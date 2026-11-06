@@ -136,7 +136,7 @@ def render(result: dict, report: dict, source_name: str) -> str:
     bullets_mean = [
         f'程式從 2016-04 跑到 {s["end"]}，未調整模擬帳面值 {s["final_nav"]:,.0f} 元（{pct(s["total_return"])}）。這是「機制跑得通」的證據，<b>不是策略績效</b>；策略比大盤好或差，這份資料不能判定。',
         f'加權指數（價格）同期 {pct(index["return"])}；0050 買入持有只算到 {hold_end}，區間不同，不能直接並排比。',
-        f'可以確認的是行為：共 {s["closed_trades"]} 筆出入場、平均持有約 {report["avg_holding_calendar_days"]:.0f} 天、平均持股比例約 {report["exposure_avg"]:.0%}；手續費 {s["fees"]:,} 元、證交稅 {s["taxes"]:,} 元（這些與股利無關）。',
+        f'這次未調整模擬實際產生的行為統計：共 {s["closed_trades"]} 筆出入場、平均持有約 {report["avg_holding_calendar_days"]:.0f} 天、平均持股比例約 {report["exposure_avg"]:.0%}；手續費 {s["fees"]:,} 元、證交稅 {s["taxes"]:,} 元。只用來核對程式有照規則執行；未還原的價格會改變均線與停損訊號，缺股利與分割股數也會改變可買數量，正確處理公司行動後這些統計可能不同。',
     ]
     bullets_warn = [
         f'<b>帳面數字不可判定</b>：持股期間遇到除權息或分割共 {report["event_count"]} 次（{report["event_codes"]} 檔），第一次在 {verdict}。資料沒有還原權值，配息當天股價下跳被算成虧損、股利沒有入帳；從 {verdict} 起的報酬、回檔、勝率與比較都不能拿來判斷策略好壞。' if verdict else '回測期間持股沒有遇到除權息或分割。',
