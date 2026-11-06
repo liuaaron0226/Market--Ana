@@ -101,20 +101,19 @@ def resolve_action(event: dict | None, row, previous_close: float) -> tuple[Deci
         before, reference = event.get('close_before'), event.get('reference')
         if event['type'] == '除息':
             return Decimal(str(event['value'])), Decimal('1'), '官方除息表'
-        if event['type'] == '減資' and event.get('exchange_ratio'):
-            return Decimal(str(event.get('refund_per_share') or 0)), Decimal(str(event['exchange_ratio'])), '官方減資表'
+        if event['type'] == '減資' and before and reference:
+            # 減資：股數 × (前收 ÷ 參考價)。退還股款已反映在參考價裡，這裡併入股數換算，不另入現金（近似，市值不變）
+            return Decimal('0'), Decimal(str(before)) / Decimal(str(reference)), '官方減資表'
         if before and reference:
             # 除權／除權息／面額變更：參考價 =（前收 − 現金）÷ 倍率；現金息由 權值+息值 與倍率推回
             if event['type'] == '變更面額':
                 return Decimal('0'), Decimal(str(before)) / Decimal(str(reference)), '官方面額變更表'
-            ratio_guess = None
-            value = Decimal(str(event.get('value') or 0))
             before_d, ref_d = Decimal(str(before)), Decimal(str(reference))
             if event['type'] == '除權':
                 return Decimal('0'), before_d / ref_d, '官方除權表'
-            # 除權息：權值+息值 = 前收 − 參考價；無法單從此表拆出現金與配股比例，保守視為全部現金
-            ratio_guess = Decimal('1')
-            return value, ratio_guess, '官方除權息表（現金／配股未拆分，視為現金）'
+            # 除權息：彙總表只給「權值+息值」，拆不出現金與配股；改以參考價換算股數，市值在除權息當刻不變。
+            # 現金增資（有償）也會被這樣處理，等於假設照比例認購且不付款——近似，報告列出次數。
+            return Decimal('0'), before_d / ref_d, '官方除權息表（以參考價換算，現金與配股未拆分）'
     if row['change_sign'] != 'X' and row['change'] is not None:
         reference = row['close'] - row['change']
         if reference > 0:

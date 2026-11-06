@@ -8,6 +8,7 @@ import argparse
 import html
 import json
 import math
+from datetime import date, timedelta
 import sys
 from pathlib import Path
 
@@ -33,18 +34,23 @@ def period_stats(points, start, end, key):
 
 
 def split_date(result: dict) -> str | None:
-    """0050 第一次「官方參考價≠前收」的日子（例：2025-06-18 分割復牌）。之後的買入持有市值失真到不能看，截斷不畫。"""
-    return next((e['date'] for e in result['benchmarks'].get('0050_events', []) if not e['type'].startswith('不比價')), None)
+    """0050 第一個未解決的公司行動日；之後買入持有市值不可比，截斷不畫。已處理（resolution 有值）的不截。"""
+    return next((e['date'] for e in result['benchmarks'].get('0050_events', []) if not e.get('resolution')
+                 and not e['type'].startswith('不比價')), None) or result['benchmarks'].get('0050_not_comparable_from')
 
 
 def lines_of(result: dict) -> dict:
     cut = split_date(result)
     hold = [{'date': p['date'], 'v': p['value']} for p in result['benchmarks']['0050_buy_and_hold'] if cut is None or p['date'] < cut]
-    return {
+    lines = {
         '策略 v0.1': [{'date': p['date'], 'v': p['nav']} for p in result['equity']],
         '0050 買入持有': hold,
-        '加權指數（價格）': [{'date': p['date'], 'v': p['value']} for p in result['benchmarks']['index']],
     }
+    if result['benchmarks'].get('return_index'):
+        lines['加權報酬指數（含息）'] = [{'date': p['date'], 'v': p['value']} for p in result['benchmarks']['return_index']]
+    else:
+        lines['加權指數（價格）'] = [{'date': p['date'], 'v': p['value']} for p in result['benchmarks']['index']]
+    return lines
 
 
 def summarize(result: dict) -> dict:
@@ -52,6 +58,9 @@ def summarize(result: dict) -> dict:
     equity = lines['策略 v0.1']
     years = sorted({p['date'][:4] for p in equity})
     periods = [(y, f'{y}-01-01', f'{y}-12-31') for y in years] + SEGMENTS + [('全期', '0000', '9999')]
+    if result['verdict_from']:
+        # 第一個不可判定日之前（不含當天）才是可比區間
+        periods.append(('可比區間', '0000', (date.fromisoformat(result['verdict_from']) - timedelta(days=1)).isoformat()))
     table = []
     for label, start, end in periods:
         row = {'period': label}
@@ -104,7 +113,7 @@ def sparkline(points, width=900, height=220):
     span = max(hi - lo, 1)
     x = lambda i: 8 + i / max(len(all_dates) - 1, 1) * (width - 16)
     y = lambda v: height - 20 - (v - lo) / span * (height - 40)
-    colors = {'策略 v0.1': 'var(--accent)', '0050 買入持有': 'var(--down)', '加權指數（價格）': 'var(--faint)'}
+    colors = {'策略 v0.1': 'var(--accent)', '0050 買入持有': 'var(--down)', '加權指數（價格）': 'var(--faint)', '加權報酬指數（含息）': 'var(--faint)'}
     paths = []
     for name, pts in normalized.items():
         d = ' '.join(f'{"M" if k == 0 else "L"}{x(i):.1f},{y(v):.1f}' for k, (i, v) in enumerate(pts[::3] + [pts[-1]]))
@@ -132,21 +141,36 @@ def render(result: dict, report: dict, source_name: str) -> str:
         cls = ' class="seg"' if not row['period'].isdigit() else ''
         rows.append(f'<tr{cls}><th>{html.escape(row["period"])}</th>{cells}<td>{trade_cell}</td></tr>')
     verdict = report['verdict_from']
-    strategy, hold, index = full['策略 v0.1'], full['0050 買入持有'], full['加權指數（價格）']
+    adjusted = result.get('corporate_actions_handled', False)
+    bench_name = next(n for n in lines if n.startswith('加權'))
+    strategy, hold, index = full['策略 v0.1'], full['0050 買入持有'], full[bench_name]
+    resolved = [e for e in report['events'] if e.get('resolution')]
+    unresolved = [e for e in report['events'] if not e.get('resolution')]
+    valid_end = verdict or s['end']
+    window = next((r for r in report['table'] if r['period'] == '可比區間'), None)
+    if adjusted and not verdict:
+        status = f'股利入帳、除權／分割／減資調整股數後，整段 2016-04～{s["end"]} 都可比較。'
+    elif adjusted:
+        status = f'已處理 {len(resolved)} 次公司行動；{verdict} 起有官方表查不到的事件，之後的數字不可判定，只比到 {verdict} 之前。'
+    else:
+        status = f'未處理公司行動，{verdict} 起不可判定。'
     bullets_mean = [
-        f'程式從 2016-04 跑到 {s["end"]}，未調整模擬帳面值 {s["final_nav"]:,.0f} 元（{pct(s["total_return"])}）。這是「機制跑得通」的證據，<b>不是策略績效</b>；策略比大盤好或差，這份資料不能判定。',
-        f'加權指數（價格）同期 {pct(index["return"])}；0050 買入持有只算到 {hold_end}，區間不同，不能直接並排比。',
-        f'這次未調整模擬實際產生的行為統計：共 {s["closed_trades"]} 筆出入場、平均持有約 {report["avg_holding_calendar_days"]:.0f} 天、平均持股比例約 {report["exposure_avg"]:.0%}；手續費 {s["fees"]:,} 元、證交稅 {s["taxes"]:,} 元。只用來核對程式有照規則執行；未還原的價格會改變均線與停損訊號，缺股利與分割股數也會改變可買數量，正確處理公司行動後這些統計可能不同。',
+        f'{status}',
+        f'整段：策略 {pct(strategy["return"])}（最大回檔 {pct(strategy["max_drawdown"])}）；{bench_name} {pct(index["return"])}（{pct(index["max_drawdown"])}）；0050 買入持有到 {hold_end} {pct(hold["return"])}。' if not verdict else
+        f'只看可比區間（到 {verdict} 之前）：見下表「可比區間」列；整段數字照列但不可判定。',
+        f'行為統計：{s["closed_trades"]} 筆出入場、勝率 {s["win_rate"]:.0%}、平均持有約 {report["avg_holding_calendar_days"]:.0f} 天、平均持股比例約 {report["exposure_avg"]:.0%}；手續費 {s["fees"]:,} 元、證交稅 {s["taxes"]:,} 元。',
     ]
     bullets_warn = [
-        f'<b>帳面數字不可判定</b>：持股期間遇到除權息或分割共 {report["event_count"]} 次（{report["event_codes"]} 檔），第一次在 {verdict}。資料沒有還原權值，配息當天股價下跳被算成虧損、股利沒有入帳；從 {verdict} 起的報酬、回檔、勝率與比較都不能拿來判斷策略好壞。' if verdict else '回測期間持股沒有遇到除權息或分割。',
-        f'0050 買入持有一樣沒有算到配息；{cut} 復牌後官方參考價變成前收約 1/4（分割），市值看起來像暴跌 75%，所以 0050 線只畫到 {hold_end}，之後的年份表格顯示「—」。' if cut else '0050 買入持有沒有算到配息。',
-        '加權指數是價格指數，不含股息；跟含息的實際投資比會偏低。',
+        f'股利依官方除權息表入帳，不扣二代健保補充保費與所得稅；配股、分割、面額變更、減資依官方參考價換算股數，零股保留但不賣。' if adjusted else '',
+        f'公司行動事件 {report["event_count"]} 次（{report["event_codes"]} 檔），其中 {len(unresolved)} 次無法由官方表解決。' if report['event_count'] else '',
+        f'其中 {sum(1 for e in resolved if "未拆分" in e["resolution"])} 次「除權息」同日發生，官方彙總表拆不出現金與配股，改以參考價換算股數（市值在除權息當刻不變）；遇到有償現金增資時等於假設照比例認購且不付款，屬近似。' if any('未拆分' in e['resolution'] for e in resolved) else '',
+        f'0050 在 {cut} 起不可比，線只畫到 {hold_end}。' if cut else '',
+        f'{bench_name}是證交所官方指數；含息報酬指數把現金股利再投入，跟實際持有大盤最接近。' if bench_name.endswith('（含息）') else '加權指數是價格指數，不含股息。',
         '回測用 v0.1 固定參數，沒有用 Gemini；所有門檻都是助手訂的待驗參數，沒有為了好看去調整。',
-        f'未成交 {s["unfilled_orders"]} 筆、開盤跳空取消 {s["cancelled_buys"]} 筆；漲跌停用前收 ±10% 估算，不保證真的排得到。',
+        f'未成交 {s["unfilled_orders"]} 筆、開盤跳空取消 {s["cancelled_buys"]} 筆；漲跌停一律用前收 ±10% 估算（除權息日也是，官方表的漲跌停尚未接入撮合），不保證真的排得到。',
     ]
     li = lambda items: ''.join(f'<li>{b}</li>' for b in items if b)
-    legend = ''.join(f'<span class="key" style="--c:{c}">{n}</span>' for n, c in (('策略 v0.1', 'var(--accent)'), ('0050 買入持有', 'var(--down)'), ('加權指數（價格）', 'var(--faint)')))
+    legend = ''.join(f'<span class="key" style="--c:{c}">{n}</span>' for n, c in zip(lines, ('var(--accent)', 'var(--down)', 'var(--faint)')))
     head = ''.join(f'<th colspan="2">{n}</th>' for n in lines)
     sub = '<th></th>' + '<th>報酬</th><th>最大回檔</th>' * 3 + '<th>出場筆數／勝率</th>'
     return f'''<!doctype html>
@@ -168,13 +192,13 @@ svg{{width:100%;height:auto}}svg path{{vector-effect:non-scaling-stroke}}.base{{
 th,td{{padding:6px 10px;border-bottom:1px solid var(--line);text-align:right}}th:first-child{{text-align:left}}.dd{{color:var(--faint)}}tr.seg{{background:color-mix(in srgb,var(--accent) 6%,transparent)}}
 details summary{{cursor:pointer;color:var(--dim)}}
 </style></head><body><main>
-<h1>策略 v0.1 未調整模擬：2016-04 至 {html.escape(s["end"])}</h1>
+<h1>策略 v0.1 {"回測" if adjusted and not verdict else "未調整模擬" if not adjusted else "回測（部分不可判定）"}：2016-04 至 {html.escape(s["end"])}</h1>
 <p class="meta">起始 100 萬元虛擬資金・隔日開盤成交・手續費 0.1425%（捨去、最低 20 元）＋賣出證交稅 0.3%・資料來源證交所每日收盤行情・結果檔 {html.escape(source_name)}</p>
 <section class="card big">
-<div><b>{pct(s["total_return"])}</b><span>策略未調整帳面值（不可判定）</span></div>
-<div><b>{pct(hold["return"])}</b><span>0050 買入持有（至 {html.escape(hold_end)}，分割前）</span></div>
-<div><b>{pct(index["return"])}</b><span>加權指數（價格）</span></div>
-<div><b>{pct(s["max_drawdown"])}</b><span>策略未調整最大回檔（不可判定）</span></div>
+<div><b>{pct(s["total_return"])}</b><span>策略總報酬{"" if adjusted and not verdict else "（不可判定）"}</span></div>
+<div><b>{pct(hold["return"])}</b><span>0050 買入持有（至 {html.escape(hold_end)}）</span></div>
+<div><b>{pct(index["return"])}</b><span>{bench_name}</span></div>
+<div><b>{pct(s["max_drawdown"])}</b><span>策略最大回檔{"" if adjusted and not verdict else "（不可判定）"}</span></div>
 <div><b>{s["closed_trades"]}</b><span>出入場筆數</span></div>
 </section>
 <section class="card"><h2>三條線，起點都換算成 100</h2><div>{legend}</div>{sparkline(lines)}</section>

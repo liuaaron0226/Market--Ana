@@ -71,9 +71,19 @@ class CorporateActionTests(unittest.TestCase):
         self.assertEqual((tsmc['date'], tsmc['close_before'], tsmc['reference'], tsmc['value']), ('2016-06-27', 159.0, 153.0, 6.0))
         self.assertEqual((tsmc['limit_up'], tsmc['limit_down']), (168.0, 138.0))
         self.assertEqual(events[('6443', '除權')]['reference'], 13.81)
+        self.assertNotIn('TWTAVU', ''.join(e['source'] for e in events.values()))
         material = events[('4763', '變更面額')]
         self.assertEqual((material['date'], material['close_before'], material['reference']), ('2025-06-30', 885.0, 88.5))
 
+
+    def test_capital_reduction_history_uses_resume_reference_prices(self):
+        # 逐字取自證交所 TWTAUU 2020 官方回應
+        fields = ['恢復買賣日期', '股票代號', '名稱', '停止買賣前收盤價格', '恢復買賣參考價', '漲停價格', '跌停價格', '開盤競價基準', '除權參考價', '減資原因', '詳細資料']
+        row = ['109/01/20', '3557', '嘉威', '38.05', '48.57', '53.40', '43.75', '48.55', '--', '彌補虧損', '3557  ,20200108']
+        fake = Fake({('TWTAUU', '202001'): Response(200, 'application/json', payload(fields, [row]), 'u')})
+        fetch_all(self.out, '20200101', '20200101', get=fake.get, sleep=fake.sleep)
+        [event] = [e for e in parse_events(self.out) if e['type'] == '減資']
+        self.assertEqual((event['date'], event['code'], event['close_before'], event['reference']), ('2020-01-20', '3557', 38.05, 48.57))
 
 if __name__ == '__main__':
     unittest.main()

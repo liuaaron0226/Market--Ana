@@ -2,7 +2,8 @@
 
 - TWT49U 除權除息計算結果表：除權息日、除權息前收盤、參考價、權值＋息值、權／息／權息。
 - TWTB8U 變更股票面額恢復買賣參考價：面額變更（例 4763 2025-06-30 1 拆 10）。
-- TWTAVU 減資恢復買賣參考價：減資換股率、每股退還股款。
+- TWTAUU 股票減資恢復買賣參考價格：停止買賣前收盤、恢復買賣參考價、減資原因。
+  （TWTAVU「減資預告表」不隨日期回傳歷史，只有當下預告，11-07 實核後不用。）
 抓取規則同 stock_history：單路、間隔≥3 秒、遇 403／429／非 JSON 即停、原件存在就不重抓、不覆寫。
 
 已知限制（11-07 實核）：ETF 分割（0050 2025-06-18 1 拆 4）不在這三張表內，個股價量的「X 不比價」
@@ -28,7 +29,7 @@ MIN_INTERVAL_SECONDS = 3.0
 SOURCES = {
     'TWT49U': 'https://www.twse.com.tw/rwd/zh/exRight/TWT49U',
     'TWTB8U': 'https://www.twse.com.tw/rwd/zh/change/TWTB8U',
-    'TWTAVU': 'https://www.twse.com.tw/rwd/zh/reducation/TWTAVU',
+    'TWTAUU': 'https://www.twse.com.tw/rwd/zh/reducation/TWTAUU',
 }
 
 
@@ -134,10 +135,10 @@ def parse_events(out: Path) -> list[dict]:
                                    'close_before': before, 'reference': reference, 'value': None,
                                    'limit_up': number(cell['漲停價格']), 'limit_down': number(cell['跌停價格']), 'source': path.name})
                 else:
-                    events.append({'date': roc_date(cell['恢復買賣日期']), 'code': cell['股票代號'], 'type': '減資',
-                                   'close_before': None, 'reference': number(cell.get('恢復買賣參考價', '')),
-                                   'exchange_ratio': number(cell['減資換股率']), 'refund_per_share': number(cell['每股退還股款(元)']),
-                                   'value': None, 'source': path.name})
+                    events.append({'date': roc_date(cell['恢復買賣日期']), 'code': cell['股票代號'].strip(), 'type': '減資',
+                                   'close_before': number(cell['停止買賣前收盤價格']), 'reference': number(cell['恢復買賣參考價']),
+                                   'reason': cell.get('減資原因'), 'value': None,
+                                   'limit_up': number(cell['漲停價格']), 'limit_down': number(cell['跌停價格']), 'source': path.name})
     events.sort(key=lambda e: (e['date'], e['code'], e['type']))
     return events
 
