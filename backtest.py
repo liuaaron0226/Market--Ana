@@ -200,8 +200,11 @@ def run_backtest(db_path: Path, index: dict[str, float], params: Params, *, star
                 hold_0050 = {'lots': lots, 'cash': initial_cash - price * lots * SHARES_PER_LOT - fee, 'series': [], 'not_comparable_from': None}
             if hold_0050 is not None:
                 row = rows.get('0050')
-                if corporate_action(row, previous_0050) and hold_0050['not_comparable_from'] is None:
-                    hold_0050['not_comparable_from'] = date
+                event = corporate_action(row, previous_0050)
+                if event:
+                    hold_0050.setdefault('events', []).append({'date': date, 'type': event, 'close_before': previous_0050, 'close': row['close']})
+                    if hold_0050['not_comparable_from'] is None:
+                        hold_0050['not_comparable_from'] = date
                 hold_0050['series'].append({'date': date, 'value': hold_0050['cash'] + hold_0050['lots'] * SHARES_PER_LOT * last_close.get('0050', 0)})
 
             # 4. 收盤後決策，明天開盤撮合
@@ -233,7 +236,8 @@ def run_backtest(db_path: Path, index: dict[str, float], params: Params, *, star
     return {
         'params': {k: v for k, v in params.__dict__.items()}, 'summary': summary, 'equity': equity,
         'benchmarks': {'index': index_points, '0050_buy_and_hold': hold_0050['series'] if hold_0050 else [],
-                       '0050_not_comparable_from': hold_0050['not_comparable_from'] if hold_0050 else None},
+                       '0050_not_comparable_from': hold_0050['not_comparable_from'] if hold_0050 else None,
+                       '0050_events': hold_0050.get('events', []) if hold_0050 else []},
         'verdict_from': verdict_from, 'corporate_action_events': events, 'closed_trades': closed,
         'ledger': ledger_rows, 'ledger_path': str(ledger_path),
     }
