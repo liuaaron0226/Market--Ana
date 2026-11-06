@@ -134,13 +134,12 @@ def render(result: dict, report: dict, source_name: str) -> str:
     verdict = report['verdict_from']
     strategy, hold, index = full['策略 v0.1'], full['0050 買入持有'], full['加權指數（價格）']
     bullets_mean = [
-        f'2016-04 起 100 萬，到 {s["end"]} 帳上 {s["final_nav"]:,.0f} 元（{pct(s["total_return"])}）；同期加權指數 {pct(index["return"])}，0050 買入持有到 {hold_end} 為 {pct(hold["return"])}。<b>策略大幅落後大盤。</b>',
-        f'好處是跌得少：最大回檔 {pct(s["max_drawdown"])}，加權指數同期 {pct(index["max_drawdown"])}；2018、2022 空頭年策略虧得比大盤少。',
-        f'共完成 {s["closed_trades"]} 筆出入場，勝率 {s["win_rate"]:.0%}，平均持有約 {report["avg_holding_calendar_days"]:.0f} 天；手續費 {s["fees"]:,} 元、證交稅 {s["taxes"]:,} 元。',
-        f'平均持股比例約 {report["exposure_avg"]:.0%}，大盤偏弱時策略會自動降低持股。',
+        f'程式從 2016-04 跑到 {s["end"]}，未調整模擬帳面值 {s["final_nav"]:,.0f} 元（{pct(s["total_return"])}）。這是「機制跑得通」的證據，<b>不是策略績效</b>；策略比大盤好或差，這份資料不能判定。',
+        f'加權指數（價格）同期 {pct(index["return"])}；0050 買入持有只算到 {hold_end}，區間不同，不能直接並排比。',
+        f'可以確認的是行為：共 {s["closed_trades"]} 筆出入場、平均持有約 {report["avg_holding_calendar_days"]:.0f} 天、平均持股比例約 {report["exposure_avg"]:.0%}；手續費 {s["fees"]:,} 元、證交稅 {s["taxes"]:,} 元（這些與股利無關）。',
     ]
     bullets_warn = [
-        f'<b>這些數字不能當真實績效</b>：持股期間遇到除權息或分割共 {report["event_count"]} 次（{report["event_codes"]} 檔），第一次在 {verdict}。資料沒有還原權值，配息當天股價下跳會被算成虧損、股利沒有入帳，所以從 {verdict} 起的帳面數字都是「不可判定」，只能看大方向。' if verdict else '回測期間持股沒有遇到除權息或分割。',
+        f'<b>帳面數字不可判定</b>：持股期間遇到除權息或分割共 {report["event_count"]} 次（{report["event_codes"]} 檔），第一次在 {verdict}。資料沒有還原權值，配息當天股價下跳被算成虧損、股利沒有入帳；從 {verdict} 起的報酬、回檔、勝率與比較都不能拿來判斷策略好壞。' if verdict else '回測期間持股沒有遇到除權息或分割。',
         f'0050 買入持有一樣沒有算到配息；{cut} 復牌後官方參考價變成前收約 1/4（分割），市值看起來像暴跌 75%，所以 0050 線只畫到 {hold_end}，之後的年份表格顯示「—」。' if cut else '0050 買入持有沒有算到配息。',
         '加權指數是價格指數，不含股息；跟含息的實際投資比會偏低。',
         '回測用 v0.1 固定參數，沒有用 Gemini；所有門檻都是助手訂的待驗參數，沒有為了好看去調整。',
@@ -169,13 +168,13 @@ svg{{width:100%;height:auto}}svg path{{vector-effect:non-scaling-stroke}}.base{{
 th,td{{padding:6px 10px;border-bottom:1px solid var(--line);text-align:right}}th:first-child{{text-align:left}}.dd{{color:var(--faint)}}tr.seg{{background:color-mix(in srgb,var(--accent) 6%,transparent)}}
 details summary{{cursor:pointer;color:var(--dim)}}
 </style></head><body><main>
-<h1>策略 v0.1 回測：2016-04 至 {html.escape(s["end"])}</h1>
+<h1>策略 v0.1 未調整模擬：2016-04 至 {html.escape(s["end"])}</h1>
 <p class="meta">起始 100 萬元虛擬資金・隔日開盤成交・手續費 0.1425%（捨去、最低 20 元）＋賣出證交稅 0.3%・資料來源證交所每日收盤行情・結果檔 {html.escape(source_name)}</p>
 <section class="card big">
-<div><b>{pct(s["total_return"])}</b><span>策略總報酬</span></div>
+<div><b>{pct(s["total_return"])}</b><span>策略未調整帳面值（不可判定）</span></div>
 <div><b>{pct(hold["return"])}</b><span>0050 買入持有（至 {html.escape(hold_end)}，分割前）</span></div>
 <div><b>{pct(index["return"])}</b><span>加權指數（價格）</span></div>
-<div><b>{pct(s["max_drawdown"])}</b><span>策略最大回檔</span></div>
+<div><b>{pct(s["max_drawdown"])}</b><span>策略未調整最大回檔（不可判定）</span></div>
 <div><b>{s["closed_trades"]}</b><span>出入場筆數</span></div>
 </section>
 <section class="card"><h2>三條線，起點都換算成 100</h2><div>{legend}</div>{sparkline(lines)}</section>
