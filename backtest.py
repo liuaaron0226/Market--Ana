@@ -57,6 +57,16 @@ class Rolling:
             low10_prior=min(list(self.lows)[-10:]) if len(self.lows) >= 10 else None,
         )
 
+    def adjust(self, cash_per_share: float, ratio: float):
+        """除權息後把歷史序列換算到新基準：價格 (p − 現金) ÷ 倍率，量 × 倍率；成交金額不變。
+        只用於持股的停損／均線延續，不改原件。"""
+        price = lambda p: (p - cash_per_share) / ratio
+        self.closes = deque((price(p) for p in self.closes), maxlen=self.closes.maxlen)
+        self.highs = deque((price(p) for p in self.highs), maxlen=self.highs.maxlen)
+        self.lows = deque((price(p) for p in self.lows), maxlen=self.lows.maxlen)
+        self.ma20_history = deque((price(p) for p in self.ma20_history), maxlen=self.ma20_history.maxlen)
+        self.volumes = deque((v * ratio for v in self.volumes), maxlen=self.volumes.maxlen)
+
     def push(self, row, ma20):
         if row['close'] is None or row['high'] is None:
             return
@@ -71,15 +81,46 @@ class Rolling:
 
 
 def corporate_action(row, previous_close: float | None) -> str | None:
-    if row is None or row['close'] is None:
+    """沒有官方事件時的偵測：前一個有收盤的日子之後，出現 X 或參考價（收盤−漲跌）≠ 前收。
+    前一日無收盤價時官方也會標 X，那不是公司行動，不算。"""
+    if row is None or row['close'] is None or previous_close is None:
         return None
     if row['change_sign'] == 'X':
         return '不比價日（除權息／分割等）'
-    if previous_close is None or row['change'] is None:
+    if row['change'] is None:
         return None
     reference = row['close'] - row['change']
     if abs(reference - previous_close) > max(0.011, previous_close * 0.001):
         return f'官方參考價 {reference:g} 不等於前收 {previous_close:g}（除權息／分割等）'
+    return None
+
+
+def resolve_action(event: dict | None, row, previous_close: float) -> tuple[Decimal, Decimal, str] | None:
+    """回傳 (每股現金, 股數倍率, 說明)。官方表優先；無官方表時，只有「參考價≠前收」能推定純股數變化（分割／面額變更）。"""
+    if event is not None:
+        before, reference = event.get('close_before'), event.get('reference')
+        if event['type'] == '除息':
+            return Decimal(str(event['value'])), Decimal('1'), '官方除息表'
+        if event['type'] == '減資' and event.get('exchange_ratio'):
+            return Decimal(str(event.get('refund_per_share') or 0)), Decimal(str(event['exchange_ratio'])), '官方減資表'
+        if before and reference:
+            # 除權／除權息／面額變更：參考價 =（前收 − 現金）÷ 倍率；現金息由 權值+息值 與倍率推回
+            if event['type'] == '變更面額':
+                return Decimal('0'), Decimal(str(before)) / Decimal(str(reference)), '官方面額變更表'
+            ratio_guess = None
+            value = Decimal(str(event.get('value') or 0))
+            before_d, ref_d = Decimal(str(before)), Decimal(str(reference))
+            if event['type'] == '除權':
+                return Decimal('0'), before_d / ref_d, '官方除權表'
+            # 除權息：權值+息值 = 前收 − 參考價；無法單從此表拆出現金與配股比例，保守視為全部現金
+            ratio_guess = Decimal('1')
+            return value, ratio_guess, '官方除權息表（現金／配股未拆分，視為現金）'
+    if row['change_sign'] != 'X' and row['change'] is not None:
+        reference = row['close'] - row['change']
+        if reference > 0:
+            ratio = Decimal(str(previous_close)) / Decimal(str(reference))
+            if ratio > Decimal('1.5'):
+                return Decimal('0'), ratio.quantize(Decimal('0.0001')), '由參考價推定分割'
     return None
 
 
@@ -89,6 +130,24 @@ def index_series(index_dir: Path) -> dict[str, float]:
         for row in json.loads(path.read_text(encoding='utf-8'))['data']['data']:
             year, month, day = row[0].split('/')
             series[f'{int(year) + 1911}-{month}-{day}'] = float(row[4].replace(',', ''))
+    return series
+
+
+def total_return_index(raw_dir: Path, cache: Path) -> dict[str, float]:
+    """官方「發行量加權股價報酬指數」（含息），從既有 MI_INDEX 每日原件擷取，不新增抓取；結果快取成 JSON。"""
+    import gzip
+    if cache.exists():
+        return json.loads(cache.read_text(encoding='utf-8'))
+    series = {}
+    for path in sorted(raw_dir.glob('*/MI_INDEX-*.json.gz')):
+        day = path.name[9:17]
+        payload = json.loads(gzip.decompress(path.read_bytes()).decode('utf-8'))
+        for table in payload.get('tables') or []:
+            if '報酬指數' in (table.get('title') or ''):
+                for row in table.get('data') or []:
+                    if row[0] == '發行量加權股價報酬指數':
+                        series[f'{day[:4]}-{day[4:6]}-{day[6:]}'] = float(row[1].replace(',', ''))
+    cache.write_text(json.dumps(series) + '\n', encoding='utf-8')
     return series
 
 
@@ -108,8 +167,13 @@ def max_drawdown(values: list[float]) -> float:
 
 
 def run_backtest(db_path: Path, index: dict[str, float], params: Params, *, start: str, end: str,
-                 initial_cash: int, work_dir: Path, provider=None, progress=None) -> dict:
+                 initial_cash: int, work_dir: Path, provider=None, progress=None, corporate_events: list | None = None,
+                 return_index: dict[str, float] | None = None) -> dict:
+    """corporate_events=None：不處理公司行動（本人 11-07 01:1x 的 B 口徑，遇事件即標不可判定）。
+    傳入官方事件清單（可為空）：除息入帳、除權／分割／減資調整股數，只有無法解決的事件才標不可判定。"""
     provider = provider or FixedProvider()
+    handle_actions = corporate_events is not None
+    official = {(e['date'], e['code']): e for e in (corporate_events or [])}
     connection = sqlite3.connect(db_path)
     connection.row_factory = sqlite3.Row
     dates = [r[0] for r in connection.execute('SELECT date FROM source_days WHERE date <= ? ORDER BY date', (end,))]
@@ -127,7 +191,9 @@ def run_backtest(db_path: Path, index: dict[str, float], params: Params, *, star
     verdict_from = None
     hold_0050 = None
 
+    rows: dict = {}
     for i, date in enumerate(dates):
+        previous_rows = rows
         rows = {r['code']: r for r in connection.execute('SELECT * FROM daily WHERE date = ?', (date,))}
 
         # 1. 撮合前一日的意圖（下一交易日開盤）
@@ -167,11 +233,30 @@ def run_backtest(db_path: Path, index: dict[str, float], params: Params, *, star
 
         # 2. 公司行動：持股遇官方「X 不比價」日，或官方參考價（收盤−漲跌）不等於上一個收盤（如 0050 2025-06 分割，
         #    復牌日標 '+' 但參考價已調整）→ 那天起績效不可判定
-        for code in positions:
-            event = corporate_action(rows.get(code), last_close.get(code))
-            if event:
-                events.append({'date': date, 'code': code, 'type': event, 'close_before': last_close.get(code), 'close': rows[code]['close']})
+        for code in list(positions):
+            row = rows.get(code)
+            detected = corporate_action(row, last_close.get(code))
+            if detected and detected.startswith('不比價') and previous_rows.get(code) is not None and previous_rows[code]['close'] is None:
+                detected = None   # 前一交易日沒有收盤價，官方因此標 X，不是公司行動
+            if not detected and (date, code) not in official:
+                continue
+            record = {'date': date, 'code': code, 'type': detected or official[(date, code)]['type'],
+                      'close_before': last_close.get(code), 'close': row['close'] if row else None, 'resolution': None}
+            resolved = resolve_action(official.get((date, code)), row, last_close.get(code)) if handle_actions and row else None
+            if resolved is None:
                 verdict_from = verdict_from or date
+            else:
+                cash_per_share, ratio, how = resolved
+                ledger.apply_corporate_action('backtest', code, date, cash_per_share=cash_per_share, share_ratio=ratio, plain_reason=how)
+                held = ledger.account_state('backtest')['holdings'].get(code, 0)
+                p = positions[code]
+                factor = float(ratio)
+                positions[code] = replace(p, lots=held, entry_price=p.entry_price / factor, stop=p.stop / factor, risk=p.risk / factor)
+                rolling[code].adjust(float(cash_per_share), factor)
+                record['resolution'] = how
+                if held == 0:
+                    del positions[code]
+            events.append(record)
 
         # 3. 更新收盤價、持有天數；算 StockDay
         previous_0050 = last_close.get('0050')
@@ -201,11 +286,18 @@ def run_backtest(db_path: Path, index: dict[str, float], params: Params, *, star
             if hold_0050 is not None:
                 row = rows.get('0050')
                 event = corporate_action(row, previous_0050)
-                if event:
-                    hold_0050.setdefault('events', []).append({'date': date, 'type': event, 'close_before': previous_0050, 'close': row['close']})
-                    if hold_0050['not_comparable_from'] is None:
-                        hold_0050['not_comparable_from'] = date
-                hold_0050['series'].append({'date': date, 'value': hold_0050['cash'] + hold_0050['lots'] * SHARES_PER_LOT * last_close.get('0050', 0)})
+                if event or (date, '0050') in official:
+                    resolved = resolve_action(official.get((date, '0050')), row, previous_0050) if handle_actions and row else None
+                    hold_0050.setdefault('events', []).append({'date': date, 'type': event or official[(date, '0050')]['type'], 'close_before': previous_0050,
+                                                               'close': row['close'] if row else None, 'resolution': resolved[2] if resolved else None})
+                    if resolved is None:
+                        hold_0050['not_comparable_from'] = hold_0050['not_comparable_from'] or date
+                    else:
+                        shares = hold_0050['lots'] * SHARES_PER_LOT + hold_0050.get('odd', 0)
+                        hold_0050['cash'] += int(shares * float(resolved[0]))
+                        shares = int(shares * float(resolved[1]))
+                        hold_0050['lots'], hold_0050['odd'] = divmod(shares, SHARES_PER_LOT)
+                hold_0050['series'].append({'date': date, 'value': hold_0050['cash'] + (hold_0050['lots'] * SHARES_PER_LOT + hold_0050.get('odd', 0)) * last_close.get('0050', 0)})
 
             # 4. 收盤後決策，明天開盤撮合
             decision = decide(DaySnapshot(date=date, market=market_state(index, dates, i), stocks=snapshot_stocks),
@@ -222,6 +314,7 @@ def run_backtest(db_path: Path, index: dict[str, float], params: Params, *, star
     ledger_rows = ledger.records('backtest')
     navs = [p['nav'] for p in equity]
     index_points = [{'date': p['date'], 'value': index[p['date']]} for p in equity if p['date'] in index]
+    return_points = [{'date': p['date'], 'value': return_index[p['date']]} for p in equity if p['date'] in (return_index or {})]
     summary = {
         'start': equity[0]['date'], 'end': equity[-1]['date'], 'initial_cash': initial_cash, 'final_nav': navs[-1],
         'total_return': navs[-1] / initial_cash - 1, 'max_drawdown': max_drawdown(navs),
@@ -235,7 +328,8 @@ def run_backtest(db_path: Path, index: dict[str, float], params: Params, *, star
     }
     return {
         'params': {k: v for k, v in params.__dict__.items()}, 'summary': summary, 'equity': equity,
-        'benchmarks': {'index': index_points, '0050_buy_and_hold': hold_0050['series'] if hold_0050 else [],
+        'corporate_actions_handled': handle_actions,
+        'benchmarks': {'index': index_points, 'return_index': return_points, '0050_buy_and_hold': hold_0050['series'] if hold_0050 else [],
                        '0050_not_comparable_from': hold_0050['not_comparable_from'] if hold_0050 else None,
                        '0050_events': hold_0050.get('events', []) if hold_0050 else []},
         'verdict_from': verdict_from, 'corporate_action_events': events, 'closed_trades': closed,
@@ -258,11 +352,14 @@ def main() -> int:
     parser.add_argument('--end', default='2026-11-06')
     parser.add_argument('--cash', type=int, default=1_000_000)
     parser.add_argument('--out', type=Path, required=True)
+    parser.add_argument('--events', type=Path, help='corporate_actions.py build 產生的 events.json；不給就不處理公司行動')
     args = parser.parse_args()
     args.out.parent.mkdir(parents=True, exist_ok=True)
     started = time.time()
+    events = json.loads(args.events.read_text(encoding='utf-8')) if args.events else None
+    return_index = total_return_index(args.db.parent / 'raw', args.db.parent / 'return-index.json')
     result = run_backtest(args.db, index_series(args.index_dir), PARAMS_V01, start=args.start, end=args.end,
-                          initial_cash=args.cash, work_dir=args.out.parent,
+                          initial_cash=args.cash, work_dir=args.out.parent, corporate_events=events, return_index=return_index,
                           progress=lambda d, nav, n: print(f'{d} 淨值 {nav:,.0f} 持股 {n}', file=sys.stderr, flush=True))
     result['seconds'] = round(time.time() - started)
     result['generated_at_utc'] = datetime.now(timezone.utc).isoformat()

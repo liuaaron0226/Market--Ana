@@ -226,6 +226,9 @@ class Ledger:
                 CREATE TRIGGER IF NOT EXISTS ledger_no_delete
                     BEFORE DELETE ON ledger BEGIN SELECT RAISE(ABORT, 'ledger is append-only'); END;
             ''')
+            columns = {row['name'] for row in connection.execute('PRAGMA table_info(ledger)')}
+            if 'odd_share_delta' not in columns:
+                connection.execute('ALTER TABLE ledger ADD COLUMN odd_share_delta INTEGER NOT NULL DEFAULT 0')
 
     def create_account(
         self,
@@ -256,8 +259,16 @@ class Ledger:
             raise KeyError(account_id)
         cash = Decimal(account['initial_cash'])
         holdings = {code: int(lots) for code, lots in json.loads(account['initial_holdings']).items()}
+        cash, holdings, _ = self._full_state_in(connection, account_id)
+        return cash, holdings
+
+    def _full_state_in(self, connection: sqlite3.Connection, account_id: str) -> tuple[Decimal, dict[str, int], dict[str, int]]:
+        account = connection.execute('SELECT * FROM accounts WHERE account_id = ?', (account_id,)).fetchone()
+        cash = Decimal(account['initial_cash'])
+        holdings = {code: int(lots) for code, lots in json.loads(account['initial_holdings']).items()}
+        odd: dict[str, int] = {}
         for row in connection.execute(
-            'SELECT code, cash_delta, lot_delta FROM ledger WHERE account_id = ? ORDER BY id',
+            'SELECT code, cash_delta, lot_delta, odd_share_delta FROM ledger WHERE account_id = ? ORDER BY id',
             (account_id,),
         ):
             cash += Decimal(row['cash_delta'])
@@ -265,7 +276,51 @@ class Ledger:
                 holdings[row['code']] = holdings.get(row['code'], 0) + row['lot_delta']
                 if holdings[row['code']] == 0:
                     del holdings[row['code']]
-        return cash, holdings
+            if row['odd_share_delta']:
+                odd[row['code']] = odd.get(row['code'], 0) + row['odd_share_delta']
+                if odd[row['code']] == 0:
+                    del odd[row['code']]
+        return cash, holdings, odd
+
+    def apply_corporate_action(
+        self,
+        account_id: str,
+        code: str,
+        ex_date: str,
+        *,
+        cash_per_share: Decimal | float | int = Decimal('0'),
+        share_ratio: Decimal | float | int = Decimal('1'),
+        plain_reason: str,
+    ) -> dict:
+        """除權息、分割、面額變更、減資：依「除權息前一刻」的持有股數，現金按每股入帳（捨去到元、
+        不扣補充保費與所得稅），股數乘 share_ratio 後向下取整股，不足一張的部分記為零股。只能新增一筆。"""
+        cash_rate = _decimal(cash_per_share)
+        ratio = _decimal(share_ratio)
+        if cash_rate < 0 or ratio <= 0:
+            raise ValueError('cash_per_share 不得為負，share_ratio 必須大於 0')
+        with self._connection(immediate=True) as connection:
+            cash, holdings, odd = self._full_state_in(connection, account_id)
+            shares = holdings.get(code, 0) * SHARES_PER_LOT + odd.get(code, 0)
+            if shares <= 0:
+                raise ValueError(f'{account_id} 未持有 {code}，不能套用公司行動')
+            new_shares = int((shares * ratio).to_integral_value(rounding=ROUND_FLOOR))
+            cash_delta = int((shares * cash_rate).to_integral_value(rounding=ROUND_FLOOR))
+            lot_delta = new_shares // SHARES_PER_LOT - holdings.get(code, 0)
+            odd_delta = new_shares % SHARES_PER_LOT - odd.get(code, 0)
+            values = {
+                'record_type': 'corporate_action', 'status': 'applied', 'account_id': account_id,
+                'decided_at': ex_date, 'scheduled_trade_date': ex_date, 'code': code, 'security_kind': None,
+                'side': 'none', 'lots': 0, 'fill_price': None, 'failure_reason': None, 'fee': 0, 'tax': 0,
+                'strategy_version': '', 'strategy_rule': 'corporate_action', 'plain_reason': plain_reason,
+                'gemini_input_summary': None, 'gemini_response_ref': None, 'reference_id': None,
+                'cash_delta': str(cash_delta), 'lot_delta': lot_delta, 'odd_share_delta': odd_delta,
+                'created_at': datetime.now(timezone.utc).isoformat(),
+            }
+            cursor = connection.execute(
+                f'INSERT INTO ledger ({",".join(values)}) VALUES ({",".join("?" for _ in values)})', list(values.values()),
+            )
+            row = connection.execute('SELECT * FROM ledger WHERE id = ?', (cursor.lastrowid,)).fetchone()
+        return self._decode(row)
 
     @staticmethod
     def _as_unfilled(entry: dict, reason: str) -> dict:
@@ -457,8 +512,12 @@ class Ledger:
 
     def account_state(self, account_id: str) -> dict:
         with self._connection() as connection:
-            cash, holdings = self._account_state_in(connection, account_id)
-        return {'cash': int(cash), 'holdings': holdings}
+            self._account_state_in(connection, account_id)
+            cash, holdings, odd = self._full_state_in(connection, account_id)
+        state = {'cash': int(cash), 'holdings': holdings}
+        if odd:
+            state['odd_shares'] = odd
+        return state
 
     def fee_discount(self, account_id: str) -> Decimal:
         return Decimal(self._account(account_id)['fee_discount'])

@@ -95,17 +95,29 @@ class BacktestTests(unittest.TestCase):
         self.assertEqual(fills[0]['strategy_version'], 'v0.1')
         self.assertEqual(result['equity'][-1]['date'], self.dates[-1])
 
-    def test_ex_rights_day_on_a_held_stock_marks_the_rest_of_the_run_not_comparable(self):
-        bars = flat_then_breakout(100, 70)
-        o, c, v, _ = bars[85]
-        bars[85] = (o * 0.9, c * 0.9, v, 'X')
-        result = self.run_case({'2330': bars})
-        self.assertEqual(result['verdict_from'], self.dates[85])
-        self.assertEqual(result['corporate_action_events'][0]['code'], '2330')
-        self.assertEqual(result['corporate_action_events'][0]['date'], self.dates[85])
+    def test_normal_days_are_not_flagged_as_corporate_actions(self):
+        result = self.run_case({'2330': flat_then_breakout(100, 70)})
+        self.assertIsNone(result['verdict_from'])
+        self.assertEqual(result['corporate_action_events'], [])
 
-    def test_split_after_a_trading_halt_is_detected_from_the_official_reference_price(self):
-        # 仿 0050 2025-06：停止交易數日，復牌後價格約原 1/4，官方漲跌以新參考價（前收÷4）計、標 '+' 而非 X
+    def test_cash_dividend_from_the_official_table_is_credited_and_keeps_the_run_comparable(self):
+        # 第 85 天除息 1 元：官方參考價＝前收−1，股價照跌但股利入帳，淨值不應因除息下跳
+        bars = flat_then_breakout(100, 70)
+        before = bars[84][1]
+        for i in range(85, 100):
+            o, c, v, _ = bars[i]
+            bars[i] = (o - 1, c - 1, v, 'X' if i == 85 else '+')
+        event = {'date': self.dates[85], 'code': '2330', 'type': '除息', 'close_before': before, 'reference': before - 1, 'value': 1.0}
+        result = self.run_case({'2330': bars}, reference_override={(self.dates[85], '2330'): before - 1}, corporate_events=[event])
+        self.assertIsNone(result['verdict_from'])
+        actions = [r for r in result['ledger'] if r['record_type'] == 'corporate_action']
+        self.assertEqual(len(actions), 1)
+        lots = sum(r['lots'] for r in result['ledger'] if r['status'] == 'filled' and r['side'] == 'buy')
+        self.assertEqual(actions[0]['cash_delta'], lots * 1000 * 1)
+        navs = {p['date']: p['nav'] for p in result['equity']}
+        self.assertAlmostEqual(navs[self.dates[85]] - navs[self.dates[84]], lots * 1000 * ((bars[85][1] + 1) - bars[84][1]), delta=1)
+
+    def test_split_detected_from_reference_price_multiplies_shares_and_keeps_nav_continuous(self):
         bars = flat_then_breakout(100, 70)
         last = bars[83][1]
         for i in range(84, 87):
@@ -113,14 +125,28 @@ class BacktestTests(unittest.TestCase):
         for i in range(87, 100):
             o, c, v, sign = bars[i]
             bars[i] = (o / 4, c / 4, v * 4, sign)
-        result = self.run_case({'2330': bars}, reference_override={(self.dates[87], '2330'): last / 4})
-        self.assertEqual(result['verdict_from'], self.dates[87])
-        self.assertIn('參考價', result['corporate_action_events'][0]['type'])
+        result = self.run_case({'2330': bars}, reference_override={(self.dates[87], '2330'): last / 4}, corporate_events=[])
+        self.assertIsNone(result['verdict_from'])
+        navs = [p['nav'] for p in result['equity']]
+        self.assertGreater(min(navs[80:]), 0.9 * navs[80])          # 沒有假暴跌 75%
+        self.assertEqual(result['corporate_action_events'][0]['resolution'], '由參考價推定分割')
 
-    def test_normal_days_are_not_flagged_as_corporate_actions(self):
-        result = self.run_case({'2330': flat_then_breakout(100, 70)})
+    def test_x_day_after_a_no_trade_day_is_not_a_corporate_action(self):
+        # 官方在前一日沒有收盤價時，復牌日也會標 X；那不是除權息
+        bars = flat_then_breakout(100, 70)
+        bars[84] = None
+        o, c, v, _ = bars[85]
+        bars[85] = (o, c, v, 'X')
+        result = self.run_case({'2330': bars}, corporate_events=[])
         self.assertIsNone(result['verdict_from'])
         self.assertEqual(result['corporate_action_events'], [])
+
+    def test_x_day_with_a_prior_close_and_no_official_event_is_still_unresolved(self):
+        bars = flat_then_breakout(100, 70)
+        o, c, v, _ = bars[85]
+        bars[85] = (o * 0.9, c * 0.9, v, 'X')
+        result = self.run_case({'2330': bars}, corporate_events=[])
+        self.assertEqual(result['verdict_from'], self.dates[85])
 
     def test_buy_and_hold_0050_and_index_benchmarks_cover_the_same_dates(self):
         series = {'2330': flat_then_breakout(100, 70), '0050': [(50.0 + i * 0.1, 50.0 + i * 0.1, 1_000_000, '+') for i in range(100)]}

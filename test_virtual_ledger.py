@@ -396,6 +396,38 @@ class VirtualFillTests(unittest.TestCase):
         self.assertEqual(self.ledger.account_state('acct'), {'cash': 500_000.0, 'holdings': {'2330': 1}})
 
 
+class CorporateActionLedgerTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ledger = Ledger(Path(self.tmp.name) / 'ledger.sqlite')
+        self.ledger.create_account('acct', 100_000, {'2330': 3})
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_cash_dividend_is_credited_per_share_held(self):
+        # 2330 2016-06-27 每股息 6 元，持有 3 張＝3,000 股 → 入帳 18,000 元（模擬不扣補充保費與所得稅）
+        record = self.ledger.apply_corporate_action('acct', '2330', '2016-06-27', cash_per_share=Decimal('6'), plain_reason='除息')
+        self.assertEqual((record['record_type'], record['cash_delta'], record['lot_delta']), ('corporate_action', 18_000, 0))
+        self.assertEqual(self.ledger.account_state('acct'), {'cash': 118_000, 'holdings': {'2330': 3}})
+
+    def test_split_changes_share_count_and_odd_shares_are_kept(self):
+        # 1 拆 4：3 張 → 12 張；面額變更 1 拆 10 → 30 張
+        self.ledger.apply_corporate_action('acct', '2330', '2025-06-18', share_ratio=Decimal('4'), plain_reason='分割')
+        self.assertEqual(self.ledger.account_state('acct')['holdings'], {'2330': 12})
+
+    def test_stock_dividend_that_is_not_a_whole_lot_is_kept_as_odd_shares(self):
+        # 配股每千股 50 股（ratio 1.05）：3,000 股 → 3,150 股，150 股零股不能假裝是整張
+        self.ledger.apply_corporate_action('acct', '2330', '2016-07-01', share_ratio=Decimal('1.05'), plain_reason='除權')
+        state = self.ledger.account_state('acct')
+        self.assertEqual(state['holdings'], {'2330': 3})
+        self.assertEqual(state['odd_shares'], {'2330': 150})
+
+    def test_corporate_action_requires_a_holding_and_cannot_be_updated(self):
+        with self.assertRaises(ValueError):
+            self.ledger.apply_corporate_action('acct', '1101', '2016-06-27', cash_per_share=Decimal('1'), plain_reason='未持有')
+
+
 class StockHistoryMarketDataTests(unittest.TestCase):
     def test_uses_source_days_and_approximates_limits_from_previous_close(self):
         with tempfile.TemporaryDirectory() as directory:
