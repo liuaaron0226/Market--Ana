@@ -48,5 +48,28 @@ class ResearchFixtureTests(unittest.TestCase):
                 self.assertLessEqual(abs(volume_score(x, info['chg']) - dims['volume']), 4)
 
 
+@unittest.skipUnless(RESEARCH.exists() and DEFAULT_DB.exists(), '研究樣本或票 01 資料庫不在本機')
+class PriceStructureFixtureTests(unittest.TestCase):
+    def structure_of(self, code):
+        from twon_analysis.price_structure import structure
+        bars, _ = load_bars(code, '2026-10-16')
+        return structure(bars, indicators(bars))
+
+    def test_handoff_acceptance_targets(self):
+        # handoff §8.7：長榮 2603 第一壓力 268.5、容差 1.84；台積電支撐 2415、2395
+        evergreen = self.structure_of('2603')
+        self.assertEqual(evergreen['tolerance_pct'], 1.84)
+        self.assertEqual(evergreen['pressure']['first']['tick'], 268.5)
+        tsmc = self.structure_of('2330')
+        self.assertEqual((tsmc['support']['first']['tick'], tsmc['support']['second']['tick']), (2415.0, 2395.0))
+
+    def test_first_pressure_cluster_is_within_two_percent_of_the_original(self):
+        for analysis in samples():
+            with self.subTest(analysis['symbol']):
+                original = analysis['derived']['priceStructure']['pressure']['clusters'][0]['level']
+                mine = self.structure_of(analysis['symbol'])['pressure']['all'][0]['level']
+                self.assertLess(abs(mine / original - 1), 0.02)
+
+
 if __name__ == '__main__':
     unittest.main()
