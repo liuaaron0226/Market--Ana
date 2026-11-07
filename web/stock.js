@@ -75,10 +75,12 @@
 
     $('dims').replaceChildren(...DIMS.map(([key, label]) => {
       const value = r.dimensions[key];
+      const gaps = r.coverage && r.coverage[key] ? r.coverage[key].missing_sources : [];
       const box = document.createElement('div');
-      box.className = `sk-dim${value === null ? ' missing' : ''}`;
+      box.className = `sk-dim${value === null ? ' missing' : ''}${value !== null && gaps.length ? ' partial' : ''}`;
       const reason = key === 'F' && r.kind === 'etf' ? 'ETF 不適用' : '尚無資料';
       box.innerHTML = `<span>${label}</span><b>${value === null ? reason : value}</b><i style="--w:${value || 0}%"></i>`;
+      if (value !== null && gaps.length) box.append(Object.assign(document.createElement('small'), { textContent: `不完整：缺${gaps.join('、')}` }));
       return box;
     }));
     $('scoreLine').textContent = r.score === null ? `總分：${r.score_note}，先不給總分。` : `總分 ${r.score}（${TREND[r.trend]}）`;

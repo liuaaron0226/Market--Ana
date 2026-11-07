@@ -34,6 +34,8 @@
 .sk-dim i { display: block; height: 4px; border-radius: 4px; background: var(--line); margin-top: 6px; overflow: hidden; }
 .sk-dim i::after { content: ""; display: block; height: 100%; width: var(--w, 0%); background: var(--accent); }
 .sk-dim.missing b { color: var(--faint); font-size: 14px; }
+.sk-dim.partial b { color: var(--dim); }
+.sk-dim small { display: block; margin-top: 6px; color: var(--accent); font-size: 12px; }
 .sk-score { margin: 14px 0; color: var(--dim); }
 .sk-flags { margin: 0 0 20px; padding-left: 20px; color: var(--dim); }
 .sk-counts { color: var(--dim); }

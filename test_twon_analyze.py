@@ -10,10 +10,29 @@ class AnalyzeTests(unittest.TestCase):
         result = analyze('2330', '2026-11-06')
         self.assertEqual([s['id'] for s in result['strategies']][:6], ['T01', 'T02', 'T03', 'T04', 'T05', 'T06'])
         self.assertEqual(len(result['strategies']), 24)
-        self.assertEqual(result['dimensions_missing'], [])
-        self.assertIsNotNone(result['score'])                    # 五維到齊才給總分
-        self.assertIn(result['trend'], ('strong', 'watch', 'weak', 'risk'))
         self.assertEqual(result['sources']['revenue_period'], '2026-09')
+
+    def test_dimension_with_a_missing_source_is_incomplete_and_withholds_total_score(self):
+        from unittest.mock import patch
+        # 11/06 沒有借券與估值原件：C 缺借券、F 缺估值 → 這兩維不完整、不給總分，即使數字算得出來
+        with patch('twon_analysis.chips.borrow', return_value=[None] * 20), patch('twon_analysis.chips.valuation', return_value=None):
+            result = analyze('2330', '2026-11-06')
+        self.assertEqual(result['coverage']['C']['missing_sources'], ['借券'])
+        self.assertEqual(result['coverage']['F']['missing_sources'], ['估值'])
+        self.assertIn('C', result['dimensions_incomplete'])
+        self.assertIn('F', result['dimensions_incomplete'])
+        self.assertIsNone(result['score'])
+        self.assertIn('不完整', result['score_note'])
+
+    def test_total_score_only_when_every_source_covers_the_day(self):
+        from unittest.mock import patch
+        borrow = [{'balance_prev': 100, 'sold': 0, 'balance': 100}] * 20
+        valuation = {'per': 20.0, 'pbr': 3.0, 'yield': 2.0}
+        with patch('twon_analysis.chips.borrow', return_value=borrow), patch('twon_analysis.chips.valuation', return_value=valuation):
+            result = analyze('2330', '2026-11-06')
+        self.assertEqual(result['dimensions_incomplete'], [])
+        self.assertIsNotNone(result['score'])
+        self.assertTrue(result['score_complete'])
 
     def test_borrowing_condition_uses_official_raw_file_when_that_day_exists(self):
         result = analyze('2330', '2026-10-13')                   # 借券原件 10/07～10/13 已抓
@@ -27,7 +46,7 @@ class AnalyzeTests(unittest.TestCase):
             result = analyze('2330', '2026-11-06')
         self.assertIn('F', result['dimensions_missing'])
         self.assertIsNone(result['score'])
-        self.assertIn('F', result['score_note'])
+        self.assertIn('基本面', result['score_note'])
 
     def test_etf_has_no_fundamental_strategies_and_no_total_score(self):
         result = analyze('0050', '2026-11-06')

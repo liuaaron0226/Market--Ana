@@ -35,6 +35,13 @@ def _inst_cost(code: str, bars, days: list[str]) -> float | None:
     return round(weighted / net_sum, 2) if net_sum > 0 else None
 
 
+def _score_note(missing: list, incomplete: list, coverage: dict) -> str | None:
+    names = {'T': '趨勢', 'C': '籌碼', 'V': '量價', 'I': '法人', 'F': '基本面'}
+    parts = [f'{names[k]}尚無資料' for k in missing]
+    parts += [f'{names[k]}不完整（缺{"、".join(coverage[k]["missing_sources"])}）' for k in incomplete]
+    return '五維未到齊：' + '；'.join(parts) if parts else None
+
+
 def trend_class(score: int, risk_flags: int, rsi: float | None) -> str:
     if score <= 35 or risk_flags >= 2 or (rsi is not None and rsi <= 25 and score < 45):
         return 'risk'
@@ -70,6 +77,15 @@ def analyze(code: str, as_of: str) -> dict:
             'I': institutional_score(derived, x['avg_vol20']), 'F': None if is_etf else fundamental_score(rev, val)}
     # ETF 沒有基本面，F 不適用；依 handoff §3.5 ETF 模式總分與趨勢為 null（不是資料缺）
     missing = [k for k, v in dims.items() if v is None and not (is_etf and k == 'F')]
+    # 逐來源 coverage：有數字不等於資料到齊。C 需當日融資＋借券；I 需當日法人；F 需當日估值＋月營收。
+    margin_today = chips.margin(code, [x['date']])[0]
+    borrow_today = chips.borrow(code, [x['date']])[0]
+    inst_today = chips.institutional(code, [x['date']])[0]
+    needs = {'C': {'融資融券': margin_today, '借券': borrow_today}, 'I': {'三大法人': inst_today}}
+    if not is_etf:
+        needs['F'] = {'估值': val, '月營收': rev}
+    coverage = {k: {'missing_sources': [name for name, value in sources.items() if value is None]} for k, sources in needs.items()}
+    incomplete = [k for k, c in coverage.items() if c['missing_sources'] and k not in missing]
 
     flags = []
     if rf1(x):
@@ -89,7 +105,7 @@ def analyze(code: str, as_of: str) -> dict:
         flags.append({'id': 'RF5', 'text': '營收年減逾兩成或基本面分數偏低'})
 
     score = None
-    if not missing and not is_etf:
+    if not missing and not incomplete and not is_etf:
         base = sum(PRESET[k] * dims[k] for k in 'TCVIF')
         resonance = PRESET['res'] if dims['T'] >= 75 and dims['I'] >= 75 and chg >= 1 and (x['vol_ratio'] or 0) >= 1.3 else 0
         overheat = (PRESET['oh_rsi'] if (x['rsi14'] or 0) >= 70 else 0) + (PRESET['oh_margin'] if chg > 0 and derived.get('m5', 0) >= 20 and derived.get('margin_diff5', 0) > 1000 else 0)
@@ -109,9 +125,9 @@ def analyze(code: str, as_of: str) -> dict:
                     'valuation_date': x['date'] if val else None},
         'qa': {'blocking': False, 'bars': len(bars), 'chip_days': len(days),
                'chip_range': f'{days[0]}～{days[-1]}' if days else None},
-        'dimensions': dims, 'dimensions_missing': missing,
-        'score': score, 'score_complete': not missing and not is_etf,
-        'score_note': 'ETF 不適用五維總分' if is_etf else ('五維未到齊：' + '、'.join(missing) + ' 尚無資料' if missing else None),
+        'dimensions': dims, 'dimensions_missing': missing, 'dimensions_incomplete': incomplete, 'coverage': coverage,
+        'score': score, 'score_complete': score is not None,
+        'score_note': 'ETF 不適用五維總分' if is_etf else _score_note(missing, incomplete, coverage),
         'trend': trend_class(score, len(flags), x['rsi14']) if score is not None else None,
         'risk_flags': flags,
         'strategies': [{**r, 'status_label': STATUS_LABEL[r['status']]} for r in strategies],
