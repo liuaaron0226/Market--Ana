@@ -9,7 +9,7 @@
   "vars": {
     "TEAM_DOMAIN": "https://feb--2.cloudflareaccess.com",
     "MAIN_AUD": "432702e4180ff19534dfc612126e65d7bc3242197b79fe85abb007eb521b302b",
-    "APPLY_AUD": "",
+    "APPLY_AUD": "f8d3288f2326f9ad1c4cc8908d0a0b321b2f0ceb014273ce631513144a3ecacd",
     "OWNER_EMAIL": "owner@example.com"
   }
 }
