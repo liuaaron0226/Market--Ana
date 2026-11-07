@@ -74,11 +74,22 @@ def _borrow(day: str) -> dict:
     return {row[0].strip(): {'balance_prev': _int(row[8]), 'sold': _int(row[9]), 'balance': _int(row[12])} for row in data['data']}
 
 
+def _valuation_openapi(day: str) -> dict:
+    """OpenAPI BWIBBU_ALL 只有最新一天；檔名帶民國日期，只在日期相符時採用。"""
+    y, m, d = day.split('-')
+    path = FUND / 'openapi' / f'BWIBBU_ALL-{int(y) - 1911}{m}{d}.json'
+    if not path.exists():
+        return {}
+    num = lambda v: None if str(v).strip() in ('', '-', '0.00') else float(str(v).replace(',', ''))
+    return {row['Code'].strip(): {'per': num(row['PEratio']), 'pbr': num(row['PBratio']), 'yield': num(row['DividendYield'])}
+            for row in json.loads(path.read_text(encoding='utf-8'))}
+
+
 @lru_cache(maxsize=64)
 def _valuation(day: str) -> dict:
     path = FUND / 'bwibbu' / f'bwibbu-{day.replace("-", "")}.json'
     if not path.exists():
-        return {}
+        return _valuation_openapi(day)
     data = json.loads(path.read_text(encoding='utf-8'))
     out = {}
     for row in data['data']:

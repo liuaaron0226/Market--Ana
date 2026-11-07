@@ -25,6 +25,8 @@ DAILY = {
 SNAPSHOTS = {
     't187ap05_L': 'https://openapi.twse.com.tw/v1/opendata/t187ap05_L',
     't187ap14_L': 'https://openapi.twse.com.tw/v1/opendata/t187ap14_L',
+    # 最新交易日估值的官方替代來源（www.twse.com.tw 逾時時用；只有最新一天）
+    'BWIBBU_ALL': 'https://openapi.twse.com.tw/v1/exchangeReport/BWIBBU_ALL',
 }
 
 
@@ -49,8 +51,10 @@ def fetch(get=http_get, sleep=time.sleep, daily: bool = True) -> dict:
         except (UnicodeDecodeError, json.JSONDecodeError):
             raise RuntimeError(f'非 JSON 回應（{response.content_type}），可能是驗證頁')
 
-    try:
-        for name, (url, params) in (DAILY.items() if daily else ()):
+    summary['stopped_sources'] = {}
+    # 每個來源各自停：某一端點逾時只停那個來源，不擋其他來源（11-07 實核 TWT93U 逾時、BWIBBU 正常）
+    for name, (url, params) in (DAILY.items() if daily else ()):
+        try:
             for day in chip_days():
                 target = OUT / name / f'{name}-{day}.json'
                 if target.exists():
@@ -63,9 +67,12 @@ def fetch(get=http_get, sleep=time.sleep, daily: bool = True) -> dict:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(response.content)
                 summary['fetched'] += 1
+        except Exception as error:
+            summary['stopped_sources'][name] = f'{type(error).__name__}: {error}'
+    try:
         for name, url in SNAPSHOTS.items():
             response, payload = request(url, {})
-            issued = max((row.get('出表日期', '') for row in payload), default='unknown')
+            issued = max((row.get('出表日期') or row.get('Date') or '' for row in payload), default='unknown')
             target = OUT / 'openapi' / f'{name}-{issued}.json'
             if target.exists():
                 summary['existing'] += 1
@@ -77,7 +84,8 @@ def fetch(get=http_get, sleep=time.sleep, daily: bool = True) -> dict:
                 ensure_ascii=False) + '\n', encoding='utf-8')
             summary['fetched'] += 1
     except Exception as error:
-        summary['stopped'] = f'{type(error).__name__}: {error}'
+        summary['stopped_sources']['openapi'] = f'{type(error).__name__}: {error}'
+    summary['stopped'] = '; '.join(f'{k}: {v}' for k, v in summary['stopped_sources'].items()) or None
     return summary
 
 
