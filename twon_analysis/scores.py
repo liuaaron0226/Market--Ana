@@ -39,3 +39,23 @@ def volume_score(x: dict, chg: float) -> int:
 def rf1(x: dict) -> bool:
     c, ma5, ma20, ma60 = x['close'], x['ma5'], x['ma20'], x['ma60']
     return ma20 is not None and c < ma20 and ((ma5 is not None and c < ma5) or (ma60 is not None and c < ma60))
+
+
+def chip_score(derived: dict, chg: float) -> int | None:
+    """籌碼 C：沒有融資資料回 None（不再用中性 50 冒充有資料）。借券沒有資料，相關項以 0 計並在畫面標示。"""
+    if 'm5' not in derived:
+        return None
+    m5, margin_diff = derived['m5'], derived['margin_diff5']
+    margin_term = 0.90 * m5 if m5 >= 0 else 0.35 * m5
+    raw = round(52 - margin_term + (8 if chg > 0 and margin_diff < 0 else 0))
+    return int(clamp(0, 100, raw))
+
+
+def institutional_score(derived: dict, avg_vol: int | None) -> int | None:
+    if 'inst_today' not in derived:
+        return None
+    avg = max(1, avg_vol or 1)
+    days = derived['inst_days']
+    d20 = derived['inst_d20'] / (20 * avg) if days >= 20 else 0
+    value = 48 + 52 * derived['inst_today'] / avg + 110 * derived['inst_d5'] / (5 * avg) + 55 * d20 + (8 if derived['trust_streak'] >= 3 else 0)
+    return int(clamp(11, 100, round(value)))

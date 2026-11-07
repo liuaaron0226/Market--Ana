@@ -18,7 +18,90 @@ META = {
     'V04': ('高檔爆量竭盡', 'volume_price', 'short', 'bearish', 'modifier'),
     'V05': ('整理平台與量縮', 'volume_price', 'swing', 'neutral', 'both'),
     'V06': ('成交量分布結構', 'volume_price', 'swing', 'neutral', 'pressure'),
+    'C01': ('融資籌碼健康', 'chip', 'swing', 'bullish', 'modifier'),
+    'C02': ('融資追價過熱', 'chip', 'short', 'bearish', 'modifier'),
+    'C03': ('融券回補潛力', 'chip', 'short', 'bullish', 'modifier'),
+    'C04': ('借券賣壓累積', 'chip', 'swing', 'bearish', 'modifier'),
+    'I01': ('法人買超強度', 'institutional', 'swing', 'bullish', 'modifier'),
+    'I02': ('法人連續買賣', 'institutional', 'swing', 'neutral', 'modifier'),
+    'I03': ('法人買賣轉向', 'institutional', 'short', 'neutral', 'modifier'),
+    'I04': ('法人成本結構', 'institutional', 'swing', 'bullish', 'both'),
+    'F01': ('營收成長動能', 'fundamental', 'mid', 'bullish', 'none'),
+    'F02': ('每股盈餘能力', 'fundamental', 'mid', 'bullish', 'none'),
+    'F03': ('估值結構', 'fundamental', 'mid', 'neutral', 'none'),
+    'F04': ('營收衰退風險', 'fundamental', 'mid', 'bearish', 'none'),
 }
+
+
+def streak(values: list) -> int:
+    """由最新往回數連續同號天數；遇 None、0 或變號停止。正數＝連買、負數＝連賣。"""
+    count, sign = 0, 0
+    for value in reversed(values):
+        if not value:
+            break
+        s = 1 if value > 0 else -1
+        if sign and s != sign:
+            break
+        sign, count = s, count + 1
+    return sign * count
+
+
+def chip_and_institutional(margin_rows: list, inst_rows: list, chg: float, close: float, avg_vol: int | None,
+                           inst_cost: float | None) -> tuple[list[dict], dict]:
+    """margin_rows／inst_rows：由舊到新、最後一筆是 as_of。缺資料的日子是 None。回傳 (8 招, 衍生數值)。"""
+    out, derived = [], {}
+    avg = max(1, avg_vol or 1)
+
+    m = [r for r in margin_rows if r is not None]
+    if not m or margin_rows[-1] is None:
+        for sid in ('C01', 'C02', 'C03'):
+            out.append(_result(sid, 'unavailable', {'reason': '融資融券原件只涵蓋 2026-10-07～11-06'}))
+    else:
+        today = m[-1]
+        base = m[max(0, len(m) - 6)]
+        margin_diff = today['margin'] - base['margin'] if len(m) > 1 else today['margin'] - today['margin_prev']
+        day_change = today['margin'] - today['margin_prev']
+        m5 = margin_diff / max(100, base['margin']) * 100
+        derived.update(margin_diff5=margin_diff, m5=round(m5, 2), short=today['short'], margin=today['margin'])
+        out.append(_result('C01', 'triggered' if chg >= 1.5 and day_change < 0 and margin_diff < 0 else
+                           'confirming' if chg > 0 and margin_diff < 0 else 'off',
+                           {'chg': round(chg, 2), 'margin_change_today': day_change, 'margin_diff5': margin_diff}))
+        out.append(_result('C02', 'triggered' if chg > 0 and m5 >= 20 and margin_diff > 1000 else
+                           'confirming' if m5 >= 10 and margin_diff > 500 else 'off',
+                           {'m5_pct': round(m5, 2), 'margin_diff5': margin_diff}))
+        out.append(_result('C03', 'triggered' if today['short'] > 0 else 'off', {'short_balance': today['short']}))
+    out.append(_result('C04', 'unavailable', {'reason': '借券資料尚未接入（補抓需本人同意）'}))
+
+    rows = [r for r in inst_rows if r is not None]
+    if not rows or inst_rows[-1] is None:
+        for sid in ('I01', 'I02', 'I03', 'I04'):
+            out.append(_result(sid, 'unavailable', {'reason': '三大法人原件只涵蓋 2026-10-07～11-06'}))
+        return out, derived
+    today = rows[-1]
+    d5 = sum(r['total'] for r in rows[-5:])
+    d10 = sum(r['total'] for r in rows[-10:])
+    d20 = sum(r['total'] for r in rows[-20:])
+    derived.update(inst_today=today['total'], inst_d5=d5, inst_d20=d20, inst_days=len(rows),
+                   foreign_today=today['foreign'], foreign_d5=sum(r['foreign'] for r in rows[-5:]),
+                   trust_today=today['trust'], trust_streak=streak([r['trust'] for r in rows]))
+    out.append(_result('I01', 'triggered' if any(v > 0 for v in (today['total'], today['foreign'], today['trust'], d5, d20)) else 'off',
+                       {'today': today['total'], 'foreign': today['foreign'], 'trust': today['trust'], 'd5': d5, 'd20': d20, 'days': len(rows)}))
+    streaks = {k: streak([r[k] for r in rows]) for k in ('foreign', 'trust', 'dealer')}
+    out.append(_result('I02', 'triggered' if any(abs(v) >= 1 for v in streaks.values()) else 'off', streaks))
+    turned = []
+    for key in ('foreign', 'trust'):
+        prev5 = sum(r[key] for r in rows[-6:-1])
+        if today[key] and prev5 and (today[key] > 0) != (prev5 > 0) and abs(today[key]) >= avg * 0.01:
+            turned.append(key)
+    out.append(_result('I03', 'triggered' if turned else 'off', {'turned': turned}))
+    cost_ok = True if inst_cost is None else close >= inst_cost * 0.97
+    out.append(_result('I04', 'triggered' if (d10 > 0 or d20 > 0) and cost_ok else 'off',
+                       {'d10': d10, 'd20': d20, 'inst_cost': inst_cost, 'close': close}))
+    return out, derived
+
+
+def fundamentals_unavailable() -> list[dict]:
+    return [_result(sid, 'unavailable', {'reason': '月營收、EPS、本益比資料尚未接入（補抓需本人同意）'}) for sid in ('F01', 'F02', 'F03', 'F04')]
 
 
 def _result(sid, status, evidence):
