@@ -43,6 +43,8 @@ def trend_class(score: int, risk_flags: int, rsi: float | None) -> str:
 
 def analyze(code: str, as_of: str) -> dict:
     bars, info = load_bars(code, as_of)
+    if not bars:
+        return {'code': code, 'as_of': as_of, 'version': VERSION, 'qa': {'blocking': True, 'reason': '查不到這個上市代號（只收上市普通股、特別股與 0050）', 'not_found': True}}
     if len(bars) < 20:
         return {'code': code, 'as_of': as_of, 'version': VERSION, 'qa': {'blocking': True, 'reason': f'有效日線只有 {len(bars)} 根，不足 20 根'}}
     x = indicators(bars)

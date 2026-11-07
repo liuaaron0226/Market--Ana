@@ -1,0 +1,56 @@
+/* 個股分析頁：沿用 minimal.css 的色票與字型，只加本頁版面。 */
+.sk-shell { max-width: 1080px; margin: 0 auto; padding: 24px 16px 80px; }
+.sk-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.sk-back { color: var(--dim); text-decoration: none; font-size: 15px; padding: 8px 4px; }
+.sk-back:hover { color: var(--ink); }
+.sk-search { display: flex; gap: 8px; flex: 1 1 220px; max-width: 360px; }
+.sk-search input { flex: 1; min-width: 0; font: 16px var(--mono); padding: 10px 14px; border-radius: 12px; border: 1px solid var(--line-strong); background: var(--panel); color: var(--ink); }
+.sk-search button { padding: 10px 16px; border-radius: 12px; border: 1px solid var(--line-strong); background: var(--panel2); color: var(--ink); font: inherit; cursor: pointer; }
+.sk-head .theme-toggle { margin-left: auto; }
+.sk-status { color: var(--dim); margin: 24px 0; }
+.sk-card { background: var(--panel); border: 1px solid var(--line); border-radius: 20px; padding: 24px; margin-top: 20px; }
+.sk-hero { display: grid; gap: 20px; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); align-items: start; }
+.sk-title h1 { margin: 0; font-size: 26px; }
+.sk-code { color: var(--faint); font-size: 18px; }
+.sk-meta { margin: 6px 0 0; color: var(--dim); font-size: 14px; }
+.sk-meta .up { color: var(--up); } .sk-meta .down { color: var(--down); }
+.sk-verdict { display: grid; gap: 6px; text-align: left; padding: 16px 18px; border-radius: 16px; border: 1px solid var(--line); background: var(--panel2); color: var(--ink); font: inherit; cursor: pointer; }
+.sk-verdict strong { font-size: 17px; line-height: 1.5; }
+.sk-trend { justify-self: start; font-size: 13px; padding: 2px 10px; border-radius: 99px; background: var(--panel3); color: var(--dim); }
+.sk-trend[data-trend="strong"] { color: var(--up); } .sk-trend[data-trend="risk"], .sk-trend[data-trend="weak"] { color: var(--down); }
+.sk-levels { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.sk-levels div { padding: 12px 14px; border-radius: 14px; background: var(--panel2); }
+.sk-levels span { display: block; color: var(--dim); font-size: 13px; }
+.sk-levels b { font-size: 22px; }
+.sk-chart { position: relative; min-height: 300px; }
+.sk-note { color: var(--faint); font-size: 13px; margin: 8px 0 0; }
+.sk-card h2 { font-size: 18px; margin: 0 0 12px; }
+.sk-card h2 small { color: var(--faint); font-size: 12px; font-weight: 400; margin-left: 8px; }
+.sk-card h2 + * { margin-top: 0; }
+.sk-dims { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+.sk-dim { padding: 10px 12px; border-radius: 12px; background: var(--panel2); }
+.sk-dim span { display: block; color: var(--dim); font-size: 13px; }
+.sk-dim b { font: 600 22px var(--mono); }
+.sk-dim i { display: block; height: 4px; border-radius: 4px; background: var(--line); margin-top: 6px; overflow: hidden; }
+.sk-dim i::after { content: ""; display: block; height: 100%; width: var(--w, 0%); background: var(--accent); }
+.sk-dim.missing b { color: var(--faint); font-size: 14px; }
+.sk-score { margin: 14px 0; color: var(--dim); }
+.sk-flags { margin: 0 0 20px; padding-left: 20px; color: var(--dim); }
+.sk-counts { color: var(--dim); }
+.sk-detail { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 12px; }
+.sk-detail summary { cursor: pointer; color: var(--ink); font-weight: 600; }
+.sk-scroll { overflow-x: auto; margin-top: 10px; }
+.sk-table { border-collapse: collapse; width: 100%; font-size: 14px; }
+.sk-table th, .sk-table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.sk-table td:nth-child(4) { color: var(--dim); font-size: 13px; min-width: 220px; }
+.sk-pill { white-space: nowrap; font-size: 12px; padding: 2px 8px; border-radius: 99px; background: var(--panel3); }
+.sk-pill[data-s="triggered"] { color: var(--accent); } .sk-pill[data-s="unavailable"] { color: var(--faint); }
+.sk-warn { border-color: var(--accent); }
+.sk-warn ul { margin: 0; padding-left: 20px; } .sk-warn li { margin: 6px 0; color: var(--dim); }
+.sk-source { margin: 10px 0; font-size: 14px; color: var(--dim); }
+.sk-source b { color: var(--ink); }
+@media (max-width: 760px) {
+  .sk-hero { grid-template-columns: 1fr; }
+  .sk-dims { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sk-levels b { font-size: 18px; }
+}

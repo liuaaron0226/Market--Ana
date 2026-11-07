@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-Hant" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>個股分析</title>
+  <link rel="stylesheet" href="minimal.css?v=20261107-navigation1">
+  <link rel="stylesheet" href="stock.css?v=20261107-twon1">
+</head>
+<body>
+  <div class="sk-shell">
+    <header class="sk-head">
+      <a class="sk-back" href="minimal.html">‹ 大盤</a>
+      <form class="sk-search" id="searchForm" role="search">
+        <label class="sr-only" for="codeInput">股票代號</label>
+        <input id="codeInput" name="code" inputmode="numeric" autocomplete="off" placeholder="代號，例如 2330" maxlength="6">
+        <button type="submit">查詢</button>
+      </form>
+      <button class="theme-toggle" id="themeToggle" type="button" aria-label="切換深淺色主題">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.64 5.64l1.42 1.42m9.88 9.88 1.42 1.42m0-12.72-1.42 1.42M7.06 16.94l-1.42 1.42" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>
+        <span id="themeText">切換主題</span>
+      </button>
+    </header>
+
+    <p class="sk-status" id="status" role="status">讀取中…</p>
+
+    <main id="content" hidden>
+      <section class="sk-card sk-hero">
+        <div class="sk-title">
+          <h1><span id="stockName">—</span> <span class="num sk-code" id="stockCode">—</span></h1>
+          <p class="sk-meta">資料日 <b class="num" id="asOf"></b>・收盤 <b class="num" id="close"></b> <b class="num" id="chg"></b></p>
+        </div>
+        <button class="sk-verdict" id="verdictButton" type="button" aria-expanded="false" aria-controls="layer1">
+          <span class="sk-trend" id="trendBadge">—</span>
+          <strong id="verdict">—</strong>
+          <span class="detail-cue">看依據 <span aria-hidden="true">›</span></span>
+        </button>
+        <div class="sk-levels" aria-label="關鍵價位">
+          <div><span>最近支撐</span><b class="num" id="support1">—</b></div>
+          <div><span>第一壓力</span><b class="num" id="pressure1">—</b></div>
+          <div><span>防守參考</span><b class="num" id="defense">—</b></div>
+        </div>
+      </section>
+
+      <section class="sk-card sk-chart-card">
+        <div class="sk-chart" id="chartHost"></div>
+        <p class="sk-note">虛線：金＝壓力、綠＝支撐、紅＝防守參考。拖曳平移、滾輪縮放。</p>
+      </section>
+
+      <section class="sk-card" id="layer1" hidden>
+        <h2>五維分數 <small>本站自有計分，非漲停寶寶原公式</small></h2>
+        <div class="sk-dims" id="dims"></div>
+        <p class="sk-score" id="scoreLine"></p>
+        <ul class="sk-flags" id="flags"></ul>
+        <h2>24 招摘要</h2>
+        <p class="sk-counts" id="counts"></p>
+        <details class="sk-detail">
+          <summary>逐招看證據</summary>
+          <div class="sk-scroll"><table class="sk-table"><thead><tr><th>招式</th><th>狀態</th><th>方向</th><th>依據</th></tr></thead><tbody id="strategyRows"></tbody></table></div>
+        </details>
+        <details class="sk-detail">
+          <summary>價位怎麼來的</summary>
+          <div id="levelSources"></div>
+        </details>
+      </section>
+
+      <section class="sk-card sk-warn">
+        <h2>要注意</h2>
+        <ul id="notes"></ul>
+      </section>
+    </main>
+  </div>
+  <script src="kchart.js?v=20261107-twon1"></script>
+  <script src="stock.js?v=20261107-twon1"></script>
+</body>
+</html>
