@@ -86,6 +86,14 @@ def page_state(browser, base: str, code: str, preset: str, width: int, email: st
 def main() -> None:
     from twon_analysis.analyze import analyze  # noqa: E402  凍結版
     globals()["analyze"] = analyze
+    global LOCAL
+    if not os.environ.get("LOCAL_STOCK_URL"):
+        # 不用 8876（可能是舊行程）也不用他窗的 8897：在本程序內開一支隔離的 live_server（埠號自動分配）。
+        import threading
+        import live_server
+        iso = live_server.MarketHTTPServer(("127.0.0.1", 0), live_server.Handler)
+        threading.Thread(target=iso.serve_forever, daemon=True).start()
+        LOCAL = f"http://127.0.0.1:{iso.server_port}"
     subprocess.run(["node", "build.mjs"], cwd=CLOUD, check=True, capture_output=True)
     server = subprocess.Popen(["node", "test/journey-server.mjs", str(PORT), "relaxed"], cwd=CLOUD, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     pack = json.loads((CLOUD / ".stock-pack.json").read_text(encoding="utf-8"))
@@ -119,8 +127,8 @@ def main() -> None:
             page.goto(CLOUD_URL + "/")
             page.wait_for_function("window.MinimalApp && window.MinimalApp.ready === true")
             page.locator(".chip-card[data-chip='foreign']").click()
-            page.wait_for_selector("#drillDetail a.stock-link")
-            link = page.locator("#drillDetail a.stock-link").first
+            page.wait_for_selector("#chipBody a.stock-link")
+            link = page.locator("#chipBody a.stock-link").first
             href = link.get_attribute("href")
             link.click()
             page.wait_for_url("**/stock.html**")

@@ -63,10 +63,14 @@ def main() -> None:
                     for key, fields in EXPECT.items():
                         page.locator(f".chip-card[data-chip='{key}']").click()
                         page.wait_for_selector("#nowBlock")
-                        tables = page.locator("#nowBlock .now-table")
                         got = []
+                        one = page.locator("#nowBlock .now-table").count() == 1
+                        got.append({"default_single_table": one})
+                        ok &= one
                         for i, field in enumerate(fields):
-                            rows = tables.nth(i).locator("tbody tr")
+                            if i:
+                                page.locator(f"#panelBody .chip-seg[data-seg=side] [data-value='{i}']").click()
+                            rows = page.locator("#nowBlock .now-table tbody tr")
                             exp = CURRENT[field]
                             first = rows.first.inner_text() if rows.count() else ""
                             streak_txt = f"{exp[0]['streak']} 天" if exp else ""

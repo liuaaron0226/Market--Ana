@@ -121,12 +121,19 @@ def drill_all(page, settle) -> dict:
     out = {}
     for key in KINDS:
         page.locator(f".chip-card[data-chip='{key}']").click()
-        bars = page.locator("#panelBody .bar-hit")
-        days = []
-        for i in range(bars.count()):
-            bars.nth(i).click()
-            settle(page)
-            days.append(page.locator("#drillDetail").inner_text())
+        days = [page.locator("#chipBody").inner_text()]
+        sides = page.locator("#panelBody .chip-seg[data-seg=side] button")
+        for s in range(max(1, sides.count())):
+            if sides.count():
+                sides.nth(s).click()
+                days.append(page.locator("#chipBody").inner_text())
+            page.locator("#panelBody .chip-seg[data-seg=view] [data-value=daily]").click()
+            bars = page.locator("#panelBody .bar-hit")
+            for i in range(bars.count()):
+                bars.nth(i).click()
+                settle(page)
+                days.append(page.locator("#drillDetail").inner_text())
+            page.locator("#panelBody .chip-seg[data-seg=view] [data-value=now]").click()
         out[key] = days
         page.keyboard.press("Escape")
         page.wait_for_timeout(250)
@@ -185,6 +192,7 @@ def main() -> None:
             ctx, page, errs = open_page(browser, CLOUD_URL + "/", 1440, OWNER)
             page.route("**/api/market/detail**", lambda r: r.fulfill(status=429, body='{"error":"x"}', content_type="application/json"))
             page.locator(".chip-card[data-chip='trust']").click()
+            page.locator("#panelBody .chip-seg[data-seg=view] [data-value=daily]").click()
             page.wait_for_selector("#drillDetail [role=alert]")
             results["rate_limited_message"] = page.locator("#drillDetail [role=alert]").inner_text()
             ok &= "太頻繁" in results["rate_limited_message"]

@@ -617,16 +617,17 @@
       target().innerHTML = dayHead(key, day) + `<p class="chip-date" role="alert">${esc(error && error.message ? error.message : '暫時無法取得明細。')}</p>`;
     });
   }
-  function dayDetail(key, day, d) {
+  function dayDetail(key, day, d, side = chipSide()) {
     const point = chipSeries(key).find(r => r.date === day);
+    const pick = (a, b) => side ? b : a;
     const head = dayHead(key, day);
     const lots = v => `${v >= 0 ? '+' : '−'}${fmt(Math.abs(v), 0)} 張`;
     const bil = v => v == null ? '—' : `${v >= 0 ? '+' : '−'}${fmt(Math.abs(v), 1)} 億`;
     const tone = v => (v >= 0 ? 'upc' : 'dn');
-    if (key === 'trust') return head + detailTable('投信買超前 20', d.trust_buy, [['金額（估）', r => bil(r.trust_billion), r => tone(r.trust_billion)], ['張數', r => lots(r.trust_lots)]]) + detailTable('投信賣超前 20', d.trust_sell, [['金額（估）', r => bil(r.trust_billion), r => tone(r.trust_billion)], ['張數', r => lots(r.trust_lots)]]);
-    if (key === 'foreign') return head + detailTable('外資買超前 20', d.foreign_buy, [['金額（估）', r => bil(r.foreign_billion), r => tone(r.foreign_billion)], ['張數', r => lots(r.foreign_lots)]]) + detailTable('外資賣超前 20', d.foreign_sell, [['金額（估）', r => bil(r.foreign_billion), r => tone(r.foreign_billion)], ['張數', r => lots(r.foreign_lots)]]);
-    if (key === 'margin') return head + detailTable('融資增加最多 20 檔', d.margin_up, [['增加', r => lots(r.margin_change)], ['融資餘額', r => `${fmt(r.margin_balance, 0)} 張`]]) + detailTable('融資減少最多 20 檔', d.margin_down, [['減少', r => lots(r.margin_change)], ['融資餘額', r => `${fmt(r.margin_balance, 0)} 張`]]);
-    if (key === 'short') return head + detailTable('融券增加最多 20 檔', d.short_up, [['增加', r => lots(r.short_change)], ['融券餘額', r => `${fmt(r.short_balance, 0)} 張`]]) + detailTable('融券減少最多 20 檔', d.short_down, [['減少', r => lots(r.short_change)], ['融券餘額', r => `${fmt(r.short_balance, 0)} 張`]]);
+    if (key === 'trust') return head + detailTable(pick('投信買超前 20', '投信賣超前 20'), pick(d.trust_buy, d.trust_sell), [['金額（估）', r => bil(r.trust_billion), r => tone(r.trust_billion)], ['張數', r => lots(r.trust_lots)]]);
+    if (key === 'foreign') return head + detailTable(pick('外資買超前 20', '外資賣超前 20'), pick(d.foreign_buy, d.foreign_sell), [['金額（估）', r => bil(r.foreign_billion), r => tone(r.foreign_billion)], ['張數', r => lots(r.foreign_lots)]]);
+    if (key === 'margin') return head + detailTable(pick('融資增加最多 20 檔', '融資減少最多 20 檔'), pick(d.margin_up, d.margin_down), [[pick('增加', '減少'), r => lots(r.margin_change)], ['融資餘額', r => `${fmt(r.margin_balance, 0)} 張`]]);
+    if (key === 'short') return head + detailTable(pick('融券增加最多 20 檔', '融券減少最多 20 檔'), pick(d.short_up, d.short_down), [[pick('增加', '減少'), r => lots(r.short_change)], ['融券餘額', r => `${fmt(r.short_balance, 0)} 張`]]);
     if (key === 'volume') return head + detailTable('成交金額前 20', d.turnover_top, [['成交', r => `${fmt(r.amount_billion, 0)} 億`], ['漲跌', r => r.change_pct == null ? '—' : `${r.change_pct >= 0 ? '+' : ''}${fmt(r.change_pct, 2)}%`, r => tone(r.change_pct || 0)]]);
     if (key === 'futures') {
       const change = point && point.prev != null ? (-point.value) - point.prev : null;
@@ -656,23 +657,47 @@
     const tone = key === 'volume' ? () => '' : r => (r.value >= 0 ? 'upc' : 'dn');
     return `<section class="drill-table now-table"><h4>${esc(title)}</h4><table><thead><tr><th>#</th><th>股票</th><th class="num">${key === 'volume' ? '成交' : key === 'margin' || key === 'short' ? '增減' : '金額（估）'}</th><th class="num">連續</th></tr></thead><tbody>${rows.map((r, i) => `<tr><td class="num">${i + 1}</td><td><a class="stock-link" href="stock.html?code=${encodeURIComponent(r.code)}"><span class="num">${esc(r.code)}</span> ${esc(r.name)}</a></td><td class="num ${tone(r)}">${esc(nowValue(key, r.value))}</td><td class="num streak">${days(r)}</td></tr>`).join('')}</tbody></table></section>`;
   }
-  function nowBlock(key) {
+  function nowBlock(key, side = 0) {
     if (!NOW || !NOW_TABLES[key]) return '';
+    const table = NOW_TABLES[key][Math.min(side, NOW_TABLES[key].length - 1)];
     const md = NOW.as_of ? NOW.as_of.slice(5).replace('-', '/') : '';
     const head = key === 'futures'
       ? `<p class="now-lede">外資台指期空單已連續增加 <b>${fmt(NOW.futures_short_growing_days, 0)}</b> 天${NOW.futures_short_growing_days >= NOW.futures_days_available ? '以上' : ''}（期貨是整個台指，沒有個股；下面列同日外資現貨賣超對照）。</p>`
       : `<p class="now-lede">依 ${esc(md)} 排序；「連續」是往回數同方向幾天，資料只有近 ${fmt(NOW.days_available, 0)} 個交易日。</p>`;
-    return `<section class="now-block" id="nowBlock"><h3>目前前 10（${esc(md)}）</h3>${head}<div class="now-grid">${NOW_TABLES[key].map(([title, field, word]) => nowTable(key, title, field, word)).join('')}</div></section>`;
+    return `<section class="now-block" id="nowBlock"><h3>目前前 10（${esc(md)}）</h3>${head}<div class="now-grid">${nowTable(key, ...table)}</div></section>`;
+  }
+  // 本人 11-07：不要一次全貼。一進來只給「目前前 10 × 買超（增加）」，其他（賣超、每天明細）用按鈕切換。
+  const SIDE_LABELS = { foreign: ['買超', '賣超'], trust: ['買超', '賣超'], margin: ['增加', '減少'], short: ['增加', '減少'] };
+  const chipView = () => (panelState.payload && panelState.payload.view) || 'now';
+  const chipSide = () => (panelState.payload && panelState.payload.side) || 0;
+  function segmented(name, options, current) {
+    return `<div class="chip-seg" role="radiogroup" data-seg="${name}">${options.map(([value, label]) => `<button type="button" role="radio" data-value="${value}" aria-checked="${String(value) === String(current)}">${esc(label)}</button>`).join('')}</div>`;
+  }
+  function chipBody(key, day) {
+    if (chipView() === 'now') return nowBlock(key, chipSide());
+    const rows = chipSeries(key);
+    const selected = day || (rows.length ? rows[rows.length - 1].date : '');
+    return `<p class="drill-hint">點下面任一天，看那天的明細 <span aria-hidden="true">↓</span></p><div class="chip-big">${clickableBars(key, selected)}</div><div class="drill-detail" id="drillDetail" data-day="${esc(selected)}"></div><p class="chip-date">${esc(DT ? DT.notes.money : '')}　${esc(DT ? DT.notes.scope : '')}</p>`;
   }
   function renderChipPanel(key, day) {
     const card = chipCards().find(item => item.key === key);
     if (!card) return '';
-    const rows = chipSeries(key);
-    const selected = day || (rows.length ? rows[rows.length - 1].date : '');
     const watch = PL ? PL.worry.filter(w => (key === 'futures' || key === 'foreign') && w.includes('外資')) : [];
-    return `${plainBlock(card.plain.lines.map(esc), watch.map(esc))}${nowBlock(key)}<p class="drill-hint">點下面任一天，看那天的明細 <span aria-hidden="true">↓</span></p><div class="chip-big">${clickableBars(key, selected)}</div><div class="drill-detail" id="drillDetail" data-day="${esc(selected)}"></div><p class="chip-date">${esc(DT ? DT.notes.money : '')}　${esc(DT ? DT.notes.scope : '')}</p>`;
+    const sides = SIDE_LABELS[key];
+    const controls = `<div class="chip-controls">${segmented('view', [['now', '目前前 10'], ['daily', '每天明細']], chipView())}${sides ? segmented('side', sides.map((label, i) => [i, label]), chipSide()) : ''}</div>`;
+    return `${plainBlock(card.plain.lines.map(esc), watch.map(esc))}${controls}<div id="chipBody">${chipBody(key, day)}</div>`;
   }
   function bindChipPanel(key) {
+    els.panelBody.querySelectorAll('.chip-seg').forEach(group => group.querySelectorAll('button').forEach(button => button.addEventListener('click', () => {
+      const name = group.dataset.seg;
+      panelState.payload[name] = name === 'side' ? Number(button.dataset.value) : button.dataset.value;
+      group.querySelectorAll('button').forEach(b => b.setAttribute('aria-checked', String(b === button)));
+      els.panelBody.querySelector('#chipBody').innerHTML = chipBody(key, panelState.payload.day);
+      bindChipBody(key);
+    })));
+    bindChipBody(key);
+  }
+  function bindChipBody(key) {
     const first = els.panelBody.querySelector('#drillDetail');
     if (first) loadDayDetail(key, first.dataset.day);
     els.panelBody.querySelectorAll('.bar-hit').forEach(node => {

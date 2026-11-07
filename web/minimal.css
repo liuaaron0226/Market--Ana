@@ -959,3 +959,11 @@ html, body { height: auto; }
   .now-table table { font-size: 12.5px; }
   .now-table td, .now-table th { padding: 5px 4px; }
 }
+
+/* 本人 11-07：籌碼卡細部先給最重要的，其他用按鈕切換 */
+.chip-controls { display: flex; flex-wrap: wrap; gap: 8px 10px; margin: 14px 0 4px; }
+.chip-seg { display: inline-flex; padding: 3px; gap: 2px; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--panel2); }
+.chip-seg button { min-height: 36px; padding: 0 14px; border: 0; border-radius: 999px; background: transparent; color: var(--dim); font: 600 13.5px/1 var(--sans); cursor: pointer; }
+.chip-seg button[aria-checked="true"] { background: var(--panel); color: var(--ink); box-shadow: 0 1px 4px rgb(0 0 0 / 10%); }
+.chip-seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+#chipBody .now-block { margin-top: 8px; }
