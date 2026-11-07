@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="light dark">
   <title>個股分析</title>
   <link rel="stylesheet" href="minimal.css?v=20261107-twon1">
-  <link rel="stylesheet" href="stock.css?v=20261107-twon3">
+  <link rel="stylesheet" href="stock.css?v=20261107-clear1">
 </head>
 <body>
   <div class="sk-shell">
@@ -23,12 +23,27 @@
       </button>
     </header>
 
+    <section class="sk-profile-control" aria-labelledby="presetHeading">
+      <h2 id="presetHeading">分析策略 <small>三套本站自有分析，換策略會重算分數與關鍵價位</small></h2>
+      <div class="sk-preset-tabs" role="radiogroup" aria-labelledby="presetHeading" id="presetTabs">
+        <button type="button" role="radio" data-preset="2TON-FIT-V1" aria-checked="true"><b>綜合觀察</b><span>趨勢與量價為主，價位看近 60 日</span></button>
+        <button type="button" role="radio" data-preset="MOMENTUM-V1" aria-checked="false"><b>短線量價</b><span>更重量價，價位只看近 20 日</span></button>
+        <button type="button" role="radio" data-preset="SWING-SAFE-V1" aria-checked="false"><b>波段結構</b><span>加重法人與基本面，價位看近 120 日</span></button>
+      </div>
+      <select id="presetSelect" class="sr-only" tabindex="-1" aria-hidden="true">
+        <option value="2TON-FIT-V1">綜合觀察</option>
+        <option value="MOMENTUM-V1">短線量價</option>
+        <option value="SWING-SAFE-V1">波段結構</option>
+      </select>
+      <p id="presetDescription" class="sr-only">本站自有分析；分數與關鍵價位一起重算，不執行交易。</p>
+    </section>
     <p class="sk-status" id="status" role="status">讀取中…</p>
 
     <main id="content" hidden>
       <section class="sk-card sk-hero">
         <div class="sk-title">
           <h1><span id="stockName">—</span> <span class="num sk-code" id="stockCode">—</span></h1>
+          <p class="sk-mode" id="appliedPreset"></p>
           <p class="sk-meta">資料日 <b class="num" id="asOf"></b>・收盤 <b class="num" id="close"></b> <b class="num" id="chg"></b></p>
         </div>
         <button class="sk-verdict" id="verdictButton" type="button" aria-expanded="false" aria-controls="layer1">
@@ -37,15 +52,22 @@
           <span class="detail-cue">看依據 <span aria-hidden="true">›</span></span>
         </button>
         <div class="sk-levels" aria-label="關鍵價位">
-          <div><span>最近支撐</span><b class="num" id="support1">—</b></div>
-          <div><span>第一壓力</span><b class="num" id="pressure1">—</b></div>
-          <div><span>防守參考</span><b class="num" id="defense">—</b></div>
+          <div class="lv-pressure"><span>第一壓力</span><b class="num" id="pressure1">—</b><small id="pressure1Diff"></small></div>
+          <div class="lv-support"><span>最近支撐</span><b class="num" id="support1">—</b><small id="support1Diff"></small></div>
+          <div class="lv-defense"><span>防守參考</span><b class="num" id="defense">—</b><small id="defenseDiff"></small></div>
+          <div class="lv-score"><span>總分</span><b class="num" id="scoreValue">—</b><small id="scoreDiff"></small></div>
         </div>
+        <p class="sk-compare" id="compareLine" hidden></p>
       </section>
 
       <section class="sk-card sk-chart-card">
         <div class="sk-chart" id="chartHost"></div>
-        <p class="sk-note">虛線：金＝壓力、綠＝支撐、紅＝防守參考。拖曳平移、滾輪縮放。</p>
+        <ul class="sk-legend" aria-label="圖上虛線">
+          <li class="lg-pressure">壓力：漲到這附近容易遇到賣壓</li>
+          <li class="lg-support">支撐：跌到這附近容易有人接</li>
+          <li class="lg-zone">觀察區上緣／下緣：近期價格常停留的區間</li>
+          <li class="lg-defense">防守：跌破代表結構轉壞（分析參考，不是停損指令）</li>
+        </ul>
       </section>
 
       <section class="sk-card" id="layer1" hidden>
@@ -71,7 +93,7 @@
       </section>
     </main>
   </div>
-  <script src="kchart.js?v=20261107-twon1"></script>
-  <script src="stock.js?v=20261107-twon5"></script>
+  <script src="kchart.js?v=20261107-clear1"></script>
+  <script src="stock.js?v=20261107-clear1"></script>
 </body>
 </html>

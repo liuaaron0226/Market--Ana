@@ -8,6 +8,18 @@
 .sk-search button { padding: 10px 16px; border-radius: 12px; border: 1px solid var(--line-strong); background: var(--panel2); color: var(--ink); font: inherit; cursor: pointer; }
 .sk-head .theme-toggle { margin-left: auto; }
 .sk-status { color: var(--dim); margin: 24px 0; }
+.sk-profile-control { margin-top: 20px; }
+.sk-profile-control h2 { font-size: 15px; margin: 0 0 10px; color: var(--ink); }
+.sk-profile-control h2 small { color: var(--faint); font-size: 12px; font-weight: 400; margin-left: 8px; }
+.sk-preset-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.sk-preset-tabs button { display: grid; gap: 4px; text-align: left; min-height: 64px; padding: 12px 14px; border-radius: 14px; border: 1px solid var(--line-strong); background: var(--panel); color: var(--ink); font: inherit; cursor: pointer; transition: border-color .15s, background .15s; }
+.sk-preset-tabs button b { font-size: 16px; }
+.sk-preset-tabs button span { color: var(--dim); font-size: 12.5px; line-height: 1.4; }
+.sk-preset-tabs button:hover { border-color: var(--accent); }
+.sk-preset-tabs button[aria-checked="true"] { border: 2px solid var(--accent); padding: 11px 13px; background: var(--panel2); }
+.sk-preset-tabs button[aria-checked="true"] b::before { content: "✓ "; color: var(--accent); }
+.sk-preset-tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sk-mode { color: var(--dim); font-size: 13px; margin: 8px 0 0; }
 .sk-card { background: var(--panel); border: 1px solid var(--line); border-radius: 20px; padding: 24px; margin-top: 20px; }
 .sk-hero { display: grid; gap: 20px; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); align-items: start; }
 .sk-title h1 { margin: 0; font-size: 26px; }
@@ -18,12 +30,20 @@
 .sk-verdict strong { font-size: 17px; line-height: 1.5; }
 .sk-trend { justify-self: start; font-size: 13px; padding: 2px 10px; border-radius: 99px; background: var(--panel3); color: var(--dim); }
 .sk-trend[data-trend="strong"] { color: var(--up); } .sk-trend[data-trend="risk"], .sk-trend[data-trend="weak"] { color: var(--down); }
-.sk-levels { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-.sk-levels div { padding: 12px 14px; border-radius: 14px; background: var(--panel2); }
+.sk-levels { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.sk-levels div { padding: 12px 14px; border-radius: 14px; background: var(--panel2); border-left: 4px solid var(--line-strong); }
+.sk-levels .lv-pressure { border-left-color: var(--gold); } .sk-levels .lv-support { border-left-color: var(--down); }
+.sk-levels .lv-defense { border-left-color: var(--up); } .sk-levels .lv-score { border-left-color: var(--accent); }
+.sk-levels small { display: block; min-height: 1.3em; margin-top: 2px; color: var(--accent); font-size: 12px; font-weight: 600; }
+.sk-compare { grid-column: 1 / -1; margin: 0; padding: 10px 14px; border-radius: 12px; background: var(--panel2); color: var(--ink); font-size: 14px; }
 .sk-levels span { display: block; color: var(--dim); font-size: 13px; }
 .sk-levels b { font-size: 22px; }
 .sk-chart { position: relative; min-height: 300px; }
-.sk-note { color: var(--faint); font-size: 13px; margin: 8px 0 0; }
+.sk-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 10px 0 0; padding: 0; list-style: none; font-size: 13px; color: var(--dim); }
+.sk-legend li { display: flex; align-items: center; gap: 6px; }
+.sk-legend li::before { content: ""; width: 18px; border-top: 2px dashed currentColor; }
+.sk-legend .lg-pressure::before { color: var(--gold); } .sk-legend .lg-support::before { color: var(--down); }
+.sk-legend .lg-zone::before { color: var(--dim); } .sk-legend .lg-defense::before { color: var(--up); }
 .sk-card h2 { font-size: 18px; margin: 0 0 12px; }
 .sk-card h2 small { color: var(--faint); font-size: 12px; font-weight: 400; margin-left: 8px; }
 .sk-card h2 + * { margin-top: 0; }
@@ -54,5 +74,8 @@
 @media (max-width: 760px) {
   .sk-hero { grid-template-columns: 1fr; }
   .sk-dims { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sk-levels { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .sk-levels b { font-size: 18px; }
+  .sk-preset-tabs { grid-template-columns: 1fr; }
+  .sk-preset-tabs button { min-height: 52px; }
 }

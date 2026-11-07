@@ -7,18 +7,59 @@
   const DIRECTION = { bullish: '偏多', bearish: '偏空', neutral: '中性' };
   const TREND = { strong: '強', watch: '觀察', weak: '弱', risk: '風險' };
   const DIMS = [['T', '趨勢'], ['C', '籌碼'], ['V', '量價'], ['I', '法人'], ['F', '基本面']];
+  const DEFAULT_PRESET = '2TON-FIT-V1';
   let chart = null;
+  let lastChartKey = '';
+  let lastResult = null;
+  let requestSequence = 0;
+  let pendingRequest = null;
+  const baseline = new Map(); // 代號:資料日 → 綜合觀察結果，用來標出「換策略後哪裡變了」
+
+  function syncTabs(preset) {
+    document.querySelectorAll('#presetTabs [data-preset]').forEach(b => b.setAttribute('aria-checked', String(b.dataset.preset === preset)));
+  }
+
+  function diffText(now, base) {
+    if (now === null || now === undefined || base === null || base === undefined || now === base) return '';
+    const d = now - base;
+    return `比綜合觀察${d > 0 ? '高' : '低'} ${fmt(Math.abs(d))}`;
+  }
+
+  function renderCompare(r, base) {
+    const isBase = r.preset.id === DEFAULT_PRESET;
+    const pairs = [['pressure1', r.levels.pressure1, base && base.levels.pressure1], ['support1', r.levels.support1, base && base.levels.support1],
+      ['defense', r.levels.defense, base && base.levels.defense], ['score', r.score, base && base.score]];
+    pairs.forEach(([id, now, was]) => { $(`${id}Diff`).textContent = isBase || !base ? '' : diffText(now, was); });
+    const line = $('compareLine');
+    if (isBase || !base) { line.hidden = true; return; }
+    const changed = pairs.filter(([, now, was]) => now !== was).length;
+    line.hidden = false;
+    line.textContent = changed
+      ? `目前是「${r.preset.name}」：和綜合觀察相比，有 ${changed} 項數字不同（標在各數字下方）。`
+      : `目前是「${r.preset.name}」：這檔在這個策略下，壓力、支撐、防守與總分都和綜合觀察相同。`;
+  }
 
   function setTheme(theme) {
     document.documentElement.dataset.theme = theme;
     try { localStorage.setItem('market-theme', theme); } catch (_) { /* 私密視窗可能無法存 */ }
     $('themeText').textContent = theme === 'dark' ? '淺色' : '深色';
-    if (chart) chart.draw();
+    if (lastResult) drawChart(lastResult);
   }
 
   function codeFromUrl() {
     const code = new URLSearchParams(location.search).get('code');
     return code && /^[0-9A-Z]{4,6}$/.test(code) ? code : null;
+  }
+
+  function presetFromUrl() {
+    return new URLSearchParams(location.search).get('preset') || DEFAULT_PRESET;
+  }
+
+  function updateUrl(code, preset) {
+    const url = new URL(location.href);
+    url.searchParams.set('code', code);
+    url.searchParams.set('preset', preset);
+    if (url.href !== location.href) history.pushState(null, '', url);
   }
 
   function verdictText(r) {
@@ -33,7 +74,7 @@
     }
     if (p) parts.push(`上方 ${fmt(p)} 有壓力（距 ${((p / close - 1) * 100).toFixed(1)}%）`);
     if (s) parts.push(`下方 ${fmt(s)} 有支撐`);
-    return parts.join('，') + '。';
+    return `${r.preset.name}：${parts.join('，')}。`;
   }
 
   const FIELD = {
@@ -58,7 +99,14 @@
   }
 
   function render(r) {
-    document.title = `${r.name} ${r.code}｜個股分析`;
+    document.title = `${r.name} ${r.code}｜${r.preset.name}`;
+    $('content').dataset.preset = r.preset.id;
+    $('content').dataset.paramsHash = r.params_hash;
+    $('presetSelect').value = r.preset.id;
+    syncTabs(r.preset.id);
+    $('appliedPreset').textContent = `${r.preset.name} · 本站自有分析`;
+    $('presetDescription').textContent = r.preset.description;
+    lastResult = r;
     $('stockName').textContent = r.name;
     $('stockCode').textContent = r.code;
     $('asOf').textContent = r.as_of;
@@ -72,6 +120,9 @@
     $('support1').textContent = fmt(r.levels.support1);
     $('pressure1').textContent = fmt(r.levels.pressure1);
     $('defense').textContent = fmt(r.levels.defense);
+    $('scoreValue').textContent = r.score === null ? '未到齊' : String(r.score);
+    if (r.preset.id === DEFAULT_PRESET) baseline.set(`${r.code}:${r.as_of}`, r);
+    renderCompare(r, baseline.get(`${r.code}:${r.as_of}`));
 
     $('dims').replaceChildren(...DIMS.map(([key, label]) => {
       const value = r.dimensions[key];
@@ -96,8 +147,8 @@
     const lv = r.levels;
     $('levelSources').innerHTML = '';
     const lines = [
-      `分群容差 ${lv.tolerance_pct}%（ATR% × 0.6，限 1～3%）。支撐取群組上緣，壓力取來源加權平均，再依台股升降單位取整。`,
-      lv.sweet && lv.sweet.formed ? `觀察區 ${fmt(lv.sweet.low)}～${fmt(lv.sweet.high)}（中心與寬度是本站暫用，原站未知）。` : '觀察區尚未形成，防守參考改用近 20 日盤中低點。',
+      `${r.preset.name}：${r.preset.description} 價位依所選方案的來源與窗口重新計算，不同方案可能得到相同價位。`,
+      lv.sweet && lv.sweet.formed ? `觀察區 ${fmt(lv.sweet.low)}～${fmt(lv.sweet.high)}（中心與寬度為本站自有分析，非買進區）。` : '觀察區尚未形成，防守參考只作分析，不是停損指令。',
       `第二支撐 ${fmt(lv.support2)}、第二壓力 ${fmt(lv.pressure2)}。`,
     ];
     lines.forEach(t => $('levelSources').append(Object.assign(document.createElement('p'), { className: 'sk-source', textContent: t })));
@@ -109,9 +160,9 @@
       '價格未還原權值，除權息前後的均線會有落差。',
     ].map(t => Object.assign(document.createElement('li'), { textContent: t })));
 
-    drawChart(r);
     $('status').hidden = true;
     $('content').hidden = false;
+    drawChart(r);
   }
 
   function drawChart(r) {
@@ -120,32 +171,67 @@
     if (r.levels.pressure1) overlays.push({ value: r.levels.pressure1, label: `壓力 ${fmt(r.levels.pressure1)}`, color: css('--gold', '#94681a'), pos: 'above', align: 'right' });
     if (r.levels.support1) overlays.push({ value: r.levels.support1, label: `支撐 ${fmt(r.levels.support1)}`, color: css('--down', '#0f8058'), pos: 'below', align: 'right' });
     if (r.levels.defense) overlays.push({ value: r.levels.defense, label: `防守 ${fmt(r.levels.defense)}`, color: css('--up', '#c8262c'), pos: 'below', align: 'right' });
-    if (!chart) chart = new window.KChart($('chartHost'), { macd: false, height: w => Math.max(280, Math.min(440, w * 0.5)) });
+    const sweet = r.levels.sweet;
+    if (sweet && sweet.formed) {
+      overlays.push({ value: sweet.low, label: `觀察下緣 ${fmt(sweet.low)}`, color: css('--dim', '#666666'), pos: 'below', align: 'left' });
+      overlays.push({ value: sweet.high, label: `觀察上緣 ${fmt(sweet.high)}`, color: css('--dim', '#666666'), pos: 'above', align: 'left' });
+    }
+    const key = `${r.code}:${r.as_of}`;
+    const savedView = chart && key === lastChartKey ? { ...chart.view } : null;
+    if (!chart) chart = new window.KChart($('chartHost'), { macd: false, overlayLabels: 'stacked', height: w => Math.max(300, Math.min(460, w * 0.52)) });
     chart.setData(candles, { count: Math.min(candles.length, innerWidth < 600 ? 50 : 90), overlays, unit: '日' });
-    chart.canvas.setAttribute('aria-label', `${r.name}日K，${candles[0].label}至${candles[candles.length - 1].label}，含支撐、壓力與防守參考線。`);
+    if (savedView) { chart.view = savedView; chart.draw(); }
+    lastChartKey = key;
+    chart.canvas.setAttribute('aria-label', `${r.preset.name}，${r.name}日K，${candles[0].label}至${candles[candles.length - 1].label}，含支撐、壓力、觀察區與防守參考線。`);
   }
 
-  async function load(code) {
+  async function load(code, preset = presetFromUrl()) {
+    const sequence = ++requestSequence;
+    if (pendingRequest) pendingRequest.abort();
+    pendingRequest = new AbortController();
     $('content').hidden = true;
+    $('content').setAttribute('aria-busy', 'true');
     $('status').hidden = false;
-    $('status').textContent = `讀取 ${code}…`;
+    $('status').textContent = `重新分析 ${code}…`;
     $('codeInput').value = code;
+    $('presetSelect').value = preset;
+    syncTabs(preset);
     if (location.protocol === 'file:') {
+      $('content').setAttribute('aria-busy', 'false');
       $('status').textContent = '請從本機服務開啟（http://127.0.0.1:8876/stock.html），個股分析需要後端計算。';
       return;
     }
+    const params = new URLSearchParams({ preset });
+    const asOf = new URLSearchParams(location.search).get('as_of');
+    if (asOf) params.set('as_of', asOf);
     try {
-      const response = await fetch(`/api/stocks/${encodeURIComponent(code)}/analysis`, { cache: 'no-store' });
+      const response = await fetch(`/api/stocks/${encodeURIComponent(code)}/analysis?${params}`, { cache: 'no-store', signal: pendingRequest.signal });
       const data = await response.json();
+      if (sequence !== requestSequence) return;
       if (!response.ok || data.error || (data.qa && data.qa.blocking)) {
-        $('content').hidden = true;
-        $('status').hidden = false;
         $('status').textContent = data.qa && data.qa.reason ? `${code}：${data.qa.reason}，不給結論。` : `${code}：${data.message || '查不到資料'}`;
         return;
       }
+      if (!data.preset || data.preset.id !== preset) {
+        $('status').textContent = '本機服務尚未載入分析方案新版，請更新服務後再使用；不顯示其他方案的結果。';
+        return;
+      }
+      // 第一次看非預設策略時，順便取綜合觀察當比較基準（同一檔同一天只取一次）。
+      if (preset !== DEFAULT_PRESET && !baseline.has(`${data.code}:${data.as_of}`)) {
+        try {
+          const bp = new URLSearchParams(params); bp.set('preset', DEFAULT_PRESET);
+          const br = await fetch(`/api/stocks/${encodeURIComponent(code)}/analysis?${bp}`, { cache: 'no-store', signal: pendingRequest.signal });
+          const bd = br.ok ? await br.json() : null;
+          if (bd && bd.preset && bd.preset.id === DEFAULT_PRESET && !(bd.qa && bd.qa.blocking)) baseline.set(`${bd.code}:${bd.as_of}`, bd);
+        } catch (_) { /* 比較基準拿不到就不顯示差異，不影響主結果 */ }
+        if (sequence !== requestSequence) return;
+      }
       render(data);
-    } catch (_) {
-      $('status').textContent = '本機服務沒有回應，請確認 Market--Ana 服務已啟動。';
+    } catch (error) {
+      if (sequence !== requestSequence || error.name === 'AbortError') return;
+      $('status').textContent = '本機服務沒有回應，請稍後重新選擇分析方案。';
+    } finally {
+      if (sequence === requestSequence) $('content').setAttribute('aria-busy', 'false');
     }
   }
 
@@ -153,10 +239,29 @@
     event.preventDefault();
     const code = $('codeInput').value.trim().toUpperCase();
     if (!/^[0-9A-Z]{4,6}$/.test(code)) { $('status').hidden = false; $('status').textContent = '代號格式不正確。'; return; }
-    history.pushState(null, '', `?code=${code}`);
-    load(code);
+    const preset = $('presetSelect').value || DEFAULT_PRESET;
+    updateUrl(code, preset);
+    load(code, preset);
   });
-  window.addEventListener('popstate', () => { const code = codeFromUrl(); if (code) load(code); });
+  document.querySelectorAll('#presetTabs [data-preset]').forEach(button => button.addEventListener('click', () => {
+    if (button.getAttribute('aria-checked') === 'true') return;
+    $('presetSelect').value = button.dataset.preset;
+    $('presetSelect').dispatchEvent(new Event('change'));
+  }));
+  $('presetTabs').addEventListener('keydown', event => {
+    if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+    const buttons = [...document.querySelectorAll('#presetTabs [data-preset]')];
+    const i = buttons.findIndex(b => b.getAttribute('aria-checked') === 'true');
+    const next = buttons[(i + (event.key === 'ArrowRight' ? 1 : buttons.length - 1)) % buttons.length];
+    event.preventDefault(); next.focus(); next.click();
+  });
+  $('presetSelect').addEventListener('change', () => {
+    const code = codeFromUrl() || '2330';
+    const preset = $('presetSelect').value;
+    updateUrl(code, preset);
+    load(code, preset);
+  });
+  window.addEventListener('popstate', () => load(codeFromUrl() || '2330', presetFromUrl()));
   $('verdictButton').addEventListener('click', () => {
     const open = $('layer1').hidden;
     $('layer1').hidden = !open;
