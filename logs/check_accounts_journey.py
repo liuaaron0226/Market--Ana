@@ -77,8 +77,15 @@ def run_width(browser, width: int) -> dict:
     res["pending_admin_blocked"] = page.url.rstrip("/").endswith("/apply")
 
     as_user(ctx, OWNER)
-    page.goto(BASE + "/admin/")
+    page.goto(BASE + "/")
+    entry = page.locator(".owner-entry")
+    entry.wait_for()
+    res["owner_entry_on_main_page"] = entry.get_attribute("href") == "/admin/"
+    res["owner_entry_shows_pending"] = entry.locator("b").inner_text() == "1"
+    page.screenshot(path=str(SHOTS / f"accounts-owner-entry-{width}.png"))
+    entry.click()
     page.wait_for_selector(f'[data-email="{applicant}"]')
+    res["owner_entry_opens_admin"] = page.url.endswith("/admin/")
     res["admin_lists_applicant"] = True
     res["admin_no_overflow"] = not overflow(page)
     page.screenshot(path=str(SHOTS / f"accounts-admin-{width}.png"), full_page=True)
@@ -91,6 +98,8 @@ def run_width(browser, width: int) -> dict:
     r = page.goto(BASE + "/")
     page.wait_for_load_state("networkidle")
     res["approved_enters_site"] = r.status == 200 and page.title() == "台股決策鏡"
+    page.wait_for_timeout(500)
+    res["approved_no_owner_entry"] = page.locator(".owner-entry").count() == 0
     r = page.goto(BASE + "/analysis-data.js")
     res["approved_gets_data"] = r.status == 200
     r = page.goto(BASE + "/api/admin/users")

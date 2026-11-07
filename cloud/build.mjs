@@ -13,8 +13,13 @@ const WEB_FILES = [
 rmSync(dist, { recursive: true, force: true });
 mkdirSync(dist, { recursive: true });
 for (const f of WEB_FILES) cpSync(new URL(f, web), new URL(f, dist));
+// 雲端版限定：大盤頁加站主的帳號管理入口（一般使用者不顯示，本機版不受影響）。
+const ENTRY = '<script src="/owner-entry.js" defer></script>';
+const page = readFileSync(new URL("minimal.html", dist), "utf8");
+if (!page.includes("</body>")) throw new Error("minimal.html 沒有 </body>，無法插入站主入口");
+writeFileSync(new URL("minimal.html", dist), page.replace("</body>", `  ${ENTRY}\n</body>`));
 // 票 04 起雲端首頁就是 B 版 minimal.html（web/index.html 是舊一分鐘看盤頁，不上雲）。
-cpSync(new URL("minimal.html", web), new URL("index.html", dist));
+cpSync(new URL("minimal.html", dist), new URL("index.html", dist));
 cpSync(new URL("public-src/", root), dist, { recursive: true, filter: (src) => !src.endsWith("account.css") });
 // /apply 與主站是兩個 Access 入口：未核准者只拿得到 /apply/*，所以樣式各放一份。
 for (const dir of ["apply", "admin"]) cpSync(new URL("public-src/account.css", root), new URL(`${dir}/account.css`, dist));
