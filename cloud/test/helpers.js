@@ -2,7 +2,9 @@
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
 
-const MIGRATION = readFileSync(new URL("../migrations/0001_init.sql", import.meta.url), "utf8");
+const MIGRATION = ["0001_init.sql", "0003_api_hits.sql"]
+  .map((f) => readFileSync(new URL(`../migrations/${f}`, import.meta.url), "utf8"))
+  .join("\n");
 
 export function fakeD1() {
   const db = new DatabaseSync(":memory:");

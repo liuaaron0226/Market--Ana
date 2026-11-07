@@ -2,8 +2,14 @@
 // 第一道門是 Cloudflare Access（擋未核准者），這裡是第二道：驗 Access JWT、查 D1 即時狀態、站主後台。
 // 任何設定缺漏或資料庫錯誤一律拒絕。
 import { verifyAccessJwt } from "./jwt.js";
+import { detailFor } from "./market-data.js";
 
 const PENDING_CAP = 30;
+// 票 06 限速（Astra r1 建議值）：市場 API 全部每人每分 30 次；個股明細另限每分 12 次。固定一分鐘窗，邊界最多兩倍突發。
+const RATE = { market: 30, detail: 12 };
+// 舊的整包資料檔：雲端已不部署，這裡再擋一次，避免預覽網址或殘留檔被讀到。
+const RETIRED_DATA = new Set(["/analysis-data.js", "/chips-data.js", "/dashboard-data.js", "/detail-data.js", "/plain-data.js"]);
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const NICK_MAX = 40;
 const ACTIONS = {
   approve: { from: ["pending", "rejected", "disabled"], to: "approved" },
@@ -11,7 +17,7 @@ const ACTIONS = {
   disable: { from: ["approved", "pending"], to: "disabled" },
 };
 
-const defaultDeps = { fetchImpl: (...a) => fetch(...a) };
+const defaultDeps = { fetchImpl: (...a) => fetch(...a), now: () => Date.now() };
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -20,7 +26,7 @@ class HttpError extends Error {
   }
 }
 
-function json(status, body) {
+function json(status, body, extra = {}) {
   return new Response(JSON.stringify(body), {
     status,
     headers: {
@@ -28,6 +34,7 @@ function json(status, body) {
       "cache-control": "no-store",
       "x-content-type-options": "nosniff",
       "x-robots-tag": "noindex, nofollow",
+      ...extra,
     },
   });
 }
@@ -118,6 +125,60 @@ async function handleAdminApi(request, env, path, owner) {
   return json(200, { email: target, status: rule.to });
 }
 
+class RateLimited extends Error {
+  constructor(retryAfter) {
+    super("rate limited");
+    this.retryAfter = retryAfter;
+  }
+}
+
+// 單一語句條件遞增：未超限才 +1 並回傳新值；超限不寫入、回空。超限紀錄每人每額度每分鐘只寫一次。
+async function consume(db, email, bucket, now, rate = RATE) {
+  const minute = Math.floor(now / 60_000);
+  const row = await db
+    .prepare(
+      "INSERT INTO api_hits (email, bucket, minute, count) VALUES (?, ?, ?, 1) " +
+        "ON CONFLICT (email, bucket, minute) DO UPDATE SET count = count + 1 WHERE count < ? RETURNING count",
+    )
+    .bind(email, bucket, minute, rate[bucket])
+    .first();
+  if (row) return;
+  const flag = await db
+    .prepare("INSERT INTO api_hits (email, bucket, minute, count) VALUES (?, ?, ?, 0) ON CONFLICT DO NOTHING RETURNING count")
+    .bind(email, `${bucket}:over`, minute)
+    .first();
+  if (flag) await audit(db, email, "rate_limited", bucket, String(minute));
+  throw new RateLimited(60 - Math.floor((now % 60_000) / 1000));
+}
+
+async function handleMarketApi(request, env, path, email, deps) {
+  if (request.method !== "GET") throw new HttpError(405, "方法不允許");
+  const pack = deps.marketPack;
+  if (!pack) throw new HttpError(503, "資料尚未就緒");
+  const isOverview = path === "/api/market/overview";
+  const isDetail = path === "/api/market/detail";
+  if (!isOverview && !isDetail) throw new HttpError(404, "找不到");
+  const now = (deps.now || Date.now)();
+  try {
+    await consume(env.DB, email, "market", now, deps.rate);
+    if (isDetail) await consume(env.DB, email, "detail", now, deps.rate);
+  } catch (e) {
+    if (e instanceof RateLimited) return json(429, { error: "查詢太頻繁，請稍後再試" }, { "retry-after": String(e.retryAfter) });
+    throw new HttpError(503, "暫時無法處理，請稍後再試");
+  }
+  const headers = { "cache-control": "private, no-store", "x-data-version": pack.version };
+  if (isOverview) return json(200, pack.overview, headers);
+  const q = new URL(request.url).searchParams;
+  const kind = q.get("kind") || "";
+  const date = q.get("date") || "";
+  const v = q.get("v");
+  if (v && v !== pack.version) return json(409, { error: "資料已更新，請重新整理頁面" }, headers);
+  if (!DATE_RE.test(date)) throw new HttpError(400, "日期格式錯誤");
+  const tables = detailFor(pack, kind, date);
+  if (!tables) throw new HttpError(404, "沒有這一天或這張卡的明細");
+  return json(200, { version: pack.version, kind, date, tables }, headers);
+}
+
 export async function handle(request, env, next, deps = defaultDeps) {
   const { TEAM_DOMAIN, MAIN_AUD, APPLY_AUD, OWNER_EMAIL, DB } = env;
   if (!TEAM_DOMAIN || !MAIN_AUD || !APPLY_AUD || !OWNER_EMAIL || !DB) return fail(503, "服務設定未完成");
@@ -146,9 +207,12 @@ export async function handle(request, env, next, deps = defaultDeps) {
     }
 
     const isAdmin = path === "/admin" || path.startsWith("/admin/") || path.startsWith("/api/admin/");
+    const isMarket = path.startsWith("/api/market/");
     if (isOwner) {
       if (path.startsWith("/api/admin/")) return await handleAdminApi(request, env, path, owner);
       if (path === "/api/me") return json(200, { email, status: "approved", owner: true });
+      if (isMarket) return await handleMarketApi(request, env, path, email, deps);
+      if (RETIRED_DATA.has(path)) return fail(404, "找不到");
       return await next();
     }
 
@@ -159,6 +223,8 @@ export async function handle(request, env, next, deps = defaultDeps) {
     }
     if (isAdmin) return fail(403, "沒有管理權限");
     if (path === "/api/me") return json(200, { email, status, owner: false });
+    if (isMarket) return await handleMarketApi(request, env, path, email, deps);
+    if (RETIRED_DATA.has(path)) return fail(404, "找不到");
     return await next();
   } catch (e) {
     if (e instanceof HttpError) return fail(e.status, e.message);

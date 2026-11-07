@@ -1,8 +1,17 @@
-(() => {
+(async () => {
   'use strict';
 
-  const A = window.MARKET_ANALYSIS;
-  const D = window.MARKET_DASHBOARD;
+  // 票 06：資料一律經 window.MarketData（本機讀全域、雲端打 API），畫面邏輯不分本機或雲端。
+  let OV = null;
+  try {
+    OV = window.MarketData ? await window.MarketData.overview() : null;
+  } catch (error) {
+    const note = document.getElementById('serviceNote');
+    if (note) { note.hidden = false; note.textContent = error && error.message ? error.message : '暫時無法取得資料。'; }
+    return;
+  }
+  const A = OV && OV.analysis;
+  const D = OV && OV.dashboard;
   const root = document.documentElement;
   const $ = id => document.getElementById(id);
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -504,8 +513,8 @@
 
 
   // 籌碼卡與直白分析（本人 2026-11-06：選 B、多一點數據、直白分析、要提空單與融資）
-  const CH = window.MARKET_CHIPS || null;
-  const PL = window.MARKET_PLAIN || null;
+  const CH = OV.chips || null;
+  const PL = OV.plain || null;
   function spark(values, tone, signedAxis) {
     const clean = values.map(Number).filter(Number.isFinite);
     if (clean.length < 2) return '';
@@ -553,7 +562,8 @@
     }
     $('readCard').addEventListener('click', () => openPanel('plain', {}, $('readCard')));
   }
-  const DT = window.MARKET_DETAIL || null;
+  const DT = OV.detailIndex || null;
+  const detailDays = new Set(DT ? DT.days : []);
   function chipSeries(key) {
     if (!CH) return [];
     if (key === 'foreign') return CH.foreign.slice(-20).map(r => ({ date: r.date, value: r.net_billion, label: `${r.net_billion < 0 ? '賣' : '買'} ${fmt(Math.abs(r.net_billion), 0)} 億` }));
@@ -576,7 +586,7 @@
     const bars = rows.map((r, i) => {
       const top = Math.min(y(r.value), zero), h = Math.max(2, Math.abs(zero - y(r.value)));
       const tone = signedAxis ? (r.value >= 0 ? 'var(--up)' : 'var(--down)') : key === 'margin' ? 'var(--gold)' : key === 'futures' ? 'var(--down)' : 'var(--accent)';
-      const has = DT && DT.by_date[r.date];
+      const has = detailDays.has(r.date);
       const on = r.date === selected;
       return `<g class="bar-hit${on ? ' is-on' : ''}" data-day="${r.date}" tabindex="0" role="button" aria-label="${esc(r.date)} ${esc(r.label)}${has ? '，點看明細' : ''}"><rect x="${pad + i * step}" y="0" width="${step}" height="${H}" fill="transparent"/><rect x="${pad + i * step + step * .14}" y="${top}" width="${step * .72}" height="${h}" rx="2" fill="${tone}" opacity="${on ? 1 : .72}"/></g>`;
     }).join('');
@@ -587,11 +597,29 @@
     if (!rows || !rows.length) return `<section class="drill-table"><h4>${esc(title)}</h4><p class="chip-date">這天沒有資料。</p></section>`;
     return `<section class="drill-table"><h4>${esc(title)}</h4><table><thead><tr><th>#</th><th>股票</th>${cols.map(c => `<th class="num">${esc(c[0])}</th>`).join('')}</tr></thead><tbody>${rows.map((r, i) => `<tr><td class="num">${i + 1}</td><td><a class="stock-link" href="stock.html?code=${encodeURIComponent(r.code)}"><span class="num">${esc(r.code)}</span> ${esc(r.name)}</a></td>${cols.map(c => `<td class="num ${c[2] ? c[2](r) : ''}">${esc(c[1](r))}</td>`).join('')}</tr>`).join('')}</tbody></table></section>`;
   }
-  function dayDetail(key, day) {
-    const d = DT && DT.by_date[day];
+  function dayHead(key, day) {
     const point = chipSeries(key).find(r => r.date === day);
-    const head = `<div class="drill-day"><b>${esc(day.slice(5).replace('-', '/'))}</b><span>${esc(point ? point.label : '')}</span></div>`;
-    if (!d || !Object.keys(d).length) return head + `<p class="chip-date">這一天的個股明細還沒抓到（目前有 ${DT ? DT.days.length : 0} 天）。</p>`;
+    return `<div class="drill-day"><b>${esc(day.slice(5).replace('-', '/'))}</b><span>${esc(point ? point.label : '')}</span></div>`;
+  }
+  const noDetail = (key, day) => dayHead(key, day) + `<p class="chip-date">這一天的個股明細還沒抓到（目前有 ${DT ? DT.days.length : 0} 天）。</p>`;
+  // 明細按需取：先放「載入中」，取回後只在使用者仍停在同一張卡、同一天時才填入（舊請求不覆蓋新選擇）。
+  let drillToken = 0;
+  function loadDayDetail(key, day) {
+    const token = ++drillToken;
+    const target = () => els.panelBody.querySelector('#drillDetail');
+    if (!detailDays.has(day)) { if (target()) target().innerHTML = noDetail(key, day); return; }
+    if (target()) target().innerHTML = dayHead(key, day) + '<p class="chip-date" data-loading>載入明細中…</p>';
+    window.MarketData.detail(key, day).then(d => {
+      if (token !== drillToken || !target()) return;
+      target().innerHTML = Object.keys(d || {}).length ? dayDetail(key, day, d) : noDetail(key, day);
+    }, error => {
+      if (token !== drillToken || !target()) return;
+      target().innerHTML = dayHead(key, day) + `<p class="chip-date" role="alert">${esc(error && error.message ? error.message : '暫時無法取得明細。')}</p>`;
+    });
+  }
+  function dayDetail(key, day, d) {
+    const point = chipSeries(key).find(r => r.date === day);
+    const head = dayHead(key, day);
     const lots = v => `${v >= 0 ? '+' : '−'}${fmt(Math.abs(v), 0)} 張`;
     const bil = v => v == null ? '—' : `${v >= 0 ? '+' : '−'}${fmt(Math.abs(v), 1)} 億`;
     const tone = v => (v >= 0 ? 'upc' : 'dn');
@@ -612,14 +640,16 @@
     const rows = chipSeries(key);
     const selected = day || (rows.length ? rows[rows.length - 1].date : '');
     const watch = PL ? PL.worry.filter(w => (key === 'futures' || key === 'foreign') && w.includes('外資')) : [];
-    return `${plainBlock(card.plain.lines.map(esc), watch.map(esc))}<p class="drill-hint">點下面任一天，看那天的明細 <span aria-hidden="true">↓</span></p><div class="chip-big">${clickableBars(key, selected)}</div><div class="drill-detail" id="drillDetail">${dayDetail(key, selected)}</div><p class="chip-date">${esc(DT ? DT.notes.money : '')}　${esc(DT ? DT.notes.scope : '')}</p>`;
+    return `${plainBlock(card.plain.lines.map(esc), watch.map(esc))}<p class="drill-hint">點下面任一天，看那天的明細 <span aria-hidden="true">↓</span></p><div class="chip-big">${clickableBars(key, selected)}</div><div class="drill-detail" id="drillDetail" data-day="${esc(selected)}"></div><p class="chip-date">${esc(DT ? DT.notes.money : '')}　${esc(DT ? DT.notes.scope : '')}</p>`;
   }
   function bindChipPanel(key) {
+    const first = els.panelBody.querySelector('#drillDetail');
+    if (first) loadDayDetail(key, first.dataset.day);
     els.panelBody.querySelectorAll('.bar-hit').forEach(node => {
       const go = () => {
         panelState.payload.day = node.dataset.day;
         els.panelBody.querySelectorAll('.bar-hit').forEach(x => x.classList.toggle('is-on', x === node));
-        els.panelBody.querySelector('#drillDetail').innerHTML = dayDetail(key, node.dataset.day);
+        loadDayDetail(key, node.dataset.day);
       };
       node.addEventListener('click', go);
       node.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); go(); } });

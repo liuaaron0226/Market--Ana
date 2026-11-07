@@ -5,12 +5,15 @@ import { readFile } from "node:fs/promises";
 import { extname } from "node:path";
 import { handle } from "../lib/gate.js";
 import { fakeD1, makeIssuer, claims, fetchJwks, TEAM, MAIN_AUD, APPLY_AUD, OWNER } from "./helpers.js";
+import marketPack from "../functions/_market-pack.js";
 
 const port = Number(process.argv[2] || 8899);
 const dist = new URL("../dist/", import.meta.url);
 const issuer = await makeIssuer();
 const env = { DB: fakeD1(), TEAM_DOMAIN: TEAM, MAIN_AUD, APPLY_AUD, OWNER_EMAIL: OWNER };
-const deps = { fetchImpl: fetchJwks(issuer.jwks) };
+// 自動化驗收會在一分鐘內點完全部下鑽；額度可由第三個參數放寬（正式版額度見 gate.js RATE，不受影響）。
+const rate = process.argv[3] === "relaxed" ? { market: 10_000, detail: 10_000 } : undefined;
+const deps = { fetchImpl: fetchJwks(issuer.jwks), now: () => Date.now(), marketPack, rate };
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json" };
 
 async function serveStatic(pathname) {

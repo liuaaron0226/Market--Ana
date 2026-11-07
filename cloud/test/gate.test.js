@@ -63,7 +63,8 @@ test("站主可進站與後台", async () => {
 
 test("已核准者可進站，但進不了後台", async () => {
   await seed("ok@x.com", "approved");
-  assert.equal(await (await req("/analysis-data.js", { email: "ok@x.com" })).text(), "static-ok");
+  // 票 06 起整包資料檔不再提供，改用頁面檔驗證可進站。
+  assert.equal(await (await req("/minimal.js", { email: "ok@x.com" })).text(), "static-ok");
   assert.equal((await req("/admin", { email: "ok@x.com" })).status, 403);
   assert.equal((await req("/api/admin/users", { email: "ok@x.com" })).status, 403);
 });
