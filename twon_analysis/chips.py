@@ -129,9 +129,37 @@ def revenue(code: str) -> dict | None:
             'cum_yoy': pct('累計營業收入-前期比較增減(%)'), 'period': f'{int(ym[:3]) + 1911}-{ym[3:]}'}
 
 
-def eps(code: str) -> dict | None:
-    rows, _ = _openapi('t187ap14_L')
-    row = rows.get(code)
-    if not row or row.get('基本每股盈餘(元)') in (None, '', '-'):
-        return None
-    return {'eps': float(row['基本每股盈餘(元)']), 'period': f'{int(row["年度"]) + 1911}Q{row["季別"]}'}
+# 公開資訊觀測站「綜合損益表彙總」原件（data/fundamentals/mops/t163sb04-<民國年>-<季>.html），基本每股盈餘為當年累計。
+# 公告日未知：只用「法定申報期限已過」或「取得日 ≤ 分析日」的那一季，不把後來才取得的回填成更早已知。
+MOPS_USABLE_FROM = {('115', '02'): '2026-08-14', ('115', '03'): '2026-11-07'}   # Q2 法定期限 8/14；Q3 為本機取得日
+
+
+@lru_cache(maxsize=8)
+def _mops_eps(year: str, season: str) -> dict:
+    import html as htmllib
+    import re
+    path = FUND / 'mops' / f't163sb04-{year}-{season}.html'
+    if not path.exists():
+        return {}
+    text = path.read_text(encoding='utf-8')
+    out = {}
+    for table in re.findall(r'<table class=.hasBorder.*?</table>', text, re.S):
+        heads = [htmllib.unescape(re.sub('<[^>]+>', '', h)).strip() for h in re.findall(r'<th[^>]*>(.*?)</th>', table, re.S)]
+        if '基本每股盈餘（元）' not in heads:
+            continue
+        col = heads.index('基本每股盈餘（元）')
+        for row in re.findall(r'<tr class=.(?:even|odd).>(.*?)</tr>', table, re.S):
+            cells = [re.sub('<[^>]+>', '', c).strip() for c in re.findall(r'<td[^>]*>(.*?)</td>', row, re.S)]
+            if len(cells) > col and cells[col] not in ('', '--'):
+                out[cells[0]] = float(cells[col].replace(',', ''))
+    return out
+
+
+def eps(code: str, as_of: str = '9999-12-31') -> dict | None:
+    for (year, season), usable_from in sorted(MOPS_USABLE_FROM.items(), reverse=True):
+        if as_of < usable_from:
+            continue
+        value = _mops_eps(year, season).get(code)
+        if value is not None:
+            return {'eps': value, 'period': f'{int(year) + 1911} 年前 {int(season)} 季累計', 'usable_from': usable_from}
+    return None

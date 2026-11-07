@@ -67,7 +67,7 @@ def analyze(code: str, as_of: str) -> dict:
     strategies += chip_results
     rev = eps = val = None
     if not is_etf:
-        rev, eps, val = chips.revenue(code), chips.eps(code), chips.valuation(code, x['date'])
+        rev, eps, val = chips.revenue(code), chips.eps(code, x['date']), chips.valuation(code, x['date'])
         strategies += fundamentals(rev, eps, val)
     avg = max(1, x['avg_vol20'] or 1)
     bonus = (0.4 if derived.get('borrow_sold', 0) > 0 and (derived.get('borrow_balance', 0) / avg >= 0.10 or derived.get('borrow_diff5', 0) > 0) else 0)         + (0.3 if derived.get('borrow_diff5', 0) > avg * 0.15 else 0)

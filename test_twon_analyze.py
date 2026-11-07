@@ -34,6 +34,15 @@ class AnalyzeTests(unittest.TestCase):
         self.assertIsNotNone(result['score'])
         self.assertTrue(result['score_complete'])
 
+    def test_eps_uses_only_quarters_known_by_the_analysis_date(self):
+        from twon_analysis import chips
+        # 11/06：Q3 名單 11/07 才取得 → 用 Q2（法定期限 8/14 已過）；11/07 起 Q3 有的公司用 Q3
+        self.assertEqual(chips.eps('2330', '2026-11-06')['eps'], 49.33)
+        self.assertIn('前 2 季', chips.eps('2330', '2026-11-06')['period'])
+        self.assertIsNone(chips.eps('2330', '2026-08-01'))
+        f02 = next(s for s in analyze('2330', '2026-11-06')['strategies'] if s['id'] == 'F02')
+        self.assertEqual(f02['status'], 'triggered')
+
     def test_borrowing_condition_uses_official_raw_file_when_that_day_exists(self):
         result = analyze('2330', '2026-10-13')                   # 借券原件 10/07～10/13 已抓
         c04 = next(s for s in result['strategies'] if s['id'] == 'C04')
