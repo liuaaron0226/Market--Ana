@@ -122,7 +122,8 @@ def fundamentals(rev: dict | None, eps: dict | None, val: dict | None) -> list[d
     if eps is None:
         out.append(_result('F02', 'unavailable', {'reason': '最新一季 EPS 尚未公告或不在 OpenAPI 名單'}))
     else:
-        out.append(_result('F02', 'triggered' if eps['eps'] > 0 else 'off', {'eps': eps['eps'], 'period': eps['period']}))
+        out.append(_result('F02', 'triggered' if eps['eps'] > 0 else 'off', {'eps': eps['eps'], 'period': eps['period'], 'basis': eps.get('basis'),
+                                                                             'estimated_available_at': eps.get('estimated_available_at')}))
     if val is None or (val['per'] is None and val['pbr'] is None):
         out.append(_result('F03', 'unavailable', {'reason': '沒有本益比／淨值比'}))
     else:

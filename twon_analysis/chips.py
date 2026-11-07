@@ -130,8 +130,9 @@ def revenue(code: str) -> dict | None:
 
 
 # 公開資訊觀測站「綜合損益表彙總」原件（data/fundamentals/mops/t163sb04-<民國年>-<季>.html），基本每股盈餘為當年累計。
-# 公告日未知：只用「法定申報期限已過」或「取得日 ≤ 分析日」的那一季，不把後來才取得的回填成更早已知。
-MOPS_USABLE_FROM = {('115', '02'): '2026-08-14', ('115', '03'): '2026-11-07'}   # Q2 法定期限 8/14；Q3 為本機取得日
+# 各公司實際公告日未知：可用日期是「估計值」——Q2 用法定申報期限 8/14（假設），Q3 用本機取得日 11/07。
+# 這不是公告日：例如台積電 Q3 已於 10/15 公告，只是本次取得的 MOPS 清單沒收錄，所以 11/06 仍用 Q2（偏保守）。
+MOPS_USABLE_FROM = {('115', '02'): '2026-08-14', ('115', '03'): '2026-11-07'}
 
 
 @lru_cache(maxsize=8)
@@ -161,5 +162,6 @@ def eps(code: str, as_of: str = '9999-12-31') -> dict | None:
             continue
         value = _mops_eps(year, season).get(code)
         if value is not None:
-            return {'eps': value, 'period': f'{int(year) + 1911} 年前 {int(season)} 季累計', 'usable_from': usable_from}
+            return {'eps': value, 'period': f'{int(year) + 1911}Q{int(season)}', 'basis': '當年累計（非單季）',
+                    'estimated_available_at': usable_from, 'available_basis': '法定期限假設' if season == '02' else '本機取得日'}
     return None

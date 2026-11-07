@@ -38,7 +38,8 @@ class AnalyzeTests(unittest.TestCase):
         from twon_analysis import chips
         # 11/06：Q3 名單 11/07 才取得 → 用 Q2（法定期限 8/14 已過）；11/07 起 Q3 有的公司用 Q3
         self.assertEqual(chips.eps('2330', '2026-11-06')['eps'], 49.33)
-        self.assertIn('前 2 季', chips.eps('2330', '2026-11-06')['period'])
+        self.assertEqual(chips.eps('2330', '2026-11-06')['period'], '2026Q2')
+        self.assertIn('累計', chips.eps('2330', '2026-11-06')['basis'])
         self.assertIsNone(chips.eps('2330', '2026-08-01'))
         f02 = next(s for s in analyze('2330', '2026-11-06')['strategies'] if s['id'] == 'F02')
         self.assertEqual(f02['status'], 'triggered')

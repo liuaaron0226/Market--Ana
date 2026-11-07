@@ -44,7 +44,7 @@
     short_balance: '融券餘額（張）', today: '三大法人今日（股）', foreign: '外資', trust: '投信', dealer: '自營', d5: '五日合計',
     d10: '十日合計', d20: '二十日合計', days: '資料天數', inst_cost: '法人估計成本',
     borrow_sold: '借券賣出（股）', borrow_balance: '借券餘額（股）', borrow_diff5: '借券五日增減（股）',
-    yoy: '營收年增%', cum_yoy: '累計營收年增%', period: '資料期別', eps: 'EPS', per: '本益比', pbr: '淨值比', side: '估值'
+    yoy: '營收年增%', cum_yoy: '累計營收年增%', period: '資料期別', eps: 'EPS', basis: '口徑', estimated_available_at: '估計可用日', per: '本益比', pbr: '淨值比', side: '估值'
   };
   const STREAK_KEYS = ['foreign', 'trust', 'dealer'];
 
@@ -105,7 +105,7 @@
     $('notes').replaceChildren(...[
       r.labels.own_formula + '；24 招門檻是本站 2TON-FIT-V1 規則，部分招式與原站行為已知不同。',
       r.labels.not_advice + '；支撐、壓力、防守參考都是分析數字。',
-      `籌碼、法人、借券、估值用 ${r.qa.chip_range || '—'} 的官方逐日原件；月營收 ${r.sources && r.sources.revenue_period || '—'}、EPS ${r.sources && r.sources.eps_period || '未公告'}（只用資料日當時已公告的期別）。缺資料的招式標「資料不足」。`,
+      `籌碼、法人、借券、估值用 ${r.qa.chip_range || '—'} 的官方逐日原件；月營收 ${r.sources && r.sources.revenue_period || '—'}、EPS ${r.sources && r.sources.eps_period || '—'} 當年累計（可用日為估計，不是公司公告日）。缺資料的招式標「資料不足」。`,
       '價格未還原權值，除權息前後的均線會有落差。',
     ].map(t => Object.assign(document.createElement('li'), { textContent: t })));
 
