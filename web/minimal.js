@@ -634,13 +634,43 @@
     }
     return head;
   }
+  // 本人 11-07：每張卡加「目前（最新一天）前 10」，標連續幾天同方向；依最新一天排序。
+  const NOW = OV.current || null;
+  const NOW_TABLES = {
+    foreign: [['外資買超前 10', 'foreign_buy', '連買'], ['外資賣超前 10', 'foreign_sell', '連賣']],
+    trust: [['投信買超前 10', 'trust_buy', '連買'], ['投信賣超前 10', 'trust_sell', '連賣']],
+    margin: [['融資增加前 10', 'margin_up', '連增'], ['融資減少前 10', 'margin_down', '連減']],
+    short: [['融券增加前 10', 'short_up', '連增'], ['融券減少前 10', 'short_down', '連減']],
+    volume: [['成交金額前 10', 'turnover_top', '連續在前 20']],
+    futures: [['外資現貨賣超前 10（對照）', 'foreign_sell', '連賣']]
+  };
+  function nowValue(key, v) {
+    if (key === 'margin' || key === 'short') return `${v >= 0 ? '+' : '−'}${fmt(Math.abs(v), 0)} 張`;
+    if (key === 'volume') return `${fmt(v, 0)} 億`;
+    return `${v >= 0 ? '+' : '−'}${fmt(Math.abs(v), 1)} 億`;
+  }
+  function nowTable(key, title, field, word) {
+    const rows = NOW && NOW[field] || [];
+    if (!rows.length) return `<section class="drill-table now-table"><h4>${esc(title)}</h4><p class="chip-date">沒有資料。</p></section>`;
+    const days = r => `${word} <b>${fmt(r.streak, 0)}</b> 天${r.capped ? '以上' : ''}`;
+    const tone = key === 'volume' ? () => '' : r => (r.value >= 0 ? 'upc' : 'dn');
+    return `<section class="drill-table now-table"><h4>${esc(title)}</h4><table><thead><tr><th>#</th><th>股票</th><th class="num">${key === 'volume' ? '成交' : key === 'margin' || key === 'short' ? '增減' : '金額（估）'}</th><th class="num">連續</th></tr></thead><tbody>${rows.map((r, i) => `<tr><td class="num">${i + 1}</td><td><a class="stock-link" href="stock.html?code=${encodeURIComponent(r.code)}"><span class="num">${esc(r.code)}</span> ${esc(r.name)}</a></td><td class="num ${tone(r)}">${esc(nowValue(key, r.value))}</td><td class="num streak">${days(r)}</td></tr>`).join('')}</tbody></table></section>`;
+  }
+  function nowBlock(key) {
+    if (!NOW || !NOW_TABLES[key]) return '';
+    const md = NOW.as_of ? NOW.as_of.slice(5).replace('-', '/') : '';
+    const head = key === 'futures'
+      ? `<p class="now-lede">外資台指期空單已連續增加 <b>${fmt(NOW.futures_short_growing_days, 0)}</b> 天${NOW.futures_short_growing_days >= NOW.futures_days_available ? '以上' : ''}（期貨是整個台指，沒有個股；下面列同日外資現貨賣超對照）。</p>`
+      : `<p class="now-lede">依 ${esc(md)} 排序；「連續」是往回數同方向幾天，資料只有近 ${fmt(NOW.days_available, 0)} 個交易日。</p>`;
+    return `<section class="now-block" id="nowBlock"><h3>目前前 10（${esc(md)}）</h3>${head}<div class="now-grid">${NOW_TABLES[key].map(([title, field, word]) => nowTable(key, title, field, word)).join('')}</div></section>`;
+  }
   function renderChipPanel(key, day) {
     const card = chipCards().find(item => item.key === key);
     if (!card) return '';
     const rows = chipSeries(key);
     const selected = day || (rows.length ? rows[rows.length - 1].date : '');
     const watch = PL ? PL.worry.filter(w => (key === 'futures' || key === 'foreign') && w.includes('外資')) : [];
-    return `${plainBlock(card.plain.lines.map(esc), watch.map(esc))}<p class="drill-hint">點下面任一天，看那天的明細 <span aria-hidden="true">↓</span></p><div class="chip-big">${clickableBars(key, selected)}</div><div class="drill-detail" id="drillDetail" data-day="${esc(selected)}"></div><p class="chip-date">${esc(DT ? DT.notes.money : '')}　${esc(DT ? DT.notes.scope : '')}</p>`;
+    return `${plainBlock(card.plain.lines.map(esc), watch.map(esc))}${nowBlock(key)}<p class="drill-hint">點下面任一天，看那天的明細 <span aria-hidden="true">↓</span></p><div class="chip-big">${clickableBars(key, selected)}</div><div class="drill-detail" id="drillDetail" data-day="${esc(selected)}"></div><p class="chip-date">${esc(DT ? DT.notes.money : '')}　${esc(DT ? DT.notes.scope : '')}</p>`;
   }
   function bindChipPanel(key) {
     const first = els.panelBody.querySelector('#drillDetail');

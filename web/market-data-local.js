@@ -10,7 +10,8 @@
         dashboard: window.MARKET_DASHBOARD,
         chips: window.MARKET_CHIPS || null,
         plain: window.MARKET_PLAIN || null,
-        detailIndex: detail ? { days: detail.days, notes: detail.notes } : null
+        detailIndex: detail ? { days: detail.days, notes: detail.notes } : null,
+        current: detail && detail.current ? detail.current : null
       };
     },
     async detail(kind, date) {

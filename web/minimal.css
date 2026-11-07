@@ -944,3 +944,18 @@ html, body { height: auto; }
 
 .drill-table .stock-link { color: inherit; text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px; }
 .drill-table .stock-link:hover { text-decoration-color: var(--accent); }
+
+/* 本人 11-07：籌碼卡細部「目前前 10＋連續天數」 */
+.now-block { margin: 16px 0 6px; padding: 14px 14px 6px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel2); }
+.now-block h3 { margin: 0 0 4px; font-size: 15px; }
+.now-lede { margin: 0 0 4px; color: var(--dim); font-size: 13px; line-height: 1.5; }
+.now-lede b { color: var(--ink); }
+.now-grid { display: grid; grid-template-columns: 1fr; gap: 4px; }
+.now-table td.streak { white-space: nowrap; color: var(--dim); }
+.now-table td.streak b { color: var(--ink); font-size: 14px; }
+.now-table td a.stock-link { white-space: nowrap; }
+@media (max-width: 420px) {
+  .now-block { padding: 12px 10px 4px; }
+  .now-table table { font-size: 12.5px; }
+  .now-table td, .now-table th { padding: 5px 4px; }
+}

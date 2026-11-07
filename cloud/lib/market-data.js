@@ -75,6 +75,16 @@ const plainView = (p) => ({
   data_dates: pick(p.data_dates, ["price_and_foreign", "margin"]),
 });
 
+// 本人 11-07：每張卡「目前前 10＋連續天數」，資料小，放總覽。
+const CURRENT_TABLES = ["foreign_buy", "foreign_sell", "trust_buy", "trust_sell", "margin_up", "margin_down", "short_up", "short_down", "turnover_top"];
+function currentView(c) {
+  if (!c) return null;
+  return {
+    ...pick(c, ["as_of", "days_available", "futures_short_growing_days", "futures_days_available"]),
+    ...Object.fromEntries(CURRENT_TABLES.map((k) => [k, pickAll(c[k], ["code", "name", "value", "streak", "capped"])])),
+  };
+}
+
 // 每張籌碼卡下鑽時要的表與欄位（對照 minimal.js dayDetail）。
 const DETAIL = {
   foreign: { foreign_buy: ["foreign_billion", "foreign_lots"], foreign_sell: ["foreign_billion", "foreign_lots"] },
@@ -94,6 +104,7 @@ export function buildMarketPack({ analysis, dashboard, chips, plain, detail }, h
     chips: chipsView(chips),
     plain: plainView(plain),
     detailIndex: { days: [...(detail.days || [])], notes: pick(detail.notes, ["money", "scope"]) },
+    current: currentView(detail.current),
   };
   const details = {};
   for (const day of content.detailIndex.days) {

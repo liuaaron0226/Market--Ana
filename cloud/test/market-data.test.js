@@ -56,6 +56,8 @@ function raw() {
     plain: { id: "p", for_trading_day: "d", reviewed_by: "logs/x.json", one_line: "一句", points: [{ key: "foreign", title: "外資", lines: ["a"] }], worry: ["w"], relief: ["r"], data_dates: { price_and_foreign: "2026-03-10", margin: "2026-03-09" }, supersedes: "old" },
     detail: {
       generated_at: "g", days: ["2026-03-09", "2026-03-10"], notes: { money: "m", scope: "s", sources: "internal" },
+      current: { as_of: "2026-03-10", days_available: 2, futures_short_growing_days: 4, futures_days_available: 1, secret: "x",
+        trust_buy: [{ code: "2330", name: "台積電", value: 99.7, streak: 20, capped: true, secret: "x" }] },
       by_date: {
         "2026-03-09": {},
         "2026-03-10": {
@@ -111,6 +113,10 @@ test("總覽保留畫面計算需要的完整序列（日K、法人、籌碼）�
   assert.equal(o.dashboard.actions["轉強觀察"].holding, "h");
   assert.equal(o.dashboard.forecast.scenarios[0].trigger, "t");
   assert.deepEqual(o.detailIndex, { days: ["2026-03-09", "2026-03-10"], notes: { money: "m", scope: "s" } });
+  // 本人 11-07：每張卡的「目前前 10＋連續天數」放在總覽（小），欄位只留畫面用的。
+  assert.deepEqual(o.current.trust_buy[0], { code: "2330", name: "台積電", value: 99.7, streak: 20, capped: true });
+  assert.equal(o.current.futures_short_growing_days, 4);
+  assert.equal(o.current.as_of, "2026-03-10");
 });
 
 test("明細一次只給一張卡需要的表與欄位", () => {
