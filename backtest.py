@@ -19,6 +19,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from strategy_engine import PARAMS_V01, SHARES_PER_LOT, Account, DaySnapshot, FixedProvider, MarketState, Params, Position, StockDay, decide
+from strategy_v02 import CoreSatellite, MonthlyCore
 from virtual_ledger import Ledger, StockHistoryMarketData, TradeIntent, execute_intent
 
 ROOT = Path(__file__).resolve().parent
@@ -167,17 +168,19 @@ def max_drawdown(values: list[float]) -> float:
 
 def run_backtest(db_path: Path, index: dict[str, float], params: Params, *, start: str, end: str,
                  initial_cash: int, work_dir: Path, provider=None, progress=None, corporate_events: list | None = None,
-                 return_index: dict[str, float] | None = None) -> dict:
+                 return_index: dict[str, float] | None = None, strategy=None) -> dict:
     """corporate_events=None：不處理公司行動（本人 11-07 01:1x 的 B 口徑，遇事件即標不可判定）。
     傳入官方事件清單（可為空）：除息入帳、除權／分割／減資調整股數，只有無法解決的事件才標不可判定。"""
     provider = provider or FixedProvider()
+    strategy = strategy or decide
+    version = getattr(strategy, 'version', params.version)
     handle_actions = corporate_events is not None
     official = {(e['date'], e['code']): e for e in (corporate_events or [])}
     connection = sqlite3.connect(db_path)
     connection.row_factory = sqlite3.Row
     dates = [r[0] for r in connection.execute('SELECT date FROM source_days WHERE date <= ? ORDER BY date', (end,))]
     first_trade_index = next(i for i, d in enumerate(dates) if d >= start)
-    ledger_path = work_dir / f'ledger-{params.version}-{datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")}.sqlite'
+    ledger_path = work_dir / f'ledger-{version}-{datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")}.sqlite'
     ledger = Ledger(ledger_path)
     ledger.create_account('backtest', initial_cash)
     market_data = StockHistoryMarketData(db_path)
@@ -204,7 +207,7 @@ def run_backtest(db_path: Path, index: dict[str, float], params: Params, *, star
                     continue
             record = execute_intent(ledger, market_data, TradeIntent(
                 account_id='backtest', code=intent.code, side=intent.side, lots=intent.lots, decided_at=f'{decided_on}T14:30:00+08:00',
-                strategy_version=params.version, strategy_rule=intent.rule, plain_reason=intent.reason))
+                strategy_version=version, strategy_rule=intent.rule, plain_reason=intent.reason))
             if record['status'] != 'filled':
                 continue
             price = float(record['fill_price'])
@@ -214,7 +217,7 @@ def run_backtest(db_path: Path, index: dict[str, float], params: Params, *, star
                     positions[intent.code] = replace(p, lots=p.lots + intent.lots, added=True)
                 else:
                     positions[intent.code] = Position(lots=intent.lots, entry_price=price, entry_date=date,
-                                                      stop=stop, risk=price - stop, last_price=price)
+                                                      stop=stop or 0.0, risk=price - (stop or 0.0), last_price=price)
                     trades.append({'code': intent.code, 'open_date': date, 'entry': price, 'cost': 0.0, 'proceeds': 0.0})
                 open_trade = next(t for t in reversed(trades) if t.get('code') == intent.code and 'open_date' in t and 'close_date' not in t)
                 open_trade['cost'] += price * intent.lots * SHARES_PER_LOT + record['fee']
@@ -299,7 +302,7 @@ def run_backtest(db_path: Path, index: dict[str, float], params: Params, *, star
                 hold_0050['series'].append({'date': date, 'value': hold_0050['cash'] + (hold_0050['lots'] * SHARES_PER_LOT + hold_0050.get('odd', 0)) * last_close.get('0050', 0)})
 
             # 4. 收盤後決策，明天開盤撮合
-            decision = decide(DaySnapshot(date=date, market=market_state(index, dates, i), stocks=snapshot_stocks),
+            decision = strategy(DaySnapshot(date=date, market=market_state(index, dates, i), stocks=snapshot_stocks),
                               Account(cash=cash, positions=dict(positions)), params, provider)
             for code, stop in decision.stops.items():
                 if code in positions:
@@ -326,7 +329,7 @@ def run_backtest(db_path: Path, index: dict[str, float], params: Params, *, star
         'unfilled_reasons': dict(sorted(_count(r['failure_reason'] for r in ledger_rows if r['status'] == 'unfilled').items())),
     }
     return {
-        'params': {k: v for k, v in params.__dict__.items()}, 'summary': summary, 'equity': equity,
+        'strategy_version': version, 'params': {k: v for k, v in params.__dict__.items()}, 'summary': summary, 'equity': equity,
         'corporate_actions_handled': handle_actions,
         'benchmarks': {'index': index_points, 'return_index': return_points, '0050_buy_and_hold': hold_0050['series'] if hold_0050 else [],
                        '0050_not_comparable_from': hold_0050['not_comparable_from'] if hold_0050 else None,
@@ -351,6 +354,7 @@ def main() -> int:
     parser.add_argument('--end', default='2026-11-06')
     parser.add_argument('--cash', type=int, default=1_000_000)
     parser.add_argument('--out', type=Path, required=True)
+    parser.add_argument('--strategy', choices=['v0.1', 'v0.2a', 'v0.2b'], default='v0.1')
     parser.add_argument('--events', type=Path, help='corporate_actions.py build 產生的 events.json；不給就不處理公司行動')
     args = parser.parse_args()
     args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -359,6 +363,7 @@ def main() -> int:
     return_index = total_return_index(args.db.parent / 'raw', args.db.parent / 'return-index.json')
     result = run_backtest(args.db, index_series(args.index_dir), PARAMS_V01, start=args.start, end=args.end,
                           initial_cash=args.cash, work_dir=args.out.parent, corporate_events=events, return_index=return_index,
+                          strategy={'v0.1': None, 'v0.2a': CoreSatellite(), 'v0.2b': MonthlyCore()}[args.strategy],
                           progress=lambda d, nav, n: print(f'{d} 淨值 {nav:,.0f} 持股 {n}', file=sys.stderr, flush=True))
     result['seconds'] = round(time.time() - started)
     result['generated_at_utc'] = datetime.now(timezone.utc).isoformat()

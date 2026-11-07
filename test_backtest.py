@@ -148,6 +148,18 @@ class BacktestTests(unittest.TestCase):
         result = self.run_case({'2330': bars}, corporate_events=[])
         self.assertEqual(result['verdict_from'], self.dates[85])
 
+    def test_monthly_core_strategy_runs_through_the_same_ledger_and_is_labelled(self):
+        from strategy_v02 import MonthlyCore
+        series = {'0050': [(50.0 + i * 0.1, 50.0 + i * 0.1, 1_000_000, '+') for i in range(100)]}
+        result = self.run_case(series, corporate_events=[], strategy=MonthlyCore())
+        fills = [r for r in result['ledger'] if r['status'] == 'filled']
+        self.assertEqual(result['strategy_version'], 'v0.2b')
+        self.assertEqual({r['code'] for r in fills}, {'0050'})
+        self.assertTrue(all(r['strategy_version'] == 'v0.2b' for r in fills))
+        # 大盤一路上漲 → 第一個有 MA60 的月初買到約 90%（一張約淨值 5%，整張向下取整），之後不再交易
+        self.assertEqual(len(fills), 1)
+        self.assertGreater(result['equity'][-1]['nav'] - result['equity'][-1]['cash'], 0.80 * result['equity'][-1]['nav'])
+
     def test_buy_and_hold_0050_and_index_benchmarks_cover_the_same_dates(self):
         series = {'2330': flat_then_breakout(100, 70), '0050': [(50.0 + i * 0.1, 50.0 + i * 0.1, 1_000_000, '+') for i in range(100)]}
         result = self.run_case(series)

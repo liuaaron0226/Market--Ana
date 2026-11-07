@@ -102,7 +102,7 @@ def pct(value, digits=1):
     return '—' if value is None or (isinstance(value, float) and math.isnan(value)) else f'{value * 100:+.{digits}f}%'
 
 
-def sparkline(points, width=900, height=220):
+def sparkline(points, width=900, height=220, colors=None):
     """三條線同一張 SVG，各自以起點=100 正規化；回傳 svg 字串。"""
     series = {name: pts for name, pts in points.items() if pts}
     all_dates = sorted({p['date'] for pts in series.values() for p in pts})
@@ -113,7 +113,7 @@ def sparkline(points, width=900, height=220):
     span = max(hi - lo, 1)
     x = lambda i: 8 + i / max(len(all_dates) - 1, 1) * (width - 16)
     y = lambda v: height - 20 - (v - lo) / span * (height - 40)
-    colors = {'策略 v0.1': 'var(--accent)', '0050 買入持有': 'var(--down)', '加權指數（價格）': 'var(--faint)', '加權報酬指數（含息）': 'var(--faint)'}
+    colors = colors or {'策略 v0.1': 'var(--accent)', '0050 買入持有': 'var(--down)', '加權指數（價格）': 'var(--faint)', '加權報酬指數（含息）': 'var(--faint)'}
     paths = []
     for name, pts in normalized.items():
         d = ' '.join(f'{"M" if k == 0 else "L"}{x(i):.1f},{y(v):.1f}' for k, (i, v) in enumerate(pts[::3] + [pts[-1]]))
@@ -123,7 +123,7 @@ def sparkline(points, width=900, height=220):
     for year in sorted({d[:4] for d in all_dates}):
         first = next(i for i, d in enumerate(all_dates) if d.startswith(year))
         ticks.append(f'<text x="{x(first):.1f}" y="{height - 4}" class="tick">{year[2:]}</text>')
-    return (f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="三條績效線，起點皆為 100">'
+    return (f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="{len(normalized)} 條績效線，起點皆為 100">'
             f'<line x1="8" x2="{width - 8}" y1="{base:.1f}" y2="{base:.1f}" class="base"/>{"".join(paths)}{"".join(ticks)}</svg>')
 
 
