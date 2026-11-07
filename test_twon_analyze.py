@@ -10,10 +10,24 @@ class AnalyzeTests(unittest.TestCase):
         result = analyze('2330', '2026-11-06')
         self.assertEqual([s['id'] for s in result['strategies']][:6], ['T01', 'T02', 'T03', 'T04', 'T05', 'T06'])
         self.assertEqual(len(result['strategies']), 24)
+        self.assertEqual(result['dimensions_missing'], [])
+        self.assertIsNotNone(result['score'])                    # 五維到齊才給總分
+        self.assertIn(result['trend'], ('strong', 'watch', 'weak', 'risk'))
+        self.assertEqual(result['sources']['revenue_period'], '2026-09')
+
+    def test_borrowing_condition_uses_official_raw_file_when_that_day_exists(self):
+        result = analyze('2330', '2026-10-13')                   # 借券原件 10/07～10/13 已抓
+        c04 = next(s for s in result['strategies'] if s['id'] == 'C04')
+        self.assertNotEqual(c04['status'], 'unavailable')
+        self.assertIn('borrow_balance', c04['evidence'])
+
+    def test_missing_dimension_withholds_total_score(self):
+        from unittest.mock import patch
+        with patch('twon_analysis.chips.revenue', return_value=None), patch('twon_analysis.chips.valuation', return_value=None):
+            result = analyze('2330', '2026-11-06')
         self.assertIn('F', result['dimensions_missing'])
-        self.assertIsNone(result['score'])                       # 五維未到齊就不給總分
+        self.assertIsNone(result['score'])
         self.assertIn('F', result['score_note'])
-        self.assertTrue(all(s['status'] == 'unavailable' for s in result['strategies'] if s['id'] in ('C04', 'F01', 'F02', 'F03', 'F04')))
 
     def test_etf_has_no_fundamental_strategies_and_no_total_score(self):
         result = analyze('0050', '2026-11-06')

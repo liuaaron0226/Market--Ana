@@ -59,3 +59,68 @@ def institutional(code: str, dates: list[str]) -> list[dict | None]:
 
 def margin(code: str, dates: list[str]) -> list[dict | None]:
     return [_margin(d).get(code) for d in dates]
+
+
+FUND = ROOT / 'data/fundamentals'
+
+
+@lru_cache(maxsize=64)
+def _borrow(day: str) -> dict:
+    path = FUND / 'twt93u' / f'twt93u-{day.replace("-", "")}.json'
+    if not path.exists():
+        return {}
+    data = json.loads(path.read_text(encoding='utf-8'))
+    # 欄位：代號 名稱｜融券 6 欄｜借券賣出：前日餘額 當日賣出 當日還券 當日調整 當日餘額 可限額｜備註（單位：股）
+    return {row[0].strip(): {'balance_prev': _int(row[8]), 'sold': _int(row[9]), 'balance': _int(row[12])} for row in data['data']}
+
+
+@lru_cache(maxsize=64)
+def _valuation(day: str) -> dict:
+    path = FUND / 'bwibbu' / f'bwibbu-{day.replace("-", "")}.json'
+    if not path.exists():
+        return {}
+    data = json.loads(path.read_text(encoding='utf-8'))
+    out = {}
+    for row in data['data']:
+        cell = dict(zip(data['fields'], row))
+        num = lambda key: None if str(cell[key]).strip() in ('', '-', '0.00') else float(str(cell[key]).replace(',', ''))
+        out[cell['證券代號'].strip()] = {'per': num('本益比'), 'pbr': num('股價淨值比'), 'yield': num('殖利率(%)')}
+    return out
+
+
+def borrow(code: str, dates: list[str]) -> list[dict | None]:
+    return [_borrow(d).get(code) for d in dates]
+
+
+def valuation(code: str, day: str) -> dict | None:
+    return _valuation(day).get(code)
+
+
+@lru_cache(maxsize=4)
+def _openapi(name: str) -> tuple[dict, str | None]:
+    files = sorted((FUND / 'openapi').glob(f'{name}-*.json'))
+    files = [f for f in files if not f.name.endswith('.meta.json')]
+    if not files:
+        return {}, None
+    rows = json.loads(files[-1].read_text(encoding='utf-8'))
+    return {row['公司代號'].strip(): row for row in rows}, files[-1].stem.split('-')[-1]
+
+
+def revenue(code: str) -> dict | None:
+    """最新一期月營收（OpenAPI 只有最新一期）。回傳 yoy、mom、cum_yoy（%）與資料年月。"""
+    rows, _ = _openapi('t187ap05_L')
+    row = rows.get(code)
+    if not row:
+        return None
+    pct = lambda key: None if not row.get(key) or row[key] in ('-', '') else round(float(row[key]), 2)
+    ym = row['資料年月']
+    return {'yoy': pct('營業收入-去年同月增減(%)'), 'mom': pct('營業收入-上月比較增減(%)'),
+            'cum_yoy': pct('累計營業收入-前期比較增減(%)'), 'period': f'{int(ym[:3]) + 1911}-{ym[3:]}'}
+
+
+def eps(code: str) -> dict | None:
+    rows, _ = _openapi('t187ap14_L')
+    row = rows.get(code)
+    if not row or row.get('基本每股盈餘(元)') in (None, '', '-'):
+        return None
+    return {'eps': float(row['基本每股盈餘(元)']), 'period': f'{int(row["年度"]) + 1911}Q{row["季別"]}'}

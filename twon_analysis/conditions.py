@@ -47,7 +47,7 @@ def streak(values: list) -> int:
 
 
 def chip_and_institutional(margin_rows: list, inst_rows: list, chg: float, close: float, avg_vol: int | None,
-                           inst_cost: float | None) -> tuple[list[dict], dict]:
+                           inst_cost: float | None, borrow_rows: list | None = None) -> tuple[list[dict], dict]:
     """margin_rows／inst_rows：由舊到新、最後一筆是 as_of。缺資料的日子是 None。回傳 (8 招, 衍生數值)。"""
     out, derived = [], {}
     avg = max(1, avg_vol or 1)
@@ -70,7 +70,17 @@ def chip_and_institutional(margin_rows: list, inst_rows: list, chg: float, close
                            'confirming' if m5 >= 10 and margin_diff > 500 else 'off',
                            {'m5_pct': round(m5, 2), 'margin_diff5': margin_diff}))
         out.append(_result('C03', 'triggered' if today['short'] > 0 else 'off', {'short_balance': today['short']}))
-    out.append(_result('C04', 'unavailable', {'reason': '借券資料尚未接入（補抓需本人同意）'}))
+    b = [r for r in (borrow_rows or []) if r is not None]
+    if not b or not borrow_rows or borrow_rows[-1] is None:
+        out.append(_result('C04', 'unavailable', {'reason': '借券原件不涵蓋這一天'}))
+    else:
+        today_b = b[-1]
+        base_b = b[max(0, len(b) - 6)]
+        borrow_diff5 = today_b['balance'] - base_b['balance'] if len(b) > 1 else None
+        derived.update(borrow_sold=today_b['sold'], borrow_balance=today_b['balance'], borrow_diff5=borrow_diff5 or 0)
+        heavy = today_b['balance'] / avg >= 0.10 or (borrow_diff5 or 0) > 0
+        out.append(_result('C04', 'triggered' if today_b['sold'] > 0 and avg_vol and heavy else 'off',
+                           {'borrow_sold': today_b['sold'], 'borrow_balance': today_b['balance'], 'borrow_diff5': borrow_diff5}))
 
     rows = [r for r in inst_rows if r is not None]
     if not rows or inst_rows[-1] is None:
@@ -100,8 +110,31 @@ def chip_and_institutional(margin_rows: list, inst_rows: list, chg: float, close
     return out, derived
 
 
-def fundamentals_unavailable() -> list[dict]:
-    return [_result(sid, 'unavailable', {'reason': '月營收、EPS、本益比資料尚未接入（補抓需本人同意）'}) for sid in ('F01', 'F02', 'F03', 'F04')]
+def fundamentals(rev: dict | None, eps: dict | None, val: dict | None) -> list[dict]:
+    """F01–F04（handoff §3.5）。月營收與 EPS 是 OpenAPI 最新一期，不一定等於分析日；證據附資料期別。"""
+    out = []
+    if rev is None or rev['yoy'] is None:
+        out.append(_result('F01', 'unavailable', {'reason': '沒有這家公司的最新月營收'}))
+        out.append(_result('F04', 'unavailable', {'reason': '沒有這家公司的最新月營收'}))
+    else:
+        out.append(_result('F01', 'triggered' if rev['yoy'] > 0 or (rev['cum_yoy'] or 0) > 0 else 'off',
+                           {'yoy': rev['yoy'], 'cum_yoy': rev['cum_yoy'], 'period': rev['period']}))
+    if eps is None:
+        out.append(_result('F02', 'unavailable', {'reason': '最新一季 EPS 尚未公告或不在 OpenAPI 名單'}))
+    else:
+        out.append(_result('F02', 'triggered' if eps['eps'] > 0 else 'off', {'eps': eps['eps'], 'period': eps['period']}))
+    if val is None or (val['per'] is None and val['pbr'] is None):
+        out.append(_result('F03', 'unavailable', {'reason': '沒有本益比／淨值比'}))
+    else:
+        per, pbr = val['per'], val['pbr']
+        cheap = (per is not None and per <= 15) or (pbr is not None and pbr <= 1.1)
+        rich = (per is not None and per >= 45) or (pbr is not None and pbr >= 10)
+        out.append(_result('F03', 'triggered' if cheap or rich else 'off',
+                           {'per': per, 'pbr': pbr, 'side': '偏低估' if cheap else '偏高估' if rich else '一般'}))
+    if rev is not None and rev['yoy'] is not None:
+        out.append(_result('F04', 'triggered' if rev['yoy'] <= -20 else 'off', {'yoy': rev['yoy'], 'period': rev['period']}))
+    order = {'F01': 0, 'F02': 1, 'F03': 2, 'F04': 3}
+    return sorted(out, key=lambda r: order[r['id']])
 
 
 def _result(sid, status, evidence):

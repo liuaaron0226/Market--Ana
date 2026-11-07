@@ -46,9 +46,37 @@ def chip_score(derived: dict, chg: float) -> int | None:
     if 'm5' not in derived:
         return None
     m5, margin_diff = derived['m5'], derived['margin_diff5']
+    avg = max(1, derived.get('avg_vol') or 1)
+    borrow5d = derived.get('borrow_diff5', 0) / avg
+    borrow_sale = derived.get('borrow_sold', 0) / avg * 100
     margin_term = 0.90 * m5 if m5 >= 0 else 0.35 * m5
-    raw = round(52 - margin_term + (8 if chg > 0 and margin_diff < 0 else 0))
-    return int(clamp(0, 100, raw))
+    raw = round(52 - margin_term - 14 * borrow5d - 0.45 * borrow_sale + (8 if chg > 0 and margin_diff < 0 else 0))
+    return int(clamp(0, 100, raw - (18 if m5 > 4 and borrow_sale > 15 and raw > 35 else 0)))
+
+
+def fundamental_score(rev: dict | None, val: dict | None) -> int | None:
+    """基本面 F（handoff §4.1）；估值與營收都沒有時回 None。EPS 不進 F。"""
+    if rev is None and val is None:
+        return None
+    f = 52.0
+    yoy = rev['yoy'] if rev and rev['yoy'] is not None else None
+    mom = rev['mom'] if rev and rev['mom'] is not None else None
+    if yoy is not None:
+        f += clamp(-18, 20, yoy * 0.38)
+    if mom is not None and mom < -5:
+        f += max(-8, mom * 0.45)
+    elif mom is not None and mom > 0 and (yoy or 0) > 0:
+        f += min(5, mom * 0.2)
+    per = val['per'] if val else None
+    pbr = val['pbr'] if val else None
+    dividend_yield = val['yield'] if val else None
+    if per is not None:
+        f += 5 if per <= 16 else -10 if per >= 55 else -6 if per >= 40 else 0
+    if pbr is not None:
+        f += 3 if pbr <= 1.2 else -6 if pbr >= 12 else 0
+    if dividend_yield is not None and dividend_yield >= 4:
+        f += 4
+    return int(clamp(0, 100, round(f)))
 
 
 def institutional_score(derived: dict, avg_vol: int | None) -> int | None:

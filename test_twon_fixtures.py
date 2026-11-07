@@ -51,7 +51,7 @@ class ResearchFixtureTests(unittest.TestCase):
 @unittest.skipUnless(RESEARCH.exists() and DEFAULT_DB.exists(), '研究樣本或票 01 資料庫不在本機')
 class ChipFixtureTests(unittest.TestCase):
     def test_chip_and_institutional_statuses_match_except_borrowing(self):
-        from twon_analysis.chips import available_days, institutional, margin
+        from twon_analysis.chips import available_days, borrow, institutional, margin
         from twon_analysis.conditions import chip_and_institutional
         days = [d for d in available_days() if d <= '2026-10-16']
         mismatches = {}
@@ -59,10 +59,10 @@ class ChipFixtureTests(unittest.TestCase):
             code = analysis['symbol']
             bars, info = load_bars(code, '2026-10-16')
             x = indicators(bars)
-            results, _ = chip_and_institutional(margin(code, days), institutional(code, days), info['chg'], x['close'], x['avg_vol20'], None)
+            results, _ = chip_and_institutional(margin(code, days), institutional(code, days), info['chg'], x['close'], x['avg_vol20'], None, borrow(code, days))
             original = {s['strategy_id']: s['status'] for s in analysis['derived']['strategies']}
             for r in results:
-                if r['id'] != 'C04' and r['status'] != original[r['id']]:
+                if r['status'] != original[r['id']] and r['status'] != 'unavailable':
                     mismatches.setdefault(r['id'], []).append(code)
         # 10/16 前只有 7 天法人／融資原件（原站用 20 日），I04 的 d20 與 C01 的五日基準可能不同；
         # I03 原站真條件 handoff 記為【未知】（捷徑只 2/5 符合），本站照 2TON-FIT-V1 自有規則。其餘必須一致。

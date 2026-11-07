@@ -1,8 +1,8 @@
 """個股分析入口：代號＋日期 → 24 招、五維、總分、價位結構（結果投影，不含公式與權重）。
 
 總分五步（handoff §4.2，2TON-FIT-V1 預設 preset，本站自有）。本人定案最終要 24 招與五維總分全部到齊；
-目前籌碼只有近 20 日原件、借券／基本面尚未接入，缺的維度回 None 並註明，總分在五維未到齊時標「未完整」，
-不用中性分冒充有資料（ANALYSIS_PLAN 11-07 本人定案）。
+籌碼、法人、借券、估值是近 20 個交易日的逐日原件；月營收與 EPS 是 OpenAPI 最新一期（附資料期別）。
+缺的維度回 None 並註明，五維未到齊不給總分，不用中性分冒充有資料（ANALYSIS_PLAN 11-07 本人定案）。
 """
 from __future__ import annotations
 
@@ -10,11 +10,11 @@ import hashlib
 import json
 
 from . import chips
-from .conditions import chip_and_institutional, fundamentals_unavailable, trend_and_volume
+from .conditions import chip_and_institutional, fundamentals, trend_and_volume
 from .data import load_bars
 from .indicators import indicators
 from .price_structure import structure
-from .scores import chip_score, clamp, institutional_score, rf1, trend_score, volume_score
+from .scores import chip_score, clamp, fundamental_score, institutional_score, rf1, trend_score, volume_score
 
 VERSION = 'MA-TWON-ANALYSIS-PV1'
 FORMULA = '2TON-FIT-V1+price:2ton-research'
@@ -54,18 +54,23 @@ def analyze(code: str, as_of: str) -> dict:
     inst_cost = _inst_cost(code, bars, days) if days else None
 
     strategies = trend_and_volume(x, chg, len(bars))
-    chip_results, derived = chip_and_institutional(chips.margin(code, days), chips.institutional(code, days), chg, x['close'], x['avg_vol20'], inst_cost)
+    chip_results, derived = chip_and_institutional(chips.margin(code, days), chips.institutional(code, days), chg, x['close'],
+                                                   x['avg_vol20'], inst_cost, chips.borrow(code, days))
+    derived['avg_vol'] = x['avg_vol20']
     strategies += chip_results
+    rev = eps = val = None
     if not is_etf:
-        strategies += fundamentals_unavailable()
-    price = structure(bars, x, inst_cost)
+        rev, eps, val = chips.revenue(code), chips.eps(code), chips.valuation(code, x['date'])
+        strategies += fundamentals(rev, eps, val)
+    avg = max(1, x['avg_vol20'] or 1)
+    bonus = (0.4 if derived.get('borrow_sold', 0) > 0 and (derived.get('borrow_balance', 0) / avg >= 0.10 or derived.get('borrow_diff5', 0) > 0) else 0)         + (0.3 if derived.get('borrow_diff5', 0) > avg * 0.15 else 0)
+    price = structure(bars, x, inst_cost, bonus)
 
     dims = {'T': trend_score(x), 'V': volume_score(x, chg), 'C': chip_score(derived, chg),
-            'I': institutional_score(derived, x['avg_vol20']), 'F': None}
+            'I': institutional_score(derived, x['avg_vol20']), 'F': None if is_etf else fundamental_score(rev, val)}
     # ETF 沒有基本面，F 不適用；依 handoff §3.5 ETF 模式總分與趨勢為 null（不是資料缺）
     missing = [k for k, v in dims.items() if v is None and not (is_etf and k == 'F')]
 
-    avg = max(1, x['avg_vol20'] or 1)
     flags = []
     if rf1(x):
         flags.append({'id': 'RF1', 'text': '收盤在 MA20 之下，且也在 MA5 或 MA60 之下'})
@@ -75,6 +80,13 @@ def analyze(code: str, as_of: str) -> dict:
             flags.append({'id': 'RF2', 'text': '外資近五日賣超偏大'})
     if dims['C'] is not None and dims['C'] <= 35:
         flags.append({'id': 'RF3', 'text': '融資籌碼分數偏低'})
+    if 'borrow_sold' in derived:
+        sold = derived['borrow_sold'] / avg
+        diff5 = derived.get('borrow_diff5', 0)
+        if sold > 0.12 or (sold > 0.05 and derived.get('inst_today', 0) < 0) or (sold > 0.025 and diff5 > 0 and dims['T'] < 50) or diff5 > 10_000_000:
+            flags.append({'id': 'RF4', 'text': '借券賣出或借券餘額增加偏多'})
+    if (rev and rev['yoy'] is not None and rev['yoy'] <= -20) or (dims['F'] is not None and dims['F'] <= 40):
+        flags.append({'id': 'RF5', 'text': '營收年減逾兩成或基本面分數偏低'})
 
     score = None
     if not missing and not is_etf:
@@ -93,6 +105,8 @@ def analyze(code: str, as_of: str) -> dict:
         'code': code, 'name': info['name'], 'kind': info['kind'], 'as_of': x['date'], 'requested_as_of': as_of,
         'version': VERSION, 'formula': FORMULA, 'params_hash': params_hash,
         'quote': {'close': x['close'], 'chg_pct': round(chg, 2), 'volume': x['volume'], 'change_sign': info['change_sign']},
+        'sources': {'revenue_period': rev['period'] if rev else None, 'eps_period': eps['period'] if eps else None,
+                    'valuation_date': x['date'] if val else None},
         'qa': {'blocking': False, 'bars': len(bars), 'chip_days': len(days),
                'chip_range': f'{days[0]}～{days[-1]}' if days else None},
         'dimensions': dims, 'dimensions_missing': missing,
