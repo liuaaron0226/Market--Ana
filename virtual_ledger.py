@@ -7,7 +7,7 @@ append 會在同一個 ``BEGIN IMMEDIATE`` 交易內重驗不當沖、現金與�
 
 助手假設、待本人確認：手續費先以「成交金額 × 0.1425% × 使用者折扣」計算，再無條件
 捨去到元，每筆最低 20 元。這些規則集中在 FeePolicy，可由 execute_intent 的 fee_policy
-參數替換。證交稅為賣出成交金額 0.3%，無條件捨去到元。
+參數替換。證交稅為賣出成交金額 0.3%（ETF 如 0050 為 0.1%，本人 11-07 定案），無條件捨去到元。
 
 助手假設、待本人確認：可交易範圍保守限定四位數且首碼非 0 的上市普通股與 0050；
 特別股及其他 ETF 均拒絕。
@@ -27,6 +27,13 @@ from typing import Protocol
 
 SHARES_PER_LOT = 1000
 SELL_TAX_RATE = Decimal('0.003')
+ETF_SELL_TAX_RATE = Decimal('0.001')
+
+
+def sell_tax(code: str, gross: Decimal) -> int:
+    """賣出證交稅，捨去到元。稅率依代號判定（00 開頭為 ETF），不信任外部傳入的 security_kind。"""
+    rate = ETF_SELL_TAX_RATE if code.startswith('00') else SELL_TAX_RATE
+    return int((gross * rate).to_integral_value(rounding=ROUND_FLOOR))
 
 
 @dataclass(frozen=True)
@@ -393,9 +400,7 @@ class Ledger:
         required_fee = fee_policy.calculate(gross, discount)
         if entry['fee'] != required_fee:
             raise ValueError(f'手續費必須是 {required_fee} 元')
-        required_tax = 0 if entry['side'] == 'buy' else int(
-            (gross * SELL_TAX_RATE).to_integral_value(rounding=ROUND_FLOOR)
-        )
+        required_tax = 0 if entry['side'] == 'buy' else sell_tax(entry['code'], gross)
         if entry['tax'] != required_tax:
             raise ValueError(f'證交稅必須是 {required_tax} 元')
         if entry['side'] == 'buy':
@@ -608,7 +613,7 @@ def execute_intent(
         cash_delta = -(gross + fee)
         lot_delta = intent.lots
     else:
-        tax = int((gross * SELL_TAX_RATE).to_integral_value(rounding=ROUND_FLOOR))
+        tax = sell_tax(intent.code, gross)
         cash_delta = gross - fee - tax
         lot_delta = -intent.lots
     record.update(

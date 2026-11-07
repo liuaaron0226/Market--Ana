@@ -193,7 +193,7 @@ th,td{{padding:6px 10px;border-bottom:1px solid var(--line);text-align:right}}th
 details summary{{cursor:pointer;color:var(--dim)}}
 </style></head><body><main>
 <h1>策略 v0.1 {"回測" if adjusted and not verdict else "未調整模擬" if not adjusted else "回測（部分不可判定）"}：2016-04 至 {html.escape(s["end"])}</h1>
-<p class="meta">起始 100 萬元虛擬資金・隔日開盤成交・手續費 0.1425%（捨去、最低 20 元）＋賣出證交稅 0.3%・資料來源證交所每日收盤行情・結果檔 {html.escape(source_name)}</p>
+<p class="meta">起始 100 萬元虛擬資金・隔日開盤成交・手續費 0.1425%（捨去、最低 20 元）＋賣出證交稅（普通股 0.3%、ETF 0.1%）・資料來源證交所每日收盤行情・結果檔 {html.escape(source_name)}</p>
 <section class="card big">
 <div><b>{pct(s["total_return"])}</b><span>策略總報酬{"" if adjusted and not verdict else "（不可判定）"}</span></div>
 <div><b>{pct(hold["return"])}</b><span>0050 買入持有（至 {html.escape(hold_end)}）</span></div>

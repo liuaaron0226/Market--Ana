@@ -81,13 +81,13 @@ svg{{width:100%;height:auto}}svg path{{vector-effect:non-scaling-stroke}}.base{{
 th,td{{padding:6px 10px;border-bottom:1px solid var(--line);text-align:right}}th:first-child{{text-align:left}}.dd{{color:var(--faint)}}tr.seg{{background:color-mix(in srgb,var(--accent) 6%,transparent)}}
 </style></head><body><main>
 <h1>策略比較：v0.1、v0.2a、v0.2b</h1>
-<p class="meta">2016-04 至 2026-11-06・起始 100 萬元虛擬資金・隔日開盤成交・手續費 0.1425%（捨去、最低 20 元）＋賣出證交稅 0.3%（0050 也用 0.3%，見下）・股利入帳、配股／分割／減資依官方表調整・結果檔 {html.escape(", ".join(sources))}</p>
+<p class="meta">2016-04 至 2026-11-06・起始 100 萬元虛擬資金・隔日開盤成交・手續費 0.1425%（捨去、最低 20 元）＋賣出證交稅（普通股 0.3%、0050 等 ETF 0.1%）・股利入帳、配股／分割／減資依官方表調整・結果檔 {html.escape(", ".join(sources))}</p>
 <section class="card big">{cards}</section>
 <section class="card"><h2>績效線，起點都換算成 100</h2><div>{legend}</div>{svg}</section>
 <section class="card warn"><h2>要注意</h2><ul>
 <li><b>這是已看過資料的探索性回測</b>：v0.2 是看完 v0.1 全期結果才設計的，三段（開發／驗證／保留）都被看過，不能說通過樣本外檢驗。真正的檢驗是參數凍結後新增的資料。</li>
 <li>v0.2a、v0.2b 大部分資金放在 0050，等於大半是「看大盤狀態決定持有多少 0050」；與 0050 買入持有接近是預期內的。</li>
-<li>證交稅照 spec 一律 0.3%；0050 等 ETF 實際賣出稅是 0.1%，以 0050 為主的 v0.2 實際費用會更低（是否改 spec 待本人決定）。</li>
+<li>證交稅依本人 11-07 定案：0050 等 ETF 賣出 0.1%、普通股 0.3%（先前版本一律 0.3%，結果檔另存保留對照）。</li>
 <li>股利不扣二代健保補充保費與所得稅；漲跌停一律前收 ±10% 估算；8 次左右除權息同日事件以參考價換算股數。</li>
 <li>回測用固定參數，沒有用 Gemini，也沒有用結果挑參數。</li>
 </ul></section>

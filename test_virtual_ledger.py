@@ -253,11 +253,11 @@ class VirtualFillTests(unittest.TestCase):
         # 手算最低費用假設：10×1000×0.1425%×0.6＝8.55，採每筆最低 20 元。
         self.assertEqual(allowed['fee'], 20)
 
-    def test_0050_sell_uses_ticket_specified_point_three_percent_tax(self):
+    def test_0050_sell_uses_etf_point_one_percent_tax(self):
         self.ledger.create_account('etf-acct', 0, {'0050': 1}, fee_discount=Decimal('0.6'))
         market = FakeMarket(
             {'2026-01-05': '2026-01-06'},
-            {('2026-01-06', '0050'): MarketQuote(10, False, 11, 9)},
+            {('2026-01-06', '0050'): MarketQuote(10, False, 11, 9, 'etf')},
         )
 
         record = execute_intent(
@@ -265,9 +265,27 @@ class VirtualFillTests(unittest.TestCase):
             TradeIntent('etf-acct', '0050', 'sell', 1, '2026-01-05T15:00:00+08:00', 'v1', 'exit-1', '減碼'),
         )
 
-        # 本票明文指定所有賣出 0.3%：10×1000×0.3%=30；最低手續費 20；實收 9,950。
-        self.assertEqual((record['fee'], record['tax']), (20, 30))
-        self.assertEqual(self.ledger.account_state('etf-acct'), {'cash': 9_950.0, 'holdings': {}})
+        # 本人 11-07 定案 ETF 賣出 0.1%：10×1000×0.1%=10；最低手續費 20；實收 9,970。
+        self.assertEqual((record['fee'], record['tax']), (20, 10))
+        self.assertEqual(self.ledger.account_state('etf-acct'), {'cash': 9_970.0, 'holdings': {}})
+
+    def test_public_append_rejects_stock_tax_rate_on_etf_sell(self):
+        self.ledger.create_account('etf-acct', 0, {'0050': 1}, fee_discount=Decimal('0.6'))
+        market = FakeMarket(
+            {'2026-01-05': '2026-01-06'},
+            {('2026-01-06', '0050'): MarketQuote(10, False, 11, 9, 'etf')},
+        )
+        sold = execute_intent(
+            self.ledger, market,
+            TradeIntent('etf-acct', '0050', 'sell', 1, '2026-01-05T15:00:00+08:00', 'v1', 'exit-1', '減碼'),
+        )
+        self.ledger.reverse(sold['id'], decided_at='2026-01-06T16:00:00+08:00', plain_reason='重送')
+        forged = {k: v for k, v in sold.items() if k not in ('id', 'created_at', 'odd_share_delta')}
+        # 稅率依代號判定，竄改 security_kind 也不能套回 0.3%。
+        forged.update(security_kind='common', tax=30, cash_delta=10_000 - 20 - 30)
+
+        with self.assertRaisesRegex(ValueError, '證交稅必須是 10 元'):
+            self.ledger.append(forged)
 
     def test_correction_appends_reversal_without_changing_original_record(self):
         market = FakeMarket(
