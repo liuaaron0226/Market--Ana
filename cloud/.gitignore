@@ -3,3 +3,5 @@ dist/
 node_modules/
 .dev.vars
 functions/_market-pack.js
+.stock-pack.json
+functions/_stock-pack.js

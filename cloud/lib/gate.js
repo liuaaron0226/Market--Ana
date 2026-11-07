@@ -151,6 +151,43 @@ async function consume(db, email, bucket, now, rate = RATE) {
   throw new RateLimited(60 - Math.floor((now % 60_000) / 1000));
 }
 
+// 個股分析：雲端不能跑 Python，回 build 時預算好的結果（籌碼卡會連到的股票 × 三種方案、最新交易日）。
+const STOCK_PATH = /^\/api\/stocks\/([0-9A-Z]{4,6})\/analysis$/;
+async function handleStockApi(request, env, path, email, deps) {
+  if (request.method !== "GET") throw new HttpError(405, "方法不允許");
+  const pack = deps.stockPack;
+  if (!pack) throw new HttpError(503, "資料尚未就緒");
+  const m = path.match(STOCK_PATH);
+  if (!m) throw new HttpError(400, "代號格式不正確");
+  const q = new URL(request.url).searchParams;
+  const presets = q.getAll("preset");
+  if (presets.length > 1) throw new HttpError(400, "請指定一個分析方案");
+  const preset = presets[0] || pack.default_preset;
+  if (!pack.presets.includes(preset)) throw new HttpError(400, "分析方案不正確");
+  const asOf = q.get("as_of");
+  if (asOf !== null && !DATE_RE.test(asOf)) throw new HttpError(400, "日期格式不正確");
+  try {
+    await consume(env.DB, email, "market", (deps.now || Date.now)(), deps.rate);
+  } catch (e) {
+    if (e instanceof RateLimited) return json(429, { error: "rate-limited", message: "查詢太頻繁，請稍後再試" }, { "retry-after": String(e.retryAfter) });
+    throw new HttpError(503, "暫時無法處理，請稍後再試");
+  }
+  if (asOf && asOf !== pack.as_of) {
+    return json(404, { error: "not-in-cloud", message: `雲端版只提供最新交易日 ${pack.as_of} 的分析` }, { "cache-control": "private, no-store" });
+  }
+  const byPreset = Object.hasOwn(pack.results, m[1]) ? pack.results[m[1]] : null;
+  const result = byPreset && Object.hasOwn(byPreset, preset) ? byPreset[preset] : null;
+  if (!result) {
+    return json(404, { error: "not-in-cloud", message: "雲端版只提供籌碼卡上出現過的股票，這檔請在本機版查詢" }, { "cache-control": "private, no-store" });
+  }
+  // 雲端資料包裡每筆結果是 build 時序列化好的 JSON 字串（加快 Worker 啟動），原樣回傳。
+  const body = typeof result === "string" ? result : JSON.stringify(result);
+  return new Response(body, {
+    status: 200,
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "private, no-store", "x-content-type-options": "nosniff", "x-robots-tag": "noindex, nofollow" },
+  });
+}
+
 async function handleMarketApi(request, env, path, email, deps) {
   if (request.method !== "GET") throw new HttpError(405, "方法不允許");
   const pack = deps.marketPack;
@@ -208,10 +245,12 @@ export async function handle(request, env, next, deps = defaultDeps) {
 
     const isAdmin = path === "/admin" || path.startsWith("/admin/") || path.startsWith("/api/admin/");
     const isMarket = path.startsWith("/api/market/");
+    const isStock = path.startsWith("/api/stocks/");
     if (isOwner) {
       if (path.startsWith("/api/admin/")) return await handleAdminApi(request, env, path, owner);
       if (path === "/api/me") return json(200, { email, status: "approved", owner: true });
       if (isMarket) return await handleMarketApi(request, env, path, email, deps);
+      if (isStock) return await handleStockApi(request, env, path, email, deps);
       if (RETIRED_DATA.has(path)) return fail(404, "找不到");
       return await next();
     }
@@ -224,6 +263,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
     if (isAdmin) return fail(403, "沒有管理權限");
     if (path === "/api/me") return json(200, { email, status, owner: false });
     if (isMarket) return await handleMarketApi(request, env, path, email, deps);
+    if (isStock) return await handleStockApi(request, env, path, email, deps);
     if (RETIRED_DATA.has(path)) return fail(404, "找不到");
     return await next();
   } catch (e) {

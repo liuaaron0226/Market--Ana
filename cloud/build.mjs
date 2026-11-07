@@ -8,7 +8,7 @@ import { packFromWeb } from "./lib/build-pack.js";
 const root = new URL("./", import.meta.url);
 const web = new URL("../web/", import.meta.url);
 const dist = new URL("dist/", root);
-const WEB_FILES = ["minimal.html", "minimal.css", "minimal.js", "kchart.js"];
+const WEB_FILES = ["minimal.html", "minimal.css", "minimal.js", "kchart.js", "stock.html", "stock.css", "stock.js"];
 const RETIRED = ["analysis-data.js", "chips-data.js", "dashboard-data.js", "detail-data.js", "plain-data.js", "market-data-local.js"];
 
 rmSync(dist, { recursive: true, force: true });
@@ -48,6 +48,22 @@ writeFileSync(new URL("_routes.json", dist), JSON.stringify({ version: 1, includ
 const pack = packFromWeb(web);
 writeFileSync(new URL("functions/_market-pack.js", root), `// build.mjs 產生，勿手改、不入庫。\nexport default ${JSON.stringify(pack)};\n`);
 
+// 個股分析：build_stock_pack.py 在本機先算好（雲端不能跑 Python），這裡包進 Functions。沒有就停，不部署沒有個股頁資料的版本。
+const stockPackFile = new URL(".stock-pack.json", root);
+let stockPack;
+try {
+  stockPack = JSON.parse(readFileSync(stockPackFile, "utf8"));
+} catch {
+  throw new Error("找不到 cloud/.stock-pack.json，先跑 python cloud/build_stock_pack.py");
+}
+if (!stockPack.as_of || !Object.keys(stockPack.results || {}).length) throw new Error(".stock-pack.json 內容不完整");
+// 每檔每方案存成 JSON 字串：Worker 啟動限 1 秒，大型物件字面值解析太慢；字串只在被查到時才原樣回傳。
+const stockStrings = Object.fromEntries(Object.entries(stockPack.results).map(([code, byPreset]) =>
+  [code, Object.fromEntries(Object.entries(byPreset).map(([preset, r]) => [preset, JSON.stringify(r)]))]));
+writeFileSync(new URL("functions/_stock-pack.js", root), `// build.mjs 產生，勿手改、不入庫。
+export default ${JSON.stringify({ ...stockPack, results: stockStrings })};
+`);
+
 // 部署前掃描：dist 只能有允許的檔，且不得含資料或本機路徑。
 const ALLOWED = new Set([...WEB_FILES, "index.html", "_headers", "_routes.json", "owner-entry.js", "market-data-cloud.js",
   "apply/index.html", "apply/apply.js", "apply/account.css", "admin/index.html", "admin/admin.js", "admin/account.css"]);
@@ -69,4 +85,5 @@ for (const f of listed) {
 
 const sums = listed.sort().map((f) => `${createHash("sha256").update(readFileSync(new URL(f, dist))).digest("hex").slice(0, 12)}  ${f}`);
 console.log(sums.join("\n"));
+console.log(`stock pack ${stockPack.as_of}（${Object.keys(stockPack.results).length} 檔 × ${stockPack.presets.length} 方案）`);
 console.log(`market pack ${pack.version}（${(JSON.stringify(pack).length / 1024) | 0} KB，明細 ${pack.overview.detailIndex.days.length} 天）`);
