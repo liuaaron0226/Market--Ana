@@ -1,0 +1,15 @@
+// Access External Evaluation Worker：登入時查 D1 名單。部署：npx wrangler@4 deploy（在本目錄）
+{
+  "name": "market-ana-eval",
+  "main": "src/evaluate.js",
+  "compatibility_date": "2026-11-07",
+  "workers_dev": true,
+  "preview_urls": false,
+  "d1_databases": [
+    { "binding": "DB", "database_name": "market-ana-accounts", "database_id": "391bc764-2dd8-47b3-b9f9-93b9521c59e7" }
+  ],
+  "vars": {
+    "TEAM_DOMAIN": "https://feb--2.cloudflareaccess.com",
+    "OWNER_EMAIL": "owner@example.com"
+  }
+}

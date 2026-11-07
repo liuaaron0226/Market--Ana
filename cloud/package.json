@@ -1,0 +1,8 @@
+{
+  "name": "market-ana-cloud",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test --no-warnings \"test/**/*.test.js\""
+  }
+}

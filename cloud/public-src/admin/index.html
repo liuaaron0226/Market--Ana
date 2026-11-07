@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="robots" content="noindex,nofollow">
+  <title>帳號管理｜台股決策鏡</title>
+  <link rel="stylesheet" href="/admin/account.css">
+</head>
+<body>
+  <main class="wrap">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M4 23.5 10.5 17l4.5 3.5L24.5 9l3.5 3.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M22 9h6v6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      台股決策鏡
+    </div>
+
+    <section class="card">
+      <h1>帳號管理</h1>
+      <p class="lead">核准後對方下次開網站就能進；停用立刻生效。</p>
+      <div class="tabs" role="group" aria-label="篩選">
+        <button class="ghost" type="button" data-f="pending" aria-pressed="true">等待核准</button>
+        <button class="ghost" type="button" data-f="approved" aria-pressed="false">已核准</button>
+        <button class="ghost" type="button" data-f="closed" aria-pressed="false">已拒絕／停用</button>
+      </div>
+      <p class="msg" id="msg" role="alert"></p>
+      <div class="list" id="list" aria-live="polite"></div>
+      <div class="row"><a class="btn" href="/">回到網站</a></div>
+    </section>
+  </main>
+  <script src="/admin/admin.js"></script>
+</body>
+</html>
