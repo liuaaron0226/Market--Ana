@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="zh-Hant" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>台股決策鏡</title>
+  <link rel="stylesheet" href="minimal.css?v=20261107-twon1">
+</head>
+<body>
+  <a class="skip-link" href="#workspace">跳到主圖</a>
+
+  <div class="app-shell" data-ui>
+    <header class="market-header" aria-label="市場狀態">
+      <div class="instrument-block">
+        <div class="brand-line">
+          <svg class="market-mark" viewBox="0 0 32 32" aria-hidden="true">
+            <path d="M4 23.5 10.5 17l4.5 3.5L24.5 9l3.5 3.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M22 9h6v6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <h1>台股加權指數</h1>
+        </div>
+        <button class="price-summary detail-trigger" id="priceSummary" type="button" aria-label="查看現價詳情">
+          <span class="price-value num" id="currentPrice">—</span>
+          <span class="price-change num" id="currentChange">—</span>
+          <span class="detail-cue">詳情 <span aria-hidden="true">›</span></span>
+        </button>
+      </div>
+
+      <div class="time-grid" aria-label="行情、分析與劇本時間">
+        <div class="status-compact">
+          <button class="state-trigger detail-trigger" id="statusTrigger" type="button" aria-label="查看行情狀態與現價詳情">
+            <span class="state-dot" aria-hidden="true"></span>
+            <span id="marketState">讀取中</span>
+            <span class="num" id="marketTime">—</span>
+            <span aria-hidden="true">›</span>
+          </button>
+          <span class="status-separator" aria-hidden="true">·</span>
+          <span>分析 <b class="num" id="analysisDate">—</b></span>
+          <span class="status-separator" aria-hidden="true">·</span>
+          <span>劇本 <b class="num" id="scenarioDate">—</b></span>
+        </div>
+        <span id="zoneLabel" class="sr-only">—</span>
+      </div>
+
+      <button class="conclusion-trigger liquid-control" id="conclusionTrigger" type="button" aria-label="查看結論依據">
+        <span class="conclusion-label">下一交易日</span>
+        <strong id="conclusionText">讀取判斷中</strong>
+        <span class="detail-cue">依據 <span aria-hidden="true">›</span></span>
+      </button>
+
+      <button class="theme-toggle" id="themeToggle" type="button" aria-label="切換深淺色主題">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.64 5.64l1.42 1.42m9.88 9.88 1.42 1.42m0-12.72-1.42 1.42M7.06 16.94l-1.42 1.42" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>
+        <span id="themeText">切換主題</span>
+      </button>
+    </header>
+
+    <p class="service-note" id="serviceNote" role="status" hidden></p>
+
+    <main id="workspace" class="workspace">
+      <section class="chart-workspace" aria-labelledby="chartTitle">
+        <div class="chart-toolbar">
+          <div>
+            <h2 id="chartTitle">主K線</h2>
+            <p id="chartContext">日K · 盤後資料</p>
+          </div>
+          <div class="chart-controls" aria-label="K線控制">
+            <label class="period-control" for="periodSelect">
+              <span class="sr-only">週期</span>
+              <select id="periodSelect">
+                <optgroup label="盤中">
+                  <option value="m1">1 分</option>
+                  <option value="m5">5 分</option>
+                  <option value="m15">15 分</option>
+                </optgroup>
+                <optgroup label="趨勢">
+                  <option value="h60">60 分</option>
+                  <option value="daily" selected>日</option>
+                  <option value="weekly">週</option>
+                  <option value="monthly">月</option>
+                </optgroup>
+              </select>
+            </label>
+            <button type="button" id="zoomOut" aria-label="縮小K線">−</button>
+            <button type="button" id="zoomIn" aria-label="放大K線">＋</button>
+            <button type="button" id="resetView" class="reset-view" hidden>回到最新</button>
+          </div>
+        </div>
+
+        <div class="chart-stage" id="chartStage">
+          <div class="chart-badges" aria-live="polite">
+            <span id="formingBadge" hidden>最右一根：形成中</span>
+            <span id="estimateBadge" hidden>分鐘點推估，非完整 OHLC</span>
+          </div>
+          <div class="chart-host" id="mainChart"></div>
+
+          <button class="line-trigger line-upper" id="lineUpper" type="button" aria-label="查看收復線詳情">
+            <span>收復線</span><strong class="num" id="upperValue">—</strong><i aria-hidden="true">›</i>
+          </button>
+          <button class="line-trigger line-lower" id="lineLower" type="button" aria-label="查看防守線詳情">
+            <span>防守線</span><strong class="num" id="lowerValue">—</strong><i aria-hidden="true">›</i>
+          </button>
+          <button class="current-point" id="currentPoint" type="button" aria-label="查看現價詳情" hidden>
+            <span class="point-core" aria-hidden="true"></span>
+            <span class="point-label">現價詳情 <span aria-hidden="true">›</span></span>
+          </button>
+          <span class="selected-candle-marker" id="selectedCandleMarker" aria-hidden="true" hidden></span>
+          <button class="mobile-candle-details" id="mobileCandleDetails" type="button" hidden>這一天的詳情 <span aria-hidden="true">›</span></button>
+        </div>
+        <p class="sr-only" id="chartSummary" aria-live="polite"></p>
+      </section>
+
+      <section class="read-card" id="readCard" aria-labelledby="readTitle">
+        <h2 id="readTitle">直白分析</h2>
+        <p class="read-line" id="readLine">—</p>
+        <ul class="read-list" id="readList"></ul>
+        <p class="read-date" id="readDate"></p>
+      </section>
+      <section class="chips" aria-labelledby="chipsTitle">
+        <h2 id="chipsTitle" class="sr-only">籌碼與資金</h2>
+        <div class="chip-grid" id="chipGrid"></div>
+      </section>
+      <section class="distribution" id="distribution" aria-labelledby="distributionTitle">
+        <div class="distribution-heading">
+          <h2 id="distributionTitle">隔日三區歷史分布</h2>
+          <p id="distributionNote">歷史樣本 <strong class="num" id="sampleCount" data-count="0">—</strong> 次，非預測機率</p>
+        </div>
+        <div class="distribution-bar" id="distributionBar" role="group" aria-label="隔日三區歷史分布">
+          <button type="button" data-outcome="stand_back" class="outcome-up">
+            <span>站回</span><strong class="num" data-share>—</strong><i aria-hidden="true">›</i>
+          </button>
+          <button type="button" data-outcome="between" class="outcome-mid">
+            <span>兩線間</span><strong class="num" data-share>—</strong><i aria-hidden="true">›</i>
+          </button>
+          <button type="button" data-outcome="continue_break" class="outcome-down">
+            <span>跌破</span><strong class="num" data-share>—</strong><i aria-hidden="true">›</i>
+          </button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="panel-backdrop" id="panelBackdrop" hidden></div>
+  <aside class="detail-panel" id="detailPanel" role="dialog" aria-modal="true" aria-labelledby="panelTitle" aria-hidden="true" data-kind="">
+    <header class="panel-header">
+      <div class="panel-heading">
+        <button class="panel-back" id="panelBack" type="button" hidden aria-label="返回上一層">
+          <span aria-hidden="true">‹</span> 返回
+        </button>
+        <p class="panel-path" id="panelPath">細部</p>
+        <h2 id="panelTitle">詳情</h2>
+      </div>
+      <button class="panel-close" id="panelClose" type="button" aria-label="關閉詳情">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      </button>
+    </header>
+    <div class="panel-body" id="panelBody"></div>
+    <nav class="panel-nav" id="panelNav" aria-label="第二層細節">
+      <button type="button" data-layer="method">方法</button>
+      <button type="button" data-layer="sources">來源</button>
+      <button type="button" data-layer="samples">6 組樣本</button>
+      <button type="button" data-layer="table">資料表</button>
+      <button type="button" data-layer="news">新聞時間軸</button>
+    </nav>
+  </aside>
+
+  <script src="dashboard-data.js"></script>
+  <script src="analysis-data.js"></script>
+  <script src="chips-data.js"></script>
+  <script src="plain-data.js"></script>
+  <script src="detail-data.js"></script>
+  <script src="kchart.js"></script>
+  <script src="minimal.js?v=20261107-twon1"></script>
+</body>
+</html>
