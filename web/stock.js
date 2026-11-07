@@ -105,7 +105,7 @@
     $('notes').replaceChildren(...[
       r.labels.own_formula + '；24 招門檻是本站 2TON-FIT-V1 規則，部分招式與原站行為已知不同。',
       r.labels.not_advice + '；支撐、壓力、防守參考都是分析數字。',
-      `籌碼、法人、借券、估值用 ${r.qa.chip_range || '—'} 的官方逐日原件；月營收 ${r.sources && r.sources.revenue_period || '—'}、EPS ${r.sources && r.sources.eps_period || '未公告'} 是官方最新一期。缺資料的招式標「資料不足」。`,
+      `籌碼、法人、借券、估值用 ${r.qa.chip_range || '—'} 的官方逐日原件；月營收 ${r.sources && r.sources.revenue_period || '—'}、EPS ${r.sources && r.sources.eps_period || '未公告'}（只用資料日當時已公告的期別）。缺資料的招式標「資料不足」。`,
       '價格未還原權值，除權息前後的均線會有落差。',
     ].map(t => Object.assign(document.createElement('li'), { textContent: t })));
 
