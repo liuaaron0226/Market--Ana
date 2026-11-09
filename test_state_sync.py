@@ -255,6 +255,24 @@ class StateSyncTest(unittest.TestCase):
         self.assertIn("缺少 R2 金鑰", str(caught.exception))
         self.assertIn("R2_ACCESS_KEY_ID", str(caught.exception))
 
+    def test_r2_credentials_strip_pasted_whitespace(self) -> None:
+        # 用剪貼簿存 secret 常會多帶換行；去掉空白後是正常長度就照用。
+        env = {"CLOUDFLARE_ACCOUNT_ID": "x", "R2_ACCESS_KEY_ID": "a" * 32 + "\r\n", "R2_SECRET_ACCESS_KEY": " s\n"}
+        with unittest.mock.patch.dict("os.environ", env, clear=True):
+            store = ss.R2Store.from_env()
+        self.assertEqual(store.access_key, "a" * 32)
+        self.assertEqual(store.secret_key, "s")
+
+    def test_malformed_r2_access_key_gives_clear_error(self) -> None:
+        # 第一次 Actions 試跑：R2 回「access key has length 74, should be 32」，要在送出前就講清楚是哪個 secret 錯。
+        env = {"CLOUDFLARE_ACCOUNT_ID": "x", "R2_ACCESS_KEY_ID": "a" * 74, "R2_SECRET_ACCESS_KEY": "s"}
+        with unittest.mock.patch.dict("os.environ", env, clear=True):
+            with self.assertRaises(SystemExit) as caught:
+                ss.R2Store.from_env()
+        self.assertIn("R2_ACCESS_KEY_ID", str(caught.exception))
+        self.assertIn("74", str(caught.exception))
+        self.assertNotIn("a" * 10, str(caught.exception))
+
     def test_default_working_set_excludes_video_research_and_backups(self) -> None:
         paths = [item.path for item in ss.WORKING_SET]
         self.assertIn("data/stock-history/stock-history.sqlite", paths)

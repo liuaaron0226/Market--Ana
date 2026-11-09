@@ -142,13 +142,19 @@ class R2Store:
 
     @classmethod
     def from_env(cls) -> "R2Store":
-        env = os.environ
+        # 剪貼簿存 secret 常多帶換行或空白，先去掉。
+        env = {name: (os.environ.get(name) or "").strip() for name in
+               ("CLOUDFLARE_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET")}
         missing = [name for name in ("CLOUDFLARE_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY")
-                   if not env.get(name)]
+                   if not env[name]]
         if missing:
             # Actions 上 secret 沒設時是空字串；用白話說缺哪個，不丟 KeyError。
             raise SystemExit(f"缺少 R2 金鑰：{', '.join(missing)}（R2 → Manage R2 API Tokens 建立後放進 GitHub Secrets）")
-        return cls(env["CLOUDFLARE_ACCOUNT_ID"], env.get("R2_BUCKET") or "market-ana-state",
+        if len(env["R2_ACCESS_KEY_ID"]) != 32:
+            # R2 的 Access Key ID 固定 32 字元；長度不對多半是貼成了 Token value 或兩個值黏在一起。只報長度，不印內容。
+            raise SystemExit(f"R2_ACCESS_KEY_ID 長度是 {len(env['R2_ACCESS_KEY_ID'])}，應為 32："
+                             "請重新複製 R2 API Token 頁面上的 Access Key ID（不是 Token value）")
+        return cls(env["CLOUDFLARE_ACCOUNT_ID"], env["R2_BUCKET"] or "market-ana-state",
                    env["R2_ACCESS_KEY_ID"], env["R2_SECRET_ACCESS_KEY"])
 
     def _request(self, method: str, key: str, body: bytes = b"", headers: dict | None = None,
