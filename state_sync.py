@@ -154,7 +154,14 @@ class R2Store:
             # R2 的 Access Key ID 固定 32 字元；長度不對多半是貼成了 Token value 或兩個值黏在一起。
             # 只報各行長度（Secret Access Key 一併列出，應為 64），不印內容。
             def shape(name: str) -> str:
-                return "＋".join(str(len(line)) for line in env[name].splitlines()) or "0"
+                value = env[name]
+                lines = "＋".join(str(len(line)) for line in value.splitlines()) or "0"
+                # 字元組成（只計數）：分辨是貼錯欄位，還是傳輸時編碼被改過（例如 NUL、非 ASCII）。
+                hexdigits = sum(c in "0123456789abcdefABCDEF" for c in value)
+                nul = value.count("\x00")
+                nonascii = sum(ord(c) > 127 for c in value)
+                other = len(value) - hexdigits - nul - nonascii
+                return f"{lines}（hex {hexdigits}、其他ASCII {other}、NUL {nul}、非ASCII {nonascii}）"
             raise SystemExit(f"R2_ACCESS_KEY_ID 長度是 {len(env['R2_ACCESS_KEY_ID'])}，應為 32："
                              "請重新複製 R2 API Token 頁面上的 Access Key ID（不是 Token value）"
                              f"〔各行長度：R2_ACCESS_KEY_ID {shape('R2_ACCESS_KEY_ID')}，"
