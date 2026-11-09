@@ -280,7 +280,7 @@ class StateSyncTest(unittest.TestCase):
         with unittest.mock.patch.dict("os.environ", env, clear=True):
             with self.assertRaises(SystemExit) as caught:
                 ss.R2Store.from_env()
-        self.assertIn("R2_ACCESS_KEY_ID 40＋32（hex 34", str(caught.exception))
+        self.assertIn("R2_ACCESS_KEY_ID 40＋32（hex 72", str(caught.exception))
         self.assertIn("R2_SECRET_ACCESS_KEY 64", str(caught.exception))
         self.assertNotIn("b" * 10, str(caught.exception))
 
