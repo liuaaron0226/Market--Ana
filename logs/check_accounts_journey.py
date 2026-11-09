@@ -100,7 +100,8 @@ def run_width(browser, width: int) -> dict:
     res["approved_enters_site"] = r.status == 200 and page.title() == "台股決策鏡"
     page.wait_for_timeout(500)
     res["approved_no_owner_entry"] = page.locator(".owner-entry").count() == 0
-    r = page.goto(BASE + "/analysis-data.js")
+    # 票 06 起整包資料檔已移除，核准者改從登入後的 API 取資料。
+    r = page.goto(BASE + "/api/market/overview")
     res["approved_gets_data"] = r.status == 200
     r = page.goto(BASE + "/api/admin/users")
     res["approved_not_admin"] = r.status == 403

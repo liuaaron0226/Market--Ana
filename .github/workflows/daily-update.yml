@@ -1,0 +1,151 @@
+# 每日收盤後自動更新（票 11／外部票 08）。設計：.scratch/chart-screening-workbench/daily-update-design.md
+#
+# - 多個 cron 時段輪詢官方就緒；每個時段只檢查一次（--no-wait），不在 runner 裡 sleep 吃額度。
+#   前幾個時段未就緒正常結束（--allow-not-ready）；最後一個時段（20:30）仍未就緒才讓 job 失敗、寄信。
+# - 同一資料日已成功：執行紀錄在 R2 工作集裡，後面的時段會回 already-done，不重做、不重部署。
+# - 只有真的發布成功才把新的工作集同步回 R2；其他結果保留雲端上一版狀態。
+# - GitHub 的 schedule 只在預設分支（main）觸發；分支上請用 workflow_dispatch 試跑。
+name: daily-update
+
+on:
+  schedule:
+    # UTC；台北時間（UTC+8）週一到週五 15:30、16:30、18:00、20:30。休市日由 daily_update.py 判斷並 skipped。
+    - cron: "30 7 * * 1-5"
+    - cron: "30 8 * * 1-5"
+    - cron: "0 10 * * 1-5"
+    - cron: "30 12 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "資料日 YYYY-MM-DD（留空＝台北時間今天）"
+        required: false
+        type: string
+      dry_run:
+        description: "只跑不改遠端的步驟（不匯入 D1、不部署、不同步工作集）"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      TZ: Asia/Taipei
+      PYTHONIOENCODING: utf-8
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: market-ana-state
+    steps:
+      - name: 檢查金鑰
+        run: |
+          missing=""
+          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY; do
+            if [ -z "${!name}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            case "$missing" in
+              *R2_*) echo "::error::缺少 R2 金鑰：$missing（R2 → Manage R2 API Tokens 建立後放進 GitHub Secrets）" ;;
+              *) echo "::error::缺少 Cloudflare 金鑰：$missing" ;;
+            esac
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-daily.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: 安裝相依
+        run: python -m pip install -r requirements-daily.txt
+
+      - name: 決定資料日
+        id: day
+        env:
+          INPUT_DATE: ${{ inputs.date }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          if [ -n "$INPUT_DATE" ]; then
+            # 手動輸入只接受 YYYY-MM-DD，其他一律拒絕（避免把任意字串帶進後面的命令）。
+            if ! printf '%s' "$INPUT_DATE" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'; then
+              echo "::error::date 必須是 YYYY-MM-DD"; exit 1
+            fi
+            day="$INPUT_DATE"
+          else
+            day="$(date +%F)"
+          fi
+          echo "date=$day" >> "$GITHUB_OUTPUT"
+          # 最後一個 cron 時段（UTC 12:30）未就緒才算失敗；手動觸發一律照實回報。
+          if [ "$EVENT_NAME" = "schedule" ] && [ "$EVENT_SCHEDULE" != "30 12 * * 1-5" ]; then
+            echo "allow_not_ready=--allow-not-ready" >> "$GITHUB_OUTPUT"
+          else
+            echo "allow_not_ready=" >> "$GITHUB_OUTPUT"
+          fi
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$INPUT_DRY_RUN" = "true" ]; then
+            echo "dry_run=--dry-run" >> "$GITHUB_OUTPUT"
+          else
+            echo "dry_run=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 從 R2 還原工作集
+        run: python state_sync.py restore --target .
+
+      - name: 每日更新
+        id: run
+        run: >-
+          python daily_update.py
+          --date "${{ steps.day.outputs.date }}"
+          --no-wait
+          ${{ steps.day.outputs.allow_not_ready }}
+          ${{ steps.day.outputs.dry_run }}
+          --result-file "${{ runner.temp }}/daily-result.json"
+
+      - name: 同步工作集回 R2（只在發布成功時）
+        if: success() && steps.day.outputs.dry_run == ''
+        run: |
+          sync=$(python -c "import json,sys; print(json.load(open(sys.argv[1], encoding='utf-8'))['sync_state'])" "${{ runner.temp }}/daily-result.json")
+          if [ "$sync" = "True" ]; then
+            python state_sync.py upload --data-date "${{ steps.day.outputs.date }}"
+          else
+            echo "本次沒有新發布，雲端工作集維持上一版"
+          fi
+
+      - name: 執行摘要
+        if: always()
+        run: |
+          {
+            echo "### 每日更新 ${{ steps.day.outputs.date }}"
+            if [ -f "${{ runner.temp }}/daily-result.json" ]; then
+              echo '```json'; cat "${{ runner.temp }}/daily-result.json"; echo '```'
+            fi
+            if [ -f data/daily-update-log/status.json ]; then
+              echo '```json'; cat data/daily-update-log/status.json; echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 失敗時保存執行紀錄
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-update-log-${{ steps.day.outputs.date }}
+          path: data/daily-update-log/
+          retention-days: 30
+          if-no-files-found: ignore

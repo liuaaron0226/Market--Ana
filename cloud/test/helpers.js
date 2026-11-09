@@ -2,23 +2,47 @@
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
 
-const MIGRATION = ["0001_init.sql", "0003_api_hits.sql"]
+const MIGRATION = ["0001_init.sql", "0003_api_hits.sql", "0004_listed_stock_data.sql"]
   .map((f) => readFileSync(new URL(`../migrations/${f}`, import.meta.url), "utf8"))
   .join("\n");
 
 export function fakeD1() {
   const db = new DatabaseSync(":memory:");
   db.exec(MIGRATION);
+  const metrics = { selectQueries: 0, rowsReturned: 0, logicalRowsRead: 0, fullScanQueries: 0 };
+  const measure = (sql, args, rows) => {
+    if (!/^\s*(SELECT|WITH)\b/i.test(sql)) return;
+    const plan = db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...args);
+    const details = plan.map((row) => String(row.detail));
+    metrics.selectQueries += 1;
+    metrics.rowsReturned += rows.length;
+    if (details.some((detail) => /\bSCAN\b/.test(detail) && !/SCAN CONSTANT ROW/.test(detail))) {
+      metrics.fullScanQueries += 1;
+      return;
+    }
+    // point lookup 的每個 SEARCH 節點各讀一個索引命中的邏輯列；本數字是本機
+    // SQLite 對 gate 查詢的可重跑量測，不冒充尚未執行的遠端 D1 meta.rows_read。
+    if (rows.length) metrics.logicalRowsRead += details.filter((detail) => /\bSEARCH\b/.test(detail)).length;
+  };
   const stmt = (sql, args = []) => ({
     bind: (...a) => stmt(sql, a),
-    first: async () => db.prepare(sql).get(...args) ?? null,
-    all: async () => ({ results: db.prepare(sql).all(...args) }),
+    first: async () => {
+      const row = db.prepare(sql).get(...args) ?? null;
+      measure(sql, args, row === null ? [] : [row]);
+      return row;
+    },
+    all: async () => {
+      const rows = db.prepare(sql).all(...args);
+      measure(sql, args, rows);
+      return { results: rows };
+    },
     run: async () => {
       const r = db.prepare(sql).run(...args);
       return { meta: { changes: Number(r.changes) } };
     },
   });
-  return { prepare: (sql) => stmt(sql), _raw: db };
+  const resetMetrics = () => Object.assign(metrics, { selectQueries: 0, rowsReturned: 0, logicalRowsRead: 0, fullScanQueries: 0 });
+  return { prepare: (sql) => stmt(sql), _raw: db, metrics, resetMetrics };
 }
 
 const b64url = (buf) => Buffer.from(buf).toString("base64url");

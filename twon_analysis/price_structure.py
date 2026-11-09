@@ -1,14 +1,18 @@
-"""價位結構：支撐、壓力、觀察區、防守價（handoff §5，採 2ton-research ruleset）。
+"""【部分退役 2026-11-08】structure() 為既有呼叫端相容保留（含觀察區、防守價、強度分級等自創項）；新輸出只用 analyze_v2.price_levels_v2。
 
-與 current ruleset 的差異（handoff §5 表）：成交密集區用 60 日「收盤」高低、端點保留 2 位；缺口嚴格不等式不加緩衝；
+價位結構：支撐、壓力、觀察區、防守價（handoff §5，採 2ton-research ruleset）。
+
+預設與 current ruleset 的差異（handoff §5 表）：成交密集區用 60 日「收盤」高低、端點保留 2 位；缺口嚴格不等式不加緩衝；
 支撐代表價取群組上緣；突破失敗價位取前高 pHigh（研究結論）。法人成本來源需法人資料，沒有就不加。
 觀察區中心與寬度是本站暫用（原站未知），防守價依原站結構式＋本站觀察區。
+profile 的來源／窗口組合是本站自有，不屬原站重現；其餘分群、容差、區間與 pivot 確認規則不變。
 """
 from __future__ import annotations
 
 import math
 
 from .indicators import Bar
+from .profiles import PriceProfile
 
 # handoff §5.3：原站重現的權重＋本站暫用（研究沒看到的來源）
 WEIGHTS = {
@@ -73,7 +77,9 @@ def resistance_tick(price: float, close: float) -> float:
     return round(p, 2)
 
 
-def candidates(bars: list[Bar], x: dict, inst_cost: float | None = None) -> list[dict]:
+def candidates(bars: list[Bar], x: dict, inst_cost: float | None = None,
+               profile: PriceProfile | None = None) -> list[dict]:
+    profile = profile if profile is not None else PriceProfile()
     close = bars[-1].close
     out = []
 
@@ -82,41 +88,42 @@ def candidates(bars: list[Bar], x: dict, inst_cost: float | None = None) -> list
             out.append({'kind': kind, 'value': round(value, 2), 'weight': WEIGHTS[kind], 'label': label, 'date': date,
                         'structural': kind in STRUCTURAL})
 
-    for n in (5, 10, 20, 60, 120, 240):
+    for n in profile.ma_periods:
         add(f'ma{n}', x[f'ma{n}'], f'MA{n}')
     closes = [b.close for b in bars]
     add('prior_high_20', x['prior_high20'], '前 20 日盤中高點')
     add('high_20', max(closes[-20:]) if len(closes) >= 20 else None, '近 20 日收盤高點')
     add('low_20', min(b.low for b in bars[-20:]) if len(bars) >= 20 else None, '近 20 日盤中低點')
-    add('high_60', max(closes[-60:]) if len(closes) >= 20 else None, '近 60 日收盤高點')
-    add('low_60', min(closes[-60:]) if len(closes) >= 20 else None, '近 60 日收盤低點')
-    add('intraday_high_60', max(b.high for b in bars[-60:]), '近 60 日盤中高點')
+    if profile.include_long_refs:
+        add('high_60', max(closes[-60:]) if len(closes) >= 20 else None, '近 60 日收盤高點')
+        add('low_60', min(closes[-60:]) if len(closes) >= 20 else None, '近 60 日收盤低點')
+        add('intraday_high_60', max(b.high for b in bars[-60:]), '近 60 日盤中高點')
 
-    bars60 = bars[-60:]
-    if len(bars60) >= 10:
-        low, high = min(b.close for b in bars60), max(b.close for b in bars60)
+    vp_bars = bars[-profile.vp_window:]
+    if len(vp_bars) >= 10:
+        low, high = min(b.close for b in vp_bars), max(b.close for b in vp_bars)
         if high > low:
             width = (high - low) / 20
             volumes = [0] * 20
-            for b in bars60:
+            for b in vp_bars:
                 volumes[min(19, max(0, math.floor((b.close - low) / width)))] += b.volume
             j = max(range(20), key=lambda i: (volumes[i], -i))
             add('vp_low', low + j * width, '成交密集區下緣')
             add('vp_center', low + (j + 0.5) * width, '成交密集區中心')
             add('vp_high', low + (j + 1) * width, '成交密集區上緣')
 
-    bars120 = bars[-120:]
+    swing_bars = bars[-profile.swing_gap_window:]
     highs, lows = [], []
-    for i in range(2, len(bars120) - 2):
-        cur = bars120[i]
-        around = bars120[i - 2:i] + bars120[i + 1:i + 3]
+    for i in range(2, len(swing_bars) - 2):
+        cur = swing_bars[i]
+        around = swing_bars[i - 2:i] + swing_bars[i + 1:i + 3]
         if all(cur.high >= b.high for b in around):
             highs.append((i, cur))
             add('swing_high', cur.high, '前高轉支撐' if cur.high < close * 0.999 else '前波高點', cur.date)
         if all(cur.low <= b.low for b in around):
             lows.append((i, cur))
             add('swing_low', cur.low, '波段低點', cur.date)
-    last = len(bars120) - 1
+    last = len(swing_bars) - 1
     for points, kind, attr, label in ((highs, 'trendline_resistance', 'high', '下降趨勢線'), (lows, 'trendline_support', 'low', '上升趨勢線')):
         if len(points) >= 2:
             (i1, b1), (i2, b2) = points[-2], points[-1]
@@ -124,17 +131,17 @@ def candidates(bars: list[Bar], x: dict, inst_cost: float | None = None) -> list
             if close * 0.65 <= projected <= close * 1.35:
                 add(kind, projected, label, b2.date)
 
-    if inst_cost:
+    if profile.include_inst_cost and inst_cost:
         add('inst_cost', inst_cost, '法人估計成本區')
 
-    for i in range(max(20, len(bars) - 60), len(bars)):
+    for i in range(max(20, len(bars) - profile.breakout_scan), len(bars)):
         p_high = max(b.high for b in bars[i - 20:i])
         if bars[i].high > p_high and bars[i].close < p_high:
             add('breakout_failure', p_high, '突破失敗位', bars[i].date)
 
-    for i in range(1, len(bars120)):
-        prev, cur = bars120[i - 1], bars120[i]
-        later = bars120[i + 1:]
+    for i in range(1, len(swing_bars)):
+        prev, cur = swing_bars[i - 1], swing_bars[i]
+        later = swing_bars[i + 1:]
         if cur.low > prev.high and not any(b.low <= prev.high for b in later):
             add('gap_up_upper', cur.low, '向上缺口上緣', cur.date)
             add('gap_up_lower', prev.high, '向上缺口下緣', cur.date)
@@ -142,15 +149,16 @@ def candidates(bars: list[Bar], x: dict, inst_cost: float | None = None) -> list
             add('gap_down_upper', prev.low, '向下缺口上緣', cur.date)
             add('gap_down_lower', cur.high, '向下缺口下緣', cur.date)
 
-    bars40 = bars[-40:]
-    if len(bars40) >= 12:
-        for i in range(len(bars40) - 8, -1, -4):
-            seg = [b.close for b in bars40[i:i + 8]]
+    platform_bars = bars[-profile.platform_window:]
+    if len(platform_bars) >= 12:
+        for i in range(len(platform_bars) - 8, -1, -4):
+            seg = [b.close for b in platform_bars[i:i + 8]]
             if min(seg) > 0 and (max(seg) - min(seg)) / min(seg) <= 0.045:
-                add('platform', (max(seg) + min(seg)) / 2, '整理平台中軸', bars40[i + 7].date)
+                add('platform', (max(seg) + min(seg)) / 2, '整理平台中軸', platform_bars[i + 7].date)
                 break
 
-    for b in sorted([b for b in bars60 if b.volume > 0], key=lambda b: -b.volume)[:9]:
+    heavy_bars = bars[-profile.heavy_window:]
+    for b in sorted([b for b in heavy_bars if b.volume > 0], key=lambda b: -b.volume)[:profile.heavy_count]:
         add('heavy_volume', b.close, '大量成交日收盤', b.date)
         add('heavy_high', b.high, '大量成交日高點', b.date)
         add('heavy_low', b.low, '大量成交日低點', b.date)
@@ -184,11 +192,12 @@ def _cluster(group, close, side, modifier_bonus=0.0):
             'sources': [{k: f[k] for k in ('kind', 'label', 'value', 'date')} for f in group]}
 
 
-def structure(bars: list[Bar], x: dict, inst_cost: float | None = None, modifier_bonus: float = 0.0) -> dict:
+def structure(bars: list[Bar], x: dict, inst_cost: float | None = None, modifier_bonus: float = 0.0,
+              profile: PriceProfile | None = None) -> dict:
     close = bars[-1].close
     atr_pct = x['atr_pct'] if x['atr_pct'] else 2.5
     tolerance = round(min(3.0, max(1.0, 0.6 * atr_pct)), 2)
-    factors = candidates(bars, x, inst_cost)
+    factors = candidates(bars, x, inst_cost, profile=profile)
 
     above = sorted((f for f in factors if f['value'] > close * 1.001), key=lambda f: f['value'])
     groups: list[list[dict]] = []
@@ -244,5 +253,5 @@ def structure(bars: list[Bar], x: dict, inst_cost: float | None = None, modifier
         'pressure': {'first': first, 'second': actionable[1] if len(actionable) > 1 else None, 'all': pressures, 'limit_up_ref': limit_up},
         'support': {'first': supports[0] if supports else None, 'second': supports[1] if len(supports) > 1 else None, 'all': qualified},
         'sweet': sweet, 'defense': support_tick(defense, close), 'range_position': range_position,
-        'evidence_levels': EVIDENCE,
+        'evidence_levels': {**EVIDENCE, 'profileWindows': '本站自有（助手分析窗口組合，非原站重現）'},
     }

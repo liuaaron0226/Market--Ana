@@ -66,9 +66,19 @@ class AnalyzeTests(unittest.TestCase):
         self.assertEqual(result['score_note'], 'ETF 不適用五維總分')
 
     def test_result_has_no_formula_or_weights(self):
-        text = repr(analyze('2603', '2026-11-06'))
-        for secret in ('0.40', 'oh_rsi', 'resUnit', 'WEIGHTS', 'vp_center'):
-            self.assertNotIn(secret, text)
+        result = analyze('2603', '2026-11-06')
+        secrets = {'weights', 'WEIGHTS', 'oh_rsi', 'resUnit', 'vp_center', 'score_profile', 'price_profile'}
+
+        def check(value):
+            if isinstance(value, dict):
+                self.assertFalse(secrets.intersection(value))
+                for child in value.values():
+                    check(child)
+            elif isinstance(value, list):
+                for child in value:
+                    check(child)
+
+        check(result)
 
     def test_too_little_history_is_blocked_not_guessed(self):
         result = analyze('2330', '2016-01-20')

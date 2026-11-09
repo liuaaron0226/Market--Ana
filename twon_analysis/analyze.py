@@ -1,4 +1,6 @@
-"""個股分析入口：代號＋日期 → 24 招、五維、總分、價位結構（結果投影，不含公式與權重）。
+"""【已退役 2026-11-08】本人定案「自創部分不保留」；個股分析改由 analyze_v2.py 輸出（契約 .scratch/chart-screening-workbench/stock-analysis-contract-v2.md）。本檔僅為既有呼叫端相容而保留，不用於新產品輸出。
+
+個股分析入口：代號＋日期 → 24 招、五維、總分、價位結構（結果投影，不含公式與權重）。
 
 總分五步（handoff §4.2，2TON-FIT-V1 預設 preset，本站自有）。本人定案最終要 24 招與五維總分全部到齊；
 籌碼、法人、借券、估值是近 20 個交易日的逐日原件；月營收與 EPS 是 OpenAPI 最新一期（附資料期別）。
@@ -6,20 +8,23 @@
 """
 from __future__ import annotations
 
-import hashlib
-import json
+from dataclasses import asdict
 
 from . import chips
 from .conditions import chip_and_institutional, fundamentals, trend_and_volume
 from .data import load_bars
-from .indicators import indicators
+from .indicators import indicators, macd
 from .price_structure import structure
+from .profiles import DEFAULT, available_presets, get_preset
 from .scores import chip_score, clamp, fundamental_score, institutional_score, rf1, trend_score, volume_score
 
-VERSION = 'MA-TWON-ANALYSIS-PV1'
-FORMULA = '2TON-FIT-V1+price:2ton-research'
-PRESET = {'T': .40, 'C': .10, 'V': .25, 'I': .15, 'F': .10, 'res': 6, 'oh_rsi': 6, 'oh_margin': 6, 'oh_hot': 4, 'risk': 6}
+# 保留原模組常數入口；每次分析使用所選不可變方案，不修改全域狀態。
+VERSION = get_preset().version
+FORMULA = get_preset().formula
+PRESET = asdict(get_preset().score)
 STATUS_LABEL = {'triggered': '成立', 'confirming': '醞釀中', 'off': '未成立', 'unavailable': '資料不足'}
+# 建置器與分析入口共用同一最低日 K 門檻，避免兩邊自行發明或漂移。
+MIN_ANALYSIS_BARS = 20
 
 
 def _inst_cost(code: str, bars, days: list[str]) -> float | None:
@@ -48,12 +53,18 @@ def trend_class(score: int, risk_flags: int, rsi: float | None) -> str:
     return 'strong' if score >= 75 else 'weak' if score < 45 else 'watch'
 
 
-def analyze(code: str, as_of: str) -> dict:
+def analyze(code: str, as_of: str, preset_id: str = DEFAULT) -> dict:
+    preset = get_preset(preset_id)  # 先拒絕未知方案，不能悄悄回退或先讀資料。
+    metadata = {
+        'version': preset.version, 'formula': preset.formula, 'params_hash': preset.params_hash,
+        'preset': {**preset.public_metadata(), 'provenance': '本站自有'},
+        'available_presets': available_presets(),
+    }
     bars, info = load_bars(code, as_of)
     if not bars:
-        return {'code': code, 'as_of': as_of, 'version': VERSION, 'qa': {'blocking': True, 'reason': '查不到這個上市代號（只收上市普通股、特別股與 0050）', 'not_found': True}}
-    if len(bars) < 20:
-        return {'code': code, 'as_of': as_of, 'version': VERSION, 'qa': {'blocking': True, 'reason': f'有效日線只有 {len(bars)} 根，不足 20 根'}}
+        return {'code': code, 'as_of': as_of, **metadata, 'qa': {'blocking': True, 'reason': '查不到這個上市代號（只收上市普通股、特別股與 0050）', 'not_found': True}}
+    if len(bars) < MIN_ANALYSIS_BARS:
+        return {'code': code, 'as_of': as_of, **metadata, 'qa': {'blocking': True, 'reason': f'有效日線只有 {len(bars)} 根，不足 {MIN_ANALYSIS_BARS} 根'}}
     x = indicators(bars)
     is_etf = info['kind'] == 'etf'
     days = [d for d in chips.available_days() if d <= x['date']]
@@ -71,7 +82,7 @@ def analyze(code: str, as_of: str) -> dict:
         strategies += fundamentals(rev, eps, val)
     avg = max(1, x['avg_vol20'] or 1)
     bonus = (0.4 if derived.get('borrow_sold', 0) > 0 and (derived.get('borrow_balance', 0) / avg >= 0.10 or derived.get('borrow_diff5', 0) > 0) else 0)         + (0.3 if derived.get('borrow_diff5', 0) > avg * 0.15 else 0)
-    price = structure(bars, x, inst_cost, bonus)
+    price = structure(bars, x, inst_cost, bonus, profile=preset.price)
 
     dims = {'T': trend_score(x), 'V': volume_score(x, chg), 'C': chip_score(derived, chg),
             'I': institutional_score(derived, x['avg_vol20']), 'F': None if is_etf else fundamental_score(rev, val)}
@@ -104,22 +115,22 @@ def analyze(code: str, as_of: str) -> dict:
     if (rev and rev['yoy'] is not None and rev['yoy'] <= -20) or (dims['F'] is not None and dims['F'] <= 40):
         flags.append({'id': 'RF5', 'text': '營收年減逾兩成或基本面分數偏低'})
 
+    weights = asdict(preset.score)
     score = None
     if not missing and not incomplete and not is_etf:
-        base = sum(PRESET[k] * dims[k] for k in 'TCVIF')
-        resonance = PRESET['res'] if dims['T'] >= 75 and dims['I'] >= 75 and chg >= 1 and (x['vol_ratio'] or 0) >= 1.3 else 0
-        overheat = (PRESET['oh_rsi'] if (x['rsi14'] or 0) >= 70 else 0) + (PRESET['oh_margin'] if chg > 0 and derived.get('m5', 0) >= 20 and derived.get('margin_diff5', 0) > 1000 else 0)
+        base = sum(weights[k] * dims[k] for k in 'TCVIF')
+        resonance = weights['res'] if dims['T'] >= 75 and dims['I'] >= 75 and chg >= 1 and (x['vol_ratio'] or 0) >= 1.3 else 0
+        overheat = (weights['oh_rsi'] if (x['rsi14'] or 0) >= 70 else 0) + (weights['oh_margin'] if chg > 0 and derived.get('m5', 0) >= 20 and derived.get('margin_diff5', 0) > 1000 else 0)
         if price['range_position'] is not None and price['range_position'] >= 0.75 and derived.get('trust_today', 0) < 0 and dims['C'] > 35:
-            overheat += PRESET['oh_hot']
-        score = int(clamp(0, 100, round(base + resonance - overheat - PRESET['risk'] * len(flags))))
+            overheat += weights['oh_hot']
+        score = int(clamp(0, 100, round(base + resonance - overheat - weights['risk'] * len(flags))))
 
     counts = {s: sum(1 for r in strategies if r['status'] == s) for s in STATUS_LABEL}
     p1 = price['pressure']['first']
     s1 = price['support']['first']
-    params_hash = hashlib.sha256(json.dumps(PRESET, sort_keys=True).encode()).hexdigest()[:8]
     return {
         'code': code, 'name': info['name'], 'kind': info['kind'], 'as_of': x['date'], 'requested_as_of': as_of,
-        'version': VERSION, 'formula': FORMULA, 'params_hash': params_hash,
+        **metadata,
         'quote': {'close': x['close'], 'chg_pct': round(chg, 2), 'volume': x['volume'], 'change_sign': info['change_sign']},
         'sources': {'revenue_period': rev['period'] if rev else None, 'eps_period': eps['period'] if eps else None,
                     'valuation_date': x['date'] if val else None},
@@ -141,5 +152,12 @@ def analyze(code: str, as_of: str) -> dict:
             'evidence_levels': price['evidence_levels'],
         },
         'bars': [{'date': b.date, 'open': b.open, 'high': b.high, 'low': b.low, 'close': b.close, 'volume': b.volume} for b in bars[-120:]],
+        'chart': {
+            'parameters': {'fast': 12, 'slow': 26, 'signal': 9, 'histogram_multiplier': 1,
+                           'seed': 'first_close', 'warmup_bars': 34, 'precision': 3,
+                           'missing_policy': 'omit_missing_price_rows', 'version': 'macd-first-close-v1'},
+            'macd': [{'date': b.date, 'dif': m[0], 'dea': m[1], 'hist': m[2], 'ready': i >= 33}
+                     for i, (b, m) in enumerate(zip(bars, macd([b.close for b in bars])))][-120:],
+        },
         'labels': {'own_formula': '本站自有計分，非漲停寶寶原公式', 'not_advice': '分析數字不是買賣指令'},
     }

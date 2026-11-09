@@ -113,3 +113,18 @@ test("資料包未設定時市場 API 回 503", async () => {
   const r = await req("/api/market/overview");
   assert.equal(r.status, 503);
 });
+
+test("雲端沒有即時行情：/api/live 回 JSON 503 說明（不能落到首頁 HTML）", async () => {
+  const r = await req("/api/live");
+  assert.equal(r.status, 503);
+  assert.match(r.headers.get("content-type"), /application\/json/);
+  const body = await r.json();
+  assert.equal(body.error, "live-not-available");
+  assert.match(body.message, /雲端/);
+  assert.equal((await req("/api/live", null)).status, 401);
+});
+
+test("/api/live 對未核准者同樣先擋 403", async () => {
+  await seed("p2@x.com", "pending");
+  assert.equal((await req("/api/live", "p2@x.com")).status, 403);
+});

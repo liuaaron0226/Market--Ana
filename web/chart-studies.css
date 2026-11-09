@@ -1,0 +1,377 @@
+:root { --study-dif: #4f8bd4; --study-dea: #b48730; }
+:root[data-theme="light"] { --study-dif: #235b9f; --study-dea: #94681a; }
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) { --study-dif: #235b9f; --study-dea: #94681a; }
+}
+
+.app-shell:has(.kc-studies) { height: auto; grid-template-rows: auto auto auto; }
+.app-shell:has(.kc-studies) .workspace { grid-template-rows: auto; }
+.chart-workspace:has(.kc-studies) { display: block; height: auto; }
+.chart-workspace:has(.kc-studies) .chart-stage { height: clamp(300px, 45vh, 460px); }
+
+.kc-studies {
+  display: grid;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  gap: 18px;
+  margin-top: 14px;
+  color: var(--ink);
+  font-family: var(--sans);
+  overflow: hidden;
+}
+
+.kc-studies [hidden] {
+  display: none !important;
+}
+
+.kc-studies .kc-studies-notice {
+  min-height: 44px;
+  margin: 0;
+  padding: 11px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  color: var(--dim);
+  font-size: .875rem;
+  line-height: 1.5;
+}
+
+.kc-studies .kc-study-pane {
+  min-width: 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.kc-studies .kc-study-head {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px 18px;
+  margin-bottom: 6px;
+}
+
+.kc-studies .kc-study-title {
+  flex: 0 0 auto;
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: .92rem;
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: .01em;
+}
+
+.kc-studies .kc-study-readout {
+  min-width: 0;
+  margin: 0;
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: .76rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.45;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.kc-studies .kc-study-canvas {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: 104px;
+  margin: 0;
+  border-radius: 8px;
+  outline: none;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.kc-studies .kc-study-canvas:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+
+.kc-studies .kc-study-legend {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  margin: -1px 0 5px;
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: .68rem;
+  line-height: 1.4;
+}
+
+.kc-studies .kc-study-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.kc-studies .kc-study-legend-line {
+  display: inline-block;
+  width: 19px;
+  height: 0;
+  border-top-width: 2px;
+  border-top-style: solid;
+}
+
+.kc-studies .kc-study-legend-line-dif {
+  border-top-color: var(--study-dif);
+}
+
+.kc-studies .kc-study-legend-line-dea {
+  border-top-color: var(--study-dea);
+  border-top-style: dashed;
+}
+
+.kc-studies .kc-study-legend-bar {
+  display: inline-block;
+  width: 8px;
+  height: 11px;
+  border-radius: 1px;
+}
+
+.kc-studies .kc-study-legend-bar-positive {
+  background: var(--up);
+}
+
+.kc-studies .kc-study-legend-bar-negative {
+  background: var(--down);
+}
+
+.kc-studies .kc-study-details {
+  min-width: 0;
+  margin-top: 7px;
+  border-top: 1px solid var(--line);
+}
+
+.kc-studies .kc-study-details-summary {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  padding: 8px 2px;
+  color: var(--ink);
+  font-size: .84rem;
+  font-weight: 700;
+  line-height: 1.4;
+  cursor: pointer;
+  list-style-position: inside;
+  touch-action: manipulation;
+}
+
+.kc-studies .kc-study-details-summary::marker,
+.kc-studies .kc-study-details-summary::-webkit-details-marker {
+  color: var(--gold);
+}
+
+.kc-studies .kc-study-details-summary:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+
+.kc-studies .kc-study-details-body {
+  min-width: 0;
+  padding: 0 2px 13px;
+  color: var(--dim);
+}
+
+.kc-studies .kc-study-explainer {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding-left: 1.45rem;
+}
+
+.kc-studies .kc-study-explainer-item {
+  min-width: 0;
+  padding-left: 3px;
+}
+
+.kc-studies .kc-study-explainer-item::marker {
+  color: var(--gold);
+  font-family: var(--mono);
+  font-size: .76rem;
+  font-weight: 700;
+}
+
+.kc-studies .kc-study-explainer-title {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--ink);
+  font-size: .8rem;
+  line-height: 1.45;
+}
+
+.kc-studies .kc-study-explainer-copy {
+  margin: 0;
+  color: var(--dim);
+  font-size: .79rem;
+  line-height: 1.7;
+}
+
+.kc-studies .kc-study-value {
+  color: var(--ink);
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.kc-studies .kc-study-value-state {
+  margin-left: .25em;
+  font-family: var(--sans);
+}
+
+.kc-studies .kc-study-table-details {
+  min-width: 0;
+  margin-top: -3px;
+  padding-top: 0;
+  border-top: 1px solid var(--line);
+}
+
+.kc-studies .kc-study-table-hint {
+  margin: 0 0 8px;
+  color: var(--dim);
+  font-size: .76rem;
+  line-height: 1.55;
+}
+
+.kc-studies .kc-study-table-wrap {
+  width: 100%;
+  max-width: 100%;
+  max-height: 360px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.kc-studies .kc-study-table-wrap:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+
+.kc-studies .kc-study-table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+  color: var(--ink);
+  background: var(--panel);
+  font-family: var(--mono);
+  font-size: .72rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+  text-align: right;
+}
+
+.kc-studies .kc-study-table caption {
+  padding: 9px 10px;
+  color: var(--dim);
+  background: var(--panel);
+  font-family: var(--sans);
+  font-size: .75rem;
+  text-align: left;
+}
+
+.kc-studies .kc-study-table th,
+.kc-studies .kc-study-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+
+.kc-studies .kc-study-table thead th {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  color: var(--dim);
+  background: var(--panel2);
+  font-family: var(--sans);
+  font-weight: 700;
+}
+
+.kc-studies .kc-study-table tbody th {
+  color: var(--ink);
+  background: var(--panel);
+  font-weight: 600;
+  text-align: left;
+}
+
+.kc-studies .kc-study-table tbody tr:last-child th,
+.kc-studies .kc-study-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.kc-studies .kc-study-switcher { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 0 10px; }
+.kc-studies .kc-study-choice { min-height: 44px; padding: 8px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--dim); font: inherit; cursor: pointer; }
+.kc-studies .kc-study-choice[aria-pressed="true"] { background: var(--panel2); color: var(--ink); border-color: var(--line-strong); font-weight: 700; }
+.kc-studies .kc-study-choice:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.kc-studies .kc-study-swipe-hint { margin-left: auto; color: var(--dim); font-size: 12px; }
+
+.kc-studies .kc-study-clear {
+  justify-self: end;
+  min-height: 44px;
+  padding: 8px 12px;
+  color: var(--ink);
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.kc-studies .kc-study-details-summary::after {
+  content: '+';
+  margin-left: auto;
+  font-size: 1.2rem;
+}
+.kc-studies details[open] > .kc-study-details-summary::after { content: '−'; }
+.kc-studies .kc-study-explainer-copy { font-size: 1rem; }
+.kc-studies .kc-study-explainer-title { font-size: .95rem; }
+.kc-studies .kc-study-clear:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+
+@media (min-width: 760px) {
+  .kc-studies .kc-study-canvas {
+    height: 120px;
+  }
+}
+
+@media (max-width: 519px) {
+  .kc-studies {
+    gap: 14px;
+    margin-top: 10px;
+  }
+
+  .kc-studies .kc-study-head {
+    display: grid;
+    gap: 3px;
+    margin-bottom: 5px;
+  }
+
+  .kc-studies .kc-study-readout {
+    text-align: left;
+  }
+
+  .kc-studies .kc-study-legend {
+    gap: 3px 10px;
+    font-size: .65rem;
+  }
+
+  .kc-studies .kc-study-details-body {
+    padding-right: 0;
+    padding-left: 0;
+  }
+
+  .kc-studies .kc-study-explainer {
+    padding-left: 1.25rem;
+  }
+}
+
+/* KD／RSI 副圖（個股頁，本人 11-09）：參考線用細虛線，和 DIF／DEA 同一組線色 */
+.kc-studies .kc-study-legend-line-ref {
+  border-top-color: var(--line);
+  border-top-style: dashed;
+}
+.kc-studies .kc-study-legend-line.is-dashed { border-top-style: dashed; }

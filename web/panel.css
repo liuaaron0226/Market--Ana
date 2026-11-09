@@ -1,0 +1,310 @@
+/* 詳情面板與選股看板設計（2026-11-09 本人確認範例方向後套用正式版；本人：「有一些選單的頁面需要再重設計」）
+   跟頁面同一套語言：紙面、明體標題、細線分段、實色小價籤；不用浮起的灰盒、金色提醒框、粗陰影
+   只靠 CSS，不改 minimal.js 產生的內容與結構
+   方法 unslop by Damir Sokolovsky (@heydamir), CC BY 4.0 */
+
+/* ---------- 面板外框 ---------- */
+.hm .panel-backdrop { background: color-mix(in srgb, var(--ink) 28%, transparent); backdrop-filter: none; }
+.hm .detail-panel {
+  width: min(600px, calc(100vw - 32px));
+  border: 1px solid color-mix(in srgb, var(--ink) 14%, transparent);
+  border-radius: 16px;
+  background: var(--bg);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--ink) 6%, transparent), 0 24px 48px -24px rgb(0 0 0 / 28%);
+}
+.hm .detail-panel[data-kind="chip"] { width: min(720px, calc(100vw - 32px)); }
+
+/* ---------- 標題列 ---------- */
+.hm .panel-header {
+  min-height: 0; padding: 20px 20px 16px 28px; align-items: center;
+  border-bottom: 1px solid var(--ink);
+}
+.hm .panel-path { font-size: 12px; color: var(--faint); letter-spacing: .02em; }
+.hm .panel-heading h2 { margin-top: 4px; font: 600 24px/1.25 var(--serif); }
+.hm .panel-back {
+  display: inline-flex; align-items: center; gap: 4px; height: 28px; min-height: 0; margin-bottom: 4px;
+  padding: 0 10px 0 6px; border: 1px solid var(--hair); border-radius: var(--btn-r);
+  color: var(--dim); font: 500 12px var(--sans);
+  transition: background-color 160ms var(--ease-out), color 160ms var(--ease-out);
+}
+.hm .panel-back:hover { background: var(--panel2); color: var(--ink); }
+.hm .panel-close {
+  flex: 0 0 auto; width: var(--btn-h); height: var(--btn-h); display: grid; place-items: center;
+  border: 1px solid var(--hair); border-radius: var(--btn-r); background: transparent; color: var(--ink);
+  transition: background-color 160ms var(--ease-out), transform 120ms var(--ease-out);
+}
+.hm .panel-close:hover { background: var(--panel2); }
+.hm .panel-close:active { transform: var(--press); }
+.hm .panel-close svg { width: 16px; height: 16px; }
+
+.hm .panel-body { padding: 24px 28px 28px; }
+.hm .panel-body > * + * { margin-top: 0; }
+
+/* ---------- 「這代表／要注意」 ---------- */
+.hm .plain { display: grid; gap: 20px; }
+.hm .plain-group h4 {
+  margin-bottom: 8px; font: 400 12px var(--sans); color: var(--faint); letter-spacing: .02em;
+}
+.hm .plain-group ul { padding: 0; list-style: none; gap: 8px; }
+.hm .plain-group li { position: relative; padding-left: 16px; font-size: 15px; line-height: 1.65; }
+.hm .plain-group li::before {
+  content: ""; position: absolute; left: 0; top: .78em; width: 6px; height: 1px; background: var(--ink);
+}
+.hm .plain-group li b { font-weight: 600; }
+/* 要注意：不再是金色底框，改成上方一條金色細線＋小價籤標題 */
+.hm .plain-watch { padding: 16px 0 0; border-radius: 0; background: transparent; border-top: 1px solid var(--hair); }
+.hm .plain-watch h4 {
+  display: inline-block; padding: 0 8px; border-radius: 4px; background: var(--gold); color: var(--bg);
+  font: 500 12px/20px var(--sans);
+}
+.hm .plain-watch li::before { background: var(--gold); }
+
+.hm .panel-lede { font-size: 13px; line-height: 1.6; color: var(--dim); }
+.hm .panel-callout {
+  margin-top: 20px; padding: 12px 0 0; border: 0; border-top: 1px solid var(--hair); background: transparent;
+  font-size: 12px; line-height: 1.6; color: var(--faint);
+}
+
+/* ---------- 結論依據的四列證據：報表列，不是四個灰盒 ---------- */
+.hm .evidence-list { margin-top: 24px; gap: 0; border-top: 1px solid var(--ink); }
+.hm .evidence-row {
+  min-height: 0; padding: 16px 32px 16px 0; border: 0; border-bottom: 1px solid var(--hair); border-radius: 0;
+  background: transparent; grid-template-columns: 72px minmax(0, 1fr); gap: 4px 16px; cursor: pointer;
+  transition: background-color 160ms var(--ease-out);
+}
+.hm .evidence-row:hover { background: color-mix(in srgb, var(--panel2) 70%, transparent); }
+.hm .evidence-row::after { right: 8px; font-size: 16px; transition: transform 160ms var(--ease-out); }
+.hm .evidence-row:hover::after { transform: translate(2px, -50%); }
+.hm .evidence-row span { font-size: 12px; color: var(--faint); padding-top: 2px; }
+.hm .evidence-row strong { font: 600 16px/1.4 var(--serif); }
+.hm .evidence-row small { font-size: 13px; line-height: 1.5; color: var(--dim); }
+
+/* ---------- 現價：數字表 ---------- */
+.hm .current-grid { margin-top: 24px; gap: 0; border-top: 1px solid var(--ink); }
+.hm .current-grid div { padding: 14px 16px 14px 0; border-radius: 0; background: transparent; border-bottom: 1px solid var(--hair); }
+.hm .current-grid div:nth-child(2n) { padding-left: 16px; border-left: 1px solid var(--hair); }
+.hm .current-grid span { font-size: 12px; }
+.hm .current-grid strong { margin-top: 6px; font: 500 20px var(--mono); font-variant-numeric: tabular-nums; }
+.hm .kv-list { margin-top: 20px; gap: 0; background: transparent; border: 0; border-radius: 0; border-top: 1px solid var(--hair); }
+.hm .kv-list div { padding: 10px 0; background: transparent; border-bottom: 1px solid var(--hair); grid-template-columns: 112px minmax(0, 1fr); }
+.hm .kv-list dt { font-size: 12px; }
+.hm .kv-list dd { font-size: 14px; }
+.hm .ohlc-grid { border: 0; border-top: 1px solid var(--hair); border-bottom: 1px solid var(--hair); border-radius: 0; }
+.hm .ohlc-grid strong { font: 500 15px var(--mono); }
+
+/* ---------- 收復／防守：行動清單與歷史分布 ---------- */
+.hm .action-list { margin-top: 20px; gap: 0; background: transparent; border: 0; border-top: 1px solid var(--hair); border-radius: 0; }
+.hm .action-list div { padding: 12px 0; background: transparent; border-bottom: 1px solid var(--hair); display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 16px; }
+.hm .action-list dt { font-size: 12px; padding-top: 2px; }
+.hm .action-list dd { margin: 0; font-size: 14px; line-height: 1.6; }
+.hm .ob-bar { gap: 2px; border-radius: 6px; overflow: hidden; margin-top: 8px; }
+.hm .ob-seg { padding: 10px 12px; border-radius: 0; background: color-mix(in srgb, var(--tone) 12%, transparent); border: 0; box-shadow: inset 0 3px 0 var(--tone); text-align: left; }
+.hm .ob-seg b { font: 500 18px var(--mono); }
+.hm .metric-track { height: 4px; border-radius: 2px; }
+
+/* ---------- 展開更多 ---------- */
+.hm .more-detail { margin-top: 24px; border-top: 1px solid var(--hair); padding-top: 4px; }
+.hm .more-detail > summary {
+  display: flex; align-items: center; justify-content: space-between; min-height: 44px;
+  font: 500 14px var(--sans); color: var(--ink); list-style: none;
+}
+.hm .more-detail > summary::-webkit-details-marker { display: none; }
+.hm .more-detail > summary::after {
+  content: "+"; display: grid; place-items: center; width: 24px; height: 24px;
+  border: 1px solid var(--hair); border-radius: 50%; font: 400 14px/1 var(--mono); color: var(--dim);
+}
+.hm .more-detail[open] > summary::after { content: "−"; background: var(--panel2); }
+
+/* ---------- 籌碼明細 ---------- */
+.hm .now-block { margin: 20px 0 8px; padding: 16px 0 0; border: 0; border-top: 1px solid var(--ink); border-radius: 0; background: transparent; }
+.hm .now-block h3 { font: 600 17px var(--serif); }
+.hm .drill-table h4 { font: 400 12px var(--sans); color: var(--faint); }
+.hm .drill-table table { font-size: 13px; }
+.hm .drill-table th { border-bottom: 1px solid var(--ink); }
+.hm .drill-table td { border-bottom: 1px solid var(--hair); padding-top: 8px; padding-bottom: 8px; }
+.hm .chip-seg { padding: 2px; border: 1px solid var(--hair); border-radius: calc(var(--btn-r) + 2px); background: transparent; }
+.hm .chip-seg button { min-height: 0; height: 30px; border-radius: var(--btn-r); font: 500 13px var(--sans); }
+.hm .chip-seg button[aria-checked="true"] { background: var(--ink); color: var(--bg); box-shadow: none; }
+
+/* ---------- 第二層分頁（方法／來源／樣本／資料表／新聞） ---------- */
+.hm .panel-nav { background: var(--bg); border-top: 1px solid var(--hair); padding: 8px 12px; gap: 4px; }
+.hm .panel-nav button {
+  min-height: 0; height: 32px; border: 0; border-radius: var(--btn-r); font: 500 12px var(--sans); color: var(--dim);
+  transition: background-color 160ms var(--ease-out), color 160ms var(--ease-out);
+}
+.hm .panel-nav button:hover { background: var(--panel2); color: var(--ink); }
+.hm .panel-nav button[aria-current="page"] { background: var(--ink); color: var(--bg); box-shadow: none; }
+
+@media (max-width: 760px) {
+  .hm .panel-header { padding: 16px 12px 12px 20px; }
+  .hm .panel-heading h2 { font-size: 20px; }
+  .hm .panel-body { padding: 20px; }
+  .hm .evidence-row { grid-template-columns: 56px minmax(0, 1fr); }
+  .hm .action-list div, .hm .kv-list div { grid-template-columns: 88px minmax(0, 1fr); }
+}
+/* 歷史分布：獨立一段，標題與條之間留白；色塊只用底色＋上緣 3px，不再有下緣粗線 */
+.hm .plain-group.ob { margin-top: 8px; padding-top: 20px; border-top: 1px solid var(--hair); }
+.hm .ob-seg { border-bottom: 0; flex-basis: var(--w); display: grid; gap: 2px; }
+.hm .ob-seg span { font-size: 12px; }
+
+/* ================= 本人 11-09 指正「根本沒有去設計」：週期選單、籌碼明細 ================= */
+
+/* ---------- K 線週期：分段按鈕取代原生下拉（select 保留但隱藏，是唯一真值） ---------- */
+.hm .hm-period-native { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.hm .hm-period { display: flex; align-items: flex-end; gap: 12px; }
+.hm .hm-period-group { display: grid; gap: 4px; }
+.hm .hm-period-cap { font-size: 11px; color: var(--faint); padding-left: 4px; }
+.hm .hm-period-seg { display: inline-flex; padding: 2px; gap: 2px; border: 1px solid var(--hair); border-radius: calc(var(--btn-r) + 2px); }
+.hm .hm-period-seg button {
+  height: 30px; min-width: 40px; padding: 0 10px; border: 0; border-radius: var(--btn-r);
+  background: transparent; color: var(--dim); font: 500 13px var(--sans); cursor: pointer;
+  transition: background-color 160ms var(--ease-out), color 160ms var(--ease-out), transform 120ms var(--ease-out);
+}
+.hm .hm-period-seg button:hover:not(:disabled) { background: var(--panel2); color: var(--ink); }
+.hm .hm-period-seg button:active:not(:disabled) { transform: var(--press); }
+.hm .hm-period-seg button[aria-checked="true"] { background: var(--ink); color: var(--bg); }
+.hm .hm-period-seg button:disabled { color: color-mix(in srgb, var(--faint) 55%, transparent); cursor: not-allowed; }
+.hm .hm-period-sep { width: 1px; height: 30px; margin-bottom: 2px; background: var(--hair); }
+.hm .chart-toolbar { align-items: flex-end; }
+
+/* ---------- 籌碼明細面板 ---------- */
+/* 捲軸：細、跟紙面同色系 */
+.hm .panel-body { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--ink) 22%, transparent) transparent; }
+.hm .panel-body::-webkit-scrollbar { width: 8px; }
+.hm .panel-body::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--ink) 18%, transparent); border-radius: 8px; border: 2px solid var(--bg); }
+.hm .panel-body::-webkit-scrollbar-track { background: transparent; }
+
+/* 互動柱狀圖：柱子變細、整體淡，選中那天才實色＋日期標示 */
+.hm .drill-hint { margin: 24px 0 8px; font-size: 12px; color: var(--faint); }
+.hm .chip-big { padding: 12px 0 4px; border-top: 1px solid var(--ink); border-bottom: 1px solid var(--hair); }
+.hm .drill-chart text { font: 11px var(--mono); fill: var(--faint); }
+.hm .bar-hit rect:last-child { opacity: .32; transition: opacity 160ms var(--ease-out); }
+.hm .bar-hit:hover rect:last-child, .hm .bar-hit:focus-visible rect:last-child { opacity: .7; }
+.hm .bar-hit.is-on rect:last-child { opacity: 1; }
+.hm .bar-hit.is-on rect:first-child { fill: color-mix(in srgb, var(--ink) 6%, transparent); }
+.hm .bar-hit:focus-visible rect:first-child { stroke: var(--accent); stroke-width: 1.5; }
+
+/* 選中日期標題：大日期＋數值，像報表小標 */
+.hm .drill-day { margin: 20px 0 4px; gap: 16px; align-items: baseline; }
+.hm .drill-day b { font: 600 28px/1 var(--mono); letter-spacing: -.01em; }
+.hm .drill-day span { font: 500 16px var(--mono); color: var(--ink); }
+
+/* 明細表 */
+.hm .drill-table { margin-top: 16px; }
+.hm .drill-table h4 { margin-bottom: 8px; }
+.hm .drill-table table { font-size: 14px; font-variant-numeric: tabular-nums; }
+.hm .drill-table th { padding: 8px 8px 8px 0; font-size: 12px; color: var(--faint); font-weight: 400; }
+.hm .drill-table td { padding: 10px 8px 10px 0; vertical-align: baseline; }
+.hm .drill-table td:first-child, .hm .drill-table th:first-child { width: 2.5em; color: var(--faint); font: 12px var(--mono); }
+.hm .drill-table td.num { font-family: var(--mono); }
+.hm .drill-table tbody tr { transition: background-color 120ms var(--ease-out); }
+.hm .drill-table tbody tr:hover { background: color-mix(in srgb, var(--panel2) 70%, transparent); }
+.hm .drill-table tbody tr:nth-child(-n + 3) td:first-child { color: var(--ink); font-weight: 600; }
+.hm .drill-table .stock-link { text-decoration: none; color: var(--ink); }
+.hm .drill-table .stock-link:hover { color: var(--accent); }
+.hm .drill-table .stock-link::after { content: " ›"; color: var(--faint); opacity: 0; transition: opacity 120ms var(--ease-out); }
+.hm .drill-table tbody tr:hover .stock-link::after { opacity: 1; }
+
+/* 註腳：與表格分開，小字 */
+.hm .drill-detail + .chip-date { display: block; margin-top: 24px; padding-top: 12px; border-top: 1px solid var(--hair); font-size: 11px; line-height: 1.7; color: var(--faint); }
+
+@media (max-width: 860px) {
+  .hm .hm-period { gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+  .hm .hm-period-cap { display: none; }
+  .hm .hm-period-sep { display: none; }
+  .hm .hm-period-seg button { min-width: 34px; padding: 0 8px; font-size: 12px; }
+  .hm .drill-day b { font-size: 22px; }
+  .hm .drill-table table { font-size: 13px; }
+}
+/* 修正：.hm .chart-controls button 的通用樣式（36px 方鈕、透明底）會蓋到週期鈕 */
+.hm .chart-controls .hm-period-seg button {
+  width: auto; height: 30px; min-width: 44px; padding: 0 10px; border: 0; white-space: nowrap;
+  background: transparent; color: var(--dim);
+}
+.hm .chart-controls .hm-period-seg button:hover:not(:disabled) { background: var(--panel2); color: var(--ink); }
+.hm .chart-controls .hm-period-seg button[aria-checked="true"] { background: var(--ink); color: var(--bg); }
+.hm .chart-controls .hm-period-seg button:disabled { background: transparent; color: color-mix(in srgb, var(--faint) 55%, transparent); }
+/* 指標說明展開：標題不要變橘，用墨色＋圓鈕即可 */
+.hm .kc-studies details[open] > .kc-study-details-summary { color: var(--ink); }
+.hm .kc-studies .kc-study-details-body ol { padding-left: 0; list-style: none; counter-reset: kc; }
+.hm .kc-studies .kc-study-details-body ol > li { counter-increment: kc; position: relative; padding-left: 28px; }
+.hm .kc-studies .kc-study-details-body ol > li::before {
+  content: counter(kc); position: absolute; left: 0; top: 2px; width: 18px; height: 18px; display: grid; place-items: center;
+  border: 1px solid var(--hair); border-radius: 50%; font: 500 11px var(--mono); color: var(--dim);
+}
+.hm .kc-studies .kc-study-details-body ol > li::marker { content: ""; }
+@media (max-width: 860px) {
+  .hm .chart-controls .hm-period-seg button { min-width: 38px; padding: 0 6px; font-size: 12px; }
+}
+
+/* ---------- 選股看板：排行列、產業資金流向圖 ---------- */
+/* 排行：卡片列 → 報表列 */
+.hm .screen-list { gap: 0; margin-top: 12px; border-top: 1px solid var(--ink); }
+.hm .screen-list a,
+.hm .screen-list .screen-static {
+  padding: 12px 8px 12px 0; border: 0; border-bottom: 1px solid var(--hair); border-radius: 0;
+  grid-template-columns: 2.5em minmax(0, 1fr) auto; transition: background-color 120ms var(--ease-out);
+}
+/* 0050 以外的 ETF 沒有個股分析，不能點：不給 hover 底色，ETF 標籤用安靜的細框字 */
+.hm .screen-list .screen-static { cursor: default; }
+.hm .screen-list .screen-static strong { color: var(--dim); }
+.hm .screen-flag.screen-etf { padding: 0 6px; border: 1px solid var(--hair); border-radius: 4px; color: var(--faint); font: 500 11px/18px var(--mono); }
+.hm .screen-list a:hover { background: color-mix(in srgb, var(--panel2) 70%, transparent); border-color: var(--hair); }
+.hm .screen-rank { font: 500 12px var(--mono); }
+.hm .screen-list li:nth-child(-n + 3) .screen-rank { color: var(--ink); font-weight: 600; }
+.hm .screen-list strong { font-weight: 600; }
+.hm .screen-list small { font-size: 12px; color: var(--faint); }
+.hm .screen-value { font: 500 15px var(--mono); font-variant-numeric: tabular-nums; }
+.hm .screen-flag { border-radius: 4px; border-color: var(--hair); color: var(--dim); }
+.hm .screen-more {
+  height: 32px; margin-top: 12px; padding: 0 12px; border: 1px solid var(--hair); border-radius: var(--btn-r);
+  background: transparent; color: var(--dim); font: 500 13px var(--sans); cursor: pointer;
+  transition: background-color 160ms var(--ease-out), color 160ms var(--ease-out);
+}
+.hm .screen-more:hover { background: var(--panel2); color: var(--ink); }
+
+/* 產業資金流向：象限色改用站內色票（原本是 Tailwind 預設的靛紫＋兩種相近橘色） */
+.hm { --q-leading: var(--accent); --q-weakening: var(--gold); --q-improving: color-mix(in srgb, var(--ink) 62%, var(--bg)); --q-lagging: color-mix(in srgb, var(--ink) 28%, var(--bg)); }
+.hm .rotation-dot { stroke: var(--bg); stroke-width: 1.5; }
+.hm .rotation-dot:hover, .hm .rotation-dot:focus { stroke: var(--ink); stroke-width: 2; }
+.hm .rotation-legend { gap: 6px 20px; margin-top: 16px; font-size: 12px; }
+.hm .rotation-legend i { width: 8px; height: 8px; }
+.hm .rotation-chart { margin-top: 16px; padding: 8px 0; border-top: 1px solid var(--ink); border-bottom: 1px solid var(--hair); }
+.hm .rotation-chart text, .hm .core-chart text { font: 11px var(--sans); fill: var(--faint); }
+.hm .rotation-chart text.strong { font-weight: 600; fill: var(--ink); }
+.hm .rotation-lists { gap: 40px; margin-top: 24px; }
+.hm .rotation-lists h4 { font: 400 12px var(--sans); color: var(--faint); margin-bottom: 8px; }
+.hm .rotation-lists ol { padding: 0; list-style: none; counter-reset: r; border-top: 1px solid var(--hair); line-height: 1.5; }
+.hm .rotation-lists li { counter-increment: r; display: grid; grid-template-columns: 2em 1fr auto; padding: 8px 0; border-bottom: 1px solid var(--hair); font-size: 14px; }
+.hm .rotation-lists li::before { content: counter(r); font: 500 12px var(--mono); color: var(--faint); }
+.hm .rotation-lists small { font: 500 13px var(--mono); color: var(--dim); text-align: right; }
+.hm .rotation-table summary {
+  display: inline-flex; gap: 8px; height: 32px; padding: 0 12px; border: 1px solid var(--hair); border-radius: var(--btn-r);
+  list-style: none; font: 500 13px var(--sans); color: var(--dim); transition: background-color 160ms var(--ease-out);
+}
+.hm .rotation-table summary::-webkit-details-marker { display: none; }
+.hm .rotation-table summary:hover { background: var(--panel2); color: var(--ink); }
+.hm .rotation-table[open] summary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.hm .rotation-table table { margin-top: 12px; font-size: 13px; font-variant-numeric: tabular-nums; }
+.hm .rotation-table th { text-align: left; font-weight: 400; color: var(--faint); padding: 8px 8px 8px 0; border-bottom: 1px solid var(--ink); }
+.hm .rotation-table td { padding: 8px 8px 8px 0; border-bottom: 1px solid var(--hair); color: var(--ink); }
+.hm .chart-tip, .hm .rotation-chart [role="tooltip"] { border: 1px solid var(--hair); border-radius: var(--btn-r); background: var(--bg); box-shadow: 0 8px 24px -12px rgb(0 0 0 / 30%); }
+/* 選中狀態優先於 hover：滑鼠停在已選的按鈕上也不會變回淺色 */
+.hm .chart-controls .hm-period-seg button[aria-checked="true"]:hover,
+.hm .hm-period-seg button[aria-checked="true"]:hover,
+.hm .screen-tabs button[aria-selected="true"]:hover,
+.hm .screen-seg button[aria-pressed="true"]:hover,
+.hm .chip-seg button[aria-checked="true"]:hover { background: var(--ink); color: var(--bg); }
+@media (max-width: 860px) {
+  .hm .chart-toolbar { flex-wrap: wrap; row-gap: 12px; }
+  .hm .chart-toolbar > div:first-child { flex: 1 1 auto; min-width: 0; }
+  .hm .chart-controls { flex: 1 1 100%; flex-wrap: wrap; justify-content: space-between; row-gap: 8px; }
+  .hm .hm-period { order: 2; flex: 1 1 100%; justify-content: space-between; }
+  .hm .hm-period-group:last-child { flex: 1 1 auto; }
+  .hm .hm-period-group:last-child .hm-period-seg { display: flex; }
+  .hm .hm-period-group:last-child .hm-period-seg button { flex: 1 1 0; }
+}
+/* 產業資金流向：點一下固定說明，固定中的泡泡加墨色外框 */
+.hm .rotation-dot { cursor: pointer; }
+.hm .rotation-dot.is-pinned { stroke: var(--ink); stroke-width: 2.5; }
+.hm .rotation-chart .chart-tip { pointer-events: none; }

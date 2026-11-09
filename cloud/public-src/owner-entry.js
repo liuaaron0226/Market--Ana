@@ -17,7 +17,9 @@
       .owner-entry:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
       .owner-entry b { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: var(--accent); color: #fff;
         display: inline-grid; place-items: center; font: 700 12px/1 var(--mono); }
-      body.panel-open .owner-entry { display: none; }`;
+      body.panel-open .owner-entry { display: none; }
+      /* 本人 11-07：手機不讓浮動按鈕蓋住主圖，改放在頁面最下方。 */
+      @media (max-width: 760px) { .owner-entry { position: static; display: flex; justify-content: center; margin: 16px auto 24px; width: max-content; box-shadow: none; } }`;
     document.head.append(style);
     const a = document.createElement("a");
     a.className = "owner-entry";

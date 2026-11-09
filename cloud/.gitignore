@@ -5,3 +5,9 @@ node_modules/
 functions/_market-pack.js
 .stock-pack.json
 functions/_stock-pack.js
+functions/_screens-pack.js
+.screens-pack.json
+functions/_data-status.js
+.data-status.json
+functions/_compare-pack.js
+.compare-pack.json

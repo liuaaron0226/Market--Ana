@@ -1,4 +1,6 @@
-"""五維分數（handoff §4.1，本站自有計分，非原站公式）。這裡先放價量可算的 T、V 與風險旗標 RF1。"""
+"""【已退役 2026-11-08】本人定案「自創部分不保留」；個股分析改由 analyze_v2.py 輸出（契約 .scratch/chart-screening-workbench/stock-analysis-contract-v2.md）。本檔僅為既有呼叫端相容而保留，不用於新產品輸出。
+
+五維分數（handoff §4.1，本站自有計分，非原站公式）。這裡先放價量可算的 T、V 與風險旗標 RF1。"""
 from __future__ import annotations
 
 

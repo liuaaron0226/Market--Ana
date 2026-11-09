@@ -5,95 +5,148 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>個股分析</title>
-  <link rel="stylesheet" href="minimal.css?v=20261107-twon1">
-  <link rel="stylesheet" href="stock.css?v=20261107-clear1">
+  <link rel="stylesheet" href="minimal.css?v=20261109-ux1">
+  <link rel="stylesheet" href="chart-studies.css?v=20261108-01">
+  <link rel="stylesheet" href="bold.css?v=20261109-ux1">
+  <link rel="stylesheet" href="stock.css?v=20261109-ux1">
 </head>
-<body>
-  <div class="sk-shell">
-    <header class="sk-head">
-      <a class="sk-back" href="minimal.html">‹ 大盤</a>
-      <form class="sk-search" id="searchForm" role="search">
+<body class="bd">
+  <div class="bd-shell">
+    <header class="bd-bar">
+      <a class="bd-back" href="minimal.html"><span aria-hidden="true">‹</span> 大盤</a>
+      <form class="bd-search" id="searchForm" role="search">
         <label class="sr-only" for="codeInput">股票代號</label>
         <input id="codeInput" name="code" inputmode="numeric" autocomplete="off" placeholder="代號，例如 2330" maxlength="6">
         <button type="submit">查詢</button>
       </form>
-      <button class="theme-toggle" id="themeToggle" type="button" aria-label="切換深淺色主題">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.64 5.64l1.42 1.42m9.88 9.88 1.42 1.42m0-12.72-1.42 1.42M7.06 16.94l-1.42 1.42" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>
-        <span id="themeText">切換主題</span>
+      <button class="bd-theme" id="themeToggle" type="button" aria-label="切換深淺色主題">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.64 5.64l1.42 1.42m9.88 9.88 1.42 1.42m0-12.72-1.42 1.42M7.06 16.94l-1.42 1.42" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+        <span id="themeText" class="sr-only">切換主題</span>
       </button>
     </header>
 
-    <section class="sk-profile-control" aria-labelledby="presetHeading">
-      <h2 id="presetHeading">分析策略 <small>三套本站自有分析，換策略會重算分數與關鍵價位</small></h2>
-      <div class="sk-preset-tabs" role="radiogroup" aria-labelledby="presetHeading" id="presetTabs">
-        <button type="button" role="radio" data-preset="2TON-FIT-V1" aria-checked="true"><b>綜合觀察</b><span>趨勢與量價為主，價位看近 60 日</span></button>
-        <button type="button" role="radio" data-preset="MOMENTUM-V1" aria-checked="false"><b>短線量價</b><span>更重量價，價位只看近 20 日</span></button>
-        <button type="button" role="radio" data-preset="SWING-SAFE-V1" aria-checked="false"><b>波段結構</b><span>加重法人與基本面，價位看近 120 日</span></button>
-      </div>
-      <select id="presetSelect" class="sr-only" tabindex="-1" aria-hidden="true">
-        <option value="2TON-FIT-V1">綜合觀察</option>
-        <option value="MOMENTUM-V1">短線量價</option>
-        <option value="SWING-SAFE-V1">波段結構</option>
-      </select>
-      <p id="presetDescription" class="sr-only">本站自有分析；分數與關鍵價位一起重算，不執行交易。</p>
+    <p class="bd-status" id="status" role="status">讀取中</p>
+
+    <section class="bd-outside" id="outside" hidden>
+      <h1 id="outsideTitle">不在本站涵蓋範圍</h1>
+      <p class="bd-outside-reason" id="outsideReason"></p>
+      <p class="bd-outside-meta num" id="outsideMeta"></p>
+      <p class="bd-outside-rule">本站只涵蓋 20 日平均成交金額排名前段的大量股（前 300 名納入、跌出前 400 名才移出），另加核心持有 0050。</p>
     </section>
-    <p class="sk-status" id="status" role="status">讀取中…</p>
 
     <main id="content" hidden>
-      <section class="sk-card sk-hero">
-        <div class="sk-title">
-          <h1><span id="stockName">—</span> <span class="num sk-code" id="stockCode">—</span></h1>
-          <p class="sk-mode" id="appliedPreset"></p>
-          <p class="sk-meta">資料日 <b class="num" id="asOf"></b>・收盤 <b class="num" id="close"></b> <b class="num" id="chg"></b></p>
+      <section class="bd-quote" aria-label="報價">
+        <div class="bd-ident">
+          <h1><span id="stockName">—</span></h1>
+          <p><span class="num" id="stockCode">—</span><span class="bd-dot" aria-hidden="true">·</span><span id="stockMarket" hidden></span><span class="bd-dot" aria-hidden="true">·</span>資料日 <span class="num" id="asOf"></span></p>
         </div>
-        <button class="sk-verdict" id="verdictButton" type="button" aria-expanded="false" aria-controls="layer1">
-          <span class="sk-trend" id="trendBadge">—</span>
-          <strong id="verdict">—</strong>
-          <span class="detail-cue">看依據 <span aria-hidden="true">›</span></span>
-        </button>
-        <div class="sk-levels" aria-label="關鍵價位">
-          <div class="lv-pressure"><span>第一壓力</span><b class="num" id="pressure1">—</b><small id="pressure1Diff"></small></div>
-          <div class="lv-support"><span>最近支撐</span><b class="num" id="support1">—</b><small id="support1Diff"></small></div>
-          <div class="lv-defense"><span>防守參考</span><b class="num" id="defense">—</b><small id="defenseDiff"></small></div>
-          <div class="lv-score"><span>總分</span><b class="num" id="scoreValue">—</b><small id="scoreDiff"></small></div>
+        <div class="bd-price">
+          <b class="num" id="close">—</b>
+          <b class="num" id="chg"></b>
         </div>
-        <p class="sk-compare" id="compareLine" hidden></p>
       </section>
 
-      <section class="sk-card sk-chart-card">
-        <div class="sk-chart" id="chartHost"></div>
-        <ul class="sk-legend" aria-label="圖上虛線">
-          <li class="lg-pressure">壓力：漲到這附近容易遇到賣壓</li>
-          <li class="lg-support">支撐：跌到這附近容易有人接</li>
-          <li class="lg-zone">觀察區上緣／下緣：近期價格常停留的區間</li>
-          <li class="lg-defense">防守：跌破代表結構轉壞（分析參考，不是停損指令）</li>
-        </ul>
+      <!-- 本人 11-09：把分析整理成清楚的操作指引，放在報價正下方；條件與指標細節收合在下方。 -->
+      <section class="bd-guide" id="guide" aria-labelledby="guideConclusion">
+        <p class="bd-guide-label">目前狀態</p>
+        <h2 class="bd-guide-conclusion" id="guideConclusion">—</h2>
+        <ol class="bd-guide-list" id="guideList"></ol>
+        <p class="bd-guide-disclaimer" id="guideDisclaimer">價位與訊號整理，非買賣建議</p>
       </section>
 
-      <section class="sk-card" id="layer1" hidden>
-        <h2>五維分數 <small>本站自有計分，非漲停寶寶原公式</small></h2>
-        <div class="sk-dims" id="dims"></div>
-        <p class="sk-score" id="scoreLine"></p>
-        <ul class="sk-flags" id="flags"></ul>
-        <h2>24 招摘要</h2>
-        <p class="sk-counts" id="counts"></p>
-        <details class="sk-detail">
-          <summary>逐招看證據</summary>
-          <div class="sk-scroll"><table class="sk-table"><thead><tr><th>招式</th><th>狀態</th><th>方向</th><th>依據</th></tr></thead><tbody id="strategyRows"></tbody></table></div>
+      <div id="candidateReasons"></div>
+
+      <div class="bd-stage">
+        <section class="bd-chart sk-chart-card" aria-labelledby="chartTitle">
+          <div class="bd-chart-bar">
+            <div>
+              <h2 id="chartTitle" class="sr-only">價格走勢</h2>
+              <p id="stockChartContext">日K · 盤後資料</p>
+            </div>
+            <label class="bd-period" for="periodSelect">
+              <span class="sr-only">週期</span>
+              <select id="periodSelect">
+                <option value="daily" selected>日K</option>
+                <option value="monthly">月K</option>
+              </select>
+            </label>
+          </div>
+          <p class="bd-notice" id="stockChartNotice" role="note" hidden></p>
+          <div class="bd-chart-host sk-chart" id="chartHost"></div>
+          <div id="chartStudies"></div>
+        </section>
+
+        <aside class="bd-rail" aria-label="價格結構">
+          <h2>價位階梯</h2>
+          <p class="bd-rail-sub">間距依距收盤遠近排列</p>
+          <ol class="bd-ladder" id="ladder">
+            <li class="lad lad-res" data-key="resistance2"><span class="lad-name">壓力二</span><b class="num" id="resistance2">—</b><small id="resistance2Meta"></small></li>
+            <li class="lad-gap" aria-hidden="true"></li>
+            <li class="lad lad-res" data-key="resistance1"><span class="lad-name">壓力一</span><b class="num" id="resistance1">—</b><small id="resistance1Meta"></small></li>
+            <li class="lad-gap" aria-hidden="true"></li>
+            <li class="lad lad-now" data-key="close"><span class="lad-name">收盤</span><b class="num" id="ladderClose">—</b><small>資料日收盤</small></li>
+            <li class="lad-gap" aria-hidden="true"></li>
+            <li class="lad lad-sup" data-key="support1"><span class="lad-name">支撐一</span><b class="num" id="support1">—</b><small id="support1Meta"></small></li>
+            <li class="lad-gap" aria-hidden="true"></li>
+            <li class="lad lad-sup" data-key="support2"><span class="lad-name">支撐二</span><b class="num" id="support2">—</b><small id="support2Meta"></small></li>
+          </ol>
+          <p class="bd-rail-note">支撐、壓力只描述價格所在位置，不是目標價、也不是停損價</p>
+          <button class="bd-link" id="verdictButton" type="button" aria-expanded="false" aria-controls="layer1">價位怎麼來的 <span aria-hidden="true">›</span></button>
+        </aside>
+      </div>
+
+      <section class="bd-sources" id="layer1" hidden>
+        <h2>價位怎麼來的</h2>
+        <p class="bd-small" id="toleranceLine"></p>
+        <div class="bd-scroll"><table class="bd-table"><thead><tr><th>類型</th><th>價位</th><th>距離</th><th>距離分層</th><th>構成來源</th></tr></thead><tbody id="levelRows"></tbody></table></div>
+        <p class="bd-small" id="referenceLine"></p>
+      </section>
+
+      <details class="bd-more" id="signalDetails">
+        <summary>訊號明細 <small id="signalSummary"></small></summary>
+        <div class="bd-more-body">
+          <div class="sk-cond-group">
+            <h3>主要訊號</h3>
+            <ul class="sk-cond" id="condConfirmed"></ul>
+          </div>
+          <div class="sk-cond-group">
+            <h3>輔助訊號 <small>較不穩定，只作參考</small></h3>
+            <ul class="sk-cond" id="condApproximate"></ul>
+          </div>
+          <div class="sk-cond-group">
+            <h3>成交活絡股的共同狀態 <small>本站涵蓋的股票幾乎都是同一個狀態，個股參考價值低</small></h3>
+            <ul class="sk-cond" id="condFixed"></ul>
+          </div>
+        </div>
+      </details>
+
+      <details class="bd-more bd-ind" id="indicatorDetails">
+        <summary id="indTitle">技術指標數值 <small>資料日收盤</small></summary>
+        <div class="bd-more-body">
+          <div class="bd-ind-grid" id="indicators"></div>
+        </div>
+      </details>
+
+      <footer class="bd-foot" aria-labelledby="notesTitle">
+        <h2 id="notesTitle">要注意</h2>
+        <ul class="bd-notes" id="notes"></ul>
+        <details class="bd-method" id="methodDetails">
+          <summary>方法說明</summary>
+          <div class="bd-method-body">
+            <p>本頁的支撐、壓力與訊號，都是用公開的每日價量、法人、融資券與營收資料，依固定規則算出來的整理結果。</p>
+            <p id="tradingRules">本站不提供買賣建議，也不給目標價或停損價。</p>
+            <p id="tradingRulesQuote">價位是依價格結構整理出的相對位置：不是買賣建議，也不代表價格漲到區間上緣前都適合進場；上緣不是目標價。</p>
+            <p>「主要訊號」的規則經過大量歷史資料核對；「輔助訊號」準確度較低，只作參考，不納入上方的狀態與操作重點。</p>
+            <p>KD、RSI、MACD 是通用技術指標；RSI 採 14 日簡單平均，和常見看盤軟體的 Wilder 平滑略有差異。</p>
+          </div>
         </details>
-        <details class="sk-detail">
-          <summary>價位怎麼來的</summary>
-          <div id="levelSources"></div>
-        </details>
-      </section>
-
-      <section class="sk-card sk-warn">
-        <h2>要注意</h2>
-        <ul id="notes"></ul>
-      </section>
+      </footer>
     </main>
   </div>
-  <script src="kchart.js?v=20261107-clear1"></script>
-  <script src="stock.js?v=20261107-clear1"></script>
+  <script src="chart-studies.js?v=20261108-01"></script>
+  <script src="kchart.js?v=20261109-ux1"></script>
+  <script src="stock.js?v=20261109-ux1"></script>
+  <script src="period-switch.js?v=20261109-ux1"></script>
+  <script src="motion.js?v=20261109-ux1"></script>
 </body>
 </html>

@@ -372,7 +372,11 @@ def check_mobile_sheet(browser: Browser, screenshots: list[str]) -> None:
     panel_box = page.locator("#detailPanel").bounding_box()
     marker_box = page.locator("#selectedCandleMarker").bounding_box()
     assert panel_box and marker_box
-    assert marker_box["y"] + marker_box["height"] <= panel_box["y"] + 1, f"手機底部面板遮住選取K棒：marker={marker_box}, panel={panel_box}"
+    # 本人 11-07 更正：手機浮窗也要置中（取代舊的底部面板＋露出選取 K 棒規則）。
+    vw, vh = 390, 844
+    assert abs(panel_box["x"] - (vw - panel_box["x"] - panel_box["width"])) <= 2, f"手機浮窗未水平置中：{panel_box}"
+    assert abs(panel_box["y"] - (vh - panel_box["y"] - panel_box["height"])) <= 2, f"手機浮窗未垂直置中：{panel_box}"
+    assert panel_box["x"] >= 8 and panel_box["y"] >= 8, f"手機浮窗超出可視範圍：{panel_box}"
     shot = OUT / "minimal-panel-mobile-390.png"
     page.screenshot(path=str(shot), full_page=False)
     screenshots.append(str(shot))
@@ -605,7 +609,7 @@ def main() -> None:
         "defense_action_matches_dashboard": True,
         "distribution_matches_backtest": True,
         "escape_restores_focus": True,
-        "mobile_bottom_sheet_keeps_selection_visible": True,
+        "mobile_panel_centered": True,
         "reduced_motion_content_visible": True,
         "stale_data_never_shows_live": True,
         "chip_drilldown_top20_matches_data": True,

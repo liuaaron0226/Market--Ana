@@ -27,7 +27,7 @@
         <div class="row"><button type="submit" id="send">送出申請</button></div>
         <p class="msg" id="msg" role="alert"></p>
       </form>
-      <p class="note">進站時需要兩步驟驗證：第一次登入時，Cloudflare 會請你用手機驗證器 App（例如 Google Authenticator）或裝置指紋完成設定。</p>`;
+      <p class="note">你已完成信箱驗證。填寫稱呼並送出申請即可，不用設定密碼或手機驗證器；核准後，用同一個信箱登入。</p>`;
     const f = document.getElementById("f");
     f.addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -52,7 +52,7 @@
       view.innerHTML = `
         <span class="state approved">已核准</span>
         <h1 style="margin-top:12px">${me.owner ? "你是站主" : "已經可以進站了"}</h1>
-        <p class="lead">${me.owner ? "站主不用申請。" : "第一次進站會要求兩步驟驗證設定。"}</p>
+        <p class="lead">${me.owner ? "站主不用申請，可以直接進入網站。" : "信箱已驗證、申請已核准，可以直接進入網站，不用再設定驗證器。"}</p>
         <p class="who">${esc(me.email)}</p>
         <div class="row"><a class="btn" href="/">進入網站</a>${me.owner ? '<a class="btn" style="background:transparent;color:var(--ink);border-color:var(--line-strong)" href="/admin/">管理申請</a>' : ""}</div>`;
       return;

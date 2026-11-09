@@ -1,0 +1,930 @@
+{
+  "schema": "stock-analysis/v2",
+  "analysis_version": "price-structure-rea-v2",
+  "code": "2330",
+  "name": "台積電",
+  "kind": "common",
+  "market": "上市",
+  "as_of": "2026-11-06",
+  "requested_as_of": "2026-11-06",
+  "quote": {
+    "close": 2135.0,
+    "chg_pct": -4.69,
+    "volume": 110714587,
+    "change_sign": "-"
+  },
+  "qa": {
+    "blocking": false,
+    "bars": 300
+  },
+  "indicators": {
+    "ma5": 2252.0,
+    "ma10": 2325.5,
+    "ma20": 2400.75,
+    "ma60": 2422.08,
+    "ma120": 2389.42,
+    "ma240": 2079.48,
+    "rsi14": 13.3,
+    "atr14": 55.71,
+    "atr_pct": 2.61,
+    "relative_volume": 2.94,
+    "high20_close": 2585.0,
+    "low20_close": 2135.0,
+    "prior_high20": 2590.0,
+    "low20_intraday": 2020.0,
+    "k9": 16.74,
+    "d9": 16.08,
+    "macd_dif": -61.354,
+    "macd_dea": -31.94,
+    "macd_hist": -29.413
+  },
+  "levels": {
+    "aggregation_tolerance_pct": 1.57,
+    "observable_range_pct": 10.44,
+    "resistance": [
+      {
+        "tick": 2195.0,
+        "level": 2195.0,
+        "low": 2195.0,
+        "high": 2195.0,
+        "distance_pct": 2.81,
+        "tier": "near",
+        "signal_count": 2,
+        "structural": true,
+        "strength_score": 2.4,
+        "sources": [
+          {
+            "kind": "gap_down_lower",
+            "label": "未回補向下缺口下緣",
+            "value": 2195.0,
+            "date": "2026-11-06"
+          },
+          {
+            "kind": "heavy_high",
+            "label": "大量成交日高點",
+            "value": 2195.0,
+            "date": "2026-11-06"
+          }
+        ]
+      },
+      {
+        "tick": 2300.0,
+        "level": 2299.8,
+        "low": 2285.0,
+        "high": 2320.0,
+        "distance_pct": 7.72,
+        "tier": "near",
+        "signal_count": 3,
+        "structural": false,
+        "strength_score": 2.5,
+        "sources": [
+          {
+            "kind": "heavy_high",
+            "label": "大量成交日高點",
+            "value": 2285.0,
+            "date": "2026-11-05"
+          },
+          {
+            "kind": "heavy_volume",
+            "label": "大量成交日收盤",
+            "value": 2295.0,
+            "date": "2026-11-03"
+          },
+          {
+            "kind": "heavy_high",
+            "label": "大量成交日高點",
+            "value": 2320.0,
+            "date": "2026-11-04"
+          }
+        ]
+      }
+    ],
+    "support": [
+      {
+        "tick": 2080.0,
+        "level": 2079.48,
+        "low": 2079.48,
+        "high": 2079.48,
+        "distance_pct": -2.6,
+        "tier": "near",
+        "signal_count": 1,
+        "structural": true,
+        "strength_score": 1.0,
+        "sources": [
+          {
+            "kind": "ma240",
+            "label": "MA240",
+            "value": 2079.48,
+            "date": null
+          }
+        ]
+      },
+      {
+        "tick": 2020.0,
+        "level": 2020.0,
+        "low": 2020.0,
+        "high": 2020.0,
+        "distance_pct": -5.39,
+        "tier": "near",
+        "signal_count": 2,
+        "structural": true,
+        "strength_score": null,
+        "sources": [
+          {
+            "kind": "low_20",
+            "label": "近 20 日盤中低點",
+            "value": 2020.0,
+            "date": null
+          },
+          {
+            "kind": "heavy_low",
+            "label": "大量成交日低點",
+            "value": 2020.0,
+            "date": "2026-11-06"
+          }
+        ]
+      }
+    ],
+    "resistance_all": [
+      {
+        "tick": 2195.0,
+        "level": 2195.0,
+        "low": 2195.0,
+        "high": 2195.0,
+        "distance_pct": 2.81,
+        "tier": "near",
+        "signal_count": 2,
+        "structural": true,
+        "strength_score": 2.4,
+        "sources": [
+          {
+            "kind": "gap_down_lower",
+            "label": "未回補向下缺口下緣",
+            "value": 2195.0,
+            "date": "2026-11-06"
+          },
+          {
+            "kind": "heavy_high",
+            "label": "大量成交日高點",
+            "value": 2195.0,
+            "date": "2026-11-06"
+          }
+        ]
+      },
+      {
+        "tick": 2245.0,
+        "level": 2245.81,
+        "low": 2235.0,
+        "high": 2260.0,
+        "distance_pct": 5.19,
+        "tier": "near",
+        "signal_count": 4,
+        "structural": true,
+        "strength_score": 4.8,
+        "sources": [
+          {
+            "kind": "gap_down_upper",
+            "label": "未回補向下缺口上緣",
+            "value": 2235.0,
+            "date": "2026-11-06"
+          },
+          {
+            "kind": "heavy_volume",
+            "label": "大量成交日收盤",
+            "value": 2240.0,
+            "date": "2026-11-05"
+          },
+          {
+            "kind": "ma5",
+            "label": "MA5",
+            "value": 2252.0,
+            "date": null
+          },
+          {
+            "kind": "heavy_volume",
+            "label": "大量成交日收盤",
+            "value": 2260.0,
+            "date": "2026-11-04"
+          }
+        ]
+      },
+      {
+        "tick": 2300.0,
+        "level": 2299.8,
+        "low": 2285.0,
+        "high": 2320.0,
+        "distance_pct": 7.72,
+        "tier": "near",
+        "signal_count": 3,
+        "structural": false,
+        "strength_score": 2.5,
+        "sources": [
+          {
+            "kind": "heavy_high",
+            "label": "大量成交日高點",
+            "value": 2285.0,
+            "date": "2026-11-05"
+          },
+          {
+            "kind": "heavy_volume",
+            "label": "大量成交日收盤",
+            "value": 2295.0,
+            "date": "2026-11-03"
+          },
+          {
+            "kind": "heavy_high",
+            "label": "大量成交日高點",
+            "value": 2320.0,
+            "date": "2026-11-04"
+          }
+        ]
+      },
+      {
+        "tick": 2340.0,
+        "level": 2341.48,
+        "low": 2325.5,
+        "high": 2360.0,
+        "distance_pct": 9.67,
+        "tier": "near",
+        "signal_count": 6,
+        "structural": true,
+        "strength_score": 6.5,
+        "sources": [
+          {
+            "kind": "ma10",
+            "label": "MA10",
+            "value": 2325.5,
+            "date": null
+          },
+          {
+            "kind": "heavy_volume",
+            "label": "大量成交日收盤",
+            "value": 2330.0,
+            "date": "2026-11-02"
+          },
+          {
+            "kind": "heavy_high",
+            "label": "大量成交日高點",
+            "value": 2335.0,
+            "date": "2026-11-03"
+          },
+          {
+            "kind": "gap_down_lower",
+            "label": "未回補向下缺口下緣",
+            "value": 2345.0,
+            "date": "2026-11-02"
+          },
+          {
+            "kind": "heavy_high",
+            "label": "大量成交日高點",
+            "value": 2345.0,
+            "date": "2026-11-02"
+          },
+          {
+            "kind": "gap_down_upper",
+            "label": "未回補向下缺口上緣",
+            "value": 2360.0,
+            "date": "2026-11-02"
+          }
+        ]
+      },
+      {
+        "tick": 2400.0,
+        "level": 2401.71,
+        "low": 2380.0,
+        "high": 2416.25,
+        "distance_pct": 12.49,
+        "tier": "mid",
+        "signal_count": 7,
+        "structural": true,
+        "strength_score": 10.3,
+        "sources": [
+          {
+            "kind": "gap_down_lower",
+            "label": "未回補向下缺口下緣",
+            "value": 2380.0,
+            "date": "2026-10-30"
+          },
+          {
+            "kind": "ma120",
+            "label": "MA120",
+            "value": 2389.42,
+            "date": null
+          },
+          {
+            "kind": "gap_down_upper",
+            "label": "未回補向下缺口上緣",
+            "value": 2390.0,
+            "date": "2026-10-30"
+          },
+          {
+            "kind": "ma20",
+            "label": "MA20",
+            "value": 2400.75,
+            "date": null
+          },
+          {
+            "kind": "swing_high",
+            "label": "前波高點",
+            "value": 2410.0,
+            "date": "2026-08-21"
+          },
+          {
+            "kind": "swing_high",
+            "label": "前波高點",
+            "value": 2415.0,
+            "date": "2026-08-05"
+          },
+          {
+            "kind": "vp_center",
+            "label": "成交量分布密集價",
+            "value": 2416.25,
+            "date": null
+          }
+        ]
+      },
+      {
+        "tick": 2435.0,
+        "level": 2437.34,
+        "low": 2420.0,
+        "high": 2450.0,
+        "distance_pct": 14.16,
+        "tier": "mid",
+        "signal_count": 14,
+        "structural": true,
+        "strength_score": 17.3,
+        "sources": [
+          {
+            "kind": "heavy_volume",
+            "label": "大量成交日收盤",
+            "value": 2420.0,
+            "date": "2026-10-16"
+          },
+          {
+            "kind": "ma60",
+            "label": "MA60",
+            "value": 2422.08,
+            "date": null
+          },
+          {
+            "kind": "swing_high",
+            "label": "前波高點",
+            "value": 2425.0,
+            "date": "2026-07-31"
+          },
+          {
+            "kind": "vp_high",
+            "label": "成交量分布上界",
+            "value": 2427.5,
+            "date": null
+          },
+          {
+            "kind": "swing_high",
+            "label": "前波高點",
+            "value": 2435.0,
+            "date": "2026-10-21"
+          },
+          {
+            "kind": "swing_high",
+            "label": "前波高點",
+            "value": 2435.0,
+            "date": "2026-10-22"
+          },
+          {
+            "kind": "swing_high",
+            "label": "前波高點",
+            "value": 2440.0,
+            "date": "2026-06-03"
+          },
+          {
+            "kind": "heavy_volume",
+            "label": "大量成交日收盤",
+            "value": 2440.0,
+            "date": "2026-10-15"
+          },
+          {
+            "kind": "swing_high",
+            "label": "前波高點",
+            "value": 2445.0,
+            "date": "2026-07-22"
+          },
+          {
+            "kind": "swing_high",
+            "label": "前波高點",
+            "value": 2445.0,
+            "date": "2026-08-13"
+          },
+          {
+            "kind": "swing_high",
+            "label": "前波高點",
+            "value": 2445.0,
+            "date": "2026-08-28"
+          },
+          {
+            "kind": "heavy_high",
+            "label": "大量成交日高點",
+            "value": 2445.0,
+            "date": "2026-10-16"
+          },
+          {
+            "kind": "gap_down_lower",
+            "label": "未回補向下缺口下緣",
+            "value": 2450.0,
+            "date": "2026-10-15"
+          },
+          {
+            "kind": "heavy_high",
+            "label": "大量成交日高點",
+            "value": 2450.0,
+            "date": "2026-10-15"
+          }
+        ]
+      },
+      {
+        "tick": 2475.0,
+        "level": 2475.74,
+        "low": 2460.0,
+        "high": 2490.0,
+        "distance_pct": 15.96,
+        "tier": "mid",
+        "signal_count": 6,
+        "structural": true,
+        "strength_score": 7.3,
+        "sources": [
+          {
+            "kind": "heavy_volume",
+            "label": "大量成交日收盤",
+            "value": 2460.0,
+            "date": "2026-09-18"
+          },
+          {
+            "kind": "heavy_high",
+            "label": "大量成交日高點",
+            "value": 2460.0,
+            "date": "2026-09-18"
+          },
+          {
+            "kind": "swing_high",
+            "label": "前波高點",
+            "value": 2470.0,
+            "date": "2026-07-16"
+          },
+          {
+            "kind": "swing_high",
+            "label": "前波高點",
+            "value": 2480.0,
+            "date": "2026-07-13"
+          },
+          {
+            "kind": "gap_down_upper",
+            "label": "未回補向下缺口上緣",
+            "value": 2490.0,
+            "date": "2026-10-15"
+          },
+          {
+            "kind": "heavy_volume",
+            "label": "大量成交日收盤",
+            "value": 2490.0,
+            "date": "2026-10-13"
+          }
+        ]
+      },
+      {
+        "tick": 2510.0,
+        "level": 2508.87,
+        "low": 2500.0,
+        "high": 2535.0,
+        "distance_pct": 17.51,
+        "tier": "mid",
+        "signal_count": 9,
+        "structural": true,
+        "strength_score": 11.4,
+        "sources": [
+          {
+            "kind": "swing_high",
+            "label": "前波高點",
+            "value": 2500.0,
+            "date": "2026-07-06"
+          },
+          {
+            "kind": "swing_high",
+            "label": "前波高點",
+            "value": 2500.0,
+            "date": "2026-07-07"
+          },
+          {
+            "kind": "swing_high",
+            "label": "前波高點",
+            "value": 2505.0,
+            "date": "2026-07-01"
+          },
+          {
+            "kind": "swing_high",
+            "label": "前波高點",
+            "value": 2505.0,
+            "date": "2026-09-08"
+          },
+          {
+            "kind": "breakout_failure",
+            "label": "假突破價位",
+            "value": 2505.0,
+            "date": "2026-09-22"
+          },
+          {
+            "kind": "swing_high",
+            "label": "前波高點",
+            "value": 2510.0,
+            "date": "2026-09-22"
+          },
+          {
+            "kind": "breakout_failure",
+            "label": "假突破價位",
+            "value": 2510.0,
+            "date": "2026-10-02"
+          },
+          {
+            "kind": "heavy_high",
+            "label": "大量成交日高點",
+            "value": 2510.0,
+            "date": "2026-10-13"
+          },
+          {
+            "kind": "swing_high",
+            "label": "前波高點",
+            "value": 2535.0,
+            "date": "2026-06-23"
+          }
+        ]
+      },
+      {
+        "tick": 2590.0,
+        "level": 2588.1,
+        "low": 2585.0,
+        "high": 2590.0,
+        "distance_pct": 21.22,
+        "tier": "far",
+        "signal_count": 5,
+        "structural": true,
+        "strength_score": 7.6,
+        "sources": [
+          {
+            "kind": "high_20",
+            "label": "近 20 日收盤高點",
+            "value": 2585.0,
+            "date": null
+          },
+          {
+            "kind": "high_60",
+            "label": "近 60 日收盤高點",
+            "value": 2585.0,
+            "date": null
+          },
+          {
+            "kind": "prior_high_20",
+            "label": "前 20 日盤中高點",
+            "value": 2590.0,
+            "date": null
+          },
+          {
+            "kind": "intraday_high_60",
+            "label": "近 60 日盤中高點",
+            "value": 2590.0,
+            "date": null
+          },
+          {
+            "kind": "swing_high",
+            "label": "前波高點",
+            "value": 2590.0,
+            "date": "2026-10-06"
+          }
+        ]
+      }
+    ],
+    "support_all": [
+      {
+        "tick": 2080.0,
+        "level": 2079.48,
+        "low": 2079.48,
+        "high": 2079.48,
+        "distance_pct": -2.6,
+        "tier": "near",
+        "signal_count": 1,
+        "structural": true,
+        "strength_score": 1.0,
+        "sources": [
+          {
+            "kind": "ma240",
+            "label": "MA240",
+            "value": 2079.48,
+            "date": null
+          }
+        ]
+      },
+      {
+        "tick": 2020.0,
+        "level": 2020.0,
+        "low": 2020.0,
+        "high": 2020.0,
+        "distance_pct": -5.39,
+        "tier": "near",
+        "signal_count": 2,
+        "structural": true,
+        "strength_score": null,
+        "sources": [
+          {
+            "kind": "low_20",
+            "label": "近 20 日盤中低點",
+            "value": 2020.0,
+            "date": null
+          },
+          {
+            "kind": "heavy_low",
+            "label": "大量成交日低點",
+            "value": 2020.0,
+            "date": "2026-11-06"
+          }
+        ]
+      }
+    ],
+    "no_resistance_above": false,
+    "limit_up_reference": null
+  },
+  "defense": {
+    "status": "pending_observation_zone",
+    "label": "待觀察區",
+    "value_if_zone_not_formed": 2020.0,
+    "rule": "觀察區已形成：min(近 20 日盤中最低, 觀察區下緣 − 1.5×ATR14)；未形成：近 20 日盤中最低",
+    "verified": "198/198（含已形成 36、未形成 162）"
+  },
+  "trend_classification": {
+    "status": "pending_composite_score",
+    "label": "待總分",
+    "value": null,
+    "rule": "評分≤35 或 (RSI14≤25 且 評分<45) → 風險；否則 評分≥75 → 強勢；評分<45 → 偏弱；其餘 觀察"
+  },
+  "conditions": {
+    "confirmed": {
+      "ma_trend": {
+        "state": "off",
+        "name": "均線多頭結構",
+        "definition": "收盤價站上 MA5／MA20，且短均在長均之上、中期均線多頭排列",
+        "rule": "收盤>MA5 或 收盤>MA20 → 成立；否則 MA20>MA60 → 確認中；否則 未成立",
+        "verified": "100%／100%；100%／100%",
+        "label": "與原站樣本相符"
+      },
+      "kd_bullish": {
+        "state": "triggered",
+        "name": "KD 黃金交叉",
+        "definition": "K 值向上穿越 D 值",
+        "rule": "K9>D9（初值 50）",
+        "verified": "100%／100%；100%／100%",
+        "label": "與原站樣本相符"
+      },
+      "momentum_overheated": {
+        "state": "confirming",
+        "name": "動能過熱鈍化",
+        "definition": "RSI 進入過熱鈍化區或 KD 位於高檔",
+        "rule": "RSI14（簡單平均）≥75 或 K9≥85 → 成立；否則 確認中",
+        "verified": "100%／100%；100%／100%",
+        "label": "與原站樣本相符"
+      },
+      "near_prior_high": {
+        "state": "off",
+        "name": "逼近前波高點",
+        "definition": "收盤價逼近近 20 日高點區",
+        "rule": "收盤 ≥ 0.98 × 近 20 日收盤最高",
+        "verified": "100%／100%；100%／100%",
+        "label": "與原站樣本相符"
+      },
+      "volume_confirmed": {
+        "state": "confirming",
+        "name": "量能確認",
+        "definition": "上漲日成交量高於均量，價量同步",
+        "rule": "當日上漲 且 量比>1 → 成立；否則 確認中",
+        "verified": "100%／97.6%；100%／97.9%",
+        "label": "與原站樣本相符"
+      },
+      "heavy_volume_stall": {
+        "state": "triggered",
+        "name": "爆量未推升",
+        "definition": "爆量但價未推進，或留下明顯長上影線",
+        "rule": "量比≥2 且 當日漲跌幅≤0",
+        "verified": "100%／100%；100%／100%",
+        "label": "與原站樣本相符"
+      },
+      "revenue_decline": {
+        "state": "off",
+        "name": "營收衰退風險",
+        "definition": "月營收出現重大衰退",
+        "rule": "月營收年增≤−20%",
+        "verified": "100%／100%；100%／100%",
+        "label": "與原站樣本相符"
+      },
+      "securities_lending_sale": {
+        "state": "triggered",
+        "name": "借券賣壓",
+        "definition": "借券餘額大幅增加或借券賣出量放大",
+        "rule": "前一交易日借券賣出>0",
+        "verified": "100%／100%；100%／100%",
+        "label": "與原站樣本相符"
+      }
+    },
+    "approximate": {
+      "macd_bullish": {
+        "state": "off",
+        "name": "MACD 動能翻多",
+        "definition": "MACD 柱狀體翻正且 MACD 在訊號線之上",
+        "rule": "hist>0 且 DIF>DEA（12/26/9，柱＝DIF−DEA）",
+        "verified": "97.9%／95.2%；98.0%／93.6%",
+        "label": "近似（吻合率 80～95%）"
+      },
+      "margin_healthy": {
+        "state": "off",
+        "name": "融資籌碼健康",
+        "definition": "股價上漲同時融資減少，或融資變化未同步放大",
+        "rule": "當日上漲 且 5 日融資增減<0（融資取前一交易日）",
+        "verified": "96.6%／95.2%；96.7%／93.6%",
+        "label": "近似（吻合率 80～95%）"
+      },
+      "short_interest": {
+        "state": "triggered",
+        "name": "融券回補潛力",
+        "definition": "融券餘額增加，形成潛在回補力道",
+        "rule": "融券餘額>0（前一交易日）",
+        "verified": "92.5%／92.9%；92.1%／93.6%",
+        "label": "近似（吻合率 80～95%）"
+      },
+      "institutional_reversal": {
+        "state": "off",
+        "name": "法人買賣轉向",
+        "definition": "由賣轉買（轉正）或由買轉賣（轉負）",
+        "rule": "當日三大法人合計與 5 日合計反號",
+        "verified": "89.7%／90.5%；88.7%／91.5%",
+        "label": "近似（吻合率 80～95%）"
+      },
+      "valuation_low_pe": {
+        "state": "off",
+        "name": "估值結構",
+        "definition": "本益比偏低為優勢；高估值且無成長支撐或股價淨值比偏高為風險",
+        "rule": "0<本益比≤15（本益比取前一交易日）",
+        "verified": "80.8%／85.7%；81.5%／87.2%",
+        "label": "近似（吻合率 80～95%）"
+      },
+      "volume_contraction": {
+        "state": "off",
+        "name": "量縮整理",
+        "definition": "回檔量縮整理形成平台；高檔量縮則視為承接轉弱",
+        "rule": "量比<0.7",
+        "verified": "98.2%／94.4%；98.2%／93.6%（第三輪 360 檔）",
+        "label": "近似（吻合率 80～95%）"
+      }
+    },
+    "pending": {
+      "status": "pending_reverse_engineering",
+      "label": "待反推",
+      "count": 10
+    },
+    "sample": {
+      "size": 198,
+      "source": "參考站會員樣本第二輪（2026-11-06）"
+    }
+  },
+  "trading_rules": {
+    "status": "not_provided_by_source",
+    "label": "原站明示不提供買賣建議",
+    "quote": "結構觀察區是依價格結構整理出的相對位置區間，不是買賣建議，也不代表價格漲到區間上緣前都適合進場。上緣不是目標價。"
+  },
+  "reference": {
+    "low20_intraday": {
+      "value": 2020.0,
+      "label": "近 20 日盤中低點",
+      "note": "事實資料；觀察區未形成時即為防守價"
+    }
+  },
+  "undisclosed": {
+    "observation_zone": {
+      "status": "undisclosed",
+      "label": "原站未公開"
+    },
+    "composite_score": {
+      "status": "undisclosed",
+      "label": "原站未公開"
+    },
+    "condition_thresholds": {
+      "status": "undisclosed",
+      "label": "原站未公開"
+    }
+  },
+  "provenance": {
+    "indicators": {
+      "level": "reference_reproduced",
+      "note": "均線（含 MA240）、RSI14、ATR14 與 20 日高低與原站算法相容"
+    },
+    "relative_volume": {
+      "level": "reference_reproduced",
+      "note": "均量窗口的取法依研究樣本相容"
+    },
+    "levels": {
+      "level": "reference_reproduced",
+      "note": "來源、聚合容差、分群、距離分級與申報價位單位與原站算法相容；可觀察範圍與第一／第二壓力選取依會員回應 198/198"
+    },
+    "limit_up_reference": {
+      "level": "reference_text",
+      "note": "原站說明：創新高且上方無歷史結構時，以 10% 漲跌幅推算的明日漲停參考價標示（非結構價位）"
+    },
+    "defense": {
+      "level": "reference_reproduced",
+      "note": "會員第二輪 198/198；觀察區已形成時依賴觀察區下緣，錨點仍在反推"
+    },
+    "conditions": {
+      "level": "reference_reproduced",
+      "note": "條件文字取自原站會員頁；門檻依會員樣本反推，逐條附吻合率"
+    },
+    "trend_classification": {
+      "level": "reference_reproduced",
+      "note": "原站前端分類函式 198/198，但須有綜合評分，評分仍在反推"
+    },
+    "high_20_high_60_weights": {
+      "level": "partially_undisclosed",
+      "note": "近 20／60 日收盤高點的個別權重原站未公開，同價合計與原站一致"
+    },
+    "gap_candidates": {
+      "level": "partially_undisclosed",
+      "note": "缺口判定方式相容，完整候選母集合原站未公開"
+    },
+    "chart": {
+      "level": "generic_indicator",
+      "note": "MACD 為通用指標，非原站規則"
+    },
+    "reference": {
+      "level": "fact",
+      "note": "事實資料"
+    }
+  },
+  "bars": [
+    {
+      "date": "2026-05-14",
+      "open": 2250.0,
+      "high": 2270.0,
+      "low": 2230.0,
+      "close": 2270.0,
+      "volume": 39564699
+    },
+    {
+      "date": "2026-05-15",
+      "open": 2310.0,
+      "high": 2325.0,
+      "low": 2250.0,
+      "close": 2265.0,
+      "volume": 34360513
+    },
+    {
+      "date": "2026-05-18",
+      "open": 2225.0,
+      "high": 2260.0,
+      "low": 2215.0,
+      "close": 2240.0,
+      "volume": 32966937
+    }
+  ],
+  "chart": {
+    "parameters": {
+      "fast": 12,
+      "slow": 26,
+      "signal": 9,
+      "histogram_multiplier": 1,
+      "seed": "first_close",
+      "warmup_bars": 34,
+      "precision": 3,
+      "missing_policy": "omit_missing_price_rows",
+      "version": "macd-first-close-v1"
+    },
+    "macd": [
+      {
+        "date": "2026-05-14",
+        "dif": 79.938,
+        "dea": 84.974,
+        "hist": -5.036,
+        "ready": true
+      },
+      {
+        "date": "2026-05-15",
+        "dif": 77.104,
+        "dea": 83.4,
+        "hist": -6.296,
+        "ready": true
+      },
+      {
+        "date": "2026-05-18",
+        "dif": 72.011,
+        "dea": 81.122,
+        "hist": -9.111,
+        "ready": true
+      }
+    ]
+  },
+  "labels": {
+    "not_advice": "分析數字是參考，不是買賣指令",
+    "price_basis": "價格未還原權值"
+  }
+}

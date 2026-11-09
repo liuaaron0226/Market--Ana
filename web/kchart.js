@@ -5,15 +5,34 @@
   'use strict';
   const DPR = () => Math.max(1, Math.min(3, window.devicePixelRatio || 1));
   function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
-  function fmt(n, d = 2) { return Number(n).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }); }
+  // 價籤用：千元以上取整；以下保留到台股升降單位（最多兩位小數，去掉尾端 0）。
+  function fmtTag(n) { return !Number.isFinite(n) ? '缺值' : n >= 1000 ? fmt(n, 0) : n.toLocaleString('en-US', { maximumFractionDigits: 2 }); }
+  function fmt(n, d = 2) { return Number.isFinite(n) ? n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }) : '缺值'; }
+  const hasPrice = candle => ['open', 'high', 'low', 'close'].every(key => Number.isFinite(candle[key]));
 
   function ema(values, n) { const k = 2 / (n + 1); let prev = null; return values.map(v => (prev = prev === null ? v : v * k + prev * (1 - k))); }
-  function sma(values, n) { let sum = 0; return values.map((v, i) => { sum += v; if (i >= n) sum -= values[i - n]; return i >= n - 1 ? sum / n : null; }); }
+  function sma(values, n) {
+    let sum = 0, count = 0;
+    return values.map((v, i) => {
+      if (!Number.isFinite(v)) { sum = 0; count = 0; return null; }
+      sum += v; count++;
+      if (count > n) sum -= values[i - n];
+      return count >= n ? sum / n : null;
+    });
+  }
   function macd(closes) {
-    const e12 = ema(closes, 12), e26 = ema(closes, 26);
-    const dif = closes.map((_, i) => e12[i] - e26[i]);
-    const dea = ema(dif, 9);
-    return closes.map((_, i) => ({ dif: dif[i], dea: dea[i], hist: (dif[i] - dea[i]) * 2, ready: i >= 33 }));
+    let fast = null, slow = null, signal = null, count = 0;
+    return closes.map(close => {
+      if (!Number.isFinite(close)) {
+        fast = slow = signal = null; count = 0;
+        return { dif: null, dea: null, hist: null, ready: false };
+      }
+      fast = fast === null ? close : fast + (close - fast) * 2 / 13;
+      slow = slow === null ? close : slow + (close - slow) * 2 / 27;
+      const dif = fast - slow;
+      signal = signal === null ? dif : signal + (dif - signal) * 2 / 10;
+      return { dif, dea: signal, hist: dif - signal, ready: ++count >= 34 };
+    });
   }
 
   class KChart {
@@ -25,25 +44,38 @@
       this.canvas.style.cssText = 'display:block;width:100%;touch-action:none;cursor:grab;border-radius:10px';
       host.append(this.canvas);
       this.tip = document.createElement('div'); this.tip.className = 'kc-tip'; host.append(this.tip);
-      this.candles = []; this.view = { end: 0, count: 60 }; this.hover = -1; this.overlays = [];
+      this.candles = []; this.view = { end: 0, count: 60 }; this.hover = -1; this.selection = -1; this.overlays = [];
       this.showMacd = this.opts.macd !== false;
-      this.bind();
+      this.bindCanvas(this.canvas);
+      this.studies = this.opts.studyHost ? new window.ChartStudies(this, this.opts.studyHost, { volumeKind: this.opts.volumeKind || 'amount', studies: this.opts.studies }) : null;
+      if (this.studies) document.addEventListener('pointerdown', event => {
+        if (![this.host, this.opts.studyHost, ...(this.opts.selectionRoots || [])].some(root => root.contains(event.target)) && this.hover >= 0) {
+          this.clearSelection();
+        }
+      });
       new ResizeObserver(() => this.draw()).observe(host);
     }
     setData(candles, opts = {}) {
       this.unit = opts.unit || '日';
+      this.sourceMacd = opts.macd || null;
+      this.macdNotice = opts.macdNotice || '';
       this.compute(candles);
       const count = Math.min(candles.length, opts.count || this.view.count || 60);
       this.view = { end: candles.length, count };
-      this.hover = -1;
+      this.hover = -1; this.selection = -1;
       this.overlays = opts.overlays || [];
       this.draw(); this.emit();
     }
     compute(candles) {
       this.candles = candles; this.shownLength = candles.length;
-      const closes = candles.map(c => c.close);
+      const closes = candles.map(c => hasPrice(c) ? c.close : null);
       this.ma = { 5: sma(closes, 5), 20: sma(closes, 20), 60: sma(closes, 60) };
-      this.macd = macd(closes);
+      const supplied = this.sourceMacd && new Map(this.sourceMacd.map(row => [row.date, row]));
+      this.macd = supplied ? candles.map(c => {
+        const row = supplied.get(c.t);
+        return row && row.ready && ['dif', 'dea', 'hist'].every(k => Number.isFinite(row[k]))
+          ? row : { dif: null, dea: null, hist: null, ready: false };
+      }) : macd(closes);
       if (candles.length) this.canvas.setAttribute('aria-label', `加權指數${this.unit}K，共${candles.length}根，${candles[0].label}至${candles[candles.length - 1].label}。可拖曳平移、滾輪縮放。`);
     }
     update(candles, overlays) {
@@ -55,7 +87,9 @@
     }
     clamp() {
       const n = this.candles.length;
-      this.view.count = Math.max(Math.min(15, n), Math.min(n, Math.round(this.view.count)));
+      const requestedMin = Number(this.opts.minViewCount);
+      const minCount = Math.min(Number.isFinite(requestedMin) ? Math.max(1, Math.round(requestedMin)) : 15, n);
+      this.view.count = Math.max(minCount, Math.min(n, Math.round(this.view.count)));
       this.view.end = Math.max(this.view.count, Math.min(n, this.view.end));
     }
     zoom(factor, anchorRatio = 1) {
@@ -68,33 +102,56 @@
     pan(delta) { this.view.end += delta; this.clamp(); this.draw(); this.emit(); }
     reset() { this.view.end = this.candles.length; this.view.count = Math.min(this.candles.length, 60); this.draw(); this.emit(); }
     emit() { if (this.opts.onView) { const s = this.view.end - this.view.count; this.opts.onView(this.candles[s], this.candles[this.view.end - 1], this.view.end === this.candles.length); } }
-    bind() {
-      const c = this.canvas; let drag = null; const pts = new Map();
+    clearSelection() {
+      this.hover = -1; this.selection = -1;
+      if (this.opts.onClear) this.opts.onClear();
+      this.draw();
+    }
+    bindCanvas(c) {
+      let drag = null; const pts = new Map();
       const geo = () => this.geo;
       c.addEventListener('pointerdown', e => {
         c.setPointerCapture(e.pointerId); pts.set(e.pointerId, e.clientX);
-        if (pts.size === 1) drag = { x: e.clientX, end: this.view.end, moved: false };
-        if (pts.size === 2) { const xs = [...pts.values()]; drag = { pinch: Math.abs(xs[0] - xs[1]), count: this.view.count, end: this.view.end }; }
+        if (pts.size === 1) drag = { x: e.clientX, y: e.clientY, end: this.view.end, moved: false, studySwipe: c !== this.canvas && !!this.studies };
+        if (pts.size === 2) { const xs = [...pts.values()]; drag = { pinch: Math.abs(xs[0] - xs[1]), count: this.view.count, end: this.view.end, studySwipe: c !== this.canvas && !!this.studies }; }
         c.style.cursor = 'grabbing';
+        if (drag?.studySwipe) { this.hover = this.selection; this.draw(); }
       });
       c.addEventListener('pointermove', e => {
         const g = geo(); if (!g) return;
         if (pts.has(e.pointerId)) pts.set(e.pointerId, e.clientX);
         const rect = c.getBoundingClientRect(); const x = e.clientX - rect.left;
         if (drag && pts.size === 2 && drag.pinch) {
+          if (drag.studySwipe) return;
           const xs = [...pts.values()]; const d = Math.max(20, Math.abs(xs[0] - xs[1]));
           this.view.count = drag.count * drag.pinch / d; this.view.end = drag.end; this.clamp(); this.draw(); this.emit(); return;
         }
         if (drag && pts.size === 1) {
-          const dx = e.clientX - drag.x; if (Math.abs(dx) > 3) drag.moved = true;
+          const dx = e.clientX - drag.x; if ((drag.studySwipe ? Math.hypot(dx, e.clientY - drag.y) : Math.abs(dx)) > 3) drag.moved = true;
+          if (drag.studySwipe) return;
           this.view.end = Math.round(drag.end - dx / g.step); this.clamp();
         }
         this.hover = x >= g.l && x <= g.l + g.pw ? g.start + Math.floor((x - g.l) / g.step) : -1;
         this.draw(); if (drag && drag.moved) this.emit();
       });
-      const up = e => { pts.delete(e.pointerId); if (pts.size === 0) { drag = null; c.style.cursor = 'grab'; } };
+      const up = e => {
+        if (e.type === 'pointerup' && drag?.studySwipe && drag.moved && !drag.pinch) {
+          const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+          if (Math.abs(dx) >= 40 && Math.abs(dx) > Math.abs(dy) * 1.3) this.studies.switchBy(dx < 0 ? 1 : -1);
+        }
+        if (e.type === 'pointerup' && drag && !drag.moved && !drag.pinch && this.geo) {
+          const g = this.geo, px = e.clientX - c.getBoundingClientRect().left;
+          this.hover = px >= g.l && px <= g.l + g.pw
+            ? Math.min(this.view.end - 1, g.start + Math.floor((px - g.l) / g.step)) : -1;
+          this.selection = this.hover;
+          if (c !== this.canvas && this.hover >= 0 && this.opts.onSelect) this.opts.onSelect(this.hover, c);
+          this.draw();
+        }
+        pts.delete(e.pointerId);
+        if (pts.size === 0) { drag = null; c.style.cursor = 'grab'; }
+      };
       c.addEventListener('pointerup', up); c.addEventListener('pointercancel', up);
-      c.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse' && !drag) { this.hover = -1; this.draw(); } });
+      c.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse' && !drag) { this.hover = this.selection; this.draw(); } });
       c.addEventListener('wheel', e => {
         const g = geo(); if (!g) return; e.preventDefault();
         const rect = c.getBoundingClientRect(); const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left - g.l) / g.pw));
@@ -108,30 +165,95 @@
         else if (e.key === '-') { e.preventDefault(); this.zoom(1.25); }
         else if (e.key === 'Home') { e.preventDefault(); this.view.end = this.view.count; this.clamp(); this.draw(); this.emit(); }
         else if (e.key === 'End') { e.preventDefault(); this.reset(); }
+        else if (e.key === 'Escape') { e.preventDefault(); this.clearSelection(); }
+        else if (e.key === 'Enter' && c !== this.canvas) {
+          e.preventDefault(); this.hover = this.selection = this.view.end - 1;
+          if (this.opts.onSelect) this.opts.onSelect(this.hover, c);
+          this.draw();
+        }
       });
     }
     draw() {
-      const c = this.canvas, n = this.candles.length; if (!n) return;
+      const c = this.canvas, n = this.candles.length;
+      if (!n) {
+        c.getContext('2d').clearRect(0, 0, c.width, c.height);
+        c.setAttribute('aria-label', '尚無K線資料');
+        this.tip.classList.remove('show'); this.geo = null;
+        if (this.studies) this.studies.draw();
+        return;
+      }
       const W = this.host.clientWidth || 600, H = this.opts.height ? this.opts.height(W) : Math.max(300, Math.min(460, W * .56));
       const dpr = DPR(); c.width = W * dpr; c.height = H * dpr; c.style.height = H + 'px';
       const x = c.getContext('2d'); x.setTransform(dpr, 0, 0, dpr, 0, 0); x.clearRect(0, 0, W, H);
       const stacked = this.opts.overlayLabels === 'stacked';
-      const l = 4, r = stacked ? (W < 520 ? 150 : 176) : 64, t = 10, b = 22, macdH = this.showMacd ? Math.round(H * .24) : 0, gapH = this.showMacd ? 10 : 0;
+      const compactStacked = stacked && W < 520;
+      const compactRail = Math.min(102, Math.max(92, Math.round(W * .33)));
+      const requestedLeft = typeof this.opts.leftRail === 'function' ? this.opts.leftRail(W) : this.opts.leftRail;
+      const l = Math.max(4, Number.isFinite(Number(requestedLeft)) ? Math.round(Number(requestedLeft)) : 4);
+      const tags = this.opts.overlayLabels === 'tags';
+      // 價籤寬度：五位數或帶兩位小數（例如 128.5、28.35）都要加寬，避免文字擠到短名上。
+      const tagWide = tags && this.overlays.concat(this.candles.slice(-1)).some(o => {
+        const v = o.value ?? o.close; return v >= 10000 || (v < 1000 && fmtTag(v).length >= 6);
+      });
+      const r = tags ? (W < 520 ? (tagWide ? 84 : 66) : (tagWide ? 100 : 78)) : stacked ? (compactStacked ? compactRail : 176) : 64, t = 10, b = 22, macdH = this.showMacd ? Math.round(H * .24) : 0, gapH = this.showMacd ? 10 : 0;
       const pw = W - l - r, ph = H - t - b - macdH - gapH;
       const start = this.view.end - this.view.count, end = this.view.end, step = pw / this.view.count;
       this.geo = { l, pw, step, start };
+      if (this.selection >= 0 && (this.selection < start || this.selection >= end)) {
+        this.selection = -1; this.hover = -1;
+        if (this.opts.onClear) this.opts.onClear();
+      }
       const vis = this.candles.slice(start, end);
-      let lo = Math.min(...vis.map(c => c.low)), hi = Math.max(...vis.map(c => c.high));
+      const prices = vis.filter(hasPrice);
+      if (!prices.length) {
+        x.fillStyle = css('--dim'); x.font = '13px "Noto Sans TC","Microsoft JhengHei",sans-serif';
+        x.fillText('此區間OHLC資料不足', 12, 32);
+        this.tip.classList.remove('show');
+        if (this.studies) this.studies.draw();
+        return;
+      }
+      let lo = Math.min(...prices.map(c => c.low)), hi = Math.max(...prices.map(c => c.high));
       this.overlays.forEach(o => { if (o.inView !== false) { lo = Math.min(lo, o.value); hi = Math.max(hi, o.value); } });
       const pad = (hi - lo) * .07 || 10; lo -= pad; hi += pad;
       const y = v => t + (hi - v) / (hi - lo) * ph;
       const line = css('--line'), dim = css('--faint'), ink = css('--ink'), up = css('--up'), dn = css('--down');
       x.font = '11.5px "JetBrains Mono",Consolas,monospace'; x.textBaseline = 'middle';
+      // 範例（unslop 11-09）：價位標籤釘在價格軸上；先算位置，刻度文字再避開。
+      const tagH = 18, tagGap = 20, tagX = l + pw + 4, tagW = r - 6;
+      const tagSlots = [];
+      if (tags) {
+        // 收盤也當成一枚價籤一起排序：先由上往下確保間距，再由下往上收回界內，順序永遠跟價位一致。
+        const lc = this.view.end === n && hasPrice(this.candles[n - 1]) ? this.candles[n - 1].close : null;
+        const items = this.overlays.map(o => ({ o, value: o.value }));
+        if (lc !== null) items.push({ o: null, value: lc, close: true });
+        items.sort((a2, b2) => b2.value - a2.value);
+        const top0 = t + tagH / 2, bot = t + ph - tagH / 2;
+        items.forEach((it, i) => {
+          it.yy = y(it.value);
+          it.slot = Math.max(it.yy, i ? items[i - 1].slot + tagGap : top0);
+        });
+        for (let i = items.length - 1; i >= 0; i--) {
+          const lim = i === items.length - 1 ? bot : items[i + 1].slot - tagGap;
+          if (items[i].slot > lim) items[i].slot = lim;
+        }
+        tagSlots.push(...items);
+      }
       // 價格刻度
+      const axisBoxes = [];
       const raw = (hi - lo) / 5, mag = Math.pow(10, Math.floor(Math.log10(raw))), tick = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s >= raw);
+      // 現價標籤（最右一根在畫面內才畫）所占的高度區間：與它重疊的刻度只略過文字、保留格線（本人 11-07：現價不可壓字）。
+      const lastClose = this.view.end === n && hasPrice(this.candles[n - 1]) ? this.candles[n - 1].close : null;
+      const tagTop = lastClose === null ? null : y(lastClose) - 9, tagBottom = tagTop === null ? null : tagTop + 18;
       for (let v = Math.ceil(lo / tick) * tick; v <= hi; v += tick) {
         x.strokeStyle = line; x.lineWidth = 1; x.beginPath(); x.moveTo(l, Math.round(y(v)) + .5); x.lineTo(l + pw, Math.round(y(v)) + .5); x.stroke();
+        const boxTop = y(v) - 7;
+        if (tagTop !== null && boxTop < tagBottom + 1 && tagTop - 1 < boxTop + 14) continue;
+        if (boxTop < 0 || boxTop + 14 > H) continue; // 最上／最下貼邊會被裁切的刻度不寫
+        // 手機個股圖把有限的右側空間留給有語意的關鍵價位；格線仍保留刻度感。
+        if (compactStacked) continue;
+        if (tags && tagSlots.some(g => Math.abs(g.slot - y(v)) < tagH)) continue;
         x.fillStyle = dim; x.fillText(fmt(v, 0), l + pw + 8, y(v));
+        axisBoxes.push({ y: boxTop, h: 14, v });
       }
       // 時間刻度
       x.textBaseline = 'alphabetic'; let lastKey = '';
@@ -144,26 +266,59 @@
       });
       // 判斷線
       const sortedOv = [...this.overlays].sort((a, b2) => b2.value - a.value);
-      if (stacked) {
+      if (tags) {
+        const boxes = [];
+        tagSlots.filter(g => !g.close).forEach(({ o, yy, slot }) => {
+          const col = o.color || css('--gold');
+          // 整條淡細實線＋右端一小段實色錨點
+          x.strokeStyle = col; x.lineWidth = 1; x.globalAlpha = .38;
+          x.beginPath(); x.moveTo(l, Math.round(yy) + .5); x.lineTo(l + pw, Math.round(yy) + .5); x.stroke();
+          x.globalAlpha = 1; x.lineWidth = 2;
+          x.beginPath(); x.moveTo(l + pw - 20, Math.round(yy) + .5); x.lineTo(l + pw, Math.round(yy) + .5); x.stroke();
+          // 標籤被擠開時，才畫一小段折線接回
+          if (Math.abs(slot - yy) > 1) {
+            x.lineWidth = 1; x.beginPath(); x.moveTo(l + pw, yy); x.lineTo(l + pw + 2, yy); x.lineTo(tagX, slot); x.stroke();
+          }
+          x.fillStyle = col;
+          x.beginPath(); x.roundRect ? x.roundRect(tagX, slot - tagH / 2, tagW, tagH, 4) : x.rect(tagX, slot - tagH / 2, tagW, tagH); x.fill();
+          x.fillStyle = css('--bg'); x.textBaseline = 'middle'; x.textAlign = 'left';
+          x.font = '500 11px "Noto Sans TC","Microsoft JhengHei",sans-serif';
+          x.fillText(o.short || '', tagX + 6, slot + .5);
+          x.font = '500 11.5px "JetBrains Mono",Consolas,monospace'; x.textAlign = 'right';
+          x.fillText(fmtTag(o.value), tagX + tagW - 6, slot + .5);
+          x.textAlign = 'left'; x.textBaseline = 'alphabetic';
+          boxes.push({ y: slot - tagH / 2, h: tagH, label: o.label });
+        });
+        window.__kchartLabelBoxes = boxes;
+        x.font = '11.5px "JetBrains Mono",Consolas,monospace';
+      } else if (stacked) {
         // 個股頁用：標籤放右側價格欄外，依價位由上而下排；彼此至少隔 gap，且避開最新價框，用短引線連回實際價位。
         const gap = 19, top0 = t + 8, bottom = t + ph - 8;
+        // 手機共用同一條價位欄，標籤中心須避開最新價框；桌面仍維持雙欄。
+        const blocked = compactStacked && tagTop !== null ? { min: tagTop - 9, max: tagBottom + 9 } : null;
+        const avoidPrice = (slot, direction) => !blocked || slot < blocked.min || slot > blocked.max
+          ? slot : direction > 0 ? blocked.max : blocked.min;
         const slots = [];
         sortedOv.forEach(o => {
           let s = Math.max(y(o.value), slots.length ? slots[slots.length - 1] + gap : top0);
+          s = avoidPrice(s, 1);
           slots.push(s);
         });
-        // 超出底部就整串往上推（保持間距）。
+        // 超出底部就整串往上推（保持間距並再次避開最新價框）。
         for (let i = slots.length - 1; i >= 0; i--) {
           const limit = i === slots.length - 1 ? bottom : slots[i + 1] - gap;
-          if (slots[i] > limit) slots[i] = limit;
+          if (slots[i] > limit) slots[i] = avoidPrice(limit, -1);
         }
-        for (let i = 1; i < slots.length; i++) if (slots[i] < slots[i - 1] + gap) slots[i] = slots[i - 1] + gap;
+        for (let i = 1; i < slots.length; i++) {
+          const limit = slots[i - 1] + gap;
+          if (slots[i] < limit) slots[i] = avoidPrice(limit, 1);
+        }
         const boxes = [];
         sortedOv.forEach((o, k) => {
           const yy = y(o.value), ly = slots[k];
           x.strokeStyle = o.color || css('--gold'); x.setLineDash([5, 4]); x.lineWidth = 1.2;
           x.beginPath(); x.moveTo(l, yy); x.lineTo(l + pw, yy); x.stroke(); x.setLineDash([]);
-          const lx = l + pw + 52;
+          const lx = l + pw + (compactStacked ? 3 : 52);
           x.lineWidth = 1; x.beginPath(); x.moveTo(l + pw, yy); x.lineTo(lx, ly); x.stroke();
           x.font = '600 11.5px "JetBrains Mono",Consolas,monospace';
           const w = x.measureText(o.label).width + 10;
@@ -187,6 +342,7 @@
       // K棒
       const bw = Math.max(1, Math.min(14, step * .66));
       vis.forEach((c, i) => {
+        if (!hasPrice(c)) return;
         const cx = l + step * (i + .5), col = c.close >= c.open ? up : dn;
         x.strokeStyle = col; x.fillStyle = col; x.lineWidth = 1;
         x.beginPath(); x.moveTo(cx, y(c.high)); x.lineTo(cx, y(c.low)); x.stroke();
@@ -197,14 +353,26 @@
         } else x.fillRect(cx - bw / 2, top, bw, h);
       });
       // 均線
-      [[5, css('--dim'), 1.1], [20, css('--accent'), 1.8], [60, '#7d8cff', 1.4]].forEach(([p, col, w]) => {
+      [[5, css('--dim'), 1.1], [20, css('--accent'), 1.8], [60, css('--faint'), 1.2]].forEach(([p, col, w]) => {
         x.strokeStyle = col; x.lineWidth = w; x.beginPath(); let on = false;
         for (let i = start; i < end; i++) { const v = this.ma[p][i]; if (v == null) { on = false; continue; } const px = l + step * (i - start + .5); on ? x.lineTo(px, y(v)) : x.moveTo(px, y(v)); on = true; }
         x.stroke();
       });
       // 最新價標籤
       const last = this.candles[n - 1];
-      if (end === n) { const pw2 = stacked ? 46 : r - 4; x.fillStyle = ink; x.textBaseline = 'middle'; x.fillRect(l + pw + 2, y(last.close) - 9, pw2, 18); x.fillStyle = css('--bg'); x.fillText(fmt(last.close, 0), l + pw + 7, y(last.close)); }
+      if (tags && end === n && hasPrice(last)) {
+        const real = y(last.close), cs = tagSlots.find(g => g.close), py = cs ? cs.slot : real;
+        x.strokeStyle = ink; x.lineWidth = 1; x.setLineDash([2, 3]);
+        x.beginPath(); x.moveTo(l, Math.round(real) + .5); x.lineTo(l + pw, Math.round(real) + .5); x.stroke(); x.setLineDash([]);
+        if (Math.abs(py - real) > 1) { x.beginPath(); x.moveTo(l + pw, real); x.lineTo(l + pw + 2, real); x.lineTo(tagX, py); x.stroke(); }
+        x.fillStyle = ink; x.beginPath(); x.roundRect ? x.roundRect(tagX, py - tagH / 2, tagW, tagH, 4) : x.rect(tagX, py - tagH / 2, tagW, tagH); x.fill();
+        x.fillStyle = css('--bg'); x.textBaseline = 'middle';
+        x.font = '500 11px "Noto Sans TC","Microsoft JhengHei",sans-serif'; x.textAlign = 'left'; x.fillText('收盤', tagX + 6, py + .5);
+        x.font = '600 11.5px "JetBrains Mono",Consolas,monospace'; x.textAlign = 'right'; x.fillText(fmtTag(last.close), tagX + tagW - 6, py + .5);
+        x.textAlign = 'left'; x.font = '11.5px "JetBrains Mono",Consolas,monospace';
+      } else if (end === n && hasPrice(last)) { const pw2 = stacked ? 46 : r - 4; x.fillStyle = ink; x.textBaseline = 'middle'; x.fillRect(l + pw + 2, y(last.close) - 9, pw2, 18); x.fillStyle = css('--bg'); x.fillText(fmt(last.close, 0), l + pw + 7, y(last.close)); }
+      // 驗收用：右側刻度文字框與現價框的位置。
+      this.debugBoxes = { axis: axisBoxes, price: end === n && hasPrice(last) ? { y: y(last.close) - 9, h: 18 } : null, height: H };
       // MACD
       if (this.showMacd) {
         const top = H - macdH, mv = this.macd.slice(start, end).filter(m => m.ready);
@@ -219,11 +387,14 @@
       if (this.hover >= start && this.hover < end) {
         const i = this.hover, c = this.candles[i], cx = l + step * (i - start + .5);
         x.strokeStyle = dim; x.setLineDash([3, 3]); x.beginPath(); x.moveTo(cx, t); x.lineTo(cx, H - 4); x.stroke(); x.setLineDash([]);
-        const prev = this.candles[i - 1], chg = prev ? c.close - prev.close : 0, m = this.macd[i];
-        this.tip.innerHTML = `<b>${c.label}</b><span class="${chg < 0 ? 'dn' : 'upc'}">收 ${fmt(c.close)}　${chg >= 0 ? '+' : '−'}${fmt(Math.abs(chg))}</span><span>開 ${fmt(c.open)}　高 ${fmt(c.high)}　低 ${fmt(c.low)}</span>` + (c.amount != null ? `<span>成交 ${fmt(c.amount, 0)} 億</span>` : '') + (m.ready ? `<span>MACD柱 ${fmt(m.hist)}　DIF ${fmt(m.dif)}</span>` : '') + ['5', '20', '60'].map(p => this.ma[p][i] != null ? `MA${p} ${fmt(this.ma[p][i], 0)}` : '').filter(Boolean).join('　').replace(/^/, '<span>') + '</span>';
+        const prev = this.candles[i - 1], chg = prev && Number.isFinite(c.close) && Number.isFinite(prev.close) ? c.close - prev.close : NaN, m = this.macd[i];
+        this.tip.innerHTML = `<b>${c.label}</b><span class="${chg < 0 ? 'dn' : 'upc'}">收 ${fmt(c.close)}　${Number.isFinite(chg) ? `${chg >= 0 ? '+' : '−'}${fmt(Math.abs(chg))}` : '漲跌缺值'}</span><span>開 ${fmt(c.open)}　高 ${fmt(c.high)}　低 ${fmt(c.low)}</span>` + (this.opts.volumeKind === 'volume'
+          ? `<span>成交量 ${Number.isFinite(c.volume) ? `${fmt(c.volume / 1000)} 張（${fmt(c.volume, 0)} 股）` : '缺資料'}</span>`
+          : Number.isFinite(c.amount) ? `<span>成交金額 ${fmt(c.amount, 2)} 億元</span>` : '') + (m.ready ? `<span>MACD柱 ${fmt(m.hist)}　DIF ${fmt(m.dif)}</span>` : '') + ['5', '20', '60'].map(p => this.ma[p][i] != null ? `MA${p} ${fmt(this.ma[p][i], 0)}` : '').filter(Boolean).join('　').replace(/^/, '<span>') + '</span>';
         this.tip.classList.add('show');
-        const tw = this.tip.offsetWidth; this.tip.style.left = (cx + 14 + tw > W ? cx - tw - 14 : cx + 14) + 'px'; this.tip.style.top = '8px';
+        const tw = Math.min(this.tip.offsetWidth, W - 8); const want = cx + 14 + tw > W ? cx - tw - 14 : cx + 14; this.tip.style.left = Math.max(4, Math.min(W - tw - 4, want)) + 'px'; this.tip.style.top = '8px'; // 手機窄圖：左右都夾在圖表內，不出界
       } else this.tip.classList.remove('show');
+      if (this.studies) this.studies.draw();
     }
   }
   window.KChart = KChart;

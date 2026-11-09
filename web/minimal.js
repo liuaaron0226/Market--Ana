@@ -16,6 +16,8 @@
   const $ = id => document.getElementById(id);
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
   const isMobile = () => matchMedia('(max-width: 760px)').matches;
+  // 收復／防守改由 K 線軸上價籤顯示線與數字（unslop 11-09），左側不再留浮鈕欄。
+  const marketLabelRail = () => 4;
   const outcomeLabels = {
     stand_back: '站回收復線',
     between: '兩線之間',
@@ -30,6 +32,8 @@
     weekly: '週K',
     monthly: '月K'
   };
+  const minutePeriods = new Set(['m1', 'm5', 'm15']);
+  const isMinutePeriod = period => minutePeriods.has(period);
 
   const els = {
     price: $('currentPrice'),
@@ -44,11 +48,14 @@
     service: $('serviceNote'),
     chartContext: $('chartContext'),
     chartStage: $('chartStage'),
+    chartActions: $('chartActions'),
+    chartTools: $('chartToolsToggle'),
     chartHost: $('mainChart'),
     chartSummary: $('chartSummary'),
     period: $('periodSelect'),
     reset: $('resetView'),
     forming: $('formingBadge'),
+    provisional: $('provisionalBadge'),
     estimate: $('estimateBadge'),
     upper: $('upperValue'),
     lower: $('lowerValue'),
@@ -204,7 +211,10 @@
     els.scenarioDate.textContent = shortDate(scenarioDate);
     els.analysisDate.title = A.meta.cutoff_date || D.market_date || '';
     els.scenarioDate.title = scenarioDate || '';
-    els.conclusion.textContent = headlineSummary();
+    // 標題與語氣各自不斷行：只在「｜」處換行，避免「長下／影」這種把詞拆開的斷法。textContent 不變。
+    const title = HEADLINE.title || '方向待確認';
+    els.conclusion.replaceChildren(Object.assign(document.createElement('span'), { className: 'nowrap-phrase', textContent: title }));
+    if (HEADLINE.tone) els.conclusion.append('｜', Object.assign(document.createElement('span'), { className: 'nowrap-phrase', textContent: HEADLINE.tone }));
   }
 
   function setOffline(message) {
@@ -214,12 +224,12 @@
     els.service.textContent = message;
     setMarketHeader(fallbackMarketData(), { id: 'closed', label: '即時服務未啟動' }, D.market_date || A.meta.cutoff_date);
     setIntradayOptions(false);
-    loadPeriod(currentPeriod.startsWith('m') ? 'daily' : currentPeriod, true);
+    loadPeriod(isMinutePeriod(currentPeriod) ? 'daily' : currentPeriod, true);
   }
 
   function setIntradayOptions(enabled) {
     [...els.period.options].forEach(option => {
-      if (option.value.startsWith('m')) option.disabled = !enabled;
+      if (isMinutePeriod(option.value)) option.disabled = !enabled;
     });
   }
 
@@ -228,15 +238,15 @@
     const label = unit === '60分'
       ? `${datePart(date).slice(5).replace('-', '/')} ${String(row.time || row.timestamp || '').slice(11, 16)}`
       : row.label || String(date || '').slice(5).replace('-', '/');
-    const rawAmount = Number(row.amount ?? row.turnover);
+    const rawAmount = row.amount ?? row.turnover;
     return {
       t: date,
       label,
-      open: Number(row.open),
-      high: Number(row.high),
-      low: Number(row.low),
-      close: Number(row.close),
-      amount: Number.isFinite(rawAmount) ? (rawAmount > 10_000_000 ? rawAmount / 100_000_000 : rawAmount) : null
+      open: Number.isFinite(row.open) ? row.open : null,
+      high: Number.isFinite(row.high) ? row.high : null,
+      low: Number.isFinite(row.low) ? row.low : null,
+      close: Number.isFinite(row.close) ? row.close : null,
+      amount: Number.isFinite(rawAmount) ? rawAmount / 100_000_000 : null
     };
   }
 
@@ -285,8 +295,29 @@
     });
   }
 
+  // 收盤後、正式日K還沒更新前：用即時報價（MIS）今天的開高低收暫補一根，並標示是暫用值。
+  // 只在 MIS 的日期比正式日K最後一天新時才補；每日更新把正式日K補上後，日期相同就不再補，自然以正式資料為準。
+  function provisionalCloseCandle(candles) {
+    if (!latestPayload || !latestPayload.ok || latestPayload.market_open || !latestPayload.data) return null;
+    const data = latestPayload.data;
+    const day = datePart(latestPayload.data_time);
+    const lastDay = periodDataDate(candles[candles.length - 1]);
+    if (!day || !lastDay || day <= lastDay) return null;
+    const ohlc = [data.open, data.high, data.low, data.price].map(Number);
+    if (!ohlc.every(Number.isFinite)) return null;
+    return {
+      t: day,
+      label: `${day.slice(5).replace('-', '/')}（盤後暫用即時收盤）`,
+      open: ohlc[0], high: ohlc[1], low: ohlc[2], close: ohlc[3],
+      amount: Number(data.turnover_billion),
+      provisional: true
+    };
+  }
+
   function dailyWithLive() {
     const candles = A.daily.map(row => toChartCandle(row, '日'));
+    const provisional = provisionalCloseCandle(candles);
+    if (provisional) { candles.push(provisional); return candles; }
     if (!latestPayload || !latestPayload.data || !latestLive) return candles;
     const data = latestPayload.data;
     const day = datePart(latestPayload.data_time);
@@ -321,8 +352,8 @@
 
   function overlays() {
     return [
-      { value: UPPER, label: '', color: css('--gold', '#d9a94b'), pos: 'above' },
-      { value: LOWER, label: '', color: css('--down', '#2fd09a'), pos: 'below' }
+      { value: UPPER, label: '收復線', short: '收復', color: css('--gold', '#d9a94b'), pos: 'above' },
+      { value: LOWER, label: '防守線', short: '防守', color: css('--down', '#2fd09a'), pos: 'below' }
     ];
   }
 
@@ -330,11 +361,21 @@
     if (chart) return chart;
     chart = new window.KChart(els.chartHost, {
       liveLast: false,
+      macd: false,
+      studyHost: document.getElementById('chartStudies'),
+      selectionRoots: [els.chartStage.parentElement, els.panel],
+      volumeKind: 'amount',
+      leftRail: marketLabelRail,
+      overlayLabels: 'tags',
+      minViewCount: 10,
+      onSelect: (index, anchor) => selectCandle(index, anchor, false),
+      onClear: () => { selectedIndex = -1; els.marker.hidden = true; els.mobileDetails.hidden = true; },
       onView: (_first, _last, atEnd) => {
         els.reset.hidden = atEnd;
         requestAnimationFrame(updateOverlayControls);
       },
-      height: () => Math.max(250, els.chartStage.clientHeight || 360)
+      // 扣掉畫布上方保留給圖例的高度（chart-host 的 top）
+      height: () => Math.max(250, (els.chartStage.clientHeight || 360) - (els.chartHost.offsetTop || 0))
     });
     chart.canvas.setAttribute('aria-describedby', 'chartSummary');
     bindCandleSelection();
@@ -346,36 +387,45 @@
 
   function loadPeriod(period, reset = true) {
     const candles = candlesFor(period);
-    if (!candles.length && period.startsWith('m')) {
+    if (!candles.length && isMinutePeriod(period)) {
       currentPeriod = 'daily';
       els.period.value = 'daily';
       return loadPeriod('daily', reset);
     }
     currentPeriod = period;
     els.period.value = period;
+    els.period.dispatchEvent(new Event('periodsync')); // 週期分段按鈕（period-switch.js）同步
     selectedIndex = -1;
     els.mobileDetails.hidden = true;
     els.marker.hidden = true;
-    const unit = period === 'h60' ? '60分' : period === 'weekly' ? '週' : period === 'monthly' ? '月' : period.startsWith('m') ? `${period.slice(1)}分` : '日';
-    const liveLast = latestLive && (period.startsWith('m') || period === 'daily');
+    const unit = period === 'h60' ? '60分' : period === 'weekly' ? '週' : period === 'monthly' ? '月' : isMinutePeriod(period) ? `${period.slice(1)}分` : '日';
+    const liveLast = latestLive && (isMinutePeriod(period) || period === 'daily');
     const instance = ensureChart();
     instance.opts.liveLast = liveLast;
-    const desiredCount = period === 'monthly' ? 60 : period === 'weekly' ? 70 : period === 'h60' ? 80 : period.startsWith('m') ? Math.min(candles.length, 120) : 70;
-    const plotWidth = Math.max(0, els.chartStage.clientWidth - 68);
-    const touchSafeCount = Math.max(15, Math.floor(plotWidth / 44));
+    instance.showMacd = period !== 'daily' && !isMobile();
+    const desiredCount = period === 'monthly' ? 60 : period === 'weekly' ? 70 : period === 'h60' ? 80 : isMinutePeriod(period) ? Math.min(candles.length, 120) : 70;
+    // 右側價格欄寬：軸上價籤模式（收復／防守／收盤）約 78～100px，取已畫過的實際值；第一次畫之前用 100 保守估。
+    const priceRail = instance.geo ? Math.max(64, instance.canvas.clientWidth - instance.geo.l - instance.geo.pw) : 100;
+    const plotWidth = Math.max(0, els.chartStage.clientWidth - marketLabelRail() - priceRail);
+    const touchSafeCount = Math.max(10, Math.floor(plotWidth / 44));
     const count = Math.min(candles.length, isMobile() ? desiredCount : Math.min(desiredCount, touchSafeCount));
     if (reset || !instance.candles.length) instance.setData(candles, { count, overlays: overlays(), unit });
     else instance.update(candles, overlays());
+    const lastCandle = candles[candles.length - 1];
+    const provisionalLast = period === 'daily' && !liveLast && lastCandle && lastCandle.provisional === true;
     els.forming.hidden = !liveLast;
-    els.estimate.hidden = !period.startsWith('m');
-    els.chartContext.textContent = `${periodLabels[period]} · ${liveLast ? '最右一根形成中' : `資料截至 ${A.meta.cutoff_date}`}`;
+    els.provisional.hidden = !provisionalLast;
+    els.estimate.hidden = !isMinutePeriod(period);
+    els.chartContext.textContent = `${periodLabels[period]} · ${liveLast ? '最右一根形成中'
+      : provisionalLast ? `最右一根暫用即時收盤，正式日K待更新（目前到 ${A.meta.cutoff_date}）` : `資料截至 ${A.meta.cutoff_date}`}`;
     els.chartSummary.textContent = `${periodLabels[period]}，共 ${candles.length} 根。圖上有收復線 ${fmt(UPPER)} 與防守線 ${fmt(LOWER)}。`;
     requestAnimationFrame(updateOverlayControls);
   }
 
   function enforceCandleHitTarget() {
     if (!chart || !chart.candles.length || isMobile()) return;
-    const maxCount = Math.max(15, Math.floor(Math.max(0, chart.canvas.clientWidth - 68) / 44));
+    // 下限跟 minViewCount 一致（10 根）：右側軸上價籤欄較寬時，15 根在 820px 會不足 44px。
+    const maxCount = Math.max(10, Math.floor(Math.max(0, chart.geo.pw) / 44));
     if (chart.view.count <= maxCount) return;
     chart.view.count = Math.min(chart.candles.length, maxCount);
     chart.clamp();
@@ -388,26 +438,24 @@
     const canvas = chart.canvas;
     const W = canvas.clientWidth;
     const H = canvas.clientHeight;
-    const l = 4;
-    const r = 64;
+    const { l, pw, start, step } = chart.geo;
     const t = 10;
     const b = 22;
     const macdH = chart.showMacd ? Math.round(H * .24) : 0;
     const gapH = chart.showMacd ? 10 : 0;
-    const pw = W - l - r;
     const ph = H - t - b - macdH - gapH;
-    const start = chart.view.end - chart.view.count;
     const end = chart.view.end;
-    const step = pw / chart.view.count;
-    const visible = chart.candles.slice(start, end);
+    const visible = chart.candles.slice(start, end).filter(candle => ['open', 'high', 'low', 'close'].every(key => Number.isFinite(candle[key])));
     let low = Math.min(...visible.map(candle => candle.low), LOWER, UPPER);
     let high = Math.max(...visible.map(candle => candle.high), LOWER, UPPER);
     const pad = (high - low) * .07 || 10;
     low -= pad;
     high += pad;
-    const y = value => t + (high - value) / (high - low) * ph;
+    // 畫布可能不從 chart-stage 頂端開始（桌面上方留一條收復／防守圖例），浮動元件定位要加上這段位移。
+    const offsetY = canvas.getBoundingClientRect().top - els.chartStage.getBoundingClientRect().top;
+    const y = value => offsetY + t + (high - value) / (high - low) * ph;
     const x = index => l + step * (index - start + .5);
-    return { W, H, l, pw, ph, start, end, step, y, x };
+    return { W, H: H + offsetY, l, pw, ph, start, end, step, y, x };
   }
 
   function setPosition(element, x, y) {
@@ -415,7 +463,18 @@
     element.style.top = `${y}px`;
   }
 
+  // 手機：收復／防守按鈕放到畫布下方操作列（不蓋 K 棒）；桌面維持貼在線旁。
+  function placeLineButtons() {
+    const target = isMobile() ? els.chartActions : els.chartStage;
+    [els.lineUpper, els.lineLower].forEach(button => {
+      if (button.parentElement !== target) target.prepend(button);
+      if (isMobile()) button.style.top = '';
+    });
+    if (els.lineUpper.parentElement === els.chartActions && els.lineUpper.nextElementSibling !== els.lineLower) els.lineUpper.after(els.lineLower);
+  }
+
   function updateOverlayControls() {
+    placeLineButtons();
     const g = visibleGeometry();
     if (!g) return;
     let upperTop = Math.max(48, Math.min(g.H - 50, g.y(UPPER) - 22));
@@ -425,14 +484,17 @@
       upperTop = Math.max(48, Math.min(g.H - 104, middle - 27));
       lowerTop = Math.min(g.H - 50, upperTop + 54);
     }
-    els.lineUpper.style.top = `${upperTop}px`;
-    els.lineLower.style.top = `${lowerTop}px`;
+    if (!isMobile()) {
+      els.lineUpper.style.top = `${upperTop}px`;
+      els.lineLower.style.top = `${lowerTop}px`;
+    }
     const lastIndex = chart.candles.length - 1;
-    const currentVisible = chart.view.end === chart.candles.length && lastIndex >= g.start;
+    const currentVisible = chart.view.end === chart.candles.length && lastIndex >= g.start && Number.isFinite(chart.candles[lastIndex].close);
     els.point.hidden = !currentVisible;
     if (currentVisible) {
       const last = chart.candles[lastIndex];
-      setPosition(els.point, Math.max(150, g.W - 64 - 22), Math.max(32, Math.min(g.H - 55, g.y(last.close) + 4)));
+      // 現價點貼在最後一根 K 棒上（軸上價籤占用右側欄，舊的右欄推算會蓋到價籤）。
+      setPosition(els.point, g.l + g.pw - g.step / 2 - 22, Math.max(32, Math.min(g.H - 55, g.y(last.close) - 22)));
     }
     if (selectedIndex >= g.start && selectedIndex < g.end) {
       const candle = chart.candles[selectedIndex];
@@ -471,12 +533,14 @@
 
   function selectCandle(index, anchor, open) {
     selectedIndex = index;
-    chart.hover = index;
+    chart.hover = chart.selection = index;
     chart.draw();
     updateOverlayControls();
-    if (isMobile() && !open) {
-      els.mobileDetails.hidden = false;
-      els.mobileDetails.textContent = `${chart.candles[index].label} 的詳情 ›`;
+    if (!open) {
+      if (isMobile()) {
+        els.mobileDetails.hidden = false;
+        els.mobileDetails.textContent = `${chart.candles[index].label} 的詳情 ›`;
+      }
       return;
     }
     openPanel('candle', { index }, els.marker, anchor);
@@ -504,7 +568,7 @@
 
   function plainBlock(meaning, watch) {
     const list = items => `<ul>${items.filter(Boolean).map(item => `<li>${item}</li>`).join('')}</ul>`;
-    return `<div class="plain"><section class="plain-group"><h4>這代表</h4>${list(meaning)}</section>${watch && watch.length ? `<section class="plain-group plain-watch"><h4>要注意</h4>${list(watch)}</section>` : ''}</div>`;
+    return `<div class="plain"><section class="plain-group"><h4>這代表</h4>${list(meaning)}</section>${watch && watch.filter(Boolean).length ? `<section class="plain-group plain-watch"><h4>要注意</h4>${list(watch)}</section>` : ''}</div>`;
   }
 
   function moreDetail(html) {
@@ -555,9 +619,18 @@
     const cards = chipCards();
     grid.innerHTML = cards.map(card => `<button type="button" class="chip-card tone-${card.tone}" data-chip="${card.key}"><span class="chip-name">${esc(card.name)}<i aria-hidden="true">›</i></span><strong class="chip-value num">${esc(card.value)}</strong><span class="chip-read">${esc(card.read)}</span>${card.chart}<span class="chip-date num">資料 ${esc(card.date.slice(5).replace('-', '/'))}</span></button>`).join('');
     grid.querySelectorAll('[data-chip]').forEach(button => button.addEventListener('click', () => openPanel('chip', { key: button.dataset.chip }, button)));
+    // 六張卡同一天時，日期只在「籌碼與資金」標題寫一次；不同天才每張各自標。
+    const dates = [...new Set(cards.map(c => c.date))];
+    const small = document.querySelector('#chipsTitle small');
+    if (small) small.textContent = dates.length === 1 ? `資料 ${dates[0].slice(5).replace('-', '/')}・點卡片看明細` : '點卡片看明細';
+    grid.classList.toggle('hm-same-date', dates.length === 1);
     if (PL) {
       $('readLine').textContent = PL.one_line;
-      $('readList').innerHTML = PL.points.slice(0, 4).map(p => `<li><b>${esc(p.title)}</b>${esc(p.lines[0] || '')}</li>`).join('');
+      // 每點只留「主角＋一句判斷」；數字細節點開詳情看。標題沒有「主角：」時整句當判斷。
+      $('readList').innerHTML = PL.points.slice(0, 4).map(p => {
+        const [who, ...rest] = String(p.title).split('：');
+        return rest.length ? `<li><b>${esc(who)}</b><span>${esc(rest.join('：'))}</span></li>` : `<li><b>${esc(p.title)}</b><span>${esc(p.lines[0] || '')}</span></li>`;
+      }).join('');
       $('readDate').textContent = `股價、外資、期貨：${PL.data_dates.price_and_foreign.slice(5).replace('-', '/')}；融資融券：${PL.data_dates.margin.slice(5).replace('-', '/')}${PL.data_dates.margin < PL.data_dates.price_and_foreign ? '（官方還沒公布最新一天）' : ''}`;
     }
     $('readCard').addEventListener('click', () => openPanel('plain', {}, $('readCard')));
@@ -745,7 +818,8 @@
     const watch = [
       lowerShadow >= 0.35 ? `下影線要<b>隔天不被跌破</b>才算數；收盤跌破 ${fmt(candle.low, 0)} 就失效。` : '',
       Number.isFinite(foreign) && foreign < 0 && Number.isFinite(trust) && trust > 0 ? '外資在賣、投信在買，方向不一致，先別單看一邊。' : '',
-    ];
+      candle.provisional ? '這根是盤後暫用即時收盤（證交所即時報價），正式日K與法人資料還沒更新；更新後以正式資料為準。' : '',
+    ].filter(Boolean);
     return `
       ${plainBlock(meaning, watch)}
       ${moreDetail(`<div class="ohlc-grid" aria-label="開高低收">
@@ -1270,7 +1344,7 @@
       if (els.panel.getAttribute('aria-hidden') === 'true') return;
       els.backdrop.classList.add('is-open');
       els.panel.classList.add('is-open');
-      if (isMobile()) keepSelectionAboveSheet();
+      // 11-07 起手機也置中浮窗，不再需要把選取的 K 棒捲到底部面板上方。
       els.panelClose.focus({ preventScroll: true });
     });
   }
@@ -1292,13 +1366,6 @@
     root.style.setProperty('--panel-y', `${top}px`);
   }
 
-  function keepSelectionAboveSheet() {
-    const panelTop = innerHeight - els.panel.offsetHeight;
-    const markerRect = !els.marker.hidden ? els.marker.getBoundingClientRect() : null;
-    if (markerRect && markerRect.bottom > panelTop - 10) {
-      scrollBy({ top: markerRect.bottom - panelTop + 18, behavior: 'auto' });
-    }
-  }
 
   function closePanel() {
     if (els.panel.getAttribute('aria-hidden') === 'true') return;
@@ -1343,7 +1410,7 @@
       els.service.textContent = `即時行情暫時無法更新：${payload && payload.error ? payload.error : '未取得資料'}。目前顯示盤後資料。`;
       setMarketHeader(fallbackMarketData(), { id: 'delay', label: '延遲' }, D.market_date || A.meta.cutoff_date);
       setIntradayOptions(false);
-      loadPeriod(currentPeriod.startsWith('m') ? 'daily' : currentPeriod, false);
+      loadPeriod(isMinutePeriod(currentPeriod) ? 'daily' : currentPeriod, false);
       return;
     }
     const fetched = new Date(payload.fetched_at).getTime();
@@ -1384,8 +1451,20 @@
     const timeout = window.setTimeout(() => controller.abort(), 6500);
     try {
       const response = await fetch('/api/live', { cache: 'no-store', headers: { Accept: 'application/json' }, signal: controller.signal });
+      // 先確認是 JSON 再解析：伺服器回 HTML（例如登入頁或首頁）時，Safari 的解析錯誤訊息看不懂。
+      const isJson = (response.headers.get('content-type') || '').includes('application/json');
+      const body = isJson ? await response.json() : null;
+      if (body && body.error === 'live-not-available') {
+        latestLive = false;
+        els.service.hidden = false;
+        els.service.textContent = `${body.message}。`;
+        setMarketHeader(fallbackMarketData(), { id: 'closed', label: '盤後' }, D.market_date || A.meta.cutoff_date);
+        setIntradayOptions(false);
+        return; // 雲端沒有即時行情，不再輪詢
+      }
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const payload = await response.json();
+      if (!isJson) throw new Error('回應不是行情資料（可能是登入已失效，請重新整理）');
+      const payload = body;
       renderPayload(payload);
       const retry = Number(payload.retry_after_seconds || 0) * 1000;
       schedulePoll(payload.market_open ? Math.max(7000, retry) : Math.max(60_000, retry));
@@ -1395,7 +1474,7 @@
       els.service.textContent = `即時行情連線中斷：${error.name === 'AbortError' ? '本機服務逾時' : error.message}。目前顯示盤後資料。`;
       setMarketHeader(fallbackMarketData(), { id: 'delay', label: '延遲' }, D.market_date || A.meta.cutoff_date);
       setIntradayOptions(false);
-      loadPeriod(currentPeriod.startsWith('m') ? 'daily' : currentPeriod, false);
+      loadPeriod(isMinutePeriod(currentPeriod) ? 'daily' : currentPeriod, false);
       schedulePoll(15000);
     } finally {
       window.clearTimeout(timeout);
@@ -1409,6 +1488,12 @@
   setMarketHeader(fallbackMarketData(), { id: 'closed', label: '休市' }, D.market_date || A.meta.cutoff_date);
 
   els.period.addEventListener('change', () => loadPeriod(els.period.value, true));
+  // 手機：縮放收在「圖表工具」裡，點了才展開（桌面一直顯示）。
+  els.chartTools.addEventListener('click', () => {
+    const open = els.chartTools.getAttribute('aria-expanded') !== 'true';
+    els.chartTools.setAttribute('aria-expanded', String(open));
+    document.querySelector('.chart-controls').classList.toggle('tools-open', open);
+  });
   $('zoomIn').addEventListener('click', () => chart && chart.zoom(1 / 1.35));
   $('zoomOut').addEventListener('click', () => {
     if (!chart) return;
@@ -1479,4 +1564,619 @@
   } else {
     pollLive();
   }
+})();
+
+// 票 05／06：首頁上市／上櫃普通股搜尋獨立於大盤資料初始化，搜尋失敗不影響既有首頁。
+(() => {
+  'use strict';
+  const form = document.getElementById('stockSearchForm');
+  const input = document.getElementById('stockSearchInput');
+  const clear = document.getElementById('stockSearchClear');
+  const status = document.getElementById('stockSearchStatus');
+  const results = document.getElementById('stockSearchResults');
+  const more = document.getElementById('stockSearchMore');
+  if (!form || !input || !clear || !status || !results || !more) return;
+
+  let controller = null;
+  let sequence = 0;
+  let debounceTimer = 0;
+  let activeQuery = '';
+  let nextCursor = null;
+
+  function setStatus(message, state) {
+    status.textContent = message;
+    status.dataset.state = state;
+  }
+
+  function reset(message = '請輸入搜尋條件。') {
+    sequence += 1;
+    if (controller) controller.abort();
+    controller = null;
+    activeQuery = '';
+    nextCursor = null;
+    results.replaceChildren();
+    results.removeAttribute('aria-busy');
+    more.hidden = true;
+    setStatus(message, 'empty');
+  }
+
+  function resultItem(item) {
+    const row = document.createElement('li');
+    row.className = 'stock-search-result';
+    const link = document.createElement('a');
+    link.href = `stock.html?code=${encodeURIComponent(item.code)}`;
+    link.dataset.code = item.code;
+
+    const title = document.createElement('strong');
+    title.textContent = `${item.code} ${item.name}`;
+    const market = document.createElement('small');
+    market.className = 'stock-search-market';
+    market.textContent = `${item.market}${item.security_type} · 名錄資料日 ${item.source_date}`;
+    const availability = document.createElement('small');
+    availability.className = 'stock-search-meta';
+    if (item.analysis_status === 'stale') {
+      availability.textContent = `可分析 · 資料至 ${item.data_date || '未提供'}，已過期`;
+    } else if (item.analysis_status === 'insufficient') {
+      availability.textContent = `無法分析 · 歷史資料不足（${item.available_bars || 0} 根）`;
+    } else if (item.analysis_status === 'unavailable') {
+      availability.textContent = '無法分析 · 最新交易日停牌或無有效行情';
+    } else {
+      availability.textContent = `可分析 · 資料至 ${item.data_date || '未提供'}`;
+    }
+    link.append(title, market, availability);
+    row.append(link);
+    return row;
+  }
+
+  async function search(query, cursor = null) {
+    const normalized = query.trim();
+    if (!normalized) { reset(); return; }
+    if (controller) controller.abort();
+    controller = new AbortController();
+    const request = ++sequence;
+    const append = cursor !== null;
+    if (!append) {
+      activeQuery = normalized;
+      nextCursor = null;
+      results.replaceChildren();
+    }
+    results.setAttribute('aria-busy', 'true');
+    more.hidden = true;
+    setStatus(append ? '載入更多結果中…' : `正在搜尋「${normalized}」…`, 'loading');
+    const params = new URLSearchParams({ q: normalized, limit: '8' });
+    if (cursor !== null) params.set('cursor', cursor);
+    try {
+      const response = await fetch(`/api/stocks/search?${params}`, {
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+      const payload = await response.json();
+      if (request !== sequence) return;
+      if (!response.ok || payload.error) throw new Error(payload.message || '搜尋暫時無法使用');
+      const items = Array.isArray(payload.items) ? payload.items : [];
+      results.append(...items.map(resultItem));
+      nextCursor = payload.next_cursor || null;
+      more.hidden = nextCursor === null;
+      const shown = results.children.length;
+      setStatus(
+        shown === 0 ? `查無「${normalized}」的上市或上櫃普通股。` : `已顯示 ${shown} 檔結果，名錄資料日 ${payload.source_date || '未提供'}。`,
+        shown === 0 ? 'no-results' : 'ready'
+      );
+    } catch (error) {
+      if (request !== sequence || error.name === 'AbortError') return;
+      results.replaceChildren();
+      nextCursor = null;
+      more.hidden = true;
+      setStatus('搜尋暫時無法使用，請稍後再試。', 'error');
+    } finally {
+      if (request === sequence) results.removeAttribute('aria-busy');
+    }
+  }
+
+  function scheduleSearch() {
+    window.clearTimeout(debounceTimer);
+    const query = input.value.trim();
+    if (!query) { reset(); return; }
+    debounceTimer = window.setTimeout(() => search(query), 220);
+  }
+
+  input.addEventListener('input', scheduleSearch);
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    window.clearTimeout(debounceTimer);
+    search(input.value);
+  });
+  clear.addEventListener('click', () => {
+    window.clearTimeout(debounceTimer);
+    input.value = '';
+    reset('搜尋已清空。');
+    input.focus();
+  });
+  more.addEventListener('click', () => {
+    if (nextCursor !== null && activeQuery) search(activeQuery, nextCursor);
+  });
+})();
+
+// G3：首頁三區塊（籌碼選股／產業資金流向／長期核心持有），只讀已封存的發布結果；搜尋時讓位，清空後回來。
+// 本人 2026-11-08：自創候選退役；演算法依參考網站反推結果，畫面名稱為本站用語。
+(() => {
+  'use strict';
+  const host = document.getElementById('marketScreens');
+  const input = document.getElementById('stockSearchInput');
+  if (!host) return;
+  const $ = id => document.getElementById(id);
+  const SVG = 'http://www.w3.org/2000/svg';
+  const MARKET_TEXT = { 上市: '上市', 上櫃: '上櫃' };
+
+  function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+  function svg(tag, attrs) {
+    const node = document.createElementNS(SVG, tag);
+    Object.entries(attrs || {}).forEach(([k, v]) => node.setAttribute(k, v));
+    return node;
+  }
+  async function getJson(url) {
+    const response = await fetch(url, { cache: 'no-store' });
+    const payload = await response.json();
+    if (!response.ok || payload.error) throw new Error(payload.message || '資料暫時無法讀取');
+    return payload;
+  }
+  function fmtNum(value, digits = 0) {
+    return Number(value).toLocaleString('zh-TW', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  }
+  function signed(value, digits = 1) {
+    if (value === null || value === undefined) return '—';
+    return `${value > 0 ? '+' : ''}${fmtNum(value, digits)}`;
+  }
+  function tooltip(container) {
+    let tip = container.querySelector('.chart-tip');
+    if (!tip) { tip = el('div', 'chart-tip'); tip.hidden = true; container.append(tip); }
+    return {
+      show(lines, x, y) {
+        tip.replaceChildren(...lines.map((line, i) => (i === 0 ? el('strong', '', line) : el('div', '', line))));
+        tip.hidden = false;
+        const box = container.getBoundingClientRect();
+        const w = tip.offsetWidth;
+        tip.style.left = `${Math.max(0, Math.min(x + 12, box.width - w))}px`;
+        // 上方放不下就放到點的下方，不蓋住被說明的泡泡本身
+        const above = y - tip.offsetHeight - 10;
+        tip.style.top = `${above >= 0 ? above : y + 24}px`;
+      },
+      hide() { tip.hidden = true; },
+    };
+  }
+
+  // ---- 籌碼選股 ----
+  const chip = {
+    block: $('chipScreens'), meta: $('chipScreensMeta'), tabs: $('chipScreenTabs'), controls: $('chipScreenControls'),
+    days: $('chipScreenDays'), side: $('chipScreenSide'), inflow: $('chipScreenInflow'),
+    status: $('chipScreenStatus'), list: $('chipScreenList'), more: $('chipScreenMore'), panel: $('chipScreenPanel'),
+  };
+  const view = { key: null, days: 1, side: 'buy', inflow: false, expanded: false, catalog: null, sequence: 0 };
+  const SIDE_TEXT = { buy: '淨買超', sell: '淨賣超' };
+
+  function setChipState(state, message) {
+    chip.block.dataset.state = state;
+    chip.status.textContent = message;
+  }
+
+  function renderControls(tab) {
+    const computable = tab.kind === 'rank' || tab.kind === 'streak';
+    chip.controls.hidden = !computable;
+    chip.days.replaceChildren();
+    chip.days.hidden = tab.kind !== 'rank';
+    if (tab.kind === 'rank') {
+      tab.day_options.forEach(days => {
+        const button = el('button', '', days === 1 ? '當日' : `${days} 日`);
+        button.type = 'button';
+        button.dataset.days = String(days);
+        button.setAttribute('aria-pressed', String(days === view.days));
+        button.addEventListener('click', () => { view.days = days; view.expanded = false; load(); });
+        chip.days.append(button);
+      });
+    }
+    chip.side.querySelectorAll('button').forEach(button => {
+      button.textContent = tab.kind === 'streak' ? (button.dataset.side === 'buy' ? '連續淨買超' : '連續淨賣超') : SIDE_TEXT[button.dataset.side];
+      button.setAttribute('aria-pressed', String(button.dataset.side === view.side));
+    });
+    chip.inflow.closest('label').hidden = !tab.inflow_filter;
+    chip.inflow.checked = view.inflow;
+  }
+
+  function row(item, index, tab) {
+    const li = document.createElement('li');
+    // 排行母體含名次前 300 的 ETF（照參考站）；個股分析只涵蓋普通股與核心持有 0050，其他 ETF 不連到個股頁。
+    const isEtf = item.security_type === 'ETF';
+    const linkable = !isEtf || item.code === '0050';
+    const link = el(linkable ? 'a' : 'div', linkable ? '' : 'screen-static');
+    if (linkable) link.href = `stock.html?code=${encodeURIComponent(item.code)}`;
+    link.dataset.code = item.code;
+    const title = el('strong', '', `${item.code} ${item.name || ''}`);
+    if (isEtf) title.append(el('span', 'screen-flag screen-etf', 'ETF'));
+    if (item.rotation_star) title.append(el('span', 'screen-flag', '資金流入產業'));
+    const meta = el('small', '', [MARKET_TEXT[item.market] || item.market,
+      item.close !== null && item.close !== undefined ? `收 ${fmtNum(item.close, 2)}` : '',
+      item.change_pct !== null && item.change_pct !== undefined ? `${signed(item.change_pct, 2)}%` : '']
+      .filter(Boolean).join(' · '));
+    let value;
+    if (tab.kind === 'streak') {
+      value = `${item.streak_days}${item.streak_is_lower_bound ? '+' : ''} 天`;
+    } else if (tab.kind === 'relative_value') {
+      // 相對低位階：個股 20 日乖離 < 所屬市場指數 20 日乖離（R1 會員 127 檔驗證）；顯示乖離而不是張數。
+      value = item.bias20 === null || item.bias20 === undefined ? '—' : `乖離 ${signed(item.bias20 * 100, 1)}%`;
+      if (item.index_bias20 !== null && item.index_bias20 !== undefined) {
+        meta.textContent = [meta.textContent, item.group, `${item.index_name || '指數'} ${signed(item.index_bias20 * 100, 1)}%`]
+          .filter(Boolean).join(' · ');
+      }
+    } else {
+      value = `${signed(item.metric_lots, 0)} 張`;
+    }
+    link.append(el('span', 'screen-rank', String(index + 1)), title, el('span', 'screen-value', value), meta);
+    li.append(link);
+    return li;
+  }
+
+  function stateMessage(payload, tab) {
+    const dated = payload.data_date ? `資料日 ${payload.data_date}` : '';
+    if (payload.status === 'not_ready') return ['not_ready', `${tab.display_name}尚未就緒：還沒有已封存的發布結果。`];
+    if (payload.state === 'unknown') return ['unknown', `定義未公開：參考網站沒有公開第二個條件的算法，本站不自訂，因此不提供名單。`];
+    if (payload.state === 'unavailable') return ['unavailable', '無合法資料來源：需要逐日券商分點資料，目前沒有涵蓋全市場的合法免費來源，因此不提供名單。'];
+    if (payload.state === 'missing') return ['empty', `${dated}：交易日不足或資料缺漏，本頁沒有可排序的結果。`];
+    const extra = [];
+    if (payload.uncovered_markets && payload.uncovered_markets.length) extra.push(`${payload.uncovered_markets.join('、')}未涵蓋`);
+    if (payload.missing_count) extra.push(`${fmtNum(payload.missing_count)} 檔當期缺法人資料，未列入（不當成 0）`);
+    const stale = payload.status === 'stale' ? `已過期（最新行情 ${payload.latest_market_data_date}），僅供查看舊結果。` : '';
+    const shown = payload.items.length ? `共 ${payload.items.length} 檔` : '沒有符合條件的個股';
+    return [payload.status === 'stale' ? 'stale' : (payload.state === 'partial' ? 'partial' : 'ok'),
+      `${stale}${dated} · ${shown}${extra.length ? `；${extra.join('；')}` : ''}。`];
+  }
+
+  async function load() {
+    const tab = view.catalog.tabs.find(t => t.key === view.key);
+    renderControls(tab);
+    chip.list.replaceChildren();
+    chip.more.hidden = true;
+    chip.panel.querySelector('.screen-conditions')?.remove();
+    const request = ++view.sequence;
+    setChipState('loading', `正在讀取${tab.display_name}…`);
+    const params = new URLSearchParams({ key: tab.key });
+    if (tab.kind === 'rank') params.set('days', String(view.days));
+    if (tab.kind === 'rank' || tab.kind === 'streak') params.set('side', view.side);
+    if (tab.inflow_filter && view.inflow) params.set('only_inflow', '1');
+    try {
+      const payload = await getJson(`/api/screens?${params}`);
+      if (request !== view.sequence) return;
+      const [state, message] = stateMessage(payload, tab);
+      setChipState(state, message);
+      if (state === 'unknown' || state === 'unavailable') {
+        const ul = el('ul', 'screen-conditions');
+        (payload.display_conditions || []).forEach(text => ul.append(el('li', '', text)));
+        chip.status.after(ul);
+        return;
+      }
+      const items = payload.items || [];
+      const visible = view.expanded ? items : items.slice(0, 5);
+      chip.list.append(...visible.map((item, index) => row(item, index, tab)));
+      chip.more.hidden = view.expanded || items.length <= 5;
+      chip.more.textContent = `展開到 ${items.length} 名`;
+    } catch (error) {
+      if (request !== view.sequence) return;
+      setChipState('error', `${tab.display_name}暫時無法讀取，請稍後再試。`);
+    }
+  }
+
+  function selectTab(key) {
+    view.key = key;
+    view.expanded = false;
+    const tab = view.catalog.tabs.find(t => t.key === key);
+    if (tab.kind !== 'rank') view.days = 1;
+    chip.tabs.querySelectorAll('[role="tab"]').forEach(button => button.setAttribute('aria-selected', String(button.dataset.key === key)));
+    chip.panel.setAttribute('aria-labelledby', `chipTab-${key}`);
+    load();
+  }
+
+  async function initChips() {
+    try {
+      view.catalog = await getJson('/api/screens');
+    } catch (error) {
+      chip.meta.textContent = '';
+      setChipState('error', '籌碼選股暫時無法讀取，請稍後再試。');
+      return;
+    }
+    chip.meta.textContent = view.catalog.data_date ? `資料日 ${view.catalog.data_date} · 成交金額前段的大量股（含 ETF）` : '尚無已發布結果';
+    // 九頁全部顯示（不收進選單）：可算的排前面，沒有名單的（定義未公開、無合法資料來源）集中在後面一組。
+    const listable = tab => ['rank', 'streak', 'relative_value'].includes(tab.kind);
+    const ordered = [...view.catalog.tabs.filter(listable), ...view.catalog.tabs.filter(tab => !listable(tab))];
+    let dividerAdded = false;
+    ordered.forEach(tab => {
+      if (!listable(tab) && !dividerAdded && ordered.some(listable)) {
+        dividerAdded = true;
+        const cap = el('span', 'hm-tab-cap', '目前沒有名單');
+        cap.setAttribute('role', 'presentation');
+        chip.tabs.append(cap);
+      }
+      const button = el('button', listable(tab) ? '' : 'is-unlisted', tab.display_name);
+      button.type = 'button';
+      button.id = `chipTab-${tab.key}`;
+      button.setAttribute('role', 'tab');
+      button.dataset.key = tab.key;
+      button.dataset.kind = tab.kind === 'rotation_unknown' ? 'unknown' : tab.kind;
+      button.setAttribute('aria-controls', 'chipScreenPanel');
+      button.addEventListener('click', () => selectTab(tab.key));
+      chip.tabs.append(button);
+    });
+    chip.side.querySelectorAll('button').forEach(button => button.addEventListener('click', () => {
+      view.side = button.dataset.side; view.expanded = false; load();
+    }));
+    chip.inflow.addEventListener('change', () => { view.inflow = chip.inflow.checked; view.expanded = false; load(); });
+    chip.more.addEventListener('click', () => { view.expanded = true; load(); });
+    selectTab(view.catalog.tabs[0].key);
+  }
+
+  // ---- 產業資金流向 ----
+  const rot = {
+    block: $('rotationBlock'), meta: $('rotationMeta'), status: $('rotationStatus'), body: $('rotationBody'),
+    legend: $('rotationLegend'), chart: $('rotationChart'), efficiency: $('rotationEfficiency'),
+    recovery: $('rotationRecovery'), table: $('rotationTable'),
+  };
+  const QUADRANT_ORDER = ['leading', 'weakening', 'improving', 'lagging'];
+  const QUADRANT_VAR = { leading: '--q-leading', weakening: '--q-weakening', improving: '--q-improving', lagging: '--q-lagging' };
+
+  function drawRotation(payload) {
+    const bubbles = payload.latest.bubbles.filter(b => b.x !== null && b.y !== null);
+    // 畫布寬度＝實際容器寬度，文字維持 11px，不隨螢幕放大。
+    const width = Math.max(280, Math.round(rot.chart.clientWidth || 640));
+    const height = width < 520 ? 280 : 340;
+    const pad = { l: 36, r: 12, t: 16, b: 30 };
+    const xs = bubbles.map(b => b.x), ys = bubbles.map(b => b.y);
+    // 橫軸依實際範圍（含 0），不強迫左右對稱，避免一側大片空白。
+    const xLo = Math.min(0, ...xs), xHi = Math.max(0, ...xs);
+    const xPad = (xHi - xLo || 1) * 0.06;
+    const yAbs = Math.max(1, ...ys.map(Math.abs)) * 1.12;
+    const sx = x => pad.l + (x - xLo + xPad) / (xHi - xLo + 2 * xPad) * (width - pad.l - pad.r);
+    const sy = y => pad.t + (yAbs - y) / (2 * yAbs) * (height - pad.t - pad.b);
+    const maxSize = Math.max(...bubbles.map(b => b.size || 0), 1);
+    const radius = b => 4 + Math.sqrt((b.size || 0) / maxSize) * (width < 520 ? 12 : 16);
+    const root = svg('svg', { width, height, viewBox: `0 0 ${width} ${height}`, role: 'img',
+      'aria-label': '各產業資金位置：橫軸為成交額相對平均，縱軸為近 5 日加速度' });
+    root.append(svg('line', { class: 'chart-axis', x1: sx(0), x2: sx(0), y1: pad.t, y2: height - pad.b }));
+    root.append(svg('line', { class: 'chart-axis', x1: pad.l, x2: width - pad.r, y1: sy(0), y2: sy(0) }));
+    const label = (text, x, y, anchor, strong) => {
+      const t = svg('text', { class: `chart-label${strong ? ' strong' : ''}`, x, y, 'text-anchor': anchor });
+      t.textContent = text;
+      root.append(t);
+      return t;
+    };
+    label('← 成交額低於平均', pad.l, height - 8, 'start');
+    label('高於平均 →', width - pad.r, height - 8, 'end');
+    label('加速', pad.l - 6, pad.t + 10, 'end');
+    label('減速', pad.l - 6, height - pad.b - 2, 'end');
+    const tip = tooltip(rot.chart);
+    let pinned = null;
+    // 點圖上空白處也能關掉固定的說明
+    root.addEventListener('click', () => { if (pinned) { pinned.classList.remove('is-pinned'); pinned.setAttribute('aria-pressed', 'false'); pinned = null; tip.hide(); } });
+    const sorted = [...bubbles].sort((a, b) => (b.size || 0) - (a.size || 0));
+    sorted.forEach(b => {
+      const dot = svg('circle', { class: 'rotation-dot', cx: sx(b.x), cy: sy(b.y), r: radius(b), tabindex: '0',
+        fill: `var(${QUADRANT_VAR[b.quadrant]})`, 'fill-opacity': '0.85', 'aria-label': `${b.name}，${payload.quadrants[b.quadrant].label}` });
+      const lines = [b.name, payload.quadrants[b.quadrant].label, `成交額相對平均 ${signed(b.relative_pct, 0)}%`,
+        `近 5 日加速度 ${signed(b.y)} 億元/日`, `近 20 日成交額 ${fmtNum(b.amount_20d, 1)} 十億元`];
+      const show = () => tip.show(lines, sx(b.x), sy(b.y) - radius(b));
+      // 本人 11-09：點一下固定顯示、再點一下關掉；固定時滑過別的泡泡不會換掉。滑鼠移上仍可預覽。
+      const toggle = () => {
+        const pinnedHere = pinned === dot;
+        if (pinned) pinned.classList.remove('is-pinned');
+        pinned = pinnedHere ? null : dot;
+        if (pinned) { dot.classList.add('is-pinned'); show(); } else tip.hide();
+        dot.setAttribute('aria-pressed', String(!!pinned));
+      };
+      dot.setAttribute('role', 'button');
+      dot.setAttribute('aria-pressed', 'false');
+      dot.addEventListener('mouseenter', () => { if (!pinned) show(); });
+      dot.addEventListener('focus', () => { if (!pinned) show(); });
+      dot.addEventListener('mouseleave', () => { if (!pinned) tip.hide(); });
+      dot.addEventListener('blur', () => { if (!pinned) tip.hide(); });
+      dot.addEventListener('click', event => { event.stopPropagation(); toggle(); });
+      dot.addEventListener('keydown', event => {
+        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggle(); }
+        if (event.key === 'Escape' && pinned) { event.preventDefault(); pinned.classList.remove('is-pinned'); pinned = null; tip.hide(); }
+      });
+      root.append(dot);
+    });
+    // 直接標示規模最大的產業；與已放的標籤重疊就略過，其餘靠 hover 與表格檢視。
+    const placed = [];
+    sorted.slice(0, 6).forEach(b => {
+      const r = radius(b);
+      const x = sx(b.x);
+      const y = sy(b.y) - r - 5 < pad.t + 10 ? sy(b.y) + r + 13 : sy(b.y) - r - 5;
+      const w = b.name.length * 12;
+      const box = { x1: x - w / 2, x2: x + w / 2, y1: y - 12, y2: y + 2 };
+      if (box.x1 < 0 || box.x2 > width) return;
+      if (placed.some(p => box.x1 < p.x2 && box.x2 > p.x1 && box.y1 < p.y2 && box.y2 > p.y1)) return;
+      placed.push(box);
+      label(b.name, x, y, 'middle', true);
+    });
+    rot.chart.querySelector('svg')?.remove();
+    rot.chart.prepend(root);
+  }
+
+  let rotationPayload = null;
+  function renderRotation(payload) {
+    if (payload.status === 'not_ready') {
+      rot.block.dataset.state = 'not_ready';
+      rot.meta.textContent = '';
+      rot.status.textContent = '產業資金流向尚未就緒：還沒有已封存的發布結果。';
+      return;
+    }
+    const latest = payload.latest;
+    rot.block.dataset.state = payload.status;
+    rot.meta.textContent = `資料日 ${latest.date} · 產業＝官方產業別（${latest.bubbles.length} 個）`;
+    const stale = payload.status === 'stale' ? `已過期（最新行情 ${payload.latest_market_data_date}），僅供查看舊結果。` : '';
+    rot.status.textContent = `${stale}${latest.summary ? latest.summary.text : ''}`;
+    rot.legend.replaceChildren(...QUADRANT_ORDER.map(key => {
+      const li = el('li');
+      const swatch = el('i');
+      swatch.style.background = `var(${QUADRANT_VAR[key]})`;
+      li.append(swatch, `${payload.quadrants[key].label} `, el('b', '', String(latest.quadrant_counts[key] || 0)));
+      li.title = payload.quadrants[key].meaning;
+      return li;
+    }));
+    rot.body.hidden = false;
+    rotationPayload = payload;
+    drawRotation(payload);
+    rot.efficiency.replaceChildren(...(latest.efficiency_ranking || []).map(r => {
+      const li = el('li', '', `${r.name} `);
+      li.append(el('small', '', fmtNum(r.score, 1)));
+      return li;
+    }));
+    if (!rot.efficiency.children.length) rot.efficiency.append(el('li', '', '今日沒有成交額高於平均的產業'));
+    rot.recovery.replaceChildren(...(latest.recovery_signals || []).map(r => {
+      const li = el('li', '', `${r.name} `);
+      li.append(el('small', '', `${signed(r.y)} 億元/日`));
+      return li;
+    }));
+    if (!rot.recovery.children.length) rot.recovery.append(el('li', '', '今日沒有低於平均但加速的產業'));
+    const table = el('table');
+    const head = el('tr');
+    ['產業', '資金狀態', '相對平均', '加速度（億元/日）', '20 日成交額（十億元）'].forEach(t => head.append(el('th', '', t)));
+    table.append(head);
+    latest.bubbles.forEach(b => {
+      const tr = el('tr');
+      tr.append(el('td', '', b.name), el('td', '', b.quadrant ? payload.quadrants[b.quadrant].label : '—'),
+        el('td', 'num', b.relative_pct === null ? '—' : `${signed(b.relative_pct, 0)}%`), el('td', 'num', signed(b.y)),
+        el('td', 'num', fmtNum(b.amount_20d, 1)));
+      table.append(tr);
+    });
+    rot.table.replaceChildren(table);
+    rot.body.hidden = false;
+  }
+
+  async function initRotation() {
+    try {
+      renderRotation(await getJson('/api/rotation'));
+    } catch (error) {
+      rot.block.dataset.state = 'error';
+      rot.status.textContent = '產業資金流向暫時無法讀取，請稍後再試。';
+    }
+  }
+
+  // ---- 長期核心持有 ----
+  const core = { block: $('coreHoldings'), meta: $('coreHoldingsMeta'), cards: $('coreCards'), chart: $('coreChart'), notes: $('coreNotes') };
+  const CORE_VAR = ['--core-a', '--core-b'];
+
+  function drawCore(report) {
+    // 畫布寬度＝實際容器寬度，文字維持 11px，不隨螢幕放大。
+    const width = Math.max(280, Math.round(core.chart.clientWidth || 640));
+    const height = width < 520 ? 200 : 240;
+    const pad = { l: 40, r: 70, t: 12, b: 24 };
+    const series = report.holdings.map(h => h.chart);
+    const all = series.flat();
+    const dates = all.map(p => p[0]).sort();
+    const start = Date.parse(dates[0]), end = Date.parse(dates[dates.length - 1]);
+    // 倍數用對數刻度，才看得出兩條線各自的複利速度。
+    const vMax = Math.max(...all.map(p => p[1])), vMin = Math.min(1, ...all.map(p => p[1]));
+    const sx = d => pad.l + (Date.parse(d) - start) / (end - start) * (width - pad.l - pad.r);
+    const sy = v => pad.t + (Math.log(vMax) - Math.log(v)) / (Math.log(vMax) - Math.log(vMin)) * (height - pad.t - pad.b);
+    const root = svg('svg', { width, height, viewBox: `0 0 ${width} ${height}`, role: 'img', 'aria-label': '0050 與 2330 自 2016 年起含息累積倍數（對數刻度）' });
+    [1, 2, 5, 10, 20].filter(v => v <= vMax * 1.01).forEach(v => {
+      root.append(svg('line', { class: 'chart-grid', x1: pad.l, x2: width - pad.r, y1: sy(v), y2: sy(v) }));
+      const t = svg('text', { class: 'chart-label', x: pad.l - 6, y: sy(v) + 4, 'text-anchor': 'end' });
+      t.textContent = `${v}×`;
+      root.append(t);
+    });
+    [dates[0], dates[dates.length - 1]].forEach((d, i) => {
+      const t = svg('text', { class: 'chart-label', x: sx(d), y: height - 6, 'text-anchor': i ? 'end' : 'start' });
+      t.textContent = d.slice(0, 4);
+      root.append(t);
+    });
+    report.holdings.forEach((h, i) => {
+      const path = h.chart.map((p, j) => `${j ? 'L' : 'M'}${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`).join('');
+      root.append(svg('path', { d: path, fill: 'none', stroke: `var(${CORE_VAR[i]})`, 'stroke-width': '2', 'stroke-linejoin': 'round' }));
+      const last = h.chart[h.chart.length - 1];
+      const t = svg('text', { class: 'chart-label strong', x: sx(last[0]) + 6, y: sy(last[1]) + 4 });
+      t.textContent = `${h.code} ${fmtNum(last[1], 1)}×`;
+      root.append(t);
+    });
+    const cross = svg('line', { class: 'chart-axis', y1: pad.t, y2: height - pad.b, visibility: 'hidden' });
+    root.append(cross);
+    const tip = tooltip(core.chart);
+    const hit = svg('rect', { x: pad.l, y: pad.t, width: width - pad.l - pad.r, height: height - pad.t - pad.b, fill: 'transparent' });
+    hit.addEventListener('mousemove', event => {
+      const box = root.getBoundingClientRect();
+      const x = (event.clientX - box.left) / box.width * width;
+      const t = start + (x - pad.l) / (width - pad.l - pad.r) * (end - start);
+      const nearest = report.holdings.map(h => h.chart.reduce((best, p) => (Math.abs(Date.parse(p[0]) - t) < Math.abs(Date.parse(best[0]) - t) ? p : best)));
+      cross.setAttribute('x1', sx(nearest[0][0])); cross.setAttribute('x2', sx(nearest[0][0]));
+      cross.setAttribute('visibility', 'visible');
+      tip.show([nearest[0][0], ...report.holdings.map((h, i) => `${h.code} ${fmtNum(nearest[i][1], 2)}×`)],
+        event.clientX - core.chart.getBoundingClientRect().left, event.clientY - core.chart.getBoundingClientRect().top);
+    });
+    hit.addEventListener('mouseleave', () => { cross.setAttribute('visibility', 'hidden'); tip.hide(); });
+    root.append(hit);
+    core.chart.querySelector('svg')?.remove();
+    core.chart.prepend(root);
+  }
+
+  let coreReport = null;
+  function renderCore(report) {
+    coreReport = report;
+    core.block.dataset.state = 'ok';
+    const first = report.holdings[0].stats;
+    core.meta.textContent = `${report.basis}，至 ${first.end}`;
+    core.cards.replaceChildren(...report.holdings.map((h, i) => {
+      const card = el('article', 'core-card');
+      const header = el('header');
+      const swatch = el('i');
+      swatch.style.background = `var(${CORE_VAR[i]})`;
+      header.append(swatch, el('strong', '', `${h.code} ${h.name}`), el('span', '', h.role));
+      const dl = el('dl');
+      const s = h.stats;
+      [['累積倍數', `${fmtNum(s.total_multiple, 2)}×`], ['年化報酬', `${signed(s.cagr_pct)}%`], ['最大回撤', `${fmtNum(s.max_drawdown_pct, 1)}%`],
+        ['近 1 年', s.trailing_pct['1y'] === null ? '—' : `${signed(s.trailing_pct['1y'])}%`],
+        ['近 3 年', s.trailing_pct['3y'] === null ? '—' : `${signed(s.trailing_pct['3y'])}%`],
+        ['近 5 年', s.trailing_pct['5y'] === null ? '—' : `${signed(s.trailing_pct['5y'])}%`]]
+        .forEach(([k, v]) => dl.append(el('dt', '', k), el('dd', '', v)));
+      card.append(header, dl);
+      return card;
+    }));
+    drawCore(report);
+    core.notes.textContent = report.notes.join(' ');
+  }
+
+  async function initCore() {
+    try {
+      renderCore(await getJson('/api/core-holdings'));
+    } catch (error) {
+      core.block.dataset.state = 'error';
+      core.meta.textContent = '長期核心持有暫時無法讀取，請稍後再試。';
+    }
+  }
+
+  // 寬度改變時依新容器寬度重畫兩張圖（文字大小不隨縮放）。
+  let resizeTimer = null;
+  let lastWidth = host.clientWidth;
+  window.addEventListener('resize', () => {
+    window.clearTimeout(resizeTimer);
+    resizeTimer = window.setTimeout(() => {
+      if (host.clientWidth === lastWidth) return;
+      lastWidth = host.clientWidth;
+      if (rotationPayload) drawRotation(rotationPayload);
+      if (coreReport) drawCore(coreReport);
+    }, 150);
+  });
+
+  // 規格：未輸入時顯示首頁區塊，輸入搜尋時讓位，清空後回來。
+  function syncWithSearch() { host.hidden = Boolean(input && input.value.trim()); }
+  if (input) {
+    input.addEventListener('input', syncWithSearch);
+    document.getElementById('stockSearchClear')?.addEventListener('click', () => { host.hidden = false; });
+  }
+  syncWithSearch();
+  initChips();
+  initRotation();
+  initCore();
 })();

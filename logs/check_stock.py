@@ -1,4 +1,9 @@
 """個股分析頁驗收：三寬、24 招、ETF 20 招、查無代號、無橫溢、JS 0 錯誤、截圖。用暫時 port，不碰 8876。"""
+
+# 【已退役 2026-11-08，S3】本腳本驗的是個股頁 v1（三方案、總分、24 招或近期操作卡）。
+# 本人定案「自創部分不保留」，個股頁已改用契約 v2；v2 驗收見 logs/check_search_journey.py --case all。
+# 檔案保留不刪（刪除需本人確認），執行時直接說明並以非零碼結束，避免被誤當成通過。
+raise SystemExit("RETIRED: v1 個股頁檢查已退役，改用 logs/check_search_journey.py --case all")
 import json
 import sys
 import threading

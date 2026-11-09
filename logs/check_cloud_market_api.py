@@ -121,6 +121,8 @@ def drill_all(page, settle) -> dict:
     out = {}
     for key in KINDS:
         page.locator(f".chip-card[data-chip='{key}']").click()
+        # 面板開啟動畫期間 visibility 仍是 hidden，inner_text 會讀到空字串；等開好再讀。
+        page.wait_for_function("document.getElementById('detailPanel').classList.contains('is-open') && document.getElementById('chipBody') && document.getElementById('chipBody').innerText.trim().length > 0")
         days = [page.locator("#chipBody").inner_text()]
         sides = page.locator("#panelBody .chip-seg[data-seg=side] button")
         for s in range(max(1, sides.count())):
@@ -131,7 +133,10 @@ def drill_all(page, settle) -> dict:
             bars = page.locator("#panelBody .bar-hit")
             for i in range(bars.count()):
                 bars.nth(i).click()
-                settle(page)
+                day = bars.nth(i).get_attribute("data-day")
+                md = day[5:].replace("-", "/")
+                # 等到明細區換成這一天、且不在載入中（雲端要打 API，只等「沒有載入中」會讀到上一天的舊內容）。
+                page.wait_for_function("md => { const d = document.querySelector('#drillDetail'); return d && !d.querySelector('[data-loading]') && (d.querySelector('.drill-day b') || {}).textContent === md; }", arg=md)
                 days.append(page.locator("#drillDetail").inner_text())
             page.locator("#panelBody .chip-seg[data-seg=view] [data-value=now]").click()
         out[key] = days
@@ -179,6 +184,8 @@ def main() -> None:
                     w["drilldown_equal"] = cd == ld
                     if cd != ld:
                         w["drilldown_diff"] = [k for k in KINDS if cd[k] != ld[k]]
+                        w["drilldown_diff_sample"] = [{"kind": k, "index": i, "cloud": a[:200], "local": b[:200]}
+                                                      for k in KINDS for i, (a, b) in enumerate(zip(cd[k], ld[k])) if a != b][:3]
                 data_files = [u for u in reqs if u.endswith("-data.js") or "-data.js?" in u]
                 w["cloud_data_file_requests"] = data_files
                 w["cloud_api_requests"] = sorted({u.split("?")[0].replace(CLOUD_URL, "") for u in reqs if "/api/" in u})

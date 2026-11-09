@@ -1,43 +1,115 @@
-/* 個股分析頁：只向後端 API 取結果並畫圖，不在前端算分數或價位。 */
+/* 個股分析頁：只向後端 API 取個股分析契約 v2 並畫圖，不在前端算價位。每檔一份分析，沒有方案與總分。 */
 (function () {
   'use strict';
   const $ = id => document.getElementById(id);
   const css = (name, fallback) => getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
   const fmt = n => n === null || n === undefined ? '—' : Number(n).toLocaleString('en-US', { maximumFractionDigits: 2 });
-  const DIRECTION = { bullish: '偏多', bearish: '偏空', neutral: '中性' };
-  const TREND = { strong: '強', watch: '觀察', weak: '弱', risk: '風險' };
-  const DIMS = [['T', '趨勢'], ['C', '籌碼'], ['V', '量價'], ['I', '法人'], ['F', '基本面']];
-  const DEFAULT_PRESET = '2TON-FIT-V1';
+  const SCHEMA = 'stock-analysis/v2';
+  const TIER = { near: '近端（10% 內）', mid: '中距（10～20%）', far: '遠端（20% 以上）' };
+  // 本人 2026-11-09：「不要放這種{條件文字取自參考站，判斷門檻依會員樣本反推，逐條附吻合率}敘述在我的正式網站頁面上」。
+  // 研究過程（樣本、吻合率、判斷式、待反推）只留在 API 與內部文件；畫面只放整理後的狀態與價位。
+  // 成交活絡股（本站母體）幾乎都處於同一狀態的條件，只收在明細最後，不進結論。
+  const FIXED_CONDITIONS = [
+    ['趨勢型態與均線位置', '趨勢型態分類與 MA20 斜率；跌破 MA5／MA20 視為結構轉弱', 'triggered'],
+    ['成交量分布結構', '5 日均量與 20 日均量比值變化；成交量密集區與大量成交套牢區', 'triggered'],
+    ['法人買超強度', '當日法人買賣超占均量比重，以及近 5／10／20 日累計', 'triggered'],
+    ['法人連續買賣', '外資／投信／自營商連續買超或賣超日數', 'triggered'],
+    ['營收成長動能', '月營收年增、月增與累計年增同步成長', 'triggered'],
+    ['高檔爆量竭盡', '偏離 MA20 過大且連續上漲後爆量', 'off'],
+    ['獲利能力', '每股盈餘表現', 'off'],
+  ];
+  const STATE_TEXT = { triggered: '成立', confirming: '確認中', off: '未成立' };
+  const INDICATORS = [
+    ['ma5', 'MA5'], ['ma10', 'MA10'], ['ma20', 'MA20'], ['ma60', 'MA60'], ['ma120', 'MA120'], ['ma240', 'MA240'],
+    ['rsi14', 'RSI14'], ['k9', 'K9'], ['d9', 'D9'], ['atr14', 'ATR14'], ['atr_pct', 'ATR%'], ['relative_volume', '量比'],
+    ['high20_close', '近 20 日收盤高'], ['low20_close', '近 20 日收盤低'], ['prior_high20', '前 20 日盤中高'],
+    ['low20_intraday', '近 20 日盤中低'], ['macd_hist', 'MACD 柱'], ['observable_range_pct', '可觀察範圍 %'],
+  ];
+  const STOCK_STATE_MESSAGE = {
+    not_found: code => `${code}：查無此股。`,
+    missing_data: code => `${code}：缺少分析資料，暫不顯示數值。`,
+    suspended: code => `${code}：目前為停牌或行情中斷狀態，暫不顯示過期分析。`,
+    just_listed: code => `${code}：剛上市，歷史資料尚不足，暫不顯示分析數值。`,
+    stale: (code, dataDate = '未提供') => `${code}：資料至 ${dataDate}，已過期。以下內容只供查看舊資料，不作今日判斷。`,
+  };
+  // ---------- 操作指引（本人 11-09：「並沒有整理，並且做出清楚明了的操作手段指引」） ----------
+  // 只用「主要訊號」（契約 conditions.confirmed）與已確認的價位規則（支撐、壓力、近 20 日盤中低點）。
+  // 不另訂分數或門檻；資料缺就不說。語氣是「觀察／若…代表…」，不寫成買進或賣出指令。
+  const pct = value => `${value > 0 ? '+' : ''}${Number(value).toFixed(2)}%`;
+
+  function structureText(state) {
+    if (state === 'triggered') return '站上短期均線';
+    if (state === 'confirming') return '短線跌破均線、中期均線仍向上排列';
+    if (state === 'off') return '跌破短中期均線，結構偏弱';
+    return null;
+  }
+
+  function buildGuide(r) {
+    const s = Object.fromEntries(Object.entries((r.conditions || {}).confirmed || {}).map(([k, v]) => [k, v.state]));
+    const lv = r.levels || {};
+    const close = r.quote && r.quote.close;
+    const res1 = (lv.resistance || [])[0];
+    const sup1 = (lv.support || [])[0];
+    const low20 = r.indicators && r.indicators.low20_intraday;
+    const distance = value => (Number.isFinite(close) && close > 0 ? (value - close) / close * 100 : null);
+
+    // 一句話結論：結構＋最多兩個主要狀態＋目前位置（距壓力、支撐哪邊近，純比較、不設門檻）。
+    const parts = [];
+    const structure = structureText(s.ma_trend);
+    parts.push(structure || '資料不足以判斷均線結構');
+    if (s.momentum_overheated === 'triggered') parts.push('短線過熱');
+    if (s.heavy_volume_stall === 'triggered') parts.push('爆量但價格沒有推升');
+    else if (s.volume_confirmed === 'triggered') parts.push('上漲且量能放大');
+    if (s.near_prior_high === 'triggered') parts.push('逼近前波高點');
+    if (lv.limit_up_reference) parts.push('創近期新高，上方沒有歷史壓力');
+    else if (res1 && sup1) parts.push(Math.abs(res1.distance_pct) <= Math.abs(sup1.distance_pct) ? '距壓力較近' : '距支撐較近');
+    const conclusion = parts.slice(0, 4).join('、');
+
+    const items = [];
+    if (lv.limit_up_reference) {
+      items.push({ key: 'resistance', title: '上方', text: `創近期新高，上方沒有歷史壓力；明日漲停參考價 ${fmt(lv.limit_up_reference.value)}，不是目標價。` });
+    } else if (res1) {
+      items.push({ key: 'resistance', title: '上方壓力', text: `第一道壓力 ${fmt(res1.tick)}（${pct(res1.distance_pct)}）。若放量站上，代表上方空間打開；站上前，留意在此遇到賣壓。` });
+    } else if (lv.no_resistance_above) {
+      items.push({ key: 'resistance', title: '上方', text: '可觀察範圍內沒有結構壓力。' });
+    }
+    if (sup1) {
+      const weak = s.ma_trend === 'off';
+      items.push({ key: 'support', title: '回檔觀察', text: `支撐一 ${fmt(sup1.tick)}（${pct(sup1.distance_pct)}）。${weak ? '結構偏弱時，先看這裡能否止跌，止跌前不急著進場。' : '若要找進場位置，觀察回檔到這裡是否守住。'}` });
+    }
+    if (Number.isFinite(low20)) {
+      const d = distance(low20);
+      items.push({ key: 'weaken', title: '轉弱訊號', text: `跌破近 20 日低點 ${fmt(low20)}${d === null ? '' : `（${pct(d)}）`}，代表這波結構轉弱。` });
+    }
+    const risks = [];
+    if (s.momentum_overheated === 'triggered') risks.push('RSI 或 KD 位在高檔，追價風險較高');
+    if (s.heavy_volume_stall === 'triggered') risks.push('爆量但收平或收黑，留意上方賣壓');
+    if (s.revenue_decline === 'triggered') risks.push('月營收年減超過兩成');
+    if (s.securities_lending_sale === 'triggered') risks.push('前一交易日有借券放空');
+    if (s.ma_trend === 'off') risks.push('股價在短中期均線之下');
+    items.push({ key: 'risk', title: '留意', text: risks.length ? `${risks.join('；')}。` : '目前沒有主要風險訊號。' });
+    return { conclusion, items: items.slice(0, 4) };
+  }
+
+  function renderGuide(r) {
+    const guide = buildGuide(r);
+    $('guideConclusion').textContent = guide.conclusion;
+    $('guideList').replaceChildren(...guide.items.map(item => {
+      const li = node('li', `bd-guide-item is-${item.key}`);
+      li.dataset.key = item.key;
+      li.append(node('b', '', item.title), node('span', '', item.text));
+      return li;
+    }));
+  }
+
+  window.StockGuide = { build: buildGuide };
+
   let chart = null;
   let lastChartKey = '';
   let lastResult = null;
   let requestSequence = 0;
   let pendingRequest = null;
-  const baseline = new Map(); // 代號:資料日 → 綜合觀察結果，用來標出「換策略後哪裡變了」
-
-  function syncTabs(preset) {
-    document.querySelectorAll('#presetTabs [data-preset]').forEach(b => b.setAttribute('aria-checked', String(b.dataset.preset === preset)));
-  }
-
-  function diffText(now, base) {
-    if (now === null || now === undefined || base === null || base === undefined || now === base) return '';
-    const d = now - base;
-    return `比綜合觀察${d > 0 ? '高' : '低'} ${fmt(Math.abs(d))}`;
-  }
-
-  function renderCompare(r, base) {
-    const isBase = r.preset.id === DEFAULT_PRESET;
-    const pairs = [['pressure1', r.levels.pressure1, base && base.levels.pressure1], ['support1', r.levels.support1, base && base.levels.support1],
-      ['defense', r.levels.defense, base && base.levels.defense], ['score', r.score, base && base.score]];
-    pairs.forEach(([id, now, was]) => { $(`${id}Diff`).textContent = isBase || !base ? '' : diffText(now, was); });
-    const line = $('compareLine');
-    if (isBase || !base) { line.hidden = true; return; }
-    const changed = pairs.filter(([, now, was]) => now !== was).length;
-    line.hidden = false;
-    line.textContent = changed
-      ? `目前是「${r.preset.name}」：和綜合觀察相比，有 ${changed} 項數字不同（標在各數字下方）。`
-      : `目前是「${r.preset.name}」：這檔在這個策略下，壓力、支撐、防守與總分都和綜合觀察相同。`;
-  }
+  let chartPeriod = 'daily';
 
   function setTheme(theme) {
     document.documentElement.dataset.theme = theme;
@@ -51,185 +123,302 @@
     return code && /^[0-9A-Z]{4,6}$/.test(code) ? code : null;
   }
 
-  function presetFromUrl() {
-    return new URLSearchParams(location.search).get('preset') || DEFAULT_PRESET;
-  }
-
-  function updateUrl(code, preset) {
+  function updateUrl(code) {
     const url = new URL(location.href);
     url.searchParams.set('code', code);
-    url.searchParams.set('preset', preset);
+    url.searchParams.delete('preset');
     if (url.href !== location.href) history.pushState(null, '', url);
   }
 
-  function verdictText(r) {
-    const p = r.levels.pressure1, s = r.levels.support1;
-    const close = r.quote.close;
-    const parts = [];
-    const t = r.dimensions.T;
-    parts.push(t >= 68 ? '趨勢偏多' : t >= 38 ? '趨勢轉弱、還在中期均線之上' : '趨勢偏弱');
-    if (r.levels.sweet && r.levels.sweet.formed && r.levels.sweet.position !== null) {
-      const pos = r.levels.sweet.position;
-      parts.push(pos < 0 ? '跌到觀察區下方' : pos < 0.5 ? '在觀察區下半' : pos <= 1 ? '在觀察區上半' : '已高於觀察區');
-    }
-    if (p) parts.push(`上方 ${fmt(p)} 有壓力（距 ${((p / close - 1) * 100).toFixed(1)}%）`);
-    if (s) parts.push(`下方 ${fmt(s)} 有支撐`);
-    return `${r.preset.name}：${parts.join('，')}。`;
+  function node(tag, className, text) {
+    const el = document.createElement(tag);
+    if (className) el.className = className;
+    if (text !== undefined) el.textContent = text;
+    return el;
   }
 
-  const FIELD = {
-    close: '收盤', ma5: 'MA5', ma10: 'MA10', ma20: 'MA20', ma60: 'MA60', structure: '結構', ma20_slope5: 'MA20 五日斜率%',
-    dif: 'DIF', dea: 'DEA', hist: '柱', prev_hist: '前一柱', k: 'K', d: 'D', prev_k: '前 K', prev_d: '前 D', rsi14: 'RSI14',
-    ref_high: '前高', prior_high: '前 20 日高', vol_ratio: '量比', chg: '漲跌%', upper_shadow: '上影比', bias20: 'MA20 乖離',
-    valid_bars: '有效日線', margin_change_today: '融資今日增減（張）', margin_diff5: '融資五日增減（張）', m5_pct: '融資五日變化%',
-    short_balance: '融券餘額（張）', today: '三大法人今日（股）', foreign: '外資', trust: '投信', dealer: '自營', d5: '五日合計',
-    d10: '十日合計', d20: '二十日合計', days: '資料天數', inst_cost: '法人估計成本',
-    borrow_sold: '借券賣出（股）', borrow_balance: '借券餘額（股）', borrow_diff5: '借券五日增減（股）',
-    yoy: '營收年增%', cum_yoy: '累計營收年增%', period: '資料期別', eps: 'EPS', basis: '口徑', estimated_available_at: '估計可用日', per: '本益比', pbr: '淨值比', side: '估值'
-  };
-  const STREAK_KEYS = ['foreign', 'trust', 'dealer'];
+  function levelMeta(cluster) {
+    if (!cluster) return '無結構價位';
+    const sign = cluster.distance_pct > 0 ? '+' : '';
+    return `${sign}${fmt(cluster.distance_pct)}%・${TIER[cluster.tier] || cluster.tier}`;
+  }
 
-  function evidenceText(s) {
-    const e = s.evidence || {};
-    if (e.reason) return e.reason;
-    if (s.id === 'I02') return STREAK_KEYS.map(k => `${FIELD[k]}${e[k] > 0 ? '連買' : e[k] < 0 ? '連賣' : '持平'} ${Math.abs(e[k] || 0)} 日`).join('、');
-    if (s.id === 'I03') return e.turned && e.turned.length ? `${e.turned.map(k => FIELD[k]).join('、')}今日方向與前五日累計相反` : '外資與投信沒有明顯轉向';
-    return Object.entries(e).filter(([, v]) => v !== null && v !== undefined && typeof v !== 'object')
-      .map(([k, v]) => `${FIELD[k] || k} ${typeof v === 'number' ? fmt(v) : v}`).join('、');
+  function setLevel(id, cluster, emptyText) {
+    $(id).textContent = cluster ? fmt(cluster.tick) : emptyText;
+    $(`${id}Meta`).textContent = cluster ? levelMeta(cluster) : '';
+  }
+
+  // 價位階梯：壓力二／壓力一／收盤／支撐一／支撐二由上而下，列距依「與收盤相差幾 %」拉開，讓遠近一眼可比。
+  function layoutLadder(close, res, sup) {
+    $('ladderClose').textContent = fmt(close);
+    const items = { resistance2: res[1], resistance1: res[0], close: { tick: close }, support1: sup[0], support2: sup[1] };
+    const rows = [...document.querySelectorAll('#ladder > li')];
+    let prev = null;
+    rows.forEach((li, i) => {
+      if (!li.classList.contains('lad')) return;
+      const item = items[li.dataset.key];
+      // 壓力一沒有結構價位時仍顯示（寫「上方無結構價位」），其他缺的就整列收起。
+      const keep = item || li.dataset.key === 'resistance1';
+      li.hidden = !keep;
+      li.classList.toggle('is-empty', !item);
+      if (!keep) return;
+      if (prev && item) {
+        const pct = Math.abs(prev.tick - item.tick) / close * 100;
+        rows[i - 1].style.setProperty('--gap', `${Math.round(Math.min(96, Math.max(8, pct * 8)))}px`);
+      } else if (i > 0) rows[i - 1].style.setProperty('--gap', '8px');
+      prev = item || prev;
+    });
+    rows.forEach((li, i) => {
+      if (li.classList.contains('lad-gap')) li.hidden = !!(rows[i - 1]?.hidden || rows[i + 1]?.hidden);
+    });
   }
 
   function render(r) {
-    document.title = `${r.name} ${r.code}｜${r.preset.name}`;
-    $('content').dataset.preset = r.preset.id;
-    $('content').dataset.paramsHash = r.params_hash;
-    $('presetSelect').value = r.preset.id;
-    syncTabs(r.preset.id);
-    $('appliedPreset').textContent = `${r.preset.name} · 本站自有分析`;
-    $('presetDescription').textContent = r.preset.description;
+    document.title = `${r.name} ${r.code}｜個股分析`;
+    $('content').dataset.schema = r.schema;
     lastResult = r;
     $('stockName').textContent = r.name;
     $('stockCode').textContent = r.code;
+    showMarket(r);
+    showCandidateReasons(r.code);
     $('asOf').textContent = r.as_of;
     $('close').textContent = fmt(r.quote.close);
     const chg = r.quote.chg_pct;
-    $('chg').textContent = `${chg > 0 ? '+' : ''}${chg.toFixed(2)}%`;
+    $('chg').textContent = chg === null || chg === undefined ? '' : `${chg > 0 ? '+' : ''}${Number(chg).toFixed(2)}%`;
     $('chg').className = `num ${chg > 0 ? 'up' : chg < 0 ? 'down' : ''}`;
-    $('trendBadge').textContent = r.trend ? `趨勢分類：${TREND[r.trend]}` : '趨勢分類：總分未到齊';
-    $('trendBadge').dataset.trend = r.trend || '';
-    $('verdict').textContent = verdictText(r);
-    $('support1').textContent = fmt(r.levels.support1);
-    $('pressure1').textContent = fmt(r.levels.pressure1);
-    $('defense').textContent = fmt(r.levels.defense);
-    $('scoreValue').textContent = r.score === null ? '未到齊' : String(r.score);
-    if (r.preset.id === DEFAULT_PRESET) baseline.set(`${r.code}:${r.as_of}`, r);
-    renderCompare(r, baseline.get(`${r.code}:${r.as_of}`));
 
-    $('dims').replaceChildren(...DIMS.map(([key, label]) => {
-      const value = r.dimensions[key];
-      const gaps = r.coverage && r.coverage[key] ? r.coverage[key].missing_sources : [];
-      const box = document.createElement('div');
-      box.className = `sk-dim${value === null ? ' missing' : ''}${value !== null && gaps.length ? ' partial' : ''}`;
-      const reason = key === 'F' && r.kind === 'etf' ? 'ETF 不適用' : '尚無資料';
-      box.innerHTML = `<span>${label}</span><b>${value === null ? reason : value}</b><i style="--w:${value || 0}%"></i>`;
-      if (value !== null && gaps.length) box.append(Object.assign(document.createElement('small'), { textContent: `不完整：缺${gaps.join('、')}` }));
+    const lv = r.levels || {};
+    const res = lv.resistance || [];
+    const sup = lv.support || [];
+    const noRes = lv.no_resistance_above ? '上方無結構價位' : '無';
+    setLevel('resistance1', res[0], noRes);
+    setLevel('resistance2', res[1], '無');
+    setLevel('support1', sup[0], '無');
+    setLevel('support2', sup[1], '無');
+    layoutLadder(r.quote.close, lv.limit_up_reference ? [{ tick: lv.limit_up_reference.value }, res[1]] : res, sup);
+
+    const ind = { ...(r.indicators || {}), observable_range_pct: lv.observable_range_pct };
+    $('indicators').replaceChildren(...INDICATORS.map(([key, label]) => {
+      const box = node('div', 'sk-ind');
+      box.append(node('span', '', label), node('b', 'num', fmt(ind[key])));
       return box;
     }));
-    $('scoreLine').textContent = r.score === null ? `總分：${r.score_note}，先不給總分。` : `總分 ${r.score}（${TREND[r.trend]}）`;
-    $('flags').replaceChildren(...r.risk_flags.map(f => Object.assign(document.createElement('li'), { textContent: `${f.id}：${f.text}` })));
-    const c = r.strategy_counts;
-    $('counts').textContent = `${r.strategies.length} 招中：成立 ${c.triggered}、醞釀中 ${c.confirming}、未成立 ${c.off}、資料不足 ${c.unavailable}。「成立」只代表條件符合，不是買賣訊號。`;
-    $('strategyRows').replaceChildren(...r.strategies.map(s => {
+    if (lv.limit_up_reference) {
+      $('resistance1').textContent = fmt(lv.limit_up_reference.value);
+      $('resistance1Meta').textContent = lv.limit_up_reference.label;
+    }
+
+    renderGuide(r);
+    renderConditions(r.conditions || {});
+
+    $('toleranceLine').textContent = lv.aggregation_tolerance_pct === null || lv.aggregation_tolerance_pct === undefined
+      ? 'ATR% 資料不足，暫不計算價位聚合。'
+      : `落在 ${fmt(lv.aggregation_tolerance_pct)}% 波動容差內的相鄰結構合併為同一價格帶；價位依台股升降單位取整。支撐近端 0～10%、中距 10～20%、超過 20% 為遠端。`;
+    const rows = [...(lv.resistance_all || []).map(c => ['壓力', c]), ...(lv.support_all || []).map(c => ['支撐', c])];
+    $('levelRows').replaceChildren(...rows.map(([type, c]) => {
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td><b>${s.id}</b> ${s.name}</td><td><span class="sk-pill" data-s="${s.status}">${s.status_label}</span></td><td>${DIRECTION[s.direction]}</td><td></td>`;
-      tr.lastElementChild.textContent = evidenceText(s);
+      const sign = c.distance_pct > 0 ? '+' : '';
+      [type, fmt(c.tick), `${sign}${fmt(c.distance_pct)}%`, TIER[c.tier] || c.tier, (c.sources || []).map(s => s.label).join('、')]
+        .forEach(text => tr.append(node('td', '', text)));
       return tr;
     }));
-    const lv = r.levels;
-    $('levelSources').innerHTML = '';
-    const lines = [
-      `${r.preset.name}：${r.preset.description} 價位依所選方案的來源與窗口重新計算，不同方案可能得到相同價位。`,
-      lv.sweet && lv.sweet.formed ? `觀察區 ${fmt(lv.sweet.low)}～${fmt(lv.sweet.high)}（中心與寬度為本站自有分析，非買進區）。` : '觀察區尚未形成，防守參考只作分析，不是停損指令。',
-      `第二支撐 ${fmt(lv.support2)}、第二壓力 ${fmt(lv.pressure2)}。`,
-    ];
-    lines.forEach(t => $('levelSources').append(Object.assign(document.createElement('p'), { className: 'sk-source', textContent: t })));
+    const ref = r.reference && r.reference.low20_intraday;
+    $('referenceLine').textContent = ref ? `${ref.label} ${fmt(ref.value)}：跌破代表這波結構轉弱。` : '';
 
     $('notes').replaceChildren(...[
-      r.labels.own_formula + '；24 招門檻是本站 2TON-FIT-V1 規則，部分招式與原站行為已知不同。',
-      r.labels.not_advice + '；支撐、壓力、防守參考都是分析數字。',
-      `籌碼、法人、借券、估值用 ${r.qa.chip_range || '—'} 的官方逐日原件；月營收 ${r.sources && r.sources.revenue_period || '—'}、EPS ${r.sources && r.sources.eps_period || '—'} 當年累計（可用日為估計，不是公司公告日）。缺資料的招式標「資料不足」。`,
-      '價格未還原權值，除權息前後的均線會有落差。',
-    ].map(t => Object.assign(document.createElement('li'), { textContent: t })));
+      `${r.labels && r.labels.not_advice ? r.labels.not_advice : '分析數字是參考，不是買賣指令'}；支撐、壓力只描述價格所在位置。`,
+      r.labels && r.labels.price_basis ? `${r.labels.price_basis}，除權息前後的均線會有落差。` : '價格未還原權值，除權息前後的均線會有落差。',
+    ].map(t => node('li', '', t)));
 
-    $('status').hidden = true;
+    if (r.stock_state === 'stale' || r.analysis_status === 'stale') {
+      $('status').hidden = false;
+      $('status').dataset.stockState = 'stale';
+      $('status').textContent = STOCK_STATE_MESSAGE.stale(r.code, r.data_date || r.as_of);
+    } else {
+      $('status').hidden = true;
+      delete $('status').dataset.stockState;
+    }
     $('content').hidden = false;
     drawChart(r);
   }
 
-  function drawChart(r) {
-    const candles = r.bars.map(b => ({ t: b.date, label: b.date, open: b.open, high: b.high, low: b.low, close: b.close, amount: b.volume }));
-    const overlays = [];
-    if (r.levels.pressure1) overlays.push({ value: r.levels.pressure1, label: `壓力 ${fmt(r.levels.pressure1)}`, color: css('--gold', '#94681a'), pos: 'above', align: 'right' });
-    if (r.levels.support1) overlays.push({ value: r.levels.support1, label: `支撐 ${fmt(r.levels.support1)}`, color: css('--down', '#0f8058'), pos: 'below', align: 'right' });
-    if (r.levels.defense) overlays.push({ value: r.levels.defense, label: `防守 ${fmt(r.levels.defense)}`, color: css('--up', '#c8262c'), pos: 'below', align: 'right' });
-    const sweet = r.levels.sweet;
-    if (sweet && sweet.formed) {
-      overlays.push({ value: sweet.low, label: `觀察下緣 ${fmt(sweet.low)}`, color: css('--dim', '#666666'), pos: 'below', align: 'left' });
-      overlays.push({ value: sweet.high, label: `觀察上緣 ${fmt(sweet.high)}`, color: css('--dim', '#666666'), pos: 'above', align: 'left' });
-    }
-    const key = `${r.code}:${r.as_of}`;
-    const savedView = chart && key === lastChartKey ? { ...chart.view } : null;
-    if (!chart) chart = new window.KChart($('chartHost'), { macd: false, overlayLabels: 'stacked', height: w => Math.max(300, Math.min(460, w * 0.52)) });
-    chart.setData(candles, { count: Math.min(candles.length, innerWidth < 600 ? 50 : 90), overlays, unit: '日' });
-    if (savedView) { chart.view = savedView; chart.draw(); }
-    lastChartKey = key;
-    chart.canvas.setAttribute('aria-label', `${r.preset.name}，${r.name}日K，${candles[0].label}至${candles[candles.length - 1].label}，含支撐、壓力、觀察區與防守參考線。`);
+  // 訊號明細（預設收合）：每條只放名稱、狀態、一句白話；判斷式與準確度留在 API。
+  function conditionItem(name, definition, state, tag) {
+    const li = node('li', '');
+    const head = node('div', 'sk-cond-head');
+    const badge = node('b', `sk-cond-state ${state ? `is-${state}` : 'is-null'}`, state ? STATE_TEXT[state] || state : '資料不足');
+    head.append(node('span', '', name), badge);
+    li.append(head, node('p', 'sk-cond-def', definition));
+    if (tag) li.dataset.group = tag;
+    return li;
   }
 
-  async function load(code, preset = presetFromUrl()) {
+  function renderConditions(c) {
+    const confirmed = Object.values(c.confirmed || {});
+    const approximate = Object.values(c.approximate || {});
+    $('condConfirmed').replaceChildren(...confirmed.map(v => conditionItem(v.name, v.definition, v.state, 'confirmed')));
+    $('condApproximate').replaceChildren(...approximate.map(v => conditionItem(v.name, v.definition, v.state, 'approximate')));
+    $('condFixed').replaceChildren(...FIXED_CONDITIONS.map(([name, definition, state]) => conditionItem(name, definition, state, 'fixed')));
+    const on = confirmed.filter(v => v.state === 'triggered').length;
+    $('signalSummary').textContent = `主要訊號 ${confirmed.length} 項，成立 ${on} 項`;
+  }
+
+  function showOutside(data) {
+    $('outside').hidden = false;
+    $('outsideTitle').textContent = `${data.name || data.code} ${data.code}：不在本站涵蓋範圍`;
+    $('outsideReason').textContent = data.message || '不在本站涵蓋範圍';
+    $('outsideMeta').textContent = [data.market, data.universe_rank ? `成交金額排名第 ${data.universe_rank} 名` : '',
+      data.data_date ? `資料日 ${data.data_date}` : ''].filter(Boolean).join('・');
+    $('status').hidden = true;
+  }
+
+  function monthlyCandles(rows) {
+    const grouped = [];
+    rows.forEach(row => {
+      const month = row.date.slice(0, 7);
+      let bar = grouped[grouped.length - 1];
+      if (!bar || bar.month !== month) {
+        grouped.push({ month, t: row.date, label: month, open: row.open, high: row.high, low: row.low, close: row.close, volume: row.volume });
+        return;
+      }
+      bar.t = row.date;
+      bar.high = Math.max(bar.high, row.high);
+      bar.low = Math.min(bar.low, row.low);
+      bar.close = row.close;
+      bar.volume = Number.isFinite(bar.volume) && Number.isFinite(row.volume) ? bar.volume + row.volume : null;
+    });
+    return grouped;
+  }
+
+  function drawChart(r) {
+    const daily = r.bars.map(b => ({ t: b.date, label: b.date, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume }));
+    const candles = chartPeriod === 'monthly' ? monthlyCandles(r.bars) : daily;
+    const overlays = [];
+    const lv = r.levels || {};
+    (lv.resistance || []).forEach((c, i) => overlays.push({ value: c.tick, label: `壓力${i ? '二' : '一'} ${fmt(c.tick)}`, short: '壓力', color: css('--gold', '#94681a'), pos: 'above', align: i ? 'left' : 'right' }));
+    (lv.support || []).forEach((c, i) => overlays.push({ value: c.tick, label: `支撐${i ? '二' : '一'} ${fmt(c.tick)}`, short: '支撐', color: css('--down', '#0f8058'), pos: 'below', align: i ? 'left' : 'right' }));
+    const key = `${r.code}:${r.as_of}:${chartPeriod}`;
+    const savedView = chart && key === lastChartKey ? { ...chart.view } : null;
+    if (!chart) chart = new window.KChart($('chartHost'), { macd: false, studyHost: $('chartStudies'), studies: ['volume', 'macd', 'kd', 'rsi'], selectionRoots: [$('chartHost').parentElement], volumeKind: 'volume', overlayLabels: 'tags', height: w => Math.max(300, Math.min(460, w * 0.52)) });
+    const expected = { fast: 12, slow: 26, signal: 9, histogram_multiplier: 1, seed: 'first_close', warmup_bars: 34,
+      precision: 3, missing_policy: 'omit_missing_price_rows', version: 'macd-first-close-v1' };
+    const compatible = chartPeriod === 'daily' && r.chart && Object.entries(expected).every(([key, value]) => r.chart.parameters?.[key] === value)
+      && Array.isArray(r.chart.macd) && r.chart.macd.length === daily.length
+      && r.chart.macd.every((row, i) => row.date === daily[i].t);
+    const unit = chartPeriod === 'monthly' ? '月' : '日';
+    chart.setData(candles, { count: Math.min(candles.length, innerWidth < 600 ? 50 : 90), overlays, unit,
+      macd: chartPeriod === 'monthly' ? null : compatible ? r.chart.macd : [], macdNotice: compatible || chartPeriod === 'monthly' ? '' : 'MACD版本或日期不符，暫不顯示' });
+    if (savedView) { chart.view = savedView; chart.clamp(); chart.draw(); }
+    lastChartKey = key;
+    $('stockChartContext').textContent = chartPeriod === 'monthly'
+      ? `月K · ${candles.length} 根 · 涵蓋 ${daily[0].t}～${daily[daily.length - 1].t}`
+      : `日K · ${candles.length} 根 · 資料截至 ${r.as_of}`;
+    const notice = $('stockChartNotice');
+    notice.hidden = chartPeriod !== 'monthly';
+    notice.textContent = chartPeriod === 'monthly'
+      ? `僅以目前 ${daily.length} 根日K按曆月彙整；首月可能不完整，最末月只計至資料日、尚未收定。圖上價位仍是 ${r.as_of} 的分析結果。`
+      : '';
+    chart.canvas.setAttribute('aria-label', `${r.name}${unit}K，${candles[0].label}至${candles[candles.length - 1].label}，含支撐與壓力參考線。`);
+  }
+
+  // 契約 v2 本身帶市場別，不必再打一次搜尋 API。
+  function showMarket(r) {
+    const badge = $('stockMarket');
+    badge.hidden = !r.market;
+    badge.textContent = r.market || '';
+  }
+
+  // G3：此股若出現在已封存的籌碼選股名單中，顯示在哪些分頁、第幾名，以及所屬產業的資金狀態；不在名單就不顯示。
+  const SIDE_TEXT = { buy: '淨買超', sell: '淨賣超' };
+
+  function reasonEl(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+
+  // 同一分頁、同一方向合併成一行：例如「外資淨買超排行・淨賣超：當日第 2 名、3 日第 3 名」。
+  function membershipLines(memberships) {
+    const groups = new Map();
+    memberships.forEach(m => {
+      const streak = m.streak_days !== null && m.streak_days !== undefined;
+      const key = `${m.key}|${m.side}`;
+      if (!groups.has(key)) groups.set(key, { title: `${m.display_name}・${streak ? '連續' : ''}${SIDE_TEXT[m.side]}`, parts: [] });
+      groups.get(key).parts.push(streak ? `第 ${m.rank} 名（${m.streak_days} 天）` : `${m.days === 1 ? '當日' : `${m.days} 日`}第 ${m.rank} 名`);
+    });
+    return [...groups.values()].map(g => `${g.title}：${g.parts.join('、')}`);
+  }
+
+  async function showCandidateReasons(code) {
+    const host = $('candidateReasons');
+    if (!host || host.dataset.code === code) return;
+    host.dataset.code = code;
+    host.replaceChildren();
+    try {
+      const response = await fetch(`/api/screens/membership?${new URLSearchParams({ code })}`, { cache: 'no-store' });
+      const data = response.ok ? await response.json() : null;
+      if (!data || host.dataset.code !== code || !Array.isArray(data.memberships) || data.memberships.length === 0) return;
+      const section = reasonEl('section', 'sk-card sk-reason sk-membership');
+      const head = reasonEl('div', 'sk-reason-head');
+      head.append(reasonEl('h2', '', '出現在籌碼選股名單'), reasonEl('span', 'sk-reason-meta', `資料日 ${data.data_date}`));
+      section.append(head);
+      const ul = reasonEl('ul', 'sk-reason-invalid');
+      membershipLines(data.memberships).forEach(text => ul.append(reasonEl('li', '', text)));
+      section.append(ul);
+      if (data.industry) {
+        section.append(reasonEl('p', 'sk-reason-judgment',
+          `所屬產業：${data.industry.name}（${data.industry.label}，資料日 ${data.industry.date}；產業＝官方產業別）`));
+      }
+      section.append(reasonEl('p', 'sk-reason-meta', '排名依法人買賣超與連續天數計算，是資金動向的觀察，不是買賣建議。'));
+      host.replaceChildren(section);
+    } catch (_) { /* 名單讀不到就不顯示，不影響分析 */ }
+  }
+
+  async function load(code) {
     const sequence = ++requestSequence;
     if (pendingRequest) pendingRequest.abort();
     pendingRequest = new AbortController();
     $('content').hidden = true;
+    $('outside').hidden = true;
     $('content').setAttribute('aria-busy', 'true');
     $('status').hidden = false;
-    $('status').textContent = `重新分析 ${code}…`;
+    delete $('status').dataset.stockState;
+    $('status').textContent = `讀取 ${code}`;
     $('codeInput').value = code;
-    $('presetSelect').value = preset;
-    syncTabs(preset);
     if (location.protocol === 'file:') {
       $('content').setAttribute('aria-busy', 'false');
       $('status').textContent = '請從本機服務開啟（http://127.0.0.1:8876/stock.html），個股分析需要後端計算。';
       return;
     }
-    const params = new URLSearchParams({ preset });
+    const params = new URLSearchParams();
     const asOf = new URLSearchParams(location.search).get('as_of');
     if (asOf) params.set('as_of', asOf);
     try {
       const response = await fetch(`/api/stocks/${encodeURIComponent(code)}/analysis?${params}`, { cache: 'no-store', signal: pendingRequest.signal });
       const data = await response.json();
       if (sequence !== requestSequence) return;
+      if (data.error === 'outside-universe') {
+        // 和「資料尚未就緒」分開：不畫 K 線、不顯示任何分析數字。
+        showOutside(data);
+        return;
+      }
       if (!response.ok || data.error || (data.qa && data.qa.blocking)) {
-        $('status').textContent = data.qa && data.qa.reason ? `${code}：${data.qa.reason}，不給結論。` : `${code}：${data.message || '查不到資料'}`;
+        const stockState = data.stock_state || '';
+        $('status').dataset.stockState = stockState;
+        $('status').textContent = STOCK_STATE_MESSAGE[stockState]
+          ? STOCK_STATE_MESSAGE[stockState](code)
+          : data.qa && data.qa.reason ? `${code}：${data.qa.reason}，不給結論。` : `${code}：${data.message || '查不到資料'}`;
         return;
       }
-      if (!data.preset || data.preset.id !== preset) {
-        $('status').textContent = '本機服務尚未載入分析方案新版，請更新服務後再使用；不顯示其他方案的結果。';
+      if (data.schema !== SCHEMA) {
+        $('status').textContent = '本機服務尚未載入個股分析新版，請更新服務後再使用。';
         return;
-      }
-      // 第一次看非預設策略時，順便取綜合觀察當比較基準（同一檔同一天只取一次）。
-      if (preset !== DEFAULT_PRESET && !baseline.has(`${data.code}:${data.as_of}`)) {
-        try {
-          const bp = new URLSearchParams(params); bp.set('preset', DEFAULT_PRESET);
-          const br = await fetch(`/api/stocks/${encodeURIComponent(code)}/analysis?${bp}`, { cache: 'no-store', signal: pendingRequest.signal });
-          const bd = br.ok ? await br.json() : null;
-          if (bd && bd.preset && bd.preset.id === DEFAULT_PRESET && !(bd.qa && bd.qa.blocking)) baseline.set(`${bd.code}:${bd.as_of}`, bd);
-        } catch (_) { /* 比較基準拿不到就不顯示差異，不影響主結果 */ }
-        if (sequence !== requestSequence) return;
       }
       render(data);
     } catch (error) {
       if (sequence !== requestSequence || error.name === 'AbortError') return;
-      $('status').textContent = '本機服務沒有回應，請稍後重新選擇分析方案。';
+      $('status').textContent = '本機服務沒有回應，請稍後再試。';
     } finally {
       if (sequence === requestSequence) $('content').setAttribute('aria-busy', 'false');
     }
@@ -239,29 +428,14 @@
     event.preventDefault();
     const code = $('codeInput').value.trim().toUpperCase();
     if (!/^[0-9A-Z]{4,6}$/.test(code)) { $('status').hidden = false; $('status').textContent = '代號格式不正確。'; return; }
-    const preset = $('presetSelect').value || DEFAULT_PRESET;
-    updateUrl(code, preset);
-    load(code, preset);
+    updateUrl(code);
+    load(code);
   });
-  document.querySelectorAll('#presetTabs [data-preset]').forEach(button => button.addEventListener('click', () => {
-    if (button.getAttribute('aria-checked') === 'true') return;
-    $('presetSelect').value = button.dataset.preset;
-    $('presetSelect').dispatchEvent(new Event('change'));
-  }));
-  $('presetTabs').addEventListener('keydown', event => {
-    if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
-    const buttons = [...document.querySelectorAll('#presetTabs [data-preset]')];
-    const i = buttons.findIndex(b => b.getAttribute('aria-checked') === 'true');
-    const next = buttons[(i + (event.key === 'ArrowRight' ? 1 : buttons.length - 1)) % buttons.length];
-    event.preventDefault(); next.focus(); next.click();
+  $('periodSelect').addEventListener('change', () => {
+    chartPeriod = $('periodSelect').value === 'monthly' ? 'monthly' : 'daily';
+    if (lastResult) drawChart(lastResult);
   });
-  $('presetSelect').addEventListener('change', () => {
-    const code = codeFromUrl() || '2330';
-    const preset = $('presetSelect').value;
-    updateUrl(code, preset);
-    load(code, preset);
-  });
-  window.addEventListener('popstate', () => load(codeFromUrl() || '2330', presetFromUrl()));
+  window.addEventListener('popstate', () => load(codeFromUrl() || '2330'));
   $('verdictButton').addEventListener('click', () => {
     const open = $('layer1').hidden;
     $('layer1').hidden = !open;

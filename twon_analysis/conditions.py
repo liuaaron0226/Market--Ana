@@ -1,4 +1,6 @@
-"""24 招條件（handoff §3，2TON-FIT-V1，本站自有門檻）。這裡先放價量可算的 T01–T06、V01–V06。
+"""【已退役 2026-11-08】本人定案「自創部分不保留」；個股分析改由 analyze_v2.py 輸出（契約 .scratch/chart-screening-workbench/stock-analysis-contract-v2.md）。本檔僅為既有呼叫端相容而保留，不用於新產品輸出。
+
+24 招條件（handoff §3，2TON-FIT-V1，本站自有門檻）。這裡先放價量可算的 T01–T06、V01–V06。
 
 每招回傳 {'id','name','family','horizon','direction','price_role','status','evidence'}；
 status：triggered／confirming／off；資料不足時 status='unavailable'（不能把缺資料當 off）。

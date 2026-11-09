@@ -151,19 +151,62 @@ async function consume(db, email, bucket, now, rate = RATE) {
   throw new RateLimited(60 - Math.floor((now % 60_000) / 1000));
 }
 
-// 個股分析：雲端不能跑 Python，回 build 時預算好的結果（籌碼卡會連到的股票 × 三種方案、最新交易日）。
+// 個股搜尋與分析：搜尋讀版本化官方名錄；分析先兼容舊包，再讀同一 active version 的 D1 預算結果。
 const STOCK_PATH = /^\/api\/stocks\/([0-9A-Z]{4,6})\/analysis$/;
+const ANALYSIS_SCHEMA = "stock-analysis/v2";
+async function handleStockSearch(request, env, email, deps) {
+  const params = new URL(request.url).searchParams;
+  if (params.getAll("q").length > 1 || params.getAll("limit").length > 1 || params.getAll("cursor").length > 1) {
+    throw new HttpError(400, "搜尋參數不可重複");
+  }
+  const query = (params.get("q") || "").trim();
+  if (new TextEncoder().encode(query).length > 48) throw new HttpError(400, "搜尋文字過長");
+  const limitText = params.get("limit") || "20";
+  const cursorText = params.get("cursor") || "0";
+  if (!/^\d+$/.test(limitText) || !/^\d+$/.test(cursorText)) throw new HttpError(400, "分頁參數格式錯誤");
+  const limit = Number(limitText);
+  const offset = Number(cursorText);
+  if (limit < 1 || limit > 50 || !Number.isSafeInteger(offset)) throw new HttpError(400, "分頁參數超出範圍");
+  try {
+    await consume(env.DB, email, "market", (deps.now || Date.now)(), deps.rate);
+  } catch (e) {
+    if (e instanceof RateLimited) return json(429, { error: "rate-limited", message: "查詢太頻繁，請稍後再試" }, { "retry-after": String(e.retryAfter) });
+    throw new HttpError(503, "暫時無法處理，請稍後再試");
+  }
+  const active = await env.DB.prepare(
+    "SELECT v.version, v.source_date FROM stock_data_state s " +
+      "JOIN stock_data_versions v ON v.version = s.active_version WHERE s.key = 'current'",
+  ).first();
+  if (!active) throw new HttpError(503, "上市或上櫃普通股名錄尚未就緒");
+  if (!query) return json(200, { source_date: active.source_date, items: [], next_cursor: null });
+  const escaped = query.replace(/[\\%_]/g, (character) => `\\${character}`);
+  // V2：名錄只含大量股母體（listed_securities），母體外的股票自然不會出現在搜尋結果；名次與規則版本只增欄位。
+  const rows = await env.DB.prepare(
+    "SELECT code, name, market, security_type, latest_bar_date, available_bars, analysis_status, universe_rank, universe_rule " +
+      "FROM listed_securities WHERE version = ? AND (code = ? OR name LIKE ? ESCAPE '\\') " +
+      "ORDER BY CASE WHEN code = ? THEN 0 WHEN name = ? THEN 1 ELSE 2 END, code LIMIT ? OFFSET ?",
+  ).bind(active.version, query, `%${escaped}%`, query, query, limit + 1, offset).all();
+  const hasMore = rows.results.length > limit;
+  const items = rows.results.slice(0, limit).map((item) => ({
+    ...item,
+    data_date: item.latest_bar_date,
+    analysis_available: item.analysis_status === "available" || item.analysis_status === "stale",
+    source_date: active.source_date,
+  }));
+  return json(200, { source_date: active.source_date, items, next_cursor: hasMore ? String(offset + limit) : null });
+}
+
 async function handleStockApi(request, env, path, email, deps) {
   if (request.method !== "GET") throw new HttpError(405, "方法不允許");
+  if (path === "/api/stocks/search") return handleStockSearch(request, env, email, deps);
   const pack = deps.stockPack;
-  if (!pack) throw new HttpError(503, "資料尚未就緒");
+  // 個股分析契約 v2（本人 11-08「自創部分不保留」）：每檔一筆。舊三方案格式的資料包不能當 v2 回傳，視同未就緒。
+  if (!pack || pack.analysis_schema !== ANALYSIS_SCHEMA) throw new HttpError(503, "資料尚未就緒");
   const m = path.match(STOCK_PATH);
   if (!m) throw new HttpError(400, "代號格式不正確");
   const q = new URL(request.url).searchParams;
-  const presets = q.getAll("preset");
-  if (presets.length > 1) throw new HttpError(400, "請指定一個分析方案");
-  const preset = presets[0] || pack.default_preset;
-  if (!pack.presets.includes(preset)) throw new HttpError(400, "分析方案不正確");
+  // 舊頁面或書籤若仍帶 ?preset=，明確回 400 說明方案已移除；靜默忽略會讓呼叫端誤以為拿到的是指定方案。
+  if (q.has("preset")) throw new HttpError(400, "分析方案已移除，個股分析每檔只有一份，請拿掉 preset 參數");
   const asOf = q.get("as_of");
   if (asOf !== null && !DATE_RE.test(asOf)) throw new HttpError(400, "日期格式不正確");
   try {
@@ -172,20 +215,171 @@ async function handleStockApi(request, env, path, email, deps) {
     if (e instanceof RateLimited) return json(429, { error: "rate-limited", message: "查詢太頻繁，請稍後再試" }, { "retry-after": String(e.retryAfter) });
     throw new HttpError(503, "暫時無法處理，請稍後再試");
   }
-  if (asOf && asOf !== pack.as_of) {
-    return json(404, { error: "not-in-cloud", message: `雲端版只提供最新交易日 ${pack.as_of} 的分析` }, { "cache-control": "private, no-store" });
-  }
-  const byPreset = Object.hasOwn(pack.results, m[1]) ? pack.results[m[1]] : null;
-  const result = byPreset && Object.hasOwn(byPreset, preset) ? byPreset[preset] : null;
+  let result = Object.hasOwn(pack.results, m[1]) ? pack.results[m[1]] : null;
+  let resultAsOf = pack.as_of;
   if (!result) {
-    return json(404, { error: "not-in-cloud", message: "雲端版只提供籌碼卡上出現過的股票，這檔請在本機版查詢" }, { "cache-control": "private, no-store" });
+    const stored = await env.DB.prepare(
+      "SELECT a.as_of, a.payload FROM stock_data_state s " +
+        "JOIN stock_analysis a ON a.version = s.active_version " +
+        "WHERE s.key = 'current' AND a.code = ?",
+    ).bind(m[1]).first();
+    if (stored) {
+      result = stored.payload;
+      resultAsOf = stored.as_of;
+    }
   }
-  // 雲端資料包裡每筆結果是 build 時序列化好的 JSON 字串（加快 Worker 啟動），原樣回傳。
+  if (!result) {
+    // V2：本人「整個網站都只做大量股」。母體外的股票回 404 並帶名次／原因（原因照實，停牌不說成交量小），
+    // 讓頁面顯示「不在本站涵蓋範圍」；仍與「雲端沒資料」分開，呼叫端以 error 欄判斷。
+    const outside = await env.DB.prepare(
+      "SELECT o.code, o.name, o.market, o.universe_rank, o.reason, o.universe_rule, v.source_date FROM stock_data_state s " +
+        "JOIN universe_outside o ON o.version = s.active_version " +
+        "JOIN stock_data_versions v ON v.version = s.active_version " +
+        "WHERE s.key = 'current' AND o.code = ?",
+    ).bind(m[1]).first();
+    if (outside) {
+      const message = outside.reason === "below_rank"
+        ? `不在本站涵蓋範圍：20 日平均成交金額目前第 ${outside.universe_rank} 名，本站只涵蓋大量股`
+        : "不在本站涵蓋範圍：" + ({ insufficient_window: "近 20 個交易日資料不完整，無法排名", suspended_on_data_date: "資料日停牌，無法排名", no_trading_data: "沒有行情資料" }[outside.reason] || "無法排名");
+      return json(404, { error: "outside-universe", message, ...outside }, { "cache-control": "private, no-store" });
+    }
+    return json(404, { error: "not-in-cloud", message: "雲端目前沒有這檔上市或上櫃普通股的可用分析資料" }, { "cache-control": "private, no-store" });
+  }
+  if (asOf && asOf !== resultAsOf) {
+    return json(404, { error: "not-in-cloud", message: `雲端版只提供最新分析資料日 ${resultAsOf}` }, { "cache-control": "private, no-store" });
+  }
+  // 舊資料包與 D1 都保存 build 時序列化好的結果；查到時才原樣回傳。
   const body = typeof result === "string" ? result : JSON.stringify(result);
   return new Response(body, {
     status: 200,
     headers: { "content-type": "application/json; charset=utf-8", "cache-control": "private, no-store", "x-content-type-options": "nosniff", "x-robots-tag": "noindex, nofollow" },
   });
+}
+
+// C1：籌碼選股／產業資金流向／長期核心持有。build 前由 build_screens_pack.py 用本機 API 的同一組函式預算，
+// 這裡只做參數驗證（與 live_server 相同規則）、權限與限速，再原樣回傳預算好的 JSON 字串。
+const SCREENS_SCHEMA = "market-screens-pack/v1";
+const SCREEN_PATHS = new Set(["/api/screens", "/api/screens/membership", "/api/rotation", "/api/core-holdings"]);
+const CODE_RE = /^[0-9A-Z]{4,6}$/;
+const PRIVATE_JSON = { "content-type": "application/json; charset=utf-8", "cache-control": "private, no-store", "x-content-type-options": "nosniff", "x-robots-tag": "noindex, nofollow" };
+const rawJson = (body) => new Response(body, { status: 200, headers: PRIVATE_JSON });
+const badRequest = (message) => json(400, { error: "bad-request", message }, { "cache-control": "private, no-store" });
+
+// 回傳 {key} 或錯誤回應；規則同 live_server._send_screens：參數不可重複，天數／方向限該分頁允許的值。
+function screenKey(params, pack) {
+  const keys = params.getAll("key");
+  const days = params.getAll("days");
+  const sides = params.getAll("side");
+  const inflow = params.getAll("only_inflow");
+  if (keys.length !== 1 || days.length > 1 || sides.length > 1 || inflow.length > 1) return null;
+  const tab = Object.hasOwn(pack.tabs, keys[0]) ? pack.tabs[keys[0]] : null;
+  if (!tab) return null;
+  const dayText = days[0] ?? "1";
+  const side = sides[0] ?? "buy";
+  const flag = inflow[0] ?? "0";
+  if (!/^-?\d+$/.test(dayText.trim())) return null;
+  const day = Number(dayText.trim());
+  if (!tab.days.includes(day) || !tab.sides.includes(side) || (flag !== "0" && flag !== "1")) return null;
+  return `${keys[0]}|${day}|${side}|${flag}`;
+}
+
+async function handleScreensApi(request, env, path, email, deps) {
+  if (request.method !== "GET") throw new HttpError(405, "方法不允許");
+  const pack = deps.screensPack;
+  if (!pack || pack.schema !== SCREENS_SCHEMA) throw new HttpError(503, "資料尚未就緒");
+  const params = new URL(request.url).searchParams;
+  let body;
+  if (path === "/api/screens") {
+    if ([...params.keys()].length === 0) body = pack.catalog;
+    else {
+      const key = screenKey(params, pack);
+      if (!key) return badRequest("選股分頁、天數或方向不正確");
+      body = Object.hasOwn(pack.screens, key) ? pack.screens[key] : null;
+      if (body === null) throw new HttpError(503, "資料尚未就緒");
+    }
+  } else if (path === "/api/screens/membership") {
+    const codes = params.getAll("code");
+    if (codes.length !== 1 || !CODE_RE.test(codes[0])) return badRequest("代號格式不正確");
+    const code = codes[0];
+    body = Object.hasOwn(pack.membership, code) ? pack.membership[code]
+      : JSON.stringify({ code, data_date: null, memberships: [], industry: Object.hasOwn(pack.industry_by_code, code) ? pack.industry_by_code[code] : null });
+  } else if (path === "/api/rotation") body = pack.rotation;
+  else body = pack.core_holdings;
+  try {
+    await consume(env.DB, email, "market", (deps.now || Date.now)(), deps.rate);
+  } catch (e) {
+    if (e instanceof RateLimited) return json(429, { error: "rate-limited", message: "查詢太頻繁，請稍後再試" }, { "retry-after": String(e.retryAfter) });
+    throw new HttpError(503, "暫時無法處理，請稍後再試");
+  }
+  return rawJson(body);
+}
+
+// B1（11-09）：和 0050 比。build 前由 build_compare_pack.py 用 benchmark_compare 預算（與本機 live_server 同一組函式），
+// 這裡只做參數驗證（與 live_server 相同規則）、權限與限速，再把預算好的片段組成與本機相同的 JSON。
+const COMPARE_SCHEMA = "compare-0050-pack/v1";
+const VS_PATH = /^\/api\/stocks\/([^/]+)\/vs-0050$/;
+const COMPARE_PATH = "/api/compare-0050";
+const COMPARE_BASIS = "含息總報酬，期初＝1";
+const NOT_FOUND_MESSAGE = "查無此上市或上櫃普通股";
+
+// 回傳去重保序的代號，或 null（格式不對、空、重複參數、超過上限）；規則同 benchmark_compare.parse_codes。
+function compareCodes(params, max) {
+  const raw = params.getAll("codes");
+  if (raw.length !== 1 || !raw[0]) return null;
+  const parts = raw[0].split(",");
+  if (parts.some((part) => !CODE_RE.test(part))) return null;
+  const codes = [...new Set(parts)];
+  return codes.length > max ? null : codes;
+}
+
+async function handleCompareApi(request, env, path, email, deps) {
+  if (request.method !== "GET") throw new HttpError(405, "方法不允許");
+  const pack = deps.comparePack;
+  if (!pack || pack.schema !== COMPARE_SCHEMA) throw new HttpError(503, "資料尚未就緒");
+  const privateError = (status, body) => json(status, body, { "cache-control": "private, no-store" });
+  let codes;
+  const vs = path.match(VS_PATH);
+  if (vs) {
+    if (!CODE_RE.test(vs[1])) return badRequest("代號格式不正確");
+    codes = [vs[1]];
+  } else {
+    codes = compareCodes(new URL(request.url).searchParams, pack.max_codes);
+    if (!codes) return badRequest(`codes 需為 1～${pack.max_codes} 個以逗號分隔的代號`);
+  }
+  try {
+    await consume(env.DB, email, "market", (deps.now || Date.now)(), deps.rate);
+  } catch (e) {
+    if (e instanceof RateLimited) return json(429, { error: "rate-limited", message: "查詢太頻繁，請稍後再試" }, { "retry-after": String(e.retryAfter) });
+    throw new HttpError(503, "暫時無法處理，請稍後再試");
+  }
+  const itemFor = (code) => {
+    if (Object.hasOwn(pack.items, code)) return JSON.parse(pack.items[code]);
+    if (Object.hasOwn(pack.outside, code)) return { code, status: "outside-universe", ...JSON.parse(pack.outside[code]) };
+    return { code, status: "not-found", message: NOT_FOUND_MESSAGE };
+  };
+  const benchmark = JSON.parse(pack.benchmark);
+  if (vs) {
+    const item = itemFor(codes[0]);
+    if (item.status !== "ok") {
+      const { status, ...rest } = item;
+      return privateError(404, { error: status, ...rest });
+    }
+    return rawJson(JSON.stringify({ schema: "vs-0050/v1", data_date: pack.data_date, basis: COMPARE_BASIS, benchmark, item, notes: pack.notes }));
+  }
+  return rawJson(JSON.stringify({ schema: "compare-0050/v1", data_date: pack.data_date, basis: COMPARE_BASIS, max_codes: pack.max_codes,
+    benchmark, items: codes.map(itemFor), notes: pack.notes }));
+}
+
+const isComparePath = (path) => path === COMPARE_PATH || VS_PATH.test(path);
+
+// U2：每日更新狀態。build 前由 daily_update 產生 status.json，包進 Functions；這裡只原樣回傳。
+// 每頁載入都會讀，所以不扣查詢額度（只有通過登入與核准才看得到）。
+const DATA_STATUS_PATH = "/api/data-status";
+const NOT_READY_STATUS = { schema: "data-status/v1", status: "not_ready", last_success_date: null, stale: null };
+
+function handleDataStatusApi(request, deps) {
+  if (request.method !== "GET") throw new HttpError(405, "方法不允許");
+  return new Response(JSON.stringify(deps.dataStatus ?? NOT_READY_STATUS), { status: 200, headers: PRIVATE_JSON });
 }
 
 async function handleMarketApi(request, env, path, email, deps) {
@@ -244,13 +438,21 @@ export async function handle(request, env, next, deps = defaultDeps) {
     }
 
     const isAdmin = path === "/admin" || path.startsWith("/admin/") || path.startsWith("/api/admin/");
+    // 雲端沒有即時行情服務（票 07）。不處理的話 Pages 會把 /api/live 回成首頁 HTML，Safari 解析時顯示
+    // 「The string did not match the expected pattern」。改成明確的 JSON 503，前端顯示白話說明。
     const isMarket = path.startsWith("/api/market/");
     const isStock = path.startsWith("/api/stocks/");
+    const isScreens = SCREEN_PATHS.has(path);
+    const LIVE_OFF = () => json(503, { error: "live-not-available", message: "雲端版尚未提供盤中即時行情，目前顯示盤後資料" });
     if (isOwner) {
+      if (path === "/api/live") return LIVE_OFF();
       if (path.startsWith("/api/admin/")) return await handleAdminApi(request, env, path, owner);
       if (path === "/api/me") return json(200, { email, status: "approved", owner: true });
       if (isMarket) return await handleMarketApi(request, env, path, email, deps);
+      if (isComparePath(path)) return await handleCompareApi(request, env, path, email, deps);
       if (isStock) return await handleStockApi(request, env, path, email, deps);
+      if (isScreens) return await handleScreensApi(request, env, path, email, deps);
+      if (path === DATA_STATUS_PATH) return handleDataStatusApi(request, deps);
       if (RETIRED_DATA.has(path)) return fail(404, "找不到");
       return await next();
     }
@@ -262,8 +464,12 @@ export async function handle(request, env, next, deps = defaultDeps) {
     }
     if (isAdmin) return fail(403, "沒有管理權限");
     if (path === "/api/me") return json(200, { email, status, owner: false });
+    if (path === "/api/live") return LIVE_OFF();
     if (isMarket) return await handleMarketApi(request, env, path, email, deps);
+    if (isComparePath(path)) return await handleCompareApi(request, env, path, email, deps);
     if (isStock) return await handleStockApi(request, env, path, email, deps);
+    if (isScreens) return await handleScreensApi(request, env, path, email, deps);
+    if (path === DATA_STATUS_PATH) return handleDataStatusApi(request, deps);
     if (RETIRED_DATA.has(path)) return fail(404, "找不到");
     return await next();
   } catch (e) {

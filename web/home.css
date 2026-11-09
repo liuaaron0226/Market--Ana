@@ -1,0 +1,391 @@
+/* 首頁設計改版（2026-11-09 本人確認範例方向後套用正式版；方法 unslop by @heydamir, CC BY 4.0）
+   延續個股頁第二版：報表式大標、黑粗線分隔、去卡片、軸上價籤、統一按鈕
+   新順序：報價 → 找個股 → 主 K 線 → 直白分析 → 籌碼與資金 → 選股看板
+   方法 unslop by Damir Sokolovsky (@heydamir), CC BY 4.0 */
+
+.hm .app-shell {
+  width: min(100%, 1280px); height: auto; min-height: 100dvh;
+  padding: 0 32px 96px; gap: 0; display: block;
+}
+.hm .hm-section-title {
+  display: flex; align-items: baseline; gap: 12px;
+  font: 600 22px/1.2 var(--serif); color: var(--ink); margin: 0 0 16px;
+}
+.hm .hm-section-title small { font: 400 13px var(--sans); color: var(--faint); }
+
+/* ---------- 報價：報表式大標 ---------- */
+.hm .market-header {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 480px) auto;
+  grid-template-areas: "price conclusion theme" "time conclusion theme";
+  column-gap: 40px; row-gap: 12px; align-items: end;
+  padding: 40px 0 32px; border-bottom: 1px solid var(--ink);
+}
+.hm .instrument-block { grid-area: price; gap: 12px; }
+.hm .time-grid { grid-area: time; align-self: start; }
+.hm .conclusion-trigger { grid-area: conclusion; }
+.hm .theme-toggle { grid-area: theme; align-self: start; }
+.hm .brand-line h1 { font: 600 20px var(--serif); letter-spacing: .02em; color: var(--dim); }
+.hm .market-mark { width: 20px; height: 20px; color: var(--dim); }
+.hm .price-summary { display: flex; align-items: baseline; gap: 16px; padding: 0; border: 0; background: none; cursor: pointer; text-align: left; }
+.hm .price-value { font: 500 64px/1 var(--mono); letter-spacing: -.02em; color: var(--ink); }
+.hm .price-change { font: 500 18px var(--mono); }
+.hm .price-summary .detail-cue { align-self: center; }
+.hm .status-compact { color: var(--faint); font-size: 12px; gap: 8px; }
+.hm .state-trigger { color: var(--dim); }
+
+/* 下一交易日結論：不再是浮起的卡片，改成上方一條細線的引文 */
+.hm .conclusion-trigger {
+  max-width: none; padding: 12px 32px 0 0; min-height: 0;
+  border: 0 !important; border-top: 1px solid var(--hair) !important; border-radius: 0 !important;
+  background: transparent !important; box-shadow: none;
+}
+.hm .conclusion-trigger strong { transition: color 160ms var(--ease-out); }
+.hm .conclusion-trigger:hover strong { color: var(--accent); }
+.hm .conclusion-label { font-size: 12px; color: var(--faint); }
+.hm .conclusion-trigger strong { font: 600 22px/1.45 var(--serif) !important; color: var(--ink); margin-top: 4px; }
+.hm .conclusion-trigger .detail-cue { right: 0; }
+
+.hm .theme-toggle {
+  width: var(--btn-h); height: var(--btn-h); padding: 0; display: grid; place-items: center;
+  border: 1px solid var(--hair); border-radius: var(--btn-r); background: transparent; color: var(--ink);
+  transition: background-color 160ms var(--ease-out), transform 120ms var(--ease-out);
+}
+.hm .theme-toggle:hover { background: var(--panel2); }
+.hm .theme-toggle:active { transform: var(--press); }
+.hm .theme-toggle svg { width: 18px; height: 18px; }
+
+/* ---------- 找個股：一條搜尋列 ---------- */
+.hm .hm-search {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; column-gap: 24px;
+  padding: 20px 0; border: 0; border-bottom: 1px solid var(--hair); border-radius: 0; background: transparent;
+}
+.hm .stock-search-heading { flex-direction: column; gap: 2px; }
+.hm .stock-search-heading h2 { font: 600 18px var(--serif); }
+.hm .stock-search-heading p { font-size: 12px; color: var(--faint); }
+.hm .stock-search-form { margin: 0; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; }
+.hm .stock-search-form input {
+  height: 44px; min-height: 0; padding: 0 16px; border: 1px solid var(--hair); border-radius: var(--btn-r);
+  background: var(--panel); font-size: 15px; transition: border-color 160ms var(--ease-out);
+}
+.hm .stock-search-form input:focus { outline: none; border-color: var(--ink); }
+.hm .stock-search-form button {
+  height: 44px; min-height: 0; padding: 0 16px; border-radius: var(--btn-r); font: 500 14px var(--sans);
+  transition: background-color 160ms var(--ease-out), transform 120ms var(--ease-out);
+}
+.hm .stock-search-form button[type="submit"] { background: var(--ink); color: var(--bg); border: 1px solid var(--ink); }
+.hm .stock-search-form button[type="submit"]:hover { background: color-mix(in srgb, var(--ink) 86%, var(--bg)); }
+.hm .stock-search-form button[type="button"] { background: transparent; border: 1px solid var(--hair); color: var(--dim); }
+.hm .stock-search-form button[type="button"]:hover { background: var(--panel2); color: var(--ink); }
+.hm .stock-search-form button:active { transform: var(--press); }
+.hm .stock-search-status,
+.hm .stock-search-results,
+.hm .stock-search-more { grid-column: 2; }
+.hm .stock-search-status { margin-top: 8px; font-size: 12px; color: var(--faint); }
+.hm .stock-search-status:empty { display: none; }
+.hm .stock-search-results li,
+.hm .stock-search-results a,
+.hm .stock-search-results button { border-radius: var(--btn-r); }
+
+.hm .service-note { margin: 16px 0 0; padding: 8px 12px; border: 0; border-radius: var(--btn-r); background: var(--panel2); color: var(--dim); font-size: 12px; }
+
+/* ---------- 主 K 線：去卡片，滿版 ---------- */
+.hm .workspace { display: block; padding-top: 8px; }
+.hm .chart-workspace {
+  height: auto; border: 0 !important; border-radius: 0; background: transparent; box-shadow: none; overflow: visible;
+  border-bottom: 1px solid var(--hair) !important; padding-bottom: 24px;
+}
+.hm .chart-toolbar { padding: 16px 0 8px; min-height: 0; border: 0; background: transparent; }
+.hm .chart-toolbar h2 { font: 600 22px var(--serif); }
+.hm .chart-toolbar p { color: var(--faint); font: 12px var(--mono); }
+.hm .chart-controls { gap: 8px; }
+.hm .chart-controls select,
+.hm .chart-controls button {
+  height: var(--btn-h); min-height: 0; border: 1px solid var(--hair); border-radius: var(--btn-r);
+  background: transparent; color: var(--ink); font: 500 13px var(--sans);
+  transition: background-color 160ms var(--ease-out), transform 120ms var(--ease-out);
+}
+.hm .chart-controls button { width: var(--btn-h); padding: 0; }
+.hm .chart-controls .reset-view { width: auto; padding: 0 12px; }
+.hm .chart-controls button:hover { background: var(--panel2); }
+.hm .chart-controls button:active { transform: var(--press); }
+.hm .chart-stage { height: clamp(380px, 52vh, 560px); }
+
+/* 收復線／防守線浮鈕：跟個股頁價籤同一套語言（實色小價籤＋數字） */
+.hm .line-trigger {
+  width: 140px; min-height: 0; height: 32px; padding: 0 8px 0 6px; border: 1px solid var(--hair); border-radius: 6px;
+  background: color-mix(in srgb, var(--bg) 92%, transparent); box-shadow: none;
+  grid-template-columns: auto 1fr auto; gap: 8px;
+  transition: background-color 160ms var(--ease-out);
+}
+.hm .line-trigger:hover { background: var(--panel2); }
+.hm .line-trigger span {
+  padding: 0 6px; border-radius: 4px; background: var(--gold); color: var(--bg);
+  font: 500 11px/18px var(--sans);
+}
+.hm .line-lower span { background: var(--down); }
+.hm .line-trigger strong { font: 500 13px var(--mono); color: var(--ink); text-align: right; }
+.hm .current-point .point-label { border-radius: 4px; }
+
+/* ---------- 直白分析：報表引文 ---------- */
+.hm .read-card {
+  margin-top: 0; padding: 40px 0; border: 0 !important; border-bottom: 1px solid var(--hair) !important;
+  border-radius: 0; background: transparent; gap: 20px;
+}
+.hm .read-card:hover { border-color: var(--hair) !important; }
+.hm .read-card:hover .read-line { color: var(--accent); }
+.hm .read-card h2 { font: 400 13px var(--sans); color: var(--faint); }
+.hm .read-line { font: 600 28px/1.5 var(--serif); max-width: 32em; transition: color 160ms var(--ease-out); }
+.hm .read-list { gap: 20px 48px; }
+.hm .read-list li { font-size: 15px; line-height: 1.6; padding-left: 16px; border-left: 1px solid var(--hair); }
+.hm .read-list li b { font-size: 13px; color: var(--ink); font-weight: 600; }
+.hm .read-date { font: 12px var(--mono); color: var(--faint); }
+
+/* ---------- 籌碼與資金：報表格線，不用浮卡 ---------- */
+.hm .chips { padding: 40px 0; border-bottom: 1px solid var(--hair); }
+.hm .chip-grid {
+  gap: 0; border-top: 1px solid var(--ink);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.hm .chip-card {
+  border: 0 !important; border-bottom: 1px solid var(--hair) !important; border-radius: 0;
+  background: transparent; padding: 20px 24px 16px 0; gap: 8px;
+  transition: background-color 160ms var(--ease-out);
+}
+.hm .chip-card:nth-child(3n + 2),
+.hm .chip-card:nth-child(3n + 3) { padding-left: 24px; border-left: 1px solid var(--hair) !important; }
+.hm .chip-card:hover { background: color-mix(in srgb, var(--panel2) 60%, transparent); transform: none; }
+.hm .chip-name { font-size: 13px; color: var(--dim); }
+.hm .chip-value { font: 500 30px var(--mono); letter-spacing: -.01em; }
+.hm .chip-read { font-size: 13px; color: var(--dim); }
+.hm .spark { height: 40px; opacity: .85; }
+
+/* ---------- 選股看板：三個區塊用細線分開 ---------- */
+.hm .hm-explore { padding: 40px 0 0; }
+.hm .market-screens { margin: 0; }
+.hm .screen-block { margin: 0; padding: 24px 0; border-top: 1px solid var(--hair); }
+.hm .screen-block:first-child { border-top: 1px solid var(--ink); }
+.hm .screen-head h3 { font: 600 17px var(--serif); }
+.hm .screen-tabs { gap: 4px; margin-top: 16px; }
+.hm .screen-tabs button,
+.hm .screen-seg button {
+  height: 32px; min-height: 0; padding: 0 12px; border: 1px solid transparent; border-radius: var(--btn-r);
+  background: transparent; color: var(--dim); font: 500 13px var(--sans);
+  transition: background-color 160ms var(--ease-out), color 160ms var(--ease-out), transform 120ms var(--ease-out);
+}
+.hm .screen-tabs button:hover,
+.hm .screen-seg button:hover { background: var(--panel2); color: var(--ink); }
+.hm .screen-tabs button:active,
+.hm .screen-seg button:active { transform: var(--press); }
+.hm .screen-tabs button[aria-selected="true"],
+.hm .screen-seg button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.hm .screen-seg { padding: 2px; border: 1px solid var(--hair); border-radius: calc(var(--btn-r) + 2px); }
+.hm .screen-seg button { height: 28px; }
+.hm .screen-controls { margin-top: 12px; gap: 12px 16px; }
+.hm .core-cards > * { border-radius: var(--btn-r); border-color: var(--hair); background: transparent; }
+
+/* ---------- 窄螢幕 ---------- */
+@media (max-width: 860px) {
+  .hm .app-shell { padding: 0 16px 64px; }
+  .hm .market-header {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "price theme" "time time" "conclusion conclusion";
+    padding: 24px 0 20px; row-gap: 16px;
+  }
+  .hm .price-value { font-size: 44px; }
+  .hm .price-change { font-size: 15px; }
+  .hm .conclusion-trigger strong { font-size: 18px !important; }
+  .hm .hm-search { grid-template-columns: minmax(0, 1fr); row-gap: 12px; }
+  .hm .stock-search-status, .hm .stock-search-results, .hm .stock-search-more { grid-column: 1; }
+  .hm .chart-stage { height: 340px; }
+  .hm .read-card { padding: 28px 0; }
+  .hm .read-line { font-size: 21px; }
+  .hm .read-list { grid-template-columns: minmax(0, 1fr); }
+  .hm .chips { padding: 28px 0; }
+  .hm .chip-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .hm .chip-card { padding: 16px 12px 12px 0; }
+  .hm .chip-card:nth-child(3n + 2), .hm .chip-card:nth-child(3n + 3) { padding-left: 0; border-left: 0 !important; }
+  .hm .chip-card:nth-child(2n) { padding-left: 12px; border-left: 1px solid var(--hair) !important; }
+  .hm .chip-value { font-size: 22px; }
+}
+
+/* ---------- 第二輪修正：蓋過舊樣式的 !important、細節對齊個股頁 ---------- */
+.hm .price-value { font: 500 64px/1 var(--mono) !important; }
+.hm .time-grid { padding: 0; border: 0; }
+.hm .instrument-block { gap: 16px; }
+.hm .conclusion-trigger { min-height: 0; overflow: visible; display: block; padding: 12px 48px 0 0; }
+.hm .conclusion-trigger::before,
+.hm .conclusion-trigger::after { display: none !important; }
+.hm .conclusion-trigger strong { font: 600 22px/1.5 var(--serif) !important; }
+.hm .conclusion-trigger .detail-cue { top: 14px; transform: none; }
+.hm .line-trigger { width: 156px; grid-template-columns: auto 1fr auto; }
+.hm .line-trigger span { white-space: nowrap; }
+@media (max-width: 860px) {
+  .hm .price-value { font-size: 44px !important; }
+  .hm .conclusion-trigger strong { font-size: 18px !important; }
+}
+
+/* 收復／防守：線與數字由 K 線軸上價籤顯示；原浮鈕改成圖表左上角的可點圖例（點了開詳情） */
+@media (min-width: 761px) {
+  /* 圖例外觀約 28px 高，但按鈕本身仍是 44px 點擊區（透明上下緣），不縮觸控目標 */
+  .hm .line-trigger {
+    top: 0 !important; left: 4px !important; width: auto; height: 44px; min-height: 44px; padding: 8px 10px 8px 4px;
+    border: 0; background: transparent; background-clip: content-box;
+  }
+  .hm .line-trigger::before {
+    content: ""; position: absolute; inset: 8px 0; z-index: -1;
+    border: 1px solid var(--hair); border-radius: 6px; background: color-mix(in srgb, var(--bg) 90%, transparent);
+    transition: background-color 160ms var(--ease-out), border-color 160ms var(--ease-out);
+  }
+  .hm .line-trigger { isolation: isolate; }
+  .hm .line-trigger:hover { background: transparent; }
+  .hm .line-trigger:hover::before { background: var(--panel2); border-color: color-mix(in srgb, var(--ink) 22%, transparent); }
+  .hm .line-lower { left: 176px !important; }
+}
+/* 現價點：只留小圓點；「現價詳情」字樣保留給螢幕閱讀器（視覺隱藏），避免壓到 K 棒與價籤 */
+.hm .current-point .point-label {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+}
+.hm .point-core { width: 10px; height: 10px; border-width: 2px; box-shadow: 0 0 0 1px var(--accent); }
+@media (max-width: 860px) {
+  .hm .stock-search-form { grid-template-columns: minmax(0, 1fr) auto auto; }
+  .hm .stock-search-form button { padding: 0 12px; }
+  .hm .chart-toolbar { gap: 8px; }
+  .hm .chart-toolbar p { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .hm .chart-tools-toggle { width: auto !important; padding: 0 10px !important; white-space: nowrap; }
+}
+
+/* ================= 資訊密度整理（本人 11-09：「資訊比較多地方還是需要在優化一下」） ================= */
+
+/* 籌碼卡：日期統一寫在標題；迷你圖淡一點、矮一點，讓數字當主角 */
+.hm .chip-grid.hm-same-date .chip-date { display: none; }
+.hm .chip-card { gap: 4px; padding-top: 16px; padding-bottom: 16px; }
+.hm .chip-name i { opacity: 0; transition: opacity 160ms var(--ease-out), transform 160ms var(--ease-out); }
+.hm .chip-card:hover .chip-name i { opacity: 1; transform: translateX(2px); }
+.hm .spark { height: 28px; opacity: .55; margin-top: 8px; transition: opacity 160ms var(--ease-out); }
+.hm .chip-card:hover .spark { opacity: 1; }
+
+/* 直白分析：四點只留「主角＋一句判斷」，排成一列 */
+.hm .read-list { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; border-top: 1px solid var(--hair); }
+.hm .read-list li { padding: 16px 20px 0 0; border-left: 0; gap: 4px; }
+.hm .read-list li + li { padding-left: 20px; border-left: 1px solid var(--hair); }
+.hm .read-list li b { font: 400 12px var(--sans); color: var(--faint); }
+.hm .read-list li span { font-size: 15px; line-height: 1.5; color: var(--ink); }
+.hm .read-card::after { content: "點這裡看完整數字與依據 ›"; font-size: 12px; color: var(--faint); transition: color 160ms var(--ease-out); }
+.hm .read-card:hover::after { color: var(--accent); }
+
+/* 選股看板：九頁全部顯示，沒有名單的一組排在後面、字色退一階 */
+.hm .hm-tab-cap {
+  display: inline-flex; align-items: center; height: 32px; margin-left: 8px; padding-left: 12px;
+  border-left: 1px solid var(--hair); color: var(--faint); font-size: 12px; white-space: nowrap;
+}
+.hm .screen-tabs button.is-unlisted { color: var(--faint); }
+.hm .screen-tabs button.is-unlisted[aria-selected="true"] { color: var(--bg); }
+.hm .screen-head { align-items: baseline; }
+.hm .screen-meta { font-size: 12px; color: var(--faint); }
+.hm .screen-block[data-state="empty"] .screen-controls,
+.hm .screen-block[data-state="not_ready"] .screen-controls { opacity: .5; }
+
+/* 長期核心：兩張卡排成左右對照，同一指標在同一列，數字靠右對齊 */
+.hm .core-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0; margin-top: 16px; border-top: 1px solid var(--ink); }
+.hm .core-cards > .core-card { padding: 12px 0 0; border: 0; border-radius: 0; background: transparent; }
+.hm .core-cards > .core-card + .core-card { padding-left: 24px; border-left: 1px solid var(--hair); }
+.hm .core-card header { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; column-gap: 8px; padding-bottom: 8px; }
+.hm .core-card header i { width: 12px; height: 2px; border-radius: 0; }
+.hm .core-card header strong { font-weight: 600; font-size: 14px; color: var(--ink); }
+.hm .core-card header span { grid-column: 2; font-size: 11px; color: var(--faint); }
+.hm .core-card dl { display: grid; grid-template-columns: minmax(0, 1fr) auto; margin: 0; }
+.hm .core-card dt, .hm .core-card dd { margin: 0; padding: 8px 0; border-top: 1px solid var(--hair); }
+.hm .core-card dt { font-size: 13px; color: var(--dim); }
+.hm .core-card dd { text-align: right; font: 500 14px var(--mono); font-variant-numeric: tabular-nums; color: var(--ink); }
+.hm .core-card dt:first-of-type + dd { font-size: 18px; }
+.hm .core-chart { margin-top: 24px; }
+.hm .screen-note { font-size: 11px; line-height: 1.6; color: var(--faint); max-width: 56em; }
+
+@media (max-width: 860px) {
+  .hm .read-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .hm .read-list li { padding: 12px 12px 12px 0; }
+  .hm .read-list li + li { padding-left: 0; border-left: 0; }
+  .hm .read-list li:nth-child(2n) { padding-left: 12px; border-left: 1px solid var(--hair); }
+  .hm .read-list li:nth-child(n + 3) { border-top: 1px solid var(--hair); }
+  .hm .core-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .hm .core-cards > .core-card + .core-card { padding-left: 12px; }
+}
+/* 長期核心：表格與走勢圖並排，不留右側空白 */
+@media (min-width: 861px) {
+  .hm #coreHoldings { display: grid; grid-template-columns: minmax(0, 400px) minmax(0, 1fr); column-gap: 40px; align-items: start; }
+  .hm #coreHoldings .screen-head,
+  .hm #coreHoldings .screen-note { grid-column: 1 / -1; }
+  .hm #coreHoldings .core-cards { grid-column: 1; }
+  .hm #coreHoldings .core-chart { grid-column: 2; margin-top: 16px; }
+}
+@media (max-width: 860px) {
+  .hm .screen-tabs { flex-wrap: wrap; overflow: visible; }
+  .hm .screen-controls { flex-wrap: wrap; }
+}
+
+/* ================= 正式版補強（11-09）：中寬度報價列 =================
+   861～1179px 三欄放不下 64px 指數＋漲跌（960px 時結論會蓋到漲跌），改成「報價一列、結論整列在下」；
+   指數字級隨寬度縮放，避免硬切。 */
+.hm .price-value { font-size: clamp(44px, 4.4vw, 64px) !important; }
+@media (max-width: 1179px) and (min-width: 861px) {
+  .hm .market-header {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "price theme" "time time" "conclusion conclusion";
+    row-gap: 16px;
+  }
+  .hm .conclusion-trigger { max-width: 720px; }
+}
+
+/* 手機：收復／防守按鈕移到圖表下方一列（minimal.js 搬到 .chart-actions），維持 44px 觸控高度 */
+@media (max-width: 760px) {
+  .hm .chart-actions .line-trigger {
+    height: 44px; min-height: 44px; width: auto; flex: 1 1 0; padding: 0 12px 0 8px;
+    border: 1px solid var(--hair); border-radius: var(--btn-r); background: transparent;
+  }
+  .hm .chart-actions .line-trigger:hover { background: var(--panel2); }
+  .hm .chart-actions .line-trigger strong { font-size: 14px; }
+}
+
+/* 收復／防守圖例占用圖上方獨立一條（44px），K 線從圖例下方開始畫，不再蓋到上緣的 K 棒 */
+@media (min-width: 761px) {
+  .hm .chart-host { top: 44px; }
+}
+/* 結論句：讓瀏覽器平均分配兩行，不在「不追」與「空」之間硬斷 */
+.hm .conclusion-trigger strong { text-wrap: balance; }
+.hm .read-line { text-wrap: balance; }
+
+/* 長期核心：0050 是主角用 accent；2330 是對照，用墨色的中性一階（取代原本唯一的冷紫色，稽核 #7 同類問題） */
+.hm { --core-b: color-mix(in srgb, var(--ink) 55%, var(--bg)); }
+
+/* 籌碼選股分頁：可算的一列，「目前沒有名單」那組換到下一列，不會在中間被切斷 */
+.hm .screen-tabs { flex-wrap: wrap; row-gap: 4px; }
+.hm .hm-tab-cap { flex-basis: 100%; height: 24px; margin: 4px 0 0; padding-left: 0; border-left: 0; }
+.hm .conclusion-trigger strong { text-wrap: pretty; }
+/* 手機：「清空」不再獨占一整列，和搜尋鈕並排 */
+@media (max-width: 860px) {
+  .hm .stock-search-form { grid-template-columns: minmax(0, 1fr) auto auto; }
+  .hm .stock-search-form #stockSearchClear { grid-column: auto; }
+}
+.hm .conclusion-trigger .nowrap-phrase { display: inline-block; }
+
+/* 11-09 本人指出長期核心重疊：卡片太窄（每卡 200px），數字貼到分隔線、× 被切；
+   列線因 dl 的 gap 而斷開；表格底部直接接註腳。改為：表格欄加寬、列線連續、表格與註腳間留白 */
+@media (min-width: 861px) {
+  .hm #coreHoldings { grid-template-columns: minmax(440px, 480px) minmax(0, 1fr); column-gap: 48px; }
+}
+.hm .core-card dl { gap: 0; }
+.hm .core-card dt { padding-right: 16px; }
+.hm .core-card dd { padding-right: 0; white-space: nowrap; }
+.hm .core-cards > .core-card:first-child { padding-right: 24px; }
+.hm .core-cards { border-bottom: 1px solid var(--hair); }
+.hm #coreHoldings .screen-note { margin-top: 24px; }
+
+/* 圖上狀態小標（形成中／盤後暫用）：放在圖例下方，不跟收復／防守圖例擠在同一條 */
+@media (min-width: 761px) {
+  .hm .chart-badges { top: 48px; left: 8px; }
+}
+.hm .chart-badges span { border-color: var(--hair); border-radius: 4px; background: color-mix(in srgb, var(--bg) 92%, transparent); color: var(--dim); font-size: 12px; }
+.hm #provisionalBadge { color: var(--gold); border-color: color-mix(in srgb, var(--gold) 45%, transparent); }
+/* 圖表說明文字太長時換行，不截斷 */
+.hm .chart-toolbar > div:first-child { min-width: 0; }
+.hm .chart-toolbar p { white-space: normal; max-width: 40em; }
