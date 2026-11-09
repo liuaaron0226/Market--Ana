@@ -92,6 +92,7 @@ WORKING_SET: tuple[Item, ...] = (
     Item("data/market-snapshots/stock-detail", recent_files=60),  # 上市融資融券與法人明細（個股頁籌碼）
     Item("data/fundamentals/twt93u", recent_files=20),
     Item("data/corporate-actions/events.json"),
+    Item("data/corporate-actions/raw/TPEx-exDailyQ"),  # 櫃買除權息原件＋SHA＋涵蓋區間（2016 起全留）
     Item("data/liquid-universe"),
     Item("data/market-screen-snapshots"),
     # U3：Actions 每次都是新機器。執行紀錄讓同一天後面的 cron 時段看到 already-done（不重做、不重部署），

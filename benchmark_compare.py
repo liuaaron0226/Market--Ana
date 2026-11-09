@@ -8,8 +8,8 @@
 - 期初點與核心持有相同：取錨點日當天或之前最近一筆收盤；整年錨點與 ``series_stats`` 一致。
 - 歷史不夠長就回 ``insufficient_history``，不補數字：上市日晚於錨點 → ``listed_recently``；
   本站行情庫沒載到那麼早 → ``history_not_loaded``（上櫃日 K 目前只有近一年）。
-- 官方除權息表只涵蓋上市（TWT49U／TWTB8U／TWTAUU）；上櫃股回 ``dividends_included: false``，
-  報酬只反映價格與參考價推定的分割，畫面要照實標示。
+- 上市沿用 TWT49U／TWTB8U／TWTAUU；上櫃沿用櫃買中心 exDailyQ 官方表。
+  ``dividends_included`` 依已驗 SHA 原件的實際涵蓋區間判定，缺期間時不冒稱含息。
 - 對照圖期初＝1，降採樣到 ``CHART_POINTS`` 點，與核心持有同一套降採樣。
 """
 from __future__ import annotations
@@ -25,12 +25,14 @@ from pathlib import Path
 from typing import Any
 
 import market_screens_publish as msp
+import otc_corporate_actions as oca
 from market_screens_publish import total_return_series  # noqa: F401 —— 共用算法（測試以 is 確認）
 
 ROOT = Path(__file__).resolve().parent
 LISTED_DB = msp.STOCK_HISTORY_DB
 OTC_DB = ROOT / "data/otc-history/otc_history.sqlite"
 EVENTS = msp.CORPORATE_EVENTS
+OTC_ACTIONS_DIR = ROOT / "data/corporate-actions/raw/TPEx-exDailyQ"
 BENCHMARK = "0050"
 SCHEMA_SINGLE = "vs-0050/v1"
 SCHEMA_MULTI = "compare-0050/v1"
@@ -45,7 +47,7 @@ NOTES = (
     "含息總報酬：現金股利於除息日以收盤價再投入；分割依官方表或參考價換算股數。",
     "期初點取期間起點當天或之前最近一個交易日的收盤。",
     "未扣交易成本與稅；0050 淨值已含內扣費用。過去表現不代表未來。",
-    "上櫃股本站沒有官方除權息表，報酬未含現金股利（只反映價格與分割）。",
+    "上櫃股以櫃買中心官方除權除息表計入；dividends_included 依已驗原件涵蓋期間逐檔判定。",
 )
 
 
@@ -167,9 +169,11 @@ def parse_codes(raw: Sequence[str]) -> list[str] | None:
 class Loader:
     """唯讀兩個行情庫與官方公司行動表，計算含息序列；0050 序列在同一個 Loader 只算一次。"""
 
-    def __init__(self, listed_db: Path = LISTED_DB, otc_db: Path = OTC_DB, events_path: Path = EVENTS) -> None:
+    def __init__(self, listed_db: Path = LISTED_DB, otc_db: Path = OTC_DB, events_path: Path = EVENTS,
+                 *, otc_actions_dir: Path = OTC_ACTIONS_DIR) -> None:
         self.listed_db, self.otc_db = listed_db, otc_db
         self.events = {(e["code"], e["date"]): e for e in json.loads(events_path.read_text(encoding="utf-8"))}
+        self.otc_action_coverage = oca.verified_coverage(otc_actions_dir) if otc_actions_dir.exists() else []
         self._series: dict[tuple[str, str], tuple[list, str | None, str | None]] = {}
 
     @staticmethod
@@ -200,6 +204,12 @@ class Loader:
             self._series[key] = (total_return_series(code, rows, self.events) if rows else [], name, market)
         return self._series[key]
 
+    def dividends_included(self, market: str | None, series: Sequence[tuple[str, float]]) -> bool:
+        if market == "上市":
+            return True
+        return bool(market == "上櫃" and series and self.otc_action_coverage and
+                    oca.coverage_covers(self.otc_action_coverage, series[0][0], series[-1][0]))
+
     def benchmark_block(self, end: str) -> dict[str, Any]:
         series, name, _ = self.series(BENCHMARK, end)
         start = shift_months(end, 60)
@@ -219,7 +229,7 @@ class Loader:
         bench_start = _value_on_or_before(bench, chart_start) if chart_start else None
         _, bench_chart = chart_points(bench, bench_start[0]) if bench_start else (None, [])
         return {"code": code, "name": name, "market": market, "status": "ok",
-                "dividends_included": market == "上市", "listed_date": _iso(listed_date),
+                "dividends_included": self.dividends_included(market, stock), "listed_date": _iso(listed_date),
                 "periods": periods, "chart_from": chart_start, "chart": chart, "benchmark_chart": bench_chart}
 
 

@@ -633,11 +633,43 @@ def fetch_holidays(cache: Path, *, get: Callable | None = None) -> set[str]:
     return parse_holiday_schedule(cache.read_bytes()) if cache.exists() else set()
 
 
+# ---- 櫃買除權除息（exDailyQ） ----
+
+
+def otc_corporate_actions_day(root: Path, day: str, *, get: Callable | None = None,
+                              sleep: Callable = time.sleep) -> dict:
+    """抓指定日的官方公司行動原件並重建共同 events.json；無事件日仍保留涵蓋證據。"""
+    import otc_corporate_actions as oca
+
+    raw_dir = root / "data/corporate-actions/raw/TPEx-exDailyQ"
+    compact = _compact(day)
+    if raw_dir.exists():
+        try:
+            coverage = oca.verified_coverage(raw_dir)
+        except ValueError as error:
+            return {"status": "stopped", "reason": f"櫃買除權息原件帳務無效：{error}", "requests": 0}
+    else:
+        coverage = []
+    if coverage and oca.coverage_covers(coverage, day, day):
+        events = oca.rebuild_events(root / "data/corporate-actions/events.json", raw_dir)
+        return {"status": "already-present", "requests": 0, "events": events}
+    latest = max((end for _, end in coverage), default=None)
+    start = day if latest is None or latest >= day else (date.fromisoformat(latest) + timedelta(days=1)).isoformat()
+    summary = oca.fetch_periods(raw_dir, [(compact, start, day)],
+                                get=get or oca.http_get, sleep=sleep)
+    if summary["stopped"]:
+        return {"status": "stopped", "reason": summary["stopped"]["reason"],
+                "requests": summary["requested"]}
+    events = oca.rebuild_events(root / "data/corporate-actions/events.json", raw_dir)
+    return {"status": "appended" if summary["fetched"] else "already-present",
+            "requests": summary["requested"], "events": events}
+
+
 # ---- 每日協調器呼叫的兩個入口 ----
 
 REQUIRED_DATASETS = ("listed_quotes", "otc_quotes", "listed_institutional", "otc_institutional")
-OPTIONAL_DATASETS = ("otc_index", "twse_valuation", "tpex_valuation", "fundamentals", "taiex_index",
-                     "listed_chip_detail")
+OPTIONAL_DATASETS = ("otc_index", "twse_valuation", "tpex_valuation", "otc_corporate_actions",
+                     "fundamentals", "taiex_index", "listed_chip_detail")
 
 
 def _interval(previous: dict | None, sleep: Callable) -> None:
@@ -725,10 +757,13 @@ def fetch_day(day: str, *, root: Path = ROOT, sleep: Callable = time.sleep, incl
         return result["institutional"]
 
     timed("otc_institutional", otc_market)
-    _interval(datasets["otc_institutional"], sleep)
+    # otc_market 內的法人或指數任一項可能剛打過同一個 www.tpex.org.tw；下一個 TPEx 來源前都要等。
+    _interval({"requests": max(datasets["otc_institutional"].get("requests", 0),
+                                datasets.get("otc_index", {}).get("requests", 0))}, sleep)
     timed("tpex_valuation", lambda: tpex_valuation_day(data / "valuation-history/tpex",
                                                        data / "valuation-history/valuation.sqlite", day, sleep=sleep))
-    sleep(5.0)
+    _interval(datasets["tpex_valuation"], sleep)
+    timed("otc_corporate_actions", lambda: otc_corporate_actions_day(root, day, sleep=sleep))
     timed("listed_chip_detail", lambda: {"status": "ok", "datasets": listed_chip_detail_day(root, day, sleep=sleep)})
     if include_fundamentals:
         timed("fundamentals", lambda: fundamentals_day(data / "fundamentals-history", day))

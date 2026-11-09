@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import json
+import sqlite3
+import tempfile
 import threading
 import unittest
 import urllib.error
@@ -15,6 +17,8 @@ from pathlib import Path
 
 import benchmark_compare as bc
 import market_screens_publish as msp
+import otc_corporate_actions as oca
+from test_otc_corporate_actions import COMMON_BOTH, _Response, payload as actions_payload
 
 ROOT = Path(__file__).resolve().parent
 
@@ -97,6 +101,51 @@ class ParseCodesTest(unittest.TestCase):
         self.assertEqual(len(bc.parse_codes(["2330,6488,0050,1102,2454"])), 5)
 
 
+class OtcDividendCoverageTest(unittest.TestCase):
+    @staticmethod
+    def _db(path: Path, code: str, name: str, closes: list[tuple[str, float]]) -> None:
+        connection = sqlite3.connect(path)
+        try:
+            connection.execute("CREATE TABLE daily (date TEXT, code TEXT, name TEXT, close REAL, change_sign TEXT, change REAL)")
+            connection.executemany("INSERT INTO daily VALUES (?, ?, ?, ?, '', 0)",
+                                   [(day, code, name, close) for day, close in closes])
+            connection.commit()
+        finally:
+            connection.close()
+
+    def test_otc_flag_comes_from_verified_coverage_and_cash_dividend_changes_return(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            listed_db, otc_db = root / "listed.sqlite", root / "otc.sqlite"
+            self._db(listed_db, "0050", "元大台灣50", [("2024-12-31", 50), ("2025-07-01", 52), ("2025-12-31", 55)])
+            self._db(otc_db, "6488", "環球晶", [("2024-12-31", 100), ("2025-07-01", 90), ("2025-12-31", 100)])
+            events_path = root / "data/corporate-actions/events.json"
+            events_path.parent.mkdir(parents=True)
+            events_path.write_text("[]", encoding="utf-8")
+            raw_dir = events_path.parent / "raw/TPEx-exDailyQ"
+            dividend = list(COMMON_BOTH)
+            dividend[3:9] = ["100.00", "90.00", "0.000000", "10.000000", "10.000000", "除息"]
+            oca.fetch_periods(raw_dir, [("2024-2025", "2024-01-01", "2025-12-31")],
+                              get=lambda *_: _Response(actions_payload(dividend)), sleep=lambda _: None)
+            oca.rebuild_events(events_path, raw_dir)
+
+            loader = bc.Loader(listed_db, otc_db, events_path, otc_actions_dir=raw_dir)
+            item = loader.item("6488", "2025-12-31", listed_date="2015/09/25")
+            one_year = next(row for row in item["periods"] if row["period"] == "1y")
+            self.assertTrue(item["dividends_included"])
+            self.assertEqual(one_year["stock_return_pct"], 11.1)
+            self.assertNotEqual(one_year["stock_return_pct"], 0.0)  # 同期價格 100 → 100
+
+            uncovered = bc.Loader(listed_db, otc_db, events_path, otc_actions_dir=root / "missing")
+            self.assertFalse(uncovered.item("6488", "2025-12-31", "2015/09/25")["dividends_included"])
+
+            corrupt = root / "corrupt"
+            corrupt.mkdir()
+            (corrupt / "meta.json").write_text("{broken", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                bc.Loader(listed_db, otc_db, events_path, otc_actions_dir=corrupt)
+
+
 class RealDataTest(unittest.TestCase):
     """驗算：1Y 報酬與核心持有（同一算法、同一資料日）逐位相同。"""
 
@@ -125,10 +174,16 @@ class RealDataTest(unittest.TestCase):
                 one_year = next(p for p in item["periods"] if p["period"] == "1y")
                 self.assertEqual(one_year["stock_return_pct"], expected)
 
-    def test_otc_flags_dividends_not_included(self) -> None:
+    def test_real_otc_return_includes_official_cash_dividend_when_coverage_is_complete(self) -> None:
         item = self.loader.item("6488", self.end, listed_date="2015/09/25")
         self.assertEqual(item["market"], "上櫃")
-        self.assertFalse(item["dividends_included"])
+        self.assertTrue(item["dividends_included"])
+        rows, _, _ = self.loader.rows("6488", self.end)
+        without_events = msp.total_return_series("6488", rows, {})
+        without_periods = {p["period"]: p for p in bc.period_rows(
+            without_events, self.loader.series("0050", self.end)[0], self.end, "2015/09/25")}
+        with_periods = {p["period"]: p for p in item["periods"]}
+        self.assertNotEqual(with_periods["1y"]["stock_return_pct"], without_periods["1y"]["stock_return_pct"])
         listed = self.loader.item("1102", self.end, listed_date="1962/06/08")
         self.assertTrue(listed["dividends_included"])
 

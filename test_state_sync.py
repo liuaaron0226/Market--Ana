@@ -188,6 +188,12 @@ class StateSyncTest(unittest.TestCase):
         for path in ("web/dashboard-data.js", "web/plain-data.js"):
             self.assertIn(path, by_path, path)
 
+    def test_working_set_carries_otc_corporate_action_originals_and_merged_events(self) -> None:
+        by_path = {item.path: item for item in ss.WORKING_SET}
+        self.assertIn("data/corporate-actions/events.json", by_path)
+        self.assertIn("data/corporate-actions/raw/TPEx-exDailyQ", by_path)
+        self.assertEqual(by_path["data/corporate-actions/raw/TPEx-exDailyQ"].recent_files, 0)
+
     def test_working_set_carries_run_log_and_previous_seed(self) -> None:
         # Actions 每次都是新機器：沒有執行紀錄，後面的 cron 時段看不到 already-done，會整天重做；
         # 沒有前一天 seed，D1 只能完整匯入（失去增量 base）。

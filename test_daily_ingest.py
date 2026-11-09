@@ -19,11 +19,13 @@ from pathlib import Path
 
 import daily_ingest as di
 import listed_institutional as li
+import otc_corporate_actions as oca
 import otc_history as oh
 import otc_market_data as omd
 import stock_history as sh
 import valuation_history as vh
 from test_listed_institutional import ROW_2330 as T86_2330, t86_json
+from test_otc_corporate_actions import ETF_DIVIDEND, payload as actions_payload
 from test_otc_history import csv_bytes
 from test_otc_market_data import index_json, inst_csv, val_csv
 from test_stock_history import ROW_0050, ROW_2330, official_payload
@@ -420,6 +422,78 @@ class DefaultGetterTest(unittest.TestCase):
                                               sleep=lambda s: None)
         self.assertEqual(result["status"], "not_published")
         self.assertEqual(len(calls), 1)
+
+
+class OtcCorporateActionsTest(unittest.TestCase):
+    def test_daily_fetch_merges_official_event_without_changing_listed_event(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            events = root / "data/corporate-actions/events.json"
+            events.parent.mkdir(parents=True)
+            listed = {"date": "2025-01-02", "code": "2330", "type": "除息", "close_before": 1000.0,
+                      "reference": 995.0, "value": 5.0, "limit_up": 1094.0, "limit_down": 896.0,
+                      "source": "TWT49U-202501.json.gz"}
+            events.write_text(json.dumps([listed], ensure_ascii=False), encoding="utf-8")
+            calls = []
+
+            def get(session, url, params):
+                calls.append(params)
+                return oca.Response(200, "application/json", actions_payload(ETF_DIVIDEND), url)
+
+            result = di.otc_corporate_actions_day(root, "2025-01-02", get=get, sleep=lambda _: None)
+            self.assertEqual(result["status"], "appended")
+            self.assertEqual(result["events"]["otc"], 1)
+            merged = json.loads(events.read_text(encoding="utf-8"))
+            self.assertEqual(next(e for e in merged if e["code"] == "2330"), listed)
+            self.assertEqual(next(e for e in merged if e["code"] == "00950B")["value"], 0.08)
+            self.assertEqual(len(calls), 1)
+            again = di.otc_corporate_actions_day(root, "2025-01-02", get=get, sleep=lambda _: None)
+            self.assertEqual(again["status"], "already-present")
+            self.assertEqual(len(calls), 1)
+
+    def test_corrupt_meta_stops_without_refetching_or_removing_existing_events(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            events = root / "data/corporate-actions/events.json"
+            events.parent.mkdir(parents=True)
+            existing = oca.parse_exdailyq(actions_payload(ETF_DIVIDEND), source="TPEx-exDailyQ-seed.json")
+            events.write_text(json.dumps(existing, ensure_ascii=False), encoding="utf-8")
+            raw_dir = events.parent / "raw/TPEx-exDailyQ"
+            oca.fetch_periods(raw_dir, [("seed", "2025-01-01", "2025-01-02")],
+                              get=lambda *_: oca.Response(200, "application/json", actions_payload(ETF_DIVIDEND), "u"),
+                              sleep=lambda _: None)
+            (raw_dir / "meta.json").write_text("{broken", encoding="utf-8")
+            before = events.read_bytes()
+            calls = []
+            def should_not_fetch(*_):
+                calls.append(1)
+                return oca.Response(200, "application/json", actions_payload(), "u")
+
+            result = di.otc_corporate_actions_day(root, "2025-01-06", get=should_not_fetch, sleep=lambda _: None)
+            self.assertEqual(result["status"], "stopped")
+            self.assertEqual(calls, [])
+            self.assertEqual(events.read_bytes(), before)
+            self.assertEqual((raw_dir / "meta.json").read_text(encoding="utf-8"), "{broken")
+
+    def test_daily_fetch_extends_coverage_over_non_trading_calendar_gaps(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            events = root / "data/corporate-actions/events.json"
+            events.parent.mkdir(parents=True)
+            events.write_text("[]", encoding="utf-8")
+            raw_dir = events.parent / "raw/TPEx-exDailyQ"
+            oca.fetch_periods(raw_dir, [("seed", "2025-01-01", "2025-01-02")],
+                              get=lambda *_: oca.Response(200, "application/json", actions_payload(), "u"),
+                              sleep=lambda _: None)
+            calls = []
+
+            def get(session, url, params):
+                calls.append(params)
+                return oca.Response(200, "application/json", actions_payload(), "u")
+
+            di.otc_corporate_actions_day(root, "2025-01-06", get=get, sleep=lambda _: None)
+            self.assertEqual((calls[0]["startDate"], calls[0]["endDate"]), ("2025/01/03", "2025/01/06"))
+            self.assertTrue(oca.coverage_covers(oca.verified_coverage(raw_dir), "2025-01-01", "2025-01-06"))
 
 
 class TradingCalendarTest(unittest.TestCase):
