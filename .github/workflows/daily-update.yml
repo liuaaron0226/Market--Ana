@@ -75,6 +75,12 @@ jobs:
       - name: 安裝相依
         run: python -m pip install -r requirements-daily.txt
 
+      # dry-run 不碰 D1／Pages，token 壞了要到正式發布才會失敗；這裡先用唯讀指令確認 token 能用、權限夠。
+      - name: 驗證 Cloudflare token（唯讀）
+        run: |
+          npx --yes wrangler@4 d1 list > /dev/null || { echo "::error::CLOUDFLARE_API_TOKEN 無法讀取 D1（token 無效或缺 D1 權限）"; exit 1; }
+          npx --yes wrangler@4 pages project list > /dev/null || { echo "::error::CLOUDFLARE_API_TOKEN 無法讀取 Pages（token 無效或缺 Pages 權限）"; exit 1; }
+
       - name: 決定資料日
         id: day
         env:

@@ -270,7 +270,8 @@ class BuildAndDeployWiringTest(unittest.TestCase):
         (ctx.work_dir / "seed").mkdir()
         (ctx.work_dir / "seed" / "stock-pack-v2.json").write_text('{"as_of": "2026-11-09"}', encoding="utf-8")
         with unittest.mock.patch.object(du, "_install_stock_pack", lambda src: {"installed": str(src)}), \
-                unittest.mock.patch.object(du, "_write_status_for_build", lambda ctx: {"status_file": "x"}):
+                unittest.mock.patch.object(du, "_write_status_for_build", lambda ctx: {"status_file": "x"}), \
+                unittest.mock.patch.object(du, "_remember_market_pack", lambda src: None):
             steps["build_dist"].fn(ctx)
         joined = [" ".join(c).replace("\\", "/") for c in self.cmds]
         self.assertTrue(any("build_screens_pack.py" in c and "--snapshot-root" in c for c in joined), joined)
@@ -281,6 +282,53 @@ class BuildAndDeployWiringTest(unittest.TestCase):
         self.assertIn("--universe", compare[0])
         self.assertIn("liquid-universe/2026-11-09.json", compare[0])
         self.assertTrue(joined[-1].endswith("build.mjs"), joined)
+
+    def _build_dist_with_market(self, market_fails: bool, last_pack: bool):
+        """build_dist 跑一次：market_pack_daily 依參數失敗或成功；last_pack 決定有沒有上一版大盤資料包。"""
+        steps = {s.name: s for s in du.real_steps()}
+        ctx = self.ctx()
+        ctx.outputs["build_seed"] = {"seed_dir": str(ctx.work_dir / "seed")}
+        last_dir = self.work / "last-market-pack"
+        if last_pack:
+            last_dir.mkdir()
+            (last_dir / "analysis-data.js").write_text("old", encoding="utf-8")
+        recorded = self.cmds
+
+        def fake_sh(args, cwd=du.ROOT):
+            recorded.append([str(a) for a in args])
+            joined = " ".join(str(a) for a in args)
+            if "market_pack_daily.py" in joined:
+                if market_fails:
+                    raise RuntimeError("market_pack_daily.py exit 1: 歷史月份成交金額缺日期")
+                out = Path(args[args.index("--out") + 1])
+                out.mkdir(parents=True, exist_ok=True)
+                (out / "analysis-data.js").write_text("new", encoding="utf-8")
+            return {"cmd": joined}
+        with unittest.mock.patch.object(du, "_sh", fake_sh), \
+                unittest.mock.patch.object(du, "LAST_MARKET_DIR", last_dir), \
+                unittest.mock.patch.object(du, "_install_stock_pack", lambda src: {}), \
+                unittest.mock.patch.object(du, "_write_status_for_build", lambda ctx: {}):
+            report = steps["build_dist"].fn(ctx)
+        build = [c for c in recorded if any(str(a).endswith("build.mjs") for a in c)]
+        return report, build, last_dir
+
+    def test_build_dist_falls_back_to_last_market_pack_when_official_month_file_lags(self) -> None:
+        # 11-09 Actions 試跑：證交所成交金額月檔晚於個股資料公布，大盤頁無法重建。
+        # 個股／選股／對照照常發布，大盤頁沿用上一版並標明，不讓整天失敗。
+        report, build, last_dir = self._build_dist_with_market(market_fails=True, last_pack=True)
+        self.assertTrue(report["market"]["fallback"])
+        self.assertIn("成交金額", report["market"]["reason"])
+        self.assertEqual(len(build), 1)
+        self.assertIn(f"MARKET_DATA_DIR={last_dir}", " ".join(build[0]))
+
+    def test_build_dist_fails_when_market_pack_fails_and_no_previous_pack(self) -> None:
+        with self.assertRaises(RuntimeError):
+            self._build_dist_with_market(market_fails=True, last_pack=False)
+
+    def test_build_dist_remembers_a_fresh_market_pack_for_tomorrow(self) -> None:
+        report, build, last_dir = self._build_dist_with_market(market_fails=False, last_pack=True)
+        self.assertNotIn("fallback", report["market"])
+        self.assertEqual((last_dir / "analysis-data.js").read_text(encoding="utf-8"), "new")
 
     def test_d1_import_is_incremental_against_previous_seed_and_grouped(self) -> None:
         steps = {s.name: s for s in du.real_steps()}

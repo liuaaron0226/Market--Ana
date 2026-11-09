@@ -352,6 +352,19 @@ ACCESS_LOGIN_HOST = "cloudflareaccess.com"
 D1_GROUP_BYTES = 2_000_000
 # 前一天成功發布的 seed 放在這裡（R2 工作集也帶它），增量匯入以它為 base。
 LAST_SEED_DIR = ROOT / "data/daily-update-state/last-seed"
+# 最近一次成功重建的大盤頁資料包（R2 工作集也帶它）；當天官方月檔未更新時沿用。
+LAST_MARKET_DIR = ROOT / "data/daily-update-state/last-market-pack"
+
+
+def _remember_market_pack(source: Path) -> None:
+    import shutil
+    partial = LAST_MARKET_DIR.with_name(LAST_MARKET_DIR.name + ".partial")
+    if partial.exists():
+        shutil.rmtree(partial)
+    shutil.copytree(source, partial)
+    if LAST_MARKET_DIR.exists():
+        shutil.rmtree(LAST_MARKET_DIR)
+    os.replace(partial, LAST_MARKET_DIR)
 
 
 def _npx(*args: str) -> list[str]:
@@ -517,8 +530,16 @@ def real_steps() -> list[Step]:
                                  "--universe", str(ctx.work_dir / "liquid-universe" / f"{ctx.data_date}.json"),
                                  "--out", str(CLOUD / ".compare-pack.json")])
         market_dir = ctx.work_dir / "market-pack"
-        report["market"] = _sh([sys.executable, str(CLOUD / "market_pack_daily.py"), "--date", ctx.data_date,
-                                "--out", str(market_dir)])
+        try:
+            report["market"] = _sh([sys.executable, str(CLOUD / "market_pack_daily.py"), "--date", ctx.data_date,
+                                    "--out", str(market_dir)])
+            _remember_market_pack(market_dir)
+        except RuntimeError as error:
+            # 證交所成交金額月檔常比個股資料晚公布：大盤頁沿用上一版（前端依資料日顯示），其餘照常發布。
+            if not (LAST_MARKET_DIR / "analysis-data.js").exists():
+                raise
+            market_dir = LAST_MARKET_DIR
+            report["market"] = {"fallback": True, "reason": str(error)[-300:]}
         report["stock_pack"] = _install_stock_pack(_seed_dir(ctx) / "stock-pack-v2.json")
         report["status"] = _write_status_for_build(ctx)
         env_prefix = ["cmd", "/c", f"set MARKET_DATA_DIR={market_dir}&&"] if os.name == "nt" else \

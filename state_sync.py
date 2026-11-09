@@ -98,6 +98,7 @@ WORKING_SET: tuple[Item, ...] = (
     # status.json 保留最後成功日；前一天成功切換的 seed 是 D1 增量匯入的 base。
     Item("data/daily-update-log"),
     Item("data/daily-update-state/last-seed"),
+    Item("data/daily-update-state/last-market-pack"),   # 官方月檔晚到時，大盤頁沿用這一版
     *(Item(path) for path in GENERATED_CARRY),
 )
 
