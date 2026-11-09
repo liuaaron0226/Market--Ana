@@ -273,6 +273,17 @@ class StateSyncTest(unittest.TestCase):
         self.assertIn("74", str(caught.exception))
         self.assertNotIn("a" * 10, str(caught.exception))
 
+    def test_multiline_r2_key_reports_line_lengths_only(self) -> None:
+        # 剪貼簿一次帶了兩個值時，報出每行長度，方便看出貼錯了什麼，但不印內容。
+        env = {"CLOUDFLARE_ACCOUNT_ID": "x", "R2_ACCESS_KEY_ID": "b" * 40 + "\r\n" + "a" * 32,
+               "R2_SECRET_ACCESS_KEY": "s" * 64}
+        with unittest.mock.patch.dict("os.environ", env, clear=True):
+            with self.assertRaises(SystemExit) as caught:
+                ss.R2Store.from_env()
+        self.assertIn("R2_ACCESS_KEY_ID 40＋32", str(caught.exception))
+        self.assertIn("R2_SECRET_ACCESS_KEY 64", str(caught.exception))
+        self.assertNotIn("b" * 10, str(caught.exception))
+
     def test_default_working_set_excludes_video_research_and_backups(self) -> None:
         paths = [item.path for item in ss.WORKING_SET]
         self.assertIn("data/stock-history/stock-history.sqlite", paths)

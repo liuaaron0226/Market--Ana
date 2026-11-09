@@ -151,9 +151,14 @@ class R2Store:
             # Actions 上 secret 沒設時是空字串；用白話說缺哪個，不丟 KeyError。
             raise SystemExit(f"缺少 R2 金鑰：{', '.join(missing)}（R2 → Manage R2 API Tokens 建立後放進 GitHub Secrets）")
         if len(env["R2_ACCESS_KEY_ID"]) != 32:
-            # R2 的 Access Key ID 固定 32 字元；長度不對多半是貼成了 Token value 或兩個值黏在一起。只報長度，不印內容。
+            # R2 的 Access Key ID 固定 32 字元；長度不對多半是貼成了 Token value 或兩個值黏在一起。
+            # 只報各行長度（Secret Access Key 一併列出，應為 64），不印內容。
+            def shape(name: str) -> str:
+                return "＋".join(str(len(line)) for line in env[name].splitlines()) or "0"
             raise SystemExit(f"R2_ACCESS_KEY_ID 長度是 {len(env['R2_ACCESS_KEY_ID'])}，應為 32："
-                             "請重新複製 R2 API Token 頁面上的 Access Key ID（不是 Token value）")
+                             "請重新複製 R2 API Token 頁面上的 Access Key ID（不是 Token value）"
+                             f"〔各行長度：R2_ACCESS_KEY_ID {shape('R2_ACCESS_KEY_ID')}，"
+                             f"R2_SECRET_ACCESS_KEY {shape('R2_SECRET_ACCESS_KEY')}〕")
         return cls(env["CLOUDFLARE_ACCOUNT_ID"], env["R2_BUCKET"] or "market-ana-state",
                    env["R2_ACCESS_KEY_ID"], env["R2_SECRET_ACCESS_KEY"])
 
