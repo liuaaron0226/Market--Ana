@@ -5,6 +5,7 @@ import http.cookiejar
 import json
 import os
 import re
+import sqlite3
 import threading
 import time
 import urllib.error
@@ -815,6 +816,265 @@ class LiveQuoteService:
 SERVICE = LiveQuoteService()
 
 
+class PortfolioApiError(Exception):
+    def __init__(self, status: int, message: str) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+_PORTFOLIO_SCHEMA_LOCK = threading.Lock()
+_PORTFOLIO_SCHEMA_READY: set[str] = set()
+_PORTFOLIO_EMAIL = "local"
+_PORTFOLIO_CODE = re.compile(r"^[0-9A-Z]{4,6}$")
+_PORTFOLIO_LIMIT = 100
+
+
+def _portfolio_code(value: Any) -> str:
+    code = value.strip().upper() if isinstance(value, str) else ""
+    if not _PORTFOLIO_CODE.fullmatch(code):
+        raise PortfolioApiError(400, "股票代號格式不正確")
+    return code
+
+
+def _default_portfolio_security(code: str) -> dict[str, Any] | None:
+    security = lookup_security(code)
+    if security is not None:
+        universe = universe_state()
+        return {"code": code, "name": security.name, "market": security.market,
+                "in_universe": code in universe["members"] or code in universe["core"]}
+    if code == "0050":
+        return {"code": code, "name": "元大台灣50", "market": "上市", "in_universe": True}
+    return None
+
+
+def _default_portfolio_prices(codes: list[str]) -> dict[str, dict[str, Any]]:
+    prices: dict[str, dict[str, Any]] = {}
+    connections: dict[Path, sqlite3.Connection] = {}
+    try:
+        for code in codes:
+            security = lookup_security(code)
+            path = OTC_HISTORY_DB if security is not None and security.market == "上櫃" else STOCK_HISTORY_DB
+            if not path.exists():
+                continue
+            connection = connections.setdefault(path, sqlite3.connect(path))
+            row = connection.execute(
+                "SELECT date, close FROM daily WHERE code = ? AND close IS NOT NULL ORDER BY date DESC LIMIT 1",
+                (code,),
+            ).fetchone()
+            if row is not None:
+                prices[code] = {"price": float(row[1]), "as_of": row[0], "source": "本站盤後資料"}
+    finally:
+        for connection in connections.values():
+            connection.close()
+    return prices
+
+
+class _ClosingConnection(sqlite3.Connection):
+    def __exit__(self, exc_type, exc_value, traceback) -> bool:
+        try:
+            return bool(super().__exit__(exc_type, exc_value, traceback))
+        finally:
+            self.close()
+
+
+class LocalPortfolioStore:
+    def __init__(self, path: Path, resolver=None, prices=None, now=None) -> None:
+        self.path = Path(path)
+        self.resolver = resolver or _default_portfolio_security
+        self.prices = prices or _default_portfolio_prices
+        self.now = now or (lambda: datetime.now(timezone.utc))
+        self._ensure_schema()
+
+    def _ensure_schema(self) -> None:
+        key = str(self.path.resolve())
+        with _PORTFOLIO_SCHEMA_LOCK:
+            if key in _PORTFOLIO_SCHEMA_READY and self.path.exists():
+                return
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            script = (ROOT / "cloud/migrations/0005_user_portfolio.sql").read_text(encoding="utf-8")
+            script = script.replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ").replace(
+                "CREATE INDEX ", "CREATE INDEX IF NOT EXISTS ")
+            with sqlite3.connect(self.path, factory=_ClosingConnection) as connection:
+                connection.executescript(script)
+            _PORTFOLIO_SCHEMA_READY.add(key)
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self.path, factory=_ClosingConnection)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    def _security(self, code: str) -> dict[str, Any]:
+        security = self.resolver(code)
+        if not security:
+            raise PortfolioApiError(404, "查無此上市或上櫃股票")
+        return security
+
+    def _at(self) -> str:
+        value = self.now()
+        return (value if isinstance(value, datetime) else datetime.fromtimestamp(value / 1000, timezone.utc)).isoformat().replace("+00:00", "Z")
+
+    def list_watchlist(self) -> dict[str, Any]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT code, name, market, horizon, in_universe, created_at, updated_at "
+                "FROM user_watchlist WHERE email = ? ORDER BY updated_at DESC, code", (_PORTFOLIO_EMAIL,)
+            ).fetchall()
+        return {"items": [{**dict(row), "in_universe": bool(row["in_universe"])} for row in rows]}
+
+    def save_watchlist(self, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        code = _portfolio_code(body.get("code"))
+        horizon = body.get("horizon", "none")
+        if horizon not in {"none", "short", "long"}:
+            raise PortfolioApiError(400, "分類只接受短期、長期或未分類")
+        security = self._security(code)
+        at = self._at()
+        with self._connect() as connection:
+            existing = connection.execute(
+                "SELECT 1 FROM user_watchlist WHERE email = ? AND code = ?", (_PORTFOLIO_EMAIL, code)
+            ).fetchone()
+            count = connection.execute(
+                "SELECT COUNT(*) FROM user_watchlist WHERE email = ?", (_PORTFOLIO_EMAIL,)
+            ).fetchone()[0]
+            if not existing and count >= _PORTFOLIO_LIMIT:
+                raise PortfolioApiError(409, f"自選股最多 {_PORTFOLIO_LIMIT} 檔")
+            connection.execute(
+                "INSERT INTO user_watchlist (email, code, name, market, horizon, in_universe, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (email, code) DO UPDATE SET "
+                "name=excluded.name, market=excluded.market, horizon=excluded.horizon, "
+                "in_universe=excluded.in_universe, updated_at=excluded.updated_at",
+                (_PORTFOLIO_EMAIL, code, security["name"], security["market"], horizon,
+                 int(bool(security.get("in_universe"))), at, at),
+            )
+        return (200 if existing else 201), {"code": code, "name": security["name"],
+            "market": security["market"], "horizon": horizon,
+            "in_universe": bool(security.get("in_universe")), "updated_at": at}
+
+    def delete_watchlist(self, code: str) -> None:
+        with self._connect() as connection:
+            result = connection.execute(
+                "DELETE FROM user_watchlist WHERE email = ? AND code = ?", (_PORTFOLIO_EMAIL, _portfolio_code(code))
+            )
+            if not result.rowcount:
+                raise PortfolioApiError(404, "自選股中沒有這檔股票")
+
+    @staticmethod
+    def _holding_input(body: dict[str, Any]) -> tuple[int, float, str]:
+        shares = body.get("shares")
+        average_cost = body.get("average_cost")
+        note = body.get("note", "")
+        if isinstance(shares, bool) or not isinstance(shares, int) or not 1 <= shares <= 1_000_000_000:
+            raise PortfolioApiError(400, "股數須為 1～1,000,000,000 的整數")
+        if isinstance(average_cost, bool) or not isinstance(average_cost, (int, float)) or not 0 < average_cost <= 10_000_000:
+            raise PortfolioApiError(400, "平均成本須大於 0 且不超過 10,000,000")
+        if not isinstance(note, str) or len(note.strip()) > 200:
+            raise PortfolioApiError(400, "備註最多 200 字")
+        return shares, float(average_cost), note.strip()
+
+    def save_holding(self, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        code = _portfolio_code(body.get("code"))
+        shares, average_cost, note = self._holding_input(body)
+        security = self._security(code)
+        at = self._at()
+        with self._connect() as connection:
+            existing = connection.execute(
+                "SELECT 1 FROM user_holdings WHERE email = ? AND code = ?", (_PORTFOLIO_EMAIL, code)
+            ).fetchone()
+            count = connection.execute(
+                "SELECT COUNT(*) FROM user_holdings WHERE email = ?", (_PORTFOLIO_EMAIL,)
+            ).fetchone()[0]
+            if not existing and count >= _PORTFOLIO_LIMIT:
+                raise PortfolioApiError(409, f"庫存最多 {_PORTFOLIO_LIMIT} 檔")
+            connection.execute(
+                "INSERT INTO user_holdings (email, code, name, market, shares, average_cost, note, in_universe, source, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?) ON CONFLICT (email, code) DO UPDATE SET "
+                "name=excluded.name, market=excluded.market, shares=excluded.shares, average_cost=excluded.average_cost, "
+                "note=excluded.note, in_universe=excluded.in_universe, source='manual', source_ref=NULL, updated_at=excluded.updated_at",
+                (_PORTFOLIO_EMAIL, code, security["name"], security["market"], shares, average_cost,
+                 note, int(bool(security.get("in_universe"))), at, at),
+            )
+        return (200 if existing else 201), {"code": code, "name": security["name"], "market": security["market"],
+            "shares": shares, "average_cost": average_cost, "note": note,
+            "in_universe": bool(security.get("in_universe")), "source": "manual", "updated_at": at}
+
+    def list_holdings(self) -> dict[str, Any]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT code, name, market, shares, average_cost, note, in_universe, source, source_ref, "
+                "last_price, price_as_of, price_source, created_at, updated_at FROM user_holdings "
+                "WHERE email = ? ORDER BY updated_at DESC, code", (_PORTFOLIO_EMAIL,)
+            ).fetchall()
+            quotes = self.prices([row["code"] for row in rows])
+            for code, quote in quotes.items():
+                connection.execute(
+                    "UPDATE user_holdings SET last_price=?, price_as_of=?, price_source=? WHERE email=? AND code=?",
+                    (quote["price"], quote.get("as_of"), quote.get("source"), _PORTFOLIO_EMAIL, code),
+                )
+            items = []
+            for row in rows:
+                quote = quotes.get(row["code"])
+                price = float(quote["price"]) if quote else (float(row["last_price"]) if row["last_price"] is not None else None)
+                cost = round(float(row["shares"]) * float(row["average_cost"]), 2)
+                value = round(float(row["shares"]) * price, 2) if price is not None else None
+                pnl = round(value - cost, 2) if value is not None else None
+                items.append({"code": row["code"], "name": row["name"], "market": row["market"],
+                    "shares": int(row["shares"]), "average_cost": float(row["average_cost"]), "note": row["note"],
+                    "in_universe": bool(row["in_universe"]), "source": row["source"], "source_ref": row["source_ref"],
+                    "latest_price": price, "price_as_of": quote.get("as_of") if quote else row["price_as_of"],
+                    "price_source": quote.get("source") if quote else row["price_source"],
+                    "price_stale": quote is None and price is not None, "cost_basis": cost,
+                    "market_value": value, "unrealized_pnl": pnl,
+                    "return_pct": round(pnl / cost * 100, 2) if pnl is not None else None,
+                    "created_at": row["created_at"], "updated_at": row["updated_at"]})
+        return {"items": items}
+
+    def delete_holding(self, code: str) -> None:
+        with self._connect() as connection:
+            result = connection.execute(
+                "DELETE FROM user_holdings WHERE email = ? AND code = ?", (_PORTFOLIO_EMAIL, _portfolio_code(code))
+            )
+            if not result.rowcount:
+                raise PortfolioApiError(404, "庫存中沒有這檔股票")
+
+    def list_history(self) -> dict[str, Any]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT code, name, market, viewed_at FROM user_search_history WHERE email = ? "
+                "ORDER BY viewed_at DESC, code LIMIT 10", (_PORTFOLIO_EMAIL,)
+            ).fetchall()
+        return {"items": [dict(row) for row in rows]}
+
+    def save_history(self, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        code = _portfolio_code(body.get("code"))
+        security = self._security(code)
+        at = self._at()
+        with self._connect() as connection:
+            existing = connection.execute(
+                "SELECT 1 FROM user_search_history WHERE email = ? AND code = ?", (_PORTFOLIO_EMAIL, code)
+            ).fetchone()
+            connection.execute(
+                "INSERT INTO user_search_history (email, code, name, market, viewed_at) VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT (email, code) DO UPDATE SET name=excluded.name, market=excluded.market, viewed_at=excluded.viewed_at",
+                (_PORTFOLIO_EMAIL, code, security["name"], security["market"], at),
+            )
+            connection.execute(
+                "DELETE FROM user_search_history WHERE email = ? AND code NOT IN (SELECT code FROM user_search_history "
+                "WHERE email = ? ORDER BY viewed_at DESC, code LIMIT 10)", (_PORTFOLIO_EMAIL, _PORTFOLIO_EMAIL)
+            )
+        return (200 if existing else 201), {"code": code, "name": security["name"],
+            "market": security["market"], "viewed_at": at}
+
+    def delete_history(self, code: str | None = None) -> None:
+        with self._connect() as connection:
+            if code is None:
+                connection.execute("DELETE FROM user_search_history WHERE email = ?", (_PORTFOLIO_EMAIL,))
+                return
+            result = connection.execute(
+                "DELETE FROM user_search_history WHERE email = ? AND code = ?", (_PORTFOLIO_EMAIL, _portfolio_code(code))
+            )
+            if not result.rowcount:
+                raise PortfolioApiError(404, "搜尋紀錄中沒有這檔股票")
+
+
 class MarketHTTPServer(ThreadingHTTPServer):
     # On Windows, SO_REUSEADDR can let two unrelated local servers bind the same
     # port and randomly receive each other's requests. Fail instead of sharing.
@@ -827,6 +1087,9 @@ class MarketHTTPServer(ThreadingHTTPServer):
     # universe_enabled=False 只給 V2 前的全名錄契約測試使用（對應雲端 build 的 --all-securities）。
     universe_path: Path | None = None
     universe_enabled: bool = True
+    portfolio_db: Path = ROOT / "data/user-portfolio.sqlite"
+    portfolio_resolver: Any = None
+    portfolio_prices: Any = None
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -843,7 +1106,88 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store, max-age=0")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            # 瀏覽器導頁時會取消尚在傳送的分析回應；請求已結束，不視為服務錯誤。
+            pass
+
+    def _send_empty(self, status: int = 204) -> None:
+        self.send_response(status)
+        self.send_header("Cache-Control", "no-store, max-age=0")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _portfolio_store(self) -> LocalPortfolioStore:
+        return LocalPortfolioStore(self.server.portfolio_db, self.server.portfolio_resolver,
+                                   self.server.portfolio_prices)
+
+    def _require_local_host(self) -> None:
+        if self.headers.get("Host") != f"{HOST}:{self.server.server_port}":
+            raise PortfolioApiError(403, "來源主機被拒絕")
+
+    def _require_local_origin(self) -> None:
+        expected = f"http://{HOST}:{self.server.server_port}"
+        if self.headers.get("Origin") != expected:
+            raise PortfolioApiError(403, "跨站請求被拒絕")
+
+    def _read_api_json(self) -> dict[str, Any]:
+        self._require_local_origin()
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if length <= 0 or length > 16_384:
+                raise ValueError
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError
+            return payload
+        except (UnicodeDecodeError, ValueError, json.JSONDecodeError):
+            raise PortfolioApiError(400, "格式錯誤")
+
+    def _portfolio_api(self, method: str) -> bool:
+        path = urllib.parse.urlsplit(self.path).path
+        if not re.fullmatch(r"/api/(?:watchlist|holdings|search-history)(?:/[^/]+)?", path):
+            return False
+        try:
+            self._require_local_host()
+            store = self._portfolio_store()
+            if path == "/api/watchlist":
+                if method == "GET": self._send_json(store.list_watchlist())
+                elif method == "POST":
+                    status, payload = store.save_watchlist(self._read_api_json()); self._send_json(payload, status)
+                else: raise PortfolioApiError(405, "方法不允許")
+                return True
+            if path == "/api/holdings":
+                if method == "GET": self._send_json(store.list_holdings())
+                elif method == "POST":
+                    status, payload = store.save_holding(self._read_api_json()); self._send_json(payload, status)
+                else: raise PortfolioApiError(405, "方法不允許")
+                return True
+            if path == "/api/search-history":
+                if method == "GET": self._send_json(store.list_history())
+                elif method == "POST":
+                    status, payload = store.save_history(self._read_api_json()); self._send_json(payload, status)
+                elif method == "DELETE":
+                    self._require_local_origin(); store.delete_history(); self._send_empty()
+                else: raise PortfolioApiError(405, "方法不允許")
+                return True
+            match = re.fullmatch(r"/api/(watchlist|holdings|search-history)/([^/]+)", path)
+            if method != "DELETE":
+                raise PortfolioApiError(405, "方法不允許")
+            self._require_local_origin()
+            kind, code = match.groups()
+            if kind == "watchlist": store.delete_watchlist(code)
+            elif kind == "holdings": store.delete_holding(code)
+            else: store.delete_history(code)
+            self._send_empty()
+            return True
+        except PortfolioApiError as error:
+            self._send_json({"error": error.args[0]}, error.status)
+            return True
+        except Exception as error:
+            print(f"portfolio api failed: {type(error).__name__}: {error}")
+            self._send_json({"error": "個人資料暫時無法處理"}, 500)
+            return True
 
     def _send_stock_search(self, query: str) -> None:
         """GET /api/stocks/search?q=...：上市＋上櫃普通股名錄搜尋。"""
@@ -1072,6 +1416,8 @@ class Handler(SimpleHTTPRequestHandler):
         self._send_json(result)
 
     def do_GET(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
+        if self._portfolio_api("GET"):
+            return
         path = urllib.parse.urlsplit(self.path).path
         if path == "/api/live":
             self._send_json(SERVICE.snapshot())
@@ -1114,6 +1460,14 @@ class Handler(SimpleHTTPRequestHandler):
             )
             return
         super().do_GET()
+
+    def do_POST(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
+        if not self._portfolio_api("POST"):
+            self._send_json({"error": "找不到"}, 404)
+
+    def do_DELETE(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
+        if not self._portfolio_api("DELETE"):
+            self._send_json({"error": "找不到"}, 404)
 
     def end_headers(self) -> None:
         self.send_header("Referrer-Policy", "no-referrer")

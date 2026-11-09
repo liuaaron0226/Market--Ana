@@ -110,12 +110,20 @@
   let requestSequence = 0;
   let pendingRequest = null;
   let chartPeriod = 'daily';
+  const COMPARE_PERIODS = ['1m', '3m', '1y', '3y', '5y'];
+  const COMPARE_COLORS = ['--cmp-series-1', '--cmp-series-2', '--cmp-series-3', '--cmp-series-4', '--cmp-series-5'];
+  const COMPARE_DASHES = ['', '10 4', '3 4', '12 4 3 4', '2 5'];
+  const compareState = {
+    current: '', codes: [], names: new Map(), colors: new Map(), hidden: new Set(), payload: null,
+    request: 0, abort: null, searchAbort: null, searchTimer: null, searchOptions: [], activeOption: -1,
+  };
 
   function setTheme(theme) {
     document.documentElement.dataset.theme = theme;
     try { localStorage.setItem('market-theme', theme); } catch (_) { /* 私密視窗可能無法存 */ }
     $('themeText').textContent = theme === 'dark' ? '淺色' : '深色';
     if (lastResult) drawChart(lastResult);
+    if (compareState.payload) drawComparisonChart(compareState.payload);
   }
 
   function codeFromUrl() {
@@ -240,6 +248,7 @@
     }
     $('content').hidden = false;
     drawChart(r);
+    syncComparison(r);
   }
 
   // 訊號明細（預設收合）：每條只放名稱、狀態、一句白話；判斷式與準確度留在 API。
@@ -375,6 +384,449 @@
     } catch (_) { /* 名單讀不到就不顯示，不影響分析 */ }
   }
 
+  // ---------- 和 0050 對照 ----------
+  const svgNode = (tag, attrs = {}) => {
+    const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    Object.entries(attrs).forEach(([key, value]) => el.setAttribute(key, String(value)));
+    return el;
+  };
+  const compareItems = payload => (payload.item ? [payload.item] : (payload.items || [])).filter(item => item.status === 'ok');
+  const comparePercent = value => `${value > 0 ? '+' : ''}${Number(value).toFixed(1)}%`;
+  const compareDrawdown = value => value === 0 ? '0.0%' : `${Number(value).toFixed(1)}%`;
+
+  function compareColorToken(code) {
+    if (!compareState.colors.has(code)) {
+      const used = new Set(compareState.colors.values());
+      compareState.colors.set(code, COMPARE_COLORS.find(token => !used.has(token)) || COMPARE_COLORS[compareState.colors.size % COMPARE_COLORS.length]);
+    }
+    return compareState.colors.get(code);
+  }
+
+  function compareCss(name, fallback) {
+    return getComputedStyle($('compareBlock')).getPropertyValue(name).trim() || fallback;
+  }
+
+  function compareColor(code) {
+    return compareCss(compareColorToken(code), '#2a78d6');
+  }
+
+  function setCompareStatus(state, text) {
+    $('compareStatus').dataset.state = state;
+    $('compareStatus').textContent = text;
+  }
+
+  function renderCompareChips() {
+    $('compareChips').replaceChildren(...compareState.codes.map((code, index) => {
+      const chip = node('span', `bd-compare-chip${index === 0 ? ' is-current' : ''}`);
+      chip.dataset.code = code;
+      chip.style.setProperty('--chip-color', compareColor(code));
+      const line = node('i');
+      line.setAttribute('aria-hidden', 'true');
+      const label = node('span', '', `${compareState.names.get(code) || code} ${code}`);
+      const remove = node('button', '', '×');
+      remove.type = 'button';
+      remove.setAttribute('aria-label', `移除 ${compareState.names.get(code) || code} ${code}`);
+      remove.addEventListener('click', () => {
+        compareState.codes = compareState.codes.filter(value => value !== code);
+        compareState.hidden.delete(code);
+        compareState.colors.delete(code);
+        renderCompareChips();
+        loadComparison();
+      });
+      chip.append(line, label, remove);
+      return chip;
+    }));
+  }
+
+  function comparisonConclusion(items) {
+    const rows = items.map(item => ({ item, row: (item.periods || []).find(period => period.period === '1y') }))
+      .filter(entry => entry.row && entry.row.status === 'ok');
+    if (!rows.length) {
+      const item = items[0];
+      return `${item ? item.code : compareState.current} 近 1 年資料不足，暫時無法和 0050 比較。`;
+    }
+    if (items.length === 1) {
+      const { item, row } = rows[0];
+      const gap = Number(row.excess_pct);
+      if (gap === 0) return `${item.name} ${item.code} 近 1 年和 0050 持平。`;
+      return `${item.name} ${item.code} 近 1 年${gap > 0 ? '贏過' : '落後'} 0050 ${Math.abs(gap).toFixed(1)} 個百分點。`;
+    }
+    rows.sort((a, b) => b.row.excess_pct - a.row.excess_pct);
+    const { item, row } = rows[0];
+    const gap = Number(row.excess_pct);
+    return `${item.name} ${item.code} 的近 1 年相對表現最佳，${gap >= 0 ? '領先' : '仍落後'} 0050 ${Math.abs(gap).toFixed(1)} 個百分點。`;
+  }
+
+  function appendCompareCell(row, text, label, className = '') {
+    const cell = node('td', className, text);
+    cell.dataset.label = label;
+    row.append(cell);
+  }
+
+  function renderCompareTable(items) {
+    const rows = [];
+    items.forEach(item => {
+      const periods = new Map((item.periods || []).map(period => [period.period, period]));
+      COMPARE_PERIODS.forEach((key, index) => {
+        const period = periods.get(key) || { period: key, label: key, status: 'insufficient_history' };
+        const tr = document.createElement('tr');
+        tr.dataset.code = item.code;
+        tr.dataset.groupStart = String(index === 0);
+        const stock = node('td', 'cmp-stock');
+        stock.append(node('span', '', item.name || item.code), node('small', '', item.code));
+        tr.append(stock);
+        const periodHead = node('th', 'cmp-period', period.label);
+        periodHead.scope = 'row';
+        tr.append(periodHead);
+        if (period.status !== 'ok') {
+          appendCompareCell(tr, '資料不足', '個股報酬', 'cmp-missing');
+          appendCompareCell(tr, '—', '0050 報酬', 'cmp-missing');
+          appendCompareCell(tr, '—', '差距', 'cmp-missing');
+          appendCompareCell(tr, '—', '個股最大回撤', 'cmp-missing');
+          appendCompareCell(tr, '—', '0050 最大回撤', 'cmp-missing');
+        } else {
+          appendCompareCell(tr, comparePercent(period.stock_return_pct), '個股報酬');
+          appendCompareCell(tr, comparePercent(period.benchmark_return_pct), '0050 報酬');
+          const gapClass = period.excess_pct > 0 ? 'cmp-positive' : period.excess_pct < 0 ? 'cmp-negative' : '';
+          appendCompareCell(tr, comparePercent(period.excess_pct), '差距', gapClass);
+          appendCompareCell(tr, compareDrawdown(period.stock_max_drawdown_pct), '個股最大回撤');
+          appendCompareCell(tr, compareDrawdown(period.benchmark_max_drawdown_pct), '0050 最大回撤');
+        }
+        rows.push(tr);
+      });
+    });
+    $('compareTableBody').replaceChildren(...rows);
+  }
+
+  function comparisonSeries(payload) {
+    const items = compareItems(payload);
+    const source = [];
+    const benchmarkPoints = payload.item ? payload.item.benchmark_chart : payload.benchmark && payload.benchmark.chart;
+    source.push({ key: '0050', label: '0050', color: compareCss('--cmp-benchmark', '#1d1b20'), dash: '8 5', points: benchmarkPoints || [] });
+    items.forEach((item, index) => source.push({
+      key: item.code, label: `${item.name || item.code} ${item.code}`, color: compareColor(item.code),
+      dash: COMPARE_DASHES[index] || '', points: item.chart || [],
+    }));
+    const valid = source.filter(series => Array.isArray(series.points) && series.points.length > 1);
+    if (!valid.length) return [];
+    const commonStart = valid.map(series => series.points[0][0]).sort().at(-1);
+    return valid.map(series => {
+      const points = series.points.filter(point => point[0] >= commonStart);
+      if (!points.length) return { ...series, points: [] };
+      const base = Number(points[0][1]);
+      return { ...series, points: points.map(point => [point[0], Number(point[1]) / base * 100]) };
+    }).filter(series => series.points.length > 1);
+  }
+
+  function renderCompareLegend(series) {
+    const buttons = series.map(item => {
+      const button = node('button');
+      button.type = 'button';
+      button.dataset.key = item.key;
+      button.setAttribute('aria-pressed', String(!compareState.hidden.has(item.key)));
+      button.setAttribute('aria-label', `顯示或隱藏 ${item.label}`);
+      const line = node('i', item.dash ? 'is-dashed' : '');
+      line.style.setProperty('--series-color', item.color);
+      button.append(line, node('span', '', item.label));
+      button.addEventListener('click', () => {
+        if (compareState.hidden.has(item.key)) compareState.hidden.delete(item.key);
+        else if (series.length - compareState.hidden.size > 1) compareState.hidden.add(item.key);
+        drawComparisonChart(compareState.payload);
+      });
+      return button;
+    });
+    $('compareLegend').replaceChildren(...buttons);
+  }
+
+  function drawComparisonChart(payload) {
+    if (!payload) return;
+    const allSeries = comparisonSeries(payload);
+    renderCompareLegend(allSeries);
+    const series = allSeries.filter(item => !compareState.hidden.has(item.key));
+    const host = $('compareChart');
+    const tooltip = $('compareTooltip');
+    tooltip.hidden = true;
+    host.replaceChildren();
+    if (!series.length) {
+      host.append(node('p', 'bd-compare-empty', '目前沒有足夠的走勢資料。'));
+      return;
+    }
+
+    const compact = innerWidth <= 700;
+    const W = compact ? 620 : 900, H = compact ? 340 : 310, L = compact ? 48 : 54, R = compact ? 24 : 72, T = 20, B = 34;
+    const times = series.flatMap(item => item.points.map(point => Date.parse(point[0]))).filter(Number.isFinite);
+    const values = series.flatMap(item => item.points.map(point => point[1])).filter(Number.isFinite);
+    const minTime = Math.min(...times), maxTime = Math.max(...times);
+    let minValue = Math.min(100, ...values), maxValue = Math.max(100, ...values);
+    const pad = Math.max(2, (maxValue - minValue) * .08);
+    minValue -= pad; maxValue += pad;
+    const x = time => L + (time - minTime) / Math.max(1, maxTime - minTime) * (W - L - R);
+    const y = value => T + (maxValue - value) / Math.max(1, maxValue - minValue) * (H - T - B);
+    const svg = svgNode('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', tabindex: '0', 'aria-describedby': 'compareTooltip',
+      'aria-label': `${series.map(item => item.label).join('、')}含息報酬走勢，共同起點為 100` });
+
+    for (let i = 0; i < 5; i += 1) {
+      const value = minValue + (maxValue - minValue) * i / 4;
+      const yy = y(value);
+      svg.append(svgNode('line', { x1: L, x2: W - R, y1: yy, y2: yy, class: 'cmp-grid' }));
+      const label = svgNode('text', { x: L - 8, y: yy + 4, 'text-anchor': 'end', class: 'cmp-axis-label' });
+      label.textContent = `${Math.round(value - 100)}%`;
+      svg.append(label);
+    }
+    const zeroY = y(100);
+    svg.append(svgNode('line', { x1: L, x2: W - R, y1: zeroY, y2: zeroY, class: 'cmp-base' }));
+    const zeroLabel = svgNode('text', { x: L - 8, y: zeroY + 4, 'text-anchor': 'end', class: 'cmp-axis-label' });
+    zeroLabel.textContent = '0%';
+    svg.append(zeroLabel);
+    for (let i = 0; i < 4; i += 1) {
+      const time = minTime + (maxTime - minTime) * i / 3;
+      const label = svgNode('text', { x: x(time), y: H - 8, 'text-anchor': i === 0 ? 'start' : i === 3 ? 'end' : 'middle', class: 'cmp-axis-label' });
+      const date = new Date(time);
+      label.textContent = `${date.getUTCFullYear()}/${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+      svg.append(label);
+    }
+
+    const labelYs = [];
+    series.forEach((item, index) => {
+      const path = svgNode('path', { class: 'cmp-line', stroke: item.color, 'data-key': item.key,
+        d: item.points.map((point, pointIndex) => `${pointIndex ? 'L' : 'M'}${x(Date.parse(point[0])).toFixed(2)},${y(point[1]).toFixed(2)}`).join(' ') });
+      if (item.dash) path.setAttribute('stroke-dasharray', item.dash);
+      svg.append(path);
+      if (index < 2) {
+        const end = item.points[item.points.length - 1];
+        let labelY = y(end[1]) + 4;
+        while (labelYs.some(value => Math.abs(value - labelY) < 13)) labelY += 13;
+        labelYs.push(labelY);
+        const label = svgNode('text', { x: W - R + 7, y: labelY, fill: item.color, class: 'cmp-direct-label' });
+        label.textContent = item.key;
+        svg.append(label);
+      }
+    });
+
+    const crosshair = svgNode('line', { x1: L, x2: L, y1: T, y2: H - B, class: 'cmp-crosshair', hidden: 'hidden' });
+    svg.append(crosshair);
+    const hit = svgNode('rect', { x: L, y: T, width: W - L - R, height: H - T - B, class: 'cmp-hit' });
+    svg.append(hit);
+    host.append(svg);
+
+    const availableDates = [...new Set(series.flatMap(item => item.points.map(point => point[0])))].sort();
+    let keyboardIndex = availableDates.length - 1;
+    const nearestPoint = (points, time) => points.reduce((best, point) => Math.abs(Date.parse(point[0]) - time) < Math.abs(Date.parse(best[0]) - time) ? point : best, points[0]);
+    const showAt = (time, clientX = null) => {
+      const nearestDate = availableDates.reduce((best, date) => Math.abs(Date.parse(date) - time) < Math.abs(Date.parse(best) - time) ? date : best, availableDates[0]);
+      const selectedTime = Date.parse(nearestDate);
+      const xx = x(selectedTime);
+      crosshair.setAttribute('x1', xx); crosshair.setAttribute('x2', xx); crosshair.removeAttribute('hidden');
+      const title = document.createElement('time');
+      title.textContent = nearestDate;
+      const rows = series.map(item => {
+        const point = nearestPoint(item.points, selectedTime);
+        const row = document.createElement('p');
+        const label = node('span');
+        const line = node('i'); line.style.setProperty('--series-color', item.color);
+        label.append(line, document.createTextNode(item.label));
+        const value = node('b', '', comparePercent(point[1] - 100));
+        row.append(label, value);
+        return row;
+      });
+      tooltip.replaceChildren(title, ...rows);
+      tooltip.hidden = false;
+      const block = tooltip.parentElement.getBoundingClientRect();
+      const svgRect = svg.getBoundingClientRect();
+      const pointer = clientX === null ? svgRect.left + (xx / W) * svgRect.width : clientX;
+      const left = Math.max(0, Math.min(block.width - Math.min(280, block.width - 24), pointer - block.left + 12));
+      tooltip.style.left = `${left}px`;
+      tooltip.style.top = `${Math.max(54, svgRect.top - block.top + 28)}px`;
+    };
+    const showAtPointer = event => {
+      const rect = svg.getBoundingClientRect();
+      const ratio = Math.max(0, Math.min(W - L - R, (event.clientX - rect.left) / rect.width * W - L)) / (W - L - R);
+      showAt(minTime + ratio * (maxTime - minTime), event.clientX);
+    };
+    hit.addEventListener('pointermove', showAtPointer);
+    hit.addEventListener('pointerdown', showAtPointer);
+    hit.addEventListener('pointerleave', event => {
+      if (event.pointerType === 'touch') return;
+      tooltip.hidden = true;
+      crosshair.setAttribute('hidden', 'hidden');
+    });
+    svg.addEventListener('keydown', event => {
+      if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+      event.preventDefault();
+      keyboardIndex = Math.max(0, Math.min(availableDates.length - 1, keyboardIndex + (event.key === 'ArrowRight' ? 1 : -1)));
+      showAt(Date.parse(availableDates[keyboardIndex]));
+    });
+  }
+
+  function renderComparison(payload) {
+    const items = compareItems(payload);
+    compareState.payload = payload;
+    items.forEach(item => compareState.names.set(item.code, item.name || item.code));
+    $('compareDate').textContent = `資料日 ${payload.data_date}`;
+    $('compareConclusion').textContent = comparisonConclusion(items);
+    const withoutDividends = items.filter(item => item.dividends_included === false);
+    $('compareDividendNote').hidden = withoutDividends.length === 0;
+    $('compareDividendNote').textContent = withoutDividends.length
+      ? `${withoutDividends.map(item => `${item.name || item.code} ${item.code}`).join('、')}：未含現金股利。`
+      : '';
+    renderCompareTable(items);
+    renderCompareChips();
+    const starts = items.map(item => item.chart_from).filter(Boolean).sort();
+    $('compareChartMeta').textContent = `${starts.length ? `自 ${starts.at(-1)} 起，` : ''}共同起點＝100`;
+    $('compareNotes').replaceChildren(...[
+      '報酬未扣交易成本與稅；0050 淨值已含內扣費用。',
+      '資料不足的期間不補數字。',
+      '過去表現不代表未來。',
+    ].map(text => node('li', '', text)));
+    drawComparisonChart(payload);
+    $('compareBlock').hidden = false;
+    setCompareStatus('ok', '對照資料已更新');
+  }
+
+  async function loadComparison() {
+    const sequence = ++compareState.request;
+    if (compareState.abort) compareState.abort.abort();
+    compareState.abort = new AbortController();
+    setCompareStatus('loading', '讀取對照資料');
+    const path = compareState.codes.length === 1
+      ? `/api/stocks/${encodeURIComponent(compareState.codes[0])}/vs-0050`
+      : `/api/compare-0050?${new URLSearchParams({ codes: compareState.codes.join(',') })}`;
+    try {
+      const response = await fetch(path, { cache: 'no-store', signal: compareState.abort.signal });
+      const data = await response.json();
+      if (sequence !== compareState.request) return;
+      if (!response.ok || data.error) throw new Error(data.message || '對照資料讀取失敗');
+      if (Array.isArray(data.items)) {
+        const rejected = data.items.filter(item => item.status !== 'ok');
+        if (rejected.length) {
+          compareState.codes = compareState.codes.filter(code => !rejected.some(item => item.code === code));
+          rejected.forEach(item => compareState.colors.delete(item.code));
+          renderCompareChips();
+          renderComparison(data);
+          setCompareStatus('error', `${rejected.map(item => item.code).join('、')} 不在本站涵蓋的大量股，未加入比較。`);
+          return;
+        }
+      }
+      renderComparison(data);
+    } catch (error) {
+      if (sequence !== compareState.request || error.name === 'AbortError') return;
+      setCompareStatus('error', error.message || '對照資料讀取失敗，請稍後再試。');
+    }
+  }
+
+  function clearComparisonView() {
+    $('compareConclusion').textContent = '讀取中';
+    $('compareDate').textContent = '';
+    $('compareDividendNote').hidden = true;
+    $('compareDividendNote').textContent = '';
+    $('compareTableBody').replaceChildren();
+    $('compareLegend').replaceChildren();
+    $('compareChart').replaceChildren(node('p', 'bd-compare-empty', '讀取對照資料'));
+    $('compareTooltip').hidden = true;
+  }
+
+  function syncComparison(result) {
+    if (compareState.current === result.code) return;
+    compareState.current = result.code;
+    compareState.codes = [result.code];
+    compareState.names = new Map([[result.code, result.name || result.code]]);
+    compareState.colors = new Map();
+    compareState.hidden = new Set();
+    compareState.payload = null;
+    compareColorToken(result.code);
+    clearComparisonView();
+    $('compareBlock').hidden = false;
+    renderCompareChips();
+    loadComparison();
+  }
+
+  function closeCompareResults() {
+    clearTimeout(compareState.searchTimer);
+    if (compareState.searchAbort) compareState.searchAbort.abort();
+    compareState.searchAbort = null;
+    compareState.searchOptions = [];
+    compareState.activeOption = -1;
+    $('compareSearchResults').hidden = true;
+    $('compareInput').setAttribute('aria-expanded', 'false');
+    $('compareInput').removeAttribute('aria-activedescendant');
+  }
+
+  function setActiveCompareOption(index) {
+    const options = compareState.searchOptions;
+    if (!options.length) return;
+    compareState.activeOption = (index + options.length) % options.length;
+    options.forEach((button, buttonIndex) => button.setAttribute('aria-selected', String(buttonIndex === compareState.activeOption)));
+    const active = options[compareState.activeOption];
+    $('compareInput').setAttribute('aria-activedescendant', active.id);
+    active.scrollIntoView({ block: 'nearest' });
+  }
+
+  async function searchComparison(term) {
+    if (compareState.searchAbort) compareState.searchAbort.abort();
+    const controller = new AbortController();
+    compareState.searchAbort = controller;
+    try {
+      const response = await fetch(`/api/stocks/search?${new URLSearchParams({ q: term, limit: '5' })}`, {
+        cache: 'no-store', signal: controller.signal,
+      });
+      const data = response.ok ? await response.json() : null;
+      if ($('compareInput').value.trim() !== term || controller.signal.aborted) return;
+      const items = (data && data.items || []).filter(item => item.universe_rank !== null && item.universe_rank !== undefined
+        && !compareState.codes.includes(item.code));
+      const buttons = items.map((item, index) => {
+        const button = node('button');
+        button.type = 'button';
+        button.id = `compareOption${index}`;
+        button.setAttribute('role', 'option');
+        button.setAttribute('aria-selected', 'false');
+        button.append(node('span', '', `${item.name} ${item.code}`), node('small', '', item.market));
+        button.addEventListener('click', () => {
+          $('compareInput').value = item.code;
+          closeCompareResults();
+          addComparisonCode(item.code, item.name);
+        });
+        return button;
+      });
+      compareState.searchAbort = null;
+      compareState.searchOptions = buttons;
+      compareState.activeOption = -1;
+      $('compareSearchResults').replaceChildren(...buttons);
+      $('compareSearchResults').hidden = buttons.length === 0;
+      $('compareInput').setAttribute('aria-expanded', String(buttons.length > 0));
+      $('compareInput').removeAttribute('aria-activedescendant');
+    } catch (error) {
+      if (error.name !== 'AbortError') closeCompareResults();
+    }
+  }
+
+  function addComparisonCode(code, name = code) {
+    clearTimeout(compareState.searchTimer);
+    const normalized = code.trim().toUpperCase();
+    if (!/^[0-9A-Z]{4,6}$/.test(normalized)) {
+      setCompareStatus('error', '請從搜尋結果選擇股票，或輸入正確代號。');
+      return;
+    }
+    if (normalized === '0050') {
+      setCompareStatus('error', '0050 已經是比較基準，不必重複加入。');
+      return;
+    }
+    if (compareState.codes.includes(normalized)) {
+      setCompareStatus('error', `${normalized} 已在比較清單中。`);
+      return;
+    }
+    if (compareState.codes.length >= 5) {
+      setCompareStatus('error', '最多同時比較 5 檔股票。');
+      return;
+    }
+    compareState.codes.push(normalized);
+    compareState.names.set(normalized, name);
+    compareColorToken(normalized);
+    $('compareInput').value = '';
+    closeCompareResults();
+    renderCompareChips();
+    loadComparison();
+  }
+
   async function load(code) {
     const sequence = ++requestSequence;
     if (pendingRequest) pendingRequest.abort();
@@ -423,6 +875,33 @@
       if (sequence === requestSequence) $('content').setAttribute('aria-busy', 'false');
     }
   }
+
+  $('compareForm').addEventListener('submit', event => {
+    event.preventDefault();
+    addComparisonCode($('compareInput').value);
+  });
+  $('compareInput').addEventListener('input', () => {
+    const term = $('compareInput').value.trim();
+    closeCompareResults();
+    if (term.length < 2) return;
+    compareState.searchTimer = setTimeout(() => searchComparison(term), 180);
+  });
+  $('compareInput').addEventListener('keydown', event => {
+    if (event.key === 'Escape') { closeCompareResults(); return; }
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      if (!compareState.searchOptions.length) return;
+      event.preventDefault();
+      setActiveCompareOption(compareState.activeOption + (event.key === 'ArrowDown' ? 1 : -1));
+      return;
+    }
+    if (event.key === 'Enter' && compareState.activeOption >= 0) {
+      event.preventDefault();
+      compareState.searchOptions[compareState.activeOption].click();
+    }
+  });
+  document.addEventListener('click', event => {
+    if (!$('compareForm').contains(event.target)) closeCompareResults();
+  });
 
   $('searchForm').addEventListener('submit', event => {
     event.preventDefault();

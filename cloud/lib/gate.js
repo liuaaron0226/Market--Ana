@@ -3,10 +3,11 @@
 // 任何設定缺漏或資料庫錯誤一律拒絕。
 import { verifyAccessJwt } from "./jwt.js";
 import { detailFor } from "./market-data.js";
+import { handleUserPortfolio, UserPortfolioError } from "./user-portfolio.js";
 
 const PENDING_CAP = 30;
 // 票 06 限速（Astra r1 建議值）：市場 API 全部每人每分 30 次；個股明細另限每分 12 次。固定一分鐘窗，邊界最多兩倍突發。
-const RATE = { market: 30, detail: 12 };
+const RATE = { market: 30, detail: 12, userData: 60 };
 // 舊的整包資料檔：雲端已不部署，這裡再擋一次，避免預覽網址或殘留檔被讀到。
 const RETIRED_DATA = new Set(["/analysis-data.js", "/chips-data.js", "/dashboard-data.js", "/detail-data.js", "/plain-data.js"]);
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -382,6 +383,19 @@ function handleDataStatusApi(request, deps) {
   return new Response(JSON.stringify(deps.dataStatus ?? NOT_READY_STATUS), { status: 200, headers: PRIVATE_JSON });
 }
 
+const USER_DATA_PATH = /^\/api\/(watchlist|holdings|search-history)(?:\/[^/]+)?$/;
+async function handleUserPortfolioApi(request, env, path, email, deps) {
+  try {
+    await consume(env.DB, email, "userData", (deps.now || Date.now)(), deps.rate);
+  } catch (error) {
+    if (error instanceof RateLimited) {
+      return json(429, { error: "rate-limited", message: "操作太頻繁，請稍後再試" }, { "retry-after": String(error.retryAfter) });
+    }
+    throw new HttpError(503, "暫時無法處理，請稍後再試");
+  }
+  return handleUserPortfolio(request, env, path, email, deps);
+}
+
 async function handleMarketApi(request, env, path, email, deps) {
   if (request.method !== "GET") throw new HttpError(405, "方法不允許");
   const pack = deps.marketPack;
@@ -443,11 +457,13 @@ export async function handle(request, env, next, deps = defaultDeps) {
     const isMarket = path.startsWith("/api/market/");
     const isStock = path.startsWith("/api/stocks/");
     const isScreens = SCREEN_PATHS.has(path);
+    const isUserData = USER_DATA_PATH.test(path);
     const LIVE_OFF = () => json(503, { error: "live-not-available", message: "雲端版尚未提供盤中即時行情，目前顯示盤後資料" });
     if (isOwner) {
       if (path === "/api/live") return LIVE_OFF();
       if (path.startsWith("/api/admin/")) return await handleAdminApi(request, env, path, owner);
       if (path === "/api/me") return json(200, { email, status: "approved", owner: true });
+      if (isUserData) return await handleUserPortfolioApi(request, env, path, email, deps);
       if (isMarket) return await handleMarketApi(request, env, path, email, deps);
       if (isComparePath(path)) return await handleCompareApi(request, env, path, email, deps);
       if (isStock) return await handleStockApi(request, env, path, email, deps);
@@ -464,6 +480,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
     }
     if (isAdmin) return fail(403, "沒有管理權限");
     if (path === "/api/me") return json(200, { email, status, owner: false });
+    if (isUserData) return await handleUserPortfolioApi(request, env, path, email, deps);
     if (path === "/api/live") return LIVE_OFF();
     if (isMarket) return await handleMarketApi(request, env, path, email, deps);
     if (isComparePath(path)) return await handleCompareApi(request, env, path, email, deps);
@@ -473,7 +490,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
     if (RETIRED_DATA.has(path)) return fail(404, "找不到");
     return await next();
   } catch (e) {
-    if (e instanceof HttpError) return fail(e.status, e.message);
+    if (e instanceof HttpError || e instanceof UserPortfolioError) return fail(e.status, e.message);
     return fail(503, "暫時無法處理，請稍後再試");
   }
 }

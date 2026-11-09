@@ -63,6 +63,7 @@
       <div class="stock-search-heading">
         <h2 id="stockSearchTitle">搜尋上市／上櫃普通股</h2>
         <p>代號、完整名稱或部分名稱都可以</p>
+        <a class="portfolio-entry" href="portfolio.html">自選股與庫存 <span aria-hidden="true">›</span></a>
       </div>
       <form class="stock-search-form" id="stockSearchForm" role="search">
         <label class="sr-only" for="stockSearchInput">股票代號或名稱</label>
@@ -70,6 +71,7 @@
         <button type="submit">搜尋</button>
         <button type="button" id="stockSearchClear">清空</button>
       </form>
+      <div class="stock-search-suggestions" id="stockSearchSuggestions" aria-label="搜尋建議" hidden></div>
       <p class="stock-search-status" id="stockSearchStatus" role="status">請輸入搜尋條件。</p>
       <ul class="stock-search-results" id="stockSearchResults" aria-label="股票搜尋結果"></ul>
       <button class="stock-search-more" id="stockSearchMore" type="button" hidden>載入更多</button>

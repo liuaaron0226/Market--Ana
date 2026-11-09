@@ -6,6 +6,7 @@ export const WEB_FILES = [
   "stock.html", "stock.css", "stock.js",
   // claude-60 設計改版（11-09）新增的資產
   "bold.css", "home.css", "panel.css", "motion.js", "home-motion.js", "period-switch.js",
+  "portfolio.html", "portfolio.css", "portfolio.js",
 ];
 export const RETIRED = ["analysis-data.js", "chips-data.js", "dashboard-data.js", "detail-data.js", "plain-data.js", "market-data-local.js"];
 

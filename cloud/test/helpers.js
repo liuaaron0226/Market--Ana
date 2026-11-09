@@ -2,7 +2,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
 
-const MIGRATION = ["0001_init.sql", "0003_api_hits.sql", "0004_listed_stock_data.sql"]
+const MIGRATION = ["0001_init.sql", "0003_api_hits.sql", "0004_listed_stock_data.sql", "0005_user_portfolio.sql"]
   .map((f) => readFileSync(new URL(`../migrations/${f}`, import.meta.url), "utf8"))
   .join("\n");
 

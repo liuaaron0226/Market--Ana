@@ -1575,13 +1575,176 @@
   const status = document.getElementById('stockSearchStatus');
   const results = document.getElementById('stockSearchResults');
   const more = document.getElementById('stockSearchMore');
-  if (!form || !input || !clear || !status || !results || !more) return;
+  const suggestions = document.getElementById('stockSearchSuggestions');
+  if (!form || !input || !clear || !status || !results || !more || !suggestions) return;
 
   let controller = null;
   let sequence = 0;
   let debounceTimer = 0;
   let activeQuery = '';
   let nextCursor = null;
+  let suggestionRequest = 0;
+
+  async function requestJson(url, options = {}) {
+    const response = await fetch(url, {
+      cache: 'no-store',
+      headers: options.body ? { 'content-type': 'application/json' } : undefined,
+      ...options,
+      body: options.body ? JSON.stringify(options.body) : undefined,
+    });
+    if (response.status === 204) return null;
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.message || payload.error || '暫時無法讀取');
+    return payload;
+  }
+
+  async function recordAndOpen(event, code, href) {
+    if (event && (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button > 0)) return;
+    if (event) event.preventDefault();
+    let navigated = false;
+    const go = () => {
+      if (navigated) return;
+      navigated = true;
+      location.assign(href);
+    };
+    const fallback = window.setTimeout(go, 900);
+    try { await requestJson('/api/search-history', { method: 'POST', body: { code } }); } catch (_) {}
+    window.clearTimeout(fallback);
+    go();
+  }
+
+  function suggestionRow(item, { removable = false } = {}) {
+    const row = document.createElement('li');
+    row.className = 'stock-suggest-row';
+    const link = document.createElement('a');
+    link.className = 'stock-suggest-link';
+    link.href = `stock.html?code=${encodeURIComponent(item.code)}`;
+    const title = document.createElement('strong');
+    title.textContent = `${item.code} ${item.name || ''}`.trim();
+    const meta = document.createElement('small');
+    meta.textContent = [item.market, item.horizon === 'short' ? '本人標記短期' : item.horizon === 'long' ? '本人標記長期' : ''].filter(Boolean).join(' · ');
+    link.append(title, meta);
+    link.addEventListener('click', event => recordAndOpen(event, item.code, link.href));
+    row.append(link);
+    if (removable) {
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'stock-suggest-remove';
+      remove.textContent = '×';
+      remove.setAttribute('aria-label', `刪除 ${item.code} ${item.name || ''} 的搜尋紀錄`);
+      remove.addEventListener('click', async () => {
+        try {
+          await requestJson(`/api/search-history/${encodeURIComponent(item.code)}`, { method: 'DELETE', body: {} });
+          await loadSuggestions();
+        } catch (_) { setStatus('搜尋紀錄暫時無法刪除。', 'error'); }
+      });
+      row.append(remove);
+    }
+    return row;
+  }
+
+  function suggestionGroup(title, items, { clearAll = false, removable = false, notice = '' } = {}) {
+    const section = document.createElement('section');
+    section.className = 'stock-suggest-group';
+    const head = document.createElement('div');
+    head.className = 'stock-suggest-head';
+    const heading = document.createElement('h3');
+    heading.textContent = title;
+    head.append(heading);
+    if (clearAll && items.length) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'stock-suggest-clear';
+      button.textContent = '清除全部';
+      button.addEventListener('click', async () => {
+        if (!confirm('要清除全部搜尋紀錄嗎？')) return;
+        try {
+          await requestJson('/api/search-history', { method: 'DELETE', body: {} });
+          await loadSuggestions();
+        } catch (_) { setStatus('搜尋紀錄暫時無法清除。', 'error'); }
+      });
+      head.append(button);
+    }
+    const list = document.createElement('ul');
+    list.className = 'stock-suggest-list';
+    if (notice) {
+      const warning = document.createElement('li');
+      warning.className = 'stock-suggest-empty stock-suggest-error';
+      warning.textContent = notice;
+      list.append(warning);
+    }
+    if (items.length) list.append(...items.map(item => suggestionRow(item, { removable })));
+    else if (!notice) {
+      const empty = document.createElement('li');
+      empty.className = 'stock-suggest-empty';
+      empty.textContent = title === '最近搜尋' ? '還沒有搜尋紀錄' : '目前沒有可顯示的股票';
+      list.append(empty);
+    }
+    section.append(head, list);
+    return section;
+  }
+
+  function uniqueStocks(...groups) {
+    const seen = new Set();
+    return groups.flat().filter(item => item?.code && !seen.has(item.code) && seen.add(item.code));
+  }
+
+  async function loadSuggestions() {
+    if (input.value.trim()) { suggestions.hidden = true; return; }
+    const request = ++suggestionRequest;
+    suggestions.hidden = false;
+    suggestions.replaceChildren();
+    const loading = document.createElement('p');
+    loading.className = 'stock-suggest-empty';
+    loading.textContent = '正在讀取最近搜尋與分類…';
+    suggestions.append(loading);
+    try {
+      const settled = await Promise.allSettled([
+        requestJson('/api/search-history'), requestJson('/api/watchlist'), requestJson('/api/screens'), requestJson('/api/core-holdings'),
+      ]);
+      const value = (index, fallback) => settled[index].status === 'fulfilled' ? settled[index].value : fallback;
+      const history = value(0, { items: [] });
+      const watchlist = value(1, { items: [] });
+      const catalog = value(2, { tabs: [] });
+      const core = value(3, { holdings: [] });
+      const historyFailed = settled[0].status === 'rejected';
+      const watchlistFailed = settled[1].status === 'rejected';
+      let shortSystemFailed = settled[2].status === 'rejected';
+      const coreFailed = settled[3].status === 'rejected';
+      const firstShort = (catalog.tabs || []).find(tab => ['rank', 'streak', 'relative_value'].includes(tab.kind));
+      let shortPayload = { items: [] };
+      if (firstShort) {
+        try { shortPayload = await requestJson(`/api/screens?key=${encodeURIComponent(firstShort.key)}`); }
+        catch (_) { shortSystemFailed = true; }
+      }
+      if (request !== suggestionRequest || input.value.trim()) return;
+      const ownShort = (watchlist.items || []).filter(item => item.horizon === 'short');
+      const ownLong = (watchlist.items || []).filter(item => item.horizon === 'long');
+      const systemShort = (shortPayload.items || []).filter(item => item.security_type !== 'ETF' || item.code === '0050').slice(0, 5);
+      const shortItems = uniqueStocks(ownShort, systemShort);
+      const longItems = uniqueStocks(ownLong, core.holdings || []);
+      const shortNotice = watchlistFailed && shortSystemFailed ? '短期分類暫時無法讀取'
+        : watchlistFailed ? '本人標記的短期分類暫時無法讀取'
+          : shortSystemFailed ? '系統短期名單暫時無法讀取' : '';
+      const longNotice = watchlistFailed && coreFailed ? '長期分類暫時無法讀取'
+        : watchlistFailed ? '本人標記的長期分類暫時無法讀取'
+          : coreFailed ? '系統長期名單暫時無法讀取' : '';
+      suggestions.replaceChildren(
+        suggestionGroup('最近搜尋', history.items || [], {
+          clearAll: true, removable: true, notice: historyFailed ? '最近搜尋暫時無法讀取' : '',
+        }),
+        suggestionGroup('短期', shortItems, { notice: shortNotice }),
+        suggestionGroup('長期', longItems, { notice: longNotice }),
+      );
+    } catch (_) {
+      if (request !== suggestionRequest) return;
+      suggestions.replaceChildren();
+      const failed = document.createElement('p');
+      failed.className = 'stock-suggest-empty';
+      failed.textContent = '搜尋建議暫時無法讀取，仍可直接輸入代號或名稱。';
+      suggestions.append(failed);
+    }
+  }
 
   function setStatus(message, state) {
     status.textContent = message;
@@ -1606,6 +1769,7 @@
     const link = document.createElement('a');
     link.href = `stock.html?code=${encodeURIComponent(item.code)}`;
     link.dataset.code = item.code;
+    link.addEventListener('click', event => recordAndOpen(event, item.code, link.href));
 
     const title = document.createElement('strong');
     title.textContent = `${item.code} ${item.name}`;
@@ -1631,6 +1795,7 @@
   async function search(query, cursor = null) {
     const normalized = query.trim();
     if (!normalized) { reset(); return; }
+    suggestions.hidden = true;
     if (controller) controller.abort();
     controller = new AbortController();
     const request = ++sequence;
@@ -1680,7 +1845,18 @@
     debounceTimer = window.setTimeout(() => search(query), 220);
   }
 
-  input.addEventListener('input', scheduleSearch);
+  input.addEventListener('input', () => {
+    if (input.value.trim()) suggestions.hidden = true;
+    else loadSuggestions();
+    scheduleSearch();
+  });
+  input.addEventListener('focus', () => { if (!input.value.trim()) loadSuggestions(); });
+  input.addEventListener('keydown', event => {
+    if (event.key === 'Escape') { suggestions.hidden = true; input.blur(); }
+  });
+  input.addEventListener('blur', () => window.setTimeout(() => {
+    if (!suggestions.contains(document.activeElement)) suggestions.hidden = true;
+  }, 120));
   form.addEventListener('submit', event => {
     event.preventDefault();
     window.clearTimeout(debounceTimer);
@@ -1691,6 +1867,7 @@
     input.value = '';
     reset('搜尋已清空。');
     input.focus();
+    loadSuggestions();
   });
   more.addEventListener('click', () => {
     if (nextCursor !== null && activeQuery) search(activeQuery, nextCursor);

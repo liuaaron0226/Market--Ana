@@ -1,0 +1,134 @@
+/* 自選股與庫存：沿用首頁的紙本報表語言與既有 token。 */
+.pf { min-height: 100dvh; }
+.pf > .skip-link { opacity: 0; pointer-events: none; }
+.pf > .skip-link:focus { opacity: 1; pointer-events: auto; }
+.pf-shell { width: min(100%, 1280px); margin: 0 auto; padding: 0 32px 96px; }
+.pf-bar {
+  height: 64px; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
+  border-bottom: 1px solid var(--hair);
+}
+.pf-back, .pf-theme {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 44px; border: 1px solid var(--hair);
+  border-radius: var(--btn-r); background: transparent; color: var(--ink); font: 500 13px var(--sans);
+  text-decoration: none; cursor: pointer; transition: background-color 160ms var(--ease-out), border-color 160ms var(--ease-out);
+}
+.pf-back { justify-self: start; padding: 0 12px; }
+.pf-theme { justify-self: end; width: 44px; justify-content: center; padding: 0; }
+.pf-back:hover, .pf-theme:hover { background: var(--panel2); border-color: color-mix(in srgb, var(--ink) 22%, transparent); }
+.pf-theme svg { width: 18px; height: 18px; }
+.pf-brand { display: inline-flex; align-items: center; gap: 8px; color: var(--dim); font: 600 14px var(--serif); }
+.pf-brand svg { width: 20px; height: 20px; }
+.pf :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.pf-title-row { display: flex; justify-content: space-between; align-items: end; gap: 24px; padding: 48px 0 32px; }
+.pf-title-row h1 { font: 600 36px/1.15 var(--serif); letter-spacing: .01em; }
+.pf-title-row > div > p { margin-top: 10px; color: var(--dim); font-size: 15px; }
+.pf-freshness { color: var(--faint); font: 12px var(--mono); }
+
+.pf-summary { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 32px; padding: 24px 0; border-top: 1px solid var(--ink); border-bottom: 1px solid var(--hair); }
+.pf-summary h2 { font: 600 18px var(--serif); }
+.pf-summary > div > p { margin-top: 6px; color: var(--faint); font-size: 12px; }
+.pf-summary dl { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; }
+.pf-summary dl div { padding: 0 20px; border-left: 1px solid var(--hair); }
+.pf-summary dt { color: var(--faint); font-size: 12px; }
+.pf-summary dd { margin: 8px 0 0; color: var(--ink); font: 500 22px var(--mono); font-variant-numeric: tabular-nums; }
+.pf-summary dd.up { color: var(--up); }
+.pf-summary dd.down { color: var(--down); }
+
+.pf-section { padding: 48px 0 0; }
+.pf-section + .pf-section { margin-top: 24px; }
+.pf-section-head { display: flex; align-items: end; justify-content: space-between; gap: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--ink); }
+.pf-section-head h2 { font: 600 22px var(--serif); }
+.pf-section-head p { margin-top: 6px; color: var(--dim); font-size: 13px; }
+.pf-section-head > span { flex: none; color: var(--faint); font: 12px var(--mono); }
+
+.pf-form { display: grid; gap: 12px; align-items: end; padding: 20px 0; border-bottom: 1px solid var(--hair); }
+.pf-watch-form { grid-template-columns: minmax(160px, 1fr) minmax(150px, 220px) auto; }
+.pf-holding-form { grid-template-columns: minmax(120px, .7fr) minmax(120px, .7fr) minmax(140px, .8fr) minmax(200px, 1.4fr) auto; }
+.pf-form label { display: grid; gap: 8px; color: var(--dim); font-size: 13px; }
+.pf-form input, .pf-form select, .pf-form button, .pf-row button, .pf-row select {
+  min-height: 44px; border: 1px solid var(--hair); border-radius: var(--btn-r); font: 14px var(--sans);
+}
+.pf-form input, .pf-form select, .pf-row select { width: 100%; padding: 0 12px; background: var(--panel); color: var(--ink); }
+.pf-form input { font-size: 16px; }
+.pf-form button {
+  padding: 0 18px; border-color: var(--ink); background: var(--ink); color: var(--bg); font-weight: 500; cursor: pointer;
+  transition: background-color 160ms var(--ease-out), transform 120ms var(--ease-out);
+}
+.pf-form button:hover { background: color-mix(in srgb, var(--ink) 86%, var(--bg)); }
+.pf-form button:active, .pf-row button:active { transform: var(--press); }
+.pf-form button:disabled { opacity: .55; cursor: wait; }
+.pf-form-status { min-height: 20px; padding: 8px 0 0; color: var(--faint); font-size: 12px; }
+.pf-form-status[data-state="error"] { color: var(--up); }
+.pf-form-status[data-state="success"] { color: var(--down); }
+
+.pf-list { border-top: 1px solid var(--hair); }
+.pf-row { min-height: 68px; display: grid; align-items: center; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--hair); }
+.pf-watch-row { grid-template-columns: minmax(200px, 1fr) 160px auto; }
+.pf-holding-row { grid-template-columns: minmax(180px, 1.25fr) repeat(4, minmax(105px, .8fr)) minmax(120px, 1fr) auto; }
+.pf-stock { min-width: 0; }
+.pf-stock a { color: var(--ink); font: 600 15px var(--sans); text-decoration: none; }
+.pf-stock a:hover { color: var(--accent); }
+.pf-stock small, .pf-cell small { display: block; margin-top: 4px; color: var(--faint); font-size: 12px; line-height: 1.4; }
+.pf-cell { min-width: 0; text-align: right; }
+.pf-cell strong { display: block; color: var(--ink); font: 500 14px var(--mono); font-variant-numeric: tabular-nums; }
+.pf-cell strong.up { color: var(--up); }
+.pf-cell strong.down { color: var(--down); }
+.pf-note { text-align: left; overflow-wrap: anywhere; }
+.pf-row select { min-width: 0; }
+.pf-row .pf-delete {
+  width: 44px; padding: 0; background: transparent; color: var(--up); cursor: pointer;
+  transition: background-color 160ms var(--ease-out), transform 120ms var(--ease-out);
+}
+.pf-row .pf-delete:hover { background: color-mix(in srgb, var(--up) 8%, transparent); }
+.pf-empty { padding: 24px 0; color: var(--dim); font-size: 14px; border-bottom: 1px solid var(--hair); }
+.pf-scope { display: inline-block; margin-top: 5px; color: var(--faint); font-size: 12px; }
+.pf-scope.outside { color: var(--gold); }
+
+@media (max-width: 980px) {
+  .pf-holding-form { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .pf-note-field { grid-column: 1 / 3; }
+  .pf-holding-row { grid-template-columns: minmax(180px, 1.2fr) repeat(2, minmax(110px, .8fr)) auto; }
+  .pf-holding-row .pf-secondary { grid-row: 2; }
+  .pf-holding-row .pf-note { grid-column: 1 / 4; grid-row: 2; }
+  .pf-holding-row .pf-delete { grid-column: 4; grid-row: 1 / 3; }
+}
+
+@media (max-width: 640px) {
+  .pf-shell { padding: 0 16px 64px; }
+  .pf-bar { grid-template-columns: 1fr auto; }
+  .pf-brand { display: none; }
+  .pf-title-row { display: block; padding: 32px 0 24px; }
+  .pf-title-row h1 { font-size: 28px; }
+  .pf-freshness { margin-top: 12px; }
+  .pf-summary { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .pf-summary dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pf-summary dl div { padding: 12px 0; border-left: 0; }
+  .pf-summary dl div:nth-child(2n) { padding-left: 16px; border-left: 1px solid var(--hair); }
+  .pf-summary dd { font-size: 19px; }
+  .pf-section { padding-top: 36px; }
+  .pf-section-head { align-items: start; }
+  .pf-section-head p { max-width: 28em; }
+  .pf-watch-form, .pf-holding-form { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .pf-note-field { grid-column: 1 / -1; }
+  .pf-form button { grid-column: 1 / -1; }
+  .pf-watch-row { grid-template-columns: minmax(0, 1fr) 128px auto; gap: 8px; }
+  .pf-holding-row { grid-template-columns: minmax(0, 1fr) minmax(105px, .65fr) auto; gap: 8px 12px; padding: 16px 0; }
+  .pf-holding-row .pf-stock { grid-column: 1 / 3; }
+  .pf-holding-row .pf-delete { grid-column: 3; grid-row: 1; }
+  .pf-holding-row .pf-cell { text-align: left; }
+  .pf-holding-row .pf-secondary { grid-row: auto; }
+  .pf-holding-row .pf-note { grid-column: 1 / -1; grid-row: auto; }
+}
+
+@media (max-width: 390px) {
+  .pf-watch-form, .pf-holding-form { grid-template-columns: minmax(0, 1fr); }
+  .pf-note-field, .pf-form button { grid-column: 1; }
+  .pf-watch-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .pf-watch-row select { grid-column: 1; grid-row: 2; }
+  .pf-watch-row .pf-delete { grid-column: 2; grid-row: 1 / 3; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pf *, .pf *::before, .pf *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; }
+}
