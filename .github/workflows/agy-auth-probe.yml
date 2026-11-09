@@ -1,0 +1,55 @@
+# G4 實驗：驗證官方 Antigravity CLI（agy -p）能不能在全新的 GitHub runner 上，
+# 用本人存進 secret 的登入檔跑起來（CI 用途，官方 FAQ：direct scripting and CI workflows）。
+# - 只能手動觸發；不碰網站資料，不帶 Cloudflare／R2 金鑰。
+# - 登入檔只寫進 runner 暫存的隔離 HOME，結束時清掉；不印內容、不上傳 artifact、不用 cache。
+# 設計與風險：.scratch/g4-gemini-runner/CI-AUTH.md
+name: agy-auth-probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: 下載官方 agy 1.5.3 並核對 SHA-256
+        run: |
+          mkdir -p "$RUNNER_TEMP/agy" && cd "$RUNNER_TEMP/agy"
+          curl -fsSL -o agy.tgz https://github.com/google-antigravity/antigravity-cli/releases/download/1.5.3/agy_cli_linux_x64.tar.gz
+          echo "1b4850599cce73a17f94ffb422df3bf9531531b77dbddc40c1a435e0c2c16807  agy.tgz" | sha256sum -c
+          tar xzf agy.tgz
+          ./antigravity --version
+
+      - name: 還原登入檔到隔離 HOME
+        env:
+          AGY_LOGIN_BUNDLE: ${{ secrets.AGY_LOGIN_BUNDLE }}
+        run: |
+          if [ -z "$AGY_LOGIN_BUNDLE" ]; then echo "::error::缺少 secret AGY_LOGIN_BUNDLE"; exit 1; fi
+          home="$RUNNER_TEMP/agy-home"; mkdir -p "$home"; chmod 700 "$home"
+          printf '%s' "$AGY_LOGIN_BUNDLE" | tr -d ' \r\n' | base64 -d | tar xzf - -C "$home"
+          echo "還原的檔案（只列路徑與大小）："; find "$home" -type f -printf '%s\t%P\n'
+
+      - name: 跑一次最小的 agy -p
+        run: |
+          cd "$RUNNER_TEMP"
+          HOME="$RUNNER_TEMP/agy-home" "$RUNNER_TEMP/agy/antigravity" -p "只回答 OK" \
+            --model gemini-3.8-flash-low --output-format json --print-timeout 120s < /dev/null > out.json 2> err.txt || true
+          python3 - <<'PY'
+          import json, os
+          t = open(os.path.join(os.environ["RUNNER_TEMP"], "out.json"), encoding="utf-8", errors="replace").read()
+          i = t.find("{")
+          d = json.loads(t[i:]) if i >= 0 else {}
+          print("status:", d.get("status"), "| finished_reason:", d.get("finished_reason"))
+          print("response 開頭:", (d.get("response") or "")[:40].replace("\n", " "))
+          if d.get("status") != "SUCCESS":
+              raise SystemExit("agy -p 沒有成功")
+          PY
+          echo "stderr 末段（不含憑證）："; tail -c 400 err.txt | grep -v -i -E 'token|secret|bearer' || true
+
+      - name: 清除登入檔
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/agy-home" "$RUNNER_TEMP/out.json" "$RUNNER_TEMP/err.txt"
