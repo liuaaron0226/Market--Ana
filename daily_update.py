@@ -347,6 +347,7 @@ D1_DATABASE = "market-ana-accounts"
 PAGES_PROJECT = "market-ana"
 PRODUCTION_SITE = "https://market-ana.pages.dev"
 ACCESS_LOGIN_HOST = "cloudflareaccess.com"
+PROBE_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) market-ana-post-deploy-check"
 # D1 單一語句上限 100KB（每條 ≤90KB）；一個 --file 可含多條語句（上限 5GB，官方 limits 頁）。
 # 一檔約 2MB：353 檔一天約 5～10 次往返，而不是 181 次。
 D1_GROUP_BYTES = 2_000_000
@@ -462,7 +463,10 @@ def _probe_unauthenticated(paths: Iterable[str]) -> dict:
     out = {}
     for path in paths:
         try:
-            response = opener.open(urllib.request.Request(PRODUCTION_SITE + path, method="GET"), timeout=30)
+            # Python 預設 UA 會被 Cloudflare 直接 403（error 1010），看不到 Access 的 302；用一般瀏覽器 UA。
+            request = urllib.request.Request(PRODUCTION_SITE + path, method="GET",
+                                             headers={"User-Agent": PROBE_USER_AGENT})
+            response = opener.open(request, timeout=30)
             out[path] = (response.status, response.headers.get("location"))
         except urllib.error.HTTPError as error:
             out[path] = (error.code, error.headers.get("location"))

@@ -414,6 +414,28 @@ class PostDeployCheckTest(unittest.TestCase):
         self.assertIn("active", result["reason"])
 
 
+class ProbeRequestTest(unittest.TestCase):
+    def test_probe_sends_a_browser_user_agent(self) -> None:
+        # 11-10：Python 預設 UA 會被 Cloudflare 直接回 403（error 1010），看不到 Access 的 302，誤判為「未導向 Access」。
+        seen = []
+
+        class FakeOpener:
+            def open(self, request, timeout=None):
+                seen.append(request.get_header("User-agent"))
+                raise du_urllib_error(request.full_url)
+
+        import urllib.error
+        import urllib.request
+
+        def du_urllib_error(url):
+            return urllib.error.HTTPError(url, 302, "Found", {"location": "https://x.cloudflareaccess.com/login"}, None)
+
+        with unittest.mock.patch.object(urllib.request, "build_opener", lambda *a: FakeOpener()):
+            out = du._probe_unauthenticated(["/"])
+        self.assertEqual(out["/"][0], 302)
+        self.assertTrue(seen[0] and "Mozilla" in seen[0], seen)
+
+
 class StatusFileTest(unittest.TestCase):
     """每次執行都寫 status.json：最後成功資料日、本次狀態、原因；失敗時 stale=True 且最後成功日不前進。"""
 
