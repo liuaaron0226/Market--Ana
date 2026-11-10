@@ -515,12 +515,17 @@ CHIP_SOURCES = {
     "margin": ("https://www.twse.com.tw/rwd/zh/marginTrading/MI_MARGN",
                lambda d: {"date": d, "selectType": "ALL", "response": "json"}),
     "twt93u": ("https://www.twse.com.tw/rwd/zh/marginTrading/TWT93U", lambda d: {"date": d, "response": "json"}),
+    # 大盤信用交易總表（首頁融資／融券卡，logs/build_chips_data.py 讀 market-snapshots/margin）
+    "margin_summary": ("https://www.twse.com.tw/rwd/zh/marginTrading/MI_MARGN",
+                       lambda d: {"date": d, "selectType": "MS", "response": "json"}),
 }
 
 
 def _chip_target(root: Path, dataset: str, compact: str) -> Path:
     if dataset == "twt93u":
         return root / "data/fundamentals/twt93u" / f"twt93u-{compact}.json"
+    if dataset == "margin_summary":
+        return root / "data/market-snapshots/margin" / f"mi-margn-{compact}.json"
     return root / "data/market-snapshots/stock-detail" / dataset / f"{dataset}-{compact}.json"
 
 
@@ -532,7 +537,7 @@ def _write_atomic(target: Path, data: bytes) -> None:
 
 
 def listed_chip_detail_day(root: Path, day: str, *, get: Callable | None = None, sleep: Callable = time.sleep,
-                           datasets: tuple[str, ...] = ("t86", "margin", "twt93u")) -> dict:
+                           datasets: tuple[str, ...] = ("t86", "margin", "twt93u", "margin_summary")) -> dict:
     """個股頁上市籌碼要的三份原件，格式沿用既有檔（不另造新格式）：
     - t86：直接從 listed_institutional 已驗 SHA 的原件包一層 {"data": ...} 複製，不重抓。
     - margin（MI_MARGN）：同 logs/fetch_stock_detail.py 的外包格式。
@@ -583,7 +588,7 @@ def listed_chip_detail_day(root: Path, day: str, *, get: Callable | None = None,
         if payload.get("stat") != "OK" or str(payload.get("date")) != compact:
             results[dataset] = {"status": "not_published", "reason": str(payload.get("stat"))}
             continue
-        if dataset == "margin":
+        if dataset in ("margin", "margin_summary"):
             body = {"fetched_at_utc": datetime.now(timezone.utc).isoformat(), "source_url": response.url,
                     "data": payload}
             _write_atomic(target, (json.dumps(body, ensure_ascii=False) + "\n").encode("utf-8"))

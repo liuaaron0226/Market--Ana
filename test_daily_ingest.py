@@ -327,6 +327,29 @@ class ChipDetailTest(unittest.TestCase):
                 encoding="utf-8"))
             self.assertEqual(wrapped["data"], inner)
 
+    def test_market_margin_summary_saved_for_homepage_cards(self) -> None:
+        # 11-11 本人糾正首頁融資／融券卡停在 11-06：大盤信用交易總表（MI_MARGN selectType=MS）每天都要抓。
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            summary = {"stat": "OK", "date": "20261110", "tables": [{"title": "信用交易統計", "data": [["融資"]]}]}
+            seen = []
+
+            def get(url, params):
+                seen.append(params.get("selectType"))
+                return sh.Response(200, "application/json", json.dumps(summary).encode(), "u")
+            done = di.listed_chip_detail_day(root, "2026-11-10", get=get, sleep=lambda s: None,
+                                             datasets=("margin_summary",))
+            self.assertEqual(done["margin_summary"]["status"], "saved")
+            self.assertEqual(seen, ["MS"])
+            saved = json.loads((root / "data/market-snapshots/margin/mi-margn-20261110.json").read_text(encoding="utf-8"))
+            self.assertEqual(saved["data"], summary)
+            self.assertIn("margin_summary", di.CHIP_SOURCES)
+
+    def test_default_chip_datasets_include_market_margin_summary(self) -> None:
+        import inspect
+        default = inspect.signature(di.listed_chip_detail_day).parameters["datasets"].default
+        self.assertIn("margin_summary", default)
+
     def test_margin_and_borrow_written_in_existing_formats_and_no_data_skipped(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
