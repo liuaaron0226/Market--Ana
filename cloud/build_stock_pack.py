@@ -432,6 +432,19 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def version_name(*, data_date: str, combined_sha256: str, liquid: bool,
+                 selected_codes: Sequence[str] | None) -> str:
+    """版本名用行情資料日：每天一個新版本。
+
+    舊做法用名錄抓取日，名錄沒重抓時每天同名，D1 以 INSERT OR IGNORE 略過新資料、verify 失敗（11-10 Actions）。
+    """
+    suffix = combined_sha256[:12]
+    if selected_codes:
+        suffix += "-" + hashlib.sha256(",".join(sorted(selected_codes)).encode()).hexdigest()[:8]
+    prefix = "liquid" if liquid else "twomarket"
+    return f"{prefix}-{data_date.replace('-', '')}-{suffix}-v2"
+
+
 def build_version(
     out_dir: Path,
     selected_codes: Sequence[str] | None = None,
@@ -487,11 +500,8 @@ def build_version(
         "\n".join(f"{item['market']}:{item['source_sha256']}" for item in sources).encode("utf-8")
     ).hexdigest()
     if version is None:
-        suffix = combined_sha256[:12]
-        if selected_codes:
-            suffix += "-" + hashlib.sha256(",".join(sorted(selected_codes)).encode()).hexdigest()[:8]
-        prefix = "liquid" if universe else "twomarket"
-        version = f"{prefix}-{metadata['retrieved_at_utc'][:10].replace('-', '')}-{suffix}-v2"
+        version = version_name(data_date=data_date, combined_sha256=combined_sha256,
+                               liquid=universe is not None, selected_codes=selected_codes)
     built_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
     securities, analyses, failures = _build_rows(items, data_date, suspended, analyzer)

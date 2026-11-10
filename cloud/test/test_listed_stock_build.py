@@ -304,6 +304,17 @@ class TwoMarketTests(unittest.TestCase):
                 build.build_version(Path(tmp) / "out", selected_codes=("1102",), analyzer=lambda *a, **k: {})
             self.assertEqual(list(Path(tmp).iterdir()), [])
 
+    def test_version_name_uses_market_data_date_not_catalog_date(self) -> None:
+        # 11-10 Actions：版本名沿用名錄抓取日（11-08）→ 和 D1 既有版本同名，INSERT OR IGNORE 略過，verify 失敗。
+        import cloud.build_stock_pack as build
+
+        name = build.version_name(data_date="2026-11-10", combined_sha256="237d4b8dd208" + "0" * 52,
+                                  liquid=True, selected_codes=None)
+        self.assertEqual(name, "liquid-20261110-237d4b8dd208-v2")
+        sample = build.version_name(data_date="2026-11-10", combined_sha256="a" * 64, liquid=False,
+                                    selected_codes=("2330",))
+        self.assertTrue(sample.startswith("twomarket-20261110-aaaaaaaaaaaa-"), sample)
+
     def test_analysis_status_signature_stays_compatible(self) -> None:
         # live_server 以位置參數呼叫；新增市場支援不得改名或改變既有參數。
         self.assertEqual(analysis_status(250, "2026-11-06", False, "2026-11-06"), "available")
