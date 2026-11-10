@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import shutil
 import sys
 import time
@@ -115,18 +116,25 @@ def fetch_json(
     label: str,
     records: list[FetchRecord],
     seedable: bool = True,
+    require_day: str | None = None,
 ) -> dict[str, Any]:
     if seedable and not target.exists() and SEED_ROOT is not None:
         seed = SEED_ROOT / target.relative_to(SNAPSHOT_ROOT)
         if seed.exists():
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(seed, target)
+    replace = False
     if target.exists():
         wrapper = load_wrapper(target)
         data = wrapper["data"]
         rows = len(data.get("data", [])) if isinstance(data, dict) else None
-        records.append(FetchRecord(relative(target), str(wrapper.get("source_url", url)), "existing", rows))
-        return data
+        # 截止月的月檔是當月逐日累加的：已存的舊版若還沒有截止日，就重抓一次並換成新版。
+        have = {roc_to_iso(row[0]) for row in data.get("data", [])
+                if row and str(row[0]).count("/") == 2} if isinstance(data, dict) else set()
+        if require_day is None or require_day in have:
+            records.append(FetchRecord(relative(target), str(wrapper.get("source_url", url)), "existing", rows))
+            return data
+        replace = True
 
     response = client.request("GET", url, params=params)
     payload = parse_json_response(response, label)
@@ -139,9 +147,16 @@ def fetch_json(
         "http_status": response.status_code,
         "data": payload,
     }
-    write_new_json(target, wrapper)
+    if replace:
+        # 原子替換：先寫暫存檔再換名，失敗時舊版仍在。
+        partial = target.with_name(target.name + ".partial")
+        partial.unlink(missing_ok=True)
+        write_new_json(partial, wrapper)
+        os.replace(partial, target)
+    else:
+        write_new_json(target, wrapper)
     rows = len(payload.get("data", [])) if isinstance(payload.get("data"), list) else None
-    records.append(FetchRecord(relative(target), response.url, "fetched", rows))
+    records.append(FetchRecord(relative(target), response.url, "refetched" if replace else "fetched", rows))
     print(json.dumps({"file": relative(target), "rows": rows}, ensure_ascii=False), flush=True)
     return payload
 
@@ -171,6 +186,8 @@ def fetch_history(client: OfficialClient, records: list[FetchRecord]) -> None:
     for month in month_keys(2016, 1, CUTOFF.year, CUTOFF.month):
         request_date = f"{month}01"
         seedable = month != f"{CUTOFF.year:04d}{CUTOFF.month:02d}"
+        # 截止月：既有月檔要涵蓋截止日，否則重抓（官方月檔逐日累加）。
+        require_day = None if seedable else CUTOFF.isoformat()
         index_target = SNAPSHOT_ROOT / "index-monthly" / f"taiex-{month}.json"
         turnover_target = SNAPSHOT_ROOT / "turnover-monthly" / f"fmtqik-{month}.json"
         fetch_json(
@@ -181,6 +198,7 @@ def fetch_history(client: OfficialClient, records: list[FetchRecord]) -> None:
             label=f"加權指數日K {month}",
             records=records,
             seedable=seedable,
+            require_day=require_day,
         )
         fetch_json(
             client,
@@ -190,6 +208,7 @@ def fetch_history(client: OfficialClient, records: list[FetchRecord]) -> None:
             label=f"市場成交資訊 {month}",
             records=records,
             seedable=seedable,
+            require_day=require_day,
         )
 
 

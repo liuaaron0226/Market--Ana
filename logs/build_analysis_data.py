@@ -2,6 +2,7 @@ import argparse
 import csv
 import io
 import json
+import re
 import statistics
 from collections import defaultdict
 from datetime import date, datetime, time as clock_time
@@ -185,12 +186,20 @@ def weekly_key(value: date) -> str:
     return f"{iso_year:04d}-W{iso_week:02d}"
 
 
+def recent_files(folder: str, pattern: str, count: int) -> list[Path]:
+    """每日累加的原件：取截止日（含）以前最近 count 份，舊的保留在磁碟但不進本次建置。"""
+    cutoff = CUTOFF.strftime("%Y%m%d")
+    paths = sorted(p for p in (SNAPSHOT_ROOT / folder).glob(pattern)
+                   if (m := re.search(r"(\d{8})", p.name)) and m.group(1) <= cutoff)
+    return paths[-count:]
+
+
 def monthly_key(value: date) -> str:
     return value.strftime("%Y-%m")
 
 
 def load_h60(daily: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[Path]]:
-    paths = sorted((SNAPSHOT_ROOT / "intraday-5s").glob("taiex-*.json"))
+    paths = recent_files("intraday-5s", "taiex-*.json", 30)
     require(len(paths) == 30, f"每5秒指數原件應為 30 日，實際 {len(paths)}")
     daily_by_date = {bar["date"]: bar for bar in daily}
     daily_dates = [bar["date"] for bar in daily]
@@ -300,7 +309,7 @@ def build_indicators(bars: list[dict[str, Any]], key: str) -> list[dict[str, Any
 
 
 def load_institutional() -> tuple[list[dict[str, Any]], list[Path]]:
-    paths = sorted((SNAPSHOT_ROOT / "institutional").glob("bfi82u-*.json"))
+    paths = recent_files("institutional", "bfi82u-*.json", 120)
     require(len(paths) == 120, f"三大法人原件應為120日，實際 {len(paths)}")
     result: list[dict[str, Any]] = []
     for path in paths:
@@ -336,7 +345,7 @@ def load_institutional() -> tuple[list[dict[str, Any]], list[Path]]:
 
 
 def load_sectors() -> tuple[list[dict[str, Any]], list[Path]]:
-    paths = sorted((SNAPSHOT_ROOT / "sectors").glob("mi-index-ind-*.json"))
+    paths = recent_files("sectors", "mi-index-ind-*.json", 60)
     require(len(paths) == 60, f"類股原件應為60日，實際 {len(paths)}")
     result: list[dict[str, Any]] = []
     for path in paths:
@@ -365,7 +374,10 @@ def load_sectors() -> tuple[list[dict[str, Any]], list[Path]]:
 
 
 def load_futures() -> tuple[list[dict[str, Any]], list[Path]]:
-    csv_paths = sorted((SNAPSHOT_ROOT / "futures").glob("taifex-txf-*.csv"))
+    # 每日抓的是「起日-截止日」整段檔；取截止日（含）以前最新的一份。
+    cutoff = CUTOFF.strftime("%Y%m%d")
+    csv_paths = sorted(p for p in (SNAPSHOT_ROOT / "futures").glob("taifex-txf-*.csv")
+                       if p.stem.rsplit("-", 1)[-1] <= cutoff)[-1:]
     require(len(csv_paths) == 1, f"期交所TXF CSV應為1份，實際 {len(csv_paths)}")
     csv_path = csv_paths[0]
     meta_path = csv_path.with_suffix(".meta.json")
