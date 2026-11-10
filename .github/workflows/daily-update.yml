@@ -95,6 +95,10 @@ jobs:
               echo "::error::date 必須是 YYYY-MM-DD"; exit 1
             fi
             day="$INPUT_DATE"
+          elif [ "$EVENT_NAME" = "schedule" ] && [ "$(date +%H)" -lt 15 ]; then
+            # GitHub 排程可能延遲數小時：11-09 的 20:30 時段拖到 11-10 06:38 才觸發，被當成 11-10 而失敗。
+            # 收盤前觸發的排程都是前一天時段延遲到的，資料日用前一天（週末或休市由 daily_update 判斷並略過）。
+            day="$(date -d yesterday +%F)"
           else
             day="$(date +%F)"
           fi
