@@ -1,0 +1,46 @@
+# 一次性驗證：本人的 EODHD 免費 Key 能否取得 S&P 500（GSPC.INDX）日線，筆數是否夠算 200 日均線、最新日期為何。
+# 只能手動觸發；不印 Key、不存資料、不碰網站。
+name: eodhd-probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 取 GSPC.INDX 一年日線
+        env:
+          EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
+        run: |
+          if [ -z "$EODHD_API_KEY" ]; then echo "::error::缺少 secret EODHD_API_KEY"; exit 1; fi
+          from="$(date -u -d '400 days ago' +%F)"
+          code=$(curl -s -o out.json -w '%{http_code}' \
+            "https://eodhd.com/api/eod/GSPC.INDX?api_token=${EODHD_API_KEY}&fmt=json&period=d&from=${from}")
+          echo "HTTP $code"
+          python3 - <<'PY'
+          import json
+          raw = open("out.json", encoding="utf-8", errors="replace").read()
+          try:
+              rows = json.loads(raw)
+          except Exception:
+              print("不是 JSON：", raw[:120].replace("\n", " "))
+              raise SystemExit(1)
+          if not isinstance(rows, list) or not rows:
+              print("沒有資料：", str(rows)[:200])
+              raise SystemExit(1)
+          closes = [r["close"] for r in rows if r.get("close") is not None]
+          print("筆數", len(rows), "有效收盤", len(closes))
+          print("最早", rows[0]["date"], "最新", rows[-1]["date"], "最新收盤", rows[-1]["close"])
+          if len(closes) >= 200:
+              ma = sum(closes[-200:]) / 200
+              print("200 日均線", round(ma, 2), "收盤在均線", "之下" if closes[-1] < ma else "之上")
+          else:
+              print("不足 200 筆，無法計算 200 日均線")
+              raise SystemExit(1)
+          PY
+          rm -f out.json
