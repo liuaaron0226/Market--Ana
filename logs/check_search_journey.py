@@ -28,6 +28,13 @@ FROZEN_AS_OF = "2026-11-06"
 SHOT_DIR = ROOT / ".tmp/lane-A3"
 
 
+def goto_home(page: Page, base_url: str) -> None:
+    """首頁會管理行情輪詢，導航只等 DOM；真正可操作狀態用顯式 ready seam 判斷。"""
+    page.goto(f"{base_url}/minimal.html", wait_until="domcontentloaded")
+    page.wait_for_function("window.MinimalApp && window.MinimalApp.ready")
+    page.locator("#stockSearchForm").wait_for(state="visible")
+
+
 class SearchJourneyHandler(live_server.Handler):
     def _send_json(self, payload: dict[str, object], status: int = 200) -> None:
         try:
@@ -83,38 +90,31 @@ def assert_stock_v2(page: Page) -> dict[str, object]:
     assert page.locator("#content").get_attribute("data-schema") == "stock-analysis/v2"
     assert page.locator("#presetTabs").count() == 0
     assert page.locator("#undisclosed").count() == 0
-    # W1：主畫面是操作指引——一句話結論＋3～4 條有價位的重點＋「非買賣建議」小字。
-    conclusion = page.locator("#guideConclusion").inner_text()
-    assert conclusion and conclusion != "—", conclusion
-    guide = page.locator("#guideList li").all_inner_texts()
-    assert 3 <= len(guide) <= 4, guide
-    assert "價位與訊號整理，非買賣建議" in page.locator("#guideDisclaimer").inner_text()
-    assert any(char.isdigit() for char in " ".join(guide)), guide
-    # 條件與指標細節預設收合；不提供買賣建議的說明在方法說明裡（也預設收合）。
-    assert page.locator("#signalDetails").get_attribute("open") is None
-    assert page.locator("#indicatorDetails").get_attribute("open") is None
-    assert page.locator("#methodDetails").get_attribute("open") is None
-    confirmed = page.locator("#condConfirmed li").count()
-    approximate = page.locator("#condApproximate li").count()
-    fixed = page.locator("#condFixed li").count()
-    assert (confirmed, approximate, fixed) == (8, 6, 7), (confirmed, approximate, fixed)
-    assert page.locator("#indicators .sk-ind").count() == 18
-    # 展開全部收合區塊後再檢查整頁文字：研究字樣、退役字樣都不得出現。
-    page.evaluate("document.querySelectorAll('details').forEach(d => { d.open = true; })")
-    assert "不提供買賣建議" in page.locator("#tradingRules").inner_text()
-    assert "不是買賣建議" in page.locator("#tradingRulesQuote").inner_text()
+    # UI-2b：首屏只露出一句明確策略；進場／加碼／停損／目標與單次證據強度預設收合。
+    conclusion = page.locator("#strategyConclusion").inner_text()
+    assert any(action in conclusion for action in ("持有", "分批進場", "觀望", "減碼")), conclusion
+    assert page.locator("#strategyDetails").get_attribute("open") is None
+    page.locator("#strategyDetails summary").click()
+    prices = [page.locator(f"#{item}").inner_text() for item in
+              ("strategyEntry", "strategyAdd", "strategyStop", "strategyTarget")]
+    assert any(any(char.isdigit() for char in value) for value in prices), prices
+    assert "證據強度：" in page.locator("#strategyEvidence").inner_text()
+    for retired in ("#signalDetails", "#indicatorDetails", "#methodDetails", "#guideDisclaimer"):
+        assert page.locator(retired).count() == 0, retired
     body = page.locator("body").inner_text()
     leaked = [word for word in RETIRED_STOCK_TEXT + RESEARCH_TEXT if word in body]
-    page.evaluate("document.querySelectorAll('details').forEach(d => { d.open = false; })")
+    supplemental = [word for word in ("非買賣建議", "左右滑動切換", "價位怎麼來的", "方法說明") if word in body]
     assert not leaked, leaked
-    return {"schema": "stock-analysis/v2", "conditions": [confirmed, approximate, fixed], "conclusion": conclusion,
-            "guide": guide, "resistance1": page.locator("#resistance1").inner_text(),
+    assert not supplemental, supplemental
+    page.locator("#strategyDetails summary").click()
+    return {"schema": "stock-analysis/v2", "conclusion": conclusion, "prices": prices,
+            "resistance1": page.locator("#resistance1").inner_text(),
             "support1": page.locator("#support1").inner_text()}
 
 
 def check_outside_universe(page: Page, base_url: str, width: int) -> dict[str, object]:
     """母體外：搜尋查不到；直接開個股頁顯示「不在本站涵蓋範圍」＋名次，不畫圖、不顯示數字。"""
-    page.goto(f"{base_url}/minimal.html", wait_until="networkidle")
+    goto_home(page, base_url)
     page.locator("#stockSearchInput").fill("4441")
     page.wait_for_function("document.querySelector('#stockSearchStatus').dataset.state === 'no-results'")
     page.goto(f"{base_url}/stock.html?code=4441", wait_until="networkidle")
@@ -132,7 +132,7 @@ def check_outside_universe(page: Page, base_url: str, width: int) -> dict[str, o
 
 
 def check_shell(page: Page, base_url: str) -> dict[str, object]:
-    page.goto(f"{base_url}/minimal.html", wait_until="networkidle")
+    goto_home(page, base_url)
     search = page.locator("#stockSearchInput")
     search.wait_for(state="visible")
     assert search.get_attribute("type") == "search"
@@ -147,7 +147,7 @@ def check_shell(page: Page, base_url: str) -> dict[str, object]:
 
 
 def check_journey(page: Page, base_url: str, width: int) -> dict[str, object]:
-    page.goto(f"{base_url}/minimal.html", wait_until="networkidle")
+    goto_home(page, base_url)
     search = page.locator("#stockSearchInput")
 
     search.fill("1102")
@@ -159,7 +159,7 @@ def check_journey(page: Page, base_url: str, width: int) -> dict[str, object]:
     v2_1102 = assert_stock_v2(page)
     page.screenshot(path=str(SHOT_DIR / f"stock-v2-1102-{width}.png"), full_page=True)
 
-    page.goto(f"{base_url}/minimal.html", wait_until="networkidle")
+    goto_home(page, base_url)
     page.locator("#stockSearchInput").fill("積電")
     page.locator('#stockSearchResults a[data-code="2330"]').wait_for(state="visible")
     codes = page.locator("#stockSearchResults a").evaluate_all(
@@ -179,7 +179,7 @@ def check_journey(page: Page, base_url: str, width: int) -> dict[str, object]:
 
 def check_otc_journey(page: Page, base_url: str, width: int) -> dict[str, object]:
     """票06：上櫃以代號與中文部分名稱搜尋 → 個股頁三方案，市場別在搜尋結果與個股頁都看得到。"""
-    page.goto(f"{base_url}/minimal.html", wait_until="networkidle")
+    goto_home(page, base_url)
     assert page.locator("#stockSearchTitle").inner_text() == "搜尋上市／上櫃普通股"
     search = page.locator("#stockSearchInput")
 
@@ -208,7 +208,7 @@ def check_otc_journey(page: Page, base_url: str, width: int) -> dict[str, object
 
 
 def check_search_states(page: Page, base_url: str) -> dict[str, object]:
-    page.goto(f"{base_url}/minimal.html", wait_until="networkidle")
+    goto_home(page, base_url)
     search = page.locator("#stockSearchInput")
     status = page.locator("#stockSearchStatus")
 
@@ -314,7 +314,7 @@ def check_stock_states(page: Page, base_url: str) -> dict[str, str]:
 
 def check_real_stale_and_unavailable(page: Page, base_url: str, width: int) -> dict[str, str]:
     """（S4 起不在 --case all）1589、5906 都不在大量股母體；只在全名錄模式（universe_enabled=False）有意義。"""
-    page.goto(f"{base_url}/minimal.html", wait_until="networkidle")
+    goto_home(page, base_url)
     search = page.locator("#stockSearchInput")
 
     search.fill("1589")
@@ -331,7 +331,7 @@ def check_real_stale_and_unavailable(page: Page, base_url: str, width: int) -> d
     assert_stock_v2(page)
     page.screenshot(path=str(SHOT_DIR / f"stock-real-stale-{width}.png"), full_page=True)
 
-    page.goto(f"{base_url}/minimal.html", wait_until="networkidle")
+    goto_home(page, base_url)
     page.locator("#stockSearchInput").fill("5906")
     unavailable_meta = page.locator('#stockSearchResults a[data-code="5906"] .stock-search-meta')
     unavailable_meta.wait_for(state="visible")
@@ -370,11 +370,38 @@ def click_and_wait(page: Page, locator) -> str:
     return wait_block(page, "chipScreens")
 
 
+def etf_compare_ui_fixture() -> dict[str, object]:
+    """首頁互動用凍結 fixture；真 ETF 原件／股利契約另由 test_compare_etf.py 與 pack build 驗。"""
+    periods = [("1m", "近 1 個月", 1), ("3m", "近 3 個月", 3), ("1y", "近 1 年", 12),
+               ("3y", "近 3 年", 36), ("5y", "近 5 年", 60)]
+    benchmark_periods = [{"period": key, "label": label, "status": "ok", "from": "2021-11-05",
+                          "to": "2026-11-06", "return_pct": float(months), "max_drawdown_pct": -12.0}
+                         for key, label, months in periods]
+    item_periods = lambda scale: [{"period": key, "label": label, "status": "ok", "from": "2021-11-05",
+                                   "to": "2026-11-06", "stock_return_pct": months * scale,
+                                   "stock_max_drawdown_pct": -15.0, "benchmark_return_pct": float(months),
+                                   "benchmark_max_drawdown_pct": -12.0, "excess_pct": months * scale - months}
+                                  for key, label, months in periods]
+    return {
+        "schema": "compare-0050/v1", "data_date": "2026-11-06", "basis": "含息總報酬，期初＝1", "max_codes": 5,
+        "notes": [],
+        "benchmark": {"code": "0050", "name": "元大台灣50", "dividends_included": True,
+                      "periods": benchmark_periods, "chart": [["2021-11-05", 1.0], ["2026-11-06", 1.6]]},
+        "items": [
+            {"code": "2330", "name": "台積電", "market": "上市", "status": "ok", "dividends_included": True,
+             "periods": item_periods(1.5), "chart": [["2021-11-05", 1.0], ["2026-11-06", 2.0]]},
+            {"code": "00919", "name": "群益台灣精選高息", "market": "上市", "status": "ok",
+             "dividends_included": False, "dividend_source": "TWSE TWT49U", "periods": item_periods(1.2),
+             "chart": [["2022-10-20", 1.0], ["2026-11-06", 1.35]]},
+        ],
+    }
+
+
 def check_home_screens_journey(page: Page, base_url: str, server, width: int) -> dict[str, object]:
     """首頁三區塊：籌碼選股（可算／定義未公開／無合法來源）、產業資金流向、長期核心持有；名單可點入個股頁。"""
     result: dict[str, object] = {}
     server.screen_root = SCREEN_ROOTS["real"]
-    page.goto(f"{base_url}/minimal.html", wait_until="networkidle")
+    goto_home(page, base_url)
     assert wait_block(page, "chipScreens") in {"ok", "partial"}
     tabs = page.locator("#chipScreenTabs [role=tab]").all_inner_texts()
     assert tabs[:4] == ["外資淨買超排行", "投信淨買超排行", "外資連續淨買超", "投信連續淨買超"], tabs
@@ -402,7 +429,7 @@ def check_home_screens_journey(page: Page, base_url: str, server, width: int) ->
     result["foreign_1d_top5"] = first_codes
 
     assert wait_block(page, "rotationBlock") == "ok"
-    assert "產業＝官方產業別" in page.locator("#rotationMeta").inner_text()
+    assert page.locator("#rotationMeta").inner_text() == "資料日 2026-11-06"
     legend = page.locator("#rotationLegend").inner_text()
     for label in ("資金領先", "資金減速", "資金回補", "資金落後"):
         assert label in legend, legend
@@ -414,9 +441,27 @@ def check_home_screens_journey(page: Page, base_url: str, server, width: int) ->
 
     assert wait_block(page, "coreHoldings") == "ok"
     cards = page.locator("#coreCards .core-card").all_inner_texts()
-    assert "0050" in cards[0] and "核心持有" in cards[0], cards
-    assert "2330" in cards[1] and "對照" in cards[1], cards
-    assert page.locator("#coreChart path").count() == 2
+    assert "0050" in cards[0] and "基準" in cards[0], cards
+    assert "2330" in cards[1], cards
+    assert page.locator('#coreSelection button[data-code="2330"]').count() == 1
+    assert page.locator("#coreChart path[data-code]").count() == 2
+    if width == 1440:
+        fixture = etf_compare_ui_fixture()
+        page.route(
+            "**/api/compare-0050?*",
+            lambda route: route.fulfill(status=200, content_type="application/json; charset=utf-8",
+                                        body=json.dumps(fixture, ensure_ascii=False)),
+        )
+        page.locator("#coreCompareInput").fill("00919")
+        page.locator("#coreCompareForm button[type=submit]").click()
+        page.wait_for_function(
+            "document.querySelector('#coreHoldings').dataset.state === 'ok' && "
+            "document.querySelector('#coreSelection [data-code=\"00919\"]')"
+        )
+        etf_cards = page.locator("#coreCards .core-card").all_inner_texts()
+        assert any("00919" in text and "配息未完整" in text for text in etf_cards), etf_cards
+        assert page.locator("#coreChart path[data-code]").count() == 3
+        result["etf_compare_00919"] = True
     page.mouse.move(0, 0)
     page.screenshot(path=str(SCREEN_DIR / f"home-screens-{width}.png"), full_page=True)
 
@@ -458,8 +503,8 @@ def check_home_screens_journey(page: Page, base_url: str, server, width: int) ->
     card = page.locator("#candidateReasons .sk-membership")
     card.wait_for(state="visible", timeout=15_000)
     card_text = card.inner_text()
-    assert "出現在籌碼選股名單" in card_text and "投信連續淨買超・連續淨買超：第 1 名" in card_text, card_text
-    assert "所屬產業" in card_text, card_text
+    assert "出現在籌碼選股名單" in card_text, card_text
+    assert "投信連續淨買超・連續淨買超：第 1 名" in card_text, card_text
     page.screenshot(path=str(SCREEN_DIR / f"stock-membership-{target}-{width}.png"), full_page=True)
     result["membership_code"] = target
 
@@ -471,7 +516,7 @@ def check_home_screens_journey(page: Page, base_url: str, server, width: int) ->
     assert result["non_member_6168_card_count"] == 0
 
     server.screen_root = SCREEN_ROOTS["not_ready"]
-    page.goto(f"{base_url}/minimal.html", wait_until="networkidle")
+    goto_home(page, base_url)
     assert wait_block(page, "chipScreens") == "not_ready"
     assert "尚未就緒" in page.locator("#chipScreenStatus").inner_text()
     assert wait_block(page, "rotationBlock") == "not_ready"
@@ -527,7 +572,7 @@ def main() -> int:
                     page.close()
                 elif args.case == "otc":
                     result["otc_journeys"] = {}
-                    for width, height in ((1440, 1000), (390, 844)):
+                    for width, height in ((1440, 1000), (375, 812)):
                         page = browser.new_page(viewport={"width": width, "height": height})
                         errors: list[str] = []
                         page.on("pageerror", lambda error: errors.append(str(error)))
@@ -536,7 +581,7 @@ def main() -> int:
                         page.close()
                 elif args.case == "screens":
                     result["screen_journeys"] = {}
-                    for width, height in ((1440, 1000), (390, 844)):
+                    for width, height in ((1440, 1000), (375, 812)):
                         page = browser.new_page(viewport={"width": width, "height": height})
                         errors: list[str] = []
                         page.on("pageerror", lambda error: errors.append(str(error)))
@@ -550,7 +595,7 @@ def main() -> int:
                     page.close()
                 else:
                     result["journeys"] = {}
-                    for width, height in ((1440, 1000), (390, 844)):
+                    for width, height in ((1440, 1000), (375, 812)):
                         page = browser.new_page(viewport={"width": width, "height": height})
                         errors: list[str] = []
                         page.on("pageerror", lambda error: errors.append(str(error)))

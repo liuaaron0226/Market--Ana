@@ -33,7 +33,8 @@ def _dump(payload: Any) -> str:
 def build_pack(universe_path: Path) -> dict[str, Any]:
     state = live_server.universe_state(Path(universe_path))
     end = state["universe"]["data_date"]
-    codes = sorted(set(state["members"]) | set(state["core"]))
+    etf_codes = {str(item["code"]) for item in state["universe"].get("etf_members", ())}
+    codes = sorted(set(state["members"]) | set(state["core"]) | etf_codes)
     listed_dates = {}
     for code in codes:
         security = live_server.lookup_security(code)

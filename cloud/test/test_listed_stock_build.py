@@ -73,18 +73,35 @@ def security(code: str = "1102", market: str = "上市") -> dict:
 def v2_payload(code: str = "1102", as_of: str = "2026-11-06", market: str = "上市", kind: str = "common") -> dict:
     return {
         "schema": "stock-analysis/v2",
-        "analysis_version": "price-structure-rea-v1",
+        "analysis_version": "price-structure-rea-v2",
         "code": code,
         "kind": kind,
         "market": market,
         "as_of": as_of,
         "qa": {"blocking": False, "bars": 300},
+        "strategy": {
+            "strategy_version": "support-pressure-strategy-v1",
+            "recommendation": "觀望",
+            "prices": {"entry": None, "add": None, "stop": None, "target": None},
+            "reason": "資料不足時保留明確觀望狀態，不補造操作價位。",
+            "evidence_strength": "有限",
+            "signals": {"positive": 0, "risk": 0, "institutional_day": None, "institutional_5d": None},
+        },
+        "institutional": [],
         "undisclosed": {"composite_score": dict(UNDISCLOSED)},
     }
 
 
 def analysis(code: str = "1102", as_of: str = "2026-11-06", market: str = "上市") -> dict:
     return {"code": code, "as_of": as_of, "payload": v2_payload(code, as_of, market)}
+
+
+def analysis_with_institutional(rows: list[dict], *, day, five) -> dict:
+    row = analysis()
+    row["payload"]["institutional"] = rows
+    row["payload"]["strategy"]["signals"]["institutional_day"] = day
+    row["payload"]["strategy"]["signals"]["institutional_5d"] = five
+    return row
 
 
 class AnalysisStatusTests(unittest.TestCase):
@@ -183,6 +200,212 @@ class VersionActivationTests(unittest.TestCase):
             mutate(bad["payload"])
             with self.assertRaisesRegex(ValueError, "契約"):
                 install_staging_version(connection, manifest(), [security()], [bad])
+
+    def test_payload_requires_strategy_and_institutional_fields(self) -> None:
+        for missing in ("strategy", "institutional"):
+            with self.subTest(missing), self.assertRaisesRegex(ValueError, missing):
+                connection = memory_db()
+                seed_old_version(connection)
+                bad = analysis()
+                del bad["payload"][missing]
+                install_staging_version(connection, manifest(), [security()], [bad])
+
+    def test_payload_rejects_null_or_malformed_new_fields(self) -> None:
+        def set_strategy(value):
+            return lambda payload: payload.__setitem__("strategy", value)
+
+        def change_strategy(path: str, value):
+            def mutate(payload):
+                target = payload["strategy"]
+                parts = path.split(".")
+                for part in parts[:-1]:
+                    target = target[part]
+                target[parts[-1]] = value
+            return mutate
+
+        cases = (
+            ("strategy-list", set_strategy([]), "strategy"),
+            ("recommendation", change_strategy("recommendation", "買進"), "strategy"),
+            ("price-string", change_strategy("prices.entry", "2080"), "strategy"),
+            ("signal-float", change_strategy("signals.positive", 1.5), "strategy"),
+            ("institutional-null", lambda p: p.__setitem__("institutional", None), "institutional"),
+            ("institutional-object", lambda p: p.__setitem__("institutional", {}), "institutional"),
+            ("institutional-row-missing", lambda p: p.__setitem__("institutional", [
+                {"date": "2026-11-06", "foreign": 1, "trust": 2, "total": 3}
+            ]), "institutional"),
+            ("institutional-null-value", lambda p: p.__setitem__("institutional", [
+                {"date": "2026-11-06", "foreign": None, "trust": 2, "dealer": 0, "total": 2}
+            ]), "institutional"),
+        )
+        for label, mutate, message in cases:
+            with self.subTest(label), self.assertRaisesRegex(ValueError, message):
+                connection = memory_db()
+                seed_old_version(connection)
+                bad = analysis()
+                mutate(bad["payload"])
+                install_staging_version(connection, manifest(), [security()], [bad])
+
+    def test_null_strategy_is_a_valid_stored_state(self) -> None:
+        connection = memory_db()
+        seed_old_version(connection)
+        row = analysis()
+        row["payload"]["strategy"] = None
+        install_staging_version(connection, manifest(), [security()], [row])
+        stored = json.loads(connection.execute("SELECT payload FROM stock_analysis WHERE code = '1102' AND version = ?",
+                                               (manifest()["version"],)).fetchone()[0])
+        self.assertIsNone(stored["strategy"])
+
+    def test_malformed_strategy_is_isolated_without_touching_core_fields(self) -> None:
+        from cloud.build_stock_pack import _check_payload, _isolate_strategy
+        good = analysis()["payload"]
+        self.assertIsNone(_isolate_strategy("1102", good))
+        self.assertIsNotNone(good["strategy"])
+
+        bad = analysis()["payload"]
+        core = json.loads(json.dumps({k: v for k, v in bad.items() if k != "strategy"}))
+        bad["strategy"]["recommendation"] = "買進"
+        reason = _isolate_strategy("1102", bad)
+        self.assertIn("strategy", reason)
+        self.assertIsNone(bad["strategy"])
+        self.assertEqual({k: v for k, v in bad.items() if k != "strategy"}, core)
+        _check_payload("1102", bad)
+
+    def test_strategy_isolation_never_hides_core_data_defects(self) -> None:
+        from cloud.build_stock_pack import _check_payload, _isolate_strategy
+        payload = analysis()["payload"]
+        payload["institutional"] = [{"date": "2026-11-06", "foreign": 1, "trust": 2, "dealer": 3, "total": 99}]
+        with self.assertRaisesRegex(ValueError, "institutional"):
+            _isolate_strategy("1102", payload)
+        with self.assertRaisesRegex(ValueError, "institutional"):
+            _check_payload("1102", payload)
+
+    def test_payload_requires_explicit_nonblocking_qa(self) -> None:
+        cases = (
+            ("missing", lambda payload: payload.pop("qa")),
+            ("empty", lambda payload: payload.__setitem__("qa", {})),
+            ("null-blocking", lambda payload: payload.__setitem__("qa", {"blocking": None, "bars": 300})),
+            ("missing-bars", lambda payload: payload.__setitem__("qa", {"blocking": False})),
+            ("too-few-bars", lambda payload: payload.__setitem__("qa", {"blocking": False, "bars": 19})),
+        )
+        for label, mutate in cases:
+            with self.subTest(label), self.assertRaisesRegex(ValueError, "QA"):
+                connection = memory_db()
+                seed_old_version(connection)
+                bad = analysis()
+                mutate(bad["payload"])
+                install_staging_version(connection, manifest(), [security()], [bad])
+
+    def test_unknown_or_inconsistent_dates_are_rejected(self) -> None:
+        def invalid_as_of():
+            row = analysis(as_of="unknown")
+            item = security()
+            item["latest_bar_date"] = "unknown"
+            return item, row
+
+        def compact_as_of():
+            row = analysis(as_of="20261106")
+            item = security()
+            item["latest_bar_date"] = "20261106"
+            return item, row
+
+        def catalog_mismatch():
+            item = security()
+            item.update(latest_bar_date="2026-11-05", analysis_status="stale")
+            return item, analysis(as_of="2026-11-06")
+
+        def institutional_future():
+            row = analysis()
+            row["payload"]["institutional"] = [
+                {"date": "2026-11-07", "foreign": 1, "trust": 2, "dealer": 3, "total": 6}
+            ]
+            return security(), row
+
+        def institutional_unsorted():
+            row = analysis()
+            row["payload"]["institutional"] = [
+                {"date": "2026-11-06", "foreign": 1, "trust": 2, "dealer": 3, "total": 6},
+                {"date": "2026-11-05", "foreign": -1, "trust": 0, "dealer": 1, "total": 0},
+            ]
+            return security(), row
+
+        for label, make_case in (
+            ("unknown-as-of", invalid_as_of),
+            ("compact-as-of", compact_as_of),
+            ("catalog-mismatch", catalog_mismatch),
+            ("institutional-future", institutional_future),
+            ("institutional-unsorted", institutional_unsorted),
+        ):
+            with self.subTest(label), self.assertRaisesRegex(ValueError, "資料日|institutional"):
+                connection = memory_db()
+                seed_old_version(connection)
+                item, row = make_case()
+                install_staging_version(connection, manifest(), [item], [row])
+
+    def test_institutional_totals_and_strategy_signals_must_match_rows(self) -> None:
+        valid_rows = [
+            {"date": "2026-10-30", "foreign": 1, "trust": 2, "dealer": 3, "total": 6},
+            {"date": "2026-11-02", "foreign": 2, "trust": 3, "dealer": 4, "total": 9},
+            {"date": "2026-11-03", "foreign": 3, "trust": 4, "dealer": 5, "total": 12},
+            {"date": "2026-11-05", "foreign": 4, "trust": 5, "dealer": 6, "total": 15},
+            {"date": "2026-11-06", "foreign": 5, "trust": 6, "dealer": 7, "total": 18},
+        ]
+        cases = []
+        wrong_total = [dict(row) for row in valid_rows]
+        wrong_total[-1]["total"] = 999
+        cases.append(("total", analysis_with_institutional(wrong_total, day=999, five=1041)))
+        cases.append(("institutional_day", analysis_with_institutional(valid_rows, day=999, five=60)))
+        cases.append(("institutional_5d", analysis_with_institutional(valid_rows, day=18, five=999)))
+
+        for message, bad in cases:
+            with self.subTest(message), self.assertRaisesRegex(ValueError, message):
+                connection = memory_db()
+                seed_old_version(connection)
+                install_staging_version(connection, manifest(), [security()], [bad])
+
+    def test_institutional_five_day_uses_last_five_rows_not_calendar_fill(self) -> None:
+        rows = [
+            {"date": "2026-10-30", "foreign": 1, "trust": 2, "dealer": 3, "total": 6},
+            {"date": "2026-11-02", "foreign": 2, "trust": 3, "dealer": 4, "total": 9},
+            {"date": "2026-11-03", "foreign": 3, "trust": 4, "dealer": 5, "total": 12},
+            {"date": "2026-11-05", "foreign": 4, "trust": 5, "dealer": 6, "total": 15},
+            {"date": "2026-11-06", "foreign": 5, "trust": 6, "dealer": 7, "total": 18},
+        ]
+        connection = memory_db()
+        seed_old_version(connection)
+        install_staging_version(
+            connection, manifest(), [security()],
+            [analysis_with_institutional(rows, day=18, five=60)],
+        )
+        payload = json.loads(connection.execute("SELECT payload FROM stock_analysis WHERE code = '1102'").fetchone()[0])
+        self.assertEqual(payload["strategy"]["signals"]["institutional_5d"], 60)
+
+    def test_less_than_five_institutional_rows_keeps_five_day_null(self) -> None:
+        rows = [
+            {"date": "2026-10-30", "foreign": 1, "trust": 2, "dealer": 3, "total": 6},
+            {"date": "2026-11-02", "foreign": 2, "trust": 3, "dealer": 4, "total": 9},
+            {"date": "2026-11-05", "foreign": 3, "trust": 4, "dealer": 5, "total": 12},
+            {"date": "2026-11-06", "foreign": 0, "trust": 0, "dealer": 0, "total": 0},
+        ]
+        connection = memory_db()
+        seed_old_version(connection)
+        install_staging_version(
+            connection, manifest(), [security()],
+            [analysis_with_institutional(rows, day=0, five=None)],
+        )
+        payload = json.loads(connection.execute("SELECT payload FROM stock_analysis WHERE code = '1102'").fetchone()[0])
+        self.assertEqual(payload["strategy"]["signals"]["institutional_day"], 0)
+        self.assertIsNone(payload["strategy"]["signals"]["institutional_5d"])
+
+    def test_explicit_legal_missing_values_are_preserved(self) -> None:
+        connection = memory_db()
+        seed_old_version(connection)
+        install_staging_version(connection, manifest(), [security()], [analysis()])
+        payload = json.loads(connection.execute("SELECT payload FROM stock_analysis WHERE code = '1102'").fetchone()[0])
+        self.assertEqual(payload["institutional"], [])
+        self.assertEqual(payload["strategy"]["evidence_strength"], "有限")
+        self.assertEqual(payload["strategy"]["prices"], {"entry": None, "add": None, "stop": None, "target": None})
+        self.assertIsNone(payload["strategy"]["signals"]["institutional_day"])
+        self.assertIsNone(payload["strategy"]["signals"]["institutional_5d"])
 
     def test_duplicate_analysis_row_for_one_code_is_rejected(self) -> None:
         connection = memory_db()
@@ -422,6 +645,18 @@ class SampleBuildV2Tests(unittest.TestCase):
         self.assertEqual(self.manifest["analysis_schema"], "stock-analysis/v2")
         self.assertNotIn("presets", self.manifest)
 
+    def test_functions_pack_has_target_date_and_valid_new_fields_per_stock(self) -> None:
+        pack = json.loads((self.out / "stock-pack-v2.json").read_text(encoding="utf-8"))
+        self.assertEqual(pack["as_of"], self.manifest["data_date"])
+        self.assertEqual(pack["analysis_schema"], "stock-analysis/v2")
+        self.assertEqual(sorted(pack["results"]), ["0050", "2330"])
+        for code, payload in pack["results"].items():
+            with self.subTest(code):
+                self.assertEqual(payload["as_of"], pack["as_of"])
+                self.assertIs(payload["qa"]["blocking"], False)
+                self.assertIsInstance(payload["strategy"], dict)
+                self.assertIsInstance(payload["institutional"], list)
+
     def test_seed_equals_direct_analyze_v2_bytes(self) -> None:
         from twon_analysis.analyze_v2 import analyze_v2
 
@@ -461,6 +696,23 @@ class ContractExampleGroupingTests(unittest.TestCase):
 
     def test_cloud_fixture_grouping_matches_analyze_v2(self) -> None:
         self.assert_grouping(EXAMPLE)
+
+    def test_cloud_fixture_carries_the_new_pack_contract(self) -> None:
+        payload = json.loads(EXAMPLE.read_text(encoding="utf-8"))
+        self.assertEqual(payload["schema"], "stock-analysis/v2")
+        self.assertIn(payload["strategy"]["recommendation"], {"持有", "分批進場", "觀望", "減碼"})
+        self.assertEqual(set(payload["strategy"]["prices"]), {"entry", "add", "stop", "target"})
+        self.assertTrue(payload["institutional"])
+        self.assertEqual(set(payload["institutional"][0]), {"date", "foreign", "trust", "dealer", "total"})
+
+    def test_cloud_fixture_institutional_arithmetic_matches_strategy_signals(self) -> None:
+        payload = json.loads(EXAMPLE.read_text(encoding="utf-8"))
+        rows = payload["institutional"]
+        for row in rows:
+            self.assertEqual(row["total"], row["foreign"] + row["trust"] + row["dealer"])
+        signals = payload["strategy"]["signals"]
+        self.assertEqual(signals["institutional_day"], rows[-1]["total"])
+        self.assertEqual(signals["institutional_5d"], sum(row["total"] for row in rows[-5:]))
 
     def test_contract_example_grouping_matches_analyze_v2(self) -> None:
         self.assert_grouping(self.CONTRACT_EXAMPLE)

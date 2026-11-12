@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import traceback
@@ -79,6 +80,29 @@ class RunConfig:
     ready_interval: float = 600
     ready_deadline: datetime | None = None
     work_dir: Path | None = None
+    trigger_event: str = ""
+    trigger_source: str = ""
+    trigger_slot: str = ""
+    legacy_allow_not_ready: bool = False
+
+
+# Caller metadata is a CI routing contract, not authentication. Unknown values stay strict.
+RETRY_SLOTS = {"30 7 * * 1-5": (15, 30), "30 8 * * 1-5": (16, 30),
+               "0 10 * * 1-5": (18, 0), "30 12 * * 1-5": (20, 30)}
+
+
+def may_wait_for_retry(config: RunConfig, now: datetime) -> bool:
+    local = now.astimezone(TPE)
+    if local.date().isoformat() != config.data_date or (local.hour, local.minute) >= (20, 30):
+        return False
+    if not any((config.trigger_event, config.trigger_source, config.trigger_slot)):
+        # Compatibility for an old, explicitly opted-in caller; never infer from dispatch alone.
+        return config.legacy_allow_not_ready and (local.hour, local.minute) >= (15, 30)
+    expected_event = {"github-schedule": "schedule", "cloudflare-cron": "workflow_dispatch"}
+    if expected_event.get(config.trigger_source) != config.trigger_event:
+        return False
+    slot = RETRY_SLOTS.get(config.trigger_slot)
+    return slot is not None and slot < (20, 30) and (local.hour, local.minute) >= slot
 
 
 class SystemClock:
@@ -107,7 +131,7 @@ def wait_until_ready(check: Callable[[], bool], *, clock, interval: float, deadl
         attempts += 1
         if check():
             return ReadyResult(True, attempts, "ready")
-        if clock.now() + timedelta(seconds=interval) > deadline:
+        if interval <= 0 or clock.now() + timedelta(seconds=interval) > deadline:
             return ReadyResult(False, attempts, "deadline")
         clock.sleep(interval)
 
@@ -128,7 +152,8 @@ def _stamp(clock) -> str:
 
 
 def run(config: RunConfig, *, steps: Iterable[Step], probe: Callable[[str], bool],
-        ready_check: Callable[[], bool], clock=None, rollback: Callable[[RunContext], dict] | None = None) -> dict:
+        ready_check: Callable[[], bool], clock=None, rollback: Callable[[RunContext], dict] | None = None,
+        readiness_observations: list[dict] | None = None) -> dict:
     clock = clock or SystemClock()
     log_path = _log_path(config.log_dir, config.data_date)
     if log_path.exists() and not config.dry_run:
@@ -149,10 +174,18 @@ def run(config: RunConfig, *, steps: Iterable[Step], probe: Callable[[str], bool
 
     deadline = config.ready_deadline or datetime.fromisoformat(config.data_date).replace(hour=21, tzinfo=TPE)
     ready = wait_until_ready(ready_check, clock=clock, interval=config.ready_interval, deadline=deadline)
-    record["readiness"] = {"ready": ready.ready, "attempts": ready.attempts, "reason": ready.reason}
+    record["readiness"] = {"ready": ready.ready, "attempts": ready.attempts, "reason": ready.reason,
+                           "sources": list(readiness_observations or [])}
+    source_error = any(row.get("status") == "error" for row in record["readiness"]["sources"])
     if not ready.ready:
-        record.update(status="failed", failed_step="wait_ready", finished_at=_stamp(clock),
-                      error="官方資料在停止期限前未就緒；保留上一版，不硬算")
+        if source_error:
+            record["readiness"]["reason"] = "source-error"
+        waiting = not source_error and may_wait_for_retry(config, clock.now())
+        record.update(status="waiting" if waiting else "failed", failed_step="wait_ready",
+                      published=False, finished_at=_stamp(clock),
+                      error=("官方來源探測失敗；保留上一版，不發布" if source_error else
+                             "等待官方資料，未發布；下個時段重試" if waiting else
+                             "官方資料在停止期限前未就緒；保留上一版，不硬算"))
         _write_record(log_path, record)
         write_status(config.log_dir, record)
         return record
@@ -226,12 +259,15 @@ def write_status(log_dir: Path, record: dict) -> dict:
         last_date, last_at = record["data_date"], record.get("finished_at")
     failed_step = record.get("failed_step")
     run = {"data_date": record["data_date"], "status": outcome, "finished_at": record.get("finished_at")}
-    if failed_step:
+    if outcome == "waiting":
+        run.update(reason="等待官方資料，未發布；下個時段重試", published=False)
+    elif failed_step:
         run["failed_step"] = failed_step
-        run["reason"] = _PUBLIC_REASONS.get(failed_step, "更新失敗")
+        run["reason"] = ("官方來源探測失敗，未發布" if record.get("readiness", {}).get("reason") == "source-error"
+                         else _PUBLIC_REASONS.get(failed_step, "更新失敗"))
     elif outcome == "incomplete":
         run["reason"] = "流程有步驟尚未接上，未發布新資料"
-    stale = outcome in ("failed", "incomplete") or (outcome == "running")
+    stale = outcome in ("failed", "incomplete", "waiting", "running")
     status = {"schema": STATUS_SCHEMA, "last_success_date": last_date, "last_success_at": last_at,
               "run": run, "stale": stale}
     _write_record(path, status)
@@ -275,33 +311,101 @@ def local_state_probe(day: str) -> bool:
 READY_SOURCES = ("listed_quotes", "otc_quotes", "listed_institutional", "otc_institutional")
 
 
-def official_ready(day: str, *, probes: dict[str, Callable[[str], bool]] | None = None) -> bool:
-    """每個必要來源都回「已公布」才算就緒；任何一個未公布就等下一個 cron 時段。"""
-    probes = probes or _official_probes()
-    return all(name in probes and probes[name](day) for name in READY_SOURCES)
+def official_ready(day: str, *, probes: dict[str, Callable] | None = None,
+                   observations: list[dict] | None = None, clock=None) -> bool:
+    """四源全部檢查；只存白名單小紀錄，不保存回應本文／例外訊息／憑證。"""
+    probes = _official_probes() if probes is None else probes
+    clock = clock or SystemClock()
+    rows = []
+    reasons = {"ready", "not-published", "http-error", "invalid-payload", "date-mismatch"}
+    for name in READY_SOURCES:
+        row = {"source": name, "observed_at": _stamp(clock), "as_of": None,
+               "ready": False, "status": "error", "reason": "missing-probe", "missing": []}
+        if name in probes:
+            try:
+                result = probes[name](day)
+                if isinstance(result, bool):
+                    result = {"ready": result, "reason": "ready" if result else "not-published"}
+                reason = result.get("reason") if isinstance(result, dict) else "invalid-payload"
+                if reason not in reasons:
+                    reason = "invalid-payload"
+                as_of = result.get("as_of") if isinstance(result, dict) else None
+                if isinstance(as_of, str):
+                    try:
+                        row["as_of"] = as_of if date.fromisoformat(as_of).isoformat() == as_of else None
+                    except ValueError:
+                        pass
+                if row["as_of"] is not None and row["as_of"] != day:
+                    reason = "date-mismatch"
+                row["reason"] = reason
+                row["ready"] = isinstance(result, dict) and result.get("ready") is True and reason == "ready"
+                row["status"] = "ready" if row["ready"] else "not-ready" if reason == "not-published" else "error"
+                http_status = result.get("http_status") if isinstance(result, dict) else None
+                if type(http_status) is int and 100 <= http_status <= 599:
+                    row["http_status"] = http_status
+            except Exception:  # transport/parser failures stay strict; never copy exception text
+                row["reason"] = "probe-error"
+        else:
+            row["missing"].append("probe")
+        if row["as_of"] is None:
+            row["missing"].append("as_of")
+        rows.append(row)
+    if observations is not None:
+        observations[:] = rows  # bounded: latest attempt, at most four source records
+    return all(row["ready"] for row in rows)
 
 
-def _official_probes() -> dict[str, Callable[[str], bool]]:
-    """各來源只送一次輕量請求看官方是否已有當日資料（不寫原件；抓取由 fetch_incremental 負責）。"""
+def _response_as_of(response) -> str | None:
+    """只解析來源自己帶的日期；絕不以查詢日冒充來源日。"""
+    try:
+        if "json" in (getattr(response, "content_type", "") or "").lower():
+            payload = json.loads(response.content.decode("utf-8"))
+            raw = str(payload.get("date") or "") if isinstance(payload, dict) else ""
+            if re.fullmatch(r"\d{8}", raw):
+                raw = f"{raw[:4]}-{raw[4:6]}-{raw[6:]}"
+            return date.fromisoformat(raw).isoformat() if raw else None
+        text = response.content[:2000].decode("cp950", errors="replace")
+        match = re.search(r'(?:資料日期[:：]\s*|^"?)(\d{3,4})[年/](\d{1,2})[月/](\d{1,2})(?:日|\b)', text, re.MULTILINE)
+        if match:
+            year, month, day = map(int, match.groups())
+            return date(year + 1911 if year < 1911 else year, month, day).isoformat()
+    except (ValueError, UnicodeError, TypeError):
+        pass
+    return None
+
+
+def _official_probes() -> dict[str, Callable]:
+    """各來源單次請求；只回日期／狀態小紀錄，不寫原件或回傳原本文。"""
     import daily_ingest as di
     import listed_institutional as li
     import otc_history as oh
     import otc_market_data as omd
     import stock_history as sh
 
-    def twse(url: str, params: Callable[[str], dict]) -> Callable[[str], bool]:
-        def probe(day: str) -> bool:
+    def twse(url: str, params: Callable[[str], dict]) -> Callable:
+        def probe(day: str) -> dict:
             response = sh.http_get(url, params(day.replace("-", "")))
-            return response.status == 200 and not di._no_data_json(response.content) and \
+            no_data = di._no_data_json(response.content)
+            ready = response.status == 200 and not no_data and \
                 '"stat":"OK"' in response.content.decode("utf-8", "replace").replace(" ", "")
+            as_of = _response_as_of(response)
+            ready = ready and as_of is not None
+            return {"ready": ready, "as_of": as_of, "http_status": response.status,
+                    "reason": "http-error" if response.status != 200 else
+                              "ready" if ready else "not-published" if no_data else "invalid-payload"}
         return probe
 
-    def tpex(url: str, params: Callable[[str], dict], empty: Callable) -> Callable[[str], bool]:
-        def probe(day: str) -> bool:
+    def tpex(url: str, params: Callable[[str], dict], empty: Callable) -> Callable:
+        def probe(day: str) -> dict:
             import requests
             with requests.Session() as session:
                 response = oh.http_get(session, url, params(day))
-            return response.status == 200 and not empty(response)
+            no_data = empty(response)
+            as_of = _response_as_of(response)
+            ready = response.status == 200 and not no_data and as_of is not None
+            return {"ready": ready, "as_of": as_of, "http_status": response.status,
+                    "reason": "http-error" if response.status != 200 else "ready" if ready else
+                              "not-published" if no_data else "invalid-payload"}
         return probe
 
     return {
@@ -603,7 +707,8 @@ def remote_rollback(ctx: RunContext) -> dict:
                 "--work-dir", str(ctx.work_dir / "d1-import"), "--remote", "--confirm"])
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, clock=None) -> int:
+    clock = clock or SystemClock()
     parser = argparse.ArgumentParser(description="每日收盤後更新協調器")
     parser.add_argument("--date", help="資料日 YYYY-MM-DD；預設為台北時間今天")
     parser.add_argument("--log-dir", type=Path, default=ROOT / "data/daily-update-log")
@@ -617,8 +722,13 @@ def main(argv: list[str] | None = None) -> int:
                         help="U3：Actions 前幾個 cron 時段用；官方未就緒時 exit 0（等下個時段），其他失敗照樣 exit 1")
     parser.add_argument("--result-file", type=Path,
                         help="U3：把本次結果寫成 JSON（workflow 依 sync_state 決定要不要把工作集同步回 R2）")
+    parser.add_argument("--trigger-event", default="", help="可信 CI 事件名稱；缺省為嚴格模式")
+    parser.add_argument("--trigger-source", default="", help="github-schedule／cloudflare-cron")
+    parser.add_argument("--trigger-slot", default="", help="原排程 UTC cron；僅已知前段時段可等待")
     args = parser.parse_args(argv)
-    data_date = args.date or datetime.now(TPE).date().isoformat()
+    data_date = args.date or clock.now().astimezone(TPE).date().isoformat()
+    if date.fromisoformat(data_date).isoformat() != data_date:
+        parser.error("date 必須是真實的 YYYY-MM-DD")
     if args.write_status_only:
         ctx = RunContext(data_date, False, ROOT / ".tmp" / "daily-update" / data_date,
                          outputs={"_log_dir": str(args.log_dir)})
@@ -628,24 +738,33 @@ def main(argv: list[str] | None = None) -> int:
     holidays = daily_ingest.fetch_holidays(args.log_dir / "holiday-schedule.json") or None
     config = RunConfig(data_date=data_date, log_dir=args.log_dir, dry_run=args.dry_run, holidays=holidays,
                        ready_interval=0 if args.no_wait else 600,
-                       ready_deadline=datetime.now(TPE) if args.no_wait else None)
-    if args.local_ready:
-        ready_check = lambda: local_state_probe(data_date)  # noqa: E731
-    else:
-        ready_check = lambda: local_state_probe(data_date) or official_ready(data_date)  # noqa: E731
-    record = run(config, steps=real_steps(), probe=local_state_probe, ready_check=ready_check, rollback=remote_rollback)
+                       ready_deadline=clock.now() if args.no_wait else None,
+                       trigger_event=args.trigger_event, trigger_source=args.trigger_source,
+                       trigger_slot=args.trigger_slot, legacy_allow_not_ready=args.allow_not_ready)
+    observations: list[dict] = []
+
+    def ready_check() -> bool:
+        local = local_state_probe(data_date)
+        if args.local_ready or local:
+            # 保留原本機重跑分支；沒有讀到來源日期就明示缺項，不假填請求日。
+            observations[:] = [{"source": "local_state", "observed_at": _stamp(clock), "as_of": None,
+                               "ready": local, "status": "ready" if local else "not-ready",
+                               "reason": "ready" if local else "not-published", "missing": ["as_of"]}]
+            return local
+        return official_ready(data_date, observations=observations, clock=clock)
+
+    record = run(config, steps=real_steps(), probe=local_state_probe, ready_check=ready_check,
+                 rollback=remote_rollback, clock=clock, readiness_observations=observations)
     summary = {k: record.get(k) for k in ("data_date", "status", "failed_step")}
+    published = record.get("status") == "success" and not args.dry_run
+    summary.update(published=published, sync_state=published, readiness=record.get("readiness"),
+                   message=("等待官方資料，未發布；下個時段重試" if record["status"] == "waiting" else
+                            "本次已發布" if published else "本次未發布"))
     print(json.dumps(summary, ensure_ascii=False))
     if args.result_file:
-        # 只有真的發布成功才把新的工作集推回 R2；未就緒／失敗都保留雲端上一版狀態。
-        # dry-run 沒有匯入 D1、沒有部署，雲端工作集不得前進（否則明天的增量 base 與 already-done 都會錯）。
-        _write_record(args.result_file, {**summary,
-                                         "sync_state": record.get("status") == "success" and not args.dry_run})
-    if record["status"] in {"success", "skipped", "already-done"}:
-        return 0
-    if args.allow_not_ready and record.get("failed_step") == "wait_ready":
-        return 0
-    return 1
+        # exit0 包括 waiting／dry-run／already-done；只有真發布才允許 R2／AI 接續。
+        _write_record(args.result_file, summary)
+    return 0 if record["status"] in {"success", "skipped", "already-done", "waiting"} else 1
 
 
 if __name__ == "__main__":

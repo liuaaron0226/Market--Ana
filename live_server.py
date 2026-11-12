@@ -17,11 +17,35 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from local_ai_digest import LocalAiDigestError, LocalAiDigestStore
+
 ROOT = Path(__file__).resolve().parent
 WEB_DIR = ROOT / "web"
 HOST = "127.0.0.1"
 DEFAULT_PORT = 8876
 TAIPEI = ZoneInfo("Asia/Taipei")
+
+
+def _strategy_flag(value: Any) -> bool:
+    if value is True or value == 1:
+        return True
+    return isinstance(value, str) and value.strip().lower() in {"1", "true"}
+
+
+def _release_policy(enabled: bool) -> dict[str, Any]:
+    return {
+        "schema": "market-ana-features/v1",
+        "core_release": True,
+        "strategies_enabled": bool(enabled),
+        "features": {
+            "live_market": True, "charts": True, "compare": True,
+            "watchlist": True, "holdings": True, "daily_update": True,
+            "strategy_v1": bool(enabled), "market_trend_v1": bool(enabled),
+            "level_advice": bool(enabled), "ai_digest": bool(enabled),
+            "ai_stock_advice": bool(enabled),
+        },
+    }
+
 
 QUOTE_URL = (
     "https://mis.twse.com.tw/stock/api/getStockInfo.jsp"
@@ -813,7 +837,135 @@ class LiveQuoteService:
             }
 
 
+def stock_quote_url(code: str, market: str) -> str:
+    return (
+        "https://mis.twse.com.tw/stock/api/getStockInfo.jsp?"
+        + urllib.parse.urlencode({"ex_ch": f"{market}_{code}.tw", "json": "1", "delay": "0"})
+    )
+
+
+def parse_stock_quote(payload: dict[str, Any], code: str, market: str) -> dict[str, Any]:
+    if str(payload.get("rtcode")) != "0000":
+        raise ValueError(payload.get("rtmessage") or "MIS rtcode 不是 0000")
+    fields = next((row for row in payload.get("msgArray", []) if str(row.get("c")) == code), None)
+    if not isinstance(fields, dict):
+        raise ValueError("MIS 沒有指定個股資料")
+    price = parse_number(fields.get("z")) or parse_number((fields.get("trade") or {}).get("z"))
+    previous_close = parse_number(fields.get("y"))
+    data_time = parse_data_time(fields)
+    if price is None or previous_close is None or data_time is None:
+        raise ValueError("MIS 缺少現價、前收或時間")
+    volume = parse_integer(fields.get("v"))
+    return {
+        "price": price,
+        "previous_close": previous_close,
+        "change": round(price - previous_close, 2),
+        "change_percent": round((price - previous_close) / previous_close * 100, 2),
+        "open": parse_number(fields.get("o")),
+        "high": parse_number(fields.get("h")),
+        "low": parse_number(fields.get("l")),
+        # MIS 個股 v 以張為單位；分析日 K 與圖表統一用股。
+        "volume_shares": volume * 1000 if volume is not None else None,
+        "data_time": data_time.isoformat(timespec="seconds"),
+        "data_date": data_time.date().isoformat(),
+        "upstream_delay_ms": parse_integer(payload.get("userDelay")),
+        "code": code,
+        "market": market,
+    }
+
+
+def aggregate_stock_points(points: list[dict[str, Any]], minutes: int) -> list[dict[str, Any]]:
+    buckets: dict[int, dict[str, Any]] = {}
+    width = minutes * 60
+    for point in points:
+        stamp = datetime.fromisoformat(point["timestamp"])
+        key = int(stamp.timestamp()) // width * width
+        candle = buckets.get(key)
+        if candle is None:
+            start = datetime.fromtimestamp(key, TAIPEI)
+            candle = {
+                "t": start.isoformat(timespec="seconds"), "label": start.strftime("%H:%M"),
+                "open": point["price"], "high": point["price"], "low": point["price"],
+                "close": point["price"], "volume": max(0, point.get("volume_delta") or 0),
+            }
+            buckets[key] = candle
+        else:
+            candle["high"] = max(candle["high"], point["price"])
+            candle["low"] = min(candle["low"], point["price"])
+            candle["close"] = point["price"]
+            candle["volume"] += max(0, point.get("volume_delta") or 0)
+    return list(buckets.values())
+
+
+class StockLiveQuoteService(LiveQuoteService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.states: dict[str, dict[str, Any]] = {}
+
+    def _state(self, code: str, market: str) -> dict[str, Any]:
+        key = f"{market}:{code}"
+        if key not in self.states:
+            self.states[key] = {
+                "quote": UpstreamState(QUOTE_INTERVAL_SECONDS), "points": [],
+                "last_chart_monotonic": 0.0, "last_cumulative_volume": None,
+            }
+        return self.states[key]
+
+    def snapshot(self, code: str, market: str) -> dict[str, Any]:
+        with self.lock:
+            now = datetime.now(TAIPEI)
+            phase, scheduled_open = market_phase(now, now.date())
+            current = self._state(code, market)
+            quote_state: UpstreamState = current["quote"]
+            if scheduled_open:
+                self._attempt(
+                    quote_state,
+                    lambda: parse_stock_quote(self._request_json(stock_quote_url(code, market)), code, market),
+                )
+            quote = quote_state.value
+            now_monotonic = time.monotonic()
+            market_open = bool(scheduled_open and quote and quote["data_date"] == now.date().isoformat())
+            if quote and market_open and (
+                not current["last_chart_monotonic"]
+                or now_monotonic - current["last_chart_monotonic"] >= CHART_INTERVAL_SECONDS
+            ):
+                cumulative = quote.get("volume_shares")
+                previous = current["last_cumulative_volume"]
+                delta = max(0, cumulative - previous) if cumulative is not None and previous is not None else 0
+                current["points"].append({
+                    "timestamp": quote["data_time"], "price": quote["price"], "volume_delta": delta,
+                })
+                current["points"] = current["points"][-MAX_SERIES_POINTS:]
+                current["last_cumulative_volume"] = cumulative
+                current["last_chart_monotonic"] = now_monotonic
+            candles = {str(minutes): aggregate_stock_points(current["points"], minutes) for minutes in (1, 5, 15)}
+            if not scheduled_open:
+                return {
+                    "ok": True, "environment": "local", "code": code, "market": market,
+                    "market_open": False, "market_phase": phase, "live": False, "quote": None,
+                    "chart_samples": len(current["points"]), "candles": candles,
+                    "delay_seconds": {"quote": 5, "chart": 15}, "retry_after_seconds": 0,
+                }
+            quote_age = (
+                max(0.0, (now - datetime.fromisoformat(quote["data_time"])).total_seconds())
+                if quote is not None else None
+            )
+            live = bool(market_open and quote_age is not None and quote_age <= 30 and quote_state.error is None)
+            return {
+                "ok": quote is not None,
+                "environment": "local", "code": code, "market": market,
+                "market_open": market_open, "market_phase": "open" if market_open else "non_trading_day",
+                "live": live, "fetched_at": quote_state.last_success_at,
+                "quote_age_seconds": round(quote_age, 3) if quote_age is not None else None,
+                "delay_seconds": {"quote": 5, "chart": 15},
+                "retry_after_seconds": quote_state.retry_after(now_monotonic),
+                "error": quote_state.error, "quote": quote,
+                "chart_samples": len(current["points"]), "candles": candles,
+            }
+
+
 SERVICE = LiveQuoteService()
+STOCK_LIVE_SERVICE = StockLiveQuoteService()
 
 
 class PortfolioApiError(Exception):
@@ -836,15 +988,18 @@ def _portfolio_code(value: Any) -> str:
     return code
 
 
-def _default_portfolio_security(code: str) -> dict[str, Any] | None:
+def _portfolio_security(code: str, universe: dict[str, Any]) -> dict[str, Any] | None:
     security = lookup_security(code)
     if security is not None:
-        universe = universe_state()
         return {"code": code, "name": security.name, "market": security.market,
                 "in_universe": code in universe["members"] or code in universe["core"]}
     if code == "0050":
         return {"code": code, "name": "元大台灣50", "market": "上市", "in_universe": True}
     return None
+
+
+def _default_portfolio_security(code: str) -> dict[str, Any] | None:
+    return _portfolio_security(code, universe_state())
 
 
 def _default_portfolio_prices(codes: list[str]) -> dict[str, dict[str, Any]]:
@@ -856,7 +1011,10 @@ def _default_portfolio_prices(codes: list[str]) -> dict[str, dict[str, Any]]:
             path = OTC_HISTORY_DB if security is not None and security.market == "上櫃" else STOCK_HISTORY_DB
             if not path.exists():
                 continue
-            connection = connections.setdefault(path, sqlite3.connect(path))
+            connection = connections.get(path)
+            if connection is None:
+                connection = sqlite3.connect(path)
+                connections[path] = connection
             row = connection.execute(
                 "SELECT date, close FROM daily WHERE code = ? AND close IS NOT NULL ORDER BY date DESC LIMIT 1",
                 (code,),
@@ -891,11 +1049,16 @@ class LocalPortfolioStore:
             if key in _PORTFOLIO_SCHEMA_READY and self.path.exists():
                 return
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            script = (ROOT / "cloud/migrations/0005_user_portfolio.sql").read_text(encoding="utf-8")
-            script = script.replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ").replace(
-                "CREATE INDEX ", "CREATE INDEX IF NOT EXISTS ")
+            scripts = []
+            for migration in ("0005_user_portfolio.sql", "0006_cash_and_level.sql"):
+                script = (ROOT / "cloud/migrations" / migration).read_text(encoding="utf-8")
+                script = (script.replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ")
+                          .replace("CREATE UNIQUE INDEX ", "CREATE UNIQUE INDEX IF NOT EXISTS ")
+                          .replace("CREATE INDEX ", "CREATE INDEX IF NOT EXISTS ")
+                          .replace("CREATE TRIGGER ", "CREATE TRIGGER IF NOT EXISTS "))
+                scripts.append(script)
             with sqlite3.connect(self.path, factory=_ClosingConnection) as connection:
-                connection.executescript(script)
+                connection.executescript("\n".join(scripts))
             _PORTFOLIO_SCHEMA_READY.add(key)
 
     def _connect(self) -> sqlite3.Connection:
@@ -1027,6 +1190,88 @@ class LocalPortfolioStore:
                     "created_at": row["created_at"], "updated_at": row["updated_at"]})
         return {"items": items}
 
+    def list_cash(self) -> dict[str, Any]:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT amount_twd, updated_at, version FROM user_cash_current WHERE email = ?",
+                (_PORTFOLIO_EMAIL,),
+            ).fetchone()
+        if row is None:
+            return {"amount_twd": None, "updated_at": None, "version": None, "stale": False,
+                    "warning": "尚未申報要計入總資金的現金"}
+        now = self.now()
+        current = now if isinstance(now, datetime) else datetime.fromtimestamp(now / 1000, timezone.utc)
+        updated = datetime.fromisoformat(row["updated_at"].replace("Z", "+00:00"))
+        age_days = max(0, (current - updated).days)
+        stale = age_days > 30
+        return {"amount_twd": float(row["amount_twd"]), "updated_at": row["updated_at"],
+                "version": int(row["version"]), "age_days": age_days, "stale": stale,
+                "warning": "現金已超過 30 天未更新，金額仍照申報值計算" if stale else None}
+
+    def save_cash(self, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        amount = body.get("amount_twd")
+        if isinstance(amount, bool) or not isinstance(amount, (int, float)) or not 0 <= amount <= 1_000_000_000_000:
+            raise PortfolioApiError(400, "現金須為 0～1,000,000,000,000 元")
+        amount = round(float(amount), 2)
+        at = self._at()
+        with self._connect() as connection:
+            existing = connection.execute(
+                "SELECT version FROM user_cash_current WHERE email = ?", (_PORTFOLIO_EMAIL,)
+            ).fetchone()
+            version = connection.execute(
+                "SELECT COALESCE(MAX(version), 0) + 1 FROM user_cash_history WHERE email = ?",
+                (_PORTFOLIO_EMAIL,),
+            ).fetchone()[0]
+            connection.execute(
+                "INSERT INTO user_cash_history (email, version, amount_twd, effective_at, recorded_at) VALUES (?, ?, ?, ?, ?)",
+                (_PORTFOLIO_EMAIL, version, amount, at, at),
+            )
+        return (200 if existing else 201), {"amount_twd": amount, "updated_at": at, "version": version,
+                                             "stale": False, "warning": None}
+
+    def current_level(self) -> dict[str, Any]:
+        cash = self.list_cash()
+        holdings = self.list_holdings()["items"]
+        missing = [item["code"] for item in holdings if item["market_value"] is None]
+        market_value = round(sum(float(item["market_value"]) for item in holdings if item["market_value"] is not None), 2)
+        complete = cash["amount_twd"] is not None and not missing
+        total_assets = round(market_value + cash["amount_twd"], 2) if complete else None
+        current = {"complete": complete, "market_value": market_value, "cash_twd": cash["amount_twd"],
+                   "cash_updated_at": cash["updated_at"], "cash_stale": cash["stale"],
+                   "cash_warning": cash["warning"], "missing_price_codes": missing,
+                   "total_assets": total_assets,
+                   "level": round(market_value / total_assets * 100, 2) if complete and total_assets > 0 else None,
+                   "warning": "總資金為 0，尚無法計算目前水位" if complete and total_assets == 0 else None}
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT data_date, version, rule_version, source_cutoff, payload, created_at FROM level_daily "
+                "WHERE is_current = 1 ORDER BY data_date DESC LIMIT 1"
+            ).fetchone()
+        if row is None:
+            return {"current": current, "advice": None, "adjustment": None, "warning": "今日建議尚未產生"}
+        stored_payload = json.loads(row["payload"])
+        visible = ("recommended_level", "raw_level", "international_cap_applied", "warning",
+                   "missing_signals", "unavailable_signals", "score", "confirmation", "wave", "lock",
+                   "online_monitoring", "parameters", "source_status")
+        advice = {key: stored_payload[key] for key in visible if key in stored_payload}
+        advice.update({"data_date": row["data_date"], "version": int(row["version"]),
+                       "rule_version": row["rule_version"], "source_cutoff": row["source_cutoff"],
+                       "created_at": row["created_at"]})
+        adjustment = None
+        recommended = advice.get("recommended_level")
+        if complete and current["level"] is not None and recommended is not None:
+            difference = round(float(recommended) - current["level"], 2)
+            amount = round(abs(difference) / 100 * total_assets, 2)
+            within = abs(difference) <= 5
+            action = "increase" if difference > 0 else "decrease" if difference < 0 else "none"
+            adjustment = {"percentage_points": difference, "amount_twd": 0 if within else amount,
+                          "action": "none" if within else action, "within_tolerance": within,
+                          "message": "不用動" if within else "可用現金提高股票水位" if action == "increase" else "由本人決定減碼哪些持股" if action == "decrease" else "不用動",
+                          "estimated_commission_twd": 0 if within else round(amount * 0.001425),
+                          "estimated_tax_twd": round(amount * 0.003) if not within and action == "decrease" else 0,
+                          "fee_note": "手續費以 0.1425% 估算；賣出證交稅以普通股 0.3% 保守估算，ETF 實際稅率可能較低"}
+        return {"current": current, "advice": advice, "adjustment": adjustment}
+
     def delete_holding(self, code: str) -> None:
         with self._connect() as connection:
             result = connection.execute(
@@ -1090,6 +1335,10 @@ class MarketHTTPServer(ThreadingHTTPServer):
     portfolio_db: Path = ROOT / "data/user-portfolio.sqlite"
     portfolio_resolver: Any = None
     portfolio_prices: Any = None
+    ai_digest_owner: bool = True
+    stock_live_service: Any = None
+    index_live_service: Any = None
+    strategies_enabled: bool = _strategy_flag(os.environ.get("MARKET_ANA_STRATEGIES_ENABLED"))
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -1119,8 +1368,11 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
 
     def _portfolio_store(self) -> LocalPortfolioStore:
-        return LocalPortfolioStore(self.server.portfolio_db, self.server.portfolio_resolver,
-                                   self.server.portfolio_prices)
+        resolver = self.server.portfolio_resolver
+        if resolver is None:
+            # 使用這個 server 已指定／快取的母體快照；避免個人資料請求另起一輪 rolling_universe。
+            resolver = lambda code: _portfolio_security(code, self._universe())
+        return LocalPortfolioStore(self.server.portfolio_db, resolver, self.server.portfolio_prices)
 
     def _require_local_host(self) -> None:
         if self.headers.get("Host") != f"{HOST}:{self.server.server_port}":
@@ -1150,6 +1402,11 @@ class Handler(SimpleHTTPRequestHandler):
             return False
         try:
             self._require_local_host()
+            if path == "/api/holdings/level" and not self.server.strategies_enabled:
+                policy = _release_policy(False)
+                self._send_json({"error": "feature-disabled", "message": "未驗證的水位建議尚未啟用",
+                                 "features": policy["features"]}, 403)
+                return True
             store = self._portfolio_store()
             if path == "/api/watchlist":
                 if method == "GET": self._send_json(store.list_watchlist())
@@ -1161,6 +1418,16 @@ class Handler(SimpleHTTPRequestHandler):
                 if method == "GET": self._send_json(store.list_holdings())
                 elif method == "POST":
                     status, payload = store.save_holding(self._read_api_json()); self._send_json(payload, status)
+                else: raise PortfolioApiError(405, "方法不允許")
+                return True
+            if path == "/api/holdings/cash":
+                if method == "GET": self._send_json(store.list_cash())
+                elif method == "POST":
+                    status, payload = store.save_cash(self._read_api_json()); self._send_json(payload, status)
+                else: raise PortfolioApiError(405, "方法不允許")
+                return True
+            if path == "/api/holdings/level":
+                if method == "GET": self._send_json(store.current_level())
                 else: raise PortfolioApiError(405, "方法不允許")
                 return True
             if path == "/api/search-history":
@@ -1295,16 +1562,25 @@ class Handler(SimpleHTTPRequestHandler):
 
         self._send_screen_payload(market_screens_publish.core_holdings, "core holdings")
 
-    # B1（11-09）：和 0050 比（含息報酬）。只對大量股母體（＋核心持有 0050）提供，母體外照 outside-universe。
+    # B1／UI-2a：和 0050 比（含息報酬）。提供大量普通股、核心持有與同日大量 ETF 名單。
     # 資料日＝母體快照的資料日（與個股分析、選股同一天），不是行情庫最新一天。
     def _compare_resolver(self, universe: dict[str, Any] | None):
+        etfs = ({str(item["code"]): item for item in universe["universe"].get("etf_members", ())}
+                if universe is not None else {})
+
         def resolve(code: str) -> tuple[str, Any]:
             security = lookup_security(code)
-            in_universe = universe is None or code in universe["members"] or code in universe["core"]
-            if in_universe and (security is not None or code == "0050"):
+            in_universe = universe is None or code in universe["members"] or code in universe["core"] or code in etfs
+            if in_universe and (security is not None or code == "0050" or code in etfs):
                 return "ok", security.listed_date if security is not None else None
             if security is None:
-                return "not-found", {"message": "查無此上市或上櫃普通股"}
+                if code.startswith("00"):
+                    return "outside-universe", {"message": "這檔 ETF 不在本日大量 ETF 比較名單", "name": None,
+                                                "market": None, "universe_rank": None, "reason": "outside-etf-universe",
+                                                "universe_rule": universe["universe"]["rule_version"] if universe else None,
+                                                "source_date": universe["universe"]["data_date"] if universe else None,
+                                                "data_date": universe["universe"]["data_date"] if universe else None}
+                return "not-found", {"message": "查無此上市、上櫃普通股或比較名單 ETF"}
             outside = outside_universe_payload(code, security, universe)
             return "outside-universe", {k: v for k, v in outside.items() if k not in ("error", "code")}
         return resolve
@@ -1413,17 +1689,67 @@ class Handler(SimpleHTTPRequestHandler):
                 "stock_state": "stale",
                 "data_date": security.latest_bar_date,
             }
+        if not self.server.strategies_enabled:
+            result = {key: value for key, value in result.items() if key != "strategy"}
         self._send_json(result)
 
     def do_GET(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
         if self._portfolio_api("GET"):
             return
         path = urllib.parse.urlsplit(self.path).path
+        if path == "/api/features":
+            try:
+                self._require_local_host()
+                self._send_json(_release_policy(self.server.strategies_enabled))
+            except PortfolioApiError as error:
+                self._send_json({"error": str(error)}, error.status)
+            return
+        if path == "/api/ai-digest":
+            try:
+                self._require_local_host()
+                if not self.server.strategies_enabled:
+                    policy = _release_policy(False)
+                    self._send_json({"error": "feature-disabled", "message": "未驗證的 AI 摘要尚未啟用",
+                                     "features": policy["features"]}, 403)
+                    return
+                params = urllib.parse.parse_qs(
+                    urllib.parse.urlsplit(self.path).query, keep_blank_values=True
+                )
+                payload = LocalAiDigestStore(self.server.portfolio_db).get(
+                    scope=params.get("scope", ["home"])[0],
+                    owner=bool(self.server.ai_digest_owner),
+                    codes=params.get("code", []),
+                )
+                self._send_json(payload)
+            except LocalAiDigestError as error:
+                self._send_json({"error": str(error)}, error.status)
+            except PortfolioApiError as error:
+                self._send_json({"error": str(error)}, error.status)
+            return
         if path == "/api/live":
-            self._send_json(SERVICE.snapshot())
+            try:
+                self._require_local_host()
+                service = self.server.index_live_service or SERVICE
+                payload = service.snapshot()
+                status = 200 if payload.get("ok") and payload.get("data") is not None else 503
+                self._send_json(payload, status)
+            except PortfolioApiError as error:
+                self._send_json({"error": str(error)}, error.status)
             return
         if path == "/api/stocks/search":
             self._send_stock_search(urllib.parse.urlsplit(self.path).query)
+            return
+        live_match = re.fullmatch(r"/api/stocks/([0-9A-Z]{4,6})/live", path)
+        if live_match:
+            code = live_match.group(1)
+            markets = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("market", ["tse"])
+            if len(markets) != 1 or markets[0] not in {"tse", "otc"}:
+                self._send_json({"error": "bad-request", "message": "市場格式不正確", "live": False}, 400)
+                return
+            market = markets[0]
+            service = self.server.stock_live_service or STOCK_LIVE_SERVICE
+            payload = service.snapshot(code, market)
+            self._send_json(payload, 200 if payload.get("ok") else 503)
             return
         if path.startswith("/api/stocks/") and path.endswith("/analysis"):
             self._send_stock_analysis(path, urllib.parse.urlsplit(self.path).query)

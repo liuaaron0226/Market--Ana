@@ -1,7 +1,8 @@
 """雲端狀態同步（U1）：把每日更新需要的最小工作集打包、上傳到 R2，或從 R2 下載還原。
 
 - 每個工作集項目存成一個 gzip 物件（SQLite 單檔或目錄 tar），附 ``state/manifest.json``：SHA-256、大小、資料日。
-- 上傳先寫 ``*.next``，全部物件成功才寫 ``manifest.json.next`` 再換成正式名；中途失敗，舊 manifest 仍指向舊物件。
+- 上傳以 SHA-256 內容定址的 immutable key 寫入新物件；全部成功才切換 manifest，中途失敗時舊 manifest 與其物件保持可還原。
+- 舊 manifest 既有的固定 object key 仍可還原；immutable 物件與失敗留下的暫存物件不自動刪除，遠端 GC／容量門須另行審核後啟用。
 - 還原逐一驗 SHA，全部通過才把暫存目錄換到目標位置；任一不符就丟出 StateIntegrityError，目標不動。
 - R2 用 S3 相容 API（SigV4，標準庫實作，不新增依賴）；本機測試用 DirectoryStore 以目錄模擬。
 """
@@ -14,6 +15,7 @@ import hmac
 import io
 import json
 import os
+import re
 import shutil
 import sqlite3
 import sys
@@ -23,7 +25,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -45,7 +47,23 @@ GENERATED_CARRY = ("cloud/.stock-pack.json",)
 
 
 class StateIntegrityError(Exception):
-    """還原時物件缺漏或 SHA 不符。"""
+    """遠端狀態、日期或物件完整性不符合契約。"""
+
+
+STRICT_DATE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+
+
+def require_iso_date(value, field: str) -> str:
+    """只接受真實且完整的 YYYY-MM-DD；拒絕 compact ISO 與錯型。"""
+    if not isinstance(value, str) or not STRICT_DATE.fullmatch(value):
+        raise StateIntegrityError(f"{field} 必須是有效的 YYYY-MM-DD 日期")
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError as error:
+        raise StateIntegrityError(f"{field} 必須是有效的 YYYY-MM-DD 日期") from error
+    if parsed.isoformat() != value:
+        raise StateIntegrityError(f"{field} 必須是有效的 YYYY-MM-DD 日期")
+    return value
 
 
 @dataclass(frozen=True)
@@ -95,6 +113,8 @@ WORKING_SET: tuple[Item, ...] = (
     Item("data/corporate-actions/raw/TPEx-exDailyQ"),  # 櫃買除權息原件＋SHA＋涵蓋區間（2016 起全留）
     Item("data/liquid-universe"),
     Item("data/market-screen-snapshots"),
+    # G4-2W：跨日確認／波段狀態；EODHD／OFR 原件每天重取，VIX／SOX 不進 R2。
+    Item("data/level-signals/state.json"),
     # U3：Actions 每次都是新機器。執行紀錄讓同一天後面的 cron 時段看到 already-done（不重做、不重部署），
     # status.json 保留最後成功日；前一天成功切換的 seed 是 D1 增量匯入的 base。
     Item("data/daily-update-log"),
@@ -282,25 +302,118 @@ def _pack(root: Path, item: Item, scratch: Path) -> bytes | None:
     return buffer.getvalue()
 
 
-def upload(root: Path, store, items=WORKING_SET, *, data_date: str) -> dict:
-    """打包上傳；全部物件成功才換上新 manifest。"""
-    manifest = {"schema": "market-ana-state/v1", "data_date": data_date,
+def _manifest_error(detail: str) -> StateIntegrityError:
+    return StateIntegrityError(
+        f"{MANIFEST} 無效（{detail}）；已停止讀寫，請人工修復或還原上一版 manifest"
+    )
+
+
+def _decode_manifest(raw: bytes) -> dict:
+    try:
+        manifest = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise _manifest_error("不是有效 JSON") from error
+    if not isinstance(manifest, dict):
+        raise _manifest_error("根節點必須是 object")
+    try:
+        manifest_date = require_iso_date(manifest.get("data_date"), "data_date")
+    except StateIntegrityError as error:
+        raise _manifest_error(str(error)) from error
+    objects = manifest.get("objects")
+    if not isinstance(objects, list):
+        raise _manifest_error("objects 缺少或不是 array")
+    cursors = manifest.get("cursors")
+    if cursors is not None:
+        if not isinstance(cursors, dict):
+            raise _manifest_error("cursors 不是 object")
+        if "market_data_date" not in cursors:
+            raise _manifest_error("cursors.market_data_date 缺少")
+        try:
+            market_date = require_iso_date(cursors.get("market_data_date"), "cursors.market_data_date")
+            if "level_last_processed_date" in cursors:
+                require_iso_date(cursors.get("level_last_processed_date"), "cursors.level_last_processed_date")
+        except StateIntegrityError as error:
+            raise _manifest_error(str(error)) from error
+        if market_date != manifest_date:
+            raise _manifest_error("data_date 與 cursors.market_data_date 不一致")
+    return manifest
+
+
+def _remote_manifest(store) -> dict | None:
+    raw = store.get(MANIFEST)
+    return _decode_manifest(raw) if raw is not None else None
+
+
+def _put_immutable(store, key: str, data: bytes, digest: str) -> None:
+    """建立內容定址物件；既有 key 只能重用相同內容，絕不覆寫。"""
+    existing = store.get(key)
+    if existing is not None:
+        if hashlib.sha256(existing).hexdigest() != digest:
+            raise StateIntegrityError(f"immutable 物件 {key} 已存在但 SHA-256 不符；停止寫入並請人工檢查 R2")
+        return
+    staged_key = key + ".next"
+    store.put(staged_key, data)
+    store.rename(staged_key, key)
+
+
+def _level_state_date(root: Path) -> str:
+    path = Path(root) / "data/level-signals/state.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise StateIntegrityError(f"{path} 無法讀取有效 JSON；拒絕宣告 level cursor") from error
+    if not isinstance(payload, dict):
+        raise StateIntegrityError(f"{path} 必須是 JSON object；拒絕宣告 level cursor")
+    return require_iso_date(payload.get("last_processed_date"), "level state last_processed_date")
+
+
+def upload(root: Path, store, items=WORKING_SET, *, data_date: str, cursor_domain: str = "market") -> dict:
+    """打包上傳；market／level 各自單調，新物件完成後才切換共同 manifest。"""
+    data_date = require_iso_date(data_date, "data_date")
+    if cursor_domain not in ("market", "level"):
+        raise StateIntegrityError("cursor_domain 只接受 market 或 level")
+    if cursor_domain == "level":
+        actual_level_date = _level_state_date(root)
+        if actual_level_date != data_date:
+            raise StateIntegrityError(
+                f"level cursor {data_date} 與 state.json.last_processed_date {actual_level_date} 不一致；拒絕寫入"
+            )
+
+    existing_manifest = _remote_manifest(store)
+    existing_market = existing_manifest["data_date"] if existing_manifest is not None else None
+    existing_cursors = existing_manifest.get("cursors", {}) if existing_manifest is not None else {}
+    existing_level = existing_cursors.get("level_last_processed_date")
+    if cursor_domain == "market":
+        if existing_market and existing_market > data_date:
+            raise StateIntegrityError(f"雲端市場資料日 {existing_market} 比本次 {data_date} 新，拒絕倒退上傳")
+        market_date = data_date
+        level_date = existing_level
+    else:
+        if existing_market is None:
+            raise StateIntegrityError("level 狀態不能建立第一份市場 manifest；請先初始化 market cursor")
+        if existing_level and existing_level > data_date:
+            raise StateIntegrityError(f"雲端 level 狀態日 {existing_level} 比本次 {data_date} 新，拒絕倒退上傳")
+        market_date = existing_market
+        level_date = data_date
+
+    cursors = {"market_data_date": market_date}
+    if level_date is not None:
+        cursors["level_last_processed_date"] = level_date
+    manifest = {"schema": "market-ana-state/v1", "data_date": market_date, "cursors": cursors,
                 "uploaded_at_utc": datetime.now(timezone.utc).isoformat(), "objects": []}
     with tempfile.TemporaryDirectory() as scratch_dir:
         scratch = Path(scratch_dir)
-        staged: list[str] = []
         for item in items:
             data = _pack(root, item, scratch)
             if data is None:
                 manifest["objects"].append({"path": item.path, "key": None, "missing": True})
                 continue
-            store.put(item.key + ".next", data)
-            staged.append(item.key)
-            manifest["objects"].append({"path": item.path, "kind": item.kind, "key": item.key,
-                                        "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)})
+            digest = hashlib.sha256(data).hexdigest()
+            immutable_key = f"{item.key}.{digest}"
+            _put_immutable(store, immutable_key, data, digest)
+            manifest["objects"].append({"path": item.path, "kind": item.kind, "key": immutable_key,
+                                        "sha256": digest, "bytes": len(data)})
     store.put(MANIFEST + ".next", json.dumps(manifest, ensure_ascii=False, indent=1).encode("utf-8"))
-    for key in staged:
-        store.rename(key + ".next", key)
     store.rename(MANIFEST + ".next", MANIFEST)
     return manifest
 
@@ -310,7 +423,7 @@ def restore(target: Path, store) -> dict:
     raw = store.get(MANIFEST)
     if raw is None:
         raise StateIntegrityError("找不到 state/manifest.json")
-    manifest = json.loads(raw.decode("utf-8"))
+    manifest = _decode_manifest(raw)
     target.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=target) as scratch_dir:
         scratch = Path(scratch_dir)
@@ -344,8 +457,8 @@ def restore(target: Path, store) -> dict:
 
 
 def remote_data_date(store) -> str | None:
-    raw = store.get(MANIFEST)
-    return json.loads(raw.decode("utf-8")).get("data_date") if raw else None
+    manifest = _remote_manifest(store)
+    return manifest["data_date"] if manifest is not None else None
 
 
 def init(root: Path, store, *, data_date: str, confirm: bool) -> dict:
@@ -354,6 +467,7 @@ def init(root: Path, store, *, data_date: str, confirm: bool) -> dict:
     - 沒有 ``confirm`` 不上傳（會蓋掉雲端 manifest）。
     - 雲端已有比 ``data_date`` 新的狀態（Actions 已在跑）時拒絕，避免把雲端倒退回舊資料日。
     """
+    data_date = require_iso_date(data_date, "data_date")
     if not confirm:
         raise SystemExit("init 會覆蓋雲端 state/manifest.json；確認後請加 --confirm（先跑 plan 看大小）")
     existing = remote_data_date(store)
@@ -369,6 +483,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="每日更新工作集：上傳到 R2 或從 R2 還原")
     parser.add_argument("command", choices=["upload", "restore", "plan", "init"])
     parser.add_argument("--data-date", help="upload／init 時的資料日 YYYY-MM-DD")
+    parser.add_argument("--cursor-domain", choices=("market", "level"), default="market",
+                        help="upload 更新的分域 cursor；init 固定為 market")
     parser.add_argument("--store-dir", type=Path, help="以本機目錄模擬 R2（不給就用環境變數連 R2）")
     parser.add_argument("--target", type=Path, default=ROOT, help="restore 目標根目錄")
     parser.add_argument("--confirm", action="store_true", help="init 真的上傳（否則只報錯提示）")
@@ -379,21 +495,34 @@ def main(argv: list[str] | None = None) -> int:
             for item in WORKING_SET:
                 data = _pack(ROOT, item, Path(scratch))
                 sizes.append({"path": item.path, "gz_bytes": len(data) if data else None})
-        print(json.dumps({"objects": sizes, "total_gz_mb": round(sum(s["gz_bytes"] or 0 for s in sizes) / 1e6, 1)},
-                         ensure_ascii=False, indent=1))
+        total_gz_mb = round(sum(s["gz_bytes"] or 0 for s in sizes) / 1e6, 1)
+        print(json.dumps({
+            "objects": sizes,
+            "total_gz_mb": total_gz_mb,
+            "immutable_space_estimate": f"每次成功 upload 最多新增約 {total_gz_mb} MB；未變物件依 SHA 重用",
+            "remote_gc": "disabled；須先審核保留窗、費用與可還原性後另行啟用",
+        }, ensure_ascii=False, indent=1))
         return 0
     if args.command in ("upload", "init") and not args.data_date:
         parser.error(f"{args.command} 需要 --data-date")
+    if args.command in ("upload", "init"):
+        try:
+            require_iso_date(args.data_date, "--data-date")
+        except StateIntegrityError as error:
+            parser.error(str(error))
+    if args.command == "init" and args.cursor_domain != "market":
+        parser.error("init 只能建立 market cursor")
     if args.command == "init" and not args.confirm:
         init(ROOT, None, data_date=args.data_date, confirm=False)
     store = DirectoryStore(args.store_dir) if args.store_dir else R2Store.from_env()
     if args.command == "init":
         manifest = init(ROOT, store, data_date=args.data_date, confirm=True)
     elif args.command == "upload":
-        manifest = upload(ROOT, store, data_date=args.data_date)
+        manifest = upload(ROOT, store, data_date=args.data_date, cursor_domain=args.cursor_domain)
     else:
         manifest = restore(args.target, store)
-    print(json.dumps({"data_date": manifest["data_date"], "objects": len(manifest["objects"])}, ensure_ascii=False))
+    print(json.dumps({"data_date": manifest["data_date"], "cursors": manifest.get("cursors"),
+                      "objects": len(manifest["objects"])}, ensure_ascii=False))
     return 0
 
 

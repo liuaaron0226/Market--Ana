@@ -2,7 +2,7 @@
 
 本機以目錄模擬 R2（DirectoryStore），驗證：
 - manifest 記錄每個物件的 SHA 與資料日；下載還原後逐檔 SHA 相符。
-- 上傳先寫 *.next，全部成功才換成正式 manifest；中途失敗不會讓舊狀態失效。
+- 上傳使用內容定址 immutable object key，全部成功才切換 manifest；put／copy／commit 中斷不會讓舊狀態失效。
 - 物件被竄改或缺漏時還原拒絕，不留下半份工作集。
 - 上市日 K 可裁成最近 N 個交易日，裁後的庫仍能算 300 根指標。
 - 還原後的工作集足以完成一天的增量更新（以 daily_ingest 附加一日驗證）。
@@ -46,6 +46,44 @@ class FailingStore(ss.DirectoryStore):
         super().put(key, data)
 
 
+class RecordingStore(ss.DirectoryStore):
+    def __init__(self, root: Path) -> None:
+        super().__init__(root)
+        self.puts: list[str] = []
+
+    def put(self, key: str, data: bytes) -> None:
+        self.puts.append(key)
+        super().put(key, data)
+
+
+class RenameFailureStore(ss.DirectoryStore):
+    def __init__(self, root: Path, *, fail_on_rename: int, reader_target: Path | None = None) -> None:
+        super().__init__(root)
+        self.fail_on_rename = fail_on_rename
+        self.reader_target = reader_target
+        self.rename_count = 0
+        self.reader_manifest: dict | None = None
+        self.reader_error: Exception | None = None
+
+    def rename(self, src: str, dst: str) -> None:
+        self.rename_count += 1
+        if self.rename_count == self.fail_on_rename:
+            raise OSError("模擬永久 COPY 失敗")
+        super().rename(src, dst)
+        if self.reader_target is not None and self.rename_count == 1:
+            try:
+                self.reader_manifest = ss.restore(self.reader_target, ss.DirectoryStore(self.root))
+            except Exception as error:  # 測試要保留並行 reader 的實際錯誤供斷言
+                self.reader_error = error
+
+
+class CommitFailureStore(ss.DirectoryStore):
+    def rename(self, src: str, dst: str) -> None:
+        if dst == ss.MANIFEST:
+            raise OSError("模擬永久 manifest commit 失敗")
+        super().rename(src, dst)
+
+
 class StateSyncTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -86,15 +124,134 @@ class StateSyncTest(unittest.TestCase):
     def test_interrupted_upload_keeps_previous_manifest(self) -> None:
         good = ss.DirectoryStore(self.bucket)
         ss.upload(self.local, good, self.items, data_date="2026-11-05")
-        broken = FailingStore(self.bucket, fail_on="liquid-universe.tar.gz.next")
+        broken = FailingStore(self.bucket, fail_on=".next")
         with self.assertRaises(OSError):
             ss.upload(self.local, broken, self.items, data_date="2026-11-06")
         self.assertEqual(ss.restore(self.restore, good)["data_date"], "2026-11-05")
 
+    def test_object_copy_failure_does_not_break_old_manifest_or_concurrent_reader(self) -> None:
+        good = ss.DirectoryStore(self.bucket)
+        old = ss.upload(self.local, good, self.items, data_date="2026-11-05")
+        self.db.write_bytes(self.db.read_bytes() + b"new-version")
+        (self.local / "data/liquid-universe/2026-11-06.json").write_text('{"members":["2330"]}', encoding="utf-8")
+        reader_target = Path(self.tmp.name) / "concurrent-reader"
+        broken = RenameFailureStore(self.bucket, fail_on_rename=2, reader_target=reader_target)
+
+        with self.assertRaises(OSError):
+            ss.upload(self.local, broken, self.items, data_date="2026-11-06")
+
+        self.assertIsNone(broken.reader_error)
+        self.assertEqual(broken.reader_manifest["data_date"], "2026-11-05")
+        self.assertEqual(ss.restore(self.restore, good)["data_date"], "2026-11-05")
+        current = json.loads(good.get(ss.MANIFEST).decode("utf-8"))
+        self.assertEqual(current, old)
+
+    def test_manifest_commit_failure_keeps_previous_manifest_restorable(self) -> None:
+        good = ss.DirectoryStore(self.bucket)
+        old = ss.upload(self.local, good, self.items, data_date="2026-11-05")
+        self.db.write_bytes(self.db.read_bytes() + b"new-version")
+        broken = CommitFailureStore(self.bucket)
+
+        with self.assertRaises(OSError):
+            ss.upload(self.local, broken, self.items, data_date="2026-11-06")
+
+        self.assertEqual(ss.restore(self.restore, good)["data_date"], "2026-11-05")
+        self.assertEqual(json.loads(good.get(ss.MANIFEST).decode("utf-8")), old)
+
+    def test_regular_upload_rejects_older_date_before_any_object_put(self) -> None:
+        store = RecordingStore(self.bucket)
+        ss.upload(self.local, store, self.items, data_date="2026-11-10")
+        store.puts.clear()
+        with self.assertRaises(ss.StateIntegrityError) as caught:
+            ss.upload(self.local, store, self.items, data_date="2026-11-09")
+        self.assertIn("2026-11-10", str(caught.exception))
+        self.assertEqual(store.puts, [])
+        self.assertEqual(ss.restore(self.restore, store)["data_date"], "2026-11-10")
+
+    def test_upload_rejects_non_strict_or_wrong_type_date_before_any_put(self) -> None:
+        for value in ("not-a-date", "2026-99-99", "20261111", None, 20261111):
+            with self.subTest(value=value):
+                store = RecordingStore(self.bucket / str(value))
+                with self.assertRaises(ss.StateIntegrityError):
+                    ss.upload(self.local, store, self.items, data_date=value)
+                self.assertEqual(store.puts, [])
+
+    def test_bad_remote_manifest_or_cursor_fails_closed_before_any_put(self) -> None:
+        bad_manifests = (
+            b"{not-json",
+            json.dumps({"schema": "market-ana-state/v1", "objects": []}).encode(),
+            json.dumps({"schema": "market-ana-state/v1", "data_date": 20261111, "objects": []}).encode(),
+            json.dumps({"schema": "market-ana-state/v1", "data_date": "not-a-date", "objects": []}).encode(),
+            json.dumps({"schema": "market-ana-state/v1", "data_date": "2026-11-10", "cursors": "bad", "objects": []}).encode(),
+            json.dumps({"schema": "market-ana-state/v1", "data_date": "2026-11-10", "cursors": {"market_data_date": "2026-99-99"}, "objects": []}).encode(),
+            json.dumps({"schema": "market-ana-state/v1", "data_date": "2026-11-10", "cursors": {"market_data_date": "2026-11-09"}, "objects": []}).encode(),
+        )
+        for index, raw in enumerate(bad_manifests):
+            with self.subTest(index=index):
+                store = RecordingStore(self.bucket / f"bad-{index}")
+                store.put(ss.MANIFEST, raw)
+                store.puts.clear()
+                with self.assertRaises(ss.StateIntegrityError) as caught:
+                    ss.upload(self.local, store, self.items, data_date="2026-11-11")
+                self.assertIn("state/manifest.json", str(caught.exception))
+                self.assertIn("人工", str(caught.exception))
+                self.assertEqual(store.puts, [])
+
+    def test_level_cursor_does_not_advance_market_or_block_delayed_daily(self) -> None:
+        state = self.local / "data/level-signals/state.json"
+        state.parent.mkdir(parents=True)
+        state.write_text('{"last_processed_date":"2026-11-10","recommended_level":65}', encoding="utf-8")
+        items = [*self.items, ss.Item("data/level-signals/state.json")]
+        store = RecordingStore(self.bucket)
+        ss.upload(self.local, store, items, data_date="2026-11-10", cursor_domain="market")
+
+        state.write_text('{"last_processed_date":"2026-11-11","recommended_level":80}', encoding="utf-8")
+        level_manifest = ss.upload(self.local, store, items, data_date="2026-11-11", cursor_domain="level")
+        self.assertEqual(level_manifest["data_date"], "2026-11-10")
+        self.assertEqual(level_manifest["cursors"], {
+            "market_data_date": "2026-11-10",
+            "level_last_processed_date": "2026-11-11",
+        })
+
+        self.db.write_bytes(self.db.read_bytes() + b"delayed-market-publication")
+        delayed = ss.upload(self.local, store, items, data_date="2026-11-10", cursor_domain="market")
+        self.assertEqual(delayed["data_date"], "2026-11-10")
+        self.assertEqual(delayed["cursors"]["level_last_processed_date"], "2026-11-11")
+        restored = ss.restore(self.restore, store)
+        self.assertEqual(restored["cursors"]["level_last_processed_date"], "2026-11-11")
+        self.assertEqual(json.loads((self.restore / "data/level-signals/state.json").read_text())["last_processed_date"], "2026-11-11")
+
+        store.puts.clear()
+        with self.assertRaises(ss.StateIntegrityError):
+            ss.upload(self.local, store, items, data_date="2026-11-09", cursor_domain="market")
+        self.assertEqual(store.puts, [])
+
+    def test_legacy_manifest_fixed_object_key_restores_and_gains_cursors_on_next_upload(self) -> None:
+        item = ss.Item("data/liquid-universe")
+        store = ss.DirectoryStore(self.bucket)
+        current = ss.upload(self.local, store, [item], data_date="2026-11-10", cursor_domain="market")
+        entry = current["objects"][0]
+        legacy_key = item.key
+        store.put(legacy_key, store.get(entry["key"]))
+        legacy = {key: value for key, value in current.items() if key != "cursors"}
+        legacy["objects"][0]["key"] = legacy_key
+        store.put(ss.MANIFEST, json.dumps(legacy).encode("utf-8"))
+
+        self.assertEqual(ss.restore(self.restore, store)["data_date"], "2026-11-10")
+        state = self.local / "data/level-signals/state.json"
+        state.parent.mkdir(parents=True)
+        state.write_text('{"last_processed_date":"2026-11-11"}', encoding="utf-8")
+        upgraded = ss.upload(self.local, store, [item, ss.Item("data/level-signals/state.json")],
+                             data_date="2026-11-11", cursor_domain="level")
+        self.assertEqual(upgraded["data_date"], "2026-11-10")
+        self.assertEqual(upgraded["cursors"]["market_data_date"], "2026-11-10")
+        self.assertEqual(upgraded["cursors"]["level_last_processed_date"], "2026-11-11")
+
     def test_tampered_object_is_rejected_and_target_left_untouched(self) -> None:
         store = ss.DirectoryStore(self.bucket)
         ss.upload(self.local, store, self.items, data_date="2026-11-06")
-        key = next(k for k in store.keys() if k.endswith("stock-history.sqlite.gz"))
+        prefix = ss.Item("data/stock-history/stock-history.sqlite", kind="sqlite").key + "."
+        key = next(k for k in store.keys() if k.startswith(prefix) and not k.endswith(".next"))
         store.put(key, b"tampered")
         with self.assertRaises(ss.StateIntegrityError):
             ss.restore(self.restore, store)
@@ -235,6 +392,14 @@ class StateSyncTest(unittest.TestCase):
                 ss.main(["init", "--data-date", "2026-11-06", "--store-dir", str(self.bucket)])
         self.assertIn("--confirm", str(caught.exception))
         self.assertEqual(store.keys(), [])
+
+    def test_cli_rejects_impossible_or_compact_date_before_store_write(self) -> None:
+        for value in ("2026-99-99", "20261111", "not-a-date"):
+            with self.subTest(value=value):
+                bucket = self.bucket / value
+                with self.assertRaises(SystemExit):
+                    ss.main(["upload", "--data-date", value, "--store-dir", str(bucket)])
+                self.assertFalse(bucket.exists())
 
     def test_init_with_confirm_uploads_and_verifies_roundtrip(self) -> None:
         store = ss.DirectoryStore(self.bucket)

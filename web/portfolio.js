@@ -1,9 +1,47 @@
 (() => {
   'use strict';
+
+  function normalizeAiDigest(payload) {
+    const byCode = new Map();
+    for (const item of payload?.stocks?.items || []) {
+      const code = typeof item?.code === 'string' ? item.code.trim().toUpperCase() : '';
+      if (!code) continue;
+      if (item.generation_status !== 'generated') {
+        byCode.set(code, { status: 'unproduced', text: '今日未產生' });
+        continue;
+      }
+      const parts = [item.status, item.action && item.reason ? `${item.action}：${item.reason}` : item.action || item.reason]
+        .filter(value => typeof value === 'string' && value.trim());
+      byCode.set(code, { status: 'generated', text: parts.join(' · ') || '今日未產生' });
+    }
+    return {
+      dataDate: typeof payload?.data_date === 'string' ? payload.data_date : null,
+      status: payload?.stocks?.status || 'unproduced',
+      byCode,
+    };
+  }
+
+  function aiEntryFor(digest, code) {
+    return digest?.byCode?.get(String(code).toUpperCase()) || { status: 'unproduced', text: '今日未產生' };
+  }
+
+  if (typeof window !== 'undefined') window.PortfolioAi = Object.freeze({ normalize: normalizeAiDigest, entryFor: aiEntryFor });
+  if (typeof document === 'undefined') return;
+
   const $ = id => document.getElementById(id);
   const money = new Intl.NumberFormat('zh-TW', { style: 'currency', currency: 'TWD', maximumFractionDigits: 0 });
   const number = new Intl.NumberFormat('zh-TW', { maximumFractionDigits: 2 });
-  const state = { watchlist: [], holdings: [] };
+  const state = { watchlist: [], holdings: [], level: null, aiDigest: null, aiVisible: false };
+  let features = { level_advice: false, ai_stock_advice: false };
+
+  async function loadReleaseFeatures() {
+    try {
+      const response = await fetch('/api/features', { cache: 'no-store', headers: { Accept: 'application/json' } });
+      const payload = response.ok ? await response.json() : null;
+      if (payload?.schema === 'market-ana-features/v1' && payload.features) features = payload.features;
+    } catch (_) { /* feature gate 讀取失敗時維持 default-off */ }
+    $('levelPanel').hidden = !features.level_advice;
+  }
 
   function setThemeLabel() {
     const dark = getComputedStyle(document.documentElement).colorScheme.includes('dark');
@@ -31,7 +69,11 @@
     });
     if (response.status === 204) return null;
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.message || payload.error || '暫時無法處理');
+    if (!response.ok) {
+      const error = new Error(payload.message || payload.error || '暫時無法處理');
+      error.status = response.status;
+      throw error;
+    }
     return payload;
   }
 
@@ -39,6 +81,19 @@
     node.textContent = message;
     if (kind) node.dataset.state = kind;
     else node.removeAttribute('data-state');
+  }
+
+  function stockAiDigest(code) {
+    if (!state.aiVisible) return null;
+    const entry = aiEntryFor(state.aiDigest, code);
+    const host = document.createElement('div');
+    host.className = `pf-ai${entry.status === 'generated' ? '' : ' pf-ai-empty'}`;
+    const label = document.createElement('span');
+    label.textContent = state.aiDigest?.dataDate ? `AI 整理 · ${state.aiDigest.dataDate}` : 'AI 整理';
+    const text = document.createElement('p');
+    text.textContent = entry.text;
+    host.append(label, text);
+    return host;
   }
 
   function stockIdentity(item) {
@@ -57,6 +112,8 @@
     scope.className = `pf-scope${item.in_universe ? '' : ' outside'}`;
     scope.textContent = item.in_universe ? '可開啟本站完整分析' : '不在本站分析範圍';
     host.append(link, meta, scope);
+    const digest = stockAiDigest(item.code);
+    if (digest) host.append(digest);
     return host;
   }
 
@@ -128,6 +185,144 @@
     return cell;
   }
 
+  const groupLabels = {
+    trend: '台股與美股趨勢',
+    volatility: '市場波動',
+    warning: '跌前預警',
+    taiwan_funding: '台灣資金面',
+  };
+  const signalLabels = {
+    taiex_trend: '加權指數趨勢', sp500_trend: 'S&P 500 趨勢', vix: 'VIX',
+    taiex_volatility: '台股 20 日波動', breadth: '上市股票強弱', sox_5d: '費城半導體 5 日跌幅',
+    credit_stress: 'OFR FSI Credit 壓力變化', foreign_flow: '外資 5 日累計', twd_depreciation: '新台幣 20 日貶值',
+  };
+
+  function signalValueText(signal) {
+    if (signal.unavailable) return '未接，固定 0 分';
+    if (!signal.available) return '缺資料';
+    if (signal.key === 'taiex_trend' || signal.key === 'sp500_trend') {
+      return `收盤 ${number.format(signal.raw.close)}，200 日線 ${number.format(signal.raw.ma200)}`;
+    }
+    if (signal.key === 'breadth') {
+      return `20 日下降 ${number.format(signal.raw.drop_pp_20d)} 個百分點，指數${signal.raw.taiex_above_ma200 ? '仍在' : '已跌破'} 200 日線`;
+    }
+    return typeof signal.raw === 'number' ? `近三年分位 ${number.format(signal.raw * 100)}%` : String(signal.raw);
+  }
+
+  function appendLevelPoint(text) {
+    const item = document.createElement('li');
+    item.textContent = text;
+    $('levelPoints').append(item);
+  }
+
+  function renderLevel() {
+    const payload = state.level;
+    $('levelPoints').replaceChildren();
+    $('levelBreakdown').replaceChildren();
+    if (!payload) return;
+    const { current, advice, adjustment } = payload;
+    $('cashAmount').value = current.cash_twd === null ? '' : String(current.cash_twd);
+    $('cashMeta').textContent = current.cash_twd === null
+      ? '尚未申報，不含緊急預備金'
+      : `${current.cash_stale ? '現金可能過期 · ' : ''}更新於 ${new Date(current.cash_updated_at).toLocaleString('zh-TW')}`;
+    $('currentLevel').textContent = current.level === null ? '—' : `${number.format(current.level)}%`;
+    if (!advice) {
+      $('recommendedLevel').textContent = '—';
+      $('levelGap').textContent = '—';
+      $('levelAmount').textContent = '—';
+      $('levelDate').textContent = '今日建議尚未產生';
+      $('levelStatus').textContent = payload.warning || '等待資料';
+      $('levelStatus').dataset.state = 'warning';
+      $('levelConclusion').textContent = current.complete ? '目前水位已算好，等待今天的大盤建議。' : '先補齊現金與庫存價格，才能算出完整水位。';
+      return;
+    }
+    $('levelDate').textContent = `資料日 ${advice.data_date}`;
+    $('recommendedLevel').textContent = advice.recommended_level === null ? '—' : `${number.format(advice.recommended_level)}%`;
+    $('levelStatus').textContent = advice.warning || (advice.missing_signals?.length ? `少看 ${advice.missing_signals.length} 項資料` : '資料已到齊');
+    $('levelStatus').dataset.state = advice.warning || advice.missing_signals?.length ? 'warning' : 'ok';
+    if (!adjustment) {
+      $('levelGap').textContent = '—';
+      $('levelAmount').textContent = '—';
+      $('levelConclusion').textContent = current.warning || '目前資料不完整，今天先不要依部分數字調整部位。';
+      if (current.total_assets !== null) appendLevelPoint(`總資金 ${money.format(current.total_assets)}（股票市值 ${money.format(current.market_value)}＋計入現金 ${money.format(current.cash_twd)}）`);
+      else appendLevelPoint(`目前可估股票市值 ${money.format(current.market_value)}；總資金因下列缺口尚無法完整計算`);
+      if (current.missing_price_codes.length) appendLevelPoint(`缺少收盤價：${current.missing_price_codes.join('、')}`);
+      if (current.cash_twd === null) appendLevelPoint('尚未申報要計入總資金的現金');
+    } else {
+      const gap = adjustment.percentage_points;
+      $('levelGap').textContent = `${gap > 0 ? '+' : ''}${number.format(gap)} 個百分點`;
+      $('levelAmount').textContent = adjustment.within_tolerance ? '不用動' : money.format(adjustment.amount_twd);
+      $('levelConclusion').textContent = adjustment.within_tolerance
+        ? '目前水位在 5 個百分點容忍帶內，今天不用動。'
+        : gap > 0
+          ? `目前股票水位偏低，可用現金增加約 ${money.format(adjustment.amount_twd)}。`
+          : `目前股票水位偏高，由您決定減碼哪些持股，金額約 ${money.format(adjustment.amount_twd)}。`;
+      appendLevelPoint(`總資金 ${money.format(current.total_assets)}（股票市值 ${money.format(current.market_value)}＋計入現金 ${money.format(current.cash_twd)}）`);
+      if (!adjustment.within_tolerance) appendLevelPoint(`估計手續費 ${money.format(adjustment.estimated_commission_twd)}${adjustment.estimated_tax_twd ? `，證交稅 ${money.format(adjustment.estimated_tax_twd)}` : ''}`);
+    }
+    if (current.cash_warning) appendLevelPoint(current.cash_warning);
+    (advice.missing_signals || []).forEach(key => {
+      const source = advice.source_status?.[key];
+      appendLevelPoint(`${source?.label || key}今天缺資料${source?.reason ? `：${source.reason}` : ''}`);
+    });
+    (advice.unavailable_signals || []).forEach(key => {
+      const source = advice.source_status?.[key];
+      appendLevelPoint(`${source?.label || key}未接，今天固定 0 分${source?.reason ? `：${source.reason}` : ''}`);
+    });
+    appendLevelPoint('台股趨勢組為 0 分時，其他訊號不會單獨把建議降到 80% 以下');
+    const score = advice.score || { groups: {} };
+    const grid = document.createElement('div');
+    grid.className = 'pf-score-grid';
+    Object.entries(groupLabels).forEach(([key, label]) => {
+      const section = document.createElement('section');
+      const title = document.createElement('h3');
+      title.textContent = label;
+      const value = document.createElement('strong');
+      value.textContent = `${score.groups?.[key] ?? 0} 分`;
+      const raw = (score.signals || []).filter(signal => signal.group === key)
+        .map(signal => `${signalLabels[signal.key] || signal.key}：${signalValueText(signal)}；門檻 ${signal.threshold}`).join('；');
+      const note = document.createElement('p');
+      note.textContent = raw || '今天沒有可列的明細';
+      section.append(title, value, note);
+      grid.append(section);
+    });
+    $('levelBreakdown').append(grid);
+    const progress = document.createElement('p');
+    progress.className = 'pf-level-warning';
+    const confirmation = advice.confirmation || {};
+    const wave = advice.wave || {};
+    const direction = confirmation.direction === 'down' ? '降水位' : confirmation.direction === 'up' ? '升水位' : '沒有待確認的升降級';
+    let waveText = '目前不在大跌加碼波段。';
+    if (wave.active) {
+      const next = (wave.used_tranches || []).length + 1;
+      const threshold = [null, 15, 25, 35][next];
+      const missing = [];
+      if (threshold && (wave.drawdown || 0) * 100 < threshold) missing.push(`跌幅達 ${threshold}%`);
+      if (!wave.vix_retreated) missing.push('VIX 從近 10 日高點回落至少 20%');
+      if (!wave.stable_three_days) missing.push(`台股連續 3 日不破底（目前 ${wave.no_new_low_days || 0} 日）`);
+      waveText = `本波從 ${number.format(wave.reference_high)} 點計，跌幅 ${number.format((wave.drawdown || 0) * 100)}%，已用第 ${(wave.used_tranches || []).join('、') || '零'} 批。` +
+        (next <= 3 ? `第 ${next} 批${missing.length ? `還差：${missing.join('、')}` : '條件已到齊'}。` : '三批已用完，本波沒有後手。');
+    }
+    progress.textContent = `${direction}${confirmation.required ? `：${confirmation.days}/${confirmation.required} 個交易日` : ''}。${waveText}` +
+      `${advice.lock?.remaining_days ? ` 加碼後降級限制還有 ${advice.lock.remaining_days} 個交易日。` : ''}`;
+    $('levelBreakdown').append(progress);
+    const monitoring = advice.online_monitoring;
+    if (monitoring?.status === 'insufficient-history') {
+      const note = document.createElement('p');
+      note.className = 'pf-level-warning';
+      note.textContent = '上線追蹤時間尚不足，還不能判斷一年期表現。歷史建議仍會持續留存。';
+      $('levelBreakdown').append(note);
+    }
+    if (monitoring?.display_disabled) {
+      $('levelConclusion').textContent = `建議已停用${monitoring.disabled_at ? `（${monitoring.disabled_at}）` : ''}；背景仍持續計算與留存。`;
+    }
+  }
+
+  async function loadLevel() {
+    state.level = await api('/api/holdings/level');
+    renderLevel();
+  }
+
   function renderSummary() {
     const priced = state.holdings.filter(item => Number.isFinite(item.market_value));
     const marketValue = priced.reduce((sum, item) => sum + item.market_value, 0);
@@ -184,7 +379,7 @@
           try {
             await api(`/api/holdings/${encodeURIComponent(item.code)}`, { method: 'DELETE', body: {} });
             setStatus($('holdingStatus'), `${item.code} 庫存已刪除。`, 'success');
-            await loadHoldings();
+            await Promise.all([loadHoldings(), ...(features.level_advice ? [loadLevel()] : [])]);
           } catch (error) { setStatus($('holdingStatus'), error.message, 'error'); }
         }),
       );
@@ -203,6 +398,21 @@
     const payload = await api('/api/holdings');
     state.holdings = payload.items || [];
     renderHoldings();
+  }
+
+  async function loadAiDigest() {
+    try {
+      state.aiDigest = normalizeAiDigest(await api('/api/ai-digest?scope=portfolio'));
+      state.aiVisible = true;
+    } catch (error) {
+      if (error.status === 403) {
+        state.aiDigest = null;
+        state.aiVisible = false;
+        return;
+      }
+      state.aiDigest = normalizeAiDigest(null);
+      state.aiVisible = true;
+    }
   }
 
   $('watchlistForm').addEventListener('submit', async event => {
@@ -236,12 +446,30 @@
       } });
       form.reset();
       setStatus($('holdingStatus'), `${code} 庫存已儲存。`, 'success');
-      await loadHoldings();
+      await Promise.all([loadHoldings(), ...(features.level_advice ? [loadLevel()] : [])]);
     } catch (error) { setStatus($('holdingStatus'), error.message, 'error'); }
     finally { button.disabled = false; }
   });
 
-  Promise.all([loadWatchlist(), loadHoldings()]).then(() => {
+  $('cashForm').addEventListener('submit', async event => {
+    event.preventDefault();
+    const button = event.currentTarget.querySelector('button[type="submit"]');
+    button.disabled = true;
+    $('cashMeta').textContent = '正在更新…';
+    try {
+      const cash = await api('/api/holdings/cash', { method: 'POST', body: { amount_twd: Number($('cashAmount').value) } });
+      $('cashMeta').textContent = `已更新 ${new Date(cash.updated_at).toLocaleString('zh-TW')} · 第 ${cash.version} 版`;
+      await loadLevel();
+    } catch (error) {
+      $('cashMeta').textContent = error.message;
+    } finally { button.disabled = false; }
+  });
+
+  loadReleaseFeatures().then(async () => {
+    await Promise.all([loadWatchlist(), loadHoldings(), ...(features.level_advice ? [loadLevel()] : [])]);
+    if (features.ai_stock_advice) await loadAiDigest();
+    renderWatchlist();
+    renderHoldings();
     const dates = state.holdings.map(item => item.price_as_of).filter(Boolean).sort();
     const stale = state.holdings.some(item => item.price_stale);
     $('portfolioFreshness').textContent = dates.length

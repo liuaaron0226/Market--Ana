@@ -3,7 +3,7 @@
 // 比對改用 regex，允許 ?query，但檔名必須完全相同（kchart.js.bak 之類不算）。
 export const WEB_FILES = [
   "minimal.html", "minimal.css", "minimal.js", "kchart.js", "chart-studies.js", "chart-studies.css",
-  "stock.html", "stock.css", "stock.js",
+  "stock.html", "stock.css", "stock.js", "intraday.js",
   // claude-60 設計改版（11-09）新增的資產
   "bold.css", "home.css", "panel.css", "motion.js", "home-motion.js", "period-switch.js",
   "portfolio.html", "portfolio.css", "portfolio.js",

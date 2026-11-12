@@ -259,6 +259,122 @@ async function listHoldings(db, email, deps) {
   return response(200, { items });
 }
 
+const MAX_CASH_TWD = 1_000_000_000_000;
+const CASH_STALE_DAYS = 30;
+const COMMISSION_RATE = 0.001425;
+const SELL_TAX_RATE = 0.003;
+
+function cashAmount(value) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > MAX_CASH_TWD) {
+    throw new UserPortfolioError(400, `現金須為 0～${MAX_CASH_TWD.toLocaleString("en-US")} 元`);
+  }
+  return rounded(value);
+}
+
+async function listCash(db, email, deps) {
+  const row = await db.prepare(
+    "SELECT amount_twd, updated_at, version FROM user_cash_current WHERE email = ?",
+  ).bind(email).first();
+  if (!row) return response(200, { amount_twd: null, updated_at: null, version: null, stale: false, warning: "尚未申報要計入總資金的現金" });
+  const now = Number((deps.now || Date.now)());
+  const ageDays = Math.floor((now - Date.parse(row.updated_at)) / 86_400_000);
+  const stale = Number.isFinite(ageDays) && ageDays > CASH_STALE_DAYS;
+  return response(200, {
+    amount_twd: Number(row.amount_twd), updated_at: row.updated_at, version: Number(row.version), age_days: Math.max(0, ageDays), stale,
+    warning: stale ? "現金已超過 30 天未更新，金額仍照申報值計算" : null,
+  });
+}
+
+async function saveCash(request, db, email, deps) {
+  const body = await readBody(request);
+  const amount = cashAmount(body.amount_twd);
+  const at = new Date((deps.now || Date.now)()).toISOString();
+  const existing = await db.prepare("SELECT version FROM user_cash_current WHERE email = ?").bind(email).first();
+  let version;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const inserted = await db.prepare(
+        "INSERT INTO user_cash_history (email, version, amount_twd, effective_at, recorded_at) " +
+          "SELECT ?, COALESCE(MAX(version), 0) + 1, ?, ?, ? FROM user_cash_history WHERE email = ? RETURNING version",
+      ).bind(email, amount, at, at, email).first();
+      version = Number(inserted.version);
+      break;
+    } catch (error) {
+      if (attempt === 1) throw error;
+    }
+  }
+  return response(existing ? 200 : 201, { amount_twd: amount, updated_at: at, version, stale: false, warning: null });
+}
+
+function publicLevelAdvice(payload, stored) {
+  const visible = [
+    "recommended_level", "raw_level", "international_cap_applied", "warning",
+    "missing_signals", "unavailable_signals", "score", "confirmation", "wave", "lock",
+    "online_monitoring", "parameters", "source_status",
+  ];
+  const advice = Object.fromEntries(visible.filter((key) => payload[key] !== undefined).map((key) => [key, payload[key]]));
+  return {
+    ...advice,
+    data_date: stored.data_date,
+    version: Number(stored.version),
+    rule_version: stored.rule_version,
+    source_cutoff: stored.source_cutoff,
+    created_at: stored.created_at,
+  };
+}
+
+async function currentLevel(db, email, deps) {
+  const cashResponse = await listCash(db, email, deps);
+  const cash = await cashResponse.json();
+  const holdingsResponse = await listHoldings(db, email, deps);
+  const holdings = (await holdingsResponse.json()).items;
+  const missing = holdings.filter((item) => item.market_value === null).map((item) => item.code);
+  const marketValue = rounded(holdings.filter((item) => item.market_value !== null).reduce((sum, item) => sum + Number(item.market_value), 0));
+  const complete = cash.amount_twd !== null && missing.length === 0;
+  const totalAssets = complete ? rounded(marketValue + Number(cash.amount_twd)) : null;
+  const current = {
+    complete,
+    market_value: marketValue,
+    cash_twd: cash.amount_twd,
+    cash_updated_at: cash.updated_at,
+    cash_stale: cash.stale,
+    cash_warning: cash.warning,
+    missing_price_codes: missing,
+    total_assets: totalAssets,
+    level: complete && totalAssets > 0 ? rounded(marketValue / totalAssets * 100) : null,
+    warning: complete && totalAssets === 0 ? "總資金為 0，尚無法計算目前水位" : null,
+  };
+  const stored = await db.prepare(
+    "SELECT data_date, version, rule_version, source_cutoff, payload, created_at FROM level_daily " +
+      "WHERE is_current = 1 ORDER BY data_date DESC LIMIT 1",
+  ).first();
+  if (!stored) return response(200, { current, advice: null, adjustment: null, warning: "今日建議尚未產生" });
+  const payload = typeof stored.payload === "string" ? JSON.parse(stored.payload) : stored.payload;
+  const recommended = payload.recommended_level === null ? null : Number(payload.recommended_level);
+  let adjustment = null;
+  if (current.complete && current.level !== null && recommended !== null) {
+    const difference = rounded(recommended - current.level);
+    const amount = rounded(Math.abs(difference) / 100 * current.total_assets);
+    const within = Math.abs(difference) <= 5;
+    const action = difference > 0 ? "increase" : difference < 0 ? "decrease" : "none";
+    adjustment = {
+      percentage_points: difference,
+      amount_twd: within ? 0 : amount,
+      action: within ? "none" : action,
+      within_tolerance: within,
+      message: within ? "不用動" : action === "increase" ? "可用現金提高股票水位" : action === "decrease" ? "由本人決定減碼哪些持股" : "不用動",
+      estimated_commission_twd: within ? 0 : Math.round(amount * COMMISSION_RATE),
+      estimated_tax_twd: !within && action === "decrease" ? Math.round(amount * SELL_TAX_RATE) : 0,
+      fee_note: "手續費以 0.1425% 估算；賣出證交稅以普通股 0.3% 保守估算，ETF 實際稅率可能較低",
+    };
+  }
+  return response(200, {
+    current,
+    advice: publicLevelAdvice(payload, stored),
+    adjustment,
+  });
+}
+
 async function listSearchHistory(db, email) {
   const { results } = await db.prepare(
     "SELECT code, name, market, viewed_at FROM user_search_history WHERE email = ? ORDER BY viewed_at DESC, code LIMIT 10",
@@ -320,6 +436,15 @@ export async function handleUserPortfolio(request, env, path, email, deps = {}) 
   if (path === "/api/holdings") {
     if (request.method === "GET") return listHoldings(env.DB, email, deps);
     if (request.method === "POST") return saveHolding(request, env.DB, email, deps);
+    throw new UserPortfolioError(405, "方法不允許");
+  }
+  if (path === "/api/holdings/cash") {
+    if (request.method === "GET") return listCash(env.DB, email, deps);
+    if (request.method === "POST") return saveCash(request, env.DB, email, deps);
+    throw new UserPortfolioError(405, "方法不允許");
+  }
+  if (path === "/api/holdings/level") {
+    if (request.method === "GET") return currentLevel(env.DB, email, deps);
     throw new UserPortfolioError(405, "方法不允許");
   }
   const holdingItem = path.match(/^\/api\/holdings\/([^/]+)$/);

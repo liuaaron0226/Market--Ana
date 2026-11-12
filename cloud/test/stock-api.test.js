@@ -29,7 +29,8 @@ const next = async () => new Response("static-ok", { status: 200 });
 
 beforeEach(async () => {
   issuer = await makeIssuer();
-  env = { DB: fakeD1(), TEAM_DOMAIN: TEAM, MAIN_AUD, APPLY_AUD, OWNER_EMAIL: OWNER };
+  env = { DB: fakeD1(), TEAM_DOMAIN: TEAM, MAIN_AUD, APPLY_AUD, OWNER_EMAIL: OWNER,
+    MARKET_ANA_STRATEGIES_ENABLED: "true" };
   deps = { fetchImpl: fetchJwks(issuer.jwks), marketPack: PACK, stockPack: STOCKS, now: () => Date.parse("2026-11-07T10:00:05Z") };
 });
 
@@ -186,6 +187,18 @@ test("已核准者拿到契約 v2 分析：不含方案、總分、24項條件�
   for (const name of REFERENCE_NAMES) assert.doesNotMatch(text, new RegExp(name), name);
   assert.doesNotMatch(text, /"[TCVIF]0[1-6]"/);
   for (const value of Object.values(body.undisclosed)) assert.deepEqual(value, { status: "undisclosed", label: "原站未公開" });
+});
+
+test("核心版預設移除 strategy_v1 操作建議但保留支撐壓力，query 不能自行啟用", async () => {
+  delete env.MARKET_ANA_STRATEGIES_ENABLED;
+  const response = await req("/api/stocks/2330/analysis?MARKET_ANA_STRATEGIES_ENABLED=1");
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(Object.hasOwn(body, "strategy"), false);
+  const features = await (await req("/api/features?MARKET_ANA_STRATEGIES_ENABLED=1")).json();
+  assert.equal(features.features.strategy_v1, false);
+  assert.ok(Array.isArray(body.levels.support));
+  assert.ok(Array.isArray(body.levels.resistance));
 });
 
 test("舊的 ?preset= 參數一律回 400 並說明方案已移除，不靜默改回單一結果", async () => {

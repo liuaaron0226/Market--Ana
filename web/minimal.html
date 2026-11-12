@@ -48,7 +48,7 @@
       </div>
 
       <button class="conclusion-trigger" id="conclusionTrigger" type="button" aria-label="查看結論依據">
-        <span class="conclusion-label">下一交易日</span>
+        <span class="conclusion-label" id="conclusionLabel">下一交易日</span>
         <strong id="conclusionText">讀取判斷中</strong>
         <span class="detail-cue">依據 <span aria-hidden="true">›</span></span>
       </button>
@@ -59,10 +59,31 @@
       </button>
     </header>
 
+    <section class="ai-digest-card" id="aiDigestCard" data-state="loading" aria-labelledby="aiDigestTitle" hidden>
+      <header class="ai-digest-head">
+        <h2 id="aiDigestTitle">今日 AI 解讀</h2>
+        <p id="aiDigestDate">資料日 —</p>
+      </header>
+      <p class="ai-digest-conclusion" id="aiDigestConclusion" role="status">讀取中…</p>
+      <ul class="ai-digest-preview" id="aiDigestPreview" aria-label="今日籌碼重點"></ul>
+      <details class="ai-digest-details" id="aiDigestDetails">
+        <summary>查看大盤與籌碼明細</summary>
+        <div class="ai-digest-detail-grid">
+          <section aria-labelledby="aiDigestMarketTitle">
+            <h3 id="aiDigestMarketTitle">大盤重點</h3>
+            <ul id="aiDigestMarketPoints"></ul>
+          </section>
+          <section aria-labelledby="aiDigestFlowTitle">
+            <h3 id="aiDigestFlowTitle">籌碼與資金</h3>
+            <ul id="aiDigestFlowPoints"></ul>
+          </section>
+        </div>
+      </details>
+    </section>
+
     <section class="stock-search-panel hm-search" aria-labelledby="stockSearchTitle">
       <div class="stock-search-heading">
         <h2 id="stockSearchTitle">搜尋上市／上櫃普通股</h2>
-        <p>代號、完整名稱或部分名稱都可以</p>
         <a class="portfolio-entry" href="portfolio.html">自選股與庫存 <span aria-hidden="true">›</span></a>
       </div>
       <form class="stock-search-form" id="stockSearchForm" role="search">
@@ -72,7 +93,7 @@
         <button type="button" id="stockSearchClear">清空</button>
       </form>
       <div class="stock-search-suggestions" id="stockSearchSuggestions" aria-label="搜尋建議" hidden></div>
-      <p class="stock-search-status" id="stockSearchStatus" role="status">請輸入搜尋條件。</p>
+      <p class="stock-search-status" id="stockSearchStatus" role="status" hidden></p>
       <ul class="stock-search-results" id="stockSearchResults" aria-label="股票搜尋結果"></ul>
       <button class="stock-search-more" id="stockSearchMore" type="button" hidden>載入更多</button>
     </section>
@@ -134,6 +155,13 @@
           <button class="mobile-candle-details" id="mobileCandleDetails" type="button" hidden>這一天的詳情 <span aria-hidden="true">›</span></button>
         </div>
         <div id="chartStudies"></div>
+        <section class="market-trend" id="marketTrend" aria-labelledby="marketTrendTitle" hidden>
+          <header class="market-trend-head">
+            <h3 id="marketTrendTitle">短中長期走勢</h3>
+            <p id="marketTrendDate">資料日 —</p>
+          </header>
+          <div class="market-trend-grid" id="marketTrendGrid" role="list"></div>
+        </section>
         <p class="sr-only" id="chartSummary" aria-live="polite"></p>
       </section>
 
@@ -144,13 +172,13 @@
         <p class="read-date" id="readDate"></p>
       </section>
       <section class="chips" aria-labelledby="chipsTitle">
-        <h2 id="chipsTitle" class="hm-section-title">籌碼與資金 <small>點卡片看明細</small></h2>
+        <h2 id="chipsTitle" class="hm-section-title">籌碼與資金</h2>
         <div class="chip-grid" id="chipGrid"></div>
       </section>
       <section class="distribution" id="distribution" aria-labelledby="distributionTitle">
         <div class="distribution-heading">
           <h2 id="distributionTitle">隔日三區歷史分布</h2>
-          <p id="distributionNote">歷史樣本 <strong class="num" id="sampleCount" data-count="0">—</strong> 次，非預測機率</p>
+          <p id="distributionNote">樣本 <strong class="num" id="sampleCount" data-count="0">—</strong> 次</p>
         </div>
         <div class="distribution-bar" id="distributionBar" role="group" aria-label="隔日三區歷史分布">
           <button type="button" data-outcome="stand_back" class="outcome-up">
@@ -166,7 +194,7 @@
       </section>
 
       <section class="hm-explore" aria-labelledby="exploreTitle">
-        <h2 id="exploreTitle" class="hm-section-title">選股看板 <small>籌碼排行、產業資金、長期核心</small></h2>
+        <h2 id="exploreTitle" class="hm-section-title">選股看板</h2>
         <div class="market-screens" id="marketScreens">
           <section class="screen-block" id="chipScreens" data-state="loading" aria-labelledby="chipScreensTitle">
             <div class="screen-head">
@@ -211,9 +239,26 @@
               <h3 id="coreHoldingsTitle">長期核心持有</h3>
               <p class="screen-meta" id="coreHoldingsMeta">讀取中…</p>
             </div>
+            <form class="core-compare-form" id="coreCompareForm">
+              <label for="coreCompareInput">加入個股或 ETF</label>
+              <div class="core-compare-entry">
+                <input id="coreCompareInput" name="code" inputmode="text" autocomplete="off" maxlength="6" placeholder="輸入代號">
+                <button type="submit">加入比較</button>
+              </div>
+              <div class="core-selection" id="coreSelection" aria-label="已加入的比較標的"></div>
+              <p class="core-status" id="coreStatus" role="status" hidden></p>
+            </form>
+            <label class="core-period" for="corePeriodSelect">比較期間
+              <select id="corePeriodSelect">
+                <option value="1m">近 1 個月</option>
+                <option value="3m">近 3 個月</option>
+                <option value="1y">近 1 年</option>
+                <option value="3y">近 3 年</option>
+                <option value="5y" selected>近 5 年</option>
+              </select>
+            </label>
             <div class="core-cards" id="coreCards"></div>
             <div class="core-chart" id="coreChart"></div>
-            <p class="screen-note" id="coreNotes"></p>
           </section>
         </div>
       </section>
@@ -252,7 +297,7 @@
   <script src="market-data-local.js"></script>
   <script src="chart-studies.js?v=20261108-01"></script>
   <script src="kchart.js?v=20261109-ux1"></script>
-  <script src="minimal.js?v=20261109-ux1"></script>
+  <script src="minimal.js?v=20261111-core-release"></script>
   <script src="period-switch.js?v=20261109-ux1"></script>
   <script src="home-motion.js?v=20261109-ux1"></script>
 </body>

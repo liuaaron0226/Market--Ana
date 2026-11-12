@@ -1,0 +1,155 @@
+{
+  "conditions": {
+    "confirmed": {
+      "ma_trend": {"state": "triggered"},
+      "kd_bullish": {"state": "triggered"},
+      "momentum_overheated": {"state": "confirming"},
+      "volume_confirmed": {"state": "triggered"},
+      "heavy_volume_stall": {"state": "off"},
+      "revenue_decline": {"state": "off"},
+      "securities_lending_sale": {"state": "off"}
+    },
+    "approximate": {
+      "macd_bullish": {"state": "triggered"},
+      "volume_contraction": {"state": "triggered"}
+    }
+  },
+  "cases": [
+    {
+      "name": "完整：技術、價位、法人都齊",
+      "analysis": {
+        "_intraday": true,
+        "quote": {"close": 100},
+        "indicators": {"ma5": 101, "ma20": 99, "ma60": 96, "relative_volume": 1.25, "k9": 62, "d9": 55, "rsi14": 58, "macd_hist": 0.5},
+        "levels": {
+          "support": [{"tick": 98, "distance_pct": -2, "tier": "near"}, {"tick": 94, "distance_pct": -6, "tier": "near"}],
+          "support_all": [{"tick": 98, "distance_pct": -2, "tier": "near"}, {"tick": 94, "distance_pct": -6, "tier": "near"}, {"tick": 89, "distance_pct": -11, "tier": "mid"}],
+          "resistance": [{"tick": 108, "distance_pct": 8, "tier": "near"}]
+        },
+        "institutional": [
+          {"date": "2026-11-03", "total": 100}, {"date": "2026-11-04", "total": 120},
+          {"date": "2026-11-05", "total": 90}, {"date": "2026-11-06", "total": 130},
+          {"date": "2026-11-09", "total": 160}
+        ]
+      },
+      "expected": {
+        "recommendation": "分批進場",
+        "prices": {"entry": 98, "add": 94, "stop": 89, "target": 108},
+        "reason": "均線、量能與動能偏多，量縮回檔時依第一、第二支撐分批，第一壓力作為目標。",
+        "evidence_strength": "完整"
+      }
+    },
+    {
+      "name": "部分：缺法人但技術與價位可用",
+      "analysis": {
+        "_intraday": true,
+        "quote": {"close": 100},
+        "indicators": {"ma5": 101, "ma20": 99, "ma60": 96, "relative_volume": 1.25, "k9": 62, "d9": 55, "rsi14": 58, "macd_hist": 0.5},
+        "levels": {
+          "support": [{"tick": 98, "distance_pct": -2, "tier": "near"}, {"tick": 94, "distance_pct": -6, "tier": "near"}],
+          "support_all": [{"tick": 98, "distance_pct": -2, "tier": "near"}, {"tick": 94, "distance_pct": -6, "tier": "near"}, {"tick": 89, "distance_pct": -11, "tier": "mid"}],
+          "resistance": [{"tick": 108, "distance_pct": 8, "tier": "near"}]
+        },
+        "institutional": []
+      },
+      "expected": {
+        "recommendation": "分批進場",
+        "prices": {"entry": 98, "add": 94, "stop": 89, "target": 108},
+        "reason": "均線、量能與動能偏多，量縮回檔時依第一、第二支撐分批，第一壓力作為目標。",
+        "evidence_strength": "部分"
+      }
+    },
+    {
+      "name": "部分：價位結構不完整但仍有進場價",
+      "analysis": {
+        "_intraday": true,
+        "quote": {"close": 100},
+        "indicators": {"ma5": 101, "ma20": 99, "ma60": 96, "relative_volume": 1.25, "k9": 62, "d9": 55, "rsi14": 58, "macd_hist": 0.5},
+        "levels": {
+          "support": [{"tick": 98, "distance_pct": -2, "tier": "near"}],
+          "support_all": [{"tick": 98, "distance_pct": -2, "tier": "near"}],
+          "resistance": [{"tick": 108, "distance_pct": 8, "tier": "near"}]
+        },
+        "institutional": [
+          {"date": "2026-11-03", "total": 100}, {"date": "2026-11-04", "total": 120},
+          {"date": "2026-11-05", "total": 90}, {"date": "2026-11-06", "total": 130},
+          {"date": "2026-11-09", "total": 160}
+        ]
+      },
+      "expected": {
+        "recommendation": "分批進場",
+        "prices": {"entry": 98, "add": null, "stop": null, "target": 108},
+        "reason": "均線、量能與動能偏多，量縮回檔時依第一、第二支撐分批，第一壓力作為目標。",
+        "evidence_strength": "部分"
+      }
+    },
+    {
+      "name": "有限：技術完整但價位全缺",
+      "analysis": {
+        "_intraday": true,
+        "quote": {"close": 100},
+        "indicators": {"ma5": 101, "ma20": 99, "ma60": 96, "relative_volume": 1.25, "k9": 62, "d9": 55, "rsi14": 58, "macd_hist": 0.5},
+        "levels": {"support": [], "support_all": [], "resistance": []},
+        "institutional": [
+          {"date": "2026-11-03", "total": 100}, {"date": "2026-11-04", "total": 120},
+          {"date": "2026-11-05", "total": 90}, {"date": "2026-11-06", "total": 130},
+          {"date": "2026-11-09", "total": 160}
+        ]
+      },
+      "expected": {
+        "recommendation": "持有",
+        "prices": {"entry": null, "add": null, "stop": null, "target": null},
+        "reason": "均線、量能與動能仍偏多，持有到目標價；跌破停損價即退出。",
+        "evidence_strength": "有限"
+      }
+    },
+    {
+      "name": "有限：技術為 null 但價位與法人存在",
+      "analysis": {
+        "_intraday": true,
+        "quote": {"close": 100},
+        "indicators": {"ma5": null, "ma20": null, "ma60": null, "relative_volume": null, "k9": null, "d9": null, "rsi14": null, "macd_hist": null},
+        "levels": {
+          "support": [{"tick": 98, "distance_pct": -2, "tier": "near"}, {"tick": 94, "distance_pct": -6, "tier": "near"}],
+          "support_all": [{"tick": 98, "distance_pct": -2, "tier": "near"}, {"tick": 94, "distance_pct": -6, "tier": "near"}, {"tick": 89, "distance_pct": -11, "tier": "mid"}],
+          "resistance": [{"tick": 108, "distance_pct": 8, "tier": "near"}]
+        },
+        "institutional": [
+          {"date": "2026-11-03", "total": 100}, {"date": "2026-11-04", "total": 120},
+          {"date": "2026-11-05", "total": 90}, {"date": "2026-11-06", "total": 130},
+          {"date": "2026-11-09", "total": 160}
+        ]
+      },
+      "expected": {
+        "recommendation": "分批進場",
+        "prices": {"entry": 98, "add": 94, "stop": 89, "target": 108},
+        "reason": "均線、量能與動能偏多，量縮回檔時依第一、第二支撐分批，第一壓力作為目標。",
+        "evidence_strength": "有限"
+      }
+    },
+    {
+      "name": "完整：0 是有效數值而不是 null",
+      "analysis": {
+        "_intraday": true,
+        "quote": {"close": 100},
+        "indicators": {"ma5": 0, "ma20": 0, "ma60": 0, "relative_volume": 0, "k9": 0, "d9": 0, "rsi14": 0, "macd_hist": 0},
+        "levels": {
+          "support": [{"tick": 98, "distance_pct": -2, "tier": "near"}, {"tick": 94, "distance_pct": -6, "tier": "near"}],
+          "support_all": [{"tick": 98, "distance_pct": -2, "tier": "near"}, {"tick": 94, "distance_pct": -6, "tier": "near"}, {"tick": 89, "distance_pct": -11, "tier": "mid"}],
+          "resistance": [{"tick": 108, "distance_pct": 8, "tier": "near"}]
+        },
+        "institutional": [
+          {"date": "2026-11-03", "total": 0}, {"date": "2026-11-04", "total": 0},
+          {"date": "2026-11-05", "total": 0}, {"date": "2026-11-06", "total": 0},
+          {"date": "2026-11-09", "total": 0}
+        ]
+      },
+      "expected": {
+        "recommendation": "分批進場",
+        "prices": {"entry": 98, "add": 94, "stop": 89, "target": 108},
+        "reason": "均線、量能與動能偏多，量縮回檔時依第一、第二支撐分批，第一壓力作為目標。",
+        "evidence_strength": "完整"
+      }
+    }
+  ]
+}

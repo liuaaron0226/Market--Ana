@@ -50,7 +50,15 @@ test("已核准者拿到總覽與單張明細，帶版本號、不可快取", as
   assert.equal(r.status, 200);
   assert.equal(r.headers.get("cache-control"), "private, no-store");
   assert.equal(r.headers.get("x-data-version"), PACK.version);
-  assert.deepEqual(await r.json(), PACK.overview);
+  const body = await r.json();
+  assert.equal(body.version, PACK.version);
+  assert.deepEqual(body.analysis, PACK.overview.analysis);
+  assert.deepEqual(body.detailIndex, PACK.overview.detailIndex);
+  assert.deepEqual(body.dashboard, { actions: {} });
+  assert.equal(body.features.market_trend_v1, false);
+  assert.equal(body.features.ai_digest, false);
+  assert.equal(body.features.daily_update, true);
+  assert.equal(body.features.charts, true);
   const d = await req("/api/market/detail?kind=trust&date=2026-03-10&v=abc123def456", "ok@x.com");
   assert.equal(d.status, 200);
   assert.deepEqual(await d.json(), { version: PACK.version, kind: "trust", date: "2026-03-10", tables: PACK.details["2026-03-10"].trust });
@@ -114,13 +122,15 @@ test("資料包未設定時市場 API 回 503", async () => {
   assert.equal(r.status, 503);
 });
 
-test("雲端沒有即時行情：/api/live 回 JSON 503 說明（不能落到首頁 HTML）", async () => {
+test("首頁即時缺 server key 時回 JSON 503，不落到 HTML 或外部來源", async () => {
   const r = await req("/api/live");
   assert.equal(r.status, 503);
   assert.match(r.headers.get("content-type"), /application\/json/);
   const body = await r.json();
-  assert.equal(body.error, "live-not-available");
-  assert.match(body.message, /雲端/);
+  assert.equal(body.error, "FUGLE_API_KEY 未設定");
+  assert.equal(body.live, false);
+  assert.equal(body.data, null);
+  assert.equal(r.headers.get("cache-control"), "private, no-store");
   assert.equal((await req("/api/live", null)).status, 401);
 });
 

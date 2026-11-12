@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -17,7 +18,7 @@ PAGE_FILE = ROOT / "web/minimal.html"
 SERVER_FILE = ROOT / "live_server.py"
 OUT = ROOT / "logs/visual-preview"
 HOST = "127.0.0.1"
-PORT = 8876
+PORT = int(os.environ.get("MARKET_ANA_PORT", "8876"))
 BASE_URL = f"http://{HOST}:{PORT}"
 PAGE_URL = f"{BASE_URL}/minimal.html"
 FONT_PATTERN = re.compile(r"^https://fonts\..*")
@@ -49,7 +50,7 @@ def existing_server() -> bool:
         payload = get_json(f"{BASE_URL}/health")
     except Exception:
         return False
-    assert payload.get("web_root") == str(ROOT / "web"), "8876 已被其他服務占用；不終止別人的行程"
+    assert payload.get("web_root") == str(ROOT / "web"), f"{PORT} 已被其他服務占用；不終止別人的行程"
     return True
 
 
@@ -108,6 +109,7 @@ def fake_live_payload() -> dict[str, Any]:
         "data_time": stamp,
         "market_open": True,
         "market_phase": "open",
+        "live": True,
         "delay": "MIS 主報價至少間隔 5 秒，分時至少間隔 15 秒。",
         "delay_seconds": {"quote": 5, "chart": 15},
         "error": None,
@@ -219,6 +221,20 @@ def check_standard_width(browser: Browser, width: int, height: int, screenshots:
     assert page.locator("#analysisDate").inner_text() == ANALYSIS["meta"]["cutoff_date"][5:].replace("-", "/")
     assert page.locator("#scenarioDate").get_attribute("title") == TARGET_DAY
     assert page.locator("#scenarioDate").inner_text() == TARGET_DAY[5:].replace("-", "/")
+    trend = page.evaluate("window.MinimalApp.trend")
+    assert trend["schema"] == "market-trend/v1"
+    assert trend["data_date"] == ANALYSIS["meta"]["cutoff_date"]
+    assert [row["key"] for row in trend["periods"]] == ["short", "medium", "long"]
+    assert page.locator("#marketTrendGrid .market-trend-item").count() == 3
+    assert page.locator("#marketTrendDate").inner_text() == f"資料日 {trend['data_date']}"
+    study_labels = page.locator("#chartStudies .kc-study-choice").all_inner_texts()
+    assert study_labels == ["成交金額", "MACD", "KD", "RSI"], study_labels
+    for kind in ("kd", "rsi", "volume"):
+        button = page.locator(f'#chartStudies [data-study="{kind}"]')
+        button.click()
+        assert button.get_attribute("aria-pressed") == "true"
+        assert page.locator("#chartStudies .kc-study-pane:not([hidden])").count() == 1
+        assert page.locator(f"#chartStudies .kc-study-pane-{kind}").is_visible()
     assert page.locator(".chip-card").count() == 6, "籌碼卡應有 6 張"
     assert page.locator("#readLine").inner_text() == PLAIN["one_line"]
     expected_n = int(ANALYSIS["backtest"]["results"][DEFAULT_SAMPLE]["next_day_outcomes"]["sample_count"])
@@ -229,7 +245,7 @@ def check_standard_width(browser: Browser, width: int, height: int, screenshots:
         assert chart_box
         assert chart_box["y"] >= 0 and chart_box["y"] + chart_box["height"] <= height, "主K線未在 1440×900 首屏內"
 
-    if width in (390, 1440):
+    if width in (375, 1440):
         shot = OUT / f"minimal-{width}.png"
         page.screenshot(path=str(shot), full_page=False)
         screenshots.append(str(shot))
@@ -431,14 +447,50 @@ def check_live_freshness_guards(browser: Browser) -> None:
     closed = fake_live_payload()
     closed["market_open"] = False
     closed["market_phase"] = "closed"
-    closed_page.route(
-        "**/api/live",
-        lambda route: route.fulfill(status=200, content_type="application/json; charset=utf-8", body=json.dumps(closed, ensure_ascii=False)),
-    )
+    closed["live"] = False
+    closed_requests = 0
+
+    def fulfill_closed(route: Route) -> None:
+        nonlocal closed_requests
+        closed_requests += 1
+        route.fulfill(status=200, content_type="application/json; charset=utf-8", body=json.dumps(closed, ensure_ascii=False))
+
+    closed_page.route("**/api/live", fulfill_closed)
     closed_page.goto(PAGE_URL, wait_until="domcontentloaded")
     closed_page.wait_for_function("document.getElementById('marketState').textContent === '休市'")
-    closed_page.wait_for_function("window.MinimalApp.nextPollDelay >= 60000")
+    closed_page.wait_for_function("window.MinimalApp.nextPollDelay === 0")
+    assert closed_requests == 1, closed_requests
+    closed_page.wait_for_timeout(1200)
+    assert closed_requests == 1, "休市後不應繼續輪詢即時行情 API"
     closed_page.close()
+
+
+def check_official_date_alignment(browser: Browser) -> None:
+    """舊 dashboard／劇本不得蓋掉實際日 K 與分析資料日，也不得把今天冒充資料日。"""
+    fixture = json.loads(json.dumps(ANALYSIS))
+    fixture["meta"]["cutoff_date"] = "2026-11-10"
+    fixture["daily"][-1]["date"] = "2026-11-10"
+    analysis_script = "window.MARKET_ANALYSIS = " + json.dumps(fixture, ensure_ascii=False) + ";\n"
+    unavailable = {"error": "live-not-available", "message": "明確盤後 fixture，不提供即時行情"}
+    page = browser.new_page(viewport={"width": 820, "height": 900}, color_scheme="dark")
+    block_fonts(page)
+    page.route(
+        "**/analysis-data.js",
+        lambda route: route.fulfill(status=200, content_type="application/javascript; charset=utf-8", body=analysis_script),
+    )
+    page.route(
+        "**/api/live",
+        lambda route: route.fulfill(status=503, content_type="application/json; charset=utf-8", body=json.dumps(unavailable, ensure_ascii=False)),
+    )
+    page.goto(PAGE_URL, wait_until="domcontentloaded")
+    page.wait_for_function("document.getElementById('marketState').textContent === '盤後'")
+    assert page.locator("#marketTime").inner_text() == "2026-11-10"
+    assert page.locator("#analysisDate").inner_text() == "11/10"
+    assert page.locator("#analysisDate").get_attribute("title") == "2026-11-10"
+    assert page.locator("#scenarioDate").inner_text() == "11/09 已過期"
+    assert "已過期" in (page.locator("#scenarioDate").get_attribute("title") or "")
+    assert page.locator("#marketTrendDate").inner_text() == "資料日 2026-11-10"
+    page.close()
 
 
 def check_file_mode(browser: Browser) -> None:
@@ -542,7 +594,7 @@ def check_panel_return(browser: Browser, width: int) -> None:
 
 
 def check_half_window_header(browser: Browser) -> None:
-    for width in (390, 760, 761, 820, 960, 1120, 1280, 1440):
+    for width in (375, 760, 761, 820, 960, 1120, 1280, 1440):
         page = browser.new_page(viewport={"width": width, "height": 900})
         block_fonts(page)
         route_live(page)
@@ -558,7 +610,7 @@ def check_half_window_header(browser: Browser) -> None:
         }""")
         assert not overlap, f"{width}px 結論卡蓋住 {overlap}"
         assert_no_overflow(page, width)
-        if width in (390, 820, 1440):
+        if width in (375, 820, 1440):
             page.screenshot(path=str(OUT / f"minimal-header-fixed-{width}.png"), full_page=False)
         page.close()
 
@@ -571,7 +623,7 @@ def main() -> None:
     process: subprocess.Popen[Any] | None = None
     if not existing_server():
         process = subprocess.Popen(
-            [sys.executable, str(SERVER_FILE)],
+            [sys.executable, str(SERVER_FILE), "--port", str(PORT)],
             cwd=str(ROOT),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -583,15 +635,16 @@ def main() -> None:
     try:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
-            for width in (390, 820, 1440):
+            for width in (375, 820, 1440):
                 check_panel_return(browser, width)
             check_half_window_header(browser)
             check_actual_service(browser)
-            for width, height in ((390, 844), (820, 900), (1440, 900)):
+            for width, height in ((375, 812), (820, 900), (1440, 900)):
                 checks.append(check_standard_width(browser, width, height, screenshots))
             check_mobile_sheet(browser, screenshots)
             check_reduced_motion(browser)
             check_live_freshness_guards(browser)
+            check_official_date_alignment(browser)
             check_file_mode(browser)
             check_dark(browser, screenshots)
             check_chip_drilldown(browser)
@@ -602,7 +655,7 @@ def main() -> None:
     print(json.dumps({
         "widths": checks,
         "panel_return_preserves_parent_date_details_and_focus": True,
-        "half_window_header_no_overlap_widths": [390, 760, 761, 820, 960, 1120, 1280, 1440],
+        "half_window_header_no_overlap_widths": [375, 760, 761, 820, 960, 1120, 1280, 1440],
         "actual_live_server_integration": True,
         "first_screen_1440": True,
         "candle_ohlc_matches_data": True,
@@ -613,7 +666,9 @@ def main() -> None:
         "reduced_motion_content_visible": True,
         "stale_data_never_shows_live": True,
         "chip_drilldown_top20_matches_data": True,
-        "closed_market_keeps_polling": True,
+        "closed_market_stops_live_polling": True,
+        "official_date_alignment_fixture": "analysis/daily 2026-11-10; old scenario 2026-11-09",
+        "market_studies": ["成交金額", "MACD", "KD", "RSI"],
         "file_service_message": True,
         "screenshots": screenshots,
     }, ensure_ascii=False, indent=2))

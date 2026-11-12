@@ -59,19 +59,27 @@ def force_otc_unincluded(page: Page) -> None:
     page.route("**/api/compare-0050?*", multi)
 
 
-def assert_single(page: Page, code: str) -> dict[str, object]:
+def assert_single(page: Page, code: str, *, comparable: bool = True) -> dict[str, object]:
     assert page.locator("#compareBlock").is_visible()
     conclusion = page.locator("#compareConclusion").inner_text()
-    assert code in conclusion and "0050" in conclusion, conclusion
+    if comparable:
+        assert code in conclusion and "0050" in conclusion, conclusion
+        assert not any(label in conclusion for label in ("不可比較", "配息未完整", "配息狀態未知")), conclusion
+    else:
+        assert "配息未完整" in conclusion and "不可比較" in conclusion, conclusion
+        assert not any(label in conclusion for label in ("領先", "落後", "贏過", "百分點")), conclusion
     rows = page.locator("#compareTableBody tr")
     assert rows.count() == 5, rows.count()
     labels = rows.locator("th").all_inner_texts()
     assert labels == ["近 1 個月", "近 3 個月", "近 1 年", "近 3 年", "近 5 年"], labels
     assert page.locator("#compareChart svg").count() == 1
-    assert page.locator("#compareLegend button").count() == 2
+    assert page.locator("#compareLegend button").count() == (2 if comparable else 1)
     assert page.locator('#compareChips [data-code="%s"]' % code).count() == 1
+    if not comparable:
+        table_text = page.locator("#compareTable").inner_text()
+        assert "配息未完整" in table_text and "不可比" in table_text, table_text
     assert_no_overflow(page)
-    return {"conclusion": conclusion, "rows": labels}
+    return {"conclusion": conclusion, "rows": labels, "comparable": comparable}
 
 
 def add_code(page: Page, code: str) -> None:
@@ -124,14 +132,14 @@ def check_desktop(page: Page, base_url: str) -> dict[str, object]:
 
     page.goto(f"{base_url}/stock.html?code=6488", wait_until="domcontentloaded")
     page.locator("#content:not([hidden])").wait_for(state="visible", timeout=60_000)
-    assert page.locator("#compareStatus").get_attribute("data-state") == "loading"
-    assert page.locator("#compareTableBody tr").count() == 0
-    wait_compare(page)
-    assert_single(page, "6488")
-    dividend_note = page.locator("#compareDividendNote").inner_text()
-    assert "未含現金股利" in dividend_note, dividend_note
+    state = page.locator("#compareStatus").get_attribute("data-state")
+    assert state in {"loading", "ok"}, state
+    if state == "loading":
+        assert page.locator("#compareTableBody tr").count() == 0
+        wait_compare(page)
+    assert_single(page, "6488", comparable=False)
     page.locator("#compareBlock").screenshot(path=str(SHOT_DIR / "compare-otc-6488-desktop.png"))
-    result["otc"] = dividend_note
+    result["otc"] = "配息未完整時不宣告可比差距"
 
     open_stock(page, base_url, "7769")
     assert_single(page, "7769")
@@ -154,7 +162,10 @@ def check_mobile(page: Page, base_url: str) -> dict[str, object]:
     assert page.locator("#compareTooltip").get_attribute("aria-live") == "polite"
     add_code(page, "6488")
     assert page.locator("#compareChips [data-code]").count() == 2
-    assert "未含現金股利" in page.locator("#compareDividendNote").inner_text()
+    compare_text = page.locator("#compareTable").inner_text()
+    assert "配息未完整" in compare_text and "不可比" in compare_text, compare_text
+    conclusion = page.locator("#compareConclusion").inner_text()
+    assert "配息未完整標的未納入比較" in conclusion, conclusion
     assert_no_overflow(page)
     hit = page.locator("#compareChart .cmp-hit")
     box = hit.bounding_box()

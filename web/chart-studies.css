@@ -339,6 +339,8 @@
 }
 
 @media (max-width: 519px) {
+  .kc-studies .kc-study-switcher { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); padding: 0; gap: 6px; }
+  .kc-studies .kc-study-choice { min-width: 0; padding: 8px 4px; }
   .kc-studies {
     gap: 14px;
     margin-top: 10px;

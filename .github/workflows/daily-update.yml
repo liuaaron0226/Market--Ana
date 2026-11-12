@@ -1,7 +1,8 @@
 # 每日收盤後自動更新（票 11／外部票 08）。設計：.scratch/chart-screening-workbench/daily-update-design.md
 #
 # - 多個 cron 時段輪詢官方就緒；每個時段只檢查一次（--no-wait），不在 runner 裡 sleep 吃額度。
-#   前幾個時段未就緒正常結束（--allow-not-ready）；最後一個時段（20:30）仍未就緒才讓 job 失敗、寄信。
+#   已知自動排程前三時段可 waiting（未發布）；最後時段、已過當日20:30、過期日或未知來源未就緒仍失敗。
+# - rollout：先發布本 workflow／Python 相容輸入，再部署 Worker；回退先退 Worker，避免新 inputs 打舊 schema 422。
 # - 同一資料日已成功：執行紀錄在 R2 工作集裡，後面的時段會回 already-done，不重做、不重部署。
 # - 只有真的發布成功才把新的工作集同步回 R2；其他結果保留雲端上一版狀態。
 # - GitHub 的 schedule 只在預設分支（main）觸發；分支上請用 workflow_dispatch 試跑。
@@ -25,12 +26,23 @@ on:
         required: false
         type: boolean
         default: true
+      trigger_source:
+        description: "自動排程來源（Cloudflare 使用 cloudflare-cron；手動留空＝嚴格）"
+        required: false
+        type: string
+        default: ""
+      trigger_slot:
+        description: "原始 UTC cron 時段（未知／缺省＝嚴格）"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
 
 concurrency:
-  group: daily-update
+  # 三支正式 workflow 共用鎖且不取消；只序列化採用此 group 的 CI caller，跨資料域單調性仍由 cursor 驗證。
+  group: market-state-write
   cancel-in-progress: false
 
 jobs:
@@ -102,13 +114,9 @@ jobs:
           else
             day="$(date +%F)"
           fi
+          python -c 'from state_sync import require_iso_date; import sys; require_iso_date(sys.argv[1], "workflow date")' "$day" || { echo "::error::date 必須是真實的 YYYY-MM-DD"; exit 1; }
           echo "date=$day" >> "$GITHUB_OUTPUT"
-          # 最後一個 cron 時段（UTC 12:30）未就緒才算失敗；手動觸發一律照實回報。
-          if [ "$EVENT_NAME" = "schedule" ] && [ "$EVENT_SCHEDULE" != "30 12 * * 1-5" ]; then
-            echo "allow_not_ready=--allow-not-ready" >> "$GITHUB_OUTPUT"
-          else
-            echo "allow_not_ready=" >> "$GITHUB_OUTPUT"
-          fi
+          # 等待分類在 Python 以來源／slot／target日與實際處理時刻共同判定。
           if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$INPUT_DRY_RUN" = "true" ]; then
             echo "dry_run=--dry-run" >> "$GITHUB_OUTPUT"
           else
@@ -120,11 +128,17 @@ jobs:
 
       - name: 每日更新
         id: run
+        env:
+          TRIGGER_EVENT: ${{ github.event_name }}
+          TRIGGER_SOURCE: ${{ github.event_name == 'schedule' && 'github-schedule' || inputs.trigger_source }}
+          TRIGGER_SLOT: ${{ github.event_name == 'schedule' && github.event.schedule || inputs.trigger_slot }}
         run: >-
           python daily_update.py
           --date "${{ steps.day.outputs.date }}"
           --no-wait
-          ${{ steps.day.outputs.allow_not_ready }}
+          --trigger-event "$TRIGGER_EVENT"
+          --trigger-source "$TRIGGER_SOURCE"
+          --trigger-slot "$TRIGGER_SLOT"
           ${{ steps.day.outputs.dry_run }}
           --result-file "${{ runner.temp }}/daily-result.json"
 
@@ -133,10 +147,34 @@ jobs:
         run: |
           sync=$(python -c "import json,sys; print(json.load(open(sys.argv[1], encoding='utf-8'))['sync_state'])" "${{ runner.temp }}/daily-result.json")
           if [ "$sync" = "True" ]; then
-            python state_sync.py upload --data-date "${{ steps.day.outputs.date }}"
+            python state_sync.py upload --data-date "${{ steps.day.outputs.date }}" --cursor-domain market
           else
             echo "本次沒有新發布，雲端工作集維持上一版"
           fi
+
+      - name: 建立本次發布證據
+        id: publication_evidence
+        if: success() && steps.run.outcome == 'success'
+        env:
+          DRY_RUN: ${{ steps.day.outputs.dry_run != '' }}
+        run: >-
+          python ai_digest_trigger.py create-evidence
+          --daily-result "${{ runner.temp }}/daily-result.json"
+          --dry-run "$DRY_RUN"
+          --run-id "${{ github.run_id }}"
+          --head-sha "${{ github.sha }}"
+          --repository "${{ github.repository }}"
+          --head-branch "${{ github.ref_name }}"
+          --output "${{ runner.temp }}/daily-publication.json"
+
+      - name: 保存發布證據供同一 run 的 AI 接續核對
+        if: steps.publication_evidence.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-publication-${{ github.run_id }}
+          path: ${{ runner.temp }}/daily-publication.json
+          retention-days: 3
+          if-no-files-found: error
 
       - name: 執行摘要
         if: always()
@@ -151,8 +189,8 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 失敗時保存執行紀錄
-        if: failure()
+      - name: 保存執行紀錄（包含等待與失敗）
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: daily-update-log-${{ steps.day.outputs.date }}

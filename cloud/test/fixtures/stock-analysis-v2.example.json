@@ -17,6 +17,61 @@
     "blocking": false,
     "bars": 300
   },
+  "strategy": {
+    "strategy_version": "support-pressure-strategy-v1",
+    "recommendation": "減碼",
+    "prices": {
+      "entry": 2080.0,
+      "add": null,
+      "stop": 2020.0,
+      "target": 2195.0
+    },
+    "reason": "均線與動能同步轉弱，先降低曝險，跌破停損價不再等待反彈。",
+    "evidence_strength": "完整",
+    "signals": {
+      "positive": 1,
+      "risk": 5,
+      "institutional_day": -9473176,
+      "institutional_5d": -39747936
+    }
+  },
+  "institutional": [
+    {
+      "date": "2026-11-02",
+      "foreign": -15005014,
+      "trust": 3682223,
+      "dealer": 1885893,
+      "total": -9436898
+    },
+    {
+      "date": "2026-11-03",
+      "foreign": -11703020,
+      "trust": 2345645,
+      "dealer": 2658082,
+      "total": -6699293
+    },
+    {
+      "date": "2026-11-04",
+      "foreign": -21603811,
+      "trust": 3715164,
+      "dealer": 5966950,
+      "total": -11921697
+    },
+    {
+      "date": "2026-11-05",
+      "foreign": -10252100,
+      "trust": 2739641,
+      "dealer": 5295587,
+      "total": -2216872
+    },
+    {
+      "date": "2026-11-06",
+      "foreign": -22844481,
+      "trust": 4669484,
+      "dealer": 8701821,
+      "total": -9473176
+    }
+  ],
   "indicators": {
     "ma5": 2252.0,
     "ma10": 2325.5,

@@ -174,6 +174,143 @@ test("設定缺漏或資料庫故障時一律拒絕（fail closed）", async () 
   assert.equal(r3.status, 401);
 });
 
+test("/api/features 由 server env 決定，預設關閉且 query 不能自行開啟策略", async () => {
+  let response = await req("/api/features?MARKET_ANA_STRATEGIES_ENABLED=1", { email: OWNER });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  let body = await response.json();
+  assert.equal(body.core_release, true);
+  assert.equal(body.features.live_market, true);
+  assert.equal(body.features.strategy_v1, false);
+  assert.equal(body.features.market_trend_v1, false);
+  assert.equal(body.features.level_advice, false);
+  assert.equal(body.features.ai_stock_advice, false);
+
+  env.MARKET_ANA_STRATEGIES_ENABLED = "true";
+  response = await req("/api/features", { email: OWNER });
+  body = await response.json();
+  assert.equal(body.strategies_enabled, true);
+  assert.equal(body.features.strategy_v1, true);
+});
+
+test("核心版 market overview 移除未驗 market-trend-v1，完整模式才保留", async () => {
+  deps.marketPack = {
+    version: "market-v1",
+    overview: {
+      version: "market-v1",
+      analysis: { keep: "chart-data", market_trend: { schema: "market-trend/v1" } },
+      dashboard: { keep: "quote-data", actions: { market_trend: { schema: "market-trend/v1" }, core: "keep" } },
+    },
+    details: {},
+  };
+  let response = await req("/api/market/overview?MARKET_ANA_STRATEGIES_ENABLED=1", { email: OWNER });
+  let body = await response.json();
+  assert.equal(body.features.market_trend_v1, false);
+  assert.equal(Object.hasOwn(body.analysis, "market_trend"), false);
+  assert.equal(Object.hasOwn(body.dashboard.actions, "market_trend"), false);
+  assert.equal(body.analysis.keep, "chart-data");
+  assert.equal(body.dashboard.actions.core, "keep");
+
+  env.MARKET_ANA_STRATEGIES_ENABLED = "true";
+  response = await req("/api/market/overview", { email: OWNER });
+  body = await response.json();
+  assert.equal(body.features.market_trend_v1, true);
+  assert.equal(body.analysis.market_trend.schema, "market-trend/v1");
+});
+
+test("核心版在 level schema 前就關閉建議端點，不影響其他個人資料 route", async () => {
+  const level = await req("/api/holdings/level?MARKET_ANA_STRATEGIES_ENABLED=1", { email: OWNER });
+  assert.equal(level.status, 403);
+  const body = await level.json();
+  assert.equal(body.error, "feature-disabled");
+  assert.equal(body.features.level_advice, false);
+
+  const watchlist = await req("/api/watchlist", { email: OWNER });
+  assert.equal(watchlist.status, 200);
+  assert.deepEqual((await watchlist.json()).items, []);
+});
+
+test("首頁 /api/live 只讓站主經 gate 取得 S1 行情，核准非站主仍不得轉供", async () => {
+  let calls = 0;
+  env.FUGLE_API_KEY = "server-only-index-key";
+  deps.indexLiveService = {
+    async snapshot({ fugleApiKey }) {
+      calls += 1;
+      assert.equal(fugleApiKey, "server-only-index-key");
+      return {
+        ok: true, source: "fugle-index", symbol: "IX0001", live: true,
+        market_open: true, phase: "open", retryable: true, retry_after_seconds: 0,
+        data_time: "2026-11-11T10:00:05+08:00", fetched_at: "2026-11-11T10:00:10+08:00",
+        data: { price: 28088.25, turnover_billion: null },
+        series: [{ timestamp: "2026-11-11T10:00:00+08:00", price: 28088.25 }],
+      };
+    },
+  };
+
+  const owner = await req("/api/live", { email: OWNER });
+  assert.equal(owner.status, 200);
+  assert.equal(owner.headers.get("cache-control"), "private, no-store");
+  const payload = await owner.json();
+  assert.equal(payload.source, "fugle-index");
+  assert.equal(payload.data.price, 28088.25);
+  assert.equal(payload.data.turnover_billion, null);
+  assert.equal(payload.series.length, 1);
+  assert.doesNotMatch(JSON.stringify(payload), /server-only-index-key/);
+
+  await seed("ok@x.com", "approved");
+  const nonOwner = await req("/api/live", { email: "ok@x.com" });
+  assert.equal(nonOwner.status, 403);
+  assert.equal(calls, 1, "非站主不得觸發 Fugle service");
+});
+
+test("首頁 live gate 對缺 key／上游失敗回 503＋Retry-After，有 stale 資料仍回 200", async () => {
+  let receivedKey = "not-called";
+  deps.indexLiveService = {
+    async snapshot({ fugleApiKey }) {
+      receivedKey = fugleApiKey;
+      return { ok: false, live: false, market_open: true, retryable: true,
+        retry_after_seconds: 12, data: null, series: [], error: "FUGLE_API_KEY 未設定" };
+    },
+  };
+  let response = await req("/api/live", { email: OWNER });
+  assert.equal(receivedKey, null);
+  assert.equal(response.status, 503);
+  assert.equal(response.headers.get("retry-after"), "12");
+  assert.equal(response.headers.get("cache-control"), "private, no-store");
+
+  deps.indexLiveService = { async snapshot() {
+    return { ok: true, live: false, market_open: true, phase: "delayed", retryable: true,
+      retry_after_seconds: 5, data: { price: 28000 }, series: [], error: "Fugle HTTP 503" };
+  } };
+  response = await req("/api/live", { email: OWNER });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).phase, "delayed");
+
+  await seed("pending@x.com", "pending");
+  assert.equal((await req("/api/live", { email: "pending@x.com" })).status, 403);
+});
+
+test("個股 Fugle 即時行情也只限站主，核准非站主不能耗用 server key", async () => {
+  let calls = 0;
+  env.FUGLE_API_KEY = "server-only-stock-key";
+  deps.stockPack = {
+    analysis_schema: "stock-analysis/v2", as_of: "2026-11-10",
+    results: { "2330": JSON.stringify({ schema: "stock-analysis/v2", code: "2330", market: "上市" }) },
+  };
+  deps.liveQuoteService = {
+    async snapshot(code, market, { fugleApiKey }) {
+      calls += 1;
+      assert.deepEqual([code, market, fugleApiKey], ["2330", "tse", "server-only-stock-key"]);
+      return { ok: true, live: true, market_open: true, quote: { price: 1000 } };
+    },
+  };
+
+  assert.equal((await req("/api/stocks/2330/live", { email: OWNER })).status, 200);
+  await seed("ok@x.com", "approved");
+  assert.equal((await req("/api/stocks/2330/live", { email: "ok@x.com" })).status, 403);
+  assert.equal(calls, 1);
+});
+
 test("錯誤回應不洩漏內部訊息", async () => {
   const broken = { ...env, DB: { prepare: () => { throw new Error("SECRET-STACK"); } } };
   const tok = await issuer.sign(claims(OWNER));

@@ -14,6 +14,12 @@
   --gold: #d9a94b;
   --up: #ff6868;
   --down: #2fd09a;
+  --compare-0: #3987e5;
+  --compare-1: #d95926;
+  --compare-2: #199e70;
+  --compare-3: #c98500;
+  --compare-4: #d55181;
+  --compare-5: #008300;
   --scrim: rgb(0 0 0 / 58%);
   --sans: "Noto Sans TC", "Microsoft JhengHei", system-ui, sans-serif;
   --mono: "JetBrains Mono", Consolas, monospace;
@@ -38,6 +44,12 @@
   --gold: #94681a;
   --up: #c8262c;
   --down: #0f8058;
+  --compare-0: #2a78d6;
+  --compare-1: #eb6834;
+  --compare-2: #1baf7a;
+  --compare-3: #eda100;
+  --compare-4: #e87ba4;
+  --compare-5: #008300;
   --scrim: rgb(28 25 20 / 42%);
 }
 
@@ -58,6 +70,12 @@
     --gold: #94681a;
     --up: #c8262c;
     --down: #0f8058;
+    --compare-0: #2a78d6;
+    --compare-1: #eb6834;
+    --compare-2: #1baf7a;
+    --compare-3: #eda100;
+    --compare-4: #e87ba4;
+    --compare-5: #008300;
     --scrim: rgb(28 25 20 / 42%);
   }
 }
@@ -1155,4 +1173,124 @@ html, body { height: auto; }
   .screen-tabs button, .screen-seg button { min-height: 40px; }
   .screen-list a, .screen-list .screen-static { grid-template-columns: 2em minmax(0, 1fr) auto; padding: 9px 10px; }
   .rotation-lists, .core-cards { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* G4-2R：首頁最先讀的一句結論；明細用原生 details 漸進揭露。 */
+.ai-digest-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, .72fr);
+  gap: 10px 28px;
+  padding: 20px 22px 18px 26px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--panel);
+  overflow: hidden;
+}
+.ai-digest-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: var(--accent);
+}
+.ai-digest-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.ai-digest-head h2 { font-size: 15px; font-weight: 650; }
+.ai-digest-head p, .ai-digest-note { color: var(--faint); font-size: 12px; }
+.ai-digest-conclusion { grid-column: 1; font-size: clamp(18px, 1.6vw, 23px); font-weight: 650; line-height: 1.4; }
+.ai-digest-preview { grid-column: 2; grid-row: 1 / 3; align-self: center; display: grid; gap: 7px; padding: 0; list-style: none; }
+.ai-digest-preview li { position: relative; padding-left: 14px; color: var(--dim); font-size: 13px; line-height: 1.5; }
+.ai-digest-preview li::before { content: ""; position: absolute; left: 0; top: .66em; width: 5px; height: 5px; border-radius: 50%; background: var(--gold); }
+.ai-digest-details { grid-column: 1 / -1; margin-top: 2px; }
+.ai-digest-details > summary {
+  width: max-content;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ai-digest-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 28px; padding: 12px 0 6px; }
+.ai-digest-detail-grid h3 { margin-bottom: 7px; color: var(--dim); font-size: 13px; font-weight: 600; }
+.ai-digest-detail-grid ul { display: grid; gap: 6px; margin: 0; padding-left: 1.15em; }
+.ai-digest-detail-grid li { font-size: 13.5px; line-height: 1.55; }
+.ai-digest-note { grid-column: 1 / -1; }
+.ai-digest-card[data-state="unproduced"]::before { background: var(--faint); }
+.ai-digest-card[data-state="unproduced"] .ai-digest-conclusion { color: var(--dim); }
+
+@media (max-width: 760px) {
+  .ai-digest-card { grid-template-columns: minmax(0, 1fr); gap: 9px; padding: 17px 16px 15px 20px; border-radius: 18px; }
+  .ai-digest-head { align-items: flex-start; }
+  .ai-digest-head p { white-space: nowrap; }
+  .ai-digest-conclusion { grid-column: 1; font-size: 18px; }
+  .ai-digest-preview { grid-column: 1; grid-row: auto; gap: 5px; }
+  .ai-digest-preview li { font-size: 12.5px; }
+  .ai-digest-details { grid-column: 1; }
+  .ai-digest-detail-grid { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+}
+
+/* UI-2a：首頁不再顯示操作提示、指標教學與區間表，改由短中長期結論承接。 */
+body.hm #chartStudies .kc-study-swipe-hint,
+body.hm #chartStudies .kc-study-details,
+body.hm #chartStudies .kc-studies-notice { display: none !important; }
+
+.market-trend { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+.market-trend-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+.market-trend-head h3 { font-size: 15px; font-weight: 650; }
+.market-trend-head p { color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums; }
+.market-trend-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 12px; }
+.market-trend-item { min-width: 0; padding: 4px 18px 0 0; }
+.market-trend-item + .market-trend-item { padding-left: 18px; border-left: 1px solid var(--line); }
+.market-trend-item h4 { color: var(--ink); font-size: 14px; font-weight: 650; }
+.market-trend-item[data-state="bullish"] h4 { color: var(--down); }
+.market-trend-item[data-state="bearish"] h4 { color: var(--up); }
+.market-trend-item p { margin-top: 7px; color: var(--dim); font-size: 13px; line-height: 1.65; }
+.market-trend-error { grid-column: 1 / -1; color: var(--dim); }
+
+body.hm #coreHoldings { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+body.hm #coreHoldings > * { grid-column: 1; }
+body.hm #coreHoldings .screen-head { margin-bottom: 0; }
+.core-compare-form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.core-compare-form > label, .core-period { color: var(--dim); font-size: 13px; font-weight: 600; }
+.core-compare-entry { display: grid; grid-template-columns: minmax(0, 240px) auto; gap: 8px; justify-content: start; }
+.core-compare-entry input, .core-compare-entry button, .core-period select {
+  min-height: 40px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--panel); color: var(--ink); font: inherit;
+}
+.core-compare-entry input { min-width: 0; padding: 0 12px; text-transform: uppercase; }
+.core-compare-entry button { padding: 0 16px; background: var(--ink); color: var(--bg); font-weight: 650; }
+.core-selection { display: flex; flex-wrap: wrap; gap: 8px; min-height: 0; }
+.core-selection:empty { display: none; }
+.core-selection-chip { min-height: 36px; padding: 0 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel2); color: var(--ink); }
+.core-selection-chip::after { content: " ×"; color: var(--faint); }
+.core-status { color: var(--up); font-size: 13px; }
+.core-period { display: flex; width: max-content; align-items: center; gap: 10px; }
+.core-period select { min-width: 132px; padding: 0 30px 0 10px; }
+body.hm #coreHoldings .core-cards {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; margin-top: 0; border-top: 1px solid var(--ink); border-bottom: 0;
+}
+body.hm #coreHoldings .core-card { min-width: 0; padding: 14px 18px 8px 0; }
+body.hm #coreHoldings .core-card + .core-card { padding-left: 18px; border-left: 1px solid var(--line); }
+body.hm #coreHoldings .core-card:nth-child(3n + 1):not(:first-child) { padding-left: 0; border-left: 0; }
+body.hm #coreHoldings .core-card:nth-child(n + 4) { border-top: 1px solid var(--line); }
+body.hm #coreHoldings .core-card header span { font-size: 12px; }
+body.hm #coreHoldings .core-card dl { grid-template-columns: minmax(0, 1fr) minmax(112px, auto); }
+body.hm #coreHoldings .core-card dt,
+body.hm #coreHoldings .core-card dd { padding: 7px 0; }
+body.hm #coreHoldings .core-chart { margin-top: 0; min-height: 210px; }
+.core-chart svg { display: block; width: 100%; height: auto; touch-action: pan-y; }
+.core-empty { padding: 32px 0; color: var(--dim); }
+
+@media (max-width: 760px) {
+  .market-trend-head { align-items: flex-start; }
+  .market-trend-grid { grid-template-columns: minmax(0, 1fr); }
+  .market-trend-item { padding: 12px 0; }
+  .market-trend-item + .market-trend-item { padding-left: 0; border-top: 1px solid var(--line); border-left: 0; }
+  .core-compare-entry { grid-template-columns: minmax(0, 1fr) auto; }
+  .core-compare-entry input, .core-compare-entry button, .core-period select { min-height: 44px; }
+  body.hm #coreHoldings .core-cards { grid-template-columns: minmax(0, 1fr); }
+  body.hm #coreHoldings .core-card,
+  body.hm #coreHoldings .core-card + .core-card { padding: 14px 0 8px; border-top: 1px solid var(--line); border-left: 0; }
+  body.hm #coreHoldings .core-card:first-child { border-top: 0; }
 }

@@ -3,7 +3,7 @@
   'use strict';
 
   const DPR = () => Math.max(1, Math.min(3, window.devicePixelRatio || 1));
-  const KNOWN_KINDS = ['volume', 'macd', 'kd', 'rsi'];
+  const KNOWN_KINDS = ['volume', 'macd', 'kd', 'rsi', 'foreign', 'trust', 'dealer'];
   // KD 以 K、D 初值 50 遞推，前端只有約 120 根日K：前 9 根算 RSV，之後再暖機 40 根，
   // 讓初值的影響衰減到 0.01 以下，最後一根才會和後端用較長歷史算出的 K9／D9 一致。
   const KD_READY_BARS = 49;
@@ -137,7 +137,7 @@
       this.rsi = [];
 
       this.root = element('section', 'kc-studies');
-      this.root.setAttribute('aria-label', this.kinds.length > 2 ? '日線副圖：成交量、MACD、KD、RSI' : '日線量能與 MACD 副圖');
+      this.root.setAttribute('aria-label', '日線副圖');
 
       this.notice = element('p', 'kc-studies-notice', '日線副圖：切回日K查看');
       this.notice.hidden = true;
@@ -147,16 +147,12 @@
       this.volumePane = volumePane.pane;
       this.volumeReadout = volumePane.readout;
       this.volumeCanvas = volumePane.canvas;
-      this.volumeDetails = this._makeVolumeDetails();
-      this.volumePane.append(this.volumeDetails.details);
 
       const macdPane = this._makePane('macd', 'MACD（12／26／9）');
       this.macdPane = macdPane.pane;
       this.macdReadout = macdPane.readout;
       this.macdCanvas = macdPane.canvas;
       this.macdPane.insertBefore(this._makeMacdLegend(), this.macdCanvas);
-      this.macdDetails = this._makeMacdDetails();
-      this.macdPane.append(this.macdDetails.details);
 
       this.panes = [this.volumePane, this.macdPane];
       if (this.kinds.includes('kd')) {
@@ -165,8 +161,6 @@
         this.kdReadout = kdPane.readout;
         this.kdCanvas = kdPane.canvas;
         this.kdPane.insertBefore(this._makeLineLegend([['K 實線', 'dif', false], ['D 虛線', 'dea', true], ['80／20 參考線', 'ref', true]]), this.kdCanvas);
-        this.kdDetails = this._makeKdDetails();
-        this.kdPane.append(this.kdDetails.details);
         this.panes.push(this.kdPane);
       }
       if (this.kinds.includes('rsi')) {
@@ -175,17 +169,16 @@
         this.rsiReadout = rsiPane.readout;
         this.rsiCanvas = rsiPane.canvas;
         this.rsiPane.insertBefore(this._makeLineLegend([['RSI 實線', 'dif', false], ['70／50／30 參考線', 'ref', true]]), this.rsiCanvas);
-        this.rsiDetails = this._makeRsiDetails();
-        this.rsiPane.append(this.rsiDetails.details);
         this.panes.push(this.rsiPane);
       }
-
-      const tableParts = this._makeRangeTable();
-      this.tableDetails = tableParts.details;
-      this.tableBody = tableParts.body;
-      this.tableDetails.addEventListener('toggle', () => {
-        if (this.tableDetails.open) this._updateTable();
-      });
+      this.institutionalPanes = {};
+      const institutionalLabels = { foreign: '外資買賣超', trust: '投信買賣超', dealer: '自營商買賣超' };
+      for (const kind of ['foreign', 'trust', 'dealer']) {
+        if (!this.kinds.includes(kind)) continue;
+        const parts = this._makePane(kind, institutionalLabels[kind]);
+        this.institutionalPanes[kind] = parts;
+        this.panes.push(parts.pane);
+      }
 
       this.clearButton = element('button', 'kc-study-clear', '取消選取');
       this.clearButton.type = 'button';
@@ -193,21 +186,19 @@
       this.clearButton.addEventListener('click', () => this.chart.clearSelection());
       this.switcher = element('div', 'kc-study-switcher');
       this.switcher.setAttribute('role', 'group');
-      this.switcher.setAttribute('aria-label', '切換指標，也可左右滑動副圖');
-      const choiceLabels = { volume: volumeTitle, macd: 'MACD', kd: 'KD', rsi: 'RSI' };
+      this.switcher.setAttribute('aria-label', '切換副圖');
+      const choiceLabels = { volume: volumeTitle, macd: 'MACD', kd: 'KD', rsi: 'RSI', foreign: '外資', trust: '投信', dealer: '自營商' };
       for (const kind of this.kinds) {
         const button = element('button', 'kc-study-choice', choiceLabels[kind]);
         button.type = 'button'; button.dataset.study = kind;
         button.addEventListener('click', () => this.select(kind));
         this.switcher.append(button);
       }
-      this.switcher.append(element('span', 'kc-study-swipe-hint', '左右滑動切換'));
       this.root.append(
         this.switcher,
         this.clearButton,
         this.notice,
-        ...this.panes,
-        this.tableDetails
+        ...this.panes
       );
       this.host.append(this.root);
 
@@ -306,8 +297,10 @@
         canvas.setAttribute('aria-label', `${titleValue}副圖；日期尚無；單位：${unit}。`);
       } else if (kind === 'macd') {
         canvas.setAttribute('aria-label', 'MACD副圖；日期尚無；單位同主圖價格。');
-      } else {
+      } else if (kind === 'kd' || kind === 'rsi') {
         canvas.setAttribute('aria-label', `${titleValue}副圖；日期尚無；數值範圍 0 到 100。`);
+      } else {
+        canvas.setAttribute('aria-label', `${titleValue}副圖；日期尚無；單位：張。`);
       }
 
       pane.append(header, canvas);
@@ -631,6 +624,40 @@
       this._drawCrosshair(context, height, range);
     }
 
+    _drawInstitutional(context, width, height, range, kind) {
+      const top = 10;
+      const bottom = height - 12;
+      let amplitude = 0;
+      for (let index = range.start; index < range.end; index += 1) {
+        const value = range.candles[index] && range.candles[index][kind];
+        if (finite(value)) amplitude = Math.max(amplitude, Math.abs(value));
+      }
+      amplitude = amplitude || 1;
+      const middle = (top + bottom) / 2;
+      const y = value => middle - value / amplitude * (bottom - top) / 2;
+      const barWidth = Math.max(1, Math.min(14, range.geo.step * .64));
+      context.save();
+      context.beginPath(); context.rect(range.geo.l, 0, range.geo.pw, height); context.clip();
+      context.strokeStyle = token('--line'); context.lineWidth = 1;
+      context.beginPath(); context.moveTo(range.geo.l, Math.round(middle) + .5); context.lineTo(range.geo.l + range.geo.pw, Math.round(middle) + .5); context.stroke();
+      for (let index = range.start; index < range.end; index += 1) {
+        const value = range.candles[index] && range.candles[index][kind];
+        if (!finite(value)) continue;
+        const x = range.geo.l + range.geo.step * (index - range.start + .5);
+        const valueY = y(value);
+        context.fillStyle = value >= 0 ? token('--up') : token('--down');
+        context.fillRect(x - barWidth / 2, Math.min(middle, valueY), barWidth, Math.max(1, Math.abs(valueY - middle)));
+      }
+      context.restore();
+      context.fillStyle = token('--dim'); context.font = `11px ${token('--mono') || 'monospace'}`;
+      context.textAlign = 'left'; context.textBaseline = 'middle';
+      const axisX = Math.min(width - 2, range.geo.l + range.geo.pw + 7);
+      context.fillText(`${formatNumber(amplitude / 1000, 0)}張`, axisX, top + 3);
+      context.fillText('0', axisX, middle);
+      context.fillText(`−${formatNumber(amplitude / 1000, 0)}張`, axisX, bottom - 3);
+      this._drawCrosshair(context, height, range);
+    }
+
     _drawMacdLine(context, range, y, field, color, dash) {
       context.save();
       context.strokeStyle = color;
@@ -788,23 +815,8 @@
       if (this.kdPane) {
         const point = selectedIndex >= 0 ? this.kd[selectedIndex] : null;
         const ready = point && point.ready && finite(point.k) && finite(point.d);
-        this.kdDetails.dateNode.textContent = candle ? date : '日期尚無';
-        if (!candle) {
-          this.kdReadout.textContent = '尚無日線資料';
-          this.kdDetails.valueNode.textContent = '資料不足';
-          this.kdDetails.stateNode.textContent = '尚無足夠資料可判讀。';
-        } else if (!ready) {
-          this.kdReadout.textContent = `${date}｜KD 暖機中，暫無數值`;
-          this.kdDetails.valueNode.textContent = '暖機中';
-          this.kdDetails.stateNode.textContent = '需要至少 49 根有效日線才畫線，暖機前不判讀交叉。';
-        } else {
-          const kText = formatNumber(point.k, 2);
-          const dText = formatNumber(point.d, 2);
-          this.kdReadout.textContent = `${date}｜K ${kText}｜D ${dText}`;
-          this.kdDetails.valueNode.textContent = `K ${kText}、D ${dText}`;
-          const zone = point.k >= 80 ? 'K 在 80 以上的高檔區' : point.k <= 20 ? 'K 在 20 以下的低檔區' : 'K 在中間區';
-          this.kdDetails.stateNode.textContent = `${zone}，K ${point.k > point.d ? '在 D 上方' : point.k < point.d ? '在 D 下方' : '與 D 相同'}；仍須配合價格與量能。`;
-        }
+        this.kdReadout.textContent = !candle ? '尚無日線資料' : !ready ? `${date}｜KD 暖機中，暫無數值`
+          : `${date}｜K ${formatNumber(point.k, 2)}｜D ${formatNumber(point.d, 2)}`;
         this.kdCanvas.setAttribute('aria-label', candle && ready
           ? `KD副圖；日期：${date}；K：${formatNumber(point.k, 2)}；D：${formatNumber(point.d, 2)}。`
           : 'KD副圖；暖機或資料不足。');
@@ -812,22 +824,8 @@
       if (this.rsiPane) {
         const point = selectedIndex >= 0 ? this.rsi[selectedIndex] : null;
         const ready = point && point.ready && finite(point.rsi);
-        this.rsiDetails.dateNode.textContent = candle ? date : '日期尚無';
-        if (!candle) {
-          this.rsiReadout.textContent = '尚無日線資料';
-          this.rsiDetails.valueNode.textContent = '資料不足';
-          this.rsiDetails.stateNode.textContent = '尚無足夠資料可判讀。';
-        } else if (!ready) {
-          this.rsiReadout.textContent = `${date}｜RSI 暖機中或近 14 日無漲跌，暫無數值`;
-          this.rsiDetails.valueNode.textContent = '資料不足';
-          this.rsiDetails.stateNode.textContent = '需要 15 根有效日線，且近 14 日要有漲跌，才有數值。';
-        } else {
-          const rsiText = formatNumber(point.rsi, 1);
-          this.rsiReadout.textContent = `${date}｜RSI ${rsiText}`;
-          this.rsiDetails.valueNode.textContent = rsiText;
-          this.rsiDetails.stateNode.textContent = point.rsi >= 70 ? '在 70 以上的偏熱區，留意追高風險。'
-            : point.rsi <= 30 ? '在 30 以下的偏冷區，留意是否已超跌。' : '在 30～70 之間，力道中性。';
-        }
+        this.rsiReadout.textContent = !candle ? '尚無日線資料' : !ready ? `${date}｜RSI 暖機中或近 14 日無漲跌，暫無數值`
+          : `${date}｜RSI ${formatNumber(point.rsi, 1)}`;
         this.rsiCanvas.setAttribute('aria-label', candle && ready
           ? `RSI副圖；日期：${date}；RSI：${formatNumber(point.rsi, 1)}。`
           : 'RSI副圖；暖機或資料不足。');
@@ -835,89 +833,45 @@
     }
 
     _updateReadouts(range, selectedIndex) {
-      if (this.kdPane || this.rsiPane) {
-        const oscCandle = selectedIndex >= 0 ? range.candles[selectedIndex] : null;
-        this._updateOscillatorReadouts(oscCandle, labelFor(oscCandle), selectedIndex);
-      }
       const candle = selectedIndex >= 0 ? range.candles[selectedIndex] : null;
       const date = labelFor(candle);
+      if (this.kdPane || this.rsiPane) this._updateOscillatorReadouts(candle, date, selectedIndex);
       const value = candle && candle[this.volumeKind];
-      const point = selectedIndex >= 0 && Array.isArray(this.chart.macd)
-        ? this.chart.macd[selectedIndex]
-        : null;
-
+      const point = selectedIndex >= 0 && Array.isArray(this.chart.macd) ? this.chart.macd[selectedIndex] : null;
+      for (const [kind, parts] of Object.entries(this.institutionalPanes || {})) {
+        const net = candle && candle[kind];
+        const label = { foreign: '外資', trust: '投信', dealer: '自營商' }[kind];
+        parts.readout.textContent = candle && finite(net)
+          ? `${date}｜${label} ${net > 0 ? '+' : net < 0 ? '−' : ''}${formatNumber(Math.abs(net) / 1000, 0)} 張`
+          : `${date}｜資料不足`;
+        parts.canvas.setAttribute('aria-label', candle && finite(net)
+          ? `${label}買賣超；日期：${date}；${net >= 0 ? '買超' : '賣超'} ${formatNumber(Math.abs(net) / 1000, 0)} 張。`
+          : `${label}買賣超；日期：${date}；資料不足。`);
+      }
       if (!candle) {
         this.volumeReadout.textContent = '尚無日線資料';
         this.macdReadout.textContent = '尚無日線資料';
-        this.volumeDetails.dateNode.textContent = '日期尚無';
-        this.volumeDetails.valueNode.textContent = '資料不足';
-        this.macdDetails.dateNode.textContent = '日期尚無';
-        this.macdDetails.difNode.textContent = '資料不足';
-        this.macdDetails.deaNode.textContent = '資料不足';
-        this.macdDetails.histNode.textContent = '資料不足';
-        this.macdDetails.stateNode.textContent = '尚無足夠資料可判讀。';
-        this.volumeCanvas.setAttribute(
-          'aria-label',
-          this.volumeKind === 'amount'
-            ? '成交金額副圖；日期尚無；單位：億元。'
-            : '成交量副圖；日期尚無；單位：張與股。'
-        );
+        this.volumeCanvas.setAttribute('aria-label', this.volumeKind === 'amount' ? '成交金額副圖；日期尚無；單位：億元。' : '成交量副圖；日期尚無；單位：張與股。');
         this.macdCanvas.setAttribute('aria-label', 'MACD副圖；日期尚無；單位同主圖價格。');
         return;
       }
-
-      this.volumeDetails.dateNode.textContent = date;
       if (this.volumeKind === 'amount') {
         const valueText = finite(value) ? `${formatNumber(value, 2)} 億元` : '資料不足';
         this.volumeReadout.textContent = `${date}｜成交金額 ${valueText}`;
-        this.volumeDetails.valueNode.textContent = valueText;
-        this.volumeCanvas.setAttribute(
-          'aria-label',
-          `成交金額副圖；日期：${date}；成交金額：${valueText}；單位：億元。`
-        );
+        this.volumeCanvas.setAttribute('aria-label', `成交金額副圖；日期：${date}；成交金額：${valueText}；單位：億元。`);
       } else {
-        const valueText = finite(value)
-          ? `${formatNumber(value / 1000, 3)} 張（${formatNumber(value, 0)} 股）`
-          : '資料不足';
+        const valueText = finite(value) ? `${formatNumber(value / 1000, 3)} 張（${formatNumber(value, 0)} 股）` : '資料不足';
         this.volumeReadout.textContent = `${date}｜成交量 ${valueText}`;
-        this.volumeDetails.valueNode.textContent = valueText;
-        this.volumeCanvas.setAttribute(
-          'aria-label',
-          `成交量副圖；日期：${date}；成交量：${valueText}；單位：張與股。`
-        );
+        this.volumeCanvas.setAttribute('aria-label', `成交量副圖；日期：${date}；成交量：${valueText}；單位：張與股。`);
       }
-
-      this.macdDetails.dateNode.textContent = date;
       const macdReady = point && point.ready === true && finite(point.dif) && finite(point.dea) && finite(point.hist);
       if (macdReady) {
-        const difText = formatMacd(point.dif);
-        const deaText = formatMacd(point.dea);
-        const histText = formatSigned(point.hist);
+        const difText = formatMacd(point.dif), deaText = formatMacd(point.dea), histText = formatSigned(point.hist);
         this.macdReadout.textContent = `${date}｜DIF ${difText}｜DEA ${deaText}｜柱 ${histText}`;
-        this.macdDetails.difNode.textContent = difText;
-        this.macdDetails.deaNode.textContent = deaText;
-        this.macdDetails.histNode.textContent = histText;
-        if (point.dif > point.dea) {
-          this.macdDetails.stateNode.textContent = 'DIF在DEA上方；仍須配合價格、量能與所在位置，不代表必買。';
-        } else if (point.dif < point.dea) {
-          this.macdDetails.stateNode.textContent = 'DIF在DEA下方；仍須配合價格、量能與所在位置，不代表必賣。';
-        } else {
-          this.macdDetails.stateNode.textContent = 'DIF與DEA相同；單一交會點不足以判斷後續方向。';
-        }
-        this.macdCanvas.setAttribute(
-          'aria-label',
-          `MACD副圖；日期：${date}；DIF：${difText}；DEA：${deaText}；柱：${histText}；單位同主圖價格。`
-        );
+        this.macdCanvas.setAttribute('aria-label', `MACD副圖；日期：${date}；DIF：${difText}；DEA：${deaText}；柱：${histText}；單位同主圖價格。`);
       } else {
         this.macdReadout.textContent = `${date}｜${this.chart.macdNotice || 'MACD 暖機或資料不足，暫無完整數值'}`;
-        this.macdDetails.difNode.textContent = '不足';
-        this.macdDetails.deaNode.textContent = '不足';
-        this.macdDetails.histNode.textContent = '不足';
-        this.macdDetails.stateNode.textContent = '尚未完成34根有效日線暖機或資料有缺值，不能判讀交叉或柱勢。';
-        this.macdCanvas.setAttribute(
-          'aria-label',
-          `MACD副圖；日期：${date}；暖機或資料不足；單位同主圖價格。`
-        );
+        this.macdCanvas.setAttribute('aria-label', `MACD副圖；日期：${date}；暖機或資料不足；單位同主圖價格。`);
       }
     }
 
@@ -950,7 +904,7 @@
     }
 
     _updateTable() {
-      if (!this.tableDetails.open || this.chart.unit !== '日') return;
+      if (!this.tableDetails?.open || !this.tableBody || this.chart.unit !== '日') return;
       const range = this._range();
       const key = this._tableRangeKey(range);
       if (key === this._tableKey) return;
@@ -1014,7 +968,7 @@
       this.macdPane.hidden = !daily || this.active !== 'macd';
       if (this.kdPane) this.kdPane.hidden = !daily || this.active !== 'kd';
       if (this.rsiPane) this.rsiPane.hidden = !daily || this.active !== 'rsi';
-      this.tableDetails.hidden = !daily;
+      for (const [kind, parts] of Object.entries(this.institutionalPanes || {})) parts.pane.hidden = !daily || this.active !== kind;
       if (!daily) return;
 
       const width = this._mainWidth();
@@ -1029,6 +983,7 @@
         this._drawEmpty(this.macdCanvas, width, height, '尚無可顯示的日線MACD');
         if (this.kdPane) this._drawEmpty(this.kdCanvas, width, height, '尚無可顯示的日線KD');
         if (this.rsiPane) this._drawEmpty(this.rsiCanvas, width, height, '尚無可顯示的日線RSI');
+        for (const parts of Object.values(this.institutionalPanes || {})) this._drawEmpty(parts.canvas, width, height, '尚無法人資料');
       } else {
         const volumeContext = this._canvasSize(this.volumeCanvas, width, height);
         this._drawVolume(volumeContext, width, height, range);
@@ -1042,9 +997,10 @@
           this._drawOscillator(this._canvasSize(this.rsiCanvas, width, height), width, height, range, this.rsi,
             [['rsi', token('--study-dif'), []]], [70, 50, 30], '暖機中：需15根有效日線');
         }
+        for (const [kind, parts] of Object.entries(this.institutionalPanes || {})) {
+          this._drawInstitutional(this._canvasSize(parts.canvas, width, height), width, height, range, kind);
+        }
       }
-
-      if (this.tableDetails.open) this._updateTable();
     }
   }
 

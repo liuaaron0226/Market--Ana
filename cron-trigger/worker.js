@@ -19,7 +19,9 @@ export function taipeiDate(ms) {
 export async function dispatch(cron, scheduledTime, env, fetcher = fetch) {
   const job = JOBS[cron];
   if (!job) return { skipped: cron };
-  const body = { ref: "main", inputs: { ...job.inputs, date: taipeiDate(scheduledTime) } };
+  // Rollout: deploy the workflow input schema first, then this Worker (old schema rejects new inputs with 422).
+  const body = { ref: "main", inputs: { ...job.inputs, date: taipeiDate(scheduledTime),
+    trigger_source: "cloudflare-cron", trigger_slot: cron } };
   const response = await fetcher(
     `https://api.github.com/repos/${REPO}/actions/workflows/${job.workflow}/dispatches`,
     {

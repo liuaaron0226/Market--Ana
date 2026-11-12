@@ -7,7 +7,7 @@
   <title>自選股與庫存｜台股決策鏡</title>
   <link rel="stylesheet" href="minimal.css?v=20261109-ux1">
   <link rel="stylesheet" href="bold.css?v=20261109-ux1">
-  <link rel="stylesheet" href="portfolio.css?v=20261109-p2">
+  <link rel="stylesheet" href="portfolio.css?v=20261111-int1">
 </head>
 <body class="bd pf">
   <a class="skip-link" href="#portfolioMain">跳到自選股與庫存</a>
@@ -31,6 +31,33 @@
         </div>
         <p class="pf-freshness" id="portfolioFreshness" role="status">讀取中</p>
       </div>
+
+      <section class="pf-level" id="levelPanel" aria-labelledby="levelTitle" hidden>
+        <div class="pf-level-head">
+          <div>
+            <h2 id="levelTitle">今日股票水位</h2>
+            <p id="levelDate">等待今日資料</p>
+          </div>
+          <p class="pf-level-status" id="levelStatus" role="status">讀取中</p>
+        </div>
+        <p class="pf-level-conclusion" id="levelConclusion">正在整理大盤情勢與目前部位。</p>
+        <div class="pf-level-figures">
+          <div><span>今日建議</span><strong class="num" id="recommendedLevel">—</strong></div>
+          <div><span>目前水位</span><strong class="num" id="currentLevel">—</strong></div>
+          <div><span>相差</span><strong class="num" id="levelGap">—</strong></div>
+          <div><span>約需調整</span><strong class="num" id="levelAmount">—</strong></div>
+        </div>
+        <ul class="pf-level-points" id="levelPoints"></ul>
+        <form class="pf-cash-form" id="cashForm">
+          <label for="cashAmount">計入總資金的現金</label>
+          <div><input id="cashAmount" name="amount_twd" type="number" inputmode="decimal" min="0" max="1000000000000" step="1" placeholder="不含緊急預備金" required><button type="submit">更新現金</button></div>
+          <p id="cashMeta">尚未申報</p>
+        </form>
+        <details class="pf-level-details" id="levelDetails">
+          <summary>查看分數、確認與加碼進度</summary>
+          <div id="levelBreakdown"></div>
+        </details>
+      </section>
 
       <section class="pf-summary" aria-labelledby="holdingSummaryTitle">
         <div>
@@ -76,6 +103,6 @@
       </section>
     </main>
   </div>
-  <script src="portfolio.js?v=20261109-p2" defer></script>
+  <script src="portfolio.js?v=20261111-core-release" defer></script>
 </body>
 </html>

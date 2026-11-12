@@ -20,6 +20,17 @@
       return count >= n ? sum / n : null;
     });
   }
+  function normalizePeriods(values) {
+    const periods = [];
+    for (const value of values || []) {
+      const numeric = Math.round(Number(value) || 0);
+      if (numeric < 2) continue;
+      const parsed = Math.min(240, numeric);
+      if (!periods.includes(parsed)) periods.push(parsed);
+      if (periods.length >= 4) break;
+    }
+    return periods.length ? periods : [18, 45];
+  }
   function macd(closes) {
     let fast = null, slow = null, signal = null, count = 0;
     return closes.map(close => {
@@ -46,6 +57,7 @@
       this.tip = document.createElement('div'); this.tip.className = 'kc-tip'; host.append(this.tip);
       this.candles = []; this.view = { end: 0, count: 60 }; this.hover = -1; this.selection = -1; this.overlays = [];
       this.showMacd = this.opts.macd !== false;
+      this.maPeriods = normalizePeriods(this.opts.maPeriods || [18, 45]);
       this.bindCanvas(this.canvas);
       this.studies = this.opts.studyHost ? new window.ChartStudies(this, this.opts.studyHost, { volumeKind: this.opts.volumeKind || 'amount', studies: this.opts.studies }) : null;
       if (this.studies) document.addEventListener('pointerdown', event => {
@@ -69,7 +81,7 @@
     compute(candles) {
       this.candles = candles; this.shownLength = candles.length;
       const closes = candles.map(c => hasPrice(c) ? c.close : null);
-      this.ma = { 5: sma(closes, 5), 20: sma(closes, 20), 60: sma(closes, 60) };
+      this.ma = Object.fromEntries(this.maPeriods.map(period => [period, sma(closes, period)]));
       const supplied = this.sourceMacd && new Map(this.sourceMacd.map(row => [row.date, row]));
       this.macd = supplied ? candles.map(c => {
         const row = supplied.get(c.t);
@@ -84,6 +96,11 @@
       if (overlays) this.overlays = overlays;
       if (atEnd) this.view.end = candles.length;
       this.clamp(); this.draw(); this.emit();
+    }
+    setMaPeriods(periods) {
+      this.maPeriods = normalizePeriods(periods);
+      this.compute(this.candles);
+      this.draw();
     }
     clamp() {
       const n = this.candles.length;
@@ -111,22 +128,22 @@
       let drag = null; const pts = new Map();
       const geo = () => this.geo;
       c.addEventListener('pointerdown', e => {
-        c.setPointerCapture(e.pointerId); pts.set(e.pointerId, e.clientX);
-        if (pts.size === 1) drag = { x: e.clientX, y: e.clientY, end: this.view.end, moved: false, studySwipe: c !== this.canvas && !!this.studies };
-        if (pts.size === 2) { const xs = [...pts.values()]; drag = { pinch: Math.abs(xs[0] - xs[1]), count: this.view.count, end: this.view.end, studySwipe: c !== this.canvas && !!this.studies }; }
+        c.setPointerCapture(e.pointerId); pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (pts.size === 1) drag = { kind: 'single', x: e.clientX, y: e.clientY, end: this.view.end, moved: false, hadPinch: false, studySwipe: c !== this.canvas && !!this.studies };
+        if (pts.size === 2) { const xs = [...pts.values()].map(point => point.x); drag = { kind: 'pinch', pinch: Math.max(20, Math.abs(xs[0] - xs[1])), count: this.view.count, end: this.view.end, hadPinch: true, studySwipe: c !== this.canvas && !!this.studies }; }
         c.style.cursor = 'grabbing';
         if (drag?.studySwipe) { this.hover = this.selection; this.draw(); }
       });
       c.addEventListener('pointermove', e => {
         const g = geo(); if (!g) return;
-        if (pts.has(e.pointerId)) pts.set(e.pointerId, e.clientX);
+        if (pts.has(e.pointerId)) pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
         const rect = c.getBoundingClientRect(); const x = e.clientX - rect.left;
-        if (drag && pts.size === 2 && drag.pinch) {
+        if (drag?.kind === 'pinch' && pts.size === 2) {
           if (drag.studySwipe) return;
-          const xs = [...pts.values()]; const d = Math.max(20, Math.abs(xs[0] - xs[1]));
+          const xs = [...pts.values()].map(point => point.x); const d = Math.max(20, Math.abs(xs[0] - xs[1]));
           this.view.count = drag.count * drag.pinch / d; this.view.end = drag.end; this.clamp(); this.draw(); this.emit(); return;
         }
-        if (drag && pts.size === 1) {
+        if (drag?.kind === 'single' && pts.size === 1) {
           const dx = e.clientX - drag.x; if ((drag.studySwipe ? Math.hypot(dx, e.clientY - drag.y) : Math.abs(dx)) > 3) drag.moved = true;
           if (drag.studySwipe) return;
           this.view.end = Math.round(drag.end - dx / g.step); this.clamp();
@@ -135,11 +152,11 @@
         this.draw(); if (drag && drag.moved) this.emit();
       });
       const up = e => {
-        if (e.type === 'pointerup' && drag?.studySwipe && drag.moved && !drag.pinch) {
+        if (e.type === 'pointerup' && drag?.kind === 'single' && drag.studySwipe && drag.moved && !drag.hadPinch) {
           const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
           if (Math.abs(dx) >= 40 && Math.abs(dx) > Math.abs(dy) * 1.3) this.studies.switchBy(dx < 0 ? 1 : -1);
         }
-        if (e.type === 'pointerup' && drag && !drag.moved && !drag.pinch && this.geo) {
+        if (e.type === 'pointerup' && drag?.kind === 'single' && !drag.moved && !drag.hadPinch && this.geo) {
           const g = this.geo, px = e.clientX - c.getBoundingClientRect().left;
           this.hover = px >= g.l && px <= g.l + g.pw
             ? Math.min(this.view.end - 1, g.start + Math.floor((px - g.l) / g.step)) : -1;
@@ -148,7 +165,10 @@
           this.draw();
         }
         pts.delete(e.pointerId);
-        if (pts.size === 0) { drag = null; c.style.cursor = 'grab'; }
+        if (pts.size === 1 && drag?.kind === 'pinch') {
+          const point = pts.values().next().value;
+          drag = { kind: 'single', x: point.x, y: point.y, end: this.view.end, moved: false, hadPinch: true, studySwipe: drag.studySwipe };
+        } else if (pts.size === 0) { drag = null; c.style.cursor = 'grab'; }
       };
       c.addEventListener('pointerup', up); c.addEventListener('pointercancel', up);
       c.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse' && !drag) { this.hover = this.selection; this.draw(); } });
@@ -352,9 +372,10 @@
           x.lineWidth = 1.4; x.strokeRect(cx - bw / 2 - 1.5, top - 1.5, bw + 3, h + 3);
         } else x.fillRect(cx - bw / 2, top, bw, h);
       });
-      // 均線
-      [[5, css('--dim'), 1.1], [20, css('--accent'), 1.8], [60, css('--faint'), 1.2]].forEach(([p, col, w]) => {
-        x.strokeStyle = col; x.lineWidth = w; x.beginPath(); let on = false;
+      // 使用者自訂均線（最多四條，預設 MA18／MA45）。
+      const maColors = [css('--accent'), css('--gold'), css('--dim'), css('--faint')];
+      this.maPeriods.forEach((p, index) => {
+        x.strokeStyle = maColors[index]; x.lineWidth = index < 2 ? 1.8 : 1.2; x.beginPath(); let on = false;
         for (let i = start; i < end; i++) { const v = this.ma[p][i]; if (v == null) { on = false; continue; } const px = l + step * (i - start + .5); on ? x.lineTo(px, y(v)) : x.moveTo(px, y(v)); on = true; }
         x.stroke();
       });
@@ -388,9 +409,10 @@
         const i = this.hover, c = this.candles[i], cx = l + step * (i - start + .5);
         x.strokeStyle = dim; x.setLineDash([3, 3]); x.beginPath(); x.moveTo(cx, t); x.lineTo(cx, H - 4); x.stroke(); x.setLineDash([]);
         const prev = this.candles[i - 1], chg = prev && Number.isFinite(c.close) && Number.isFinite(prev.close) ? c.close - prev.close : NaN, m = this.macd[i];
+        const maText = this.maPeriods.map(p => this.ma[p][i] != null ? `MA${p} ${fmt(this.ma[p][i], 0)}` : '').filter(Boolean).join('　');
         this.tip.innerHTML = `<b>${c.label}</b><span class="${chg < 0 ? 'dn' : 'upc'}">收 ${fmt(c.close)}　${Number.isFinite(chg) ? `${chg >= 0 ? '+' : '−'}${fmt(Math.abs(chg))}` : '漲跌缺值'}</span><span>開 ${fmt(c.open)}　高 ${fmt(c.high)}　低 ${fmt(c.low)}</span>` + (this.opts.volumeKind === 'volume'
           ? `<span>成交量 ${Number.isFinite(c.volume) ? `${fmt(c.volume / 1000)} 張（${fmt(c.volume, 0)} 股）` : '缺資料'}</span>`
-          : Number.isFinite(c.amount) ? `<span>成交金額 ${fmt(c.amount, 2)} 億元</span>` : '') + (m.ready ? `<span>MACD柱 ${fmt(m.hist)}　DIF ${fmt(m.dif)}</span>` : '') + ['5', '20', '60'].map(p => this.ma[p][i] != null ? `MA${p} ${fmt(this.ma[p][i], 0)}` : '').filter(Boolean).join('　').replace(/^/, '<span>') + '</span>';
+          : Number.isFinite(c.amount) ? `<span>成交金額 ${fmt(c.amount, 2)} 億元</span>` : '') + (m.ready ? `<span>MACD柱 ${fmt(m.hist)}　DIF ${fmt(m.dif)}</span>` : '') + (maText ? `<span>${maText}</span>` : '');
         this.tip.classList.add('show');
         const tw = Math.min(this.tip.offsetWidth, W - 8); const want = cx + 14 + tw > W ? cx - tw - 14 : cx + 14; this.tip.style.left = Math.max(4, Math.min(W - tw - 4, want)) + 'px'; this.tip.style.top = '8px'; // 手機窄圖：左右都夾在圖表內，不出界
       } else this.tip.classList.remove('show');
@@ -398,5 +420,5 @@
     }
   }
   window.KChart = KChart;
-  window.KChartMath = { sma, ema, macd };
+  window.KChartMath = { sma, ema, macd, normalizePeriods };
 })();

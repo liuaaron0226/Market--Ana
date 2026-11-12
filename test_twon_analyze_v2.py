@@ -13,7 +13,7 @@ from twon_analysis.indicators import Bar
 
 TOP_KEYS = {'schema', 'analysis_version', 'code', 'name', 'kind', 'market', 'as_of', 'requested_as_of', 'quote', 'qa',
             'indicators', 'levels', 'defense', 'trend_classification', 'conditions', 'trading_rules', 'reference',
-            'undisclosed', 'provenance', 'bars', 'chart', 'labels'}
+            'undisclosed', 'provenance', 'bars', 'chart', 'labels', 'strategy', 'institutional'}
 BLOCKING_KEYS = {'schema', 'analysis_version', 'code', 'as_of', 'requested_as_of', 'qa', 'trading_rules', 'undisclosed',
                  'provenance', 'labels'}
 INDICATOR_KEYS = {'ma5', 'ma10', 'ma20', 'ma60', 'ma120', 'ma240', 'rsi14', 'atr14', 'atr_pct', 'relative_volume',
@@ -356,6 +356,26 @@ class RealDataContractTests(unittest.TestCase):
         self.assertEqual(self.listed['chart']['parameters']['version'], 'macd-first-close-v1')
         self.assertEqual(len(self.listed['chart']['macd']), 120)
         self.assertEqual(self.listed['provenance']['chart']['level'], 'generic_indicator')
+
+    def test_strategy_and_three_institutional_series_are_in_the_contract(self):
+        for result in (self.listed, self.otc):
+            with self.subTest(result['code']):
+                self.assertIn(result['strategy']['recommendation'], {'持有', '分批進場', '觀望', '減碼'})
+                self.assertEqual(set(result['strategy']['prices']), {'entry', 'add', 'stop', 'target'})
+                self.assertEqual(set(result['institutional'][0]), {'date', 'foreign', 'trust', 'dealer', 'total'})
+                self.assertEqual([row['date'] for row in result['institutional']], sorted(row['date'] for row in result['institutional']))
+                price_ticks = {row['tick'] for row in result['levels']['support_all']} | {row['tick'] for row in result['levels']['resistance']}
+                self.assertLessEqual({value for value in result['strategy']['prices'].values() if value is not None}, price_ticks)
+
+    def test_unverified_strategy_failure_leaves_core_analysis_intact(self):
+        from unittest import mock
+        import twon_analysis.analyze_v2 as module
+        with mock.patch.object(module, 'strategy_v1', side_effect=RuntimeError('strategy bug')):
+            result = module.analyze_v2('2330', '2026-11-06')
+        self.assertIsNone(result['strategy'])
+        self.assertFalse(result['qa']['blocking'])
+        for key in ('quote', 'indicators', 'levels', 'institutional', 'conditions', 'bars'):
+            self.assertEqual(result[key], self.listed[key], key)
 
     def test_low20_reference_and_unformed_defense_agree(self):
         reference = self.listed['reference']['low20_intraday']

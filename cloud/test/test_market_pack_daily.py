@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -69,6 +70,46 @@ class OutputContractTest(unittest.TestCase):
             with self.assertRaisesRegex(Exception, ""):
                 # out 在 root 外沒關係；stage 一律在 root/.tmp 下（建置腳本的輸出路徑相對 ROOT）。
                 mpd.build("2026-11-06", Path(tmp) / "out", root=Path(tmp) / "no-such-root", fetch=False)
+
+    def test_computed_trend_is_added_to_carried_dashboard_without_changing_human_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            analysis = root / "analysis-data.js"
+            dashboard = root / "dashboard-data.js"
+            trend = {"schema": "market-trend/v1", "data_date": "2026-11-10", "periods": []}
+            analysis.write_text(
+                "window.MARKET_ANALYSIS = " + json.dumps({"market_trend": trend}, ensure_ascii=False) + ";\n",
+                encoding="utf-8",
+            )
+            original = {"headline": {"title": "人寫劇本"}, "actions": {"stand_back": "等待"}}
+            dashboard.write_text(
+                "window.MARKET_DASHBOARD = " + json.dumps(original, ensure_ascii=False) + ";\n",
+                encoding="utf-8",
+            )
+
+            mpd._attach_market_trend(analysis, dashboard)
+
+            payload = mpd._read_assignment(dashboard, "window.MARKET_DASHBOARD = ")
+            self.assertEqual(payload["headline"], original["headline"])
+            self.assertEqual(payload["actions"]["stand_back"], "等待")
+            self.assertEqual(payload["actions"]["market_trend"], trend)
+
+    def test_missing_or_invalid_trend_leaves_dashboard_untouched_and_does_not_raise(self) -> None:
+        for label, trend in (("missing", "absent"), ("null", None), ("wrong-schema", {"schema": "other"})):
+            with self.subTest(label), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                analysis = root / "analysis-data.js"
+                dashboard = root / "dashboard-data.js"
+                body = {"meta": {"cutoff_date": "2026-11-10"}}
+                if trend != "absent":
+                    body["market_trend"] = trend
+                analysis.write_text("window.MARKET_ANALYSIS = " + json.dumps(body, ensure_ascii=False) + ";" + "\n", encoding="utf-8")
+                original = "window.MARKET_DASHBOARD = " + json.dumps({"actions": {"stand_back": "等待"}}, ensure_ascii=False) + ";" + "\n"
+                dashboard.write_text(original, encoding="utf-8")
+
+                self.assertFalse(mpd._attach_market_trend(analysis, dashboard))
+
+                self.assertEqual(dashboard.read_text(encoding="utf-8"), original)
 
 
 if __name__ == "__main__":

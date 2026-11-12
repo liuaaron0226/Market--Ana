@@ -4,10 +4,25 @@ import io
 import json
 import re
 import statistics
+import sys
 from collections import defaultdict
 from datetime import date, datetime, time as clock_time
 from pathlib import Path
 from typing import Any, Callable, Iterable
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import market_trend
+
+
+
+def _market_trend_or_none(daily, institutional):
+    """market-trend/v1 未驗證、預設關閉：算不出來只留空並印警告，不擋核心大盤資料。"""
+    try:
+        return market_trend.assess_market_trends(daily, institutional)
+    except Exception as error:
+        print(f"WARNING market_trend unavailable: {type(error).__name__}", file=sys.stderr)
+        return None
+
 
 ROOT = Path("C:/Users/User/Desktop/Market--Ana")
 SNAPSHOT_ROOT = ROOT / "data/market-snapshots/analysis-20261106"
@@ -715,6 +730,7 @@ def main() -> None:
         "futures": futures,
         "sectors": sectors,
         "indicators": indicators,
+        "market_trend": _market_trend_or_none(daily, institutional),
         "backtest": backtest,
     }
 

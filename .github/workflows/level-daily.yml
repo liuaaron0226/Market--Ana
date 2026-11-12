@@ -1,0 +1,154 @@
+name: level-daily
+
+on:
+  schedule:
+    # 台北週一至週五約 07:30；UTC 為前一日 23:30。
+    - cron: "30 23 * * 0-4"
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "台股資料日 YYYY-MM-DD（留空＝台北今天）"
+        required: false
+        type: string
+      dry_run:
+        description: "只取得與計算，不寫 D1、不回傳 R2"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  # 三支正式 workflow 共用鎖且不取消；只序列化採用此 group 的 CI caller，不取代 immutable manifest 原子性。
+  group: market-state-write
+  cancel-in-progress: false
+
+jobs:
+  authorize:
+    runs-on: ubuntu-latest
+    outputs:
+      allowed: ${{ steps.gate.outputs.allowed }}
+      dry_run: ${{ steps.gate.outputs.dry_run }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: 核心版策略預設停用門
+        id: gate
+        env:
+          MARKET_ANA_STRATEGIES_ENABLED: ${{ vars.MARKET_ANA_STRATEGIES_ENABLED }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+        run: node cloud/strategy-workflow.mjs
+
+  calculate:
+    needs: authorize
+    if: needs.authorize.outputs.allowed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TZ: Asia/Taipei
+      PYTHONIOENCODING: utf-8
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: market-ana-state
+      EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
+    steps:
+      - name: 檢查金鑰
+        run: |
+          missing=""
+          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY EODHD_API_KEY; do
+            if [ -z "${!name}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then echo "::error::缺少 GitHub Secrets：$missing"; exit 1; fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: 驗證 Cloudflare token（唯讀）
+        run: |
+          npx --yes wrangler@4 d1 list > /dev/null || { echo "::error::CLOUDFLARE_API_TOKEN 無法讀取 D1"; exit 1; }
+          npx --yes wrangler@4 pages project list > /dev/null || { echo "::error::CLOUDFLARE_API_TOKEN 無法讀取 Pages"; exit 1; }
+
+      - name: 決定資料日
+        id: day
+        env:
+          INPUT_DATE: ${{ inputs.date }}
+          AUTH_DRY_RUN: ${{ needs.authorize.outputs.dry_run }}
+        run: |
+          day="${INPUT_DATE:-$(date +%F)}"
+          python -c 'from state_sync import require_iso_date; import sys; require_iso_date(sys.argv[1], "workflow date")' "$day" || { echo "::error::date 必須是真實的 YYYY-MM-DD"; exit 1; }
+          echo "date=$day" >> "$GITHUB_OUTPUT"
+          dry_run=true
+          if [ "$AUTH_DRY_RUN" = "false" ]; then dry_run=false; fi
+          echo "dry_run=$dry_run" >> "$GITHUB_OUTPUT"
+
+      - name: 從 R2 還原工作集
+        run: python state_sync.py restore --target .
+
+      # state_sync 工作集須保留 data/level-signals/state.json；EODHD／OFR 原件由每日流程重新取得。
+      # R2 與 D1 都可能有狀態；D1 讀取或格式不明時 fail closed，只有 success=true 的真空結果可初始化。
+      - name: 合併 R2 與 D1 的最新水位狀態
+        run: |
+          mkdir -p data/level-signals
+          npx --yes wrangler@4 d1 execute market-ana-accounts --remote --json \
+            --command "SELECT data_date,payload FROM level_strategy_state WHERE key='current'" > "${{ runner.temp }}/level-state.json"
+          python level_signals.py merge-state \
+            --d1-result "${{ runner.temp }}/level-state.json" \
+            --r2-state "data/level-signals/state.json" \
+            --run-date "${{ steps.day.outputs.date }}"
+
+      - name: 取得合法訊號並計算水位
+        run: >-
+          python level_signals.py daily
+          --date "${{ steps.day.outputs.date }}"
+          --output "data/level-signals/${{ steps.day.outputs.date }}/result.json"
+          --sql-output "${{ runner.temp }}/level-daily.sql"
+
+      - name: 寫入 D1 新版本
+        if: steps.day.outputs.dry_run == 'false'
+        run: npx --yes wrangler@4 d1 execute market-ana-accounts --remote --file "${{ runner.temp }}/level-daily.sql"
+
+      - name: 驗證 D1 已保存才算成功
+        if: steps.day.outputs.dry_run == 'false'
+        run: |
+          npx --yes wrangler@4 d1 execute market-ana-accounts --remote --json \
+            --command "SELECT data_date,version,rule_version,input_sha256 FROM level_daily WHERE data_date='${{ steps.day.outputs.date }}' AND is_current=1" \
+            > "${{ runner.temp }}/level-verify.json"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          rows = json.loads(Path(r"${{ runner.temp }}/level-verify.json").read_text(encoding="utf-8"))[0].get("results", [])
+          if len(rows) != 1:
+              raise SystemExit("D1 沒有唯一的當日 current 版本")
+          print(rows[0])
+          PY
+
+      - name: 成功後同步工作集回 R2
+        if: success() && steps.day.outputs.dry_run == 'false'
+        run: |
+          level_state_date=$(python -c 'import json; print(json.load(open("data/level-signals/state.json", encoding="utf-8"))["last_processed_date"])')
+          python state_sync.py upload --data-date "$level_state_date" --cursor-domain level
+
+      - name: 執行摘要
+        if: always()
+        run: |
+          {
+            echo "### 每日水位 ${{ steps.day.outputs.date }}"
+            if [ -f "data/level-signals/${{ steps.day.outputs.date }}/result.json" ]; then
+              echo '```json'
+              python -c "import json; p=json.load(open('data/level-signals/${{ steps.day.outputs.date }}/result.json',encoding='utf-8')); print(json.dumps({k:p.get(k) for k in ('data_date','recommended_level','missing_signals','warning')},ensure_ascii=False,indent=2))"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -14,6 +14,7 @@ import math
 from .data import DEFAULT_DB, DEFAULT_OTC_DB, load_bars
 from .indicators import Bar, atr14, kd9, ma, macd
 from .price_structure import WEIGHTS, resistance_tick, support_tick, tick_floor
+from .strategy_v1 import strategy_v1
 
 SCHEMA = 'stock-analysis/v2'
 ANALYSIS_VERSION = 'price-structure-rea-v2'
@@ -435,6 +436,32 @@ def _otc_chip_inputs(code: str, as_of: str) -> dict:
 _REVENUE_CACHE: dict[tuple, dict] = {}
 
 
+def institutional_series(code: str, market: str, dates: list[str]) -> list[dict]:
+    """回傳與 K 線日期對齊的三大法人個別買賣超；缺日省略，不補成零。"""
+    if not dates:
+        return []
+    import sqlite3
+    data_root = DEFAULT_DB.parents[1]
+    path = (data_root / 'listed-institutional' / 'listed_institutional.sqlite'
+            if market == '上市' else data_root / 'otc-history' / 'otc_market.sqlite')
+    if not path.exists():
+        return []
+    connection = sqlite3.connect(f'file:{path.as_posix()}?mode=ro', uri=True)
+    try:
+        rows = connection.execute(
+            'SELECT date, foreign_net, trust_net, dealer_net, total_net FROM institutional '
+            'WHERE code = ? AND date >= ? AND date <= ? ORDER BY date',
+            (code, dates[0], dates[-1]),
+        ).fetchall()
+    finally:
+        connection.close()
+    allowed = set(dates)
+    return [
+        {'date': date, 'foreign': foreign, 'trust': trust, 'dealer': dealer, 'total': total}
+        for date, foreign, trust, dealer, total in rows if date in allowed
+    ]
+
+
 def _revenue_yoy(code: str, market: str, as_of: str) -> float | None:
     import json
     from datetime import date
@@ -502,6 +529,17 @@ def analyze_v2(code: str, as_of: str, db_path=DEFAULT_DB, otc_db_path=DEFAULT_OT
     x = indicators_v2(bars)
     last = bars[-1]
     inputs = condition_inputs(code, info['market'], last.date, bars, x)
+    levels = price_levels_v2(bars, x)
+    conditions = condition_states(inputs)
+    chart_bars = bars[-120:]
+    institutional = _safe(lambda: institutional_series(code, info['market'], [bar.date for bar in chart_bars])) or []
+    # strategy_v1 尚未通過驗證、對外預設關閉（本人 11-11／11-12 定案）：它出錯只讓 strategy 留空，
+    # 不能讓這檔的行情、指標、價位、法人等核心資料跟著消失。
+    try:
+        strategy = strategy_v1(close=last.close, indicators=x, levels=levels, conditions=conditions,
+                               institutional=institutional)
+    except Exception:
+        strategy = None
     return {
         'schema': SCHEMA, 'analysis_version': ANALYSIS_VERSION,
         'code': code, 'name': info['name'], 'kind': info['kind'], 'market': info['market'],
@@ -509,16 +547,18 @@ def analyze_v2(code: str, as_of: str, db_path=DEFAULT_DB, otc_db_path=DEFAULT_OT
         'quote': {'close': last.close, 'chg_pct': round(info['chg'], 2), 'volume': last.volume, 'change_sign': info['change_sign']},
         'qa': {'blocking': False, 'bars': len(bars)},
         'indicators': x,
-        'levels': price_levels_v2(bars, x),
+        'levels': levels,
+        'strategy': strategy,
+        'institutional': institutional,
         'defense': defense_payload(x['low20_intraday']),
         'trend_classification': trend_classification_payload(),
-        'conditions': condition_states(inputs),
+        'conditions': conditions,
         'trading_rules': dict(TRADING_RULES),
         'reference': {'low20_intraday': {'value': x['low20_intraday'], 'label': '近 20 日盤中低點',
                                          'note': '事實資料；觀察區未形成時即為防守價'}},
         'undisclosed': {k: dict(UNDISCLOSED) for k in UNDISCLOSED_KEYS},
         'provenance': PROVENANCE,
-        'bars': [{'date': b.date, 'open': b.open, 'high': b.high, 'low': b.low, 'close': b.close, 'volume': b.volume} for b in bars[-120:]],
+        'bars': [{'date': b.date, 'open': b.open, 'high': b.high, 'low': b.low, 'close': b.close, 'volume': b.volume} for b in chart_bars],
         'chart': {
             'parameters': {'fast': 12, 'slow': 26, 'signal': 9, 'histogram_multiplier': 1,
                            'seed': 'first_close', 'warmup_bars': 34, 'precision': 3,

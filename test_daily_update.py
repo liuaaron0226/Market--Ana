@@ -174,6 +174,231 @@ class RunTest(unittest.TestCase):
         self.assertLess(order.index("pages_deploy"), order.index("post_deploy_check"))
 
 
+class PeriodicWaitTest(unittest.TestCase):
+    def test_cloudflare_early_slot_waits_without_publishing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            du.write_status(root, {"data_date": "2026-11-10", "status": "success", "finished_at": "previous"})
+            calls = []
+            clock = FakeClock(datetime(2026, 11, 11, 15, 32, tzinfo=TPE))
+            config = du.RunConfig("2026-11-11", root, holidays=set(), ready_interval=0,
+                                  ready_deadline=clock.now(), trigger_event="workflow_dispatch",
+                                  trigger_source="cloudflare-cron", trigger_slot="30 7 * * 1-5")
+            record = du.run(config, steps=full_steps(calls), probe=lambda day: False,
+                            ready_check=lambda: False, clock=clock, rollback=recorder("rollback", calls))
+            self.assertEqual(record["status"], "waiting")
+            self.assertFalse(record["published"])
+            self.assertEqual(record["readiness"]["attempts"], 1)
+            self.assertEqual(calls, [])
+            self.assertEqual(clock.sleeps, [])
+            status = json.loads((root / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["last_success_date"], "2026-11-10")
+            self.assertEqual(status["run"]["reason"], "等待官方資料，未發布；下個時段重試")
+            self.assertTrue(status["stale"])
+
+
+    def test_probe_crossing_final_cutoff_cannot_keep_early_slot_waiting(self) -> None:
+        clock = FakeClock(datetime(2026, 11, 11, 20, 29, 59, tzinfo=TPE))
+        def delayed_probe():
+            clock.now_value += timedelta(seconds=2)
+            return False
+        with tempfile.TemporaryDirectory() as directory:
+            calls = []
+            config = du.RunConfig("2026-11-11", Path(directory), holidays=set(), ready_interval=0,
+                                  ready_deadline=clock.now(), trigger_event="schedule",
+                                  trigger_source="github-schedule", trigger_slot="30 7 * * 1-5")
+            record = du.run(config, steps=full_steps(calls), probe=lambda day: False,
+                            ready_check=delayed_probe, clock=clock)
+            self.assertEqual(record["status"], "failed")
+            self.assertFalse(record["published"])
+            self.assertEqual(calls, [])
+
+
+class PeriodicCliTest(unittest.TestCase):
+    def run_cli(self, *, event="workflow_dispatch", source="cloudflare-cron", slot="30 7 * * 1-5",
+                at="2026-11-11T15:32:00+08:00", ready=False, fail_at=None, legacy=False):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            calls = []
+            argv = ["--date", "2026-11-11", "--no-wait", "--log-dir", str(root),
+                    "--result-file", str(root / "result.json")]
+            if event is not None:
+                argv += ["--trigger-event", event, "--trigger-source", source, "--trigger-slot", slot]
+            if legacy:
+                argv += ["--allow-not-ready"]
+            fake_ingest = unittest.mock.Mock()
+            fake_ingest.fetch_holidays.return_value = {"2026-01-01"}
+            with unittest.mock.patch.dict("sys.modules", {"daily_ingest": fake_ingest}), \
+                    unittest.mock.patch.object(du, "local_state_probe", return_value=False), \
+                    unittest.mock.patch.object(du, "official_ready", return_value=ready), \
+                    unittest.mock.patch.object(du, "real_steps", return_value=full_steps(calls, fail_at)), \
+                    unittest.mock.patch.object(du, "remote_rollback", side_effect=AssertionError("unexpected remote rollback")):
+                rc = du.main(argv, clock=FakeClock(datetime.fromisoformat(at)))
+            return rc, json.loads((root / "result.json").read_text(encoding="utf-8")), calls
+
+    def test_cli_waiting_is_neither_publication_nor_ai_authorization(self) -> None:
+        from ai_digest_trigger import build_publication_evidence, authorize_publication
+        rc, result, calls = self.run_cli()
+        self.assertEqual(rc, 0)
+        self.assertEqual(result["status"], "waiting")
+        self.assertFalse(result["published"])
+        self.assertFalse(result["sync_state"])
+        self.assertIn("未發布", result["message"])
+        self.assertEqual(calls, [])
+        evidence = build_publication_evidence(result, dry_run=False, run_id="42", head_sha="a" * 40,
+                                              repository="fixture/repo", head_branch="main")
+        self.assertFalse(evidence["published"])
+        self.assertEqual(evidence["status"], "waiting")
+        decision = authorize_publication(evidence, expected_run_id="42", expected_head_sha="a" * 40,
+                                         expected_repository="fixture/repo", expected_branch="main", conclusion="success")
+        self.assertFalse(decision["allowed"])
+        self.assertEqual(decision["reason"], "upstream-not-published")
+
+    def test_all_slots_both_callers_and_strict_manual_delays(self) -> None:
+        slots = [("30 7 * * 1-5", "15:32", 0), ("30 8 * * 1-5", "16:32", 0),
+                 ("0 10 * * 1-5", "18:02", 0), ("30 12 * * 1-5", "20:32", 1)]
+        for event, source in [("schedule", "github-schedule"), ("workflow_dispatch", "cloudflare-cron")]:
+            for slot, hour, expected in slots:
+                with self.subTest(event=event, slot=slot):
+                    rc, result, calls = self.run_cli(event=event, source=source, slot=slot,
+                                                    at=f"2026-11-11T{hour}:00+08:00")
+                    self.assertEqual(rc, expected)
+                    self.assertEqual(result["status"], "waiting" if expected == 0 else "failed")
+                    self.assertFalse(result["published"])
+                    self.assertFalse(result["sync_state"])
+                    self.assertEqual(calls, [])
+        strict = [dict(source="", slot=""), dict(source="unknown"), dict(slot="unknown"),
+                  dict(source="github-schedule"), dict(event="schedule", source="cloudflare-cron"),
+                  dict(at="2026-11-11T20:30:00+08:00"), dict(at="2026-11-11T21:00:00+08:00"),
+                  dict(at="2026-11-12T06:00:00+08:00"), dict(at="2026-11-10T16:00:00+08:00"),
+                  dict(at="2026-11-11T15:00:00+08:00"), dict(slot="", legacy=True)]
+        for values in strict:
+            with self.subTest(strict=values):
+                rc, result, calls = self.run_cli(**values)
+                self.assertEqual(rc, 1)
+                self.assertEqual(result["status"], "failed")
+                self.assertEqual(calls, [])
+
+    def test_ready_publishes_but_real_failure_never_becomes_waiting(self) -> None:
+        rc, result, calls = self.run_cli(ready=True)
+        self.assertEqual(rc, 0)
+        self.assertTrue(result["published"])
+        self.assertTrue(result["sync_state"])
+        self.assertEqual(calls, du.STEP_ORDER)
+        rc, result, calls = self.run_cli(ready=True, fail_at="fetch_incremental")
+        self.assertEqual(rc, 1)
+        self.assertEqual(result["status"], "failed")
+        self.assertFalse(result["published"])
+        self.assertEqual(calls, ["fetch_incremental"])
+
+    def test_legacy_flag_only_before_same_day_final_deadline(self) -> None:
+        self.assertEqual(self.run_cli(event=None, legacy=True)[0], 0)
+        self.assertEqual(self.run_cli(event=None, legacy=True, at="2026-11-11T20:30:00+08:00")[0], 1)
+        self.assertEqual(self.run_cli(event=None, legacy=True, at="2026-11-12T06:00:00+08:00")[0], 1)
+        self.assertEqual(self.run_cli(event=None)[0], 1)
+
+
+class ReadinessEvidenceTest(unittest.TestCase):
+    def test_every_source_is_recorded_without_secret_or_invented_date(self) -> None:
+        clock = FakeClock(datetime(2026, 11, 11, 15, 32, tzinfo=TPE))
+        observations = []
+        probes = {
+            "listed_quotes": lambda day: {"ready": True, "as_of": "2026-11-11", "http_status": 200,
+                                           "reason": "ready", "cookie": "SECRET_SENTINEL"},
+            "otc_quotes": lambda day: {"ready": False, "as_of": None, "http_status": 200, "reason": "not-published"},
+            "listed_institutional": lambda day: (_ for _ in ()).throw(ValueError("SECRET_SENTINEL email@example.test")),
+        }
+        self.assertFalse(du.official_ready("2026-11-11", probes=probes, observations=observations, clock=clock))
+        self.assertEqual([row["source"] for row in observations], list(du.READY_SOURCES))
+        self.assertEqual(observations[0]["as_of"], "2026-11-11")
+        self.assertIsNone(observations[1]["as_of"])
+        self.assertIn("as_of", observations[1]["missing"])
+        self.assertEqual(observations[2]["reason"], "probe-error")
+        self.assertEqual(observations[3]["reason"], "missing-probe")
+        self.assertTrue(all(row["observed_at"] == "2026-11-11T15:32:00+08:00" for row in observations))
+        self.assertNotIn("SECRET_SENTINEL", json.dumps(observations))
+        self.assertNotIn("email@", json.dumps(observations))
+        calls = []
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = du.RunConfig("2026-11-11", root, holidays=set(), ready_interval=0,
+                                  ready_deadline=clock.now(), trigger_event="workflow_dispatch",
+                                  trigger_source="cloudflare-cron", trigger_slot="30 7 * * 1-5")
+            record = du.run(config, steps=full_steps(calls), probe=lambda day: False, ready_check=lambda: False,
+                            clock=clock, readiness_observations=observations)
+            self.assertEqual(record["status"], "failed", "probe errors must not be softened to waiting")
+            self.assertEqual(record["readiness"]["sources"], observations)
+            saved = json.loads((root / "2026-11-11.json").read_text(encoding="utf-8"))
+            self.assertEqual(saved["readiness"]["sources"], observations)
+            self.assertEqual(calls, [])
+
+
+    def test_wrong_source_day_and_transport_failure_are_strict_without_raw_error_text(self) -> None:
+        for overrides, expected in [({"as_of": "2026-11-10"}, "date-mismatch"),
+                                    ({"ready": False, "reason": "http-error", "http_status": 503}, "http-error")]:
+            with self.subTest(overrides=overrides):
+                rows = []
+                probes = {name: (lambda day: {"ready": True, "as_of": "2026-11-11", "reason": "ready"})
+                          for name in du.READY_SOURCES}
+                probes["listed_quotes"] = lambda day: {"ready": True, "as_of": "2026-11-11", "reason": "ready", **overrides}
+                self.assertFalse(du.official_ready("2026-11-11", probes=probes, observations=rows))
+                self.assertEqual(rows[0]["status"], "error")
+                self.assertEqual(rows[0]["reason"], expected)
+
+    def test_http_200_without_source_date_cannot_be_ready(self) -> None:
+        from types import SimpleNamespace
+        import stock_history
+        import otc_history
+        rows = []
+        twse = SimpleNamespace(status=200, content=b'{"stat":"OK"}', content_type="application/json")
+        tpex = SimpleNamespace(status=200, content=b'<html>not market data</html>', content_type="text/html")
+        with unittest.mock.patch.object(stock_history, "http_get", return_value=twse), \
+                unittest.mock.patch.object(otc_history, "http_get", return_value=tpex):
+            self.assertFalse(du.official_ready("2026-11-11", observations=rows))
+        self.assertTrue(all(row["status"] == "error" for row in rows))
+        self.assertTrue(all(row["as_of"] is None and "as_of" in row["missing"] for row in rows))
+
+    def test_real_http_adapters_keep_source_dates_in_waiting_and_failure_artifacts(self) -> None:
+        from types import SimpleNamespace
+        import daily_ingest
+        import stock_history
+        import otc_history
+        def response(content, kind="application/json"):
+            return SimpleNamespace(status=200, content=content, content_type=kind)
+        def twse(url, params):
+            payload = ({"stat": "很抱歉，沒有符合條件的資料!", "total": 0} if "/T86" in url else
+                       {"stat": "OK", "date": "20261111"})
+            return response(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+        def tpex(session, url, params):
+            title = "115年11月11日三大法人" if "dailyTrade" in url else "資料日期:115/11/11"
+            return response((title + "\n代號,名稱,收盤,漲跌,成交股數\n2330,fixture,100,1,1000\n").encode("cp950"), "application/csv;charset=MS950")
+        for hour, expected_status, expected_rc in [(16, "waiting", 0), (21, "failed", 1)]:
+            with self.subTest(hour=hour), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                calls = []
+                with unittest.mock.patch.object(stock_history, "http_get", side_effect=twse), \
+                        unittest.mock.patch.object(otc_history, "http_get", side_effect=tpex), \
+                        unittest.mock.patch.object(daily_ingest, "fetch_holidays", return_value={"2026-01-01"}), \
+                        unittest.mock.patch.object(du, "local_state_probe", return_value=False), \
+                        unittest.mock.patch.object(du, "real_steps", return_value=full_steps(calls)):
+                    rc = du.main(["--date", "2026-11-11", "--no-wait", "--log-dir", str(root),
+                                  "--result-file", str(root / "result.json"), "--trigger-event", "workflow_dispatch",
+                                  "--trigger-source", "cloudflare-cron", "--trigger-slot", "30 7 * * 1-5"],
+                                 clock=FakeClock(datetime(2026, 11, 11, hour, 0, tzinfo=TPE)))
+                self.assertEqual(rc, expected_rc)
+                record = json.loads((root / "2026-11-11.json").read_text(encoding="utf-8"))
+                self.assertEqual(record["status"], expected_status)
+                rows = record["readiness"]["sources"]
+                self.assertEqual(len(rows), 4)
+                self.assertEqual([row["as_of"] for row in rows], ["2026-11-11", "2026-11-11", None, "2026-11-11"])
+                self.assertEqual(rows[2]["reason"], "not-published")
+                self.assertEqual(rows[2]["missing"], ["as_of"])
+                self.assertFalse(record["published"])
+                result = json.loads((root / "result.json").read_text(encoding="utf-8"))
+                self.assertEqual(result["readiness"]["sources"], rows)
+                self.assertEqual(calls, [])
+
+
 class IngestWiringTest(unittest.TestCase):
     """U1：fetch_incremental／build_databases 接上 daily_ingest，不再是 pending。"""
 
@@ -498,10 +723,12 @@ class StatusFileTest(unittest.TestCase):
                 unittest.mock.patch.object(du, "real_steps", lambda: []):
             return du.main(["--date", "2026-11-09", "--log-dir", str(self.log_dir), *argv])
 
-    def test_not_ready_in_an_early_cron_slot_exits_zero_with_allow_flag(self) -> None:
-        # U3：Actions 用多個 cron 輪詢；前幾個時段未就緒是正常，不能讓 job 失敗寄信。最後一個時段才算失敗。
-        record = {"data_date": "2026-11-09", "status": "failed", "failed_step": "wait_ready"}
-        self.assertEqual(self._main_with_record(record, ["--no-wait", "--allow-not-ready"]), 0)
+    def test_waiting_exits_zero_but_cli_never_softens_an_already_failed_record(self) -> None:
+        # 時段／實際截止判斷已移入 run；本接縫只映射明確waiting，不可拿flag吞掉嚴格失敗。
+        record = {"data_date": "2026-11-09", "status": "waiting", "failed_step": "wait_ready"}
+        self.assertEqual(self._main_with_record(record, ["--no-wait"]), 0)
+        record["status"] = "failed"
+        self.assertEqual(self._main_with_record(record, ["--no-wait", "--allow-not-ready"]), 1)
         self.assertEqual(self._main_with_record(record, ["--no-wait"]), 1)
 
     def test_allow_not_ready_does_not_hide_real_failures(self) -> None:
@@ -515,7 +742,7 @@ class StatusFileTest(unittest.TestCase):
         self._main_with_record(record, ["--no-wait", "--result-file", str(result)])
         payload = json.loads(result.read_text(encoding="utf-8"))
         self.assertEqual(payload, {"data_date": "2026-11-09", "status": "success", "failed_step": None,
-                                   "sync_state": True})
+                                   "sync_state": True, "published": True, "readiness": None, "message": "本次已發布"})
         record = {"data_date": "2026-11-09", "status": "failed", "failed_step": "wait_ready"}
         self._main_with_record(record, ["--no-wait", "--allow-not-ready", "--result-file", str(result)])
         self.assertFalse(json.loads(result.read_text(encoding="utf-8"))["sync_state"])

@@ -16,12 +16,15 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
+import re
 import sqlite3
 import sys
 import time
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Callable, Iterable, Sequence
 
@@ -55,6 +58,105 @@ def _read_only(db_path: Path) -> sqlite3.Connection:
     return sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
 
 
+def _is_finite_number(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _validate_qa(code: str, qa: object) -> None:
+    if not isinstance(qa, dict) or qa.get("blocking") is not False:
+        raise ValueError(f"payload QA 必須明確為 non-blocking：{code}")
+    bars = qa.get("bars")
+    if not isinstance(bars, int) or isinstance(bars, bool) or bars < MIN_ANALYSIS_BARS:
+        raise ValueError(f"payload QA bars 不足或型別無效：{code}")
+
+
+def _validate_strategy(
+    code: str,
+    strategy: object,
+    *,
+    institutional_day: Decimal | None,
+    institutional_5d: Decimal | None,
+) -> None:
+    if not isinstance(strategy, dict):
+        raise ValueError(f"payload strategy 必須是 object：{code}")
+    if not isinstance(strategy.get("strategy_version"), str) or not strategy["strategy_version"]:
+        raise ValueError(f"payload strategy 缺有效版本：{code}")
+    if strategy.get("recommendation") not in {"持有", "分批進場", "觀望", "減碼"}:
+        raise ValueError(f"payload strategy 建議無效：{code}")
+    prices = strategy.get("prices")
+    if not isinstance(prices, dict) or not {"entry", "add", "stop", "target"}.issubset(prices):
+        raise ValueError(f"payload strategy 價位結構無效：{code}")
+    if any(prices[key] is not None and not _is_finite_number(prices[key])
+           for key in ("entry", "add", "stop", "target")):
+        raise ValueError(f"payload strategy 價位必須是數字或 null：{code}")
+    if not isinstance(strategy.get("reason"), str) or not strategy["reason"].strip():
+        raise ValueError(f"payload strategy 缺明確理由：{code}")
+    if strategy.get("evidence_strength") not in {"完整", "部分", "有限"}:
+        raise ValueError(f"payload strategy 證據狀態無效：{code}")
+    signals = strategy.get("signals")
+    if not isinstance(signals, dict) or not {"positive", "risk", "institutional_day", "institutional_5d"}.issubset(signals):
+        raise ValueError(f"payload strategy 訊號結構無效：{code}")
+    for key in ("positive", "risk"):
+        if not isinstance(signals[key], int) or isinstance(signals[key], bool) or signals[key] < 0:
+            raise ValueError(f"payload strategy 訊號計數無效：{code}/{key}")
+    for key in ("institutional_day", "institutional_5d"):
+        if signals[key] is not None and not _is_finite_number(signals[key]):
+            raise ValueError(f"payload strategy 法人訊號無效：{code}/{key}")
+    expected = {
+        "institutional_day": institutional_day,
+        "institutional_5d": institutional_5d,
+    }
+    for key, value in expected.items():
+        actual = signals[key]
+        matches = actual is None and value is None
+        if actual is not None and value is not None:
+            matches = Decimal(str(actual)) == value
+        if not matches:
+            raise ValueError(f"payload strategy {key} 與 institutional 序列不一致：{code}")
+
+
+def _parse_payload_date(code: str, value: object) -> date:
+    if not isinstance(value, str) or re.fullmatch(r"\d{4}-\d{2}-\d{2}", value) is None:
+        raise ValueError(f"payload 資料日格式無效：{code}/{value}")
+    try:
+        return date.fromisoformat(value)
+    except ValueError as error:
+        raise ValueError(f"payload 資料日格式無效：{code}/{value}") from error
+
+
+def _validate_institutional(code: str, rows: object, as_of: date) -> tuple[Decimal | None, Decimal | None]:
+    if not isinstance(rows, list):
+        raise ValueError(f"payload institutional 必須是 array：{code}")
+    required = {"date", "foreign", "trust", "dealer", "total"}
+    prior: date | None = None
+    totals: list[Decimal] = []
+    for row in rows:
+        if not isinstance(row, dict) or not required.issubset(row):
+            raise ValueError(f"payload institutional 列結構無效：{code}")
+        if any(not _is_finite_number(row[key]) for key in required - {"date"}):
+            raise ValueError(f"payload institutional 列型別無效：{code}")
+        component_total = sum((Decimal(str(row[key])) for key in ("foreign", "trust", "dealer")), Decimal(0))
+        reported_total = Decimal(str(row["total"]))
+        if reported_total != component_total:
+            raise ValueError(f"payload institutional total 與三分項不一致：{code}/{row.get('date')}")
+        totals.append(reported_total)
+        raw_date = row["date"]
+        if not isinstance(raw_date, str) or re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw_date) is None:
+            raise ValueError(f"payload institutional 日期無效：{code}/{raw_date}")
+        try:
+            row_date = date.fromisoformat(raw_date)
+        except ValueError as error:
+            raise ValueError(f"payload institutional 日期無效：{code}/{raw_date}") from error
+        if row_date > as_of:
+            raise ValueError(f"payload institutional 日期超出資料日：{code}/{row.get('date')}")
+        if prior is not None and row_date <= prior:
+            raise ValueError(f"payload institutional 日期未嚴格遞增：{code}/{row['date']}")
+        prior = row_date
+    institutional_day = totals[-1] if totals else None
+    institutional_5d = sum(totals[-5:], Decimal(0)) if len(totals) >= 5 else None
+    return institutional_day, institutional_5d
+
+
 def analysis_status(
     available_bars: int,
     latest_bar_date: str | None,
@@ -79,6 +181,38 @@ def _check_payload(code: str, payload: object) -> None:
     retired = sorted(RETIRED_KEYS & payload.keys())
     if retired:
         raise ValueError(f"payload 含契約 v2 已移除的欄位：{code}/{','.join(retired)}")
+    as_of = _parse_payload_date(code, payload.get("as_of"))
+    _validate_qa(code, payload.get("qa"))
+    for required in ("strategy", "institutional"):
+        if required not in payload:
+            raise ValueError(f"payload 缺少 {required}：{code}")
+    institutional_day, institutional_5d = _validate_institutional(code, payload["institutional"], as_of)
+    # strategy 只有兩種合法狀態：null（未驗證策略當日不可用），或完整通過驗證。
+    if payload["strategy"] is not None:
+        _validate_strategy(
+            code,
+            payload["strategy"],
+            institutional_day=institutional_day,
+            institutional_5d=institutional_5d,
+        )
+
+
+def _isolate_strategy(code: str, payload: dict) -> str | None:
+    """未驗證策略不合格時把 strategy 改成 null 並回傳原因；核心欄位有問題照樣丟例外。
+
+    每日核心發布不能被預設關閉的策略計算拖累（本人 11-12「先脫鉤再上線」）。
+    """
+    if not isinstance(payload, dict) or payload.get("strategy") is None:
+        return None
+    as_of = _parse_payload_date(code, payload.get("as_of"))
+    institutional_day, institutional_5d = _validate_institutional(code, payload.get("institutional"), as_of)
+    try:
+        _validate_strategy(code, payload["strategy"],
+                           institutional_day=institutional_day, institutional_5d=institutional_5d)
+    except ValueError as error:
+        payload["strategy"] = None
+        return str(error)[:200]
+    return None
 
 
 def _validate_seed(manifest: dict, securities: Sequence[dict], analyses: Sequence[dict]) -> None:
@@ -113,6 +247,10 @@ def _validate_seed(manifest: dict, securities: Sequence[dict], analyses: Sequenc
             raise ValueError(f"payload 市場別與名錄不符：{code}")
         if payload.get("as_of") != row["as_of"] or payload.get("qa", {}).get("blocking"):
             raise ValueError(f"payload 資料日或 QA 不可用：{code}")
+        if security is not None and payload["as_of"] != security["latest_bar_date"]:
+            raise ValueError(f"payload 資料日與名錄最後行情日不一致：{code}")
+        if is_compatibility and manifest.get("data_date") is not None and payload["as_of"] != manifest["data_date"]:
+            raise ValueError(f"相容入口資料日與版本資料日不一致：{code}")
 
     for code, security in by_code.items():
         if security["analysis_status"] in ("available", "stale") and code not in found:
@@ -370,6 +508,10 @@ def _build_rows(
         if status in ("available", "stale"):
             try:
                 payload = analyzer(item.code, "9999-12-31")
+                isolated = _isolate_strategy(item.code, payload)
+                if isolated or (isinstance(payload, dict) and "strategy" in payload and payload["strategy"] is None):
+                    failures.append({"code": item.code, "scope": "strategy", "error": "StrategyUnavailable",
+                                     "message": isolated or "strategy 計算失敗，已留空"})
                 _check_payload(item.code, payload)
                 if (
                     payload.get("as_of") != item.latest_bar_date
@@ -390,6 +532,7 @@ def _build_rows(
 def _compatibility_rows(data_date: str, analyzer: Callable[..., dict]) -> list[dict]:
     """保留既有 0050 ETF 分析入口，但不把 ETF 放進普通股名錄。"""
     payload = analyzer("0050", "9999-12-31")
+    _isolate_strategy("0050", payload)
     _check_payload("0050", payload)
     if payload.get("kind") != "etf" or payload.get("as_of") != data_date or payload.get("qa", {}).get("blocking"):
         raise ValueError("0050 ETF 相容入口分析不完整")

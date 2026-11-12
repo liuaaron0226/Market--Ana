@@ -103,6 +103,10 @@ def build(day: str, out: Path, *, root: Path = ROOT, fetch: bool = True) -> dict
     for name in HUMAN_AUTHORED:
         shutil.copy2(root / "web" / name, out / name)
         report["files"][name] = "carried-over（人寫文字，不自動重寫）"
+    if _attach_market_trend(out / "analysis-data.js", out / "dashboard-data.js"):
+        report["files"]["dashboard-data.js"] += "＋computed market_trend"
+    else:
+        report["market_trend"] = "unavailable（未驗證趨勢當日算不出來，核心資料照常發布）"
     report["analysis_cutoff"] = _analysis_cutoff(out / "analysis-data.js")
     if report["analysis_cutoff"] != day:
         raise RuntimeError(f"analysis-data.js 截止日 {report['analysis_cutoff']} 不是 {day}")
@@ -129,10 +133,43 @@ def _stage_root(root: Path, stage: Path) -> Path:
     return stage
 
 
-def _analysis_cutoff(path: Path) -> str:
+def _read_assignment(path: Path, prefix: str) -> dict:
     text = path.read_text(encoding="utf-8").strip()
-    payload = json.loads(text[text.index("=") + 1:].strip().rstrip(";"))
-    return payload["meta"]["cutoff_date"]
+    if not text.startswith(prefix):
+        raise RuntimeError(f"{path.name} 缺少 {prefix}")
+    value = json.loads(text[len(prefix):].rstrip(";"))
+    if not isinstance(value, dict):
+        raise RuntimeError(f"{path.name} 最外層不是物件")
+    return value
+
+
+def _write_assignment(path: Path, prefix: str, payload: dict) -> None:
+    path.write_text(prefix + json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + ";\n", encoding="utf-8")
+
+
+def _attach_market_trend(analysis_path: Path, dashboard_path: Path) -> bool:
+    """只改每日輸出副本：把純數字趨勢放進雲端既有會保留的 actions，不改人寫日期與文字。
+
+    market-trend/v1 尚未通過驗證、對外預設關閉；當日沒有合格趨勢就原樣保留 dashboard 並回 False，
+    不擋核心大盤資料發布（本人 11-12「先脫鉤再上線」）。
+    """
+    analysis = _read_assignment(analysis_path, "window.MARKET_ANALYSIS = ")
+    trend = analysis.get("market_trend")
+    if not isinstance(trend, dict) or trend.get("schema") != "market-trend/v1":
+        return False
+    dashboard = _read_assignment(dashboard_path, "window.MARKET_DASHBOARD = ")
+    actions = dashboard.get("actions")
+    if actions is None:
+        actions = {}
+    if not isinstance(actions, dict):
+        raise RuntimeError("dashboard-data.js 的 actions 不是物件")
+    dashboard["actions"] = {**actions, "market_trend": trend}
+    _write_assignment(dashboard_path, "window.MARKET_DASHBOARD = ", dashboard)
+    return True
+
+
+def _analysis_cutoff(path: Path) -> str:
+    return _read_assignment(path, "window.MARKET_ANALYSIS = ")["meta"]["cutoff_date"]
 
 
 def main(argv: list[str] | None = None) -> int:

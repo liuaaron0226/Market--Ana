@@ -6,9 +6,9 @@
   <meta name="color-scheme" content="light dark">
   <title>個股分析</title>
   <link rel="stylesheet" href="minimal.css?v=20261109-ux1">
-  <link rel="stylesheet" href="chart-studies.css?v=20261108-01">
+  <link rel="stylesheet" href="chart-studies.css?v=20261111-ui2b">
   <link rel="stylesheet" href="bold.css?v=20261109-ux1">
-  <link rel="stylesheet" href="stock.css?v=20261109-p4">
+  <link rel="stylesheet" href="stock.css?v=20261111-ui2b">
 </head>
 <body class="bd">
   <div class="bd-shell">
@@ -31,42 +31,90 @@
       <h1 id="outsideTitle">不在本站涵蓋範圍</h1>
       <p class="bd-outside-reason" id="outsideReason"></p>
       <p class="bd-outside-meta num" id="outsideMeta"></p>
-      <p class="bd-outside-rule">本站只涵蓋 20 日平均成交金額排名前段的大量股（前 300 名納入、跌出前 400 名才移出），另加核心持有 0050。</p>
+      <p class="bd-outside-rule">本站只涵蓋大量股與 0050。</p>
     </section>
 
     <main id="content" hidden>
       <section class="bd-quote" aria-label="報價">
         <div class="bd-ident">
           <h1><span id="stockName">—</span></h1>
-          <p><span class="num" id="stockCode">—</span><span class="bd-dot" aria-hidden="true">·</span><span id="stockMarket" hidden></span><span class="bd-dot" aria-hidden="true">·</span>資料日 <span class="num" id="asOf"></span></p>
+          <p><span class="num" id="stockCode">—</span><span class="bd-dot" aria-hidden="true">·</span><span id="stockMarket" hidden></span><span class="bd-dot" aria-hidden="true">·</span><span id="quoteMode">資料日</span> <span class="num" id="asOf"></span></p>
         </div>
         <div class="bd-price">
-          <b class="num" id="close">—</b>
+          <div class="bd-price-line"><b class="num" id="close">—</b><span class="bd-live-badge" id="liveBadge" hidden>LIVE</span></div>
           <b class="num" id="chg"></b>
+          <p class="bd-live-status" id="liveStatus" role="status">收盤資料</p>
         </div>
       </section>
 
-      <!-- 本人 11-09：把分析整理成清楚的操作指引，放在報價正下方；條件與指標細節收合在下方。 -->
-      <section class="bd-guide" id="guide" aria-labelledby="guideConclusion">
-        <p class="bd-guide-label">目前狀態</p>
-        <h2 class="bd-guide-conclusion" id="guideConclusion">—</h2>
-        <ol class="bd-guide-list" id="guideList"></ol>
-        <p class="bd-guide-disclaimer" id="guideDisclaimer">價位與訊號整理，非買賣建議</p>
+      <section class="bd-strategy" id="strategy" aria-labelledby="strategyConclusion" hidden>
+        <h2 id="strategyConclusion">—</h2>
+        <details id="strategyDetails">
+          <summary>操作價位</summary>
+          <div class="bd-strategy-grid">
+            <div><span>進場價</span><b class="num" id="strategyEntry">—</b></div>
+            <div><span>加碼價</span><b class="num" id="strategyAdd">—</b></div>
+            <div><span>停損價</span><b class="num" id="strategyStop">—</b></div>
+            <div><span>目標價</span><b class="num" id="strategyTarget">—</b></div>
+          </div>
+          <p id="strategyReason"></p>
+          <p id="strategyEvidence"></p>
+        </details>
       </section>
 
       <div id="candidateReasons"></div>
 
+      <div class="bd-stage">
+        <section class="bd-chart sk-chart-card" aria-labelledby="chartTitle">
+          <div class="bd-chart-bar">
+            <div>
+              <h2 id="chartTitle" class="sr-only">價格走勢</h2>
+              <p id="stockChartContext">日K</p>
+            </div>
+            <label class="bd-period" for="periodSelect">
+              <span class="sr-only">週期</span>
+              <select id="periodSelect">
+                <option value="1m">1分K</option>
+                <option value="5m">5分K</option>
+                <option value="15m">15分K</option>
+                <option value="60m">60分K</option>
+                <option value="daily" selected>日K</option>
+                <option value="weekly">週K</option>
+                <option value="monthly">月K</option>
+              </select>
+            </label>
+          </div>
+          <div class="bd-ma-row">
+            <div class="bd-ma-controls" id="maControls" aria-label="均線期數"></div>
+            <button class="bd-ma-add" id="addMa" type="button">新增均線</button>
+          </div>
+          <div class="bd-chart-host sk-chart" id="chartHost"></div>
+          <div id="chartStudies"></div>
+        </section>
+
+        <aside class="bd-rail" aria-label="價格結構">
+          <h2>價位階梯</h2>
+          <ol class="bd-ladder" id="ladder">
+            <li class="lad lad-res" data-key="resistance2"><span class="lad-name">壓力二</span><b class="num" id="resistance2">—</b><small id="resistance2Meta"></small></li>
+            <li class="lad-gap" aria-hidden="true"></li>
+            <li class="lad lad-res" data-key="resistance1"><span class="lad-name">壓力一</span><b class="num" id="resistance1">—</b><small id="resistance1Meta"></small></li>
+            <li class="lad-gap" aria-hidden="true"></li>
+            <li class="lad lad-now" data-key="close"><span class="lad-name" id="ladderCurrentLabel">收盤</span><b class="num" id="ladderClose">—</b><small id="ladderCurrentMeta">資料日收盤</small></li>
+            <li class="lad-gap" aria-hidden="true"></li>
+            <li class="lad lad-sup" data-key="support1"><span class="lad-name">支撐一</span><b class="num" id="support1">—</b><small id="support1Meta"></small></li>
+            <li class="lad-gap" aria-hidden="true"></li>
+            <li class="lad lad-sup" data-key="support2"><span class="lad-name">支撐二</span><b class="num" id="support2">—</b><small id="support2Meta"></small></li>
+          </ol>
+        </aside>
+      </div>
+
       <section class="bd-compare" id="compareBlock" aria-labelledby="compareTitle" hidden>
         <header class="bd-compare-head">
-          <div>
-            <h2 id="compareTitle">和 0050 對照</h2>
-            <p id="compareMeta">含息報酬與最大回撤</p>
-          </div>
+          <h2 id="compareTitle">和 0050 對照</h2>
           <p class="bd-compare-date num" id="compareDate"></p>
         </header>
         <p class="bd-compare-status" id="compareStatus" role="status" data-state="loading">讀取對照資料</p>
         <p class="bd-compare-conclusion" id="compareConclusion">讀取中</p>
-        <p class="bd-compare-dividend" id="compareDividendNote" hidden></p>
 
         <div class="bd-compare-tools">
           <form class="bd-compare-form" id="compareForm">
@@ -77,7 +125,6 @@
                      placeholder="輸入代號或名稱">
               <button id="compareAdd" type="submit">加入</button>
             </div>
-            <p id="compareHelp">只可加入本站涵蓋的大量股，最多 5 檔</p>
             <div class="bd-compare-results" id="compareSearchResults" role="listbox" hidden></div>
           </form>
           <div class="bd-compare-chips" id="compareChips" aria-label="已選股票"></div>
@@ -85,7 +132,7 @@
 
         <div class="bd-compare-table-wrap">
           <table class="bd-compare-table" id="compareTable">
-            <caption class="sr-only">各期間個股與 0050 的含息報酬、差距及最大回撤</caption>
+            <caption class="sr-only">配息資料完整時，顯示各期間個股與 0050 的含息報酬、差距及最大回撤</caption>
             <thead><tr><th>股票</th><th>期間</th><th>個股報酬</th><th>0050 報酬</th><th>差距</th><th>個股最大回撤</th><th>0050 最大回撤</th></tr></thead>
             <tbody id="compareTableBody"></tbody>
           </table>
@@ -93,113 +140,19 @@
 
         <div class="bd-compare-chart-block">
           <div class="bd-compare-chart-head">
-            <div>
-              <h3>報酬走勢</h3>
-              <p id="compareChartMeta">共同起點＝100</p>
-            </div>
+            <h3>報酬走勢</h3>
             <div class="bd-compare-legend" id="compareLegend" aria-label="圖例"></div>
           </div>
           <div class="bd-compare-chart" id="compareChart"></div>
           <div class="bd-compare-tooltip" id="compareTooltip" role="status" aria-live="polite" hidden></div>
         </div>
-
-        <details class="bd-compare-more" id="compareNotesDetails">
-          <summary>資料範圍與注意事項</summary>
-          <ul id="compareNotes"></ul>
-        </details>
       </section>
-
-      <div class="bd-stage">
-        <section class="bd-chart sk-chart-card" aria-labelledby="chartTitle">
-          <div class="bd-chart-bar">
-            <div>
-              <h2 id="chartTitle" class="sr-only">價格走勢</h2>
-              <p id="stockChartContext">日K · 盤後資料</p>
-            </div>
-            <label class="bd-period" for="periodSelect">
-              <span class="sr-only">週期</span>
-              <select id="periodSelect">
-                <option value="daily" selected>日K</option>
-                <option value="monthly">月K</option>
-              </select>
-            </label>
-          </div>
-          <p class="bd-notice" id="stockChartNotice" role="note" hidden></p>
-          <div class="bd-chart-host sk-chart" id="chartHost"></div>
-          <div id="chartStudies"></div>
-        </section>
-
-        <aside class="bd-rail" aria-label="價格結構">
-          <h2>價位階梯</h2>
-          <p class="bd-rail-sub">間距依距收盤遠近排列</p>
-          <ol class="bd-ladder" id="ladder">
-            <li class="lad lad-res" data-key="resistance2"><span class="lad-name">壓力二</span><b class="num" id="resistance2">—</b><small id="resistance2Meta"></small></li>
-            <li class="lad-gap" aria-hidden="true"></li>
-            <li class="lad lad-res" data-key="resistance1"><span class="lad-name">壓力一</span><b class="num" id="resistance1">—</b><small id="resistance1Meta"></small></li>
-            <li class="lad-gap" aria-hidden="true"></li>
-            <li class="lad lad-now" data-key="close"><span class="lad-name">收盤</span><b class="num" id="ladderClose">—</b><small>資料日收盤</small></li>
-            <li class="lad-gap" aria-hidden="true"></li>
-            <li class="lad lad-sup" data-key="support1"><span class="lad-name">支撐一</span><b class="num" id="support1">—</b><small id="support1Meta"></small></li>
-            <li class="lad-gap" aria-hidden="true"></li>
-            <li class="lad lad-sup" data-key="support2"><span class="lad-name">支撐二</span><b class="num" id="support2">—</b><small id="support2Meta"></small></li>
-          </ol>
-          <p class="bd-rail-note">支撐、壓力只描述價格所在位置，不是目標價、也不是停損價</p>
-          <button class="bd-link" id="verdictButton" type="button" aria-expanded="false" aria-controls="layer1">價位怎麼來的 <span aria-hidden="true">›</span></button>
-        </aside>
-      </div>
-
-      <section class="bd-sources" id="layer1" hidden>
-        <h2>價位怎麼來的</h2>
-        <p class="bd-small" id="toleranceLine"></p>
-        <div class="bd-scroll"><table class="bd-table"><thead><tr><th>類型</th><th>價位</th><th>距離</th><th>距離分層</th><th>構成來源</th></tr></thead><tbody id="levelRows"></tbody></table></div>
-        <p class="bd-small" id="referenceLine"></p>
-      </section>
-
-      <details class="bd-more" id="signalDetails">
-        <summary>訊號明細 <small id="signalSummary"></small></summary>
-        <div class="bd-more-body">
-          <div class="sk-cond-group">
-            <h3>主要訊號</h3>
-            <ul class="sk-cond" id="condConfirmed"></ul>
-          </div>
-          <div class="sk-cond-group">
-            <h3>輔助訊號 <small>較不穩定，只作參考</small></h3>
-            <ul class="sk-cond" id="condApproximate"></ul>
-          </div>
-          <div class="sk-cond-group">
-            <h3>成交活絡股的共同狀態 <small>本站涵蓋的股票幾乎都是同一個狀態，個股參考價值低</small></h3>
-            <ul class="sk-cond" id="condFixed"></ul>
-          </div>
-        </div>
-      </details>
-
-      <details class="bd-more bd-ind" id="indicatorDetails">
-        <summary id="indTitle">技術指標數值 <small>資料日收盤</small></summary>
-        <div class="bd-more-body">
-          <div class="bd-ind-grid" id="indicators"></div>
-        </div>
-      </details>
-
-      <footer class="bd-foot" aria-labelledby="notesTitle">
-        <h2 id="notesTitle">要注意</h2>
-        <ul class="bd-notes" id="notes"></ul>
-        <details class="bd-method" id="methodDetails">
-          <summary>方法說明</summary>
-          <div class="bd-method-body">
-            <p>本頁的支撐、壓力與訊號，都是用公開的每日價量、法人、融資券與營收資料，依固定規則算出來的整理結果。</p>
-            <p id="tradingRules">本站不提供買賣建議，也不給目標價或停損價。</p>
-            <p id="tradingRulesQuote">價位是依價格結構整理出的相對位置：不是買賣建議，也不代表價格漲到區間上緣前都適合進場；上緣不是目標價。</p>
-            <p>「主要訊號」的規則經過大量歷史資料核對；「輔助訊號」準確度較低，只作參考，不納入上方的狀態與操作重點。</p>
-            <p>KD、RSI、MACD 是通用技術指標；RSI 採 14 日簡單平均，和常見看盤軟體的 Wilder 平滑略有差異。</p>
-          </div>
-        </details>
-      </footer>
     </main>
   </div>
-  <script src="chart-studies.js?v=20261108-01"></script>
-  <script src="kchart.js?v=20261109-ux1"></script>
-  <script src="stock.js?v=20261109-p4"></script>
+  <script src="chart-studies.js?v=20261111-ui2b"></script>
+  <script src="kchart.js?v=20261111-ui2b"></script>
+  <script src="intraday.js?v=20261111-ui2b"></script>
+  <script src="stock.js?v=20261111-core-release"></script>
   <script src="period-switch.js?v=20261109-ux1"></script>
-  <script src="motion.js?v=20261109-ux1"></script>
 </body>
 </html>
