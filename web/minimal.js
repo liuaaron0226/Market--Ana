@@ -119,6 +119,11 @@
   })();
   const TARGET_LABEL = scenarioDate ? `${scenarioDate.slice(5, 7)}/${scenarioDate.slice(8, 10)}` : '下一交易日';
   const scenarioExpired = Boolean(scenarioDate && A.meta.cutoff_date && scenarioDate < A.meta.cutoff_date);
+  // 本人 2026-11-14「過期就隱藏」：劇本與直白分析是人寫的，不會跟每日資料一起更新。
+  // 比行情資料日舊時整組不顯示（劇本文字、收復線／防守線、靠這兩條線算的隔日分布），不拿舊解讀配新數字。
+  const plainSource = OV && OV.plain || null;
+  const plainStale = Boolean(plainSource && plainSource.data_dates && A.meta.cutoff_date
+    && String(plainSource.data_dates.price_and_foreign || '') < A.meta.cutoff_date);
 
   let chart = null;
   let currentPeriod = 'daily';
@@ -250,13 +255,13 @@
     els.state.textContent = state.label;
     els.stateButton.dataset.state = state.id;
     els.time.textContent = stamp || fallbackMarketDate();
-    els.zone.textContent = zoneFor(price).label;
+    els.zone.textContent = scenarioExpired ? '' : zoneFor(price).label;
     const shortDate = value => (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}/.test(value)) ? `${value.slice(5, 7)}/${value.slice(8, 10)}` : (value || '—');
     els.analysisDate.textContent = shortDate(A.meta.cutoff_date || fallbackMarketDate());
-    els.scenarioDate.textContent = `${shortDate(scenarioDate)}${scenarioExpired ? ' 已過期' : ''}`;
-    els.scenarioLabel.textContent = scenarioExpired ? '舊劇本' : '下一交易日';
+    els.scenarioDate.textContent = shortDate(scenarioDate);
+    els.scenarioLabel.textContent = '下一交易日';
     els.analysisDate.title = A.meta.cutoff_date || fallbackMarketDate();
-    els.scenarioDate.title = scenarioExpired ? `${scenarioDate} 劇本已過期，未冒充當日分析` : (scenarioDate || '');
+    els.scenarioDate.title = scenarioDate || '';
     // 標題與語氣各自不斷行：只在「｜」處換行，避免「長下／影」這種把詞拆開的斷法。textContent 不變。
     const title = HEADLINE.title || '方向待確認';
     els.conclusion.replaceChildren(Object.assign(document.createElement('span'), { className: 'nowrap-phrase', textContent: title }));
@@ -397,6 +402,7 @@
   }
 
   function overlays() {
+    if (scenarioExpired) return [];
     return [
       { value: UPPER, label: '收復線', short: '收復', color: css('--gold', '#d9a94b'), pos: 'above' },
       { value: LOWER, label: '防守線', short: '防守', color: css('--down', '#2fd09a'), pos: 'below' }
@@ -571,7 +577,7 @@
     els.estimate.hidden = !isMinutePeriod(period);
     els.chartContext.textContent = `${periodLabels[period]} · ${liveLast ? '最右一根形成中'
       : provisionalLast ? `最右一根暫用即時收盤，正式日K待更新（目前到 ${A.meta.cutoff_date}）` : `資料截至 ${A.meta.cutoff_date}`}`;
-    els.chartSummary.textContent = `${periodLabels[period]}，共 ${candles.length} 根。圖上有收復線 ${fmt(UPPER)} 與防守線 ${fmt(LOWER)}。`;
+    els.chartSummary.textContent = `${periodLabels[period]}，共 ${candles.length} 根。${scenarioExpired ? '' : `圖上有收復線 ${fmt(UPPER)} 與防守線 ${fmt(LOWER)}。`}`;
     requestAnimationFrame(updateOverlayControls);
   }
 
@@ -599,8 +605,9 @@
     const ph = H - t - b - macdH - gapH;
     const end = chart.view.end;
     const visible = chart.candles.slice(start, end).filter(candle => ['open', 'high', 'low', 'close'].every(key => Number.isFinite(candle[key])));
-    let low = Math.min(...visible.map(candle => candle.low), LOWER, UPPER);
-    let high = Math.max(...visible.map(candle => candle.high), LOWER, UPPER);
+    const scenarioLines = scenarioExpired ? [] : [LOWER, UPPER];
+    let low = Math.min(...visible.map(candle => candle.low), ...scenarioLines);
+    let high = Math.max(...visible.map(candle => candle.high), ...scenarioLines);
     const pad = (high - low) * .07 || 10;
     low -= pad;
     high += pad;
@@ -1170,17 +1177,17 @@
     ];
     const watch = ['判斷看<b>收盤</b>，盤中位置會變。', '盤後劇本不會因盤中價格自動改寫。'];
     return `
-      ${plainBlock(meaning, watch)}
+      ${scenarioExpired ? '' : plainBlock(meaning, watch)}
       <div class="current-grid">
         <div><span>現價</span><strong class="num">${fmt(price)}</strong></div>
         <div><span>漲跌</span><strong class="num">${signed(data.change)}（${signed(data.change_percent)}%）</strong></div>
-        <div><span>距收復線</span><strong class="num">${signed(upperGap)} 點</strong><small class="num">${signed(upperGap / UPPER * 100)}%</small></div>
-        <div><span>距防守線</span><strong class="num">${signed(lowerGap)} 點</strong><small class="num">${signed(lowerGap / LOWER * 100)}%</small></div>
+        ${scenarioExpired ? '' : `<div><span>距收復線</span><strong class="num">${signed(upperGap)} 點</strong><small class="num">${signed(upperGap / UPPER * 100)}%</small></div>
+        <div><span>距防守線</span><strong class="num">${signed(lowerGap)} 點</strong><small class="num">${signed(lowerGap / LOWER * 100)}%</small></div>`}
       </div>
       <dl class="action-list">
         <div><dt>行情狀態</dt><dd>${esc(els.state.textContent)}</dd></div>
         <div><dt>行情時間</dt><dd class="num">${esc(els.time.textContent)}</dd></div>
-        <div><dt>現價落點</dt><dd>${esc(zoneFor(price).label)}</dd></div>
+        ${scenarioExpired ? '' : `<div><dt>現價落點</dt><dd>${esc(zoneFor(price).label)}</dd></div>`}
       </dl>
     `;
   }
@@ -1366,7 +1373,7 @@
       <section class="detail-section"><h3>三個時間</h3><dl class="kv-list">
         <div><dt>行情時間</dt><dd class="num">${esc(els.time.textContent)}</dd></div>
         <div><dt>分析截止日</dt><dd class="num">${esc(A.meta.cutoff_date)}</dd></div>
-        <div><dt>劇本適用日</dt><dd class="num">${esc(scenarioDate)}</dd></div>
+        ${scenarioExpired ? '' : `<div><dt>劇本適用日</dt><dd class="num">${esc(scenarioDate)}</dd></div>`}
         <div><dt>資料生成時間</dt><dd class="num">${esc(A.meta.generated_at)}</dd></div>
       </dl></section>
       <section class="detail-section"><h3>官方端點</h3><ul class="source-list">
@@ -1634,6 +1641,12 @@
   els.upper.textContent = fmt(UPPER);
   els.lower.textContent = fmt(LOWER);
   renderDistribution();
+  // 過期的劇本整組收起來：標頭的劇本日期與結論、圖旁兩個價位按鈕、隔日分布；直白分析另看它自己的資料日。
+  for (const node of [els.scenarioDate.parentElement, els.scenarioDate.parentElement.previousElementSibling,
+    $('conclusionTrigger'), els.lineUpper, els.lineLower, $('distribution')]) {
+    if (node) node.hidden = scenarioExpired;
+  }
+  $('readCard').hidden = plainStale;
   setMarketHeader(fallbackMarketData(), { id: 'closed', label: '休市' }, fallbackMarketDate());
 
   els.period.addEventListener('change', () => loadPeriod(els.period.value, true));

@@ -487,8 +487,10 @@ def check_official_date_alignment(browser: Browser) -> None:
     assert page.locator("#marketTime").inner_text() == "2026-11-10"
     assert page.locator("#analysisDate").inner_text() == "11/10"
     assert page.locator("#analysisDate").get_attribute("title") == "2026-11-10"
-    assert page.locator("#scenarioDate").inner_text() == "11/09 已過期"
-    assert "已過期" in (page.locator("#scenarioDate").get_attribute("title") or "")
+    # 本人 11-14「過期就隱藏」：劇本比資料日舊時，日期、結論、兩條價位線與直白分析都不顯示。
+    for selector in ("#scenarioDate", "#conclusionTrigger", "#lineUpper", "#lineLower", "#readCard"):
+        assert not page.locator(selector).is_visible(), f"過期內容仍顯示：{selector}"
+    assert "已過期" not in page.locator("body").inner_text()
     assert page.locator("#marketTrendDate").inner_text() == "資料日 2026-11-10"
     page.close()
 

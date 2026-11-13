@@ -85,6 +85,22 @@ test("策略理由只在結論出現一次，展開後不再重複同一句（�
   assert.equal([...js.matchAll(/strategy\.reason/g)].length, 1);
 });
 
+test("首頁人寫的劇本與直白分析比資料日舊時整組隱藏，不留「已過期」字樣配新數字（本人 11-14）", () => {
+  const source = read("web/minimal.js");
+  assert.match(source, /function overlays\(\) \{\s+if \(scenarioExpired\) return \[\];/);
+  assert.match(source, /\$\('readCard'\)\.hidden = plainStale;/);
+  assert.match(source, /plainSource\.data_dates\.price_and_foreign \|\| ''\) < A\.meta\.cutoff_date/);
+  const hiddenGroup = source.slice(source.indexOf("for (const node of [els.scenarioDate.parentElement"));
+  for (const target of ["$('conclusionTrigger')", "els.lineUpper", "els.lineLower", "$('distribution')"]) {
+    assert.ok(hiddenGroup.slice(0, 400).includes(target), target);
+  }
+  assert.match(hiddenGroup.slice(0, 400), /node\.hidden = scenarioExpired/);
+  for (const removed of ["' 已過期'", "舊劇本", "未冒充當日分析"]) {
+    assert.ok(!source.includes(removed), removed);
+  }
+  assert.doesNotMatch(source, /Math\.min\(\.\.\.visible\.map\(candle => candle\.low\), LOWER, UPPER\)/);
+});
+
 test("首頁即時 consumer 以 source time／live／retryable 判斷，未知成交金額不轉成 0", () => {
   const source = read("web/minimal.js");
   assert.match(source, /payload\.live === true/);
