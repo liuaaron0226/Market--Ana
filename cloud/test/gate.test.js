@@ -218,6 +218,34 @@ test("核心版 market overview 移除未驗 market-trend-v1，完整模式才�
   assert.equal(body.analysis.market_trend.schema, "market-trend/v1");
 });
 
+test("只開走勢與個股策略時：overview 保留 market_trend，水位與 AI 解讀仍被擋，query 不能加開", async () => {
+  deps.marketPack = {
+    version: "market-v1",
+    overview: {
+      version: "market-v1",
+      analysis: { keep: "chart-data", market_trend: { schema: "market-trend/v1" } },
+      dashboard: { keep: "quote-data", actions: { market_trend: { schema: "market-trend/v1" }, core: "keep" } },
+    },
+    details: {},
+  };
+  env.MARKET_ANA_ENABLED_FEATURES = "strategy_v1,market_trend_v1";
+  const overview = await (await req("/api/market/overview", { email: OWNER })).json();
+  assert.equal(overview.features.market_trend_v1, true);
+  assert.equal(overview.features.strategy_v1, true);
+  assert.equal(overview.analysis.market_trend.schema, "market-trend/v1");
+  assert.equal(overview.dashboard.actions.market_trend.schema, "market-trend/v1");
+
+  const features = await (await req("/api/features?MARKET_ANA_ENABLED_FEATURES=level_advice,ai_digest", { email: OWNER })).json();
+  assert.equal(features.strategies_enabled, false);
+  assert.equal(features.features.level_advice, false);
+  assert.equal(features.features.ai_digest, false);
+  assert.equal(features.features.ai_stock_advice, false);
+
+  const level = await req("/api/holdings/level", { email: OWNER });
+  assert.equal(level.status, 403);
+  assert.equal((await level.json()).error, "feature-disabled");
+});
+
 test("核心版在 level schema 前就關閉建議端點，不影響其他個人資料 route", async () => {
   const level = await req("/api/holdings/level?MARKET_ANA_STRATEGIES_ENABLED=1", { email: OWNER });
   assert.equal(level.status, 403);

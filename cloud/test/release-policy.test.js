@@ -55,6 +55,50 @@ test("只有明確批准的 true 或 1 模式啟用完整策略功能", () => {
   }
 });
 
+test("本人 11-14 定案：走勢與個股操作策略可以單獨開啟，AI、水位與策略 workflow 仍只認全域開關", () => {
+  for (const list of ["strategy_v1,market_trend_v1", " Strategy_V1 , MARKET_TREND_V1 ", "market_trend_v1,strategy_v1,"]) {
+    const env = { MARKET_ANA_ENABLED_FEATURES: list };
+    const policy = releasePolicy(env);
+    assert.equal(policy.features.strategy_v1, true, list);
+    assert.equal(policy.features.market_trend_v1, true, list);
+    for (const feature of ["level_advice", "ai_digest", "ai_stock_advice"]) assert.equal(policy.features[feature], false, `${list}/${feature}`);
+    assert.equal(policy.strategies_enabled, false, list);
+    for (const event of ["schedule", "workflow_run"]) {
+      assert.deepEqual(strategyWorkflowPolicy({ ...env, EVENT_NAME: event }), { allowed: false, dry_run: true });
+    }
+    assert.deepEqual(strategyWorkflowPolicy({ ...env, EVENT_NAME: "workflow_dispatch", INPUT_DRY_RUN: "false" }), { allowed: false, dry_run: true });
+  }
+  const one = releasePolicy({ MARKET_ANA_ENABLED_FEATURES: "market_trend_v1" }).features;
+  assert.equal(one.market_trend_v1, true);
+  assert.equal(one.strategy_v1, false);
+});
+
+test("單獨開啟的名單只接受走勢與個股策略兩個名字，其他寫法一律無效", () => {
+  for (const list of ["level_advice,ai_digest,ai_stock_advice", "all", "*", "true", "1", "strategy", "live_market", "", null, 1, true, ["strategy_v1"], { strategy_v1: true }]) {
+    const policy = releasePolicy({ MARKET_ANA_ENABLED_FEATURES: list });
+    for (const feature of STRATEGY_FEATURES) assert.equal(policy.features[feature], false, `${JSON.stringify(list)}/${feature}`);
+    assert.equal(policy.strategies_enabled, false);
+  }
+  const mixed = releasePolicy({ MARKET_ANA_ENABLED_FEATURES: "strategy_v1,ai_digest,level_advice" }).features;
+  assert.equal(mixed.strategy_v1, true);
+  assert.equal(mixed.ai_digest, false);
+  assert.equal(mixed.level_advice, false);
+  assert.doesNotMatch(JSON.stringify(releasePolicy({ MARKET_ANA_ENABLED_FEATURES: "strategy_v1" })), /MARKET_ANA_ENABLED_FEATURES/);
+});
+
+test("正式環境設定（wrangler.jsonc）只開走勢與個股策略，AI、水位與全域開關維持關閉", async () => {
+  const { readFileSync } = await import("node:fs");
+  const text = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8").replace(/^\s*\/\/.*$/gm, "");
+  const vars = JSON.parse(text).vars;
+  assert.equal(Object.hasOwn(vars, "MARKET_ANA_STRATEGIES_ENABLED"), false);
+  const policy = releasePolicy(vars);
+  assert.equal(policy.strategies_enabled, false);
+  assert.deepEqual(
+    Object.fromEntries(STRATEGY_FEATURES.map(name => [name, policy.features[name]])),
+    { strategy_v1: true, market_trend_v1: true, level_advice: false, ai_digest: false, ai_stock_advice: false },
+  );
+});
+
 test("policy 是可直接給 API 的穩定純資料，不回傳原始環境值", () => {
   const policy = releasePolicy({ MARKET_ANA_STRATEGIES_ENABLED: "true", OTHER_SECRET: "never-return" });
   assert.equal(policy.schema, "market-ana-features/v1");

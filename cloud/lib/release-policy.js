@@ -17,10 +17,21 @@ export function strategyWorkflowPolicy(env = {}) {
   return { allowed: false, dry_run: true };
 }
 
+// 本人 2026-11-14：「短中長期走勢」與「個股操作策略」先在正式站打開，AI 解讀與現金水位維持關閉。
+// 只有這兩個純顯示功能可以用 MARKET_ANA_ENABLED_FEATURES（逗號分隔）單獨開；會寫 D1／呼叫外部模型的
+// level_advice、ai_* 與兩支策略 workflow 仍只認全域的 MARKET_ANA_STRATEGIES_ENABLED。
+const INDIVIDUALLY_SWITCHABLE = new Set(["strategy_v1", "market_trend_v1"]);
+
+function individuallyEnabled(raw) {
+  if (typeof raw !== "string") return new Set();
+  return new Set(raw.split(",").map(name => name.trim().toLowerCase()).filter(name => INDIVIDUALLY_SWITCHABLE.has(name)));
+}
+
 export function releasePolicy(env = {}) {
   const raw = env?.MARKET_ANA_STRATEGIES_ENABLED;
   const strategiesEnabled = raw === true || raw === 1 ||
     (typeof raw === "string" && ENABLED_VALUES.has(raw.trim().toLowerCase()));
+  const single = individuallyEnabled(env?.MARKET_ANA_ENABLED_FEATURES);
   return {
     schema: "market-ana-features/v1",
     core_release: true,
@@ -32,8 +43,8 @@ export function releasePolicy(env = {}) {
       watchlist: true,
       holdings: true,
       daily_update: true,
-      strategy_v1: strategiesEnabled,
-      market_trend_v1: strategiesEnabled,
+      strategy_v1: strategiesEnabled || single.has("strategy_v1"),
+      market_trend_v1: strategiesEnabled || single.has("market_trend_v1"),
       level_advice: strategiesEnabled,
       ai_digest: strategiesEnabled,
       ai_stock_advice: strategiesEnabled,

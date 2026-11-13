@@ -20,6 +20,21 @@
       return count >= n ? sum / n : null;
     });
   }
+  // 布林通道：中線＝n 期收盤均價，上下軌＝中線 ± k 個母體標準差。缺值會中斷累積，之後重新湊滿 n 期才有值。
+  function bollinger(values, n = 20, k = 2) {
+    let run = 0;
+    return values.map((v, i) => {
+      run = Number.isFinite(v) ? run + 1 : 0;
+      if (run < n) return null;
+      let sum = 0;
+      for (let j = i - n + 1; j <= i; j++) sum += values[j];
+      const mid = sum / n;
+      let squares = 0;
+      for (let j = i - n + 1; j <= i; j++) squares += (values[j] - mid) ** 2;
+      const width = k * Math.sqrt(squares / n);
+      return { mid, upper: mid + width, lower: mid - width };
+    });
+  }
   function normalizePeriods(values) {
     const periods = [];
     for (const value of values || []) {
@@ -82,6 +97,7 @@
       this.candles = candles; this.shownLength = candles.length;
       const closes = candles.map(c => hasPrice(c) ? c.close : null);
       this.ma = Object.fromEntries(this.maPeriods.map(period => [period, sma(closes, period)]));
+      this.boll = bollinger(closes);
       const supplied = this.sourceMacd && new Map(this.sourceMacd.map(row => [row.date, row]));
       this.macd = supplied ? candles.map(c => {
         const row = supplied.get(c.t);
@@ -234,6 +250,8 @@
       }
       let lo = Math.min(...prices.map(c => c.low)), hi = Math.max(...prices.map(c => c.high));
       this.overlays.forEach(o => { if (o.inView !== false) { lo = Math.min(lo, o.value); hi = Math.max(hi, o.value); } });
+      // 布林通道常比 K 棒寬，價格座標要把可見範圍內的上下軌算進去，通道才不會畫到圖外。
+      for (let i = start; i < end; i++) { const band = this.boll[i]; if (band) { lo = Math.min(lo, band.lower); hi = Math.max(hi, band.upper); } }
       const pad = (hi - lo) * .07 || 10; lo -= pad; hi += pad;
       const y = v => t + (hi - v) / (hi - lo) * ph;
       const line = css('--line'), dim = css('--faint'), ink = css('--ink'), up = css('--up'), dn = css('--down');
@@ -359,6 +377,28 @@
         else x.fillText(o.label, l + 6, y(o.value) + (above ? -3 : 3));
         x.textBaseline = 'alphabetic';
       });
+      // 布林通道 20：畫在 K 棒後面，淡色帶加上下軌細線。連續有值的每一段各自成帶，缺值處斷開。
+      const bandColor = css('--dim');
+      for (let i = start; i < end;) {
+        if (!this.boll[i]) { i++; continue; }
+        let stop = i;
+        while (stop < end && this.boll[stop]) stop++;
+        const px = index => l + step * (index - start + .5);
+        if (stop - i > 1) {
+          x.fillStyle = bandColor; x.globalAlpha = .08; x.beginPath();
+          x.moveTo(px(i), y(this.boll[i].upper));
+          for (let j = i + 1; j < stop; j++) x.lineTo(px(j), y(this.boll[j].upper));
+          for (let j = stop - 1; j >= i; j--) x.lineTo(px(j), y(this.boll[j].lower));
+          x.fill(); x.globalAlpha = 1;
+        }
+        for (const edge of ['upper', 'lower']) {
+          x.strokeStyle = bandColor; x.globalAlpha = .55; x.lineWidth = 1; x.beginPath();
+          x.moveTo(px(i), y(this.boll[i][edge]));
+          for (let j = i + 1; j < stop; j++) x.lineTo(px(j), y(this.boll[j][edge]));
+          x.stroke(); x.globalAlpha = 1;
+        }
+        i = stop;
+      }
       // K棒
       const bw = Math.max(1, Math.min(14, step * .66));
       vis.forEach((c, i) => {
@@ -410,9 +450,11 @@
         x.strokeStyle = dim; x.setLineDash([3, 3]); x.beginPath(); x.moveTo(cx, t); x.lineTo(cx, H - 4); x.stroke(); x.setLineDash([]);
         const prev = this.candles[i - 1], chg = prev && Number.isFinite(c.close) && Number.isFinite(prev.close) ? c.close - prev.close : NaN, m = this.macd[i];
         const maText = this.maPeriods.map(p => this.ma[p][i] != null ? `MA${p} ${fmt(this.ma[p][i], 0)}` : '').filter(Boolean).join('　');
+        const band = this.boll[i], bandDigits = band && band.upper >= 1000 ? 0 : 2;
+        const bandText = band ? `布林 ${fmt(band.upper, bandDigits)}／${fmt(band.lower, bandDigits)}` : '';
         this.tip.innerHTML = `<b>${c.label}</b><span class="${chg < 0 ? 'dn' : 'upc'}">收 ${fmt(c.close)}　${Number.isFinite(chg) ? `${chg >= 0 ? '+' : '−'}${fmt(Math.abs(chg))}` : '漲跌缺值'}</span><span>開 ${fmt(c.open)}　高 ${fmt(c.high)}　低 ${fmt(c.low)}</span>` + (this.opts.volumeKind === 'volume'
           ? `<span>成交量 ${Number.isFinite(c.volume) ? `${fmt(c.volume / 1000)} 張（${fmt(c.volume, 0)} 股）` : '缺資料'}</span>`
-          : Number.isFinite(c.amount) ? `<span>成交金額 ${fmt(c.amount, 2)} 億元</span>` : '') + (m.ready ? `<span>MACD柱 ${fmt(m.hist)}　DIF ${fmt(m.dif)}</span>` : '') + (maText ? `<span>${maText}</span>` : '');
+          : Number.isFinite(c.amount) ? `<span>成交金額 ${fmt(c.amount, 2)} 億元</span>` : '') + (m.ready ? `<span>MACD柱 ${fmt(m.hist)}　DIF ${fmt(m.dif)}</span>` : '') + (maText ? `<span>${maText}</span>` : '') + (bandText ? `<span>${bandText}</span>` : '');
         this.tip.classList.add('show');
         const tw = Math.min(this.tip.offsetWidth, W - 8); const want = cx + 14 + tw > W ? cx - tw - 14 : cx + 14; this.tip.style.left = Math.max(4, Math.min(W - tw - 4, want)) + 'px'; this.tip.style.top = '8px'; // 手機窄圖：左右都夾在圖表內，不出界
       } else this.tip.classList.remove('show');
@@ -420,5 +462,5 @@
     }
   }
   window.KChart = KChart;
-  window.KChartMath = { sma, ema, macd, normalizePeriods };
+  window.KChartMath = { sma, ema, macd, bollinger, normalizePeriods };
 })();

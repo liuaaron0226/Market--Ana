@@ -189,6 +189,21 @@ test("已核准者拿到契約 v2 分析：不含方案、總分、24項條件�
   for (const value of Object.values(body.undisclosed)) assert.deepEqual(value, { status: "undisclosed", label: "原站未公開" });
 });
 
+test("只開個股策略時 analysis 回傳 strategy；只開走勢時不回傳", async () => {
+  delete env.MARKET_ANA_STRATEGIES_ENABLED;
+  env.MARKET_ANA_ENABLED_FEATURES = "strategy_v1";
+  const enabled = await (await req("/api/stocks/2330/analysis")).json();
+  const full = STOCKS.results["2330"];
+  const expected = (typeof full === "string" ? JSON.parse(full) : full).strategy;
+  assert.ok(expected, "fixture 必須帶 strategy 才驗得到");
+  assert.deepEqual(enabled.strategy, expected);
+
+  env.MARKET_ANA_ENABLED_FEATURES = "market_trend_v1";
+  const trendOnly = await (await req("/api/stocks/2330/analysis")).json();
+  assert.equal(Object.hasOwn(trendOnly, "strategy"), false);
+  delete env.MARKET_ANA_ENABLED_FEATURES;
+});
+
 test("核心版預設移除 strategy_v1 操作建議但保留支撐壓力，query 不能自行啟用", async () => {
   delete env.MARKET_ANA_STRATEGIES_ENABLED;
   const response = await req("/api/stocks/2330/analysis?MARKET_ANA_STRATEGIES_ENABLED=1");

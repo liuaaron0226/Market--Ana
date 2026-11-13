@@ -84,7 +84,6 @@
     for (const [key, id] of Object.entries({ entry: 'strategyEntry', add: 'strategyAdd', stop: 'strategyStop', target: 'strategyTarget' })) {
       $(id).textContent = fmt(strategy.prices?.[key]);
     }
-    $('strategyReason').textContent = strategy.reason;
     $('strategyEvidence').textContent = `證據強度：${strategy.evidence_strength}`;
   }
 

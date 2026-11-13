@@ -1,0 +1,121 @@
+// 布林通道 20（本人 2026-11-14：「在所有k線圖加上布林通道20」）。
+// 首頁大盤與個股頁的 K 線都由 web/kchart.js 的 KChart 畫，所以在這一層驗一次就涵蓋所有週期。
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import vm from "node:vm";
+
+const SOURCE = new URL("../../web/kchart.js", import.meta.url);
+
+function load() {
+  const calls = [];
+  const context2d = new Proxy({}, {
+    get(target, name) {
+      if (name === "measureText") return text => ({ width: String(text).length * 7 });
+      if (name in target) return target[name];
+      return (...args) => { calls.push([name, ...args]); };
+    },
+    set(target, name, value) { target[name] = value; return true; },
+  });
+  class FakeElement {
+    constructor() {
+      this.children = []; this.style = {}; this.clientWidth = 390; this.offsetWidth = 150; this.innerHTML = "";
+      this.classList = { add() {}, remove() {}, contains: () => false };
+    }
+    append(child) { this.children.push(child); }
+    setAttribute() {}
+    addEventListener() {}
+    setPointerCapture() {}
+    getBoundingClientRect() { return { left: 0, top: 0, width: 390, height: 340 }; }
+    getContext() { return context2d; }
+    contains() { return false; }
+  }
+  const sandbox = {
+    window: { devicePixelRatio: 1 },
+    document: { documentElement: new FakeElement(), createElement: () => new FakeElement(), addEventListener() {} },
+    ResizeObserver: class { observe() {} },
+    getComputedStyle: () => ({ getPropertyValue: () => "#666" }),
+    console, Number, Math, Map, Object, Array, String, Set,
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(readFileSync(SOURCE, "utf8"), sandbox, { filename: "kchart.js" });
+  return { KChart: sandbox.window.KChart, math: sandbox.window.KChartMath, FakeElement, calls };
+}
+
+function candles(closes) {
+  return closes.map((close, index) => ({
+    t: `d${index}`, label: `第${index + 1}根`, open: close, high: close + 1, low: close - 1, close, amount: 1, volume: 1,
+  }));
+}
+
+function chartWith(closes, count) {
+  const { KChart, FakeElement, calls } = load();
+  const chart = new KChart(new FakeElement(), { macd: false, height: () => 340 });
+  chart.setData(candles(closes), { count: count ?? Math.min(60, closes.length) });
+  return { chart, calls };
+}
+
+test("布林通道 20：中線是 20 期均價，上下各 2 個母體標準差，不足 20 期不畫", () => {
+  const { math } = load();
+  const closes = Array.from({ length: 25 }, (_, index) => index + 1);
+  const bands = math.bollinger(closes);
+  assert.equal(bands.length, 25);
+  for (let index = 0; index < 19; index++) assert.equal(bands[index], null, `第 ${index + 1} 根`);
+  const sd = Math.sqrt((20 * 20 - 1) / 12); // 1..20 的母體標準差
+  assert.ok(Math.abs(bands[19].mid - 10.5) < 1e-9);
+  assert.ok(Math.abs(bands[19].upper - (10.5 + 2 * sd)) < 1e-9);
+  assert.ok(Math.abs(bands[19].lower - (10.5 - 2 * sd)) < 1e-9);
+  assert.ok(Math.abs(bands[24].mid - 15.5) < 1e-9, "視窗往後滑動");
+
+  const flat = math.bollinger(Array(30).fill(50));
+  assert.deepEqual({ ...flat[29] }, { mid: 50, upper: 50, lower: 50 });
+});
+
+test("布林通道遇到缺值就重新累積 20 期，不拿缺值前的資料湊數", () => {
+  const { math } = load();
+  const closes = Array.from({ length: 45 }, (_, index) => (index === 22 ? null : 100 + index));
+  const bands = math.bollinger(closes);
+  assert.ok(bands[21]);
+  for (let index = 22; index < 42; index++) assert.equal(bands[index], null, `第 ${index + 1} 根`);
+  assert.ok(bands[42]);
+  assert.ok(Math.abs(bands[42].mid - (123 + 142) / 2) < 1e-9);
+});
+
+test("K 線圖一律算出並畫出布林通道；不足 20 根時照常畫 K 線、不出錯", () => {
+  const { chart, calls } = chartWith(Array.from({ length: 80 }, (_, index) => 100 + Math.sin(index / 3) * 8));
+  assert.equal(chart.boll.length, 80);
+  assert.equal(chart.boll[18], null);
+  assert.ok(chart.boll[79].upper > chart.boll[79].mid && chart.boll[79].mid > chart.boll[79].lower);
+  assert.ok(calls.some(call => call[0] === "fill"), "通道要有底色帶");
+
+  const short = chartWith(Array.from({ length: 12 }, (_, index) => 100 + index));
+  assert.ok(short.chart.boll.every(value => value === null));
+  assert.ok(!short.calls.some(call => call[0] === "fillText" && call[1] === "此區間OHLC資料不足"));
+});
+
+test("通道比 K 棒寬時，價格座標要把通道算進去，不能畫到圖外", () => {
+  const closes = Array.from({ length: 60 }, (_, index) => (index % 2 ? 120 : 100));
+  const { calls } = chartWith(closes, 30);
+  const ys = calls.filter(call => call[0] === "moveTo" || call[0] === "lineTo").map(call => call[2]);
+  assert.ok(ys.length > 0);
+  assert.ok(ys.every(Number.isFinite));
+  assert.ok(Math.min(...ys) >= 0, `最上方 y=${Math.min(...ys)}`);
+  assert.ok(Math.max(...ys) <= 340, `最下方 y=${Math.max(...ys)}`);
+});
+
+test("選取某一根時，提示列出當根的布林上軌與下軌", () => {
+  const { chart } = chartWith(Array.from({ length: 80 }, (_, index) => 100 + Math.sin(index / 3) * 8));
+  chart.hover = 70;
+  chart.draw();
+  const band = chart.boll[70];
+  assert.match(chart.tip.innerHTML, /布林/);
+  assert.ok(chart.tip.innerHTML.includes(band.upper.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })));
+
+  chart.hover = 25;
+  chart.view = { end: 60, count: 60 };
+  chart.draw();
+  assert.match(chart.tip.innerHTML, /布林/);
+  chart.hover = 5;
+  chart.draw();
+  assert.doesNotMatch(chart.tip.innerHTML, /布林/, "還沒滿 20 根的那一根不顯示");
+});

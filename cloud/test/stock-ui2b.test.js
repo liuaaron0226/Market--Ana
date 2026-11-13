@@ -78,6 +78,13 @@ test("完整模式保留策略結論與收合細節，0050對照位於最底", (
   }
 });
 
+test("策略理由只在結論出現一次，展開後不再重複同一句（本人 11-14：讓版面說明，不加重複描述）", () => {
+  const html = read("web/stock.html");
+  const js = read("web/stock.js");
+  assert.doesNotMatch(html, /id="strategyReason"/);
+  assert.equal([...js.matchAll(/strategy\.reason/g)].length, 1);
+});
+
 test("首頁即時 consumer 以 source time／live／retryable 判斷，未知成交金額不轉成 0", () => {
   const source = read("web/minimal.js");
   assert.match(source, /payload\.live === true/);
