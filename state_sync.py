@@ -120,6 +120,7 @@ WORKING_SET: tuple[Item, ...] = (
     Item("data/daily-update-log"),
     Item("data/daily-update-state/last-seed"),
     Item("data/daily-update-state/last-market-pack"),   # 官方月檔晚到時，大盤頁沿用這一版
+    Item("data/daily-update-state/last-build-inputs"),  # 「資料不變、只重新部署程式」用：最後一次發布的建置輸入
     *(Item(path) for path in GENERATED_CARRY),
 )
 

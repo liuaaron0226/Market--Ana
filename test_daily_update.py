@@ -595,6 +595,7 @@ class BuildAndDeployWiringTest(unittest.TestCase):
         ok = {"ok": True, "reason": "fine"}
         bad = {"ok": False, "reason": "exposed"}
         with unittest.mock.patch.object(du, "_remember_seed", lambda c: remembered.append("x") or {"remembered": "v"}), \
+                unittest.mock.patch.object(du, "_remember_build_inputs", lambda c: remembered.append("x") or {}, create=True), \
                 unittest.mock.patch.object(du, "_probe_unauthenticated", lambda paths: {}), \
                 unittest.mock.patch.object(du, "_remote_active_version", lambda: "v-new"):
             with unittest.mock.patch.object(du, "post_deploy_verdict", lambda **kw: bad):
@@ -603,7 +604,25 @@ class BuildAndDeployWiringTest(unittest.TestCase):
             self.assertEqual(remembered, [])
             with unittest.mock.patch.object(du, "post_deploy_verdict", lambda **kw: ok):
                 steps["post_deploy_check"].fn(ctx)
-            self.assertEqual(remembered, ["x"])
+            self.assertEqual(remembered, ["x", "x"])  # seed 與建置輸入都只在檢查通過後才保存
+
+    def test_failing_to_save_build_inputs_never_fails_a_good_publish(self) -> None:
+        # 保存建置輸入只是為了之後能「只重新部署程式」；它出錯不能讓已通過檢查的發布被判失敗而回滾 D1。
+        steps = {s.name: s for s in du.real_steps()}
+        ctx = self.ctx()
+        ctx.outputs["build_seed"] = {"seed_dir": str(ctx.work_dir / "seed"), "version": "v-new"}
+
+        def broken(_ctx):
+            raise OSError("disk full")
+        with unittest.mock.patch.object(du, "_remember_seed", lambda c: {"remembered": "v-new"}), \
+                unittest.mock.patch.object(du, "_remember_build_inputs", broken), \
+                unittest.mock.patch.object(du, "_probe_unauthenticated", lambda paths: {}), \
+                unittest.mock.patch.object(du, "_remote_active_version", lambda: "v-new"), \
+                unittest.mock.patch.object(du, "post_deploy_verdict", lambda **kw: {"ok": True, "reason": "fine"}):
+            out = steps["post_deploy_check"].fn(ctx)
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["remembered"], "v-new")
+        self.assertEqual(out["build_inputs_error"], "OSError")
 
     def test_pages_deploy_targets_production_branch(self) -> None:
         steps = {s.name: s for s in du.real_steps()}
@@ -763,6 +782,166 @@ class StatusFileTest(unittest.TestCase):
         status = json.loads((self.log_dir / "status.json").read_text(encoding="utf-8"))
         self.assertTrue(status["stale"])
         self.assertEqual(status["run"]["failed_step"], "build_seed")
+
+
+class RedeployTest(unittest.TestCase):
+    """本人 2026-11-14：「資料不變、只重新部署程式」。發布成功時保存建置輸入，之後用同一批輸入重建網頁。"""
+
+    SEED_VERSION = "liquid-20261113-abc-v2"
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        self.cloud = root / "cloud"
+        self.cloud.mkdir()
+        self.saved = root / "state" / "last-build-inputs"
+        self.market = root / "work" / "market-pack"
+        self.market.mkdir(parents=True)
+        self.log_dir = root / "log"
+        self.cmds: list[list[str]] = []
+        self.active = self.SEED_VERSION
+        self.probes = {"/": (302, "https://x.cloudflareaccess.com/cdn-cgi/access/login")}
+
+        def fake_sh(args, cwd=du.ROOT):
+            self.cmds.append([str(a) for a in args])
+            return {"cmd": " ".join(str(a) for a in args[:4])}
+
+        self.patches = [
+            unittest.mock.patch.object(du, "_sh", fake_sh),
+            unittest.mock.patch.object(du, "CLOUD", self.cloud),
+            unittest.mock.patch.object(du, "LAST_BUILD_DIR", self.saved, create=True),
+            unittest.mock.patch.object(du, "_remote_active_version", lambda: self.active),
+            unittest.mock.patch.object(du, "_probe_unauthenticated", lambda paths: self.probes),
+        ]
+        for patch in self.patches:
+            patch.start()
+
+    def tearDown(self) -> None:
+        for patch in self.patches:
+            patch.stop()
+        self.tmp.cleanup()
+
+    def publish(self) -> dict:
+        """模擬一次發布完成時的現場，並保存建置輸入。"""
+        files = {".stock-pack.json": '{"as_of": "2026-11-13", "results": {}}', ".screens-pack.json": '{"screens": 1}',
+                 ".compare-pack.json": '{"compare": 1}', ".data-status.json": '{"last_success_date": "2026-11-13"}'}
+        for name, text in files.items():
+            (self.cloud / name).write_text(text, encoding="utf-8")
+        (self.market / "analysis-data.js").write_text("window.MARKET_ANALYSIS = {};", encoding="utf-8")
+        (self.market / "dashboard-data.js").write_text("window.MARKET_DASHBOARD = {};", encoding="utf-8")
+        ctx = du.RunContext("2026-11-13", False, Path(self.tmp.name) / "work")
+        ctx.outputs["build_seed"] = {"version": self.SEED_VERSION}
+        ctx.outputs["build_dist"] = {"market_dir": str(self.market)}
+        return du._remember_build_inputs(ctx)
+
+    def joined(self) -> list[str]:
+        return [" ".join(cmd).replace(chr(92), "/") for cmd in self.cmds]
+
+    def test_publish_saves_exact_build_inputs_with_a_hash_manifest(self) -> None:
+        out = self.publish()
+        manifest = json.loads((self.saved / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["schema"], "build-inputs/v1")
+        self.assertEqual(manifest["data_date"], "2026-11-13")
+        self.assertEqual(manifest["seed_version"], self.SEED_VERSION)
+        self.assertEqual(out["data_date"], "2026-11-13")
+        self.assertEqual(sorted(manifest["files"]), ["compare-pack.json", "data-status.json", "market/analysis-data.js",
+                                                     "market/dashboard-data.js", "screens-pack.json"])
+        for name in manifest["files"]:
+            self.assertEqual(du._file_sha256(self.saved / name), manifest["files"][name], name)
+        # 個股包已經由工作集另外攜帶（cloud/.stock-pack.json），這裡只記雜湊，不再存一份。
+        self.assertEqual(manifest["stock_pack_sha256"], du._file_sha256(self.cloud / ".stock-pack.json"))
+        self.assertFalse((self.saved / "stock-pack.json").exists())
+        self.assertEqual(self.cmds, [])
+
+    def test_redeploy_rebuilds_from_saved_inputs_and_never_touches_data(self) -> None:
+        self.publish()
+        saved_status = (self.cloud / ".data-status.json").read_bytes()
+        for name in (".screens-pack.json", ".compare-pack.json", ".data-status.json"):
+            (self.cloud / name).write_text('{"from": "another checkout"}', encoding="utf-8")
+
+        result = du.redeploy(dry_run=False)
+
+        self.assertEqual(result["status"], "success", result)
+        self.assertEqual(result["data_date"], "2026-11-13")
+        self.assertIs(result["redeployed"], True)
+        self.assertIs(result["published"], False)
+        self.assertIs(result["sync_state"], False)
+        self.assertEqual((self.cloud / ".data-status.json").read_bytes(), saved_status)
+        self.assertEqual((self.cloud / ".screens-pack.json").read_text(encoding="utf-8"), '{"screens": 1}')
+        self.assertEqual((self.cloud / ".compare-pack.json").read_text(encoding="utf-8"), '{"compare": 1}')
+        joined = self.joined()
+        build = next(index for index, cmd in enumerate(joined) if "build.mjs" in cmd)
+        deploy = next(index for index, cmd in enumerate(joined) if "pages deploy dist" in cmd)
+        self.assertLess(build, deploy)
+        self.assertIn(str(self.saved / "market").replace(chr(92), "/"), joined[build])
+        self.assertIn("--branch main", joined[deploy])
+        for forbidden in ("import_d1_seed", "state_sync", "build_stock_pack", "market_pack_daily", "liquid_universe",
+                          "market_screens_publish", "build_screens_pack", "build_compare_pack"):
+            self.assertFalse(any(forbidden in cmd for cmd in joined), forbidden)
+        self.assertFalse(self.log_dir.exists())
+
+    def test_redeploy_dry_run_builds_but_does_not_deploy(self) -> None:
+        self.publish()
+        result = du.redeploy(dry_run=True)
+        self.assertEqual(result["status"], "success", result)
+        self.assertIs(result["redeployed"], False)
+        self.assertTrue(any("build.mjs" in cmd for cmd in self.joined()))
+        self.assertFalse(any("pages deploy" in cmd for cmd in self.joined()))
+
+    def test_redeploy_without_saved_inputs_fails_before_doing_anything(self) -> None:
+        result = du.redeploy(dry_run=False)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["failed_step"], "load_inputs")
+        self.assertEqual(self.cmds, [])
+
+    def test_redeploy_refuses_changed_or_missing_inputs(self) -> None:
+        cases = {
+            "screens changed": lambda: (self.saved / "screens-pack.json").write_text('{"screens": 2}', encoding="utf-8"),
+            "market file missing": lambda: (self.saved / "market" / "analysis-data.js").unlink(),
+            "stock pack differs": lambda: (self.cloud / ".stock-pack.json").write_text('{"as_of": "2026-11-09"}', encoding="utf-8"),
+            "stock pack missing": lambda: (self.cloud / ".stock-pack.json").unlink(),
+        }
+        for label, damage in cases.items():
+            with self.subTest(label):
+                self.publish()
+                self.cmds.clear()
+                damage()
+                result = du.redeploy(dry_run=False)
+                self.assertEqual(result["status"], "failed", label)
+                self.assertEqual(result["failed_step"], "verify_inputs", label)
+                self.assertEqual(self.cmds, [], label)
+
+    def test_redeploy_refuses_when_live_data_is_not_the_saved_version(self) -> None:
+        self.publish()
+        self.active = "liquid-20261116-def-v2"
+        result = du.redeploy(dry_run=False)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["failed_step"], "check_active")
+        self.assertEqual(self.cmds, [])
+
+    def test_redeploy_reports_failure_when_site_is_exposed_after_deploy(self) -> None:
+        self.publish()
+        self.probes = {"/": (200, None)}
+        result = du.redeploy(dry_run=False)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["failed_step"], "post_deploy_check")
+        self.assertIs(result["redeployed"], True)  # 已經上傳了，回退要另外處理，不能說沒部署
+
+    def test_cli_redeploy_writes_a_result_that_cannot_trigger_state_sync_or_ai(self) -> None:
+        self.publish()
+        result_file = Path(self.tmp.name) / "daily-result.json"
+        with unittest.mock.patch.object(du, "run", side_effect=AssertionError("redeploy 不可走每日更新流程")):
+            code = du.main(["--redeploy", "--result-file", str(result_file), "--log-dir", str(self.log_dir)])
+        self.assertEqual(code, 0)
+        summary = json.loads(result_file.read_text(encoding="utf-8"))
+        self.assertEqual(summary["status"], "success")
+        self.assertIs(summary["sync_state"], False)
+        self.assertIs(summary["published"], False)
+        self.assertFalse(self.log_dir.exists())
+
+    def test_cli_redeploy_failure_exits_nonzero(self) -> None:
+        code = du.main(["--redeploy", "--log-dir", str(self.log_dir)])
+        self.assertEqual(code, 1)
 
 
 if __name__ == "__main__":

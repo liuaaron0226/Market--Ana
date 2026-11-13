@@ -26,6 +26,11 @@ on:
         required: false
         type: boolean
         default: true
+      redeploy:
+        description: "資料不變、只重新部署程式（用最後一次發布保存的建置輸入重建網頁；不重算、不寫 D1、不同步工作集；date 會被忽略）"
+        required: false
+        type: boolean
+        default: false
       trigger_source:
         description: "自動排程來源（Cloudflare 使用 cloudflare-cron；手動留空＝嚴格）"
         required: false
@@ -148,6 +153,7 @@ jobs:
           --trigger-source "$TRIGGER_SOURCE"
           --trigger-slot "$TRIGGER_SLOT"
           ${{ steps.day.outputs.dry_run }}
+          ${{ inputs.redeploy == true && '--redeploy' || '' }}
           --result-file "${{ runner.temp }}/daily-result.json"
 
       - name: 同步工作集回 R2（只在發布成功時）

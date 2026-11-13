@@ -475,6 +475,139 @@ def _remember_market_pack(source: Path) -> None:
 def _npx(*args: str) -> list[str]:
     return ["npx", "--yes", "wrangler@4", *args]
 
+# 「資料不變、只重新部署程式」（本人 2026-11-14 選「穩的」做法）：發布檢查通過時，把這次建置用的輸入原樣存下來；
+# 之後改了程式要上線，就用同一批輸入重建網頁，不重算、不寫 D1、不上傳工作集。
+LAST_BUILD_DIR = ROOT / "data/daily-update-state/last-build-inputs"
+BUILD_INPUTS_SCHEMA = "build-inputs/v1"
+# 存檔名 → build.mjs 讀的檔名。個股包已由工作集另外攜帶（cloud/.stock-pack.json），只記雜湊，不重複存。
+_BUILD_INPUT_FILES = {"screens-pack.json": ".screens-pack.json", "compare-pack.json": ".compare-pack.json",
+                      "data-status.json": ".data-status.json"}
+_STOCK_PACK_FILE = ".stock-pack.json"
+
+
+def _file_sha256(path: Path) -> str:
+    import hashlib
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _remember_build_inputs(ctx: RunContext) -> dict:
+    """發布檢查通過後呼叫：保存這次建置的輸入與雜湊清單（原子換目錄）。"""
+    import shutil
+    market_dir = Path(ctx.outputs["build_dist"]["market_dir"])
+    partial = LAST_BUILD_DIR.with_name(LAST_BUILD_DIR.name + ".partial")
+    if partial.exists():
+        shutil.rmtree(partial)
+    partial.mkdir(parents=True)
+    for saved, source in _BUILD_INPUT_FILES.items():
+        shutil.copy2(CLOUD / source, partial / saved)
+    shutil.copytree(market_dir, partial / "market")
+    files = {path.relative_to(partial).as_posix(): _file_sha256(path)
+             for path in sorted(partial.rglob("*")) if path.is_file()}
+    manifest = {"schema": BUILD_INPUTS_SCHEMA, "data_date": ctx.data_date,
+                "seed_version": ctx.outputs.get("build_seed", {}).get("version"),
+                "stock_pack_sha256": _file_sha256(CLOUD / _STOCK_PACK_FILE), "files": files}
+    _write_record(partial / "manifest.json", manifest)
+    old = LAST_BUILD_DIR.with_name(LAST_BUILD_DIR.name + ".old")
+    if LAST_BUILD_DIR.exists():
+        if old.exists():
+            shutil.rmtree(old)
+        os.replace(LAST_BUILD_DIR, old)
+    os.replace(partial, LAST_BUILD_DIR)
+    if old.exists():
+        shutil.rmtree(old)
+    return {"build_inputs": len(files), "data_date": ctx.data_date}
+
+
+def _build_site(market_dir: Path) -> dict:
+    env_prefix = ["cmd", "/c", f"set MARKET_DATA_DIR={market_dir}&&"] if os.name == "nt" else \
+        ["env", f"MARKET_DATA_DIR={market_dir}"]
+    return _sh([*env_prefix, "node", str(CLOUD / "build.mjs")], cwd=CLOUD)
+
+
+def _deploy_pages() -> dict:
+    return _sh(_npx("pages", "deploy", "dist", "--project-name", PAGES_PROJECT, "--branch", "main",
+                    "--commit-dirty=true"), cwd=CLOUD)
+
+
+def _saved_build_inputs_problem(manifest: dict) -> str | None:
+    """保存的輸入要和清單一字不差；任何缺漏或差異都不能拿來部署。回傳問題說明，沒問題回 None。"""
+    if manifest.get("schema") != BUILD_INPUTS_SCHEMA or not isinstance(manifest.get("files"), dict) \
+            or not manifest.get("data_date") or not manifest.get("seed_version"):
+        return "建置輸入清單格式不對"
+    required = set(_BUILD_INPUT_FILES) | {"market/analysis-data.js"}
+    if not required.issubset(manifest["files"]):
+        return f"建置輸入清單缺少：{', '.join(sorted(required - set(manifest['files'])))}"
+    for name, expected in manifest["files"].items():
+        path = LAST_BUILD_DIR / name
+        if not path.is_file() or _file_sha256(path) != expected:
+            return f"建置輸入與清單不符：{name}"
+    stock_pack = CLOUD / _STOCK_PACK_FILE
+    if not stock_pack.is_file() or _file_sha256(stock_pack) != manifest.get("stock_pack_sha256"):
+        return "個股資料包與發布時的不同"
+    return None
+
+
+def redeploy(*, dry_run: bool) -> dict:
+    """用最後一次發布保存的建置輸入重建並部署網頁。不重算資料、不寫 D1、不動執行紀錄與工作集。
+
+    回傳的 published／sync_state 一律是 False：這不是一次新的資料發布，workflow 不會同步工作集，AI 解讀也不會被觸發。
+    """
+    import shutil
+    result: dict = {"mode": "redeploy", "dry_run": dry_run, "data_date": None, "status": "failed", "failed_step": None,
+                    "published": False, "sync_state": False, "redeployed": False}
+
+    def failed(step: str, message: str) -> dict:
+        return {**result, "failed_step": step, "message": message}
+
+    manifest_path = LAST_BUILD_DIR / "manifest.json"
+    if not manifest_path.is_file():
+        return failed("load_inputs", "還沒有保存的建置輸入；要先有一次每日更新成功發布")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return failed("load_inputs", "建置輸入清單讀不出來")
+    if not isinstance(manifest, dict):
+        return failed("load_inputs", "建置輸入清單讀不出來")
+    result["data_date"] = manifest.get("data_date")
+    problem = _saved_build_inputs_problem(manifest)
+    if problem:
+        return failed("verify_inputs", problem)
+    # 線上資料必須就是保存這批輸入時的版本；不是的話，重建出來的網頁會和資料庫對不上。
+    try:
+        active = _remote_active_version()
+    except Exception as error:  # noqa: BLE001 — 讀不到線上版本就不部署
+        return failed("check_active", f"讀不到線上資料版本：{type(error).__name__}")
+    if active != manifest["seed_version"]:
+        return failed("check_active", f"線上資料版本是 {active}，保存的建置輸入屬於 {manifest['seed_version']}")
+    try:
+        for saved, target in _BUILD_INPUT_FILES.items():
+            partial = CLOUD / (target + ".partial")
+            shutil.copy2(LAST_BUILD_DIR / saved, partial)
+            os.replace(partial, CLOUD / target)
+        _build_site(LAST_BUILD_DIR / "market")
+    except Exception as error:  # noqa: BLE001
+        return failed("build_dist", f"{type(error).__name__}: {str(error)[-300:]}")
+    if dry_run:
+        return {**result, "status": "success", "message": "乾跑：已用保存的輸入建置，沒有部署"}
+    try:
+        _deploy_pages()
+    except Exception as error:  # noqa: BLE001
+        return failed("pages_deploy", f"{type(error).__name__}: {str(error)[-300:]}")
+    result["redeployed"] = True
+    try:
+        verdict = post_deploy_verdict(
+            probes=_probe_unauthenticated(["/", "/api/data-status", "/api/stocks/search?q=2330"]),
+            active_version=_remote_active_version(), expected_version=manifest["seed_version"])
+    except Exception as error:  # noqa: BLE001
+        return failed("post_deploy_check", f"部署後檢查沒有完成：{type(error).__name__}")
+    if not verdict["ok"]:
+        return failed("post_deploy_check", verdict["reason"])
+    return {**result, "status": "success", "message": "已用同一批資料重新部署網頁"}
+
 
 def _seed_dir(ctx: RunContext) -> Path:
     return Path(ctx.outputs.get("build_seed", {}).get("seed_dir") or ctx.work_dir / "seed")
@@ -650,9 +783,8 @@ def real_steps() -> list[Step]:
             report["market"] = {"fallback": True, "reason": str(error)[-300:]}
         report["stock_pack"] = _install_stock_pack(_seed_dir(ctx) / "stock-pack-v2.json")
         report["status"] = _write_status_for_build(ctx)
-        env_prefix = ["cmd", "/c", f"set MARKET_DATA_DIR={market_dir}&&"] if os.name == "nt" else \
-            ["env", f"MARKET_DATA_DIR={market_dir}"]
-        report["build"] = _sh([*env_prefix, "node", str(CLOUD / "build.mjs")], cwd=CLOUD)
+        report["build"] = _build_site(market_dir)
+        report["market_dir"] = str(market_dir)  # 發布檢查通過後要把這批建置輸入存下來
         return report
 
     def d1_import(ctx: RunContext) -> dict:
@@ -673,8 +805,7 @@ def real_steps() -> list[Step]:
                     "--work-dir", str(ctx.work_dir / "d1-import"), "--remote", "--confirm"])
 
     def pages_deploy(ctx: RunContext) -> dict:
-        return _sh(_npx("pages", "deploy", "dist", "--project-name", PAGES_PROJECT, "--branch", "main",
-                        "--commit-dirty=true"), cwd=CLOUD)
+        return _deploy_pages()
 
     def post_deploy_check(ctx: RunContext) -> dict:
         expected = ctx.outputs.get("build_seed", {}).get("version")
@@ -683,7 +814,12 @@ def real_steps() -> list[Step]:
         if not verdict["ok"]:
             raise RuntimeError(verdict["reason"])
         # 全部驗證通過才把今天的 seed 記成明天增量的 base；途中失敗會 rollback，base 也就不能前進。
-        return {**verdict, **_remember_seed(ctx)}
+        remembered = _remember_seed(ctx)
+        try:
+            saved = _remember_build_inputs(ctx)
+        except Exception as error:  # noqa: BLE001 — 存不成只是之後不能「只重新部署程式」，不能讓已通過的發布回滾
+            saved = {"build_inputs_error": type(error).__name__}
+        return {**verdict, **remembered, **saved}
 
     steps = {
         "fetch_incremental": fetch_incremental,
@@ -722,6 +858,8 @@ def main(argv: list[str] | None = None, *, clock=None) -> int:
                         help="U3：Actions 前幾個 cron 時段用；官方未就緒時 exit 0（等下個時段），其他失敗照樣 exit 1")
     parser.add_argument("--result-file", type=Path,
                         help="U3：把本次結果寫成 JSON（workflow 依 sync_state 決定要不要把工作集同步回 R2）")
+    parser.add_argument("--redeploy", action="store_true",
+                        help="資料不變、只重新部署程式：用最後一次發布保存的建置輸入重建網頁；--date 會被忽略")
     parser.add_argument("--trigger-event", default="", help="可信 CI 事件名稱；缺省為嚴格模式")
     parser.add_argument("--trigger-source", default="", help="github-schedule／cloudflare-cron")
     parser.add_argument("--trigger-slot", default="", help="原排程 UTC cron；僅已知前段時段可等待")
@@ -729,6 +867,12 @@ def main(argv: list[str] | None = None, *, clock=None) -> int:
     data_date = args.date or clock.now().astimezone(TPE).date().isoformat()
     if date.fromisoformat(data_date).isoformat() != data_date:
         parser.error("date 必須是真實的 YYYY-MM-DD")
+    if args.redeploy:
+        summary = redeploy(dry_run=args.dry_run)
+        print(json.dumps(summary, ensure_ascii=False))
+        if args.result_file:
+            _write_record(args.result_file, summary)
+        return 0 if summary["status"] == "success" else 1
     if args.write_status_only:
         ctx = RunContext(data_date, False, ROOT / ".tmp" / "daily-update" / data_date,
                          outputs={"_log_dir": str(args.log_dir)})

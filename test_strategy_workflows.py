@@ -133,6 +133,20 @@ class StrategyWorkflowTests(unittest.TestCase):
             self.assertEqual(lock['group'], 'market-state-write')
             self.assertIs(lock['cancel-in-progress'], False)
 
+    def test_daily_workflow_offers_code_only_redeploy_that_defaults_to_off_and_dry(self):
+        # 本人 2026-11-14：「資料不變、只重新部署程式」。只能手動觸發；排程永遠不會帶這個旗標。
+        doc = workflow('daily-update.yml')
+        inputs = doc[True]['workflow_dispatch']['inputs']
+        self.assertEqual(inputs['redeploy']['type'], 'boolean')
+        self.assertIs(inputs['redeploy']['default'], False)
+        self.assertIs(inputs['dry_run']['default'], True)
+        steps = doc['jobs']['update']['steps']
+        run = next(s for s in steps if s.get('id') == 'run')
+        self.assertIn("${{ inputs.redeploy == true && '--redeploy' || '' }}", run['run'])
+        self.assertIn('${{ steps.day.outputs.dry_run }}', run['run'])
+        sync = next(s for s in steps if s.get('name', '').startswith('同步工作集回 R2'))
+        self.assertIn("['sync_state']", sync['run'])  # 重新部署的結果 sync_state 是 False，不會上傳工作集
+
     def test_real_cli_outputs_fail_closed_modes_without_side_effect_commands(self):
         cases = [('', 'schedule', '', 'false', 'true'),
                  ('false', 'workflow_run', '', 'false', 'true'),
