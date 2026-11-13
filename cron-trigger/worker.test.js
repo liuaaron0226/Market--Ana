@@ -4,10 +4,38 @@ import { JOBS, dispatch, taipeiDate } from "./worker.js";
 
 const env = { GITHUB_DISPATCH_TOKEN: "t" };
 
-test("每個 cron 都對應 daily-update，且和 wrangler.toml 一致", async () => {
+test("wrangler.toml 的四個時段都有對應工作，且星期用 MON-FRI（Cloudflare 的 1 是週日，1-5 會漏掉週五）", async () => {
   const { readFileSync } = await import("node:fs");
   const toml = readFileSync(new URL("./wrangler.toml", import.meta.url), "utf8");
-  for (const cron of Object.keys(JOBS)) assert.ok(toml.includes(`"${cron}"`), cron);
+  const crons = [...toml.match(/crons = \[(.*)\]/)[1].matchAll(/"([^"]+)"/g)].map(m => m[1]);
+  assert.equal(crons.length, 4);
+  for (const cron of crons) {
+    const [minute, hour, , , weekday] = cron.split(" ");
+    assert.equal(weekday, "MON-FRI", cron);
+    assert.ok(JOBS[`${minute} ${hour}`], cron);
+  }
+  assert.equal(Object.keys(JOBS).length, 4);
+});
+
+test("Cloudflare 不論怎麼回報星期欄位，都送出 daily_update.py 認得的時段字串", async () => {
+  for (const reported of ["30 7 * * MON-FRI", "30 7 * * mon-fri", "30 7 * * 2-6"]) {
+    let body;
+    const result = await dispatch(reported, Date.parse("2026-11-13T07:30:00Z"), env, async (_url, init) => {
+      body = JSON.parse(init.body); return { status: 204 };
+    });
+    assert.equal(result.dispatched, "daily-update.yml", reported);
+    assert.equal(body.inputs.trigger_slot, "30 7 * * 1-5");
+    assert.equal(body.inputs.date, "2026-11-13");
+  }
+  assert.deepEqual(await dispatch("15 3 * * MON-FRI", 0, env, async () => ({ status: 204 })), { skipped: "15 3 * * MON-FRI" });
+});
+
+test("送出的時段字串與 daily_update.py 的 RETRY_SLOTS 完全一致", async () => {
+  const { readFileSync } = await import("node:fs");
+  const python = readFileSync(new URL("../daily_update.py", import.meta.url), "utf8");
+  const block = python.split("RETRY_SLOTS = {")[1].split("}")[0];
+  const expected = [...block.matchAll(/"([^"]+)":/g)].map(m => m[1]).sort();
+  assert.deepEqual(Object.values(JOBS).map(job => job.slot).sort(), expected);
 });
 
 test("台北日期：UTC 07:30 是台北同一天 15:30", () => {

@@ -4,7 +4,8 @@ compatibility_date = "2026-11-01"
 workers_dev = false
 
 [triggers]
-crons = ["30 7 * * 1-5", "30 8 * * 1-5", "0 10 * * 1-5", "30 12 * * 1-5"]
+# Cloudflare 的星期：1＝週日…7＝週六。一律用縮寫，不要寫數字。
+crons = ["30 7 * * MON-FRI", "30 8 * * MON-FRI", "0 10 * * MON-FRI", "30 12 * * MON-FRI"]
 
 [observability]
 enabled = true

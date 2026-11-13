@@ -69,6 +69,41 @@ class StrategyWorkflowTests(unittest.TestCase):
                 self.assertEqual(done.returncode, 0, done.stderr)
                 self.assertIn('dry_run=true', output.read_text(encoding='utf-8'))
 
+    def _run_token_check(self, failures_before_success):
+        """實跑 daily-update 的 token 驗證 step；npx 與 sleep 換成假指令，回傳 (exit code, npx 呼叫次數)。"""
+        import shutil
+        bash = shutil.which('bash')
+        if not bash:
+            self.skipTest('需要 bash 才能實跑 workflow step')
+        steps = workflow('daily-update.yml')['jobs']['update']['steps']
+        step = next(s for s in steps if s.get('name', '').startswith('驗證 Cloudflare token'))
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            counter = folder / 'calls'
+            counter.write_text('0', encoding='utf-8')
+            prelude = (
+                'npx() { n=$(cat "$CALLS"); n=$((n+1)); echo "$n" > "$CALLS"; [ "$n" -gt "$FAIL_FIRST" ]; }NL'
+                'sleep() { :; }NL'
+            ).replace('NL', chr(10))
+            script = folder / 'step.sh'
+            script.write_text(prelude + step['run'], encoding='utf-8', newline=chr(10))
+            env = {**os.environ, 'CALLS': counter.as_posix(), 'FAIL_FIRST': str(failures_before_success)}
+            done = subprocess.run([bash, script.as_posix()], env=env, capture_output=True, text=True, encoding='utf-8')
+            return done.returncode, int(counter.read_text(encoding='utf-8').strip()), done.stdout
+
+    def test_token_check_survives_a_transient_cloudflare_api_failure(self):
+        # 11-13 23:37 的 schedule run：Pages API 一次 503 就被判成「token 無效」，當天沒有發布。
+        code, calls, _ = self._run_token_check(failures_before_success=2)
+        self.assertEqual(code, 0)
+        self.assertEqual(calls, 4)  # d1 失敗 2 次＋成功 1 次，pages 成功 1 次
+
+    def test_token_check_still_fails_when_the_api_never_answers(self):
+        code, calls, output = self._run_token_check(failures_before_success=99)
+        self.assertNotEqual(code, 0)
+        self.assertEqual(calls, 3)
+        self.assertIn('::error::', output)
+        self.assertIn('暫時', output)
+
     def test_dry_run_cannot_reach_writes_or_agy_and_original_state_guards_remain(self):
         level = workflow('level-daily.yml')['jobs']['calculate']['steps']
         ai = workflow('ai-digest.yml')['jobs']['digest']['steps']
