@@ -754,7 +754,8 @@ body.hm .rotation-dialog .rotation-table :is(th, td):first-child { white-space: 
 /* ================= 資金地形（立體重設計 B 包，本人 2026-11-14 定案的方向） =================
    每個產業一棟樓，樓高＝今日成交額，四個街區＝四個資金狀態；結構由 terrain.js 產生。
    這裡是真的立體幾何：樓的厚度是 3D 的面、落影是壓在地面上的模糊色塊，
-   所以不走 bold.css 的陰影變數（那是給平面的板用的）；顏色、圓角、浮板仍然引用變數。 */
+   所以不走 bold.css 的陰影變數（那是給平面的板用的）。樓的底色、地面、圓角、浮板仍然引用變數；
+   各面的明暗是打光：在底色上混一點白（頂面）或黑（側面），這幾個比例直接寫在這裡。 */
 body.hm .terrain { position: relative; margin-top: 16px; }
 body.hm .terrain [data-quadrant="leading"] { --q: var(--q-leading); }
 body.hm .terrain [data-quadrant="weakening"] { --q: var(--q-weakening); }
@@ -768,9 +769,9 @@ body.hm .terrain-stage {
   overflow: hidden; /* 立體的面轉出去的部分不能撐出橫向捲動 */
 }
 body.hm .terrain-stage.is-dragging { cursor: grabbing; }
-/* 透視、視角（--rx、--rz）、縮放（--s）與位置都由 terrain.js 設定 */
+/* 透視、視角（--rx、--rz）、縮放（--s）、位置與長出來的時間（--grow-ms、--stagger-ms）都由 terrain.js 設定 */
 body.hm .terrain-city {
-  --rx: 57deg; --rz: 34deg; --s: 1;
+  --s: 1;
   position: absolute; left: 50%; top: 50%; width: 0; height: 0; transform-style: preserve-3d;
   transform: scale3d(var(--s), var(--s), var(--s)) rotateX(var(--rx)) rotateZ(var(--rz));
 }
@@ -796,7 +797,7 @@ body.hm .terrain-tower {
   left: calc(var(--x) - var(--w) / 2); top: calc(var(--y) - var(--w) / 2); width: var(--w); height: var(--w);
   --tone: color-mix(in srgb, var(--q), var(--key) var(--fade, 0%));
   transform: translateZ(var(--raise, 0px)) scale3d(1, 1, var(--grow, .001));
-  transition: transform 900ms var(--ease-depth); transition-delay: calc(var(--i) * 26ms);
+  transition: transform var(--grow-ms) var(--ease-depth); transition-delay: calc(var(--i) * var(--stagger-ms));
   cursor: pointer; outline: none;
 }
 body.hm .terrain-city.is-grown .terrain-tower { --grow: 1; }

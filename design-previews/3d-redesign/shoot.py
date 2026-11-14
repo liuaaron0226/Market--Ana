@@ -125,15 +125,20 @@ def grown_terrain(page: Page) -> None:
     page.wait_for_timeout(400)
 
 
+def roof_of(page: Page, rank: str) -> dict:
+    """資金地形裡某一棟樓的名稱與樓頂中心在畫面上的位置。rank："largest" 成交額最大（樓頂一定露在外面）、"smallest" 最小。"""
+    return page.evaluate("""rank => {
+      const towers = [...document.querySelectorAll('#rotationTerrain .terrain-tower')].sort((a, b) => a.dataset.rank - b.dataset.rank);
+      const tower = rank === 'smallest' ? towers[towers.length - 1] : towers[0];
+      const box = tower.querySelector('.top').getBoundingClientRect();
+      return { name: tower.dataset.name, x: box.left + box.width / 2, y: box.top + box.height / 2 };
+    }""", rank)
+
+
 def pick_tallest_tower(page: Page) -> None:
-    """點成交額最大的那一棟樓（樓頂一定露在外面）。"""
+    """點成交額最大的那一棟樓。"""
     grown_terrain(page)
-    roof = page.evaluate("""() => {
-      const towers = [...document.querySelectorAll('#rotationTerrain .terrain-tower')];
-      const tallest = towers.reduce((best, tower) => (parseFloat(tower.style.getPropertyValue('--h')) > parseFloat(best.style.getPropertyValue('--h')) ? tower : best));
-      const box = tallest.querySelector('.top').getBoundingClientRect();
-      return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
-    }""")
+    roof = roof_of(page, "largest")
     page.mouse.click(roof["x"], roof["y"])
     page.wait_for_timeout(300)
 

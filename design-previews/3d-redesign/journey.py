@@ -96,25 +96,19 @@ TERRAIN_INSIDE = """() => {
   const out = parts.filter(b => b.left < stage.left - 1 || b.right > stage.right + 1 || b.top < stage.top - 1 || b.bottom > stage.bottom + 1);
   return parts.length > 30 && !out.length ? 'ok' : `${out.length} of ${parts.length} outside`;
 }"""
-# 成交額最大的那一棟樓：樓頂中心在畫面上的位置
-TALLEST_ROOF = """() => {
-  const towers = [...document.querySelectorAll('#rotationTerrain .terrain-tower')];
-  const tallest = towers.reduce((best, tower) => (parseFloat(tower.style.getPropertyValue('--h')) > parseFloat(best.style.getPropertyValue('--h')) ? tower : best));
-  const box = tallest.querySelector('.top').getBoundingClientRect();
-  return { name: tallest.dataset.name, x: box.left + box.width / 2, y: box.top + box.height / 2 };
-}"""
-# 成交額最小的那一棟樓（手機上只有十幾個像素）：樓頂中心的位置
-SMALLEST_ROOF = """() => {
-  const towers = [...document.querySelectorAll('#rotationTerrain .terrain-tower')];
-  const smallest = towers.reduce((best, tower) => (parseFloat(tower.style.getPropertyValue('--h')) < parseFloat(best.style.getPropertyValue('--h')) ? tower : best));
-  const box = smallest.querySelector('.top').getBoundingClientRect();
-  return { name: smallest.dataset.name, x: box.left + box.width / 2, y: box.top + box.height / 2 };
-}"""
-# 表格裡同一個產業那一列的資金狀態與相對平均
+# 表格裡同一個產業那一列的資金狀態、相對平均與加速度（字要和點樓的明細一模一樣，含正負號）
 TABLE_ROW = """name => {
   const row = [...document.querySelectorAll('#rotationTable tr')].find(tr => tr.cells[0] && tr.cells[0].textContent === name);
-  return row ? { state: row.cells[1].textContent, relative: row.cells[2].textContent } : null;
+  return row ? { state: row.cells[1].textContent, relative: row.cells[2].textContent, accel: row.cells[3].textContent } : null;
 }"""
+
+
+def matches_table(page: Page, name: str) -> tuple[bool, object]:
+    """點樓的明細和表格同一個產業那一列是不是同一組字。"""
+    row = page.evaluate(TABLE_ROW, name)
+    detail = page.locator("#rotationTerrain .terrain-detail").inner_text()
+    same = bool(row) and row["state"] in detail and row["relative"] in detail and f"{row['accel']} 億元/日" in detail
+    return same, [row, detail]
 
 
 def open_panel(page: Page, tag: str, selector: str, title_part: str) -> None:
@@ -297,20 +291,23 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
         page.mouse.up()
 
         # 點樓：成交額最大的那一棟（樓頂一定露在外面）
-        top = page.evaluate(TALLEST_ROOF)
+        top = shoot.roof_of(page, "largest")
         page.mouse.click(top["x"], top["y"])
         detail = page.locator("#rotationTerrain .terrain-detail").inner_text()
         wanted = [top["name"], "今日成交額", "檔數", "成交額相對平均", "近 5 日加速度"]
         check(f"{tag}：點樓出明細（名稱、資金狀態與四個數字）",
               all(word in detail for word in wanted) and any(state in detail for state in ("資金領先", "資金減速", "資金回補", "資金落後")), detail)
-        row = page.evaluate(TABLE_ROW, top["name"])
-        check(f"{tag}：明細的數字和表格同一筆一致", bool(row) and row["relative"] in detail and row["state"] in detail, [row, detail])
+        same, seen = matches_table(page, top["name"])
+        check(f"{tag}：明細的數字和表格同一筆一致", same, seen)
         check(f"{tag}：被選的樓讀得出選取狀態", page.locator("#rotationTerrain .terrain-tower[aria-pressed='true']").count() == 1)
         if mobile:
             stage = page.locator("#rotationTerrain .terrain-stage").bounding_box()
             box = page.locator("#rotationTerrain .terrain-detail").bounding_box()
-            check(f"{tag}：手機上明細排在街區下方、不蓋住街區", box["y"] >= stage["y"] + stage["height"] - 1 and box["x"] >= 0
-                  and box["x"] + box["width"] <= page.viewport_size["width"] + 1, [stage, box])
+            view = page.viewport_size
+            check(f"{tag}：手機上明細排在街區下方、不蓋住街區", box["y"] >= stage["y"] + stage["height"] - 1, [stage, box])
+            check(f"{tag}：手機上明細完全在可見範圍內", box["x"] >= 0 and box["x"] + box["width"] <= view["width"] + 1
+                  and box["y"] >= 0 and box["y"] + box["height"] <= view["height"] + 1, [view, box])
+        top = shoot.roof_of(page, "largest")  # 手機選取後頁面可能捲過，樓的位置要重量
         page.mouse.click(top["x"], top["y"])
         check(f"{tag}：再點同一棟樓取消選取",
               page.locator("#rotationTerrain .terrain-tower[aria-pressed='true']").count() == 0
@@ -318,7 +315,7 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
 
         if mobile:
             # 手機上樓很小：故意點偏，要選到最近的那一棟；點明顯的空白處取消
-            small = page.evaluate(SMALLEST_ROOF)
+            small = shoot.roof_of(page, "smallest")
             page.touchscreen.tap(small["x"] + 9, small["y"] - 8)
             picked = page.locator("#rotationTerrain .terrain-tower[aria-pressed='true']")
             check(f"{tag}：點在小樓旁邊也選得到最近的一棟", picked.count() == 1 and picked.first.get_attribute("data-name") == small["name"], small)
@@ -333,6 +330,9 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
         label = first.get_attribute("aria-label") or ""
         check(f"{tag}：鍵盤 Enter 選取樓，樓的名稱含產業與資金狀態",
               first.get_attribute("aria-pressed") == "true" and "，" in label and label.split("，")[0] in page.locator("#rotationTerrain .terrain-detail").inner_text(), label)
+        # 這一棟在資金回補區，相對平均是負的：負號也要和表格同一個字
+        same, seen = matches_table(page, first.get_attribute("data-name") or "")
+        check(f"{tag}：負數的明細也和表格一致", same and "-" in seen[0]["relative"], seen)
         page.keyboard.press("Escape")
         check(f"{tag}：鍵盤 Esc 取消選取", first.get_attribute("aria-pressed") == "false")
 
@@ -345,7 +345,7 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
         check(f"{tag}：面板裡有資金效率排行", page.locator("#rotationEfficiency > li").count() >= 1)
         check(f"{tag}：面板裡有低基期回溫訊號", page.locator("#rotationRecovery > li").count() >= 1)
         rows = page.locator("#rotationTable tr").count() - 1  # 扣掉表頭
-        check(f"{tag}：表格檢視列出全部產業", rows >= 30, rows)
+        check(f"{tag}：表格檢視列出全部產業（不少於地形上的樓）", rows >= 30 and rows >= towers.count(), [rows, towers.count()])
         box = page.locator("#rotationDialog").bounding_box()
         view = page.viewport_size
         check(f"{tag}：排行表格的面板完全在可見範圍內",

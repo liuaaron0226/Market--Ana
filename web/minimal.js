@@ -2277,7 +2277,6 @@
     rot.meta.textContent = `資料日 ${latest.date}`;
     const stale = payload.status === 'stale' ? `已過期（最新行情 ${payload.latest_market_data_date}），僅供查看舊結果。` : '';
     rot.status.textContent = `${stale}${latest.summary ? latest.summary.text : ''}`;
-    rot.body.hidden = false;
     window.Terrain.render(rot.terrain, { bubbles: latest.bubbles, quadrants: payload.quadrants });
     rot.efficiency.replaceChildren(...(latest.efficiency_ranking || []).map(r => {
       const li = el('li', '', `${r.name} `);
@@ -2310,6 +2309,8 @@
     try {
       renderRotation(await getJson('/api/rotation'));
     } catch (error) {
+      // 地形與三顆入口鍵只在整段都畫好之後才顯示；中途出錯就收起來，不留一個點開是空的面板
+      rot.body.hidden = true;
       rot.block.dataset.state = 'error';
       rot.status.textContent = '產業資金流向暫時無法讀取，請稍後再試。';
     }
