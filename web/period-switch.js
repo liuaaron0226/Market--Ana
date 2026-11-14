@@ -11,7 +11,6 @@
   const chip = document.createElement('button');
   chip.type = 'button';
   chip.className = 'chart-chip';
-  chip.setAttribute('aria-haspopup', 'true');
   chip.setAttribute('aria-expanded', 'false');
   chip.setAttribute('aria-controls', 'periodMenu');
 
@@ -41,7 +40,7 @@
   });
   wrap.append(chip, menu);
 
-  // 左右方向鍵在可用的週期之間移動
+  // 左右方向鍵在可用的週期之間移動焦點；按 Enter 或空白鍵才切換（切換後選單會收回）
   menu.addEventListener('keydown', e => {
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
     const live = buttons.filter(([b]) => !b.disabled).map(([b]) => b);

@@ -57,40 +57,38 @@ function studiesWith(options, hover) {
 }
 
 const picked = studies => JSON.parse(JSON.stringify(studies.debugPicked));
+// 切到某一種指標，回傳標出來的數值；同時確認每一個數值真的畫到了畫布上。
+function pickedAfter(studies, drawn, kind) {
+  drawn.length = 0;
+  studies.select(kind);
+  const tags = picked(studies);
+  for (const tag of tags) assert.ok(drawn.includes(tag.text), `${kind}：畫布上要有數值 ${tag.text}`);
+  return tags;
+}
 const one = value => value.toLocaleString("zh-TW", { minimumFractionDigits: 0, maximumFractionDigits: 1 });
 
 test("選取某一天：MACD 標 DIF、DEA、柱；KD 標 K、D；RSI 與成交金額各標一枚，數值就是那一天的", () => {
   const { studies, chart, drawn } = studiesWith({ volumeKind: "amount", studies: ["volume", "macd", "kd", "rsi"] }, 60);
 
-  studies.select("volume");
-  assert.deepEqual(picked(studies), [{ name: "", text: "3,600" }]);
+  assert.deepEqual(pickedAfter(studies, drawn, "volume"), [{ name: "", text: "3,600" }]);
 
-  drawn.length = 0;
-  studies.select("macd");
   const point = chart.macd[60];
-  assert.deepEqual(picked(studies), [
+  assert.deepEqual(pickedAfter(studies, drawn, "macd"), [
     { name: "DIF", text: one(point.dif) }, { name: "DEA", text: one(point.dea) },
     { name: "柱", text: `${point.hist < 0 ? "−" : "+"}${one(Math.abs(point.hist))}` },
   ]);
-  for (const tag of picked(studies)) assert.ok(drawn.includes(tag.text), `畫布上要有 ${tag.name} 的數值 ${tag.text}`);
+  for (const name of ["DIF", "DEA", "柱"]) assert.ok(drawn.includes(name), `欄位夠寬時要寫出短名 ${name}`);
 
-  studies.select("kd");
-  assert.deepEqual(picked(studies), [{ name: "K", text: one(studies.kd[60].k) }, { name: "D", text: one(studies.kd[60].d) }]);
-
-  studies.select("rsi");
-  assert.deepEqual(picked(studies), [{ name: "", text: one(studies.rsi[60].rsi) }]);
+  assert.deepEqual(pickedAfter(studies, drawn, "kd"), [{ name: "K", text: one(studies.kd[60].k) }, { name: "D", text: one(studies.kd[60].d) }]);
+  assert.deepEqual(pickedAfter(studies, drawn, "rsi"), [{ name: "", text: one(studies.rsi[60].rsi) }]);
 });
 
 test("個股頁：成交量以張為單位，外資、投信、自營商標買賣超張數（帶正負號）", () => {
-  const { studies } = studiesWith({ volumeKind: "volume", studies: ["volume", "foreign", "trust", "dealer"] }, 60);
-  studies.select("volume");
-  assert.deepEqual(picked(studies), [{ name: "", text: "1,060" }]);
-  studies.select("foreign");
-  assert.deepEqual(picked(studies), [{ name: "", text: "+2,345" }]);
-  studies.select("trust");
-  assert.deepEqual(picked(studies), [{ name: "", text: "−678" }]);
-  studies.select("dealer");
-  assert.deepEqual(picked(studies), [{ name: "", text: "0" }]);
+  const { studies, drawn } = studiesWith({ volumeKind: "volume", studies: ["volume", "foreign", "trust", "dealer"] }, 60);
+  assert.deepEqual(pickedAfter(studies, drawn, "volume"), [{ name: "", text: "1,060" }]);
+  assert.deepEqual(pickedAfter(studies, drawn, "foreign"), [{ name: "", text: "+2,345" }]);
+  assert.deepEqual(pickedAfter(studies, drawn, "trust"), [{ name: "", text: "−678" }]);
+  assert.deepEqual(pickedAfter(studies, drawn, "dealer"), [{ name: "", text: "0" }]);
 });
 
 test("沒有選取、或指標還在暖機沒有數值時，不標", () => {

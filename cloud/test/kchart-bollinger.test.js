@@ -140,6 +140,23 @@ test("數值籤擠在一起時上下排開：順序照數值高低、彼此不�
   assert.deepEqual(tags.place([{ name: "x", y: NaN }, { name: "y", y: 50 }], 9, 300, 20).map(item => item.name), ["y"], "沒有數值的不排");
 });
 
+test("欄位太窄時：開高低收的短名照寫（三枚同底色，少了短名分不出來）；指標籤可以整組只留數值", () => {
+  const { tags } = load();
+  const { chart, calls } = chartWith([100, 101, 102]);
+  const x = chart.canvas.getContext("2d");
+  const names = () => calls.filter(call => call[0] === "fillText").map(call => String(call[1]));
+  const items = () => [{ name: "DIF", text: "1,234.5", slot: 20, bg: "#000", fg: "#fff" }, { name: "柱", text: "+1.0", slot: 40, bg: "#000", fg: "#fff" }];
+
+  calls.length = 0;
+  tags.draw(x, 0, 40, 18, items(), true);
+  assert.ok(!names().includes("DIF") && !names().includes("柱"), "指標籤：有一枚放不下，整組都不寫短名");
+  assert.ok(names().includes("1,234.5") && names().includes("+1.0"), "數值照寫");
+
+  calls.length = 0;
+  tags.draw(x, 0, 40, 18, items());
+  assert.ok(names().includes("DIF") && names().includes("柱"), "沒有說可以省的（開高低收），短名照寫");
+});
+
 // 秒 K（本人 2026-11-14：秒級先做當天）：橫軸要標到秒，不能像日 K 一樣標年月。
 test("秒 K 的時間刻度是 時:分:秒", () => {
   const { KChart, FakeElement, calls } = load();

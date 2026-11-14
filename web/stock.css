@@ -113,7 +113,7 @@
 .bd-table td:nth-child(5) { color: var(--dim); }
 .bd-table td { padding-top: 10px; padding-bottom: 10px; }
 
-/* ---------- 週期：跟首頁同一套分段按鈕（原生 select 保留為唯一真值、視覺隱藏） ---------- */
+/* ---------- 週期：跟首頁同一套小鍵加選單（原生 select 保留為唯一真值、視覺隱藏） ---------- */
 .bd .hm-period-native { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 /* 操作策略：首屏只露出一句結論，價位與理由在原生 details 內。 */

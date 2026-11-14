@@ -275,7 +275,6 @@
       const titleNode = element('h3', 'kc-study-title');
       const chip = element('button', 'chart-chip', titleValue);
       chip.type = 'button';
-      chip.setAttribute('aria-haspopup', 'true');
       chip.setAttribute('aria-expanded', 'false');
       chip.setAttribute('aria-controls', STUDY_MENU_ID);
       titleNode.append(chip);
@@ -535,7 +534,7 @@
       if (kind !== this.active || !Number.isInteger(hover) || hover < range.start || hover >= range.end) return;
       const tags = window.KChartTags, paper = token('--bg'), left = range.geo.l + range.geo.pw + 4;
       const items = values(hover).filter(item => finite(item.value)).map(item => ({ ...item, y: y(item.value), fg: paper }));
-      tags.draw(context, left, width - left - 2, TAG_HEIGHT_PX, tags.place(items, TAG_HEIGHT_PX / 2 + 1, height - TAG_HEIGHT_PX / 2 - 1, TAG_HEIGHT_PX + 2));
+      tags.draw(context, left, width - left - 2, TAG_HEIGHT_PX, tags.place(items, TAG_HEIGHT_PX / 2 + 1, height - TAG_HEIGHT_PX / 2 - 1, TAG_HEIGHT_PX + 2), true);
       // 驗收用：這一天實際標出來的數值。
       this.debugPicked = items.map(({ name, text: value }) => ({ name, text: value }));
     }
@@ -964,6 +963,11 @@
       const daily = this.chart.unit === '日';
       this.debugPicked = [];
       this.notice.hidden = daily;
+      // 非日線沒有指標區，指標的選單也跟著收起來（不然會懸在空的地方）
+      if (!daily && !this.switcher.hidden) {
+        this.switcher.hidden = true;
+        for (const chip of this.root.querySelectorAll('.chart-chip')) chip.setAttribute('aria-expanded', 'false');
+      }
       for (const button of this.switcher.querySelectorAll('[data-study]')) {
         button.setAttribute('aria-pressed', String(button.dataset.study === this.active));
       }

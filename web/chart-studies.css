@@ -65,8 +65,9 @@
   font-weight: 500;
 }
 
+/* 觸控範圍只往下、往右補一點：往上會蓋到 K 線的時間軸 */
 .kc-studies .kc-study-title .chart-chip::before {
-  inset: -12px -8px;
+  inset: -2px -8px -8px -4px;
 }
 
 .kc-studies .kc-study-menu {
@@ -358,10 +359,6 @@
   animation: chart-menu-rise 380ms var(--ease-depth);
 }
 
-.chart-menu[hidden] {
-  display: none;
-}
-
 @keyframes chart-menu-rise {
   from { opacity: 0; transform: translateY(-6px) scale(.96); }
 }
@@ -404,6 +401,11 @@
 
 .chart-menu.chart-ma-menu .bd-ma-row {
   margin: 0;
+}
+
+/* 收起來的選單：排在所有設定 display 的規則之後，不靠別的檔案的 [hidden] 規則 */
+.chart-menu[hidden] {
+  display: none;
 }
 
 @media (prefers-reduced-motion: reduce) {

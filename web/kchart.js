@@ -23,10 +23,12 @@
     }
     return placed;
   }
-  // 畫一組數值籤：左邊短名、右邊數值。欄位太窄、有任何一枚放不下兩者時，整組都只留數值（底色仍分得出是哪一個）。
-  function drawTags(x, left, width, height, items) {
-    const wide = item => { x.font = TAG_VALUE_FONT; const value = x.measureText(item.text).width; x.font = TAG_NAME_FONT; return x.measureText(item.name).width + value + 16; };
-    const named = items.every(item => !item.name || wide(item) <= width);
+  // 畫一組數值籤：左邊短名、右邊數值。
+  // namesOptional：欄位太窄、有任何一枚放不下兩者時，整組都只留數值——只給底色各不相同的指標籤用（顏色仍分得出是哪一條線）；
+  // 開高低收三枚同底色，短名不能省。
+  function drawTags(x, left, width, height, items, namesOptional = false) {
+    const wide = item => { x.font = TAG_VALUE_FONT; const value = x.measureText(item.text).width; x.font = TAG_NAME_FONT; return x.measureText(item.name).width + value + 14; };
+    const named = !namesOptional || items.every(item => !item.name || wide(item) <= width);
     items.forEach(item => {
       x.fillStyle = item.bg; x.strokeStyle = item.edge || item.bg; x.lineWidth = 1; x.beginPath();
       const top = Math.round(item.slot - height / 2) + .5;
@@ -204,13 +206,18 @@
           const g = this.geo, px = e.clientX - c.getBoundingClientRect().left;
           const picked = px >= g.l && px <= g.l + g.pw
             ? Math.min(this.view.end - 1, g.start + Math.floor((px - g.l) / g.step)) : -1;
-          // 再點一次同一根就取消選取（本人 11-15：畫面上不再有「取消選取」鍵）。
-          if (picked >= 0 && picked === this.selection) this.clearSelection();
+          // 再點一次同一根就取消選取（本人 11-15：畫面上不再有「取消選取」鍵）；點到圖區以外（例如右側數值欄）也是取消。
+          // 取消一律走 clearSelection，頁面才收得到通知（首頁要跟著收掉「這一天的詳情」）。
+          if (picked < 0 || picked === this.selection) this.clearSelection();
           else {
             this.hover = this.selection = picked;
-            if (c !== this.canvas && picked >= 0 && this.opts.onSelect) this.opts.onSelect(picked, c);
+            if (c !== this.canvas && this.opts.onSelect) this.opts.onSelect(picked, c);
             this.draw();
           }
+        } else if (e.pointerType !== 'mouse' && drag?.kind === 'single' && drag.moved && this.hover !== this.selection) {
+          // 觸控拖完：十字線與右側數值回到選取的那一天（沒有選取就收掉），不要停在手指經過的那一天
+          this.hover = this.selection;
+          this.draw();
         }
         pts.delete(e.pointerId);
         if (pts.size === 1 && drag?.kind === 'pinch') {
@@ -480,7 +487,7 @@
           const paper = css('--bg');
           drawTags(x, tagX, tagW, tagH, placeTags([{ name: 'DIF', text: fmt(picked.dif, 1), y: my(picked.dif), bg: ink, fg: paper }, { name: 'DEA', text: fmt(picked.dea, 1), y: my(picked.dea), bg: css('--gold'), fg: paper },
             { name: '柱', text: `${picked.hist < 0 ? '−' : '+'}${fmt(Math.abs(picked.hist), 1)}`, y: my(picked.hist), bg: picked.hist >= 0 ? up : dn, fg: paper }],
-          top + tagH / 2, H - tagH / 2, tagGap));
+          top + tagH / 2, H - tagH / 2, tagGap), true);
           x.font = '11.5px "JetBrains Mono",Consolas,monospace';
         }
       }

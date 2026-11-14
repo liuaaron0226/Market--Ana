@@ -402,7 +402,7 @@ body.hm .service-note {
 
 /* ---------- 鍵：凸起，懸停浮起，按下沉入（外殼與下面各區塊的按鈕共用這一組） ---------- */
 body.hm :is(.theme-toggle, .icon-key, .stock-search-form button[type="button"], .stock-search-more, .stock-search-result a,
-  .chart-actions .line-trigger, .chart-actions .mobile-candle-details,
+  .chart-actions .line-trigger, .chart-actions .mobile-candle-details, .chart-toolbar .chart-chip, .chart-stage .reset-view,
   .screen-more, .core-selection-chip, .core-period select) {
   border: 0; border-radius: var(--r-key); background: var(--key); box-shadow: var(--key-shadow);
   transition: transform var(--t-lift) var(--ease-depth), box-shadow var(--t-lift) var(--ease-depth), color 160ms var(--ease-out);
@@ -422,7 +422,7 @@ body.hm .core-compare-entry button {
 body.hm .stock-search-results { gap: 8px; }
 @media (hover: hover) {
   body.hm :is(.conclusion-trigger, .theme-toggle, .icon-key, .stock-search-form button[type="button"], .stock-search-more, .stock-search-result a,
-    .chart-actions .line-trigger, .chart-actions .mobile-candle-details,
+    .chart-actions .line-trigger, .chart-actions .mobile-candle-details, .chart-toolbar .chart-chip, .chart-stage .reset-view,
     .screen-more, .core-selection-chip, .core-period select):hover {
     background: var(--key); color: var(--ink); transform: translateY(var(--key-lift)); box-shadow: var(--key-shadow-hover);
   }
@@ -431,7 +431,7 @@ body.hm .stock-search-results { gap: 8px; }
   body.hm :is(.price-summary, .state-trigger):hover { transform: translateY(var(--key-lift)); }
 }
 body.hm :is(.conclusion-trigger, .theme-toggle, .icon-key, .stock-search-form button[type="button"], .stock-search-more, .stock-search-result a,
-  .chart-actions .line-trigger, .chart-actions .mobile-candle-details,
+  .chart-actions .line-trigger, .chart-actions .mobile-candle-details, .chart-toolbar .chart-chip, .chart-stage .reset-view,
   .screen-more, .core-selection-chip, .core-period select):active {
   transform: translateY(var(--key-thick)); box-shadow: var(--key-shadow-press); transition-duration: var(--t-press);
 }
@@ -449,13 +449,6 @@ body.hm .core-compare-entry input {
 }
 body.hm .stock-search-form input:focus,
 body.hm .core-compare-entry input:focus { outline: 2px solid var(--ink); outline-offset: 0; }
-
-/* ---------- 週期切換：槽裡一塊凸起的滑塊，滑到選中的週期 ----------
-   各鈕等寬，滑塊是軌道的 ::before，位置由「第幾個鈕被選中」決定，不需要腳本量位置。
-   跨到另一組（盤中／趨勢）時，舊的一塊淡出、新的一塊淡入。
-   --slots 是這一組有幾顆鈕，--at 是選中第幾顆（從 0 算）。現在兩組是 3 顆與 4 顆；週期選單的顆數改了，下面四行要跟著補。 */
-
-/* ---------- 指標切換：同一種槽與滑塊 ---------- */
 
 /* ---------- 圖上的小元件 ---------- */
 body.hm .chart-badges span,
@@ -803,20 +796,10 @@ body.hm .terrain-detail dd { margin: 0; text-align: right; color: var(--ink); }
 }
 
 /* ================= 看盤桌：K 線區的小鍵（立體重設計 A 包第 7 片，2026-11-15） =================
-   週期收成標題旁的一枚鍵；「回到最新」只在圖被拖離最新一天時浮在圖的角落。
-   小鍵與選單的共用樣式在 chart-studies.css，這裡只把首頁的鍵換成凸起的樣子。 */
-body.hm .chart-toolbar .chart-chip,
+   週期收成標題列的一枚鍵；「回到最新」只在圖被拖離最新一天時浮在圖的角落。
+   兩者凸起、浮起、沉入的樣子併在上面「鍵」那一組；小鍵與選單的共用樣式在 chart-studies.css。 */
+body.hm .chart-toolbar .chart-chip { min-height: 36px; }
+body.hm .chart-toolbar .chart-chip[aria-expanded="true"] { transform: translateY(var(--key-thick)); box-shadow: var(--key-shadow-press); }
 body.hm .chart-stage .reset-view {
-  min-height: 36px; border: 0; border-radius: var(--r-key); background: var(--key); box-shadow: var(--key-shadow);
-  transition: transform var(--t-lift) var(--ease-depth), box-shadow var(--t-lift) var(--ease-depth);
-}
-@media (hover: hover) {
-  body.hm .chart-toolbar .chart-chip:hover,
-  body.hm .chart-stage .reset-view:hover { transform: translateY(var(--key-lift)); box-shadow: var(--key-shadow-hover); }
-}
-body.hm .chart-toolbar .chart-chip:active,
-body.hm .chart-toolbar .chart-chip[aria-expanded="true"],
-body.hm .chart-stage .reset-view:active { transform: translateY(var(--key-thick)); box-shadow: var(--key-shadow-press); transition-duration: var(--t-press); }
-body.hm .chart-stage .reset-view {
-  position: absolute; z-index: 8; left: 10px; bottom: 32px; padding: 0 12px; color: var(--ink); font: 600 13px var(--sans); cursor: pointer;
+  position: absolute; z-index: 8; left: 10px; bottom: 32px; min-height: 36px; padding: 0 12px; color: var(--ink); font: 600 13px var(--sans); cursor: pointer;
 }

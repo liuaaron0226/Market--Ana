@@ -526,7 +526,7 @@
       overlayLabels: 'tags',
       minViewCount: 10,
       onSelect: (index, anchor) => selectCandle(index, anchor, false),
-      onClear: () => { selectedIndex = -1; els.marker.hidden = true; els.mobileDetails.hidden = true; },
+      onClear: () => { selectedIndex = -1; clearedByChart = true; els.marker.hidden = true; els.mobileDetails.hidden = true; },
       onView: (_first, _last, atEnd) => {
         els.reset.hidden = atEnd;
         requestAnimationFrame(updateOverlayControls);
@@ -551,7 +551,7 @@
     }
     currentPeriod = period;
     els.period.value = period;
-    els.period.dispatchEvent(new Event('periodsync')); // 週期分段按鈕（period-switch.js）同步
+    els.period.dispatchEvent(new Event('periodsync')); // 週期小鍵與選單（period-switch.js）同步
     selectedIndex = -1;
     els.mobileDetails.hidden = true;
     els.marker.hidden = true;
@@ -664,15 +664,18 @@
     }
   }
 
+  // 這一次點擊裡，圖表是不是自己取消了選取（onClear 會設成 true）
+  let clearedByChart = false;
+
   function bindCandleSelection() {
     let start = null;
     chart.canvas.addEventListener('pointerdown', event => {
-      start = { x: event.clientX, y: event.clientY, pointerId: event.pointerId, selected: selectedIndex };
+      start = { x: event.clientX, y: event.clientY, pointerId: event.pointerId };
+      clearedByChart = false;
     });
     chart.canvas.addEventListener('pointerup', event => {
       if (!start || start.pointerId !== event.pointerId) return;
       const distance = Math.hypot(event.clientX - start.x, event.clientY - start.y);
-      const selectedBefore = start.selected;
       start = null;
       if (distance >= 6) return;
       const g = visibleGeometry();
@@ -680,8 +683,9 @@
       const rect = chart.canvas.getBoundingClientRect();
       const localX = event.clientX - rect.left;
       const index = Math.max(g.start, Math.min(g.end - 1, g.start + Math.floor((localX - g.l) / g.step)));
-      // 手機再點一次同一根：圖表已經取消選取（kchart.js），這裡不要又選回去。桌機點 K 棒是開明細板，照舊。
-      if (isMobile() && index === selectedBefore && chart.selection < 0) return;
+      // 手機：這一下如果是圖表自己取消了選取（再點同一根、或點在圖區以外，kchart.js 會先處理並通知 onClear），不要又選回去。
+      // 桌機點 K 棒是開明細板，照舊。
+      if (isMobile() && clearedByChart) return;
       selectCandle(index, chart.canvas, !isMobile());
     });
     chart.canvas.addEventListener('keydown', event => {

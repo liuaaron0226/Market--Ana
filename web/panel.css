@@ -149,7 +149,7 @@
 
 /* ================= 本人 11-09 指正「根本沒有去設計」：週期選單、籌碼明細 ================= */
 
-/* ---------- K 線週期：分段按鈕取代原生下拉（select 保留但隱藏，是唯一真值） ---------- */
+/* ---------- K 線週期：原生下拉保留但隱藏（是唯一真值），畫面上是一枚小鍵加選單（period-switch.js） ---------- */
 .hm .hm-period-native { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .hm .chart-toolbar { align-items: flex-end; }
 

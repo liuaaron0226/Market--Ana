@@ -8,7 +8,9 @@ export const WEB_FILES = [
   "bold.css", "home.css", "panel.css", "motion.js", "home-motion.js", "period-switch.js",
   "portfolio.html", "portfolio.css", "portfolio.js",
   // 立體重設計 A 包第 4 片（11-14）：首頁分類收合與搜尋面板
-  "home-fold.js", "chart-menus.js",
+  "home-fold.js",
+  // 立體重設計 A 包第 7 片（11-15）：K 線區的小鍵與浮出選單
+  "chart-menus.js",
   // 立體重設計 B 包（11-14）：資金地形的版面計算與畫面
   "terrain-layout.js", "terrain.js",
 ];

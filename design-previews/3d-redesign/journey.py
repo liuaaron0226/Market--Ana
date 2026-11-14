@@ -359,6 +359,13 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
                   not page.locator("#mobileCandleDetails").is_visible() and main.get("cover") == 0 and main.get("rail") == 0 and study.get("rail") == 0, [main, study])
             page.touchscreen.tap(x, y)
             page.locator("#mobileCandleDetails").wait_for(state="visible")
+            # 點在右側數值欄（不是 K 棒）也是取消，「這一天的詳情」要跟著收掉，不能留著一顆對不上的鈕。
+            box = page.locator("#mainChart canvas").first.bounding_box()
+            page.touchscreen.tap(box["x"] + box["width"] - 20, y)
+            page.wait_for_timeout(250)
+            check(f"{tag}：點右側數值欄會取消選取，詳情鈕跟著收掉", not page.locator("#mobileCandleDetails").is_visible())
+            page.touchscreen.tap(x, y)
+            page.locator("#mobileCandleDetails").wait_for(state="visible")
         if mobile:
             page.locator("#mobileCandleDetails").click()
         else:
@@ -596,8 +603,16 @@ def stock(page: Page, base: str, tag: str, mobile: bool) -> None:
         check(f"{tag}：新增均線", inputs.count() == before + 1)
         added = inputs.evaluate_all("nodes => nodes.map(node => node.value)")
         check(f"{tag}：新增之後小鍵跟著寫出新的期數", all(period in chip.inner_text() for period in added), [chip.inner_text(), added])
+        page.locator("#maControls .bd-ma-remove").last.click()
+        check(f"{tag}：刪掉一條均線後設定板還開著，小鍵跟著變回來",
+              inputs.count() == before and page.evaluate(VISIBLE_COUNT, "#maControls input") == before and chip.inner_text().strip() == label, chip.inner_text())
         page.keyboard.press("Escape")
         check(f"{tag}：按 Esc 收回均線設定板", page.evaluate(VISIBLE_COUNT, "#maControls input") == 0)
+        page.locator(".hm-period .chart-chip").click()
+        chip.click()
+        check(f"{tag}：一次只開一個選單（開均線時週期選單收回）",
+              page.evaluate(VISIBLE_COUNT, ".hm-period [data-value]") == 0 and page.evaluate(VISIBLE_COUNT, "#maControls input") == before)
+        page.keyboard.press("Escape")
     step(f"{tag}：均線", averages)
 
     def studies() -> None:

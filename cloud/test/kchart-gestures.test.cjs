@@ -371,3 +371,38 @@ test('再點一次同一根 K 棒就取消選取；點另一根則改選那一�
   assert.ok(chart.selection >= 0 && chart.selection !== first, '點另一根：改選那一根');
   assert.equal(cleared, 1, '改選不算取消');
 });
+
+test('點到圖區以外（右側數值欄）會取消選取，而且通知頁面', () => {
+  const { chart, canvas } = createChart();
+  let cleared = 0;
+  chart.opts.onClear = () => { cleared += 1; };
+  const tap = x => {
+    canvas.dispatch('pointerdown', { pointerId: 1, clientX: x, clientY: 100 });
+    canvas.dispatch('pointerup', { pointerId: 1, clientX: x, clientY: 100 });
+  };
+  tap(150);
+  assert.ok(chart.selection >= 0);
+  tap(385);
+  assert.equal(chart.selection, -1, '右側數值欄不是 K 棒，點了取消選取');
+  assert.equal(cleared, 1, '頁面要收到通知，才會跟著收掉自己的選取狀態');
+});
+
+test('觸控拖動平移之後，十字線回到選取的那一天，不停在手指經過的那一天', () => {
+  const { chart, canvas } = createChart();
+  canvas.dispatch('pointerdown', { pointerId: 1, clientX: 150, clientY: 100 });
+  canvas.dispatch('pointerup', { pointerId: 1, clientX: 150, clientY: 100 });
+  const selected = chart.selection;
+  assert.ok(selected >= 0);
+  canvas.dispatch('pointerdown', { pointerId: 1, clientX: 200, clientY: 100 });
+  canvas.dispatch('pointermove', { pointerId: 1, clientX: 260, clientY: 100 });
+  assert.notEqual(chart.hover, selected, '拖動中十字線跟著手指');
+  canvas.dispatch('pointerup', { pointerId: 1, clientX: 260, clientY: 100 });
+  assert.equal(chart.selection, selected, '拖動不改選取');
+  assert.equal(chart.hover, selected, '放手後十字線回到選取的那一天');
+
+  const fresh = createChart();
+  fresh.canvas.dispatch('pointerdown', { pointerId: 1, clientX: 200, clientY: 100 });
+  fresh.canvas.dispatch('pointermove', { pointerId: 1, clientX: 260, clientY: 100 });
+  fresh.canvas.dispatch('pointerup', { pointerId: 1, clientX: 260, clientY: 100 });
+  assert.equal(fresh.chart.hover, -1, '沒有選取時，拖完十字線收掉');
+});

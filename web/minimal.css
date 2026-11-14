@@ -674,7 +674,7 @@ h1 { font-size: 18px; line-height: 1.2; font-weight: 650; letter-spacing: -.01em
   .chart-toolbar p { max-width: 132px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .chart-controls { gap: 4px; }
   .period-control select { min-width: 78px; padding-left: 9px; }
-    .chart-stage { min-height: 0; }
+  .chart-stage { min-height: 0; }
   .line-trigger { width: 132px; padding-inline: 7px; grid-template-columns: auto 1fr auto; }
   .line-trigger span { display: block; font-size: 9.5px; white-space: nowrap; }
   .line-trigger strong { font-size: 10px; text-align: right; }
@@ -717,7 +717,7 @@ h1 { font-size: 18px; line-height: 1.2; font-weight: 650; letter-spacing: -.01em
   .time-grid { grid-template-columns: 1.12fr .88fr .92fr .92fr .96fr; }
   .time-grid > div { padding-inline: 4px; }
   .chart-workspace { height: 500px; }
-    .chart-badges span { font-size: 10px; }
+  .chart-badges span { font-size: 10px; }
   .line-trigger { width: 126px; }
   .distribution-heading { align-items: flex-start; }
   .distribution-heading p { max-width: 174px; }
@@ -966,7 +966,7 @@ html, body { height: auto; }
   .chip-card .chip-read { font-size: 12.5px; }
 }
 
-/* 本人 11-07 截圖 8「主K太擠」：手機主圖不放浮動按鈕；收復／防守與某日詳情移到圖下方操作列，縮放收進「圖表工具」。 */
+/* 本人 11-07 截圖 8「主K太擠」：手機主圖不放浮動按鈕；收復／防守與某日詳情移到圖下方操作列（縮放鍵 11-15 起拿掉，用兩指捏合）。 */
 .chart-actions { display: none; }
 @media (max-width: 760px) {
   .chart-workspace { height: auto; grid-template-rows: auto auto auto; }
