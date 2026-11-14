@@ -432,24 +432,35 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
         tags = page.locator("#rotationTerrain .terrain-tag:visible").count()
         check(f"{tag}：名稱牌標出成交額前幾大", tags == (3 if mobile else 6), tags)
 
-        # 旋轉：在街區的空白角落水平拖曳
+        # 旋轉（本人 11-15：原本的手勢很難操作）：手指放在地形上拖就是轉，斜著拖也算；可以一直轉，不會卡在某個角度。
         stage = page.locator("#rotationTerrain .terrain-stage").bounding_box()
-        angle = "getComputedStyle(document.querySelector('#rotationTerrain .terrain-city')).getPropertyValue('--rz').trim()"
-        before = page.evaluate(angle)
-        page.mouse.move(stage["x"] + 12, stage["y"] + stage["height"] - 12)
-        page.mouse.down()
-        page.mouse.move(stage["x"] + 92, stage["y"] + stage["height"] - 12, steps=4)
-        page.mouse.up()
-        check(f"{tag}：水平拖曳可以旋轉街區", page.evaluate(angle) != before, [before, page.evaluate(angle)])
-        page.mouse.move(stage["x"] + 92, stage["y"] + stage["height"] - 12)
-        page.mouse.down()
-        page.mouse.move(stage["x"] - 400, stage["y"] + stage["height"] - 12, steps=6)
-        page.mouse.up()
-        check(f"{tag}：轉到底就停，不會轉到背面", page.evaluate(angle) == "-40deg", page.evaluate(angle))
-        page.mouse.move(stage["x"] + 12, stage["y"] + stage["height"] - 12)
-        page.mouse.down()
-        page.mouse.move(stage["x"] + 243, stage["y"] + stage["height"] - 12, steps=6)
-        page.mouse.up()
+        angle = "parseFloat(getComputedStyle(document.querySelector('#rotationTerrain .terrain-city')).getPropertyValue('--rz'))"
+        low, reach = stage["y"] + stage["height"] - 12, stage["width"] - 24
+
+        def turn(dx: float, dy: float = 0) -> float:
+            """在地形底邊拖 dx（往右為正）。一次拖不完就分幾次，每次都留在地形的框內。"""
+            left = dx
+            while abs(left) > 0.01:
+                piece = max(-reach, min(reach, left))
+                from_x = stage["x"] + 12 if piece > 0 else stage["x"] + stage["width"] - 12
+                page.mouse.move(from_x, low)
+                page.mouse.down()
+                page.mouse.move(from_x + piece, low + dy, steps=6)
+                page.mouse.up()
+                left -= piece
+            return page.evaluate(angle)
+
+        start = page.evaluate(angle)
+        level = turn(80)
+        check(f"{tag}：水平拖曳可以旋轉街區", level != start, [start, level])
+        check(f"{tag}：旋轉夠靈敏（拖 80px 轉超過 40 度）", abs(level - start) >= 40, [start, level])
+        slanted = turn(40, -70)
+        touch_action = page.evaluate("getComputedStyle(document.querySelector('#rotationTerrain .terrain-stage')).touchAction")
+        check(f"{tag}：斜著拖（偏上下）也算旋轉，不會被當成捲頁面", slanted != level and touch_action == "none", [level, slanted, touch_action])
+        far = turn(-600)
+        check(f"{tag}：可以一直轉，轉過半圈也不會卡住", abs(far - start) > 180, [start, far])
+        back = turn((start - far) / ((level - start) / 80))
+        check(f"{tag}：轉回原本的角度", abs(back - start) < 1, [start, back])
 
         # 點樓：成交額最大的那一棟（樓頂一定露在外面）
         top = shoot.roof_of(page, "largest")

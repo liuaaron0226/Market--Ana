@@ -10,8 +10,9 @@
 
   // 一格的邊長、街區與中央十字的距離、街區內緣的留白、街區外側放名稱的那一條（像素，縮放前）。
   const CELL = 56, STREET = 14, MARGIN = 16, LABEL_STRIP = 96;
-  // 視角：往下看的傾角固定；水平旋轉預設從右前方看，街區名稱朝向觀看者，不能轉到背面。
-  const TILT = 57, ANGLE_START = 34, ANGLE_MIN = -40, ANGLE_MAX = 75, DEGREES_PER_PIXEL = 0.32;
+  // 視角：往下看的傾角固定；水平旋轉預設從右前方看。可以一直轉（本人 11-15：原本只能轉 115 度、滑很長才轉一點，很難操作）：
+  // 手機橫向滑過半個螢幕約轉 120 度；放手後帶一點慣性再滑一下——每 16 毫秒速度剩下 GLIDE_KEEP，慢到每毫秒 GLIDE_STOP 度以下就停。
+  const TILT = 57, ANGLE_START = 34, DEGREES_PER_PIXEL = 0.64, GLIDE_KEEP = 0.92, GLIDE_STOP = 0.01;
   // 透視：觀看距離（像素）與消失點在舞台上的位置（比例）。
   const PERSPECTIVE = 1700, VANISH_X = 0.5, VANISH_Y = 0.2;
   // 縮放：最多放大到幾倍；四周與名稱牌留的邊（像素）。
@@ -39,22 +40,14 @@
   // 上一次畫在同一個容器上留下的觀察器，重畫前要收掉
   const cleanups = new WeakMap();
 
-  /* 建出街區、樓與名稱牌。回傳的 corners 是每個角落轉到預設視角之後的位置
-     （縮放前；x 向右、y 向下、z 朝向觀看者），用來算整片街區投影到畫面上佔多大。 */
+  /* 建出街區、樓與名稱牌。回傳的 corners 是每個角落在街區上的位置與高度（縮放前、還沒轉），
+     fitCity 用它算整片街區轉到某個角度時，投影到畫面上佔多大。 */
   function buildCity(plan, labelOf) {
     const city = el('div', 'terrain-city');
     const tagLayer = el('div', 'terrain-tags');
     const towers = [], tags = [], corners = [];
-    const turn = radians(ANGLE_START), tilt = radians(TILT);
     const coverBox = (left, top, width, depth, height) => {
-      [[left, top], [left + width, top], [left, top + depth], [left + width, top + depth]].forEach(([x, y]) => {
-        const turnedY = x * Math.sin(turn) + y * Math.cos(turn);
-        corners.push({
-          x: x * Math.cos(turn) - y * Math.sin(turn),
-          y: turnedY * Math.cos(tilt) - height * Math.sin(tilt),
-          z: turnedY * Math.sin(tilt) + height * Math.cos(tilt),
-        });
-      });
+      [[left, top], [left + width, top], [left, top + depth], [left + width, top + depth]].forEach(([x, y]) => corners.push({ x, y, height }));
     };
 
     plan.blocks.forEach(block => {
@@ -127,14 +120,21 @@
 
   /* 依可用的寬與高等比縮放並置中：整片街區連同名稱牌都留在框內。
      透視會把靠近觀看者的部分放大、往消失點的反方向推，所以縮放與位置互相影響，來回修正幾次就收斂。 */
-  function fitCity(stage, city, corners) {
+  // 照目前轉到的角度（degrees）取景：整片街區放大到剛好放進框裡並置中。街區可以轉一整圈，每個角度佔的範圍不一樣，
+  // 所以轉的時候跟著重算，不是用一個固定的大小。
+  function fitCity(stage, city, corners, degrees) {
     const width = stage.clientWidth, height = stage.clientHeight;
     if (!width || !corners.length) return;
-    const vanishX = width * VANISH_X, vanishY = height * VANISH_Y;
+    const vanishX = width * VANISH_X, vanishY = height * VANISH_Y, tilt = radians(TILT), turn = radians(degrees);
+    // 每個角落轉到這個視角之後的位置（x 向右、y 向下、z 朝向觀看者）
+    const turned = corners.map(({ x, y, height: tall }) => {
+      const turnedY = x * Math.sin(turn) + y * Math.cos(turn);
+      return { x: x * Math.cos(turn) - y * Math.sin(turn), y: turnedY * Math.cos(tilt) - tall * Math.sin(tilt), z: turnedY * Math.sin(tilt) + tall * Math.cos(tilt) };
+    });
     let scale = 1, centerX = width / 2, centerY = height / 2;
     const projected = () => {
       const box = { left: Infinity, right: -Infinity, top: Infinity, bottom: -Infinity };
-      corners.forEach(corner => {
+      turned.forEach(corner => {
         const near = PERSPECTIVE / (PERSPECTIVE - scale * corner.z);
         const x = vanishX + (centerX + scale * corner.x - vanishX) * near, y = vanishY + (centerY + scale * corner.y - vanishY) * near;
         box.left = Math.min(box.left, x); box.right = Math.max(box.right, x);
@@ -181,7 +181,8 @@
   }
 
   /* 指標與鍵盤：水平拖曳旋轉，垂直的手勢還給頁面捲動，位移很小才算點選；Enter／空白鍵選取，Esc 取消。 */
-  function bindControls(stage, city, towers, picker, follow) {
+  // onTurn(degrees)：轉到新的角度時通知外面重新取景、把名稱牌移到樓頂上
+  function bindControls(stage, city, towers, picker, onTurn) {
     // 手機上樓很小：沒點中時，取畫面上最近的一棟
     const nearest = event => {
       let best = null, bestDistance = NEAR_PICK;
@@ -192,11 +193,34 @@
       });
       return best;
     };
-    let angle = ANGLE_START, drag = null;
+    let angle = ANGLE_START, drag = null, glide = 0;
+    const calm = Boolean(global.matchMedia && global.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    const turnTo = degrees => {
+      angle = degrees;
+      city.style.setProperty('--rz', `${angle}deg`);
+      // 轉到背面時，寫在地上的街區名稱跟著倒過來，字才不會是顛倒的
+      city.classList.toggle('is-turned', Math.cos(radians(angle - ANGLE_START)) < 0);
+      onTurn(angle);
+    };
     const stop = () => { drag = null; stage.classList.remove('is-dragging'); };
+    // 放手後照放手那一刻的速度（每毫秒幾度）再滑一下，越滑越慢
+    const coast = speed => {
+      let last = global.performance.now();
+      const step = now => {
+        const elapsed = now - last;
+        last = now;
+        speed *= Math.pow(GLIDE_KEEP, elapsed / 16);
+        if (Math.abs(speed) < GLIDE_STOP) return;
+        turnTo(angle + speed * elapsed);
+        glide = global.requestAnimationFrame(step);
+      };
+      glide = global.requestAnimationFrame(step);
+    };
     stage.addEventListener('pointerdown', event => {
       if (event.pointerType === 'mouse' && event.button !== 0) return;
-      drag = { id: event.pointerId, x: event.clientX, y: event.clientY, angle, turning: false, tower: event.target.closest('.terrain-tower') || nearest(event) };
+      global.cancelAnimationFrame(glide);
+      drag = { id: event.pointerId, x: event.clientX, y: event.clientY, angle, turning: false, at: event.timeStamp, lastX: event.clientX, speed: 0,
+        tower: event.target.closest('.terrain-tower') || nearest(event) };
     });
     stage.addEventListener('pointermove', event => {
       if (!drag || event.pointerId !== drag.id) return;
@@ -204,21 +228,23 @@
       if (event.pointerType === 'mouse' && event.buttons === 0) { stop(); return; }
       const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
       if (!drag.turning) {
+        // 動得比點選多了就是在轉：不管方向，斜著拖、偏上下也算（頁面要捲動，手指放在地形以外）
         if (Math.hypot(dx, dy) < TAP_SLOP) return;
-        // 動得比點選多了：垂直為主就還給頁面捲動（也不算點選），水平為主才開始轉
-        if (Math.abs(dy) > Math.abs(dx)) { stop(); return; }
         drag.turning = true;
         stage.classList.add('is-dragging');
         // 確定是在轉了才把指標抓住，轉到街區外面放開也收得到
         if (stage.setPointerCapture) stage.setPointerCapture(event.pointerId);
       }
-      angle = Math.max(ANGLE_MIN, Math.min(ANGLE_MAX, drag.angle + dx * DEGREES_PER_PIXEL));
-      city.style.setProperty('--rz', `${angle}deg`);
-      follow();
+      if (event.timeStamp > drag.at) drag.speed = (event.clientX - drag.lastX) * DEGREES_PER_PIXEL / (event.timeStamp - drag.at);
+      drag.at = event.timeStamp;
+      drag.lastX = event.clientX;
+      turnTo(drag.angle + dx * DEGREES_PER_PIXEL);
     });
     stage.addEventListener('pointerup', event => {
       if (!drag || event.pointerId !== drag.id) return;
       if (!drag.turning) picker.toggle(drag.tower);
+      // 手指停住一下才放開就不滑；開了「減少動態效果」也不滑
+      else if (!calm && event.timeStamp - drag.at < 80 && Math.abs(drag.speed) >= GLIDE_STOP) coast(drag.speed);
       stop();
     });
     stage.addEventListener('pointercancel', stop);
@@ -256,7 +282,8 @@
     host.append(stage, detail);
 
     const follow = tagFollower(stage, tags);
-    const fit = () => { fitCity(stage, city, corners); follow(); };
+    let view = ANGLE_START;
+    const fit = () => { fitCity(stage, city, corners, view); follow(); };
     const observers = [];
     if (typeof ResizeObserver === 'function') {
       const resized = new ResizeObserver(fit);
@@ -282,7 +309,7 @@
     } else grow();
     cleanups.set(host, () => { observers.forEach(observer => observer.disconnect()); global.clearTimeout(settle); });
 
-    bindControls(stage, city, towers, selection(host, city, detail, byName, labelOf, follow), follow);
+    bindControls(stage, city, towers, selection(host, city, detail, byName, labelOf, follow), degrees => { view = degrees; fit(); });
   }
 
   global.Terrain = { render };

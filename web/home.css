@@ -702,7 +702,8 @@ body.hm .terrain [data-quadrant="lagging"] { --q: var(--q-lagging); }
 body.hm .terrain-stage {
   /* 高度跟著寬度走：手機 300、平板約 500、桌機 600；街區會依這個框自動縮放 */
   position: relative; height: clamp(300px, 62vw, 600px);
-  touch-action: pan-y; cursor: grab; user-select: none; -webkit-user-select: none;
+  /* 手指放在地形上拖就是旋轉，不分方向（本人 11-15）；要捲頁面，手指放在地形以外 */
+  touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none;
   overflow: hidden; /* 立體的面轉出去的部分不能撐出橫向捲動 */
 }
 body.hm .terrain-stage.is-dragging { cursor: grabbing; }
@@ -728,6 +729,8 @@ body.hm .terrain-ground-label {
   color: var(--ink); font: 700 min(calc(18px / var(--s)), 24px)/1 var(--sans); white-space: nowrap;
   transform: translateZ(.6px);
 }
+/* 轉到背面時名稱倒過來寫，從觀看的方向看才是正的 */
+body.hm .terrain-city.is-turned .terrain-ground-label { rotate: 180deg; }
 
 /* 樓：頂面加四個側面，一開始壓扁，進到畫面才長出來 */
 body.hm .terrain-tower {
