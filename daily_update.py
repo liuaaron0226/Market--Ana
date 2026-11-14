@@ -719,6 +719,55 @@ def _remote_active_version() -> str | None:
     return rows[0]["active_version"] if rows else None
 
 
+# D1 免費方案單庫上限 500MB；每版約 13MB、原本從不清除。本人 2026-11-14 同意：發布成功後只留最近 3 版。
+D1_KEEP_VERSIONS = 3
+_D1_VERSION_TABLES = ("stock_analysis", "listed_securities", "universe_outside", "stock_data_versions")
+_PROTECTED_VERSIONS_SQL = ("(SELECT active_version FROM stock_data_state UNION "
+                           "SELECT previous_version FROM stock_data_state WHERE previous_version IS NOT NULL)")
+
+
+def versions_to_prune(rows: list[dict], *, active: str | None, previous: str | None,
+                      keep: int = D1_KEEP_VERSIONS) -> list[str]:
+    """該刪的版本（舊到新）。最近 keep 版、正在用的與回退用的前一版一律留；不知道現在用哪一版就什麼都不刪。"""
+    if not active:
+        return []
+    newest_first = sorted(rows, key=lambda row: row["built_at"], reverse=True)
+    kept = {row["version"] for row in newest_first[:keep]} | {active, previous}
+    return sorted((row["version"] for row in rows if row["version"] not in kept),
+                  key=lambda version: next(row["built_at"] for row in rows if row["version"] == version))
+
+
+def _prune_d1_versions(expected_active: str | None) -> dict:
+    """刪掉正式 D1 裡更舊的個股資料版本。線上版本不是剛發布的那一版就不動手。"""
+    result = _sh(_npx("d1", "execute", D1_DATABASE, "--remote", "--json", "--command",
+                      "SELECT v.version, v.built_at, s.active_version, s.previous_version FROM stock_data_versions v "
+                      "LEFT JOIN stock_data_state s ON s.key = 'current'"), cwd=CLOUD)
+    text = result.get("_stdout") or ""
+    rows = json.loads(text[text.index("["):])[0]["results"]
+    active = rows[0]["active_version"] if rows else None
+    if not rows or active != expected_active:
+        return {"pruned_versions": [], "kept_versions": len(rows), "prune_skipped": "線上版本不是剛發布的版本"}
+    prune = versions_to_prune(rows, active=active, previous=rows[0]["previous_version"])
+    if not prune:
+        return {"pruned_versions": [], "kept_versions": len(rows)}
+    for version in prune:  # 版本名來自資料庫；只接受單純識別字才拼進 SQL
+        if not re.fullmatch(r"[A-Za-z0-9._-]{1,120}", version):
+            raise ValueError("版本名稱格式不符，不執行刪除")
+    # 一版一個指令、由舊到新：先刪掛在版本下的列，最後才刪版本登記（不依賴外鍵連帶刪除）；
+    # 每句再擋一次使用中與回退用的版本。中途失敗就停，已刪的照實回報，剩下的下次再清。
+    pruned: list[str] = []
+    for version in prune:
+        try:
+            _sh(_npx("d1", "execute", D1_DATABASE, "--remote", "--json", "--command",
+                     " ".join(f"DELETE FROM {table} WHERE version = '{version}' AND version NOT IN {_PROTECTED_VERSIONS_SQL};"
+                              for table in _D1_VERSION_TABLES)), cwd=CLOUD)
+        except Exception as error:  # noqa: BLE001
+            return {"pruned_versions": pruned, "kept_versions": len(rows) - len(pruned),
+                    "prune_error": type(error).__name__}
+        pruned.append(version)
+    return {"pruned_versions": pruned, "kept_versions": len(rows) - len(pruned)}
+
+
 def real_steps() -> list[Step]:
     """正式流程的步驟表（U2 起全部接上）。dry-run 時會改動遠端的步驟由 run() 跳過，只記錄。"""
 
@@ -819,7 +868,11 @@ def real_steps() -> list[Step]:
             saved = _remember_build_inputs(ctx)
         except Exception as error:  # noqa: BLE001 — 存不成只是之後不能「只重新部署程式」，不能讓已通過的發布回滾
             saved = {"build_inputs_error": type(error).__name__}
-        return {**verdict, **remembered, **saved}
+        try:  # 清舊版本只在發布通過檢查之後做；清不成只記一筆，明天再清，不能讓已通過的發布回滾
+            pruned = _prune_d1_versions(expected)
+        except Exception as error:  # noqa: BLE001
+            pruned = {"prune_error": type(error).__name__}
+        return {**verdict, **remembered, **saved, **pruned}
 
     steps = {
         "fetch_incremental": fetch_incremental,

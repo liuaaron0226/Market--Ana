@@ -624,6 +624,47 @@ class BuildAndDeployWiringTest(unittest.TestCase):
         self.assertEqual(out["remembered"], "v-new")
         self.assertEqual(out["build_inputs_error"], "OSError")
 
+    def test_old_d1_versions_are_pruned_only_after_a_verified_publish_and_never_fail_it(self) -> None:
+        steps = {s.name: s for s in du.real_steps()}
+        ctx = self.ctx()
+        ctx.outputs["build_seed"] = {"seed_dir": str(ctx.work_dir / "seed"), "version": "v-new"}
+        pruned: list[str] = []
+
+        def prune(expected):
+            pruned.append(expected)
+            return {"pruned_versions": ["v-old"], "kept_versions": 3}
+
+        def patched(verdict, prune_fn):
+            return (unittest.mock.patch.object(du, "_remember_seed", lambda c: {"remembered": "v-new"}),
+                    unittest.mock.patch.object(du, "_remember_build_inputs", lambda c: {}),
+                    unittest.mock.patch.object(du, "_probe_unauthenticated", lambda paths: {}),
+                    unittest.mock.patch.object(du, "_remote_active_version", lambda: "v-new"),
+                    unittest.mock.patch.object(du, "post_deploy_verdict", lambda **kw: verdict),
+                    unittest.mock.patch.object(du, "_prune_d1_versions", prune_fn))
+
+        import contextlib
+        with contextlib.ExitStack() as stack:
+            for item in patched({"ok": False, "reason": "bad"}, prune):
+                stack.enter_context(item)
+            with self.assertRaises(RuntimeError):
+                steps["post_deploy_check"].fn(ctx)
+        self.assertEqual(pruned, [])  # 檢查沒過：會回退，什麼都不刪
+
+        with contextlib.ExitStack() as stack:
+            for item in patched({"ok": True, "reason": "fine"}, prune):
+                stack.enter_context(item)
+            out = steps["post_deploy_check"].fn(ctx)
+        self.assertEqual((pruned, out["pruned_versions"]), (["v-new"], ["v-old"]))
+
+        def broken(expected):
+            raise RuntimeError("d1 unavailable")
+        with contextlib.ExitStack() as stack:
+            for item in patched({"ok": True, "reason": "fine"}, broken):
+                stack.enter_context(item)
+            out = steps["post_deploy_check"].fn(ctx)
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["prune_error"], "RuntimeError")
+
     def test_pages_deploy_targets_production_branch(self) -> None:
         steps = {s.name: s for s in du.real_steps()}
         steps["pages_deploy"].fn(self.ctx())
@@ -782,6 +823,94 @@ class StatusFileTest(unittest.TestCase):
         status = json.loads((self.log_dir / "status.json").read_text(encoding="utf-8"))
         self.assertTrue(status["stale"])
         self.assertEqual(status["run"]["failed_step"], "build_seed")
+
+
+class D1PruneTest(unittest.TestCase):
+    """本人 2026-11-14「我覺得可以」：每次發布成功後只留最近 3 版，刪掉更舊的（D1 免費單庫上限 500MB）。"""
+
+    VERSIONS = [{"version": f"liquid-202611{day:02d}-237d4b8dd208-v2", "built_at": f"2026-11-{day:02d}T08:40:00Z"}
+                for day in (8, 9, 10, 11, 12, 13)]
+
+    @staticmethod
+    def name(day: int) -> str:
+        return f"liquid-202611{day:02d}-237d4b8dd208-v2"
+
+    def test_everything_older_than_the_three_newest_versions_goes(self) -> None:
+        prune = du.versions_to_prune(self.VERSIONS, active=self.name(13), previous=self.name(12))
+        self.assertEqual(prune, [self.name(8), self.name(9), self.name(10)])
+
+    def test_the_version_in_use_and_the_rollback_target_are_never_deleted_however_old(self) -> None:
+        # 曾經回退過：正在用的是舊版、previous 指向最新版。兩個都要留。
+        prune = du.versions_to_prune(self.VERSIONS, active=self.name(9), previous=self.name(13))
+        self.assertEqual(prune, [self.name(8), self.name(10)])
+
+    def test_nothing_is_deleted_when_there_is_little_to_delete_or_the_state_is_unknown(self) -> None:
+        self.assertEqual(du.versions_to_prune(self.VERSIONS[-3:], active=self.name(13), previous=self.name(12)), [])
+        self.assertEqual(du.versions_to_prune(self.VERSIONS, active=None, previous=None), [])
+
+    def remote(self, state: dict, calls: list):
+        def sh(args, cwd=None):
+            sql = args[args.index("--command") + 1]
+            calls.append(sql)
+            if sql.startswith("SELECT"):
+                rows = [{**row, **state} for row in self.VERSIONS]
+                return {"_stdout": "noise\n" + json.dumps([{"results": rows, "success": True}])}
+            return {"_stdout": "[]"}
+        return sh
+
+    def test_old_versions_and_their_rows_are_deleted_children_first_one_version_per_command(self) -> None:
+        calls: list[str] = []
+        state = {"active_version": self.name(13), "previous_version": self.name(12)}
+        with unittest.mock.patch.object(du, "_sh", self.remote(state, calls)):
+            out = du._prune_d1_versions(self.name(13))
+        self.assertEqual(out, {"pruned_versions": [self.name(8), self.name(9), self.name(10)], "kept_versions": 3})
+        # 一版一個指令、由舊到新：單一指令的資料量固定（約 13MB），不會因為積太多版而超時後永遠清不掉。
+        self.assertEqual(len(calls), 4)
+        for delete, day in zip(calls[1:], (8, 9, 10)):
+            order = [delete.index(f"DELETE FROM {table} ") for table in
+                     ("stock_analysis", "listed_securities", "universe_outside", "stock_data_versions")]
+            self.assertEqual(order, sorted(order))  # 先刪掛在版本下的列，最後才刪版本登記
+            self.assertEqual(delete.count(f"version = '{self.name(day)}'"), 4)
+            self.assertEqual(delete.count("NOT IN (SELECT active_version FROM stock_data_state"), 4)  # 語句本身再擋一次
+            for other in (11, 12, 13):
+                self.assertNotIn(self.name(other), delete)
+
+    def test_a_failed_delete_stops_there_and_reports_what_was_already_removed(self) -> None:
+        calls: list[str] = []
+        state = {"active_version": self.name(13), "previous_version": self.name(12)}
+        inner = self.remote(state, calls)
+
+        def sh(args, cwd=None):
+            if self.name(9) in args[args.index("--command") + 1] and "DELETE" in args[args.index("--command") + 1]:
+                raise RuntimeError("timeout")
+            return inner(args, cwd)
+        with unittest.mock.patch.object(du, "_sh", sh):
+            out = du._prune_d1_versions(self.name(13))
+        self.assertEqual(out["pruned_versions"], [self.name(8)])
+        self.assertEqual(out["prune_error"], "RuntimeError")
+        self.assertEqual(len(calls), 2)  # 查詢、刪第 8 日那版；第 9 日失敗後不再往下
+
+    def test_no_delete_runs_when_the_live_version_is_not_the_one_just_published(self) -> None:
+        calls: list[str] = []
+        state = {"active_version": self.name(12), "previous_version": self.name(13)}
+        with unittest.mock.patch.object(du, "_sh", self.remote(state, calls)):
+            out = du._prune_d1_versions(self.name(13))
+        self.assertEqual(out["pruned_versions"], [])
+        self.assertEqual(len(calls), 1)
+
+    def test_a_version_name_that_is_not_a_plain_identifier_is_never_put_into_sql(self) -> None:
+        calls: list[str] = []
+        odd = [{"version": "x'; DROP TABLE users; --", "built_at": "2026-11-01T00:00:00Z"}]
+        state = {"active_version": self.name(13), "previous_version": self.name(12)}
+
+        def sh(args, cwd=None):
+            sql = args[args.index("--command") + 1]
+            calls.append(sql)
+            rows = [{**row, **state} for row in odd + self.VERSIONS]
+            return {"_stdout": json.dumps([{"results": rows}])}
+        with unittest.mock.patch.object(du, "_sh", sh), self.assertRaises(ValueError):
+            du._prune_d1_versions(self.name(13))
+        self.assertEqual(len(calls), 1)
 
 
 class RedeployTest(unittest.TestCase):
