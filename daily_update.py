@@ -711,6 +711,16 @@ def republish_version(data_date: str, now: datetime) -> str:
     return re.sub(r"-r\d{12}$", "", version) + "-r" + now.astimezone(TPE).strftime("%Y%m%d%H%M")
 
 
+def _seed_problems(manifest: dict) -> dict:
+    """建置清單裡沒擋發布的問題，依種類列出是哪幾檔（進執行紀錄；沒分類的是整檔分析失敗）。"""
+    problems: dict[str, list[str]] = {}
+    for failure in manifest.get("failures") or []:
+        codes = problems.setdefault(str(failure.get("scope") or "analysis"), [])
+        if str(failure.get("code")) not in codes:
+            codes.append(str(failure.get("code")))
+    return problems
+
+
 def _seed_dir(ctx: RunContext) -> Path:
     return Path(ctx.outputs.get("build_seed", {}).get("seed_dir") or ctx.work_dir / "seed")
 
@@ -938,14 +948,15 @@ def real_steps() -> list[Step]:
         # build_stock_pack 不覆寫既有目錄；同一資料日重試時沿用已建好的 seed（版本相同，進度檔可續傳）。
         if (out / "manifest.json").exists():
             manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
-            return {"seed_dir": str(out), "version": manifest.get("version"), "reused": True}
+            return {"seed_dir": str(out), "version": manifest.get("version"), "reused": True,
+                    "problems": _seed_problems(manifest)}
         universe = ctx.work_dir / "liquid-universe" / f"{ctx.data_date}.json"
         command = [sys.executable, str(CLOUD / "build_stock_pack.py"), "--out", str(out), "--universe", str(universe)]
         if ctx.outputs.get("_seed_version"):  # 同日重新發布：資料日與來源相同，版本名要另外給才不會撞到原版
             command += ["--version", ctx.outputs["_seed_version"]]
         result = _sh(command)
         manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8")) if (out / "manifest.json").exists() else {}
-        return {**result, "seed_dir": str(out), "version": manifest.get("version")}
+        return {**result, "seed_dir": str(out), "version": manifest.get("version"), "problems": _seed_problems(manifest)}
 
     def build_dist(ctx: RunContext) -> dict:
         report: dict = {}

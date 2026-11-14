@@ -514,6 +514,23 @@ class BuildAndDeployWiringTest(unittest.TestCase):
         self.assertEqual(self.cmds, [])
         self.assertTrue(out["reused"])
 
+    def test_build_seed_reports_which_stocks_were_built_with_problems(self) -> None:
+        # 建置清單裡的問題（例如某次股本變動缺官方數字而沒還原）不擋發布，但要進執行紀錄：
+        # 否則只有把整包 seed 拿回來看才知道哪幾檔的圖還留著斷崖。
+        steps = {s.name: s for s in du.real_steps()}
+        ctx = self.ctx()
+        seed = ctx.work_dir / "seed"
+        seed.mkdir(parents=True)
+        (seed / "manifest.json").write_text(json.dumps({"version": "v-x", "failures": [
+            {"code": "6669", "scope": "price_adjustment", "error": "UnresolvedCapitalEvent", "message": "2024-07-01 除權 未還原"},
+            {"code": "6669", "scope": "price_adjustment", "error": "UnresolvedCapitalEvent", "message": "2023-07-03 除權 未還原"},
+            {"code": "2330", "scope": "strategy", "error": "StrategyUnavailable", "message": "x"},
+            {"code": "1101", "error": "ValueError", "message": "y"}]}), encoding="utf-8")
+        out = steps["build_seed"].fn(ctx)
+        self.assertEqual(out["problems"], {"price_adjustment": ["6669"], "strategy": ["2330"], "analysis": ["1101"]})
+        (seed / "manifest.json").write_text('{"version": "v-x", "failures": []}', encoding="utf-8")
+        self.assertEqual(steps["build_seed"].fn(ctx)["problems"], {})
+
     def test_build_dist_runs_all_packs_then_build_mjs(self) -> None:
         steps = {s.name: s for s in du.real_steps()}
         ctx = self.ctx()
