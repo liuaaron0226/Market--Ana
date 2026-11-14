@@ -116,8 +116,6 @@
 .hm .more-detail[open] > summary::after { content: "−"; background: var(--panel2); }
 
 /* ---------- 籌碼明細 ---------- */
-.hm .now-block { margin: 20px 0 8px; padding: 16px 0 0; border: 0; border-top: 1px solid var(--ink); border-radius: 0; background: transparent; }
-.hm .now-block h3 { font: 600 17px var(--serif); }
 .hm .drill-table h4 { font: 400 12px var(--sans); color: var(--faint); }
 .hm .drill-table table { font-size: 13px; }
 .hm .drill-table th { border-bottom: 1px solid var(--ink); }
@@ -171,9 +169,6 @@
 .hm .bar-hit:focus-visible rect:first-child { stroke: var(--accent); stroke-width: 1.5; }
 
 /* 選中日期標題：大日期＋數值，像報表小標 */
-.hm .drill-day { margin: 20px 0 4px; gap: 16px; align-items: baseline; }
-.hm .drill-day b { font: 600 28px/1 var(--mono); letter-spacing: -.01em; }
-.hm .drill-day span { font: 500 16px var(--mono); color: var(--ink); }
 
 /* 明細表 */
 .hm .drill-table { margin-top: 16px; }
@@ -192,10 +187,8 @@
 .hm .drill-table tbody tr:hover .stock-link::after { opacity: 1; }
 
 /* 註腳：與表格分開，小字 */
-.hm .drill-detail + .chip-date { display: block; margin-top: 24px; padding-top: 12px; border-top: 1px solid var(--hair); font-size: 11px; line-height: 1.7; color: var(--faint); }
 
 @media (max-width: 860px) {
-  .hm .drill-day b { font-size: 22px; }
   .hm .drill-table table { font-size: 13px; }
 }
 /* 指標說明展開：標題不要變橘，用墨色＋圓鈕即可 */

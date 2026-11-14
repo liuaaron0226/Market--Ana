@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -59,6 +60,12 @@ def pick_period(page: Page, value: str) -> str:
     page.locator(f".hm-period [data-value='{value}']").click()
     return chip.inner_text().strip()
 
+
+# 籌碼與資金的明細板：數字與結論、圖、解讀、名單標題、名單，各自的上緣位置（沒有的那一塊是 None）
+CHIP_PANEL_TOPS = """() => ['.chip-top', '.chip-big', '.chip-points', '.chip-list-head', '#chipList'].map(selector => {
+  const node = document.querySelector('#panelBody ' + selector);
+  return node ? Math.round(node.getBoundingClientRect().top) : null;
+})"""
 
 # 畫面上看得到幾個（收起來的選單裡的按鈕不算；只留給螢幕閱讀器的也不算——那種是自己或外層被縮成 1px 並裁掉）
 VISIBLE_COUNT = """selector => [...document.querySelectorAll(selector)].filter(e => {
@@ -352,6 +359,70 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
           page.evaluate(VISIBLE_COUNT, "#chipGrid .chip-card") == 6 and page.evaluate(VISIBLE_COUNT, "#chipGrid .chip-card .spark") == 6
           and page.evaluate(VISIBLE_COUNT, "#chipGrid .chip-read, #chipGrid .chip-date") == 0)
     open_panel(page, tag, ".chip-card", "")
+
+    def open_chip(key: str) -> None:
+        card = page.locator(f"#chipGrid .chip-card[data-chip='{key}']")
+        card.scroll_into_view_if_needed()
+        card.click()
+        page.wait_for_function(PANEL_OPEN)
+        page.locator("#panelTitle").wait_for(state="visible")   # 面板剛開的瞬間還在淡入，等它真的顯示出來再量
+        page.wait_for_function("!document.querySelector('#chipList [data-loading]')")
+
+    def close_chip() -> None:
+        page.keyboard.press("Escape")
+        page.wait_for_function(PANEL_CLOSED)
+
+    def chip_panel() -> None:
+        """明細板照樣品（本人 11-15）：今天的數字與結論 → 近 20 天的圖 → 解讀 → 名單；圖直接看得到，沒有檢視的切換。"""
+        short = lambda day: day[5:].replace("-", "/")
+        rows, points = "#chipList tbody tr", "#panelBody .chip-points li"
+        title = page.locator("#chipListTitle")
+        open_chip("foreign")
+        tops = page.evaluate(CHIP_PANEL_TOPS)
+        check(f"{tag}：明細板由上到下是數字與結論、圖、解讀、名單", None not in tops and tops == sorted(tops), tops)
+        check(f"{tag}：明細板直接看得到近 20 天的圖，沒有「目前前 10／每天明細」的切換",
+              page.evaluate(VISIBLE_COUNT, "#panelBody .bar-hit") == 20 and page.locator("#panelBody .chip-seg[data-seg='view']").count() == 0
+              and "每天明細" not in page.locator("#panelBody").inner_text())
+        total = page.locator(points).count()
+        check(f"{tag}：明細板的解讀先列兩點", page.evaluate(VISIBLE_COUNT, points) == 2 and total > 2, total)
+        page.locator("#panelBody .chip-points [data-more]").click()
+        check(f"{tag}：點「還有幾點」展開其餘的解讀", page.evaluate(VISIBLE_COUNT, points) == total, total)
+        latest = page.locator("#panelBody .bar-hit.is-on").get_attribute("data-day")
+        head = [text.strip() for text in page.locator("#chipList thead th").all_inner_texts()]
+        streaks = [text.strip() for text in page.locator("#chipList tbody td.streak").all_inner_texts()]
+        check(f"{tag}：名單是最新一天的買超前 10，連續天數寫在「連買」那一欄",
+              "外資買超前 10" in title.inner_text() and short(latest) in title.inner_text() and page.evaluate(VISIBLE_COUNT, rows) == 10
+              and head[-1:] == ["連買"] and len(streaks) == 10 and all(re.fullmatch(r"\d+ 天(以上)?", text) for text in streaks),
+              [title.inner_text(), head, streaks[:3]])
+        first = page.locator(rows).first.inner_text()
+        page.locator("#panelBody .chip-seg[data-seg='side'] button", has_text="賣超").click()
+        head = [text.strip() for text in page.locator("#chipList thead th").all_inner_texts()]
+        check(f"{tag}：標題右邊切到賣超，名單換成賣超前 10",
+              "外資賣超前 10" in title.inner_text() and head[-1:] == ["連賣"] and page.locator(rows).first.inner_text() != first, [title.inner_text(), head])
+        bar = page.locator("#panelBody .bar-hit").nth(9)
+        day = bar.get_attribute("data-day")
+        bar.click()
+        page.wait_for_function("!document.querySelector('#chipList [data-loading]')")
+        label = page.locator("#panelBody .bar-hit.is-on .bar-value").text_content() or ""
+        check(f"{tag}：點圖上的另一天，名單換成那一天，圖上標出那一天的數字",
+              short(day) in title.inner_text() and "賣超" in title.inner_text() and page.locator("#panelBody .bar-hit.is-on").get_attribute("data-day") == day
+              and page.evaluate(VISIBLE_COUNT, "#panelBody .bar-value") == 1 and short(day) in label and page.locator("#chipList td.streak").count() == 0,
+              [day, title.inner_text(), label])
+        count = page.locator(rows).count()
+        check(f"{tag}：那一天的名單先列 10 檔", count > 10 and page.evaluate(VISIBLE_COUNT, rows) == 10, count)
+        page.locator("#chipList [data-more]").click()
+        check(f"{tag}：點了再列出其餘的", page.evaluate(VISIBLE_COUNT, rows) == count, count)
+        page.locator(f"#panelBody .bar-hit[data-day='{latest}']").click()
+        check(f"{tag}：點回最新一天，名單回到有連續天數的前 10", short(latest) in title.inner_text() and page.locator("#chipList td.streak").count() == 10, title.inner_text())
+        close_chip()
+        seen = {}
+        for key in ("futures", "margin", "short", "trust", "volume"):
+            open_chip(key)
+            seen[key] = [bool(page.locator("#panelBody .chip-top .chip-value").inner_text().strip()), page.evaluate(VISIBLE_COUNT, "#panelBody .bar-hit"),
+                         page.evaluate(VISIBLE_COUNT, rows), page.locator("#panelBody .chip-seg[data-seg='view']").count()]
+            close_chip()
+        check(f"{tag}：其餘五項的明細板也是數字、圖、前 10 名單", all(value == [True, 20, 10, 0] for value in seen.values()), seen)
+    step(f"{tag}：籌碼與資金的明細板", chip_panel)
 
     def candle() -> None:
         x, y = chart_point(page, "#mainChart", 0.45, 0.45)
