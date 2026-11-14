@@ -89,6 +89,34 @@ CHART_FITS = """selector => {
 }"""
 
 
+# 資金地形：街區的地面、每棟樓的樓頂、名稱牌都要落在地形的框內（沒有被裁掉）。
+TERRAIN_INSIDE = """() => {
+  const host = document.querySelector('#rotationTerrain'), stage = host.querySelector('.terrain-stage').getBoundingClientRect();
+  const parts = [...host.querySelectorAll('.terrain-ground, .terrain-tower .top, .terrain-tag')].map(e => e.getBoundingClientRect()).filter(b => b.width);
+  const out = parts.filter(b => b.left < stage.left - 1 || b.right > stage.right + 1 || b.top < stage.top - 1 || b.bottom > stage.bottom + 1);
+  return parts.length > 30 && !out.length ? 'ok' : `${out.length} of ${parts.length} outside`;
+}"""
+# 成交額最大的那一棟樓：樓頂中心在畫面上的位置
+TALLEST_ROOF = """() => {
+  const towers = [...document.querySelectorAll('#rotationTerrain .terrain-tower')];
+  const tallest = towers.reduce((best, tower) => (parseFloat(tower.style.getPropertyValue('--h')) > parseFloat(best.style.getPropertyValue('--h')) ? tower : best));
+  const box = tallest.querySelector('.top').getBoundingClientRect();
+  return { name: tallest.dataset.name, x: box.left + box.width / 2, y: box.top + box.height / 2 };
+}"""
+# 成交額最小的那一棟樓（手機上只有十幾個像素）：樓頂中心的位置
+SMALLEST_ROOF = """() => {
+  const towers = [...document.querySelectorAll('#rotationTerrain .terrain-tower')];
+  const smallest = towers.reduce((best, tower) => (parseFloat(tower.style.getPropertyValue('--h')) < parseFloat(best.style.getPropertyValue('--h')) ? tower : best));
+  const box = smallest.querySelector('.top').getBoundingClientRect();
+  return { name: smallest.dataset.name, x: box.left + box.width / 2, y: box.top + box.height / 2 };
+}"""
+# 表格裡同一個產業那一列的資金狀態與相對平均
+TABLE_ROW = """name => {
+  const row = [...document.querySelectorAll('#rotationTable tr')].find(tr => tr.cells[0] && tr.cells[0].textContent === name);
+  return row ? { state: row.cells[1].textContent, relative: row.cells[2].textContent } : null;
+}"""
+
+
 def open_panel(page: Page, tag: str, selector: str, title_part: str) -> None:
     def run() -> None:
         target = page.locator(selector).first
@@ -235,17 +263,97 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
 
     def rotation() -> None:
         open_cat(page, "rotation")
-        fits = page.evaluate(CHART_FITS, "#rotationChart")
-        check(f"{tag}：產業資金流向的圖照容器寬度畫", fits == "ok", fits)
         check(f"{tag}：產業資金流向顯示資料日", "資料日" in page.locator("#rotationMeta").inner_text())
-        check(f"{tag}：四種資金狀態圖例", page.locator("#rotationLegend > li").count() == 4)
-        check(f"{tag}：象限圖有產業點", page.locator("#rotationChart circle").count() >= 10, page.locator("#rotationChart circle").count())
-        check(f"{tag}：資金效率排行有列", page.locator("#rotationEfficiency > li").count() >= 1)
-        check(f"{tag}：低基期回溫訊號有列", page.locator("#rotationRecovery > li").count() >= 1)
-        page.locator(".rotation-table > summary").click()
+        check(f"{tag}：首屏沒有泡泡圖、四色圖例、排行與表格",
+              page.locator("#rotationLegend, #rotationChart").count() == 0
+              and not page.locator("#rotationEfficiency").is_visible() and not page.locator("#rotationTable").is_visible())
+        towers = page.locator("#rotationTerrain .terrain-tower")
+        check(f"{tag}：資金地形每個產業一棟樓", towers.count() >= 30, towers.count())
+        page.locator("#rotationTerrain .terrain-stage").scroll_into_view_if_needed()
+        page.wait_for_function("document.querySelector('#rotationTerrain .terrain-city').classList.contains('is-grown')")
+        page.wait_for_timeout(300)
+        inside = page.evaluate(TERRAIN_INSIDE)
+        check(f"{tag}：整片街區與名稱牌都在地形的框內", inside == "ok", inside)
+        tags = page.locator("#rotationTerrain .terrain-tag:visible").count()
+        check(f"{tag}：名稱牌標出成交額前幾大", tags == (3 if mobile else 6), tags)
+
+        # 旋轉：在街區的空白角落水平拖曳
+        stage = page.locator("#rotationTerrain .terrain-stage").bounding_box()
+        angle = "getComputedStyle(document.querySelector('#rotationTerrain .terrain-city')).getPropertyValue('--rz').trim()"
+        before = page.evaluate(angle)
+        page.mouse.move(stage["x"] + 12, stage["y"] + stage["height"] - 12)
+        page.mouse.down()
+        page.mouse.move(stage["x"] + 92, stage["y"] + stage["height"] - 12, steps=4)
+        page.mouse.up()
+        check(f"{tag}：水平拖曳可以旋轉街區", page.evaluate(angle) != before, [before, page.evaluate(angle)])
+        page.mouse.move(stage["x"] + 92, stage["y"] + stage["height"] - 12)
+        page.mouse.down()
+        page.mouse.move(stage["x"] - 400, stage["y"] + stage["height"] - 12, steps=6)
+        page.mouse.up()
+        check(f"{tag}：轉到底就停，不會轉到背面", page.evaluate(angle) == "-40deg", page.evaluate(angle))
+        page.mouse.move(stage["x"] + 12, stage["y"] + stage["height"] - 12)
+        page.mouse.down()
+        page.mouse.move(stage["x"] + 243, stage["y"] + stage["height"] - 12, steps=6)
+        page.mouse.up()
+
+        # 點樓：成交額最大的那一棟（樓頂一定露在外面）
+        top = page.evaluate(TALLEST_ROOF)
+        page.mouse.click(top["x"], top["y"])
+        detail = page.locator("#rotationTerrain .terrain-detail").inner_text()
+        wanted = [top["name"], "今日成交額", "檔數", "成交額相對平均", "近 5 日加速度"]
+        check(f"{tag}：點樓出明細（名稱、資金狀態與四個數字）",
+              all(word in detail for word in wanted) and any(state in detail for state in ("資金領先", "資金減速", "資金回補", "資金落後")), detail)
+        row = page.evaluate(TABLE_ROW, top["name"])
+        check(f"{tag}：明細的數字和表格同一筆一致", bool(row) and row["relative"] in detail and row["state"] in detail, [row, detail])
+        check(f"{tag}：被選的樓讀得出選取狀態", page.locator("#rotationTerrain .terrain-tower[aria-pressed='true']").count() == 1)
+        if mobile:
+            stage = page.locator("#rotationTerrain .terrain-stage").bounding_box()
+            box = page.locator("#rotationTerrain .terrain-detail").bounding_box()
+            check(f"{tag}：手機上明細排在街區下方、不蓋住街區", box["y"] >= stage["y"] + stage["height"] - 1 and box["x"] >= 0
+                  and box["x"] + box["width"] <= page.viewport_size["width"] + 1, [stage, box])
+        page.mouse.click(top["x"], top["y"])
+        check(f"{tag}：再點同一棟樓取消選取",
+              page.locator("#rotationTerrain .terrain-tower[aria-pressed='true']").count() == 0
+              and page.locator("#rotationTerrain .terrain-detail").inner_text().strip() == "")
+
+        if mobile:
+            # 手機上樓很小：故意點偏，要選到最近的那一棟；點明顯的空白處取消
+            small = page.evaluate(SMALLEST_ROOF)
+            page.touchscreen.tap(small["x"] + 9, small["y"] - 8)
+            picked = page.locator("#rotationTerrain .terrain-tower[aria-pressed='true']")
+            check(f"{tag}：點在小樓旁邊也選得到最近的一棟", picked.count() == 1 and picked.first.get_attribute("data-name") == small["name"], small)
+            stage = page.locator("#rotationTerrain .terrain-stage").bounding_box()
+            page.touchscreen.tap(stage["x"] + 6, stage["y"] + stage["height"] - 6)
+            check(f"{tag}：點街區的空白處取消選取", picked.count() == 0)
+
+        # 鍵盤：聚焦一棟樓，Enter 選取、Esc 取消；每棟樓讀得出產業與資金狀態
+        first = towers.first
+        first.focus()
+        page.keyboard.press("Enter")
+        label = first.get_attribute("aria-label") or ""
+        check(f"{tag}：鍵盤 Enter 選取樓，樓的名稱含產業與資金狀態",
+              first.get_attribute("aria-pressed") == "true" and "，" in label and label.split("，")[0] in page.locator("#rotationTerrain .terrain-detail").inner_text(), label)
+        page.keyboard.press("Escape")
+        check(f"{tag}：鍵盤 Esc 取消選取", first.get_attribute("aria-pressed") == "false")
+
+        # 排行、回溫訊號、表格收在面板裡，從地形下方的三顆鍵進去
+        entries = page.locator("#rotationBody .rotation-entries button")
+        check(f"{tag}：地形下方有三顆入口鍵", [text.replace("›", "").strip() for text in entries.all_inner_texts()] == ["資金效率排行", "低基期回溫訊號", "表格檢視"],
+              entries.all_inner_texts())
+        entries.nth(2).click()
         page.locator("#rotationTable").wait_for(state="visible")
+        check(f"{tag}：面板裡有資金效率排行", page.locator("#rotationEfficiency > li").count() >= 1)
+        check(f"{tag}：面板裡有低基期回溫訊號", page.locator("#rotationRecovery > li").count() >= 1)
         rows = page.locator("#rotationTable tr").count() - 1  # 扣掉表頭
         check(f"{tag}：表格檢視列出全部產業", rows >= 30, rows)
+        box = page.locator("#rotationDialog").bounding_box()
+        view = page.viewport_size
+        check(f"{tag}：排行表格的面板完全在可見範圍內",
+              box["x"] >= 0 and box["y"] >= 0 and box["x"] + box["width"] <= view["width"] + 1 and box["y"] + box["height"] <= view["height"] + 1, box)
+        check(f"{tag}：點「表格檢視」開到表格那一段", page.evaluate("document.activeElement.id") == "rotationTableSection")
+        page.keyboard.press("Escape")
+        page.locator("#rotationTable").wait_for(state="hidden")
+        check(f"{tag}：按 Esc 收回排行表格的面板", not page.evaluate("document.getElementById('rotationDialog').open"))
     step(f"{tag}：產業資金流向", rotation)
 
     def core() -> None:

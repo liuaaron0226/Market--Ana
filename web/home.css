@@ -682,21 +682,29 @@ body.hm .workspace [data-cat-panel][data-open] { animation: cat-rise 380ms var(-
   from { opacity: 0; transform: translateY(12px); }
 }
 
-/* ---------- 搜尋面板：第 2 層的浮板，出現在畫面上方（手機鍵盤彈出時結果不會被擋） ---------- */
-body.hm dialog.hm-search:not([open]) { display: none; }
-body.hm dialog.hm-search {
+/* ---------- 浮起的面板（原生 dialog）：第 2 層的浮板，搜尋與產業資金流向的排行表格共用 ----------
+   出現在畫面上方（手機鍵盤彈出時內容不會被擋）。開關在 home-fold.js。 */
+body.hm dialog.float-dialog:not([open]) { display: none; }
+body.hm dialog.float-dialog {
   width: min(640px, calc(100vw - 32px)); max-height: calc(100dvh - 10dvh - 16px);
   margin: 10dvh auto auto; padding: 20px 24px 24px;
-  grid-template-columns: minmax(0, 1fr); row-gap: 12px;
   border: 0; border-radius: var(--r-float); background: var(--float); box-shadow: var(--float-shadow);
   color: var(--ink); overflow: auto; overscroll-behavior: contain;
   animation: float-rise 380ms var(--ease-depth);
 }
 /* 舊版瀏覽器的 ::backdrop 讀不到頁面的變數，所以給一個後備值 */
-body.hm dialog.hm-search::backdrop { background: var(--scrim, rgb(28 25 20 / 42%)); }
+body.hm dialog.float-dialog::backdrop { background: var(--scrim, rgb(28 25 20 / 42%)); }
 @keyframes float-rise {
   from { opacity: 0; transform: translateY(16px) scale(.96); }
 }
+/* 面板的標題列黏在上緣：內容捲動時標題與關閉鈕都還在。
+   黏的位置是從面板的內距裡面算的，所以 top 要用負的內距，標題列才會貼到面板最上緣、不露出後面捲過的內容。 */
+body.hm .float-dialog-head {
+  position: sticky; top: -20px; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin: -20px -24px 4px; padding: 20px 24px 10px; background: var(--float);
+}
+body.hm .float-dialog-head h2 { font: 600 18px var(--serif); }
+body.hm dialog.hm-search { grid-template-columns: minmax(0, 1fr); row-gap: 12px; }
 body.hm dialog.hm-search .stock-search-heading { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 12px; }
 body.hm dialog.hm-search :is(.stock-search-suggestions, .stock-search-status, .stock-search-results, .stock-search-more) { grid-column: 1; }
 
@@ -711,7 +719,8 @@ body.hm dialog.hm-search :is(.stock-search-suggestions, .stock-search-status, .s
   body.hm .hm-cats button { height: 44px; padding: 0 2px; font-size: 13px; }
   body.hm .chips { padding-top: 12px; }
   body.hm .market-screens .screen-block[data-open] { margin-top: 12px; }
-  body.hm dialog.hm-search { max-height: calc(100dvh - 28px); margin-top: 12px; padding: 16px; }
+  body.hm dialog.float-dialog { max-height: calc(100dvh - 28px); margin-top: 12px; padding: 16px; }
+  body.hm .float-dialog-head { top: -16px; margin: -16px -16px 4px; padding: 16px 16px 10px; }
 }
 /* 320 寬：三顆 44px 的圖示鍵旁邊放不下帶圖示的標題，拿掉標題前的小圖示 */
 @media (max-width: 359px) {
@@ -719,6 +728,28 @@ body.hm dialog.hm-search :is(.stock-search-suggestions, .stock-search-status, .s
   body.hm .brand-line h1 { font-size: 16px; }
   body.hm .hm-cats button { font-size: 12px; line-height: 1.25; text-wrap: balance; }
 }
+
+/* ================= 產業資金流向：入口與面板（立體重設計 B 包） =================
+   首屏只有資金地形；資金效率排行、低基期回溫訊號、表格檢視收進浮起的面板，入口是地形下方的三顆鍵。 */
+body.hm .rotation-entries { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+body.hm .rotation-entries button {
+  height: var(--btn-h); padding: 0 14px; border: 0; border-radius: var(--r-key);
+  background: var(--key); box-shadow: var(--key-shadow); color: var(--ink); font: 500 13px var(--sans);
+  transition: transform var(--t-lift) var(--ease-depth), box-shadow var(--t-lift) var(--ease-depth);
+}
+@media (hover: hover) {
+  body.hm .rotation-entries button:hover { transform: translateY(var(--key-lift)); box-shadow: var(--key-shadow-hover); }
+}
+body.hm .rotation-entries button:active { transform: translateY(var(--key-thick)); box-shadow: var(--key-shadow-press); transition-duration: var(--t-press); }
+body.hm .rotation-dialog { width: min(720px, calc(100vw - 32px)); }
+body.hm .rotation-dialog section { scroll-margin-top: 72px; outline: none; }
+body.hm .rotation-dialog .rotation-lists { margin-top: 12px; }
+body.hm .rotation-dialog .rotation-table { margin-top: 28px; }
+body.hm .rotation-dialog .rotation-table h4 { font: 400 12px var(--sans); color: var(--faint); }
+/* 窄螢幕上表格比面板寬：產業名稱不折行，表格自己左右捲 */
+body.hm .rotation-dialog #rotationTable { overflow-x: auto; }
+body.hm .rotation-dialog .rotation-table table { min-width: 440px; margin-top: 8px; }
+body.hm .rotation-dialog .rotation-table :is(th, td):first-child { white-space: nowrap; }
 
 /* ================= 資金地形（立體重設計 B 包，本人 2026-11-14 定案的方向） =================
    每個產業一棟樓，樓高＝今日成交額，四個街區＝四個資金狀態；結構由 terrain.js 產生。
@@ -731,7 +762,8 @@ body.hm .terrain [data-quadrant="improving"] { --q: var(--q-improving); }
 body.hm .terrain [data-quadrant="lagging"] { --q: var(--q-lagging); }
 
 body.hm .terrain-stage {
-  position: relative; height: 600px;
+  /* 高度跟著寬度走：手機 300、平板約 500、桌機 600；街區會依這個框自動縮放 */
+  position: relative; height: clamp(300px, 62vw, 600px);
   touch-action: pan-y; cursor: grab; user-select: none; -webkit-user-select: none;
   overflow: hidden; /* 立體的面轉出去的部分不能撐出橫向捲動 */
 }
@@ -772,15 +804,16 @@ body.hm .terrain-city.is-settled .terrain-tower { transition-delay: 0s; transiti
 body.hm .terrain-city.has-selection .terrain-tower:not(.is-selected) { --fade: 58%; }
 body.hm .terrain-tower.is-selected { --raise: 12px; }
 body.hm .terrain-tower .face { transition: background-color 300ms var(--ease-out); }
+/* 各面都往外多畫半個像素、彼此疊一點，縮小顯示時面與面之間才不會露出細縫 */
 body.hm .terrain-tower .top {
-  inset: 0; transform: translateZ(var(--h)); border-radius: 2px;
+  inset: -.5px; transform: translateZ(var(--h));
   background: color-mix(in srgb, var(--tone), #fff 14%);
 }
 body.hm .terrain-tower:focus-visible .top { outline: 3px solid var(--accent); outline-offset: 2px; }
-body.hm .terrain-tower :is(.south, .north) { left: 0; width: 100%; height: var(--h); transform-origin: 50% 100%; transform: rotateX(-90deg); }
+body.hm .terrain-tower :is(.south, .north) { left: -.5px; width: calc(100% + 1px); height: calc(var(--h) + .5px); transform-origin: 50% 100%; transform: rotateX(-90deg); }
 body.hm .terrain-tower .south { bottom: 0; background: linear-gradient(to top, rgb(0 0 0 / 16%), transparent 45%), color-mix(in srgb, var(--tone), #000 6%); }
-body.hm .terrain-tower .north { top: calc(-1 * var(--h)); background: color-mix(in srgb, var(--tone), #000 30%); }
-body.hm .terrain-tower :is(.east, .west) { top: 0; width: var(--h); height: 100%; transform-origin: 0 50%; transform: rotateY(-90deg); }
+body.hm .terrain-tower .north { top: calc(-1 * var(--h) - .5px); background: color-mix(in srgb, var(--tone), #000 30%); }
+body.hm .terrain-tower :is(.east, .west) { top: -.5px; width: calc(var(--h) + .5px); height: calc(100% + 1px); transform-origin: 0 50%; transform: rotateY(-90deg); }
 body.hm .terrain-tower .east { left: 100%; background: linear-gradient(to right, rgb(0 0 0 / 16%), transparent 45%), color-mix(in srgb, var(--tone), #000 24%); }
 body.hm .terrain-tower .west { left: 0; background: linear-gradient(to right, rgb(0 0 0 / 16%), transparent 45%), color-mix(in srgb, var(--tone), #000 13%); }
 body.hm .terrain-tower .shade {
@@ -814,7 +847,9 @@ body.hm .terrain-detail dt { color: var(--dim); }
 body.hm .terrain-detail dd { margin: 0; text-align: right; color: var(--ink); }
 
 @media (max-width: 860px) {
-  body.hm .terrain-stage { height: 300px; }
+  /* 三顆入口鍵在手機上排成一列 */
+  body.hm .rotation-entries { gap: 6px; }
+  body.hm .rotation-entries button { padding: 0 8px; font-size: 12px; }
   body.hm .terrain-tag { padding: 4px 6px; font-size: 11px; }
   body.hm .terrain-tag.minor { display: none; }
   /* 手機：明細排在街區下方，不蓋住街區 */

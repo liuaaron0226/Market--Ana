@@ -265,30 +265,17 @@
 
 /* 產業資金流向：象限色改用站內色票（原本是 Tailwind 預設的靛紫＋兩種相近橘色） */
 .hm { --q-leading: var(--accent); --q-weakening: var(--gold); --q-improving: color-mix(in srgb, var(--ink) 62%, var(--bg)); --q-lagging: color-mix(in srgb, var(--ink) 28%, var(--bg)); }
-.hm .rotation-dot { stroke: var(--bg); stroke-width: 1.5; }
-.hm .rotation-dot:hover, .hm .rotation-dot:focus { stroke: var(--ink); stroke-width: 2; }
-.hm .rotation-legend { gap: 6px 20px; margin-top: 16px; font-size: 12px; }
-.hm .rotation-legend i { width: 8px; height: 8px; }
-.hm .rotation-chart { margin-top: 16px; padding: 8px 0; border-top: 1px solid var(--ink); border-bottom: 1px solid var(--hair); }
-.hm .rotation-chart text, .hm .core-chart text { font: 11px var(--sans); fill: var(--faint); }
-.hm .rotation-chart text.strong { font-weight: 600; fill: var(--ink); }
+.hm .core-chart text { font: 11px var(--sans); fill: var(--faint); }
 .hm .rotation-lists { gap: 40px; margin-top: 24px; }
 .hm .rotation-lists h4 { font: 400 12px var(--sans); color: var(--faint); margin-bottom: 8px; }
 .hm .rotation-lists ol { padding: 0; list-style: none; counter-reset: r; border-top: 1px solid var(--hair); line-height: 1.5; }
 .hm .rotation-lists li { counter-increment: r; display: grid; grid-template-columns: 2em 1fr auto; padding: 8px 0; border-bottom: 1px solid var(--hair); font-size: 14px; }
 .hm .rotation-lists li::before { content: counter(r); font: 500 12px var(--mono); color: var(--faint); }
 .hm .rotation-lists small { font: 500 13px var(--mono); color: var(--dim); text-align: right; }
-.hm .rotation-table summary {
-  display: inline-flex; gap: 8px; height: 32px; padding: 0 12px; border: 1px solid var(--hair); border-radius: var(--btn-r);
-  list-style: none; font: 500 13px var(--sans); color: var(--dim); transition: background-color 160ms var(--ease-out);
-}
-.hm .rotation-table summary::-webkit-details-marker { display: none; }
-.hm .rotation-table summary:hover { background: var(--panel2); color: var(--ink); }
-.hm .rotation-table[open] summary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
 .hm .rotation-table table { margin-top: 12px; font-size: 13px; font-variant-numeric: tabular-nums; }
 .hm .rotation-table th { text-align: left; font-weight: 400; color: var(--faint); padding: 8px 8px 8px 0; border-bottom: 1px solid var(--ink); }
 .hm .rotation-table td { padding: 8px 8px 8px 0; border-bottom: 1px solid var(--hair); color: var(--ink); }
-.hm .chart-tip, .hm .rotation-chart [role="tooltip"] { border: 1px solid var(--hair); border-radius: var(--btn-r); background: var(--bg); box-shadow: 0 8px 24px -12px rgb(0 0 0 / 30%); }
+.hm .chart-tip { border: 1px solid var(--hair); border-radius: var(--btn-r); background: var(--bg); box-shadow: 0 8px 24px -12px rgb(0 0 0 / 30%); }
 /* 選中狀態優先於 hover：滑鼠停在已選的按鈕上也不會變回淺色 */
 .hm .chart-controls .hm-period-seg button[aria-checked="true"]:hover,
 .hm .hm-period-seg button[aria-checked="true"]:hover,
@@ -304,10 +291,6 @@
   .hm .hm-period-group:last-child .hm-period-seg { display: flex; }
   .hm .hm-period-group:last-child .hm-period-seg button { flex: 1 1 0; }
 }
-/* 產業資金流向：點一下固定說明，固定中的泡泡加墨色外框 */
-.hm .rotation-dot { cursor: pointer; }
-.hm .rotation-dot.is-pinned { stroke: var(--ink); stroke-width: 2.5; }
-.hm .rotation-chart .chart-tip { pointer-events: none; }
 
 /* ================= 看盤桌：浮起的明細板（立體重設計 A 包第 2 片，2026-11-14） =================
    點開的明細是第 2 層：指到 K 棒的當天明細、下鑽面板。底色不透明，可讀性不靠背景模糊。

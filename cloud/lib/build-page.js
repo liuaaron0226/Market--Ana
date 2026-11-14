@@ -9,6 +9,8 @@ export const WEB_FILES = [
   "portfolio.html", "portfolio.css", "portfolio.js",
   // 立體重設計 A 包第 4 片（11-14）：首頁分類收合與搜尋面板
   "home-fold.js",
+  // 立體重設計 B 包（11-14）：資金地形的版面計算與畫面
+  "terrain-layout.js", "terrain.js",
 ];
 export const RETIRED = ["analysis-data.js", "chips-data.js", "dashboard-data.js", "detail-data.js", "plain-data.js", "market-data-local.js"];
 

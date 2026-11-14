@@ -448,14 +448,20 @@ def check_home_screens_journey(page: Page, base_url: str, server, width: int) ->
     open_cat(page, "rotation")
     assert wait_block(page, "rotationBlock") == "ok"
     assert page.locator("#rotationMeta").inner_text() == "資料日 2026-11-06"
-    legend = page.locator("#rotationLegend").inner_text()
+    # 11-14 起象限泡泡圖與四色圖例換成資金地形：每個產業一棟樓，四個街區各標資金狀態的名稱。
+    grounds = page.locator("#rotationTerrain .terrain-ground-label").all_text_contents()
     for label in ("資金領先", "資金減速", "資金回補", "資金落後"):
-        assert label in legend, legend
-    assert page.locator("#rotationChart circle").count() >= 30
+        assert label in grounds, grounds
+    assert page.locator("#rotationTerrain .terrain-tower").count() >= 30
     assert page.locator("#rotationEfficiency li").count() == 5
     assert page.locator("#rotationRecovery li").count() >= 1
-    page.locator("#rotationChart circle").last.hover()
-    assert page.locator("#rotationChart .chart-tip").is_visible()
+    # 排行與回溫訊號收在面板裡（上面兩行數的是面板裡的列，面板沒開也數得到）。用鍵盤選一棟樓，要出現它的明細。
+    tower = page.locator("#rotationTerrain .terrain-tower").first
+    tower.focus()
+    page.keyboard.press("Enter")
+    assert tower.get_attribute("aria-pressed") == "true"
+    assert "今日成交額" in page.locator("#rotationTerrain .terrain-detail").inner_text()
+    page.keyboard.press("Escape")
 
     open_cat(page, "core")
     assert wait_block(page, "coreHoldings") == "ok"

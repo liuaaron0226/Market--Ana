@@ -2258,93 +2258,13 @@
   }
 
   // ---- 產業資金流向 ----
+  // 首屏是資金地形（terrain.js）；資金效率排行、低基期回溫訊號與表格在點開的面板裡（本人 2026-11-14 定案）。
   const rot = {
     block: $('rotationBlock'), meta: $('rotationMeta'), status: $('rotationStatus'), body: $('rotationBody'),
-    legend: $('rotationLegend'), chart: $('rotationChart'), efficiency: $('rotationEfficiency'),
+    terrain: $('rotationTerrain'), efficiency: $('rotationEfficiency'),
     recovery: $('rotationRecovery'), table: $('rotationTable'),
   };
-  const QUADRANT_ORDER = ['leading', 'weakening', 'improving', 'lagging'];
-  const QUADRANT_VAR = { leading: '--q-leading', weakening: '--q-weakening', improving: '--q-improving', lagging: '--q-lagging' };
 
-  function drawRotation(payload) {
-    const bubbles = payload.latest.bubbles.filter(b => b.x !== null && b.y !== null);
-    // 畫布寬度＝實際容器寬度，文字維持 11px，不隨螢幕放大。
-    const width = Math.max(280, Math.round(rot.chart.clientWidth || 640));
-    const height = width < 520 ? 280 : 340;
-    const pad = { l: 36, r: 12, t: 16, b: 30 };
-    const xs = bubbles.map(b => b.x), ys = bubbles.map(b => b.y);
-    // 橫軸依實際範圍（含 0），不強迫左右對稱，避免一側大片空白。
-    const xLo = Math.min(0, ...xs), xHi = Math.max(0, ...xs);
-    const xPad = (xHi - xLo || 1) * 0.06;
-    const yAbs = Math.max(1, ...ys.map(Math.abs)) * 1.12;
-    const sx = x => pad.l + (x - xLo + xPad) / (xHi - xLo + 2 * xPad) * (width - pad.l - pad.r);
-    const sy = y => pad.t + (yAbs - y) / (2 * yAbs) * (height - pad.t - pad.b);
-    const maxSize = Math.max(...bubbles.map(b => b.size || 0), 1);
-    const radius = b => 4 + Math.sqrt((b.size || 0) / maxSize) * (width < 520 ? 12 : 16);
-    const root = svg('svg', { width, height, viewBox: `0 0 ${width} ${height}`, role: 'img',
-      'aria-label': '各產業資金位置：橫軸為成交額相對平均，縱軸為近 5 日加速度' });
-    root.append(svg('line', { class: 'chart-axis', x1: sx(0), x2: sx(0), y1: pad.t, y2: height - pad.b }));
-    root.append(svg('line', { class: 'chart-axis', x1: pad.l, x2: width - pad.r, y1: sy(0), y2: sy(0) }));
-    const label = (text, x, y, anchor, strong) => {
-      const t = svg('text', { class: `chart-label${strong ? ' strong' : ''}`, x, y, 'text-anchor': anchor });
-      t.textContent = text;
-      root.append(t);
-      return t;
-    };
-    label('← 成交額低於平均', pad.l, height - 8, 'start');
-    label('高於平均 →', width - pad.r, height - 8, 'end');
-    label('加速', pad.l - 6, pad.t + 10, 'end');
-    label('減速', pad.l - 6, height - pad.b - 2, 'end');
-    const tip = tooltip(rot.chart);
-    let pinned = null;
-    // 點圖上空白處也能關掉固定的說明
-    root.addEventListener('click', () => { if (pinned) { pinned.classList.remove('is-pinned'); pinned.setAttribute('aria-pressed', 'false'); pinned = null; tip.hide(); } });
-    const sorted = [...bubbles].sort((a, b) => (b.size || 0) - (a.size || 0));
-    sorted.forEach(b => {
-      const dot = svg('circle', { class: 'rotation-dot', cx: sx(b.x), cy: sy(b.y), r: radius(b), tabindex: '0',
-        fill: `var(${QUADRANT_VAR[b.quadrant]})`, 'fill-opacity': '0.85', 'aria-label': `${b.name}，${payload.quadrants[b.quadrant].label}` });
-      const lines = [b.name, payload.quadrants[b.quadrant].label, `成交額相對平均 ${signed(b.relative_pct, 0)}%`,
-        `近 5 日加速度 ${signed(b.y)} 億元/日`, `近 20 日成交額 ${fmtNum(b.amount_20d, 1)} 十億元`];
-      const show = () => tip.show(lines, sx(b.x), sy(b.y) - radius(b));
-      // 本人 11-09：點一下固定顯示、再點一下關掉；固定時滑過別的泡泡不會換掉。滑鼠移上仍可預覽。
-      const toggle = () => {
-        const pinnedHere = pinned === dot;
-        if (pinned) pinned.classList.remove('is-pinned');
-        pinned = pinnedHere ? null : dot;
-        if (pinned) { dot.classList.add('is-pinned'); show(); } else tip.hide();
-        dot.setAttribute('aria-pressed', String(!!pinned));
-      };
-      dot.setAttribute('role', 'button');
-      dot.setAttribute('aria-pressed', 'false');
-      dot.addEventListener('mouseenter', () => { if (!pinned) show(); });
-      dot.addEventListener('focus', () => { if (!pinned) show(); });
-      dot.addEventListener('mouseleave', () => { if (!pinned) tip.hide(); });
-      dot.addEventListener('blur', () => { if (!pinned) tip.hide(); });
-      dot.addEventListener('click', event => { event.stopPropagation(); toggle(); });
-      dot.addEventListener('keydown', event => {
-        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggle(); }
-        if (event.key === 'Escape' && pinned) { event.preventDefault(); pinned.classList.remove('is-pinned'); pinned = null; tip.hide(); }
-      });
-      root.append(dot);
-    });
-    // 直接標示規模最大的產業；與已放的標籤重疊就略過，其餘靠 hover 與表格檢視。
-    const placed = [];
-    sorted.slice(0, 6).forEach(b => {
-      const r = radius(b);
-      const x = sx(b.x);
-      const y = sy(b.y) - r - 5 < pad.t + 10 ? sy(b.y) + r + 13 : sy(b.y) - r - 5;
-      const w = b.name.length * 12;
-      const box = { x1: x - w / 2, x2: x + w / 2, y1: y - 12, y2: y + 2 };
-      if (box.x1 < 0 || box.x2 > width) return;
-      if (placed.some(p => box.x1 < p.x2 && box.x2 > p.x1 && box.y1 < p.y2 && box.y2 > p.y1)) return;
-      placed.push(box);
-      label(b.name, x, y, 'middle', true);
-    });
-    rot.chart.querySelector('svg')?.remove();
-    rot.chart.prepend(root);
-  }
-
-  let rotationPayload = null;
   function renderRotation(payload) {
     if (payload.status === 'not_ready') {
       rot.block.dataset.state = 'not_ready';
@@ -2357,17 +2277,8 @@
     rot.meta.textContent = `資料日 ${latest.date}`;
     const stale = payload.status === 'stale' ? `已過期（最新行情 ${payload.latest_market_data_date}），僅供查看舊結果。` : '';
     rot.status.textContent = `${stale}${latest.summary ? latest.summary.text : ''}`;
-    rot.legend.replaceChildren(...QUADRANT_ORDER.map(key => {
-      const li = el('li');
-      const swatch = el('i');
-      swatch.style.background = `var(${QUADRANT_VAR[key]})`;
-      li.append(swatch, `${payload.quadrants[key].label} `, el('b', '', String(latest.quadrant_counts[key] || 0)));
-      li.title = payload.quadrants[key].meaning;
-      return li;
-    }));
     rot.body.hidden = false;
-    rotationPayload = payload;
-    drawRotation(payload);
+    window.Terrain.render(rot.terrain, { bubbles: latest.bubbles, quadrants: payload.quadrants });
     rot.efficiency.replaceChildren(...(latest.efficiency_ranking || []).map(r => {
       const li = el('li', '', `${r.name} `);
       li.append(el('small', '', fmtNum(r.score, 1)));
@@ -2597,7 +2508,6 @@
     resizeTimer = window.setTimeout(() => {
       if (host.clientWidth === lastWidth) return;
       lastWidth = host.clientWidth;
-      if (rotationPayload) drawRotation(rotationPayload);
       if (coreReport) drawCore(coreReport);
     }, 150);
   });

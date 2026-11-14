@@ -117,6 +117,33 @@ def open_cat(page: Page, cat: str) -> None:
     page.wait_for_function("cat => document.querySelector(`#homeCats button[data-cat='${cat}']`).getAttribute('aria-expanded') === 'true'", arg=cat)
 
 
+def grown_terrain(page: Page) -> None:
+    """展開產業資金流向，等資金地形的樓長好，並把地形捲到畫面內。"""
+    open_cat(page, "rotation")
+    page.locator("#rotationTerrain .terrain-stage").scroll_into_view_if_needed()
+    page.wait_for_function("document.querySelector('#rotationTerrain .terrain-city').classList.contains('is-grown')")
+    page.wait_for_timeout(400)
+
+
+def pick_tallest_tower(page: Page) -> None:
+    """點成交額最大的那一棟樓（樓頂一定露在外面）。"""
+    grown_terrain(page)
+    roof = page.evaluate("""() => {
+      const towers = [...document.querySelectorAll('#rotationTerrain .terrain-tower')];
+      const tallest = towers.reduce((best, tower) => (parseFloat(tower.style.getPropertyValue('--h')) > parseFloat(best.style.getPropertyValue('--h')) ? tower : best));
+      const box = tallest.querySelector('.top').getBoundingClientRect();
+      return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+    }""")
+    page.mouse.click(roof["x"], roof["y"])
+    page.wait_for_timeout(300)
+
+
+def open_rotation_table(page: Page) -> None:
+    grown_terrain(page)
+    page.locator("#rotationBody .rotation-entries button").nth(2).click()
+    page.locator("#rotationTable").wait_for(state="visible")
+
+
 def open_search(page: Page) -> None:
     page.locator("#searchToggle").click()
     page.locator("#stockSearchInput").wait_for(state="visible")
@@ -218,9 +245,14 @@ def main() -> None:
                         for theme in THEMES:
                             for cat in HOME_CATS:
                                 shoot(browser, base, out, report, f"home-cat-{cat}-{size}-{theme}", "home", size, theme,
-                                      after=lambda page, cat=cat: open_cat(page, cat))
+                                      after=grown_terrain if cat == "rotation" else (lambda page, cat=cat: open_cat(page, cat)))
                             shoot(browser, base, out, report, f"home-search-{size}-{theme}", "home", size, theme,
                                   after=open_search, full_page=False)
+                            # 資金地形：點了一棟樓、排行表格的面板打開（都只拍可見範圍）
+                            shoot(browser, base, out, report, f"home-terrain-picked-{size}-{theme}", "home", size, theme,
+                                  after=pick_tallest_tower, full_page=False)
+                            shoot(browser, base, out, report, f"home-rotation-table-{size}-{theme}", "home", size, theme,
+                                  after=open_rotation_table, full_page=False)
             run(("--features", "core"), core_jobs)
         if "expired" in groups:
             # 劇本與直白分析過期時的首頁：結論、劇本日、收復線／防守線、直白分析整組隱藏。
