@@ -13,6 +13,7 @@ import math
 
 from .data import DEFAULT_DB, DEFAULT_OTC_DB, load_bars
 from .indicators import Bar, atr14, kd9, ma, macd
+from .price_adjustment import apply_factors, default_capital_events, price_factors
 from .price_structure import WEIGHTS, resistance_tick, support_tick, tick_floor
 from .strategy_v1 import strategy_v1
 
@@ -56,7 +57,7 @@ PROVENANCE = {
     'chart': {'level': 'generic_indicator', 'note': 'MACD 為通用指標，非原站規則'},
     'reference': {'level': 'fact', 'note': '事實資料'},
 }
-LABELS = {'not_advice': '分析數字是參考，不是買賣指令', 'price_basis': '價格未還原權值'}
+LABELS = {'not_advice': '分析數字是參考，不是買賣指令', 'price_basis': '分割、減資、配股已還原；現金股利未還原'}
 
 # 條件：鍵＝本站中性名稱；site_id 只留在內部 provenance。rule 為反推出的判斷式；verified 為
 # 第二輪會員樣本吻合率（大量股 擬合／留出；全部 擬合／留出），出處 reverse-engineering-round2.md §2。
@@ -462,6 +463,19 @@ def institutional_series(code: str, market: str, dates: list[str]) -> list[dict]
     ]
 
 
+def _scale_shares(rows: list[dict], share_scale: dict[str, float]) -> list[dict]:
+    """法人買賣超是股數：事件日之前的列跟成交量用同一個倍數換算；合計重算成三分項之和，維持逐列一致。"""
+    scaled = []
+    for row in rows:
+        scale = share_scale.get(row['date'])
+        if scale is None or any(row[key] is None for key in ('foreign', 'trust', 'dealer')):
+            scaled.append(row)
+            continue
+        parts = {key: round(row[key] * scale) for key in ('foreign', 'trust', 'dealer')}
+        scaled.append({'date': row['date'], **parts, 'total': sum(parts.values())})
+    return scaled
+
+
 def _revenue_yoy(code: str, market: str, as_of: str) -> float | None:
     import json
     from datetime import date
@@ -520,19 +534,28 @@ def condition_inputs(code: str, market: str, as_of: str, bars: list[Bar], x: dic
     }
 
 
-def analyze_v2(code: str, as_of: str, db_path=DEFAULT_DB, otc_db_path=DEFAULT_OTC_DB) -> dict:
+def analyze_v2(code: str, as_of: str, db_path=DEFAULT_DB, otc_db_path=DEFAULT_OTC_DB,
+               capital_actions: dict[str, list[dict]] | None = None) -> dict:
+    """capital_actions：每檔代號的股本變動事件（price_adjustment.capital_events 的形狀）；不給就讀資料根目錄的。"""
     bars, info = load_bars(code, as_of, db_path=db_path, otc_db_path=otc_db_path)
     if not bars:
         return _blocking(code, as_of, {'reason': '查不到這個代號的有效日 K', 'not_found': True})
     if len(bars) < MIN_ANALYSIS_BARS:
         return _blocking(code, as_of, {'bars': len(bars), 'reason': f'有效日 K 只有 {len(bars)} 根，不足 {MIN_ANALYSIS_BARS} 根'})
+    # 本人 2026-11-14：圖和判讀共用還原價（分割、面額變更、減資、配股；現金股利不還原）。最新一根不受影響。
+    if capital_actions is None:
+        capital_actions = default_capital_events()
+    factors, unresolved = price_factors(bars, capital_actions.get(code, []))
+    share_scale = {bar.date: 1 / factor for bar, factor in zip(bars, factors) if factor != 1.0}
+    bars = apply_factors(bars, factors)
     x = indicators_v2(bars)
     last = bars[-1]
     inputs = condition_inputs(code, info['market'], last.date, bars, x)
     levels = price_levels_v2(bars, x)
     conditions = condition_states(inputs)
     chart_bars = bars[-120:]
-    institutional = _safe(lambda: institutional_series(code, info['market'], [bar.date for bar in chart_bars])) or []
+    institutional = _scale_shares(
+        _safe(lambda: institutional_series(code, info['market'], [bar.date for bar in chart_bars])) or [], share_scale)
     # strategy_v1 尚未通過驗證、對外預設關閉（本人 11-11／11-12 定案）：它出錯只讓 strategy 留空，
     # 不能讓這檔的行情、指標、價位、法人等核心資料跟著消失。
     try:
@@ -545,7 +568,10 @@ def analyze_v2(code: str, as_of: str, db_path=DEFAULT_DB, otc_db_path=DEFAULT_OT
         'code': code, 'name': info['name'], 'kind': info['kind'], 'market': info['market'],
         'as_of': last.date, 'requested_as_of': as_of,
         'quote': {'close': last.close, 'chg_pct': round(info['chg'], 2), 'volume': last.volume, 'change_sign': info['change_sign']},
-        'qa': {'blocking': False, 'bars': len(bars)},
+        'qa': {'blocking': False, 'bars': len(bars),
+               # 該還原卻缺官方數字的事件：價格維持實際成交價，不猜係數；建置報告會彙總。
+               'unresolved_capital_events': [{'date': event['date'], 'type': event['type'],
+                                              'reason': event['unresolved_reason']} for event in unresolved]},
         'indicators': x,
         'levels': levels,
         'strategy': strategy,

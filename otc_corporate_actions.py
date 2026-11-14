@@ -290,6 +290,27 @@ def load_events(out: Path) -> list[dict[str, Any]]:
     return sorted(events.values(), key=lambda event: (event["date"], event["code"]))
 
 
+def cash_dividends(out: Path) -> dict[str, float]:
+    """「除權息」同日事件的每股現金股利（鍵：代號|日期），取自已驗 SHA 的原件。
+
+    共同 events.json 只留權值＋息值合計；還原價只還原配股那部分，要用這個把現金拆出來。
+    """
+    cash: dict[str, float] = {}
+    for entry in _verified_entries(out):
+        payload = json.loads((out / entry["raw_file"]).read_bytes().decode("utf-8"))
+        table = next((table for table in payload.get("tables", []) if table.get("fields") == FIELDS), None)
+        if table is None:
+            raise ValueError(f"{entry['raw_file']} 欄位不符")
+        for raw in table.get("data") or []:
+            cell = dict(zip(FIELDS, raw))
+            if str(cell["權/息"]).strip() != "除權息":
+                continue
+            amount = _number(cell["現金股利"])
+            if amount is not None:
+                cash[f"{str(cell['代號']).strip()}|{roc_date_to_iso(str(cell['除權息日期']))}"] = amount
+    return cash
+
+
 def merge_events(existing: list[dict[str, Any]], otc_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """移除舊 TPEx 衍生事件後重建；上市官方事件原樣保留且遇鍵值衝突即停。"""
     merged = {(event["code"], event["date"]): event for event in existing

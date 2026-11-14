@@ -111,6 +111,8 @@ WORKING_SET: tuple[Item, ...] = (
     Item("data/fundamentals/twt93u", recent_files=20),
     Item("data/corporate-actions/events.json"),
     Item("data/corporate-actions/raw/TPEx-exDailyQ"),  # 櫃買除權息原件＋SHA＋涵蓋區間（2016 起全留）
+    # 還原價的補充資料（ETF 分割、櫃買減資／面額變更、上市除權息現金股利）；第一次由 seeds/ 的種子起算。
+    Item("data/corporate-actions/capital-supplement.json"),
     Item("data/liquid-universe"),
     Item("data/market-screen-snapshots"),
     # G4-2W：跨日確認／波段狀態；EODHD／OFR 原件每天重取，VIX／SOX 不進 R2。

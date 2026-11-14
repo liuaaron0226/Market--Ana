@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from corporate_actions import fetch_all, months, parse_events, raw_file
+from corporate_actions import fetch_all, months, parse_events, raw_file, refresh_window
 from stock_history import Response
 
 # 逐字取自證交所 TWT49U 2016-06／07 官方回應
@@ -84,6 +84,63 @@ class CorporateActionTests(unittest.TestCase):
         fetch_all(self.out, '20200101', '20200101', get=fake.get, sleep=fake.sleep)
         [event] = [e for e in parse_events(self.out) if e['type'] == '減資']
         self.assertEqual((event['date'], event['code'], event['close_before'], event['reference']), ('2020-01-20', '3557', 38.05, 48.57))
+
+
+ROW_6669 = ['115年09月02日', '6669', '緯穎', '7,800.00', '2,614.99', '5,185.002642', '權', '2,875.00', '2,355.00', '2,615.00', '2,614.99', '6669,20260902', '', '321.78', '94.04']
+
+
+class RefreshWindowTests(unittest.TestCase):
+    """雲端每日更新：上市事件原本只在本機整月抓，雲端的 events.json 上市部分會停在上傳那天。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / 'events.json'
+        self.old = {'date': '2016-06-27', 'code': '2330', 'type': '除息', 'close_before': 159.0, 'reference': 153.0,
+                    'value': 6.0, 'limit_up': 168.0, 'limit_down': 138.0, 'source': 'TWT49U-201606.json.gz'}
+        self.otc = {'date': '2026-09-02', 'code': '6488', 'type': '除息', 'close_before': 400.0, 'reference': 390.0,
+                    'value': 10.0, 'limit_up': 429.0, 'limit_down': 351.0, 'source': 'TPEx-exDailyQ-2026-0101-1109.json'}
+        self.withdrawn = {'date': '2026-09-10', 'code': '1101', 'type': '除息', 'close_before': 30.0, 'reference': 29.0,
+                          'value': 1.0, 'limit_up': 31.9, 'limit_down': 26.1, 'source': 'TWT49U-202609.json.gz'}
+        self.path.write_text(json.dumps([self.old, self.otc, self.withdrawn], ensure_ascii=False), encoding='utf-8')
+
+    def test_window_of_listed_events_is_replaced_and_everything_else_is_kept(self):
+        fake = Fake({('TWT49U', '202608'): Response(200, 'application/json', payload(TWT49U_FIELDS, [ROW_6669]), 'u')})
+        summary = refresh_window(self.path, '2026-08-01', '2026-12-13', get=fake.get, sleep=fake.sleep)
+        self.assertIsNone(summary['stopped'])
+        self.assertEqual(fake.events, ['get', 3.0, 'get', 3.0, 'get'])
+        events = json.loads(self.path.read_text(encoding='utf-8'))
+        self.assertEqual([(e['date'], e['code'], e['source']) for e in events], [
+            ('2016-06-27', '2330', 'TWT49U-201606.json.gz'),
+            ('2026-09-02', '6488', 'TPEx-exDailyQ-2026-0101-1109.json'),
+            ('2026-09-02', '6669', 'TWT49U-202609.json.gz'),
+        ])
+        self.assertEqual(events[0], self.old)
+        self.assertEqual((events[2]['type'], events[2]['close_before'], events[2]['reference']), ('除權', 7800.0, 2614.99))
+
+    def test_a_row_the_official_table_lists_twice_becomes_one_event(self):
+        # 官方表真的會重複列同一筆（TWTAUU 2016-07 的 5906 出現兩次）。
+        fake = Fake({('TWT49U', '202608'): Response(200, 'application/json', payload(TWT49U_FIELDS, [ROW_6669, ROW_6669]), 'u')})
+        refresh_window(self.path, '2026-08-01', '2026-12-13', get=fake.get, sleep=fake.sleep)
+        events = json.loads(self.path.read_text(encoding='utf-8'))
+        self.assertEqual([e['code'] for e in events].count('6669'), 1)
+
+    def test_an_empty_answer_for_a_table_we_already_have_events_from_is_not_trusted(self):
+        # 官方站異常時也會回「沒有符合條件的資料」。已有事件的區間突然全空：不拿它清掉既有事件。
+        before = self.path.read_bytes()
+        fake = Fake({})
+        summary = refresh_window(self.path, '2026-08-01', '2026-12-13', get=fake.get, sleep=fake.sleep)
+        self.assertIn('TWT49U', summary['stopped'])
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_a_refused_table_leaves_the_shared_file_untouched(self):
+        before = self.path.read_bytes()
+        fake = Fake({('TWT49U', '202608'): Response(200, 'application/json', payload(TWT49U_FIELDS, [ROW_6669]), 'u'),
+                     ('TWTB8U', '202608'): Response(429, 'text/html', b'', 'u')})
+        summary = refresh_window(self.path, '2026-08-01', '2026-12-13', get=fake.get, sleep=fake.sleep)
+        self.assertIn('429', summary['stopped'])
+        self.assertEqual(self.path.read_bytes(), before)
+
 
 if __name__ == '__main__':
     unittest.main()

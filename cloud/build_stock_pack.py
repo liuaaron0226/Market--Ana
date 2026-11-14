@@ -488,6 +488,14 @@ def _security_row(item: ListedSecurity | OtcSecurity, status: str) -> dict:
     }
 
 
+def _unresolved_capital_failures(code: str, payload: dict) -> list[dict]:
+    """還原價缺官方數字而沒還原的事件：不擋這檔發布，只列進建置清單。"""
+    events = (payload.get("qa") or {}).get("unresolved_capital_events") or []
+    return [{"code": code, "scope": "price_adjustment", "error": "UnresolvedCapitalEvent",
+             "message": f"{event['date']} {event['type']} 未還原：{event.get('reason') or '原因未記錄'}"}
+            for event in events]
+
+
 def _build_rows(
     items: Sequence[ListedSecurity | OtcSecurity],
     data_date: str,
@@ -520,6 +528,7 @@ def _build_rows(
                 ):
                     raise ValueError("分析 payload 的資料日、市場別或 QA 不符")
                 analyses.append({"code": item.code, "as_of": payload["as_of"], "payload": payload})
+                failures.extend(_unresolved_capital_failures(item.code, payload))
             except Exception as error:
                 status = "unavailable"
                 failures.append({"code": item.code, "error": type(error).__name__, "message": str(error)[:200]})
@@ -652,7 +661,10 @@ def build_version(
         for row in securities:
             row["universe_rank"] = ranks.get(row["code"])
             row["universe_rule"] = universe["rule_version"]
-    analyses.extend(_compatibility_rows(data_date, analyzer))
+    compatibility = _compatibility_rows(data_date, analyzer)
+    analyses.extend(compatibility)
+    for row in compatibility:  # 0050 不在普通股名錄裡，但它的未還原事件同樣要進清單
+        failures.extend(_unresolved_capital_failures(row["code"], row["payload"]))
     status_counts = dict(sorted(Counter(row["analysis_status"] for row in securities).items()))
     market_status_counts = {
         market: dict(sorted(Counter(row["analysis_status"] for row in securities if row["market"] == market).items()))

@@ -119,28 +119,88 @@ def parse_events(out: Path) -> list[dict]:
     for source in SOURCES:
         for path in sorted((out / 'raw' / source).glob('*.json.gz')):
             payload = json.loads(gzip.decompress(path.read_bytes()).decode('utf-8'))
-            fields = payload.get('fields') or []
-            for row in payload.get('data') or []:
-                cell = dict(zip(fields, row))
-                if source == 'TWT49U':
-                    before, reference = number(cell['除權息前收盤價']), number(cell['除權息參考價'])
-                    kind = cell['權/息']
-                    events.append({'date': roc_date(cell['資料日期']), 'code': cell['股票代號'], 'type': f'除{kind}',
-                                   'close_before': before, 'reference': reference,
-                                   'value': number(cell['權值+息值']), 'limit_up': number(cell['漲停價格']),
-                                   'limit_down': number(cell['跌停價格']), 'source': path.name})
-                elif source == 'TWTB8U':
-                    before, reference = number(cell['停止買賣前收盤價格']), number(cell['恢復買賣參考價'])
-                    events.append({'date': roc_date(cell['恢復買賣日期']), 'code': cell['股票代號'], 'type': '變更面額',
-                                   'close_before': before, 'reference': reference, 'value': None,
-                                   'limit_up': number(cell['漲停價格']), 'limit_down': number(cell['跌停價格']), 'source': path.name})
-                else:
-                    events.append({'date': roc_date(cell['恢復買賣日期']), 'code': cell['股票代號'].strip(), 'type': '減資',
-                                   'close_before': number(cell['停止買賣前收盤價格']), 'reference': number(cell['恢復買賣參考價']),
-                                   'reason': cell.get('減資原因'), 'value': None,
-                                   'limit_up': number(cell['漲停價格']), 'limit_down': number(cell['跌停價格']), 'source': path.name})
+            events.extend(_payload_events(source, payload))
     events.sort(key=lambda e: (e['date'], e['code'], e['type']))
     return events
+
+
+def _payload_events(source: str, payload: dict) -> list[dict]:
+    """一份官方回應 → 事件。source 欄是該事件所屬的月檔檔名（月檔的月份就是事件日的月份）。"""
+    def source_name(day: str) -> str:
+        return f'{source}-{day[:4]}{day[5:7]}.json.gz'
+
+    events = []
+    fields = payload.get('fields') or []
+    for row in payload.get('data') or []:
+        cell = dict(zip(fields, row))
+        if source == 'TWT49U':
+            day = roc_date(cell['資料日期'])
+            before, reference = number(cell['除權息前收盤價']), number(cell['除權息參考價'])
+            kind = cell['權/息']
+            events.append({'date': day, 'code': cell['股票代號'], 'type': f'除{kind}',
+                           'close_before': before, 'reference': reference,
+                           'value': number(cell['權值+息值']), 'limit_up': number(cell['漲停價格']),
+                           'limit_down': number(cell['跌停價格']), 'source': source_name(day)})
+        elif source == 'TWTB8U':
+            day = roc_date(cell['恢復買賣日期'])
+            before, reference = number(cell['停止買賣前收盤價格']), number(cell['恢復買賣參考價'])
+            events.append({'date': day, 'code': cell['股票代號'], 'type': '變更面額',
+                           'close_before': before, 'reference': reference, 'value': None,
+                           'limit_up': number(cell['漲停價格']), 'limit_down': number(cell['跌停價格']),
+                           'source': source_name(day)})
+        else:
+            day = roc_date(cell['恢復買賣日期'])
+            events.append({'date': day, 'code': cell['股票代號'].strip(), 'type': '減資',
+                           'close_before': number(cell['停止買賣前收盤價格']), 'reference': number(cell['恢復買賣參考價']),
+                           'reason': cell.get('減資原因'), 'value': None,
+                           'limit_up': number(cell['漲停價格']), 'limit_down': number(cell['跌停價格']),
+                           'source': source_name(day)})
+    return events
+
+
+def refresh_window(events_path: Path, start: str, end: str, get: Callable = http_get,
+                   sleep: Callable = time.sleep) -> dict:
+    """抓 start..end（YYYY-MM-DD）的三張表，換掉 events.json 裡同區間的上市事件；其餘事件原樣保留。
+
+    每日更新用：不存月檔（當月檔中途抓到就不會再補）。三張表都成功才寫回；任何一張被擋就整份不動。
+    """
+    events = json.loads(events_path.read_text(encoding='utf-8')) if events_path.exists() else []
+    summary = {'requested': 0, 'stopped': None}
+    fetched = []
+    for source, url in SOURCES.items():
+        if summary['requested']:
+            sleep(MIN_INTERVAL_SECONDS)
+        summary['requested'] += 1
+        try:
+            response: Response = get(url, {'startDate': start.replace('-', ''), 'endDate': end.replace('-', ''),
+                                           'response': 'json'})
+        except Exception as error:  # noqa: BLE001 — 連線錯誤即停，不重試
+            summary['stopped'] = f'{source} 連線錯誤：{type(error).__name__}'
+            return summary
+        if response.status != 200:
+            summary['stopped'] = f'{source} HTTP {response.status}'
+            return summary
+        try:
+            payload = json.loads(response.content.decode('utf-8'))
+            rows = _payload_events(source, payload)
+        except (UnicodeDecodeError, json.JSONDecodeError, KeyError, ValueError, AttributeError, IndexError,
+                TypeError) as error:
+            summary['stopped'] = f'{source} 非預期回應（{type(error).__name__}）'
+            return summary
+        if not rows and any(str(event.get('source', '')).startswith(f'{source}-') and start <= event['date'] <= end
+                            for event in events):
+            summary['stopped'] = f'{source} 回空，但同區間原本有事件；不採用'
+            return summary
+        fetched += [row for index, row in enumerate(rows) if row not in rows[:index]]  # 官方表偶有重複列
+    listed_prefixes = tuple(f'{source}-' for source in SOURCES)
+    kept = [event for event in events
+            if not (str(event.get('source', '')).startswith(listed_prefixes) and start <= event['date'] <= end)]
+    merged = sorted(kept + [event for event in fetched if start <= event['date'] <= end],
+                    key=lambda e: (e['date'], e['code'], e['type']))
+    partial = events_path.with_name(events_path.name + '.partial')
+    partial.write_text(json.dumps(merged, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    os.replace(partial, events_path)
+    return {**summary, 'replaced': len(events) - len(kept), 'fetched': len(merged) - len(kept), 'total': len(merged)}
 
 
 def main() -> int:

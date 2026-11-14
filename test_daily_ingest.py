@@ -519,6 +519,61 @@ class OtcCorporateActionsTest(unittest.TestCase):
             self.assertTrue(oca.coverage_covers(oca.verified_coverage(raw_dir), "2025-01-01", "2025-01-06"))
 
 
+class CapitalChangeSourcesTest(unittest.TestCase):
+    """還原價需要的官方資料每天跟上：上市公司行動（events.json）與補充資料（capital-supplement.json）。"""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.events = self.root / "data/corporate-actions/events.json"
+        self.events.parent.mkdir(parents=True)
+        self.events.write_text("[]", encoding="utf-8")
+        self.calls: list[tuple[str, dict]] = []
+
+    def get(self, url, params):
+        from stock_history import Response
+        from test_capital_supplement import (PVCHG_FIELDS, REVIVT_FIELDS, ROW_0050, ROW_2464_DETAIL, TWTCAU_FIELDS,
+                                             detail, tpex, twse)
+        from test_corporate_actions import TWT49U_FIELDS
+        name = url.rsplit("/", 1)[-1]
+        self.calls.append((name, dict(params)))
+        mixed = ["115年09月02日", "2464", "盟立", "184.50", "182.30", "2.192145", "權息", "202.00", "164.50", "184.00",
+                 "184.02", "2464,20260902", "", "", ""]
+        body = {"TWT49U": twse(TWT49U_FIELDS, [mixed]), "TWTCAU": twse(TWTCAU_FIELDS, [ROW_0050]),
+                "revivt": tpex(REVIVT_FIELDS, []), "pvChgRslt": tpex(PVCHG_FIELDS, []),
+                "etfSplitRslt": tpex(PVCHG_FIELDS, []), "TWT49UDetail": detail([ROW_2464_DETAIL]),
+                }.get(name, json.dumps({"stat": "很抱歉，沒有符合條件的資料!"}, ensure_ascii=False).encode("utf-8"))
+        return Response(200, "application/json", body, url)
+
+    def test_listed_actions_are_refreshed_for_a_window_around_the_data_day(self) -> None:
+        result = di.listed_corporate_actions_day(self.root, "2026-09-10", get=self.get, sleep=lambda _: None)
+        self.assertEqual((result["status"], result["requests"]), ("refreshed", 3))
+        self.assertEqual({(name, p["startDate"], p["endDate"]) for name, p in self.calls},
+                         {(name, "20260727", "20261010") for name in ("TWT49U", "TWTB8U", "TWTAUU")})
+        [event] = json.loads(self.events.read_text(encoding="utf-8"))
+        self.assertEqual((event["code"], event["type"], event["source"]), ("2464", "除權息", "TWT49U-202609.json.gz"))
+
+    def test_supplement_follows_with_splits_and_the_cash_part_of_new_listed_ex_rights(self) -> None:
+        di.listed_corporate_actions_day(self.root, "2026-09-10", get=self.get, sleep=lambda _: None)
+        self.calls.clear()
+        result = di.capital_supplement_day(self.root, "2026-09-10", get=self.get, sleep=lambda _: None)
+        self.assertEqual((result["status"], result["requests"]), ("refreshed", 5))
+        saved = json.loads((self.root / "data/corporate-actions/capital-supplement.json").read_text(encoding="utf-8"))
+        self.assertEqual(saved["cash_dividends"], {"2464|2026-09-02": 0.471403})
+        self.assertEqual(saved["events"], [])  # 0050 的分割在 2025-06，不在這次的視窗內
+        again = di.capital_supplement_day(self.root, "2026-09-10", get=self.get, sleep=lambda _: None)
+        self.assertEqual(again["requests"], 4)
+
+    def test_a_refusal_is_reported_as_stopped_and_never_raises(self) -> None:
+        from stock_history import Response
+        refused = lambda url, params: Response(403, "text/html", b"", url)  # noqa: E731
+        self.assertEqual(di.listed_corporate_actions_day(self.root, "2026-09-10", get=refused, sleep=lambda _: None)["status"],
+                         "stopped")
+        self.assertEqual(di.capital_supplement_day(self.root, "2026-09-10", get=refused, sleep=lambda _: None)["status"],
+                         "stopped")
+
+
 class TradingCalendarTest(unittest.TestCase):
     def test_parses_official_holiday_schedule_roc_dates(self) -> None:
         payload = [{"Name": "國慶日", "Date": "1151009", "Weekday": "五", "Description": ""},

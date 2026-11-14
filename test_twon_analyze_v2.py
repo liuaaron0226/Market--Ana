@@ -6,6 +6,7 @@ import json
 import sqlite3
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 from twon_analysis.data import DEFAULT_DB, DEFAULT_OTC_DB
@@ -266,6 +267,67 @@ class LegacyUnitTests(unittest.TestCase):
         bars = self.bars([100 + (i % 9) for i in range(80)])
         legacy = structure(bars, indicators(bars))
         self.assertTrue({'pressure', 'support', 'sweet', 'defense', 'range_position', 'tolerance_pct'} <= set(legacy))
+
+
+class AdjustedPriceTests(unittest.TestCase):
+    """本人 2026-11-14「圖和判讀都用」：個股圖與均線、關卡、走勢、策略共用同一套還原價。"""
+
+    def setUp(self):
+        from datetime import date, timedelta
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.db = Path(self.tmp.name) / 'h.sqlite'
+        # 60 根：前 30 根在 400 元附近；第 31 根起一拆四，在 100 元附近。
+        self.days = [(date(2026, 1, 5) + timedelta(days=i)).isoformat() for i in range(60)]
+        self.closes = [400.0 + (i % 3) * 4 for i in range(30)] + [100.0 + (i % 3) for i in range(30)]
+        connection = sqlite3.connect(self.db)
+        connection.execute("""CREATE TABLE daily (date TEXT, code TEXT, name TEXT, kind TEXT, open REAL, high REAL, low REAL,
+                              close REAL, change_sign TEXT, change REAL, volume_shares INTEGER, trades INTEGER, turnover INTEGER,
+                              suspended INTEGER)""")
+        for day, close in zip(self.days, self.closes):
+            connection.execute("INSERT INTO daily VALUES (?, '9999', '測試', 'common', ?, ?, ?, ?, '+', 0.5, 1000, 1, 1, 0)",
+                               (day, close, close * 1.01, close * 0.99, close))
+        connection.commit()
+        connection.close()
+        self.split = {'date': self.days[30], 'code': '9999', 'type': '變更面額', 'close_before': self.closes[29],
+                      'reference': self.closes[29] / 4, 'source': 'TWTB8U-202602.json.gz'}
+
+    def analyze(self, capital_actions):
+        from twon_analysis.analyze_v2 import analyze_v2
+        return analyze_v2('9999', self.days[-1], db_path=self.db, otc_db_path=None, capital_actions=capital_actions)
+
+    def test_chart_bars_and_indicators_use_split_adjusted_prices(self):
+        result = self.analyze({'9999': [self.split]})
+        closes = [bar['close'] for bar in result['bars']]
+        self.assertEqual(len(closes), 60)
+        self.assertTrue(all(99 <= close <= 103 for close in closes), closes[:5])   # 圖上沒有 400 → 100 的斷崖
+        self.assertEqual(result['bars'][0]['volume'], 4000)                        # 成交量跟著還原
+        self.assertTrue(100 <= result['indicators']['ma60'] <= 102, result['indicators']['ma60'])  # 判讀用同一套價格
+        self.assertEqual(result['quote']['close'], self.closes[-1])                # 最新一根是實際成交價
+        self.assertEqual(result['qa'].get('unresolved_capital_events'), [])
+        self.assertEqual(result['labels']['price_basis'], '分割、減資、配股已還原；現金股利未還原')
+
+    def test_event_that_cannot_be_resolved_is_reported_and_prices_stay_as_traded(self):
+        announced = {**self.split, 'reference': None}
+        result = self.analyze({'9999': [announced]})
+        self.assertEqual(result['bars'][0]['close'], 400.0)
+        self.assertEqual(result['qa']['unresolved_capital_events'],
+                         [{'date': self.days[30], 'type': '變更面額', 'reason': '缺官方參考價或現金股利'}])
+
+    def test_institutional_share_counts_follow_the_same_adjustment_as_volume(self):
+        # 成交量還原成拆分後的股數，法人買賣超（同樣是股數）不跟著換算的話，事件日前後單位就混在一起。
+        rows = [{'date': self.days[29], 'foreign': 1000, 'trust': -301, 'dealer': 50, 'total': 749},
+                {'date': self.days[30], 'foreign': 4000, 'trust': -1200, 'dealer': 200, 'total': 3000}]
+        with unittest.mock.patch('twon_analysis.analyze_v2.institutional_series', return_value=rows):
+            result = self.analyze({'9999': [self.split]})
+        self.assertEqual(result['institutional'], [
+            {'date': self.days[29], 'foreign': 4000, 'trust': -1204, 'dealer': 200, 'total': 2996},
+            {'date': self.days[30], 'foreign': 4000, 'trust': -1200, 'dealer': 200, 'total': 3000}])
+
+    def test_default_reads_the_capital_events_of_the_data_root(self):
+        with unittest.mock.patch('twon_analysis.analyze_v2.default_capital_events', return_value={'9999': [self.split]}):
+            result = self.analyze(None)
+        self.assertEqual(result['bars'][0]['close'], 100.0)
 
 
 class BlockingTests(unittest.TestCase):

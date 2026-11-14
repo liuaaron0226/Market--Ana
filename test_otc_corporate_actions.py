@@ -132,6 +132,18 @@ class FetchAndMergeTest(unittest.TestCase):
             self.assertEqual({e["code"] for e in merged}, {"2330", "00950B"})
             self.assertFalse(events_path.with_name(events_path.name + ".partial").exists())
 
+    def test_cash_dividends_of_same_day_rights_and_dividend_come_from_the_verified_raw_files(self) -> None:
+        # 還原價只還原配股那部分：需要「除權息」同日事件的每股現金股利。純除息、純除權不列。
+        with tempfile.TemporaryDirectory() as tmp:
+            raw = Path(tmp) / "raw"
+            oca.fetch_periods(raw, [("2025", "2025-01-01", "2025-12-31")],
+                              get=lambda *_: _Response(payload(ETF_DIVIDEND, COMMON_RIGHT, COMMON_BOTH)),
+                              sleep=lambda _: None)
+            self.assertEqual(oca.cash_dividends(raw), {"6488|2025-07-01": 10.0})
+            (raw / "TPEx-exDailyQ-2025.json").write_bytes(payload(COMMON_BOTH))  # 原件被改動：SHA 不符就不採用
+            with self.assertRaises(ValueError):
+                oca.cash_dividends(raw)
+
     def test_merge_replaces_only_prior_tpex_events_and_never_changes_listed_events(self) -> None:
         listed = {"date": "2025-01-02", "code": "2330", "type": "除息", "close_before": 1000.0,
                   "reference": 995.0, "value": 5.0, "limit_up": 1094.0, "limit_down": 896.0,

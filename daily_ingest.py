@@ -670,10 +670,56 @@ def otc_corporate_actions_day(root: Path, day: str, *, get: Callable | None = No
             "requests": summary["requested"], "events": events}
 
 
+# ---- 還原價要用的股本變動資料（上市公司行動＋補充資料） ----
+
+# 視窗：資料日前 45 天到後 30 天。往前涵蓋停牌換發與補登，往後帶入已公告的恢復買賣日。
+CAPITAL_WINDOW_BEFORE, CAPITAL_WINDOW_AFTER = 45, 30
+
+
+def _capital_window(day: str) -> tuple[str, str]:
+    base = date.fromisoformat(day)
+    return ((base - timedelta(days=CAPITAL_WINDOW_BEFORE)).isoformat(),
+            (base + timedelta(days=CAPITAL_WINDOW_AFTER)).isoformat())
+
+
+def listed_corporate_actions_day(root: Path, day: str, *, get: Callable | None = None,
+                                 sleep: Callable = time.sleep) -> dict:
+    """更新共同 events.json 的上市事件（除權息、面額變更、減資）。雲端原本只有櫃買會每天更新。"""
+    import corporate_actions as ca
+
+    start, end = _capital_window(day)
+    summary = ca.refresh_window(root / "data/corporate-actions/events.json", start, end,
+                                get=get or ca.http_get, sleep=sleep)
+    if summary["stopped"]:
+        return {"status": "stopped", "reason": summary["stopped"], "requests": summary["requested"]}
+    return {"status": "refreshed", "requests": summary["requested"], "window": [start, end],
+            "events": {key: summary[key] for key in ("replaced", "fetched", "total")}}
+
+
+def capital_supplement_day(root: Path, day: str, *, get: Callable | None = None,
+                           sleep: Callable = time.sleep) -> dict:
+    """更新還原價的補充資料：ETF 分割、櫃買減資與面額變更、上市除權息的現金股利。"""
+    import capital_supplement as cs
+
+    start, end = _capital_window(day)
+    events_path = root / "data/corporate-actions/events.json"
+    events = json.loads(events_path.read_text(encoding="utf-8")) if events_path.exists() else []
+    otc_raw = root / "data/corporate-actions/raw/TPEx-exDailyQ"
+    summary = cs.refresh(root / "data/corporate-actions/capital-supplement.json", events, start, end,
+                         seed=root / "seeds/capital-supplement.json", get=get or cs.http_get, sleep=sleep,
+                         otc_raw_dir=otc_raw if otc_raw.exists() else None)
+    result = {"requests": summary["requested"], "window": [start, end], "events": summary["events"],
+              "cash_dividends": summary["cash_dividends"], "missing_details": summary["missing_details"]}
+    if summary["stopped"]:
+        return {"status": "stopped", "reason": summary["stopped"], **result}
+    return {"status": "refreshed", **result}
+
+
 # ---- 每日協調器呼叫的兩個入口 ----
 
 REQUIRED_DATASETS = ("listed_quotes", "otc_quotes", "listed_institutional", "otc_institutional")
 OPTIONAL_DATASETS = ("otc_index", "twse_valuation", "tpex_valuation", "otc_corporate_actions",
+                     "listed_corporate_actions", "capital_supplement",
                      "fundamentals", "taiex_index", "listed_chip_detail")
 
 
@@ -769,6 +815,14 @@ def fetch_day(day: str, *, root: Path = ROOT, sleep: Callable = time.sleep, incl
                                                        data / "valuation-history/valuation.sqlite", day, sleep=sleep))
     _interval(datasets["tpex_valuation"], sleep)
     timed("otc_corporate_actions", lambda: otc_corporate_actions_day(root, day, sleep=sleep))
+    # 還原價用的股本變動：先更新上市事件，補充資料才看得到今天新出現的除權息。兩者都是非必要資料集，失敗不擋發布。
+    # 這兩個每次都會打證交所與櫃買（視窗內的官方表會補登、更正，不能用「已有就不抓」）。前一個資料集就算
+    # 沒發請求、或出錯沒回 requests，也固定等 5 秒：不靠別人的回報來判斷離上一個同站請求多久。
+    sleep(5.0)
+    timed("listed_corporate_actions", lambda: listed_corporate_actions_day(root, day, sleep=sleep))
+    sleep(5.0)
+    timed("capital_supplement", lambda: capital_supplement_day(root, day, sleep=sleep))
+    sleep(5.0)
     timed("listed_chip_detail", lambda: {"status": "ok", "datasets": listed_chip_detail_day(root, day, sleep=sleep)})
     if include_fundamentals:
         timed("fundamentals", lambda: fundamentals_day(data / "fundamentals-history", day))

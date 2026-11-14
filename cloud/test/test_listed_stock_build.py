@@ -270,6 +270,17 @@ class VersionActivationTests(unittest.TestCase):
         self.assertEqual({k: v for k, v in bad.items() if k != "strategy"}, core)
         _check_payload("1102", bad)
 
+    def test_unresolved_capital_events_are_listed_in_the_build_report(self) -> None:
+        # 該還原卻缺官方數字的事件：該檔照常發布（價格維持實際成交價），但建置清單要看得到是哪一檔、哪一天。
+        from cloud.build_stock_pack import _unresolved_capital_failures
+        payload = analysis()["payload"]
+        self.assertEqual(_unresolved_capital_failures("1102", payload), [])
+        payload["qa"]["unresolved_capital_events"] = [
+            {"date": "2026-09-02", "type": "除權息", "reason": "缺官方參考價或現金股利"}]
+        self.assertEqual(_unresolved_capital_failures("1102", payload), [
+            {"code": "1102", "scope": "price_adjustment", "error": "UnresolvedCapitalEvent",
+             "message": "2026-09-02 除權息 未還原：缺官方參考價或現金股利"}])
+
     def test_strategy_isolation_never_hides_core_data_defects(self) -> None:
         from cloud.build_stock_pack import _check_payload, _isolate_strategy
         payload = analysis()["payload"]
