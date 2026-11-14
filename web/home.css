@@ -719,3 +719,105 @@ body.hm dialog.hm-search :is(.stock-search-suggestions, .stock-search-status, .s
   body.hm .brand-line h1 { font-size: 16px; }
   body.hm .hm-cats button { font-size: 12px; line-height: 1.25; text-wrap: balance; }
 }
+
+/* ================= 資金地形（立體重設計 B 包，本人 2026-11-14 定案的方向） =================
+   每個產業一棟樓，樓高＝今日成交額，四個街區＝四個資金狀態；結構由 terrain.js 產生。
+   這裡是真的立體幾何：樓的厚度是 3D 的面、落影是壓在地面上的模糊色塊，
+   所以不走 bold.css 的陰影變數（那是給平面的板用的）；顏色、圓角、浮板仍然引用變數。 */
+body.hm .terrain { position: relative; margin-top: 16px; }
+body.hm .terrain [data-quadrant="leading"] { --q: var(--q-leading); }
+body.hm .terrain [data-quadrant="weakening"] { --q: var(--q-weakening); }
+body.hm .terrain [data-quadrant="improving"] { --q: var(--q-improving); }
+body.hm .terrain [data-quadrant="lagging"] { --q: var(--q-lagging); }
+
+body.hm .terrain-stage {
+  position: relative; height: 600px;
+  touch-action: pan-y; cursor: grab; user-select: none; -webkit-user-select: none;
+  overflow: hidden; /* 立體的面轉出去的部分不能撐出橫向捲動 */
+}
+body.hm .terrain-stage.is-dragging { cursor: grabbing; }
+/* 透視、視角（--rx、--rz）、縮放（--s）與位置都由 terrain.js 設定 */
+body.hm .terrain-city {
+  --rx: 57deg; --rz: 34deg; --s: 1;
+  position: absolute; left: 50%; top: 50%; width: 0; height: 0; transform-style: preserve-3d;
+  transform: scale3d(var(--s), var(--s), var(--s)) rotateX(var(--rx)) rotateZ(var(--rz));
+}
+body.hm .terrain-city * { position: absolute; transform-style: preserve-3d; }
+
+/* 街區：一塊有厚度的地面，名稱寫在地面上 */
+body.hm .terrain-ground { border-radius: var(--r-slab); background: var(--key); }
+body.hm .terrain-ground::before {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; background: var(--edge); transform: translateZ(-7px);
+}
+body.hm .terrain-ground::after {
+  content: ""; position: absolute; inset: 6px -4px -4px 6px; border-radius: var(--r-slab);
+  background: rgb(var(--shade) / calc(.3 * var(--shade-k))); filter: blur(14px);
+  transform: translateZ(-8px) translate(10px, -10px);
+}
+body.hm .terrain-ground-label {
+  color: var(--ink); font: 700 min(calc(18px / var(--s)), 24px)/1 var(--sans); white-space: nowrap;
+  transform: translateZ(.6px);
+}
+
+/* 樓：頂面加四個側面，一開始壓扁，進到畫面才長出來 */
+body.hm .terrain-tower {
+  left: calc(var(--x) - var(--w) / 2); top: calc(var(--y) - var(--w) / 2); width: var(--w); height: var(--w);
+  --tone: color-mix(in srgb, var(--q), var(--key) var(--fade, 0%));
+  transform: translateZ(var(--raise, 0px)) scale3d(1, 1, var(--grow, .001));
+  transition: transform 900ms var(--ease-depth); transition-delay: calc(var(--i) * 26ms);
+  cursor: pointer; outline: none;
+}
+body.hm .terrain-city.is-grown .terrain-tower { --grow: 1; }
+body.hm .terrain-city.is-settled .terrain-tower { transition-delay: 0s; transition-duration: 400ms; }
+body.hm .terrain-city.has-selection .terrain-tower:not(.is-selected) { --fade: 58%; }
+body.hm .terrain-tower.is-selected { --raise: 12px; }
+body.hm .terrain-tower .face { transition: background-color 300ms var(--ease-out); }
+body.hm .terrain-tower .top {
+  inset: 0; transform: translateZ(var(--h)); border-radius: 2px;
+  background: color-mix(in srgb, var(--tone), #fff 14%);
+}
+body.hm .terrain-tower:focus-visible .top { outline: 3px solid var(--accent); outline-offset: 2px; }
+body.hm .terrain-tower :is(.south, .north) { left: 0; width: 100%; height: var(--h); transform-origin: 50% 100%; transform: rotateX(-90deg); }
+body.hm .terrain-tower .south { bottom: 0; background: linear-gradient(to top, rgb(0 0 0 / 16%), transparent 45%), color-mix(in srgb, var(--tone), #000 6%); }
+body.hm .terrain-tower .north { top: calc(-1 * var(--h)); background: color-mix(in srgb, var(--tone), #000 30%); }
+body.hm .terrain-tower :is(.east, .west) { top: 0; width: var(--h); height: 100%; transform-origin: 0 50%; transform: rotateY(-90deg); }
+body.hm .terrain-tower .east { left: 100%; background: linear-gradient(to right, rgb(0 0 0 / 16%), transparent 45%), color-mix(in srgb, var(--tone), #000 24%); }
+body.hm .terrain-tower .west { left: 0; background: linear-gradient(to right, rgb(0 0 0 / 16%), transparent 45%), color-mix(in srgb, var(--tone), #000 13%); }
+body.hm .terrain-tower .shade {
+  left: 50%; top: 50%; width: calc(var(--w) * 1.15); height: calc(var(--w) * .6 + var(--h) * .42);
+  transform: translate(-50%, -100%) rotate(45deg) translateZ(.4px); transform-origin: 50% 100%;
+  background: linear-gradient(to top, rgb(var(--shade) / calc(.34 * var(--shade-k))), rgb(var(--shade) / 0));
+  filter: blur(6px); pointer-events: none;
+}
+/* 名稱牌：畫在街區上面的平面層，位置由 terrain.js 對到樓頂；永遠正對畫面，不會被前面的樓擋住 */
+body.hm .terrain-tags { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity 300ms var(--ease-out) 600ms; }
+body.hm .terrain-stage.is-grown .terrain-tags { opacity: 1; }
+body.hm .terrain-tag {
+  position: absolute; left: 0; top: 0; padding: 5px 8px; border-radius: var(--r-key);
+  background: var(--float); color: var(--ink); font: 700 12.5px/1 var(--sans); white-space: nowrap;
+  box-shadow: var(--key-shadow);
+}
+
+/* 點樓的明細：第 2 層的浮板，桌機浮在地形角落 */
+body.hm .terrain-detail {
+  position: absolute; z-index: 2; right: 0; top: 0; min-width: 216px; padding: 14px 16px;
+  border-radius: var(--r-float); background: var(--float); box-shadow: var(--float-shadow);
+  opacity: 0; transform: translateY(8px) scale(.96); transform-origin: 50% 100%; pointer-events: none;
+  transition: opacity 160ms var(--ease-out), transform 380ms var(--ease-depth);
+}
+body.hm .terrain.has-selection .terrain-detail { opacity: 1; transform: none; }
+body.hm .terrain-detail-state { display: flex; align-items: center; gap: 8px; color: var(--dim); font: 500 13px var(--sans); }
+body.hm .terrain-detail-state::before { content: ""; width: 10px; height: 10px; border-radius: var(--r-tag); background: var(--q); }
+body.hm .terrain-detail h4 { margin: 6px 0 10px; font: 600 18px/1.3 var(--serif); color: var(--ink); }
+body.hm .terrain-detail dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 18px; margin: 0; font-size: 13px; }
+body.hm .terrain-detail dt { color: var(--dim); }
+body.hm .terrain-detail dd { margin: 0; text-align: right; color: var(--ink); }
+
+@media (max-width: 860px) {
+  body.hm .terrain-stage { height: 300px; }
+  body.hm .terrain-tag { padding: 4px 6px; font-size: 11px; }
+  body.hm .terrain-tag.minor { display: none; }
+  /* 手機：明細排在街區下方，不蓋住街區 */
+  body.hm .terrain-detail { position: static; display: none; width: min(100%, 320px); margin: 4px auto 0; }
+  body.hm .terrain.has-selection .terrain-detail { display: block; }
+}
