@@ -348,3 +348,26 @@ test('短合成序列與週K／月K／60分K標籤共用手勢路徑都不把有
     assertHealthy(chart, drawnText, `${scenario.unit}K縮回與平移`);
   }
 });
+
+// 「取消選取」鍵拿掉之後（本人 2026-11-15），取消的方式是再點一次同一根。
+test('再點一次同一根 K 棒就取消選取；點另一根則改選那一根', () => {
+  const { chart, canvas } = createChart();
+  let cleared = 0;
+  chart.opts.onClear = () => { cleared += 1; };
+  const tap = x => {
+    canvas.dispatch('pointerdown', { pointerId: 1, clientX: x, clientY: 100 });
+    canvas.dispatch('pointerup', { pointerId: 1, clientX: x, clientY: 100 });
+  };
+  tap(150);
+  const first = chart.selection;
+  assert.ok(first >= 0, '第一次點：選取');
+  tap(150);
+  assert.equal(chart.selection, -1, '再點同一根：取消選取');
+  assert.equal(chart.hover, -1, '十字線跟著收掉');
+  assert.equal(cleared, 1, '通知頁面選取已取消');
+  tap(150);
+  assert.equal(chart.selection, first, '取消之後再點：重新選取');
+  tap(220);
+  assert.ok(chart.selection >= 0 && chart.selection !== first, '點另一根：改選那一根');
+  assert.equal(cleared, 1, '改選不算取消');
+});

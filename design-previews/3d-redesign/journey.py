@@ -40,26 +40,61 @@ def no_overflow(page: Page) -> bool:
     return page.evaluate("document.documentElement.scrollWidth - innerWidth") == 0
 
 
+STUDY_CHIP = "#chartStudies .kc-study-pane:not([hidden]) .chart-chip"
+
+
 def study_pressed(page: Page, study: str) -> bool:
-    """指標切換鈕本身就寫著指標名稱，所以要看的是它有沒有變成選中，不是畫面上有沒有那幾個字。"""
+    """指標收在指標名稱的選單裡：先點名稱，再從浮出的選單選。看的是那一項有沒有變成選中。"""
     button = page.locator(f".kc-study-choice[data-study='{study}']")
+    page.locator(STUDY_CHIP).click()
     button.click()
     page.wait_for_timeout(200)
     return button.get_attribute("aria-pressed") == "true"
 
 
-# 週期切換的選中狀態是一塊凸起的滑塊（畫在切換軌道上的那一塊）。量它實際停的位置，和被選中的鈕比。
-THUMB_ON_CHECKED = """value => {
-  const button = document.querySelector(`.hm-period button[data-value='${value}']`);
-  const track = button.closest('.hm-period-seg');
-  const thumb = getComputedStyle(track, '::before');
-  if (thumb.content === 'none' || Number(thumb.opacity) === 0) return 'no thumb';
-  const shift = new DOMMatrixReadOnly(thumb.transform === 'none' ? '' : thumb.transform).m41;
-  const trackBox = track.getBoundingClientRect(), box = button.getBoundingClientRect();
-  const left = trackBox.left + parseFloat(getComputedStyle(track).borderLeftWidth) + parseFloat(thumb.left) + shift;
-  const off = Math.max(Math.abs(left - box.left), Math.abs(parseFloat(thumb.width) - box.width));
-  return off <= 1.5 ? 'ok' : `off by ${off.toFixed(1)}px`;
-}"""
+def pick_period(page: Page, value: str) -> str:
+    """週期收在標題旁的小鍵裡：先點小鍵，再從浮出的選單選。回傳選完之後小鍵上寫的字。"""
+    chip = page.locator(".hm-period .chart-chip")
+    chip.click()
+    page.locator(f".hm-period [data-value='{value}']").click()
+    return chip.inner_text().strip()
+
+
+# 畫面上看得到幾個（收起來的選單裡的按鈕不算）
+VISIBLE_COUNT = "selector => [...document.querySelectorAll(selector)].filter(e => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden').length"
+
+
+def tucked_controls(page: Page, tag: str, periods: list[str], studies: list[str]) -> None:
+    """週期與指標平常收著，點圖上的小鍵才浮出選單；選了、按 Esc、點選單外面都會收回。首頁與個股頁共用。"""
+    def count(selector: str) -> int:
+        return page.evaluate(VISIBLE_COUNT, selector)
+
+    gone = [selector for selector in ("#zoomIn", "#zoomOut", "#chartToolsToggle", ".kc-study-clear", ".hm-period-cap") if page.locator(selector).count()]
+    check(f"{tag}：平常看不到週期與指標的整排按鈕；縮放鍵、圖表工具、取消選取、週期分組都拿掉了",
+          count(".hm-period [data-value]") == 0 and count("#chartStudies .kc-study-choice") == 0 and not gone, gone)
+
+    period = page.locator(".hm-period .chart-chip")
+    period.scroll_into_view_if_needed()
+    period.click()
+    shown = [name.strip() for name in page.locator(".hm-period [data-value]").all_inner_texts()]
+    box = page.locator("#periodMenu").bounding_box()
+    inside = box["x"] >= 0 and box["x"] + box["width"] <= page.viewport_size["width"]
+    check(f"{tag}：點週期小鍵浮出全部 {len(periods)} 個週期，排成一份、整個選單在畫面內",
+          shown == periods and count(".hm-period [data-value]") == len(periods) and inside, [shown, box])
+    page.keyboard.press("Escape")
+    by_escape = count(".hm-period [data-value]") == 0
+    period.click()
+    page.locator("#chartContext, #stockChartContext").first.click()
+    check(f"{tag}：按 Esc 或點選單外面，週期選單收回", by_escape and count(".hm-period [data-value]") == 0)
+
+    page.locator(STUDY_CHIP).click()
+    shown = [name.strip() for name in page.locator("#chartStudies .kc-study-choice").all_inner_texts()]
+    opened = shown == studies and count("#chartStudies .kc-study-choice") == len(studies)
+    page.locator(".kc-study-choice[data-study='macd']").click()
+    title = page.locator("#chartStudies .kc-study-pane:not([hidden]) .kc-study-title").inner_text().strip()
+    check(f"{tag}：點指標名稱浮出 {len(studies)} 種指標，選了就收回、名稱換成選的那一種",
+          opened and count("#chartStudies .kc-study-choice") == 0 and title.startswith("MACD"), [shown, title])
+    study_pressed(page, "volume")
 
 
 # 目前顯示的那一個指標區（一次只顯示一種）。下面幾段檢查共用。
@@ -83,13 +118,11 @@ STUDY_NAME_ONLY = """() => {
   const extra = [...pane.querySelectorAll('.kc-study-readout, .kc-study-legend')].filter(seen);
   return extra.length ? 'still shows ' + extra.map(e => e.className).join(', ') : 'ok';
 }""" % ACTIVE_STUDY
-# 由上到下：K 線、指標區、切換鍵；有給 under_keys 的話（首頁手機的收復線／防守線與詳情鈕），它要再排在切換鍵下面。
-STUDY_ORDER = """under_keys => {
+# 首頁手機：指標區下面直接就是收復線／防守線那一列，中間沒有一排切換鍵或別的按鈕。
+STUDY_THEN = """under => {
   %s
-  const bottom = pane.querySelector('canvas').getBoundingClientRect().bottom, keys = document.querySelector('#chartStudies .kc-study-switcher').getBoundingClientRect();
-  if (keys.top < bottom - 1) return 'switch keys are not below the indicator area';
-  const actions = under_keys && document.querySelector(under_keys).getBoundingClientRect();
-  return !actions || actions.top >= keys.bottom - 1 ? 'ok' : 'chart actions are not below the switch keys';
+  const gap = document.querySelector(under).getBoundingClientRect().top - pane.querySelector('canvas').getBoundingClientRect().bottom;
+  return gap >= -1 && gap <= 24 ? 'ok' : `gap ${gap.toFixed(1)}px`;
 }""" % ACTIVE_STUDY
 # 選取 K 棒之後畫布上多出來的東西：十字線，加上那一天的數值（標在右側）與日期（標在時間軸）。當天明細的浮窗已經拿掉。
 # 先記下選取前兩張畫布（K 線、指標區）的樣子，選取後逐欄比出多了什麼：
@@ -134,7 +167,7 @@ def chart_point(page: Page, host: str, across: float, down: float) -> tuple[floa
     return box["x"] + box["width"] * across, box["y"] + box["height"] * down
 
 
-def joined_chart(page: Page, tag: str, host: str, names: list[str], under_keys: str | None) -> None:
+def joined_chart(page: Page, tag: str, host: str, names: list[str], under_study: str | None) -> None:
     """K 線和指標是同一個圖框：這幾項檢查首頁與個股頁共用。names 是切換鍵由左到右的名稱。"""
     keys = page.locator("#chartStudies .kc-study-choice")
     labels = [label.strip() for label in keys.all_inner_texts()]
@@ -146,8 +179,9 @@ def joined_chart(page: Page, tag: str, host: str, names: list[str], under_keys: 
     check(f"{tag}：指標區接在 K 線正下方、左緣對齊", joined == "ok", joined)
     name_only = page.evaluate(STUDY_NAME_ONLY)
     check(f"{tag}：指標區左上角只寫指標名稱，沒有讀數與圖例", name_only == "ok", name_only)
-    order = page.evaluate(STUDY_ORDER, under_keys)
-    check(f"{tag}：切換鍵排在整張圖下方" + ("，收復線／防守線與詳情再往下" if under_keys else ""), order == "ok", order)
+    if under_study:
+        then = page.evaluate(STUDY_THEN, under_study)
+        check(f"{tag}：指標區下面直接是收復線／防守線，中間沒有一排切換鍵", then == "ok", then)
 
 
 CATS = dict(zip(shoot.HOME_CATS, ("籌碼與資金", "籌碼選股", "產業資金流向", "長期核心持有")))
@@ -224,7 +258,7 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
         check(f"{tag}：剛進首頁四類都收著", len(shown) == 4 and not any(shown.values()), shown)
         check(f"{tag}：剛進首頁搜尋板收著、主圖與指標副圖看得到",
               not page.locator("#stockSearchInput").is_visible() and page.locator("#mainChart canvas").first.is_visible()
-              and page.locator("#chartStudies .kc-study-switcher").is_visible())
+              and page.locator("#chartStudies .kc-study-pane:not([hidden]) canvas").is_visible())
         open_cat(page, "chips")
         open_cat(page, "screens")
         shown = page.evaluate(CATS_VISIBLE)
@@ -243,22 +277,33 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
     step(f"{tag}：首頁分類收合", folded)
 
     def periods() -> None:
-        thumb = []
+        chips = []
         for value, label in (("weekly", "週"), ("monthly", "月"), ("daily", "日")):
-            page.locator(f".hm-period button[data-value='{value}']").click()
+            chips.append(pick_period(page, value))
             page.wait_for_function("label => document.getElementById('chartContext').textContent.includes(label)", arg=label)
-            thumb.append(f"{label}：{page.evaluate(THUMB_ON_CHECKED, value)}")
         check(f"{tag}：週期切換日／週／月", True)
-        check(f"{tag}：週期滑塊停在選中的週期上", all(item.endswith("ok") for item in thumb), thumb)
+        check(f"{tag}：週期小鍵寫著現在的週期", chips == ["週K", "月K", "日K"], chips)
     step(f"{tag}：週期切換", periods)
+    step(f"{tag}：控制項收納", lambda: tucked_controls(page, tag, ["1分", "5分", "15分", "60分", "日", "週", "月"], ["成交金額", "MACD", "KD", "RSI"]))
 
-    def zoom() -> None:
-        if mobile:
-            page.locator("#chartToolsToggle").click()
-        page.locator("#zoomIn").click()
-        page.locator("#zoomOut").click()
-        check(f"{tag}：K 線縮放鈕可按、圖還在", page.locator("#mainChart canvas").count() >= 1)
-    step(f"{tag}：K 線縮放", zoom)
+    def reset_view() -> None:
+        # 縮放鍵拿掉了（改用捏合、滾輪、鍵盤）；「回到最新」只在圖被拖離最新一天時才浮在圖的角落。
+        button = page.locator("#resetView")
+        hidden_first = not button.is_visible()
+        x, y = chart_point(page, "#mainChart", 0.5, 0.5)
+        page.mouse.move(x, y)
+        page.mouse.down()
+        page.mouse.move(x + 160, y, steps=8)
+        page.mouse.up()
+        button.wait_for(state="visible")
+        stage, box = page.locator("#chartStage").bounding_box(), button.bounding_box()
+        inside = (box["x"] >= stage["x"] and box["y"] >= stage["y"] and box["x"] + box["width"] <= stage["x"] + stage["width"]
+                  and box["y"] + box["height"] <= stage["y"] + stage["height"])
+        button.click()
+        check(f"{tag}：「回到最新」平常不出現；把圖拖離最新一天才浮在圖的角落，按了就收回",
+              hidden_first and inside and not button.is_visible(), [hidden_first, stage, box])
+        page.mouse.move(4, 4)
+    step(f"{tag}：回到最新", reset_view)
 
     def studies() -> None:
         check(f"{tag}：指標切到 MACD", study_pressed(page, "macd"))
@@ -306,9 +351,14 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
         check(f"{tag}：右側標的是選取那一天的開、高、低、收", names == ["開", "高", "低", "收"] and same_day
               and all(item["text"].replace(",", "").replace(".", "").isdigit() for item in picked["tags"]), picked)
         if mobile:
-            # 選取之後切換鍵下面會多一顆「取消選取」，收復線／防守線與詳情鈕仍然要在切換鍵下面。
-            order = page.evaluate(STUDY_ORDER, "#chartActions")
-            check(f"{tag}：選取 K 棒後，收復線／防守線與詳情仍在切換鍵下面", order == "ok", order)
+            # 「取消選取」鍵拿掉了：再點一次同一根就取消（十字線、右側數值、詳情鈕都收掉），然後再點回來繼續。
+            page.touchscreen.tap(x, y)
+            page.wait_for_timeout(250)
+            main, study = page.evaluate(PICKED_MARKS, "#mainChart")
+            check(f"{tag}：再點一次同一根 K 棒就取消選取",
+                  not page.locator("#mobileCandleDetails").is_visible() and main.get("cover") == 0 and main.get("rail") == 0 and study.get("rail") == 0, [main, study])
+            page.touchscreen.tap(x, y)
+            page.locator("#mobileCandleDetails").wait_for(state="visible")
         if mobile:
             page.locator("#mobileCandleDetails").click()
         else:
@@ -524,16 +574,30 @@ def stock(page: Page, base: str, tag: str, mobile: bool) -> None:
     check(f"{tag}：價位階梯五列都有價位", len(ladder) == 5 and all(text.strip() not in ("", "—") for text in ladder), ladder)
 
     def periods() -> None:
+        chips = []
         for value, label in (("weekly", "週K"), ("monthly", "月K"), ("daily", "日K")):
-            page.locator(f".hm-period button[data-value='{value}']").click()
+            chips.append(pick_period(page, value))
             page.wait_for_function("label => document.getElementById('stockChartContext').textContent.includes(label)", arg=label)
         check(f"{tag}：週期切換日／週／月", True)
+        check(f"{tag}：週期小鍵寫著現在的週期", chips == ["週K", "月K", "日K"], chips)
     step(f"{tag}：週期切換", periods)
+    step(f"{tag}：控制項收納", lambda: tucked_controls(page, tag,
+         ["1秒", "5秒", "10秒", "15秒", "30秒", "1分K", "5分K", "15分K", "60分K", "日K", "週K", "月K"], ["成交量", "MACD", "KD", "RSI", "外資", "投信", "自營商"]))
 
     def averages() -> None:
-        before = page.locator("#maControls input").count()
+        # 均線設定收在一枚小鍵裡：小鍵寫著現在的期數，點了才浮出設定板。
+        chip, inputs = page.locator("#maChip"), page.locator("#maControls input")
+        before, label = inputs.count(), chip.inner_text().strip()
+        periods_now = inputs.evaluate_all("nodes => nodes.map(node => node.value)")
+        check(f"{tag}：平常看不到均線的輸入框，小鍵寫著現在的期數",
+              page.evaluate(VISIBLE_COUNT, "#maControls input") == 0 and all(period in label for period in periods_now) and before >= 1, [label, periods_now])
+        chip.click()
         page.locator("#addMa").click()
-        check(f"{tag}：新增均線", page.locator("#maControls input").count() == before + 1)
+        check(f"{tag}：新增均線", inputs.count() == before + 1)
+        added = inputs.evaluate_all("nodes => nodes.map(node => node.value)")
+        check(f"{tag}：新增之後小鍵跟著寫出新的期數", all(period in chip.inner_text() for period in added), [chip.inner_text(), added])
+        page.keyboard.press("Escape")
+        check(f"{tag}：按 Esc 收回均線設定板", page.evaluate(VISIBLE_COUNT, "#maControls input") == 0)
     step(f"{tag}：均線", averages)
 
     def studies() -> None:
@@ -553,6 +617,15 @@ def stock(page: Page, base: str, tag: str, mobile: bool) -> None:
             page.mouse.move(x, y)
         page.wait_for_timeout(250)
         picked_marks(page, tag, "#chartHost")
+        # 再點一次同一根就取消（手機：第一下已經選取，再點一下；桌機：點一下釘住，再點一下取消）。
+        if mobile:
+            page.touchscreen.tap(x, y)
+        else:
+            page.mouse.click(x, y)
+            page.mouse.click(x, y)
+        page.wait_for_timeout(250)
+        main, study = page.evaluate(PICKED_MARKS, "#chartHost")
+        check(f"{tag}：再點一次同一根 K 棒就取消選取", main.get("cover") == 0 and main.get("rail") == 0 and study.get("rail") == 0, [main, study])
     step(f"{tag}：K 棒明細", candle_tip)
 
     def wheel_zoom() -> None:

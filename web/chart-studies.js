@@ -8,6 +8,7 @@
   // 名稱的位置與字級在 chart-studies.css 的 .kc-study-head／.kc-study-title，兩邊要一起改。
   const TITLE_STRIP_PX = 20;
   const TAG_HEIGHT_PX = 18;
+  const STUDY_MENU_ID = 'studyMenu';
   // KD 以 K、D 初值 50 遞推，前端只有約 120 根日K：前 9 根算 RSV，之後再暖機 40 根，
   // 讓初值的影響衰減到 0.01 以下，最後一根才會和後端用較長歷史算出的 K9／D9 一致。
   const KD_READY_BARS = 49;
@@ -181,25 +182,23 @@
         this.panes.push(parts.pane);
       }
 
-      this.clearButton = element('button', 'kc-study-clear', '取消選取');
-      this.clearButton.type = 'button';
-      this.clearButton.hidden = true;
-      this.clearButton.addEventListener('click', () => this.chart.clearSelection());
-      this.switcher = element('div', 'kc-study-switcher');
+      // 指標的選單：平常收著，點指標區左上角的指標名稱才浮出來（開合在 chart-menus.js）。
+      this.switcher = element('div', 'kc-study-menu chart-menu');
+      this.switcher.id = STUDY_MENU_ID;
+      this.switcher.hidden = true;
       this.switcher.setAttribute('role', 'group');
-      this.switcher.setAttribute('aria-label', '切換副圖');
+      this.switcher.setAttribute('aria-label', '切換指標');
       const choiceLabels = { volume: volumeTitle, macd: 'MACD', kd: 'KD', rsi: 'RSI', foreign: '外資', trust: '投信', dealer: '自營商' };
       for (const kind of this.kinds) {
         const button = element('button', 'kc-study-choice', choiceLabels[kind]);
-        button.type = 'button'; button.dataset.study = kind;
+        button.type = 'button'; button.dataset.study = kind; button.dataset.menuClose = '';
         button.addEventListener('click', () => this.select(kind));
         this.switcher.append(button);
       }
-      // 指標區排最前面：它接在 K 線正下方、和 K 線同一個圖框（本人 11-14），切換鍵在整張圖的下方。
+      // 指標區排最前面：它接在 K 線正下方、和 K 線同一個圖框（本人 11-14）。
       this.root.append(
         ...this.panes,
         this.switcher,
-        this.clearButton,
         this.notice
       );
       this.host.append(this.root);
@@ -271,9 +270,15 @@
 
     _makePane(kind, titleValue) {
       const pane = element('section', `kc-study-pane kc-study-pane-${kind}`);
-      // 畫面上只看得到指標名稱（疊在指標區左上角）；讀數留給螢幕閱讀器，樣式把它收起來。
+      // 指標名稱疊在指標區左上角，它本身就是切換指標的小鍵；讀數留給螢幕閱讀器，樣式把它收起來。
       const header = element('header', 'kc-study-head');
-      const titleNode = element('h3', 'kc-study-title', titleValue);
+      const titleNode = element('h3', 'kc-study-title');
+      const chip = element('button', 'chart-chip', titleValue);
+      chip.type = 'button';
+      chip.setAttribute('aria-haspopup', 'true');
+      chip.setAttribute('aria-expanded', 'false');
+      chip.setAttribute('aria-controls', STUDY_MENU_ID);
+      titleNode.append(chip);
       const readout = element('p', 'kc-study-readout sr-only', '尚無日線資料');
       readout.setAttribute('aria-label', `${titleValue}目前選取值`);
       header.append(titleNode, readout);
@@ -530,8 +535,7 @@
       if (kind !== this.active || !Number.isInteger(hover) || hover < range.start || hover >= range.end) return;
       const tags = window.KChartTags, paper = token('--bg'), left = range.geo.l + range.geo.pw + 4;
       const items = values(hover).filter(item => finite(item.value)).map(item => ({ ...item, y: y(item.value), fg: paper }));
-      tags.place(items, TAG_HEIGHT_PX / 2 + 1, height - TAG_HEIGHT_PX / 2 - 1, TAG_HEIGHT_PX + 2)
-        .forEach(item => tags.draw(context, left, width - left - 2, TAG_HEIGHT_PX, item));
+      tags.draw(context, left, width - left - 2, TAG_HEIGHT_PX, tags.place(items, TAG_HEIGHT_PX / 2 + 1, height - TAG_HEIGHT_PX / 2 - 1, TAG_HEIGHT_PX + 2));
       // 驗收用：這一天實際標出來的數值。
       this.debugPicked = items.map(({ name, text: value }) => ({ name, text: value }));
     }
@@ -960,8 +964,6 @@
       const daily = this.chart.unit === '日';
       this.debugPicked = [];
       this.notice.hidden = daily;
-      this.clearButton.hidden = !daily || this.chart.selection < 0;
-      this.switcher.hidden = !daily;
       for (const button of this.switcher.querySelectorAll('[data-study]')) {
         button.setAttribute('aria-pressed', String(button.dataset.study === this.active));
       }

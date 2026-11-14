@@ -1,5 +1,5 @@
 /* 可拖曳／縮放的K線圖（原生Canvas，無外部套件）。
-   互動：滑鼠拖曳或單指左右平移；滾輪、雙指捏合或＋／−按鈕縮放；鍵盤左右鍵平移、+/- 縮放；點擊或移動顯示十字線，
+   互動：滑鼠拖曳或單指左右平移；滾輪或雙指捏合縮放；鍵盤左右鍵平移、+/- 縮放；點擊或移動顯示十字線（再點一次同一根取消），
    並把那一天的開高低收標在右側價格欄、日期標在時間軸（本人 11-15；不再有浮窗）。
    資料：candles=[{t,label,open,high,low,close,amount}] 由舊到新。overlays 可放判斷線。 */
 (function () {
@@ -23,17 +23,19 @@
     }
     return placed;
   }
-  // 畫一枚數值籤：左邊短名、右邊數值；欄位太窄放不下兩者時只留數值（底色仍分得出是哪一個）。
-  function drawTag(x, left, width, height, item) {
-    x.fillStyle = item.bg; x.strokeStyle = item.edge || item.bg; x.lineWidth = 1; x.beginPath();
-    const top = Math.round(item.slot - height / 2) + .5;
-    x.roundRect ? x.roundRect(left + .5, top, width - 1, height - 1, 4) : x.rect(left + .5, top, width - 1, height - 1);
-    x.fill(); x.stroke();
-    x.fillStyle = item.fg; x.textBaseline = 'middle';
-    x.font = TAG_VALUE_FONT; const valueWidth = x.measureText(item.text).width;
-    x.font = TAG_NAME_FONT;
-    if (item.name && x.measureText(item.name).width + valueWidth + 16 <= width) { x.textAlign = 'left'; x.fillText(item.name, left + 6, item.slot + .5); }
-    x.font = TAG_VALUE_FONT; x.textAlign = 'right'; x.fillText(item.text, left + width - 6, item.slot + .5);
+  // 畫一組數值籤：左邊短名、右邊數值。欄位太窄、有任何一枚放不下兩者時，整組都只留數值（底色仍分得出是哪一個）。
+  function drawTags(x, left, width, height, items) {
+    const wide = item => { x.font = TAG_VALUE_FONT; const value = x.measureText(item.text).width; x.font = TAG_NAME_FONT; return x.measureText(item.name).width + value + 16; };
+    const named = items.every(item => !item.name || wide(item) <= width);
+    items.forEach(item => {
+      x.fillStyle = item.bg; x.strokeStyle = item.edge || item.bg; x.lineWidth = 1; x.beginPath();
+      const top = Math.round(item.slot - height / 2) + .5;
+      x.roundRect ? x.roundRect(left + .5, top, width - 1, height - 1, 4) : x.rect(left + .5, top, width - 1, height - 1);
+      x.fill(); x.stroke();
+      x.fillStyle = item.fg; x.textBaseline = 'middle';
+      if (named && item.name) { x.font = TAG_NAME_FONT; x.textAlign = 'left'; x.fillText(item.name, left + 6, item.slot + .5); }
+      x.font = TAG_VALUE_FONT; x.textAlign = 'right'; x.fillText(item.text, left + width - 6, item.slot + .5);
+    });
     x.textAlign = 'left'; x.textBaseline = 'alphabetic';
   }
 
@@ -200,11 +202,15 @@
         }
         if (e.type === 'pointerup' && drag?.kind === 'single' && !drag.moved && !drag.hadPinch && this.geo) {
           const g = this.geo, px = e.clientX - c.getBoundingClientRect().left;
-          this.hover = px >= g.l && px <= g.l + g.pw
+          const picked = px >= g.l && px <= g.l + g.pw
             ? Math.min(this.view.end - 1, g.start + Math.floor((px - g.l) / g.step)) : -1;
-          this.selection = this.hover;
-          if (c !== this.canvas && this.hover >= 0 && this.opts.onSelect) this.opts.onSelect(this.hover, c);
-          this.draw();
+          // 再點一次同一根就取消選取（本人 11-15：畫面上不再有「取消選取」鍵）。
+          if (picked >= 0 && picked === this.selection) this.clearSelection();
+          else {
+            this.hover = this.selection = picked;
+            if (c !== this.canvas && picked >= 0 && this.opts.onSelect) this.opts.onSelect(picked, c);
+            this.draw();
+          }
         }
         pts.delete(e.pointerId);
         if (pts.size === 1 && drag?.kind === 'pinch') {
@@ -472,9 +478,9 @@
         const picked = this.hover >= start && this.hover < end ? this.macd[this.hover] : null;
         if (picked && picked.ready) {
           const paper = css('--bg');
-          placeTags([{ name: 'DIF', text: fmt(picked.dif, 1), y: my(picked.dif), bg: ink, fg: paper }, { name: 'DEA', text: fmt(picked.dea, 1), y: my(picked.dea), bg: css('--gold'), fg: paper },
+          drawTags(x, tagX, tagW, tagH, placeTags([{ name: 'DIF', text: fmt(picked.dif, 1), y: my(picked.dif), bg: ink, fg: paper }, { name: 'DEA', text: fmt(picked.dea, 1), y: my(picked.dea), bg: css('--gold'), fg: paper },
             { name: '柱', text: `${picked.hist < 0 ? '−' : '+'}${fmt(Math.abs(picked.hist), 1)}`, y: my(picked.hist), bg: picked.hist >= 0 ? up : dn, fg: paper }],
-          top + tagH / 2, H - tagH / 2, tagGap).forEach(item => drawTag(x, tagX, tagW, tagH, item));
+          top + tagH / 2, H - tagH / 2, tagGap));
           x.font = '11.5px "JetBrains Mono",Consolas,monospace';
         }
       }
@@ -486,10 +492,10 @@
         const paper = css('--bg'), tone = c.close >= c.open ? up : dn;
         const prices = hasPrice(c) ? [['開', c.open], ['高', c.high], ['低', c.low], ['收', c.close]].map(([name, value]) => (
           { name, text: fmtTag(value), y: y(value), bg: name === '收' ? tone : paper, fg: name === '收' ? paper : ink, edge: tone })) : [];
-        placeTags(prices, t + tagH / 2, t + ph - tagH / 2, tagGap).forEach(item => drawTag(x, tagX, tagW, tagH, item));
+        drawTags(x, tagX, tagW, tagH, placeTags(prices, t + tagH / 2, t + ph - tagH / 2, tagGap));
         x.font = TAG_VALUE_FONT;
         const dateWidth = x.measureText(c.label).width + 12;
-        drawTag(x, Math.max(l, Math.min(l + pw - dateWidth, cx - dateWidth / 2)), dateWidth, tagH, { name: '', text: c.label, slot: t + ph + b / 2 + 1, bg: ink, fg: paper });
+        drawTags(x, Math.max(l, Math.min(l + pw - dateWidth, cx - dateWidth / 2)), dateWidth, tagH, [{ name: '', text: c.label, slot: t + ph + b / 2 + 1, bg: ink, fg: paper }]);
         // 驗收用：這一天實際標出來的日期與四個價位。
         this.debugBoxes.picked = { date: c.label, tags: prices.map(({ name, text: value }) => ({ name, text: value })) };
       }
@@ -497,7 +503,7 @@
     }
   }
   window.KChart = KChart;
-  window.KChartTags = { place: placeTags, draw: drawTag };
+  window.KChartTags = { place: placeTags, draw: drawTags };
   // 5 年歷史日線（欄位式：d 為 YYYYMMDD 整數）裡，比 bars 第一根更早的 K 棒。
   // 歷史必須涵蓋 bars 的第一根且收盤一致才接：還原係數不同步或資料不是同一檔時回空陣列，圖維持原樣。
   function olderBars(bars, history) {

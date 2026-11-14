@@ -13,7 +13,6 @@
 .bd-live-badge[hidden] { display: none; }
 .bd .bd-live-status { grid-column: 1 / -1; margin: 0; color: var(--faint); font: 12px/1.5 var(--sans); }
 .bd .bd-live-status[data-state="error"] { color: var(--up); }
-.bd .hm-period-seg { max-width: min(100%, 360px); overflow-x: auto; scrollbar-width: thin; }
 
 /* ---------- 價位階梯：名稱三個字（壓力二），價籤加寬 ---------- */
 .lad { grid-template-columns: 56px 1fr; }
@@ -116,17 +115,6 @@
 
 /* ---------- 週期：跟首頁同一套分段按鈕（原生 select 保留為唯一真值、視覺隱藏） ---------- */
 .bd .hm-period-native { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.bd .hm-period-seg { display: inline-flex; padding: 2px; gap: 2px; border: 1px solid var(--hair); border-radius: calc(var(--btn-r) + 2px); }
-.bd .hm-period-seg button {
-  height: 32px; min-width: 52px; padding: 0 12px; border: 0; border-radius: var(--btn-r);
-  background: transparent; color: var(--dim); font: 500 13px var(--sans); cursor: pointer;
-  transition: background-color 160ms var(--ease-out), color 160ms var(--ease-out), transform 120ms var(--ease-out);
-}
-.bd .hm-period-seg button:hover { background: var(--panel2); color: var(--ink); }
-.bd .hm-period-seg button:active { transform: var(--press); }
-.bd .hm-period-seg button[aria-checked="true"],
-.bd .hm-period-seg button[aria-checked="true"]:hover { background: var(--ink); color: var(--bg); }
-@media (pointer: coarse) { .bd .hm-period-seg button { height: 40px; } }
 
 /* 操作策略：首屏只露出一句結論，價位與理由在原生 details 內。 */
 .bd-strategy { margin: 8px 0 28px; padding: 22px 0 0; border-top: 2px solid var(--ink); }
@@ -157,9 +145,6 @@
 
 @media (max-width: 860px) {
   .bd .bd-price { justify-items: start; }
-  .bd .bd-chart-bar { display: grid; align-items: start; }
-  .bd .bd-chart-bar .hm-period, .bd .bd-chart-bar .hm-period-group { width: 100%; min-width: 0; }
-  .bd .hm-period-seg { box-sizing: border-box; width: 100%; max-width: calc(100vw - 32px); }
   .bd-strategy { padding-top: 18px; margin-bottom: 22px; }
   .bd-strategy h2 { font-size: 20px; }
   .bd-strategy-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -313,3 +298,7 @@
   .bd-compare-chart { min-height: 210px; margin-top: 4px; }
   .bd-compare-chart .cmp-direct-label { display: none; }
 }
+
+/* K 線工具列（A 包第 7 片，本人 11-15）：左邊資料說明，右邊是週期與均線兩枚小鍵，點了才浮出選單 */
+.bd .bd-chart-bar { justify-content: flex-start; flex-wrap: wrap; gap: 8px; }
+.bd .bd-chart-bar > div:first-child { margin-right: auto; }

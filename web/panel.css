@@ -151,20 +151,6 @@
 
 /* ---------- K 線週期：分段按鈕取代原生下拉（select 保留但隱藏，是唯一真值） ---------- */
 .hm .hm-period-native { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.hm .hm-period { display: flex; align-items: flex-end; gap: 12px; }
-.hm .hm-period-group { display: grid; gap: 4px; }
-.hm .hm-period-cap { font-size: 11px; color: var(--faint); padding-left: 4px; }
-.hm .hm-period-seg { display: inline-flex; padding: 2px; gap: 2px; border: 1px solid var(--hair); border-radius: calc(var(--btn-r) + 2px); }
-.hm .hm-period-seg button {
-  height: 30px; min-width: 40px; padding: 0 10px; border: 0; border-radius: var(--btn-r);
-  background: transparent; color: var(--dim); font: 500 13px var(--sans); cursor: pointer;
-  transition: background-color 160ms var(--ease-out), color 160ms var(--ease-out), transform 120ms var(--ease-out);
-}
-.hm .hm-period-seg button:hover:not(:disabled) { background: var(--panel2); color: var(--ink); }
-.hm .hm-period-seg button:active:not(:disabled) { transform: var(--press); }
-.hm .hm-period-seg button[aria-checked="true"] { background: var(--ink); color: var(--bg); }
-.hm .hm-period-seg button:disabled { color: color-mix(in srgb, var(--faint) 55%, transparent); cursor: not-allowed; }
-.hm .hm-period-sep { width: 1px; height: 30px; margin-bottom: 2px; background: var(--hair); }
 .hm .chart-toolbar { align-items: flex-end; }
 
 /* ---------- 籌碼明細面板 ---------- */
@@ -209,21 +195,9 @@
 .hm .drill-detail + .chip-date { display: block; margin-top: 24px; padding-top: 12px; border-top: 1px solid var(--hair); font-size: 11px; line-height: 1.7; color: var(--faint); }
 
 @media (max-width: 860px) {
-  .hm .hm-period { gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
-  .hm .hm-period-cap { display: none; }
-  .hm .hm-period-sep { display: none; }
-  .hm .hm-period-seg button { min-width: 34px; padding: 0 8px; font-size: 12px; }
   .hm .drill-day b { font-size: 22px; }
   .hm .drill-table table { font-size: 13px; }
 }
-/* 修正：.hm .chart-controls button 的通用樣式（36px 方鈕、透明底）會蓋到週期鈕 */
-.hm .chart-controls .hm-period-seg button {
-  width: auto; height: 30px; min-width: 44px; padding: 0 10px; border: 0; white-space: nowrap;
-  background: transparent; color: var(--dim);
-}
-.hm .chart-controls .hm-period-seg button:hover:not(:disabled) { background: var(--panel2); color: var(--ink); }
-.hm .chart-controls .hm-period-seg button[aria-checked="true"] { background: var(--ink); color: var(--bg); }
-.hm .chart-controls .hm-period-seg button:disabled { background: transparent; color: color-mix(in srgb, var(--faint) 55%, transparent); }
 /* 指標說明展開：標題不要變橘，用墨色＋圓鈕即可 */
 .hm .kc-studies details[open] > .kc-study-details-summary { color: var(--ink); }
 .hm .kc-studies .kc-study-details-body ol { padding-left: 0; list-style: none; counter-reset: kc; }
@@ -233,9 +207,6 @@
   border: 1px solid var(--hair); border-radius: 50%; font: 500 11px var(--mono); color: var(--dim);
 }
 .hm .kc-studies .kc-study-details-body ol > li::marker { content: ""; }
-@media (max-width: 860px) {
-  .hm .chart-controls .hm-period-seg button { min-width: 38px; padding: 0 6px; font-size: 12px; }
-}
 
 /* ---------- 選股看板：排行列、產業資金流向圖 ---------- */
 /* 排行：卡片列 → 報表列 */
@@ -277,19 +248,11 @@
 .hm .rotation-table td { padding: 8px 8px 8px 0; border-bottom: 1px solid var(--hair); color: var(--ink); }
 .hm .chart-tip { border: 1px solid var(--hair); border-radius: var(--btn-r); background: var(--bg); box-shadow: 0 8px 24px -12px rgb(0 0 0 / 30%); }
 /* 選中狀態優先於 hover：滑鼠停在已選的按鈕上也不會變回淺色 */
-.hm .chart-controls .hm-period-seg button[aria-checked="true"]:hover,
-.hm .hm-period-seg button[aria-checked="true"]:hover,
 .hm .screen-tabs button[aria-selected="true"]:hover,
 .hm .screen-seg button[aria-pressed="true"]:hover,
 .hm .chip-seg button[aria-checked="true"]:hover { background: var(--ink); color: var(--bg); }
 @media (max-width: 860px) {
-  .hm .chart-toolbar { flex-wrap: wrap; row-gap: 12px; }
   .hm .chart-toolbar > div:first-child { flex: 1 1 auto; min-width: 0; }
-  .hm .chart-controls { flex: 1 1 100%; flex-wrap: wrap; justify-content: space-between; row-gap: 8px; }
-  .hm .hm-period { order: 2; flex: 1 1 100%; justify-content: space-between; }
-  .hm .hm-period-group:last-child { flex: 1 1 auto; }
-  .hm .hm-period-group:last-child .hm-period-seg { display: flex; }
-  .hm .hm-period-group:last-child .hm-period-seg button { flex: 1 1 0; }
 }
 
 /* ================= 看盤桌：浮起的明細板（立體重設計 A 包第 2 片，2026-11-14） =================

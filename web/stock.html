@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>個股分析</title>
-  <link rel="stylesheet" href="minimal.css?v=20261115-desk7">
-  <link rel="stylesheet" href="chart-studies.css?v=20261114-desk5">
-  <link rel="stylesheet" href="bold.css?v=20261114-desk5">
-  <link rel="stylesheet" href="stock.css?v=20261111-ui2b">
+  <link rel="stylesheet" href="minimal.css?v=20261115-desk8">
+  <link rel="stylesheet" href="chart-studies.css?v=20261115-desk8">
+  <link rel="stylesheet" href="bold.css?v=20261115-desk8">
+  <link rel="stylesheet" href="stock.css?v=20261115-desk8">
 </head>
 <body class="bd">
   <div class="bd-shell">
@@ -94,10 +94,15 @@
                 </optgroup>
               </select>
             </label>
-          </div>
-          <div class="bd-ma-row">
-            <div class="bd-ma-controls" id="maControls" aria-label="均線期數"></div>
-            <button class="bd-ma-add" id="addMa" type="button">新增均線</button>
+            <div class="chart-ma">
+              <button type="button" class="chart-chip" id="maChip" aria-haspopup="true" aria-expanded="false" aria-controls="maMenu">均線 <span id="maChipValue"></span></button>
+              <div class="chart-menu chart-ma-menu" id="maMenu" hidden>
+                <div class="bd-ma-row">
+                  <div class="bd-ma-controls" id="maControls" aria-label="均線期數"></div>
+                  <button class="bd-ma-add" id="addMa" type="button">新增均線</button>
+                </div>
+              </div>
+            </div>
           </div>
           <div class="bd-chart-host sk-chart" id="chartHost"></div>
           <div id="chartStudies"></div>
@@ -160,10 +165,11 @@
       </section>
     </main>
   </div>
-  <script src="chart-studies.js?v=20261115-desk7"></script>
-  <script src="kchart.js?v=20261115-desk7"></script>
+  <script src="chart-studies.js?v=20261115-desk8"></script>
+  <script src="kchart.js?v=20261115-desk8"></script>
   <script src="intraday.js?v=20261111-ui2b"></script>
   <script src="stock.js?v=20261111-core-release"></script>
-  <script src="period-switch.js?v=20261109-ux1"></script>
+  <script src="period-switch.js?v=20261115-desk8"></script>
+  <script src="chart-menus.js?v=20261115-desk8"></script>
 </body>
 </html>

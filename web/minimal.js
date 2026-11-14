@@ -61,7 +61,6 @@
     chartContext: $('chartContext'),
     chartStage: $('chartStage'),
     chartActions: $('chartActions'),
-    chartTools: $('chartToolsToggle'),
     chartHost: $('mainChart'),
     chartSummary: $('chartSummary'),
     period: $('periodSelect'),
@@ -668,11 +667,12 @@
   function bindCandleSelection() {
     let start = null;
     chart.canvas.addEventListener('pointerdown', event => {
-      start = { x: event.clientX, y: event.clientY, pointerId: event.pointerId };
+      start = { x: event.clientX, y: event.clientY, pointerId: event.pointerId, selected: selectedIndex };
     });
     chart.canvas.addEventListener('pointerup', event => {
       if (!start || start.pointerId !== event.pointerId) return;
       const distance = Math.hypot(event.clientX - start.x, event.clientY - start.y);
+      const selectedBefore = start.selected;
       start = null;
       if (distance >= 6) return;
       const g = visibleGeometry();
@@ -680,6 +680,8 @@
       const rect = chart.canvas.getBoundingClientRect();
       const localX = event.clientX - rect.left;
       const index = Math.max(g.start, Math.min(g.end - 1, g.start + Math.floor((localX - g.l) / g.step)));
+      // 手機再點一次同一根：圖表已經取消選取（kchart.js），這裡不要又選回去。桌機點 K 棒是開明細板，照舊。
+      if (isMobile() && index === selectedBefore && chart.selection < 0) return;
       selectCandle(index, chart.canvas, !isMobile());
     });
     chart.canvas.addEventListener('keydown', event => {
@@ -1650,18 +1652,6 @@
   setMarketHeader(fallbackMarketData(), { id: 'closed', label: '休市' }, fallbackMarketDate());
 
   els.period.addEventListener('change', () => loadPeriod(els.period.value, true));
-  // 手機：縮放收在「圖表工具」裡，點了才展開（桌面一直顯示）。
-  els.chartTools.addEventListener('click', () => {
-    const open = els.chartTools.getAttribute('aria-expanded') !== 'true';
-    els.chartTools.setAttribute('aria-expanded', String(open));
-    document.querySelector('.chart-controls').classList.toggle('tools-open', open);
-  });
-  $('zoomIn').addEventListener('click', () => chart && chart.zoom(1 / 1.35));
-  $('zoomOut').addEventListener('click', () => {
-    if (!chart) return;
-    chart.zoom(1.35);
-    enforceCandleHitTarget();
-  });
   els.reset.addEventListener('click', () => {
     if (!chart) return;
     chart.reset();

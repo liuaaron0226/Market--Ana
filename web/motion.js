@@ -81,29 +81,14 @@
       .observe($('stockName'), { childList: true, characterData: true, subtree: true });
   }
 
-  // ---------- 4. 指標切換：滑動底塊＋副圖方向滑入 ----------
+  // ---------- 4. 指標切換：新的指標區從切換的方向滑入（切換鍵收進指標名稱的選單，不再有滑動底塊） ----------
   function setupSwitcher() {
     const host = $('chartStudies');
-    let indicator = null;
     let lastActive = null;
-    const order = ['volume', 'macd', 'kd', 'rsi'];
-    const place = animate => {
-      const sw = host.querySelector('.kc-study-switcher');
-      const on = sw && sw.querySelector('.kc-study-choice[aria-pressed="true"]');
-      if (!sw || !on) return;
-      if (!indicator || !sw.contains(indicator)) {
-        indicator = document.createElement('span');
-        indicator.className = 'bd-switch-pill';
-        indicator.setAttribute('aria-hidden', 'true');
-        sw.prepend(indicator);
-        sw.classList.add('bd-has-pill');
-        animate = false;
-      }
-      const box = sw.getBoundingClientRect();
-      const r = on.getBoundingClientRect();
-      // 底塊固定 100px 寬，用 scaleX 對齊按鈕寬度，只動 transform
-      indicator.style.transition = animate ? `transform 280ms ${EASE}` : 'none';
-      indicator.style.transform = `translateX(${r.left - box.left}px) scaleX(${r.width / 100})`;
+    const order = ['volume', 'macd', 'kd', 'rsi', 'foreign', 'trust', 'dealer'];
+    const slide = animate => {
+      const on = host.querySelector('.kc-study-choice[aria-pressed="true"]');
+      if (!on) return;
       const kind = on.dataset.study;
       if (animate && lastActive && kind !== lastActive) {
         const pane = host.querySelector(`.kc-study-pane-${kind}`);
@@ -114,11 +99,8 @@
       }
       lastActive = kind;
     };
-    new MutationObserver(muts => {
-      if (muts.some(m => m.attributeName === 'aria-pressed')) place(true);
-      else place(false);
-    }).observe(host, { subtree: true, childList: true, attributes: true, attributeFilter: ['aria-pressed'] });
-    window.addEventListener('resize', () => place(false));
+    new MutationObserver(muts => slide(muts.some(m => m.attributeName === 'aria-pressed')))
+      .observe(host, { subtree: true, childList: true, attributes: true, attributeFilter: ['aria-pressed'] });
   }
 
   // ---------- 5. 展開區塊平滑 ----------

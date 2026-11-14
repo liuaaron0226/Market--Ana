@@ -98,16 +98,6 @@
 .hm .chart-toolbar h2 { font: 600 22px var(--serif); }
 .hm .chart-toolbar p { color: var(--faint); font: 12px var(--mono); }
 .hm .chart-controls { gap: 8px; }
-.hm .chart-controls select,
-.hm .chart-controls button {
-  height: var(--btn-h); min-height: 0; border: 1px solid var(--hair); border-radius: var(--btn-r);
-  background: transparent; color: var(--ink); font: 500 13px var(--sans);
-  transition: background-color 160ms var(--ease-out), transform 120ms var(--ease-out);
-}
-.hm .chart-controls button { width: var(--btn-h); padding: 0; }
-.hm .chart-controls .reset-view { width: auto; padding: 0 12px; }
-.hm .chart-controls button:hover { background: var(--panel2); }
-.hm .chart-controls button:active { transform: var(--press); }
 .hm .chart-stage { height: clamp(380px, 52vh, 560px); }
 
 /* 收復線／防守線浮鈕：跟個股頁價籤同一套語言（實色小價籤＋數字） */
@@ -251,7 +241,6 @@
   .hm .stock-search-form button { padding: 0 12px; }
   .hm .chart-toolbar { gap: 8px; }
   .hm .chart-toolbar p { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .hm .chart-tools-toggle { width: auto !important; padding: 0 10px !important; white-space: nowrap; }
 }
 
 /* ================= 資訊密度整理（本人 11-09：「資訊比較多地方還是需要在優化一下」） ================= */
@@ -413,7 +402,7 @@ body.hm .service-note {
 
 /* ---------- 鍵：凸起，懸停浮起，按下沉入（外殼與下面各區塊的按鈕共用這一組） ---------- */
 body.hm :is(.theme-toggle, .icon-key, .stock-search-form button[type="button"], .stock-search-more, .stock-search-result a,
-  .chart-controls > button, .chart-actions .line-trigger, .chart-actions .mobile-candle-details,
+  .chart-actions .line-trigger, .chart-actions .mobile-candle-details,
   .screen-more, .core-selection-chip, .core-period select) {
   border: 0; border-radius: var(--r-key); background: var(--key); box-shadow: var(--key-shadow);
   transition: transform var(--t-lift) var(--ease-depth), box-shadow var(--t-lift) var(--ease-depth), color 160ms var(--ease-out);
@@ -433,7 +422,7 @@ body.hm .core-compare-entry button {
 body.hm .stock-search-results { gap: 8px; }
 @media (hover: hover) {
   body.hm :is(.conclusion-trigger, .theme-toggle, .icon-key, .stock-search-form button[type="button"], .stock-search-more, .stock-search-result a,
-    .chart-controls > button, .chart-actions .line-trigger, .chart-actions .mobile-candle-details,
+    .chart-actions .line-trigger, .chart-actions .mobile-candle-details,
     .screen-more, .core-selection-chip, .core-period select):hover {
     background: var(--key); color: var(--ink); transform: translateY(var(--key-lift)); box-shadow: var(--key-shadow-hover);
   }
@@ -442,9 +431,8 @@ body.hm .stock-search-results { gap: 8px; }
   body.hm :is(.price-summary, .state-trigger):hover { transform: translateY(var(--key-lift)); }
 }
 body.hm :is(.conclusion-trigger, .theme-toggle, .icon-key, .stock-search-form button[type="button"], .stock-search-more, .stock-search-result a,
-  .chart-controls > button, .chart-actions .line-trigger, .chart-actions .mobile-candle-details,
-  .screen-more, .core-selection-chip, .core-period select):active,
-body.hm .chart-tools-toggle[aria-expanded="true"] {
+  .chart-actions .line-trigger, .chart-actions .mobile-candle-details,
+  .screen-more, .core-selection-chip, .core-period select):active {
   transform: translateY(var(--key-thick)); box-shadow: var(--key-shadow-press); transition-duration: var(--t-press);
 }
 body.hm .stock-search-form button[type="submit"]:active,
@@ -466,50 +454,8 @@ body.hm .core-compare-entry input:focus { outline: 2px solid var(--ink); outline
    各鈕等寬，滑塊是軌道的 ::before，位置由「第幾個鈕被選中」決定，不需要腳本量位置。
    跨到另一組（盤中／趨勢）時，舊的一塊淡出、新的一塊淡入。
    --slots 是這一組有幾顆鈕，--at 是選中第幾顆（從 0 算）。現在兩組是 3 顆與 4 顆；週期選單的顆數改了，下面四行要跟著補。 */
-body.hm .hm-period-seg {
-  --slots: 3; --at: 0;
-  position: relative; isolation: isolate;
-  display: grid; grid-auto-flow: column; grid-auto-columns: minmax(44px, 1fr);
-  padding: var(--track-pad); gap: var(--track-gap);
-  border: 0; border-radius: var(--r-track); background: var(--well); box-shadow: var(--well-shadow);
-}
-body.hm .hm-period-seg:has(> button:nth-child(4)) { --slots: 4; }
-body.hm .hm-period-seg:has(> button:nth-child(2)[aria-checked="true"]) { --at: 1; }
-body.hm .hm-period-seg:has(> button:nth-child(3)[aria-checked="true"]) { --at: 2; }
-body.hm .hm-period-seg:has(> button:nth-child(4)[aria-checked="true"]) { --at: 3; }
-body.hm .hm-period-seg::before {
-  content: ""; position: absolute; z-index: -1; top: var(--track-pad); bottom: var(--track-pad); left: var(--track-pad);
-  width: calc((100% - 2 * var(--track-pad) - (var(--slots) - 1) * var(--track-gap)) / var(--slots));
-  border-radius: var(--r-key); background: var(--key); box-shadow: var(--key-shadow);
-  transform: translateX(calc(var(--at) * (100% + var(--track-gap)))); opacity: 0;
-  transition: transform 450ms var(--ease-depth), opacity 160ms var(--ease-out);
-}
-body.hm .hm-period-seg:has(> button[aria-checked="true"])::before { opacity: 1; }
-body.hm .chart-controls .hm-period-seg button {
-  min-width: 0; padding: 0 10px; border-radius: var(--r-key); background: transparent;
-  transition: color 200ms var(--ease-out);
-}
-body.hm .chart-controls .hm-period-seg button:hover:not(:disabled) { background: transparent; color: var(--ink); }
-body.hm .chart-controls .hm-period-seg button:active:not(:disabled) { transform: none; }
-body.hm .chart-controls .hm-period-seg button[aria-checked="true"],
-body.hm .chart-controls .hm-period-seg button[aria-checked="true"]:hover { background: transparent; color: var(--ink); font-weight: 700; }
 
 /* ---------- 指標切換：同一種槽與滑塊 ---------- */
-body.hm .kc-studies .kc-study-switcher {
-  justify-self: start; padding: var(--track-pad); gap: var(--track-gap);
-  border-radius: var(--r-track); background: var(--well); box-shadow: var(--well-shadow);
-}
-body.hm .kc-studies .kc-study-choice { border-radius: var(--r-key); }
-body.hm .kc-studies .kc-study-choice:hover { background: transparent; }
-body.hm .kc-studies .kc-study-choice[aria-pressed="true"] {
-  border-color: transparent; background: var(--key); color: var(--ink); font-weight: 700; box-shadow: var(--key-shadow);
-}
-body.hm .kc-studies .bd-has-pill .kc-study-choice[aria-pressed="true"] { background: transparent; box-shadow: none; }
-body.hm .bd-switch-pill { border-radius: var(--r-key); background: var(--key); box-shadow: var(--key-shadow); }
-@media (max-width: 519px) {
-  body.hm .kc-studies .kc-study-switcher { justify-self: stretch; }
-  body.hm .kc-studies .kc-study-choice { padding: 0 4px; white-space: nowrap; }
-}
 
 /* ---------- 圖上的小元件 ---------- */
 body.hm .chart-badges span,
@@ -550,8 +496,6 @@ body.hm #mainChart canvas { border-radius: var(--r-key) !important; }
   body.hm .ai-digest-card { margin-top: 12px; }
   body.hm .workspace { padding-top: 12px; }
   body.hm .chart-workspace { padding: 0 14px 16px; }
-  body.hm .hm-period-seg { grid-auto-columns: minmax(34px, 1fr); }
-  body.hm .chart-controls .hm-period-seg button { padding: 0 6px; }
 }
 /* 320 寬：板的內距讓圖下的收復線／防守線兩鍵並排放不下，改成上下各一列，避免橫向捲動 */
 @media (max-width: 359px) {
@@ -856,4 +800,23 @@ body.hm .terrain-detail dd { margin: 0; text-align: right; color: var(--ink); }
   /* 手機：明細排在街區下方，不蓋住街區 */
   body.hm .terrain-detail { position: static; display: none; width: min(100%, 320px); margin: 4px auto 0; }
   body.hm .terrain.has-selection .terrain-detail { display: block; }
+}
+
+/* ================= 看盤桌：K 線區的小鍵（立體重設計 A 包第 7 片，2026-11-15） =================
+   週期收成標題旁的一枚鍵；「回到最新」只在圖被拖離最新一天時浮在圖的角落。
+   小鍵與選單的共用樣式在 chart-studies.css，這裡只把首頁的鍵換成凸起的樣子。 */
+body.hm .chart-toolbar .chart-chip,
+body.hm .chart-stage .reset-view {
+  min-height: 36px; border: 0; border-radius: var(--r-key); background: var(--key); box-shadow: var(--key-shadow);
+  transition: transform var(--t-lift) var(--ease-depth), box-shadow var(--t-lift) var(--ease-depth);
+}
+@media (hover: hover) {
+  body.hm .chart-toolbar .chart-chip:hover,
+  body.hm .chart-stage .reset-view:hover { transform: translateY(var(--key-lift)); box-shadow: var(--key-shadow-hover); }
+}
+body.hm .chart-toolbar .chart-chip:active,
+body.hm .chart-toolbar .chart-chip[aria-expanded="true"],
+body.hm .chart-stage .reset-view:active { transform: translateY(var(--key-thick)); box-shadow: var(--key-shadow-press); transition-duration: var(--t-press); }
+body.hm .chart-stage .reset-view {
+  position: absolute; z-index: 8; left: 10px; bottom: 32px; padding: 0 12px; color: var(--ink); font: 600 13px var(--sans); cursor: pointer;
 }

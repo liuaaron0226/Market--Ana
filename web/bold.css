@@ -193,19 +193,6 @@
   transition: border-color 160ms var(--ease-out);
 }
 .bd-period select:hover { border-color: color-mix(in srgb, var(--ink) 22%, transparent); }
-
-.bd .kc-studies .kc-study-switcher { padding: 0; gap: 4px; }
-.bd .kc-studies .kc-study-switcher > .kc-study-choice:first-child { margin-left: 0; }
-.bd .kc-studies .kc-study-choice {
-  height: var(--btn-h); min-height: 0; padding: 0 16px; border: 1px solid transparent; border-radius: var(--btn-r);
-  background: transparent; color: var(--dim); font: 500 13px var(--sans);
-  transition: background-color 160ms var(--ease-out), color 160ms var(--ease-out), transform 120ms var(--ease-out);
-}
-.bd .kc-studies .kc-study-choice:hover { color: var(--ink); background: var(--panel2); }
-.bd .kc-studies .kc-study-choice:active { transform: var(--press); }
-.bd .kc-studies .kc-study-choice[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); font-weight: 500; }
-.bd .kc-studies .kc-study-choice:focus-visible,
-.bd .kc-studies .kc-study-clear:focus-visible,
 .bd .kc-studies .kc-study-details-summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .bd .kc-studies .kc-study-swipe-hint { color: var(--faint); font-size: 12px; }
 
@@ -223,28 +210,13 @@
 }
 .bd .kc-studies .kc-study-details-summary:hover::after { background: var(--panel2); }
 .bd .kc-studies details[open] > .kc-study-details-summary::after { content: "−"; background: var(--panel2); }
-.bd .kc-studies .kc-study-clear {
-  height: var(--btn-h); min-height: 0; padding: 0 12px; border: 1px solid var(--hair); border-radius: var(--btn-r);
-  background: transparent; font: 500 13px var(--sans);
-}
-.bd .kc-studies .kc-study-clear:hover { background: var(--panel2); }
 
 @media (prefers-reduced-motion: reduce) {
   .bd *, .bd *::before, .bd *::after { transition: none !important; }
 }
 
 /* ================= 動態效果配合（motion.js） ================= */
-.bd .kc-studies .kc-study-switcher.bd-has-pill { position: relative; isolation: isolate; }
-.bd-switch-pill {
-  position: absolute; left: 0; top: 50%; z-index: -1;
-  width: 100px; height: var(--btn-h); margin-top: calc(var(--btn-h) / -2);
-  border-radius: var(--btn-r); background: var(--ink);
-  transform-origin: left center; pointer-events: none;
-}
 /* 有滑動底塊時，選中鈕本身改透明，讓底塊當背景 */
-.bd .kc-studies .bd-has-pill .kc-study-choice[aria-pressed="true"] { background: transparent; border-color: transparent; }
-.bd .kc-studies .bd-has-pill .kc-study-choice { transition: color 200ms var(--ease-out), transform 120ms var(--ease-out); }
-.bd .kc-studies .bd-has-pill .kc-study-choice:not([aria-pressed="true"]):hover { background: transparent; }
 /* scaleX 會把圓角壓扁，寬度差不大（約 1.2 倍內）視覺可接受 */
 
 /* ================= 價位：更簡約、更清楚（本人 11-09） =================

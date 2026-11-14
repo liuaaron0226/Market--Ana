@@ -51,21 +51,13 @@
     requestAnimationFrame(step);
   }).observe(price, { childList: true, characterData: true, subtree: true });
 
-  // 4. 指標切換滑動底塊（與個股頁相同）
+  // 4. 切換指標時，新的指標區從切換的方向滑進來（與個股頁相同）。切換鍵收進指標名稱的選單，不再有滑動底塊。
   const host = document.getElementById('chartStudies');
-  let pill = null, lastKind = null;
-  const order = ['volume', 'macd'];
-  const place = animate => {
-    const sw = host && host.querySelector('.kc-study-switcher');
-    const on = sw && sw.querySelector('.kc-study-choice[aria-pressed="true"]');
+  let lastKind = null;
+  const order = ['volume', 'macd', 'kd', 'rsi'];
+  const slide = animate => {
+    const on = host.querySelector('.kc-study-choice[aria-pressed="true"]');
     if (!on) return;
-    if (!pill || !sw.contains(pill)) {
-      pill = document.createElement('span'); pill.className = 'bd-switch-pill'; pill.setAttribute('aria-hidden', 'true');
-      sw.prepend(pill); sw.classList.add('bd-has-pill'); animate = false;
-    }
-    const box = sw.getBoundingClientRect(), r = on.getBoundingClientRect();
-    pill.style.transition = animate ? `transform 280ms ${EASE}` : 'none';
-    pill.style.transform = `translateX(${r.left - box.left}px) scaleX(${r.width / 100})`;
     const kind = on.dataset.study;
     if (animate && lastKind && kind !== lastKind) {
       const pane = host.querySelector(`.kc-study-pane-${kind}`);
@@ -75,8 +67,7 @@
     lastKind = kind;
   };
   if (host) {
-    new MutationObserver(muts => place(muts.some(m => m.attributeName === 'aria-pressed')))
+    new MutationObserver(muts => slide(muts.some(m => m.attributeName === 'aria-pressed')))
       .observe(host, { subtree: true, childList: true, attributes: true, attributeFilter: ['aria-pressed'] });
-    addEventListener('resize', () => place(false));
   }
 })();

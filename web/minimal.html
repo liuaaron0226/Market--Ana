@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>台股決策鏡</title>
-  <link rel="stylesheet" href="minimal.css?v=20261115-desk7">
-  <link rel="stylesheet" href="chart-studies.css?v=20261114-desk5">
-  <link rel="stylesheet" href="bold.css?v=20261114-desk5">
-  <link rel="stylesheet" href="home.css?v=20261114-desk3">
-  <link rel="stylesheet" href="panel.css?v=20261115-desk7">
+  <link rel="stylesheet" href="minimal.css?v=20261115-desk8">
+  <link rel="stylesheet" href="chart-studies.css?v=20261115-desk8">
+  <link rel="stylesheet" href="bold.css?v=20261115-desk8">
+  <link rel="stylesheet" href="home.css?v=20261115-desk8">
+  <link rel="stylesheet" href="panel.css?v=20261115-desk8">
 </head>
 <body class="bd hm">
   <a class="skip-link" href="#workspace">跳到主圖</a>
@@ -134,10 +134,6 @@
                 </optgroup>
               </select>
             </label>
-            <button type="button" id="chartToolsToggle" class="chart-tools-toggle" aria-expanded="false" aria-controls="zoomOut zoomIn">圖表工具</button>
-            <button type="button" id="zoomOut" aria-label="縮小K線">−</button>
-            <button type="button" id="zoomIn" aria-label="放大K線">＋</button>
-            <button type="button" id="resetView" class="reset-view" hidden>回到最新</button>
           </div>
         </div>
 
@@ -160,6 +156,7 @@
             <span class="point-label">現價詳情 <span aria-hidden="true">›</span></span>
           </button>
           <span class="selected-candle-marker" id="selectedCandleMarker" aria-hidden="true" hidden></span>
+          <button type="button" id="resetView" class="reset-view" hidden>回到最新</button>
         </div>
         <div id="chartStudies"></div>
         <div class="chart-actions" id="chartActions">
@@ -326,11 +323,12 @@
   <script src="market-data-local.js"></script>
   <script src="terrain-layout.js?v=20261114-desk1"></script>
   <script src="terrain.js?v=20261114-desk1"></script>
-  <script src="chart-studies.js?v=20261115-desk7"></script>
-  <script src="kchart.js?v=20261115-desk7"></script>
-  <script src="minimal.js?v=20261114-desk2"></script>
-  <script src="period-switch.js?v=20261109-ux1"></script>
-  <script src="home-motion.js?v=20261114-desk1"></script>
+  <script src="chart-studies.js?v=20261115-desk8"></script>
+  <script src="kchart.js?v=20261115-desk8"></script>
+  <script src="minimal.js?v=20261115-desk8"></script>
+  <script src="period-switch.js?v=20261115-desk8"></script>
+  <script src="chart-menus.js?v=20261115-desk8"></script>
+  <script src="home-motion.js?v=20261115-desk8"></script>
   <script src="home-fold.js?v=20261114-desk2"></script>
 </body>
 </html>
