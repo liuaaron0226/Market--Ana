@@ -456,8 +456,10 @@ def upload(root: Path, store, items=WORKING_SET, *, data_date: str, cursor_domai
             _put_immutable(store, immutable_key, data, digest)
             manifest["objects"].append({"path": item.path, "kind": item.kind, "key": immutable_key,
                                         "sha256": digest, "bytes": len(data)})
-    if existing_manifest is not None and cursor_domain == "market" and existing_market < data_date:
+    advanced = cursor_domain == "market" and existing_market is not None and existing_market < data_date
+    if existing_manifest is not None and (advanced or store.get(PREVIOUS_MANIFEST) is None):
         # 資料日前進了：原本那份就是「上一個資料日」。同日重傳或水位線上傳不輪替，上一份維持前一個資料日。
+        # 例外是還沒有上一份的時候：原本那份先留下來，第一次清理才不會把它的物件全刪光而沒有退路。
         store.put(PREVIOUS_MANIFEST, json.dumps(existing_manifest, ensure_ascii=False, indent=1).encode("utf-8"))
     store.put(MANIFEST + ".next", json.dumps(manifest, ensure_ascii=False, indent=1).encode("utf-8"))
     store.rename(MANIFEST + ".next", MANIFEST)

@@ -106,6 +106,22 @@ class RunTest(unittest.TestCase):
         self.assertEqual([s["name"] for s in saved["steps"]], du.STEP_ORDER)
         self.assertTrue(all(s["status"] == "ok" for s in saved["steps"]))
 
+    def test_republish_reruns_a_day_that_already_succeeded_under_a_new_version(self) -> None:
+        # 本人 2026-11-14：還原價、5 年歷史、大戶持股不需要新的交易日資料，要的是用新程式把同一天重算並發布。
+        # 「同日已成功就不重做」的保護照舊；只有明確要求重新發布時才再跑，並告訴步驟要用哪個新版本名。
+        calls: list[str] = []
+        self.run_with(full_steps(calls))
+        self.assertEqual(self.run_with(full_steps(calls))["status"], "already-done")
+        seen: list = []
+        steps = full_steps(calls)
+        steps[0] = du.Step(steps[0].name, lambda ctx: seen.append(ctx.outputs.get("_seed_version")) or {})
+        record = du.run(du.RunConfig(data_date="2026-11-06", log_dir=self.log_dir, holidays=set(), ready_interval=600,
+                                     ready_deadline=datetime(2026, 11, 6, 21, 0, tzinfo=TPE),
+                                     republish_version="liquid-20261106-abc-v2-r202611141800"),
+                        steps=steps, probe=lambda day: True, ready_check=lambda: True, clock=self.clock)
+        self.assertEqual((record["status"], record["republish_version"]), ("success", "liquid-20261106-abc-v2-r202611141800"))
+        self.assertEqual(seen, ["liquid-20261106-abc-v2-r202611141800"])
+
     def test_failure_before_activate_never_activates_or_deploys(self) -> None:
         calls: list[str] = []
         record = self.run_with(full_steps(calls, fail_at="d1_verify"))
@@ -477,6 +493,16 @@ class BuildAndDeployWiringTest(unittest.TestCase):
         self.assertTrue(cmd[cmd.index("--universe") + 1].endswith("2026-11-09.json"))
         self.assertEqual(Path(cmd[cmd.index("--out") + 1]), ctx.work_dir / "seed")
         self.assertEqual(Path(out["seed_dir"]), ctx.work_dir / "seed")
+
+    def test_build_seed_uses_the_republish_version_name_when_one_is_given(self) -> None:
+        steps = {s.name: s for s in du.real_steps()}
+        ctx = self.ctx()
+        steps["build_seed"].fn(ctx)
+        self.assertNotIn("--version", self.cmds[-1])     # 平常由資料日與來源雜湊決定版本名
+        ctx.outputs["_seed_version"] = "liquid-20261109-abc-v2-r202611141800"
+        steps["build_seed"].fn(ctx)
+        cmd = self.cmds[-1]
+        self.assertEqual(cmd[cmd.index("--version") + 1], "liquid-20261109-abc-v2-r202611141800")
 
     def test_build_seed_reuses_an_already_built_seed_on_retry(self) -> None:
         steps = {s.name: s for s in du.real_steps()}
@@ -973,6 +999,33 @@ class D1PruneTest(unittest.TestCase):
         with unittest.mock.patch.object(du, "_sh", sh), self.assertRaises(ValueError):
             du._prune_d1_versions(self.name(13))
         self.assertEqual(len(calls), 1)
+
+
+class RepublishVersionTest(unittest.TestCase):
+    def seed(self, version: str, data_date: str = "2026-11-13") -> Path:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        folder = Path(tmp.name)
+        (folder / "manifest.json").write_text(json.dumps({"version": version, "data_date": data_date}), encoding="utf-8")
+        return folder
+
+    def test_new_version_keeps_the_published_name_and_adds_when_it_was_republished(self) -> None:
+        now = datetime(2026, 11, 14, 18, 5, tzinfo=TPE)
+        with unittest.mock.patch.object(du, "LAST_SEED_DIR", self.seed("liquid-20261113-237d4b8dd208-v2")):
+            self.assertEqual(du.republish_version("2026-11-13", now), "liquid-20261113-237d4b8dd208-v2-r202611141805")
+        # 已經重新發布過一次的，再來一次不會越疊越長
+        with unittest.mock.patch.object(du, "LAST_SEED_DIR", self.seed("liquid-20261113-237d4b8dd208-v2-r202611141805")):
+            self.assertEqual(du.republish_version("2026-11-13", now.replace(hour=20)),
+                             "liquid-20261113-237d4b8dd208-v2-r202611142005")
+
+    def test_only_the_day_that_is_actually_published_can_be_republished(self) -> None:
+        now = datetime(2026, 11, 14, 18, 5, tzinfo=TPE)
+        with unittest.mock.patch.object(du, "LAST_SEED_DIR", self.seed("liquid-20261113-237d4b8dd208-v2")):
+            with self.assertRaises(ValueError):
+                du.republish_version("2026-11-12", now)
+        with unittest.mock.patch.object(du, "LAST_SEED_DIR", Path(tempfile.gettempdir()) / "no-such-last-seed"):
+            with self.assertRaises(ValueError):
+                du.republish_version("2026-11-13", now)
 
 
 class RedeployFromWorkingSetTest(unittest.TestCase):
