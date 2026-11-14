@@ -10,7 +10,7 @@ import { releasePolicy } from "./release-policy.js";
 
 const PENDING_CAP = 30;
 // 票 06 限速（Astra r1 建議值）：市場 API 全部每人每分 30 次；個股明細另限每分 12 次。固定一分鐘窗，邊界最多兩倍突發。
-const RATE = { market: 30, detail: 12, userData: 60, live: 20 };
+const RATE = { market: 30, detail: 12, userData: 60, live: 20, history: 30 };
 // 舊的整包資料檔：雲端已不部署，這裡再擋一次，避免預覽網址或殘留檔被讀到。
 const RETIRED_DATA = new Set(["/analysis-data.js", "/chips-data.js", "/dashboard-data.js", "/detail-data.js", "/plain-data.js"]);
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -263,6 +263,33 @@ async function handleStockApi(request, env, path, email, deps) {
   return new Response(body, {
     status: 200,
     headers: { "content-type": "application/json; charset=utf-8", "cache-control": "private, no-store", "x-content-type-options": "nosniff", "x-robots-tag": "noindex, nofollow" },
+  });
+}
+
+// 5 年歷史日線（本人 2026-11-14：先做 5 年、放進資料庫）。每檔一列，由每日更新在發布通過後覆寫；
+// 個股分析已帶最近 120 根，這裡只供圖往前拉。沒有資料（含資料表尚未建立）一律 404，頁面照舊顯示 120 根。
+const HISTORY_STOCK_PATH = /^\/api\/stocks\/([0-9A-Z]{4,6})\/history$/;
+
+async function handleStockHistoryApi(request, env, path, email, deps) {
+  if (request.method !== "GET") throw new HttpError(405, "方法不允許");
+  const code = path.match(HISTORY_STOCK_PATH)[1];
+  const headers = { "cache-control": "private, no-store" };
+  try {
+    await consume(env.DB, email, "history", (deps.now || Date.now)(), { ...RATE, ...deps.rate });
+  } catch (e) {
+    if (e instanceof RateLimited) return json(429, { error: "rate-limited", message: "查詢太頻繁，請稍後再試" }, { "retry-after": String(e.retryAfter) });
+    throw new HttpError(503, "暫時無法處理，請稍後再試");
+  }
+  let stored = null;
+  try {
+    stored = await env.DB.prepare("SELECT payload FROM stock_history WHERE code = ?").bind(code).first();
+  } catch {
+    stored = null;
+  }
+  if (!stored) return json(404, { error: "no-history", message: "這檔目前沒有較長的歷史日線" }, headers);
+  return new Response(stored.payload, {
+    status: 200,
+    headers: { "content-type": "application/json; charset=utf-8", ...headers, "x-content-type-options": "nosniff", "x-robots-tag": "noindex, nofollow" },
   });
 }
 
@@ -548,6 +575,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
       if (isMarket) return await handleMarketApi(request, env, path, email, deps);
       if (isComparePath(path)) return await handleCompareApi(request, env, path, email, deps);
       if (LIVE_STOCK_PATH.test(path)) return await handleStockLiveApi(request, env, path, email, deps);
+      if (HISTORY_STOCK_PATH.test(path)) return await handleStockHistoryApi(request, env, path, email, deps);
       if (isStock) return await handleStockApi(request, env, path, email, deps);
       if (isScreens) return await handleScreensApi(request, env, path, email, deps);
       if (path === DATA_STATUS_PATH) return handleDataStatusApi(request, deps);
@@ -569,6 +597,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
     if (isMarket) return await handleMarketApi(request, env, path, email, deps);
     if (isComparePath(path)) return await handleCompareApi(request, env, path, email, deps);
     if (LIVE_STOCK_PATH.test(path)) return fail(403, "即時行情僅限站主使用");
+    if (HISTORY_STOCK_PATH.test(path)) return await handleStockHistoryApi(request, env, path, email, deps);
     if (isStock) return await handleStockApi(request, env, path, email, deps);
     if (isScreens) return await handleScreensApi(request, env, path, email, deps);
     if (path === DATA_STATUS_PATH) return handleDataStatusApi(request, deps);

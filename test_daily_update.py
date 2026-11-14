@@ -665,6 +665,68 @@ class BuildAndDeployWiringTest(unittest.TestCase):
         self.assertTrue(out["ok"])
         self.assertEqual(out["prune_error"], "RuntimeError")
 
+    def test_five_year_history_is_written_to_d1_for_every_published_stock(self) -> None:
+        # 本人 2026-11-14「可以，放資料庫」：每檔一列、每天覆寫。代號取自剛發布的 seed（含 0050 相容列）。
+        import cloud.build_stock_history as history
+        ctx = self.ctx()
+        seed = ctx.work_dir / "seed"
+        seed.mkdir(parents=True)
+        rows = [{"type": "version", "data": {"version": "v-new"}},
+                {"type": "listed_security", "data": {"code": "2327"}},
+                {"type": "stock_analysis", "data": {"code": "2327"}},
+                {"type": "stock_analysis", "data": {"code": "0050"}},
+                {"type": "universe_outside", "data": {"code": "1234"}}]
+        (seed / "seed.jsonl").write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+        ctx.outputs["build_seed"] = {"seed_dir": str(seed), "version": "v-new"}
+        asked = []
+
+        def fake_build(codes, as_of):
+            asked.append((list(codes), as_of))
+            return {code: {"schema": "stock-history/v1", "code": code, "as_of": as_of, "d": [20261109], "o": [1.0],
+                           "h": [1.0], "l": [1.0], "c": [1.0], "v": [1]} for code in codes}
+        with unittest.mock.patch.object(history, "build_history", fake_build):
+            out = du._publish_stock_history(ctx)
+        self.assertEqual(asked, [(["2327", "0050"], "2026-11-09")])
+        self.assertEqual(out, {"history_rows": 2, "history_skipped": [], "history_files": 1})
+        [command] = self.cmds
+        self.assertEqual(command[:7], ["npx", "--yes", "wrangler@4", "d1", "execute", "market-ana-accounts", "--remote"])
+        sql = Path(command[command.index("--file") + 1]).read_text(encoding="utf-8")
+        self.assertEqual(sql.count("INSERT INTO stock_history"), 2)
+        self.assertTrue(sql.rstrip().endswith("DELETE FROM stock_history WHERE data_date < '2026-11-09';"))
+
+    def test_history_is_published_only_after_a_verified_publish_and_never_fails_it(self) -> None:
+        steps = {s.name: s for s in du.real_steps()}
+        ctx = self.ctx()
+        ctx.outputs["build_seed"] = {"seed_dir": str(ctx.work_dir / "seed"), "version": "v-new"}
+        published: list[str] = []
+
+        def run(verdict, publish):
+            import contextlib
+            with contextlib.ExitStack() as stack:
+                for name, value in (("_remember_seed", lambda c: {"remembered": "v-new"}),
+                                    ("_remember_build_inputs", lambda c: {}),
+                                    ("_probe_unauthenticated", lambda paths: {}),
+                                    ("_remote_active_version", lambda: "v-new"),
+                                    ("post_deploy_verdict", lambda **kw: verdict),
+                                    ("_prune_d1_versions", lambda expected: {}),
+                                    ("_publish_stock_history", publish)):
+                    stack.enter_context(unittest.mock.patch.object(du, name, value))
+                return steps["post_deploy_check"].fn(ctx)
+
+        def publish(c):
+            published.append(c.data_date)
+            return {"history_rows": 356, "history_skipped": [], "history_files": 10}
+        with self.assertRaises(RuntimeError):
+            run({"ok": False, "reason": "bad"}, publish)
+        self.assertEqual(published, [])
+        self.assertEqual(run({"ok": True, "reason": "fine"}, publish)["history_rows"], 356)
+
+        def broken(c):
+            raise RuntimeError("d1 unavailable")
+        out = run({"ok": True, "reason": "fine"}, broken)
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["history_error"], "RuntimeError")
+
     def test_pages_deploy_targets_production_branch(self) -> None:
         steps = {s.name: s for s in du.real_steps()}
         steps["pages_deploy"].fn(self.ctx())

@@ -462,5 +462,21 @@
     }
   }
   window.KChart = KChart;
-  window.KChartMath = { sma, ema, macd, bollinger, normalizePeriods };
+  // 5 年歷史日線（欄位式：d 為 YYYYMMDD 整數）裡，比 bars 第一根更早的 K 棒。
+  // 歷史必須涵蓋 bars 的第一根且收盤一致才接：還原係數不同步或資料不是同一檔時回空陣列，圖維持原樣。
+  function olderBars(bars, history) {
+    if (!Array.isArray(bars) || !bars.length || !history || history.schema !== 'stock-history/v1') return [];
+    const columns = ['d', 'o', 'h', 'l', 'c', 'v'].map(key => history[key]);
+    if (columns.some(column => !Array.isArray(column) || column.length !== history.d.length)) return [];
+    const first = bars[0];
+    const join = history.d.indexOf(Number(String(first.date).replaceAll('-', '')));
+    if (join < 0 || Math.abs(history.c[join] - first.close) > 0.011) return [];
+    return history.d.slice(0, join).map((day, i) => {
+      const text = String(day);
+      return { date: `${text.slice(0, 4)}-${text.slice(4, 6)}-${text.slice(6, 8)}`, open: history.o[i], high: history.h[i],
+        low: history.l[i], close: history.c[i], volume: history.v[i] };
+    });
+  }
+
+  window.KChartMath = { sma, ema, macd, bollinger, normalizePeriods, olderBars };
 })();

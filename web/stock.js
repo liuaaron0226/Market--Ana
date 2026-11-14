@@ -97,6 +97,8 @@
   let requestSequence = 0;
   let pendingRequest = null;
   let chartPeriod = 'daily';
+  // 5 年歷史日線：個股分析只帶最近 120 根，更早的在背景載入後接在前面。拿不到或對不上就維持原樣，不顯示任何訊息。
+  let olderBars = { code: '', firstDate: '', rows: [] };
   let maPeriods = [18, 45];
   const INTRADAY_PERIODS = { '1m': '1', '5m': '5', '15m': '15', '60m': '60' };
   try {
@@ -343,7 +345,8 @@
 
   function dailyCandles(result) {
     const institutional = new Map((result.institutional || []).map(row => [row.date, row]));
-    return result.bars.map(bar => {
+    const older = olderBars.code === result.code && olderBars.firstDate === result.bars[0]?.date ? olderBars.rows : [];
+    return [...older, ...result.bars].map(bar => {
       const chip = institutional.get(bar.date) || {};
       return { t: bar.date, label: bar.date, open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume,
         foreign: chip.foreign, trust: chip.trust, dealer: chip.dealer };
@@ -363,6 +366,9 @@
     (lv.support || []).forEach((c, i) => overlays.push({ value: c.tick, label: `支撐${i ? '二' : '一'} ${fmt(c.tick)}`, short: '支撐', color: css('--down', '#0f8058'), pos: 'below', align: i ? 'left' : 'right' }));
     const key = `${r.code}:${r.as_of}:${chartPeriod}`;
     const savedView = chart && key === lastChartKey ? { ...chart.view } : null;
+    const shownBefore = chart ? chart.candles : [];
+    // 歷史接上後，日 K 比伺服器預算的 MACD 多出很多根：改由圖表用完整序列自己算。
+    const extended = !intraday && daily.length > r.bars.length;
     if (!chart) chart = new window.KChart($('chartHost'), { macd: false, studyHost: $('chartStudies'), studies: ['volume', 'macd', 'kd', 'rsi', 'foreign', 'trust', 'dealer'], maPeriods, selectionRoots: [$('chartHost').parentElement], volumeKind: 'volume', overlayLabels: 'tags', height: w => Math.max(300, Math.min(460, w * 0.52)) });
     const expected = { fast: 12, slow: 26, signal: 9, histogram_multiplier: 1, seed: 'first_close', warmup_bars: 34,
       precision: 3, missing_policy: 'omit_missing_price_rows', version: 'macd-first-close-v1' };
@@ -371,9 +377,14 @@
       && r.chart.macd.every((row, i) => row.date === daily[i].t);
     const unit = intraday ? `${intradayKey}分` : chartPeriod === 'monthly' ? '月' : chartPeriod === 'weekly' ? '週' : '日';
     chart.setData(candles, { count: Math.min(candles.length, intraday ? 80 : innerWidth < 600 ? 50 : 90), overlays, unit,
-      macd: intraday || chartPeriod !== 'daily' || r._intraday ? null : compatible ? r.chart.macd : [],
-      macdNotice: compatible || intraday || chartPeriod !== 'daily' || r._intraday ? '' : 'MACD版本或日期不符，暫不顯示' });
-    if (savedView) { chart.view = savedView; chart.clamp(); chart.draw(); }
+      macd: intraday || chartPeriod !== 'daily' || r._intraday || extended ? null : compatible ? r.chart.macd : [],
+      macdNotice: compatible || intraday || chartPeriod !== 'daily' || r._intraday || extended ? '' : 'MACD版本或日期不符，暫不顯示' });
+    if (savedView) {
+      // 歷史接在前面時，原本看的那一段往後移了幾根就跟著移，畫面停在原地。
+      const shift = shownBefore.length ? candles.findIndex(candle => candle.t === shownBefore[0].t) : 0;
+      if (shift > 0) savedView.end += shift;
+      chart.view = savedView; chart.clamp(); chart.draw();
+    }
     lastChartKey = key;
     if (intraday) $('stockChartContext').textContent = `${intradayKey}分K · ${candles.length} 根`;
     else $('stockChartContext').textContent = `${unit}K · 資料日 ${r.as_of}`;
@@ -899,11 +910,23 @@
     loadComparison();
   }
 
+  async function loadHistory(result, sequence) {
+    try {
+      const response = await fetch(`/api/stocks/${encodeURIComponent(result.code)}/history`, { cache: 'no-store' });
+      if (!response.ok || sequence !== requestSequence) return;
+      const rows = window.KChartMath.olderBars(result.bars, await response.json());
+      if (!rows.length || sequence !== requestSequence) return;
+      olderBars = { code: result.code, firstDate: result.bars[0].date, rows };
+      if (lastResult && lastResult.code === result.code) drawChart(lastResult);
+    } catch (_) { /* 歷史是附加的：失敗就維持最近 120 根 */ }
+  }
+
   async function load(code) {
     const sequence = ++requestSequence;
     livePoller.stop();
     baseResult = null;
     lastLive = null;
+    olderBars = { code: '', firstDate: '', rows: [] };
     if (pendingRequest) pendingRequest.abort();
     pendingRequest = new AbortController();
     $('content').hidden = true;
@@ -944,6 +967,7 @@
       }
       baseResult = data;
       render(data, true);
+      loadHistory(data, sequence);
       if (canUseLive(data)) livePoller.start(code, data.market);
       else updateLiveStatus({ ok: true, market_open: false, live: false });
     } catch (error) {

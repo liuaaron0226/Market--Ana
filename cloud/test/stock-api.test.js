@@ -321,3 +321,51 @@ test("舊三方案格式的個股資料包被拒絕（503），不把舊 payload
   assert.equal(r.status, 503);
   assert.doesNotMatch(await r.text(), /2TON/);
 });
+
+// ---- 5 年歷史日線（本人 2026-11-14：先做 5 年、放進資料庫每檔一列） ----
+const HISTORY = { schema: "stock-history/v1", code: "2330", as_of: "2026-11-06",
+  d: [20211116, 20261105, 20261106], o: [600, 2190, 2200], h: [605, 2210, 2240], l: [598, 2180, 2195], c: [603, 2200, 2235], v: [1, 2, 3] };
+async function seedHistory(payload = HISTORY, dataDate = "2026-11-06") {
+  await env.DB.prepare("INSERT INTO stock_history (code, data_date, payload) VALUES (?, ?, ?)")
+    .bind(payload.code, dataDate, JSON.stringify(payload)).run();
+}
+
+test("已核准者取得該檔的 5 年歷史日線；未登入與未核准拿不到", async () => {
+  await seedHistory();
+  await seed("ok@x.com", "approved");
+  const r = await req("/api/stocks/2330/history", "ok@x.com");
+  assert.equal(r.status, 200);
+  assert.equal(r.headers.get("cache-control"), "private, no-store");
+  assert.deepEqual(await r.json(), HISTORY);
+  assert.equal((await req("/api/stocks/2330/history", null)).status, 401);
+  await seed("p@x.com", "pending");
+  const denied = await req("/api/stocks/2330/history", "p@x.com");
+  assert.equal(denied.status, 403);
+  assert.doesNotMatch(await denied.text(), /20261106/);
+});
+
+test("沒有歷史資料的代號回 404 no-history，頁面照舊只顯示最近 120 根", async () => {
+  const r = await req("/api/stocks/2454/history");
+  assert.equal(r.status, 404);
+  assert.equal((await r.json()).error, "no-history");
+  assert.equal((await req("/api/stocks/23!0/history")).status, 400);
+});
+
+test("歷史資料表還沒建立時同樣回 404 no-history，不是伺服器錯誤", async () => {
+  const real = env.DB;
+  env.DB = { prepare: (sql) => {
+    if (/stock_history/.test(sql)) throw new Error("D1_ERROR: no such table: stock_history");
+    return real.prepare(sql);
+  } };
+  const r = await req("/api/stocks/2330/history");
+  assert.equal(r.status, 404);
+  assert.equal((await r.json()).error, "no-history");
+});
+
+test("歷史日線有自己的額度，不佔用個股分析的查詢次數", async () => {
+  await seedHistory();
+  await seed("ok@x.com", "approved");
+  for (let i = 0; i < 30; i++) assert.equal((await req("/api/stocks/2330/history", "ok@x.com")).status, 200);
+  assert.equal((await req("/api/stocks/2330/history", "ok@x.com")).status, 429);
+  assert.equal((await req("/api/stocks/2330/analysis", "ok@x.com")).status, 200);
+});

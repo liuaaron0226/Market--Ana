@@ -768,6 +768,38 @@ def _prune_d1_versions(expected_active: str | None) -> dict:
     return {"pruned_versions": pruned, "kept_versions": len(rows) - len(pruned)}
 
 
+def _publish_stock_history(ctx: RunContext) -> dict:
+    """把剛發布的每檔 5 年還原日線寫進 D1 stock_history（每檔一列、每天覆寫）。
+
+    非必要：個股分析已帶最近 120 根，這裡失敗只是圖暫時不能往前拉，由呼叫端記錄、不擋發布。
+    """
+    from cloud import build_stock_history as history
+
+    seed_file = Path(ctx.outputs["build_seed"]["seed_dir"]) / "seed.jsonl"
+    codes = []
+    with seed_file.open(encoding="utf-8") as lines:
+        for line in lines:
+            row = json.loads(line)
+            if row.get("type") == "stock_analysis":
+                codes.append(row["data"]["code"])
+    statements, skipped = history.history_sql(history.build_history(codes, ctx.data_date), ctx.data_date)
+    out = ctx.work_dir / "stock-history"
+    out.mkdir(parents=True, exist_ok=True)
+    groups: list[list[str]] = [[]]
+    for statement in statements:  # 與每日匯入相同：多條語句合成約 2MB 一檔，減少往返次數
+        if groups[-1] and sum(len(item) for item in groups[-1]) + len(statement) > D1_GROUP_BYTES:
+            groups.append([])
+        groups[-1].append(statement)
+    files = 0
+    for index, group in enumerate(group for group in groups if group):
+        path = out / f"{index:04d}.sql"
+        path.write_text("\n".join(group) + "\n", encoding="utf-8", newline="\n")
+        _sh(_npx("d1", "execute", D1_DATABASE, "--remote", "--file", str(path.resolve())), cwd=CLOUD)
+        files += 1
+    rows = sum(1 for statement in statements if statement.startswith("INSERT INTO stock_history"))
+    return {"history_rows": rows, "history_skipped": skipped, "history_files": files}
+
+
 def real_steps() -> list[Step]:
     """正式流程的步驟表（U2 起全部接上）。dry-run 時會改動遠端的步驟由 run() 跳過，只記錄。"""
 
@@ -872,7 +904,11 @@ def real_steps() -> list[Step]:
             pruned = _prune_d1_versions(expected)
         except Exception as error:  # noqa: BLE001
             pruned = {"prune_error": type(error).__name__}
-        return {**verdict, **remembered, **saved, **pruned}
+        try:  # 5 年歷史日線同樣是發布後的附帶工作：寫不成，圖就維持最近 120 根，不回滾發布
+            history = _publish_stock_history(ctx)
+        except Exception as error:  # noqa: BLE001
+            history = {"history_error": type(error).__name__}
+        return {**verdict, **remembered, **saved, **pruned, **history}
 
     steps = {
         "fetch_incremental": fetch_incremental,

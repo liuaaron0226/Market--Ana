@@ -127,6 +127,16 @@ test("副圖提供外資、投信、自營商個別買賣超，不提供無來�
   assert.doesNotMatch(studies, /左右滑動切換/);
 });
 
+test("個股頁在分析畫出來之後才背景載入 5 年歷史，接不上就維持原樣、不加任何提示文字（本人 11-14）", () => {
+  const js = read("web/stock.js");
+  const html = read("web/stock.html");
+  assert.match(js, /render\(data, true\);\s*loadHistory\(data, sequence\);/);
+  assert.match(js, /fetch\(`\/api\/stocks\/\$\{encodeURIComponent\(result\.code\)\}\/history`/);
+  assert.match(js, /window\.KChartMath\.olderBars\(result\.bars, await response\.json\(\)\)/);
+  assert.match(js, /olderBars = \{ code: '', firstDate: '', rows: \[\] \};\s*if \(pendingRequest\)/);  // 換股票就丟掉上一檔的歷史
+  assert.doesNotMatch(html, /5 ?年|歷史日線|載入更多/);  // 圖本來就能拖曳、縮放、切換日週月，不需要新的按鈕或說明
+});
+
 test("MA設定使用try catch保護localStorage", () => {
   const stock = read("web/stock.js");
   assert.match(stock, /localStorage\.getItem\(['"]stock-ma-periods['"]\)/);
