@@ -4,6 +4,7 @@
 import { verifyAccessJwt } from "./jwt.js";
 import { detailFor } from "./market-data.js";
 import { handleUserPortfolio, UserPortfolioError } from "./user-portfolio.js";
+import { handleUserDrawings } from "./user-drawings.js";
 import { defaultLiveQuoteService } from "./live-quotes.js";
 import { fetchTickPage } from "./live-ticks.js";
 import { defaultIndexLiveService } from "./index-live.js";
@@ -515,7 +516,9 @@ function handleDataStatusApi(request, deps) {
 }
 
 const USER_DATA_PATH = /^\/api\/(watchlist|holdings|search-history)(?:\/[^/]+)?$/;
-async function handleUserPortfolioApi(request, env, path, email, deps) {
+// 畫線：/api/drawings/<代號> 讀整檔，/api/drawings/<代號>/<識別碼> 寫一條。與其他個人資料共用額度。
+const DRAWINGS_PATH = /^\/api\/drawings\/([^/]+)(?:\/([^/]+))?$/;
+async function handleUserDataApi(request, env, path, email, deps) {
   try {
     await consume(env.DB, email, "userData", (deps.now || Date.now)(), deps.rate);
   } catch (error) {
@@ -524,6 +527,8 @@ async function handleUserPortfolioApi(request, env, path, email, deps) {
     }
     throw new HttpError(503, "暫時無法處理，請稍後再試");
   }
+  const drawing = path.match(DRAWINGS_PATH);
+  if (drawing) return handleUserDrawings(request, env, { code: drawing[1], id: drawing[2] }, email, deps);
   return handleUserPortfolio(request, env, path, email, deps);
 }
 
@@ -598,7 +603,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
     const isMarket = path.startsWith("/api/market/");
     const isStock = path.startsWith("/api/stocks/");
     const isScreens = SCREEN_PATHS.has(path);
-    const isUserData = USER_DATA_PATH.test(path);
+    const isUserData = USER_DATA_PATH.test(path) || DRAWINGS_PATH.test(path);
     const policy = releasePolicy(env);
     const levelDisabled = () => json(403, { error: "feature-disabled", message: "未驗證的水位建議尚未啟用", features: policy.features });
     if (isOwner) {
@@ -607,7 +612,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
       if (path.startsWith("/api/admin/")) return await handleAdminApi(request, env, path, owner);
       if (path === "/api/me") return json(200, { email, status: "approved", owner: true });
       if (path === "/api/holdings/level" && !policy.features.level_advice) return levelDisabled();
-      if (isUserData) return await handleUserPortfolioApi(request, env, path, email, deps);
+      if (isUserData) return await handleUserDataApi(request, env, path, email, deps);
       if (isMarket) return await handleMarketApi(request, env, path, email, deps);
       if (isComparePath(path)) return await handleCompareApi(request, env, path, email, deps);
       if (LIVE_STOCK_PATH.test(path)) return await handleStockLiveApi(request, env, path, email, deps);
@@ -629,7 +634,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
     if (path === "/api/me") return json(200, { email, status, owner: false });
     if (path === "/api/features") return json(200, policy);
     if (path === "/api/holdings/level" && !policy.features.level_advice) return levelDisabled();
-    if (isUserData) return await handleUserPortfolioApi(request, env, path, email, deps);
+    if (isUserData) return await handleUserDataApi(request, env, path, email, deps);
     if (path === "/api/live" || path === "/api/mis-probe") return fail(403, "即時行情僅限站主使用");
     if (isMarket) return await handleMarketApi(request, env, path, email, deps);
     if (isComparePath(path)) return await handleCompareApi(request, env, path, email, deps);

@@ -14,7 +14,7 @@ const dist = new URL("../dist/", import.meta.url);
 const issuer = await makeIssuer();
 const env = { DB: fakeD1(), TEAM_DOMAIN: TEAM, MAIN_AUD, APPLY_AUD, OWNER_EMAIL: OWNER };
 // 自動化驗收會在一分鐘內點完全部下鑽；額度可由第三個參數放寬（正式版額度見 gate.js RATE，不受影響）。
-const rate = process.argv[3] === "relaxed" ? { market: 10_000, detail: 10_000 } : undefined;
+const rate = process.argv[3] === "relaxed" ? { market: 10_000, detail: 10_000, userData: 10_000 } : undefined;
 const deps = { fetchImpl: fetchJwks(issuer.jwks), now: () => Date.now(), marketPack, stockPack, screensPack, rate };
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json" };
 

@@ -13,7 +13,7 @@ export class UserPortfolioError extends Error {
   }
 }
 
-const response = (status, body) => new Response(JSON.stringify(body), {
+export const response = (status, body) => new Response(JSON.stringify(body), {
   status,
   headers: {
     "content-type": "application/json; charset=utf-8",
@@ -23,7 +23,7 @@ const response = (status, body) => new Response(JSON.stringify(body), {
   },
 });
 
-function codeFrom(value) {
+export function codeFrom(value) {
   const code = typeof value === "string" ? value.trim().toUpperCase() : "";
   if (!CODE_RE.test(code)) throw new UserPortfolioError(400, "股票代號格式不正確");
   return code;
@@ -35,7 +35,7 @@ function requireSameOrigin(request) {
   }
 }
 
-async function readBody(request) {
+export async function readBody(request) {
   requireSameOrigin(request);
   try {
     return await request.json();

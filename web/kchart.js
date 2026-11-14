@@ -1,6 +1,7 @@
 /* 可拖曳／縮放的K線圖（原生Canvas，無外部套件）。
    互動：滑鼠拖曳或單指左右平移；滾輪、雙指捏合或＋／−按鈕縮放；鍵盤左右鍵平移、+/- 縮放；點擊或移動顯示十字線。
-   資料：candles=[{t,label,open,high,low,close,amount}] 由舊到新。overlays 可放判斷線。 */
+   資料：candles=[{t,label,open,high,low,close,amount}] 由舊到新。overlays 可放判斷線。
+   畫線（選用）：頁面先載入 chart-drawings.js 並傳 opts.drawings={onChange,onTool}，再用 setTool／setDrawings 操作。 */
 (function () {
   'use strict';
   const DPR = () => Math.max(1, Math.min(3, window.devicePixelRatio || 1));
@@ -73,6 +74,7 @@
       this.candles = []; this.view = { end: 0, count: 60 }; this.hover = -1; this.selection = -1; this.overlays = [];
       this.showMacd = this.opts.macd !== false;
       this.maPeriods = normalizePeriods(this.opts.maPeriods || [18, 45]);
+      this.drawings = this.opts.drawings && window.ChartDrawings ? new window.ChartDrawings(this, this.opts.drawings) : null;
       this.bindCanvas(this.canvas);
       this.studies = this.opts.studyHost ? new window.ChartStudies(this, this.opts.studyHost, { volumeKind: this.opts.volumeKind || 'amount', studies: this.opts.studies }) : null;
       if (this.studies) document.addEventListener('pointerdown', event => {
@@ -91,8 +93,12 @@
       this.view = { end: candles.length, count };
       this.hover = -1; this.selection = -1;
       this.overlays = opts.overlays || [];
+      if (this.drawings) this.drawings.dataChanged();
       this.draw(); this.emit();
     }
+    // 畫線：目前要用的工具（'hline'；null＝一般模式），以及這張圖上的整組畫線（[{id,kind,anchors:[{date,price}]}]）。
+    setTool(kind) { if (this.drawings) this.drawings.setTool(kind); }
+    setDrawings(list) { if (this.drawings) { this.drawings.load(list); this.draw(); } }
     compute(candles) {
       this.candles = candles; this.shownLength = candles.length;
       const closes = candles.map(c => hasPrice(c) ? c.close : null);
@@ -173,18 +179,21 @@
           if (Math.abs(dx) >= 40 && Math.abs(dx) > Math.abs(dy) * 1.3) this.studies.switchBy(dx < 0 ? 1 : -1);
         }
         if (e.type === 'pointerup' && drag?.kind === 'single' && !drag.moved && !drag.hadPinch && this.geo) {
-          const g = this.geo, px = e.clientX - c.getBoundingClientRect().left;
-          this.hover = px >= g.l && px <= g.l + g.pw
-            ? Math.min(this.view.end - 1, g.start + Math.floor((px - g.l) / g.step)) : -1;
-          this.selection = this.hover;
-          if (c !== this.canvas && this.hover >= 0 && this.opts.onSelect) this.opts.onSelect(this.hover, c);
+          const g = this.geo, rect = c.getBoundingClientRect(), px = e.clientX - rect.left;
+          // 選了畫線工具時，主圖上的這一下用來定位，不選 K 棒。
+          if (!(c === this.canvas && this.drawings && this.drawings.tap(px, e.clientY - rect.top))) {
+            this.hover = px >= g.l && px <= g.l + g.pw
+              ? Math.min(this.view.end - 1, g.start + Math.floor((px - g.l) / g.step)) : -1;
+            this.selection = this.hover;
+            if (c !== this.canvas && this.hover >= 0 && this.opts.onSelect) this.opts.onSelect(this.hover, c);
+          }
           this.draw();
         }
         pts.delete(e.pointerId);
         if (pts.size === 1 && drag?.kind === 'pinch') {
           const point = pts.values().next().value;
           drag = { kind: 'single', x: point.x, y: point.y, end: this.view.end, moved: false, hadPinch: true, studySwipe: drag.studySwipe };
-        } else if (pts.size === 0) { drag = null; c.style.cursor = 'grab'; }
+        } else if (pts.size === 0) { drag = null; c.style.cursor = c === this.canvas && this.drawings ? this.drawings.idleCursor() : 'grab'; }
       };
       c.addEventListener('pointerup', up); c.addEventListener('pointercancel', up);
       c.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse' && !drag) { this.hover = this.selection; this.draw(); } });
@@ -253,6 +262,7 @@
       // 布林通道常比 K 棒寬，價格座標要把可見範圍內的上下軌算進去，通道才不會畫到圖外。
       for (let i = start; i < end; i++) { const band = this.boll[i]; if (band) { lo = Math.min(lo, band.lower); hi = Math.max(hi, band.upper); } }
       const pad = (hi - lo) * .07 || 10; lo -= pad; hi += pad;
+      Object.assign(this.geo, { t, ph, lo, hi });
       const y = v => t + (hi - v) / (hi - lo) * ph;
       const line = css('--line'), dim = css('--faint'), ink = css('--ink'), up = css('--up'), dn = css('--down');
       x.font = '11.5px "JetBrains Mono",Consolas,monospace'; x.textBaseline = 'middle';
@@ -378,6 +388,7 @@
         else x.fillText(o.label, l + 6, y(o.value) + (above ? -3 : 3));
         x.textBaseline = 'alphabetic';
       });
+      if (this.drawings) this.drawings.drawLines(x, this.geo);
       // 布林通道 20：畫在 K 棒後面，淡色帶加上下軌細線。連續有值的每一段各自成帶，缺值處斷開。
       const bandColor = css('--dim');
       for (let i = start; i < end;) {
@@ -433,6 +444,8 @@
         x.font = '600 11.5px "JetBrains Mono",Consolas,monospace'; x.textAlign = 'right'; x.fillText(fmtTag(last.close), tagX + tagW - 6, py + .5);
         x.textAlign = 'left'; x.font = '11.5px "JetBrains Mono",Consolas,monospace';
       } else if (end === n && hasPrice(last)) { const pw2 = stacked ? 46 : r - 4; x.fillStyle = ink; x.textBaseline = 'middle'; x.fillRect(l + pw + 2, y(last.close) - 9, pw2, 18); x.fillStyle = css('--bg'); x.fillText(fmt(last.close, 0), l + pw + 7, y(last.close)); }
+      // 畫線的價位標示最後才畫：壓在 K 棒與現價虛線上面，數字才讀得到。
+      if (this.drawings) this.drawings.drawLabels(x, this.geo);
       // 驗收用：右側刻度文字框與現價框的位置。
       this.debugBoxes = { axis: axisBoxes, price: end === n && hasPrice(last) ? { y: y(last.close) - 9, h: 18 } : null, height: H };
       // MACD

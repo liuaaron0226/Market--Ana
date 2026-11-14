@@ -113,6 +113,8 @@
   // 5 年歷史日線：個股分析只帶最近 120 根，更早的在背景載入後接在前面。拿不到或對不上就維持原樣，不顯示任何訊息。
   let olderBars = { code: '', firstDate: '', rows: [] };
   let maPeriods = [18, 45];
+  // 畫線：目前這一檔在這次瀏覽中新畫的線。雲端那一份晚一步讀回來時要併進去，不能把剛畫的蓋掉。
+  let drawnHere = { code: '', items: [] };
   const INTRADAY_PERIODS = { '1m': '1', '5m': '5', '15m': '15', '60m': '60' };
   // 秒 K（本人 2026-11-14「可以，先做當天」）：當天逐筆在背景一頁一頁取回，由 Intraday.secondCandles 彙總。
   const SECOND_PERIODS = { '1s': 1, '5s': 5, '10s': 10, '15s': 15, '30s': 30 };
@@ -388,7 +390,10 @@
     const shownBefore = chart ? chart.candles : [];
     // 歷史接上後，日 K 比伺服器預算的 MACD 多出很多根：改由圖表用完整序列自己算。
     const extended = !intraday && daily.length > r.bars.length;
-    if (!chart) chart = new window.KChart($('chartHost'), { macd: false, studyHost: $('chartStudies'), studies: ['volume', 'macd', 'kd', 'rsi', 'foreign', 'trust', 'dealer'], maPeriods, selectionRoots: [$('chartHost').parentElement], volumeKind: 'volume', overlayLabels: 'tags', height: w => Math.max(300, Math.min(460, w * 0.52)) });
+    if (!chart) chart = new window.KChart($('chartHost'), { macd: false, studyHost: $('chartStudies'), studies: ['volume', 'macd', 'kd', 'rsi', 'foreign', 'trust', 'dealer'], maPeriods, selectionRoots: [$('chartHost').parentElement], volumeKind: 'volume', overlayLabels: 'tags', height: w => Math.max(300, Math.min(460, w * 0.52)),
+      drawings: { onChange: saveDrawingChange, onTool: showActiveTool } });
+    // 畫線只在日、週、月 K：秒 K、分 K 連工具列一起收起。
+    $('drawTools').hidden = intraday;
     const expected = { fast: 12, slow: 26, signal: 9, histogram_multiplier: 1, seed: 'first_close', warmup_bars: 34,
       precision: 3, missing_policy: 'omit_missing_price_rows', version: 'macd-first-close-v1' };
     const compatible = !r._intraday && chartPeriod === 'daily' && r.chart && Object.entries(expected).every(([field, value]) => r.chart.parameters?.[field] === value)
@@ -990,6 +995,53 @@
     pollTicks(lastResult.code, tickFeed.generation);
   }
 
+  // ---------- 畫線 ----------
+  const drawToolButtons = () => [...$('drawTools').querySelectorAll('button[data-tool]')];
+
+  function showActiveTool(tool) {
+    drawToolButtons().forEach(button => button.setAttribute('aria-pressed', String(button.dataset.tool === tool)));
+  }
+
+  // 畫完就存到自己的帳號底下。存不上去時線仍留在畫面上（補存與提示另案處理）。
+  function saveDrawingChange(change) {
+    if (change.type !== 'add' || !drawnHere.code) return;
+    const { id, kind, anchors } = change.drawing;
+    drawnHere.items.push(change.drawing);
+    fetch(`/api/drawings/${encodeURIComponent(drawnHere.code)}/${encodeURIComponent(id)}`, {
+      method: 'PUT', cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind, anchors }),
+    }).catch(() => { /* 連不上：線留在畫面 */ });
+  }
+
+  // 個股分析畫出來之後才讀；讀不到就當作沒有畫線，不影響其他內容。
+  async function loadDrawings(code, sequence) {
+    try {
+      const response = await fetch(`/api/drawings/${encodeURIComponent(code)}`, { cache: 'no-store' });
+      const data = response.ok ? await response.json() : null;
+      if (sequence !== requestSequence || !chart || !Array.isArray(data?.items)) return;
+      const local = new Set(drawnHere.items.map(drawing => drawing.id));
+      chart.setDrawings([...data.items.filter(item => !local.has(item.id)), ...drawnHere.items]);
+    } catch (_) { /* 畫線是附加的：失敗就維持沒有畫線 */ }
+  }
+
+  // 工具列只有圖示：名稱在滑鼠停留與鍵盤聚焦時由樣式顯示，手機則是長按；長按只看名稱，不切換工具。
+  function bindDrawTools() {
+    drawToolButtons().forEach(button => {
+      let timer = null, held = false;
+      const release = () => { clearTimeout(timer); button.classList.remove('is-tip'); };
+      button.addEventListener('pointerdown', event => {
+        held = false;
+        if (event.pointerType === 'mouse') return;
+        timer = setTimeout(() => { held = true; button.classList.add('is-tip'); }, 450);
+      });
+      ['pointerup', 'pointercancel', 'pointerleave'].forEach(type => button.addEventListener(type, release));
+      button.addEventListener('contextmenu', event => event.preventDefault());
+      button.addEventListener('click', () => {
+        if (held) { held = false; return; }
+        if (chart) chart.setTool(button.getAttribute('aria-pressed') === 'true' ? null : button.dataset.tool);
+      });
+    });
+  }
+
   async function loadHistory(result, sequence) {
     try {
       const response = await fetch(`/api/stocks/${encodeURIComponent(result.code)}/history`, { cache: 'no-store' });
@@ -1010,6 +1062,9 @@
     stopTicks();
     if (pendingRequest) pendingRequest.abort();
     pendingRequest = new AbortController();
+    // 換股票：上一檔的畫線與選到一半的工具都放下；重新載入同一檔時，這次剛畫的先留著。
+    if (drawnHere.code !== code) drawnHere = { code, items: [] };
+    if (chart) { chart.setTool(null); chart.setDrawings(drawnHere.items); }
     $('content').hidden = true;
     $('outside').hidden = true;
     $('content').setAttribute('aria-busy', 'true');
@@ -1049,6 +1104,7 @@
       baseResult = data;
       render(data, true);
       loadHistory(data, sequence);
+      loadDrawings(data.code, sequence);
       syncTickFeed();
       if (canUseLive(data)) livePoller.start(code, data.market);
       else updateLiveStatus({ ok: true, market_open: false, live: false });
@@ -1112,6 +1168,7 @@
   let saved = null;
   try { saved = localStorage.getItem('market-theme'); } catch (_) { /* 私密視窗 */ }
   renderMaControls();
+  bindDrawTools();
   setTheme(saved === 'dark' ? 'dark' : 'light');
   window.StockView = { weeklyCandles, monthlyCandles };
   loadReleaseFeatures().then(() => load(codeFromUrl() || '2330'));
