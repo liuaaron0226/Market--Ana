@@ -507,6 +507,10 @@ body.hm .bd-switch-pill { border-radius: var(--r-key); background: var(--key); b
 body.hm .chart-badges span,
 body.hm .line-trigger span,
 body.hm .current-point .point-label { border-radius: var(--r-tag); }
+/* 焦點框的形狀也跟著變數走；主圖畫布的圓角是 kchart.js 寫在行內的，所以要 !important */
+body.hm .skip-link,
+body.hm .line-trigger { border-radius: var(--r-key); }
+body.hm #mainChart canvas { border-radius: var(--r-key) !important; }
 @media (min-width: 761px) {
   /* 收復線／防守線圖例：外觀畫在 ::before（按鈕本身保留 44px 點擊區），所以鍵的樣子套在 ::before */
   body.hm .line-trigger { transition: transform var(--t-lift) var(--ease-depth); }
@@ -542,4 +546,100 @@ body.hm .current-point .point-label { border-radius: var(--r-tag); }
 /* 320 寬：板的內距讓圖下的收復線／防守線兩鍵並排放不下，改成上下各一列，避免橫向捲動 */
 @media (max-width: 359px) {
   body.hm .chart-actions { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ================= 看盤桌：首頁其餘區塊（立體重設計 A 包第 3 片，2026-11-14） =================
+   今日 AI 解讀、直白分析、六張籌碼卡、選股看板的三個區塊都是第 1 層的板；區塊標題寫在桌面上。
+   可以點開明細的板（直白分析、籌碼卡）有懸停浮起與按下沉入。板裡的列表維持報表列，不再各自加框。
+   產業資金流向只換外面的板，裡面的圖、圖例、排行與表格留給 B 包。 */
+body.hm .ai-digest-card,
+body.hm .read-card,
+body.hm .chip-grid .chip-card,
+body.hm .market-screens .screen-block {
+  border: 0 !important; border-radius: var(--r-slab); background: var(--slab); box-shadow: var(--slab-shadow);
+}
+
+/* ---------- 直白分析、籌碼卡：可以點開明細的板 ---------- */
+body.hm .read-card { margin-top: 20px; padding: 28px 32px; }
+body.hm .chips { padding: 40px 0 0; border: 0; }
+body.hm .chip-grid { gap: 20px; border: 0; }
+body.hm .chip-grid .chip-card { padding: 18px 22px 16px; }
+body.hm .read-card,
+body.hm .chip-grid .chip-card {
+  transition: transform var(--t-lift) var(--ease-depth), box-shadow var(--t-lift) var(--ease-depth);
+}
+@media (hover: hover) {
+  body.hm .read-card:hover,
+  body.hm .chip-grid .chip-card:hover {
+    background: var(--slab); transform: translateY(var(--slab-lift)); box-shadow: var(--slab-shadow-hover);
+  }
+}
+body.hm .read-card:active,
+body.hm .chip-grid .chip-card:active {
+  transform: translateY(calc(var(--slab-thick) - 1px)); box-shadow: var(--slab-shadow-press); transition-duration: var(--t-press);
+}
+
+/* ---------- 選股看板：三塊板 ---------- */
+body.hm .hm-explore { padding: 40px 0 0; }
+body.hm .market-screens .screen-block { margin: 20px 0 0; padding: 24px 32px 28px; }
+body.hm .market-screens .screen-block:first-child { margin-top: 0; }
+/* 長期核心持有：板有了內距之後，左欄（表單與對照卡）固定回換皮前的 560px，指標名稱才不會被擠成一字一行 */
+@media (min-width: 861px) {
+  body.hm #coreHoldings { grid-template-columns: minmax(0, 560px) minmax(0, 1fr); column-gap: 32px; }
+}
+
+/* 分頁：選中的是凸起的鍵。分段切換（天數、買賣超）與週期切換同一種槽與鍵 */
+body.hm .screen-tabs button { border: 0; border-radius: var(--r-key); }
+body.hm .screen-tabs button[aria-selected="true"],
+body.hm .screen-tabs button[aria-selected="true"]:hover,
+body.hm .screen-tabs button.is-unlisted[aria-selected="true"],
+body.hm .screen-seg button[aria-pressed="true"],
+body.hm .screen-seg button[aria-pressed="true"]:hover {
+  background: var(--key); color: var(--ink); font-weight: 700; box-shadow: var(--key-shadow);
+}
+body.hm .screen-seg {
+  padding: 3px; gap: 2px; border: 0; border-radius: calc(var(--r-key) + 3px); background: var(--well); box-shadow: var(--well-shadow);
+}
+body.hm .screen-seg button { border: 0; border-radius: var(--r-key); }
+body.hm .screen-seg button:hover { background: transparent; }
+body.hm .screen-flag { border-radius: var(--r-tag); }
+body.hm .screen-list a:active { transform: translateY(1px); }
+
+/* 板上的鍵與槽：展開更多、已加入的比較標的、比較期間、代號輸入 */
+body.hm :is(.screen-more, .core-selection-chip, .core-period select) {
+  border: 0; border-radius: var(--r-key); background-color: var(--key); box-shadow: var(--key-shadow);
+  transition: transform var(--t-lift) var(--ease-depth), box-shadow var(--t-lift) var(--ease-depth), color 160ms var(--ease-out);
+}
+@media (hover: hover) {
+  body.hm :is(.screen-more, .core-selection-chip, .core-period select):hover {
+    background-color: var(--key); color: var(--ink); transform: translateY(var(--key-lift)); box-shadow: var(--key-shadow-hover);
+  }
+  body.hm .core-compare-entry button:hover { transform: translateY(var(--key-lift)); }
+}
+body.hm :is(.screen-more, .core-selection-chip):active {
+  transform: translateY(var(--key-thick)); box-shadow: var(--key-shadow-press); transition-duration: var(--t-press);
+}
+body.hm .core-compare-entry input {
+  border: 0; border-radius: var(--r-key); background: var(--well); box-shadow: var(--well-shadow);
+}
+body.hm .core-compare-entry input:focus { outline: 2px solid var(--ink); outline-offset: 0; }
+body.hm .core-compare-entry button {
+  border: 0; border-radius: var(--r-key); box-shadow: var(--key-shadow-ink);
+  transition: transform var(--t-lift) var(--ease-depth);
+}
+body.hm .core-compare-entry button:active {
+  transform: translateY(var(--key-thick)); box-shadow: none; transition-duration: var(--t-press);
+}
+/* 圖上資料點的說明：小的浮板 */
+body.hm .chart-tip,
+body.hm .rotation-chart [role="tooltip"] {
+  border: 0; border-radius: var(--r-key); background: var(--float); box-shadow: var(--float-shadow);
+}
+
+@media (max-width: 860px) {
+  body.hm .read-card { margin-top: 12px; padding: 20px 16px; }
+  body.hm .chips, body.hm .hm-explore { padding-top: 28px; }
+  body.hm .chip-grid { gap: 12px; }
+  body.hm .chip-grid .chip-card { padding: 14px 14px 12px; }
+  body.hm .market-screens .screen-block { margin-top: 12px; padding: 18px 14px 20px; }
 }
