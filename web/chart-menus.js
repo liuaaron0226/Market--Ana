@@ -1,8 +1,9 @@
 /* 圖上的小鍵與浮出的選單（本人 11-15：參數與功能收起來，互動時才出現）。
    小鍵：<button class="chart-chip" aria-expanded="false" aria-controls="選單的 id">
    選單：<div class="chart-menu" id="…" hidden>；選單裡帶 data-menu-close 的按鈕按了就收回；選單帶 data-menu-autoclose 的話，裡面任何按鈕按了都收回。
-   小鍵帶 data-mirror：上面的字跟著選單裡選中的那一項，那一項所在的群組隱藏時小鍵也不顯示。
-   一次只開一個；按 Esc 或點選單以外的地方收回；選單裡有輸入框的話，打開時游標直接進輸入框。
+   小鍵帶 data-mirror="這個設定叫什麼"：上面的字跟著選單裡選中的那一項，那一項所在的群組隱藏時小鍵也不顯示。
+   一次只開一個；按 Esc 或點選單以外的地方收回；選單帶 data-menu-focus 的話，打開時游標直接進裡面的輸入框
+   （只給「打開就是為了打字」的選單用；均線設定板不要，不然手機一打開就跳出鍵盤）。
    K 線的週期（period-switch.js）、指標（chart-studies.js）、個股頁的均線、首頁的籌碼選股與長期核心持有都用這一套。 */
 (function () {
   'use strict';
@@ -14,7 +15,7 @@
     if (!menu) return;
     chip.setAttribute('aria-expanded', String(open));
     menu.hidden = !open;
-    const field = open && menu.querySelector('input:not([type="checkbox"])');
+    const field = open && menu.hasAttribute('data-menu-focus') && menu.querySelector('input');
     if (field) field.focus();
   }
 
@@ -52,13 +53,20 @@
   document.querySelectorAll('.chart-chip[data-mirror]').forEach(chip => {
     const menu = menuOf(chip);
     if (!menu) return;
+    // 選單裡面的某一層被隱藏（這個設定現在用不到）。只看到選單為止：選單自己平常就是收著的
+    const tucked = node => {
+      for (let item = node; item && item !== menu; item = item.parentElement) if (item.hidden) return true;
+      return false;
+    };
     const sync = () => {
       const on = menu.querySelector(SELECTED);
-      // 選中的那一項所在的群組（選單裡面的某一層）被隱藏：這個設定現在用不到，小鍵也不顯示
-      let tucked = !on;
-      for (let node = on; node && node !== menu; node = node.parentElement) tucked = tucked || node.hidden;
-      chip.hidden = tucked;
-      if (on) chip.textContent = on.textContent.trim() + (menu.querySelector('input[type="checkbox"]:checked') ? chip.dataset.mirrorFlag || '' : '');
+      chip.hidden = !on || tucked(on);
+      // 選單裡的勾選框有勾、而且這個排行用得到它（沒有被隱藏）時，小鍵上多一個標記
+      const flagged = [...menu.querySelectorAll('input[type="checkbox"]:checked')].some(box => !tucked(box));
+      if (!on) return;
+      chip.textContent = on.textContent.trim() + (flagged ? chip.dataset.mirrorFlag || '' : '');
+      // 只念「當日」聽不出是什麼設定，前面補上這個設定的名稱
+      if (chip.dataset.mirror) chip.setAttribute('aria-label', `${chip.dataset.mirror}：${chip.textContent}`);
     };
     new MutationObserver(sync).observe(menu, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['aria-selected', 'aria-pressed', 'aria-checked', 'hidden'] });
     menu.addEventListener('change', sync);

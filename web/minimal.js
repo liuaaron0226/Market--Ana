@@ -775,7 +775,7 @@
       { key: 'futures', name: '外資期貨空單', value: `${fmt(Math.abs(fut), 0)} 口`, tone: fut < futWeek ? 'down' : 'up', read: fut < futWeek ? `比一週前多 ${fmt(Math.abs(fut - futWeek), 0)} 口，還在加` : `比一週前少 ${fmt(Math.abs(fut - futWeek), 0)} 口`, chart: spark(U.slice(-20).map(r => -r.net_contracts), 'var(--down)'), date: last(U).date, plain: pick('foreign') },
       { key: 'margin', name: '融資餘額', value: `${fmt(mLast.margin_balance_billion, 0)} 億`, tone: 'mid', read: `比 ${md(mPeak.date)} 高點少 ${fmt(mPeak.margin_balance_billion - mLast.margin_balance_billion, 0)} 億`, chart: spark(M.slice(-20).map(r => r.margin_balance_billion), 'var(--gold)'), date: mLast.date, plain: pick('margin') },
       { key: 'short', name: '融券餘額', value: `${fmt(sNow / 10000, 1)} 萬張`, tone: sNow > s20 ? 'down' : 'up', read: `比 20 天前${sNow > s20 ? '多' : '少'} ${fmt(Math.abs(sNow / s20 - 1) * 100, 0)}%`, chart: spark(M.slice(-20).map(r => r.short_units), 'var(--accent)'), date: mLast.date, plain: pick('short') },
-      { key: 'trust', name: '投信', value: `${t5 >= 0 ? '買' : '賣'} ${fmt(Math.abs(t5), 0)} 億`, tone: t5 >= 0 ? 'up' : 'down', read: '近一週合計', chart: spark(F.slice(-20).map(r => r.trust_billion), '', true), date: last(F).date, plain: pick('trust') },
+      { key: 'trust', name: '投信近一週', value: `${t5 >= 0 ? '買' : '賣'} ${fmt(Math.abs(t5), 0)} 億`, tone: t5 >= 0 ? 'up' : 'down', read: '近一週合計', chart: spark(F.slice(-20).map(r => r.trust_billion), '', true), date: last(F).date, plain: pick('trust') },
       { key: 'volume', name: '成交金額', value: `${fmt(amounts.at(-1), 0)} 億`, tone: 'mid', read: `平常的 ${fmt(amtRatio, 1)} 倍`, chart: spark(amounts, 'var(--accent)'), date: A.daily.at(-1).date, plain: pick('volume') },
     ];
   }
@@ -1692,10 +1692,21 @@
 
   // 主題的選擇存在瀏覽器裡，和個股頁、自選庫存頁用同一個名字：換頁之後才會是同一種背景色（本人 11-15 回報換頁會跑掉）。
   const THEME_KEY = 'market-theme';
-  try {
-    const saved = localStorage.getItem(THEME_KEY);
-    if (saved === 'light' || saved === 'dark') root.dataset.theme = saved;
-  } catch (_) { /* 私密視窗可能讀不到 */ }
+  function readSavedTheme() {
+    try {
+      const saved = localStorage.getItem(THEME_KEY);
+      if (saved === 'light' || saved === 'dark') root.dataset.theme = saved;
+    } catch (_) { /* 私密視窗可能讀不到 */ }
+  }
+  readSavedTheme();
+  // 按瀏覽器「上一頁」回來時，頁面是整頁還原的、不會重新載入：這時要再讀一次（可能在別頁改過），圖也要用新的顏色重畫
+  window.addEventListener('pageshow', event => {
+    if (!event.persisted) return;
+    readSavedTheme();
+    updateThemeText();
+    chart && chart.draw();
+    requestAnimationFrame(updateOverlayControls);
+  });
 
   function updateThemeText() {
     const dark = getComputedStyle(root).colorScheme.includes('dark');
@@ -2311,7 +2322,7 @@
     try {
       renderRotation(await getJson('/api/rotation'));
     } catch (error) {
-      // 地形與三顆入口鍵只在整段都畫好之後才顯示；中途出錯就收起來，不留一個點開是空的面板
+      // 地形與「排行與表格」的入口只在整段都畫好之後才顯示；中途出錯就收起來，不留一個點開是空的面板
       rot.body.hidden = true;
       rot.block.dataset.state = 'error';
       rot.status.textContent = '產業資金流向暫時無法讀取，請稍後再試。';

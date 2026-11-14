@@ -180,7 +180,7 @@
     return { toggle: node => select(node && node !== selected ? node : null), clear: () => { if (selected) select(null); } };
   }
 
-  /* 指標與鍵盤：水平拖曳旋轉，垂直的手勢還給頁面捲動，位移很小才算點選；Enter／空白鍵選取，Esc 取消。 */
+  /* 指標與鍵盤：在地形上拖就是旋轉（不分方向），位移很小才算點選；Enter／空白鍵選取，Esc 取消。回傳一個收尾函式（停掉還在滑的慣性）。 */
   // onTurn(degrees)：轉到新的角度時通知外面重新取景、把名稱牌移到樓頂上
   function bindControls(stage, city, towers, picker, onTurn) {
     // 手機上樓很小：沒點中時，取畫面上最近的一棟
@@ -210,7 +210,7 @@
         const elapsed = now - last;
         last = now;
         speed *= Math.pow(GLIDE_KEEP, elapsed / 16);
-        if (Math.abs(speed) < GLIDE_STOP) return;
+        if (Math.abs(speed) < GLIDE_STOP) { glide = 0; return; }
         turnTo(angle + speed * elapsed);
         glide = global.requestAnimationFrame(step);
       };
@@ -218,9 +218,12 @@
     };
     stage.addEventListener('pointerdown', event => {
       if (event.pointerType === 'mouse' && event.button !== 0) return;
+      // 還在慣性滑的時候點一下：只是讓它停下來，不算點選樓
+      const gliding = glide !== 0;
       global.cancelAnimationFrame(glide);
+      glide = 0;
       drag = { id: event.pointerId, x: event.clientX, y: event.clientY, angle, turning: false, at: event.timeStamp, lastX: event.clientX, speed: 0,
-        tower: event.target.closest('.terrain-tower') || nearest(event) };
+        tower: gliding ? null : event.target.closest('.terrain-tower') || nearest(event), halted: gliding };
     });
     stage.addEventListener('pointermove', event => {
       if (!drag || event.pointerId !== drag.id) return;
@@ -242,7 +245,7 @@
     });
     stage.addEventListener('pointerup', event => {
       if (!drag || event.pointerId !== drag.id) return;
-      if (!drag.turning) picker.toggle(drag.tower);
+      if (!drag.turning) { if (!drag.halted) picker.toggle(drag.tower); }
       // 手指停住一下才放開就不滑；開了「減少動態效果」也不滑
       else if (!calm && event.timeStamp - drag.at < 80 && Math.abs(drag.speed) >= GLIDE_STOP) coast(drag.speed);
       stop();
@@ -255,6 +258,7 @@
       if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); picker.toggle(node); }
       else if (event.key === 'Escape') { event.preventDefault(); picker.clear(); }
     });
+    return () => global.cancelAnimationFrame(glide);
   }
 
   function render(host, payload) {
@@ -307,9 +311,9 @@
       seen.observe(stage);
       observers.push(seen);
     } else grow();
-    cleanups.set(host, () => { observers.forEach(observer => observer.disconnect()); global.clearTimeout(settle); });
 
-    bindControls(stage, city, towers, selection(host, city, detail, byName, labelOf, follow), degrees => { view = degrees; fit(); });
+    const stopGlide = bindControls(stage, city, towers, selection(host, city, detail, byName, labelOf, follow), degrees => { view = degrees; fit(); });
+    cleanups.set(host, () => { observers.forEach(observer => observer.disconnect()); global.clearTimeout(settle); stopGlide(); });
   }
 
   global.Terrain = { render };

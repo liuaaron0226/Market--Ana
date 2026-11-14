@@ -64,6 +64,7 @@ def pick_period(page: Page, value: str) -> str:
 VISIBLE_COUNT = """selector => [...document.querySelectorAll(selector)].filter(e => {
   if (getComputedStyle(e).visibility === 'hidden') return false;
   for (let node = e; node && node !== document.body; node = node.parentElement) {
+    if (getComputedStyle(node).display === 'contents') continue;   // 這種外層本身沒有方框，不代表裡面看不到
     const box = node.getBoundingClientRect();
     if (box.width <= 2 || box.height <= 2) return false;
   }
@@ -346,6 +347,10 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
     open_panel(page, tag, "#lineUpper", "收復線")
     open_panel(page, tag, "#readCard", "直白分析")
     step(f"{tag}：展開籌碼與資金", lambda: open_cat(page, "chips"))
+    # 籌碼與資金圖為主（本人 11-15）：六項各一列，有名稱、數字與近 20 天的迷你圖；那句說明不放在卡上。
+    check(f"{tag}：籌碼與資金六項都有迷你圖，卡上沒有說明句",
+          page.evaluate(VISIBLE_COUNT, "#chipGrid .chip-card") == 6 and page.evaluate(VISIBLE_COUNT, "#chipGrid .chip-card .spark") == 6
+          and page.evaluate(VISIBLE_COUNT, "#chipGrid .chip-read, #chipGrid .chip-date") == 0)
     open_panel(page, tag, ".chip-card", "")
 
     def candle() -> None:

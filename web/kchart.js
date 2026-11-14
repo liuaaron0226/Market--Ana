@@ -447,7 +447,8 @@
         } else x.fillRect(cx - bw / 2, top, bw, h);
       });
       // 使用者自訂均線（最多四條，預設 MA18／MA45）。
-      const maColors = [css('--accent'), css('--gold'), css('--dim'), css('--faint')];
+      // 四條線四種看得出差別的顏色：橘、金、藍、灰（布林通道是更淡的灰帶）
+      const maColors = [css('--accent'), css('--gold'), css('--study-dif') || css('--dim'), css('--dim')];
       this.maPeriods.forEach((p, index) => {
         x.strokeStyle = maColors[index]; x.lineWidth = index < 2 ? 1.8 : 1.2; x.beginPath(); let on = false;
         for (let i = start; i < end; i++) { const v = this.ma[p][i]; if (v == null) { on = false; continue; } const px = l + step * (i - start + .5); on ? x.lineTo(px, y(v)) : x.moveTo(px, y(v)); on = true; }
@@ -457,8 +458,11 @@
       x.font = TAG_NAME_FONT; x.textBaseline = 'top'; x.textAlign = 'left';
       let nameX = l + 6;
       [...this.maPeriods.map((p, index) => [`MA${p}`, maColors[index]]), ['布林20', bandColor]].forEach(([name, color]) => {
+        // 布林通道的線是半透明的，名稱也用同樣的淡度，和同色系的第三條均線才分得出來
+        x.globalAlpha = color === bandColor ? .55 : 1;
         x.fillStyle = color; x.fillText(name, nameX, t - 5); nameX += x.measureText(name).width + 10;
       });
+      x.globalAlpha = 1;
       x.font = '11.5px "JetBrains Mono",Consolas,monospace'; x.textBaseline = 'alphabetic';
       // 最新價標籤
       const last = this.candles[n - 1];

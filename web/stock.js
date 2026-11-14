@@ -178,6 +178,14 @@
     }));
   }
 
+  // 按瀏覽器「上一頁」回來時，頁面是整頁還原的、不會重新載入：這時要再讀一次存起來的主題（可能在別頁改過）
+  window.addEventListener('pageshow', event => {
+    if (!event.persisted) return;
+    let stored = null;
+    try { stored = localStorage.getItem('market-theme'); } catch (_) { /* 私密視窗 */ }
+    if ((stored === 'light' || stored === 'dark') && stored !== document.documentElement.dataset.theme) setTheme(stored);
+  });
+
   function setTheme(theme) {
     document.documentElement.dataset.theme = theme;
     try { localStorage.setItem('market-theme', theme); } catch (_) { /* 私密視窗可能無法存 */ }
@@ -1120,7 +1128,8 @@
   document.addEventListener('visibilitychange', syncTickFeed);
   $('addMa').addEventListener('click', () => {
     if (maPeriods.length >= MA_LIMIT) return;
-    const next = [60, 120, 240].find(value => !maPeriods.includes(value)) || Math.min(240, maPeriods.at(-1) + 10);
+    // 從常用的期數裡找第一個還沒用到的（最多四條，六個候選一定找得到），不會加出重複而被併掉
+    const next = [60, 120, 240, 20, 10, 5].find(value => !maPeriods.includes(value));
     applyMaPeriods([...maPeriods, next]);
   });
   $('themeToggle').addEventListener('click', () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));

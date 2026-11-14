@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>台股決策鏡</title>
-  <link rel="stylesheet" href="minimal.css?v=20261115-desk12">
-  <link rel="stylesheet" href="chart-studies.css?v=20261115-desk12">
-  <link rel="stylesheet" href="bold.css?v=20261115-desk12">
-  <link rel="stylesheet" href="home.css?v=20261115-desk12">
-  <link rel="stylesheet" href="panel.css?v=20261115-desk12">
+  <link rel="stylesheet" href="minimal.css?v=20261115-desk15">
+  <link rel="stylesheet" href="chart-studies.css?v=20261115-desk15">
+  <link rel="stylesheet" href="bold.css?v=20261115-desk15">
+  <link rel="stylesheet" href="home.css?v=20261115-desk15">
+  <link rel="stylesheet" href="panel.css?v=20261115-desk15">
 </head>
 <body class="bd hm">
   <a class="skip-link" href="#workspace">跳到主圖</a>
@@ -216,17 +216,17 @@
             </div>
             <!-- 排行、天數、買賣超各收成一枚小鍵，點了才浮出選單（本人 11-15）；小鍵上的字跟著選單裡選中的那一項，開合在 chart-menus.js -->
             <div class="screen-picks">
-              <button type="button" class="chart-chip" id="screenTabChip" aria-expanded="false" aria-controls="screenTabMenu" data-mirror data-mirror-flag="・只看流入"></button>
+              <button type="button" class="chart-chip" id="screenTabChip" aria-expanded="false" aria-controls="screenTabMenu" data-mirror="排行" data-mirror-flag="・只看流入"></button>
               <div class="chart-menu screen-tab-menu" id="screenTabMenu" data-menu-autoclose hidden>
                 <div class="screen-tabs" id="chipScreenTabs" role="tablist" aria-label="籌碼選股分頁"></div>
                 <label class="screen-check"><input type="checkbox" id="chipScreenInflow"> 只顯示資金流入產業</label>
               </div>
-              <div class="screen-controls" id="chipScreenControls">
-                <button type="button" class="chart-chip" id="screenDaysChip" aria-expanded="false" aria-controls="screenDaysMenu" data-mirror></button>
+              <div class="screen-controls" id="chipScreenControls" hidden>
+                <button type="button" class="chart-chip" id="screenDaysChip" aria-expanded="false" aria-controls="screenDaysMenu" data-mirror="累計天數"></button>
                 <div class="chart-menu" id="screenDaysMenu" data-menu-autoclose hidden>
                   <div class="screen-seg" id="chipScreenDays" role="group" aria-label="累計天數"></div>
                 </div>
-                <button type="button" class="chart-chip" id="screenSideChip" aria-expanded="false" aria-controls="screenSideMenu" data-mirror></button>
+                <button type="button" class="chart-chip" id="screenSideChip" aria-expanded="false" aria-controls="screenSideMenu" data-mirror="買超或賣超"></button>
                 <div class="chart-menu" id="screenSideMenu" data-menu-autoclose hidden>
                   <div class="screen-seg" id="chipScreenSide" role="group" aria-label="買超或賣超">
                     <button type="button" data-side="buy" aria-pressed="true">淨買超</button>
@@ -264,15 +264,15 @@
               <div class="core-picks">
                 <div class="core-selection" id="coreSelection" aria-label="已加入的比較標的"></div>
                 <button type="button" class="chart-chip is-plain" id="coreAddChip" aria-expanded="false" aria-controls="coreAddMenu">＋ 加入</button>
-                <div class="chart-menu core-add-menu" id="coreAddMenu" hidden>
+                <div class="chart-menu core-add-menu" id="coreAddMenu" data-menu-focus hidden>
                   <label class="sr-only" for="coreCompareInput">加入個股或 ETF</label>
                   <div class="core-compare-entry">
                     <input id="coreCompareInput" name="code" inputmode="text" autocomplete="off" maxlength="6" placeholder="輸入代號">
-                    <button type="submit" data-menu-close>加入比較</button>
+                    <button type="submit">加入比較</button>
                   </div>
                 </div>
                 <label class="core-period" for="corePeriodSelect"><span class="sr-only">比較期間</span>
-                  <select id="corePeriodSelect" data-chip-menu>
+                  <select id="corePeriodSelect" data-chip-menu="比較期間">
                     <option value="1m">近 1 個月</option>
                     <option value="3m">近 3 個月</option>
                     <option value="1y">近 1 年</option>
@@ -299,10 +299,10 @@
       </button>
     </header>
     <div class="rotation-lists">
-      <section id="rotationEfficiencySection" tabindex="-1"><h4>資金效率排行</h4><ol id="rotationEfficiency"></ol></section>
-      <section id="rotationRecoverySection" tabindex="-1"><h4>低基期回溫訊號</h4><ol id="rotationRecovery"></ol></section>
+      <section id="rotationEfficiencySection"><h4>資金效率排行</h4><ol id="rotationEfficiency"></ol></section>
+      <section id="rotationRecoverySection"><h4>低基期回溫訊號</h4><ol id="rotationRecovery"></ol></section>
     </div>
-    <section class="rotation-table" id="rotationTableSection" tabindex="-1"><h4>表格檢視</h4><div id="rotationTable"></div></section>
+    <section class="rotation-table" id="rotationTableSection"><h4>表格檢視</h4><div id="rotationTable"></div></section>
   </dialog>
 
   <div class="panel-backdrop" id="panelBackdrop" hidden></div>
@@ -336,13 +336,13 @@
   <script src="detail-data.js"></script>
   <script src="market-data-local.js"></script>
   <script src="terrain-layout.js?v=20261114-desk1"></script>
-  <script src="terrain.js?v=20261115-desk12"></script>
-  <script src="chart-studies.js?v=20261115-desk12"></script>
-  <script src="kchart.js?v=20261115-desk12"></script>
-  <script src="minimal.js?v=20261115-desk12"></script>
-  <script src="period-switch.js?v=20261115-desk12"></script>
-  <script src="chart-menus.js?v=20261115-desk12"></script>
-  <script src="home-motion.js?v=20261115-desk12"></script>
-  <script src="home-fold.js?v=20261115-desk12"></script>
+  <script src="terrain.js?v=20261115-desk15"></script>
+  <script src="chart-studies.js?v=20261115-desk15"></script>
+  <script src="kchart.js?v=20261115-desk15"></script>
+  <script src="minimal.js?v=20261115-desk15"></script>
+  <script src="period-switch.js?v=20261115-desk15"></script>
+  <script src="chart-menus.js?v=20261115-desk15"></script>
+  <script src="home-motion.js?v=20261115-desk15"></script>
+  <script src="home-fold.js?v=20261115-desk15"></script>
 </body>
 </html>

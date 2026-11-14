@@ -54,11 +54,16 @@
     try { localStorage.setItem('market-theme', root.dataset.theme); } catch (_) {}
     setThemeLabel();
   });
-  try {
-    const saved = localStorage.getItem('market-theme');
-    if (saved === 'light' || saved === 'dark') document.documentElement.dataset.theme = saved;
-  } catch (_) {}
-  setThemeLabel();
+  function readSavedTheme() {
+    try {
+      const saved = localStorage.getItem('market-theme');
+      if (saved === 'light' || saved === 'dark') document.documentElement.dataset.theme = saved;
+    } catch (_) {}
+    setThemeLabel();
+  }
+  readSavedTheme();
+  // 按瀏覽器「上一頁」回來時頁面是整頁還原的，要再讀一次存起來的主題（可能在別頁改過）
+  window.addEventListener('pageshow', event => { if (event.persisted) readSavedTheme(); });
 
   async function api(path, options = {}) {
     const response = await fetch(path, {

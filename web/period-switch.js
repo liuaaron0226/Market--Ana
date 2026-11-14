@@ -1,13 +1,13 @@
 /* 把原生下拉選單換成一枚小鍵（寫著現在選的是什麼），點了浮出全部選項（本人 11-15：參數收起來、互動時才出現）。
-   用在 K 線的週期（#periodSelect，不分「盤中／趨勢」），以及任何標了 data-chip-menu 的 <select>（首頁長期核心持有的比較期間）。
+   用在 K 線的週期（#periodSelect，不分「盤中／趨勢」），以及任何標了 data-chip-menu="名稱" 的 <select>（首頁長期核心持有的比較期間）。
    原本的 <select> 保留為唯一真值：選單的按鈕只負責改它的值並觸發 change；它的值或 disabled 變了會同步回小鍵與選單。
    小鍵與選單的開合由 chart-menus.js 統一處理。 */
 (function () {
   'use strict';
   const compact = text => text.replace(/\s+/g, '');
 
-  // label(選中那一項的字) 回傳小鍵上要寫的字
-  function chipMenu(select, { wrapClass, menuId, name, label }) {
+  // name：這組選項叫什麼（給螢幕閱讀器）；label(選中那一項的字) 回傳小鍵上要寫的字；disabledHint：選項停用時的提示
+  function chipMenu(select, { wrapClass, menuId, name, label = text => text, disabledHint = '' }) {
     const wrap = document.createElement('div');
     wrap.className = wrapClass;
 
@@ -58,7 +58,7 @@
         b.disabled = opt.disabled;
         b.setAttribute('aria-checked', String(on));
         b.tabIndex = on ? 0 : -1;
-        b.title = opt.disabled ? '即時資料目前連不上' : '';
+        b.title = opt.disabled ? disabledHint : '';
         if (on) chip.textContent = label(b.textContent);
       });
       chip.setAttribute('aria-label', `${name}：${chip.textContent}`);
@@ -77,10 +77,9 @@
 
   const period = document.getElementById('periodSelect');
   // 週期的小鍵：首頁的選項是「日」「60分」，補成「日K」「60分K」（秒 K 不補）
-  if (period) chipMenu(period, { wrapClass: 'hm-period', menuId: 'periodMenu', name: 'K 線週期', label: text => (/[K秒]$/.test(text) ? text : `${text}K`) });
+  if (period) chipMenu(period, { wrapClass: 'hm-period', menuId: 'periodMenu', name: 'K 線週期', label: text => (/[K秒]$/.test(text) ? text : `${text}K`), disabledHint: '即時資料目前連不上' });
 
   document.querySelectorAll('select[data-chip-menu]').forEach(select => {
-    const caption = select.closest('label');
-    chipMenu(select, { wrapClass: 'chart-select', menuId: `${select.id}Menu`, name: caption ? compact(caption.textContent.split('\n')[0]) || '選項' : '選項', label: text => text });
+    chipMenu(select, { wrapClass: 'chart-select', menuId: `${select.id}Menu`, name: select.dataset.chipMenu || '選項' });
   });
 })();

@@ -260,7 +260,7 @@
 .hm .read-list li b { font: 400 12px var(--sans); color: var(--faint); }
 .hm .read-list li span { font-size: 15px; line-height: 1.5; color: var(--ink); }
 
-/* 選股看板：九頁全部顯示，沒有名單的一組排在後面、字色退一階 */
+/* 選股看板：九頁都列在排行小鍵的選單裡，沒有名單的一組排在後面、字色退一階 */
 .hm .hm-tab-cap {
   display: inline-flex; align-items: center; height: 32px; margin-left: 8px; padding-left: 12px;
   border-left: 1px solid var(--hair); color: var(--faint); font-size: 12px; white-space: nowrap;
@@ -269,8 +269,8 @@
 .hm .screen-tabs button.is-unlisted[aria-selected="true"] { color: var(--bg); }
 .hm .screen-head { align-items: baseline; }
 .hm .screen-meta { font-size: 12px; color: var(--faint); }
-.hm .screen-block[data-state="empty"] .screen-controls,
-.hm .screen-block[data-state="not_ready"] .screen-controls { opacity: .5; }
+.hm .screen-block[data-state="empty"] .screen-controls .chart-chip,
+.hm .screen-block[data-state="not_ready"] .screen-controls .chart-chip { opacity: .5; }
 
 /* 長期核心：兩張卡排成左右對照，同一指標在同一列，數字靠右對齊 */
 .hm .core-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0; margin-top: 16px; border-top: 1px solid var(--ink); }
@@ -665,7 +665,7 @@ body.hm dialog.hm-search :is(.stock-search-suggestions, .stock-search-status, .s
 }
 
 /* ================= 產業資金流向：入口與面板（立體重設計 B 包） =================
-   首屏只有資金地形；資金效率排行、低基期回溫訊號、表格檢視收進浮起的面板，入口是地形下方的三顆鍵。 */
+   首屏只有資金地形；資金效率排行、低基期回溫訊號、表格檢視收進浮起的面板，入口是標題列的「排行與表格」。 */
 body.hm .rotation-dialog { width: min(720px, calc(100vw - 32px)); }
 body.hm .rotation-dialog section { scroll-margin-top: 72px; outline: none; }
 body.hm .rotation-dialog .rotation-lists { margin-top: 12px; }
@@ -689,7 +689,8 @@ body.hm .terrain [data-quadrant="lagging"] { --q: var(--q-lagging); }
 
 body.hm .terrain-stage {
   /* 高度跟著寬度走：手機 300、平板約 500、桌機 600；街區會依這個框自動縮放 */
-  position: relative; height: clamp(300px, 62vw, 600px);
+  /* 再用視窗高度封頂：手機橫放時不能比畫面還高，不然整個畫面都是地形、沒有地方可以捲頁面 */
+  position: relative; height: min(clamp(300px, 62vw, 600px), 72svh);
   /* 手指放在地形上拖就是旋轉，不分方向（本人 11-15）；要捲頁面，手指放在地形以外 */
   touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none;
   overflow: hidden; /* 立體的面轉出去的部分不能撐出橫向捲動 */
@@ -776,7 +777,6 @@ body.hm .terrain-detail dt { color: var(--dim); }
 body.hm .terrain-detail dd { margin: 0; text-align: right; color: var(--ink); }
 
 @media (max-width: 860px) {
-  /* 三顆入口鍵在手機上排成一列 */
   body.hm .terrain-tag { padding: 4px 6px; font-size: 11px; }
   body.hm .terrain-tag.minor { display: none; }
   /* 手機：明細排在街區下方，不蓋住街區 */
@@ -826,6 +826,8 @@ body.hm .screen-tab-menu { flex-direction: column; flex-wrap: nowrap; width: min
 body.hm .screen-tab-menu .screen-tabs { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 2px; margin: 0; padding: 0; overflow: visible; }
 body.hm .screen-tab-menu .hm-tab-cap { flex-basis: auto; height: auto; margin: 8px 10px 2px; }
 body.hm .screen-tab-menu .screen-check { margin: 6px 10px 2px; padding-top: 8px; border-top: 1px solid var(--hair); }
+/* 這個排行不能調天數與買賣超時（原本整排控制項一起收掉），勾選框也不出現 */
+body.hm .screen-picks:has(.screen-controls[hidden]) .screen-check { display: none; }
 body.hm .chart-menu .screen-seg { display: flex; flex-direction: column; gap: 2px; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
 body.hm .chart-menu :is(.screen-tabs, .screen-seg) button {
   min-height: 40px; height: auto; padding: 0 12px; border: 0; border-radius: var(--r-key); background: transparent; box-shadow: none;
@@ -842,3 +844,22 @@ body.hm .core-picks { position: relative; display: flex; flex-wrap: wrap; align-
 body.hm .core-picks .chart-select { margin-left: auto; }
 body.hm .core-add-menu { right: auto; left: 0; padding: 12px; }
 body.hm .core-add-menu .core-compare-entry { grid-template-columns: minmax(0, 160px) auto; }
+
+/* ================= 看盤桌：籌碼與資金，圖為主（立體重設計 A 包第 12 片，2026-11-15） =================
+   本人選的排法：一列一項——左邊名稱與今天的數字，右邊近 20 天的迷你圖。
+   每張卡原本的一句判讀與資料日不放在卡上，點開的明細有完整的白話說明。寬螢幕排成兩欄。 */
+body.hm .chip-grid { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+body.hm .chip-grid .chip-card {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 46%); grid-template-rows: auto auto; align-items: center; column-gap: 14px; row-gap: 0;
+  min-height: 0; padding: 10px 14px; border-left: 0 !important;
+}
+body.hm .chip-card .chip-name { grid-area: 1 / 1; font-size: 12px; }
+body.hm .chip-card .chip-value { grid-area: 2 / 1; font-size: 19px; }
+body.hm .chip-card :is(.chip-read, .chip-date) { display: none; }
+body.hm .chip-card .spark { display: block; grid-area: 1 / 2 / span 2; width: 100%; height: 40px; opacity: 1; }
+@media (min-width: 900px) {
+  body.hm .chip-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 20px; }
+  body.hm .chip-grid .chip-card { padding: 14px 20px; }
+  body.hm .chip-card .chip-value { font-size: 22px; }
+  body.hm .chip-card .spark { height: 48px; }
+}

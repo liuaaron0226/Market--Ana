@@ -1197,9 +1197,8 @@ body.hm #coreHoldings { display: grid; grid-template-columns: minmax(0, 1fr); ga
 body.hm #coreHoldings > * { grid-column: 1; }
 body.hm #coreHoldings .screen-head { margin-bottom: 0; }
 .core-compare-form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
-.core-compare-form > label, .core-period { color: var(--dim); font-size: 13px; font-weight: 600; }
 .core-compare-entry { display: grid; grid-template-columns: minmax(0, 240px) auto; gap: 8px; justify-content: start; }
-.core-compare-entry input, .core-compare-entry button, .core-period select {
+.core-compare-entry input, .core-compare-entry button {
   min-height: 40px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--panel); color: var(--ink); font: inherit;
 }
 .core-compare-entry input { min-width: 0; padding: 0 12px; text-transform: uppercase; }
@@ -1210,7 +1209,6 @@ body.hm #coreHoldings .screen-head { margin-bottom: 0; }
 .core-selection-chip::after { content: " ×"; color: var(--faint); }
 .core-status { color: var(--up); font-size: 13px; }
 .core-period { display: flex; width: max-content; align-items: center; gap: 10px; }
-.core-period select { min-width: 132px; padding: 0 30px 0 10px; }
 body.hm #coreHoldings .core-cards {
   display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; margin-top: 0; border-top: 1px solid var(--ink); border-bottom: 0;
 }
@@ -1232,7 +1230,7 @@ body.hm #coreHoldings .core-chart { margin-top: 0; min-height: 210px; }
   .market-trend-item { padding: 12px 0; }
   .market-trend-item + .market-trend-item { padding-left: 0; border-top: 1px solid var(--line); border-left: 0; }
   .core-compare-entry { grid-template-columns: minmax(0, 1fr) auto; }
-  .core-compare-entry input, .core-compare-entry button, .core-period select { min-height: 44px; }
+  .core-compare-entry input, .core-compare-entry button { min-height: 44px; }
   body.hm #coreHoldings .core-cards { grid-template-columns: minmax(0, 1fr); }
   body.hm #coreHoldings .core-card,
   body.hm #coreHoldings .core-card + .core-card { padding: 14px 0 8px; border-top: 1px solid var(--line); border-left: 0; }
