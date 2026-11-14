@@ -3,11 +3,13 @@
 // 預設開正式站目前開的功能旗標、開機時放入固定的樣本自選／庫存與個股歷史，讓每次截圖看到同一份畫面。
 // 伺服器本身不對外連線（即時行情一律離線），不讀寫任何使用者資料。頁面自己會向 Google Fonts 要標題字型（web/bold.css）。
 //
-// 用法：node design-previews/3d-redesign/preview-server.mjs [--port 5197] [--features core|all] [--expired]
+// 用法：node design-previews/3d-redesign/preview-server.mjs [--port 5197] [--features core|all] [--expired] [--host 0.0.0.0]
 //   --port 0 ＝由系統挑一個空埠，實際網址印在第一行（截圖腳本用這個）。
 //   --features core（預設）＝正式站現況：短中長期走勢、個股操作策略開；AI 解讀與現金水位關。
 //   --features all ＝全部打開，用來看平常隱藏的區塊（今日 AI 解讀沒有樣本資料，只會出現未就緒狀態）。
 //   --now 2026-11-14T10:00:00+08:00 ＝把伺服器端的「現在」固定在這一刻（截圖腳本用，讓開盤／收盤判斷每次相同）。
+//   --host 0.0.0.0 ＝讓同一個 Wi-Fi 上的手機也連得到（用電腦的區網位址加埠號開）。預設只有這台電腦連得到。
+//     裡面只有樣本資料，但開著的期間區網內任何裝置都能以站主身分看到這個預覽，看完就關掉。
 //   --expired ＝把人寫內容（劇本、直白分析）的日期改成比行情資料日早一天，用來看首頁「過期就整組隱藏」的樣子。
 // 先備條件（都不入版控，見 .scratch/3d-redesign/parity-checklist.md〈本機預覽〉）：
 //   cloud/.stock-pack.json、.screens-pack.json、.compare-pack.json、.data-status.json、web/*-data.js，並跑過 node cloud/build.mjs。
@@ -30,6 +32,7 @@ const args = process.argv.slice(2);
 const flag = (name) => args.includes(`--${name}`);
 const option = (name, fallback) => (args.includes(`--${name}`) ? args[args.indexOf(`--${name}`) + 1] : fallback);
 const port = Number(option("port", 5197));
+const host = option("host", "127.0.0.1");
 const features = option("features", "core");
 if (!["core", "all"].includes(features)) throw new Error("--features 只接受 core 或 all");
 
@@ -170,7 +173,7 @@ const server = createServer(async (req, res) => {
   res.writeHead(resp.status, Object.fromEntries(resp.headers));
   res.end(Buffer.from(await resp.arrayBuffer()));
 });
-server.listen(port, "127.0.0.1", () => {
+server.listen(port, host, () => {
   // 截圖腳本只讀第一行找網址，提醒要印在網址之後。
   console.log(`3d-redesign preview http://127.0.0.1:${server.address().port}/ （features=${features}${flag("expired") ? "，expired" : ""}）`);
   for (const note of notes) console.log(note);

@@ -389,3 +389,157 @@
 /* 圖表說明文字太長時換行，不截斷 */
 .hm .chart-toolbar > div:first-child { min-width: 0; }
 .hm .chart-toolbar p { white-space: normal; max-width: 40em; }
+
+/* ================= 看盤桌：首頁外殼（立體重設計 A 包第 1 片，2026-11-14） =================
+   頁面背景是桌面；頂列、搜尋、主 K 線是板；板上可按的是鍵，輸入框與切換軌道是槽。
+   陰影與圓角一律引用 bold.css 的深度變數。選擇器用 body.hm，才壓得過後載入的 panel.css。
+   外殼以下的區塊（直白分析、籌碼、選股看板）在第 3 片換。 */
+html:has(> body.hm) { background: var(--desk); }
+body.hm { background: radial-gradient(1200px 720px at 18% 0, var(--desk-hi), transparent 70%) no-repeat var(--desk); }
+body.hm .app-shell { padding-top: 24px; }
+
+/* ---------- 第 1 層：三塊板 ---------- */
+body.hm .market-header,
+body.hm .hm-search,
+body.hm .chart-workspace {
+  border: 0; border-radius: var(--r-slab); background: var(--slab); box-shadow: var(--slab-shadow);
+}
+body.hm .market-header { padding: 28px 32px; }
+body.hm .hm-search { margin-top: 20px; padding: 18px 24px 18px 32px; }
+body.hm .workspace { padding-top: 20px; }
+body.hm .chart-workspace { padding: 4px 32px 28px; border-bottom: 0 !important; }
+body.hm .ai-digest-card { margin-top: 20px; }
+body.hm .service-note {
+  margin-top: 20px; padding: 10px 16px; border-radius: var(--r-key); background: transparent; box-shadow: var(--well-shadow);
+}
+
+/* ---------- 鍵：凸起，懸停浮起，按下沉入 ---------- */
+body.hm :is(.theme-toggle, .stock-search-form button[type="button"], .stock-search-more, .stock-search-result a,
+  .chart-controls > button, .chart-actions .line-trigger, .chart-actions .mobile-candle-details) {
+  border: 0; border-radius: var(--r-key); background: var(--key); box-shadow: var(--key-shadow);
+  transition: transform var(--t-lift) var(--ease-depth), box-shadow var(--t-lift) var(--ease-depth), color 160ms var(--ease-out);
+}
+body.hm .conclusion-trigger {
+  align-self: stretch; display: grid; align-content: center; padding: 14px 64px 16px 18px;
+  border: 0 !important; border-radius: var(--r-key) !important; background: var(--key) !important; box-shadow: var(--key-shadow);
+  transition: transform var(--t-lift) var(--ease-depth), box-shadow var(--t-lift) var(--ease-depth);
+}
+body.hm .conclusion-trigger .detail-cue { top: 16px; right: 16px; }
+body.hm .stock-search-form button[type="submit"] {
+  border: 0; border-radius: var(--r-key); box-shadow: var(--key-shadow-ink);
+  transition: transform var(--t-lift) var(--ease-depth), background-color 160ms var(--ease-out);
+}
+body.hm .stock-search-results { gap: 8px; }
+@media (hover: hover) {
+  body.hm :is(.conclusion-trigger, .theme-toggle, .stock-search-form button[type="button"], .stock-search-more, .stock-search-result a,
+    .chart-controls > button, .chart-actions .line-trigger, .chart-actions .mobile-candle-details):hover {
+    background: var(--key); color: var(--ink); transform: translateY(var(--key-lift)); box-shadow: var(--key-shadow-hover);
+  }
+  body.hm .stock-search-form button[type="submit"]:hover { transform: translateY(var(--key-lift)); }
+  body.hm :is(.price-summary, .state-trigger, .portfolio-entry):hover { transform: translateY(var(--key-lift)); }
+}
+body.hm :is(.conclusion-trigger, .theme-toggle, .stock-search-form button[type="button"], .stock-search-more, .stock-search-result a,
+  .chart-controls > button, .chart-actions .line-trigger, .chart-actions .mobile-candle-details):active,
+body.hm .chart-tools-toggle[aria-expanded="true"] {
+  transform: translateY(var(--key-thick)); box-shadow: var(--key-shadow-press); transition-duration: var(--t-press);
+}
+body.hm .stock-search-form button[type="submit"]:active {
+  transform: translateY(var(--key-thick)); box-shadow: none; transition-duration: var(--t-press);
+}
+body.hm :is(.price-summary, .state-trigger, .portfolio-entry) { transition: transform var(--t-lift) var(--ease-depth); }
+body.hm :is(.price-summary, .state-trigger, .portfolio-entry):active { transform: translateY(1px); transition-duration: var(--t-press); }
+
+/* ---------- 槽：搜尋框 ---------- */
+body.hm .stock-search-form input {
+  border: 0; border-radius: var(--r-key); background: var(--well); box-shadow: var(--well-shadow);
+}
+body.hm .stock-search-form input:focus { outline: 2px solid var(--ink); outline-offset: 0; }
+
+/* ---------- 週期切換：槽裡一塊凸起的滑塊，滑到選中的週期 ----------
+   各鈕等寬，滑塊是軌道的 ::before，位置由「第幾個鈕被選中」決定，不需要腳本量位置。
+   跨到另一組（盤中／趨勢）時，舊的一塊淡出、新的一塊淡入。 */
+body.hm .hm-period-seg {
+  --n: 3; --i: 0; --pad: 3px; --gap: 2px;
+  position: relative; isolation: isolate;
+  display: grid; grid-auto-flow: column; grid-auto-columns: minmax(44px, 1fr);
+  padding: var(--pad); gap: var(--gap);
+  border: 0; border-radius: calc(var(--r-key) + var(--pad)); background: var(--well); box-shadow: var(--well-shadow);
+}
+body.hm .hm-period-seg:has(> button:nth-child(4)) { --n: 4; }
+body.hm .hm-period-seg:has(> button:nth-child(2)[aria-checked="true"]) { --i: 1; }
+body.hm .hm-period-seg:has(> button:nth-child(3)[aria-checked="true"]) { --i: 2; }
+body.hm .hm-period-seg:has(> button:nth-child(4)[aria-checked="true"]) { --i: 3; }
+body.hm .hm-period-seg::before {
+  content: ""; position: absolute; z-index: -1; top: var(--pad); bottom: var(--pad); left: var(--pad);
+  width: calc((100% - 2 * var(--pad) - (var(--n) - 1) * var(--gap)) / var(--n));
+  border-radius: var(--r-key); background: var(--key); box-shadow: var(--key-shadow);
+  transform: translateX(calc(var(--i) * (100% + var(--gap)))); opacity: 0;
+  transition: transform 450ms var(--ease-depth), opacity 160ms var(--ease-out);
+}
+body.hm .hm-period-seg:has(> button[aria-checked="true"])::before { opacity: 1; }
+body.hm .chart-controls .hm-period-seg button {
+  min-width: 0; padding: 0 10px; border-radius: var(--r-key); background: transparent;
+  transition: color 200ms var(--ease-out);
+}
+body.hm .chart-controls .hm-period-seg button:hover:not(:disabled) { background: transparent; color: var(--ink); }
+body.hm .chart-controls .hm-period-seg button:active:not(:disabled) { transform: none; }
+body.hm .chart-controls .hm-period-seg button[aria-checked="true"],
+body.hm .chart-controls .hm-period-seg button[aria-checked="true"]:hover { background: transparent; color: var(--ink); font-weight: 700; }
+
+/* ---------- 指標切換：同一種槽與滑塊 ---------- */
+body.hm .kc-studies .kc-study-switcher {
+  justify-self: start; padding: 3px; gap: 2px;
+  border-radius: calc(var(--r-key) + 3px); background: var(--well); box-shadow: var(--well-shadow);
+}
+body.hm .kc-studies .kc-study-choice { border-radius: var(--r-key); }
+body.hm .kc-studies .kc-study-choice:hover { background: transparent; }
+body.hm .kc-studies .kc-study-choice[aria-pressed="true"] {
+  border-color: transparent; background: var(--key); color: var(--ink); font-weight: 700; box-shadow: var(--key-shadow);
+}
+body.hm .kc-studies .bd-has-pill .kc-study-choice[aria-pressed="true"] { background: transparent; box-shadow: none; }
+body.hm .bd-switch-pill { border-radius: var(--r-key); background: var(--key); box-shadow: var(--key-shadow); }
+@media (max-width: 519px) {
+  body.hm .kc-studies .kc-study-switcher { justify-self: stretch; }
+  body.hm .kc-studies .kc-study-choice { padding: 0 4px; white-space: nowrap; }
+}
+
+/* ---------- 圖上的小元件 ---------- */
+body.hm .chart-badges span,
+body.hm .line-trigger span,
+body.hm .current-point .point-label { border-radius: var(--r-tag); }
+@media (min-width: 761px) {
+  /* 收復線／防守線圖例：外觀畫在 ::before（按鈕本身保留 44px 點擊區），所以鍵的樣子套在 ::before */
+  body.hm .line-trigger { transition: transform var(--t-lift) var(--ease-depth); }
+  body.hm .line-trigger::before {
+    border: 0; border-radius: var(--r-key); background: var(--key); box-shadow: var(--key-shadow);
+    transition: box-shadow var(--t-lift) var(--ease-depth);
+  }
+  body.hm .line-trigger:active { transform: translateY(var(--key-thick)); transition-duration: var(--t-press); }
+  body.hm .line-trigger:active::before { box-shadow: var(--key-shadow-press); }
+}
+@media (min-width: 761px) and (hover: hover) {
+  body.hm .line-trigger:hover { transform: translateY(var(--key-lift)); }
+  body.hm .line-trigger:hover::before { border: 0; background: var(--key); box-shadow: var(--key-shadow-hover); }
+  body.hm .line-trigger:hover:active { transform: translateY(var(--key-thick)); }
+  body.hm .line-trigger:hover:active::before { box-shadow: var(--key-shadow-press); }
+}
+@media (max-width: 760px) {
+  body.hm .chart-actions { padding: 12px 0 4px; border-top: 0; }
+}
+
+/* ---------- 窄螢幕 ---------- */
+@media (max-width: 860px) {
+  body.hm .app-shell { padding: 12px 12px 64px; }
+  body.hm .market-header { padding: 20px 16px; }
+  body.hm .hm-search { margin-top: 12px; padding: 16px; }
+  body.hm .service-note { margin-top: 12px; }
+  body.hm .ai-digest-card { margin-top: 12px; }
+  body.hm .workspace { padding-top: 12px; }
+  body.hm .chart-workspace { padding: 0 14px 16px; }
+  body.hm .hm-period-seg { grid-auto-columns: minmax(34px, 1fr); }
+  body.hm .chart-controls .hm-period-seg button { padding: 0 6px; }
+}
+/* 320 寬：板的內距讓圖下的收復線／防守線兩鍵並排放不下，改成上下各一列，避免橫向捲動 */
+@media (max-width: 359px) {
+  body.hm .chart-actions { grid-template-columns: minmax(0, 1fr); }
+}

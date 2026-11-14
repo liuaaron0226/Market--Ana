@@ -48,6 +48,20 @@ def study_pressed(page: Page, study: str) -> bool:
     return button.get_attribute("aria-pressed") == "true"
 
 
+# 週期切換的選中狀態是一塊凸起的滑塊（畫在切換軌道上的那一塊）。量它實際停的位置，和被選中的鈕比。
+THUMB_ON_CHECKED = """value => {
+  const button = document.querySelector(`.hm-period button[data-value='${value}']`);
+  const track = button.closest('.hm-period-seg');
+  const thumb = getComputedStyle(track, '::before');
+  if (thumb.content === 'none' || Number(thumb.opacity) === 0) return 'no thumb';
+  const shift = new DOMMatrixReadOnly(thumb.transform === 'none' ? '' : thumb.transform).m41;
+  const trackBox = track.getBoundingClientRect(), box = button.getBoundingClientRect();
+  const left = trackBox.left + parseFloat(getComputedStyle(track).borderLeftWidth) + parseFloat(thumb.left) + shift;
+  const off = Math.max(Math.abs(left - box.left), Math.abs(parseFloat(thumb.width) - box.width));
+  return off <= 1.5 ? 'ok' : `off by ${off.toFixed(1)}px`;
+}"""
+
+
 def open_panel(page: Page, tag: str, selector: str, title_part: str) -> None:
     def run() -> None:
         target = page.locator(selector).first
@@ -79,10 +93,13 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
     check(f"{tag}：沒有橫向捲動", no_overflow(page))
 
     def periods() -> None:
+        thumb = []
         for value, label in (("weekly", "週"), ("monthly", "月"), ("daily", "日")):
             page.locator(f".hm-period button[data-value='{value}']").click()
             page.wait_for_function("label => document.getElementById('chartContext').textContent.includes(label)", arg=label)
+            thumb.append(f"{label}：{page.evaluate(THUMB_ON_CHECKED, value)}")
         check(f"{tag}：週期切換日／週／月", True)
+        check(f"{tag}：週期滑塊停在選中的週期上", all(item.endswith("ok") for item in thumb), thumb)
     step(f"{tag}：週期切換", periods)
 
     def zoom() -> None:

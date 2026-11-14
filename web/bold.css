@@ -272,3 +272,107 @@
   border-left: 1px dotted color-mix(in srgb, var(--ink) 25%, transparent);
 }
 .lad-name { min-width: 40px; text-align: center; }
+
+/* ================= 看盤桌：全站唯一的深度系統（立體重設計，2026-11-14） =================
+   三層高度：桌面（第 0 層）→ 板（第 1 層）→ 浮起的板（第 2 層）。
+   板上的小元件只有兩種：凸起的鍵（按鈕、滑塊）與凹下的槽（輸入框、切換軌道）。
+   各頁只引用這裡的變數，不自訂陰影與圓角。強度「大膽」：板的厚度邊 4px。
+   組合陰影在 :root 就算好了，子元素改 --edge 之類的原料不會跟著變；要別種鍵就在這裡加一組。 */
+:root {
+  /* 圓角：全站只用這四個（圓點與膠囊除外） */
+  --r-tag: 4px;
+  --r-key: 8px;
+  --r-slab: 18px;
+  --r-float: 22px;
+  /* 厚度與位移 */
+  --slab-thick: 4px;
+  --key-thick: 2px;
+  --slab-lift: -3px;
+  --key-lift: -1px;
+  /* 動態：平滑減速，不過衝 */
+  --ease-depth: cubic-bezier(.16, 1, .3, 1);
+  --t-lift: 350ms;
+  --t-press: 80ms;
+
+  /* 深色：陰影在深底上看不出來，高低靠明度差（桌面最暗、板亮一階、鍵與浮板再亮一階）與上緣亮邊 */
+  --desk: #070709;
+  --desk-hi: #0e0e12;
+  --slab: var(--panel);
+  --float: var(--panel3);
+  --key: var(--panel3);
+  --well: var(--bg);
+  --edge: #0d0d11;
+  --rim: rgb(255 255 255 / 11%);
+  --shade: 0 0 0;
+  --shade-k: 2.6;
+  --edge-ink: color-mix(in srgb, var(--ink) 62%, #000);
+  --rim-ink: color-mix(in srgb, var(--ink) 78%, #fff);
+
+  /* 第 1 層：板 */
+  --slab-shadow:
+    inset 0 1px 0 var(--rim),
+    0 var(--slab-thick) 0 var(--edge),
+    0 calc(var(--slab-thick) + 2px) 3px rgb(var(--shade) / calc(.08 * var(--shade-k))),
+    0 calc(var(--slab-thick) + 10px) 20px -6px rgb(var(--shade) / calc(.16 * var(--shade-k))),
+    0 calc(var(--slab-thick) + 30px) 48px -20px rgb(var(--shade) / calc(.2 * var(--shade-k)));
+  --slab-shadow-hover:
+    inset 0 1px 0 var(--rim),
+    0 var(--slab-thick) 0 var(--edge),
+    0 calc(var(--slab-thick) + 3px) 4px rgb(var(--shade) / calc(.08 * var(--shade-k))),
+    0 calc(var(--slab-thick) + 14px) 26px -6px rgb(var(--shade) / calc(.18 * var(--shade-k))),
+    0 calc(var(--slab-thick) + 38px) 56px -20px rgb(var(--shade) / calc(.22 * var(--shade-k)));
+  --slab-shadow-press:
+    inset 0 1px 0 var(--rim),
+    0 1px 0 var(--edge),
+    0 2px 4px rgb(var(--shade) / calc(.14 * var(--shade-k)));
+  /* 板上的鍵與槽 */
+  --key-shadow:
+    inset 0 1px 0 var(--rim),
+    0 var(--key-thick) 0 var(--edge),
+    0 calc(var(--key-thick) + 1px) 5px rgb(var(--shade) / calc(.16 * var(--shade-k)));
+  --key-shadow-hover:
+    inset 0 1px 0 var(--rim),
+    0 var(--key-thick) 0 var(--edge),
+    0 calc(var(--key-thick) + 3px) 9px rgb(var(--shade) / calc(.2 * var(--shade-k)));
+  --key-shadow-press:
+    inset 0 1px 0 var(--rim),
+    0 0 0 var(--edge),
+    0 1px 2px rgb(var(--shade) / calc(.12 * var(--shade-k)));
+  --key-shadow-ink:
+    inset 0 1px 0 var(--rim-ink),
+    0 var(--key-thick) 0 var(--edge-ink),
+    0 calc(var(--key-thick) + 1px) 5px rgb(var(--shade) / calc(.2 * var(--shade-k)));
+  --well-shadow:
+    inset 0 2px 4px rgb(var(--shade) / calc(.12 * var(--shade-k))),
+    inset 0 -1px 0 var(--rim);
+  /* 第 2 層：浮起的板 */
+  --float-shadow:
+    inset 0 1px 0 var(--rim),
+    0 2px 0 var(--edge),
+    0 18px 30px -10px rgb(var(--shade) / calc(.28 * var(--shade-k))),
+    0 44px 60px -24px rgb(var(--shade) / calc(.3 * var(--shade-k)));
+}
+:root[data-theme="light"] {
+  --desk: #e9e5dc;
+  --desk-hi: #f1eee7;
+  --float: var(--panel);
+  --key: var(--panel);
+  --well: var(--panel2);
+  --edge: #d6cfc0;
+  --rim: #fff;
+  --shade: 60 45 20;
+  --shade-k: 1;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --desk: #e9e5dc;
+    --desk-hi: #f1eee7;
+    --float: var(--panel);
+    --key: var(--panel);
+    --well: var(--panel2);
+    --edge: #d6cfc0;
+    --rim: #fff;
+    --shade: 60 45 20;
+    --shade-k: 1;
+  }
+}
