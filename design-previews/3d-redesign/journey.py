@@ -66,7 +66,7 @@ THUMB_ON_CHECKED = """value => {
 TIP_STATE = """() => {
   const tip = document.querySelector('#mainChart .kc-tip'), style = getComputedStyle(tip);
   if (!tip.classList.contains('show') || Number(style.opacity) < 1) return 'hidden';
-  if (!/開.*高.*低/.test(tip.textContent)) return 'no ohlc: ' + tip.textContent;
+  if (!/收.*開.*高.*低/.test(tip.textContent)) return 'no ohlc: ' + tip.textContent;
   const parts = style.backgroundColor.match(/[\d.]+/g) || [];
   return parts.length < 4 || Number(parts[3]) === 1 ? 'ok' : 'translucent ' + style.backgroundColor;
 }"""

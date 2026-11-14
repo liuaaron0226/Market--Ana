@@ -33,6 +33,8 @@ const flag = (name) => args.includes(`--${name}`);
 const option = (name, fallback) => (args.includes(`--${name}`) ? args[args.indexOf(`--${name}`) + 1] : fallback);
 const port = Number(option("port", 5197));
 const host = option("host", "127.0.0.1");
+// 沒給值時 listen 會綁到所有網路介面，等於靜默對區網開放；所以一定要明講位址。
+if (!host || host.startsWith("--")) throw new Error("--host 後面要接位址，例如 0.0.0.0");
 const features = option("features", "core");
 if (!["core", "all"].includes(features)) throw new Error("--features 只接受 core 或 all");
 

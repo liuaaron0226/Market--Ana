@@ -413,9 +413,10 @@ body.hm .service-note {
   margin-top: 20px; padding: 10px 16px; border-radius: var(--r-key); background: transparent; box-shadow: var(--well-shadow);
 }
 
-/* ---------- 鍵：凸起，懸停浮起，按下沉入 ---------- */
+/* ---------- 鍵：凸起，懸停浮起，按下沉入（外殼與下面各區塊的按鈕共用這一組） ---------- */
 body.hm :is(.theme-toggle, .stock-search-form button[type="button"], .stock-search-more, .stock-search-result a,
-  .chart-controls > button, .chart-actions .line-trigger, .chart-actions .mobile-candle-details) {
+  .chart-controls > button, .chart-actions .line-trigger, .chart-actions .mobile-candle-details,
+  .screen-more, .core-selection-chip, .core-period select) {
   border: 0; border-radius: var(--r-key); background: var(--key); box-shadow: var(--key-shadow);
   transition: transform var(--t-lift) var(--ease-depth), box-shadow var(--t-lift) var(--ease-depth), color 160ms var(--ease-out);
 }
@@ -425,55 +426,64 @@ body.hm .conclusion-trigger {
   transition: transform var(--t-lift) var(--ease-depth), box-shadow var(--t-lift) var(--ease-depth);
 }
 body.hm .conclusion-trigger .detail-cue { top: 16px; right: 16px; }
-body.hm .stock-search-form button[type="submit"] {
+/* 實心墨色的主要動作：搜尋、加入比較 */
+body.hm .stock-search-form button[type="submit"],
+body.hm .core-compare-entry button {
   border: 0; border-radius: var(--r-key); box-shadow: var(--key-shadow-ink);
   transition: transform var(--t-lift) var(--ease-depth), background-color 160ms var(--ease-out);
 }
 body.hm .stock-search-results { gap: 8px; }
 @media (hover: hover) {
   body.hm :is(.conclusion-trigger, .theme-toggle, .stock-search-form button[type="button"], .stock-search-more, .stock-search-result a,
-    .chart-controls > button, .chart-actions .line-trigger, .chart-actions .mobile-candle-details):hover {
+    .chart-controls > button, .chart-actions .line-trigger, .chart-actions .mobile-candle-details,
+    .screen-more, .core-selection-chip, .core-period select):hover {
     background: var(--key); color: var(--ink); transform: translateY(var(--key-lift)); box-shadow: var(--key-shadow-hover);
   }
-  body.hm .stock-search-form button[type="submit"]:hover { transform: translateY(var(--key-lift)); }
+  body.hm .stock-search-form button[type="submit"]:hover,
+  body.hm .core-compare-entry button:hover { transform: translateY(var(--key-lift)); }
   body.hm :is(.price-summary, .state-trigger, .portfolio-entry):hover { transform: translateY(var(--key-lift)); }
 }
 body.hm :is(.conclusion-trigger, .theme-toggle, .stock-search-form button[type="button"], .stock-search-more, .stock-search-result a,
-  .chart-controls > button, .chart-actions .line-trigger, .chart-actions .mobile-candle-details):active,
+  .chart-controls > button, .chart-actions .line-trigger, .chart-actions .mobile-candle-details,
+  .screen-more, .core-selection-chip, .core-period select):active,
 body.hm .chart-tools-toggle[aria-expanded="true"] {
   transform: translateY(var(--key-thick)); box-shadow: var(--key-shadow-press); transition-duration: var(--t-press);
 }
-body.hm .stock-search-form button[type="submit"]:active {
+body.hm .stock-search-form button[type="submit"]:active,
+body.hm .core-compare-entry button:active {
   transform: translateY(var(--key-thick)); box-shadow: none; transition-duration: var(--t-press);
 }
 body.hm :is(.price-summary, .state-trigger, .portfolio-entry) { transition: transform var(--t-lift) var(--ease-depth); }
 body.hm :is(.price-summary, .state-trigger, .portfolio-entry):active { transform: translateY(1px); transition-duration: var(--t-press); }
 
-/* ---------- 槽：搜尋框 ---------- */
-body.hm .stock-search-form input {
+/* ---------- 槽：搜尋框、代號輸入框 ---------- */
+body.hm .stock-search-form input,
+body.hm .core-compare-entry input {
   border: 0; border-radius: var(--r-key); background: var(--well); box-shadow: var(--well-shadow);
 }
-body.hm .stock-search-form input:focus { outline: 2px solid var(--ink); outline-offset: 0; }
+body.hm .stock-search-form input:focus,
+body.hm .core-compare-entry input:focus { outline: 2px solid var(--ink); outline-offset: 0; }
 
 /* ---------- 週期切換：槽裡一塊凸起的滑塊，滑到選中的週期 ----------
    各鈕等寬，滑塊是軌道的 ::before，位置由「第幾個鈕被選中」決定，不需要腳本量位置。
-   跨到另一組（盤中／趨勢）時，舊的一塊淡出、新的一塊淡入。 */
+   跨到另一組（盤中／趨勢）時，舊的一塊淡出、新的一塊淡入。
+   --slots 是這一組有幾顆鈕，--at 是選中第幾顆（從 0 算）。現在兩組是 3 顆與 4 顆；週期選單的顆數改了，下面四行要跟著補。 */
 body.hm .hm-period-seg {
-  --n: 3; --i: 0; --pad: 3px; --gap: 2px;
+  --slots: 3; --at: 0;
   position: relative; isolation: isolate;
   display: grid; grid-auto-flow: column; grid-auto-columns: minmax(44px, 1fr);
-  padding: var(--pad); gap: var(--gap);
-  border: 0; border-radius: calc(var(--r-key) + var(--pad)); background: var(--well); box-shadow: var(--well-shadow);
+  padding: var(--track-pad); gap: var(--track-gap);
+  border: 0; border-radius: var(--r-track); background: var(--well); box-shadow: var(--well-shadow);
 }
-body.hm .hm-period-seg:has(> button:nth-child(4)) { --n: 4; }
-body.hm .hm-period-seg:has(> button:nth-child(2)[aria-checked="true"]) { --i: 1; }
-body.hm .hm-period-seg:has(> button:nth-child(3)[aria-checked="true"]) { --i: 2; }
-body.hm .hm-period-seg:has(> button:nth-child(4)[aria-checked="true"]) { --i: 3; }
+body.hm .hm-period-seg:has(> button:nth-child(4)) { --slots: 4; }
+body.hm .hm-period-seg:has(> button:nth-child(2)[aria-checked="true"]) { --at: 1; }
+body.hm .hm-period-seg:has(> button:nth-child(3)[aria-checked="true"]) { --at: 2; }
+body.hm .hm-period-seg:has(> button:nth-child(4)[aria-checked="true"]) { --at: 3; }
 body.hm .hm-period-seg::before {
-  content: ""; position: absolute; z-index: -1; top: var(--pad); bottom: var(--pad); left: var(--pad);
-  width: calc((100% - 2 * var(--pad) - (var(--n) - 1) * var(--gap)) / var(--n));
+  content: ""; position: absolute; z-index: -1; top: var(--track-pad); bottom: var(--track-pad); left: var(--track-pad);
+  width: calc((100% - 2 * var(--track-pad) - (var(--slots) - 1) * var(--track-gap)) / var(--slots));
   border-radius: var(--r-key); background: var(--key); box-shadow: var(--key-shadow);
-  transform: translateX(calc(var(--i) * (100% + var(--gap)))); opacity: 0;
+  transform: translateX(calc(var(--at) * (100% + var(--track-gap)))); opacity: 0;
   transition: transform 450ms var(--ease-depth), opacity 160ms var(--ease-out);
 }
 body.hm .hm-period-seg:has(> button[aria-checked="true"])::before { opacity: 1; }
@@ -488,8 +498,8 @@ body.hm .chart-controls .hm-period-seg button[aria-checked="true"]:hover { backg
 
 /* ---------- 指標切換：同一種槽與滑塊 ---------- */
 body.hm .kc-studies .kc-study-switcher {
-  justify-self: start; padding: 3px; gap: 2px;
-  border-radius: calc(var(--r-key) + 3px); background: var(--well); box-shadow: var(--well-shadow);
+  justify-self: start; padding: var(--track-pad); gap: var(--track-gap);
+  border-radius: var(--r-track); background: var(--well); box-shadow: var(--well-shadow);
 }
 body.hm .kc-studies .kc-study-choice { border-radius: var(--r-key); }
 body.hm .kc-studies .kc-study-choice:hover { background: transparent; }
@@ -507,6 +517,8 @@ body.hm .bd-switch-pill { border-radius: var(--r-key); background: var(--key); b
 body.hm .chart-badges span,
 body.hm .line-trigger span,
 body.hm .current-point .point-label { border-radius: var(--r-tag); }
+/* 圖上的狀態小標（形成中、盤後暫用、分鐘推估）：不留細線框，底色不透明才壓得住 K 線 */
+body.hm .chart-badges span { border: 0; background: var(--well); }
 /* 焦點框的形狀也跟著變數走；主圖畫布的圓角是 kchart.js 寫在行內的，所以要 !important */
 body.hm .skip-link,
 body.hm .line-trigger { border-radius: var(--r-key); }
@@ -518,14 +530,15 @@ body.hm #mainChart canvas { border-radius: var(--r-key) !important; }
     border: 0; border-radius: var(--r-key); background: var(--key); box-shadow: var(--key-shadow);
     transition: box-shadow var(--t-lift) var(--ease-depth);
   }
-  body.hm .line-trigger:active { transform: translateY(var(--key-thick)); transition-duration: var(--t-press); }
-  body.hm .line-trigger:active::before { box-shadow: var(--key-shadow-press); }
 }
 @media (min-width: 761px) and (hover: hover) {
   body.hm .line-trigger:hover { transform: translateY(var(--key-lift)); }
   body.hm .line-trigger:hover::before { border: 0; background: var(--key); box-shadow: var(--key-shadow-hover); }
-  body.hm .line-trigger:hover:active { transform: translateY(var(--key-thick)); }
-  body.hm .line-trigger:hover:active::before { box-shadow: var(--key-shadow-press); }
+}
+/* 按下的規則排在懸停之後：兩者同時成立時以按下為準 */
+@media (min-width: 761px) {
+  body.hm .line-trigger:active { transform: translateY(var(--key-thick)); transition-duration: var(--t-press); }
+  body.hm .line-trigger:active::before { box-shadow: var(--key-shadow-press); }
 }
 @media (max-width: 760px) {
   body.hm .chart-actions { padding: 12px 0 4px; border-top: 0; }
@@ -598,41 +611,16 @@ body.hm .screen-seg button[aria-pressed="true"]:hover {
   background: var(--key); color: var(--ink); font-weight: 700; box-shadow: var(--key-shadow);
 }
 body.hm .screen-seg {
-  padding: 3px; gap: 2px; border: 0; border-radius: calc(var(--r-key) + 3px); background: var(--well); box-shadow: var(--well-shadow);
+  padding: var(--track-pad); gap: var(--track-gap); border: 0; border-radius: var(--r-track); background: var(--well); box-shadow: var(--well-shadow);
 }
 body.hm .screen-seg button { border: 0; border-radius: var(--r-key); }
 body.hm .screen-seg button:hover { background: transparent; }
 body.hm .screen-flag { border-radius: var(--r-tag); }
 body.hm .screen-list a:active { transform: translateY(1px); }
 
-/* 板上的鍵與槽：展開更多、已加入的比較標的、比較期間、代號輸入 */
-body.hm :is(.screen-more, .core-selection-chip, .core-period select) {
-  border: 0; border-radius: var(--r-key); background-color: var(--key); box-shadow: var(--key-shadow);
-  transition: transform var(--t-lift) var(--ease-depth), box-shadow var(--t-lift) var(--ease-depth), color 160ms var(--ease-out);
-}
-@media (hover: hover) {
-  body.hm :is(.screen-more, .core-selection-chip, .core-period select):hover {
-    background-color: var(--key); color: var(--ink); transform: translateY(var(--key-lift)); box-shadow: var(--key-shadow-hover);
-  }
-  body.hm .core-compare-entry button:hover { transform: translateY(var(--key-lift)); }
-}
-body.hm :is(.screen-more, .core-selection-chip):active {
-  transform: translateY(var(--key-thick)); box-shadow: var(--key-shadow-press); transition-duration: var(--t-press);
-}
-body.hm .core-compare-entry input {
-  border: 0; border-radius: var(--r-key); background: var(--well); box-shadow: var(--well-shadow);
-}
-body.hm .core-compare-entry input:focus { outline: 2px solid var(--ink); outline-offset: 0; }
-body.hm .core-compare-entry button {
-  border: 0; border-radius: var(--r-key); box-shadow: var(--key-shadow-ink);
-  transition: transform var(--t-lift) var(--ease-depth);
-}
-body.hm .core-compare-entry button:active {
-  transform: translateY(var(--key-thick)); box-shadow: none; transition-duration: var(--t-press);
-}
-/* 圖上資料點的說明：小的浮板 */
-body.hm .chart-tip,
-body.hm .rotation-chart [role="tooltip"] {
+/* 展開更多、已加入的比較標的、比較期間、代號輸入框、加入比較：樣式在上面外殼那一段的鍵與槽 */
+/* 長期核心持有走勢圖上資料點的說明：小的浮板（產業資金流向泡泡的說明框留給 B 包，不動） */
+body.hm .core-chart .chart-tip {
   border: 0; border-radius: var(--r-key); background: var(--float); box-shadow: var(--float-shadow);
 }
 

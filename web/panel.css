@@ -356,7 +356,7 @@ body.hm .sample-list button[aria-pressed="true"] {
 }
 body.hm .sample-list button[aria-pressed="true"] { color: var(--accent); }
 body.hm .chip-seg {
-  padding: 3px; gap: 2px; border: 0; border-radius: calc(var(--r-key) + 3px); background: var(--well); box-shadow: var(--well-shadow);
+  padding: var(--track-pad); gap: var(--track-gap); border: 0; border-radius: var(--r-track); background: var(--well); box-shadow: var(--well-shadow);
 }
 body.hm .chip-seg button { border-radius: var(--r-key); }
 body.hm .chip-seg button[aria-checked="true"],
