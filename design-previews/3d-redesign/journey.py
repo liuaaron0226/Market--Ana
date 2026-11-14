@@ -737,6 +737,27 @@ def portfolio(page: Page, base: str, tag: str) -> None:
     step(f"{tag}：主題切換", theme)
 
 
+def theme_follows(page: Page, base: str, tag: str) -> None:
+    """選好的背景色（深色／淺色）換頁之後要一樣（本人 11-15 回報：進出不同頁面會被改掉）。"""
+    scheme = "getComputedStyle(document.documentElement).colorScheme.includes('dark') ? 'dark' : 'light'"
+
+    def open_page(path: str, ready) -> str:
+        page.goto(base + path, wait_until="domcontentloaded")
+        ready(page)
+        return page.evaluate(scheme)
+
+    seen = [open_page("/", shoot.ready_home)]
+    if seen[0] != "dark":
+        page.locator("#themeToggle").click()
+    seen = [page.evaluate(scheme), open_page(f"/stock.html?code={shoot.STOCK}", shoot.ready_stock),
+            open_page("/portfolio.html", shoot.ready_portfolio), open_page("/", shoot.ready_home)]
+    check(f"{tag}：在首頁選深色，到個股頁、自選庫存頁、再回首頁都是深色", seen == ["dark"] * 4, seen)
+    open_page(f"/stock.html?code={shoot.STOCK}", shoot.ready_stock)
+    page.locator("#themeToggle").click()
+    seen = [page.evaluate(scheme), open_page("/", shoot.ready_home)]
+    check(f"{tag}：在個股頁改回淺色，回首頁也是淺色", seen == ["light"] * 2, seen)
+
+
 def main() -> None:
     proc, base = shoot.start_server("--features", "core")
     errors: list[str] = []
@@ -754,6 +775,7 @@ def main() -> None:
                 step(f"首頁 {size}", lambda: home(page, base, f"首頁 {size}", mobile))
                 step(f"個股 {size}", lambda: stock(page, base, f"個股 {size}", mobile))
                 step(f"自選庫存 {size}", lambda: portfolio(page, base, f"自選庫存 {size}"))
+                step(f"主題 {size}", lambda: theme_follows(page, base, f"主題 {size}"))
                 context.close()
             browser.close()
     finally:

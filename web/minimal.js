@@ -1690,6 +1690,13 @@
     if (!document.hidden) pollLive();
   });
 
+  // 主題的選擇存在瀏覽器裡，和個股頁、自選庫存頁用同一個名字：換頁之後才會是同一種背景色（本人 11-15 回報換頁會跑掉）。
+  const THEME_KEY = 'market-theme';
+  try {
+    const saved = localStorage.getItem(THEME_KEY);
+    if (saved === 'light' || saved === 'dark') root.dataset.theme = saved;
+  } catch (_) { /* 私密視窗可能讀不到 */ }
+
   function updateThemeText() {
     const dark = getComputedStyle(root).colorScheme.includes('dark');
     $('themeText').textContent = dark ? '改用淺色' : '改用深色';
@@ -1698,6 +1705,7 @@
   $('themeToggle').addEventListener('click', () => {
     const dark = getComputedStyle(root).colorScheme.includes('dark');
     root.dataset.theme = dark ? 'light' : 'dark';
+    try { localStorage.setItem(THEME_KEY, root.dataset.theme); } catch (_) { /* 私密視窗可能存不了 */ }
     updateThemeText();
     chart && chart.draw();
     requestAnimationFrame(updateOverlayControls);
