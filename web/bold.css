@@ -73,10 +73,8 @@
   background: transparent; color: var(--ink); font: 13px var(--sans);
 }
 .bd-notice { margin-bottom: 8px; padding: 8px 12px; background: var(--panel2); color: var(--dim); font-size: 12px; line-height: 1.5; border-radius: 8px; }
-.bd-chart-host { position: relative; min-height: 320px; }
-
-/* 單一指標區：沿用 chart-studies，只把框線收細 */
-.bd #chartStudies { margin-top: 8px; }
+/* 最小高度等於 K 線最矮的高度（stock.js 的 300）：再高，窄螢幕上 K 線和接在下面的指標區之間會空一條 */
+.bd-chart-host { position: relative; min-height: 300px; }
 
 /* ---------- 價位階梯 ---------- */
 .bd-rail { padding: 24px 0 24px 32px; border-left: 1px solid var(--hair); display: flex; flex-direction: column; }

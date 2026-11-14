@@ -4,6 +4,8 @@
 
   const DPR = () => Math.max(1, Math.min(3, window.devicePixelRatio || 1));
   const KNOWN_KINDS = ['volume', 'macd', 'kd', 'rsi', 'foreign', 'trust', 'dealer'];
+  // 指標名稱疊在指標區左上角：畫圖時上緣留這一條給它，線與柱不會壓到字。
+  const NAME_STRIP = 20;
   // KD 以 K、D 初值 50 遞推，前端只有約 120 根日K：前 9 根算 RSV，之後再暖機 40 根，
   // 讓初值的影響衰減到 0.01 以下，最後一根才會和後端用較長歷史算出的 K9／D9 一致。
   const KD_READY_BARS = 49;
@@ -152,7 +154,6 @@
       this.macdPane = macdPane.pane;
       this.macdReadout = macdPane.readout;
       this.macdCanvas = macdPane.canvas;
-      this.macdPane.insertBefore(this._makeMacdLegend(), this.macdCanvas);
 
       this.panes = [this.volumePane, this.macdPane];
       if (this.kinds.includes('kd')) {
@@ -160,7 +161,6 @@
         this.kdPane = kdPane.pane;
         this.kdReadout = kdPane.readout;
         this.kdCanvas = kdPane.canvas;
-        this.kdPane.insertBefore(this._makeLineLegend([['K 實線', 'dif', false], ['D 虛線', 'dea', true], ['80／20 參考線', 'ref', true]]), this.kdCanvas);
         this.panes.push(this.kdPane);
       }
       if (this.kinds.includes('rsi')) {
@@ -168,7 +168,6 @@
         this.rsiPane = rsiPane.pane;
         this.rsiReadout = rsiPane.readout;
         this.rsiCanvas = rsiPane.canvas;
-        this.rsiPane.insertBefore(this._makeLineLegend([['RSI 實線', 'dif', false], ['70／50／30 參考線', 'ref', true]]), this.rsiCanvas);
         this.panes.push(this.rsiPane);
       }
       this.institutionalPanes = {};
@@ -194,11 +193,12 @@
         button.addEventListener('click', () => this.select(kind));
         this.switcher.append(button);
       }
+      // 指標區排最前面：它接在 K 線正下方、和 K 線同一個圖框（本人 11-14），切換鍵在整張圖的下方。
       this.root.append(
+        ...this.panes,
         this.switcher,
         this.clearButton,
-        this.notice,
-        ...this.panes
+        this.notice
       );
       this.host.append(this.root);
 
@@ -216,19 +216,6 @@
     switchBy(delta) {
       const kinds = this.kinds;
       this.select(kinds[(kinds.indexOf(this.active) + delta + kinds.length) % kinds.length]);
-    }
-
-    _makeLineLegend(items) {
-      const legend = element('div', 'kc-study-legend');
-      legend.setAttribute('aria-label', '圖例');
-      for (const [label, tone, dashed] of items) {
-        const item = element('span', 'kc-study-legend-item');
-        const line = element('span', `kc-study-legend-line kc-study-legend-line-${tone}${dashed ? ' is-dashed' : ''}`);
-        line.setAttribute('aria-hidden', 'true');
-        item.append(line, text(label));
-        legend.append(item);
-      }
-      return legend;
     }
 
     _exampleItem(list, lead) {
@@ -282,6 +269,7 @@
 
     _makePane(kind, titleValue) {
       const pane = element('section', `kc-study-pane kc-study-pane-${kind}`);
+      // 畫面上只看得到指標名稱（疊在指標區左上角）；讀數留給螢幕閱讀器，樣式把它收起來。
       const header = element('header', 'kc-study-head');
       const titleNode = element('h3', 'kc-study-title', titleValue);
       const readout = element('p', 'kc-study-readout', '尚無日線資料');
@@ -305,34 +293,6 @@
 
       pane.append(header, canvas);
       return { pane, readout, canvas };
-    }
-
-    _makeMacdLegend() {
-      const legend = element('div', 'kc-study-legend');
-      legend.setAttribute('aria-label', 'MACD圖例');
-
-      const dif = element('span', 'kc-study-legend-item');
-      const difLine = element('span', 'kc-study-legend-line kc-study-legend-line-dif');
-      difLine.setAttribute('aria-hidden', 'true');
-      dif.append(difLine, text('DIF 實線'));
-
-      const dea = element('span', 'kc-study-legend-item');
-      const deaLine = element('span', 'kc-study-legend-line kc-study-legend-line-dea');
-      deaLine.setAttribute('aria-hidden', 'true');
-      dea.append(deaLine, text('DEA 虛線'));
-
-      const positive = element('span', 'kc-study-legend-item');
-      const positiveBar = element('span', 'kc-study-legend-bar kc-study-legend-bar-positive');
-      positiveBar.setAttribute('aria-hidden', 'true');
-      positive.append(positiveBar, text('正柱'));
-
-      const negative = element('span', 'kc-study-legend-item');
-      const negativeBar = element('span', 'kc-study-legend-bar kc-study-legend-bar-negative');
-      negativeBar.setAttribute('aria-hidden', 'true');
-      negative.append(negativeBar, text('負柱'));
-
-      legend.append(dif, dea, positive, negative);
-      return legend;
     }
 
     _makeDetails(summaryText) {
@@ -562,7 +522,7 @@
 
     _drawVolume(context, width, height, range) {
       const { candles, start, end, geo } = range;
-      const top = 12;
+      const top = NAME_STRIP;
       const bottom = height - 14;
       const plotHeight = Math.max(1, bottom - top);
       const key = this.volumeKind;
@@ -625,7 +585,7 @@
     }
 
     _drawInstitutional(context, width, height, range, kind) {
-      const top = 10;
+      const top = NAME_STRIP;
       const bottom = height - 12;
       let amplitude = 0;
       for (let index = range.start; index < range.end; index += 1) {
@@ -682,7 +642,7 @@
 
     _drawMacd(context, width, height, range) {
       const macd = Array.isArray(this.chart.macd) ? this.chart.macd : [];
-      const top = 8;
+      const top = NAME_STRIP;
       const bottom = height - 12;
       let amplitude = 0;
       let hasReady = false;
@@ -756,7 +716,7 @@
 
     // KD／RSI 共用：固定 0～100 縱軸，畫參考虛線與一到兩條指標線；暖機中的點不畫成 0。
     _drawOscillator(context, width, height, range, series, lines, refs, emptyText) {
-      const top = 8;
+      const top = NAME_STRIP;
       const bottom = height - 12;
       const y = value => bottom - value / 100 * (bottom - top);
       let hasReady = false;
@@ -972,7 +932,7 @@
       if (!daily) return;
 
       const width = this._mainWidth();
-      const height = width >= 760 ? 120 : 104;
+      const height = width >= 760 ? 132 : 116;
       const range = this._range();
       this._ensureOscillators(range.candles);
       const selectedIndex = this._selectedIndex(range);

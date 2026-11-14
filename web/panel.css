@@ -304,6 +304,10 @@ body.hm .kc-tip {
   transition: opacity 160ms var(--ease-out), transform 380ms var(--ease-depth);
 }
 body.hm .kc-tip.show { transform: none; }
+/* 手機不浮出當天明細（一碰就跳出來、蓋住 K 線，本人 11-14 iPhone 實測）：只留十字線，數字按「這一天的詳情」看 */
+@media (max-width: 760px) {
+  body.hm .kc-tip { display: none; }
+}
 
 /* ---------- 下鑽面板 ---------- */
 body.hm .panel-backdrop { background: var(--scrim); }

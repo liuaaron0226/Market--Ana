@@ -72,6 +72,53 @@ TIP_STATE = """() => {
 }"""
 
 
+# 當天明細的浮窗現在看不看得到（首頁手機不顯示；桌機與個股頁照舊）。
+TIP_SEEN = """host => {
+  const tip = document.querySelector(host + ' .kc-tip');
+  return tip.classList.contains('show') && tip.getClientRects().length > 0 && Number(getComputedStyle(tip).opacity) === 1;
+}"""
+# 目前顯示的那一個指標區（一次只顯示一種）。下面三段檢查共用。
+ACTIVE_STUDY = "const pane = [...document.querySelectorAll('#chartStudies .kc-study-pane')].find(p => p.getClientRects().length);"
+# 指標區接在 K 線正下方：同寬、左右對齊、中間不留空隙（所以也夾不進標題列、讀數、圖例或按鈕）。
+STUDY_JOINED = """host => {
+  %s
+  if (!pane) return 'no indicator shown';
+  const main = document.querySelector(host + ' canvas').getBoundingClientRect(), box = pane.querySelector('canvas').getBoundingClientRect();
+  const gap = box.top - main.bottom;
+  if (Math.abs(gap) > 2) return `gap ${gap.toFixed(1)}px`;
+  return Math.abs(box.left - main.left) <= 1 && Math.abs(box.width - main.width) <= 1 ? 'ok' : `misaligned ${box.left}/${box.width} vs ${main.left}/${main.width}`;
+}""" % ACTIVE_STUDY
+# 指標區左上角只寫指標名稱；選取那一天的讀數與圖例不出現在畫面上。
+STUDY_NAME_ONLY = """() => {
+  %s
+  const seen = e => { const b = e.getBoundingClientRect(), s = getComputedStyle(e); return s.display !== 'none' && s.visibility !== 'hidden' && b.width > 2 && b.height > 2; };
+  const title = pane.querySelector('.kc-study-title'), name = title.getBoundingClientRect(), box = pane.querySelector('canvas').getBoundingClientRect();
+  if (!seen(title) || !title.textContent.trim()) return 'no name';
+  if (name.top < box.top - 1 || name.bottom > box.top + box.height / 2 || name.left < box.left - 1 || name.right > box.left + box.width / 2) return 'name is not at the top-left of the indicator area';
+  const extra = [...pane.querySelectorAll('.kc-study-readout, .kc-study-legend')].filter(seen);
+  return extra.length ? 'still shows ' + extra.map(e => e.className).join(', ') : 'ok';
+}""" % ACTIVE_STUDY
+# 由上到下：K 線、指標區、切換鍵；首頁手機的收復線／防守線與詳情鈕再排在切換鍵下面。
+STUDY_ORDER = """below => {
+  %s
+  const bottom = pane.querySelector('canvas').getBoundingClientRect().bottom, keys = document.querySelector('#chartStudies .kc-study-switcher').getBoundingClientRect();
+  if (keys.top < bottom - 1) return 'switch keys are not below the indicator area';
+  const actions = below && document.querySelector(below).getBoundingClientRect();
+  return !actions || actions.top >= keys.bottom - 1 ? 'ok' : 'chart actions are not below the switch keys';
+}""" % ACTIVE_STUDY
+STUDY_PIXELS = "document.querySelector('#chartStudies .kc-study-pane:not([hidden]) canvas').toDataURL()"
+
+
+def joined_chart(page: Page, tag: str, host: str, below: str | None) -> None:
+    """K 線和指標是同一個圖框：三項檢查首頁與個股頁共用。"""
+    joined = page.evaluate(STUDY_JOINED, host)
+    check(f"{tag}：指標區接在 K 線正下方、同寬對齊", joined == "ok", joined)
+    name_only = page.evaluate(STUDY_NAME_ONLY)
+    check(f"{tag}：指標區左上角只寫指標名稱，沒有讀數與圖例", name_only == "ok", name_only)
+    order = page.evaluate(STUDY_ORDER, below)
+    check(f"{tag}：切換鍵排在整張圖下方" + ("，收復線／防守線與詳情再往下" if below else ""), order == "ok", order)
+
+
 CATS = dict(zip(shoot.HOME_CATS, ("籌碼與資金", "籌碼選股", "產業資金流向", "長期核心持有")))
 open_cat = shoot.open_cat
 # 四類各自的內容區塊目前看不看得到（收起來的不算，Tab 也走不到）。
@@ -186,6 +233,7 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
         check(f"{tag}：指標切到 MACD", study_pressed(page, "macd"))
         check(f"{tag}：指標切回成交金額", study_pressed(page, "volume"))
     step(f"{tag}：指標切換", studies)
+    step(f"{tag}：K 線與指標同一個圖框", lambda: joined_chart(page, tag, "#mainChart", "#chartActions" if mobile else None))
 
     open_panel(page, tag, "#priceSummary", "現價")
     open_panel(page, tag, "#conclusionTrigger", "結論")
@@ -199,14 +247,19 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
         canvas.scroll_into_view_if_needed()
         box = canvas.bounding_box()
         x, y = box["x"] + box["width"] * 0.45, box["y"] + box["height"] * 0.45
+        plain = page.evaluate(STUDY_PIXELS)
         if mobile:
             # 手機：點 K 棒先選取，再按「這一天的詳情」才開明細板。
             page.touchscreen.tap(x, y)
             page.locator("#mobileCandleDetails").wait_for(state="visible")
+            # 手機不浮出當天明細的視窗（會蓋住 K 線），只留十字線；數字按「這一天的詳情」看。
+            check(f"{tag}：點 K 棒不浮出明細視窗，十字線還在",
+                  not page.evaluate(TIP_SEEN, "#mainChart") and page.evaluate("window.MinimalApp.chart.hover >= 0"))
         else:
             page.mouse.move(x, y)
-        tip = page.evaluate(TIP_STATE)
-        check(f"{tag}：指到 K 棒浮出當天明細，底色不透明", tip == "ok", tip)
+            tip = page.evaluate(TIP_STATE)
+            check(f"{tag}：指到 K 棒浮出當天明細，底色不透明", tip == "ok", tip)
+        check(f"{tag}：十字線一路畫到指標區", page.evaluate(STUDY_PIXELS) != plain)
         if mobile:
             page.locator("#mobileCandleDetails").click()
         else:
@@ -411,7 +464,7 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
     step(f"{tag}：搜尋到個股", search)
 
 
-def stock(page: Page, base: str, tag: str) -> None:
+def stock(page: Page, base: str, tag: str, mobile: bool) -> None:
     page.goto(base + f"/stock.html?code={shoot.STOCK}", wait_until="domcontentloaded")
     shoot.ready_stock(page)
     check(f"{tag}：沒有橫向捲動", no_overflow(page))
@@ -438,6 +491,18 @@ def stock(page: Page, base: str, tag: str) -> None:
         check(f"{tag}：指標切到 MACD", study_pressed(page, "macd"))
         check(f"{tag}：指標切到外資", study_pressed(page, "foreign"))
     step(f"{tag}：指標切換", studies)
+    step(f"{tag}：K 線與指標同一個圖框", lambda: joined_chart(page, tag, "#chartHost", None))
+
+    def candle_tip() -> None:
+        # 個股頁沒有「這一天的詳情」可以替代，所以手機上的當天明細浮窗照舊（只有首頁手機拿掉）。
+        canvas = page.locator("#chartHost canvas").first
+        canvas.scroll_into_view_if_needed()
+        box = canvas.bounding_box()
+        x, y = box["x"] + box["width"] * 0.4, box["y"] + box["height"] * 0.4
+        page.touchscreen.tap(x, y) if mobile else page.mouse.move(x, y)
+        page.wait_for_timeout(250)
+        check(f"{tag}：指到 K 棒仍浮出當天明細", page.evaluate(TIP_SEEN, "#chartHost"))
+    step(f"{tag}：K 棒明細", candle_tip)
 
     def wheel_zoom() -> None:
         # 只確認滾輪縮小不會把圖弄壞；縮放的格數與歷史往前載入由 cloud/test 的 K 線手勢測試保護。
@@ -517,7 +582,7 @@ def main() -> None:
                 page.on("pageerror", lambda error: errors.append(str(error)))
                 mobile = size == "390"
                 step(f"首頁 {size}", lambda: home(page, base, f"首頁 {size}", mobile))
-                step(f"個股 {size}", lambda: stock(page, base, f"個股 {size}"))
+                step(f"個股 {size}", lambda: stock(page, base, f"個股 {size}", mobile))
                 step(f"自選庫存 {size}", lambda: portfolio(page, base, f"自選庫存 {size}"))
                 context.close()
             browser.close()
