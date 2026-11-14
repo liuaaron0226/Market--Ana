@@ -5,8 +5,8 @@
 
 - 每次查詢前固定等 PAUSE 秒；先把最近一週的所有股票查完，再往前一週（中途停下，手上是完整的近幾週）。
 - 進度逐筆附加到 jsonl，重跑只查還沒有的；那一週沒有那一檔也記下來，不再問。
-- HTTP 不是 200、頁面不是查詢頁、回的不是問的那一檔那一週、或連續一大串查無資料：立刻停，不重試硬闖。
-- 連線錯誤只等 60 秒重來一次，再錯就停。
+- HTTP 403／429 等、頁面不是查詢頁、回的不是問的那一檔那一週、或連續一大串查無資料：立刻停，不重試硬闖。
+- 連線錯誤等 60 秒、單次 HTTP 404 等 5 分鐘（官方站偶發，重新開頁就好），重新開表單頁後同一筆再問一次；再錯就停。
 
 用法：
     python tdcc_backfill.py run --codes data/tdcc-holders/backfill/codes.json
@@ -32,6 +32,7 @@ DEFAULT_PROGRESS = ROOT / "data/tdcc-holders/backfill/progress.jsonl"
 DEFAULT_SEED = ROOT / "seeds/tdcc-holders-history.json"
 PAUSE = 3.0
 RETRY_WAIT = 60.0
+NOT_FOUND_WAIT = 300.0  # 本人 2026-11-15「可以，重試一次」：單次 HTTP 404 等 5 分鐘再問一次，連續兩次才停
 EMPTY_RUN_LIMIT = 15
 REFRESH_EVERY = 100  # 同一個連線階段查太久官方會回 404（11-15 實跑 153 次後）；每查這麼多次就重新開一次表單頁
 HISTORY_SCHEMA = "tdcc-holders-history/v1"
@@ -106,87 +107,100 @@ def _append(path: Path, rows: list[dict]) -> None:
             handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
+class _Hiccup(Exception):
+    """可能只是一時的：等一下、重新開表單頁、同一件事再做一次。"""
+
+    def __init__(self, reason: str, wait: float) -> None:
+        super().__init__(reason)
+        self.wait = wait
+
+
 def backfill(codes: list[str], progress: Path = DEFAULT_PROGRESS, *, fetch: Callable, sleep: Callable = time.sleep,
              log: Callable = print, skip_dates: set[str] | None = None, limit: int | None = None,
              refresh_every: int = REFRESH_EVERY) -> dict:
     """fetch(None) 讀表單、fetch(欄位) 送查詢，都回（HTTP 狀態，頁面文字）。回報做了多少、為什麼停。"""
     report = {"status": "done", "fetched": 0, "missing": 0, "requests": 0}
 
-    def stopped(reason: str) -> dict:
-        return {**report, "status": "stopped", "reason": reason}
-
-    def open_form() -> dict:
+    def request(data: dict | None) -> str:
         report["requests"] += 1
-        status, html = fetch(None)
+        try:
+            status, html = fetch(data)
+        except Exception as error:  # noqa: BLE001
+            raise _Hiccup(f"連線錯誤：{type(error).__name__}", RETRY_WAIT) from error
+        if status == 404:
+            raise _Hiccup("HTTP 404", NOT_FOUND_WAIT)
         if status != 200:
             raise Refused(f"HTTP {status}")
-        return parse_form(html)
+        return html
 
-    try:
-        form = open_form()
-    except (Refused, ValueError) as error:
-        return stopped(str(error))
-    except Exception as error:  # noqa: BLE001 — 連線錯誤即停
-        return stopped(f"連線錯誤：{type(error).__name__}")
-    done = _load_progress(progress)
-    skip = skip_dates or set()
-    weeks = [(compact, f"{compact[:4]}-{compact[4:6]}-{compact[6:]}") for compact in sorted(form["dates"], reverse=True)]
-    todo = [(code, compact, iso) for compact, iso in weeks if iso not in skip for code in codes if (code, iso) not in done]
-    report["remaining"] = len(todo)
-    empties: list[dict] = []  # 查無資料先放著：後面有查到東西才算數，一長串都空就當成被擋
-    asked = 0  # 這個表單頁已經查了幾次
-    for code, compact, iso in todo:
-        if limit is not None and report["fetched"] + report["missing"] + len(empties) >= limit:
-            report["status"] = "paused"
-            break
-        if asked >= refresh_every:
-            sleep(PAUSE)
+    def open_form() -> dict:
+        try:
+            return parse_form(request(None))
+        except ValueError as error:
+            raise Refused(str(error)) from error
+
+    def once_more(action: Callable):
+        """做一次；只是一時出錯就等一下、重新開表單頁再做一次，再錯就停。"""
+        nonlocal form
+        try:
+            return action()
+        except _Hiccup as first:
+            log(f"{datetime.now().isoformat(timespec='seconds')} {first}，等 {first.wait:.0f} 秒後重來一次")
+            sleep(first.wait)
             try:
                 form = open_form()
-            except (Refused, ValueError) as error:
-                return stopped(str(error))
-            except Exception as error:  # noqa: BLE001
-                return stopped(f"連線錯誤：{type(error).__name__}")
-            asked = 0
-        asked += 1
-        retried = False
-        while True:
-            try:
-                if not retried:
-                    sleep(PAUSE)
-                report["requests"] += 1
-                status, html = fetch({**form["fields"], "scaDate": compact, "sqlMethod": "StockNo", "stockNo": code, "stockName": ""})
+                return action()
+            except _Hiccup as second:
+                raise Refused(str(second)) from second
+
+    form: dict = {}
+
+    def reopen() -> None:
+        nonlocal form
+        form = open_form()
+
+    try:
+        once_more(reopen)
+        done = _load_progress(progress)
+        skip = skip_dates or set()
+        weeks = [(compact, f"{compact[:4]}-{compact[4:6]}-{compact[6:]}") for compact in sorted(form["dates"], reverse=True)]
+        todo = [(code, compact, iso) for compact, iso in weeks if iso not in skip for code in codes if (code, iso) not in done]
+        report["remaining"] = len(todo)
+        empties: list[dict] = []  # 查無資料先放著：後面有查到東西才算數，一長串都空就當成被擋
+        asked = 0  # 這個表單頁已經查了幾次
+        for code, compact, iso in todo:
+            if limit is not None and report["fetched"] + report["missing"] + len(empties) >= limit:
+                report["status"] = "paused"
                 break
-            except Exception as error:  # noqa: BLE001
-                if retried:
-                    return stopped(f"連線錯誤：{type(error).__name__}")
-                retried = True
-                log(f"連線錯誤（{type(error).__name__}），等 {RETRY_WAIT:.0f} 秒後重來一次")
-                sleep(RETRY_WAIT)
-                try:
-                    form = open_form()
-                except Exception as again:  # noqa: BLE001
-                    return stopped(f"連線錯誤：{type(again).__name__}" if not isinstance(again, (Refused, ValueError)) else str(again))
-        if status != 200:
-            return stopped(f"HTTP {status}")
-        try:
-            form = {**form, "fields": parse_form(html)["fields"]}
-            result = parse_result(html)
-        except ValueError as error:
-            return stopped(str(error))
-        if result is None:
-            empties.append({"code": code, "date": iso, "holders": None})
-            if len(empties) >= EMPTY_RUN_LIMIT:
-                return stopped(f"連續 {len(empties)} 次查無資料，可能被擋或權杖失效；這一串沒有記成「沒有」")
-            continue
-        if (result["code"], result["data_date"]) != (code, iso):
-            return stopped(f"問 {code} {iso}，回的是 {result['code']} {result['data_date']}")
-        _append(progress, [*empties, {"code": code, "date": iso, "holders": result["holders"]}])
-        report["missing"] += len(empties)
-        report["fetched"] += 1
-        empties = []
-        if report["fetched"] % 50 == 0:
-            log(f"{datetime.now().isoformat(timespec='seconds')} 已查到 {report['fetched']}／剩 {report['remaining'] - report['fetched'] - report['missing']}（目前 {iso}）")
+            if asked >= refresh_every:
+                sleep(PAUSE)
+                once_more(reopen)
+                asked = 0
+            asked += 1
+            sleep(PAUSE)
+            html = once_more(lambda: request({**form["fields"], "scaDate": compact, "sqlMethod": "StockNo",
+                                              "stockNo": code, "stockName": ""}))
+            try:
+                form = {**form, "fields": parse_form(html)["fields"]}
+                result = parse_result(html)
+            except ValueError as error:
+                raise Refused(str(error)) from error
+            if result is None:
+                empties.append({"code": code, "date": iso, "holders": None})
+                if len(empties) >= EMPTY_RUN_LIMIT:
+                    raise Refused(f"連續 {len(empties)} 次查無資料，可能被擋或權杖失效；這一串沒有記成「沒有」")
+                continue
+            if (result["code"], result["data_date"]) != (code, iso):
+                raise Refused(f"問 {code} {iso}，回的是 {result['code']} {result['data_date']}")
+            _append(progress, [*empties, {"code": code, "date": iso, "holders": result["holders"]}])
+            report["missing"] += len(empties)
+            report["fetched"] += 1
+            empties = []
+            if report["fetched"] % 50 == 0:
+                log(f"{datetime.now().isoformat(timespec='seconds')} 已查到 {report['fetched']}／"
+                    f"剩 {report['remaining'] - report['fetched'] - report['missing']}（目前 {iso}）")
+    except Refused as error:
+        return {**report, "status": "stopped", "reason": str(error)}
     if empties:  # 收尾時剩下的零星查無資料（沒有達到整串的門檻）照實記下
         _append(progress, empties)
         report["missing"] += len(empties)

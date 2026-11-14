@@ -84,6 +84,8 @@ class FakeSite:
         if data is None:
             return 200, page(rows=False, token=f"t{self.token}", dates=self.dates)
         answer = self.answers.get((data["stockNo"], data["scaDate"]), "ok")
+        if isinstance(answer, list):  # 同一筆查詢每次回不一樣的東西：照順序給，給完就一直給最後一個
+            answer = answer.pop(0) if len(answer) > 1 else answer[0]
         if isinstance(answer, Exception):
             raise answer
         if isinstance(answer, tuple):
@@ -147,11 +149,32 @@ class BackfillTest(unittest.TestCase):
         self.assertEqual(site.requests, [None], "只讀一次表單看有哪些週，不再查那一檔")
 
     def test_stops_at_once_when_the_site_refuses(self) -> None:
+        # 403、429 這類是明講不給：不等、不重試。只有 404 和連線錯誤才再試一次。
         site = FakeSite({("2317", "20261106"): (403, "<html>Forbidden</html>")})
         report = self.run_backfill(site)
         self.assertEqual((report["status"], report["reason"]), ("stopped", "HTTP 403"))
         self.assertEqual(len(site.requests), 3, "被拒絕後不再送任何請求")
         self.assertEqual(len(self.rows()), 1)
+
+    def test_a_single_404_waits_five_minutes_and_asks_the_same_thing_once_more(self) -> None:
+        # 本人 2026-11-15「可以，重試一次」：實跑 543 次請求出現 2 次 404，每次重新開頁後馬上正常；
+        # 一次 404 就停的話整批跑不完。等 5 分鐘、重新開表單頁、同一筆再問一次。
+        site = FakeSite({("2317", "20261106"): [(404, ""), "ok"]})
+        report = self.run_backfill(site)
+        self.assertEqual((report["status"], report["fetched"]), ("done", 4))
+        self.assertEqual([request and request[:2] for request in site.requests],
+                         [None, ("2330", "20261106"), ("2317", "20261106"), None, ("2317", "20261106"),
+                          ("2330", "20251121"), ("2317", "20251121")])
+        self.assertEqual(self.sleeps.count(300.0), 1)
+        self.assertEqual(len(self.rows()), 4)
+
+    def test_two_404s_in_a_row_stop_the_run(self) -> None:
+        site = FakeSite({("2317", "20261106"): (404, "")})
+        report = self.run_backfill(site)
+        self.assertEqual((report["status"], report["reason"]), ("stopped", "HTTP 404"))
+        self.assertEqual(self.sleeps.count(300.0), 1)
+        self.assertEqual(len(site.requests), 5, "第二次 404 之後不再送任何請求")
+        self.assertEqual([row["code"] for row in self.rows()], ["2330"])
 
     def test_stops_when_the_answer_is_for_a_different_stock_or_week(self) -> None:
         wrong = page(code="2454", roc_date="115年11月06日", token="x", dates=("20261113", "20261106", "20251121"))
