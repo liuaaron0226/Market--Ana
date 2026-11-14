@@ -406,3 +406,38 @@ test('觸控拖動平移之後，十字線回到選取的那一天，不停在�
   fresh.canvas.dispatch('pointerup', { pointerId: 1, clientX: 260, clientY: 100 });
   assert.equal(fresh.chart.hover, -1, '沒有選取時，拖完十字線收掉');
 });
+
+test('手指在主圖上下拖（想捲頁面）不算點選那一天', () => {
+  const { chart, canvas } = createChart();
+  canvas.dispatch('pointerdown', { pointerId: 1, clientX: 150, clientY: 60 });
+  canvas.dispatch('pointermove', { pointerId: 1, clientX: 150, clientY: 140 });
+  canvas.dispatch('pointerup', { pointerId: 1, clientX: 150, clientY: 140 });
+  assert.equal(chart.selection, -1, '上下拖不選取');
+});
+
+// 本人 2026-11-15：「用手機看k線圖，單指是可以左右滑動歷史資料，兩指是放大」。指標區和 K 線是同一張圖，手勢要一樣；
+// 切換指標改由指標名稱的選單，不再用左右滑。
+test('指標區的手勢和主圖一樣：單指左右拖是平移歷史，兩指是縮放，不再切換指標', () => {
+  const { chart, canvas } = createChart();
+  let switched = 0;
+  chart.studies = { draw() {}, switchBy() { switched += 1; } };
+  const study = new canvas.constructor('canvas');
+  chart.bindCanvas(study);
+
+  const endBefore = chart.view.end;
+  study.dispatch('pointerdown', { pointerId: 1, clientX: 150, clientY: 100 });
+  study.dispatch('pointermove', { pointerId: 1, clientX: 230, clientY: 100 });
+  study.dispatch('pointerup', { pointerId: 1, clientX: 230, clientY: 100 });
+  assert.ok(chart.view.end < endBefore, '往右拖：看到更早的資料');
+  assert.equal(switched, 0, '不切換指標');
+  assert.equal(chart.selection, -1, '拖動不算點選');
+
+  const countBefore = chart.view.count;
+  study.dispatch('pointerdown', { pointerId: 1, clientX: 180, clientY: 100 });
+  study.dispatch('pointerdown', { pointerId: 2, clientX: 210, clientY: 100 });
+  study.dispatch('pointermove', { pointerId: 2, clientX: 300, clientY: 100 });
+  study.dispatch('pointerup', { pointerId: 2, clientX: 300, clientY: 100 });
+  study.dispatch('pointerup', { pointerId: 1, clientX: 180, clientY: 100 });
+  assert.ok(chart.view.count < countBefore, '兩指張開：放大（顯示的根數變少）');
+  assert.equal(switched, 0);
+});

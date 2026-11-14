@@ -214,10 +214,6 @@
       this.draw();
     }
 
-    switchBy(delta) {
-      const kinds = this.kinds;
-      this.select(kinds[(kinds.indexOf(this.active) + delta + kinds.length) % kinds.length]);
-    }
 
     _exampleItem(list, lead) {
       const item = element('li', 'kc-study-explainer-item');

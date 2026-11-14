@@ -313,18 +313,20 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
          lambda: joined_chart(page, tag, "#mainChart", ["成交金額", "MACD", "KD", "RSI"], "#chartActions" if mobile else None))
 
     def swipe_study() -> None:
-        # 指標區沿用原本的手勢：在上面左右拖是切換指標（要平移或縮放 K 線，在 K 線那一半操作）。
+        # 指標區和 K 線是同一張圖，手勢一樣（本人 11-15）：左右拖是平移歷史，不再是切換指標。
         canvas = page.locator("#chartStudies .kc-study-pane:not([hidden]) canvas")
         canvas.scroll_into_view_if_needed()
         box = canvas.bounding_box()
-        x, y = box["x"] + box["width"] * 0.6, box["y"] + box["height"] / 2
+        x, y = box["x"] + box["width"] * 0.4, box["y"] + box["height"] / 2
         page.mouse.move(x, y)
         page.mouse.down()
-        page.mouse.move(x - 90, y, steps=6)
+        page.mouse.move(x + 120, y, steps=6)
         page.mouse.up()
-        check(f"{tag}：在指標區往左拖，切到下一種指標",
-              page.locator(".kc-study-choice[data-study='macd']").get_attribute("aria-pressed") == "true")
-        study_pressed(page, "volume")
+        page.mouse.move(4, 4)
+        still = page.locator(".kc-study-choice[data-study='volume']").get_attribute("aria-pressed") == "true"
+        moved = page.locator("#resetView").is_visible()
+        check(f"{tag}：在指標區左右拖是平移歷史（和 K 線一樣），不會切換指標", still and moved, [still, moved])
+        page.locator("#resetView").click()
     step(f"{tag}：指標區手勢", swipe_study)
 
     open_panel(page, tag, "#priceSummary", "現價")

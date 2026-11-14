@@ -170,38 +170,33 @@
       if (this.opts.onClear) this.opts.onClear();
       this.draw();
     }
+    // 主圖與指標區的畫布都綁同一組手勢（本人 11-15）：單指左右拖平移歷史、兩指捏合縮放、點一下選取那一天。
     bindCanvas(c) {
       let drag = null; const pts = new Map();
       const geo = () => this.geo;
       c.addEventListener('pointerdown', e => {
         c.setPointerCapture(e.pointerId); pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-        if (pts.size === 1) drag = { kind: 'single', x: e.clientX, y: e.clientY, end: this.view.end, moved: false, hadPinch: false, studySwipe: c !== this.canvas && !!this.studies };
-        if (pts.size === 2) { const xs = [...pts.values()].map(point => point.x); drag = { kind: 'pinch', pinch: Math.max(20, Math.abs(xs[0] - xs[1])), count: this.view.count, end: this.view.end, hadPinch: true, studySwipe: c !== this.canvas && !!this.studies }; }
+        if (pts.size === 1) drag = { kind: 'single', x: e.clientX, y: e.clientY, end: this.view.end, moved: false, hadPinch: false };
+        if (pts.size === 2) { const xs = [...pts.values()].map(point => point.x); drag = { kind: 'pinch', pinch: Math.max(20, Math.abs(xs[0] - xs[1])), count: this.view.count, end: this.view.end, hadPinch: true }; }
         c.style.cursor = 'grabbing';
-        if (drag?.studySwipe) { this.hover = this.selection; this.draw(); }
       });
       c.addEventListener('pointermove', e => {
         const g = geo(); if (!g) return;
         if (pts.has(e.pointerId)) pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
         const rect = c.getBoundingClientRect(); const x = e.clientX - rect.left;
         if (drag?.kind === 'pinch' && pts.size === 2) {
-          if (drag.studySwipe) return;
           const xs = [...pts.values()].map(point => point.x); const d = Math.max(20, Math.abs(xs[0] - xs[1]));
           this.view.count = drag.count * drag.pinch / d; this.view.end = drag.end; this.clamp(); this.draw(); this.emit(); return;
         }
         if (drag?.kind === 'single' && pts.size === 1) {
-          const dx = e.clientX - drag.x; if ((drag.studySwipe ? Math.hypot(dx, e.clientY - drag.y) : Math.abs(dx)) > 3) drag.moved = true;
-          if (drag.studySwipe) return;
+          // 上下拖也算「動了」：不然手指在圖上往下滑想捲頁面，放開時會被當成點選那一天
+          const dx = e.clientX - drag.x; if (Math.hypot(dx, e.clientY - drag.y) > 3) drag.moved = true;
           this.view.end = Math.round(drag.end - dx / g.step); this.clamp();
         }
         this.hover = x >= g.l && x <= g.l + g.pw ? g.start + Math.floor((x - g.l) / g.step) : -1;
         this.draw(); if (drag && drag.moved) this.emit();
       });
       const up = e => {
-        if (e.type === 'pointerup' && drag?.kind === 'single' && drag.studySwipe && drag.moved && !drag.hadPinch) {
-          const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
-          if (Math.abs(dx) >= 40 && Math.abs(dx) > Math.abs(dy) * 1.3) this.studies.switchBy(dx < 0 ? 1 : -1);
-        }
         if (e.type === 'pointerup' && drag?.kind === 'single' && !drag.moved && !drag.hadPinch && this.geo) {
           const g = this.geo, px = e.clientX - c.getBoundingClientRect().left;
           const picked = px >= g.l && px <= g.l + g.pw
@@ -222,7 +217,7 @@
         pts.delete(e.pointerId);
         if (pts.size === 1 && drag?.kind === 'pinch') {
           const point = pts.values().next().value;
-          drag = { kind: 'single', x: point.x, y: point.y, end: this.view.end, moved: false, hadPinch: true, studySwipe: drag.studySwipe };
+          drag = { kind: 'single', x: point.x, y: point.y, end: this.view.end, moved: false, hadPinch: true };
         } else if (pts.size === 0) { drag = null; c.style.cursor = 'grab'; }
       };
       c.addEventListener('pointerup', up); c.addEventListener('pointercancel', up);

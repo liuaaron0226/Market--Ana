@@ -378,15 +378,14 @@ h1 { font-size: 18px; line-height: 1.2; font-weight: 650; letter-spacing: -.01em
   font-size: 10px;
   white-space: nowrap;
 }
+/* 選取那一天的定位點：畫面上不顯示（本人 11-15：「k線圖上面可以不用顯示那個圓圈了」，十字線與右側數值已經標出是哪一天），
+   只留著位置，明細板關掉時焦點回到這裡。 */
 .selected-candle-marker {
   position: absolute;
   z-index: 5;
   width: 44px;
   height: 44px;
-  border: 1px solid var(--gold);
-  border-radius: 50%;
   pointer-events: none;
-  box-shadow: inset 0 0 0 4px color-mix(in srgb, var(--gold) 12%, transparent);
 }
 .mobile-candle-details {
   position: absolute;
@@ -1178,7 +1177,6 @@ html, body { height: auto; }
 }
 
 /* UI-2a：首頁不再顯示操作提示、指標教學與區間表，改由短中長期結論承接。 */
-body.hm #chartStudies .kc-study-swipe-hint,
 body.hm #chartStudies .kc-study-details,
 body.hm #chartStudies .kc-studies-notice { display: none !important; }
 

@@ -194,7 +194,6 @@
 }
 .bd-period select:hover { border-color: color-mix(in srgb, var(--ink) 22%, transparent); }
 .bd .kc-studies .kc-study-details-summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.bd .kc-studies .kc-study-swipe-hint { color: var(--faint); font-size: 12px; }
 
 /* 展開列 */
 .bd .kc-studies .kc-study-details { border-top-color: var(--hair); }

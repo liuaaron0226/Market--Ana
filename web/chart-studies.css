@@ -262,7 +262,6 @@
 .kc-studies .kc-study-table tbody tr:last-child td {
   border-bottom: 0;
 }
-.kc-studies .kc-study-swipe-hint { margin-left: auto; color: var(--dim); font-size: 12px; }
 .kc-studies .kc-study-details-summary::after {
   content: '+';
   margin-left: auto;
