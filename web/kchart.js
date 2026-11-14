@@ -295,10 +295,11 @@
       }
       // 時間刻度
       x.textBaseline = 'alphabetic'; let lastKey = '';
-      const every = Math.max(1, Math.ceil(70 / step));
+      const bySecond = this.unit.endsWith('秒');
+      const every = Math.max(1, Math.ceil((bySecond ? 84 : 70) / step));
       vis.forEach((c, i) => {
-        const intraday = this.unit !== '60分' && this.unit.endsWith('分');
-        if (intraday) { if (i % every === 0) { x.fillStyle = dim; x.fillText(c.t.slice(11, 16), l + step * i, H - macdH - gapH - 6); } return; }
+        const intraday = bySecond || this.unit !== '60分' && this.unit.endsWith('分');
+        if (intraday) { if (i % every === 0) { x.fillStyle = dim; x.fillText(c.t.slice(11, bySecond ? 19 : 16), l + step * i, H - macdH - gapH - 6); } return; }
         const key = this.unit === '月' ? c.t.slice(0, 4) : this.unit === '週' ? c.t.slice(0, 7) : this.unit === '60分' ? c.t.slice(0, 10) : c.t.slice(0, 7);
         if (key !== lastKey && i % every === 0) { lastKey = key; x.fillStyle = dim; x.fillText(this.unit === '月' ? key : this.unit === '60分' ? c.t.slice(5, 10) : c.t.slice(2, 7).replace('-', '/'), l + step * i, H - macdH - gapH - 6); }
       });

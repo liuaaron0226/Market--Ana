@@ -133,8 +133,19 @@ test("個股頁在分析畫出來之後才背景載入 5 年歷史，接不上�
   assert.match(js, /render\(data, true\);\s*loadHistory\(data, sequence\);/);
   assert.match(js, /fetch\(`\/api\/stocks\/\$\{encodeURIComponent\(result\.code\)\}\/history`/);
   assert.match(js, /window\.KChartMath\.olderBars\(result\.bars, await response\.json\(\)\)/);
-  assert.match(js, /olderBars = \{ code: '', firstDate: '', rows: \[\] \};\s*if \(pendingRequest\)/);  // 換股票就丟掉上一檔的歷史
+  assert.match(js, /olderBars = \{ code: '', firstDate: '', rows: \[\] \};\s*stopTicks\(\);\s*if \(pendingRequest\)/);  // 換股票就丟掉上一檔的歷史、停掉上一檔的逐筆
   assert.doesNotMatch(html, /5 ?年|歷史日線|載入更多/);  // 圖本來就能拖曳、縮放、切換日週月，不需要新的按鈕或說明
+});
+
+test("個股頁週期多出 1／5／10／15／30 秒，只在選了秒 K 時才向站台要當天逐筆（本人 11-14：秒級先做當天）", () => {
+  const html = read("web/stock.html");
+  const js = read("web/stock.js");
+  for (const value of ["1s", "5s", "10s", "15s", "30s"]) assert.match(html, new RegExp(`<option value="${value}">${parseInt(value, 10)}秒</option>`));
+  assert.doesNotMatch(html, /<optgroup label="[^"]+"/);  // 分組只靠間隔，不加小標題
+  assert.match(js, /const wanted = Boolean\(SECOND_PERIODS\[chartPeriod\]\) && lastResult && canUseLive\(lastResult\) && !document\.hidden;/);
+  assert.match(js, /fetch\(`\/api\/stocks\/\$\{encodeURIComponent\(code\)\}\/ticks\?offset=\$\{tickFeed\.offset\}`/);
+  assert.match(js, /window\.Intraday\.secondCandles\(tickFeed\.code === r\.code \? tickFeed\.ticks : \[\], seconds\)/);
+  assert.match(js, /if \(response\.status === 403 \|\| response\.status === 404\) return;/);  // 沒有權限就不再問
 });
 
 test("MA設定使用try catch保護localStorage", () => {

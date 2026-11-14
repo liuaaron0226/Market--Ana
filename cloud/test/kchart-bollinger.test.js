@@ -119,3 +119,18 @@ test("選取某一根時，提示列出當根的布林上軌與下軌", () => {
   chart.draw();
   assert.doesNotMatch(chart.tip.innerHTML, /布林/, "還沒滿 20 根的那一根不顯示");
 });
+
+// 秒 K（本人 2026-11-14：秒級先做當天）：橫軸要標到秒，不能像日 K 一樣標年月。
+test("秒 K 的時間刻度是 時:分:秒", () => {
+  const { KChart, FakeElement, calls } = load();
+  const chart = new KChart(new FakeElement(), { macd: false, height: () => 340 });
+  const rows = Array.from({ length: 30 }, (_, index) => {
+    const second = String(index * 5 % 60).padStart(2, "0"), minute = String(Math.floor(index * 5 / 60)).padStart(2, "0");
+    return { t: `2026-11-10T09:${minute}:${second}+08:00`, label: `09:${minute}:${second}`, open: 100, high: 101, low: 99, close: 100, volume: 1000 };
+  });
+  calls.length = 0;
+  chart.setData(rows, { count: 30, unit: "5秒" });
+  const texts = calls.filter(([name]) => name === "fillText").map(([, text]) => String(text));
+  assert.ok(texts.includes("09:00:00"), texts.join(" "));
+  assert.ok(!texts.some(text => /^26\/11$/.test(text)), texts.join(" "));
+});

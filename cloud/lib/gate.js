@@ -5,12 +5,14 @@ import { verifyAccessJwt } from "./jwt.js";
 import { detailFor } from "./market-data.js";
 import { handleUserPortfolio, UserPortfolioError } from "./user-portfolio.js";
 import { defaultLiveQuoteService } from "./live-quotes.js";
+import { fetchTickPage } from "./live-ticks.js";
 import { defaultIndexLiveService } from "./index-live.js";
 import { releasePolicy } from "./release-policy.js";
 
 const PENDING_CAP = 30;
 // 票 06 限速（Astra r1 建議值）：市場 API 全部每人每分 30 次；個股明細另限每分 12 次。固定一分鐘窗，邊界最多兩倍突發。
-const RATE = { market: 30, detail: 12, userData: 60, live: 20, history: 30 };
+// ticks：行情商免費方案的日內查詢是每分鐘 60 次，報價與分 K 輪詢約用掉 10 次，逐筆留 40 次。
+const RATE = { market: 30, detail: 12, userData: 60, live: 20, history: 30, ticks: 40 };
 // 舊的整包資料檔：雲端已不部署，這裡再擋一次，避免預覽網址或殘留檔被讀到。
 const RETIRED_DATA = new Set(["/analysis-data.js", "/chips-data.js", "/dashboard-data.js", "/detail-data.js", "/plain-data.js"]);
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -352,6 +354,40 @@ async function handleStockLiveApi(request, env, path, email, deps) {
   return json(200, { ...result, environment: "cloud" }, headers);
 }
 
+// 秒級第一步：當天逐筆成交（站主限定，與既有即時行情相同；行情商條款不得轉給第三方）。
+// 只轉送一頁逐筆，金鑰留在伺服器端；秒 K 由瀏覽器彙總。
+const TICKS_STOCK_PATH = /^\/api\/stocks\/([0-9A-Z]{4,6})\/ticks$/;
+
+async function handleStockTicksApi(request, env, path, email, deps) {
+  if (request.method !== "GET") throw new HttpError(405, "方法不允許");
+  const code = path.match(TICKS_STOCK_PATH)[1];
+  const rawOffset = new URL(request.url).searchParams.get("offset") ?? "0";
+  if (!/^\d{1,6}$/.test(rawOffset)) throw new HttpError(400, "位移格式不正確");
+  const headers = { "cache-control": "private, no-store" };
+  try {
+    await consume(env.DB, email, "ticks", (deps.now || Date.now)(), { ...RATE, ...deps.rate });
+  } catch (error) {
+    if (error instanceof RateLimited) {
+      return json(429, { error: "rate-limited", message: "逐筆查詢太頻繁，請稍後再試", retry_after_seconds: error.retryAfter },
+        { ...headers, "retry-after": String(error.retryAfter) });
+    }
+    throw new HttpError(503, "暫時無法處理，請稍後再試");
+  }
+  const unavailable = () => json(503, { error: "ticks-unavailable", message: "目前無法取得逐筆成交" }, headers);
+  if (!env.FUGLE_API_KEY) return unavailable();
+  try {
+    const page = await (deps.tickPage || fetchTickPage)({ code, offset: Number(rawOffset), fugleApiKey: env.FUGLE_API_KEY, fetchImpl: deps.upstreamFetch || fetch });
+    return json(200, page, headers);
+  } catch (error) {
+    if (error?.status === 429) {
+      const wait = Math.max(1, Number(error.retryAfter) || 60);
+      return json(429, { error: "rate-limited", message: "行情來源暫時限流，請稍後再試", retry_after_seconds: wait },
+        { ...headers, "retry-after": String(wait) });
+    }
+    return unavailable();
+  }
+}
+
 // C1：籌碼選股／產業資金流向／長期核心持有。build 前由 build_screens_pack.py 用本機 API 的同一組函式預算，
 // 這裡只做參數驗證（與 live_server 相同規則）、權限與限速，再原樣回傳預算好的 JSON 字串。
 const SCREENS_SCHEMA = "market-screens-pack/v1";
@@ -575,6 +611,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
       if (isMarket) return await handleMarketApi(request, env, path, email, deps);
       if (isComparePath(path)) return await handleCompareApi(request, env, path, email, deps);
       if (LIVE_STOCK_PATH.test(path)) return await handleStockLiveApi(request, env, path, email, deps);
+      if (TICKS_STOCK_PATH.test(path)) return await handleStockTicksApi(request, env, path, email, deps);
       if (HISTORY_STOCK_PATH.test(path)) return await handleStockHistoryApi(request, env, path, email, deps);
       if (isStock) return await handleStockApi(request, env, path, email, deps);
       if (isScreens) return await handleScreensApi(request, env, path, email, deps);
@@ -596,7 +633,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
     if (path === "/api/live" || path === "/api/mis-probe") return fail(403, "即時行情僅限站主使用");
     if (isMarket) return await handleMarketApi(request, env, path, email, deps);
     if (isComparePath(path)) return await handleCompareApi(request, env, path, email, deps);
-    if (LIVE_STOCK_PATH.test(path)) return fail(403, "即時行情僅限站主使用");
+    if (LIVE_STOCK_PATH.test(path) || TICKS_STOCK_PATH.test(path)) return fail(403, "即時行情僅限站主使用");
     if (HISTORY_STOCK_PATH.test(path)) return await handleStockHistoryApi(request, env, path, email, deps);
     if (isStock) return await handleStockApi(request, env, path, email, deps);
     if (isScreens) return await handleScreensApi(request, env, path, email, deps);

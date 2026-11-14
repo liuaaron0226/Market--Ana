@@ -101,6 +101,9 @@
   let olderBars = { code: '', firstDate: '', rows: [] };
   let maPeriods = [18, 45];
   const INTRADAY_PERIODS = { '1m': '1', '5m': '5', '15m': '15', '60m': '60' };
+  // 秒 K（本人 2026-11-14「可以，先做當天」）：當天逐筆在背景一頁一頁取回，由 Intraday.secondCandles 彙總。
+  const SECOND_PERIODS = { '1s': 1, '5s': 5, '10s': 10, '15s': 15, '30s': 30 };
+  let tickFeed = { code: '', date: null, ticks: [], offset: 0, timer: null, generation: 0 };
   try {
     const stored = JSON.parse(localStorage.getItem('stock-ma-periods') || 'null');
     if (Array.isArray(stored)) maPeriods = window.KChartMath.normalizePeriods(stored);
@@ -356,8 +359,10 @@
   function drawChart(r) {
     const daily = dailyCandles(r);
     const intradayKey = INTRADAY_PERIODS[chartPeriod];
-    const intraday = Boolean(intradayKey);
-    const candles = intraday ? (lastLive?.candles?.[intradayKey] || [])
+    const seconds = SECOND_PERIODS[chartPeriod];
+    const intraday = Boolean(intradayKey) || Boolean(seconds);
+    const candles = seconds ? window.Intraday.secondCandles(tickFeed.code === r.code ? tickFeed.ticks : [], seconds)
+      : intraday ? (lastLive?.candles?.[intradayKey] || [])
       : chartPeriod === 'weekly' ? weeklyCandles(daily.map(row => ({ ...row, date: row.t })))
       : chartPeriod === 'monthly' ? monthlyCandles(daily.map(row => ({ ...row, date: row.t }))) : daily;
     const overlays = [];
@@ -375,18 +380,23 @@
     const compatible = !r._intraday && chartPeriod === 'daily' && r.chart && Object.entries(expected).every(([field, value]) => r.chart.parameters?.[field] === value)
       && Array.isArray(r.chart.macd) && r.chart.macd.length === daily.length
       && r.chart.macd.every((row, i) => row.date === daily[i].t);
-    const unit = intraday ? `${intradayKey}分` : chartPeriod === 'monthly' ? '月' : chartPeriod === 'weekly' ? '週' : '日';
-    chart.setData(candles, { count: Math.min(candles.length, intraday ? 80 : innerWidth < 600 ? 50 : 90), overlays, unit,
+    const unit = seconds ? `${seconds}秒` : intraday ? `${intradayKey}分` : chartPeriod === 'monthly' ? '月' : chartPeriod === 'weekly' ? '週' : '日';
+    const defaultCount = intraday ? 80 : innerWidth < 600 ? 50 : 90;
+    chart.setData(candles, { count: Math.min(candles.length, defaultCount), overlays, unit,
       macd: intraday || chartPeriod !== 'daily' || r._intraday || extended ? null : compatible ? r.chart.macd : [],
       macdNotice: compatible || intraday || chartPeriod !== 'daily' || r._intraday || extended ? '' : 'MACD版本或日期不符，暫不顯示' });
     if (savedView) {
       // 歷史接在前面時，原本看的那一段往後移了幾根就跟著移，畫面停在原地。
       const shift = shownBefore.length ? candles.findIndex(candle => candle.t === shownBefore[0].t) : 0;
       if (shift > 0) savedView.end += shift;
+      // 原本就看著最新一根：新的 K 棒進來時跟著走，不讓最新價跑出畫面。
+      if (savedView.end >= shownBefore.length) savedView.end = candles.length;
+      // 剛切過來時資料還沒到齊、畫面只能擠幾根：之後資料補上來，就放寬到平常的根數。
+      if (shownBefore.length < defaultCount) savedView.count = Math.max(savedView.count, Math.min(candles.length, defaultCount));
       chart.view = savedView; chart.clamp(); chart.draw();
     }
     lastChartKey = key;
-    if (intraday) $('stockChartContext').textContent = `${intradayKey}分K · ${candles.length} 根`;
+    if (intraday) $('stockChartContext').textContent = `${unit}K · ${candles.length} 根`;
     else $('stockChartContext').textContent = `${unit}K · 資料日 ${r.as_of}`;
     chart.canvas.setAttribute('aria-label', candles.length
       ? `${r.name}${unit}K，${candles[0].label}至${candles[candles.length - 1].label}，含支撐與壓力參考線。`
@@ -910,6 +920,50 @@
     loadComparison();
   }
 
+  function stopTicks() {
+    if (tickFeed.timer) clearTimeout(tickFeed.timer);
+    tickFeed.timer = null;
+    tickFeed.generation += 1;
+  }
+
+  // 只在選了秒 K、頁面看得到的時候才問逐筆：還在補當天稍早的成交時一秒一頁，追上之後每 3 秒問一次新成交。
+  async function pollTicks(code, generation) {
+    if (generation !== tickFeed.generation) return;
+    let delay = 15_000;
+    try {
+      const response = await fetch(`/api/stocks/${encodeURIComponent(code)}/ticks?offset=${tickFeed.offset}`, { cache: 'no-store' });
+      if (generation !== tickFeed.generation) return;
+      if (response.status === 403 || response.status === 404) return;  // 沒有權限：不再問
+      if (response.status === 429) delay = (Number(response.headers.get('retry-after')) || 60) * 1000;
+      else if (response.ok) {
+        const page = await response.json();
+        if (generation !== tickFeed.generation) return;
+        if (tickFeed.date && page.date !== tickFeed.date) {
+          // 換了交易日：前一天的逐筆不能和今天的接在一起，從頭來。
+          tickFeed = { ...tickFeed, date: page.date, ticks: [], offset: 0 };
+          delay = 0;
+        } else {
+          tickFeed.date = page.date;
+          tickFeed.offset = page.next_offset;
+          if (page.ticks.length) {
+            tickFeed.ticks.push(...page.ticks);
+            if (lastResult && lastResult.code === code && SECOND_PERIODS[chartPeriod]) drawChart(lastResult);
+          }
+          delay = !page.complete ? 1000 : lastLive?.market_open ? 3000 : 60_000;
+        }
+      }
+    } catch (_) { /* 連不上：稍後再試，圖維持已取得的部分 */ }
+    if (generation === tickFeed.generation) tickFeed.timer = setTimeout(() => pollTicks(code, generation), delay);
+  }
+
+  function syncTickFeed() {
+    const wanted = Boolean(SECOND_PERIODS[chartPeriod]) && lastResult && canUseLive(lastResult) && !document.hidden;
+    stopTicks();
+    if (!wanted) return;
+    if (tickFeed.code !== lastResult.code) tickFeed = { ...tickFeed, code: lastResult.code, date: null, ticks: [], offset: 0 };
+    pollTicks(lastResult.code, tickFeed.generation);
+  }
+
   async function loadHistory(result, sequence) {
     try {
       const response = await fetch(`/api/stocks/${encodeURIComponent(result.code)}/history`, { cache: 'no-store' });
@@ -927,6 +981,7 @@
     baseResult = null;
     lastLive = null;
     olderBars = { code: '', firstDate: '', rows: [] };
+    stopTicks();
     if (pendingRequest) pendingRequest.abort();
     pendingRequest = new AbortController();
     $('content').hidden = true;
@@ -968,6 +1023,7 @@
       baseResult = data;
       render(data, true);
       loadHistory(data, sequence);
+      syncTickFeed();
       if (canUseLive(data)) livePoller.start(code, data.market);
       else updateLiveStatus({ ok: true, market_open: false, live: false });
     } catch (error) {
@@ -1014,11 +1070,13 @@
   });
   $('periodSelect').addEventListener('change', () => {
     const selected = $('periodSelect').value;
-    chartPeriod = ['1m', '5m', '15m', '60m', 'weekly', 'monthly'].includes(selected) ? selected : 'daily';
+    chartPeriod = ['1s', '5s', '10s', '15s', '30s', '1m', '5m', '15m', '60m', 'weekly', 'monthly'].includes(selected) ? selected : 'daily';
     if (lastResult) drawChart(lastResult);
+    syncTickFeed();
   });
   window.addEventListener('popstate', () => load(codeFromUrl() || '2330'));
-  window.addEventListener('beforeunload', () => livePoller.stop());
+  window.addEventListener('beforeunload', () => { livePoller.stop(); stopTicks(); });
+  document.addEventListener('visibilitychange', syncTickFeed);
   $('addMa').addEventListener('click', () => {
     if (maPeriods.length >= 4) return;
     const next = [60, 120, 240].find(value => !maPeriods.includes(value)) || Math.min(240, maPeriods.at(-1) + 10);
