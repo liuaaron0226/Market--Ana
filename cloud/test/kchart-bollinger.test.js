@@ -39,7 +39,7 @@ function load() {
   };
   vm.createContext(sandbox);
   vm.runInContext(readFileSync(SOURCE, "utf8"), sandbox, { filename: "kchart.js" });
-  return { KChart: sandbox.window.KChart, math: sandbox.window.KChartMath, FakeElement, calls };
+  return { KChart: sandbox.window.KChart, math: sandbox.window.KChartMath, tags: sandbox.window.KChartTags, FakeElement, calls };
 }
 
 function candles(closes) {
@@ -103,21 +103,41 @@ test("通道比 K 棒寬時，價格座標要把通道算進去，不能畫到�
   assert.ok(Math.max(...ys) <= 340, `最下方 y=${Math.max(...ys)}`);
 });
 
-test("選取某一根時，提示列出當根的布林上軌與下軌", () => {
-  const { chart } = chartWith(Array.from({ length: 80 }, (_, index) => 100 + Math.sin(index / 3) * 8));
-  chart.hover = 70;
-  chart.draw();
-  const band = chart.boll[70];
-  assert.match(chart.tip.innerHTML, /布林/);
-  assert.ok(chart.tip.innerHTML.includes(band.upper.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })));
+// 選取那一天的數值標在右側（本人 2026-11-15）：不再有浮窗，所以浮窗裡的布林、均線數字也不再顯示。
+function drawnTexts(calls) {
+  return calls.filter(call => call[0] === "fillText").map(call => String(call[1]));
+}
 
-  chart.hover = 25;
-  chart.view = { end: 60, count: 60 };
+test("選取某一根時，右側標出那一天的開高低收，時間軸標出日期，不再有浮窗", () => {
+  const { chart, calls } = chartWith(Array.from({ length: 80 }, (_, index) => 100 + Math.sin(index / 3) * 8));
+  assert.equal(chart.tip, undefined, "浮窗的元素不再建立");
+  calls.length = 0;
   chart.draw();
-  assert.match(chart.tip.innerHTML, /布林/);
-  chart.hover = 5;
+  const plain = drawnTexts(calls);
+  assert.ok(!plain.includes("開") && !plain.includes("第71根"), "沒有選取時不標");
+
+  chart.hover = 70;
+  calls.length = 0;
   chart.draw();
-  assert.doesNotMatch(chart.tip.innerHTML, /布林/, "還沒滿 20 根的那一根不顯示");
+  const texts = drawnTexts(calls), candle = chart.candles[70];
+  const price = value => value.toLocaleString("en-US", { maximumFractionDigits: 2 });
+  for (const [name, value] of [["開", candle.open], ["高", candle.high], ["低", candle.low], ["收", candle.close]]) {
+    assert.ok(texts.includes(name), `右側要有「${name}」`);
+    assert.ok(texts.includes(price(value)), `「${name}」的數值 ${price(value)}`);
+  }
+  assert.ok(texts.includes("第71根"), "時間軸標出選取那一天的日期");
+  assert.deepEqual(JSON.parse(JSON.stringify(chart.debugBoxes.picked)),
+    { date: "第71根", tags: ["開", "高", "低", "收"].map(name => ({ name, text: price(candle[{ 開: "open", 高: "high", 低: "low", 收: "close" }[name]]) })) });
+});
+
+test("數值籤擠在一起時上下排開：順序照數值高低、彼此不重疊、不超出上下界", () => {
+  const { tags } = load();
+  const placed = tags.place([{ name: "收", y: 100 }, { name: "高", y: 96 }, { name: "低", y: 104 }, { name: "開", y: 101 }], 9, 300, 20);
+  assert.deepEqual(placed.map(item => item.name), ["高", "收", "開", "低"]);
+  placed.slice(1).forEach((item, index) => assert.ok(item.slot - placed[index].slot >= 20));
+  const low = tags.place([{ name: "a", y: 295 }, { name: "b", y: 299 }], 9, 300, 20);
+  assert.deepEqual(low.map(item => item.slot), [280, 300], "貼到下界時往上推");
+  assert.deepEqual(tags.place([{ name: "x", y: NaN }, { name: "y", y: 50 }], 9, 300, 20).map(item => item.name), ["y"], "沒有數值的不排");
 });
 
 // 秒 K（本人 2026-11-14：秒級先做當天）：橫軸要標到秒，不能像日 K 一樣標年月。

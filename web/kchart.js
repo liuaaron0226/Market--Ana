@@ -1,5 +1,6 @@
 /* 可拖曳／縮放的K線圖（原生Canvas，無外部套件）。
-   互動：滑鼠拖曳或單指左右平移；滾輪、雙指捏合或＋／−按鈕縮放；鍵盤左右鍵平移、+/- 縮放；點擊或移動顯示十字線。
+   互動：滑鼠拖曳或單指左右平移；滾輪、雙指捏合或＋／−按鈕縮放；鍵盤左右鍵平移、+/- 縮放；點擊或移動顯示十字線，
+   並把那一天的開高低收標在右側價格欄、日期標在時間軸（本人 11-15；不再有浮窗）。
    資料：candles=[{t,label,open,high,low,close,amount}] 由舊到新。overlays 可放判斷線。 */
 (function () {
   'use strict';
@@ -9,6 +10,32 @@
   function fmtTag(n) { return !Number.isFinite(n) ? '缺值' : n >= 1000 ? fmt(n, 0) : n.toLocaleString('en-US', { maximumFractionDigits: 2 }); }
   function fmt(n, d = 2) { return Number.isFinite(n) ? n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }) : '缺值'; }
   const hasPrice = candle => ['open', 'high', 'low', 'close'].every(key => Number.isFinite(candle[key]));
+
+  // 數值籤（選取那一天的開高低收、指標數值；chart-studies.js 也用這一組）。
+  const TAG_NAME_FONT = '500 11px "Noto Sans TC","Microsoft JhengHei",sans-serif', TAG_VALUE_FONT = '500 11.5px "JetBrains Mono",Consolas,monospace';
+  // 依位置由上到下排好；擠在一起時上下推開，彼此至少隔 gap，而且不超出上下界。沒有數值的不排。
+  function placeTags(items, top, bottom, gap) {
+    const placed = items.filter(item => Number.isFinite(item.y)).sort((a, b) => a.y - b.y);
+    placed.forEach((item, i) => { item.slot = Math.max(item.y, i ? placed[i - 1].slot + gap : top); });
+    for (let i = placed.length - 1; i >= 0; i--) {
+      const limit = i === placed.length - 1 ? bottom : placed[i + 1].slot - gap;
+      if (placed[i].slot > limit) placed[i].slot = limit;
+    }
+    return placed;
+  }
+  // 畫一枚數值籤：左邊短名、右邊數值；欄位太窄放不下兩者時只留數值（底色仍分得出是哪一個）。
+  function drawTag(x, left, width, height, item) {
+    x.fillStyle = item.bg; x.strokeStyle = item.edge || item.bg; x.lineWidth = 1; x.beginPath();
+    const top = Math.round(item.slot - height / 2) + .5;
+    x.roundRect ? x.roundRect(left + .5, top, width - 1, height - 1, 4) : x.rect(left + .5, top, width - 1, height - 1);
+    x.fill(); x.stroke();
+    x.fillStyle = item.fg; x.textBaseline = 'middle';
+    x.font = TAG_VALUE_FONT; const valueWidth = x.measureText(item.text).width;
+    x.font = TAG_NAME_FONT;
+    if (item.name && x.measureText(item.name).width + valueWidth + 16 <= width) { x.textAlign = 'left'; x.fillText(item.name, left + 6, item.slot + .5); }
+    x.font = TAG_VALUE_FONT; x.textAlign = 'right'; x.fillText(item.text, left + width - 6, item.slot + .5);
+    x.textAlign = 'left'; x.textBaseline = 'alphabetic';
+  }
 
   function ema(values, n) { const k = 2 / (n + 1); let prev = null; return values.map(v => (prev = prev === null ? v : v * k + prev * (1 - k))); }
   function sma(values, n) {
@@ -69,7 +96,6 @@
       this.canvas.setAttribute('role', 'img');
       this.canvas.style.cssText = 'display:block;width:100%;touch-action:none;cursor:grab;border-radius:10px';
       host.append(this.canvas);
-      this.tip = document.createElement('div'); this.tip.className = 'kc-tip'; host.append(this.tip);
       this.candles = []; this.view = { end: 0, count: 60 }; this.hover = -1; this.selection = -1; this.overlays = [];
       this.showMacd = this.opts.macd !== false;
       this.maPeriods = normalizePeriods(this.opts.maPeriods || [18, 45]);
@@ -214,7 +240,7 @@
       if (!n) {
         c.getContext('2d').clearRect(0, 0, c.width, c.height);
         c.setAttribute('aria-label', '尚無K線資料');
-        this.tip.classList.remove('show'); this.geo = null;
+        this.geo = null;
         if (this.studies) this.studies.draw();
         return;
       }
@@ -244,7 +270,6 @@
       if (!prices.length) {
         x.fillStyle = css('--dim'); x.font = '13px "Noto Sans TC","Microsoft JhengHei",sans-serif';
         x.fillText('此區間OHLC資料不足', 12, 32);
-        this.tip.classList.remove('show');
         if (this.studies) this.studies.draw();
         return;
       }
@@ -444,25 +469,35 @@
         x.fillStyle = dim; x.textBaseline = 'top'; x.fillText('MACD(12,26,9)', l + 4, top + 2);
         for (let i = start; i < end; i++) { const m = this.macd[i]; if (!m.ready) continue; const px = l + step * (i - start + .5); x.fillStyle = m.hist >= 0 ? up : dn; x.globalAlpha = .7; x.fillRect(px - bw / 2, Math.min(my(0), my(m.hist)), bw, Math.abs(my(m.hist) - my(0)) || 1); x.globalAlpha = 1; }
         [['dif', ink], ['dea', css('--gold')]].forEach(([k, col]) => { x.strokeStyle = col; x.lineWidth = 1.2; x.beginPath(); let on = false; for (let i = start; i < end; i++) { const m = this.macd[i]; if (!m.ready) { on = false; continue; } const px = l + step * (i - start + .5); on ? x.lineTo(px, my(m[k])) : x.moveTo(px, my(m[k])); on = true; } x.stroke(); });
+        const picked = this.hover >= start && this.hover < end ? this.macd[this.hover] : null;
+        if (picked && picked.ready) {
+          const paper = css('--bg');
+          placeTags([{ name: 'DIF', text: fmt(picked.dif, 1), y: my(picked.dif), bg: ink, fg: paper }, { name: 'DEA', text: fmt(picked.dea, 1), y: my(picked.dea), bg: css('--gold'), fg: paper },
+            { name: '柱', text: `${picked.hist < 0 ? '−' : '+'}${fmt(Math.abs(picked.hist), 1)}`, y: my(picked.hist), bg: picked.hist >= 0 ? up : dn, fg: paper }],
+          top + tagH / 2, H - tagH / 2, tagGap).forEach(item => drawTag(x, tagX, tagW, tagH, item));
+          x.font = '11.5px "JetBrains Mono",Consolas,monospace';
+        }
       }
-      // 十字線與提示
+      // 十字線；選取那一天的開高低收標在右側價格欄，日期標在時間軸上、十字線的正下方。
+      this.debugBoxes.picked = null;
       if (this.hover >= start && this.hover < end) {
         const i = this.hover, c = this.candles[i], cx = l + step * (i - start + .5);
         x.strokeStyle = dim; x.setLineDash([3, 3]); x.beginPath(); x.moveTo(cx, t); x.lineTo(cx, H - 4); x.stroke(); x.setLineDash([]);
-        const prev = this.candles[i - 1], chg = prev && Number.isFinite(c.close) && Number.isFinite(prev.close) ? c.close - prev.close : NaN, m = this.macd[i];
-        const maText = this.maPeriods.map(p => this.ma[p][i] != null ? `MA${p} ${fmt(this.ma[p][i], 0)}` : '').filter(Boolean).join('　');
-        const band = this.boll[i], bandDigits = band && band.upper >= 1000 ? 0 : 2;
-        const bandText = band ? `布林 ${fmt(band.upper, bandDigits)}／${fmt(band.lower, bandDigits)}` : '';
-        this.tip.innerHTML = `<b>${c.label}</b><span class="${chg < 0 ? 'dn' : 'upc'}">收 ${fmt(c.close)}　${Number.isFinite(chg) ? `${chg >= 0 ? '+' : '−'}${fmt(Math.abs(chg))}` : '漲跌缺值'}</span><span>開 ${fmt(c.open)}　高 ${fmt(c.high)}　低 ${fmt(c.low)}</span>` + (this.opts.volumeKind === 'volume'
-          ? `<span>成交量 ${Number.isFinite(c.volume) ? `${fmt(c.volume / 1000)} 張（${fmt(c.volume, 0)} 股）` : '缺資料'}</span>`
-          : Number.isFinite(c.amount) ? `<span>成交金額 ${fmt(c.amount, 2)} 億元</span>` : '') + (m.ready ? `<span>MACD柱 ${fmt(m.hist)}　DIF ${fmt(m.dif)}</span>` : '') + (maText ? `<span>${maText}</span>` : '') + (bandText ? `<span>${bandText}</span>` : '');
-        this.tip.classList.add('show');
-        const tw = Math.min(this.tip.offsetWidth, W - 8); const want = cx + 14 + tw > W ? cx - tw - 14 : cx + 14; this.tip.style.left = Math.max(4, Math.min(W - tw - 4, want)) + 'px'; this.tip.style.top = '8px'; // 手機窄圖：左右都夾在圖表內，不出界
-      } else this.tip.classList.remove('show');
+        const paper = css('--bg'), tone = c.close >= c.open ? up : dn;
+        const prices = hasPrice(c) ? [['開', c.open], ['高', c.high], ['低', c.low], ['收', c.close]].map(([name, value]) => (
+          { name, text: fmtTag(value), y: y(value), bg: name === '收' ? tone : paper, fg: name === '收' ? paper : ink, edge: tone })) : [];
+        placeTags(prices, t + tagH / 2, t + ph - tagH / 2, tagGap).forEach(item => drawTag(x, tagX, tagW, tagH, item));
+        x.font = TAG_VALUE_FONT;
+        const dateWidth = x.measureText(c.label).width + 12;
+        drawTag(x, Math.max(l, Math.min(l + pw - dateWidth, cx - dateWidth / 2)), dateWidth, tagH, { name: '', text: c.label, slot: t + ph + b / 2 + 1, bg: ink, fg: paper });
+        // 驗收用：這一天實際標出來的日期與四個價位。
+        this.debugBoxes.picked = { date: c.label, tags: prices.map(({ name, text: value }) => ({ name, text: value })) };
+      }
       if (this.studies) this.studies.draw();
     }
   }
   window.KChart = KChart;
+  window.KChartTags = { place: placeTags, draw: drawTag };
   // 5 年歷史日線（欄位式：d 為 YYYYMMDD 整數）裡，比 bars 第一根更早的 K 棒。
   // 歷史必須涵蓋 bars 的第一根且收盤一致才接：還原係數不同步或資料不是同一檔時回空陣列，圖維持原樣。
   function olderBars(bars, history) {

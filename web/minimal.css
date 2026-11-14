@@ -313,27 +313,6 @@ h1 { font-size: 18px; line-height: 1.2; font-weight: 650; letter-spacing: -.01em
 .chart-stage { position: relative; min-width: 0; min-height: 250px; overflow: hidden; }
 .chart-host { position: absolute; inset: 0; min-width: 0; min-height: 0; }
 .chart-host canvas { outline-offset: -4px; }
-.kc-tip {
-  position: absolute;
-  z-index: 7;
-  min-width: 182px;
-  pointer-events: none;
-  opacity: 0;
-  display: grid;
-  gap: 1px;
-  border: 1px solid var(--line-strong);
-  border-radius: 8px;
-  padding: 8px 10px;
-  background: var(--panel3);
-  color: var(--ink);
-  font: 12px/1.55 var(--mono);
-  transition: opacity 150ms ease;
-}
-.kc-tip.show { opacity: 1; }
-.kc-tip b { font-family: var(--sans); }
-.kc-tip span { color: var(--dim); }
-.kc-tip span.dn { color: var(--down); }
-.kc-tip span.upc { color: var(--up); }
 .chart-badges {
   position: absolute;
   z-index: 4;
@@ -976,14 +955,10 @@ html, body { height: auto; }
 }
 .detail-panel.is-open { transform: translate(-50%, -50%); }
 .detail-panel[data-kind="chip"] { width: min(640px, calc(100vw - 32px - env(safe-area-inset-left) - env(safe-area-inset-right))); }
-.kc-tip { max-width: calc(100% - 8px); }
 @media (max-width: 760px) {
   body.panel-open { padding-bottom: 0; }
   .detail-panel { max-height: calc(100svh - 32px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
   .panel-body { padding: 14px 16px; }
-  /* 手機不浮出當天明細（一碰就跳出來、蓋住 K 線，本人 11-14 iPhone 實測）：只留十字線。
-     首頁與個股頁都是（本人 11-15）；首頁的數字按「這一天的詳情」看，個股頁手機沒有替代的地方。 */
-  .kc-tip { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   .detail-panel, .detail-panel.is-open { transform: translate(-50%, -50%); }

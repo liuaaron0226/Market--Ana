@@ -293,17 +293,8 @@
 }
 
 /* ================= 看盤桌：浮起的明細板（立體重設計 A 包第 2 片，2026-11-14） =================
-   點開的明細是第 2 層：指到 K 棒的當天明細、下鑽面板。底色不透明，可讀性不靠背景模糊。
+   點開的明細是第 2 層：下鑽面板。底色不透明，可讀性不靠背景模糊。
    開關行為與內容照舊，這裡只換外觀與浮起動態；陰影與圓角引用 bold.css 的深度變數。 */
-
-/* ---------- 指到 K 棒的當天明細 ---------- */
-body.hm .kc-tip {
-  gap: 2px; padding: 10px 14px; border: 0; border-radius: var(--r-float);
-  background: var(--float); box-shadow: var(--float-shadow);
-  transform: translateY(8px) scale(.96); transform-origin: 50% 100%;
-  transition: opacity 160ms var(--ease-out), transform 380ms var(--ease-depth);
-}
-body.hm .kc-tip.show { transform: none; }
 
 /* ---------- 下鑽面板 ---------- */
 body.hm .panel-backdrop { background: var(--scrim); }

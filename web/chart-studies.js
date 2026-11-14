@@ -7,6 +7,7 @@
   // 指標名稱（.kc-study-title）疊在指標區左上角：畫圖時上緣留這一條給它，線與柱不會壓到字。
   // 名稱的位置與字級在 chart-studies.css 的 .kc-study-head／.kc-study-title，兩邊要一起改。
   const TITLE_STRIP_PX = 20;
+  const TAG_HEIGHT_PX = 18;
   // KD 以 K、D 初值 50 遞推，前端只有約 120 根日K：前 9 根算 RSV，之後再暖機 40 根，
   // 讓初值的影響衰減到 0.01 以下，最後一根才會和後端用較長歷史算出的 K9／D9 一致。
   const KD_READY_BARS = 49;
@@ -522,6 +523,19 @@
       context.restore();
     }
 
+    // 選取那一天的數值標在右側 Y 軸的位置（本人 11-15：「選哪一天就顯示哪一天」）。原本的刻度不動，數值籤蓋到刻度時疊在上面。
+    // values 是這一種指標那一天要標的數值 { name, value, text, bg }；y 把數值換成畫布上的高度。只畫目前顯示的那一種。
+    _drawPicked(kind, context, width, height, range, y, values) {
+      const hover = this.chart.hover;
+      if (kind !== this.active || !Number.isInteger(hover) || hover < range.start || hover >= range.end) return;
+      const tags = window.KChartTags, paper = token('--bg'), left = range.geo.l + range.geo.pw + 4;
+      const items = values(hover).filter(item => finite(item.value)).map(item => ({ ...item, y: y(item.value), fg: paper }));
+      tags.place(items, TAG_HEIGHT_PX / 2 + 1, height - TAG_HEIGHT_PX / 2 - 1, TAG_HEIGHT_PX + 2)
+        .forEach(item => tags.draw(context, left, width - left - 2, TAG_HEIGHT_PX, item));
+      // 驗收用：這一天實際標出來的數值。
+      this.debugPicked = items.map(({ name, text: value }) => ({ name, text: value }));
+    }
+
     _drawVolume(context, width, height, range) {
       const { candles, start, end, geo } = range;
       const top = TITLE_STRIP_PX;
@@ -584,6 +598,10 @@
       }
 
       this._drawCrosshair(context, height, range);
+      this._drawPicked('volume', context, width, height, range, value => bottom - value / scale * plotHeight, index => {
+        const value = candles[index] && candles[index][key];
+        return [{ name: '', value, text: formatNumber(this.volumeKind === 'volume' ? value / 1000 : value, 0), bg: token('--dim') }];
+      });
     }
 
     _drawInstitutional(context, width, height, range, kind) {
@@ -618,6 +636,11 @@
       context.fillText('0', axisX, middle);
       context.fillText(`−${formatNumber(amplitude / 1000, 0)}張`, axisX, bottom - 3);
       this._drawCrosshair(context, height, range);
+      this._drawPicked(kind, context, width, height, range, y, index => {
+        const value = range.candles[index] && range.candles[index][kind];
+        const lots = formatNumber(Math.abs(value) / 1000, 0);
+        return [{ name: '', value, text: value > 0 ? `+${lots}` : value < 0 ? `−${lots}` : lots, bg: value >= 0 ? token('--up') : token('--down') }];
+      });
     }
 
     _drawMacdLine(context, range, y, field, color, dash) {
@@ -714,10 +737,19 @@
       }
 
       this._drawCrosshair(context, height, range);
+      this._drawPicked('macd', context, width, height, range, y, index => {
+        const point = macd[index];
+        if (!point || point.ready !== true) return [];
+        return [
+          { name: 'DIF', value: point.dif, text: formatNumber(point.dif, 1), bg: token('--study-dif') },
+          { name: 'DEA', value: point.dea, text: formatNumber(point.dea, 1), bg: token('--study-dea') },
+          { name: '柱', value: point.hist, text: `${point.hist < 0 ? '−' : '+'}${formatNumber(Math.abs(point.hist), 1)}`, bg: point.hist >= 0 ? token('--up') : token('--down') }
+        ];
+      });
     }
 
     // KD／RSI 共用：固定 0～100 縱軸，畫參考虛線與一到兩條指標線；暖機中的點不畫成 0。
-    _drawOscillator(context, width, height, range, series, lines, refs, emptyText) {
+    _drawOscillator(kind, context, width, height, range, series, lines, refs, emptyText) {
       const top = TITLE_STRIP_PX;
       const bottom = height - 12;
       const y = value => bottom - value / 100 * (bottom - top);
@@ -764,6 +796,12 @@
         context.fillText(emptyText, range.geo.l + 6, height / 2);
       }
       this._drawCrosshair(context, height, range);
+      this._drawPicked(kind, context, width, height, range, y, index => {
+        const point = series[index];
+        if (!point || point.ready !== true) return [];
+        // 只有一條線的指標（RSI）不寫短名，指標名稱已經在左上角
+        return lines.map(([field, color]) => ({ name: lines.length > 1 ? field.toUpperCase() : '', value: point[field], text: formatNumber(point[field], 1), bg: color }));
+      });
     }
 
     _ensureOscillators(candles) {
@@ -920,6 +958,7 @@
 
     draw() {
       const daily = this.chart.unit === '日';
+      this.debugPicked = [];
       this.notice.hidden = daily;
       this.clearButton.hidden = !daily || this.chart.selection < 0;
       this.switcher.hidden = !daily;
@@ -952,11 +991,11 @@
         const macdContext = this._canvasSize(this.macdCanvas, width, height);
         this._drawMacd(macdContext, width, height, range);
         if (this.kdPane) {
-          this._drawOscillator(this._canvasSize(this.kdCanvas, width, height), width, height, range, this.kd,
+          this._drawOscillator('kd', this._canvasSize(this.kdCanvas, width, height), width, height, range, this.kd,
             [['k', token('--study-dif'), []], ['d', token('--study-dea'), [5, 3]]], [80, 20], '暖機中：需49根有效日線');
         }
         if (this.rsiPane) {
-          this._drawOscillator(this._canvasSize(this.rsiCanvas, width, height), width, height, range, this.rsi,
+          this._drawOscillator('rsi', this._canvasSize(this.rsiCanvas, width, height), width, height, range, this.rsi,
             [['rsi', token('--study-dif'), []]], [70, 50, 30], '暖機中：需15根有效日線');
         }
         for (const [kind, parts] of Object.entries(this.institutionalPanes || {})) {

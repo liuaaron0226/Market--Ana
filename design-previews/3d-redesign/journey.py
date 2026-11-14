@@ -62,17 +62,6 @@ THUMB_ON_CHECKED = """value => {
 }"""
 
 
-# 指到 K 棒時浮出來的當天明細：看不到回 'hidden'；看得到的話要有開高低收，而且底色不透明（壓在 K 線上數字才讀得清楚）。
-# 首頁手機不顯示（一碰就跳出來蓋住 K 線），只留十字線；桌機與個股頁照舊。
-TIP_STATE = """host => {
-  const tip = document.querySelector(host + ' .kc-tip'), style = getComputedStyle(tip);
-  if (!tip.classList.contains('show') || !tip.getClientRects().length || Number(style.opacity) < 1) return 'hidden';
-  if (!/收.*開.*高.*低/.test(tip.textContent)) return 'no ohlc: ' + tip.textContent;
-  const parts = style.backgroundColor.match(/[\d.]+/g) || [];
-  return parts.length < 4 || Number(parts[3]) === 1 ? 'ok' : 'translucent ' + style.backgroundColor;
-}"""
-
-
 # 目前顯示的那一個指標區（一次只顯示一種）。下面幾段檢查共用。
 ACTIVE_PANE = "[...document.querySelectorAll('#chartStudies .kc-study-pane')].find(p => p.getClientRects().length)"
 ACTIVE_STUDY = "const pane = %s; if (!pane) return 'no indicator shown';" % ACTIVE_PANE
@@ -102,26 +91,39 @@ STUDY_ORDER = """under_keys => {
   const actions = under_keys && document.querySelector(under_keys).getBoundingClientRect();
   return !actions || actions.top >= keys.bottom - 1 ? 'ok' : 'chart actions are not below the switch keys';
 }""" % ACTIVE_STUDY
-# 十字線：選取 K 棒之後，K 線和指標區兩張畫布上多出來的東西只有它（當天明細是另外的元素，不畫在畫布上）。
-# 先記下選取前兩張畫布的樣子，選取後比出多了什麼：兩張都要多一條細直線、幾乎貫穿整張，而且在同一個水平位置。
+# 選取 K 棒之後畫布上多出來的東西：十字線，加上那一天的數值（標在右側）與日期（標在時間軸）。當天明細的浮窗已經拿掉。
+# 先記下選取前兩張畫布（K 線、指標區）的樣子，選取後逐欄比出多了什麼：
+#   line —— 圖區裡變動範圍最長的那一欄，就是十字線：x 是它的水平位置，cover 是它從上到下佔畫布高度的比例。
+#   rail —— 最右邊 60px（右側數值欄）裡變動的像素數，數值籤畫在這裡。
 CHART_CANVASES = "[document.querySelector(host + ' canvas'), %s.querySelector('canvas')]" % ACTIVE_PANE
 KEEP_CANVASES = "host => { window.__journeyCanvases = %s.map(c => c.getContext('2d').getImageData(0, 0, c.width, c.height).data); }" % CHART_CANVASES
-CROSSHAIR = """host => {
-  const lines = %s.map((c, i) => {
-    const now = c.getContext('2d').getImageData(0, 0, c.width, c.height).data, was = window.__journeyCanvases[i];
-    if (now.length !== was.length) return 'canvas resized';
-    let left = c.width, right = -1, top = c.height, bottom = -1;
-    for (let p = 0; p < now.length; p += 4) {
-      if (now[p] === was[p] && now[p + 1] === was[p + 1] && now[p + 2] === was[p + 2] && now[p + 3] === was[p + 3]) continue;
-      const x = p / 4 %% c.width, y = Math.floor(p / 4 / c.width);
-      left = Math.min(left, x); right = Math.max(right, x); top = Math.min(top, y); bottom = Math.max(bottom, y);
-    }
-    const scale = c.width / c.getBoundingClientRect().width;
-    return right < 0 ? 'no line' : { x: (left + right) / 2 / scale, width: (right - left + 1) / scale, cover: (bottom - top + 1) / c.height };
-  });
-  const broken = lines.some(line => typeof line === 'string' || line.width > 3 || line.cover < 0.8);
-  return !broken && Math.abs(lines[0].x - lines[1].x) <= 1 ? 'ok' : JSON.stringify(lines);
-}""" % CHART_CANVASES
+PICKED_MARKS = """host => %s.map((c, i) => {
+  const now = c.getContext('2d').getImageData(0, 0, c.width, c.height).data, was = window.__journeyCanvases[i];
+  if (now.length !== was.length) return { error: 'canvas resized' };
+  const first = new Int32Array(c.width).fill(-1), last = new Int32Array(c.width).fill(-1), count = new Int32Array(c.width);
+  for (let p = 0; p < now.length; p += 4) {
+    if (now[p] === was[p] && now[p + 1] === was[p + 1] && now[p + 2] === was[p + 2] && now[p + 3] === was[p + 3]) continue;
+    const x = p / 4 %% c.width, y = Math.floor(p / 4 / c.width);
+    if (first[x] < 0) first[x] = y;
+    last[x] = y; count[x] += 1;
+  }
+  const scale = c.width / c.getBoundingClientRect().width, plotEnd = Math.round(c.width - 104 * scale), railStart = Math.round(c.width - 60 * scale);
+  let line = 0;
+  for (let x = 1; x < plotEnd; x += 1) if (last[x] - first[x] > last[line] - first[line]) line = x;
+  let rail = 0;
+  for (let x = railStart; x < c.width; x += 1) rail += count[x];
+  return { x: line / scale, cover: first[line] < 0 ? 0 : (last[line] - first[line] + 1) / c.height, rail };
+})""" % CHART_CANVASES
+
+
+def picked_marks(page: Page, tag: str, host: str) -> None:
+    """選取 K 棒之後：十字線上下接成一條、那一天的數值標在右側、沒有浮窗。首頁與個股頁共用。"""
+    main, study = page.evaluate(PICKED_MARKS, host)
+    seen = [main, study]
+    check(f"{tag}：十字線從 K 線一路畫到指標區，上下同一個位置",
+          "error" not in main and "error" not in study and main["cover"] >= 0.8 and study["cover"] >= 0.8 and abs(main["x"] - study["x"]) <= 1, seen)
+    check(f"{tag}：選取那一天的數值標在右側（K 線與指標區都有）", main.get("rail", 0) > 50 and study.get("rail", 0) > 50, seen)
+    check(f"{tag}：不再浮出當天明細的視窗", page.locator(f"{host} .kc-tip").count() == 0)
 
 
 def chart_point(page: Page, host: str, across: float, down: float) -> tuple[float, float]:
@@ -296,13 +298,13 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
             page.locator("#mobileCandleDetails").wait_for(state="visible")
         else:
             page.mouse.move(x, y)
-        tip = page.evaluate(TIP_STATE, "#mainChart")
-        if mobile:
-            check(f"{tag}：點 K 棒不浮出當天明細的視窗", tip == "hidden", tip)
-        else:
-            check(f"{tag}：指到 K 棒浮出當天明細，底色不透明", tip == "ok", tip)
-        crosshair = page.evaluate(CROSSHAIR, "#mainChart")
-        check(f"{tag}：十字線從 K 線一路畫到指標區，上下同一個位置", crosshair == "ok", crosshair)
+        picked_marks(page, tag, "#mainChart")
+        # 右側標的是哪一天、哪幾個數值：日期要和「這一天的詳情」鈕上寫的同一天（手機），四個價位是開高低收。
+        picked = page.evaluate("window.MinimalApp.chart.debugBoxes.picked")
+        names = [item["name"] for item in picked["tags"]] if picked else []
+        same_day = not mobile or picked["date"] in page.locator("#mobileCandleDetails").inner_text()
+        check(f"{tag}：右側標的是選取那一天的開、高、低、收", names == ["開", "高", "低", "收"] and same_day
+              and all(item["text"].replace(",", "").replace(".", "").isdigit() for item in picked["tags"]), picked)
         if mobile:
             # 選取之後切換鍵下面會多一顆「取消選取」，收復線／防守線與詳情鈕仍然要在切換鍵下面。
             order = page.evaluate(STUDY_ORDER, "#chartActions")
@@ -542,7 +544,7 @@ def stock(page: Page, base: str, tag: str, mobile: bool) -> None:
          lambda: joined_chart(page, tag, "#chartHost", ["成交量", "MACD", "KD", "RSI", "外資", "投信", "自營商"], None))
 
     def candle_tip() -> None:
-        # 手機和首頁一樣不浮出當天明細的視窗，只留十字線（本人 11-15）；桌機照舊。
+        # 和首頁一樣：選取那一天的數值標在右側，沒有浮窗（本人 11-15）。
         x, y = chart_point(page, "#chartHost", 0.4, 0.4)
         page.evaluate(KEEP_CANVASES, "#chartHost")
         if mobile:
@@ -550,13 +552,7 @@ def stock(page: Page, base: str, tag: str, mobile: bool) -> None:
         else:
             page.mouse.move(x, y)
         page.wait_for_timeout(250)
-        tip = page.evaluate(TIP_STATE, "#chartHost")
-        if mobile:
-            check(f"{tag}：點 K 棒不浮出當天明細的視窗", tip == "hidden", tip)
-        else:
-            check(f"{tag}：指到 K 棒浮出當天明細", tip != "hidden", tip)
-        crosshair = page.evaluate(CROSSHAIR, "#chartHost")
-        check(f"{tag}：十字線從 K 線一路畫到指標區，上下同一個位置", crosshair == "ok", crosshair)
+        picked_marks(page, tag, "#chartHost")
     step(f"{tag}：K 棒明細", candle_tip)
 
     def wheel_zoom() -> None:
