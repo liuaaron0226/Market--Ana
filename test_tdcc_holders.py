@@ -103,6 +103,31 @@ class RefreshTest(unittest.TestCase):
         self.assertEqual([row["date"] for row in series(self.out, "6488", "9999-12-31")], ["2026-11-13"])  # 後一週沒有它
         self.assertEqual(series(self.out, "9999", "9999-12-31"), [])
 
+    def test_series_starts_with_the_backfilled_year_and_the_weekly_files_win(self) -> None:
+        # 本人 2026-11-15「補，慢慢抓」：開放資料只有最新一週，過去一年由查詢頁補抓後存成一份歷史檔。
+        refresh(self.out, get=self.get(csv(ROWS_2330, ROWS_6488)))
+        history = self.out.parent / "history.json"
+        history.write_text(json.dumps({"schema": "tdcc-holders-history/v1",
+                                       "fields": ["pct_1000", "holders_1000", "pct_400", "holders_400", "holders"],
+                                       "weeks": {"2025-11-21": {"2330": [86.63, 1534, 89.33, 2645, 1797619]},
+                                                 "2026-11-06": {"2330": [84.0, 1460, 86.8, 2600, 3290000], "6488": [66.0, 48, 71.7, 99, 178000]},
+                                                 "2026-11-13": {"2330": [1.0, 1, 1.0, 1, 1]}}}), encoding="utf-8")
+        rows = series(self.out, "2330", "9999-12-31", history=history)
+        self.assertEqual([(row["date"], row["pct_1000"]) for row in rows],
+                         [("2025-11-21", 86.63), ("2026-11-06", 84.0), ("2026-11-13", 84.17)])   # 同一週以每週存下的檔為準
+        self.assertEqual(rows[0], {"date": "2025-11-21", "pct_1000": 86.63, "holders_1000": 1534, "pct_400": 89.33,
+                                   "holders_400": 2645, "holders": 1797619})
+        self.assertEqual([row["date"] for row in series(self.out, "2330", "2026-11-10", history=history)],
+                         ["2025-11-21", "2026-11-06"])
+        self.assertEqual([row["date"] for row in series(self.out, "6488", "9999-12-31", history=history)],
+                         ["2026-11-06", "2026-11-13"])
+        # 沒有歷史檔就只有每週存下的；還沒有任何每週檔時，歷史照樣給
+        self.assertEqual(len(series(self.out, "2330", "9999-12-31", history=self.out.parent / "none.json")), 1)
+        self.assertEqual(len(series(self.out.parent / "empty", "2330", "9999-12-31", history=history)), 3)
+        history.write_text('{"schema": "something-else", "weeks": {}}', encoding="utf-8")
+        with self.assertRaises(ValueError):
+            series(self.out, "2330", "9999-12-31", history=history)
+
 
 if __name__ == "__main__":
     unittest.main()
