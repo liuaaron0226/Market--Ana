@@ -145,7 +145,7 @@ def pick_tallest_tower(page: Page) -> None:
 
 def open_rotation_table(page: Page) -> None:
     grown_terrain(page)
-    page.locator("#rotationBody .rotation-entries button").nth(2).click()
+    page.locator("#rotationBlock .rotation-open").click()
     page.locator("#rotationTable").wait_for(state="visible")
 
 
@@ -184,8 +184,7 @@ def shoot(browser, base: str, out: Path, report: dict, name: str, page_key: str,
     try:
         page.goto(base + path, wait_until="domcontentloaded")
         ready(page)
-        if page_key == "home" and theme == "dark":
-            page.locator("#themeToggle").click()
+        # 首頁也讀存起來的主題了（2026-11-15 修正換頁主題跑掉），不用再另外按一次切換鍵
         if after:
             after(page)
         page.mouse.move(2, 2)

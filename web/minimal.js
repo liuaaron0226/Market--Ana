@@ -2230,7 +2230,7 @@
       return;
     }
     chip.meta.textContent = view.catalog.data_date ? `資料日 ${view.catalog.data_date}` : '尚無已發布結果';
-    // 九頁全部顯示（不收進選單）：可算的排前面，沒有名單的（定義未公開、無合法資料來源）集中在後面一組。
+    // 九頁都列在第一枚小鍵的選單裡（本人 11-15 改成收進選單）：可算的排前面，沒有名單的（定義未公開、無合法資料來源）集中在後面一組。
     const listable = tab => ['rank', 'streak', 'relative_value'].includes(tab.kind);
     const ordered = [...view.catalog.tabs.filter(listable), ...view.catalog.tabs.filter(tab => !listable(tab))];
     let dividerAdded = false;

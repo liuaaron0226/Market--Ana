@@ -259,8 +259,6 @@
 .hm .read-list li + li { padding-left: 20px; border-left: 1px solid var(--hair); }
 .hm .read-list li b { font: 400 12px var(--sans); color: var(--faint); }
 .hm .read-list li span { font-size: 15px; line-height: 1.5; color: var(--ink); }
-.hm .read-card::after { content: "點這裡看完整數字與依據 ›"; font-size: 12px; color: var(--faint); transition: color 160ms var(--ease-out); }
-.hm .read-card:hover::after { color: var(--accent); }
 
 /* 選股看板：九頁全部顯示，沒有名單的一組排在後面、字色退一階 */
 .hm .hm-tab-cap {
@@ -403,7 +401,7 @@ body.hm .service-note {
 /* ---------- 鍵：凸起，懸停浮起，按下沉入（外殼與下面各區塊的按鈕共用這一組） ---------- */
 body.hm :is(.theme-toggle, .icon-key, .stock-search-form button[type="button"], .stock-search-more, .stock-search-result a,
   .chart-actions .line-trigger, .chart-actions .mobile-candle-details, .chart-toolbar .chart-chip, .chart-stage .reset-view,
-  .screen-more, .core-selection-chip, .core-period select) {
+  .screen-more, .core-selection-chip, .rotation-open) {
   border: 0; border-radius: var(--r-key); background: var(--key); box-shadow: var(--key-shadow);
   transition: transform var(--t-lift) var(--ease-depth), box-shadow var(--t-lift) var(--ease-depth), color 160ms var(--ease-out);
 }
@@ -423,7 +421,7 @@ body.hm .stock-search-results { gap: 8px; }
 @media (hover: hover) {
   body.hm :is(.conclusion-trigger, .theme-toggle, .icon-key, .stock-search-form button[type="button"], .stock-search-more, .stock-search-result a,
     .chart-actions .line-trigger, .chart-actions .mobile-candle-details, .chart-toolbar .chart-chip, .chart-stage .reset-view,
-    .screen-more, .core-selection-chip, .core-period select):hover {
+    .screen-more, .core-selection-chip, .rotation-open):hover {
     background: var(--key); color: var(--ink); transform: translateY(var(--key-lift)); box-shadow: var(--key-shadow-hover);
   }
   body.hm .stock-search-form button[type="submit"]:hover,
@@ -432,7 +430,7 @@ body.hm .stock-search-results { gap: 8px; }
 }
 body.hm :is(.conclusion-trigger, .theme-toggle, .icon-key, .stock-search-form button[type="button"], .stock-search-more, .stock-search-result a,
   .chart-actions .line-trigger, .chart-actions .mobile-candle-details, .chart-toolbar .chart-chip, .chart-stage .reset-view,
-  .screen-more, .core-selection-chip, .core-period select):active {
+  .screen-more, .core-selection-chip, .rotation-open):active {
   transform: translateY(var(--key-thick)); box-shadow: var(--key-shadow-press); transition-duration: var(--t-press);
 }
 body.hm .stock-search-form button[type="submit"]:active,
@@ -668,16 +666,6 @@ body.hm dialog.hm-search :is(.stock-search-suggestions, .stock-search-status, .s
 
 /* ================= 產業資金流向：入口與面板（立體重設計 B 包） =================
    首屏只有資金地形；資金效率排行、低基期回溫訊號、表格檢視收進浮起的面板，入口是地形下方的三顆鍵。 */
-body.hm .rotation-entries { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
-body.hm .rotation-entries button {
-  height: var(--btn-h); padding: 0 14px; border: 0; border-radius: var(--r-key);
-  background: var(--key); box-shadow: var(--key-shadow); color: var(--ink); font: 500 13px var(--sans);
-  transition: transform var(--t-lift) var(--ease-depth), box-shadow var(--t-lift) var(--ease-depth);
-}
-@media (hover: hover) {
-  body.hm .rotation-entries button:hover { transform: translateY(var(--key-lift)); box-shadow: var(--key-shadow-hover); }
-}
-body.hm .rotation-entries button:active { transform: translateY(var(--key-thick)); box-shadow: var(--key-shadow-press); transition-duration: var(--t-press); }
 body.hm .rotation-dialog { width: min(720px, calc(100vw - 32px)); }
 body.hm .rotation-dialog section { scroll-margin-top: 72px; outline: none; }
 body.hm .rotation-dialog .rotation-lists { margin-top: 12px; }
@@ -789,8 +777,6 @@ body.hm .terrain-detail dd { margin: 0; text-align: right; color: var(--ink); }
 
 @media (max-width: 860px) {
   /* 三顆入口鍵在手機上排成一列 */
-  body.hm .rotation-entries { gap: 6px; }
-  body.hm .rotation-entries button { padding: 0 8px; font-size: 12px; }
   body.hm .terrain-tag { padding: 4px 6px; font-size: 11px; }
   body.hm .terrain-tag.minor { display: none; }
   /* 手機：明細排在街區下方，不蓋住街區 */
@@ -812,3 +798,47 @@ body.hm .chart-badges { top: 28px; }
 @media (min-width: 761px) {
   body.hm .chart-badges { top: 68px; }
 }
+
+/* ================= 看盤桌：首頁其餘區塊的精簡（立體重設計 A 包第 11 片，2026-11-15） =================
+   本人：可以選的參數與功能不要全部攤在版面上，互動時才出現。小鍵與選單沿用 K 線區那一套（chart-studies.css、chart-menus.js）。 */
+/* 頂列：狀態只留燈號、行情狀態與日期（分析日、劇本日在「資料來源與時間」看；元素留給螢幕閱讀器） */
+body.hm .status-compact .status-separator { display: none; }
+/* 直白分析：不寫提示句，右上角一個箭頭表示點了有明細 */
+body.hm .read-card { position: relative; }
+body.hm .read-card::after {
+  content: "›"; position: absolute; top: 22px; right: 26px; display: block; margin: 0;
+  color: var(--faint); font: 400 20px/1 var(--sans); transition: color 160ms var(--ease-out), transform var(--t-lift) var(--ease-depth);
+}
+body.hm .read-card:hover::after { color: var(--ink); transform: translateX(3px); }
+/* 首頁的小鍵都是凸起的鍵（K 線工具列的那一枚在上面「鍵」那一組） */
+body.hm :is(.screen-picks, .core-picks) .chart-chip {
+  min-height: 36px; border: 0; border-radius: var(--r-key); background: var(--key); box-shadow: var(--key-shadow);
+  transition: transform var(--t-lift) var(--ease-depth), box-shadow var(--t-lift) var(--ease-depth);
+}
+body.hm :is(.screen-picks, .core-picks) .chart-chip:is(:active, [aria-expanded="true"]) {
+  transform: translateY(var(--key-thick)); box-shadow: var(--key-shadow-press); transition-duration: var(--t-press);
+}
+/* 籌碼選股：三枚小鍵排成一列；選單貼齊這一列的左緣 */
+body.hm .screen-picks { position: relative; display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 10px; }
+body.hm .screen-picks .screen-controls:not([hidden]) { display: contents; }
+body.hm .screen-picks .chart-menu { right: auto; left: 0; }
+body.hm .screen-tab-menu { flex-direction: column; flex-wrap: nowrap; width: min(300px, calc(100vw - 48px)); max-height: min(70vh, 520px); overflow-y: auto; }
+body.hm .screen-tab-menu .screen-tabs { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 2px; margin: 0; padding: 0; overflow: visible; }
+body.hm .screen-tab-menu .hm-tab-cap { flex-basis: auto; height: auto; margin: 8px 10px 2px; }
+body.hm .screen-tab-menu .screen-check { margin: 6px 10px 2px; padding-top: 8px; border-top: 1px solid var(--hair); }
+body.hm .chart-menu .screen-seg { display: flex; flex-direction: column; gap: 2px; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+body.hm .chart-menu :is(.screen-tabs, .screen-seg) button {
+  min-height: 40px; height: auto; padding: 0 12px; border: 0; border-radius: var(--r-key); background: transparent; box-shadow: none;
+  color: var(--ink); font: 500 14px var(--sans); text-align: left; white-space: nowrap;
+}
+body.hm .chart-menu .screen-tabs button.is-unlisted { color: var(--faint); }
+body.hm .chart-menu :is(.screen-tabs, .screen-seg) button:is([aria-selected="true"], [aria-pressed="true"]) { background: var(--ink); color: var(--bg); font-weight: 700; }
+/* 產業資金流向：排行與表格的入口在標題列右邊；資料還沒好就不出現 */
+body.hm #rotationBlock .screen-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+body.hm .rotation-open { margin-left: auto; min-height: 36px; padding: 0 12px; color: var(--ink); font: 600 13px var(--sans); white-space: nowrap; cursor: pointer; }
+body.hm #rotationBlock:has(.rotation-body[hidden]) .rotation-open { display: none; }
+/* 長期核心持有：已加入的標的、「＋ 加入」、比較期間排成一列 */
+body.hm .core-picks { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+body.hm .core-picks .chart-select { margin-left: auto; }
+body.hm .core-add-menu { right: auto; left: 0; padding: 12px; }
+body.hm .core-add-menu .core-compare-entry { grid-template-columns: minmax(0, 160px) auto; }

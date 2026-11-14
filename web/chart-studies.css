@@ -335,6 +335,15 @@
   transform: translateY(1px) rotate(225deg);
 }
 
+/* 不是「選一個」的小鍵（例如「＋ 加入」）不畫箭頭 */
+.chart-chip.is-plain::after {
+  display: none;
+}
+
+.chart-chip[hidden] {
+  display: none;
+}
+
 .chart-chip:focus-visible,
 .chart-menu button:focus-visible {
   outline: 2px solid var(--gold);

@@ -60,8 +60,15 @@ def pick_period(page: Page, value: str) -> str:
     return chip.inner_text().strip()
 
 
-# 畫面上看得到幾個（收起來的選單裡的按鈕不算）
-VISIBLE_COUNT = "selector => [...document.querySelectorAll(selector)].filter(e => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden').length"
+# 畫面上看得到幾個（收起來的選單裡的按鈕不算；只留給螢幕閱讀器的也不算——那種是自己或外層被縮成 1px 並裁掉）
+VISIBLE_COUNT = """selector => [...document.querySelectorAll(selector)].filter(e => {
+  if (getComputedStyle(e).visibility === 'hidden') return false;
+  for (let node = e; node && node !== document.body; node = node.parentElement) {
+    const box = node.getBoundingClientRect();
+    if (box.width <= 2 || box.height <= 2) return false;
+  }
+  return true;
+}).length"""
 
 
 def tucked_controls(page: Page, tag: str, periods: list[str], studies: list[str]) -> None:
@@ -252,6 +259,11 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
     shoot.ready_home(page)
     check(f"{tag}：現價有數字", page.locator("#currentPrice").inner_text().strip() not in ("", "—"))
     check(f"{tag}：沒有橫向捲動", no_overflow(page))
+    # 頂列與直白分析的精簡（本人 11-15）：狀態只留燈號、行情狀態與日期；直白分析不寫提示句，右上角一個箭頭。
+    check(f"{tag}：頂列的狀態看得到，分析日與劇本日不放在頂列",
+          page.locator("#statusTrigger").is_visible() and page.evaluate(VISIBLE_COUNT, "#analysisDate, #scenarioDate, .status-separator") == 0)
+    cue = page.evaluate("getComputedStyle(document.querySelector('#readCard'), '::after').content")
+    check(f"{tag}：直白分析右上角是箭頭，沒有提示句", "›" in cue and "點這裡" not in cue and "重點" not in cue, cue)
 
     def folded() -> None:
         shown = page.evaluate(CATS_VISIBLE)
@@ -403,16 +415,48 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
 
     def screens() -> None:
         open_cat(page, "screens")
-        check(f"{tag}：籌碼選股有分頁", page.locator("#chipScreenTabs [role=tab]").count() >= 2)
+
+        def count(selector: str) -> int:
+            return page.evaluate(VISIBLE_COUNT, selector)
+
+        def chip_text(chip_id: str) -> str:
+            return page.locator(chip_id).inner_text().strip()
+
+        tabs = page.locator("#chipScreenTabs [role=tab]")
+        names = [name.strip() for name in tabs.evaluate_all("nodes => nodes.map(node => node.textContent)")]
+        check(f"{tag}：籌碼選股有分頁", len(names) >= 2, names)
+        chips = [name.strip() for name in page.locator(".screen-picks .chart-chip:visible").all_inner_texts()]
+        check(f"{tag}：籌碼選股平常只有三枚小鍵（排行、天數、買賣超），分頁、天數鍵、勾選框都收著",
+              chips == [names[0], "當日", "淨買超"] and count("#chipScreenTabs [role=tab], #chipScreenDays button, #chipScreenSide button, #chipScreenInflow") == 0, chips)
         before = page.locator("#chipScreenList > li").count()
         check(f"{tag}：籌碼選股有結果", before >= 1, before)
         # 樣本資料的第一個分頁有 50 檔，「展開到 50 名」一定要在；被藏掉就是少了功能。
         page.locator("#chipScreenMore").click()
         page.wait_for_function("n => document.querySelectorAll('#chipScreenList > li').length > n", arg=before)
         check(f"{tag}：展開到 50 名", page.locator("#chipScreenList > li").count() > before)
+
+        page.locator("#screenTabChip").click()
+        opened = count("#chipScreenTabs [role=tab]") == len(names) and page.locator("#chipScreenInflow").is_visible()
+        tabs.nth(1).click()
+        page.wait_for_function("name => document.querySelector('#screenTabChip').textContent.trim() === name", arg=names[1])
+        check(f"{tag}：點第一枚浮出全部排行與勾選框；選了另一個排行，選單收回、小鍵換成那個名稱",
+              opened and count("#chipScreenTabs [role=tab]") == 0 and chip_text("#screenTabChip") == names[1], [opened, chip_text("#screenTabChip")])
+        page.locator("#screenTabChip").click()
+        tabs.first.click()
+        page.wait_for_function("name => document.querySelector('#screenTabChip').textContent.trim() === name", arg=names[0])
+
+        page.locator("#screenDaysChip").click()
+        page.locator("#chipScreenDays button").nth(1).click()
+        page.wait_for_function("document.querySelector('#screenDaysChip').textContent.trim() !== '當日'")
+        check(f"{tag}：天數小鍵選了別的天數就寫那個天數，選單收回", chip_text("#screenDaysChip") == "3 日" and count("#chipScreenDays button") == 0, chip_text("#screenDaysChip"))
+        page.locator("#screenDaysChip").click()
+        page.locator("#chipScreenDays button").first.click()
+
+        page.locator("#screenSideChip").click()
         page.locator("#chipScreenSide button[data-side='sell']").click()
         page.wait_for_function("document.querySelector(\"#chipScreenSide button[data-side='sell']\").getAttribute('aria-pressed') === 'true'")
-        check(f"{tag}：買超／賣超可切換", True)
+        check(f"{tag}：買超／賣超可切換", chip_text("#screenSideChip") == "淨賣超", chip_text("#screenSideChip"))
+        page.locator("#screenSideChip").click()
         page.locator("#chipScreenSide button[data-side='buy']").click()
     step(f"{tag}：籌碼選股", screens)
 
@@ -508,12 +552,12 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
         page.keyboard.press("Escape")
         check(f"{tag}：鍵盤 Esc 取消選取", first.get_attribute("aria-pressed") == "false")
 
-        # 排行、回溫訊號、表格收在面板裡，從地形下方的三顆鍵進去
-        entries = page.locator("#rotationBody .rotation-entries button")
-        check(f"{tag}：地形下方有三顆入口鍵", [text.replace("›", "").strip() for text in entries.all_inner_texts()] == ["資金效率排行", "低基期回溫訊號", "表格檢視"],
-              entries.all_inner_texts())
-        entries.nth(2).click()
-        page.locator("#rotationTable").wait_for(state="visible")
+        # 排行、回溫訊號、表格收在面板裡，入口是標題列的一枚「排行與表格」（本人 11-15：原本地形下方的三顆鍵收成一枚）
+        entry = page.locator("#rotationBlock .rotation-open")
+        check(f"{tag}：排行與表格的入口收成標題列的一枚", entry.is_visible() and "排行與表格" in entry.inner_text() and page.locator(".rotation-entries").count() == 0,
+              entry.inner_text())
+        entry.click()
+        page.locator("#rotationEfficiency").wait_for(state="visible")
         check(f"{tag}：面板裡有資金效率排行", page.locator("#rotationEfficiency > li").count() >= 1)
         check(f"{tag}：面板裡有低基期回溫訊號", page.locator("#rotationRecovery > li").count() >= 1)
         rows = page.locator("#rotationTable tr").count() - 1  # 扣掉表頭
@@ -522,9 +566,8 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
         view = page.viewport_size
         check(f"{tag}：排行表格的面板完全在可見範圍內",
               box["x"] >= 0 and box["y"] >= 0 and box["x"] + box["width"] <= view["width"] + 1 and box["y"] + box["height"] <= view["height"] + 1, box)
-        check(f"{tag}：點「表格檢視」開到表格那一段", page.evaluate("document.activeElement.id") == "rotationTableSection")
         page.keyboard.press("Escape")
-        page.locator("#rotationTable").wait_for(state="hidden")
+        page.locator("#rotationEfficiency").wait_for(state="hidden")
         check(f"{tag}：按 Esc 收回排行表格的面板", not page.evaluate("document.getElementById('rotationDialog').open"))
     step(f"{tag}：產業資金流向", rotation)
 
@@ -533,9 +576,18 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
         fits = page.evaluate(CHART_FITS, "#coreChart")
         check(f"{tag}：長期核心持有的走勢圖照容器寬度畫", fits == "ok", fits)
         check(f"{tag}：長期核心持有有卡片", page.locator("#coreCards > *").count() >= 2)
-        page.locator("#corePeriodSelect").select_option("1y")
+        period = page.locator(".core-picks .chart-select .chart-chip")
+        check(f"{tag}：長期核心持有平常看不到輸入框與下拉選單，只有「＋ 加入」與寫著期間的小鍵",
+              page.evaluate(VISIBLE_COUNT, "#coreCompareInput, #corePeriodSelect, #corePeriodSelectMenu [data-value]") == 0
+              and page.locator("#coreAddChip").is_visible() and period.inner_text().strip() == "近5年", period.inner_text())
+        period.click()
+        page.locator("#corePeriodSelectMenu [data-value='1y']").click()
         page.wait_for_timeout(400)
-        check(f"{tag}：比較期間可切換、走勢圖還在", page.locator("#coreChart svg, #coreChart canvas").count() >= 1)
+        check(f"{tag}：比較期間可切換、走勢圖還在", page.locator("#coreChart svg, #coreChart canvas").count() >= 1 and period.inner_text().strip() == "近1年", period.inner_text())
+        page.locator("#coreAddChip").click()
+        check(f"{tag}：點「＋ 加入」浮出輸入框，游標直接在裡面", page.evaluate("document.activeElement.id") == "coreCompareInput")
+        page.keyboard.press("Escape")
+        check(f"{tag}：按 Esc 收回加入的輸入框", page.evaluate(VISIBLE_COUNT, "#coreCompareInput") == 0)
     step(f"{tag}：長期核心持有", core)
 
     def theme() -> None:
