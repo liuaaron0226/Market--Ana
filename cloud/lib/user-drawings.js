@@ -1,6 +1,6 @@
 // 畫線工具：每位使用者、每一檔個股各自的畫線（本人 2026-11-14「共識達成」）。
 // 登入、核准與額度由 gate 把關；這裡只做輸入驗證與「只能讀寫自己的資料」。
-import { UserPortfolioError, codeFrom, readBody, response } from "./user-portfolio.js";
+import { UserPortfolioError, codeFrom, noContent, readBody, requireSameOrigin, response } from "./user-portfolio.js";
 
 const DRAWINGS_LIMIT = 200;
 const MAX_PRICE = 10_000_000;
@@ -14,6 +14,10 @@ function isCalendarDate(value) {
   if (!parts) return false;
   const date = new Date(Date.UTC(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3])));
   return date.toISOString().slice(0, 10) === value;
+}
+
+function requireId(id) {
+  if (!ID_RE.test(id)) throw new UserPortfolioError(400, "畫線識別碼格式不正確");
 }
 
 function drawingInput(body) {
@@ -53,7 +57,7 @@ async function listDrawings(db, email, code) {
 
 async function saveDrawing(request, db, email, code, id, deps) {
   const body = await readBody(request);
-  if (!ID_RE.test(id)) throw new UserPortfolioError(400, "畫線識別碼格式不正確");
+  requireId(id);
   const { kind, anchors, text } = drawingInput(body);
   const tooMany = () => new UserPortfolioError(409, `每一檔最多 ${DRAWINGS_LIMIT} 條畫線`);
   const existing = await db.prepare("SELECT 1 AS found FROM user_drawings WHERE email = ? AND code = ? AND id = ?").bind(email, code, id).first();
@@ -76,6 +80,15 @@ async function saveDrawing(request, db, email, code, id, deps) {
   return response(existing ? 200 : 201, fromRow(stored));
 }
 
+async function deleteDrawing(request, db, email, code, id) {
+  requireSameOrigin(request);
+  requireId(id);
+  // 沒有這一條（已經刪過、別檔的、別人的）也回 204，不像自選股、庫存那樣回 404：
+  // 票 02 明訂「刪除不存在的線不報錯」，用戶端重送或補送刪除時不必分辨。
+  await db.prepare("DELETE FROM user_drawings WHERE email = ? AND code = ? AND id = ?").bind(email, code, id).run();
+  return noContent();
+}
+
 // target：gate 從路徑解析出的 { code, id }；沒有 id 是整檔的集合。
 export async function handleUserDrawings(request, env, target, email, deps = {}) {
   const code = codeFrom(target.code);
@@ -85,5 +98,6 @@ export async function handleUserDrawings(request, env, target, email, deps = {})
     throw new UserPortfolioError(405, "方法不允許");
   }
   if (request.method === "PUT") return saveDrawing(request, env.DB, email, code, id, deps);
+  if (request.method === "DELETE") return deleteDrawing(request, env.DB, email, code, id);
   throw new UserPortfolioError(405, "方法不允許");
 }

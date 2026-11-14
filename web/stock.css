@@ -132,7 +132,7 @@
    --draw 是畫線用色，沿用既有色票的藍紫（--core-b）：與漲跌的紅綠、均線的橘金灰、支撐壓力的金綠都分得開。 */
 :root { --draw: var(--core-b); }
 .bd-draw { display: flex; gap: 4px; margin: 0 0 6px; }
-.bd-draw[hidden] { display: none; }
+.bd-draw[hidden], .bd-draw button[hidden] { display: none; }
 .bd-draw button {
   position: relative; width: var(--btn-h); height: var(--btn-h); display: grid; place-items: center; padding: 0;
   border: 1px solid var(--hair); border-radius: var(--btn-r); background: transparent; color: var(--dim); cursor: pointer;
@@ -141,6 +141,8 @@
 }
 .bd-draw svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; pointer-events: none; }
 .bd-draw button:active { transform: var(--press); }
+/* 刪除只在選取了一條線時出現，與畫線工具隔開一點；多一顆按鈕不改變工具列高度，圖表不會跳動。 */
+.bd-draw .bd-draw-delete { margin-left: 8px; }
 .bd-draw button[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--bg); }
 .bd-draw button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .bd-draw button::after {

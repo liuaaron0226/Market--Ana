@@ -1,7 +1,9 @@
 /* 可拖曳／縮放的K線圖（原生Canvas，無外部套件）。
    互動：滑鼠拖曳或單指左右平移；滾輪、雙指捏合或＋／−按鈕縮放；鍵盤左右鍵平移、+/- 縮放；點擊或移動顯示十字線。
+   有畫線時：點線選取、拖已選取的線移動、Delete 刪除、Esc 取消選取或放下工具。
    資料：candles=[{t,label,open,high,low,close,amount}] 由舊到新。overlays 可放判斷線。
-   畫線（選用）：頁面先載入 chart-drawings.js 並傳 opts.drawings={onChange,onTool}，再用 setTool／setDrawings 操作。 */
+   畫線（選用）：頁面先載入 chart-drawings.js 並傳 opts.drawings={onChange,onTool,onSelect}，
+   再用 setTool／setDrawings／deleteSelectedDrawing／cancelDrawing 操作。 */
 (function () {
   'use strict';
   const DPR = () => Math.max(1, Math.min(3, window.devicePixelRatio || 1));
@@ -97,8 +99,15 @@
       this.draw(); this.emit();
     }
     // 畫線：目前要用的工具（'hline'；null＝一般模式），以及這張圖上的整組畫線（[{id,kind,anchors:[{date,price}]}]）。
-    setTool(kind) { if (this.drawings) this.drawings.setTool(kind); }
+    setTool(kind) { if (this.drawings) { this.drawings.setTool(kind); this.draw(); } }
     setDrawings(list) { if (this.drawings) { this.drawings.load(list); this.draw(); } }
+    // 刪除目前選取的那一條，回傳有沒有刪（沒有選取就不做事）；放下工具並取消選取（Esc 做的事）。
+    deleteSelectedDrawing() {
+      const removed = Boolean(this.drawings && this.drawings.remove());
+      if (removed) this.draw();
+      return removed;
+    }
+    cancelDrawing() { if (this.drawings) { this.drawings.cancel(); this.draw(); } }
     compute(candles) {
       this.candles = candles; this.shownLength = candles.length;
       const closes = candles.map(c => hasPrice(c) ? c.close : null);
@@ -151,7 +160,15 @@
       const geo = () => this.geo;
       c.addEventListener('pointerdown', e => {
         c.setPointerCapture(e.pointerId); pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-        if (pts.size === 1) drag = { kind: 'single', x: e.clientX, y: e.clientY, end: this.view.end, moved: false, hadPinch: false, studySwipe: c !== this.canvas && !!this.studies };
+        if (pts.size === 1) {
+          const rect = c.getBoundingClientRect();
+          // 起點落在已選取的畫線上：這次拖曳是移動那條線，圖表不平移。
+          drag = c === this.canvas && this.drawings && this.drawings.grab(e.clientX - rect.left, e.clientY - rect.top, e.pointerType)
+            ? { kind: 'drawing', moved: false, hadPinch: false }
+            : { kind: 'single', x: e.clientX, y: e.clientY, end: this.view.end, moved: false, hadPinch: false, studySwipe: c !== this.canvas && !!this.studies };
+        }
+        // 拖線途中放上第二指：線回原位，改成雙指縮放。
+        if (pts.size === 2 && drag?.kind === 'drawing') { this.drawings.drop(false); this.draw(); }
         if (pts.size === 2) { const xs = [...pts.values()].map(point => point.x); drag = { kind: 'pinch', pinch: Math.max(20, Math.abs(xs[0] - xs[1])), count: this.view.count, end: this.view.end, hadPinch: true, studySwipe: c !== this.canvas && !!this.studies }; }
         c.style.cursor = 'grabbing';
         if (drag?.studySwipe) { this.hover = this.selection; this.draw(); }
@@ -160,6 +177,8 @@
         const g = geo(); if (!g) return;
         if (pts.has(e.pointerId)) pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
         const rect = c.getBoundingClientRect(); const x = e.clientX - rect.left;
+        // moved 一旦成立就不收回：拖到一半線被換掉或按了 Esc，放開時也不會被當成一次點擊。
+        if (drag?.kind === 'drawing') { drag.moved = this.drawings.dragTo(x, e.clientY - rect.top) || drag.moved; this.draw(); return; }
         if (drag?.kind === 'pinch' && pts.size === 2) {
           if (drag.studySwipe) return;
           const xs = [...pts.values()].map(point => point.x); const d = Math.max(20, Math.abs(xs[0] - xs[1]));
@@ -171,17 +190,21 @@
           this.view.end = Math.round(drag.end - dx / g.step); this.clamp();
         }
         this.hover = x >= g.l && x <= g.l + g.pw ? g.start + Math.floor((x - g.l) / g.step) : -1;
+        if (!drag && c === this.canvas && this.drawings) c.style.cursor = this.drawings.cursorAt(x, e.clientY - rect.top);
         this.draw(); if (drag && drag.moved) this.emit();
       });
       const up = e => {
+        // 放開正在拖的畫線：正常放開就定在新位置，手勢被系統取消則回原位。
+        if (drag?.kind === 'drawing') { this.drawings.drop(e.type === 'pointerup'); this.draw(); }
         if (e.type === 'pointerup' && drag?.kind === 'single' && drag.studySwipe && drag.moved && !drag.hadPinch) {
           const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
           if (Math.abs(dx) >= 40 && Math.abs(dx) > Math.abs(dy) * 1.3) this.studies.switchBy(dx < 0 ? 1 : -1);
         }
-        if (e.type === 'pointerup' && drag?.kind === 'single' && !drag.moved && !drag.hadPinch && this.geo) {
+        // 按在已選取的線上但沒有拖就放開，也是一次點擊（附近有更近的線時會改選那一條）。
+        if (e.type === 'pointerup' && (drag?.kind === 'single' || drag?.kind === 'drawing') && !drag.moved && !drag.hadPinch && this.geo) {
           const g = this.geo, rect = c.getBoundingClientRect(), px = e.clientX - rect.left;
-          // 選了畫線工具時，主圖上的這一下用來定位，不選 K 棒。
-          if (!(c === this.canvas && this.drawings && this.drawings.tap(px, e.clientY - rect.top))) {
+          // 主圖上的這一下先給畫線：選了工具就定位，沒選工具而點到線就選取那條線；都不是才選 K 棒。
+          if (!(c === this.canvas && this.drawings && this.drawings.tap(px, e.clientY - rect.top, e.pointerType))) {
             this.hover = px >= g.l && px <= g.l + g.pw
               ? Math.min(this.view.end - 1, g.start + Math.floor((px - g.l) / g.step)) : -1;
             this.selection = this.hover;
@@ -210,7 +233,9 @@
         else if (e.key === '-') { e.preventDefault(); this.zoom(1.25); }
         else if (e.key === 'Home') { e.preventDefault(); this.view.end = this.view.count; this.clamp(); this.draw(); this.emit(); }
         else if (e.key === 'End') { e.preventDefault(); this.reset(); }
-        else if (e.key === 'Escape') { e.preventDefault(); this.clearSelection(); }
+        else if (e.key === 'Escape') { e.preventDefault(); if (this.drawings) this.drawings.cancel(); this.clearSelection(); }
+        // Mac 與 iPad 鍵盤上標著 delete 的那一顆送出的是 Backspace。
+        else if ((e.key === 'Delete' || e.key === 'Backspace') && this.deleteSelectedDrawing()) e.preventDefault();
         else if (e.key === 'Enter' && c !== this.canvas) {
           e.preventDefault(); this.hover = this.selection = this.view.end - 1;
           if (this.opts.onSelect) this.opts.onSelect(this.hover, c);
@@ -444,8 +469,8 @@
         x.font = '600 11.5px "JetBrains Mono",Consolas,monospace'; x.textAlign = 'right'; x.fillText(fmtTag(last.close), tagX + tagW - 6, py + .5);
         x.textAlign = 'left'; x.font = '11.5px "JetBrains Mono",Consolas,monospace';
       } else if (end === n && hasPrice(last)) { const pw2 = stacked ? 46 : r - 4; x.fillStyle = ink; x.textBaseline = 'middle'; x.fillRect(l + pw + 2, y(last.close) - 9, pw2, 18); x.fillStyle = css('--bg'); x.fillText(fmt(last.close, 0), l + pw + 7, y(last.close)); }
-      // 畫線的價位標示最後才畫：壓在 K 棒與現價虛線上面，數字才讀得到。
-      if (this.drawings) this.drawings.drawLabels(x, this.geo);
+      // 畫線的價位標示與選取把手最後才畫：壓在 K 棒與現價虛線上面，才看得到。
+      if (this.drawings) this.drawings.drawOnTop(x, this.geo);
       // 驗收用：右側刻度文字框與現價框的位置。
       this.debugBoxes = { axis: axisBoxes, price: end === n && hasPrice(last) ? { y: y(last.close) - 9, h: 18 } : null, height: H };
       // MACD

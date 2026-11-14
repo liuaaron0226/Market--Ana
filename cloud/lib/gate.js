@@ -516,7 +516,7 @@ function handleDataStatusApi(request, deps) {
 }
 
 const USER_DATA_PATH = /^\/api\/(watchlist|holdings|search-history)(?:\/[^/]+)?$/;
-// 畫線：/api/drawings/<代號> 讀整檔，/api/drawings/<代號>/<識別碼> 寫一條。與其他個人資料共用額度。
+// 畫線：/api/drawings/<代號> 讀整檔，/api/drawings/<代號>/<識別碼> 寫或刪一條。與其他個人資料共用額度。
 const DRAWINGS_PATH = /^\/api\/drawings\/([^/]+)(?:\/([^/]+))?$/;
 async function handleUserDataApi(request, env, path, email, deps) {
   try {

@@ -23,13 +23,16 @@ export const response = (status, body) => new Response(JSON.stringify(body), {
   },
 });
 
+// 刪除成功：沒有內容可回。
+export const noContent = () => new Response(null, { status: 204, headers: { "cache-control": "private, no-store" } });
+
 export function codeFrom(value) {
   const code = typeof value === "string" ? value.trim().toUpperCase() : "";
   if (!CODE_RE.test(code)) throw new UserPortfolioError(400, "股票代號格式不正確");
   return code;
 }
 
-function requireSameOrigin(request) {
+export function requireSameOrigin(request) {
   if (request.headers.get("origin") !== new URL(request.url).origin) {
     throw new UserPortfolioError(403, "跨站請求被拒絕");
   }
@@ -408,7 +411,7 @@ async function deleteSearchHistory(request, db, email, codeText = null) {
     const result = await db.prepare("DELETE FROM user_search_history WHERE email = ? AND code = ?").bind(email, code).run();
     if (!result.meta.changes) throw new UserPortfolioError(404, "搜尋紀錄中沒有這檔股票");
   }
-  return new Response(null, { status: 204, headers: { "cache-control": "private, no-store" } });
+  return noContent();
 }
 
 async function deleteHolding(request, db, email, codeText) {
@@ -416,7 +419,7 @@ async function deleteHolding(request, db, email, codeText) {
   const code = codeFrom(codeText);
   const result = await db.prepare("DELETE FROM user_holdings WHERE email = ? AND code = ?").bind(email, code).run();
   if (!result.meta.changes) throw new UserPortfolioError(404, "庫存中沒有這檔股票");
-  return new Response(null, { status: 204, headers: { "cache-control": "private, no-store" } });
+  return noContent();
 }
 
 async function deleteWatchlist(request, db, email, codeText) {
@@ -424,7 +427,7 @@ async function deleteWatchlist(request, db, email, codeText) {
   const code = codeFrom(codeText);
   const result = await db.prepare("DELETE FROM user_watchlist WHERE email = ? AND code = ?").bind(email, code).run();
   if (!result.meta.changes) throw new UserPortfolioError(404, "自選股中沒有這檔股票");
-  return new Response(null, { status: 204, headers: { "cache-control": "private, no-store" } });
+  return noContent();
 }
 
 export async function handleUserPortfolio(request, env, path, email, deps = {}) {

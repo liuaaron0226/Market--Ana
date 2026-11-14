@@ -22,10 +22,8 @@ beforeEach(async () => {
 async function req(path, { email = "a@example.com", method = "GET", body, origin = ORIGIN } = {}) {
   const headers = new Headers();
   if (email) headers.set("cf-access-jwt-assertion", await issuer.sign(claims(email)));
-  if (body !== undefined) {
-    headers.set("content-type", "application/json");
-    if (origin) headers.set("origin", origin);
-  }
+  if (body !== undefined) headers.set("content-type", "application/json");
+  if (origin && method !== "GET") headers.set("origin", origin); // 瀏覽器對同源的寫入與刪除都會帶 Origin
   return handle(new Request(ORIGIN + path, {
     method,
     headers,
@@ -143,9 +141,11 @@ test("不合法的代號、識別碼、種類、日期、價格、錨點個數�
   assert.equal((await env.DB.prepare("SELECT COUNT(*) AS n FROM user_drawings").first()).n, 0);
 });
 
-test("這張票只開放讀與寫：其他方法回 405；不是畫線端點的路徑不歸這裡管", async () => {
+test("整檔只能讀、單一條只能寫與刪：其他方法回 405；不是畫線端點的路徑不歸這裡管", async () => {
   assert.equal((await req("/api/drawings/2330", { method: "POST", body: hline(1000) })).status, 405);
+  assert.equal((await req("/api/drawings/2330", { method: "DELETE" })).status, 405, "不能一次刪掉整檔");
   assert.equal((await req("/api/drawings/2330/line-0001")).status, 405);
+  assert.equal((await req("/api/drawings/2330/line-0001", { method: "POST", body: hline(1000) })).status, 405);
   assert.equal(await (await req("/api/drawings")).text(), "static-ok");
 });
 
@@ -184,4 +184,62 @@ test("畫線和其他個人資料共用每帳號每分鐘 60 次的額度", asyn
   assert.equal(limited.status, 429);
   assert.ok(Number(limited.headers.get("retry-after")) > 0);
   assert.equal((await req("/api/watchlist")).status, 429);
+});
+
+// ---------- 票 02：刪除 ----------
+
+test("刪除一條線：回 204，重新讀取時不再出現，同一檔的其他線不受影響", async () => {
+  await req("/api/drawings/2330/line-0001", { method: "PUT", body: hline(1085.5) });
+  await req("/api/drawings/2330/line-0002", { method: "PUT", body: hline(1100) });
+  const removed = await req("/api/drawings/2330/line-0001", { method: "DELETE" });
+  assert.equal(removed.status, 204);
+  assert.equal(await removed.text(), "");
+  assert.match(removed.headers.get("cache-control"), /no-store/);
+  assert.deepEqual((await listOf("2330")).map((item) => [item.id, item.anchors[0].price]), [["line-0002", 1100]]);
+});
+
+test("刪除不存在的線不報錯：照樣回 204，其他線與別檔同識別碼的線都還在", async () => {
+  await req("/api/drawings/2330/line-0001", { method: "PUT", body: hline(1085.5) });
+  await req("/api/drawings/2317/line-0002", { method: "PUT", body: hline(212) });
+  assert.equal((await req("/api/drawings/2330/line-0002", { method: "DELETE" })).status, 204, "這一檔沒有這條");
+  assert.equal((await req("/api/drawings/2454/line-0001", { method: "DELETE" })).status, 204, "這一檔一條都沒有");
+  await req("/api/drawings/2330/line-0001", { method: "DELETE" });
+  assert.equal((await req("/api/drawings/2330/line-0001", { method: "DELETE" })).status, 204, "刪過再刪一次");
+  assert.deepEqual(await listOf("2330"), []);
+  assert.deepEqual((await listOf("2317")).map((item) => [item.id, item.anchors[0].price]), [["line-0002", 212]]);
+});
+
+test("A 帳號刪不到 B 帳號的線：對同一個識別碼下刪除，B 的那一條原封不動", async () => {
+  await req("/api/drawings/2330/line-0001", { email: "b@example.com", method: "PUT", body: hline(900) });
+  await req("/api/drawings/2330/line-0001", { method: "PUT", body: hline(1085.5) });
+  assert.equal((await req("/api/drawings/2330/line-0001", { method: "DELETE" })).status, 204);
+  assert.equal((await req("/api/drawings/2330/line-0001", { method: "DELETE" })).status, 204, "自己的已經沒了，再刪也碰不到別人的");
+  assert.deepEqual(await listOf("2330"), []);
+  assert.deepEqual((await listOf("2330", { email: "b@example.com" })).map((item) => item.anchors[0].price), [900]);
+});
+
+test("未登入、未核准、跨站的刪除一律被擋，線還在；代號或識別碼格式不對回 400", async () => {
+  await req("/api/drawings/2330/line-0001", { method: "PUT", body: hline(1085.5) });
+  const remove = (options, path = "/api/drawings/2330/line-0001") => req(path, { method: "DELETE", ...options });
+  assert.equal((await remove({ email: null })).status, 401);
+  assert.equal((await remove({ email: "pending@example.com" })).status, 403);
+  assert.equal((await remove({ email: "stranger@example.com" })).status, 403);
+  assert.equal((await remove({ origin: "https://evil.example" })).status, 403);
+  assert.equal((await remove({ origin: null })).status, 403);
+  assert.equal((await remove({}, "/api/drawings/23/line-0001")).status, 400);
+  for (const id of ["short", "x".repeat(41), "has%20space1", "semi;colon1"]) {
+    assert.equal((await remove({}, `/api/drawings/2330/${id}`)).status, 400, id);
+  }
+  assert.deepEqual((await listOf("2330")).map((item) => item.anchors[0].price), [1085.5]);
+});
+
+test("滿 200 條時刪掉一條，就能再畫一條新的", async () => {
+  deps.rate = { userData: 10_000 };
+  for (let index = 0; index < 200; index += 1) {
+    await req(`/api/drawings/2330/line-${String(index).padStart(4, "0")}`, { method: "PUT", body: hline(1000 + index) });
+  }
+  assert.equal((await req("/api/drawings/2330/line-0200", { method: "PUT", body: hline(5) })).status, 409);
+  assert.equal((await req("/api/drawings/2330/line-0007", { method: "DELETE" })).status, 204);
+  assert.equal((await req("/api/drawings/2330/line-0200", { method: "PUT", body: hline(5) })).status, 201);
+  assert.equal((await listOf("2330")).length, 200);
 });

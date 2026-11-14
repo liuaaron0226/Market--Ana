@@ -1,4 +1,5 @@
-"""畫線工具票 01 的本機瀏覽器旅程：水平線畫得出來，而且存得住（桌機與手機寬度各走一遍）。
+"""畫線工具的本機瀏覽器旅程（桌機與手機寬度各走一遍）。
+票 01：水平線畫得出來，而且存得住。票 02：點線選取、拖動、刪除（工具列與 Delete）、Esc。
 
 用真正的 gate.handle＋cloud/dist＋記憶體資料庫（cloud/test/journey-server.mjs），Access 由 cookie 模擬；
 不連正式站、不碰 8876／8897。先在 cloud/ 跑過 `node build.mjs` 讓 dist 是最新的。
@@ -46,6 +47,30 @@ LINES_JS = """() => {
   const lines = [];
   rows.forEach(y => { if (!lines.length || y - lines[lines.length - 1].at(-1) > 1) lines.push([y]); else lines[lines.length - 1].push(y); });
   return lines.map(group => Math.round((group[0] + group.at(-1)) / 2 / scale * 10) / 10);
+}"""
+
+# 選取把手：線的下方 3～5 像素那幾列，只有把手的圓邊會用到畫線顏色（價位標示在線的上方）。回傳那幾列的畫線色像素數。
+HANDLE_JS = """lineY => {
+  const canvas = document.querySelector('#chartHost canvas');
+  const scale = canvas.height / canvas.getBoundingClientRect().height;
+  const hex = getComputedStyle(document.documentElement).getPropertyValue('--draw').trim();
+  const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
+  const top = Math.round((lineY + 3) * scale), rows = Math.max(1, Math.round(2 * scale));
+  const data = canvas.getContext('2d').getImageData(0, top, canvas.width, rows).data;
+  let hits = 0;
+  for (let i = 0; i < data.length; i += 4) if (Math.abs(data[i] - r) + Math.abs(data[i + 1] - g) + Math.abs(data[i + 2] - b) < 60) hits++;
+  return hits;
+}"""
+
+# 時間軸那一條（畫布最下面）的像素指紋：圖表有沒有平移，看它變了沒有。
+AXIS_JS = """() => {
+  const canvas = document.querySelector('#chartHost canvas');
+  const scale = canvas.height / canvas.getBoundingClientRect().height;
+  const rows = Math.round(16 * scale);
+  const data = canvas.getContext('2d').getImageData(0, canvas.height - Math.round(20 * scale), canvas.width, rows).data;
+  let hash = 0;
+  for (let i = 0; i < data.length; i += 4) hash = (hash * 31 + data[i] + data[i + 1] * 3 + data[i + 2] * 7) >>> 0;
+  return hash;
 }"""
 
 
@@ -106,6 +131,16 @@ class Journey:
         page.locator("#periodSelect").select_option(value)
         page.locator("#periodSelect").dispatch_event("change")
         page.wait_for_timeout(250)
+
+    def handle(self, page, line_y: float) -> bool:
+        return page.evaluate(HANDLE_JS, line_y) > 0
+
+    def axis(self, page) -> int:
+        return page.evaluate(AXIS_JS)
+
+    def canvas_xy(self, page, fx: float, canvas_y: float) -> tuple[float, float]:
+        box = page.locator("#chartHost canvas").bounding_box()
+        return box["x"] + box["width"] * fx, box["y"] + canvas_y
 
     def draw(self, page, fx: float, fy: float, touch: bool = False) -> float:
         tool = page.locator("#drawTools button[data-tool=hline]")
@@ -262,6 +297,237 @@ def mobile(journey: Journey, browser) -> None:
     context.close()
 
 
+def near(lines: list[float], y: float, tolerance: float = 1.5) -> bool:
+    return any(abs(line - y) <= tolerance for line in lines)
+
+
+def drawing_request(method: str):
+    return lambda response: "/api/drawings/" in response.url and response.request.method == method
+
+
+def edit_desktop(journey: Journey, browser) -> None:
+    print("票 02｜桌機寬度 1280：選取、拖動、刪除")
+    viewport = {"width": 1280, "height": 900}
+    context = journey.context(browser, OWNER, viewport=viewport)
+    page = journey.open(context, "2317")
+    tools = page.locator("#drawTools")
+    tool = tools.locator("button[data-tool=hline]")
+    delete = page.locator("#drawDelete")
+
+    lines = journey.lines(page)
+    before = journey.saved(page, "2317")
+    journey.check("起點：這一檔有一條存好的線", len(lines) == 1 and len(before) == 1, lines)
+    line_y, line_id, price = lines[0], before[0]["id"], before[0]["anchors"][0]["price"]
+    journey.check("沒選取時：工具列沒有刪除、線上沒有把手", not delete.is_visible() and not journey.handle(page, line_y))
+
+    x, y = journey.canvas_xy(page, 0.4, line_y + 5)
+    page.mouse.click(x, y)
+    journey.check("點在線旁 5px 內就選取：工具列出現刪除、線上出現把手", delete.is_visible() and journey.handle(page, line_y))
+    journey.check("刪除鈕只有圖示、有可讀名稱", delete.inner_text().strip() == "" and delete.get_attribute("aria-label") == "刪除選取的線")
+    page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-05-selected.png"))
+
+    x, y = journey.canvas_xy(page, 0.4, line_y + 80)
+    page.mouse.click(x, y)
+    journey.check("點空白處取消選取：刪除收起、把手消失、線還在", not delete.is_visible() and not journey.handle(page, line_y)
+                  and journey.lines(page) == lines)
+    page.mouse.click(x, y - 60)  # 離線 20px：點不到
+    journey.check("點在可點選範圍外不會選到線", not delete.is_visible())
+
+    x, y = journey.canvas_xy(page, 0.4, line_y)
+    page.mouse.click(x, y)
+    axis = journey.axis(page)
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x, y + 30, steps=4)
+    page.mouse.move(x, y + 60, steps=4)
+    moving = journey.lines(page)
+    with page.expect_response(drawing_request("PUT")) as moved:
+        page.mouse.up()
+    journey.check("拖的時候線就跟著走", near(moving, line_y + 60), {"lines": moving, "want": line_y + 60})
+    journey.check("放開後自動儲存（PUT 回 200，是覆寫不是新增）", moved.value.status == 200, moved.value.status)
+    after = journey.saved(page, "2317")
+    journey.check("線移到新價位：同一條、價位變低、仍只有一條", len(after) == 1 and after[0]["id"] == line_id
+                  and after[0]["anchors"][0]["price"] < price and near(journey.lines(page), line_y + 60), after)
+    journey.check("拖線時圖表沒有跟著平移", journey.axis(page) == axis)
+    journey.check("放開後仍選取著", delete.is_visible() and journey.handle(page, line_y + 60))
+    page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-06-moved.png"))
+    price = after[0]["anchors"][0]["price"] if after else price
+
+    page.reload()
+    journey.ready(page, "2317")
+    lines = journey.lines(page)
+    journey.check("重新整理後線在拖過去的位置，沒有選取", near(lines, line_y + 60) and len(lines) == 1 and not delete.is_visible()
+                  and journey.saved(page, "2317")[0]["anchors"][0]["price"] == price, lines)
+    line_y = lines[0]
+
+    x, y = journey.canvas_xy(page, 0.4, line_y)
+    page.mouse.click(x, y)
+    axis = journey.axis(page)
+    bx, by = journey.canvas_xy(page, 0.5, line_y + 90)
+    page.mouse.move(bx, by)
+    page.mouse.down()
+    page.mouse.move(bx + 160, by, steps=6)
+    page.mouse.up()
+    page.wait_for_timeout(150)
+    # 平移後價格座標會重新取範圍：線還在畫面內就維持選取，移出畫面則解除（看不到的線不留著刪除鈕）。
+    journey.check("選取後從空白處拖曳：照舊平移圖表，線的價位不變；線還看得到就維持選取", journey.axis(page) != axis
+                  and delete.is_visible() == (len(journey.lines(page)) == 1)
+                  and journey.saved(page, "2317")[0]["anchors"][0]["price"] == price, journey.lines(page))
+    page.reload()
+    journey.ready(page, "2317")
+    line_y = journey.lines(page)[0]
+    x, y = journey.canvas_xy(page, 0.4, line_y)
+    axis = journey.axis(page)
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x + 160, y + 40, steps=6)
+    page.mouse.up()
+    page.wait_for_timeout(150)
+    journey.check("沒選取的線拖不動：從線上拖也是平移", journey.axis(page) != axis
+                  and journey.saved(page, "2317")[0]["anchors"][0]["price"] == price)
+    page.reload()
+    journey.ready(page, "2317")
+    line_y = journey.lines(page)[0]
+
+    x, y = journey.canvas_xy(page, 0.4, line_y)
+    page.mouse.click(x, y)
+    page.keyboard.press("Escape")
+    journey.check("按 Esc 取消選取，線還在", not delete.is_visible() and len(journey.lines(page)) == 1)
+    tool.click()
+    page.keyboard.press("Escape")
+    journey.check("選了工具還沒點下去時按 Esc：放下工具", tool.get_attribute("aria-pressed") == "false")
+    page.mouse.click(x, y - 100)
+    journey.check("放下工具後點圖不會畫出線", len(journey.lines(page)) == 1 and len(journey.saved(page, "2317")) == 1)
+
+    second_y = journey.draw(page, 0.5, 0.25)
+    x2, y2 = journey.canvas_xy(page, 0.5, second_y)
+    page.mouse.click(x2, y2)
+    journey.check("新畫的線也選得到", delete.is_visible() and journey.handle(page, second_y))
+    with page.expect_response(drawing_request("DELETE")) as removed:
+        page.keyboard.press("Delete")
+    journey.check("按 Delete 刪除選取的線（DELETE 回 204）", removed.value.status == 204, removed.value.status)
+    saved = journey.saved(page, "2317")
+    journey.check("刪掉的是選取的那一條，另一條還在", len(saved) == 1 and saved[0]["id"] == line_id
+                  and len(journey.lines(page)) == 1 and not delete.is_visible(), saved)
+
+    page.mouse.click(x, y)
+    delete.hover()
+    page.wait_for_timeout(700)
+    journey.check("滑鼠停在刪除鈕上顯示「刪除」", page.evaluate(
+        "() => { const style = getComputedStyle(document.getElementById('drawDelete'), '::after'); return style.content + '|' + style.opacity; }") == '"刪除"|1')
+    page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-07-delete-button.png"))
+    with page.expect_response(drawing_request("DELETE")) as removed:
+        delete.click()
+    journey.check("按工具列的刪除：線消失、雲端也刪了、刪除鈕收起", removed.value.status == 204 and journey.lines(page) == []
+                  and journey.saved(page, "2317") == [] and not delete.is_visible())
+    journey.check("刪除後焦點回到圖表", page.evaluate("() => document.activeElement === document.querySelector('#chartHost canvas')"))
+    page.reload()
+    journey.ready(page, "2317")
+    journey.check("重新整理後刪掉的線不再出現", journey.lines(page) == [] and journey.saved(page, "2317") == [])
+
+    third_y = journey.draw(page, 0.5, 0.45)
+    x3, y3 = journey.canvas_xy(page, 0.5, third_y)
+    page.mouse.click(x3, y3)
+    page.mouse.move(x3, y3)
+    page.mouse.down()
+    page.mouse.move(x3, y3 - 40, steps=4)
+    with page.expect_response(drawing_request("DELETE")) as removed:
+        page.mouse.up()
+        page.keyboard.press("Delete")
+    page.wait_for_timeout(200)
+    journey.check("拖完馬上刪：線不會又冒出來", removed.value.status == 204 and journey.saved(page, "2317") == [] and journey.lines(page) == [])
+
+    journey.draw(page, 0.5, 0.45)
+    kept = journey.saved(page, "2317")
+    x3, y3 = journey.canvas_xy(page, 0.5, journey.lines(page)[0])
+    page.mouse.click(x3, y3)
+    journey.choose_period(page, "weekly")
+    journey.check("切到週 K：選取還在", delete.is_visible() and len(journey.lines(page)) == 1 and journey.handle(page, journey.lines(page)[0]))
+    journey.choose_period(page, "5m")
+    journey.check("切到分 K：工具列與刪除都收起", not tools.is_visible() and not delete.is_visible())
+    page.keyboard.press("Delete")
+    journey.choose_period(page, "daily")
+    journey.check("切回日 K：線還在、沒有被分 K 上的 Delete 刪掉、不會自己恢復選取", len(journey.lines(page)) == 1
+                  and journey.saved(page, "2317") == kept and not delete.is_visible())
+
+    kept_id = kept[0]["id"] if kept else "missing-line"
+    other = journey.context(browser, OTHER, viewport=viewport)
+    foreign = other.request.delete(f"{journey.base}/api/drawings/2317/{kept_id}", headers={"origin": journey.base})
+    journey.check("別的帳號對同一個識別碼下刪除：刪不到我的線", foreign.status == 204 and journey.saved(page, "2317") == kept, foreign.status)
+    other.close()
+    cross = context.request.delete(f"{journey.base}/api/drawings/2317/{kept_id}", headers={"origin": "https://evil.example"})
+    anonymous = journey.context(browser, None, viewport=viewport)
+    unsigned = anonymous.request.delete(f"{journey.base}/api/drawings/2317/{kept_id}", headers={"origin": journey.base})
+    anonymous.close()
+    journey.check("跨站與未登入的刪除被擋，線還在", cross.status == 403 and unsigned.status == 401 and journey.saved(page, "2317") == kept,
+                  [cross.status, unsigned.status])
+    context.close()
+
+
+def edit_mobile(journey: Journey, browser) -> None:
+    print("票 02｜手機寬度 390（觸控）：選取、拖動、刪除")
+    context = journey.context(browser, OWNER, viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True, has_touch=True)
+    page = journey.open(context)
+    delete = page.locator("#drawDelete")
+    lines = journey.lines(page)
+    saved = journey.saved(page)
+    journey.check("手機起點：這一檔有兩條線", len(lines) == 2 and len(saved) == 2, lines)
+    # 挑下面那一條：往下還有空間可以拖。
+    line_y = max(lines)
+    x, y = journey.canvas_xy(page, 0.6, line_y + 11)
+    page.touchscreen.tap(x, y)
+    journey.check("手機：手指點在線旁 11px 就選得到（比滑鼠寬），工具列出現刪除", delete.is_visible() and journey.handle(page, line_y))
+    box = delete.bounding_box()
+    journey.check("手機：刪除鈕夠大（至少 44px）、不造成橫向捲動", box["width"] >= 44 and box["height"] >= 44
+                  and page.evaluate("() => document.documentElement.scrollWidth <= innerWidth"), box)
+    page.locator(".bd-chart").screenshot(path=str(OUT / "mobile-04-selected.png"))
+
+    cdp = context.new_cdp_session(page)
+
+    def touch(kind: str, tx: float, ty: float) -> None:
+        cdp.send("Input.dispatchTouchEvent", {
+            "type": kind, "touchPoints": [] if kind == "touchEnd" else [{"x": round(tx), "y": round(ty)}]})
+
+    x, y = journey.canvas_xy(page, 0.6, line_y)
+    axis = journey.axis(page)
+    scroll = page.evaluate("() => scrollY")
+    touch("touchStart", x, y)
+    for step in range(1, 7):
+        touch("touchMove", x, y + step * 5)
+        page.wait_for_timeout(16)
+    # 停一下再放開。帶著速度放開會被 Chromium 當成甩動，之後的第一次點擊會被吞掉（第二次才有 click）；
+    # 這和畫線無關——不選線、單純甩動平移圖表後點工具鈕也一樣（2026-11-14 以同一套模擬觸控重現）。真機上是否如此留給票 08。
+    page.wait_for_timeout(250)
+    with page.expect_response(drawing_request("PUT")) as moved:
+        touch("touchEnd", x, y)
+    after = journey.lines(page)
+    journey.check("手機：手指拖動選取的線，放開後自動儲存", moved.value.status == 200 and near(after, line_y + 30, 2) and len(after) == 2,
+                  {"lines": after, "want": line_y + 30})
+    journey.check("手機：拖線時圖表不平移、頁面不捲動", journey.axis(page) == axis and page.evaluate("() => scrollY") == scroll)
+    now = journey.saved(page)
+    journey.check("手機：雲端仍是兩條，其中一條換了價位", len(now) == 2
+                  and sorted(item["id"] for item in now) == sorted(item["id"] for item in saved) and now != saved)
+    page.locator(".bd-chart").screenshot(path=str(OUT / "mobile-05-moved.png"))
+
+    delete.dispatch_event("pointerdown", {"pointerType": "touch", "pointerId": 9, "bubbles": True})
+    page.wait_for_timeout(650)
+    shown = page.evaluate("() => getComputedStyle(document.getElementById('drawDelete'), '::after').opacity")
+    delete.dispatch_event("pointerup", {"pointerType": "touch", "pointerId": 9, "bubbles": True})
+    delete.dispatch_event("click", {"bubbles": True})
+    journey.check("手機：長按刪除鈕只顯示「刪除」，放開不會真的刪", shown == "1" and len(journey.lines(page)) == 2 and delete.is_visible(), shown)
+
+    with page.expect_response(drawing_request("DELETE")) as removed:
+        delete.tap()
+    journey.check("手機：點刪除，線消失、刪除鈕收起", removed.value.status == 204 and len(journey.lines(page)) == 1 and not delete.is_visible())
+    x, y = journey.canvas_xy(page, 0.6, max(journey.lines(page)) + 60)
+    page.touchscreen.tap(x, y)
+    journey.check("手機：點空白處照舊顯示 K 棒數值，不出現刪除", page.locator("#chartHost .kc-tip.show").count() == 1 and not delete.is_visible())
+    page.reload()
+    journey.ready(page, "2330")
+    journey.check("手機：重新整理後只剩一條", len(journey.lines(page)) == 1 and len(journey.saved(page)) == 1, journey.lines(page))
+    context.close()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", help="已經開著的旅程伺服器；省略時自己起一個")
@@ -288,6 +554,8 @@ def main() -> int:
             browser = playwright.chromium.launch()
             desktop(journey, browser)
             mobile(journey, browser)
+            edit_desktop(journey, browser)
+            edit_mobile(journey, browser)
             browser.close()
     finally:
         if server:
