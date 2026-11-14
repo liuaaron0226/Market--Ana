@@ -62,6 +62,16 @@ THUMB_ON_CHECKED = """value => {
 }"""
 
 
+# 指到 K 棒時浮出來的當天明細：要看得到、有開高低收，而且底色不透明（壓在 K 線上數字才讀得清楚）。
+TIP_STATE = """() => {
+  const tip = document.querySelector('#mainChart .kc-tip'), style = getComputedStyle(tip);
+  if (!tip.classList.contains('show') || Number(style.opacity) < 1) return 'hidden';
+  if (!/開.*高.*低/.test(tip.textContent)) return 'no ohlc: ' + tip.textContent;
+  const parts = style.backgroundColor.match(/[\d.]+/g) || [];
+  return parts.length < 4 || Number(parts[3]) === 1 ? 'ok' : 'translucent ' + style.backgroundColor;
+}"""
+
+
 def open_panel(page: Page, tag: str, selector: str, title_part: str) -> None:
     def run() -> None:
         target = page.locator(selector).first
@@ -120,6 +130,52 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
     open_panel(page, tag, "#lineUpper", "收復線")
     open_panel(page, tag, "#readCard", "直白分析")
     open_panel(page, tag, ".chip-card", "")
+
+    def candle() -> None:
+        canvas = page.locator("#mainChart canvas").first
+        canvas.scroll_into_view_if_needed()
+        box = canvas.bounding_box()
+        x, y = box["x"] + box["width"] * 0.45, box["y"] + box["height"] * 0.45
+        if mobile:
+            # 手機：點 K 棒先選取，再按「這一天的詳情」才開明細板。
+            page.touchscreen.tap(x, y)
+            page.locator("#mobileCandleDetails").wait_for(state="visible")
+        else:
+            page.mouse.move(x, y)
+        tip = page.evaluate(TIP_STATE)
+        check(f"{tag}：指到 K 棒浮出當天明細，底色不透明", tip == "ok", tip)
+        if mobile:
+            page.locator("#mobileCandleDetails").click()
+        else:
+            page.mouse.click(x, y)
+        page.wait_for_function(PANEL_OPEN)
+        page.locator("#panelTitle").wait_for(state="visible")
+        check(f"{tag}：點 K 棒開當天的明細板", page.locator("#detailPanel").get_attribute("data-kind") == "candle"
+              and len(page.locator("#panelBody").inner_text().strip()) > 20, page.locator("#panelTitle").text_content())
+        page.mouse.click(4, 4)
+        page.wait_for_function(PANEL_CLOSED)
+        check(f"{tag}：點明細板以外的地方會收回", True)
+    step(f"{tag}：K 棒明細", candle)
+
+    def deep_layers() -> None:
+        page.locator("#lineUpper").scroll_into_view_if_needed()
+        page.locator("#lineUpper").click()
+        page.wait_for_function(PANEL_OPEN)
+        seen = []
+        for kind in ("method", "sources", "samples", "table", "news"):
+            # 從深入頁返回時，面板會記得「看詳細數字」原本是開著的；關著才需要點開。
+            if not page.evaluate("document.querySelector('#panelBody .more-detail').open"):
+                page.locator("#panelBody .more-detail > summary").click()
+            page.locator(f"#panelBody [data-deep='{kind}']").click()
+            page.wait_for_function("document.getElementById('panelPath').textContent.includes('深入')")
+            seen.append((kind, len(page.locator("#panelBody").inner_text().strip())))
+            page.locator("#panelBack").click()
+            page.wait_for_function("!document.getElementById('panelPath').textContent.includes('深入')")
+        check(f"{tag}：方法、來源、樣本、資料表、新聞五個深入頁都有內容且回得來", all(size > 20 for _, size in seen), seen)
+    step(f"{tag}：面板深入頁", deep_layers)
+    # 中途失敗也要把面板關掉，否則後面每一項都會被面板擋住而跟著失敗。
+    page.keyboard.press("Escape")
+    page.wait_for_function(PANEL_CLOSED)
 
     def screens() -> None:
         check(f"{tag}：籌碼選股有分頁", page.locator("#chipScreenTabs [role=tab]").count() >= 2)

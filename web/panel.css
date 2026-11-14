@@ -308,3 +308,60 @@
 .hm .rotation-dot { cursor: pointer; }
 .hm .rotation-dot.is-pinned { stroke: var(--ink); stroke-width: 2.5; }
 .hm .rotation-chart .chart-tip { pointer-events: none; }
+
+/* ================= 看盤桌：浮起的明細板（立體重設計 A 包第 2 片，2026-11-14） =================
+   點開的明細是第 2 層：指到 K 棒的當天明細、下鑽面板。底色不透明，可讀性不靠背景模糊。
+   開關行為與內容照舊，這裡只換外觀與浮起動態；陰影與圓角引用 bold.css 的深度變數。 */
+
+/* ---------- 指到 K 棒的當天明細 ---------- */
+body.hm .kc-tip {
+  gap: 2px; padding: 10px 14px; border: 0; border-radius: var(--r-float);
+  background: var(--float); box-shadow: var(--float-shadow);
+  transform: translateY(8px) scale(.96); transform-origin: 50% 100%;
+  transition: opacity 160ms var(--ease-out), transform 380ms var(--ease-depth);
+}
+body.hm .kc-tip.show { transform: none; }
+
+/* ---------- 下鑽面板 ---------- */
+body.hm .panel-backdrop { background: var(--scrim); }
+body.hm .detail-panel {
+  border: 0; border-radius: var(--r-float); background: var(--float); box-shadow: var(--float-shadow);
+  pointer-events: none;
+  transform: translate(-50%, calc(-50% + 20px)) scale(.96);
+  /* 收回時先淡出下沉，再隱藏 */
+  transition: opacity 180ms var(--ease-out), transform 420ms var(--ease-depth), visibility 0s linear 180ms;
+}
+body.hm .detail-panel.is-open {
+  pointer-events: auto; transform: translate(-50%, -50%);
+  transition: opacity 180ms var(--ease-out), transform 420ms var(--ease-depth), visibility 0s;
+}
+body.hm .panel-nav { background: var(--float); }
+body.hm .panel-body::-webkit-scrollbar-thumb { border-color: var(--float); }
+body.hm .data-table th:first-child,
+body.hm .data-table td:first-child { background: var(--float); }
+
+/* 面板上的鍵與槽：關閉、返回、更深入的入口、籌碼明細的分段切換 */
+body.hm :is(.panel-close, .panel-back, .deep-links button, .sample-list button) {
+  border: 0; border-radius: var(--r-key); background: var(--key); box-shadow: var(--key-shadow);
+  transition: transform var(--t-lift) var(--ease-depth), box-shadow var(--t-lift) var(--ease-depth), color 160ms var(--ease-out);
+}
+@media (hover: hover) {
+  body.hm :is(.panel-close, .panel-back, .deep-links button, .sample-list button):hover {
+    background: var(--key); color: var(--ink); transform: translateY(var(--key-lift)); box-shadow: var(--key-shadow-hover);
+  }
+}
+body.hm :is(.panel-close, .panel-back, .deep-links button, .sample-list button):active,
+body.hm .sample-list button[aria-pressed="true"] {
+  transform: translateY(var(--key-thick)); box-shadow: var(--key-shadow-press); transition-duration: var(--t-press);
+}
+body.hm .sample-list button[aria-pressed="true"] { color: var(--accent); }
+body.hm .chip-seg {
+  padding: 3px; gap: 2px; border: 0; border-radius: calc(var(--r-key) + 3px); background: var(--well); box-shadow: var(--well-shadow);
+}
+body.hm .chip-seg button { border-radius: var(--r-key); }
+body.hm .chip-seg button[aria-checked="true"],
+body.hm .chip-seg button[aria-checked="true"]:hover { background: var(--key); color: var(--ink); box-shadow: var(--key-shadow); }
+body.hm .detail-chart { border-radius: var(--r-key); background: var(--well); box-shadow: var(--well-shadow); }
+body.hm .table-scroll { border: 0; border-radius: var(--r-key); box-shadow: var(--well-shadow); }
+body.hm .ob-bar { border-radius: var(--r-key); }
+body.hm .plain-watch h4 { border-radius: var(--r-tag); }
