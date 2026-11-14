@@ -13,6 +13,8 @@ export const WEB_FILES = [
   "chart-menus.js",
   // 立體重設計 B 包（11-14）：資金地形的版面計算與畫面
   "terrain-layout.js", "terrain.js",
+  // 立體重設計 E（11-15）：資金浮雕的版面計算與畫面
+  "relief-layout.js", "relief.js",
 ];
 export const RETIRED = ["analysis-data.js", "chips-data.js", "dashboard-data.js", "detail-data.js", "plain-data.js", "market-data-local.js"];
 

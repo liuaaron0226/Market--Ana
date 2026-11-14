@@ -863,3 +863,28 @@ body.hm .chip-card .spark { display: block; grid-area: 1 / 2 / span 2; width: 10
   body.hm .chip-card .chip-value { font-size: 22px; }
   body.hm .chip-card .spark { height: 48px; }
 }
+
+/* ================= 看盤桌：資金浮雕（立體重設計 E，2026-11-15，樣品階段） =================
+   「籌碼與資金」六項近 20 天的立體圖，畫在 canvas 上（relief.js）；左邊的名稱與數字是一般的按鈕，位置由 relief.js 對到每條軌道的起點。
+   顏色從這裡的變數拿：--relief-bar 是平常的柱、--relief-deck 是槽的台面與槽壁。 */
+body.hm .chip-relief {
+  --relief-bar: color-mix(in srgb, var(--dim) 46%, var(--slab));
+  --relief-deck: color-mix(in srgb, var(--ink) 7%, var(--slab));
+  position: relative; margin-bottom: 12px; padding: 0; border-radius: var(--r-slab); background: var(--slab); box-shadow: var(--slab-shadow); overflow: hidden;
+}
+body.hm .chip-relief:empty { display: none; }
+body.hm .relief-canvas { display: block; width: 100%; cursor: pointer; }
+body.hm .relief-probe { position: absolute; width: 0; height: 0; overflow: hidden; }
+body.hm .relief-label {
+  position: absolute; display: grid; justify-items: end; gap: 1px; padding: 2px 4px; border: 0; background: none;
+  transform: translate(-100%, -62%); text-align: right; white-space: nowrap; cursor: pointer;
+}
+body.hm .relief-label span { color: var(--dim); font: 400 11px/1.2 var(--sans); }
+body.hm .relief-label b { color: var(--ink); font: 600 14px/1.2 var(--mono); }
+body.hm .relief-label.tone-up b { color: var(--up); }
+body.hm .relief-label.tone-down b { color: var(--down); }
+body.hm .relief-label:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; border-radius: var(--r-tag); }
+@media (min-width: 900px) {
+  body.hm .relief-label span { font-size: 12.5px; }
+  body.hm .relief-label b { font-size: 17px; }
+}
