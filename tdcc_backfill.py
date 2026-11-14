@@ -33,6 +33,7 @@ DEFAULT_SEED = ROOT / "seeds/tdcc-holders-history.json"
 PAUSE = 3.0
 RETRY_WAIT = 60.0
 EMPTY_RUN_LIMIT = 15
+REFRESH_EVERY = 100  # 同一個連線階段查太久官方會回 404（11-15 實跑 153 次後）；每查這麼多次就重新開一次表單頁
 HISTORY_SCHEMA = "tdcc-holders-history/v1"
 HISTORY_FIELDS = ("pct_1000", "holders_1000", "pct_400", "holders_400", "holders")
 
@@ -106,7 +107,8 @@ def _append(path: Path, rows: list[dict]) -> None:
 
 
 def backfill(codes: list[str], progress: Path = DEFAULT_PROGRESS, *, fetch: Callable, sleep: Callable = time.sleep,
-             log: Callable = print, skip_dates: set[str] | None = None, limit: int | None = None) -> dict:
+             log: Callable = print, skip_dates: set[str] | None = None, limit: int | None = None,
+             refresh_every: int = REFRESH_EVERY) -> dict:
     """fetch(None) 讀表單、fetch(欄位) 送查詢，都回（HTTP 狀態，頁面文字）。回報做了多少、為什麼停。"""
     report = {"status": "done", "fetched": 0, "missing": 0, "requests": 0}
 
@@ -132,10 +134,21 @@ def backfill(codes: list[str], progress: Path = DEFAULT_PROGRESS, *, fetch: Call
     todo = [(code, compact, iso) for compact, iso in weeks if iso not in skip for code in codes if (code, iso) not in done]
     report["remaining"] = len(todo)
     empties: list[dict] = []  # 查無資料先放著：後面有查到東西才算數，一長串都空就當成被擋
+    asked = 0  # 這個表單頁已經查了幾次
     for code, compact, iso in todo:
         if limit is not None and report["fetched"] + report["missing"] + len(empties) >= limit:
             report["status"] = "paused"
             break
+        if asked >= refresh_every:
+            sleep(PAUSE)
+            try:
+                form = open_form()
+            except (Refused, ValueError) as error:
+                return stopped(str(error))
+            except Exception as error:  # noqa: BLE001
+                return stopped(f"連線錯誤：{type(error).__name__}")
+            asked = 0
+        asked += 1
         retried = False
         while True:
             try:

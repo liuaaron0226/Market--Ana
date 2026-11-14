@@ -121,6 +121,16 @@ class BackfillTest(unittest.TestCase):
                          [("2330", "2026-11-06", 1534), ("2317", "2026-11-06", 1534),
                           ("2330", "2025-11-21", 1534), ("2317", "2025-11-21", 1534)])
 
+    def test_the_form_page_is_reopened_every_so_often_like_a_visitor_reloading(self) -> None:
+        # 11-15 實跑：同一個連線階段查了 153 次、約 9 分半後，官方回 HTTP 404；馬上重新開表單頁再查同一檔就正常。
+        # 所以每查一批就重新開一次表單頁；規矩不變——任何一次不是 200 還是立刻停。
+        site = FakeSite()
+        report = self.run_backfill(site, refresh_every=3)
+        self.assertEqual(report["status"], "done")
+        self.assertEqual([request and request[0] for request in site.requests], [None, "2330", "2317", "2330", None, "2317"])
+        self.assertEqual(site.requests[-1][2], "t5", "重新開頁之後用新頁面的權杖")
+        self.assertEqual(self.sleeps, [3.0] * 5, "重新開頁前也等一樣久")
+
     def test_a_second_run_only_asks_for_what_is_still_missing(self) -> None:
         self.run_backfill(FakeSite(), limit=3)
         self.assertEqual(len(self.rows()), 3)
