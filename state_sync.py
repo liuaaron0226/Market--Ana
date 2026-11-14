@@ -2,7 +2,10 @@
 
 - 每個工作集項目存成一個 gzip 物件（SQLite 單檔或目錄 tar），附 ``state/manifest.json``：SHA-256、大小、資料日。
 - 上傳以 SHA-256 內容定址的 immutable key 寫入新物件；全部成功才切換 manifest，中途失敗時舊 manifest 與其物件保持可還原。
-- 舊 manifest 既有的固定 object key 仍可還原；immutable 物件與失敗留下的暫存物件不自動刪除，遠端 GC／容量門須另行審核後啟用。
+- 舊 manifest 既有的固定 object key 仍可還原。
+- 清理（本人 2026-11-14 同意）：資料日前進時把上一份 manifest 另存為 ``state/manifest.previous.json``；
+  upload 成功後刪掉 ``state/`` 底下沒被目前或上一份 manifest 引用的物件（含失敗留下的暫存物件）。
+  判斷不出哪些在用就一個都不刪；清理失敗不影響上傳結果。
 - 還原逐一驗 SHA，全部通過才把暫存目錄換到目標位置；任一不符就丟出 StateIntegrityError，目標不動。
 - R2 用 S3 相容 API（SigV4，標準庫實作，不新增依賴）；本機測試用 DirectoryStore 以目錄模擬。
 """
@@ -25,12 +28,14 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from xml.etree import ElementTree
 from datetime import date, datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 PREFIX = "state/"
 MANIFEST = PREFIX + "manifest.json"
+PREVIOUS_MANIFEST = PREFIX + "manifest.previous.json"  # 上一個資料日的 manifest：出問題時可退回，也是清理時要保留的一代
 # B1（11-09，協調窗追加）：個股與 0050 的 3Y／5Y 含息對照要 5 年日K（60 個月約 1,214 個交易日，留 1,270 含緩衝）。
 DAILY_KEEP_DAYS = 1270
 LISTED_KEEP_DAYS = DAILY_KEEP_DAYS  # 舊名保留
@@ -152,8 +157,14 @@ class DirectoryStore:
     def rename(self, src: str, dst: str) -> None:
         os.replace(self._path(src), self._path(dst))
 
-    def keys(self) -> list[str]:
-        return sorted(p.relative_to(self.root).as_posix() for p in self.root.rglob("*") if p.is_file())
+    def keys(self, prefix: str = "") -> list[str]:
+        if not self.root.exists():
+            return []
+        return sorted(key for key in (p.relative_to(self.root).as_posix() for p in self.root.rglob("*") if p.is_file())
+                      if key.startswith(prefix))
+
+    def delete(self, key: str) -> None:
+        self._path(key).unlink()
 
 
 class R2Store:
@@ -240,6 +251,33 @@ class R2Store:
         if status != 200:
             raise OSError(f"R2 COPY {src} → {dst} HTTP {status}: {body[:200]!r}")
         self._request("DELETE", src)
+
+    def keys(self, prefix: str = "") -> list[str]:
+        """ListObjectsV2，逐頁取完。"""
+        found: list[str] = []
+        token = ""
+        while True:
+            params = {"list-type": "2", "prefix": prefix, **({"continuation-token": token} if token else {})}
+            query = "&".join(f"{name}={urllib.parse.quote(value, safe='')}" for name, value in sorted(params.items()))
+            status, body = self._request("GET", "", query=query)
+            if status != 200:
+                raise OSError(f"R2 LIST {prefix} → HTTP {status}: {body[:200]!r}")
+            page = ElementTree.fromstring(body)
+            fields = {}
+            for element in page.iter():
+                name = element.tag.rsplit("}", 1)[-1]
+                if name == "Key":
+                    found.append(element.text or "")
+                elif name in ("IsTruncated", "NextContinuationToken"):
+                    fields[name] = element.text or ""
+            token = fields.get("NextContinuationToken", "")
+            if fields.get("IsTruncated") != "true" or not token:
+                return sorted(found)
+
+    def delete(self, key: str) -> None:
+        status, body = self._request("DELETE", key)
+        if status not in (200, 204):
+            raise OSError(f"R2 DELETE {key} → HTTP {status}: {body[:200]!r}")
 
 
 # ---- 打包 ----
@@ -416,16 +454,39 @@ def upload(root: Path, store, items=WORKING_SET, *, data_date: str, cursor_domai
             _put_immutable(store, immutable_key, data, digest)
             manifest["objects"].append({"path": item.path, "kind": item.kind, "key": immutable_key,
                                         "sha256": digest, "bytes": len(data)})
+    if existing_manifest is not None and cursor_domain == "market" and existing_market < data_date:
+        # 資料日前進了：原本那份就是「上一個資料日」。同日重傳或水位線上傳不輪替，上一份維持前一個資料日。
+        store.put(PREVIOUS_MANIFEST, json.dumps(existing_manifest, ensure_ascii=False, indent=1).encode("utf-8"))
     store.put(MANIFEST + ".next", json.dumps(manifest, ensure_ascii=False, indent=1).encode("utf-8"))
     store.rename(MANIFEST + ".next", MANIFEST)
     return manifest
 
 
-def restore(target: Path, store) -> dict:
-    """下載並驗 SHA；全部通過才換到 target。任何物件缺漏或不符，target 不動。"""
-    raw = store.get(MANIFEST)
+def collect_garbage(store) -> dict:
+    """刪掉 state/ 底下沒被目前或上一份 manifest 引用的物件；只動 state/ 前綴。
+
+    沒有目前的 manifest 就不動；任一份 manifest 讀不懂會丟 StateIntegrityError，同樣一個都不刪。
+    """
+    current = _remote_manifest(store)
+    if current is None:
+        return {"deleted": 0, "kept": 0}
+    previous_raw = store.get(PREVIOUS_MANIFEST)
+    previous = _decode_manifest(previous_raw) if previous_raw is not None else None
+    in_use = {MANIFEST, PREVIOUS_MANIFEST} | {entry["key"] for manifest in (current, previous) if manifest
+                                             for entry in manifest["objects"] if entry.get("key")}
+    keys = [key for key in store.keys(PREFIX) if key.startswith(PREFIX)]
+    garbage = [key for key in keys if key not in in_use]
+    for key in garbage:
+        store.delete(key)
+    return {"deleted": len(garbage), "kept": len(keys) - len(garbage)}
+
+
+def restore(target: Path, store, *, previous: bool = False) -> dict:
+    """下載並驗 SHA；全部通過才換到 target。任何物件缺漏或不符，target 不動。previous＝還原上一個資料日。"""
+    manifest_key = PREVIOUS_MANIFEST if previous else MANIFEST
+    raw = store.get(manifest_key)
     if raw is None:
-        raise StateIntegrityError("找不到 state/manifest.json")
+        raise StateIntegrityError(f"找不到 {manifest_key}")
     manifest = _decode_manifest(raw)
     target.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=target) as scratch_dir:
@@ -491,6 +552,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--store-dir", type=Path, help="以本機目錄模擬 R2（不給就用環境變數連 R2）")
     parser.add_argument("--target", type=Path, default=ROOT, help="restore 目標根目錄")
     parser.add_argument("--confirm", action="store_true", help="init 真的上傳（否則只報錯提示）")
+    parser.add_argument("--previous", action="store_true", help="restore 改還原上一個資料日（manifest.previous.json）")
     args = parser.parse_args(argv)
     if args.command == "plan":
         with tempfile.TemporaryDirectory() as scratch:
@@ -503,7 +565,7 @@ def main(argv: list[str] | None = None) -> int:
             "objects": sizes,
             "total_gz_mb": total_gz_mb,
             "immutable_space_estimate": f"每次成功 upload 最多新增約 {total_gz_mb} MB；未變物件依 SHA 重用",
-            "remote_gc": "disabled；須先審核保留窗、費用與可還原性後另行啟用",
+            "remote_gc": "upload 成功後清理：只留目前與上一個資料日的 manifest 引用的物件",
         }, ensure_ascii=False, indent=1))
         return 0
     if args.command in ("upload", "init") and not args.data_date:
@@ -523,9 +585,14 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "upload":
         manifest = upload(ROOT, store, data_date=args.data_date, cursor_domain=args.cursor_domain)
     else:
-        manifest = restore(args.target, store)
-    print(json.dumps({"data_date": manifest["data_date"], "cursors": manifest.get("cursors"),
-                      "objects": len(manifest["objects"])}, ensure_ascii=False))
+        manifest = restore(args.target, store, previous=args.previous)
+    report = {"data_date": manifest["data_date"], "cursors": manifest.get("cursors"), "objects": len(manifest["objects"])}
+    if args.command == "upload":
+        try:  # 上傳已經成功；清不成只記一筆，下次上傳再清
+            report["cleanup"] = collect_garbage(store)
+        except Exception as error:  # noqa: BLE001
+            report["cleanup"] = {"error": type(error).__name__}
+    print(json.dumps(report, ensure_ascii=False))
     return 0
 
 

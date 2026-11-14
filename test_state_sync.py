@@ -257,6 +257,113 @@ class StateSyncTest(unittest.TestCase):
             ss.restore(self.restore, store)
         self.assertFalse((self.restore / "data/stock-history/stock-history.sqlite").exists())
 
+    # ---- 本人 2026-11-14「可以，留兩次」：只留目前與上一個資料日用到的物件，其餘刪除 ----
+
+    def publish(self, store, day: str) -> dict:
+        """模擬一天的發布：內容每天不同，上傳後清理。"""
+        (self.local / "data/liquid-universe/2026-11-06.json").write_text(json.dumps({"day": day}), encoding="utf-8")
+        ss.upload(self.local, store, self.items, data_date=day)
+        return ss.collect_garbage(store)
+
+    def referenced(self, store, key: str) -> set:
+        return {entry["key"] for entry in json.loads(store.get(key))["objects"] if entry.get("key")}
+
+    def test_garbage_collection_keeps_only_what_today_and_the_previous_day_use(self) -> None:
+        store = ss.DirectoryStore(self.bucket)
+        self.assertEqual(self.publish(store, "2026-11-04")["deleted"], 0)
+        first = self.referenced(store, ss.MANIFEST)
+        self.assertEqual(self.publish(store, "2026-11-05")["deleted"], 0)   # 第二天：前一天的還留著
+        report = self.publish(store, "2026-11-06")
+        today, yesterday = self.referenced(store, ss.MANIFEST), self.referenced(store, ss.PREVIOUS_MANIFEST)
+        self.assertEqual(set(store.keys()), {ss.MANIFEST, ss.PREVIOUS_MANIFEST} | today | yesterday)
+        self.assertEqual(report["deleted"], len(first - today - yesterday))
+        self.assertGreater(report["deleted"], 0)
+        self.assertEqual(ss.restore(self.restore, store)["data_date"], "2026-11-06")
+
+    def test_the_previous_day_can_still_be_restored_after_cleanup(self) -> None:
+        store = ss.DirectoryStore(self.bucket)
+        for day in ("2026-11-04", "2026-11-05", "2026-11-06"):
+            self.publish(store, day)
+        restored = ss.restore(self.restore, store, previous=True)
+        self.assertEqual(restored["data_date"], "2026-11-05")
+        self.assertEqual(json.loads((self.restore / "data/liquid-universe/2026-11-06.json").read_text(encoding="utf-8")),
+                         {"day": "2026-11-05"})
+
+    def test_a_second_upload_for_the_same_day_does_not_push_the_previous_day_out(self) -> None:
+        # 同一資料日重傳、或水位線另外上傳，都不算「新的一天」；上一份仍是前一個資料日。
+        store = ss.DirectoryStore(self.bucket)
+        self.publish(store, "2026-11-05")
+        self.publish(store, "2026-11-06")
+        (self.local / "data/liquid-universe/2026-11-06.json").write_text('{"day": "again"}', encoding="utf-8")
+        ss.upload(self.local, store, self.items, data_date="2026-11-06")
+        ss.collect_garbage(store)
+        self.assertEqual(json.loads(store.get(ss.PREVIOUS_MANIFEST))["data_date"], "2026-11-05")
+        self.assertEqual(ss.restore(self.restore, store, previous=True)["data_date"], "2026-11-05")
+
+    def test_cleanup_only_touches_the_state_prefix_and_removes_abandoned_uploads(self) -> None:
+        store = ss.DirectoryStore(self.bucket)
+        self.publish(store, "2026-11-05")
+        store.put("other/keep-me.json", b"{}")
+        store.put(ss.PREFIX + "data__liquid-universe.tar.gz.deadbeef.next", b"half uploaded")
+        report = ss.collect_garbage(store)
+        self.assertEqual(report["deleted"], 1)
+        self.assertIn("other/keep-me.json", store.keys())
+        self.assertNotIn(ss.PREFIX + "data__liquid-universe.tar.gz.deadbeef.next", store.keys())
+
+    def test_cleanup_deletes_nothing_when_it_cannot_tell_what_is_in_use(self) -> None:
+        store = ss.DirectoryStore(self.bucket)
+        self.assertEqual(ss.collect_garbage(store)["deleted"], 0)           # 還沒有任何 manifest
+        self.publish(store, "2026-11-05")
+        self.publish(store, "2026-11-06")
+        store.put(ss.PREFIX + "stray", b"x")
+        store.put(ss.PREVIOUS_MANIFEST, b"{broken")
+        before = store.keys()
+        with self.assertRaises(ss.StateIntegrityError):
+            ss.collect_garbage(store)
+        self.assertEqual(store.keys(), before)
+
+    def test_cli_upload_cleans_up_and_a_cleanup_failure_does_not_fail_the_upload(self) -> None:
+        import contextlib
+        import io
+        args = ["upload", "--data-date", "2026-11-06", "--store-dir", str(self.bucket)]
+        with unittest.mock.patch.object(ss, "ROOT", self.local), \
+                unittest.mock.patch.object(ss, "WORKING_SET", tuple(self.items)):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(ss.main(args), 0)
+            self.assertEqual(json.loads(out.getvalue())["cleanup"], {"deleted": 0, "kept": 4})
+
+            def broken(_store):
+                raise OSError("R2 list failed")
+            out = io.StringIO()
+            with unittest.mock.patch.object(ss, "collect_garbage", broken), contextlib.redirect_stdout(out):
+                self.assertEqual(ss.main(args), 0)
+            self.assertEqual(json.loads(out.getvalue())["cleanup"], {"error": "OSError"})
+
+    def test_r2_lists_every_page_under_a_prefix_and_deletes_single_objects(self) -> None:
+        store = ss.R2Store("acct", "bucket", "a" * 32, "s" * 64)
+        calls = []
+        pages = {
+            "": b"<ListBucketResult><IsTruncated>true</IsTruncated><Contents><Key>state/a b.gz</Key></Contents>"
+                b"<NextContinuationToken>tok/1+=</NextContinuationToken></ListBucketResult>",
+            "tok/1+=": b"<ListBucketResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><IsTruncated>false</IsTruncated>"
+                       b"<Contents><Key>state/manifest.json</Key></Contents></ListBucketResult>",
+        }
+
+        def request(method, key, body=b"", headers=None, query=""):
+            calls.append((method, key, query))
+            if method == "DELETE":
+                return (204, b"") if key == "state/a b.gz" else (403, b"denied")
+            token = dict(pair.split("=", 1) for pair in query.split("&")).get("continuation-token", "")
+            return 200, pages[__import__("urllib.parse").parse.unquote(token)]
+        with unittest.mock.patch.object(store, "_request", request):
+            self.assertEqual(store.keys("state/"), ["state/a b.gz", "state/manifest.json"])
+            store.delete("state/a b.gz")
+            with self.assertRaises(OSError):
+                store.delete("state/other")
+        self.assertEqual(calls[0], ("GET", "", "list-type=2&prefix=state%2F"))
+        self.assertEqual(calls[1], ("GET", "", "continuation-token=tok%2F1%2B%3D&list-type=2&prefix=state%2F"))
+
     def test_trim_listed_history_keeps_recent_days_and_source_days(self) -> None:
         trimmed = Path(self.tmp.name) / "trim.sqlite"
         summary = ss.trim_daily_db(self.db, trimmed, keep_days=2)
