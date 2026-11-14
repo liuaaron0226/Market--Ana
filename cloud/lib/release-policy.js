@@ -48,6 +48,9 @@ export function releasePolicy(env = {}) {
       level_advice: strategiesEnabled,
       ai_digest: strategiesEnabled,
       ai_stock_advice: strategiesEnabled,
+      // 預測帳本（2026-11-15 規格）：獨立的開關，不掛在策略總開關或單獨開啟名單底下。
+      // 只認一字不差的 "owner"：打開後也只有站主讀得到；讓其他使用者看到的設定不在本規格內。
+      forecast_ledger_v1: env?.MARKET_ANA_FORECAST_LEDGER === "owner",
     },
   };
 }

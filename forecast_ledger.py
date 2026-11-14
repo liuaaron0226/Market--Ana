@@ -658,13 +658,41 @@ def _rates(pairs: list[tuple[dict[str, Any], dict[str, Any]]]) -> dict[str, Any]
     }
 
 
-def summarize(root: Path | str, index_daily: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+# 本人定案：正式結論 1 日滿 3 個月、5 日滿 6 個月、20 日滿 1 年；之前只標「累積中」。
+VERDICT_MONTHS = {1: 3, 5: 6, 20: 12}
+
+
+def _add_months(day: date, months: int) -> date:
+    month_index = day.month - 1 + months
+    year, month = day.year + month_index // 12, month_index % 12 + 1
+    for last in (31, 30, 29, 28):
+        try:
+            return date(year, month, min(day.day, last))
+        except ValueError:
+            continue
+    raise ValueError(day)
+
+
+def _verdict(run_mode: str, horizon: int, official_since: str | None, as_of: str | None) -> str:
+    """「試跑」不下結論；正式紀錄在正式起算日之後滿規定時間才「可下結論」，之前一律「累積中」。"""
+    if run_mode != "official":
+        return "試跑"
+    if not official_since or not as_of:
+        return "累積中"
+    due = _add_months(date.fromisoformat(official_since), VERDICT_MONTHS[horizon])
+    return "可下結論" if date.fromisoformat(as_of) >= due else "累積中"
+
+
+def summarize(root: Path | str, index_daily: Sequence[Mapping[str, Any]], *,
+              official_since: str | None = None) -> dict[str, Any]:
     """依（試跑／正式、版本、期間、方法版本、輸入版本）分組；試跑與正式各自成組，不混算。
 
     還沒對帳的格子依截至目前的指數日 K 分成「還沒到期」與「無法判定」，兩者都不算猜錯。
+    每組另標 ``verdict``：試跑／累積中／可下結論（只是顯示，不觸發任何其他功能）。
     """
     ledger = read_ledger(root)
     rows = _clean_daily(index_daily)
+    as_of = rows[-1]["date"] if rows else None
     position = {row["date"]: index for index, row in enumerate(rows)}
     reconciled_by_cell = {(row["forecast_id"], row["horizon"]): row for row in ledger["reconciliations"]}
     series: dict[tuple[str, str, str, str], dict[str, Any]] = {}
@@ -695,8 +723,68 @@ def summarize(root: Path | str, index_daily: Sequence[Mapping[str, Any]]) -> dic
                 "method_version": method_version, "input_version": input_version,
                 **_rates(reconciled), **open_cells, "misses": bucket["misses"],
                 "pullback": _rates(pullback),
+                "verdict": _verdict(run_mode, horizon, official_since, as_of),
             })
-    return {"groups": groups, "conflicts": len(ledger["conflicts"])}
+    return {"as_of": as_of, "official_since": official_since, "groups": groups, "conflicts": len(ledger["conflicts"])}
+
+
+# ---- 發布到網站讀的資料庫 ----
+
+# 給網站顯示的欄位；完整輸入（含方法稿）與模型的重試細節只留在原件。
+_PUBLIC_FIELDS = ("forecast_id", "base_date", "edition", "method_version", "input_version", "model", "run_mode",
+                  "kind", "locked_at", "deadline", "data_cutoffs", "regime", "cells", "miss_reason", "miss_detail",
+                  "record_sha256")
+
+
+def _sql_literal(value: Any) -> str:
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, (int, float)):
+        return repr(value)
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def _insert(table: str, columns: dict[str, Any], key: str) -> str:
+    names = ",".join(columns)
+    values = ",".join(_sql_literal(value) for value in columns.values())
+    return f"INSERT INTO {table} ({names}) VALUES ({values}) ON CONFLICT({key}) DO NOTHING;"
+
+
+def _json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def d1_sql(root: Path | str, index_daily: Sequence[Mapping[str, Any]], *, published_at: str,
+           official_since: str | None = None) -> str:
+    """把帳本整理成給網站資料庫的指令檔。只新增：同一筆再發布一次不會多一筆、也不會改內容。
+
+    不包 BEGIN／COMMIT：部署工具（wrangler d1 execute）自己會包交易。
+    """
+    ledger = read_ledger(root)
+    statements = []
+    for record in ledger["forecasts"]:
+        public = {key: record[key] for key in _PUBLIC_FIELDS if key in record}
+        statements.append(_insert("forecast_records", {
+            "forecast_id": record["forecast_id"], "base_date": record["base_date"], "edition": record["edition"],
+            "method_version": record["method_version"], "input_version": record["input_version"],
+            "run_mode": record["run_mode"], "kind": record["kind"], "record_json": _json(public),
+            "record_sha256": record["record_sha256"], "published_at": published_at,
+        }, "forecast_id"))
+    for row in ledger["reconciliations"]:
+        statements.append(_insert("forecast_reconciliations", {
+            "forecast_id": row["forecast_id"], "horizon": row["horizon"], "expiry_date": row["expiry_date"],
+            "actual_zone": row["actual_zone"], "record_json": _json(row), "record_sha256": row["record_sha256"],
+            "published_at": published_at,
+        }, "forecast_id,horizon"))
+    summary = summarize(root, index_daily, official_since=official_since)
+    if summary["as_of"]:
+        statements.append(_insert("forecast_summaries", {
+            "summary_sha256": _sha(summary), "as_of": summary["as_of"], "summary_json": _json(summary),
+            "published_at": published_at,
+        }, "summary_sha256"))
+    return "\n".join(statements) + "\n"
 
 
 # ---- 讀帳本 ----

@@ -5,6 +5,7 @@
 """
 import hashlib
 import json
+import sqlite3
 import tempfile
 import unittest
 from datetime import date, datetime, timedelta, timezone
@@ -677,6 +678,98 @@ class SummaryTests(LedgerTestCase):
         fl.reconcile(self.root, through("2026-10-01"))
         fl.reconcile(self.root, through("2026-10-01", changes={"2026-10-01": {"close": 97.0}}))
         self.assertEqual(fl.summarize(self.root, through("2026-10-08"))["conflicts"], 1)
+
+
+class VerdictStatusTests(LedgerTestCase):
+    def test_groups_say_accumulating_until_each_horizon_has_run_long_enough(self):
+        self.write(official_since=BASE_A)
+        trial = day_input()
+        trial["method_text"] = METHOD_TEXT.replace("版本：0.2", "版本：0.1")
+        self.write(trial)
+
+        def statuses(as_of_rows):
+            summary = fl.summarize(self.root, as_of_rows, official_since=BASE_A)
+            return {(g["run_mode"], g["horizon"]): g["verdict"] for g in summary["groups"]}
+
+        # 正式起算 09/30：一日滿三個月是 12/30、五日滿六個月是 2027-03-30、二十日滿一年是 2027-09-30
+        early = statuses(through("2026-10-08"))
+        self.assertEqual(early[("official", 1)], "累積中")
+        self.assertEqual(early[("trial", 1)], "試跑")
+
+        just_before = statuses(through("2026-10-08") + [bar("2026-12-29", 93, 94, 92, 93)])
+        self.assertEqual(just_before[("official", 1)], "累積中")
+        on_the_day = statuses(through("2026-10-08") + [bar("2026-12-30", 93, 94, 92, 93)])
+        self.assertEqual([on_the_day[("official", h)] for h in (1, 5, 20)], ["可下結論", "累積中", "累積中"])
+        later = statuses(through("2026-10-08") + [bar("2027-09-30", 93, 94, 92, 93)])
+        self.assertEqual([later[("official", h)] for h in (1, 5, 20)], ["可下結論", "可下結論", "可下結論"])
+        self.assertEqual(later[("trial", 20)], "試跑")
+
+    def test_without_an_official_start_every_official_group_is_accumulating(self):
+        self.write(official_since=BASE_A)
+        # 一年多以後也一樣：沒有寫下正式起算日，就不會出現結論
+        summary = fl.summarize(self.root, through("2026-10-08") + [bar("2027-12-31", 93, 94, 92, 93)])
+        self.assertEqual({g["verdict"] for g in summary["groups"]}, {"累積中"})
+
+
+MIGRATION = Path(__file__).resolve().parent / "cloud" / "migrations" / "0010_forecast_ledger.sql"
+
+
+class PublishToDatabaseTests(LedgerTestCase):
+    def database(self):
+        connection = sqlite3.connect(":memory:")
+        connection.executescript(MIGRATION.read_text(encoding="utf-8"))
+        return connection
+
+    def published(self):
+        self.write(official_since=BASE_A)
+        stale = {"index": "2026-10-01", "institutional": "2026-10-01", "futures": "2026-09-30"}
+        self.write(day_input(through("2026-10-01"), base_date="2026-10-01", cutoffs=stale),
+                   now=clock(at("2026-10-02", 0, 1)), official_since=BASE_A)
+        fl.reconcile(self.root, through("2026-10-08"))
+        return fl.d1_sql(self.root, through("2026-10-08"), published_at="2026-10-08T18:00:00+08:00")
+
+    def test_publishing_twice_keeps_one_row_per_record_with_the_original_hash(self):
+        sql = self.published()
+        self.assertNotRegex(sql, r"(?im)^\s*(BEGIN|COMMIT)\s*;")  # 部署工具自己包交易
+        db = self.database()
+        db.executescript(sql)
+        first = db.execute("SELECT forecast_id, kind, record_sha256, record_json FROM forecast_records ORDER BY forecast_id").fetchall()
+        db.executescript(sql)
+        again = db.execute("SELECT forecast_id, kind, record_sha256, record_json FROM forecast_records ORDER BY forecast_id").fetchall()
+        self.assertEqual(first, again)
+        self.assertEqual([row[1] for row in first], ["forecast", "miss"])
+        ledger = {r["forecast_id"]: r for r in fl.read_ledger(self.root)["forecasts"]}
+        for forecast_id, _, sha, _ in first:
+            self.assertEqual(sha, ledger[forecast_id]["record_sha256"])
+        self.assertEqual(db.execute("SELECT COUNT(*) FROM forecast_reconciliations").fetchone(), (2,))
+        self.assertEqual(db.execute("SELECT COUNT(*) FROM forecast_summaries").fetchone(), (1,))
+
+    def test_published_rows_carry_display_fields_but_not_the_method_text_or_model_input(self):
+        db = self.database()
+        db.executescript(self.published())
+        record = json.loads(db.execute("SELECT record_json FROM forecast_records WHERE kind = 'forecast'").fetchone()[0])
+        self.assertNotIn("input", record)
+        self.assertNotIn("方法內容", json.dumps(record, ensure_ascii=False))
+        self.assertEqual(record["cells"]["1"]["strong_line"], {"id": "ma5", "name": "五日線", "value": 97.6})
+        self.assertEqual(record["cells"]["1"]["reason"], "站回均線之上偏強【資料：五日線 97.6 點】")
+        self.assertEqual((record["run_mode"], record["regime"], record["data_cutoffs"]["futures"]),
+                         ("official", "多頭中的回檔", BASE_A))
+        summary = json.loads(db.execute("SELECT summary_json FROM forecast_summaries").fetchone()[0])
+        self.assertEqual(summary["as_of"], "2026-10-08")
+
+    def test_database_refuses_updates_and_deletes(self):
+        db = self.database()
+        db.executescript(self.published())
+        for statement in ("UPDATE forecast_records SET kind = 'miss'",
+                          "DELETE FROM forecast_records",
+                          "UPDATE forecast_reconciliations SET actual_zone = 'below'",
+                          "DELETE FROM forecast_reconciliations",
+                          "UPDATE forecast_summaries SET summary_json = '{}'",
+                          "DELETE FROM forecast_summaries"):
+            with self.subTest(statement):
+                with self.assertRaises(sqlite3.DatabaseError):
+                    db.execute(statement)
+        self.assertEqual(db.execute("SELECT COUNT(*) FROM forecast_records").fetchone(), (2,))
 
 
 if __name__ == "__main__":
