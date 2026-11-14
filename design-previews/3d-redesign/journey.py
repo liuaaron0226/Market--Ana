@@ -72,26 +72,21 @@ TIP_STATE = """() => {
 }"""
 
 
-CATS = {"chips": "籌碼與資金", "screens": "籌碼選股", "rotation": "產業資金流向", "core": "長期核心持有"}
+CATS = dict(zip(shoot.HOME_CATS, ("籌碼與資金", "籌碼選股", "產業資金流向", "長期核心持有")))
+open_cat = shoot.open_cat
 # 四類各自的內容區塊目前看不看得到（收起來的不算，Tab 也走不到）。
 CATS_VISIBLE = """() => Object.fromEntries([...document.querySelectorAll('[data-cat-panel]')].map(e => {
   const style = getComputedStyle(e), box = e.getBoundingClientRect();
   return [e.dataset.catPanel, style.display !== 'none' && style.visibility !== 'hidden' && box.height > 40];
 }))"""
-# 圖是照容器寬度畫的；收起來的時候如果量到 0 會用預設寬度畫，展開後就會太寬或太窄。
+# 圖是照容器寬度畫的；收起來的時候如果量到 0 會改用預設的 640 畫，展開後座標就不合。
+# 樣式會把圖縮放到容器寬，所以要比的是畫的時候用的寬度（viewBox），不是畫面上的寬度。
 CHART_FITS = """selector => {
   const host = document.querySelector(selector), svg = host.querySelector('svg');
-  return svg ? Math.abs(svg.getBoundingClientRect().width - host.clientWidth) <= 2 : false;
+  if (!svg) return 'no svg';
+  const drawn = svg.viewBox.baseVal.width, want = Math.max(280, Math.round(host.clientWidth));
+  return Math.abs(drawn - want) <= 2 ? 'ok' : `drawn ${drawn} vs container ${want}`;
 }"""
-
-
-def open_cat(page: Page, cat: str) -> None:
-    """展開首頁的一類；已經開著就不動。"""
-    button = page.locator(f"#homeCats button[data-cat='{cat}']")
-    button.scroll_into_view_if_needed()
-    if button.get_attribute("aria-expanded") != "true":
-        button.click()
-    page.wait_for_function("cat => document.querySelector(`#homeCats button[data-cat='${cat}']`).getAttribute('aria-expanded') === 'true'", arg=cat)
 
 
 def open_panel(page: Page, tag: str, selector: str, title_part: str) -> None:
@@ -140,6 +135,11 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
         check(f"{tag}：再點同一顆分類鍵收回", not any(shown.values()), shown)
         names = page.locator("#homeCats button").all_inner_texts()
         check(f"{tag}：四顆分類鍵的名稱", [name.strip() for name in names] == list(CATS.values()), names)
+        open_cat(page, "chips")
+        page.reload(wait_until="domcontentloaded")
+        shoot.ready_home(page)
+        shown = page.evaluate(CATS_VISIBLE)
+        check(f"{tag}：展開後重新整理，回到四類都收著", len(shown) == 4 and not any(shown.values()), shown)
     step(f"{tag}：首頁分類收合", folded)
 
     def periods() -> None:
@@ -235,7 +235,8 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
 
     def rotation() -> None:
         open_cat(page, "rotation")
-        check(f"{tag}：產業資金流向的圖照容器寬度畫", page.evaluate(CHART_FITS, "#rotationChart"))
+        fits = page.evaluate(CHART_FITS, "#rotationChart")
+        check(f"{tag}：產業資金流向的圖照容器寬度畫", fits == "ok", fits)
         check(f"{tag}：產業資金流向顯示資料日", "資料日" in page.locator("#rotationMeta").inner_text())
         check(f"{tag}：四種資金狀態圖例", page.locator("#rotationLegend > li").count() == 4)
         check(f"{tag}：象限圖有產業點", page.locator("#rotationChart circle").count() >= 10, page.locator("#rotationChart circle").count())
@@ -249,7 +250,8 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
 
     def core() -> None:
         open_cat(page, "core")
-        check(f"{tag}：長期核心持有的走勢圖照容器寬度畫", page.evaluate(CHART_FITS, "#coreChart"))
+        fits = page.evaluate(CHART_FITS, "#coreChart")
+        check(f"{tag}：長期核心持有的走勢圖照容器寬度畫", fits == "ok", fits)
         check(f"{tag}：長期核心持有有卡片", page.locator("#coreCards > *").count() >= 2)
         page.locator("#corePeriodSelect").select_option("1y")
         page.wait_for_timeout(400)
@@ -277,7 +279,7 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
               box["x"] >= 0 and box["y"] >= 0 and box["x"] + box["width"] <= view["width"] + 1 and box["y"] + box["height"] <= view["height"] + 1, box)
         page.keyboard.press("Escape")
         page.locator("#stockSearchInput").wait_for(state="hidden")
-        check(f"{tag}：按 Esc 收回搜尋面板", True)
+        check(f"{tag}：按 Esc 收回搜尋面板", not page.evaluate("document.getElementById('stockSearchDialog').open"))
     step(f"{tag}：右上角圖示鍵", tools)
 
     def search() -> None:

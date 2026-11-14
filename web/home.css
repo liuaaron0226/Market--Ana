@@ -400,12 +400,10 @@ body.hm .app-shell { padding-top: 24px; }
 
 /* ---------- 第 1 層：三塊板 ---------- */
 body.hm .market-header,
-body.hm .hm-search,
 body.hm .chart-workspace {
   border: 0; border-radius: var(--r-slab); background: var(--slab); box-shadow: var(--slab-shadow);
 }
 body.hm .market-header { padding: 28px 32px; }
-body.hm .hm-search { margin-top: 20px; padding: 18px 24px 18px 32px; }
 body.hm .workspace { padding-top: 20px; }
 body.hm .chart-workspace { padding: 4px 32px 28px; border-bottom: 0 !important; }
 body.hm .ai-digest-card { margin-top: 20px; }
@@ -548,7 +546,6 @@ body.hm #mainChart canvas { border-radius: var(--r-key) !important; }
 @media (max-width: 860px) {
   body.hm .app-shell { padding: 12px 12px 64px; }
   body.hm .market-header { padding: 20px 16px; }
-  body.hm .hm-search { margin-top: 12px; padding: 16px; }
   body.hm .service-note { margin-top: 12px; }
   body.hm .ai-digest-card { margin-top: 12px; }
   body.hm .workspace { padding-top: 12px; }
@@ -667,32 +664,23 @@ body.hm .hm-cats button[aria-expanded="true"] {
   background: var(--key); color: var(--ink); font-weight: 700; box-shadow: var(--key-shadow);
 }
 
-/* 收起來的一類：不佔版面、看不到、Tab 走不到，但保留原本的寬度。
-   不用 display: none，是因為裡面的圖是照容器寬度畫的，量到 0 會畫錯。 */
-body.hm .workspace { position: relative; }
-body.hm .workspace:not([data-open-cat="chips"]) [data-cat-panel="chips"],
-body.hm .workspace:not([data-open-cat="screens"]) [data-cat-panel="screens"],
-body.hm .workspace:not([data-open-cat="rotation"]) [data-cat-panel="rotation"],
-body.hm .workspace:not([data-open-cat="core"]) [data-cat-panel="core"] {
-  position: absolute; top: 0; left: 0; right: 0; height: 0; margin: 0; padding-block: 0;
-  overflow: hidden; visibility: hidden; box-shadow: none;
-}
-body.hm .workspace[data-open-cat="chips"] [data-cat-panel="chips"],
-body.hm .workspace[data-open-cat="screens"] [data-cat-panel="screens"],
-body.hm .workspace[data-open-cat="rotation"] [data-cat-panel="rotation"],
-body.hm .workspace[data-open-cat="core"] [data-cat-panel="core"] { animation: cat-rise 380ms var(--ease-depth); }
-@keyframes cat-rise {
-  from { opacity: 0; transform: translateY(12px); }
-}
-/* 區塊標題和分類鍵同名，畫面上不再重複，留給螢幕閱讀器 */
-body.hm #chipsTitle,
-body.hm #exploreTitle {
-  position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
-}
+/* 四類的大標題（「籌碼與資金」「選股看板」）改由分類鍵承擔，在 minimal.html 標成只給螢幕閱讀器。 */
 body.hm .chips { padding-top: 20px; }
 body.hm .hm-explore { padding-top: 0; }
 body.hm .market-screens .screen-block,
 body.hm .market-screens .screen-block:first-child { margin-top: 20px; }
+/* 收起來的一類（沒有 data-open）：不佔版面、看不到、Tab 走不到，但保留原本的寬度。
+   不用 display: none，是因為裡面的圖是照容器寬度畫的，量到 0 會畫錯。
+   這條要排在上面的間距之後，收起來時的 margin 才會歸零。 */
+body.hm .workspace { position: relative; }
+body.hm .workspace [data-cat-panel]:not([data-open]) {
+  position: absolute; top: 0; left: 0; right: 0; height: 0; margin: 0; padding-block: 0;
+  overflow: hidden; visibility: hidden; box-shadow: none;
+}
+body.hm .workspace [data-cat-panel][data-open] { animation: cat-rise 380ms var(--ease-depth); }
+@keyframes cat-rise {
+  from { opacity: 0; transform: translateY(12px); }
+}
 
 /* ---------- 搜尋面板：第 2 層的浮板，出現在畫面上方（手機鍵盤彈出時結果不會被擋） ---------- */
 body.hm dialog.hm-search:not([open]) { display: none; }
@@ -722,8 +710,7 @@ body.hm dialog.hm-search :is(.stock-search-suggestions, .stock-search-status, .s
   body.hm .hm-cats { margin-top: 12px; }
   body.hm .hm-cats button { height: 44px; padding: 0 2px; font-size: 13px; }
   body.hm .chips { padding-top: 12px; }
-  body.hm .market-screens .screen-block,
-  body.hm .market-screens .screen-block:first-child { margin-top: 12px; }
+  body.hm .market-screens .screen-block[data-open] { margin-top: 12px; }
   body.hm dialog.hm-search { max-height: calc(100dvh - 28px); margin-top: 12px; padding: 16px; }
 }
 /* 320 寬：三顆 44px 的圖示鍵旁邊放不下帶圖示的標題，拿掉標題前的小圖示 */

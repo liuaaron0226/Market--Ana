@@ -1,6 +1,6 @@
 /* unslop 首頁範例：動態效果（2026-11-09），跟個股頁 motion.js 同一套規則
-   1. 載入：報價→找個股→主K線依序淡入上移 8px（一次）
-   2. 往下捲：直白分析、籌碼卡、選股看板進入畫面時才淡入（各一次）
+   1. 載入：報價→主K線依序淡入上移 8px（一次）
+   2. 往下捲：直白分析進入畫面時才淡入（一次）。籌碼與選股看板 11-14 起收在分類鍵後面，展開的動態在 home.css
    3. 指數數字從前一個值滾到新值（盤中更新時看得出變化）
    4. 指標切換滑動底塊沿用 motion.js 的做法
    系統設定「減少動態」時全部跳過。方法 unslop by @heydamir, CC BY 4.0 */
@@ -11,32 +11,22 @@
   const rise = [{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }];
 
   // 1. 進場
-  ['.market-header', '.hm-search', '.chart-workspace'].forEach((sel, i) => {
+  ['.market-header', '.chart-workspace'].forEach((sel, i) => {
     const el = document.querySelector(sel);
     el && el.animate(rise, { duration: 420, delay: i * 80, easing: EASE, fill: 'backwards' });
   });
 
-  // 2. 捲動到才出現；籌碼卡依序錯開
+  // 2. 捲動到才出現
   const io = new IntersectionObserver(entries => {
     entries.forEach(entry => {
       if (!entry.isIntersecting) return;
       io.unobserve(entry.target);
-      const el = entry.target;
-      if (el.classList.contains('chips')) {
-        [...el.querySelectorAll('.chip-card')].forEach((card, i) =>
-          card.animate(rise, { duration: 380, delay: i * 50, easing: EASE, fill: 'backwards' }));
-      } else {
-        el.animate(rise, { duration: 420, easing: EASE, fill: 'backwards' });
-      }
+      entry.target.animate(rise, { duration: 420, easing: EASE, fill: 'backwards' });
     });
   }, { rootMargin: '0px 0px -10% 0px' });
-  ['.read-card', '.chips', '.hm-explore'].forEach(sel => {
-    const el = document.querySelector(sel);
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    if (r.top < innerHeight) return; // 一開始就在畫面內的不再重播
-    io.observe(el);
-  });
+  const readCard = document.querySelector('.read-card');
+  // 一開始就在畫面內的不再重播
+  if (readCard && readCard.getBoundingClientRect().top >= innerHeight) io.observe(readCard);
 
   // 3. 指數數字滾動
   const price = document.getElementById('currentPrice');

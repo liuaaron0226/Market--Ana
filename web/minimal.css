@@ -1060,12 +1060,6 @@ html, body { height: auto; }
 .stock-search-result small { color: var(--dim); }
 .stock-search-result .stock-search-meta { grid-column: 2; grid-row: 1 / 3; text-align: right; }
 .stock-search-more { margin-top: 10px; }
-.portfolio-entry {
-  display: inline-flex; align-items: center; gap: 5px; min-height: 44px; color: var(--ink);
-  font-size: 13px; font-weight: 600; text-decoration: none;
-}
-.portfolio-entry span { transition: transform 160ms var(--ease); }
-.portfolio-entry:hover span { transform: translateX(2px); }
 .stock-search-suggestions {
   grid-column: 2; margin-top: 8px; padding: 4px 0 0; border-top: 1px solid var(--line);
 }
@@ -1097,7 +1091,6 @@ html, body { height: auto; }
 }
 :root[data-theme="light"] { --core-a: #c24a16; --core-b: #4f5fd6; }
 @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) { --core-a: #c24a16; --core-b: #4f5fd6; } }
-.market-screens[hidden] { display: none; }
 .screen-block { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
 .screen-head { display: flex; align-items: baseline; justify-content: space-between; gap: 6px 12px; flex-wrap: wrap; }
 .screen-head h3 { font-size: 14px; }

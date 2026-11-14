@@ -108,11 +108,13 @@ def open_price_panel(page: Page) -> None:
 HOME_CATS = ("chips", "screens", "rotation", "core")
 
 
-def open_cat(cat: str):
-    def run(page: Page) -> None:
-        page.locator(f"#homeCats button[data-cat='{cat}']").click()
-        page.wait_for_function("cat => document.getElementById('workspace').dataset.openCat === cat", arg=cat)
-    return run
+def open_cat(page: Page, cat: str) -> None:
+    """展開首頁的一類；已經開著就不動（再點一次會收回）。"""
+    button = page.locator(f"#homeCats button[data-cat='{cat}']")
+    button.scroll_into_view_if_needed()
+    if button.get_attribute("aria-expanded") != "true":
+        button.click()
+    page.wait_for_function("cat => document.querySelector(`#homeCats button[data-cat='${cat}']`).getAttribute('aria-expanded') === 'true'", arg=cat)
 
 
 def open_search(page: Page) -> None:
@@ -215,7 +217,8 @@ def main() -> None:
                     for size in SIZES:
                         for theme in THEMES:
                             for cat in HOME_CATS:
-                                shoot(browser, base, out, report, f"home-cat-{cat}-{size}-{theme}", "home", size, theme, after=open_cat(cat))
+                                shoot(browser, base, out, report, f"home-cat-{cat}-{size}-{theme}", "home", size, theme,
+                                      after=lambda page, cat=cat: open_cat(page, cat))
                             shoot(browser, base, out, report, f"home-search-{size}-{theme}", "home", size, theme,
                                   after=open_search, full_page=False)
             run(("--features", "core"), core_jobs)

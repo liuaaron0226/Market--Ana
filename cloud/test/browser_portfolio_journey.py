@@ -72,6 +72,8 @@ with tempfile.TemporaryDirectory() as temp:
             page.goto(base + "/minimal.html", wait_until="networkidle")
             page.wait_for_timeout(500)
             assert not report["errors"], report["errors"]
+            # 11-14 起首頁的搜尋收在右上角的放大鏡後面，點了才出現（打開時游標就在輸入框）。
+            page.locator("#searchToggle").click()
             page.locator("#stockSearchInput").fill("2330")
             page.locator('#stockSearchForm button[type="submit"]').click()
             search_result = page.locator('#stockSearchResults a[data-code="2330"]')
@@ -79,7 +81,7 @@ with tempfile.TemporaryDirectory() as temp:
             search_result.click()
             page.wait_for_url("**/stock.html?code=2330")
             page.goto(base + "/minimal.html", wait_until="networkidle")
-            page.locator("#stockSearchInput").focus()
+            page.locator("#searchToggle").click()
             page.locator("#stockSearchSuggestions").wait_for(state="visible")
             page.locator(".stock-suggest-head h3").nth(2).wait_for()
             headings = page.locator(".stock-suggest-head h3").all_text_contents()
@@ -90,7 +92,7 @@ with tempfile.TemporaryDirectory() as temp:
 
             page.route("**/api/screens**", lambda route: route.abort())
             page.goto(base + "/minimal.html", wait_until="networkidle")
-            page.locator("#stockSearchInput").focus()
+            page.locator("#searchToggle").click()
             page.locator(".stock-suggest-head h3").nth(2).wait_for()
             assert "2330 台積電" in page.locator(".stock-suggest-group").nth(0).inner_text()
             assert "系統短期名單暫時無法讀取" in page.locator(".stock-suggest-group").nth(1).inner_text()

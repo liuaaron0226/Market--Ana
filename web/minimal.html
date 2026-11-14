@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="minimal.css?v=20261109-ux1">
   <link rel="stylesheet" href="chart-studies.css?v=20261108-01">
   <link rel="stylesheet" href="bold.css?v=20261114-desk1">
-  <link rel="stylesheet" href="home.css?v=20261114-desk1">
+  <link rel="stylesheet" href="home.css?v=20261114-desk2">
   <link rel="stylesheet" href="panel.css?v=20261114-desk1">
 </head>
 <body class="bd hm">
@@ -60,7 +60,7 @@
         <button class="icon-key" id="searchToggle" type="button" aria-label="搜尋股票" title="搜尋股票" aria-haspopup="dialog" aria-controls="stockSearchDialog">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="m16 16 4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
         </button>
-        <button class="theme-toggle" id="themeToggle" type="button" aria-label="切換深淺色主題">
+        <button class="theme-toggle" id="themeToggle" type="button" aria-label="切換深淺色主題" title="切換深淺色主題">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.64 5.64l1.42 1.42m9.88 9.88 1.42 1.42m0-12.72-1.42 1.42M7.06 16.94l-1.42 1.42" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>
           <span id="themeText">切換主題</span>
         </button>
@@ -188,7 +188,7 @@
         <button type="button" data-cat="core" aria-expanded="false" aria-controls="coreHoldings">長期核心持有</button>
       </div>
       <section class="chips" id="chipsSection" data-cat-panel="chips" aria-labelledby="chipsTitle">
-        <h2 id="chipsTitle" class="hm-section-title">籌碼與資金</h2>
+        <h2 id="chipsTitle" class="hm-section-title sr-only">籌碼與資金</h2>
         <div class="chip-grid" id="chipGrid"></div>
       </section>
       <section class="distribution" id="distribution" aria-labelledby="distributionTitle">
@@ -210,7 +210,7 @@
       </section>
 
       <section class="hm-explore" aria-labelledby="exploreTitle">
-        <h2 id="exploreTitle" class="hm-section-title">選股看板</h2>
+        <h2 id="exploreTitle" class="hm-section-title sr-only">選股看板</h2>
         <div class="market-screens" id="marketScreens">
           <section class="screen-block" id="chipScreens" data-cat-panel="screens" data-state="loading" aria-labelledby="chipScreensTitle">
             <div class="screen-head">
@@ -315,7 +315,7 @@
   <script src="kchart.js?v=20261109-ux1"></script>
   <script src="minimal.js?v=20261114-desk1"></script>
   <script src="period-switch.js?v=20261109-ux1"></script>
-  <script src="home-motion.js?v=20261109-ux1"></script>
+  <script src="home-motion.js?v=20261114-desk1"></script>
   <script src="home-fold.js?v=20261114-desk1"></script>
 </body>
 </html>
