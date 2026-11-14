@@ -137,11 +137,26 @@
     try { localStorage.setItem('stock-ma-periods', JSON.stringify(maPeriods)); } catch (_) { /* 私密視窗 */ }
   }
 
+  const MA_LIMIT = 4; // 和 kchart.js 的 normalizePeriods 一致：最多四條
+
   function applyMaPeriods(next) {
+    const before = maPeriods.length;
     maPeriods = window.KChartMath.normalizePeriods(next);
     saveMaPeriods();
-    renderMaControls();
+    // 條數沒變（只是改了某一格的數字）就把數字寫回原本的輸入框，不整組重畫：
+    // 重畫會把正在點的那一格換掉，手機上接著點另一格或「新增均線」的那一下會落空（本人 11-15 iPhone 回報）。
+    const inputs = [...$('maControls').querySelectorAll('input')];
+    if (maPeriods.length === before && inputs.length === before) inputs.forEach((input, index) => { input.value = String(maPeriods[index]); });
+    else renderMaControls();
+    syncMaLimit();
     if (chart) chart.setMaPeriods(maPeriods);
+  }
+
+  // 到四條上限時，「新增均線」停用並寫明原因（原本是按了沒反應）
+  function syncMaLimit() {
+    const full = maPeriods.length >= MA_LIMIT;
+    $('addMa').disabled = full;
+    $('addMa').textContent = full ? `最多 ${MA_LIMIT} 條均線` : '新增均線';
   }
 
   function renderMaControls() {
@@ -1104,7 +1119,7 @@
   window.addEventListener('beforeunload', () => { livePoller.stop(); stopTicks(); });
   document.addEventListener('visibilitychange', syncTickFeed);
   $('addMa').addEventListener('click', () => {
-    if (maPeriods.length >= 4) return;
+    if (maPeriods.length >= MA_LIMIT) return;
     const next = [60, 120, 240].find(value => !maPeriods.includes(value)) || Math.min(240, maPeriods.at(-1) + 10);
     applyMaPeriods([...maPeriods, next]);
   });
@@ -1112,6 +1127,7 @@
   let saved = null;
   try { saved = localStorage.getItem('market-theme'); } catch (_) { /* 私密視窗 */ }
   renderMaControls();
+  syncMaLimit();
   setTheme(saved === 'dark' ? 'dark' : 'light');
   window.StockView = { weeklyCandles, monthlyCandles };
   loadReleaseFeatures().then(() => load(codeFromUrl() || '2330'));

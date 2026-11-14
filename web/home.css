@@ -806,3 +806,9 @@ body.hm .chart-toolbar .chart-chip[aria-expanded="true"] { transform: translateY
 body.hm .chart-stage .reset-view {
   position: absolute; z-index: 8; left: 10px; bottom: 32px; min-height: 36px; padding: 0 12px; color: var(--ink); font: 600 13px var(--sans); cursor: pointer;
 }
+
+/* 圖的左上角第一列是均線的名稱（kchart.js 畫在圖上），狀態小標（形成中、盤後暫用、分鐘推估）往下讓一列 */
+body.hm .chart-badges { top: 28px; }
+@media (min-width: 761px) {
+  body.hm .chart-badges { top: 68px; }
+}

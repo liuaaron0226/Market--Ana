@@ -302,3 +302,4 @@
 /* K 線工具列（A 包第 7 片，本人 11-15）：左邊資料說明，右邊是週期與均線兩枚小鍵，點了才浮出選單 */
 .bd .bd-chart-bar { justify-content: flex-start; flex-wrap: wrap; gap: 8px; }
 .bd .bd-chart-bar > div:first-child { margin-right: auto; }
+.bd-ma-add:disabled { color: var(--faint); cursor: default; }

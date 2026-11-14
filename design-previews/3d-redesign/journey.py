@@ -625,6 +625,24 @@ def stock(page: Page, base: str, tag: str, mobile: bool) -> None:
         chip.click()
         check(f"{tag}：一次只開一個選單（開均線時週期選單收回）",
               page.evaluate(VISIBLE_COUNT, ".hm-period [data-value]") == 0 and page.evaluate(VISIBLE_COUNT, "#maControls input") == before)
+        # 改一格的數字之後直接點另一格（本人 11-15 iPhone 回報：一次只能設一個）：不能把輸入框整組換掉，不然接著的那一下會落空。
+        values = "nodes => nodes.map(node => node.value)"
+        inputs.first.evaluate("node => { node.dataset.kept = 'yes'; }")
+        inputs.first.fill("20")
+        inputs.nth(1).click()
+        check(f"{tag}：改一格的數字後直接點另一格，輸入框沒有被換掉、游標進了另一格、小鍵跟著變",
+              inputs.first.get_attribute("data-kept") == "yes" and inputs.evaluate_all(values)[0] == "20" and "20" in chip.inner_text()
+              and page.evaluate("document.activeElement === document.querySelectorAll('#maControls input')[1]"), [inputs.evaluate_all(values), chip.inner_text()])
+        add = page.locator("#addMa")
+        while inputs.count() < 4:
+            add.click()
+        check(f"{tag}：加到四條時「新增均線」停用並寫明上限（原本是按了沒反應）", add.is_disabled() and "最多" in add.inner_text(), add.inner_text())
+        while inputs.count() > before:
+            page.locator("#maControls .bd-ma-remove").last.click()
+        inputs.first.fill(periods_now[0])
+        inputs.first.press("Tab")
+        check(f"{tag}：均線改回原本的期數，「新增均線」恢復可按", inputs.evaluate_all(values) == periods_now and add.is_enabled() and add.inner_text().strip() == "新增均線",
+              [inputs.evaluate_all(values), add.inner_text()])
         page.keyboard.press("Escape")
     step(f"{tag}：均線", averages)
 

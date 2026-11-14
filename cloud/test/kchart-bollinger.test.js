@@ -171,3 +171,18 @@ test("秒 K 的時間刻度是 時:分:秒", () => {
   assert.ok(texts.includes("09:00:00"), texts.join(" "));
   assert.ok(!texts.some(text => /^26\/11$/.test(text)), texts.join(" "));
 });
+
+// 本人 2026-11-15：「圖表上的均線雖然有均線的顏色區分但我不知道哪個顏色是哪個指標」。
+test("圖的左上角寫出每條均線與布林通道的名稱；改了均線期數，名稱跟著換", () => {
+  const { chart, calls } = chartWith(Array.from({ length: 80 }, (_, index) => 100 + Math.sin(index / 3) * 8));
+  calls.length = 0;
+  chart.draw();
+  let texts = drawnTexts(calls);
+  for (const name of ["MA18", "MA45", "布林20"]) assert.ok(texts.includes(name), `要寫出 ${name}`);
+
+  calls.length = 0;
+  chart.setMaPeriods([5, 20, 60]);
+  texts = drawnTexts(calls);
+  for (const name of ["MA5", "MA20", "MA60"]) assert.ok(texts.includes(name), `要寫出 ${name}`);
+  assert.ok(!texts.includes("MA18") && !texts.includes("MA45"), "拿掉的均線不再寫");
+});

@@ -453,6 +453,13 @@
         for (let i = start; i < end; i++) { const v = this.ma[p][i]; if (v == null) { on = false; continue; } const px = l + step * (i - start + .5); on ? x.lineTo(px, y(v)) : x.moveTo(px, y(v)); on = true; }
         x.stroke();
       });
+      // 均線與布林通道的名稱寫在圖的左上角，字的顏色就是線的顏色（本人 11-15：有顏色但看不出哪個顏色是哪一條）。
+      x.font = TAG_NAME_FONT; x.textBaseline = 'top'; x.textAlign = 'left';
+      let nameX = l + 6;
+      [...this.maPeriods.map((p, index) => [`MA${p}`, maColors[index]]), ['布林20', bandColor]].forEach(([name, color]) => {
+        x.fillStyle = color; x.fillText(name, nameX, t - 5); nameX += x.measureText(name).width + 10;
+      });
+      x.font = '11.5px "JetBrains Mono",Consolas,monospace'; x.textBaseline = 'alphabetic';
       // 最新價標籤
       const last = this.candles[n - 1];
       if (tags && end === n && hasPrice(last)) {
