@@ -64,7 +64,7 @@
   // 4. 指標切換滑動底塊（與個股頁相同）
   const host = document.getElementById('chartStudies');
   let pill = null, lastKind = null;
-  const order = ['volume', 'macd'];
+  const order = ['volume', 'macd', 'kd', 'rsi', 'foreign', 'trust', 'dealer'];
   const place = animate => {
     const sw = host && host.querySelector('.kc-study-switcher');
     const on = sw && sw.querySelector('.kc-study-choice[aria-pressed="true"]');
@@ -75,7 +75,8 @@
     }
     const box = sw.getBoundingClientRect(), r = on.getBoundingClientRect();
     pill.style.transition = animate ? `transform 280ms ${EASE}` : 'none';
-    pill.style.transform = `translateX(${r.left - box.left}px) scaleX(${r.width / 100})`;
+    // 手機上按鈕會排成兩列：底塊要跟到選中的那一列，不能只算水平位置。
+    pill.style.transform = `translate(${r.left - box.left}px, ${r.top + r.height / 2 - box.top - box.height / 2}px) scaleX(${r.width / 100})`;
     const kind = on.dataset.study;
     if (animate && lastKind && kind !== lastKind) {
       const pane = host.querySelector(`.kc-study-pane-${kind}`);

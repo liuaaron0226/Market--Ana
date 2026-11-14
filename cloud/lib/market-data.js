@@ -23,7 +23,7 @@ function analysisView(a) {
     monthly: pickAll(a.monthly, PERIOD_OHLC),
     h60: pickAll(a.h60, ["timestamp", "date", "time", "open", "high", "low", "close"]),
     // 劇本「外資賣超」樣本與 K 棒細節都要逐日法人淨額，不能截短（Astra r1 指出）。
-    institutional: (a.institutional || []).map((r) => ({ date: r.date, foreign: pick(r.foreign, ["net"]), trust: pick(r.trust, ["net"]) })),
+    institutional: (a.institutional || []).map((r) => ({ date: r.date, foreign: pick(r.foreign, ["net"]), trust: pick(r.trust, ["net"]), dealer: pick(r.dealer, ["net"]) })),
     futures: pickAll(last(a.futures, 20), ["date", "foreign_oi_net_contracts"]),
     indicators: {
       parameters: { macd: pick(a.indicators?.parameters?.macd, ["fast", "slow", "signal"]) },

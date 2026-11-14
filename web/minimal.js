@@ -366,7 +366,7 @@
   }
 
   function dailyWithLive() {
-    const candles = A.daily.map(row => toChartCandle(row, '日'));
+    const candles = window.ChartStudies.withMarketInstitutional(A.daily.map(row => toChartCandle(row, '日')), A.institutional);
     const provisional = provisionalCloseCandle(candles);
     if (provisional) { candles.push(provisional); return candles; }
     if (!latestPayload || !latestPayload.data || !latestLive) return candles;
@@ -520,7 +520,7 @@
       liveLast: false,
       macd: false,
       studyHost: document.getElementById('chartStudies'),
-      studies: ['volume', 'macd', 'kd', 'rsi'],
+      studies: ['volume', 'macd', 'kd', 'rsi', 'foreign', 'trust', 'dealer'],
       selectionRoots: [els.chartStage.parentElement, els.panel],
       volumeKind: 'amount',
       leftRail: marketLabelRail,

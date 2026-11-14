@@ -200,7 +200,7 @@
 .bd .kc-studies .kc-study-switcher > .kc-study-choice:first-child { margin-left: 0; }
 .bd .kc-studies .kc-study-choice {
   height: var(--btn-h); min-height: 0; padding: 0 16px; border: 1px solid transparent; border-radius: var(--btn-r);
-  background: transparent; color: var(--dim); font: 500 13px var(--sans);
+  background: transparent; color: var(--dim); font: 500 13px var(--sans); white-space: nowrap;
   transition: background-color 160ms var(--ease-out), color 160ms var(--ease-out), transform 120ms var(--ease-out);
 }
 .bd .kc-studies .kc-study-choice:hover { color: var(--ink); background: var(--panel2); }

@@ -59,6 +59,12 @@
     return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   }
 
+  // 法人買賣超的單位跟著圖走：大盤（成交金額圖）是億元，個股（成交量圖）是股數、顯示成張。
+  function institutionalText(value, volumeKind, compact) {
+    if (volumeKind === 'amount') return `${formatNumber(Math.abs(value), compact ? 0 : 1)}${compact ? '億' : ' 億元'}`;
+    return `${formatNumber(Math.abs(value) / 1000, 0)}${compact ? '張' : ' 張'}`;
+  }
+
   function finite(value) {
     return Number.isFinite(value);
   }
@@ -300,7 +306,7 @@
       } else if (kind === 'kd' || kind === 'rsi') {
         canvas.setAttribute('aria-label', `${titleValue}副圖；日期尚無；數值範圍 0 到 100。`);
       } else {
-        canvas.setAttribute('aria-label', `${titleValue}副圖；日期尚無；單位：張。`);
+        canvas.setAttribute('aria-label', `${titleValue}副圖；日期尚無；單位：${this.volumeKind === 'amount' ? '億元' : '張'}。`);
       }
 
       pane.append(header, canvas);
@@ -652,9 +658,9 @@
       context.fillStyle = token('--dim'); context.font = `11px ${token('--mono') || 'monospace'}`;
       context.textAlign = 'left'; context.textBaseline = 'middle';
       const axisX = Math.min(width - 2, range.geo.l + range.geo.pw + 7);
-      context.fillText(`${formatNumber(amplitude / 1000, 0)}張`, axisX, top + 3);
+      context.fillText(institutionalText(amplitude, this.volumeKind, true), axisX, top + 3);
       context.fillText('0', axisX, middle);
-      context.fillText(`−${formatNumber(amplitude / 1000, 0)}張`, axisX, bottom - 3);
+      context.fillText(`−${institutionalText(amplitude, this.volumeKind, true)}`, axisX, bottom - 3);
       this._drawCrosshair(context, height, range);
     }
 
@@ -842,10 +848,10 @@
         const net = candle && candle[kind];
         const label = { foreign: '外資', trust: '投信', dealer: '自營商' }[kind];
         parts.readout.textContent = candle && finite(net)
-          ? `${date}｜${label} ${net > 0 ? '+' : net < 0 ? '−' : ''}${formatNumber(Math.abs(net) / 1000, 0)} 張`
+          ? `${date}｜${label} ${net > 0 ? '+' : net < 0 ? '−' : ''}${institutionalText(net, this.volumeKind)}`
           : `${date}｜資料不足`;
         parts.canvas.setAttribute('aria-label', candle && finite(net)
-          ? `${label}買賣超；日期：${date}；${net >= 0 ? '買超' : '賣超'} ${formatNumber(Math.abs(net) / 1000, 0)} 張。`
+          ? `${label}買賣超；日期：${date}；${net >= 0 ? '買超' : '賣超'} ${institutionalText(net, this.volumeKind)}。`
           : `${label}買賣超；日期：${date}；資料不足。`);
       }
       if (!candle) {
@@ -1003,6 +1009,21 @@
       }
     }
   }
+
+  // 大盤日 K 接上官方三大法人淨額（元 → 億元）。只接同一天的；官方沒有的日子或欄位留空，不拿別天補。
+  ChartStudies.withMarketInstitutional = function withMarketInstitutional(candles, rows) {
+    const byDate = new Map((rows || []).map(row => [row.date, row]));
+    return candles.map(candle => {
+      const row = byDate.get(candle.t);
+      if (!row) return candle;
+      const out = { ...candle };
+      for (const kind of ['foreign', 'trust', 'dealer']) {
+        const net = row[kind] && row[kind].net;
+        if (finite(net)) out[kind] = net / 100_000_000;
+      }
+      return out;
+    });
+  };
 
   window.ChartStudies = ChartStudies;
 })();

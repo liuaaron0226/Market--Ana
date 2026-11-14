@@ -86,7 +86,7 @@
     const host = $('chartStudies');
     let indicator = null;
     let lastActive = null;
-    const order = ['volume', 'macd', 'kd', 'rsi'];
+    const order = ['volume', 'macd', 'kd', 'rsi', 'foreign', 'trust', 'dealer'];
     const place = animate => {
       const sw = host.querySelector('.kc-study-switcher');
       const on = sw && sw.querySelector('.kc-study-choice[aria-pressed="true"]');
@@ -103,7 +103,8 @@
       const r = on.getBoundingClientRect();
       // 底塊固定 100px 寬，用 scaleX 對齊按鈕寬度，只動 transform
       indicator.style.transition = animate ? `transform 280ms ${EASE}` : 'none';
-      indicator.style.transform = `translateX(${r.left - box.left}px) scaleX(${r.width / 100})`;
+      // 手機上按鈕會排成兩列：底塊要跟到選中的那一列，不能只算水平位置。
+      indicator.style.transform = `translate(${r.left - box.left}px, ${r.top + r.height / 2 - box.top - box.height / 2}px) scaleX(${r.width / 100})`;
       const kind = on.dataset.study;
       if (animate && lastActive && kind !== lastActive) {
         const pane = host.querySelector(`.kc-study-pane-${kind}`);
