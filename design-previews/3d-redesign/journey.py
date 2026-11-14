@@ -542,7 +542,7 @@ def stock(page: Page, base: str, tag: str, mobile: bool) -> None:
          lambda: joined_chart(page, tag, "#chartHost", ["成交量", "MACD", "KD", "RSI", "外資", "投信", "自營商"], None))
 
     def candle_tip() -> None:
-        # 個股頁沒有「這一天的詳情」可以替代，所以手機上的當天明細浮窗照舊（只有首頁手機拿掉）。
+        # 手機和首頁一樣不浮出當天明細的視窗，只留十字線（本人 11-15）；桌機照舊。
         x, y = chart_point(page, "#chartHost", 0.4, 0.4)
         page.evaluate(KEEP_CANVASES, "#chartHost")
         if mobile:
@@ -551,7 +551,10 @@ def stock(page: Page, base: str, tag: str, mobile: bool) -> None:
             page.mouse.move(x, y)
         page.wait_for_timeout(250)
         tip = page.evaluate(TIP_STATE, "#chartHost")
-        check(f"{tag}：指到 K 棒仍浮出當天明細", tip != "hidden", tip)
+        if mobile:
+            check(f"{tag}：點 K 棒不浮出當天明細的視窗", tip == "hidden", tip)
+        else:
+            check(f"{tag}：指到 K 棒浮出當天明細", tip != "hidden", tip)
         crosshair = page.evaluate(CROSSHAIR, "#chartHost")
         check(f"{tag}：十字線從 K 線一路畫到指標區，上下同一個位置", crosshair == "ok", crosshair)
     step(f"{tag}：K 棒明細", candle_tip)

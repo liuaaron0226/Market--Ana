@@ -981,7 +981,9 @@ html, body { height: auto; }
   body.panel-open { padding-bottom: 0; }
   .detail-panel { max-height: calc(100svh - 32px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
   .panel-body { padding: 14px 16px; }
-  .kc-tip { min-width: 0; font-size: 11px; }
+  /* 手機不浮出當天明細（一碰就跳出來、蓋住 K 線，本人 11-14 iPhone 實測）：只留十字線。
+     首頁與個股頁都是（本人 11-15）；首頁的數字按「這一天的詳情」看，個股頁手機沒有替代的地方。 */
+  .kc-tip { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   .detail-panel, .detail-panel.is-open { transform: translate(-50%, -50%); }
