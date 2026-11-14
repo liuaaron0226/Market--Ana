@@ -72,6 +72,28 @@ TIP_STATE = """() => {
 }"""
 
 
+CATS = {"chips": "籌碼與資金", "screens": "籌碼選股", "rotation": "產業資金流向", "core": "長期核心持有"}
+# 四類各自的內容區塊目前看不看得到（收起來的不算，Tab 也走不到）。
+CATS_VISIBLE = """() => Object.fromEntries([...document.querySelectorAll('[data-cat-panel]')].map(e => {
+  const style = getComputedStyle(e), box = e.getBoundingClientRect();
+  return [e.dataset.catPanel, style.display !== 'none' && style.visibility !== 'hidden' && box.height > 40];
+}))"""
+# 圖是照容器寬度畫的；收起來的時候如果量到 0 會用預設寬度畫，展開後就會太寬或太窄。
+CHART_FITS = """selector => {
+  const host = document.querySelector(selector), svg = host.querySelector('svg');
+  return svg ? Math.abs(svg.getBoundingClientRect().width - host.clientWidth) <= 2 : false;
+}"""
+
+
+def open_cat(page: Page, cat: str) -> None:
+    """展開首頁的一類；已經開著就不動。"""
+    button = page.locator(f"#homeCats button[data-cat='{cat}']")
+    button.scroll_into_view_if_needed()
+    if button.get_attribute("aria-expanded") != "true":
+        button.click()
+    page.wait_for_function("cat => document.querySelector(`#homeCats button[data-cat='${cat}']`).getAttribute('aria-expanded') === 'true'", arg=cat)
+
+
 def open_panel(page: Page, tag: str, selector: str, title_part: str) -> None:
     def run() -> None:
         target = page.locator(selector).first
@@ -102,6 +124,24 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
     check(f"{tag}：現價有數字", page.locator("#currentPrice").inner_text().strip() not in ("", "—"))
     check(f"{tag}：沒有橫向捲動", no_overflow(page))
 
+    def folded() -> None:
+        shown = page.evaluate(CATS_VISIBLE)
+        check(f"{tag}：剛進首頁四類都收著", len(shown) == 4 and not any(shown.values()), shown)
+        check(f"{tag}：剛進首頁搜尋板收著、主圖與指標副圖看得到",
+              not page.locator("#stockSearchInput").is_visible() and page.locator("#mainChart canvas").first.is_visible()
+              and page.locator("#chartStudies .kc-study-switcher").is_visible())
+        open_cat(page, "chips")
+        open_cat(page, "screens")
+        shown = page.evaluate(CATS_VISIBLE)
+        check(f"{tag}：點分類鍵展開那一類、收起別類", shown == {"chips": False, "screens": True, "rotation": False, "core": False}, shown)
+        page.locator("#homeCats button[data-cat='screens']").click()
+        page.wait_for_function("document.querySelector(\"#homeCats button[data-cat='screens']\").getAttribute('aria-expanded') === 'false'")
+        shown = page.evaluate(CATS_VISIBLE)
+        check(f"{tag}：再點同一顆分類鍵收回", not any(shown.values()), shown)
+        names = page.locator("#homeCats button").all_inner_texts()
+        check(f"{tag}：四顆分類鍵的名稱", [name.strip() for name in names] == list(CATS.values()), names)
+    step(f"{tag}：首頁分類收合", folded)
+
     def periods() -> None:
         thumb = []
         for value, label in (("weekly", "週"), ("monthly", "月"), ("daily", "日")):
@@ -129,6 +169,7 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
     open_panel(page, tag, "#conclusionTrigger", "結論")
     open_panel(page, tag, "#lineUpper", "收復線")
     open_panel(page, tag, "#readCard", "直白分析")
+    step(f"{tag}：展開籌碼與資金", lambda: open_cat(page, "chips"))
     open_panel(page, tag, ".chip-card", "")
 
     def candle() -> None:
@@ -178,6 +219,7 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
     page.wait_for_function(PANEL_CLOSED)
 
     def screens() -> None:
+        open_cat(page, "screens")
         check(f"{tag}：籌碼選股有分頁", page.locator("#chipScreenTabs [role=tab]").count() >= 2)
         before = page.locator("#chipScreenList > li").count()
         check(f"{tag}：籌碼選股有結果", before >= 1, before)
@@ -192,6 +234,8 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
     step(f"{tag}：籌碼選股", screens)
 
     def rotation() -> None:
+        open_cat(page, "rotation")
+        check(f"{tag}：產業資金流向的圖照容器寬度畫", page.evaluate(CHART_FITS, "#rotationChart"))
         check(f"{tag}：產業資金流向顯示資料日", "資料日" in page.locator("#rotationMeta").inner_text())
         check(f"{tag}：四種資金狀態圖例", page.locator("#rotationLegend > li").count() == 4)
         check(f"{tag}：象限圖有產業點", page.locator("#rotationChart circle").count() >= 10, page.locator("#rotationChart circle").count())
@@ -204,6 +248,8 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
     step(f"{tag}：產業資金流向", rotation)
 
     def core() -> None:
+        open_cat(page, "core")
+        check(f"{tag}：長期核心持有的走勢圖照容器寬度畫", page.evaluate(CHART_FITS, "#coreChart"))
         check(f"{tag}：長期核心持有有卡片", page.locator("#coreCards > *").count() >= 2)
         page.locator("#corePeriodSelect").select_option("1y")
         page.wait_for_timeout(400)
@@ -216,12 +262,38 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
         page.locator("#themeToggle").click()
     step(f"{tag}：主題切換", theme)
 
+    def tools() -> None:
+        entry = page.locator("#portfolioEntry")
+        check(f"{tag}：右上角自選庫存圖示鍵連到自選與庫存頁",
+              entry.is_visible() and (entry.get_attribute("href") or "").endswith("portfolio.html")
+              and entry.get_attribute("aria-label") == "自選股與庫存")
+        page.evaluate("scrollTo(0, 0)")
+        page.locator("#searchToggle").click()
+        page.locator("#stockSearchInput").wait_for(state="visible")
+        check(f"{tag}：點放大鏡打開搜尋面板，游標在輸入框", page.evaluate("document.activeElement.id") == "stockSearchInput")
+        box = page.locator("#stockSearchDialog").bounding_box()
+        view = page.viewport_size
+        check(f"{tag}：搜尋面板完全在可見範圍內",
+              box["x"] >= 0 and box["y"] >= 0 and box["x"] + box["width"] <= view["width"] + 1 and box["y"] + box["height"] <= view["height"] + 1, box)
+        page.keyboard.press("Escape")
+        page.locator("#stockSearchInput").wait_for(state="hidden")
+        check(f"{tag}：按 Esc 收回搜尋面板", True)
+    step(f"{tag}：右上角圖示鍵", tools)
+
     def search() -> None:
+        page.locator("#searchToggle").click()
         page.locator("#stockSearchInput").fill("2330")
         page.locator("#stockSearchForm button[type=submit]").click()
         link = page.locator("#stockSearchResults a[data-code='2330']")
         link.wait_for()
-        check(f"{tag}：搜尋時選股看板讓位", page.locator("#marketScreens").is_hidden())
+        # 留著字關掉面板（點面板以外的地方），選股看板不能跟著不見。
+        page.mouse.click(4, page.viewport_size["height"] - 4)
+        page.locator("#stockSearchInput").wait_for(state="hidden")
+        open_cat(page, "screens")
+        check(f"{tag}：搜尋框留著字關掉面板，籌碼選股照樣打得開", page.locator("#chipScreenList > li").first.is_visible())
+        page.evaluate("scrollTo(0, 0)")
+        page.locator("#searchToggle").click()
+        link.wait_for(state="visible")
         link.click()
         page.wait_for_url("**/stock.html?code=2330")
         shoot.ready_stock(page)

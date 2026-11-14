@@ -7,6 +7,8 @@ export const WEB_FILES = [
   // claude-60 設計改版（11-09）新增的資產
   "bold.css", "home.css", "panel.css", "motion.js", "home-motion.js", "period-switch.js",
   "portfolio.html", "portfolio.css", "portfolio.js",
+  // 立體重設計 A 包第 4 片（11-14）：首頁分類收合與搜尋面板
+  "home-fold.js",
 ];
 export const RETIRED = ["analysis-data.js", "chips-data.js", "dashboard-data.js", "detail-data.js", "plain-data.js", "market-data-local.js"];
 

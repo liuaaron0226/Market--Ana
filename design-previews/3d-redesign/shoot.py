@@ -104,6 +104,22 @@ def open_price_panel(page: Page) -> None:
     page.wait_for_function("document.getElementById('detailPanel').getAttribute('aria-hidden') === 'false'")
 
 
+# 首頁的四類預設是收著的（A 包第 4 片）；要看某一類的內容得先點它的分類鍵。
+HOME_CATS = ("chips", "screens", "rotation", "core")
+
+
+def open_cat(cat: str):
+    def run(page: Page) -> None:
+        page.locator(f"#homeCats button[data-cat='{cat}']").click()
+        page.wait_for_function("cat => document.getElementById('workspace').dataset.openCat === cat", arg=cat)
+    return run
+
+
+def open_search(page: Page) -> None:
+    page.locator("#searchToggle").click()
+    page.locator("#stockSearchInput").wait_for(state="visible")
+
+
 def shoot(browser, base: str, out: Path, report: dict, name: str, page_key: str, size: str, theme: str,
           after=None, full_page: bool = True) -> None:
     path, ready = PAGES[page_key]
@@ -157,14 +173,14 @@ def shoot(browser, base: str, out: Path, report: dict, name: str, page_key: str,
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out", required=True, help="shots/ 底下的資料夾名稱，例如 after-04")
-    parser.add_argument("--only", choices=("core", "expired", "flags", "states"), help="只拍其中一組")
+    parser.add_argument("--only", choices=("core", "expired", "flags", "states", "cats"), help="只拍其中一組")
     args = parser.parse_args()
     out = HERE / "shots" / args.out
     out.mkdir(parents=True, exist_ok=True)
     for old in out.glob("*.png"):
         old.unlink()
     report: dict[str, object] = {}
-    groups = [args.only] if args.only else ["core", "expired", "flags", "states"]
+    groups = [args.only] if args.only else ["core", "expired", "flags", "states", "cats"]
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
@@ -183,7 +199,7 @@ def main() -> None:
                     for theme in themes:
                         shoot(browser, base, out, report, f"{page_key}{prefix}-{size}-{theme}", page_key, size, theme, **kwargs)
 
-        if "core" in groups or "states" in groups:
+        if "core" in groups or "states" in groups or "cats" in groups:
             def core_jobs(base: str) -> None:
                 # 必要的 12 張：正式站目前的功能旗標，樣本資料的劇本與直白分析都還沒過期。
                 if "core" in groups:
@@ -194,6 +210,14 @@ def main() -> None:
                         for theme in THEMES:
                             shoot(browser, base, out, report, f"home-panel-price-{size}-{theme}", "home", size, theme,
                                   after=open_price_panel, full_page=False)
+                if "cats" in groups:
+                    # 首頁四類各展開一次（整頁），加上搜尋面板打開的樣子（只拍可見範圍）。
+                    for size in SIZES:
+                        for theme in THEMES:
+                            for cat in HOME_CATS:
+                                shoot(browser, base, out, report, f"home-cat-{cat}-{size}-{theme}", "home", size, theme, after=open_cat(cat))
+                            shoot(browser, base, out, report, f"home-search-{size}-{theme}", "home", size, theme,
+                                  after=open_search, full_page=False)
             run(("--features", "core"), core_jobs)
         if "expired" in groups:
             # 劇本與直白分析過期時的首頁：結論、劇本日、收復線／防守線、直白分析整組隱藏。

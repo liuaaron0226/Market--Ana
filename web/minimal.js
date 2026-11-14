@@ -2037,12 +2037,12 @@
   });
 })();
 
-// G3：首頁三區塊（籌碼選股／產業資金流向／長期核心持有），只讀已封存的發布結果；搜尋時讓位，清空後回來。
+// G3：首頁三區塊（籌碼選股／產業資金流向／長期核心持有），只讀已封存的發布結果。
+// 本人 2026-11-14：搜尋改在浮起的面板裡，不再佔首頁版面，原本「搜尋時讓位」的行為取消。
 // 本人 2026-11-08：自創候選退役；演算法依參考網站反推結果，畫面名稱為本站用語。
 (() => {
   'use strict';
   const host = document.getElementById('marketScreens');
-  const input = document.getElementById('stockSearchInput');
   if (!host) return;
   const $ = id => document.getElementById(id);
   const SVG = 'http://www.w3.org/2000/svg';
@@ -2602,13 +2602,6 @@
     }, 150);
   });
 
-  // 規格：未輸入時顯示首頁區塊，輸入搜尋時讓位，清空後回來。
-  function syncWithSearch() { host.hidden = Boolean(input && input.value.trim()); }
-  if (input) {
-    input.addEventListener('input', syncWithSearch);
-    document.getElementById('stockSearchClear')?.addEventListener('click', () => { host.hidden = false; });
-  }
-  syncWithSearch();
   initChips();
   initRotation();
   initCore();

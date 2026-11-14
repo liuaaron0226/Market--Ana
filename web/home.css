@@ -414,7 +414,7 @@ body.hm .service-note {
 }
 
 /* ---------- 鍵：凸起，懸停浮起，按下沉入（外殼與下面各區塊的按鈕共用這一組） ---------- */
-body.hm :is(.theme-toggle, .stock-search-form button[type="button"], .stock-search-more, .stock-search-result a,
+body.hm :is(.theme-toggle, .icon-key, .stock-search-form button[type="button"], .stock-search-more, .stock-search-result a,
   .chart-controls > button, .chart-actions .line-trigger, .chart-actions .mobile-candle-details,
   .screen-more, .core-selection-chip, .core-period select) {
   border: 0; border-radius: var(--r-key); background: var(--key); box-shadow: var(--key-shadow);
@@ -434,16 +434,16 @@ body.hm .core-compare-entry button {
 }
 body.hm .stock-search-results { gap: 8px; }
 @media (hover: hover) {
-  body.hm :is(.conclusion-trigger, .theme-toggle, .stock-search-form button[type="button"], .stock-search-more, .stock-search-result a,
+  body.hm :is(.conclusion-trigger, .theme-toggle, .icon-key, .stock-search-form button[type="button"], .stock-search-more, .stock-search-result a,
     .chart-controls > button, .chart-actions .line-trigger, .chart-actions .mobile-candle-details,
     .screen-more, .core-selection-chip, .core-period select):hover {
     background: var(--key); color: var(--ink); transform: translateY(var(--key-lift)); box-shadow: var(--key-shadow-hover);
   }
   body.hm .stock-search-form button[type="submit"]:hover,
   body.hm .core-compare-entry button:hover { transform: translateY(var(--key-lift)); }
-  body.hm :is(.price-summary, .state-trigger, .portfolio-entry):hover { transform: translateY(var(--key-lift)); }
+  body.hm :is(.price-summary, .state-trigger):hover { transform: translateY(var(--key-lift)); }
 }
-body.hm :is(.conclusion-trigger, .theme-toggle, .stock-search-form button[type="button"], .stock-search-more, .stock-search-result a,
+body.hm :is(.conclusion-trigger, .theme-toggle, .icon-key, .stock-search-form button[type="button"], .stock-search-more, .stock-search-result a,
   .chart-controls > button, .chart-actions .line-trigger, .chart-actions .mobile-candle-details,
   .screen-more, .core-selection-chip, .core-period select):active,
 body.hm .chart-tools-toggle[aria-expanded="true"] {
@@ -453,8 +453,8 @@ body.hm .stock-search-form button[type="submit"]:active,
 body.hm .core-compare-entry button:active {
   transform: translateY(var(--key-thick)); box-shadow: none; transition-duration: var(--t-press);
 }
-body.hm :is(.price-summary, .state-trigger, .portfolio-entry) { transition: transform var(--t-lift) var(--ease-depth); }
-body.hm :is(.price-summary, .state-trigger, .portfolio-entry):active { transform: translateY(1px); transition-duration: var(--t-press); }
+body.hm :is(.price-summary, .state-trigger) { transition: transform var(--t-lift) var(--ease-depth); }
+body.hm :is(.price-summary, .state-trigger):active { transform: translateY(1px); transition-duration: var(--t-press); }
 
 /* ---------- 槽：搜尋框、代號輸入框 ---------- */
 body.hm .stock-search-form input,
@@ -630,4 +630,105 @@ body.hm .core-chart .chart-tip {
   body.hm .chip-grid { gap: 12px; }
   body.hm .chip-grid .chip-card { padding: 14px 14px 12px; }
   body.hm .market-screens .screen-block { margin-top: 12px; padding: 18px 14px 20px; }
+}
+
+/* ================= 看盤桌：首頁分類收合（立體重設計 A 包第 4 片，本人 2026-11-14 定案） =================
+   一進首頁只露出重點與結論：頂列、主 K 線與指標副圖、短中長期走勢、直白分析的一句話。
+   籌碼與資金、籌碼選股、產業資金流向、長期核心持有收成一排四顆分類鍵，一次只開一類（開關在 home-fold.js）。
+   搜尋與自選庫存收成右上角的圖示鍵；搜尋用浮起的面板（原生 dialog）打開。 */
+
+/* ---------- 右上角三顆圖示鍵：自選庫存、搜尋、主題 ---------- */
+body.hm .header-tools { grid-area: theme; align-self: start; display: flex; gap: 8px; }
+body.hm .header-tools > * {
+  width: var(--btn-h); height: var(--btn-h); min-height: 0; padding: 0;
+  display: grid; place-items: center; color: var(--ink);
+}
+body.hm .header-tools svg { width: 18px; height: 18px; }
+
+/* ---------- 直白分析：桌機也只留一句，四個重點點開才看 ---------- */
+body.hm .read-card .read-list,
+body.hm .read-card .read-date { display: none; }
+
+/* ---------- 分類鍵：和週期切換同一種槽與鍵，展開的那一類是凸起的鍵 ---------- */
+body.hm .hm-cats {
+  margin-top: 20px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+  padding: var(--track-pad); gap: var(--track-gap);
+  border-radius: var(--r-track); background: var(--well); box-shadow: var(--well-shadow);
+}
+body.hm .hm-cats button {
+  height: 48px; padding: 0 4px; border: 0; border-radius: var(--r-key);
+  background: transparent; color: var(--dim); font: 500 15px var(--sans);
+  transition: color 200ms var(--ease-out);
+}
+@media (hover: hover) {
+  body.hm .hm-cats button:hover { color: var(--ink); }
+}
+body.hm .hm-cats button[aria-expanded="true"] {
+  background: var(--key); color: var(--ink); font-weight: 700; box-shadow: var(--key-shadow);
+}
+
+/* 收起來的一類：不佔版面、看不到、Tab 走不到，但保留原本的寬度。
+   不用 display: none，是因為裡面的圖是照容器寬度畫的，量到 0 會畫錯。 */
+body.hm .workspace { position: relative; }
+body.hm .workspace:not([data-open-cat="chips"]) [data-cat-panel="chips"],
+body.hm .workspace:not([data-open-cat="screens"]) [data-cat-panel="screens"],
+body.hm .workspace:not([data-open-cat="rotation"]) [data-cat-panel="rotation"],
+body.hm .workspace:not([data-open-cat="core"]) [data-cat-panel="core"] {
+  position: absolute; top: 0; left: 0; right: 0; height: 0; margin: 0; padding-block: 0;
+  overflow: hidden; visibility: hidden; box-shadow: none;
+}
+body.hm .workspace[data-open-cat="chips"] [data-cat-panel="chips"],
+body.hm .workspace[data-open-cat="screens"] [data-cat-panel="screens"],
+body.hm .workspace[data-open-cat="rotation"] [data-cat-panel="rotation"],
+body.hm .workspace[data-open-cat="core"] [data-cat-panel="core"] { animation: cat-rise 380ms var(--ease-depth); }
+@keyframes cat-rise {
+  from { opacity: 0; transform: translateY(12px); }
+}
+/* 區塊標題和分類鍵同名，畫面上不再重複，留給螢幕閱讀器 */
+body.hm #chipsTitle,
+body.hm #exploreTitle {
+  position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+}
+body.hm .chips { padding-top: 20px; }
+body.hm .hm-explore { padding-top: 0; }
+body.hm .market-screens .screen-block,
+body.hm .market-screens .screen-block:first-child { margin-top: 20px; }
+
+/* ---------- 搜尋面板：第 2 層的浮板，出現在畫面上方（手機鍵盤彈出時結果不會被擋） ---------- */
+body.hm dialog.hm-search:not([open]) { display: none; }
+body.hm dialog.hm-search {
+  width: min(640px, calc(100vw - 32px)); max-height: calc(100dvh - 10dvh - 16px);
+  margin: 10dvh auto auto; padding: 20px 24px 24px;
+  grid-template-columns: minmax(0, 1fr); row-gap: 12px;
+  border: 0; border-radius: var(--r-float); background: var(--float); box-shadow: var(--float-shadow);
+  color: var(--ink); overflow: auto; overscroll-behavior: contain;
+  animation: float-rise 380ms var(--ease-depth);
+}
+/* 舊版瀏覽器的 ::backdrop 讀不到頁面的變數，所以給一個後備值 */
+body.hm dialog.hm-search::backdrop { background: var(--scrim, rgb(28 25 20 / 42%)); }
+@keyframes float-rise {
+  from { opacity: 0; transform: translateY(16px) scale(.96); }
+}
+body.hm dialog.hm-search .stock-search-heading { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 12px; }
+body.hm dialog.hm-search :is(.stock-search-suggestions, .stock-search-status, .stock-search-results, .stock-search-more) { grid-column: 1; }
+
+@media (max-width: 860px) {
+  /* 手機：三顆圖示鍵和「台股加權指數」同一列，指數數字自己一整列，才不會被擠到 */
+  body.hm .market-header { grid-template-areas: "brand theme" "price price" "time time" "conclusion conclusion"; column-gap: 12px; }
+  body.hm .instrument-block { display: contents; }
+  body.hm .brand-line { grid-area: brand; align-self: center; min-width: 0; }
+  body.hm .brand-line h1 { font-size: 18px; white-space: nowrap; }
+  body.hm .price-summary { grid-area: price; }
+  body.hm .hm-cats { margin-top: 12px; }
+  body.hm .hm-cats button { height: 44px; padding: 0 2px; font-size: 13px; }
+  body.hm .chips { padding-top: 12px; }
+  body.hm .market-screens .screen-block,
+  body.hm .market-screens .screen-block:first-child { margin-top: 12px; }
+  body.hm dialog.hm-search { max-height: calc(100dvh - 28px); margin-top: 12px; padding: 16px; }
+}
+/* 320 寬：三顆 44px 的圖示鍵旁邊放不下帶圖示的標題，拿掉標題前的小圖示 */
+@media (max-width: 359px) {
+  body.hm .market-mark { display: none; }
+  body.hm .brand-line h1 { font-size: 16px; }
+  body.hm .hm-cats button { font-size: 12px; line-height: 1.25; text-wrap: balance; }
 }
