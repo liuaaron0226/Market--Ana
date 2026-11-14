@@ -62,31 +62,27 @@ THUMB_ON_CHECKED = """value => {
 }"""
 
 
-# 指到 K 棒時浮出來的當天明細：要看得到、有開高低收，而且底色不透明（壓在 K 線上數字才讀得清楚）。
-TIP_STATE = """() => {
-  const tip = document.querySelector('#mainChart .kc-tip'), style = getComputedStyle(tip);
-  if (!tip.classList.contains('show') || Number(style.opacity) < 1) return 'hidden';
+# 指到 K 棒時浮出來的當天明細：看不到回 'hidden'；看得到的話要有開高低收，而且底色不透明（壓在 K 線上數字才讀得清楚）。
+# 首頁手機不顯示（一碰就跳出來蓋住 K 線），只留十字線；桌機與個股頁照舊。
+TIP_STATE = """host => {
+  const tip = document.querySelector(host + ' .kc-tip'), style = getComputedStyle(tip);
+  if (!tip.classList.contains('show') || !tip.getClientRects().length || Number(style.opacity) < 1) return 'hidden';
   if (!/收.*開.*高.*低/.test(tip.textContent)) return 'no ohlc: ' + tip.textContent;
   const parts = style.backgroundColor.match(/[\d.]+/g) || [];
   return parts.length < 4 || Number(parts[3]) === 1 ? 'ok' : 'translucent ' + style.backgroundColor;
 }"""
 
 
-# 當天明細的浮窗現在看不看得到（首頁手機不顯示；桌機與個股頁照舊）。
-TIP_SEEN = """host => {
-  const tip = document.querySelector(host + ' .kc-tip');
-  return tip.classList.contains('show') && tip.getClientRects().length > 0 && Number(getComputedStyle(tip).opacity) === 1;
-}"""
-# 目前顯示的那一個指標區（一次只顯示一種）。下面三段檢查共用。
-ACTIVE_STUDY = "const pane = [...document.querySelectorAll('#chartStudies .kc-study-pane')].find(p => p.getClientRects().length);"
-# 指標區接在 K 線正下方：同寬、左右對齊、中間不留空隙（所以也夾不進標題列、讀數、圖例或按鈕）。
+# 目前顯示的那一個指標區（一次只顯示一種）。下面幾段檢查共用。
+ACTIVE_PANE = "[...document.querySelectorAll('#chartStudies .kc-study-pane')].find(p => p.getClientRects().length)"
+ACTIVE_STUDY = "const pane = %s; if (!pane) return 'no indicator shown';" % ACTIVE_PANE
+# 指標區接在 K 線正下方：左緣對齊、中間不留空隙（所以也夾不進標題列、讀數、圖例或按鈕）。
 STUDY_JOINED = """host => {
   %s
-  if (!pane) return 'no indicator shown';
   const main = document.querySelector(host + ' canvas').getBoundingClientRect(), box = pane.querySelector('canvas').getBoundingClientRect();
   const gap = box.top - main.bottom;
   if (Math.abs(gap) > 2) return `gap ${gap.toFixed(1)}px`;
-  return Math.abs(box.left - main.left) <= 1 && Math.abs(box.width - main.width) <= 1 ? 'ok' : `misaligned ${box.left}/${box.width} vs ${main.left}/${main.width}`;
+  return Math.abs(box.left - main.left) <= 1 ? 'ok' : `left edge ${box.left} vs ${main.left}`;
 }""" % ACTIVE_STUDY
 # 指標區左上角只寫指標名稱；選取那一天的讀數與圖例不出現在畫面上。
 STUDY_NAME_ONLY = """() => {
@@ -98,25 +94,58 @@ STUDY_NAME_ONLY = """() => {
   const extra = [...pane.querySelectorAll('.kc-study-readout, .kc-study-legend')].filter(seen);
   return extra.length ? 'still shows ' + extra.map(e => e.className).join(', ') : 'ok';
 }""" % ACTIVE_STUDY
-# 由上到下：K 線、指標區、切換鍵；首頁手機的收復線／防守線與詳情鈕再排在切換鍵下面。
-STUDY_ORDER = """below => {
+# 由上到下：K 線、指標區、切換鍵；有給 under_keys 的話（首頁手機的收復線／防守線與詳情鈕），它要再排在切換鍵下面。
+STUDY_ORDER = """under_keys => {
   %s
   const bottom = pane.querySelector('canvas').getBoundingClientRect().bottom, keys = document.querySelector('#chartStudies .kc-study-switcher').getBoundingClientRect();
   if (keys.top < bottom - 1) return 'switch keys are not below the indicator area';
-  const actions = below && document.querySelector(below).getBoundingClientRect();
+  const actions = under_keys && document.querySelector(under_keys).getBoundingClientRect();
   return !actions || actions.top >= keys.bottom - 1 ? 'ok' : 'chart actions are not below the switch keys';
 }""" % ACTIVE_STUDY
-STUDY_PIXELS = "document.querySelector('#chartStudies .kc-study-pane:not([hidden]) canvas').toDataURL()"
+# 十字線：選取 K 棒之後，K 線和指標區兩張畫布上多出來的東西只有它（當天明細是另外的元素，不畫在畫布上）。
+# 先記下選取前兩張畫布的樣子，選取後比出多了什麼：兩張都要多一條細直線、幾乎貫穿整張，而且在同一個水平位置。
+CHART_CANVASES = "[document.querySelector(host + ' canvas'), %s.querySelector('canvas')]" % ACTIVE_PANE
+KEEP_CANVASES = "host => { window.__journeyCanvases = %s.map(c => c.getContext('2d').getImageData(0, 0, c.width, c.height).data); }" % CHART_CANVASES
+CROSSHAIR = """host => {
+  const lines = %s.map((c, i) => {
+    const now = c.getContext('2d').getImageData(0, 0, c.width, c.height).data, was = window.__journeyCanvases[i];
+    if (now.length !== was.length) return 'canvas resized';
+    let left = c.width, right = -1, top = c.height, bottom = -1;
+    for (let p = 0; p < now.length; p += 4) {
+      if (now[p] === was[p] && now[p + 1] === was[p + 1] && now[p + 2] === was[p + 2] && now[p + 3] === was[p + 3]) continue;
+      const x = p / 4 %% c.width, y = Math.floor(p / 4 / c.width);
+      left = Math.min(left, x); right = Math.max(right, x); top = Math.min(top, y); bottom = Math.max(bottom, y);
+    }
+    const scale = c.width / c.getBoundingClientRect().width;
+    return right < 0 ? 'no line' : { x: (left + right) / 2 / scale, width: (right - left + 1) / scale, cover: (bottom - top + 1) / c.height };
+  });
+  const broken = lines.some(line => typeof line === 'string' || line.width > 3 || line.cover < 0.8);
+  return !broken && Math.abs(lines[0].x - lines[1].x) <= 1 ? 'ok' : JSON.stringify(lines);
+}""" % CHART_CANVASES
 
 
-def joined_chart(page: Page, tag: str, host: str, below: str | None) -> None:
-    """K 線和指標是同一個圖框：三項檢查首頁與個股頁共用。"""
+def chart_point(page: Page, host: str, across: float, down: float) -> tuple[float, float]:
+    """K 線畫布上的一點（先把圖捲進畫面），across、down 是佔畫布寬高的比例。"""
+    canvas = page.locator(f"{host} canvas").first
+    canvas.scroll_into_view_if_needed()
+    box = canvas.bounding_box()
+    return box["x"] + box["width"] * across, box["y"] + box["height"] * down
+
+
+def joined_chart(page: Page, tag: str, host: str, names: list[str], under_keys: str | None) -> None:
+    """K 線和指標是同一個圖框：這幾項檢查首頁與個股頁共用。names 是切換鍵由左到右的名稱。"""
+    keys = page.locator("#chartStudies .kc-study-choice")
+    labels = [label.strip() for label in keys.all_inner_texts()]
+    apart = [kind for kind in keys.evaluate_all("nodes => nodes.map(node => node.dataset.study)")
+             if not study_pressed(page, kind) or page.evaluate(STUDY_JOINED, host) != "ok"]
+    check(f"{tag}：{len(names)} 種指標都切得到，而且每一種都接在 K 線正下方", labels == names and not apart, [labels, apart])
+    study_pressed(page, "volume")
     joined = page.evaluate(STUDY_JOINED, host)
-    check(f"{tag}：指標區接在 K 線正下方、同寬對齊", joined == "ok", joined)
+    check(f"{tag}：指標區接在 K 線正下方、左緣對齊", joined == "ok", joined)
     name_only = page.evaluate(STUDY_NAME_ONLY)
     check(f"{tag}：指標區左上角只寫指標名稱，沒有讀數與圖例", name_only == "ok", name_only)
-    order = page.evaluate(STUDY_ORDER, below)
-    check(f"{tag}：切換鍵排在整張圖下方" + ("，收復線／防守線與詳情再往下" if below else ""), order == "ok", order)
+    order = page.evaluate(STUDY_ORDER, under_keys)
+    check(f"{tag}：切換鍵排在整張圖下方" + ("，收復線／防守線與詳情再往下" if under_keys else ""), order == "ok", order)
 
 
 CATS = dict(zip(shoot.HOME_CATS, ("籌碼與資金", "籌碼選股", "產業資金流向", "長期核心持有")))
@@ -233,7 +262,23 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
         check(f"{tag}：指標切到 MACD", study_pressed(page, "macd"))
         check(f"{tag}：指標切回成交金額", study_pressed(page, "volume"))
     step(f"{tag}：指標切換", studies)
-    step(f"{tag}：K 線與指標同一個圖框", lambda: joined_chart(page, tag, "#mainChart", "#chartActions" if mobile else None))
+    step(f"{tag}：K 線與指標同一個圖框",
+         lambda: joined_chart(page, tag, "#mainChart", ["成交金額", "MACD", "KD", "RSI"], "#chartActions" if mobile else None))
+
+    def swipe_study() -> None:
+        # 指標區沿用原本的手勢：在上面左右拖是切換指標（要平移或縮放 K 線，在 K 線那一半操作）。
+        canvas = page.locator("#chartStudies .kc-study-pane:not([hidden]) canvas")
+        canvas.scroll_into_view_if_needed()
+        box = canvas.bounding_box()
+        x, y = box["x"] + box["width"] * 0.6, box["y"] + box["height"] / 2
+        page.mouse.move(x, y)
+        page.mouse.down()
+        page.mouse.move(x - 90, y, steps=6)
+        page.mouse.up()
+        check(f"{tag}：在指標區往左拖，切到下一種指標",
+              page.locator(".kc-study-choice[data-study='macd']").get_attribute("aria-pressed") == "true")
+        study_pressed(page, "volume")
+    step(f"{tag}：指標區手勢", swipe_study)
 
     open_panel(page, tag, "#priceSummary", "現價")
     open_panel(page, tag, "#conclusionTrigger", "結論")
@@ -243,23 +288,25 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
     open_panel(page, tag, ".chip-card", "")
 
     def candle() -> None:
-        canvas = page.locator("#mainChart canvas").first
-        canvas.scroll_into_view_if_needed()
-        box = canvas.bounding_box()
-        x, y = box["x"] + box["width"] * 0.45, box["y"] + box["height"] * 0.45
-        plain = page.evaluate(STUDY_PIXELS)
+        x, y = chart_point(page, "#mainChart", 0.45, 0.45)
+        page.evaluate(KEEP_CANVASES, "#mainChart")
         if mobile:
             # 手機：點 K 棒先選取，再按「這一天的詳情」才開明細板。
             page.touchscreen.tap(x, y)
             page.locator("#mobileCandleDetails").wait_for(state="visible")
-            # 手機不浮出當天明細的視窗（會蓋住 K 線），只留十字線；數字按「這一天的詳情」看。
-            check(f"{tag}：點 K 棒不浮出明細視窗，十字線還在",
-                  not page.evaluate(TIP_SEEN, "#mainChart") and page.evaluate("window.MinimalApp.chart.hover >= 0"))
         else:
             page.mouse.move(x, y)
-            tip = page.evaluate(TIP_STATE)
+        tip = page.evaluate(TIP_STATE, "#mainChart")
+        if mobile:
+            check(f"{tag}：點 K 棒不浮出當天明細的視窗", tip == "hidden", tip)
+        else:
             check(f"{tag}：指到 K 棒浮出當天明細，底色不透明", tip == "ok", tip)
-        check(f"{tag}：十字線一路畫到指標區", page.evaluate(STUDY_PIXELS) != plain)
+        crosshair = page.evaluate(CROSSHAIR, "#mainChart")
+        check(f"{tag}：十字線從 K 線一路畫到指標區，上下同一個位置", crosshair == "ok", crosshair)
+        if mobile:
+            # 選取之後切換鍵下面會多一顆「取消選取」，收復線／防守線與詳情鈕仍然要在切換鍵下面。
+            order = page.evaluate(STUDY_ORDER, "#chartActions")
+            check(f"{tag}：選取 K 棒後，收復線／防守線與詳情仍在切換鍵下面", order == "ok", order)
         if mobile:
             page.locator("#mobileCandleDetails").click()
         else:
@@ -491,17 +538,22 @@ def stock(page: Page, base: str, tag: str, mobile: bool) -> None:
         check(f"{tag}：指標切到 MACD", study_pressed(page, "macd"))
         check(f"{tag}：指標切到外資", study_pressed(page, "foreign"))
     step(f"{tag}：指標切換", studies)
-    step(f"{tag}：K 線與指標同一個圖框", lambda: joined_chart(page, tag, "#chartHost", None))
+    step(f"{tag}：K 線與指標同一個圖框",
+         lambda: joined_chart(page, tag, "#chartHost", ["成交量", "MACD", "KD", "RSI", "外資", "投信", "自營商"], None))
 
     def candle_tip() -> None:
         # 個股頁沒有「這一天的詳情」可以替代，所以手機上的當天明細浮窗照舊（只有首頁手機拿掉）。
-        canvas = page.locator("#chartHost canvas").first
-        canvas.scroll_into_view_if_needed()
-        box = canvas.bounding_box()
-        x, y = box["x"] + box["width"] * 0.4, box["y"] + box["height"] * 0.4
-        page.touchscreen.tap(x, y) if mobile else page.mouse.move(x, y)
+        x, y = chart_point(page, "#chartHost", 0.4, 0.4)
+        page.evaluate(KEEP_CANVASES, "#chartHost")
+        if mobile:
+            page.touchscreen.tap(x, y)
+        else:
+            page.mouse.move(x, y)
         page.wait_for_timeout(250)
-        check(f"{tag}：指到 K 棒仍浮出當天明細", page.evaluate(TIP_SEEN, "#chartHost"))
+        tip = page.evaluate(TIP_STATE, "#chartHost")
+        check(f"{tag}：指到 K 棒仍浮出當天明細", tip != "hidden", tip)
+        crosshair = page.evaluate(CROSSHAIR, "#chartHost")
+        check(f"{tag}：十字線從 K 線一路畫到指標區，上下同一個位置", crosshair == "ok", crosshair)
     step(f"{tag}：K 棒明細", candle_tip)
 
     def wheel_zoom() -> None:

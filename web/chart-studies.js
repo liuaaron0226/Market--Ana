@@ -4,8 +4,9 @@
 
   const DPR = () => Math.max(1, Math.min(3, window.devicePixelRatio || 1));
   const KNOWN_KINDS = ['volume', 'macd', 'kd', 'rsi', 'foreign', 'trust', 'dealer'];
-  // 指標名稱疊在指標區左上角：畫圖時上緣留這一條給它，線與柱不會壓到字。
-  const NAME_STRIP = 20;
+  // 指標名稱（.kc-study-title）疊在指標區左上角：畫圖時上緣留這一條給它，線與柱不會壓到字。
+  // 名稱的位置與字級在 chart-studies.css 的 .kc-study-head／.kc-study-title，兩邊要一起改。
+  const TITLE_STRIP_PX = 20;
   // KD 以 K、D 初值 50 遞推，前端只有約 120 根日K：前 9 根算 RSV，之後再暖機 40 根，
   // 讓初值的影響衰減到 0.01 以下，最後一根才會和後端用較長歷史算出的 K9／D9 一致。
   const KD_READY_BARS = 49;
@@ -272,7 +273,7 @@
       // 畫面上只看得到指標名稱（疊在指標區左上角）；讀數留給螢幕閱讀器，樣式把它收起來。
       const header = element('header', 'kc-study-head');
       const titleNode = element('h3', 'kc-study-title', titleValue);
-      const readout = element('p', 'kc-study-readout', '尚無日線資料');
+      const readout = element('p', 'kc-study-readout sr-only', '尚無日線資料');
       readout.setAttribute('aria-label', `${titleValue}目前選取值`);
       header.append(titleNode, readout);
 
@@ -508,21 +509,22 @@
     _drawCrosshair(context, height, range) {
       const hover = this.chart.hover;
       if (!Number.isInteger(hover) || hover < range.start || hover >= range.end) return;
+      // 和 K 線那一段的十字線（kchart.js）同色、同一個水平位置，上下接起來才是一條線。
       const x = range.geo.l + range.geo.step * (hover - range.start + 0.5);
       context.save();
-      context.strokeStyle = token('--dim');
+      context.strokeStyle = token('--faint');
       context.lineWidth = 1;
       context.setLineDash([3, 3]);
       context.beginPath();
-      context.moveTo(Math.round(x) + 0.5, 0);
-      context.lineTo(Math.round(x) + 0.5, height);
+      context.moveTo(x, 0);
+      context.lineTo(x, height);
       context.stroke();
       context.restore();
     }
 
     _drawVolume(context, width, height, range) {
       const { candles, start, end, geo } = range;
-      const top = NAME_STRIP;
+      const top = TITLE_STRIP_PX;
       const bottom = height - 14;
       const plotHeight = Math.max(1, bottom - top);
       const key = this.volumeKind;
@@ -562,8 +564,8 @@
       context.textBaseline = 'top';
       const axisX = Math.min(width - 2, geo.l + geo.pw + 7);
       const unitLabel = this.volumeKind === 'amount' ? '億元' : '張';
-      context.fillText(unitLabel, axisX, 2);
-      context.fillText(this.volumeKind === 'volume' ? formatNumber(maximum / 1000, 1) : formatNumber(maximum, 1), axisX, 15);
+      context.fillText(unitLabel, axisX, top - 18);
+      context.fillText(this.volumeKind === 'volume' ? formatNumber(maximum / 1000, 1) : formatNumber(maximum, 1), axisX, top - 5);
       context.textBaseline = 'bottom';
       context.fillText('0', axisX, height - 2);
 
@@ -585,7 +587,7 @@
     }
 
     _drawInstitutional(context, width, height, range, kind) {
-      const top = NAME_STRIP;
+      const top = TITLE_STRIP_PX;
       const bottom = height - 12;
       let amplitude = 0;
       for (let index = range.start; index < range.end; index += 1) {
@@ -642,7 +644,7 @@
 
     _drawMacd(context, width, height, range) {
       const macd = Array.isArray(this.chart.macd) ? this.chart.macd : [];
-      const top = NAME_STRIP;
+      const top = TITLE_STRIP_PX;
       const bottom = height - 12;
       let amplitude = 0;
       let hasReady = false;
@@ -716,7 +718,7 @@
 
     // KD／RSI 共用：固定 0～100 縱軸，畫參考虛線與一到兩條指標線；暖機中的點不畫成 0。
     _drawOscillator(context, width, height, range, series, lines, refs, emptyText) {
-      const top = NAME_STRIP;
+      const top = TITLE_STRIP_PX;
       const bottom = height - 12;
       const y = value => bottom - value / 100 * (bottom - top);
       let hasReady = false;
