@@ -785,16 +785,6 @@
     const cards = chipCards();
     grid.innerHTML = cards.map(card => `<button type="button" class="chip-card tone-${card.tone}" data-chip="${card.key}"><span class="chip-name">${esc(card.name)}<i aria-hidden="true">›</i></span><strong class="chip-value num">${esc(card.value)}</strong><span class="chip-read">${esc(card.read)}</span>${card.chart}<span class="chip-date num">資料 ${esc(card.date.slice(5).replace('-', '/'))}</span></button>`).join('');
     grid.querySelectorAll('[data-chip]').forEach(button => button.addEventListener('click', () => openPanel('chip', { key: button.dataset.chip }, button)));
-    // 資金浮雕：同一組六項畫成立體的軌道，有買有賣的兩項（外資現貨、投信）排前面
-    const relief = $('chipRelief');
-    if (relief && window.Relief && window.ReliefLayout) {
-      const signed = card => card.key === 'foreign' || card.key === 'trust';
-      window.Relief.render(relief, {
-        lanes: window.ReliefLayout.layout([...cards.filter(signed), ...cards.filter(card => !signed(card))].map(card => (
-          { key: card.key, name: card.name, value: card.value, tone: card.tone, signed: signed(card), values: chipSeries(card.key).map(row => row.value) }))),
-        onPick: (key, anchor) => openPanel('chip', { key }, anchor),
-      });
-    }
     grid.classList.remove('hm-same-date');
     if (PL) {
       $('readLine').textContent = PL.one_line;

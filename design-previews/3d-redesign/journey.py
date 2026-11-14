@@ -353,41 +353,6 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
           and page.evaluate(VISIBLE_COUNT, "#chipGrid .chip-read, #chipGrid .chip-date") == 0)
     open_panel(page, tag, ".chip-card", "")
 
-    def relief() -> None:
-        # 資金浮雕（樣品階段，本人 11-15 選的方向）：籌碼與資金六項近 20 天的立體圖，一項一條軌道。
-        painted = page.evaluate("""() => {
-          const canvas = document.querySelector('#chipRelief canvas'), data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
-          let filled = 0;
-          for (let i = 3; i < data.length; i += 4) if (data[i]) filled += 1;
-          return filled / (canvas.width * canvas.height);
-        }""")
-        check(f"{tag}：資金浮雕有畫出東西", painted > 0.08, painted)
-        labels = page.locator("#chipRelief .relief-label")
-        lanes = [[part.strip() for part in label.split("\n") if part.strip()] for label in labels.all_inner_texts()]
-        cards = page.locator("#chipGrid .chip-card").evaluate_all(
-            "nodes => nodes.map(node => [node.querySelector('.chip-name').firstChild.textContent.trim(), node.querySelector('.chip-value').textContent.trim()])")
-        check(f"{tag}：浮雕六條軌道的名稱與數字和下面六項一樣，有買有賣的兩項排在最前面",
-              sorted(lanes) == sorted(cards) and [lane[0] for lane in lanes[:2]] == ["外資現貨", "投信近一週"], [lanes, cards])
-        boxes = [label.bounding_box() for label in labels.all()]
-        apart = all(later["y"] >= earlier["y"] + earlier["height"] - 2 for earlier, later in zip(boxes, boxes[1:]))
-        check(f"{tag}：六條軌道的名稱由上到下排開，沒有疊在一起", len(boxes) == 6 and apart, boxes)
-        labels.nth(2).click()
-        page.wait_for_function(PANEL_OPEN)
-        page.locator("#panelTitle").wait_for(state="visible")
-        check(f"{tag}：點軌道的名稱開那一項的明細板", lanes[2][0] in page.locator("#panelTitle").text_content(), page.locator("#panelTitle").text_content())
-        page.keyboard.press("Escape")
-        page.wait_for_function(PANEL_CLOSED)
-        # 剛才點名稱時頁面可能捲動過，位置要重新量
-        canvas, first = page.locator("#chipRelief canvas").bounding_box(), labels.first.bounding_box()
-        # 用「圖上的相對位置」點：圖比視窗高的時候，點的地方可能不在畫面裡，讓瀏覽器自己先捲過去
-        page.locator("#chipRelief canvas").click(position={"x": canvas["width"] / 2, "y": first["y"] + first["height"] / 2 - 6 - canvas["y"]})
-        page.wait_for_function(PANEL_OPEN)
-        page.locator("#panelTitle").wait_for(state="visible")
-        check(f"{tag}：點圖上的軌道也開那一項的明細板", lanes[0][0] in page.locator("#panelTitle").text_content(), page.locator("#panelTitle").text_content())
-        page.keyboard.press("Escape")
-        page.wait_for_function(PANEL_CLOSED)
-    step(f"{tag}：資金浮雕", relief)
-
     def candle() -> None:
         x, y = chart_point(page, "#mainChart", 0.45, 0.45)
         page.evaluate(KEEP_CANVASES, "#mainChart")
