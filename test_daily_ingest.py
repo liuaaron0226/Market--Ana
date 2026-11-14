@@ -574,6 +574,30 @@ class CapitalChangeSourcesTest(unittest.TestCase):
                          "stopped")
 
 
+class BigHolderSourceTest(unittest.TestCase):
+    """集保大戶持股每週一份（本人 2026-11-14「可以，用集保」）：這一週已經存了就不再下載。"""
+
+    def test_weekly_file_is_fetched_once_per_week(self) -> None:
+        from stock_history import Response
+        from test_tdcc_holders import ROWS_2330, csv
+        calls = []
+
+        def get(url, params):
+            calls.append((url, dict(params)))
+            return Response(200, "text/csv", csv(ROWS_2330), url)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = di.tdcc_holders_day(root, "2026-11-16", get=get)   # 週一：最近一個週五是 11-13
+            self.assertEqual((first["status"], first["data_date"], first["requests"]), ("appended", "2026-11-13", 1))
+            self.assertEqual(calls, [("https://opendata.tdcc.com.tw/getOD.ashx", {"id": "1-5"})])
+            self.assertTrue((root / "data/tdcc-holders/weekly/2026-11-13.json").is_file())
+            again = di.tdcc_holders_day(root, "2026-11-18", get=get)   # 同一週稍後：不再下載
+            self.assertEqual((again["status"], again["requests"]), ("already-present", 0))
+            self.assertEqual(len(calls), 1)
+            di.tdcc_holders_day(root, "2026-11-20", get=get)           # 新的週五：再問一次
+            self.assertEqual(len(calls), 2)
+
+
 class TradingCalendarTest(unittest.TestCase):
     def test_parses_official_holiday_schedule_roc_dates(self) -> None:
         payload = [{"Name": "國慶日", "Date": "1151009", "Weekday": "五", "Description": ""},

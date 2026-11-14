@@ -14,7 +14,7 @@ from twon_analysis.indicators import Bar
 
 TOP_KEYS = {'schema', 'analysis_version', 'code', 'name', 'kind', 'market', 'as_of', 'requested_as_of', 'quote', 'qa',
             'indicators', 'levels', 'defense', 'trend_classification', 'conditions', 'trading_rules', 'reference',
-            'undisclosed', 'provenance', 'bars', 'chart', 'labels', 'strategy', 'institutional'}
+            'undisclosed', 'provenance', 'bars', 'chart', 'labels', 'strategy', 'institutional', 'big_holders'}
 BLOCKING_KEYS = {'schema', 'analysis_version', 'code', 'as_of', 'requested_as_of', 'qa', 'trading_rules', 'undisclosed',
                  'provenance', 'labels'}
 INDICATOR_KEYS = {'ma5', 'ma10', 'ma20', 'ma60', 'ma120', 'ma240', 'rsi14', 'atr14', 'atr_pct', 'relative_volume',
@@ -323,6 +323,24 @@ class AdjustedPriceTests(unittest.TestCase):
         self.assertEqual(result['institutional'], [
             {'date': self.days[29], 'foreign': 4000, 'trust': -1204, 'dealer': 200, 'total': 2996},
             {'date': self.days[30], 'foreign': 4000, 'trust': -1200, 'dealer': 200, 'total': 3000}])
+
+    def test_weekly_big_holder_shares_come_with_the_analysis_up_to_its_data_day(self):
+        # 本人 2026-11-14「可以，用集保」：主力買賣超沒有合法免費來源，改看集保的大戶持股變化。
+        asked = []
+
+        def weekly(out, code, as_of):
+            asked.append((code, as_of))
+            return [{'date': '2026-02-27', 'pct_1000': 60.1, 'holders_1000': 40, 'pct_400': 70.0, 'holders_400': 90, 'holders': 5000}]
+        with unittest.mock.patch('twon_analysis.analyze_v2.big_holder_series', weekly):
+            result = self.analyze({})
+        self.assertEqual(asked, [('9999', self.days[-1])])
+        self.assertEqual(result['big_holders'][0]['pct_1000'], 60.1)
+
+    def test_missing_big_holder_data_is_an_empty_list_not_a_failed_analysis(self):
+        def broken(out, code, as_of):
+            raise OSError('unreadable')
+        with unittest.mock.patch('twon_analysis.analyze_v2.big_holder_series', broken):
+            self.assertEqual(self.analyze({})['big_holders'], [])
 
     def test_default_reads_the_capital_events_of_the_data_root(self):
         with unittest.mock.patch('twon_analysis.analyze_v2.default_capital_events', return_value={'9999': [self.split]}):

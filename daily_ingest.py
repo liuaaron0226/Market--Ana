@@ -715,11 +715,26 @@ def capital_supplement_day(root: Path, day: str, *, get: Callable | None = None,
     return {"status": "refreshed", **result}
 
 
+# ---- 集保大戶持股（每週一份） ----
+
+
+def tdcc_holders_day(root: Path, day: str, *, get: Callable | None = None) -> dict:
+    """集保股權分散表通常以週五為資料日。最近一個週五那份已經存了，就不再下載（一份 2.4MB）。"""
+    import tdcc_holders as th
+
+    out = root / "data/tdcc-holders"
+    base = date.fromisoformat(day)
+    friday = base - timedelta(days=(base.weekday() - 4) % 7)
+    if (out / "weekly" / f"{friday.isoformat()}.json").exists():
+        return {"status": "already-present", "requests": 0, "data_date": friday.isoformat()}
+    return th.refresh(out, get=get or th.http_get)
+
+
 # ---- 每日協調器呼叫的兩個入口 ----
 
 REQUIRED_DATASETS = ("listed_quotes", "otc_quotes", "listed_institutional", "otc_institutional")
 OPTIONAL_DATASETS = ("otc_index", "twse_valuation", "tpex_valuation", "otc_corporate_actions",
-                     "listed_corporate_actions", "capital_supplement",
+                     "listed_corporate_actions", "capital_supplement", "tdcc_holders",
                      "fundamentals", "taiex_index", "listed_chip_detail")
 
 
@@ -823,6 +838,7 @@ def fetch_day(day: str, *, root: Path = ROOT, sleep: Callable = time.sleep, incl
     sleep(5.0)
     timed("capital_supplement", lambda: capital_supplement_day(root, day, sleep=sleep))
     sleep(5.0)
+    timed("tdcc_holders", lambda: tdcc_holders_day(root, day))  # 集保另一個網域，不與證交所／櫃買共用間隔
     timed("listed_chip_detail", lambda: {"status": "ok", "datasets": listed_chip_detail_day(root, day, sleep=sleep)})
     if include_fundamentals:
         timed("fundamentals", lambda: fundamentals_day(data / "fundamentals-history", day))

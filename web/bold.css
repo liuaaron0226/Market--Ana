@@ -56,8 +56,8 @@
 .bd-price #chg.down { color: var(--down); }
 
 /* 候選入選理由（stock.js 產生，沿用原 class）：改成細線區塊 */
-#candidateReasons:not(:empty) { margin-bottom: 24px; }
-#candidateReasons .sk-card { border: 0; border-top: 1px solid var(--hair); border-radius: 0; background: transparent; padding: 20px 0 0; margin: 0; }
+:is(#candidateReasons, #bigHolders):not(:empty) { margin-bottom: 24px; }
+:is(#candidateReasons, #bigHolders) .sk-card { border: 0; border-top: 1px solid var(--hair); border-radius: 0; background: transparent; padding: 20px 0 0; margin: 0; }
 
 /* ---------- 主舞台：圖 7 ＋ 階梯 3 ---------- */
 .bd-stage {

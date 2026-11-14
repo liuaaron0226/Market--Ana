@@ -76,13 +76,13 @@
 .sk-cond-sample { margin-top: 12px; }
 
 /* ---------- 籌碼名單（出現在籌碼選股名單）：細線區塊 ---------- */
-#candidateReasons .sk-reason-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-#candidateReasons .sk-reason-head h2 { margin: 0; font: 600 16px var(--serif); }
-#candidateReasons .sk-reason-meta { color: var(--faint); font: 12px var(--mono); }
-#candidateReasons .sk-reason-invalid { margin: 12px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--hair); }
-#candidateReasons .sk-reason-invalid li { padding: 8px 0; border-bottom: 1px solid var(--hair); font-size: 14px; }
-#candidateReasons .sk-reason-judgment { margin: 12px 0 4px; font-size: 14px; line-height: 1.6; }
-#candidateReasons p.sk-reason-meta { font-family: var(--sans); }
+:is(#candidateReasons, #bigHolders) .sk-reason-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+:is(#candidateReasons, #bigHolders) .sk-reason-head h2 { margin: 0; font: 600 16px var(--serif); }
+:is(#candidateReasons, #bigHolders) .sk-reason-meta { color: var(--faint); font: 12px var(--mono); }
+:is(#candidateReasons, #bigHolders) .sk-reason-invalid { margin: 12px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--hair); }
+:is(#candidateReasons, #bigHolders) .sk-reason-invalid li { padding: 8px 0; border-bottom: 1px solid var(--hair); font-size: 14px; }
+:is(#candidateReasons, #bigHolders) .sk-reason-judgment { margin: 12px 0 4px; font-size: 14px; line-height: 1.6; }
+:is(#candidateReasons, #bigHolders) p.sk-reason-meta { font-family: var(--sans); }
 
 /* ---------- 要注意：頁尾小字 ---------- */
 .bd-foot h2 { font-size: 15px; margin-bottom: 8px; }

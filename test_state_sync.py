@@ -462,6 +462,10 @@ class StateSyncTest(unittest.TestCase):
         # 每天只抓視窗內的新事件；累積下來的 ETF 分割、櫃買減資與上市現金股利要跟著工作集走，否則每次回到種子。
         self.assertIn("data/corporate-actions/capital-supplement.json", {item.path for item in ss.WORKING_SET})
 
+    def test_working_set_carries_the_weekly_big_holder_files_that_cannot_be_downloaded_again(self) -> None:
+        by_path = {item.path: item for item in ss.WORKING_SET}
+        self.assertEqual(by_path["data/tdcc-holders/weekly"].recent_files, 60)
+
     def test_working_set_carries_run_log_and_previous_seed(self) -> None:
         # Actions 每次都是新機器：沒有執行紀錄，後面的 cron 時段看不到 already-done，會整天重做；
         # 沒有前一天 seed，D1 只能完整匯入（失去增量 base）。

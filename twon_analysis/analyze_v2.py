@@ -463,6 +463,13 @@ def institutional_series(code: str, market: str, dates: list[str]) -> list[dict]
     ]
 
 
+def big_holder_series(out, code: str, as_of: str) -> list[dict]:
+    """集保大戶持股逐週序列（tdcc_holders.series）。獨立成一個名字，分析測試才換得掉。"""
+    import tdcc_holders
+
+    return tdcc_holders.series(out, code, as_of)
+
+
 def _scale_shares(rows: list[dict], share_scale: dict[str, float]) -> list[dict]:
     """法人買賣超是股數：事件日之前的列跟成交量用同一個倍數換算；合計重算成三分項之和，維持逐列一致。"""
     scaled = []
@@ -576,6 +583,8 @@ def analyze_v2(code: str, as_of: str, db_path=DEFAULT_DB, otc_db_path=DEFAULT_OT
         'levels': levels,
         'strategy': strategy,
         'institutional': institutional,
+        # 集保每週的大戶持股（本人 2026-11-14：主力買賣超沒有合法免費來源，改看這個）。讀不到就是空的。
+        'big_holders': _safe(lambda: big_holder_series(DEFAULT_DB.parents[1] / 'tdcc-holders', code, last.date)) or [],
         'defense': defense_payload(x['low20_intraday']),
         'trend_classification': trend_classification_payload(),
         'conditions': conditions,
