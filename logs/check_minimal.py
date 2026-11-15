@@ -480,9 +480,12 @@ def check_official_date_alignment(browser: Browser) -> None:
     assert page.locator("#marketTime").inner_text() == "2026-11-10"
     assert page.locator("#analysisDate").inner_text() == "11/10"
     assert page.locator("#analysisDate").get_attribute("title") == "2026-11-10"
-    # 本人 11-14「過期就隱藏」：劇本比資料日舊時，日期、結論、兩條價位線與直白分析都不顯示。
-    for selector in ("#scenarioDate", "#lineUpper", "#lineLower", "#readCard"):
+    # 本人 11-14「過期就隱藏」：劇本比資料日舊時，人寫的內容（劇本日期、直白分析）不顯示。
+    # 兩條價位線每天照規則算，照樣有（本人 2026-11-15）。
+    for selector in ("#scenarioDate", "#readCard"):
         assert not page.locator(selector).is_visible(), f"過期內容仍顯示：{selector}"
+    for selector in ("#lineUpper", "#lineLower"):
+        assert page.locator(selector).is_visible(), f"每天算的價位線沒有顯示：{selector}"
     assert "已過期" not in page.locator("body").inner_text()
     assert page.locator("#marketTrendDate").inner_text() == "資料日 2026-11-10"
     page.close()

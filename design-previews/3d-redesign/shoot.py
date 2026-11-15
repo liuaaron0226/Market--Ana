@@ -259,7 +259,7 @@ def main() -> None:
                                   after=open_rotation_table, full_page=False)
             run(("--features", "core"), core_jobs)
         if "expired" in groups:
-            # 劇本與直白分析過期時的首頁：結論、劇本日、收復線／防守線、直白分析整組隱藏。
+            # 劇本與直白分析過期時的首頁：人寫的文字（劇本日、直白分析）不顯示；收復線／防守線每天算，照樣有。
             run(("--features", "core", "--expired"), lambda base: each(base, "-expired", ("home",)))
         if "flags" in groups:
             # 功能旗標全開：今日 AI 解讀（無樣本，未就緒狀態）與今日股票水位（有樣本）。

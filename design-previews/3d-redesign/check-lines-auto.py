@@ -1,8 +1,13 @@
 """人寫的劇本過期時，首頁的收復線／防守線與那張圖照樣要有（本人 2026-11-15「好，動手做」）：
 兩條線每天照規則算得出來（每日更新的回測），不該因為沒有人寫新的劇本就整組不見；過期只藏人寫的文字。
-自己開兩個預覽伺服器：一個劇本過期（--expired）、一個沒過期，各驗手機與電腦寬度。
+自己開三個預覽伺服器，各驗手機與電腦寬度：
+  劇本沒過期（線和劇本裡抄的一樣）——一切照原本；
+  劇本過期——線與圖照樣有，人寫的那幾句不顯示；
+  劇本還沒過期、但線已經換成新一天算的（劇本適用日當天收盤後）——線用算的，人寫的那幾句不顯示。
+另外用假的即時行情驗：行情已經走到線適用的那一天之後（每日更新沒跑成）時，線收起來；還在適用的那一天時照樣有。
 用法（在工作目錄根目錄）：python design-previews/3d-redesign/check-lines-auto.py"""
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -11,6 +16,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import shoot  # noqa: E402
 
 fails = []
+# 樣本資料（資料日 2026-11-06）照規則算出來的兩條線與那一天的收盤（web/analysis-data.js 的回測截止日資料）
+UPPER, LOWER, CLOSE = "40,435.83", "37,837.05", 39701.64
 
 
 def check(label, ok, detail=""):
@@ -24,58 +31,114 @@ PANEL = """() => { const body = document.querySelector('#panelBody');
     lines: [...body.querySelectorAll('.zone-line strong')].map(node => node.textContent), gaps: [...body.querySelectorAll('.zone-line span')].map(node => node.textContent),
     shares: [...body.querySelectorAll('.zone b')].map(node => node.textContent), caption: (body.querySelector('.zones > figcaption') || {}).textContent || '',
     folds: [...body.querySelectorAll('details > summary')].map(node => node.textContent), text: body.textContent,
+    notes: [...body.querySelectorAll('.plain-watch li')].map(node => node.textContent),
     actions: body.querySelectorAll('#actionFlat, #actionHolding').length }; }"""
 HOME = """() => { const seen = id => { const node = document.getElementById(id); return Boolean(node) && !node.hidden && node.getClientRects().length > 0; };
   return { upper: seen('lineUpper'), lower: seen('lineLower'), upperValue: document.getElementById('upperValue').textContent, lowerValue: document.getElementById('lowerValue').textContent,
-    distributionHidden: document.getElementById('distribution').hidden, shares: [...document.querySelectorAll('#distributionBar [data-share]')].map(node => node.textContent),
     summary: document.getElementById('chartSummary').textContent, zone: document.getElementById('zoneLabel').textContent, read: seen('readCard'),
     scriptDate: seen('scenarioDate') }; }"""
+PANEL_OPEN = "document.getElementById('detailPanel').getAttribute('aria-hidden') === 'false'"
+PANEL_CLOSED = "document.getElementById('detailPanel').getAttribute('aria-hidden') === 'true'"
 
 
-def look(base, tag, expired):
+def new_page(browser, width, height):
+    ctx = browser.new_context(viewport={"width": width, "height": height}, reduced_motion="reduce", has_touch=width < 700, locale="zh-TW")
+    page = ctx.new_page()
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)[:200]))
+    return ctx, page, errors
+
+
+def look(base, tag, script_shown, stale_text):
+    """script_shown：人寫的那幾句該不該顯示。stale_text：人寫的直白分析與劇本日期是不是過期了。"""
     with sync_playwright() as p:
         browser = p.chromium.launch()
         for size, width, height in (("手機", 390, 844), ("電腦", 1440, 900)):
             label = f"{tag}・{size}"
-            ctx = browser.new_context(viewport={"width": width, "height": height}, reduced_motion="reduce", has_touch=width < 700, locale="zh-TW")
-            page = ctx.new_page()
-            errors = []
-            page.on("pageerror", lambda error: errors.append(str(error)[:200]))
+            ctx, page, errors = new_page(browser, width, height)
             page.goto(base + "/", wait_until="domcontentloaded")
             shoot.ready_home(page)
             home = page.evaluate(HOME)
             check(f"{label}：K 線下面看得到收復線、防守線兩顆鍵，數字是照規則算的那兩個", home["upper"] and home["lower"]
-                  and home["upperValue"] == "40,435.83" and home["lowerValue"] == "37,837.05", home)
-            check(f"{label}：圖上有這兩條線、標頭有現價落在哪一區", "收復線 40,435.83" in home["summary"] and "防守線 37,837.05" in home["summary"] and home["zone"] == "兩線之間", home)
-            check(f"{label}：隔日三區的比例照樣有", not home["distributionHidden"] and len(home["shares"]) == 3 and all("%" in share for share in home["shares"]), home)
-            if expired:
-                check(f"{label}：人寫的直白分析與劇本日期過期了，照舊不顯示", not home["read"] and not home["scriptDate"], home)
+                  and home["upperValue"] == UPPER and home["lowerValue"] == LOWER, home)
+            check(f"{label}：圖上有這兩條線、標頭有現價落在哪一區", f"收復線 {UPPER}" in home["summary"] and f"防守線 {LOWER}" in home["summary"] and home["zone"] == "兩線之間", home)
+            check(f"{label}：劇本日期{'不' if not script_shown else ''}顯示", home["scriptDate"] == script_shown, home["scriptDate"])
+            if stale_text:
+                check(f"{label}：人寫的直白分析過期了，照舊不顯示", not home["read"], home)
             for key, name in (("#lineUpper", "收復線"), ("#lineLower", "防守線")):
                 target = page.locator(key)
                 target.scroll_into_view_if_needed()
                 target.click()
-                page.wait_for_function("document.getElementById('detailPanel').getAttribute('aria-hidden') === 'false'")
+                page.wait_for_function(PANEL_OPEN)
                 seen = page.evaluate(PANEL)
                 check(f"{label}：{name}點開有一句重點與那張圖（五列、兩條線、三區的比例）",
                       seen["rows"] == 5 and seen["lines"] == ["40,436", "37,837"] and seen["gaps"] == ["還差 734 點", "還有 1,865 點"]
                       and len(seen["shares"]) == 3 and "不是明天的機率" in seen["caption"] and ("止跌" in seen["point"] or "低點沒守住" in seen["point"]), seen)
-                if expired:
-                    check(f"{label}：劇本過期時，{name}不顯示人寫的那幾句（怎麼應對、觸發條件、解讀）",
-                          seen["folds"] == ["看詳細數字"] and seen["actions"] == 0 and "觸發條件" not in seen["text"] and "解讀" not in seen["text"], seen["folds"])
-                else:
-                    check(f"{label}：劇本沒過期時，{name}照樣有「怎麼應對」與觸發條件、解讀",
+                if script_shown:
+                    check(f"{label}：{name}照樣有「怎麼應對」與觸發條件、解讀",
                           seen["folds"] == ["怎麼應對", "看詳細數字"] and seen["actions"] == 2 and "觸發條件" in seen["text"] and "解讀" in seen["text"], seen["folds"])
+                else:
+                    check(f"{label}：{name}不顯示人寫的那幾句（手上沒股票、已經持有、觸發條件、解讀），程式給的提醒自己一列",
+                          seen["folds"] == ["要注意", "看詳細數字"] and seen["actions"] == 0 and len(seen["notes"]) == 2
+                          and all(word not in seen["text"] for word in ("觸發條件", "解讀", "手上沒股票", "已經持有")), [seen["folds"], seen["notes"]])
                 page.keyboard.press("Escape")
-                page.wait_for_function("document.getElementById('detailPanel').getAttribute('aria-hidden') === 'true'")
+                page.wait_for_function(PANEL_CLOSED)
+            page.locator("#priceSummary").click()
+            page.wait_for_function(PANEL_OPEN)
+            current = page.locator("#panelBody").inner_text()
+            check(f"{label}：現價的面板寫得出離兩條線多遠", "距收復線" in current and "距防守線" in current and "現價落點" in current, current[:120])
+            page.keyboard.press("Escape")
             check(f"{label}：沒有橫向捲動、沒有腳本錯誤", not page.evaluate("document.documentElement.scrollWidth > document.documentElement.clientWidth") and not errors, errors)
             ctx.close()
         browser.close()
 
 
-for tag, extra, expired in (("劇本過期", ("--features", "core", "--expired"), True), ("劇本沒過期", ("--features", "core"), False)):
+def live(base):
+    """即時行情的「昨收」就是畫線那一天的收盤：線還在適用的那一天，照樣有。
+    「昨收」是別的數字：中間又過了交易日（每日更新沒跑成），線過時了，收起來，不拿舊線配今天的價。"""
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        for tag, previous, shown in (("線還在適用的那一天", CLOSE, True), ("每日更新沒跑成、行情已經走到後面的交易日", CLOSE - 812.5, False)):
+            ctx, page, errors = new_page(browser, 1440, 900)
+            now = datetime.now(timezone.utc).isoformat()
+            price = previous + 150
+            payload = {"ok": True, "live": True, "market_open": True, "phase": "open", "fetched_at": now, "data_time": now, "series": [],
+                       "data": {"price": price, "previous_close": previous, "change": 150, "change_percent": 150 / previous * 100,
+                                "open": previous + 20, "high": price + 30, "low": previous - 40, "turnover_billion": 3200}}
+            def answer(route, _request=None, body=payload) -> None:
+                route.fulfill(json=body)
+            page.route("**/api/live", lambda route: answer(route))
+            page.goto(base + "/", wait_until="domcontentloaded")
+            shoot.ready_home(page)
+            page.wait_for_function("document.getElementById('statusTrigger').dataset.state === 'live'", timeout=15000)
+            page.wait_for_timeout(500)
+            home = page.evaluate(HOME)
+            if shown:
+                check(f"即時行情・{tag}：兩顆鍵、圖上的線、落點都在",
+                      home["upper"] and home["lower"] and "收復線" in home["summary"] and home["zone"] == "兩線之間", home)
+            else:
+                check(f"即時行情・{tag}：兩顆鍵、圖上的線、落點都收起來",
+                      not home["upper"] and not home["lower"] and "收復線" not in home["summary"] and home["zone"] == "", home)
+                page.locator("#priceSummary").click()
+                page.wait_for_function(PANEL_OPEN)
+                current = page.locator("#panelBody").inner_text()
+                check(f"即時行情・{tag}：現價的面板不寫離線多遠", "距收復線" not in current and "現價落點" not in current, current[:120])
+            check(f"即時行情・{tag}：沒有腳本錯誤", not errors, errors)
+            ctx.close()
+        browser.close()
+
+
+RUNS = (
+    ("劇本沒過期", ("--features", "core"), True, False),
+    ("劇本過期", ("--features", "core", "--expired"), False, True),
+    ("劇本沒過期但線已換成新一天算的", ("--features", "core", "--old-script"), False, False),
+)
+for tag, extra, script_shown, stale_text in RUNS:
     proc, base = shoot.start_server(*extra)
     try:
-        look(base, tag, expired)
+        look(base, tag, script_shown, stale_text)
+        if tag == "劇本沒過期":
+            live(base)
     finally:
         proc.kill()
 

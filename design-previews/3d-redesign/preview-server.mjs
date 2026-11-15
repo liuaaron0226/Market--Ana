@@ -11,7 +11,9 @@
 //   --host 0.0.0.0 ＝讓同一個 Wi-Fi 上的手機也連得到（用電腦的區網位址加埠號開）。預設只有這台電腦連得到。
 //     裡面只有樣本資料，但開著的期間區網內任何裝置都能以站主身分看到這個預覽，看完就關掉。
 //   --owner-extras ＝主線兩個只給站主的功能也打開（預測帳本、自選股關注），並放一筆樣本預測。
-//   --expired ＝把人寫內容（劇本、直白分析）的日期改成比行情資料日早一天，用來看首頁「過期就整組隱藏」的樣子。
+//   --expired ＝把人寫內容（劇本、直白分析）的日期改成比行情資料日早一天，用來看首頁人寫的文字過期時的樣子（兩條線每天算，照樣有）。
+//   --old-script ＝劇本的適用日就是行情資料日（還沒過期），但劇本裡抄的兩條線是前一天的數字：劇本適用日當天收盤後的狀態，
+//     用來看「線換成新一天算的之後，人寫的那幾句不顯示」。
 // 先備條件（都不入版控，見 .scratch/3d-redesign/parity-checklist.md〈本機預覽〉）：
 //   cloud/.stock-pack.json、.screens-pack.json、.compare-pack.json、.data-status.json、web/*-data.js，並跑過 node cloud/build.mjs。
 import { createServer } from "node:http";
@@ -106,6 +108,14 @@ const deps = {
     if (run.status === 0) ov.dashboard.actions = { ...(ov.dashboard.actions || {}), market_trend: JSON.parse(run.stdout) };
     else trendNote = "走勢判讀算不出來（需要 python 與 market_trend.py）：首頁的短中長期走勢會寫「尚未完成」。";
   }
+}
+
+if (flag("old-script")) {
+  const ov = marketPack.overview;
+  const day = ov.analysis.meta.cutoff_date;
+  if (ov.dashboard.forecast) { ov.dashboard.forecast.horizon = day; ov.dashboard.forecast.expiry = day; }
+  ov.dashboard.expires_at = day;
+  ov.dashboard.thresholds = { upper: ov.dashboard.thresholds.upper + 1420, lower: ov.dashboard.thresholds.lower + 3676 };
 }
 
 if (flag("expired")) {
