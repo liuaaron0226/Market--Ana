@@ -15,8 +15,9 @@
 
 /* ---------- 報價：報表式大標 ---------- */
 .hm .market-header {
-  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 480px) auto;
-  grid-template-areas: "price conclusion theme" "time conclusion theme";
+  /* 中間原本有「下一交易日」那一欄；那個框收起來了（本人 11-15），格線不再留它的位置 */
+  display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "price theme" "time theme";
   column-gap: 40px; row-gap: 12px; align-items: end;
   padding: 40px 0 32px; border-bottom: 1px solid var(--ink);
 }
@@ -178,7 +179,7 @@
   .hm .app-shell { padding: 0 16px 64px; }
   .hm .market-header {
     grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas: "price theme" "time time" "conclusion conclusion";
+    grid-template-areas: "price theme" "time time";
     padding: 24px 0 20px; row-gap: 16px;
   }
   .hm .price-value { font-size: 44px; }
@@ -316,7 +317,7 @@
 @media (max-width: 1179px) and (min-width: 861px) {
   .hm .market-header {
     grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas: "price theme" "time time" "conclusion conclusion";
+    grid-template-areas: "price theme" "time time";
     row-gap: 16px;
   }
   .hm .conclusion-trigger { max-width: 720px; }
@@ -644,7 +645,7 @@ body.hm dialog.hm-search :is(.stock-search-suggestions, .stock-search-status, .s
 
 @media (max-width: 860px) {
   /* 手機：三顆圖示鍵和「台股加權指數」同一列，指數數字自己一整列，才不會被擠到 */
-  body.hm .market-header { grid-template-areas: "brand theme" "price price" "time time" "conclusion conclusion"; column-gap: 12px; }
+  body.hm .market-header { grid-template-areas: "brand theme" "price price" "time time"; column-gap: 12px; }
   body.hm .instrument-block { display: contents; }
   body.hm .brand-line { grid-area: brand; align-self: center; min-width: 0; }
   body.hm .brand-line h1 { font-size: 18px; white-space: nowrap; }

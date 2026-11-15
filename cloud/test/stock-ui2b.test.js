@@ -91,9 +91,12 @@ test("首頁人寫的劇本與直白分析比資料日舊時整組隱藏，不�
   assert.match(source, /\$\('readCard'\)\.hidden = plainStale;/);
   assert.match(source, /plainSource\.data_dates\.price_and_foreign \|\| ''\) < A\.meta\.cutoff_date/);
   const hiddenGroup = source.slice(source.indexOf("for (const node of [els.scenarioDate.parentElement"));
-  for (const target of ["$('conclusionTrigger')", "els.lineUpper", "els.lineLower", "$('distribution')"]) {
+  for (const target of ["els.lineUpper", "els.lineLower", "$('distribution')"]) {
     assert.ok(hiddenGroup.slice(0, 400).includes(target), target);
   }
+  // 標頭「下一交易日」的框一律收著（本人 11-15），不能被這一段在劇本沒過期時又打開
+  assert.ok(!hiddenGroup.slice(0, 400).includes("conclusionTrigger"));
+  assert.match(read("web/minimal.html"), /id="conclusionTrigger"[^>]*\shidden>/);
   assert.match(hiddenGroup.slice(0, 400), /node\.hidden = scenarioExpired/);
   for (const removed of ["' 已過期'", "舊劇本", "未冒充當日分析"]) {
     assert.ok(!source.includes(removed), removed);

@@ -894,6 +894,7 @@
       // 展開到全部之後，標題的「前 10」跟著寫成實際列出的檔數；收起再寫回來
       const more = target().querySelector('[data-more]');
       if (more) more.addEventListener('click', () => {
+        if (token !== drillToken) return;   // 已經在等另一天的資料：這份名單是舊的，標題不能被寫回舊的那一天
         title.innerHTML = name(more.getAttribute('aria-expanded') === 'true' ? list[0].replace(`前 ${LIST_ROWS}`, `前 ${target().querySelectorAll('tbody tr').length}`) : list[0]);
       });
     };
@@ -996,7 +997,11 @@
       stop();
       drag = { x: event.clientX, id: event.pointerId, moved: false, hot: null };
     });
-    chart.addEventListener('pointermove', event => { if (drag && event.pointerId === drag.id) follow(event); });
+    chart.addEventListener('pointermove', event => {
+      if (!drag || event.pointerId !== drag.id) return;
+      if (event.pointerType === 'mouse' && !(event.buttons & 1)) { drag = null; stop(); return; }   // 滑鼠在圖外放開了：這一次按住已經結束
+      follow(event);
+    });
     chart.addEventListener('pointerup', event => finish(event, false));
     chart.addEventListener('pointercancel', event => finish(event, true));
     return () => performance.now() - releasedAt < BAR_STRAY_CLICK_MS;
@@ -1447,6 +1452,14 @@
     `;
   }
 
+  // 樣本清單長到面板要捲才看得完的時候（手機橫放），從按鈕開始上下拖要留給捲動，不拿來拖框（樣式看這個記號）。
+  // 面板開著時把手機轉向、視窗改大小也要重新判斷，不然橫放之後從按鈕上拖捲不動面板
+  function markSampleListScroll() {
+    const list = els.panelBody.querySelector('.sample-list');
+    if (list) list.classList.toggle('is-scrollable', els.panelBody.scrollHeight > els.panelBody.clientHeight);
+  }
+  window.addEventListener('resize', markSampleListScroll);
+
   function renderSamplesLayer() {
     els.panelTitle.textContent = '回測樣本切換';
     els.panelBody.innerHTML = `
@@ -1459,8 +1472,7 @@
         }).join('')}
       </div>
     `;
-    // 清單長到面板要捲才看得完的時候（手機橫放），從按鈕開始上下拖要留給捲動，不拿來拖框（樣式看這個記號）
-    els.panelBody.querySelector('.sample-list').classList.toggle('is-scrollable', els.panelBody.scrollHeight > els.panelBody.clientHeight);
+    markSampleListScroll();
     els.panelBody.querySelectorAll('[data-sample]').forEach(button => button.addEventListener('click', () => {
       selectedSample = button.dataset.sample;
       renderDistribution();
@@ -1705,9 +1717,10 @@
   els.upper.textContent = fmt(UPPER);
   els.lower.textContent = fmt(LOWER);
   renderDistribution();
-  // 過期的劇本整組收起來：標頭的劇本日期與結論、圖旁兩個價位按鈕、隔日分布；直白分析另看它自己的資料日。
+  // 過期的劇本整組收起來：標頭的劇本日期、圖旁兩個價位按鈕、隔日分布；直白分析另看它自己的資料日。
+  // 標頭「下一交易日」的框不在這裡：它一律收著（minimal.html 上的 hidden，本人 11-15）。
   for (const node of [els.scenarioDate.parentElement, els.scenarioDate.parentElement.previousElementSibling,
-    $('conclusionTrigger'), els.lineUpper, els.lineLower, $('distribution')]) {
+    els.lineUpper, els.lineLower, $('distribution')]) {
     if (node) node.hidden = scenarioExpired;
   }
   $('readCard').hidden = plainStale;

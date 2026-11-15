@@ -28,7 +28,10 @@
     };
     // 不墊的話，頁尾比畫面下緣短多少（負的表示不用墊）
     const shortBy = bottom => bottom - (page.scrollHeight - held);
-    window.addEventListener('scroll', () => { if (held) setHold(Math.min(held, shortBy(window.scrollY + window.innerHeight))); }, { passive: true });
+    // 用不到的部分收掉：往上捲的時候；視窗改大小、手機轉向之後也要重算，不然頁尾會多出一段捲得到的空白
+    const trimHold = () => { if (held) setHold(Math.min(held, shortBy(window.scrollY + window.innerHeight))); };
+    window.addEventListener('scroll', trimHold, { passive: true });
+    window.addEventListener('resize', trimHold);
 
     const showOnly = chosen => {
       const bottom = window.scrollY + window.innerHeight;

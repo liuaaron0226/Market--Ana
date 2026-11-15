@@ -34,8 +34,8 @@
   }
 
   // ---------- 按住滑到要的再放開 ----------
-  const GROUPS = '.chart-menu, .hm-cats, .chip-seg, .sample-list, .key-strip';   // 成排的鍵：在同一組裡滑
-  const TRACKS = '.hm-cats, .chip-seg, .sample-list, .key-strip';                // 其中整組都是「選一個」的：滑的時候選中的那個框（.slide-thumb）跟著手指走
+  const TRACKS = '.hm-cats, .chip-seg, .sample-list, .key-strip';   // 整組都是「選一個」的：滑的時候選中的那個框（.slide-thumb）跟著手指走
+  const GROUPS = `.chart-menu, ${TRACKS}`;                          // 成排的鍵：在同一組裡滑。選單之外就是上面那幾種，加新的只改一處
   const MENU_KEYS = 'button:is([aria-checked], [aria-pressed], [aria-selected])';   // 選單裡「選一個」的那些項目；新增、刪除這類按鈕不算
   const SELECTED_KEY = '[aria-checked="true"], [aria-expanded="true"], [aria-pressed="true"], [aria-selected="true"]';
   const REACH_PX = 12;                                 // 選單：手指離項目這麼遠以內框才跟著，再遠就當成離開選單
@@ -52,7 +52,7 @@
   const nodeAt = event => document.elementFromPoint(event.clientX, event.clientY);
   const isMenu = track => track.matches('.chart-menu');
   const keysOf = track => [...track.querySelectorAll(isMenu(track) ? MENU_KEYS : 'button')].filter(usable);
-  // 這一組按鈕有沒有「選中的框」可以跟著手指：有槽的那兩種一定有；選單要有「選一個」的項目才有
+  // 這一組按鈕有沒有「選中的框」可以跟著手指：整組都是「選一個」的那幾種（TRACKS）一定有；選單要有「選一個」的項目才有
   const trackOf = group => (group.matches(TRACKS) || keysOf(group).length ? group : null);
   const clamp = (value, low, high) => Math.min(Math.max(value, low), high);
   const begin = (event, group, origin, chip) => ({ group, origin, chip, track: trackOf(group), thumb: null, x: event.clientX, y: event.clientY, moved: false, hot: null });

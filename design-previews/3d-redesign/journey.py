@@ -588,7 +588,7 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
     step(f"{tag}：指標區手勢", swipe_study)
 
     open_panel(page, tag, "#priceSummary", "現價")
-    open_panel(page, tag, "#conclusionTrigger", "結論")
+    check(f"{tag}：頂列「下一交易日」的框收起來了（本人 11-15）", not page.locator("#conclusionTrigger").is_visible())
     open_panel(page, tag, "#lineUpper", "收復線")
     open_panel(page, tag, "#readCard", "直白分析")
     step(f"{tag}：展開籌碼與資金", lambda: open_cat(page, "chips"))
@@ -702,6 +702,19 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
         shades = page.evaluate("""() => [...document.querySelectorAll('#panelBody .bar-hit')].map(bar =>
           [bar.classList.contains('is-on'), getComputedStyle(bar.querySelectorAll('rect')[1]).opacity])""")
         check(f"{tag}：選到的那一根柱子顏色最深，其餘是淡的", all((opacity == "1") == on for on, opacity in shades) and sum(on for on, _ in shades) == 1, shades[10:14])
+        if not mobile:
+            # 滑鼠按在圖上、往上移出圖外才放開：這一次按住就結束了。之後沒按著鍵移回圖上，框不能跟著游標跑（兩軸審查抓到的）
+            chosen = page.locator("#panelBody .bar-hit.is-on").get_attribute("data-day")
+            x, y = centre(bars.nth(12).locator("rect").first)
+            top = page.locator("#panelBody .drill-chart").bounding_box()["y"]
+            page.mouse.move(x, y)
+            page.mouse.down()
+            page.mouse.move(x + 2, top - 30, steps=4)
+            page.mouse.up()
+            page.mouse.move(x + 60, y, steps=4)
+            check(f"{tag}：滑鼠在圖外放開之後移回圖上，框不會跟著游標跑、選的那一天不變",
+                  page.evaluate(BAR_THUMB_X) is None and page.locator("#panelBody .bar-hit.is-on").get_attribute("data-day") == chosen,
+                  [page.evaluate(BAR_THUMB_X), chosen])
         close_chip()
     step(f"{tag}：明細板柱狀圖按住滑動選取", slide_bars)
 

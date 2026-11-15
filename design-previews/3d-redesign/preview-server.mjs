@@ -206,8 +206,8 @@ async function serveSample(pathname) {
 }
 
 async function serveStatic(pathname) {
-  // 手機上好打的短網址，轉到樣品：/s 是 ⑤ 短中長期走勢、/s6 是 ⑥ 大戶持股、/s3 是 ③ 庫存總覽
-  const SHORT = { "/s": "trend-matrix", "/s6": "holders-weekly", "/s3": "holdings-overview" };
+  // 手機上好打的短網址，轉到樣品：/s 是 ⑤ 短中長期走勢、/s6 是 ⑥ 大戶持股、/s3 是 ③ 庫存總覽、/s1 是收復線／防守線點開之後
+  const SHORT = { "/s": "trend-matrix", "/s6": "holders-weekly", "/s3": "holdings-overview", "/s1": "line-panel" };
   if (SHORT[pathname]) return new Response(null, { status: 302, headers: { location: `/samples/${SHORT[pathname]}.html` } });
   if (/^\/samples\/[A-Za-z0-9-]+\.html$/.test(pathname)) return serveSample(pathname);
   let p = pathname.endsWith("/") ? pathname + "index.html" : pathname;
