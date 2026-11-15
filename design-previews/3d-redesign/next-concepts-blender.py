@@ -4,6 +4,8 @@
 哪些是示意由 next-concepts-sheet.py 寫在圖上。
 加深版（本人看過第一批之後要求：形狀與動態本身要帶出更多資訊，足以取代原本的版面）：tank2、blocks2、jacks，
 這三個會動，一次算出一串畫面（frames-<名稱>/f000.png…），由 next-concepts-sheet.py 接成動圖。
+第三輪（本人：①③ 整合成兩層、提兩個方向；⑤ 重做，箭頭看不出上下、放不進版面；不要底下那塊板子）：
+integ-a、integ-b、towers。這三個沒有底板、背景透明，由 next-concepts-sheet.py 疊到頁面的底色上。
 用法：blender -b -P next-concepts-blender.py -- <輸出資料夾（要給完整路徑）> <場景名稱> [邊長，預設 1000] [final：會動的場景只算最後一格]"""
 import math
 import sys
@@ -437,8 +439,196 @@ def jacks():
     return Vector((2.7, -depth / 2 - 0.2, 0.8)), (54, 0, 10), 15.6, animate
 
 
+# ---------- 第三輪：沒有底板、背景透明的三個場景 ----------
+def lerp(a, b, share):
+    return a + (b - a) * share
+
+
+def pop(obj, share):
+    """讓一行字（或一個小東西）出現或消失：整個縮放。"""
+    share = max(share, 0.0001)
+    obj.scale = (share, share, share)
+
+
+def own_material(code, rough=0.4):
+    """自己一份、之後可以改顏色的材質（共用的材質改了會連別的東西一起變）。"""
+    mat = bpy.data.materials.new(f"own-{len(bpy.data.materials)}")
+    mat.use_nodes = True
+    bsdf = mat.node_tree.nodes.get("Principled BSDF")
+    bsdf.inputs["Base Color"].default_value = rgb(code)
+    bsdf.inputs["Roughness"].default_value = rough
+    return mat
+
+
+def tint(mat, start, end, share):
+    a, b = rgb(start), rgb(end)
+    mat.node_tree.nodes.get("Principled BSDF").inputs["Base Color"].default_value = tuple(lerp(x, y, share) for x, y in zip(a, b))
+
+
+SAMPLE_HOLDINGS = [("台積電", 980000, 2235000), ("長榮", 430000, 491000), ("0050", 175200, 292350)]   # 名稱、投入成本、目前市值（樣本資料）
+SAMPLE_CASH, SAMPLE_TOTAL = 400000, 3418350
+
+
+def outer_tank(width, depth, height, with_strata):
+    """外層：今日股票水位的水槽（和加深版同一套：建議線、容忍帶、砝碼、確認天數）。回傳畫股票那一層要用的東西。"""
+    z = lambda pct: height * pct / 100
+    now, advice, band = 88.3, 90.0, 5.0
+    if not with_strata:
+        box((0, 0, z(now) / 2), (width - 0.12, depth - 0.12, z(now)), "#2c6cb4", bevel=0, rough=0.18)
+    box((0, 0, (z(now) + height) / 2), (width - 0.12, depth - 0.12, height - z(now)), "#dfe7ef", bevel=0, rough=0.3)
+    glass_tank(0, width, depth, height)
+    box((0, -depth / 2 - 0.05, z(advice)), (width + 0.16, 0.03, z(band * 2)), GOLD, bevel=0, rough=0.5, alpha=0.3)
+    box((0, -depth / 2 - 0.08, z(advice)), (width + 0.34, 0.05, 0.08), GOLD, bevel=0, rough=0.4)
+    rack = height + 1.7
+    box((0, 0, rack - 0.2), (width + 0.5, depth * 0.78, 0.4), SLAB, bevel=0.02)
+    for sx in (-1, 1):
+        box((sx * (width / 2 + 0.2), -depth / 2 - 0.08, (rack + z(advice)) / 2), (0.035, 0.035, rack - z(advice)), GOLD, bevel=0)
+    slot = (width + 0.5) / 4
+    for index, (name, points, absent) in enumerate((("趨勢", 2, 0), ("波動", 0, 1), ("預警", 1, 1), ("資金面", 0, 0))):
+        x = -(width + 0.5) / 2 + slot * (index + 0.5)
+        text(name, (x, -depth * 0.39 - 0.02, rack - 0.3), 0.2, DIM, align="CENTER", flat=False)
+        for level in range(points + absent):
+            box((x, 0, rack + 0.19 + level * 0.42), (slot - 0.26, depth * 0.52, 0.38), INK if level < points else GREY, bevel=0.03,
+                rough=0.35 if level < points else 0.6, alpha=1.0 if level < points else 0.32)
+    for index in range(2):
+        ball((width / 2 + 0.55 + index * 0.3, -depth / 2 - 0.08, z(advice)), 0.1, GOLD)
+    text("目前水位", (-width / 2 - 0.35, -depth / 2, z(now) + 0.1), 0.3, DIM, align="RIGHT", flat=False)
+    text("88.3%", (-width / 2 - 0.35, -depth / 2, z(now) - 0.75), 0.74, INK, align="RIGHT", flat=False)
+    text("建議 90%", (-width / 2 - 0.35, -depth / 2, z(now) - 1.3), 0.28, GOLD, align="RIGHT", flat=False)
+    return z
+
+
+def integ_a():
+    """①③ 整合・方向甲「把那一層拿出來」。
+    外層：水槽裡股票那一層不是一整塊，而是一檔一層疊起來的，每一層的厚度就是那一檔占總資金多少；最上面淺色的是現金。
+    內層：把股票那幾層從槽裡拿出來、排成一排柱子；柱子的高度還是同一把尺（錢），這時每一根分成兩段——
+    下面是投入的成本、上面變成紅色的是賺到的。同一個東西從頭到尾沒有換，只是拿出來看仔細。
+    數字全部是樣本資料（三檔都是賺的，賠錢的樣子這張沒有畫）。"""
+    width, depth, height = 3.6, 2.0, 6.0
+    z = outer_tank(width, depth, height, with_strata=True)
+    blues = ["#245f9f", "#3f7fc2", "#6fa3d6"]
+    foot_x, foot_y, column = width - 0.12, depth - 0.12, 1.5
+    stacks, floor = [], 0.0
+    for index, (name, cost, value) in enumerate(SAMPLE_HOLDINGS):
+        cost_h, value_h = height * cost / SAMPLE_TOTAL, height * value / SAMPLE_TOTAL
+        lower = box((0, 0, floor + cost_h / 2), (foot_x, foot_y, cost_h), blues[index], bevel=0, rough=0.25)
+        upper = box((0, 0, floor + cost_h + (value_h - cost_h) / 2), (foot_x, foot_y, value_h - cost_h), blues[index], bevel=0, rough=0.25)
+        gain = own_material(blues[index], 0.3)
+        upper.data.materials.clear()
+        upper.data.materials.append(gain)
+        x = width / 2 + 2.6 + index * 2.3
+        # 字要高過柱頂那一面（從斜上方看，頂面會露出來）
+        name_tag = text(name, (x, -column / 2, value_h + 1.5), 0.36, INK, align="CENTER", flat=False)
+        rate_tag = text(f"{(value / cost - 1) * 100:+.0f}%", (x, -column / 2, value_h + 0.85), 0.46, UP, align="CENTER", flat=False)
+        share_tag = text(f"{name} {value / SAMPLE_TOTAL * 100:.0f}%", (width / 2 + 0.3, -depth / 2, floor + value_h / 2 - 0.1), 0.24, DIM, flat=False)
+        stacks.append((lower, upper, gain, blues[index], floor, cost_h, value_h, x, name_tag, rate_tag, share_tag))
+        floor += value_h
+    cash_tag = text("現金 12%", (width / 2 + 0.3, -depth / 2, z(94) - 0.1), 0.24, DIM, flat=False)
+
+    def animate(t):
+        for index, (lower, upper, gain, blue, floor, cost_h, value_h, x, name_tag, rate_tag, share_tag) in enumerate(stacks):
+            move = part(t, 0.22 + index * 0.07, 0.66 + index * 0.07)
+            lift = math.sin(math.pi * move) * 0.9
+            base = lerp(floor, 0, move) + lift
+            for piece, offset in ((lower, cost_h / 2), (upper, cost_h + (value_h - cost_h) / 2)):
+                piece.location = (lerp(0, x, move), 0, base + offset)
+                piece.scale = (lerp(1, column / foot_x, move), lerp(1, column / foot_y, move), 1)
+            tint(gain, blue, UP, part(t, 0.62 + index * 0.05, 0.86 + index * 0.04))
+            pop(name_tag, part(t, 0.78, 0.9))
+            pop(rate_tag, part(t, 0.84, 0.96))
+            pop(share_tag, 1 - part(t, 0.16, 0.26))
+        pop(cash_tag, 1 - part(t, 0.16, 0.26))
+    return Vector((3.5, 0, 4.2)), (76, 0, 14), 16.0, animate
+
+
+def integ_b():
+    """①③ 整合・方向乙「水面就是成本」。
+    外層：和加深版一樣的水槽（股票是一整層）。
+    內層：換成一個淺池。每檔持股是一根柱子站在池裡，底面積是占比；池子的水面代表「剛好打平」——
+    柱子露出水面的那一截是賺的（越高賺越多），整根沉在水面下就是賠的。一眼就看得出誰賺誰賠、賺多少。
+    數字全部是樣本資料（三檔都是賺的，沉在水面下的樣子這張沒有畫）。
+    要留意：外層的水是「股票占總資金多少」，內層的水是「成本線」，同樣是水、意思不一樣。"""
+    width, depth, height = 3.6, 2.0, 6.0
+    outer_tank(width, depth, height, with_strata=False)
+    unit, pool_d, pool_x = 1.35, 3.4, width / 2 + 5.4     # unit：成本的高度（水面）
+    held = sum(value for _, _, value in SAMPLE_HOLDINGS)
+    sides = [math.sqrt(value / held) * 3.3 for _, _, value in SAMPLE_HOLDINGS]
+    pool_w = sum(sides) + 0.55 * (len(sides) - 1) + 1.0
+    box((pool_x, 0, unit / 2), (pool_w - 0.1, pool_d - 0.1, unit), "#3b7cc0", bevel=0, rough=0.1, alpha=0.5)
+    glass_tank(pool_x, pool_w, pool_d, unit + 0.5)
+    text("水面＝成本", (pool_x - pool_w / 2 - 0.2, -pool_d / 2 - 0.08, -0.75), 0.4, BLUE, flat=False)
+    pillars, cursor = [], pool_x - pool_w / 2 + 0.5
+    for index, (name, cost, value) in enumerate(SAMPLE_HOLDINGS):
+        side, top = sides[index], unit * value / cost
+        x = cursor + side / 2
+        cursor += side + 0.55
+        under = box((x, 0, unit / 2), (side, side, unit), "#93a9c4", bevel=0, rough=0.5)
+        above = box((x, 0, unit + (top - unit) / 2), (side, side, top - unit), UP, bevel=0.03, rough=0.42)
+        name_tag = text(name, (x, -side / 2, top + 1.85), 0.36, INK, align="CENTER", flat=False)
+        rate_tag = text(f"{(value / cost - 1) * 100:+.0f}%", (x, -side / 2, top + 1.2), 0.46, UP, align="CENTER", flat=False)
+        pillars.append((under, above, top, name_tag, rate_tag))
+
+    def animate(t):
+        for index, (under, above, top, name_tag, rate_tag) in enumerate(pillars):
+            now = top * part(t, 0.2 + index * 0.1, 0.72 + index * 0.08)   # 柱子從池底長上來，先到水面、再露出水面
+            stretch(under, 0, unit, min(now, unit) / unit)
+            stretch(above, min(now, unit), top - unit, max(0.0, now - unit) / (top - unit))   # 還沒到水面時跟著柱頂走，不先浮在水面上
+            pop(name_tag, part(t, 0.8, 0.92))
+            pop(rate_tag, part(t, 0.84, 0.96))
+    return Vector((4.3, 0, 4.2)), (74, 0, 14), 17.5, animate
+
+
+def towers():
+    """⑤ 短中長期走勢（重新設計）「上下兩邊的票」。
+    每一期中間一條橫線。偏多的指標一格一格往上疊（紅），偏空的一格一格往下疊（綠），每一格上面寫是哪個指標；
+    旁邊的圓球停在「多的比空的多幾票」的高度：球在線上面是偏多、在線下面是偏空、停在線上是盤整。
+    上下就是畫面的上下，不用再看箭頭往哪邊斜。沒有底板，三期排成一列，可以直接放進首頁那一塊。
+    樣本資料裡走勢判讀還沒產生，這張的票是示意（票數照現行規則：短期 5 票、中期與長期各 4 票）。"""
+    periods = [("短期", [("MA5", -1), ("MA10", -1), ("MACD", -1), ("RSI", -1), ("KD", 1)]),
+               ("中期", [("MA60", -1), ("20日", -1), ("MA20", 1), ("法人", 1)]),
+               ("長期", [("60日", -1), ("MA120", 1), ("MA60", 1), ("MA240", 1)])]
+    wide, deep, tall, gap, pitch = 2.0, 1.0, 0.62, 0.07, 4.3
+    movers = []
+    for column, (label, votes) in enumerate(periods):
+        x = column * pitch
+        box((x + 0.35, 0, 0), (wide + 1.5, deep + 0.06, 0.05), INK, bevel=0)
+        net = sum(side for _, side in votes)
+        code, state = (UP, "偏多") if net > 0 else (DOWN, "偏空") if net < 0 else (GOLD, "盤整")
+        cells = []
+        for side in (1, -1):
+            for level, (name, _) in enumerate([vote for vote in votes if vote[1] == side]):
+                near = side * (0.03 + level * (tall + gap))
+                cell = box((x, 0, near + side * tall / 2), (wide, deep, tall), UP if side > 0 else DOWN, bevel=0.03, rough=0.42)
+                tag = text(name, (x, -deep / 2 - 0.02, near + side * tall / 2 - 0.13), 0.3, SLAB, align="CENTER", flat=False)
+                cells.append((cell, tag, near, side))
+        stem = box((x + wide / 2 + 0.55, 0, 0), (0.05, 0.05, 1), code, bevel=0)
+        dot = ball((x + wide / 2 + 0.55, 0, 0), 0.24, code)
+        count = text(f"{net:+d}" if net else "0", (x + wide / 2 + 0.95, -0.2, net * (tall + gap) - 0.14), 0.38, code, flat=False)
+        text(label, (x - wide / 2, -deep / 2, 3.5), 0.34, DIM, flat=False)
+        text(state, (x - wide / 2 + 0.95, -deep / 2, 3.42), 0.56, code, flat=False)
+        movers.append((cells, stem, dot, count, net, column))
+
+    def animate(t):
+        for cells, stem, dot, count, net, column in movers:
+            total = 0.0
+            for order, (cell, tag, near, side) in enumerate(cells):
+                grow = part(t, 0.05 + column * 0.06 + order * 0.1, 0.27 + column * 0.06 + order * 0.1)
+                cell.scale.z = max(grow, 0.001)
+                cell.location.z = near + side * tall * grow / 2
+                pop(tag, part(t, 0.2 + column * 0.06 + order * 0.1, 0.32 + column * 0.06 + order * 0.1))
+                total += side * grow
+            level = total * (tall + gap)
+            dot.location.z = level
+            stem.scale.z = max(abs(level), 0.001)
+            stem.location.z = level / 2
+            pop(count, part(t, 0.82, 0.94))
+    return Vector((pitch + 0.35, 0, 0.45)), (76, 0, 0), 14.6, animate   # 正面看：三條橫線在同一個高度，上下才好比
+
+
+CLEAR = {"integ-a", "integ-b", "towers"}   # 沒有底板、背景透明的場景
+
 built = {"tank": tank, "stairs": stairs, "blocks": blocks, "bins": bins, "ramps": ramps, "terraces": terraces,
-         "tank2": tank2, "blocks2": blocks2, "jacks": jacks}[concept]()
+         "tank2": tank2, "blocks2": blocks2, "jacks": jacks, "integ-a": integ_a, "integ-b": integ_b, "towers": towers}[concept]()
 target, angles, ortho = built[:3]
 animate = built[3] if len(built) > 3 else None
 
@@ -467,7 +657,7 @@ world.node_tree.nodes["Background"].inputs[1].default_value = 1.0
 scene.world = world
 
 scene.render.resolution_x, scene.render.resolution_y = side_px, side_px
-scene.render.film_transparent = False
+scene.render.film_transparent = concept in CLEAR
 scene.view_settings.view_transform = "Standard"
 for name in ("BLENDER_EEVEE", "BLENDER_EEVEE_NEXT"):
     try:

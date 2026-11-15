@@ -1,5 +1,7 @@
-"""把 Blender 算出來的六張概念圖加上標題、一句說明與「哪些數字是示意」，各存一張成品，另外拼一張總覽。
-加深版的三個（會動的）另外存成 deeper-<名稱>.png（最後一格加說明）與 deeper-<名稱>.gif（整串畫面接成動圖，要有 ffmpeg）。
+"""把 Blender 算出來的概念圖加上標題、一句說明與「哪些數字是示意」，各存一張成品。
+第一批六張另外拼一張總覽（concepts-all.png）。
+會動的樣品（加深版 deeper-*、第三輪 round3-*）存成最後一格加說明的圖與整串畫面接成的動圖（要有 ffmpeg）。
+第三輪的畫面是透明背景、沒有底板，這裡疊到頁面卡片的底色上。
 用法（在工作目錄根目錄）：python design-previews/3d-redesign/next-concepts-sheet.py <圖片資料夾>"""
 import shutil
 import subprocess
@@ -21,48 +23,8 @@ CONCEPTS = [
     ("ramps", "⑤ 短中長期走勢", "首頁", "往上斜是偏多、平的是盤整、往下斜是偏空。", "三個狀態是示意：樣本資料裡走勢判讀還沒產生。"),
     ("terraces", "⑥ 大戶持股", "個股頁", "每週一片，千張大戶比例高就高，連起來看得出一路往上還是往下；本週那一片上色。", "最後兩週是樣本資料，前十週是示意。"),
 ]
-
-
-def wrap(draw, body, font, width):
-    lines, line = [], ""
-    for char in body:
-        if draw.textlength(line + char, font=font) > width:
-            lines.append(line)
-            line = char
-        else:
-            line += char
-    return lines + [line]
-
-
-finished = []
-for name, title, page, how, source in CONCEPTS:
-    render = Image.open(folder / f"render-{name}.png").convert("RGB")
-    width, pad = render.width, 36
-    probe = ImageDraw.Draw(render)
-    title_font, page_font, body_font = ImageFont.truetype(BOLD, 44), ImageFont.truetype(REGULAR, 26), ImageFont.truetype(REGULAR, 28)
-    how_lines, source_lines = wrap(probe, how, body_font, width - pad * 2), wrap(probe, source, body_font, width - pad * 2)
-    band = pad + 60 + 14 + 40 * (len(how_lines) + len(source_lines)) + 10 + pad
-    card = Image.new("RGB", (width, render.height + band), PAPER)
-    card.paste(render, (0, 0))
-    draw = ImageDraw.Draw(card)
-    y = render.height + pad
-    draw.text((pad, y), title, fill=INK, font=title_font)
-    draw.text((pad + draw.textlength(title, font=title_font) + 16, y + 16), page, fill=DIM, font=page_font)
-    y += 60 + 14
-    for line in how_lines:
-        draw.text((pad, y), line, fill=INK, font=body_font)
-        y += 40
-    y += 10
-    for line in source_lines:
-        draw.text((pad, y), line, fill=NOTE, font=body_font)
-        y += 40
-    path = folder / f"concept-{CONCEPTS.index((name, title, page, how, source)) + 1}-{name}.png"
-    card.save(path)
-    finished.append(card)
-    print(path.name, card.size)
-
-# ---------- 加深版（會動的三個）：最後一格加上說明存成圖，整串畫面接成動圖 ----------
-MOTION = [
+# 加深版（本人看過第一批之後：形狀與動態本身要帶出更多資訊）
+DEEPER = [
     ("tank2", "① 今日股票水位（加深版）", "自選與庫存頁",
      "整個槽是總資金：深色是股票、上面淺色那一層是現金，交界就是目前水位。上方每一塊砝碼是一分訊號，砝碼落下，金色的建議線就被壓低——"
      "看得到建議是被哪幾組壓下來的；半透明的是還沒接上的訊號。金色的帶子是容忍帶，旁邊的圓點是連續確認的天數。",
@@ -76,23 +38,56 @@ MOTION = [
      "看得到是幾票對幾票、是哪幾個指標。",
      "票是示意：樣本資料裡走勢判讀還沒產生；票數照現行規則（短期 5 票、中期與長期各 4 票）。"),
 ]
-for name, title, page, how, source in MOTION:
-    still = folder / f"render-{name}.png"
-    if not still.exists():
-        continue
-    render = Image.open(still).convert("RGB")
+# 第三輪（本人：①③ 整合成兩層、提兩個方向；⑤ 重做；不要底下那塊板子）
+ROUND3 = [
+    ("integ-a", "①＋③ 整合・方向甲「把那一層拿出來」", "自選與庫存頁",
+     "外層是水槽：股票那一層是一檔一層疊起來的，厚度就是那一檔占總資金多少，最上面淺色的是現金。"
+     "內層是把那幾層拿出來排成柱子：高度還是同一把尺（錢），每一根下面是投入的成本、上面變紅的是賺到的。同一個東西只是拿出來看仔細。",
+     "數字全部是樣本資料；三檔都是賺的，賠錢的樣子這張沒有畫。"),
+    ("integ-b", "①＋③ 整合・方向乙「水面就是成本」", "自選與庫存頁",
+     "外層是同一個水槽。內層換成淺池：每檔持股一根柱子站在池裡，底面積是占比；水面代表剛好打平，"
+     "露出水面的那一截是賺的，整根沉在水面下就是賠的。",
+     "數字全部是樣本資料；三檔都是賺的。要留意：外層的水是「股票占總資金多少」，內層的水是「成本線」，同樣是水、意思不一樣。"),
+    ("towers", "⑤ 短中長期走勢（重新設計）", "首頁",
+     "每一期中間一條橫線：偏多的指標一格一格往上疊，偏空的往下疊，每一格寫著是哪個指標。旁邊的球停在「多的比空的多幾票」的高度——"
+     "在線上面是偏多、線下面是偏空、停在線上是盤整。沒有底板，三期排成一列。",
+     "票是示意：樣本資料裡走勢判讀還沒產生；票數照現行規則（短期 5 票、中期與長期各 4 票）。"),
+]
+
+
+def wrap(draw, body, font, width):
+    lines, line = [], ""
+    for char in body:
+        if draw.textlength(line + char, font=font) > width:
+            lines.append(line)
+            line = char
+        else:
+            line += char
+    return lines + [line]
+
+
+def flatten(path):
+    """透明背景的畫面疊到頁面卡片的底色上。"""
+    image = Image.open(path).convert("RGBA")
+    backdrop = Image.new("RGBA", image.size, (*PAPER, 255))
+    backdrop.alpha_composite(image)
+    return backdrop.convert("RGB")
+
+
+def card(render, title, page, how, source):
     width, pad = render.width, 36
     probe = ImageDraw.Draw(render)
-    title_font, page_font, body_font = ImageFont.truetype(BOLD, 44), ImageFont.truetype(REGULAR, 26), ImageFont.truetype(REGULAR, 28)
+    title_font, page_font, body_font = ImageFont.truetype(BOLD, 40), ImageFont.truetype(REGULAR, 26), ImageFont.truetype(REGULAR, 28)
     how_lines, source_lines = wrap(probe, how, body_font, width - pad * 2), wrap(probe, source, body_font, width - pad * 2)
-    band = pad + 60 + 14 + 40 * (len(how_lines) + len(source_lines)) + 10 + pad
-    card = Image.new("RGB", (width, render.height + band), PAPER)
-    card.paste(render, (0, 0))
-    draw = ImageDraw.Draw(card)
+    band = pad + 86 + 14 + 40 * (len(how_lines) + len(source_lines)) + 10 + pad
+    sheet = Image.new("RGB", (width, render.height + band), PAPER)
+    sheet.paste(render, (0, 0))
+    draw = ImageDraw.Draw(sheet)
+    draw.line([(pad, render.height), (width - pad, render.height)], fill=(222, 218, 208), width=2)
     y = render.height + pad
     draw.text((pad, y), title, fill=INK, font=title_font)
-    draw.text((pad + draw.textlength(title, font=title_font) + 16, y + 16), page, fill=DIM, font=page_font)
-    y += 60 + 14
+    draw.text((pad, y + 52), page, fill=DIM, font=page_font)
+    y += 86 + 14
     for line in how_lines:
         draw.text((pad, y), line, fill=INK, font=body_font)
         y += 40
@@ -100,26 +95,47 @@ for name, title, page, how, source in MOTION:
     for line in source_lines:
         draw.text((pad, y), line, fill=NOTE, font=body_font)
         y += 40
-    card.save(folder / f"deeper-{name}.png")
-    print(f"deeper-{name}.png", card.size)
-    frames = folder / f"frames-{name}"
-    if frames.exists() and shutil.which("ffmpeg"):
-        # 12 格一秒；最後一格多停 1.8 秒再重播，看得清楚結果
-        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-framerate", "12", "-i", str(frames / "f%03d.png"),
-                        "-vf", "tpad=stop_mode=clone:stop_duration=1.8,split[a][b];[a]palettegen=max_colors=160[p];[b][p]paletteuse=dither=bayer:bayer_scale=4",
-                        "-loop", "0", str(folder / f"deeper-{name}.gif")], check=True)
-        print(f"deeper-{name}.gif", (folder / f"deeper-{name}.gif").stat().st_size // 1024, "KB")
+    return sheet
 
-# 總覽：兩欄三列，每張縮到同樣的寬度
-cell = 640
-small = [image.resize((cell, round(image.height * cell / image.width))) for image in finished]
-row_heights = [max(small[i].height, small[i + 1].height) for i in range(0, len(small), 2)]
-gap = 20
-sheet = Image.new("RGB", (cell * 2 + gap, sum(row_heights) + gap * (len(row_heights) - 1)), (110, 110, 110))
-y = 0
-for row, height in enumerate(row_heights):
-    for col in range(2):
-        sheet.paste(small[row * 2 + col], (col * (cell + gap), y))
-    y += height + gap
-sheet.save(folder / "concepts-all.png")
-print("concepts-all.png", sheet.size)
+
+finished = []
+for index, (name, title, page, how, source) in enumerate(CONCEPTS):
+    still = folder / f"render-{name}.png"
+    if not still.exists():
+        continue
+    sheet = card(flatten(still), title, page, how, source)
+    sheet.save(folder / f"concept-{index + 1}-{name}.png")
+    finished.append(sheet)
+    print(f"concept-{index + 1}-{name}.png", sheet.size)
+
+for prefix, entries in (("deeper", DEEPER), ("round3", ROUND3)):
+    for name, title, page, how, source in entries:
+        still, frames = folder / f"render-{name}.png", folder / f"frames-{name}"
+        if still.exists():
+            sheet = card(flatten(still), title, page, how, source)
+            sheet.save(folder / f"{prefix}-{name}.png")
+            print(f"{prefix}-{name}.png", sheet.size)
+        if frames.exists() and shutil.which("ffmpeg"):
+            flat = folder / f"flat-{name}"
+            flat.mkdir(exist_ok=True)
+            for frame in sorted(frames.glob("f*.png")):
+                flatten(frame).save(flat / frame.name)
+            # 12 格一秒；開頭停 1 秒看清楚起點，最後一格停 2 秒看清楚結果，再重播
+            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-framerate", "12", "-i", str(flat / "f%03d.png"), "-vf",
+                            "tpad=start_mode=clone:start_duration=1:stop_mode=clone:stop_duration=2,split[a][b];[a]palettegen=max_colors=160[p];[b][p]paletteuse=dither=bayer:bayer_scale=4",
+                            "-loop", "0", str(folder / f"{prefix}-{name}.gif")], check=True)
+            print(f"{prefix}-{name}.gif", (folder / f"{prefix}-{name}.gif").stat().st_size // 1024, "KB")
+
+# 第一批的總覽：兩欄，每張縮到同樣的寬度
+if len(finished) >= 2:
+    cell, gap = 640, 20
+    small = [image.resize((cell, round(image.height * cell / image.width))) for image in finished]
+    row_heights = [max(image.height for image in small[i:i + 2]) for i in range(0, len(small), 2)]
+    overview = Image.new("RGB", (cell * 2 + gap, sum(row_heights) + gap * (len(row_heights) - 1)), (110, 110, 110))
+    y = 0
+    for row, height in enumerate(row_heights):
+        for col, image in enumerate(small[row * 2:row * 2 + 2]):
+            overview.paste(image, (col * (cell + gap), y))
+        y += height + gap
+    overview.save(folder / "concepts-all.png")
+    print("concepts-all.png", overview.size)
