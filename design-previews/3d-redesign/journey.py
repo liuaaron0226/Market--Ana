@@ -128,6 +128,22 @@ BAR_THUMB_X = """() => { const chart = document.querySelector('#panelBody .drill
 BAR_LABELS = "() => [...document.querySelectorAll('#panelBody .bar-value')].filter(node => getComputedStyle(node).display !== 'none').map(node => node.textContent)"
 
 
+# 短中長期走勢（本人 11-15 定案的 ⑤）現在畫了什麼：最上面那一句、每一期的結論與小柱、哪一期開著、鍵與讀數
+TREND_STATE = """() => { const section = document.getElementById('marketTrend');
+  const box = node => { const b = node.getBoundingClientRect(); return [Math.round(b.left), Math.round(b.top)]; };
+  return { hidden: section.hidden, align: section.querySelector('.trend-align').innerText.replace(/\\s+/g, ' ').trim(),
+    rows: [...section.querySelectorAll('.trend-row')].map(row => { const pin = row.querySelector('.trend-strip .mid');
+      return { key: row.dataset.key, state: row.dataset.state, name: row.querySelector('.trend-name').innerText.replace(/\\s+/g, ' ').trim(), at: box(row),
+        bear: row.querySelectorAll('.blk.bear').length, bull: row.querySelectorAll('.blk.bull').length,
+        marks: row.querySelector('.blk') ? getComputedStyle(row.querySelector('.blk')).opacity : null,
+        open: row.classList.contains('is-open') && !row.classList.contains('is-closing'), expanded: row.querySelector('.trend-top').getAttribute('aria-expanded'),
+        reachable: row.querySelector('.trend-panel') ? !row.querySelector('.trend-panel').inert : null,
+        cells: [...row.querySelectorAll('.cell')].map(cell => ({ name: cell.querySelector('.cell-name').textContent, kind: cell.classList.contains('bull') ? 'bull' : cell.classList.contains('bear') ? 'bear' : 'none',
+          pressed: cell.getAttribute('aria-pressed') === 'true', leftOfPin: pin ? cell.getBoundingClientRect().right <= pin.getBoundingClientRect().left + 1 : null,
+          markAbove: cell.querySelector('.tag').getBoundingClientRect().top < cell.querySelector('.cell-name').getBoundingClientRect().top })),
+        read: row.querySelector('.trend-read') && !row.querySelector('.trend-read').hidden ? row.querySelector('.trend-read').textContent : null }; }) }; }"""
+
+
 def centre(locator) -> tuple[float, float]:
     box = locator.bounding_box()
     return box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
@@ -418,6 +434,82 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
         shown = page.evaluate(CATS_VISIBLE)
         check(f"{tag}：展開後重新整理，回到四類都收著", len(shown) == 4 and not any(shown.values()), shown)
     step(f"{tag}：首頁分類收合", folded)
+
+    def trend() -> None:
+        """短中長期走勢（本人 11-15 定案的 ⑤）：一列一期、一票一根小柱，點那一期才展開每個指標的鍵。
+        預覽的走勢是用正式規則就樣本資料算的：短期 5 票全空、中期 4 票全空、長期 2 空 2 多。"""
+        section = page.locator("#marketTrend")
+        section.scroll_into_view_if_needed()
+        tops = page.locator("#marketTrend button.trend-top")
+        state = page.evaluate(TREND_STATE)
+        rows = state["rows"]
+        check(f"{tag}：短中長期走勢三期的結論", [(row["key"], row["state"], row["name"]) for row in rows]
+              == [("short", "bear", "短期 偏空"), ("medium", "bear", "中期 偏空"), ("long", "flat", "長期 盤整")], rows)
+        check(f"{tag}：走勢最上面那一句寫三期一不一致", state["align"] == "三期不同調 短線偏空、中線偏空、長線盤整", state["align"])
+        check(f"{tag}：走勢每一期的小柱一票一根，偏空與偏多的根數和資料一樣",
+              [(row["bear"], row["bull"]) for row in rows] == [(5, 0), (4, 0), (2, 2)], [(row["bear"], row["bull"]) for row in rows])
+        check(f"{tag}：走勢一開始三期都收著，收著的鍵鍵盤走不到",
+              all(not row["open"] and row["expanded"] == "false" and row["reachable"] is False for row in rows), rows)
+        lefts, heights = {row["at"][0] for row in rows}, {row["at"][1] for row in rows}
+        check(f"{tag}：走勢{'一列一期' if mobile else '三期並排'}", (len(lefts) == 1 and len(heights) == 3) if mobile else (len(lefts) == 3 and len(heights) <= 2), [row["at"] for row in rows])
+
+        tops.nth(0).click()
+        page.wait_for_function("document.querySelector('#marketTrend .trend-row').classList.contains('is-open')")
+        short = page.evaluate(TREND_STATE)["rows"][0]
+        check(f"{tag}：點短期只展開短期，橫條上的小柱收進鍵裡", short["open"] and short["reachable"] and short["marks"] == "0"
+              and [row["open"] for row in page.evaluate(TREND_STATE)["rows"]] == [True, False, False], short)
+        check(f"{tag}：短期展開後一個指標一顆鍵，偏空的都在中線左邊、小柱在名稱下面",
+              sorted(cell["name"] for cell in short["cells"]) == sorted(["MA5", "MA5/10", "MACD", "KD", "RSI"])
+              and all(cell["kind"] == "bear" and cell["leftOfPin"] and not cell["markAbove"] for cell in short["cells"]), short["cells"])
+        check(f"{tag}：短期還沒選鍵時，下面寫不算票的量比與 5 日法人", short["read"] == "量比 1.33 倍，5 日法人 −3,955.9 億", short["read"])
+        cells = page.locator("#marketTrend .trend-row.is-open .cell")
+        kd = cells.filter(has_text="KD")
+        kd.click()
+        short = page.evaluate(TREND_STATE)["rows"][0]
+        check(f"{tag}：點一顆鍵，下面換成那個指標的數字", short["read"] == "K 14.1 低於 D 15.1"
+              and [cell["name"] for cell in short["cells"] if cell["pressed"]] == ["KD"], short)
+
+        # 展開後那一排鍵照全站的規則：按住左右滑，選中的框跟著手指走，放開時靠近哪一顆就選哪一顆
+        target = cells.filter(has_text="MA5/10")
+        hold = Hold(page, mobile)
+        hold.down(*centre(kd))
+        hold.move(*centre(target))
+        thumb = page.evaluate(THUMB_X, "#marketTrend .trend-row.is-open .trend-strip")
+        held = page.evaluate(TREND_STATE)["rows"][0]["read"]
+        check(f"{tag}：走勢的鍵按住左右滑，選中的框跟著手指走，還沒放開讀數不換",
+              thumb is not None and abs(thumb - centre(target)[0]) <= 3 and held == "K 14.1 低於 D 15.1", [thumb, centre(target)[0], held])
+        hold.up()
+        page.wait_for_timeout(300)
+        short = page.evaluate(TREND_STATE)["rows"][0]
+        check(f"{tag}：放開之後選到滑到的那一顆，不留下多的框", short["read"] == "MA5 42,490.59 低於 MA10 44,320.63"
+              and [cell["name"] for cell in short["cells"] if cell["pressed"]] == ["MA5/10"]
+              and page.locator("#marketTrend .slide-thumb").count() == 0, short)
+
+        tops.nth(2).click()
+        page.wait_for_function("(() => { const rows = document.querySelectorAll('#marketTrend .trend-row'); return rows[2].classList.contains('is-open') && !rows[0].classList.contains('is-open'); })()")
+        rows = page.evaluate(TREND_STATE)["rows"]
+        check(f"{tag}：換點長期，短期收起來（小柱回到橫條、選的鍵與讀數清掉）", not rows[0]["open"] and rows[0]["marks"] == "1" and rows[0]["reachable"] is False
+              and not any(cell["pressed"] for cell in rows[0]["cells"]) and rows[0]["read"] == "量比 1.33 倍，5 日法人 −3,955.9 億", rows[0])
+        long = rows[2]
+        check(f"{tag}：長期展開後偏空在中線左邊、小柱在名稱下面；偏多在右邊、小柱在名稱上面",
+              [(cell["name"], cell["kind"]) for cell in long["cells"]] == [("近 60 日", "bear"), ("MA120", "bear"), ("MA60/120", "bull"), ("MA120/240", "bull")]
+              and all(cell["leftOfPin"] == (cell["kind"] == "bear") and cell["markAbove"] == (cell["kind"] == "bull") for cell in long["cells"]), long["cells"])
+        check(f"{tag}：長期沒有不算票的數字，還沒選鍵時下面不佔位置", long["read"] is None, long["read"])
+
+        # 切換 K 線週期再切回來：這一塊不重畫，開著的那一期照樣開著
+        pick_period(page, "weekly")
+        page.wait_for_function("document.getElementById('chartContext').textContent.includes('週')")
+        pick_period(page, "daily")
+        page.wait_for_function("document.getElementById('chartContext').textContent.includes('日')")
+        section.scroll_into_view_if_needed()
+        rows = page.evaluate(TREND_STATE)["rows"]
+        check(f"{tag}：切換 K 線週期再切回來，開著的那一期照樣開著", [row["open"] for row in rows] == [False, False, True], [row["open"] for row in rows])
+        tops.nth(2).click()
+        page.wait_for_function("!document.querySelector('#marketTrend .trend-row.is-open')")
+        rows = page.evaluate(TREND_STATE)["rows"]
+        check(f"{tag}：再點一次收起來，三期的小柱都回到橫條上", all(not row["open"] and row["marks"] == "1" for row in rows), rows)
+        check(f"{tag}：走勢這一塊沒有造成橫向捲動", no_overflow(page))
+    step(f"{tag}：短中長期走勢", trend)
 
     def periods() -> None:
         chips = []

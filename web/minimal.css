@@ -1163,14 +1163,7 @@ body.hm #chartStudies .kc-studies-notice { display: none !important; }
 .market-trend-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
 .market-trend-head h3 { font-size: 15px; font-weight: 650; }
 .market-trend-head p { color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums; }
-.market-trend-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 12px; }
-.market-trend-item { min-width: 0; padding: 4px 18px 0 0; }
-.market-trend-item + .market-trend-item { padding-left: 18px; border-left: 1px solid var(--line); }
-.market-trend-item h4 { color: var(--ink); font-size: 14px; font-weight: 650; }
-.market-trend-item[data-state="bullish"] h4 { color: var(--down); }
-.market-trend-item[data-state="bearish"] h4 { color: var(--up); }
-.market-trend-item p { margin-top: 7px; color: var(--dim); font-size: 13px; line-height: 1.65; }
-.market-trend-error { grid-column: 1 / -1; color: var(--dim); }
+.market-trend-error { grid-column: 1 / -1; color: var(--dim); font-size: 13px; }
 
 body.hm #coreHoldings { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
 body.hm #coreHoldings > * { grid-column: 1; }
@@ -1205,9 +1198,6 @@ body.hm #coreHoldings .core-chart { margin-top: 0; min-height: 210px; }
 
 @media (max-width: 760px) {
   .market-trend-head { align-items: flex-start; }
-  .market-trend-grid { grid-template-columns: minmax(0, 1fr); }
-  .market-trend-item { padding: 12px 0; }
-  .market-trend-item + .market-trend-item { padding-left: 0; border-top: 1px solid var(--line); border-left: 0; }
   .core-compare-entry { grid-template-columns: minmax(0, 1fr) auto; }
   .core-compare-entry input, .core-compare-entry button { min-height: 44px; }
   body.hm #coreHoldings .core-cards { grid-template-columns: minmax(0, 1fr); }

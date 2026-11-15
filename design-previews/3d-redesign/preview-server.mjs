@@ -17,6 +17,8 @@ import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { readFileSync, existsSync } from "node:fs";
 import { extname } from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { handle } from "../../cloud/lib/gate.js";
 import { createLiveQuoteService } from "../../cloud/lib/live-quotes.js";
 import { createIndexLiveService } from "../../cloud/lib/index-live.js";
@@ -39,6 +41,7 @@ const features = option("features", "core");
 if (!["core", "all"].includes(features)) throw new Error("--features 只接受 core 或 all");
 
 const root = new URL("../../", import.meta.url);
+let trendNote = "";
 const dist = new URL("cloud/dist/", root);
 const issuer = await makeIssuer();
 const db = fakeD1();
@@ -62,6 +65,18 @@ const deps = {
   upstreamFetch: offline,
 };
 
+// 樣本資料裡沒有走勢判讀（每日打包才會附上，見 cloud/market_pack_daily.py）：用正式的規則 market_trend.py 就樣本的日 K 與法人算一份，
+// 放在正式站放的同一個位置。算不出來就照舊沒有（首頁會寫「尚未完成」）。
+{
+  const ov = marketPack.overview;
+  if (!ov.dashboard.actions?.market_trend) {
+    const run = spawnSync("python", ["-c", "import json,sys,market_trend; d=json.load(sys.stdin); json.dump(market_trend.assess_market_trends(d['daily'], d['institutional']), sys.stdout)"],
+      { cwd: fileURLToPath(root), input: JSON.stringify({ daily: ov.analysis.daily, institutional: ov.analysis.institutional }), encoding: "utf8", maxBuffer: 64 * 1024 * 1024, env: { ...process.env, PYTHONIOENCODING: "utf-8" } });
+    if (run.status === 0) ov.dashboard.actions = { ...(ov.dashboard.actions || {}), market_trend: JSON.parse(run.stdout) };
+    else trendNote = "走勢判讀算不出來（需要 python 與 market_trend.py）：首頁的短中長期走勢會寫「尚未完成」。";
+  }
+}
+
 if (flag("expired")) {
   const ov = marketPack.overview;
   const before = new Date(Date.parse(`${ov.analysis.meta.cutoff_date}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
@@ -73,6 +88,7 @@ if (flag("expired")) {
 // 個股 5 年歷史與含大戶持股的新版分析：取自另一條前端線的預覽樣本（5 檔），有複製過來才放。
 const historyFile = new URL(".tmp/3d-baseline/history-preview.json", root);
 const notes = [];
+if (trendNote) notes.push(trendNote);
 if (!existsSync(historyFile)) {
   notes.push("沒有 .tmp/3d-baseline/history-preview.json：個股頁沒有 5 年歷史與大戶持股，畫面會和基準截圖不同。");
 } else {

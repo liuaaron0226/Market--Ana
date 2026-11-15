@@ -925,3 +925,90 @@ body.hm :is(.hm-cats, .chip-seg).is-sliding button.is-slide-hot { color: var(--i
 @media (prefers-reduced-motion: reduce) {
   body.hm :is(.hm-cats, .chip-seg) .slide-thumb.is-settling { transition: none; }
 }
+
+/* ================= 看盤桌：短中長期走勢（立體重設計，本人 2026-11-15 定案的 ⑤） =================
+   一列一期（桌機三期並排）。每一期：結論 → 以中線為界的橫條，一票一根小柱，偏多的在基準線上面、偏空的在線下面
+   （和外資現貨小圖「買超在上、賣超在下」同一種讀法）→ 點那一期才展開，每個指標一顆鍵。
+   高低就是結論，用的是現成的鍵與槽：偏多那一列＝浮起的鍵、偏空＝凹下的槽、盤整＝一條細框。紅綠只在小柱上。
+   程式在 trend-matrix.js（畫面）與 trend-votes.js（每一票怎麼來）。本人定的樣品：design-previews/3d-redesign/pro-samples/trend-matrix.html */
+body.hm .trend-align { margin: 8px 0 0; color: var(--ink); font: 600 14px var(--sans); }
+body.hm .trend-align small { margin-left: 4px; color: var(--dim); font: 400 13px var(--sans); }
+body.hm .trend-rows { margin: 12px 0 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+@media (min-width: 761px) {
+  body.hm .trend-rows { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; gap: 12px; }
+}
+
+body.hm .trend-row { position: relative; border-radius: var(--r-key); box-shadow: inset 0 0 0 1px var(--line); transition: transform var(--t-press) linear, box-shadow var(--t-press) linear; }
+body.hm .trend-row[data-state="bull"] { background: var(--key); box-shadow: var(--key-shadow); transform: translateY(var(--key-lift)); }
+body.hm .trend-row[data-state="bear"] { background: var(--well); box-shadow: var(--well-shadow); }
+body.hm .trend-row[data-state="bull"]:has(button.trend-top:active) { transform: translateY(calc(var(--key-thick) - 1px)); box-shadow: var(--key-shadow-press); }
+
+body.hm .trend-top { display: grid; grid-template-columns: 76px minmax(0, 1fr) 12px; align-items: center; column-gap: 12px; width: 100%; min-height: 48px; padding: 6px 12px; border: 0; border-radius: inherit; background: none; color: inherit; font: inherit; text-align: left; }
+body.hm button.trend-top { cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+body.hm button.trend-top:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+body.hm .trend-name { display: flex; align-items: baseline; gap: 6px; white-space: nowrap; }
+body.hm .trend-name span { color: var(--faint); font: 12px var(--sans); }
+body.hm .trend-name strong { color: var(--ink); font: 700 16px var(--sans); }
+/* 資料不足，或算出來的票和結論對不上：不畫小柱，只寫原本那句說明 */
+body.hm .trend-top.is-plain { grid-template-columns: 76px minmax(0, 1fr); align-items: baseline; padding-top: 12px; padding-bottom: 12px; }
+body.hm .trend-sentence { margin: 0; color: var(--dim); font: 13px/1.6 var(--sans); }
+
+/* 資料記號：一票一根小柱，平的、細的 */
+body.hm .trend-row :is(.blk, .tag) { flex: none; width: 8px; height: 13px; border-radius: 2px; background: var(--faint); }
+body.hm .trend-row :is(.blk, .tag).bull { background: var(--up); }
+body.hm .trend-row :is(.blk, .tag).bear { background: var(--down); }
+
+body.hm .trend-bar { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 1px minmax(0, 1fr); column-gap: 4px; height: 32px; }
+body.hm .trend-bar::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 1px; margin-top: -.5px; background: var(--line); }
+body.hm .trend-row .mid { position: relative; background: var(--faint); }
+body.hm .trend-bar .side { display: flex; align-items: flex-start; gap: 3px; padding: 2px 0; }
+body.hm .trend-bar .side.bears { flex-direction: row-reverse; align-items: flex-end; }
+/* 點開的那一期：橫條上的小柱已經飛下去、落進各自的鍵裡了 */
+body.hm .trend-row.is-open .blk { opacity: 0; }
+
+body.hm .trend-row .chev { width: 7px; height: 7px; border: solid var(--faint); border-width: 0 1.5px 1.5px 0; transform: translateY(-2px) rotate(45deg); transition: transform var(--t-lift) var(--ease-depth); }
+body.hm .trend-row.is-open:not(.is-closing) .chev { transform: translateY(2px) rotate(225deg); }
+
+/* 展開：高度用格線的 0fr → 1fr 帶；只裁下緣，小柱才能從上面的橫條飛下來 */
+body.hm .trend-panel { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 460ms var(--ease-depth); }
+body.hm .trend-row.is-open:not(.is-closing) .trend-panel { grid-template-rows: 1fr; }
+body.hm .trend-clip { min-height: 0; clip-path: inset(-70px -6px 0 -6px); }
+body.hm .trend-inner { padding: 2px 12px 12px; }
+
+/* 展開後：一個指標一顆鍵。偏空在中線左邊、小柱在名稱下面；偏多在右邊、小柱在名稱上面；沒有方向的在中間 */
+body.hm .trend-strip { position: relative; display: flex; align-items: stretch; justify-content: center; gap: 6px; }
+body.hm .trend-strip .mid { flex: 0 0 1px; }
+body.hm .trend-strip .cell { position: relative; z-index: 1; flex: 1 1 0; min-width: 0; max-width: 104px; min-height: 48px; padding: 7px 2px; border: 0; border-radius: var(--r-key); background: none; color: var(--ink); font: 600 12px var(--sans); white-space: nowrap; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; cursor: pointer; transition: transform var(--t-press) linear; touch-action: pan-y; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+body.hm .trend-strip .cell.bear { flex-direction: column-reverse; }
+body.hm .trend-strip .cell.none .tag { height: 5px; }
+body.hm .trend-strip .cell-face { position: absolute; inset: 0; border-radius: inherit; background: var(--key); box-shadow: var(--key-shadow); transition: box-shadow var(--t-press) linear; }
+body.hm .trend-strip :is(.tag, .cell-name) { position: relative; }
+body.hm .trend-strip .cell:active { transform: translateY(calc(var(--key-thick) - 1px)); }
+body.hm .trend-strip .cell:active .cell-face { box-shadow: var(--key-shadow-press); }
+body.hm .trend-strip .cell:is(:focus-visible, [aria-pressed="true"]) { outline: 2px solid var(--gold); outline-offset: 2px; }
+/* 按住左右拖：選中的框（.slide-thumb，程式在 chart-menus.js）跟著手指走，放開時靠近哪一顆就選哪一顆 */
+body.hm .trend-strip .slide-thumb { position: absolute; z-index: 2; left: 0; top: 0; pointer-events: none; border-radius: var(--r-key); outline: 2px solid var(--gold); outline-offset: 2px; }
+body.hm .trend-strip .slide-thumb.is-settling { transition: transform 200ms var(--ease-depth); }
+body.hm .trend-strip.is-sliding .cell { outline: none; }
+
+/* 點一顆：那個指標實際的數字寫在下面一行（短期沒選的時候寫不算票的量比與 5 日法人） */
+body.hm .trend-read { margin: 12px 0 0; color: var(--ink); font: 13px/1.5 var(--sans); }
+
+/* 進場（捲到這一塊才播一次）：基準線從中間畫出來；每一票從那一邊的盡頭滑進來；票都到了整列才定在最後的高度 */
+body.hm .market-trend.is-waiting .blk { opacity: 0; }
+body.hm .market-trend.is-waiting .trend-bar::before,
+body.hm .market-trend.is-waiting .trend-bar .mid { transform: scale(0); }
+body.hm .market-trend.is-waiting .trend-row { background: transparent; box-shadow: inset 0 0 0 1px var(--line); transform: none; }
+body.hm .market-trend.is-entering .trend-bar::before { animation: trend-rail-in 460ms var(--ease-depth) both; animation-delay: var(--rail-at); }
+body.hm .market-trend.is-entering .trend-bar .mid { animation: trend-pin-in 380ms var(--ease-depth) both; animation-delay: var(--rail-at); }
+body.hm .market-trend.is-entering .blk { animation: trend-vote-in 420ms var(--ease-depth) both; animation-delay: var(--at); }
+body.hm .market-trend.is-entering .blk.bull { --from-x: 80px; }
+body.hm .market-trend.is-entering .blk.bear { --from-x: -80px; }
+body.hm .market-trend.is-entering .trend-row { animation: trend-row-settle 700ms var(--ease-depth) both; animation-delay: var(--settle-at); }
+@keyframes trend-rail-in { from { transform: scaleX(0); } }
+@keyframes trend-pin-in { from { transform: scaleY(0); } }
+@keyframes trend-vote-in { from { opacity: 0; translate: var(--from-x) 0; } 35% { opacity: 1; } }
+@keyframes trend-row-settle { from { transform: none; background: transparent; box-shadow: inset 0 0 0 1px var(--line); } }
+@media (prefers-reduced-motion: reduce) {
+  body.hm .trend-panel, body.hm .trend-row .chev, body.hm .trend-strip .slide-thumb.is-settling { transition: none; }
+}

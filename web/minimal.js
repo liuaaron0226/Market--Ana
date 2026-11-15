@@ -493,24 +493,9 @@
     const trend = packaged && packaged.schema === 'market-trend/v1' ? packaged : localMarketTrend(instance);
     renderedTrend = trend;
     if (!els.trendDate || !els.trendGrid) return;
-    if (!trend) {
-      els.trendDate.textContent = `資料日 ${A.meta.cutoff_date || '—'}`;
-      els.trendGrid.replaceChildren(Object.assign(document.createElement('p'), { className: 'market-trend-error', textContent: '走勢判讀尚未隨每日資料完成。' }));
-      return;
-    }
-    els.trendDate.textContent = `資料日 ${trend.data_date || '—'}`;
-    els.trendGrid.replaceChildren(...trend.periods.map(period => {
-      const article = document.createElement('article');
-      article.className = 'market-trend-item';
-      article.dataset.state = period.state;
-      article.setAttribute('role', 'listitem');
-      const heading = document.createElement('h4');
-      heading.textContent = `${period.label} ${period.conclusion}`;
-      const sentence = document.createElement('p');
-      sentence.textContent = period.sentence.replace(`${period.conclusion}：`, '');
-      article.append(heading, sentence);
-      return article;
-    }));
+    els.trendDate.textContent = `資料日 ${(trend && trend.data_date) || A.meta.cutoff_date || '—'}`;
+    // 每一票與最上面那一句由 trend-votes.js 讀好，畫面由 trend-matrix.js 畫；同一份資料重複叫不會重畫
+    window.TrendMatrix.render(els.trendSection, trend ? window.TrendVotes.read(trend) : null);
   }
 
   function ensureChart() {
