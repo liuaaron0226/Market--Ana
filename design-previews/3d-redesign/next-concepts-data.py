@@ -14,7 +14,7 @@ import shoot  # noqa: E402
 out = Path(sys.argv[1])
 HOME = """() => ({
   distribution: [...document.querySelectorAll('#distributionBar button')].map(b => ({ key: b.dataset.outcome, text: b.innerText.replace(/\\s+/g, ' ').trim(), share: (b.querySelector('[data-share]') || {}).textContent })),
-  trend: [...document.querySelectorAll('#marketTrendGrid > *')].map(a => ({ state: a.dataset.state, text: a.innerText.replace(/\\s+/g, ' ').trim() })),
+  trend: [...document.querySelectorAll('#marketTrendRows > *')].map(a => ({ state: a.dataset.state, text: a.innerText.replace(/\\s+/g, ' ').trim() })),
   trendDate: document.getElementById('marketTrendDate').textContent,
 })"""
 STOCK = """() => ({

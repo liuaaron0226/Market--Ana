@@ -73,10 +73,15 @@ test("短期另外帶著不算票的量比與 5 日法人；其他期沒有", ()
   assert.equal(periods[0].extra, "量比 1.33 倍，5 日法人 −3,955.9 億");
   assert.equal(periods[1].extra, null);
   assert.equal(periods[2].extra, null);
-  const noExtra = clone(SAMPLE);
-  noExtra.periods[0].metrics.volume_ratio_20d = null;
-  noExtra.periods[0].metrics.institutional_5d_billion = null;
-  assert.equal(loadRead()(noExtra).periods[0].extra, null);
+  // 兩個各寫各的：缺一個，另一個照寫；兩個都缺才沒有
+  const partly = clone(SAMPLE);
+  partly.periods[0].metrics.volume_ratio_20d = null;
+  assert.equal(loadRead()(partly).periods[0].extra, "5 日法人 −3,955.9 億");
+  partly.periods[0].metrics.volume_ratio_20d = 1.3314;
+  partly.periods[0].metrics.institutional_5d_billion = null;
+  assert.equal(loadRead()(partly).periods[0].extra, "量比 1.33 倍");
+  partly.periods[0].metrics.volume_ratio_20d = null;
+  assert.equal(loadRead()(partly).periods[0].extra, null);
 });
 
 test("原本那句說明留著（拿掉開頭的結論），畫面退回文字時用", () => {
@@ -111,6 +116,18 @@ test("兩個數字相等或缺資料的那一票沒有方向", () => {
   assert.equal(medium.votes[3].text, "近 20 日外資加投信合計：沒有資料");
   // 兩票偏空、兩票沒有方向，合計 −2，和資料裡的「偏空」對得上
   assert.equal(medium.state, "bear");
+  // 法人合計剛好是 0：不寫買超也不寫賣超
+  trend.periods[1].metrics.institutional_20d_billion = 0;
+  assert.equal(loadRead()(trend).periods[1].votes[3].text, "近 20 日外資加投信合計 0.0 億");
+  // RSI 算不出來：照規則原本那句話的寫法
+  const noRsi = clone(SAMPLE);
+  noRsi.periods[0].metrics.rsi14 = null;
+  const short = loadRead()(noRsi).periods[0];
+  assert.deepEqual([short.votes[4].side, short.votes[4].text], [0, "RSI 無方向"]);
+  // 差不到十億分之一算相等（和規則的容差一樣）
+  const close = clone(SAMPLE);
+  close.periods[0].metrics.kd_k = close.periods[0].metrics.kd_d + 5e-10;
+  assert.equal(loadRead()(close).periods[0].votes[3].side, 0);
 });
 
 test("算出來的票和資料裡的結論對不上：那一期不給票", () => {

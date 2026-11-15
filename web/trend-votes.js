@@ -2,6 +2,7 @@
    不碰畫面；畫面層（trend-matrix.js）只負責把結果畫出來，不另外算一套。
 
    用法：TrendVotes.read(trend) → { title, note, periods }，不是走勢資料回 null。
+        TrendVotes.sideOf(左, 右) → 1、-1、0：規則的比法（首頁本機來源重算走勢時也用這一個，不另外寫）。
    - title、note：最上面那一句（三期一不一致）。
    - periods：每一期 { key, label, conclusion, state, sentence, votes, extra }。
      state：'bull' 偏多、'bear' 偏空、'flat' 盤整、'none' 資料不足。
@@ -20,7 +21,7 @@
 
   // 和規則同一個比法：缺任何一邊或兩邊相等就是沒有方向
   function sideOf(left, right) {
-    if (!finite(left) || !finite(right) || Math.abs(left - right) < 1e-9) return 0;
+    if (!finite(left) || !finite(right) || Math.abs(left - right) <= 1e-9) return 0;
     return left > right ? 1 : -1;
   }
   const word = side => (side > 0 ? '高於' : side < 0 ? '低於' : '等於');
@@ -35,29 +36,29 @@
   // 一個數字對一條線的那一種票：MACD 柱對零軸、RSI 對 50、報酬對 0、法人合計對 0
   function against(name, value, line, missing, text) {
     const side = sideOf(value, line);
-    return { name, side, text: finite(value) ? text(side) : `${missing}：沒有資料` };
+    return { name, side, text: finite(value) ? text(side) : missing };
   }
 
   const RULES = {
     short: m => [
       versus('MA5', '收盤', m.close, 'MA5', m.ma5, 2, true),
       versus('MA5/10', 'MA5', m.ma5, 'MA10', m.ma10, 2, false),
-      against('MACD', m.macd_hist, 0, 'MACD 柱', side => `MACD 柱 ${signed(m.macd_hist, 2)}，${side > 0 ? '在零軸上' : side < 0 ? '在零軸下' : '在零軸上（剛好是 0）'}`),
+      against('MACD', m.macd_hist, 0, 'MACD 柱：沒有資料', side => `MACD 柱 ${signed(m.macd_hist, 2)}，${side > 0 ? '在零軸上' : side < 0 ? '在零軸下' : '在零軸上（剛好是 0）'}`),
       versus('KD', 'K', m.kd_k, 'D', m.kd_d, 1, false),
-      against('RSI', m.rsi14, 50, 'RSI14', side => `RSI14 ${fmt(m.rsi14, 1)}，${word(side)} 50`),
+      against('RSI', m.rsi14, 50, 'RSI 無方向', side => `RSI14 ${fmt(m.rsi14, 1)}，${word(side)} 50`),
     ],
     medium: m => [
       versus('MA20', '收盤', m.close, 'MA20', m.ma20, 2, true),
       versus('MA20/60', 'MA20', m.ma20, 'MA60', m.ma60, 2, false),
-      against('近 20 日', m.return_20d_pct, 0, '近 20 日', () => `近 20 日 ${signed(m.return_20d_pct, 1)}%`),
-      against('法人', m.institutional_20d_billion, 0, '近 20 日外資加投信合計', side =>
-        `近 20 日外資加投信合計${side < 0 ? '賣超' : '買超'} ${fmt(Math.abs(m.institutional_20d_billion), 1)} 億`),
+      against('近 20 日', m.return_20d_pct, 0, '近 20 日：沒有資料', () => `近 20 日 ${signed(m.return_20d_pct, 1)}%`),
+      against('法人', m.institutional_20d_billion, 0, '近 20 日外資加投信合計：沒有資料', side =>
+        `近 20 日外資加投信合計${side < 0 ? '賣超' : side > 0 ? '買超' : ''} ${fmt(Math.abs(m.institutional_20d_billion), 1)} 億`),
     ],
     long: m => [
       versus('MA120', '收盤', m.close, 'MA120', m.ma120, 2, true),
       versus('MA60/120', 'MA60', m.ma60, 'MA120', m.ma120, 2, false),
       versus('MA120/240', 'MA120', m.ma120, 'MA240', m.ma240, 2, false),
-      against('近 60 日', m.return_60d_pct, 0, '近 60 日', () => `近 60 日 ${signed(m.return_60d_pct, 1)}%`),
+      against('近 60 日', m.return_60d_pct, 0, '近 60 日：沒有資料', () => `近 60 日 ${signed(m.return_60d_pct, 1)}%`),
     ],
   };
 
@@ -72,8 +73,11 @@
     const rule = state === 'none' ? null : RULES[period.key];
     let votes = rule ? rule(metrics) : null;
     if (votes && stateOf(votes.reduce((sum, vote) => sum + vote.side, 0)) !== state) votes = null;
-    const extra = period.key === 'short' && state !== 'none' && finite(metrics.volume_ratio_20d) && finite(metrics.institutional_5d_billion)
-      ? `量比 ${fmt(metrics.volume_ratio_20d, 2)} 倍，5 日法人 ${signed(metrics.institutional_5d_billion, 1)} 億` : null;
+    const extras = period.key !== 'short' || state === 'none' ? [] : [
+      finite(metrics.volume_ratio_20d) ? `量比 ${fmt(metrics.volume_ratio_20d, 2)} 倍` : '',
+      finite(metrics.institutional_5d_billion) ? `5 日法人 ${signed(metrics.institutional_5d_billion, 1)} 億` : '',
+    ].filter(Boolean);
+    const extra = extras.length ? extras.join('，') : null;
     return { key: period.key, label: String(period.label || ''), conclusion, state, sentence, votes, extra };
   }
 
@@ -95,5 +99,5 @@
     return { ...headline(periods), periods };
   }
 
-  global.TrendVotes = { read };
+  global.TrendVotes = { read, sideOf };
 })(window);

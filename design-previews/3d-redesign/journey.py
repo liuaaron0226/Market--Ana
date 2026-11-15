@@ -138,7 +138,7 @@ TREND_STATE = """() => { const section = document.getElementById('marketTrend');
         marks: row.querySelector('.blk') ? getComputedStyle(row.querySelector('.blk')).opacity : null,
         open: row.classList.contains('is-open') && !row.classList.contains('is-closing'), expanded: row.querySelector('.trend-top').getAttribute('aria-expanded'),
         reachable: row.querySelector('.trend-panel') ? !row.querySelector('.trend-panel').inert : null,
-        cells: [...row.querySelectorAll('.cell')].map(cell => ({ name: cell.querySelector('.cell-name').textContent, kind: cell.classList.contains('bull') ? 'bull' : cell.classList.contains('bear') ? 'bear' : 'none',
+        cells: [...row.querySelectorAll('.cell')].map(cell => ({ name: cell.querySelector('.cell-name').textContent.replace(/\u00a0/g, ' '), kind: cell.classList.contains('bull') ? 'bull' : cell.classList.contains('bear') ? 'bear' : 'none',
           pressed: cell.getAttribute('aria-pressed') === 'true', leftOfPin: pin ? cell.getBoundingClientRect().right <= pin.getBoundingClientRect().left + 1 : null,
           markAbove: cell.querySelector('.tag').getBoundingClientRect().top < cell.querySelector('.cell-name').getBoundingClientRect().top })),
         read: row.querySelector('.trend-read') && !row.querySelector('.trend-read').hidden ? row.querySelector('.trend-read').textContent : null }; }) }; }"""
@@ -484,6 +484,11 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
         check(f"{tag}：放開之後選到滑到的那一顆，不留下多的框", short["read"] == "MA5 42,490.59 低於 MA10 44,320.63"
               and [cell["name"] for cell in short["cells"] if cell["pressed"]] == ["MA5/10"]
               and page.locator("#marketTrend .slide-thumb").count() == 0, short)
+        target.click()
+        short = page.evaluate(TREND_STATE)["rows"][0]
+        check(f"{tag}：再點一次選中的那顆鍵就取消，下面回到量比與 5 日法人", not any(cell["pressed"] for cell in short["cells"])
+              and short["read"] == "量比 1.33 倍，5 日法人 −3,955.9 億", short)
+        target.click()
 
         tops.nth(2).click()
         page.wait_for_function("(() => { const rows = document.querySelectorAll('#marketTrend .trend-row'); return rows[2].classList.contains('is-open') && !rows[0].classList.contains('is-open'); })()")

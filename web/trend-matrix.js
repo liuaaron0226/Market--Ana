@@ -10,7 +10,7 @@
 (function () {
   'use strict';
   const STILL = window.matchMedia('(prefers-reduced-motion: reduce)');
-  const EASE = 'cubic-bezier(.16, 1, .3, 1)';
+  const EASE = getComputedStyle(document.documentElement).getPropertyValue('--ease-depth').trim() || 'ease-out';   // 全站的緩動（bold.css）
   // 進場的時間表（毫秒）：一列比一列晚；每一票隔一拍落下；每落一票整列被壓或頂一下
   const FIRST_ROW = 100, ROW_GAP = 380, FIRST_VOTE = 260, VOTE_GAP = 240, SETTLE_MS = 700, BUMP_PX = 3;
   const KINDS = { '-1': 'bear', 0: 'none', 1: 'bull' };
@@ -19,22 +19,30 @@
 
   const shown = new WeakMap();   // 每一塊現在畫的是哪一份資料：{ key, model, entered }
 
+  // 進場的時間表：第幾列什麼時候開始、每一票什麼時候落下、整列什麼時候定位。畫的時候（寫進樣式）與播的時候（每一票那一下）都用這一份
+  function timetable(period, row) {
+    const start = FIRST_ROW + row * ROW_GAP, count = period.votes ? period.votes.length : 0;
+    return { start, votes: Array.from({ length: count }, (_, index) => start + FIRST_VOTE + index * VOTE_GAP), settle: count ? start + FIRST_VOTE + count * VOTE_GAP : start };
+  }
+  // 鍵上的名稱：字之間的空白不換行；太窄時只在斜線後面折成兩行（MA120/240）
+  const keyName = name => esc(name).replace(/ /g, '&nbsp;').replace('/', '/<wbr>');
+
   function rowHtml(period, row) {
-    const start = FIRST_ROW + row * ROW_GAP;
+    const times = timetable(period, row);
     const name = `<span class="trend-name"><span>${esc(period.label)}</span><strong>${esc(period.conclusion)}</strong></span>`;
     // 資料不足，或算出來的票和結論對不上：只寫原本那句說明，不能展開
     if (!period.votes) {
-      return `<li class="trend-row" data-key="${esc(period.key)}" data-state="${period.state}" style="--settle-at:${start}ms">
+      return `<li class="trend-row" data-key="${esc(period.key)}" data-state="${esc(period.state)}" style="--settle-at:${times.settle}ms">
         <div class="trend-top is-plain">${name}<p class="trend-sentence">${esc(period.sentence)}</p></div></li>`;
     }
-    const votes = period.votes.map((vote, index) => ({ ...vote, index, kind: KINDS[vote.side], at: start + FIRST_VOTE + index * VOTE_GAP }));
+    const votes = period.votes.map((vote, index) => ({ ...vote, index, kind: KINDS[vote.side], at: times.votes[index] }));
     const of = kind => votes.filter(vote => vote.kind === kind);
     const block = vote => `<i class="blk ${vote.kind}" data-vote="${vote.index}" style="--at:${vote.at}ms"></i>`;
-    const cell = vote => `<button type="button" class="cell ${vote.kind}" data-vote="${vote.index}" aria-pressed="false" aria-label="${esc(vote.name)} ${WORDS[vote.kind]}"><span class="cell-face"></span><i class="tag ${vote.kind}"></i><span class="cell-name">${esc(vote.name)}</span></button>`;
+    const cell = vote => `<button type="button" class="cell ${vote.kind}" data-vote="${vote.index}" aria-pressed="false" aria-label="${esc(vote.name)} ${WORDS[vote.kind]}"><span class="cell-face"></span><i class="tag ${vote.kind}"></i><span class="cell-name">${keyName(vote.name)}</span></button>`;
     const none = of('none'), mid = '<span class="mid"></span>';
     const counts = `${of('bear').length} 個偏空、${of('bull').length} 個偏多${none.length ? `、${none.length} 個沒有方向` : ''}`;
     const panel = `trendPanel-${esc(period.key)}`;
-    return `<li class="trend-row" data-key="${esc(period.key)}" data-state="${period.state}" style="--rail-at:${start}ms;--settle-at:${start + FIRST_VOTE + votes.length * VOTE_GAP}ms">
+    return `<li class="trend-row" data-key="${esc(period.key)}" data-state="${esc(period.state)}" style="--rail-at:${times.start}ms;--settle-at:${times.settle}ms">
       <button type="button" class="trend-top" aria-expanded="false" aria-controls="${panel}" aria-label="${esc(period.label)} ${esc(period.conclusion)}：${votes.length} 個指標，${counts}">
         ${name}
         <span class="trend-bar" aria-hidden="true"><span class="side bears">${of('bear').map(block).join('')}</span>${mid}<span class="side">${of('bull').map(block).join('')}</span></span>
@@ -89,6 +97,8 @@
   function close(section, row) {
     if (row.classList.contains('is-closing')) return;
     if (STILL.matches) { select(section, row, null); setOpen(row, false); return; }
+    // 展開的動畫還沒播完就收：先讓它落定，不然量到的是飛到一半的位置，飛回去的落點會偏
+    row.querySelectorAll('.cell').forEach(cell => cell.getAnimations({ subtree: true }).forEach(run => run.finish()));
     const cells = cellsOf(row), targets = cells.map(cell => fromBlock(row, cell));
     row.classList.add('is-closing');
     row.querySelector('.trend-top').setAttribute('aria-expanded', 'false');
@@ -98,13 +108,14 @@
       return [...(targets[order] ? [tag.animate([{ offset: 1, transform: targets[order] }], timing)] : []),
         ...rest.map(part => part.animate({ opacity: [1, 0, 0], offset: [0, .5, 1] }, timing))];
     });
-    Promise.all(runs.map(run => run.finished)).then(() => {
+    // 動畫不管是播完還是被取消，都要收乾淨，不然那一列會卡在「正在收」
+    Promise.allSettled(runs.map(run => run.finished)).then(() => {
       if (!row.isConnected) return;   // 收到一半資料換了、整塊重畫了
       select(section, row, null);
       setOpen(row, false);
       row.classList.remove('is-closing');
       runs.forEach(run => run.cancel());
-    }, () => {});
+    });
   }
 
   function onClick(section, event) {
@@ -116,7 +127,8 @@
       open(row);
       return;
     }
-    if (cell) select(section, cell.closest('.trend-row'), cell);
+    // 再點一次選中的那一顆＝取消，下面那一行回到沒選時的樣子（和本人定案的樣品一樣）
+    if (cell) select(section, cell.closest('.trend-row'), cell.getAttribute('aria-pressed') === 'true' ? null : cell);
   }
 
   // 進場：等捲到這一塊才播一次。還沒播之前小柱先藏著（.is-waiting），播的時候樣式照時間表帶（.is-entering）
@@ -131,11 +143,12 @@
       section.classList.replace('is-waiting', 'is-entering');
       let last = 0;
       rowsOf(section).forEach((row, index) => {
-        const period = periodOf(section, row), start = FIRST_ROW + index * ROW_GAP;
-        (period && period.votes || []).forEach((vote, order) => {
-          const at = start + FIRST_VOTE + order * VOTE_GAP;
-          last = Math.max(last, at + VOTE_GAP + SETTLE_MS);
-          if (vote.side) row.animate({ translate: ['0 0', `0 ${-vote.side * BUMP_PX}px`, '0 0'], offset: [0, .3, 1] }, { duration: VOTE_GAP - 10, delay: at + 150, easing: 'ease-out' });
+        const period = periodOf(section, row);
+        if (!period) return;
+        const times = timetable(period, index);
+        last = Math.max(last, times.settle + SETTLE_MS);   // 沒有票的列也要等它定位完
+        (period.votes || []).forEach((vote, order) => {
+          if (vote.side) row.animate({ translate: ['0 0', `0 ${-vote.side * BUMP_PX}px`, '0 0'], offset: [0, .3, 1] }, { duration: VOTE_GAP - 10, delay: times.votes[order] + 150, easing: 'ease-out' });
         });
       });
       setTimeout(() => section.classList.remove('is-entering'), last + 200);
@@ -152,7 +165,10 @@
     const wasOpen = section.querySelector('.trend-row.is-open:not(.is-closing)');
     const keep = wasOpen && { key: wasOpen.dataset.key, vote: (wasOpen.querySelector('.cell[aria-pressed="true"]') || { dataset: {} }).dataset.vote };
     shown.set(section, { key, model, entered: Boolean(before && before.entered) });
-    if (!before) list.addEventListener('click', event => onClick(section, event));
+    if (!before) {
+      list.addEventListener('click', event => onClick(section, event));
+      section.style.setProperty('--trend-settle', `${SETTLE_MS}ms`);   // 整列定位要多久：樣式（home.css）跟著這個值，不各寫一份
+    }
     if (!model) {
       align.hidden = true;
       list.innerHTML = '<li class="market-trend-error">走勢判讀尚未隨每日資料完成。</li>';

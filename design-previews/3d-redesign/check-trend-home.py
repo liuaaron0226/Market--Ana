@@ -28,24 +28,24 @@ REDRAW = """change => { const trend = JSON.parse(JSON.stringify(window.MinimalAp
     rows: [...section.querySelectorAll('.trend-row')].map(row => ({ state: row.dataset.state, name: row.querySelector('.trend-name').innerText.replace(/\\s+/g, ' ').trim(),
       button: Boolean(row.querySelector('button.trend-top')), sentence: row.querySelector('.trend-sentence') ? row.querySelector('.trend-sentence').textContent : null,
       marks: row.querySelectorAll('.blk').length, open: row.classList.contains('is-open'),
-      cells: [...row.querySelectorAll('.cell')].map(cell => [cell.querySelector('.cell-name').textContent, cell.className.replace('cell ', ''), cell.getAttribute('aria-pressed')]),
+      cells: [...row.querySelectorAll('.cell')].map(cell => [cell.querySelector('.cell-name').textContent.replace(/ /g, ' '), cell.className.replace('cell ', ''), cell.getAttribute('aria-pressed')]),
       read: row.querySelector('.trend-read') && !row.querySelector('.trend-read').hidden ? row.querySelector('.trend-read').textContent : null })) }; }"""
 
 with sync_playwright() as p:
     browser = p.chromium.launch()
 
     # ---- 1. 有動態
-    for label, width, height in (("手機", 390, 760), ("桌機", 1440, 700)):
+    for label, width, height in (("手機", 390, 760), ("桌機", 1440, 700)):   # 其他寬度的排版在下面另外驗
         ctx = browser.new_context(viewport={"width": width, "height": height}, has_touch=width < 700, reduced_motion="no-preference", locale="zh-TW")
         page = ctx.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
         page.goto(BASE, wait_until="networkidle")
         page.wait_for_selector("#marketTrend .trend-row")
-        below = page.evaluate("document.getElementById('marketTrendGrid').getBoundingClientRect().top > innerHeight")
+        below = page.evaluate("document.getElementById('marketTrendRows').getBoundingClientRect().top > innerHeight")
         check(f"{label}：這一塊一開始在畫面下方", below)
         check(f"{label}：還沒捲到之前在等（小柱先藏著）", "is-waiting" in page.evaluate(CLASS) and set(page.evaluate(MARKS)) == {"0"}, page.evaluate(CLASS))
-        page.locator("#marketTrendGrid").scroll_into_view_if_needed()
+        page.locator("#marketTrendRows").scroll_into_view_if_needed()
         page.wait_for_function(f"{CLASS}.includes('is-entering')", timeout=3000)
         check(f"{label}：捲到之後開始播", True)
         page.wait_for_function(f"!{CLASS}.includes('is-entering') && !{CLASS}.includes('is-waiting')", timeout=8000)
@@ -56,7 +56,7 @@ with sync_playwright() as p:
             page.locator(f".hm-period [data-value='{value}']").click()
             page.wait_for_timeout(500)
         check(f"{label}：切換 K 線週期再切回來不重播", page.evaluate(CLASS).strip() == "market-trend" and set(page.evaluate(MARKS)) == {"1"}, page.evaluate(CLASS))
-        page.locator("#marketTrendGrid").scroll_into_view_if_needed()
+        page.locator("#marketTrendRows").scroll_into_view_if_needed()
         tops = page.locator("#marketTrend button.trend-top")
         tops.nth(2).click()
         page.wait_for_timeout(1300)
@@ -77,6 +77,29 @@ with sync_playwright() as p:
         check(f"{label}：沒有橫向捲動、沒有腳本錯誤", not page.evaluate("document.documentElement.scrollWidth > document.documentElement.clientWidth") and not errors, errors)
         ctx.close()
 
+    # ---- 各種寬度：鍵的名稱不凸出鍵外、鍵不凸出那一列；夠寬（1180 以上）才三期並排，不夠寬一列一期
+    FITS = """() => { const row = document.querySelector('#marketTrend .trend-row.is-open'), box = row.getBoundingClientRect();
+      return [...row.querySelectorAll('.cell')].every(cell => { const c = cell.getBoundingClientRect(), n = cell.querySelector('.cell-name').getBoundingClientRect();
+        return n.left >= c.left - .5 && n.right <= c.right + .5 && c.left >= box.left - .5 && c.right <= box.right + .5; })
+        && (() => { const read = row.querySelector('.trend-read'); return read.hidden || read.getBoundingClientRect().right <= box.right + .5; })(); }"""
+    for width in (320, 390, 800, 1024, 1180, 1440):
+        ctx = browser.new_context(viewport={"width": width, "height": 800}, has_touch=width < 700, reduced_motion="reduce", locale="zh-TW")
+        page = ctx.new_page()
+        page.goto(BASE, wait_until="networkidle")
+        page.wait_for_selector("#marketTrend .trend-row")
+        page.locator("#marketTrendRows").scroll_into_view_if_needed()
+        lefts = page.evaluate("[...new Set([...document.querySelectorAll('#marketTrend .trend-row')].map(row => Math.round(row.getBoundingClientRect().left)))].length")
+        check(f"寬 {width}：{'三期並排' if width >= 1180 else '一列一期'}", lefts == (3 if width >= 1180 else 1), lefts)
+        fits = []
+        for index in range(3):
+            page.locator("#marketTrend button.trend-top").nth(index).click()
+            page.wait_for_function("index => document.querySelectorAll('#marketTrend .trend-row')[index].classList.contains('is-open')", arg=index)
+            page.locator("#marketTrend .trend-row.is-open .cell").first.click()
+            fits.append(page.evaluate(FITS))
+        check(f"寬 {width}：三期展開後鍵的名稱、鍵與讀數都沒有凸出去", all(fits), fits)
+        check(f"寬 {width}：沒有橫向捲動", not page.evaluate("document.documentElement.scrollWidth > document.documentElement.clientWidth"))
+        ctx.close()
+
     # ---- 2、3. 樣本資料沒有的情況，與資料換了重畫
     ctx = browser.new_context(viewport={"width": 390, "height": 760}, has_touch=True, reduced_motion="reduce", locale="zh-TW")
     page = ctx.new_page()
@@ -84,7 +107,7 @@ with sync_playwright() as p:
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.goto(BASE, wait_until="networkidle")
     page.wait_for_selector("#marketTrend .trend-row")
-    page.locator("#marketTrendGrid").scroll_into_view_if_needed()
+    page.locator("#marketTrendRows").scroll_into_view_if_needed()
 
     drawn = page.evaluate(REDRAW, "trend.periods[1].metrics.institutional_20d_billion = null;")
     medium = drawn["rows"][1]

@@ -56,7 +56,7 @@
     conclusion: $('conclusionText'),
     trendSection: $('marketTrend'),
     trendDate: $('marketTrendDate'),
-    trendGrid: $('marketTrendGrid'),
+    trendRows: $('marketTrendRows'),
     service: $('serviceNote'),
     chartContext: $('chartContext'),
     chartStage: $('chartStage'),
@@ -408,10 +408,8 @@
     ];
   }
 
-  function trendSide(left, right) {
-    if (!Number.isFinite(left) || !Number.isFinite(right) || Math.abs(left - right) < 1e-9) return 0;
-    return left > right ? 1 : -1;
-  }
+  // 規則的比法只有一份，在 trend-votes.js
+  const trendSide = (left, right) => window.TrendVotes.sideOf(left, right);
 
   function trendState(score) {
     if (score >= 2) return ['bullish', '偏多'];
@@ -492,7 +490,7 @@
     const packaged = D.actions && D.actions.market_trend || A.market_trend;
     const trend = packaged && packaged.schema === 'market-trend/v1' ? packaged : localMarketTrend(instance);
     renderedTrend = trend;
-    if (!els.trendDate || !els.trendGrid) return;
+    if (!els.trendDate || !els.trendRows) return;
     els.trendDate.textContent = `資料日 ${(trend && trend.data_date) || A.meta.cutoff_date || '—'}`;
     // 每一票與最上面那一句由 trend-votes.js 讀好，畫面由 trend-matrix.js 畫；同一份資料重複叫不會重畫
     window.TrendMatrix.render(els.trendSection, trend ? window.TrendVotes.read(trend) : null);

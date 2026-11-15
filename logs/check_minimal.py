@@ -225,7 +225,7 @@ def check_standard_width(browser: Browser, width: int, height: int, screenshots:
     assert trend["schema"] == "market-trend/v1"
     assert trend["data_date"] == ANALYSIS["meta"]["cutoff_date"]
     assert [row["key"] for row in trend["periods"]] == ["short", "medium", "long"]
-    assert page.locator("#marketTrendGrid .trend-row").count() == 3
+    assert page.locator("#marketTrendRows .trend-row").count() == 3
     assert page.locator("#marketTrendDate").inner_text() == f"資料日 {trend['data_date']}"
     study_labels = page.locator("#chartStudies .kc-study-choice").all_inner_texts()
     assert study_labels == ["成交金額", "MACD", "KD", "RSI"], study_labels
