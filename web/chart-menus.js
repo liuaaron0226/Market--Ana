@@ -2,6 +2,8 @@
    小鍵：<button class="chart-chip" aria-expanded="false" aria-controls="選單的 id">
    選單：<div class="chart-menu" id="…" hidden>；選單裡帶 data-menu-close 的按鈕按了就收回；選單帶 data-menu-autoclose 的話，裡面任何按鈕按了都收回。
    小鍵帶 data-mirror="這個設定叫什麼"：上面的字跟著選單裡選中的那一項，那一項所在的群組隱藏時小鍵也不顯示。
+   按住滑到要的再放開（本人 11-15）：按住小鍵，選單不用放開就浮出，手指滑到要的那一項（會亮起）放開就選到；滑到外面放開不選；
+   按一下就放開和原本一樣，選單開著等人點。成排的鍵（選單裡的按鈕、首頁的分類鍵、明細板的買超／賣超）按住滑到另一顆，放開才生效。
    一次只開一個；按 Esc 或點選單以外的地方收回；選單帶 data-menu-focus 的話，打開時游標直接進裡面的輸入框
    （只給「打開就是為了打字」的選單用；均線設定板不要，不然手機一打開就跳出鍵盤）。
    K 線的週期（period-switch.js）、指標（chart-studies.js）、個股頁的均線、首頁的籌碼選股與長期核心持有都用這一套。 */
@@ -28,10 +30,91 @@
     if (shown) shown.focus();
   }
 
+  // ---------- 按住滑到要的再放開 ----------
+  const GROUPS = '.chart-menu, .hm-cats, .chip-seg';   // 成排的鍵：在同一組裡滑
+  const SLIDE_START_PX = 8;                            // 動超過這麼多才算滑，不然就是點一下
+  const STRAY_CLICK_MS = 150;                          // 補發的 click 緊跟在放開之後；窗口留短，免得把使用者緊接著的下一次點擊吃掉
+  let slide = null;         // 這一次按住：{ group 可以滑到的範圍, origin 按下去的那一顆, chip 按的是小鍵的話, x, y, moved, hot 手指底下亮起的那一顆 }
+  let pressOpened = null;   // 這一次按下去才打開選單的小鍵：緊接著的那一下 click 不要又把它收回
+  let stray = null;         // 滑動選到之後，瀏覽器可能再補一下 click 給按下去的地方：{ origin, at }，那一下不算
+
+  const usable = button => Boolean(button) && !button.disabled && button.getClientRects().length > 0;
+  const nodeAt = event => document.elementFromPoint(event.clientX, event.clientY);
+  function heat(button) {
+    if (slide.hot === button) return;
+    if (slide.hot) slide.hot.classList.remove('is-slide-hot');
+    slide.hot = button;
+    if (button) button.classList.add('is-slide-hot');
+  }
+
+  document.addEventListener('pointerdown', event => {
+    pressOpened = null;
+    if (!event.isPrimary || event.button !== 0) return;
+    const chip = event.target.closest('.chart-chip[aria-controls]');
+    if (chip) {
+      const menu = menuOf(chip);
+      // 打開就是為了打字的選單照舊用點的：游標要在點完之後才進輸入框，手機鍵盤才會出來
+      if (!menu || menu.hasAttribute('data-menu-focus')) return;
+      if (chip.getAttribute('aria-expanded') !== 'true') {
+        const current = openChip();
+        if (current) set(current, false);
+        set(chip, true);
+        pressOpened = chip;
+      }
+      slide = { group: menu, origin: chip, chip, x: event.clientX, y: event.clientY, moved: false, hot: null };
+      return;
+    }
+    const button = event.target.closest('button');
+    const group = button && button.closest(GROUPS);
+    if (group && usable(button)) slide = { group, origin: button, chip: null, x: event.clientX, y: event.clientY, moved: false, hot: null };
+  });
+
+  document.addEventListener('pointermove', event => {
+    if (!slide || !event.isPrimary) return;
+    if (event.pointerType === 'mouse' && !(event.buttons & 1)) { heat(null); slide = null; return; }   // 在視窗外放開了滑鼠
+    if (!slide.moved && Math.hypot(event.clientX - slide.x, event.clientY - slide.y) < SLIDE_START_PX) return;
+    slide.moved = true;
+    const node = nodeAt(event), button = node && node.closest('button');
+    heat(usable(button) && slide.group.contains(button) ? button : null);
+  });
+
+  function finish(event, cancelled) {
+    if (!slide || !event.isPrimary) return;
+    const { hot, moved, chip, origin } = slide;
+    heat(null);
+    slide = null;
+    if (cancelled || !moved) return;   // 沒有滑：就是點一下，交給下面的 click
+    if (hot && hot !== origin) {
+      pressOpened = null;
+      stray = { origin, at: performance.now() };
+      hot.click();
+      return;
+    }
+    // 小鍵：滑出去之後在選單與小鍵以外的地方放開＝不選，收起。回到小鍵上放開當成點一下。
+    const node = nodeAt(event);
+    if (chip && chip.getAttribute('aria-expanded') === 'true' && !(node && (chip.contains(node) || menuOf(chip).contains(node)))) {
+      pressOpened = null;
+      stray = { origin, at: performance.now() };
+      close(chip, false);
+    }
+  }
+  document.addEventListener('pointerup', event => finish(event, false));
+  document.addEventListener('pointercancel', event => finish(event, true));
+
+  // 滑動選到（或滑出去不選）之後，瀏覽器補發的那一下 click：滑鼠會發給按下與放開兩處共同的外層，觸控在手指只動一點點時會發給按下去的那一顆。
+  document.addEventListener('click', event => {
+    if (!stray || !event.isTrusted) return;
+    const { origin, at } = stray;
+    stray = null;
+    if (performance.now() - at > STRAY_CLICK_MS) return;
+    if (origin.contains(event.target) || event.target.contains(origin)) { event.stopPropagation(); event.preventDefault(); }
+  }, true);
+
   document.addEventListener('click', event => {
     const chip = event.target.closest('.chart-chip[aria-controls]');
     const current = openChip();
     if (chip) {
+      if (pressOpened === chip) { pressOpened = null; return; }   // 這一下按下去的時候已經打開了
       if (current && current !== chip) set(current, false);
       set(chip, chip.getAttribute('aria-expanded') !== 'true');
       return;

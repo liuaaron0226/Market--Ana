@@ -893,3 +893,9 @@ body.hm .chip-table { margin-top: 0; }
 body.hm .chip-table th small { margin-left: 3px; font-size: 10px; }
 body.hm .chip-table td.streak { color: var(--dim); white-space: nowrap; }
 body.hm .chip-table td .stock-link { white-space: nowrap; }
+
+/* ================= 看盤桌：成排的鍵按住滑動選取（立體重設計 A 包第 14 片，2026-11-15） =================
+   分類鍵與明細板的買超／賣超：按住左右滑，手指底下那一顆亮起，放開才生效（程式在 chart-menus.js）。上下拖仍然捲動頁面。 */
+body.hm :is(.hm-cats, .chip-seg) button { touch-action: pan-y; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+body.hm .hm-cats button.is-slide-hot:not([aria-expanded="true"]),
+body.hm .chip-seg button.is-slide-hot:not([aria-checked="true"]) { color: var(--ink); box-shadow: inset 0 0 0 1.5px var(--ink); }

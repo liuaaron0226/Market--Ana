@@ -61,6 +61,82 @@ def pick_period(page: Page, value: str) -> str:
     return chip.inner_text().strip()
 
 
+class Hold:
+    """按住不放的一次拖曳。桌機用滑鼠；手機經由瀏覽器的除錯介面送真正的觸控事件（Playwright 自己的觸控只會點一下）。"""
+
+    def __init__(self, page: Page, mobile: bool) -> None:
+        self.page, self.mobile, self.at = page, mobile, (0.0, 0.0)
+        self.cdp = page.context.new_cdp_session(page) if mobile else None
+
+    def touch(self, kind: str, points: list) -> None:
+        self.cdp.send("Input.dispatchTouchEvent", {"type": kind, "touchPoints": [{"x": x, "y": y} for x, y in points]})
+
+    def down(self, x: float, y: float) -> None:
+        self.at = (x, y)
+        if self.mobile:
+            self.touch("touchStart", [self.at])
+        else:
+            self.page.mouse.move(x, y)
+            self.page.mouse.down()
+
+    def move(self, x: float, y: float, steps: int = 6) -> None:
+        if self.mobile:
+            for index in range(1, steps + 1):
+                self.touch("touchMove", [(self.at[0] + (x - self.at[0]) * index / steps, self.at[1] + (y - self.at[1]) * index / steps)])
+        else:
+            self.page.mouse.move(x, y, steps=steps)
+        self.at = (x, y)
+
+    def up(self) -> None:
+        if self.mobile:
+            self.touch("touchEnd", [])
+            self.cdp.detach()
+        else:
+            self.page.mouse.up()
+
+
+def centre(locator) -> tuple[float, float]:
+    box = locator.bounding_box()
+    return box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+
+
+def slide_period(page: Page, tag: str, mobile: bool) -> None:
+    """按住週期小鍵滑到要的那一項再放開（本人 11-15）；首頁與個股頁的小鍵是同一套。"""
+    chip, menu = page.locator(".hm-period .chart-chip"), page.locator("#periodMenu")
+    weekly, daily = menu.locator("[data-value='weekly']"), menu.locator("[data-value='daily']")
+    chip.scroll_into_view_if_needed()
+    page.evaluate("scrollBy(0, -160)")   # 小鍵離畫面上緣遠一點，選單整個在畫面裡
+    before = chip.inner_text().strip()
+    hold = Hold(page, mobile)
+    hold.down(*centre(chip))
+    check(f"{tag}：按住週期小鍵，不用放開選單就浮出來", menu.is_visible())
+    hold.move(*centre(weekly))
+    check(f"{tag}：滑到的那一項亮起，還沒放開不會換", "is-slide-hot" in (weekly.get_attribute("class") or "") and chip.inner_text().strip() == before,
+          [weekly.get_attribute("class"), chip.inner_text()])
+    hold.up()
+    page.wait_for_timeout(250)
+    check(f"{tag}：放開就選到並收起選單", chip.inner_text().strip() == "週K" and not menu.is_visible(), chip.inner_text())
+    hold = Hold(page, mobile)
+    x, y = centre(chip)
+    hold.down(x, y)
+    hold.move(*centre(daily))
+    hold.move(12, y + 150)
+    hold.up()
+    page.wait_for_timeout(250)
+    check(f"{tag}：滑到選單外面放開不選，選單收起", chip.inner_text().strip() == "週K" and not menu.is_visible(), chip.inner_text())
+    hold = Hold(page, mobile)
+    hold.down(*centre(chip))
+    hold.up()
+    page.wait_for_timeout(250)
+    check(f"{tag}：按一下就放開，選單開著", menu.is_visible())
+    hold = Hold(page, mobile)
+    hold.down(*centre(weekly))
+    hold.move(*centre(daily))
+    hold.up()
+    page.wait_for_timeout(250)
+    check(f"{tag}：在開著的選單裡按住一項滑到另一項，放開選到後面那一項", chip.inner_text().strip() == "日K" and not menu.is_visible(), chip.inner_text())
+
+
 # 籌碼與資金的明細板：數字與結論、圖、解讀、名單標題、名單，各自的上緣位置（沒有的那一塊是 None）
 CHIP_PANEL_TOPS = """() => ['.chip-top', '.chip-big', '.chip-points', '.chip-list-head', '#chipList'].map(selector => {
   const node = document.querySelector('#panelBody ' + selector);
@@ -424,6 +500,36 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
         check(f"{tag}：其餘五項的明細板也是數字、圖、前 10 名單", all(value == [True, 20, 10, 0] for value in seen.values()), seen)
     step(f"{tag}：籌碼與資金的明細板", chip_panel)
 
+    def slide_keys() -> None:
+        """成排的鍵：按住滑到另一顆，放開才生效（本人 11-15）。"""
+        chips_key, screens_key = page.locator("#homeCats [data-cat='chips']"), page.locator("#homeCats [data-cat='screens']")
+        chips_key.scroll_into_view_if_needed()
+        hold = Hold(page, mobile)
+        hold.down(*centre(chips_key))
+        hold.move(*centre(screens_key))
+        shown = page.evaluate(CATS_VISIBLE)
+        check(f"{tag}：按住分類鍵滑到另一顆，那一顆亮起，還沒放開畫面不換",
+              "is-slide-hot" in (screens_key.get_attribute("class") or "") and shown["chips"] and not shown["screens"], [screens_key.get_attribute("class"), shown])
+        hold.up()
+        page.wait_for_timeout(300)
+        shown = page.evaluate(CATS_VISIBLE)
+        check(f"{tag}：放開之後換到滑到的那一類", shown["screens"] and not shown["chips"] and "is-slide-hot" not in (screens_key.get_attribute("class") or ""), shown)
+        open_cat(page, "chips")
+        open_chip("foreign")
+        title = page.locator("#chipListTitle")
+        buy, sell = page.locator("#panelBody .chip-seg button").nth(0), page.locator("#panelBody .chip-seg button").nth(1)
+        hold = Hold(page, mobile)
+        hold.down(*centre(buy))
+        hold.move(*centre(sell))
+        held = title.inner_text()
+        hold.up()
+        page.wait_for_timeout(250)
+        check(f"{tag}：明細板按住買超滑到賣超，放開才換成賣超的名單", "買超" in held and "賣超" in title.inner_text() and sell.get_attribute("aria-checked") == "true",
+              [held, title.inner_text()])
+        close_chip()
+    step(f"{tag}：成排的鍵按住滑動選取", slide_keys)
+    step(f"{tag}：週期小鍵按住滑動選取", lambda: slide_period(page, tag, mobile))
+
     def candle() -> None:
         x, y = chart_point(page, "#mainChart", 0.45, 0.45)
         page.evaluate(KEEP_CANVASES, "#mainChart")
@@ -729,6 +835,7 @@ def stock(page: Page, base: str, tag: str, mobile: bool) -> None:
         check(f"{tag}：週期切換日／週／月", True)
         check(f"{tag}：週期小鍵寫著現在的週期", chips == ["週K", "月K", "日K"], chips)
     step(f"{tag}：週期切換", periods)
+    step(f"{tag}：週期小鍵按住滑動選取", lambda: slide_period(page, tag, mobile))
     step(f"{tag}：控制項收納", lambda: tucked_controls(page, tag,
          ["1秒", "5秒", "10秒", "15秒", "30秒", "1分K", "5分K", "15分K", "60分K", "日K", "週K", "月K"], ["成交量", "MACD", "KD", "RSI", "外資", "投信", "自營商"]))
 
