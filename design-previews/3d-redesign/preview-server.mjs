@@ -144,7 +144,20 @@ if (features === "all") {
 
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json" };
 
+// 設計樣品：只開 pro-samples 這一個資料夾裡的 .html（檔名只能是英數與連字號），樣式改指到 dist 的同名檔。
+// 其他工作目錄裡的檔案一律不提供——這個伺服器可能綁在區網上。
+const samples = new URL("design-previews/3d-redesign/pro-samples/", root);
+async function serveSample(pathname) {
+  try {
+    const html = await readFile(new URL(pathname.slice("/samples/".length), samples), "utf8");
+    return new Response(html.replaceAll("../../../web/", "/"), { headers: { "content-type": TYPES[".html"], "cache-control": "no-store" } });
+  } catch {
+    return new Response("not found", { status: 404 });
+  }
+}
+
 async function serveStatic(pathname) {
+  if (/^\/samples\/[A-Za-z0-9-]+\.html$/.test(pathname)) return serveSample(pathname);
   let p = pathname.endsWith("/") ? pathname + "index.html" : pathname;
   if (!extname(p)) p += "/index.html";
   try {
