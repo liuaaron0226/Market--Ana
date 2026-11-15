@@ -664,6 +664,37 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
             page.wait_for_function("!document.getElementById('panelPath').textContent.includes('深入')")
         check(f"{tag}：方法、來源、樣本、資料表、新聞五個深入頁都有內容且回得來", all(size > 20 for _, size in seen), seen)
     step(f"{tag}：面板深入頁", deep_layers)
+
+    def slide_samples() -> None:
+        """「換一組比較樣本」的 6 組樣本：按住上下拖，選中的框跟著手指走，放開選到靠近的那一組（本人 11-15「也做」）。"""
+        if not page.evaluate("document.querySelector('#panelBody .more-detail').open"):
+            page.locator("#panelBody .more-detail > summary").click()
+        page.locator("#panelBody [data-deep='samples']").click()
+        page.wait_for_function("document.getElementById('panelPath').textContent.includes('深入')")
+        samples = page.locator("#panelBody .sample-list button")
+        keys = samples.evaluate_all("buttons => buttons.map(b => b.dataset.sample)")
+        was = page.locator("#panelBody .sample-list button[aria-pressed='true']").get_attribute("data-sample")
+        start, goal = keys.index(was), (keys.index(was) + 2) % len(keys)
+        samples.nth(goal).scroll_into_view_if_needed()
+        samples.nth(start).scroll_into_view_if_needed()
+        hold = Hold(page, mobile)
+        hold.down(*centre(samples.nth(start)))
+        target = centre(samples.nth(goal))
+        hold.move(*target)
+        thumb = page.evaluate(THUMB_XY, "#panelBody .sample-list")
+        check(f"{tag}：按住樣本上下拖，選中的框跟著手指走，還沒放開不換",
+              thumb is not None and abs(thumb[1] - target[1]) <= 4
+              and page.locator("#panelBody .sample-list button[aria-pressed='true']").get_attribute("data-sample") == was, [thumb, target])
+        hold.up()
+        page.wait_for_timeout(300)
+        now = page.locator("#panelBody .sample-list button[aria-pressed='true']").get_attribute("data-sample")
+        check(f"{tag}：放開選到靠近的那一組樣本，不留下多的框", now == keys[goal] and page.locator("#panelBody .slide-thumb").count() == 0, [now, keys[goal]])
+        page.locator(f"#panelBody .sample-list button[data-sample='{was}']").click()
+        page.wait_for_timeout(200)
+        check(f"{tag}：點一下換回原本那一組", page.locator("#panelBody .sample-list button[aria-pressed='true']").get_attribute("data-sample") == was)
+        page.locator("#panelBack").click()
+        page.wait_for_function("!document.getElementById('panelPath').textContent.includes('深入')")
+    step(f"{tag}：樣本清單按住滑動選取", slide_samples)
     # 中途失敗也要把面板關掉，否則後面每一項都會被面板擋住而跟著失敗。
     page.keyboard.press("Escape")
     page.wait_for_function(PANEL_CLOSED)

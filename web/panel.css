@@ -281,6 +281,21 @@ body.hm .sample-list button[aria-pressed="true"] {
   transform: translateY(var(--key-thick)); box-shadow: var(--key-shadow-press); transition-duration: var(--t-press);
 }
 body.hm .sample-list button[aria-pressed="true"] { color: var(--accent); }
+/* 樣本清單：按住上下拖，選中的框（.slide-thumb，程式在 chart-menus.js）跟著手指走，放開時靠近哪一組就選哪一組。
+   拖的時候六顆都先浮起來，選中的樣子由框來畫。清單長到面板要捲的時候（is-scrollable）上下拖留給捲動。 */
+body.hm .sample-list { position: relative; }
+body.hm .sample-list button { touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+body.hm .sample-list.is-scrollable button { touch-action: pan-y; }
+body.hm .sample-list .slide-thumb {
+  position: absolute; z-index: 2; left: 0; top: 0; pointer-events: none;
+  border-radius: var(--r-key); box-shadow: inset 0 0 0 2px var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+body.hm .sample-list .slide-thumb.is-settling { transition: transform 200ms var(--ease-depth); }
+body.hm .sample-list.is-sliding button[aria-pressed="true"] { transform: none; box-shadow: var(--key-shadow); color: var(--ink); }
+body.hm .sample-list.is-sliding button.is-slide-hot { color: var(--accent); }
+@media (prefers-reduced-motion: reduce) {
+  body.hm .sample-list .slide-thumb.is-settling { transition: none; }
+}
 body.hm .chip-seg {
   padding: var(--track-pad); gap: var(--track-gap); border: 0; border-radius: var(--r-track); background: var(--well); box-shadow: var(--well-shadow);
 }

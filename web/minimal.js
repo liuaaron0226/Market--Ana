@@ -1406,6 +1406,8 @@
         }).join('')}
       </div>
     `;
+    // 清單長到面板要捲才看得完的時候（手機橫放），從按鈕開始上下拖要留給捲動，不拿來拖框（樣式看這個記號）
+    els.panelBody.querySelector('.sample-list').classList.toggle('is-scrollable', els.panelBody.scrollHeight > els.panelBody.clientHeight);
     els.panelBody.querySelectorAll('[data-sample]').forEach(button => button.addEventListener('click', () => {
       selectedSample = button.dataset.sample;
       renderDistribution();

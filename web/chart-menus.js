@@ -4,7 +4,7 @@
    小鍵帶 data-mirror="這個設定叫什麼"：上面的字跟著選單裡選中的那一項，那一項所在的群組隱藏時小鍵也不顯示。
    按住滑到要的再放開（本人 11-15）：按住小鍵，選單不用放開就浮出，手指滑到要的那一項（會亮起）放開就選到；滑到外面放開不選；
    按一下就放開和原本一樣，選單開著等人點。
-   選中的那個框跟著手指走，放開時靠近哪一顆就選哪一顆（本人 11-15 更正）：有槽的成排切換鍵（首頁的分類鍵、明細板的買超／賣超）左右跟；
+   選中的那個框跟著手指走，放開時靠近哪一顆就選哪一顆（本人 11-15 更正）：有槽的成排切換鍵（首頁的分類鍵、明細板的買超／賣超）左右跟，直排的樣本清單（換一組比較樣本）上下跟；
    「選一個」的選單（週期、指標、排行、天數、買賣超、比較期間）橫排的左右跟、直排的上下跟，手指離開選單框就收掉、放開不選。
    沒有「選一個」的選單（均線設定板）沒有框：按住滑到另一顆按鈕，那一顆亮起，放開才生效。
    一次只開一個；按 Esc 或點選單以外的地方收回；選單帶 data-menu-focus 的話，打開時游標直接進裡面的輸入框
@@ -34,8 +34,8 @@
   }
 
   // ---------- 按住滑到要的再放開 ----------
-  const GROUPS = '.chart-menu, .hm-cats, .chip-seg';   // 成排的鍵：在同一組裡滑
-  const TRACKS = '.hm-cats, .chip-seg';                // 其中有槽的：滑的時候選中的那個框（.slide-thumb）跟著手指走
+  const GROUPS = '.chart-menu, .hm-cats, .chip-seg, .sample-list';   // 成排的鍵：在同一組裡滑
+  const TRACKS = '.hm-cats, .chip-seg, .sample-list';                // 其中整組都是「選一個」的：滑的時候選中的那個框（.slide-thumb）跟著手指走
   const MENU_KEYS = 'button:is([aria-checked], [aria-pressed], [aria-selected])';   // 選單裡「選一個」的那些項目；新增、刪除這類按鈕不算
   const SELECTED_KEY = '[aria-checked="true"], [aria-expanded="true"], [aria-pressed="true"], [aria-selected="true"]';
   const REACH_PX = 12;                                 // 選單：手指離項目這麼遠以內框才跟著，再遠就當成離開選單
@@ -146,18 +146,25 @@
     if (group && usable(button)) slide = begin(event, group, button, null);
   });
 
-  document.addEventListener('pointermove', event => {
-    if (!slide || !event.isPrimary) return;
-    if (event.pointerType === 'mouse' && !(event.buttons & 1)) { removeThumb(); slide = null; pressOpened = null; return; }   // 在視窗外放開了滑鼠
+  // 照指標現在的位置更新：動得夠遠才算滑；有框的讓框跟過去，沒有框的把底下那一顆做記號
+  function update(event) {
     if (!slide.moved && Math.hypot(event.clientX - slide.x, event.clientY - slide.y) < SLIDE_START_PX) return;
     slide.moved = true;
     if (slide.track) { follow(event); return; }
     const node = nodeAt(event), button = node && node.closest('button');
     markHot(usable(button) && slide.group.contains(button) ? button : null);
+  }
+
+  document.addEventListener('pointermove', event => {
+    if (!slide || !event.isPrimary) return;
+    if (event.pointerType === 'mouse' && !(event.buttons & 1)) { removeThumb(); slide = null; pressOpened = null; return; }   // 在視窗外放開了滑鼠
+    update(event);
   });
 
   function finish(event, cancelled) {
     if (!slide || !event.isPrimary) return;
+    // 以放開的位置為準再更新一次：最後幾次移動如果來不及送到，不要照舊的位置選
+    if (!cancelled) update(event);
     const { hot, moved, chip, origin, track, thumb } = slide;
     // 有框：照框的位置選。這條路之後不會再有「同一下」的 click 走到小鍵（補發的那一下會被擋掉），所以按下去打開的記號要清掉，
     // 不然下一次用鍵盤開選單會被當成同一下而沒有反應
