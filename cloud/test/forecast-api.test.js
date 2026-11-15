@@ -171,6 +171,19 @@ test("只接受讀取", async () => {
   }
 });
 
+test("正式環境設定（本人 11-15）：預測帳本只對站主打開，其他策略、AI 與總開關維持原狀", async () => {
+  const { readFileSync } = await import("node:fs");
+  const text = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8").replace(/^\s*\/\/.*$/gm, "");
+  const vars = JSON.parse(text).vars;
+  assert.equal(vars.MARKET_ANA_FORECAST_LEDGER, "owner");
+  const policy = releasePolicy(vars);
+  assert.equal(policy.features.forecast_ledger_v1, true);
+  assert.equal(policy.strategies_enabled, false);
+  for (const feature of ["strategy_v1", "level_advice", "ai_digest", "ai_stock_advice"]) {
+    assert.equal(policy.features[feature], false, feature);
+  }
+});
+
 test("預測開關是獨立的：打開它不會連帶打開其他策略或 AI 功能，策略總開關也不會打開它", () => {
   const on = releasePolicy(ON);
   assert.equal(on.features.forecast_ledger_v1, true);

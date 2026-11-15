@@ -13,6 +13,8 @@
     "OWNER_EMAIL": "owner@example.com",
     // 本人 2026-11-14：「短中長期走勢」保留顯示；「個股操作策略」同日回測後決定先關掉（扣成本後賠錢，見 ANALYSIS_PLAN 頂部）。
     // AI 解讀、現金水位仍由 MARKET_ANA_STRATEGIES_ENABLED 控制（未設＝關）。
-    "MARKET_ANA_ENABLED_FEATURES": "market_trend_v1"
+    "MARKET_ANA_ENABLED_FEATURES": "market_trend_v1",
+    // 本人 2026-11-15：預測帳本對站主打開（試跑；其他獲准使用者看不到）。關閉＝拿掉這一行再部署。
+    "MARKET_ANA_FORECAST_LEDGER": "owner"
   }
 }
