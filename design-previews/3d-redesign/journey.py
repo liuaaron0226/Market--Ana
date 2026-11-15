@@ -120,6 +120,14 @@ THUMB_XY = """selector => { const thumb = document.querySelector(selector + ' .s
   const box = thumb.getBoundingClientRect(); return [box.left + box.width / 2, box.top + box.height / 2]; }"""
 
 
+# 明細板柱狀圖上跟著手指走的直條框：正在拖的時候回傳它的中心 x，沒有在拖是 None
+BAR_THUMB_X = """() => { const chart = document.querySelector('#panelBody .drill-chart'), thumb = chart && chart.querySelector('.bar-thumb');
+  if (!thumb || !chart.classList.contains('is-sliding')) return null;
+  const box = thumb.getBoundingClientRect(); return box.left + box.width / 2; }"""
+# 圖上現在看得到的那一行字（選到的那一天的日期與數字）
+BAR_LABELS = "() => [...document.querySelectorAll('#panelBody .bar-value')].filter(node => getComputedStyle(node).display !== 'none').map(node => node.textContent)"
+
+
 def centre(locator) -> tuple[float, float]:
     box = locator.bounding_box()
     return box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
@@ -129,8 +137,7 @@ def slide_period(page: Page, tag: str, mobile: bool) -> None:
     """按住週期小鍵滑到要的那一項再放開（本人 11-15）；首頁與個股頁的小鍵是同一套。"""
     chip, menu = page.locator(".hm-period .chart-chip"), page.locator("#periodMenu")
     weekly, daily = menu.locator("[data-value='weekly']"), menu.locator("[data-value='daily']")
-    chip.scroll_into_view_if_needed()
-    page.evaluate("scrollBy(0, -160)")   # 小鍵離畫面上緣遠一點，選單整個在畫面裡
+    chip.evaluate("node => node.scrollIntoView({ block: 'center' })")   # 固定放在畫面中央，選單整個在畫面裡（不靠前一步留下的捲動位置）
     before = chip.inner_text().strip()
     hold = Hold(page, mobile)
     hold.down(*centre(chip))
@@ -541,6 +548,48 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
         check(f"{tag}：其餘五項的明細板也是數字、圖、前 10 名單", all(value == [True, 20, 10, 0] for value in seen.values()), seen)
     step(f"{tag}：籌碼與資金的明細板", chip_panel)
 
+    def slide_bars() -> None:
+        """明細板的柱狀圖：按住左右拖，選中的那個直條框跟著手指走，放開時靠近哪一天就選哪一天，名單跟著換（本人 11-15 更正）。"""
+        short = lambda day: day[5:].replace("-", "/")
+        open_chip("foreign")
+        title, bars = page.locator("#chipListTitle"), page.locator("#panelBody .bar-hit")
+        latest = page.locator("#panelBody .bar-hit.is-on")
+        latest.scroll_into_view_if_needed()
+        start, goal_bar = centre(latest.locator("rect").first), bars.nth(6)
+        goal, day, before = centre(goal_bar.locator("rect").first), goal_bar.get_attribute("data-day"), title.inner_text()
+        finger = goal[0] + 4   # 故意不停在那一根的正中：框要跟著手指，不是一根一根跳
+        hold = Hold(page, mobile)
+        hold.down(*start)
+        hold.move(finger, start[1])
+        frame, labels = page.evaluate(BAR_THUMB_X), page.evaluate(BAR_LABELS)
+        check(f"{tag}：按住柱狀圖左右拖，選中的直條框跟著手指走", frame is not None and abs(frame - finger) <= 3, [frame, finger])
+        check(f"{tag}：圖上寫的是手指底下那一天，還沒放開名單不換", len(labels) == 1 and short(day) in labels[0] and title.inner_text() == before, [labels, title.inner_text()])
+        hold.up()
+        page.wait_for_timeout(350)
+        page.wait_for_function("!document.querySelector('#chipList [data-loading]')")
+        check(f"{tag}：放開選到那一天，下面的名單跟著換",
+              short(day) in title.inner_text() and page.locator("#panelBody .bar-hit.is-on").get_attribute("data-day") == day and page.evaluate(BAR_THUMB_X) is None,
+              [day, title.inner_text()])
+        # 換一天、資料還沒回來的那一下，名單不能先塌成一行（面板變矮又變高，畫面會跳——本人 11-15 回報的抖動）
+        tall = page.locator("#chipList").bounding_box()["height"]
+
+        def slow(route) -> None:
+            page.wait_for_timeout(350)
+            route.continue_()
+        page.route("**/api/market/detail*", slow)
+        bars.nth(12).click()
+        waiting = page.evaluate("() => { const list = document.querySelector('#chipList'); return [list.getBoundingClientRect().height, list.getAttribute('aria-busy'), Boolean(list.querySelector('[data-loading]'))]; }")
+        check(f"{tag}：換一天等資料的時候，名單留著不塌掉", waiting[2] and waiting[1] == "true" and waiting[0] >= tall * 0.9, [tall, waiting])
+        page.wait_for_function("!document.querySelector('#chipList [data-loading]')")
+        page.unroute("**/api/market/detail*")
+        check(f"{tag}：拖過之後點一下別的柱子仍然可以選", short(bars.nth(12).get_attribute("data-day")) in title.inner_text()
+              and page.locator("#chipList").get_attribute("aria-busy") is None, title.inner_text())
+        shades = page.evaluate("""() => [...document.querySelectorAll('#panelBody .bar-hit')].map(bar =>
+          [bar.classList.contains('is-on'), getComputedStyle(bar.querySelectorAll('rect')[1]).opacity])""")
+        check(f"{tag}：選到的那一根柱子顏色最深，其餘是淡的", all((opacity == "1") == on for on, opacity in shades) and sum(on for on, _ in shades) == 1, shades[10:14])
+        close_chip()
+    step(f"{tag}：明細板柱狀圖按住滑動選取", slide_bars)
+
     def slide_keys() -> None:
         """成排的鍵：按住滑到另一顆，放開才生效（本人 11-15）。"""
         chips_key, screens_key = page.locator("#homeCats [data-cat='chips']"), page.locator("#homeCats [data-cat='screens']")
@@ -585,8 +634,7 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
     def slide_study() -> None:
         """直排的選單（指標）：按住指標名稱往下拖，選中的框跟著手指上下走（本人 11-15「也改」）。"""
         chip = page.locator(STUDY_CHIP)
-        chip.scroll_into_view_if_needed()
-        page.evaluate("scrollBy(0, 220)")   # 選單往下開，留出下面的空間
+        chip.evaluate("node => node.scrollIntoView({ block: 'center' })")   # 固定放在畫面中央：選單往下開，上下都留得出空間
         was = page.locator(".kc-study-choice[aria-pressed='true']").get_attribute("data-study")
         goal = "kd" if was != "kd" else "rsi"
         choice = page.locator(f".kc-study-choice[data-study='{goal}']")

@@ -833,7 +833,7 @@
       return `<g class="bar-hit${on ? ' is-on' : ''}" data-day="${esc(r.date)}" tabindex="0" role="button" aria-label="${esc(r.date)} ${esc(r.label)}${has ? '，點看那一天的名單' : ''}"><rect x="${pad + i * step}" y="0" width="${step}" height="${H}" fill="transparent"/><rect x="${pad + i * step + step * .14}" y="${top}" width="${step * .72}" height="${h}" rx="2" fill="${tone}" opacity="${on ? 1 : .72}"/><text class="bar-value" x="${edge[1]}" y="17" text-anchor="${edge[0]}">${esc(shortDay(r.date))} ${esc(r.label)}</text></g>`;
     }).join('');
     const ticks = [0, Math.floor(rows.length / 2), rows.length - 1].map(i => `<text x="${pad + i * step + step / 2}" y="${H - 6}" text-anchor="middle">${esc(rows[i].date.slice(5).replace('-', '/'))}</text>`).join('');
-    return `<svg class="drill-chart" viewBox="0 0 ${W} ${H}" role="group" aria-label="近 20 個交易日，點任一天看那一天的名單">${signedAxis ? `<line x1="0" x2="${W}" y1="${zero}" y2="${zero}" stroke="var(--line-strong)"/>` : ''}${bars}${ticks}</svg>`;
+    return `<svg class="drill-chart" viewBox="0 0 ${W} ${H}" role="group" aria-label="近 20 個交易日，點任一天看那一天的名單">${signedAxis ? `<line x1="0" x2="${W}" y1="${zero}" y2="${zero}" stroke="var(--line-strong)"/>` : ''}<rect class="bar-thumb" x="0" y="0" width="${step}" height="${H}"/>${bars}${ticks}</svg>`;
   }
   // 籌碼與資金的明細板（本人 2026-11-15 照樣品定案）：今天的數字與一句結論 → 近 20 天的圖 → 注意 → 解讀 → 名單。
   // 名單預設是最新一天的前 10（有連續天數，本人 11-07 定案的資料）；點圖上的另一天，名單換成那一天的排行（按需取）。
@@ -899,6 +899,8 @@
     title.innerHTML = name(list[0]);
     const fill = html => {
       if (token !== drillToken || !target()) return;
+      target().classList.remove('is-loading');
+      target().removeAttribute('aria-busy');
       target().innerHTML = html;
       bindMore(target());
       // 展開到全部之後，標題的「前 10」跟著寫成實際列出的檔數；收起再寫回來
@@ -909,7 +911,12 @@
     };
     if (NOW && day === NOW.as_of) { fill(listTable(NOW[list[1]], latestColumns(key, list[2]))); return; }
     if (!detailDays.has(day)) { fill(`<p class="chip-date">這一天的個股明細還沒抓到（目前有 ${DT ? DT.days.length : 0} 天）。</p>`); return; }
-    fill('<p class="chip-date" data-loading>載入明細中…</p>');
+    // 取資料的期間原本的名單先留著（變淡），不換成一行「載入中」：不然面板會先變矮再變高，往下捲過的話畫面會跳一下（本人 11-15 回報的抖動）
+    if (target().firstElementChild) {
+      target().classList.add('is-loading');
+      target().setAttribute('aria-busy', 'true');
+      target().firstElementChild.setAttribute('data-loading', '');
+    } else fill('<p class="chip-date" data-loading>載入明細中…</p>');
     window.MarketData.detail(key, day).then(
       detail => fill(listTable((detail || {})[list[1]], dayColumns(key))),
       error => fill(`<p class="chip-date" role="alert">${esc(error && error.message ? error.message : '暫時無法取得明細。')}</p>`)
@@ -937,16 +944,74 @@
       button.parentElement.querySelectorAll('button').forEach(other => other.setAttribute('aria-checked', String(other === button)));
       showChipList(key);
     }));
-    els.panelBody.querySelectorAll('.bar-hit').forEach(node => {
-      const go = () => {
-        panelState.payload.day = node.dataset.day;
-        els.panelBody.querySelectorAll('.bar-hit').forEach(other => other.classList.toggle('is-on', other === node));
-        showChipList(key);
-      };
-      node.addEventListener('click', go);
-      node.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); go(); } });
+    const chart = els.panelBody.querySelector('.drill-chart'), bars = [...els.panelBody.querySelectorAll('.bar-hit')];
+    const pickDay = bar => {
+      panelState.payload.day = bar.dataset.day;
+      bars.forEach(other => other.classList.toggle('is-on', other === bar));
+      showChipList(key);
+    };
+    const justDragged = chart ? bindBarDrag(chart, bars, pickDay) : () => false;
+    bars.forEach(bar => {
+      bar.addEventListener('click', () => { if (!justDragged()) pickDay(bar); });   // 拖完放開後瀏覽器補發的那一下不算
+      bar.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); pickDay(bar); } });
     });
     showChipList(key);
+  }
+  // 柱狀圖按住左右拖：選中的那個直條框跟著手指走，放開時靠近哪一天就選哪一天、名單跟著換（本人 11-15 更正）。點一下照舊。
+  // 框是圖裡的一塊（.bar-thumb），位置用圖自己的座標。拖的時候圖帶 is-sliding：原本選中那一根的底色先收掉、由框來畫，
+  // 圖上那行字寫手指底下那一天。名單等放開才換（一天一次取資料，不在拖的途中一直取）。回傳「是不是剛拖完」給點擊用。
+  const BAR_DRAG_START_PX = 8, BAR_SETTLE_MS = 200, BAR_STRAY_CLICK_MS = 150;
+  function bindBarDrag(chart, bars, pickDay) {
+    const thumb = chart.querySelector('.bar-thumb');
+    if (!bars.length || !thumb) return () => false;
+    const columns = bars.map(bar => Number(bar.firstElementChild.getAttribute('x'))), step = Number(thumb.getAttribute('width'));
+    const calm = window.matchMedia('(prefers-reduced-motion: reduce)');
+    let drag = null, settling = 0, releasedAt = -Infinity;   // drag：{ x 按下去的位置, id 哪一根手指, moved, hot 手指底下那一天 }
+    const place = x => { thumb.style.transform = `translateX(${x}px)`; };
+    const stop = () => {
+      window.clearTimeout(settling);
+      chart.classList.remove('is-sliding', 'is-settling');
+      bars.forEach(bar => bar.classList.remove('is-slide-hot'));
+    };
+    const follow = event => {
+      if (!drag.moved && Math.abs(event.clientX - drag.x) < BAR_DRAG_START_PX) return;
+      if (!drag.moved) {
+        drag.moved = true;
+        chart.classList.add('is-sliding');
+        try { chart.setPointerCapture(drag.id); } catch (error) { /* 抓不到就照一般的事件走 */ }
+      }
+      const box = chart.getBoundingClientRect();
+      const x = (event.clientX - box.left) / box.width * chart.viewBox.baseVal.width;   // 視窗座標換成圖的座標
+      place(Math.min(Math.max(x - step / 2, columns[0]), columns[columns.length - 1]));
+      const hot = bars[Math.min(Math.max(Math.floor((x - columns[0]) / step), 0), bars.length - 1)];
+      if (hot === drag.hot) return;
+      if (drag.hot) drag.hot.classList.remove('is-slide-hot');
+      drag.hot = hot;
+      hot.classList.add('is-slide-hot');
+    };
+    const finish = (event, cancelled) => {
+      if (!drag || event.pointerId !== drag.id) return;
+      if (!cancelled) follow(event);   // 以放開的位置為準
+      const { moved, hot } = drag;
+      drag = null;
+      if (!moved) return;   // 沒有拖：就是點一下
+      if (cancelled || !hot) { stop(); return; }
+      releasedAt = performance.now();
+      pickDay(hot);
+      if (calm.matches) { stop(); return; }
+      chart.classList.add('is-settling');   // 框滑到那一根的正上方，再交還給那一根自己的底色
+      place(columns[bars.indexOf(hot)]);
+      settling = window.setTimeout(stop, BAR_SETTLE_MS);
+    };
+    chart.addEventListener('pointerdown', event => {
+      if (!event.isPrimary || event.button !== 0) return;
+      stop();
+      drag = { x: event.clientX, id: event.pointerId, moved: false, hot: null };
+    });
+    chart.addEventListener('pointermove', event => { if (drag && event.pointerId === drag.id) follow(event); });
+    chart.addEventListener('pointerup', event => finish(event, false));
+    chart.addEventListener('pointercancel', event => finish(event, true));
+    return () => performance.now() - releasedAt < BAR_STRAY_CLICK_MS;
   }
   function renderPlainPanel() {
     if (!PL) return '';

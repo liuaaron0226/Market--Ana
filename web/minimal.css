@@ -887,7 +887,7 @@ html, body { height: auto; }
 .drill-chart { width: 100%; height: auto; display: block; }
 .drill-chart text { font-size: 11px; fill: var(--faint); font-family: var(--mono); }
 .bar-hit { cursor: pointer; outline: none; }
-.bar-hit:hover rect:last-child, .bar-hit:focus-visible rect:last-child { opacity: 1; }
+.bar-hit:hover rect:last-of-type, .bar-hit:focus-visible rect:last-of-type { opacity: 1; }
 .bar-hit.is-on rect:first-child { fill: color-mix(in srgb, var(--gold) 14%, transparent); }
 .drill-table { margin-top: 12px; }
 .drill-table table { width: 100%; border-collapse: collapse; font-size: 13.5px; }

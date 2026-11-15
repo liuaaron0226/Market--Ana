@@ -879,6 +879,17 @@ body.hm .drill-chart .bar-value { display: none; pointer-events: none; fill: var
   body.hm .drill-chart .bar-value { font-size: 17px; }
 }
 body.hm .drill-chart .bar-hit.is-on .bar-value { display: block; }
+/* 柱狀圖按住左右拖：選中的直條框（.bar-thumb，程式在 minimal.js 的 bindBarDrag）跟著手指走，放開時靠近哪一天就選哪一天。
+   拖的時候原本選中那一根的底色先收掉、由框來畫；圖上那行字與深色的柱子都跟著手指底下那一天。上下拖仍然捲動面板。 */
+body.hm .drill-chart { touch-action: pan-y; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+body.hm .drill-chart .bar-thumb { display: none; pointer-events: none; fill: color-mix(in srgb, var(--ink) 6%, transparent); }
+body.hm .drill-chart.is-sliding .bar-thumb { display: block; }
+body.hm .drill-chart.is-settling .bar-thumb { transition: transform 200ms var(--ease-depth); }
+body.hm .drill-chart.is-sliding .bar-hit.is-on rect:first-child { fill: transparent; }
+body.hm .drill-chart.is-sliding .bar-hit rect:last-of-type { opacity: .32; }
+body.hm .drill-chart.is-sliding .bar-hit.is-slide-hot rect:last-of-type { opacity: 1; }
+body.hm .drill-chart.is-sliding .bar-hit .bar-value { display: none; }
+body.hm .drill-chart.is-sliding .bar-hit.is-slide-hot .bar-value { display: block; }
 body.hm .chip-watch { display: flex; align-items: baseline; gap: 8px; margin: 0 0 12px; font-size: 14px; line-height: 1.6; }
 body.hm .chip-watch i { flex: none; padding: 2px 6px; border-radius: var(--r-tag); background: var(--gold); color: var(--bg); font: 600 11px/1.4 var(--sans); }
 body.hm .chip-points { margin: 0 0 16px; padding: 0 0 12px; border-bottom: 1px solid var(--hair); }
@@ -891,6 +902,8 @@ body.hm .chip-list-head { display: flex; flex-wrap: wrap; align-items: center; j
 body.hm .chip-list-head h4 { margin: 0; font: 600 15px var(--sans); }
 body.hm .chip-list-head h4 small { margin-left: 8px; color: var(--faint); font: 400 12px var(--mono); }
 body.hm .chip-table { margin-top: 0; }
+/* 換一天、資料還沒回來的時候：原本的名單留著、變淡，面板的高度不變 */
+body.hm #chipList.is-loading { opacity: .45; transition: opacity 120ms var(--ease-out); }
 body.hm .chip-table th small { margin-left: 3px; font-size: 10px; }
 body.hm .chip-table td.streak { color: var(--dim); white-space: nowrap; }
 body.hm .chip-table td .stock-link { white-space: nowrap; }
