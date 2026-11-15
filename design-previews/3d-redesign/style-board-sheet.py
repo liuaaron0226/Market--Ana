@@ -40,3 +40,32 @@ for index, (name, letter, title, note) in enumerate(STYLES):
     draw.text((x + 8, y + cell + 68), note, fill=DIM, font=ImageFont.truetype(REGULAR, 26))
 board.save(folder / "style-board.png")
 print("style-board.png", board.size)
+
+# 第二張：表達的概念（本人看過風格板之後說不喜歡「垂直表達指標」）。質感都一樣，只比概念。
+IDEAS = [
+    ("tug", "甲", "拔河", "每一期一條橫的繩子：偏多的指標在右邊拉、偏空的在左邊拉，中間的結被拉向人多的那一邊"),
+    ("rings", "乙", "年輪", "一個同心圓：裡圈短期、外圈長期；每一圈切成幾段，一段是一個指標，紅偏多、綠偏空"),
+    ("path", "丙", "一條走勢帶", "一條從短期走到長期的光帶，三段的高低就是偏多還是偏空；帶子上每一顆珠子是一個指標"),
+    ("weather", "丁", "天氣", "每一期一個天氣：偏多的指標是太陽的光芒、偏空的是雨滴；太陽大是偏多、下雨是偏空"),
+]
+if all((folder / f"idea-{name}.png").exists() for name, *_ in IDEAS):
+    band = 150
+    ideas = Image.new("RGB", (cell * 2 + pad * 3, head + (cell + band) * 2 + pad * 3), NIGHT)
+    draw = ImageDraw.Draw(ideas)
+    draw.text((pad, 30), "⑤ 短中長期走勢：四種表達的概念", fill=PALE, font=ImageFont.truetype(BOLD, 46))
+    draw.text((pad, 96), "同一組資料（短期偏空、中期盤整、長期偏多；票是示意）。這一張只比概念，質感先都用同一種。", fill=DIM, font=ImageFont.truetype(REGULAR, 26))
+    for index, (name, letter, title, note) in enumerate(IDEAS):
+        image = bloom(Image.open(folder / f"idea-{name}.png").convert("RGB"), 14, 0.35)
+        x, y = pad + (index % 2) * (cell + pad), head + pad + (index // 2) * (cell + band + pad)
+        ideas.paste(image, (x, y))
+        draw.text((x + 8, y + cell + 14), f"{letter}　{title}", fill=PALE, font=ImageFont.truetype(BOLD, 40))
+        words, line, top = note, "", y + cell + 68
+        for char in words:
+            if draw.textlength(line + char, font=ImageFont.truetype(REGULAR, 25)) > cell - 16:
+                draw.text((x + 8, top), line, fill=DIM, font=ImageFont.truetype(REGULAR, 25))
+                line, top = char, top + 34
+            else:
+                line += char
+        draw.text((x + 8, top), line, fill=DIM, font=ImageFont.truetype(REGULAR, 25))
+    ideas.save(folder / "idea-board.png")
+    print("idea-board.png", ideas.size)

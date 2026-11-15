@@ -2,6 +2,8 @@
 內容固定是「短期走勢：1 個指標偏多（KD）、4 個偏空（MA5、MA10、MACD、RSI）」——偏多在線上面、偏空在線下面，這個讀法本人已經說方向對。
 四種視覺：neon 霓虹光管、liquid 液態玻璃、swarm 粒子群、holo 全像線框。深色背景（本人的手機用深色主題）。
 只產生圖片，不是網站執行時用的程式；發光的暈由 style-board-sheet.py 事後加上。
+本人看過風格板之後說不喜歡「垂直表達指標」這種表達方式，所以另外加了四種「表達的概念」（三期都畫，票是示意）：
+tug 拔河、rings 年輪、path 一條走勢帶、weather 天氣。質感先用同一種（發光的線與球），這一輪只比概念。
 用法：blender -b -P style-board-blender.py -- <輸出資料夾（要給完整路徑）> <風格名稱>"""
 import math
 import sys
@@ -179,17 +181,161 @@ def holo():
     label(f"{NET:+d}", 2.2, NET * RISE - 0.13, 0.36, GREEN, "LEFT")
 
 
-{"neon": neon, "liquid": liquid, "swarm": swarm, "holo": holo}[style]()
-label("短期", -1.9, 2.55, 0.34, "#9aa0ad", "LEFT")
-label("偏空", -1.05, 2.48, 0.56, GREEN, "LEFT")
+# ---------- 表達的概念：三期都畫。票是示意（樣本資料裡走勢判讀還沒產生），票數照現行規則 ----------
+PERIODS = [("短期", ["KD"], ["MA5", "MA10", "MACD", "RSI"]), ("中期", ["MA20", "法人"], ["MA60", "20日"]), ("長期", ["MA120", "MA60", "MA240"], ["60日"])]
+GOLD_LIGHT, GREY_LIGHT = "#f2c14e", "#9aa0ad"
+
+
+def verdict(bulls, bears):
+    net = len(bulls) - len(bears)
+    return (net, "偏多", RED) if net > 0 else (net, "偏空", GREEN) if net < 0 else (net, "盤整", GOLD_LIGHT)
+
+
+def orb(x, z, radius, mat, y=0.0):
+    bpy.ops.mesh.primitive_uv_sphere_add(radius=radius, location=(x, y, z), segments=40, ring_count=20)
+    bpy.ops.object.shade_smooth()
+    bpy.context.active_object.data.materials.append(mat)
+    return bpy.context.active_object
+
+
+def tug():
+    """拔河：每一期一條橫的繩子，偏多的指標在右邊拉、偏空的在左邊拉，中間的結被拉向人多的那一邊。左右，不是上下。"""
+    for row, (name, bulls, bears) in enumerate(PERIODS):
+        z = 2.6 - row * 2.6
+        net, word, code = verdict(bulls, bears)
+        bar((0, 0, z), (9.2, 0.03, 0.03), glow(WHITE, 2.5))
+        bar((0, 0.02, z), (0.03, 0.03, 1.1), glow(GREY_LIGHT, 1.5))
+        for index, vote in enumerate(bears):
+            orb(-1.3 - index * 0.92, z, 0.36, glow(GREEN, 3.2))
+            label(vote, -1.3 - index * 0.92, z - 0.75, 0.2)
+        for index, vote in enumerate(bulls):
+            orb(1.3 + index * 0.92, z, 0.36, glow(RED, 2.6))
+            label(vote, 1.3 + index * 0.92, z - 0.75, 0.2)
+        bpy.ops.mesh.primitive_cone_add(vertices=4, radius1=0.3, radius2=0.3, depth=0.3, location=(net * 0.28, -0.1, z), rotation=(math.radians(90), 0, math.radians(45)))
+        bpy.context.active_object.data.materials.append(glow(code, 6))
+        label(name, -5.6, z + 0.25, 0.3, GREY_LIGHT, "LEFT")
+        label(word, -5.6, z - 0.45, 0.5, code, "LEFT")
+    label("空", -4.4, 3.75, 0.34, GREEN)
+    label("多", 4.4, 3.75, 0.34, RED)
+    return Vector((-0.5, 0, 0.1)), 12.6
+
+
+def sector(inner, outer, start, end, mat, y=0.0, depth=0.12):
+    """一段圓環（面向鏡頭）。角度從正上方起算、順時針。"""
+    steps = max(4, int((end - start) / 4))
+    verts = []
+    for index in range(steps + 1):
+        angle = math.radians(start + (end - start) * index / steps)
+        for radius in (inner, outer):
+            for side in (-depth / 2, depth / 2):
+                verts.append((radius * math.sin(angle), y + side, radius * math.cos(angle)))
+    faces = []
+    for index in range(steps):
+        a, b = index * 4, index * 4 + 4
+        faces += [[a, a + 2, b + 2, b], [a + 1, b + 1, b + 3, a + 3], [a, b, b + 1, a + 1], [a + 2, a + 3, b + 3, b + 2]]
+    faces += [[0, 1, 3, 2], [steps * 4, steps * 4 + 2, steps * 4 + 3, steps * 4 + 1]]
+    mesh = bpy.data.meshes.new("sector")
+    mesh.from_pydata(verts, [], faces)
+    mesh.update()
+    obj = bpy.data.objects.new("sector", mesh)
+    scene.collection.objects.link(obj)
+    obj.data.materials.append(mat)
+    return obj
+
+
+def rings():
+    """年輪：一個同心圓。最裡面一圈是短期、中間是中期、最外面是長期；每一圈切成幾段，一段是一個指標，紅的偏多、綠的偏空。
+    一眼看得到三期各有幾段紅、幾段綠，也看得到是哪幾個指標。"""
+    for ring, (name, bulls, bears) in enumerate(PERIODS):
+        inner, outer = 1.0 + ring * 1.15, 1.9 + ring * 1.15
+        votes = [(vote, RED) for vote in bulls] + [(vote, GREEN) for vote in bears]
+        span = 360 / len(votes)
+        for index, (vote, code) in enumerate(votes):
+            sector(inner, outer, index * span + 3, (index + 1) * span - 3, glow(code, 0.55))   # 環暗一點，上面的白字才讀得到
+            middle = math.radians((index + 0.5) * span)
+            label(vote, (inner + outer) / 2 * math.sin(middle), (inner + outer) / 2 * math.cos(middle) - 0.1, 0.24, WHITE, y=-0.2)
+        net, word, code = verdict(bulls, bears)
+        label(f"{name} {word}", 5.2, 2.4 - ring * 1.1, 0.42, code, "LEFT")
+    label("裡圈短期", 5.2, -1.6, 0.26, GREY_LIGHT, "LEFT")
+    label("外圈長期", 5.2, -2.1, 0.26, GREY_LIGHT, "LEFT")
+    return Vector((1.9, 0, 0.0)), 12.6
+
+
+def path():
+    """一條走勢帶：一條從左（短期）走到右（長期）的光帶，三段的高低就是那一期偏多還是偏空；
+    帶子上的每一顆珠子是一個指標，紅的偏多、綠的偏空。看的是一條線怎麼走，不是一疊東西。"""
+    spots = []
+    for column, (name, bulls, bears) in enumerate(PERIODS):
+        net, word, code = verdict(bulls, bears)
+        spots.append((-4.2 + column * 4.2, net * 0.55, name, word, code, [(vote, RED) for vote in bulls] + [(vote, GREEN) for vote in bears]))
+    points = [(-6.4, spots[0][1])] + [(x, z) for x, z, *_ in spots] + [(6.4, spots[-1][1])]
+    steps = 80
+    for index in range(steps):
+        s0, s1 = index / steps, (index + 1) / steps
+        def at(s):
+            f = s * (len(points) - 1)
+            i = min(int(f), len(points) - 2)
+            t = f - i
+            t = t * t * (3 - 2 * t)
+            return points[i][0] + (points[i + 1][0] - points[i][0]) * (f - i), points[i][1] + (points[i + 1][1] - points[i][1]) * t
+        (xa, za), (xb, zb) = at(s0), at(s1)
+        nearest = min(spots, key=lambda spot: abs(spot[0] - (xa + xb) / 2))
+        seg = bar(((xa + xb) / 2, 0.1, (za + zb) / 2), (math.hypot(xb - xa, zb - za) + 0.02, 0.05, 0.14), glow(nearest[4], 1.6))
+        seg.rotation_euler = (0, -math.atan2(zb - za, xb - xa), 0)
+    for x, z, name, word, code, votes in spots:
+        for index, (vote, colour) in enumerate(votes):
+            bx = x + (index - (len(votes) - 1) / 2) * 0.78
+            orb(bx, z, 0.3, glow(colour, 2.6 if colour == RED else 3.2), y=-0.1)
+            label(vote, bx, z - 0.72, 0.19)
+        label(name, x, z + 1.35, 0.3, GREY_LIGHT)
+        label(word, x, z + 0.7, 0.5, code)
+    return Vector((0, 0, -0.1)), 14.0
+
+
+def weather():
+    """天氣：每一期一個天氣。偏多的指標是太陽的光芒（一道光一個指標）、偏空的指標是雲底下的雨滴（一滴一個指標）；
+    太陽大雲小就是偏多、烏雲下雨就是偏空、半晴半雲是盤整。"""
+    for column, (name, bulls, bears) in enumerate(PERIODS):
+        x = -4.4 + column * 4.4
+        net, word, code = verdict(bulls, bears)
+        sun = 0.35 + 0.16 * len(bulls)
+        orb(x + 0.5, 1.2, sun, glow(RED, 2.4), y=0.3)
+        for index, vote in enumerate(bulls):
+            angle = math.radians(35 + index * 42)
+            ray = bar((x + 0.5 + math.cos(angle) * (sun + 0.5), 0.3, 1.2 + math.sin(angle) * (sun + 0.5)), (0.55, 0.05, 0.07), glow(RED, 3))
+            ray.rotation_euler = (0, -angle, 0)
+            label(vote, x + 0.5 + math.cos(angle) * (sun + 1.25), 1.2 + math.sin(angle) * (sun + 1.25) - 0.08, 0.18)
+        puff = 0.3 + 0.1 * len(bears)
+        for dx, dz, scale in ((-0.75, 0, 0.8), (-0.2, 0.22, 1.0), (0.35, 0.02, 0.85), (-0.2, -0.1, 0.9)):
+            orb(x - 0.3 + dx * puff * 2.2, 0.2 + dz * puff * 2.2, puff * scale, glossy("#8f9bb0"), y=-0.2)
+        for index, vote in enumerate(bears):
+            dx = (index - (len(bears) - 1) / 2) * 0.62
+            drop = orb(x - 0.45 + dx, -0.95 - (index % 2) * 0.35, 0.15, glow(GREEN, 4), y=-0.2)
+            drop.scale = (1, 1, 1.5)
+            label(vote, x - 0.45 + dx, -1.9 - (index % 2) * 0.3, 0.18)
+        label(name, x - 0.6, 3.6, 0.3, GREY_LIGHT)
+        label(word, x + 0.5, 3.5, 0.5, code)
+    return Vector((0, 0, 0.7)), 14.0
+
+
+IDEA_SCENES = {"tug": tug, "rings": rings, "path": path, "weather": weather}
+
+if style in IDEA_SCENES:
+    look_at, width = IDEA_SCENES[style]()
+    prefix = "idea"
+else:
+    {"neon": neon, "liquid": liquid, "swarm": swarm, "holo": holo}[style]()
+    label("短期", -1.9, 2.55, 0.34, "#9aa0ad", "LEFT")
+    label("偏空", -1.05, 2.48, 0.56, GREEN, "LEFT")
+    look_at, width, prefix = Vector((0.45, 0, -1.2)), 9.6, "style"
 
 camera_data = bpy.data.cameras.new("camera")
 camera_data.type = "ORTHO"
-camera_data.ortho_scale = 9.6
+camera_data.ortho_scale = width
 camera = bpy.data.objects.new("camera", camera_data)
 scene.collection.objects.link(camera)
 camera.rotation_euler = (math.radians(84), 0, 0)
-camera.location = Vector((0.45, 0, -1.2)) + camera.rotation_euler.to_matrix() @ Vector((0, 0, 40))
+camera.location = look_at + camera.rotation_euler.to_matrix() @ Vector((0, 0, 40))
 scene.camera = camera
 for position, energy in (((-6, -9, 8), 2600), ((7, -6, -3), 700)):
     light_data = bpy.data.lights.new("light", "AREA")
@@ -211,6 +357,6 @@ for name in ("BLENDER_EEVEE", "BLENDER_EEVEE_NEXT"):
         break
     except TypeError:
         continue
-scene.render.filepath = str(out / f"style-{style}.png")
+scene.render.filepath = str(out / f"{prefix}-{style}.png")
 bpy.ops.render.render(write_still=True)
 print("saved", scene.render.filepath)
