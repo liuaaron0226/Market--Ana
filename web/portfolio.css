@@ -59,15 +59,8 @@
 .pf-score-grid p { margin-top: 6px; color: var(--faint); font-size: 12px; line-height: 1.5; }
 .pf-level-warning { margin-top: 14px; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--gold) 45%, var(--hair)); border-radius: var(--btn-r); color: var(--gold); font-size: 13px; }
 
-.pf-summary { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 32px; padding: 24px 0; border-top: 1px solid var(--ink); border-bottom: 1px solid var(--hair); }
+.pf-summary { padding: 24px 0; border-top: 1px solid var(--ink); border-bottom: 1px solid var(--hair); }
 .pf-summary h2 { font: 600 18px var(--serif); }
-.pf-summary > div > p { margin-top: 6px; color: var(--faint); font-size: 12px; }
-.pf-summary dl { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; }
-.pf-summary dl div { padding: 0 20px; border-left: 1px solid var(--hair); }
-.pf-summary dt { color: var(--faint); font-size: 12px; }
-.pf-summary dd { margin: 8px 0 0; color: var(--ink); font: 500 22px var(--mono); font-variant-numeric: tabular-nums; }
-.pf-summary dd.up { color: var(--up); }
-.pf-summary dd.down { color: var(--down); }
 
 .pf-section { padding: 48px 0 0; }
 .pf-section + .pf-section { margin-top: 24px; }
@@ -80,7 +73,7 @@
 .pf-watch-form { grid-template-columns: minmax(160px, 1fr) minmax(150px, 220px) auto; }
 .pf-holding-form { grid-template-columns: minmax(120px, .7fr) minmax(120px, .7fr) minmax(140px, .8fr) minmax(200px, 1.4fr) auto; }
 .pf-form label { display: grid; gap: 8px; color: var(--dim); font-size: 13px; }
-.pf-form input, .pf-form select, .pf-form button, .pf-row button, .pf-row select {
+.pf-form input, .pf-form select, .pf-form button, .pf-row button, .pf-row select, .hv-row .pf-delete {
   min-height: 44px; border: 1px solid var(--hair); border-radius: var(--btn-r); font: 14px var(--sans);
 }
 .pf-form input, .pf-form select, .pf-row select { width: 100%; padding: 0 12px; background: var(--panel); color: var(--ink); }
@@ -90,7 +83,7 @@
   transition: background-color 160ms var(--ease-out), transform 120ms var(--ease-out);
 }
 .pf-form button:hover { background: color-mix(in srgb, var(--ink) 86%, var(--bg)); }
-.pf-form button:active, .pf-row button:active { transform: var(--press); }
+.pf-form button:active, .pf-row button:active, .hv-row .pf-delete:active { transform: var(--press); }
 .pf-form button:disabled { opacity: .55; cursor: wait; }
 .pf-form-status { min-height: 20px; padding: 8px 0 0; color: var(--faint); font-size: 12px; }
 .pf-form-status[data-state="error"] { color: var(--up); }
@@ -99,7 +92,6 @@
 .pf-list { border-top: 1px solid var(--hair); }
 .pf-row { min-height: 68px; display: grid; align-items: center; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--hair); }
 .pf-watch-row { grid-template-columns: minmax(200px, 1fr) 160px auto; }
-.pf-holding-row { grid-template-columns: minmax(180px, 1.25fr) repeat(4, minmax(105px, .8fr)) minmax(120px, 1fr) auto; }
 .pf-stock { min-width: 0; }
 .pf-stock a { color: var(--ink); font: 600 15px var(--sans); text-decoration: none; }
 .pf-stock a:hover { color: var(--accent); }
@@ -110,11 +102,11 @@
 .pf-cell strong.down { color: var(--down); }
 .pf-note { text-align: left; overflow-wrap: anywhere; }
 .pf-row select { min-width: 0; }
-.pf-row .pf-delete {
+.pf-row .pf-delete, .hv-row .pf-delete {
   width: 44px; padding: 0; background: transparent; color: var(--up); cursor: pointer;
   transition: background-color 160ms var(--ease-out), transform 120ms var(--ease-out);
 }
-.pf-row .pf-delete:hover { background: color-mix(in srgb, var(--up) 8%, transparent); }
+:is(.pf-row, .hv-row) .pf-delete:hover { background: color-mix(in srgb, var(--up) 8%, transparent); }
 .pf-empty { padding: 24px 0; color: var(--dim); font-size: 14px; border-bottom: 1px solid var(--hair); }
 .pf-scope { display: inline-block; margin-top: 5px; color: var(--faint); font-size: 12px; }
 .pf-scope.outside { color: var(--gold); }
@@ -123,13 +115,75 @@
 .pf-ai p { margin-top: 4px; color: var(--dim); font-size: 12px; line-height: 1.5; }
 .pf-ai-empty { border-left-color: var(--hair); }
 
+/* ---------- 庫存總覽：一列一檔（立體重設計，本人 2026-11-15 定案的 ③） ----------
+   總數一行 → 一列一檔（照市值由大到小）：名稱 → 橫條（整條的寬度是全部庫存的市值；灰的是成本、紅的是賺的那一段；
+   賠錢時灰的是現在的市值、綠的是還差成本的那一段）→ 報酬率 → 點那一檔才看金額、備註、刪除。只呈現現況。
+   高低就是賺賠：賺的那一列浮起、賠的凹下、打平或沒有價格是細框。陰影只用 bold.css 現成的。
+   這一頁沒有板，列直接放在頁面底色上：浮起的用比底色亮一階的板色、凹下的用比底色暗一階的桌面色。
+   算法在 holdings-rows.js，畫面在 portfolio.js。本人定的樣品：design-previews/3d-redesign/pro-samples/holdings-overview.html */
+.hv-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.pf-summary .hv-head p { margin: 0; color: var(--faint); font-size: 12px; }
+.pf-summary .hv-total { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; margin: 14px 0 0; color: var(--dim); font: 13px var(--sans); }
+.hv-total strong { color: var(--ink); font: 500 26px var(--mono); font-variant-numeric: tabular-nums; }
+.hv-total b { color: var(--ink); font: 400 13px var(--mono); font-variant-numeric: tabular-nums; }
+.hv-total b.up, .hv-ret.up, .hv-facts b.up { color: var(--up); }
+.hv-total b.down, .hv-ret.down, .hv-facts b.down { color: var(--down); }
+
+.pf-summary .hv-rows { margin: 24px 0 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.hv-row { position: relative; border: 1px solid var(--line); border-radius: var(--r-key); transition: transform var(--t-press) linear, box-shadow var(--t-press) linear; }
+.hv-row[data-state="bull"] { border-color: transparent; background: var(--slab); box-shadow: var(--key-shadow); transform: translateY(var(--key-lift)); }
+.hv-row[data-state="bear"] { border-color: transparent; background: var(--desk); box-shadow: var(--well-shadow); }
+.hv-row[data-state="bull"]:has(.hv-top:active) { transform: translateY(calc(var(--key-thick) - 1px)); box-shadow: var(--key-shadow-press); }
+
+.hv-top { display: grid; grid-template-columns: 88px minmax(0, 1fr) 72px 12px; align-items: center; column-gap: 10px; width: 100%; min-height: 48px; padding: 5px 12px; border: 0; border-radius: inherit; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+.hv-name { display: grid; gap: 1px; min-width: 0; white-space: nowrap; }
+.hv-name strong { color: var(--ink); font: 650 14px var(--sans); overflow: hidden; text-overflow: ellipsis; }
+.hv-name span { color: var(--faint); font: 11px var(--mono); }
+.hv-ret { color: var(--dim); text-align: right; font: 14px var(--mono); font-variant-numeric: tabular-nums; }
+
+/* 橫條：平的、細的、方的 */
+.hv-bar { position: relative; display: flex; align-items: center; height: 20px; }
+.hv-bar::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 1px; margin-top: -.5px; background: var(--line); }
+.hv-bar i { position: relative; flex: none; height: 8px; width: calc(var(--w) * 1%); min-width: 2px; transform-origin: left; background: var(--faint); }
+.hv-bar .gain { background: var(--up); }
+.hv-bar .lack { background: var(--down); }
+
+.hv-row .chev { width: 7px; height: 7px; border: solid var(--faint); border-width: 0 1.5px 1.5px 0; transform: translateY(-2px) rotate(45deg); transition: transform var(--t-lift) var(--ease-depth); }
+.hv-row.is-open .chev { transform: translateY(2px) rotate(225deg); }
+
+/* 展開：這一檔的金額、明細與操作 */
+.hv-panel { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 420ms var(--ease-depth); }
+.hv-row.is-open .hv-panel { grid-template-rows: 1fr; }
+.hv-clip { min-height: 0; overflow: hidden; }
+.hv-inner { display: grid; gap: 12px; padding: 2px 12px 12px; }
+.pf-summary .hv-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; margin: 0; padding: 0; list-style: none; }
+.hv-facts li { display: grid; gap: 2px; min-width: 0; }
+.hv-facts span { color: var(--faint); font: 12px var(--sans); }
+.hv-facts b { color: var(--ink); font: 400 14px var(--mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.pf-summary .hv-note { margin: 0; color: var(--dim); font: 13px/1.5 var(--sans); overflow-wrap: anywhere; }
+.hv-more { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 12px; padding-top: 12px; border-top: 1px solid var(--hair); }
+.hv-empty { padding: 4px 0; color: var(--dim); font-size: 14px; }
+@media (min-width: 761px) {
+  /* 寬螢幕：橫條不跟著拉到整個版面那麼長（大塊的紅綠太吵），報酬率靠右 */
+  .hv-top { grid-template-columns: 140px minmax(0, 420px) minmax(96px, 1fr) 12px; }
+  .pf-summary .hv-facts { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+}
+
+/* 進場（只播一次）：一檔一檔來。成本那一段先長出來，賺的（或還差的）那一段接著長；長完這一列才定在最後的高度 */
+@media (prefers-reduced-motion: no-preference) {
+  .hv-rows.is-entering .hv-bar::before { animation: hv-grow 460ms var(--ease-depth) both; animation-delay: var(--at); }
+  .hv-rows.is-entering .hv-bar .base { animation: hv-grow 420ms var(--ease-depth) both; animation-delay: var(--at); }
+  .hv-rows.is-entering .hv-bar :is(.gain, .lack) { animation: hv-grow 420ms var(--ease-depth) both; animation-delay: calc(var(--at) + 300ms); }
+  .hv-rows.is-entering .hv-ret { animation: hv-fade 300ms linear both; animation-delay: calc(var(--at) + 500ms); }
+  .hv-rows.is-entering .hv-row { animation: hv-row-settle 700ms var(--ease-depth) both; animation-delay: calc(var(--at) + 560ms); }
+  @keyframes hv-grow { from { transform: scaleX(0); } }
+  @keyframes hv-fade { from { opacity: 0; } }
+  @keyframes hv-row-settle { from { transform: none; border-color: var(--line); background: transparent; box-shadow: none; } }
+}
+
 @media (max-width: 980px) {
   .pf-holding-form { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .pf-note-field { grid-column: 1 / 3; }
-  .pf-holding-row { grid-template-columns: minmax(180px, 1.2fr) repeat(2, minmax(110px, .8fr)) auto; }
-  .pf-holding-row .pf-secondary { grid-row: 2; }
-  .pf-holding-row .pf-note { grid-column: 1 / 4; grid-row: 2; }
-  .pf-holding-row .pf-delete { grid-column: 4; grid-row: 1 / 3; }
 }
 
 @media (max-width: 640px) {
@@ -147,11 +201,6 @@
   .pf-level-figures strong { font-size: 20px; overflow-wrap: anywhere; }
   .pf-cash-form { grid-template-columns: minmax(0, 1fr); gap: 8px; }
   .pf-score-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .pf-summary { grid-template-columns: minmax(0, 1fr); gap: 16px; }
-  .pf-summary dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .pf-summary dl div { padding: 12px 0; border-left: 0; }
-  .pf-summary dl div:nth-child(2n) { padding-left: 16px; border-left: 1px solid var(--hair); }
-  .pf-summary dd { font-size: 19px; }
   .pf-section { padding-top: 36px; }
   .pf-section-head { align-items: start; }
   .pf-section-head p { max-width: 28em; }
@@ -159,12 +208,6 @@
   .pf-note-field { grid-column: 1 / -1; }
   .pf-form button { grid-column: 1 / -1; }
   .pf-watch-row { grid-template-columns: minmax(0, 1fr) 128px auto; gap: 8px; }
-  .pf-holding-row { grid-template-columns: minmax(0, 1fr) minmax(105px, .65fr) auto; gap: 8px 12px; padding: 16px 0; }
-  .pf-holding-row .pf-stock { grid-column: 1 / 3; }
-  .pf-holding-row .pf-delete { grid-column: 3; grid-row: 1; }
-  .pf-holding-row .pf-cell { text-align: left; }
-  .pf-holding-row .pf-secondary { grid-row: auto; }
-  .pf-holding-row .pf-note { grid-column: 1 / -1; grid-row: auto; }
 }
 
 @media (max-width: 390px) {

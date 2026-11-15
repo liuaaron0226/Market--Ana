@@ -15,6 +15,8 @@ export const WEB_FILES = [
   "terrain-layout.js", "terrain.js",
   // 立體重設計（11-15）：短中長期走勢的算票與畫面
   "trend-votes.js", "trend-matrix.js",
+  // 立體重設計（11-15）：庫存總覽一列一檔的算法
+  "holdings-rows.js",
 ];
 export const RETIRED = ["analysis-data.js", "chips-data.js", "dashboard-data.js", "detail-data.js", "plain-data.js", "market-data-local.js"];
 

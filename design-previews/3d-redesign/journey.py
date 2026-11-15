@@ -144,6 +144,15 @@ TREND_STATE = """() => { const section = document.getElementById('marketTrend');
         read: row.querySelector('.trend-read') && !row.querySelector('.trend-read').hidden ? row.querySelector('.trend-read').textContent : null }; }) }; }"""
 
 
+# 庫存總覽（本人 11-15 定案的 ③）現在畫了什麼：總數那一行、每一檔的順序與高低、橫條的兩段、哪一檔開著
+HOLDING_ROWS = """() => ({ total: document.querySelector('.hv-total').innerText.replace(/\\s+/g, ' ').trim(), count: document.getElementById('holdingCount').textContent,
+  rows: [...document.querySelectorAll('#holdingRows .hv-row')].map(row => ({ code: row.dataset.code, state: row.dataset.state,
+    name: row.querySelector('.hv-name strong').textContent, ret: row.querySelector('.hv-ret').textContent,
+    bars: [...row.querySelectorAll('.hv-bar i')].map(bar => [bar.className, Math.round(bar.getBoundingClientRect().width)]),
+    open: row.classList.contains('is-open'), reachable: !row.querySelector('.hv-panel').inert,
+    facts: [...row.querySelectorAll('.hv-facts li')].map(fact => fact.innerText.replace(/\\s+/g, ' ').trim()) })) })"""
+
+
 def centre(locator) -> tuple[float, float]:
     box = locator.bounding_box()
     return box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
@@ -1222,18 +1231,51 @@ def portfolio(page: Page, base: str, tag: str) -> None:
     step(f"{tag}：自選股", watchlist)
 
     def holdings() -> None:
+        """庫存總覽一列一檔（本人 11-15 定案的 ③）：每一檔的明細與刪除在點開的那一列裡，下面只留新增或更新的表單。"""
+        mobile = page.viewport_size["width"] < 700
+        state = page.evaluate(HOLDING_ROWS)
+        rows = state["rows"]
+        check(f"{tag}：庫存總覽的總數一行", state["total"] == "$3,018,350 成本 $1,585,200 賺 +$1,433,150（+90.41%）" and state["count"] == "3 檔庫存", state["total"])
+        check(f"{tag}：庫存一列一檔，照市值由大到小，賺的浮起", [(row["code"], row["name"], row["state"], row["ret"]) for row in rows]
+              == [("2330", "台積電", "bull", "+128.06%"), ("2603", "長榮", "bull", "+14.19%"), ("0050", "元大台灣50", "bull", "+66.87%")], rows)
+        widths = [sum(width for _, width in row["bars"]) for row in rows]
+        check(f"{tag}：橫條兩段（成本＋賺的），占比最大的那一檔最長", all([kind for kind, _ in row["bars"]] == ["base", "gain"] for row in rows)
+              and widths[0] > widths[1] > widths[2] and all(width >= 2 for row in rows for _, width in row["bars"]), [row["bars"] for row in rows])
+        check(f"{tag}：一開始每一檔都收著，收著的連結與刪除鍵鍵盤走不到；下面沒有舊的長清單",
+              all(not row["open"] and not row["reachable"] for row in rows) and page.locator(".pf-holding-row").count() == 0, rows)
+        tops = page.locator("#holdingRows .hv-top")
+        tops.nth(0).click()
+        page.wait_for_function("document.querySelector('#holdingRows .hv-row').classList.contains('is-open')")
+        first = page.evaluate(HOLDING_ROWS)["rows"][0]
+        check(f"{tag}：點台積電看金額與明細", first["reachable"] and first["facts"]
+              == ["市值 $2,235,000", "成本 $980,000", "賺 +$1,255,000", "占庫存 74.0%", "最新收盤 2,235", "股數・均價 1,000 股 · 980"], first["facts"])
+        opened = page.locator("#holdingRows .hv-row.is-open")
+        check(f"{tag}：點開的那一檔有備註、開個股頁的連結與刪除鍵", "備註：核心部位" in opened.inner_text()
+              and opened.locator("a[href='stock.html?code=2330']").is_visible() and opened.get_by_role("button", name="刪除庫存 2330").is_visible(), opened.inner_text())
+        tops.nth(2).click()
+        page.wait_for_function("document.querySelectorAll('#holdingRows .hv-row')[2].classList.contains('is-open')")
+        check(f"{tag}：一次只開一檔", [row["open"] for row in page.evaluate(HOLDING_ROWS)["rows"]] == [False, False, True])
+
         before_value = page.locator("#totalMarketValue").inner_text()
         page.locator("#holdingCode").fill("6669")
         page.locator("#holdingShares").fill("100")
         page.locator("#holdingCost").fill("3000")
         page.locator("#holdingNote").fill("旅程檢查")
         page.locator("#holdingForm button[type=submit]").click()
-        page.locator("#holdingRows").get_by_text("6669 緯穎").wait_for()
-        check(f"{tag}：新增庫存後總覽更新", page.locator("#totalMarketValue").inner_text() != before_value)
+        page.locator("#holdingRows .hv-row[data-code='6669']").wait_for()
+        state = page.evaluate(HOLDING_ROWS)
+        check(f"{tag}：新增庫存後總覽更新", page.locator("#totalMarketValue").inner_text() != before_value and state["count"] == "4 檔庫存", state["total"])
+        check(f"{tag}：新增之後開著的那一檔照樣開著，沒有重播進場", [row["code"] for row in state["rows"] if row["open"]] == ["0050"]
+              and not page.evaluate("document.getElementById('holdingRows').classList.contains('is-entering')"), [row["code"] for row in state["rows"] if row["open"]])
+        added = page.locator("#holdingRows .hv-row[data-code='6669']")
+        added.locator(".hv-top").click()
+        page.wait_for_function("document.querySelector(\"#holdingRows .hv-row[data-code='6669']\").classList.contains('is-open')")
+        check(f"{tag}：新增的那一檔點開有備註", "備註：旅程檢查" in added.inner_text(), added.inner_text())
         page.get_by_role("button", name="刪除庫存 6669").click()
         page.wait_for_function("value => document.getElementById('totalMarketValue').textContent === value", arg=before_value)
-        check(f"{tag}：刪除庫存後總覽還原", True)
-    step(f"{tag}：我的庫存", holdings)
+        check(f"{tag}：刪除庫存後總覽還原", page.evaluate(HOLDING_ROWS)["count"] == "3 檔庫存" and page.locator("#holdingRows .hv-row").count() == 3)
+        check(f"{tag}：庫存總覽沒有造成橫向捲動", no_overflow(page))
+    step(f"{tag}：庫存總覽與新增刪除", holdings)
 
     def theme() -> None:
         page.locator("#portfolioTheme").click()

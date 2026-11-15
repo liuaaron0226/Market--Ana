@@ -178,18 +178,6 @@
     });
   }
 
-  function valueCell(label, value, tone = '') {
-    const cell = document.createElement('div');
-    cell.className = 'pf-cell';
-    const strong = document.createElement('strong');
-    strong.textContent = value;
-    if (tone) strong.className = tone;
-    const small = document.createElement('small');
-    small.textContent = label;
-    cell.append(strong, small);
-    return cell;
-  }
-
   const groupLabels = {
     trend: '台股與美股趨勢',
     volatility: '市場波動',
@@ -328,71 +316,145 @@
     renderLevel();
   }
 
-  function renderSummary() {
-    const priced = state.holdings.filter(item => Number.isFinite(item.market_value));
-    const marketValue = priced.reduce((sum, item) => sum + item.market_value, 0);
-    const cost = state.holdings.reduce((sum, item) => sum + item.cost_basis, 0);
-    const pnl = priced.length === state.holdings.length ? marketValue - cost : null;
-    const returnPct = pnl === null || !cost ? null : pnl / cost * 100;
-    $('holdingCount').textContent = `${state.holdings.length} 檔庫存`;
-    $('totalMarketValue').textContent = state.holdings.length && priced.length === state.holdings.length ? money.format(marketValue) : '—';
-    $('totalCost').textContent = state.holdings.length ? money.format(cost) : '—';
-    $('totalPnl').textContent = pnl === null ? '—' : `${pnl >= 0 ? '+' : '−'}${money.format(Math.abs(pnl))}`;
-    $('totalReturn').textContent = returnPct === null ? '—' : `${returnPct >= 0 ? '+' : ''}${number.format(returnPct)}%`;
-    for (const id of ['totalPnl', 'totalReturn']) {
-      $(id).className = `num${pnl === null ? '' : pnl >= 0 ? ' up' : ' down'}`;
+  // ---------- 庫存總覽：一列一檔（立體重設計，本人 2026-11-15 定案的 ③）----------
+  // 算法在 holdings-rows.js（排序、橫條的兩段、賺賠的高低）；這裡只畫。每一檔的明細與刪除都在點開的那一列裡，
+  // 頁面下面只留新增或更新的表單。只呈現現況，不說要調整哪一檔。
+  const calm = window.matchMedia('(prefers-reduced-motion: reduce)');
+  const HOLDING_FIRST = 150, HOLDING_GAP = 300;   // 進場：第一檔什麼時候開始、一檔比一檔晚多少（毫秒）
+  const signedMoney = value => `${value > 0 ? '+' : value < 0 ? '−' : ''}${money.format(Math.abs(value))}`;
+  const signedPercent = value => `${value > 0 ? '+' : value < 0 ? '−' : ''}${number.format(Math.abs(value))}%`;
+  const toneOf = value => (value > 0 ? 'up' : value < 0 ? 'down' : '');
+  const wordOf = value => (value > 0 ? '賺' : value < 0 ? '賠' : '打平');
+  const element = (tag, className, text) => {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+  let holdingsShown = null;      // 畫面上現在是哪一份資料，同一份不重畫
+  let holdingsEntered = false;   // 進場的動態播過了沒
+
+  function renderTotals(read) {
+    $('holdingCount').textContent = `${read.count} 檔庫存`;
+    $('holdingsCount').textContent = `${read.count} 檔`;
+    $('totalMarketValue').textContent = read.complete ? money.format(read.value) : '—';
+    $('totalCost').textContent = read.count ? money.format(read.cost) : '—';
+    $('totalWord').textContent = read.pnl === null ? '損益' : wordOf(read.pnl);
+    $('totalPnl').textContent = read.pnl === null ? '—' : signedMoney(read.pnl);
+    $('totalReturn').textContent = read.returnPct === null ? '—' : signedPercent(read.returnPct);
+    for (const id of ['totalPnl', 'totalReturn']) $(id).className = `num ${read.pnl === null ? '' : toneOf(read.pnl)}`.trim();
+  }
+
+  function holdingRow(row, order, complete) {
+    const item = row.item, priced = row.state !== 'none', pnl = priced ? item.market_value - item.cost_basis : null;
+    const li = element('li', 'hv-row');
+    li.dataset.code = item.code;
+    li.dataset.state = row.state;
+    li.style.setProperty('--at', `${HOLDING_FIRST + order * HOLDING_GAP}ms`);
+    const panelId = `holdingPanel-${item.code}`;
+
+    const top = element('button', 'hv-top');
+    top.type = 'button';
+    top.setAttribute('aria-expanded', 'false');
+    top.setAttribute('aria-controls', panelId);
+    top.setAttribute('aria-label', priced
+      ? `${item.name} ${item.code}：${complete ? `占庫存 ${row.share.toFixed(1)}%，` : ''}${wordOf(pnl)}${pnl ? ` ${signedPercent(item.return_pct)}` : ''}`
+      : `${item.name} ${item.code}：沒有價格`);
+    const name = element('span', 'hv-name');
+    name.append(element('strong', '', item.name), element('span', '', item.code));
+    const bar = element('span', 'hv-bar');
+    bar.setAttribute('aria-hidden', 'true');
+    if (priced) {
+      const base = element('i', 'base');
+      base.style.setProperty('--w', row.base.toFixed(2));
+      bar.append(base);
+      if (row.edgeKind) {
+        const edge = element('i', row.edgeKind);
+        edge.style.setProperty('--w', row.edge.toFixed(2));
+        bar.append(edge);
+      }
     }
+    const chev = element('span', 'chev');
+    chev.setAttribute('aria-hidden', 'true');
+    top.append(name, bar, element('span', `hv-ret num ${priced ? toneOf(pnl) : ''}`.trim(), priced && item.return_pct !== null ? signedPercent(item.return_pct) : '—'), chev);
+
+    const panel = element('div', 'hv-panel');
+    panel.id = panelId;
+    panel.inert = true;
+    const clip = element('div', 'hv-clip'), inner = element('div', 'hv-inner'), facts = element('ul', 'hv-facts');
+    [
+      ['市值', priced ? money.format(item.market_value) : '—', ''],
+      ['成本', money.format(item.cost_basis), ''],
+      [priced ? wordOf(pnl) : '損益', priced ? signedMoney(pnl) : '—', priced ? toneOf(pnl) : ''],
+      ['占庫存', priced && complete ? `${row.share.toFixed(1)}%` : '—', ''],
+      [item.price_stale ? '上次可用收盤' : '最新收盤', item.latest_price === null ? '—' : number.format(item.latest_price), ''],
+      ['股數・均價', `${number.format(item.shares)} 股 · ${number.format(item.average_cost)}`, ''],
+    ].forEach(([label, text, tone]) => {
+      const fact = element('li');
+      fact.append(element('span', '', label), element('b', tone, text));
+      facts.append(fact);
+    });
+    inner.append(facts);
+    if (item.note) inner.append(element('p', 'hv-note', `備註：${item.note}`));
+    const more = element('div', 'hv-more');
+    more.append(stockIdentity(item), deleteButton(`刪除庫存 ${item.code} ${item.name}`, async () => {
+      if (!confirm(`要刪除 ${item.code} ${item.name} 的庫存資料嗎？`)) return;
+      try {
+        await api(`/api/holdings/${encodeURIComponent(item.code)}`, { method: 'DELETE', body: {} });
+        setStatus($('holdingStatus'), `${item.code} 庫存已刪除。`, 'success');
+        await Promise.all([loadHoldings(), ...(features.level_advice ? [loadLevel()] : [])]);
+      } catch (error) { setStatus($('holdingStatus'), error.message, 'error'); }
+    }));
+    inner.append(more);
+    clip.append(inner);
+    panel.append(clip);
+    li.append(top, panel);
+    return li;
+  }
+
+  // 收起來的那一列，裡面的連結與刪除鍵鍵盤走不到
+  function setHoldingOpen(row, open) {
+    row.classList.toggle('is-open', open);
+    row.querySelector('.hv-top').setAttribute('aria-expanded', String(open));
+    row.querySelector('.hv-panel').inert = !open;
   }
 
   function renderHoldings() {
-    const host = $('holdingRows');
+    const host = $('holdingRows'), read = window.HoldingsRows.read(state.holdings);
+    // 同一份資料（含 AI 整理有沒有）不重畫：頁面載入時會叫兩次，重畫會把正在播的進場與開著的那一檔打斷
+    const key = JSON.stringify([state.holdings, state.aiVisible, state.aiDigest?.dataDate || null, state.aiVisible ? [...(state.aiDigest?.byCode || [])] : null]);
+    if (key === holdingsShown) return;
+    holdingsShown = key;
+    renderTotals(read);
+    const openCode = host.querySelector('.hv-row.is-open')?.dataset.code;
+    host.classList.remove('is-entering');   // 重畫就不再播進場；新的列直接在定位
     host.replaceChildren();
-    $('holdingsCount').textContent = `${state.holdings.length} 檔`;
-    renderSummary();
-    if (!state.holdings.length) {
-      const empty = document.createElement('p');
-      empty.className = 'pf-empty';
-      empty.textContent = '還沒有庫存。先輸入代號、股數與平均成本，之後可用同一表單更新。';
-      host.append(empty);
+    if (!read.count) {
+      host.append(element('li', 'hv-empty', '還沒有庫存。先在下面輸入代號、股數與平均成本，之後可用同一表單更新。'));
       return;
     }
-    state.holdings.forEach(item => {
-      const row = document.createElement('article');
-      row.className = 'pf-row pf-holding-row';
-      const price = item.latest_price === null ? '—' : number.format(item.latest_price);
-      const marketValue = item.market_value === null ? '—' : money.format(item.market_value);
-      const pnl = item.unrealized_pnl;
-      const pnlTone = pnl === null ? '' : pnl >= 0 ? 'up' : 'down';
-      const pnlText = pnl === null ? '—' : `${pnl >= 0 ? '+' : '−'}${money.format(Math.abs(pnl))}`;
-      const returnText = item.return_pct === null ? '—' : `${item.return_pct >= 0 ? '+' : ''}${number.format(item.return_pct)}%`;
-      const note = document.createElement('div');
-      note.className = 'pf-cell pf-note';
-      const strong = document.createElement('strong');
-      strong.textContent = item.note || '無備註';
-      const small = document.createElement('small');
-      small.textContent = `${number.format(item.shares)} 股 · 均價 ${number.format(item.average_cost)}`;
-      note.append(strong, small);
-      row.append(
-        stockIdentity(item),
-        valueCell(item.price_stale ? '上次可用收盤' : '最新收盤', price),
-        valueCell('目前市值', marketValue),
-        valueCell('未實現損益', pnlText, pnlTone),
-        valueCell('報酬率', returnText, pnlTone),
-        note,
-        deleteButton(`刪除庫存 ${item.code} ${item.name}`, async () => {
-          if (!confirm(`要刪除 ${item.code} ${item.name} 的庫存資料嗎？`)) return;
-          try {
-            await api(`/api/holdings/${encodeURIComponent(item.code)}`, { method: 'DELETE', body: {} });
-            setStatus($('holdingStatus'), `${item.code} 庫存已刪除。`, 'success');
-            await Promise.all([loadHoldings(), ...(features.level_advice ? [loadLevel()] : [])]);
-          } catch (error) { setStatus($('holdingStatus'), error.message, 'error'); }
-        }),
-      );
-      row.querySelectorAll('.pf-cell')[1]?.classList.add('pf-secondary');
-      row.querySelectorAll('.pf-cell')[2]?.classList.add('pf-secondary');
-      host.append(row);
+    read.rows.forEach((row, order) => host.append(holdingRow(row, order, read.complete)));
+    const again = openCode && [...host.children].find(row => row.dataset.code === openCode);
+    if (again) setHoldingOpen(again, true);
+    if (holdingsEntered) return;
+    holdingsEntered = true;
+    if (calm.matches) return;
+    // 進場：賺的（或還差的）那一段長出來時，這一列被往上頂（或往下壓）一下
+    host.classList.add('is-entering');
+    [...host.children].forEach((row, order) => {
+      const push = row.dataset.state === 'bull' ? -3 : row.dataset.state === 'bear' ? 3 : 0;
+      if (push) row.animate({ translate: ['0 0', `0 ${push}px`, '0 0'], offset: [0, .3, 1] }, { duration: 260, delay: HOLDING_FIRST + order * HOLDING_GAP + 420, easing: 'ease-out' });
     });
+    setTimeout(() => host.classList.remove('is-entering'), HOLDING_FIRST + read.count * HOLDING_GAP + 1400);
   }
+
+  // 點一檔展開，一次只開一檔
+  $('holdingRows').addEventListener('click', event => {
+    const top = event.target.closest('.hv-top');
+    if (!top) return;
+    const row = top.closest('.hv-row'), open = !row.classList.contains('is-open');
+    [...$('holdingRows').querySelectorAll('.hv-row')].forEach(other => setHoldingOpen(other, other === row && open));
+  });
 
   async function loadWatchlist() {
     const payload = await api('/api/watchlist');
