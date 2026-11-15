@@ -1,6 +1,7 @@
 import { verifyAccessJwt } from "../../lib/jwt.js";
 import { AiDigestError, handleAiDigest } from "../../lib/ai-digest.js";
 import { releasePolicy } from "../../lib/release-policy.js";
+import { isOwnerEmail } from "../../lib/owner.js";
 
 const HEADERS = {
   "content-type": "application/json; charset=utf-8",
@@ -24,7 +25,7 @@ export async function onRequest(context) {
     return fail(401, "需要登入");
   }
   const email = claims.email.toLowerCase();
-  const owner = email === OWNER_EMAIL.toLowerCase();
+  const owner = isOwnerEmail(context.env, email);
   if (!owner) {
     try {
       const row = await DB.prepare("SELECT status FROM users WHERE email = ?").bind(email).first();

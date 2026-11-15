@@ -1,0 +1,212 @@
+"""晚間執行程式的入口（C 票第 6、7 片；本人 2026-11-15 同意的測試接縫 1）。
+
+給一份「每日更新已發布」的大盤資料檔（window.MARKET_ANALYSIS）＋假模型命令列程式（經真的子程序邊界），
+檢查帳本、對帳、寫給資料庫的指令檔與執行紀錄。預期值都是手算或手推的。
+"""
+import json
+import tempfile
+import unittest
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+
+import forecast_ledger as fl
+import forecast_run as fr
+
+TAIPEI = timezone(timedelta(hours=8))
+METHOD = "# 大盤分析方法\n\n版本：0.3，2026-11-15。\n"
+
+
+def weekdays(start, count):
+    day, out = date.fromisoformat(start), []
+    while len(out) < count:
+        if day.weekday() < 5:
+            out.append(day.isoformat())
+        day += timedelta(days=1)
+    return out
+
+
+# 80 個交易日，收盤從 100 每天加 1 到 179；高低各 ±0.5（相鄰兩根剛好相接，沒有缺口）；法人每天買超。
+#   短期：收盤 > 五日線、五日線 > 十日線、每天都漲所以 RSI = 100 → 至少三項偏多 → 偏多
+#   中期：收盤 > 月線、月線 > 季線、近二十日上漲、二十日法人買超 → 偏多
+#   所以固定規則三格都選線上。收盤創新高，上方只有距離關卡；五日線 = (175+…+179)/5 = 177 在下方。
+DATES = weekdays("2026-07-01", 80)
+BASE = DATES[-1]
+
+
+def analysis(dates=DATES, *, institutional_until=None, futures_until=None):
+    daily = [{"date": d, "open": 100 + i - 0.3, "high": 100 + i + 0.5, "low": 100 + i - 0.5, "close": 100 + i,
+              "amount": 300_000_000_000} for i, d in enumerate(dates)]
+    inst_dates = [d for d in dates if d <= (institutional_until or dates[-1])]
+    fut_dates = [d for d in dates if d <= (futures_until or dates[-1])]
+    return {
+        "meta": {"cutoff_date": dates[-1]},
+        "daily": daily,
+        "institutional": [{"date": d, "foreign": {"net": 5_000_000_000}, "trust": {"net": 1_000_000_000},
+                           "dealer": {"net": -500_000_000}} for d in inst_dates],
+        "futures": [{"date": d, "foreign_oi_net_contracts": -1000} for d in fut_dates],
+    }
+
+
+def cell(strong, weak, zone):
+    return {"strong_line": strong, "weak_line": weak, "zone": zone, "reason": "創高後量價配合", "reason_refs": [],
+            "invalidation": "跌破短均線代表看錯", "invalidation_refs": [weak]}
+
+
+def answer(base=BASE):
+    return {"base_date": base, "regime": "多頭延續", "cells": {
+        "1": cell("dist_up_1", "ma5", "above"), "5": cell("dist_up_5", "ma5", "between"),
+        "20": cell("dist_up_20", "ma5", "above")}}
+
+
+class RunTestCase(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.ledger = self.tmp / "ledger"
+        self.method = self.tmp / "MARKET_METHOD.md"
+        self.method.write_text(METHOD, encoding="utf-8")
+        self.calls = self.tmp / "calls.txt"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def analysis_file(self, payload, name="analysis-data.js"):
+        path = self.tmp / name
+        path.write_text("window.MARKET_ANALYSIS = " + json.dumps(payload, ensure_ascii=False) + ";\n", encoding="utf-8")
+        return path
+
+    def model(self, structured):
+        script = self.tmp / "fake_agy.py"
+        envelope = json.dumps({"event": "result", "result": {"status": "SUCCESS", "structured_output": structured}},
+                              ensure_ascii=False)
+        script.write_text(
+            "import sys\nfrom pathlib import Path\n"
+            "sys.stdin.buffer.readline()\n"
+            f"p=Path({str(self.calls)!r}); p.write_text(p.read_text()+'x' if p.exists() else 'x')\n"
+            f"sys.stdout.buffer.write({envelope.encode('utf-8')!r} + b'\\n')\n", encoding="utf-8")
+        return script
+
+    def calls_made(self):
+        return len(self.calls.read_text()) if self.calls.exists() else 0
+
+    def run_evening(self, payload=None, *, now=None, structured=None, **kwargs):
+        return fr.run_evening(
+            self.analysis_file(payload or analysis()), ledger=self.ledger, method_path=self.method,
+            model_bin=self.model(structured or answer()), model="gemini-3.8-flash",
+            now=lambda: now or datetime.fromisoformat(f"{BASE}T17:40:00+08:00"), **kwargs)
+
+
+class EveningRunTests(RunTestCase):
+    def test_writes_a_trial_evening_forecast_and_the_database_file(self):
+        sql = self.tmp / "out" / "forecast.sql"
+        log = self.tmp / "out" / "run.json"
+        result = self.run_evening(sql_output=sql, log_output=log)
+
+        self.assertEqual(result["outcome"], "written")
+        record = fl.read_ledger(self.ledger)["forecasts"][0]
+        self.assertEqual((record["kind"], record["edition"], record["base_date"], record["run_mode"]),
+                         ("forecast", "evening", BASE, "trial"))
+        self.assertEqual(record["model"], "gemini-3.8-flash")
+        self.assertEqual(record["method_version"], "0.3")
+        self.assertEqual([record["cells"][h]["fixed_rule_zone"] for h in ("1", "5", "20")], ["above"] * 3)
+        self.assertEqual(record["cells"]["1"]["weak_line"], {"id": "ma5", "name": "五日線", "value": 177})
+        self.assertEqual(record["data_cutoffs"], {"index": BASE, "institutional": BASE, "futures": BASE})
+        self.assertIn("INSERT INTO forecast_records", sql.read_text(encoding="utf-8"))
+        written = json.loads(log.read_text(encoding="utf-8"))
+        self.assertEqual((written["outcome"], written["base_date"], written["kind"], written["dry_run"]),
+                         ("written", BASE, "forecast", False))
+
+    def test_running_twice_keeps_the_first_record_and_does_not_call_the_model_again(self):
+        self.run_evening()
+        first = fl.read_ledger(self.ledger)["forecasts"]
+        again = self.run_evening(structured=answer() | {"regime": "盤整"})
+        self.assertEqual(again["outcome"], "unchanged")
+        self.assertEqual(fl.read_ledger(self.ledger)["forecasts"], first)
+        self.assertEqual(self.calls_made(), 1)
+
+    def test_missing_institutional_data_before_the_deadline_writes_nothing(self):
+        result = self.run_evening(analysis(institutional_until=DATES[-2]))
+        self.assertEqual(result["outcome"], "not_ready")
+        self.assertIn("institutional", result["detail"])
+        self.assertEqual(fl.read_ledger(self.ledger)["forecasts"], [])
+        self.assertEqual(self.calls_made(), 0)
+
+    def test_requested_date_that_is_not_the_published_data_date_writes_nothing(self):
+        result = self.run_evening(date=DATES[-2])
+        self.assertEqual(result["outcome"], "not_ready")
+        self.assertEqual(fl.read_ledger(self.ledger)["forecasts"], [])
+
+    def test_past_the_end_of_the_base_date_records_a_miss_with_its_reason(self):
+        log = self.tmp / "run.json"
+        result = self.run_evening(now=datetime.fromisoformat(f"{BASE}T00:00:00+08:00") + timedelta(days=1, minutes=5),
+                                  log_output=log)
+        self.assertEqual((result["outcome"], result["kind"], result["miss_reason"]), ("written", "miss", "deadline_passed"))
+        self.assertEqual(json.loads(log.read_text(encoding="utf-8"))["miss_reason"], "deadline_passed")
+
+    def test_model_input_carries_turnover_indicators_and_all_three_trend_labels(self):
+        self.run_evening()
+        model_input = fl.read_ledger(self.ledger)["forecasts"][0]["input"]
+        self.assertEqual(model_input["index_recent"][-1]["amount"], 300_000_000_000)
+        self.assertEqual([p["key"] for p in model_input["indicators"]], ["short", "medium", "long"])
+        self.assertEqual(model_input["indicators"][0]["conclusion"], "偏多")
+        self.assertIn("ma5", model_input["indicators"][0]["metrics"])
+        # 80 根不夠算長期（要 240 根），長期標記資料不足、不擋預測
+        self.assertEqual(model_input["trend_labels"], {"short": "偏多", "medium": "偏多", "long": None})
+
+    def test_trading_days_with_no_run_are_locked_as_misses(self):
+        two_back = DATES[:-2]
+        self.run_evening(analysis(two_back), structured=answer(two_back[-1]),
+                         now=datetime.fromisoformat(f"{two_back[-1]}T17:40:00+08:00"))
+        result = self.run_evening()
+        # 前一個交易日整天沒跑：今天補一筆漏記（過了期限），不呼叫模型
+        self.assertEqual(result["backfilled_misses"], [DATES[-2]])
+        records = {r["base_date"]: r for r in fl.read_ledger(self.ledger)["forecasts"]}
+        self.assertEqual((records[DATES[-2]]["kind"], records[DATES[-2]]["miss_reason"]), ("miss", "deadline_passed"))
+        self.assertEqual(records[BASE]["kind"], "forecast")
+        self.assertEqual(self.calls_made(), 2)
+
+    def test_an_empty_ledger_does_not_backfill_anything(self):
+        result = self.run_evening()
+        self.assertEqual(result["backfilled_misses"], [])
+        self.assertEqual(len(fl.read_ledger(self.ledger)["forecasts"]), 1)
+
+    def test_each_run_reconciles_earlier_forecasts_that_have_expired(self):
+        early = DATES[:-1]
+        self.run_evening(analysis(early), structured=answer(early[-1]),
+                         now=datetime.fromisoformat(f"{early[-1]}T17:40:00+08:00"))
+        result = self.run_evening()
+        # 前一天那份的一日格在今天到期：收盤 179，轉弱線五日線 176、轉強線一日距離關卡在 178 上方
+        self.assertEqual(result["reconciliation"]["appended"], 1)
+        outcome = fl.read_ledger(self.ledger)["reconciliations"][0]
+        self.assertEqual((outcome["horizon"], outcome["expiry_date"], outcome["expiry_close"]), (1, BASE, 179))
+
+
+class DryRunTests(RunTestCase):
+    def test_dry_run_leaves_the_real_ledger_untouched_and_reports_the_answer(self):
+        sql = self.tmp / "forecast.sql"
+        log = self.tmp / "run.json"
+        result = self.run_evening(dry_run=True, sql_output=sql, log_output=log)
+        self.assertEqual(result["dry_run"], True)
+        self.assertFalse(self.ledger.exists() and any(self.ledger.rglob("*.json")))
+        self.assertFalse(sql.exists())
+        report = json.loads(log.read_text(encoding="utf-8"))
+        self.assertEqual(report["kind"], "forecast")
+        self.assertEqual(report["record"]["regime"], "多頭延續")
+        self.assertEqual(report["record"]["cells"]["1"]["strong_line"]["id"], "dist_up_1")
+        self.assertEqual(report["attempts"], [])
+
+    def test_dry_run_can_replay_an_earlier_published_day(self):
+        replay = DATES[-3]
+        result = self.run_evening(dry_run=True, as_of=replay, structured=answer(replay),
+                                  now=datetime.fromisoformat("2026-11-15T10:00:00+08:00"))
+        # 重播：資料截到那一天、時鐘停在那天收盤後，所以不會因為期限而漏記
+        self.assertEqual((result["base_date"], result["kind"]), (replay, "forecast"))
+        self.assertEqual(result["record"]["cells"]["1"]["weak_line"]["value"], 175)  # (173+…+177)/5
+
+    def test_replaying_an_earlier_day_is_only_allowed_in_a_dry_run(self):
+        with self.assertRaises(ValueError):
+            self.run_evening(as_of=DATES[-3])
+
+
+if __name__ == "__main__":
+    unittest.main()

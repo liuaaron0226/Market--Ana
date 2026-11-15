@@ -9,6 +9,8 @@ import { defaultLiveQuoteService } from "./live-quotes.js";
 import { fetchTickPage } from "./live-ticks.js";
 import { defaultIndexLiveService } from "./index-live.js";
 import { releasePolicy } from "./release-policy.js";
+import { isOwnerEmail } from "./owner.js";
+import { FORECAST_PATH, handleForecastApi } from "./forecast.js";
 
 const PENDING_CAP = 30;
 // 票 06 限速（Astra r1 建議值）：市場 API 全部每人每分 30 次；個股明細另限每分 12 次。固定一分鐘窗，邊界最多兩倍突發。
@@ -591,7 +593,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
 
   const email = claims.email.toLowerCase();
   const owner = OWNER_EMAIL.toLowerCase();
-  const isOwner = email === owner;
+  const isOwner = isOwnerEmail(env, email);
 
   try {
     if (isApply) {
@@ -612,6 +614,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
       if (path.startsWith("/api/admin/")) return await handleAdminApi(request, env, path, owner);
       if (path === "/api/me") return json(200, { email, status: "approved", owner: true });
       if (path === "/api/holdings/level" && !policy.features.level_advice) return levelDisabled();
+      if (FORECAST_PATH.test(path)) return await handleForecastApi(request, env, path, { isOwner: true, policy });
       if (isUserData) return await handleUserDataApi(request, env, path, email, deps);
       if (isMarket) return await handleMarketApi(request, env, path, email, deps);
       if (isComparePath(path)) return await handleCompareApi(request, env, path, email, deps);
@@ -634,6 +637,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
     if (path === "/api/me") return json(200, { email, status, owner: false });
     if (path === "/api/features") return json(200, policy);
     if (path === "/api/holdings/level" && !policy.features.level_advice) return levelDisabled();
+    if (FORECAST_PATH.test(path)) return await handleForecastApi(request, env, path, { isOwner: false, policy });
     if (isUserData) return await handleUserDataApi(request, env, path, email, deps);
     if (path === "/api/live" || path === "/api/mis-probe") return fail(403, "即時行情僅限站主使用");
     if (isMarket) return await handleMarketApi(request, env, path, email, deps);

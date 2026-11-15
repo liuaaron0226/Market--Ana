@@ -7,6 +7,8 @@ export const WEB_FILES = [
   // claude-60 設計改版（11-09）新增的資產
   "bold.css", "home.css", "panel.css", "motion.js", "home-motion.js", "period-switch.js",
   "portfolio.html", "portfolio.css", "portfolio.js",
+  // 預測帳本（2026-11-15，B 票第 4 片）：只有站主有預測內容時才會在首頁出現
+  "forecast.js", "forecast.css",
 ];
 export const RETIRED = ["analysis-data.js", "chips-data.js", "dashboard-data.js", "detail-data.js", "plain-data.js", "market-data-local.js"];
 

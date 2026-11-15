@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import calendar
 import copy
 import hashlib
 import json
@@ -51,6 +52,9 @@ PARAMETERS: dict[str, Any] = {
     "min_distance_pct": 0.3,
     "distance_percentiles": {"up": 80, "down": 20},
     "recent_bars_for_model": 60,
+    # 基本層交給模型的資料組成（規格〈交給 Gemini 的輸入〉）；加減任何一項都會換輸入版本。
+    "base_inputs": ["index_ohlc_amount", "indicators_short_medium_long", "trend_labels", "chips_institutional_futures",
+                    "candidates", "method_text"],
 }
 
 _MA_NAMES = {5: "五日線", 10: "十日線", 20: "月線", 60: "季線", 120: "半年線", 240: "年線"}
@@ -89,6 +93,11 @@ _PROMPT_RULES = (
     "帶 horizon 的候選只能用在同一格。zone 只能是 above（收盤大於等於轉強線）、between、below（收盤小於轉弱線）之一。",
     "reason（理由）與 invalidation（什麼情況代表看錯）只寫繁體中文質化判斷，不得出現任何阿拉伯／全形／中文數字、日期或價格；"
     "要引用價位就把候選 id 放進 reason_refs／invalidation_refs，程式會代入名字與數值。",
+    # 本人 2026-11-15 看過真 Gemini 乾跑後選「先改提示再乾跑」：下面兩條是那次加的。
+    "理由與看錯條件只能引用 INPUT_JSON 裡有的資料（日 K、指標、法人與期貨、候選關卡、方法稿）；"
+    "INPUT_JSON 沒給的資料（例如融資、新聞、海外市場）不得當成事實寫進去。",
+    "每一格到期後，程式會把你的落點命中率和「照歷史亂猜」並排比較：照歷史亂猜是不看任何判斷、只看歷史上同樣距離的兩條線"
+    "收盤落在各區的比例。兩條線拉得越寬，「兩線之間」在歷史上本來就越常中，所以只為了保險把線拉寬，比不贏照歷史亂猜。",
     f"regime 從固定清單選一個：{'、'.join(REGIMES)}。base_date 照抄 INPUT_JSON 的 base_date。",
 )
 # 輸入版本：參數、回答格式、提示規則任何一項改了就是新系列，和舊系列分開對帳。
@@ -187,7 +196,7 @@ def method_version_of(method_text: str) -> str:
 def _clean_daily(index_daily: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     rows = []
     for row in index_daily:
-        values = {key: _number(row.get(key)) for key in ("open", "high", "low", "close")}
+        values = {key: _number(row.get(key)) for key in ("open", "high", "low", "close", "amount")}
         rows.append({"date": str(row.get("date")), **values})
     dates = [row["date"] for row in rows]
     if dates != sorted(dates) or len(set(dates)) != len(dates):
@@ -327,6 +336,7 @@ def _model_input(data: Mapping[str, Any], rows: list[dict[str, Any]], edition: s
         "edition": edition,
         "index_recent": rows[-PARAMETERS["recent_bars_for_model"]:],
         "trend_labels": copy.deepcopy(dict(data.get("trend_labels") or {})),
+        "indicators": copy.deepcopy(data.get("indicators")),
         "chips": copy.deepcopy(data.get("chips")),
         "data_cutoffs": copy.deepcopy(dict(data.get("data_cutoffs") or {})),
         "candidates": candidates,
@@ -343,31 +353,58 @@ def _build_prompt(model_input: Mapping[str, Any]) -> str:
 
 # ---- 模型呼叫與回答驗證 ----
 
-def _model_command(model_bin: Path | str, prompt: str, model: str) -> list[str]:
+def _model_command(model_bin: Path | str, model: str) -> list[str]:
+    """agy 的串流模式：提示從 stdin 送（Windows 單一指令列約 32K 字元的上限擋不住方法稿全文），結果讀最後的 result 事件。"""
     path = Path(model_bin)
     prefix = [sys.executable, str(path)] if path.suffix.lower() == ".py" else [str(path)]
-    return [*prefix, "-p", prompt, "--model", model, "--effort", "medium", "--output-format", "json",
+    return [*prefix, "-p=", "--input-format", "stream-json", "--output-format", "stream-json",
+            "--model", model, "--effort", "medium",
             "--json-schema", json.dumps(OUTPUT_SCHEMA, ensure_ascii=False, separators=(",", ":")),
             "--print-timeout", "300s", "--sandbox"]
+
+
+def _stream_input(prompt: str) -> bytes:
+    return (json.dumps({"event": "user", "message": {"content": prompt}}, ensure_ascii=False) + "\n").encode("utf-8")
+
+
+def _result_event(stdout: bytes) -> dict[str, Any] | None:
+    """串流輸出一行一個事件；回傳最後一個 result 事件的內容。"""
+    result = None
+    for line in stdout.decode("utf-8").splitlines():
+        if not line.strip():
+            continue
+        event = json.loads(line)
+        if isinstance(event, dict) and event.get("event") == "result" and isinstance(event.get("result"), dict):
+            result = event["result"]
+    return result
+
+
+def _failure(returncode: int, stderr: bytes) -> str:
+    """漏記原因帶上錯誤輸出的最後一段，查得到是額度、登入還是程式問題。"""
+    tail = stderr.decode("utf-8", errors="replace").strip()[-300:]
+    return f"結束碼 {returncode}" + (f"：{tail}" if tail else "")
 
 
 def _call_model(model_bin: Path | str, prompt: str, model: str, timeout: float) -> tuple[str, Any, str]:
     """回傳 (狀態, structured_output, 說明)；狀態是 ok／model_failed／model_timeout／output_garbled。"""
     try:
-        completed = subprocess.run(_model_command(model_bin, prompt, model), input=b"", capture_output=True,
-                                   timeout=timeout, check=False)
+        completed = subprocess.run(_model_command(model_bin, model), input=_stream_input(prompt),
+                                   capture_output=True, timeout=timeout, check=False)
     except subprocess.TimeoutExpired:
         return "model_timeout", None, f"超過 {timeout} 秒沒有回應"
     except OSError as error:
         return "model_failed", None, f"{type(error).__name__}: {error}"
     try:
-        envelope = json.loads(completed.stdout.decode("utf-8").strip())
+        envelope = _result_event(completed.stdout)
     except (UnicodeDecodeError, json.JSONDecodeError):
         if completed.returncode != 0:
-            return "model_failed", None, f"結束碼 {completed.returncode}"
-        return "output_garbled", None, "輸出不是 UTF-8 JSON"
-    if completed.returncode != 0 or not isinstance(envelope, dict) or envelope.get("status") != "SUCCESS":
-        return "model_failed", None, f"結束碼 {completed.returncode}"
+            return "model_failed", None, _failure(completed.returncode, completed.stderr)
+        return "output_garbled", None, "輸出不是 UTF-8 JSON 事件"
+    if completed.returncode != 0 or envelope is None or envelope.get("status") != "SUCCESS":
+        detail = _failure(completed.returncode, completed.stderr)
+        if envelope and envelope.get("error"):
+            detail += f"；{str(envelope['error'])[:200]}"
+        return "model_failed", None, detail
     return "ok", envelope.get("structured_output"), ""
 
 
@@ -658,13 +695,37 @@ def _rates(pairs: list[tuple[dict[str, Any], dict[str, Any]]]) -> dict[str, Any]
     }
 
 
-def summarize(root: Path | str, index_daily: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+# 本人定案：正式結論 1 日滿 3 個月、5 日滿 6 個月、20 日滿 1 年；之前只標「累積中」。
+VERDICT_MONTHS = {1: 3, 5: 6, 20: 12}
+
+
+def _add_months(day: date, months: int) -> date:
+    """加幾個月，月底對齊（例如 8/31 加三個月是 11/30）。"""
+    month_index = day.month - 1 + months
+    year, month = day.year + month_index // 12, month_index % 12 + 1
+    return date(year, month, min(day.day, calendar.monthrange(year, month)[1]))
+
+
+def _verdict(run_mode: str, horizon: int, official_since: str | None, as_of: str | None) -> str:
+    """「試跑」不下結論；正式紀錄在正式起算日之後滿規定時間才「可下結論」，之前一律「累積中」。"""
+    if run_mode != "official":
+        return "試跑"
+    if not official_since or not as_of:
+        return "累積中"
+    due = _add_months(date.fromisoformat(official_since), VERDICT_MONTHS[horizon])
+    return "可下結論" if date.fromisoformat(as_of) >= due else "累積中"
+
+
+def summarize(root: Path | str, index_daily: Sequence[Mapping[str, Any]], *,
+              official_since: str | None = None) -> dict[str, Any]:
     """依（試跑／正式、版本、期間、方法版本、輸入版本）分組；試跑與正式各自成組，不混算。
 
     還沒對帳的格子依截至目前的指數日 K 分成「還沒到期」與「無法判定」，兩者都不算猜錯。
+    每組另標 ``verdict``：試跑／累積中／可下結論（只是顯示，不觸發任何其他功能）。
     """
     ledger = read_ledger(root)
     rows = _clean_daily(index_daily)
+    as_of = rows[-1]["date"] if rows else None
     position = {row["date"]: index for index, row in enumerate(rows)}
     reconciled_by_cell = {(row["forecast_id"], row["horizon"]): row for row in ledger["reconciliations"]}
     series: dict[tuple[str, str, str, str], dict[str, Any]] = {}
@@ -695,8 +756,68 @@ def summarize(root: Path | str, index_daily: Sequence[Mapping[str, Any]]) -> dic
                 "method_version": method_version, "input_version": input_version,
                 **_rates(reconciled), **open_cells, "misses": bucket["misses"],
                 "pullback": _rates(pullback),
+                "verdict": _verdict(run_mode, horizon, official_since, as_of),
             })
-    return {"groups": groups, "conflicts": len(ledger["conflicts"])}
+    return {"as_of": as_of, "official_since": official_since, "groups": groups, "conflicts": len(ledger["conflicts"])}
+
+
+# ---- 發布到網站讀的資料庫 ----
+
+# 給網站顯示的欄位；完整輸入（含方法稿）與模型的重試細節只留在原件。
+_PUBLIC_FIELDS = ("forecast_id", "base_date", "edition", "method_version", "input_version", "model", "run_mode",
+                  "kind", "locked_at", "deadline", "data_cutoffs", "regime", "cells", "miss_reason", "miss_detail",
+                  "record_sha256")
+
+
+def _sql_literal(value: Any) -> str:
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, (int, float)):
+        return repr(value)
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def _insert(table: str, columns: dict[str, Any], key: str) -> str:
+    names = ",".join(columns)
+    values = ",".join(_sql_literal(value) for value in columns.values())
+    return f"INSERT INTO {table} ({names}) VALUES ({values}) ON CONFLICT({key}) DO NOTHING;"
+
+
+def _json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def d1_sql(root: Path | str, index_daily: Sequence[Mapping[str, Any]], *, published_at: str,
+           official_since: str | None = None) -> str:
+    """把帳本整理成給網站資料庫的指令檔。只新增：同一筆再發布一次不會多一筆、也不會改內容。
+
+    不包 BEGIN／COMMIT：部署工具（wrangler d1 execute）自己會包交易。
+    """
+    ledger = read_ledger(root)
+    statements = []
+    for record in ledger["forecasts"]:
+        public = {key: record[key] for key in _PUBLIC_FIELDS if key in record}
+        statements.append(_insert("forecast_records", {
+            "forecast_id": record["forecast_id"], "base_date": record["base_date"], "edition": record["edition"],
+            "method_version": record["method_version"], "input_version": record["input_version"],
+            "run_mode": record["run_mode"], "kind": record["kind"], "record_json": _json(public),
+            "record_sha256": record["record_sha256"], "published_at": published_at,
+        }, "forecast_id"))
+    for row in ledger["reconciliations"]:
+        statements.append(_insert("forecast_reconciliations", {
+            "forecast_id": row["forecast_id"], "horizon": row["horizon"], "expiry_date": row["expiry_date"],
+            "actual_zone": row["actual_zone"], "record_json": _json(row), "record_sha256": row["record_sha256"],
+            "published_at": published_at,
+        }, "forecast_id,horizon"))
+    summary = summarize(root, index_daily, official_since=official_since)
+    if summary["as_of"]:
+        statements.append(_insert("forecast_summaries", {
+            "summary_sha256": _sha(summary), "as_of": summary["as_of"], "summary_json": _json(summary),
+            "published_at": published_at,
+        }, "summary_sha256"))
+    return "\n".join(statements) + "\n"
 
 
 # ---- 讀帳本 ----

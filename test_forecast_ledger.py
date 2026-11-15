@@ -5,6 +5,7 @@
 """
 import hashlib
 import json
+import sqlite3
 import tempfile
 import unittest
 from datetime import date, datetime, timedelta, timezone
@@ -90,26 +91,31 @@ def envelope(structured):
     return {"status": "SUCCESS", "structured_output": structured}
 
 
-def fake_model(folder: Path, responses, *, exit_code=0, sleep=0, raw=None):
-    """依序回傳 responses（重試時取下一個）；每次被呼叫都在 calls.txt 加一行。"""
+def fake_model(folder: Path, responses, *, exit_code=0, sleep=0, raw=None, stderr=""):
+    """仿 agy 的串流模式：從 stdin 讀一行 {"event":"user","message":{"content":提示}}，
+    輸出 init 與 result 兩行事件。依序回傳 responses（重試時取下一個）；每次被呼叫都在 calls.txt 加一行。"""
     script = folder / "fake_model.py"
     state = folder / "calls.txt"
-    payloads = [json.dumps(item, ensure_ascii=False) for item in responses]
+    payloads = [json.dumps({"event": "result", "result": item}, ensure_ascii=False) for item in responses]
     script.write_text(
         "import json,sys,time\n"
         "from pathlib import Path\n"
         "args=sys.argv[1:]\n"
-        "assert '--json-schema' in args and '--output-format' in args and '-p' in args\n"
+        "assert '--json-schema' in args and args[args.index('--input-format')+1]=='stream-json'\n"
+        "assert args[args.index('--output-format')+1]=='stream-json'\n"
+        "message=json.loads(sys.stdin.buffer.readline().decode('utf-8'))\n"
+        "assert message['event']=='user' and message['message']['content']\n"
         f"state=Path({str(state)!r})\n"
         "calls=len(state.read_text().splitlines()) if state.exists() else 0\n"
         "state.write_text('x\\n'*(calls+1))\n"
         f"time.sleep({sleep})\n"
+        f"sys.stderr.write({stderr!r})\n"
         f"raw={raw!r}\n"
         "if raw is not None:\n"
         "    sys.stdout.buffer.write(raw)\n"
         "else:\n"
         f"    payloads={payloads!r}\n"
-        "    sys.stdout.buffer.write(payloads[min(calls,len(payloads)-1)].encode('utf-8'))\n"
+        "    sys.stdout.buffer.write(b'{\"event\":\"init\"}\\n'+payloads[min(calls,len(payloads)-1)].encode('utf-8')+b'\\n')\n"
         f"raise SystemExit({exit_code})\n",
         encoding="utf-8",
     )
@@ -292,7 +298,7 @@ class AnswerValidationTests(LedgerTestCase):
     def test_model_failure_timeout_and_garbled_output_become_a_miss_without_retry(self):
         cases = [
             ("model_failed", dict(exit_code=1)),
-            ("model_failed", dict(raw=json.dumps({"status": "ERROR"}).encode())),
+            ("model_failed", dict(raw=json.dumps({"event": "result", "result": {"status": "ERROR"}}).encode())),
             ("output_garbled", dict(raw=b"\xff\xfe not json")),
         ]
         for index, (reason, options) in enumerate(cases):
@@ -301,6 +307,20 @@ class AnswerValidationTests(LedgerTestCase):
                 model = fake_model(self.bin, [envelope(answer_a())], **options)
                 result = self.write(model=model, root=self.root / f"case{index}")
                 self.assert_miss(result, reason, 1)
+
+    def test_model_failure_keeps_the_tail_of_its_error_output_as_the_reason(self):
+        model = fake_model(self.bin, [envelope(answer_a())], exit_code=3, stderr="noise\nquota exceeded for this week\n")
+        result = self.write(model=model)
+        self.assert_miss(result, "model_failed", 1)
+        self.assertIn("結束碼 3", result["record"]["miss_detail"])
+        self.assertIn("quota exceeded for this week", result["record"]["miss_detail"])
+
+    def test_a_prompt_longer_than_a_windows_command_line_still_reaches_the_model(self):
+        # Windows 單一指令列上限約 32,767 字元；提示改從 stdin 交給模型，長度不再受限。
+        data = day_input()
+        data["method_text"] = METHOD_TEXT + "方法細節。" * 8000
+        result = self.write(data)
+        self.assertEqual(result["record"]["kind"], "forecast")
 
     def test_model_timeout_becomes_a_miss(self):
         model = fake_model(self.bin, [envelope(answer_a())], sleep=5)
@@ -677,6 +697,152 @@ class SummaryTests(LedgerTestCase):
         fl.reconcile(self.root, through("2026-10-01"))
         fl.reconcile(self.root, through("2026-10-01", changes={"2026-10-01": {"close": 97.0}}))
         self.assertEqual(fl.summarize(self.root, through("2026-10-08"))["conflicts"], 1)
+
+
+class PromptRulesTests(LedgerTestCase):
+    def test_model_is_told_to_use_only_given_facts_and_that_it_will_be_compared_with_history(self):
+        # 本人 2026-11-15 看過乾跑後選「先改提示再乾跑」：理由只能用輸入裡的資料；事先說明會和照歷史亂猜並排比。
+        seen = self.tmp / "prompt.txt"
+        script = self.bin / "recording_model.py"
+        payload = json.dumps({"event": "result", "result": envelope(answer_a())}, ensure_ascii=False)
+        script.write_text(
+            "import json,sys\nfrom pathlib import Path\n"
+            "prompt=json.loads(sys.stdin.buffer.readline().decode('utf-8'))['message']['content']\n"
+            f"Path({str(seen)!r}).write_text(prompt, encoding='utf-8')\n"
+            f"sys.stdout.buffer.write({payload.encode('utf-8')!r})\n", encoding="utf-8")
+        self.write(model=script)
+        prompt = seen.read_text(encoding="utf-8")
+        self.assertIn("只能引用 INPUT_JSON 裡有的資料", prompt)
+        self.assertIn("照歷史亂猜", prompt)
+
+
+class VerdictStatusTests(LedgerTestCase):
+    def test_groups_say_accumulating_until_each_horizon_has_run_long_enough(self):
+        self.write(official_since=BASE_A)
+        trial = day_input()
+        trial["method_text"] = METHOD_TEXT.replace("版本：0.2", "版本：0.1")
+        self.write(trial)
+
+        def statuses(as_of_rows):
+            summary = fl.summarize(self.root, as_of_rows, official_since=BASE_A)
+            return {(g["run_mode"], g["horizon"]): g["verdict"] for g in summary["groups"]}
+
+        # 正式起算 09/30：一日滿三個月是 12/30、五日滿六個月是 2027-03-30、二十日滿一年是 2027-09-30
+        early = statuses(through("2026-10-08"))
+        self.assertEqual(early[("official", 1)], "累積中")
+        self.assertEqual(early[("trial", 1)], "試跑")
+
+        just_before = statuses(through("2026-10-08") + [bar("2026-12-29", 93, 94, 92, 93)])
+        self.assertEqual(just_before[("official", 1)], "累積中")
+        on_the_day = statuses(through("2026-10-08") + [bar("2026-12-30", 93, 94, 92, 93)])
+        self.assertEqual([on_the_day[("official", h)] for h in (1, 5, 20)], ["可下結論", "累積中", "累積中"])
+        later = statuses(through("2026-10-08") + [bar("2027-09-30", 93, 94, 92, 93)])
+        self.assertEqual([later[("official", h)] for h in (1, 5, 20)], ["可下結論", "可下結論", "可下結論"])
+        self.assertEqual(later[("trial", 20)], "試跑")
+
+    def test_without_an_official_start_every_official_group_is_accumulating(self):
+        self.write(official_since=BASE_A)
+        # 一年多以後也一樣：沒有寫下正式起算日，就不會出現結論
+        summary = fl.summarize(self.root, through("2026-10-08") + [bar("2027-12-31", 93, 94, 92, 93)])
+        self.assertEqual({g["verdict"] for g in summary["groups"]}, {"累積中"})
+
+
+MIGRATION = Path(__file__).resolve().parent / "cloud" / "migrations" / "0010_forecast_ledger.sql"
+
+
+class PublishToDatabaseTests(LedgerTestCase):
+    def database(self):
+        connection = sqlite3.connect(":memory:")
+        connection.executescript(MIGRATION.read_text(encoding="utf-8"))
+        return connection
+
+    def published(self):
+        self.write(official_since=BASE_A)
+        stale = {"index": "2026-10-01", "institutional": "2026-10-01", "futures": "2026-09-30"}
+        self.write(day_input(through("2026-10-01"), base_date="2026-10-01", cutoffs=stale),
+                   now=clock(at("2026-10-02", 0, 1)), official_since=BASE_A)
+        fl.reconcile(self.root, through("2026-10-08"))
+        return fl.d1_sql(self.root, through("2026-10-08"), published_at="2026-10-08T18:00:00+08:00")
+
+    def test_publishing_twice_keeps_one_row_per_record_with_the_original_hash(self):
+        sql = self.published()
+        self.assertNotRegex(sql, r"(?im)^\s*(BEGIN|COMMIT)\s*;")  # 部署工具自己包交易
+        db = self.database()
+        db.executescript(sql)
+        first = db.execute("SELECT forecast_id, kind, record_sha256, record_json FROM forecast_records ORDER BY forecast_id").fetchall()
+        db.executescript(sql)
+        again = db.execute("SELECT forecast_id, kind, record_sha256, record_json FROM forecast_records ORDER BY forecast_id").fetchall()
+        self.assertEqual(first, again)
+        self.assertEqual([row[1] for row in first], ["forecast", "miss"])
+        ledger = {r["forecast_id"]: r for r in fl.read_ledger(self.root)["forecasts"]}
+        for forecast_id, _, sha, _ in first:
+            self.assertEqual(sha, ledger[forecast_id]["record_sha256"])
+        self.assertEqual(db.execute("SELECT COUNT(*) FROM forecast_reconciliations").fetchone(), (2,))
+        self.assertEqual(db.execute("SELECT COUNT(*) FROM forecast_summaries").fetchone(), (1,))
+
+    def test_published_rows_carry_display_fields_but_not_the_method_text_or_model_input(self):
+        db = self.database()
+        db.executescript(self.published())
+        record = json.loads(db.execute("SELECT record_json FROM forecast_records WHERE kind = 'forecast'").fetchone()[0])
+        self.assertNotIn("input", record)
+        self.assertNotIn("方法內容", json.dumps(record, ensure_ascii=False))
+        self.assertEqual(record["cells"]["1"]["strong_line"], {"id": "ma5", "name": "五日線", "value": 97.6})
+        self.assertEqual(record["cells"]["1"]["reason"], "站回均線之上偏強【資料：五日線 97.6 點】")
+        self.assertEqual((record["run_mode"], record["regime"], record["data_cutoffs"]["futures"]),
+                         ("official", "多頭中的回檔", BASE_A))
+        summary = json.loads(db.execute("SELECT summary_json FROM forecast_summaries").fetchone()[0])
+        self.assertEqual(summary["as_of"], "2026-10-08")
+
+    def test_database_refuses_updates_and_deletes(self):
+        db = self.database()
+        db.executescript(self.published())
+        for statement in ("UPDATE forecast_records SET kind = 'miss'",
+                          "DELETE FROM forecast_records",
+                          "UPDATE forecast_reconciliations SET actual_zone = 'below'",
+                          "DELETE FROM forecast_reconciliations",
+                          "UPDATE forecast_summaries SET summary_json = '{}'",
+                          "DELETE FROM forecast_summaries"):
+            with self.subTest(statement):
+                with self.assertRaises(sqlite3.DatabaseError):
+                    db.execute(statement)
+        self.assertEqual(db.execute("SELECT COUNT(*) FROM forecast_records").fetchone(), (2,))
+
+    def test_database_refuses_replacing_a_row_with_different_content(self):
+        db = self.database()
+        db.executescript(self.published())
+        forecast_id, sha = db.execute("SELECT forecast_id, record_sha256 FROM forecast_records WHERE kind = 'forecast'").fetchone()
+        replace = ("INSERT OR REPLACE INTO forecast_records (forecast_id, base_date, edition, method_version, input_version, "
+                   "run_mode, kind, record_json, record_sha256, published_at) VALUES (?, ?, 'evening', '0.2', 'v', 'trial', "
+                   "'forecast', '{}', ?, 'now')")
+        with self.assertRaises(sqlite3.DatabaseError):
+            db.execute(replace, (forecast_id, BASE_A, "0" * 64))
+        with self.assertRaises(sqlite3.DatabaseError):
+            db.execute("INSERT OR REPLACE INTO forecast_reconciliations (forecast_id, horizon, expiry_date, actual_zone, "
+                       "record_json, record_sha256, published_at) VALUES (?, 1, '2026-10-01', 'below', '{}', ?, 'now')",
+                       (forecast_id, "0" * 64))
+        self.assertEqual(db.execute("SELECT record_sha256 FROM forecast_records WHERE forecast_id = ?", (forecast_id,)).fetchone(), (sha,))
+        self.assertEqual(db.execute("SELECT actual_zone FROM forecast_reconciliations WHERE horizon = 1").fetchone(), ("above",))
+
+    def test_publishing_a_different_record_under_the_same_id_fails_loudly(self):
+        # 兩本帳各有一筆同識別（同基準日、版本、方法、輸入版本）但內容不同的預測
+        self.write()
+        other = self.tmp / "other-ledger"
+        self.write(responses=[envelope(answer_a(regime="盤整"))], root=other,
+                   model=fake_model(self.tmp, [envelope(answer_a(regime="盤整"))]))
+        db = self.database()
+        db.executescript(fl.d1_sql(self.root, series_a(), published_at="2026-09-30T18:00:00+08:00"))
+        with self.assertRaises(sqlite3.DatabaseError):
+            db.executescript(fl.d1_sql(other, series_a(), published_at="2026-09-30T19:00:00+08:00"))
+        record = json.loads(db.execute("SELECT record_json FROM forecast_records").fetchone()[0])
+        self.assertEqual(record["regime"], "多頭中的回檔")
+
+    def test_text_with_quotes_survives_publishing(self):
+        quoted = answer_a(**{"1": cell("ma5", "prev_low", "above", reason="站回'均線'之上")})
+        self.write(responses=[envelope(quoted)])
+        db = self.database()
+        db.executescript(fl.d1_sql(self.root, series_a(), published_at="2026-09-30T18:00:00+08:00"))
+        record = json.loads(db.execute("SELECT record_json FROM forecast_records").fetchone()[0])
+        self.assertEqual(record["cells"]["1"]["reason"], "站回'均線'之上")
 
 
 if __name__ == "__main__":
