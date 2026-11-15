@@ -26,15 +26,15 @@ def holding(code, name, shares, cost, price, **extra):
             "created_at": "2026-11-15T10:00:00.000Z", "updated_at": "2026-11-15T10:00:00.000Z", **extra}
 
 
-STATE = """() => ({ total: document.querySelector('.hv-total').innerText.replace(/\\s+/g, ' ').trim(), count: document.getElementById('holdingCount').textContent,
+STATE = """() => ({ total: document.querySelector('.hv-total').innerText.replace(/\\s+/g, ' ').trim(), count: document.getElementById('countHolding').textContent,
   empty: document.querySelector('#holdingRows .hv-empty') ? document.querySelector('#holdingRows .hv-empty').textContent : null,
   entering: document.getElementById('holdingRows').classList.contains('is-entering'),
-  rows: [...document.querySelectorAll('#holdingRows .hv-row')].map(row => ({ code: row.dataset.code, state: row.dataset.state, ret: row.querySelector('.hv-ret').textContent,
+  rows: [...document.querySelectorAll('#holdingRows .hv-row:not(.pf-only-watch)')].map(row => ({ code: row.dataset.code, state: row.dataset.state, ret: row.querySelector('.hv-ret').textContent,
     bars: [...row.querySelectorAll('.hv-bar i')].map(bar => bar.className), label: row.querySelector('.hv-top').getAttribute('aria-label'),
-    facts: [...row.querySelectorAll('.hv-facts li')].map(fact => fact.innerText.replace(/\\s+/g, ' ').trim()), more: row.querySelector('.hv-more').innerText.replace(/\\s+/g, ' ').trim(),
-    link: row.querySelector('.hv-more a').getAttribute('href') })) })"""
+    facts: [...row.querySelectorAll('.hv-facts li')].map(fact => fact.innerText.replace(/\\s+/g, ' ').trim()), more: row.querySelector('.pf-acts').innerText.replace(/\\s+/g, ' ').trim(),
+    link: row.querySelector('.pf-acts a') ? row.querySelector('.pf-acts a').getAttribute('href') : null })) })"""
 FITS = """() => [...document.querySelectorAll('#holdingRows .hv-row')].every(row => { const box = row.getBoundingClientRect();
-  return [...row.querySelectorAll('.hv-top > *, .hv-facts li, .hv-more > *')].every(node => { const b = node.getBoundingClientRect(); return b.width === 0 || (b.left >= box.left - .5 && b.right <= box.right + .5); }); })"""
+  return [...row.querySelectorAll('.hv-top > *, .hv-facts li, .pf-set > *, .pf-acts > *')].every(node => { const b = node.getBoundingClientRect(); return b.width === 0 || (b.left >= box.left - .5 && b.right <= box.right + .5); }); })"""
 OVERFLOW = "document.documentElement.scrollWidth > document.documentElement.clientWidth"
 
 with sync_playwright() as p:
@@ -51,9 +51,18 @@ with sync_playwright() as p:
             .observe(document, { subtree: true, attributes: true, attributeFilter: ['class'] });""")
         if items is not None:
             page.route("**/api/holdings", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps({"items": items})) if route.request.method == "GET" else route.continue_())
+            page.route("**/api/watchlist", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps({"items": []})) if route.request.method == "GET" else route.continue_())
         page.goto(BASE + "/portfolio.html", wait_until="networkidle")
         page.wait_for_function("document.getElementById('portfolioFreshness').textContent.trim() !== '讀取中'")
         return ctx, page, errors
+
+    def open_holding_form(page):
+        """新增的表單收在「＋」裡（本人 2026-11-16）：按開、選新增庫存。"""
+        if page.locator("#addToggle").get_attribute("aria-expanded") != "true":
+            page.locator("#addToggle").click()
+        page.locator("#addKind [data-kind='holding']").click()
+
+    held = "#holdingRows .hv-row:not(.pf-only-watch)"
 
     # ---- 1. 有動態：進場只播一次
     ctx, page, errors = open_page(390, "no-preference")
@@ -63,15 +72,16 @@ with sync_playwright() as p:
     check("有動態：播完之後記號拿掉、每一列在定位", [row["state"] for row in page.evaluate(STATE)["rows"]] == ["bull"] * 3
           and page.evaluate("[...document.querySelectorAll('#holdingRows .hv-bar i')].every(bar => getComputedStyle(bar).transform === 'none')"))
     page.evaluate("window.__again = false; new MutationObserver(() => { if (document.getElementById('holdingRows').classList.contains('is-entering')) window.__again = true; }).observe(document.getElementById('holdingRows'), { attributes: true, attributeFilter: ['class'] })")
+    open_holding_form(page)
     page.locator("#holdingCode").fill("6669")
     page.locator("#holdingShares").fill("100")
     page.locator("#holdingCost").fill("3000")
     page.locator("#holdingForm button[type=submit]").click()
-    page.locator("#holdingRows .hv-row[data-code='6669']").wait_for()
+    page.locator(f"{held}[data-code='6669']").wait_for()
     check("有動態：新增一檔之後重畫，不重播進場", not page.evaluate(STATE)["entering"] and not page.evaluate("window.__again"))
     page.locator("#holdingRows .hv-row[data-code='6669'] .hv-top").click()
     page.get_by_role("button", name="刪除庫存 6669").click()
-    page.wait_for_function("document.querySelectorAll('#holdingRows .hv-row').length === 3")
+    page.wait_for_function("selector => document.querySelectorAll(selector).length === 3", arg=held)
     check("有動態：沒有腳本錯誤", not errors, errors)
     ctx.close()
 
@@ -102,7 +112,7 @@ with sync_playwright() as p:
 
     ctx, page, errors = open_page(390, "reduce", [])
     state = page.evaluate(STATE)
-    check("還沒有庫存：寫提示，總數都是—", state["empty"] and state["empty"].startswith("還沒有庫存") and state["total"] == "— 成本 — 損益 —（—）" and state["count"] == "0 檔庫存", state)
+    check("還沒有庫存也沒有自選：寫提示，總數都是—", state["empty"] and state["empty"].startswith("還沒有自選或庫存") and state["total"] == "— 成本 — 損益 —（—）" and state["count"] == "0", state)
     check("假資料的三種情況都沒有腳本錯誤", not errors, errors)
     ctx.close()
 
@@ -132,10 +142,12 @@ with sync_playwright() as p:
             route.continue_()
     page.route("**/api/holdings", fake)
     page.route("**/api/holdings/2330", lambda route: (stored.pop(0), route.fulfill(status=200, content_type="application/json", body="{}")))
+    page.route("**/api/watchlist", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps({"items": []})) if route.request.method == "GET" else route.continue_())
     page.goto(BASE + "/portfolio.html", wait_until="networkidle")
     page.wait_for_function("document.getElementById('portfolioFreshness').textContent.trim() !== '讀取中'")
     page.evaluate("window.__again = false; new MutationObserver(() => { if (document.getElementById('holdingRows').classList.contains('is-entering')) window.__again = true; }).observe(document.getElementById('holdingRows'), { attributes: true, attributeFilter: ['class'] })")
-    check("沒有庫存時寫的是原本那句提示", page.evaluate(STATE)["empty"] == "還沒有庫存。先輸入代號、股數與平均成本，之後可用同一表單更新。", page.evaluate(STATE)["empty"])
+    check("什麼都沒有時寫一句怎麼新增", page.evaluate(STATE)["empty"] == "還沒有自選或庫存。按右邊的「＋」，加入想追蹤的股票或輸入庫存。", page.evaluate(STATE)["empty"])
+    open_holding_form(page)
     page.locator("#holdingCode").fill("2330")
     page.locator("#holdingShares").fill("1000")
     page.locator("#holdingCost").fill("980")

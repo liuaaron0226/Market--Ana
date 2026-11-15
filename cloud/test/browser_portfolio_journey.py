@@ -45,21 +45,26 @@ with tempfile.TemporaryDirectory() as temp:
             page.on("dialog", lambda dialog: dialog.accept())
             page.goto(base + "/portfolio.html", wait_until="networkidle")
 
+            # 自選與庫存併成一份清單（2026-11-16）：新增的表單收在「＋」裡，存好會自己收回去；一檔一列，認 data-code
+            page.locator("#addToggle").click()
             page.locator("#watchCode").fill("2330")
             page.locator("#watchHorizon").select_option("short")
             page.locator("#watchlistForm button[type=submit]").click()
-            page.get_by_text("2330 台積電").wait_for()
+            page.locator("#holdingRows .hv-row[data-code='2330']").wait_for()
+            page.locator("#addToggle").click()
             page.locator("#watchCode").fill("0050")
             page.locator("#watchHorizon").select_option("long")
             page.locator("#watchlistForm button[type=submit]").click()
-            page.get_by_text("0050 元大台灣50").wait_for()
+            page.locator("#holdingRows .hv-row[data-code='0050']").wait_for()
 
+            page.locator("#addToggle").click()
+            page.locator("#addKind [data-kind='holding']").click()
             page.locator("#holdingCode").fill("1101")
             page.locator("#holdingShares").fill("2000")
             page.locator("#holdingCost").fill("35")
             page.locator("#holdingNote").fill("長期觀察")
             page.locator("#holdingForm button[type=submit]").click()
-            page.get_by_text("1101 台泥").wait_for()
+            page.locator("#holdingRows .hv-row[data-code='1101']").wait_for()
             holding_text = page.locator("#holdingRows").inner_text()
             assert "10,000" in holding_text and "+14.29%" in holding_text, holding_text
             assert "不在本站分析範圍" in holding_text
@@ -105,9 +110,10 @@ with tempfile.TemporaryDirectory() as temp:
             page.goto(base + "/portfolio.html", wait_until="networkidle")
             assert page.evaluate("document.documentElement.scrollWidth - innerWidth") == 0
             page.screenshot(path=str(OUT / "portfolio-375.png"), full_page=True)
+            page.locator("#holdingRows .hv-row[data-code='2330'] .hv-top").click()
             page.get_by_label("從自選股刪除 2330 台積電").click()
-            page.get_by_text("2330 台積電").wait_for(state="detached")
-            assert "2330 台積電" not in page.locator("#watchlistRows").inner_text()
+            page.locator("#holdingRows .hv-row[data-code='2330']").wait_for(state="detached")
+            assert page.locator("#holdingRows .hv-row[data-code='2330']").count() == 0
             report["checks"].append("mobile-375:no-overflow:delete-watchlist")
             browser.close()
     finally:

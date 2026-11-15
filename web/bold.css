@@ -378,7 +378,8 @@
 @media (hover: hover) {
   :is(body.hm, body.bd) .hm-cats button:hover { color: var(--ink); }
 }
-:is(body.hm, body.bd) .hm-cats button[aria-expanded="true"] {
+/* 展開一類（aria-expanded，首頁與個股頁）或選一個（aria-pressed，自選與庫存頁的篩選）：選中的那一顆是凸起的鍵 */
+:is(body.hm, body.bd) .hm-cats button:is([aria-expanded="true"], [aria-pressed="true"]) {
   background: var(--key); color: var(--ink); font-weight: 700; box-shadow: var(--key-shadow);
 }
 @media (max-width: 860px) {

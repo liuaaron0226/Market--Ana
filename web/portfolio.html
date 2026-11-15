@@ -6,8 +6,8 @@
   <meta name="color-scheme" content="light dark">
   <title>自選股與庫存｜台股決策鏡</title>
   <link rel="stylesheet" href="minimal.css?v=20261109-ux1">
-  <link rel="stylesheet" href="bold.css?v=20261115-desk35">
-  <link rel="stylesheet" href="portfolio.css?v=20261115-desk35">
+  <link rel="stylesheet" href="bold.css?v=20261116-desk36">
+  <link rel="stylesheet" href="portfolio.css?v=20261116-desk36">
 </head>
 <body class="bd pf">
   <a class="skip-link" href="#portfolioMain">跳到自選股與庫存</a>
@@ -25,10 +25,7 @@
 
     <main id="portfolioMain">
       <div class="pf-title-row">
-        <div>
-          <h1>自選股與庫存</h1>
-          <p>追蹤想看的股票，並用最新收盤價整理目前部位。</p>
-        </div>
+        <h1>自選股與庫存</h1>
         <p class="pf-freshness" id="portfolioFreshness" role="status">讀取中</p>
       </div>
 
@@ -59,46 +56,53 @@
         </details>
       </section>
 
-      <section class="pf-summary" aria-labelledby="holdingSummaryTitle">
-        <div class="hv-head">
-          <h2 id="holdingSummaryTitle">庫存總覽</h2>
-          <p id="holdingCount">0 檔庫存</p>
-        </div>
+      <!-- 自選與庫存併成一份清單（本人 2026-11-16：頁面太長、要整合）：一檔只出現一次，上面三顆鍵篩全部／庫存／自選；
+           新增收進「＋」鍵，每一檔的數字與設定收進點開的那一列。資料整理在 portfolio-list.js、holdings-rows.js，畫面在 portfolio.js。 -->
+      <section class="pf-summary" aria-labelledby="listTitle">
+        <h2 id="listTitle" class="sr-only">自選與庫存</h2>
         <p class="hv-total"><strong class="num" id="totalMarketValue" aria-label="目前市值">—</strong><span>成本 <b class="num" id="totalCost">—</b></span><span><span id="totalWord">損益</span> <b class="num" id="totalPnl">—</b>（<b class="num" id="totalReturn">—</b>）</span></p>
+        <div class="pf-tools">
+          <div class="hm-cats" id="listFilter" role="group" aria-label="要看哪些">
+            <button type="button" data-filter="all" aria-pressed="true">全部<small class="num" id="countAll">0</small></button>
+            <button type="button" data-filter="holding" aria-pressed="false">庫存<small class="num" id="countHolding">0</small></button>
+            <button type="button" data-filter="watch" aria-pressed="false">自選<small class="num" id="countWatch">0</small></button>
+          </div>
+          <button type="button" class="pf-add" id="addToggle" aria-expanded="false" aria-controls="addPanel" aria-label="新增自選或庫存">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+        <div class="pf-add-panel" id="addPanel">
+          <div class="pf-add-clip" id="addClip" inert>
+            <div class="pf-add-in">
+              <div class="key-strip pf-kind" id="addKind" role="group" aria-label="要新增的是">
+                <button type="button" class="cell" data-kind="watch" aria-pressed="true"><span class="cell-face"></span><span class="cell-name">加入自選</span></button>
+                <button type="button" class="cell" data-kind="holding" aria-pressed="false"><span class="cell-face"></span><span class="cell-name">新增庫存</span></button>
+              </div>
+              <form class="pf-form pf-watch-form" id="watchlistForm" data-kind="watch">
+                <label>股票代號<input id="watchCode" name="code" inputmode="text" autocomplete="off" maxlength="6" placeholder="例如 2330" required></label>
+                <label>分類<select id="watchHorizon" name="horizon"><option value="none">未分類</option><option value="short">短期</option><option value="long">長期</option></select></label>
+                <button type="submit">加入或更新</button>
+                <p class="pf-form-status" id="watchlistStatus" role="status"></p>
+              </form>
+              <form class="pf-form pf-holding-form" id="holdingForm" data-kind="holding" hidden>
+                <label>股票代號<input id="holdingCode" name="code" inputmode="text" autocomplete="off" maxlength="6" placeholder="例如 2330" required></label>
+                <label>股數<input id="holdingShares" name="shares" type="number" inputmode="numeric" min="1" max="1000000000" step="1" required></label>
+                <label>平均成本<input id="holdingCost" name="average_cost" type="number" inputmode="decimal" min="0.01" max="10000000" step="0.01" required></label>
+                <label class="pf-note-field">備註<input id="holdingNote" name="note" maxlength="200" placeholder="選填，最多 200 字"></label>
+                <button type="submit">儲存庫存</button>
+                <p class="pf-form-status" id="holdingStatus" role="status"></p>
+              </form>
+            </div>
+          </div>
+        </div>
+        <p class="pf-form-status pf-list-status" id="listStatus" role="status"></p>
         <ol class="hv-rows" id="holdingRows" aria-live="polite"></ol>
-      </section>
-
-      <section class="pf-section" aria-labelledby="watchlistTitle">
-        <div class="pf-section-head">
-          <div><h2 id="watchlistTitle">自選股</h2><p>本人標記的短期、長期會同步出現在首頁搜尋建議。</p></div>
-          <span id="watchlistCount">0 檔</span>
-        </div>
-        <form class="pf-form pf-watch-form" id="watchlistForm">
-          <label>股票代號<input id="watchCode" name="code" inputmode="text" autocomplete="off" maxlength="6" placeholder="例如 2330" required></label>
-          <label>分類<select id="watchHorizon" name="horizon"><option value="none">未分類</option><option value="short">短期</option><option value="long">長期</option></select></label>
-          <button type="submit">加入或更新</button>
-        </form>
-        <p class="pf-form-status" id="watchlistStatus" role="status"></p>
-        <div class="pf-list" id="watchlistRows" aria-live="polite"></div>
-      </section>
-
-      <section class="pf-section" aria-labelledby="holdingsTitle">
-        <div class="pf-section-head">
-          <div><h2 id="holdingsTitle">新增或更新庫存</h2><p>輸入整體股數與平均成本；同一代號再次儲存會更新原資料。每一檔的明細在上面的庫存總覽，點那一檔展開。</p></div>
-          <span id="holdingsCount">0 檔</span>
-        </div>
-        <form class="pf-form pf-holding-form" id="holdingForm">
-          <label>股票代號<input id="holdingCode" name="code" inputmode="text" autocomplete="off" maxlength="6" placeholder="例如 2330" required></label>
-          <label>股數<input id="holdingShares" name="shares" type="number" inputmode="numeric" min="1" max="1000000000" step="1" required></label>
-          <label>平均成本<input id="holdingCost" name="average_cost" type="number" inputmode="decimal" min="0.01" max="10000000" step="0.01" required></label>
-          <label class="pf-note-field">備註<input id="holdingNote" name="note" maxlength="200" placeholder="選填，最多 200 字"></label>
-          <button type="submit">儲存庫存</button>
-        </form>
-        <p class="pf-form-status" id="holdingStatus" role="status"></p>
       </section>
     </main>
   </div>
-  <script src="holdings-rows.js?v=20261115-desk35" defer></script>
-  <script src="portfolio.js?v=20261115-desk35" defer></script>
+  <script src="holdings-rows.js?v=20261116-desk36" defer></script>
+  <script src="portfolio-list.js?v=20261116-desk36" defer></script>
+  <script src="portfolio.js?v=20261116-desk36" defer></script>
+  <script src="chart-menus.js?v=20261116-desk36" defer></script>
 </body>
 </html>

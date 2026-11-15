@@ -145,11 +145,15 @@ TREND_STATE = """() => { const section = document.getElementById('marketTrend');
 
 
 # 庫存總覽（本人 11-15 定案的 ③）現在畫了什麼：總數那一行、每一檔的順序與高低、橫條的兩段、哪一檔開著
-HOLDING_ROWS = """() => ({ total: document.querySelector('.hv-total').innerText.replace(/\\s+/g, ' ').trim(), count: document.getElementById('holdingCount').textContent,
-  rows: [...document.querySelectorAll('#holdingRows .hv-row')].map(row => ({ code: row.dataset.code, state: row.dataset.state,
-    name: row.querySelector('.hv-name strong').textContent, ret: row.querySelector('.hv-ret').textContent,
+HOLDING_ROWS = """() => ({ total: document.querySelector('.hv-total').innerText.replace(/\\s+/g, ' ').trim(),
+  counts: [...document.querySelectorAll('#listFilter button small')].map(node => node.textContent),
+  filter: (document.querySelector('#listFilter button[aria-pressed="true"]') || {}).dataset?.filter,
+  rows: [...document.querySelectorAll('#holdingRows .hv-row')].map(row => ({ code: row.dataset.code, kinds: row.dataset.kinds, state: row.dataset.state, hidden: row.hidden,
+    name: row.querySelector('.hv-name strong').textContent, under: row.querySelector('.hv-name > span').textContent,
+    ret: (row.querySelector('.hv-ret') || {}).textContent || null, tag: (row.querySelector('.pf-tag') || {}).textContent || null,
     bars: [...row.querySelectorAll('.hv-bar i')].map(bar => [bar.className, Math.round(bar.getBoundingClientRect().width)]),
     open: row.classList.contains('is-open'), reachable: !row.querySelector('.hv-panel').inert,
+    horizon: (row.querySelector('.pf-horizon [aria-pressed="true"]') || {}).textContent || null,
     facts: [...row.querySelectorAll('.hv-facts li')].map(fact => fact.innerText.replace(/\\s+/g, ' ').trim()) })) })"""
 
 
@@ -1450,66 +1454,128 @@ def portfolio(page: Page, base: str, tag: str) -> None:
     page.goto(base + "/portfolio.html", wait_until="domcontentloaded")
     shoot.ready_portfolio(page)
     check(f"{tag}：沒有橫向捲動", no_overflow(page))
-    check(f"{tag}：庫存總覽有市值", page.locator("#totalMarketValue").inner_text().strip() not in ("", "—"))
+    check(f"{tag}：上面那一行有市值", page.locator("#totalMarketValue").inner_text().strip() not in ("", "—"))
+    mobile = page.viewport_size["width"] < 700
+    shown = lambda: [row["code"] for row in page.evaluate(HOLDING_ROWS)["rows"] if not row["hidden"]]
+    row_of = lambda code: page.locator(f"#holdingRows .hv-row[data-code='{code}']")
 
-    def watchlist() -> None:
-        before = page.locator("#watchlistRows").get_by_role("button", name="刪除").count()
-        page.locator("#watchCode").fill("2327")
-        page.locator("#watchHorizon").select_option("short")
-        page.locator("#watchlistForm button[type=submit]").click()
-        page.get_by_text("2327 國巨").first.wait_for()
-        check(f"{tag}：加入自選", page.locator("#watchlistRows").get_by_role("button", name="刪除").count() == before + 1)
-        page.get_by_role("button", name="從自選股刪除 2327").click()
-        page.wait_for_function("n => document.querySelectorAll('#watchlistRows button').length === n", arg=before)
-        check(f"{tag}：刪除自選", True)
-    step(f"{tag}：自選股", watchlist)
-
-    def holdings() -> None:
-        """庫存總覽一列一檔（本人 11-15 定案的 ③）：每一檔的明細與刪除在點開的那一列裡，下面只留新增或更新的表單。"""
-        mobile = page.viewport_size["width"] < 700
+    def one_list() -> None:
+        """自選與庫存併成一份清單（本人 11-16：頁面太長、要整合；看樣品後選「併成一份清單」）。"""
         state = page.evaluate(HOLDING_ROWS)
         rows = state["rows"]
-        check(f"{tag}：庫存總覽的總數一行", state["total"] == "$3,018,350 成本 $1,585,200 賺 +$1,433,150（+90.41%）" and state["count"] == "3 檔庫存", state["total"])
-        check(f"{tag}：庫存一列一檔，照市值由大到小，賺的浮起", [(row["code"], row["name"], row["state"], row["ret"]) for row in rows]
-              == [("2330", "台積電", "bull", "+128.06%"), ("2603", "長榮", "bull", "+14.19%"), ("0050", "元大台灣50", "bull", "+66.87%")], rows)
-        widths = [sum(width for _, width in row["bars"]) for row in rows]
-        check(f"{tag}：橫條兩段（成本＋賺的），占比最大的那一檔最長", all([kind for kind, _ in row["bars"]] == ["base", "gain"] for row in rows)
-              and widths[0] > widths[1] > widths[2] and all(width >= 2 for row in rows for _, width in row["bars"]), [row["bars"] for row in rows])
-        check(f"{tag}：一開始每一檔都收著，收著的連結與刪除鍵鍵盤走不到；下面沒有舊的長清單",
-              all(not row["open"] and not row["reachable"] for row in rows) and page.locator(".pf-holding-row").count() == 0, rows)
-        tops = page.locator("#holdingRows .hv-top")
-        tops.nth(0).click()
+        check(f"{tag}：總數一行；三顆鍵寫著全部 4、庫存 3、自選 3，一開始選全部",
+              state["total"] == "$3,018,350 成本 $1,585,200 賺 +$1,433,150（+90.41%）" and state["counts"] == ["4", "3", "3"] and state["filter"] == "all", state)
+        check(f"{tag}：一檔只出現一次：庫存照市值由大到小排前面，只在自選的排後面", [(row["code"], row["name"], row["kinds"]) for row in rows]
+              == [("2330", "台積電", "holding watch"), ("2603", "長榮", "holding watch"), ("0050", "元大台灣50", "holding"), ("6669", "緯穎", "watch")], rows)
+        check(f"{tag}：兩邊都有的那幾檔名稱下面寫自選的分類；只有庫存的不寫", [row["under"] for row in rows[:3]] == ["2330自選・長期", "2603自選・短期", "0050"], [row["under"] for row in rows])
+        held = rows[:3]
+        check(f"{tag}：有庫存的列是橫條與報酬率，賺的浮起", [(row["state"], row["ret"]) for row in held] == [("bull", "+128.06%"), ("bull", "+14.19%"), ("bull", "+66.87%")], held)
+        widths = [sum(width for _, width in row["bars"]) for row in held]
+        check(f"{tag}：橫條兩段（成本＋賺的），占比最大的那一檔最長", all([kind for kind, _ in row["bars"]] == ["base", "gain"] for row in held)
+              and widths[0] > widths[1] > widths[2] and all(width >= 2 for row in held for _, width in row["bars"]), [row["bars"] for row in held])
+        check(f"{tag}：只在自選的那一列沒有橫條，右邊寫分類", (rows[3]["state"], rows[3]["bars"], rows[3]["ret"], rows[3]["tag"]) == ("none", [], None, "未分類"), rows[3])
+        check(f"{tag}：一開始每一檔都收著，收著的連結、設定與刪除鍵鍵盤走不到", all(not row["open"] and not row["reachable"] for row in rows), rows)
+        check(f"{tag}：新增的表單收著；沒有舊的兩個段落與自選的長清單",
+              not page.locator("#watchCode").is_visible() and not page.locator("#holdingCode").is_visible()
+              and page.locator(".pf-section, .pf-watch-row, #watchlistRows").count() == 0)
+        bottom = page.evaluate("(document.querySelector('.pf-summary').getBoundingClientRect().bottom + scrollY) / innerHeight")
+        check(f"{tag}：一進去內容不到一個畫面（原本手機 2.4 個、電腦 1.6 個）", bottom < 1, bottom)
+    step(f"{tag}：自選與庫存一份清單", one_list)
+
+    def filters() -> None:
+        keys = page.locator("#listFilter button")
+        keys.nth(2).click()
+        check(f"{tag}：按「自選」只剩在自選的那幾檔", shown() == ["2330", "2603", "6669"] and keys.nth(2).get_attribute("aria-pressed") == "true", shown())
+        keys.nth(1).click()
+        check(f"{tag}：按「庫存」只剩有庫存的那幾檔", shown() == ["2330", "2603", "0050"], shown())
+        # 三顆鍵照全站的規則：按住左右滑，選中的框跟著手指走，放開時靠近哪一顆就選哪一顆
+        hold = Hold(page, mobile)
+        hold.down(*centre(keys.nth(1)))
+        hold.move(*centre(keys.nth(0)))
+        thumb = page.evaluate(THUMB_X, "#listFilter")
+        hold.up()
+        page.wait_for_function("document.querySelector('#listFilter button').getAttribute('aria-pressed') === 'true'")
+        check(f"{tag}：篩選鍵按住左右滑，框跟著手指走，放開回到全部", thumb is not None and abs(thumb - centre(keys.nth(0))[0]) <= 3 and shown() == ["2330", "2603", "0050", "6669"], [thumb, shown()])
+        page.wait_for_timeout(300)
+    step(f"{tag}：三顆篩選鍵", filters)
+
+    def opened() -> None:
+        row_of("2330").locator(".hv-top").click()
         page.wait_for_function("document.querySelector('#holdingRows .hv-row').classList.contains('is-open')")
         first = page.evaluate(HOLDING_ROWS)["rows"][0]
         check(f"{tag}：點台積電看金額與明細", first["reachable"] and first["facts"]
               == ["市值 $2,235,000", "成本 $980,000", "賺 +$1,255,000", "占庫存 74.0%", "最新收盤 2,235", "股數・均價 1,000 股 · 980"], first["facts"])
-        opened = page.locator("#holdingRows .hv-row.is-open")
-        check(f"{tag}：點開的那一檔有備註、開個股頁的連結與刪除鍵", "備註：核心部位" in opened.inner_text()
-              and opened.locator("a[href='stock.html?code=2330']").is_visible() and opened.get_by_role("button", name="刪除庫存 2330").is_visible(), opened.inner_text())
-        tops.nth(2).click()
-        page.wait_for_function("document.querySelectorAll('#holdingRows .hv-row')[2].classList.contains('is-open')")
-        check(f"{tag}：一次只開一檔", [row["open"] for row in page.evaluate(HOLDING_ROWS)["rows"]] == [False, False, True])
+        row = row_of("2330")
+        check(f"{tag}：點開的那一檔有備註、自選分類（選著長期）、開個股頁的連結、刪除庫存與移出自選", "備註：核心部位" in row.inner_text() and first["horizon"] == "長期"
+              and row.locator("a[href='stock.html?code=2330']").is_visible() and row.get_by_role("button", name="刪除庫存 2330").is_visible()
+              and row.get_by_role("button", name="從自選股刪除 2330").is_visible(), row.inner_text())
+        row_of("6669").locator(".hv-top").click()
+        page.wait_for_function("document.querySelector(\"#holdingRows .hv-row[data-code='6669']\").classList.contains('is-open')")
+        rows = page.evaluate(HOLDING_ROWS)["rows"]
+        check(f"{tag}：一次只開一檔", [row["open"] for row in rows] == [False, False, False, True])
+        only = row_of("6669")
+        check(f"{tag}：只在自選的那一檔點開是分類與移出自選，沒有庫存的數字與刪除庫存", rows[3]["facts"] == [] and rows[3]["horizon"] == "未分類"
+              and only.get_by_role("button", name="從自選股刪除 6669").is_visible() and only.get_by_role("button", name="刪除庫存").count() == 0, only.inner_text())
+        only.locator(".pf-horizon .cell").nth(1).click()
+        page.wait_for_function("document.querySelector(\"#holdingRows .hv-row[data-code='6669'] .pf-tag\").textContent === '短期'")
+        after = page.evaluate(HOLDING_ROWS)["rows"][3]
+        check(f"{tag}：按「短期」就存起來：那一列右邊的字跟著變、開著的照樣開著、上面寫已更新",
+              after["open"] and after["horizon"] == "短期" and "6669 分類已更新" in page.locator("#listStatus").inner_text(), [after, page.locator("#listStatus").inner_text()])
+        row_of("6669").locator(".pf-horizon .cell").nth(0).click()
+        page.wait_for_function("document.querySelector(\"#holdingRows .hv-row[data-code='6669'] .pf-tag\").textContent === '未分類'")
+    step(f"{tag}：點開一檔與改自選分類", opened)
 
+    def add_watch() -> None:
+        add = page.locator("#addToggle")
+        add.click()
+        check(f"{tag}：按「＋」才看到新增的表單，預設是加入自選", page.locator("#watchCode").is_visible() and not page.locator("#holdingCode").is_visible()
+              and page.locator("#addKind [data-kind='watch']").get_attribute("aria-pressed") == "true" and add.get_attribute("aria-expanded") == "true")
+        page.locator("#watchCode").fill("2327")
+        page.locator("#watchHorizon").select_option("short")
+        page.locator("#watchlistForm button[type=submit]").click()
+        row_of("2327").wait_for()
+        state = page.evaluate(HOLDING_ROWS)
+        added = next(row for row in state["rows"] if row["code"] == "2327")
+        check(f"{tag}：加入自選：清單多一列（國巨、短期），表單收回去，上面寫已加入，鍵上的數字跟著變",
+              added["name"].startswith("國巨") and (added["kinds"], added["tag"]) == ("watch", "短期") and add.get_attribute("aria-expanded") == "false"
+              and "2327 已加入自選股" in page.locator("#listStatus").inner_text() and state["counts"] == ["5", "3", "4"], [added, state["counts"]])
+        page.wait_for_timeout(400)
+        check(f"{tag}：表單收回去之後看不到、鍵盤也走不到", not page.locator("#watchCode").is_visible() and page.evaluate("document.getElementById('addClip').inert"))
+        row_of("2327").locator(".hv-top").click()
+        page.get_by_role("button", name="從自選股刪除 2327").click()
+        page.wait_for_function("!document.querySelector(\"#holdingRows .hv-row[data-code='2327']\")")
+        check(f"{tag}：移出自選：那一列不見了，數字還原", page.evaluate(HOLDING_ROWS)["counts"] == ["4", "3", "3"] and "2327 已從自選股刪除" in page.locator("#listStatus").inner_text())
+    step(f"{tag}：加入與移出自選", add_watch)
+
+    def add_holding() -> None:
+        row_of("0050").locator(".hv-top").click()
         before_value = page.locator("#totalMarketValue").inner_text()
+        page.locator("#addToggle").click()
+        page.locator("#addKind [data-kind='holding']").click()
+        check(f"{tag}：按「＋」選新增庫存，換成庫存的四個欄位", page.locator("#holdingCode").is_visible() and not page.locator("#watchCode").is_visible())
         page.locator("#holdingCode").fill("6669")
         page.locator("#holdingShares").fill("100")
         page.locator("#holdingCost").fill("3000")
         page.locator("#holdingNote").fill("旅程檢查")
         page.locator("#holdingForm button[type=submit]").click()
-        page.locator("#holdingRows .hv-row[data-code='6669']").wait_for()
+        page.wait_for_function("document.querySelector(\"#holdingRows .hv-row[data-code='6669']\").dataset.kinds === 'holding watch'")
         state = page.evaluate(HOLDING_ROWS)
-        check(f"{tag}：新增庫存後總覽更新", page.locator("#totalMarketValue").inner_text() != before_value and state["count"] == "4 檔庫存", state["total"])
+        added = next(row for row in state["rows"] if row["code"] == "6669")
+        check(f"{tag}：新增庫存：原本只在自選的緯穎變成有橫條的一列（仍然只有一列），總數更新，鍵上庫存變 4、全部還是 4",
+              added["ret"] is not None and added["under"] == "6669自選・未分類" and len([row for row in state["rows"] if row["code"] == "6669"]) == 1
+              and page.locator("#totalMarketValue").inner_text() != before_value and state["counts"] == ["4", "4", "3"], [added, state["counts"]])
         check(f"{tag}：新增之後開著的那一檔照樣開著，沒有重播進場", [row["code"] for row in state["rows"] if row["open"]] == ["0050"]
               and not page.evaluate("document.getElementById('holdingRows').classList.contains('is-entering')"), [row["code"] for row in state["rows"] if row["open"]])
-        added = page.locator("#holdingRows .hv-row[data-code='6669']")
-        added.locator(".hv-top").click()
+        row_of("6669").locator(".hv-top").click()
         page.wait_for_function("document.querySelector(\"#holdingRows .hv-row[data-code='6669']\").classList.contains('is-open')")
-        check(f"{tag}：新增的那一檔點開有備註", "備註：旅程檢查" in added.inner_text(), added.inner_text())
+        check(f"{tag}：新增的那一檔點開有備註", "備註：旅程檢查" in row_of("6669").inner_text(), row_of("6669").inner_text())
         page.get_by_role("button", name="刪除庫存 6669").click()
         page.wait_for_function("value => document.getElementById('totalMarketValue').textContent === value", arg=before_value)
-        check(f"{tag}：刪除庫存後總覽還原", page.evaluate(HOLDING_ROWS)["count"] == "3 檔庫存" and page.locator("#holdingRows .hv-row").count() == 3)
-        check(f"{tag}：庫存總覽沒有造成橫向捲動", no_overflow(page))
-    step(f"{tag}：庫存總覽與新增刪除", holdings)
+        state = page.evaluate(HOLDING_ROWS)
+        back = next(row for row in state["rows"] if row["code"] == "6669")
+        check(f"{tag}：刪除庫存：緯穎變回只在自選的一列，總數與數字還原", (back["kinds"], back["ret"], back["tag"]) == ("watch", None, "未分類") and state["counts"] == ["4", "3", "3"], [back, state["counts"]])
+        check(f"{tag}：自選與庫存頁沒有造成橫向捲動", no_overflow(page))
+    step(f"{tag}：新增與刪除庫存", add_holding)
 
     def theme() -> None:
         page.locator("#portfolioTheme").click()
