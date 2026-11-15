@@ -1,5 +1,5 @@
 """拍專業圖表樣品（用網站自己的樣式做的真畫面）：手機寬度深色與淺色（收合、展開一期並點一格）、桌機寬度、
-以及「進場 → 點開一期」的動圖。
+以及「進場 → 點開一期 → 收起來」的動圖。
 用法（在工作目錄根目錄）：python design-previews/3d-redesign/pro-samples/shoot-sample.py <樣品 html 的檔名> <輸出資料夾>"""
 import shutil
 import subprocess
@@ -20,7 +20,12 @@ FREEZE = """ms => document.getAnimations().forEach(a => {
   if (window.__done && window.__done.has(a)) return;
   a.pause(); a.currentTime = ms;
 })"""
-MARK_DONE = "() => { document.getAnimations().forEach(a => a.finish()); window.__done = new Set(document.getAnimations()); }"
+# 把跑得完的動畫都跑完並記下來；一直重複的（反光）跑不完，留著繼續跟時間走
+MARK_DONE = """() => {
+  document.getAnimations().forEach(a => { try { a.finish(); } catch (e) {} });
+  window.__done = new Set(document.getAnimations().filter(a => a.playState === 'finished'));
+}"""
+STEP = 60  # 動圖一格是幾毫秒
 OVERFLOW = "document.documentElement.scrollWidth > document.documentElement.clientWidth"
 
 with sync_playwright() as p:
@@ -41,10 +46,9 @@ with sync_playwright() as p:
         page.locator("#sample").screenshot(path=str(out / f"{name}-{label}.png"))
         print(label, "收合高度", page.locator("#sample").bounding_box()["height"], "橫向捲動", page.evaluate(OVERFLOW))
         row = page.locator(".trend-row").nth(OPEN_ROW)
-        if width < 720:
-            row.locator(".trend-top").click()
-            page.wait_for_timeout(600)
-        row.locator(".key").nth(OPEN_KEY).click()
+        row.locator(".trend-top").click()
+        page.wait_for_timeout(600)
+        row.locator(".cell").nth(OPEN_KEY).click()
         page.wait_for_timeout(200)
         page.locator("#sample").screenshot(path=str(out / f"{name}-{label}-open.png"))
         print(label, "展開高度", page.locator("#sample").bounding_box()["height"], "橫向捲動", page.evaluate(OVERFLOW),
@@ -52,13 +56,13 @@ with sync_playwright() as p:
         print(label, "errors", errors)
         ctx.close()
 
-    # 動圖：進場（0–1.5 秒）→ 停一下 → 點開中期（0–0.9 秒）→ 停住
+    # 動圖：進場（含第一道反光）→ 停一下 → 點開中期 → 停住 → 收起來 → 停住
     ctx, page, errors = page_for(390, 760, "dark", "no-preference")
     frames = out / f"{name}-frames"
     frames.mkdir(exist_ok=True)
     for old in frames.glob("f*.png"):
         old.unlink()
-    clip = {"x": 0, "y": 0, "width": 390, "height": 430}
+    clip = {"x": 0, "y": 0, "width": 390, "height": 420}
     count = 0
 
     def shot(repeat=1):
@@ -70,28 +74,37 @@ with sync_playwright() as p:
             shutil.copyfile(first, frames / f"f{count:03d}.png")
             count += 1
 
-    for index in range(31):
-        page.evaluate(FREEZE, index * 50)
-        shot()
+    def play(ms):
+        for index in range(ms // STEP + 1):
+            page.evaluate(FREEZE, index * STEP)
+            shot()
+
+    top = page.locator(".trend-row").nth(OPEN_ROW).locator(".trend-top")
+    play(4200)
     print("進場的動畫數", page.evaluate("document.getAnimations().length"))
     page.evaluate(MARK_DONE)
-    shot(repeat=14)
-    page.locator(".trend-row").nth(OPEN_ROW).locator(".trend-top").click()
+    shot(repeat=8)
+    top.click()
     page.evaluate(FREEZE, 0)
     print("展開的動畫數", page.evaluate("document.getAnimations().filter(a => !window.__done.has(a)).length"))
-    for index in range(20):
-        page.evaluate(FREEZE, index * 50)
-        shot()
-    page.evaluate("() => document.getAnimations().forEach(a => a.finish())")
-    shot(repeat=30)
-    print("errors", errors)
+    play(1080)
+    page.evaluate(MARK_DONE)
+    shot(repeat=22)
+    top.click()
+    page.evaluate(FREEZE, 0)
+    print("收合的動畫數", page.evaluate("document.getAnimations().filter(a => !window.__done.has(a)).length"))
+    play(600)
+    page.evaluate(MARK_DONE)
+    page.wait_for_timeout(200)
+    shot(repeat=20)
+    print("收合後還開著的列數", page.locator(".trend-row.is-open").count(), "errors", errors)
     ctx.close()
     browser.close()
 
 if shutil.which("ffmpeg"):
     first = Image.open(frames / "f000.png")
     width = first.width - first.width % 2
-    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-framerate", "20", "-i", str(frames / "f%03d.png"), "-vf",
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-framerate", f"{1000 / STEP:.3f}", "-i", str(frames / "f%03d.png"), "-vf",
                     f"scale={width}:-2,split[a][b];[a]palettegen=max_colors=128[p];[b][p]paletteuse=dither=bayer:bayer_scale=4",
                     "-loop", "0", str(out / f"{name}-motion.gif")], check=True)
     print(f"{name}-motion.gif", (out / f"{name}-motion.gif").stat().st_size // 1024, "KB", count, "格")
