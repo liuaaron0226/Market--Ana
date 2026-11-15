@@ -198,6 +198,12 @@
     return !historical && result?.stock_state !== 'stale' && result?.analysis_status !== 'stale';
   }
 
+  // K 線的高度：照寬度算，最矮 300、最高 460。電腦上再多一個上限——視窗高度扣掉 K 線以外要擠進第一個畫面的東西
+  // （頂列、報價、圖上的工具列、指標區、三顆分類鍵，量起來約 570px），三顆分類鍵才不用捲就看得到（本人 2026-11-15「改矮一點」）。
+  // 視窗夠高時照舊是 460；手機本來就是 300，不受影響。
+  const CHART_REST_PX = 570;
+  const chartHeight = width => Math.max(300, Math.min(460, width * 0.52, innerHeight - CHART_REST_PX));
+
   function updateUrl(code) {
     const url = new URL(location.href);
     url.searchParams.set('code', code);
@@ -405,7 +411,7 @@
     const shownBefore = chart ? chart.candles : [];
     // 歷史接上後，日 K 比伺服器預算的 MACD 多出很多根：改由圖表用完整序列自己算。
     const extended = !intraday && daily.length > r.bars.length;
-    if (!chart) chart = new window.KChart($('chartHost'), { macd: false, studyHost: $('chartStudies'), studies: ['volume', 'macd', 'kd', 'rsi', 'foreign', 'trust', 'dealer'], maPeriods, selectionRoots: [$('chartHost').parentElement], volumeKind: 'volume', overlayLabels: 'tags', height: w => Math.max(300, Math.min(460, w * 0.52)),
+    if (!chart) chart = new window.KChart($('chartHost'), { macd: false, studyHost: $('chartStudies'), studies: ['volume', 'macd', 'kd', 'rsi', 'foreign', 'trust', 'dealer'], maPeriods, selectionRoots: [$('chartHost').parentElement], volumeKind: 'volume', overlayLabels: 'tags', height: chartHeight,
       drawings: { onChange: saveDrawingChange, onTool: showActiveTool, onSelect: showDrawingSelection } });
     // 畫線只在日、週、月 K：秒 K、分 K 連工具列一起收起。
     $('drawTools').hidden = intraday;

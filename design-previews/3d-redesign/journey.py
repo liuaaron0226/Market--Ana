@@ -1193,6 +1193,14 @@ def stock(page: Page, base: str, tag: str, mobile: bool) -> None:
         check(f"{tag}：一進去看不到價位階梯、籌碼名單、大戶持股、和 0050 對照", seen["shown"] == [], seen["shown"])
         check(f"{tag}：一進去整頁不到兩個畫面（原本手機 4.2 個、電腦 3.1 個）", seen["screens"] < 1.7, seen["screens"])
         check(f"{tag}：K 線占滿整個寬度（價位階梯不在右邊了）", seen["chart"] > 0.97, seen["chart"])
+        if not mobile:
+            # 電腦上 K 線改矮（本人 11-15「改矮一點」）：正式站的狀態（個股操作策略關著）下，三顆鍵不用捲就看得到
+            fits = page.evaluate("""async () => { const strategy = document.getElementById('strategy'), was = strategy.hidden, settle = () => new Promise(done => setTimeout(done, 300));
+              strategy.hidden = true; window.dispatchEvent(new Event('resize')); await settle();
+              const bottom = document.getElementById('stockCats').getBoundingClientRect().bottom + scrollY, chart = document.querySelector('#chartHost canvas').getBoundingClientRect().height;
+              strategy.hidden = was; window.dispatchEvent(new Event('resize')); await settle();
+              return [bottom, innerHeight, chart]; }""")
+            check(f"{tag}：電腦上一進去三顆分類鍵就在第一個畫面裡，K 線沒有矮過 300", fits[0] <= fits[1] and fits[2] >= 300, fits)
         keys = page.locator("#stockCats button")
         keys.first.scroll_into_view_if_needed()
         opened = []
