@@ -52,6 +52,8 @@ with sync_playwright() as p:
         page.on("pageerror", lambda error: errors.append(str(error)))
         # 個股頁會一直向站台問即時報價，等「網路都安靜了」有時等不到；改成等這一塊畫出來、版面排好
         page.goto(f"{BASE}/stock.html?code={STOCK}", wait_until="load")
+        # 大戶持股收在「籌碼」那一類裡（本人 11-15）：先把那一類展開
+        page.locator("#stockCats button[aria-controls='chipsPanel']").click()
         page.wait_for_selector("#bigHolders .hold-card")
         page.wait_for_timeout(800)
         return ctx, page, errors

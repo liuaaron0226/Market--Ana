@@ -1162,19 +1162,75 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
     step(f"{tag}：搜尋到個股", search)
 
 
+def open_stock_cat(page: Page, panel: str) -> None:
+    """個股頁的分類鍵：把某一類展開（已經開著就不動）。"""
+    key = page.locator(f"#stockCats button[aria-controls='{panel}']")
+    key.scroll_into_view_if_needed()
+    if key.get_attribute("aria-expanded") != "true":
+        key.click()
+    page.wait_for_function("id => document.getElementById(id).hasAttribute('data-open')", arg=panel)
+
+
 def stock(page: Page, base: str, tag: str, mobile: bool) -> None:
     page.goto(base + f"/stock.html?code={shoot.STOCK}", wait_until="domcontentloaded")
     shoot.ready_stock(page)
     check(f"{tag}：沒有橫向捲動", no_overflow(page))
     check(f"{tag}：報價有收盤價", page.locator("#close").inner_text().strip() not in ("", "—"))
     check(f"{tag}：操作策略有結論", page.locator("#strategy").is_visible() and page.locator("#strategyConclusion").inner_text().strip() != "—")
-    check(f"{tag}：大戶持股有內容", "千張" in page.locator("#bigHolders").inner_text())
-    ladder = page.locator("#ladder .lad b").all_inner_texts()
-    check(f"{tag}：價位階梯五列都有價位", len(ladder) == 5 and all(text.strip() not in ("", "—") for text in ladder), ladder)
+
+    def folded() -> None:
+        """一進去只看報價與 K 線，其餘收在三顆分類鍵裡（本人 11-15：太長、全部攤開、沒辦法選現在要看什麼；看樣品後答「照這樣做」）。"""
+        seen = page.evaluate("""() => { const shown = id => { const node = document.getElementById(id), box = node.getBoundingClientRect();
+            return getComputedStyle(node).visibility !== 'hidden' && box.height > 0; };
+          const stage = document.querySelector('.bd-stage').getBoundingClientRect(), canvas = document.querySelector('#chartHost canvas').getBoundingClientRect();
+          return { keys: [...document.querySelectorAll('#stockCats button')].map(key => [key.textContent, key.getAttribute('aria-expanded')]),
+            open: document.querySelectorAll('[data-cat-panel][data-open]').length,
+            shown: ['ladder', 'bigHolders', 'candidateReasons', 'compareBlock'].filter(shown),
+            screens: document.documentElement.scrollHeight / innerHeight, chart: canvas.width / stage.width,
+            order: document.querySelector('.bd-stage').compareDocumentPosition(document.getElementById('stockCats')) & Node.DOCUMENT_POSITION_FOLLOWING }; }""")
+        check(f"{tag}：K 線下面一排三顆分類鍵（價位、籌碼、對照 0050），一開始都收著",
+              seen["keys"] == [["價位", "false"], ["籌碼", "false"], ["對照 0050", "false"]] and seen["open"] == 0 and seen["order"], seen)
+        check(f"{tag}：一進去看不到價位階梯、籌碼名單、大戶持股、和 0050 對照", seen["shown"] == [], seen["shown"])
+        check(f"{tag}：一進去整頁不到兩個畫面（原本手機 4.2 個、電腦 3.1 個）", seen["screens"] < 1.7, seen["screens"])
+        check(f"{tag}：K 線占滿整個寬度（價位階梯不在右邊了）", seen["chart"] > 0.97, seen["chart"])
+        keys = page.locator("#stockCats button")
+        keys.first.scroll_into_view_if_needed()
+        opened = []
+        for index, panel in enumerate(("levelsPanel", "chipsPanel", "comparePanel")):
+            keys.nth(index).click()
+            page.wait_for_function("id => document.getElementById(id).hasAttribute('data-open')", arg=panel)
+            opened.append(page.evaluate("[...document.querySelectorAll('[data-cat-panel][data-open]')].map(node => node.id)"))
+        check(f"{tag}：點哪一顆開哪一類，一次只開一類", opened == [["levelsPanel"], ["chipsPanel"], ["comparePanel"]], opened)
+        check(f"{tag}：展開的那一顆是按下的樣子，那一類的內容看得到",
+              keys.nth(2).get_attribute("aria-expanded") == "true" and page.locator("#compareConclusion").is_visible() and not page.locator("#ladder").is_visible())
+        keys.nth(2).click()
+        check(f"{tag}：再點一次收回", page.evaluate("document.querySelectorAll('[data-cat-panel][data-open]').length") == 0 and not page.locator("#compareConclusion").is_visible())
+        # 分類鍵照全站的規則：按住左右滑，選中的框跟著手指走，放開時靠近哪一顆就選哪一顆
+        keys.nth(0).click()
+        hold = Hold(page, mobile)
+        hold.down(*centre(keys.nth(0)))
+        hold.move(*centre(keys.nth(1)))
+        thumb = page.evaluate(THUMB_X, "#stockCats")
+        hold.up()
+        page.wait_for_function("document.getElementById('chipsPanel').hasAttribute('data-open')")
+        check(f"{tag}：分類鍵按住左右滑，框跟著手指走，放開選到那一類",
+              thumb is not None and abs(thumb - centre(keys.nth(1))[0]) <= 3 and page.evaluate("[...document.querySelectorAll('[data-cat-panel][data-open]')].map(node => node.id)") == ["chipsPanel"], thumb)
+        page.wait_for_timeout(300)
+        keys.nth(1).click()
+        check(f"{tag}：分類鍵開合沒有造成橫向捲動", no_overflow(page) and page.evaluate("document.querySelectorAll('[data-cat-panel][data-open]').length") == 0)
+    step(f"{tag}：一進去只看重點，其餘收在分類鍵", folded)
+
+    def levels() -> None:
+        open_stock_cat(page, "levelsPanel")
+        ladder = page.locator("#ladder .lad b").all_inner_texts()
+        check(f"{tag}：點「價位」看得到價位階梯，五列都有價位", page.locator("#ladder").is_visible() and len(ladder) == 5 and all(text.strip() not in ("", "—") for text in ladder), ladder)
+    step(f"{tag}：價位", levels)
 
     def holders() -> None:
         """大戶持股（本人 11-15 定案的 ⑥）：一句結論、這一週的數字、每週增減的小柱；點開看三個級距。
         預覽樣本裡這一檔（2330）只有兩週的資料，所以只有一根小柱；十二根的樣子由 check-holders-page.py 另外驗。"""
+        open_stock_cat(page, "chipsPanel")
+        check(f"{tag}：點「籌碼」看得到大戶持股，沒有「沒有資料」那一句", "千張" in page.locator("#bigHolders").inner_text() and not page.locator(".bd-cat-empty").is_visible())
         host = page.locator("#bigHolders")
         host.scroll_into_view_if_needed()
         state = page.evaluate(HOLDERS_STATE)
@@ -1310,9 +1366,68 @@ def stock(page: Page, base: str, tag: str, mobile: bool) -> None:
     step(f"{tag}：K 線滾輪", wheel_zoom)
 
     def compare() -> None:
-        check(f"{tag}：和 0050 對照表有列", page.locator("#compareTableBody tr").count() >= 3)
-        check(f"{tag}：報酬走勢圖有畫", page.locator("#compareChart svg, #compareChart canvas").count() >= 1)
+        open_stock_cat(page, "comparePanel")
+        check(f"{tag}：點「對照 0050」先看到一句結論與報酬走勢圖",
+              "0050" in page.locator("#compareConclusion").inner_text() and page.locator("#compareChart svg").is_visible())
+        cells = page.locator("#comparePeriods .cell")
+        seen = cells.evaluate_all("cells => cells.map(cell => [cell.querySelector('.cell-name').firstChild.textContent, cell.querySelector('b').textContent, cell.className.replace('cell ', ''), cell.getAttribute('aria-pressed')])")
+        check(f"{tag}：五個期間各一顆鍵：領先 0050 的記號在上、落後的在下，預設選近 1 年",
+              seen == [["近1月", "+2.8%", "bull", "false"], ["近3月", "-0.1%", "bear", "false"], ["近1年", "-3.9%", "bear", "true"],
+                       ["近3年", "+92.3%", "bull", "false"], ["近5年", "+80.2%", "bull", "false"]], seen)
+        facts = lambda: page.locator("#comparePeriods .cmp-facts div").evaluate_all("rows => rows.map(row => [row.querySelector('dt').textContent, row.querySelector('dd').textContent])")
+        check(f"{tag}：下面是近 1 年的四個數字", [title for title, _ in facts()] == ["個股報酬", "0050 報酬", "個股最大回撤", "0050 最大回撤"] and facts()[0][1] == "+55.0%" and facts()[1][1] == "+58.9%", facts())
+        cells.nth(3).click()
+        check(f"{tag}：點近 3 年，數字換成近 3 年的", cells.nth(3).get_attribute("aria-pressed") == "true" and cells.nth(2).get_attribute("aria-pressed") == "false"
+              and facts()[0][1] == "+320.4%" and facts()[1][1] == "+228.1%", facts())
+        # 期間的鍵照全站的規則：按住左右滑
+        hold = Hold(page, mobile)
+        hold.down(*centre(cells.nth(3)))
+        hold.move(*centre(cells.nth(0)))
+        thumb = page.evaluate(THUMB_X, "#comparePeriods .key-strip")
+        hold.up()
+        page.wait_for_function("document.querySelector('#comparePeriods .cell').getAttribute('aria-pressed') === 'true'")
+        page.wait_for_timeout(350)
+        check(f"{tag}：期間的鍵按住左右滑，框跟著手指走，放開選到那個期間、數字跟著換",
+              thumb is not None and abs(thumb - centre(cells.nth(0))[0]) <= 3 and facts()[0][1] == "-12.4%" and page.locator("#comparePeriods .slide-thumb").count() == 0, [thumb, facts()])
+        cells.nth(2).click()
+        box = page.locator(".bd-compare-table-wrap").bounding_box()
+        check(f"{tag}：完整的表還在頁面裡給螢幕閱讀器（五列），畫面上不佔位置", page.locator("#compareTableBody tr").count() == 5 and box["width"] <= 1 and box["height"] <= 1, box)
+        check(f"{tag}：對照 0050 展開後沒有橫向捲動", no_overflow(page))
+        columns = page.evaluate("getComputedStyle(document.querySelector('#comparePeriods .cmp-facts')).gridTemplateColumns.split(' ').length")
+        check(f"{tag}：四個數字手機排兩欄、電腦排四欄；「和 0050 對照」的標題不再顯示（寫在鍵上了）",
+              columns == (2 if mobile else 4) and page.locator("#compareTitle").bounding_box()["width"] <= 1, columns)
+        strip = page.evaluate("""() => { const strip = document.querySelector('#comparePeriods .key-strip'), cell = strip.querySelector('.cell');
+          return [getComputedStyle(strip).justifyContent, cell.getBoundingClientRect().height, strip.getBoundingClientRect().left - cell.getBoundingClientRect().left]; }""")
+        check(f"{tag}：期間的鍵靠左排、每顆至少 64 高（放得下短名與差距兩行）", strip[0] == "flex-start" and strip[1] >= 64 and abs(strip[2]) <= 1, strip)
     step(f"{tag}：和 0050 對照", compare)
+
+    def chips_empty() -> None:
+        """這一檔不在任何籌碼名單、也沒有大戶持股資料時，「籌碼」展開後寫一句，不是一片空白。"""
+        open_stock_cat(page, "chipsPanel")
+        hint = page.locator(".bd-cat-empty")
+        check(f"{tag}：有籌碼資料時不寫「沒有資料」那一句", not hint.is_visible())
+        page.evaluate("() => { document.getElementById('candidateReasons').replaceChildren(); window.HoldersCard.render(document.getElementById('bigHolders'), null); }")
+        check(f"{tag}：兩塊都沒有資料時寫一句說明", hint.is_visible() and "不在籌碼選股名單" in hint.inner_text(), hint.inner_text())
+        page.evaluate("document.getElementById('candidateReasons').dataset.loading = ''")
+        check(f"{tag}：名單還在讀的時候先不寫那一句", not hint.is_visible())
+    step(f"{tag}：籌碼沒有資料", chips_empty)
+
+    def switch_stock() -> None:
+        """在個股頁上查另一檔：開著的那一類收回、期間回到近 1 年（本人 11-15：不管從哪裡進來，一開始都收著）。"""
+        open_stock_cat(page, "comparePanel")
+        page.locator("#comparePeriods .cell").nth(4).click()
+        page.locator("#codeInput").fill("2327")
+        page.locator("#searchForm button[type=submit]").click()
+        page.wait_for_function("document.getElementById('stockCode').textContent.trim() === '2327'")
+        page.wait_for_function("document.getElementById('compareStatus').dataset.state !== 'loading'")
+        check(f"{tag}：換一檔之後三類都收著", page.evaluate("document.querySelectorAll('[data-cat-panel][data-open]').length") == 0
+              and page.locator("#stockCats button[aria-expanded='true']").count() == 0)
+        open_stock_cat(page, "comparePanel")
+        picked = page.locator("#comparePeriods .cell[aria-pressed='true']")
+        check(f"{tag}：換一檔之後期間回到近 1 年，鍵與表都是新的那一檔", picked.count() == 1 and picked.get_attribute("data-period") == "1y"
+              and page.locator("#comparePeriods .cmp-card").get_attribute("data-code") == "2327"
+              and page.locator("#compareTableBody tr").evaluate_all("rows => rows.every(row => row.dataset.code === '2327') && rows.length") == 5)
+    step(f"{tag}：在個股頁上換一檔", switch_stock)
 
     def outside() -> None:
         page.goto(base + f"/stock.html?code={shoot.OUTSIDE}", wait_until="domcontentloaded")

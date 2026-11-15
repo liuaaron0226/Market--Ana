@@ -581,41 +581,12 @@ body.hm .header-tools svg { width: 18px; height: 18px; }
 body.hm .read-card .read-list,
 body.hm .read-card .read-date { display: none; }
 
-/* ---------- 分類鍵：和週期切換同一種槽與鍵，展開的那一類是凸起的鍵 ---------- */
-body.hm .hm-cats {
-  margin-top: 20px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
-  padding: var(--track-pad); gap: var(--track-gap);
-  border-radius: var(--r-track); background: var(--well); box-shadow: var(--well-shadow);
-}
-body.hm .hm-cats button {
-  height: 48px; padding: 0 4px; border: 0; border-radius: var(--r-key);
-  background: transparent; color: var(--dim); font: 500 15px var(--sans);
-  transition: color 200ms var(--ease-out);
-}
-@media (hover: hover) {
-  body.hm .hm-cats button:hover { color: var(--ink); }
-}
-body.hm .hm-cats button[aria-expanded="true"] {
-  background: var(--key); color: var(--ink); font-weight: 700; box-shadow: var(--key-shadow);
-}
-
 /* 四類的大標題（「籌碼與資金」「選股看板」）改由分類鍵承擔，在 minimal.html 標成只給螢幕閱讀器。 */
 body.hm .chips { padding-top: 20px; }
 body.hm .hm-explore { padding-top: 0; }
 body.hm .market-screens .screen-block,
 body.hm .market-screens .screen-block:first-child { margin-top: 20px; }
-/* 收起來的一類（沒有 data-open）：不佔版面、看不到、Tab 走不到，但保留原本的寬度。
-   不用 display: none，是因為裡面的圖是照容器寬度畫的，量到 0 會畫錯。
-   這條要排在上面的間距之後，收起來時的 margin 才會歸零。 */
-body.hm .workspace { position: relative; }
-body.hm .workspace [data-cat-panel]:not([data-open]) {
-  position: absolute; top: 0; left: 0; right: 0; height: 0; margin: 0; padding-block: 0;
-  overflow: hidden; visibility: hidden; box-shadow: none;
-}
-body.hm .workspace [data-cat-panel][data-open] { animation: cat-rise 380ms var(--ease-depth); }
-@keyframes cat-rise {
-  from { opacity: 0; transform: translateY(12px); }
-}
+/* 收起來的一類怎麼藏、展開時怎麼浮出來：在 bold.css「分類鍵」那一段，和個股頁共用。 */
 
 /* ---------- 浮起的面板（原生 dialog）：第 2 層的浮板，搜尋與產業資金流向的排行表格共用 ----------
    出現在畫面上方（手機鍵盤彈出時內容不會被擋）。開關在 home-fold.js。 */
@@ -650,8 +621,6 @@ body.hm dialog.hm-search :is(.stock-search-suggestions, .stock-search-status, .s
   body.hm .brand-line { grid-area: brand; align-self: center; min-width: 0; }
   body.hm .brand-line h1 { font-size: 18px; white-space: nowrap; }
   body.hm .price-summary { grid-area: price; }
-  body.hm .hm-cats { margin-top: 12px; }
-  body.hm .hm-cats button { height: 44px; padding: 0 2px; font-size: 13px; }
   body.hm .chips { padding-top: 12px; }
   body.hm .market-screens .screen-block[data-open] { margin-top: 12px; }
   body.hm dialog.float-dialog { max-height: calc(100dvh - 28px); margin-top: 12px; padding: 16px; }
@@ -661,7 +630,6 @@ body.hm dialog.hm-search :is(.stock-search-suggestions, .stock-search-status, .s
 @media (max-width: 359px) {
   body.hm .market-mark { display: none; }
   body.hm .brand-line h1 { font-size: 16px; }
-  body.hm .hm-cats button { font-size: 12px; line-height: 1.25; text-wrap: balance; }
 }
 
 /* ================= 產業資金流向：入口與面板（立體重設計 B 包） =================
@@ -909,23 +877,7 @@ body.hm .chip-table th small { margin-left: 3px; font-size: 10px; }
 body.hm .chip-table td.streak { color: var(--dim); white-space: nowrap; }
 body.hm .chip-table td .stock-link { white-space: nowrap; }
 
-/* ================= 看盤桌：成排的鍵，選中的框跟著手指走（立體重設計 A 包第 14 片，2026-11-15） =================
-   分類鍵與明細板的買超／賣超：按住左右拖，選中的那個框（.slide-thumb，程式在 chart-menus.js）跟著手指移動，
-   放開時靠近哪一顆就選哪一顆。上下拖仍然捲動頁面。 */
-body.hm :is(.hm-cats, .chip-seg) { position: relative; }
-body.hm :is(.hm-cats, .chip-seg) button { position: relative; z-index: 1; touch-action: pan-y; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
-body.hm :is(.hm-cats, .chip-seg) .slide-thumb {
-  position: absolute; z-index: 0; left: 0; top: 0; pointer-events: none;
-  border-radius: var(--r-key); background: var(--key); box-shadow: var(--key-shadow);
-}
-body.hm :is(.hm-cats, .chip-seg) .slide-thumb.is-settling { transition: transform 200ms var(--ease-depth), width 200ms var(--ease-depth); }
-/* 拖的時候凸起的樣子由框來畫：原本選中的那一顆先攤平，字的深淺跟著框走。
-   用 !important 是因為明細板的選中樣式寫在比較晚載入的 panel.css（還帶 :hover），不這樣蓋不過。 */
-body.hm :is(.hm-cats, .chip-seg).is-sliding button { background: transparent !important; box-shadow: none !important; color: var(--dim) !important; }
-body.hm :is(.hm-cats, .chip-seg).is-sliding button.is-slide-hot { color: var(--ink) !important; }
-@media (prefers-reduced-motion: reduce) {
-  body.hm :is(.hm-cats, .chip-seg) .slide-thumb.is-settling { transition: none; }
-}
+/* 成排的鍵「選中的框跟著手指走」（.slide-thumb）的樣子：在 bold.css「分類鍵」那一段，和個股頁共用。 */
 
 /* ================= 看盤桌：短中長期走勢（立體重設計，本人 2026-11-15 定案的 ⑤） =================
    一列一期（桌機三期並排）。每一期：結論 → 以中線為界的橫條，一票一根小柱，偏多的在基準線上面、偏空的在線下面

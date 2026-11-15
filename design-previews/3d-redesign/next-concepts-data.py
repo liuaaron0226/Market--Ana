@@ -19,8 +19,8 @@ HOME = """() => ({
 })"""
 STOCK = """() => ({
   title: document.title,
-  ladder: [...document.querySelectorAll('#ladder > li')].map(li => ({ cls: li.className, text: li.innerText.replace(/\\s+/g, ' ').trim() })),
-  holders: (document.getElementById('bigHolders') || {}).innerText,
+  ladder: [...document.querySelectorAll('#ladder > li')].map(li => ({ cls: li.className, text: li.textContent.replace(/\\s+/g, ' ').trim() })),
+  holders: (document.getElementById('bigHolders') || {}).textContent,
 })"""
 PORTFOLIO = """() => ({
   level: { current: document.getElementById('currentLevel').textContent, recommended: document.getElementById('recommendedLevel').textContent,

@@ -60,6 +60,10 @@ def force_otc_unincluded(page: Page) -> None:
 
 
 def assert_single(page: Page, code: str, *, comparable: bool = True) -> dict[str, object]:
+    # 和 0050 對照收在「對照 0050」那一類裡（本人 2026-11-15）：先展開
+    key = page.locator("#stockCats button[aria-controls='comparePanel']")
+    if key.get_attribute("aria-expanded") != "true":
+        key.click()
     assert page.locator("#compareBlock").is_visible()
     conclusion = page.locator("#compareConclusion").inner_text()
     if comparable:

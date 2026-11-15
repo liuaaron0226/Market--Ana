@@ -52,7 +52,8 @@ def verify_page(page, base: str, width: int, shot: Path):
     page.wait_for_timeout(1200)
     assert "2,268" in page.locator("#close").inner_text(), page.locator("#close").inner_text()
     assert page.locator("#liveStatus").inner_text() == "10:18:00 更新"
-    assert page.locator("#ladderCurrentLabel").inner_text() == "現價"
+    # 價位階梯收在「價位」那一類裡（本人 2026-11-15），收著的時候 inner_text 是空的，改讀文字內容
+    assert page.locator("#ladderCurrentLabel").text_content() == "現價"
     page.select_option("#periodSelect", "1m")
     page.locator("#periodSelect").dispatch_event("change")
     page.wait_for_function("document.querySelector('#stockChartContext').textContent.includes('1分K')")

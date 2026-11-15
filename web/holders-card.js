@@ -85,6 +85,8 @@
       state.pending = setTimeout(() => {
         const now = host.querySelector('.hold-card.is-waiting');
         if (!now || state.played) return;
+        // 收在「籌碼」那一類裡、還沒展開的時候（看不到，但座標在頁面上方）不算進到畫面：等展開了才播
+        if (getComputedStyle(now).visibility === 'hidden') return;
         const box = now.getBoundingClientRect();
         if (box.bottom > 0 && box.top < window.innerHeight * .9) play(host, now);
       }, STEADY_MS);
