@@ -629,6 +629,27 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
         check(f"{tag}：明細板按住買超滑到賣超，放開才換成賣超的名單", "買超" in held and "賣超" in title.inner_text() and sell.get_attribute("aria-checked") == "true",
               [held, title.inner_text()])
         close_chip()
+    def steady_cats() -> None:
+        """分類鍵在畫面上方時換到比較矮的一類，整頁不能跳（本人 11-15 回報「整頁跳一下」）：頁面變短時捲動位置不可以被拉回去。"""
+        bar_top = "Math.round(document.getElementById('homeCats').getBoundingClientRect().top)"
+        moved = {}
+        for first, second in (("screens", "rotation"), ("core", "chips")):
+            open_cat(page, first)
+            page.wait_for_timeout(500)
+            page.evaluate("() => scrollBy(0, document.getElementById('homeCats').getBoundingClientRect().top - 120)")
+            page.wait_for_timeout(150)
+            before = page.evaluate(bar_top)
+            page.locator(f"#homeCats [data-cat='{second}']").click()
+            page.wait_for_timeout(500)
+            moved[f"{first}→{second}"] = [before, page.evaluate(bar_top)]
+        check(f"{tag}：分類鍵在畫面上方時換到別類，整頁不跳", all(abs(a - b) <= 2 for a, b in moved.values()), moved)
+        page.evaluate("scrollTo(0, 0)")
+        page.wait_for_timeout(200)
+        spare = page.evaluate("() => { const hold = document.querySelector('.hm-cat-hold'); return hold ? Math.round(hold.getBoundingClientRect().height) : 0; }")
+        check(f"{tag}：往上捲之後，為了不跳而墊在頁尾的空白會收掉", spare == 0, spare)
+        open_cat(page, "chips")
+    step(f"{tag}：換分類時整頁不跳", steady_cats)
+
     step(f"{tag}：成排的鍵按住滑動選取", slide_keys)
 
     def slide_study() -> None:
