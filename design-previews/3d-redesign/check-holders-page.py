@@ -31,7 +31,7 @@ STATE = """() => { const host = document.getElementById('bigHolders'), card = ho
   if (!card) return { empty: host.innerHTML === '' };
   const text = selector => { const node = host.querySelector(selector); return node && !node.hidden ? node.innerText.replace(/\\s+/g, ' ').trim() : null; };
   return { align: text('.hold-align'), label: text('.hold-label'), value: text('.hold-value'), change: text('.hold-change'), read: text('.hold-read'), state: card.dataset.state,
-    cls: card.className, open: card.classList.contains('is-open'), barsShown: !card.querySelector('.hold-bars').hidden,
+    cls: card.className, open: card.classList.contains('is-open'), barsShown: getComputedStyle(card.querySelector('.hold-bars')).visibility !== 'hidden',
     bars: [...card.querySelectorAll('.col')].map(col => col.className.replace('col ', '')),
     heights: [...card.querySelectorAll('.col i')].map(bar => Math.round(bar.getBoundingClientRect().height)),
     above: [...card.querySelectorAll('.col i')].map(bar => bar.getBoundingClientRect().bottom <= card.querySelector('.hold-bars').getBoundingClientRect().top + card.querySelector('.hold-bars').getBoundingClientRect().height / 2 + 1),
@@ -66,13 +66,13 @@ with sync_playwright() as p:
         # 捲到畫面中間：進場要等這一張離開畫面最下面那一成才開始，只捲到剛好看得到的話還不會播
         page.evaluate("document.querySelector('#bigHolders .hold-card').scrollIntoView({ block: 'center' })")
         page.wait_for_function("document.querySelector('#bigHolders .hold-card').classList.contains('is-entering')", timeout=3000)
-        page.wait_for_function("document.querySelector('#bigHolders .hold-card').className.trim() === 'hold-card'", timeout=8000)
+        page.wait_for_function("!/is-(waiting|entering)/.test(document.querySelector('#bigHolders .hold-card').className)", timeout=8000)
         state = page.evaluate(STATE)
         check(f"{label}：播完之後記號拿掉、小柱在、這一張是浮起的", state["bars"] == ["bull"] and state["state"] == "bull"
               and page.evaluate("getComputedStyle(document.querySelector('#bigHolders .col i')).opacity") == "1", state)
         page.evaluate(DRAW, WEEKS)
         page.wait_for_timeout(300)
-        check(f"{label}：資料換了重畫，不重播進場", page.evaluate(STATE)["cls"].strip() == "hold-card" and len(page.evaluate(STATE)["bars"]) == 12, page.evaluate(STATE)["cls"])
+        check(f"{label}：資料換了重畫，不重播進場", not any(mark in page.evaluate(STATE)["cls"] for mark in ("is-waiting", "is-entering")) and len(page.evaluate(STATE)["bars"]) == 12, page.evaluate(STATE)["cls"])
         check(f"{label}：沒有腳本錯誤", not errors, errors)
         ctx.close()
 
@@ -106,13 +106,38 @@ with sync_playwright() as p:
     page.evaluate(DRAW, WEEKS[-1:])
     state = page.evaluate(STATE)
     check("只有一週：不寫連幾週、不畫小柱、這一張是平的、不寫較前一週", state["align"] is None and not state["barsShown"] and state["bars"] == [] and state["state"] == "flat" and state["change"] is None, state)
+    chev = page.evaluate("(() => { const card = document.querySelector('#bigHolders .hold-card').getBoundingClientRect(), chev = document.querySelector('#bigHolders .chev').getBoundingClientRect(); return Math.round(card.right - chev.right); })()")
+    check("只有一週：右邊的箭頭還在最右邊，沒有跑到數字旁邊", 8 <= chev <= 20, chev)
     check("只有一週：三個級距照樣可以看，鍵上不放記號", [cell[0] for cell in state["cells"]] == ["千張以上", "400 張以上", "全部股東"] and not any(cell[3] for cell in state["cells"])
           and state["read"] == "持股 58.56%，179 人", state)
     page.evaluate(DRAW, None)
     check("沒有資料：整塊不顯示", page.evaluate(STATE) == {"empty": True}, page.evaluate(STATE))
+    # 連幾週照全部的資料算，不會被只畫 12 根截斷
+    rising = [dict(zip(KEYS, [f"2026-{6 + (5 + i * 7 - 1) // 30:02d}-01", 50 + i * 0.1, 100 + i, 60, 200, 1000])) for i in range(3)]
+    import datetime
+    start = datetime.date(2026, 6, 5)
+    rising = [dict(zip(KEYS, [(start + datetime.timedelta(days=7 * i)).isoformat(), round(50 + i * 0.1, 2), 100 + i, 60, 200, 1000])) for i in range(21)]
+    page.evaluate(DRAW, rising)
+    state = page.evaluate(STATE)
+    check("連 20 週增加：結論照全部的資料算，小柱只畫最近 12 根", state["align"] == "連 20 週增加 千張以上大戶" and len(state["bars"]) == 12, state["align"])
     page.evaluate(DRAW, WEEKS)
     check("資料回來之後照常畫", len(page.evaluate(STATE)["bars"]) == 12)
     check("假資料的各種情況都沒有腳本錯誤", not errors, errors)
+    ctx.close()
+
+    # ---- 還沒播進場之前資料換了（在站內換一檔股票）：新畫的那一張照樣等捲到才播（審查抓到的）
+    ctx, page, errors = open_page(390, "no-preference")
+    page.evaluate(DRAW, WEEKS)
+    page.wait_for_timeout(700)
+    check("還沒播之前重畫：新的那一張照樣在等", "is-waiting" in page.evaluate(STATE)["cls"], page.evaluate(STATE)["cls"])
+    page.evaluate("document.querySelector('#bigHolders .hold-card').scrollIntoView({ block: 'center' })")
+    page.wait_for_function("document.querySelector('#bigHolders .hold-card').classList.contains('is-entering')", timeout=3000)
+    page.wait_for_function("!/is-(waiting|entering)/.test(document.querySelector('#bigHolders .hold-card').className)", timeout=8000)
+    check("還沒播之前重畫：捲到之後照樣播、播完記號拿掉", len(page.evaluate(STATE)["bars"]) == 12)
+    page.evaluate(DRAW, FALLING)
+    page.wait_for_timeout(700)
+    check("播過之後資料再換：不再播", not any(mark in page.evaluate(STATE)["cls"] for mark in ("is-waiting", "is-entering")), page.evaluate(STATE)["cls"])
+    check("換資料的過程沒有腳本錯誤", not errors, errors)
     ctx.close()
 
     # ---- 4. 各種寬度

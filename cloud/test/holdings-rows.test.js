@@ -25,7 +25,7 @@ const round1 = (value) => Math.round(value * 10) / 10;
 
 test("總數：市值、成本、賺賠與報酬率", () => {
   const read = loadRead()(SAMPLE);
-  assert.deepEqual([read.count, read.complete, read.value, read.cost, read.pnl], [3, true, 3018350, 1585200, 1433150]);
+  assert.deepEqual([read.count, read.complete, read.value, read.cost, read.pnl, read.state], [3, true, 3018350, 1585200, 1433150, "bull"]);
   assert.equal(Math.round(read.returnPct * 100) / 100, 90.41);
 });
 
@@ -33,6 +33,7 @@ test("一列一檔，照市值由大到小", () => {
   const { rows } = loadRead()(SAMPLE);
   assert.deepEqual(rows.map((row) => row.code), ["2330", "2603", "0050"]);
   assert.deepEqual(rows.map((row) => row.state), ["bull", "bull", "bull"]);
+  assert.deepEqual(rows.map((row) => row.gain), [1255000, 61000, 117150]);   // 每一檔賺多少由這裡給，畫面不另外算
   assert.deepEqual(rows.map((row) => round1(row.share)), [74.0, 16.3, 9.7]);
   // 每一列帶著原本那一筆，畫面要用裡面的名稱、股數、備註等等
   assert.equal(rows[0].item.name, "台積電");
@@ -50,7 +51,7 @@ test("橫條的兩段：賺錢是「成本＋賺的」，加起來就是這一�
 test("賠錢的一檔：凹下；橫條是「現在的市值＋還差成本的那一段」", () => {
   const { rows, pnl } = loadRead()([...SAMPLE, item("2317", "鴻海", 1000, 210, 189)]);
   const loser = rows.find((row) => row.code === "2317");
-  assert.equal(loser.state, "bear");
+  assert.deepEqual([loser.state, loser.gain], ["bear", -21000]);
   assert.equal(loser.edgeKind, "lack");
   const total = 3018350 + 189000;
   assert.equal(round1(loser.base), round1(189000 / total * 100));
@@ -59,17 +60,28 @@ test("賠錢的一檔：凹下；橫條是「現在的市值＋還差成本的�
   assert.equal(pnl, 1433150 - 21000);
 });
 
+test("賠很多而且占比大的一檔：橫條不會畫出去（整條的寬度改用它的成本，大家一起等比例縮短）", () => {
+  const read = loadRead();
+  const alone = read([item("2317", "鴻海", 1000, 200, 100)]).rows[0];          // 只有一檔，賠一半
+  assert.deepEqual([round1(alone.base), round1(alone.edge), round1(alone.base + alone.edge), alone.share], [50, 50, 100, 100]);
+  const { rows } = read([item("2317", "鴻海", 1000, 200, 100), item("2330", "台積電", 10, 980, 2235)]);   // 市值 100,000＋22,350；鴻海的成本 200,000
+  for (const row of rows) assert.ok(row.base + row.edge <= 100.0001, `${row.code} ${row.base + row.edge}`);
+  assert.equal(round1(rows[0].base + rows[0].edge), 100);                       // 最長的那一條剛好到底
+  assert.equal(round1(rows[1].base + rows[1].edge), round1(22350 / 200000 * 100));
+  assert.equal(round1(rows[1].share), round1(22350 / 122350 * 100));           // 占庫存照樣是對全部的市值算
+});
+
 test("剛好打平的一檔：平的，橫條只有一段", () => {
   const { rows } = loadRead()([item("1101", "台泥", 1000, 40, 40)]);
-  assert.deepEqual([rows[0].state, rows[0].edgeKind, rows[0].edge, rows[0].base], ["flat", null, 0, 100]);
+  assert.deepEqual([rows[0].state, rows[0].gain, rows[0].edgeKind, rows[0].edge, rows[0].base], ["flat", 0, null, 0, 100]);
 });
 
 test("沒有價格的那一檔：排最後、不畫橫條；總市值與賺賠不給數字，成本照算", () => {
   const read = loadRead()([item("9999", "沒有價格", 500, 100, null), ...SAMPLE]);
   assert.deepEqual(read.rows.map((row) => row.code), ["2330", "2603", "0050", "9999"]);
   const last = read.rows.at(-1);
-  assert.deepEqual([last.state, last.share, last.base, last.edge, last.edgeKind], ["none", null, null, null, null]);
-  assert.deepEqual([read.complete, read.pnl, read.returnPct], [false, null, null]);
+  assert.deepEqual([last.state, last.gain, last.share, last.base, last.edge, last.edgeKind], ["none", null, null, null, null, null]);
+  assert.deepEqual([read.complete, read.pnl, read.returnPct, read.state], [false, null, null, "none"]);
   assert.equal(read.cost, 1585200 + 50000);
   // 有價格的那幾檔照樣有橫條（比的是有價格的那幾檔合起來），但「占庫存」不給數字——全部是多少不知道
   assert.equal(read.rows[0].share, null);
@@ -78,7 +90,7 @@ test("沒有價格的那一檔：排最後、不畫橫條；總市值與賺賠�
 
 test("還沒有庫存", () => {
   const read = loadRead()([]);
-  assert.deepEqual([read.count, read.complete, read.value, read.cost, read.pnl, read.returnPct, read.rows], [0, false, 0, 0, null, null, []]);
+  assert.deepEqual([read.count, read.complete, read.value, read.cost, read.pnl, read.returnPct, read.state, read.rows], [0, false, 0, 0, null, null, "none", []]);
   assert.deepEqual(loadRead()(null).rows, []);
 });
 

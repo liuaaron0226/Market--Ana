@@ -75,6 +75,23 @@ test("連續減少、只增加一週、和前一週一樣的結論與高低", ()
   assert.deepEqual([read(same).title, read(same).state, read(same).levels[0].change], ["和前一週一樣", "flat", "和前一週一樣"]);
 });
 
+test("連幾週照全部的資料算，不會被只畫 12 根截斷", () => {
+  let pct = 50;
+  const rising = Array.from({ length: 21 }, (_, index) => week(new Date(Date.UTC(2026, 5, 5 + index * 7)).toISOString().slice(0, 10), (pct += 0.1), 100 + index, 60, 200, 1000));
+  const read = loadRead()(rising);
+  assert.equal(read.title, "連 20 週增加");
+  assert.equal(read.levels[0].bars.length, 12);
+});
+
+test("中間缺一週（那一週沒有這一檔的資料）：連幾週數到缺的地方為止，幾週前照日期算", () => {
+  // 10-16 那一週沒有資料
+  const gapped = [week("2026-10-02", 57.0, 170, 63, 333, 1000), week("2026-10-09", 57.2, 172, 63, 334, 1010), week("2026-10-23", 57.5, 172, 63, 335, 1020),
+    week("2026-10-30", 57.8, 174, 63, 336, 1030), week("2026-11-06", 58.0, 175, 63, 337, 1040)];
+  const read = loadRead()(gapped);
+  assert.equal(read.title, "連 2 週增加");                                     // 11-06、10-30 兩週；10-23 和前一筆隔了兩週，不算連續
+  assert.equal(read.levels[2].read, "5 週前 1,000 人，現在 1,040 人（+40）");    // 四筆之前，但日期是五週前
+});
+
 test("不到 12 週：有幾週畫幾週", () => {
   const read = loadRead()(WEEKS.slice(-2));
   assert.equal(read.title, "這一週增加");

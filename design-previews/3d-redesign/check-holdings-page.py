@@ -106,6 +106,54 @@ with sync_playwright() as p:
     check("假資料的三種情況都沒有腳本錯誤", not errors, errors)
     ctx.close()
 
+    # ---- 賠很多而且占比大的一檔：橫條不能畫出去蓋到報酬率（審查抓到的）
+    for width in (390, 1024):
+        for label, loser in (("只有一檔、賠一半", [holding("2317", "鴻海", 1000, 200, 100)]),
+                             ("賠一成的大部位加一個小部位", [holding("2317", "鴻海", 1000, 200, 180), holding("2330", "台積電", 10, 980, 2235)])):
+            ctx, page, errors = open_page(width, "reduce", loser)
+            inside = page.evaluate("""() => [...document.querySelectorAll('#holdingRows .hv-row')].every(row => { const bar = row.querySelector('.hv-bar').getBoundingClientRect(),
+              ret = row.querySelector('.hv-ret').getBoundingClientRect(); return [...row.querySelectorAll('.hv-bar i')].every(part => part.getBoundingClientRect().right <= bar.right + .5) && bar.right <= ret.left + .5; })""")
+            check(f"寬 {width}・{label}：橫條留在自己的格子裡，沒有蓋到報酬率，沒有橫向捲動", inside and not page.evaluate(OVERFLOW) and not errors, [inside, errors])
+            ctx.close()
+
+    # ---- 一開始沒有庫存、之後新增第一檔：不播進場（進場只在進頁面時播）；刪除之後鍵盤焦點不掉回頁面最上面
+    ctx = browser.new_context(viewport={"width": 390, "height": 800}, has_touch=True, reduced_motion="no-preference", locale="zh-TW")
+    page = ctx.new_page()
+    page.on("dialog", lambda dialog: dialog.accept())
+    stored = []
+    def fake(route):
+        if route.request.method == "GET":
+            route.fulfill(status=200, content_type="application/json", body=json.dumps({"items": stored}))
+        elif route.request.method == "POST":
+            stored.append(holding("2330", "台積電", 1000, 980, 2235))
+            stored.append(holding("2603", "長榮", 2000, 215, 245.5))
+            route.fulfill(status=200, content_type="application/json", body="{}")
+        else:
+            route.continue_()
+    page.route("**/api/holdings", fake)
+    page.route("**/api/holdings/2330", lambda route: (stored.pop(0), route.fulfill(status=200, content_type="application/json", body="{}")))
+    page.goto(BASE + "/portfolio.html", wait_until="networkidle")
+    page.wait_for_function("document.getElementById('portfolioFreshness').textContent.trim() !== '讀取中'")
+    page.evaluate("window.__again = false; new MutationObserver(() => { if (document.getElementById('holdingRows').classList.contains('is-entering')) window.__again = true; }).observe(document.getElementById('holdingRows'), { attributes: true, attributeFilter: ['class'] })")
+    check("沒有庫存時寫的是原本那句提示", page.evaluate(STATE)["empty"] == "還沒有庫存。先輸入代號、股數與平均成本，之後可用同一表單更新。", page.evaluate(STATE)["empty"])
+    page.locator("#holdingCode").fill("2330")
+    page.locator("#holdingShares").fill("1000")
+    page.locator("#holdingCost").fill("980")
+    page.locator("#holdingForm button[type=submit]").click()
+    page.locator("#holdingRows .hv-row[data-code='2330']").wait_for()
+    page.wait_for_timeout(300)
+    check("一開始沒有庫存、之後新增第一檔：不播進場", not page.evaluate("window.__again"))
+    page.locator("#holdingRows .hv-row[data-code='2330'] .hv-top").click()
+    page.wait_for_timeout(500)
+    facts = page.evaluate("[...document.querySelectorAll('#holdingRows .hv-row.is-open .hv-facts li')].map(fact => getComputedStyle(fact).animationName)")
+    check("展開時六個數字一格一格浮出來", facts == ["hv-fact-in"] * 6, facts)
+    page.get_by_role("button", name="刪除庫存 2330").click()
+    page.wait_for_function("document.querySelectorAll('#holdingRows .hv-row').length === 1")
+    page.wait_for_timeout(200)
+    check("刪除之後鍵盤焦點在補上來的那一列，沒有掉回頁面最上面", page.evaluate("document.activeElement.classList.contains('hv-top') && document.activeElement.closest('.hv-row').dataset.code") == "2603",
+          page.evaluate("document.activeElement.outerHTML.slice(0, 80)"))
+    ctx.close()
+
     # ---- 3. 各種寬度
     for width in (320, 390, 800, 1024, 1440):
         ctx, page, errors = open_page(width, "reduce", items)

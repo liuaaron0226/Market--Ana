@@ -345,6 +345,25 @@
   }
 }
 
+/* ================= 會浮起或凹下、可以點開的列（.depth-row）（立體重設計，2026-11-15） =================
+   首頁短中長期走勢的每一期、個股頁大戶持股的那一張、自選與庫存頁庫存總覽的每一檔共用。高低就是方向：
+   data-state="bull" 浮起（偏多、增加、賺）、"bear" 凹下（偏空、減少、賠），其餘是一條細框。陰影只用上面那幾組。
+   放在板上的（首頁）用鍵與槽的顏色；直接放在頁面底色上的（個股頁、自選與庫存頁，加 .on-page）沒有板墊著，
+   浮起的用比底色亮一階的板色、凹下的用比底色暗一階的桌面色。
+   列裡第一層的按鈕是點開用的；.chev 是右邊的箭頭；.depth-panel 是點開的內容，高度用格線的 0fr → 1fr 帶。 */
+:is(body.hm, body.bd) .depth-row { --row-up: var(--key); --row-down: var(--well); position: relative; border: 1px solid var(--line); border-radius: var(--r-key); transition: transform var(--t-press) linear, box-shadow var(--t-press) linear; }
+:is(body.hm, body.bd) .depth-row.on-page { --row-up: var(--slab); --row-down: var(--desk); }
+:is(body.hm, body.bd) .depth-row[data-state="bull"] { border-color: transparent; background: var(--row-up); box-shadow: var(--key-shadow); transform: translateY(var(--key-lift)); }
+:is(body.hm, body.bd) .depth-row[data-state="bear"] { border-color: transparent; background: var(--row-down); box-shadow: var(--well-shadow); }
+:is(body.hm, body.bd) .depth-row[data-state="bull"]:has(> button:active) { transform: translateY(calc(var(--key-thick) - 1px)); box-shadow: var(--key-shadow-press); }
+:is(body.hm, body.bd) .depth-row .chev { width: 7px; height: 7px; border: solid var(--faint); border-width: 0 1.5px 1.5px 0; transform: translateY(-2px) rotate(45deg); transition: transform var(--t-lift) var(--ease-depth); }
+:is(body.hm, body.bd) .depth-row.is-open:not(.is-closing) .chev { transform: translateY(2px) rotate(225deg); }
+:is(body.hm, body.bd) .depth-panel { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 460ms var(--ease-depth); }
+:is(body.hm, body.bd) .depth-row.is-open:not(.is-closing) > .depth-panel { grid-template-rows: 1fr; }
+@media (prefers-reduced-motion: reduce) {
+  :is(body.hm, body.bd) .depth-panel, :is(body.hm, body.bd) .depth-row .chev { transition: none; }
+}
+
 /* ================= 一排帶記號的鍵（.key-strip）（立體重設計，2026-11-15） =================
    首頁短中長期走勢展開後的指標、個股頁大戶持股展開後的級距共用。每一顆鍵（.cell）一個名稱加一根小記號（.tag）：
    偏多／增加（.bull）的記號在名稱上面，偏空／減少（.bear）的在下面，沒有方向（.none）的是一小段灰的。

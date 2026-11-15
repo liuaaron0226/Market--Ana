@@ -95,12 +95,7 @@
 .pf-stock { min-width: 0; }
 .pf-stock a { color: var(--ink); font: 600 15px var(--sans); text-decoration: none; }
 .pf-stock a:hover { color: var(--accent); }
-.pf-stock small, .pf-cell small { display: block; margin-top: 4px; color: var(--faint); font-size: 12px; line-height: 1.4; }
-.pf-cell { min-width: 0; text-align: right; }
-.pf-cell strong { display: block; color: var(--ink); font: 500 14px var(--mono); font-variant-numeric: tabular-nums; }
-.pf-cell strong.up { color: var(--up); }
-.pf-cell strong.down { color: var(--down); }
-.pf-note { text-align: left; overflow-wrap: anywhere; }
+.pf-stock small { display: block; margin-top: 4px; color: var(--faint); font-size: 12px; line-height: 1.4; }
 .pf-row select { min-width: 0; }
 .pf-row .pf-delete, .hv-row .pf-delete {
   width: 44px; padding: 0; background: transparent; color: var(--up); cursor: pointer;
@@ -119,7 +114,7 @@
    總數一行 → 一列一檔（照市值由大到小）：名稱 → 橫條（整條的寬度是全部庫存的市值；灰的是成本、紅的是賺的那一段；
    賠錢時灰的是現在的市值、綠的是還差成本的那一段）→ 報酬率 → 點那一檔才看金額、備註、刪除。只呈現現況。
    高低就是賺賠：賺的那一列浮起、賠的凹下、打平或沒有價格是細框。陰影只用 bold.css 現成的。
-   這一頁沒有板，列直接放在頁面底色上：浮起的用比底色亮一階的板色、凹下的用比底色暗一階的桌面色。
+   每一列的高低、箭頭與展開的高度在 bold.css（.depth-row .on-page）。
    算法在 holdings-rows.js，畫面在 portfolio.js。本人定的樣品：design-previews/3d-redesign/pro-samples/holdings-overview.html */
 .hv-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .pf-summary .hv-head p { margin: 0; color: var(--faint); font-size: 12px; }
@@ -130,10 +125,6 @@
 .hv-total b.down, .hv-ret.down, .hv-facts b.down { color: var(--down); }
 
 .pf-summary .hv-rows { margin: 24px 0 0; padding: 0; list-style: none; display: grid; gap: 8px; }
-.hv-row { position: relative; border: 1px solid var(--line); border-radius: var(--r-key); transition: transform var(--t-press) linear, box-shadow var(--t-press) linear; }
-.hv-row[data-state="bull"] { border-color: transparent; background: var(--slab); box-shadow: var(--key-shadow); transform: translateY(var(--key-lift)); }
-.hv-row[data-state="bear"] { border-color: transparent; background: var(--desk); box-shadow: var(--well-shadow); }
-.hv-row[data-state="bull"]:has(.hv-top:active) { transform: translateY(calc(var(--key-thick) - 1px)); box-shadow: var(--key-shadow-press); }
 
 .hv-top { display: grid; grid-template-columns: 88px minmax(0, 1fr) 72px 12px; align-items: center; column-gap: 10px; width: 100%; min-height: 48px; padding: 5px 12px; border: 0; border-radius: inherit; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 .hv-name { display: grid; gap: 1px; min-width: 0; white-space: nowrap; }
@@ -142,18 +133,14 @@
 .hv-ret { color: var(--dim); text-align: right; font: 14px var(--mono); font-variant-numeric: tabular-nums; }
 
 /* 橫條：平的、細的、方的 */
-.hv-bar { position: relative; display: flex; align-items: center; height: 20px; }
+.hv-bar { position: relative; display: flex; align-items: center; min-width: 0; height: 20px; overflow: hidden; }
 .hv-bar::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 1px; margin-top: -.5px; background: var(--line); }
 .hv-bar i { position: relative; flex: none; height: 8px; width: calc(var(--w) * 1%); min-width: 2px; transform-origin: left; background: var(--faint); }
 .hv-bar .gain { background: var(--up); }
 .hv-bar .lack { background: var(--down); }
 
-.hv-row .chev { width: 7px; height: 7px; border: solid var(--faint); border-width: 0 1.5px 1.5px 0; transform: translateY(-2px) rotate(45deg); transition: transform var(--t-lift) var(--ease-depth); }
-.hv-row.is-open .chev { transform: translateY(2px) rotate(225deg); }
 
 /* 展開：這一檔的金額、明細與操作 */
-.hv-panel { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 420ms var(--ease-depth); }
-.hv-row.is-open .hv-panel { grid-template-rows: 1fr; }
 .hv-clip { min-height: 0; overflow: hidden; }
 .hv-inner { display: grid; gap: 12px; padding: 2px 12px 12px; }
 .pf-summary .hv-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; margin: 0; padding: 0; list-style: none; }
@@ -176,6 +163,8 @@
   .hv-rows.is-entering .hv-bar :is(.gain, .lack) { animation: hv-grow 420ms var(--ease-depth) both; animation-delay: calc(var(--at) + 300ms); }
   .hv-rows.is-entering .hv-ret { animation: hv-fade 300ms linear both; animation-delay: calc(var(--at) + 500ms); }
   .hv-rows.is-entering .hv-row { animation: hv-row-settle 700ms var(--ease-depth) both; animation-delay: calc(var(--at) + 560ms); }
+  .hv-row.is-open .hv-facts li { animation: hv-fact-in 380ms var(--ease-depth) both; animation-delay: calc(var(--order) * 60ms + 60ms); }
+  @keyframes hv-fact-in { from { opacity: 0; translate: 0 6px; } }
   @keyframes hv-grow { from { transform: scaleX(0); } }
   @keyframes hv-fade { from { opacity: 0; } }
   @keyframes hv-row-settle { from { transform: none; border-color: var(--line); background: transparent; box-shadow: none; } }

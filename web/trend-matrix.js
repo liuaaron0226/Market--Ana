@@ -1,5 +1,5 @@
 /* 短中長期走勢的畫面（立體重設計，本人 2026-11-15 定案的 ⑤）：一列一期，橫條上一票一根小柱，點那一期才展開每個指標的鍵。
-   資料由 trend-votes.js 讀好（TrendVotes.read），這裡只畫，不另外算。樣式在 home.css〈短中長期走勢〉，展開後那一排鍵的樣式在 bold.css（.key-strip）。
+   資料由 trend-votes.js 讀好（TrendVotes.read），這裡只畫，不另外算。樣式在 home.css〈短中長期走勢〉；會浮起或凹下的列與展開收合在 bold.css（.depth-row），展開後那一排鍵在 bold.css（.key-strip）。
 
    用法：TrendMatrix.render(section, model)
    - section：首頁的 #marketTrend（裡面要有 .trend-align 與 .trend-rows）。
@@ -32,23 +32,23 @@
     const name = `<span class="trend-name"><span>${esc(period.label)}</span><strong>${esc(period.conclusion)}</strong></span>`;
     // 資料不足，或算出來的票和結論對不上：只寫原本那句說明，不能展開
     if (!period.votes) {
-      return `<li class="trend-row" data-key="${esc(period.key)}" data-state="${esc(period.state)}" style="--settle-at:${times.settle}ms">
+      return `<li class="trend-row depth-row" data-key="${esc(period.key)}" data-state="${esc(period.state)}" style="--settle-at:${times.settle}ms">
         <div class="trend-top is-plain">${name}<p class="trend-sentence">${esc(period.sentence)}</p></div></li>`;
     }
     const votes = period.votes.map((vote, index) => ({ ...vote, index, kind: KINDS[vote.side], at: times.votes[index] }));
     const of = kind => votes.filter(vote => vote.kind === kind);
     const block = vote => `<i class="blk ${vote.kind}" data-vote="${vote.index}" style="--at:${vote.at}ms"></i>`;
-    const cell = vote => `<button type="button" class="cell ${vote.kind}" data-vote="${vote.index}" aria-pressed="false" aria-label="${esc(vote.name)} ${WORDS[vote.kind]}"><span class="cell-face"></span><i class="tag ${vote.kind}"></i><span class="cell-name">${keyName(vote.name)}</span></button>`;
+    const cell = vote => `<button type="button" class="cell ${vote.kind}" data-vote="${vote.index}" aria-pressed="false" aria-label="${esc(vote.name)} ${WORDS[vote.kind]}"><span class="cell-face"></span><i class="tag"></i><span class="cell-name">${keyName(vote.name)}</span></button>`;
     const none = of('none'), mid = '<span class="mid"></span>';
     const counts = `${of('bear').length} 個偏空、${of('bull').length} 個偏多${none.length ? `、${none.length} 個沒有方向` : ''}`;
     const panel = `trendPanel-${esc(period.key)}`;
-    return `<li class="trend-row" data-key="${esc(period.key)}" data-state="${esc(period.state)}" style="--rail-at:${times.start}ms;--settle-at:${times.settle}ms">
+    return `<li class="trend-row depth-row" data-key="${esc(period.key)}" data-state="${esc(period.state)}" style="--rail-at:${times.start}ms;--settle-at:${times.settle}ms">
       <button type="button" class="trend-top" aria-expanded="false" aria-controls="${panel}" aria-label="${esc(period.label)} ${esc(period.conclusion)}：${votes.length} 個指標，${counts}">
         ${name}
         <span class="trend-bar" aria-hidden="true"><span class="side bears">${of('bear').map(block).join('')}</span>${mid}<span class="side">${of('bull').map(block).join('')}</span></span>
         <span class="chev" aria-hidden="true"></span>
       </button>
-      <div class="trend-panel" id="${panel}" inert><div class="trend-clip"><div class="trend-inner">
+      <div class="trend-panel depth-panel" id="${panel}" inert><div class="trend-clip"><div class="trend-inner">
         <div class="trend-strip key-strip" role="group" aria-label="${esc(period.label)}的每個指標">${of('bear').reverse().map(cell).join('')}${mid}${none.length ? none.map(cell).join('') + mid : ''}${of('bull').map(cell).join('')}</div>
         <p class="trend-read"${period.extra ? '' : ' hidden'}>${esc(period.extra || '')}</p>
       </div></div></div>
