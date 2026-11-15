@@ -3,8 +3,10 @@
    選單：<div class="chart-menu" id="…" hidden>；選單裡帶 data-menu-close 的按鈕按了就收回；選單帶 data-menu-autoclose 的話，裡面任何按鈕按了都收回。
    小鍵帶 data-mirror="這個設定叫什麼"：上面的字跟著選單裡選中的那一項，那一項所在的群組隱藏時小鍵也不顯示。
    按住滑到要的再放開（本人 11-15）：按住小鍵，選單不用放開就浮出，手指滑到要的那一項（會亮起）放開就選到；滑到外面放開不選；
-   按一下就放開和原本一樣，選單開著等人點。選單裡的按鈕按住滑到另一顆，放開才生效。
-   有槽的成排切換鍵（首頁的分類鍵、明細板的買超／賣超）：選中的那個框跟著手指左右移動，放開時靠近哪一顆就選哪一顆（本人 11-15 更正）。
+   按一下就放開和原本一樣，選單開著等人點。
+   選中的那個框跟著手指走，放開時靠近哪一顆就選哪一顆（本人 11-15 更正）：有槽的成排切換鍵（首頁的分類鍵、明細板的買超／賣超）左右跟；
+   「選一個」的選單（週期、指標、排行、天數、買賣超、比較期間）橫排的左右跟、直排的上下跟，手指離開選單框就收掉、放開不選。
+   沒有「選一個」的選單（均線設定板）沒有框：按住滑到另一顆按鈕，那一顆亮起，放開才生效。
    一次只開一個；按 Esc 或點選單以外的地方收回；選單帶 data-menu-focus 的話，打開時游標直接進裡面的輸入框
    （只給「打開就是為了打字」的選單用；均線設定板不要，不然手機一打開就跳出鍵盤）。
    K 線的週期（period-switch.js）、指標（chart-studies.js）、個股頁的均線、首頁的籌碼選股與長期核心持有都用這一套。 */
@@ -34,7 +36,9 @@
   // ---------- 按住滑到要的再放開 ----------
   const GROUPS = '.chart-menu, .hm-cats, .chip-seg';   // 成排的鍵：在同一組裡滑
   const TRACKS = '.hm-cats, .chip-seg';                // 其中有槽的：滑的時候選中的那個框（.slide-thumb）跟著手指走
-  const SELECTED_KEY = '[aria-checked="true"], [aria-expanded="true"]';
+  const MENU_KEYS = 'button:is([aria-checked], [aria-pressed], [aria-selected])';   // 選單裡「選一個」的那些項目；新增、刪除這類按鈕不算
+  const SELECTED_KEY = '[aria-checked="true"], [aria-expanded="true"], [aria-pressed="true"], [aria-selected="true"]';
+  const REACH_PX = 28;                                 // 選單：手指離項目這麼遠以內框才跟著，再遠就當成離開選單
   const SETTLE_MS = 200;                               // 放開之後框滑到定位的時間，和樣式裡 .is-settling 的轉場一致
   const CALM = window.matchMedia('(prefers-reduced-motion: reduce)');
   const SLIDE_START_PX = 8;                            // 動超過這麼多才算滑，不然就是點一下
@@ -52,6 +56,19 @@
     if (button) button.classList.add('is-slide-hot');
   }
 
+  const isMenu = track => track.matches('.chart-menu');
+  const keysOf = track => [...track.querySelectorAll(isMenu(track) ? MENU_KEYS : 'button')].filter(usable);
+  // 這一組按鈕有沒有「選中的框」可以跟著手指：有槽的那兩種一定有；選單要有「選一個」的項目才有
+  const trackOf = group => (group.matches(TRACKS) || keysOf(group).length ? group : null);
+  const clamp = (value, low, high) => Math.min(Math.max(value, low), high);
+  // 把框收掉（手指離開選單、或滑鼠在視窗外放開）
+  function drop() {
+    heat(null);
+    if (!slide.thumb) return;
+    slide.thumb.remove();
+    slide.thumb = null;
+    if (!slide.track.querySelector('.slide-thumb')) slide.track.classList.remove('is-sliding');
+  }
   // 把框放到畫面上的某個位置（座標是視窗的）；框是槽裡絕對定位的一塊，所以換算成相對於槽
   function put(thumb, track, left, top, width, height) {
     const frame = track.getBoundingClientRect();
@@ -59,12 +76,16 @@
     thumb.style.height = `${height}px`;
     thumb.style.transform = `translate(${left - frame.left - track.clientLeft}px, ${top - frame.top - track.clientTop}px)`;
   }
-  // 框跟著手指：大小照最靠近的那一顆，左右不超出第一顆與最後一顆
+  // 框跟著手指：大小照最靠近的那一顆，位置不超出所有項目合起來的範圍（一排的只會左右動，直排的只會上下動）
   function follow(event) {
-    const track = slide.track, keys = [...track.querySelectorAll('button')].filter(usable);
+    const track = slide.track, keys = keysOf(track);
     if (!keys.length) return;
-    const boxes = keys.map(key => key.getBoundingClientRect());
-    const gap = box => Math.abs(event.clientX - (box.left + box.width / 2));
+    const boxes = keys.map(key => key.getBoundingClientRect()), x = event.clientX, y = event.clientY;
+    const left = Math.min(...boxes.map(box => box.left)), right = Math.max(...boxes.map(box => box.right));
+    const top = Math.min(...boxes.map(box => box.top)), bottom = Math.max(...boxes.map(box => box.bottom));
+    // 選單：手指離開項目的範圍就不跟了（這時放開＝不選）。有槽的那一排沒有「離開」，一路跟到放開
+    if (isMenu(track) && (x < left - REACH_PX || x > right + REACH_PX || y < top - REACH_PX || y > bottom + REACH_PX)) { drop(); return; }
+    const gap = box => Math.hypot(x - (box.left + box.width / 2), y - (box.top + box.height / 2));
     const near = boxes.reduce((best, box, index) => (gap(box) < gap(boxes[best]) ? index : best), 0);
     if (!slide.thumb) {
       slide.thumb = document.createElement('span');
@@ -74,7 +95,7 @@
       track.append(slide.thumb);
     }
     const box = boxes[near];
-    put(slide.thumb, track, Math.min(Math.max(event.clientX - box.width / 2, boxes[0].left), boxes[boxes.length - 1].right - box.width), box.top, box.width, box.height);
+    put(slide.thumb, track, clamp(x - box.width / 2, left, right - box.width), clamp(y - box.height / 2, top, bottom - box.height), box.width, box.height);
     heat(keys[near]);
   }
   // 放開：靠近哪一顆就選哪一顆，框滑到那一顆上再交還給那一顆自己的樣子
@@ -86,7 +107,8 @@
     };
     if (cancelled || !target) { done(); return; }
     stray = { origin, at: performance.now() };   // 拖過之後瀏覽器補發的 click 不算，不然拖回原位放開會把展開的那一類收起來
-    if (target !== track.querySelector(SELECTED_KEY)) target.click();
+    // 選單：選到原本那一項也照點（選單會收起，和點一下一樣）；有槽的那一排選到原本那一顆就不動（分類鍵再點一次是收起）
+    if (isMenu(track) || target !== track.querySelector(SELECTED_KEY)) target.click();
     if (CALM.matches) { done(); return; }
     thumb.classList.add('is-settling');
     const box = target.getBoundingClientRect();
@@ -108,17 +130,17 @@
         set(chip, true);
         pressOpened = chip;
       }
-      slide = { group: menu, origin: chip, chip, track: null, thumb: null, x: event.clientX, y: event.clientY, moved: false, hot: null };
+      slide = { group: menu, origin: chip, chip, track: trackOf(menu), thumb: null, x: event.clientX, y: event.clientY, moved: false, hot: null };
       return;
     }
     const button = event.target.closest('button');
     const group = button && button.closest(GROUPS);
-    if (group && usable(button)) slide = { group, origin: button, chip: null, track: group.matches(TRACKS) ? group : null, thumb: null, x: event.clientX, y: event.clientY, moved: false, hot: null };
+    if (group && usable(button)) slide = { group, origin: button, chip: null, track: trackOf(group), thumb: null, x: event.clientX, y: event.clientY, moved: false, hot: null };
   });
 
   document.addEventListener('pointermove', event => {
     if (!slide || !event.isPrimary) return;
-    if (event.pointerType === 'mouse' && !(event.buttons & 1)) { heat(null); slide = null; return; }   // 在視窗外放開了滑鼠
+    if (event.pointerType === 'mouse' && !(event.buttons & 1)) { drop(); slide = null; return; }   // 在視窗外放開了滑鼠
     if (!slide.moved && Math.hypot(event.clientX - slide.x, event.clientY - slide.y) < SLIDE_START_PX) return;
     slide.moved = true;
     if (slide.track) { follow(event); return; }

@@ -101,6 +101,11 @@ THUMB_X = """selector => { const thumb = document.querySelector(selector + ' .sl
   const box = thumb.getBoundingClientRect(); return box.left + box.width / 2; }"""
 
 
+# 同一個框的中心 x 與 y（選單有直排的，也要看上下）
+THUMB_XY = """selector => { const thumb = document.querySelector(selector + ' .slide-thumb'); if (!thumb) return null;
+  const box = thumb.getBoundingClientRect(); return [box.left + box.width / 2, box.top + box.height / 2]; }"""
+
+
 def centre(locator) -> tuple[float, float]:
     box = locator.bounding_box()
     return box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
@@ -117,6 +122,8 @@ def slide_period(page: Page, tag: str, mobile: bool) -> None:
     hold.down(*centre(chip))
     check(f"{tag}：按住週期小鍵，不用放開選單就浮出來", menu.is_visible())
     hold.move(*centre(weekly))
+    thumb, target = page.evaluate(THUMB_XY, "#periodMenu"), centre(weekly)
+    check(f"{tag}：選單裡選中的框跟著手指走", thumb is not None and abs(thumb[0] - target[0]) <= 3 and abs(thumb[1] - target[1]) <= 3, [thumb, target])
     check(f"{tag}：滑到的那一項亮起，還沒放開不會換", "is-slide-hot" in (weekly.get_attribute("class") or "") and chip.inner_text().strip() == before,
           [weekly.get_attribute("class"), chip.inner_text()])
     hold.up()
@@ -127,6 +134,7 @@ def slide_period(page: Page, tag: str, mobile: bool) -> None:
     hold.down(x, y)
     hold.move(*centre(daily))
     hold.move(12, y + 150)
+    check(f"{tag}：手指離開選單，框不留在選單裡", page.locator("#periodMenu .slide-thumb").count() == 0)
     hold.up()
     page.wait_for_timeout(250)
     check(f"{tag}：滑到選單外面放開不選，選單收起", chip.inner_text().strip() == "週K" and not menu.is_visible(), chip.inner_text())
@@ -546,6 +554,26 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
               [held, title.inner_text()])
         close_chip()
     step(f"{tag}：成排的鍵按住滑動選取", slide_keys)
+
+    def slide_study() -> None:
+        """直排的選單（指標）：按住指標名稱往下拖，選中的框跟著手指上下走（本人 11-15「也改」）。"""
+        chip = page.locator(STUDY_CHIP)
+        chip.scroll_into_view_if_needed()
+        page.evaluate("scrollBy(0, 220)")   # 選單往下開，留出下面的空間
+        was = page.locator(".kc-study-choice[aria-pressed='true']").get_attribute("data-study")
+        goal = "kd" if was != "kd" else "rsi"
+        choice = page.locator(f".kc-study-choice[data-study='{goal}']")
+        hold = Hold(page, mobile)
+        hold.down(*centre(chip))
+        hold.move(*centre(choice))
+        thumb, target = page.evaluate(THUMB_XY, "#studyMenu"), centre(choice)
+        check(f"{tag}：直排的指標選單，框跟著手指上下走", thumb is not None and abs(thumb[0] - target[0]) <= 3 and abs(thumb[1] - target[1]) <= 3, [thumb, target])
+        hold.up()
+        page.wait_for_timeout(300)
+        check(f"{tag}：放開就換成那個指標", choice.get_attribute("aria-pressed") == "true" and page.locator("#studyMenu .slide-thumb").count() == 0
+              and not page.locator("#studyMenu").is_visible())
+        check(f"{tag}：換回原本的指標", study_pressed(page, was))
+    step(f"{tag}：指標小鍵按住滑動選取", slide_study)
     step(f"{tag}：週期小鍵按住滑動選取", lambda: slide_period(page, tag, mobile))
 
     def candle() -> None:
