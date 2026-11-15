@@ -38,43 +38,48 @@
   const TRACKS = '.hm-cats, .chip-seg';                // 其中有槽的：滑的時候選中的那個框（.slide-thumb）跟著手指走
   const MENU_KEYS = 'button:is([aria-checked], [aria-pressed], [aria-selected])';   // 選單裡「選一個」的那些項目；新增、刪除這類按鈕不算
   const SELECTED_KEY = '[aria-checked="true"], [aria-expanded="true"], [aria-pressed="true"], [aria-selected="true"]';
-  const REACH_PX = 28;                                 // 選單：手指離項目這麼遠以內框才跟著，再遠就當成離開選單
+  const REACH_PX = 12;                                 // 選單：手指離項目這麼遠以內框才跟著，再遠就當成離開選單
   const SETTLE_MS = 200;                               // 放開之後框滑到定位的時間，和樣式裡 .is-settling 的轉場一致
   const CALM = window.matchMedia('(prefers-reduced-motion: reduce)');
   const SLIDE_START_PX = 8;                            // 動超過這麼多才算滑，不然就是點一下
   const STRAY_CLICK_MS = 150;                          // 補發的 click 緊跟在放開之後；窗口留短，免得把使用者緊接著的下一次點擊吃掉
-  let slide = null;         // 這一次按住：{ group 可以滑到的範圍, origin 按下去的那一顆, chip 按的是小鍵的話, track 有槽的那一排, thumb 跟著手指的框, x, y, moved, hot 手指底下（或最靠近）的那一顆 }
-  let pressOpened = null;   // 這一次按下去才打開選單的小鍵：緊接著的那一下 click 不要又把它收回
+  const PRESS_CLICK_MS = 400;                          // 按下去就打開的那一次，放開後這麼久以內到的 click 才算是同一下
+  let slide = null;         // 這一次按住：{ group 可以滑到的範圍, origin 按下去的那一顆, chip 按的是小鍵的話, track 有框可以跟的那一組, thumb 跟著手指的框, x, y, moved, hot 手指底下（或最靠近）的那一顆 }
+  let pressOpened = null;   // 這一次按下去才打開選單的小鍵：{ chip, releasedAt }。緊接著的那一下 click 不要又把它收回
   let stray = null;         // 滑動選到之後，瀏覽器可能再補一下 click 給按下去的地方：{ origin, at }，那一下不算
 
   const usable = button => Boolean(button) && !button.disabled && button.getClientRects().length > 0;
   const nodeAt = event => document.elementFromPoint(event.clientX, event.clientY);
-  function heat(button) {
-    if (slide.hot === button) return;
-    if (slide.hot) slide.hot.classList.remove('is-slide-hot');
-    slide.hot = button;
-    if (button) button.classList.add('is-slide-hot');
-  }
-
   const isMenu = track => track.matches('.chart-menu');
   const keysOf = track => [...track.querySelectorAll(isMenu(track) ? MENU_KEYS : 'button')].filter(usable);
   // 這一組按鈕有沒有「選中的框」可以跟著手指：有槽的那兩種一定有；選單要有「選一個」的項目才有
   const trackOf = group => (group.matches(TRACKS) || keysOf(group).length ? group : null);
   const clamp = (value, low, high) => Math.min(Math.max(value, low), high);
-  // 把框收掉（手指離開選單、或滑鼠在視窗外放開）
-  function drop() {
-    heat(null);
+  const begin = (event, group, origin, chip) => ({ group, origin, chip, track: trackOf(group), thumb: null, x: event.clientX, y: event.clientY, moved: false, hot: null });
+  // 接下來瀏覽器補發給按下去那個地方的 click 不算。時間從程式點完之後才起算，切換畫面花掉的時間不算在窗口裡
+  const expectStrayClick = origin => { stray = { origin, at: performance.now() }; };
+
+  // 手指底下（或最靠近）的那一顆做記號
+  function markHot(button) {
+    if (slide.hot === button) return;
+    if (slide.hot) slide.hot.classList.remove('is-slide-hot');
+    slide.hot = button;
+    if (button) button.classList.add('is-slide-hot');
+  }
+  // 把框收掉（手指離開選單、回到小鍵上、滑鼠在視窗外放開、或上一次拖曳沒有收到放開）
+  function removeThumb() {
+    markHot(null);
     if (!slide.thumb) return;
     slide.thumb.remove();
     slide.thumb = null;
     if (!slide.track.querySelector('.slide-thumb')) slide.track.classList.remove('is-sliding');
   }
-  // 把框放到畫面上的某個位置（座標是視窗的）；框是槽裡絕對定位的一塊，所以換算成相對於槽
-  function put(thumb, track, left, top, width, height) {
+  // 把框放到畫面上的某個位置（座標是視窗的）；框是那一組裡絕對定位的一塊，所以換算成相對於那一組，那一組自己有捲動的話也要算進去
+  function placeThumb(thumb, track, left, top, width, height) {
     const frame = track.getBoundingClientRect();
     thumb.style.width = `${width}px`;
     thumb.style.height = `${height}px`;
-    thumb.style.transform = `translate(${left - frame.left - track.clientLeft}px, ${top - frame.top - track.clientTop}px)`;
+    thumb.style.transform = `translate(${left - frame.left - track.clientLeft + track.scrollLeft}px, ${top - frame.top - track.clientTop + track.scrollTop}px)`;
   }
   // 框跟著手指：大小照最靠近的那一顆，位置不超出所有項目合起來的範圍（一排的只會左右動，直排的只會上下動）
   function follow(event) {
@@ -83,8 +88,10 @@
     const boxes = keys.map(key => key.getBoundingClientRect()), x = event.clientX, y = event.clientY;
     const left = Math.min(...boxes.map(box => box.left)), right = Math.max(...boxes.map(box => box.right));
     const top = Math.min(...boxes.map(box => box.top)), bottom = Math.max(...boxes.map(box => box.bottom));
-    // 選單：手指離開項目的範圍就不跟了（這時放開＝不選）。有槽的那一排沒有「離開」，一路跟到放開
-    if (isMenu(track) && (x < left - REACH_PX || x > right + REACH_PX || y < top - REACH_PX || y > bottom + REACH_PX)) { drop(); return; }
+    // 選單：手指還在小鍵上（只是按的時候晃了一下），或離開了項目的範圍，就不跟——這時放開不會選到東西。
+    // 有槽的那一排沒有「離開」，一路跟到放開
+    const onChip = slide.chip && slide.chip.contains(nodeAt(event));
+    if (onChip || (isMenu(track) && (x < left - REACH_PX || x > right + REACH_PX || y < top - REACH_PX || y > bottom + REACH_PX))) { removeThumb(); return; }
     const gap = box => Math.hypot(x - (box.left + box.width / 2), y - (box.top + box.height / 2));
     const near = boxes.reduce((best, box, index) => (gap(box) < gap(boxes[best]) ? index : best), 0);
     if (!slide.thumb) {
@@ -95,8 +102,8 @@
       track.append(slide.thumb);
     }
     const box = boxes[near];
-    put(slide.thumb, track, clamp(x - box.width / 2, left, right - box.width), clamp(y - box.height / 2, top, bottom - box.height), box.width, box.height);
-    heat(keys[near]);
+    placeThumb(slide.thumb, track, clamp(x - box.width / 2, left, right - box.width), clamp(y - box.height / 2, top, bottom - box.height), box.width, box.height);
+    markHot(keys[near]);
   }
   // 放開：靠近哪一顆就選哪一顆，框滑到那一顆上再交還給那一顆自己的樣子
   function settle(track, thumb, target, origin, cancelled) {
@@ -105,20 +112,21 @@
       if (target) target.classList.remove('is-slide-hot');
       if (!track.querySelector('.slide-thumb')) track.classList.remove('is-sliding');   // 還有另一次拖曳的框就先留著
     };
-    if (cancelled || !target) { done(); return; }
-    stray = { origin, at: performance.now() };   // 拖過之後瀏覽器補發的 click 不算，不然拖回原位放開會把展開的那一類收起來
+    if (cancelled || !target || !target.isConnected) { done(); return; }   // 拖到一半那一顆被重畫掉了就不選
     // 選單：選到原本那一項也照點（選單會收起，和點一下一樣）；有槽的那一排選到原本那一顆就不動（分類鍵再點一次是收起）
     if (isMenu(track) || target !== track.querySelector(SELECTED_KEY)) target.click();
-    if (CALM.matches) { done(); return; }
+    expectStrayClick(origin);   // 不擋的話，拖回原位放開會被補發的 click 把展開的那一類收起來
+    if (CALM.matches || !target.isConnected) { done(); return; }
     thumb.classList.add('is-settling');
     const box = target.getBoundingClientRect();
-    put(thumb, track, box.left, box.top, box.width, box.height);
+    placeThumb(thumb, track, box.left, box.top, box.width, box.height);
     setTimeout(done, SETTLE_MS);
   }
 
   document.addEventListener('pointerdown', event => {
-    pressOpened = null;
     if (!event.isPrimary || event.button !== 0) return;
+    pressOpened = null;
+    if (slide) { removeThumb(); slide = null; }   // 上一次拖曳沒有收到放開（按下去的那一顆拖到一半被重畫掉之類）
     const chip = event.target.closest('.chart-chip[aria-controls]');
     if (chip) {
       const menu = menuOf(chip);
@@ -128,45 +136,49 @@
         const current = openChip();
         if (current) set(current, false);
         set(chip, true);
-        pressOpened = chip;
+        pressOpened = { chip, releasedAt: 0 };
       }
-      slide = { group: menu, origin: chip, chip, track: trackOf(menu), thumb: null, x: event.clientX, y: event.clientY, moved: false, hot: null };
+      slide = begin(event, menu, chip, chip);
       return;
     }
     const button = event.target.closest('button');
     const group = button && button.closest(GROUPS);
-    if (group && usable(button)) slide = { group, origin: button, chip: null, track: trackOf(group), thumb: null, x: event.clientX, y: event.clientY, moved: false, hot: null };
+    if (group && usable(button)) slide = begin(event, group, button, null);
   });
 
   document.addEventListener('pointermove', event => {
     if (!slide || !event.isPrimary) return;
-    if (event.pointerType === 'mouse' && !(event.buttons & 1)) { drop(); slide = null; return; }   // 在視窗外放開了滑鼠
+    if (event.pointerType === 'mouse' && !(event.buttons & 1)) { removeThumb(); slide = null; pressOpened = null; return; }   // 在視窗外放開了滑鼠
     if (!slide.moved && Math.hypot(event.clientX - slide.x, event.clientY - slide.y) < SLIDE_START_PX) return;
     slide.moved = true;
     if (slide.track) { follow(event); return; }
     const node = nodeAt(event), button = node && node.closest('button');
-    heat(usable(button) && slide.group.contains(button) ? button : null);
+    markHot(usable(button) && slide.group.contains(button) ? button : null);
   });
 
   function finish(event, cancelled) {
     if (!slide || !event.isPrimary) return;
     const { hot, moved, chip, origin, track, thumb } = slide;
-    if (thumb) { slide = null; settle(track, thumb, hot, origin, cancelled); return; }
-    heat(null);
+    // 有框：照框的位置選。這條路之後不會再有「同一下」的 click 走到小鍵（補發的那一下會被擋掉），所以按下去打開的記號要清掉，
+    // 不然下一次用鍵盤開選單會被當成同一下而沒有反應
+    if (thumb) { slide = null; pressOpened = null; settle(track, thumb, hot, origin, cancelled); return; }
+    markHot(null);
     slide = null;
-    if (cancelled || !moved) return;   // 沒有滑：就是點一下，交給下面的 click
+    if (cancelled) { pressOpened = null; return; }
+    if (pressOpened) pressOpened.releasedAt = performance.now();
+    if (!moved) return;   // 沒有滑：就是點一下，交給下面的 click
     if (hot && hot !== origin) {
       pressOpened = null;
-      stray = { origin, at: performance.now() };
       hot.click();
+      expectStrayClick(origin);
       return;
     }
     // 小鍵：滑出去之後在選單與小鍵以外的地方放開＝不選，收起。回到小鍵上放開當成點一下。
     const node = nodeAt(event);
     if (chip && chip.getAttribute('aria-expanded') === 'true' && !(node && (chip.contains(node) || menuOf(chip).contains(node)))) {
       pressOpened = null;
-      stray = { origin, at: performance.now() };
       close(chip, false);
+      expectStrayClick(origin);
     }
   }
   document.addEventListener('pointerup', event => finish(event, false));
@@ -185,7 +197,10 @@
     const chip = event.target.closest('.chart-chip[aria-controls]');
     const current = openChip();
     if (chip) {
-      if (pressOpened === chip) { pressOpened = null; return; }   // 這一下按下去的時候已經打開了
+      // 這一下按下去的時候已經打開了，放開跟著來的 click 不要又收回。隔了一陣子才來的 click（例如之後用鍵盤按）不算同一下
+      const samePress = pressOpened && pressOpened.chip === chip && performance.now() - pressOpened.releasedAt < PRESS_CLICK_MS;
+      pressOpened = null;
+      if (samePress) return;
       if (current && current !== chip) set(current, false);
       set(chip, chip.getAttribute('aria-expanded') !== 'true');
       return;

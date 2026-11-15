@@ -31,6 +31,7 @@ def step(name: str, action) -> None:
         action()
     except Exception as error:  # noqa: BLE001
         check(name, False, str(error).splitlines()[0][:160])
+        Hold.release_all()   # 拖到一半丟例外的話把手指、滑鼠放開，不然後面的檢查會一直是按住的狀態
 
 
 PANEL_OPEN = "document.getElementById('detailPanel').getAttribute('aria-hidden') === 'false'"
@@ -64,15 +65,26 @@ def pick_period(page: Page, value: str) -> str:
 class Hold:
     """按住不放的一次拖曳。桌機用滑鼠；手機經由瀏覽器的除錯介面送真正的觸控事件（Playwright 自己的觸控只會點一下）。"""
 
+    live: list["Hold"] = []   # 還按著沒放開的
+
     def __init__(self, page: Page, mobile: bool) -> None:
         self.page, self.mobile, self.at = page, mobile, (0.0, 0.0)
         self.cdp = page.context.new_cdp_session(page) if mobile else None
+
+    @classmethod
+    def release_all(cls) -> None:
+        for hold in list(cls.live):
+            try:
+                hold.up()
+            except Exception:  # noqa: BLE001  頁面已經關掉之類的，放不開就算了
+                cls.live.remove(hold)
 
     def touch(self, kind: str, points: list) -> None:
         self.cdp.send("Input.dispatchTouchEvent", {"type": kind, "touchPoints": [{"x": x, "y": y} for x, y in points]})
 
     def down(self, x: float, y: float) -> None:
         self.at = (x, y)
+        Hold.live.append(self)
         if self.mobile:
             self.touch("touchStart", [self.at])
         else:
@@ -89,6 +101,8 @@ class Hold:
         self.at = (x, y)
 
     def up(self) -> None:
+        if self in Hold.live:
+            Hold.live.remove(self)
         if self.mobile:
             self.touch("touchEnd", [])
             self.cdp.detach()
@@ -129,6 +143,18 @@ def slide_period(page: Page, tag: str, mobile: bool) -> None:
     hold.up()
     page.wait_for_timeout(250)
     check(f"{tag}：放開就選到並收起選單", chip.inner_text().strip() == "週K" and not menu.is_visible(), chip.inner_text())
+    chip.focus()
+    page.keyboard.press("Enter")
+    check(f"{tag}：滑動選完之後，用鍵盤按一次 Enter 就打開選單", menu.is_visible())
+    page.keyboard.press("Escape")
+    hold = Hold(page, mobile)
+    x, y = centre(chip)
+    hold.down(x, y)
+    hold.move(x + 1, y + 14, steps=3)   # 手指還在小鍵上，只是按的時候晃了一下
+    hold.up()
+    page.wait_for_timeout(250)
+    check(f"{tag}：按在小鍵上晃一下就放開，不會誤選，選單開著", chip.inner_text().strip() == "週K" and menu.is_visible(), chip.inner_text())
+    page.keyboard.press("Escape")
     hold = Hold(page, mobile)
     x, y = centre(chip)
     hold.down(x, y)
@@ -501,7 +527,8 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
         count = page.locator(rows).count()
         check(f"{tag}：那一天的名單先列 10 檔", count > 10 and page.evaluate(VISIBLE_COUNT, rows) == 10, count)
         page.locator("#chipList [data-more]").click()
-        check(f"{tag}：點了再列出其餘的", page.evaluate(VISIBLE_COUNT, rows) == count, count)
+        check(f"{tag}：點了再列出其餘的，標題跟著寫成前 {count}", page.evaluate(VISIBLE_COUNT, rows) == count and f"前 {count}" in title.inner_text(),
+              [count, title.inner_text()])
         page.locator(f"#panelBody .bar-hit[data-day='{latest}']").click()
         check(f"{tag}：點回最新一天，名單回到有連續天數的前 10", short(latest) in title.inner_text() and page.locator("#chipList td.streak").count() == 10, title.inner_text())
         close_chip()

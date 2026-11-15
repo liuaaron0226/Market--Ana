@@ -246,7 +246,6 @@
 /* ================= 資訊密度整理（本人 11-09：「資訊比較多地方還是需要在優化一下」） ================= */
 
 /* 籌碼卡：日期統一寫在標題；迷你圖淡一點、矮一點，讓數字當主角 */
-.hm .chip-grid.hm-same-date .chip-date { display: none; }
 .hm .chip-card { gap: 4px; padding-top: 16px; padding-bottom: 16px; }
 .hm .chip-name i { opacity: 0; transition: opacity 160ms var(--ease-out), transform 160ms var(--ease-out); }
 .hm .chip-card:hover .chip-name i { opacity: 1; transform: translateX(2px); }
@@ -823,6 +822,8 @@ body.hm .screen-picks { position: relative; display: flex; flex-wrap: wrap; gap:
 body.hm .screen-picks .screen-controls:not([hidden]) { display: contents; }
 body.hm .screen-picks .chart-menu { right: auto; left: 0; }
 body.hm .screen-tab-menu { flex-direction: column; flex-wrap: nowrap; width: min(300px, calc(100vw - 48px)); max-height: min(70vh, 520px); overflow-y: auto; }
+/* 這個選單畫面矮的時候要能捲：從裡面的按鈕開始上下拖是捲選單，不是拖框（按住小鍵拖進來仍然是拖框） */
+body.hm .screen-tab-menu button { touch-action: pan-y; }
 body.hm .screen-tab-menu .screen-tabs { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 2px; margin: 0; padding: 0; overflow: visible; }
 body.hm .screen-tab-menu .hm-tab-cap { flex-basis: auto; height: auto; margin: 8px 10px 2px; }
 body.hm .screen-tab-menu .screen-check { margin: 6px 10px 2px; padding-top: 8px; border-top: 1px solid var(--hair); }

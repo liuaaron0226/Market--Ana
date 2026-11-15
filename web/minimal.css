@@ -890,7 +890,6 @@ html, body { height: auto; }
 .bar-hit:hover rect:last-child, .bar-hit:focus-visible rect:last-child { opacity: 1; }
 .bar-hit.is-on rect:first-child { fill: color-mix(in srgb, var(--gold) 14%, transparent); }
 .drill-table { margin-top: 12px; }
-.drill-table h4 { font-size: 13px; color: var(--dim); font-weight: 600; margin-bottom: 6px; }
 .drill-table table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 .drill-table th { text-align: left; font-weight: 500; color: var(--faint); font-size: 12px; padding: 4px 6px; border-bottom: 1px solid var(--line); }
 .drill-table td { padding: 6px; border-bottom: 1px solid var(--line); }

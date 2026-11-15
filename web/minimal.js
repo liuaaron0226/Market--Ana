@@ -779,7 +779,7 @@
       { key: 'futures', name: '外資期貨空單', value: `${fmt(Math.abs(fut), 0)} 口`, tone: fut < futWeek ? 'down' : 'up', read: `比一週前${fut < futWeek ? '多' : '少'} ${fmt(Math.abs(fut - futWeek), 0)} 口${futStreak}`, chart: spark(U.slice(-20).map(r => -r.net_contracts), 'var(--down)'), date: last(U).date, plain: pick('foreign') },
       { key: 'margin', name: '融資餘額', value: `${fmt(mLast.margin_balance_billion, 0)} 億`, tone: 'mid', read: `比 ${md(mPeak.date)} 高點少 ${fmt(mPeak.margin_balance_billion - mLast.margin_balance_billion, 0)} 億`, chart: spark(M.slice(-20).map(r => r.margin_balance_billion), 'var(--gold)'), date: mLast.date, plain: pick('margin') },
       { key: 'short', name: '融券餘額', value: `${fmt(sNow / 10000, 1)} 萬張`, tone: sNow > s20 ? 'down' : 'up', read: `比 20 天前${sNow > s20 ? '多' : '少'} ${fmt(Math.abs(sNow / s20 - 1) * 100, 0)}%`, chart: spark(M.slice(-20).map(r => r.short_units), 'var(--accent)'), date: mLast.date, plain: pick('short') },
-      { key: 'trust', name: '投信近一週', value: `${t5 >= 0 ? '買' : '賣'} ${fmt(Math.abs(t5), 0)} 億`, tone: t5 >= 0 ? 'up' : 'down', read: '近一週合計', chart: spark(F.slice(-20).map(r => r.trust_billion), '', true), date: last(F).date, plain: pick('trust') },
+      { key: 'trust', name: '投信近一週', value: `${t5 >= 0 ? '買' : '賣'} ${fmt(Math.abs(t5), 0)} 億`, tone: t5 >= 0 ? 'up' : 'down', read: `最新一天${last(F).trust_billion < 0 ? '賣' : '買'} ${fmt(Math.abs(last(F).trust_billion), 0)} 億`, chart: spark(F.slice(-20).map(r => r.trust_billion), '', true), date: last(F).date, plain: pick('trust') },
       { key: 'volume', name: '成交金額', value: `${fmt(amounts.at(-1), 0)} 億`, tone: 'mid', read: `平常的 ${fmt(amtRatio, 1)} 倍`, chart: spark(amounts, 'var(--accent)'), date: A.daily.at(-1).date, plain: pick('volume') },
     ];
   }
@@ -789,7 +789,6 @@
     const cards = chipCards();
     grid.innerHTML = cards.map(card => `<button type="button" class="chip-card tone-${card.tone}" data-chip="${card.key}"><span class="chip-name">${esc(card.name)}<i aria-hidden="true">›</i></span><strong class="chip-value num">${esc(card.value)}</strong><span class="chip-read">${esc(card.read)}</span>${card.chart}<span class="chip-date num">資料 ${esc(card.date.slice(5).replace('-', '/'))}</span></button>`).join('');
     grid.querySelectorAll('[data-chip]').forEach(button => button.addEventListener('click', () => openPanel('chip', { key: button.dataset.chip }, button)));
-    grid.classList.remove('hm-same-date');
     if (PL) {
       $('readLine').textContent = PL.one_line;
       // 每點只留「主角＋一句判斷」；數字細節點開詳情看。標題沒有「主角：」時整句當判斷。
@@ -831,7 +830,7 @@
       const on = r.date === selected;
       // 選到的那一天，日期與數字寫在圖的最上面、對著那一根；靠邊的幾根改成靠左或靠右對齊，字才不會被切掉
       const edge = i < 4 ? ['start', pad + i * step] : i > rows.length - 5 ? ['end', pad + (i + 1) * step] : ['middle', pad + i * step + step / 2];
-      return `<g class="bar-hit${on ? ' is-on' : ''}" data-day="${r.date}" tabindex="0" role="button" aria-label="${esc(r.date)} ${esc(r.label)}${has ? '，點看那一天的名單' : ''}"><rect x="${pad + i * step}" y="0" width="${step}" height="${H}" fill="transparent"/><rect x="${pad + i * step + step * .14}" y="${top}" width="${step * .72}" height="${h}" rx="2" fill="${tone}" opacity="${on ? 1 : .72}"/><text class="bar-value" x="${edge[1]}" y="17" text-anchor="${edge[0]}">${esc(shortDay(r.date))} ${esc(r.label)}</text></g>`;
+      return `<g class="bar-hit${on ? ' is-on' : ''}" data-day="${esc(r.date)}" tabindex="0" role="button" aria-label="${esc(r.date)} ${esc(r.label)}${has ? '，點看那一天的名單' : ''}"><rect x="${pad + i * step}" y="0" width="${step}" height="${H}" fill="transparent"/><rect x="${pad + i * step + step * .14}" y="${top}" width="${step * .72}" height="${h}" rx="2" fill="${tone}" opacity="${on ? 1 : .72}"/><text class="bar-value" x="${edge[1]}" y="17" text-anchor="${edge[0]}">${esc(shortDay(r.date))} ${esc(r.label)}</text></g>`;
     }).join('');
     const ticks = [0, Math.floor(rows.length / 2), rows.length - 1].map(i => `<text x="${pad + i * step + step / 2}" y="${H - 6}" text-anchor="middle">${esc(rows[i].date.slice(5).replace('-', '/'))}</text>`).join('');
     return `<svg class="drill-chart" viewBox="0 0 ${W} ${H}" role="group" aria-label="近 20 個交易日，點任一天看那一天的名單">${signedAxis ? `<line x1="0" x2="${W}" y1="${zero}" y2="${zero}" stroke="var(--line-strong)"/>` : ''}${bars}${ticks}</svg>`;
@@ -860,13 +859,15 @@
   const signedLots = v => `${v >= 0 ? '+' : '−'}${fmt(Math.abs(v), 0)} 張`;
   const signedBillion = v => (v == null ? '—' : `${v >= 0 ? '+' : '−'}${fmt(Math.abs(v), 1)} 億`);
   const signTone = v => (v >= 0 ? 'upc' : 'dn');
-  const ESTIMATED = '金額 <small>估</small>';   // 個股的金額是用張數乘收盤價估的
-  // 欄位：[欄名, 取字, 取顏色類別]。最新一天有連續天數；其他天是那一天的排行，欄位照當天抓到的資料。
+  const ESTIMATED = { html: '金額 <small>估</small>' };   // 個股的金額是用張數乘收盤價估的
+  // 欄位：[欄名, 取字, 取顏色類別]。欄名是一般的字（放進表格時會跳脫）；要帶標記的寫成 { html }，只能是這裡寫死的常數。
+  // 最新一天有連續天數；其他天是那一天的排行，欄位照當天抓到的資料。
+  const columnHead = name => (typeof name === 'string' ? esc(name) : name.html);
   function latestColumns(key, word) {
     const value = key === 'volume' ? ['成交', r => `${fmt(r.value, 0)} 億`]
       : key === 'margin' || key === 'short' ? ['增減', r => signedLots(r.value), r => signTone(r.value)]
         : [ESTIMATED, r => signedBillion(r.value), r => signTone(r.value)];
-    return [value, [esc(word), r => `${fmt(r.streak, 0)} 天${r.capped ? '以上' : ''}`, () => 'streak']];
+    return [value, [word, r => `${fmt(r.streak, 0)} 天${r.capped ? '以上' : ''}`, () => 'streak']];
   }
   function dayColumns(key) {
     if (key === 'foreign' || key === 'trust') return [[ESTIMATED, r => signedBillion(r[`${key}_billion`]), r => signTone(r[`${key}_billion`])], ['張數', r => signedLots(r[`${key}_lots`])]];
@@ -886,7 +887,7 @@
   function listTable(rows, columns) {
     if (!rows || !rows.length) return '<p class="chip-date">這一天沒有資料。</p>';
     const body = rows.map((r, i) => `<tr${i >= LIST_ROWS ? ' class="is-extra"' : ''}><td class="num">${i + 1}</td><td><a class="stock-link" href="stock.html?code=${encodeURIComponent(r.code)}"><span class="num">${esc(r.code)}</span> ${esc(r.name)}</a></td>${columns.map(c => `<td class="num ${c[2] ? c[2](r) : ''}">${esc(c[1](r))}</td>`).join('')}</tr>`).join('');
-    return `<div class="drill-table chip-table more-wrap"><table><thead><tr><th>#</th><th>股票</th>${columns.map(c => `<th class="num">${c[0]}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table>${rows.length > LIST_ROWS ? moreButton(`看到前 ${rows.length} ›`) : ''}</div>`;
+    return `<div class="drill-table chip-table more-wrap"><table><thead><tr><th>#</th><th>股票</th>${columns.map(c => `<th class="num">${columnHead(c[0])}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table>${rows.length > LIST_ROWS ? moreButton(`看到前 ${rows.length} ›`) : ''}</div>`;
   }
   // 填名單：其他天的排行要去取，取回後只在使用者仍停在同一張卡、同一天、同一邊時才填入（舊請求不覆蓋新選擇）。
   let drillToken = 0;
@@ -894,8 +895,18 @@
     const list = chipList(key), day = chipDay(key), token = ++drillToken;
     const target = () => els.panelBody.querySelector('#chipList'), title = els.panelBody.querySelector('#chipListTitle');
     if (!list || !title || !target()) return;
-    title.innerHTML = `${esc(list[0])} <small class="num">${esc(shortDay(day))}</small>`;
-    const fill = html => { if (token === drillToken && target()) { target().innerHTML = html; bindMore(target()); } };
+    const name = shown => `${esc(shown)} <small class="num">${esc(shortDay(day))}</small>`;
+    title.innerHTML = name(list[0]);
+    const fill = html => {
+      if (token !== drillToken || !target()) return;
+      target().innerHTML = html;
+      bindMore(target());
+      // 展開到全部之後，標題的「前 10」跟著寫成實際列出的檔數；收起再寫回來
+      const more = target().querySelector('[data-more]');
+      if (more) more.addEventListener('click', () => {
+        title.innerHTML = name(more.getAttribute('aria-expanded') === 'true' ? list[0].replace(`前 ${LIST_ROWS}`, `前 ${target().querySelectorAll('tbody tr').length}`) : list[0]);
+      });
+    };
     if (NOW && day === NOW.as_of) { fill(listTable(NOW[list[1]], latestColumns(key, list[2]))); return; }
     if (!detailDays.has(day)) { fill(`<p class="chip-date">這一天的個股明細還沒抓到（目前有 ${DT ? DT.days.length : 0} 天）。</p>`); return; }
     fill('<p class="chip-date" data-loading>載入明細中…</p>');

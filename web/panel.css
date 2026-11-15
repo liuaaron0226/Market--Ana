@@ -116,7 +116,6 @@
 .hm .more-detail[open] > summary::after { content: "−"; background: var(--panel2); }
 
 /* ---------- 籌碼明細 ---------- */
-.hm .drill-table h4 { font: 400 12px var(--sans); color: var(--faint); }
 .hm .drill-table table { font-size: 13px; }
 .hm .drill-table th { border-bottom: 1px solid var(--ink); }
 .hm .drill-table td { border-bottom: 1px solid var(--hair); padding-top: 8px; padding-bottom: 8px; }
@@ -168,11 +167,9 @@
 .hm .bar-hit.is-on rect:first-child { fill: color-mix(in srgb, var(--ink) 6%, transparent); }
 .hm .bar-hit:focus-visible rect:first-child { stroke: var(--accent); stroke-width: 1.5; }
 
-/* 選中日期標題：大日期＋數值，像報表小標 */
 
 /* 明細表 */
 .hm .drill-table { margin-top: 16px; }
-.hm .drill-table h4 { margin-bottom: 8px; }
 .hm .drill-table table { font-size: 14px; font-variant-numeric: tabular-nums; }
 .hm .drill-table th { padding: 8px 8px 8px 0; font-size: 12px; color: var(--faint); font-weight: 400; }
 .hm .drill-table td { padding: 10px 8px 10px 0; vertical-align: baseline; }
@@ -186,7 +183,6 @@
 .hm .drill-table .stock-link::after { content: " ›"; color: var(--faint); opacity: 0; transition: opacity 120ms var(--ease-out); }
 .hm .drill-table tbody tr:hover .stock-link::after { opacity: 1; }
 
-/* 註腳：與表格分開，小字 */
 
 @media (max-width: 860px) {
   .hm .drill-table table { font-size: 13px; }
