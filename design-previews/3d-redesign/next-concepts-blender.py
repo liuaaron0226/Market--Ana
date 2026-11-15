@@ -6,11 +6,14 @@
 這三個會動，一次算出一串畫面（frames-<名稱>/f000.png…），由 next-concepts-sheet.py 接成動圖。
 第三輪（本人：①③ 整合成兩層、提兩個方向；⑤ 重做，箭頭看不出上下、放不進版面；不要底下那塊板子）：
 integ-a、integ-b、towers。這三個沒有底板、背景透明，由 next-concepts-sheet.py 疊到頁面的底色上。
+第四輪（本人：物件不要侷限在現實中的物品、要大膽；①＋③ 要看得出哪一檔降多少；⑤ 方向對但物件要重做）：
+flow（光帶分流）、crystal（晶柱與粒子）、orbs（浮沉的球）。一樣沒有底板、背景透明。
 用法：blender -b -P next-concepts-blender.py -- <輸出資料夾（要給完整路徑）> <場景名稱> [邊長，預設 1000] [final：會動的場景只算最後一格]"""
 import math
 import sys
 from pathlib import Path
 
+import bmesh
 import bpy
 from mathutils import Vector
 
@@ -627,10 +630,229 @@ def towers():
 
 CLEAR = {"integ-a", "integ-b", "towers"}   # 沒有底板、背景透明的場景
 
+# ---------- 第四輪：抽象的形式。情境是示意的「建議 70%」，才看得到要降的量；每一檔降多少先照占比平均分攤（規則還沒定） ----------
+GOAL_NOW, GOAL_ADVICE = 88.3, 70.0
+TRIM_SHARE = (GOAL_NOW - GOAL_ADVICE) / GOAL_NOW   # 每一檔照占比要減掉自己的幾成
+
+
+def wan(amount):
+    return f"{amount / 10000:.0f} 萬"
+
+
+class Band:
+    """一條有厚度的光帶：從 (x0, 中心高 c0) 流到 (x1, 中心高 c1)，粗細 h 就是金額。progress 是流到哪裡。"""
+
+    def __init__(self, x0, c0, x1, c1, h, y, depth, code, alpha=0.84):
+        self.shape = (x0, c0, x1, c1, h, y, depth)
+        self.obj = bpy.data.objects.new("band", bpy.data.meshes.new("band"))
+        scene.collection.objects.link(self.obj)
+        self.obj.data.materials.append(material(code, 0.3, alpha))
+        self.update(1.0)
+
+    def update(self, progress):
+        x0, c0, x1, c1, h, y, depth = self.shape
+        steps, progress = 30, max(progress, 0.002)
+        verts, faces = [], []
+        for index in range(steps + 1):
+            s = index / steps * progress
+            x, centre = x0 + (x1 - x0) * s, c0 + (c1 - c0) * ease(s)
+            verts += [(x, y - depth / 2, centre - h / 2), (x, y + depth / 2, centre - h / 2), (x, y + depth / 2, centre + h / 2), (x, y - depth / 2, centre + h / 2)]
+        for index in range(steps):
+            a, b = index * 4, index * 4 + 4
+            faces += [[a + k, a + (k + 1) % 4, b + (k + 1) % 4, b + k] for k in range(4)]
+        faces += [[3, 2, 1, 0], [steps * 4 + k for k in range(4)]]
+        mesh = self.obj.data
+        mesh.clear_geometry()
+        mesh.from_pydata(verts, [], faces)
+        fixed = bmesh.new()
+        fixed.from_mesh(mesh)
+        bmesh.ops.recalc_face_normals(fixed, faces=fixed.faces)
+        fixed.to_mesh(mesh)
+        fixed.free()
+        mesh.update()
+
+
+def flow():
+    """①＋③ 整合・「光帶分流」。錢是一條會流動的光帶，粗細就是金額。
+    左邊一整條是總資金，往右分成每一檔持股與現金；建議水位比現在低的時候，每一檔的光帶上緣會剝出一條金色的細帶流向現金——
+    那條細帶的粗細就是「這一檔要降多少」，旁邊寫著金額。右邊剩下的粗細是調整之後各檔留多少、現金變多少。
+    持股的市值與現金是樣本資料；「建議 70%」是示意的情境（樣本那天其實不用動）；每一檔降多少是照占比平均分攤，規則還沒定。"""
+    tall, depth, gap = 6.0, 0.7, 0.55
+    size = lambda amount: tall * amount / SAMPLE_TOTAL
+    blues = ["#245f9f", "#3f7fc2", "#6fa3d6"]
+    x0, x1, x2 = 0.0, 4.6, 9.8
+    items = [(name, value, blues[index]) for index, (name, _, value) in enumerate(SAMPLE_HOLDINGS)] + [("現金", SAMPLE_CASH, "#c9d5e2")]
+    start, level, firsts, seconds = 0.0, -gap * 1.5, [], []
+    for name, value, code in items:
+        h = size(value)
+        firsts.append(Band(x0 + 0.18, start + h / 2, x1 - 0.18, level + h / 2, h, 0, depth, code))
+        seconds.append((name, value, code, level, h))
+        start += h
+        level += h + gap
+    box((x0, 0, tall / 2), (0.3, depth + 0.1, tall), INK, bevel=0.05)
+    cuts = [value * TRIM_SHARE for _, _, value in SAMPLE_HOLDINGS]   # 照市值的占比分攤
+    cash_base, cash_h = seconds[3][3], size(SAMPLE_CASH)
+    pool = cash_base + cash_h + 0.75 - size(SAMPLE_CASH + sum(cuts))    # 調整後現金那一節的底
+    keeps, trims, tags, offset = [], [], [], 0.0
+    for index, (name, value, code, base, h) in enumerate(seconds[:3]):
+        cut = size(cuts[index])
+        box((x1, 0, base + h / 2), (0.3, depth + 0.1, h), INK, bevel=0.05)
+        keeps.append(Band(x1 + 0.18, base + (h - cut) / 2, x2 - 0.18, base + (h - cut) / 2, h - cut, 0, depth, code))
+        trims.append(Band(x1 + 0.18, base + h - cut / 2, x2 - 0.18, pool + offset + cut / 2, cut, -0.3, depth * 0.75, GOLD, alpha=0.9))
+        offset += cut
+        box((x2, 0, base + (h - cut) / 2), (0.3, depth + 0.1, h - cut), INK, bevel=0.05)
+        tags.append((text(name, (x2 + 0.4, -depth / 2, base + (h - cut) / 2 + 0.05), 0.34, INK, flat=False),
+                     text(f"降 {wan(cuts[index])}", (x2 + 0.4, -depth / 2, base + (h - cut) / 2 - 0.42), 0.34, GOLD, flat=False)))
+    box((x1, 0, cash_base + cash_h / 2), (0.3, depth + 0.1, cash_h), INK, bevel=0.05)
+    cash_band = Band(x1 + 0.18, cash_base + cash_h / 2, x2 - 0.18, pool + offset + cash_h / 2, cash_h, 0, depth, "#c9d5e2")
+    box((x2, 0, pool + (offset + cash_h) / 2), (0.3, depth + 0.1, offset + cash_h), INK, bevel=0.05)
+    cash_tag = (text("現金", (x2 + 0.4, -depth / 2, pool + (offset + cash_h) / 2 + 0.05), 0.34, INK, flat=False),
+                text("12% → 30%", (x2 + 0.4, -depth / 2, pool + (offset + cash_h) / 2 - 0.42), 0.34, GOLD, flat=False))
+    text("總資金", (x0 - 0.35, -depth / 2, tall / 2 + 0.15), 0.32, DIM, align="RIGHT", flat=False)
+    text(wan(SAMPLE_TOTAL), (x0 - 0.35, -depth / 2, tall / 2 - 0.4), 0.44, INK, align="RIGHT", flat=False)
+    text("股票水位 88% → 建議 70%", (x1 + 0.2, -depth / 2, level + 0.25), 0.36, GOLD, flat=False)
+
+    def animate(t):
+        for index, band in enumerate(firsts):
+            band.update(part(t, 0.02 + index * 0.03, 0.32 + index * 0.03))
+        for index, band in enumerate(keeps):
+            band.update(part(t, 0.34 + index * 0.03, 0.62 + index * 0.03))
+            trims[index].update(part(t, 0.5 + index * 0.07, 0.84 + index * 0.05))
+            for tag in tags[index]:
+                pop(tag, part(t, 0.72 + index * 0.05, 0.84 + index * 0.05))
+        cash_band.update(part(t, 0.4, 0.68))
+        for tag in cash_tag:
+            pop(tag, part(t, 0.88, 0.98))
+    return Vector((5.6, 0, 2.9)), (84, 0, 8), 16.5, animate, 36
+
+
+def hexa(center, radius, height, code, rough=0.35, alpha=1.0):
+    bpy.ops.mesh.primitive_cylinder_add(vertices=6, radius=radius, depth=height, location=center)
+    obj = bpy.context.active_object
+    mod = obj.modifiers.new("bevel", "BEVEL")
+    mod.width = 0.04
+    mod.segments = 2
+    obj.data.materials.append(material(code, rough, alpha))
+    return obj
+
+
+def crystal():
+    """①＋③ 整合・「晶柱與粒子」。每一檔持股是一根懸浮的六角晶柱，高度是錢：藍色是投入的成本、紅色是賺到的。
+    建議水位比現在低的時候，每一根頂端要降的那一截變成金色，碎成一顆一顆的粒子飛向現金那一根——
+    一顆粒子是 2 萬，哪一檔飛出去多少顆就是那一檔要降多少，旁邊寫著金額；左邊的水位條跟著從 88% 降到 70%。
+    持股的成本、市值與現金是樣本資料；「建議 70%」是示意的情境；每一檔降多少是照占比平均分攤，規則還沒定。"""
+    tall, radius, pitch, grain = 6.0, 0.95, 2.9, 20000
+    size = lambda amount: tall * amount / SAMPLE_TOTAL
+    cuts = [value * TRIM_SHARE for _, _, value in SAMPLE_HOLDINGS]
+    cash_x, cash_h = pitch * len(SAMPLE_HOLDINGS) + 0.9, size(SAMPLE_CASH)
+    hexa((cash_x, 0, cash_h / 2), radius, cash_h, "#c9d5e2", rough=0.25)
+    added = hexa((cash_x, 0, cash_h), radius, size(sum(cuts)), GOLD, rough=0.3, alpha=0.85)
+    text("現金", (cash_x, -radius, size(SAMPLE_CASH + sum(cuts)) + 1.25), 0.34, INK, align="CENTER", flat=False)
+    text("12% → 30%", (cash_x, -radius, size(SAMPLE_CASH + sum(cuts)) + 0.72), 0.32, GOLD, align="CENTER", flat=False)
+    caps, grains, tags = [], [], []
+    for index, (name, cost, value) in enumerate(SAMPLE_HOLDINGS):
+        x, top, cut = index * pitch, size(value), size(cuts[index])
+        kept_gain = max(0.0, size(value - cost) - cut)
+        kept_cost = top - cut - kept_gain
+        hexa((x, 0, kept_cost / 2), radius, kept_cost, "#2c6cb4")
+        if kept_gain > 0.01:
+            hexa((x, 0, kept_cost + kept_gain / 2), radius, kept_gain, UP)
+        caps.append((hexa((x, 0, top - cut / 2), radius, cut, GOLD, rough=0.3, alpha=0.9), top - cut, cut))
+        count = max(1, round(cuts[index] / grain))
+        for number in range(count):
+            angle = number * 2.4
+            away = (x + math.cos(angle) * radius * 0.55, math.sin(angle) * radius * 0.55, top - cut * (number + 0.5) / count)
+            grains.append((box(away, (0.17, 0.17, 0.17), GOLD, bevel=0.03, rough=0.3), away,
+                           (cash_x + math.cos(angle) * radius * 0.5, math.sin(angle) * radius * 0.5, cash_h + size(sum(cuts)) * 0.5),
+                           0.3 + index * 0.1 + number / count * 0.28, index))
+        text(name, (x, -radius, top + 1.25), 0.34, INK, align="CENTER", flat=False)
+        tags.append(text(f"降 {wan(cuts[index])}", (x, -radius, top + 0.72), 0.34, GOLD, align="CENTER", flat=False))
+    gauge_x = -2.6
+    box((gauge_x, 0, tall / 2), (0.34, 0.34, tall), GREY, bevel=0.05, rough=0.6, alpha=0.35)
+    fill = box((gauge_x, 0, tall * GOAL_NOW / 200), (0.36, 0.36, tall * GOAL_NOW / 100), "#2c6cb4", bevel=0.05, rough=0.3)
+    box((gauge_x, -0.05, tall * GOAL_ADVICE / 100), (0.8, 0.3, 0.06), GOLD, bevel=0)
+    text("建議 70%", (gauge_x - 0.55, -0.2, tall * GOAL_ADVICE / 100 - 0.12), 0.3, GOLD, align="RIGHT", flat=False)
+    text("目前 88%", (gauge_x - 0.55, -0.2, tall * GOAL_NOW / 100 - 0.12), 0.3, INK, align="RIGHT", flat=False)
+    text("股票水位", (gauge_x, -0.2, tall + 0.35), 0.28, DIM, align="CENTER", flat=False)
+
+    def animate(t):
+        gone, landed = [0.0] * len(caps), 0.0
+        for cube, away, home, begin, owner in grains:
+            fly = part(t, begin, begin + 0.26)
+            cube.location = (lerp(away[0], home[0], fly), lerp(away[1], home[1], fly), lerp(away[2], home[2], fly) + math.sin(math.pi * fly) * 2.4)
+            pop(cube, 0.0 if fly <= 0 or fly >= 1 else 1.0)
+            gone[owner] += part(t, begin, begin + 0.08)
+            landed += fly
+        for index, (cap, base, cut) in enumerate(caps):
+            count = sum(1 for grain_ in grains if grain_[4] == index)
+            stretch(cap, base, cut, 1 - gone[index] / count)
+            pop(tags[index], part(t, 0.28 + index * 0.1, 0.4 + index * 0.1))
+        stretch(added, cash_h, size(sum(cuts)), landed / len(grains))
+        stretch(fill, 0, tall * GOAL_NOW / 100, 1 - (1 - GOAL_ADVICE / GOAL_NOW) * landed / len(grains))
+    return Vector((3.8, 0, 3.3)), (74, 0, 12), 17.0, animate, 40
+
+
+def orbs():
+    """⑤ 短中長期走勢・「浮上來的與沉下去的」。每一期中間一條線；每個指標是一顆球，各用一條線繫在那條線上：
+    偏多的指標往上浮（紅），偏空的往下沉（綠），球上寫著是哪個指標。旁邊的圓環停在「多的比空的多幾顆」的高度——
+    環在線上面是偏多、線下面是偏空、套在線上是盤整。上下就是畫面的上下。
+    樣本資料裡走勢判讀還沒產生，這張的票是示意（票數照現行規則：短期 5 票、中期與長期各 4 票）。"""
+    periods = [("短期", [("MA5", -1), ("MA10", -1), ("MACD", -1), ("RSI", -1), ("KD", 1)]),
+               ("中期", [("MA60", -1), ("20日", -1), ("MA20", 1), ("法人", 1)]),
+               ("長期", [("60日", -1), ("MA120", 1), ("MA60", 1), ("MA240", 1)])]
+    radius, rise, pitch = 0.5, 1.12, 4.6
+    movers = []
+    for column, (label, votes) in enumerate(periods):
+        x = column * pitch
+        box((x + 0.45, 0, 0), (3.3, 0.1, 0.05), INK, bevel=0)
+        net = sum(side for _, side in votes)
+        code, state = (UP, "偏多") if net > 0 else (DOWN, "偏空") if net < 0 else (GOLD, "盤整")
+        bobs = []
+        for side in (1, -1):
+            for level, (name, _) in enumerate([vote for vote in votes if vote[1] == side]):
+                home = side * (0.82 + level * rise)
+                orb = ball((x, 0, 0), radius, UP if side > 0 else DOWN, rough=0.25)
+                cord = box((x, 0.02, 0), (0.035, 0.035, 1), GREY, bevel=0)
+                tag = text(name, (x, -radius - 0.03, home - 0.12), 0.27, SLAB, align="CENTER", flat=False)
+                bobs.append((orb, cord, tag, home, side))
+        bpy.ops.mesh.primitive_torus_add(location=(x + 1.55, 0, 0), major_radius=0.34, minor_radius=0.075, rotation=(math.radians(90), 0, 0))
+        ring = bpy.context.active_object
+        bpy.ops.object.shade_smooth()
+        ring.data.materials.append(material(code, 0.3))
+        count = text(f"{net:+d}" if net else "0", (x + 2.05, -0.2, net * rise - 0.16), 0.42, code, flat=False)
+        text(label, (x - 0.6, -radius, 4.75), 0.34, DIM, flat=False)
+        text(state, (x + 0.35, -radius, 4.66), 0.58, code, flat=False)
+        movers.append((bobs, ring, count, net, column))
+
+    def animate(t):
+        for bobs, ring, count, net, column in movers:
+            drift = 0.0
+            for order, (orb, cord, tag, home, side) in enumerate(bobs):
+                begin = 0.04 + column * 0.07 + order * 0.09
+                out = part(t, begin, begin + 0.3)
+                swing = 1 + 0.28 * math.sin(math.pi * out) * (1 - out)                     # 浮過頭一點再回來
+                sway = 0.07 * math.sin(math.tau * (t * 1.5 + order * 0.21 + column * 0.13)) * out   # 到位之後輕輕晃
+                height = home * out * swing + sway
+                orb.location.z = height
+                pop(orb, min(1.0, out * 1.6))
+                cord.scale.z = max(abs(height), 0.001)
+                cord.location.z = height / 2
+                tag.location.z = height - 0.12
+                pop(tag, part(t, begin + 0.16, begin + 0.3))
+                drift += side * out
+            ring.location.z = drift * rise
+            pop(count, part(t, 0.84, 0.95))
+    return Vector((pitch + 0.55, 0, 0.35)), (80, 0, 0), 16.5, animate, 34
+
+
+CLEAR |= {"flow", "crystal", "orbs"}
+
 built = {"tank": tank, "stairs": stairs, "blocks": blocks, "bins": bins, "ramps": ramps, "terraces": terraces,
-         "tank2": tank2, "blocks2": blocks2, "jacks": jacks, "integ-a": integ_a, "integ-b": integ_b, "towers": towers}[concept]()
+         "tank2": tank2, "blocks2": blocks2, "jacks": jacks, "integ-a": integ_a, "integ-b": integ_b, "towers": towers,
+         "flow": flow, "crystal": crystal, "orbs": orbs}[concept]()
 target, angles, ortho = built[:3]
 animate = built[3] if len(built) > 3 else None
+frame_count = built[4] if len(built) > 4 else 30
 
 # 鏡頭：正投影，從前上方看
 camera_data = bpy.data.cameras.new("camera")
@@ -672,7 +894,7 @@ if animate and len(args) > 3 and args[3] == "final":   # 只算最後一格，�
     bpy.ops.render.render(write_still=True)
     print("saved", scene.render.filepath)
 elif animate:
-    frames = 30
+    frames = frame_count
     (out / f"frames-{concept}").mkdir(exist_ok=True)
     for index in range(frames):
         animate(index / (frames - 1))
