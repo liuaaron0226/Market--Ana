@@ -205,11 +205,30 @@ async function serveSample(pathname) {
   }
 }
 
-async function serveStatic(pathname) {
+// 在真的頁面上試的樣品：樣品的樣式與程式也放在 pro-samples（同樣只認英數與連字號的檔名）
+async function serveSampleAsset(pathname) {
+  try {
+    const body = await readFile(new URL(pathname.slice("/samples/".length), samples));
+    return new Response(body, { headers: { "content-type": TYPES[extname(pathname)], "cache-control": "no-store" } });
+  } catch {
+    return new Response("not found", { status: 404 });
+  }
+}
+
+async function serveStatic(pathname, query) {
   // 手機上好打的短網址，轉到樣品：/s 是 ⑤ 短中長期走勢、/s6 是 ⑥ 大戶持股、/s3 是 ③ 庫存總覽、/s1 是收復線／防守線點開之後
   const SHORT = { "/s": "trend-matrix", "/s6": "holders-weekly", "/s3": "holdings-overview", "/s1": "line-panel" };
   if (SHORT[pathname]) return new Response(null, { status: 302, headers: { location: `/samples/${SHORT[pathname]}.html` } });
+  // /s2 是個股頁把區塊收進三顆分類鍵的樣品：真的個股頁加上 fold=1
+  if (pathname === "/s2") return new Response(null, { status: 302, headers: { location: "/stock.html?code=2330&fold=1" } });
   if (/^\/samples\/[A-Za-z0-9-]+\.html$/.test(pathname)) return serveSample(pathname);
+  if (/^\/samples\/[A-Za-z0-9-]+\.(js|css)$/.test(pathname)) return serveSampleAsset(pathname);
+  if (pathname === "/stock.html" && query && query.get("fold") === "1") {
+    const html = await readFile(new URL("./stock.html", dist), "utf8");
+    console.log(`樣品被打開 個股頁收合 ${new Date().toLocaleTimeString("zh-TW", { hour12: false })}`);
+    return new Response(html.replace("</head>", '<link rel="stylesheet" href="/samples/stock-fold.css"></head>').replace("</body>", '<script src="/samples/stock-fold.js"></script></body>'),
+      { headers: { "content-type": TYPES[".html"], "cache-control": "no-store" } });
+  }
   let p = pathname.endsWith("/") ? pathname + "index.html" : pathname;
   if (!extname(p)) p += "/index.html";
   try {
@@ -236,7 +255,7 @@ const server = createServer(async (req, res) => {
   // 今日 AI 解讀在正式站是獨立的 Pages Function，不經 gate.handle。
   const resp = url.pathname === "/api/ai-digest"
     ? await aiDigest({ request, env, fetch: jwksFetch })
-    : await handle(request, env, () => serveStatic(url.pathname), deps);
+    : await handle(request, env, () => serveStatic(url.pathname, url.searchParams), deps);
   res.writeHead(resp.status, Object.fromEntries(resp.headers));
   res.end(Buffer.from(await resp.arrayBuffer()));
 });
