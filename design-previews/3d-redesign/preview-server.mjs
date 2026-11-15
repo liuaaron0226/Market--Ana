@@ -150,6 +150,8 @@ const samples = new URL("design-previews/3d-redesign/pro-samples/", root);
 async function serveSample(pathname) {
   try {
     const html = await readFile(new URL(pathname.slice("/samples/".length), samples), "utf8");
+    // 記一行，才知道手機有沒有真的連進來
+    console.log(`樣品被打開 ${pathname} ${new Date().toLocaleTimeString("zh-TW", { hour12: false })}`);
     return new Response(html.replaceAll("../../../web/", "/"), { headers: { "content-type": TYPES[".html"], "cache-control": "no-store" } });
   } catch {
     return new Response("not found", { status: 404 });
@@ -157,6 +159,8 @@ async function serveSample(pathname) {
 }
 
 async function serveStatic(pathname) {
+  // /s：手機上好打的短網址，轉到目前在看的樣品
+  if (pathname === "/s") return new Response(null, { status: 302, headers: { location: "/samples/trend-matrix.html" } });
   if (/^\/samples\/[A-Za-z0-9-]+\.html$/.test(pathname)) return serveSample(pathname);
   let p = pathname.endsWith("/") ? pathname + "index.html" : pathname;
   if (!extname(p)) p += "/index.html";
