@@ -278,7 +278,7 @@ def check_standard_width(browser: Browser, width: int, height: int, screenshots:
         assert int(page.locator("#panelBody .zone-rows").count()) == 1, "判斷線視窗缺歷史比例的圖"
         page.locator("#panelBody [data-outcome-panel='continue_break']").click()
         assert "不是明天的機率" in page.locator("#panelBody").inner_text(), "分布面板缺白話提醒"
-        page.locator("#panelBody .more-detail > summary").click()
+        page.locator("#panelBody .more-detail:has(.deep-links) > summary").click()
         result = ANALYSIS["backtest"]["results"][DEFAULT_SAMPLE]
         assert page.locator("#histogram").count() == 1
         expected_outcome_count = int(result["next_day_outcomes"]["counts"]["continue_break"])
@@ -292,14 +292,14 @@ def check_standard_width(browser: Browser, width: int, height: int, screenshots:
         for sample in ANALYSIS["backtest"]["samples"]:
             page.locator("#lineLower").click()
             page.locator("#panelBody [data-outcome-panel='between']").click()
-            page.locator("#panelBody .more-detail > summary").click()
+            page.locator("#panelBody .more-detail:has(.deep-links) > summary").click()
             page.locator("#panelBody [data-deep='samples']").click()
             page.locator(f"#panelBody [data-sample='{sample['key']}']").click()
             page.keyboard.press("Escape")
             for outcome in ("stand_back", "between", "continue_break"):
                 page.locator("#lineLower").click()
                 page.locator(f"#panelBody [data-outcome-panel='{outcome}']").click()
-                page.locator("#panelBody .more-detail > summary").click()
+                page.locator("#panelBody .more-detail:has(.deep-links) > summary").click()
                 expected_count = int(ANALYSIS["backtest"]["results"][sample["key"]]["next_day_outcomes"]["counts"][outcome])
                 assert int(page.locator("#histogram").get_attribute("data-sample-count")) == expected_count
                 assert int(page.locator("#histogram").get_attribute("data-expected-count")) == expected_count
@@ -322,7 +322,7 @@ def check_standard_width(browser: Browser, width: int, height: int, screenshots:
         }
         for layer, ok in checks_deep.items():
             page.locator("#lineLower").click()
-            page.locator("#panelBody .more-detail > summary").click()
+            page.locator("#panelBody .more-detail:has(.deep-links) > summary").click()
             page.locator(f"#panelBody [data-deep='{layer}']").click()
             assert ok(), f"第2層 {layer} 內容不符"
             assert page.locator("#panelBack").is_visible()
@@ -400,7 +400,7 @@ def check_mobile_sheet(browser: Browser, screenshots: list[str]) -> None:
     if max_scroll > 0:
         target_scroll = min(40, max_scroll)
         page.locator("#panelBody").evaluate("(el, y) => { el.scrollTop = y; }", target_scroll)
-        page.locator("#panelBody .more-detail > summary").click()
+        page.locator("#panelBody .more-detail:has(.deep-links) > summary").click()
         page.locator("#panelBody").evaluate("(el, y) => { el.scrollTop = y; }", target_scroll)
         page.locator("#panelBody [data-deep='method']").click()
         page.locator("#panelBack").click()
@@ -564,11 +564,11 @@ def check_panel_return(browser: Browser, width: int) -> None:
     page.wait_for_function("document.getElementById('marketState').textContent.startsWith('即時')")
     original_view = page.evaluate("({...window.MinimalApp.chart.view})")
     page.locator("#lineUpper").click()
-    page.locator("#panelBody .more-detail > summary").click()
+    page.locator("#panelBody .more-detail:has(.deep-links) > summary").click()
     page.locator("#panelBody").evaluate("el => el.scrollTop = 80")
     page.locator("#panelBody [data-outcome-panel='between']").click()
     assert page.locator("#panelBack").is_visible(), "收復線進入歷史結果後缺少返回上一層"
-    page.locator("#panelBody .more-detail > summary").click()
+    page.locator("#panelBody .more-detail:has(.deep-links) > summary").click()
     page.locator("#panelBody [data-deep='samples']").click()
     page.locator("#panelBack").click()
     assert "歷史結果" in page.locator("#panelTitle").inner_text()

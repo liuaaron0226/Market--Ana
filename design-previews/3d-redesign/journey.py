@@ -603,6 +603,8 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
                 ? 'line:' + li.querySelector('.tag').textContent : 'zone:' + li.querySelector('.zone').dataset.outcomePanel);
               const track = body.querySelector('.zone[data-outcome-panel="continue_break"] .zone-track');
               return { rows, point: body.querySelectorAll('.line-point').length, first: body.firstElementChild.className,
+                sentence: body.querySelector('.line-point').textContent, caption: body.querySelector('.zones > figcaption').textContent,
+                marked: [...body.querySelectorAll('.zone')].filter(zone => zone.querySelector('em')).map(zone => zone.dataset.outcomePanel),
                 lit: [...body.querySelectorAll('.zone-line.is-this .tag')].map(node => node.textContent),
                 marks: body.querySelectorAll('.zone-name em').length,
                 gaps: [...body.querySelectorAll('.zone-line span')].map(node => node.textContent),
@@ -610,17 +612,22 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
                 share: track.firstElementChild.getBoundingClientRect().width / track.getBoundingClientRect().width,
                 text: body.querySelector('.zone[data-outcome-panel="continue_break"] b').textContent,
                 wide: body.scrollWidth > body.clientWidth }; }""")
-            check(f"{tag}：{name}點開先看到一句重點", seen["point"] == 1 and seen["first"] == "line-point", seen["first"])
+            said = "回到 40,436 以上，才算止跌" if name == "收復線" else "跌破 37,837"
+            check(f"{tag}：{name}點開先看到一句重點", seen["point"] == 1 and seen["first"] == "line-point" and said in seen["sentence"], seen["sentence"])
+            check(f"{tag}：{name}的圖標題寫明是過去 35 次、不是明天的機率", "35 次" in seen["caption"] and "不是明天的機率" in seen["caption"], seen["caption"])
             check(f"{tag}：{name}的圖由上到下是站回、收復線、兩線間、防守線、跌破",
                   seen["rows"] == ["zone:stand_back", "line:收復線", "zone:between", "line:防守線", "zone:continue_break"], seen["rows"])
             check(f"{tag}：{name}的圖只有{name}那一條比較亮，收盤落在哪一區只標一區，兩條線都寫離收盤多遠",
-                  seen["lit"] == [name] and seen["marks"] == 1 and len(seen["gaps"]) == 2 and all("點" in gap for gap in seen["gaps"]), seen)
+                  seen["lit"] == [name] and seen["marked"] == ["between"] and seen["gaps"] == ["還差 734 點", "還有 1,865 點"], seen)
             check(f"{tag}：{name}的橫條長度就是旁邊寫的比例", abs(seen["share"] * 100 - float(seen["text"].rstrip("%"))) <= 1.5, [seen["share"], seen["text"]])
             check(f"{tag}：{name}其餘的收在「怎麼應對」「看詳細數字」，一開始都收著",
                   seen["folds"] == ["怎麼應對", "看詳細數字"] and seen["open"] == [False, False] and not page.locator("#actionFlat").is_visible(), seen)
             check(f"{tag}：{name}的面板沒有橫向捲動", not seen["wide"])
             page.locator("#panelBody details > summary").first.click()
-            check(f"{tag}：{name}點「怎麼應對」才看到手上沒股票、已經持有那兩句", page.locator("#actionFlat").is_visible() and page.locator("#actionHolding").is_visible())
+            notes = page.locator("#panelBody details[open] .plain-watch li").all_inner_texts()
+            check(f"{tag}：{name}點「怎麼應對」才看到手上沒股票、已經持有那兩句與要注意的兩點",
+                  page.locator("#actionFlat").is_visible() and page.locator("#actionHolding").is_visible() and len(notes) == 2
+                  and page.locator("#panelBody details[open] .plain-group").count() == 1, notes)
             page.locator("#panelBody .zone[data-outcome-panel='between']").click()
             page.wait_for_function("document.getElementById('panelTitle').textContent.includes('歷史結果')")
             check(f"{tag}：{name}的圖點某一區，照舊進那一區的歷史結果", "不是明天的機率" in page.locator("#panelBody").inner_text())
@@ -889,8 +896,8 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
         seen = []
         for kind in ("method", "sources", "samples", "table", "news"):
             # 從深入頁返回時，面板會記得「看詳細數字」原本是開著的；關著才需要點開。
-            if not page.evaluate("document.querySelector('#panelBody .more-detail').open"):
-                page.locator("#panelBody .more-detail > summary").click()
+            if not page.evaluate("document.querySelector('#panelBody .more-detail:has(.deep-links)').open"):
+                page.locator("#panelBody .more-detail:has(.deep-links) > summary").click()
             page.locator(f"#panelBody [data-deep='{kind}']").click()
             page.wait_for_function("document.getElementById('panelPath').textContent.includes('深入')")
             seen.append((kind, len(page.locator("#panelBody").inner_text().strip())))
@@ -901,8 +908,8 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
 
     def slide_samples() -> None:
         """「換一組比較樣本」的 6 組樣本：按住上下拖，選中的框跟著手指走，放開選到靠近的那一組（本人 11-15「也做」）。"""
-        if not page.evaluate("document.querySelector('#panelBody .more-detail').open"):
-            page.locator("#panelBody .more-detail > summary").click()
+        if not page.evaluate("document.querySelector('#panelBody .more-detail:has(.deep-links)').open"):
+            page.locator("#panelBody .more-detail:has(.deep-links) > summary").click()
         page.locator("#panelBody [data-deep='samples']").click()
         page.wait_for_function("document.getElementById('panelPath').textContent.includes('深入')")
         samples = page.locator("#panelBody .sample-list button")

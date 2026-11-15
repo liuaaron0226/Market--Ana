@@ -189,11 +189,10 @@
     return HEADLINE.lede ? `${summary}：${HEADLINE.lede}` : summary;
   }
 
+  // 現價落在哪一區：規則和收復線／防守線那張圖是同一個（line-zones.js）
+  const ZONE_NAMES = { stand_back: { id: 'up', label: '站回收復線' }, between: { id: 'mid', label: '兩線之間' }, continue_break: { id: 'down', label: '跌破防守線' } };
   function zoneFor(price) {
-    if (!Number.isFinite(Number(price))) return { id: 'unknown', label: '尚未取得' };
-    if (price >= UPPER) return { id: 'up', label: '站回收復線' };
-    if (price >= LOWER) return { id: 'mid', label: '兩線之間' };
-    return { id: 'down', label: '跌破防守線' };
+    return ZONE_NAMES[window.LineZones.zoneOf(Number(price), UPPER, LOWER)] || { id: 'unknown', label: '尚未取得' };
   }
 
   function buildOfficialMarketSnapshot() {
@@ -1076,24 +1075,27 @@
     const scenario = scenarioFor(scenarioName);
     const action = ACTIONS[scenarioName] || {};
     const outcomes = (A.backtest.results[selectedSample] || A.backtest.results[DEFAULT_SAMPLE]).next_day_outcomes;
-    // 線是照分析那一天畫的。那一天就是今天才寫「今天」；隔天盤中再看，那已經是上一個交易日，改寫日期
-    const cutoff = A.meta.cutoff_date || '';
-    const today = cutoff === new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Taipei' });
-    const day = today ? '今天' : cutoff ? ` ${shortDay(cutoff)} ` : '當天';
+    // 線是照分析那一天畫的：那一天就是今天才寫「今天」，不然寫日期（line-zones.js 的 dayOf）
+    const drawn = window.LineZones.dayOf(AS_OF.date || A.meta.cutoff_date || '', new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Taipei' }));
     const point = upper
       ? `收盤回到 <b class="num">${fmt(UPPER, 0)}</b> 以上，才算止跌。`
-      : `收盤跌破 <b class="num">${fmt(LOWER, 0)}</b>，就是${day}的低點沒守住。`;
+      : `收盤跌破 <b class="num">${fmt(LOWER, 0)}</b>，就是${esc(drawn.word)}的低點沒守住。`;
     const figure = window.LineZones.read({ upper: UPPER, lower: LOWER, close: CLOSE, percent: outcomes.percent, count: outcomes.sample_count });
-    const here = today ? '今天' : '收盤';
     const row = item => (item.kind === 'zone'
-      ? `<li><button type="button" class="zone" data-outcome-panel="${item.key}" style="--w:${item.percent}%;--tone:${ZONE_TONES[item.key]}" aria-label="${esc(outcomeLabels[item.key])} ${item.text}${item.here ? `，${here}落在這一區` : ''}，查看歷史分布詳情"><span class="zone-name">${item.label}${item.here ? `<em>${here}</em>` : ''}</span><span class="zone-track"><i></i></span><b class="num">${item.text}</b></button></li>`
+      ? `<li><button type="button" class="zone" data-outcome-panel="${item.key}" style="--w:${item.percent}%;--tone:${ZONE_TONES[item.key]}" aria-label="${esc(outcomeLabels[item.key])} ${item.text}${item.here ? `，${drawn.mark}落在這一區` : ''}，查看歷史分布詳情"><span class="zone-name">${item.label}${item.here ? `<em>${drawn.mark}</em>` : ''}</span><span class="zone-track"><i></i></span><b class="num">${item.text}</b></button></li>`
       : `<li class="zone-line${item.key === line ? ' is-this' : ''}" style="--tone:${ZONE_TONES[item.key]}"><i class="tag">${item.label}</i><strong class="num">${fmt(item.value, 0)}</strong><span>${item.gap}</span></li>`);
+    // 這條線怎麼來的：規則是跌破前一天最低點時收復線取「前一天最低點、當天最高點」比較低的那一個，防守線取當天最低點。
+    // 對得上當天的最高、最低點才寫白話；對不上就照規則的原話，不猜
+    const same = (a, b) => Number.isFinite(Number(a)) && Math.abs(Number(a) - b) < 0.005;
+    const prior = Number(AS_OF.previous_low), dayName = esc(drawn.word);
     const source = upper
-      ? `依回測規則，本次收復線取 ${fmt(UPPER)}；原始前日低為 ${fmt(AS_OF.previous_low)}。`
-      : `依回測規則，防守線取分析截止日最低 ${fmt(LOWER)}。`;
+      ? (same(AS_OF.high, UPPER) ? `這條線取${dayName}的最高點 ${fmt(UPPER)}${prior > UPPER ? `（前一天的最低點 ${fmt(prior)} 比較高，所以取比較近的這一個）` : ''}。`
+        : same(AS_OF.previous_low, UPPER) ? `這條線取前一天的最低點 ${fmt(UPPER)}。`
+          : `依回測規則，本次收復線取 ${fmt(UPPER)}；原始前日低為 ${fmt(AS_OF.previous_low)}。`)
+      : (same(AS_OF.low, LOWER) ? `這條線取${dayName}的最低點 ${fmt(LOWER)}。` : `依回測規則，防守線取分析截止日最低 ${fmt(LOWER)}。`);
     const watch = upper
       ? ['站上只是反彈，不代表開始漲回去。', '外資賣得變少，才比較可信。']
-      : ['只看收盤，盤中跌破又收回來不算。', CLOSE >= LOWER && CLOSE < UPPER ? '還在兩條線中間，不代表安全。' : ''];
+      : ['只看收盤，盤中跌破又收回來不算。', window.LineZones.zoneOf(CLOSE, UPPER, LOWER) === 'between' ? '還在兩條線中間，不代表安全。' : ''];
     return `
       <p class="line-point">${point}</p>
       <figure class="zones">

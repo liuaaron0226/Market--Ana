@@ -103,7 +103,7 @@ def period_counts(page) -> dict:
 def sample_counts(page) -> dict:
     """每組樣本：在面板切換後讀頁面上的次數（本機與雲端都用同一個操作）。"""
     page.locator("#lineLower").click()
-    page.locator("#panelBody .more-detail > summary").first.click()
+    page.locator("#panelBody .more-detail:has(.deep-links) > summary").first.click()
     page.locator("#panelBody [data-deep='samples']").click()
     keys = page.eval_on_selector_all("#panelBody [data-sample]", "ns => ns.map(n => n.dataset.sample)")
     out = {}

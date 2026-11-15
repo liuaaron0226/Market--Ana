@@ -98,3 +98,35 @@ test("資料裡的數字寫成字串也認得；null、空字串不會被當成 
   assert.deepEqual(rows.filter((row) => row.kind === "zone").map((zone) => [zone.text, zone.here]), [["14%", false], ["—", true], ["—", false]]);
   assert.equal(rows[1].gap, "還差 734 點");
 });
+
+test("差不到半點寫剛好在線上，不寫還差 0 點", () => {
+  const { rows } = loadRead()({ ...SAMPLE, close: SAMPLE.upper - 0.3 });
+  assert.equal(rows[1].gap, "剛好在線上");
+  assert.equal(rows[2].here, true);   // 落在哪一區照實際的數字，不照四捨五入
+});
+
+test("兩條線有一條不是數字：不標哪一區（不能因為比不出來就算成跌破）", () => {
+  const { rows } = loadRead()({ ...SAMPLE, lower: NaN });
+  assert.ok(rows.every((row) => row.kind !== "zone" || row.here === false));
+});
+
+function loadModule() {
+  const window = {};
+  vm.runInNewContext(readFileSync(new URL("web/line-zones.js", ROOT), "utf8"), { window });
+  return window.LineZones;
+}
+
+test("zoneOf：首頁標頭判斷現價落點用的同一條規則", () => {
+  const { zoneOf } = loadModule();
+  assert.deepEqual([40436, 40435.83, 39000, 37837.05, 37837].map((price) => zoneOf(price, 40435.83, 37837.05)),
+    ["stand_back", "stand_back", "between", "between", "continue_break"]);
+  assert.deepEqual([zoneOf(NaN, 40435.83, 37837.05), zoneOf(39000, NaN, 37837.05), zoneOf(39000, 40435.83, NaN)], [null, null, null]);
+});
+
+test("dayOf：線是今天畫的才寫今天；隔天再看，記號寫收盤、句子裡寫日期", () => {
+  const { dayOf } = loadModule();
+  assert.deepEqual({ ...dayOf("2026-11-06", "2026-11-06") }, { mark: "今天", word: "今天" });
+  assert.deepEqual({ ...dayOf("2026-11-06", "2026-11-09") }, { mark: "收盤", word: " 11/06 " });
+  assert.deepEqual({ ...dayOf("", "2026-11-09") }, { mark: "收盤", word: "當天" });
+  assert.deepEqual({ ...dayOf(undefined, undefined) }, { mark: "收盤", word: "當天" });
+});

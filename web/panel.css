@@ -114,12 +114,12 @@
 
 /* ---------- 收復線／防守線：一句重點＋一張照價位高低排的圖 ----------
    由上到下是站回、收復線、兩線間、防守線、跌破，和 K 線圖上的高低一樣；細橫條是過去隔天收在那一區的比例。
-   紅綠只在細橫條與小價籤上；沒有另外的陰影。（.panel-body 開頭是為了蓋過 .bd 對 figure、ol、p 的歸零） */
-.hm .panel-body .line-point { margin: 0; font: 600 19px/1.55 var(--sans); color: var(--ink); text-wrap: pretty; }
-.hm .panel-body .line-point b { font: 600 19px var(--mono); font-variant-numeric: tabular-nums; }
-.hm .panel-body .zones { margin: 20px 0 0; }
-.hm .panel-body .zones > figcaption { margin: 0 0 8px; font-size: 12px; color: var(--faint); }
-.hm .panel-body .zone-rows { margin: 0; padding: 0; list-style: none; }
+   紅綠只在細橫條與小價籤上；沒有另外的陰影。 */
+.hm .line-point { margin: 0; font: 600 19px/1.55 var(--sans); color: var(--ink); text-wrap: pretty; }
+.hm .line-point b { font: 600 19px var(--mono); font-variant-numeric: tabular-nums; }
+.hm .zones { margin: 20px 0 0; }
+.hm .zones > figcaption { margin: 0 0 8px; font-size: 12px; color: var(--faint); }
+.hm .zone-rows { margin: 0; padding: 0; list-style: none; }
 .hm .zone {
   display: grid; grid-template-columns: 84px minmax(0, 1fr) 48px; align-items: center; gap: 12px;
   width: 100%; min-height: 44px; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer;
@@ -140,7 +140,8 @@
 .hm .zone-line.is-this :is(strong, span) { color: var(--ink); }
 .hm .zones + .more-detail { margin-top: 16px; }
 .hm .more-detail + .more-detail { margin-top: 0; }
-.hm .more-detail > .action-list { margin-top: 4px; }
+/* 只管緊接在那一列標題下面的（怎麼應對）；看詳細數字裡排在說明後面的照原本的間距 */
+.hm .more-detail > summary + .action-list { margin-top: 4px; }
 .hm .more-detail > .plain { margin: 16px 0 12px; }
 
 /* ---------- 籌碼明細 ---------- */
@@ -167,7 +168,6 @@
   .hm .evidence-row { grid-template-columns: 56px minmax(0, 1fr); }
   .hm .action-list div, .hm .kv-list div { grid-template-columns: 88px minmax(0, 1fr); }
 }
-/* 歷史分布：獨立一段，標題與條之間留白；色塊只用底色＋上緣 3px，不再有下緣粗線 */
 
 /* ================= 本人 11-09 指正「根本沒有去設計」：週期選單、籌碼明細 ================= */
 
