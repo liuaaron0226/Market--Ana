@@ -1,0 +1,50 @@
+/* 大盤事前預測：K 線控制列的一枚小鍵＋點開的浮板（B 票第 4 片）。只在站主有預測內容時才會出現。 */
+.forecast-control { position: relative; }
+.forecast-chip {
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: var(--panel2);
+  color: var(--ink);
+  font: 500 13px/1 var(--sans);
+  white-space: nowrap;
+}
+.forecast-chip:hover { border-color: var(--ink); }
+.forecast-chip[aria-expanded="true"] { border-color: var(--accent); }
+.forecast-pop {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(340px, calc(100vw - 32px));
+  padding: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 14px 36px rgb(0 0 0 / 28%);
+  animation: forecast-rise .18s var(--ease);
+}
+.forecast-pop[hidden] { display: none; }
+@keyframes forecast-rise { from { opacity: 0; transform: translateY(-4px); } }
+@media (prefers-reduced-motion: reduce) { .forecast-pop { animation: none; } }
+.forecast-seg { display: flex; gap: 4px; margin-bottom: 10px; }
+.forecast-seg button {
+  flex: 1;
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dim);
+  font: 500 13px/1 var(--sans);
+}
+.forecast-seg button[aria-pressed="true"] { border-color: var(--ink); color: var(--ink); background: var(--panel2); }
+.forecast-facts { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; margin: 0; font-size: 13px; line-height: 1.5; }
+.forecast-facts dt { color: var(--faint); }
+.forecast-facts dd { margin: 0; color: var(--ink); }
+.forecast-facts .is-up { color: var(--up); }
+.forecast-facts .is-down { color: var(--down); }
+@media (max-width: 720px) {
+  .forecast-chip { padding: 0 10px; }
+  .forecast-pop { position: fixed; top: auto; bottom: 16px; left: 16px; right: 16px; width: auto; }
+}
