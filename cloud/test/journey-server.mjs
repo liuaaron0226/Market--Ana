@@ -13,8 +13,12 @@ const port = Number(process.argv[2] || 8899);
 const dist = new URL("../dist/", import.meta.url);
 const issuer = await makeIssuer();
 const env = { DB: fakeD1(), TEAM_DOMAIN: TEAM, MAIN_AUD, APPLY_AUD, OWNER_EMAIL: OWNER };
+// 預測帳本的本機預覽（B 票）：JOURNEY_SEED_SQL 指向 forecast_ledger.d1_sql 產生的指令檔，
+// MARKET_ANA_FORECAST_LEDGER=owner 打開開關。兩者都沒設時與原本相同。
+if (process.env.JOURNEY_SEED_SQL) env.DB._raw.exec(await readFile(process.env.JOURNEY_SEED_SQL, "utf8"));
+if (process.env.MARKET_ANA_FORECAST_LEDGER) env.MARKET_ANA_FORECAST_LEDGER = process.env.MARKET_ANA_FORECAST_LEDGER;
 // 自動化驗收會在一分鐘內點完全部下鑽；額度可由第三個參數放寬（正式版額度見 gate.js RATE，不受影響）。
-const rate = process.argv[3] === "relaxed" ? { market: 10_000, detail: 10_000 } : undefined;
+const rate = process.argv[3] === "relaxed" ? { market: 10_000, detail: 10_000, userData: 10_000 } : undefined;
 const deps = { fetchImpl: fetchJwks(issuer.jwks), now: () => Date.now(), marketPack, stockPack, screensPack, rate };
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json" };
 

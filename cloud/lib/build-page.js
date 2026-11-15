@@ -2,7 +2,7 @@
 // U2（11-09）：web/ 設計改版後 script 標籤帶版本 query（例如 kchart.js?v=20261109-ux1），
 // 比對改用 regex，允許 ?query，但檔名必須完全相同（kchart.js.bak 之類不算）。
 export const WEB_FILES = [
-  "minimal.html", "minimal.css", "minimal.js", "kchart.js", "chart-studies.js", "chart-studies.css",
+  "minimal.html", "minimal.css", "minimal.js", "kchart.js", "chart-drawings.js", "chart-studies.js", "chart-studies.css",
   "stock.html", "stock.css", "stock.js", "intraday.js",
   // claude-60 設計改版（11-09）新增的資產
   "bold.css", "home.css", "panel.css", "motion.js", "home-motion.js", "period-switch.js",
@@ -19,6 +19,8 @@ export const WEB_FILES = [
   "holdings-rows.js",
   // 立體重設計（11-15）：大戶持股每週增減的算法與畫面
   "holders-weekly.js", "holders-card.js",
+  // 預測帳本（2026-11-15，B 票第 4 片）：只有站主有預測內容時才會在首頁出現
+  "forecast.js", "forecast.css",
 ];
 export const RETIRED = ["analysis-data.js", "chips-data.js", "dashboard-data.js", "detail-data.js", "plain-data.js", "market-data-local.js"];
 

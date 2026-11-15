@@ -54,7 +54,7 @@
   // 4. 切換指標時，新的指標區從切換的方向滑進來（與個股頁相同）。切換鍵收進指標名稱的選單，不再有滑動底塊。
   const host = document.getElementById('chartStudies');
   let lastKind = null;
-  const order = ['volume', 'macd', 'kd', 'rsi'];
+  const order = ['volume', 'macd', 'kd', 'rsi', 'foreign', 'trust', 'dealer'];
   const slide = animate => {
     const on = host.querySelector('.kc-study-choice[aria-pressed="true"]');
     if (!on) return;

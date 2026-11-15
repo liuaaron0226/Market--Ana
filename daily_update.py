@@ -84,6 +84,8 @@ class RunConfig:
     trigger_source: str = ""
     trigger_slot: str = ""
     legacy_allow_not_ready: bool = False
+    # 同一資料日用新程式重算並發布成新版本時的版本名（本人 2026-11-14）。有值才會重跑已成功的那一天。
+    republish_version: str | None = None
 
 
 # Caller metadata is a CI routing contract, not authentication. Unknown values stay strict.
@@ -156,13 +158,15 @@ def run(config: RunConfig, *, steps: Iterable[Step], probe: Callable[[str], bool
         readiness_observations: list[dict] | None = None) -> dict:
     clock = clock or SystemClock()
     log_path = _log_path(config.log_dir, config.data_date)
-    if log_path.exists() and not config.dry_run:
+    if log_path.exists() and not config.dry_run and not config.republish_version:
         previous = json.loads(log_path.read_text(encoding="utf-8"))
         if previous.get("status") == "success":
             return {**previous, "status": "already-done"}
 
     record: dict = {"data_date": config.data_date, "dry_run": config.dry_run, "started_at": _stamp(clock),
                     "steps": [], "status": "running"}
+    if config.republish_version:
+        record["republish_version"] = config.republish_version
 
     verdict = trading_day(config.data_date, probe=probe, holidays=config.holidays)
     record["trading_day"] = {"status": verdict.status, "reason": verdict.reason}
@@ -192,6 +196,8 @@ def run(config: RunConfig, *, steps: Iterable[Step], probe: Callable[[str], bool
 
     ctx = RunContext(config.data_date, config.dry_run, config.work_dir or (ROOT / ".tmp" / "daily-update" / config.data_date))
     ctx.outputs["_log_dir"] = str(config.log_dir)
+    if config.republish_version:
+        ctx.outputs["_seed_version"] = config.republish_version
     activated = False
     for step in steps:
         entry = {"name": step.name, "started_at": _stamp(clock)}
@@ -551,9 +557,99 @@ def _saved_build_inputs_problem(manifest: dict) -> str | None:
     return None
 
 
-def redeploy(*, dry_run: bool) -> dict:
+def _redeploy_from_working_set(result: dict, *, dry_run: bool, log_dir: Path, work_root: Path) -> dict:
+    """還沒有保存的建置輸入時，用工作集重建上一次發布那天的網頁並只部署程式（本人 2026-11-14「要，現在做」）。
+
+    工作集帶著上一版 seed、Functions 個股包、大盤資料、日線庫與執行狀態；當天的母體與選股快照只存在
+    runner 的暫存目錄，沒有保存，所以這裡把母體、選股包、對照包重算一次。重算的母體必須和已發布的
+    那一版完全相同才往下走。不抓資料、不重算個股分析、不匯入 D1、不上傳工作集。
+    """
+    result = {**result, "source": "working-set"}
+
+    def failed(step: str, message: str) -> dict:
+        return {**result, "failed_step": step, "message": message}
+
+    try:
+        seed_manifest = json.loads((LAST_SEED_DIR / "manifest.json").read_text(encoding="utf-8"))
+        version, data_date = seed_manifest["version"], seed_manifest["data_date"]
+        published = set()
+        with (LAST_SEED_DIR / "seed.jsonl").open(encoding="utf-8") as lines:
+            for line in lines:
+                row = json.loads(line)
+                if row.get("type") == "listed_security":
+                    published.add(str(row["data"]["code"]))
+    except (OSError, ValueError, KeyError, TypeError):
+        return failed("load_inputs", "上一版 seed 讀不出來")
+    result["data_date"] = data_date
+    # 隨工作集帶來的三樣必須都屬於同一個資料日；狀態檔沒有那天的成功紀錄就不部署，不自己編一份。
+    try:
+        pack_as_of = json.loads((CLOUD / ".stock-pack.json").read_text(encoding="utf-8")).get("as_of")
+        status = json.loads((log_dir / _STATUS_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError, AttributeError):
+        return failed("verify_inputs", "個股包或執行狀態讀不出來")
+    if pack_as_of != data_date:
+        return failed("verify_inputs", f"個股包是 {pack_as_of} 的，上一版 seed 是 {data_date} 的")
+    if not isinstance(status, dict) or status.get("schema") != STATUS_SCHEMA or status.get("last_success_date") != data_date:
+        return failed("verify_inputs", f"執行狀態沒有 {data_date} 的成功紀錄")
+    if not (LAST_MARKET_DIR / "analysis-data.js").is_file():
+        return failed("verify_inputs", "沒有保存的大盤資料")
+    try:
+        active = _remote_active_version()
+    except Exception as error:  # noqa: BLE001 — 讀不到線上版本就不部署
+        return failed("check_active", f"讀不到線上資料版本：{type(error).__name__}")
+    if active != version:
+        return failed("check_active", f"線上資料版本是 {active}，工作集的上一版 seed 是 {version}")
+    work = work_root / f"{data_date}-redeploy"
+    universe_file = work / "liquid-universe" / f"{data_date}.json"
+    try:
+        if not universe_file.exists():  # 快照不可覆寫：同一個暫存目錄重試時沿用
+            _sh([sys.executable, "liquid_universe.py", "--as-of", data_date, "--snapshot-root", str(universe_file.parent)])
+        recomputed = {str(member["code"]) for member in json.loads(universe_file.read_text(encoding="utf-8"))["members"]}
+    except Exception as error:  # noqa: BLE001
+        return failed("build_universe", f"{type(error).__name__}: {str(error)[-300:]}")
+    if recomputed != published:
+        return failed("verify_universe", f"重算的母體與已發布的不一致：多出 {len(recomputed - published)} 檔、"
+                                         f"少了 {len(published - recomputed)} 檔")
+    try:
+        snapshots = work / "market-screen-snapshots"
+        if not (snapshots / "universe" / f"{data_date}.json").exists():
+            _sh([sys.executable, "market_screens_publish.py", "--as-of", data_date,
+                 "--published-at", str(status.get("last_success_at") or datetime.now(TPE).isoformat(timespec="seconds")),
+                 "--snapshot-root", str(snapshots), "--universe-root", str(universe_file.parent)])
+        _sh([sys.executable, str(CLOUD / "build_screens_pack.py"), "--snapshot-root", str(snapshots),
+             "--out", str(CLOUD / ".screens-pack.json")])
+        _sh([sys.executable, str(CLOUD / "build_compare_pack.py"), "--universe", str(universe_file),
+             "--out", str(CLOUD / ".compare-pack.json")])
+        _write_record(CLOUD / ".data-status.json", status)
+        _build_site(LAST_MARKET_DIR)
+    except Exception as error:  # noqa: BLE001
+        return failed("build_dist", f"{type(error).__name__}: {str(error)[-300:]}")
+    if dry_run:
+        return {**result, "status": "success", "message": "乾跑：已由工作集重建，沒有部署"}
+    return _deploy_and_check(result, failed, version, "已由工作集重建並重新部署網頁（資料不變）")
+
+
+def _deploy_and_check(result: dict, failed: Callable[[str, str], dict], version: str, message: str) -> dict:
+    try:
+        _deploy_pages()
+    except Exception as error:  # noqa: BLE001
+        return failed("pages_deploy", f"{type(error).__name__}: {str(error)[-300:]}")
+    result = {**result, "redeployed": True}
+    try:
+        verdict = post_deploy_verdict(
+            probes=_probe_unauthenticated(["/", "/api/data-status", "/api/stocks/search?q=2330"]),
+            active_version=_remote_active_version(), expected_version=version)
+    except Exception as error:  # noqa: BLE001
+        return {**failed("post_deploy_check", f"部署後檢查沒有完成：{type(error).__name__}"), "redeployed": True}
+    if not verdict["ok"]:
+        return {**failed("post_deploy_check", verdict["reason"]), "redeployed": True}
+    return {**result, "status": "success", "message": message}
+
+
+def redeploy(*, dry_run: bool, log_dir: Path | None = None, work_root: Path | None = None) -> dict:
     """用最後一次發布保存的建置輸入重建並部署網頁。不重算資料、不寫 D1、不動執行紀錄與工作集。
 
+    還沒有保存的輸入、但工作集帶著上一版 seed 時，改由 _redeploy_from_working_set 重建。
     回傳的 published／sync_state 一律是 False：這不是一次新的資料發布，workflow 不會同步工作集，AI 解讀也不會被觸發。
     """
     import shutil
@@ -565,6 +661,9 @@ def redeploy(*, dry_run: bool) -> dict:
 
     manifest_path = LAST_BUILD_DIR / "manifest.json"
     if not manifest_path.is_file():
+        if (LAST_SEED_DIR / "manifest.json").is_file():
+            return _redeploy_from_working_set(result, dry_run=dry_run, log_dir=log_dir or ROOT / "data/daily-update-log",
+                                              work_root=work_root or ROOT / ".tmp" / "daily-update")
         return failed("load_inputs", "還沒有保存的建置輸入；要先有一次每日更新成功發布")
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -593,20 +692,33 @@ def redeploy(*, dry_run: bool) -> dict:
         return failed("build_dist", f"{type(error).__name__}: {str(error)[-300:]}")
     if dry_run:
         return {**result, "status": "success", "message": "乾跑：已用保存的輸入建置，沒有部署"}
+    return _deploy_and_check(result, failed, manifest["seed_version"], "已用同一批資料重新部署網頁")
+
+
+def republish_version(data_date: str, now: datetime) -> str:
+    """同一資料日重新發布用的版本名：已發布的版本名加上重新發布的時間。
+
+    只有「目前線上那一版」的資料日可以重新發布：增量匯入與退路都以它為準。原版留在 D1 當上一版。
+    """
+    import re
     try:
-        _deploy_pages()
-    except Exception as error:  # noqa: BLE001
-        return failed("pages_deploy", f"{type(error).__name__}: {str(error)[-300:]}")
-    result["redeployed"] = True
-    try:
-        verdict = post_deploy_verdict(
-            probes=_probe_unauthenticated(["/", "/api/data-status", "/api/stocks/search?q=2330"]),
-            active_version=_remote_active_version(), expected_version=manifest["seed_version"])
-    except Exception as error:  # noqa: BLE001
-        return failed("post_deploy_check", f"部署後檢查沒有完成：{type(error).__name__}")
-    if not verdict["ok"]:
-        return failed("post_deploy_check", verdict["reason"])
-    return {**result, "status": "success", "message": "已用同一批資料重新部署網頁"}
+        manifest = json.loads((LAST_SEED_DIR / "manifest.json").read_text(encoding="utf-8"))
+        version, published_date = manifest["version"], manifest["data_date"]
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise ValueError("找不到已發布的版本，不能重新發布") from error
+    if published_date != data_date:
+        raise ValueError(f"目前發布的是 {published_date}，不能重新發布 {data_date}")
+    return re.sub(r"-r\d{12}$", "", version) + "-r" + now.astimezone(TPE).strftime("%Y%m%d%H%M")
+
+
+def _seed_problems(manifest: dict) -> dict:
+    """建置清單裡沒擋發布的問題，依種類列出是哪幾檔（進執行紀錄；沒分類的是整檔分析失敗）。"""
+    problems: dict[str, list[str]] = {}
+    for failure in manifest.get("failures") or []:
+        codes = problems.setdefault(str(failure.get("scope") or "analysis"), [])
+        if str(failure.get("code")) not in codes:
+            codes.append(str(failure.get("code")))
+    return problems
 
 
 def _seed_dir(ctx: RunContext) -> Path:
@@ -836,11 +948,15 @@ def real_steps() -> list[Step]:
         # build_stock_pack 不覆寫既有目錄；同一資料日重試時沿用已建好的 seed（版本相同，進度檔可續傳）。
         if (out / "manifest.json").exists():
             manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
-            return {"seed_dir": str(out), "version": manifest.get("version"), "reused": True}
+            return {"seed_dir": str(out), "version": manifest.get("version"), "reused": True,
+                    "problems": _seed_problems(manifest)}
         universe = ctx.work_dir / "liquid-universe" / f"{ctx.data_date}.json"
-        result = _sh([sys.executable, str(CLOUD / "build_stock_pack.py"), "--out", str(out), "--universe", str(universe)])
+        command = [sys.executable, str(CLOUD / "build_stock_pack.py"), "--out", str(out), "--universe", str(universe)]
+        if ctx.outputs.get("_seed_version"):  # 同日重新發布：資料日與來源相同，版本名要另外給才不會撞到原版
+            command += ["--version", ctx.outputs["_seed_version"]]
+        result = _sh(command)
         manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8")) if (out / "manifest.json").exists() else {}
-        return {**result, "seed_dir": str(out), "version": manifest.get("version")}
+        return {**result, "seed_dir": str(out), "version": manifest.get("version"), "problems": _seed_problems(manifest)}
 
     def build_dist(ctx: RunContext) -> dict:
         report: dict = {}
@@ -949,6 +1065,8 @@ def main(argv: list[str] | None = None, *, clock=None) -> int:
                         help="U3：把本次結果寫成 JSON（workflow 依 sync_state 決定要不要把工作集同步回 R2）")
     parser.add_argument("--redeploy", action="store_true",
                         help="資料不變、只重新部署程式：用最後一次發布保存的建置輸入重建網頁；--date 會被忽略")
+    parser.add_argument("--republish", action="store_true",
+                        help="同一資料日用現在的程式重算並發布成新版本；只接受目前線上那一版的資料日，原版留作上一版")
     parser.add_argument("--trigger-event", default="", help="可信 CI 事件名稱；缺省為嚴格模式")
     parser.add_argument("--trigger-source", default="", help="github-schedule／cloudflare-cron")
     parser.add_argument("--trigger-slot", default="", help="原排程 UTC cron；僅已知前段時段可等待")
@@ -956,8 +1074,10 @@ def main(argv: list[str] | None = None, *, clock=None) -> int:
     data_date = args.date or clock.now().astimezone(TPE).date().isoformat()
     if date.fromisoformat(data_date).isoformat() != data_date:
         parser.error("date 必須是真實的 YYYY-MM-DD")
+    if args.redeploy and args.republish:
+        parser.error("--redeploy 與 --republish 只能擇一")
     if args.redeploy:
-        summary = redeploy(dry_run=args.dry_run)
+        summary = redeploy(dry_run=args.dry_run, log_dir=args.log_dir)
         print(json.dumps(summary, ensure_ascii=False))
         if args.result_file:
             _write_record(args.result_file, summary)
@@ -967,9 +1087,20 @@ def main(argv: list[str] | None = None, *, clock=None) -> int:
                          outputs={"_log_dir": str(args.log_dir)})
         print(json.dumps(_write_status_for_build(ctx), ensure_ascii=False))
         return 0
+    new_version = None
+    if args.republish:
+        try:
+            new_version = republish_version(data_date, clock.now())
+        except ValueError as error:
+            summary = {"data_date": data_date, "status": "failed", "failed_step": "republish_check",
+                       "published": False, "sync_state": False, "message": str(error)}
+            print(json.dumps(summary, ensure_ascii=False))
+            if args.result_file:
+                _write_record(args.result_file, summary)
+            return 1
     import daily_ingest
     holidays = daily_ingest.fetch_holidays(args.log_dir / "holiday-schedule.json") or None
-    config = RunConfig(data_date=data_date, log_dir=args.log_dir, dry_run=args.dry_run, holidays=holidays,
+    config = RunConfig(republish_version=new_version, data_date=data_date, log_dir=args.log_dir, dry_run=args.dry_run, holidays=holidays,
                        ready_interval=0 if args.no_wait else 600,
                        ready_deadline=clock.now() if args.no_wait else None,
                        trigger_event=args.trigger_event, trigger_source=args.trigger_source,
@@ -989,6 +1120,8 @@ def main(argv: list[str] | None = None, *, clock=None) -> int:
     record = run(config, steps=real_steps(), probe=local_state_probe, ready_check=ready_check,
                  rollback=remote_rollback, clock=clock, readiness_observations=observations)
     summary = {k: record.get(k) for k in ("data_date", "status", "failed_step")}
+    if new_version:
+        summary["republish_version"] = new_version
     published = record.get("status") == "success" and not args.dry_run
     summary.update(published=published, sync_state=published, readiness=record.get("readiness"),
                    message=("等待官方資料，未發布；下個時段重試" if record["status"] == "waiting" else

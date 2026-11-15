@@ -542,7 +542,7 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
         check(f"{tag}：週期切換日／週／月", True)
         check(f"{tag}：週期小鍵寫著現在的週期", chips == ["週K", "月K", "日K"], chips)
     step(f"{tag}：週期切換", periods)
-    step(f"{tag}：控制項收納", lambda: tucked_controls(page, tag, ["1分", "5分", "15分", "60分", "日", "週", "月"], ["成交金額", "MACD", "KD", "RSI"]))
+    step(f"{tag}：控制項收納", lambda: tucked_controls(page, tag, ["1分", "5分", "15分", "60分", "日", "週", "月"], ["成交金額", "MACD", "KD", "RSI", "外資", "投信", "自營商"]))
 
     def reset_view() -> None:
         # 縮放鍵拿掉了（改用捏合、滾輪、鍵盤）；「回到最新」只在圖被拖離最新一天時才浮在圖的角落。
@@ -568,7 +568,7 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
         check(f"{tag}：指標切回成交金額", study_pressed(page, "volume"))
     step(f"{tag}：指標切換", studies)
     step(f"{tag}：K 線與指標同一個圖框",
-         lambda: joined_chart(page, tag, "#mainChart", ["成交金額", "MACD", "KD", "RSI"], "#chartActions" if mobile else None))
+         lambda: joined_chart(page, tag, "#mainChart", ["成交金額", "MACD", "KD", "RSI", "外資", "投信", "自營商"], "#chartActions" if mobile else None))
 
     def swipe_study() -> None:
         # 指標區和 K 線是同一張圖，手勢一樣（本人 11-15）：左右拖是平移歷史，不再是切換指標。

@@ -342,6 +342,15 @@ class AdjustedPriceTests(unittest.TestCase):
         with unittest.mock.patch('twon_analysis.analyze_v2.big_holder_series', broken):
             self.assertEqual(self.analyze({})['big_holders'], [])
 
+    def test_big_holders_include_the_backfilled_history_file(self):
+        import tdcc_holders
+        seen = {}
+        from twon_analysis import analyze_v2 as module
+        with unittest.mock.patch.object(tdcc_holders, 'series', lambda out, code, as_of, history=None: seen.update(history=history) or []):
+            module.big_holder_series(Path('x'), '2330', '2026-11-13')
+        self.assertEqual(seen['history'], tdcc_holders.DEFAULT_HISTORY)
+        self.assertEqual(tdcc_holders.DEFAULT_HISTORY.name, 'tdcc-holders-history.json')
+
     def test_default_reads_the_capital_events_of_the_data_root(self):
         with unittest.mock.patch('twon_analysis.analyze_v2.default_capital_events', return_value={'9999': [self.split]}):
             result = self.analyze(None)

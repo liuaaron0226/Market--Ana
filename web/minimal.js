@@ -365,7 +365,7 @@
   }
 
   function dailyWithLive() {
-    const candles = A.daily.map(row => toChartCandle(row, '日'));
+    const candles = window.ChartStudies.withMarketInstitutional(A.daily.map(row => toChartCandle(row, '日')), A.institutional);
     const provisional = provisionalCloseCandle(candles);
     if (provisional) { candles.push(provisional); return candles; }
     if (!latestPayload || !latestPayload.data || !latestLive) return candles;
@@ -406,6 +406,11 @@
       { value: UPPER, label: '收復線', short: '收復', color: css('--gold', '#d9a94b'), pos: 'above' },
       { value: LOWER, label: '防守線', short: '防守', color: css('--down', '#2fd09a'), pos: 'below' }
     ];
+  }
+
+  // 圖上的判斷線：人寫劇本的兩條線照舊，再加預測帳本的轉強線／轉弱線（forecast.js；只有站主有內容時才有）。
+  function chartOverlays() {
+    return [...overlays(), ...(window.MarketForecast ? window.MarketForecast.overlays(currentPeriod) : [])];
   }
 
   // 規則的比法只有一份，在 trend-votes.js
@@ -502,7 +507,7 @@
       liveLast: false,
       macd: false,
       studyHost: document.getElementById('chartStudies'),
-      studies: ['volume', 'macd', 'kd', 'rsi'],
+      studies: ['volume', 'macd', 'kd', 'rsi', 'foreign', 'trust', 'dealer'],
       selectionRoots: [els.chartStage.parentElement, els.panel],
       volumeKind: 'amount',
       leftRail: marketLabelRail,
@@ -549,8 +554,8 @@
     const plotWidth = Math.max(0, els.chartStage.clientWidth - marketLabelRail() - priceRail);
     const touchSafeCount = Math.max(10, Math.floor(plotWidth / 44));
     const count = Math.min(candles.length, isMobile() ? desiredCount : Math.min(desiredCount, touchSafeCount));
-    if (reset || !instance.candles.length) instance.setData(candles, { count, overlays: overlays(), unit });
-    else instance.update(candles, overlays());
+    if (reset || !instance.candles.length) instance.setData(candles, { count, overlays: chartOverlays(), unit });
+    else instance.update(candles, chartOverlays());
     if (period === 'daily') renderMarketTrend(instance);
     const lastCandle = candles[candles.length - 1];
     const provisionalLast = period === 'daily' && !liveLast && lastCandle && lastCandle.provisional === true;
@@ -1786,6 +1791,13 @@
   renderChips();
   loadPeriod('daily', true);
   api.ready = true;
+  if (window.MarketForecast) {
+    window.MarketForecast.mount({
+      host: document.querySelector('.chart-controls'),
+      onChange: () => loadPeriod(currentPeriod, false),
+      getDaily: () => A.daily,
+    });
+  }
 
   if (location.protocol === 'file:') {
     setOffline('即時服務未啟動，目前仍可使用盤後資料。請執行專案內的 python live_server.py，再開啟 http://127.0.0.1:8876/minimal.html。');

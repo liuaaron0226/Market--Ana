@@ -4,6 +4,7 @@
 #   已知自動排程前三時段可 waiting（未發布）；最後時段、已過當日20:30、過期日或未知來源未就緒仍失敗。
 # - rollout：先發布本 workflow／Python 相容輸入，再部署 Worker；回退先退 Worker，避免新 inputs 打舊 schema 422。
 # - 同一資料日已成功：執行紀錄在 R2 工作集裡，後面的時段會回 already-done，不重做、不重部署。
+#   要用新程式把同一天重算並發布，手動觸發時勾 republish（發布成新版本，原版留作上一版）。
 # - 只有真的發布成功才把新的工作集同步回 R2；其他結果保留雲端上一版狀態。
 # - GitHub 的 schedule 只在預設分支（main）觸發；分支上請用 workflow_dispatch 試跑。
 name: daily-update
@@ -28,6 +29,11 @@ on:
         default: true
       redeploy:
         description: "資料不變、只重新部署程式（用最後一次發布保存的建置輸入重建網頁；不重算、不寫 D1、不同步工作集；date 會被忽略）"
+        required: false
+        type: boolean
+        default: false
+      republish:
+        description: "同一資料日用現在的程式重算並發布成新版本（只接受目前線上那一版的資料日；原版留作上一版可退回）"
         required: false
         type: boolean
         default: false
@@ -154,6 +160,7 @@ jobs:
           --trigger-slot "$TRIGGER_SLOT"
           ${{ steps.day.outputs.dry_run }}
           ${{ inputs.redeploy == true && '--redeploy' || '' }}
+          ${{ inputs.republish == true && '--republish' || '' }}
           --result-file "${{ runner.temp }}/daily-result.json"
 
       - name: 同步工作集回 R2（只在發布成功時）

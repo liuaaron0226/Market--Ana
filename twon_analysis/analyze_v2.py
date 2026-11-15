@@ -467,7 +467,7 @@ def big_holder_series(out, code: str, as_of: str) -> list[dict]:
     """集保大戶持股逐週序列（tdcc_holders.series）。獨立成一個名字，分析測試才換得掉。"""
     import tdcc_holders
 
-    return tdcc_holders.series(out, code, as_of)
+    return tdcc_holders.series(out, code, as_of, history=tdcc_holders.DEFAULT_HISTORY)
 
 
 def _scale_shares(rows: list[dict], share_scale: dict[str, float]) -> list[dict]:

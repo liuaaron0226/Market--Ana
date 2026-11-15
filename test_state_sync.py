@@ -300,6 +300,25 @@ class StateSyncTest(unittest.TestCase):
         self.assertEqual(json.loads(store.get(ss.PREVIOUS_MANIFEST))["data_date"], "2026-11-05")
         self.assertEqual(ss.restore(self.restore, store, previous=True)["data_date"], "2026-11-05")
 
+    def test_the_very_first_cleanup_still_keeps_what_was_there_before_as_the_previous_set(self) -> None:
+        # 清理上線後的第一次上傳若是同一資料日（重新發布），原本那份 manifest 也要留成「上一份」：
+        # 否則第一次清理會把原本的物件全刪掉，新上傳的若有問題就沒有退路。
+        store = ss.DirectoryStore(self.bucket)
+        ss.upload(self.local, store, self.items, data_date="2026-11-06")     # 清理機制上線前留下的狀態
+        store.delete(ss.PREVIOUS_MANIFEST) if ss.PREVIOUS_MANIFEST in store.keys() else None
+        before = self.referenced(store, ss.MANIFEST)
+        (self.local / "data/liquid-universe/2026-11-06.json").write_text('{"day": "republished"}', encoding="utf-8")
+        ss.upload(self.local, store, self.items, data_date="2026-11-06")     # 同一資料日再傳一次
+        ss.collect_garbage(store)
+        self.assertEqual(self.referenced(store, ss.PREVIOUS_MANIFEST), before)
+        self.assertTrue(before <= set(store.keys()))
+        self.assertEqual(json.loads((self.restore_previous(store) / "data/liquid-universe/2026-11-06.json").read_text(encoding="utf-8")),
+                         {"members": []})
+
+    def restore_previous(self, store) -> Path:
+        ss.restore(self.restore, store, previous=True)
+        return self.restore
+
     def test_cleanup_only_touches_the_state_prefix_and_removes_abandoned_uploads(self) -> None:
         store = ss.DirectoryStore(self.bucket)
         self.publish(store, "2026-11-05")

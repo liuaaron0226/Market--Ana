@@ -86,7 +86,7 @@ test("單獨開啟的名單只接受走勢與個股策略兩個名字，其他�
   assert.doesNotMatch(JSON.stringify(releasePolicy({ MARKET_ANA_ENABLED_FEATURES: "strategy_v1" })), /MARKET_ANA_ENABLED_FEATURES/);
 });
 
-test("正式環境設定（wrangler.jsonc）只開走勢與個股策略，AI、水位與全域開關維持關閉", async () => {
+test("正式環境設定（wrangler.jsonc）只開走勢；個股策略（本人 11-14 回測後先關掉）、AI、水位與全域開關維持關閉", async () => {
   const { readFileSync } = await import("node:fs");
   const text = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8").replace(/^\s*\/\/.*$/gm, "");
   const vars = JSON.parse(text).vars;
@@ -95,7 +95,7 @@ test("正式環境設定（wrangler.jsonc）只開走勢與個股策略，AI、�
   assert.equal(policy.strategies_enabled, false);
   assert.deepEqual(
     Object.fromEntries(STRATEGY_FEATURES.map(name => [name, policy.features[name]])),
-    { strategy_v1: true, market_trend_v1: true, level_advice: false, ai_digest: false, ai_stock_advice: false },
+    { strategy_v1: false, market_trend_v1: true, level_advice: false, ai_digest: false, ai_stock_advice: false },
   );
 });
 

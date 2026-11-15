@@ -104,6 +104,14 @@
               </div>
             </div>
           </div>
+          <div class="bd-draw" id="drawTools" role="toolbar" aria-label="畫線工具" hidden>
+            <button type="button" data-tool="hline" data-tip="水平線" aria-label="水平線" aria-pressed="false">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h6.5m5 0H21"/><circle cx="12" cy="12" r="2.5"/></svg>
+            </button>
+            <button type="button" class="bd-draw-delete" id="drawDelete" data-tip="刪除" aria-label="刪除選取的線" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 7h15M9.5 7V4.5h5V7M6.5 7l1 12.5h9l1-12.5M10.2 10.5v5.5m3.6-5.5v5.5"/></svg>
+            </button>
+          </div>
           <div class="bd-chart-host sk-chart" id="chartHost"></div>
           <div id="chartStudies"></div>
         </section>
@@ -166,6 +174,7 @@
     </main>
   </div>
   <script src="chart-studies.js?v=20261115-desk29"></script>
+  <script src="chart-drawings.js?v=20261114-draw2"></script>
   <script src="kchart.js?v=20261115-desk29"></script>
   <script src="intraday.js?v=20261111-ui2b"></script>
   <script src="holders-weekly.js?v=20261115-desk29"></script>

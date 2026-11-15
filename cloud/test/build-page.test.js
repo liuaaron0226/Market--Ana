@@ -13,6 +13,14 @@ test("白名單含設計改版以來新增的資產", () => {
   }
 });
 
+test("個股頁引用的每一支程式與樣式都在部署白名單裡（少一支，雲端就會缺功能而本機看不出來）", () => {
+  const html = readFileSync(new URL("../../web/stock.html", import.meta.url), "utf8");
+  const files = [...html.matchAll(/<(?:script src|link rel="stylesheet" href)="([^"?]+)/g)].map((match) => match[1]);
+  assert.ok(files.includes("chart-drawings.js") && files.includes("kchart.js"));
+  assert.ok(files.indexOf("chart-drawings.js") < files.indexOf("kchart.js"), "畫線層要先於圖表載入");
+  for (const file of files) assert.ok(WEB_FILES.includes(file), file);
+});
+
 test("帶版本 query 的 kchart 標籤也能插入雲端資料來源，且插在 kchart 之前", () => {
   const html = '<head></head><body>\n  <script src="analysis-data.js"></script>\n  <script src="kchart.js?v=20261109-ux1"></script>\n</body>';
   const out = cloudPage(html, ["analysis-data.js"]);

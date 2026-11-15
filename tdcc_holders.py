@@ -29,6 +29,9 @@ FIELDS = ["資料日期", "證券代號", "持股分級", "人數", "股數", "�
 # 只留股票與 ETF（4 碼，或 00 開頭的 ETF）；權證、特別股代號等不是個股頁的對象。
 STOCK_CODE = re.compile(r"^(?:[1-9][0-9]{3}|00[0-9]{2,4}[A-Z]?)$")
 SCHEMA = "tdcc-holders/v1"
+# 過去一年由官方查詢頁補抓（tdcc_backfill.py）後入庫的歷史；每週新抓到的仍存 weekly/，同一週以 weekly 為準。
+DEFAULT_HISTORY = ROOT / "seeds/tdcc-holders-history.json"
+HISTORY_SCHEMA = "tdcc-holders-history/v1"
 
 
 def parse(content: bytes) -> tuple[str, dict[str, dict]]:
@@ -95,10 +98,25 @@ def _weeks(folder: Path, stamps: tuple) -> list[tuple[str, dict]]:
     return [(path.stem, json.loads(path.read_text(encoding="utf-8"))["holders"]) for path in sorted(folder.glob("*.json"))]
 
 
-def series(out: Path, code: str, as_of: str) -> list[dict]:
-    """某一檔逐週的大戶持股（舊到新，只到 as_of 為止）；那一週沒有它就略過。"""
+@functools.lru_cache(maxsize=2)
+def _history(path: Path, stamp: int) -> dict[str, dict[str, dict]]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload.get("schema") != HISTORY_SCHEMA or not isinstance(payload.get("weeks"), dict):
+        raise ValueError(f"大戶持股歷史檔格式不符：{path.name}")
+    fields = payload["fields"]
+    return {day: {code: dict(zip(fields, values)) for code, values in week.items()} for day, week in payload["weeks"].items()}
+
+
+def series(out: Path, code: str, as_of: str, history: Path | None = None) -> list[dict]:
+    """某一檔逐週的大戶持股（舊到新，只到 as_of 為止）；那一週沒有它就略過。
+
+    history 是補抓的歷史檔；同一週兩邊都有時用每週存下的那一份。
+    """
+    weeks: dict[str, dict] = {}
+    if history is not None and history.is_file():
+        weeks.update({day: week[code] for day, week in _history(history, history.stat().st_mtime_ns).items() if code in week})
     folder = out / "weekly"
-    if not folder.is_dir():
-        return []
-    stamps = tuple((path.name, path.stat().st_mtime_ns) for path in sorted(folder.glob("*.json")))
-    return [{"date": day, **holders[code]} for day, holders in _weeks(folder, stamps) if day <= as_of and code in holders]
+    if folder.is_dir():
+        stamps = tuple((path.name, path.stat().st_mtime_ns) for path in sorted(folder.glob("*.json")))
+        weeks.update({day: holders[code] for day, holders in _weeks(folder, stamps) if code in holders})
+    return [{"date": day, **weeks[day]} for day in sorted(weeks) if day <= as_of]

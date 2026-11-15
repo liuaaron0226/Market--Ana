@@ -80,7 +80,8 @@ test("資料包帶同一個版本，總覽不含明細與內部欄位", () => {
   assert.match(pack.version, /^[0-9a-f]{12}$/);
   assert.equal(pack.overview.version, pack.version);
   const keys = allKeys(pack.overview);
-  for (const k of ["source_files", "calendar_exceptions", "sectors", "dealer", "buy", "sell", "baseline", "five_day_return", "historical_assessment", "atr20",
+  // 自營商淨額原本不外送；本人 2026-11-15 要大盤副圖有三大法人後，畫面用得到，只放淨額（buy／sell 仍不送）。
+  for (const k of ["source_files", "calendar_exceptions", "sectors", "buy", "sell", "baseline", "five_day_return", "historical_assessment", "atr20",
     "forecast_id", "candles", "method_sources", "review", "backtest_file", "reviewed_by", "supersedes", "margin_units", "index_close", "by_date", "secret",
     "probability_note", "foreign_oi_long_contracts", "avg_turnover_20d", "dif", "dea", "ma5", "ticks", "sessions"]) {
     assert.ok(!keys.has(k), `總覽不應含 ${k}`);
@@ -95,7 +96,8 @@ test("總覽保留畫面計算需要的完整序列（日K、法人、籌碼）�
   assert.equal(A.daily.length, 60);
   assert.deepEqual(A.daily[0], { date: r.analysis.daily[0].date, open: 100, high: 110, low: 90, close: 105, amount: 1e11 });
   assert.equal(A.institutional.length, 40, "劇本的外資賣超樣本與 K 棒細節需要全部法人資料");
-  assert.deepEqual(A.institutional[0], { date: r.analysis.institutional[0].date, foreign: { net: -1 }, trust: { net: 2 } });
+  // 本人 2026-11-15：大盤 K 線副圖要有三大法人，自營商淨額也要帶上；買、賣兩個分項仍不外送。
+  assert.deepEqual(A.institutional[0], { date: r.analysis.institutional[0].date, foreign: { net: -1 }, trust: { net: 2 }, dealer: { net: 0 } });
   assert.equal(A.weekly.length, 30);
   assert.equal(A.h60[0].time, "09:00");
   assert.equal(A.futures.length, 20);

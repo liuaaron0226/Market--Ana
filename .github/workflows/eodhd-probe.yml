@@ -1,9 +1,15 @@
-# 一次性驗證：本人的 EODHD 免費 Key 能否取得 S&P 500（GSPC.INDX）日線，筆數是否夠算 200 日均線、最新日期為何。
-# 只能手動觸發；不印 Key、不存資料、不碰網站。
+# 驗證：本人的 EODHD 免費 Key 拿不拿得到指定代號的日線，各有幾筆、最新日期為何。
+# 只能手動觸發；不印 Key、不存資料、不碰網站。每個代號用掉當天 20 次額度裡的 1 次。
 name: eodhd-probe
 
 on:
   workflow_dispatch:
+    inputs:
+      symbols:
+        description: "要探測的 EODHD 代號，空白分隔（例：GSPC.INDX N225.INDX 8035.TSE 005930.KO）"
+        required: false
+        default: "GSPC.INDX"
+        type: string
 
 permissions:
   contents: read
@@ -13,34 +19,51 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: 取 GSPC.INDX 一年日線
+      - name: 逐一取一年日線
         env:
           EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
+          SYMBOLS: ${{ inputs.symbols }}
         run: |
           if [ -z "$EODHD_API_KEY" ]; then echo "::error::缺少 secret EODHD_API_KEY"; exit 1; fi
-          from="$(date -u -d '400 days ago' +%F)"
-          code=$(curl -s -o out.json -w '%{http_code}' \
-            "https://eodhd.com/api/eod/GSPC.INDX?api_token=${EODHD_API_KEY}&fmt=json&period=d&from=${from}")
-          echo "HTTP $code"
           python3 - <<'PY'
-          import json
-          raw = open("out.json", encoding="utf-8", errors="replace").read()
-          try:
-              rows = json.loads(raw)
-          except Exception:
-              print("不是 JSON：", raw[:120].replace("\n", " "))
-              raise SystemExit(1)
-          if not isinstance(rows, list) or not rows:
-              print("沒有資料：", str(rows)[:200])
-              raise SystemExit(1)
-          closes = [r["close"] for r in rows if r.get("close") is not None]
-          print("筆數", len(rows), "有效收盤", len(closes))
-          print("最早", rows[0]["date"], "最新", rows[-1]["date"], "最新收盤", rows[-1]["close"])
-          if len(closes) >= 200:
-              ma = sum(closes[-200:]) / 200
-              print("200 日均線", round(ma, 2), "收盤在均線", "之下" if closes[-1] < ma else "之上")
-          else:
-              print("不足 200 筆，無法計算 200 日均線")
-              raise SystemExit(1)
+          import json, os, re, sys, time, urllib.error, urllib.parse, urllib.request
+          from datetime import date, timedelta
+
+          symbols = os.environ.get("SYMBOLS", "").split() or ["GSPC.INDX"]
+          if len(symbols) > 12:
+              sys.exit("一次最多 12 個代號（每天只有 20 次額度）")
+          key = os.environ["EODHD_API_KEY"]
+          start = (date.today() - timedelta(days=400)).isoformat()
+          failed = 0
+          for symbol in symbols:
+              if not re.fullmatch(r"[A-Za-z0-9.\-]{1,20}", symbol):
+                  print(symbol[:20], "代號格式不對，跳過")
+                  failed += 1
+                  continue
+              url = (f"https://eodhd.com/api/eod/{symbol}?"
+                     + urllib.parse.urlencode({"api_token": key, "fmt": "json", "period": "d", "from": start}))
+              try:
+                  with urllib.request.urlopen(url, timeout=30) as response:
+                      status, raw = response.status, response.read().decode("utf-8", "replace")
+              except urllib.error.HTTPError as error:
+                  status, raw = error.code, error.read().decode("utf-8", "replace")
+              except Exception as error:  # 不印例外內容：網址裡有 Key
+                  print(symbol, "連線錯誤", type(error).__name__)
+                  failed += 1
+                  continue
+              try:
+                  rows = json.loads(raw)
+              except Exception:
+                  print(symbol, "HTTP", status, "不是 JSON：", raw[:120].replace("\n", " ").replace(key, "***"))
+                  failed += 1
+                  continue
+              if not isinstance(rows, list) or not rows:
+                  print(symbol, "HTTP", status, "沒有資料：", str(rows)[:160].replace(key, "***"))
+                  failed += 1
+                  continue
+              closes = [row["close"] for row in rows if row.get("close") is not None]
+              print(symbol, "HTTP", status, "筆數", len(rows), "有效收盤", len(closes),
+                    "最早", rows[0]["date"], "最新", rows[-1]["date"], "最新收盤", rows[-1]["close"])
+              time.sleep(1)
+          print("拿不到的代號數", failed, "／", len(symbols))
           PY
-          rm -f out.json

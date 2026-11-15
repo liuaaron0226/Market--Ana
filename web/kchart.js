@@ -1,7 +1,10 @@
 /* 可拖曳／縮放的K線圖（原生Canvas，無外部套件）。
    互動：滑鼠拖曳或單指左右平移；滾輪或雙指捏合縮放；鍵盤左右鍵平移、+/- 縮放；點擊或移動顯示十字線（再點一次同一根取消），
    並把那一天的開高低收標在右側價格欄、日期標在時間軸（本人 11-15；不再有浮窗）。
-   資料：candles=[{t,label,open,high,low,close,amount}] 由舊到新。overlays 可放判斷線。 */
+   有畫線時：點線選取、拖已選取的線移動、Delete 刪除、Esc 取消選取或放下工具。
+   資料：candles=[{t,label,open,high,low,close,amount}] 由舊到新。overlays 可放判斷線。
+   畫線（選用）：頁面先載入 chart-drawings.js 並傳 opts.drawings={onChange,onTool,onSelect}，
+   再用 setTool／setDrawings／deleteSelectedDrawing／cancelDrawing 操作。 */
 (function () {
   'use strict';
   const DPR = () => Math.max(1, Math.min(3, window.devicePixelRatio || 1));
@@ -103,6 +106,7 @@
       this.candles = []; this.view = { end: 0, count: 60 }; this.hover = -1; this.selection = -1; this.overlays = [];
       this.showMacd = this.opts.macd !== false;
       this.maPeriods = normalizePeriods(this.opts.maPeriods || [18, 45]);
+      this.drawings = this.opts.drawings && window.ChartDrawings ? new window.ChartDrawings(this, this.opts.drawings) : null;
       this.bindCanvas(this.canvas);
       this.studies = this.opts.studyHost ? new window.ChartStudies(this, this.opts.studyHost, { volumeKind: this.opts.volumeKind || 'amount', studies: this.opts.studies }) : null;
       if (this.studies) document.addEventListener('pointerdown', event => {
@@ -121,8 +125,19 @@
       this.view = { end: candles.length, count };
       this.hover = -1; this.selection = -1;
       this.overlays = opts.overlays || [];
+      if (this.drawings) this.drawings.dataChanged();
       this.draw(); this.emit();
     }
+    // 畫線：目前要用的工具（'hline'；null＝一般模式），以及這張圖上的整組畫線（[{id,kind,anchors:[{date,price}]}]）。
+    setTool(kind) { if (this.drawings) { this.drawings.setTool(kind); this.draw(); } }
+    setDrawings(list) { if (this.drawings) { this.drawings.load(list); this.draw(); } }
+    // 刪除目前選取的那一條，回傳有沒有刪（沒有選取就不做事）；放下工具並取消選取（Esc 做的事）。
+    deleteSelectedDrawing() {
+      const removed = Boolean(this.drawings && this.drawings.remove());
+      if (removed) this.draw();
+      return removed;
+    }
+    cancelDrawing() { if (this.drawings) { this.drawings.cancel(); this.draw(); } }
     compute(candles) {
       this.candles = candles; this.shownLength = candles.length;
       const closes = candles.map(c => hasPrice(c) ? c.close : null);
@@ -176,7 +191,15 @@
       const geo = () => this.geo;
       c.addEventListener('pointerdown', e => {
         c.setPointerCapture(e.pointerId); pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-        if (pts.size === 1) drag = { kind: 'single', x: e.clientX, y: e.clientY, end: this.view.end, moved: false, hadPinch: false };
+        if (pts.size === 1) {
+          const rect = c.getBoundingClientRect();
+          // 起點落在已選取的畫線上：這次拖曳是移動那條線，圖表不平移。
+          drag = c === this.canvas && this.drawings && this.drawings.grab(e.clientX - rect.left, e.clientY - rect.top, e.pointerType)
+            ? { kind: 'drawing', moved: false, hadPinch: false }
+            : { kind: 'single', x: e.clientX, y: e.clientY, end: this.view.end, moved: false, hadPinch: false };
+        }
+        // 拖線途中放上第二指：線回原位，改成雙指縮放。
+        if (pts.size === 2 && drag?.kind === 'drawing') { this.drawings.drop(false); this.draw(); }
         if (pts.size === 2) { const xs = [...pts.values()].map(point => point.x); drag = { kind: 'pinch', pinch: Math.max(20, Math.abs(xs[0] - xs[1])), count: this.view.count, end: this.view.end, hadPinch: true }; }
         c.style.cursor = 'grabbing';
       });
@@ -184,6 +207,8 @@
         const g = geo(); if (!g) return;
         if (pts.has(e.pointerId)) pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
         const rect = c.getBoundingClientRect(); const x = e.clientX - rect.left;
+        // moved 一旦成立就不收回：拖到一半線被換掉或按了 Esc，放開時也不會被當成一次點擊。
+        if (drag?.kind === 'drawing') { drag.moved = this.drawings.dragTo(x, e.clientY - rect.top) || drag.moved; this.draw(); return; }
         if (drag?.kind === 'pinch' && pts.size === 2) {
           const xs = [...pts.values()].map(point => point.x); const d = Math.max(20, Math.abs(xs[0] - xs[1]));
           this.view.count = drag.count * drag.pinch / d; this.view.end = drag.end; this.clamp(); this.draw(); this.emit(); return;
@@ -194,21 +219,28 @@
           this.view.end = Math.round(drag.end - dx / g.step); this.clamp();
         }
         this.hover = x >= g.l && x <= g.l + g.pw ? g.start + Math.floor((x - g.l) / g.step) : -1;
+        if (!drag && c === this.canvas && this.drawings) c.style.cursor = this.drawings.cursorAt(x, e.clientY - rect.top);
         this.draw(); if (drag && drag.moved) this.emit();
       });
       const up = e => {
-        if (e.type === 'pointerup' && drag?.kind === 'single' && !drag.moved && !drag.hadPinch && this.geo) {
-          const g = this.geo, px = e.clientX - c.getBoundingClientRect().left;
-          const picked = px >= g.l && px <= g.l + g.pw
-            ? Math.min(this.view.end - 1, g.start + Math.floor((px - g.l) / g.step)) : -1;
-          // 再點一次同一根就取消選取（本人 11-15：畫面上不再有「取消選取」鍵）；點到圖區以外（例如右側數值欄）也是取消。
-          // 取消一律走 clearSelection，頁面才收得到通知（首頁要跟著收掉「這一天的詳情」）。
-          if (picked < 0 || picked === this.selection) this.clearSelection();
-          else {
-            this.hover = this.selection = picked;
-            if (c !== this.canvas && this.opts.onSelect) this.opts.onSelect(picked, c);
-            this.draw();
+        // 放開正在拖的畫線：正常放開就定在新位置，手勢被系統取消則回原位。
+        if (drag?.kind === 'drawing') { this.drawings.drop(e.type === 'pointerup'); this.draw(); }
+        // 按在已選取的線上但沒有拖就放開，也是一次點擊（附近有更近的線時會改選那一條）。
+        if (e.type === 'pointerup' && (drag?.kind === 'single' || drag?.kind === 'drawing') && !drag.moved && !drag.hadPinch && this.geo) {
+          const g = this.geo, rect = c.getBoundingClientRect(), px = e.clientX - rect.left;
+          // 主圖上的這一下先給畫線：選了工具就定位，沒選工具而點到線就選取那條線；都不是才選 K 棒。
+          if (!(c === this.canvas && this.drawings && this.drawings.tap(px, e.clientY - rect.top, e.pointerType))) {
+            const picked = px >= g.l && px <= g.l + g.pw
+              ? Math.min(this.view.end - 1, g.start + Math.floor((px - g.l) / g.step)) : -1;
+            // 再點一次同一根就取消選取（本人 11-15：畫面上不再有「取消選取」鍵）；點到圖區以外（例如右側數值欄）也是取消。
+            // 取消一律走 clearSelection，頁面才收得到通知（首頁要跟著收掉「這一天的詳情」）。
+            if (picked < 0 || picked === this.selection) this.clearSelection();
+            else {
+              this.hover = this.selection = picked;
+              if (c !== this.canvas && this.opts.onSelect) this.opts.onSelect(picked, c);
+            }
           }
+          this.draw();
         } else if (e.pointerType !== 'mouse' && drag?.kind === 'single' && drag.moved && this.hover !== this.selection) {
           // 觸控拖完：十字線與右側數值回到選取的那一天（沒有選取就收掉），不要停在手指經過的那一天
           this.hover = this.selection;
@@ -218,7 +250,7 @@
         if (pts.size === 1 && drag?.kind === 'pinch') {
           const point = pts.values().next().value;
           drag = { kind: 'single', x: point.x, y: point.y, end: this.view.end, moved: false, hadPinch: true };
-        } else if (pts.size === 0) { drag = null; c.style.cursor = 'grab'; }
+        } else if (pts.size === 0) { drag = null; c.style.cursor = c === this.canvas && this.drawings ? this.drawings.idleCursor() : 'grab'; }
       };
       c.addEventListener('pointerup', up); c.addEventListener('pointercancel', up);
       c.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse' && !drag) { this.hover = this.selection; this.draw(); } });
@@ -235,7 +267,9 @@
         else if (e.key === '-') { e.preventDefault(); this.zoom(1.25); }
         else if (e.key === 'Home') { e.preventDefault(); this.view.end = this.view.count; this.clamp(); this.draw(); this.emit(); }
         else if (e.key === 'End') { e.preventDefault(); this.reset(); }
-        else if (e.key === 'Escape') { e.preventDefault(); this.clearSelection(); }
+        else if (e.key === 'Escape') { e.preventDefault(); if (this.drawings) this.drawings.cancel(); this.clearSelection(); }
+        // Mac 與 iPad 鍵盤上標著 delete 的那一顆送出的是 Backspace。
+        else if ((e.key === 'Delete' || e.key === 'Backspace') && this.deleteSelectedDrawing()) e.preventDefault();
         else if (e.key === 'Enter' && c !== this.canvas) {
           e.preventDefault(); this.hover = this.selection = this.view.end - 1;
           if (this.opts.onSelect) this.opts.onSelect(this.hover, c);
@@ -265,7 +299,9 @@
       const tagWide = tags && this.overlays.concat(this.candles.slice(-1)).some(o => {
         const v = o.value ?? o.close; return v >= 10000 || (v < 1000 && fmtTag(v).length >= 6);
       });
-      const r = tags ? (W < 520 ? (tagWide ? 84 : 66) : (tagWide ? 100 : 78)) : stacked ? (compactStacked ? compactRail : 176) : 64, t = 10, b = 22, macdH = this.showMacd ? Math.round(H * .24) : 0, gapH = this.showMacd ? 10 : 0;
+      // 短名有三個字（預測帳本的「五日線」「缺口上」）而且數字是五位數：手機寬度再加寬一點，數字的第一位才不會被短名蓋住
+      const tagLong = tagWide && W < 520 && this.overlays.some(o => (o.short || '').length >= 3);
+      const r = tags ? (W < 520 ? (tagWide ? 84 : 66) : (tagWide ? 100 : 78)) + (tagLong ? 12 : 0) : stacked ? (compactStacked ? compactRail : 176) : 64, t = 10, b = 22, macdH = this.showMacd ? Math.round(H * .24) : 0, gapH = this.showMacd ? 10 : 0;
       const pw = W - l - r, ph = H - t - b - macdH - gapH;
       const start = this.view.end - this.view.count, end = this.view.end, step = pw / this.view.count;
       this.geo = { l, pw, step, start };
@@ -286,6 +322,7 @@
       // 布林通道常比 K 棒寬，價格座標要把可見範圍內的上下軌算進去，通道才不會畫到圖外。
       for (let i = start; i < end; i++) { const band = this.boll[i]; if (band) { lo = Math.min(lo, band.lower); hi = Math.max(hi, band.upper); } }
       const pad = (hi - lo) * .07 || 10; lo -= pad; hi += pad;
+      Object.assign(this.geo, { t, ph, lo, hi });
       const y = v => t + (hi - v) / (hi - lo) * ph;
       const line = css('--line'), dim = css('--faint'), ink = css('--ink'), up = css('--up'), dn = css('--down');
       x.font = '11.5px "JetBrains Mono",Consolas,monospace'; x.textBaseline = 'middle';
@@ -411,6 +448,7 @@
         else x.fillText(o.label, l + 6, y(o.value) + (above ? -3 : 3));
         x.textBaseline = 'alphabetic';
       });
+      if (this.drawings) this.drawings.drawLines(x, this.geo);
       // 布林通道 20：畫在 K 棒後面，淡色帶加上下軌細線。連續有值的每一段各自成帶，缺值處斷開。
       const bandColor = css('--dim');
       for (let i = start; i < end;) {
@@ -477,6 +515,8 @@
         x.font = '600 11.5px "JetBrains Mono",Consolas,monospace'; x.textAlign = 'right'; x.fillText(fmtTag(last.close), tagX + tagW - 6, py + .5);
         x.textAlign = 'left'; x.font = '11.5px "JetBrains Mono",Consolas,monospace';
       } else if (end === n && hasPrice(last)) { const pw2 = stacked ? 46 : r - 4; x.fillStyle = ink; x.textBaseline = 'middle'; x.fillRect(l + pw + 2, y(last.close) - 9, pw2, 18); x.fillStyle = css('--bg'); x.fillText(fmt(last.close, 0), l + pw + 7, y(last.close)); }
+      // 畫線的價位標示與選取把手最後才畫：壓在 K 棒與現價虛線上面，才看得到。
+      if (this.drawings) this.drawings.drawOnTop(x, this.geo);
       // 驗收用：右側刻度文字框與現價框的位置。
       this.debugBoxes = { axis: axisBoxes, price: end === n && hasPrice(last) ? { y: y(last.close) - 9, h: 18 } : null, height: H };
       // MACD

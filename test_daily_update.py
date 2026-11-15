@@ -106,6 +106,22 @@ class RunTest(unittest.TestCase):
         self.assertEqual([s["name"] for s in saved["steps"]], du.STEP_ORDER)
         self.assertTrue(all(s["status"] == "ok" for s in saved["steps"]))
 
+    def test_republish_reruns_a_day_that_already_succeeded_under_a_new_version(self) -> None:
+        # 本人 2026-11-14：還原價、5 年歷史、大戶持股不需要新的交易日資料，要的是用新程式把同一天重算並發布。
+        # 「同日已成功就不重做」的保護照舊；只有明確要求重新發布時才再跑，並告訴步驟要用哪個新版本名。
+        calls: list[str] = []
+        self.run_with(full_steps(calls))
+        self.assertEqual(self.run_with(full_steps(calls))["status"], "already-done")
+        seen: list = []
+        steps = full_steps(calls)
+        steps[0] = du.Step(steps[0].name, lambda ctx: seen.append(ctx.outputs.get("_seed_version")) or {})
+        record = du.run(du.RunConfig(data_date="2026-11-06", log_dir=self.log_dir, holidays=set(), ready_interval=600,
+                                     ready_deadline=datetime(2026, 11, 6, 21, 0, tzinfo=TPE),
+                                     republish_version="liquid-20261106-abc-v2-r202611141800"),
+                        steps=steps, probe=lambda day: True, ready_check=lambda: True, clock=self.clock)
+        self.assertEqual((record["status"], record["republish_version"]), ("success", "liquid-20261106-abc-v2-r202611141800"))
+        self.assertEqual(seen, ["liquid-20261106-abc-v2-r202611141800"])
+
     def test_failure_before_activate_never_activates_or_deploys(self) -> None:
         calls: list[str] = []
         record = self.run_with(full_steps(calls, fail_at="d1_verify"))
@@ -478,6 +494,16 @@ class BuildAndDeployWiringTest(unittest.TestCase):
         self.assertEqual(Path(cmd[cmd.index("--out") + 1]), ctx.work_dir / "seed")
         self.assertEqual(Path(out["seed_dir"]), ctx.work_dir / "seed")
 
+    def test_build_seed_uses_the_republish_version_name_when_one_is_given(self) -> None:
+        steps = {s.name: s for s in du.real_steps()}
+        ctx = self.ctx()
+        steps["build_seed"].fn(ctx)
+        self.assertNotIn("--version", self.cmds[-1])     # 平常由資料日與來源雜湊決定版本名
+        ctx.outputs["_seed_version"] = "liquid-20261109-abc-v2-r202611141800"
+        steps["build_seed"].fn(ctx)
+        cmd = self.cmds[-1]
+        self.assertEqual(cmd[cmd.index("--version") + 1], "liquid-20261109-abc-v2-r202611141800")
+
     def test_build_seed_reuses_an_already_built_seed_on_retry(self) -> None:
         steps = {s.name: s for s in du.real_steps()}
         ctx = self.ctx()
@@ -487,6 +513,23 @@ class BuildAndDeployWiringTest(unittest.TestCase):
         out = steps["build_seed"].fn(ctx)
         self.assertEqual(self.cmds, [])
         self.assertTrue(out["reused"])
+
+    def test_build_seed_reports_which_stocks_were_built_with_problems(self) -> None:
+        # 建置清單裡的問題（例如某次股本變動缺官方數字而沒還原）不擋發布，但要進執行紀錄：
+        # 否則只有把整包 seed 拿回來看才知道哪幾檔的圖還留著斷崖。
+        steps = {s.name: s for s in du.real_steps()}
+        ctx = self.ctx()
+        seed = ctx.work_dir / "seed"
+        seed.mkdir(parents=True)
+        (seed / "manifest.json").write_text(json.dumps({"version": "v-x", "failures": [
+            {"code": "6669", "scope": "price_adjustment", "error": "UnresolvedCapitalEvent", "message": "2024-07-01 除權 未還原"},
+            {"code": "6669", "scope": "price_adjustment", "error": "UnresolvedCapitalEvent", "message": "2023-07-03 除權 未還原"},
+            {"code": "2330", "scope": "strategy", "error": "StrategyUnavailable", "message": "x"},
+            {"code": "1101", "error": "ValueError", "message": "y"}]}), encoding="utf-8")
+        out = steps["build_seed"].fn(ctx)
+        self.assertEqual(out["problems"], {"price_adjustment": ["6669"], "strategy": ["2330"], "analysis": ["1101"]})
+        (seed / "manifest.json").write_text('{"version": "v-x", "failures": []}', encoding="utf-8")
+        self.assertEqual(steps["build_seed"].fn(ctx)["problems"], {})
 
     def test_build_dist_runs_all_packs_then_build_mjs(self) -> None:
         steps = {s.name: s for s in du.real_steps()}
@@ -975,6 +1018,141 @@ class D1PruneTest(unittest.TestCase):
         self.assertEqual(len(calls), 1)
 
 
+class RepublishVersionTest(unittest.TestCase):
+    def seed(self, version: str, data_date: str = "2026-11-13") -> Path:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        folder = Path(tmp.name)
+        (folder / "manifest.json").write_text(json.dumps({"version": version, "data_date": data_date}), encoding="utf-8")
+        return folder
+
+    def test_new_version_keeps_the_published_name_and_adds_when_it_was_republished(self) -> None:
+        now = datetime(2026, 11, 14, 18, 5, tzinfo=TPE)
+        with unittest.mock.patch.object(du, "LAST_SEED_DIR", self.seed("liquid-20261113-237d4b8dd208-v2")):
+            self.assertEqual(du.republish_version("2026-11-13", now), "liquid-20261113-237d4b8dd208-v2-r202611141805")
+        # 已經重新發布過一次的，再來一次不會越疊越長
+        with unittest.mock.patch.object(du, "LAST_SEED_DIR", self.seed("liquid-20261113-237d4b8dd208-v2-r202611141805")):
+            self.assertEqual(du.republish_version("2026-11-13", now.replace(hour=20)),
+                             "liquid-20261113-237d4b8dd208-v2-r202611142005")
+
+    def test_only_the_day_that_is_actually_published_can_be_republished(self) -> None:
+        now = datetime(2026, 11, 14, 18, 5, tzinfo=TPE)
+        with unittest.mock.patch.object(du, "LAST_SEED_DIR", self.seed("liquid-20261113-237d4b8dd208-v2")):
+            with self.assertRaises(ValueError):
+                du.republish_version("2026-11-12", now)
+        with unittest.mock.patch.object(du, "LAST_SEED_DIR", Path(tempfile.gettempdir()) / "no-such-last-seed"):
+            with self.assertRaises(ValueError):
+                du.republish_version("2026-11-13", now)
+
+
+class RedeployFromWorkingSetTest(unittest.TestCase):
+    """本人 2026-11-14「要，現在做」：還沒有任何一次新版發布存下建置輸入時，也要能只部署程式。
+
+    雲端工作集帶著上一版 seed、個股包、大盤資料、日線庫與執行狀態，但沒有當天的母體與選股快照
+    （每日更新在 runner 的暫存目錄現算，不保存）。所以這條路把母體、選股包、對照包重算一次；
+    重算出來的母體必須和已發布的那一版一模一樣才部署。不匯入 D1、不上傳工作集。
+    """
+
+    VERSION = "liquid-20261113-abc-v2"
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name)
+        self.root = root
+        self.cloud = root / "cloud"
+        self.cloud.mkdir()
+        self.seed = root / "state" / "last-seed"
+        self.market = root / "state" / "last-market-pack"
+        self.log_dir = root / "log"
+        for folder in (self.seed, self.market, self.log_dir):
+            folder.mkdir(parents=True)
+        (self.seed / "manifest.json").write_text(json.dumps({"version": self.VERSION, "data_date": "2026-11-13"}), encoding="utf-8")
+        rows = [{"type": "version", "data": {"version": self.VERSION}},
+                {"type": "listed_security", "data": {"code": "2330"}}, {"type": "listed_security", "data": {"code": "6669"}},
+                {"type": "stock_analysis", "data": {"code": "2330"}}, {"type": "stock_analysis", "data": {"code": "0050"}}]
+        (self.seed / "seed.jsonl").write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+        (self.market / "analysis-data.js").write_text("window.MARKET_ANALYSIS = {};", encoding="utf-8")
+        (self.cloud / ".stock-pack.json").write_text(json.dumps({"as_of": "2026-11-13", "results": {}}), encoding="utf-8")
+        self.status = {"schema": "data-status/v1", "last_success_date": "2026-11-13",
+                       "last_success_at": "2026-11-14T00:19:31+08:00",
+                       "run": {"data_date": "2026-11-13", "status": "success", "finished_at": "2026-11-14T00:19:31+08:00"},
+                       "stale": False}
+        (self.log_dir / "status.json").write_text(json.dumps(self.status), encoding="utf-8")
+        self.cmds: list[list[str]] = []
+        self.active = self.VERSION
+        self.members = ["2330", "6669"]
+        self.probes = {"/": (302, "https://x.cloudflareaccess.com/cdn-cgi/access/login")}
+
+        def fake_sh(args, cwd=du.ROOT):
+            args = [str(a) for a in args]
+            self.cmds.append(args)
+            if "liquid_universe.py" in args:
+                out = Path(args[args.index("--snapshot-root") + 1])
+                out.mkdir(parents=True, exist_ok=True)
+                (out / "2026-11-13.json").write_text(json.dumps(
+                    {"data_date": "2026-11-13", "members": [{"code": code} for code in self.members]}), encoding="utf-8")
+            for name in ("build_screens_pack.py", "build_compare_pack.py"):
+                if any(arg.replace(chr(92), "/").endswith("/" + name) for arg in args):
+                    Path(args[args.index("--out") + 1]).write_text("{}", encoding="utf-8")
+            return {"cmd": " ".join(args[:4])}
+
+        for target, value in (("_sh", fake_sh), ("CLOUD", self.cloud), ("LAST_BUILD_DIR", root / "state" / "no-saved-inputs"),
+                              ("LAST_SEED_DIR", self.seed), ("LAST_MARKET_DIR", self.market),
+                              ("_remote_active_version", lambda: self.active),
+                              ("_probe_unauthenticated", lambda paths: self.probes)):
+            patcher = unittest.mock.patch.object(du, target, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def run_redeploy(self, dry_run: bool = False) -> dict:
+        return du.redeploy(dry_run=dry_run, log_dir=self.log_dir, work_root=self.root / "work")
+
+    def joined(self) -> list[str]:
+        return [" ".join(cmd).replace(chr(92), "/") for cmd in self.cmds]
+
+    def test_rebuilds_the_packs_for_the_published_day_and_deploys_code_only(self) -> None:
+        out = self.run_redeploy()
+        self.assertEqual({key: out[key] for key in ("mode", "source", "status", "data_date", "redeployed", "published", "sync_state")},
+                         {"mode": "redeploy", "source": "working-set", "status": "success", "data_date": "2026-11-13",
+                          "redeployed": True, "published": False, "sync_state": False})
+        steps = self.joined()
+        order = [next(i for i, cmd in enumerate(steps) if marker in cmd) for marker in
+                 ("liquid_universe.py --as-of 2026-11-13", "market_screens_publish.py --as-of 2026-11-13",
+                  "build_screens_pack.py", "build_compare_pack.py", "build.mjs", "pages deploy dist")]
+        self.assertEqual(order, sorted(order))
+        self.assertIn(str(self.market).replace(chr(92), "/"), steps[order[4]])   # 大盤資料用上一版保存的那批
+        self.assertTrue(all("import_d1_seed" not in cmd and "state_sync" not in cmd and "daily_ingest" not in cmd
+                            and "build_stock_pack" not in cmd for cmd in steps))    # 不抓資料、不重算個股、不寫 D1、不上傳
+        self.assertEqual(json.loads((self.cloud / ".data-status.json").read_text(encoding="utf-8")), self.status)
+
+    def test_dry_run_builds_everything_but_does_not_deploy(self) -> None:
+        out = self.run_redeploy(dry_run=True)
+        self.assertEqual((out["status"], out["redeployed"]), ("success", False))
+        self.assertTrue(any("build.mjs" in cmd for cmd in self.joined()))
+        self.assertFalse(any("pages deploy" in cmd for cmd in self.joined()))
+
+    def test_refuses_when_the_recomputed_universe_is_not_the_published_one(self) -> None:
+        self.members = ["2330", "2317"]   # 重算出來的名單和資料庫裡發布的那一版不同
+        out = self.run_redeploy()
+        self.assertEqual((out["status"], out["failed_step"], out["redeployed"]), ("failed", "verify_universe", False))
+        self.assertFalse(any("build.mjs" in cmd or "pages deploy" in cmd for cmd in self.joined()))
+
+    def test_refuses_before_doing_anything_when_live_data_or_carried_packs_do_not_match(self) -> None:
+        self.active = "liquid-20261116-zzz-v2"
+        out = self.run_redeploy()
+        self.assertEqual((out["failed_step"], self.cmds), ("check_active", []))
+        self.active = self.VERSION
+        (self.cloud / ".stock-pack.json").write_text(json.dumps({"as_of": "2026-11-12", "results": {}}), encoding="utf-8")
+        out = self.run_redeploy()
+        self.assertEqual((out["failed_step"], self.cmds), ("verify_inputs", []))
+
+    def test_refuses_when_the_run_status_of_that_day_is_missing_rather_than_inventing_one(self) -> None:
+        (self.log_dir / "status.json").write_text(json.dumps({**self.status, "last_success_date": "2026-11-12"}), encoding="utf-8")
+        out = self.run_redeploy()
+        self.assertEqual((out["failed_step"], self.cmds), ("verify_inputs", []))
+
+
 class RedeployTest(unittest.TestCase):
     """本人 2026-11-14：「資料不變、只重新部署程式」。發布成功時保存建置輸入，之後用同一批輸入重建網頁。"""
 
@@ -1001,6 +1179,7 @@ class RedeployTest(unittest.TestCase):
             unittest.mock.patch.object(du, "_sh", fake_sh),
             unittest.mock.patch.object(du, "CLOUD", self.cloud),
             unittest.mock.patch.object(du, "LAST_BUILD_DIR", self.saved, create=True),
+            unittest.mock.patch.object(du, "LAST_SEED_DIR", root / "state" / "no-last-seed"),
             unittest.mock.patch.object(du, "_remote_active_version", lambda: self.active),
             unittest.mock.patch.object(du, "_probe_unauthenticated", lambda paths: self.probes),
         ]

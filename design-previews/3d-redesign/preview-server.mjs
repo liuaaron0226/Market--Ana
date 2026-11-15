@@ -10,6 +10,7 @@
 //   --now 2026-11-14T10:00:00+08:00 ＝把伺服器端的「現在」固定在這一刻（截圖腳本用，讓開盤／收盤判斷每次相同）。
 //   --host 0.0.0.0 ＝讓同一個 Wi-Fi 上的手機也連得到（用電腦的區網位址加埠號開）。預設只有這台電腦連得到。
 //     裡面只有樣本資料，但開著的期間區網內任何裝置都能以站主身分看到這個預覽，看完就關掉。
+//   --owner-extras ＝主線兩個只給站主的功能也打開（預測帳本、自選股關注），並放一筆樣本預測。
 //   --expired ＝把人寫內容（劇本、直白分析）的日期改成比行情資料日早一天，用來看首頁「過期就整組隱藏」的樣子。
 // 先備條件（都不入版控，見 .scratch/3d-redesign/parity-checklist.md〈本機預覽〉）：
 //   cloud/.stock-pack.json、.screens-pack.json、.compare-pack.json、.data-status.json、web/*-data.js，並跑過 node cloud/build.mjs。
@@ -51,6 +52,36 @@ const env = {
   DB: db, TEAM_DOMAIN: TEAM, MAIN_AUD, APPLY_AUD, OWNER_EMAIL: OWNER,
   ...(features === "all" ? { MARKET_ANA_STRATEGIES_ENABLED: "1" } : { MARKET_ANA_ENABLED_FEATURES: "strategy_v1,market_trend_v1" }),
 };
+// --owner-extras：主線兩個只給站主的功能也打開——預測帳本（正式站已對站主試跑）與自選股關注——
+// 並放一筆樣本預測，才看得到它們在這個版面裡的樣子。線的數值取自樣本的日 K（五日線、月線、近二十日高低點），
+// 區間與理由是預覽用的假內容，不是真的預測。沒給這個選項時和原本完全一樣（旅程檢查與截圖巡檢都不給）。
+if (flag("owner-extras")) {
+  env.MARKET_ANA_FORECAST_LEDGER = "owner";
+  env.MARKET_ANA_WATCHLIST_WATCH = "owner";
+  const daily = marketPack.overview.analysis.daily, last = daily.at(-1);
+  const average = count => daily.slice(-count).reduce((sum, row) => sum + row.close, 0) / count;
+  const recent = daily.slice(-20);
+  const high = recent.reduce((best, row) => (row.high > best.high ? row : best)), low = recent.reduce((best, row) => (row.low < best.low ? row : best));
+  const mmdd = date => date.slice(5).replace("-", "/");
+  const line = (id, name, value) => ({ id, name, value: Math.round(value * 100) / 100 });
+  const cell = (strong, weak, zone) => ({ strong_line: strong, weak_line: weak, zone, reason: "預覽用的樣本內容，不是真的預測。", invalidation: "預覽用的樣本內容。" });
+  const record = {
+    forecast_id: `${last.date}|evening|0.4|preview-sample`, base_date: last.date, edition: "evening",
+    method_version: "0.4", input_version: "preview-sample", run_mode: "trial", kind: "forecast",
+    regime: "預覽樣本", locked_at: `${last.date}T17:00:00+08:00`,
+    data_cutoffs: { index: last.date, institutional: last.date, futures: last.date },
+    cells: {
+      1: cell(line("ma5", "五日線", average(5)), line("prev_low", "前一交易日低點", last.low), "between"),
+      5: cell(line("ma20", "月線", average(20)), line("low20", `近二十日低點（${mmdd(low.date)}）`, low.low), "between"),
+      20: cell(line("high20", `近二十日高點（${mmdd(high.date)}）`, high.high), line("low20", `近二十日低點（${mmdd(low.date)}）`, low.low), "between"),
+    },
+    record_sha256: "0".repeat(64),
+  };
+  await db.prepare(
+    "INSERT INTO forecast_records (forecast_id, base_date, edition, method_version, input_version, run_mode, kind, record_json, record_sha256, published_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+  ).bind(record.forecast_id, record.base_date, record.edition, record.method_version, record.input_version,
+    record.run_mode, record.kind, JSON.stringify(record), record.record_sha256, `${last.date}T18:00:00+08:00`).run();
+}
 const relaxed = { market: 10_000, detail: 10_000, userData: 10_000, live: 10_000, history: 10_000, ticks: 10_000 };
 const fixedNow = option("now", null);
 if (fixedNow && Number.isNaN(Date.parse(fixedNow))) throw new Error("--now 要是 ISO 時間");

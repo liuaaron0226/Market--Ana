@@ -31,8 +31,9 @@
   const $ = id => document.getElementById(id);
   const money = new Intl.NumberFormat('zh-TW', { style: 'currency', currency: 'TWD', maximumFractionDigits: 0 });
   const number = new Intl.NumberFormat('zh-TW', { maximumFractionDigits: 2 });
-  const state = { watchlist: [], holdings: [], level: null, aiDigest: null, aiVisible: false };
-  let features = { level_advice: false, ai_stock_advice: false };
+  // watch：站主才有（其他人是 null）——已關注的代號、目前幾檔、上限。
+  const state = { watchlist: [], watch: null, holdings: [], level: null, aiDigest: null, aiVisible: false };
+  let features = { level_advice: false, ai_stock_advice: false, watchlist_watch_v1: false };
 
   async function loadReleaseFeatures() {
     try {
@@ -132,10 +133,64 @@
     return button;
   }
 
+  function renderWatchCount() {
+    const total = `${state.watchlist.length} 檔`;
+    $('watchlistCount').textContent = state.watch ? `${total} · 關注 ${state.watch.count}/${state.watch.limit}` : total;
+  }
+
+  // 每一列的訊息區在畫出這一列時就放好（空的），之後只改文字：輔助工具才會念出來。
+  function rowNote(row, message) {
+    const note = row.querySelector('.pf-row-note');
+    note.textContent = message;
+    note.hidden = !message;
+  }
+
+  function watchToggle(item, row) {
+    const watch = state.watch; // 請求途中清單可能重新載入；這一顆開關只動它畫出來時的那一份
+    const label = document.createElement('label');
+    label.className = 'pf-watch-toggle';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.setAttribute('role', 'switch');
+    input.setAttribute('aria-label', `關注 ${item.code} ${item.name}`);
+    input.checked = watch.codes.has(item.code);
+    // 現在不能關注的那幾檔只是變淡、仍然可以按：按了由伺服器說明原因，顯示在這一列。
+    const dim = () => label.classList.toggle('is-dim', watch.unwatchable.has(item.code) && !input.checked);
+    dim();
+    const text = document.createElement('span');
+    text.textContent = '關注';
+    label.append(input, text);
+    input.addEventListener('change', async () => {
+      const wanted = input.checked;
+      input.disabled = true;
+      rowNote(row, '');
+      try {
+        const path = `/api/watch/${encodeURIComponent(item.code)}`;
+        if (wanted) {
+          const result = await api(path, { method: 'POST', body: {} });
+          if (!result?.watching) throw new Error('暫時無法處理');
+          watch.codes.add(item.code);
+        } else {
+          await api(path, { method: 'DELETE', body: {} });
+          watch.codes.delete(item.code);
+        }
+        watch.count = watch.codes.size;
+        renderWatchCount();
+      } catch (error) {
+        input.checked = !wanted;
+        rowNote(row, error.message);
+      } finally {
+        input.disabled = false;
+        dim();
+      }
+    });
+    return label;
+  }
+
   function renderWatchlist() {
     const host = $('watchlistRows');
     host.replaceChildren();
-    $('watchlistCount').textContent = `${state.watchlist.length} 檔`;
+    renderWatchCount();
     if (!state.watchlist.length) {
       const empty = document.createElement('p');
       empty.className = 'pf-empty';
@@ -145,7 +200,7 @@
     }
     state.watchlist.forEach(item => {
       const row = document.createElement('article');
-      row.className = 'pf-row pf-watch-row';
+      row.className = `pf-row pf-watch-row${state.watch ? ' has-watch' : ''}`;
       const select = document.createElement('select');
       select.setAttribute('aria-label', `${item.code} 投資分類`);
       [['none', '未分類'], ['short', '短期'], ['long', '長期']].forEach(([value, label]) => {
@@ -166,7 +221,7 @@
           select.value = item.horizon;
         } finally { select.disabled = false; }
       });
-      row.append(stockIdentity(item), select, deleteButton(`從自選股刪除 ${item.code} ${item.name}`, async () => {
+      row.append(stockIdentity(item), ...(state.watch ? [watchToggle(item, row)] : []), select, deleteButton(`從自選股刪除 ${item.code} ${item.name}`, async () => {
         if (!confirm(`要從自選股刪除 ${item.code} ${item.name} 嗎？`)) return;
         try {
           await api(`/api/watchlist/${encodeURIComponent(item.code)}`, { method: 'DELETE', body: {} });
@@ -174,6 +229,13 @@
           await loadWatchlist();
         } catch (error) { setStatus($('watchlistStatus'), error.message, 'error'); }
       }));
+      if (state.watch) {
+        const note = document.createElement('p');
+        note.className = 'pf-row-note';
+        note.setAttribute('role', 'status');
+        note.hidden = true;
+        row.append(note);
+      }
       host.append(row);
     });
   }
@@ -477,8 +539,25 @@
     [...$('holdingRows').querySelectorAll('.hv-row')].forEach(other => setHoldingOpen(other, other === row && open));
   });
 
+  async function loadWatch() {
+    let watch = null;
+    if (features.watchlist_watch_v1) {
+      try {
+        const payload = await api('/api/watch');
+        if (payload?.available) {
+          watch = {
+            count: payload.count, limit: payload.limit,
+            codes: new Set((payload.items || []).map(item => item.code)),
+            unwatchable: new Set(payload.unwatchable || []),
+          };
+        }
+      } catch (_) { /* 讀不到關注時，自選股照常顯示，只是沒有開關 */ }
+    }
+    state.watch = watch;
+  }
+
   async function loadWatchlist() {
-    const payload = await api('/api/watchlist');
+    const [payload] = await Promise.all([api('/api/watchlist'), loadWatch()]);
     state.watchlist = payload.items || [];
     renderWatchlist();
   }
