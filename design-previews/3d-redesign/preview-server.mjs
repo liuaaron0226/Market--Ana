@@ -175,8 +175,9 @@ async function serveSample(pathname) {
 }
 
 async function serveStatic(pathname) {
-  // /s：手機上好打的短網址，轉到目前在看的樣品
-  if (pathname === "/s") return new Response(null, { status: 302, headers: { location: "/samples/trend-matrix.html" } });
+  // 手機上好打的短網址，轉到樣品：/s 是 ⑤ 短中長期走勢、/s6 是 ⑥ 大戶持股、/s3 是 ③ 庫存總覽
+  const SHORT = { "/s": "trend-matrix", "/s6": "holders-weekly", "/s3": "holdings-overview" };
+  if (SHORT[pathname]) return new Response(null, { status: 302, headers: { location: `/samples/${SHORT[pathname]}.html` } });
   if (/^\/samples\/[A-Za-z0-9-]+\.html$/.test(pathname)) return serveSample(pathname);
   let p = pathname.endsWith("/") ? pathname + "index.html" : pathname;
   if (!extname(p)) p += "/index.html";
