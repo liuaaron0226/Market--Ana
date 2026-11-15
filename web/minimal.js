@@ -96,27 +96,35 @@
   };
   window.MinimalApp = api;
 
-  if (!A || !D || !A.backtest || !D.thresholds || !window.KChart) {
+  if (!A || !D || !A.backtest || !window.KChart) {
     els.service.hidden = false;
     els.service.textContent = '資料驗證失敗：缺少盤後分析、劇本或圖表元件。';
     return;
   }
 
-  const UPPER = Number(D.thresholds.upper);
-  const LOWER = Number(D.thresholds.lower);
   const AS_OF = A.backtest.as_of || {};
+  // 收復線、防守線：每日更新照規則從當天的 K 線算出來（回測的截止日資料），每天都有，優先讀這一份；
+  // 人寫的劇本裡也抄了一份同樣的數字，只有在資料包還沒有帶算出來的那一份時才退回去讀它（本人 2026-11-15：線與圖不等人寫劇本）。
+  const isNumber = value => value !== null && value !== '' && Number.isFinite(Number(value));
+  const LINES_DAILY = isNumber(AS_OF.upper) && isNumber(AS_OF.lower);
+  const SCRIPT_LINES = D.thresholds || {};
+  const UPPER = Number(LINES_DAILY ? AS_OF.upper : SCRIPT_LINES.upper);
+  const LOWER = Number(LINES_DAILY ? AS_OF.lower : SCRIPT_LINES.lower);
   const ACTIONS = D.actions || (D.forecast && D.forecast.actions) || {};
   const CLOSE = Number(AS_OF.close || (D.latest && D.latest.close));
-  const DEFAULT_SAMPLE = D.default_sample || AS_OF.default_sample || (A.backtest.samples[0] && A.backtest.samples[0].key);
+  // 預設用哪一組比較樣本：也是每天照當天的型態定的，先讀算出來的；人寫的那一份可能是好幾天前的型態
+  const DEFAULT_SAMPLE = AS_OF.default_sample || D.default_sample || (A.backtest.samples[0] && A.backtest.samples[0].key);
   const scenarioDate = (() => {
     const horizon = String(D.forecast && D.forecast.horizon || '');
     const match = horizon.match(/\d{4}-\d{2}-\d{2}/);
     return match ? match[0] : String(D.expires_at || D.forecast && D.forecast.expiry || '').slice(0, 10);
   })();
-  const TARGET_LABEL = scenarioDate ? `${scenarioDate.slice(5, 7)}/${scenarioDate.slice(8, 10)}` : '下一交易日';
   const scenarioExpired = Boolean(scenarioDate && A.meta.cutoff_date && scenarioDate < A.meta.cutoff_date);
-  // 本人 2026-11-14「過期就隱藏」：劇本與直白分析是人寫的，不會跟每日資料一起更新。
-  // 比行情資料日舊時整組不顯示（劇本文字、收復線／防守線、靠這兩條線算的隔日分布），不拿舊解讀配新數字。
+  // 本人 2026-11-14「過期就隱藏」：劇本與直白分析是人寫的，不會跟每日資料一起更新，比行情資料日舊時不顯示，不拿舊解讀配新數字。
+  // 2026-11-15 本人同意把範圍縮小：過期只藏人寫的文字（scenarioExpired：劇本日期、怎麼應對、觸發條件、解讀）；
+  // 兩條線與靠它們算的東西每天都有，只有在線還是從過期的劇本抄來的時候才跟著藏（linesHidden）。
+  // 兩邊都沒有數字（資料包壞了）也當成沒有線，不畫出「NaN」
+  const linesHidden = !(Number.isFinite(UPPER) && Number.isFinite(LOWER)) || (!LINES_DAILY && scenarioExpired);
   const plainSource = OV && OV.plain || null;
   const plainStale = Boolean(plainSource && plainSource.data_dates && A.meta.cutoff_date
     && String(plainSource.data_dates.price_and_foreign || '') < A.meta.cutoff_date);
@@ -240,7 +248,7 @@
     els.state.textContent = state.label;
     els.stateButton.dataset.state = state.id;
     els.time.textContent = stamp || fallbackMarketDate();
-    els.zone.textContent = scenarioExpired ? '' : zoneFor(price).label;
+    els.zone.textContent = linesHidden ? '' : zoneFor(price).label;
     const shortDate = value => (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}/.test(value)) ? `${value.slice(5, 7)}/${value.slice(8, 10)}` : (value || '—');
     els.analysisDate.textContent = shortDate(A.meta.cutoff_date || fallbackMarketDate());
     els.scenarioDate.textContent = shortDate(scenarioDate);
@@ -382,7 +390,7 @@
   }
 
   function overlays() {
-    if (scenarioExpired) return [];
+    if (linesHidden) return [];
     return [
       { value: UPPER, label: '收復線', short: '收復', color: css('--gold', '#d9a94b'), pos: 'above' },
       { value: LOWER, label: '防守線', short: '防守', color: css('--down', '#2fd09a'), pos: 'below' }
@@ -545,7 +553,7 @@
     els.estimate.hidden = !isMinutePeriod(period);
     els.chartContext.textContent = `${periodLabels[period]} · ${liveLast ? '最右一根形成中'
       : provisionalLast ? `最右一根暫用即時收盤，正式日K待更新（目前到 ${A.meta.cutoff_date}）` : `資料截至 ${A.meta.cutoff_date}`}`;
-    els.chartSummary.textContent = `${periodLabels[period]}，共 ${candles.length} 根。${scenarioExpired ? '' : `圖上有收復線 ${fmt(UPPER)} 與防守線 ${fmt(LOWER)}。`}`;
+    els.chartSummary.textContent = `${periodLabels[period]}，共 ${candles.length} 根。${linesHidden ? '' : `圖上有收復線 ${fmt(UPPER)} 與防守線 ${fmt(LOWER)}。`}`;
     requestAnimationFrame(updateOverlayControls);
   }
 
@@ -573,7 +581,7 @@
     const ph = H - t - b - macdH - gapH;
     const end = chart.view.end;
     const visible = chart.candles.slice(start, end).filter(candle => ['open', 'high', 'low', 'close'].every(key => Number.isFinite(candle[key])));
-    const scenarioLines = scenarioExpired ? [] : [LOWER, UPPER];
+    const scenarioLines = linesHidden ? [] : [LOWER, UPPER];
     let low = Math.min(...visible.map(candle => candle.low), ...scenarioLines);
     let high = Math.max(...visible.map(candle => candle.high), ...scenarioLines);
     const pad = (high - low) * .07 || 10;
@@ -1053,6 +1061,7 @@
   const ZONE_TONES = { stand_back: 'var(--up)', between: 'var(--gold)', continue_break: 'var(--down)', upper: 'var(--gold)', lower: 'var(--down)' };
   function renderLinePanel(line) {
     const upper = line === 'upper';
+    // 人寫的那幾句（怎麼應對、觸發條件、解讀）：劇本過期就不顯示，線與圖照樣有
     const scenarioName = upper ? '轉強觀察' : '續弱觀察';
     const scenario = scenarioFor(scenarioName);
     const action = ACTIONS[scenarioName] || {};
@@ -1084,11 +1093,11 @@
         <figcaption>過去很像的${figure.count === null ? '日子' : ` ${fmt(figure.count, 0)} 次`}，隔天收在哪裡（不是明天的機率）</figcaption>
         <ol class="zone-rows">${figure.rows.map(row).join('')}</ol>
       </figure>
-      ${fold('怎麼應對', `<dl class="action-list">
+      ${scenarioExpired ? '' : fold('怎麼應對', `<dl class="action-list">
         <div><dt>手上沒股票</dt><dd id="actionFlat">${esc(action.flat || '尚未取得')}</dd></div>
         <div><dt>已經持有</dt><dd id="actionHolding">${esc(action.holding || '尚未取得')}</dd></div>
       </dl>${plainBlock([], watch)}`)}
-      ${moreDetail(`<p class="panel-lede">${source}</p><dl class="action-list"><div><dt>觸發條件</dt><dd>${esc(scenario.trigger || '尚未取得')}</dd></div><div><dt>解讀</dt><dd>${esc(scenario.interpretation || '尚未取得')}</dd></div></dl><p class="panel-callout" style="--tone:${upper ? 'var(--gold)' : 'var(--down)'}">${esc(ACTIONS.basis || '一般情境應對，不是自動下單指示。')}</p>`)}
+      ${moreDetail(`<p class="panel-lede">${source}</p>${scenarioExpired ? '' : `<dl class="action-list"><div><dt>觸發條件</dt><dd>${esc(scenario.trigger || '尚未取得')}</dd></div><div><dt>解讀</dt><dd>${esc(scenario.interpretation || '尚未取得')}</dd></div></dl><p class="panel-callout" style="--tone:${upper ? 'var(--gold)' : 'var(--down)'}">${esc(ACTIONS.basis || '一般情境應對，不是自動下單指示。')}</p>`}`)}
     `;
   }
 
@@ -1237,19 +1246,19 @@
       `現在 <b>${fmt(price, 0)}</b>，落在「${esc(zone)}」。`,
       `離收復線還差 <b>${fmt(Math.abs(upperGap), 0)} 點</b>${upperGap >= 0 ? '（已在上方）' : ''}；離防守線還有 <b>${fmt(Math.abs(lowerGap), 0)} 點</b>${lowerGap < 0 ? '（已跌破）' : ''}。`,
     ];
-    const watch = ['判斷看<b>收盤</b>，盤中位置會變。', '盤後劇本不會因盤中價格自動改寫。'];
+    const watch = ['判斷看<b>收盤</b>，盤中位置會變。', '兩條線是照上一個收盤畫的，盤中不會跟著改。'];
     return `
-      ${scenarioExpired ? '' : plainBlock(meaning, watch)}
+      ${linesHidden ? '' : plainBlock(meaning, watch)}
       <div class="current-grid">
         <div><span>現價</span><strong class="num">${fmt(price)}</strong></div>
         <div><span>漲跌</span><strong class="num">${signed(data.change)}（${signed(data.change_percent)}%）</strong></div>
-        ${scenarioExpired ? '' : `<div><span>距收復線</span><strong class="num">${signed(upperGap)} 點</strong><small class="num">${signed(upperGap / UPPER * 100)}%</small></div>
+        ${linesHidden ? '' : `<div><span>距收復線</span><strong class="num">${signed(upperGap)} 點</strong><small class="num">${signed(upperGap / UPPER * 100)}%</small></div>
         <div><span>距防守線</span><strong class="num">${signed(lowerGap)} 點</strong><small class="num">${signed(lowerGap / LOWER * 100)}%</small></div>`}
       </div>
       <dl class="action-list">
         <div><dt>行情狀態</dt><dd>${esc(els.state.textContent)}</dd></div>
         <div><dt>行情時間</dt><dd class="num">${esc(els.time.textContent)}</dd></div>
-        ${scenarioExpired ? '' : `<div><dt>現價落點</dt><dd>${esc(zoneFor(price).label)}</dd></div>`}
+        ${linesHidden ? '' : `<div><dt>現價落點</dt><dd>${esc(zoneFor(price).label)}</dd></div>`}
       </dl>
     `;
   }
@@ -1625,10 +1634,13 @@
   els.upper.textContent = fmt(UPPER);
   els.lower.textContent = fmt(LOWER);
   renderDistribution();
-  // 過期的劇本整組收起來：標頭的劇本日期、圖旁兩個價位按鈕、隔日分布；直白分析另看它自己的資料日。
-  for (const node of [els.scenarioDate.parentElement, els.scenarioDate.parentElement.previousElementSibling,
-    els.lineUpper, els.lineLower, $('distribution')]) {
+  // 人寫的劇本過期：標頭的劇本日期收起來。圖旁兩個價位按鈕與隔日分布每天都有，只有線還是從過期的劇本抄來時才跟著收。
+  // 直白分析另看它自己的資料日。
+  for (const node of [els.scenarioDate.parentElement, els.scenarioDate.parentElement.previousElementSibling]) {
     if (node) node.hidden = scenarioExpired;
+  }
+  for (const node of [els.lineUpper, els.lineLower, $('distribution')]) {
+    if (node) node.hidden = linesHidden;
   }
   $('readCard').hidden = plainStale;
   setMarketHeader(fallbackMarketData(), { id: 'closed', label: '休市' }, fallbackMarketDate());
