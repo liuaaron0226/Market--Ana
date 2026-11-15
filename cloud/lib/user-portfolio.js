@@ -106,9 +106,9 @@ async function renameWatchGroup(request, db, email) {
 async function saveWatchlist(request, db, email, deps) {
   const body = await readBody(request);
   const code = codeFrom(body.code);
-  const horizon = typeof body.horizon === "string" ? body.horizon : "none";
-  if (!HORIZONS.has(horizon)) throw new UserPortfolioError(400, "分類只接受短期、長期或未分類");
-  // 沒帶群組：新加的是未分組，已經有的那一檔保留原本的群組（只改短期／長期不會把群組洗掉）
+  // 短期／長期與群組各改各的：沒帶的那一項，新加的是不標、未分組，已經有的那一檔保留原本的
+  const horizon = body.horizon === undefined ? null : body.horizon;
+  if (horizon !== null && !HORIZONS.has(horizon)) throw new UserPortfolioError(400, "短期／長期只接受 short、long 或 none");
   const group = body.group === undefined ? null : groupFrom(body.group);
   const security = await securityFor(db, code, deps);
   const existing = await db.prepare("SELECT created_at FROM user_watchlist WHERE email = ? AND code = ?").bind(email, code).first();
@@ -116,17 +116,24 @@ async function saveWatchlist(request, db, email, deps) {
     const count = await db.prepare("SELECT COUNT(*) AS n FROM user_watchlist WHERE email = ?").bind(email).first();
     if (Number(count.n) >= WATCHLIST_LIMIT) throw new UserPortfolioError(409, `自選股最多 ${WATCHLIST_LIMIT} 檔`);
   }
-  const at = new Date((deps.now || Date.now)()).toISOString();
+  const now = (deps.now || Date.now)(), at = new Date(now).toISOString();
+  // 還原剛移出的那一檔時帶著它原本加入的時間：清單與群組照加入的先後排，放回去才會在原位。只在新加時採用
+  let createdAt = at;
+  if (body.created_at !== undefined) {
+    const stamp = typeof body.created_at === "string" ? Date.parse(body.created_at) : NaN;
+    if (!Number.isFinite(stamp) || stamp > now) throw new UserPortfolioError(400, "加入時間格式不正確");
+    createdAt = new Date(stamp).toISOString();
+  }
   let created = false;
   try {
     const inserted = await db.prepare(
       "INSERT INTO user_watchlist (email, code, name, market, horizon, group_name, in_universe, created_at, updated_at) " +
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (email, code) DO NOTHING",
-    ).bind(email, code, security.name, security.market, horizon, group ?? "", security.in_universe, at, at).run();
+    ).bind(email, code, security.name, security.market, horizon ?? "none", group ?? "", security.in_universe, createdAt, at).run();
     created = Number(inserted.meta.changes) > 0;
     if (!created) {
       await db.prepare(
-        "UPDATE user_watchlist SET name = ?, market = ?, horizon = ?, group_name = COALESCE(?, group_name), in_universe = ?, updated_at = ? WHERE email = ? AND code = ?",
+        "UPDATE user_watchlist SET name = ?, market = ?, horizon = COALESCE(?, horizon), group_name = COALESCE(?, group_name), in_universe = ?, updated_at = ? WHERE email = ? AND code = ?",
       ).bind(security.name, security.market, horizon, group, security.in_universe, at, email, code).run();
     }
   } catch (error) {

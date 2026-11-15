@@ -53,13 +53,15 @@ with sync_playwright() as p:
     def touch(kind, x, y):
         cdp.send("Input.dispatchTouchEvent", {"type": kind, "touchPoints": [] if kind == "touchEnd" else [{"x": x, "y": y, "id": 1}]})
 
-    def swipe(row, dx, dy=0, steps=8):
+    def swipe(row, dx, dy=0, steps=8, hold=0):
+        """hold：放開之前停多久（毫秒）。馬上放開是「一撥」，瀏覽器會把緊接著的那一下點擊吃掉；要接著點一般的鍵就先停一下。"""
         row.locator(".swipe-face").evaluate("node => node.scrollIntoView({ block: 'center' })"); pg.wait_for_timeout(120)
         box = row.locator(".swipe-face").bounding_box()
         x, y = box["x"] + box["width"] * 0.7, box["y"] + box["height"] / 2
         touch("touchStart", x, y)
         for i in range(1, steps + 1):
             touch("touchMove", x + dx * i / steps, y + dy * i / steps); pg.wait_for_timeout(16)
+        pg.wait_for_timeout(hold)
         touch("touchEnd", 0, 0); pg.wait_for_timeout(200)
 
     row = lambda code: pg.locator(f".hv-row[data-code='{code}']")
@@ -77,7 +79,8 @@ with sync_playwright() as p:
     check("名稱下面的小字：兩邊都有的寫群組（沒有群組寫「自選」），只在自選的右邊寫群組",
           [row(c).locator(".hv-name span").inner_text() for c in ("2330", "2603", "0050", "6669")] == ["2330自選", "2603航運", "0050", "6669"] and row("6669").locator(".pf-tag").inner_text() == "AI 伺服器",
           str([row(c).locator(".hv-name span").inner_text() for c in ("2330", "2603", "0050", "6669")]))
-    check("平常看不到滑開的動作，也沒有「⋯」", pg.locator(".swipe-acts").first.evaluate("n => getComputedStyle(n).visibility") == "hidden" and pg.locator(".swipe-more").first.evaluate("n => getComputedStyle(n).display") == "none")
+    check("平常看不到滑開的動作；「⋯」在觸控的畫面上縮成看不到的一個點（留給螢幕報讀）", pg.locator(".swipe-acts").first.evaluate("n => getComputedStyle(n).visibility") == "hidden"
+          and pg.locator(".swipe-more").first.evaluate("n => { const b = n.getBoundingClientRect(); return b.width <= 1 && b.height <= 1; }"))
     shot(pg, "p1-list.png")
 
     # 向左滑
@@ -130,7 +133,7 @@ with sync_playwright() as p:
     # 群組的選單
     row("2603").locator(".pf-group-chip").tap(); pg.wait_for_timeout(400)
     menu = pg.locator("#groupMenu-2603"); mb = menu.bounding_box()
-    check("群組小鍵：選單在畫面裡，列出現有的群組、未分組與新群組", menu.is_visible() and mb["x"] >= 0 and mb["x"] + mb["width"] <= 390 and menu.inner_text().split("\n") == ["AI 伺服器", "航運", "未分組", "＋ 新群組"], menu.inner_text().replace("\n", " ｜ "))
+    check("群組小鍵：選單在畫面裡，列出現有的群組、未分組與新群組", menu.is_visible() and mb["x"] >= 0 and mb["x"] + mb["width"] <= 390 and menu.inner_text().split("\n") == ["航運", "AI 伺服器", "未分組", "＋ 新群組"], menu.inner_text().replace("\n", " ｜ "))
     covered = pg.evaluate("(() => { const m = document.getElementById('groupMenu-2603').getBoundingClientRect(); const at = document.elementFromPoint(m.left + 20, m.bottom - 14); return at && at.closest('#groupMenu-2603') ? '' : '被蓋住：' + (at && at.className); })()")
     check("選單沒有被下面的列蓋住", covered == "", covered)
     shot(pg, "p5-group-menu.png")
@@ -150,7 +153,7 @@ with sync_playwright() as p:
 
     # 自選：照群組分段
     pg.locator("#listFilter [data-filter='watch']").tap(); pg.wait_for_timeout(300)
-    check("按「自選」：照群組分段，未分組在最後；開著的那一列還開著", heads() == ["AI 伺服器 1", "貨櫃三雄 1", "未分組 1"] and "is-open" in row("2603").get_attribute("class"), str(heads()))
+    check("按「自選」：照群組分段，未分組在最後；開著的那一列還開著", heads() == ["貨櫃三雄 1", "AI 伺服器 1", "未分組 1"] and "is-open" in row("2603").get_attribute("class"), str(heads()))
     check("分段時：有庫存的那一列名稱下面改寫短期／長期，只在自選的右邊不再重複寫群組", row("2603").locator(".hv-name em").inner_text() == "長期" and row("6669").locator(".pf-tag").inner_text() == "" and not wide())
     pg.evaluate("scrollTo(0, 0)"); shot(pg, "p7-groups.png")
     # 改群組的名稱
@@ -158,10 +161,10 @@ with sync_playwright() as p:
     rename = pg.locator(".pf-rename input")
     check("點群組名稱：就地變成輸入框，帶著原本的名字", rename.input_value() == "貨櫃三雄")
     rename.fill("航運"); rename.press("Enter"); pg.wait_for_function("[...document.querySelectorAll('.pf-group-name')].some(n => n.textContent === '航運')")
-    check("改名回「航運」", heads() == ["AI 伺服器 1", "航運 1", "未分組 1"] and "「貨櫃三雄」改名為「航運」" in status(), f"{heads()}｜{status()}")
+    check("改名回「航運」", heads() == ["航運 1", "AI 伺服器 1", "未分組 1"] and "「貨櫃三雄」改名為「航運」" in status(), f"{heads()}｜{status()}")
     pg.locator(".pf-group-name[data-group='航運']").tap(); pg.wait_for_selector(".pf-rename input")
     pg.locator(".pf-rename input").fill("不要改"); pg.locator(".pf-rename input").press("Escape"); pg.wait_for_timeout(300)
-    check("改名按 Esc：不改", heads() == ["AI 伺服器 1", "航運 1", "未分組 1"])
+    check("改名按 Esc：不改", heads() == ["航運 1", "AI 伺服器 1", "未分組 1"])
     # 群組裡最後一檔移走，群組跟著不見
     swipe(row("6669"), -80)
     row("6669").locator("[data-act='unwatch']").tap(); pg.wait_for_selector(".pf-undo")
@@ -218,6 +221,48 @@ with sync_playwright() as p:
         row("2603").locator(".hv-open").tap(position={"x": 230, "y": 24}); settle()
     row("2603").locator(".cell[data-horizon='short']").tap(); pg.wait_for_function("document.querySelector('#listStatus').textContent.includes('短期')")
     check("檢查做完，伺服器上的資料和一開始一樣", data(pg) == start, f"{data(pg)} ≠ {start}")
+
+    # ---- 兩軸審查之後補的幾項 ----
+    order = lambda: pg.evaluate("[...document.querySelectorAll('#holdingRows .hv-row')].map(row => row.dataset.code)")
+    created = lambda code: pg.evaluate("async code => (await (await fetch('/api/watchlist', { cache: 'no-store' })).json()).items.find(item => item.code === code).created_at", code)
+    # 滑開又展開的那一列：按點開的內容第一下就有反應（不是只把滑開的收回去）
+    swipe(row("2603"), -150, hold=200)
+    row("2603").locator(".cell[data-horizon='long']").tap(); pg.wait_for_function("document.querySelector('#listStatus').textContent.includes('長期')")
+    check("滑開又展開的那一列：按短期／長期第一下就存，滑開的同時收回", shift("2603") == 0 and json.loads(data(pg))["watch"][1][1] == "long", data(pg))
+    row("2603").locator(".cell[data-horizon='short']").tap(); pg.wait_for_function("document.querySelector('#listStatus').textContent.includes('短期')")
+    # 移出再還原：回到原本的位置
+    pg.locator("#listFilter [data-filter='watch']").tap(); pg.wait_for_timeout(300)
+    was = (order(), heads(), created("6669"))
+    swipe(row("6669"), -80)
+    row("6669").locator("[data-act='unwatch']").tap(); pg.wait_for_selector(".pf-undo")
+    pg.locator("#listFilter [data-filter='all']").tap(); pg.wait_for_timeout(200)
+    check("移出之後換一顆篩選鍵：上面的「還原」還在", pg.locator(".pf-undo").count() == 1 and "移出自選" in status(), status())
+    pg.locator("#listFilter [data-filter='watch']").tap(); pg.wait_for_timeout(200)
+    pg.locator(".pf-undo").tap(); pg.wait_for_selector(".hv-row[data-code='6669']")
+    check("還原：那一檔回到原本的位置，群組的順序與加入的時間都沒有變", (order(), heads(), created("6669")) == was, f"{(order(), heads(), created('6669'))} ≠ {was}")
+    # 改名改到一半按別的列：不改名，而且按的那一下有作用
+    first = pg.locator(".pf-group-name").first.get_attribute("data-group")
+    pg.locator(".pf-group-name").first.tap(); pg.wait_for_selector(".pf-rename input")
+    check("點群組名稱：輸入框拿到焦點", pg.locator(".pf-rename input").evaluate("n => n === document.activeElement"))
+    pg.locator(".pf-rename input").fill("改到一半")
+    other = row(order()[-1])
+    was_open = "is-open" in other.get_attribute("class")
+    other.locator(".hv-open").tap(position={"x": 230, "y": 24}); settle()
+    check("改名改到一半按別的列：不改名（離開就算了），按的那一下照樣有作用", pg.locator(".pf-rename").count() == 0 and heads()[0].startswith(first)
+          and ("is-open" in other.get_attribute("class")) != was_open and data(pg) == start, f"{heads()}｜{other.get_attribute('class')}")
+    pg.locator("#listFilter [data-filter='all']").tap(); pg.wait_for_timeout(300)
+    # 「＋」：收起來的股數欄位不會擋住加入自選；已經在自選的代號不重寫
+    pg.locator("#addToggle").tap(); settle()
+    pg.locator("#addHolding").tap(); pg.locator("#holdingShares").fill("0"); pg.locator("#addHolding").tap()
+    pg.locator("#addCode").fill("2330"); pg.locator("#addWatch").tap(); pg.wait_for_timeout(300)
+    check("加入已經在自選的代號：只在表單裡說一聲、不寫資料；收起來的欄位填了 0 也不會擋住這顆鍵", "台積電 已經在自選了" in pg.locator("#addStatus").inner_text() and data(pg) == start, pg.locator("#addStatus").inner_text())
+    pg.locator("#addToggle").tap(); settle()
+    # 螢幕報讀：看不到的「⋯」按了把動作滑出來，焦點直接到第一個動作
+    pg.evaluate("document.querySelector(\".hv-row[data-code='0050'] .swipe-more\").click()"); settle()
+    check("看不到的「⋯」（螢幕報讀與外接鍵盤用）：按了動作滑出來、焦點在第一個動作", shift("0050") == -128 and pg.evaluate("document.activeElement.textContent") == "修改")
+    pg.keyboard.press("Escape"); settle()
+    check("Esc 收回：焦點回到那一列的「⋯」", shift("0050") == 0 and pg.evaluate("document.activeElement.className") == "swipe-more")
+    check("補的幾項做完，伺服器上的資料和一開始一樣", data(pg) == start, f"{data(pg)} ≠ {start}")
 
     # 點名稱：進個股頁（會換頁，最後做）
     box = row("2330").locator("a.hv-name strong").bounding_box()

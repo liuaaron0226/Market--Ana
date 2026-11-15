@@ -99,6 +99,31 @@ test("群組改名擋跨站請求，也只接受 POST", async () => {
   assert.deepEqual(await groupsOf("a@example.com"), { "2603": "航運" });
 });
 
+test("只改群組（沒帶短期／長期）不會把短期／長期洗掉；新加的沒帶就是不標", async () => {
+  await save({ code: "2603", horizon: "long", group: "航運" });
+  const moved = await (await save({ code: "2603", group: "貨櫃" })).json();
+  assert.deepEqual([moved.horizon, moved.group], ["long", "貨櫃"]);
+  assert.equal((await (await save({ code: "2330" })).json()).horizon, "none");
+  assert.equal((await save({ code: "2330", horizon: "weekly" })).status, 400);
+});
+
+test("還原移出的那一檔：帶著原本加入的時間放回去，順序才不會跑掉；已經在的那一檔不能改加入的時間", async () => {
+  deps.now = () => Date.parse("2026-11-10T00:00:00Z");
+  await save({ code: "2603", group: "航運" });
+  deps.now = () => Date.parse("2026-11-16T14:00:00Z");
+  const before = (await (await req("/api/watchlist")).json()).items[0].created_at;
+  assert.equal((await req("/api/watchlist/2603", { method: "DELETE", body: {} })).status, 204);
+  const back = await save({ code: "2603", horizon: "short", group: "航運", created_at: before });
+  assert.equal(back.status, 201);
+  assert.equal((await back.json()).created_at, "2026-11-10T00:00:00.000Z");
+
+  await save({ code: "2603", created_at: "2020-01-01T00:00:00.000Z" });
+  assert.equal((await (await req("/api/watchlist")).json()).items[0].created_at, "2026-11-10T00:00:00.000Z");
+  for (const bad of ["昨天", 5, "2030-01-01T00:00:00.000Z"]) {
+    assert.equal((await save({ code: "2609", created_at: bad })).status, 400, String(bad));
+  }
+});
+
 test("關注（另一個開關）不受改群組影響", async () => {
   await save({ code: "2603", group: "航運" });
   await env.DB.prepare("UPDATE user_watchlist SET watching = 1, watch_since = ? WHERE email = ? AND code = ?").bind("2026-11-16T00:00:00Z", "a@example.com", "2603").run();

@@ -6,7 +6,8 @@
    - summary：上面那一行總數，就是 HoldingsRows.read(holdings) 的 count、complete、value、cost、pnl、returnPct、state。
    - counts：三顆篩選鍵上的數字 { all 不重複的檔數, holding 庫存幾檔, watch 自選幾檔 }。
    - rows：一檔一列，同一檔只出現一次。庫存排前面（照 HoldingsRows 的順序：市值由大到小，沒有價格的在後），
-     只在自選的排後面（照自選原本的先後）。每一列 { code, name, inUniverse, kinds, holding, watch }：
+     只在自選的排後面：照加入的先後，新的在前（伺服器是照最後更新的時間給的，那樣改一下群組那一檔就會跳到最上面）；
+     沒有加入時間的維持伺服器給的先後。每一列 { code, name, inUniverse, kinds, holding, watch }：
      kinds：['holding']、['watch'] 或兩個都有——篩選用。
      holding：HoldingsRows 的那一列（state、gain、share、橫條、item），沒有庫存是 null。
      watch：自選的那一筆（horizon 分類……），不在自選是 null。
@@ -20,7 +21,9 @@
    - 沒有東西可畫的段不出現，所以空的清單是 []。
 
    PortfolioList.actions(row) → 這一列向左滑露出的動作，照畫面由左到右：
-   'edit' 修改（有庫存）、'unwatch' 移出自選（在自選）、'delete' 刪除庫存（有庫存，放最右邊）。 */
+   'edit' 修改（有庫存）、'unwatch' 移出自選（在自選）、'delete' 刪除庫存（有庫存，放最右邊）。
+
+   PortfolioList.groupOf(watch) → 自選的那一筆在哪個群組；未分組、舊資料沒有這個欄位、不在自選（null）都是空字串。 */
 (function (global) {
   'use strict';
 
@@ -34,9 +37,12 @@
       code: source.code, name: source.name, inUniverse: source.in_universe === true,
       kinds: [...(holding ? ['holding'] : []), ...(watch ? ['watch'] : [])], holding, watch,
     });
+    const joined = item => (typeof item.created_at === 'string' ? item.created_at : '');
+    const onlyWatched = list(watchlist).filter(item => !owned.has(item.code))
+      .sort((a, b) => (joined(a) && joined(b) ? (joined(a) < joined(b) ? 1 : joined(a) > joined(b) ? -1 : 0) : 0));
     const rows = [
       ...held.map(row => entry(row.item, row, watched.get(row.code) || null)),
-      ...list(watchlist).filter(item => !owned.has(item.code)).map(item => entry(item, null, item)),
+      ...onlyWatched.map(item => entry(item, null, item)),
     ];
     return { summary, counts: { all: rows.length, holding: held.length, watch: watched.size }, rows, groups: groupsOf(list(watchlist)) };
   }

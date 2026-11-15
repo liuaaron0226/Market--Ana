@@ -1542,9 +1542,9 @@ def portfolio(page: Page, base: str, tag: str) -> None:
         page.wait_for_function("document.querySelector(\"#holdingRows .hv-row[data-code='6669'] .hv-name em\")?.textContent === '短期'")
         after = page.evaluate(HOLDING_ROWS)["rows"][3]
         check(f"{tag}：按「短期」就存起來：名稱下面多了「短期」、群組還在、開著的照樣開著、上面寫結果",
-              after["open"] and after["horizon"] == "短期" and after["tag"] == "AI 伺服器" and "緯穎 已改成短期" in said(), [after, said()])
+              after["open"] and after["horizon"] == "短期" and after["tag"] == "AI 伺服器" and "緯穎 已標成短期" in said(), [after, said()])
         row_of("6669").locator(".pf-horizon .cell").nth(0).click()
-        page.wait_for_function("!document.querySelector(\"#holdingRows .hv-row[data-code='6669'] .hv-name em\") && document.querySelector('#listStatus').textContent.includes('不標')")
+        page.wait_for_function("!document.querySelector(\"#holdingRows .hv-row[data-code='6669'] .hv-name em\") && document.querySelector('#listStatus').textContent.includes('不再標')")
     step(f"{tag}：點開一檔與改短期長期", opened)
 
     def groups() -> None:

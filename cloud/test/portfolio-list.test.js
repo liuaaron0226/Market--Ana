@@ -101,19 +101,19 @@ const GROUPED = [
   watch("2454", "聯發科", "none", { created_at: "2026-11-06T00:00:00Z" }),   // 舊資料沒有群組欄位：當未分組
 ];
 
-test("按「自選」：照群組分段，群組照最早加入的那一檔的先後，未分組放最後；段內庫存在前", () => {
+test("按「自選」：照群組分段，群組照最早加入的那一檔的先後，未分組放最後；段內庫存在前、其餘新加的在前", () => {
   const list = loadList(), model = list.read(HOLDINGS, GROUPED);
   assert.deepEqual(list.sections(model, "watch"), [
     { group: "航運", titled: true, rows: ["2603", "2609"] },
-    { group: "AI 伺服器", titled: true, rows: ["6669", "2382"] },
+    { group: "AI 伺服器", titled: true, rows: ["2382", "6669"] },
     { group: "", titled: true, rows: ["2330", "2454"] },
   ]);
   assert.deepEqual(JSON.parse(JSON.stringify(model.groups)), ["航運", "AI 伺服器"]);
 });
 
-test("按「全部」「庫存」：不分段、沒有標題；順序照原本的清單", () => {
+test("按「全部」「庫存」：不分段、沒有標題；庫存在前，只在自選的照加入的先後（新的在前）", () => {
   const list = loadList(), model = list.read(HOLDINGS, GROUPED);
-  assert.deepEqual(list.sections(model, "all"), [{ group: "", titled: false, rows: ["2330", "2603", "0050", "6669", "2382", "2609", "2454"] }]);
+  assert.deepEqual(list.sections(model, "all"), [{ group: "", titled: false, rows: ["2330", "2603", "0050", "2454", "2382", "6669", "2609"] }]);
   assert.deepEqual(list.sections(model, "holding"), [{ group: "", titled: false, rows: ["2330", "2603", "0050"] }]);
 });
 
@@ -135,4 +135,16 @@ test("向左滑露出的動作：只有庫存是修改、刪除；兩邊都有�
   assert.deepEqual(list.actions(rows.get("0050")), ["edit", "delete"]);
   assert.deepEqual(list.actions(rows.get("2603")), ["edit", "unwatch", "delete"]);
   assert.deepEqual(list.actions(rows.get("6669")), ["unwatch"]);
+});
+
+test("只在自選的那幾檔照加入的先後排（新的在前），改群組或短期／長期不會讓它跳位置；沒有時間的維持原本的先後", () => {
+  const list = loadList();
+  // 伺服器照最後更新的時間給：2609 剛被改過所以排第一，但它其實是最早加入的
+  const touched = [
+    watch("2609", "陽明", "none", { created_at: "2026-11-02T00:00:00Z", updated_at: "2026-11-16T00:00:00Z" }),
+    watch("2382", "廣達", "short", { created_at: "2026-11-05T00:00:00Z", updated_at: "2026-11-05T00:00:00Z" }),
+    watch("6669", "緯穎", "none", { created_at: "2026-11-03T00:00:00Z", updated_at: "2026-11-03T00:00:00Z" }),
+  ];
+  assert.deepEqual(list.sections(list.read([], touched), "all")[0].rows, ["2382", "6669", "2609"]);
+  assert.deepEqual(list.sections(list.read([], WATCHLIST), "all")[0].rows, ["6669", "2603", "2330"]);
 });

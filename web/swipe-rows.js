@@ -5,7 +5,7 @@
      .swipe-row                這一列
        .swipe-clip             上面那一條的框（裁掉滑出去的部分）
          .swipe-acts[inert]    墊在下面的動作，裡面是 button.swipe-act（幾顆都可以，寬度照實際量）
-         .swipe-face           會滑動的那一條；裡面可以有 button.swipe-more（給滑鼠用的「⋯」）
+         .swipe-face           會滑動的那一條；裡面可以有 button.swipe-more（「⋯」：滑鼠、鍵盤與螢幕報讀用它把動作滑出來）
    用法：const swipe = SwipeRows.bind(host, { onAct(button, row) { … } })
      host 是清單的外層（列可以隨時重畫）。onAct：某個動作被按了（手指放開、滑鼠放開或鍵盤按下）。
      swipe.close() 把滑開的那一列收回去。
@@ -49,6 +49,8 @@
     let back = null;      // 用鍵盤滑開之前焦點在哪
 
     const rowOf = node => (node instanceof Element ? node.closest('.swipe-row') : null);
+    // 滑動的範圍只有上面那一條（.swipe-clip）。同一列裡點開的內容不算：滑開著的時候按那裡，是收回去並照常按下去
+    const onStrip = (node, row) => node instanceof Element && node.closest('.swipe-clip') === row.querySelector('.swipe-clip');
     const widthOf = row => row.querySelector('.swipe-acts').offsetWidth;
 
     function set(row, open) {
@@ -63,14 +65,15 @@
     }
     const close = () => { if (swiped && !swiped.isConnected) swiped = null; set(swiped, false); };
 
-    // 滑開著的時候按別的地方（別的列，或清單外面）：收回去
+    // 滑開著的時候按別的地方（別的列、這一列點開的內容，或清單外面）：收回去
     document.addEventListener('pointerdown', event => {
       ghost = null;   // 新的一下開始了：之後的點擊是這一下的，不是補發的
       if (swiped && !swiped.isConnected) swiped = null;
-      if (swiped && rowOf(event.target) !== swiped) set(swiped, false);
+      if (swiped && !onStrip(event.target, swiped)) set(swiped, false);
     }, true);
 
     host.addEventListener('pointerdown', event => {
+      if (drag && event.pointerId !== drag.id) return;   // 已經有一根手指按著：第二根不算，不然第一列會卡在半開
       pressed = event.target.closest('.swipe-act');
       const face = event.target.closest('.swipe-face');
       if (!face || (event.pointerType === 'mouse' && event.button !== 0) || event.target.closest('.swipe-more')) return;
@@ -108,15 +111,16 @@
       set(done.row, settle({ ...done, cancelled }));
       ghost = { id: event.pointerId, at: event.timeStamp };
     }
-    host.addEventListener('pointerup', event => {
+    // 放開與取消聽整份文件：在清單外面放開也收得到，按著的那一下才不會留著
+    document.addEventListener('pointerup', event => {
       release(event, false);
       // 動作在手指放開時就做，不等瀏覽器補發的點擊：快速一撥之後，瀏覽器會把緊接著的那一下點擊吃掉（Chromium 實測）。
       // 做完頁面會重畫，隨後補發的點擊會落在換上來的東西上，所以那一下一併不算。
       const act = pressed;
       pressed = null;
-      if (act && act.isConnected && event.target.closest('.swipe-act') === act) { ghost = { id: event.pointerId, at: event.timeStamp }; onAct(act, rowOf(act)); }
+      if (act && act.isConnected && event.target instanceof Element && event.target.closest('.swipe-act') === act) { ghost = { id: event.pointerId, at: event.timeStamp }; onAct(act, rowOf(act)); }
     });
-    host.addEventListener('pointercancel', event => { pressed = null; release(event, true); });
+    document.addEventListener('pointercancel', event => { pressed = null; release(event, true); });
     host.addEventListener('dragstart', event => { if (event.target.closest('.swipe-face')) event.preventDefault(); });
 
     // 補發的點擊不算（鍵盤按下去的 detail 是 0，照常）；滑開著的時候點那一列是收回去
@@ -128,10 +132,17 @@
       const row = rowOf(event.target);
       if (!row) return;
       const more = event.target.closest('.swipe-more');
-      if (more) { event.stopPropagation(); set(row, row !== swiped); return; }
+      if (more) {
+        event.stopPropagation();
+        const open = row !== swiped;
+        set(row, open);
+        // 用鍵盤或螢幕報讀按的（不是滑鼠點的）：焦點直接放到第一個動作，不用倒著找
+        if (open && event.detail === 0) { back = more; row.querySelector('.swipe-act').focus(); }
+        return;
+      }
       const act = event.target.closest('.swipe-act');
       if (act) { event.stopPropagation(); onAct(act, row); return; }
-      if (row === swiped) { event.preventDefault(); event.stopPropagation(); set(row, false); }
+      if (row === swiped && onStrip(event.target, row)) { event.preventDefault(); event.stopPropagation(); set(row, false); }
     }, true);
 
     host.addEventListener('keydown', event => {
@@ -144,7 +155,8 @@
         event.preventDefault();
       } else if ((event.key === 'Escape' || event.key === 'ArrowRight') && event.target.matches('.swipe-act')) {
         set(row, false);
-        (back && back.isConnected ? back : row.querySelector('.swipe-face a, .swipe-face button')).focus();
+        (back && row.contains(back) ? back : row.querySelector('.swipe-face a, .swipe-face button')).focus();   // 只回到同一列裡原本的位置
+        back = null;
         event.preventDefault();
       }
     });
