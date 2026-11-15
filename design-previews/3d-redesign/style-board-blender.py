@@ -4,6 +4,7 @@
 只產生圖片，不是網站執行時用的程式；發光的暈由 style-board-sheet.py 事後加上。
 本人看過風格板之後說不喜歡「垂直表達指標」這種表達方式，所以另外加了四種「表達的概念」（三期都畫，票是示意）：
 tug 拔河、rings 年輪、path 一條走勢帶、weather 天氣。質感先用同一種（發光的線與球），這一輪只比概念。
+這四種本人也都不要（回答「其他的」），再加四種有生命感的：fish 魚群、plant 植物、wave 海浪、planet 行星。
 用法：blender -b -P style-board-blender.py -- <輸出資料夾（要給完整路徑）> <風格名稱>"""
 import math
 import sys
@@ -319,6 +320,107 @@ def weather():
 
 
 IDEA_SCENES = {"tug": tug, "rings": rings, "path": path, "weather": weather}
+
+def fish():
+    """魚群：每個指標是一條魚。偏多的魚往右上游（紅）、偏空的往右下游（綠）；整群往哪邊游，那一期就是偏多還是偏空。"""
+    for column, (name, bulls, bears) in enumerate(PERIODS):
+        x = -4.4 + column * 4.4
+        net, word, code = verdict(bulls, bears)
+        school = [(vote, 1) for vote in bulls] + [(vote, -1) for vote in bears]
+        for index, (vote, side) in enumerate(school):
+            fx = x + (index % 3 - 1) * 1.05 + (0.3 if index // 3 % 2 else 0)
+            fz = 0.9 - (index // 3) * 1.25 + side * 0.35
+            angle = math.radians(30 * side)
+            body = orb(fx, fz, 0.36, glow(RED if side > 0 else GREEN, 2.6 if side > 0 else 3.2))
+            body.scale = (1.0, 0.5, 0.42)
+            body.rotation_euler = (0, -angle, 0)
+            bpy.ops.mesh.primitive_cone_add(vertices=3, radius1=0.2, depth=0.3, location=(fx - math.cos(angle) * 0.45, 0, fz - math.sin(angle) * 0.45),
+                                            rotation=(0, math.radians(90) - angle, 0))
+            bpy.context.active_object.data.materials.append(glow(RED if side > 0 else GREEN, 2.2))
+            label(vote, fx, fz - 0.55, 0.17)
+        label(name, x - 0.6, 3.4, 0.3, GREY_LIGHT)
+        label(word, x + 0.5, 3.3, 0.5, code)
+    return Vector((0, 0, 0.5)), 14.0
+
+
+def plant():
+    """植物：每一期一株。偏多的指標是往上挺的葉子（紅）、偏空的是垂下來的葉子（綠）；
+    偏多的那一株長得直、頂上開花，偏空的那一株整株彎下去。"""
+    for column, (name, bulls, bears) in enumerate(PERIODS):
+        x = -4.4 + column * 4.4
+        net, word, code = verdict(bulls, bears)
+        leaves = [(vote, 1) for vote in bulls] + [(vote, -1) for vote in bears]
+        bend, px, pz, heading = -net * 0.085, x, -1.9, math.radians(90)
+        for step in range(22):
+            heading += bend * (step / 22)
+            nx, nz = px + math.cos(heading) * 0.2, pz + math.sin(heading) * 0.2
+            stalk = bar(((px + nx) / 2, 0, (pz + nz) / 2), (0.24, 0.06, 0.07), glow("#7fd8a8", 1.2))
+            stalk.rotation_euler = (0, -heading, 0)
+            if step % 4 == 2 and step // 4 < len(leaves):
+                vote, side = leaves[step // 4]
+                hand = 1 if (step // 4) % 2 else -1
+                tilt = heading - math.radians(90) + hand * math.radians(55) + (math.radians(-40) * hand if side < 0 else 0)
+                lx, lz = nx + math.cos(tilt + math.radians(90)) * 0.55, nz + math.sin(tilt + math.radians(90)) * 0.55 - (0.25 if side < 0 else 0)
+                leaf = orb(lx, lz, 0.3, glow(RED if side > 0 else GREEN, 2.4 if side > 0 else 3.0))
+                leaf.scale = (0.5, 0.3, 1.5)
+                leaf.rotation_euler = (0, -(tilt), 0)
+                label(vote, lx + hand * 0.75, lz - 0.08, 0.17)
+            px, pz = nx, nz
+        orb(px, pz, 0.24 + 0.08 * max(net, 0), glow(code, 3.2))
+        label(name, x - 0.6, 3.6, 0.3, GREY_LIGHT)
+        label(word, x + 0.5, 3.5, 0.5, code)
+    return Vector((0, 0, 0.7)), 14.0
+
+
+def wave():
+    """海浪：每一期一道浪，不把指標一個一個畫出來。浪往右是往上湧還是往下退＝偏多還是偏空；
+    浪越碎（細紋越多）＝指標彼此越不一致；浪底下一行小字寫幾個偏多、幾個偏空。"""
+    for row, (name, bulls, bears) in enumerate(PERIODS):
+        z = 2.4 - row * 2.6
+        net, word, code = verdict(bulls, bears)
+        mixed = min(len(bulls), len(bears))
+        for layer in range(3):
+            previous = None
+            for step in range(121):
+                s = step / 120
+                x = -3.6 + s * 7.6
+                height = z + net * 0.22 * (s - 0.5) * 2 + math.sin(s * math.tau * 1.5 + layer) * 0.22 + math.sin(s * math.tau * (7 + layer * 2)) * 0.07 * mixed - layer * 0.22
+                if previous:
+                    seg = bar(((previous[0] + x) / 2, layer * 0.2, (previous[1] + height) / 2), (math.hypot(x - previous[0], height - previous[1]) + 0.01, 0.04, 0.07 - layer * 0.015),
+                              glow(code, 2.6 - layer * 0.8))
+                    seg.rotation_euler = (0, -math.atan2(height - previous[1], x - previous[0]), 0)
+                previous = (x, height)
+        label(name, -5.9, z + 0.2, 0.3, GREY_LIGHT, "LEFT")
+        label(word, -5.9, z - 0.5, 0.5, code, "LEFT")
+        label(f"{len(bulls)} 個偏多、{len(bears)} 個偏空", 4.3, z - 0.1, 0.2, GREY_LIGHT, "LEFT")
+    return Vector((0.2, 0, 0.0)), 14.0
+
+
+def planet():
+    """行星：每一期一顆行星，帶一圈光環。光環往右上翹是偏多、往右下垂是偏空、平的是盤整；
+    繞著它的小衛星是指標，紅的偏多、綠的偏空。"""
+    for column, (name, bulls, bears) in enumerate(PERIODS):
+        x = -4.4 + column * 4.4
+        net, word, code = verdict(bulls, bears)
+        orb(x, 0.3, 0.8, glossy("#56627a"))
+        lean, open_up = math.radians(net * 11), math.radians(14)   # 光環幾乎平躺（從正面看是一個扁的橢圓），再往右上或右下傾
+        bpy.ops.mesh.primitive_torus_add(location=(x, 0, 0.3), major_radius=1.6, minor_radius=0.035, major_segments=96)
+        ring = bpy.context.active_object
+        ring.rotation_euler = (open_up, -lean, 0)
+        ring.data.materials.append(glow(code, 3.5))
+        moons = [(vote, RED) for vote in bulls] + [(vote, GREEN) for vote in bears]
+        for index, (vote, colour) in enumerate(moons):
+            angle = math.radians(205 + index * (130 / max(len(moons) - 1, 1)))   # 排在光環靠鏡頭的這半圈
+            mx, mz = math.cos(angle) * 1.6, math.sin(angle) * 1.6 * math.sin(open_up)
+            px, pz = x + mx * math.cos(lean) - mz * math.sin(lean), 0.3 + mx * math.sin(lean) + mz * math.cos(lean)
+            orb(px, pz, 0.17, glow(colour, 3.0), y=-1.7)
+            label(vote, px, pz - 0.45, 0.17, WHITE, "CENTER", y=-1.9)
+        label(name, x - 0.6, 3.2, 0.3, GREY_LIGHT)
+        label(word, x + 0.5, 3.1, 0.5, code)
+    return Vector((0, 0, 0.5)), 14.0
+
+
+IDEA_SCENES.update({"fish": fish, "plant": plant, "wave": wave, "planet": planet})
 
 if style in IDEA_SCENES:
     look_at, width = IDEA_SCENES[style]()

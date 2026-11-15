@@ -48,13 +48,22 @@ IDEAS = [
     ("path", "丙", "一條走勢帶", "一條從短期走到長期的光帶，三段的高低就是偏多還是偏空；帶子上每一顆珠子是一個指標"),
     ("weather", "丁", "天氣", "每一期一個天氣：偏多的指標是太陽的光芒、偏空的是雨滴；太陽大是偏多、下雨是偏空"),
 ]
-if all((folder / f"idea-{name}.png").exists() for name, *_ in IDEAS):
+# 第三張：本人對上面四種回答「其他的」，再四種有生命感的概念
+IDEAS_MORE = [
+    ("fish", "戊", "魚群", "每個指標是一條魚：偏多的往右上游、偏空的往右下游；整群往哪邊游，那一期就是偏多還是偏空"),
+    ("plant", "己", "植物", "每一期一株：偏多的指標是往上挺的葉子、偏空的是垂下來的葉子；偏多的長得直、開花，偏空的整株彎下去"),
+    ("wave", "庚", "海浪", "每一期一道浪，不把指標一個一個畫出來：往上湧是偏多、往下退是偏空；浪越碎表示指標彼此越不一致"),
+    ("planet", "辛", "行星", "每一期一顆帶光環的行星：光環往右上翹是偏多、往右下垂是偏空；繞著它的小衛星是指標"),
+]
+for entries, heading, filename in ((IDEAS, "⑤ 短中長期走勢：四種表達的概念", "idea-board.png"), (IDEAS_MORE, "⑤ 短中長期走勢：再四種概念（有生命感的）", "idea-board-2.png")):
+    if not all((folder / f"idea-{name}.png").exists() for name, *_ in entries):
+        continue
     band = 150
     ideas = Image.new("RGB", (cell * 2 + pad * 3, head + (cell + band) * 2 + pad * 3), NIGHT)
     draw = ImageDraw.Draw(ideas)
-    draw.text((pad, 30), "⑤ 短中長期走勢：四種表達的概念", fill=PALE, font=ImageFont.truetype(BOLD, 46))
+    draw.text((pad, 30), heading, fill=PALE, font=ImageFont.truetype(BOLD, 46))
     draw.text((pad, 96), "同一組資料（短期偏空、中期盤整、長期偏多；票是示意）。這一張只比概念，質感先都用同一種。", fill=DIM, font=ImageFont.truetype(REGULAR, 26))
-    for index, (name, letter, title, note) in enumerate(IDEAS):
+    for index, (name, letter, title, note) in enumerate(entries):
         image = bloom(Image.open(folder / f"idea-{name}.png").convert("RGB"), 14, 0.35)
         x, y = pad + (index % 2) * (cell + pad), head + pad + (index // 2) * (cell + band + pad)
         ideas.paste(image, (x, y))
@@ -67,5 +76,5 @@ if all((folder / f"idea-{name}.png").exists() for name, *_ in IDEAS):
             else:
                 line += char
         draw.text((x + 8, top), line, fill=DIM, font=ImageFont.truetype(REGULAR, 25))
-    ideas.save(folder / "idea-board.png")
-    print("idea-board.png", ideas.size)
+    ideas.save(folder / filename)
+    print(filename, ideas.size)
