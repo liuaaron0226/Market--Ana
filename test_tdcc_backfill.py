@@ -192,13 +192,32 @@ class BackfillTest(unittest.TestCase):
         self.assertFalse(self.progress.exists() and self.rows())
         self.assertEqual(len(site.requests), 1 + tb.EMPTY_RUN_LIMIT)
 
-    def test_one_network_hiccup_is_retried_once_after_a_long_wait_then_it_stops(self) -> None:
+    def test_a_second_network_error_waits_five_minutes_and_tries_once_more(self) -> None:
+        # 本人 2026-11-15「可以，接著抓」：實跑 3,194 次請求遇到 16 次連線錯誤，15 次等 60 秒就好，
+        # 1 次重來又錯就整批停。第二次改等 5 分鐘再試，第三次才停。
+        site = FakeSite({("2317", "20261106"): [TimeoutError("timed out"), TimeoutError("timed out"), "ok"]})
+        report = self.run_backfill(site)
+        self.assertEqual((report["status"], report["fetched"]), ("done", 4))
+        self.assertEqual([wait for wait in self.sleeps if wait != 3.0], [60.0, 300.0])
+        self.assertEqual([request and request[:2] for request in site.requests[:7]],
+                         [None, ("2330", "20261106"), ("2317", "20261106"), None, ("2317", "20261106"),
+                          None, ("2317", "20261106")])
+
+    def test_three_network_errors_in_a_row_stop_the_run(self) -> None:
         site = FakeSite({("2317", "20261106"): TimeoutError("timed out")})
         report = self.run_backfill(site)
         self.assertEqual((report["status"], report["reason"]), ("stopped", "連線錯誤：TimeoutError"))
-        self.assertIn(60.0, self.sleeps)
+        self.assertEqual([wait for wait in self.sleeps if wait != 3.0], [60.0, 300.0])
         self.assertEqual([request and request[:2] for request in site.requests],
-                         [None, ("2330", "20261106"), ("2317", "20261106"), None, ("2317", "20261106")])
+                         [None, ("2330", "20261106"), ("2317", "20261106"), None, ("2317", "20261106"),
+                          None, ("2317", "20261106")], "第三次錯之後不再送任何請求")
+
+    def test_a_404_after_a_network_error_still_gets_its_one_retry(self) -> None:
+        # 混著來：只要 404 沒有連兩次、整體沒有連錯三次，就還有一次機會。
+        site = FakeSite({("2317", "20261106"): [TimeoutError("timed out"), (404, ""), "ok"]})
+        report = self.run_backfill(site)
+        self.assertEqual((report["status"], report["fetched"]), ("done", 4))
+        self.assertEqual([wait for wait in self.sleeps if wait != 3.0], [60.0, 300.0])
 
 
 class ExportTest(unittest.TestCase):

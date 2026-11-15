@@ -6,7 +6,8 @@
 - 每次查詢前固定等 PAUSE 秒；先把最近一週的所有股票查完，再往前一週（中途停下，手上是完整的近幾週）。
 - 進度逐筆附加到 jsonl，重跑只查還沒有的；那一週沒有那一檔也記下來，不再問。
 - HTTP 403／429 等、頁面不是查詢頁、回的不是問的那一檔那一週、或連續一大串查無資料：立刻停，不重試硬闖。
-- 連線錯誤等 60 秒、單次 HTTP 404 等 5 分鐘（官方站偶發，重新開頁就好），重新開表單頁後同一筆再問一次；再錯就停。
+- 連線錯誤等 60 秒、單次 HTTP 404 等 5 分鐘（官方站偶發，重新開頁就好），重新開表單頁後同一筆再問一次。
+- 再錯：404 連兩次就停；連線錯誤再等 5 分鐘試最後一次，連錯三次就停。
 
 用法：
     python tdcc_backfill.py run --codes data/tdcc-holders/backfill/codes.json
@@ -33,6 +34,7 @@ DEFAULT_SEED = ROOT / "seeds/tdcc-holders-history.json"
 PAUSE = 3.0
 RETRY_WAIT = 60.0
 NOT_FOUND_WAIT = 300.0  # 本人 2026-11-15「可以，重試一次」：單次 HTTP 404 等 5 分鐘再問一次，連續兩次才停
+SECOND_WAIT = 300.0  # 本人 2026-11-15「可以，接著抓」：連線錯誤重來又錯，改等 5 分鐘再試一次，第三次才停
 EMPTY_RUN_LIMIT = 15
 REFRESH_EVERY = 100  # 同一個連線階段查太久官方會回 404（11-15 實跑 153 次後）；每查這麼多次就重新開一次表單頁
 HISTORY_SCHEMA = "tdcc-holders-history/v1"
@@ -140,18 +142,21 @@ def backfill(codes: list[str], progress: Path = DEFAULT_PROGRESS, *, fetch: Call
             raise Refused(str(error)) from error
 
     def once_more(action: Callable):
-        """做一次；只是一時出錯就等一下、重新開表單頁再做一次，再錯就停。"""
+        """做一次；只是一時出錯就等一下、重新開表單頁再做。404 連兩次、或不管哪一種連錯三次，就停。"""
         nonlocal form
-        try:
-            return action()
-        except _Hiccup as first:
-            log(f"{datetime.now().isoformat(timespec='seconds')} {first}，等 {first.wait:.0f} 秒後重來一次")
-            sleep(first.wait)
+        hiccups: list[str] = []
+        while True:
             try:
-                form = open_form()
+                if hiccups:
+                    form = open_form()
                 return action()
-            except _Hiccup as second:
-                raise Refused(str(second)) from second
+            except _Hiccup as hiccup:
+                hiccups.append(str(hiccup))
+                if len(hiccups) >= 3 or hiccups.count("HTTP 404") >= 2:
+                    raise Refused(str(hiccup)) from hiccup
+                wait = hiccup.wait if len(hiccups) == 1 else SECOND_WAIT
+                log(f"{datetime.now().isoformat(timespec='seconds')} {hiccup}，等 {wait:.0f} 秒後重來一次")
+                sleep(wait)
 
     form: dict = {}
 
