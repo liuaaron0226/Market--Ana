@@ -93,6 +93,11 @@ _PROMPT_RULES = (
     "帶 horizon 的候選只能用在同一格。zone 只能是 above（收盤大於等於轉強線）、between、below（收盤小於轉弱線）之一。",
     "reason（理由）與 invalidation（什麼情況代表看錯）只寫繁體中文質化判斷，不得出現任何阿拉伯／全形／中文數字、日期或價格；"
     "要引用價位就把候選 id 放進 reason_refs／invalidation_refs，程式會代入名字與數值。",
+    # 本人 2026-11-15 看過真 Gemini 乾跑後選「先改提示再乾跑」：下面兩條是那次加的。
+    "理由與看錯條件只能引用 INPUT_JSON 裡有的資料（日 K、指標、法人與期貨、候選關卡、方法稿）；"
+    "INPUT_JSON 沒給的資料（例如融資、新聞、海外市場）不得當成事實寫進去。",
+    "每一格到期後，程式會把你的落點命中率和「照歷史亂猜」並排比較：照歷史亂猜是不看任何判斷、只看歷史上同樣距離的兩條線"
+    "收盤落在各區的比例。兩條線拉得越寬，「兩線之間」在歷史上本來就越常中，所以只為了保險把線拉寬，比不贏照歷史亂猜。",
     f"regime 從固定清單選一個：{'、'.join(REGIMES)}。base_date 照抄 INPUT_JSON 的 base_date。",
 )
 # 輸入版本：參數、回答格式、提示規則任何一項改了就是新系列，和舊系列分開對帳。
@@ -348,31 +353,58 @@ def _build_prompt(model_input: Mapping[str, Any]) -> str:
 
 # ---- 模型呼叫與回答驗證 ----
 
-def _model_command(model_bin: Path | str, prompt: str, model: str) -> list[str]:
+def _model_command(model_bin: Path | str, model: str) -> list[str]:
+    """agy 的串流模式：提示從 stdin 送（Windows 單一指令列約 32K 字元的上限擋不住方法稿全文），結果讀最後的 result 事件。"""
     path = Path(model_bin)
     prefix = [sys.executable, str(path)] if path.suffix.lower() == ".py" else [str(path)]
-    return [*prefix, "-p", prompt, "--model", model, "--effort", "medium", "--output-format", "json",
+    return [*prefix, "-p=", "--input-format", "stream-json", "--output-format", "stream-json",
+            "--model", model, "--effort", "medium",
             "--json-schema", json.dumps(OUTPUT_SCHEMA, ensure_ascii=False, separators=(",", ":")),
             "--print-timeout", "300s", "--sandbox"]
+
+
+def _stream_input(prompt: str) -> bytes:
+    return (json.dumps({"event": "user", "message": {"content": prompt}}, ensure_ascii=False) + "\n").encode("utf-8")
+
+
+def _result_event(stdout: bytes) -> dict[str, Any] | None:
+    """串流輸出一行一個事件；回傳最後一個 result 事件的內容。"""
+    result = None
+    for line in stdout.decode("utf-8").splitlines():
+        if not line.strip():
+            continue
+        event = json.loads(line)
+        if isinstance(event, dict) and event.get("event") == "result" and isinstance(event.get("result"), dict):
+            result = event["result"]
+    return result
+
+
+def _failure(returncode: int, stderr: bytes) -> str:
+    """漏記原因帶上錯誤輸出的最後一段，查得到是額度、登入還是程式問題。"""
+    tail = stderr.decode("utf-8", errors="replace").strip()[-300:]
+    return f"結束碼 {returncode}" + (f"：{tail}" if tail else "")
 
 
 def _call_model(model_bin: Path | str, prompt: str, model: str, timeout: float) -> tuple[str, Any, str]:
     """回傳 (狀態, structured_output, 說明)；狀態是 ok／model_failed／model_timeout／output_garbled。"""
     try:
-        completed = subprocess.run(_model_command(model_bin, prompt, model), input=b"", capture_output=True,
-                                   timeout=timeout, check=False)
+        completed = subprocess.run(_model_command(model_bin, model), input=_stream_input(prompt),
+                                   capture_output=True, timeout=timeout, check=False)
     except subprocess.TimeoutExpired:
         return "model_timeout", None, f"超過 {timeout} 秒沒有回應"
     except OSError as error:
         return "model_failed", None, f"{type(error).__name__}: {error}"
     try:
-        envelope = json.loads(completed.stdout.decode("utf-8").strip())
+        envelope = _result_event(completed.stdout)
     except (UnicodeDecodeError, json.JSONDecodeError):
         if completed.returncode != 0:
-            return "model_failed", None, f"結束碼 {completed.returncode}"
-        return "output_garbled", None, "輸出不是 UTF-8 JSON"
-    if completed.returncode != 0 or not isinstance(envelope, dict) or envelope.get("status") != "SUCCESS":
-        return "model_failed", None, f"結束碼 {completed.returncode}"
+            return "model_failed", None, _failure(completed.returncode, completed.stderr)
+        return "output_garbled", None, "輸出不是 UTF-8 JSON 事件"
+    if completed.returncode != 0 or envelope is None or envelope.get("status") != "SUCCESS":
+        detail = _failure(completed.returncode, completed.stderr)
+        if envelope and envelope.get("error"):
+            detail += f"；{str(envelope['error'])[:200]}"
+        return "model_failed", None, detail
     return "ok", envelope.get("structured_output"), ""
 
 

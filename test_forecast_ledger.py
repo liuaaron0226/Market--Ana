@@ -91,26 +91,31 @@ def envelope(structured):
     return {"status": "SUCCESS", "structured_output": structured}
 
 
-def fake_model(folder: Path, responses, *, exit_code=0, sleep=0, raw=None):
-    """依序回傳 responses（重試時取下一個）；每次被呼叫都在 calls.txt 加一行。"""
+def fake_model(folder: Path, responses, *, exit_code=0, sleep=0, raw=None, stderr=""):
+    """仿 agy 的串流模式：從 stdin 讀一行 {"event":"user","message":{"content":提示}}，
+    輸出 init 與 result 兩行事件。依序回傳 responses（重試時取下一個）；每次被呼叫都在 calls.txt 加一行。"""
     script = folder / "fake_model.py"
     state = folder / "calls.txt"
-    payloads = [json.dumps(item, ensure_ascii=False) for item in responses]
+    payloads = [json.dumps({"event": "result", "result": item}, ensure_ascii=False) for item in responses]
     script.write_text(
         "import json,sys,time\n"
         "from pathlib import Path\n"
         "args=sys.argv[1:]\n"
-        "assert '--json-schema' in args and '--output-format' in args and '-p' in args\n"
+        "assert '--json-schema' in args and args[args.index('--input-format')+1]=='stream-json'\n"
+        "assert args[args.index('--output-format')+1]=='stream-json'\n"
+        "message=json.loads(sys.stdin.buffer.readline().decode('utf-8'))\n"
+        "assert message['event']=='user' and message['message']['content']\n"
         f"state=Path({str(state)!r})\n"
         "calls=len(state.read_text().splitlines()) if state.exists() else 0\n"
         "state.write_text('x\\n'*(calls+1))\n"
         f"time.sleep({sleep})\n"
+        f"sys.stderr.write({stderr!r})\n"
         f"raw={raw!r}\n"
         "if raw is not None:\n"
         "    sys.stdout.buffer.write(raw)\n"
         "else:\n"
         f"    payloads={payloads!r}\n"
-        "    sys.stdout.buffer.write(payloads[min(calls,len(payloads)-1)].encode('utf-8'))\n"
+        "    sys.stdout.buffer.write(b'{\"event\":\"init\"}\\n'+payloads[min(calls,len(payloads)-1)].encode('utf-8')+b'\\n')\n"
         f"raise SystemExit({exit_code})\n",
         encoding="utf-8",
     )
@@ -293,7 +298,7 @@ class AnswerValidationTests(LedgerTestCase):
     def test_model_failure_timeout_and_garbled_output_become_a_miss_without_retry(self):
         cases = [
             ("model_failed", dict(exit_code=1)),
-            ("model_failed", dict(raw=json.dumps({"status": "ERROR"}).encode())),
+            ("model_failed", dict(raw=json.dumps({"event": "result", "result": {"status": "ERROR"}}).encode())),
             ("output_garbled", dict(raw=b"\xff\xfe not json")),
         ]
         for index, (reason, options) in enumerate(cases):
@@ -302,6 +307,20 @@ class AnswerValidationTests(LedgerTestCase):
                 model = fake_model(self.bin, [envelope(answer_a())], **options)
                 result = self.write(model=model, root=self.root / f"case{index}")
                 self.assert_miss(result, reason, 1)
+
+    def test_model_failure_keeps_the_tail_of_its_error_output_as_the_reason(self):
+        model = fake_model(self.bin, [envelope(answer_a())], exit_code=3, stderr="noise\nquota exceeded for this week\n")
+        result = self.write(model=model)
+        self.assert_miss(result, "model_failed", 1)
+        self.assertIn("結束碼 3", result["record"]["miss_detail"])
+        self.assertIn("quota exceeded for this week", result["record"]["miss_detail"])
+
+    def test_a_prompt_longer_than_a_windows_command_line_still_reaches_the_model(self):
+        # Windows 單一指令列上限約 32,767 字元；提示改從 stdin 交給模型，長度不再受限。
+        data = day_input()
+        data["method_text"] = METHOD_TEXT + "方法細節。" * 8000
+        result = self.write(data)
+        self.assertEqual(result["record"]["kind"], "forecast")
 
     def test_model_timeout_becomes_a_miss(self):
         model = fake_model(self.bin, [envelope(answer_a())], sleep=5)
@@ -678,6 +697,23 @@ class SummaryTests(LedgerTestCase):
         fl.reconcile(self.root, through("2026-10-01"))
         fl.reconcile(self.root, through("2026-10-01", changes={"2026-10-01": {"close": 97.0}}))
         self.assertEqual(fl.summarize(self.root, through("2026-10-08"))["conflicts"], 1)
+
+
+class PromptRulesTests(LedgerTestCase):
+    def test_model_is_told_to_use_only_given_facts_and_that_it_will_be_compared_with_history(self):
+        # 本人 2026-11-15 看過乾跑後選「先改提示再乾跑」：理由只能用輸入裡的資料；事先說明會和照歷史亂猜並排比。
+        seen = self.tmp / "prompt.txt"
+        script = self.bin / "recording_model.py"
+        payload = json.dumps({"event": "result", "result": envelope(answer_a())}, ensure_ascii=False)
+        script.write_text(
+            "import json,sys\nfrom pathlib import Path\n"
+            "prompt=json.loads(sys.stdin.buffer.readline().decode('utf-8'))['message']['content']\n"
+            f"Path({str(seen)!r}).write_text(prompt, encoding='utf-8')\n"
+            f"sys.stdout.buffer.write({payload.encode('utf-8')!r})\n", encoding="utf-8")
+        self.write(model=script)
+        prompt = seen.read_text(encoding="utf-8")
+        self.assertIn("只能引用 INPUT_JSON 裡有的資料", prompt)
+        self.assertIn("照歷史亂猜", prompt)
 
 
 class VerdictStatusTests(LedgerTestCase):

@@ -77,11 +77,13 @@ class RunTestCase(unittest.TestCase):
 
     def model(self, structured):
         script = self.tmp / "fake_agy.py"
-        envelope = json.dumps({"status": "SUCCESS", "structured_output": structured}, ensure_ascii=False)
+        envelope = json.dumps({"event": "result", "result": {"status": "SUCCESS", "structured_output": structured}},
+                              ensure_ascii=False)
         script.write_text(
             "import sys\nfrom pathlib import Path\n"
+            "sys.stdin.buffer.readline()\n"
             f"p=Path({str(self.calls)!r}); p.write_text(p.read_text()+'x' if p.exists() else 'x')\n"
-            f"sys.stdout.buffer.write({envelope.encode('utf-8')!r})\n", encoding="utf-8")
+            f"sys.stdout.buffer.write({envelope.encode('utf-8')!r} + b'\\n')\n", encoding="utf-8")
         return script
 
     def calls_made(self):
