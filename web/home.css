@@ -894,8 +894,20 @@ body.hm .chip-table th small { margin-left: 3px; font-size: 10px; }
 body.hm .chip-table td.streak { color: var(--dim); white-space: nowrap; }
 body.hm .chip-table td .stock-link { white-space: nowrap; }
 
-/* ================= 看盤桌：成排的鍵按住滑動選取（立體重設計 A 包第 14 片，2026-11-15） =================
-   分類鍵與明細板的買超／賣超：按住左右滑，手指底下那一顆亮起，放開才生效（程式在 chart-menus.js）。上下拖仍然捲動頁面。 */
-body.hm :is(.hm-cats, .chip-seg) button { touch-action: pan-y; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
-body.hm .hm-cats button.is-slide-hot:not([aria-expanded="true"]),
-body.hm .chip-seg button.is-slide-hot:not([aria-checked="true"]) { color: var(--ink); box-shadow: inset 0 0 0 1.5px var(--ink); }
+/* ================= 看盤桌：成排的鍵，選中的框跟著手指走（立體重設計 A 包第 14 片，2026-11-15） =================
+   分類鍵與明細板的買超／賣超：按住左右拖，選中的那個框（.slide-thumb，程式在 chart-menus.js）跟著手指移動，
+   放開時靠近哪一顆就選哪一顆。上下拖仍然捲動頁面。 */
+body.hm :is(.hm-cats, .chip-seg) { position: relative; }
+body.hm :is(.hm-cats, .chip-seg) button { position: relative; z-index: 1; touch-action: pan-y; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+body.hm :is(.hm-cats, .chip-seg) .slide-thumb {
+  position: absolute; z-index: 0; left: 0; top: 0; pointer-events: none;
+  border-radius: var(--r-key); background: var(--key); box-shadow: var(--key-shadow);
+}
+body.hm :is(.hm-cats, .chip-seg) .slide-thumb.is-settling { transition: transform 200ms var(--ease-depth), width 200ms var(--ease-depth); }
+/* 拖的時候凸起的樣子由框來畫：原本選中的那一顆先攤平，字的深淺跟著框走。
+   用 !important 是因為明細板的選中樣式寫在比較晚載入的 panel.css（還帶 :hover），不這樣蓋不過。 */
+body.hm :is(.hm-cats, .chip-seg).is-sliding button { background: transparent !important; box-shadow: none !important; color: var(--dim) !important; }
+body.hm :is(.hm-cats, .chip-seg).is-sliding button.is-slide-hot { color: var(--ink) !important; }
+@media (prefers-reduced-motion: reduce) {
+  body.hm :is(.hm-cats, .chip-seg) .slide-thumb.is-settling { transition: none; }
+}

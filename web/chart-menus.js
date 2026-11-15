@@ -3,7 +3,8 @@
    選單：<div class="chart-menu" id="…" hidden>；選單裡帶 data-menu-close 的按鈕按了就收回；選單帶 data-menu-autoclose 的話，裡面任何按鈕按了都收回。
    小鍵帶 data-mirror="這個設定叫什麼"：上面的字跟著選單裡選中的那一項，那一項所在的群組隱藏時小鍵也不顯示。
    按住滑到要的再放開（本人 11-15）：按住小鍵，選單不用放開就浮出，手指滑到要的那一項（會亮起）放開就選到；滑到外面放開不選；
-   按一下就放開和原本一樣，選單開著等人點。成排的鍵（選單裡的按鈕、首頁的分類鍵、明細板的買超／賣超）按住滑到另一顆，放開才生效。
+   按一下就放開和原本一樣，選單開著等人點。選單裡的按鈕按住滑到另一顆，放開才生效。
+   有槽的成排切換鍵（首頁的分類鍵、明細板的買超／賣超）：選中的那個框跟著手指左右移動，放開時靠近哪一顆就選哪一顆（本人 11-15 更正）。
    一次只開一個；按 Esc 或點選單以外的地方收回；選單帶 data-menu-focus 的話，打開時游標直接進裡面的輸入框
    （只給「打開就是為了打字」的選單用；均線設定板不要，不然手機一打開就跳出鍵盤）。
    K 線的週期（period-switch.js）、指標（chart-studies.js）、個股頁的均線、首頁的籌碼選股與長期核心持有都用這一套。 */
@@ -32,9 +33,13 @@
 
   // ---------- 按住滑到要的再放開 ----------
   const GROUPS = '.chart-menu, .hm-cats, .chip-seg';   // 成排的鍵：在同一組裡滑
+  const TRACKS = '.hm-cats, .chip-seg';                // 其中有槽的：滑的時候選中的那個框（.slide-thumb）跟著手指走
+  const SELECTED_KEY = '[aria-checked="true"], [aria-expanded="true"]';
+  const SETTLE_MS = 200;                               // 放開之後框滑到定位的時間，和樣式裡 .is-settling 的轉場一致
+  const CALM = window.matchMedia('(prefers-reduced-motion: reduce)');
   const SLIDE_START_PX = 8;                            // 動超過這麼多才算滑，不然就是點一下
   const STRAY_CLICK_MS = 150;                          // 補發的 click 緊跟在放開之後；窗口留短，免得把使用者緊接著的下一次點擊吃掉
-  let slide = null;         // 這一次按住：{ group 可以滑到的範圍, origin 按下去的那一顆, chip 按的是小鍵的話, x, y, moved, hot 手指底下亮起的那一顆 }
+  let slide = null;         // 這一次按住：{ group 可以滑到的範圍, origin 按下去的那一顆, chip 按的是小鍵的話, track 有槽的那一排, thumb 跟著手指的框, x, y, moved, hot 手指底下（或最靠近）的那一顆 }
   let pressOpened = null;   // 這一次按下去才打開選單的小鍵：緊接著的那一下 click 不要又把它收回
   let stray = null;         // 滑動選到之後，瀏覽器可能再補一下 click 給按下去的地方：{ origin, at }，那一下不算
 
@@ -45,6 +50,48 @@
     if (slide.hot) slide.hot.classList.remove('is-slide-hot');
     slide.hot = button;
     if (button) button.classList.add('is-slide-hot');
+  }
+
+  // 把框放到畫面上的某個位置（座標是視窗的）；框是槽裡絕對定位的一塊，所以換算成相對於槽
+  function put(thumb, track, left, top, width, height) {
+    const frame = track.getBoundingClientRect();
+    thumb.style.width = `${width}px`;
+    thumb.style.height = `${height}px`;
+    thumb.style.transform = `translate(${left - frame.left - track.clientLeft}px, ${top - frame.top - track.clientTop}px)`;
+  }
+  // 框跟著手指：大小照最靠近的那一顆，左右不超出第一顆與最後一顆
+  function follow(event) {
+    const track = slide.track, keys = [...track.querySelectorAll('button')].filter(usable);
+    if (!keys.length) return;
+    const boxes = keys.map(key => key.getBoundingClientRect());
+    const gap = box => Math.abs(event.clientX - (box.left + box.width / 2));
+    const near = boxes.reduce((best, box, index) => (gap(box) < gap(boxes[best]) ? index : best), 0);
+    if (!slide.thumb) {
+      slide.thumb = document.createElement('span');
+      slide.thumb.className = 'slide-thumb';
+      slide.thumb.setAttribute('aria-hidden', 'true');
+      track.classList.add('is-sliding');
+      track.append(slide.thumb);
+    }
+    const box = boxes[near];
+    put(slide.thumb, track, Math.min(Math.max(event.clientX - box.width / 2, boxes[0].left), boxes[boxes.length - 1].right - box.width), box.top, box.width, box.height);
+    heat(keys[near]);
+  }
+  // 放開：靠近哪一顆就選哪一顆，框滑到那一顆上再交還給那一顆自己的樣子
+  function settle(track, thumb, target, origin, cancelled) {
+    const done = () => {
+      thumb.remove();
+      if (target) target.classList.remove('is-slide-hot');
+      if (!track.querySelector('.slide-thumb')) track.classList.remove('is-sliding');   // 還有另一次拖曳的框就先留著
+    };
+    if (cancelled || !target) { done(); return; }
+    stray = { origin, at: performance.now() };   // 拖過之後瀏覽器補發的 click 不算，不然拖回原位放開會把展開的那一類收起來
+    if (target !== track.querySelector(SELECTED_KEY)) target.click();
+    if (CALM.matches) { done(); return; }
+    thumb.classList.add('is-settling');
+    const box = target.getBoundingClientRect();
+    put(thumb, track, box.left, box.top, box.width, box.height);
+    setTimeout(done, SETTLE_MS);
   }
 
   document.addEventListener('pointerdown', event => {
@@ -61,12 +108,12 @@
         set(chip, true);
         pressOpened = chip;
       }
-      slide = { group: menu, origin: chip, chip, x: event.clientX, y: event.clientY, moved: false, hot: null };
+      slide = { group: menu, origin: chip, chip, track: null, thumb: null, x: event.clientX, y: event.clientY, moved: false, hot: null };
       return;
     }
     const button = event.target.closest('button');
     const group = button && button.closest(GROUPS);
-    if (group && usable(button)) slide = { group, origin: button, chip: null, x: event.clientX, y: event.clientY, moved: false, hot: null };
+    if (group && usable(button)) slide = { group, origin: button, chip: null, track: group.matches(TRACKS) ? group : null, thumb: null, x: event.clientX, y: event.clientY, moved: false, hot: null };
   });
 
   document.addEventListener('pointermove', event => {
@@ -74,13 +121,15 @@
     if (event.pointerType === 'mouse' && !(event.buttons & 1)) { heat(null); slide = null; return; }   // 在視窗外放開了滑鼠
     if (!slide.moved && Math.hypot(event.clientX - slide.x, event.clientY - slide.y) < SLIDE_START_PX) return;
     slide.moved = true;
+    if (slide.track) { follow(event); return; }
     const node = nodeAt(event), button = node && node.closest('button');
     heat(usable(button) && slide.group.contains(button) ? button : null);
   });
 
   function finish(event, cancelled) {
     if (!slide || !event.isPrimary) return;
-    const { hot, moved, chip, origin } = slide;
+    const { hot, moved, chip, origin, track, thumb } = slide;
+    if (thumb) { slide = null; settle(track, thumb, hot, origin, cancelled); return; }
     heat(null);
     slide = null;
     if (cancelled || !moved) return;   // 沒有滑：就是點一下，交給下面的 click

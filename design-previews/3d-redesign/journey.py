@@ -83,6 +83,7 @@ class Hold:
         if self.mobile:
             for index in range(1, steps + 1):
                 self.touch("touchMove", [(self.at[0] + (x - self.at[0]) * index / steps, self.at[1] + (y - self.at[1]) * index / steps)])
+            self.page.wait_for_timeout(80)   # 觸控的移動是非同步送到頁面的，等最後一次送達再往下量
         else:
             self.page.mouse.move(x, y, steps=steps)
         self.at = (x, y)
@@ -93,6 +94,11 @@ class Hold:
             self.cdp.detach()
         else:
             self.page.mouse.up()
+
+
+# 成排的鍵上跟著手指走的那個框（本人 11-15 更正：選中的框要跟著手指左右移動），回傳它的中心 x；沒有框是 None
+THUMB_X = """selector => { const thumb = document.querySelector(selector + ' .slide-thumb'); if (!thumb) return null;
+  const box = thumb.getBoundingClientRect(); return box.left + box.width / 2; }"""
 
 
 def centre(locator) -> tuple[float, float]:
@@ -506,7 +512,14 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
         chips_key.scroll_into_view_if_needed()
         hold = Hold(page, mobile)
         hold.down(*centre(chips_key))
+        far = centre(page.locator("#homeCats [data-cat='rotation']"))
+        hold.move(*far)
+        at_far = page.evaluate(THUMB_X, "#homeCats")
         hold.move(*centre(screens_key))
+        at_near = page.evaluate(THUMB_X, "#homeCats")
+        check(f"{tag}：按住分類鍵左右滑，選中的框跟著手指走",
+              at_far is not None and at_near is not None and abs(at_far - far[0]) <= 3 and abs(at_near - centre(screens_key)[0]) <= 3,
+              [at_far, far[0], at_near, centre(screens_key)[0]])
         shown = page.evaluate(CATS_VISIBLE)
         check(f"{tag}：按住分類鍵滑到另一顆，那一顆亮起，還沒放開畫面不換",
               "is-slide-hot" in (screens_key.get_attribute("class") or "") and shown["chips"] and not shown["screens"], [screens_key.get_attribute("class"), shown])
@@ -514,13 +527,18 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
         page.wait_for_timeout(300)
         shown = page.evaluate(CATS_VISIBLE)
         check(f"{tag}：放開之後換到滑到的那一類", shown["screens"] and not shown["chips"] and "is-slide-hot" not in (screens_key.get_attribute("class") or ""), shown)
+        check(f"{tag}：放開之後框停在選到的那一顆，不留下多的框", page.locator("#homeCats .slide-thumb").count() == 0
+              and screens_key.get_attribute("aria-expanded") == "true")
         open_cat(page, "chips")
         open_chip("foreign")
         title = page.locator("#chipListTitle")
         buy, sell = page.locator("#panelBody .chip-seg button").nth(0), page.locator("#panelBody .chip-seg button").nth(1)
         hold = Hold(page, mobile)
         hold.down(*centre(buy))
-        hold.move(*centre(sell))
+        middle = (centre(buy)[0] + centre(sell)[0]) / 2
+        hold.move(middle + 6, centre(buy)[1])   # 只拖過中線一點點就放開：框靠近哪一項就選哪一項
+        thumb = page.evaluate(THUMB_X, "#panelBody .chip-seg")
+        check(f"{tag}：明細板按住買超往右拖，框跟著手指走", thumb is not None and abs(thumb - (middle + 6)) <= 3, [thumb, middle + 6])
         held = title.inner_text()
         hold.up()
         page.wait_for_timeout(250)
