@@ -23,7 +23,7 @@
 }
 .hm .instrument-block { grid-area: price; gap: 12px; }
 .hm .time-grid { grid-area: time; align-self: start; }
-.hm .conclusion-trigger { grid-area: conclusion; }
+
 .hm .theme-toggle { grid-area: theme; align-self: start; }
 .hm .brand-line h1 { font: 600 20px var(--serif); letter-spacing: .02em; color: var(--dim); }
 .hm .market-mark { width: 20px; height: 20px; color: var(--dim); }
@@ -33,18 +33,6 @@
 .hm .price-summary .detail-cue { align-self: center; }
 .hm .status-compact { color: var(--faint); font-size: 12px; gap: 8px; }
 .hm .state-trigger { color: var(--dim); }
-
-/* 下一交易日結論：不再是浮起的卡片，改成上方一條細線的引文 */
-.hm .conclusion-trigger {
-  max-width: none; padding: 12px 32px 0 0; min-height: 0;
-  border: 0 !important; border-top: 1px solid var(--hair) !important; border-radius: 0 !important;
-  background: transparent !important; box-shadow: none;
-}
-.hm .conclusion-trigger strong { transition: color 160ms var(--ease-out); }
-.hm .conclusion-trigger:hover strong { color: var(--accent); }
-.hm .conclusion-label { font-size: 12px; color: var(--faint); }
-.hm .conclusion-trigger strong { font: 600 22px/1.45 var(--serif) !important; color: var(--ink); margin-top: 4px; }
-.hm .conclusion-trigger .detail-cue { right: 0; }
 
 .hm .theme-toggle {
   width: var(--btn-h); height: var(--btn-h); padding: 0; display: grid; place-items: center;
@@ -184,7 +172,7 @@
   }
   .hm .price-value { font-size: 44px; }
   .hm .price-change { font-size: 15px; }
-  .hm .conclusion-trigger strong { font-size: 18px !important; }
+
   .hm .hm-search { grid-template-columns: minmax(0, 1fr); row-gap: 12px; }
   .hm .stock-search-status, .hm .stock-search-results, .hm .stock-search-more { grid-column: 1; }
   .hm .chart-stage { height: 340px; }
@@ -203,16 +191,12 @@
 .hm .price-value { font: 500 64px/1 var(--mono) !important; }
 .hm .time-grid { padding: 0; border: 0; }
 .hm .instrument-block { gap: 16px; }
-.hm .conclusion-trigger { min-height: 0; overflow: visible; display: block; padding: 12px 48px 0 0; }
-.hm .conclusion-trigger::before,
-.hm .conclusion-trigger::after { display: none !important; }
-.hm .conclusion-trigger strong { font: 600 22px/1.5 var(--serif) !important; }
-.hm .conclusion-trigger .detail-cue { top: 14px; transform: none; }
+
 .hm .line-trigger { width: 156px; grid-template-columns: auto 1fr auto; }
 .hm .line-trigger span { white-space: nowrap; }
 @media (max-width: 860px) {
   .hm .price-value { font-size: 44px !important; }
-  .hm .conclusion-trigger strong { font-size: 18px !important; }
+
 }
 
 /* 收復／防守：線與數字由 K 線軸上價籤顯示；原浮鈕改成圖表左上角的可點圖例（點了開詳情） */
@@ -311,8 +295,7 @@
 }
 
 /* ================= 正式版補強（11-09）：中寬度報價列 =================
-   861～1179px 三欄放不下 64px 指數＋漲跌（960px 時結論會蓋到漲跌），改成「報價一列、結論整列在下」；
-   指數字級隨寬度縮放，避免硬切。 */
+   861～1179px：日期那一列橫跨整個寬度；指數字級隨寬度縮放，避免硬切。 */
 .hm .price-value { font-size: clamp(44px, 4.4vw, 64px) !important; }
 @media (max-width: 1179px) and (min-width: 861px) {
   .hm .market-header {
@@ -320,7 +303,7 @@
     grid-template-areas: "price theme" "time time";
     row-gap: 16px;
   }
-  .hm .conclusion-trigger { max-width: 720px; }
+
 }
 
 /* 手機：收復／防守按鈕移到圖表下方一列（minimal.js 搬到 .chart-actions），維持 44px 觸控高度 */
@@ -337,8 +320,7 @@
 @media (min-width: 761px) {
   .hm .chart-host { top: 44px; }
 }
-/* 結論句：讓瀏覽器平均分配兩行，不在「不追」與「空」之間硬斷 */
-.hm .conclusion-trigger strong { text-wrap: balance; }
+/* 直白分析那一句：讓瀏覽器平均分配兩行 */
 .hm .read-line { text-wrap: balance; }
 
 /* 長期核心：0050 是主角用 accent；2330 是對照，用墨色的中性一階（取代原本唯一的冷紫色，稽核 #7 同類問題） */
@@ -347,13 +329,12 @@
 /* 籌碼選股分頁：可算的一列，「目前沒有名單」那組換到下一列，不會在中間被切斷 */
 .hm .screen-tabs { flex-wrap: wrap; row-gap: 4px; }
 .hm .hm-tab-cap { flex-basis: 100%; height: 24px; margin: 4px 0 0; padding-left: 0; border-left: 0; }
-.hm .conclusion-trigger strong { text-wrap: pretty; }
+
 /* 手機：「清空」不再獨占一整列，和搜尋鈕並排 */
 @media (max-width: 860px) {
   .hm .stock-search-form { grid-template-columns: minmax(0, 1fr) auto auto; }
   .hm .stock-search-form #stockSearchClear { grid-column: auto; }
 }
-.hm .conclusion-trigger .nowrap-phrase { display: inline-block; }
 
 /* 11-09 本人指出長期核心重疊：卡片太窄（每卡 200px），數字貼到分隔線、× 被切；
    列線因 dl 的 gap 而斷開；表格底部直接接註腳。改為：表格欄加寬、列線連續、表格與註腳間留白 */
@@ -405,12 +386,7 @@ body.hm :is(.theme-toggle, .icon-key, .stock-search-form button[type="button"], 
   border: 0; border-radius: var(--r-key); background: var(--key); box-shadow: var(--key-shadow);
   transition: transform var(--t-lift) var(--ease-depth), box-shadow var(--t-lift) var(--ease-depth), color 160ms var(--ease-out);
 }
-body.hm .conclusion-trigger {
-  align-self: stretch; display: grid; align-content: center; padding: 14px 64px 16px 18px;
-  border: 0 !important; border-radius: var(--r-key) !important; background: var(--key) !important; box-shadow: var(--key-shadow);
-  transition: transform var(--t-lift) var(--ease-depth), box-shadow var(--t-lift) var(--ease-depth);
-}
-body.hm .conclusion-trigger .detail-cue { top: 16px; right: 16px; }
+
 /* 實心墨色的主要動作：搜尋、加入比較 */
 body.hm .stock-search-form button[type="submit"],
 body.hm .core-compare-entry button {
@@ -419,7 +395,7 @@ body.hm .core-compare-entry button {
 }
 body.hm .stock-search-results { gap: 8px; }
 @media (hover: hover) {
-  body.hm :is(.conclusion-trigger, .theme-toggle, .icon-key, .stock-search-form button[type="button"], .stock-search-more, .stock-search-result a,
+  body.hm :is(.theme-toggle, .icon-key, .stock-search-form button[type="button"], .stock-search-more, .stock-search-result a,
     .chart-actions .line-trigger, .chart-actions .mobile-candle-details, .chart-toolbar .chart-chip, .chart-stage .reset-view,
     .screen-more, .core-selection-chip, .rotation-open):hover {
     background: var(--key); color: var(--ink); transform: translateY(var(--key-lift)); box-shadow: var(--key-shadow-hover);
@@ -428,7 +404,7 @@ body.hm .stock-search-results { gap: 8px; }
   body.hm .core-compare-entry button:hover { transform: translateY(var(--key-lift)); }
   body.hm :is(.price-summary, .state-trigger):hover { transform: translateY(var(--key-lift)); }
 }
-body.hm :is(.conclusion-trigger, .theme-toggle, .icon-key, .stock-search-form button[type="button"], .stock-search-more, .stock-search-result a,
+body.hm :is(.theme-toggle, .icon-key, .stock-search-form button[type="button"], .stock-search-more, .stock-search-result a,
   .chart-actions .line-trigger, .chart-actions .mobile-candle-details, .chart-toolbar .chart-chip, .chart-stage .reset-view,
   .screen-more, .core-selection-chip, .rotation-open):active {
   transform: translateY(var(--key-thick)); box-shadow: var(--key-shadow-press); transition-duration: var(--t-press);
@@ -891,7 +867,6 @@ body.hm .trend-rows { margin: 12px 0 0; padding: 0; list-style: none; display: g
   body.hm .trend-rows { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; gap: 12px; }
 }
 
-
 body.hm .trend-top { display: grid; grid-template-columns: 76px minmax(0, 1fr) 12px; align-items: center; column-gap: 12px; width: 100%; min-height: 48px; padding: 6px 12px; border: 0; border-radius: inherit; background: none; color: inherit; font: inherit; text-align: left; }
 body.hm button.trend-top { cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 body.hm button.trend-top:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
@@ -914,7 +889,6 @@ body.hm .trend-bar .side { display: flex; align-items: flex-start; gap: 3px; pad
 body.hm .trend-bar .side.bears { flex-direction: row-reverse; align-items: flex-end; }
 /* 點開的那一期：橫條上的小柱已經飛下去、落進各自的鍵裡了 */
 body.hm .trend-row.is-open .blk { opacity: 0; }
-
 
 /* 展開：高度用格線的 0fr → 1fr 帶；只裁下緣，小柱才能從上面的橫條飛下來 */
 /* 列的高低、箭頭與展開的高度在 bold.css（.depth-row），和個股頁、自選與庫存頁共用 */

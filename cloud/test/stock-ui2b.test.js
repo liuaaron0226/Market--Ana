@@ -94,9 +94,10 @@ test("首頁人寫的劇本與直白分析比資料日舊時整組隱藏，不�
   for (const target of ["els.lineUpper", "els.lineLower", "$('distribution')"]) {
     assert.ok(hiddenGroup.slice(0, 400).includes(target), target);
   }
-  // 標頭「下一交易日」的框一律收著（本人 11-15），不能被這一段在劇本沒過期時又打開
-  assert.ok(!hiddenGroup.slice(0, 400).includes("conclusionTrigger"));
-  assert.match(read("web/minimal.html"), /id="conclusionTrigger"[^>]*\shidden>/);
+  // 標頭「下一交易日」的框與它打開的「結論依據」面板拿掉了（本人 11-15：框多餘、文字看不懂；之後答「拿掉」）
+  for (const gone of ["conclusionTrigger", "conclusionText", "renderConclusionPanel", "renderEvidenceLayer", "data-evidence"]) {
+    assert.ok(!source.includes(gone) && !read("web/minimal.html").includes(gone), gone);
+  }
   assert.match(hiddenGroup.slice(0, 400), /node\.hidden = scenarioExpired/);
   for (const removed of ["' 已過期'", "舊劇本", "未冒充當日分析"]) {
     assert.ok(!source.includes(removed), removed);

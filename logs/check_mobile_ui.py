@@ -54,7 +54,6 @@ PANEL_JS = """() => {
 def open_cases(page):
     """回傳 (名稱, 開啟動作) 清單：涵蓋所有同類浮窗。"""
     cases = [
-        ("conclusion", lambda: page.locator("#conclusionTrigger").click()),
         ("upper", lambda: page.locator("#lineUpper").click()),
         ("lower", lambda: page.locator("#lineLower").click()),
         ("plain", lambda: page.locator("#readCard").click()),

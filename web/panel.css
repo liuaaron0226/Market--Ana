@@ -65,20 +65,6 @@
   font-size: 12px; line-height: 1.6; color: var(--faint);
 }
 
-/* ---------- 結論依據的四列證據：報表列，不是四個灰盒 ---------- */
-.hm .evidence-list { margin-top: 24px; gap: 0; border-top: 1px solid var(--ink); }
-.hm .evidence-row {
-  min-height: 0; padding: 16px 32px 16px 0; border: 0; border-bottom: 1px solid var(--hair); border-radius: 0;
-  background: transparent; grid-template-columns: 72px minmax(0, 1fr); gap: 4px 16px; cursor: pointer;
-  transition: background-color 160ms var(--ease-out);
-}
-.hm .evidence-row:hover { background: color-mix(in srgb, var(--panel2) 70%, transparent); }
-.hm .evidence-row::after { right: 8px; font-size: 16px; transition: transform 160ms var(--ease-out); }
-.hm .evidence-row:hover::after { transform: translate(2px, -50%); }
-.hm .evidence-row span { font-size: 12px; color: var(--faint); padding-top: 2px; }
-.hm .evidence-row strong { font: 600 16px/1.4 var(--serif); }
-.hm .evidence-row small { font-size: 13px; line-height: 1.5; color: var(--dim); }
-
 /* ---------- 現價：數字表 ---------- */
 .hm .current-grid { margin-top: 24px; gap: 0; border-top: 1px solid var(--ink); }
 .hm .current-grid div { padding: 14px 16px 14px 0; border-radius: 0; background: transparent; border-bottom: 1px solid var(--hair); }
@@ -165,7 +151,7 @@
   .hm .panel-header { padding: 16px 12px 12px 20px; }
   .hm .panel-heading h2 { font-size: 20px; }
   .hm .panel-body { padding: 20px; }
-  .hm .evidence-row { grid-template-columns: 56px minmax(0, 1fr); }
+
   .hm .action-list div, .hm .kv-list div { grid-template-columns: 88px minmax(0, 1fr); }
 }
 
@@ -192,7 +178,6 @@
 .hm .bar-hit.is-on rect:first-child { fill: color-mix(in srgb, var(--ink) 6%, transparent); }
 .hm .bar-hit:focus-visible rect:first-child { stroke: var(--accent); stroke-width: 1.5; }
 
-
 /* 明細表 */
 .hm .drill-table { margin-top: 16px; }
 .hm .drill-table table { font-size: 14px; font-variant-numeric: tabular-nums; }
@@ -207,7 +192,6 @@
 .hm .drill-table .stock-link:hover { color: var(--accent); }
 .hm .drill-table .stock-link::after { content: " ›"; color: var(--faint); opacity: 0; transition: opacity 120ms var(--ease-out); }
 .hm .drill-table tbody tr:hover .stock-link::after { opacity: 1; }
-
 
 @media (max-width: 860px) {
   .hm .drill-table table { font-size: 13px; }

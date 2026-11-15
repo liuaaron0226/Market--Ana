@@ -75,7 +75,6 @@ SNAPSHOT_JS = """() => {
   const c = window.MinimalApp.chart;
   const pick = k => k && { t: k.t, open: k.open, high: k.high, low: k.low, close: k.close, amount: k.amount };
   return {
-    conclusion: t('conclusionText'),
     upper: t('lineUpper'),
     lower: t('lineLower'),
     distribution: [...document.querySelectorAll('[data-outcome] [data-share]')].map(n => n.textContent),

@@ -213,9 +213,6 @@ def check_standard_width(browser: Browser, width: int, height: int, screenshots:
         assert page.evaluate("window.MinimalApp.chart.geo.step >= 44"), "桌面／平板單根K棒命中寬度不足44px"
     assert upper_box and upper_box["height"] >= 44 and lower_box and lower_box["height"] >= 44
     assert page.locator("#marketState").inner_text().startswith("即時")
-    assert page.locator("#conclusionText").evaluate("el => parseFloat(getComputedStyle(el).fontSize)") >= 17
-    conclusion_box = page.locator("#conclusionText").evaluate("el => ({scroll:el.scrollHeight, client:el.clientHeight, overflow:getComputedStyle(el).overflow, text:el.textContent})")
-    assert conclusion_box["scroll"] <= conclusion_box["client"] + 1, f"結論句被截斷：{conclusion_box}"
     assert "詳情" in page.locator("#currentPoint").inner_text()
     assert page.locator("#analysisDate").get_attribute("title") == ANALYSIS["meta"]["cutoff_date"]
     assert page.locator("#analysisDate").inner_text() == ANALYSIS["meta"]["cutoff_date"][5:].replace("-", "/")
@@ -306,13 +303,7 @@ def check_standard_width(browser: Browser, width: int, height: int, screenshots:
                 page.keyboard.press("Escape")
 
         # 第2層入口都能進入並返回，樣本數量與資料一致。
-        page.locator("#conclusionTrigger").click()
-        page.locator("[data-evidence='trend']").click()
-        assert page.locator("#panelBack").is_visible()
-        assert page.locator(".detail-chart svg").count() == 4
-        page.locator("#panelBack").click()
-        assert page.locator("[data-evidence='trend']").is_visible()
-        page.keyboard.press("Escape")
+        # （頂列「下一交易日」的框與結論依據面板已拿掉，本人 2026-11-15；原本這裡從它進第二層）
         checks_deep = {
             "method": lambda: "回測規則" in page.locator("#panelBody").inner_text(),
             "sources": lambda: "分析截止日" in page.locator("#panelBody").inner_text(),
@@ -490,7 +481,7 @@ def check_official_date_alignment(browser: Browser) -> None:
     assert page.locator("#analysisDate").inner_text() == "11/10"
     assert page.locator("#analysisDate").get_attribute("title") == "2026-11-10"
     # 本人 11-14「過期就隱藏」：劇本比資料日舊時，日期、結論、兩條價位線與直白分析都不顯示。
-    for selector in ("#scenarioDate", "#conclusionTrigger", "#lineUpper", "#lineLower", "#readCard"):
+    for selector in ("#scenarioDate", "#lineUpper", "#lineLower", "#readCard"):
         assert not page.locator(selector).is_visible(), f"過期內容仍顯示：{selector}"
     assert "已過期" not in page.locator("body").inner_text()
     assert page.locator("#marketTrendDate").inner_text() == "資料日 2026-11-10"
@@ -604,15 +595,6 @@ def check_half_window_header(browser: Browser) -> None:
         route_live(page)
         page.goto(PAGE_URL, wait_until="domcontentloaded")
         page.wait_for_function("window.MinimalApp && window.MinimalApp.ready")
-        overlap = page.evaluate("""() => {
-            const conclusion = document.getElementById('conclusionTrigger').getBoundingClientRect();
-            return ['currentPrice', 'currentChange', 'statusTrigger', 'analysisDate', 'scenarioDate'].filter(id => {
-                const r = document.getElementById(id).getBoundingClientRect();
-                return Math.min(r.right, conclusion.right) - Math.max(r.left, conclusion.left) > 1 &&
-                    Math.min(r.bottom, conclusion.bottom) - Math.max(r.top, conclusion.top) > 1;
-            });
-        }""")
-        assert not overlap, f"{width}px 結論卡蓋住 {overlap}"
         assert_no_overflow(page, width)
         if width in (375, 820, 1440):
             page.screenshot(path=str(OUT / f"minimal-header-fixed-{width}.png"), full_page=False)

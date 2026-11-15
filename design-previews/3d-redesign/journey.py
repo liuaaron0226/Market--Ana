@@ -588,7 +588,8 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
     step(f"{tag}：指標區手勢", swipe_study)
 
     open_panel(page, tag, "#priceSummary", "現價")
-    check(f"{tag}：頂列「下一交易日」的框收起來了（本人 11-15）", not page.locator("#conclusionTrigger").is_visible())
+    check(f"{tag}：頂列沒有「下一交易日」的框了（本人 11-15）", page.locator("#conclusionTrigger, .conclusion-trigger").count() == 0
+          and "下一交易日" not in page.locator(".market-header").inner_text())
     open_panel(page, tag, "#lineUpper", "收復線")
 
     def line_panel() -> None:

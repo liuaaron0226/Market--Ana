@@ -51,9 +51,7 @@
     time: $('marketTime'),
     analysisDate: $('analysisDate'),
     scenarioDate: $('scenarioDate'),
-    scenarioLabel: $('conclusionLabel'),
     zone: $('zoneLabel'),
-    conclusion: $('conclusionText'),
     trendSection: $('marketTrend'),
     trendDate: $('marketTrendDate'),
     trendRows: $('marketTrendRows'),
@@ -109,7 +107,6 @@
   const AS_OF = A.backtest.as_of || {};
   const ACTIONS = D.actions || (D.forecast && D.forecast.actions) || {};
   const CLOSE = Number(AS_OF.close || (D.latest && D.latest.close));
-  const HEADLINE = D.headline || (D.forecast && D.forecast.headline) || {};
   const DEFAULT_SAMPLE = D.default_sample || AS_OF.default_sample || (A.backtest.samples[0] && A.backtest.samples[0].key);
   const scenarioDate = (() => {
     const horizon = String(D.forecast && D.forecast.horizon || '');
@@ -177,16 +174,6 @@
 
   function css(name, fallback) {
     return getComputedStyle(root).getPropertyValue(name).trim() || fallback;
-  }
-
-  function headlineSummary() {
-    const title = HEADLINE.title || '方向待確認';
-    return HEADLINE.tone ? `${title}｜${HEADLINE.tone}` : title;
-  }
-
-  function headlineDetail() {
-    const summary = headlineSummary();
-    return HEADLINE.lede ? `${summary}：${HEADLINE.lede}` : summary;
   }
 
   // 現價落在哪一區：規則和收復線／防守線那張圖是同一個（line-zones.js）
@@ -257,13 +244,8 @@
     const shortDate = value => (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}/.test(value)) ? `${value.slice(5, 7)}/${value.slice(8, 10)}` : (value || '—');
     els.analysisDate.textContent = shortDate(A.meta.cutoff_date || fallbackMarketDate());
     els.scenarioDate.textContent = shortDate(scenarioDate);
-    els.scenarioLabel.textContent = '下一交易日';
     els.analysisDate.title = A.meta.cutoff_date || fallbackMarketDate();
     els.scenarioDate.title = scenarioDate || '';
-    // 標題與語氣各自不斷行：只在「｜」處換行，避免「長下／影」這種把詞拆開的斷法。textContent 不變。
-    const title = HEADLINE.title || '方向待確認';
-    els.conclusion.replaceChildren(Object.assign(document.createElement('span'), { className: 'nowrap-phrase', textContent: title }));
-    if (HEADLINE.tone) els.conclusion.append('｜', Object.assign(document.createElement('span'), { className: 'nowrap-phrase', textContent: HEADLINE.tone }));
   }
 
   function setOffline(message) {
@@ -1272,61 +1254,11 @@
     `;
   }
 
-  function evidenceData() {
-    const latest = D.latest || {};
-    const future = A.futures[A.futures.length - 1] || {};
-    const news = Array.isArray(D.news) ? D.news : [];
-    const close = Number(latest.close);
-    const ma20 = Number(latest.ma20);
-    const volumeRatio = Number(latest.turnover_vs_20d);
-    const foreign = Number(latest.foreign_net);
-    return [
-      {
-        key: 'trend', label: '趨勢', value: close < ma20 ? '還在下跌趨勢' : '在上升趨勢',
-        note: `指數 ${fmt(close, 0)}，${close < ma20 ? '低於' : '高於'}近一個月平均 ${fmt(ma20, 0)}`
-      },
-      {
-        key: 'money', label: '資金', value: foreign < 0 ? '外資還在賣' : '外資在買',
-        note: `今天${foreign < 0 ? '賣' : '買'} ${fmt(Math.abs(foreign), 0)} 億；期貨${future.foreign_oi_net_contracts < 0 ? '偏空' : '偏多'}部位 ${fmt(Math.abs(future.foreign_oi_net_contracts), 0)} 口`
-      },
-      {
-        key: 'volume', label: '成交量', value: volumeRatio >= 1.3 ? '比平常熱很多' : volumeRatio <= 0.75 ? '比平常冷' : '和平常差不多',
-        note: `成交 ${fmt(latest.turnover, 0)} 億，約平常的 ${fmt(volumeRatio, 1)} 倍`
-      },
-      {
-        key: 'event', label: '國際事件', value: news.length ? `${fmt(news.length, 0)} 件要留意` : '沒有重大事件',
-        note: news[0] ? esc((news[0].facts || [])[0] || news[0].source) : '目前沒有已整理的事件'
-      }
-    ];
-  }
-
-  function renderConclusionPanel() {
-    const latest = D.latest || {};
-    const pos = AS_OF.features && Number.isFinite(AS_OF.features.close_position) ? AS_OF.features.close_position : NaN;
-    const meaning = [
-      Number.isFinite(pos) && pos >= 0.6 ? '今天一開盤就大跌，但<b>收盤前被買回不少</b>，沒有收在最低點。' : '今天收在當天的低檔附近。',
-      Number(latest.foreign_net) < 0 ? '外資<b>還在賣</b>，股票和期貨兩邊都偏向看壞。' : '外資今天轉為買進。',
-      `所以下一個交易日先觀察：收盤能不能站回 <b>${fmt(UPPER, 0)}</b>。`,
-    ];
-    const watch = ['反彈不等於止跌，外資停止賣出才比較可信。'];
-    return `
-      ${plainBlock(meaning, watch)}
-      <div class="evidence-list">
-        ${evidenceData().map(item => `
-          <button class="evidence-row" type="button" data-evidence="${item.key}">
-            <span>${esc(item.label)}</span><strong>${esc(item.value)}</strong><small>${esc(item.note)}</small>
-          </button>
-        `).join('')}
-      </div>
-    `;
-  }
-
   function panelTitleFor(kind, payload) {
     if (kind === 'candle') return chart.candles[payload.index].label;
     if (kind === 'line') return payload.line === 'upper' ? '收復線' : '防守線';
     if (kind === 'distribution') return `${outcomeLabels[payload.outcome]}的歷史結果`;
     if (kind === 'current') return '現價落點';
-    if (kind === 'conclusion') return '結論依據';
     if (kind === 'plain') return '直白分析';
     if (kind === 'chip') { const c = chipCards().find(item => item.key === payload.key); return c ? c.name : '籌碼'; }
     return '詳情';
@@ -1396,10 +1328,6 @@
     else if (panelState.kind === 'current') els.panelBody.innerHTML = renderCurrentPanel();
     else if (panelState.kind === 'plain') els.panelBody.innerHTML = renderPlainPanel();
     else if (panelState.kind === 'chip') { els.panelBody.innerHTML = renderChipPanel(panelState.payload.key); bindChipPanel(panelState.payload.key); }
-    else if (panelState.kind === 'conclusion') {
-      els.panelBody.innerHTML = renderConclusionPanel();
-      els.panelBody.querySelectorAll('[data-evidence]').forEach(button => button.addEventListener('click', () => renderLayerTwo(`evidence:${button.dataset.evidence}`)));
-    }
     els.panelBody.querySelectorAll('[data-deep]').forEach(button => button.addEventListener('click', () => renderLayerTwo(button.dataset.deep)));
     els.panelBody.scrollTop = 0;
   }
@@ -1418,7 +1346,6 @@
     else if (kind === 'samples') renderSamplesLayer();
     else if (kind === 'table') renderTableLayer();
     else if (kind === 'news') renderNewsLayer();
-    else if (kind.startsWith('evidence:')) renderEvidenceLayer(kind.split(':')[1]);
     els.panelBody.scrollTop = 0;
     if (remember && entering) els.panelBack.focus({ preventScroll: true });
   }
@@ -1537,38 +1464,6 @@
     const labelIndexes = [...new Set([0, Math.floor((clean.length - 1) / 2), clean.length - 1])].filter(index => index >= 0);
     const text = labelIndexes.map(index => `<text x="${22 + index * step + step * .49}" y="148" text-anchor="middle">${esc(String(labels[index] || '').slice(5))}</text>`).join('');
     return `<svg viewBox="0 0 ${width} ${height}" role="img"><line class="axis" x1="18" y1="${baseline + .5}" x2="338" y2="${baseline + .5}"/>${bars}${text}</svg>`;
-  }
-
-  function renderEvidenceLayer(kind) {
-    const titles = { trend: '多週期趨勢', money: '現貨與期貨資金', volume: '成交金額', event: '事件時間軸' };
-    els.panelTitle.textContent = titles[kind] || '完整依據';
-    if (kind === 'event') {
-      renderNewsLayer();
-      els.panelTitle.textContent = titles[kind];
-      return;
-    }
-    if (kind === 'trend') {
-      const periods = ['monthly', 'weekly', 'daily', 'h60'];
-      els.panelBody.innerHTML = periods.map(period => {
-        const values = (A.indicators[period] || []).slice(-20).map(row => row.hist);
-        const rows = period === 'monthly' ? A.monthly : period === 'weekly' ? A.weekly : period === 'h60' ? A.h60 : A.daily;
-        const labels = rows.slice(-20).map(row => row.date || row.timestamp);
-        const latest = (A.indicators[period] || []).at(-1) || {};
-        return `<section class="detail-section"><h3>${periodLabels[period]}</h3><p>MACD 柱 ${signed(latest.hist)}，通用參數 ${A.indicators.parameters.macd.fast}, ${A.indicators.parameters.macd.slow}, ${A.indicators.parameters.macd.signal}。</p><div class="detail-chart">${svgBars(values, labels, 'var(--accent)', true)}</div></section>`;
-      }).join('');
-      return;
-    }
-    if (kind === 'money') {
-      const institution = A.institutional.slice(-20);
-      const futures = A.futures.slice(-20);
-      els.panelBody.innerHTML = `
-        <section class="detail-section"><h3>外資現貨，億元</h3><div class="detail-chart">${svgBars(institution.map(row => row.foreign.net / 100_000_000), institution.map(row => row.date), 'var(--accent)', true)}</div></section>
-        <section class="detail-section"><h3>外資台指期淨部位，口</h3><div class="detail-chart">${svgBars(futures.map(row => row.foreign_oi_net_contracts), futures.map(row => row.date), 'var(--accent)', true)}</div></section>
-      `;
-      return;
-    }
-    const rows = A.daily.slice(-20);
-    els.panelBody.innerHTML = `<section class="detail-section"><h3>近 20 個交易日成交金額</h3><p>單位：億元。</p><div class="detail-chart">${svgBars(rows.map(row => row.amount / 100_000_000), rows.map(row => row.date), 'var(--accent)', false)}</div></section>`;
   }
 
   function openPanel(kind, payload, anchor, focusAnchor = anchor) {
@@ -1731,7 +1626,6 @@
   els.lower.textContent = fmt(LOWER);
   renderDistribution();
   // 過期的劇本整組收起來：標頭的劇本日期、圖旁兩個價位按鈕、隔日分布；直白分析另看它自己的資料日。
-  // 標頭「下一交易日」的框不在這裡：它一律收著（minimal.html 上的 hidden，本人 11-15）。
   for (const node of [els.scenarioDate.parentElement, els.scenarioDate.parentElement.previousElementSibling,
     els.lineUpper, els.lineLower, $('distribution')]) {
     if (node) node.hidden = scenarioExpired;
@@ -1750,7 +1644,6 @@
   $('priceSummary').addEventListener('click', () => openPanel('current', {}, $('priceSummary')));
   els.stateButton.addEventListener('click', () => openPanel('current', {}, els.stateButton));
   els.point.addEventListener('click', () => openPanel('current', {}, els.point));
-  $('conclusionTrigger').addEventListener('click', () => openPanel('conclusion', {}, $('conclusionTrigger')));
   els.mobileDetails.addEventListener('click', () => {
     if (selectedIndex >= 0) openPanel('candle', { index: selectedIndex }, els.marker, els.mobileDetails);
   });
