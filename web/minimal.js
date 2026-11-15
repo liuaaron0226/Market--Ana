@@ -1726,7 +1726,11 @@
   loadPeriod('daily', true);
   api.ready = true;
   if (window.MarketForecast) {
-    window.MarketForecast.mount({ host: document.querySelector('.chart-controls'), onChange: () => loadPeriod(currentPeriod, false) });
+    window.MarketForecast.mount({
+      host: document.querySelector('.chart-controls'),
+      onChange: () => loadPeriod(currentPeriod, false),
+      getDaily: () => A.daily,
+    });
   }
 
   if (location.protocol === 'file:') {
