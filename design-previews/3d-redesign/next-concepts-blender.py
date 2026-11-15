@@ -2,7 +2,9 @@
 六個場景：tank 今日股票水位、stairs 價位階梯、blocks 庫存總覽、bins 隔日三區歷史分布、ramps 短中長期走勢、terraces 大戶持股。
 數字來自 next-concepts-data.py 取出的樣本資料；樣本裡不夠的（走勢判讀、大戶持股的逐週序列、賠錢的庫存）用示意數字，
 哪些是示意由 next-concepts-sheet.py 寫在圖上。
-用法：blender -b -P next-concepts-blender.py -- <輸出資料夾> <場景名稱>"""
+加深版（本人看過第一批之後要求：形狀與動態本身要帶出更多資訊，足以取代原本的版面）：tank2、blocks2、jacks，
+這三個會動，一次算出一串畫面（frames-<名稱>/f000.png…），由 next-concepts-sheet.py 接成動圖。
+用法：blender -b -P next-concepts-blender.py -- <輸出資料夾（要給完整路徑）> <場景名稱> [邊長，預設 1000] [final：會動的場景只算最後一格]"""
 import math
 import sys
 from pathlib import Path
@@ -13,6 +15,7 @@ from mathutils import Vector
 args = sys.argv[sys.argv.index("--") + 1:]
 out = Path(args[0])
 concept = args[1]
+side_px = int(args[2]) if len(args) > 2 else 1000
 out.mkdir(parents=True, exist_ok=True)
 
 
@@ -261,7 +264,183 @@ def terraces():
     return Vector((span / 2 + 2.1, -0.2, 1.7)), (64, 0, 18), 15.0
 
 
-target, angles, ortho = {"tank": tank, "stairs": stairs, "blocks": blocks, "bins": bins, "ramps": ramps, "terraces": terraces}[concept]()
+# ---------- 加深版：會動的三個場景。每個場景回傳 (鏡頭目標, 角度, 範圍, 動態函式)，動態函式吃 0 到 1 的進度 ----------
+def ease(value):
+    value = max(0.0, min(1.0, value))
+    return value * value * (3 - 2 * value)
+
+
+def part(t, start, end):
+    """整段動態裡的一小段：t 還沒到 start 是 0，過了 end 是 1。"""
+    return ease((t - start) / (end - start))
+
+
+def stretch(obj, base, height, share):
+    """把一塊原本高 height 的方塊從底部長到 share（0 到 1）的高度。"""
+    share = max(share, 0.001)
+    obj.scale.z = share
+    obj.location.z = base + height * share / 2
+
+
+def plate(points, thickness, location, code, rough=0.45):
+    """俯視的多邊形（x, y）加上厚度：用來做箭頭形的板子。原點在 location，方便繞著它轉。"""
+    n = len(points)
+    verts = [(x, y, -thickness / 2) for x, y in points] + [(x, y, thickness / 2) for x, y in points]
+    faces = [list(range(n - 1, -1, -1)), list(range(n, 2 * n))] + [[i, (i + 1) % n, n + (i + 1) % n, n + i] for i in range(n)]
+    mesh = bpy.data.meshes.new("plate")
+    mesh.from_pydata(verts, [], faces)
+    mesh.update()
+    obj = bpy.data.objects.new("plate", mesh)
+    scene.collection.objects.link(obj)
+    obj.location = location
+    obj.data.materials.append(material(code, rough))
+    return obj
+
+
+def tank2():
+    """今日股票水位（加深版）。整個槽是總資金：下面深色的是股票、上面淺色那一層是現金，兩層的交界就是目前水位。
+    槽上方四格是四組訊號，每一分是一塊砝碼；砝碼一塊一塊落下，金色的建議線跟著被壓低（看得到建議是被哪幾組壓下來的）。
+    半透明的那幾塊是還沒接上的訊號。建議線旁邊的圓點是連續確認的天數。半透明的金色帶是容忍帶。
+    樣本資料：目前 88.3%、建議 90%、趨勢 2 分、預警 1 分、VIX 與費半未接、已連續確認 2 天（要 2 天）。
+    砝碼壓低多少是示意方向，實際的換算照現行的分數表。"""
+    now, advice, band = 88.3, 90.0, 5.0
+    width, depth, height = 3.6, 2.0, 6.0
+    z = lambda pct: height * pct / 100
+    box((0.6, 0, -0.15), (width + 4.4, depth + 1.6, 0.3), BOARD, bevel=0.1, rough=0.6)
+    box((0, 0, z(now) / 2), (width - 0.12, depth - 0.12, z(now)), "#2c6cb4", bevel=0, rough=0.18)
+    box((0, 0, (z(now) + height) / 2), (width - 0.12, depth - 0.12, height - z(now)), "#dfe7ef", bevel=0, rough=0.3)
+    glass_tank(0, width, depth, height)
+    zone = box((0, -depth / 2 - 0.05, z(100)), (width + 0.16, 0.03, z(band * 2)), GOLD, bevel=0, rough=0.5, alpha=0.3)
+    line = box((0, -depth / 2 - 0.08, z(100)), (width + 0.34, 0.05, 0.08), GOLD, bevel=0, rough=0.4)
+    rack = height + 1.7
+    box((0, 0, rack - 0.2), (width + 0.5, depth * 0.78, 0.4), SLAB, bevel=0.02)   # 架子厚一點，組名寫在前緣
+    rod_len = 1.0
+    rods = [box((sx * (width / 2 + 0.2), -depth / 2 - 0.08, rack - rod_len / 2), (0.035, 0.035, rod_len), GOLD, bevel=0) for sx in (-1, 1)]
+    slot = (width + 0.5) / 4
+    weights = []
+    for index, (name, points, absent) in enumerate((("趨勢", 2, 0), ("波動", 0, 1), ("預警", 1, 1), ("資金面", 0, 0))):
+        x = -(width + 0.5) / 2 + slot * (index + 0.5)
+        text(name, (x, -depth * 0.39 - 0.02, rack - 0.3), 0.2, DIM, align="CENTER", flat=False)
+        for level in range(points):
+            rest = rack + 0.19 + level * 0.42
+            weights.append((box((x, 0, rest + 4), (slot - 0.26, depth * 0.52, 0.38), INK, bevel=0.03, rough=0.35), rest))
+        for level in range(points, points + absent):
+            box((x, 0, rack + 0.19 + level * 0.42), (slot - 0.26, depth * 0.52, 0.38), GREY, bevel=0.03, rough=0.6, alpha=0.32)
+    dots = [ball((width / 2 + 0.55 + index * 0.3, -depth / 2 - 0.08, z(100)), 0.1, GOLD) for index in range(2)]
+    text("目前水位", (-width / 2 - 0.35, -depth / 2, z(now) + 0.1), 0.3, DIM, align="RIGHT", flat=False)
+    text("88.3%", (-width / 2 - 0.35, -depth / 2, z(now) - 0.75), 0.74, INK, align="RIGHT", flat=False)
+    text("現金", (-width / 2 - 0.35, -depth / 2, z(96) + 0.3), 0.24, DIM, align="RIGHT", flat=False)
+    text("股票", (-width / 2 - 0.35, -depth / 2, z(40)), 0.24, DIM, align="RIGHT", flat=False)
+    text("今日建議 90%", (width / 2 + 1.25, -depth / 2 - 0.08, z(advice) - 0.1), 0.3, GOLD, flat=False)
+    text("已連續確認 2 天", (width / 2 + 1.25, -depth / 2 - 0.08, z(advice) - 0.55), 0.22, DIM, flat=False)
+
+    def animate(t):
+        landed = 0.0
+        for index, (weight, rest) in enumerate(weights):
+            fall = part(t, 0.06 + index * 0.2, 0.3 + index * 0.2)
+            weight.location.z = rest + 4 * (1 - fall)
+            landed += fall
+        level = z(100 - (100 - advice) * landed / len(weights))
+        line.location.z = zone.location.z = level
+        for dot in dots:
+            dot.location.z = level
+        for rod in rods:
+            stretch(rod, level, rod_len, (rack - level) / rod_len)
+    return Vector((0.85, 0, 4.3)), (74, 0, 20), 12.6, animate
+
+
+def blocks2():
+    """庫存總覽（加深版）。每檔持股一根柱子，高度是錢：灰色那一段是投入的成本，上面紅色那一段是賺到的。
+    賠錢的那一檔，柱子比成本矮，缺的那一塊用半透明的綠色標出來。後面的牆是金額的刻度。
+    動態：柱子先長到成本的高度，接著賺的往上長、賠的往下縮——看得到每一檔是從成本變成現在的市值。
+    前三檔是樣本資料（成本 98 萬→市值 223.5 萬、43 萬→49.1 萬、17.5 萬→29.2 萬）；「示意甲、乙」是為了示範賠錢加的。"""
+    holdings = [("台積電", 980000, 2235000), ("長榮", 430000, 491000), ("0050", 175200, 292350), ("示意甲", 317000, 260000), ("示意乙", 160000, 150000)]
+    unit, foot, pitch = 1 / 300000, 1.7, 2.3
+    columns = []
+    for index, (name, cost, value) in enumerate(holdings):
+        x, cost_h, value_h = index * pitch, cost * unit, value * unit
+        base = box((x, 0, cost_h / 2), (foot, foot, cost_h), "#bdb8ac", bevel=0.03, rough=0.7)
+        if value >= cost:
+            extra = box((x, 0, cost_h + (value_h - cost_h) / 2), (foot, foot, value_h - cost_h), UP, bevel=0.03, rough=0.42)
+        else:
+            extra = box((x, 0, value_h + (cost_h - value_h) / 2), (foot - 0.02, foot - 0.02, cost_h - value_h), DOWN, bevel=0, rough=0.5, alpha=0.4)
+        columns.append((base, extra, cost_h, value_h))
+        code = UP if value >= cost else DOWN
+        text(name, (x, -foot / 2 - 0.6, 0.01), 0.38, INK, align="CENTER")
+        text(f"{(value / cost - 1) * 100:+.0f}%", (x, -foot / 2 - 1.25, 0.01), 0.52, code, align="CENTER")
+    span = pitch * (len(holdings) - 1)
+    wall_y, wall_h = foot / 2 + 0.6, 8.2
+    box((span / 2, wall_y, wall_h / 2), (span + foot + 1.0, 0.1, wall_h), SLAB, bevel=0.02)
+    for amount in (500000, 1000000, 1500000, 2000000):
+        box((span / 2, wall_y - 0.06, amount * unit), (span + foot + 1.0, 0.03, 0.03), GREY, bevel=0)
+        text(f"{amount // 10000} 萬", (span / 2 + (span + foot + 1.0) / 2 + 0.15, wall_y - 0.06, amount * unit - 0.1), 0.26, DIM, flat=False)
+    box((span / 2 + 0.3, -0.5, -0.12), (span + foot + 3.0, foot + 4.2, 0.24), BOARD, bevel=0.1, rough=0.6)
+
+    def animate(t):
+        for index, (base, extra, cost_h, value_h) in enumerate(columns):
+            rise, change = part(t, 0.02 + index * 0.04, 0.34 + index * 0.04), part(t, 0.42 + index * 0.05, 0.84 + index * 0.03)
+            if value_h >= cost_h:
+                stretch(base, 0, cost_h, rise)
+                stretch(extra, cost_h * rise, value_h - cost_h, change)
+            else:
+                top = cost_h * rise * (1 - (1 - value_h / cost_h) * change)   # 柱子現在的頂
+                stretch(base, 0, cost_h, top / cost_h)
+                stretch(extra, top, cost_h - value_h, (cost_h * rise - top) / (cost_h - value_h))   # 缺口從柱頂往上到成本的高度
+    return Vector((span / 2 + 0.5, 0, 3.6)), (66, 0, 18), 15.5, animate
+
+
+def jacks():
+    """短中長期走勢（加深版）。每一個結論背後是幾個指標各投一票；這裡每一票是一根撐竿：
+    偏空的指標（綠）撐在左邊、偏多的指標（紅）撐在右邊，哪一邊的撐竿多，箭頭就被撐得往另一邊低下去——
+    看得到「偏空」是幾票對幾票，也看得到是哪幾個指標。箭頭往右上是偏多、往右下是偏空、平的是盤整。
+    動態：撐竿一根一根升起來，箭頭跟著慢慢傾斜。
+    樣本資料裡走勢判讀還沒產生，這張的票是示意（票數照現行規則：短期 5 票、中期與長期各 4 票）。"""
+    periods = [("短期", 6.0, [("MA5", -1), ("MA10", -1), ("MACD", -1), ("RSI", -1), ("KD", 1)]),
+               ("中期", 6.6, [("MA60", -1), ("20日", -1), ("MA20", 1), ("法人", 1)]),
+               ("長期", 7.2, [("60日", -1), ("MA120", 1), ("MA60", 1), ("MA240", 1)])]
+    lane, beam_w, pivot_z, thick = 4.0, 1.1, 1.15, 0.14
+    movers = []
+    for row, (label, length, votes) in enumerate(periods):
+        y, cx = -row * lane, length / 2
+        net = sum(side for _, side in votes)
+        angle = math.radians(net / len(votes) * 16)
+        code, state = (UP, "偏多") if net > 0 else (DOWN, "偏空") if net < 0 else (GOLD, "盤整")
+        half, tip = length / 2, 0.62
+        outline = [(-half, -beam_w / 2), (half - tip, -beam_w / 2), (half - tip, -beam_w / 2 - 0.26), (half, 0),
+                   (half - tip, beam_w / 2 + 0.26), (half - tip, beam_w / 2), (-half, beam_w / 2)]
+        beam = plate(outline, thick, (cx, y, 0.9), code)
+        bears, bulls = [vote for vote in votes if vote[1] < 0], [vote for vote in votes if vote[1] > 0]
+        poles = []
+        for group, start, end in ((bears, 0.25, half - 0.35), (bulls, half + 0.35, length - tip - 0.25)):
+            for index, (name, side) in enumerate(group):
+                x = start + (end - start) * (index + 0.5) / len(group)
+                final = pivot_z + (x - cx) * math.tan(angle) - thick / 2
+                pole = box((x, y, final / 2), (0.34, 0.34, final), UP if side > 0 else DOWN, bevel=0.03, rough=0.45)
+                poles.append((pole, final, len(poles)))
+                text(name, (x, y - beam_w / 2 - 0.55, 0.01), 0.24, UP if side > 0 else DOWN, align="CENTER")
+        text(label, (-0.6, y - beam_w / 2, 1.0), 0.36, DIM, align="RIGHT", flat=False)
+        text(state, (-0.6, y - beam_w / 2, 0.25), 0.6, code, align="RIGHT", flat=False)
+        movers.append((beam, angle, poles, row))
+    depth = lane * (len(periods) - 1)
+    box((2.7, -depth / 2 - 0.3, -0.12), (11.6, depth + 3.6, 0.24), BOARD, bevel=0.1, rough=0.6)
+
+    def animate(t):
+        for beam, angle, poles, row in movers:
+            lifts = []
+            for pole, final, order in poles:
+                lift = part(t, 0.04 + row * 0.08 + order * 0.11, 0.3 + row * 0.08 + order * 0.11)
+                stretch(pole, 0, final, lift)
+                lifts.append(lift)
+            done = sum(lifts) / len(lifts)
+            beam.location.z = 0.9 + (pivot_z - 0.9) * done
+            beam.rotation_euler = (0, -angle * done, 0)
+    return Vector((2.7, -depth / 2 - 0.2, 0.8)), (54, 0, 10), 15.6, animate
+
+
+built = {"tank": tank, "stairs": stairs, "blocks": blocks, "bins": bins, "ramps": ramps, "terraces": terraces,
+         "tank2": tank2, "blocks2": blocks2, "jacks": jacks}[concept]()
+target, angles, ortho = built[:3]
+animate = built[3] if len(built) > 3 else None
 
 # 鏡頭：正投影，從前上方看
 camera_data = bpy.data.cameras.new("camera")
@@ -287,7 +466,7 @@ world.node_tree.nodes["Background"].inputs[0].default_value = rgb(DESK)
 world.node_tree.nodes["Background"].inputs[1].default_value = 1.0
 scene.world = world
 
-scene.render.resolution_x, scene.render.resolution_y = 1000, 1000
+scene.render.resolution_x, scene.render.resolution_y = side_px, side_px
 scene.render.film_transparent = False
 scene.view_settings.view_transform = "Standard"
 for name in ("BLENDER_EEVEE", "BLENDER_EEVEE_NEXT"):
@@ -297,6 +476,20 @@ for name in ("BLENDER_EEVEE", "BLENDER_EEVEE_NEXT"):
     except TypeError:
         continue
 print("engine", scene.render.engine, "font", FONT.name if FONT else None)
-scene.render.filepath = str(out / f"render-{concept}.png")
-bpy.ops.render.render(write_still=True)
-print("saved", scene.render.filepath)
+if animate and len(args) > 3 and args[3] == "final":   # 只算最後一格，調整構圖時用
+    animate(1.0)
+    scene.render.filepath = str(out / f"render-{concept}.png")
+    bpy.ops.render.render(write_still=True)
+    print("saved", scene.render.filepath)
+elif animate:
+    frames = 30
+    (out / f"frames-{concept}").mkdir(exist_ok=True)
+    for index in range(frames):
+        animate(index / (frames - 1))
+        scene.render.filepath = str(out / f"frames-{concept}" / f"f{index:03d}.png")
+        bpy.ops.render.render(write_still=True)
+    print("saved", frames, "frames", out / f"frames-{concept}")
+else:
+    scene.render.filepath = str(out / f"render-{concept}.png")
+    bpy.ops.render.render(write_still=True)
+    print("saved", scene.render.filepath)
