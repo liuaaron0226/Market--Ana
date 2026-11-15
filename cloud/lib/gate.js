@@ -614,7 +614,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
       if (path.startsWith("/api/admin/")) return await handleAdminApi(request, env, path, owner);
       if (path === "/api/me") return json(200, { email, status: "approved", owner: true });
       if (path === "/api/holdings/level" && !policy.features.level_advice) return levelDisabled();
-      if (FORECAST_PATH.test(path)) return await handleForecastApi(request, env, path, { owner: true, policy });
+      if (FORECAST_PATH.test(path)) return await handleForecastApi(request, env, path, { isOwner: true, policy });
       if (isUserData) return await handleUserDataApi(request, env, path, email, deps);
       if (isMarket) return await handleMarketApi(request, env, path, email, deps);
       if (isComparePath(path)) return await handleCompareApi(request, env, path, email, deps);
@@ -637,7 +637,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
     if (path === "/api/me") return json(200, { email, status, owner: false });
     if (path === "/api/features") return json(200, policy);
     if (path === "/api/holdings/level" && !policy.features.level_advice) return levelDisabled();
-    if (FORECAST_PATH.test(path)) return await handleForecastApi(request, env, path, { owner: false, policy });
+    if (FORECAST_PATH.test(path)) return await handleForecastApi(request, env, path, { isOwner: false, policy });
     if (isUserData) return await handleUserDataApi(request, env, path, email, deps);
     if (path === "/api/live" || path === "/api/mis-probe") return fail(403, "即時行情僅限站主使用");
     if (isMarket) return await handleMarketApi(request, env, path, email, deps);

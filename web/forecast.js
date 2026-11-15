@@ -20,10 +20,12 @@
   const HISTORY_DAYS = 60;
   const state = {
     latest: null, horizon: '1', edition: null, view: 'forecast', onChange: null, getDaily: null, root: null,
-    summary: undefined, history: undefined, picked: null,
+    summary: undefined, history: undefined, historyFrom: null, picked: null,
   };
 
-  const css = (name, fallback) => getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+  // 顏色一律取首頁的設計變數；取不到時的備用色只寫這一份（淺色主題的值）。
+  const FALLBACK = { '--up': '#c8262c', '--down': '#0f8058', '--faint': '#6d6874', '--ink': '#1d1b20' };
+  const color = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim() || FALLBACK[name];
   const fmt = (value) => Number(value).toLocaleString('zh-TW', { maximumFractionDigits: 2 });
   const pct = (value) => (value === null || value === undefined ? '—' : `${Math.round(value * 100)}%`);
   const mmdd = (day) => (day ? `${day.slice(5, 7)}/${day.slice(8, 10)}` : '—');
@@ -68,8 +70,8 @@
     const cell = record.cells[state.horizon];
     if (!cell) return [];
     return [
-      { value: cell.strong_line.value, label: `轉強線 ${cell.strong_line.name}`, short: shortName(cell.strong_line), color: css('--up', '#ff6868'), pos: 'above' },
-      { value: cell.weak_line.value, label: `轉弱線 ${cell.weak_line.name}`, short: shortName(cell.weak_line), color: css('--down', '#2fd09a'), pos: 'below' },
+      { value: cell.strong_line.value, label: `轉強線 ${cell.strong_line.name}`, short: shortName(cell.strong_line), color: color('--up'), pos: 'above' },
+      { value: cell.weak_line.value, label: `轉弱線 ${cell.weak_line.name}`, short: shortName(cell.weak_line), color: color('--down'), pos: 'below' },
     ];
   }
 
@@ -123,13 +125,13 @@
     return row;
   }
 
-  function seriesGroups(summary) {
+  // 這一版、同方法與輸入版本的系列；試跑與正式各自一組，正式在前。
+  function seriesByRunMode(summary) {
     const record = current() || Object.values(state.latest.editions).find(Boolean);
-    const groups = summary.groups || [];
-    const same = (g) => record && g.edition === state.edition && g.method_version === record.method_version
-      && g.input_version === record.input_version && g.run_mode === record.run_mode;
-    const chosen = groups.filter(same);
-    return chosen.length ? chosen : groups.filter(g => g.edition === state.edition);
+    const sameSeries = (g) => g.edition === state.edition && (!record
+      || (g.method_version === record.method_version && g.input_version === record.input_version));
+    const groups = (summary.groups || []).filter(sameSeries);
+    return ['official', 'trial'].map(mode => groups.filter(g => g.run_mode === mode)).filter(list => list.length);
   }
 
   function summaryView(panel) {
@@ -138,12 +140,17 @@
       loadSummary();
       return;
     }
-    const summary = state.summary;
-    const groups = summary ? seriesGroups(summary) : [];
-    if (!groups.length) {
+    const series = state.summary ? seriesByRunMode(state.summary) : [];
+    if (!series.length) {
       panel.append(el('p', { class: 'forecast-note' }, '還沒有對帳紀錄'));
       return;
     }
+    for (const groups of series) seriesView(panel, groups, series.length > 1);
+  }
+
+  function seriesView(panel, groups, titled) {
+    const official = groups[0].run_mode === 'official';
+    if (titled) panel.append(el('h4', { class: 'forecast-series' }, official ? '正式' : '試跑'));
     for (const horizon of HORIZONS) {
       const group = groups.find(g => String(g.horizon) === horizon);
       if (!group) continue;
@@ -158,9 +165,8 @@
       }
       panel.append(block);
     }
-    const first = groups[0];
     panel.append(el('p', { class: 'forecast-note' },
-      `${first.run_mode === 'official' ? '正式' : '試跑'} · 漏記 ${first.misses} 次 · 還沒到期 ${groups.reduce((n, g) => n + g.pending, 0)} 格`));
+      `${official ? '正式' : '試跑'} · 漏記 ${groups[0].misses} 次 · 還沒到期 ${groups.reduce((n, g) => n + g.pending, 0)} 格`));
   }
 
   // ---- 回看頁 ----
@@ -177,11 +183,13 @@
     }
     const picked = items.find(item => item.forecast_id === state.picked) || items[0];
     const list = el('div', { class: 'forecast-days', role: 'group', 'aria-label': '基準日' });
-    for (const item of items.slice(0, 12)) {
+    for (const item of items) {
       const outcome = item.reconciliations && item.reconciliations[state.horizon];
       const mark = !outcome ? '' : outcome.actual_zone === item.cells[state.horizon].zone ? ' ✓' : ' ✗';
       list.append(el('button', { type: 'button', 'aria-pressed': String(item === picked), 'data-pick': item.forecast_id }, `${mmdd(item.base_date)}${mark}`));
     }
+    // 一次載六十天；要回到更早的任一份就再往前載一段。
+    list.append(el('button', { type: 'button', class: 'forecast-more', 'data-more': '1' }, '更早'));
     panel.append(list, revisitChart(picked));
     const cell = picked.cells[state.horizon];
     const outcome = picked.reconciliations && picked.reconciliations[state.horizon];
@@ -212,7 +220,7 @@
     const y = (v) => pad.t + (hi - v) / span * (H - pad.t - pad.b);
     const step = (W - pad.l - pad.r) / slots;
     const x = (i) => pad.l + step * (i + 0.5);
-    const up = css('--up', '#c8262c'); const down = css('--down', '#0f8058'); const faint = css('--faint', '#888');
+    const up = color('--up'); const down = color('--down'); const faint = color('--faint');
     rows.forEach((row, i) => {
       const color = row.close >= row.open ? up : down;
       box.append(svg('line', { x1: x(i), x2: x(i), y1: y(row.high), y2: y(row.low), stroke: color, 'stroke-width': 1 }));
@@ -229,7 +237,7 @@
     }
     if (outcome) {
       const ex = expiryIndex >= 0 ? x(expiryIndex - Math.max(0, baseIndex - 15)) : x(slots - 1);
-      box.append(svg('circle', { cx: ex, cy: y(outcome.expiry_close), r: 4, fill: css('--ink', '#222') }));
+      box.append(svg('circle', { cx: ex, cy: y(outcome.expiry_close), r: 4, fill: color('--ink') }));
     }
     const label = svg('text', { x: baseX + 3, y: H - 5, fill: faint, 'font-size': 10 });
     label.textContent = mmdd(item.base_date);
@@ -249,10 +257,19 @@
     render();
   }
 
+  const shiftDays = (day, days) => new Date(Date.parse(`${day}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
+
+  // 第一次載基準日往前六十天；之後每按一次「更早」就把下一段六十天接在前面。
   async function loadHistory() {
-    const to = state.latest.base_date;
-    const from = new Date(Date.parse(`${to}T00:00:00Z`) - HISTORY_DAYS * 86_400_000).toISOString().slice(0, 10);
-    try { state.history = (await getJson(`/api/forecast/history?from=${from}&to=${to}`))?.items || null; } catch { state.history = null; }
+    const to = state.historyFrom ? shiftDays(state.historyFrom, -1) : state.latest.base_date;
+    const from = shiftDays(to, -HISTORY_DAYS);
+    try {
+      const items = (await getJson(`/api/forecast/history?from=${from}&to=${to}`))?.items || [];
+      state.history = [...items, ...(state.history || [])];
+      state.historyFrom = from;
+    } catch {
+      state.history = state.history || null;
+    }
     render();
   }
 
@@ -294,7 +311,8 @@
     panel.addEventListener('click', (event) => {
       const button = event.target.closest('button');
       if (!button) return;
-      const { horizon, edition, view, pick } = button.dataset;
+      const { horizon, edition, view, pick, more } = button.dataset;
+      if (more) { loadHistory(); return; }
       if (view) state.view = view;
       if (pick) state.picked = pick;
       if (horizon) state.horizon = horizon;

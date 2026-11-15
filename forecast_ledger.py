@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import calendar
 import copy
 import hashlib
 import json
@@ -663,14 +664,10 @@ VERDICT_MONTHS = {1: 3, 5: 6, 20: 12}
 
 
 def _add_months(day: date, months: int) -> date:
+    """加幾個月，月底對齊（例如 8/31 加三個月是 11/30）。"""
     month_index = day.month - 1 + months
     year, month = day.year + month_index // 12, month_index % 12 + 1
-    for last in (31, 30, 29, 28):
-        try:
-            return date(year, month, min(day.day, last))
-        except ValueError:
-            continue
-    raise ValueError(day)
+    return date(year, month, min(day.day, calendar.monthrange(year, month)[1]))
 
 
 def _verdict(run_mode: str, horizon: int, official_since: str | None, as_of: str | None) -> str:

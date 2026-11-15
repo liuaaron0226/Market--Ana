@@ -2,6 +2,7 @@
 // 與個人資料、畫線端點測試相同（規格〈Testing Decisions〉接縫 2）。
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { handle } from "../lib/gate.js";
 import { releasePolicy, strategyWorkflowPolicy } from "../lib/release-policy.js";
 import { fakeD1, makeIssuer, claims, fetchJwks, TEAM, MAIN_AUD, APPLY_AUD, OWNER } from "./helpers.js";
@@ -44,8 +45,9 @@ async function seedReconciliation(forecastId, horizon, expiry_date, expiry_close
 }
 
 async function seedSummary(as_of, published_at, summary) {
+  const text = JSON.stringify(summary);
   await env.DB.prepare("INSERT INTO forecast_summaries (summary_sha256, as_of, summary_json, published_at) VALUES (?,?,?,?)")
-    .bind(`${as_of}${published_at}`.replace(/\D/g, "").padEnd(64, "0").slice(0, 64), as_of, JSON.stringify(summary), published_at).run();
+    .bind(createHash("sha256").update(text).digest("hex"), as_of, text, published_at).run();
 }
 
 beforeEach(async () => {
@@ -92,8 +94,10 @@ test("站主讀得到最新基準日的晚間版與晨間版，每一格兩條�
 });
 
 test("站主讀到的最新預測帶著線的名字與數值、落點、盤勢類型、試跑與資料截止日", async () => {
-  await env.DB._raw.exec("DROP TRIGGER forecast_records_no_delete");
-  await env.DB.prepare("DELETE FROM forecast_records WHERE kind = 'miss'").run();
+  // 另起一個只有 09/30 兩版預測的資料庫（帳本只能新增，不拿掉漏記，改成不放）
+  env = { ...env, DB: fakeD1() };
+  await seedRecord(forecast("2026-09-30", "evening"));
+  await seedRecord(forecast("2026-09-30", "morning", { run_mode: "trial", regime: "盤整" }));
   const latest = await body("/api/forecast/latest");
   assert.equal(latest.base_date, "2026-09-30");
   const evening = latest.editions.evening;

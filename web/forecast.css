@@ -59,6 +59,9 @@
 .forecast-bar.is-rule .forecast-bar-fill { background: var(--gold); }
 .forecast-bar-value { text-align: right; color: var(--ink); }
 .forecast-note { margin: 8px 0 0; color: var(--faint); font-size: 12px; }
+.forecast-series { margin: 14px 0 0; padding-top: 10px; border-top: 1px solid var(--line-strong); font-size: 13px; }
+.forecast-series:first-of-type { margin-top: 4px; padding-top: 0; border-top: 0; }
+.forecast-days .forecast-more { color: var(--faint); border-style: dashed; }
 /* 回看：基準日一排小鍵，選一天看當時的兩條線與之後的走勢。 */
 .forecast-days { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
 .forecast-days button {

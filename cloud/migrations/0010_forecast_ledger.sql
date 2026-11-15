@@ -36,6 +36,15 @@ CREATE TABLE forecast_summaries (
 );
 CREATE INDEX forecast_summaries_as_of ON forecast_summaries (as_of, published_at);
 
+-- INSERT OR REPLACE 會先刪掉舊列，UPDATE／DELETE 觸發器擋不到；同一筆換了雜湊（內容不同）一律拒絕。
+-- 同內容重發仍由 ON CONFLICT DO NOTHING 吸收，不多一筆、不改內容。
+CREATE TRIGGER forecast_records_no_replace BEFORE INSERT ON forecast_records
+WHEN EXISTS (SELECT 1 FROM forecast_records WHERE forecast_id = NEW.forecast_id AND record_sha256 <> NEW.record_sha256)
+BEGIN SELECT RAISE(ABORT, 'forecast ledger is append-only'); END;
+CREATE TRIGGER forecast_reconciliations_no_replace BEFORE INSERT ON forecast_reconciliations
+WHEN EXISTS (SELECT 1 FROM forecast_reconciliations
+             WHERE forecast_id = NEW.forecast_id AND horizon = NEW.horizon AND record_sha256 <> NEW.record_sha256)
+BEGIN SELECT RAISE(ABORT, 'forecast ledger is append-only'); END;
 CREATE TRIGGER forecast_records_no_update BEFORE UPDATE ON forecast_records
 BEGIN SELECT RAISE(ABORT, 'forecast ledger is append-only'); END;
 CREATE TRIGGER forecast_records_no_delete BEFORE DELETE ON forecast_records

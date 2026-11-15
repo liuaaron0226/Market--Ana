@@ -64,8 +64,8 @@ async function history(db, url) {
   return json(200, { available: true, from, to, items });
 }
 
-export async function handleForecastApi(request, env, path, { owner, policy }) {
-  if (!owner || !policy.features.forecast_ledger_v1) return json(200, { available: false });
+export async function handleForecastApi(request, env, path, { isOwner, policy }) {
+  if (!isOwner || !policy.features.forecast_ledger_v1) return json(200, { available: false });
   if (request.method !== "GET") return json(405, { error: "方法不允許" });
   const [, kind] = FORECAST_PATH.exec(path);
   if (kind === "latest") return json(200, await latest(env.DB));

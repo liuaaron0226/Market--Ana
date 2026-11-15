@@ -771,6 +771,43 @@ class PublishToDatabaseTests(LedgerTestCase):
                     db.execute(statement)
         self.assertEqual(db.execute("SELECT COUNT(*) FROM forecast_records").fetchone(), (2,))
 
+    def test_database_refuses_replacing_a_row_with_different_content(self):
+        db = self.database()
+        db.executescript(self.published())
+        forecast_id, sha = db.execute("SELECT forecast_id, record_sha256 FROM forecast_records WHERE kind = 'forecast'").fetchone()
+        replace = ("INSERT OR REPLACE INTO forecast_records (forecast_id, base_date, edition, method_version, input_version, "
+                   "run_mode, kind, record_json, record_sha256, published_at) VALUES (?, ?, 'evening', '0.2', 'v', 'trial', "
+                   "'forecast', '{}', ?, 'now')")
+        with self.assertRaises(sqlite3.DatabaseError):
+            db.execute(replace, (forecast_id, BASE_A, "0" * 64))
+        with self.assertRaises(sqlite3.DatabaseError):
+            db.execute("INSERT OR REPLACE INTO forecast_reconciliations (forecast_id, horizon, expiry_date, actual_zone, "
+                       "record_json, record_sha256, published_at) VALUES (?, 1, '2026-10-01', 'below', '{}', ?, 'now')",
+                       (forecast_id, "0" * 64))
+        self.assertEqual(db.execute("SELECT record_sha256 FROM forecast_records WHERE forecast_id = ?", (forecast_id,)).fetchone(), (sha,))
+        self.assertEqual(db.execute("SELECT actual_zone FROM forecast_reconciliations WHERE horizon = 1").fetchone(), ("above",))
+
+    def test_publishing_a_different_record_under_the_same_id_fails_loudly(self):
+        # 兩本帳各有一筆同識別（同基準日、版本、方法、輸入版本）但內容不同的預測
+        self.write()
+        other = self.tmp / "other-ledger"
+        self.write(responses=[envelope(answer_a(regime="盤整"))], root=other,
+                   model=fake_model(self.tmp, [envelope(answer_a(regime="盤整"))]))
+        db = self.database()
+        db.executescript(fl.d1_sql(self.root, series_a(), published_at="2026-09-30T18:00:00+08:00"))
+        with self.assertRaises(sqlite3.DatabaseError):
+            db.executescript(fl.d1_sql(other, series_a(), published_at="2026-09-30T19:00:00+08:00"))
+        record = json.loads(db.execute("SELECT record_json FROM forecast_records").fetchone()[0])
+        self.assertEqual(record["regime"], "多頭中的回檔")
+
+    def test_text_with_quotes_survives_publishing(self):
+        quoted = answer_a(**{"1": cell("ma5", "prev_low", "above", reason="站回'均線'之上")})
+        self.write(responses=[envelope(quoted)])
+        db = self.database()
+        db.executescript(fl.d1_sql(self.root, series_a(), published_at="2026-09-30T18:00:00+08:00"))
+        record = json.loads(db.execute("SELECT record_json FROM forecast_records").fetchone()[0])
+        self.assertEqual(record["cells"]["1"]["reason"], "站回'均線'之上")
+
 
 if __name__ == "__main__":
     unittest.main()
