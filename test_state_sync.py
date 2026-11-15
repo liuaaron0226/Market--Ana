@@ -423,6 +423,24 @@ class StateSyncTest(unittest.TestCase):
         kept = sorted(p.name for p in (self.restore / "data/market-snapshots/stock-detail").rglob("*.json"))
         self.assertEqual(kept, ["margin-20261105.json", "margin-20261106.json", "t86-20261105.json", "t86-20261106.json"])
 
+    def test_long_term_margin_originals_travel_with_the_working_set_untrimmed(self) -> None:
+        # 融資維持率（估）每天要從起點把全部個股融資原件重播一次；雲端每次都是新機器，
+        # 工作集少了舊的那幾天就算不出來。個股頁籌碼用的近期明細照舊只留 60 個交易日。
+        by_path = {item.path: item for item in ss.WORKING_SET}
+        self.assertIn("data/margin-history", by_path)
+        self.assertEqual(by_path["data/margin-history"].recent_files, 0)
+        self.assertEqual(by_path["data/market-snapshots/stock-detail"].recent_files, 60)
+        history = self.local / "data/margin-history/raw"
+        history.mkdir(parents=True)
+        days = [f"2026{month:02d}{day:02d}" for month in (8, 9, 10) for day in range(1, 29)]
+        for day in days:
+            (history / f"margin-{day}.json").write_text("{}", encoding="utf-8")
+        store = ss.DirectoryStore(self.bucket)
+        ss.upload(self.local, store, [by_path["data/margin-history"]], data_date="2026-11-06")
+        ss.restore(self.restore, store)
+        kept = sorted(p.name for p in (self.restore / "data/margin-history/raw").glob("*.json"))
+        self.assertEqual(len(kept), len(days))      # 84 個交易日，超過近期明細的 60，一份都沒少
+
     def test_restored_state_can_append_next_day(self) -> None:
         store = ss.DirectoryStore(self.bucket)
         ss.upload(self.local, store, self.items, data_date="2026-11-06")

@@ -379,6 +379,48 @@ class ChipDetailTest(unittest.TestCase):
                                               datasets=("margin", "twt93u"))
             self.assertEqual((again["margin"]["status"], again["twt93u"]["status"]), ("existing", "existing"))
 
+    def _complete_margin(self, day: str) -> dict:
+        return {"stat": "OK", "date": day, "tables": [
+            {"fields": ["項目", "買進", "賣出", "現金(券)償還", "前日餘額", "今日餘額"],
+             "data": [["融資金額(仟元)", "1", "2", "3", "4", "539900000"]]},
+            {"fields": ["代號", "名稱", "買進", "賣出", "現金償還", "前日餘額", "今日餘額"],
+             "data": [["2330", "台積電", "100", "80", "5", "35000", "35015"]]}]}
+
+    def test_individual_margin_original_is_also_kept_in_the_long_term_store(self) -> None:
+        # 近期明細只留最近一段；融資維持率（估）要連續的每日原件，所以每天抓到的那一份另外長期留一份。
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            empty = {"stat": "很抱歉，沒有符合條件的資料!", "total": 0}
+            rec = Recorder({
+                ("MI_MARGN", "20261106"): sh.Response(200, "application/json",
+                                                      json.dumps(self._complete_margin("20261106")).encode(), "u"),
+                ("MI_MARGN", "20261109"): sh.Response(200, "application/json", json.dumps(empty).encode(), "u"),
+            })
+            done = di.listed_chip_detail_day(root, "2026-11-06", get=rec.two_arg, sleep=lambda s: None,
+                                             datasets=("margin",))
+            recent = root / "data/market-snapshots/stock-detail/margin/margin-20261106.json"
+            kept = root / "data/margin-history/raw/margin-20261106.json"
+            self.assertEqual(kept.read_bytes(), recent.read_bytes())
+            self.assertEqual((done["margin_history"]["status"], done["margin_history"]["stored"]), ("ok", ["20261106"]))
+            # 官方還沒公布的那一天：近期明細沒有，長期保存區也不會憑空多一份。
+            later = di.listed_chip_detail_day(root, "2026-11-09", get=rec.two_arg, sleep=lambda s: None,
+                                              datasets=("margin",))
+            self.assertEqual(sorted(p.name for p in kept.parent.glob("*.json")), ["margin-20261106.json"])
+            self.assertEqual(later["margin_history"]["stored"], [])
+
+    def test_long_term_store_failure_does_not_hide_what_was_fetched(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "data").mkdir()
+            (root / "data/margin-history").write_text("擋路的檔案", encoding="utf-8")   # 長期保存區建不起來
+            rec = Recorder({("MI_MARGN", "20261106"): sh.Response(
+                200, "application/json", json.dumps(self._complete_margin("20261106")).encode(), "u")})
+            done = di.listed_chip_detail_day(root, "2026-11-06", get=rec.two_arg, sleep=lambda s: None,
+                                             datasets=("margin",))
+            self.assertEqual(done["margin"]["status"], "saved")
+            self.assertEqual(done["margin_history"]["status"], "error")
+            self.assertTrue(done["margin_history"]["reason"])
+
 
 class _FakeRequestsResponse:
     def __init__(self, content: bytes, content_type: str) -> None:

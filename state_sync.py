@@ -113,6 +113,9 @@ WORKING_SET: tuple[Item, ...] = (
     Item("data/listed-catalog/raw"),
     Item("data/otc-catalog/raw"),
     Item("data/market-snapshots/stock-detail", recent_files=60),  # 上市融資融券與法人明細（個股頁籌碼）
+    # 個股融資原件的長期保存區：融資維持率（估）每天從起點重播，全部保留、不得裁（每日約 150 KB）。
+    # 上面 stock-detail 裡的近期明細另有用途（首頁籌碼明細會把那裡的每一天都列出來），所以不放在一起。
+    Item("data/margin-history"),
     Item("data/fundamentals/twt93u", recent_files=20),
     Item("data/corporate-actions/events.json"),
     Item("data/corporate-actions/raw/TPEx-exDailyQ"),  # 櫃買除權息原件＋SHA＋涵蓋區間（2016 起全留）
