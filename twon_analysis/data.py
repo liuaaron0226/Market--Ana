@@ -57,6 +57,8 @@ def load_bars(code: str, as_of: str, db_path: Path = DEFAULT_DB, limit: int = 30
         return [], {}
     last = rows[-1]
     reference = last[6] - last[8] if last[8] is not None else None
-    chg = 0.0 if last[7] == 'X' or not reference else round(last[8] / reference * 100, 4)
+    comparable = last[7] != 'X' and bool(reference)
+    chg = round(last[8] / reference * 100, 4) if comparable else 0.0
+    # chg_known：不比價（X）或沒有參考價時 chg 只是 0.0 佔位，事實區塊靠它決定要不要寫漲跌（不拿假的零冒充平盤）。
     return bars, {'name': last[1], 'kind': last[2], 'chg': chg, 'change_sign': last[7], 'turnover': last[10], 'date': last[0],
-                  'market': market}
+                  'market': market, 'chg_known': comparable}

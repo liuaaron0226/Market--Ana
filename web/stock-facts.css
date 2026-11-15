@@ -1,0 +1,22 @@
+/* 個股頁事實區塊（2026-11-15 規格）：色票、字型、細線沿用網站現有的；不加陰影；紅綠只在細記號上。
+   立體重設計合併時，只要換這個檔與掛載位置。 */
+.bd .sf { margin: -12px 0 28px; }
+.bd .sf[hidden] { display: none; }
+.bd .sf-today { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 2px solid var(--ink); }
+.bd .sf-today[data-count="2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.bd .sf-today[data-count="1"] { grid-template-columns: minmax(0, 1fr); }
+.bd .sf-cell { padding: 14px 0 14px 18px; border-left: 1px solid var(--hair); min-width: 0; }
+.bd .sf-cell:first-child { padding-left: 0; border-left: 0; }
+.bd .sf-label { display: block; color: var(--dim); font: 13px var(--sans); }
+.bd .sf-value { display: flex; align-items: center; margin-top: 6px; color: var(--ink); font: 500 17px/1.35 var(--sans); font-variant-numeric: tabular-nums; }
+.bd .sf-tick { flex: none; width: 3px; height: 13px; margin-right: 8px; background: var(--faint); }
+.bd .sf-tick.up { background: var(--up); }
+.bd .sf-tick.down { background: var(--down); }
+
+@media (max-width: 860px) {
+  .bd .sf { margin: -4px 0 22px; }
+  .bd .sf-cell { padding: 12px 0 12px 10px; }
+  .bd .sf-label { font-size: 12px; }
+  .bd .sf-value { font-size: 14px; }
+  .bd .sf-tick { height: 11px; margin-right: 6px; }
+}

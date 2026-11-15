@@ -32,10 +32,24 @@ function individuallyEnabled(raw) {
 // （預測帳本也只給站主，但它的旗標上線時就對所有人可見、頁面也依賴它，這裡不改它的行為。）
 const HIDDEN_FROM_OTHERS = ["watchlist_watch_v1"];
 
-export function policyForViewer(policy, isOwner) {
+// 個股頁事實區塊（2026-11-15 規格）：三種狀態，只認一字不差的 "owner"（只開站主）與 "all"（開給全部獲准使用者），
+// 其他寫法一律是關。和策略總開關、預測帳本、自選股關注都不綁在一起。
+function stockFactsMode(env) {
+  const raw = env?.MARKET_ANA_STOCK_FACTS;
+  return raw === "owner" || raw === "all" ? raw : "off";
+}
+
+export function stockFactsVisible(env, isOwner) {
+  const mode = stockFactsMode(env);
+  return mode === "all" || (mode === "owner" && Boolean(isOwner));
+}
+
+// env 沒給時，事實區塊對其他人一律是關（寧可少給，不可多給）。
+export function policyForViewer(policy, isOwner, env = {}) {
   if (isOwner) return policy;
   const features = { ...policy.features };
   for (const name of HIDDEN_FROM_OTHERS) features[name] = false;
+  features.stock_facts_v1 = stockFactsVisible(env, false);
   return { ...policy, features };
 }
 
@@ -65,6 +79,8 @@ export function releasePolicy(env = {}) {
       forecast_ledger_v1: env?.MARKET_ANA_FORECAST_LEDGER === "owner",
       // 自選股關注（2026-11-15 規格）：同樣是獨立的開關、只認一字不差的 "owner"，不和預測帳本綁在一起。
       watchlist_watch_v1: env?.MARKET_ANA_WATCHLIST_WATCH === "owner",
+      // 個股頁事實區塊：這裡是站主看到的值；其他人看到的值由 policyForViewer 依狀態決定。
+      stock_facts_v1: stockFactsMode(env) !== "off",
     },
   };
 }

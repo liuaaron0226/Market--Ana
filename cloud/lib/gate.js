@@ -8,7 +8,7 @@ import { handleUserDrawings } from "./user-drawings.js";
 import { defaultLiveQuoteService } from "./live-quotes.js";
 import { fetchTickPage } from "./live-ticks.js";
 import { defaultIndexLiveService } from "./index-live.js";
-import { policyForViewer, releasePolicy } from "./release-policy.js";
+import { policyForViewer, releasePolicy, stockFactsVisible } from "./release-policy.js";
 import { isOwnerEmail } from "./owner.js";
 import { FORECAST_PATH, handleForecastApi } from "./forecast.js";
 import { WATCH_PATH, handleWatchApi } from "./watch.js";
@@ -206,7 +206,7 @@ async function handleStockSearch(request, env, email, deps) {
   return json(200, { source_date: active.source_date, items, next_cursor: hasMore ? String(offset + limit) : null });
 }
 
-async function handleStockApi(request, env, path, email, deps) {
+async function handleStockApi(request, env, path, email, deps, options = {}) {
   if (request.method !== "GET") throw new HttpError(405, "方法不允許");
   if (path === "/api/stocks/search") return handleStockSearch(request, env, email, deps);
   const pack = deps.stockPack;
@@ -260,10 +260,14 @@ async function handleStockApi(request, env, path, email, deps) {
   }
   // 舊資料包與 D1 都保存 build 時序列化好的結果；完整模式原樣回傳。
   // 核心 release 預設只移除未驗 strategy_v1 操作建議，支撐壓力等觀察資料仍保留。
+  // 個股頁事實區塊依開關決定給誰（只開站主時，其他人拿到的內容和開關關著時一樣）。
   let body = typeof result === "string" ? result : JSON.stringify(result);
-  if (!releasePolicy(env).features.strategy_v1) {
+  const dropStrategy = !releasePolicy(env).features.strategy_v1;
+  const dropFacts = !stockFactsVisible(env, options.isOwner);
+  if (dropStrategy || dropFacts) {
     const projected = typeof result === "string" ? JSON.parse(result) : { ...result };
-    delete projected.strategy;
+    if (dropStrategy) delete projected.strategy;
+    if (dropFacts) delete projected.facts;
     body = JSON.stringify(projected);
   }
   return new Response(body, {
@@ -549,7 +553,7 @@ function marketOverviewForRelease(overview, policy) {
   return { ...overview, analysis, dashboard, features: policy.features };
 }
 
-async function handleMarketApi(request, env, path, email, deps) {
+async function handleMarketApi(request, env, path, email, deps, options = {}) {
   if (request.method !== "GET") throw new HttpError(405, "方法不允許");
   const pack = deps.marketPack;
   if (!pack) throw new HttpError(503, "資料尚未就緒");
@@ -565,7 +569,7 @@ async function handleMarketApi(request, env, path, email, deps) {
     throw new HttpError(503, "暫時無法處理，請稍後再試");
   }
   const headers = { "cache-control": "private, no-store", "x-data-version": pack.version };
-  if (isOverview) return json(200, marketOverviewForRelease(pack.overview, releasePolicy(env)), headers);
+  if (isOverview) return json(200, marketOverviewForRelease(pack.overview, policyForViewer(releasePolicy(env), options.isOwner, env)), headers);
   const q = new URL(request.url).searchParams;
   const kind = q.get("kind") || "";
   const date = q.get("date") || "";
@@ -610,7 +614,8 @@ export async function handle(request, env, next, deps = defaultDeps) {
     const isScreens = SCREEN_PATHS.has(path);
     const isUserData = USER_DATA_PATH.test(path) || DRAWINGS_PATH.test(path) || WATCH_PATH.test(path);
     const policy = releasePolicy(env);
-    const levelDisabled = () => json(403, { error: "feature-disabled", message: "未驗證的水位建議尚未啟用", features: policy.features });
+    // 只給站主的功能，其他人拿到的功能清單裡一律是關的（和 /api/features 同一個規則）。
+    const levelDisabled = () => json(403, { error: "feature-disabled", message: "未驗證的水位建議尚未啟用", features: policyForViewer(policy, isOwner, env).features });
     if (isOwner) {
       if (path === "/api/features") return json(200, policy);
       if (path === "/api/live") return await handleIndexLiveApi(request, env, email, deps);
@@ -619,12 +624,12 @@ export async function handle(request, env, next, deps = defaultDeps) {
       if (path === "/api/holdings/level" && !policy.features.level_advice) return levelDisabled();
       if (FORECAST_PATH.test(path)) return await handleForecastApi(request, env, path, { isOwner: true, policy });
       if (isUserData) return await handleUserDataApi(request, env, path, email, deps, { isOwner: true, policy });
-      if (isMarket) return await handleMarketApi(request, env, path, email, deps);
+      if (isMarket) return await handleMarketApi(request, env, path, email, deps, { isOwner: true });
       if (isComparePath(path)) return await handleCompareApi(request, env, path, email, deps);
       if (LIVE_STOCK_PATH.test(path)) return await handleStockLiveApi(request, env, path, email, deps);
       if (TICKS_STOCK_PATH.test(path)) return await handleStockTicksApi(request, env, path, email, deps);
       if (HISTORY_STOCK_PATH.test(path)) return await handleStockHistoryApi(request, env, path, email, deps);
-      if (isStock) return await handleStockApi(request, env, path, email, deps);
+      if (isStock) return await handleStockApi(request, env, path, email, deps, { isOwner: true });
       if (isScreens) return await handleScreensApi(request, env, path, email, deps);
       if (path === DATA_STATUS_PATH) return handleDataStatusApi(request, deps);
       if (RETIRED_DATA.has(path)) return fail(404, "找不到");
@@ -638,16 +643,16 @@ export async function handle(request, env, next, deps = defaultDeps) {
     }
     if (isAdmin) return fail(403, "沒有管理權限");
     if (path === "/api/me") return json(200, { email, status, owner: false });
-    if (path === "/api/features") return json(200, policyForViewer(policy, false));
+    if (path === "/api/features") return json(200, policyForViewer(policy, false, env));
     if (path === "/api/holdings/level" && !policy.features.level_advice) return levelDisabled();
     if (FORECAST_PATH.test(path)) return await handleForecastApi(request, env, path, { isOwner: false, policy });
     if (isUserData) return await handleUserDataApi(request, env, path, email, deps, { isOwner: false, policy });
     if (path === "/api/live" || path === "/api/mis-probe") return fail(403, "即時行情僅限站主使用");
-    if (isMarket) return await handleMarketApi(request, env, path, email, deps);
+    if (isMarket) return await handleMarketApi(request, env, path, email, deps, { isOwner: false });
     if (isComparePath(path)) return await handleCompareApi(request, env, path, email, deps);
     if (LIVE_STOCK_PATH.test(path) || TICKS_STOCK_PATH.test(path)) return fail(403, "即時行情僅限站主使用");
     if (HISTORY_STOCK_PATH.test(path)) return await handleStockHistoryApi(request, env, path, email, deps);
-    if (isStock) return await handleStockApi(request, env, path, email, deps);
+    if (isStock) return await handleStockApi(request, env, path, email, deps, { isOwner: false });
     if (isScreens) return await handleScreensApi(request, env, path, email, deps);
     if (path === DATA_STATUS_PATH) return handleDataStatusApi(request, deps);
     if (RETIRED_DATA.has(path)) return fail(404, "找不到");

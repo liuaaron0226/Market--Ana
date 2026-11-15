@@ -14,7 +14,7 @@ from twon_analysis.indicators import Bar
 
 TOP_KEYS = {'schema', 'analysis_version', 'code', 'name', 'kind', 'market', 'as_of', 'requested_as_of', 'quote', 'qa',
             'indicators', 'levels', 'defense', 'trend_classification', 'conditions', 'trading_rules', 'reference',
-            'undisclosed', 'provenance', 'bars', 'chart', 'labels', 'strategy', 'institutional', 'big_holders'}
+            'undisclosed', 'provenance', 'bars', 'chart', 'labels', 'strategy', 'institutional', 'big_holders', 'facts'}
 BLOCKING_KEYS = {'schema', 'analysis_version', 'code', 'as_of', 'requested_as_of', 'qa', 'trading_rules', 'undisclosed',
                  'provenance', 'labels'}
 INDICATOR_KEYS = {'ma5', 'ma10', 'ma20', 'ma60', 'ma120', 'ma240', 'rsi14', 'atr14', 'atr_pct', 'relative_volume',
@@ -355,6 +355,84 @@ class AdjustedPriceTests(unittest.TestCase):
         with unittest.mock.patch('twon_analysis.analyze_v2.default_capital_events', return_value={'9999': [self.split]}):
             result = self.analyze(None)
         self.assertEqual(result['bars'][0]['close'], 100.0)
+
+
+class StockFactsTodayTests(unittest.TestCase):
+    """個股頁事實區塊（本人 2026-11-15 共識，規格 .scratch/stock-facts/spec.md）：當日三格只報數字，缺什麼就少什麼。"""
+
+    def setUp(self):
+        from datetime import date, timedelta
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.db = Path(self.tmp.name) / 'h.sqlite'
+        self.days = [(date(2026, 1, 5) + timedelta(days=i)).isoformat() for i in range(60)]
+
+    def analyze(self, *, change, close=100.0, last_volume=1000, volume=1000, foreign=None, foreign_day=None, change_sign='+',
+                capital_actions=None, rows=None):
+        connection = sqlite3.connect(self.db)
+        connection.execute("""CREATE TABLE daily (date TEXT, code TEXT, name TEXT, kind TEXT, open REAL, high REAL, low REAL,
+                              close REAL, change_sign TEXT, change REAL, volume_shares INTEGER, trades INTEGER, turnover INTEGER,
+                              suspended INTEGER)""")
+        for i, day in enumerate(self.days):
+            last = i == len(self.days) - 1
+            price = close if last else 100.0
+            connection.execute("INSERT INTO daily VALUES (?, '9999', '測試', 'common', ?, ?, ?, ?, ?, ?, ?, 1, 1, 0)",
+                               (day, price, price + 1, price - 1, price, change_sign if last else '+', change if last else 0.5,
+                                last_volume if last else volume))
+        connection.commit()
+        connection.close()
+        rows = list(rows or [])
+        if foreign is not None:
+            rows.append({'date': foreign_day or self.days[-1], 'foreign': foreign, 'trust': 0, 'dealer': 0, 'total': foreign})
+        from twon_analysis.analyze_v2 import analyze_v2
+        with unittest.mock.patch('twon_analysis.analyze_v2.institutional_series', return_value=rows):
+            return analyze_v2('9999', self.days[-1], db_path=self.db, otc_db_path=None, capital_actions=capital_actions or {})
+
+    def test_red_close_volume_ratio_and_foreign_net_sell(self):
+        # 收盤 100.5、漲 0.5 → 0.50%；均量＝(19×1000＋2300)/20＝1065 → 2300/1065＝2.16 倍；外資 −8,758,880 股＝賣超 8,759 張。
+        facts = self.analyze(change=0.5, close=100.5, last_volume=2300, foreign=-8_758_880)['facts']
+        self.assertEqual(facts['data_date'], self.days[-1])
+        self.assertEqual(facts['today'], [
+            {'key': 'close', 'label': '收盤', 'tone': 'up', 'text': '收紅 +0.50%'},
+            {'key': 'volume', 'label': '成交量', 'tone': None, 'text': '均量的 2.16 倍'},
+            {'key': 'foreign', 'label': '外資', 'tone': 'down', 'text': '賣超 8,759 張'},
+        ])
+        self.assertEqual(facts['blocks'], [])
+
+    def test_black_close_and_foreign_net_buy_rounds_half_up(self):
+        # 收盤 98、跌 2 → 前一日 100 → −2.00%；外資 2,500 股＝2.5 張 → 3 張（四捨五入，不是銀行家捨入）。
+        facts = self.analyze(change=-2.0, close=98.0, foreign=2_500)['facts']
+        self.assertEqual(facts['today'][0], {'key': 'close', 'label': '收盤', 'tone': 'down', 'text': '收黑 -2.00%'})
+        self.assertEqual(facts['today'][2], {'key': 'foreign', 'label': '外資', 'tone': 'up', 'text': '買超 3 張'})
+
+    def test_flat_close_and_zero_foreign(self):
+        facts = self.analyze(change=0.0, foreign=0)['facts']
+        self.assertEqual(facts['today'][0], {'key': 'close', 'label': '收盤', 'tone': None, 'text': '平盤 0.00%'})
+        self.assertEqual(facts['today'][2], {'key': 'foreign', 'label': '外資', 'tone': None, 'text': '買賣超 0 張'})
+
+    def test_missing_volume_ratio_or_same_day_foreign_drops_that_cell(self):
+        # 近 20 日量全是 0 → 量比算不出來；法人最新一筆不是資料日 → 外資那格不給（不拿前一天冒充）。
+        facts = self.analyze(change=0.5, close=100.5, last_volume=0, volume=0, foreign=5_000, foreign_day=self.days[-2])['facts']
+        self.assertEqual([cell['key'] for cell in facts['today']], ['close'])
+
+    def test_day_without_a_price_comparison_has_no_close_cell_instead_of_a_fake_flat(self):
+        # 官方標 X（不比價，例如除權息或新上市）時沒有可信的漲跌幅；不能寫成「平盤 0.00%」。
+        facts = self.analyze(change=0.0, change_sign='X', foreign=1_000)['facts']
+        self.assertEqual([cell['key'] for cell in facts['today']], ['volume', 'foreign'])
+
+    def test_volume_multiple_drops_trailing_zeros(self):
+        # 均量＝(19×1000＋1106)/20＝1005.3 → 1005；1106/1005＝1.1005 → 1.10 → 寫「1.1」。
+        facts = self.analyze(change=0.5, close=100.5, last_volume=1106)['facts']
+        self.assertEqual(facts['today'][1]['text'], '均量的 1.1 倍')
+
+    def test_foreign_lots_on_the_data_day_are_unaffected_by_an_earlier_split(self):
+        # 第 31 天一拆四：之前的法人股數乘 4 換算，資料日當天的股數不變 → 外資 3,000 股＝買超 3 張。
+        split = {'date': self.days[30], 'code': '9999', 'type': '變更面額', 'close_before': 100.0,
+                 'reference': 25.0, 'source': 'TWTB8U-202602.json.gz'}
+        earlier = [{'date': self.days[29], 'foreign': 1_000, 'trust': 0, 'dealer': 0, 'total': 1_000}]
+        result = self.analyze(change=0.5, close=100.5, foreign=3_000, capital_actions={'9999': [split]}, rows=earlier)
+        self.assertEqual(result['institutional'][0]['foreign'], 4_000)
+        self.assertEqual(result['facts']['today'][2]['text'], '買超 3 張')
 
 
 class BlockingTests(unittest.TestCase):

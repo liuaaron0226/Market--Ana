@@ -321,6 +321,7 @@
       delete $('status').dataset.stockState;
     }
     $('content').hidden = false;
+    window.StockFacts?.render(r);  // 事實區塊（獨立檔）：沒有 facts 就不出現
     showBigHolders(r);
     drawChart(r);
     if (initial) syncComparison(r);
