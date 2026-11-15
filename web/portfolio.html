@@ -6,8 +6,8 @@
   <meta name="color-scheme" content="light dark">
   <title>自選股與庫存｜台股決策鏡</title>
   <link rel="stylesheet" href="minimal.css?v=20261109-ux1">
-  <link rel="stylesheet" href="bold.css?v=20261116-desk36">
-  <link rel="stylesheet" href="portfolio.css?v=20261116-desk36">
+  <link rel="stylesheet" href="bold.css?v=20261116-desk37">
+  <link rel="stylesheet" href="portfolio.css?v=20261116-desk37">
 </head>
 <body class="bd pf">
   <a class="skip-link" href="#portfolioMain">跳到自選股與庫存</a>
@@ -60,7 +60,7 @@
            新增收進「＋」鍵，每一檔的數字與設定收進點開的那一列。資料整理在 portfolio-list.js、holdings-rows.js，畫面在 portfolio.js。 -->
       <section class="pf-summary" aria-labelledby="listTitle">
         <h2 id="listTitle" class="sr-only">自選與庫存</h2>
-        <p class="hv-total"><strong class="num" id="totalMarketValue" aria-label="目前市值">—</strong><span>成本 <b class="num" id="totalCost">—</b></span><span><span id="totalWord">損益</span> <b class="num" id="totalPnl">—</b>（<b class="num" id="totalReturn">—</b>）</span></p>
+        <p class="hv-total" id="totalLine"><strong class="num" id="totalMarketValue" aria-label="目前市值">—</strong><span>成本 <b class="num" id="totalCost">—</b></span><span><span id="totalWord">損益</span> <b class="num" id="totalPnl">—</b>（<b class="num" id="totalReturn">—</b>）</span></p>
         <div class="pf-tools">
           <div class="hm-cats" id="listFilter" role="group" aria-label="要看哪些">
             <button type="button" data-filter="all" aria-pressed="true">全部<small class="num" id="countAll">0</small></button>
@@ -74,7 +74,7 @@
         <div class="pf-add-panel" id="addPanel">
           <div class="pf-add-clip" id="addClip" inert>
             <div class="pf-add-in">
-              <div class="key-strip pf-kind" id="addKind" role="group" aria-label="要新增的是">
+              <div class="key-strip" id="addKind" role="group" aria-label="要新增的是">
                 <button type="button" class="cell" data-kind="watch" aria-pressed="true"><span class="cell-face"></span><span class="cell-name">加入自選</span></button>
                 <button type="button" class="cell" data-kind="holding" aria-pressed="false"><span class="cell-face"></span><span class="cell-name">新增庫存</span></button>
               </div>
@@ -96,13 +96,13 @@
           </div>
         </div>
         <p class="pf-form-status pf-list-status" id="listStatus" role="status"></p>
-        <ol class="hv-rows" id="holdingRows" aria-live="polite"></ol>
+        <ol class="hv-rows" id="holdingRows"></ol>
       </section>
     </main>
   </div>
-  <script src="holdings-rows.js?v=20261116-desk36" defer></script>
-  <script src="portfolio-list.js?v=20261116-desk36" defer></script>
-  <script src="portfolio.js?v=20261116-desk36" defer></script>
-  <script src="chart-menus.js?v=20261116-desk36" defer></script>
+  <script src="holdings-rows.js?v=20261116-desk37" defer></script>
+  <script src="portfolio-list.js?v=20261116-desk37" defer></script>
+  <script src="portfolio.js?v=20261116-desk37" defer></script>
+  <script src="chart-menus.js?v=20261116-desk37" defer></script>
 </body>
 </html>

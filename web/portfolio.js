@@ -114,6 +114,7 @@
 
   // 關注幾檔／上限：寫在每一顆關注開關旁邊，開關一動全部一起改
   function renderWatchCount() {
+    if (!state.watch) return;
     document.querySelectorAll('.pf-watch-count').forEach(node => { node.textContent = `${state.watch.count}／${state.watch.limit}`; });
   }
 
@@ -337,6 +338,7 @@
   const setListStatus = (message, kind) => setStatus($('listStatus'), message, kind);
 
   function renderTotals(summary) {
+    $('totalLine').hidden = !summary.count;
     $('totalMarketValue').textContent = summary.complete ? money.format(summary.value) : '—';
     $('totalCost').textContent = summary.count ? money.format(summary.cost) : '—';
     $('totalWord').textContent = GAIN_WORDS[summary.state];
@@ -351,10 +353,26 @@
     (tops[Math.min(at, tops.length - 1)] || $('addToggle')).focus();
   }
   const visibleIndex = row => [...$('holdingRows').querySelectorAll('.hv-row:not([hidden])')].indexOf(row);
+  const rowOf = code => $('holdingRows').querySelector(`.hv-row[data-code="${CSS.escape(code)}"]:not([hidden])`);
+  // 刪除庫存、移出自選：確認 → 送出 → 重讀。那一列如果還在（另一邊還有它）焦點回到那一列，不在了就放到補上來的那一列
+  function removalButton(text, label, question, li, send, done) {
+    return deleteButton(text, label, async () => {
+      if (!confirm(question)) return;
+      setListStatus('');
+      try {
+        const at = visibleIndex(li), code = li.dataset.code;
+        await send();
+        setListStatus(done, 'success');
+        const still = rowOf(code);
+        if (still) still.querySelector('.hv-top').focus();
+        else focusAfterRemoval(at);
+      } catch (error) { rowNote(li, error.message); }
+    });
+  }
 
   // 點開之後的自選設定：分類三選一（按了就存）、關注開關（站主才有）
   function watchSettings(entry, li) {
-    const watch = entry.watch, host = element('div', 'pf-set');
+    const listed = entry.watch, host = element('div', 'pf-set');   // listed：自選的那一筆（state.watch 是站主的關注狀態，不是同一件事）
     const strip = element('div', 'key-strip pf-horizon');
     strip.setAttribute('role', 'group');
     strip.setAttribute('aria-label', `${entry.code} 自選分類`);
@@ -362,13 +380,13 @@
       const cell = element('button', 'cell');
       cell.type = 'button';
       cell.dataset.horizon = value;
-      cell.setAttribute('aria-pressed', String(watch.horizon === value));
+      cell.setAttribute('aria-pressed', String(listed.horizon === value));
       cell.append(element('span', 'cell-face'), element('span', 'cell-name', label));
       strip.append(cell);
     });
     host.append(element('span', 'pf-set-name', '自選分類'), strip);
     if (state.watch) {
-      const toggle = watchToggle(watch, li);
+      const toggle = watchToggle(listed, li);
       toggle.append(element('small', 'pf-watch-count num', `${state.watch.count}／${state.watch.limit}`));
       host.append(toggle);
     }
@@ -376,21 +394,28 @@
   }
 
   async function changeHorizon(cell) {
-    if (cell.getAttribute('aria-pressed') === 'true') return;
-    const row = cell.closest('.hv-row'), strip = cell.parentElement, code = row.dataset.code;
+    const strip = cell.parentElement;
+    if (cell.getAttribute('aria-pressed') === 'true' || strip.dataset.busy) return;
+    const row = cell.closest('.hv-row'), code = row.dataset.code;
     const before = strip.querySelector('[aria-pressed="true"]');
     const press = chosen => strip.querySelectorAll('.cell').forEach(other => other.setAttribute('aria-pressed', String(other === chosen)));
     press(cell);
-    strip.inert = true;
+    strip.dataset.busy = '1';   // 這一筆還沒存完，先不收下一下
     rowNote(row, '');
+    setListStatus('');
     try {
       await api('/api/watchlist', { method: 'POST', body: { code, horizon: cell.dataset.horizon } });
-      setListStatus(`${code} 分類已更新。`, 'success');
-      await loadWatchlist();
     } catch (error) {
       press(before);
+      delete strip.dataset.busy;
       rowNote(row, error.message);
-    } finally { strip.inert = false; }
+      return;
+    }
+    setListStatus(`${code} 分類已更新。`, 'success');
+    try { await loadWatchlist(); } catch (error) { setListStatus(error.message, 'error'); }
+    delete strip.dataset.busy;
+    // 重畫之後原本那一顆不在頁面上了：焦點放回新畫的、選中的那一顆
+    if (!cell.isConnected) rowOf(code)?.querySelector('.pf-horizon [aria-pressed="true"]')?.focus();
   }
 
   function listRow(entry, order, complete) {
@@ -412,7 +437,7 @@
         : `沒有價格${watch ? `，自選 ${HORIZON_WORDS[watch.horizon]}` : ''}`;
     top.setAttribute('aria-label', `${entry.name} ${entry.code}：${said}`);
     const name = element('span', 'hv-name'), under = element('span', '', entry.code);
-    if (held && watch) under.append(element('em', '', `自選・${HORIZON_WORDS[watch.horizon]}`));
+    if (held && watch) under.append(element('em', '', watch.horizon === 'none' ? '自選' : `自選・${HORIZON_WORDS[watch.horizon]}`));
     name.append(element('strong', '', entry.name), under);
     const chev = element('span', 'chev');
     chev.setAttribute('aria-hidden', 'true');
@@ -470,28 +495,32 @@
       acts.append(link);
     } else acts.append(element('span', 'pf-scope outside', '不在本站分析範圍'));
     if (held) {
-      buttons.append(deleteButton('刪除庫存', `刪除庫存 ${entry.code} ${entry.name}`, async () => {
-        if (!confirm(`要刪除 ${entry.code} ${entry.name} 的庫存資料嗎？`)) return;
-        try {
-          const at = visibleIndex(li);
+      // 修改：同一個代號再存一次就是更新。把現在的數字帶進「＋」的表單，改完按儲存
+      const edit = element('button', 'pf-edit', '修改');
+      edit.type = 'button';
+      edit.setAttribute('aria-label', `修改庫存 ${entry.code} ${entry.name}`);
+      edit.addEventListener('click', () => {
+        setAddKind('holding');
+        $('holdingCode').value = item.code;
+        $('holdingShares').value = String(item.shares);
+        $('holdingCost').value = String(item.average_cost);
+        $('holdingNote').value = item.note || '';
+        setAddOpen(true);
+        $('addToggle').scrollIntoView({ block: 'nearest' });
+        $('holdingShares').focus({ preventScroll: true });
+      });
+      buttons.append(edit, removalButton('刪除庫存', `刪除庫存 ${entry.code} ${entry.name}`, `要刪除 ${entry.code} ${entry.name} 的庫存資料嗎？`, li,
+        async () => {
           await api(`/api/holdings/${encodeURIComponent(entry.code)}`, { method: 'DELETE', body: {} });
-          setListStatus(`${entry.code} 庫存已刪除。`, 'success');
           await Promise.all([loadHoldings(), ...(features.level_advice ? [loadLevel()] : [])]);
-          if (!$('holdingRows').querySelector(`.hv-row[data-code="${CSS.escape(entry.code)}"]:not([hidden])`)) focusAfterRemoval(at);
-        } catch (error) { rowNote(li, error.message); }
-      }));
+        }, `${entry.code} 庫存已刪除。`));
     }
     if (watch) {
-      buttons.append(deleteButton('移出自選', `從自選股刪除 ${entry.code} ${entry.name}`, async () => {
-        if (!confirm(`要從自選股刪除 ${entry.code} ${entry.name} 嗎？`)) return;
-        try {
-          const at = visibleIndex(li);
+      buttons.append(removalButton('移出自選', `從自選股移出 ${entry.code} ${entry.name}`, `要把 ${entry.code} ${entry.name} 移出自選股嗎？`, li,
+        async () => {
           await api(`/api/watchlist/${encodeURIComponent(entry.code)}`, { method: 'DELETE', body: {} });
-          setListStatus(`${entry.code} 已從自選股刪除。`, 'success');
           await loadWatchlist();
-          if (!$('holdingRows').querySelector(`.hv-row[data-code="${CSS.escape(entry.code)}"]:not([hidden])`)) focusAfterRemoval(at);
-        } catch (error) { rowNote(li, error.message); }
-      }));
+        }, `${entry.code} 已移出自選股。`));
     }
     acts.append(buttons);
     inner.append(acts);
@@ -510,18 +539,20 @@
 
   // 進場（只播一次）。時間都寫在樣式裡（portfolio.css），這裡只跟著樣式的動畫走，不另外記一份時間：
   // 賺的（或還差的）那一段開始長，這一列被往上頂（或往下壓）一下；最後一列定位完，把進場的記號拿掉
+  let stopListEntrance = () => {};
   function playListEntrance(host) {
     const onStart = event => {
       if (!event.target.matches('.hv-bar .gain, .hv-bar .lack')) return;
       const row = event.target.closest('.hv-row');
       row.animate({ translate: ['0 0', `0 ${row.dataset.state === 'bull' ? -HOLDING_PUSH : HOLDING_PUSH}px`, '0 0'], offset: [0, .3, 1] }, { duration: 260, delay: 120, easing: 'ease-out' });
     };
-    const onEnd = event => {
-      if (event.animationName !== 'hv-row-settle' || event.target !== host.lastElementChild) return;
+    stopListEntrance = () => {
       host.classList.remove('is-entering');
       host.removeEventListener('animationstart', onStart);
       host.removeEventListener('animationend', onEnd);
+      stopListEntrance = () => {};
     };
+    const onEnd = event => { if (event.animationName === 'hv-row-settle' && event.target === host.lastElementChild) stopListEntrance(); };
     host.addEventListener('animationstart', onStart);
     host.addEventListener('animationend', onEnd);
     host.classList.add('is-entering');
@@ -554,7 +585,7 @@
     $('countHolding').textContent = String(model.counts.holding);
     $('countWatch').textContent = String(model.counts.watch);
     const openCode = host.querySelector('.hv-row.is-open')?.dataset.code;
-    host.classList.remove('is-entering');   // 新增、更新、刪除之後重畫就不再播進場；新的列直接在定位
+    stopListEntrance();   // 新增、更新、刪除之後重畫就不再播進場；新的列直接在定位
     host.replaceChildren(...model.rows.map((entry, order) => listRow(entry, order, model.summary.complete)));
     applyFilter();
     const again = openCode && [...host.children].find(row => row.dataset.code === openCode && !row.hidden);
@@ -574,13 +605,20 @@
     [...$('holdingRows').querySelectorAll('.hv-row')].forEach(other => setRowOpen(other, other === row && open));
   });
 
+  function setFilter(value) {
+    listFilter = value;
+    $('listFilter').querySelectorAll('button').forEach(key => key.setAttribute('aria-pressed', String(key.dataset.filter === value)));
+    stopListEntrance();
+    applyFilter();
+  }
   $('listFilter').addEventListener('click', event => {
     const chosen = event.target.closest('button[data-filter]');
     if (!chosen) return;
-    listFilter = chosen.dataset.filter;
-    $('listFilter').querySelectorAll('button').forEach(other => other.setAttribute('aria-pressed', String(other === chosen)));
-    applyFilter();
+    setListStatus('');
+    setFilter(chosen.dataset.filter);
   });
+  // 新增了某一種之後，目前的篩選如果看不到它就切回全部
+  const showKind = kind => { if (listFilter !== 'all' && listFilter !== kind) setFilter('all'); };
 
   // 「＋」：新增的表單平常收著，按了才展開；裡面先選是加入自選還是新增庫存
   function setAddOpen(open) {
@@ -594,8 +632,8 @@
   }
   $('addToggle').addEventListener('click', () => {
     const open = $('addToggle').getAttribute('aria-expanded') !== 'true';
+    if (open) for (const id of ['listStatus', 'watchlistStatus', 'holdingStatus']) setStatus($(id), '');
     setAddOpen(open);
-    if (open) ($('watchlistForm').hidden ? $('holdingCode') : $('watchCode')).focus({ preventScroll: true });
   });
   $('addKind').addEventListener('click', event => {
     const cell = event.target.closest('.cell[data-kind]');
@@ -656,8 +694,10 @@
       $('watchCode').value = '';
       setStatus($('watchlistStatus'), '');
       setAddOpen(false);
+      $('addToggle').focus({ preventScroll: true });
       setListStatus(`${code} 已加入自選股。`, 'success');
       await loadWatchlist();
+      showKind('watch');
     } catch (error) { setStatus($('watchlistStatus'), error.message, 'error'); }
     finally { button.disabled = false; }
   });
@@ -679,8 +719,10 @@
       form.reset();
       setStatus($('holdingStatus'), '');
       setAddOpen(false);
+      $('addToggle').focus({ preventScroll: true });
       setListStatus(`${code} 庫存已儲存。`, 'success');
       await Promise.all([loadHoldings(), ...(features.level_advice ? [loadLevel()] : [])]);
+      showKind('holding');
     } catch (error) { setStatus($('holdingStatus'), error.message, 'error'); }
     finally { button.disabled = false; }
   });

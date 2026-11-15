@@ -59,7 +59,7 @@ test("上面那一行總數就是庫存總覽的總數（不因為併了自選�
 test("名稱與能不能開個股頁：兩邊都有時用庫存那一筆；只在自選就用自選那一筆", () => {
   const outside = watch("1232", "大統益", "none", { in_universe: false, market: "上市" });
   const { rows } = loadRead()([holding("2330", "台積電", 1, 1, 2)], [outside, watch("2330", "TSMC", "long")]);
-  assert.deepEqual(rows.map((row) => [row.code, row.name, row.market, row.inUniverse]), [["2330", "台積電", "上市", true], ["1232", "大統益", "上市", false]]);
+  assert.deepEqual(rows.map((row) => [row.code, row.name, row.inUniverse]), [["2330", "台積電", true], ["1232", "大統益", false]]);
 });
 
 test("只有庫存、只有自選、兩邊都沒有", () => {

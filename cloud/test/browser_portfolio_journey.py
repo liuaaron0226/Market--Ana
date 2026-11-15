@@ -111,7 +111,7 @@ with tempfile.TemporaryDirectory() as temp:
             assert page.evaluate("document.documentElement.scrollWidth - innerWidth") == 0
             page.screenshot(path=str(OUT / "portfolio-375.png"), full_page=True)
             page.locator("#holdingRows .hv-row[data-code='2330'] .hv-top").click()
-            page.get_by_label("從自選股刪除 2330 台積電").click()
+            page.get_by_label("從自選股移出 2330 台積電").click()
             page.locator("#holdingRows .hv-row[data-code='2330']").wait_for(state="detached")
             assert page.locator("#holdingRows .hv-row[data-code='2330']").count() == 0
             report["checks"].append("mobile-375:no-overflow:delete-watchlist")

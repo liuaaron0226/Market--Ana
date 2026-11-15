@@ -20,8 +20,8 @@
 .pf-brand svg { width: 20px; height: 20px; }
 .pf :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-.pf-title-row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 6px 16px; padding: 40px 0 20px; }
-.pf-title-row h1 { font: 600 36px/1.15 var(--serif); letter-spacing: .01em; }
+.pf-title-row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 6px 16px; padding: 24px 0 16px; }
+.pf-title-row h1 { font: 600 26px/1.15 var(--serif); letter-spacing: .01em; }
 .pf-freshness { color: var(--faint); font: 12px var(--mono); white-space: nowrap; }
 
 .pf-level { margin-bottom: 40px; padding: 24px 0; border-top: 1px solid var(--ink); }
@@ -58,15 +58,14 @@
 .pf-score-grid p { margin-top: 6px; color: var(--faint); font-size: 12px; line-height: 1.5; }
 .pf-level-warning { margin-top: 14px; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--gold) 45%, var(--hair)); border-radius: var(--btn-r); color: var(--gold); font-size: 13px; }
 
-.pf-summary { padding: 24px 0; border-top: 1px solid var(--ink); border-bottom: 1px solid var(--hair); }
-.pf-summary h2 { font: 600 18px var(--serif); }
+.pf-summary { padding: 0 0 24px; border-bottom: 1px solid var(--hair); }
 
 
 .pf-form { display: grid; gap: 12px; align-items: end; padding: 20px 0; border-bottom: 1px solid var(--hair); }
 .pf-watch-form { grid-template-columns: minmax(160px, 1fr) minmax(150px, 220px) auto; }
 .pf-holding-form { grid-template-columns: minmax(120px, .7fr) minmax(120px, .7fr) minmax(140px, .8fr) minmax(200px, 1.4fr) auto; }
 .pf-form label { display: grid; gap: 8px; color: var(--dim); font-size: 13px; }
-.pf-form input, .pf-form select, .pf-form button, .hv-row .pf-delete {
+.pf-form input, .pf-form select, .pf-form button, .hv-row :is(.pf-delete, .pf-edit) {
   min-height: 44px; border: 1px solid var(--hair); border-radius: var(--btn-r); font: 14px var(--sans);
 }
 .pf-form input, .pf-form select { width: 100%; padding: 0 12px; background: var(--panel); color: var(--ink); }
@@ -76,7 +75,7 @@
   transition: background-color 160ms var(--ease-out), transform 120ms var(--ease-out);
 }
 .pf-form button:hover { background: color-mix(in srgb, var(--ink) 86%, var(--bg)); }
-.pf-form button:active, .hv-row .pf-delete:active { transform: var(--press); }
+.pf-form button:active, .hv-row :is(.pf-delete, .pf-edit):active { transform: var(--press); }
 .pf-form button:disabled { opacity: .55; cursor: wait; }
 .pf-form-status { min-height: 20px; padding: 8px 0 0; color: var(--faint); font-size: 12px; }
 .pf-form-status[data-state="error"] { color: var(--up); }
@@ -87,16 +86,13 @@
 .pf-watch-toggle:has(input:checked) { color: var(--ink); }
 .pf-watch-toggle.is-dim { opacity: .45; }
 .pf-row-note { grid-column: 1 / -1; margin: 0; color: var(--up); font-size: 13px; line-height: 1.5; }
-.pf-stock { min-width: 0; }
-.pf-stock a { color: var(--ink); font: 600 15px var(--sans); text-decoration: none; }
-.pf-stock a:hover { color: var(--accent); }
-.pf-stock small { display: block; margin-top: 4px; color: var(--faint); font-size: 12px; line-height: 1.4; }
-.hv-row .pf-delete {
+.hv-row :is(.pf-delete, .pf-edit) {
   padding: 0 12px; background: transparent; color: var(--up); white-space: nowrap; cursor: pointer;
   transition: background-color 160ms var(--ease-out), transform 120ms var(--ease-out);
 }
-.hv-row) .pf-delete:hover { background: color-mix(in srgb, var(--up) 8%, transparent); }
-.pf-empty { padding: 24px 0; color: var(--dim); font-size: 14px; border-bottom: 1px solid var(--hair); }
+.hv-row .pf-delete:hover { background: color-mix(in srgb, var(--up) 8%, transparent); }
+.hv-row .pf-edit { color: var(--ink); }
+.hv-row .pf-edit:hover { background: color-mix(in srgb, var(--ink) 8%, transparent); }
 .pf-scope { display: inline-block; margin-top: 5px; color: var(--faint); font-size: 12px; }
 .pf-scope.outside { color: var(--gold); }
 .pf-ai { margin-top: 10px; padding-left: 10px; border-left: 2px solid var(--accent); }
@@ -110,15 +106,13 @@
    高低就是賺賠：賺的那一列浮起、賠的凹下、打平或沒有價格是細框。陰影只用 bold.css 現成的。
    每一列的高低、箭頭與展開的高度在 bold.css（.depth-row .on-page）。
    算法在 holdings-rows.js，畫面在 portfolio.js。本人定的樣品：design-previews/3d-redesign/pro-samples/holdings-overview.html */
-.hv-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-.pf-summary .hv-head p { margin: 0; color: var(--faint); font-size: 12px; }
-.pf-summary .hv-total { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; margin: 14px 0 0; color: var(--dim); font: 13px var(--sans); }
+.pf-summary .hv-total { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; margin: 0 0 16px; color: var(--dim); font: 13px var(--sans); }
 .hv-total strong { color: var(--ink); font: 500 26px var(--mono); font-variant-numeric: tabular-nums; }
 .hv-total b { color: var(--ink); font: 400 13px var(--mono); font-variant-numeric: tabular-nums; }
 .hv-total b.up, .hv-ret.up, .hv-facts b.up { color: var(--up); }
 .hv-total b.down, .hv-ret.down, .hv-facts b.down { color: var(--down); }
 
-.pf-summary .hv-rows { margin: 24px 0 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.pf-summary .hv-rows { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
 
 .hv-top { display: grid; grid-template-columns: 88px minmax(0, 1fr) 72px 12px; align-items: center; column-gap: 10px; width: 100%; min-height: 48px; padding: 5px 12px; border: 0; border-radius: inherit; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 .hv-name { display: grid; gap: 1px; min-width: 0; white-space: nowrap; }
@@ -137,7 +131,6 @@
 /* ---------- 自選與庫存併成一份清單（本人 2026-11-16） ----------
    總數一行 → 一排鍵（全部／庫存／自選，共用的分類鍵）＋「＋」→ 一檔一列。新增的表單平常收著，按「＋」才展開。
    只在自選的那幾列沒有橫條，右邊寫分類；兩邊都有的那幾列名稱下面寫「自選・分類」。 */
-.pf-summary .hv-total { margin: 0 0 16px; }
 .pf-tools { display: flex; align-items: stretch; gap: 8px; margin-bottom: 12px; }
 .pf-tools .hm-cats { flex: 1; margin-top: 0; }
 .pf-tools .hm-cats small { margin-left: 4px; font: 400 12px var(--mono); color: var(--faint); }
@@ -162,12 +155,11 @@
 .pf-add-in .pf-form-status:empty, .pf-list-status:empty { display: none; }
 .pf-list-status { padding: 0 0 12px; }
 #addKind, #holdingRows .pf-horizon { justify-content: flex-start; }
-:is(#addKind, #holdingRows .pf-horizon) .cell { max-width: 96px; min-height: 40px; }
+:is(#addKind, #holdingRows .pf-horizon) .cell { max-width: 72px; min-height: 40px; }
 :is(#addKind, #holdingRows .pf-horizon) .cell-name { font: 500 13px var(--sans); color: var(--ink); }
-.pf-summary .hv-rows { margin-top: 0; }
-.pf-summary .hv-row[hidden] { display: none; }
 .pf-only-watch .hv-top { grid-template-columns: minmax(0, 1fr) auto 12px; }
 .pf-tag { color: var(--dim); font: 12px var(--sans); white-space: nowrap; }
+.hv-name > span { overflow: hidden; text-overflow: ellipsis; }
 .hv-name em { margin-left: 6px; color: var(--faint); font: 400 11px var(--sans); font-style: normal; }
 /* 點開之後：自選的設定（分類三選一、關注開關）與下面的動作 */
 .pf-set { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; }
@@ -224,8 +216,6 @@
   .pf-shell { padding: 0 16px 64px; }
   .pf-bar { grid-template-columns: 1fr auto; }
   .pf-brand { display: none; }
-  .pf-title-row { padding: 28px 0 16px; }
-  .pf-title-row h1 { font-size: 28px; }
   .pf-level-head { align-items: start; }
   .pf-level-conclusion { font-size: 18px; }
   .pf-level-figures { grid-template-columns: repeat(2, minmax(0, 1fr)); }

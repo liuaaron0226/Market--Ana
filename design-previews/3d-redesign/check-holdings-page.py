@@ -112,7 +112,7 @@ with sync_playwright() as p:
 
     ctx, page, errors = open_page(390, "reduce", [])
     state = page.evaluate(STATE)
-    check("還沒有庫存也沒有自選：寫提示，總數都是—", state["empty"] and state["empty"].startswith("還沒有自選或庫存") and state["total"] == "— 成本 — 損益 —（—）" and state["count"] == "0", state)
+    check("還沒有庫存也沒有自選：寫提示，上面那一行總數不顯示", state["empty"] and state["empty"].startswith("還沒有自選或庫存") and not page.locator("#totalLine").is_visible() and state["count"] == "0", state)
     check("假資料的三種情況都沒有腳本錯誤", not errors, errors)
     ctx.close()
 
@@ -164,6 +164,81 @@ with sync_playwright() as p:
     page.wait_for_timeout(200)
     check("刪除之後鍵盤焦點在補上來的那一列，沒有掉回頁面最上面", page.evaluate("document.activeElement.classList.contains('hv-top') && document.activeElement.closest('.hv-row').dataset.code") == "2603",
           page.evaluate("document.activeElement.outerHTML.slice(0, 80)"))
+    ctx.close()
+
+    # ---- 一份清單才有的情況（本人 2026-11-16 選「併成一份清單」）
+    def open_with(holdings, watchlist, motion="reduce"):
+        ctx = browser.new_context(viewport={"width": 390, "height": 800}, has_touch=True, reduced_motion=motion, locale="zh-TW")
+        page = ctx.new_page()
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        page.on("dialog", lambda dialog: dialog.accept())
+        page.route("**/api/holdings", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps({"items": holdings})) if route.request.method == "GET" else route.continue_())
+        page.route("**/api/watchlist", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps({"items": watchlist})) if route.request.method == "GET" else route.continue_())
+        page.goto(BASE + "/portfolio.html", wait_until="networkidle")
+        page.wait_for_function("document.getElementById('portfolioFreshness').textContent.trim() !== '讀取中'")
+        return ctx, page, errors
+
+    watched = lambda code, name, horizon, **extra: {"code": code, "name": name, "market": "上市", "in_universe": True, "horizon": horizon, **extra}
+    hint = "() => { const node = document.querySelector('#holdingRows .pf-none'); return node ? node.textContent : null; }"
+    shown = "() => [...document.querySelectorAll('#holdingRows .hv-row:not([hidden])')].map(row => row.dataset.code)"
+
+    # 只有自選、沒有庫存：上面那一行總數不顯示（不寫一排「—」）；按「庫存」寫怎麼新增庫存
+    ctx, page, errors = open_with([], [watched("2330", "台積電", "long"), watched("9958", "世紀鋼", "none", in_universe=False)])
+    check("只有自選：總數那一行不顯示，兩檔照自選的先後各一列", not page.locator("#totalLine").is_visible() and page.evaluate(shown) == ["2330", "9958"]
+          and page.locator("#listFilter").inner_text().replace("\n", "") == "全部2庫存0自選2", page.locator("#listFilter").inner_text())
+    page.locator("#listFilter [data-filter='holding']").click()
+    check("只有自選時按「庫存」：寫怎麼新增庫存", page.evaluate(hint) == "還沒有庫存。按右邊的「＋」選「新增庫存」，輸入代號、股數與平均成本。", page.evaluate(hint))
+    page.locator("#listFilter [data-filter='all']").click()
+    page.locator("#holdingRows .hv-row[data-code='9958'] .hv-top").click()
+    outside = page.locator("#holdingRows .hv-row[data-code='9958']")
+    check("只在自選、又不在分析範圍的那一檔：寫明不能開、沒有連結", "不在本站分析範圍" in outside.locator(".pf-acts").inner_text() and outside.locator(".pf-acts a").count() == 0)
+    check("只有自選的頁面沒有腳本錯誤、沒有橫向捲動", not errors and not page.evaluate(OVERFLOW), errors)
+    ctx.close()
+
+    # 只有庫存、沒有自選：按「自選」寫怎麼加入自選
+    ctx, page, errors = open_with([holding("2330", "台積電", 1000, 980, 2235)], [])
+    page.locator("#listFilter [data-filter='watch']").click()
+    check("只有庫存時按「自選」：寫怎麼加入自選", page.evaluate(hint) == "還沒有自選股。按右邊的「＋」選「加入自選」，可標記為短期、長期或先不分類。" and page.evaluate(shown) == [], page.evaluate(hint))
+    ctx.close()
+
+    # 進場還在播的時候就按篩選：進場直接到定位，之後不會重播（審查抓到：被藏起來的最後一列等不到結束）
+    ctx, page, errors = open_with([holding("2330", "台積電", 1000, 980, 2235), holding("2603", "長榮", 2000, 215, 245.5)], [watched("6669", "緯穎", "none")], motion="no-preference")
+    page.locator("#listFilter [data-filter='holding']").click()
+    page.evaluate("window.__again = false; new MutationObserver(() => { if (document.getElementById('holdingRows').classList.contains('is-entering')) window.__again = true; }).observe(document.getElementById('holdingRows'), { attributes: true, attributeFilter: ['class'] })")
+    page.wait_for_timeout(2600)
+    page.locator("#listFilter [data-filter='all']").click()
+    page.wait_for_timeout(300)
+    check("進場中按篩選：進場的記號馬上拿掉，換回全部也不重播", not page.evaluate("document.getElementById('holdingRows').classList.contains('is-entering')") and not page.evaluate("window.__again"))
+    ctx.close()
+
+    # 預覽上的真資料：改分類之後焦點留在那一排鍵上；站主的關注開關旁邊寫幾檔／上限
+    ctx = browser.new_context(viewport={"width": 390, "height": 800}, has_touch=True, reduced_motion="reduce", locale="zh-TW")
+    page = ctx.new_page()
+    page.goto(BASE + "/portfolio.html", wait_until="networkidle")
+    page.wait_for_function("document.getElementById('portfolioFreshness').textContent.trim() !== '讀取中'")
+    row = page.locator("#holdingRows .hv-row[data-code='6669']")
+    row.locator(".hv-top").click()
+    row.locator(".pf-horizon .cell").nth(2).click()
+    page.wait_for_function("document.querySelector(\"#holdingRows .hv-row[data-code='6669'] .pf-tag\").textContent === '長期'")
+    page.wait_for_timeout(200)
+    check("改分類存好、清單重畫之後，焦點在新畫的那一顆選中的鍵上（沒有掉回頁面最上面）",
+          page.evaluate("(() => { const at = document.activeElement; return at.matches('.pf-horizon .cell[aria-pressed=\"true\"]') && at.closest('.hv-row').dataset.code; })()") == "6669",
+          page.evaluate("document.activeElement.outerHTML.slice(0, 90)"))
+    row.locator(".pf-horizon .cell").nth(0).click()
+    page.wait_for_function("document.querySelector(\"#holdingRows .hv-row[data-code='6669'] .pf-tag\").textContent === '未分類'")
+    toggle = row.locator(".pf-watch-toggle")
+    if toggle.count():
+        count = row.locator(".pf-watch-count")
+        before = count.inner_text()
+        toggle.locator("input").check()
+        page.wait_for_function("text => document.querySelector(\"#holdingRows .hv-row[data-code='6669'] .pf-watch-count\").textContent !== text", arg=before)
+        raised = count.inner_text()
+        toggle.locator("input").uncheck()
+        page.wait_for_function("text => document.querySelector(\"#holdingRows .hv-row[data-code='6669'] .pf-watch-count\").textContent === text", arg=before)
+        check("站主的關注開關：旁邊寫幾檔／上限，打開多一檔、關掉還原", before.endswith("／20") and raised == f"{int(before.split('／')[0]) + 1}／20", [before, raised])
+    else:
+        print("（這個預覽沒有打開關注功能，關注開關那一項沒有驗）")
     ctx.close()
 
     # ---- 3. 各種寬度
