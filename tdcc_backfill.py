@@ -46,7 +46,11 @@ _HIDDEN = re.compile(r'<input[^>]*name="(SYNCHRONIZER_TOKEN|SYNCHRONIZER_URI|met
 
 
 class Refused(Exception):
-    """官方站的回應不是預期的樣子：停，不重試。"""
+    """官方站的回應不是預期的樣子：停，不重試。page 是讓它停下的那一頁原文（有的話）。"""
+
+    def __init__(self, reason: str, page: str | None = None) -> None:
+        super().__init__(reason)
+        self.page = page
 
 
 def parse_form(html: str) -> dict:
@@ -189,14 +193,14 @@ def backfill(codes: list[str], progress: Path = DEFAULT_PROGRESS, *, fetch: Call
                 form = {**form, "fields": parse_form(html)["fields"]}
                 result = parse_result(html)
             except ValueError as error:
-                raise Refused(str(error)) from error
+                raise Refused(str(error), html) from error
             if result is None:
                 empties.append({"code": code, "date": iso, "holders": None})
                 if len(empties) >= EMPTY_RUN_LIMIT:
-                    raise Refused(f"連續 {len(empties)} 次查無資料，可能被擋或權杖失效；這一串沒有記成「沒有」")
+                    raise Refused(f"連續 {len(empties)} 次查無資料，可能被擋或權杖失效；這一串沒有記成「沒有」", html)
                 continue
             if (result["code"], result["data_date"]) != (code, iso):
-                raise Refused(f"問 {code} {iso}，回的是 {result['code']} {result['data_date']}")
+                raise Refused(f"問 {code} {iso}，回的是 {result['code']} {result['data_date']}", html)
             _append(progress, [*empties, {"code": code, "date": iso, "holders": result["holders"]}])
             report["missing"] += len(empties)
             report["fetched"] += 1
@@ -205,7 +209,13 @@ def backfill(codes: list[str], progress: Path = DEFAULT_PROGRESS, *, fetch: Call
                 log(f"{datetime.now().isoformat(timespec='seconds')} 已查到 {report['fetched']}／"
                     f"剩 {report['remaining'] - report['fetched'] - report['missing']}（目前 {iso}）")
     except Refused as error:
-        return {**report, "status": "stopped", "reason": str(error)}
+        stopped = {**report, "status": "stopped", "reason": str(error)}
+        if error.page is not None:  # 留下讓它停下的那一頁，事後才查得出官方到底回了什麼
+            kept = progress.with_name("refused.html")
+            kept.parent.mkdir(parents=True, exist_ok=True)
+            kept.write_text(error.page, encoding="utf-8", newline="\n")
+            stopped["evidence"] = str(kept)
+        return stopped
     if empties:  # 收尾時剩下的零星查無資料（沒有達到整串的門檻）照實記下
         _append(progress, empties)
         report["missing"] += len(empties)

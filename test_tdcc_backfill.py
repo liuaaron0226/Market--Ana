@@ -182,6 +182,11 @@ class BackfillTest(unittest.TestCase):
         self.assertEqual(report["status"], "stopped")
         self.assertIn("2454", report["reason"])
         self.assertEqual([row["code"] for row in self.rows()], ["2330"])
+        # 11-15 實跑：問 6672 的 08-07 回了 08-26，重問又正常，當時那一頁沒留下來無從查起。
+        # 所以因為頁面內容停下時，把官方那一頁原文存在進度檔旁邊。
+        kept = self.progress.with_name("refused.html")
+        self.assertEqual(report["evidence"], str(kept))
+        self.assertEqual(kept.read_text(encoding="utf-8"), wrong)
 
     def test_a_long_run_of_empty_answers_is_treated_as_a_silent_refusal(self) -> None:
         # 連續一大串「查無資料」多半是被擋或權杖失效，不是真的都沒資料：停下來，而且這一串不記成「沒有」。
