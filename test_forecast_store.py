@@ -83,6 +83,18 @@ class ForecastStoreTests(unittest.TestCase):
             fs.pull(Remote(), target)
         self.assertFalse((Path(self._tmp.name) / "evil.json").exists())
 
+    def test_pull_refuses_windows_style_escapes(self):
+        for key in ("forecast-ledger/..\\evil.json", "forecast-ledger/C:/evil.json", "forecast-ledger/runs\\x.json"):
+            class Remote:
+                def keys(self, prefix="", key=key):
+                    return [key]
+
+                def get(self, _key):
+                    return b"{}"
+
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                fs.pull(Remote(), Path(self._tmp.name) / "restored")
+
 
 if __name__ == "__main__":
     unittest.main()

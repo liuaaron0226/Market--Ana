@@ -31,9 +31,29 @@ class ForecastWorkflowTests(unittest.TestCase):
         self.assertNotIn("schedule:", self.source)
 
     def test_has_its_own_lock_and_never_joins_the_shared_one(self):
-        self.assertIn("group: forecast-ledger", self.source)
-        self.assertIn("cancel-in-progress: false", self.source)
+        group = re.search(r"concurrency:\n\s+group: (.+)\n\s+cancel-in-progress: false", self.source)
+        self.assertIsNotNone(group)
+        # 寫入用 forecast-ledger；手動乾跑各自一組，不會把排隊中的正式寫入擠掉。
+        self.assertIn("'forecast-ledger'", group.group(1))
+        self.assertIn("forecast-ledger-dry-{0}", group.group(1))
+        self.assertIn("github.run_id", group.group(1))
         self.assertNotIn("market-state-write", self.source)
+
+    def test_real_manual_runs_only_from_the_default_branch(self):
+        authorize = step(self.source, "Fail-closed 核准執行模式")
+        self.assertIn('"$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH"', authorize)
+        self.assertIn("DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}", authorize)
+
+    def test_run_step_takes_inputs_through_env_not_shell_interpolation(self):
+        run = step(self.source, "寫晚間版預測並對帳")
+        script = run.split("run: |", 1)[1]
+        self.assertNotIn("${{", script)
+        for name in ("REQUESTED_DATE", "AS_OF", "DRY_RUN"):
+            self.assertIn(f"{name}: ${{{{ steps.mode.outputs.", run)
+
+    def test_every_run_record_is_kept_in_the_ledger(self):
+        run = step(self.source, "寫晚間版預測並對帳")
+        self.assertIn('--log-output "$LEDGER/runs/$GITHUB_RUN_ID.json"', run)
 
     def test_automatic_runs_need_published_evidence_and_the_schedule_switch(self):
         authorize = step(self.source, "Fail-closed 核准執行模式")
@@ -67,8 +87,10 @@ class ForecastWorkflowTests(unittest.TestCase):
         d1 = step(self.source, "發布到網站資料庫")
         self.assertIn("python forecast_store.py push --ledger", push)
         self.assertIn("d1 execute market-ana-accounts --remote --file", d1)
-        for body in (push, d1):
-            self.assertIn("if: success() && steps.mode.outputs.dry_run == 'false'", body)
+        # 寫預測那一步就算後面出錯，已鎖定的原件也要存回（只要帳本是從 R2 還原成功的）；重試三次。
+        self.assertIn("if: always() && steps.mode.outputs.dry_run == 'false' && steps.restore.outcome == 'success'", push)
+        self.assertIn("for attempt in 1 2 3", push)
+        self.assertIn("if: success() && steps.mode.outputs.dry_run == 'false'", d1)
         self.assertLess(self.source.index("帳本原件存回 R2（只新增）"), self.source.index("發布到網站資料庫"))
 
     def test_always_keeps_a_run_record_and_cleans_up_the_login(self):

@@ -52,6 +52,9 @@ PARAMETERS: dict[str, Any] = {
     "min_distance_pct": 0.3,
     "distance_percentiles": {"up": 80, "down": 20},
     "recent_bars_for_model": 60,
+    # 基本層交給模型的資料組成（規格〈交給 Gemini 的輸入〉）；加減任何一項都會換輸入版本。
+    "base_inputs": ["index_ohlc_amount", "indicators_short_medium_long", "trend_labels", "chips_institutional_futures",
+                    "candidates", "method_text"],
 }
 
 _MA_NAMES = {5: "五日線", 10: "十日線", 20: "月線", 60: "季線", 120: "半年線", 240: "年線"}
@@ -188,7 +191,7 @@ def method_version_of(method_text: str) -> str:
 def _clean_daily(index_daily: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     rows = []
     for row in index_daily:
-        values = {key: _number(row.get(key)) for key in ("open", "high", "low", "close")}
+        values = {key: _number(row.get(key)) for key in ("open", "high", "low", "close", "amount")}
         rows.append({"date": str(row.get("date")), **values})
     dates = [row["date"] for row in rows]
     if dates != sorted(dates) or len(set(dates)) != len(dates):
@@ -328,6 +331,7 @@ def _model_input(data: Mapping[str, Any], rows: list[dict[str, Any]], edition: s
         "edition": edition,
         "index_recent": rows[-PARAMETERS["recent_bars_for_model"]:],
         "trend_labels": copy.deepcopy(dict(data.get("trend_labels") or {})),
+        "indicators": copy.deepcopy(data.get("indicators")),
         "chips": copy.deepcopy(data.get("chips")),
         "data_cutoffs": copy.deepcopy(dict(data.get("data_cutoffs") or {})),
         "candidates": candidates,

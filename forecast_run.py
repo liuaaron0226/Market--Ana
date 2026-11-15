@@ -49,10 +49,13 @@ def _billion(value: Any) -> float | None:
     return None if value is None else round(float(value) / 100_000_000, 2)
 
 
-def _trend_labels(daily: list[dict[str, Any]], institutional: list[dict[str, Any]]) -> dict[str, str | None]:
-    periods = {period["key"]: period for period in market_trend.assess_market_trends(daily, institutional)["periods"]}
-    return {key: (periods[key]["conclusion"] if periods.get(key, {}).get("state") != "insufficient" else None)
-            for key in ("short", "medium")}
+def _trend(daily: list[dict[str, Any]], institutional: list[dict[str, Any]]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """現行短中長期走勢（網站同一套 market_trend）：標籤給固定規則，指標數值給模型看。"""
+    periods = market_trend.assess_market_trends(daily, institutional)["periods"]
+    labels = {period["key"]: (None if period["state"] == "insufficient" else period["conclusion"]) for period in periods}
+    indicators = [{"key": period["key"], "state": period["state"], "conclusion": period["conclusion"],
+                   "metrics": period["metrics"]} for period in periods]
+    return labels, indicators
 
 
 def build_day_input(analysis: Mapping[str, Any], method_text: str) -> dict[str, Any]:
@@ -61,10 +64,12 @@ def build_day_input(analysis: Mapping[str, Any], method_text: str) -> dict[str, 
     institutional = list(analysis.get("institutional") or [])
     futures = list(analysis.get("futures") or [])
     base_date = daily[-1]["date"] if daily else None
+    labels, indicators = _trend(daily, institutional) if daily else ({}, [])
     return {
         "base_date": base_date,
-        "index_daily": [{key: row.get(key) for key in ("date", "open", "high", "low", "close")} for row in daily],
-        "trend_labels": _trend_labels(daily, institutional) if daily else {},
+        "index_daily": [{key: row.get(key) for key in ("date", "open", "high", "low", "close", "amount")} for row in daily],
+        "trend_labels": labels,
+        "indicators": indicators,
         "chips": {
             "institutional_billion": [
                 {"date": row["date"], "foreign": _billion((row.get("foreign") or {}).get("net")),
@@ -88,6 +93,23 @@ def _replay(analysis: Mapping[str, Any], day: str) -> dict[str, Any]:
     if not trimmed["daily"] or trimmed["daily"][-1]["date"] != day:
         raise ValueError(f"已發布的日 K 裡沒有 {day}，不能重播")
     return {**analysis, **trimmed}
+
+
+def _backfill_misses(analysis: Mapping[str, Any], method_text: str, ledger: Path, base_date: str, *,
+                     model_bin: Path | str, model: str, clock: Callable[[], datetime]) -> list[str]:
+    """帳本最後一份晚間版之後、今天之前，有日 K 卻沒有任何紀錄的交易日（整天沒跑）補記漏記。
+
+    那些日子都已過期限，帳本不會呼叫模型，只鎖一筆漏記並寫下原因。帳本還沒有任何晚間版時不補（起點之前不算）。
+    """
+    earlier = [record["base_date"] for record in fl.read_ledger(ledger)["forecasts"] if record["edition"] == "evening"]
+    if not earlier:
+        return []
+    last = max(earlier)
+    days = [row["date"] for row in analysis.get("daily") or [] if last < row["date"] < base_date]
+    for day in days:
+        fl.write_forecast(ledger, build_day_input(_replay(analysis, day), method_text), edition="evening",
+                          model_bin=model_bin, model=model, now=clock)
+    return days
 
 
 def _report(record: Mapping[str, Any]) -> dict[str, Any]:
@@ -119,17 +141,21 @@ def run_evening(
         frozen = datetime.fromisoformat(f"{as_of}T{REPLAY_CLOCK}").replace(tzinfo=fl.TAIPEI)
         clock = lambda: frozen  # noqa: E731
     clock = clock or (lambda: datetime.now(fl.TAIPEI))
-    data = build_day_input(analysis, Path(method_path).read_text(encoding="utf-8"))
+    method_text = Path(method_path).read_text(encoding="utf-8")
+    data = build_day_input(analysis, method_text)
     base_date = data["base_date"]
     log: dict[str, Any] = {
         "schema": SCHEMA, "edition": "evening", "dry_run": dry_run, "base_date": base_date, "model": model,
-        "started_at": clock().astimezone(fl.TAIPEI).isoformat(),
+        "started_at": clock().astimezone(fl.TAIPEI).isoformat(), "backfilled_misses": [],
     }
 
     if date and date != base_date:
         # 手動指定的日期不是剛發布的資料日：不交給帳本（帳本會把過了期限的日子鎖成漏記）。
         log.update(outcome="not_ready", detail=f"要求的日期 {date} 不是已發布的資料日 {base_date}")
     else:
+        if not dry_run:
+            log["backfilled_misses"] = _backfill_misses(analysis, method_text, Path(ledger), base_date,
+                                                        model_bin=model_bin, model=model, clock=clock)
         with tempfile.TemporaryDirectory() as scratch:
             target = Path(ledger)
             if dry_run:

@@ -35,7 +35,8 @@ permissions:
 
 concurrency:
   # 預測帳本自己的鎖：寫預測與對帳不會被其他每日排程擠掉或取消，也不擋它們。
-  group: forecast-ledger
+  # GitHub 同一組只留一個排隊中的執行；手動乾跑各自一組，才不會把排隊中的正式寫入替換掉。
+  group: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run != false && format('forecast-ledger-dry-{0}', github.run_id) || 'forecast-ledger' }}
   cancel-in-progress: false
 
 jobs:
@@ -74,6 +75,7 @@ jobs:
           EXPECTED_REPOSITORY: ${{ github.repository }}
           EXPECTED_BRANCH: ${{ github.event.repository.default_branch }}
           UPSTREAM_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             # 日期會原樣寫進 GITHUB_OUTPUT；夾帶換行就能多塞一行，寫入前先擋。
@@ -81,8 +83,10 @@ jobs:
               echo "::error::date 必須是 YYYY-MM-DD"; exit 1
             fi
             dry_run=true
-            # 手動正式跑也要排程開關打開；沒開只能乾跑。
-            if [ "$INPUT_DRY_RUN" = "false" ] && [ "$SCHEDULE_SWITCH" = "on" ]; then dry_run=false; fi
+            # 手動正式跑要排程開關打開，而且只能用預設分支的程式；其他情況一律乾跑。
+            if [ "$INPUT_DRY_RUN" = "false" ] && [ "$SCHEDULE_SWITCH" = "on" ] && [ "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH" ]; then
+              dry_run=false
+            fi
             echo "allowed=true" >> "$GITHUB_OUTPUT"
             echo "dry_run=$dry_run" >> "$GITHUB_OUTPUT"
             echo "data_date=$INPUT_DATE" >> "$GITHUB_OUTPUT"
@@ -152,6 +156,7 @@ jobs:
           echo "as_of=$INPUT_AS_OF" >> "$GITHUB_OUTPUT"
 
       - name: 從 R2 還原每日更新已發布的資料（唯讀）
+        id: restore
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -184,28 +189,39 @@ jobs:
       - name: 寫晚間版預測並對帳
         env:
           HOME: ${{ runner.temp }}/agy-home
+          REQUESTED_DATE: ${{ steps.mode.outputs.requested_date }}
+          AS_OF: ${{ steps.mode.outputs.as_of }}
+          DRY_RUN: ${{ steps.mode.outputs.dry_run }}
         run: |
           # agy 沒裝好時照樣交給帳本：模型呼叫失敗會記成一筆漏記（原因看得到），不靜默跳過。
-          args="--analysis data/daily-update-state/last-market-pack/analysis-data.js --method MARKET_METHOD.md"
-          args="$args --ledger $LEDGER --agy-bin $RUNNER_TEMP/agy/antigravity --model gemini-3.8-flash"
-          args="$args --log-output $RUNNER_TEMP/forecast-run/run.json"
-          if [ -n "${{ steps.mode.outputs.requested_date }}" ]; then args="$args --date ${{ steps.mode.outputs.requested_date }}"; fi
-          if [ "${{ steps.mode.outputs.dry_run }}" = "true" ]; then
-            args="$args --dry-run"
-            if [ -n "${{ steps.mode.outputs.as_of }}" ]; then args="$args --as-of ${{ steps.mode.outputs.as_of }}"; fi
+          args=(--analysis data/daily-update-state/last-market-pack/analysis-data.js --method MARKET_METHOD.md
+                --ledger "$LEDGER" --agy-bin "$RUNNER_TEMP/agy/antigravity" --model gemini-3.8-flash)
+          if [ -n "$REQUESTED_DATE" ]; then args+=(--date "$REQUESTED_DATE"); fi
+          if [ "$DRY_RUN" = "false" ]; then
+            # 每一次正式執行的紀錄放進帳本（runs/），跟著帳本存回 R2。
+            args+=(--sql-output "$RUNNER_TEMP/forecast.sql" --log-output "$LEDGER/runs/$GITHUB_RUN_ID.json")
           else
-            args="$args --sql-output $RUNNER_TEMP/forecast.sql"
+            args+=(--dry-run --log-output "$RUNNER_TEMP/forecast-run/run.json")
+            if [ -n "$AS_OF" ]; then args+=(--as-of "$AS_OF"); fi
           fi
-          python forecast_run.py $args
+          python forecast_run.py "${args[@]}"
+          mkdir -p "$RUNNER_TEMP/forecast-run"
+          if [ -f "$LEDGER/runs/$GITHUB_RUN_ID.json" ]; then cp "$LEDGER/runs/$GITHUB_RUN_ID.json" "$RUNNER_TEMP/forecast-run/run.json"; fi
 
       - name: 帳本原件存回 R2（只新增）
-        if: success() && steps.mode.outputs.dry_run == 'false'
+        # 寫預測那一步就算之後出錯，本機已鎖定的原件也要存回，否則重跑會換掉第一份；只要帳本是從 R2 還原成功的就存。
+        if: always() && steps.mode.outputs.dry_run == 'false' && steps.restore.outcome == 'success'
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET: market-ana-state
-        run: python forecast_store.py push --ledger "$LEDGER"
+        run: |
+          for attempt in 1 2 3; do
+            if python forecast_store.py push --ledger "$LEDGER"; then exit 0; fi
+            echo "::warning::存回 R2 第 $attempt 次失敗"; sleep 20
+          done
+          echo "::error::帳本原件三次都沒能存回 R2"; exit 1
 
       - name: 發布到網站資料庫
         if: success() && steps.mode.outputs.dry_run == 'false'
@@ -221,7 +237,7 @@ jobs:
         if: always()
         run: |
           {
-            echo "### 晚間版大盤預測（${{ steps.mode.outputs.dry_run == 'true' && '乾跑' || '試跑紀錄' }}）"
+            echo "### 晚間版大盤預測（${{ steps.mode.outputs.dry_run == 'false' && '試跑紀錄' || '乾跑或未寫入' }}）"
             if [ -f "$RUNNER_TEMP/forecast-run/run.json" ]; then echo '```json'; cat "$RUNNER_TEMP/forecast-run/run.json"; echo '```'; fi
           } >> "$GITHUB_STEP_SUMMARY"
 

@@ -141,6 +141,33 @@ class EveningRunTests(RunTestCase):
         self.assertEqual((result["outcome"], result["kind"], result["miss_reason"]), ("written", "miss", "deadline_passed"))
         self.assertEqual(json.loads(log.read_text(encoding="utf-8"))["miss_reason"], "deadline_passed")
 
+    def test_model_input_carries_turnover_indicators_and_all_three_trend_labels(self):
+        self.run_evening()
+        model_input = fl.read_ledger(self.ledger)["forecasts"][0]["input"]
+        self.assertEqual(model_input["index_recent"][-1]["amount"], 300_000_000_000)
+        self.assertEqual([p["key"] for p in model_input["indicators"]], ["short", "medium", "long"])
+        self.assertEqual(model_input["indicators"][0]["conclusion"], "偏多")
+        self.assertIn("ma5", model_input["indicators"][0]["metrics"])
+        # 80 根不夠算長期（要 240 根），長期標記資料不足、不擋預測
+        self.assertEqual(model_input["trend_labels"], {"short": "偏多", "medium": "偏多", "long": None})
+
+    def test_trading_days_with_no_run_are_locked_as_misses(self):
+        two_back = DATES[:-2]
+        self.run_evening(analysis(two_back), structured=answer(two_back[-1]),
+                         now=datetime.fromisoformat(f"{two_back[-1]}T17:40:00+08:00"))
+        result = self.run_evening()
+        # 前一個交易日整天沒跑：今天補一筆漏記（過了期限），不呼叫模型
+        self.assertEqual(result["backfilled_misses"], [DATES[-2]])
+        records = {r["base_date"]: r for r in fl.read_ledger(self.ledger)["forecasts"]}
+        self.assertEqual((records[DATES[-2]]["kind"], records[DATES[-2]]["miss_reason"]), ("miss", "deadline_passed"))
+        self.assertEqual(records[BASE]["kind"], "forecast")
+        self.assertEqual(self.calls_made(), 2)
+
+    def test_an_empty_ledger_does_not_backfill_anything(self):
+        result = self.run_evening()
+        self.assertEqual(result["backfilled_misses"], [])
+        self.assertEqual(len(fl.read_ledger(self.ledger)["forecasts"]), 1)
+
     def test_each_run_reconciles_earlier_forecasts_that_have_expired(self):
         early = DATES[:-1]
         self.run_evening(analysis(early), structured=answer(early[-1]),

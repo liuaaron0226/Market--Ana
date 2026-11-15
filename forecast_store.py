@@ -31,6 +31,7 @@ def _local_files(ledger: Path) -> list[Path]:
 
 
 def push(ledger: Path | str, store, prefix: str = PREFIX) -> dict[str, int]:
+    # 先讀再寫（check-then-act）：同時只會有一個寫入者，由 workflow 的 forecast-ledger 鎖保證。
     ledger = Path(ledger)
     uploaded = unchanged = 0
     for path in _local_files(ledger):
@@ -49,7 +50,9 @@ def push(ledger: Path | str, store, prefix: str = PREFIX) -> dict[str, int]:
 
 def _relative(key: str, prefix: str) -> PurePosixPath:
     relative = PurePosixPath(key[len(prefix):])
-    if not relative.parts or relative.is_absolute() or ".." in relative.parts:
+    # 反斜線與磁碟代號在 Windows 上會被當成路徑分隔或根目錄，一律拒絕，避免寫到帳本資料夾外面。
+    if (not relative.parts or relative.is_absolute() or ".." in relative.parts
+            or any("\\" in part or ":" in part for part in relative.parts)):
         raise ValueError(f"雲端物件路徑不合法：{key}")
     return relative
 
@@ -86,7 +89,7 @@ def main(argv: list[str] | None = None) -> int:
     store = DirectoryStore(args.store_dir) if args.store_dir else R2Store.from_env()
     try:
         result = push(args.ledger, store) if args.command == "push" else pull(store, args.ledger)
-    except LedgerStoreConflict as error:
+    except (LedgerStoreConflict, ValueError) as error:
         print(f"::error::{error}", file=sys.stderr)
         return 2
     print(json.dumps(result, ensure_ascii=False))
