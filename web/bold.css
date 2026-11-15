@@ -344,3 +344,27 @@
     --shade-k: 1;
   }
 }
+
+/* ================= 一排帶記號的鍵（.key-strip）（立體重設計，2026-11-15） =================
+   首頁短中長期走勢展開後的指標、個股頁大戶持股展開後的級距共用。每一顆鍵（.cell）一個名稱加一根小記號（.tag）：
+   偏多／增加（.bull）的記號在名稱上面，偏空／減少（.bear）的在下面，沒有方向（.none）的是一小段灰的。
+   記號平的、細的、方的，紅綠只在記號上；鍵用現成的鍵的陰影。
+   「選一個」的那一排可以按住左右滑：選中的框（.slide-thumb，程式在 chart-menus.js）跟著手指走，放開時靠近哪一顆就選哪一顆。 */
+:is(body.hm, body.bd) .key-strip { position: relative; display: flex; align-items: stretch; justify-content: center; gap: 6px; }
+:is(body.hm, body.bd) .key-strip .cell { position: relative; z-index: 1; flex: 1 1 0; min-width: 0; max-width: 104px; min-height: 48px; padding: 7px 2px; border: 0; border-radius: var(--r-key); background: none; color: var(--ink); font: 600 12px/1.25 var(--sans); text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; cursor: pointer; transition: transform var(--t-press) linear; touch-action: pan-y; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+:is(body.hm, body.bd) .key-strip .cell.bear { flex-direction: column-reverse; }
+:is(body.hm, body.bd) .key-strip .cell-face { position: absolute; inset: 0; border-radius: inherit; background: var(--key); box-shadow: var(--key-shadow); transition: box-shadow var(--t-press) linear; }
+:is(body.hm, body.bd) .key-strip :is(.tag, .cell-name) { position: relative; }
+:is(body.hm, body.bd) .key-strip .tag { flex: none; width: 8px; height: 13px; background: var(--faint); }
+:is(body.hm, body.bd) .key-strip .cell.bull .tag { background: var(--up); }
+:is(body.hm, body.bd) .key-strip .cell.bear .tag { background: var(--down); }
+:is(body.hm, body.bd) .key-strip .cell.none .tag { height: 5px; }
+:is(body.hm, body.bd) .key-strip .cell:active { transform: translateY(calc(var(--key-thick) - 1px)); }
+:is(body.hm, body.bd) .key-strip .cell:active .cell-face { box-shadow: var(--key-shadow-press); }
+:is(body.hm, body.bd) .key-strip .cell:is(:focus-visible, [aria-pressed="true"]) { outline: 2px solid var(--gold); outline-offset: 2px; }
+:is(body.hm, body.bd) .key-strip .slide-thumb { position: absolute; z-index: 2; left: 0; top: 0; pointer-events: none; border-radius: var(--r-key); outline: 2px solid var(--gold); outline-offset: 2px; }
+:is(body.hm, body.bd) .key-strip .slide-thumb.is-settling { transition: transform 200ms var(--ease-depth); }
+:is(body.hm, body.bd) .key-strip.is-sliding .cell { outline: none; }
+@media (prefers-reduced-motion: reduce) {
+  :is(body.hm, body.bd) .key-strip .slide-thumb.is-settling { transition: none; }
+}

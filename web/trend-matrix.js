@@ -1,5 +1,5 @@
 /* 短中長期走勢的畫面（立體重設計，本人 2026-11-15 定案的 ⑤）：一列一期，橫條上一票一根小柱，點那一期才展開每個指標的鍵。
-   資料由 trend-votes.js 讀好（TrendVotes.read），這裡只畫，不另外算。樣式在 home.css〈短中長期走勢〉。
+   資料由 trend-votes.js 讀好（TrendVotes.read），這裡只畫，不另外算。樣式在 home.css〈短中長期走勢〉，展開後那一排鍵的樣式在 bold.css（.key-strip）。
 
    用法：TrendMatrix.render(section, model)
    - section：首頁的 #marketTrend（裡面要有 .trend-align 與 .trend-rows）。
@@ -49,7 +49,7 @@
         <span class="chev" aria-hidden="true"></span>
       </button>
       <div class="trend-panel" id="${panel}" inert><div class="trend-clip"><div class="trend-inner">
-        <div class="trend-strip" role="group" aria-label="${esc(period.label)}的每個指標">${of('bear').reverse().map(cell).join('')}${mid}${none.length ? none.map(cell).join('') + mid : ''}${of('bull').map(cell).join('')}</div>
+        <div class="trend-strip key-strip" role="group" aria-label="${esc(period.label)}的每個指標">${of('bear').reverse().map(cell).join('')}${mid}${none.length ? none.map(cell).join('') + mid : ''}${of('bull').map(cell).join('')}</div>
         <p class="trend-read"${period.extra ? '' : ' hidden'}>${esc(period.extra || '')}</p>
       </div></div></div>
     </li>`;

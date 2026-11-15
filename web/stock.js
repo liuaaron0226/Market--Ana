@@ -89,19 +89,6 @@
 
   window.StockStrategy = { build: buildStrategy };
 
-  // 大戶持股（集保股權分散表，每週一份）：一行講完，沒有資料就不顯示。
-  function holdersLine(rows) {
-    if (!Array.isArray(rows) || !rows.length) return null;
-    const latest = rows[rows.length - 1];
-    const parts = [`千張以上大戶持股 ${Number(latest.pct_1000).toFixed(2)}%`, `${fmt(latest.holders_1000, 0)} 人`];
-    if (rows.length > 1) {
-      const change = Math.round((latest.pct_1000 - rows[rows.length - 2].pct_1000) * 100) / 100;
-      parts.push(change === 0 ? '與前一週相同' : `較前一週 ${change > 0 ? '+' : '−'}${Math.abs(change).toFixed(2)} 個百分點`);
-    }
-    return { date: latest.date, text: parts.join('・') };
-  }
-  window.StockHolders = { line: holdersLine };
-
   let chart = null;
   let lastChartKey = '';
   let lastResult = null;
@@ -469,16 +456,10 @@
     return [...groups.values()].map(g => `${g.title}：${g.parts.join('、')}`);
   }
 
+  // 大戶持股（集保股權分散表，每週一份）：算法在 holders-weekly.js，畫面在 holders-card.js；沒有資料整塊不顯示
   function showBigHolders(r) {
     const host = $('bigHolders');
-    if (!host) return;
-    const line = holdersLine(r.big_holders);
-    if (!line) { host.replaceChildren(); return; }
-    const section = reasonEl('section', 'sk-card sk-reason sk-membership');  // 與上方「籌碼選股名單」同一套版面
-    const head = reasonEl('div', 'sk-reason-head');
-    head.append(reasonEl('h2', '', '大戶持股'), reasonEl('span', 'sk-reason-meta', `資料日 ${line.date}`));
-    section.append(head, reasonEl('p', 'sk-reason-judgment', line.text));
-    host.replaceChildren(section);
+    if (host) window.HoldersCard.render(host, window.HoldersWeekly.read(r.big_holders));
   }
 
   async function showCandidateReasons(code) {

@@ -148,20 +148,14 @@ test("個股頁週期多出 1／5／10／15／30 秒，只在選了秒 K 時才�
   assert.match(js, /if \(response\.status === 403 \|\| response\.status === 404\) return;/);  // 沒有權限就不再問
 });
 
-test("大戶持股一行講完：千張以上的持股比例、人數與較前一週的變化；沒有資料就不顯示（本人 11-14：用集保代替主力）", () => {
-  const { StockHolders } = loadStockWindow();
-  const week = (date, pct, holders) => ({ date, pct_1000: pct, holders_1000: holders, pct_400: pct + 3, holders_400: holders * 2, holders: 9999 });
-  assert.equal(StockHolders.line([]), null);
-  assert.equal(StockHolders.line(undefined), null);
-  assert.deepEqual({ ...StockHolders.line([week("2026-11-13", 84.17, 1466)]) },
-    { date: "2026-11-13", text: "千張以上大戶持股 84.17%・1,466 人" });
-  assert.equal(StockHolders.line([week("2026-11-13", 84.17, 1466), week("2026-11-20", 84.3, 1470)]).text,
-    "千張以上大戶持股 84.30%・1,470 人・較前一週 +0.13 個百分點");
-  assert.equal(StockHolders.line([week("2026-11-13", 84.17, 1466), week("2026-11-20", 83.9, 1460)]).text,
-    "千張以上大戶持股 83.90%・1,460 人・較前一週 −0.27 個百分點");
-  assert.equal(StockHolders.line([week("2026-11-13", 84.17, 1466), week("2026-11-20", 84.17, 1466)]).text,
-    "千張以上大戶持股 84.17%・1,466 人・與前一週相同");
-  assert.match(read("web/stock.html"), /<div id="bigHolders"><\/div>/);
+test("個股頁的大戶持股：算法與畫面各一支程式，排在 stock.js 前面；沒有資料整塊不顯示（本人 11-14：用集保代替主力；11-15：改成每週增減的小柱）", () => {
+  const html = read("web/stock.html");
+  assert.match(html, /<div id="bigHolders"><\/div>/);
+  const order = ["holders-weekly.js", "holders-card.js", "stock.js"].map((file) => html.indexOf(`<script src="${file}?`));
+  assert.ok(order.every((at) => at > 0) && order[0] < order[1] && order[1] < order[2], order);
+  const js = read("web/stock.js");
+  assert.match(js, /window\.HoldersCard\.render\(host, window\.HoldersWeekly\.read\(r\.big_holders\)\)/);
+  assert.doesNotMatch(js, /StockHolders/);   // 舊的「一行講完」已經拿掉；每一個數字怎麼算由 holders-weekly.test.js 驗
 });
 
 test("MA設定使用try catch保護localStorage", () => {

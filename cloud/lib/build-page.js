@@ -17,6 +17,8 @@ export const WEB_FILES = [
   "trend-votes.js", "trend-matrix.js",
   // 立體重設計（11-15）：庫存總覽一列一檔的算法
   "holdings-rows.js",
+  // 立體重設計（11-15）：大戶持股每週增減的算法與畫面
+  "holders-weekly.js", "holders-card.js",
 ];
 export const RETIRED = ["analysis-data.js", "chips-data.js", "dashboard-data.js", "detail-data.js", "plain-data.js", "market-data-local.js"];
 

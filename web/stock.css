@@ -303,3 +303,67 @@
 .bd .bd-chart-bar { justify-content: flex-start; flex-wrap: wrap; gap: 8px; }
 .bd .bd-chart-bar > div:first-child { margin-right: auto; }
 .bd-ma-add:disabled { color: var(--faint); cursor: default; }
+
+/* ---------- 大戶持股（立體重設計，本人 2026-11-15 定案的 ⑥） ----------
+   一句結論（千張以上連續幾週增加或減少）→ 這一週的數字 → 每週增減的小柱（增加在基準線上面、減少在線下面，最右邊是這一週）
+   → 點開才看三個級距（千張以上、400 張以上、全部股東），點哪一顆上面的數字與小柱就換過去。
+   高低就是這一週的方向：增加＝浮起、減少＝凹下、沒變或只有一週＝細框。陰影只用 bold.css 現成的。
+   這一頁沒有板，這一張直接放在頁面底色上：浮起的用比底色亮一階的板色、凹下的用比底色暗一階的桌面色。
+   算法在 holders-weekly.js，畫面在 holders-card.js，那一排鍵的樣式在 bold.css（.key-strip）。
+   本人定的樣品：design-previews/3d-redesign/pro-samples/holders-weekly.html */
+#bigHolders .hold-align { margin: 12px 0 0; color: var(--ink); font: 600 14px var(--sans); }
+#bigHolders .hold-align small { margin-left: 4px; color: var(--dim); font: 400 13px var(--sans); }
+#bigHolders .hold-card { position: relative; margin-top: 12px; border: 1px solid var(--line); border-radius: var(--r-key); transition: transform var(--t-press) linear, box-shadow var(--t-press) linear; }
+#bigHolders .hold-card[data-state="bull"] { border-color: transparent; background: var(--slab); box-shadow: var(--key-shadow); transform: translateY(var(--key-lift)); }
+#bigHolders .hold-card[data-state="bear"] { border-color: transparent; background: var(--desk); box-shadow: var(--well-shadow); }
+#bigHolders .hold-card[data-state="bull"]:has(.hold-top:active) { transform: translateY(calc(var(--key-thick) - 1px)); box-shadow: var(--key-shadow-press); }
+
+#bigHolders .hold-top { display: grid; grid-template-columns: minmax(0, auto) minmax(0, 1fr) 12px; align-items: center; column-gap: 14px; width: 100%; min-height: 64px; padding: 8px 12px; border: 0; border-radius: inherit; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+#bigHolders .hold-top:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+#bigHolders .hold-now { display: grid; gap: 2px; white-space: nowrap; }
+#bigHolders .hold-label { color: var(--faint); font: 12px var(--sans); }
+#bigHolders .hold-value { color: var(--ink); font: 500 20px var(--mono); font-variant-numeric: tabular-nums; }
+#bigHolders .hold-change { color: var(--dim); font: 12px var(--mono); font-style: normal; font-variant-numeric: tabular-nums; }
+#bigHolders .hold-change.up { color: var(--up); }
+#bigHolders .hold-change.down { color: var(--down); }
+
+/* 每週增減的小柱：平的、細的、方的。每一根固定 20px 高、從基準線出發，用縮放決定長短與方向（往上是負的）；換級距時滑到新的長度，不動版面 */
+#bigHolders .hold-bars { position: relative; display: flex; align-items: center; justify-content: flex-end; gap: 4px; height: 44px; }
+#bigHolders .hold-bars[hidden] { display: none; }
+#bigHolders .hold-bars::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 1px; margin-top: -.5px; background: var(--line); }
+#bigHolders .col { position: relative; flex: 0 1 8px; height: 100%; }
+#bigHolders .col i { position: absolute; left: 0; right: 0; top: 50%; height: 20px; transform-origin: top; transform: scaleY(calc(var(--dir, 1) * max(var(--size, 0), .1))); background: var(--faint); transition: transform 360ms var(--ease-depth), background-color 200ms linear; }
+#bigHolders .col.bull { --dir: -1; }
+#bigHolders .col.bull i { background: var(--up); }
+#bigHolders .col.bear i { background: var(--down); }
+#bigHolders .col:not(:last-child) i { opacity: .55; }
+
+#bigHolders .chev { width: 7px; height: 7px; border: solid var(--faint); border-width: 0 1.5px 1.5px 0; transform: translateY(-2px) rotate(45deg); transition: transform var(--t-lift) var(--ease-depth); }
+#bigHolders .hold-card.is-open .chev { transform: translateY(2px) rotate(225deg); }
+
+/* 展開：三個級距各一顆鍵 */
+#bigHolders .hold-panel { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 460ms var(--ease-depth); }
+#bigHolders .hold-card.is-open .hold-panel { grid-template-rows: 1fr; }
+#bigHolders .hold-clip { min-height: 0; overflow: hidden; }
+#bigHolders .hold-inner { padding: 4px 12px 12px; }
+#bigHolders .hold-strip { justify-content: flex-start; }
+#bigHolders .hold-strip .cell.plain .tag { display: none; }   /* 只有一週：沒有方向可說，鍵上不放記號 */
+#bigHolders .hold-read { margin: 18px 0 0; color: var(--ink); font: 13px/1.5 var(--sans); }
+
+/* 進場（捲到這一塊才播一次）：小柱一週一週長出來；都到了這一張才定在最後的高度 */
+#bigHolders .hold-card.is-waiting .col i { opacity: 0; }
+#bigHolders .hold-card.is-waiting .hold-bars::before { transform: scaleX(0); }
+#bigHolders .hold-card.is-waiting { border-color: var(--line); background: transparent; box-shadow: none; transform: none; }
+#bigHolders .hold-card.is-entering .hold-bars::before { animation: hold-rail-in 460ms var(--ease-depth) both; }
+#bigHolders .hold-card.is-entering .col i { animation: hold-col-in 420ms var(--ease-depth) both; animation-delay: var(--at); }
+#bigHolders .hold-card.is-entering { animation: hold-card-settle var(--hold-settle, 700ms) var(--ease-depth) both; animation-delay: var(--settle-at); }
+@media (prefers-reduced-motion: no-preference) {
+  #bigHolders .hold-card.is-open .cell { animation: hold-cell-in 420ms var(--ease-depth) both; animation-delay: calc(var(--order, 0) * 70ms + 80ms); }
+}
+@keyframes hold-rail-in { from { transform: scaleX(0); } }
+@keyframes hold-col-in { from { transform: scaleY(0); opacity: 0; } }
+@keyframes hold-card-settle { from { transform: none; border-color: var(--line); background: transparent; box-shadow: none; } }
+@keyframes hold-cell-in { from { opacity: 0; translate: 0 6px; } }
+@media (prefers-reduced-motion: reduce) {
+  #bigHolders .col i, #bigHolders .hold-panel, #bigHolders .chev { transition: none; }
+}

@@ -153,6 +153,15 @@ HOLDING_ROWS = """() => ({ total: document.querySelector('.hv-total').innerText.
     facts: [...row.querySelectorAll('.hv-facts li')].map(fact => fact.innerText.replace(/\\s+/g, ' ').trim()) })) })"""
 
 
+# 個股頁的大戶持股（本人 11-15 定案的 ⑥）現在畫了什麼：結論、這一週的數字、小柱、三顆鍵、下面那一行
+HOLDERS_STATE = """() => { const host = document.getElementById('bigHolders'), card = host.querySelector('.hold-card');
+  const text = selector => { const node = host.querySelector(selector); return node && !node.hidden ? node.innerText.replace(/\\s+/g, ' ').trim() : null; };
+  return { align: text('.hold-align'), date: text('.sk-reason-meta'), label: text('.hold-label'), value: text('.hold-value'), change: text('.hold-change'), read: text('.hold-read'),
+    state: card.dataset.state, open: card.classList.contains('is-open'), reachable: !card.querySelector('.hold-panel').inert,
+    bars: [...card.querySelectorAll('.col')].map(col => col.className.replace('col ', '')),
+    cells: [...card.querySelectorAll('.cell')].map(cell => [cell.querySelector('.cell-name').textContent.replace(/\\u00a0/g, ' '), cell.className.replace('cell ', ''), cell.getAttribute('aria-pressed')]) }; }"""
+
+
 def centre(locator) -> tuple[float, float]:
     box = locator.bounding_box()
     return box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
@@ -1105,6 +1114,50 @@ def stock(page: Page, base: str, tag: str, mobile: bool) -> None:
     check(f"{tag}：大戶持股有內容", "千張" in page.locator("#bigHolders").inner_text())
     ladder = page.locator("#ladder .lad b").all_inner_texts()
     check(f"{tag}：價位階梯五列都有價位", len(ladder) == 5 and all(text.strip() not in ("", "—") for text in ladder), ladder)
+
+    def holders() -> None:
+        """大戶持股（本人 11-15 定案的 ⑥）：一句結論、這一週的數字、每週增減的小柱；點開看三個級距。
+        預覽樣本裡這一檔（2330）只有兩週的資料，所以只有一根小柱；十二根的樣子由 check-holders-page.py 另外驗。"""
+        host = page.locator("#bigHolders")
+        host.scroll_into_view_if_needed()
+        state = page.evaluate(HOLDERS_STATE)
+        check(f"{tag}：大戶持股的結論與這一週的數字", (state["align"], state["label"], state["value"], state["change"])
+              == ("這一週增加 千張以上大戶", "千張以上大戶", "84.17%", "較前一週 +0.13 個百分點"), state)
+        check(f"{tag}：大戶持股每週增減一根小柱；這一週增加，這一張是浮起的", state["bars"] == ["bull"] and state["state"] == "bull", [state["bars"], state["state"]])
+        check(f"{tag}：大戶持股一開始收著，收著的鍵鍵盤走不到", not state["open"] and not state["reachable"])
+        page.locator("#bigHolders .hold-top").click()
+        page.wait_for_function("document.querySelector('#bigHolders .hold-card').classList.contains('is-open')")
+        state = page.evaluate(HOLDERS_STATE)
+        check(f"{tag}：點開大戶持股，三個級距各一顆鍵，預設選千張以上", state["reachable"] and state["cells"]
+              == [["千張以上", "bull", "true"], ["400 張以上", "none", "false"], ["全部股東", "none", "false"]] and state["read"] == "持股 84.17%，1,466 人（人數 +4）", state)
+        cells = page.locator("#bigHolders .cell")
+        cells.nth(1).click()
+        state = page.evaluate(HOLDERS_STATE)
+        check(f"{tag}：點 400 張以上，上面的數字、小柱與下面那一行都換過去", (state["label"], state["value"], state["change"], state["read"], state["bars"])
+              == ("400 張以上", "86.95%", "和前一週一樣", "持股 86.95%，2,616 人（人數 0）", ["none"]), state)
+        check(f"{tag}：換級距不會改這一張的高低與上面那句結論（那是千張以上的）", state["state"] == "bull" and state["align"] == "這一週增加 千張以上大戶", state)
+        # 三顆鍵照全站的規則：按住左右滑，選中的框跟著手指走，放開時靠近哪一顆就選哪一顆
+        hold = Hold(page, mobile)
+        hold.down(*centre(cells.nth(1)))
+        hold.move(*centre(cells.nth(2)))
+        thumb = page.evaluate(THUMB_X, "#bigHolders .hold-strip")
+        held = page.evaluate(HOLDERS_STATE)["value"]
+        check(f"{tag}：大戶持股的鍵按住左右滑，選中的框跟著手指走，還沒放開數字不換",
+              thumb is not None and abs(thumb - centre(cells.nth(2))[0]) <= 3 and held == "86.95%", [thumb, centre(cells.nth(2))[0], held])
+        hold.up()
+        page.wait_for_timeout(300)
+        state = page.evaluate(HOLDERS_STATE)
+        check(f"{tag}：放開之後選到全部股東，不留下多的框", (state["label"], state["value"]) == ("全部股東", "3,294,631 人")
+              and [cell[2] for cell in state["cells"]] == ["false", "false", "true"] and page.locator("#bigHolders .slide-thumb").count() == 0, state)
+        cells.nth(2).click()
+        check(f"{tag}：再點同一顆不會取消（一定有一顆選著）", [cell[2] for cell in page.evaluate(HOLDERS_STATE)["cells"]] == ["false", "false", "true"])
+        cells.nth(0).click()
+        page.locator("#bigHolders .hold-top").click()
+        page.wait_for_function("!document.querySelector('#bigHolders .hold-card').classList.contains('is-open')")
+        state = page.evaluate(HOLDERS_STATE)
+        check(f"{tag}：再點一次收起來，回到千張以上", not state["open"] and not state["reachable"] and state["value"] == "84.17%", state)
+        check(f"{tag}：大戶持股沒有造成橫向捲動", no_overflow(page))
+    step(f"{tag}：大戶持股", holders)
 
     def periods() -> None:
         chips = []

@@ -954,9 +954,9 @@ body.hm .trend-top.is-plain { grid-template-columns: 76px minmax(0, 1fr); align-
 body.hm .trend-sentence { margin: 0; color: var(--dim); font: 13px/1.6 var(--sans); }
 
 /* 資料記號：一票一根小柱，平的、細的、方的（和外資現貨小圖的柱一樣；圓角只用 bold.css 那幾個，這裡不另外發明） */
-body.hm .trend-row :is(.blk, .tag) { flex: none; width: 8px; height: 13px; background: var(--faint); }
-body.hm .trend-row :is(.blk, .tag).bull { background: var(--up); }
-body.hm .trend-row :is(.blk, .tag).bear { background: var(--down); }
+body.hm .trend-row .blk { flex: none; width: 8px; height: 13px; background: var(--faint); }
+body.hm .trend-row .blk.bull { background: var(--up); }
+body.hm .trend-row .blk.bear { background: var(--down); }
 
 body.hm .trend-bar { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 1px minmax(0, 1fr); column-gap: 4px; height: 32px; }
 body.hm .trend-bar::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 1px; margin-top: -.5px; background: var(--line); }
@@ -976,20 +976,8 @@ body.hm .trend-clip { min-height: 0; clip-path: inset(-70px -6px 0 -6px); }
 body.hm .trend-inner { padding: 2px 12px 12px; }
 
 /* 展開後：一個指標一顆鍵。偏空在中線左邊、小柱在名稱下面；偏多在右邊、小柱在名稱上面；沒有方向的在中間 */
-body.hm .trend-strip { position: relative; display: flex; align-items: stretch; justify-content: center; gap: 6px; }
 body.hm .trend-strip .mid { flex: 0 0 1px; }
-body.hm .trend-strip .cell { position: relative; z-index: 1; flex: 1 1 0; min-width: 0; max-width: 104px; min-height: 48px; padding: 7px 2px; border: 0; border-radius: var(--r-key); background: none; color: var(--ink); font: 600 12px/1.25 var(--sans); text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; cursor: pointer; transition: transform var(--t-press) linear; touch-action: pan-y; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
-body.hm .trend-strip .cell.bear { flex-direction: column-reverse; }
-body.hm .trend-strip .cell.none .tag { height: 5px; }
-body.hm .trend-strip .cell-face { position: absolute; inset: 0; border-radius: inherit; background: var(--key); box-shadow: var(--key-shadow); transition: box-shadow var(--t-press) linear; }
-body.hm .trend-strip :is(.tag, .cell-name) { position: relative; }
-body.hm .trend-strip .cell:active { transform: translateY(calc(var(--key-thick) - 1px)); }
-body.hm .trend-strip .cell:active .cell-face { box-shadow: var(--key-shadow-press); }
-body.hm .trend-strip .cell:is(:focus-visible, [aria-pressed="true"]) { outline: 2px solid var(--gold); outline-offset: 2px; }
-/* 按住左右拖：選中的框（.slide-thumb，程式在 chart-menus.js）跟著手指走，放開時靠近哪一顆就選哪一顆 */
-body.hm .trend-strip .slide-thumb { position: absolute; z-index: 2; left: 0; top: 0; pointer-events: none; border-radius: var(--r-key); outline: 2px solid var(--gold); outline-offset: 2px; }
-body.hm .trend-strip .slide-thumb.is-settling { transition: transform 200ms var(--ease-depth); }
-body.hm .trend-strip.is-sliding .cell { outline: none; }
+/* 鍵本身的樣子、選中的框與按住左右滑的框在 bold.css（.key-strip），和個股頁的大戶持股共用 */
 
 /* 點一顆：那個指標實際的數字寫在下面一行（短期沒選的時候寫不算票的量比與 5 日法人） */
 body.hm .trend-read { margin: 12px 0 0; color: var(--ink); font: 13px/1.5 var(--sans); }
@@ -1010,5 +998,5 @@ body.hm .market-trend.is-entering .trend-row { animation: trend-row-settle var(-
 @keyframes trend-vote-in { from { opacity: 0; translate: var(--from-x) 0; } 35% { opacity: 1; } }
 @keyframes trend-row-settle { from { transform: none; border-color: var(--line); background: transparent; box-shadow: none; } }
 @media (prefers-reduced-motion: reduce) {
-  body.hm .trend-panel, body.hm .trend-row .chev, body.hm .trend-strip .slide-thumb.is-settling { transition: none; }
+  body.hm .trend-panel, body.hm .trend-row .chev { transition: none; }
 }
