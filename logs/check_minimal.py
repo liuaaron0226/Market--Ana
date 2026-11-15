@@ -275,7 +275,7 @@ def check_standard_width(browser: Browser, width: int, height: int, screenshots:
         assert page.evaluate("document.activeElement && document.activeElement.id") == "lineLower", "Esc 後焦點未回入口"
 
         page.locator("#lineLower").click()
-        assert int(page.locator("#panelBody .ob-bar").count()) == 1, "判斷線視窗缺歷史比例條"
+        assert int(page.locator("#panelBody .zone-rows").count()) == 1, "判斷線視窗缺歷史比例的圖"
         page.locator("#panelBody [data-outcome-panel='continue_break']").click()
         assert "不是明天的機率" in page.locator("#panelBody").inner_text(), "分布面板缺白話提醒"
         page.locator("#panelBody .more-detail > summary").click()
@@ -424,6 +424,8 @@ def check_reduced_motion(browser: Browser) -> None:
     panel = page.locator("#detailPanel")
     panel.wait_for(state="visible")
     assert panel.evaluate("el => getComputedStyle(el).opacity") == "1"
+    # 手上沒股票／已經持有那兩句收在「怎麼應對」裡，點了才看得到（本人 11-15）
+    panel.locator("details > summary").first.click()
     assert panel.locator("#actionFlat").is_visible()
     page.close()
 

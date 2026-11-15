@@ -15,6 +15,8 @@ export const WEB_FILES = [
   "terrain-layout.js", "terrain.js",
   // 立體重設計（11-15）：短中長期走勢的算票與畫面
   "trend-votes.js", "trend-matrix.js",
+  // 立體重設計（11-15）：收復線／防守線點開之後那張圖的資料整理
+  "line-zones.js",
   // 立體重設計（11-15）：庫存總覽一列一檔的算法
   "holdings-rows.js",
   // 立體重設計（11-15）：大戶持股每週增減的算法與畫面

@@ -722,11 +722,13 @@
 
   function plainBlock(meaning, watch) {
     const list = items => `<ul>${items.filter(Boolean).map(item => `<li>${item}</li>`).join('')}</ul>`;
-    return `<div class="plain"><section class="plain-group"><h4>這代表</h4>${list(meaning)}</section>${watch && watch.filter(Boolean).length ? `<section class="plain-group plain-watch"><h4>要注意</h4>${list(watch)}</section>` : ''}</div>`;
+    return `<div class="plain">${meaning.filter(Boolean).length ? `<section class="plain-group"><h4>這代表</h4>${list(meaning)}</section>` : ''}${watch && watch.filter(Boolean).length ? `<section class="plain-group plain-watch"><h4>要注意</h4>${list(watch)}</section>` : ''}</div>`;
   }
 
+  // 面板裡點了才展開的一列
+  const fold = (summary, html) => `<details class="more-detail"><summary>${summary}</summary>${html}</details>`;
   function moreDetail(html) {
-    return `<details class="more-detail"><summary>看詳細數字</summary>${html}<p class="deep-links">更深入：<button type="button" data-deep="method">方法</button><button type="button" data-deep="sources">來源</button><button type="button" data-deep="samples">換一組比較樣本</button><button type="button" data-deep="table">資料表</button><button type="button" data-deep="news">新聞</button></p></details>`;
+    return fold('看詳細數字', `${html}<p class="deep-links">更深入：<button type="button" data-deep="method">方法</button><button type="button" data-deep="sources">來源</button><button type="button" data-deep="samples">換一組比較樣本</button><button type="button" data-deep="table">資料表</button><button type="button" data-deep="news">新聞</button></p>`);
   }
 
 
@@ -1065,34 +1067,43 @@
     return `<div class="metric-row"><span>${esc(label)}</span><strong class="num">${esc(display)}</strong><div class="metric-track"><i style="--size:${size}%;--tone:${tone}"></i></div></div>`;
   }
 
-  function lineOutcomeBar() {
-    const result = A.backtest.results[selectedSample] || A.backtest.results[DEFAULT_SAMPLE];
-    const o = result.next_day_outcomes;
-    const seg = (key, label, tone) => `<button type="button" class="ob-seg" data-outcome-panel="${key}" style="--w:${o.percent[key]}%;--tone:${tone}"><span>${label}</span><b class="num">${fmt(o.percent[key], 0)}%</b></button>`;
-    return `<section class="plain-group ob"><h4>過去很像的 ${fmt(o.sample_count, 0)} 次，隔天的結果（不是明天的機率）</h4><div class="ob-bar">${seg('stand_back', '站回', 'var(--up)')}${seg('between', '兩線間', 'var(--gold)')}${seg('continue_break', '跌破', 'var(--down)')}</div></section>`;
-  }
-
+  // 收復線／防守線點開之後：一句重點、一張照價位高低排的圖，其餘點了才展開（本人 11-15：文字看不懂、內容太多，要整理過的圖表）。
+  // 圖的資料整理在 line-zones.js；兩顆鍵點開是同一張圖，只差上面那一句與哪一條線比較亮。
+  const ZONE_TONES = { stand_back: 'var(--up)', between: 'var(--gold)', continue_break: 'var(--down)', upper: 'var(--gold)', lower: 'var(--down)' };
   function renderLinePanel(line) {
     const upper = line === 'upper';
     const scenarioName = upper ? '轉強觀察' : '續弱觀察';
     const scenario = scenarioFor(scenarioName);
     const action = ACTIONS[scenarioName] || {};
+    const outcomes = (A.backtest.results[selectedSample] || A.backtest.results[DEFAULT_SAMPLE]).next_day_outcomes;
+    // 線是照分析那一天畫的。那一天就是今天才寫「今天」；隔天盤中再看，那已經是上一個交易日，改寫日期
+    const cutoff = A.meta.cutoff_date || '';
+    const today = cutoff === new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Taipei' });
+    const day = today ? '今天' : cutoff ? ` ${shortDay(cutoff)} ` : '當天';
+    const point = upper
+      ? `收盤回到 <b class="num">${fmt(UPPER, 0)}</b> 以上，才算止跌。`
+      : `收盤跌破 <b class="num">${fmt(LOWER, 0)}</b>，就是${day}的低點沒守住。`;
+    const figure = window.LineZones.read({ upper: UPPER, lower: LOWER, close: CLOSE, percent: outcomes.percent, count: outcomes.sample_count });
+    const here = today ? '今天' : '收盤';
+    const row = item => (item.kind === 'zone'
+      ? `<li><button type="button" class="zone" data-outcome-panel="${item.key}" style="--w:${item.percent}%;--tone:${ZONE_TONES[item.key]}" aria-label="${esc(outcomeLabels[item.key])} ${item.text}${item.here ? `，${here}落在這一區` : ''}，查看歷史分布詳情"><span class="zone-name">${item.label}${item.here ? `<em>${here}</em>` : ''}</span><span class="zone-track"><i></i></span><b class="num">${item.text}</b></button></li>`
+      : `<li class="zone-line${item.key === line ? ' is-this' : ''}" style="--tone:${ZONE_TONES[item.key]}"><i class="tag">${item.label}</i><strong class="num">${fmt(item.value, 0)}</strong><span>${item.gap}</span></li>`);
     const source = upper
       ? `依回測規則，本次收復線取 ${fmt(UPPER)}；原始前日低為 ${fmt(AS_OF.previous_low)}。`
       : `依回測規則，防守線取分析截止日最低 ${fmt(LOWER)}。`;
-    const meaning = upper
-      ? [`這是<b>止穩的門檻</b>：${esc(TARGET_LABEL)} 收盤站上 ${fmt(UPPER, 0)}，才算短線止跌。`, `它是今天的最高點${AS_OF.previous_low > UPPER ? '（前一天最低點更高，所以取比較近的今天最高點）' : ''}。`]
-      : [`這是<b>停損的警戒線</b>：${esc(TARGET_LABEL)} 收盤跌破 ${fmt(LOWER, 0)}，代表今天的低點守不住。`, '它是今天的最低點。'];
     const watch = upper
-      ? ['站上只代表<b>短線反彈</b>，不是趨勢翻多。', '要搭配外資賣超縮小才比較可信。']
-      : ['只看<b>收盤</b>，盤中跌破又收回來不算。', `這條線離今天收盤約 ${fmt(Math.abs(CLOSE - LOWER), 0)} 點，在兩線之間不代表安全。`];
+      ? ['站上只是反彈，不代表開始漲回去。', '外資賣得變少，才比較可信。']
+      : ['只看收盤，盤中跌破又收回來不算。', CLOSE >= LOWER && CLOSE < UPPER ? '還在兩條線中間，不代表安全。' : ''];
     return `
-      ${plainBlock(meaning, watch)}
-      <dl class="action-list">
+      <p class="line-point">${point}</p>
+      <figure class="zones">
+        <figcaption>過去很像的${figure.count === null ? '日子' : ` ${fmt(figure.count, 0)} 次`}，隔天收在哪裡（不是明天的機率）</figcaption>
+        <ol class="zone-rows">${figure.rows.map(row).join('')}</ol>
+      </figure>
+      ${fold('怎麼應對', `<dl class="action-list">
         <div><dt>手上沒股票</dt><dd id="actionFlat">${esc(action.flat || '尚未取得')}</dd></div>
         <div><dt>已經持有</dt><dd id="actionHolding">${esc(action.holding || '尚未取得')}</dd></div>
-      </dl>
-      ${lineOutcomeBar()}
+      </dl>${plainBlock([], watch)}`)}
       ${moreDetail(`<p class="panel-lede">${source}</p><dl class="action-list"><div><dt>觸發條件</dt><dd>${esc(scenario.trigger || '尚未取得')}</dd></div><div><dt>解讀</dt><dd>${esc(scenario.interpretation || '尚未取得')}</dd></div></dl><p class="panel-callout" style="--tone:${upper ? 'var(--gold)' : 'var(--down)'}">${esc(ACTIONS.basis || '一般情境應對，不是自動下單指示。')}</p>`)}
     `;
   }

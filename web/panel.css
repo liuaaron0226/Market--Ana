@@ -97,9 +97,6 @@
 .hm .action-list div { padding: 12px 0; background: transparent; border-bottom: 1px solid var(--hair); display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 16px; }
 .hm .action-list dt { font-size: 12px; padding-top: 2px; }
 .hm .action-list dd { margin: 0; font-size: 14px; line-height: 1.6; }
-.hm .ob-bar { gap: 2px; border-radius: 6px; overflow: hidden; margin-top: 8px; }
-.hm .ob-seg { padding: 10px 12px; border-radius: 0; background: color-mix(in srgb, var(--tone) 12%, transparent); border: 0; box-shadow: inset 0 3px 0 var(--tone); text-align: left; }
-.hm .ob-seg b { font: 500 18px var(--mono); }
 .hm .metric-track { height: 4px; border-radius: 2px; }
 
 /* ---------- 展開更多 ---------- */
@@ -114,6 +111,37 @@
   border: 1px solid var(--hair); border-radius: 50%; font: 400 14px/1 var(--mono); color: var(--dim);
 }
 .hm .more-detail[open] > summary::after { content: "−"; background: var(--panel2); }
+
+/* ---------- 收復線／防守線：一句重點＋一張照價位高低排的圖 ----------
+   由上到下是站回、收復線、兩線間、防守線、跌破，和 K 線圖上的高低一樣；細橫條是過去隔天收在那一區的比例。
+   紅綠只在細橫條與小價籤上；沒有另外的陰影。（.panel-body 開頭是為了蓋過 .bd 對 figure、ol、p 的歸零） */
+.hm .panel-body .line-point { margin: 0; font: 600 19px/1.55 var(--sans); color: var(--ink); text-wrap: pretty; }
+.hm .panel-body .line-point b { font: 600 19px var(--mono); font-variant-numeric: tabular-nums; }
+.hm .panel-body .zones { margin: 20px 0 0; }
+.hm .panel-body .zones > figcaption { margin: 0 0 8px; font-size: 12px; color: var(--faint); }
+.hm .panel-body .zone-rows { margin: 0; padding: 0; list-style: none; }
+.hm .zone {
+  display: grid; grid-template-columns: 84px minmax(0, 1fr) 48px; align-items: center; gap: 12px;
+  width: 100%; min-height: 44px; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.hm .zone:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.hm .zone-name { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--dim); white-space: nowrap; }
+.hm .zone-name em { padding: 1px 5px; border: 1px solid var(--gold); border-radius: var(--r-tag); font: 500 11px var(--sans); font-style: normal; color: var(--gold); }
+.hm .zone-track { height: 8px; background: color-mix(in srgb, var(--ink) 7%, transparent); }
+.hm .zone-track i { display: block; width: var(--w); height: 100%; background: var(--tone); }
+.hm .zone b { justify-self: end; font: 500 16px var(--mono); font-variant-numeric: tabular-nums; color: var(--ink); }
+@media (hover: hover) { .hm .zone:hover .zone-name { color: var(--ink); } }
+/* 兩條線：夾在三區中間，和圖上一樣是一條橫線加一個小價籤；點開的是哪一條，那一條的數字比較亮 */
+.hm .zone-line { display: flex; align-items: center; gap: 8px; min-height: 30px; color: var(--dim); font-size: 13px; }
+.hm .zone-line::after { content: ""; order: 2; flex: 1; height: 0; border-top: 1px dashed var(--tone); opacity: .7; }
+.hm .zone-line .tag { order: 1; padding: 2px 6px; border-radius: var(--r-tag); background: var(--tone); color: var(--bg); font: 600 12px var(--sans); font-style: normal; white-space: nowrap; }
+.hm .zone-line strong { order: 1; font: 500 15px var(--mono); font-variant-numeric: tabular-nums; color: var(--dim); }
+.hm .zone-line span { order: 3; white-space: nowrap; font-size: 12px; color: var(--faint); }
+.hm .zone-line.is-this :is(strong, span) { color: var(--ink); }
+.hm .zones + .more-detail { margin-top: 16px; }
+.hm .more-detail + .more-detail { margin-top: 0; }
+.hm .more-detail > .action-list { margin-top: 4px; }
+.hm .more-detail > .plain { margin: 16px 0 12px; }
 
 /* ---------- 籌碼明細 ---------- */
 .hm .drill-table table { font-size: 13px; }
@@ -140,9 +168,6 @@
   .hm .action-list div, .hm .kv-list div { grid-template-columns: 88px minmax(0, 1fr); }
 }
 /* 歷史分布：獨立一段，標題與條之間留白；色塊只用底色＋上緣 3px，不再有下緣粗線 */
-.hm .plain-group.ob { margin-top: 8px; padding-top: 20px; border-top: 1px solid var(--hair); }
-.hm .ob-seg { border-bottom: 0; flex-basis: var(--w); display: grid; gap: 2px; }
-.hm .ob-seg span { font-size: 12px; }
 
 /* ================= 本人 11-09 指正「根本沒有去設計」：週期選單、籌碼明細 ================= */
 
@@ -304,5 +329,4 @@ body.hm .chip-seg button[aria-checked="true"],
 body.hm .chip-seg button[aria-checked="true"]:hover { background: var(--key); color: var(--ink); box-shadow: var(--key-shadow); }
 body.hm .detail-chart { border-radius: var(--r-key); background: var(--well); box-shadow: var(--well-shadow); }
 body.hm .table-scroll { border: 0; border-radius: var(--r-key); box-shadow: var(--well-shadow); }
-body.hm .ob-bar { border-radius: var(--r-key); }
 body.hm .plain-watch h4 { border-radius: var(--r-tag); }

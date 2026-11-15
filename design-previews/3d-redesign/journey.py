@@ -590,6 +590,43 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
     open_panel(page, tag, "#priceSummary", "現價")
     check(f"{tag}：頂列「下一交易日」的框收起來了（本人 11-15）", not page.locator("#conclusionTrigger").is_visible())
     open_panel(page, tag, "#lineUpper", "收復線")
+
+    def line_panel() -> None:
+        """收復線／防守線點開之後：一句重點、一張照價位高低排的圖，其餘點了才展開（本人 11-15 看樣品後答「照這樣做」）。"""
+        for key, name in (("#lineUpper", "收復線"), ("#lineLower", "防守線")):
+            target = page.locator(key)
+            target.scroll_into_view_if_needed()
+            target.click()
+            page.wait_for_function(PANEL_OPEN)
+            seen = page.evaluate("""() => { const body = document.querySelector('#panelBody');
+              const rows = [...body.querySelectorAll('.zone-rows > li')].map(li => li.classList.contains('zone-line')
+                ? 'line:' + li.querySelector('.tag').textContent : 'zone:' + li.querySelector('.zone').dataset.outcomePanel);
+              const track = body.querySelector('.zone[data-outcome-panel="continue_break"] .zone-track');
+              return { rows, point: body.querySelectorAll('.line-point').length, first: body.firstElementChild.className,
+                lit: [...body.querySelectorAll('.zone-line.is-this .tag')].map(node => node.textContent),
+                marks: body.querySelectorAll('.zone-name em').length,
+                gaps: [...body.querySelectorAll('.zone-line span')].map(node => node.textContent),
+                open: [...body.querySelectorAll('details')].map(node => node.open), folds: [...body.querySelectorAll('details > summary')].map(node => node.textContent),
+                share: track.firstElementChild.getBoundingClientRect().width / track.getBoundingClientRect().width,
+                text: body.querySelector('.zone[data-outcome-panel="continue_break"] b').textContent,
+                wide: body.scrollWidth > body.clientWidth }; }""")
+            check(f"{tag}：{name}點開先看到一句重點", seen["point"] == 1 and seen["first"] == "line-point", seen["first"])
+            check(f"{tag}：{name}的圖由上到下是站回、收復線、兩線間、防守線、跌破",
+                  seen["rows"] == ["zone:stand_back", "line:收復線", "zone:between", "line:防守線", "zone:continue_break"], seen["rows"])
+            check(f"{tag}：{name}的圖只有{name}那一條比較亮，收盤落在哪一區只標一區，兩條線都寫離收盤多遠",
+                  seen["lit"] == [name] and seen["marks"] == 1 and len(seen["gaps"]) == 2 and all("點" in gap for gap in seen["gaps"]), seen)
+            check(f"{tag}：{name}的橫條長度就是旁邊寫的比例", abs(seen["share"] * 100 - float(seen["text"].rstrip("%"))) <= 1.5, [seen["share"], seen["text"]])
+            check(f"{tag}：{name}其餘的收在「怎麼應對」「看詳細數字」，一開始都收著",
+                  seen["folds"] == ["怎麼應對", "看詳細數字"] and seen["open"] == [False, False] and not page.locator("#actionFlat").is_visible(), seen)
+            check(f"{tag}：{name}的面板沒有橫向捲動", not seen["wide"])
+            page.locator("#panelBody details > summary").first.click()
+            check(f"{tag}：{name}點「怎麼應對」才看到手上沒股票、已經持有那兩句", page.locator("#actionFlat").is_visible() and page.locator("#actionHolding").is_visible())
+            page.locator("#panelBody .zone[data-outcome-panel='between']").click()
+            page.wait_for_function("document.getElementById('panelTitle').textContent.includes('歷史結果')")
+            check(f"{tag}：{name}的圖點某一區，照舊進那一區的歷史結果", "不是明天的機率" in page.locator("#panelBody").inner_text())
+            page.keyboard.press("Escape")
+            page.wait_for_function(PANEL_CLOSED)
+    step(f"{tag}：收復線與防守線點開之後的圖", line_panel)
     open_panel(page, tag, "#readCard", "直白分析")
     step(f"{tag}：展開籌碼與資金", lambda: open_cat(page, "chips"))
     # 籌碼與資金圖為主（本人 11-15）：六項各一列，有名稱、數字與近 20 天的迷你圖；那句說明不放在卡上。
