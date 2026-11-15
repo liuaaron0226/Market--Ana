@@ -5,7 +5,9 @@
 
 - 每次查詢前固定等 PAUSE 秒；先把最近一週的所有股票查完，再往前一週（中途停下，手上是完整的近幾週）。
 - 進度逐筆附加到 jsonl，重跑只查還沒有的；那一週沒有那一檔也記下來，不再問。
-- HTTP 403／429 等、頁面不是查詢頁、回的不是問的那一檔那一週、或連續一大串查無資料：立刻停，不重試硬闖。
+- HTTP 403／429 等、頁面不是查詢頁、或連續一大串查無資料：立刻停，不重試硬闖。
+- 回的不是問的那一檔那一週（官方偶爾把資料日期印錯，資料本身是對的）：留下那一頁、等 60 秒、重新開頁再問一次，
+  重問後日期和代號都對才寫入；連兩次就停。
 - 連線錯誤等 60 秒、單次 HTTP 404 等 5 分鐘（官方站偶發，重新開頁就好），重新開表單頁後同一筆再問一次。
 - 再錯：404 連兩次就停；連線錯誤再等 5 分鐘試最後一次，連錯三次就停。
 
@@ -116,9 +118,16 @@ def _append(path: Path, rows: list[dict]) -> None:
 class _Hiccup(Exception):
     """可能只是一時的：等一下、重新開表單頁、同一件事再做一次。"""
 
-    def __init__(self, reason: str, wait: float) -> None:
+    def __init__(self, reason: str, wait: float, kind: str = "network", page: str | None = None) -> None:
         super().__init__(reason)
         self.wait = wait
+        self.kind = kind
+        self.page = page
+
+
+def _keep(path: Path, page: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(page, encoding="utf-8", newline="\n")
 
 
 def backfill(codes: list[str], progress: Path = DEFAULT_PROGRESS, *, fetch: Callable, sleep: Callable = time.sleep,
@@ -134,7 +143,7 @@ def backfill(codes: list[str], progress: Path = DEFAULT_PROGRESS, *, fetch: Call
         except Exception as error:  # noqa: BLE001
             raise _Hiccup(f"連線錯誤：{type(error).__name__}", RETRY_WAIT) from error
         if status == 404:
-            raise _Hiccup("HTTP 404", NOT_FOUND_WAIT)
+            raise _Hiccup("HTTP 404", NOT_FOUND_WAIT, "404")
         if status != 200:
             raise Refused(f"HTTP {status}")
         return html
@@ -146,7 +155,7 @@ def backfill(codes: list[str], progress: Path = DEFAULT_PROGRESS, *, fetch: Call
             raise Refused(str(error)) from error
 
     def once_more(action: Callable):
-        """做一次；只是一時出錯就等一下、重新開表單頁再做。404 連兩次、或不管哪一種連錯三次，就停。"""
+        """做一次；只是一時出錯就等一下、重新開表單頁再做。404 或回錯週連兩次、或不管哪一種連錯三次，就停。"""
         nonlocal form
         hiccups: list[str] = []
         while True:
@@ -155,9 +164,9 @@ def backfill(codes: list[str], progress: Path = DEFAULT_PROGRESS, *, fetch: Call
                     form = open_form()
                 return action()
             except _Hiccup as hiccup:
-                hiccups.append(str(hiccup))
-                if len(hiccups) >= 3 or hiccups.count("HTTP 404") >= 2:
-                    raise Refused(str(hiccup)) from hiccup
+                hiccups.append(hiccup.kind)
+                if len(hiccups) >= 3 or hiccups.count("404") >= 2 or hiccups.count("mismatch") >= 2:
+                    raise Refused(str(hiccup), hiccup.page) from hiccup
                 wait = hiccup.wait if len(hiccups) == 1 else SECOND_WAIT
                 log(f"{datetime.now().isoformat(timespec='seconds')} {hiccup}，等 {wait:.0f} 秒後重來一次")
                 sleep(wait)
@@ -187,20 +196,31 @@ def backfill(codes: list[str], progress: Path = DEFAULT_PROGRESS, *, fetch: Call
                 asked = 0
             asked += 1
             sleep(PAUSE)
-            html = once_more(lambda: request({**form["fields"], "scaDate": compact, "sqlMethod": "StockNo",
-                                              "stockNo": code, "stockName": ""}))
-            try:
-                form = {**form, "fields": parse_form(html)["fields"]}
-                result = parse_result(html)
-            except ValueError as error:
-                raise Refused(str(error), html) from error
+            doubts: list[dict] = []  # 頁面印的不是問的那一檔那一週時，那一頁的數字（重問後拿來比）
+
+            def ask(code: str = code, compact: str = compact, iso: str = iso, doubts: list = doubts) -> tuple:
+                html = request({**form["fields"], "scaDate": compact, "sqlMethod": "StockNo", "stockNo": code, "stockName": ""})
+                try:
+                    fields = parse_form(html)["fields"]
+                    result = parse_result(html)
+                except ValueError as error:
+                    raise Refused(str(error), html) from error
+                if result is not None and (result["code"], result["data_date"]) != (code, iso):
+                    _keep(progress.with_name(f"mismatch-{code}-{compact}.html"), html)
+                    doubts.append(result["holders"])
+                    raise _Hiccup(f"問 {code} {iso}，回的是 {result['code']} {result['data_date']}", RETRY_WAIT, "mismatch", html)
+                return html, fields, result
+
+            html, fields, result = once_more(ask)
+            form = {**form, "fields": fields}
+            if doubts and result is not None:
+                same = "數字相同" if doubts[-1] == result["holders"] else "數字不同"
+                log(f"{datetime.now().isoformat(timespec='seconds')} {code} {iso} 重問後日期正確，和印錯的那一頁{same}（那一頁已留下）")
             if result is None:
                 empties.append({"code": code, "date": iso, "holders": None})
                 if len(empties) >= EMPTY_RUN_LIMIT:
                     raise Refused(f"連續 {len(empties)} 次查無資料，可能被擋或權杖失效；這一串沒有記成「沒有」", html)
                 continue
-            if (result["code"], result["data_date"]) != (code, iso):
-                raise Refused(f"問 {code} {iso}，回的是 {result['code']} {result['data_date']}", html)
             _append(progress, [*empties, {"code": code, "date": iso, "holders": result["holders"]}])
             report["missing"] += len(empties)
             report["fetched"] += 1
@@ -212,8 +232,7 @@ def backfill(codes: list[str], progress: Path = DEFAULT_PROGRESS, *, fetch: Call
         stopped = {**report, "status": "stopped", "reason": str(error)}
         if error.page is not None:  # 留下讓它停下的那一頁，事後才查得出官方到底回了什麼
             kept = progress.with_name("refused.html")
-            kept.parent.mkdir(parents=True, exist_ok=True)
-            kept.write_text(error.page, encoding="utf-8", newline="\n")
+            _keep(kept, error.page)
             stopped["evidence"] = str(kept)
         return stopped
     if empties:  # 收尾時剩下的零星查無資料（沒有達到整串的門檻）照實記下

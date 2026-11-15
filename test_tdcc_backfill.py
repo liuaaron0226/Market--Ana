@@ -101,9 +101,10 @@ class BackfillTest(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.progress = Path(self.tmp.name) / "progress.jsonl"
         self.sleeps: list[float] = []
+        self.logs: list[str] = []
 
     def run_backfill(self, site, codes=("2330", "2317"), **kwargs) -> dict:
-        return tb.backfill(list(codes), self.progress, fetch=site, sleep=self.sleeps.append, log=lambda *_: None,
+        return tb.backfill(list(codes), self.progress, fetch=site, sleep=self.sleeps.append, log=self.logs.append,
                            skip_dates={"2026-11-13"}, **kwargs)
 
     def rows(self) -> list[dict]:
@@ -176,14 +177,32 @@ class BackfillTest(unittest.TestCase):
         self.assertEqual(len(site.requests), 5, "第二次 404 之後不再送任何請求")
         self.assertEqual([row["code"] for row in self.rows()], ["2330"])
 
-    def test_stops_when_the_answer_is_for_a_different_stock_or_week(self) -> None:
+    def test_an_answer_for_another_week_is_asked_again_and_only_the_matching_answer_is_kept(self) -> None:
+        # 本人 2026-11-15「可以，接著抓」：實跑約 5,700 次有 2 次頁面印的資料日期不是問的那一週
+        # （問 1326 的 07-17 印成 10-30）。留下的那一頁和重問的結果數字完全相同，只有日期印錯。
+        # 所以等 60 秒、重新開頁、同一筆再問一次；重問後日期和代號都對才寫入，並留下印錯的那一頁。
+        wrong = page(code="2317", roc_date="115年10月30日", token="x", dates=("20261113", "20261106", "20251121"))
+        site = FakeSite({("2317", "20261106"): [(200, wrong), "ok"]})
+        report = self.run_backfill(site)
+        self.assertEqual((report["status"], report["fetched"]), ("done", 4))
+        self.assertEqual([wait for wait in self.sleeps if wait != 3.0], [60.0])
+        self.assertEqual([request and request[:2] for request in site.requests[:5]],
+                         [None, ("2330", "20261106"), ("2317", "20261106"), None, ("2317", "20261106")])
+        self.assertEqual([(row["code"], row["date"]) for row in self.rows()[:2]],
+                         [("2330", "2026-11-06"), ("2317", "2026-11-06")])
+        self.assertEqual(self.progress.with_name("mismatch-2317-20261106.html").read_text(encoding="utf-8"), wrong)
+        self.assertTrue(any("2317" in line and "數字相同" in line for line in self.logs), self.logs)
+
+    def test_two_answers_in_a_row_for_another_stock_or_week_stop_the_run(self) -> None:
         wrong = page(code="2454", roc_date="115年11月06日", token="x", dates=("20261113", "20261106", "20251121"))
-        report = self.run_backfill(FakeSite({("2317", "20261106"): (200, wrong)}))
+        site = FakeSite({("2317", "20261106"): (200, wrong)})
+        report = self.run_backfill(site)
         self.assertEqual(report["status"], "stopped")
         self.assertIn("2454", report["reason"])
+        self.assertEqual([wait for wait in self.sleeps if wait != 3.0], [60.0])
+        self.assertEqual(len(site.requests), 5, "第二次回錯之後不再送任何請求")
         self.assertEqual([row["code"] for row in self.rows()], ["2330"])
-        # 11-15 實跑：問 6672 的 08-07 回了 08-26，重問又正常，當時那一頁沒留下來無從查起。
-        # 所以因為頁面內容停下時，把官方那一頁原文存在進度檔旁邊。
+        # 因為頁面內容停下時，把官方那一頁原文存在進度檔旁邊。
         kept = self.progress.with_name("refused.html")
         self.assertEqual(report["evidence"], str(kept))
         self.assertEqual(kept.read_text(encoding="utf-8"), wrong)
