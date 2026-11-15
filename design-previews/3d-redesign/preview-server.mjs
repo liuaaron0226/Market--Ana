@@ -170,8 +170,8 @@ async function asUser(email, path, { method = "GET", body } = {}) {
 
 // 固定樣本（虛構部位，不是任何人的真實庫存）：經由正式 API 寫入，沿用同一套驗證。
 await asUser(OWNER, "/api/watchlist", { method: "POST", body: { code: "2330", horizon: "long" } });
-await asUser(OWNER, "/api/watchlist", { method: "POST", body: { code: "2603", horizon: "short" } });
-await asUser(OWNER, "/api/watchlist", { method: "POST", body: { code: "6669", horizon: "none" } });
+await asUser(OWNER, "/api/watchlist", { method: "POST", body: { code: "2603", horizon: "short", group: "航運" } });
+await asUser(OWNER, "/api/watchlist", { method: "POST", body: { code: "6669", horizon: "none", group: "AI 伺服器" } });
 await asUser(OWNER, "/api/holdings", { method: "POST", body: { code: "2330", shares: 1000, average_cost: 980, note: "核心部位" } });
 await asUser(OWNER, "/api/holdings", { method: "POST", body: { code: "0050", shares: 3000, average_cost: 58.4, note: "" } });
 await asUser(OWNER, "/api/holdings", { method: "POST", body: { code: "2603", shares: 2000, average_cost: 215, note: "短線" } });

@@ -113,7 +113,8 @@ test("其他獲准使用者得到「沒有內容」，也動不了任何東西�
     assert.deepEqual(await refused.json(), { available: false }, method);
   }
   const [item] = (await json("/api/watchlist", { email: "a@example.com" })).items;
-  assert.deepEqual(Object.keys(item).sort(), ["code", "created_at", "horizon", "in_universe", "market", "name", "updated_at"]);
+  // 關注的欄位（watching、watch_since）不會出現在自選股的回應裡。group 是自選的群組（2026-11-16 加的），每個人都有。
+  assert.deepEqual(Object.keys(item).sort(), ["code", "created_at", "group", "horizon", "in_universe", "market", "name", "updated_at"]);
 
   // 站主的關注和別人的自選股互不相干。
   await follow("2330");

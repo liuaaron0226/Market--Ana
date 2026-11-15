@@ -30,11 +30,11 @@ STATE = """() => ({ total: document.querySelector('.hv-total').innerText.replace
   empty: document.querySelector('#holdingRows .hv-empty') ? document.querySelector('#holdingRows .hv-empty').textContent : null,
   entering: document.getElementById('holdingRows').classList.contains('is-entering'),
   rows: [...document.querySelectorAll('#holdingRows .hv-row:not(.pf-only-watch)')].map(row => ({ code: row.dataset.code, state: row.dataset.state, ret: row.querySelector('.hv-ret').textContent,
-    bars: [...row.querySelectorAll('.hv-bar i')].map(bar => bar.className), label: row.querySelector('.hv-top').getAttribute('aria-label'),
-    facts: [...row.querySelectorAll('.hv-facts li')].map(fact => fact.innerText.replace(/\\s+/g, ' ').trim()), more: row.querySelector('.pf-acts').innerText.replace(/\\s+/g, ' ').trim(),
-    link: row.querySelector('.pf-acts a') ? row.querySelector('.pf-acts a').getAttribute('href') : null })) })"""
+    bars: [...row.querySelectorAll('.hv-bar i')].map(bar => bar.className), label: row.querySelector('.hv-open').getAttribute('aria-label'),
+    facts: [...row.querySelectorAll('.hv-facts li')].map(fact => fact.innerText.replace(/\\s+/g, ' ').trim()), more: row.querySelector('.pf-scope') ? row.querySelector('.pf-scope').textContent : '',
+    link: row.querySelector('a.hv-name') ? row.querySelector('a.hv-name').getAttribute('href') : null })) })"""
 FITS = """() => [...document.querySelectorAll('#holdingRows .hv-row')].every(row => { const box = row.getBoundingClientRect();
-  return [...row.querySelectorAll('.hv-top > *, .hv-facts li, .pf-set > *, .pf-acts > *')].every(node => { const b = node.getBoundingClientRect(); return b.width === 0 || (b.left >= box.left - .5 && b.right <= box.right + .5); }); })"""
+  return [...row.querySelectorAll('.hv-top > *, .hv-facts li, .pf-set > *')].every(node => { const b = node.getBoundingClientRect(); return b.width === 0 || (b.left >= box.left - .5 && b.right <= box.right + .5); }); })"""
 OVERFLOW = "document.documentElement.scrollWidth > document.documentElement.clientWidth"
 
 with sync_playwright() as p:
@@ -57,30 +57,36 @@ with sync_playwright() as p:
         return ctx, page, errors
 
     def open_holding_form(page):
-        """新增的表單收在「＋」裡（本人 2026-11-16）：按開、選新增庫存。"""
+        """新增的表單收在「＋」裡（本人 2026-11-16）：按開、再按「新增庫存」才有股數與成本。"""
         if page.locator("#addToggle").get_attribute("aria-expanded") != "true":
             page.locator("#addToggle").click()
-        page.locator("#addKind [data-kind='holding']").click()
+        if page.locator("#addMore").is_hidden():
+            page.locator("#addHolding").click()
+
+    def act(page, code, kind):
+        """那一列向左滑才有的動作（修改、移出、刪除）：這裡用鍵盤把它滑出來（在那一列上按 ←），再按那個動作。"""
+        row = page.locator(f"#holdingRows .hv-row[data-code='{code}']")
+        row.locator(".hv-open").focus()
+        page.keyboard.press("ArrowLeft")
+        row.locator(f".swipe-act[data-act='{kind}']").click()
 
     held = "#holdingRows .hv-row:not(.pf-only-watch)"
 
     # ---- 1. 有動態：進場只播一次
     ctx, page, errors = open_page(390, "no-preference")
-    page.on("dialog", lambda dialog: dialog.accept())
     check("有動態：進頁面就播進場", page.evaluate("window.__entered"))
     page.wait_for_function("!document.getElementById('holdingRows').classList.contains('is-entering')", timeout=8000)
     check("有動態：播完之後記號拿掉、每一列在定位", [row["state"] for row in page.evaluate(STATE)["rows"]] == ["bull"] * 3
           and page.evaluate("[...document.querySelectorAll('#holdingRows .hv-bar i')].every(bar => getComputedStyle(bar).transform === 'none')"))
     page.evaluate("window.__again = false; new MutationObserver(() => { if (document.getElementById('holdingRows').classList.contains('is-entering')) window.__again = true; }).observe(document.getElementById('holdingRows'), { attributes: true, attributeFilter: ['class'] })")
     open_holding_form(page)
-    page.locator("#holdingCode").fill("6669")
+    page.locator("#addCode").fill("6669")
     page.locator("#holdingShares").fill("100")
     page.locator("#holdingCost").fill("3000")
-    page.locator("#holdingForm button[type=submit]").click()
+    page.locator("#saveHolding").click()
     page.locator(f"{held}[data-code='6669']").wait_for()
     check("有動態：新增一檔之後重畫，不重播進場", not page.evaluate(STATE)["entering"] and not page.evaluate("window.__again"))
-    page.locator("#holdingRows .hv-row[data-code='6669'] .hv-top").click()
-    page.get_by_role("button", name="刪除庫存 6669").click()
+    act(page, "6669", "delete")
     page.wait_for_function("selector => document.querySelectorAll(selector).length === 3", arg=held)
     check("有動態：沒有腳本錯誤", not errors, errors)
     ctx.close()
@@ -93,11 +99,12 @@ with sync_playwright() as p:
     rows = {row["code"]: row for row in state["rows"]}
     check("照市值由大到小", [row["code"] for row in state["rows"]] == ["2330", "2603", "2317", "9958", "1101"], [row["code"] for row in state["rows"]])
     check("賠錢的一檔：凹下、橫條是市值＋還差的、報酬率是負的", (rows["2317"]["state"], rows["2317"]["bars"], rows["2317"]["ret"]) == ("bear", ["base", "lack"], "−10%")
-          and rows["2317"]["facts"][2] == "賠 −$21,000" and "賠 −10%" in rows["2317"]["label"], rows["2317"])
+          and rows["2317"]["facts"][1] == "賠 −$21,000" and "賠 −10%" in rows["2317"]["label"], rows["2317"])
     check("剛好打平的一檔：平的、橫條只有一段", (rows["1101"]["state"], rows["1101"]["bars"], rows["1101"]["ret"]) == ("flat", ["base"], "0%")
-          and rows["1101"]["facts"][2] == "打平 $0", rows["1101"])
-    check("沿用上次收盤的那一檔：寫上次可用收盤", rows["2603"]["facts"][4] == "上次可用收盤 245.5", rows["2603"]["facts"])
-    check("不在分析範圍的那一檔：寫明不能開、沒有連結", "不在本站分析範圍" in rows["9958"]["more"] and rows["9958"]["link"] is None, rows["9958"]["more"])
+          and rows["1101"]["facts"][1] == "打平 $0", rows["1101"])
+    check("沿用上次收盤的那一檔：市值那一格寫明是上次收盤", rows["2603"]["facts"][0] == "市值（上次收盤） $491,000", rows["2603"]["facts"])
+    check("不在分析範圍的那一檔：名稱不是連結，點開寫明沒有個股頁；其他的名稱都連到個股頁", "不在本站分析範圍" in rows["9958"]["more"] and rows["9958"]["link"] is None
+          and rows["2330"]["link"] == "stock.html?code=2330" and rows["2330"]["more"] == "", [rows["9958"]["more"], rows["2330"]["link"]])
     check("總數那一行：賺賠合計", state["total"] == "$3,085,000 成本 $1,760,000 賺 +$1,325,000（+75.28%）", state["total"])
     ctx.close()
 
@@ -105,9 +112,9 @@ with sync_playwright() as p:
     state = page.evaluate(STATE)
     last = state["rows"][-1]
     check("沒有價格的那一檔：排最後、不畫橫條、報酬率寫—", (last["code"], last["state"], last["bars"], last["ret"]) == ("9999", "none", [], "—")
-          and last["facts"][:4] == ["市值 —", "成本 $50,000", "損益 —", "占庫存 —"] and last["label"] == "沒有價格 9999：沒有價格", last)
-    check("有一檔沒價格：總市值與賺賠寫—，成本照寫；有價格的那一檔照樣有橫條、占庫存寫—", state["total"] == "— 成本 $1,030,000 損益 —（—）"
-          and state["rows"][0]["bars"] == ["base", "gain"] and state["rows"][0]["facts"][3] == "占庫存 —", [state["total"], state["rows"][0]])
+          and last["facts"] == ["市值 —", "損益 —", "股數・均價 500・100"] and last["label"] == "沒有價格 9999 的明細：沒有價格", last)
+    check("有一檔沒價格：總市值與賺賠寫—，成本照寫；有價格的那一檔照樣有橫條，不說占庫存多少（算不出來）", state["total"] == "— 成本 $1,030,000 損益 —（—）"
+          and state["rows"][0]["bars"] == ["base", "gain"] and "占庫存" not in state["rows"][0]["label"], [state["total"], state["rows"][0]])
     ctx.close()
 
     ctx, page, errors = open_page(390, "reduce", [])
@@ -129,7 +136,6 @@ with sync_playwright() as p:
     # ---- 一開始沒有庫存、之後新增第一檔：不播進場（進場只在進頁面時播）；刪除之後鍵盤焦點不掉回頁面最上面
     ctx = browser.new_context(viewport={"width": 390, "height": 800}, has_touch=True, reduced_motion="no-preference", locale="zh-TW")
     page = ctx.new_page()
-    page.on("dialog", lambda dialog: dialog.accept())
     stored = []
     def fake(route):
         if route.request.method == "GET":
@@ -146,23 +152,24 @@ with sync_playwright() as p:
     page.goto(BASE + "/portfolio.html", wait_until="networkidle")
     page.wait_for_function("document.getElementById('portfolioFreshness').textContent.trim() !== '讀取中'")
     page.evaluate("window.__again = false; new MutationObserver(() => { if (document.getElementById('holdingRows').classList.contains('is-entering')) window.__again = true; }).observe(document.getElementById('holdingRows'), { attributes: true, attributeFilter: ['class'] })")
-    check("什麼都沒有時寫一句怎麼新增", page.evaluate(STATE)["empty"] == "還沒有自選或庫存。按右邊的「＋」，加入想追蹤的股票或輸入庫存。", page.evaluate(STATE)["empty"])
+    check("什麼都沒有時寫一句怎麼新增", page.evaluate(STATE)["empty"] == "還沒有自選或庫存。按右邊的「＋」，輸入股票代號。", page.evaluate(STATE)["empty"])
     open_holding_form(page)
-    page.locator("#holdingCode").fill("2330")
+    page.locator("#addCode").fill("2330")
     page.locator("#holdingShares").fill("1000")
     page.locator("#holdingCost").fill("980")
-    page.locator("#holdingForm button[type=submit]").click()
+    page.locator("#saveHolding").click()
     page.locator("#holdingRows .hv-row[data-code='2330']").wait_for()
     page.wait_for_timeout(300)
     check("一開始沒有庫存、之後新增第一檔：不播進場", not page.evaluate("window.__again"))
-    page.locator("#holdingRows .hv-row[data-code='2330'] .hv-top").click()
+    page.locator("#holdingRows .hv-row[data-code='2330'] .hv-open").click()
     page.wait_for_timeout(500)
     facts = page.evaluate("[...document.querySelectorAll('#holdingRows .hv-row.is-open .hv-facts li')].map(fact => getComputedStyle(fact).animationName)")
-    check("展開時六個數字一格一格浮出來", facts == ["hv-fact-in"] * 6, facts)
-    page.get_by_role("button", name="刪除庫存 2330").click()
+    check("展開時三個數字一格一格浮出來", facts == ["hv-fact-in"] * 3, facts)
+    check("展開的動態播完之後才放開裁切（群組的選單才不會在展開途中露出來）", page.evaluate("document.querySelector('#holdingRows .hv-row.is-open').classList.contains('is-settled')"))
+    act(page, "2330", "delete")
     page.wait_for_function("document.querySelectorAll('#holdingRows .hv-row').length === 1")
     page.wait_for_timeout(200)
-    check("刪除之後鍵盤焦點在補上來的那一列，沒有掉回頁面最上面", page.evaluate("document.activeElement.classList.contains('hv-top') && document.activeElement.closest('.hv-row').dataset.code") == "2603",
+    check("刪除之後鍵盤焦點在補上來的那一列，沒有掉回頁面最上面", page.evaluate("document.activeElement.classList.contains('hv-open') && document.activeElement.closest('.hv-row').dataset.code") == "2603",
           page.evaluate("document.activeElement.outerHTML.slice(0, 80)"))
     ctx.close()
 
@@ -172,7 +179,6 @@ with sync_playwright() as p:
         page = ctx.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
-        page.on("dialog", lambda dialog: dialog.accept())
         page.route("**/api/holdings", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps({"items": holdings})) if route.request.method == "GET" else route.continue_())
         page.route("**/api/watchlist", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps({"items": watchlist})) if route.request.method == "GET" else route.continue_())
         page.goto(BASE + "/portfolio.html", wait_until="networkidle")
@@ -181,25 +187,25 @@ with sync_playwright() as p:
 
     watched = lambda code, name, horizon, **extra: {"code": code, "name": name, "market": "上市", "in_universe": True, "horizon": horizon, **extra}
     hint = "() => { const node = document.querySelector('#holdingRows .pf-none'); return node ? node.textContent : null; }"
-    shown = "() => [...document.querySelectorAll('#holdingRows .hv-row:not([hidden])')].map(row => row.dataset.code)"
+    shown = "() => [...document.querySelectorAll('#holdingRows .hv-row')].map(row => row.dataset.code)"
 
     # 只有自選、沒有庫存：上面那一行總數不顯示（不寫一排「—」）；按「庫存」寫怎麼新增庫存
     ctx, page, errors = open_with([], [watched("2330", "台積電", "long"), watched("9958", "世紀鋼", "none", in_universe=False)])
     check("只有自選：總數那一行不顯示，兩檔照自選的先後各一列", not page.locator("#totalLine").is_visible() and page.evaluate(shown) == ["2330", "9958"]
           and page.locator("#listFilter").inner_text().replace("\n", "") == "全部2庫存0自選2", page.locator("#listFilter").inner_text())
     page.locator("#listFilter [data-filter='holding']").click()
-    check("只有自選時按「庫存」：寫怎麼新增庫存", page.evaluate(hint) == "還沒有庫存。按右邊的「＋」選「新增庫存」，輸入代號、股數與平均成本。", page.evaluate(hint))
+    check("只有自選時按「庫存」：寫怎麼新增庫存", page.evaluate(hint) == "還沒有庫存。按右邊的「＋」，輸入代號後按「新增庫存」。", page.evaluate(hint))
     page.locator("#listFilter [data-filter='all']").click()
-    page.locator("#holdingRows .hv-row[data-code='9958'] .hv-top").click()
+    page.locator("#holdingRows .hv-row[data-code='9958'] .hv-open").click()
     outside = page.locator("#holdingRows .hv-row[data-code='9958']")
-    check("只在自選、又不在分析範圍的那一檔：寫明不能開、沒有連結", "不在本站分析範圍" in outside.locator(".pf-acts").inner_text() and outside.locator(".pf-acts a").count() == 0)
+    check("只在自選、又不在分析範圍的那一檔：名稱不是連結，點開寫明沒有個股頁", "不在本站分析範圍" in outside.locator(".pf-scope").inner_text() and outside.locator("a").count() == 0)
     check("只有自選的頁面沒有腳本錯誤、沒有橫向捲動", not errors and not page.evaluate(OVERFLOW), errors)
     ctx.close()
 
     # 只有庫存、沒有自選：按「自選」寫怎麼加入自選
     ctx, page, errors = open_with([holding("2330", "台積電", 1000, 980, 2235)], [])
     page.locator("#listFilter [data-filter='watch']").click()
-    check("只有庫存時按「自選」：寫怎麼加入自選", page.evaluate(hint) == "還沒有自選股。按右邊的「＋」選「加入自選」，可標記為短期、長期或先不分類。" and page.evaluate(shown) == [], page.evaluate(hint))
+    check("只有庫存時按「自選」：寫怎麼加入自選", page.evaluate(hint) == "還沒有自選股。按右邊的「＋」，輸入代號後按「加入自選」。" and page.evaluate(shown) == [], page.evaluate(hint))
     ctx.close()
 
     # 進場還在播的時候就按篩選：進場直接到定位，之後不會重播（審查抓到：被藏起來的最後一列等不到結束）
@@ -212,21 +218,21 @@ with sync_playwright() as p:
     check("進場中按篩選：進場的記號馬上拿掉，換回全部也不重播", not page.evaluate("document.getElementById('holdingRows').classList.contains('is-entering')") and not page.evaluate("window.__again"))
     ctx.close()
 
-    # 預覽上的真資料：改分類之後焦點留在那一排鍵上；站主的關注開關旁邊寫幾檔／上限
+    # 預覽上的真資料：改短期／長期之後焦點留在那一排鍵上；站主的關注開關旁邊寫幾檔／上限
     ctx = browser.new_context(viewport={"width": 390, "height": 800}, has_touch=True, reduced_motion="reduce", locale="zh-TW")
     page = ctx.new_page()
     page.goto(BASE + "/portfolio.html", wait_until="networkidle")
     page.wait_for_function("document.getElementById('portfolioFreshness').textContent.trim() !== '讀取中'")
     row = page.locator("#holdingRows .hv-row[data-code='6669']")
-    row.locator(".hv-top").click()
+    row.locator(".hv-open").click()
     row.locator(".pf-horizon .cell").nth(2).click()
-    page.wait_for_function("document.querySelector(\"#holdingRows .hv-row[data-code='6669'] .pf-tag\").textContent === '長期'")
+    page.wait_for_function("document.querySelector(\"#holdingRows .hv-row[data-code='6669'] .hv-name em\")?.textContent === '長期'")
     page.wait_for_timeout(200)
-    check("改分類存好、清單重畫之後，焦點在新畫的那一顆選中的鍵上（沒有掉回頁面最上面）",
+    check("改成長期存好、清單重畫之後，焦點在新畫的那一顆選中的鍵上（沒有掉回頁面最上面）",
           page.evaluate("(() => { const at = document.activeElement; return at.matches('.pf-horizon .cell[aria-pressed=\"true\"]') && at.closest('.hv-row').dataset.code; })()") == "6669",
           page.evaluate("document.activeElement.outerHTML.slice(0, 90)"))
     row.locator(".pf-horizon .cell").nth(0).click()
-    page.wait_for_function("document.querySelector(\"#holdingRows .hv-row[data-code='6669'] .pf-tag\").textContent === '未分類'")
+    page.wait_for_function("!document.querySelector(\"#holdingRows .hv-row[data-code='6669'] .hv-name em\")")
     toggle = row.locator(".pf-watch-toggle")
     if toggle.count():
         count = row.locator(".pf-watch-count")
@@ -245,10 +251,10 @@ with sync_playwright() as p:
     for width in (320, 390, 800, 1024, 1440):
         ctx, page, errors = open_page(width, "reduce", items)
         for index in range(len(items)):
-            page.locator("#holdingRows .hv-top").nth(index).click()
+            page.locator("#holdingRows .hv-open").nth(index).click()
             page.wait_for_timeout(120)
         fits_closed = page.evaluate(FITS)
-        page.locator("#holdingRows .hv-top").nth(1).click()
+        page.locator("#holdingRows .hv-open").nth(1).click()
         page.wait_for_timeout(500)
         check(f"寬 {width}：每一列（收著與展開）的東西都在列裡面，沒有橫向捲動", fits_closed and page.evaluate(FITS) and not page.evaluate(OVERFLOW) and not errors, [fits_closed, errors])
         ctx.close()

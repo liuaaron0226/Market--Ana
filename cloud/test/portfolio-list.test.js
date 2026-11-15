@@ -80,3 +80,59 @@ test("沒有價格的庫存排在有價格的後面、只在自選的前面", ()
 test("傳進來的不是陣列（還沒讀到）當成沒有", () => {
   assert.deepEqual(loadRead()(undefined, null).counts, { all: 0, holding: 0, watch: 0 });
 });
+
+// ---- 手勢版（本人 2026-11-16「照這樣做」）：自選照自己取名的群組分段；向左滑露出的動作 ----
+function loadList() {
+  const window = {};
+  for (const file of ["web/holdings-rows.js", "web/portfolio-list.js"]) vm.runInNewContext(readFileSync(new URL(file, ROOT), "utf8"), { window });
+  const plain = value => JSON.parse(JSON.stringify(value));
+  return {
+    read: (holdings, watchlist) => window.PortfolioList.read(holdings, watchlist),
+    sections: (list, filter) => plain(window.PortfolioList.sections(list, filter)).map(section => ({ ...section, rows: section.rows.map(row => row.code) })),
+    actions: row => plain(window.PortfolioList.actions(row)),
+  };
+}
+const GROUPED = [
+  watch("6669", "緯穎", "none", { group: "AI 伺服器", created_at: "2026-11-03T00:00:00Z" }),
+  watch("2382", "廣達", "short", { group: "AI 伺服器", created_at: "2026-11-05T00:00:00Z" }),
+  watch("2609", "陽明", "none", { group: "航運", created_at: "2026-11-02T00:00:00Z" }),
+  watch("2603", "長榮", "short", { group: "航運", created_at: "2026-11-04T00:00:00Z" }),
+  watch("2330", "台積電", "long", { group: "", created_at: "2026-11-01T00:00:00Z" }),
+  watch("2454", "聯發科", "none", { created_at: "2026-11-06T00:00:00Z" }),   // 舊資料沒有群組欄位：當未分組
+];
+
+test("按「自選」：照群組分段，群組照最早加入的那一檔的先後，未分組放最後；段內庫存在前", () => {
+  const list = loadList(), model = list.read(HOLDINGS, GROUPED);
+  assert.deepEqual(list.sections(model, "watch"), [
+    { group: "航運", titled: true, rows: ["2603", "2609"] },
+    { group: "AI 伺服器", titled: true, rows: ["6669", "2382"] },
+    { group: "", titled: true, rows: ["2330", "2454"] },
+  ]);
+  assert.deepEqual(JSON.parse(JSON.stringify(model.groups)), ["航運", "AI 伺服器"]);
+});
+
+test("按「全部」「庫存」：不分段、沒有標題；順序照原本的清單", () => {
+  const list = loadList(), model = list.read(HOLDINGS, GROUPED);
+  assert.deepEqual(list.sections(model, "all"), [{ group: "", titled: false, rows: ["2330", "2603", "0050", "6669", "2382", "2609", "2454"] }]);
+  assert.deepEqual(list.sections(model, "holding"), [{ group: "", titled: false, rows: ["2330", "2603", "0050"] }]);
+});
+
+test("自選都沒有分組時，按「自選」不出現「未分組」的標題；沒有自選就沒有任何一段", () => {
+  const list = loadList();
+  assert.deepEqual(list.sections(list.read(HOLDINGS, WATCHLIST), "watch"), [{ group: "", titled: false, rows: ["2330", "2603", "6669"] }]);
+  assert.deepEqual(list.sections(list.read(HOLDINGS, []), "watch"), []);
+  assert.deepEqual(list.sections(list.read([], []), "all"), []);
+});
+
+test("兩個群組最早加入的時間一樣（或沒有時間）時，照名稱排，結果固定", () => {
+  const list = loadList();
+  const same = [watch("2609", "陽明", "none", { group: "乙" }), watch("6669", "緯穎", "none", { group: "甲" })];
+  assert.deepEqual(list.sections(list.read([], same), "watch").map(section => section.group), ["乙", "甲"].sort((a, b) => a.localeCompare(b, "zh-Hant")));
+});
+
+test("向左滑露出的動作：只有庫存是修改、刪除；兩邊都有多一個移出自選；只在自選只有移出", () => {
+  const list = loadList(), rows = new Map(list.read(HOLDINGS, GROUPED).rows.map(row => [row.code, row]));
+  assert.deepEqual(list.actions(rows.get("0050")), ["edit", "delete"]);
+  assert.deepEqual(list.actions(rows.get("2603")), ["edit", "unwatch", "delete"]);
+  assert.deepEqual(list.actions(rows.get("6669")), ["unwatch"]);
+});

@@ -21,6 +21,8 @@ export const WEB_FILES = [
   "holdings-rows.js",
   // 自選與庫存併成一份清單的資料整理（11-16）
   "portfolio-list.js",
+  // 向左滑露出動作的列（11-16，自選與庫存頁的修改、移出、刪除）
+  "swipe-rows.js",
   // 立體重設計（11-15）：大戶持股每週增減的算法與畫面
   "holders-weekly.js", "holders-card.js",
   // 預測帳本（2026-11-15，B 票第 4 片）：只有站主有預測內容時才會在首頁出現

@@ -102,16 +102,6 @@
     return host;
   }
 
-  function deleteButton(text, label, action) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'pf-delete';
-    button.textContent = text;
-    button.setAttribute('aria-label', label);
-    button.addEventListener('click', action);
-    return button;
-  }
-
   // 關注幾檔／上限：寫在每一顆關注開關旁邊，開關一動全部一起改
   function renderWatchCount() {
     if (!state.watch) return;
@@ -306,8 +296,7 @@
   }
 
   // ---------- 庫存總覽：一列一檔（立體重設計，本人 2026-11-15 定案的 ③）----------
-  // 算法在 holdings-rows.js（總數、排序、橫條的兩段、每一檔與全部的賺賠）；這裡只畫，不另外算。
-  // 每一檔的明細與刪除都在點開的那一列裡，頁面下面只留新增或更新的表單。只呈現現況，不說要調整哪一檔。
+  // 算法在 holdings-rows.js（總數、排序、橫條的兩段、每一檔與全部的賺賠）；這裡只畫，不另外算。只呈現現況，不說要調整哪一檔。
   const STILL = window.matchMedia('(prefers-reduced-motion: reduce)');
   const HOLDING_FIRST = 150, HOLDING_GAP = 300, HOLDING_PUSH = 3;   // 進場：第一檔什麼時候開始、一檔比一檔晚多少（毫秒）、被頂或壓一下的幅度（px）
   const GAIN_WORDS = { bull: '賺', bear: '賠', flat: '打平', none: '損益' };
@@ -321,21 +310,50 @@
     if (text !== undefined) node.textContent = text;
     return node;
   };
-  // ---------- 自選與庫存：一份清單（本人 2026-11-16 選「併成一份清單」） ----------
-  // 一檔只出現一次：有庫存的那幾檔是橫條與賺賠，只在自選的寫分類。點那一檔才看金額、自選的設定與刪除。
-  // 資料整理在 portfolio-list.js（併清單）與 holdings-rows.js（庫存的總數與橫條），這裡只管畫。
-  const HORIZONS = [['none', '未分類'], ['short', '短期'], ['long', '長期']];
-  const HORIZON_WORDS = Object.fromEntries(HORIZONS);
+  // ---------- 自選與庫存：一份清單（本人 2026-11-16 選「併成一份清單」，同日看過手勢版的樣品後說「照這樣做」） ----------
+  // 一檔只出現一次：有庫存的那幾檔是橫條與賺賠，只在自選的寫群組。
+  // 點名稱進個股頁，點那一列其他地方展開；向左滑露出修改、移出自選、刪除（swipe-rows.js）。
+  // 按「自選」時照群組分段（群組是自己取名的，一檔只放一個；短期／長期另外標），點群組的名稱可以改名。
+  // 資料整理在 portfolio-list.js（併清單、分段、每一列有哪些動作）與 holdings-rows.js（庫存的總數與橫條），這裡只管畫。
+  const HORIZONS = [['none', '不標'], ['short', '短期'], ['long', '長期']];
+  const HORIZON_WORDS = { none: '', short: '短期', long: '長期' };
+  const GROUP_MAX = 12;   // 群組名稱最多幾個字；伺服器（cloud/lib/user-portfolio.js）也擋同一個數字
   const EMPTY_WORDS = {
-    all: '還沒有自選或庫存。按右邊的「＋」，加入想追蹤的股票或輸入庫存。',
-    holding: '還沒有庫存。按右邊的「＋」選「新增庫存」，輸入代號、股數與平均成本。',
-    watch: '還沒有自選股。按右邊的「＋」選「加入自選」，可標記為短期、長期或先不分類。',
+    all: '還沒有自選或庫存。按右邊的「＋」，輸入股票代號。',
+    holding: '還沒有庫存。按右邊的「＋」，輸入代號後按「新增庫存」。',
+    watch: '還沒有自選股。按右邊的「＋」，輸入代號後按「加入自選」。',
   };
+  const host = $('holdingRows');
   let listReady = false;     // 第一次要等庫存、自選與 AI 整理都讀到了才畫：進場只播一次，中途重畫會把它打斷
   let listShown = null;      // 畫面上現在是哪一份資料，同一份不重畫
   let listEntered = false;   // 進場的動態播過了沒
   let listFilter = 'all';    // 三顆篩選鍵選的是哪一顆
-  const setListStatus = (message, kind) => setStatus($('listStatus'), message, kind);
+  let listModel = null;      // PortfolioList.read 的結果
+  // 只在畫面上的狀態：開著哪一檔、哪一檔正在就地修改、哪一檔正在取新群組的名字、哪一個群組正在改名
+  let openCode = null, editCode = null, namingCode = null, renamingGroup = null;
+  let undoLast = null;       // 上面那一行的「還原」要做的事；做下一個動作就沒有了
+
+  // 清單上面那一行：結果，以及可以還原時多一顆「還原」
+  function say(message, kind, undo) {
+    setStatus($('listStatus'), message, kind);
+    undoLast = undo || null;
+    if (!undo) return;
+    const button = element('button', 'pf-undo', '還原');
+    button.type = 'button';
+    $('listStatus').append(button);
+  }
+  const setListStatus = (message, kind) => say(message, kind);
+  $('listStatus').addEventListener('click', async event => {
+    const button = event.target.closest('.pf-undo'), undo = undoLast;
+    if (!button || !undo) return;
+    undoLast = null;
+    button.disabled = true;
+    try {
+      const code = await undo();
+      say('已還原。', 'success');
+      (rowOf(code)?.querySelector('.hv-open') || $('addToggle')).focus();
+    } catch (error) { say(error.message, 'error'); }
+  });
 
   function renderTotals(summary) {
     $('totalLine').hidden = !summary.count;
@@ -347,35 +365,103 @@
     for (const id of ['totalPnl', 'totalReturn']) $(id).className = `num ${GAIN_TONES[summary.state] || ''}`.trim();
   }
 
+  const rowOf = code => (code ? host.querySelector(`.hv-row[data-code="${CSS.escape(code)}"]`) : null);
+  const entryOf = code => listModel?.rows.find(entry => entry.code === code);
+  const visibleIndex = row => [...host.querySelectorAll('.hv-row')].indexOf(row);
   // 刪掉一列之後：焦點放到補上來的那一列（沒有了就放到「＋」），不要掉回頁面最上面
   function focusAfterRemoval(at) {
-    const tops = [...$('holdingRows').querySelectorAll('.hv-row:not([hidden]) .hv-top')];
-    (tops[Math.min(at, tops.length - 1)] || $('addToggle')).focus();
+    const opens = [...host.querySelectorAll('.hv-open')];
+    (opens[Math.min(at, opens.length - 1)] || $('addToggle')).focus();
   }
-  const visibleIndex = row => [...$('holdingRows').querySelectorAll('.hv-row:not([hidden])')].indexOf(row);
-  const rowOf = code => $('holdingRows').querySelector(`.hv-row[data-code="${CSS.escape(code)}"]:not([hidden])`);
-  // 刪除庫存、移出自選：確認 → 送出 → 重讀。那一列如果還在（另一邊還有它）焦點回到那一列，不在了就放到補上來的那一列
-  function removalButton(text, label, question, li, send, done) {
-    return deleteButton(text, label, async () => {
-      if (!confirm(question)) return;
-      setListStatus('');
-      try {
-        const at = visibleIndex(li), code = li.dataset.code;
-        await send();
-        setListStatus(done, 'success');
-        const still = rowOf(code);
-        if (still) still.querySelector('.hv-top').focus();
-        else focusAfterRemoval(at);
-      } catch (error) { rowNote(li, error.message); }
-    });
-  }
+  // 下一次讀回來就算資料一樣也重畫（畫面上的狀態變了，例如修改的表單要收起來）
+  const redrawNext = () => { listShown = null; };
+  const saveHolding = item => api('/api/holdings', { method: 'POST', body: { code: item.code, shares: item.shares, average_cost: item.average_cost, note: item.note || '' } });
+  const reloadHoldings = () => Promise.all([loadHoldings(), ...(features.level_advice ? [loadLevel()] : [])]);
 
-  // 點開之後的自選設定：分類三選一（按了就存）、關注開關（站主才有）
+  // 向左滑露出的動作：修改（就地改）、移出自選、刪除庫存。刪除與移出不再多問一次，做完上面一行可以還原。
+  async function runAct(button, row) {
+    const code = row.dataset.code, entry = entryOf(code), kind = button.dataset.act;
+    if (!entry) return;
+    swipe.close();
+    if (kind === 'edit') {
+      openCode = editCode = code;
+      namingCode = null;
+      drawList();
+      rowOf(code)?.querySelector('.pf-edit [name="shares"]')?.focus();
+      return;
+    }
+    const at = visibleIndex(row);
+    say('');
+    try {
+      if (kind === 'delete') {
+        const before = entry.holding.item;
+        await api(`/api/holdings/${encodeURIComponent(code)}`, { method: 'DELETE', body: {} });
+        if (editCode === code) editCode = null;
+        redrawNext();
+        await reloadHoldings();
+        say(`已刪除 ${entry.name} 的庫存。`, 'success', async () => { await saveHolding(before); await reloadHoldings(); return code; });
+      } else {
+        const before = entry.watch, watching = Boolean(state.watch?.codes.has(code));
+        await api(`/api/watchlist/${encodeURIComponent(code)}`, { method: 'DELETE', body: {} });
+        redrawNext();
+        await loadWatchlist();
+        say(`已把 ${entry.name} 移出自選。`, 'success', async () => {
+          await api('/api/watchlist', { method: 'POST', body: { code, horizon: before.horizon, group: window.PortfolioList.groupOf(before) } });
+          // 原本有關注的補回去；補不回去（例如這段時間關注滿了）不擋還原
+          if (watching) await api(`/api/watch/${encodeURIComponent(code)}`, { method: 'POST', body: {} }).catch(() => {});
+          await loadWatchlist();
+          return code;
+        });
+      }
+      const still = rowOf(code);
+      if (still) still.querySelector('.hv-open').focus();
+      else focusAfterRemoval(at);
+    } catch (error) { say(error.message, 'error'); }
+  }
+  const swipe = window.SwipeRows.bind(host, { onAct: runAct });
+
+  // 點開之後的自選設定：群組小鍵（選現有的或取新的）、短期／長期三選一（按了就存）、關注開關（站主才有）
   function watchSettings(entry, li) {
-    const listed = entry.watch, host = element('div', 'pf-set');   // listed：自選的那一筆（state.watch 是站主的關注狀態，不是同一件事）
+    const listed = entry.watch, set = element('div', 'pf-set');   // listed：自選的那一筆（state.watch 是站主的關注狀態，不是同一件事）
+    const group = window.PortfolioList.groupOf(listed);
+    if (namingCode === entry.code) {
+      const form = element('form', 'pf-new-group');
+      const input = element('input');
+      input.maxLength = GROUP_MAX;
+      input.placeholder = '群組名稱';
+      input.setAttribute('aria-label', `${entry.name} 的新群組名稱`);
+      input.setAttribute('enterkeyhint', 'done');
+      const ok = element('button', '', '確定');
+      ok.type = 'submit';
+      form.append(input, ok);
+      set.append(form);
+    } else {
+      const pop = element('span', 'pf-pop'), chip = element('button', 'chart-chip pf-group-chip'), menu = element('div', 'chart-menu pf-group-menu');
+      chip.type = 'button';
+      chip.setAttribute('aria-expanded', 'false');
+      chip.setAttribute('aria-controls', `groupMenu-${entry.code}`);
+      chip.setAttribute('aria-label', `${entry.name} 的群組：${group || '未分組'}`);
+      chip.append('群組 ', element('b', '', group || '未分組'));
+      menu.id = `groupMenu-${entry.code}`;
+      menu.hidden = true;
+      menu.setAttribute('data-menu-autoclose', '');
+      [...listModel.groups, ''].forEach(name => {
+        const pick = element('button', '', name || '未分組');
+        pick.type = 'button';
+        pick.setAttribute('role', 'radio');
+        pick.setAttribute('aria-checked', String(name === group));
+        pick.dataset.group = name;
+        menu.append(pick);
+      });
+      const fresh = element('button', 'pf-group-new', '＋ 新群組');
+      fresh.type = 'button';
+      menu.append(element('hr'), fresh);
+      pop.append(chip, menu);
+      set.append(pop);
+    }
     const strip = element('div', 'key-strip pf-horizon');
     strip.setAttribute('role', 'group');
-    strip.setAttribute('aria-label', `${entry.code} 自選分類`);
+    strip.setAttribute('aria-label', `${entry.code} 短期或長期`);
     HORIZONS.forEach(([value, label]) => {
       const cell = element('button', 'cell');
       cell.type = 'button';
@@ -384,13 +470,13 @@
       cell.append(element('span', 'cell-face'), element('span', 'cell-name', label));
       strip.append(cell);
     });
-    host.append(element('span', 'pf-set-name', '自選分類'), strip);
+    set.append(strip);
     if (state.watch) {
       const toggle = watchToggle(listed, li);
       toggle.append(element('small', 'pf-watch-count num', `${state.watch.count}／${state.watch.limit}`));
-      host.append(toggle);
+      set.append(toggle);
     }
-    return host;
+    return set;
   }
 
   async function changeHorizon(cell) {
@@ -402,8 +488,9 @@
     press(cell);
     strip.dataset.busy = '1';   // 這一筆還沒存完，先不收下一下
     rowNote(row, '');
-    setListStatus('');
+    say('');
     try {
+      // 不帶群組：伺服器保留原本的群組
       await api('/api/watchlist', { method: 'POST', body: { code, horizon: cell.dataset.horizon } });
     } catch (error) {
       press(before);
@@ -411,36 +498,148 @@
       rowNote(row, error.message);
       return;
     }
-    setListStatus(`${code} 分類已更新。`, 'success');
-    try { await loadWatchlist(); } catch (error) { setListStatus(error.message, 'error'); }
+    say(`${entryOf(code)?.name || code} 已改成${cell.textContent}。`, 'success');
+    try { await loadWatchlist(); } catch (error) { say(error.message, 'error'); }
     delete strip.dataset.busy;
     // 重畫之後原本那一顆不在頁面上了：焦點放回新畫的、選中的那一顆
     if (!cell.isConnected) rowOf(code)?.querySelector('.pf-horizon [aria-pressed="true"]')?.focus();
   }
 
-  function listRow(entry, order, complete) {
+  // 把一檔放進某個群組（空字串是改回未分組）。短期／長期照原本的送，伺服器才不會把它改掉
+  async function moveToGroup(code, group) {
+    const entry = entryOf(code), row = rowOf(code);
+    if (!entry?.watch) return;
+    rowNote(row, '');
+    say('');
+    try {
+      await api('/api/watchlist', { method: 'POST', body: { code, horizon: entry.watch.horizon, group } });
+    } catch (error) {
+      rowNote(row, error.message);
+      return;
+    }
+    namingCode = null;
+    redrawNext();
+    say(group ? `${entry.name} 放進「${group}」。` : `${entry.name} 改成未分組。`, 'success');
+    try { await loadWatchlist(); } catch (error) { say(error.message, 'error'); }
+    rowOf(code)?.querySelector('.pf-group-chip')?.focus();
+  }
+
+  async function renameGroup(from, to) {
+    if (renamingGroup !== from) return;   // 已經處理過（按 Enter 之後輸入框離開焦點又來一次）
+    renamingGroup = null;
+    if (!to || to === from) { drawList(); return; }
+    try {
+      await api('/api/watchlist/groups', { method: 'POST', body: { from, to } });
+      redrawNext();
+      say(`「${from}」改名為「${to}」。`, 'success');
+      await loadWatchlist();
+      host.querySelector(`.pf-group-name[data-group="${CSS.escape(to)}"]`)?.focus();
+    } catch (error) {
+      say(error.message, 'error');
+      drawList();
+    }
+  }
+
+  // 就地修改庫存：股數、平均成本、備註。同一個代號再存一次就是更新
+  function editForm(entry) {
+    const item = entry.holding.item, form = element('form', 'pf-form pf-edit');
+    form.dataset.code = entry.code;
+    const field = (label, name, attributes, value, wide) => {
+      const wrap = element('label', wide ? 'pf-wide' : '', label), input = element('input');
+      input.name = name;
+      Object.entries(attributes).forEach(([key, text]) => input.setAttribute(key, text));
+      input.value = value;
+      wrap.append(input);
+      return wrap;
+    };
+    const save = element('button', '', '儲存'), cancel = element('button', 'pf-ghost pf-edit-cancel', '取消');
+    save.type = 'submit';
+    cancel.type = 'button';
+    form.append(
+      field('股數', 'shares', { type: 'number', inputmode: 'numeric', min: '1', max: '1000000000', step: '1', required: '' }, String(item.shares)),
+      field('平均成本', 'average_cost', { type: 'number', inputmode: 'decimal', min: '0.01', max: '10000000', step: 'any', required: '' }, String(item.average_cost)),
+      field('備註', 'note', { maxlength: '200', placeholder: '選填，最多 200 字' }, item.note || '', true),
+      save, cancel,
+    );
+    return form;
+  }
+
+  async function saveEdit(form) {
+    const code = form.dataset.code, entry = entryOf(code), row = form.closest('.hv-row');
+    if (!entry?.holding) return;
+    const before = entry.holding.item, button = form.querySelector('button[type="submit"]');
+    button.disabled = true;
+    rowNote(row, '');
+    say('');
+    try {
+      await saveHolding({ code, shares: Number(form.elements.shares.value), average_cost: Number(form.elements.average_cost.value), note: form.elements.note.value.trim() });
+    } catch (error) {
+      rowNote(row, error.message);
+      button.disabled = false;
+      return;
+    }
+    editCode = null;
+    redrawNext();
+    try {
+      await reloadHoldings();
+      say(`已更新 ${entry.name} 的庫存。`, 'success', async () => { await saveHolding(before); await reloadHoldings(); return code; });
+    } catch (error) { say(error.message, 'error'); }
+    rowOf(code)?.querySelector('.hv-open')?.focus();
+  }
+
+  function listRow(entry, order, complete, titled) {
     const held = entry.holding, watch = entry.watch, item = held ? held.item : watch;
     const priced = Boolean(held) && held.state !== 'none', word = held ? GAIN_WORDS[held.state] : '', tone = held ? GAIN_TONES[held.state] || '' : '';
-    const li = element('li', `hv-row depth-row on-page${held ? '' : ' pf-only-watch'}`);
+    const group = window.PortfolioList.groupOf(watch), horizon = watch ? HORIZON_WORDS[watch.horizon] : '';
+    const editing = editCode === entry.code;
+    const li = element('li', `hv-row depth-row on-page swipe-row${held ? '' : ' pf-only-watch'}`);
     li.dataset.code = entry.code;
     li.dataset.kinds = entry.kinds.join(' ');
     li.dataset.state = held ? held.state : 'none';
     li.style.setProperty('--at', `${HOLDING_FIRST + order * HOLDING_GAP}ms`);
     const panelId = `holdingPanel-${entry.code}`;
 
-    const top = element('button', 'hv-top');
-    top.type = 'button';
-    top.setAttribute('aria-expanded', 'false');
-    top.setAttribute('aria-controls', panelId);
-    const said = !held ? `自選 ${HORIZON_WORDS[watch.horizon]}`
-      : priced ? `${complete ? `占庫存 ${held.share.toFixed(1)}%，` : ''}${word}${held.gain && Number.isFinite(item.return_pct) ? ` ${signedPercent(item.return_pct)}` : ''}${watch ? `，自選 ${HORIZON_WORDS[watch.horizon]}` : ''}`
-        : `沒有價格${watch ? `，自選 ${HORIZON_WORDS[watch.horizon]}` : ''}`;
-    top.setAttribute('aria-label', `${entry.name} ${entry.code}：${said}`);
-    const name = element('span', 'hv-name'), under = element('span', '', entry.code);
-    if (held && watch) under.append(element('em', '', watch.horizon === 'none' ? '自選' : `自選・${HORIZON_WORDS[watch.horizon]}`));
+    // 滑開才看得到的動作
+    const acts = element('div', 'swipe-acts');
+    acts.inert = true;
+    window.PortfolioList.actions(entry).forEach(kind => {
+      const words = kind === 'edit' ? ['修改'] : kind === 'delete' ? (watch ? ['刪除', '庫存'] : ['刪除']) : held ? ['移出', '自選'] : ['移出'];
+      const danger = kind === 'delete' || (kind === 'unwatch' && !held);
+      const button = element('button', `swipe-act${danger ? ' is-danger' : ''}`);
+      button.type = 'button';
+      button.dataset.act = kind;
+      button.setAttribute('aria-label', `${{ edit: '修改庫存', delete: '刪除庫存', unwatch: '移出自選' }[kind]} ${entry.code} ${entry.name}`);
+      words.forEach(text => button.append(element('span', '', text)));
+      acts.append(button);
+    });
+
+    // 上面那一條：名稱（連到個股頁）疊在鋪滿整條的展開鍵上面
+    const face = element('div', 'hv-top swipe-face');
+    const name = element(entry.inUniverse ? 'a' : 'span', 'hv-name'), under = element('span', '', entry.code);
+    if (entry.inUniverse) {
+      name.href = `stock.html?code=${encodeURIComponent(entry.code)}`;
+      name.draggable = false;
+      name.setAttribute('aria-label', `${entry.name} ${entry.code} 的個股頁`);
+    }
+    // 名稱下面的小字：有庫存的那幾列寫群組（沒有群組寫「自選」），照群組分段時群組已經在標題上，改寫短期／長期；只在自選的寫短期／長期
+    const mark = !watch ? '' : held && !titled ? group || '自選' : horizon;
+    if (mark) under.append(element('em', '', mark));
     name.append(element('strong', '', entry.name), under);
+    const open = element('button', 'hv-open');
+    open.type = 'button';
+    open.setAttribute('aria-expanded', 'false');
+    open.setAttribute('aria-controls', panelId);
+    const listedAs = watch ? `自選${group ? `「${group}」` : ''}${horizon ? ` ${horizon}` : ''}` : '';
+    const said = !held ? listedAs
+      : priced ? `${complete ? `占庫存 ${held.share.toFixed(1)}%，` : ''}${word}${held.gain && Number.isFinite(item.return_pct) ? ` ${signedPercent(item.return_pct)}` : ''}${watch ? `，${listedAs}` : ''}`
+        : `沒有價格${watch ? `，${listedAs}` : ''}`;
+    open.setAttribute('aria-label', `${entry.name} ${entry.code} 的明細：${said}`);
     const chev = element('span', 'chev');
     chev.setAttribute('aria-hidden', 'true');
+    const more = element('button', 'swipe-more', '⋯');
+    more.type = 'button';
+    more.setAttribute('aria-expanded', 'false');
+    more.setAttribute('aria-label', `${entry.name} 的動作`);
     if (held) {
       const bar = element('span', 'hv-bar');
       bar.setAttribute('aria-hidden', 'true');
@@ -454,22 +653,22 @@
           bar.append(edge);
         }
       }
-      top.append(name, bar, element('span', `hv-ret num ${tone}`.trim(), priced ? returnText(item) : '—'), chev);
-    } else top.append(name, element('span', 'pf-tag', HORIZON_WORDS[watch.horizon]), chev);
+      face.append(name, open, bar, element('span', `hv-ret num ${tone}`.trim(), priced ? returnText(item) : '—'), chev, more);
+    } else face.append(name, open, element('span', 'pf-tag', titled ? '' : group), chev, more);
+    const clipTop = element('div', 'swipe-clip');
+    clipTop.append(acts, face);
 
     const panel = element('div', 'hv-panel depth-panel');
     panel.id = panelId;
     panel.inert = true;
     const clip = element('div', 'hv-clip'), inner = element('div', 'hv-inner');
-    if (held) {
+    if (held && editing) inner.append(editForm(entry));
+    else if (held) {
       const facts = element('ul', 'hv-facts');
       [
-        ['市值', priced ? money.format(item.market_value) : '—', ''],
-        ['成本', money.format(item.cost_basis), ''],
+        [item.price_stale ? '市值（上次收盤）' : '市值', priced ? money.format(item.market_value) : '—', ''],
         [word, priced ? signedMoney(held.gain) : '—', tone],
-        ['占庫存', priced && complete ? `${held.share.toFixed(1)}%` : '—', ''],
-        [item.price_stale ? '上次可用收盤' : '最新收盤', item.latest_price === null ? '—' : number.format(item.latest_price), ''],
-        ['股數・均價', `${number.format(item.shares)} 股 · ${number.format(item.average_cost)}`, ''],
+        ['股數・均價', `${number.format(item.shares)}・${number.format(item.average_cost)}`, ''],
       ].forEach(([label, text, factTone], index) => {
         const fact = element('li');
         fact.style.setProperty('--order', String(index));   // 展開時一格一格浮出來
@@ -479,7 +678,8 @@
       inner.append(facts);
       if (item.note) inner.append(element('p', 'hv-note', `備註：${item.note}`));
     }
-    if (watch) inner.append(watchSettings(entry, li));
+    if (watch && !editing) inner.append(watchSettings(entry, li));
+    if (!entry.inUniverse) inner.append(element('span', 'pf-scope outside', '不在本站分析範圍，沒有個股頁'));
     // 這一列的訊息區在畫出來時就放好（空的），之後只改文字：輔助工具才會念出來
     const note = element('p', 'pf-row-note');
     note.setAttribute('role', 'status');
@@ -487,60 +687,55 @@
     inner.append(note);
     const digest = stockAiDigest(entry.code);
     if (digest) inner.append(digest);
-
-    const acts = element('div', 'pf-acts'), buttons = element('span');
-    if (entry.inUniverse) {
-      const link = element('a', '', `看 ${entry.name} 的個股頁 ›`);
-      link.href = `stock.html?code=${encodeURIComponent(entry.code)}`;
-      acts.append(link);
-    } else acts.append(element('span', 'pf-scope outside', '不在本站分析範圍'));
-    if (held) {
-      // 修改：同一個代號再存一次就是更新。把現在的數字帶進「＋」的表單，改完按儲存
-      const edit = element('button', 'pf-edit', '修改');
-      edit.type = 'button';
-      edit.setAttribute('aria-label', `修改庫存 ${entry.code} ${entry.name}`);
-      edit.addEventListener('click', () => {
-        setAddKind('holding');
-        $('holdingCode').value = item.code;
-        $('holdingShares').value = String(item.shares);
-        $('holdingCost').value = String(item.average_cost);
-        $('holdingNote').value = item.note || '';
-        setAddOpen(true);
-        $('addToggle').scrollIntoView({ block: 'nearest' });
-        $('holdingShares').focus({ preventScroll: true });
-      });
-      buttons.append(edit, removalButton('刪除庫存', `刪除庫存 ${entry.code} ${entry.name}`, `要刪除 ${entry.code} ${entry.name} 的庫存資料嗎？`, li,
-        async () => {
-          await api(`/api/holdings/${encodeURIComponent(entry.code)}`, { method: 'DELETE', body: {} });
-          await Promise.all([loadHoldings(), ...(features.level_advice ? [loadLevel()] : [])]);
-        }, `${entry.code} 庫存已刪除。`));
-    }
-    if (watch) {
-      buttons.append(removalButton('移出自選', `從自選股移出 ${entry.code} ${entry.name}`, `要把 ${entry.code} ${entry.name} 移出自選股嗎？`, li,
-        async () => {
-          await api(`/api/watchlist/${encodeURIComponent(entry.code)}`, { method: 'DELETE', body: {} });
-          await loadWatchlist();
-        }, `${entry.code} 已移出自選股。`));
-    }
-    acts.append(buttons);
-    inner.append(acts);
     clip.append(inner);
     panel.append(clip);
-    li.append(top, panel);
+    li.append(clipTop, panel);
     return li;
   }
 
-  // 收起來的那一列，裡面的連結、設定與刪除鍵鍵盤走不到
-  function setRowOpen(row, open) {
+  // 按「自選」時每一段的標題：群組的名稱（點了就地改名）與檔數；未分組不能改名
+  function groupHeading(section) {
+    const li = element('li', 'pf-group');
+    if (!section.group) li.append(element('span', 'pf-group-word', '未分組'));
+    else if (renamingGroup === section.group) {
+      const form = element('form', 'pf-rename'), input = element('input');
+      form.dataset.from = section.group;
+      input.maxLength = GROUP_MAX;
+      input.value = section.group;
+      input.setAttribute('aria-label', `「${section.group}」的新名稱`);
+      input.setAttribute('enterkeyhint', 'done');
+      form.append(input);
+      li.append(form);
+    } else {
+      const button = element('button', 'pf-group-name', section.group);
+      button.type = 'button';
+      button.dataset.group = section.group;
+      button.setAttribute('aria-label', `群組「${section.group}」，${section.rows.length} 檔。按了改名稱`);
+      li.append(button);
+    }
+    li.append(element('small', 'num', String(section.rows.length)));
+    return li;
+  }
+
+  // 收起來的那一列，裡面的設定鍵盤走不到。展開完之後（is-settled）群組的選單才可以超出這一列的框；
+  // instant：重畫時直接畫成開著的，不播展開
+  function setRowOpen(row, open, instant) {
+    const settled = open && (instant || STILL.matches);
     row.classList.toggle('is-open', open);
-    row.querySelector('.hv-top').setAttribute('aria-expanded', String(open));
+    row.classList.toggle('is-settled', Boolean(settled));
+    row.querySelector('.hv-open').setAttribute('aria-expanded', String(open));
     row.querySelector('.hv-panel').inert = !open;
   }
+  host.addEventListener('transitionend', event => {
+    if (event.propertyName !== 'grid-template-rows' || !event.target.matches('.hv-panel')) return;
+    const row = event.target.closest('.hv-row');
+    row.classList.toggle('is-settled', row.classList.contains('is-open'));
+  });
 
   // 進場（只播一次）。時間都寫在樣式裡（portfolio.css），這裡只跟著樣式的動畫走，不另外記一份時間：
   // 賺的（或還差的）那一段開始長，這一列被往上頂（或往下壓）一下；最後一列定位完，把進場的記號拿掉
   let stopListEntrance = () => {};
-  function playListEntrance(host) {
+  function playListEntrance() {
     const onStart = event => {
       if (!event.target.matches('.hv-bar .gain, .hv-bar .lack')) return;
       const row = event.target.closest('.hv-row');
@@ -558,86 +753,134 @@
     host.classList.add('is-entering');
   }
 
-  // 三顆篩選鍵：不符合的那幾列藏起來（開著的那一列被藏起來就先收合）；一列都不剩時寫一句怎麼新增
-  function applyFilter() {
-    const host = $('holdingRows');
-    host.querySelector('.pf-none')?.remove();
-    let shown = 0;
-    host.querySelectorAll('.hv-row').forEach(row => {
-      const keep = listFilter === 'all' || row.dataset.kinds.split(' ').includes(listFilter);
-      row.hidden = !keep;
-      if (keep) shown += 1;
-      else setRowOpen(row, false);
+  // 照現在的篩選與畫面上的狀態把清單畫出來。一列都沒有時寫一句怎麼新增
+  function drawList() {
+    if (!listModel) return;
+    stopListEntrance();   // 重畫就不再播進場；新的列直接在定位
+    const nodes = [];
+    let order = 0;
+    window.PortfolioList.sections(listModel, listFilter).forEach(section => {
+      if (section.titled) nodes.push(groupHeading(section));
+      section.rows.forEach(entry => nodes.push(listRow(entry, order++, listModel.summary.complete, section.titled)));
     });
-    if (!shown) host.append(element('li', 'hv-empty pf-none', EMPTY_WORDS[host.querySelector('.hv-row') ? listFilter : 'all']));
+    if (!nodes.length) nodes.push(element('li', 'hv-empty pf-none', EMPTY_WORDS[listModel.rows.length ? listFilter : 'all']));
+    host.replaceChildren(...nodes);
+    const again = rowOf(openCode);
+    if (again) setRowOpen(again, true, true);
+    else openCode = editCode = namingCode = null;   // 開著的那一檔不在這個篩選裡（或已經刪掉）
+    if (renamingGroup && !host.querySelector('.pf-rename')) renamingGroup = null;
   }
 
   function renderList() {
     if (!listReady) return;
-    const host = $('holdingRows'), model = window.PortfolioList.read(state.holdings, state.watchlist);
     // 同一份資料（含關注的名單與 AI 整理的內容）不重畫，開著的那一檔與正在播的進場才不會被打斷
     const watch = state.watch ? [[...state.watch.codes], state.watch.limit, [...state.watch.unwatchable]] : null;
     const key = JSON.stringify([state.holdings, state.watchlist, watch, state.aiVisible, state.aiDigest?.dataDate || null, state.aiVisible ? [...(state.aiDigest?.byCode || [])] : null]);
     if (key === listShown) return;
     listShown = key;
-    renderTotals(model.summary);
-    $('countAll').textContent = String(model.counts.all);
-    $('countHolding').textContent = String(model.counts.holding);
-    $('countWatch').textContent = String(model.counts.watch);
-    const openCode = host.querySelector('.hv-row.is-open')?.dataset.code;
-    stopListEntrance();   // 新增、更新、刪除之後重畫就不再播進場；新的列直接在定位
-    host.replaceChildren(...model.rows.map((entry, order) => listRow(entry, order, model.summary.complete)));
-    applyFilter();
-    const again = openCode && [...host.children].find(row => row.dataset.code === openCode && !row.hidden);
-    if (again) setRowOpen(again, true);
+    listModel = window.PortfolioList.read(state.holdings, state.watchlist);
+    renderTotals(listModel.summary);
+    $('countAll').textContent = String(listModel.counts.all);
+    $('countHolding').textContent = String(listModel.counts.holding);
+    $('countWatch').textContent = String(listModel.counts.watch);
+    drawList();
     if (listEntered) return;
     listEntered = true;   // 進場只在進頁面時播；一開始是空的，之後新增第一檔也不播
-    if (model.rows.length && !STILL.matches) playListEntrance(host);
+    if (listModel.rows.length && !STILL.matches) playListEntrance();
   }
 
-  // 清單裡的點擊：點一檔展開（一次只開一檔）；點開之後換自選的分類
-  $('holdingRows').addEventListener('click', event => {
-    const cell = event.target.closest('.pf-horizon .cell');
+  // 清單裡的點擊：點一檔展開（一次只開一檔）；點開之後的群組、短期／長期、修改的取消；群組的名稱
+  host.addEventListener('click', event => {
+    const target = event.target, row = target.closest('.hv-row');
+    const cell = target.closest('.pf-horizon .cell');
     if (cell) { changeHorizon(cell); return; }
-    const top = event.target.closest('.hv-top');
-    if (!top) return;
-    const row = top.closest('.hv-row'), open = !row.classList.contains('is-open');
-    [...$('holdingRows').querySelectorAll('.hv-row')].forEach(other => setRowOpen(other, other === row && open));
+    const pick = target.closest('.pf-group-menu [data-group]');
+    if (pick) { moveToGroup(row.dataset.code, pick.dataset.group); return; }
+    if (target.closest('.pf-group-new')) {
+      namingCode = row.dataset.code;
+      drawList();
+      rowOf(namingCode)?.querySelector('.pf-new-group input')?.focus();
+      return;
+    }
+    if (target.closest('.pf-edit-cancel')) {
+      editCode = null;
+      drawList();
+      rowOf(row.dataset.code)?.querySelector('.hv-open')?.focus();
+      return;
+    }
+    const title = target.closest('.pf-group-name');
+    if (title) {
+      renamingGroup = title.dataset.group;
+      drawList();
+      host.querySelector('.pf-rename input')?.select();
+      return;
+    }
+    const open = target.closest('.hv-open');
+    if (!open) return;
+    const opening = openCode !== row.dataset.code, hadForm = editCode || namingCode;
+    openCode = opening ? row.dataset.code : null;
+    editCode = namingCode = null;
+    if (hadForm) { drawList(); rowOf(row.dataset.code)?.querySelector('.hv-open')?.focus(); return; }   // 表單要收掉：整份重畫
+    host.querySelectorAll('.hv-row').forEach(other => setRowOpen(other, other === row && opening));
+  });
+  host.addEventListener('submit', event => {
+    event.preventDefault();
+    const form = event.target;
+    if (form.matches('.pf-edit')) saveEdit(form);
+    else if (form.matches('.pf-new-group')) {
+      const name = form.querySelector('input').value.trim(), code = form.closest('.hv-row').dataset.code;
+      if (name) moveToGroup(code, name);
+      else { namingCode = null; drawList(); rowOf(code)?.querySelector('.pf-group-chip')?.focus(); }
+    } else if (form.matches('.pf-rename')) renameGroup(form.dataset.from, form.querySelector('input').value.trim());
+  });
+  // 群組改名：輸入框離開焦點就是確定（和按 Enter 一樣），Esc 是不改。取新群組名字時 Esc 也是不取了
+  host.addEventListener('focusout', event => {
+    const form = event.target.closest('.pf-rename');
+    if (form && form.isConnected) renameGroup(form.dataset.from, event.target.value.trim());
+  });
+  host.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || !event.target.matches('.pf-rename input, .pf-new-group input')) return;
+    const code = event.target.closest('.hv-row')?.dataset.code, from = renamingGroup;
+    renamingGroup = namingCode = null;
+    drawList();
+    (code ? rowOf(code)?.querySelector('.pf-group-chip') : host.querySelector(`.pf-group-name[data-group="${CSS.escape(from || '')}"]`))?.focus();
   });
 
   function setFilter(value) {
     listFilter = value;
     $('listFilter').querySelectorAll('button').forEach(key => key.setAttribute('aria-pressed', String(key.dataset.filter === value)));
-    stopListEntrance();
-    applyFilter();
+    renamingGroup = null;
+    drawList();
   }
   $('listFilter').addEventListener('click', event => {
     const chosen = event.target.closest('button[data-filter]');
     if (!chosen) return;
-    setListStatus('');
+    say('');
     setFilter(chosen.dataset.filter);
   });
   // 新增了某一種之後，目前的篩選如果看不到它就切回全部
   const showKind = kind => { if (listFilter !== 'all' && listFilter !== kind) setFilter('all'); };
 
-  // 「＋」：新增的表單平常收著，按了才展開；裡面先選是加入自選還是新增庫存
+  // 「＋」：平常收著，按了才展開。一格代號、兩顆鍵：「加入自選」直接加；「新增庫存」才多出股數、平均成本、備註
+  function setAddMore(open) {
+    $('addMore').hidden = !open;
+    $('addHolding').setAttribute('aria-expanded', String(open));
+  }
   function setAddOpen(open) {
     $('addToggle').setAttribute('aria-expanded', String(open));
     $('addPanel').classList.toggle('is-open', open);
     $('addClip').inert = !open;
-  }
-  function setAddKind(kind) {
-    $('addKind').querySelectorAll('.cell').forEach(cell => cell.setAttribute('aria-pressed', String(cell.dataset.kind === kind)));
-    for (const form of [$('watchlistForm'), $('holdingForm')]) form.hidden = form.dataset.kind !== kind;
+    if (!open) setAddMore(false);
   }
   $('addToggle').addEventListener('click', () => {
     const open = $('addToggle').getAttribute('aria-expanded') !== 'true';
-    if (open) for (const id of ['listStatus', 'watchlistStatus', 'holdingStatus']) setStatus($(id), '');
+    if (open) { say(''); setStatus($('addStatus'), ''); }
     setAddOpen(open);
   });
-  $('addKind').addEventListener('click', event => {
-    const cell = event.target.closest('.cell[data-kind]');
-    if (cell) setAddKind(cell.dataset.kind);
+  $('addHolding').addEventListener('click', () => {
+    const open = $('addMore').hidden;
+    setAddMore(open);
+    if (open && $('addCode').value.trim()) $('holdingShares').focus();
   });
 
   async function loadWatch() {
@@ -683,48 +926,42 @@
     }
   }
 
-  $('watchlistForm').addEventListener('submit', async event => {
-    event.preventDefault();
-    const button = event.currentTarget.querySelector('button[type="submit"]');
+  // 「＋」的兩種新增共用一格代號。做完把表單收回去，結果寫在清單上面那一行；存不成的原因留在表單裡
+  async function addFromForm(button, send, done, reload, kind) {
+    const code = $('addCode').value.trim().toUpperCase();
+    if (!code) { setStatus($('addStatus'), '請先輸入股票代號。', 'error'); $('addCode').focus(); return; }
     button.disabled = true;
-    setStatus($('watchlistStatus'), '正在儲存…');
+    setStatus($('addStatus'), '正在儲存…');
     try {
-      const code = $('watchCode').value.trim().toUpperCase();
-      await api('/api/watchlist', { method: 'POST', body: { code, horizon: $('watchHorizon').value } });
-      $('watchCode').value = '';
-      setStatus($('watchlistStatus'), '');
+      const saved = await send(code);
+      $('addForm').reset();
+      setStatus($('addStatus'), '');
       setAddOpen(false);
       $('addToggle').focus({ preventScroll: true });
-      setListStatus(`${code} 已加入自選股。`, 'success');
-      await loadWatchlist();
-      showKind('watch');
-    } catch (error) { setStatus($('watchlistStatus'), error.message, 'error'); }
+      say(done(saved?.name || code), 'success');
+      await reload();
+      showKind(kind);
+    } catch (error) { setStatus($('addStatus'), error.message, 'error'); }
     finally { button.disabled = false; }
-  });
-
-  $('holdingForm').addEventListener('submit', async event => {
+  }
+  // 加入自選：先不分組、不標短期長期，之後點開那一檔再設。已經在自選的那一檔再加一次不會動到它原本的群組
+  const addWatch = () => {
+    const existing = state.watchlist.find(item => item.code === $('addCode').value.trim().toUpperCase());
+    return addFromForm($('addWatch'),
+      code => api('/api/watchlist', { method: 'POST', body: { code, horizon: existing ? existing.horizon : 'none' } }),
+      name => (existing ? `${name} 已經在自選了。` : `已把 ${name} 加入自選。`), loadWatchlist, 'watch');
+  };
+  const addHolding = () => addFromForm($('saveHolding'),
+    code => saveHolding({ code, shares: Number($('holdingShares').value), average_cost: Number($('holdingCost').value), note: $('holdingNote').value.trim() }),
+    name => `已儲存 ${name} 的庫存。`, reloadHoldings, 'holding');
+  $('addForm').addEventListener('submit', event => { event.preventDefault(); addWatch(); });
+  $('saveHolding').addEventListener('click', addHolding);
+  // 表單預設的送出是「加入自選」。股數那幾格開著的時候按 Enter 是存庫存：在代號那一格是跳到股數，在其他格是儲存
+  $('addForm').addEventListener('keydown', event => {
+    if (event.key !== 'Enter' || !event.target.matches('input') || $('addMore').hidden) return;
     event.preventDefault();
-    const form = event.currentTarget;
-    const button = form.querySelector('button[type="submit"]');
-    button.disabled = true;
-    setStatus($('holdingStatus'), '正在儲存…');
-    try {
-      const code = $('holdingCode').value.trim().toUpperCase();
-      await api('/api/holdings', { method: 'POST', body: {
-        code,
-        shares: Number($('holdingShares').value),
-        average_cost: Number($('holdingCost').value),
-        note: $('holdingNote').value.trim(),
-      } });
-      form.reset();
-      setStatus($('holdingStatus'), '');
-      setAddOpen(false);
-      $('addToggle').focus({ preventScroll: true });
-      setListStatus(`${code} 庫存已儲存。`, 'success');
-      await Promise.all([loadHoldings(), ...(features.level_advice ? [loadLevel()] : [])]);
-      showKind('holding');
-    } catch (error) { setStatus($('holdingStatus'), error.message, 'error'); }
-    finally { button.disabled = false; }
+    if (event.target === $('addCode')) $('holdingShares').focus();
+    else addHolding();
   });
 
   $('cashForm').addEventListener('submit', async event => {
