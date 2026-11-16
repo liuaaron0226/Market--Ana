@@ -8,40 +8,51 @@
 - ``read_ledger``：讀出全部紀錄，順便核對封存雜湊（原件被改動時丟 ``LedgerIntegrityError``）。
 - ``method_version_of``：從方法稿全文讀出版本號。
 
-候選關卡、照歷史亂猜、固定規則、回答驗證、鎖定與到期日計算都封在這裡。帳本只能新增：
-同一個識別（基準日＋版本＋方法版本＋輸入版本）只會有一筆；鎖定的做法沿用
-``candidate_snapshots``（正規化 JSON 的 SHA-256、``os.link`` 不覆寫）。
+候選關卡、照歷史亂猜、固定規則、回答驗證與到期日計算都封在這裡。帳本只能新增：
+同一個識別（基準日＋版本＋方法版本＋輸入版本）只會有一筆；鎖定、雜湊與模型呼叫在 ``ledger_core``
+（和關注帳本共用；做法沿用 ``candidate_snapshots``：正規化 JSON 的 SHA-256、``os.link`` 不覆寫）。
 """
 from __future__ import annotations
 
-import calendar
 import copy
 import hashlib
 import json
 import math
-import os
-import re
-import subprocess
-import sys
 from collections.abc import Callable, Mapping, Sequence
-from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal, InvalidOperation
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from ai_digest import CHINESE_NUMERAL_CHARS
+# 鎖定、雜湊、模型呼叫、期限與方法版本和關注帳本共用（ledger_core），這裡只留預測帳本自己的規則。
+from ledger_core import (
+    EDITIONS,
+    TAIPEI,
+    LedgerIntegrityError,  # noqa: F401  （對外沿用原名）
+    build_prompt,
+    call_model,
+    method_version_of,
+    read_folders,
+    refs_problem,
+    render_refs,
+)
+from ledger_core import add_months as _add_months
+from ledger_core import append as _append
+from ledger_core import clean_daily as _clean_daily
+from ledger_core import deadline as _deadline
+from ledger_core import default_now as _default_now
+from ledger_core import label_date as _label_date
+from ledger_core import read_record as _read
+from ledger_core import seal as _seal
+from ledger_core import sha as _sha
+from ledger_core import text_problem as _text_problem
 
 SCHEMA = "forecast-ledger/v1"
-TAIPEI = timezone(timedelta(hours=8))
 HORIZONS = (1, 5, 20)
-EDITIONS = ("evening", "morning")
 ZONES = ("above", "between", "below")
 REGIMES = ("多頭延續", "多頭中的回檔", "高檔轉弱", "空頭延續", "空頭中的反彈", "盤整")
 PULLBACK_REGIME = "多頭中的回檔"
 TREND_LABELS = ("偏多", "偏空", "盤整")
 REQUIRED_INPUTS = ("index", "institutional", "futures")
-# 晨間版須在開盤（09:00）前 15 分鐘鎖定。
-MORNING_DEADLINE = (8, 45)
 
 # 候選關卡與基準的參數：在第一筆紀錄之前寫定，整組算進輸入版本，改了就是新系列。
 PARAMETERS: dict[str, Any] = {
@@ -106,108 +117,7 @@ INPUT_VERSION = "base-v1-" + hashlib.sha256(json.dumps(
     ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:8]
 
 
-class LedgerIntegrityError(Exception):
-    """紀錄的封存雜湊不符：原件被改動，或不是由本模組寫入。"""
-
-
-# ---- 共用小工具 ----
-
-def _canonical(payload: Any) -> bytes:
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-
-
-def _sha(payload: Any) -> str:
-    return hashlib.sha256(_canonical(payload)).hexdigest()
-
-
-def _seal(record: dict[str, Any]) -> dict[str, Any]:
-    record["record_sha256"] = _sha({k: v for k, v in record.items() if k != "record_sha256"})
-    return record
-
-
-def _verify(record: Mapping[str, Any], path: Path) -> None:
-    body = {k: v for k, v in record.items() if k != "record_sha256"}
-    if record.get("record_sha256") != _sha(body):
-        raise LedgerIntegrityError(f"{path} 封存雜湊不符：原件被改動")
-    if "input" in record and record.get("input_sha256") != _sha(record["input"]):
-        raise LedgerIntegrityError(f"{path} 輸入雜湊不符：存檔的輸入被改動")
-
-
-def _number(value: Any) -> float | None:
-    if isinstance(value, bool):
-        return None
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return None
-    return parsed if math.isfinite(parsed) else None
-
-
-def _format_number(value: float) -> str:
-    try:
-        rendered = format(Decimal(str(value)), ",f")
-    except InvalidOperation:
-        return str(value)
-    if "." in rendered:
-        rendered = rendered.rstrip("0").rstrip(".")
-    return rendered
-
-
-def _against_existing(path: Path, record: Mapping[str, Any]) -> str:
-    existing = json.loads(path.read_text(encoding="utf-8"))
-    return "unchanged" if existing.get("record_sha256") == record["record_sha256"] else "conflict"
-
-
-def _append(path: Path, record: Mapping[str, Any]) -> str:
-    """只新增：檔案不存在才寫；已存在時同內容回 ``unchanged``、不同內容回 ``conflict``，都不覆寫。"""
-    if path.exists():
-        return _against_existing(path, record)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    partial = path.with_name(f".{path.name}.{os.getpid()}.partial")
-    partial.write_bytes(json.dumps(record, ensure_ascii=False, sort_keys=True, indent=2).encode("utf-8") + b"\n")
-    try:
-        # os.link 在目標已存在時失敗：兩個寫入者競爭時後者不會蓋掉前者。
-        os.link(partial, path)
-    except FileExistsError:
-        return _against_existing(path, record)
-    finally:
-        partial.unlink(missing_ok=True)
-    return "written"
-
-
-def _read(path: Path) -> dict[str, Any]:
-    record = json.loads(path.read_text(encoding="utf-8"))
-    _verify(record, path)
-    return record
-
-
-# ---- 方法版本 ----
-
-def method_version_of(method_text: str) -> str:
-    """方法稿開頭「版本：X.Y」那一行的版本號；用的是開始記錄當時最新的方法稿。"""
-    match = re.search(r"^版本：\s*([0-9]+(?:\.[0-9]+)*)", method_text or "", re.MULTILINE)
-    if not match:
-        raise ValueError("方法稿缺少「版本：」行，無法標示方法版本")
-    return match.group(1)
-
-
 # ---- 候選關卡 ----
-
-def _clean_daily(index_daily: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    rows = []
-    for row in index_daily:
-        values = {key: _number(row.get(key)) for key in ("open", "high", "low", "close", "amount")}
-        rows.append({"date": str(row.get("date")), **values})
-    dates = [row["date"] for row in rows]
-    if dates != sorted(dates) or len(set(dates)) != len(dates):
-        raise ValueError("index_daily 必須依日期遞增且日期不可重複")
-    return rows
-
-
-def _label_date(day: str, base_date: str) -> str:
-    """同一年只寫月／日；和基準日不同年時連年份一起寫，免得一年前的關卡被看成今年。"""
-    return f"{day[5:7]}/{day[8:10]}" if day[:4] == base_date[:4] else day.replace("-", "/")
-
 
 def _structural_levels(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     levels: list[dict[str, Any]] = []
@@ -346,83 +256,10 @@ def _model_input(data: Mapping[str, Any], rows: list[dict[str, Any]], edition: s
     }
 
 
-def _build_prompt(model_input: Mapping[str, Any]) -> str:
-    return "\n".join([*_PROMPT_RULES, "INPUT_JSON:",
-                      json.dumps(model_input, ensure_ascii=False, sort_keys=True, separators=(",", ":"))])
-
-
 # ---- 模型呼叫與回答驗證 ----
 
-def _model_command(model_bin: Path | str, model: str) -> list[str]:
-    """agy 的串流模式：提示從 stdin 送（Windows 單一指令列約 32K 字元的上限擋不住方法稿全文），結果讀最後的 result 事件。"""
-    path = Path(model_bin)
-    prefix = [sys.executable, str(path)] if path.suffix.lower() == ".py" else [str(path)]
-    return [*prefix, "-p=", "--input-format", "stream-json", "--output-format", "stream-json",
-            "--model", model, "--effort", "medium",
-            "--json-schema", json.dumps(OUTPUT_SCHEMA, ensure_ascii=False, separators=(",", ":")),
-            "--print-timeout", "300s", "--sandbox"]
-
-
-def _stream_input(prompt: str) -> bytes:
-    return (json.dumps({"event": "user", "message": {"content": prompt}}, ensure_ascii=False) + "\n").encode("utf-8")
-
-
-def _result_event(stdout: bytes) -> dict[str, Any] | None:
-    """串流輸出一行一個事件；回傳最後一個 result 事件的內容。"""
-    result = None
-    for line in stdout.decode("utf-8").splitlines():
-        if not line.strip():
-            continue
-        event = json.loads(line)
-        if isinstance(event, dict) and event.get("event") == "result" and isinstance(event.get("result"), dict):
-            result = event["result"]
-    return result
-
-
-def _failure(returncode: int, stderr: bytes) -> str:
-    """漏記原因帶上錯誤輸出的最後一段，查得到是額度、登入還是程式問題。"""
-    tail = stderr.decode("utf-8", errors="replace").strip()[-300:]
-    return f"結束碼 {returncode}" + (f"：{tail}" if tail else "")
-
-
-def _call_model(model_bin: Path | str, prompt: str, model: str, timeout: float) -> tuple[str, Any, str]:
-    """回傳 (狀態, structured_output, 說明)；狀態是 ok／model_failed／model_timeout／output_garbled。"""
-    try:
-        completed = subprocess.run(_model_command(model_bin, model), input=_stream_input(prompt),
-                                   capture_output=True, timeout=timeout, check=False)
-    except subprocess.TimeoutExpired:
-        return "model_timeout", None, f"超過 {timeout} 秒沒有回應"
-    except OSError as error:
-        return "model_failed", None, f"{type(error).__name__}: {error}"
-    try:
-        envelope = _result_event(completed.stdout)
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        if completed.returncode != 0:
-            return "model_failed", None, _failure(completed.returncode, completed.stderr)
-        return "output_garbled", None, "輸出不是 UTF-8 JSON 事件"
-    if completed.returncode != 0 or envelope is None or envelope.get("status") != "SUCCESS":
-        detail = _failure(completed.returncode, completed.stderr)
-        if envelope and envelope.get("error"):
-            detail += f"；{str(envelope['error'])[:200]}"
-        return "model_failed", None, detail
-    return "ok", envelope.get("structured_output"), ""
-
-
-def _text_problem(text: Any) -> str | None:
-    if not isinstance(text, str) or not text.strip():
-        return "文字為空"
-    if len(text) > 160:
-        return "文字過長"
-    if any(character.isnumeric() or character in CHINESE_NUMERAL_CHARS for character in text):
-        return "自由文字不得包含數字；價位請用候選編號"
-    return None
-
-
 def _render(text: str, refs: list[str], by_id: Mapping[str, Mapping[str, Any]]) -> str:
-    if not refs:
-        return text.strip()
-    facts = "；".join(f"{by_id[ref]['name']} {_format_number(by_id[ref]['value'])} 點" for ref in refs)
-    return f"{text.strip()}【資料：{facts}】"
+    return render_refs(text, refs, by_id, "點")
 
 
 def _line(level: Mapping[str, Any]) -> dict[str, Any]:
@@ -444,6 +281,7 @@ def _validate(structured: Any, model_input: Mapping[str, Any]) -> tuple[dict[str
     for horizon in HORIZONS:
         key = str(horizon)
         item = cells[key]
+        usable = {level_id: level for level_id, level in by_id.items() if _usable(level, horizon)}
         if not isinstance(item, dict) or set(item) != set(_CELL_SCHEMA["required"]):
             return None, f"{key} 日格式不正確"
         for field, side in (("strong_line", "above"), ("weak_line", "below")):
@@ -458,9 +296,7 @@ def _validate(structured: Any, model_input: Mapping[str, Any]) -> tuple[dict[str
             problem = _text_problem(item[text_field])
             if problem:
                 return None, f"{key} 日 {text_field}：{problem}"
-            refs = item[refs_field]
-            if (not isinstance(refs, list) or len(refs) > 3 or len(set(refs)) != len(refs)
-                    or any(ref not in by_id or not _usable(by_id[ref], horizon) for ref in refs)):
+            if refs_problem(item[refs_field], usable):
                 return None, f"{key} 日 {refs_field} 含不存在的候選編號"
         rendered[key] = {
             "horizon": horizon,
@@ -476,15 +312,6 @@ def _validate(structured: Any, model_input: Mapping[str, Any]) -> tuple[dict[str
 
 
 # ---- 寫一份預測 ----
-
-def _deadline(edition: str, base_date: str, session_date: str | None) -> datetime:
-    if edition == "evening":
-        return datetime.fromisoformat(base_date).replace(tzinfo=TAIPEI) + timedelta(days=1)
-    if not session_date or session_date <= base_date:
-        raise ValueError("晨間版須給基準日之後的開盤日 session_date")
-    hour, minute = MORNING_DEADLINE
-    return datetime.fromisoformat(session_date).replace(hour=hour, minute=minute, tzinfo=TAIPEI)
-
 
 def _stem(base_date: str, edition: str, method_version: str, input_version: str) -> str:
     date.fromisoformat(base_date)
@@ -533,10 +360,6 @@ def _with_baselines(accepted: dict[str, Any], rows: list[dict[str, Any]],
         item["baseline"] = _historical_shares(rows, horizon, item["strong_line"]["value"], item["weak_line"]["value"])
         item["fixed_rule_zone"] = _FIXED_RULE[labels["short" if horizon in (1, 5) else "medium"]]
     return accepted
-
-
-def _default_now() -> datetime:
-    return datetime.now(TAIPEI)
 
 
 def write_forecast(
@@ -604,9 +427,9 @@ def write_forecast(
     if clock() >= deadline:
         return finish("miss", miss_reason="deadline_passed", miss_detail="開始寫之前已過期限")
 
-    prompt = _build_prompt(model_input)
+    prompt = build_prompt(_PROMPT_RULES, model_input)
     for _ in range(2):
-        status, structured, detail = _call_model(model_bin, prompt, model, timeout_seconds)
+        status, structured, detail = call_model(model_bin, prompt, model, timeout_seconds, OUTPUT_SCHEMA)
         if status != "ok":
             record["attempts"].append({"status": status, "detail": detail})
             return finish("miss", miss_reason=status, miss_detail=detail)
@@ -697,13 +520,6 @@ def _rates(pairs: list[tuple[dict[str, Any], dict[str, Any]]]) -> dict[str, Any]
 
 # 本人定案：正式結論 1 日滿 3 個月、5 日滿 6 個月、20 日滿 1 年；之前只標「累積中」。
 VERDICT_MONTHS = {1: 3, 5: 6, 20: 12}
-
-
-def _add_months(day: date, months: int) -> date:
-    """加幾個月，月底對齊（例如 8/31 加三個月是 11/30）。"""
-    month_index = day.month - 1 + months
-    year, month = day.year + month_index // 12, month_index % 12 + 1
-    return date(year, month, min(day.day, calendar.monthrange(year, month)[1]))
 
 
 def _verdict(run_mode: str, horizon: int, official_since: str | None, as_of: str | None) -> str:
@@ -823,8 +639,4 @@ def d1_sql(root: Path | str, index_daily: Sequence[Mapping[str, Any]], *, publis
 # ---- 讀帳本 ----
 
 def read_ledger(root: Path | str) -> dict[str, list[dict[str, Any]]]:
-    folder = Path(root)
-    out: dict[str, list[dict[str, Any]]] = {}
-    for kind in ("forecasts", "reconciliations", "conflicts"):
-        out[kind] = [_read(path) for path in sorted((folder / kind).glob("*.json"))] if (folder / kind).is_dir() else []
-    return out
+    return read_folders(root, ("forecasts", "reconciliations", "conflicts"))

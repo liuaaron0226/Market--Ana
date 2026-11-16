@@ -1,0 +1,257 @@
+"""帳本共用的底層：預測帳本（``forecast_ledger``）與關注帳本（``watch_ledger``）都用這一套，不各寫一份。
+
+對外：
+
+- 鎖定：``sha``、``seal``、``append``（只新增不覆寫，``os.link``）、``read_record``／``read_folders``
+  （讀取時核對封存與輸入雜湊，不符丟 ``LedgerIntegrityError``）。
+- 模型呼叫：``build_prompt``、``call_model``（agy 串流模式的命令列程式，提示從 stdin 送，回答讀最後一個 result 事件）。
+- 回答裡的自由文字與引用：``text_problem``（不得出現數字）、``refs_problem``、``render_refs``（數值由程式依編號代入）。
+- 版本與期限：``method_version_of``、``deadline``（晚間／晨間的鎖定期限）、``add_months``、``default_now``。
+- 日 K 與顯示：``clean_daily``、``label_date``、``format_number``。
+
+這裡只放兩本帳意思相同的東西；各自的候選關卡、回答格式、對帳規則留在各自的模組。
+"""
+from __future__ import annotations
+
+import calendar
+import hashlib
+import json
+import math
+import os
+import re
+import subprocess
+import sys
+from collections.abc import Mapping, Sequence
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
+from typing import Any
+
+from ai_digest import CHINESE_NUMERAL_CHARS
+
+TAIPEI = timezone(timedelta(hours=8))
+EDITIONS = ("evening", "morning")
+# 晨間版須在開盤（09:00）前 15 分鐘鎖定。
+MORNING_DEADLINE = (8, 45)
+# 模型寫的自由文字長度上限，與一段文字最多能引用幾個編號。
+TEXT_LIMIT = 160
+REFS_LIMIT = 3
+
+
+class LedgerIntegrityError(Exception):
+    """紀錄的封存雜湊不符：原件被改動，或不是由帳本模組寫入。"""
+
+
+# ---- 雜湊與鎖定 ----
+
+def _canonical(payload: Any) -> bytes:
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def sha(payload: Any) -> str:
+    return hashlib.sha256(_canonical(payload)).hexdigest()
+
+
+def seal(record: dict[str, Any]) -> dict[str, Any]:
+    record["record_sha256"] = sha({k: v for k, v in record.items() if k != "record_sha256"})
+    return record
+
+
+def _verify(record: Mapping[str, Any], path: Path) -> None:
+    body = {k: v for k, v in record.items() if k != "record_sha256"}
+    if record.get("record_sha256") != sha(body):
+        raise LedgerIntegrityError(f"{path} 封存雜湊不符：原件被改動")
+    if "input" in record and record.get("input_sha256") != sha(record["input"]):
+        raise LedgerIntegrityError(f"{path} 輸入雜湊不符：存檔的輸入被改動")
+
+
+def _against_existing(path: Path, record: Mapping[str, Any]) -> str:
+    existing = json.loads(path.read_text(encoding="utf-8"))
+    return "unchanged" if existing.get("record_sha256") == record["record_sha256"] else "conflict"
+
+
+def append(path: Path, record: Mapping[str, Any]) -> str:
+    """只新增：檔案不存在才寫；已存在時同內容回 ``unchanged``、不同內容回 ``conflict``，都不覆寫。"""
+    if path.exists():
+        return _against_existing(path, record)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    partial = path.with_name(f".{path.name}.{os.getpid()}.partial")
+    partial.write_bytes(json.dumps(record, ensure_ascii=False, sort_keys=True, indent=2).encode("utf-8") + b"\n")
+    try:
+        # os.link 在目標已存在時失敗：兩個寫入者競爭時後者不會蓋掉前者。
+        os.link(partial, path)
+    except FileExistsError:
+        return _against_existing(path, record)
+    finally:
+        partial.unlink(missing_ok=True)
+    return "written"
+
+
+def read_record(path: Path) -> dict[str, Any]:
+    record = json.loads(path.read_text(encoding="utf-8"))
+    _verify(record, path)
+    return record
+
+
+def read_folders(root: Path | str, kinds: Sequence[str]) -> dict[str, list[dict[str, Any]]]:
+    """讀出帳本各資料夾的全部紀錄並核對雜湊；資料夾不存在就是空的。"""
+    folder = Path(root)
+    return {kind: [read_record(path) for path in sorted((folder / kind).glob("*.json"))]
+            if (folder / kind).is_dir() else [] for kind in kinds}
+
+
+# ---- 數字、日 K、日期 ----
+
+def _number(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def format_number(value: float) -> str:
+    try:
+        rendered = format(Decimal(str(value)), ",f")
+    except InvalidOperation:
+        return str(value)
+    if "." in rendered:
+        rendered = rendered.rstrip("0").rstrip(".")
+    return rendered
+
+
+def clean_daily(daily: Sequence[Mapping[str, Any]], *, name: str = "index_daily",
+                keys: Sequence[str] = ("open", "high", "low", "close", "amount")) -> list[dict[str, Any]]:
+    """日 K 轉成數字（讀不出來的是 None），並要求日期遞增、不重複。"""
+    rows = [{"date": str(row.get("date")), **{key: _number(row.get(key)) for key in keys}} for row in daily]
+    dates = [row["date"] for row in rows]
+    if dates != sorted(dates) or len(set(dates)) != len(dates):
+        raise ValueError(f"{name} 必須依日期遞增且日期不可重複")
+    return rows
+
+
+def label_date(day: str, base_date: str) -> str:
+    """同一年只寫月／日；和基準日不同年時連年份一起寫，免得一年前的關卡被看成今年。"""
+    return f"{day[5:7]}/{day[8:10]}" if day[:4] == base_date[:4] else day.replace("-", "/")
+
+
+# ---- 方法版本與期限 ----
+
+def method_version_of(method_text: str) -> str:
+    """方法稿開頭「版本：X.Y」那一行的版本號；用的是開始記錄當時最新的方法稿。"""
+    match = re.search(r"^版本：\s*([0-9]+(?:\.[0-9]+)*)", method_text or "", re.MULTILINE)
+    if not match:
+        raise ValueError("方法稿缺少「版本：」行，無法標示方法版本")
+    return match.group(1)
+
+
+def deadline(edition: str, base_date: str, session_date: str | None) -> datetime:
+    """晚間版在基準日結束前鎖定；晨間版在開盤日 08:45 前鎖定。"""
+    if edition == "evening":
+        return datetime.fromisoformat(base_date).replace(tzinfo=TAIPEI) + timedelta(days=1)
+    if not session_date or session_date <= base_date:
+        raise ValueError("晨間版須給基準日之後的開盤日 session_date")
+    hour, minute = MORNING_DEADLINE
+    return datetime.fromisoformat(session_date).replace(hour=hour, minute=minute, tzinfo=TAIPEI)
+
+
+def add_months(day: date, months: int) -> date:
+    """加幾個月，月底對齊（例如 8/31 加三個月是 11/30）。"""
+    month_index = day.month - 1 + months
+    year, month = day.year + month_index // 12, month_index % 12 + 1
+    return date(year, month, min(day.day, calendar.monthrange(year, month)[1]))
+
+
+def default_now() -> datetime:
+    return datetime.now(TAIPEI)
+
+
+# ---- 模型呼叫 ----
+
+def build_prompt(rules: Sequence[str], model_input: Mapping[str, Any]) -> str:
+    """提示 = 規則逐行，接著整份輸入的正規化 JSON。"""
+    return "\n".join([*rules, "INPUT_JSON:",
+                      json.dumps(model_input, ensure_ascii=False, sort_keys=True, separators=(",", ":"))])
+
+
+def _model_command(model_bin: Path | str, model: str, output_schema: Mapping[str, Any]) -> list[str]:
+    """agy 的串流模式：提示從 stdin 送（Windows 單一指令列約 32K 字元的上限擋不住方法稿全文），結果讀最後的 result 事件。"""
+    path = Path(model_bin)
+    prefix = [sys.executable, str(path)] if path.suffix.lower() == ".py" else [str(path)]
+    return [*prefix, "-p=", "--input-format", "stream-json", "--output-format", "stream-json",
+            "--model", model, "--effort", "medium",
+            "--json-schema", json.dumps(output_schema, ensure_ascii=False, separators=(",", ":")),
+            "--print-timeout", "300s", "--sandbox"]
+
+
+def _stream_input(prompt: str) -> bytes:
+    return (json.dumps({"event": "user", "message": {"content": prompt}}, ensure_ascii=False) + "\n").encode("utf-8")
+
+
+def _result_event(stdout: bytes) -> dict[str, Any] | None:
+    """串流輸出一行一個事件；回傳最後一個 result 事件的內容。"""
+    result = None
+    for line in stdout.decode("utf-8").splitlines():
+        if not line.strip():
+            continue
+        event = json.loads(line)
+        if isinstance(event, dict) and event.get("event") == "result" and isinstance(event.get("result"), dict):
+            result = event["result"]
+    return result
+
+
+def _failure(returncode: int, stderr: bytes) -> str:
+    """漏記原因帶上錯誤輸出的最後一段，查得到是額度、登入還是程式問題。"""
+    tail = stderr.decode("utf-8", errors="replace").strip()[-300:]
+    return f"結束碼 {returncode}" + (f"：{tail}" if tail else "")
+
+
+def call_model(model_bin: Path | str, prompt: str, model: str, timeout: float,
+               output_schema: Mapping[str, Any]) -> tuple[str, Any, str]:
+    """回傳 (狀態, structured_output, 說明)；狀態是 ok／model_failed／model_timeout／output_garbled。"""
+    try:
+        completed = subprocess.run(_model_command(model_bin, model, output_schema), input=_stream_input(prompt),
+                                   capture_output=True, timeout=timeout, check=False)
+    except subprocess.TimeoutExpired:
+        return "model_timeout", None, f"超過 {timeout} 秒沒有回應"
+    except OSError as error:
+        return "model_failed", None, f"{type(error).__name__}: {error}"
+    try:
+        envelope = _result_event(completed.stdout)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        if completed.returncode != 0:
+            return "model_failed", None, _failure(completed.returncode, completed.stderr)
+        return "output_garbled", None, "輸出不是 UTF-8 JSON 事件"
+    if completed.returncode != 0 or envelope is None or envelope.get("status") != "SUCCESS":
+        detail = _failure(completed.returncode, completed.stderr)
+        if envelope and envelope.get("error"):
+            detail += f"；{str(envelope['error'])[:200]}"
+        return "model_failed", None, detail
+    return "ok", envelope.get("structured_output"), ""
+
+
+def text_problem(text: Any) -> str | None:
+    """模型寫的自由文字：不可空白、不可過長、不可出現任何數字（數值一律由程式依編號代入）。"""
+    if not isinstance(text, str) or not text.strip():
+        return "文字為空"
+    if len(text) > TEXT_LIMIT:
+        return "文字過長"
+    if any(character.isnumeric() or character in CHINESE_NUMERAL_CHARS for character in text):
+        return "自由文字不得包含數字；價位請用候選編號"
+    return None
+
+
+def refs_problem(refs: Any, known: Mapping[str, Any]) -> bool:
+    """引用的編號清單不合格：不是清單、太多、重複，或引用了輸入裡沒有的編號。"""
+    return (not isinstance(refs, list) or len(refs) > REFS_LIMIT or len(set(refs)) != len(refs)
+            or any(ref not in known for ref in refs))
+
+
+def render_refs(text: str, refs: Sequence[str], by_id: Mapping[str, Mapping[str, Any]], unit: str) -> str:
+    """把模型引用的候選編號代成名字與數值，接在它寫的文字後面。"""
+    if not refs:
+        return text.strip()
+    facts = "；".join(f"{by_id[ref]['name']} {format_number(by_id[ref]['value'])} {unit}" for ref in refs)
+    return f"{text.strip()}【資料：{facts}】"
