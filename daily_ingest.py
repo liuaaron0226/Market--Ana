@@ -637,6 +637,9 @@ def _restore_then_keep_up(root: Path, store: str, keep_up: Callable[[Path], dict
 # ---- 交易日曆（證交所官方休市日） ----
 
 HOLIDAY_URL = "https://openapi.twse.com.tw/v1/holidaySchedule/holidaySchedule"
+# 官方開放資料只給「當年或隔年」其中一年：2026-11 起改成只給 2027。抓到的新年份要和已有的年份合併保存，
+# 專案另帶一份官方 2026 年原件當種子，快取遺失或被換掉時補回（本人 2026-11-16 要求當晚所有功能上線時發現）。
+HOLIDAY_SEED = Path(__file__).resolve().parent / "seeds" / "twse-holiday-schedule.json"
 _OPEN_MARKERS = ("開始交易", "最後交易")
 
 
@@ -652,8 +655,26 @@ def parse_holiday_schedule(content: bytes) -> set[str]:
     return holidays
 
 
-def fetch_holidays(cache: Path, *, get: Callable | None = None) -> set[str]:
-    """抓一次官方休市日並快取原件；抓不到就用快取，再沒有就回空集合（交由就緒判斷處理）。"""
+def merge_holiday_contents(*contents: bytes | None) -> bytes:
+    """把幾份官方 holidaySchedule 原件合成一份（依日期去重，後面的蓋前面的），格式和官方一樣是一個陣列。"""
+    rows: dict[str, dict] = {}
+    for content in contents:
+        if not content:
+            continue
+        for row in json.loads(content.decode("utf-8")):
+            rows[str(row["Date"])] = row
+    return json.dumps([rows[key] for key in sorted(rows)], ensure_ascii=False, indent=1).encode("utf-8")
+
+
+def _read(path: Path | None) -> bytes | None:
+    try:
+        return path.read_bytes() if path is not None and path.exists() else None
+    except OSError:
+        return None
+
+
+def fetch_holidays(cache: Path, *, get: Callable | None = None, seed: Path | None = HOLIDAY_SEED) -> set[str]:
+    """抓一次官方休市日，和快取、種子合併後存回快取；抓不到就用快取加種子，再沒有就回空集合（交由就緒判斷處理）。"""
     try:
         if get is None:
             import requests
@@ -663,15 +684,17 @@ def fetch_holidays(cache: Path, *, get: Callable | None = None) -> set[str]:
             response = get(HOLIDAY_URL)
             content, status = response.content, response.status
         if status == 200:
-            holidays = parse_holiday_schedule(content)
+            parse_holiday_schedule(content)   # 格式不對就丟例外，不寫進快取
+            merged = merge_holiday_contents(_read(seed), _read(cache), content)
             cache.parent.mkdir(parents=True, exist_ok=True)
             partial = cache.with_name(cache.name + ".partial")
-            partial.write_bytes(content)
+            partial.write_bytes(merged)
             os.replace(partial, cache)
-            return holidays
+            return parse_holiday_schedule(merged)
     except Exception:  # noqa: BLE001 — 抓不到休市清單不擋流程，退回快取或就緒判斷
         pass
-    return parse_holiday_schedule(cache.read_bytes()) if cache.exists() else set()
+    known = merge_holiday_contents(_read(seed), _read(cache))
+    return parse_holiday_schedule(known)
 
 
 # ---- 櫃買除權除息（exDailyQ） ----

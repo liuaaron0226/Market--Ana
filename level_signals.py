@@ -599,20 +599,23 @@ def breadth_features(cutoff: str) -> tuple[float | None, float | None]:
 
 
 def ensure_holiday_calendar(data_date: str, *, allow_network: bool = True) -> set[str]:
-    from daily_ingest import parse_holiday_schedule
+    from daily_ingest import HOLIDAY_SEED, merge_holiday_contents, parse_holiday_schedule
 
     year = data_date[:4]
+    # 快取和專案帶的種子合在一起看：官方開放資料年底會改成只給隔年，快取可能已被換成隔年（2026-11-16 實際發生）。
+    known_parts = [path.read_bytes() for path in (HOLIDAY_SEED, HOLIDAY_CACHE) if path.exists()]
     holidays: set[str] = set()
-    if HOLIDAY_CACHE.exists():
-        try:
-            holidays = parse_holiday_schedule(HOLIDAY_CACHE.read_bytes())
-        except (ValueError, KeyError, UnicodeDecodeError):
-            holidays = set()
+    try:
+        holidays = parse_holiday_schedule(merge_holiday_contents(*known_parts))
+    except (ValueError, KeyError, UnicodeDecodeError):
+        holidays = set()
     if any(day.startswith(year + "-") for day in holidays):
         return holidays
     if not allow_network:
         raise RuntimeError(f"缺少 {year} 年證交所官方休市日曆，不能猜測交易日")
-    content = HostPacer(5.0).fetch(TWSE_HOLIDAY_URL)
+    fetched = HostPacer(5.0).fetch(TWSE_HOLIDAY_URL)
+    parse_holiday_schedule(fetched)   # 格式不對就丟例外
+    content = merge_holiday_contents(*known_parts, fetched)
     holidays = parse_holiday_schedule(content)
     if not any(day.startswith(year + "-") for day in holidays):
         raise RuntimeError(f"證交所休市日曆未涵蓋 {year} 年")

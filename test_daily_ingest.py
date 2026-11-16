@@ -738,6 +738,38 @@ class TradingCalendarTest(unittest.TestCase):
         self.assertIn("2026-02-12", holidays)
         self.assertNotIn("2026-01-02", holidays)  # 「開始交易日」是交易日，不是休市
 
+    # 2026-11-16 實際發生：證交所 holidaySchedule 開放資料在年底改成只給隔年（2027）的日曆，
+    # 快取被整份換掉後，2026 年剩下的日子就判斷不了（水位排程與晨間預測會停）。日曆要新舊年份合併保存。
+    Y2026 = [{"Name": "中華民國開國紀念日", "Date": "1150101", "Weekday": "四", "Description": ""},
+             {"Name": "行憲紀念日", "Date": "1151225", "Weekday": "五", "Description": ""}]
+    Y2027 = [{"Name": "中華民國開國紀念日", "Date": "1160101", "Weekday": "五", "Description": ""}]
+
+    def official(self, rows):
+        body = json.dumps(rows, ensure_ascii=False).encode("utf-8")
+        return lambda url: type("Response", (), {"status": 200, "content": body})()
+
+    def test_a_new_year_from_the_official_api_is_added_to_the_cached_year_not_replacing_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "holiday-schedule.json"
+            cache.write_bytes(json.dumps(self.Y2026, ensure_ascii=False).encode("utf-8"))
+            holidays = di.fetch_holidays(cache, get=self.official(self.Y2027), seed=None)
+            self.assertEqual(holidays, {"2026-01-01", "2026-12-25", "2027-01-01"})
+            self.assertEqual(di.parse_holiday_schedule(cache.read_bytes()), holidays)   # 快取也是合併後的
+
+    def test_the_project_seed_fills_a_year_the_cache_lost(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "holiday-schedule.json"
+            cache.write_bytes(json.dumps(self.Y2027, ensure_ascii=False).encode("utf-8"))   # 雲端快取已經被換成隔年
+            seed = Path(tmp) / "seed.json"
+            seed.write_bytes(json.dumps(self.Y2026, ensure_ascii=False).encode("utf-8"))
+            offline = lambda url: (_ for _ in ()).throw(OSError("連不上"))   # noqa: E731
+            self.assertEqual(di.fetch_holidays(cache, get=offline, seed=seed), {"2026-01-01", "2026-12-25", "2027-01-01"})
+
+    def test_the_repository_carries_the_official_2026_calendar(self) -> None:
+        days = di.parse_holiday_schedule(di.HOLIDAY_SEED.read_bytes())
+        self.assertIn("2026-12-25", days)
+        self.assertIn("2026-10-09", days)
+
 
 class OtcCreditTest(unittest.TestCase):
     """個股頁事實區塊 E 票：上櫃融資融券與借券。最近 20 個交易日缺哪天補哪天（本人 11-16「補抓 20 個交易日」）。"""
