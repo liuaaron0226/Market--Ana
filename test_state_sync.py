@@ -453,7 +453,7 @@ class StateSyncTest(unittest.TestCase):
         # 個股頁事實區塊（2026-11-15 規格，C 票）：融資券那一塊要畫近 20 個交易日的走勢、算 5 日增減，
         # 借券與融資融券原件都要留到 20 個交易日再多一點緩衝（原本借券只留 20 個檔，剛好在邊界）。
         by_path = {item.path: item for item in ss.WORKING_SET}
-        for path in ("data/fundamentals/twt93u", "data/market-snapshots/stock-detail"):
+        for path in ("data/fundamentals/twt93u", "data/market-snapshots/stock-detail", "data/otc-credit"):
             self.assertGreaterEqual(by_path[path].recent_files, 25, path)
 
     def test_announcement_raw_files_are_not_in_the_working_set(self) -> None:

@@ -730,6 +730,90 @@ def tdcc_holders_day(root: Path, day: str, *, get: Callable | None = None) -> di
     return th.refresh(out, get=get or th.http_get)
 
 
+# ---- 上櫃融資融券與借券（個股頁事實區塊 E 票；櫃買網站可指定日期，政府資料開放授權） ----
+
+OTC_CREDIT_SOURCES = {
+    "margin": "https://www.tpex.org.tw/www/zh-tw/margin/balance",   # 融資、融券（張）
+    "sbl": "https://www.tpex.org.tw/www/zh-tw/margin/sbl",          # 融券與借券賣出（股）
+}
+OTC_CREDIT_BACKFILL_DAYS = 20   # 本人 11-16「補抓 20 個交易日」：每次都檢查最近 20 個交易日缺哪天補哪天
+# 寫入前要看得到的欄位：融資融券要有「資餘額」「券餘額」；借券要有「當日還券」之後的「當日餘額」（前面那個是融券的）。
+OTC_CREDIT_REQUIRED = {"margin": ("資餘額", "券餘額"), "sbl": ("當日還券", "當日餘額")}
+
+
+def _otc_credit_fields_ok(kind: str, fields: list) -> bool:
+    names = [str(f).strip() for f in fields]
+    if kind == "margin":
+        return all(name in names for name in OTC_CREDIT_REQUIRED["margin"])
+    return "當日還券" in names and "當日餘額" in names[names.index("當日還券"):]
+
+
+def _otc_trading_days(root: Path, day: str, count: int) -> list[str]:
+    """上櫃行情庫裡資料日以前（含）最近 count 個交易日；行情庫沒有這一天時仍把它放在最後。"""
+    db = root / "data/otc-history/otc_history.sqlite"
+    days: list[str] = []
+    if db.exists():
+        connection = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
+        try:
+            days = [row[0] for row in connection.execute(
+                "SELECT DISTINCT date FROM daily WHERE date <= ? ORDER BY date DESC LIMIT ?", (day, count))]
+        finally:
+            connection.close()
+    days = sorted(set(days) | {day})
+    return days[-count:]
+
+
+def otc_credit_day(root: Path, day: str, *, get: Callable | None = None, sleep: Callable = time.sleep,
+                   backfill_days: int = OTC_CREDIT_BACKFILL_DAYS) -> dict:
+    """最近 backfill_days 個交易日裡，缺哪天的融資融券或借券原件就補哪天（同一網域請求之間固定等 5 秒）。
+
+    官方還沒公布（stat 不是 ok 或沒有資料）不寫入，記進 not_published；被拒絕、連不上、格式改了或資料日不符
+    就停下（不寫入那一份），已存的保留。原件和上市明細同一個外包格式：取得時間、來源網址、雜湊、官方原文。"""
+    import otc_market_data as omd
+
+    get = get or _session_getter(omd.http_get)
+    base = root / "data/otc-credit"
+    saved = requests_made = 0
+    not_published: list[str] = []
+    for date_text in _otc_trading_days(root, day, backfill_days):
+        compact = _compact(date_text)
+        for kind, url in OTC_CREDIT_SOURCES.items():
+            target = base / kind / f"{compact}.json"
+            if target.exists():
+                continue
+            if requests_made:
+                sleep(5.0)
+            requests_made += 1
+            stop = lambda reason: {"status": "stopped", "reason": f"{kind} {date_text}：{reason}", "saved": saved,  # noqa: E731
+                                   "requests": requests_made, "not_published": not_published}
+            try:
+                response = get(None, url, {"date": date_text.replace("-", "/"), "id": "", "response": "json"})
+            except Exception as error:  # noqa: BLE001 — 連不上就停在這裡，已存的與未公布的照實回報
+                return stop(type(error).__name__)
+            if getattr(response, "status", 200) != 200:
+                return stop(f"HTTP {response.status}")
+            try:
+                payload = json.loads(response.content.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                return stop("非 JSON 回應")
+            tables = payload.get("tables") or []
+            if str(payload.get("stat") or "").lower() != "ok" or not tables or not tables[0].get("data"):
+                not_published.append(f"{date_text} {kind}")
+                continue
+            if str(payload.get("date") or "") != compact:
+                return stop(f"資料日不符（回 {payload.get('date')!r}）")
+            if not _otc_credit_fields_ok(kind, tables[0].get("fields") or []):
+                return stop("欄位跟預期不同，不寫入")
+            import hashlib
+            from datetime import datetime, timezone
+            _write_atomic(target, json.dumps({
+                "fetched_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "source_url": getattr(response, "url", "") or url, "sha256": hashlib.sha256(response.content).hexdigest(),
+                "data": payload}, ensure_ascii=False).encode("utf-8"))
+            saved += 1
+    return {"status": "ok", "saved": saved, "requests": requests_made, "not_published": not_published}
+
+
 # 公司重大訊息（個股頁事實區塊 D 票）不在這裡抓：每日更新工作流程在這之前先跑 `announcements.py daily --r2`，
 # 補齊 R2 上的原件、抓當日、把新的傳回 R2。在這裡再抓一次只會存在本機、不會進雲端。
 
@@ -739,7 +823,7 @@ def tdcc_holders_day(root: Path, day: str, *, get: Callable | None = None) -> di
 REQUIRED_DATASETS = ("listed_quotes", "otc_quotes", "listed_institutional", "otc_institutional")
 OPTIONAL_DATASETS = ("otc_index", "twse_valuation", "tpex_valuation", "otc_corporate_actions",
                      "listed_corporate_actions", "capital_supplement", "tdcc_holders",
-                     "fundamentals", "taiex_index", "listed_chip_detail")
+                     "fundamentals", "taiex_index", "listed_chip_detail", "otc_credit")
 
 
 def _interval(previous: dict | None, sleep: Callable) -> None:
@@ -844,6 +928,8 @@ def fetch_day(day: str, *, root: Path = ROOT, sleep: Callable = time.sleep, incl
     sleep(5.0)
     timed("tdcc_holders", lambda: tdcc_holders_day(root, day))  # 集保另一個網域，不與證交所／櫃買共用間隔
     timed("listed_chip_detail", lambda: {"status": "ok", "datasets": listed_chip_detail_day(root, day, sleep=sleep)})
+    sleep(5.0)   # 前一步打證交所，這裡固定再等一下才打櫃買（不靠前一步回報的請求數）
+    timed("otc_credit", lambda: otc_credit_day(root, day, sleep=sleep))
     if include_fundamentals:
         timed("fundamentals", lambda: fundamentals_day(data / "fundamentals-history", day))
     blocking = [name for name in REQUIRED_DATASETS if datasets.get(name, {}).get("status") not in

@@ -731,10 +731,31 @@ class StockFactsReaderTests(unittest.TestCase):
         self.assertEqual((valuation['date'], valuation['pe'], valuation['pb'], valuation['dividend_yield_pct']), ('2026-11-06', 25.91, 9.01, 0.98))
         self.assertEqual(revenue, [{'period': '2026-08', 'revenue': 130}, {'period': '2026-09', 'revenue': 150}])
 
-    def test_otc_has_no_credit_series_yet(self):
-        # 上櫃的融資融券與借券原件要等 E 票補抓；在那之前沒有資料，融資券那一塊不出現。
-        from twon_analysis.analyze_v2 import credit_series
-        self.assertEqual(credit_series('6488', '上櫃', '2026-01-06'), {})
+    def test_otc_credit_series_reads_the_tpex_raw_files(self):
+        # E 票：上櫃融資融券（張）在「資餘額」「券餘額」，借券（股）在第二個「當日餘額」；只讀資料日以前的。
+        from twon_analysis import analyze_v2 as module
+        margin_fields = ['代號', '名稱', '前資餘額(張)', '資買', '資賣', '現償', '資餘額', '資屬證金', '資使用率(%)', '資限額',
+                         '前券餘額(張)', '券賣', '券買', '券償', '券餘額', '券屬證金']
+        sbl_fields = ['股票代號', '股票名稱', '前日餘額', '賣出', '買進', '現券', '當日餘額', '限額', '前日餘額', '當日賣出',
+                      '當日還券', '當日調整數額', '當日餘額', '次一營業日可借券賣出限額', '備註']
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for kind in ('margin', 'sbl'):
+                (root / 'otc-credit' / kind).mkdir(parents=True)
+            for day, margin, short, borrow in (('20261110', '9,612', '202', '12,577,000'), ('20261111', '9,021', '198', '12,089,000'),
+                                               ('20261112', '1', '1', '1')):
+                margin_row = ['6488', '環球晶', '0', '0', '0', '0', margin, '0', '0', '0', '0', '0', '0', '0', short, '0']
+                sbl_row = ['6488', '環球晶', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', borrow, '0', '']
+                (root / 'otc-credit/margin' / f'{day}.json').write_text(json.dumps(
+                    {'stat': 'ok', 'tables': [{'fields': margin_fields, 'data': [margin_row]}]}), encoding='utf-8')
+                (root / 'otc-credit/sbl' / f'{day}.json').write_text(json.dumps(
+                    {'stat': 'ok', 'tables': [{'fields': sbl_fields, 'data': [sbl_row]}]}), encoding='utf-8')
+            with unittest.mock.patch.object(module, 'DEFAULT_DB', root / 'stock-history' / 'h.sqlite'):
+                series = module.credit_series('6488', '上櫃', '2026-11-11')
+        self.assertEqual(series, {
+            'margin': [{'date': '2026-11-10', 'margin': 9612, 'short': 202}, {'date': '2026-11-11', 'margin': 9021, 'short': 198}],
+            'borrow': [{'date': '2026-11-10', 'balance': 12_577_000}, {'date': '2026-11-11', 'balance': 12_089_000}],
+        })
 
 
 class BlockingTests(unittest.TestCase):

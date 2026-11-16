@@ -609,5 +609,125 @@ class TradingCalendarTest(unittest.TestCase):
         self.assertNotIn("2026-01-02", holidays)  # 「開始交易日」是交易日，不是休市
 
 
+class OtcCreditTest(unittest.TestCase):
+    """個股頁事實區塊 E 票：上櫃融資融券與借券。最近 20 個交易日缺哪天補哪天（本人 11-16「補抓 20 個交易日」）。"""
+
+    MARGIN_FIELDS = ['代號', '名稱', '前資餘額(張)', '資買', '資賣', '現償', '資餘額', '資屬證金', '資使用率(%)', '資限額',
+                     '前券餘額(張)', '券賣', '券買', '券償', '券餘額', '券屬證金', '券使用率(%)', '券限額', '資券相抵(張)', '備註']
+    SBL_FIELDS = ['股票代號', '股票名稱', '前日餘額', '賣出', '買進', '現券', '當日餘額', '限額', '前日餘額', '當日賣出',
+                  '當日還券', '當日調整數額', '當日餘額', '次一營業日可借券賣出限額', '備註']
+
+    class Response:
+        def __init__(self, status, payload=None):
+            self.status, self.content_type = status, 'application/json;charset=UTF-8'
+            self.content = json.dumps(payload or {}, ensure_ascii=False).encode('utf-8')
+            self.url = ''
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        db = self.root / 'data/otc-history/otc_history.sqlite'
+        db.parent.mkdir(parents=True)
+        connection = sqlite3.connect(db)
+        connection.execute('CREATE TABLE daily (date TEXT, code TEXT)')
+        for day in ('2026-11-10', '2026-11-11', '2026-11-12'):
+            connection.execute("INSERT INTO daily VALUES (?, '6488')", (day,))
+        connection.commit()
+        connection.close()
+
+    def payload(self, kind, compact, empty=False):
+        fields = self.MARGIN_FIELDS if kind == 'margin' else self.SBL_FIELDS
+        row = ['6488', '環球晶'] + ['1,000'] * (len(fields) - 2)
+        return {'stat': 'ok', 'date': compact, 'tables': [{'fields': fields, 'data': [] if empty else [row]}]}
+
+    def run_day(self, day, *, unpublished=(), blocked_after=None, backfill_days=20):
+        calls, waits = [], []
+
+        def get(_session, url, params):
+            calls.append((url, params['date']))
+            if blocked_after is not None and len(calls) > blocked_after:
+                return self.Response(403)
+            compact = params['date'].replace('/', '')
+            kind = 'margin' if url.endswith('/balance') else 'sbl'
+            return self.Response(200, self.payload(kind, compact, empty=compact in unpublished))
+        result = di.otc_credit_day(self.root, day, get=get, sleep=waits.append, backfill_days=backfill_days)
+        return result, calls, waits
+
+    def files(self):
+        return sorted(str(p.relative_to(self.root / 'data/otc-credit')).replace('\\', '/')
+                      for p in (self.root / 'data/otc-credit').rglob('*.json'))
+
+    def test_first_run_backfills_the_recent_trading_days_then_only_what_is_missing(self):
+        result, calls, waits = self.run_day('2026-11-12')
+        self.assertEqual(result['status'], 'ok')
+        self.assertEqual(result['saved'], 6)                     # 3 個交易日 × 融資融券、借券
+        self.assertEqual(len(calls), 6)
+        self.assertEqual(len(waits), 5)                          # 同一個網域：請求之間都等
+        self.assertEqual(self.files(), ['margin/20261110.json', 'margin/20261111.json', 'margin/20261112.json',
+                                        'sbl/20261110.json', 'sbl/20261111.json', 'sbl/20261112.json'])
+        again, calls_again, _ = self.run_day('2026-11-12')
+        self.assertEqual((again['saved'], len(calls_again)), (0, 0))
+
+    def test_backfill_is_limited_to_the_most_recent_days(self):
+        result, calls, _ = self.run_day('2026-11-12', backfill_days=2)
+        self.assertEqual(sorted({date for _, date in calls}), ['2026/11/11', '2026/11/12'])
+
+    def test_a_day_not_published_yet_is_not_written_and_is_named(self):
+        result, _, _ = self.run_day('2026-11-12', unpublished={'20261112'})
+        self.assertEqual(result['not_published'], ['2026-11-12 margin', '2026-11-12 sbl'])
+        self.assertNotIn('margin/20261112.json', self.files())
+
+    def test_a_refusal_stops_the_run_and_keeps_what_was_saved(self):
+        result, calls, _ = self.run_day('2026-11-12', blocked_after=2)
+        self.assertEqual(result['status'], 'stopped')
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(self.files()), 2)
+
+    def test_a_changed_format_or_wrong_day_stops_without_writing(self):
+        def run(payload_fix):
+            calls = []
+
+            def get(_session, url, params):
+                calls.append(url)
+                compact = params['date'].replace('/', '')
+                payload = self.payload('margin' if url.endswith('/balance') else 'sbl', compact)
+                payload_fix(payload)
+                return self.Response(200, payload)
+            return di.otc_credit_day(self.root, '2026-11-12', get=get, sleep=lambda s: None, backfill_days=1)
+        renamed = run(lambda p: p['tables'][0].__setitem__('fields', ['代號', '名稱', '餘額']))
+        self.assertEqual(renamed['status'], 'stopped')
+        self.assertIn('欄位', renamed['reason'])
+        wrong_day = run(lambda p: p.__setitem__('date', '20261111'))
+        self.assertIn('資料日不符', wrong_day['reason'])
+        no_day = run(lambda p: p.pop('date'))
+        self.assertEqual(no_day['status'], 'stopped')
+        self.assertEqual(self.files(), [])
+
+    def test_a_connection_error_stops_and_keeps_what_was_saved(self):
+        calls = []
+
+        def get(_session, url, params):
+            calls.append(url)
+            if len(calls) == 2:
+                raise TimeoutError('slow')
+            compact = params['date'].replace('/', '')
+            return self.Response(200, self.payload('margin' if url.endswith('/balance') else 'sbl', compact))
+        result = di.otc_credit_day(self.root, '2026-11-12', get=get, sleep=lambda s: None)
+        self.assertEqual(result['status'], 'stopped')
+        self.assertIn('TimeoutError', result['reason'])
+        self.assertEqual(result['saved'], 1)
+
+    def test_raw_files_carry_fetch_time_source_and_hash(self):
+        self.run_day('2026-11-12', backfill_days=1)
+        raw = json.loads((self.root / 'data/otc-credit/margin/20261112.json').read_text(encoding='utf-8'))
+        self.assertEqual(sorted(raw), ['data', 'fetched_at_utc', 'sha256', 'source_url'])
+        self.assertEqual(raw['data']['date'], '20261112')
+        self.assertEqual(len(raw['sha256']), 64)
+
+    def test_it_is_an_optional_dataset(self):
+        self.assertIn('otc_credit', di.OPTIONAL_DATASETS)
+
+
 if __name__ == "__main__":
     unittest.main()

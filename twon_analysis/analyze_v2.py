@@ -551,9 +551,49 @@ def valuation_snapshot(code: str, as_of: str) -> dict | None:
     return valuation_history.as_of(valuation_history.DEFAULT_DB, as_of, code=code)
 
 
+def _otc_credit_file(path: Path) -> dict:
+    """一份櫃買原件 → {代號: 欄位值}。融資融券看「資餘額」「券餘額」（張），借券看第二個「當日餘額」（股）。"""
+    import json
+    cached = _OTC_CREDIT_CACHE.get(path)
+    if cached is not None:
+        return cached
+    out: dict = {}
+    _OTC_CREDIT_CACHE[path] = out   # 讀不了也記住（空的）：一份壞檔不要被每一檔上櫃股重讀一次
+    raw = json.loads(path.read_text(encoding='utf-8'))
+    table = raw.get('data', raw)['tables'][0]   # 每日抓取存的是外包格式（data＝官方原文）；也認得官方原文本身
+    fields = [str(f).strip() for f in table['fields']]
+    number = lambda text: int(str(text).replace(',', '').strip() or 0)  # noqa: E731
+    if '資餘額' in fields:
+        margin_at, short_at = fields.index('資餘額'), fields.index('券餘額')
+        out.update({str(row[0]).strip(): {'margin': number(row[margin_at]), 'short': number(row[short_at])} for row in table['data']})
+    else:
+        # 借券是「當日還券」之後的那個「當日餘額」（前面那個是融券的）
+        balance_at = fields.index('當日餘額', fields.index('當日還券'))
+        out.update({str(row[0]).strip(): {'balance': number(row[balance_at])} for row in table['data']})
+    return out
+
+
+_OTC_CREDIT_CACHE: dict = {}
+
+
+def _otc_credit_series(code: str, as_of: str, days: int) -> dict:
+    base = DEFAULT_DB.parents[1] / 'otc-credit'
+    out: dict = {'margin': [], 'borrow': []}
+    for kind, key in (('margin', 'margin'), ('sbl', 'borrow')):
+        files = sorted(base.glob(f'{kind}/*.json'))
+        dated = [(f'{p.stem[:4]}-{p.stem[4:6]}-{p.stem[6:]}', p) for p in files if len(p.stem) == 8 and p.stem.isdigit()]
+        for day, path in [(d, p) for d, p in dated if d <= as_of][-days:]:
+            row = _safe(lambda: _otc_credit_file(path).get(code))
+            if row:
+                out[key].append({'date': day, **row})
+    return out
+
+
 def credit_series(code: str, market: str, as_of: str, days: int = 25) -> dict:
     """事實區塊用：上市融資融券（MI_MARGN，張）與借券（TWT93U，股），由舊到新、資料日 ≤ as_of。
-    上櫃的原件要等 E 票補抓，在那之前回空的（融資券那一塊不出現）。"""
+    上櫃讀櫃買網站的原件（E 票，每日更新逐日存 data/otc-credit/margin 與 sbl）。"""
+    if market == '上櫃':
+        return _otc_credit_series(code, as_of, days)
     if market != '上市':
         return {}
     from . import chips

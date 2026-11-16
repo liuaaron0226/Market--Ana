@@ -114,6 +114,8 @@ WORKING_SET: tuple[Item, ...] = (
     Item("data/otc-catalog/raw"),
     Item("data/market-snapshots/stock-detail", recent_files=60),  # 上市融資融券與法人明細（個股頁籌碼）
     Item("data/fundamentals/twt93u", recent_files=30),  # 個股頁融資券那一塊要近 20 個交易日走勢與 5 日增減（11-16）
+    # 上櫃融資融券與借券原件（個股頁事實區塊 E 票）：融資券那一塊要近 20 個交易日；margin／sbl 兩個子資料夾各留 30 個。
+    Item("data/otc-credit", recent_files=30),
     # 公司重大訊息的官方快照原件不在這裡：工作集整批換新，早上的排程寫進來會被每日更新蓋掉；
     # 改存 R2 的 announcements/raw/（檔名不重複、只增不改），見 announcements.py 的 daily()。
     Item("data/corporate-actions/events.json"),
