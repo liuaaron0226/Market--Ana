@@ -138,7 +138,7 @@
 .ss-drift .is-in .ss-glass { animation: ss-drift var(--dt, 8s) ease-in-out var(--dd, 0s) infinite alternate; }
 @keyframes ss-drift { from { --ex: var(--e1, 10%); } to { --ex: var(--e2, 80%); } }
 
-/* ---------- 桌機寬度的排法（07 的樣品題，本人還沒選；暫時用助手推薦的「三張並排」） ---------- */
+/* ---------- 桌機寬度的排法：三張並排（本人 2026-11-16 看過三個樣品後選「1 三張並排」） ---------- */
 @media (min-width: 861px) {
   .ss[data-panel="technical"] { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; }
 }
