@@ -771,10 +771,13 @@ class _SignalsFixture:
         from datetime import date, timedelta
         return [(date(2025, 1, 6) + timedelta(days=i)).isoformat() for i in range(count)]
 
-    def analyze(self, rows, index, *, otc=False, code='9999', kind='common', days=None, ex_events=(), capital_actions=None):
-        """rows：由舊到新的（收盤、漲跌符號、漲跌），後面可以再接（最高、最低、成交股數），不接就是收盤 ±1 與 1000 股；
+    def analyze(self, rows, index, *, otc=False, code='9999', kind='common', days=None, ex_events=(), capital_actions=None,
+                institutional=()):
+        """rows：由舊到新的（收盤、漲跌符號、漲跌），後面可以再接（最高、最低、成交股數、成交金額），不接就是收盤 ±1、
+        1000 股、成交金額 1；
         index：{日期: 加權指數收盤}，給例外就是模擬加權指數讀取出錯；
-        days：這一檔有交易的日子（不給就是連續的）；ex_events：這一檔帶官方參考價的除權息等事件（events.json 的形狀）。"""
+        days：這一檔有交易的日子（不給就是連續的）；ex_events：這一檔帶官方參考價的除權息等事件（events.json 的形狀）；
+        institutional：法人買賣超逐日的列（institutional_series 的形狀），給例外就是模擬法人資料讀取出錯。"""
         days = days or self.days(len(rows))
         self.calls += 1
         db = Path(self.tmp.name) / f's{self.calls}.sqlite'
@@ -783,15 +786,16 @@ class _SignalsFixture:
                               close REAL, change_sign TEXT, change REAL, volume_shares INTEGER, trades INTEGER, turnover INTEGER,
                               suspended INTEGER)""")
         for day, (close, sign, change, *rest) in zip(days, rows):
-            high, low, volume = rest or (close + 1, close - 1, 1000)
-            connection.execute("INSERT INTO daily VALUES (?, ?, '測試', ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 0)",
-                               (day, code, kind, close, high, low, close, sign, change, volume))
+            high, low, volume, turnover = (*rest, 1)[:4] if rest else (close + 1, close - 1, 1000, 1)
+            connection.execute("INSERT INTO daily VALUES (?, ?, '測試', ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0)",
+                               (day, code, kind, close, high, low, close, sign, change, volume, turnover))
         connection.commit()
         connection.close()
         from twon_analysis.analyze_v2 import analyze_v2
         paths = {'db_path': Path(self.tmp.name) / 'none.sqlite', 'otc_db_path': db} if otc else {'db_path': db, 'otc_db_path': None}
         taiex = {'side_effect': index} if isinstance(index, Exception) else {'return_value': index}
-        with unittest.mock.patch('twon_analysis.analyze_v2.institutional_series', return_value=[]), \
+        chips = {'side_effect': institutional} if isinstance(institutional, Exception) else {'return_value': list(institutional)}
+        with unittest.mock.patch('twon_analysis.analyze_v2.institutional_series', **chips), \
                 unittest.mock.patch('twon_analysis.analyze_v2.credit_series', return_value={}), \
                 unittest.mock.patch('twon_analysis.analyze_v2.valuation_snapshot', return_value=None), \
                 unittest.mock.patch('twon_analysis.analyze_v2.revenue_series', return_value=[]), \
@@ -822,7 +826,7 @@ class StockSignalsVersusMarketTests(_SignalsFixture, unittest.TestCase):
         self.assertEqual(signals['data_date'], self.days(70)[-1])
         self.assertEqual(signals['versus_market']['rows'], [
             {'days': 20, 'stock_pct': -20.8, 'market_pct': -21.59, 'gap': 0.8, 'tone': 'up', 'label': '強於大盤'}])
-        self.assertEqual(signals['blocks'], ['versus_market'])
+        self.assertEqual(signals['blocks'], ['limit_up_momentum', 'versus_market'])
 
     def test_weaker_than_the_market(self):
         # 大盤近 60 日：19,602 ÷ 19,000 − 1＝+3.168% → 這一檔 −1.00% 減它＝−4.168 → 落後大盤 4.2。
@@ -1107,6 +1111,231 @@ class StockSignalsHeavyZonesTests(_SignalsFixture, unittest.TestCase):
                                           'heavy': [60]})
 
 
+# 漲停動能的預期值（分數、級距）都抄自凍結的算法版本檔 twon_analysis/limit_up_momentum_20261116.json 的換算表；
+# 每個例子成立哪幾個條件是手算的（寫在各測試的註解）。六個級距的歷史比例是 0.4、0.8、2.6、3.1、5.1、17.6，全部平均 1.7。
+def momentum(points, band, rate):
+    return {'points': points, 'band': band, 'band_rate_pct': rate, 'average_rate_pct': 1.7, 'algorithm': 'limit-up-momentum-20261116'}
+
+
+class StockSignalsLimitUpMomentumTests(_SignalsFixture, unittest.TestCase):
+    """五塊資料的「漲停動能」（本人 2026-11-16 共識，規格 .scratch/stock-signals/spec.md）：上市普通股每天收盤後
+    依八個條件查固定的換算表，給 0～99 分、級距（1～6）、這個級距的歷史比例、全部平均與算法版本。"""
+
+    def flat_index(self, count=70):
+        return {day: 20000.0 for day in self.days(count)}
+
+    def test_nothing_happening_scores_from_the_frozen_table(self):
+        # 70 根都收 100、每天最高 101、成交金額一樣、大盤不動、沒有投信買超：八個條件都不成立。
+        # 換算表「全不成立」＝14 分、第 2 級（歷史比例 0.8%）。
+        signals = self.analyze([FLAT] * 70, self.flat_index())['signals']
+        self.assertEqual(signals['limit_up_momentum'], momentum(14, 2, 0.8))
+        self.assertEqual(signals['blocks'], ['limit_up_momentum', 'versus_market'])
+
+    @staticmethod
+    def after_a_fall(today):
+        """70 根：前 50 根收 150，倒數第 20 根跌到 100 之後持平，最後一根是 today（收盤、漲跌符號、漲跌）。
+        除了「今天漲多少」以外的條件都不成立：前 20 日最高是 151（還在 150 那一根）、20 日線約 100 低於 60 日線約 133、
+        近 20 日是下跌的（大盤不動）、前 20 日沒有漲停。"""
+        return [(150.0, '', 0.0)] * 50 + [(100.0, '-', -50.0)] + [FLAT] * 18 + [today]
+
+    def test_limit_up_today_means_a_rise_of_at_least_nine_and_a_half_percent(self):
+        # 只有條件 ① 成立 → 換算表 97 分、第 5 級（5.1%）。剛好 +9.5%（100 → 109.5）就算漲停。
+        for today in ((110.0, '+', 10.0), (109.5, '+', 9.5)):
+            signals = self.analyze(self.after_a_fall(today), self.flat_index())['signals']
+            self.assertEqual(signals['limit_up_momentum'], momentum(97, 5, 5.1), today)
+
+    def test_a_rise_of_five_percent_short_of_limit_up_is_its_own_condition(self):
+        # 只有條件 ② 成立 → 換算表 80 分、第 3 級（2.6%）。+9.4% 還不算漲停、剛好 +5% 就算；+4.9% 兩個都不成立（14 分）。
+        for today, expected in (((109.4, '+', 9.4), momentum(80, 3, 2.6)), ((105.0, '+', 5.0), momentum(80, 3, 2.6)),
+                                ((104.9, '+', 4.9), momentum(14, 2, 0.8))):
+            signals = self.analyze(self.after_a_fall(today), self.flat_index())['signals']
+            self.assertEqual(signals['limit_up_momentum'], expected, today)
+
+    def test_turnover_twice_its_prior_twenty_day_average(self):
+        # 只有條件 ③ 成立 → 換算表 77 分、第 2 級（0.8%）。比的是「前一日為止 20 日」的平均成交金額，不含今天。
+        def rows(today, twenty_back=100, twenty_one_back=100):
+            turnovers = [100] * 48 + [twenty_one_back, twenty_back] + [100] * 19 + [today]
+            return [(100.0, '', 0.0, 101.0, 99.0, 1000, turnover) for turnover in turnovers]
+        cases = ((rows(200), momentum(77, 2, 0.8)),                       # 均值 100，今天剛好 2 倍
+                 (rows(199), momentum(14, 2, 0.8)),                       # 差一點
+                 (rows(200, twenty_one_back=100_000), momentum(77, 2, 0.8)),   # 21 個交易日前的不算進均值
+                 (rows(399, twenty_back=2100), momentum(14, 2, 0.8)),     # 20 個交易日前的算：均值 200，要 400
+                 (rows(400, twenty_back=2100), momentum(77, 2, 0.8)))
+        for index, (case, expected) in enumerate(cases):
+            self.assertEqual(self.analyze(case, self.flat_index())['signals']['limit_up_momentum'], expected, index)
+
+    def rising_index(self, count=70):
+        """大盤近 20 個交易日漲 5%（20,000 → 21,000），比下面這些例子裡的個股都多：條件 ⑥ 不成立。"""
+        days = self.days(count)
+        return {day: 21000.0 if day == days[-1] else 20000.0 for day in days}
+
+    def test_close_above_the_highest_high_of_the_prior_twenty_days(self):
+        # 49 根收 150，20 個交易日前跌到 100 之後持平（每天最高 101），今天收 102（+2%）：只有條件 ④ 成立
+        # → 換算表 53 分、第 2 級（0.8%）。21 個交易日前那根最高 151 不在範圍裡；20 日線約 100 低於 60 日線約 132。
+        def rows(today, high_twenty_back=101.0):
+            return ([(150.0, '', 0.0)] * 49 + [(100.0, '-', -50.0, high_twenty_back, 99.0, 1000)] + [FLAT] * 19 + [today])
+        cases = ((rows((102.0, '+', 2.0)), momentum(53, 2, 0.8)),
+                 (rows((101.0, '+', 1.0)), momentum(14, 2, 0.8)),                          # 剛好等於前高不算
+                 (rows((102.0, '+', 2.0), high_twenty_back=103.0), momentum(14, 2, 0.8)))  # 20 個交易日前那根的最高要算
+        for index, (case, expected) in enumerate(cases):
+            self.assertEqual(self.analyze(case, self.rising_index())['signals']['limit_up_momentum'], expected, index)
+
+    def test_close_above_the_twenty_day_line_which_is_above_the_sixty_day_line(self):
+        # 48 根收 90，21 個交易日前漲到 100 之後持平，中間有一天最高 120（所以條件 ④ 不成立），今天收 101（+1%）。
+        # 20 日線＝(19×100＋101)÷20＝100.05；60 日線＝(38×90＋21×100＋101)÷60＝93.68 → 101 > 100.05 > 93.68，
+        # 只有條件 ⑤ 成立 → 換算表 70 分、第 2 級（0.8%）。今天收 100（沒動）就只是等於 20 日線，不算。
+        def rows(today):
+            return ([(90.0, '', 0.0)] * 48 + [(100.0, '+', 10.0)] + [FLAT] * 11 + [(100.0, '', 0.0, 120.0, 99.0, 1000)]
+                    + [FLAT] * 8 + [today])
+        cases = ((rows((101.0, '+', 1.0)), momentum(70, 2, 0.8)),
+                 (rows(FLAT), momentum(14, 2, 0.8)),
+                 # 收盤在 20 日線之上、但 20 日線（約 100）在 60 日線（約 133）之下：不算。
+                 (self.after_a_fall((101.0, '+', 1.0)), momentum(14, 2, 0.8)))
+        for index, (case, expected) in enumerate(cases):
+            self.assertEqual(self.analyze(case, self.rising_index())['signals']['limit_up_momentum'], expected, index)
+
+    def test_the_two_lines_are_exactly_twenty_and_sixty_days_long(self):
+        # 四個例子都只有條件 ⑤ 成立（70 分），而且線的天數差一天結果就不同。大盤近 20 日 +5%，條件 ⑥ 都不成立。
+        low, mid, high = (90.0, '', 0.0), (100.2, '', 0.0), (200.0, '', 0.0)
+        cases = (
+            # 20 日線含 19 個交易日前那根 96：(96＋18×100＋99.9)÷20＝99.795 < 收盤 99.9。只算 19 天的話是 99.995，不成立。
+            [low] * 48 + [(100.0, '+', 10.0), FLAT, (96.0, '-', -4.0), (100.0, '+', 4.0)] + [FLAT] * 17 + [(99.9, '-', -0.1)],
+            # 20 日線不含 20 個交易日前那根 104：(19×100＋100.1)÷20＝100.005 < 收盤 100.1。算 21 天的話是 100.195，不成立。
+            [low] * 48 + [(104.0, '+', 14.0), (104.0, '', 0.0), (100.0, '-', -4.0)] + [FLAT] * 18 + [(100.1, '+', 0.1)],
+            # 60 日線含 59 個交易日前那根 40：(40＋39×100.2＋19×100＋100.1)÷60＝99.13 < 20 日線 100.005。
+            # 只算 59 天的話是 100.13，不成立。
+            [mid] * 10 + [(40.0, '-', -60.2), (100.2, '+', 60.2)] + [mid] * 38 + [(100.0, '-', -0.2)] + [FLAT] * 18
+            + [(100.1, '+', 0.1)],
+            # 60 日線不含 60 個交易日前那根 200：(59×99＋100)÷60＝99.017 < 20 日線 (19×99＋100)÷20＝99.05。
+            # 算 61 天的話是 100.67，不成立。（今天收 100 剛好等於前一天的最高 100，條件 ④ 不成立。）
+            [high] * 10 + [(99.0, '-', -101.0)] + [(99.0, '', 0.0)] * 58 + [(100.0, '+', 1.0)],
+        )
+        for index, rows in enumerate(cases):
+            self.assertEqual(len(rows), 70, index)
+            self.assertEqual(self.analyze(rows, self.rising_index())['signals']['limit_up_momentum'], momentum(70, 2, 0.8), index)
+
+    def test_twenty_day_gain_beats_the_index_over_the_same_days(self):
+        # 這一檔 70 根都收 100（近 20 日 0%）。大盤只有「20 個交易日前」那一天是 21,000、其餘 20,000：大盤近 20 日是跌的，
+        # 只有條件 ⑥ 成立 → 換算表 3 分、第 1 級（0.4%）。把 21,000 放在 19 或 21 個交易日前就不影響（大盤 0%，一樣不算贏）。
+        days = self.days(70)
+        for back, expected in ((20, momentum(3, 1, 0.4)), (19, momentum(14, 2, 0.8)), (21, momentum(14, 2, 0.8))):
+            index = {**self.flat_index(), days[-1 - back]: 21000.0}
+            self.assertEqual(self.analyze([FLAT] * 70, index)['signals']['limit_up_momentum'], expected, back)
+
+    def test_investment_trusts_buying_three_trading_days_in_a_row(self):
+        # 這一檔 70 根都收 100、大盤不動。投信最近三個交易日都買超：只有條件 ⑦ 成立 → 換算表 1 分、第 1 級（0.4%）。
+        # 只連買兩天、中間一天賣超或沒有資料、今天的法人資料還沒有、法人資料讀取出錯：條件 ⑦ 都算不成立（14 分），這一塊照給。
+        days = self.days(70)
+
+        def trust(*nets):
+            """最近幾個交易日的投信買賣超（由舊到新）；None 是那一天沒有這一檔的資料。"""
+            return [{'date': day, 'foreign': 0, 'trust': net, 'dealer': 0, 'total': net}
+                    for day, net in zip(days[-len(nets):], nets) if net is not None]
+        cases = ((trust(1, 5000, 1000), momentum(1, 1, 0.4)),
+                 (trust(-7000, 1000, 5000, 1000), momentum(1, 1, 0.4)),      # 更早的賣超不影響
+                 (trust(0, 5000, 1000), momentum(14, 2, 0.8)),
+                 (trust(1000, -1, 1000), momentum(14, 2, 0.8)),
+                 (trust(1000, None, 1000), momentum(14, 2, 0.8)),
+                 (trust(1000, 1000, 1000, None), momentum(14, 2, 0.8)),
+                 (sqlite3.OperationalError('讀不到法人資料'), momentum(14, 2, 0.8)))
+        for index, (rows, expected) in enumerate(cases):
+            signals = self.analyze([FLAT] * 70, self.flat_index(), institutional=rows)['signals']
+            self.assertEqual(signals['limit_up_momentum'], expected, index)
+            self.assertEqual(signals['failed'], [], index)
+
+    def test_a_limit_up_within_the_prior_twenty_days_not_counting_today(self):
+        # 都收 100，其中一天漲停到 110、隔天跌回 100（大盤不動）。漲停那一天在前 20 個交易日內：只有條件 ⑧ 成立
+        # → 換算表 87 分、第 4 級（3.1%）。在 21 個交易日前就不算（14 分）。今天自己漲停不算在這一項（見條件 ① 的測試）。
+        def rows(back):
+            spike = 69 - back
+            return [FLAT] * spike + [(110.0, '+', 10.0), (100.0, '-', -10.0)] + [FLAT] * (68 - spike)
+        for back, expected in ((20, momentum(87, 4, 3.1)), (1, momentum(87, 4, 3.1)), (21, momentum(14, 2, 0.8))):
+            self.assertEqual(self.analyze(rows(back), self.flat_index())['signals']['limit_up_momentum'], expected, back)
+
+    def test_only_listed_common_stocks_with_sixty_one_bars_get_it(self):
+        # 上櫃（等驗證報告）、ETF、特別股、日線不足 61 根：整塊沒有，也不算「算不出來」。61 根就有。
+        cases = (({'otc': True}, 70, None), ({'kind': 'etf', 'code': '0050'}, 70, None), ({'kind': 'preferred'}, 70, None),
+                 ({}, 60, None), ({}, 61, momentum(14, 2, 0.8)))
+        for options, count, expected in cases:
+            signals = self.analyze([FLAT] * count, self.flat_index(count), **options)['signals']
+            self.assertEqual(signals['limit_up_momentum'], expected, (options, count))
+            self.assertEqual('limit_up_momentum' in signals['blocks'], expected is not None, (options, count))
+            self.assertEqual(signals['failed'], [], (options, count))
+
+    def test_without_the_index_on_the_data_date_or_twenty_days_back_there_is_no_block(self):
+        # 加權指數沒有對到資料日，或沒有 20 個交易日前那一天（條件 ⑥ 沒得比）：整塊不給，不拿別的日子代替；不算「算不出來」。
+        days = self.days(70)
+        for missing in (days[-1], days[-21]):
+            index = {day: 20000.0 for day in days if day != missing}
+            signals = self.analyze([FLAT] * 70, index)['signals']
+            self.assertIsNone(signals['limit_up_momentum'], missing)
+            self.assertNotIn('limit_up_momentum', signals['blocks'])
+            self.assertEqual(signals['failed'], [], missing)
+        # 加權指數讀取出錯也一樣。
+        signals = self.analyze([FLAT] * 70, OSError('讀不到加權指數'))['signals']
+        self.assertEqual((signals['limit_up_momentum'], signals['failed']), (None, []))
+
+    def test_days_without_a_comparable_price_count_as_no_move_and_leave_no_gap(self):
+        # 倒數第 10 根除息 10 元：收盤 100 → 90，官方標不比價（X）。之後持平（每天最高 91），今天收 91.5（+1.5，+1.67%）。
+        # 用漲跌幅連乘的收盤線看：除息那天不算下跌，所以今天高於前 20 日的最高（除息前的 101 換算後是 1.01 倍、
+        # 除息後的 91 是 1.0111 倍，今天是 1.0167 倍）、也在 20 日線與 60 日線之上 → 條件 ④⑤ 成立，換算表 80 分、第 3 級。
+        # （直接拿實際成交價比的話：91.5 低於除息前的 101、也低於 20 日均價 95.1，兩個都不成立，會變成 14 分。）
+        rows = [FLAT] * 60 + [(90.0, 'X', None)] + [(90.0, '', 0.0)] * 8 + [(91.5, '+', 1.5)]
+        self.assertEqual(self.analyze(rows, self.rising_index())['signals']['limit_up_momentum'], momentum(80, 3, 2.6))
+        # 和驗證時相同：不比價的那一天漲跌一律算 0。就算那天相對官方除息參考價（90）其實漲了 10%（收 99），
+        # 也不算「前 20 日內曾經漲停」——八個條件都不成立，14 分。
+        days = self.days(70)
+        rows = [FLAT] * 60 + [(99.0, 'X', None, 100.0, 98.0, 1000)] + [(99.0, '', 0.0, 100.0, 98.0, 1000)] * 9
+        event = {'date': days[60], 'code': '9999', 'type': '除息', 'close_before': 100.0, 'reference': 90.0, 'value': 10.0}
+        signals = self.analyze(rows, self.flat_index(), ex_events=[event])['signals']
+        self.assertEqual(signals['limit_up_momentum'], momentum(14, 2, 0.8))
+
+    def test_combinations_read_the_frozen_table(self):
+        # 150 跌到 100 之後（條件 ④⑤⑥ 都不成立），前 20 日內有一天漲停又跌回，今天再漲停：條件 ①⑧ 成立 → 99 分、第 6 級（17.6%）。
+        base = self.after_a_fall((110.0, '+', 10.0))
+        both = base[:55] + [(110.0, '+', 10.0), (100.0, '-', -10.0)] + base[57:]
+        self.assertEqual(self.analyze(both, self.flat_index())['signals']['limit_up_momentum'], momentum(99, 6, 17.6))
+        # 再加上今天成交金額放大（條件 ①③⑧）：這個組合四捨五入後是 100，記 99。
+        loud = both[:-1] + [(110.0, '+', 10.0, 111.0, 109.0, 1000, 2)]
+        self.assertEqual(self.analyze(loud, self.flat_index())['signals']['limit_up_momentum'], momentum(99, 6, 17.6))
+        # 今天漲停、投信連買三天、近 20 日贏大盤（條件 ①⑥⑦）：91 分、第 4 級（3.1%）——分數和級距各查各的。
+        days = self.days(70)
+        trust = [{'date': day, 'foreign': 0, 'trust': 1000, 'dealer': 0, 'total': 1000} for day in days[-3:]]
+        falling_index = {**self.flat_index(), days[-1]: 10000.0}     # 大盤近 20 日 −50%，這一檔 −26.7%
+        signals = self.analyze(base, falling_index, institutional=trust)['signals']
+        self.assertEqual(signals['limit_up_momentum'], momentum(91, 4, 3.1))
+
+    def test_a_block_that_cannot_be_computed_drops_only_itself_and_is_named(self):
+        # 某一天的成交金額不是數字（資料壞掉）：只少漲停動能這一塊並記進 failed，和大盤比照常。
+        rows = [(100.0, '', 0.0, 101.0, 99.0, 1000, '壞掉' if i == 60 else 100) for i in range(70)]
+        signals = self.analyze(rows, self.flat_index())['signals']
+        self.assertIsNone(signals['limit_up_momentum'])
+        self.assertEqual((signals['blocks'], signals['failed']), (['versus_market'], ['limit_up_momentum']))
+
+
+class StockSignalsAlgorithmVersionTests(unittest.TestCase):
+    """漲停動能的算法版本是一個固定檔案。內容被改動（重新訓練、改門檻、改換算表、改歷史比例）時這裡會紅：
+    八個條件用的固定數字（幾 %、幾倍、幾天）也在這個檔案裡。換算法版本要先問本人，然後換一個新的版本名稱與新的雜湊。"""
+
+    def test_the_frozen_algorithm_file_has_not_changed(self):
+        import hashlib
+        from twon_analysis.limit_up_momentum import ALGORITHM_FILE
+        frozen = json.loads(ALGORITHM_FILE.read_text(encoding='utf-8'))
+        canonical = json.dumps(frozen, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+        self.assertEqual(hashlib.sha256(canonical.encode('utf-8')).hexdigest(), 'c6597725df40047f0f5e0600367e2b2468d99feda96e771c187e47512e0dd26f')
+        self.assertEqual(frozen['version'], 'limit-up-momentum-20261116')
+        self.assertEqual(frozen['band_rates_pct'], [0.4, 0.8, 2.6, 3.1, 5.1, 17.6])
+        self.assertEqual(frozen['average_rate_pct'], 1.7)
+        self.assertEqual((frozen['limit_up_threshold'], frozen['up_short_of_limit_threshold'], frozen['turnover_multiple']),
+                         (0.095, 0.05, 2))
+        self.assertEqual((frozen['lookback_days'], frozen['short_line_days'], frozen['long_line_days'],
+                          frozen['trust_streak_days'], frozen['min_bars']), (20, 20, 60, 3, 61))
+        # 版本名稱會出現在個股分析結果裡，不能撞到禁用詞（有的檢查不分大小寫）。
+        self.assertFalse([word for word in BANNED_TEXT if word.lower() in frozen['version'].lower()])
+        self.assertEqual(len(frozen['table']), 256)
+        self.assertTrue(all(0 <= points <= 99 and 1 <= band <= 6 for points, band in frozen['table'].values()))
+
+
 class StockSignalsBlockListTests(_SignalsFixture, unittest.TestCase):
     """「有哪幾塊」的清單由五塊資料直接給，頁面照著它決定出現哪幾張板。"""
 
@@ -1116,7 +1345,8 @@ class StockSignalsBlockListTests(_SignalsFixture, unittest.TestCase):
         rows = [(100.0 + i, '+', 1.0, 101.0 + i, 99.0 + i, 10_000_000 if i == 120 else 1_000_000) for i in range(130)]
         signals = self.analyze(rows, {days[-1]: 20000.0, days[-6]: 20000.0})['signals']
         self.assertEqual(signals['blocks'], ['versus_market', 'ma_alignment', 'heavy_zones'])
-        self.assertEqual(set(signals), {'data_date', 'versus_market', 'ma_alignment', 'heavy_zones', 'blocks', 'failed'})
+        self.assertEqual(set(signals), {'data_date', 'limit_up_momentum', 'versus_market', 'ma_alignment', 'heavy_zones',
+                                        'blocks', 'failed'})
         self.assertEqual(signals['failed'], [])
         # 這一檔近 5 日＝229 ÷ 224 − 1＝+2.23%（每天 +1 元連乘），大盤 0% → 強於大盤 2.2。
         self.assertEqual([(row['days'], row['gap']) for row in signals['versus_market']['rows']], [(5, 2.2)])
@@ -1127,9 +1357,19 @@ class StockSignalsBlockListTests(_SignalsFixture, unittest.TestCase):
         dumped = json.dumps(signals, ensure_ascii=False)
         for word in BANNED_TEXT + ('反推',):
             self.assertNotIn(word, dumped)
-        # 20 根平盤、沒有加權指數：三塊都沒有，清單是空的，三個鍵都還在（值是 null）。
+        # 加權指數多給 20 個交易日前那一天：漲停動能也有，四塊照固定順序。
+        # 近 20 日 229 ÷ 209 − 1＝+9.6% 贏大盤（0%）、收盤在 20 日線與 60 日線之上；今天收 229 剛好等於昨天的最高 229（不算高於）
+        # → 條件 ⑤⑥ 成立，換算表 56 分、第 2 級。
+        four = self.analyze(rows, {days[-1]: 20000.0, days[-6]: 20000.0, days[-21]: 20000.0})['signals']
+        self.assertEqual(four['blocks'], ['limit_up_momentum', 'versus_market', 'ma_alignment', 'heavy_zones'])
+        self.assertEqual(four['limit_up_momentum'], momentum(56, 2, 0.8))
+        dumped = json.dumps(four, ensure_ascii=False)
+        for word in BANNED_TEXT + ('反推',):
+            self.assertNotIn(word, dumped)
+        # 20 根平盤、沒有加權指數：每一塊都沒有，清單是空的，鍵都還在（值是 null）。
         empty = self.analyze([FLAT] * 20, {})['signals']
         self.assertEqual((empty['blocks'], empty['versus_market'], empty['ma_alignment'], empty['heavy_zones']), ([], None, None, None))
+        self.assertIsNone(empty['limit_up_momentum'])
         self.assertEqual(empty['failed'], [])   # 天生沒有不算算不出來
 
     def test_a_block_that_cannot_be_computed_drops_only_itself_and_is_named(self):

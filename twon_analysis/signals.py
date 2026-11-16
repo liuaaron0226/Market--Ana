@@ -10,9 +10,10 @@ import math
 from decimal import ROUND_HALF_UP, Decimal
 
 from .indicators import Bar, ma
+from .limit_up_momentum import limit_up_momentum
 
 # 目前會算的幾塊（固定順序）；blocks 只列其中真的有的。建置報告用同一份名單統計「今天有幾檔有哪幾塊」。
-BLOCK_NAMES = ('versus_market', 'ma_alignment', 'heavy_zones')
+BLOCK_NAMES = ('limit_up_momentum', 'versus_market', 'ma_alignment', 'heavy_zones')
 VERSUS_DAYS = (5, 20, 60)
 # 均線排列的四個條件（固定順序）與畫面上四盞燈的短標籤。這一組名字只屬於均線排列這一塊。
 MA_ALIGNMENT_CONDITIONS = (('close_above_ma20', '站上月線'), ('ma20_above_ma60', '月＞季'),
@@ -108,11 +109,14 @@ def _heavy_zones(bars: list[Bar]) -> dict | None:
                       'heavy': [index - start for index in heavy]}}
 
 
-def build_signals(*, bars: list[Bar], day_returns: list[float], index_closes: dict[str, float], indicators: dict) -> dict:
+def build_signals(*, bars: list[Bar], day_returns: list[float], index_closes: dict[str, float], indicators: dict,
+                  momentum_inputs: dict) -> dict:
     """bars：這一檔由舊到新的還原後日線，最後一根是資料日；day_returns：和 bars 逐根對齊的當日漲跌幅（比率）；
-    index_closes：{日期: 加權指數收盤}；indicators：個股分析結果的指標快照。"""
+    index_closes：{日期: 加權指數收盤}；indicators：個股分析結果的指標快照；
+    momentum_inputs：漲停動能要的原始資料（limit_up_momentum 的參數，加權指數除外）。"""
     dates = [bar.date for bar in bars]
-    builders = {'versus_market': lambda: _versus_market(dates, day_returns, index_closes),
+    builders = {'limit_up_momentum': lambda: limit_up_momentum(index_closes=index_closes, **momentum_inputs),
+                'versus_market': lambda: _versus_market(dates, day_returns, index_closes),
                 'ma_alignment': lambda: _ma_alignment(bars, indicators),
                 'heavy_zones': lambda: _heavy_zones(bars)}
     found, failed = {}, []
