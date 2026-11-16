@@ -1969,6 +1969,15 @@ def touch_mobile(journey: Journey, browser) -> None:
     journey.check("08 手機：工具列不擠壓圖表高度（日 K 有工具列、分 K 沒有，圖一樣高）", abs(canvas.bounding_box()["height"] - hidden_height) < 0.5,
                   [canvas.bounding_box()["height"], hidden_height])
 
+    axis = journey.axis(page)
+    finger.pinch(*px((0.4, 0.4)), 60, 160)
+    zoomed = journey.axis(page)
+    finger.slide(*px((0.5, 0.4)), 80, 0)
+    journey.check("08 手機：沒選工具時雙指張開是縮放、單指左右拖是平移（時間軸都變了），不會畫出線",
+                  zoomed != axis and journey.axis(page) != zoomed and journey.saved(page, code) == [])
+    page.reload()
+    journey.ready(page, code)
+
     for tool in TOUCH_TOOLS:
         button = tools.locator(f"button[data-tool={tool['kind']}]")
         button.dispatch_event("pointerdown", {"pointerType": "touch", "pointerId": 9, "bubbles": True})

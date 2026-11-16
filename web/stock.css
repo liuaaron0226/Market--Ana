@@ -161,7 +161,7 @@
 @media (prefers-reduced-motion: reduce) { .bd-draw button, .bd-draw button::after { transition: none; } }
 /* 還有畫線沒存上去時的提示：和工具列同一行、靠右的一個小圓點加三個字，不蓋到圖。
    它不在工具列裡面：秒 K、分 K 把工具列收起時，還沒存上去的提示照樣看得到。
-   工具列與按鈕不讓位（手機上要維持 44px）；窄螢幕上選了線、多出刪除鈕時放不下三個字，只留圓點
+   它比工具列先讓位（手機上按鈕盡量維持 44px）；窄螢幕上選了線、多出刪除鈕時放不下三個字，只留圓點
    （不認得 :has 的舊瀏覽器是把放不下的字裁掉）。 */
 .bd-draw-unsaved {
   display: inline-flex; align-items: center; gap: 6px; flex: 0 1000 auto; min-width: 14px; overflow: hidden;

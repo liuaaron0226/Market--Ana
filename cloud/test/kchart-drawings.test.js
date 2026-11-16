@@ -3073,6 +3073,9 @@ test("選了工具時手指上下滑過圖表不算點：不定位、不選 K �
   assert.deepEqual(changes, []);
   assert.equal(chart.selection, -1);
   assert.deepEqual(tools, ["hline"], "工具留著");
+  view.drag([150, 100], [150, 140]); // 滑鼠按住往下拖 40px 放開：一樣不是點
+  assert.deepEqual(changes, []);
+  assert.equal(chart.selection, -1);
 
   chart.setTool("trend");
   tap(90, 241, "touch"); // 第一點：第 50 根（02-20）、97.15
@@ -3163,4 +3166,26 @@ test("手指點一下打開輸入框後，瀏覽器補送的滑鼠按下剛好�
   assert.equal(form.dispatch("mousedown", { target: input }).prevented, true, "補送的那一下");
   assert.deepEqual(input.selection, [4, 4]);
   assert.equal(form.dispatch("mousedown", { target: input }).prevented, false, "之後自己點的");
+});
+
+test("手指在把手旁邊（線的點選範圍外、把手的可抓範圍內）輕點一下：還是選著那一條，不取消選取、不改選 K 棒", () => {
+  const view = createChart();
+  const { chart, changes, selections } = view;
+  chart.setDrawings([TREND()]);
+  fingerTap(view, [169, 164]);
+  fingerTap(view, [262, 75]); // 離右端把手 17.7px、離線也是
+  assert.deepEqual(selections, ["saved-two-01"], "沒有被取消選取");
+  assert.equal(chart.selection, -1, "沒有改選 K 棒");
+  assert.deepEqual(changes, []);
+});
+
+test("沒有畫線層的圖（首頁大盤）手勢照舊：手指移 5px 就算平移、放開不算點一下", () => {
+  const { KChart, FakeElement } = load(["kchart.js"]);
+  const chart = new KChart(new FakeElement(), { macd: false, height: () => 340 });
+  chart.setData(dailyCandles(), { count: 40, unit: "日" });
+  chart.canvas.dispatch("pointerdown", { pointerType: "touch", clientX: 150, clientY: 100 });
+  chart.canvas.dispatch("pointermove", { pointerType: "touch", clientX: 155, clientY: 100 });
+  chart.canvas.dispatch("pointerup", { pointerType: "touch", clientX: 155, clientY: 100 });
+  assert.equal(chart.view.end, 79, "5px 進位成一根，跟著手指走");
+  assert.equal(chart.selection, -1, "移過 3px 就不是點一下");
 });
