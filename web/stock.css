@@ -485,6 +485,14 @@ body.st :is(.bd-back, .bd-theme, .bd-draw button, .bd-chart-bar .chart-chip, .bd
   transition: transform var(--t-lift) var(--ease-depth), box-shadow var(--t-lift) var(--ease-depth), color 160ms var(--ease-out);
 }
 body.st .bd-draw { gap: 6px; padding-bottom: 4px; }
+/* 手機（390 寬時工具列那一行是 334px）：六顆工具＋刪除七顆都要 44px（308px），連「未儲存」只剩的圓點（10px）也要放得下：
+   鍵距 2px、刪除前多隔 4px（共 324px），圓點 10px，剛好 334px。
+   不管有沒有選線都用同一個鍵距：選了線、刪除鈕出現時，前面六顆不會跟著移位。 */
+@media (max-width: 480px) {
+  body.st .bd-draw { gap: 2px; }
+  body.st .bd-draw .bd-draw-delete { margin-left: 4px; }
+  body.st .bd-draw-row:has(.bd-draw-delete:not([hidden])) .bd-draw-unsaved { min-width: 10px; padding-left: 4px; }
+}
 body.st .bd-draw button[aria-pressed="true"] { background: var(--ink); color: var(--bg); box-shadow: var(--key-shadow-ink); }
 @media (hover: hover) {
   body.st :is(.bd-back, .bd-theme, .bd-draw button:not([aria-pressed="true"]), .bd-chart-bar .chart-chip, .bd-period select):hover {

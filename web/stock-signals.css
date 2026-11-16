@@ -37,6 +37,8 @@
 .ss-meter { flex: 1; min-width: 0; position: relative; display: block; padding: 6px 0 20px; }
 .ss-mark { position: absolute; top: 2px; width: 1px; height: 12px; background: var(--dim); transform: translateX(-.5px); }
 .ss-avg { position: absolute; top: 18px; color: var(--faint); font-size: 11px; white-space: nowrap; transform: translateX(-50%); }
+/* 資料沒給最高一級時沒有光條，全部平均直接寫在大數字旁 */
+.ss-avg-text { color: var(--dim); font-size: 12px; white-space: nowrap; }
 .ss-tip {
   position: absolute; bottom: calc(100% - 2px); z-index: 2; padding: 6px 10px; border-radius: var(--r-key);
   background: var(--key); box-shadow: var(--key-shadow-hover); color: var(--dim); font-size: 12px; white-space: nowrap;

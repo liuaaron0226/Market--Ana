@@ -1268,6 +1268,7 @@
   syncMaLimit();
   bindDrawTools();
   setTheme(saved === 'dark' ? 'dark' : 'light');
-  window.StockView = { weeklyCandles, monthlyCandles };
+  // chart：驗收用（畫線旅程讀選了哪一根 K 棒、右側標了什麼），頁面自己不用
+  window.StockView = { weeklyCandles, monthlyCandles, chart: () => chart };
   loadReleaseFeatures().then(() => load(codeFromUrl() || '2330'));
 })();

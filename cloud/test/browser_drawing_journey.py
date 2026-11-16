@@ -167,6 +167,16 @@ class Journey:
     def handle(self, page, line_y: float) -> bool:
         return page.evaluate(HANDLE_JS, line_y) > 0
 
+    # 立體版拿掉了 K 棒的浮窗（本人 11-15）：選了一根 K 棒，十字線停在那一根、右側價格欄標出那一天的開高低收；
+    # 再點一次同一根是取消選取。這裡讀圖表自己記的「選了哪一根、右側標了什麼」（stock.js 的 StockView.chart）。
+    def bar(self, page) -> dict:
+        return page.evaluate("() => { const chart = window.StockView.chart(); return { selection: chart.selection, picked: chart.debugBoxes.picked }; }")
+
+    def shows_bar(self, page) -> bool:
+        """選了一根 K 棒，右側標出那一天的開、高、低、收。"""
+        state = self.bar(page)
+        return state["selection"] >= 0 and bool(state["picked"]) and [tag["name"] for tag in state["picked"]["tags"]] == ["開", "高", "低", "收"]
+
     def axis(self, page) -> int:
         return page.evaluate(AXIS_JS)
 
@@ -183,13 +193,16 @@ class Journey:
 
     def draw(self, page, fx: float, fy: float, touch: bool = False) -> float:
         tool = page.locator("#drawTools button[data-tool=hline]")
+        # 先選工具再量位置：工具列在圖的上方，點工具時頁面可能捲動讓它露出來，先量的位置會整個偏掉。
+        if touch:
+            tool.tap()
+        else:
+            tool.click()
         x, y, canvas_y = self.point(page, fx, fy)
         with page.expect_response(lambda response: "/api/drawings/" in response.url and response.request.method == "PUT") as saved:
             if touch:
-                tool.tap()
                 page.touchscreen.tap(x, y)
             else:
-                tool.click()
                 page.mouse.click(x, y)
         self.check("畫完自動儲存（PUT 回 201）", saved.value.status == 201, saved.value.status)
         return canvas_y
@@ -219,7 +232,10 @@ def desktop(journey: Journey, browser) -> None:
     journey.check("一開始沒有畫線", journey.lines(page) == [] and journey.saved(page) == [])
     x, y, _ = journey.point(page, 0.4, 0.5)
     page.mouse.click(x, y)
-    journey.check("沒選工具時點一下照舊顯示該根 K 棒的數值", page.locator("#chartHost .kc-tip.show").count() == 1 and journey.lines(page) == [])
+    journey.check("沒選工具時點一下照舊顯示該根 K 棒的數值", journey.shows_bar(page) and journey.lines(page) == [])
+    page.mouse.click(x, y)
+    journey.check("再點一次同一根 K 棒就取消選取（本人 11-15），也不會畫出線", journey.bar(page)["selection"] == -1 and journey.lines(page) == [],
+                  journey.bar(page))
 
     canvas_y = journey.draw(page, 0.4, 0.3)
     lines = journey.lines(page)
@@ -560,7 +576,10 @@ def edit_mobile(journey: Journey, browser) -> None:
     journey.check("手機：點刪除，線消失、刪除鈕收起", removed.value.status == 204 and len(journey.lines(page)) == 1 and not delete.is_visible())
     x, y = journey.canvas_xy(page, 0.6, max(journey.lines(page)) + 60)
     page.touchscreen.tap(x, y)
-    journey.check("手機：點空白處照舊顯示 K 棒數值，不出現刪除", page.locator("#chartHost .kc-tip.show").count() == 1 and not delete.is_visible())
+    journey.check("手機：點空白處照舊顯示 K 棒數值，不出現刪除", journey.shows_bar(page) and not delete.is_visible())
+    page.touchscreen.tap(x, y)
+    journey.check("手機：再點一次同一根 K 棒就取消選取（本人 11-15），右側不再標數值", journey.bar(page)["selection"] == -1
+                  and journey.bar(page)["picked"] is None and not delete.is_visible(), journey.bar(page))
     page.reload()
     journey.ready(page, "2330")
     journey.check("手機：重新整理後只剩一條", len(journey.lines(page)) == 1 and len(journey.saved(page)) == 1, journey.lines(page))
@@ -618,7 +637,7 @@ def two_point_desktop(journey: Journey, browser) -> None:
     page.mouse.move(*journey.at(page, *b), steps=4)
     journey.check("點了第一下後再點一次同一個工具：取消，不留下半條線", journey.ink(page)["count"] == 0 and trend.get_attribute("aria-pressed") == "false")
     page.mouse.click(*journey.at(page, *b))
-    journey.check("取消後點圖照舊顯示 K 棒數值，沒有畫出線", page.locator("#chartHost .kc-tip.show").count() == 1 and journey.saved(page, code) == [])
+    journey.check("取消後點圖照舊顯示 K 棒數值，沒有畫出線", journey.shows_bar(page) and journey.saved(page, code) == [])
     page.keyboard.press("Escape")
 
     trend.click()
@@ -858,7 +877,7 @@ def rect_desktop(journey: Journey, browser) -> None:
     page.mouse.click(*journey.at(page, b[0] + 30, inside[1]))
     journey.check("點在框外 30px：不選取", not delete.is_visible())
     page.mouse.click(*journey.at(page, *inside))
-    journey.check("點在框的內部：不選取，照舊顯示 K 棒數值", not delete.is_visible() and page.locator("#chartHost .kc-tip.show").count() == 1)
+    journey.check("點在框的內部：不選取，照舊顯示 K 棒數值", not delete.is_visible() and journey.shows_bar(page))
     page.mouse.click(*journey.at(page, inside[0], a[1] + 3))
     journey.check("點在上邊線旁 3px：選取，工具列出現刪除", delete.is_visible())
     page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-16-rect-selected.png"))
@@ -935,8 +954,10 @@ def rect_mobile(journey: Journey, browser) -> None:
 
     page.touchscreen.tap(*journey.at(page, (a[0] + b[0]) / 2, (a[1] + b[1]) / 2))
     journey.check("手機：手指點框的內部不選取", not delete.is_visible())
-    page.touchscreen.tap(*journey.at(page, (a[0] + b[0]) / 2, a[1] + 9))
-    journey.check("手機：手指點在上邊線旁 9px 就選取，工具列出現刪除", delete.is_visible())
+    # 點下邊線：立體版手機的圖比較高，這個框的上邊線離桌機畫的那個大框的下邊線不到 10px，點上邊線旁 9px
+    # 會（正確地）選到比較近的那個大框；下邊線附近沒有別的線。
+    page.touchscreen.tap(*journey.at(page, (a[0] + b[0]) / 2, b[1] - 9))
+    journey.check("手機：手指點在下邊線旁 9px 就選取，工具列出現刪除", delete.is_visible())
     page.locator(".bd-chart").screenshot(path=str(OUT / "mobile-12-rect-selected.png"))
 
     cdp = context.new_cdp_session(page)
@@ -1057,7 +1078,7 @@ def fib_desktop(journey: Journey, browser) -> None:
 
     right = b[0] + 120  # 兩點右邊、只有橫線經過的地方
     page.mouse.click(*journey.at(page, right, (levels[5] + levels[6]) / 2))
-    journey.check("點在兩條橫線中間：不選取，照舊顯示 K 棒數值", not delete.is_visible() and page.locator("#chartHost .kc-tip.show").count() == 1)
+    journey.check("點在兩條橫線中間：不選取，照舊顯示 K 棒數值", not delete.is_visible() and journey.shows_bar(page))
     page.mouse.click(*journey.at(page, right, levels[3] + 3))
     journey.check("點在 0.5 那條旁 3px：選取，工具列出現刪除", delete.is_visible())
     page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-21-fib-selected.png"))
@@ -1401,7 +1422,7 @@ def text_desktop(journey: Journey, browser) -> None:
         page.keyboard.press("Enter")
     page.wait_for_timeout(200)
     items = journey.saved(page, code)
-    # 圖表自己的 K 棒數值提示裡本來就有粗體字，所以粗體只看有沒有帶著那兩個字的。
+    # 圖表裡別的地方也可能有粗體字（以前的 K 棒浮窗就有），所以粗體只看有沒有帶著那兩個字的。
     injected = page.evaluate("() => document.querySelectorAll('#chartHost img, #chartHost script').length"
                              " + [...document.querySelectorAll('#chartHost b')].filter(b => b.textContent.includes('粗體')).length")
     journey.check("寫了像 HTML 的內容：原樣存、畫成字，頁面上沒有多出元素、沒有跳出對話框", created.value.status == 201 and len(items) == 2
@@ -1513,9 +1534,10 @@ def text_mobile(journey: Journey, browser) -> None:
 
     # 這一則的位置：左緣在點的那一根、上下置中在點的價位（另一則是桌機寫的，用位置分開）。
     target = (spot[0] + 20, spot[1])
+    bar_before = journey.bar(page)["selection"]
     page.touchscreen.tap(*journey.at(page, *target))
-    journey.check("手機：手指點文字就選取（工具列出現刪除），K 棒數值沒有跳出來", delete.is_visible() and editor(page) is None
-                  and page.locator("#chartHost .kc-tip.show").count() == 0)
+    journey.check("手機：手指點文字就選取（工具列出現刪除），K 棒沒有被選取", delete.is_visible() and editor(page) is None
+                  and journey.bar(page)["selection"] == bar_before, {"before": bar_before, "after": journey.bar(page)})
     page.screenshot(path=str(OUT / "mobile-23-text-selected.png"))
 
     cdp = context.new_cdp_session(page)
@@ -1547,11 +1569,12 @@ def text_mobile(journey: Journey, browser) -> None:
     journey.check("手機：再點一下已選取的文字，輸入框帶著原本的內容打開", opened is not None and opened["value"] == "手機寫的備註" and opened["focused"], opened)
     page.keyboard.press("Control+A")
     page.keyboard.insert_text("手機改過的備註")
+    bar_before = journey.bar(page)["selection"]
     with page.expect_response(drawing_request("PUT")) as edited:
         page.touchscreen.tap(*journey.at(page, width * 0.2, height * 0.12))
     after = [item for item in journey.saved(page, code) if item["id"] == mine["id"]][0]
     journey.check("手機：改完點圖上別處就是確定並儲存（PUT 回 200）；那一下沒有選到 K 棒", edited.value.status == 200 and after["text"] == "手機改過的備註"
-                  and editor(page) is None and page.locator("#chartHost .kc-tip.show").count() == 0, after)
+                  and editor(page) is None and journey.bar(page)["selection"] == bar_before, {"item": after, "bar": [bar_before, journey.bar(page)]})
 
     page.touchscreen.tap(*journey.at(page, *target))
     opened = editor(page)

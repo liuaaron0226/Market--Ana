@@ -10,8 +10,6 @@
   'use strict';
   // 每一塊放在事實區塊的哪個面板；排列照五塊資料 blocks 的固定順序
   const PANEL = { limit_up_momentum: 'summary', versus_market: 'technical', ma_alignment: 'technical', margin_maintenance: 'credit', heavy_zones: 'technical' };
-  // 漲停動能六級裡最高一級的歷史比例：跟著算法版本鎖住（規格〈漲停動能的規則〉）。不認得的版本不猜，不畫這張板。
-  const TOP_RATE = { 'limit-up-momentum-20261116': 17.6 };
   // 最低一級（0.4%）照比例只有 2%，放大到看得到一小段
   const MIN_FILL = 0.06;
 
@@ -21,14 +19,14 @@
   // ---------- 純整理（不碰畫面） ----------
   function momentum(block) {
     if (!block || !finite(block.points) || !finite(block.band_rate_pct) || !finite(block.average_rate_pct)) return null;
-    const top = TOP_RATE[block.algorithm];
-    if (!top) return null;
+    // 光條的滿格是六級裡最高一級的歷史比例，照資料給的（算法版本檔算出來的）；沒給就照實不畫光條，不猜。
+    const top = finite(block.top_rate_pct) && block.top_rate_pct > 0 ? block.top_rate_pct : null;
     const points = Math.round(block.points);
     return {
       kind: 'limit_up_momentum', name: '漲停動能', points,
       rate: block.band_rate_pct, rateText: pct(block.band_rate_pct), averageText: pct(block.average_rate_pct),
-      fill: Math.min(1, Math.max(MIN_FILL, block.band_rate_pct / top)),
-      averageAt: Math.min(1, Math.max(0, block.average_rate_pct / top)),
+      fill: top ? Math.min(1, Math.max(MIN_FILL, block.band_rate_pct / top)) : null,
+      averageAt: top ? Math.min(1, Math.max(0, block.average_rate_pct / top)) : null,
       label: `漲停動能 ${points}，過去同樣級距的股票隔天漲停的占 ${pct(block.band_rate_pct)}，全部股票平均 ${pct(block.average_rate_pct)}`,
     };
   }
@@ -150,13 +148,23 @@
   function momentumBoard(model) {
     const read = el('span', 'ss-read', '隔天漲停 ');
     read.append(counter(model.rateText, model.rate));
-    const board = card(model, read, 'button');
-    board.type = 'button';
-    board.classList.add('ss-momentum');   // 按住壓下去的樣式（stock-signals.css）認這個名字
     const main = el('span', 'ss-lu');
     const big = counter(String(model.points), model.points, { suffix: '', digits: 0 });
     big.classList.add('ss-big');
     big.setAttribute('aria-hidden', 'true');
+    if (model.fill === null) {
+      // 資料沒給最高一級：沒有滿格可以比，照實不畫光條；全部平均直接寫出來（沒有光條可按，這張卡也就不是按鈕）
+      const board = card(model, read);
+      const plainAverage = el('span', 'ss-avg-text', '全部股票平均 ');
+      plainAverage.setAttribute('aria-hidden', 'true');
+      plainAverage.append(el('b', 'num', model.averageText));
+      main.append(big, plainAverage);
+      board.append(main);
+      return board;
+    }
+    const board = card(model, read, 'button');
+    board.type = 'button';
+    board.classList.add('ss-momentum');   // 按住壓下去的樣式（stock-signals.css）認這個名字
     const meter = el('span', 'ss-meter');
     meter.setAttribute('aria-hidden', 'true');
     const track = el('span', 'ss-track');
@@ -173,8 +181,11 @@
     meter.append(track, mark, avg, tip);
     main.append(big, meter);
     board.append(main);
+    return holdable(board);
+  }
 
-    // 按住（或鍵盤）：整張卡壓下去，「平均」上方浮出全部股票平均；放開後隔一下收回
+  // 按住（或鍵盤）：整張卡壓下去，「平均」上方浮出全部股票平均；放開後隔一下收回
+  function holdable(board) {
     let timer = 0;
     const hold = () => { clearTimeout(timer); board.classList.add('is-held'); };
     const release = () => { clearTimeout(timer); timer = setTimeout(() => board.classList.remove('is-held'), 1400); };

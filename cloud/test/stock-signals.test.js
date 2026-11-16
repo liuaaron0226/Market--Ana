@@ -15,7 +15,7 @@ function load() {
   return sandbox.window.StockSignals;
 }
 
-const momentum = (points, band, rate) => ({ points, band, band_rate_pct: rate, average_rate_pct: 1.7, algorithm: "limit-up-momentum-20261116" });
+const momentum = (points, band, rate) => ({ points, band, band_rate_pct: rate, average_rate_pct: 1.7, top_rate_pct: 17.6, algorithm: "limit-up-momentum-20261116" });
 const signals = (extra = {}) => ({
   data_date: "2026-11-09",
   limit_up_momentum: momentum(84, 3, 2.6),
@@ -53,12 +53,30 @@ test("光條長度是這個級距的歷史比例相對最高一級（17.6%）；
   assert.ok(Math.abs(mid.averageAt - 1.7 / 17.6) < 1e-9);
 });
 
-test("出現哪幾張板由資料的 blocks 決定，頁面不自己判斷；資料不齊或算法版本不認得就不出現", () => {
+test("光條的滿格讀資料給的最高一級（top_rate_pct），頁面不寫死：資料換成 20% 就照 20% 畫", () => {
+  const { read } = load();
+  const board = plain(read(signals({ limit_up_momentum: { ...momentum(84, 3, 2.6), top_rate_pct: 20, algorithm: "limit-up-momentum-29990101" } }), "summary"))[0];
+  assert.ok(Math.abs(board.fill - 2.6 / 20) < 1e-9);
+  assert.ok(Math.abs(board.averageAt - 1.7 / 20) < 1e-9);
+});
+
+test("資料沒給最高一級：照實沒有光條（fill 是 null），分數與隔天漲停的比例照資料顯示，不猜滿格", () => {
+  const { read } = load();
+  for (const top of [undefined, null, 0, -1, "17.6"]) {
+    const block = { ...momentum(84, 3, 2.6), top_rate_pct: top };
+    if (top === undefined) delete block.top_rate_pct;
+    const [board] = plain(read(signals({ limit_up_momentum: block }), "summary"));
+    assert.equal(board.fill, null, `top_rate_pct=${top}`);
+    assert.equal(board.averageAt, null);
+    assert.equal(board.points, 84);
+    assert.equal(board.rateText, "2.6%");
+  }
+});
+
+test("出現哪幾張板由資料的 blocks 決定，頁面不自己判斷；資料不齊就不出現", () => {
   const { read } = load();
   assert.deepEqual(plain(read(signals({ blocks: ["versus_market"] }), "summary")), [], "blocks 沒列就沒有");
   assert.deepEqual(plain(read(signals({ limit_up_momentum: null }), "summary")), [], "資料是 null 就沒有");
-  assert.deepEqual(plain(read(signals({ limit_up_momentum: { ...momentum(84, 3, 2.6), algorithm: "limit-up-momentum-29990101" } }), "summary")), [],
-    "不認得的算法版本：不知道最高一級是多少，不猜");
   assert.deepEqual(plain(read(signals({ limit_up_momentum: { ...momentum(84, 3, 2.6), points: "84" } }), "summary")), []);
   assert.deepEqual(plain(read(null, "summary")), []);
   assert.deepEqual(plain(read({ blocks: "limit_up_momentum" }, "summary")), []);
