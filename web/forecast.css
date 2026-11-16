@@ -76,6 +76,23 @@
 }
 .forecast-days button[aria-pressed="true"] { border-color: var(--ink); color: var(--ink); background: var(--panel2); }
 .forecast-revisit { display: block; width: 100%; height: auto; margin-bottom: 8px; }
+/* 相似盤勢（E 票第 11 片，本人選 A 每段一點）：預測頁最下面一塊，跟著 1／5／20 日切換。 */
+.forecast-sim { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.forecast-sim h4 { margin: 0 0 6px; color: var(--faint); font-size: 12px; font-weight: 500; }
+.forecast-sim-chart { display: block; width: 100%; height: auto; }
+.forecast-sim-row { opacity: .5; transition: opacity .2s var(--ease); }
+.forecast-sim-row.is-active { opacity: 1; }
+.forecast-sim-dot { animation: forecast-sim-pop .45s var(--ease) both; animation-delay: var(--d, 0ms); transform-box: fill-box; transform-origin: center; }
+@keyframes forecast-sim-pop { from { opacity: 0; transform: scale(.2); } }
+@media (prefers-reduced-motion: reduce) { .forecast-sim-dot { animation: none; } }
+.forecast-sim-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: 4px 0 0; color: var(--faint); font-size: 11.5px; }
+.forecast-sim-legend span { margin-right: 6px; }
+.forecast-sim-legend i { display: inline-block; flex: none; }
+.forecast-sim-legend .is-up, .forecast-sim-legend .is-down { width: 8px; height: 8px; border-radius: 50%; background: var(--up); }
+.forecast-sim-legend .is-down { background: var(--down); }
+.forecast-sim-legend .is-med { width: 12px; height: 2px; background: var(--ink); }
+.forecast-sim-legend .is-base { width: 7px; height: 7px; border: 1.2px solid var(--faint); transform: rotate(45deg); }
+.forecast-sim-line { margin: 6px 0 0; color: var(--ink); font-size: 13px; }
 @media (max-width: 720px) {
   .forecast-chip { padding: 0 10px; }
   .forecast-pop {
