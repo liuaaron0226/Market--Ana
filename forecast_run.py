@@ -3,8 +3,8 @@
 輸入是每日更新剛發布的大盤資料檔（``data/daily-update-state/last-market-pack/analysis-data.js``，就是網站畫圖用的
 那一份）與方法稿；做的事依序是：
 1. 從大盤資料整理一份當天輸入（加權指數日 K、法人與期貨、現行短中期走勢標籤、各項資料截止日、方法稿全文）；
-2. 交給預測帳本寫一份晚間版（呼叫模型、驗證、鎖定或記漏記，都在帳本裡）；
-3. 替帳本裡所有還有未到期格的預測對帳一次；
+2. 替帳本裡所有還有未到期格的預測對帳一次（先對帳，今天到期的結果才進得了今天這份的教訓層）；
+3. 交給預測帳本寫一份晚間版（呼叫模型、驗證、鎖定或記漏記；相似盤勢與教訓兩層也在帳本裡算）；
 4. 輸出給網站資料庫的指令檔與一份執行紀錄。
 
 乾跑（``dry_run``）只在暫存的帳本副本上寫，不碰真的帳本、不輸出資料庫指令檔，把模型挑的線、落點與理由寫進
@@ -162,20 +162,28 @@ def run_evening(
                 target = Path(scratch) / "ledger"
                 if Path(ledger).is_dir():
                     shutil.copytree(ledger, target)
+            # 先對帳再寫（E 票）：今天到期的格子要先對完，今天這份的教訓層才看得到；乾跑只對暫存副本。
+            # 今天這份最早的到期日在明天，寫完之後不必再對一次。
+            reconciliation = fl.reconcile(target, data["index_daily"])
             result = fl.write_forecast(target, data, edition="evening", model_bin=model_bin, model=model,
                                        now=clock, timeout_seconds=timeout_seconds)
         record = result.get("record")
         log["outcome"] = result["outcome"]
+        if not dry_run:
+            log["reconciliation"] = {key: len(value) for key, value in reconciliation.items()}
         if result.get("detail"):
             log["detail"] = result["detail"]
         if record:
             log.update(kind=record["kind"], forecast_id=record["forecast_id"], locked_at=record.get("locked_at"),
                        miss_reason=record.get("miss_reason"), miss_detail=record.get("miss_detail"),
                        attempts=record.get("attempts", []), record=_report(record))
+            model_input = record.get("input") or {}
+            log["experience"] = {"similar_today": (model_input.get("similar_regimes") or {}).get("today"),
+                                 "lessons_counts": (model_input.get("lessons") or {}).get("counts")}
 
     if not dry_run:
-        reconciliation = fl.reconcile(ledger, data["index_daily"])
-        log["reconciliation"] = {key: len(value) for key, value in reconciliation.items()}
+        if "reconciliation" not in log:
+            log["reconciliation"] = {key: len(value) for key, value in fl.reconcile(ledger, data["index_daily"]).items()}
         if sql_output:
             published_at = clock().astimezone(fl.TAIPEI).isoformat()
             Path(sql_output).parent.mkdir(parents=True, exist_ok=True)

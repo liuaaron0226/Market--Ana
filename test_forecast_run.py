@@ -180,6 +180,29 @@ class EveningRunTests(RunTestCase):
         outcome = fl.read_ledger(self.ledger)["reconciliations"][0]
         self.assertEqual((outcome["horizon"], outcome["expiry_date"], outcome["expiry_close"]), (1, BASE, 179))
 
+    def test_cells_expiring_today_reach_the_lesson_layer_of_todays_forecast(self):
+        # E 票：先對帳再寫，今天到期的那一格（前一天那份的一日格）已經是今天這份的教訓
+        early = DATES[:-1]
+        self.run_evening(analysis(early), structured=answer(early[-1]),
+                         now=datetime.fromisoformat(f"{early[-1]}T17:40:00+08:00"))
+        log = self.run_evening()
+        today = {r["base_date"]: r for r in fl.read_ledger(self.ledger)["forecasts"]}[BASE]
+        counts = today["input"]["lessons"]["counts"]
+        self.assertEqual(counts["1"]["hits"] + counts["1"]["misses"], 1)
+        self.assertEqual(log["experience"]["lessons_counts"], counts)
+        # 80 根不到一年，相似盤勢不歸類
+        self.assertEqual(log["experience"]["similar_today"], {"regime": None, "since": None})
+
+    def test_dry_run_also_sees_cells_expiring_today_without_touching_the_ledger(self):
+        early = DATES[:-1]
+        self.run_evening(analysis(early), structured=answer(early[-1]),
+                         now=datetime.fromisoformat(f"{early[-1]}T17:40:00+08:00"))
+        before = fl.read_ledger(self.ledger)
+        log = self.run_evening(dry_run=True)
+        counts = log["experience"]["lessons_counts"]
+        self.assertEqual(counts["1"]["hits"] + counts["1"]["misses"], 1)
+        self.assertEqual(fl.read_ledger(self.ledger), before)
+
 
 class DryRunTests(RunTestCase):
     def test_dry_run_leaves_the_real_ledger_untouched_and_reports_the_answer(self):
