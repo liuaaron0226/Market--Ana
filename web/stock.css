@@ -503,3 +503,29 @@ body.st :is(.bd-back, .bd-theme, .bd-draw button, .bd-chart-bar .chart-chip, .bd
   body.st #candidateReasons:not(:empty) { padding: 4px 16px 20px; }
   body.st .bd-compare { padding: 20px 16px 24px; }
 }
+
+/* ---------- 收緊間距（本人 2026-11-16 定案版本 a 之後；樣子不變，只收卡片之間與卡片裡的空白） ----------
+   要過的兩條（本人 11-15 定的）：電腦上一進去三顆分類鍵在第一個畫面裡；手機一進去整頁不到兩個畫面。
+   改的只有間距：卡片的內距、卡片之間、當日三格的上下、畫線工具列下方、頁尾留白。字、顏色、卡片的樣子都不動。 */
+body.st .st-top { margin-top: 4px; padding: 18px 32px 14px; }
+body.st .st-top .bd-quote { padding-bottom: 14px; }
+body.st .st-top .sf-cell { padding-top: 10px; padding-bottom: 10px; }
+body.st .bd-stage { margin-top: 12px; padding: 2px 32px 10px; }
+body.st .bd-chart-bar { margin-bottom: 4px; }
+body.st .bd-draw { padding-bottom: 0; margin-bottom: 4px; }
+body.st .hm-cats { margin-top: 14px; }
+body.st .bd-shell { padding-bottom: 40px; }
+body.st .sf-blocks { margin-top: 18px; padding-top: 14px; }
+@media (max-width: 860px) {
+  body.st .st-top { padding: 12px 16px 8px; }
+  body.st .st-top .bd-quote { padding-bottom: 10px; }
+  body.st .st-top .sf-cell { padding-top: 6px; padding-bottom: 6px; }
+  body.st .bd-stage { margin-top: 10px; padding: 2px 12px 4px; }
+  body.st .hm-cats { margin-top: 10px; }
+  body.st .bd-shell { padding-bottom: 8px; }
+  body.st .sf-blocks { margin-top: 8px; padding-top: 8px; }
+  body.st .sf-panel { padding-top: 10px; }
+  body.st .st-top .bd-strategy { margin-top: 14px; }
+  body.st .sf-facts li { padding: 8px 0; }
+  body.st .sf-facts li:first-child { padding-top: 0; }
+}

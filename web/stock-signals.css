@@ -4,7 +4,7 @@
    卡片裡的條是乾淨的細條（和事實區塊的細橫條同一種：淡灰的軌、實色的條），紅綠只在細記號上，沒有漸層、光澤、凹槽。
    進場只做克制的淡入與細條伸出去。 */
 
-.ss { display: grid; gap: 16px; margin-top: 20px; }
+.ss { display: grid; gap: 16px; margin-top: 20px; padding-bottom: 16px; }   /* 下方留給卡片的陰影：事實區塊的面板會裁掉超出的部分（overflow-x: auto） */
 
 /* ---------- 卡片：和報價卡、K 線卡同一套 ---------- */
 .ss-board {
@@ -97,8 +97,11 @@
   .ss[data-panel] { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; }
 }
 @media (max-width: 860px) {
-  .ss { gap: 14px; margin-top: 16px; }
-  .ss-board { padding: 16px 16px 18px; }
+  .ss { gap: 12px; margin-top: 12px; padding-bottom: 10px; }
+  .ss-board { padding: 14px 16px 14px; }
+  .ss-head { margin-bottom: 10px; }
+  .ss-meter { padding-bottom: 16px; }
+  .ss-avg { top: 15px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .ss-board, .ss-fill, .ss-band, .ss-draw, .ss-fade, .ss-tip { transition: none !important; }
