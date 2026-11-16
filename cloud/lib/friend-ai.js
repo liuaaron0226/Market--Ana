@@ -197,9 +197,9 @@ function digestOf(row) {
 const PAUSED_TEXT = "這把金鑰已暫停使用，請到 Gemini 設定換一把";
 
 function noticeOf(key, sections) {
-  if (key.status === "paused") return { text: key.last_failure_reason || PAUSED_TEXT, paused: true };
+  if (key.status === "paused") return { text: key.last_failure_reason || PAUSED_TEXT };
   if (key.last_failure_reason && sections.some((section) => section.status !== "generated")) {
-    return { text: key.last_failure_reason, paused: false };
+    return { text: key.last_failure_reason };
   }
   return null;
 }
@@ -278,7 +278,7 @@ export async function deleteFriendKey(db, email) {
 // 後台用：每位使用者只有狀態——已設定與否、是否暫停、最後成功時間、最近失敗原因。不帶密文、解讀內容或持股。
 const NO_KEY = Object.freeze({ configured: false, paused: false, last_success_at: null, last_failure_reason: null });
 
-export async function keyStates(db) {
+export async function keyStateLookup(db) {
   let results = [];
   try {
     ({ results } = await db.prepare(

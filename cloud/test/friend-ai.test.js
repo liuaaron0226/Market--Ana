@@ -541,7 +541,7 @@ test("額度用完的那天：首頁拿到未產生與一般人看得懂的原�
   assert.equal(body.data_date, "2026-11-11");
   assert.equal(body.market.status, "unproduced");
   assert.equal(body.market.content, null);
-  assert.deepEqual(body.notice, { text: QUOTA_TEXT, paused: false });
+  assert.deepEqual(body.notice, { text: QUOTA_TEXT });
   assert.ok(!JSON.stringify(body).includes("我的結論"));
 });
 
@@ -553,11 +553,10 @@ test("金鑰被暫停：排程跳過他，首頁拿到暫停的原因；沒有�
   let body = await (await req("/api/friend-ai/digest")).json();
   assert.equal(body.data_date, "2026-11-11");
   assert.equal(body.market.status, "unproduced");
-  assert.deepEqual(body.notice, { text: REVOKED_TEXT, paused: true });
+  assert.deepEqual(body.notice, { text: REVOKED_TEXT });
   setKeyState({ last_failure_reason: null });
   body = await (await req("/api/friend-ai/digest")).json();
-  assert.equal(body.notice.paused, true);
-  assert.match(body.notice.text, /Gemini 設定/);
+  assert.match(body.notice.text, /暫停.*Gemini 設定/);
 });
 
 test("今天產生成功或還沒輪到：沒有提示", async () => {

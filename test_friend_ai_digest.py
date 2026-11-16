@@ -312,7 +312,7 @@ class FriendSqlTests(unittest.TestCase):
                                 ("bob@example.com", None, "今天的免費額度用完了，明天會照常再試")])
 
     def test_nothing_to_write_when_no_friend_has_a_usable_key(self):
-        self.assertEqual(friend_sql({"rows": [], "keys": {}, "audit": []}), [])
+        self.assertEqual(friend_sql({"rows": [], "keys": {}, "audit": [], "ivs": {}}), [])
 
 
 def write_js(path, name, value):

@@ -12,7 +12,7 @@ import { etfAnalysisHidden, policyForViewer, releasePolicy, stockEtfsVisible, st
 import { isOwnerEmail } from "./owner.js";
 import { FORECAST_PATH, handleForecastApi } from "./forecast.js";
 import { WATCH_PATH, handleWatchApi } from "./watch.js";
-import { FRIEND_AI_PAGE, FRIEND_AI_PATH, keyStates, deleteFriendKey, friendAiEnabled, handleFriendAiApi, notAvailable, ownerRefused } from "./friend-ai.js";
+import { FRIEND_AI_PAGE, FRIEND_AI_PATH, keyStateLookup, deleteFriendKey, friendAiEnabled, handleFriendAiApi, notAvailable, ownerRefused } from "./friend-ai.js";
 import { WATCH_PEERS_PATH, handleWatchPeersApi } from "./watch-peers.js";
 
 const PENDING_CAP = 30;
@@ -120,7 +120,7 @@ async function handleAdminApi(request, env, path, owner) {
       .all();
     // 朋友 AI 的開關打開時，每位使用者多一份 Gemini 狀態（已設定、暫停、最後成功、最近失敗）；關著時回應和以前一樣。
     if (!friendAiEnabled(env)) return json(200, { users: results });
-    const stateOf = await keyStates(env.DB);
+    const stateOf = await keyStateLookup(env.DB);
     return json(200, { users: results.map((user) => ({ ...user, gemini: stateOf(user.email) })) });
   }
   const m = path.match(/^\/api\/admin\/users\/([^/]+)\/([a-z]+)$/);

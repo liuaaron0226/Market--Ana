@@ -128,11 +128,11 @@ def classify_http_error(error: GeminiHttpError) -> str:
     return "gemini_rejected"
 
 
-def _post_with_retry(post: Callable, url: str, body: dict[str, Any], api_key: str, *, sleep: Callable[[float], None]) -> Any:
+def _post_with_retry(post: Callable, url: str, body: dict[str, Any], api_key: str, *, sleep: Callable[[float], None]) -> dict[str, Any]:
     """只有暫時錯誤（5xx、408、連線中斷）重試；額度、金鑰、其他錯誤與逾時都只呼叫一次。"""
     for attempt in range(1, GEMINI_ATTEMPTS + 1):
         try:
-            return post(url, body, api_key), attempt
+            return post(url, body, api_key)
         except GeminiHttpError as error:
             code = classify_http_error(error)
             if code != "gemini_unavailable" or attempt == GEMINI_ATTEMPTS:
@@ -152,7 +152,7 @@ def call_gemini(prompt: str, model: str, *, api_key: str, post: Callable, url_te
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "generationConfig": {"responseMimeType": "application/json", "responseJsonSchema": FRIEND_SCHEMA},
     }
-    reply, _attempts = _post_with_retry(post, url_template.format(model=model), body, api_key, sleep=sleep)
+    reply = _post_with_retry(post, url_template.format(model=model), body, api_key, sleep=sleep)
     usage = _usage(reply)
     try:
         parts = reply["candidates"][0]["content"]["parts"]
@@ -252,7 +252,7 @@ def friend_sql(result: dict[str, Any]) -> list[str]:
                 "error_code=excluded.error_code,updated_at=excluded.updated_at;"
             )
         at = _sql_literal(rows[0]["created_at"] if rows else None)
-        same_key = f"email={_sql_literal(email)} AND iv={_sql_literal(result.get('ivs', {}).get(email))}"
+        same_key = f"email={_sql_literal(email)} AND iv={_sql_literal(result['ivs'][email])}"
         if outcome["outcome"] == "success":
             statements.append(f"UPDATE friend_gemini_keys SET last_success_at={at},last_failure_reason=NULL,updated_at={at} WHERE {same_key};")
         else:
