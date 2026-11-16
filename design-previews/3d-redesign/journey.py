@@ -1293,6 +1293,36 @@ def stock(page: Page, base: str, tag: str, mobile: bool) -> None:
         check(f"{tag}：放開之後隔一下收回、沒有橫向捲動", no_overflow(page))
     step(f"{tag}：漲停動能", momentum)
 
+    def technical_boards() -> None:
+        """五塊新功能 07：「技術」原有內容的後面三張板——和大盤比、均線排列、爆大量成交區（台積電 11-09：強於 3.2／2.8／1.5、4 項成立 1 項、一區 2,020～2,195）。"""
+        page.locator("#stockFactsBlocks .sf-tab", has_text="技術").click()
+        host = page.locator("#stockFactsBlocks .ss[data-panel='technical']")
+        host.wait_for(state="attached")
+        for index in range(host.locator(".ss-board").count()):
+            host.locator(".ss-board").nth(index).scroll_into_view_if_needed()
+            page.wait_for_timeout(150)
+        page.wait_for_function("[...document.querySelectorAll('#stockFactsBlocks .ss-board')].every(board => board.classList.contains('is-in'))", timeout=6000)
+        seen = page.evaluate("""() => { const host = document.querySelector("#stockFactsBlocks .ss[data-panel='technical']");
+          return { kinds: [...host.querySelectorAll('.ss-board')].map(board => board.className.split(' ')[1]),
+            versus: [...host.querySelectorAll('.ss-vs')].map(row => row.querySelector('.ss-vs-name').textContent + ' ' + row.querySelector('.ss-vs-read').textContent),
+            lamps: [...host.querySelectorAll('.ss-lamp')].map(lamp => lamp.textContent + (lamp.classList.contains('on') ? '●' : '○')),
+            summary: host.querySelector('.ss-word-read')?.textContent,
+            zones: [...host.querySelectorAll('.ss-zones li')].map(row => row.textContent),
+            afterTable: host.previousElementSibling !== null,
+            chart: host.querySelector('.ss-zchart')?.getAttribute('aria-label') || '' }; }""")
+        page.wait_for_timeout(1500)
+        seen["versus"] = page.evaluate("""[...document.querySelectorAll("#stockFactsBlocks .ss-vs")].map(row => row.querySelector('.ss-vs-name').textContent + ' ' + row.querySelector('.ss-vs-read').textContent)""")
+        check(f"{tag}：「技術」原有內容後面三張板：和大盤比、均線排列、爆大量成交區",
+              seen["kinds"] == ["ss-versus-market", "ss-ma-alignment", "ss-heavy-zones"] and seen["afterTable"], seen["kinds"])
+        check(f"{tag}：和大盤比三列，強弱與差距照資料", seen["versus"] == ["近 5 日 強於 +3.2", "近 20 日 強於 +2.8", "近 60 日 強於 +1.5"], seen["versus"])
+        check(f"{tag}：均線排列四盞燈固定順序、只亮成立的；右上那一句照資料",
+              seen["lamps"] == ["站上月線○", "月＞季○", "季＞半年●", "月線上彎○"] and seen["summary"] == "4 項成立 1 項", [seen["lamps"], seen["summary"]])
+        check(f"{tag}：爆大量成交區的清單由高到低、中間一列現價；小圖有給輔助工具讀的說明",
+              seen["zones"] == ["現價2,235", "2,020～2,195-1.8%"] and "爆大量成交區" in seen["chart"], [seen["zones"], seen["chart"]])
+        check(f"{tag}：三張板沒有造成橫向捲動", no_overflow(page))
+        page.locator("#stockFactsBlocks .sf-tab", has_text="重點").click()
+    step(f"{tag}：技術的三張板", technical_boards)
+
     def levels() -> None:
         open_stock_cat(page, "levelsPanel")
         ladder = page.locator("#ladder .lad b").all_inner_texts()

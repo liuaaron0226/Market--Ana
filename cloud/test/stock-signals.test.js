@@ -81,3 +81,71 @@ test("每一條光條的高光（位置、亮度、漂移範圍與速度）由�
     assert.ok(one.delay <= 0 && one.delay >= -9, "從週期中間開始，條與條不同步");
   }
 });
+
+// ---------- 07：「技術」的三張板 ----------
+const technical = (extra = {}) => ({
+  blocks: ["limit_up_momentum", "versus_market", "ma_alignment", "heavy_zones"],
+  limit_up_momentum: momentum(84, 3, 2.6),
+  versus_market: { rows: [
+    { days: 60, stock_pct: 14.72, market_pct: -7.27, gap: 22.0, tone: "up", label: "強於大盤" },
+    { days: 5, stock_pct: -10.56, market_pct: -7.25, gap: -3.3, tone: "down", label: "落後大盤" },
+    { days: 20, stock_pct: 5.59, market_pct: -16.35, gap: 6.9, tone: "up", label: "強於大盤" },
+  ] },
+  ma_alignment: { conditions: [
+    { key: "close_above_ma20", label: "站上月線", met: false }, { key: "ma20_above_ma60", label: "月＞季", met: true },
+    { key: "ma60_above_ma120", label: "季＞半年", met: true }, { key: "ma20_rising", label: "月線上彎", met: true },
+  ], met_count: 3, summary: "4 項成立 3 項" },
+  heavy_zones: { close: 245.5, zones: [
+    { low: 241.5, high: 264.0, position: "inside", distance_pct: 0.0, days: ["2026-10-12"] },
+    { low: 192.0, high: 198.0, position: "below", distance_pct: -19.3, days: ["2026-06-17"] },
+    { low: 268.0, high: 289.5, position: "above", distance_pct: 9.2, days: ["2026-05-29"] },
+    { low: 200.0, high: 222.5, position: "below", distance_pct: -9.4, days: ["2026-03-02"] },
+  ], chart: { closes: [240, 250, 245.5], volumes: [10, 50, 12], heavy: [1] } },
+  ...extra,
+});
+
+test("「技術」依資料的順序出三張板：和大盤比、均線排列、爆大量成交區；漲停動能不在這裡", () => {
+  const { read } = load();
+  assert.deepEqual(plain(read(technical(), "technical")).map(board => board.kind), ["versus_market", "ma_alignment", "heavy_zones"]);
+  assert.deepEqual(plain(read(technical({ blocks: ["ma_alignment"] }), "technical")).map(board => board.kind), ["ma_alignment"]);
+});
+
+test("和大盤比：近 5、20、60 日固定順序；條從中間往右（強於）或往左（落後），20 個百分點滿格；右邊寫強弱與帶正負號的差距", () => {
+  const { read } = load();
+  const [versus] = plain(read(technical(), "technical"));
+  assert.deepEqual(versus.rows.map(row => row.name), ["近 5 日", "近 20 日", "近 60 日"]);
+  assert.deepEqual(versus.rows.map(row => [row.side, row.word, row.gapText]), [["down", "落後", "-3.3"], ["up", "強於", "+6.9"], ["up", "強於", "+22.0"]]);
+  assert.ok(Math.abs(versus.rows[1].width - 6.9 / 20) < 1e-9, "長度＝差距 ÷ 20");
+  assert.equal(versus.rows[2].width, 1, "超過 20 的貼邊");
+  assert.match(versus.label, /近 5 日落後大盤 3\.3 個百分點/);
+});
+
+test("和大盤比：差距是 0 時不畫條、不寫強弱；少一列只少那一列；三列都沒有就沒有這張板", () => {
+  const { read } = load();
+  const rows = [{ days: 5, stock_pct: 1, market_pct: 1, gap: 0, tone: null, label: "" }, { days: 60, stock_pct: 2, market_pct: 1, gap: 1, tone: "up", label: "強於大盤" }];
+  const [versus] = plain(read(technical({ versus_market: { rows } }), "technical"));
+  assert.deepEqual(versus.rows.map(row => [row.name, row.side, row.word, row.width]), [["近 5 日", "", "", 0], ["近 60 日", "up", "強於", 0.05]]);
+  assert.equal(plain(read(technical({ versus_market: { rows: [] } }), "technical")).some(board => board.kind === "versus_market"), false);
+});
+
+test("均線排列：四盞燈固定順序與短標籤、成立的亮；右上那一句照資料，不自己組字；資料不是四項就不出現", () => {
+  const { read } = load();
+  const ma = plain(read(technical(), "technical"))[1];
+  assert.deepEqual(ma.lamps.map(lamp => [lamp.name, lamp.on]), [["站上月線", false], ["月＞季", true], ["季＞半年", true], ["月線上彎", true]]);
+  assert.equal(ma.summary, "4 項成立 3 項");
+  assert.match(ma.label, /均線排列 4 項成立 3 項/);
+  const broken = technical({ ma_alignment: { conditions: [{ key: "close_above_ma20", label: "站上月線", met: true }], met_count: 1, summary: "x" } });
+  assert.equal(plain(read(broken, "technical")).some(board => board.kind === "ma_alignment"), false);
+});
+
+test("爆大量成交區：清單由高到低——現價上方的區、一列現價、區內與現價以下的區；寫價格範圍與離現價幾成，區內的寫「現價在區內」", () => {
+  const { read } = load();
+  const zones = plain(read(technical(), "technical"))[2];
+  assert.equal(zones.countText, "4 區");
+  assert.deepEqual(zones.list.map(item => [item.range, item.note]), [
+    ["268.0～289.5", "+9.2%"], ["現價", "245.5"], ["241.5～264.0", "現價在區內"], ["200.0～222.5", "-9.4%"], ["192.0～198.0", "-19.3%"],
+  ]);
+  assert.equal(zones.list[1].now, true);
+  assert.deepEqual(zones.chart.heavy, [1]);
+  assert.equal(plain(read(technical({ heavy_zones: { close: 1, zones: [], chart: { closes: [], volumes: [], heavy: [] } } }), "technical")).some(board => board.kind === "heavy_zones"), false);
+});

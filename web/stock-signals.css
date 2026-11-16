@@ -60,6 +60,44 @@
 .ss-tip b { font: 500 12px var(--mono); color: var(--ink); }
 .is-held .ss-tip { opacity: 1; transform: translate(-50%, 0); }
 
+/* ---------- 和大盤比：三列，光條從中間往右（紅，強於）或往左（綠，落後）伸出去 ---------- */
+.ss-vs { display: grid; grid-template-columns: 56px minmax(0, 1fr) 96px; align-items: center; gap: 10px; padding: 7px 0; font-size: 13px; }
+.ss-vs-name { color: var(--dim); }
+.ss-vs-groove { position: relative; height: 20px; border-radius: 10px; background: var(--well); box-shadow: var(--well-shadow); }
+.ss-vs-groove::before { content: ""; position: absolute; left: 50%; top: -3px; bottom: -3px; width: 1px; background: var(--line-strong); }
+.ss-vs-bar { position: absolute; top: 3px; bottom: 3px; border-radius: 7px; overflow: hidden; transform: scaleX(0); transition: transform 1300ms var(--ease-depth); }
+.ss-vs-bar.up { left: 50%; transform-origin: left; --b: var(--ss-up-b); }
+.ss-vs-bar.down { right: 50%; transform-origin: right; --b: var(--ss-down-b); }
+.is-in .ss-vs-bar { transform: none; }
+.ss-vs-read { text-align: right; white-space: nowrap; }
+.ss-vs-read b { font: 500 13px var(--mono); font-variant-numeric: tabular-nums; }
+.ss-word { font-weight: 700; }
+.ss-word.up { color: var(--up); }
+.ss-word.down { color: var(--down); }
+
+/* ---------- 均線排列：四盞燈，成立的亮成金色（依序亮起），不成立的是空的槽 ---------- */
+.ss-word-read { font: 600 14px var(--sans); color: var(--ink); }
+.ss-lamps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.ss-lamp { display: grid; gap: 7px; text-align: center; font-size: 11px; color: var(--faint); }
+.ss-lamp.on { color: var(--ink); font-weight: 600; }
+.ss-lamp-groove { position: relative; height: 18px; border-radius: 9px; background: var(--well); box-shadow: var(--well-shadow); overflow: hidden; }
+.ss-lamp-groove .ss-glass { opacity: 0; transition: opacity 400ms linear; }
+.is-in .ss-lamp-groove .ss-glass { opacity: 1; }
+
+/* ---------- 爆大量成交區：小圖＋各區清單 ---------- */
+.ss-zchart { display: block; width: 100%; height: 150px; }
+.ss-zband { fill: var(--gold); opacity: .24; }
+.ss-draw { fill: none; stroke: var(--ink); stroke-width: 1.3; vector-effect: non-scaling-stroke; stroke-dasharray: 1; stroke-dashoffset: 1; transition: stroke-dashoffset 1700ms var(--ease-depth); }
+.is-in .ss-draw { stroke-dashoffset: 0; }
+.ss-fade { opacity: 0; transition: opacity 900ms linear 500ms; }
+.is-in .ss-fade { opacity: 1; }
+.ss-vol rect { fill: var(--line-strong); }
+.ss-vol rect.hot { fill: var(--gold); }
+.ss-zones { margin: 8px 0 0; padding: 0; list-style: none; }
+.ss-zones li { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 8px 0; border-top: 1px solid var(--hair); font-size: 13px; }
+.ss-zones .num { font: 500 13px var(--mono); font-variant-numeric: tabular-nums; }
+.ss-zones li.now { border-top-style: dashed; border-top-color: var(--line-strong); color: var(--dim); }
+
 /* ---------- 液態玻璃 ---------- */
 @property --ex { syntax: "<percentage>"; inherits: false; initial-value: 30%; }
 .ss-glass {
@@ -84,14 +122,19 @@
 }
 /* 底下透出一點同色的光 */
 .ss-clip:has(> .ss-glass) { filter: drop-shadow(0 3px 5px color-mix(in srgb, var(--ss-ramp-b) 45%, transparent)); }
+.ss-vs-bar, .ss-lamp-groove .ss-glass { filter: drop-shadow(0 3px 5px color-mix(in srgb, var(--b) 50%, transparent)); }
 /* 高光慢慢漂：只在瀏覽器能平滑地動自訂屬性時（程式偵測到 CSS.registerProperty 才加 .ss-drift），不然維持靜止的高光 */
 .ss-drift .is-in .ss-glass { animation: ss-drift var(--dt, 8s) ease-in-out var(--dd, 0s) infinite alternate; }
 @keyframes ss-drift { from { --ex: var(--e1, 10%); } to { --ex: var(--e2, 80%); } }
 
+/* ---------- 桌機寬度的排法（07 的樣品題，本人還沒選；暫時用助手推薦的「三張並排」） ---------- */
+@media (min-width: 861px) {
+  .ss[data-panel="technical"] { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; }
+}
 @media (max-width: 860px) {
   .ss { margin-top: 14px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .ss-board, .ss-odo i, .ss-clip, .ss-tip { transition: none !important; }
+  .ss-board, .ss-odo i, .ss-clip, .ss-tip, .ss-vs-bar, .ss-lamp-groove .ss-glass, .ss-draw, .ss-fade { transition: none !important; }
   .ss-glass { animation: none !important; }
 }
