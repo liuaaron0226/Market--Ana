@@ -18,9 +18,11 @@ import hashlib
 import json
 import sqlite3
 import sys
+import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 ROOT = Path(__file__).resolve().parent
 TABLE = "etf_codes"
@@ -86,12 +88,18 @@ def day_rows(market: str, content: bytes, compact: str, codes: Iterable[str]) ->
     return parse(content, compact, wanted) if wanted else []
 
 
+def raw_path(out: Path, raw_file: str) -> Path:
+    """source_days.raw_file → 原件路徑。行情庫最早在 Windows 建，舊列的分隔符是反斜線（raw＼2026＼…）；在雲端（Linux）
+    反斜線不是分隔符，不轉的話會變成一個檔名帶反斜線的檔、永遠找不到原件（11-16 正式站 ETF 只回補到 5 天的原因之一）。"""
+    return out.joinpath(*raw_file.replace("\\", "/").split("/"))
+
+
 def _write(connection: sqlite3.Connection, out: Path, market: str, codes: set[str]) -> dict:
     unpack, parse, columns = _market_io(market)
     marks = ",".join("?" * len(columns))
     summary = {"rows": 0, "days": 0, "hash_mismatch_days": [], "missing": []}
     for day, raw_file, sha256 in connection.execute("SELECT date, raw_file, sha256 FROM source_days ORDER BY date").fetchall():
-        path = out / raw_file
+        path = raw_path(out, raw_file)
         if not path.exists():
             summary["missing"].append(day)
             continue
@@ -136,6 +144,123 @@ def backfill(db_path: Path, out: Path, market: str, codes: Iterable[str], *, for
                                  "last": missing[-1] if missing else None}}
 
 
+# ---- 補抓原件（2026-11-16 本人同意「最近 130 個交易日」，一次性）----
+# 雲端工作集的原件只剩最近幾天，ETF 回補沒有原件可讀（正式站 ETF 只有 5 根日線）。對行情庫 source_days 記著、
+# 原件卻不在的最近 N 天，向官方重新抓同一份每日行情原件（和每日更新同一個來源、同一個模組）：
+# - 抓回來的位元組雜湊要和 source_days 當初記的完全相同才放回原件夾；不同就丟掉（第一個請求就不同就整批停）。
+# - 每次請求間隔 5 秒；任何不正常的回應（非 200、不是行情表、官方說那天沒資料）立刻停。
+# - 只放回原件，不動行情庫；ETF 的列由之後的重掃（backfill force）照原本的規則寫入。
+RESTORE_INTERVAL_SECONDS = 5.0
+
+
+def _restore_io(market: str):
+    """(抓一天到暫存夾並回傳暫存檔與停止原因, 暫存檔→要比雜湊的內容, 把暫存檔放到原件夾)。"""
+    if market == "上市":
+        import stock_history as sh
+
+        def fetch(staging: Path, compact: str, get) -> tuple[Path, str | None]:
+            summary = sh.fetch_history(staging, [compact], get=get, sleep=lambda _seconds: None)
+            gap = "; ".join(item["reason"] for item in summary["gaps"])
+            reason = summary["stopped"]["reason"] if summary["stopped"] else (f"官方回應沒有這天的行情：{gap}" if gap else None)
+            return sh.raw_file(staging, compact), reason
+
+        def place(staged: Path, target: Path) -> None:
+            sh.write_once(target, staged.read_bytes())
+
+        return fetch, (lambda staged: gzip.decompress(staged.read_bytes())), place
+    if market == "上櫃":
+        import otc_history as oh
+
+        def fetch(staging: Path, compact: str, get) -> tuple[Path, str | None]:
+            summary = oh.fetch_history(staging, [compact], get=get, sleep=lambda _seconds: None)
+            return staging / "raw" / f"{compact}.csv", (summary["stopped"]["reason"] if summary["stopped"] else None)
+
+        def place(staged: Path, target: Path) -> None:
+            oh.write_once(target, staged.read_bytes())
+            sidecar = staged.with_name(staged.name + ".sha256")
+            oh.write_once(target.with_name(target.name + ".sha256"), sidecar.read_bytes())
+
+        return fetch, (lambda staged: staged.read_bytes()), place
+    raise ValueError(f"不認得的市場：{market}")
+
+
+def restore_raw(market: str, out: Path, db_path: Path, last_days: int, *, get: Callable,
+                sleep: Callable[[float], None] = time.sleep) -> dict:
+    """行情庫最近 ``last_days`` 個資料日裡原件不在的，重新抓官方原件；雜湊相符才放回 ``out``。由新到舊抓。"""
+    fetch, content_of, place = _restore_io(market)
+    out, db_path = Path(out), Path(db_path)
+    connection = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
+    try:
+        recorded = connection.execute("SELECT date, raw_file, sha256 FROM source_days ORDER BY date DESC LIMIT ?",
+                                      (int(last_days),)).fetchall()
+    finally:
+        connection.close()
+    todo = [(day, raw_path(out, raw_file), sha256) for day, raw_file, sha256 in recorded
+            if not raw_path(out, raw_file).exists()]
+    report: dict = {"market": market, "last_days": int(last_days), "candidates": len(todo), "requests": 0,
+                    "restored": [], "hash_mismatch": [], "stopped": None}
+    with tempfile.TemporaryDirectory() as tmp:
+        for day, target, sha256 in todo:
+            if report["requests"]:
+                sleep(RESTORE_INTERVAL_SECONDS)
+            report["requests"] += 1
+            staged, reason = fetch(Path(tmp) / day, day.replace("-", ""), get)
+            if reason:
+                report["stopped"] = {"date": day, "reason": reason}
+                break
+            if hashlib.sha256(content_of(staged)).hexdigest() != sha256:
+                report["hash_mismatch"].append(day)
+                if report["requests"] == 1:
+                    report["stopped"] = {"date": day, "reason": "第一天抓回來的原件和行情庫記的雜湊不同，整批停（官方原件可能改過）"}
+                    break
+                continue
+            if not target.exists():
+                place(staged, target)
+            report["restored"].append(day)
+    report["restored"].sort()
+    return report
+
+
+def _markets(root: Path) -> dict[str, tuple[Path, Path]]:
+    """市場 → (原件所在的資料夾, 行情庫)；回補、重掃、補抓共用。"""
+    data = Path(root) / "data"
+    return {"上市": (data / "stock-history", data / "stock-history/stock-history.sqlite"),
+            "上櫃": (data / "otc-history", data / "otc-history/otc_history.sqlite")}
+
+
+def restore_and_rescan(root: Path, last_days: int, *, get_listed: Callable | None = None, get_otc: Callable | None = None,
+                       sleep: Callable[[float], None] = time.sleep, rescan: Callable | None = None) -> dict:
+    """上市、上櫃同時補抓（兩個網站各自間隔 5 秒），有任何一天放回去就用 force 重掃 ETF。
+
+    status：ok＝有補回、也重掃了；partial＝有補回也重掃了，但有一邊中途停下（看那一邊的 stopped）；failed＝兩邊都一天也沒補回而且有一邊停了（例如第一天雜湊就不同），不重掃；
+    nothing-to-do＝最近這幾天的原件本來就都在。"""
+    from concurrent.futures import ThreadPoolExecutor
+
+    import otc_history as oh
+    import stock_history as sh
+
+    markets = _markets(root)
+    getters = {"上市": get_listed or sh.http_get, "上櫃": get_otc or oh.http_get}
+
+    def one(market: str) -> dict:
+        out, db = markets[market]
+        get = getters[market]
+        if not db.exists():
+            return {"market": market, "status": "no-database", "restored": [], "stopped": None}
+        return {**restore_raw(market, out, db, last_days, get=get, sleep=sleep), "status": "done"}
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        report = dict(zip(markets, pool.map(one, markets)))
+    restored = any(report[market]["restored"] for market in markets)
+    stopped = any(report[market]["stopped"] for market in markets)
+    if restored:
+        report["rescan"] = (rescan or refresh)(Path(root), force=True)
+        report["status"] = "partial" if stopped else "ok"
+    else:
+        report["status"] = "failed" if stopped else "nothing-to-do"
+    return report
+
+
 def refresh(root: Path = ROOT, *, force: bool = False) -> dict:
     """每日更新用：名錄裡新出現的股票型 ETF 補歷史；已收錄的什麼都不做（每天的新一天由附加帶上）。
 
@@ -144,10 +269,8 @@ def refresh(root: Path = ROOT, *, force: bool = False) -> dict:
     import etf_classification as ec
 
     catalog = ec.load_default_catalog(root)
-    data = Path(root) / "data"
     report: dict = {}
-    for market, out, db in (("上市", data / "stock-history", data / "stock-history/stock-history.sqlite"),
-                            ("上櫃", data / "otc-history", data / "otc-history/otc_history.sqlite")):
+    for market, (out, db) in _markets(root).items():
         report[market] = backfill(db, out, market, ec.stock_etf_codes(catalog, market), force=force)
     # 行情庫不在（還沒建）就不是 ok：每日更新的報告裡看得出這一步其實沒做
     report["status"] = "ok" if all(report[m]["status"] != "no-database" for m in ("上市", "上櫃")) else "incomplete"
@@ -158,7 +281,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="股票型 ETF 的日線從原件回補進行情庫（不抓新資料）")
     parser.add_argument("--root", type=Path, default=ROOT, help="資料根目錄（底下要有 data/）；驗證時請指向複本")
     parser.add_argument("--force", action="store_true", help="已收錄的代號也重掃全部原件（補回當初缺的日子；已有的列不動）")
+    parser.add_argument("--restore-raw-days", type=int, default=None, metavar="N",
+                        help="一次性補抓：行情庫最近 N 個資料日裡原件不在的，向官方重抓（雜湊要相符），再 force 重掃（1～300）")
     args = parser.parse_args(argv)
+    if args.restore_raw_days is not None:
+        if not 1 <= args.restore_raw_days <= 300:
+            parser.error("--restore-raw-days 只接受 1～300")
+        report = restore_and_rescan(args.root, args.restore_raw_days)
+        print(json.dumps(report, ensure_ascii=False, indent=1))
+        return 1 if report["status"] == "failed" else 0
     print(json.dumps(refresh(args.root, force=args.force), ensure_ascii=False, indent=1))
     return 0
 
