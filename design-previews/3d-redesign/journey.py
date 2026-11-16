@@ -1850,13 +1850,19 @@ TILT_PAGES = (
 )
 
 
-def desk_tilt(browser, base: str) -> None:
-    """D 包第 1 片：桌機上桌面隨游標微傾；移到 K 線等要精準對位的地方回平；固定元件不在桌面裡；觸控與減少動態效果不啟用。
-    其他檢查都在「減少動態效果」下跑（不會傾斜），這裡另開一般設定的視窗。"""
-    context = browser.new_context(viewport={"width": 1440, "height": 900}, locale="zh-TW", timezone_id="Asia/Taipei")
+def tilt_page(browser, **options):
+    """微傾的檢查另開視窗（其他檢查都在「減少動態效果」下跑，不會傾斜）。回傳 (context, page)。"""
+    context = browser.new_context(locale="zh-TW", timezone_id="Asia/Taipei", **options)
     page = context.new_page()
     page.set_default_timeout(15_000)
     page.clock.set_fixed_time(shoot.FIXED_NOW)
+    return context, page
+
+
+def desk_tilt(browser, base: str) -> None:
+    """D 包第 1 片：桌機上整頁外殼（頁首＋內容）隨游標微傾；移到 K 線等要精準對位的地方回平；固定元件不在桌面裡；
+    觸控、手機寬度、減少動態效果不啟用。"""
+    context, page = tilt_page(browser, viewport={"width": 1440, "height": 900})
     for name, path, ready, board, canvas in TILT_PAGES:
         tag = f"微傾 {name} 1440"
 
@@ -1893,7 +1899,20 @@ def desk_tilt(browser, base: str) -> None:
             page.wait_for_timeout(700)
             check(f"{tag}：按著滑鼠鍵（拖曳）時回平", page.evaluate(TILT) == "", page.evaluate(TILT))
             page.mouse.up()
+            page.mouse.move(6, 450, steps=4)   # 頁面左邊的留白也算桌面
+            page.wait_for_timeout(700)
+            check(f"{tag}：游標在頁面兩側留白時也傾斜", page.evaluate(TILT) != "", page.evaluate(TILT))
         step(tag, run)
+
+    def icon_button() -> None:
+        page.goto(base + f"/stock.html?code={shoot.STOCK}", wait_until="domcontentloaded")
+        shoot.ready_stock(page)
+        tool = page.locator("#drawTools button svg").first
+        x, y = centre(tool)
+        page.mouse.move(x, y, steps=4)
+        page.wait_for_timeout(700)
+        check("微傾 個股 1440：游標停在帶圖示的按鈕（畫線工具）上照樣傾斜，不會一下回平", page.evaluate(TILT) != "", page.evaluate(TILT))
+    step("微傾 個股 1440：圖示按鈕", icon_button)
 
     def panel() -> None:
         page.goto(base + "/", wait_until="domcontentloaded")
@@ -1930,11 +1949,9 @@ def desk_tilt(browser, base: str) -> None:
     context.close()
 
     for label, options in (("390 觸控", {"viewport": {"width": 390, "height": 844}, "has_touch": True, "is_mobile": True}),
+                           ("760 寬滑鼠（桌機視窗縮到手機寬度）", {"viewport": {"width": 760, "height": 900}}),
                            ("1440 減少動態效果", {"viewport": {"width": 1440, "height": 900}, "reduced_motion": "reduce"})):
-        context = browser.new_context(locale="zh-TW", timezone_id="Asia/Taipei", **options)
-        page = context.new_page()
-        page.set_default_timeout(15_000)
-        page.clock.set_fixed_time(shoot.FIXED_NOW)
+        context, page = tilt_page(browser, **options)
 
         def off() -> None:
             page.goto(base + "/", wait_until="domcontentloaded")

@@ -6,12 +6,13 @@
 
 用法（在工作樹根目錄）：
   PYTHONDONTWRITEBYTECODE=1 python -B design-previews/3d-redesign/make-signals-preview.py <主資料夾> .tmp/3d-baseline/signals-preview.json
--B 與 PYTHONDONTWRITEBYTECODE 讓主資料夾不會多出 __pycache__。"""
+程式自己設 sys.dont_write_bytecode，主資料夾不會多出 __pycache__（-B 只是保險）。"""
 import json
 import sys
 from pathlib import Path
 
 main_root, out = Path(sys.argv[1]), Path(sys.argv[2])
+sys.dont_write_bytecode = True   # 下面 import 的是主資料夾的程式：不在主資料夾留下 __pycache__（不靠呼叫的人記得加 -B）
 sys.path.insert(0, str(main_root))
 sys.path.insert(0, str(main_root / "cloud"))
 from twon_analysis.analyze_v2 import analyze_v2  # noqa: E402

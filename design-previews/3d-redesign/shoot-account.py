@@ -30,7 +30,8 @@ def gemini_static(browser, base: str, out: Path, report: dict, size: str, theme:
     page.evaluate("document.querySelectorAll('[hidden]').forEach(node => node.hidden = false)")
     name = f"gemini-static-{size}-{theme}"
     page.screenshot(path=str(out / f"{name}.png"), full_page=True)
-    report[name] = {"theme_ok": True, "h_overflow_px": page.evaluate("document.documentElement.scrollWidth - innerWidth")}
+    scheme = page.evaluate("getComputedStyle(document.documentElement).colorScheme")
+    report[name] = {"theme": scheme, "theme_ok": theme in scheme, "h_overflow_px": page.evaluate("document.documentElement.scrollWidth - innerWidth")}
     context.close()
 
 
