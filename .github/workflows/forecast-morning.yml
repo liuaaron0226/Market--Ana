@@ -160,9 +160,7 @@ jobs:
           args=(--edition morning --session-date "$SESSION_DATE"
                 --analysis data/daily-update-state/last-market-pack/analysis-data.js --method MARKET_METHOD.md
                 --ledger "$LEDGER" --agy-bin "$RUNNER_TEMP/agy/antigravity" --model gemini-3.8-flash
-                --overseas-dir "$RUNNER_TEMP/overseas"
-                --stock-db data/stock-history/stock-history.sqlite
-                --institutional-db data/listed-institutional/listed_institutional.sqlite)
+                --overseas-dir "$RUNNER_TEMP/overseas")
           if [ "$DRY_RUN" = "false" ]; then
             args+=(--sql-output "$RUNNER_TEMP/forecast.sql" --log-output "$LEDGER/runs/$GITHUB_RUN_ID.json")
           else

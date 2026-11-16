@@ -96,8 +96,6 @@ class ForecastWorkflowTests(unittest.TestCase):
         self.assertNotIn("${{", fetch.split("run: |", 1)[1])
         run = step(self.source, "寫晚間版預測並對帳")
         self.assertIn('--overseas-dir "$RUNNER_TEMP/overseas"', run)
-        self.assertIn("--stock-db data/stock-history/stock-history.sqlite", run)
-        self.assertIn("--institutional-db data/listed-institutional/listed_institutional.sqlite", run)
         self.assertLess(self.source.index("抓海外原件（不擋預測）"), self.source.index("寫晚間版預測並對帳"))
 
     def test_saves_the_ledger_to_r2_before_publishing_to_the_database_and_only_for_real_runs(self):

@@ -5,7 +5,6 @@
 import gzip
 import hashlib
 import json
-import sqlite3
 import tempfile
 import unittest
 from datetime import date, timedelta
@@ -123,10 +122,10 @@ class OverseasTestCase(unittest.TestCase):
                                     now=lambda: "2026-11-09T10:00:00Z")
         return folder, manifest, net
 
-    def layer(self, edition="evening", routes=None, tw=None):
+    def layer(self, edition="evening", routes=None):
         folder, _, _ = self.fetch(routes, reference=BASE if edition == "evening" else SESSION)
         return oi.build_layer(folder, edition=edition, base_date=BASE,
-                              session_date=SESSION if edition == "morning" else None, tw=tw)
+                              session_date=SESSION if edition == "morning" else None)
 
 
 class FetchTests(OverseasTestCase):
@@ -211,7 +210,6 @@ class PromptGateTests(OverseasTestCase):
         layer = self.layer("evening")
         text = json.dumps(layer, ensure_ascii=False)
         self.assertNotRegex(text, "盤中[^，。」]*續跌")
-        self.assertIn("不代表之後會續漲或續跌", json.dumps(layer["prompt"], ensure_ascii=False))
 
 
 class TreasuryAndDollarTests(OverseasTestCase):
@@ -223,114 +221,32 @@ class TreasuryAndDollarTests(OverseasTestCase):
         self.assertEqual((morning["date"], morning["yield_10y"], morning["change_20d_bp"]["10y"]),
                          ("2026-11-09", 4.6, 10.0))
 
-    def test_dollar_index_skips_missing_days_and_reports_the_weekly_lag(self):
+    def test_dollar_index_skips_days_without_data(self):
         routes = default_routes()
         days = weekdays("2026-09-01", "2026-11-06")
         values = [(d, "ND" if d == "2026-11-05" else 120 + i * 0.1) for i, d in enumerate(days)]
         routes["https://www.federalreserve.gov/"] = fed_html(values)
-        dollar = self.layer("evening", routes)["prompt"]["dollar_and_foreign"]["dollar_index"]
-        self.assertEqual(dollar["date"], "2026-11-06")
-        # 11/05 是 ND（沒有資料）：往前數 20 筆有資料的日子
-        index_of = {d: i for i, d in enumerate(days)}
-        last, base = 120 + index_of["2026-11-06"] * 0.1, 120 + (index_of["2026-11-06"] - 21) * 0.1
-        self.assertAlmostEqual(dollar["change_20d_pct"], round((last / base - 1) * 100, 2))
+        series = self.layer("evening", routes)["series"]["dollar_index"]
+        self.assertNotIn("2026-11-05", [row["date"] for row in series])
+        self.assertEqual(len(series), len(days) - 1)
 
 
-def tw_series(foreign_by_day, etf):
-    return {"foreign_net": foreign_by_day, "etf0050": [{"date": d, "open": o, "close": c} for d, o, c in etf]}
+class SeriesForForeignReadingsTests(OverseasTestCase):
+    """外資讀數 1、4 由 G 票計算；這裡只交出依版本切好的序列，和能不能交給模型。"""
 
+    def test_nasdaq_series_follows_the_us_cutoff_of_each_edition(self):
+        evening = self.layer("evening")
+        morning = self.layer("morning")
+        self.assertEqual(evening["series"]["nasdaq"][-1], {"date": "2026-11-06", "close": 101.1048})
+        self.assertEqual(morning["series"]["nasdaq"][-1], {"date": "2026-11-09", "close": 105})
+        # 那斯達克來自 EODHD：條款待決，算出來的讀數不能交給模型；美元指數與台幣可以
+        self.assertEqual(evening["series_in_prompt"], {"nasdaq": False, "dollar_index": True, "usdtwd": True})
 
-class NasdaqReadingTests(OverseasTestCase):
-    def test_buckets_next_day_foreign_selling_and_0050_gap_with_its_own_open(self):
-        # 台股：10/30 收 50。
-        #   11/03（前一晚那斯達克 −2%，跌逾 1.5%）：開 49 → 跳空 −2%；收 49.49 → 盤中 +1%；外資賣
-        #   11/04（+4%，漲逾 1.5%）：開 50.4798 → 跳空 +2%；收同 → 盤中 0%；外資買
-        #   11/05（0%，±0.5% 內）：開 50.4798 → 跳空 0%；收 49.975002 → 盤中 −1%；外資賣
-        #   11/06（−0.8%，跌 0.5～1.5%）：開 49.72512699 → 跳空 −0.5%；收同；外資買
-        #   11/09（0%）：開 12 → 跳空 −76%（分割之類的事件），不算進統計
-        etf = [("2026-10-30", 50, 50), ("2026-11-03", 49, 49.49), ("2026-11-04", 50.4798, 50.4798),
-               ("2026-11-05", 50.4798, 49.975002), ("2026-11-06", 49.72512699, 49.72512699), ("2026-11-09", 12, 12)]
-        foreign = {"2026-10-30": 1e9, "2026-11-03": -1e9, "2026-11-04": 1e9, "2026-11-05": -2e9,
-                   "2026-11-06": 5e8, "2026-11-09": -3e9}
-        reading = self.layer("evening", tw=tw_series(foreign, etf))["withheld"]["nasdaq_reading"]
-        # 晚間版（11/09 晚上）看得到的是 11/06 那一晚：0% → ±0.5% 內
-        self.assertEqual((reading["date"], reading["change_pct"], reading["bucket"]), ("2026-11-06", 0.0, "±0.5% 內"))
-        stats = {row["bucket"]: row for row in reading["history"]["buckets"]}
-        self.assertEqual(stats["跌逾 1.5%"], {"bucket": "跌逾 1.5%", "samples": 1, "foreign_sell_rate": 1.0,
-                                             "mean_open_gap_pct": -2.0, "mean_intraday_pct": 1.0})
-        self.assertEqual(stats["漲逾 1.5%"], {"bucket": "漲逾 1.5%", "samples": 1, "foreign_sell_rate": 0.0,
-                                             "mean_open_gap_pct": 2.0, "mean_intraday_pct": 0.0})
-        self.assertEqual(stats["±0.5% 內"]["samples"], 1)   # 11/09 分割那天沒算進來
-        self.assertEqual(stats["±0.5% 內"]["mean_intraday_pct"], -1.0)
-        self.assertEqual(stats["跌 0.5～1.5%"]["mean_open_gap_pct"], -0.5)
-        self.assertEqual(stats["漲 0.5～1.5%"], {"bucket": "漲 0.5～1.5%", "samples": 0, "foreign_sell_rate": None,
-                                               "mean_open_gap_pct": None, "mean_intraday_pct": None})
-        self.assertEqual((reading["history"]["from"], reading["history"]["to"]), ("2026-11-03", "2026-11-06"))
-
-    def test_morning_reading_uses_the_close_that_just_finished(self):
-        reading = self.layer("morning", tw=tw_series({}, []))["withheld"]["nasdaq_reading"]
-        self.assertEqual((reading["date"], reading["change_pct"], reading["bucket"]), ("2026-11-09", 3.85, "漲逾 1.5%"))
-
-
-class DollarReadingTests(OverseasTestCase):
-    def test_directions_and_long_run_correlation_with_foreign_twenty_day_total(self):
-        # 台股 40 個交易日。美元指數（聯準會）在台股日子上的值 v，20 日變化 d20(t) = v(t)/v(t−20) − 1。
-        # 外資每日淨額由程式外的方式構造成「近 20 日累計 = −1e11 × d20」，所以兩者完全負相關（−1）。
-        days = weekdays("2026-09-01", "2026-10-26")[:40]
-        values = [100 + (i % 7) * 0.3 + i * 0.05 for i in range(40)]
-        d20 = {i: values[i] / values[i - 20] - 1 for i in range(20, 40)}
-        flows = [1e8] * 20
-        targets = {i: -1e11 * d20[i] for i in range(20, 40)}
-        # F20(19) = 20 × 1e8；之後 f(t) = F20(t) − F20(t−1) + f(t−20)
-        previous_total = sum(flows)
-        for i in range(20, 40):
-            flows.append(targets[i] - previous_total + flows[i - 20])
-            previous_total = targets[i]
-        foreign = dict(zip(days, flows))
-        # 美元指數用前一天的日期發布（美國日期 < 台股日期），所以把它放在台股日期的前一天
-        routes = default_routes()
-        fed_rows = [((date.fromisoformat(d) - timedelta(days=1)).isoformat(), round(v, 6)) for d, v in zip(days, values)]
-        routes["https://www.federalreserve.gov/"] = fed_html(fed_rows)
-        # 台幣每天都貶一點：近 20 日美元兌台幣上升
-        routes["https://cpx.cbc.gov.tw/"] = cbc_json([(d, 30 + i * 0.01) for i, d in enumerate(days)])
-        folder, _, _ = self.fetch(routes, reference=days[-1])
-        layer = oi.build_layer(folder, edition="evening", base_date=days[-1], tw=tw_series(foreign, []))
-        reading = layer["prompt"]["dollar_and_foreign"]
-        self.assertAlmostEqual(reading["history"]["correlation_dollar"], -1.0, places=6)
-        self.assertEqual(reading["history"]["samples"], 20)
-        self.assertEqual((reading["history"]["from"], reading["history"]["to"]), (days[20], days[-1]))
-        last = d20[39]
-        self.assertEqual(reading["dollar_index"]["direction"], "上升" if last > 0 else "下降")
-        self.assertEqual(reading["usdtwd"]["direction"], "上升")
-        self.assertEqual(reading["foreign_20d"]["direction"], "賣超" if targets[39] < 0 else "買超")
-        # 美元走強且外資賣超（或美元走弱且外資買超）＝符合常態
-        self.assertTrue(reading["dollar_index"]["matches_usual_pattern"])
-        self.assertIn("除息季", " ".join(reading["notes"]))
-
-
-class LoadTwSeriesTests(OverseasTestCase):
-    def test_foreign_net_is_shares_times_close_summed_over_listed_stocks(self):
-        stock, inst = self.tmp / "stock.sqlite", self.tmp / "inst.sqlite"
-        con = sqlite3.connect(stock)
-        con.execute("CREATE TABLE daily (date TEXT, code TEXT, open REAL, close REAL)")
-        con.executemany("INSERT INTO daily VALUES (?,?,?,?)", [
-            ("2026-11-06", "2330", 1000, 1010), ("2026-11-06", "2317", 200, 210), ("2026-11-06", "0050", 50, 51),
-            ("2026-11-09", "2330", 1000, 1000), ("2026-11-09", "0050", 51, 52)])
-        con.commit()
-        con.close()
-        con = sqlite3.connect(inst)
-        con.execute("CREATE TABLE institutional (date TEXT, code TEXT, foreign_net INTEGER)")
-        con.executemany("INSERT INTO institutional VALUES (?,?,?)", [
-            ("2026-11-06", "2330", -1000), ("2026-11-06", "2317", 500), ("2026-11-09", "2330", 2000)])
-        con.commit()
-        con.close()
-        tw = oi.load_tw_series(stock, inst, until="2026-11-06")
-        # 11/06：−1000 × 1010 + 500 × 210 = −905,000；11/09 在截止日之後
-        self.assertEqual(tw["foreign_net"], {"2026-11-06": -905000.0})
-        self.assertEqual(tw["etf0050"], [{"date": "2026-11-06", "open": 50, "close": 51}])
-
-    def test_missing_databases_give_nothing_instead_of_failing(self):
-        self.assertIsNone(oi.load_tw_series(self.tmp / "no.sqlite", self.tmp / "no2.sqlite", until=BASE))
+    def test_dollar_index_and_usdtwd_series_carry_their_own_dates(self):
+        series = self.layer("evening")["series"]
+        self.assertEqual(series["dollar_index"][-1]["date"], "2026-11-06")
+        # 央行匯率到基準日為止（11/10 那筆是未來）
+        self.assertEqual(series["usdtwd"][-1], {"date": BASE, "close": 32.0})
 
 
 class ArchiveTests(OverseasTestCase):

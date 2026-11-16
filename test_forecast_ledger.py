@@ -407,7 +407,7 @@ OVERSEAS = {
     "overseas_status": {"japan_nikkei": {"name": "日本日經 225", "status": "ok", "latest_date": BASE_A,
                                          "in_prompt": False}},
     "missing_inputs": [{"key": "korea_kospi", "name": "韓國綜合", "status": "stale", "reason": "休市"}],
-    "withheld_inputs": {"markets": {"japan_nikkei": {"latest_close": 1030.2}}},
+    "record_only": {"overseas": {"markets": {"japan_nikkei": {"latest_close": 1030.2}}}},
     "sources": [{"name": "eodhd-N225.INDX", "fetched_at": "2026-09-30T09:00:00Z", "sha256": "a" * 64}],
 }
 
@@ -421,7 +421,7 @@ class OverseasLayerTests(LedgerTestCase):
         self.assertEqual(record["input"]["data_cutoffs"]["treasury"], "2026-09-29")
         # 條款不允許交給模型的數字只在紀錄裡，不在輸入裡
         self.assertNotIn("1030.2", json.dumps(record["input"], ensure_ascii=False))
-        self.assertEqual(record["withheld_inputs"], OVERSEAS["withheld_inputs"])
+        self.assertEqual(record["record_only"], OVERSEAS["record_only"])
         self.assertEqual(record["overseas_status"], OVERSEAS["overseas_status"])
         self.assertEqual(record["missing_inputs"], OVERSEAS["missing_inputs"])
         self.assertEqual(record["sources"], OVERSEAS["sources"])

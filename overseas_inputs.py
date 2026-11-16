@@ -1,9 +1,11 @@
-"""預測帳本的海外層（D 票第 9 片）：美日韓指數、美債殖利率、美元指數、美元兌台幣，以及外資讀數 1、4。
+"""預測帳本的海外層（D 票第 9 片）：美日韓指數、美債殖利率、美元指數、美元兌台幣。
 
-對外只有四件事：
+外資讀數 1、4 的計算在 G 票的 ``foreign_flow.py``（2026-11-16 兩票對齊）：這裡只抓那斯達克、美元指數、美元兌台幣
+的原件，依版本切好序列交給它。
+
+對外只有三件事：
 - ``fetch_sources``：抓原件、原樣存檔，manifest 記抓取時間、雜湊、去掉金鑰的網址；一個來源失敗不影響其他。
 - ``build_layer``：依版本（晚間／晨間）的資料截止規則，整理出交給模型的海外層、只存不交的部分、各項狀態。
-- ``load_tw_series``：讀 0050 日 K 與上市外資買賣超金額（股數 × 收盤加總），給兩個外資讀數的歷史統計用。
 - ``archive_sources``：原件壓縮後以內容雜湊命名放進帳本 ``sources/``，跟著帳本存回 R2（只新增）。
 
 資料截止（不回填當時還不知道的資料，spec〈交給 Gemini 的輸入〉海外層）：
@@ -24,7 +26,6 @@ import json
 import math
 import os
 import re
-import sqlite3
 import sys
 import urllib.error
 import urllib.parse
@@ -58,21 +59,12 @@ LICENSES: dict[str, dict[str, Any]] = {
     "cbc": {"in_prompt": True, "credit": "中央銀行 新臺幣對美元銀行間收盤匯率",
             "terms": "政府資料開放授權條款第 1 版，須註明出處"},
 }
-# 外資讀數 1 的五個區間（那斯達克漲跌 %）。
-NASDAQ_BUCKETS: tuple[tuple[str, Callable[[float], bool]], ...] = (
-    ("跌逾 1.5%", lambda c: c < -1.5),
-    ("跌 0.5～1.5%", lambda c: -1.5 <= c < -0.5),
-    ("±0.5% 內", lambda c: -0.5 <= c <= 0.5),
-    ("漲 0.5～1.5%", lambda c: 0.5 < c <= 1.5),
-    ("漲逾 1.5%", lambda c: c > 1.5),
-)
-# 0050 開盤跳空超過漲跌幅上限（10%）就是分割之類的事件，不算進統計。
-MAX_GAP = 0.11
 RECENT_SESSIONS = 5
+# 原件清單（manifest、紀錄）裡每一筆留的欄位。
+_SOURCE_FIELDS = ("name", "source", "url", "status", "fetched_at", "sha256", "bytes", "error_type")
 CHANGE_WINDOW = 20
 TREASURY_MONTHS = 3
 EODHD_HISTORY_DAYS = 400  # 免費方案只給約一年，多要也拿不到
-SMALL_SAMPLE = 10
 
 # 參數整組算進預測帳本的輸入版本：改了就是新系列。
 PARAMETERS: dict[str, Any] = {
@@ -80,15 +72,11 @@ PARAMETERS: dict[str, Any] = {
     "prompt_sources": sorted(name for name, item in LICENSES.items() if item["in_prompt"]),
     "recent_sessions": RECENT_SESSIONS,
     "change_window": CHANGE_WINDOW,
-    "nasdaq_buckets": [name for name, _ in NASDAQ_BUCKETS],
-    "max_gap": MAX_GAP,
     "cutoff_rule": "美國日期：晚間版早於基準日、晨間版早於開盤日；日韓與美元兌台幣：到基準日為止",
 }
 
 NOTES = {
     "foreign": "外資的買賣解釋當天的漲跌，不代表之後會續漲或續跌。",
-    "nasdaq": "開盤跳空與盤中漲跌都用 0050 的實際開盤價計算；統計只描述歷史平均，不是對下一個交易日的預告。",
-    "dollar": "常態是美元走強、台幣走貶時外資偏向賣超（長期相關為負）；除息季（約七到九月）兩者常不同調。",
     "status": "status 不是 ok 的項目代表休市、沒抓到或不是預期那天的收盤，不得當成最新行情。",
 }
 
@@ -251,29 +239,6 @@ def _change(values: Sequence[float], window: int) -> float | None:
     return values[-1] / values[-1 - window] - 1
 
 
-def _correlation(xs: Sequence[float], ys: Sequence[float]) -> float | None:
-    n = len(xs)
-    if n < 3:
-        return None
-    mx, my = sum(xs) / n, sum(ys) / n
-    sxx = sum((x - mx) ** 2 for x in xs)
-    syy = sum((y - my) ** 2 for y in ys)
-    if sxx == 0 or syy == 0:
-        return None
-    return round(sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / math.sqrt(sxx * syy), 4)
-
-
-def _as_of(rows: Sequence[Mapping[str, Any]], day: str, *, strict: bool, field: str) -> float | None:
-    """最後一筆日期在 day 之前（strict）或當天以前的值。rows 已依日期排序。"""
-    value = None
-    for row in rows:
-        if row["date"] < day or (not strict and row["date"] == day):
-            value = row[field]
-        else:
-            break
-    return value
-
-
 # ---- 各項 ----
 
 def _market_block(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -300,103 +265,6 @@ def _treasury_block(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "change_20d_bp": {"2y": change("y2"), "10y": change("y10")}}
 
 
-def _direction(value: float | None, up: str = "上升", down: str = "下降") -> str | None:
-    if value is None:
-        return None
-    return up if value > 0 else down if value < 0 else "持平"
-
-
-def _dollar_reading(fed: list[dict[str, Any]], cbc: list[dict[str, Any]], tw: Mapping[str, Any] | None,
-                    base_date: str) -> dict[str, Any]:
-    """外資讀數 4：美元指數與美元兌台幣近 20 個交易日的方向，和外資近 20 日累計比；附長期相關。"""
-    foreign = {day: value for day, value in ((tw or {}).get("foreign_net") or {}).items() if day <= base_date}
-    days = sorted(foreign)
-    f20 = sum(foreign[day] for day in days[-CHANGE_WINDOW:]) if len(days) >= CHANGE_WINDOW else None
-    d20 = _change([row["value"] for row in fed], CHANGE_WINDOW)
-    t20 = _change([row["value"] for row in cbc], CHANGE_WINDOW)
-
-    def usual(change: float | None) -> bool | None:
-        # 常態：美元（或美元兌台幣）上升時外資賣超、下降時買超。
-        if change is None or f20 is None or change == 0 or f20 == 0:
-            return None
-        return (change > 0) == (f20 < 0)
-
-    xs_dollar, xs_twd, ys, used = [], [], [], []
-    for index in range(CHANGE_WINDOW, len(days)):  # 要有 20 個交易日之前的那一天才算得出 20 日變化
-        day, earlier = days[index], days[index - CHANGE_WINDOW]
-        total = sum(foreign[d] for d in days[index - CHANGE_WINDOW + 1:index + 1])
-        now_d, then_d = _as_of(fed, day, strict=True, field="value"), _as_of(fed, earlier, strict=True, field="value")
-        now_t, then_t = _as_of(cbc, day, strict=False, field="value"), _as_of(cbc, earlier, strict=False, field="value")
-        if None in (now_d, then_d, now_t, then_t) or 0 in (then_d, then_t):
-            continue
-        xs_dollar.append(now_d / then_d - 1)
-        xs_twd.append(now_t / then_t - 1)
-        ys.append(total)
-        used.append(day)
-    return {
-        "dollar_index": {"date": fed[-1]["date"] if fed else None, "value": fed[-1]["value"] if fed else None,
-                         "change_20d_pct": None if d20 is None else _pct(d20), "direction": _direction(d20),
-                         "matches_usual_pattern": usual(d20)},
-        "usdtwd": {"date": cbc[-1]["date"] if cbc else None, "value": cbc[-1]["value"] if cbc else None,
-                   "change_20d_pct": None if t20 is None else _pct(t20), "direction": _direction(t20),
-                   "matches_usual_pattern": usual(t20)},
-        "foreign_20d": {"date": days[-1] if days else None,
-                        "total_billion": None if f20 is None else round(f20 / 1e8, 2),
-                        "direction": _direction(f20, "買超", "賣超")},
-        "history": {"correlation_dollar": _correlation(xs_dollar, ys), "correlation_usdtwd": _correlation(xs_twd, ys),
-                    "samples": len(used), "from": used[0] if used else None, "to": used[-1] if used else None,
-                    "small_sample": len(used) < SMALL_SAMPLE * 3},
-        "notes": [NOTES["dollar"], NOTES["foreign"]],
-    }
-
-
-def _bucket(change_pct: float) -> str:
-    return next(name for name, test in NASDAQ_BUCKETS if test(change_pct))
-
-
-def _nasdaq_reading(rows: list[dict[str, Any]], tw: Mapping[str, Any] | None, base_date: str) -> dict[str, Any] | None:
-    """外資讀數 1：最近一個美股交易日的那斯達克漲跌，以及歷史上同一區間隔天的外資與 0050 表現。"""
-    if len(rows) < 2:
-        return None
-    changes = {b["date"]: _pct(b["close"] / a["close"] - 1) for a, b in zip(rows, rows[1:])}
-    us_days = sorted(changes)
-    etf = [row for row in ((tw or {}).get("etf0050") or []) if row["date"] <= base_date]
-    foreign = (tw or {}).get("foreign_net") or {}
-    samples: dict[str, list[tuple[bool, float, float]]] = {name: [] for name, _ in NASDAQ_BUCKETS}
-    used = []
-    for previous, current in zip(etf, etf[1:]):
-        day = current["date"]
-        prior_us = [d for d in us_days if d < day]
-        # 前一個台股交易日收盤之後要有新的美股收盤，才算「前一晚」（美國休市的那幾天跳過）。
-        if not prior_us or prior_us[-1] < previous["date"] or day not in foreign:
-            continue
-        if not previous["close"] or not current["open"]:
-            continue
-        gap = current["open"] / previous["close"] - 1
-        if abs(gap) > MAX_GAP:
-            continue
-        samples[_bucket(changes[prior_us[-1]])].append((foreign[day] < 0, gap, current["close"] / current["open"] - 1))
-        used.append(day)
-
-    def summary(name: str) -> dict[str, Any]:
-        items = samples[name]
-        if not items:
-            return {"bucket": name, "samples": 0, "foreign_sell_rate": None, "mean_open_gap_pct": None,
-                    "mean_intraday_pct": None}
-        n = len(items)
-        return {"bucket": name, "samples": n, "foreign_sell_rate": round(sum(s for s, _, _ in items) / n, 4),
-                "mean_open_gap_pct": _pct(sum(g for _, g, _ in items) / n),
-                "mean_intraday_pct": _pct(sum(i for _, _, i in items) / n)}
-
-    latest = us_days[-1]
-    return {
-        "date": latest, "change_pct": changes[latest], "bucket": _bucket(changes[latest]),
-        "history": {"buckets": [summary(name) for name, _ in NASDAQ_BUCKETS], "from": used[0] if used else None,
-                    "to": used[-1] if used else None, "small_sample_below": SMALL_SAMPLE},
-        "notes": [NOTES["nasdaq"], NOTES["foreign"]],
-    }
-
-
 # ---- 組成海外層 ----
 
 def _status(name: str, rows: list[dict[str, Any]] | None, expected: str | None, in_prompt: bool) -> dict[str, Any]:
@@ -409,13 +277,15 @@ def _status(name: str, rows: list[dict[str, Any]] | None, expected: str | None, 
     return {"name": name, "status": state, "latest_date": latest, "expected_date": expected, "in_prompt": in_prompt}
 
 
-def build_layer(source_dir: Path | str | None, *, edition: str, base_date: str, session_date: str | None = None,
-                tw: Mapping[str, Any] | None = None) -> dict[str, Any]:
+def build_layer(source_dir: Path | str | None, *, edition: str, base_date: str,
+                session_date: str | None = None) -> dict[str, Any]:
     """整理海外層。回傳：
     - ``prompt``：交給模型的部分（只含條款允許的來源）；
     - ``withheld``：抓到了、但條款不允許交給模型的部分（只存在帳本原件）；
     - ``status``：每一項的狀態（ok／stale／missing）、資料日期、是否交給模型；
-    - ``cutoffs``：交給模型的各項資料日期；``missing``：缺了哪幾項；``sources``：原件清單。
+    - ``cutoffs``：交給模型的各項資料日期；``missing``：缺了哪幾項；``sources``：原件清單；
+    - ``series``：那斯達克、美元指數、美元兌台幣依版本切好的 ``[{date, close}]``，給外資讀數 1、4
+      （G 票 foreign_flow.py）用；``series_in_prompt``：各序列算出的讀數能不能交給模型。
     """
     if edition not in ("evening", "morning"):
         raise ValueError("edition 必須是 evening 或 morning")
@@ -472,52 +342,31 @@ def build_layer(source_dir: Path | str | None, *, edition: str, base_date: str, 
         cbc = []
     status["usdtwd"] = _status("美元兌台幣", cbc, base_date, LICENSES["cbc"]["in_prompt"])
 
-    prompt: dict[str, Any] = {"notes": [NOTES["status"], NOTES["foreign"]]}
+    prompt: dict[str, Any] = {"notes": [NOTES["status"]]}
     withheld: dict[str, Any] = {}
-    (prompt if eodhd_ok else withheld)["markets"] = markets
-    nasdaq = _nasdaq_reading(nasdaq_rows, tw, base_date)
-    (prompt if eodhd_ok else withheld)["nasdaq_reading"] = nasdaq
-    if not eodhd_ok:
-        prompt["not_provided"] = [name for _, name, _, _ in MARKETS] + ["外資讀數一（那斯達克）"]
-        if not withheld["markets"] and nasdaq is None:
-            withheld = {}
-    prompt["treasury"] = {**_treasury_block(treasury), "status": status["treasury"]["status"]} if treasury else None
-    if fed or cbc:
-        prompt["dollar_and_foreign"] = _dollar_reading(fed, cbc, tw, base_date)
+    if eodhd_ok:
+        prompt["markets"] = markets
     else:
-        prompt["dollar_and_foreign"] = None
+        prompt["not_provided"] = [name for _, name, _, _ in MARKETS]
+        if markets:
+            withheld["markets"] = markets
+    prompt["treasury"] = {**_treasury_block(treasury), "status": status["treasury"]["status"]} if treasury else None
 
     cutoffs = {key: item["latest_date"] for key, item in status.items() if item["in_prompt"] and item["latest_date"]}
     missing = [{"key": key, "name": item["name"], "status": item["status"],
                 "reason": "沒抓到或格式不對" if item["status"] == "missing" else "不是預期那天的收盤（可能休市或尚未更新）"}
                for key, item in status.items() if item["status"] != "ok"]
-    sources = [{key: entry[key] for key in ("name", "source", "url", "status", "fetched_at", "sha256", "bytes",
-                                            "error_type") if key in entry} for entry in entries]
+    sources = [{key: entry[key] for key in _SOURCE_FIELDS if key in entry} for entry in entries]
+    # 外資讀數 1、4 由 G 票（foreign_flow.py）計算：這裡只交出依版本切好的序列，以及各序列能不能交給模型。
+    series = {
+        "nasdaq": [{"date": row["date"], "close": row["close"]} for row in nasdaq_rows],
+        "dollar_index": [{"date": row["date"], "close": row["value"]} for row in fed],
+        "usdtwd": [{"date": row["date"], "close": row["value"]} for row in cbc],
+    }
+    series_in_prompt = {"nasdaq": eodhd_ok, "dollar_index": LICENSES["fed_h10"]["in_prompt"],
+                        "usdtwd": LICENSES["cbc"]["in_prompt"]}
     return {"prompt": prompt, "withheld": withheld, "status": status, "cutoffs": cutoffs, "missing": missing,
-            "sources": sources}
-
-
-# ---- 台股這邊的序列 ----
-
-def load_tw_series(stock_db: Path | str | None, institutional_db: Path | str | None, *,
-                   until: str) -> dict[str, Any] | None:
-    """0050 的開收，與每天上市外資買賣超金額（股數 × 收盤，元）。檔案不在就回 None（讀數照寫、統計標缺）。"""
-    if not stock_db or not institutional_db or not Path(stock_db).exists() or not Path(institutional_db).exists():
-        return None
-    con = sqlite3.connect(f"file:{Path(stock_db).as_posix()}?mode=ro", uri=True)
-    try:
-        con.execute("ATTACH DATABASE ? AS inst", (f"file:{Path(institutional_db).as_posix()}?mode=ro",))
-        etf = [{"date": d, "open": o, "close": c} for d, o, c in con.execute(
-            "SELECT date, open, close FROM daily WHERE code = '0050' AND date <= ? AND open IS NOT NULL "
-            "AND close IS NOT NULL ORDER BY date", (until,))]
-        foreign = {d: float(total) for d, total in con.execute(
-            "SELECT i.date, SUM(i.foreign_net * d.close) FROM inst.institutional i "
-            "JOIN daily d ON d.date = i.date AND d.code = i.code "
-            "WHERE i.date <= ? AND d.close IS NOT NULL AND i.foreign_net IS NOT NULL GROUP BY i.date ORDER BY i.date",
-            (until,))}
-    finally:
-        con.close()
-    return {"etf0050": etf, "foreign_net": foreign}
+            "sources": sources, "series": series, "series_in_prompt": series_in_prompt}
 
 
 # ---- 原件進帳本 ----
@@ -531,8 +380,7 @@ def archive_sources(source_dir: Path | str, ledger: Path | str, *, write: bool =
     folder, target = Path(source_dir), Path(ledger) / "sources"
     out = []
     for entry in _read_manifest(folder):
-        item = {key: entry[key] for key in ("name", "source", "url", "status", "fetched_at", "sha256", "bytes",
-                                            "error_type") if key in entry}
+        item = {key: entry[key] for key in _SOURCE_FIELDS if key in entry}
         content = _raw(folder, entry)
         if content is not None:
             packed = gzip.compress(content, compresslevel=9, mtime=0)

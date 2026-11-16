@@ -152,11 +152,12 @@ def _bollinger(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
     close = closes[-1]
     zone = "below" if close < lower else "above" if close > upper else "lower_half" if close < mid else "upper_half"
     window, share = PARAMETERS["bollinger"]["squeeze_window"], PARAMETERS["bollinger"]["squeeze_share"]
-    widths = [None if (b := _band(closes, end)) is None or b[0] <= 0 else (b[1] - b[2]) / b[0]
-              for end in range(last - window + 1, last + 1)] if last + 1 >= window else [None]
-    squeezed = None
-    if widths[0] is not None and widths[-1] is not None and None not in widths:
-        squeezed = sum(width < widths[-1] for width in widths) < window * share
+    squeezed = None  # 不到 period + window − 1 根，近 120 根裡有算不出通道的日子：不判斷
+    if last + 1 >= window:
+        widths = [None if (b := _band(closes, end)) is None or b[0] <= 0 else (b[1] - b[2]) / b[0]
+                  for end in range(last - window + 1, last + 1)]
+        if None not in widths:
+            squeezed = sum(width < widths[-1] for width in widths) < window * share
     return {"middle": round(mid, 2), "upper": round(upper, 2), "lower": round(lower, 2), "zone": _BOLL_ZONES[zone],
             "width_pct": round((upper - lower) / mid * 100, 2), "squeezed": squeezed, "note": _BOLL_NOTE}
 
@@ -291,7 +292,7 @@ def _cutoffs(data: Mapping[str, Any]) -> dict[str, Any]:
 
 
 # 只存在原件、不進模型輸入的海外欄位：各項狀態、缺漏、條款不允許交給模型的數字、原件清單。
-_RECORD_ONLY = ("overseas_status", "missing_inputs", "withheld_inputs", "sources")
+_RECORD_ONLY = ("overseas_status", "missing_inputs", "record_only", "sources")
 
 
 def _model_input(data: Mapping[str, Any], rows: list[dict[str, Any]], edition: str,

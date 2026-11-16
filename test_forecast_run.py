@@ -280,6 +280,19 @@ class MorningRunTests(MorningTestCase):
         self.assertEqual(fl.read_ledger(self.ledger)["forecasts"], [])
         self.assertEqual(self.calls_made(), 0)
 
+    def test_an_unscheduled_closure_is_never_locked_as_a_morning_miss(self):
+        # BASE 那天臨時休市（颱風，不在休市日曆）：日 K 沒有 BASE。下一個早上看到的是 DATES[-2]，不寫、不記漏記；
+        # 再下一個開盤日照常寫，補漏記也只看日 K 實際有資料的日子。
+        earlier = DATES[:-1]
+        self.run_morning(analysis(earlier), session=BASE, structured=answer(earlier[-1]))
+        late = self.run_morning(analysis(earlier), now=at_taipei(SESSION, "08:50:00"))
+        self.assertEqual((late["outcome"], late["base_date"]), ("not_ready", BASE))
+        after = next_weekday(SESSION)
+        result = self.run_morning(analysis(earlier + [SESSION]), session=after, structured=answer(SESSION))
+        self.assertEqual((result["outcome"], result["base_date"], result["backfilled_misses"]), ("written", SESSION, []))
+        kinds = {r["base_date"]: r["kind"] for r in fl.read_ledger(self.ledger)["forecasts"]}
+        self.assertEqual(kinds, {DATES[-2]: "forecast", SESSION: "forecast"})
+
     def test_not_locked_fifteen_minutes_before_the_open_is_a_miss(self):
         result = self.run_morning(now=at_taipei(SESSION, "08:46:00"))
         self.assertEqual((result["outcome"], result["kind"], result["miss_reason"]), ("written", "miss", "deadline_passed"))
@@ -322,7 +335,8 @@ class OverseasRunTests(MorningTestCase):
         self.assertEqual(records["morning"]["overseas_status"]["us_nasdaq"]["latest_date"], BASE)
         # 條款待決：那斯達克的數字存在紀錄裡，但不在交給模型的輸入裡
         morning = records["morning"]
-        self.assertEqual(morning["withheld_inputs"]["nasdaq_reading"]["change_pct"], 2.0)  # 103.02 ÷ 101 − 1
+        nasdaq = morning["record_only"]["overseas"]["markets"]["us_nasdaq"]
+        self.assertEqual(nasdaq["recent"][-1]["change_pct"], 2.0)  # 103.02 ÷ 101 − 1
         self.assertNotIn("103.02", json.dumps(morning["input"], ensure_ascii=False))
         self.assertIn("us_sp500", {item["key"] for item in morning["missing_inputs"]})
 

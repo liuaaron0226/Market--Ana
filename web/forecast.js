@@ -122,8 +122,9 @@
       return [['資料截止', [...new Set(Object.values(record.data_cutoffs || {}))].map(mmdd).join('、') || '—']];
     }
     const parts = [`台股 ${mmdd(record.data_cutoffs?.index)}`];
-    const us = [status.us_nasdaq, status.us_sp500].find((item) => item?.latest_date);
-    if (us) parts.push(`美股 ${mmdd(us.latest_date)} 收盤`);
+    // 美國那一晚：優先用有交給模型的美債日期（美國日期），沒有才用指數的日期。
+    const us = [status.treasury, status.us_nasdaq, status.us_sp500].find((item) => item?.latest_date);
+    if (us) parts.push(`美國 ${mmdd(us.latest_date)} 收盤`);
     const asia = [status.japan_nikkei, status.korea_kospi].find((item) => item?.latest_date);
     if (asia) parts.push(`日韓 ${mmdd(asia.latest_date)}`);
     const rows = [['資料截止', parts.join(' · ')]];

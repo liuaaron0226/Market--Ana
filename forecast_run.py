@@ -8,8 +8,8 @@
 3. 替帳本裡所有還有未到期格的預測對帳一次；
 4. 輸出給網站資料庫的指令檔與一份執行紀錄。
 
-晨間版：基準日是開盤日之前的最後一個台股交易日（依證交所休市日曆，不依資料檔的最後一天，資料沒發布時才
-看得出來）；不對帳（對帳只接在每日更新發布之後）；過去整個早上沒跑的晨間版補記漏記。兩版都可帶海外層
+晨間版：基準日是開盤日之前的最後一個台股交易日（證交所休市日曆推算，且日 K 要真的有那一天；沒有就不寫、
+不記漏記，那天之後若有日 K 出現，下一次晨間執行補記漏記）；不對帳（對帳只接在每日更新發布之後）；過去整個早上沒跑的晨間版補記漏記。兩版都可帶海外層
 （``overseas_inputs``：先由排程抓好原件，這裡依版本的截止規則整理）；原件在紀錄寫成之後才放進帳本 ``sources/``。
 
 乾跑（``dry_run``）只在暫存的帳本副本上寫，不碰真的帳本、不輸出資料庫指令檔，把模型挑的線、落點與理由寫進
@@ -29,6 +29,7 @@ from typing import Any
 import forecast_ledger as fl
 import market_trend
 import overseas_inputs as oi
+from level_signals import trading_day_status
 
 SCHEMA = "forecast-run/v1"
 # 沿用每日 AI 解讀用的模型（本人已訂閱的 Google AI Pro，不新增付費服務）。
@@ -109,16 +110,16 @@ def _overseas_fields(layer: Mapping[str, Any] | None) -> dict[str, Any]:
     fields = {"overseas": layer["prompt"], "overseas_cutoffs": layer["cutoffs"], "overseas_status": layer["status"],
               "missing_inputs": layer["missing"], "sources": layer["sources"]}
     if layer.get("withheld"):
-        fields["withheld_inputs"] = layer["withheld"]
+        # 和 G 票共用 record_only：海外放 overseas、外資讀數放 foreign_flow（2026-11-16 兩票對齊）。
+        fields["record_only"] = {"overseas": layer["withheld"]}
     return fields
 
 
-def _layer(overseas_dir: Path | str | None, *, edition: str, base_date: str | None, session_date: str | None,
-           stock_db: Path | str | None, institutional_db: Path | str | None) -> dict[str, Any] | None:
+def _layer(overseas_dir: Path | str | None, *, edition: str, base_date: str | None,
+           session_date: str | None) -> dict[str, Any] | None:
     if overseas_dir is None or not base_date:
         return None
-    tw = oi.load_tw_series(stock_db, institutional_db, until=base_date)
-    return oi.build_layer(overseas_dir, edition=edition, base_date=base_date, session_date=session_date, tw=tw)
+    return oi.build_layer(overseas_dir, edition=edition, base_date=base_date, session_date=session_date)
 
 
 def _with_archive_names(data: dict[str, Any], overseas_dir: Path | str | None, ledger: Path) -> dict[str, Any]:
@@ -225,8 +226,6 @@ def run_evening(
     log_output: Path | str | None = None,
     timeout_seconds: float = 360,
     overseas_dir: Path | str | None = None,
-    stock_db: Path | str | None = None,
-    institutional_db: Path | str | None = None,
 ) -> dict[str, Any]:
     if as_of and not dry_run:
         raise ValueError("重播某一天（as_of）只能在乾跑使用，正式帳本不補寫過去的預測")
@@ -239,8 +238,7 @@ def run_evening(
     clock = clock or (lambda: datetime.now(fl.TAIPEI))
     method_text = Path(method_path).read_text(encoding="utf-8")
     daily = analysis.get("daily") or []
-    layer = _layer(overseas_dir, edition="evening", base_date=daily[-1]["date"] if daily else None, session_date=None,
-                   stock_db=stock_db, institutional_db=institutional_db)
+    layer = _layer(overseas_dir, edition="evening", base_date=daily[-1]["date"] if daily else None, session_date=None)
     data = _with_archive_names(build_day_input(analysis, method_text, layer), overseas_dir, Path(ledger))
     base_date = data["base_date"]
     log: dict[str, Any] = {
@@ -267,15 +265,12 @@ def run_evening(
     return _finish_log(log, clock, log_output)
 
 
-def is_trading_day(day: str, holidays: set[str]) -> bool:
-    return datetime.fromisoformat(day).weekday() < 5 and day not in holidays
-
-
 def previous_trading_day(day: str, holidays: set[str]) -> str:
+    """休市日曆只涵蓋開盤日那一年；年初往回推到去年時，去年的休市日不在日曆裡（已知限制，年底最後一天通常開市）。"""
     current = datetime.fromisoformat(day).date()
     while True:
         current -= timedelta(days=1)
-        if is_trading_day(current.isoformat(), holidays):
+        if trading_day_status(current.isoformat(), holidays):
             return current.isoformat()
 
 
@@ -294,13 +289,11 @@ def run_morning(
     log_output: Path | str | None = None,
     timeout_seconds: float = 360,
     overseas_dir: Path | str | None = None,
-    stock_db: Path | str | None = None,
-    institutional_db: Path | str | None = None,
     replay: bool = False,
 ) -> dict[str, Any]:
     """寫一份晨間版：開盤日 session_date 的早上、開盤前 15 分鐘之前鎖定；基準日是前一個台股交易日。
 
-    休市日不寫。基準日的資料還沒發布時，期限前什麼都不寫（之後可重跑），過了期限才記漏記（帳本的規則）。
+    休市日不寫。日 K 還沒有基準日（資料沒發布或臨時休市）時不寫、不記漏記；之後補記由下一次晨間執行做。
     不對帳。和同一基準日的晚間版互不相干：輸入裡沒有任何帳本內容。
     ``replay``（只能乾跑）：重播過去某個開盤日，時鐘停在那天 07:30。
     """
@@ -314,7 +307,7 @@ def run_morning(
         "schema": SCHEMA, "edition": "morning", "dry_run": dry_run, "session_date": session_date, "model": model,
         "started_at": clock().astimezone(fl.TAIPEI).isoformat(), "backfilled_misses": [],
     }
-    if not is_trading_day(session_date, holidays):
+    if not trading_day_status(session_date, holidays):
         log.update(outcome="holiday", base_date=None, detail=f"{session_date} 不是台股交易日，不寫晨間版")
         return _finish_log(log, clock, log_output)
 
@@ -323,16 +316,18 @@ def run_morning(
     # 開盤日之後才發布的資料（例如當天傍晚重跑）不能讓晨間版看到。
     analysis = {**analysis, **{key: _until(analysis.get(key), base_date) for key in ("daily", "institutional", "futures")}}
     method_text = Path(method_path).read_text(encoding="utf-8")
-    layer = _layer(overseas_dir, edition="morning", base_date=base_date, session_date=session_date,
-                   stock_db=stock_db, institutional_db=institutional_db)
+    layer = _layer(overseas_dir, edition="morning", base_date=base_date, session_date=session_date)
     data = _with_archive_names(build_day_input(analysis, method_text, layer), overseas_dir, Path(ledger))
-    # 基準日看休市日曆：資料檔停在更早的日子代表基準日的資料還沒發布，帳本會判定資料沒到齊。
-    data["base_date"] = base_date
     log["base_date"] = base_date
 
     if not dry_run:
         log["backfilled_misses"] = _backfill_misses(analysis, method_text, Path(ledger), base_date, model_bin=model_bin,
                                                     model=model, clock=clock, edition="morning")
+    if data["base_date"] != base_date:
+        # 日 K 停在更早的日子：基準日的資料還沒發布，或那天臨時休市（颱風假不在休市日曆裡）。交易日以日 K 實際
+        # 有資料為準，所以這裡不寫也不記漏記；之後那天的日 K 出現了，下一次晨間執行會把它補記成漏記。
+        log.update(outcome="not_ready", detail=f"日 K 還沒有基準日 {base_date}（資料沒發布或臨時休市）")
+        return _finish_log(log, clock, log_output)
     result = _write(ledger, data, dry_run=dry_run, edition="morning", session_date=session_date, model_bin=model_bin,
                     model=model, now=clock, timeout_seconds=timeout_seconds)
     _log_result(log, result, overseas_dir=overseas_dir, ledger=Path(ledger), dry_run=dry_run)
@@ -354,14 +349,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="只在暫存副本上寫，不碰帳本、不輸出資料庫指令檔")
     parser.add_argument("--as-of", help="乾跑時重播已發布過的某一天（只有晚間版）")
     parser.add_argument("--overseas-dir", type=Path, help="overseas_inputs.py fetch 抓好的原件資料夾")
-    parser.add_argument("--stock-db", type=Path, help="上市日線 sqlite（0050 開收、外資金額用的收盤）")
-    parser.add_argument("--institutional-db", type=Path, help="上市個股法人買賣超 sqlite")
     parser.add_argument("--sql-output", type=Path)
     parser.add_argument("--log-output", type=Path)
     args = parser.parse_args(argv)
     common = dict(ledger=args.ledger, method_path=args.method, model_bin=args.agy_bin, model=args.model,
                   dry_run=args.dry_run, sql_output=args.sql_output, log_output=args.log_output,
-                  overseas_dir=args.overseas_dir, stock_db=args.stock_db, institutional_db=args.institutional_db)
+                  overseas_dir=args.overseas_dir)
     if args.edition == "morning":
         if not args.session_date or args.date:
             parser.error("晨間版要給 --session-date，不接受 --date")
