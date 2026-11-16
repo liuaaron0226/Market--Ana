@@ -25,7 +25,7 @@ async function list(db, email) {
   const items = {};
   if (!baseDate) return response(200, { available: true, base_date: null, items });
   const { results: rows } = await db.prepare(
-    "SELECT j.code, j.edition, j.kind, j.status, j.record_json FROM watch_judgments j " +
+    "SELECT j.code, j.edition, j.run_mode, j.method_version, j.input_version, j.kind, j.status, j.record_json FROM watch_judgments j " +
     "JOIN user_watchlist w ON w.code = j.code AND w.email = ? AND w.watching = 1 WHERE j.base_date = ?",
   ).bind(email, baseDate).all();
   const latest = new Map();
@@ -33,14 +33,18 @@ async function list(db, email) {
     const seen = latest.get(row.code);
     if (!seen || EDITION_ORDER[row.edition] > EDITION_ORDER[seen.edition]) latest.set(row.code, row);
   }
+  // 幾次對幾次和成績頁同一個分組：同一版、試跑或正式、方法與輸入版本都和這一份相同。
   const { results: tallies } = await db.prepare(
-    "SELECT r.code, r.edition, COUNT(*) AS reconciled, SUM(r.beat_index) AS wins FROM watch_reconciliations r " +
-    "JOIN user_watchlist w ON w.code = r.code AND w.email = ? AND w.watching = 1 WHERE r.horizon = ? GROUP BY r.code, r.edition",
+    "SELECT r.code, r.edition, j.run_mode, j.method_version, j.input_version, COUNT(*) AS reconciled, SUM(r.beat_index) AS wins " +
+    "FROM watch_reconciliations r JOIN watch_judgments j ON j.judgment_id = r.judgment_id " +
+    "JOIN user_watchlist w ON w.code = r.code AND w.email = ? AND w.watching = 1 WHERE r.horizon = ? " +
+    "GROUP BY r.code, r.edition, j.run_mode, j.method_version, j.input_version",
   ).bind(email, RECORD_HORIZON).all();
-  const tally = new Map(tallies.map((row) => [`${row.code}|${row.edition}`, row]));
+  const seriesKey = (row) => [row.code, row.edition, row.run_mode, row.method_version, row.input_version].join("|");
+  const tally = new Map(tallies.map((row) => [seriesKey(row), row]));
   for (const [code, row] of [...latest].sort(([a], [b]) => a.localeCompare(b))) {
     const record = parse(row.record_json) || {};
-    const counted = tally.get(`${code}|${row.edition}`);
+    const counted = tally.get(seriesKey(row));
     items[code] = {
       code, base_date: baseDate, edition: row.edition, kind: row.kind, status: row.status ?? null,
       trigger_line: record.trigger_line ?? null,
@@ -52,23 +56,25 @@ async function list(db, email) {
 
 async function stock(db, code) {
   const baseDate = await latestBaseDate(db);
+  // 最近的 MAX_HISTORY 份（含它們的對帳結果）；讀不出來的那一筆略過，不讓整頁失敗。
+  const recent = "SELECT judgment_id FROM watch_judgments WHERE code = ? ORDER BY base_date DESC, judgment_id DESC LIMIT ?";
   const { results: rows } = await db.prepare(
-    "SELECT judgment_id, base_date, edition, record_json FROM watch_judgments WHERE code = ? " +
-    "ORDER BY base_date DESC, edition DESC LIMIT ?",
+    `SELECT judgment_id, base_date, edition, record_json FROM watch_judgments WHERE judgment_id IN (${recent})`,
   ).bind(code, MAX_HISTORY).all();
-  rows.reverse();
   const { results: outcomes } = await db.prepare(
-    "SELECT judgment_id, horizon, record_json FROM watch_reconciliations WHERE code = ?",
-  ).bind(code).all();
+    `SELECT judgment_id, horizon, record_json FROM watch_reconciliations WHERE code = ? AND judgment_id IN (${recent})`,
+  ).bind(code, code, MAX_HISTORY).all();
   const byJudgment = new Map();
   for (const row of outcomes) {
     if (!byJudgment.has(row.judgment_id)) byJudgment.set(row.judgment_id, {});
     byJudgment.get(row.judgment_id)[row.horizon] = parse(row.record_json);
   }
-  const latest = { evening: null, morning: null };
-  for (const row of rows) if (row.base_date === baseDate) latest[row.edition] = parse(row.record_json);
-  const history = rows.map((row) => ({ ...parse(row.record_json), reconciliations: byJudgment.get(row.judgment_id) || {} }));
+  const history = rows.map((row) => ({ id: row.judgment_id, record: parse(row.record_json) }))
+    .filter(({ record }) => record && typeof record.base_date === "string" && record.edition in EDITION_ORDER)
+    .map(({ id, record }) => ({ ...record, reconciliations: byJudgment.get(id) || {} }));
   history.sort((a, b) => a.base_date.localeCompare(b.base_date) || EDITION_ORDER[a.edition] - EDITION_ORDER[b.edition]);
+  const latest = { evening: null, morning: null };
+  for (const { reconciliations, ...record } of history) if (record.base_date === baseDate) latest[record.edition] = record;
   return response(200, {
     available: true, code, base_date: baseDate, latest,
     default_edition: latest.morning ? "morning" : latest.evening ? "evening" : null,
@@ -85,6 +91,7 @@ async function summary(db) {
 export async function handleWatchLedgerApi(request, env, parts, email) {
   const [head, codeText, ...rest] = parts;
   if (head !== "judgments" && head !== "summary") return null;
+  if (codeText === "") throw new UserPortfolioError(404, "找不到");
   if (rest.length || (head === "summary" && codeText !== undefined)) throw new UserPortfolioError(404, "找不到");
   if (request.method !== "GET") throw new UserPortfolioError(405, "方法不允許");
   if (head === "summary") return summary(env.DB);

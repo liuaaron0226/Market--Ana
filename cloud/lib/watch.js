@@ -71,7 +71,7 @@ export async function handleWatchApi(request, env, path, email, deps, { isOwner,
   const parts = path.split("/").slice(3);
   const ledger = await handleWatchLedgerApi(request, env, parts, email);
   if (ledger) return ledger;
-  if (parts.length > 1) throw new UserPortfolioError(404, "找不到");
+  if (parts.length > 1 || parts[0] === "") throw new UserPortfolioError(404, "找不到");
   const [codeText] = parts;
   if (codeText === undefined) {
     if (request.method !== "GET") throw new UserPortfolioError(405, "方法不允許");

@@ -216,8 +216,11 @@
       block.append(head, bar('贏大盤', group.win_rate, 'is-hit'), bar('隨便挑', group.random_rate, 'is-base'));
       panel.append(block);
     }
-    panel.append(el('p', { class: 'forecast-note' },
-      `全部關注股 · 漏記 ${all[0].misses} 次 · 還沒到期 ${all.reduce((n, g) => n + g.pending, 0)} 次`));
+    // 還沒到期、無法判定都以轉變日計：二十日那一格還沒有結果的轉變日（五日還沒到期的一定也在裡面）。
+    const longest = all[all.length - 1];
+    const open = [`漏記 ${longest.misses} 次`, `還沒到期 ${longest.pending} 次`];
+    if (longest.undeterminable) open.push(`無法判定 ${longest.undeterminable} 次`);
+    panel.append(el('p', { class: 'forecast-note' }, `全部關注股 · ${open.join(' · ')}`));
     const twenty = stock && stock.find(g => g.horizon === 20);
     if (twenty) {
       // 單一檔樣本太少時只標階段，不給比例。
@@ -228,7 +231,8 @@
 
   // ---- 回看頁 ----
   function outcomeText(outcome) {
-    if (!outcome) return '還沒到期';
+    // 這一格還沒有對帳結果：可能是還沒到期，也可能是資料缺漏無法判定（合計數字在成績頁）；都不算看錯。
+    if (!outcome) return '還沒有結果';
     const sign = (v) => `${v >= 0 ? '+' : ''}${(v * 100).toFixed(1)}%`;
     return `${mmdd(outcome.expiry_date)} ${sign(outcome.stock_return)}，大盤 ${sign(outcome.index_return)}，${outcome.beat_index ? '贏大盤' : '沒贏'}`;
   }
@@ -382,13 +386,16 @@
       summary: undefined, picked: null, shown: HISTORY_PAGE });
   }
 
+  // 每次掛載拿一個號碼；同一檔在回應回來之前又載入一次時，只有最後一次會建出小鍵（不會出現兩顆）。
+  let mounting = 0;
   async function mount({ host, code, onChange, getDaily }) {
+    const ticket = ++mounting;
     unmount();
     if (!host || !code) return;
     state.code = code;
     try {
       const data = await getJson(`/api/watch/judgments/${encodeURIComponent(code)}`);
-      if (state.code !== code || !data || !data.base_date) return;
+      if (ticket !== mounting || !data || !data.base_date) return;
       if (!data.history.length) return; // 這一檔從來沒有被判斷過：個股頁和原本一樣
       state.data = data;
       state.edition = data.default_edition || (data.history[data.history.length - 1] || {}).edition || 'evening';

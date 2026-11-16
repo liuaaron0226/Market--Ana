@@ -204,3 +204,34 @@ test("輸入有驗證：代號格式不對被拒；只能讀，不能寫", async
     }
   }
 });
+
+test("單檔：資料庫裡有一筆讀不出來的紀錄時略過它，其他照常回傳", async () => {
+  await seedJudgment(judgment("2330", "2026-10-01", "evening", "接近"));
+  await env.DB.prepare(
+    "INSERT INTO watch_judgments (judgment_id, code, base_date, edition, method_version, input_version, run_mode, kind, status, record_json, record_sha256, published_at) VALUES ('bad', '2330', '2026-10-02', 'evening', '0.4', 'v', 'trial', 'judgment', '接近', '{壞掉', ?, 'now')",
+  ).bind("b".repeat(64)).run();
+  const response = await req("/api/watch/judgments/2330");
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.deepEqual(body.history.map((item) => item.base_date), ["2026-10-01"]);
+  assert.deepEqual(body.latest, { evening: null, morning: null });
+});
+
+test("路徑多一個斜線或空的一段是找不到，不是代號格式錯誤", async () => {
+  for (const path of ["/api/watch/", "/api/watch/judgments/", "/api/watch//2330"]) {
+    assert.equal((await req(path)).status, 404, path);
+  }
+});
+
+test("清單的幾次對幾次只算和這一份同一組的（試跑或正式、方法與輸入版本相同），和成績頁一致", async () => {
+  await watch("2330");
+  const trial = await seedJudgment(judgment("2330", "2026-09-01", "evening", "可以留意"));
+  await seedReconciliation(trial, 20, "2026-09-29", true);
+  const oldMethod = await seedJudgment(judgment("2330", "2026-09-03", "evening", "可以留意", {
+    run_mode: "official", judgment_id: "2330|2026-09-03|evening|0.3|v", method_version: "0.3" }));
+  await seedReconciliation(oldMethod, 20, "2026-10-01", true);
+  const official = await seedJudgment(judgment("2330", "2026-09-08", "evening", "可以留意", { run_mode: "official" }));
+  await seedReconciliation(official, 20, "2026-10-06", false);
+  await seedJudgment(judgment("2330", "2026-10-02", "evening", "接近", { run_mode: "official" }));
+  assert.deepEqual((await json("/api/watch/judgments")).items["2330"].record, { reconciled: 1, wins: 0 });
+});
