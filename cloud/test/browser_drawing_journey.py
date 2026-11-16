@@ -5,6 +5,9 @@
 票 05：黃金分割——點兩下出七條線、預覽、比例的位置、選取、拖整組、拖一端、切日週月、重新整理後仍在。
 票 06：文字標註——點一下出現輸入框、確定／取消／空白、字數上限、純文字顯示、選取、拖動、修改、切日週月、重新整理後仍在；
        手機另驗輸入框大小、鍵盤彈出（用縮小視窗模擬）時不被遮住、寫完頁面回到原位。
+票 07：儲存失敗時不白畫——斷線（真的關掉瀏覽器的網路）時畫、拖、寫字、刪都留在畫面上並出現「未儲存」，
+       恢復後照先後補存；還沒存上去就重新整理會先被瀏覽器提醒；被限速照伺服器說的秒數等；伺服器出錯自動再試；
+       被拒絕的不重試、提示改成「沒存成」；換股票不混檔。失敗用攔截請求製造，不改伺服器。
 
 用真正的 gate.handle＋cloud/dist＋記憶體資料庫（cloud/test/journey-server.mjs），Access 由 cookie 模擬；
 不連正式站、不碰 8876／8897。先在 cloud/ 跑過 `node build.mjs` 讓 dist 是最新的。
@@ -124,13 +127,14 @@ class Journey:
             context.add_cookies([{"name": "test_as", "value": quote(email), "url": self.base}])
         return context
 
-    def open(self, context, code: str = "2330"):
+    # expect_failures：這一頁會故意讓畫線的存檔失敗（票 07），那些失敗不算進最後的「畫線的讀寫請求沒有失敗」。
+    def open(self, context, code: str = "2330", expect_failures: bool = False):
         page = context.new_page()
         # 「Failed to load resource」另由下面的回應狀態記錄（帶網址），這裡只收程式本身的錯誤訊息。
         page.on("console", lambda message: self.console.append(message.text)
                 if message.type == "error" and "Failed to load resource" not in message.text else None)
         page.on("response", lambda response: self.failed.append(f"{response.status} {response.request.method} {response.url.replace(self.base, '')}")
-                if response.status >= 400 else None)
+                if response.status >= 400 and not (expect_failures and "/api/drawings/" in response.url) else None)
         page.on("pageerror", lambda error: self.console.append(f"pageerror: {error}"))
         page.goto(f"{self.base}/stock.html?code={code}")
         self.ready(page, code)
@@ -1582,6 +1586,302 @@ def text_mobile(journey: Journey, browser) -> None:
     context.close()
 
 
+class SaveNetwork:
+    """票 07：控制這一頁畫線存檔請求（PUT、DELETE）的結果。
+    mode："pass" 照常送到伺服器、"abort" 連不上、"429" 被限速（等 retry_after 秒）、其他數字＝直接回那個狀態碼。
+    sent 記下每一筆：（時間, 方法, 「代號/識別碼」, 當時的 mode）。"""
+
+    def __init__(self, page) -> None:
+        self.mode = "pass"
+        self.retry_after = "4"
+        self.sent: list[tuple[float, str, str, str]] = []
+        page.route("**/api/drawings/*/*", self.handle)
+
+    def handle(self, route) -> None:
+        request = route.request
+        self.sent.append((time.monotonic(), request.method, request.url.split("/api/drawings/")[1], self.mode))
+        if self.mode == "pass":
+            route.continue_()
+        elif self.mode == "abort":
+            route.abort()
+        elif self.mode == "429":
+            route.fulfill(status=429, headers={"retry-after": self.retry_after}, content_type="application/json", body="{}")
+        else:
+            route.fulfill(status=int(self.mode), content_type="application/json", body="{}")
+
+
+# 畫布上用畫線顏色畫的每一條橫線：[位置（CSS 像素）, 濃淡（0～1）]。
+# 圖表的畫布底是透明的：還沒存上去、畫得比較淡的線，顏色和原本一樣，只是不透明度剩四成五左右，
+# 所以 LINES_JS（只比顏色）分不出濃淡；這裡另外量那一列的不透明度（取線中央最濃的那一列）。
+SHADE_JS = """() => {
+  const canvas = document.querySelector('#chartHost canvas');
+  const { width, height } = canvas;
+  const data = canvas.getContext('2d').getImageData(0, 0, width, height).data;
+  const hex = getComputedStyle(document.documentElement).getPropertyValue('--draw').trim();
+  const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
+  const rows = [];
+  for (let y = 0; y < height; y++) {
+    const alphas = [];
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      if (Math.abs(data[i] - r) + Math.abs(data[i + 1] - g) + Math.abs(data[i + 2] - b) < 60) alphas.push(data[i + 3]);
+    }
+    if (alphas.length > width * 0.3) rows.push([y, alphas.sort((a, b) => a - b)[alphas.length >> 1] / 255]);
+  }
+  const scale = height / canvas.getBoundingClientRect().height;
+  const lines = [];
+  rows.forEach(row => { if (!lines.length || row[0] - lines[lines.length - 1].at(-1)[0] > 1) lines.push([row]); else lines[lines.length - 1].push(row); });
+  return lines.map(group => [Math.round((group[0][0] + group.at(-1)[0]) / 2 / scale * 10) / 10, Math.max(...group.map(row => row[1]))]);
+}"""
+
+
+# 原本濃淡的線（已經存上去的）。journey.lines 是不分濃淡的全部。
+def solid_lines(page) -> list[float]:
+    return [y for y, shade in page.evaluate(SHADE_JS) if shade > 0.8]
+
+
+def save_desktop(journey: Journey, browser) -> None:
+    print("票 07｜桌機寬度 1280：存檔失敗時不白畫")
+    code, other = "2882", "2881"
+    context = journey.context(browser, OWNER, viewport={"width": 1280, "height": 900})
+    page = journey.open(context, code, expect_failures=True)
+    dialogs: list[str] = []
+    page.on("dialog", lambda dialog: (dialogs.append(dialog.type), dialog.dismiss()))
+    net = SaveNetwork(page)
+    hint = page.locator("#drawUnsaved")
+    tool = page.locator("#drawTools button[data-tool=hline]")
+    host = page.locator("#chartHost")
+
+    def click_line(fx: float, fy: float) -> float:
+        x, y, canvas_y = journey.point(page, fx, fy)
+        tool.click()
+        page.mouse.click(x, y)
+        return canvas_y
+
+    def drag_line(line_y: float, by: float) -> None:
+        x, y = journey.canvas_xy(page, 0.7, line_y)
+        page.mouse.click(x, y)
+        page.mouse.move(x, y)
+        page.mouse.down()
+        page.mouse.move(x, y + by, steps=6)
+        page.mouse.up()
+        page.wait_for_timeout(120)
+
+    journey.check("起點：沒有線、沒有提示", solid_lines(page) == [] and journey.lines(page) == [] and not hint.is_visible(), journey.lines(page))
+    chart_top = host.bounding_box()["y"]
+
+    y1 = journey.draw(page, 0.4, 0.3)
+    first = journey.saved(page, code)[0]["id"]
+    journey.check("連線正常時畫線：不出現提示，線是原本的濃淡", not hint.is_visible() and near(solid_lines(page), y1), solid_lines(page))
+
+    # ---- 斷線：真的把瀏覽器的網路關掉 ----
+    context.set_offline(True)
+    y2 = click_line(0.5, 0.45)
+    hint.wait_for(state="visible", timeout=5000)
+    journey.check("斷線時畫線：線留在畫面上，畫得比較淡", near(journey.lines(page), y2) and not near(solid_lines(page), y2),
+                  {"faint": journey.lines(page), "full": solid_lines(page), "want": y2})
+    box = hint.bounding_box()
+    journey.check("出現「未儲存」：在工具列那一行、不蓋到圖，圖的位置沒有被推動，沒有跳出視窗",
+                  hint.inner_text().strip() == "未儲存" and box["y"] + box["height"] <= chart_top + 0.5
+                  and abs(host.bounding_box()["y"] - chart_top) < 0.5 and dialogs == [], {"hint": box, "chart_top": chart_top, "dialogs": dialogs})
+    page.screenshot(path=str(OUT / "desktop-32-unsaved.png"))
+    page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-33-unsaved-chart.png"))
+
+    drag_line(y1, 40)
+    journey.check("斷線時拖動已經存過的線：留在新位置，也變淡", near(journey.lines(page), y1 + 40, 2) and not near(journey.lines(page), y1)
+                  and not near(solid_lines(page), y1 + 40, 2), journey.lines(page))
+    page.keyboard.press("Escape")
+
+    x, y, _ = journey.point(page, 0.25, 0.62)
+    page.locator("#drawTools button[data-tool=text]").click()
+    page.mouse.click(x, y)
+    page.keyboard.type("補存測試")
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(120)
+    journey.check("斷線時寫一則文字：輸入框照常收起", editor(page) is None)
+
+    y3 = click_line(0.5, 0.8)
+    page.mouse.click(*journey.canvas_xy(page, 0.7, y3))
+    page.keyboard.press("Delete")
+    page.wait_for_timeout(120)
+    journey.check("斷線時畫了一條又刪掉：那一條消失，其他的還在", not near(journey.lines(page), y3) and near(journey.lines(page), y2)
+                  and near(journey.lines(page), y1 + 40, 2), journey.lines(page))
+    page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-34-offline-edits.png"))
+
+    page.evaluate("() => { setTimeout(() => location.reload(), 0); }")
+    page.wait_for_timeout(1200)
+    journey.check("還沒存上去就重新整理：瀏覽器先提醒；留下來之後線都還在", dialogs == ["beforeunload"] and near(journey.lines(page), y2)
+                  and near(journey.lines(page), y1 + 40, 2) and hint.is_visible(), {"dialogs": dialogs, "lines": journey.lines(page)})
+
+    # ---- 連線恢復 ----
+    offline_tries = len(net.sent)
+    context.set_offline(False)
+    hint.wait_for(state="hidden", timeout=10_000)
+    page.wait_for_timeout(200)
+    items = journey.saved(page, code)
+    by_id = {item["id"]: item for item in items}
+    resent = [(method, path.split("/")[1]) for _, method, path, _ in net.sent[offline_tries:]]
+    journey.check("連線恢復後自動補存，提示消失", not hint.is_visible() and len(items) == 3
+                  and sorted(item["kind"] for item in items) == ["hline", "hline", "text"], items)
+    kinds = [(method, by_id.get(drawing, {}).get("kind"), drawing == first) for method, drawing in resent]
+    journey.check("補存的先後和當初做的一樣（新畫的線 → 拖過的那一條 → 文字），畫了又刪的那一條沒有送",
+                  kinds == [("PUT", "hline", False), ("PUT", "hline", True), ("PUT", "text", False)], kinds)
+    journey.check("文字的內容也補存上去了", [item["text"] for item in items if item["kind"] == "text"] == ["補存測試"])
+    full = solid_lines(page)
+    journey.check("補存之後線恢復原本的濃淡", near(full, y2) and near(full, y1 + 40, 2), full)
+    page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-35-restored.png"))
+
+    dialogs.clear()
+    page.reload()
+    journey.ready(page, code)
+    journey.check("都存上去之後重新整理：不再提醒，兩條線與文字都還在", dialogs == [] and len(solid_lines(page)) == 2
+                  and len(journey.saved(page, code)) == 3, {"dialogs": dialogs, "lines": solid_lines(page)})
+
+    # ---- 被限速：照伺服器說的秒數等 ----
+    net.mode, net.retry_after = "429", "4"
+    drag_line(y2, 30)
+    hint.wait_for(state="visible", timeout=5000)
+    limited = len(net.sent)
+    limited_at = net.sent[-1][0]
+    net.mode = "pass"
+    page.evaluate("() => window.dispatchEvent(new Event('online'))")
+    page.wait_for_timeout(3000)
+    journey.check("被限速（429，要求等 4 秒）：三秒內一筆都不重送，連線恢復的通知也不會提早", len(net.sent) == limited and hint.is_visible(),
+                  [entry[1:] for entry in net.sent[limited:]])
+    hint.wait_for(state="hidden", timeout=6000)
+    waited = net.sent[limited][0] - limited_at
+    journey.check("等滿 4 秒才補存，存上去後提示消失", 3.8 <= waited <= 6 and len(net.sent) == limited + 1, waited)
+    page.keyboard.press("Escape")
+
+    # ---- 伺服器暫時出錯：自動再試 ----
+    net.mode = "503"
+    y4 = click_line(0.45, 0.72)
+    hint.wait_for(state="visible", timeout=5000)
+    net.mode = "pass"
+    hint.wait_for(state="hidden", timeout=6000)
+    journey.check("伺服器暫時出錯（503）：線留著，兩秒後自動再試、存上去", near(solid_lines(page), y4) and len(journey.saved(page, code)) == 4)
+
+    # ---- 被拒絕：不重試，說「沒存成」 ----
+    net.mode = "409"
+    y5 = click_line(0.55, 0.18)
+    page.wait_for_function("() => document.getElementById('drawUnsaved').textContent === '沒存成'", timeout=5000)
+    refused = len(net.sent)
+    page.wait_for_timeout(4500)
+    journey.check("被拒絕（409）：提示是「沒存成」，那一條留在畫面上、畫得比較淡，不會一直重試",
+                  hint.is_visible() and len(net.sent) == refused and near(journey.lines(page), y5) and not near(solid_lines(page), y5),
+                  {"sent": len(net.sent) - refused, "faint": journey.lines(page)})
+    page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-36-refused.png"))
+    net.mode = "pass"
+    page.mouse.click(*journey.canvas_xy(page, 0.7, y5))
+    page.keyboard.press("Delete")
+    hint.wait_for(state="hidden", timeout=5000)
+    journey.check("刪掉沒存成的那一條：提示消失，雲端還是四筆", not near(journey.lines(page), y5) and len(journey.saved(page, code)) == 4)
+
+    # ---- 換股票：不丟、不混 ----
+    net.mode = "abort"
+    y6 = click_line(0.5, 0.9)
+    hint.wait_for(state="visible", timeout=5000)
+    journey.choose_period(page, "5m")
+    box = hint.bounding_box() or {"y": 0, "height": 9999}
+    journey.check("切到分 K：工具列收起，「未儲存」還看得到、不蓋到圖", not page.locator("#drawTools").is_visible() and hint.is_visible()
+                  and box["y"] + box["height"] <= host.bounding_box()["y"] + 0.5, box)
+    page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-37-unsaved-intraday.png"))
+    journey.choose_period(page, "daily")
+    journey.check("切回日 K：提示與那條線都還在", hint.is_visible() and near(journey.lines(page), y6), journey.lines(page))
+    page.locator("#codeInput").fill(other)
+    page.locator("#searchForm button[type=submit]").click()
+    journey.ready(page, other)
+    journey.check("換到另一檔：看不到上一檔的線；上一檔還沒存上去，提示還在", journey.lines(page) == [] and hint.is_visible(), journey.lines(page))
+    y7 = click_line(0.5, 0.5)
+    page.wait_for_timeout(200)
+    net.mode = "pass"
+    page.evaluate("() => window.dispatchEvent(new Event('online'))")
+    hint.wait_for(state="hidden", timeout=10_000)
+    page.wait_for_timeout(200)
+    mine, theirs = journey.saved(page, code), journey.saved(page, other)
+    journey.check("恢復後各自補存到原本那一檔，沒有混在一起", len(mine) == 5 and len(theirs) == 1
+                  and not {item["id"] for item in mine} & {item["id"] for item in theirs}, {"first": len(mine), "second": len(theirs)})
+    journey.check("新的一檔只有自己那一條", near(solid_lines(page), y7) and len(solid_lines(page)) == 1, solid_lines(page))
+    page.go_back()
+    journey.ready(page, code)
+    journey.check("回到上一檔：補存的那一條在", near(solid_lines(page), y6) and len(solid_lines(page)) == 4, solid_lines(page))
+
+    broken = journey.context(browser, OWNER, viewport={"width": 1280, "height": 900})
+    broken.route("**/drawing-sync.js*", lambda route: route.abort())
+    broken_page = journey.open(broken, code)
+    journey.check("存檔那支程式沒載入時：個股頁其他內容照常顯示，畫線工具列收起", broken_page.locator("#close").inner_text().strip() not in ("", "—")
+                  and broken_page.locator("#chartHost canvas").is_visible() and not broken_page.locator("#drawTools").is_visible())
+    broken.close()
+    context.close()
+
+
+def save_mobile(journey: Journey, browser) -> None:
+    print("票 07｜手機寬度 390（觸控）：存檔失敗時不白畫")
+    code = "2891"
+    context = journey.context(browser, OWNER, viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True, has_touch=True)
+    page = journey.open(context, code, expect_failures=True)
+    net = SaveNetwork(page)
+    hint = page.locator("#drawUnsaved")
+    tool = page.locator("#drawTools button[data-tool=hline]")
+    other_tool = page.locator("#drawTools button[data-tool=trend]")   # 量大小用：剛按過的那一顆還在「按下去」的縮小動畫裡
+    delete = page.locator("#drawDelete")
+    host = page.locator("#chartHost")
+    fits = "() => document.documentElement.scrollWidth <= innerWidth"
+    chart_top = host.bounding_box()["y"]
+    journey.check("手機起點：沒有線、沒有提示", journey.lines(page) == [] and not hint.is_visible())
+
+    context.set_offline(True)
+    x, y, line_y = journey.point(page, 0.45, 0.4)
+    tool.tap()
+    page.touchscreen.tap(x, y)
+    hint.wait_for(state="visible", timeout=5000)
+    journey.check("手機斷線時畫線：線留在畫面上（比較淡），出現「未儲存」", near(journey.lines(page), line_y) and not near(solid_lines(page), line_y)
+                  and hint.inner_text().strip() == "未儲存", journey.lines(page))
+    box, button = hint.bounding_box(), other_tool.bounding_box()
+    journey.check("手機：提示在工具列那一行、不蓋到圖、不推動圖，不造成橫向捲動，按鈕仍至少 44px",
+                  box["y"] + box["height"] <= chart_top + 0.5 and abs(host.bounding_box()["y"] - chart_top) < 0.5 and page.evaluate(fits)
+                  and button["width"] >= 44 and button["height"] >= 44 and box["x"] + box["width"] <= 390, {"hint": box, "button": button})
+    page.screenshot(path=str(OUT / "mobile-27-unsaved.png"))
+
+    page.touchscreen.tap(*journey.canvas_xy(page, 0.7, line_y))
+    page.wait_for_timeout(150)
+    box, button, trash = hint.bounding_box(), other_tool.bounding_box(), delete.bounding_box()
+    journey.check("手機：選了線、多出刪除鈕時提示只留圓點，按鈕不被擠小、不橫向捲動", delete.is_visible() and hint.is_visible() and page.evaluate(fits)
+                  and button["width"] >= 44 and trash["width"] >= 44 and box["x"] + box["width"] <= 390 and box["width"] < 24,
+                  {"hint": box, "button": button, "delete": trash})
+    page.screenshot(path=str(OUT / "mobile-28-unsaved-selected.png"))
+
+    cdp = context.new_cdp_session(page)
+
+    def touch(kind: str, tx: float, ty: float) -> None:
+        cdp.send("Input.dispatchTouchEvent", {
+            "type": kind, "touchPoints": [] if kind == "touchEnd" else [{"x": round(tx), "y": round(ty)}]})
+
+    x, y = journey.canvas_xy(page, 0.7, line_y)
+    touch("touchStart", x, y)
+    for step in range(1, 7):
+        touch("touchMove", x, y + step * 5)
+        page.wait_for_timeout(16)
+    page.wait_for_timeout(250)
+    touch("touchEnd", x, y)
+    page.wait_for_timeout(150)
+    journey.check("手機斷線時拖動：線留在新位置", near(journey.lines(page), line_y + 30, 2) and len(journey.lines(page)) == 1, journey.lines(page))
+
+    tries = len(net.sent)
+    context.set_offline(False)
+    hint.wait_for(state="hidden", timeout=10_000)
+    page.wait_for_timeout(200)
+    items = journey.saved(page, code)
+    journey.check("手機：連線恢復後自動補存（只送最後的位置一次）、提示消失、線恢復原本的濃淡",
+                  len(items) == 1 and [entry[1] for entry in net.sent[tries:]] == ["PUT"] and near(solid_lines(page), line_y + 30, 2),
+                  {"items": len(items), "sent": [entry[1:] for entry in net.sent[tries:]], "lines": solid_lines(page)})
+    page.screenshot(path=str(OUT / "mobile-29-restored.png"))
+    page.reload()
+    journey.ready(page, code)
+    journey.check("手機：重新整理後那條線還在補存後的位置", near(solid_lines(page), line_y + 30, 2) and len(journey.saved(page, code)) == 1, solid_lines(page))
+    context.close()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", help="已經開著的旅程伺服器；省略時自己起一個")
@@ -1607,7 +1907,7 @@ def main() -> int:
     try:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch()
-            for step in (desktop, mobile, edit_desktop, edit_mobile, two_point_desktop, two_point_mobile, rect_desktop, rect_mobile, fib_desktop, fib_mobile, text_desktop, text_mobile):
+            for step in (desktop, mobile, edit_desktop, edit_mobile, two_point_desktop, two_point_mobile, rect_desktop, rect_mobile, fib_desktop, fib_mobile, text_desktop, text_mobile, save_desktop, save_mobile):
                 if not args.only or step.__name__.startswith(args.only):
                     step(journey, browser)
             browser.close()

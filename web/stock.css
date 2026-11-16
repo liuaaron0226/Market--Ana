@@ -131,12 +131,13 @@
 /* ---------- 畫線工具列：只有圖示；名稱在滑鼠停留、鍵盤聚焦或手機長按時出現 ----------
    --draw 是畫線用色，沿用既有色票的藍紫（--core-b）：與漲跌的紅綠、均線的橘金灰、支撐壓力的金綠都分得開。 */
 :root { --draw: var(--core-b); }
-.bd-draw { display: flex; gap: 4px; margin: 0 0 6px; }
+.bd-draw-row { display: flex; align-items: center; }
+.bd-draw { display: flex; flex: none; gap: 4px; margin: 0 0 6px; }
 .bd-draw[hidden], .bd-draw button[hidden] { display: none; }
 .bd-draw button {
   position: relative; width: var(--btn-h); height: var(--btn-h); display: grid; place-items: center; padding: 0;
   border: 1px solid var(--hair); border-radius: var(--btn-r); background: transparent; color: var(--dim); cursor: pointer;
-  touch-action: manipulation; -webkit-touch-callout: none; user-select: none;
+  touch-action: manipulation; -webkit-touch-callout: none; user-select: none; flex: none;
   transition: background-color 160ms var(--ease-out), color 160ms var(--ease-out), transform 120ms var(--ease-out);
 }
 .bd-draw svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; pointer-events: none; }
@@ -156,6 +157,17 @@
   .bd-draw button:hover::after { opacity: 1; transition-delay: 320ms; }
 }
 @media (prefers-reduced-motion: reduce) { .bd-draw button, .bd-draw button::after { transition: none; } }
+/* 還有畫線沒存上去時的提示：和工具列同一行、靠右的一個小圓點加三個字，不蓋到圖。
+   它不在工具列裡面：秒 K、分 K 把工具列收起時，還沒存上去的提示照樣看得到。
+   工具列與按鈕不讓位（手機上要維持 44px）；窄螢幕上選了線、多出刪除鈕時放不下三個字，只留圓點
+   （不認得 :has 的舊瀏覽器是把放不下的字裁掉）。 */
+.bd-draw-unsaved {
+  display: inline-flex; align-items: center; gap: 6px; flex: 0 1 auto; min-width: 14px; overflow: hidden;
+  margin: 0 0 6px auto; padding-left: 8px; color: var(--dim); font: 500 12px var(--sans); white-space: nowrap;
+}
+.bd-draw-unsaved[hidden] { display: none; }
+.bd-draw-unsaved::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--draw); }
+@media (max-width: 480px) { .bd-draw-row:has(.bd-draw-delete:not([hidden])) .bd-draw-unsaved { gap: 0; font-size: 0; } }
 
 /* ---------- 文字標註的輸入框：疊在圖上、對在要寫的位置（位置由 chart-drawings.js 算） ----------
    一個輸入框加一顆取消；外框用畫線色，外圈的淡色環沿用站上聚焦狀態的作法。
