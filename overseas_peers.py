@@ -157,16 +157,46 @@ class EodhdSource:
     def daily(self, symbol: str, start: date, end: date) -> list[dict]:
         status, body = self.http(f"https://eodhd.com/api/eod/{symbol}?api_token={urllib.parse.quote(self.key, safe='')}&fmt=json&period=d&from={start}&to={end}")
         _check_status(status)
-        payload = _json(body)
-        if not isinstance(payload, list):
-            raise FormatChanged("不是清單")
-        bars = []
-        for item in payload:
-            day = item.get("date") if isinstance(item, dict) else None
-            if not isinstance(day, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
-                raise FormatChanged("日期格式不同")
-            close = item.get("adjusted_close", item.get("close"))
-            bars.append(_bar(day, close, item.get("open"), item.get("high"), item.get("low"), item.get("volume")))
+        bars = _eodhd_bars(body)
+        if not bars:
+            raise NotFound()
+        return bars
+
+
+def _eodhd_bars(body: bytes) -> list[dict]:
+    """EODHD 日線回應 → 日 K（收盤用還原後的 adjusted_close）。查無資料是空清單，由呼叫的人決定怎麼算。"""
+    payload = _json(body)
+    if not isinstance(payload, list):
+        raise FormatChanged("不是清單")
+    bars = []
+    for item in payload:
+        day = item.get("date") if isinstance(item, dict) else None
+        if not isinstance(day, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+            raise FormatChanged("日期格式不同")
+        close = item.get("adjusted_close", item.get("close"))
+        bars.append(_bar(day, close, item.get("open"), item.get("high"), item.get("low"), item.get("volume")))
+    return bars
+
+
+class CachedEodhdSource:
+    """EODHD 走共用的那一份（``eodhd_cache``，G 票延伸 2026-11-17）：大盤預測已經抓過的指數不再打，
+    同一個收盤之後同一檔只抓一次。錯誤照原本的分類（查無代號、額度用完、格式不對）回給每日抓取。"""
+    name = "eodhd"
+    pause = 0.0
+
+    def __init__(self, cache):
+        self.cache = cache
+
+    def daily(self, symbol: str, start: date, end: date) -> list[dict]:
+        from eodhd_cache import FetchError
+        try:
+            body, _ = self.cache.raw(symbol)
+        except FetchError as error:
+            if error.status is None:
+                raise SourceError(str(error)) from None
+            _check_status(error.status)
+            raise FormatChanged(str(error)) from None
+        bars = [bar for bar in _eodhd_bars(body) if start.isoformat() <= bar["date"] <= end.isoformat()]
         if not bars:
             raise NotFound()
         return bars
@@ -305,7 +335,9 @@ class WranglerD1:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("daily", help="抓一輪並寫進雲端資料庫")
+    daily_parser = commands.add_parser("daily", help="抓一輪並寫進雲端資料庫")
+    daily_parser.add_argument("--shared-cache", action="store_true",
+                              help="EODHD 走 R2 的共用快取（eodhd-cache/），和大盤預測的海外層同一份")
     purge = commands.add_parser("purge", help="整批刪除某個來源的行情")
     purge.add_argument("--source", required=True, choices=["massive", "eodhd", "all"])
     purge.add_argument("--yes", action="store_true", help="確認要刪除")
@@ -322,6 +354,11 @@ def main(argv: list[str] | None = None) -> int:
     eodhd_key = os.environ.get("EODHD_API_KEY", "").strip()
     sources = {"massive": MassiveSource(massive_key) if massive_key else None,
                "eodhd": EodhdSource(eodhd_key) if eodhd_key else None}
+    if args.shared_cache:
+        # 共用快取：大盤預測已經抓過的不再打；沒有金鑰時照樣讀得到共用的那一份。
+        from eodhd_cache import SharedEodhd
+        from state_sync import R2Store
+        sources["eodhd"] = CachedEodhdSource(SharedEodhd(R2Store.from_env(), eodhd_key))
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     today = datetime.now(timezone(timedelta(hours=8))).date()
     print(json.dumps(daily(d1, sources, today=today, now=now), ensure_ascii=False))

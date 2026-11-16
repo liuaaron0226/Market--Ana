@@ -121,13 +121,18 @@ jobs:
           python state_sync.py restore --target .
           python forecast_store.py pull --ledger "$LEDGER"
 
+      # EODHD 那幾檔走共用快取（R2 eodhd-cache/，G 票延伸 2026-11-17）：和關注的國外同類股同一份，同一個收盤之後只抓一次。
       - name: 抓海外原件（不擋預測）
         continue-on-error: true
         env:
           EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: market-ana-state
           SESSION_DATE: ${{ steps.mode.outputs.session_date }}
         run: |
-          python overseas_inputs.py fetch --reference-date "$SESSION_DATE" --out "$RUNNER_TEMP/overseas"
+          python overseas_inputs.py fetch --reference-date "$SESSION_DATE" --out "$RUNNER_TEMP/overseas" --shared-cache
 
       - name: 下載官方 agy 1.5.3 並核對 SHA-256
         id: agy_download

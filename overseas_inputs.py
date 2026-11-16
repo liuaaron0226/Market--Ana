@@ -108,10 +108,13 @@ def _error_type(error: BaseException) -> str:
 
 
 def fetch_sources(out_dir: Path | str, *, reference_date: str, eodhd_token: str,
-                  fetch: Callable[..., bytes] | None = None, now: Callable[[], str] | None = None) -> dict[str, Any]:
+                  fetch: Callable[..., bytes] | None = None, now: Callable[[], str] | None = None,
+                  eodhd_cache: Any | None = None) -> dict[str, Any]:
     """抓所有海外來源到 ``out_dir``：``<名稱>.raw`` 原件＋``manifest.json``。
 
     ``reference_date``：晚間版是基準日，晨間版是開盤日。沒有 EODHD 金鑰時不打 EODHD，記成 missing_key。
+    ``eodhd_cache``（``eodhd_cache.SharedEodhd``，G 票延伸 2026-11-17）：EODHD 那幾檔和關注的國外同類股共用一份，
+    同一個收盤之後只抓一次；原件照樣寫進 ``out_dir``，``fetched_at`` 是那一份真正抓下來的時間。
     """
     folder = Path(out_dir)
     folder.mkdir(parents=True, exist_ok=True)
@@ -135,6 +138,9 @@ def fetch_sources(out_dir: Path | str, *, reference_date: str, eodhd_token: str,
     entries = []
     for name, source, url, shown in jobs:
         entry: dict[str, Any] = {"name": name, "source": source, "url": shown}
+        if source == "eodhd" and eodhd_cache is not None:
+            entries.append(_from_shared(folder, entry, name.removeprefix("eodhd-"), eodhd_cache))
+            continue
         if url is None:
             entries.append({**entry, "status": "error", "error_type": "missing_key"})
             continue
@@ -151,6 +157,19 @@ def fetch_sources(out_dir: Path | str, *, reference_date: str, eodhd_token: str,
     manifest = {"schema": SCHEMA, "reference_date": reference_date, "sources": entries}
     (folder / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return manifest
+
+
+def _from_shared(folder: Path, entry: dict[str, Any], symbol: str, cache: Any) -> dict[str, Any]:
+    from eodhd_cache import FetchError
+    try:
+        content, meta = cache.raw(symbol)
+    except FetchError as error:
+        kind = "missing_key" if not cache.token else (f"HTTP {error.status}" if error.status else "FetchError")
+        return {**entry, "status": "error", "error_type": kind}
+    (folder / f"{entry['name']}.raw").write_bytes(content)
+    return {**entry, "url": meta.get("url", entry["url"]), "status": "ok", "fetched_at": meta["fetched_at"],
+            "bytes": len(content), "sha256": hashlib.sha256(content).hexdigest(), "shared": meta.get("shared", False),
+            **({"refresh_error": meta["refresh_error"]} if meta.get("refresh_error") else {})}
 
 
 def _read_manifest(folder: Path | None) -> list[dict[str, Any]]:
@@ -400,6 +419,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--reference-date", help="晚間版＝基準日；晨間版＝開盤日")
     parser.add_argument("--analysis", type=Path, help="沒給 --reference-date 時，用這份已發布大盤資料的最後一天（晚間版）")
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--shared-cache", action="store_true",
+                        help="EODHD 那幾檔走 R2 的共用快取（eodhd-cache/），和關注的國外同類股同一份")
     args = parser.parse_args(argv)
     reference = args.reference_date
     if not reference and args.analysis:
@@ -408,8 +429,13 @@ def main(argv: list[str] | None = None) -> int:
         reference = daily[-1]["date"] if daily else None
     if not reference:
         parser.error("要給 --reference-date 或內含日 K 的 --analysis")
-    manifest = fetch_sources(args.out, reference_date=reference,
-                             eodhd_token=os.environ.get("EODHD_API_KEY", "").strip())
+    token = os.environ.get("EODHD_API_KEY", "").strip()
+    cache = None
+    if args.shared_cache:
+        from eodhd_cache import SharedEodhd
+        from state_sync import R2Store
+        cache = SharedEodhd(R2Store.from_env(), token)
+    manifest = fetch_sources(args.out, reference_date=reference, eodhd_token=token, eodhd_cache=cache)
     summary = {entry["name"]: entry["status"] if entry["status"] == "ok" else entry.get("error_type")
                for entry in manifest["sources"]}
     print(json.dumps(summary, ensure_ascii=False))
