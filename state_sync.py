@@ -107,6 +107,8 @@ WORKING_SET: tuple[Item, ...] = (
     Item("data/listed-institutional/listed_institutional.sqlite", kind="sqlite"),
     Item("data/listed-institutional/raw", recent_files=60),
     Item("data/listed-institutional/meta.json"),
+    # 外資台指期部位（預測帳本 G 票）：期交所只開放查近三年，每天的原件全部保留、不得裁（每天兩個約 0.5 KB 的檔）。
+    Item("data/foreign-futures"),
     Item("data/valuation-history/valuation.sqlite", kind="sqlite"),
     Item("data/valuation-history/twse/meta.json"),
     Item("data/fundamentals-history"),                        # 原件＋meta（load_history 要一對一），約 82 MB

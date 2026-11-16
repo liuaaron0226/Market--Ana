@@ -859,5 +859,24 @@ class OtcCreditTest(unittest.TestCase):
         self.assertIn('otc_credit', di.OPTIONAL_DATASETS)
 
 
+
+class ForeignFuturesDayTest(unittest.TestCase):
+    """外資台指期部位（預測帳本 G 票第 14 片）：每日更新每天各存一份大台、小台原件，失敗不擋發布。"""
+
+    def test_it_is_an_optional_dataset(self):
+        self.assertIn('foreign_futures', di.OPTIONAL_DATASETS)
+        self.assertNotIn('foreign_futures', di.REQUIRED_DATASETS)
+
+    def test_saves_both_contracts_under_the_working_set_folder(self):
+        from test_foreign_futures import FakePost, MXF_DAY, TXF_DAY
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            result = di.foreign_futures_day(root, '2026-11-16', post=FakePost({'TXF': TXF_DAY, 'MXF': MXF_DAY}),
+                                            sleep=lambda s: None)
+            saved = sorted(path.name for path in (root / 'data/foreign-futures/raw').iterdir())
+        self.assertEqual(result['status'], 'appended')
+        self.assertEqual(saved, ['MXF-20261116.csv', 'MXF-20261116.csv.sha256',
+                                 'TXF-20261116.csv', 'TXF-20261116.csv.sha256'])
+
 if __name__ == "__main__":
     unittest.main()

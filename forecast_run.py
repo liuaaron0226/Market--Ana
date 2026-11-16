@@ -27,6 +27,8 @@ from pathlib import Path
 from typing import Any
 
 import forecast_ledger as fl
+import foreign_flow
+import foreign_futures
 import market_trend
 import overseas_inputs as oi
 from level_signals import trading_day_status
@@ -39,6 +41,10 @@ REPLAY_CLOCK = "17:30:00"
 # 重播晨間版乾跑的時鐘：開盤日早上、期限（08:45）之前。
 MORNING_REPLAY_CLOCK = "07:30:00"
 CHIP_DAYS = 5
+ROOT = Path(__file__).resolve().parent
+# 外資層（G 票）讀的資料：工作集裡的上市法人資料庫、個股日線與外資台指期部位，加上 seeds/ 的起始資料。
+DATA_ROOT = ROOT / "data"
+SEEDS_ROOT = ROOT / "seeds"
 
 
 def load_analysis(path: Path | str) -> dict[str, Any]:
@@ -67,18 +73,100 @@ def _trend(daily: list[dict[str, Any]], institutional: list[dict[str, Any]]) -> 
     return labels, indicators
 
 
+def _error(error: Exception) -> dict[str, str]:
+    """``kind`` 進模型輸入（各機器一樣）；``detail`` 可能有本機路徑，只進執行紀錄。"""
+    return {"kind": type(error).__name__, "detail": str(error)}
+
+
+def load_foreign_sources(data_root: Path | str | None, seeds_root: Path | str = SEEDS_ROOT) -> dict[str, Any]:
+    """外資層要的兩份序列（現貨每日彙總、期貨淨部位）。讀不到或原件不符時那一份是空的，原因記在 errors。
+
+    ``data_root`` 是 None 時什麼都不讀（外資讀數全部標 missing），測試用。"""
+    # 那斯達克（nasdaq）、美元指數（dollar_index）、美元兌台幣（usdtwd）由 D 票的海外資料接進這裡，
+    # 每個都是 [{"date", "close"}]；沒接上之前是空的，讀數 1、4 標 missing。
+    # nasdaq_in_prompt：本人 2026-11-16 決定 EODHD 的那斯達克也交給模型（D 票第 8 片）；整合時接
+    # overseas_inputs.LICENSES["eodhd"]["in_prompt"]，改成 False 就只存進紀錄、不交。
+    sources: dict[str, Any] = {"daily_flow": [], "futures": [], "proxy_daily": [], "nasdaq": [], "dollar_index": [],
+                               "usdtwd": [], "nasdaq_in_prompt": oi.LICENSES["eodhd"]["in_prompt"], "errors": {}}
+    if data_root is None:
+        sources["errors"] = {name: {"kind": "no_data_root", "detail": "沒有指定資料位置"}
+                             for name in ("daily_flow", "futures")}
+        return sources
+    root = Path(data_root)
+    stock_db = root / "stock-history/stock-history.sqlite"
+    try:
+        sources["daily_flow"] = foreign_flow.load_daily_flow(
+            root / "listed-institutional/listed_institutional.sqlite", stock_db,
+            seed=Path(seeds_root) / foreign_flow.FLOW_SEED.name)
+    except Exception as error:  # noqa: BLE001 — 讀不到就讓讀數標 missing，預測照寫
+        sources["errors"]["daily_flow"] = _error(error)
+    try:
+        if stock_db.exists():
+            sources["proxy_daily"] = foreign_flow.proxy_daily_from_stock_db(stock_db)
+    except Exception as error:  # noqa: BLE001
+        sources["errors"]["proxy_daily"] = _error(error)
+    try:
+        sources["futures"] = foreign_futures.positions(root / "foreign-futures",
+                                                       Path(seeds_root) / foreign_futures.SEED.name)
+    except Exception as error:  # noqa: BLE001
+        sources["errors"]["futures"] = _error(error)
+    return sources
+
+
+def _foreign_layer(daily: list[dict[str, Any]], base_date: str, sources: Mapping[str, Any], *,
+                   edition: str = "evening", us_before: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+    """回傳（交給模型的外資層, 只存進紀錄的部分）。"""
+    flow = [row for row in sources.get("daily_flow") or [] if row["date"] <= base_date]
+    futures = [row for row in sources.get("futures") or [] if row["date"] <= base_date]
+    layer = foreign_flow.build_layer(
+        base_date=base_date, index_daily=daily, daily_flow=flow, futures_positions=futures,
+        proxy_daily=sources.get("proxy_daily") or [], nasdaq=sources.get("nasdaq") or [],
+        dollar_index=sources.get("dollar_index") or [], usdtwd=sources.get("usdtwd") or [], edition=edition,
+        us_before=us_before,
+        nasdaq_in_prompt=bool(sources.get("nasdaq_in_prompt")),
+        sources={"daily_flow_to": flow[-1]["date"] if flow else None,
+                 "futures_to": futures[-1]["date"] if futures else None,
+                 "errors": {name: error["kind"] for name, error in (sources.get("errors") or {}).items()}})
+    return layer, layer.pop("record_only")
+
+
+def _with_overseas_series(sources: Mapping[str, Any], overseas: Mapping[str, Any] | None) -> dict[str, Any]:
+    """D 票的海外序列接進外資讀數 1、4（兩票 2026-11-16 對齊）：那斯達克、美元指數、美元兌台幣。
+
+    那斯達克算出來的讀數交不交給模型，照海外層的判斷（條款允許而且當天抓得到），沒有海外層時照 EODHD 的條款。"""
+    merged = dict(sources)
+    merged.setdefault("nasdaq_in_prompt", oi.LICENSES["eodhd"]["in_prompt"])
+    if not overseas:
+        return merged
+    series = overseas.get("series") or {}
+    for key in ("nasdaq", "dollar_index", "usdtwd"):
+        if series.get(key):
+            merged[key] = series[key]
+    in_prompt = overseas.get("series_in_prompt") or {}
+    if "nasdaq" in in_prompt:
+        merged["nasdaq_in_prompt"] = bool(in_prompt["nasdaq"])
+    return merged
+
+
 def build_day_input(analysis: Mapping[str, Any], method_text: str,
-                    overseas: Mapping[str, Any] | None = None) -> dict[str, Any]:
+                    overseas: Mapping[str, Any] | None = None,
+                    foreign_sources: Mapping[str, Any] | None = None, *,
+                    edition: str = "evening", session_date: str | None = None) -> dict[str, Any]:
     """把已發布的大盤資料整理成帳本要的一份當天輸入；基準日是日 K 的最後一天。
 
     ``overseas`` 是 ``overseas_inputs.build_layer`` 的結果：交給模型的部分進輸入，狀態、缺漏、條款不允許交給模型的
     數字與原件清單只進紀錄。沒給就是海外各項都缺（照樣寫，標明缺漏）。
+    外資層（G 票）一定附上；沒給 ``foreign_sources`` 時現貨與期貨讀數標 missing。海外層的那斯達克、美元指數、
+    美元兌台幣序列接進外資讀數 1、4；晨間版的那斯達克只看開盤日之前收盤的那一晚。
     """
     daily = list(analysis.get("daily") or [])
     institutional = list(analysis.get("institutional") or [])
     futures = list(analysis.get("futures") or [])
     base_date = daily[-1]["date"] if daily else None
     labels, indicators = _trend(daily, institutional) if daily else ({}, [])
+    sources = _with_overseas_series(foreign_sources or {}, overseas)
+    layer, record_only = (_foreign_layer(daily, base_date, sources, edition=edition, us_before=session_date)
+                          if base_date else (None, {}))
     return {
         "base_date": base_date,
         "index_daily": [{key: row.get(key) for key in ("date", "open", "high", "low", "close", "amount")} for row in daily],
@@ -98,20 +186,27 @@ def build_day_input(analysis: Mapping[str, Any], method_text: str,
             "institutional": institutional[-1]["date"] if institutional else None,
             "futures": futures[-1]["date"] if futures else None,
         },
+        "foreign_flow": layer,
         "method_text": method_text,
-        **_overseas_fields(overseas),
+        # 只存進紀錄、不交給模型的內容：外資讀數放 foreign_flow、海外放 overseas（2026-11-16 兩票對齊）。
+        **_overseas_fields(overseas, foreign_record_only=record_only),
     }
 
 
-def _overseas_fields(layer: Mapping[str, Any] | None) -> dict[str, Any]:
+def _overseas_fields(layer: Mapping[str, Any] | None, *,
+                     foreign_record_only: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    record_only: dict[str, Any] = {"foreign_flow": dict(foreign_record_only)} if foreign_record_only else {}
     if layer is None:
         return {"overseas": None,
-                "missing_inputs": [{"key": "overseas", "status": "missing", "reason": "這一份沒有海外資料"}]}
+                "missing_inputs": [{"key": "overseas", "status": "missing", "reason": "這一份沒有海外資料"}],
+                **({"record_only": record_only} if record_only else {})}
     fields = {"overseas": layer["prompt"], "overseas_cutoffs": layer["cutoffs"], "overseas_status": layer["status"],
               "missing_inputs": layer["missing"], "sources": layer["sources"]}
     if layer.get("withheld"):
         # 和 G 票共用 record_only：海外放 overseas、外資讀數放 foreign_flow（2026-11-16 兩票對齊）。
-        fields["record_only"] = {"overseas": layer["withheld"]}
+        record_only["overseas"] = layer["withheld"]
+    if record_only:
+        fields["record_only"] = record_only
     return fields
 
 
@@ -138,7 +233,7 @@ def _replay(analysis: Mapping[str, Any], day: str) -> dict[str, Any]:
 
 def _backfill_misses(analysis: Mapping[str, Any], method_text: str, ledger: Path, base_date: str, *,
                      model_bin: Path | str, model: str, clock: Callable[[], datetime],
-                     edition: str = "evening") -> list[str]:
+                     edition: str = "evening", foreign_sources: Mapping[str, Any] | None = None) -> list[str]:
     """帳本這一版最後一份之後、今天這一份之前，有日 K 卻沒有任何紀錄的基準日（整個時段沒跑）補記漏記。
 
     那些日子都已過期限，帳本不會呼叫模型，只鎖一筆漏記並寫下原因。帳本還沒有任何這一版的紀錄時不補（起點之前不算）。
@@ -159,7 +254,8 @@ def _backfill_misses(analysis: Mapping[str, Any], method_text: str, ledger: Path
             if index + 1 >= len(dates):
                 continue
             session = dates[index + 1]
-        fl.write_forecast(ledger, build_day_input(_replay(analysis, day), method_text), edition=edition,
+        fl.write_forecast(ledger, build_day_input(_replay(analysis, day), method_text, None, foreign_sources,
+                                          edition=edition, session_date=session), edition=edition,
                           model_bin=model_bin, model=model, now=clock, session_date=session)
         days.append(day)
     return days
@@ -230,6 +326,8 @@ def run_evening(
     log_output: Path | str | None = None,
     timeout_seconds: float = 360,
     overseas_dir: Path | str | None = None,
+    data_root: Path | str | None = None,
+    seeds_root: Path | str = SEEDS_ROOT,
 ) -> dict[str, Any]:
     if as_of and not dry_run:
         raise ValueError("重播某一天（as_of）只能在乾跑使用，正式帳本不補寫過去的預測")
@@ -243,11 +341,15 @@ def run_evening(
     method_text = Path(method_path).read_text(encoding="utf-8")
     daily = analysis.get("daily") or []
     layer = _layer(overseas_dir, edition="evening", base_date=daily[-1]["date"] if daily else None, session_date=None)
-    data = _with_archive_names(build_day_input(analysis, method_text, layer), overseas_dir, Path(ledger))
+    foreign_sources = load_foreign_sources(data_root, seeds_root)
+    data = _with_archive_names(build_day_input(analysis, method_text, layer, foreign_sources), overseas_dir,
+                               Path(ledger))
     base_date = data["base_date"]
     log: dict[str, Any] = {
         "schema": SCHEMA, "edition": "evening", "dry_run": dry_run, "base_date": base_date, "model": model,
         "started_at": clock().astimezone(fl.TAIPEI).isoformat(), "backfilled_misses": [],
+        "foreign_flow_missing": (data.get("foreign_flow") or {}).get("missing"),
+        "foreign_flow_errors": foreign_sources.get("errors"),
     }
 
     if date and date != base_date:
@@ -259,7 +361,8 @@ def run_evening(
             # 今天這份最早的到期日在明天，寫完之後不必再對一次。
             log["reconciliation"] = {key: len(value) for key, value in fl.reconcile(ledger, data["index_daily"]).items()}
             log["backfilled_misses"] = _backfill_misses(analysis, method_text, Path(ledger), base_date,
-                                                        model_bin=model_bin, model=model, clock=clock)
+                                                        model_bin=model_bin, model=model, clock=clock,
+                                                        foreign_sources=foreign_sources)
         result = _write(ledger, data, dry_run=dry_run, edition="evening", model_bin=model_bin, model=model,
                         now=clock, timeout_seconds=timeout_seconds)
         _log_result(log, result, overseas_dir=overseas_dir, ledger=Path(ledger), dry_run=dry_run)
@@ -297,6 +400,8 @@ def run_morning(
     timeout_seconds: float = 360,
     overseas_dir: Path | str | None = None,
     replay: bool = False,
+    data_root: Path | str | None = None,
+    seeds_root: Path | str = SEEDS_ROOT,
 ) -> dict[str, Any]:
     """寫一份晨間版：開盤日 session_date 的早上、開盤前 15 分鐘之前鎖定；基準日是前一個台股交易日。
 
@@ -324,12 +429,18 @@ def run_morning(
     analysis = {**analysis, **{key: _until(analysis.get(key), base_date) for key in ("daily", "institutional", "futures")}}
     method_text = Path(method_path).read_text(encoding="utf-8")
     layer = _layer(overseas_dir, edition="morning", base_date=base_date, session_date=session_date)
-    data = _with_archive_names(build_day_input(analysis, method_text, layer), overseas_dir, Path(ledger))
+    # 外資讀數（G 票）：晨間版的那斯達克只看開盤日之前收盤的那一晚（us_before＝開盤日）。
+    foreign_sources = load_foreign_sources(data_root, seeds_root)
+    data = _with_archive_names(build_day_input(analysis, method_text, layer, foreign_sources, edition="morning",
+                                               session_date=session_date), overseas_dir, Path(ledger))
+    log["foreign_flow_missing"] = (data.get("foreign_flow") or {}).get("missing")
+    log["foreign_flow_errors"] = foreign_sources.get("errors")
     log["base_date"] = base_date
 
     if not dry_run:
         log["backfilled_misses"] = _backfill_misses(analysis, method_text, Path(ledger), base_date, model_bin=model_bin,
-                                                    model=model, clock=clock, edition="morning")
+                                                    model=model, clock=clock, edition="morning",
+                                                    foreign_sources=foreign_sources)
     if data["base_date"] != base_date:
         # 日 K 停在更早的日子：基準日的資料還沒發布，或那天臨時休市（颱風假不在休市日曆裡）。交易日以日 K 實際
         # 有資料為準，所以這裡不寫也不記漏記；之後那天的日 K 出現了，下一次晨間執行會把它補記成漏記。
@@ -358,10 +469,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--overseas-dir", type=Path, help="overseas_inputs.py fetch 抓好的原件資料夾")
     parser.add_argument("--sql-output", type=Path)
     parser.add_argument("--log-output", type=Path)
+    parser.add_argument("--data-root", type=Path, default=DATA_ROOT,
+                        help="外資層讀的工作集資料夾（上市法人、個股日線、外資台指期部位）")
     args = parser.parse_args(argv)
     common = dict(ledger=args.ledger, method_path=args.method, model_bin=args.agy_bin, model=args.model,
                   dry_run=args.dry_run, sql_output=args.sql_output, log_output=args.log_output,
-                  overseas_dir=args.overseas_dir)
+                  overseas_dir=args.overseas_dir, data_root=args.data_root)
     if args.edition == "morning":
         if not args.session_date or args.date:
             parser.error("晨間版要給 --session-date，不接受 --date")

@@ -23,6 +23,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+import foreign_flow
 # 鎖定、雜湊、模型呼叫、期限與方法版本和關注帳本共用（ledger_core），這裡只留預測帳本自己的規則。
 from ledger_core import (
     EDITIONS,
@@ -63,8 +64,10 @@ REQUIRED_INPUTS = ("index", "institutional", "futures")
 # 候選關卡與基準的參數：在第一筆紀錄之前寫定，整組算進輸入版本，改了就是新系列。
 PARAMETERS: dict[str, Any] = {
     # 交給模型的輸入層；某一層「有或沒有」才換輸入版本（教訓層內容隨時間增長不換）。
-    # 海外層（D 票）與相似盤勢、教訓層（E 票）同時上，輸入版本照四層一起算。
-    "layers": ["base", "overseas", "similar", "lessons"],
+    # 海外層（D 票）、外資層（G 票，本人 2026-11-15 定案加入外資讀數；讀數與歷史統計由 foreign_flow 算，模型只讀）、
+    # 相似盤勢與教訓層（E 票）同時上，輸入版本照五層一起算。
+    "layers": ["base", "overseas", "foreign_flow", "similar", "lessons"],
+    "foreign_flow_layer": foreign_flow.VERSION,
     "ma_periods": [5, 10, 20, 60, 120, 240],
     "high_low_windows": [20, 60, 240],
     "gap_lookback_bars": 240,
@@ -122,12 +125,17 @@ _PROMPT_RULES = (
     "reason（理由）與 invalidation（什麼情況代表看錯）只寫繁體中文質化判斷，不得出現任何阿拉伯／全形／中文數字、日期或價格；"
     "要引用價位就把候選 id 放進 reason_refs／invalidation_refs，程式會代入名字與數值。",
     # 本人 2026-11-15 看過真 Gemini 乾跑後選「先改提示再乾跑」：下面兩條是那次加的。
-    "理由與看錯條件只能引用 INPUT_JSON 裡有的資料（日 K、指標、法人與期貨、候選關卡、布林位置、overseas、方法稿）；"
+    "理由與看錯條件只能引用 INPUT_JSON 裡有的資料（日 K、指標、法人與期貨、外資讀數、候選關卡、布林位置、overseas、方法稿）；"
     "INPUT_JSON 沒給的資料（例如融資、新聞、overseas.not_provided 列出的項目）不得當成事實寫進去。",
     # D 票（2026-11-16）：布林位置與海外層的使用規則。
     "bollinger 只是位置描述：歷史上用布林通道調整持股水位沒有通過及格線，不可單獨當成轉強或轉弱的理由。",
     "overseas 每一項都標了資料日期：美國的收盤是台北前一晚（晨間版是剛收盤那一晚），status 不是 ok 的項目代表休市、"
-    "沒抓到或不是預期那天的收盤，不得當成最新行情。外資的買賣解釋當天的漲跌，不代表之後會續漲或續跌。",
+    "沒抓到或不是預期那天的收盤，不得當成最新行情。",
+    # G 票：外資讀數（本人 2026-11-15「要，加進去」「要，加第六個」）。
+    "foreign_flow 是程式算好的外資讀數與歷史統計，只能照讀，不可自己重算或改數字；status 是 missing 的讀數當作沒有。"
+    "外資的買賣解釋當天的漲跌，不代表之後會續漲或續跌：不得把外資賣超、外資續賣的機率（或期貨加空）直接當成之後會跌的理由，"
+    "也不得把期貨淨空單的多寡當成看空的理由；不得把不是外資統計講的事（例如均線壓力）說成外資統計的結論。"
+    "要和 foreign_flow.notes 與各讀數附的歷史統計一起看。",
     "每一格到期後，程式會把你的落點命中率和「照歷史亂猜」並排比較：照歷史亂猜是不看任何判斷、只看歷史上同樣距離的兩條線"
     "收盤落在各區的比例。兩條線拉得越寬，「兩線之間」在歷史上本來就越常中，所以只為了保險把線拉寬，比不贏照歷史亂猜。",
     f"regime 從固定清單選一個：{'、'.join(REGIMES)}。base_date 照抄 INPUT_JSON 的 base_date。",
@@ -324,6 +332,7 @@ def _model_input(data: Mapping[str, Any], rows: list[dict[str, Any]], edition: s
         "trend_labels": copy.deepcopy(dict(data.get("trend_labels") or {})),
         "indicators": copy.deepcopy(data.get("indicators")),
         "chips": copy.deepcopy(data.get("chips")),
+        "foreign_flow": copy.deepcopy(data.get("foreign_flow")),
         "data_cutoffs": _cutoffs(data),
         "candidates": candidates,
         "bollinger": _bollinger(rows),
@@ -500,6 +509,9 @@ def write_forecast(
         "input": model_input, "input_sha256": input_sha,
         "attempts": [],
     }
+    if data.get("record_only"):
+        # 只存進紀錄、不交給模型（例如來源條款只允許私用的海外資料）；跟著整筆一起封存。
+        record["record_only"] = copy.deepcopy(dict(data["record_only"]))
 
     def finish(kind: str, **fields: Any) -> dict[str, Any]:
         record.update(kind=kind, locked_at=clock().astimezone(TAIPEI).isoformat(), **fields)

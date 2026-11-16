@@ -474,6 +474,11 @@ class StateSyncTest(unittest.TestCase):
         for path in ("data/fundamentals/twt93u", "data/market-snapshots/stock-detail", "data/otc-credit"):
             self.assertGreaterEqual(by_path[path].recent_files, 25, path)
 
+    def test_foreign_futures_raw_files_are_all_kept(self) -> None:
+        # 預測帳本 G 票第 14 片：期交所只開放查近三年，外資台指期部位要每天累積；裁掉就拉不長。
+        by_path = {item.path: item for item in ss.WORKING_SET}
+        self.assertEqual(by_path["data/foreign-futures"].recent_files, 0)
+
     def test_announcement_raw_files_are_not_in_the_working_set(self) -> None:
         # 重大訊息原件由早上的排程與每日更新各自寫入 R2 的獨立資料夾；放進整批換新的工作集會被蓋掉。
         self.assertNotIn("data/announcements/raw", {item.path for item in ss.WORKING_SET})

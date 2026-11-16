@@ -854,12 +854,26 @@ def otc_credit_day(root: Path, day: str, *, get: Callable | None = None, sleep: 
 # 補齊 R2 上的原件、抓當日、把新的傳回 R2。在這裡再抓一次只會存在本機、不會進雲端。
 
 
+# ---- 外資台指期部位（預測帳本 G 票第 14 片；期交所只開放查近三年，要每天存下來才拉得長） ----
+
+FOREIGN_FUTURES_BACKFILL_DAYS = 10   # 漏抓的日子在這幾個交易日內補回來；平常每天只有當天那兩個請求
+
+
+def foreign_futures_day(root: Path, day: str, *, post: Callable | None = None, sleep: Callable = time.sleep,
+                        backfill_days: int = FOREIGN_FUTURES_BACKFILL_DAYS) -> dict:
+    """期交所「三大法人－區分各期貨契約」的大台、小台各一份，原件存 data/foreign-futures/raw/；最近幾天缺的一併補。"""
+    import foreign_futures as ff
+
+    return ff.fetch_recent(root / "data/foreign-futures", _otc_trading_days(root, day, backfill_days),
+                           post=post, sleep=sleep)
+
+
 # ---- 每日協調器呼叫的兩個入口 ----
 
 REQUIRED_DATASETS = ("listed_quotes", "otc_quotes", "listed_institutional", "otc_institutional")
 OPTIONAL_DATASETS = ("otc_index", "twse_valuation", "tpex_valuation", "otc_corporate_actions",
                      "listed_corporate_actions", "capital_supplement", "tdcc_holders",
-                     "fundamentals", "taiex_index", "listed_chip_detail", "otc_credit")
+                     "fundamentals", "taiex_index", "listed_chip_detail", "otc_credit", "foreign_futures")
 
 
 def _interval(previous: dict | None, sleep: Callable) -> None:
@@ -969,6 +983,7 @@ def fetch_day(day: str, *, root: Path = ROOT, sleep: Callable = time.sleep, incl
     timed("listed_chip_detail", lambda: {"status": "ok", "datasets": listed_chip_detail_day(root, day, sleep=sleep)})
     sleep(5.0)   # 前一步打證交所，這裡固定再等一下才打櫃買（不靠前一步回報的請求數）
     timed("otc_credit", lambda: otc_credit_day(root, day, sleep=sleep))
+    timed("foreign_futures", lambda: foreign_futures_day(root, day, sleep=sleep))  # 期交所，另一個網域
     if include_fundamentals:
         timed("fundamentals", lambda: fundamentals_day(data / "fundamentals-history", day))
     blocking = [name for name in REQUIRED_DATASETS if datasets.get(name, {}).get("status") not in

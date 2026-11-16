@@ -160,8 +160,8 @@ class SimilarRegimeTests(SimilarRegimeTestCase):
 
     def test_similar_and_lesson_layers_name_a_new_input_version(self):
         _, record = self.layer()
-        # D 票的海外層與 E 票同時合進來，輸入版本照四層一起算（owner 11-16 整合）。
-        self.assertRegex(record["input_version"], r"^base\+overseas\+similar\+lessons-v1-[0-9a-f]{8}$")
+        # D 票的海外層、G 票的外資層與 E 票一起合進來，輸入版本照五層一起算（owner 11-16 整合）。
+        self.assertRegex(record["input_version"], r"^base\+overseas\+foreign_flow\+similar\+lessons-v1-[0-9a-f]{8}$")
 
 
 # ---- 教訓層：沿用帳本測試的日 K（a）與之後的 FUTURE ----

@@ -376,5 +376,95 @@ class OverseasRunTests(MorningTestCase):
         self.assertFalse((self.ledger / "sources").exists())
 
 
+class ForeignFlowLayerTests(RunTestCase):
+    """G 票：晚間版的輸入多一層外資讀數，從工作集的資料庫與期貨原件算，跟著預測一起鎖進帳本。"""
+
+    def data_root(self):
+        import sqlite3
+
+        import foreign_futures
+        from test_foreign_futures import FakePost, csv_bytes, row
+        root = self.tmp / "data"
+        (root / "listed-institutional").mkdir(parents=True)
+        (root / "stock-history").mkdir(parents=True)
+        con = sqlite3.connect(root / "listed-institutional/listed_institutional.sqlite")
+        con.execute("CREATE TABLE institutional (date TEXT, code TEXT, foreign_net INTEGER)")
+        # 最後三天外資賣超台積電 100 萬股（× 收盤 1000 = -10 億），之前每天買超 100 萬股
+        con.executemany("INSERT INTO institutional VALUES (?,?,?)",
+                        [(d, "2330", -1_000_000 if i >= len(DATES) - 3 else 1_000_000) for i, d in enumerate(DATES)])
+        con.commit(); con.close()
+        con = sqlite3.connect(root / "stock-history/stock-history.sqlite")
+        con.execute("CREATE TABLE daily (date TEXT, code TEXT, close REAL, turnover INTEGER)")
+        con.executemany("INSERT INTO daily VALUES (?,?,?,?)", [(d, "2330", 1000.0, 100_000_000_000) for d in DATES])
+        con.commit(); con.close()
+        slash = BASE.replace("-", "/")
+        foreign_futures.fetch_day(root / "foreign-futures", BASE, sleep=lambda s: None, post=FakePost({
+            "TXF": csv_bytes(row(slash, "臺股期貨", "外資及陸資", -1200)),
+            "MXF": csv_bytes(row(slash, "小型臺指期貨", "外資及陸資", 400))}))
+        return root
+
+    def test_layer_is_locked_with_the_forecast(self):
+        empty_seeds = self.tmp / "no-seeds"
+        result = self.run_evening(data_root=self.data_root(), seeds_root=empty_seeds)
+        self.assertEqual(result["outcome"], "written")
+        # 那斯達克與美元的來源屬 D 票，還沒接上
+        self.assertEqual(result["foreign_flow_missing"], ["nasdaq_last_session", "dollar_and_twd_vs_foreign"])
+        record = fl.read_ledger(self.ledger)["forecasts"][0]
+        layer = record["input"]["foreign_flow"]
+        readings = layer["readings"]
+        self.assertEqual(readings["streak_and_cumulative"]["streak"], {"side": "sell", "days": 3})
+        self.assertEqual(readings["tsmc_split"]["tsmc_billion"], -10.0)
+        self.assertEqual(readings["futures_net_position"]["net_contracts"], -1100)   # -1200 + 400/4
+        self.assertIn("不代表之後會續漲或續跌", layer["notes"]["spot"])
+        self.assertEqual(layer["sources"]["futures_to"], BASE)
+        self.assertIn("foreign_flow", record["input"]["parameters"]["layers"])
+
+    def test_nasdaq_numbers_are_sealed_in_the_record_but_not_given_to_the_model(self):
+        root = self.data_root()
+        real = fr.load_foreign_sources
+        nasdaq = [{"date": d, "close": 100 + i} for i, d in enumerate(DATES[:-1])]
+
+        def with_nasdaq(data_root, seeds_root=fr.SEEDS_ROOT):
+            sources = real(data_root, seeds_root)
+            sources["nasdaq"] = nasdaq
+            sources["nasdaq_in_prompt"] = False      # 條款開關關掉時
+            return sources
+
+        fr.load_foreign_sources = with_nasdaq
+        try:
+            self.run_evening(data_root=root, seeds_root=self.tmp / "no-seeds")
+        finally:
+            fr.load_foreign_sources = real
+        record = fl.read_ledger(self.ledger)["forecasts"][0]
+        self.assertEqual(record["input"]["foreign_flow"]["readings"]["nasdaq_last_session"]["status"], "withheld")
+        self.assertNotIn("record_only", record["input"]["foreign_flow"])
+        kept = record["record_only"]["foreign_flow"]["nasdaq_last_session"]
+        self.assertEqual(kept["us_close_date"], DATES[-2])
+
+    def test_without_data_the_forecast_is_still_written_and_the_gap_is_named(self):
+        result = self.run_evening()
+        self.assertEqual(result["outcome"], "written")
+        self.assertEqual(result["foreign_flow_missing"], ["nasdaq_last_session", "streak_and_cumulative", "tsmc_split",
+                                                          "dollar_and_twd_vs_foreign", "futures_net_position"])
+
+
+class OverseasFeedsForeignFlowTests(MorningTestCase):
+    """D 票與 G 票接在一起（owner 2026-11-16 整合）：海外層的那斯達克序列就是外資讀數 1 用的那一份。"""
+
+    def test_the_nasdaq_series_feeds_the_foreign_flow_reading_of_each_edition(self):
+        # 晚間版看基準日前一晚的美股；晨間版看開盤日之前剛收盤的那一晚（就是基準日當晚）。
+        self.run_evening(overseas_dir=self.overseas(BASE, "evening"))
+        self.run_morning(overseas_dir=self.overseas(SESSION, "morning"))
+        records = {r["edition"]: r for r in fl.read_ledger(self.ledger)["forecasts"]}
+        evening = records["evening"]["input"]["foreign_flow"]["readings"]["nasdaq_last_session"]
+        morning = records["morning"]["input"]["foreign_flow"]["readings"]["nasdaq_last_session"]
+        self.assertEqual((evening["status"], evening["us_close_date"], evening["change_pct"]), ("ok", DATES[-2], 1.0))
+        self.assertEqual((morning["status"], morning["us_close_date"], morning["change_pct"]), ("ok", BASE, 2.0))
+
+    def test_without_overseas_data_the_reading_is_missing_and_the_forecast_is_still_written(self):
+        result = self.run_evening()
+        self.assertEqual(result["outcome"], "written")
+        self.assertIn("nasdaq_last_session", result["foreign_flow_missing"])
+
 if __name__ == "__main__":
     unittest.main()
