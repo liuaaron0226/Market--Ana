@@ -373,19 +373,20 @@ test("開關打開但資料表還沒建立：後台照常列出使用者，全�
   env.DB._raw.exec("DROP TABLE friend_gemini_keys");
   const res = await req("/api/admin/users", { email: OWNER });
   assert.equal(res.status, 200);
-  assert.ok((await res.json()).users.every((u) => u.gemini_configured === false));
+  assert.ok((await res.json()).users.every((u) => u.gemini.configured === false));
 });
 
-test("後台每位使用者只多一個「已設定／未設定」，沒有密文也沒有解讀內容", async () => {
+test("後台每位使用者只多一份 Gemini 狀態，沒有密文也沒有解讀內容", async () => {
   await save();
   await addUser("none@example.com");
   const res = await req("/api/admin/users", { email: OWNER });
   const { users } = await res.json();
   const byEmail = Object.fromEntries(users.map((u) => [u.email, u]));
-  assert.equal(byEmail[FRIEND].gemini_configured, true);
-  assert.equal(byEmail["none@example.com"].gemini_configured, false);
+  assert.equal(byEmail[FRIEND].gemini.configured, true);
+  assert.equal(byEmail["none@example.com"].gemini.configured, false);
   for (const user of users) {
-    assert.deepEqual(Object.keys(user).sort(), ["applied_at", "decided_at", "email", "gemini_configured", "nickname", "status"]);
+    assert.deepEqual(Object.keys(user).sort(), ["applied_at", "decided_at", "email", "gemini", "nickname", "status"]);
+    assert.deepEqual(Object.keys(user.gemini).sort(), ["configured", "last_failure_reason", "last_success_at", "paused"]);
   }
 });
 
@@ -408,7 +409,7 @@ test("開關關著：入口在讀資料庫之前就回沒有內容，設定頁�
 
   env.DB = realDb;
   const { users } = await (await req("/api/admin/users", { email: OWNER })).json();
-  assert.ok(users.every((u) => !("gemini_configured" in u)), "開關關著時後台回應不變");
+  assert.ok(users.every((u) => !("gemini" in u)), "開關關著時後台回應不變");
   for (const value of ["1", "true", "On", "owner", "all", " on"]) {
     env.MARKET_ANA_FRIEND_AI = value;
     assert.deepEqual(await (await req("/api/friend-ai")).json(), { available: false }, `只認一字不差的 on：${value}`);
@@ -519,4 +520,79 @@ test("朋友的功能清單裡沒有站主的 AI 解讀（策略總開關打開�
   assert.equal(friend.features.ai_digest, false);
   const owner = await (await req("/api/features", { email: OWNER })).json();
   assert.equal(owner.features.ai_digest, true);
+});
+
+// 04 票：金鑰失效與額度用完——當天留白，朋友看得到原因與回設定頁的入口；站主後台只看狀態。
+const QUOTA_TEXT = "今天的免費額度用完了，明天會照常再試";
+const REVOKED_TEXT = "金鑰被撤銷或停用：Google 拒絕這把金鑰，請到 Gemini 設定換一把";
+const setKeyState = (fields) => {
+  const sets = Object.keys(fields).map((name) => `${name} = ?`).join(", ");
+  env.DB._raw.prepare(`UPDATE friend_gemini_keys SET ${sets} WHERE email = ?`).run(...Object.values(fields), FRIEND);
+};
+
+test("額度用完的那天：首頁拿到未產生與一般人看得懂的原因，不拿前一天的內容", async () => {
+  await save();
+  addDigest(FRIEND, "2026-11-10", "market", { content: MARKET });
+  addDigest(FRIEND, "2026-11-10", "flow", { content: FLOW });
+  addDigest(FRIEND, "2026-11-11", "market", { status: "unproduced", error: "quota" });
+  addDigest(FRIEND, "2026-11-11", "flow", { status: "unproduced", error: "quota" });
+  setKeyState({ last_failure_reason: QUOTA_TEXT });
+  const body = await (await req("/api/friend-ai/digest")).json();
+  assert.equal(body.data_date, "2026-11-11");
+  assert.equal(body.market.status, "unproduced");
+  assert.equal(body.market.content, null);
+  assert.deepEqual(body.notice, { text: QUOTA_TEXT, paused: false });
+  assert.ok(!JSON.stringify(body).includes("我的結論"));
+});
+
+test("金鑰被暫停：排程跳過他，首頁拿到暫停的原因；沒有失敗原因時也有說明", async () => {
+  await save();
+  addDigest(FRIEND, "2026-11-10", "market", { content: MARKET });
+  addDigest("other@example.com", "2026-11-11", "market", { content: MARKET });
+  setKeyState({ status: "paused", last_failure_reason: REVOKED_TEXT });
+  let body = await (await req("/api/friend-ai/digest")).json();
+  assert.equal(body.data_date, "2026-11-11");
+  assert.equal(body.market.status, "unproduced");
+  assert.deepEqual(body.notice, { text: REVOKED_TEXT, paused: true });
+  setKeyState({ last_failure_reason: null });
+  body = await (await req("/api/friend-ai/digest")).json();
+  assert.equal(body.notice.paused, true);
+  assert.match(body.notice.text, /Gemini 設定/);
+});
+
+test("今天產生成功或還沒輪到：沒有提示", async () => {
+  await save();
+  addDigest(FRIEND, "2026-11-10", "market", { content: MARKET });
+  addDigest(FRIEND, "2026-11-10", "flow", { content: FLOW });
+  assert.equal((await (await req("/api/friend-ai/digest")).json()).notice, null);
+});
+
+test("暫停的金鑰換上新的、試呼叫成功：回到可用，提示消失；試呼叫失敗就維持暫停", async () => {
+  await save();
+  setKeyState({ status: "paused", last_failure_reason: REVOKED_TEXT });
+  geminiReply = () => googleError(403, "PERMISSION_DENIED");
+  assert.equal((await req("/api/friend-ai/key", { method: "POST", body: { key: FAKE_KEY_2 } })).status, 400);
+  assert.equal(row().status, "paused");
+  assert.equal(env.DB._raw.prepare(usableKeysSql()).all().length, 0, "暫停的金鑰排程挑不到");
+  geminiReply = () => new Response(JSON.stringify({ candidates: [] }), { status: 200 });
+  const res = await req("/api/friend-ai/key", { method: "POST", body: { key: FAKE_KEY_2 } });
+  assert.equal(res.status, 200);
+  const status = await res.json();
+  assert.equal(status.status, "active");
+  assert.equal(status.last_failure_reason, null);
+  assert.deepEqual(env.DB._raw.prepare(usableKeysSql()).all().map((r) => r.email), [FRIEND]);
+  assert.equal((await (await req("/api/friend-ai/digest")).json()).notice, null);
+});
+
+test("站主後台：每位朋友有最後成功時間、最近失敗原因與是否暫停，回應裡沒有解讀內容或持股", async () => {
+  await save();
+  addDigest(FRIEND, "2026-11-11", "market", { content: MARKET });
+  setKeyState({ last_success_at: "2026-11-11T10:00:00Z", last_failure_reason: QUOTA_TEXT, status: "paused" });
+  await addUser("none@example.com");
+  const { users } = await (await req("/api/admin/users", { email: OWNER })).json();
+  const byEmail = Object.fromEntries(users.map((u) => [u.email, u]));
+  assert.deepEqual(byEmail[FRIEND].gemini, { configured: true, paused: true, last_success_at: "2026-11-11T10:00:00Z", last_failure_reason: QUOTA_TEXT });
+  assert.deepEqual(byEmail["none@example.com"].gemini, { configured: false, paused: false, last_success_at: null, last_failure_reason: null });
+  const text = JSON.stringify(users);
+  for (const banned of ["我的結論", "ciphertext", "content", "2330"]) assert.ok(!text.includes(banned), banned);
 });

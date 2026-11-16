@@ -1048,3 +1048,21 @@
     say(error.message, 'error');
   });
 })();
+
+// 開放給朋友 04 票：朋友今天的 AI 解讀沒產生（額度用完、金鑰失效…）時，在自選股頁也寫出原因並附回設定頁的入口。
+// 開關關著、站主或沒設定金鑰的人，入口不會回 notice，這裡什麼都不做。
+(() => {
+  'use strict';
+  if (typeof document === 'undefined') return;
+  const box = document.getElementById('friendAiNotice');
+  const text = document.getElementById('friendAiNoticeText');
+  if (!box || !text) return;
+  fetch('/api/friend-ai/digest', { cache: 'no-store', headers: { Accept: 'application/json' } })
+    .then(response => (response.ok ? response.json() : null))
+    .then(payload => {
+      if (!payload?.available || !payload.notice?.text) return;
+      text.textContent = payload.notice.text;
+      box.hidden = false;
+    })
+    .catch(() => { /* 讀不到就不顯示，不影響自選股本身 */ });
+})();

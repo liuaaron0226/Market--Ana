@@ -140,5 +140,6 @@ label.check input { width: 18px; height: 18px; margin: 3px 0 0; flex: none; acce
 .note.inline { margin: 0 0 0 10px; }
 .state.gemini { color: var(--faint); }
 .state.gemini.on { color: var(--down); }
+.state.paused, .state.gemini.paused { color: var(--up); }
 .chips { display: inline-flex; gap: 6px; flex-wrap: wrap; }
 .row + input[type="password"] { margin-top: 12px; }

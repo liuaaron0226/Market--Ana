@@ -23,6 +23,11 @@
 .pf-title-row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 6px 16px; padding: 24px 0 16px; }
 .pf-title-row h1 { font: 600 26px/1.15 var(--serif); letter-spacing: .01em; }
 .pf-freshness { color: var(--faint); font: 12px var(--mono); white-space: nowrap; }
+/* 04 票：朋友當天的 AI 解讀沒產生的原因，附回 Gemini 設定的入口。 */
+.pf-ai-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin: 0 0 14px; color: var(--dim); font-size: 13.5px; line-height: 1.55; }
+.pf-ai-notice[hidden] { display: none; }
+.pf-ai-notice a { min-height: 44px; display: inline-flex; align-items: center; gap: 4px; color: var(--accent); font-weight: 600; text-decoration: none; }
+.pf-ai-notice a:hover { text-decoration: underline; }
 
 .pf-level { margin-bottom: 40px; padding: 24px 0; border-top: 1px solid var(--ink); }
 .pf-level-head { display: flex; align-items: end; justify-content: space-between; gap: 24px; }

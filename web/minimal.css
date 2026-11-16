@@ -1100,6 +1100,8 @@ html, body { height: auto; }
 .ai-digest-setup:hover { text-decoration: underline; }
 .ai-digest-setup[hidden] { display: none; }
 .ai-digest-card[data-state="unproduced"] .ai-digest-conclusion { color: var(--dim); }
+/* 04 票：當天沒產生的原因（額度用完、金鑰失效…），一般人看得懂的一句話。 */
+.ai-digest-reason { grid-column: 1; color: var(--dim); font-size: 13.5px; line-height: 1.55; }
 
 @media (max-width: 760px) {
   .ai-digest-card { grid-template-columns: minmax(0, 1fr); gap: 9px; padding: 17px 16px 15px 20px; border-radius: 18px; }

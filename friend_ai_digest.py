@@ -3,6 +3,8 @@
 輸入只有證交所、櫃買的官方開放資料（``ai_digest_inputs.build_friend_input``），不含新聞、國外行情、任何人的持股。
 驗證與失敗處理和站主那條線共用 ``ai_digest.digest_with_model``：驗證不過、金鑰失效、額度用完都標「未產生」，
 不補猜、不沿用舊內容，也不改用站主的 agy。一位朋友失敗不影響其他人。
+04 票：Gemini 的錯誤分四類——額度用完（當天未產生，隔天照常）、金鑰無效或被撤銷（當天未產生，金鑰暫停到朋友換新的）、
+暫時錯誤（當次有限次重試）、其他（當天未產生）。
 解開後的金鑰只留在記憶體，不寫檔、不印進記錄或稽核。
 """
 from __future__ import annotations
@@ -12,6 +14,7 @@ import http.client
 import json
 import os
 import subprocess
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -28,13 +31,20 @@ GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:ge
 SECTIONS = ("market", "flow")
 # 單次呼叫上限：10 位朋友最壞也在 job 的 60 分鐘內跑完、寫得進資料庫。
 GEMINI_TIMEOUT_SECONDS = 120
+# 暫時錯誤（Google 5xx、408、連線中斷）在當次排程內最多呼叫幾次、每次重試前等幾秒。
+# 等滿 120 秒的逾時不重試：十位朋友各重試一輪逾時，就會超過 job 的 60 分鐘。
+GEMINI_ATTEMPTS = 3
+RETRY_DELAYS_SECONDS = (10, 30)
+# 這幾類代表金鑰本身不能用：暫停這把金鑰，排程之後跳過，等朋友換一把試呼叫成功的（lib/friend-ai.js saveKey 改回 active）。
+PAUSING_FAILURES = frozenset({"key_invalid", "key_revoked"})
 # 寫進 friend_gemini_keys.last_failure_reason：設定頁與後台會原樣顯示，所以存中文說明；分類碼另外存在 friend_ai_daily.error_code。
 FAILURE_TEXT = {
     "key_invalid": "金鑰無效：可能已刪除或過期，請到 Gemini 設定換一把",
     "key_revoked": "金鑰被撤銷或停用：Google 拒絕這把金鑰，請到 Gemini 設定換一把",
     "quota": "今天的免費額度用完了，明天會照常再試",
     "region": "Google 在你所在的地區不提供免費額度",
-    "gemini_unavailable": "暫時連不到 Google，今天的解讀沒有產生",
+    "gemini_unavailable": "暫時連不到 Google，今天的解讀沒有產生，下一個交易日會再試",
+    "gemini_rejected": "Google 沒有接受今天的請求，解讀沒有產生，下一個交易日會再試",
     "key_decrypt_failed": "網站讀不到你的金鑰，請到 Gemini 設定重新貼一次",
     "validation_failed": "今天的解讀沒有通過數字與代號檢查，所以沒有顯示",
     "structured_output_invalid": "今天的解讀格式不正確，所以沒有顯示",
@@ -52,6 +62,10 @@ class GeminiHttpError(Exception):
         self.status = status
         self.error_status = error_status
         self.reasons = reasons
+
+
+class GeminiTimeout(OSError):
+    """等滿單次上限仍沒有回應：算暫時錯誤，但不重試（見 GEMINI_ATTEMPTS）。"""
 
 
 def _definitions_inlined(schema: Any, defs: dict[str, Any]) -> Any:
@@ -96,7 +110,8 @@ def _usage(reply: dict[str, Any]) -> dict[str, int | None]:
 
 
 def classify_http_error(error: GeminiHttpError) -> str:
-    """和 01 票試呼叫同一套分類（cloud/lib/friend-ai.js 的 trialCall）。"""
+    """金鑰類與額度類和 01 票試呼叫同一套分類（cloud/lib/friend-ai.js 的 trialCall）；
+    試呼叫失敗一律不保存，所以那邊不必再分「暫時」與「其他」。"""
     if error.status in (429, 402):
         return "quota"
     if error.status == 401:
@@ -108,21 +123,36 @@ def classify_http_error(error: GeminiHttpError) -> str:
             return "region"
         if "API_KEY_INVALID" in error.reasons:
             return "key_invalid"
-    return "gemini_unavailable"
+    if error.status >= 500 or error.status == 408:
+        return "gemini_unavailable"
+    return "gemini_rejected"
 
 
-def call_gemini(prompt: str, model: str, *, api_key: str, post: Callable,
-                url_template: str = GEMINI_URL) -> tuple[Any, dict[str, int | None]]:
+def _post_with_retry(post: Callable, url: str, body: dict[str, Any], api_key: str, *, sleep: Callable[[float], None]) -> Any:
+    """只有暫時錯誤（5xx、408、連線中斷）重試；額度、金鑰、其他錯誤與逾時都只呼叫一次。"""
+    for attempt in range(1, GEMINI_ATTEMPTS + 1):
+        try:
+            return post(url, body, api_key), attempt
+        except GeminiHttpError as error:
+            code = classify_http_error(error)
+            if code != "gemini_unavailable" or attempt == GEMINI_ATTEMPTS:
+                raise ModelCallFailed(code, None, {"http_status": error.status, "attempts": attempt}) from None
+        except GeminiTimeout as error:
+            raise ModelCallFailed("gemini_unavailable", None, {"error": type(error).__name__, "attempts": attempt}) from None
+        except OSError as error:
+            if attempt == GEMINI_ATTEMPTS:
+                raise ModelCallFailed("gemini_unavailable", None, {"error": type(error).__name__, "attempts": attempt}) from None
+        sleep(RETRY_DELAYS_SECONDS[min(attempt, len(RETRY_DELAYS_SECONDS)) - 1])
+    raise AssertionError("unreachable")
+
+
+def call_gemini(prompt: str, model: str, *, api_key: str, post: Callable, url_template: str = GEMINI_URL,
+                sleep: Callable[[float], None] = time.sleep) -> tuple[Any, dict[str, int | None]]:
     body = {
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "generationConfig": {"responseMimeType": "application/json", "responseJsonSchema": FRIEND_SCHEMA},
     }
-    try:
-        reply = post(url_template.format(model=model), body, api_key)
-    except GeminiHttpError as error:
-        raise ModelCallFailed(classify_http_error(error), None, {"http_status": error.status}) from None
-    except OSError as error:
-        raise ModelCallFailed("gemini_unavailable", None, {"error": type(error).__name__}) from None
+    reply, _attempts = _post_with_retry(post, url_template.format(model=model), body, api_key, sleep=sleep)
     usage = _usage(reply)
     try:
         parts = reply["candidates"][0]["content"]["parts"]
@@ -145,10 +175,12 @@ def _friend_validated_rows(payload, structured, model, usage):
     return [row for row in rows if row["digest_type"] in SECTIONS], rejected
 
 
-def _digest_one(payload: dict[str, Any], api_key: str, *, post: Callable, model: str, url_template: str) -> dict[str, Any]:
+def _digest_one(payload: dict[str, Any], api_key: str, *, post: Callable, model: str, url_template: str,
+                sleep: Callable[[float], None]) -> dict[str, Any]:
     return digest_with_model(
         payload, prompt=build_friend_prompt(payload), model=model, crash_code="gemini_failed",
-        call_model=lambda prompt, chosen: call_gemini(prompt, chosen, api_key=api_key, post=post, url_template=url_template),
+        call_model=lambda prompt, chosen: call_gemini(prompt, chosen, api_key=api_key, post=post, url_template=url_template,
+                                                      sleep=sleep),
         validate=_friend_validated_rows, failure_rows=_friend_failure_rows,
     )
 
@@ -160,14 +192,14 @@ def _failed(payload: dict[str, Any], model: str, code: str, error: Exception) ->
 
 
 def _one_friend(payload: dict[str, Any], key_row: dict[str, Any], *, decrypt: Callable, post: Callable,
-                model: str, url_template: str) -> dict[str, Any]:
+                model: str, url_template: str, sleep: Callable[[float], None]) -> dict[str, Any]:
     # 每位朋友各自收尾：任何例外都只讓他自己這天「未產生」，例外內容只記類別，不記訊息（可能帶上游原文）。
     try:
         api_key = decrypt(key_row)
     except Exception as error:  # noqa: BLE001 — 解不開的原因不重要，重要的是不影響下一位
         return _failed(payload, model, "key_decrypt_failed", error)
     try:
-        return _digest_one(payload, api_key, post=post, model=model, url_template=url_template)
+        return _digest_one(payload, api_key, post=post, model=model, url_template=url_template, sleep=sleep)
     except Exception as error:  # noqa: BLE001
         return _failed(payload, model, "internal_error", error)
     finally:
@@ -175,27 +207,31 @@ def _one_friend(payload: dict[str, Any], key_row: dict[str, Any], *, decrypt: Ca
 
 
 def run_friends(payload: dict[str, Any], keys: list[dict[str, Any]], *, decrypt: Callable, post: Callable,
-                model: str = MODEL, now: Callable[[], str] | None = None, url_template: str = GEMINI_URL) -> dict[str, Any]:
+                model: str = MODEL, now: Callable[[], str] | None = None, url_template: str = GEMINI_URL,
+                sleep: Callable[[float], None] = time.sleep) -> dict[str, Any]:
     now = now or (lambda: datetime.now(timezone.utc).isoformat(timespec="seconds"))
     rows: list[dict[str, Any]] = []
     outcomes: dict[str, dict[str, Any]] = {}
     audit: list[dict[str, Any]] = []
+    ivs: dict[str, Any] = {}  # 這次用的是哪一把：寫回金鑰狀態時比對，不蓋到排程中途換上的新金鑰
     for key_row in keys:
         email = key_row["email"]
-        result = _one_friend(payload, key_row, decrypt=decrypt, post=post, model=model, url_template=url_template)
+        result = _one_friend(payload, key_row, decrypt=decrypt, post=post, model=model, url_template=url_template, sleep=sleep)
         at = now()
         for row in result["rows"]:
             rows.append({**row, "email": email, "created_at": at})
         generated = all(row["status"] == "generated" for row in result["rows"])
         outcomes[email] = {"outcome": "success" if generated else "failure",
                            "reason": None if generated else result["audit"]["failure"] or "validation_failed"}
+        ivs[email] = key_row.get("iv")
         audit.append({"email": email, **result["audit"], "usage": result["usage"]})
-    return {"rows": rows, "keys": outcomes, "audit": audit}
+    return {"rows": rows, "keys": outcomes, "audit": audit, "ivs": ivs}
 
 
 def friend_sql(result: dict[str, Any]) -> list[str]:
     """每位朋友一份 SQL（各自 BEGIN／COMMIT）：寫進 friend_ai_daily 當天的成功或未產生，並更新他金鑰的
-    最後成功時間／最近失敗原因（中文說明）。排程逐份寫入，一位寫失敗不擋其他人。"""
+    最後成功時間／最近失敗原因（中文說明）；金鑰無效或被撤銷時暫停這把金鑰。排程逐份寫入，一位寫失敗不擋其他人。
+    更新金鑰那一列時比對這次用的 iv：排程跑到一半朋友換了新金鑰，舊金鑰的結果不會蓋到新金鑰上。"""
     scripts: list[str] = []
     for email, outcome in result["keys"].items():
         rows = [row for row in result["rows"] if row["email"] == email]
@@ -216,12 +252,13 @@ def friend_sql(result: dict[str, Any]) -> list[str]:
                 "error_code=excluded.error_code,updated_at=excluded.updated_at;"
             )
         at = _sql_literal(rows[0]["created_at"] if rows else None)
-        who = _sql_literal(email)
+        same_key = f"email={_sql_literal(email)} AND iv={_sql_literal(result.get('ivs', {}).get(email))}"
         if outcome["outcome"] == "success":
-            statements.append(f"UPDATE friend_gemini_keys SET last_success_at={at},last_failure_reason=NULL,updated_at={at} WHERE email={who};")
+            statements.append(f"UPDATE friend_gemini_keys SET last_success_at={at},last_failure_reason=NULL,updated_at={at} WHERE {same_key};")
         else:
-            text = FAILURE_TEXT.get(outcome["reason"], FAILURE_TEXT["internal_error"])
-            statements.append(f"UPDATE friend_gemini_keys SET last_failure_reason={_sql_literal(text)},updated_at={at} WHERE email={who};")
+            text = _sql_literal(FAILURE_TEXT.get(outcome["reason"], FAILURE_TEXT["internal_error"]))
+            pause = ",status='paused'" if outcome["reason"] in PAUSING_FAILURES else ""
+            statements.append(f"UPDATE friend_gemini_keys SET last_failure_reason={text}{pause},updated_at={at} WHERE {same_key};")
         statements.append("COMMIT;")
         scripts.append("\n".join(statements) + "\n")
     return scripts
@@ -274,7 +311,13 @@ def http_post(url: str, body: dict[str, Any], api_key: str, *, timeout: float = 
         if "api key" in str(detail.get("message") or "").lower():
             reasons = (*reasons, "API_KEY_INVALID")
         raise GeminiHttpError(error.code, detail.get("status"), reasons) from None
-    except (ValueError, TimeoutError, http.client.HTTPException) as error:
+    except TimeoutError as error:
+        raise GeminiTimeout(type(error).__name__) from None
+    except urllib.error.URLError as error:
+        if isinstance(error.reason, TimeoutError):
+            raise GeminiTimeout("TimeoutError") from None
+        raise OSError(type(error).__name__) from None
+    except (ValueError, http.client.HTTPException) as error:
         raise OSError(type(error).__name__) from None
 
 

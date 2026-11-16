@@ -14,6 +14,12 @@
   let users = [];
 
   const fmt = (iso) => (iso ? new Date(iso).toLocaleString("zh-TW", { hour12: false }) : "");
+  // 朋友 AI 開關打開時才有 u.gemini：只有狀態（已設定、暫停、最後成功、最近失敗），沒有解讀內容。
+  const geminiChip = (g) => ` <span class="state gemini${g.paused ? " paused" : g.configured ? " on" : ""}">Gemini ${
+    g.paused ? "已暫停" : g.configured ? "已設定" : "未設定"}</span>`;
+  const geminiNote = (g) => (g.configured
+    ? `<div class="note" style="margin-top:4px">Gemini 最後成功：${g.last_success_at ? fmt(g.last_success_at) : "尚未產生"}${
+      g.last_failure_reason ? `　最近失敗：${esc(g.last_failure_reason)}` : ""}</div>` : "");
 
   async function api(path, opts) {
     const r = await fetch(path, { credentials: "same-origin", headers: { "content-type": "application/json" }, ...opts });
@@ -36,11 +42,11 @@
         <article class="item" data-email="${esc(u.email)}">
           <div class="item-head">
             <span class="item-name">${esc(u.nickname)}</span>
-            <span class="chips"><span class="state ${esc(u.status)}">${LABEL[u.status] || esc(u.status)}</span>${"gemini_configured" in u
-              ? ` <span class="state gemini${u.gemini_configured ? " on" : ""}">Gemini ${u.gemini_configured ? "已設定" : "未設定"}</span>` : ""}</span>
+            <span class="chips"><span class="state ${esc(u.status)}">${LABEL[u.status] || esc(u.status)}</span>${u.gemini ? geminiChip(u.gemini) : ""}</span>
           </div>
           <div class="who">${esc(u.email)}</div>
           <div class="note" style="margin-top:4px">申請：${fmt(u.applied_at)}${u.decided_at ? `　處理：${fmt(u.decided_at)}` : ""}</div>
+          ${u.gemini ? geminiNote(u.gemini) : ""}
           <div class="row">${(ACTIONS[u.status] || [])
             .map(([a, text, cls]) => `<button type="button" class="${cls}" data-act="${a}">${text}</button>`)
             .join("")}</div>

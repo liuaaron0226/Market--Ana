@@ -75,16 +75,18 @@
   }
 
   function renderConfigured() {
+    // 04 票：金鑰失效被暫停時，排程跳過他；直接打開換金鑰的欄位，換上試呼叫成功的那把就恢復。
+    const paused = state.status === "paused";
     view.innerHTML = `
       <h1>Gemini 設定</h1>
-      <p><span class="state approved">已設定</span>${state.last_success_at ? `<span class="note inline">最後成功 ${esc(fmt(state.last_success_at))}</span>` : ""}</p>
+      <p>${paused ? '<span class="state paused">已暫停</span>' : '<span class="state approved">已設定</span>'}${state.last_success_at ? `<span class="note inline">最後成功 ${esc(fmt(state.last_success_at))}</span>` : ""}</p>
       ${state.last_failure_reason ? `<p class="msg">${esc(state.last_failure_reason)}</p>` : ""}
-      <div id="replace" hidden>
+      <div id="replace"${paused ? "" : " hidden"}>
         <div class="row"><button type="button" class="ghost" id="studio">開啟 AI Studio</button></div>
         ${keyField("確認並換上")}
       </div>
       <div class="row" id="actions">
-        <button type="button" class="ghost" id="swap">換一把金鑰</button>
+        <button type="button" class="ghost" id="swap"${paused ? " hidden" : ""}>換一把金鑰</button>
         <button type="button" class="warn" id="drop">刪除金鑰</button>
       </div>
       <p class="msg" role="alert"></p>
