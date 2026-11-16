@@ -177,7 +177,10 @@ class FriendDigestTests(unittest.TestCase):
                 mock.patch.object(ai_digest, "run_digest", side_effect=AssertionError("不可改用站主的 agy")) as owner_run:
             for failure in (GeminiHttpError(429), GeminiHttpError(403), GeminiHttpError(503), GeminiHttpError(404)):
                 result = self.run_with({"KEY-amy": failure}, keys=KEYS[:1])
-                self.assertEqual({row["status"] for row in result["rows"]}, {"unproduced"})
+                # 03 票：沒有持股的朋友另有一列個股「no_holdings」（沒呼叫個股判斷），大盤與籌碼那幾列是未產生。
+                sections = [row for row in result["rows"] if row["digest_type"] != "stock"]
+                self.assertEqual({row["status"] for row in sections}, {"unproduced"})
+                self.assertEqual([row["status"] for row in result["rows"] if row["digest_type"] == "stock"], ["no_holdings"])
                 self.assertTrue(all(row["content"] is None and row["model"] == "gemini-3.8-flash" for row in result["rows"]))
         agy.assert_not_called()
         owner_run.assert_not_called()
