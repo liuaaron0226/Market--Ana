@@ -363,7 +363,8 @@
         tagSlots.filter(g => !g.close).forEach(({ o, yy, slot }) => {
           const col = o.color || css('--gold');
           // 整條淡細實線＋右端一小段實色錨點
-          x.strokeStyle = col; x.lineWidth = 1; x.globalAlpha = .38;
+          // strong：要特別看出來的那一條（例如自選股關注「已到」的觸發線）畫成較粗的實線。
+          x.strokeStyle = col; x.lineWidth = o.strong ? 2 : 1; x.globalAlpha = o.strong ? .9 : .38;
           x.beginPath(); x.moveTo(l, Math.round(yy) + .5); x.lineTo(l + pw, Math.round(yy) + .5); x.stroke();
           x.globalAlpha = 1; x.lineWidth = 2;
           x.beginPath(); x.moveTo(l + pw - 20, Math.round(yy) + .5); x.lineTo(l + pw, Math.round(yy) + .5); x.stroke();
