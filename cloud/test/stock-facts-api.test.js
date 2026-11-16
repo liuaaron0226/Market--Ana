@@ -4,7 +4,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { handle } from "../lib/gate.js";
-import { releasePolicy } from "../lib/release-policy.js";
+import { releasePolicy, policyForViewer } from "../lib/release-policy.js";
 import { fakeD1, makeIssuer, claims, fetchJwks, TEAM, MAIN_AUD, APPLY_AUD, OWNER } from "./helpers.js";
 
 const EXAMPLE = JSON.parse(readFileSync(new URL("./fixtures/stock-analysis-v2.example.json", import.meta.url), "utf8"));
@@ -121,9 +121,13 @@ test("打開事實區塊不連帶打開任何其他功能", () => {
   assert.doesNotMatch(JSON.stringify(releasePolicy({ MARKET_ANA_STOCK_FACTS: "owner" })), /MARKET_ANA_STOCK_FACTS/);
 });
 
-test("正式環境設定（wrangler.jsonc）裡事實區塊是關的", () => {
+test("正式環境設定（本人 11-16）：事實區塊只開站主，其他獲准使用者看不到", () => {
   const text = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8").replace(/^\s*\/\/.*$/gm, "");
-  assert.equal(releasePolicy(JSON.parse(text).vars).features.stock_facts_v1, false);
+  const vars = JSON.parse(text).vars;
+  assert.equal(vars.MARKET_ANA_STOCK_FACTS, "owner");
+  const policy = releasePolicy(vars);
+  assert.equal(policyForViewer(policy, true, vars).features.stock_facts_v1, true);
+  assert.equal(policyForViewer(policy, false, vars).features.stock_facts_v1, false);
 });
 
 

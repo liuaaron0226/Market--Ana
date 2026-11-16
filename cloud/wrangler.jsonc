@@ -15,6 +15,8 @@
     // AI 解讀、現金水位仍由 MARKET_ANA_STRATEGIES_ENABLED 控制（未設＝關）。
     "MARKET_ANA_ENABLED_FEATURES": "market_trend_v1",
     // 本人 2026-11-15：預測帳本對站主打開（試跑；其他獲准使用者看不到）。關閉＝拿掉這一行再部署。
-    "MARKET_ANA_FORECAST_LEDGER": "owner"
+    "MARKET_ANA_FORECAST_LEDGER": "owner",
+    // 本人 2026-11-16：個股頁事實區塊（重點、法人、融資券、基本面、消息、技術）先只開站主驗收；開給全部＝改成 "all"，關閉＝拿掉這一行再部署。
+    "MARKET_ANA_STOCK_FACTS": "owner"
   }
 }
