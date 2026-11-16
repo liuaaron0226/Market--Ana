@@ -6,7 +6,21 @@ workers_dev = false
 [triggers]
 # Cloudflare 的星期：1＝週日…7＝週六。一律用縮寫，不要寫數字。
 # 0 0 * * *：公司重大訊息每天台北 8:00（含週末），見 worker.js JOBS 與 .github/workflows/announcements.yml。
-crons = ["30 7 * * MON-FRI", "30 8 * * MON-FRI", "0 10 * * MON-FRI", "30 12 * * MON-FRI", "0 0 * * *"]
+# 免費方案整個帳號最多 5 個時段：每日更新 15:30／16:30／20:30 合成一行（30 7,8,12），18:00 一行，觸發時間不變。
+# * 1-5 * * MON-FRI：自選股關注的雲端盯價，台北 09:00–13:59 每分鐘（F 票，本人 2026-11-16 選加在這支）。
+crons = ["30 7,8,12 * * MON-FRI", "0 10 * * MON-FRI", "0 0 * * *", "* 1-5 * * MON-FRI"]
+
+# 雲端盯價讀寫網站的同一個資料庫（關注、判斷、觸價紀錄、推播訂閱）。
+[[d1_databases]]
+binding = "DB"
+database_name = "market-ana-accounts"
+database_id = "391bc764-2dd8-47b3-b9f9-93b9521c59e7"
+
+# 和網站 cloud/wrangler.jsonc 同值：只盯站主的關注股；開關關著（拿掉這一行）時盯價什麼都不做。
+# 機密設定（本人自己放，助手不經手）：FUGLE_API_KEY、VAPID_PUBLIC_KEY、VAPID_PRIVATE_KEY；GITHUB_DISPATCH_TOKEN 照舊。
+[vars]
+OWNER_EMAIL = "owner@example.com"
+MARKET_ANA_WATCHLIST_WATCH = "owner"
 
 [observability]
 enabled = true

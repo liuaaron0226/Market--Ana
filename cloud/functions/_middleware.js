@@ -5,5 +5,5 @@ import screensPack from "./_screens-pack.js";
 import dataStatus from "./_data-status.js";
 import comparePack from "./_compare-pack.js";
 
-const deps = { fetchImpl: (...a) => fetch(...a), quoteFetch: (...a) => fetch(...a), overseasFetch: (...a) => fetch(...a), now: () => Date.now(), marketPack, stockPack, screensPack, dataStatus, comparePack };
+const deps = { fetchImpl: (...a) => fetch(...a), quoteFetch: (...a) => fetch(...a), overseasFetch: (...a) => fetch(...a), pushFetch: (...a) => fetch(...a), now: () => Date.now(), marketPack, stockPack, screensPack, dataStatus, comparePack };
 export const onRequest = (context) => handle(context.request, context.env, () => context.next(), deps);
