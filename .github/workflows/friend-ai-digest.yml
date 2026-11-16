@@ -1,0 +1,224 @@
+# 開放給朋友 02 票（2026-11-16）：daily-update 確認正式發布後，用每位朋友自己的 Gemini 金鑰產生他的大盤、籌碼解讀。
+# 邊界：只從 R2 restore、不 upload；站主那條線（ai-digest.yml、agy）完全不碰；提示只放證交所、櫃買的官方開放資料。
+# 自己的開關：GitHub variable MARKET_ANA_FRIEND_AI（只認 on），不掛在 MARKET_ANA_STRATEGIES_ENABLED 底下。
+name: friend-ai-digest
+
+on:
+  workflow_run:
+    workflows: [daily-update]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "市場資料日 YYYY-MM-DD（留空＝還原資料中的市場最新日）"
+        required: false
+        type: string
+      dry_run:
+        description: "只整理輸入並檢查格式，不讀金鑰、不呼叫 Gemini、不寫 D1"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  # 和其他寫入狀態的排程共用同一把鎖、不互相取消。
+  group: market-state-write
+  cancel-in-progress: false
+
+jobs:
+  authorize:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      allowed: ${{ steps.auth.outputs.allowed }}
+      dry_run: ${{ steps.auth.outputs.dry_run }}
+      requested_date: ${{ steps.auth.outputs.data_date }}
+      head_sha: ${{ steps.auth.outputs.head_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 朋友 AI 開關（預設關閉）
+        id: gate
+        env:
+          FRIEND_SWITCH: ${{ vars.MARKET_ANA_FRIEND_AI }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          python friend_ai_digest.py authorize --event "$EVENT_NAME" --switch "$FRIEND_SWITCH" \
+            --dry-run-input "$INPUT_DRY_RUN" --github-output "$GITHUB_OUTPUT"
+
+      - name: 下載觸發 run 的正式發布證據
+        if: steps.gate.outputs.allowed == 'true' && github.event_name == 'workflow_run'
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: daily-publication-${{ github.event.workflow_run.id }}
+          path: ${{ runner.temp }}/publication
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fail-closed 核准執行模式
+        id: auth
+        if: steps.gate.outputs.allowed == 'true'
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_DATE: ${{ inputs.date }}
+          AUTH_DRY_RUN: ${{ steps.gate.outputs.dry_run }}
+          EXPECTED_RUN_ID: ${{ github.event.workflow_run.id }}
+          EXPECTED_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          EXPECTED_REPOSITORY: ${{ github.repository }}
+          EXPECTED_BRANCH: ${{ github.event.repository.default_branch }}
+          UPSTREAM_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            # 日期會原樣寫進 GITHUB_OUTPUT；夾帶換行就能多塞一行 dry_run=false，寫入前先擋。
+            if [ -n "$INPUT_DATE" ] && ! [[ "$INPUT_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+              echo "::error::date 必須是 YYYY-MM-DD"; exit 1
+            fi
+            echo "allowed=true" >> "$GITHUB_OUTPUT"
+            echo "dry_run=${AUTH_DRY_RUN:-true}" >> "$GITHUB_OUTPUT"
+            echo "data_date=$INPUT_DATE" >> "$GITHUB_OUTPUT"
+            echo "head_sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          else
+            python ai_digest_trigger.py authorize \
+              --evidence "$RUNNER_TEMP/publication/daily-publication.json" \
+              --expected-run-id "$EXPECTED_RUN_ID" \
+              --expected-head-sha "$EXPECTED_HEAD_SHA" \
+              --expected-repository "$EXPECTED_REPOSITORY" \
+              --expected-branch "$EXPECTED_BRANCH" \
+              --conclusion "$UPSTREAM_CONCLUSION" \
+              --github-output "$GITHUB_OUTPUT"
+            echo "dry_run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  digest:
+    needs: authorize
+    if: needs.authorize.outputs.allowed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      TZ: Asia/Taipei
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.authorize.outputs.head_sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-daily.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: 安裝既有每日更新相依
+        run: python -m pip install -r requirements-daily.txt
+
+      - name: 決定執行模式並檢查設定
+        id: mode
+        env:
+          INPUT_DATE: ${{ needs.authorize.outputs.requested_date }}
+          AUTH_DRY_RUN: ${{ needs.authorize.outputs.dry_run }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          FRIEND_AI_MASTER_KEY: ${{ secrets.FRIEND_AI_MASTER_KEY }}
+        run: |
+          if [ -n "$INPUT_DATE" ]; then
+            python -c 'from state_sync import require_iso_date; import sys; require_iso_date(sys.argv[1], "workflow date")' "$INPUT_DATE" || { echo "::error::date 必須是真實的 YYYY-MM-DD"; exit 1; }
+          fi
+          dry_run=true
+          if [ "$AUTH_DRY_RUN" = "false" ]; then dry_run=false; fi
+          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY; do
+            if [ -z "${!name}" ]; then echo "::error::缺少 secret $name"; exit 1; fi
+          done
+          # 只檢查有沒有設定，不印出來。
+          if [ "$dry_run" = "false" ] && [ -z "$FRIEND_AI_MASTER_KEY" ]; then
+            echo "::error::缺少 secret FRIEND_AI_MASTER_KEY"; exit 1
+          fi
+          echo "dry_run=$dry_run" >> "$GITHUB_OUTPUT"
+          echo "requested_date=$INPUT_DATE" >> "$GITHUB_OUTPUT"
+
+      - name: 從 R2 還原需要的資料（唯讀）
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: market-ana-state
+        run: python state_sync.py restore --target .
+
+      - name: 決定資料日
+        run: |
+          if [ -n "${{ steps.mode.outputs.requested_date }}" ]; then
+            day="${{ steps.mode.outputs.requested_date }}"
+          else
+            day="$(python ai_digest_inputs.py --print-latest-date --stock-pack cloud/.stock-pack.json --screens-root data/market-screen-snapshots)"
+          fi
+          echo "DATA_DATE=$day" >> "$GITHUB_ENV"
+
+      - name: 只整理輸入、檢查格式（dry-run）
+        if: steps.mode.outputs.dry_run == 'true'
+        run: |
+          python friend_ai_digest.py run --dry-run --date "$DATA_DATE" \
+            --market-dir data/daily-update-state/last-market-pack --screens-root data/market-screen-snapshots \
+            --sql-output "$RUNNER_TEMP/friend-ai.sql" --audit "$RUNNER_TEMP/friend-ai-audit.json" \
+            --prompt-output "$RUNNER_TEMP/friend-ai-input-prompt.txt"
+
+      - name: 從 D1 讀取可用的朋友金鑰（密文）
+        if: success() && steps.mode.outputs.dry_run == 'false'
+        working-directory: cloud
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npx --yes wrangler@4 d1 execute market-ana-accounts --remote --json \
+            --command "$(node friend-ai-schedule.mjs keys-sql)" > "$RUNNER_TEMP/friend-keys.json"
+
+      - name: 逐位朋友呼叫 Gemini 並驗證
+        if: success() && steps.mode.outputs.dry_run == 'false'
+        env:
+          FRIEND_AI_MASTER_KEY: ${{ secrets.FRIEND_AI_MASTER_KEY }}
+        run: |
+          python friend_ai_digest.py run --date "$DATA_DATE" \
+            --market-dir data/daily-update-state/last-market-pack --screens-root data/market-screen-snapshots \
+            --keys-json "$RUNNER_TEMP/friend-keys.json" \
+            --sql-output "$RUNNER_TEMP/friend-ai.sql" --audit "$RUNNER_TEMP/friend-ai-audit.json"
+
+      - name: 寫入 D1
+        if: success() && steps.mode.outputs.dry_run == 'false'
+        working-directory: cloud
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ ! -f "$RUNNER_TEMP/friend-ai.sql" ]; then echo "沒有可用金鑰的朋友，今天不用寫入"; exit 0; fi
+          npx --yes wrangler@4 d1 execute market-ana-accounts --remote --file "$RUNNER_TEMP/friend-ai.sql"
+
+      - name: 執行摘要（只有人數與結果分類，不含 email、金鑰、解讀內容）
+        if: always()
+        run: |
+          {
+            echo "### 朋友 AI 解讀 ${DATA_DATE:-未決定}"
+            echo "- dry-run：${{ steps.mode.outputs.dry_run }}"
+            if [ -f "$RUNNER_TEMP/friend-ai-audit.json" ]; then
+              python -c 'import json,sys; a=json.load(open(sys.argv[1],encoding="utf-8")); print("- 結果：" + json.dumps({k: a.get(k) for k in ("input_sha256","friends","outcomes","availability")}, ensure_ascii=False))' "$RUNNER_TEMP/friend-ai-audit.json"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 清除金鑰密文與暫存檔
+        if: always()
+        run: rm -f "$RUNNER_TEMP/friend-keys.json" "$RUNNER_TEMP/friend-ai.sql" "$RUNNER_TEMP/friend-ai-input-prompt.txt" "$RUNNER_TEMP/friend-ai-audit.json"

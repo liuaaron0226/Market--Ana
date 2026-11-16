@@ -1218,6 +1218,11 @@ html, body { height: auto; }
 .ai-digest-detail-grid li { font-size: 13.5px; line-height: 1.55; }
 .ai-digest-note { grid-column: 1 / -1; }
 .ai-digest-card[data-state="unproduced"]::before { background: var(--faint); }
+/* 開放給朋友 02 票：朋友還沒設定 Gemini（或要重新同意）時，卡片只有一句說明和回設定頁的入口。 */
+.ai-digest-setup { grid-column: 1; justify-self: start; min-height: 44px; display: inline-flex; align-items: center; gap: 4px;
+  color: var(--accent); font-size: 13px; font-weight: 600; text-decoration: none; }
+.ai-digest-setup:hover { text-decoration: underline; }
+.ai-digest-setup[hidden] { display: none; }
 .ai-digest-card[data-state="unproduced"] .ai-digest-conclusion { color: var(--dim); }
 
 @media (max-width: 760px) {
