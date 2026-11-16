@@ -208,5 +208,55 @@ class DryRunTests(RunTestCase):
             self.run_evening(as_of=DATES[-3])
 
 
+
+class ForeignFlowLayerTests(RunTestCase):
+    """G 票：晚間版的輸入多一層外資讀數，從工作集的資料庫與期貨原件算，跟著預測一起鎖進帳本。"""
+
+    def data_root(self):
+        import sqlite3
+
+        import foreign_futures
+        from test_foreign_futures import FakePost, csv_bytes, row
+        root = self.tmp / "data"
+        (root / "listed-institutional").mkdir(parents=True)
+        (root / "stock-history").mkdir(parents=True)
+        con = sqlite3.connect(root / "listed-institutional/listed_institutional.sqlite")
+        con.execute("CREATE TABLE institutional (date TEXT, code TEXT, foreign_net INTEGER)")
+        # 最後三天外資賣超台積電 100 萬股（× 收盤 1000 = -10 億），之前每天買超 100 萬股
+        con.executemany("INSERT INTO institutional VALUES (?,?,?)",
+                        [(d, "2330", -1_000_000 if i >= len(DATES) - 3 else 1_000_000) for i, d in enumerate(DATES)])
+        con.commit(); con.close()
+        con = sqlite3.connect(root / "stock-history/stock-history.sqlite")
+        con.execute("CREATE TABLE daily (date TEXT, code TEXT, close REAL, turnover INTEGER)")
+        con.executemany("INSERT INTO daily VALUES (?,?,?,?)", [(d, "2330", 1000.0, 100_000_000_000) for d in DATES])
+        con.commit(); con.close()
+        slash = BASE.replace("-", "/")
+        foreign_futures.fetch_day(root / "foreign-futures", BASE, sleep=lambda s: None, post=FakePost({
+            "TXF": csv_bytes(row(slash, "臺股期貨", "外資及陸資", -1200)),
+            "MXF": csv_bytes(row(slash, "小型臺指期貨", "外資及陸資", 400))}))
+        return root
+
+    def test_layer_is_locked_with_the_forecast(self):
+        empty_seeds = self.tmp / "no-seeds"
+        result = self.run_evening(data_root=self.data_root(), seeds_root=empty_seeds)
+        self.assertEqual(result["outcome"], "written")
+        # 那斯達克與美元的來源屬 D 票，還沒接上
+        self.assertEqual(result["foreign_flow_missing"], ["nasdaq_last_session", "dollar_and_twd_vs_foreign"])
+        record = fl.read_ledger(self.ledger)["forecasts"][0]
+        layer = record["input"]["foreign_flow"]
+        readings = layer["readings"]
+        self.assertEqual(readings["streak_and_cumulative"]["streak"], {"side": "sell", "days": 3})
+        self.assertEqual(readings["tsmc_split"]["tsmc_billion"], -10.0)
+        self.assertEqual(readings["futures_net_position"]["net_contracts"], -1100)   # -1200 + 400/4
+        self.assertIn("不代表之後會續漲或續跌", layer["notes"]["spot"])
+        self.assertEqual(layer["sources"]["futures_to"], BASE)
+        self.assertIn("foreign_flow", record["input"]["parameters"]["layers"])
+
+    def test_without_data_the_forecast_is_still_written_and_the_gap_is_named(self):
+        result = self.run_evening()
+        self.assertEqual(result["outcome"], "written")
+        self.assertEqual(result["foreign_flow_missing"], ["nasdaq_last_session", "streak_and_cumulative", "tsmc_split",
+                                                          "dollar_and_twd_vs_foreign", "futures_net_position"])
+
 if __name__ == "__main__":
     unittest.main()
