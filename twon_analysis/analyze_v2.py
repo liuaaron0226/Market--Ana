@@ -13,7 +13,8 @@ import math
 
 from .data import DEFAULT_DB, DEFAULT_OTC_DB, load_bars
 from .indicators import Bar, atr14, kd9, ma, macd
-from .price_adjustment import apply_factors, default_capital_events, price_factors
+from .price_adjustment import (apply_factors, default_capital_events, default_reference_events, price_factors,
+                               reference_day_returns)
 from .price_structure import WEIGHTS, resistance_tick, support_tick, tick_floor
 from .strategy_v1 import strategy_v1
 
@@ -672,19 +673,36 @@ def taiex_closes(as_of: str, months: int = 6) -> dict[str, float]:
     return closes
 
 
-def _signals(bars: list[Bar], info: dict) -> dict | None:
+def _day_returns(code: str, raw_bars: list[Bar], returns: list[float | None],
+                 reference_events: dict[str, list[dict]] | None) -> list[float]:
+    """每天相對前一日參考價的漲跌幅（比率）。不比價的日子行情庫沒有漲跌：是除權息、減資、分割這類有官方參考價的，
+    用當天收盤 ÷ 參考價 − 1 補上；其餘（新上市、前一日沒有成交、暫停交易後恢復）沒有來源，記 0。
+    raw_bars 是還原前的實際成交價；reference_events 不給就讀資料根目錄的（有不比價的日子才讀）。"""
+    if all(r is not None for r in returns):
+        return list(returns)
+    if reference_events is None:
+        reference_events = _safe(default_reference_events) or {}
+    official = _safe(lambda: reference_day_returns(raw_bars, reference_events.get(code, []))) or {}
+    return [official.get(bar.date, 0.0) if r is None else r for bar, r in zip(raw_bars, returns)]
+
+
+def _signals(code: str, raw_bars: list[Bar], bars: list[Bar], info: dict, indicators: dict,
+             reference_events: dict[str, list[dict]] | None) -> dict | None:
     # 和事實區塊一樣是附加內容：任何錯誤都只讓這一塊留空，不能讓整份分析失敗。
     try:
         from .signals import build_signals
-        return build_signals(dates=[bar.date for bar in bars], day_returns=info['day_returns'],
-                             index_closes=_safe(lambda: taiex_closes(bars[-1].date)) or {})
+        return build_signals(bars=bars, day_returns=_day_returns(code, raw_bars, info['day_returns'], reference_events),
+                             index_closes=_safe(lambda: taiex_closes(bars[-1].date)) or {}, indicators=indicators)
     except Exception:  # noqa: BLE001
         return None
 
 
 def analyze_v2(code: str, as_of: str, db_path=DEFAULT_DB, otc_db_path=DEFAULT_OTC_DB,
-               capital_actions: dict[str, list[dict]] | None = None) -> dict:
-    """capital_actions：每檔代號的股本變動事件（price_adjustment.capital_events 的形狀）；不給就讀資料根目錄的。"""
+               capital_actions: dict[str, list[dict]] | None = None,
+               reference_events: dict[str, list[dict]] | None = None) -> dict:
+    """capital_actions：每檔代號的股本變動事件（price_adjustment.capital_events 的形狀）；不給就讀資料根目錄的。
+    reference_events：每檔代號帶官方參考價的事件（含除息；events.json 的形狀），五塊資料算事件日當天的漲跌用；
+    不給就讀資料根目錄的。"""
     bars, info = load_bars(code, as_of, db_path=db_path, otc_db_path=otc_db_path)
     if not bars:
         return _blocking(code, as_of, {'reason': '查不到這個代號的有效日 K', 'not_found': True})
@@ -695,7 +713,7 @@ def analyze_v2(code: str, as_of: str, db_path=DEFAULT_DB, otc_db_path=DEFAULT_OT
         capital_actions = default_capital_events()
     factors, unresolved = price_factors(bars, capital_actions.get(code, []))
     share_scale = {bar.date: 1 / factor for bar, factor in zip(bars, factors) if factor != 1.0}
-    bars = apply_factors(bars, factors)
+    raw_bars, bars = bars, apply_factors(bars, factors)
     x = indicators_v2(bars)
     last = bars[-1]
     inputs = condition_inputs(code, info['market'], last.date, bars, x)
@@ -729,7 +747,7 @@ def analyze_v2(code: str, as_of: str, db_path=DEFAULT_DB, otc_db_path=DEFAULT_OT
         # 個股頁事實區塊（本人 2026-11-15）：算不出來只讓這一塊留空，不影響其他內容。給誰看由網站入口的開關決定。
         'facts': _facts(last, info, x, institutional, [bar.date for bar in chart_bars], info['market'], code),
         # 個股頁五塊新功能的資料（本人 2026-11-16）：同樣算不出來只留空；給誰看由網站入口另一個獨立的開關決定。
-        'signals': _signals(bars, info),
+        'signals': _signals(code, raw_bars, bars, info, x, reference_events),
         'defense': defense_payload(x['low20_intraday']),
         'trend_classification': trend_classification_payload(),
         'conditions': conditions,

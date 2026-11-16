@@ -54,20 +54,69 @@ def capital_events(shared: list[dict], supplement: dict) -> dict[str, list[dict]
     return by_code
 
 
+def _event_files(root: Path) -> tuple:
+    """資料根目錄下的事件來源（共同事件表、補充資料、隨程式入庫的種子）與它們的修改時間；檔案沒變就用快取。"""
+    paths = (root / 'data/corporate-actions/events.json', root / 'data/corporate-actions/capital-supplement.json',
+             root / 'seeds/capital-supplement.json')
+    return (*paths, tuple(path.stat().st_mtime_ns if path.exists() else None for path in paths))
+
+
 @functools.lru_cache(maxsize=4)
-def _load_capital_events(events_path: Path, supplement_path: Path, seed_path: Path, stamps: tuple) -> dict[str, list[dict]]:
+def _read_events(events_path: Path, supplement_path: Path, seed_path: Path, stamps: tuple) -> tuple[list[dict], dict]:
     import capital_supplement
 
     shared = json.loads(events_path.read_text(encoding='utf-8')) if events_path.exists() else []
-    return capital_events(shared, capital_supplement.load(supplement_path, seed_path))
+    return shared, capital_supplement.load(supplement_path, seed_path)
+
+
+@functools.lru_cache(maxsize=4)
+def _load_capital_events(*files) -> dict[str, list[dict]]:
+    return capital_events(*_read_events(*files))
+
+
+@functools.lru_cache(maxsize=4)
+def _load_reference_events(*files) -> dict[str, list[dict]]:
+    shared, supplement = _read_events(*files)
+    by_code: dict[str, list[dict]] = {}
+    for event in shared + list(supplement.get('events') or []):
+        by_code.setdefault(event['code'], []).append(event)
+    return by_code
 
 
 def default_capital_events(root: Path = ROOT) -> dict[str, list[dict]]:
     """資料根目錄下的還原事件（每檔代號一串）；檔案沒變就用快取，建置時 355 檔只讀一次。"""
-    paths = (root / 'data/corporate-actions/events.json', root / 'data/corporate-actions/capital-supplement.json',
-             root / 'seeds/capital-supplement.json')
-    stamps = tuple(path.stat().st_mtime_ns if path.exists() else None for path in paths)
-    return _load_capital_events(*paths, stamps)
+    return _load_capital_events(*_event_files(root))
+
+
+def default_reference_events(root: Path = ROOT) -> dict[str, list[dict]]:
+    """資料根目錄下所有帶官方參考價的事件（每檔代號一串）：除息、除權、除權息、減資、面額變更、分割都在內。
+    和 default_capital_events 不同：這裡不是拿來還原價格，是拿來算事件日當天的漲跌（reference_day_returns）。"""
+    return _load_reference_events(*_event_files(root))
+
+
+def _fits_traded_close(close_before: float, traded: float) -> bool:
+    """事件表的「事件前收盤」和實際前一根收盤相符（容忍停牌前後報價的小誤差）才採用這筆事件。"""
+    return abs(traded - close_before) <= max(0.011, traded * CLOSE_TOLERANCE)
+
+
+def reference_day_returns(bars: list[Bar], events: list[dict]) -> dict[str, float]:
+    """事件日當天相對官方參考價的漲跌幅 {日期: 比率}＝當天收盤 ÷ 參考價 − 1。bars 是實際成交價（還原前）、舊到新。
+
+    行情庫在這種「不比價」的日子不存漲跌，官方參考價是唯一能補回來的來源。和還原價同樣保守：
+    事件前收盤要和實際前一根收盤相符；同一天有多筆參考價不同的事件、或缺參考價，就不給（不猜）。
+    這裡只認「前收盤、參考價」這一對數字（還原價另外還要分事件種類與現金股利，所以兩邊的去重條件不同）。
+    """
+    close_and_previous = {bar.date: (bar.close, bars[index - 1].close) for index, bar in enumerate(bars) if index}
+    quoted: dict[str, set] = {}
+    for event in events:
+        if event['date'] in close_and_previous:
+            quoted.setdefault(event['date'], set()).add((event.get('close_before'), event.get('reference')))
+    out = {}
+    for day, distinct in quoted.items():
+        (before, reference), (close, previous_close) = next(iter(distinct)), close_and_previous[day]
+        if len(distinct) == 1 and before and reference and _fits_traded_close(before, previous_close):
+            out[day] = close / reference - 1
+    return out
 
 
 def adjust_bars(bars: list[Bar], events: list[dict]) -> tuple[list[Bar], list[dict]]:
@@ -118,7 +167,7 @@ def price_factors(bars: list[Bar], events: list[dict]) -> tuple[list[float], lis
             give_up(event, '缺官方參考價或現金股利')
             continue
         traded = next(bar.close for bar in reversed(bars) if bar.date < day)
-        if abs(traded - event['close_before']) > max(0.011, traded * CLOSE_TOLERANCE):
+        if not _fits_traded_close(event['close_before'], traded):
             give_up(event, f"事件前收盤 {event['close_before']} 與實際前一根收盤 {traded} 不符")
             continue
         steps.append((day, step))

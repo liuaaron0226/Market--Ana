@@ -771,9 +771,10 @@ class _SignalsFixture:
         from datetime import date, timedelta
         return [(date(2025, 1, 6) + timedelta(days=i)).isoformat() for i in range(count)]
 
-    def analyze(self, rows, index, *, otc=False, code='9999', kind='common', days=None):
-        """rows：由舊到新的（收盤、漲跌符號、漲跌）；index：{日期: 加權指數收盤}，給例外就是模擬加權指數讀取出錯；
-        days：這一檔有交易的日子（不給就是連續的）。"""
+    def analyze(self, rows, index, *, otc=False, code='9999', kind='common', days=None, ex_events=(), capital_actions=None):
+        """rows：由舊到新的（收盤、漲跌符號、漲跌），後面可以再接（最高、最低、成交股數），不接就是收盤 ±1 與 1000 股；
+        index：{日期: 加權指數收盤}，給例外就是模擬加權指數讀取出錯；
+        days：這一檔有交易的日子（不給就是連續的）；ex_events：這一檔帶官方參考價的除權息等事件（events.json 的形狀）。"""
         days = days or self.days(len(rows))
         self.calls += 1
         db = Path(self.tmp.name) / f's{self.calls}.sqlite'
@@ -781,9 +782,10 @@ class _SignalsFixture:
         connection.execute("""CREATE TABLE daily (date TEXT, code TEXT, name TEXT, kind TEXT, open REAL, high REAL, low REAL,
                               close REAL, change_sign TEXT, change REAL, volume_shares INTEGER, trades INTEGER, turnover INTEGER,
                               suspended INTEGER)""")
-        for day, (close, sign, change) in zip(days, rows):
-            connection.execute("INSERT INTO daily VALUES (?, ?, '測試', ?, ?, ?, ?, ?, ?, ?, 1000, 1, 1, 0)",
-                               (day, code, kind, close, close + 1, close - 1, close, sign, change))
+        for day, (close, sign, change, *rest) in zip(days, rows):
+            high, low, volume = rest or (close + 1, close - 1, 1000)
+            connection.execute("INSERT INTO daily VALUES (?, ?, '測試', ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 0)",
+                               (day, code, kind, close, high, low, close, sign, change, volume))
         connection.commit()
         connection.close()
         from twon_analysis.analyze_v2 import analyze_v2
@@ -794,7 +796,8 @@ class _SignalsFixture:
                 unittest.mock.patch('twon_analysis.analyze_v2.valuation_snapshot', return_value=None), \
                 unittest.mock.patch('twon_analysis.analyze_v2.revenue_series', return_value=[]), \
                 unittest.mock.patch('twon_analysis.analyze_v2.taiex_closes', **taiex):
-            return analyze_v2(code, days[-1], capital_actions={}, **paths)
+            return analyze_v2(code, days[-1], capital_actions=capital_actions or {},
+                              reference_events={code: list(ex_events)}, **paths)
 
 
 FLAT = (100.0, '', 0.0)
@@ -840,13 +843,46 @@ class StockSignalsVersusMarketTests(_SignalsFixture, unittest.TestCase):
     def test_ex_dividend_day_does_not_count_as_a_drop(self):
         # 倒數第 4 根除息：收盤 100→95，官方標不比價（X）、沒有漲跌。之後持平，資料日 95→96.9（漲 1.9＝+2%）。
         # 這一檔近 5 日＝+2.00%（不是收盤對收盤的 −3.1%）；大盤 20,200 ÷ 20,000 − 1＝+1.00% → 強於大盤 1.0。
-        # 不比價的那一天整天記 0（行情庫在這種日子沒有漲跌，那一天相對除息參考價的漲跌也不算）；
-        # 就算原件帶了漲跌數字（−5）也不算進去。
+        # 這裡沒有給官方參考價（事件表查不到這一天）：行情庫在不比價的日子沒有漲跌，沒有來源就整天記 0；
+        # 就算原件帶了漲跌數字（−5）也不算進去。有官方參考價的情形見下一個測試。
         for ex_dividend_change in (None, -5.0):
             rows = [FLAT] * 66 + [(95.0, 'X', ex_dividend_change), (95.0, '', 0.0), (95.0, '', 0.0), (96.9, '+', 1.9)]
             result = self.analyze(rows, self.index(d0=20200.0, d5=20000.0))['signals']['versus_market']['rows']
             self.assertEqual(result, [
                 {'days': 5, 'stock_pct': 2.0, 'market_pct': 1.0, 'gap': 1.0, 'tone': 'up', 'label': '強於大盤'}], ex_dividend_change)
+
+    def test_ex_dividend_day_counts_its_move_against_the_official_reference_price(self):
+        # 倒數第 4 根除息 4 元：前一日收 100，官方除息參考價 96，當天收 99.84 → 當天真實漲跌＝99.84 ÷ 96 − 1＝+4.00%。
+        # 之後三根持平 → 這一檔近 5 日＝+4.00%；大盤 20,200 ÷ 20,000 − 1＝+1.00% → 強於大盤 3.0。
+        # （整天記 0 的話會變成 0 − 1＝落後大盤 1.0，方向相反。）
+        days = self.days(70)
+        rows = [FLAT] * 66 + [(99.84, 'X', None)] + [(99.84, '', 0.0)] * 3
+        event = {'date': days[66], 'code': '9999', 'type': '除息', 'close_before': 100.0, 'reference': 96.0, 'value': 4.0}
+        result = self.analyze(rows, self.index(d0=20200.0, d5=20000.0), ex_events=[event])['signals']['versus_market']['rows']
+        self.assertEqual(result, [{'days': 5, 'stock_pct': 4.0, 'market_pct': 1.0, 'gap': 3.0, 'tone': 'up', 'label': '強於大盤'}])
+
+    def test_official_reference_that_does_not_fit_the_traded_prices_is_not_used(self):
+        # 同上一個例子，但事件表對不上：事件前收盤寫 90（實際前一根收 100），或同一天有兩筆不同的參考價，
+        # 或沒有參考價（只有預告）。都不猜，那一天記 0 → 這一檔近 5 日 0.00%，大盤 +1.00% → 落後大盤 1.0。
+        days = self.days(70)
+        rows = [FLAT] * 66 + [(99.84, 'X', None)] + [(99.84, '', 0.0)] * 3
+        event = {'date': days[66], 'code': '9999', 'type': '除息', 'close_before': 100.0, 'reference': 96.0, 'value': 4.0}
+        for ex_events in ([{**event, 'close_before': 90.0}], [event, {**event, 'type': '減資', 'reference': 120.0}],
+                          [{**event, 'reference': None}]):
+            result = self.analyze(rows, self.index(d0=20200.0, d5=20000.0), ex_events=ex_events)['signals']['versus_market']['rows']
+            self.assertEqual(result, [
+                {'days': 5, 'stock_pct': 0.0, 'market_pct': 1.0, 'gap': -1.0, 'tone': 'down', 'label': '落後大盤'}], ex_events)
+
+    def test_split_day_counts_its_move_against_the_resumption_reference_price(self):
+        # 倒數第 4 根一拆四恢復買賣：前一日收 100，參考價 25，當天收 26 → 當天真實漲跌＝26 ÷ 25 − 1＝+4.00%（不是 −74%）。
+        # 之後持平 → 近 5 日 +4.00%，大盤 +1.00% → 強於大盤 3.0。價格還原（圖用）和這裡互不干擾。
+        days = self.days(70)
+        rows = [FLAT] * 66 + [(26.0, 'X', None)] + [(26.0, '', 0.0)] * 3
+        split = {'date': days[66], 'code': '9999', 'type': '變更面額', 'close_before': 100.0, 'reference': 25.0}
+        result = self.analyze(rows, self.index(d0=20200.0, d5=20000.0), ex_events=[split], capital_actions={'9999': [split]})
+        self.assertEqual(result['signals']['versus_market']['rows'], [
+            {'days': 5, 'stock_pct': 4.0, 'market_pct': 1.0, 'gap': 3.0, 'tone': 'up', 'label': '強於大盤'}])
+        self.assertEqual(result['bars'][0]['close'], 25.0)   # 圖上的歷史價照常還原
 
     def test_too_few_bars_drops_only_the_rows_that_need_them(self):
         # 近 N 日要 N＋1 根：21 根有近 5、20 日，沒有近 60 日；20 根只剩近 5 日。
@@ -897,6 +933,215 @@ class StockSignalsVersusMarketTests(_SignalsFixture, unittest.TestCase):
         dumped = json.dumps(self.analyze(SEVENTY, index)['signals'], ensure_ascii=False)
         for word in BANNED_TEXT + ('反推',):
             self.assertNotIn(word, dumped)
+
+
+def closes_only(closes):
+    """只在意收盤的測試用：每一根的漲跌符號與漲跌隨便給（均線排列、爆大量成交區都不看它）。"""
+    return [(float(close), '', 0.0) for close in closes]
+
+
+class StockSignalsMaAlignmentTests(_SignalsFixture, unittest.TestCase):
+    """五塊資料的「均線排列」：四個條件固定順序、都是嚴格大於——收盤在 20 日線之上、20 日線在 60 日線之上、
+    60 日線在 120 日線之上、今天的 20 日線高於 5 個交易日前的 20 日線。"""
+
+    def alignment(self, closes, **options):
+        return self.analyze(closes_only(closes), {}, **options)['signals']
+
+    def test_all_four_hold_is_a_bullish_alignment(self):
+        # 130 根，每天漲 1 元（100…229）。收盤 229；20 日線＝(210…229) 平均 219.5；60 日線＝(170…229) 平均 199.5；
+        # 120 日線＝(110…229) 平均 169.5；5 個交易日前的 20 日線＝(205…224) 平均 214.5。
+        # 229 > 219.5 > 199.5 > 169.5，219.5 > 214.5 → 四個都成立。
+        signals = self.alignment([100 + i for i in range(130)])
+        self.assertEqual(signals['ma_alignment'], {
+            'conditions': [{'key': 'close_above_ma20', 'label': '站上月線', 'met': True},
+                           {'key': 'ma20_above_ma60', 'label': '月＞季', 'met': True},
+                           {'key': 'ma60_above_ma120', 'label': '季＞半年', 'met': True},
+                           {'key': 'ma20_rising', 'label': '月線上彎', 'met': True}],
+            'met_count': 4, 'summary': '多頭排列'})
+        self.assertEqual(signals['blocks'], ['ma_alignment'])
+
+    def met(self, closes, **options):
+        block = self.alignment(closes, **options)['ma_alignment']
+        return [condition['met'] for condition in block['conditions']], block['met_count'], block['summary']
+
+    def test_none_hold_is_a_bearish_alignment(self):
+        # 130 根，每天跌 1 元（300…171）。收盤 171；20 日線 180.5；60 日線 200.5；120 日線 230.5；5 日前的 20 日線 185.5。
+        self.assertEqual(self.met([300 - i for i in range(130)]), ([False, False, False, False], 0, '空頭排列'))
+
+    def test_some_hold_reports_how_many_of_the_four(self):
+        # 前 129 根每天漲 1 元（100…228），最後一根跌到 200：
+        # 20 日線＝(210…228 的和 4,161＋200) ÷ 20＝218.05 → 收盤 200 不在其上；
+        # 60 日線＝(170…228 的和 11,741＋200) ÷ 60＝199.02 → 218.05 > 199.02 成立；
+        # 120 日線＝(110…228 的和 20,111＋200) ÷ 120＝169.26 → 成立；5 日前的 20 日線＝(205…224) 平均 214.5 → 成立。
+        self.assertEqual(self.met([100 + i for i in range(129)] + [200]), ([False, True, True, True], 3, '4 項成立 3 項'))
+        # 前 129 根每天跌 1 元（300…172），最後一根彈到 190：
+        # 20 日線＝(172…190 的和 3,439＋190) ÷ 20＝181.45 → 收盤 190 在其上；
+        # 60 日線＝(172…230 的和 11,859＋190) ÷ 60＝200.82、120 日線＝(172…290 的和 27,489＋190) ÷ 120＝230.66 → 都不成立；
+        # 5 日前的 20 日線＝(176…195) 平均 185.5 → 181.45 沒有比它高。
+        self.assertEqual(self.met([300 - i for i in range(129)] + [190]), ([True, False, False, False], 1, '4 項成立 1 項'))
+
+    def test_exactly_equal_does_not_count(self):
+        # 前 129 根 100…228，最後一根收 219：20 日線＝(4,161＋219) ÷ 20＝219.00，和收盤剛好相等 → 第一項不成立。
+        # 其餘三項：219 > 60 日線 199.33 > 120 日線 169.42，219 > 5 日前的 214.5 → 成立。
+        self.assertEqual(self.met([100 + i for i in range(129)] + [219]), ([False, True, True, True], 3, '4 項成立 3 項'))
+        # 全部收 100：四條線和收盤都一樣，沒有一項是「嚴格大於」。
+        self.assertEqual(self.met([100] * 130), ([False, False, False, False], 0, '空頭排列'))
+
+    def test_rising_compares_with_the_line_five_trading_days_ago(self):
+        # 130 根都收 100，只有倒數第 25 根收 110、最後一根收 101。
+        # 今天的 20 日線＝(19×100＋101) ÷ 20＝100.05；5 個交易日前的 20 日線（倒數第 25～6 根）＝(19×100＋110) ÷ 20＝100.50
+        # → 沒有比它高，「月線上彎」不成立。（和 4 個交易日前的 100.00 比的話會變成成立。）
+        # 其餘：收盤 101 > 100.05 成立；60 日線＝6,011 ÷ 60＝100.18，100.05 不在其上；120 日線＝12,011 ÷ 120＝100.09 < 100.18 成立。
+        closes = [100] * 105 + [110] + [100] * 23 + [101]
+        self.assertEqual(self.met(closes), ([True, False, True, False], 2, '4 項成立 2 項'))
+
+    def test_fewer_than_125_bars_means_no_block(self):
+        short = self.alignment([100 + i for i in range(124)])
+        self.assertIsNone(short['ma_alignment'])
+        self.assertEqual(short['blocks'], [])
+        self.assertEqual(self.met([100 + i for i in range(125)]), ([True, True, True, True], 4, '多頭排列'))
+
+    def test_uses_the_same_adjusted_moving_averages_as_the_analysis(self):
+        # 第 101 根一拆四：之前實際成交價是 400…796（每天 +4），之後是 200…229（每天 +1）。
+        # 還原後整段就是 100…229 每天漲 1 元 → 和第一個測試相同，四個都成立。
+        # 用實際成交價去算的話，120 日線（含 90 根四倍價）會遠高於 60 日線，就不會是多頭排列。
+        days = self.days(130)
+        closes = [4 * (100 + i) for i in range(100)] + [100 + i for i in range(100, 130)]
+        split = {'date': days[100], 'code': '9999', 'type': '變更面額', 'close_before': 796.0, 'reference': 199.0}
+        result = self.analyze(closes_only(closes), {}, capital_actions={'9999': [split]})
+        self.assertEqual(result['signals']['ma_alignment']['summary'], '多頭排列')
+        self.assertEqual((result['indicators']['ma20'], result['indicators']['ma60'], result['indicators']['ma120']),
+                         (219.5, 199.5, 169.5))
+
+
+def bar(close=100.0, high=None, low=None, volume=1_000_000):
+    """爆大量成交區測試用的一根：平常日收 100、高低 ±1、成交 1,000 張。"""
+    return (float(close), '', 0.0, float(close + 1 if high is None else high), float(close - 1 if low is None else low), volume)
+
+
+class StockSignalsHeavyZonesTests(_SignalsFixture, unittest.TestCase):
+    """五塊資料的「爆大量成交區」：最近 240 個交易日裡，成交量達到前 60 個交易日均量 3 倍的日子（爆量日），
+    當天最低到最高價是一段，重疊的合併成一區；每一區標出在現價上方、下方或區內與離現價多遠。"""
+
+    def zones(self, rows, **options):
+        return self.analyze(rows, {}, **options)['signals']
+
+    def test_a_heavy_volume_day_becomes_a_zone_below_the_price(self):
+        # 70 根：前 60 根每天 1,000 張；第 61 根 3,000 張（剛好是前 60 日均量 1,000 張的 3 倍），當天低 80、高 90、收 85；
+        # 之後 9 根回到 100、1,000 張（它們的前 60 日均量是 1,033 張，1,000 張不到 3 倍）。
+        # 現價 100 在這一區上面 → 這一區在現價下方，距離＝區的高價 90 ÷ 100 − 1＝−10.0%。
+        days = self.days(70)
+        signals = self.zones([bar()] * 60 + [bar(85, high=90, low=80, volume=3_000_000)] + [bar()] * 9)
+        self.assertEqual(signals['heavy_zones'], {
+            'close': 100.0,
+            'zones': [{'low': 80.0, 'high': 90.0, 'position': 'below', 'distance_pct': -10.0, 'days': [days[60]]}],
+            # 小圖用：收盤、成交量（張）、爆量日在這兩串裡的位置。
+            'chart': {'closes': [100] * 60 + [85] + [100] * 9, 'volumes': [1000] * 60 + [3000] + [1000] * 9, 'heavy': [60]}})
+        self.assertEqual(signals['blocks'], ['heavy_zones'])
+
+    def test_no_heavy_volume_day_means_no_block(self):
+        spike = bar(85, high=90, low=80, volume=5_000_000)
+        for label, rows in (
+                ('每天都是 1,000 張', [bar()] * 70),
+                # 第 61 根 2,999,999 股，差 1 股不到前 60 日均量（1,000,000 股）的 3 倍。
+                ('差一點不到 3 倍', [bar()] * 60 + [bar(85, high=90, low=80, volume=2_999_999)] + [bar()] * 9),
+                # 第 60 根放 5 倍量，但它之前只有 59 個交易日 → 不判斷。
+                ('之前不足 60 個交易日', [bar()] * 59 + [spike] + [bar()] * 10)):
+            signals = self.zones(rows)
+            self.assertIsNone(signals['heavy_zones'], label)
+            self.assertEqual(signals['blocks'], [], label)
+
+    HEAVY = 10_000_000   # 10,000 張：就算前 60 日裡已經有三個這樣的爆量日（均量 1,450 張），仍超過 3 倍
+
+    def heavy(self, close, low, high):
+        return bar(close, high=high, low=low, volume=self.HEAVY)
+
+    def test_overlapping_days_merge_and_separate_ones_do_not(self):
+        # 四個爆量日（第 61、63、65、67 根）：95～97、88～95、80～90、97.5～99。
+        # 由低到高排：80～90 → 88～95 的低價在 90 以內，併成 80～95 → 95～97 的低價剛好等於 95，也算以內，併成 80～97
+        # → 97.5～99 的低價高過 97，不重疊，自己一區。
+        # 現價 100：兩區都在下方，距離＝99 ÷ 100 − 1＝−1.0%、97 ÷ 100 − 1＝−3.0%。清單由高到低；形成的日子由舊到新。
+        days = self.days(70)
+        rows = ([bar()] * 60 + [self.heavy(96, 95, 97), bar(), self.heavy(90, 88, 95), bar(), self.heavy(85, 80, 90), bar(),
+                                self.heavy(98, 97.5, 99)] + [bar()] * 3)
+        block = self.zones(rows)['heavy_zones']
+        self.assertEqual(block['zones'], [
+            {'low': 97.5, 'high': 99.0, 'position': 'below', 'distance_pct': -1.0, 'days': [days[66]]},
+            {'low': 80.0, 'high': 97.0, 'position': 'below', 'distance_pct': -3.0, 'days': [days[60], days[62], days[64]]}])
+        self.assertEqual(block['chart']['heavy'], [60, 62, 64, 66])
+
+    def test_zone_above_inside_and_below_the_price_with_distances(self):
+        # 現價 100。上方那一區 113.37～120：距離＝區的低價 113.37 ÷ 100 − 1＝+13.37% → +13.4。
+        # 99～105 把現價包在裡面 → 現價在區內，距離 0。下方那一區 90～97.24：距離＝區的高價 97.24 ÷ 100 − 1＝−2.76% → −2.8。
+        rows = ([bar()] * 60 + [self.heavy(115, 113.37, 120), bar(), self.heavy(100, 99, 105), bar(), self.heavy(95, 90, 97.24)]
+                + [bar()] * 5)
+        self.assertEqual([(zone['low'], zone['high'], zone['position'], zone['distance_pct'])
+                          for zone in self.zones(rows)['heavy_zones']['zones']],
+                         [(113.37, 120.0, 'above', 13.4), (99.0, 105.0, 'inside', 0.0), (90.0, 97.24, 'below', -2.8)])
+        # 現價剛好踩在區的邊上也算在區內。
+        for low, high in ((100, 110), (90, 100)):
+            zone = self.zones([bar()] * 60 + [self.heavy(100, low, high)] + [bar()] * 9)['heavy_zones']['zones'][0]
+            self.assertEqual((zone['position'], zone['distance_pct']), ('inside', 0.0), (low, high))
+
+    def test_only_the_latest_240_trading_days_are_looked_at(self):
+        # 行情庫有 310 根。倒數第 241 根（60～70）與倒數第 240 根（80～90）都爆量：只有後者在最近 240 個交易日裡。
+        # 小圖的兩串也是最近 240 筆，爆量日在第一筆。
+        rows = [bar()] * 69 + [self.heavy(65, 60, 70), self.heavy(85, 80, 90)] + [bar()] * 239
+        block = self.zones(rows)['heavy_zones']
+        self.assertEqual([(zone['low'], zone['high']) for zone in block['zones']], [(80.0, 90.0)])
+        self.assertEqual((len(block['chart']['closes']), len(block['chart']['volumes']), block['chart']['heavy']), (240, 240, [0]))
+        self.assertEqual((block['chart']['closes'][:2], block['chart']['volumes'][:2]), ([85, 100], [10000, 1000]))
+
+    def test_split_stock_uses_adjusted_prices_and_volumes(self):
+        # 第 66 根一拆四。之前實際成交價是 400 上下、每天 250 張；之後是 100 上下、每天 1,000 張。
+        # 還原後整段都是 100 上下、1,000 張，所以拆分那天的張數變四倍不是爆量。
+        # 真正的爆量日是第 61 根：實際成交 750 張（還原後 3,000 張＝3 倍），實際低 320、高 360 → 還原後 80～90。
+        days = self.days(70)
+        before = (400.0, '', 0.0, 404.0, 396.0, 250_000)
+        rows = ([before] * 60 + [(340.0, '', 0.0, 360.0, 320.0, 750_000)] + [before] * 4
+                + [(100.0, 'X', None, 101.0, 99.0, 1_000_000)] + [bar()] * 4)
+        split = {'date': days[65], 'code': '9999', 'type': '變更面額', 'close_before': 400.0, 'reference': 100.0}
+        block = self.zones(rows, capital_actions={'9999': [split]})['heavy_zones']
+        self.assertEqual(block['zones'], [{'low': 80.0, 'high': 90.0, 'position': 'below', 'distance_pct': -10.0, 'days': [days[60]]}])
+        self.assertEqual(block['chart'], {'closes': [100] * 60 + [85] + [100] * 9, 'volumes': [1000] * 60 + [3000] + [1000] * 9,
+                                          'heavy': [60]})
+
+
+class StockSignalsBlockListTests(_SignalsFixture, unittest.TestCase):
+    """「有哪幾塊」的清單由五塊資料直接給，頁面照著它決定出現哪幾張板。"""
+
+    def test_block_list_names_exactly_the_blocks_that_exist_in_fixed_order(self):
+        # 130 根每天漲 1 元（均線排列四項成立），倒數第 10 根爆量，加權指數資料日與 5 個交易日前都有。
+        days = self.days(130)
+        rows = [(100.0 + i, '+', 1.0, 101.0 + i, 99.0 + i, 10_000_000 if i == 120 else 1_000_000) for i in range(130)]
+        signals = self.analyze(rows, {days[-1]: 20000.0, days[-6]: 20000.0})['signals']
+        self.assertEqual(signals['blocks'], ['versus_market', 'ma_alignment', 'heavy_zones'])
+        self.assertEqual(set(signals), {'data_date', 'versus_market', 'ma_alignment', 'heavy_zones', 'blocks', 'failed'})
+        self.assertEqual(signals['failed'], [])
+        # 這一檔近 5 日＝229 ÷ 224 − 1＝+2.23%（每天 +1 元連乘），大盤 0% → 強於大盤 2.2。
+        self.assertEqual([(row['days'], row['gap']) for row in signals['versus_market']['rows']], [(5, 2.2)])
+        self.assertEqual(signals['ma_alignment']['summary'], '多頭排列')
+        # 爆量那天低 219、高 221，現價 229 → 在現價下方，221 ÷ 229 − 1＝−3.5%。
+        self.assertEqual([(zone['low'], zone['high'], zone['distance_pct']) for zone in signals['heavy_zones']['zones']],
+                         [(219.0, 221.0, -3.5)])
+        dumped = json.dumps(signals, ensure_ascii=False)
+        for word in BANNED_TEXT + ('反推',):
+            self.assertNotIn(word, dumped)
+        # 20 根平盤、沒有加權指數：三塊都沒有，清單是空的，三個鍵都還在（值是 null）。
+        empty = self.analyze([FLAT] * 20, {})['signals']
+        self.assertEqual((empty['blocks'], empty['versus_market'], empty['ma_alignment'], empty['heavy_zones']), ([], None, None, None))
+        self.assertEqual(empty['failed'], [])   # 天生沒有不算算不出來
+
+    def test_a_block_that_cannot_be_computed_drops_only_itself_and_is_named(self):
+        # 同樣 130 根，但第 31 根的成交量是空的（資料有洞）：爆大量成交區的前 60 日均量算不出來。
+        # 只少這一塊，並記在 failed 讓建置報告看得到；和大盤比、均線排列照常。
+        days = self.days(130)
+        rows = [(100.0 + i, '+', 1.0, 101.0 + i, 99.0 + i, None if i == 30 else 1_000_000) for i in range(130)]
+        signals = self.analyze(rows, {days[-1]: 20000.0, days[-6]: 20000.0})['signals']
+        self.assertEqual(signals['blocks'], ['versus_market', 'ma_alignment'])
+        self.assertIsNone(signals['heavy_zones'])
+        self.assertEqual(signals['failed'], ['heavy_zones'])
+        self.assertEqual(signals['ma_alignment']['summary'], '多頭排列')
 
 
 class StockSignalsReaderTests(unittest.TestCase):
