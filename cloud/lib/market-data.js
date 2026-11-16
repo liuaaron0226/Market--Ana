@@ -82,6 +82,8 @@ function currentView(c) {
   if (!c) return null;
   return {
     ...pick(c, ["as_of", "days_available", "futures_short_growing_days", "futures_days_available"]),
+    // 11-17：各項自己的最新一天（融資晚上才公布，常比外資晚一天）；舊資料包沒有就不給
+    ...(c.dates ? { dates: pick(c.dates, ["foreign", "trust", "margin", "short", "amount"]) } : {}),
     ...Object.fromEntries(CURRENT_TABLES.map((k) => [k, pickAll(c[k], ["code", "name", "value", "streak", "capped"])])),
   };
 }

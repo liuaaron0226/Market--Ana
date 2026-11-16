@@ -851,11 +851,14 @@
   const LIST_ROWS = 10, POINT_ROWS = 2;
   const chipSide = () => (panelState.payload && panelState.payload.side) || 0;
   const chipList = key => { const lists = CHIP_LISTS[key] || []; return lists[Math.min(chipSide(), lists.length - 1)]; };
-  // 名單現在是哪一天：在圖上點過就是點的那一天，還沒點就是最新一天
+  // 「目前前 10」各項自己最新有資料的那一天（11-17：融資晚上才公布，常比外資晚一天）；舊資料包沒有 dates 就用全體最新一天
+  const NOW_KEY = { foreign: 'foreign', futures: 'foreign', trust: 'trust', margin: 'margin', short: 'short', volume: 'amount' };
+  const nowDay = key => (!NOW ? null : NOW.dates ? NOW.dates[NOW_KEY[key]] || null : NOW.as_of);
+  // 名單現在是哪一天：在圖上點過就是點的那一天，還沒點就是這一項的最新一天
   function chipDay(key) {
     if (panelState.payload && panelState.payload.day) return panelState.payload.day;
-    const rows = chipSeries(key);
-    return NOW && rows.some(row => row.date === NOW.as_of) ? NOW.as_of : rows.length ? rows[rows.length - 1].date : '';
+    const rows = chipSeries(key), today = nowDay(key);
+    return today && rows.some(row => row.date === today) ? today : rows.length ? rows[rows.length - 1].date : '';
   }
   const signedLots = v => `${v >= 0 ? '+' : '−'}${fmt(Math.abs(v), 0)} 張`;
   const signedBillion = v => (v == null ? '—' : `${v >= 0 ? '+' : '−'}${fmt(Math.abs(v), 1)} 億`);
@@ -911,7 +914,7 @@
         title.innerHTML = name(more.getAttribute('aria-expanded') === 'true' ? list[0].replace(`前 ${LIST_ROWS}`, `前 ${target().querySelectorAll('tbody tr').length}`) : list[0]);
       });
     };
-    if (NOW && day === NOW.as_of) { fill(listTable(NOW[list[1]], latestColumns(key, list[2]))); return; }
+    if (day && day === nowDay(key)) { fill(listTable(NOW[list[1]], latestColumns(key, list[2]))); return; }
     if (!detailDays.has(day)) { fill(`<p class="chip-date">這一天的個股明細還沒抓到（目前有 ${DT ? DT.days.length : 0} 天）。</p>`); return; }
     // 取資料的期間原本的名單先留著（變淡），不換成一行「載入中」：不然面板會先變矮再變高，往下捲過的話畫面會跳一下（本人 11-15 回報的抖動）
     if (target().firstElementChild) {

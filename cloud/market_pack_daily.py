@@ -96,6 +96,9 @@ def build(day: str, out: Path, *, root: Path = ROOT, fetch: bool = True) -> dict
     stage_root = _stage_root(root, stage)
     _run_script(root / "logs/build_chips_data.py", stage_root)
     _run_script(root / "logs/build_stock_detail.py", stage_root)
+    # 首頁籌碼卡的名單對照原件檢查（11-17）：不擋發布，結果由 daily_update 放進站台狀態的 checks.chip_detail
+    report["detail_check"] = check_detail(_read_assignment(stage / "web/detail-data.js", "window.MARKET_DETAIL = "),
+                                          root / "data/market-snapshots/stock-detail")
 
     for name in ("analysis-data.js", "chips-data.js", "detail-data.js"):
         shutil.copy2(stage / "web" / name, out / name)
@@ -111,6 +114,53 @@ def build(day: str, out: Path, *, root: Path = ROOT, fetch: bool = True) -> dict
     if report["analysis_cutoff"] != day:
         raise RuntimeError(f"analysis-data.js 截止日 {report['analysis_cutoff']} 不是 {day}")
     return report
+
+
+# 首頁六張籌碼卡點開的名單（11-17 本人回報最近幾天都「這一天沒有資料」，而且沒有任何檢查擋下）。
+# （卡名, detail current.dates 的鍵, 名單欄位, 應該到哪一天的原件）；外資期貨空單那張列的是外資賣超，跟外資一起檢查。
+DETAIL_CARDS = (
+    ("外資", "foreign", ("foreign_buy", "foreign_sell"), ("t86",)),
+    ("投信", "trust", ("trust_buy", "trust_sell"), ("t86",)),
+    ("成交金額", "amount", ("turnover_top",), ("t86", "quotes")),
+    ("融資", "margin", ("margin_up", "margin_down"), ("margin",)),
+    ("融券", "short", ("short_up", "short_down"), ("margin",)),
+)
+_PRICED = ("foreign", "trust", "amount")   # 要靠每日收盤行情換算或排序的幾張
+
+
+def _latest_source_day(source: Path, dataset: str) -> str | None:
+    days = sorted(p.stem.split("-")[-1] for p in (source / dataset).glob(f"{dataset}-*.json"))
+    return f"{days[-1][:4]}-{days[-1][4:6]}-{days[-1][6:]}" if days else None
+
+
+def check_detail(detail: dict, source: Path) -> dict:
+    """對照近期明細原件（source＝data/market-snapshots/stock-detail）檢查 detail-data.js：
+    每張卡在「最新有原件的那一天」，那天的名單與「目前前 10」都要有人、日期要對得上。不擋發布，結果進站台狀態。"""
+    by_date, current = detail.get("by_date") or {}, detail.get("current") or {}
+    dates = current.get("dates") or {}
+    quote_days = {p.stem.split("-")[-1] for p in (source / "quotes").glob("quotes-*.json")}
+    problems: list[str] = []
+    expected_days: list[str] = []
+    for card, key, lists, datasets in DETAIL_CARDS:
+        days = [day for day in (_latest_source_day(source, dataset) for dataset in datasets) if day]
+        if not days:
+            problems.append(f"{card}：沒有任何原件")
+            continue
+        day = max(days)
+        expected_days.append(day)
+        wrong = []
+        if not any((by_date.get(day) or {}).get(name) for name in lists):
+            wrong.append(f"{day} 的名單是空的")
+        if dates.get(key) != day:
+            wrong.append(f"目前前 10 停在 {dates.get(key)}，不是 {day}")
+        elif not any(current.get(name) for name in lists):
+            wrong.append("目前前 10 是空的")
+        if wrong:
+            if key in _PRICED and day.replace("-", "") not in quote_days:
+                wrong.append(f"缺 {day} 的每日收盤行情原件")
+            problems.append(f"{card}：{'、'.join(wrong)}")
+    return {"status": "failed" if problems else "ok", "data_date": max(expected_days, default=None),
+            "reason": "；".join(problems) or None}
 
 
 def _stage_root(root: Path, stage: Path) -> Path:
