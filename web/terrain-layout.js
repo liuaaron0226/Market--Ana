@@ -6,7 +6,14 @@
    - blocks：固定四個街區，各有 quadrant、side（x：-1 左、1 右；y：1 上、-1 下）、cols、rows、towers。
    - towers：每棟樓 { name, quadrant, col, row, footprint, height, rank }。
      col、row 從中央十字往外數（0 最靠近十字）；rank 是全體依今日成交額的名次（0 最大）。
-   沒有象限的產業不會出現；缺今日成交額或成員檔數的，用最小樓高或最小佔地。 */
+   沒有象限的產業不會出現；缺今日成交額或成員檔數的，用最小樓高或最小佔地。
+
+   TerrainLayout.stackTags(boxes, { gap, ceiling }) → 每個名稱牌的新 top（像素）；null＝這一刻藏起來
+   （這一個是畫面上的像素，不是格；放在這裡是因為它是純計算、可以單獨測。）
+   - boxes：名稱牌在畫面上的框 { left, top, width, height }，照成交額名次排好（最大的在前）。
+   - 名次前面的永遠不動；後面的真的疊到前面的（只是靠得近不算）才往上讓開一格，上下隔 gap。
+     讓開一格還是疊到，或會高過框頂 ceiling，就藏起來——不一路往上爬，牌才不會離自己的樓太遠、也不會跑出框。
+     寬是 0 的（樣式藏起來的）不參與。 */
 (function (global) {
   'use strict';
 
@@ -55,5 +62,23 @@
     return { blocks, towers: blocks.flatMap(block => block.towers) };
   }
 
-  global.TerrainLayout = { layout };
+  const touches = (a, b) => a.left < b.left + b.width && b.left < a.left + a.width && a.top < b.top + b.height && b.top < a.top + a.height;
+
+  function stackTags(boxes, { gap, ceiling }) {
+    const placed = [];
+    return (boxes || []).map(({ left, top, width, height }) => {
+      if (!(width > 0)) return top;
+      const spot = { left, top, width, height };
+      const blocking = placed.filter(other => touches(spot, other));
+      if (blocking.length) {
+        // 只讓開一格：移到疊到的那些牌裡最上面那個的上方。還是疊到、或超出框頂，就這一刻先藏起來。
+        spot.top = Math.min(...blocking.map(other => other.top)) - height - gap;
+        if (spot.top < ceiling || placed.some(other => touches(spot, other))) return null;
+      }
+      placed.push(spot);
+      return spot.top;
+    });
+  }
+
+  global.TerrainLayout = { layout, stackTags };
 })(window);

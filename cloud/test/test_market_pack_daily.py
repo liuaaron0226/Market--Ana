@@ -112,5 +112,103 @@ class OutputContractTest(unittest.TestCase):
                 self.assertEqual(dashboard.read_text(encoding="utf-8"), original)
 
 
+def _source(root: Path, days: dict[str, list[str]]) -> Path:
+    """近期明細原件：{資料集: [YYYYMMDD, ...]}，內容不重要，檢查只看有哪幾天。"""
+    folder = root / "data/market-snapshots/stock-detail"
+    for dataset, compacts in days.items():
+        (folder / dataset).mkdir(parents=True, exist_ok=True)
+        for compact in compacts:
+            (folder / dataset / f"{dataset}-{compact}.json").write_text("{}", encoding="utf-8")
+    return folder
+
+
+def _row(code: str = "2330") -> dict:
+    return {"code": code, "name": "台積電", "value": 1, "streak": 1, "capped": False}
+
+
+FULL_DAY = {"foreign_buy": [_row()], "foreign_sell": [_row()], "trust_buy": [_row()], "trust_sell": [_row()],
+            "turnover_top": [_row()], "margin_up": [_row()], "margin_down": [_row()], "short_up": [_row()],
+            "short_down": [_row()]}
+
+
+def _detail(by_date: dict, dates: dict, current: dict | None = None) -> dict:
+    return {"days": sorted(by_date), "by_date": by_date,
+            "current": {"as_of": max(by_date), "dates": dates, **(FULL_DAY if current is None else current)}}
+
+
+class DetailCheckTest(unittest.TestCase):
+    """11-17 本人回報：首頁籌碼卡點開，最近幾天都「這一天沒有資料」，而且沒有任何檢查擋下。
+    每日建置完要對照原件：最新有原件的那天，六張卡的名單都要有人；沒有就在站台狀態標失敗。"""
+
+    DATES = {"foreign": "2026-11-16", "trust": "2026-11-16", "margin": "2026-11-13", "short": "2026-11-13",
+             "amount": "2026-11-16"}
+
+    def test_all_six_cards_filled_on_their_latest_source_day_is_ok(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = _source(Path(tmp), {"t86": ["20261113", "20261116"], "quotes": ["20261113", "20261116"],
+                                         "margin": ["20261113"]})
+            detail = _detail({"2026-11-13": FULL_DAY, "2026-11-16": {k: v for k, v in FULL_DAY.items()
+                                                                     if not k.startswith(("margin", "short"))}},
+                             self.DATES)
+            self.assertEqual(mpd.check_detail(detail, source),
+                             {"status": "ok", "data_date": "2026-11-16", "reason": None})
+
+    def test_lists_empty_because_quotes_were_never_written_is_a_failure(self) -> None:
+        # 正式站 11-16 的樣子：t86 有、行情沒有 → 外資、投信、成交金額的名單全空
+        with tempfile.TemporaryDirectory() as tmp:
+            source = _source(Path(tmp), {"t86": ["20261106", "20261116"], "quotes": ["20261106"],
+                                         "margin": ["20261106", "20261116"]})
+            credit_only = {k: v for k, v in FULL_DAY.items() if k.startswith(("margin", "short"))}
+            detail = _detail({"2026-11-06": FULL_DAY, "2026-11-16": credit_only},
+                             {**self.DATES, "foreign": "2026-11-06", "trust": "2026-11-06", "amount": "2026-11-06",
+                              "margin": "2026-11-16", "short": "2026-11-16"})
+            result = mpd.check_detail(detail, source)
+            self.assertEqual((result["status"], result["data_date"]), ("failed", "2026-11-16"))
+            for card in ("外資", "投信", "成交金額"):
+                self.assertIn(card, result["reason"])
+            self.assertIn("行情", result["reason"])     # 說得出缺的是哪一份原件
+            self.assertNotIn("融資", result["reason"])
+
+    def test_current_top_ten_empty_or_on_the_wrong_day_is_a_failure(self) -> None:
+        # 「目前前 10」拿全體最新一天排、融資那天還沒公布 → 融資融券的目前前 10 是空的
+        with tempfile.TemporaryDirectory() as tmp:
+            source = _source(Path(tmp), {"t86": ["20261116"], "quotes": ["20261116"], "margin": ["20261113"]})
+            detail = _detail({"2026-11-13": FULL_DAY, "2026-11-16": FULL_DAY},
+                             {**self.DATES, "margin": "2026-11-16"},
+                             current={**FULL_DAY, "short_up": [], "short_down": []})
+            result = mpd.check_detail(detail, source)
+            self.assertEqual(result["status"], "failed")
+            self.assertIn("融資", result["reason"])
+            self.assertIn("融券", result["reason"])
+            self.assertNotIn("外資", result["reason"])
+
+    def test_an_empty_day_in_the_middle_is_a_failure_too(self) -> None:
+        # 審查指出：只看最新一天的話，中間幾天（例如補不回行情的 11-10）是空的也會靜靜過關
+        with tempfile.TemporaryDirectory() as tmp:
+            source = _source(Path(tmp), {"t86": ["20261109", "20261110", "20261116"],
+                                         "quotes": ["20261109", "20261116"], "margin": ["20261116"]})
+            detail = _detail({"2026-11-09": FULL_DAY, "2026-11-10": {}, "2026-11-16": FULL_DAY},
+                             {**self.DATES, "margin": "2026-11-16", "short": "2026-11-16"})
+            result = mpd.check_detail(detail, source)
+            self.assertEqual(result["status"], "failed")
+            self.assertIn("外資：2026-11-10 的名單是空的", result["reason"])
+            self.assertIn("缺 2026-11-10 的每日收盤行情原件", result["reason"])
+            self.assertNotIn("融資", result["reason"])
+
+    def test_a_broken_check_is_reported_and_does_not_stop_the_market_pack(self) -> None:
+        # 檢查不擋發布：detail-data.js 讀不起來時回報失敗，不能讓整包大盤資料改用上一版
+        with tempfile.TemporaryDirectory() as tmp:
+            broken = Path(tmp) / "detail-data.js"
+            broken.write_text("not js", encoding="utf-8")
+            result = mpd._safe_check_detail(broken, Path(tmp))
+            self.assertEqual((result["status"], result["data_date"]), ("failed", None))
+            self.assertIn("檢查本身出錯", result["reason"])
+
+    def test_no_sources_at_all_is_a_failure_not_a_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result = mpd.check_detail({"days": [], "by_date": {}, "current": {}}, Path(tmp) / "none")
+            self.assertEqual(result["status"], "failed")
+
+
 if __name__ == "__main__":
     unittest.main()

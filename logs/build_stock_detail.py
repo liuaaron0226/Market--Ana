@@ -8,7 +8,7 @@ from pathlib import Path
 
 ROOT = Path("C:/Users/User/Desktop/Market--Ana")
 sys.path.insert(0, str(ROOT))
-from chip_streaks import current_top, rank_streak_top  # noqa: E402
+from chip_streaks import current_top, days_through_latest, rank_streak_top  # noqa: E402
 SRC = ROOT / "data/market-snapshots/stock-detail"
 TOP = 20
 
@@ -126,12 +126,19 @@ def named(items):
     return [{"code": r["code"], "name": names.get(r["code"], ""), "value": r["value"], "streak": r["streak"], "capped": r["capped"]} for r in items]
 
 
+# 11-17：每一項用自己最新有資料的那天排（融資官方晚上才公布，最新一天常常還沒有），日期各自放在 dates。
 current = {}
+dates = {}
 for key, (buy_name, sell_name) in {"foreign": ("foreign_buy", "foreign_sell"), "trust": ("trust_buy", "trust_sell"),
                                    "margin": ("margin_up", "margin_down"), "short": ("short_up", "short_down")}.items():
-    b, s = current_top(series[key], ISO, TOP_NOW)
+    own_days = days_through_latest(series[key], ISO)
+    b, s = current_top(series[key], own_days, TOP_NOW) if own_days else ([], [])
     current[buy_name], current[sell_name] = named(b), named(s)
-current["turnover_top"] = named(rank_streak_top(series["amount"], ISO, TOP_NOW, TOP))
+    dates[key] = own_days[-1] if own_days else None
+amount_days = days_through_latest(series["amount"], ISO)
+current["turnover_top"] = named(rank_streak_top(series["amount"], amount_days, TOP_NOW, TOP)) if amount_days else []
+dates["amount"] = amount_days[-1] if amount_days else None
+current["dates"] = dates
 # 期貨卡：外資台指期淨部位連續變得更空幾天（chips-data 的期貨序列，淨口數變小＝空單增加）。
 chips_text = (ROOT / "web/chips-data.js").read_text(encoding="utf-8").strip()
 chips = json.loads(chips_text[chips_text.index("=") + 1:].strip().rstrip(";"))

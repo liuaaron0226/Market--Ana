@@ -380,9 +380,20 @@ CHART_FITS = """selector => {
 # 資金地形：街區的地面、每棟樓的樓頂、名稱牌都要落在地形的框內（沒有被裁掉）。
 TERRAIN_INSIDE = """() => {
   const host = document.querySelector('#rotationTerrain'), stage = host.querySelector('.terrain-stage').getBoundingClientRect();
-  const parts = [...host.querySelectorAll('.terrain-ground, .terrain-tower .top, .terrain-tag')].map(e => e.getBoundingClientRect()).filter(b => b.width);
+  const parts = [...host.querySelectorAll('.terrain-ground, .terrain-tower .top, .terrain-tag')]
+    .filter(e => getComputedStyle(e).visibility !== 'hidden').map(e => e.getBoundingClientRect()).filter(b => b.width);
   const out = parts.filter(b => b.left < stage.left - 1 || b.right > stage.right + 1 || b.top < stage.top - 1 || b.bottom > stage.bottom + 1);
   return parts.length > 30 && !out.length ? 'ok' : `${out.length} of ${parts.length} outside`;
+}"""
+# 資金地形：看得到的名稱牌兩兩不疊（樓靠得近時，名次後面的往上讓開）。回傳疊到的那幾對。
+TAGS_APART = """() => {
+  const boxes = [...document.querySelectorAll('#rotationTerrain .terrain-tag')].filter(t => t.offsetWidth && getComputedStyle(t).visibility !== 'hidden')
+    .map(t => ({ name: t.textContent, box: t.getBoundingClientRect() }));
+  const hits = [];
+  boxes.forEach((a, i) => boxes.slice(i + 1).forEach(b => {
+    if (a.box.left < b.box.right && b.box.left < a.box.right && a.box.top < b.box.bottom && b.box.top < a.box.bottom) hits.push(`${a.name}/${b.name}`);
+  }));
+  return hits;
 }"""
 # 表格裡同一個產業那一列的資金狀態、相對平均與加速度（字要和點樓的明細一模一樣，含正負號）
 TABLE_ROW = """name => {
@@ -1007,6 +1018,8 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
         check(f"{tag}：整片街區與名稱牌都在地形的框內", inside == "ok", inside)
         tags = page.locator("#rotationTerrain .terrain-tag:visible").count()
         check(f"{tag}：名稱牌標出成交額前幾大", tags == (3 if mobile else 6), tags)
+        apart = page.evaluate(TAGS_APART)
+        check(f"{tag}：名稱牌兩兩不疊", not apart, apart)
 
         # 旋轉（本人 11-15：原本的手勢很難操作）：手指放在地形上拖就是轉，斜著拖也算；可以一直轉，不會卡在某個角度。
         stage = page.locator("#rotationTerrain .terrain-stage").bounding_box()
@@ -1037,6 +1050,21 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
         check(f"{tag}：可以一直轉，轉過半圈也不會卡住", abs(far - start) > 180, [start, far])
         back = turn((start - far) / ((level - start) / 80))
         check(f"{tag}：轉回原本的角度", abs(back - start) < 1, [start, back])
+
+        # 轉一整圈，每約 25 度量一次：看得到的名稱牌兩兩不疊、都在框內（疊到時名次後面的讓開一格，放不下就先淡出）
+        crowded, outside = [], []
+        for _ in range(16):
+            at = turn(40)
+            page.wait_for_timeout(250)
+            apart, inside = page.evaluate(TAGS_APART), page.evaluate(TERRAIN_INSIDE)
+            if apart:
+                crowded.append([round(at), apart])
+            if inside != "ok":
+                outside.append([round(at), inside])
+        check(f"{tag}：轉一整圈，名稱牌在每個角度都兩兩不疊", not crowded, crowded[:3])
+        check(f"{tag}：轉一整圈，街區與名稱牌在每個角度都在框內", not outside, outside[:3])
+        back = turn(-640)
+        check(f"{tag}：轉完一圈再轉回原本的角度", abs(back - start) < 1, [start, back])
 
         # 點樓：成交額最大的那一棟（樓頂一定露在外面）
         top = shoot.roof_of(page, "largest")

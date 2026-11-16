@@ -6,7 +6,7 @@ const MIGRATION = ["0001_init.sql", "0003_api_hits.sql", "0004_listed_stock_data
   "0008_stock_history.sql", "0009_user_drawings.sql", "0010_forecast_ledger.sql", "0011_watchlist_watch.sql", "0012_watchlist_group.sql",
   "0013_stock_announcements.sql", "0014_friend_gemini_keys.sql", "0015_watch_news.sql", "0016_watch_peers.sql",
   "0017_watch_ledger.sql", "0018_etf_securities.sql", "0019_watch_push.sql", "0020_friend_ai_daily.sql",
-  "0021_watch_ready_notices.sql", "0022_friend_ai_stock_daily.sql"]
+  "0021_watch_ready_notices.sql", "0022_friend_ai_stock_daily.sql", "0023_forecast_replay.sql"]
   .map((f) => readFileSync(new URL(`../migrations/${f}`, import.meta.url), "utf8"))
   .join("\n");
 

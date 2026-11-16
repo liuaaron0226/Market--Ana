@@ -16,6 +16,14 @@ def _streak(by_day: dict, days: list[str], sign: int) -> int:
     return n
 
 
+def days_through_latest(series: dict[str, dict], days: list[str]) -> list[str]:
+    """這一項自己最新有資料的那天為止的日子（含）；整項都沒資料回空串列。
+    各項公布時間不同（融資官方晚上才公布）：「目前前 10」要用各自最新的一天排，不能拿全體最新一天（11-17）。"""
+    have = {day for by_day in series.values() for day, value in by_day.items() if value is not None}
+    latest = max((day for day in days if day in have), default=None)
+    return [day for day in days if latest is not None and day <= latest]
+
+
 def current_top(series: dict[str, dict], days: list[str], top: int = 10) -> tuple[list[dict], list[dict]]:
     """series: 代號 → {日期: 數值}。回傳（最新一天正值前 top，負值前 top），每列帶 value、streak、capped。"""
     latest = days[-1]

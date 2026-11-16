@@ -12,10 +12,13 @@ function loadLayout() {
   const window = {};
   vm.runInNewContext(readFileSync(new URL("web/terrain-layout.js", ROOT), "utf8"), { window, Math, Number, Object, Array, Map, Set, String, JSON });
   // 頁面腳本在另一個執行環境跑，回傳的陣列和這裡的不是同一種原型；轉一次 JSON 再比，順便確認結果是純資料。
-  return (bubbles) => JSON.parse(JSON.stringify(window.TerrainLayout.layout(bubbles)));
+  return {
+    layout: (bubbles) => JSON.parse(JSON.stringify(window.TerrainLayout.layout(bubbles))),
+    stackTags: (boxes, gap) => JSON.parse(JSON.stringify(window.TerrainLayout.stackTags(boxes, gap))),
+  };
 }
 
-const layout = loadLayout();
+const { layout, stackTags } = loadLayout();
 const industry = (name, quadrant, amount_today, member_count = 10) => ({ name, quadrant, amount_today, member_count });
 const towerOf = (result, name) => result.towers.find((tower) => tower.name === name);
 
@@ -129,5 +132,57 @@ test("已發布的 34 個產業跑得過：每個產業一棟樓，數值都合�
   for (const block of result.blocks) {
     const slots = new Set(block.towers.map((tower) => `${tower.col},${tower.row}`));
     assert.equal(slots.size, block.towers.length, block.quadrant);
+  }
+});
+
+// 名稱牌（畫面上的像素框）互相疊到時：名次後面的往上讓開一格；一格不夠或會超出框頂，就藏起來。
+// 輸入照成交額名次排好，前面的永遠不動。回傳每個牌的新 top；null 表示這一刻藏起來。
+const box = (left, top, width = 60, height = 20) => ({ left, top, width, height });
+const overlaps = (a, b) => a.width > 0 && b.width > 0 && a.left < b.left + b.width && b.left < a.left + a.width
+  && a.top < b.top + b.height && b.top < a.top + a.height;
+const stack = (boxes, gap = 2, ceiling = 0) => stackTags(boxes, { gap, ceiling });
+
+test("名稱牌疊到時，名次後面的往上讓開一格，名次前面的不動", () => {
+  assert.deepEqual(stack([box(100, 100), box(130, 108)]), [100, 100 - 20 - 2]);
+});
+
+test("沒有疊到的名稱牌留在原位", () => {
+  assert.deepEqual(stack([box(0, 100), box(200, 100), box(0, 160)]), [100, 100, 160]);
+});
+
+test("只是靠得很近、沒有真的疊到的名稱牌不動（不會為了留空隙跳到別的牌上面去）", () => {
+  assert.deepEqual(stack([box(100, 100), box(130, 121)], 3), [100, 121]);
+});
+
+test("被藏起來的名稱牌（寬是 0）不讓別人讓開，自己也不動", () => {
+  assert.deepEqual(stack([box(100, 100, 0, 0), box(100, 100)]), [100, 100]);
+});
+
+test("讓開一格還是疊到別的牌，就藏起來，不會一路往上爬、離自己的樓太遠", () => {
+  // 第三個疊到第一個，往上讓開一格是 78，正好疊到原本就在 78 的第二個 → 藏起來
+  assert.deepEqual(stack([box(100, 100), box(100, 78), box(120, 104)]), [100, 78, null]);
+});
+
+test("讓開會超出框頂，就藏起來；名次前面的不受影響", () => {
+  assert.deepEqual(stack([box(100, 10), box(130, 15)], 2, 0), [10, null]);
+});
+
+test("藏起來的牌不擋別人：名次更後面的照常顯示", () => {
+  assert.deepEqual(stack([box(100, 10), box(130, 15), box(150, 18, 60, 20)], 2, 0), [10, null, null]);
+  assert.deepEqual(stack([box(100, 10), box(130, 15), box(400, 15)], 2, 0), [10, null, 15]);
+});
+
+test("任意輸入：看得到的牌兩兩不疊、都在框頂以下，名次第一的一定看得到", () => {
+  let seed = 7;
+  const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  for (let round = 0; round < 200; round += 1) {
+    const boxes = Array.from({ length: 6 }, () => box(Math.round(rand() * 200), Math.round(rand() * 120), 40 + Math.round(rand() * 60), 20));
+    const tops = stack(boxes, 3, 0);
+    assert.notEqual(tops[0], null);
+    const shown = boxes.map((b, i) => ({ ...b, top: tops[i] })).filter((b) => b.top !== null);
+    for (const b of shown.slice(1)) assert.ok(b.top >= 0, JSON.stringify(shown));
+    for (let i = 0; i < shown.length; i += 1) {
+      for (let j = i + 1; j < shown.length; j += 1) assert.ok(!overlaps(shown[i], shown[j]), JSON.stringify(shown));
+    }
   }
 });
