@@ -1,4 +1,5 @@
 # 樣品題：個股頁的事實區塊在立體版要放哪裡（owner 11-16 交代；本人兩個定案在立體版撞在一起，見 C 包票〈要本人決定的〉第 1 點）。
+# 第二題（owner 11-16 追加）：電腦上只有一張的板（漲停動能、融資維持率）多寬——每頁右上的鍵可以在「三分之一寬（推薦）」與「整個寬」之間切。
 # 每個版本一頁、可以單獨打開、可以實際點：頁面是打包後的正式個股頁（cloud/dist），樣式與程式全部內嵌；
 # 資料是預覽伺服器給台積電 2330 的那幾份回應（本機 11-09 資料，含事實區塊與五塊新功能），錄在 .tmp/3d-baseline/facts-place/api-2330.json，
 # 頁面裡的 fetch 換成讀這份錄好的回應，所以不用開伺服器。只有「排法」各版不同。
@@ -41,6 +42,7 @@ SHIM = """<script>
 
 BADGE = """<div class="sample-badge" role="note">
   <b>樣品（不是正式站）</b><span>事實區塊放哪裡</span>%s
+  <button type="button" id="boardWidth" aria-pressed="false">單張板：三分之一寬</button>
 </div>
 <style>
 .sample-badge { position: fixed; left: 50%%; top: 14px; transform: translateX(-50%%); z-index: 50; display: flex; align-items: center; gap: 6px; padding: 6px 8px 6px 12px;
@@ -49,6 +51,13 @@ BADGE = """<div class="sample-badge" role="note">
 @media (max-width: 860px) { .sample-badge { position: static; transform: none; width: max-content; margin: 8px auto 24px; } }
 .sample-badge a { min-width: 28px; height: 26px; display: inline-grid; place-items: center; border-radius: 6px; color: #f2f0ec; text-decoration: none; font-weight: 700; border: 1px solid #45434d; }
 .sample-badge a[aria-current="page"] { background: #f2f0ec; color: #1d1b20; }
+.sample-badge button { height: 26px; padding: 0 8px; border-radius: 6px; border: 1px solid #45434d; background: transparent; color: #f2f0ec; font: 600 12px inherit; cursor: pointer; }
+@media (max-width: 860px) { .sample-badge button { display: none; } }
+/* 第二題：電腦上「重點」的漲停動能、「融資券」的融資維持率這種只有一張的板多寬。
+   推薦：三分之一寬（和「技術」三張並排的每一張同寬、靠左）；另一個：整個面板寬（現在網站上的樣子）。手機上都是整寬。 */
+@media (min-width: 861px) {
+  html:not(.wide-boards) .ss:is([data-panel="summary"], [data-panel="credit"]) { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; }
+}
 </style>"""
 
 # 版本 c 的樣式：一排鍵（手機上排成兩列）、事實區塊的切換籤藏起來改由那一排帶、當日三格一行、電腦上畫線工具併到圖的標題列
@@ -136,7 +145,14 @@ for key, note in VERSIONS.items():
     html = html.replace("<head>", "<head>\n" + SHIM % json.dumps(API, ensure_ascii=False).replace("</", "<\\/"), 1)
     current = ' aria-current="page"'
     links = "".join(f'<a href="facts-place-{k}.html"{current if k == key else ""}>{k}</a>' for k in VERSIONS)
-    tail = BADGE % links + (C_SCRIPT if key == "c" else "")
+    toggle = """<script>
+document.getElementById('boardWidth').addEventListener('click', event => {
+  const wide = document.documentElement.classList.toggle('wide-boards');
+  event.currentTarget.setAttribute('aria-pressed', String(wide));
+  event.currentTarget.textContent = wide ? '單張板：整個寬' : '單張板：三分之一寬';
+});
+</script>"""
+    tail = BADGE % links + toggle + (C_SCRIPT if key == "c" else "")
     html = html.replace("</body>", tail + "\n</body>", 1)
     html = html.replace("<title>個股分析</title>", f"<title>樣品 {key}｜事實區塊放哪裡</title>", 1)
     (OUT / f"facts-place-{key}.html").write_text(html, encoding="utf-8")
