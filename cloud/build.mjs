@@ -27,7 +27,7 @@ cpSync(new URL("minimal.html", dist), new URL("index.html", dist));
 // .bak 是本機備份，不上雲（本人 11-07 指示改打包跳過，而不是刪檔）。
 cpSync(new URL("public-src/", root), dist, { recursive: true, filter: (src) => !src.endsWith("account.css") && !src.endsWith(".bak") });
 // /apply 與主站是兩個 Access 入口：未核准者只拿得到 /apply/*，所以樣式各放一份。
-for (const dir of ["apply", "admin"]) cpSync(new URL("public-src/account.css", root), new URL(`${dir}/account.css`, dist));
+for (const dir of ["apply", "admin", "gemini"]) cpSync(new URL("public-src/account.css", root), new URL(`${dir}/account.css`, dist));
 
 writeFileSync(new URL("_headers", dist), [
   "/*",
@@ -112,7 +112,8 @@ writeFileSync(new URL("functions/_data-status.js", root), dataStatusModuleText(d
 
 // 部署前掃描：dist 只能有允許的檔，且不得含資料或本機路徑。
 const ALLOWED = new Set([...WEB_FILES, "index.html", "_headers", "_routes.json", "owner-entry.js", "market-data-cloud.js",
-  "apply/index.html", "apply/apply.js", "apply/account.css", "admin/index.html", "admin/admin.js", "admin/account.css"]);
+  "apply/index.html", "apply/apply.js", "apply/account.css", "admin/index.html", "admin/admin.js", "admin/account.css",
+  "gemini/index.html", "gemini/gemini.js", "gemini/account.css"]);
 const listed = [];
 const walk = (dir, prefix = "") => {
   for (const name of readdirSync(dir)) {

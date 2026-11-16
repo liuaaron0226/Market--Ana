@@ -11,6 +11,8 @@ from pathlib import Path
 
 import forecast_ledger as fl
 import forecast_run as fr
+import overseas_inputs as oi
+from test_overseas_inputs import FakeNet, eodhd
 
 TAIPEI = timezone(timedelta(hours=8))
 METHOD = "# 大盤分析方法\n\n版本：0.3，2026-11-15。\n"
@@ -180,6 +182,29 @@ class EveningRunTests(RunTestCase):
         outcome = fl.read_ledger(self.ledger)["reconciliations"][0]
         self.assertEqual((outcome["horizon"], outcome["expiry_date"], outcome["expiry_close"]), (1, BASE, 179))
 
+    def test_cells_expiring_today_reach_the_lesson_layer_of_todays_forecast(self):
+        # E 票：先對帳再寫，今天到期的那一格（前一天那份的一日格）已經是今天這份的教訓
+        early = DATES[:-1]
+        self.run_evening(analysis(early), structured=answer(early[-1]),
+                         now=datetime.fromisoformat(f"{early[-1]}T17:40:00+08:00"))
+        log = self.run_evening()
+        today = {r["base_date"]: r for r in fl.read_ledger(self.ledger)["forecasts"]}[BASE]
+        counts = today["input"]["lessons"]["counts"]
+        self.assertEqual(counts["1"]["hits"] + counts["1"]["misses"], 1)
+        self.assertEqual(log["experience"]["lessons_counts"], counts)
+        # 80 根不到一年，相似盤勢不歸類
+        self.assertEqual(log["experience"]["similar_today"], {"regime": None, "since": None})
+
+    def test_dry_run_also_sees_cells_expiring_today_without_touching_the_ledger(self):
+        early = DATES[:-1]
+        self.run_evening(analysis(early), structured=answer(early[-1]),
+                         now=datetime.fromisoformat(f"{early[-1]}T17:40:00+08:00"))
+        before = fl.read_ledger(self.ledger)
+        log = self.run_evening(dry_run=True)
+        counts = log["experience"]["lessons_counts"]
+        self.assertEqual(counts["1"]["hits"] + counts["1"]["misses"], 1)
+        self.assertEqual(fl.read_ledger(self.ledger), before)
+
 
 class DryRunTests(RunTestCase):
     def test_dry_run_leaves_the_real_ledger_untouched_and_reports_the_answer(self):
@@ -207,6 +232,239 @@ class DryRunTests(RunTestCase):
         with self.assertRaises(ValueError):
             self.run_evening(as_of=DATES[-3])
 
+
+def next_weekday(day, steps=1):
+    current = date.fromisoformat(day)
+    while steps:
+        current += timedelta(days=1)
+        if current.weekday() < 5:
+            steps -= 1
+    return current.isoformat()
+
+
+SESSION = next_weekday(BASE)  # 基準日之後的下一個開盤日（晨間版）
+
+
+def at_taipei(day, clock_time):
+    return datetime.fromisoformat(f"{day}T{clock_time}+08:00")
+
+
+class MorningTestCase(RunTestCase):
+    def run_morning(self, payload=None, *, session=SESSION, now=None, structured=None, holidays=frozenset(), **kwargs):
+        return fr.run_morning(
+            self.analysis_file(payload or analysis()), ledger=self.ledger, method_path=self.method,
+            model_bin=self.model(structured or answer()), model="gemini-3.8-flash", session_date=session,
+            holidays=set(holidays), now=lambda: now or at_taipei(session, "07:30:00"), **kwargs)
+
+    def overseas(self, reference, name):
+        # 那斯達克：基準日前一天、基準日（美國日期）各有一根；其他來源都沒抓到
+        routes = {"https://eodhd.com/api/eod/IXIC.INDX": eodhd([(DATES[-3], 100), (DATES[-2], 101), (BASE, 103.02)])}
+        folder = self.tmp / name
+        oi.fetch_sources(folder, reference_date=reference, eodhd_token="KEY", fetch=FakeNet(routes),
+                         now=lambda: "2026-10-20T23:00:00Z")
+        return folder
+
+
+class MorningRunTests(MorningTestCase):
+    def test_writes_a_morning_forecast_on_the_previous_trading_day_before_the_open(self):
+        log = self.tmp / "run.json"
+        result = self.run_morning(log_output=log)
+        self.assertEqual((result["outcome"], result["edition"], result["base_date"], result["session_date"]),
+                         ("written", "morning", BASE, SESSION))
+        record = fl.read_ledger(self.ledger)["forecasts"][0]
+        self.assertEqual((record["kind"], record["edition"], record["base_date"]), ("forecast", "morning", BASE))
+        self.assertEqual(record["deadline"], f"{SESSION}T08:45:00+08:00")
+        self.assertEqual(json.loads(log.read_text(encoding="utf-8"))["edition"], "morning")
+
+    def test_morning_and_evening_of_the_same_base_date_are_two_records_and_morning_never_sees_evening(self):
+        self.run_evening()
+        self.run_morning()
+        records = {r["edition"]: r for r in fl.read_ledger(self.ledger)["forecasts"]}
+        self.assertEqual({e: r["base_date"] for e, r in records.items()}, {"evening": BASE, "morning": BASE})
+        self.assertNotIn(records["evening"]["forecast_id"], json.dumps(records["morning"]["input"], ensure_ascii=False))
+        self.assertNotIn("evening", json.dumps(records["morning"]["input"], ensure_ascii=False))
+
+    def test_holidays_and_weekends_write_nothing(self):
+        saturday = next(d for d in (date.fromisoformat(BASE) + timedelta(days=n) for n in range(1, 8)) if d.weekday() == 5)
+        for session, holidays in ((saturday.isoformat(), set()), (SESSION, {SESSION})):
+            result = self.run_morning(session=session, holidays=holidays)
+            self.assertEqual(result["outcome"], "holiday")
+        self.assertEqual(fl.read_ledger(self.ledger)["forecasts"], [])
+        self.assertEqual(self.calls_made(), 0)
+
+    def test_the_base_date_skips_a_holiday_before_the_session(self):
+        later = next_weekday(BASE, 2)
+        result = self.run_morning(session=later, holidays={SESSION})
+        self.assertEqual((result["outcome"], result["base_date"]), ("written", BASE))
+
+    def test_base_date_data_not_yet_published_writes_nothing_before_the_deadline(self):
+        result = self.run_morning(analysis(DATES[:-1]))
+        self.assertEqual((result["outcome"], result["base_date"]), ("not_ready", BASE))
+        self.assertEqual(fl.read_ledger(self.ledger)["forecasts"], [])
+        self.assertEqual(self.calls_made(), 0)
+
+    def test_an_unscheduled_closure_is_never_locked_as_a_morning_miss(self):
+        # BASE 那天臨時休市（颱風，不在休市日曆）：日 K 沒有 BASE。下一個早上看到的是 DATES[-2]，不寫、不記漏記；
+        # 再下一個開盤日照常寫，補漏記也只看日 K 實際有資料的日子。
+        earlier = DATES[:-1]
+        self.run_morning(analysis(earlier), session=BASE, structured=answer(earlier[-1]))
+        late = self.run_morning(analysis(earlier), now=at_taipei(SESSION, "08:50:00"))
+        self.assertEqual((late["outcome"], late["base_date"]), ("not_ready", BASE))
+        after = next_weekday(SESSION)
+        result = self.run_morning(analysis(earlier + [SESSION]), session=after, structured=answer(SESSION))
+        self.assertEqual((result["outcome"], result["base_date"], result["backfilled_misses"]), ("written", SESSION, []))
+        kinds = {r["base_date"]: r["kind"] for r in fl.read_ledger(self.ledger)["forecasts"]}
+        self.assertEqual(kinds, {DATES[-2]: "forecast", SESSION: "forecast"})
+
+    def test_not_locked_fifteen_minutes_before_the_open_is_a_miss(self):
+        result = self.run_morning(now=at_taipei(SESSION, "08:46:00"))
+        self.assertEqual((result["outcome"], result["kind"], result["miss_reason"]), ("written", "miss", "deadline_passed"))
+        self.assertEqual(self.calls_made(), 0)
+
+    def test_missed_mornings_are_locked_as_misses_and_never_rewritten(self):
+        earlier = DATES[:-2]
+        self.run_morning(analysis(earlier), session=DATES[-2], structured=answer(earlier[-1]))
+        result = self.run_morning()
+        # DATES[-2] 那一份晨間版（開盤日是基準日 BASE）整個早上沒跑：今天補一筆漏記
+        self.assertEqual(result["backfilled_misses"], [DATES[-2]])
+        records = {r["base_date"]: r for r in fl.read_ledger(self.ledger)["forecasts"]}
+        self.assertEqual((records[DATES[-2]]["kind"], records[DATES[-2]]["miss_reason"]), ("miss", "deadline_passed"))
+        self.assertEqual(records[BASE]["kind"], "forecast")
+
+    def test_a_dry_run_can_replay_a_past_morning_with_the_clock_before_the_open(self):
+        log = self.tmp / "run.json"
+        result = self.run_morning(dry_run=True, replay=True, log_output=log,
+                                  now=datetime.fromisoformat("2026-11-15T10:00:00+08:00"))
+        self.assertEqual((result["outcome"], result["kind"], result["base_date"]), ("written", "forecast", BASE))
+        self.assertEqual(result["locked_at"], f"{SESSION}T07:30:00+08:00")
+        self.assertFalse(self.ledger.exists() and any(self.ledger.rglob("*.json")))
+        with self.assertRaises(ValueError):
+            self.run_morning(replay=True)
+
+    def test_morning_runs_never_reconcile(self):
+        early = DATES[:-1]
+        self.run_evening(analysis(early), structured=answer(early[-1]),
+                         now=datetime.fromisoformat(f"{early[-1]}T17:40:00+08:00"))
+        self.run_morning()
+        self.assertEqual(fl.read_ledger(self.ledger)["reconciliations"], [])
+
+
+class OverseasRunTests(MorningTestCase):
+    def test_evening_sees_the_us_close_of_the_night_before_and_morning_the_close_that_just_finished(self):
+        self.run_evening(overseas_dir=self.overseas(BASE, "evening"))
+        self.run_morning(overseas_dir=self.overseas(SESSION, "morning"))
+        records = {r["edition"]: r for r in fl.read_ledger(self.ledger)["forecasts"]}
+        self.assertEqual(records["evening"]["overseas_status"]["us_nasdaq"]["latest_date"], DATES[-2])
+        self.assertEqual(records["morning"]["overseas_status"]["us_nasdaq"]["latest_date"], BASE)
+        # 本人 11-16 選「交」：晨間版交給模型的輸入裡就有剛收盤那一晚的那斯達克
+        morning = records["morning"]
+        nasdaq = morning["input"]["overseas"]["markets"]["us_nasdaq"]
+        self.assertEqual(nasdaq["recent"][-1], {"date": BASE, "close": 103.02, "change_pct": 2.0})  # 103.02 ÷ 101 − 1
+        self.assertEqual(morning["input"]["data_cutoffs"]["us_nasdaq"], BASE)
+        self.assertNotIn("record_only", morning)  # 沒有只存不交的東西
+        self.assertIn("us_sp500", {item["key"] for item in morning["missing_inputs"]})
+
+    def test_originals_are_kept_in_the_ledger_and_the_record_points_at_them(self):
+        self.run_evening(overseas_dir=self.overseas(BASE, "evening"))
+        record = fl.read_ledger(self.ledger)["forecasts"][0]
+        kept = [item for item in record["sources"] if item["status"] == "ok"]
+        self.assertEqual([item["name"] for item in kept], ["eodhd-IXIC.INDX"])
+        self.assertTrue((self.ledger / kept[0]["archived_as"]).exists())
+
+    def test_a_dry_run_keeps_no_originals(self):
+        self.run_evening(dry_run=True, overseas_dir=self.overseas(BASE, "evening"))
+        self.assertFalse((self.ledger / "sources").exists())
+
+
+class ForeignFlowLayerTests(RunTestCase):
+    """G 票：晚間版的輸入多一層外資讀數，從工作集的資料庫與期貨原件算，跟著預測一起鎖進帳本。"""
+
+    def data_root(self):
+        import sqlite3
+
+        import foreign_futures
+        from test_foreign_futures import FakePost, csv_bytes, row
+        root = self.tmp / "data"
+        (root / "listed-institutional").mkdir(parents=True)
+        (root / "stock-history").mkdir(parents=True)
+        con = sqlite3.connect(root / "listed-institutional/listed_institutional.sqlite")
+        con.execute("CREATE TABLE institutional (date TEXT, code TEXT, foreign_net INTEGER)")
+        # 最後三天外資賣超台積電 100 萬股（× 收盤 1000 = -10 億），之前每天買超 100 萬股
+        con.executemany("INSERT INTO institutional VALUES (?,?,?)",
+                        [(d, "2330", -1_000_000 if i >= len(DATES) - 3 else 1_000_000) for i, d in enumerate(DATES)])
+        con.commit(); con.close()
+        con = sqlite3.connect(root / "stock-history/stock-history.sqlite")
+        con.execute("CREATE TABLE daily (date TEXT, code TEXT, close REAL, turnover INTEGER)")
+        con.executemany("INSERT INTO daily VALUES (?,?,?,?)", [(d, "2330", 1000.0, 100_000_000_000) for d in DATES])
+        con.commit(); con.close()
+        slash = BASE.replace("-", "/")
+        foreign_futures.fetch_day(root / "foreign-futures", BASE, sleep=lambda s: None, post=FakePost({
+            "TXF": csv_bytes(row(slash, "臺股期貨", "外資及陸資", -1200)),
+            "MXF": csv_bytes(row(slash, "小型臺指期貨", "外資及陸資", 400))}))
+        return root
+
+    def test_layer_is_locked_with_the_forecast(self):
+        empty_seeds = self.tmp / "no-seeds"
+        result = self.run_evening(data_root=self.data_root(), seeds_root=empty_seeds)
+        self.assertEqual(result["outcome"], "written")
+        # 那斯達克與美元的來源屬 D 票，還沒接上
+        self.assertEqual(result["foreign_flow_missing"], ["nasdaq_last_session", "dollar_and_twd_vs_foreign"])
+        record = fl.read_ledger(self.ledger)["forecasts"][0]
+        layer = record["input"]["foreign_flow"]
+        readings = layer["readings"]
+        self.assertEqual(readings["streak_and_cumulative"]["streak"], {"side": "sell", "days": 3})
+        self.assertEqual(readings["tsmc_split"]["tsmc_billion"], -10.0)
+        self.assertEqual(readings["futures_net_position"]["net_contracts"], -1100)   # -1200 + 400/4
+        self.assertIn("不代表之後會續漲或續跌", layer["notes"]["spot"])
+        self.assertEqual(layer["sources"]["futures_to"], BASE)
+        self.assertIn("foreign_flow", record["input"]["parameters"]["layers"])
+
+    def test_nasdaq_numbers_are_sealed_in_the_record_but_not_given_to_the_model(self):
+        root = self.data_root()
+        real = fr.load_foreign_sources
+        nasdaq = [{"date": d, "close": 100 + i} for i, d in enumerate(DATES[:-1])]
+
+        def with_nasdaq(data_root, seeds_root=fr.SEEDS_ROOT):
+            sources = real(data_root, seeds_root)
+            sources["nasdaq"] = nasdaq
+            sources["nasdaq_in_prompt"] = False      # 條款開關關掉時
+            return sources
+
+        fr.load_foreign_sources = with_nasdaq
+        try:
+            self.run_evening(data_root=root, seeds_root=self.tmp / "no-seeds")
+        finally:
+            fr.load_foreign_sources = real
+        record = fl.read_ledger(self.ledger)["forecasts"][0]
+        self.assertEqual(record["input"]["foreign_flow"]["readings"]["nasdaq_last_session"]["status"], "withheld")
+        self.assertNotIn("record_only", record["input"]["foreign_flow"])
+        kept = record["record_only"]["foreign_flow"]["nasdaq_last_session"]
+        self.assertEqual(kept["us_close_date"], DATES[-2])
+
+    def test_without_data_the_forecast_is_still_written_and_the_gap_is_named(self):
+        result = self.run_evening()
+        self.assertEqual(result["outcome"], "written")
+        self.assertEqual(result["foreign_flow_missing"], ["nasdaq_last_session", "streak_and_cumulative", "tsmc_split",
+                                                          "dollar_and_twd_vs_foreign", "futures_net_position"])
+
+
+class OverseasFeedsForeignFlowTests(MorningTestCase):
+    """D 票與 G 票接在一起（owner 2026-11-16 整合）：海外層的那斯達克序列就是外資讀數 1 用的那一份。"""
+
+    def test_the_nasdaq_series_feeds_the_foreign_flow_reading_of_each_edition(self):
+        # 晚間版看基準日前一晚的美股；晨間版看開盤日之前剛收盤的那一晚（就是基準日當晚）。
+        self.run_evening(overseas_dir=self.overseas(BASE, "evening"))
+        self.run_morning(overseas_dir=self.overseas(SESSION, "morning"))
+        records = {r["edition"]: r for r in fl.read_ledger(self.ledger)["forecasts"]}
+        evening = records["evening"]["input"]["foreign_flow"]["readings"]["nasdaq_last_session"]
+        morning = records["morning"]["input"]["foreign_flow"]["readings"]["nasdaq_last_session"]
+        self.assertEqual((evening["status"], evening["us_close_date"], evening["change_pct"]), ("ok", DATES[-2], 1.0))
+        self.assertEqual((morning["status"], morning["us_close_date"], morning["change_pct"]), ("ok", BASE, 2.0))
+
+    def test_without_overseas_data_the_reading_is_missing_and_the_forecast_is_still_written(self):
+        result = self.run_evening()
+        self.assertEqual(result["outcome"], "written")
+        self.assertIn("nasdaq_last_session", result["foreign_flow_missing"])
 
 if __name__ == "__main__":
     unittest.main()

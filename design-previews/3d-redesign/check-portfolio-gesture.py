@@ -11,7 +11,8 @@ from playwright.sync_api import sync_playwright
 out = Path(sys.argv[1]) if len(sys.argv) > 1 else None
 if out:
     out.mkdir(parents=True, exist_ok=True)
-BASE = "http://127.0.0.1:5197"
+import os
+BASE = os.environ.get("PREVIEW", "http://127.0.0.1:5197").rstrip("/")   # 預覽換了埠時用 PREVIEW=http://127.0.0.1:5198
 fails, passed = [], 0
 
 

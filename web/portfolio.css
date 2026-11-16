@@ -170,6 +170,9 @@
 /* 浮起的那幾列按下去會沉：共用的規則認的是列裡第一層的按鈕，這裡的展開鍵在裡面一層 */
 .hv-row[data-state="bull"]:has(.hv-open:active) { transform: translateY(calc(var(--key-thick) - 1px)); box-shadow: var(--key-shadow-press); }
 .pf-only-watch .hv-top { grid-template-columns: minmax(0, 1fr) auto 12px; }
+/* 關注中的那幾檔：判斷那一行（watch-judgments.css）排在名稱下面、整條寬；金屬板的反光跟著這一列變高 */
+.hv-top > .wj-line { grid-column: 1 / -1; margin: 0 0 2px; }
+#holdingRows .hv-row.has-judgment { --plate-h: 74px; }
 .pf-tag { color: var(--dim); font: 12px var(--sans); white-space: nowrap; }
 .hv-name > span { overflow: hidden; text-overflow: ellipsis; }
 .hv-name em { margin-left: 6px; color: var(--faint); font: 400 11px var(--sans); font-style: normal; }

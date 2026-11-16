@@ -1,0 +1,124 @@
+/* 個股頁事實區塊（2026-11-15 規格）：色票、字型、細線沿用網站現有的；不加陰影；紅綠只在細記號上。
+   立體重設計合併時，只要換這個檔與掛載位置。 */
+.bd .sf { margin: -12px 0 28px; }
+.bd .sf[hidden] { display: none; }
+.bd .sf-today { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 2px solid var(--ink); }
+.bd .sf-today[data-count="2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.bd .sf-today[data-count="1"] { grid-template-columns: minmax(0, 1fr); }
+.bd .sf-cell { padding: 14px 0 14px 18px; border-left: 1px solid var(--hair); min-width: 0; }
+.bd .sf-cell:first-child { padding-left: 0; border-left: 0; }
+.bd .sf-label { display: block; color: var(--dim); font: 13px var(--sans); }
+.bd .sf-value { display: flex; align-items: center; margin-top: 6px; color: var(--ink); font: 500 17px/1.35 var(--sans); font-variant-numeric: tabular-nums; }
+.bd .sf-tick { display: inline-block; flex: none; width: 3px; height: 13px; margin-right: 8px; vertical-align: -1px; background: var(--faint); }
+.bd .sf-tick.up { background: var(--up); }
+.bd .sf-tick.down { background: var(--down); }
+
+@media (max-width: 860px) {
+  .bd .sf { margin: -4px 0 22px; }
+  .bd .sf-cell { padding: 12px 0 12px 10px; }
+  .bd .sf-label { font-size: 12px; }
+  .bd .sf-value { font-size: 14px; }
+  .bd .sf-tick { height: 11px; margin-right: 6px; }
+}
+
+/* ---------- 六塊：切換籤（樣子與按法同圖下切換指標那一排）＋一次一塊 ----------
+   位置（本人 2026-11-16 選 B）：右欄、價位階梯下面。桌機頁面不變長；手機右欄本來就排在圖下面。 */
+.bd .sf-blocks { margin: 28px 0 0; padding-top: 18px; border-top: 1px solid var(--hair); }
+.bd .sf-blocks[hidden] { display: none; }
+.bd .sf-tabs { display: flex; gap: 4px; }
+/* 平分一整列：之後加到六個鈕，右欄約 250 寬時每個約 38 寬，三個字的名字放得下（12 號字）。 */
+.bd .sf-tab {
+  flex: 1 1 0; min-width: 0; height: var(--btn-h); padding: 0; border: 1px solid transparent; border-radius: var(--btn-r);
+  background: transparent; color: var(--dim); font: 500 12px var(--sans); white-space: nowrap; cursor: pointer;
+  transition: background-color 160ms var(--ease-out), color 160ms var(--ease-out), transform 120ms var(--ease-out);
+}
+/* 手機點過之後懸停樣式會殘留，所以只給有滑鼠的裝置 */
+@media (hover: hover) { .bd .sf-tab:not([aria-pressed="true"]):hover { color: var(--ink); background: var(--panel2); } }
+.bd .sf-tab:active { transform: var(--press); }
+.bd .sf-tab[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.bd .sf-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.bd .sf-panel { padding-top: 14px; overflow-x: auto; }  /* 萬一還是放不下，只讓這一塊左右捲，整頁不被撐開 */
+.bd .sf-date { margin: 0 0 8px; color: var(--faint); font-size: 12px; text-align: right; }
+
+.bd .sf-facts { margin: 0; padding: 0; list-style: none; }
+.bd .sf-facts li { padding: 11px 0; border-top: 1px solid var(--hair); font-size: 15px; line-height: 1.6; font-variant-numeric: tabular-nums; }
+.bd .sf-facts li:first-child { border-top: 0; padding-top: 0; }
+
+.bd .sf-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.bd .sf-table th, .bd .sf-table td { padding: 10px 0 10px 12px; text-align: right; white-space: nowrap; }
+.bd .sf-table th:first-child { padding-left: 0; text-align: left; }
+.bd .sf-table thead th { padding-top: 0; color: var(--dim); font: 400 12px var(--sans); }
+.bd .sf-table tbody th { font: 600 14px var(--sans); }
+.bd .sf-table tbody th, .bd .sf-table tbody td { border-top: 1px solid var(--hair); }
+.bd .sf-table td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.bd .sf-streak { font-family: var(--sans); }
+.bd .sf-bar { position: relative; display: block; height: 3px; margin-top: 5px; background: var(--panel3); }
+.bd .sf-bar u { position: absolute; top: 0; bottom: 0; background: var(--faint); }
+.bd .sf-bar u.up { background: var(--up); }
+.bd .sf-bar u.down { background: var(--down); }
+
+.bd .sf-figs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 14px; border-top: 1px solid var(--ink); }
+.bd .sf-figs > div { padding: 12px 0 12px 14px; border-left: 1px solid var(--hair); }
+.bd .sf-figs > div:first-child { padding-left: 0; border-left: 0; }
+.bd .sf-figs span { display: block; color: var(--dim); font-size: 12px; }
+.bd .sf-figs b { display: block; margin-top: 5px; font: 500 20px var(--mono); }
+
+/* 融資券的走勢小圖、基本面的營收列與年增直條 */
+.bd .sf-spark-cell { width: 68px; }
+.bd .sf-spark { display: block; width: 64px; height: 20px; margin-left: auto; }
+.bd .sf-spark polyline { fill: none; stroke: var(--ink); stroke-width: 1.2; vector-effect: non-scaling-stroke; }
+.bd .sf-sub { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-top: 14px; font-size: 13px; }
+.bd .sf-sub b { font: 500 13px var(--mono); white-space: nowrap; }
+.bd .sf-yoy { display: block; width: 100%; height: 64px; margin-top: 8px; }
+.bd .sf-yoy rect { fill: var(--ink); opacity: .32; }
+.bd .sf-yoy rect.latest { opacity: 1; }
+.bd .sf-yoy line { stroke: var(--line-strong); stroke-width: 1; }
+.bd .sf-caption { margin-top: 4px; color: var(--dim); font-size: 12px; }
+.bd .sf-spark circle { fill: var(--ink); }
+
+/* 消息：產業別一列＋公告清單（每則一列，點開看全文）；全文保留原本的換行 */
+.bd .sf-kv { display: flex; justify-content: space-between; gap: 12px; padding-bottom: 10px; font-size: 13px; }
+.bd .sf-kv span { color: var(--dim); }
+.bd .sf-news-item { border-top: 1px solid var(--hair); }
+.bd .sf-news-item > summary { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; padding: 9px 0; cursor: pointer; list-style: none; font-size: 13px; line-height: 1.5; }
+.bd .sf-news-item > summary::-webkit-details-marker { display: none; }
+.bd .sf-news-when { color: var(--dim); font-size: 12px; white-space: nowrap; }
+/* 本人 11-16 選 B：主旨只留一行、太長以「…」結尾；點開時顯示完整主旨 */
+.bd .sf-news-subject { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bd .sf-news-item[open] > summary .sf-news-subject { white-space: normal; overflow-wrap: anywhere; font-weight: 600; }
+.bd .sf-news-body { padding: 0 0 8px; font-size: 13px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.bd .sf-news-meta { padding-bottom: 10px; color: var(--dim); font-size: 12px; }
+.bd .sf-news-more { width: 100%; height: var(--btn-h); margin-top: 4px; border: 1px solid var(--hair); border-radius: var(--btn-r);
+  background: transparent; color: var(--dim); font: 500 12px var(--sans); cursor: pointer; }
+@media (hover: hover) { .bd .sf-news-more:hover { color: var(--ink); background: var(--panel2); } }
+.bd .sf-news-item > summary:focus-visible, .bd .sf-news-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* 關注股的新聞標題（C 票）：接在公告後面，一則一列；點了開原文。標題一行、前言兩行，出處在右下。 */
+.bd .sf-press:not(:empty) { margin-top: 14px; }
+.bd .sf-headline { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; padding: 9px 0; border-top: 1px solid var(--hair);
+  color: var(--ink); font-size: 13px; line-height: 1.5; text-decoration: none; }
+.bd .sf-headline-title { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bd .sf-headline-lead { grid-column: 2; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  color: var(--dim); font-size: 12px; overflow-wrap: anywhere; }
+.bd .sf-headline-src { grid-column: 2; justify-self: end; color: var(--faint); font-size: 11px; }
+@media (hover: hover) { .bd .sf-headline:hover .sf-headline-title { text-decoration: underline; text-underline-offset: 3px; } }
+.bd .sf-headline:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.bd .sf-miss, .bd .sf-quiet { padding: 9px 0; border-top: 1px solid var(--hair); color: var(--dim); font-size: 12px; }
+
+
+/* 桌機：右欄約 250 寬，表格收緊才放得下五欄 */
+@media (min-width: 861px) {
+  .bd .sf-facts li { font-size: 14px; }
+  .bd .sf-table { font-size: 12px; }
+  .bd .sf-table tbody th { font-size: 13px; }
+  .bd .sf-table th, .bd .sf-table td { padding-left: 4px; }
+  .bd .sf-table td.num { font-size: 11.5px; letter-spacing: -.02em; }
+  .bd .sf-streak .sf-tick { margin-right: 4px; }
+  .bd .sf-figs > div { padding-left: 10px; }
+  .bd .sf-figs b { font-size: 16px; }
+}
+@media (max-width: 860px) {
+  .bd .sf-blocks { margin-top: 20px; padding-top: 16px; }
+  .bd .sf-table { font-size: 13px; }
+  .bd .sf-table th, .bd .sf-table td { padding-left: 8px; }
+  .bd .sf-figs b { font-size: 18px; }
+}

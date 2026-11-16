@@ -1,3 +1,5 @@
+import { etfAnalysisHidden } from "./release-policy.js";
+
 const CODE_RE = /^[0-9A-Z]{4,6}$/;
 const HORIZONS = new Set(["none", "short", "long"]);
 const WATCHLIST_LIMIT = 100;
@@ -48,13 +50,27 @@ export async function readBody(request) {
   }
 }
 
+// ETF 上站（12 票）：ETF 名錄的表（0018）還沒套到資料庫時，讀它的地方當作沒有 ETF，其他照常。
+export function etfTableMissing(error) {
+  return /no such table: etf_securities/.test(String(error?.message));
+}
+
+// deps.includeEtfs 由入口依 ETF 開關決定；開的人，名單內的 ETF 也算在分析範圍內。
 async function securityFor(db, code, deps) {
-  const row = await db.prepare(
+  const directory = (withEtfs) => db.prepare(
     "SELECT x.code, x.name, x.market, x.in_universe FROM stock_data_state s JOIN (" +
       "SELECT version, code, name, market, 1 AS in_universe FROM listed_securities " +
+      (withEtfs ? "UNION ALL SELECT version, code, name, market, 1 AS in_universe FROM etf_securities " : "") +
       "UNION ALL SELECT version, code, name, market, 0 AS in_universe FROM universe_outside" +
       ") x ON x.version = s.active_version WHERE s.key = 'current' AND x.code = ? LIMIT 1",
   ).bind(code).first();
+  let row;
+  try {
+    row = await directory(Boolean(deps.includeEtfs));
+  } catch (error) {
+    if (!deps.includeEtfs || !etfTableMissing(error)) throw error;
+    row = await directory(false);
+  }
   if (row) return row;
   if (typeof deps.quoteFetch !== "function") throw new UserPortfolioError(404, "查無此上市或上櫃股票");
   const url = new URL("https://mis.twse.com.tw/stock/api/getStockInfo.jsp");
@@ -256,12 +272,15 @@ async function officialPrices(rows, quoteFetch, now) {
 async function listHoldings(db, email, deps) {
   const { results } = await db.prepare(
     "SELECT h.code, h.name, h.market, h.shares, h.average_cost, h.note, h.in_universe, h.source, h.source_ref, " +
-      "h.last_price, h.price_as_of, h.price_source, h.created_at, h.updated_at, a.as_of AS analysis_as_of, a.payload " +
+      "h.last_price, h.price_as_of, h.price_source, h.created_at, h.updated_at, a.as_of AS analysis_as_of, a.payload, " +
+      "json_extract(a.payload, '$.kind') AS kind " +
       "FROM user_holdings h LEFT JOIN stock_data_state s ON s.key = 'current' " +
       "LEFT JOIN stock_analysis a ON a.version = s.active_version AND a.code = h.code " +
       "WHERE h.email = ? ORDER BY h.updated_at DESC, h.code",
   ).bind(email).all();
-  const analysis = new Map(results.map((item) => [item.code, closeFromPayload(item.payload)]));
+  // ETF 開關對這個人關著時，0050 以外的 ETF 不用本站分析的收盤價（和 ETF 上站之前一樣走官方行情）。
+  const analysis = new Map(results.map((item) => [item.code,
+    etfAnalysisHidden(item.code, item.kind, Boolean(deps.includeEtfs)) ? null : closeFromPayload(item.payload)]));
   const unresolved = results.filter((item) => analysis.get(item.code) === null);
   const official = await officialPrices(unresolved, deps.quoteFetch, deps.now || Date.now);
   for (const [code, quote] of official) {

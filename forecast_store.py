@@ -4,6 +4,7 @@
 - push：本機帳本每個檔案上傳到 ``forecast-ledger/<相對路徑>``；雲端已有同內容就略過，內容不同就丟
   ``LedgerStoreConflict``，絕不覆寫。
 - pull：把雲端 ``forecast-ledger/`` 底下的物件還原到本機帳本；本機已有不同內容就丟錯，不覆蓋。
+  海外原件（``sources/``，以內容雜湊命名）留在雲端，不拉回本機。
 
 刻意不放進 state_sync 的工作集（本人 2026-11-15 同意的技術選擇）：工作集是整包換 manifest、會清理沒被引用的
 ``state/`` 物件，由三支既有排程共用 ``market-state-write`` 鎖。帳本用自己的前綴，不受清理影響、也不用搶那把鎖。
@@ -17,6 +18,8 @@ import sys
 from pathlib import Path, PurePosixPath
 
 PREFIX = "forecast-ledger/"
+# 海外原件（D 票）：檔名是內容的雜湊，同名必定同內容，只會越來越多；還原時不拉回本機（寫預測用不到舊原件）。
+ARCHIVE_DIR = "sources/"
 
 
 class LedgerStoreConflict(Exception):
@@ -31,7 +34,8 @@ def _local_files(ledger: Path) -> list[Path]:
 
 
 def push(ledger: Path | str, store, prefix: str = PREFIX) -> dict[str, int]:
-    # 先讀再寫（check-then-act）：同時只會有一個寫入者，由 workflow 的 forecast-ledger 鎖保證。
+    # 先讀再寫（check-then-act）：晚間與晨間兩支排程各有自己的鎖，但寫的是不同的檔案（各自的預測與漏記、
+    # 自己的 runs/；對帳只有晚間寫；sources/ 以內容雜湊命名），所以同一路徑不會有兩個寫入者。
     ledger = Path(ledger)
     uploaded = unchanged = 0
     for path in _local_files(ledger):
@@ -61,7 +65,7 @@ def pull(store, ledger: Path | str, prefix: str = PREFIX) -> dict[str, int]:
     ledger = Path(ledger)
     downloaded = unchanged = 0
     for key in store.keys(prefix):
-        if not key.startswith(prefix) or key.endswith("/"):
+        if not key.startswith(prefix) or key.endswith("/") or key[len(prefix):].startswith(ARCHIVE_DIR):
             continue
         target = ledger.joinpath(*_relative(key, prefix).parts)
         data = store.get(key)

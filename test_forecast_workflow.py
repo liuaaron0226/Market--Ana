@@ -9,6 +9,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent
 WORKFLOW = ROOT / ".github/workflows/forecast-ledger.yml"
+MORNING = ROOT / ".github/workflows/forecast-morning.yml"
+
+
+def settings_only(path: Path) -> str:
+    return "\n".join(line for line in path.read_text(encoding="utf-8").splitlines()
+                     if not line.lstrip().startswith("#"))
 
 
 def step(source: str, name: str) -> str:
@@ -80,7 +86,17 @@ class ForecastWorkflowTests(unittest.TestCase):
         self.assertIn("1b4850599cce73a17f94ffb422df3bf9531531b77dbddc40c1a435e0c2c16807", self.source)
         secrets = set(re.findall(r"secrets\.([A-Z0-9_]+)", self.source))
         self.assertEqual(secrets, {"CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "R2_ACCESS_KEY_ID",
-                                   "R2_SECRET_ACCESS_KEY", "AGY_LOGIN_BUNDLE", "GITHUB_TOKEN"})
+                                   "R2_SECRET_ACCESS_KEY", "AGY_LOGIN_BUNDLE", "GITHUB_TOKEN", "EODHD_API_KEY"})
+
+    def test_fetches_overseas_originals_without_blocking_and_hands_them_to_the_run(self):
+        fetch = step(self.source, "抓海外原件（不擋預測）")
+        self.assertIn("continue-on-error: true", fetch)
+        self.assertIn("EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}", fetch)
+        self.assertIn('python overseas_inputs.py fetch', fetch)
+        self.assertNotIn("${{", fetch.split("run: |", 1)[1])
+        run = step(self.source, "寫晚間版預測並對帳")
+        self.assertIn('--overseas-dir "$RUNNER_TEMP/overseas"', run)
+        self.assertLess(self.source.index("抓海外原件（不擋預測）"), self.source.index("寫晚間版預測並對帳"))
 
     def test_saves_the_ledger_to_r2_before_publishing_to_the_database_and_only_for_real_runs(self):
         push = step(self.source, "帳本原件存回 R2（只新增）")
@@ -100,6 +116,68 @@ class ForecastWorkflowTests(unittest.TestCase):
         cleanup = step(self.source, "清除登入檔與暫存")
         self.assertIn("if: always()", cleanup)
         self.assertIn("agy-home", cleanup)
+
+
+class MorningWorkflowTests(unittest.TestCase):
+    """晨間版（D 票第 10 片）：新增的早晨排程，開盤前寫、不對帳，不擠掉也不被其他排程擠掉。"""
+
+    def setUp(self):
+        self.source = settings_only(MORNING)
+
+    def test_runs_on_weekday_mornings_before_the_open_and_by_hand_with_dry_run_by_default(self):
+        # UTC 23:20（週日到週四）＝台北週一到週五 07:20；期限 08:45，留一個多小時給排程延遲。
+        self.assertRegex(self.source, r'schedule:\n\s+- cron: "20 23 \* \* 0-4"')
+        self.assertRegex(self.source, r"dry_run:\n(?:\s+.*\n)*?\s+default: true")
+        self.assertNotIn("workflow_run:", self.source)
+
+    def test_needs_its_own_switch_and_never_hangs_under_the_strategy_switch(self):
+        self.assertIn("vars.MARKET_ANA_FORECAST_MORNING", self.source)
+        self.assertNotIn("MARKET_ANA_FORECAST_SCHEDULE", self.source)
+        self.assertNotIn("MARKET_ANA_STRATEGIES_ENABLED", self.source)
+        self.assertIn("if: needs.authorize.outputs.allowed == 'true'", self.source)
+        authorize = step(self.source, "Fail-closed 核准執行模式")
+        self.assertIn('"$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH"', authorize)
+
+    def test_has_its_own_lock_that_is_not_the_evening_one_nor_the_shared_one(self):
+        group = re.search(r"concurrency:\n\s+group: (.+)\n\s+cancel-in-progress: false", self.source)
+        self.assertIsNotNone(group)
+        self.assertIn("'forecast-ledger-morning'", group.group(1))
+        self.assertIn("forecast-ledger-morning-dry-{0}", group.group(1))
+        self.assertNotIn("'forecast-ledger'", group.group(1))
+        self.assertNotIn("market-state-write", self.source)
+
+    def test_writes_the_morning_edition_for_today_with_overseas_originals(self):
+        run = step(self.source, "寫晨間版預測")
+        self.assertIn("python forecast_run.py", run)
+        self.assertIn("--edition morning", run)
+        self.assertIn('--session-date "$SESSION_DATE"', run)
+        self.assertIn('--overseas-dir "$RUNNER_TEMP/overseas"', run)
+        self.assertIn('--log-output "$LEDGER/runs/$GITHUB_RUN_ID.json"', run)
+        self.assertNotIn("${{", run.split("run: |", 1)[1])
+        fetch = step(self.source, "抓海外原件（不擋預測）")
+        self.assertIn("continue-on-error: true", fetch)
+        self.assertIn('--reference-date "$SESSION_DATE"', fetch)
+        mode = step(self.source, "決定執行模式並檢查機密")
+        self.assertIn("TZ=Asia/Taipei date +%F", mode)
+
+    def test_restores_read_only_saves_the_ledger_first_and_then_publishes(self):
+        self.assertIn("python state_sync.py restore --target .", self.source)
+        self.assertNotIn("state_sync.py upload", self.source)
+        self.assertIn("python forecast_store.py pull --ledger", self.source)
+        push = step(self.source, "帳本原件存回 R2（只新增）")
+        d1 = step(self.source, "發布到網站資料庫")
+        self.assertIn("if: always() && steps.mode.outputs.dry_run == 'false' && steps.restore.outcome == 'success'", push)
+        self.assertIn("if: success() && steps.mode.outputs.dry_run == 'false'", d1)
+        self.assertLess(self.source.index("帳本原件存回 R2（只新增）"), self.source.index("發布到網站資料庫"))
+        self.assertIn("1b4850599cce73a17f94ffb422df3bf9531531b77dbddc40c1a435e0c2c16807", self.source)
+        secrets = set(re.findall(r"secrets\.([A-Z0-9_]+)", self.source))
+        self.assertEqual(secrets, {"CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "R2_ACCESS_KEY_ID",
+                                   "R2_SECRET_ACCESS_KEY", "AGY_LOGIN_BUNDLE", "EODHD_API_KEY"})
+
+    def test_always_keeps_a_run_record_and_cleans_up_the_login(self):
+        self.assertIn("forecast-morning-${{ github.run_id }}", self.source)
+        self.assertIn("if: always()", step(self.source, "保存執行紀錄"))
+        self.assertIn("agy-home", step(self.source, "清除登入檔與暫存"))
 
 
 if __name__ == "__main__":

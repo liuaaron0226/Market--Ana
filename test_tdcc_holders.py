@@ -111,7 +111,7 @@ class RefreshTest(unittest.TestCase):
                                        "fields": ["pct_1000", "holders_1000", "pct_400", "holders_400", "holders"],
                                        "weeks": {"2025-11-21": {"2330": [86.63, 1534, 89.33, 2645, 1797619]},
                                                  "2026-11-06": {"2330": [84.0, 1460, 86.8, 2600, 3290000], "6488": [66.0, 48, 71.7, 99, 178000]},
-                                                 "2026-11-13": {"2330": [1.0, 1, 1.0, 1, 1]}}}), encoding="utf-8")
+                                                 "2026-11-13": {"2330": [1.0, 1, 1.0, 1, 1000]}}}), encoding="utf-8")
         rows = series(self.out, "2330", "9999-12-31", history=history)
         self.assertEqual([(row["date"], row["pct_1000"]) for row in rows],
                          [("2025-11-21", 86.63), ("2026-11-06", 84.0), ("2026-11-13", 84.17)])   # 同一週以每週存下的檔為準
@@ -127,6 +127,18 @@ class RefreshTest(unittest.TestCase):
         history.write_text('{"schema": "something-else", "weeks": {}}', encoding="utf-8")
         with self.assertRaises(ValueError):
             series(self.out, "2330", "9999-12-31", history=history)
+
+    def test_series_leaves_out_a_week_whose_register_is_not_a_real_spread(self) -> None:
+        # 官方查詢頁 5904 在 2026-08-07 那一週登記的是「1 人持有全部股份」（實查兩次相同），前後兩週都是數萬人。
+        # 那不是股權分散的樣子，放進逐週走勢會變成一根假的尖峰；這種週不放，前後兩週照常。
+        history = self.out.parent / "history.json"
+        history.write_text(json.dumps({"schema": "tdcc-holders-history/v1",
+                                       "fields": ["pct_1000", "holders_1000", "pct_400", "holders_400", "holders"],
+                                       "weeks": {"2026-07-31": {"5904": [61.52, 12, 69.42, 28, 33355]},
+                                                 "2026-08-07": {"5904": [100.0, 1, 100.0, 1, 1]},
+                                                 "2026-08-14": {"5904": [74.9, 14, 82.72, 31, 81297]}}}), encoding="utf-8")
+        rows = series(self.out, "5904", "9999-12-31", history=history)
+        self.assertEqual([(row["date"], row["pct_400"]) for row in rows], [("2026-07-31", 69.42), ("2026-08-14", 82.72)])
 
 
 if __name__ == "__main__":

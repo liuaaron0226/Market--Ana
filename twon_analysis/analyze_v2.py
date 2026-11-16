@@ -13,7 +13,8 @@ import math
 
 from .data import DEFAULT_DB, DEFAULT_OTC_DB, load_bars
 from .indicators import Bar, atr14, kd9, ma, macd
-from .price_adjustment import apply_factors, default_capital_events, price_factors
+from .price_adjustment import (apply_factors, default_capital_events, default_reference_events, price_factors,
+                               reference_day_returns)
 from .price_structure import WEIGHTS, resistance_tick, support_tick, tick_floor
 from .strategy_v1 import strategy_v1
 
@@ -483,47 +484,133 @@ def _scale_shares(rows: list[dict], share_scale: dict[str, float]) -> list[dict]
     return scaled
 
 
-def _revenue_yoy(code: str, market: str, as_of: str) -> float | None:
+def _revenue_meta() -> tuple[dict, Path]:
     import json
-    from datetime import date
-    import fundamentals_history as fh
     root = DEFAULT_DB.parents[1] / 'fundamentals-history'
     meta = _REVENUE_CACHE.get(('meta',))
     if meta is None:
         meta = json.loads((root / 'meta.json').read_text(encoding='utf-8'))
         _REVENUE_CACHE[('meta',)] = meta
+    return meta, root
+
+
+def _monthly_revenue(code: str, key_market: str, period: str) -> int | None:
+    """某一期某一檔的月營收（千元）；同一期有國內、國外兩份表時取先查到的那份。每份原件只解析一次。"""
+    import fundamentals_history as fh
+    meta, root = _revenue_meta()
+    for item in (f for f in meta['files'] if f['dataset'] == 'monthly_revenue' and f['market'] == key_market
+                 and f['period'] == period):
+        cache_key = ('file', item['file'])
+        if cache_key not in _REVENUE_CACHE:
+            content = (root / item['file']).read_bytes()
+            rows = fh.parse_monthly_revenue(content, market=key_market, period=period, source_file=item['file'],
+                                            fetched_at_utc=item['fetched_at_utc'], sha256=item['sha256'],
+                                            source_scope=item.get('source_scope', 'domestic'))
+            _REVENUE_CACHE[cache_key] = {r['code']: r['revenue_thousand_twd'] for r in rows}
+        value = _REVENUE_CACHE[cache_key].get(code)
+        if value is not None:
+            return value
+    return None
+
+
+def _revenue_periods(market: str, as_of: str) -> tuple[str, list[str]]:
+    """截至 as_of 法定公布日已過的期別（由舊到新）。"""
+    meta, _ = _revenue_meta()
     key_market = 'listed' if market == '上市' else 'otc'
-    files = [f for f in meta['files'] if f['dataset'] == 'monthly_revenue' and f['market'] == key_market
-             and f['available_on'] <= as_of]
-    if not files:
+    periods = sorted({f['period'] for f in meta['files'] if f['dataset'] == 'monthly_revenue' and f['market'] == key_market
+                      and f['available_on'] <= as_of})
+    return key_market, periods
+
+
+def _revenue_yoy(code: str, market: str, as_of: str) -> float | None:
+    from datetime import date
+    key_market, periods = _revenue_periods(market, as_of)
+    if not periods:
         return None
-    latest = max(f['period'] for f in files)
+    latest = periods[-1]
     year, month = latest.split('-')
     prior = f'{int(year) - 1}-{month}'
-
-    def revenue(period: str) -> int | None:
-        for item in (f for f in meta['files'] if f['dataset'] == 'monthly_revenue' and f['market'] == key_market
-                     and f['period'] == period):
-            cache_key = ('file', item['file'])
-            if cache_key not in _REVENUE_CACHE:
-                content = (root / item['file']).read_bytes()
-                rows = fh.parse_monthly_revenue(content, market=key_market, period=period, source_file=item['file'],
-                                                fetched_at_utc=item['fetched_at_utc'], sha256=item['sha256'],
-                                                source_scope=item.get('source_scope', 'domestic'))
-                _REVENUE_CACHE[cache_key] = {r['code']: r['revenue_thousand_twd'] for r in rows}
-            value = _REVENUE_CACHE[cache_key].get(code)
-            if value is not None:
-                return value
-        return None
-
     date.fromisoformat(as_of)
-    now, then = revenue(latest), revenue(prior)
+    now, then = _monthly_revenue(code, key_market, latest), _monthly_revenue(code, key_market, prior)
     return round((now - then) / then * 100, 2) if now is not None and then else None
 
 
-def _pe(code: str, as_of: str) -> float | None:
+def revenue_series(code: str, market: str, as_of: str, months: int = 25) -> list[dict]:
+    """事實區塊用：最近 months 期（夠算 13 個月的年增）月營收，由舊到新；查不到的期別省略。"""
+    key_market, periods = _revenue_periods(market, as_of)
+    out = []
+    for period in periods[-months:]:
+        value = _monthly_revenue(code, key_market, period)
+        if value is not None:
+            out.append({'period': period, 'revenue': value})
+    return out
+
+
+def valuation_snapshot(code: str, as_of: str) -> dict | None:
+    """事實區塊用：這一檔截至 as_of 最近一筆本益比、淨值比、殖利率（每日更新已在抓，上市上櫃都有）。"""
     import valuation_history
-    row = valuation_history.as_of(valuation_history.DEFAULT_DB, as_of, code=code)
+    return valuation_history.as_of(valuation_history.DEFAULT_DB, as_of, code=code)
+
+
+def _otc_credit_file(path: Path) -> dict:
+    """一份櫃買原件 → {代號: 欄位值}。融資融券看「資餘額」「券餘額」（張），借券看第二個「當日餘額」（股）。"""
+    import json
+    cached = _OTC_CREDIT_CACHE.get(path)
+    if cached is not None:
+        return cached
+    out: dict = {}
+    _OTC_CREDIT_CACHE[path] = out   # 讀不了也記住（空的）：一份壞檔不要被每一檔上櫃股重讀一次
+    raw = json.loads(path.read_text(encoding='utf-8'))
+    table = raw.get('data', raw)['tables'][0]   # 每日抓取存的是外包格式（data＝官方原文）；也認得官方原文本身
+    fields = [str(f).strip() for f in table['fields']]
+    number = lambda text: int(str(text).replace(',', '').strip() or 0)  # noqa: E731
+    if '資餘額' in fields:
+        margin_at, short_at = fields.index('資餘額'), fields.index('券餘額')
+        out.update({str(row[0]).strip(): {'margin': number(row[margin_at]), 'short': number(row[short_at])} for row in table['data']})
+    else:
+        # 借券是「當日還券」之後的那個「當日餘額」（前面那個是融券的）
+        balance_at = fields.index('當日餘額', fields.index('當日還券'))
+        out.update({str(row[0]).strip(): {'balance': number(row[balance_at])} for row in table['data']})
+    return out
+
+
+_OTC_CREDIT_CACHE: dict = {}
+
+
+def _otc_credit_series(code: str, as_of: str, days: int) -> dict:
+    base = DEFAULT_DB.parents[1] / 'otc-credit'
+    out: dict = {'margin': [], 'borrow': []}
+    for kind, key in (('margin', 'margin'), ('sbl', 'borrow')):
+        files = sorted(base.glob(f'{kind}/*.json'))
+        dated = [(f'{p.stem[:4]}-{p.stem[4:6]}-{p.stem[6:]}', p) for p in files if len(p.stem) == 8 and p.stem.isdigit()]
+        for day, path in [(d, p) for d, p in dated if d <= as_of][-days:]:
+            row = _safe(lambda: _otc_credit_file(path).get(code))
+            if row:
+                out[key].append({'date': day, **row})
+    return out
+
+
+def credit_series(code: str, market: str, as_of: str, days: int = 25) -> dict:
+    """事實區塊用：上市融資融券（MI_MARGN，張）與借券（TWT93U，股），由舊到新、資料日 ≤ as_of。
+    上櫃讀櫃買網站的原件（E 票，每日更新逐日存 data/otc-credit/margin 與 sbl）。"""
+    if market == '上櫃':
+        return _otc_credit_series(code, as_of, days)
+    if market != '上市':
+        return {}
+    from . import chips
+
+    def recent(folder, prefix):   # 各看自己的原件有哪幾天，不借用法人原件的日期
+        stamps = sorted(path.stem.split('-')[1] for path in folder.glob(f'{prefix}-*.json'))
+        return [d for d in (f'{s[:4]}-{s[4:6]}-{s[6:]}' for s in stamps) if d <= as_of][-days:]
+    margin_days, borrow_days = recent(chips.DETAIL / 'margin', 'margin'), recent(chips.FUND / 'twt93u', 'twt93u')
+    margin = [{'date': d, 'margin': row['margin'], 'short': row['short']}
+              for d, row in zip(margin_days, chips.margin(code, margin_days)) if row]
+    borrow = [{'date': d, 'balance': row['balance']} for d, row in zip(borrow_days, chips.borrow(code, borrow_days)) if row]
+    return {'margin': margin, 'borrow': borrow}
+
+
+def _pe(code: str, as_of: str) -> float | None:
+    row = valuation_snapshot(code, as_of)
     return row['pe'] if row else None
 
 
@@ -541,9 +628,90 @@ def condition_inputs(code: str, market: str, as_of: str, bars: list[Bar], x: dic
     }
 
 
+def _facts(last: Bar, info: dict, indicators: dict, institutional: list[dict], trading_days: list[str],
+           market: str, code: str) -> dict | None:
+    # 這裡比 _safe 收得更寬：事實區塊是附加內容，任何錯誤都只讓它留空，不能讓整份分析失敗。
+    try:
+        from .facts import build_facts
+        chg_pct = round(info['chg'], 2) if info.get('chg_known', True) else None
+        return build_facts(data_date=last.date, close=last.close, chg_pct=chg_pct, indicators=indicators,
+                           institutional=institutional, trading_days=trading_days,
+                           credit=_safe(lambda: credit_series(code, market, last.date)) or {},
+                           valuation=_safe(lambda: valuation_snapshot(code, last.date)),
+                           revenue=_safe(lambda: revenue_series(code, market, last.date)) or [])
+    except Exception:  # noqa: BLE001
+        return None
+
+
+_TAIEX_MONTH_CACHE: dict = {}
+
+
+def _taiex_month(path: Path) -> dict[str, float]:
+    """一份加權指數月檔 → {日期: 收盤}。檔案沒變就用快取（建置時每一檔股票都會問同樣幾個月）；
+    沒有資料列的月檔是空的，不當成錯誤。"""
+    import json
+    stamp = path.stat().st_mtime_ns
+    cached = _TAIEX_MONTH_CACHE.get(path)
+    if cached and cached[0] == stamp:
+        return cached[1]
+    closes = {}
+    for row in json.loads(path.read_text(encoding='utf-8')).get('data', {}).get('data') or []:
+        year, month, day = row[0].split('/')
+        closes[f'{int(year) + 1911}-{month}-{day}'] = float(row[4].replace(',', ''))
+    _TAIEX_MONTH_CACHE[path] = (stamp, closes)
+    return closes
+
+
+def taiex_closes(as_of: str, months: int = 6) -> dict[str, float]:
+    """五塊資料用：加權指數收盤 {日期: 收盤}，讀每日更新已經在抓的月檔（MI_5MINS_HIST）。
+    只讀到 as_of 當月為止最近幾個月（6 個月超過 100 個交易日，夠算近 60 日）。"""
+    import stock_history
+    paths = [p for p in sorted(stock_history.DEFAULT_INDEX_DIR.glob('taiex-*.json')) if p.stem[6:] <= as_of[:4] + as_of[5:7]]
+    closes: dict[str, float] = {}
+    for path in paths[-months:]:
+        closes.update(_taiex_month(path))
+    return closes
+
+
+def _day_returns(code: str, raw_bars: list[Bar], returns: list[float | None],
+                 reference_events: dict[str, list[dict]] | None) -> list[float]:
+    """每天相對前一日參考價的漲跌幅（比率）。不比價的日子行情庫沒有漲跌：是除權息、減資、分割這類有官方參考價的，
+    用當天收盤 ÷ 參考價 − 1 補上；其餘（新上市、前一日沒有成交、暫停交易後恢復）沒有來源，記 0。
+    raw_bars 是還原前的實際成交價；reference_events 不給就讀資料根目錄的（有不比價的日子才讀）。"""
+    if all(r is not None for r in returns):
+        return list(returns)
+    if reference_events is None:
+        reference_events = _safe(default_reference_events) or {}
+    official = _safe(lambda: reference_day_returns(raw_bars, reference_events.get(code, []))) or {}
+    return [official.get(bar.date, 0.0) if r is None else r for bar, r in zip(raw_bars, returns)]
+
+
+def _signals(code: str, raw_bars: list[Bar], bars: list[Bar], info: dict, indicators: dict,
+             reference_events: dict[str, list[dict]] | None, unscaled_institutional: list[dict],
+             capital_events: list[dict]) -> dict | None:
+    # 和事實區塊一樣是附加內容：任何錯誤都只讓這一塊留空，不能讓整份分析失敗。
+    try:
+        from .signals import build_signals
+        # 漲停動能用驗證時的那一套原始資料：實際成交價的日線、行情庫原本的漲跌幅（不比價的日子沒有）、
+        # 沒有跟著分割換算過的投信買賣超。和大盤比用的 day_returns 則是補上官方參考價之後的。
+        momentum_inputs = {'market': info['market'], 'kind': info['kind'], 'bars': raw_bars,
+                           'returns': info['day_returns'], 'turnovers': info['turnovers'],
+                           'trust_nets': {row['date']: row['trust'] for row in unscaled_institutional}}
+        return build_signals(bars=bars, day_returns=_day_returns(code, raw_bars, info['day_returns'], reference_events),
+                             index_closes=_safe(lambda: taiex_closes(bars[-1].date)) or {}, indicators=indicators,
+                             momentum_inputs=momentum_inputs,
+                             margin_inputs={'code': code, 'market': info['market'], 'kind': info['kind'],
+                                            'as_of': bars[-1].date, 'capital_events': capital_events})
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def analyze_v2(code: str, as_of: str, db_path=DEFAULT_DB, otc_db_path=DEFAULT_OTC_DB,
-               capital_actions: dict[str, list[dict]] | None = None) -> dict:
-    """capital_actions：每檔代號的股本變動事件（price_adjustment.capital_events 的形狀）；不給就讀資料根目錄的。"""
+               capital_actions: dict[str, list[dict]] | None = None,
+               reference_events: dict[str, list[dict]] | None = None) -> dict:
+    """capital_actions：每檔代號的股本變動事件（price_adjustment.capital_events 的形狀）；不給就讀資料根目錄的。
+    reference_events：每檔代號帶官方參考價的事件（含除息；events.json 的形狀），五塊資料算事件日當天的漲跌用；
+    不給就讀資料根目錄的。"""
     bars, info = load_bars(code, as_of, db_path=db_path, otc_db_path=otc_db_path)
     if not bars:
         return _blocking(code, as_of, {'reason': '查不到這個代號的有效日 K', 'not_found': True})
@@ -554,15 +722,15 @@ def analyze_v2(code: str, as_of: str, db_path=DEFAULT_DB, otc_db_path=DEFAULT_OT
         capital_actions = default_capital_events()
     factors, unresolved = price_factors(bars, capital_actions.get(code, []))
     share_scale = {bar.date: 1 / factor for bar, factor in zip(bars, factors) if factor != 1.0}
-    bars = apply_factors(bars, factors)
+    raw_bars, bars = bars, apply_factors(bars, factors)
     x = indicators_v2(bars)
     last = bars[-1]
     inputs = condition_inputs(code, info['market'], last.date, bars, x)
     levels = price_levels_v2(bars, x)
     conditions = condition_states(inputs)
     chart_bars = bars[-120:]
-    institutional = _scale_shares(
-        _safe(lambda: institutional_series(code, info['market'], [bar.date for bar in chart_bars])) or [], share_scale)
+    unscaled_institutional = _safe(lambda: institutional_series(code, info['market'], [bar.date for bar in chart_bars])) or []
+    institutional = _scale_shares(unscaled_institutional, share_scale)
     # strategy_v1 尚未通過驗證、對外預設關閉（本人 11-11／11-12 定案）：它出錯只讓 strategy 留空，
     # 不能讓這檔的行情、指標、價位、法人等核心資料跟著消失。
     try:
@@ -585,6 +753,11 @@ def analyze_v2(code: str, as_of: str, db_path=DEFAULT_DB, otc_db_path=DEFAULT_OT
         'institutional': institutional,
         # 集保每週的大戶持股（本人 2026-11-14：主力買賣超沒有合法免費來源，改看這個）。讀不到就是空的。
         'big_holders': _safe(lambda: big_holder_series(DEFAULT_DB.parents[1] / 'tdcc-holders', code, last.date)) or [],
+        # 個股頁事實區塊（本人 2026-11-15）：算不出來只讓這一塊留空，不影響其他內容。給誰看由網站入口的開關決定。
+        'facts': _facts(last, info, x, institutional, [bar.date for bar in chart_bars], info['market'], code),
+        # 個股頁五塊新功能的資料（本人 2026-11-16）：同樣算不出來只留空；給誰看由網站入口另一個獨立的開關決定。
+        'signals': _signals(code, raw_bars, bars, info, x, reference_events, unscaled_institutional,
+                            capital_actions.get(code, [])),
         'defense': defense_payload(x['low20_intraday']),
         'trend_classification': trend_classification_payload(),
         'conditions': conditions,

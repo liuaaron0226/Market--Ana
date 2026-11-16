@@ -32,6 +32,9 @@ SCHEMA = "tdcc-holders/v1"
 # 過去一年由官方查詢頁補抓（tdcc_backfill.py）後入庫的歷史；每週新抓到的仍存 weekly/，同一週以 weekly 為準。
 DEFAULT_HISTORY = ROOT / "seeds/tdcc-holders-history.json"
 HISTORY_SCHEMA = "tdcc-holders-history/v1"
+# 總股東人數低於這個數的那一週不是股權分散的樣子，不放進逐週走勢。
+# 實例：官方查詢頁 5904 在 2026-08-07 登記「1 人持有全部股份」，前後兩週都是數萬人。上市櫃股票的股東至少數百人。
+MIN_HOLDERS = 100
 
 
 def parse(content: bytes) -> tuple[str, dict[str, dict]]:
@@ -108,7 +111,7 @@ def _history(path: Path, stamp: int) -> dict[str, dict[str, dict]]:
 
 
 def series(out: Path, code: str, as_of: str, history: Path | None = None) -> list[dict]:
-    """某一檔逐週的大戶持股（舊到新，只到 as_of 為止）；那一週沒有它就略過。
+    """某一檔逐週的大戶持股（舊到新，只到 as_of 為止）；那一週沒有它、或總股東人數不到 MIN_HOLDERS 就略過。
 
     history 是補抓的歷史檔；同一週兩邊都有時用每週存下的那一份。
     """
@@ -119,4 +122,4 @@ def series(out: Path, code: str, as_of: str, history: Path | None = None) -> lis
     if folder.is_dir():
         stamps = tuple((path.name, path.stat().st_mtime_ns) for path in sorted(folder.glob("*.json")))
         weeks.update({day: holders[code] for day, holders in _weeks(folder, stamps) if code in holders})
-    return [{"date": day, **weeks[day]} for day in sorted(weeks) if day <= as_of]
+    return [{"date": day, **weeks[day]} for day in sorted(weeks) if day <= as_of and weeks[day]["holders"] >= MIN_HOLDERS]

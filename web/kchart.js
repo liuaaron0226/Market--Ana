@@ -1,13 +1,18 @@
 /* 可拖曳／縮放的K線圖（原生Canvas，無外部套件）。
-   互動：滑鼠拖曳或單指左右平移；滾輪或雙指捏合縮放；鍵盤左右鍵平移、+/- 縮放；點擊或移動顯示十字線（再點一次同一根取消），
-   並把那一天的開高低收標在右側價格欄、日期標在時間軸（本人 11-15；不再有浮窗）。
-   有畫線時：點線選取、拖已選取的線移動、Delete 刪除、Esc 取消選取或放下工具。
+   互動：滑鼠拖曳或單指左右平移；滾輪、雙指捏合或＋／−按鈕縮放；鍵盤左右鍵平移、+/- 縮放；點擊或移動顯示十字線（再點一次同一根取消），
+   並把那一天的開高低收標在右側價格欄、日期標在時間軸（本人 11-15；不再有浮窗）。主圖與指標區的手勢一樣（本人 11-15）。
+   有畫線時：點線選取、拖已選取的線移動（拖端點把手只動那一端）、Delete 刪除、Esc 取消選取或放下工具；
+   文字標註再點一下（或 Enter）打開輸入框修改內容。
    資料：candles=[{t,label,open,high,low,close,amount}] 由舊到新。overlays 可放判斷線。
    畫線（選用）：頁面先載入 chart-drawings.js 並傳 opts.drawings={onChange,onTool,onSelect}，
-   再用 setTool／setDrawings／deleteSelectedDrawing／cancelDrawing 操作。 */
+   再用 setTool／setDrawings／setUnsavedDrawings／deleteSelectedDrawing／cancelDrawing 操作。 */
 (function () {
   'use strict';
   const DPR = () => Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+  // 按下到放開之間移動超過幾像素才不算「點一下」。手指點一下難免晃幾像素（滑鼠不會），所以手指放寬；
+  // 手指在超過之前也先不平移，點一下時圖表不會跟著晃。
+  // 和 chart-drawings.js 的 DRAG_START_PX 同值：按住線拖與拖圖平移，開始的門檻一樣。
+  const TAP_SLOP = { mouse: 3, touch: 8 };
   function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
   // 價籤用：千元以上取整；以下保留到台股升降單位（最多兩位小數，去掉尾端 0）。
   function fmtTag(n) { return !Number.isFinite(n) ? '缺值' : n >= 1000 ? fmt(n, 0) : n.toLocaleString('en-US', { maximumFractionDigits: 2 }); }
@@ -128,9 +133,12 @@
       if (this.drawings) this.drawings.dataChanged();
       this.draw(); this.emit();
     }
-    // 畫線：目前要用的工具（'hline'；null＝一般模式），以及這張圖上的整組畫線（[{id,kind,anchors:[{date,price}]}]）。
+    // 畫線：目前要用的工具（'trend'、'hline'、'ray'、'rect'、'fib'、'text'；null＝一般模式），
+    // 以及這張圖上的整組畫線（[{id,kind,anchors:[{date,price}]}]，文字標註另有 text）。
     setTool(kind) { if (this.drawings) { this.drawings.setTool(kind); this.draw(); } }
     setDrawings(list) { if (this.drawings) { this.drawings.load(list); this.draw(); } }
+    // 哪幾條線還沒存上去（識別碼）：畫得比較淡。
+    setUnsavedDrawings(ids) { if (this.drawings) { this.drawings.markUnsaved(ids); this.draw(); } }
     // 刪除目前選取的那一條，回傳有沒有刪（沒有選取就不做事）；放下工具並取消選取（Esc 做的事）。
     deleteSelectedDrawing() {
       const removed = Boolean(this.drawings && this.drawings.remove());
@@ -186,21 +194,25 @@
       this.draw();
     }
     // 主圖與指標區的畫布都綁同一組手勢（本人 11-15）：單指左右拖平移歷史、兩指捏合縮放、點一下選取那一天。
+    // 手指用放寬的「點一下」門檻（只有帶畫線層的圖，也就是個股頁；首頁大盤的手勢維持原樣）。
+    fingerSlop(pointerType) { return Boolean(this.drawings) && pointerType !== 'mouse'; }
     bindCanvas(c) {
       let drag = null; const pts = new Map();
       const geo = () => this.geo;
       c.addEventListener('pointerdown', e => {
         c.setPointerCapture(e.pointerId); pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        const rect = c.getBoundingClientRect();
         if (pts.size === 1) {
-          const rect = c.getBoundingClientRect();
           // 起點落在已選取的畫線上：這次拖曳是移動那條線，圖表不平移。
           drag = c === this.canvas && this.drawings && this.drawings.grab(e.clientX - rect.left, e.clientY - rect.top, e.pointerType)
             ? { kind: 'drawing', moved: false, hadPinch: false }
-            : { kind: 'single', x: e.clientX, y: e.clientY, end: this.view.end, moved: false, hadPinch: false };
+            : { kind: 'single', x: e.clientX, y: e.clientY, end: this.view.end, moved: false, wandered: false, touch: this.fingerSlop(e.pointerType), hadPinch: false };
         }
         // 拖線途中放上第二指：線回原位，改成雙指縮放。
         if (pts.size === 2 && drag?.kind === 'drawing') { this.drawings.drop(false); this.draw(); }
         if (pts.size === 2) { const xs = [...pts.values()].map(point => point.x); drag = { kind: 'pinch', pinch: Math.max(20, Math.abs(xs[0] - xs[1])), count: this.view.count, end: this.view.end, hadPinch: true }; }
+        // 兩點畫線點了第一下之後：手指一按下去，預覽線就跟到手指的位置（手機沒有游標可以先移過去）。
+        if (c === this.canvas && this.drawings && this.drawings.trackPointer(e.clientX - rect.left, e.clientY - rect.top)) this.draw();
         c.style.cursor = 'grabbing';
       });
       c.addEventListener('pointermove', e => {
@@ -209,14 +221,19 @@
         const rect = c.getBoundingClientRect(); const x = e.clientX - rect.left;
         // moved 一旦成立就不收回：拖到一半線被換掉或按了 Esc，放開時也不會被當成一次點擊。
         if (drag?.kind === 'drawing') { drag.moved = this.drawings.dragTo(x, e.clientY - rect.top) || drag.moved; this.draw(); return; }
+        if (c === this.canvas && this.drawings) this.drawings.trackPointer(x, e.clientY - rect.top); // 預覽線跟著游標或手指
         if (drag?.kind === 'pinch' && pts.size === 2) {
           const xs = [...pts.values()].map(point => point.x); const d = Math.max(20, Math.abs(xs[0] - xs[1]));
           this.view.count = drag.count * drag.pinch / d; this.view.end = drag.end; this.clamp(); this.draw(); this.emit(); return;
         }
         if (drag?.kind === 'single' && pts.size === 1) {
-          // 上下拖也算「動了」：不然手指在圖上往下滑想捲頁面，放開時會被當成點選那一天
-          const dx = e.clientX - drag.x; if (Math.hypot(dx, e.clientY - drag.y) > 3) drag.moved = true;
-          this.view.end = Math.round(drag.end - dx / g.step); this.clamp();
+          // 往任何方向移超過門檻（包括上下滑）就算「動了」：手指在圖上往下滑想捲頁面，放開時不會被當成點選那一天；
+          // 也不拿來定位畫線（wandered，由畫線層決定）。手指的門檻比滑鼠寬（只有帶畫線層的圖，見 fingerSlop）。
+          const dx = e.clientX - drag.x, slop = drag.touch ? TAP_SLOP.touch : TAP_SLOP.mouse;
+          if (Math.hypot(dx, e.clientY - drag.y) > slop) drag.moved = drag.wandered = true;
+          // 平移只看左右：手指斜斜往下滑時左右只動了一點點，圖不跟著挪（不然兩點畫線的第二點會落到別根）
+          if (Math.abs(dx) > slop) drag.panning = true;
+          if (drag.panning || !drag.touch) { this.view.end = Math.round(drag.end - dx / g.step); this.clamp(); }
         }
         this.hover = x >= g.l && x <= g.l + g.pw ? g.start + Math.floor((x - g.l) / g.step) : -1;
         if (!drag && c === this.canvas && this.drawings) c.style.cursor = this.drawings.cursorAt(x, e.clientY - rect.top);
@@ -229,7 +246,7 @@
         if (e.type === 'pointerup' && (drag?.kind === 'single' || drag?.kind === 'drawing') && !drag.moved && !drag.hadPinch && this.geo) {
           const g = this.geo, rect = c.getBoundingClientRect(), px = e.clientX - rect.left;
           // 主圖上的這一下先給畫線：選了工具就定位，沒選工具而點到線就選取那條線；都不是才選 K 棒。
-          if (!(c === this.canvas && this.drawings && this.drawings.tap(px, e.clientY - rect.top, e.pointerType))) {
+          if (!(c === this.canvas && this.drawings && this.drawings.tap(px, e.clientY - rect.top, e.pointerType, Boolean(drag.wandered)))) {
             const picked = px >= g.l && px <= g.l + g.pw
               ? Math.min(this.view.end - 1, g.start + Math.floor((px - g.l) / g.step)) : -1;
             // 再點一次同一根就取消選取（本人 11-15：畫面上不再有「取消選取」鍵）；點到圖區以外（例如右側數值欄）也是取消。
@@ -249,7 +266,7 @@
         pts.delete(e.pointerId);
         if (pts.size === 1 && drag?.kind === 'pinch') {
           const point = pts.values().next().value;
-          drag = { kind: 'single', x: point.x, y: point.y, end: this.view.end, moved: false, hadPinch: true };
+          drag = { kind: 'single', x: point.x, y: point.y, end: this.view.end, moved: false, wandered: false, touch: this.fingerSlop(e.pointerType), hadPinch: true };
         } else if (pts.size === 0) { drag = null; c.style.cursor = c === this.canvas && this.drawings ? this.drawings.idleCursor() : 'grab'; }
       };
       c.addEventListener('pointerup', up); c.addEventListener('pointercancel', up);
@@ -270,6 +287,8 @@
         else if (e.key === 'Escape') { e.preventDefault(); if (this.drawings) this.drawings.cancel(); this.clearSelection(); }
         // Mac 與 iPad 鍵盤上標著 delete 的那一顆送出的是 Backspace。
         else if ((e.key === 'Delete' || e.key === 'Backspace') && this.deleteSelectedDrawing()) e.preventDefault();
+        // 選取的是文字標註：Enter 打開輸入框修改內容（按住不放的重複鍵不算：確定用的那一下還按著時不會又打開）。
+        else if (e.key === 'Enter' && c === this.canvas && !e.repeat && this.drawings && this.drawings.edit()) { e.preventDefault(); this.draw(); }
         else if (e.key === 'Enter' && c !== this.canvas) {
           e.preventDefault(); this.hover = this.selection = this.view.end - 1;
           if (this.opts.onSelect) this.opts.onSelect(this.hover, c);
@@ -380,7 +399,8 @@
         tagSlots.filter(g => !g.close).forEach(({ o, yy, slot }) => {
           const col = o.color || css('--gold');
           // 整條淡細實線＋右端一小段實色錨點
-          x.strokeStyle = col; x.lineWidth = 1; x.globalAlpha = .38;
+          // strong：要特別看出來的那一條（例如自選股關注「已到」的觸發線）畫成較粗的實線。
+          x.strokeStyle = col; x.lineWidth = o.strong ? 2 : 1; x.globalAlpha = o.strong ? .9 : .38;
           x.beginPath(); x.moveTo(l, Math.round(yy) + .5); x.lineTo(l + pw, Math.round(yy) + .5); x.stroke();
           x.globalAlpha = 1; x.lineWidth = 2;
           x.beginPath(); x.moveTo(l + pw - 20, Math.round(yy) + .5); x.lineTo(l + pw, Math.round(yy) + .5); x.stroke();

@@ -18,6 +18,7 @@ test("個股頁引用的每一支程式與樣式都在部署白名單裡（少�
   const files = [...html.matchAll(/<(?:script src|link rel="stylesheet" href)="([^"?]+)/g)].map((match) => match[1]);
   assert.ok(files.includes("chart-drawings.js") && files.includes("kchart.js"));
   assert.ok(files.indexOf("chart-drawings.js") < files.indexOf("kchart.js"), "畫線層要先於圖表載入");
+  assert.ok(files.includes("drawing-sync.js") && files.indexOf("drawing-sync.js") < files.indexOf("stock.js"), "畫線的存檔要先於個股頁載入");
   for (const file of files) assert.ok(WEB_FILES.includes(file), file);
 });
 

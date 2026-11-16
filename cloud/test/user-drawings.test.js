@@ -114,7 +114,7 @@ test("不合法的代號、識別碼、種類、日期、價格、錨點個數�
   }
   const bad = [
     { kind: "circle", anchors: [{ date: "2026-11-13", price: 1000 }] },
-    { kind: "trend", anchors: [{ date: "2026-11-13", price: 1000 }, { date: "2026-11-14", price: 1010 }] }, // 這張票只開放水平線
+    { kind: "text", anchors: [{ date: "2026-11-13", price: 1000 }] }, // 文字標註不帶文字（這一列原本是「還沒開放的種類」的佔位例子；票 03～06 把六種都開放了，現在擋的是沒有內容）
     { anchors: [{ date: "2026-11-13", price: 1000 }] },
     { kind: "hline" },
     { kind: "hline", anchors: [] },
@@ -242,4 +242,264 @@ test("滿 200 條時刪掉一條，就能再畫一條新的", async () => {
   assert.equal((await req("/api/drawings/2330/line-0007", { method: "DELETE" })).status, 204);
   assert.equal((await req("/api/drawings/2330/line-0200", { method: "PUT", body: hline(5) })).status, 201);
   assert.equal((await listOf("2330")).length, 200);
+});
+
+// ---------- 票 03：趨勢線與射線（兩個錨點） ----------
+
+const twoPoint = (kind, from = ["2026-10-01", 1000], to = ["2026-11-13", 1085.5]) =>
+  ({ kind, anchors: [{ date: from[0], price: from[1] }, { date: to[0], price: to[1] }] });
+
+test("趨勢線與射線各存兩個錨點：讀回來時兩端的日期、價位與先後順序都和寫入時相同", async () => {
+  const trend = await req("/api/drawings/2330/trend-0001", { method: "PUT", body: twoPoint("trend") });
+  assert.equal(trend.status, 201);
+  assert.deepEqual(await trend.json(), {
+    id: "trend-0001", kind: "trend", anchors: [{ date: "2026-10-01", price: 1000 }, { date: "2026-11-13", price: 1085.5 }], text: "",
+    created_at: "2026-11-14T06:00:00.000Z", updated_at: "2026-11-14T06:00:00.000Z",
+  });
+  // 射線的第一點可以比第二點晚（先點右邊再點左邊）：順序照寫入的，不重排。
+  assert.equal((await req("/api/drawings/2330/ray-00001", { method: "PUT", body: twoPoint("ray", ["2026-11-13", 1085.5], ["2026-10-01", 1000]) })).status, 201);
+  await req("/api/drawings/2330/line-0001", { method: "PUT", body: hline(1050) });
+
+  assert.deepEqual((await listOf("2330")).map((item) => [item.id, item.kind, item.anchors]), [
+    ["line-0001", "hline", [{ date: "2026-11-13", price: 1050 }]],
+    ["ray-00001", "ray", [{ date: "2026-11-13", price: 1085.5 }, { date: "2026-10-01", price: 1000 }]],
+    ["trend-0001", "trend", [{ date: "2026-10-01", price: 1000 }, { date: "2026-11-13", price: 1085.5 }]],
+  ]);
+});
+
+test("拖動端點後以同一個識別碼覆寫：仍是同一條，兩個錨點換成新的；同日不同價（直的線）也收", async () => {
+  await req("/api/drawings/2330/trend-0001", { method: "PUT", body: twoPoint("trend") });
+  const again = await req("/api/drawings/2330/trend-0001", { method: "PUT", body: twoPoint("trend", ["2026-10-01", 1000], ["2026-10-01", 1020]) });
+  assert.equal(again.status, 200);
+  assert.deepEqual((await listOf("2330")).map((item) => item.anchors), [[{ date: "2026-10-01", price: 1000 }, { date: "2026-10-01", price: 1020 }]]);
+});
+
+test("別的帳號讀不到、蓋不掉也刪不到我的趨勢線", async () => {
+  await req("/api/drawings/2330/trend-0001", { method: "PUT", body: twoPoint("trend") });
+  assert.deepEqual(await listOf("2330", { email: "b@example.com" }), []);
+  assert.equal((await req("/api/drawings/2330/trend-0001", { email: "b@example.com", method: "PUT", body: twoPoint("ray") })).status, 201);
+  assert.equal((await req("/api/drawings/2330/trend-0001", { email: "b@example.com", method: "DELETE" })).status, 204);
+  assert.deepEqual((await listOf("2330")).map((item) => [item.kind, item.anchors.length]), [["trend", 2]]);
+  assert.equal((await req("/api/drawings/2330/trend-0001", { method: "DELETE" })).status, 204);
+  assert.deepEqual(await listOf("2330"), []);
+});
+
+test("趨勢線與射線的不合法輸入被拒：錨點不是剛好兩個、兩點完全相同、第二個錨點的日期或價格不對、帶文字", async () => {
+  const put = (body) => req("/api/drawings/2330/trend-0001", { method: "PUT", body });
+  const first = { date: "2026-10-01", price: 1000 };
+  for (const kind of ["trend", "ray"]) {
+    const bad = [
+      { kind, anchors: [first] },
+      { kind, anchors: [first, { date: "2026-11-13", price: 1010 }, { date: "2026-11-14", price: 1020 }] },
+      { kind, anchors: [first, { ...first }] }, // 兩點落在同一位置：看不見也選不到的線
+      { kind, anchors: [first, { date: "2026-02-30", price: 1010 }] },
+      { kind, anchors: [first, { date: "2026-11-13", price: 0 }] },
+      { kind, anchors: [first, { date: "2026-11-13", price: "1010" }] },
+      { kind, anchors: [first, { date: "2026-11-13", price: 1e9 }] },
+      { kind, anchors: [first, null] },
+      { kind, anchors: [first, { date: "2026-11-13", price: 1010 }], text: "線上不帶文字" },
+    ];
+    for (const body of bad) assert.equal((await put(body)).status, 400, JSON.stringify(body));
+  }
+  assert.equal((await env.DB.prepare("SELECT COUNT(*) AS n FROM user_drawings").first()).n, 0);
+});
+
+// ---------- 票 04：矩形 ----------
+
+test("矩形存兩個對角：寫入後讀得回來，拖角落後以同一個識別碼覆寫；別的帳號看不到", async () => {
+  const saved = await req("/api/drawings/2330/rect-0001", { method: "PUT", body: twoPoint("rect", ["2026-10-01", 1085.5], ["2026-11-13", 1000]) });
+  assert.equal(saved.status, 201);
+  assert.deepEqual((await saved.json()).anchors, [{ date: "2026-10-01", price: 1085.5 }, { date: "2026-11-13", price: 1000 }]);
+  assert.equal((await req("/api/drawings/2330/rect-0001", { method: "PUT", body: twoPoint("rect", ["2026-10-01", 1085.5], ["2026-11-06", 1020]) })).status, 200);
+  assert.deepEqual((await listOf("2330")).map((item) => [item.kind, item.anchors]),
+    [["rect", [{ date: "2026-10-01", price: 1085.5 }, { date: "2026-11-06", price: 1020 }]]]);
+  assert.deepEqual(await listOf("2330", { email: "b@example.com" }), []);
+});
+
+test("矩形的不合法輸入被拒：只有一個角、兩個角完全相同、帶文字", async () => {
+  const put = (body) => req("/api/drawings/2330/rect-0001", { method: "PUT", body });
+  const corner = { date: "2026-10-01", price: 1000 };
+  for (const body of [
+    { kind: "rect", anchors: [corner] },
+    { kind: "rect", anchors: [corner, { ...corner }] },
+    { kind: "rect", anchors: [corner, { date: "2026-11-13", price: -1 }] },
+    { kind: "rect", anchors: [corner, { date: "2026-11-13", price: 1010 }], text: "框上不帶文字" },
+  ]) assert.equal((await put(body)).status, 400, JSON.stringify(body));
+  assert.equal((await env.DB.prepare("SELECT COUNT(*) AS n FROM user_drawings").first()).n, 0);
+});
+
+// ---------- 票 05：黃金分割 ----------
+
+test("黃金分割存兩個錨點，照拉的方向存、不重排（第一點是 1、第二點是 0）：由低往高、由高往低都讀得回來；別的帳號看不到", async () => {
+  const up = await req("/api/drawings/2330/fib-00001", { method: "PUT", body: twoPoint("fib", ["2026-10-01", 1000], ["2026-11-13", 1085.5]) });
+  assert.equal(up.status, 201);
+  assert.deepEqual(await up.json(), {
+    id: "fib-00001", kind: "fib", anchors: [{ date: "2026-10-01", price: 1000 }, { date: "2026-11-13", price: 1085.5 }], text: "",
+    created_at: "2026-11-14T06:00:00.000Z", updated_at: "2026-11-14T06:00:00.000Z",
+  });
+  assert.equal((await req("/api/drawings/2330/fib-00002", { method: "PUT", body: twoPoint("fib", ["2026-10-01", 1085.5], ["2026-11-13", 1000]) })).status, 201);
+  // 拖動一端後以同一個識別碼覆寫：仍是同一組。
+  assert.equal((await req("/api/drawings/2330/fib-00001", { method: "PUT", body: twoPoint("fib", ["2026-10-01", 1000], ["2026-11-06", 1100]) })).status, 200);
+  assert.deepEqual((await listOf("2330")).map((item) => [item.id, item.kind, item.anchors]), [
+    ["fib-00001", "fib", [{ date: "2026-10-01", price: 1000 }, { date: "2026-11-06", price: 1100 }]],
+    ["fib-00002", "fib", [{ date: "2026-10-01", price: 1085.5 }, { date: "2026-11-13", price: 1000 }]],
+  ]);
+  assert.deepEqual(await listOf("2330", { email: "b@example.com" }), []);
+  assert.equal((await req("/api/drawings/2330/fib-00002", { method: "DELETE" })).status, 204);
+  assert.deepEqual((await listOf("2330")).map((item) => item.id), ["fib-00001"]);
+});
+
+test("黃金分割的不合法輸入被拒：只有一個錨點、兩個錨點完全相同、價格不對、帶文字", async () => {
+  const put = (body) => req("/api/drawings/2330/fib-00001", { method: "PUT", body });
+  const first = { date: "2026-10-01", price: 1000 };
+  for (const body of [
+    { kind: "fib", anchors: [first] },
+    { kind: "fib", anchors: [first, { ...first }] },
+    { kind: "fib", anchors: [first, { date: "2026-11-13", price: 0 }] },
+    { kind: "fib", anchors: [first, { date: "2026-11-13", price: 1010 }], text: "線上不帶文字" },
+  ]) assert.equal((await put(body)).status, 400, JSON.stringify(body));
+  assert.equal((await env.DB.prepare("SELECT COUNT(*) AS n FROM user_drawings").first()).n, 0);
+});
+
+// ---------- 票 06：文字標註（一個錨點＋一段文字） ----------
+
+const note = (text, price = 1085.5, date = "2026-11-13") => ({ kind: "text", anchors: [{ date, price }], text });
+
+test("文字標註存一個錨點與一段文字：寫入後讀得回來；含 HTML 標籤的文字原樣存、原樣當純文字回", async () => {
+  const saved = await req("/api/drawings/2330/note-0001", { method: "PUT", body: note("突破前高，等回測") });
+  assert.equal(saved.status, 201);
+  assert.deepEqual(await saved.json(), {
+    id: "note-0001", kind: "text", anchors: [{ date: "2026-11-13", price: 1085.5 }], text: "突破前高，等回測",
+    created_at: "2026-11-14T06:00:00.000Z", updated_at: "2026-11-14T06:00:00.000Z",
+  });
+
+  const markup = `<img src=x onerror="alert(1)"> <b>粗體</b> &amp; <script>alert('x')</script> 'quote' "double"`;
+  assert.equal((await req("/api/drawings/2330/note-0002", { method: "PUT", body: note(markup, 1000) })).status, 201);
+  const list = await req("/api/drawings/2330");
+  assert.match(list.headers.get("content-type"), /^application\/json/, "回的是資料，不是網頁");
+  assert.deepEqual((await list.json()).items.map((item) => [item.id, item.kind, item.text]), [
+    ["note-0001", "text", "突破前高，等回測"],
+    ["note-0002", "text", markup],
+  ]);
+  const stored = await env.DB.prepare("SELECT text FROM user_drawings WHERE id = 'note-0002'").first();
+  assert.equal(stored.text, markup, "資料庫裡也是原樣，沒有被改寫或跳脫");
+});
+
+test("文字標註一定要有內容：沒帶文字、空字串、只有空白（含全形空白）、不是字串的都被拒，什麼都沒寫進去", async () => {
+  const put = (body) => req("/api/drawings/2330/note-0001", { method: "PUT", body });
+  const anchors = [{ date: "2026-11-13", price: 1085.5 }];
+  for (const body of [
+    { kind: "text", anchors },
+    { kind: "text", anchors, text: "" },
+    { kind: "text", anchors, text: "   " },
+    { kind: "text", anchors, text: "\u3000\u3000" },
+    { kind: "text", anchors, text: null },
+    { kind: "text", anchors, text: 12345 },
+    { kind: "text", anchors, text: ["突破前高"] },
+  ]) assert.equal((await put(body)).status, 400, JSON.stringify(body));
+  assert.equal((await env.DB.prepare("SELECT COUNT(*) AS n FROM user_drawings").first()).n, 0);
+});
+
+test("文字最多 200 字：剛好 200 字存得住，201 字被拒、原本的內容不變；一個表情符號算一個字", async () => {
+  const put = (id, text) => req(`/api/drawings/2330/${id}`, { method: "PUT", body: note(text) });
+  assert.equal((await put("note-0001", "線".repeat(200))).status, 201);
+  assert.equal((await put("note-0002", "線".repeat(201))).status, 400);
+  assert.equal((await put("note-0001", "a".repeat(201))).status, 400, "覆寫成太長的也不行");
+  assert.equal((await put("note-0003", "📈".repeat(200))).status, 201);
+  assert.equal((await put("note-0004", "📈".repeat(201))).status, 400);
+  assert.deepEqual((await listOf("2330")).map((item) => [item.id, item.text]), [
+    ["note-0001", "線".repeat(200)],
+    ["note-0003", "📈".repeat(200)],
+  ]);
+});
+
+test("文字是一行純文字：含換行、定位字元、控制字元或不成對的代理字元被拒；錨點個數不對也被拒", async () => {
+  const put = (body) => req("/api/drawings/2330/note-0001", { method: "PUT", body });
+  for (const text of ["第一行\n第二行", "回車\r", "定位\t字元", "空\u0000字元", "刪除\u007f字元", "半個\ud83d表情", "\udc00開頭"]) {
+    assert.equal((await put(note(text))).status, 400, JSON.stringify(text));
+  }
+  assert.equal((await put({ kind: "text", anchors: [], text: "沒有錨點" })).status, 400);
+  assert.equal((await put({ kind: "text", anchors: [{ date: "2026-11-13", price: 1000 }, { date: "2026-11-14", price: 1010 }], text: "兩個錨點" })).status, 400);
+  assert.equal((await env.DB.prepare("SELECT COUNT(*) AS n FROM user_drawings").first()).n, 0);
+  // 一般的標點、全形字、表情符號與前後的空白都照收、照原樣回。
+  const plain = " 12/05 法說會前減碼 1/3？（成本 985.5）📉 ";
+  assert.equal((await put(note(plain))).status, 201);
+  assert.deepEqual((await listOf("2330")).map((item) => item.text), [plain]);
+});
+
+test("修改文字或拖動位置後以同一個識別碼覆寫：仍是同一則，內容與位置換成新的；別的帳號讀不到、蓋不掉也刪不到", async () => {
+  let tick = Date.parse("2026-11-14T06:00:00Z");
+  deps.now = () => tick;
+  assert.equal((await req("/api/drawings/2330/note-0001", { method: "PUT", body: note("突破前高") })).status, 201);
+  tick += 60_000;
+  assert.equal((await req("/api/drawings/2330/note-0001", { method: "PUT", body: note("假突破，停損", 1070, "2026-11-12") })).status, 200);
+  const mine = [{
+    id: "note-0001", kind: "text", anchors: [{ date: "2026-11-12", price: 1070 }], text: "假突破，停損",
+    created_at: "2026-11-14T06:00:00.000Z", updated_at: "2026-11-14T06:01:00.000Z",
+  }];
+  assert.deepEqual(await listOf("2330"), mine);
+
+  assert.deepEqual(await listOf("2330", { email: "b@example.com" }), []);
+  assert.equal((await req("/api/drawings/2330/note-0001", { email: "b@example.com", method: "PUT", body: note("別人的備註") })).status, 201);
+  assert.equal((await req("/api/drawings/2330/note-0001", { email: "b@example.com", method: "DELETE" })).status, 204);
+  assert.deepEqual(await listOf("2330"), mine);
+  assert.equal((await req("/api/drawings/2330/note-0001", { method: "DELETE" })).status, 204);
+  assert.deepEqual(await listOf("2330"), []);
+});
+
+test("文字的其他不收內容：行分隔字元（U+2028、U+2029、U+0085）、只有看不見的零寬字元；長得離譜的直接拒絕", async () => {
+  const put = (text) => req("/api/drawings/2330/note-0001", { method: "PUT", body: note(text) });
+  for (const text of ["第一段\u2028第二段", "第一段\u2029第二段", "下一行\u0085", "\u200b", "\u200b\u200d \ufeff\u2060"]) {
+    assert.equal((await put(text)).status, 400, JSON.stringify(text));
+  }
+  assert.equal((await put("線".repeat(50_000))).status, 400);
+  assert.equal((await env.DB.prepare("SELECT COUNT(*) AS n FROM user_drawings").first()).n, 0);
+  // 字裡面夾著零寬連接字元的組合表情照收（一個家庭表情是 5 個字元）。
+  const family = "👨\u200d👩\u200d👧 全家持股";
+  assert.equal((await put(family)).status, 201);
+  assert.deepEqual((await listOf("2330")).map((item) => item.text), [family]);
+});
+
+// ---------- 票 07：補存要靠的回應 ----------
+// 用戶端只看狀態碼決定要不要再送：4xx（除了 401、408、429）是「再送也不會過」，其餘是「等一下再送」。
+
+test("寫入的同時那一條被別的操作刪掉：回 503 請用戶端再送一次（不是 409——409 只留給超過上限，那是再送也不會過的）", async () => {
+  // 模擬寫入之後、讀回之前被另一個裝置刪掉：讀回那一句查不到東西。
+  const prepare = env.DB.prepare;
+  let raced = false;
+  env.DB.prepare = (sql) => {
+    const statement = prepare(sql);
+    if (raced || !/^SELECT id, kind/.test(sql) || /ORDER BY/.test(sql)) return statement;
+    return { bind: () => ({ first: async () => { raced = true; await env.DB._raw.exec("DELETE FROM user_drawings"); return null; } }) };
+  };
+  const lost = await req("/api/drawings/2330/line-0001", { method: "PUT", body: hline(1045) });
+  assert.equal(raced, true);
+  assert.equal(lost.status, 503);
+  const again = await req("/api/drawings/2330/line-0001", { method: "PUT", body: hline(1045) });
+  assert.equal(again.status, 201, "再送一次就存得住");
+  assert.deepEqual((await listOf("2330")).map((item) => item.id), ["line-0001"]);
+});
+
+test("被限速時告訴用戶端要等幾秒（到這一分鐘結束），寫入與刪除都不生效；等滿之後同一筆重送就存得住，重送幾次都只有一條", async () => {
+  let now = Date.parse("2026-11-14T06:00:20Z");
+  deps.now = () => now;
+  assert.equal((await req("/api/drawings/2330/line-0000", { method: "PUT", body: hline(1000) })).status, 201);
+  for (let index = 0; index < 59; index += 1) assert.equal((await req("/api/drawings/2330")).status, 200);
+
+  const limited = await req("/api/drawings/2330/line-0001", { method: "PUT", body: hline(1045) });
+  assert.equal(limited.status, 429);
+  assert.equal(limited.headers.get("retry-after"), "40", "06:00:20 → 這一分鐘還有 40 秒");
+  assert.equal((await req("/api/drawings/2330/line-0000", { method: "DELETE" })).status, 429);
+
+  now += 39_000;
+  const early = await req("/api/drawings/2330/line-0001", { method: "PUT", body: hline(1045) });
+  assert.deepEqual([early.status, early.headers.get("retry-after")], [429, "1"], "提早重送還是被擋");
+
+  now += 1000;
+  assert.deepEqual((await listOf("2330")).map((item) => item.id), ["line-0000"], "被擋下的寫入與刪除都沒有生效");
+  assert.equal((await req("/api/drawings/2330/line-0001", { method: "PUT", body: hline(1045) })).status, 201);
+  assert.equal((await req("/api/drawings/2330/line-0001", { method: "PUT", body: hline(1045) })).status, 200, "回應沒收到而重送：覆寫同一條");
+  assert.deepEqual((await listOf("2330")).map((item) => [item.id, item.anchors[0].price]), [["line-0000", 1000], ["line-0001", 1045]]);
+  for (const status of [204, 204]) assert.equal((await req("/api/drawings/2330/line-0000", { method: "DELETE" })).status, status, "刪除重送也不報錯");
+  assert.deepEqual((await listOf("2330")).map((item) => item.id), ["line-0001"]);
 });

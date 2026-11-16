@@ -8,44 +8,66 @@
 - ``read_ledger``：讀出全部紀錄，順便核對封存雜湊（原件被改動時丟 ``LedgerIntegrityError``）。
 - ``method_version_of``：從方法稿全文讀出版本號。
 
-候選關卡、照歷史亂猜、固定規則、回答驗證、鎖定與到期日計算都封在這裡。帳本只能新增：
-同一個識別（基準日＋版本＋方法版本＋輸入版本）只會有一筆；鎖定的做法沿用
-``candidate_snapshots``（正規化 JSON 的 SHA-256、``os.link`` 不覆寫）。
+候選關卡、照歷史亂猜、固定規則、回答驗證與到期日計算都封在這裡。帳本只能新增：
+同一個識別（基準日＋版本＋方法版本＋輸入版本）只會有一筆；鎖定、雜湊與模型呼叫在 ``ledger_core``
+（和關注帳本共用；做法沿用 ``candidate_snapshots``：正規化 JSON 的 SHA-256、``os.link`` 不覆寫）。
 """
 from __future__ import annotations
 
-import calendar
 import copy
 import hashlib
 import json
 import math
-import os
-import re
-import subprocess
-import sys
 from collections.abc import Callable, Mapping, Sequence
-from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal, InvalidOperation
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from ai_digest import CHINESE_NUMERAL_CHARS
+import foreign_flow
+# 鎖定、雜湊、模型呼叫、期限與方法版本和關注帳本共用（ledger_core），這裡只留預測帳本自己的規則。
+from ledger_core import (
+    EDITIONS,
+    TAIPEI,
+    LedgerIntegrityError,  # noqa: F401  （對外沿用原名）
+    build_prompt,
+    call_model,
+    method_version_of,
+    read_folders,
+    refs_problem,
+    render_refs,
+)
+from ledger_core import add_months as _add_months
+from ledger_core import compact_json as _json
+from ledger_core import sql_insert as _insert
+from ledger_core import append as _append
+from ledger_core import clean_daily as _clean_daily
+from ledger_core import deadline as _deadline
+from ledger_core import default_now as _default_now
+from ledger_core import label_date as _label_date
+from ledger_core import read_record as _read
+from ledger_core import seal as _seal
+from ledger_core import sha as _sha
+from ledger_core import text_problem as _text_problem
+from overseas_inputs import PARAMETERS as _OVERSEAS_PARAMETERS
+
+# 過去的經驗（E 票）：相似盤勢層與教訓層，自成一個模組。
+import forecast_experience as _experience
 
 SCHEMA = "forecast-ledger/v1"
-TAIPEI = timezone(timedelta(hours=8))
 HORIZONS = (1, 5, 20)
-EDITIONS = ("evening", "morning")
 ZONES = ("above", "between", "below")
 REGIMES = ("多頭延續", "多頭中的回檔", "高檔轉弱", "空頭延續", "空頭中的反彈", "盤整")
 PULLBACK_REGIME = "多頭中的回檔"
 TREND_LABELS = ("偏多", "偏空", "盤整")
 REQUIRED_INPUTS = ("index", "institutional", "futures")
-# 晨間版須在開盤（09:00）前 15 分鐘鎖定。
-MORNING_DEADLINE = (8, 45)
 
 # 候選關卡與基準的參數：在第一筆紀錄之前寫定，整組算進輸入版本，改了就是新系列。
 PARAMETERS: dict[str, Any] = {
-    "layers": ["base"],
+    # 交給模型的輸入層；某一層「有或沒有」才換輸入版本（教訓層內容隨時間增長不換）。
+    # 海外層（D 票）、外資層（G 票，本人 2026-11-15 定案加入外資讀數；讀數與歷史統計由 foreign_flow 算，模型只讀）、
+    # 相似盤勢與教訓層（E 票）同時上，輸入版本照五層一起算。
+    "layers": ["base", "overseas", "foreign_flow", "similar", "lessons"],
+    "foreign_flow_layer": foreign_flow.VERSION,
     "ma_periods": [5, 10, 20, 60, 120, 240],
     "high_low_windows": [20, 60, 240],
     "gap_lookback_bars": 240,
@@ -54,9 +76,18 @@ PARAMETERS: dict[str, Any] = {
     "recent_bars_for_model": 60,
     # 基本層交給模型的資料組成（規格〈交給 Gemini 的輸入〉）；加減任何一項都會換輸入版本。
     "base_inputs": ["index_ohlc_amount", "indicators_short_medium_long", "trend_labels", "chips_institutional_futures",
-                    "candidates", "method_text"],
+                    "candidates", "bollinger", "method_text"],
+    # 相似盤勢的歸類定義與教訓層的筆數（本人 2026-11-16 選「照這樣」）；改任何一個數字都是新系列。
+    "similar_regimes": _experience.PARAMETERS["similar_regimes"],
+    "lessons": _experience.PARAMETERS["lessons"],
+    # 本人 2026-11-16「兩樣都加」：加權指數的布林位置（20 日、2 倍；近 120 根最窄兩成算變窄），上下緣列進候選關卡。
+    "bollinger": {"period": 20, "k": 2, "squeeze_window": 120, "squeeze_share": 0.2},
+    # 海外層（D 票）：美日韓指數、美債、美元指數、美元兌台幣、外資讀數 1 與 4；哪些來源交給模型也算在內。
+    "overseas": _OVERSEAS_PARAMETERS,
 }
 
+_BOLL_ZONES = {"below": "下緣以下", "lower_half": "下緣到中線", "upper_half": "中線到上緣", "above": "上緣以上"}
+_BOLL_NOTE = "布林位置只是位置描述；歷史上用它調整持股水位沒有通過及格線（.scratch/bollinger-study/report.html）。"
 _MA_NAMES = {5: "五日線", 10: "十日線", 20: "月線", 60: "季線", 120: "半年線", 240: "年線"}
 _WINDOW_NAMES = {20: "近二十日", 60: "近六十日", 240: "近一年"}
 _HORIZON_NAMES = {1: "一日", 5: "五日", 20: "二十日"}
@@ -94,124 +125,77 @@ _PROMPT_RULES = (
     "reason（理由）與 invalidation（什麼情況代表看錯）只寫繁體中文質化判斷，不得出現任何阿拉伯／全形／中文數字、日期或價格；"
     "要引用價位就把候選 id 放進 reason_refs／invalidation_refs，程式會代入名字與數值。",
     # 本人 2026-11-15 看過真 Gemini 乾跑後選「先改提示再乾跑」：下面兩條是那次加的。
-    "理由與看錯條件只能引用 INPUT_JSON 裡有的資料（日 K、指標、法人與期貨、候選關卡、方法稿）；"
-    "INPUT_JSON 沒給的資料（例如融資、新聞、海外市場）不得當成事實寫進去。",
+    "理由與看錯條件只能引用 INPUT_JSON 裡有的資料（日 K、指標、法人與期貨、外資讀數、候選關卡、布林位置、overseas、方法稿）；"
+    "INPUT_JSON 沒給的資料（例如融資、新聞、overseas.not_provided 列出的項目）不得當成事實寫進去。",
+    # D 票（2026-11-16）：布林位置與海外層的使用規則。
+    "bollinger 只是位置描述：歷史上用布林通道調整持股水位沒有通過及格線，不可單獨當成轉強或轉弱的理由。",
+    "overseas 每一項都標了資料日期：美國的收盤是台北前一晚（晨間版是剛收盤那一晚），status 不是 ok 的項目代表休市、"
+    "沒抓到或不是預期那天的收盤，不得當成最新行情。",
+    # G 票：外資讀數（本人 2026-11-15「要，加進去」「要，加第六個」）。
+    "foreign_flow 是程式算好的外資讀數與歷史統計，只能照讀，不可自己重算或改數字；status 是 missing 的讀數當作沒有。"
+    "外資的買賣解釋當天的漲跌，不代表之後會續漲或續跌：不得把外資賣超、外資續賣的機率（或期貨加空）直接當成之後會跌的理由，"
+    "也不得把期貨淨空單的多寡當成看空的理由；不得把不是外資統計講的事（例如均線壓力）說成外資統計的結論。"
+    "要和 foreign_flow.notes 與各讀數附的歷史統計一起看。",
     "每一格到期後，程式會把你的落點命中率和「照歷史亂猜」並排比較：照歷史亂猜是不看任何判斷、只看歷史上同樣距離的兩條線"
     "收盤落在各區的比例。兩條線拉得越寬，「兩線之間」在歷史上本來就越常中，所以只為了保險把線拉寬，比不贏照歷史亂猜。",
     f"regime 從固定清單選一個：{'、'.join(REGIMES)}。base_date 照抄 INPUT_JSON 的 base_date。",
+    # 過去的經驗（E 票）：本人「不要讓歷史重演，根據過去的經驗去輔助判斷」。
+    "similar_regimes 是程式依事先寫定的定義，把歷史上的日子歸成「多頭中的回檔」「高檔轉弱」兩類，"
+    "統計各類起點之後一、五、二十個交易日的漲跌（每一段行情只算一次），all_days 是不分類的對照；today 是今天屬於哪一類。"
+    "這是事實可以參考，但 low_sample 為 true 的類別樣本太少，不能當成規律；「高檔轉弱」只代表和歷史上某些情況相似，"
+    "不保證會大跌、也不保證能避開。today 是多頭中的回檔時，二十日那一格的轉弱線要挑「跌破才算趨勢轉壞」的那條線。",
+    "lessons 是程式整理的過去對帳事實：各期間猜中與沒中的次數，以及最近幾次沒中的那一格當時選的落點、兩條線、盤勢、"
+    "看錯條件與實際落點。寫之前先看這些，避免同一種錯一犯再犯；lessons 是空的代表還沒有對完帳的紀錄。",
 )
 # 輸入版本：參數、回答格式、提示規則任何一項改了就是新系列，和舊系列分開對帳。
-INPUT_VERSION = "base-v1-" + hashlib.sha256(json.dumps(
+INPUT_VERSION = "+".join(PARAMETERS["layers"]) + "-v1-" + hashlib.sha256(json.dumps(
     {"parameters": PARAMETERS, "output_schema": OUTPUT_SCHEMA, "prompt_rules": _PROMPT_RULES},
     ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:8]
 
 
-class LedgerIntegrityError(Exception):
-    """紀錄的封存雜湊不符：原件被改動，或不是由本模組寫入。"""
+# ---- 布林通道 ----
 
-
-# ---- 共用小工具 ----
-
-def _canonical(payload: Any) -> bytes:
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-
-
-def _sha(payload: Any) -> str:
-    return hashlib.sha256(_canonical(payload)).hexdigest()
-
-
-def _seal(record: dict[str, Any]) -> dict[str, Any]:
-    record["record_sha256"] = _sha({k: v for k, v in record.items() if k != "record_sha256"})
-    return record
-
-
-def _verify(record: Mapping[str, Any], path: Path) -> None:
-    body = {k: v for k, v in record.items() if k != "record_sha256"}
-    if record.get("record_sha256") != _sha(body):
-        raise LedgerIntegrityError(f"{path} 封存雜湊不符：原件被改動")
-    if "input" in record and record.get("input_sha256") != _sha(record["input"]):
-        raise LedgerIntegrityError(f"{path} 輸入雜湊不符：存檔的輸入被改動")
-
-
-def _number(value: Any) -> float | None:
-    if isinstance(value, bool):
+def _band(closes: list[Any], end: int) -> tuple[float, float, float] | None:
+    """第 end 根（含）往前 period 根的（中線, 上緣, 下緣）；和 web/kchart.js 的 bollinger() 同算法（母體標準差）。"""
+    period, k = PARAMETERS["bollinger"]["period"], PARAMETERS["bollinger"]["k"]
+    window = closes[end - period + 1:end + 1]
+    if end + 1 < period or len(window) != period or any(value is None for value in window):
         return None
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
+    mid = sum(window) / period
+    width = k * math.sqrt(sum((value - mid) ** 2 for value in window) / period)
+    return mid, mid + width, mid - width
+
+
+def _bollinger(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """基準日收盤在布林通道的哪一區，以及通道寬度是不是近 120 根裡最窄的兩成（資料不足時是 None）。"""
+    closes = [row["close"] for row in rows]
+    last = len(closes) - 1
+    band = _band(closes, last) if closes else None
+    if band is None:
         return None
-    return parsed if math.isfinite(parsed) else None
-
-
-def _format_number(value: float) -> str:
-    try:
-        rendered = format(Decimal(str(value)), ",f")
-    except InvalidOperation:
-        return str(value)
-    if "." in rendered:
-        rendered = rendered.rstrip("0").rstrip(".")
-    return rendered
-
-
-def _against_existing(path: Path, record: Mapping[str, Any]) -> str:
-    existing = json.loads(path.read_text(encoding="utf-8"))
-    return "unchanged" if existing.get("record_sha256") == record["record_sha256"] else "conflict"
-
-
-def _append(path: Path, record: Mapping[str, Any]) -> str:
-    """只新增：檔案不存在才寫；已存在時同內容回 ``unchanged``、不同內容回 ``conflict``，都不覆寫。"""
-    if path.exists():
-        return _against_existing(path, record)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    partial = path.with_name(f".{path.name}.{os.getpid()}.partial")
-    partial.write_bytes(json.dumps(record, ensure_ascii=False, sort_keys=True, indent=2).encode("utf-8") + b"\n")
-    try:
-        # os.link 在目標已存在時失敗：兩個寫入者競爭時後者不會蓋掉前者。
-        os.link(partial, path)
-    except FileExistsError:
-        return _against_existing(path, record)
-    finally:
-        partial.unlink(missing_ok=True)
-    return "written"
-
-
-def _read(path: Path) -> dict[str, Any]:
-    record = json.loads(path.read_text(encoding="utf-8"))
-    _verify(record, path)
-    return record
-
-
-# ---- 方法版本 ----
-
-def method_version_of(method_text: str) -> str:
-    """方法稿開頭「版本：X.Y」那一行的版本號；用的是開始記錄當時最新的方法稿。"""
-    match = re.search(r"^版本：\s*([0-9]+(?:\.[0-9]+)*)", method_text or "", re.MULTILINE)
-    if not match:
-        raise ValueError("方法稿缺少「版本：」行，無法標示方法版本")
-    return match.group(1)
+    mid, upper, lower = band
+    close = closes[-1]
+    zone = "below" if close < lower else "above" if close > upper else "lower_half" if close < mid else "upper_half"
+    window, share = PARAMETERS["bollinger"]["squeeze_window"], PARAMETERS["bollinger"]["squeeze_share"]
+    squeezed = None  # 不到 period + window − 1 根，近 120 根裡有算不出通道的日子：不判斷
+    if last + 1 >= window:
+        widths = [None if (b := _band(closes, end)) is None or b[0] <= 0 else (b[1] - b[2]) / b[0]
+                  for end in range(last - window + 1, last + 1)]
+        if None not in widths:
+            squeezed = sum(width < widths[-1] for width in widths) < window * share
+    return {"middle": round(mid, 2), "upper": round(upper, 2), "lower": round(lower, 2), "zone": _BOLL_ZONES[zone],
+            "width_pct": round((upper - lower) / mid * 100, 2), "squeezed": squeezed, "note": _BOLL_NOTE}
 
 
 # ---- 候選關卡 ----
 
-def _clean_daily(index_daily: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    rows = []
-    for row in index_daily:
-        values = {key: _number(row.get(key)) for key in ("open", "high", "low", "close", "amount")}
-        rows.append({"date": str(row.get("date")), **values})
-    dates = [row["date"] for row in rows]
-    if dates != sorted(dates) or len(set(dates)) != len(dates):
-        raise ValueError("index_daily 必須依日期遞增且日期不可重複")
-    return rows
-
-
-def _label_date(day: str, base_date: str) -> str:
-    """同一年只寫月／日；和基準日不同年時連年份一起寫，免得一年前的關卡被看成今年。"""
-    return f"{day[5:7]}/{day[8:10]}" if day[:4] == base_date[:4] else day.replace("-", "/")
-
-
 def _structural_levels(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     levels: list[dict[str, Any]] = []
     closes = [row["close"] for row in rows]
+    band = _band(closes, len(closes) - 1) if closes else None
+    if band is not None:
+        levels.append({"id": "boll_upper", "name": "布林上緣", "kind": "bollinger", "value": band[1]})
+        levels.append({"id": "boll_lower", "name": "布林下緣", "kind": "bollinger", "value": band[2]})
     for period in PARAMETERS["ma_periods"]:
         window = closes[-period:]
         if len(window) == period and all(value is not None for value in window):
@@ -293,7 +277,8 @@ def _candidate_levels(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         kept.append({**level, "value": value, "side": "above" if value > close else "below"})
     closes = [row["close"] for row in rows]
     for side, prefix, percentile_key, word, history, direction in _DISTANCE_SIDES:
-        if any(level["side"] == side for level in kept):
+        # 布林上下緣永遠在收盤兩側附近，不算「圖上的結構關卡」：創新高／新低時照樣補距離關卡。
+        if any(level["side"] == side and level["kind"] != "bollinger" for level in kept):
             continue
         for horizon in HORIZONS:
             returns = _forward_returns(closes, horizon)
@@ -326,8 +311,17 @@ def _readiness(data: Mapping[str, Any], rows: list[dict[str, Any]]) -> list[str]
     return problems
 
 
+def _cutoffs(data: Mapping[str, Any]) -> dict[str, Any]:
+    """台股各項的截止日，加上交給模型的海外各項資料日期。"""
+    return {**copy.deepcopy(dict(data.get("data_cutoffs") or {})), **copy.deepcopy(dict(data.get("overseas_cutoffs") or {}))}
+
+
+# 只存在原件、不進模型輸入的海外欄位：各項狀態、缺漏、條款不允許交給模型的數字、原件清單。
+_RECORD_ONLY = ("overseas_status", "missing_inputs", "record_only", "sources")
+
+
 def _model_input(data: Mapping[str, Any], rows: list[dict[str, Any]], edition: str,
-                 candidates: list[dict[str, Any]] | None) -> dict[str, Any]:
+                 candidates: list[dict[str, Any]] | None, experience: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "schema": "forecast-input/v1",
         "input_version": INPUT_VERSION,
@@ -338,91 +332,31 @@ def _model_input(data: Mapping[str, Any], rows: list[dict[str, Any]], edition: s
         "trend_labels": copy.deepcopy(dict(data.get("trend_labels") or {})),
         "indicators": copy.deepcopy(data.get("indicators")),
         "chips": copy.deepcopy(data.get("chips")),
-        "data_cutoffs": copy.deepcopy(dict(data.get("data_cutoffs") or {})),
+        "foreign_flow": copy.deepcopy(data.get("foreign_flow")),
+        "data_cutoffs": _cutoffs(data),
         "candidates": candidates,
+        "bollinger": _bollinger(rows),
+        "overseas": copy.deepcopy(data.get("overseas")),
         "history": {"from": rows[0]["date"] if rows else None, "to": rows[-1]["date"] if rows else None,
                     "bars": len(rows), "sha256": _sha(rows)},
         "method_text": data.get("method_text"),
+        **experience,
     }
 
 
-def _build_prompt(model_input: Mapping[str, Any]) -> str:
-    return "\n".join([*_PROMPT_RULES, "INPUT_JSON:",
-                      json.dumps(model_input, ensure_ascii=False, sort_keys=True, separators=(",", ":"))])
+def _experience_layers(root: Path, base_date: str, rows: list[dict[str, Any]], ready: bool) -> dict[str, Any]:
+    """相似盤勢層只在日 K 截到基準日時才算（不偷看之後）；教訓層只用寫這一份時已知結果的對帳。"""
+    ledger = read_ledger(root)
+    return {
+        "similar_regimes": _experience.similar_regimes(rows) if ready else None,
+        "lessons": _experience.lessons(ledger["forecasts"], ledger["reconciliations"], base_date),
+    }
 
 
 # ---- 模型呼叫與回答驗證 ----
 
-def _model_command(model_bin: Path | str, model: str) -> list[str]:
-    """agy 的串流模式：提示從 stdin 送（Windows 單一指令列約 32K 字元的上限擋不住方法稿全文），結果讀最後的 result 事件。"""
-    path = Path(model_bin)
-    prefix = [sys.executable, str(path)] if path.suffix.lower() == ".py" else [str(path)]
-    return [*prefix, "-p=", "--input-format", "stream-json", "--output-format", "stream-json",
-            "--model", model, "--effort", "medium",
-            "--json-schema", json.dumps(OUTPUT_SCHEMA, ensure_ascii=False, separators=(",", ":")),
-            "--print-timeout", "300s", "--sandbox"]
-
-
-def _stream_input(prompt: str) -> bytes:
-    return (json.dumps({"event": "user", "message": {"content": prompt}}, ensure_ascii=False) + "\n").encode("utf-8")
-
-
-def _result_event(stdout: bytes) -> dict[str, Any] | None:
-    """串流輸出一行一個事件；回傳最後一個 result 事件的內容。"""
-    result = None
-    for line in stdout.decode("utf-8").splitlines():
-        if not line.strip():
-            continue
-        event = json.loads(line)
-        if isinstance(event, dict) and event.get("event") == "result" and isinstance(event.get("result"), dict):
-            result = event["result"]
-    return result
-
-
-def _failure(returncode: int, stderr: bytes) -> str:
-    """漏記原因帶上錯誤輸出的最後一段，查得到是額度、登入還是程式問題。"""
-    tail = stderr.decode("utf-8", errors="replace").strip()[-300:]
-    return f"結束碼 {returncode}" + (f"：{tail}" if tail else "")
-
-
-def _call_model(model_bin: Path | str, prompt: str, model: str, timeout: float) -> tuple[str, Any, str]:
-    """回傳 (狀態, structured_output, 說明)；狀態是 ok／model_failed／model_timeout／output_garbled。"""
-    try:
-        completed = subprocess.run(_model_command(model_bin, model), input=_stream_input(prompt),
-                                   capture_output=True, timeout=timeout, check=False)
-    except subprocess.TimeoutExpired:
-        return "model_timeout", None, f"超過 {timeout} 秒沒有回應"
-    except OSError as error:
-        return "model_failed", None, f"{type(error).__name__}: {error}"
-    try:
-        envelope = _result_event(completed.stdout)
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        if completed.returncode != 0:
-            return "model_failed", None, _failure(completed.returncode, completed.stderr)
-        return "output_garbled", None, "輸出不是 UTF-8 JSON 事件"
-    if completed.returncode != 0 or envelope is None or envelope.get("status") != "SUCCESS":
-        detail = _failure(completed.returncode, completed.stderr)
-        if envelope and envelope.get("error"):
-            detail += f"；{str(envelope['error'])[:200]}"
-        return "model_failed", None, detail
-    return "ok", envelope.get("structured_output"), ""
-
-
-def _text_problem(text: Any) -> str | None:
-    if not isinstance(text, str) or not text.strip():
-        return "文字為空"
-    if len(text) > 160:
-        return "文字過長"
-    if any(character.isnumeric() or character in CHINESE_NUMERAL_CHARS for character in text):
-        return "自由文字不得包含數字；價位請用候選編號"
-    return None
-
-
 def _render(text: str, refs: list[str], by_id: Mapping[str, Mapping[str, Any]]) -> str:
-    if not refs:
-        return text.strip()
-    facts = "；".join(f"{by_id[ref]['name']} {_format_number(by_id[ref]['value'])} 點" for ref in refs)
-    return f"{text.strip()}【資料：{facts}】"
+    return render_refs(text, refs, by_id, "點")
 
 
 def _line(level: Mapping[str, Any]) -> dict[str, Any]:
@@ -444,6 +378,7 @@ def _validate(structured: Any, model_input: Mapping[str, Any]) -> tuple[dict[str
     for horizon in HORIZONS:
         key = str(horizon)
         item = cells[key]
+        usable = {level_id: level for level_id, level in by_id.items() if _usable(level, horizon)}
         if not isinstance(item, dict) or set(item) != set(_CELL_SCHEMA["required"]):
             return None, f"{key} 日格式不正確"
         for field, side in (("strong_line", "above"), ("weak_line", "below")):
@@ -458,9 +393,7 @@ def _validate(structured: Any, model_input: Mapping[str, Any]) -> tuple[dict[str
             problem = _text_problem(item[text_field])
             if problem:
                 return None, f"{key} 日 {text_field}：{problem}"
-            refs = item[refs_field]
-            if (not isinstance(refs, list) or len(refs) > 3 or len(set(refs)) != len(refs)
-                    or any(ref not in by_id or not _usable(by_id[ref], horizon) for ref in refs)):
+            if refs_problem(item[refs_field], usable):
                 return None, f"{key} 日 {refs_field} 含不存在的候選編號"
         rendered[key] = {
             "horizon": horizon,
@@ -476,15 +409,6 @@ def _validate(structured: Any, model_input: Mapping[str, Any]) -> tuple[dict[str
 
 
 # ---- 寫一份預測 ----
-
-def _deadline(edition: str, base_date: str, session_date: str | None) -> datetime:
-    if edition == "evening":
-        return datetime.fromisoformat(base_date).replace(tzinfo=TAIPEI) + timedelta(days=1)
-    if not session_date or session_date <= base_date:
-        raise ValueError("晨間版須給基準日之後的開盤日 session_date")
-    hour, minute = MORNING_DEADLINE
-    return datetime.fromisoformat(session_date).replace(hour=hour, minute=minute, tzinfo=TAIPEI)
-
 
 def _stem(base_date: str, edition: str, method_version: str, input_version: str) -> str:
     date.fromisoformat(base_date)
@@ -535,10 +459,6 @@ def _with_baselines(accepted: dict[str, Any], rows: list[dict[str, Any]],
     return accepted
 
 
-def _default_now() -> datetime:
-    return datetime.now(TAIPEI)
-
-
 def write_forecast(
     root: Path | str,
     data: Mapping[str, Any],
@@ -568,7 +488,8 @@ def write_forecast(
     rows = _clean_daily(data.get("index_daily") or [])
     problems = _readiness(data, rows)
     candidates = None if problems else _candidate_levels(rows)
-    model_input = _model_input(data, rows, edition, candidates)
+    model_input = _model_input(data, rows, edition, candidates,
+                               _experience_layers(Path(root), base_date, rows, not problems))
     input_sha = _sha(model_input)
 
     if path.exists():
@@ -582,16 +503,20 @@ def write_forecast(
         "method_version": method_version, "input_version": INPUT_VERSION,
         "model": model,
         "run_mode": "official" if official_since and base_date >= official_since else "trial",
-        "data_cutoffs": copy.deepcopy(dict(data.get("data_cutoffs") or {})),
+        "data_cutoffs": _cutoffs(data),
+        **{key: copy.deepcopy(data[key]) for key in _RECORD_ONLY if key in data},
         "deadline": deadline.isoformat(),
         "input": model_input, "input_sha256": input_sha,
         "attempts": [],
     }
+    if data.get("record_only"):
+        # 只存進紀錄、不交給模型（例如來源條款只允許私用的海外資料）；跟著整筆一起封存。
+        record["record_only"] = copy.deepcopy(dict(data["record_only"]))
 
     def finish(kind: str, **fields: Any) -> dict[str, Any]:
         record.update(kind=kind, locked_at=clock().astimezone(TAIPEI).isoformat(), **fields)
         if kind == "forecast" and datetime.fromisoformat(record["locked_at"]) >= deadline:
-            for key in ("regime", "cells"):
+            for key in ("regime", "cells", "similar_regimes"):
                 record.pop(key, None)
             record.update(kind="miss", miss_reason="deadline_passed", miss_detail="鎖定時已過期限")
         outcome = _append(path, _seal(record))
@@ -604,15 +529,16 @@ def write_forecast(
     if clock() >= deadline:
         return finish("miss", miss_reason="deadline_passed", miss_detail="開始寫之前已過期限")
 
-    prompt = _build_prompt(model_input)
+    prompt = build_prompt(_PROMPT_RULES, model_input)
     for _ in range(2):
-        status, structured, detail = _call_model(model_bin, prompt, model, timeout_seconds)
+        status, structured, detail = call_model(model_bin, prompt, model, timeout_seconds, OUTPUT_SCHEMA)
         if status != "ok":
             record["attempts"].append({"status": status, "detail": detail})
             return finish("miss", miss_reason=status, miss_detail=detail)
         accepted, problem = _validate(structured, model_input)
         if accepted is not None:
-            return finish("forecast", **_with_baselines(accepted, rows, data["trend_labels"]))
+            return finish("forecast", **_with_baselines(accepted, rows, data["trend_labels"]),
+                          similar_regimes=model_input["similar_regimes"])
         record["attempts"].append({"status": "answer_invalid", "detail": problem})
     return finish("miss", miss_reason="answer_invalid", miss_detail=record["attempts"][-1]["detail"])
 
@@ -699,13 +625,6 @@ def _rates(pairs: list[tuple[dict[str, Any], dict[str, Any]]]) -> dict[str, Any]
 VERDICT_MONTHS = {1: 3, 5: 6, 20: 12}
 
 
-def _add_months(day: date, months: int) -> date:
-    """加幾個月，月底對齊（例如 8/31 加三個月是 11/30）。"""
-    month_index = day.month - 1 + months
-    year, month = day.year + month_index // 12, month_index % 12 + 1
-    return date(year, month, min(day.day, calendar.monthrange(year, month)[1]))
-
-
 def _verdict(run_mode: str, horizon: int, official_since: str | None, as_of: str | None) -> str:
     """「試跑」不下結論；正式紀錄在正式起算日之後滿規定時間才「可下結論」，之前一律「累積中」。"""
     if run_mode != "official":
@@ -766,27 +685,7 @@ def summarize(root: Path | str, index_daily: Sequence[Mapping[str, Any]], *,
 # 給網站顯示的欄位；完整輸入（含方法稿）與模型的重試細節只留在原件。
 _PUBLIC_FIELDS = ("forecast_id", "base_date", "edition", "method_version", "input_version", "model", "run_mode",
                   "kind", "locked_at", "deadline", "data_cutoffs", "regime", "cells", "miss_reason", "miss_detail",
-                  "record_sha256")
-
-
-def _sql_literal(value: Any) -> str:
-    if value is None:
-        return "NULL"
-    if isinstance(value, bool):
-        return "1" if value else "0"
-    if isinstance(value, (int, float)):
-        return repr(value)
-    return "'" + str(value).replace("'", "''") + "'"
-
-
-def _insert(table: str, columns: dict[str, Any], key: str) -> str:
-    names = ",".join(columns)
-    values = ",".join(_sql_literal(value) for value in columns.values())
-    return f"INSERT INTO {table} ({names}) VALUES ({values}) ON CONFLICT({key}) DO NOTHING;"
-
-
-def _json(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                  "similar_regimes", "overseas_status", "missing_inputs", "record_sha256")
 
 
 def d1_sql(root: Path | str, index_daily: Sequence[Mapping[str, Any]], *, published_at: str,
@@ -823,8 +722,4 @@ def d1_sql(root: Path | str, index_daily: Sequence[Mapping[str, Any]], *, publis
 # ---- 讀帳本 ----
 
 def read_ledger(root: Path | str) -> dict[str, list[dict[str, Any]]]:
-    folder = Path(root)
-    out: dict[str, list[dict[str, Any]]] = {}
-    for kind in ("forecasts", "reconciliations", "conflicts"):
-        out[kind] = [_read(path) for path in sorted((folder / kind).glob("*.json"))] if (folder / kind).is_dir() else []
-    return out
+    return read_folders(root, ("forecasts", "reconciliations", "conflicts"))

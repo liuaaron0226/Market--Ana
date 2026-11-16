@@ -697,6 +697,11 @@
       }
       face.append(name, open, bar, element('span', `hv-ret num ${tone}`.trim(), priced ? returnText(item) : '—'), chev, more);
     } else face.append(name, open, element('span', 'pf-tag', titled ? '' : group), chev, more);
+    // 關注中的那幾檔：名稱下面多一行判斷（狀態點＋狀態、觸發價、對了幾次；自選股關注 E 票，本人選 A）。只有站主、功能打開時才有
+    const judgments = state.watch?.judgments;
+    const judgment = watch && judgments && state.watch.codes.has(entry.code) && window.WatchJudgments
+      ? window.WatchJudgments.listLine(judgments.items[entry.code], judgments.base_date) : null;
+    if (judgment) { li.classList.add('has-judgment'); face.append(judgment); }
     const clipTop = element('div', 'swipe-clip');
     clipTop.append(acts, face);
 
@@ -939,6 +944,8 @@
             count: payload.count, limit: payload.limit,
             codes: new Set((payload.items || []).map(item => item.code)),
             unwatchable: new Set(payload.unwatchable || []),
+            // 每一檔最新一份判斷（watch-judgments.js；E 票）。讀不到時是 null，清單照原樣。
+            judgments: window.WatchJudgments ? await window.WatchJudgments.loadList() : null,
           };
         }
       } catch (_) { /* 讀不到關注時，自選股照常顯示，只是沒有開關 */ }
@@ -1025,6 +1032,8 @@
 
   loadReleaseFeatures().then(async () => {
     await Promise.all([loadWatchlist(), loadHoldings(), ...(features.level_advice ? [loadLevel()] : [])]);
+    // 到價推播（F 票）：只有站主、關注開關打開時才出現。
+    if (features.watchlist_watch_v1 && window.WatchPush) window.WatchPush.mount($('pushPanel'));
     if (features.ai_stock_advice) await loadAiDigest();
     listReady = true;
     renderList();

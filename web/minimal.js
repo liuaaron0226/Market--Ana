@@ -2559,6 +2559,7 @@
   const details = document.getElementById('aiDigestDetails');
   const marketPoints = document.getElementById('aiDigestMarketPoints');
   const flowPoints = document.getElementById('aiDigestFlowPoints');
+  const setup = document.getElementById('aiDigestSetup');
   if (!card || !date || !conclusion || !preview || !details || !marketPoints || !flowPoints) return;
 
   const listItem = text => {
@@ -2577,35 +2578,59 @@
     details.hidden = true;
   }
 
-  async function loadAiDigest() {
+  function renderDigest(payload) {
+    const market = payload.market?.status === 'generated' ? payload.market.content : null;
+    const flow = payload.flow?.status === 'generated' ? payload.flow.content : null;
+    if (!market && !flow) { showUnproduced(payload.data_date); return; }
+
+    card.dataset.state = 'generated';
+    date.textContent = payload.data_date ? `資料日 ${payload.data_date}` : '資料日待更新';
+    conclusion.textContent = market?.conclusion || '大盤解讀今日未產生';
+    const signals = Array.isArray(flow?.signals) ? flow.signals : [];
+    preview.replaceChildren(...signals.slice(0, 2).map(item => listItem(item.text)));
+    marketPoints.replaceChildren(...(market?.points || []).map(item => listItem(item.text)));
+    flowPoints.replaceChildren(...signals.map(item => listItem(item.text)));
+    details.hidden = marketPoints.children.length === 0 && flowPoints.children.length === 0;
+  }
+
+  async function loadAiDigest(url) {
     try {
-      const response = await fetch('/api/ai-digest', { cache: 'no-store', headers: { Accept: 'application/json' } });
+      const response = await fetch(url, { cache: 'no-store', headers: { Accept: 'application/json' } });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
-      const market = payload.market?.status === 'generated' ? payload.market.content : null;
-      const flow = payload.flow?.status === 'generated' ? payload.flow.content : null;
-      if (!market && !flow) { showUnproduced(payload.data_date); return; }
-
-      card.dataset.state = 'generated';
-      date.textContent = payload.data_date ? `資料日 ${payload.data_date}` : '資料日待更新';
-      conclusion.textContent = market?.conclusion || '大盤解讀今日未產生';
-      const signals = Array.isArray(flow?.signals) ? flow.signals : [];
-      preview.replaceChildren(...signals.slice(0, 2).map(item => listItem(item.text)));
-      marketPoints.replaceChildren(...(market?.points || []).map(item => listItem(item.text)));
-      flowPoints.replaceChildren(...signals.map(item => listItem(item.text)));
-      details.hidden = marketPoints.children.length === 0 && flowPoints.children.length === 0;
+      renderDigest(payload);
     } catch (_) {
       showUnproduced();
     }
+  }
+
+  // 開放給朋友 02 票：朋友的首頁放他用自己 Gemini 金鑰產生的那兩份。
+  // 開關關著（available=false）或不是朋友（站主、本機版）時什麼都不做，首頁和以前一樣。
+  function showSetup(message) {
+    showUnproduced();
+    date.textContent = '';
+    conclusion.textContent = message;
+    if (setup) setup.hidden = false;
+  }
+
+  async function initFriendDigest() {
+    const response = await fetch('/api/friend-ai/digest', { cache: 'no-store', headers: { Accept: 'application/json' } });
+    if (!response.ok) return;
+    const payload = await response.json();
+    if (!payload?.available) return;
+    card.hidden = false;
+    if (!payload.configured) { showSetup('尚未設定 Gemini'); return; }
+    if (!payload.consented) { showSetup('同意內容已更新，請回設定頁重新同意'); return; }
+    renderDigest(payload);
   }
 
   async function initAiDigest() {
     try {
       const response = await fetch('/api/features', { cache: 'no-store', headers: { Accept: 'application/json' } });
       const policy = response.ok ? await response.json() : null;
-      if (!policy?.features?.ai_digest) return;
+      if (!policy?.features?.ai_digest) { await initFriendDigest(); return; }
       card.hidden = false;
-      await loadAiDigest();
+      await loadAiDigest('/api/ai-digest');
     } catch (_) { /* feature gate 讀取失敗時不查 AI schema、不顯示卡片 */ }
   }
 

@@ -423,6 +423,24 @@ class StateSyncTest(unittest.TestCase):
         kept = sorted(p.name for p in (self.restore / "data/market-snapshots/stock-detail").rglob("*.json"))
         self.assertEqual(kept, ["margin-20261105.json", "margin-20261106.json", "t86-20261105.json", "t86-20261106.json"])
 
+    def test_long_term_margin_originals_travel_with_the_working_set_untrimmed(self) -> None:
+        # 融資維持率（估）每天要從起點把全部個股融資原件重播一次；雲端每次都是新機器，
+        # 工作集少了舊的那幾天就算不出來。個股頁籌碼用的近期明細照舊只留 60 個交易日。
+        by_path = {item.path: item for item in ss.WORKING_SET}
+        self.assertIn("data/margin-history", by_path)
+        self.assertEqual(by_path["data/margin-history"].recent_files, 0)
+        self.assertEqual(by_path["data/market-snapshots/stock-detail"].recent_files, 60)
+        history = self.local / "data/margin-history/raw"
+        history.mkdir(parents=True)
+        days = [f"2026{month:02d}{day:02d}" for month in (8, 9, 10) for day in range(1, 29)]
+        for day in days:
+            (history / f"margin-{day}.json").write_text("{}", encoding="utf-8")
+        store = ss.DirectoryStore(self.bucket)
+        ss.upload(self.local, store, [by_path["data/margin-history"]], data_date="2026-11-06")
+        ss.restore(self.restore, store)
+        kept = sorted(p.name for p in (self.restore / "data/margin-history/raw").glob("*.json"))
+        self.assertEqual(len(kept), len(days))      # 84 個交易日，超過近期明細的 60，一份都沒少
+
     def test_restored_state_can_append_next_day(self) -> None:
         store = ss.DirectoryStore(self.bucket)
         ss.upload(self.local, store, self.items, data_date="2026-11-06")
@@ -448,6 +466,22 @@ class StateSyncTest(unittest.TestCase):
         by_path = {item.path: item for item in ss.WORKING_SET}
         for path in ("data/stock-history/raw", "data/otc-history/raw"):
             self.assertGreaterEqual(by_path[path].recent_files, needed, path)
+
+    def test_credit_raw_files_cover_the_stock_page_credit_block(self) -> None:
+        # 個股頁事實區塊（2026-11-15 規格，C 票）：融資券那一塊要畫近 20 個交易日的走勢、算 5 日增減，
+        # 借券與融資融券原件都要留到 20 個交易日再多一點緩衝（原本借券只留 20 個檔，剛好在邊界）。
+        by_path = {item.path: item for item in ss.WORKING_SET}
+        for path in ("data/fundamentals/twt93u", "data/market-snapshots/stock-detail", "data/otc-credit"):
+            self.assertGreaterEqual(by_path[path].recent_files, 25, path)
+
+    def test_foreign_futures_raw_files_are_all_kept(self) -> None:
+        # 預測帳本 G 票第 14 片：期交所只開放查近三年，外資台指期部位要每天累積；裁掉就拉不長。
+        by_path = {item.path: item for item in ss.WORKING_SET}
+        self.assertEqual(by_path["data/foreign-futures"].recent_files, 0)
+
+    def test_announcement_raw_files_are_not_in_the_working_set(self) -> None:
+        # 重大訊息原件由早上的排程與每日更新各自寫入 R2 的獨立資料夾；放進整批換新的工作集會被蓋掉。
+        self.assertNotIn("data/announcements/raw", {item.path for item in ss.WORKING_SET})
 
     def test_working_set_covers_market_pack_inputs(self) -> None:
         # U3：大盤頁資料包（cloud/market_pack_daily.py）從原件重建；Actions 上只有 R2 工作集，缺一項就在 build_dist 失敗。

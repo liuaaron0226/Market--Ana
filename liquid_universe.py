@@ -9,6 +9,10 @@ V2（2026-11-09）：籌碼排行的母體依 REA 包含 ETF（協調窗裁決�
 ENTER_RANK 名」的 ETF，遲滯同樣適用；ETF 不擠掉普通股名額（普通股名單與有沒有 ETF 無關）。
 ETF 只進籌碼排行；搜尋、個股分析、資金流向成分股仍只限普通股加 0050。
 ETF 行情不在行情庫（stock_history 只收 0050），改由 ``RawEtfSource`` 讀已驗 SHA 的原件。
+
+股票型 ETF 名單（2026-11-16 本人第 14 題「只要股票型」，11 票）：上面的 ETF 名單再過 etf_classification
+這一層（代號字尾＋官方名錄類別），只在給了 ETF 名錄時才算，快照多 ``stock_etf_members`` 與
+``etf_classification`` 兩項；普通股名單、籌碼排行用的 ``etf_members`` 都不變。0050 照舊靠 core_holdings 固定可見。
 """
 from __future__ import annotations
 
@@ -24,7 +28,7 @@ import sqlite3
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Mapping, Protocol
 
 ROOT = Path(__file__).resolve().parent
 RULE_VERSION = "liquid-v1"
@@ -58,6 +62,7 @@ class Sources:
     listed_codes: frozenset[str]
     otc_codes: frozenset[str]
     etfs: EtfSource | None = None
+    etf_catalog: Mapping[str, Any] | None = None   # 代號 → etf_classification.EtfEntry；給了才分股票型
 
 
 def _ro(db: Path) -> contextlib.closing:
@@ -171,7 +176,7 @@ def build_universe(as_of: str, sources: Sources, *, enter_rank: int = ENTER_RANK
     dropped = sorted(previous - kept)
     total = sum(item["avg_turnover_20d"] for item in ranked)
     share = sum(member["avg_turnover_20d"] for member in members) / total if total else None
-    return {
+    universe = {
         "rule_version": RULE_VERSION,
         "data_date": as_of,
         "window": {"start": days[0], "end": days[-1], "days": WINDOW_DAYS},
@@ -187,6 +192,24 @@ def build_universe(as_of: str, sources: Sources, *, enter_rank: int = ENTER_RANK
         "etf_members": etf_members,
         "etf_excluded": etf_excluded,
     }
+    if sources.etf_catalog is not None:
+        universe.update(_stock_etf_layer(etf_members, sources.etf_catalog))
+    return universe
+
+
+def _stock_etf_layer(etf_members: list[dict], catalog: Mapping[str, Any]) -> dict:
+    import etf_classification as ec
+
+    stock, others = [], []
+    for member in etf_members:
+        entry = catalog.get(member["code"])
+        result = ec.classify(member["code"], entry.cfi if entry is not None else None)
+        if result.status == ec.STOCK:
+            stock.append({**member, "etf_type": result.suffix_label})
+        else:
+            others.append({"code": member["code"], "name": member.get("name"), "equivalent_rank": member["equivalent_rank"],
+                           "status": result.status, "reason": result.reason})
+    return {"stock_etf_members": stock, "etf_classification": others}
 
 
 def rolling_universe(as_of: str, sources: Sources, *, warmup: int = 60, enter_rank: int = ENTER_RANK,
@@ -215,6 +238,11 @@ def is_member(universe: dict, code: str) -> bool:
 def is_etf_member(universe: dict, code: str) -> bool:
     """籌碼排行用的 ETF 名單（同口徑前 ENTER_RANK 名，遲滯 EXIT_RANK）。"""
     return any(member["code"] == code for member in universe.get("etf_members", ()))
+
+
+def is_stock_etf_member(universe: dict, code: str) -> bool:
+    """股票型 ETF 名單（要納入搜尋與個股頁的那一份；0050 另由 core_holdings 固定可見）。"""
+    return any(member["code"] == code for member in universe.get("stock_etf_members", ()))
 
 
 class RawEtfSource:
@@ -333,8 +361,14 @@ def default_sources(include_etfs: bool = False) -> Sources:
     with _ro(otc_db) as connection:
         otc_codes = frozenset(row[0] for row in connection.execute(
             "SELECT DISTINCT code FROM daily") if otc.lookup(row[0]) is not None)
+    etf_catalog = None
+    if include_etfs:
+        import etf_classification
+
+        etf_catalog = etf_classification.load_etf_catalog((listed_raw, listed_raw.with_suffix(".meta.json")),
+                                                          (otc_raw, otc_raw.with_suffix(".meta.json")))
     return Sources(listed_db, otc_db, listed_codes, otc_codes - listed_codes,
-                   RawEtfSource(listed_db) if include_etfs else None)
+                   RawEtfSource(listed_db) if include_etfs else None, etf_catalog)
 
 
 def main() -> int:
@@ -348,6 +382,7 @@ def main() -> int:
     path = save_snapshot(universe, args.snapshot_root)
     print(json.dumps({"snapshot": str(path), "members": len(universe["members"]),
                       "etf_members": len(universe["etf_members"]),
+                      "stock_etf_members": len(universe.get("stock_etf_members", ())),
                       "turnover_share": universe["turnover_share"]}, ensure_ascii=False))
     return 0
 
