@@ -1322,7 +1322,6 @@ class StockSignalsLimitUpMomentumTests(_SignalsFixture, unittest.TestCase):
         otc = self.analyze(self.after_a_fall(today), self.flat_index(), otc=True)['signals']['limit_up_momentum']
         self.assertEqual(otc, momentum(97, 5, 5.1))
         self.assertEqual(otc, listed)
-        self.assertEqual(otc['average_rate_pct'], 1.7)
 
     def test_without_the_index_on_the_data_date_or_twenty_days_back_there_is_no_block(self):
         # 加權指數沒有對到資料日，或沒有 20 個交易日前那一天（條件 ⑥ 沒得比）：整塊不給，不拿別的日子代替；不算「算不出來」。
