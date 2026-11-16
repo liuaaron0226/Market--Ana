@@ -510,6 +510,142 @@ class ChipDetailTest(unittest.TestCase):
             self.assertEqual([item["day"] for item in prices["skipped"]], ["20261106"])
 
 
+class ListedMarginBackfillTest(unittest.TestCase):
+    """G 票（本人 11-16 選做法一）：官方晚上才公布上市融資，傍晚那一班抓不到當天；
+    每天順便把最近幾個交易日缺的上市融資原件（個股 margin、大盤 margin_summary）補回來。"""
+
+    EMPTY = {"stat": "很抱歉，沒有符合條件的資料!", "total": 0}
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.calls: list[tuple[str, str]] = []
+        self.published: dict[tuple[str, str], dict] = {}
+
+    def trading_days(self, *days: str) -> None:
+        db = self.root / "data/otc-history/otc_history.sqlite"
+        db.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(db)
+        connection.execute("CREATE TABLE IF NOT EXISTS daily (date TEXT, code TEXT)")
+        connection.executemany("INSERT INTO daily VALUES (?, '6488')", [(day,) for day in days])
+        connection.commit()
+        connection.close()
+
+    def publish(self, compact: str, *, answered_date: str | None = None) -> None:
+        """官方已公布這一天的個股（ALL）與大盤（MS）；answered_date 模擬官方回了別天。"""
+        answer = answered_date or compact
+        self.published[("ALL", compact)] = {"stat": "OK", "date": answer, "tables": [
+            {"fields": ["項目", "買進", "賣出", "現金(券)償還", "前日餘額", "今日餘額"],
+             "data": [["融資金額(仟元)", "1", "2", "3", "4", "539900000"]]},
+            {"fields": ["代號", "名稱", "買進", "賣出", "現金償還", "前日餘額", "今日餘額"],
+             "data": [["2330", "台積電", "100", "80", "5", "35000", "35015"]]}]}
+        self.published[("MS", compact)] = {"stat": "OK", "date": answer,
+                                           "tables": [{"title": "信用交易統計", "data": [["融資"]]}]}
+
+    def get(self, url, params):
+        key = (params["selectType"], params["date"])
+        self.calls.append(key)
+        payload = self.published.get(key, self.EMPTY)
+        return sh.Response(200, "application/json", json.dumps(payload).encode(), url)
+
+    def run_day(self, day: str, sleeps: list | None = None) -> dict:
+        return di.listed_chip_detail_day(self.root, day, get=self.get,
+                                         sleep=(sleeps.append if sleeps is not None else lambda s: None),
+                                         datasets=("margin", "margin_summary"))
+
+    def recent(self, compact: str) -> Path:
+        return self.root / "data/market-snapshots/stock-detail/margin" / f"margin-{compact}.json"
+
+    def summary(self, compact: str) -> Path:
+        return self.root / "data/market-snapshots/margin" / f"mi-margn-{compact}.json"
+
+    def test_previous_trading_day_published_later_is_filled_in_when_today_is_not_yet(self) -> None:
+        # 11-13（週五）傍晚那一班沒抓到；11-16（週一）傍晚那一班當天也還沒公布，但 11-13 已經公布了。
+        self.trading_days("2026-11-12", "2026-11-13")
+        self.recent("20261112").parent.mkdir(parents=True)
+        self.recent("20261112").write_text("{}", encoding="utf-8")
+        self.summary("20261112").parent.mkdir(parents=True)
+        self.summary("20261112").write_text("{}", encoding="utf-8")
+        self.publish("20261113")
+        done = self.run_day("2026-11-16")
+        self.assertEqual((done["margin"]["status"], done["margin_summary"]["status"]), ("not_published", "not_published"))
+        self.assertFalse(self.recent("20261116").exists())
+        self.assertEqual(json.loads(self.recent("20261113").read_text(encoding="utf-8"))["data"],
+                         self.published[("ALL", "20261113")])
+        self.assertEqual(json.loads(self.summary("20261113").read_text(encoding="utf-8"))["data"],
+                         self.published[("MS", "20261113")])
+        self.assertEqual(done["margin_backfill"], {"status": "ok", "requests": 2, "not_published": [],
+                                            "saved": ["2026-11-13 margin", "2026-11-13 margin_summary"]})
+        # 補回來的個股融資也進長期保存區（融資維持率（估）要連續的每日原件）
+        self.assertTrue((self.root / "data/margin-history/raw/margin-20261113.json").exists())
+        self.assertEqual(done["margin_history"]["stored"], ["20261113"])
+
+    def test_closed_days_are_never_asked_and_requests_stay_five_seconds_apart(self) -> None:
+        # 行情庫沒有 10-09（國慶連假休市）與週末：補抓只問交易日。當天兩份，往回 10-07、10-08、10-12 各兩份。
+        self.trading_days("2026-10-07", "2026-10-08", "2026-10-12")
+        for compact in ("20261007", "20261008", "20261012"):
+            self.publish(compact)
+        sleeps: list[float] = []
+        done = self.run_day("2026-10-13", sleeps)
+        self.assertEqual(self.calls, [("ALL", "20261013"), ("MS", "20261013"),
+                                      ("ALL", "20261007"), ("MS", "20261007"), ("ALL", "20261008"), ("MS", "20261008"),
+                                      ("ALL", "20261012"), ("MS", "20261012")])
+        self.assertEqual(sleeps, [5.0] * 7)
+        self.assertEqual(done["margin_backfill"]["requests"], 6)
+        self.assertEqual(len(done["margin_backfill"]["saved"]), 6)
+
+    def test_days_already_held_are_not_fetched_again(self) -> None:
+        # 平常的一天：前一個交易日以前都有了，只缺前一天的；每天只多前一天那兩個請求。
+        self.trading_days("2026-11-10", "2026-11-11", "2026-11-12")
+        for compact in ("20261110", "20261111"):
+            for path in (self.recent(compact), self.summary(compact)):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("{}", encoding="utf-8")
+        self.summary("20261112").write_text("{}", encoding="utf-8")   # 大盤那一份已經有了，只缺個股
+        self.publish("20261112")
+        done = self.run_day("2026-11-13")
+        self.assertEqual(self.calls, [("ALL", "20261113"), ("MS", "20261113"), ("ALL", "20261112")])
+        self.assertEqual(done["margin_backfill"]["saved"], ["2026-11-12 margin"])
+        self.assertEqual(self.recent("20261110").read_text(encoding="utf-8"), "{}")   # 已有的不改寫
+
+    def test_official_answering_another_date_stops_the_backfill_without_writing(self) -> None:
+        # 問 11-10 卻回 11-13：官方的查法可能改了，不寫入、不再往下問（11-11 明明有也先不抓），回報原因。
+        self.trading_days("2026-11-10", "2026-11-11", "2026-11-12")
+        self.publish("20261110", answered_date="20261113")
+        self.publish("20261111")
+        done = self.run_day("2026-11-12")
+        self.assertEqual(self.calls, [("ALL", "20261112"), ("MS", "20261112"), ("ALL", "20261110")])
+        self.assertFalse(self.recent("20261110").exists())
+        self.assertFalse(self.recent("20261113").exists())
+        self.assertEqual((done["margin_backfill"]["status"], done["margin_backfill"]["requests"], done["margin_backfill"]["saved"]),
+                         ("stopped", 1, []))
+        self.assertIn("2026-11-10 margin", done["margin_backfill"]["reason"])
+        self.assertIn("20261113", done["margin_backfill"]["reason"])
+
+    def test_no_backfill_when_today_was_already_refused(self) -> None:
+        # 當天就被證交所擋（HTTP 403）：不再往回多打，比照上櫃一停就全停。
+        self.trading_days("2026-11-10", "2026-11-11")
+        self.publish("20261110")
+
+        def refused(url, params):
+            self.calls.append((params["selectType"], params["date"]))
+            return sh.Response(403, "text/html", b"blocked", url)
+        done = di.listed_chip_detail_day(self.root, "2026-11-11", get=refused, sleep=lambda s: None,
+                                         datasets=("margin", "margin_summary"))
+        self.assertEqual(self.calls, [("ALL", "20261111"), ("MS", "20261111")])
+        self.assertEqual((done["margin_backfill"]["status"], done["margin_backfill"]["requests"]), ("skipped", 0))
+        self.assertFalse(self.recent("20261110").exists())
+
+    def test_today_answered_with_another_date_is_stopped_not_counted_as_unpublished(self) -> None:
+        self.publish("20261112", answered_date="20261111")
+        done = self.run_day("2026-11-12")
+        self.assertEqual(done["margin"]["status"], "stopped")
+        self.assertIn("20261111", done["margin"]["reason"])
+        self.assertFalse(self.recent("20261112").exists())
+        self.assertFalse(self.recent("20261111").exists())
+
+
 class _FakeRequestsResponse:
     def __init__(self, content: bytes, content_type: str) -> None:
         self.status_code, self.content, self.url = 200, content, "u"

@@ -526,6 +526,11 @@ CHIP_SOURCES = {
 }
 
 
+# 上市融資（證交所 MI_MARGN）官方大約晚上才公布，傍晚那一班抓不到當天、發布後當天不再重跑。
+# G 票（本人 11-16 選做法一，不加排程）：每天順便把最近幾個交易日缺的補回來，天數和上櫃 otc_credit_day 相同。
+LISTED_MARGIN_DATASETS = ("margin", "margin_summary")
+
+
 def _chip_target(root: Path, dataset: str, compact: str) -> Path:
     if dataset == "twt93u":
         return root / "data/fundamentals/twt93u" / f"twt93u-{compact}.json"
@@ -548,6 +553,7 @@ def listed_chip_detail_day(root: Path, day: str, *, get: Callable | None = None,
     - margin（MI_MARGN）：同 logs/fetch_stock_detail.py 的外包格式。
     - twt93u（借券）：同 fundamentals.py，存官方原始位元組。
     官方查無（未公布）不寫檔、不當 0；已存在不重抓。兩次請求間隔 5 秒。
+    上市融資（margin、margin_summary）官方晚上才公布：另外把最近幾個交易日缺的補回來，結果在 margin_backfill（G 票）。
     個股融資原件另外在長期保存區（data/margin-history/raw）留一份，那裡不裁；結果多一項 margin_history。
     長期保存區缺的日子先從專案帶的種子（seeds/margin-history.tar.xz）放回去，再跟上近期明細。
     同一步也把每日收盤行情摘成行情摘要留在長期保存區（融資維持率（估）重播要每天的收盤與成交均價；種子是
@@ -557,6 +563,7 @@ def listed_chip_detail_day(root: Path, day: str, *, get: Callable | None = None,
     import stock_history as sh
 
     compact = _compact(day)
+    get = get or sh.http_get
     results: dict[str, dict] = {}
     requested = False
     for dataset in datasets:
@@ -577,33 +584,17 @@ def listed_chip_detail_day(root: Path, day: str, *, get: Callable | None = None,
             _write_atomic(target, (json.dumps(body, ensure_ascii=False) + "\n").encode("utf-8"))
             results[dataset] = {"status": "copied"}
             continue
-        url, params = CHIP_SOURCES[dataset]
         if requested:
             sleep(5.0)
         requested = True
-        try:
-            response = (get or sh.http_get)(url, params(compact))
-        except Exception as error:  # noqa: BLE001 — 連線錯誤只停這個資料集
-            results[dataset] = {"status": "stopped", "reason": f"連線錯誤：{type(error).__name__}: {error}"}
-            continue
-        if response.status != 200:
-            results[dataset] = {"status": "stopped", "reason": f"HTTP {response.status}"}
-            continue
-        try:
-            payload = json.loads(response.content.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            results[dataset] = {"status": "stopped", "reason": f"非 JSON 回應（{response.content_type}）"}
-            continue
-        if payload.get("stat") != "OK" or str(payload.get("date")) != compact:
-            results[dataset] = {"status": "not_published", "reason": str(payload.get("stat"))}
-            continue
-        if dataset in ("margin", "margin_summary"):
-            body = {"fetched_at_utc": datetime.now(timezone.utc).isoformat(), "source_url": response.url,
-                    "data": payload}
-            _write_atomic(target, (json.dumps(body, ensure_ascii=False) + "\n").encode("utf-8"))
-        else:
-            _write_atomic(target, response.content)
-        results[dataset] = {"status": "saved"}
+        results[dataset] = _fetch_chip(target, dataset, compact, get)
+    backfill_sets = [dataset for dataset in LISTED_MARGIN_DATASETS if dataset in datasets]
+    if backfill_sets and any(result.get("status") == "stopped" for result in results.values()):
+        # 當天就被擋或回應不對：不再往回多打證交所（比照上櫃一停就全停），下一班再補
+        results["margin_backfill"] = {"status": "skipped", "reason": "當天的請求已經停下", "requests": 0}
+    elif backfill_sets:
+        results["margin_backfill"] = _backfill_listed_margin(root, day, backfill_sets, get, sleep,
+                                                             already_requested=requested)
     if "margin" in datasets:
         # 近期明細只留最近一段；融資維持率（估）要連續的每日原件，另外長期留一份（已有的不重寫）。
         # 這一步出錯不能蓋掉上面已經抓到的結果；缺哪些交易日一起回報，每日更新的紀錄才看得到缺口。
@@ -622,6 +613,58 @@ def listed_chip_detail_day(root: Path, day: str, *, get: Callable | None = None,
             prices = {"status": "error", "reason": f"{type(error).__name__}: {error}"}
         results["margin_history"]["prices"] = prices
     return results
+
+
+def _fetch_chip(target: Path, dataset: str, compact: str, get: Callable) -> dict:
+    """抓一份上市籌碼原件並寫入 target；回 {"status": saved／not_published／stopped, ...}。"""
+    from datetime import datetime, timezone
+
+    url, params = CHIP_SOURCES[dataset]
+    try:
+        response = get(url, params(compact))
+    except Exception as error:  # noqa: BLE001 — 連線錯誤只停這個資料集
+        return {"status": "stopped", "reason": f"連線錯誤：{type(error).__name__}: {error}"}
+    if response.status != 200:
+        return {"status": "stopped", "reason": f"HTTP {response.status}"}
+    try:
+        payload = json.loads(response.content.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return {"status": "stopped", "reason": f"非 JSON 回應（{response.content_type}）"}
+    if payload.get("stat") != "OK":
+        return {"status": "not_published", "reason": str(payload.get("stat"))}
+    if str(payload.get("date")) != compact:   # 問這天卻回別天：查法可能改了，不寫入
+        return {"status": "stopped", "reason": f"資料日不符（回 {payload.get('date')!r}）"}
+    if dataset in LISTED_MARGIN_DATASETS:
+        body = {"fetched_at_utc": datetime.now(timezone.utc).isoformat(), "source_url": response.url, "data": payload}
+        _write_atomic(target, (json.dumps(body, ensure_ascii=False) + "\n").encode("utf-8"))
+    else:
+        _write_atomic(target, response.content)
+    return {"status": "saved"}
+
+
+def _backfill_listed_margin(root: Path, day: str, datasets: list[str], get: Callable, sleep: Callable, *,
+                            already_requested: bool) -> dict:
+    """資料日以前（不含當天，當天由呼叫端抓）最近幾個交易日缺的上市融資原件，由舊到新逐份補抓。"""
+    saved: list[str] = []
+    not_published: list[str] = []
+    requests_made = 0
+    for date_text in _otc_trading_days(root, day, OTC_CREDIT_BACKFILL_DAYS):
+        if date_text >= day:
+            continue
+        compact = _compact(date_text)
+        for dataset in datasets:
+            target = _chip_target(root, dataset, compact)
+            if target.exists():
+                continue
+            if already_requested or requests_made:
+                sleep(5.0)
+            requests_made += 1
+            outcome = _fetch_chip(target, dataset, compact, get)
+            if outcome["status"] == "stopped":   # 被拒絕、連不上、格式或日期不對：不再往下問，已補的保留
+                return {"status": "stopped", "reason": f"{date_text} {dataset}：{outcome['reason']}",
+                        "requests": requests_made, "not_published": not_published, "saved": saved}
+            (saved if outcome["status"] == "saved" else not_published).append(f"{date_text} {dataset}")
+    return {"status": "ok", "requests": requests_made, "not_published": not_published, "saved": saved}
 
 
 def _restore_then_keep_up(root: Path, store: str, keep_up: Callable[[Path], dict]) -> dict:
