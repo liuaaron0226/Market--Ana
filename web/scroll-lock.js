@@ -32,7 +32,6 @@
     body.style.setProperty('right', `${gap}px`);
     body.style.setProperty('width', 'auto');
     root.style.setProperty('overscroll-behavior', 'none');   // iOS 釘住之後整頁還會回彈，順便關掉
-    root.classList.add('is-scroll-locked');
   }
 
   function release() {
@@ -44,10 +43,14 @@
     });
     if (saved.overscroll) root.style.setProperty('overscroll-behavior', saved.overscroll);
     else root.style.removeProperty('overscroll-behavior');
-    root.classList.remove('is-scroll-locked');
     saved = null;
     window.scrollTo({ left: x, top: y, behavior: 'instant' });
   }
+
+  // 浮層開著時點了連結換頁：離開前先放開、捲回原位，瀏覽器記下的捲動位置才不會是 0（按上一頁回來不會跳到頁首）。
+  // 從瀏覽器的整頁快取回來時浮層還開著，再鎖回去。
+  window.addEventListener('pagehide', () => { if (saved) release(); });
+  window.addEventListener('pageshow', event => { if (event.persisted && holders.size && !saved) pin(); });
 
   window.ScrollLock = {
     lock(owner) {
@@ -58,6 +61,5 @@
       if (!holders.delete(owner)) return;
       if (!holders.size && saved) release();
     },
-    isLocked: () => holders.size > 0,
   };
 })();

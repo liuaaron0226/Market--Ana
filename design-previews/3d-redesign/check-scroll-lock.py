@@ -15,6 +15,7 @@
 自己起預覽伺服器（隨機埠、帶 --owner-extras 才有預測浮板），不碰任何使用者資料。
 關注判斷浮板要「這一檔有判斷」才會出現，預覽伺服器沒有樣本，所以用 page.route 給一份固定的判斷。
 用法（在工作目錄根目錄）：python design-previews/3d-redesign/check-scroll-lock.py [截圖資料夾]
+另外三種邊界（規格審查提出）：兩個浮層接連打開、開著時換頁再從整頁快取回來（模擬 pagehide／pageshow）、開著時從桌機寬度縮到手機寬度。
 全部通過結束碼 0，否則 1。
 """
 from __future__ import annotations
@@ -196,6 +197,20 @@ def home_cases(page: Page, base: str, size: str, mobile: bool, finger: Finger) -
                  close_js="document.querySelector('#rotationDialog [data-dialog-close]').click()", frame="#rotationDialog",
                  still="#rotationDialog .float-dialog-head", scroller="#rotationDialog", outside=True,
                  shot=f"home-{size}-rotation.png")
+    # 換到比較矮的一類時，home-fold.js 會在頁尾墊高度免得整頁跳（它聽 scroll 事件收掉用不到的部分）；
+    # 墊著高度的時候開關浮層，鎖住與放開觸發的 scroll 事件不能讓它多收或少收，關掉要回到原位。
+    page.evaluate("document.querySelector('#homeCats [data-cat=\"chips\"]').click()")
+    page.wait_for_timeout(200)
+    scroll_to(page, page.evaluate("document.documentElement.scrollHeight"))
+    page.evaluate("document.querySelector('#homeCats [data-cat=\"chips\"]').click()")
+    page.wait_for_timeout(200)
+    held = page.evaluate("document.querySelector('.hm-cat-hold').offsetHeight")
+    check(f"首頁 {size} 換分類後頁尾墊著高度（下一項的前提）", held > 0, held)
+    overlay_case(page, finger, f"首頁 {size} 換分類後開搜尋對話框", start_y=page.evaluate("window.scrollY"),
+                 open_js="document.getElementById('searchToggle').click()",
+                 is_open="document.getElementById('stockSearchDialog').open",
+                 close_js="document.getElementById('stockSearchClose').click()", frame="#stockSearchDialog",
+                 still="#stockSearchDialog", scroller=None, outside=True, shot=f"home-{size}-search-held.png")
     if mobile:
         page.wait_for_selector(".forecast-chip")
         chip_top = page.evaluate("Math.round(document.querySelector('.forecast-chip').getBoundingClientRect().top + scrollY)")
@@ -205,6 +220,82 @@ def home_cases(page: Page, base: str, size: str, mobile: bool, finger: Finger) -
                      close_js="document.querySelector('#forecastPanel [data-close]').click()", frame="#forecastPanel",
                      still="#forecastPanel .forecast-head", scroller="#forecastPanel", outside=True,
                      shot=f"home-{size}-forecast.png")
+
+
+def edge_cases(page: Page, base: str, finger: Finger) -> None:
+    """規格審查提出的三種邊界：兩個浮層同時開、開著時換頁（再按上一頁回來）、開著時跨過手機／桌機寬度。"""
+    page.goto(base + "/", wait_until="domcontentloaded")
+    shoot.ready_home(page)
+    settle(page)
+
+    # 預測浮板開著時點搜尋：預測浮板因為點了外面而收起，對話框接著鎖；頁面全程不動，關掉回原位
+    page.wait_for_selector(".forecast-chip")
+    y0 = scroll_to(page, max(0, page.evaluate("Math.round(document.querySelector('.forecast-chip').getBoundingClientRect().top + scrollY)") - 300))
+    top0 = page.evaluate(PAGE_TOP)
+    page.evaluate("document.querySelector('.forecast-chip').click()")
+    page.wait_for_function("!document.getElementById('forecastPanel').hidden")
+    page.evaluate("document.getElementById('searchToggle').click()")
+    page.wait_for_function("document.getElementById('stockSearchDialog').open")
+    page.wait_for_timeout(300)
+    finger.swipe(*center(visible_box(page, "#stockSearchDialog")), 360)
+    check("兩個浮層接連打開：頁面不動", page.evaluate(PAGE_TOP) == top0, page.evaluate(PAGE_TOP) - top0)
+    page.evaluate("document.getElementById('stockSearchClose').click()")
+    page.wait_for_timeout(300)
+    check("兩個浮層接連打開：全部關掉後回到原位", page.evaluate("window.scrollY") == y0 and page.evaluate(PAGE_TOP) == top0,
+          [y0, page.evaluate("window.scrollY")])
+
+    # 開著時換頁：離開前要放開並捲回原位（瀏覽器才記得住）；從整頁快取回來時浮層還開著，要再鎖回去
+    y0 = scroll_to(page, 800)
+    top0 = page.evaluate(PAGE_TOP)
+    page.evaluate("document.getElementById('searchToggle').click()")
+    page.wait_for_function("document.getElementById('stockSearchDialog').open")
+    page.evaluate("dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }))")
+    check("開著時換頁：離開前頁面放開、捲回原位", page.evaluate("getComputedStyle(document.body).position") != "fixed"
+          and page.evaluate("window.scrollY") == y0, [y0, page.evaluate("window.scrollY")])
+    page.evaluate("dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))")
+    finger.swipe(*center(visible_box(page, "#stockSearchDialog")), 360)
+    check("從整頁快取回來：浮層還開著，頁面再鎖回去", page.evaluate("getComputedStyle(document.body).position") == "fixed"
+          and page.evaluate(PAGE_TOP) == top0, page.evaluate(PAGE_TOP) - top0)
+    page.evaluate("document.getElementById('stockSearchClose').click()")
+    page.wait_for_timeout(300)
+    check("從整頁快取回來再關掉：回到原位", page.evaluate("window.scrollY") == y0, [y0, page.evaluate("window.scrollY")])
+
+
+def width_change_case(browser, base: str, errors: list[str]) -> None:
+    """桌機寬度打開預測浮板（不鎖），把視窗縮到手機寬度：浮板變成貼底，頁面要鎖住；關掉回原位。"""
+    context = browser.new_context(viewport={"width": 1440, "height": 900}, reduced_motion="reduce", locale="zh-TW", timezone_id="Asia/Taipei")
+    page = context.new_page()
+    page.set_default_timeout(15_000)
+    page.clock.set_fixed_time(shoot.FIXED_NOW)
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    try:
+        page.goto(base + "/", wait_until="domcontentloaded")
+        shoot.ready_home(page)
+        settle(page)
+        page.wait_for_selector(".forecast-chip")
+        scroll_to(page, max(0, page.evaluate("Math.round(document.querySelector('.forecast-chip').getBoundingClientRect().top + scrollY)") - 300))
+        page.evaluate("document.querySelector('.forecast-chip').click()")
+        page.wait_for_function("!document.getElementById('forecastPanel').hidden")
+        page.set_viewport_size({"width": 390, "height": 844})
+        page.wait_for_timeout(400)
+        top0 = page.evaluate(PAGE_TOP)
+        fixed = page.evaluate("getComputedStyle(document.getElementById('forecastPanel')).position")
+        wheel = Finger(page, False)
+        panel_top = page.evaluate("document.getElementById('forecastPanel').getBoundingClientRect().top")
+        # 浮板上與浮板外（左邊留白）各滑；上下各一次：頁面剛好在頭或尾時，單一方向本來就捲不動。
+        # 只滑浮板上不夠：它的內容比框高，滾輪被它自己的 overscroll-behavior 擋住，修前也不會穿透。
+        moves = []   # 每滑一次就量：上下兩次的位移會互相抵銷，只看最後會漏掉
+        for spot in (center(visible_box(page, "#forecastPanel")), (4, panel_top / 2)):
+            for dy in (360, -360):
+                wheel.swipe(*spot, dy)
+                moves.append(page.evaluate(PAGE_TOP) - top0)
+        check("開著時縮到手機寬度：浮板變成貼底、頁面鎖住", fixed == "fixed" and not any(moves), [fixed, moves])
+        page.evaluate("document.querySelector('#forecastPanel [data-close]').click()")
+        page.wait_for_timeout(300)
+        check("開著時縮到手機寬度：關掉後回到原位", page.evaluate(PAGE_TOP) == top0, page.evaluate(PAGE_TOP) - top0)
+    except Exception as error:  # noqa: BLE001
+        check("開著時換寬度：走到一半出錯", False, str(error).splitlines()[0][:200])
+    context.close()
 
 
 def stock_cases(page: Page, base: str, size: str, finger: Finger) -> None:
@@ -246,13 +337,15 @@ def main() -> None:
                     finger = Finger(page, mobile)
                     label = f"{size} {'淺色' if theme == 'light' else '深色'}"
                     for name, run in ((f"首頁 {label}", lambda: home_cases(page, base, label, mobile, finger)),
-                                      (f"個股 {label}", lambda: stock_cases(page, base, label, finger) if mobile else None)):
+                                      (f"個股 {label}", lambda: stock_cases(page, base, label, finger) if mobile else None),
+                                      (f"邊界 {label}", lambda: edge_cases(page, base, finger) if mobile and theme == "light" else None)):
                         try:
                             run()
                         except Exception as error:  # noqa: BLE001
                             check(f"{name}：走到一半出錯", False, str(error).splitlines()[0][:200])
                     finger.close()
                     context.close()
+            width_change_case(browser, base, errors)
             browser.close()
     finally:
         proc.kill()

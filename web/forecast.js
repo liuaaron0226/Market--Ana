@@ -478,6 +478,8 @@
       if (!path.includes(root) && !path.includes(panel)) setOpen(false);
     });
     document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && !panel.hidden) { setOpen(false); chip.focus(); } });
+    // 開著時跨過手機／桌機寬度（拉視窗、手機轉向）：重新打開一次，浮板換到對的地方、底下頁面鎖不鎖也跟著對。
+    window.matchMedia('(max-width: 720px)').addEventListener('change', () => { if (!panel.hidden) setOpen(true); });
     host.prepend(root);
     Object.assign(state, { root, chip, panel });
   }

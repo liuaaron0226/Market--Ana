@@ -391,6 +391,8 @@
       document.addEventListener('keydown', (event) => {
         if (event.key === 'Escape' && state.panel && !state.panel.hidden) { setOpen(false); state.chip.focus(); }
       });
+      // 開著時跨過手機／桌機寬度（拉視窗、手機轉向）：重新打開一次，浮板換到對的地方、底下頁面鎖不鎖也跟著對。
+      window.matchMedia('(max-width: 720px)').addEventListener('change', () => { if (state.panel && !state.panel.hidden) setOpen(true); });
     }
     host.append(root);
     Object.assign(state, { root, chip, panel });

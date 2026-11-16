@@ -56,8 +56,10 @@
     if (!dialog || typeof dialog.showModal !== 'function') return;
     opener.addEventListener('click', () => {
       if (dialog.open) return;
+      // 底下的頁面不跟著手指捲（scroll-lock.js）；Esc、關閉鈕、點外面都會觸發 close，在下面解開。
+      // 先鎖再打開：搜尋框會自動聚焦，iOS 叫出鍵盤時可能先捲動頁面，先鎖才記得住原本的位置。
+      window.ScrollLock?.lock(dialog);
       dialog.showModal();
-      window.ScrollLock?.lock(dialog);   // 底下的頁面不跟著手指捲（scroll-lock.js）；Esc、關閉鈕、點外面都會觸發 close，在下面解開
     });
   });
 
