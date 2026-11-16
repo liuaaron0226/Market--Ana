@@ -15,6 +15,8 @@ export const WEB_FILES = [
   "watch-peers.js", "watch-peers.css",
   // 自選股關注的判斷（2026-11-16，E 票）：只有站主有判斷時才會在自選股頁與個股頁出現
   "watch-judgments.js", "watch-judgments.css",
+  // 自選股關注 F 票：加入主畫面（iPhone 收推播的前提）、推播的 service worker、自選股頁的到價推播設定
+  "manifest.webmanifest", "icon-180.png", "icon-192.png", "icon-512.png", "sw.js", "watch-push.js", "watch-push.css",
 ];
 export const RETIRED = ["analysis-data.js", "chips-data.js", "dashboard-data.js", "detail-data.js", "plain-data.js", "market-data-local.js"];
 

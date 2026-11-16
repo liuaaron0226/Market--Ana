@@ -22,8 +22,17 @@ if (process.env.MARKET_ANA_FORECAST_LEDGER) env.MARKET_ANA_FORECAST_LEDGER = pro
 if (process.env.MARKET_ANA_WATCHLIST_WATCH) env.MARKET_ANA_WATCHLIST_WATCH = process.env.MARKET_ANA_WATCHLIST_WATCH;
 // 自動化驗收會在一分鐘內點完全部下鑽；額度可由第三個參數放寬（正式版額度見 gate.js RATE，不受影響）。
 const rate = process.argv[3] === "relaxed" ? { market: 10_000, detail: 10_000, userData: 10_000 } : undefined;
-const deps = { fetchImpl: fetchJwks(issuer.jwks), now: () => Date.now(), marketPack, stockPack, screensPack, rate };
-const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json" };
+// 推播的本機預覽（F 票）：JOURNEY_PUSH=test 用每次啟動新產生的測試推播金鑰（不是正式金鑰）；推播只記在這裡、不真的送出。
+const pushed = [];
+if (process.env.JOURNEY_PUSH === "test") {
+  const { makeVapid } = await import("./push-helpers.js");
+  const vapid = await makeVapid();
+  Object.assign(env, { VAPID_PUBLIC_KEY: vapid.publicKey, VAPID_PRIVATE_KEY: vapid.privateKey });
+}
+const pushFetch = async (url) => { pushed.push(String(url)); console.log(`push → ${new URL(url).host}`); return new Response(null, { status: 201 }); };
+const deps = { fetchImpl: fetchJwks(issuer.jwks), now: () => Date.now(), marketPack, stockPack, screensPack, rate, pushFetch };
+const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json",
+  ".webmanifest": "application/manifest+json", ".png": "image/png" };
 
 async function serveStatic(pathname) {
   let p = pathname.endsWith("/") ? pathname + "index.html" : pathname;

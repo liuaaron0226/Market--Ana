@@ -2,6 +2,7 @@
 // 其他人一律得到「沒有內容」，自選股本身的入口與回應不變。
 import { UserPortfolioError, codeFrom, noContent, requireSameOrigin, response } from "./user-portfolio.js";
 import { handleWatchLedgerApi } from "./watch-judgments.js";
+import { handleWatchPushApi } from "./watch-push.js";
 
 // /api/watch 與底下的每一條路徑：開關（/api/watch/<代號>）、這一檔的新聞標題（/api/watch/<代號>/news，C 票）、
 // 判斷與成績（watch-judgments.js，E 票）。
@@ -124,6 +125,8 @@ export async function handleWatchApi(request, env, path, email, deps, { isOwner,
     if (request.method !== "GET") throw new UserPortfolioError(405, "方法不允許");
     return news(env.DB, email, codeFrom(parts[0]), (deps.now || Date.now)());
   }
+  const push = await handleWatchPushApi(request, env, parts, email, deps);
+  if (push) return push;
   const ledger = await handleWatchLedgerApi(request, env, parts, email);
   if (ledger) return ledger;
   if (parts.length > 1 || parts[0] === "") throw new UserPortfolioError(404, "找不到");

@@ -4,11 +4,17 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="light dark">
+  <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
+  <link rel="apple-touch-icon" href="/icon-180.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="決策鏡">
+  <meta name="theme-color" content="#0b0b0e">
   <title>自選股與庫存｜台股決策鏡</title>
   <link rel="stylesheet" href="minimal.css?v=20261109-ux1">
   <link rel="stylesheet" href="bold.css?v=20261109-ux1">
   <link rel="stylesheet" href="portfolio.css?v=20261115-watch1">
   <link rel="stylesheet" href="watch-judgments.css?v=20261116-e1">
+  <link rel="stylesheet" href="watch-push.css?v=20261116-f1">
 </head>
 <body class="bd pf">
   <a class="skip-link" href="#portfolioMain">跳到自選股與庫存</a>
@@ -85,6 +91,7 @@
         </form>
         <p class="pf-form-status" id="watchlistStatus" role="status"></p>
         <div class="pf-list" id="watchlistRows" aria-live="polite"></div>
+        <div class="wp" id="pushPanel" hidden></div>
       </section>
 
       <section class="pf-section" aria-labelledby="holdingsTitle">
@@ -105,6 +112,7 @@
     </main>
   </div>
   <script src="watch-judgments.js?v=20261116-e1" defer></script>
-  <script src="portfolio.js?v=20261116-e1" defer></script>
+  <script src="watch-push.js?v=20261116-f1" defer></script>
+  <script src="portfolio.js?v=20261116-f1" defer></script>
 </body>
 </html>

@@ -553,6 +553,8 @@
 
   loadReleaseFeatures().then(async () => {
     await Promise.all([loadWatchlist(), loadHoldings(), ...(features.level_advice ? [loadLevel()] : [])]);
+    // 到價推播（F 票）：只有站主、關注開關打開時才出現。
+    if (features.watchlist_watch_v1 && window.WatchPush) window.WatchPush.mount($('pushPanel'));
     if (features.ai_stock_advice) await loadAiDigest();
     renderWatchlist();
     renderHoldings();
