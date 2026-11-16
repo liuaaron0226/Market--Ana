@@ -1047,7 +1047,7 @@ class ConclusionStageTests(SeriesTestCase):
         self.assertEqual(self.stages("2027-12-31", official_since=None)[("all", None, 20)]["stage"], "累積中")
 
 
-MIGRATION = Path(__file__).resolve().parent / "cloud" / "migrations" / "0014_watch_ledger.sql"
+MIGRATION = Path(__file__).resolve().parent / "cloud" / "migrations" / "0017_watch_ledger.sql"
 
 
 class PublishToDatabaseTests(SeriesTestCase):

@@ -2,7 +2,7 @@
 //   /api/watch/judgments         每一檔「現在正在關注」的股票最新一份判斷的狀態、觸發線、過去幾次對幾次
 //   /api/watch/judgments/<代號>  這一檔最新一天的晚間版與晨間版，加上歷史清單（各附對帳結果）
 //   /api/watch/summary           最新一份成績摘要（帳本模組算好發布的）
-// 誰讀得到由 watch.js 的入口統一判斷（只有站主、而且功能開關打開）。資料只讀 migrations/0014 的只能新增的三張表。
+// 誰讀得到由 watch.js 的入口統一判斷（只有站主、而且功能開關打開）。資料只讀 migrations/0017 的只能新增的三張表。
 import { UserPortfolioError, codeFrom, response } from "./user-portfolio.js";
 
 // 「過去幾次對幾次」看的那一格：二十日（「可下結論」的門檻也是看二十日）。

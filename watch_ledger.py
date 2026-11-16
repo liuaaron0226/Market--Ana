@@ -732,7 +732,7 @@ _PUBLIC_FIELDS = ("judgment_id", "code", "name", "base_date", "edition", "method
 
 def d1_sql(root: Path | str, index_daily: Sequence[Mapping[str, Any]], stocks: Mapping[str, Mapping[str, Any]], *,
            published_at: str, official_since: str | None = None) -> str:
-    """把帳本整理成給網站資料庫的指令檔（migrations/0014）。只新增：同一筆再發布一次不會多一筆、也不會改內容。
+    """把帳本整理成給網站資料庫的指令檔（migrations/0017）。只新增：同一筆再發布一次不會多一筆、也不會改內容。
 
     ``index_daily``、``stocks`` 和 ``summarize`` 的參數相同，用來算一併發布的成績摘要。
     不包 BEGIN／COMMIT：部署工具（wrangler d1 execute）自己會包交易。

@@ -1,5 +1,5 @@
 // 自選股關注 E 票第 8 片：網站讀得到判斷、歷史與成績。接縫：站台請求處理入口（gate.handle）＋測試用資料庫與簽章身分，
-// 和預測端點、關注開關的測試相同（規格〈Testing Decisions〉接縫 2）。資料只從 migrations/0014 的只能新增的三張表讀。
+// 和預測端點、關注開關的測試相同（規格〈Testing Decisions〉接縫 2）。資料只從 migrations/0017 的只能新增的三張表讀。
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";

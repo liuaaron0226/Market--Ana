@@ -1,7 +1,7 @@
 -- 自選股關注的判斷與對帳（規格 .scratch/watchlist-watch/spec.md，E 票第 8 片）：網站讀的那一份。
 -- 唯一的事實來源是關注帳本的鎖定原件（watch_ledger.py 寫在工作集）；這裡只放給網站顯示的欄位，
 -- 並帶著原件的雜湊。三張表都只能新增：資料庫層擋掉修改與刪除（和 0010 預測帳本同一套）。
--- 套用到正式資料庫前要先問本人。編號暫定 0014，由 owner 統一分配。
+-- 套用到正式資料庫前要先問本人。編號 0017 由 owner 分配（2026-11-16）。
 CREATE TABLE watch_judgments (
   judgment_id     TEXT PRIMARY KEY,
   code            TEXT NOT NULL,
