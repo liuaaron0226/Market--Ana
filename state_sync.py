@@ -117,6 +117,8 @@ WORKING_SET: tuple[Item, ...] = (
     Item("data/market-snapshots/stock-detail", recent_files=60),  # 上市融資融券與法人明細（個股頁籌碼）
     # 個股融資原件的長期保存區：融資維持率（估）每天從起點重播，全部保留、不得裁（每日約 150 KB）。
     # 同一個資料夾還有重播要的行情摘要（prices/，每日約 42 KB），一樣全部保留。
+    # 上櫃（10 票）的兩種也在這裡：otc-raw/（櫃買融資原件，每日約 95 KB）、otc-prices/（上櫃行情摘要），全部保留；
+    # 下面 data/otc-credit 那一份只留最近 30 個。
     # 上面 stock-detail 裡的近期明細另有用途（首頁籌碼明細會把那裡的每一天都列出來），所以不放在一起。
     Item("data/margin-history"),
     Item("data/fundamentals/twt93u", recent_files=30),  # 個股頁融資券那一塊要近 20 個交易日走勢與 5 日增減（11-16）

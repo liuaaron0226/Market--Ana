@@ -1027,6 +1027,108 @@ class OtcCreditTest(unittest.TestCase):
         self.assertIn('otc_credit', di.OPTIONAL_DATASETS)
 
 
+class OtcMarginHistoryTest(OtcCreditTest):
+    """上櫃融資維持率（估）（10 票）：上櫃融資原件要連續、長期留著。每日抓取存完之後把它們跟進長期保存區
+    （data/margin-history/otc-raw，雲端的 data/otc-credit 只留最近 30 份），同一步把上櫃行情摘一份；
+    另外一個回補指令把起點以來缺的上櫃融資原件補回來（只抓融資那一份，不抓借券）。"""
+
+    def payload(self, kind, compact, empty=False):
+        payload = super().payload(kind, compact, empty)
+        if kind == 'margin':   # 櫃買的融資表尾有全市場融資金（仟元），長期保存區要看得到才收
+            width = len(self.MARGIN_FIELDS)
+            payload['tables'][0]['summary'] = [['', '合計(張)'] + ['1'] * (width - 2),
+                                               ['', '融資金(仟元)'] + ['1,000'] * (width - 2)]
+        return payload
+
+    def quotes(self, day):
+        """上櫃每日收盤行情原件（data/otc-history/raw/YYYYMMDD.csv）。"""
+        header = ('"代號","名稱","收盤","漲跌","開盤","最高","最低","均價","成交股數","成交金額(元)","成交筆數","最後買價",'
+                  '"最後買量(千股)","最後賣價","最後賣量(千股)","發行股數","次日參考價","次日漲停價","次日跌停價"')
+        cells = ['6488', '環球晶', '400.00', '+1.00', '400.00', '400.00', '400.00', '400.00', '2,000', '800,000', '1',
+                 '400.00', '1', '400.00', '1', '1,000', '400.00', '440.00', '360.00']
+        roc = f"{int(day[:4]) - 1911}/{day[4:6]}/{day[6:]}"
+        text = '\r\n'.join(['上櫃股票行情', f'資料日期:{roc}', header, ','.join(f'"{c}"' for c in cells)]) + '\r\n'
+        path = self.root / 'data/otc-history/raw' / f'{day}.csv'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(text.encode('cp950'))
+
+    def kept(self, store):
+        return sorted(margin_history.held_days(self.root, store))
+
+    def test_the_daily_run_keeps_every_fetched_otc_margin_day_and_its_prices_for_good(self):
+        for day in ('20261111', '20261112'):
+            self.quotes(day)
+        result, _, _ = self.run_day('2026-11-12', backfill_days=2)
+        history = result['margin_history']
+        self.assertEqual((history['status'], history['stored'], history['missing']), ('ok', ['20261111', '20261112'], []))
+        self.assertEqual(history['prices']['stored'], ['20261111', '20261112'])
+        self.assertEqual(self.kept('otc-raw'), ['20261111', '20261112'])
+        self.assertEqual(self.kept('otc-prices'), ['20261111', '20261112'])
+
+    def test_a_stopped_fetch_still_keeps_what_was_saved_before_it(self):
+        result, _, _ = self.run_day('2026-11-12', blocked_after=2)
+        self.assertEqual(result['status'], 'stopped')
+        self.assertEqual(result['margin_history']['stored'], ['20261110'])
+        # 起點以來沒有原件的交易日照實列出，每日更新的紀錄才看得到缺口。
+        self.assertEqual(result['margin_history']['missing'], ['2026-11-11', '2026-11-12'])
+
+    def test_a_broken_long_term_store_only_marks_its_own_entry(self):
+        from unittest import mock
+        with mock.patch.object(margin_history, 'keep_up_otc', side_effect=OSError('disk')):
+            result, _, _ = self.run_day('2026-11-12', backfill_days=1)
+        self.assertEqual(result['status'], 'ok')
+        self.assertEqual(result['saved'], 2)
+        self.assertEqual(result['margin_history']['status'], 'error')
+        self.assertIn('OSError', result['margin_history']['reason'])
+
+    def test_backfill_fetches_only_the_margin_table_for_every_otc_trading_day_since_the_start(self):
+        calls, waits = [], []
+
+        def get(_session, url, params):
+            calls.append((url.rsplit('/', 1)[-1], params['date']))
+            return self.Response(200, self.payload('margin', params['date'].replace('/', '')))
+        (self.root / 'data/otc-credit/margin').mkdir(parents=True)
+        (self.root / 'data/otc-credit/margin/20261112.json').write_text(json.dumps({'data': self.payload('margin', '20261112')}),
+                                                                         encoding='utf-8')
+        result = di.otc_margin_backfill(self.root, '2026-11-11', '2026-11-12', get=get, sleep=waits.append)
+        self.assertEqual(calls, [('balance', '2026/11/11')])                # 11-10 在起點之前；11-12 已經有
+        self.assertEqual((result['status'], result['saved'], result['requests']), ('ok', 1, 1))
+        self.assertEqual(waits, [])
+        self.assertEqual(self.files(), ['margin/20261111.json', 'margin/20261112.json'])
+        self.assertEqual(result['margin_history']['stored'], ['20261111', '20261112'])
+
+    def test_backfill_waits_between_requests_and_stops_when_refused(self):
+        calls, waits = [], []
+
+        def get(_session, url, params):
+            calls.append(params['date'])
+            if len(calls) == 2:
+                return self.Response(403)
+            return self.Response(200, self.payload('margin', params['date'].replace('/', '')))
+        result = di.otc_margin_backfill(self.root, '2026-11-10', '2026-11-12', get=get, sleep=waits.append)
+        self.assertEqual(result['status'], 'stopped')
+        self.assertIn('HTTP 403', result['reason'])
+        self.assertEqual((calls, waits), (['2026/11/10', '2026/11/11'], [5.0]))
+        self.assertEqual(self.files(), ['margin/20261110.json'])
+        self.assertEqual(result['margin_history']['stored'], ['20261110'])
+
+    def test_backfill_day_not_published_is_named_and_not_written(self):
+        def get(_session, url, params):
+            compact = params['date'].replace('/', '')
+            return self.Response(200, self.payload('margin', compact, empty=compact == '20261111'))
+        result = di.otc_margin_backfill(self.root, '2026-11-10', '2026-11-12', get=get, sleep=lambda s: None)
+        self.assertEqual((result['status'], result['not_published']), ('ok', ['2026-11-11 margin']))
+        self.assertEqual(self.files(), ['margin/20261110.json', 'margin/20261112.json'])
+
+    def test_backfill_command_runs_only_the_backfill(self):
+        from unittest import mock
+        with mock.patch.object(di, 'otc_margin_backfill', return_value={'status': 'ok'}) as backfill, \
+                mock.patch.object(di, 'fetch_day') as daily, mock.patch('builtins.print'):
+            self.assertEqual(di.main(['--date', '2026-11-14', '--otc-margin-backfill', '2025-11-03']), 0)
+        daily.assert_not_called()
+        self.assertEqual(backfill.call_args.args[1:], ('2025-11-03', '2026-11-14'))
+
+
 
 class ForeignFuturesDayTest(unittest.TestCase):
     """外資台指期部位（預測帳本 G 票第 14 片）：每日更新每天各存一份大台、小台原件，失敗不擋發布。"""
