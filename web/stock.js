@@ -1016,13 +1016,13 @@
   function saveDrawingChange(change) {
     const code = drawingEdits.code;
     if (!code) return;
-    const { id, kind, anchors } = change.drawing;
+    const { id, kind, anchors, text } = change.drawing;   // text 只有文字標註才有
     const removing = change.type === 'remove';
     if (removing) { drawingEdits.items.delete(id); drawingEdits.removed.add(id); }
     else drawingEdits.items.set(id, change.drawing);
     const url = `/api/drawings/${encodeURIComponent(code)}/${encodeURIComponent(id)}`;
     const request = removing ? { method: 'DELETE', cache: 'no-store' }
-      : { method: 'PUT', cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind, anchors }) };
+      : { method: 'PUT', cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind, anchors, text }) };
     drawingSaves = drawingSaves.then(() => fetch(url, request)).catch(() => { /* 連不上：畫面不變 */ });
   }
 
@@ -1061,6 +1061,9 @@
       });
       ['pointerup', 'pointercancel', 'pointerleave'].forEach(type => button.addEventListener(type, release));
       button.addEventListener('contextmenu', event => event.preventDefault());
+      // 按工具列不搬走焦點：文字標註寫到一半時再按一次文字工具是「不寫了」，按垃圾桶是刪掉那一則——
+      // 焦點要是先被按鈕拿走，輸入框會當成「確定」把寫到一半的存下去。鍵盤（Tab、Enter、空白鍵）不受影響。
+      button.addEventListener('mousedown', event => event.preventDefault());
       button.addEventListener('click', () => {
         if (held) { held = false; return; }
         if (!chart) return;

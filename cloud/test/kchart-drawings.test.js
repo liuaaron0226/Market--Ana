@@ -27,26 +27,39 @@ function load() {
     },
     set(target, name, value) { target[name] = value; return true; },
   });
+  // 假元素：寬 150、高 32（文字標註的輸入框用這個大小算位置）；圖表容器與畫布在頁面的左上角。
   class FakeElement {
-    constructor() {
-      this.children = []; this.listeners = new Map(); this.style = {}; this.clientWidth = 390; this.offsetWidth = 150; this.innerHTML = "";
+    constructor(tag = "div") {
+      this.tagName = tag.toUpperCase(); this.parent = null; this.value = ""; this.hidden = false; this.focused = false;
+      this.children = []; this.listeners = new Map(); this.style = {}; this.clientWidth = 390; this.offsetWidth = 150; this.offsetHeight = 32; this.innerHTML = "";
       this.classList = { add() {}, remove() {}, contains: () => false };
     }
-    append(child) { this.children.push(child); }
+    append(...added) { for (const child of added) { child.parent = this; this.children.push(child); } }
+    remove() { if (this.parent) this.parent.children = this.parent.children.filter(child => child !== this); this.parent = null; }
+    focus() { this.focused = true; }
+    select() {}
     setAttribute() {}
     addEventListener(type, handler) { this.listeners.set(type, [...(this.listeners.get(type) || []), handler]); }
+    removeEventListener(type, handler) { this.listeners.set(type, (this.listeners.get(type) || []).filter(one => one !== handler)); }
+    // 回傳送出去的事件：prevented 記有沒有被擋下預設行為（表單送出會重新載入頁面）。
     dispatch(type, init = {}) {
-      const event = { type, pointerId: 1, pointerType: "mouse", clientX: 0, clientY: 0, key: "", deltaY: 0, preventDefault() {}, ...init };
+      const event = { type, pointerId: 1, pointerType: "mouse", clientX: 0, clientY: 0, key: "", deltaY: 0, prevented: false,
+        preventDefault() { event.prevented = true; }, stopPropagation() {}, ...init };
       for (const handler of this.listeners.get(type) || []) handler(event);
+      return event;
     }
     setPointerCapture() {}
-    getBoundingClientRect() { return { left: 0, top: 0, width: 390, height: 340 }; }
+    getBoundingClientRect() {
+      if (this.style.top === undefined) return { left: 0, top: 0, right: 390, bottom: 340, width: 390, height: 340 };
+      const left = parseFloat(this.style.left), top = parseFloat(this.style.top);
+      return { left, top, right: left + this.offsetWidth, bottom: top + this.offsetHeight, width: this.offsetWidth, height: this.offsetHeight };
+    }
     getContext() { return context2d; }
     contains() { return false; }
   }
   const sandbox = {
     window: { devicePixelRatio: 1 },
-    document: { documentElement: new FakeElement(), createElement: () => new FakeElement(), addEventListener() {} },
+    document: { documentElement: new FakeElement(), createElement: tag => new FakeElement(tag), addEventListener() {} },
     ResizeObserver: class { observe() {} },
     getComputedStyle: () => ({ getPropertyValue: name => name }),
     console,
@@ -55,7 +68,7 @@ function load() {
   for (const file of ["chart-drawings.js", "kchart.js"]) {
     vm.runInContext(readFileSync(new URL(file, WEB), "utf8"), sandbox, { filename: file });
   }
-  return { KChart: sandbox.window.KChart, FakeElement, strokes, texts, fills };
+  return { KChart: sandbox.window.KChart, FakeElement, strokes, texts, fills, window: sandbox.window };
 }
 
 // 80 根日 K，日期從 2026-01-01 起每天一根（第 n 根＝1 月 1 日後 n 天）。收盤都是 100，布林通道因此是一條平線。
@@ -69,7 +82,7 @@ function dailyCandles() {
 }
 
 function createChart() {
-  const { KChart, FakeElement, strokes, texts, fills } = load();
+  const { KChart, FakeElement, strokes, texts, fills, window } = load();
   const changes = [], tools = [], selections = [];
   const chart = new KChart(new FakeElement(), {
     macd: false, height: () => 340,
@@ -97,7 +110,20 @@ function createChart() {
   const drawnHandles = () => { reset(); chart.draw(); return strokes.filter(stroke => stroke.color === DRAW).flatMap(stroke => stroke.arcs.map(([x, y]) => [x, y])); };
   // 最後一次重畫時，用畫線顏色填滿的矩形（[x, y, 寬, 高]）。
   const drawnFills = () => { reset(); chart.draw(); return fills.filter(fill => fill.color === DRAW).map(fill => fill.rect); };
-  return { chart, changes, tools, selections, strokes, texts, fills, reset, tap, drag, key, drawnLines, drawnLabels, drawnHandles, drawnFills };
+  // 文字標註的輸入框（圖表容器裡的一個小表單）：沒開著回 null。at 是它在容器裡的位置 [左, 上]。
+  const editor = () => {
+    const form = chart.host.children.find(child => child.className === "kc-note");
+    if (!form) return null;
+    const part = name => form.children.find(child => child.className === name);
+    return { form, input: part("kc-note-input"), cancel: part("kc-note-cancel"), limit: part("kc-note-limit"), at: [form.style.left, form.style.top] };
+  };
+  // 在開著的輸入框裡寫字（取代原本的內容），再用指定的方式結束：submit＝按 Enter 或鍵盤的「完成」。
+  const write = (text, end = "submit") => {
+    const { form, input } = editor();
+    input.value = text; input.dispatch("input");
+    return end === "submit" ? form.dispatch("submit") : end ? input.dispatch(end) : null;
+  };
+  return { chart, changes, tools, selections, strokes, texts, fills, reset, tap, drag, key, drawnLines, drawnLabels, drawnHandles, drawnFills, editor, write, window };
 }
 
 const ID_RE = /^[A-Za-z0-9_-]{8,40}$/;
@@ -1690,4 +1716,821 @@ test("黃金分割的起點比圖上第一根還早時先不畫；五年歷史�
   // 第一點 2025-12-20 是第 18 根，在畫面第一根（第 70 根）左邊：x＝−410.575。連線在左緣的高度是 241−154×414.575/660.1＝144.28。
   assertLines(drawnLines(), [[[4, 144.28], [249.525, 87]], fibLevels(4, FIB_UP_YS)]);
   assert.deepEqual(drawnLabels().sort(), FIB_UP_LABELS);
+});
+
+// ---------- 票 06：文字標註（一個錨點＋一段文字） ----------
+// 文字的字級 12、行高 16，左緣在錨點那一根的正中央（取整數），第一行上下置中在錨點的價位；墊一塊左右各留 4 的底色。
+// 測試用的畫布每個字寬 7。
+
+const PAPER = "--bg";
+// 最後一次重畫時，用畫線顏色寫出來的字（文字與位置）與墊在字底下的底色塊。
+const notesOf = ({ chart, texts, fills, reset }) => {
+  reset(); chart.draw();
+  return { texts: texts.filter(text => text.color === DRAW).map(({ text, x, y }) => [text, x, y]), paper: fills.filter(fill => fill.color === PAPER).map(fill => fill.rect) };
+};
+
+test("選了文字工具後在圖上點一下：那個位置出現輸入框；寫完按確定，文字留在那個日期與價位，工具自動回一般模式", () => {
+  const view = createChart();
+  const { chart, changes, tools, tap, editor, write } = view;
+  chart.setTool("text");
+  assert.equal(editor(), null, "還沒點圖：沒有輸入框");
+
+  tap(150, 87); // 可見的第 19 根＝2026-02-28，正中央 x = 4 + 8.05×18.5 = 152.9；y=87 → 102.85
+  assert.deepEqual(editor().at, ["153px", "71px"], "輸入框（高 32）的左緣在那一根的正中央、上下置中在點的位置：87 − 16 = 71");
+  assert.equal(editor().input.focused, true, "輸入框出現就能直接打字");
+  assert.equal(editor().input.value, "");
+  assert.deepEqual(changes, [], "還沒確定：什麼都還沒存");
+  assert.deepEqual(tools, ["text"]);
+  assert.deepEqual(notesOf(view).texts, []);
+
+  const submitted = write("突破前高");
+  assert.equal(submitted.prevented, true, "確定不會真的送出表單（頁面不重新載入）");
+  assert.equal(changes.length, 1);
+  const [{ type, drawing }] = changes;
+  assert.equal(type, "add");
+  assert.match(drawing.id, ID_RE);
+  assert.deepEqual(drawing, { id: drawing.id, kind: "text", anchors: [{ date: "2026-02-28", price: 102.85 }], text: "突破前高" });
+  assert.deepEqual(tools, ["text", null], "確定後自動回一般模式");
+  assert.equal(editor(), null, "輸入框收起");
+
+  // 四個字寬 28：底色塊 [153, 79, 36, 16]（87 − 8 = 79），字從 157 寫起、上下置中在 87。
+  assert.deepEqual(notesOf(view), { texts: [["突破前高", 157, 87.5]], paper: [[153, 79, 36, 16]] });
+});
+
+test("沒寫內容就確定、只打了空白、按取消鈕、按 Esc、再按一次工具或換工具：都不留下標註，輸入框收起", () => {
+  const view = createChart();
+  const { chart, changes, tools, tap, editor, write } = view;
+  const ways = {
+    "沒寫內容就確定": () => write(""),
+    "只打了空白（含全形空白）就確定": () => write("  　 "),
+    "寫到一半按取消鈕": () => { write("寫到一半", null); editor().cancel.dispatch("pointerdown", { pointerType: "touch" }); },
+    "寫到一半在輸入框裡按 Esc": () => { write("寫到一半", null); editor().input.dispatch("keydown", { key: "Escape" }); },
+    "寫到一半頁面送來取消（焦點不在輸入框時的 Esc）": () => { write("寫到一半", null); chart.cancelDrawing(); },
+    "寫到一半再按一次文字工具（放下工具）": () => { write("寫到一半", null); chart.setTool(null); },
+  };
+  for (const [name, end] of Object.entries(ways)) {
+    tools.length = 0;
+    chart.setTool("text");
+    tap(150, 87);
+    assert.ok(editor(), name);
+    end();
+    assert.equal(editor(), null, `${name}：輸入框收起`);
+    assert.deepEqual(changes, [], `${name}：什麼都沒存`);
+    assert.deepEqual(tools, ["text", null], `${name}：工具回一般模式`);
+    assert.deepEqual(notesOf(view), { texts: [], paper: [] }, `${name}：圖上沒有東西`);
+  }
+
+  // 寫到一半換成別的工具：寫的不留，新的工具選起來。
+  tools.length = 0;
+  chart.setTool("text");
+  tap(150, 87);
+  write("寫到一半", null);
+  chart.setTool("hline");
+  assert.equal(editor(), null);
+  assert.deepEqual(changes, []);
+  assert.deepEqual(tools, ["text", "hline"]);
+  chart.setTool(null);
+
+  // 前後的空白不算內容：存的是去掉前後空白的字。
+  chart.setTool("text");
+  tap(150, 87);
+  write("  回測月線 　");
+  assert.deepEqual(changes.map(change => change.drawing.text), ["回測月線"]);
+  assert.deepEqual(notesOf(view).texts, [["回測月線", 157, 87.5]]);
+});
+
+test("文字最多 200 字：輸入時超過的部分直接擋下，並出現「最多 200 字」的提示；沒到上限時不提示", () => {
+  const { chart, changes, tap, editor, write } = createChart();
+  chart.setTool("text");
+  tap(150, 87);
+  const { input, limit } = editor();
+  assert.equal(limit.hidden, true, "一開始不提示");
+
+  write("線".repeat(199), null);
+  assert.equal(input.value, "線".repeat(199));
+  assert.equal(limit.hidden, true, "199 字：還沒到上限");
+
+  write("線".repeat(200), null);
+  assert.equal(input.value, "線".repeat(200));
+  assert.equal(limit.hidden, false, "剛好 200 字：再打也進不去了，先讓使用者知道");
+  assert.equal(limit.textContent, "最多 200 字");
+
+  write("線".repeat(199) + "甲乙丙", null); // 貼上或多打：只留前 200 個字
+  assert.equal(input.value, "線".repeat(199) + "甲");
+  assert.equal(limit.hidden, false);
+
+  write("📈".repeat(201), null); // 一個表情符號算一個字，不會被切成半個
+  assert.equal(input.value, "📈".repeat(200));
+
+  write("短短一句", null);
+  assert.equal(limit.hidden, true, "刪回上限以下：提示收起");
+
+  // 輸入法還在選字時不動輸入框裡的字（會打斷選字），選完才擋。
+  input.value = "線".repeat(230);
+  input.dispatch("input", { isComposing: true });
+  assert.equal(input.value, "線".repeat(230));
+  input.dispatch("compositionend");
+  assert.equal(input.value, "線".repeat(200));
+  assert.equal(limit.hidden, false);
+
+  editor().form.dispatch("submit");
+  assert.deepEqual(changes.map(change => change.drawing.text), ["線".repeat(200)]);
+});
+
+const savedNote = (text, { date = "2026-02-28", price = 102.85, id = "saved-note-01" } = {}) => ({
+  id, kind: "text", anchors: [{ date, price }], text,
+  created_at: "2026-11-14T06:00:00.000Z", updated_at: "2026-11-14T06:00:00.000Z",
+});
+
+test("載入已存的文字標註：內容原樣當成字畫在畫布上，看起來像標記語言的也不解讀；沒有內容或格式不對的略過", () => {
+  const view = createChart();
+  const { chart, changes } = view;
+  const markup = "<b>粗體</b> & <script>"; // 20 個字寬 140
+  chart.setDrawings([
+    savedNote(markup),
+    { id: "no-text-0001", kind: "text", anchors: [{ date: "2026-02-28", price: 100 }] },
+    { id: "empty-text-01", kind: "text", anchors: [{ date: "2026-02-28", price: 100 }], text: "" },
+    { id: "blank-text-01", kind: "text", anchors: [{ date: "2026-02-28", price: 100 }], text: "   " },
+    { id: "number-text-1", kind: "text", anchors: [{ date: "2026-02-28", price: 100 }], text: 12345 },
+    { id: "two-anchors-1", kind: "text", anchors: [{ date: "2026-02-28", price: 100 }, { date: "2026-03-01", price: 101 }], text: "兩個錨點" },
+  ]);
+  assert.deepEqual(notesOf(view), { texts: [[markup, 157, 87.5]], paper: [[153, 79, 148, 16]] });
+  assert.ok([chart.host, ...chart.host.children].every(element => element.innerHTML === ""), "文字沒有被塞進任何元素的 HTML");
+  assert.deepEqual(changes, [], "載入不是使用者的變動");
+
+  chart.setDrawings([]);
+  assert.deepEqual(notesOf(view), { texts: [], paper: [] });
+});
+
+test("文字墊一塊底色、最後才畫（壓在 K 棒上面），在淺色版面上讀得到；不畫線、沒有把手", () => {
+  const view = createChart();
+  const { chart, fills, texts, reset, drawnLines, drawnHandles } = view;
+  chart.setDrawings([savedNote("突破前高")]);
+  reset(); chart.draw();
+  const paper = fills.findIndex(fill => fill.color === PAPER && fill.rect.join() === "153,79,36,16");
+  assert.ok(paper >= 0);
+  assert.equal(fills[paper].alpha, 0.86, "底色幾乎不透明：字底下的 K 棒不會透上來干擾");
+  assert.ok(fills.every((fill, index) => fill.color !== "--up" || index < paper), "K 棒都在底色塊之前畫");
+  assert.deepEqual(texts.filter(text => text.color === DRAW).map(text => text.text), ["突破前高"]);
+  assert.deepEqual(drawnLines(), []);
+  assert.deepEqual(drawnHandles(), []);
+});
+
+test("文字靠近圖的右緣、上緣、下緣時整塊收進繪圖區：不進價格軸、不出界", () => {
+  const view = createChart();
+  const { chart } = view;
+  // 最後一根（2026-03-21）正中央 x = 4 + 8.05×39.5 = 322；十個字寬 70＋8 = 78，往左收到 326 − 78 = 248。100 → y = 164。
+  chart.setDrawings([savedNote("右緣的標註共十個字整", { date: "2026-03-21", price: 100 })]);
+  assert.deepEqual(notesOf(view), { texts: [["右緣的標註共十個字整", 252, 164.5]], paper: [[248, 156, 78, 16]] });
+  // 105.63 → y = 10 + 0.07/11.4×308 = 11.9：往下收到繪圖區上緣 10。
+  chart.setDrawings([savedNote("貼近上緣", { price: 105.63 })]);
+  assert.deepEqual(notesOf(view), { texts: [["貼近上緣", 157, 18.5]], paper: [[153, 10, 36, 16]] });
+  // 94.4 → y = 10 + 11.3/11.4×308 = 315.3：往上收到繪圖區下緣 318 − 16 = 302。
+  chart.setDrawings([savedNote("貼近下緣", { price: 94.4 })]);
+  assert.deepEqual(notesOf(view), { texts: [["貼近下緣", 157, 310.5]], paper: [[153, 302, 36, 16]] });
+});
+
+test("太長的文字換行（一行最寬 180）：中文逐字換、英數字的詞不從中間斷；每一行同寬的底色疊成一塊", () => {
+  const view = createChart();
+  const { chart } = view;
+  const ten = "一二三四五六七八九十";
+  // 30 個字：一行放得下 25 個（175），剩 5 個到第二行。整塊寬 183，從 153 放會超出右緣 326，往左收到 143。
+  chart.setDrawings([savedNote(ten.repeat(3))]);
+  assert.deepEqual(notesOf(view), {
+    texts: [[ten + ten + "一二三四五", 147, 87.5], ["六七八九十", 147, 103.5]],
+    paper: [[143, 79, 183, 16], [143, 95, 183, 16]],
+  });
+  // 剛好 25 個字（175）不換行。
+  chart.setDrawings([savedNote(ten + ten + "一二三四五")]);
+  assert.equal(notesOf(view).texts.length, 1);
+
+  // 英文句子：斷在空格，行首不留空格。
+  chart.setDrawings([savedNote("break above 1085 then add more on the retest")]);
+  assert.deepEqual(notesOf(view).texts.map(([text]) => text), ["break above 1085 then add", "more on the retest"]);
+  // 第 26 個字落在一個詞的中間：整個詞移到下一行。
+  chart.setDrawings([savedNote("resistance at 1085.5 breakout confirmed")]);
+  assert.deepEqual(notesOf(view).texts.map(([text]) => text), ["resistance at 1085.5", "breakout confirmed"]);
+  // 沒有空格可以斷的長字串（網址）：照字數硬斷。
+  chart.setDrawings([savedNote("https://example.com/a-very-long-path/2330")]);
+  assert.deepEqual(notesOf(view).texts.map(([text]) => text), ["https://example.com/a-ver", "y-long-path/2330"]);
+});
+
+test("平移、縮放後文字仍在同一個日期與價位；那一天或那個價位在畫面外時不顯示", () => {
+  const view = createChart();
+  const { chart } = view;
+  chart.setDrawings([savedNote("突破前高"), savedNote("畫面外的價位", { price: 120, id: "saved-note-02" })]);
+  // 只看後 40 根（94.3～105.7）：120 在畫面外。
+  assert.deepEqual(notesOf(view).texts, [["突破前高", 157, 87.5]]);
+
+  chart.zoom(0.5); // 最後 20 根（第 60～79 根）：2026-02-28 是第 58 根，在畫面左邊外面
+  assert.deepEqual(notesOf(view), { texts: [], paper: [] });
+
+  chart.zoom(2);
+  chart.pan(-10);
+  // 第 30～69 根、88.6～134.2：第 58 根正中央 x = 4 + 8.05×28.5 = 233.4；102.85 → y = 10 + 31.35/45.6×308 = 221.75，上緣 round(213.75) = 214。
+  // 120 → y = 10 + 14.2/45.6×308 = 105.9，上緣 98；六個字寬 42＋8 = 50。
+  assert.deepEqual(notesOf(view), {
+    texts: [["突破前高", 237, 222.5], ["畫面外的價位", 237, 106.5]],
+    paper: [[233, 214, 36, 16], [233, 98, 50, 16]],
+  });
+
+  chart.pan(10);
+  assert.deepEqual(notesOf(view).texts, [["突破前高", 157, 87.5]]);
+});
+
+test("切到週 K、月 K 文字留在包含那一天的那一根與同一個價位；秒 K、分 K 不顯示，切回日 K 恢復", () => {
+  const view = createChart();
+  const { chart, changes, tap, editor } = view;
+  chart.setDrawings([savedNote("突破前高", { date: "2026-02-27" })]);
+  assert.deepEqual(notesOf(view).texts, [["突破前高", 149, 87.5]]); // 日 K：第 57 根，x = 4 + 8.05×17.5 = 144.9
+  const bars = (count, time) => Array.from({ length: count }, (_, index) => ({ t: time(index), label: `第${index + 1}根`, open: 100, close: 100, high: 105, low: 95, volume: 1 }));
+  const weekly = bars(16, index => new Date(Date.UTC(2026, 0, 2 + index * 7)).toISOString().slice(0, 10));
+  const monthly = bars(16, index => new Date(Date.UTC(2025, index, 28)).toISOString().slice(0, 10));
+  const minutes = bars(40, index => `2026-03-20T09:${String(index).padStart(2, "0")}:00+08:00`);
+
+  chart.setData(weekly, { count: 16, unit: "週" }); // 每根寬 20.125；02-27 是第 8 根（那一週的最後一天）：x = 4 + 20.125×8.5 = 175.1
+  assert.deepEqual(notesOf(view), { texts: [["突破前高", 179, 87.5]], paper: [[175, 79, 36, 16]] });
+  chart.setData(monthly, { count: 16, unit: "月" }); // 02-27 落在 2026-02-28 那一根（第 13 根）：x = 4 + 20.125×13.5 = 275.7
+  assert.deepEqual(notesOf(view), { texts: [["突破前高", 280, 87.5]], paper: [[276, 79, 36, 16]] });
+
+  for (const unit of ["5秒", "1分", "60分"]) {
+    chart.setData(minutes, { count: 40, unit });
+    assert.deepEqual(notesOf(view), { texts: [], paper: [] }, unit);
+    chart.setTool("text");
+    tap(150, 87);
+    assert.equal(editor(), null, `${unit}：不能寫`);
+  }
+  chart.setData(dailyCandles(), { count: 40, unit: "日" });
+  assert.deepEqual(notesOf(view).texts, [["突破前高", 149, 87.5]]);
+
+  // 寫到一半切到分 K：輸入框收起，什麼都不留。
+  chart.setTool("text");
+  tap(150, 87);
+  editor().input.value = "寫到一半";
+  chart.setData(minutes, { count: 40, unit: "1分" });
+  assert.equal(editor(), null);
+  assert.deepEqual(changes, []);
+});
+
+test("輸入框開著時圖重畫、平移、縮放：輸入框跟著那個日期與價位走，寫的字還在；靠邊時整個留在繪圖區內", () => {
+  const { chart, changes, tap, editor, write } = createChart();
+  chart.setTool("text");
+  tap(150, 87);
+  write("寫到一半", null);
+  assert.deepEqual(editor().at, ["153px", "71px"]);
+
+  chart.update(dailyCandles()); // 盤中即時價進來：整張重畫
+  assert.deepEqual(editor().at, ["153px", "71px"]);
+  assert.equal(editor().input.value, "寫到一半");
+
+  chart.pan(-10); // 第 58 根移到 x = 233.4：輸入框（寬 150）放不下，往左收到 326 − 150 = 176；102.85 移到 y = 221.75，上緣 round(205.75) = 206
+  assert.deepEqual(editor().at, ["176px", "206px"]);
+  chart.pan(-12); // 再往前 12 根：第 58 根在 x = 4 + 8.05×40.5 = 330，已經在畫面右邊外面，輸入框停在右緣
+  assert.deepEqual(editor().at, ["176px", "206px"]);
+  chart.pan(22);
+  chart.zoom(0.5); // 那一根在畫面左邊外面：輸入框停在繪圖區左緣
+  assert.deepEqual(editor().at, ["4px", "71px"]);
+  chart.zoom(2);
+  assert.deepEqual(editor().at, ["153px", "71px"]);
+  assert.equal(editor().input.value, "寫到一半");
+  write("寫完了");
+  assert.deepEqual(changes.map(change => [change.drawing.anchors[0], change.drawing.text]), [[{ date: "2026-02-28", price: 102.85 }, "寫完了"]]);
+
+  // 點在最右邊那一根（x = 322）與最上緣：輸入框（寬 150、高 32）往左收到 326 − 150 = 176、往下收到上緣 10。
+  chart.setTool("text");
+  tap(320, 12);
+  assert.deepEqual(editor().at, ["176px", "10px"]);
+});
+
+test("點文字就選取：整塊文字外面出現一圈外框（沒有圓把手）；可點選範圍是文字那一塊加外圍幾像素，手指比滑鼠寬", () => {
+  const { chart, selections, tap, drawnLines, drawnHandles } = createChart();
+  chart.setDrawings([savedNote("突破前高")]); // 文字那一塊是 [153, 79, 36, 16]：x 153～189、y 79～95
+  assert.deepEqual(drawnLines(), []);
+
+  tap(170, 87);
+  assert.deepEqual(selections, ["saved-note-01"]);
+  assert.deepEqual(drawnLines(), [[[152.5, 78.5], [189.5, 78.5], [189.5, 95.5], [152.5, 95.5], [152.5, 78.5]]], "外框貼著文字那一塊的外緣");
+  assert.deepEqual(drawnHandles(), []);
+
+  tap(196, 87); // 右緣外 7px：滑鼠點不到，照舊選 K 棒（第 40 + floor(192/8.05) = 63 根），原本的選取放下
+  assert.deepEqual(selections, ["saved-note-01", null]);
+  assert.equal(chart.selection, 63);
+  assert.deepEqual(drawnLines(), []);
+
+  tap(194, 100); // 右下角外斜向 5、5（距離 7.1）：點不到
+  assert.deepEqual(selections, ["saved-note-01", null]);
+  tap(194, 90); // 右緣外 5px：點得到
+  assert.deepEqual(selections, ["saved-note-01", null, "saved-note-01"]);
+
+  chart.canvas.dispatch("keydown", { key: "Escape" });
+  tap(202, 87, "touch"); // 右緣外 13px：手指點得到
+  assert.deepEqual(selections, ["saved-note-01", null, "saved-note-01", null, "saved-note-01"]);
+  tap(204, 87, "touch"); // 15px：點不到
+  assert.equal(selections.at(-1), null);
+});
+
+test("選取文字後拖動：文字移到新的日期與價位、圖表不平移，放開後通知儲存（內容不變）；沒選取時拖曳照舊是平移", () => {
+  const view = createChart();
+  const { chart, changes, tap, drag } = view;
+  chart.setDrawings([savedNote("突破前高")]);
+
+  const end = chart.view.end;
+  drag([170, 87], [250, 87]); // 沒選取：平移 80px ≈ 10 根
+  assert.equal(chart.view.end, end - 10);
+  assert.deepEqual(changes, []);
+  chart.pan(10);
+
+  tap(170, 87);
+  // 往右 81、往下 54：錨點從 (152.9, 87) 到 (233.9, 141) → 第 40 + floor(229.9/8.05) = 68 根＝2026-03-10；
+  // 價位 105.7 − 131/308×11.4 = 100.85。
+  drag([170, 87], [251, 141]);
+  assert.equal(chart.view.end, end, "圖表沒有平移");
+  assert.deepEqual(changes, [{ type: "update", drawing: { id: "saved-note-01", kind: "text", anchors: [{ date: "2026-03-10", price: 100.85 }], text: "突破前高" } }]);
+  // 新位置：x = 4 + 8.05×28.5 = 233.4；100.85 → y = 141.04，上緣 round(133.04) = 133。
+  assert.deepEqual(notesOf(view), { texts: [["突破前高", 237, 141.5]], paper: [[233, 133, 36, 16]] });
+
+  // 拖出繪圖區：停在邊緣（最後一根、畫面內最高的那一分），不會被拖到看不見的地方。
+  drag([240, 141], [500, -50]);
+  assert.deepEqual(changes.at(-1).drawing.anchors, [{ date: "2026-03-21", price: 105.7 }]);
+
+  // 拖到一半手勢被取消：回原位、不通知。最後一根 x = 322，文字往左收到 326 − 36 = 290、往下收到上緣 10。
+  const count = changes.length;
+  drag([300, 14], [200, 100], { release: "pointercancel" });
+  assert.equal(changes.length, count);
+  assert.deepEqual(notesOf(view), { texts: [["突破前高", 294, 18.5]], paper: [[290, 10, 36, 16]] });
+});
+
+test("在週 K 上只上下拖文字：日期不會被換成那一週的最後一天", () => {
+  const { chart, changes, tap, drag } = createChart();
+  chart.setDrawings([savedNote("突破前高", { date: "2026-02-25" })]);
+  const weekly = Array.from({ length: 16 }, (_, index) => {
+    const date = new Date(Date.UTC(2026, 0, 2 + index * 7)).toISOString().slice(0, 10);
+    return { t: date, label: date, open: 100, close: 100, high: 105, low: 95, volume: 1 };
+  });
+  chart.setData(weekly, { count: 16, unit: "週" }); // 02-25 在 02-27 那一根（第 8 根）：文字那一塊是 [175, 79, 36, 16]
+  tap(180, 87);
+  drag([180, 87], [180, 107]); // 往下 20：105.7 − 97/308×11.4 = 102.11
+  assert.deepEqual(changes.map(change => change.drawing.anchors), [[{ date: "2026-02-25", price: 102.11 }]]);
+  drag([180, 107], [201, 107]); // 往右 21（超過一根 20.125）：換到下一根，日期變成那一根的 2026-03-06
+  assert.deepEqual(changes.at(-1).drawing.anchors, [{ date: "2026-03-06", price: 102.11 }]);
+});
+
+test("選取文字後按 Delete 或工具列的刪除：文字消失並通知刪除；沒選取時不做事", () => {
+  const view = createChart();
+  const { chart, changes, selections, tap, key } = view;
+  chart.setDrawings([savedNote("突破前高"), savedNote("留著的", { price: 100, id: "saved-note-02" })]);
+  key("Delete");
+  assert.deepEqual(changes, []);
+  tap(170, 87);
+  key("Delete");
+  assert.deepEqual(changes, [{ type: "remove", drawing: { id: "saved-note-01", kind: "text", anchors: [{ date: "2026-02-28", price: 102.85 }], text: "突破前高" } }]);
+  assert.equal(selections.at(-1), null);
+  assert.deepEqual(notesOf(view).texts, [["留著的", 157, 164.5]]);
+  tap(170, 164);
+  assert.equal(chart.deleteSelectedDrawing(), true);
+  assert.deepEqual(notesOf(view), { texts: [], paper: [] });
+});
+
+test("再點一下已選取的文字：輸入框帶著原本的內容打開，圖上那則先收起；改完確定就換成新的內容並通知儲存，位置不變", () => {
+  const view = createChart();
+  const { chart, changes, tools, selections, tap, editor, write, drawnLines } = view;
+  chart.setDrawings([savedNote("突破前高")]);
+
+  tap(170, 87);
+  assert.equal(editor(), null, "第一下只是選取");
+  tap(170, 87);
+  assert.deepEqual(editor().at, ["153px", "71px"]);
+  assert.equal(editor().input.value, "突破前高");
+  assert.equal(editor().input.focused, true);
+  assert.deepEqual(notesOf(view), { texts: [], paper: [] }, "正在改的那一則不同時畫在圖上（不會和輸入框疊成兩份）");
+  assert.deepEqual(drawnLines(), []);
+
+  write("假突破，停損");
+  assert.equal(editor(), null);
+  assert.deepEqual(changes, [{ type: "update", drawing: { id: "saved-note-01", kind: "text", anchors: [{ date: "2026-02-28", price: 102.85 }], text: "假突破，停損" } }]);
+  assert.deepEqual(notesOf(view).texts, [["假突破，停損", 157, 87.5]]);
+  assert.equal(selections.at(-1), "saved-note-01", "改完仍選取著");
+  assert.deepEqual(tools, [], "修改不經過工具");
+
+  // 沒改就確定、清空後確定、取消、Esc：內容維持原樣，不通知儲存。
+  for (const [name, end] of Object.entries({
+    "沒改就確定": () => write("假突破，停損"),
+    "前後多打了空白": () => write("  假突破，停損 "),
+    "清空後確定": () => write(""),
+    "按取消鈕": () => { write("改到一半", null); editor().cancel.dispatch("pointerdown"); },
+    "按 Esc": () => { write("改到一半", null); editor().input.dispatch("keydown", { key: "Escape" }); },
+  })) {
+    tap(170, 87);
+    assert.equal(editor().input.value, "假突破，停損", name);
+    end();
+    assert.equal(editor(), null, name);
+    assert.equal(changes.length, 1, `${name}：不通知儲存`);
+    assert.deepEqual(notesOf(view).texts, [["假突破，停損", 157, 87.5]], name);
+  }
+});
+
+test("鍵盤：選取文字後在圖上按 Enter 也能打開輸入框；選取的是線時 Enter 不做事", () => {
+  const { chart, changes, tap, key, editor, write } = createChart();
+  chart.setDrawings([savedNote("突破前高"), saved(100)]);
+  key("Enter");
+  assert.equal(editor(), null, "沒有選取");
+  tap(100, 164); // 水平線
+  key("Enter");
+  assert.equal(editor(), null, "選取的是水平線");
+  tap(170, 87);
+  key("Enter");
+  assert.equal(editor().input.value, "突破前高");
+  write("等回測");
+  assert.deepEqual(changes.map(change => [change.type, change.drawing.text]), [["update", "等回測"]]);
+});
+
+test("改到一半時這一檔的畫線重新載入：那一則還在就繼續改，不在了（換了股票）就收起不留；改到一半被刪除也收起", () => {
+  const view = createChart();
+  const { chart, changes, tap, editor, write } = view;
+  chart.setDrawings([savedNote("突破前高")]);
+  tap(170, 87);
+  tap(170, 87);
+  write("改到一半", null);
+  chart.setDrawings([savedNote("突破前高"), saved(100)]); // 雲端那一份晚一步讀回來
+  assert.equal(editor().input.value, "改到一半");
+  write("改好了");
+  assert.deepEqual(changes.map(change => [change.type, change.drawing.id, change.drawing.text]), [["update", "saved-note-01", "改好了"]]);
+  assert.deepEqual(notesOf(view).texts, [["改好了", 157, 87.5], ["100", 10, 155.5]], "圖上那一則（重新載入後的那一份）也換成新的內容；另一筆是水平線的價位");
+
+  tap(170, 87);
+  write("又改到一半", null);
+  chart.setDrawings([saved(100)]); // 換了一檔：沒有那一則了
+  assert.equal(editor(), null);
+  assert.equal(changes.length, 1);
+
+  chart.setDrawings([savedNote("突破前高")]);
+  tap(170, 87);
+  tap(170, 87);
+  write("改到一半", null);
+  assert.equal(chart.deleteSelectedDrawing(), true);
+  assert.equal(editor(), null);
+  assert.deepEqual(changes.at(-1), { type: "remove", drawing: { id: "saved-note-01", kind: "text", anchors: [{ date: "2026-02-28", price: 102.85 }], text: "突破前高" } });
+});
+
+test("輸入框開著時點圖上別處就是確定：寫的字留下，那一下不拿去選 K 棒、不平移、也不會再開一個輸入框", () => {
+  const view = createChart();
+  const { chart, changes, tools, tap, drag, editor, write } = view;
+  chart.setTool("text");
+  tap(150, 87);
+  write("突破前高", null);
+  const typing = editor().input;
+
+  chart.canvas.dispatch("pointerdown", { clientX: 250, clientY: 200 });
+  assert.deepEqual(changes.map(change => [change.type, change.drawing.text]), [["add", "突破前高"]], "手一按下去就確定了");
+  assert.equal(editor(), null);
+  typing.dispatch("blur"); // 滑鼠：按下去之後輸入框才失去焦點——不會再存一次
+  chart.canvas.dispatch("pointerup", { clientX: 250, clientY: 200 });
+  assert.equal(changes.length, 1);
+  assert.equal(chart.selection, -1, "這一下沒有選 K 棒");
+  assert.equal(editor(), null, "也沒有在新的位置再開輸入框");
+  assert.deepEqual(tools, ["text", null]);
+  assert.deepEqual(notesOf(view).texts, [["突破前高", 157, 87.5]]);
+
+  tap(250, 200); // 下一下就照常了：選 K 棒（第 40 + floor(246/8.05) = 70 根）
+  assert.equal(chart.selection, 70);
+
+  // 按下去之後拖：一樣是確定，圖表不平移；之後的點擊照常。
+  chart.setTool("text");
+  tap(150, 200);
+  write("第二則", null);
+  const end = chart.view.end;
+  drag([250, 250], [330, 250]);
+  assert.equal(chart.view.end, end);
+  assert.deepEqual(changes.map(change => change.drawing.text), ["突破前高", "第二則"]);
+  tap(250, 250);
+  assert.equal(chart.selection, 70);
+
+  // 沒寫內容就點別處：不留東西。
+  chart.setTool("text");
+  tap(150, 300);
+  tap(250, 250);
+  assert.equal(editor(), null);
+  assert.equal(changes.length, 2);
+  assert.deepEqual(tools.slice(-2), ["text", null]);
+
+  // 按下去確定之後手勢被系統取消（沒有放開的那一下）：下一次點擊仍然照常，不會被吃掉。
+  chart.clearSelection();
+  chart.setTool("text");
+  tap(150, 300);
+  chart.canvas.dispatch("pointerdown", { clientX: 250, clientY: 250, pointerType: "touch" });
+  chart.canvas.dispatch("pointercancel", { clientX: 250, clientY: 250, pointerType: "touch" });
+  assert.equal(editor(), null);
+  tap(250, 250, "touch");
+  assert.equal(chart.selection, 70);
+});
+
+test("輸入框失去焦點（點到頁面其他地方、收起手機鍵盤）也是確定；改既有的文字時點圖上別處一樣存，選取不變", () => {
+  const view = createChart();
+  const { chart, changes, selections, tap, editor, write } = view;
+  chart.setTool("text");
+  tap(150, 87);
+  write("突破前高", "blur");
+  assert.equal(editor(), null);
+  assert.deepEqual(changes.map(change => [change.type, change.drawing.text]), [["add", "突破前高"]]);
+  assert.equal(chart.canvas.focused, false, "焦點是使用者自己移走的（點了頁面別處）：不把它搶回圖表");
+
+  tap(170, 87);
+  tap(170, 87);
+  write("假突破", null);
+  tap(250, 200, "touch"); // 手指：按下、放開之後輸入框才失去焦點
+  assert.equal(editor(), null);
+  assert.deepEqual(changes.map(change => [change.type, change.drawing.text]), [["add", "突破前高"], ["update", "假突破"]]);
+  assert.equal(selections.at(-1), changes[0].drawing.id, "那一則仍選取著");
+  assert.equal(chart.selection, -1);
+});
+
+test("用 Enter 確定或 Esc 取消之後，焦點回到圖表：可以接著用鍵盤操作", () => {
+  const { chart, tap, editor, write } = createChart();
+  for (const end of [() => write("突破前高"), () => editor().input.dispatch("keydown", { key: "Escape" })]) {
+    chart.canvas.focused = false;
+    chart.setTool("text");
+    tap(150, 87);
+    assert.equal(chart.canvas.focused, false);
+    end();
+    assert.equal(chart.canvas.focused, true);
+  }
+});
+
+// 模擬手機的頁面捲動與螢幕鍵盤：頁面原本捲在 420；鍵盤彈出＝看得到的範圍（visualViewport）變矮並送出 resize。
+// 圖表容器在頁面左上角，所以輸入框在畫面上的位置就是它在容器裡的位置。
+function phone(view, FakeViewport) {
+  const { window } = view;
+  const scrolls = [];
+  Object.assign(window, {
+    scrollX: 0, scrollY: 420,
+    scrollTo(x, y) { scrolls.push(["到", x, y]); window.scrollX = x; window.scrollY = y; },
+    scrollBy(x, y) { scrolls.push(["移", x, y]); window.scrollX += x; window.scrollY += y; },
+    visualViewport: Object.assign(new FakeViewport(), { height: 800, offsetTop: 0 }),
+  });
+  const keyboard = (height, offsetTop = 0) => { Object.assign(window.visualViewport, { height, offsetTop }); window.visualViewport.dispatch("resize"); };
+  return { scrolls, keyboard };
+}
+
+test("手機：鍵盤彈出來蓋到輸入框時，頁面捲到輸入框露出來；寫完後頁面捲回原本的位置", () => {
+  const view = createChart();
+  const { chart, changes, tap, editor, write } = view;
+  const { scrolls, keyboard } = phone(view, chart.host.constructor);
+  chart.setTool("text");
+  tap(150, 300, "touch"); // 輸入框（高 32）上緣 round(299.9 − 16) = 284、下緣 316
+  assert.deepEqual(editor().at, ["153px", "284px"]);
+  assert.deepEqual(scrolls, []);
+
+  keyboard(500); // 看得到 0～500：輸入框整個看得到，不用動
+  assert.deepEqual(scrolls, []);
+  keyboard(300); // 看得到 0～300：下緣 316 被蓋住。留 12 的空隙 → 往下捲 316 − (300 − 12) = 28
+  assert.deepEqual(scrolls, [["移", 0, 28]]);
+
+  write("跌破月線");
+  assert.deepEqual(changes.map(change => change.drawing.text), ["跌破月線"]);
+  assert.deepEqual(scrolls, [["移", 0, 28], ["到", 0, 420]], "確定後捲回原本的 420");
+
+  keyboard(800); // 鍵盤收起：輸入框已經關了，不再跟著捲
+  keyboard(200);
+  assert.equal(scrolls.length, 2);
+});
+
+test("手機：看得到的範圍被往下推（iOS）而輸入框跑到上面外面時往回捲；取消或點別處收起時一樣捲回原位；頁面沒被捲動就不動它", () => {
+  const view = createChart();
+  const { chart, tap, editor, write } = view;
+  const { scrolls, keyboard } = phone(view, chart.host.constructor);
+  chart.setTool("text");
+  tap(150, 300, "touch");
+  keyboard(300, 300); // 看得到 300～600：輸入框上緣 284 在上面外面 → 往上捲 284 − (300 + 12) = −28
+  assert.deepEqual(scrolls, [["移", 0, -28]]);
+  editor().cancel.dispatch("pointerdown", { pointerType: "touch" });
+  assert.deepEqual(scrolls, [["移", 0, -28], ["到", 0, 420]]);
+
+  scrolls.length = 0;
+  keyboard(800);
+  chart.setTool("text");
+  tap(150, 300, "touch");
+  write("沒捲動", "blur");
+  assert.deepEqual(scrolls, [], "頁面沒被動過：不多捲一次");
+
+  // 改既有的文字（手指再點一下）也一樣。
+  tap(170, 300, "touch");
+  tap(170, 300, "touch");
+  assert.equal(editor().input.value, "沒捲動");
+  keyboard(300);
+  tap(250, 100, "touch");
+  assert.deepEqual(scrolls, [["移", 0, 28], ["到", 0, 420]]);
+});
+
+test("桌機（滑鼠、鍵盤）沒有螢幕鍵盤：不監看、不捲動頁面，使用者自己捲到哪就留在哪", () => {
+  const view = createChart();
+  const { chart, tap, key, editor, write, window } = view;
+  const { scrolls, keyboard } = phone(view, chart.host.constructor);
+  chart.setTool("text");
+  tap(150, 300);
+  keyboard(300);
+  window.scrollY = 600; // 使用者自己捲了頁面
+  write("突破前高");
+  tap(170, 300);
+  key("Enter");
+  assert.equal(editor().input.value, "突破前高");
+  keyboard(200);
+  window.scrollY = 700;
+  write("改過了");
+  assert.deepEqual(scrolls, []);
+});
+
+test("輸入法還在選字就按了確定：存下來的仍只有前 200 個字（不會送出儲存端不收的長度）", () => {
+  const { chart, changes, tap, editor } = createChart();
+  chart.setTool("text");
+  tap(150, 87);
+  const { form, input } = editor();
+  input.value = "線".repeat(230);
+  input.dispatch("input", { isComposing: true });
+  form.dispatch("submit");
+  assert.deepEqual(changes.map(change => change.drawing.text), ["線".repeat(200)]);
+});
+
+test("確定、取消或失去焦點之後圖表自己重畫：新寫的字馬上出現、改過的馬上換掉、取消後原本的字馬上回來，不用等下一次移動游標", () => {
+  const { chart, texts, reset, tap, editor, write } = createChart();
+  const drawn = () => [...new Set(texts.filter(text => text.color === DRAW).map(text => text.text))];
+  chart.setTool("text");
+  tap(150, 87);
+  reset();
+  write("突破前高");
+  assert.deepEqual(drawn(), ["突破前高"]);
+
+  tap(170, 87);
+  tap(170, 87); // 打開輸入框：圖上那一則先收起
+  reset();
+  write("假突破", "blur");
+  assert.deepEqual(drawn(), ["假突破"]);
+
+  for (const cancel of [() => editor().cancel.dispatch("pointerdown"), () => editor().input.dispatch("keydown", { key: "Escape" })]) {
+    tap(170, 87);
+    assert.ok(editor());
+    reset();
+    cancel();
+    assert.deepEqual(drawn(), ["假突破"]);
+  }
+});
+
+test("手指點一下打開輸入框之後，瀏覽器補送的滑鼠按下事件不會把焦點從輸入框搶回圖表；沒有輸入框時圖表照常可以被點成焦點", () => {
+  const { chart, changes, tap, editor, write } = createChart();
+  assert.equal(chart.canvas.dispatch("mousedown").prevented, false, "平常：不擋");
+  chart.setTool("text");
+  tap(150, 87, "touch"); // 手指：按下、放開（輸入框出現）之後才補送 mousedown
+  assert.ok(editor());
+  assert.equal(chart.canvas.dispatch("mousedown").prevented, true, "輸入框開著：擋下，焦點留在輸入框");
+  assert.ok(editor(), "輸入框還在");
+  write("突破前高");
+  assert.equal(changes.length, 1);
+  assert.equal(chart.canvas.dispatch("mousedown").prevented, false);
+});
+
+test("手指點的位置剛好落在剛出現的取消鈕上：補送的滑鼠按下事件不會把焦點移到取消鈕（輸入框不會一出現就收掉）；在輸入框裡按滑鼠照常可以移動游標", () => {
+  const { chart, tap, editor } = createChart();
+  chart.setTool("text");
+  tap(320, 87, "touch");
+  const { form, input, cancel } = editor();
+  assert.equal(form.dispatch("mousedown", { target: cancel }).prevented, true);
+  assert.equal(form.dispatch("mousedown", { target: form }).prevented, true);
+  assert.equal(form.dispatch("mousedown", { target: input }).prevented, false);
+  assert.equal(cancel.tabIndex, -1, "取消鈕不排進 Tab 順序：按 Tab 離開輸入框就是確定，鍵盤的取消是 Esc");
+  assert.ok(editor());
+});
+
+test("手指打開的輸入框，確定或取消之後不把焦點塞給圖表（手機上圖表會因此多一圈鍵盤焦點的外框）", () => {
+  const { chart, tap, editor, write } = createChart();
+  for (const end of [() => write("突破前高"), () => editor().cancel.dispatch("pointerdown", { pointerType: "touch" })]) {
+    chart.canvas.focused = false;
+    chart.setTool("text");
+    tap(150, 200, "touch");
+    end();
+    assert.equal(editor(), null);
+    assert.equal(chart.canvas.focused, false);
+  }
+});
+
+test("改既有的文字改到一半，頁面送來取消（焦點不在輸入框時的 Esc）：輸入框收起、內容不變；寫新的寫到一半時畫線重新載入，輸入框還在", () => {
+  const { chart, changes, tap, editor, write } = createChart();
+  chart.setDrawings([savedNote("突破前高")]);
+  tap(170, 87);
+  tap(170, 87);
+  write("改到一半", null);
+  chart.cancelDrawing();
+  assert.equal(editor(), null);
+  assert.deepEqual(changes, []);
+
+  chart.setTool("text");
+  tap(150, 200);
+  write("寫到一半", null);
+  chart.setDrawings([savedNote("突破前高"), saved(100)]); // 雲端那一份晚一步讀回來
+  assert.equal(editor().input.value, "寫到一半");
+  write("寫完了");
+  assert.deepEqual(changes.map(change => [change.type, change.drawing.text]), [["add", "寫完了"]]);
+});
+
+test("靠右緣被收進圖內的文字，拖的時候整塊照樣跟著手走：新的位置從畫面上看到的那一塊算起，不會存了新日期畫面卻不動", () => {
+  const view = createChart();
+  const { chart, changes, tap, drag } = view;
+  // 錨點在最後一根（x = 322），十個字的那一塊被收到 [248, 156, 78, 16]。
+  chart.setDrawings([savedNote("右緣的標註共十個字整", { date: "2026-03-21", price: 100 })]);
+  tap(260, 164);
+  drag([260, 164], [230, 164]); // 往左 30：那一塊的左緣從 248 到 218 → 第 40 + floor(214/8.05) = 66 根＝2026-03-08，價位不變
+  assert.deepEqual(changes.map(change => change.drawing.anchors), [[{ date: "2026-03-08", price: 100 }]]);
+  // 新位置：x = 4 + 8.05×26.5 = 217.3，放得下不用收：字從 221 寫起——畫面上往左移了 31。
+  assert.deepEqual(notesOf(view), { texts: [["右緣的標註共十個字整", 221, 164.5]], paper: [[217, 156, 78, 16]] });
+
+  // 貼著下緣被往上收的也一樣：94.4 的那一塊在 [153, 302, 36, 16]，往上拖 20 → 上下的正中央從 310 到 290 → 105.7 − 280/308×11.4 = 95.34。
+  chart.setDrawings([savedNote("貼近下緣", { price: 94.4, id: "saved-note-02" })]);
+  tap(170, 310);
+  drag([170, 310], [170, 290]);
+  assert.deepEqual(changes.at(-1).drawing.anchors, [{ date: "2026-02-28", price: 95.34 }]);
+  assert.deepEqual(notesOf(view).paper, [[153, 282, 36, 16]]);
+});
+
+test("貼上的內容帶定位字元等看不見的控制字元：確定時換成空白再存（儲存端不收這些字元），不會畫面上有字卻沒存上去", () => {
+  const { chart, changes, tap, write } = createChart();
+  chart.setTool("text");
+  tap(150, 87);
+  write("成本\t985.5\u0000 停損\u007f 970");
+  assert.deepEqual(changes.map(change => change.drawing.text), ["成本 985.5  停損  970"]);
+});
+
+test("選了文字工具點在價格軸或時間軸上：不開輸入框，工具留著等下一下", () => {
+  const { chart, changes, tools, tap, editor } = createChart();
+  chart.setTool("text");
+  tap(350, 100); // 右側價格軸
+  tap(150, 330); // 下方時間軸
+  assert.equal(editor(), null);
+  assert.deepEqual(changes, []);
+  assert.deepEqual(tools, ["text"]);
+  tap(150, 87);
+  assert.ok(editor());
+});
+
+test("中英混排換行：英數字的詞整個移到下一行，前面的中文留在原行（不會退到整行最前面的空格去斷）", () => {
+  const view = createChart();
+  const { chart } = view;
+  // 「買 」2 個字＋中文 21 個字＝23 個字，再接 ETF0050：第 26 個字是 F，落在詞的中間 → 從 ETF 前面斷。
+  chart.setDrawings([savedNote("買 台積電法說會後觀察外資動向再決定要不要加碼ETF0050")]);
+  assert.deepEqual(notesOf(view).texts.map(([text]) => text), ["買 台積電法說會後觀察外資動向再決定要不要加碼", "ETF0050"]);
+});
+
+test("按住 Enter 不放：重複送出的 Enter 不會把剛確定的那一則又打開", () => {
+  const { chart, changes, tap, editor, write } = createChart();
+  chart.setDrawings([savedNote("突破前高")]);
+  tap(170, 87);
+  chart.canvas.dispatch("keydown", { key: "Enter", repeat: true });
+  assert.equal(editor(), null, "按住的重複鍵不打開");
+  chart.canvas.dispatch("keydown", { key: "Enter" });
+  write("等回測");
+  chart.canvas.dispatch("keydown", { key: "Enter", repeat: true }); // 確定用的那一下還按著，焦點已經回到圖表
+  assert.equal(editor(), null);
+  assert.equal(changes.length, 1);
+});
+
+test("用鍵盤打開輸入框、或按下去確定的當下，圖表馬上重畫：正在改的那一則立刻從圖上收起，確定的字不用等放開才出現", () => {
+  const { chart, strokes, texts, reset, tap, key, write } = createChart();
+  const drawn = () => [...new Set(texts.filter(text => text.color === DRAW).map(text => text.text))];
+  chart.setDrawings([savedNote("突破前高")]);
+  tap(170, 87);
+  reset();
+  key("Enter");
+  assert.ok(strokes.length > 0, "重畫了");
+  assert.deepEqual(drawn(), [], "那一則先收起（輸入框疊在它的位置上）");
+
+  write("假突破", null);
+  reset();
+  chart.canvas.dispatch("pointerdown", { clientX: 250, clientY: 200 }); // 還沒放開
+  assert.deepEqual(drawn(), ["假突破"]);
+  chart.canvas.dispatch("pointerup", { clientX: 250, clientY: 200 });
+});
+
+test("輸入法選字到一半按 Esc（取消選字）：輸入框不會跟著收掉", () => {
+  const { chart, tap, editor } = createChart();
+  chart.setTool("text");
+  tap(150, 87);
+  editor().input.value = "ㄊㄨˊ";
+  editor().input.dispatch("keydown", { key: "Escape", isComposing: true });
+  assert.ok(editor(), "還開著");
+  editor().input.dispatch("keydown", { key: "Escape" });
+  assert.equal(editor(), null);
+});
+
+test("只有看不見的字元（零寬字元）不算內容：確定後不留東西；行分隔字元和其他控制字元一樣換成空白", () => {
+  const view = createChart();
+  const { chart, changes, tap, editor, write } = view;
+  chart.setTool("text");
+  tap(150, 87);
+  write("​‍﻿");
+  assert.equal(editor(), null);
+  assert.deepEqual(changes, []);
+  chart.setTool("text");
+  tap(150, 87);
+  write("第一段 第二段 第三段\u0085完");
+  assert.deepEqual(changes.map(change => change.drawing.text), ["第一段 第二段 第三段 完"]);
+  // 載入時也一樣：只有零寬字元的不畫。
+  chart.setDrawings([{ id: "invisible-001", kind: "text", anchors: [{ date: "2026-02-28", price: 100 }], text: "​" }]);
+  assert.deepEqual(notesOf(view), { texts: [], paper: [] });
 });
