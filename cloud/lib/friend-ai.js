@@ -205,11 +205,17 @@ const PAUSED_TEXT = "這把金鑰已暫停使用，請到 Gemini 設定換一把
 
 function noticeOf(key, sections) {
   if (key.status === "paused") return { text: key.last_failure_reason || PAUSED_TEXT };
-  if (key.last_failure_reason && sections.some((section) => section.status !== "generated")) {
+  if (key.last_failure_reason && !allGenerated(sections)) {
     return { text: key.last_failure_reason };
   }
   return null;
 }
+
+// 05 票：個股判斷那一列（03 票）也算進「那天產生了沒」——只有個股沒產生、大盤與籌碼都有時，朋友一樣要看到原因。
+// 朋友頁的提示與站主後台共用這一個判斷：沒有持股算成功；那天沒有個股那一列（0022 還沒套）就不列入。
+const STOCK_DONE = new Set(["generated", "no_holdings"]);
+const stockSection = (status) => (status ? [{ status: STOCK_DONE.has(status) ? "generated" : status }] : []);
+const allGenerated = (sections) => sections.every((section) => section?.status === "generated");
 
 async function friendDigest(db, email) {
   const key = await db.prepare(
@@ -232,9 +238,12 @@ async function friendDigest(db, email) {
   const pick = (type) => rows.find((row) => row.digest_type === type);
   const market = digestOf(pick("market"));
   const flow = digestOf(pick("flow"));
+  const [stock] = latest
+    ? await rowsOrNone(db, "SELECT status FROM friend_ai_stock_daily WHERE email = ? AND data_date = ?", email, latest) : [];
+  const sections = [market, flow, ...stockSection(stock?.status)];
   return {
     available: true, configured: true, consented: true, data_date: latest,
-    market, flow, notice: noticeOf(key, [market, flow]),
+    market, flow, notice: noticeOf(key, sections),
   };
 }
 
@@ -320,21 +329,48 @@ export async function deleteFriendKey(db, email) {
   }
 }
 
-// 後台用：每位使用者只有狀態——已設定與否、是否暫停、最後成功時間、最近失敗原因。不帶密文、解讀內容或持股。
-const NO_KEY = Object.freeze({ configured: false, paused: false, last_success_at: null, last_failure_reason: null });
+// 後台用（DECISIONS 第 11 題）：每位使用者只有狀態與數字——已設定與否、是否暫停、最後成功時間、最近失敗原因、
+// 最新一天的解讀是否產生、自選股與庫存各幾檔。不帶密文、解讀內容、持有哪些股票、股數或成本。
+const NO_KEY = Object.freeze({ configured: false, paused: false, last_success_at: null, last_failure_reason: null, digest: null });
 
-export async function keyStateLookup(db) {
-  let results = [];
+// 資料表還沒建立時當成沒有任何一列。
+async function rowsOrNone(db, sql, ...binds) {
   try {
-    ({ results } = await db.prepare(
-      "SELECT email, status, last_success_at, last_failure_reason FROM friend_gemini_keys",
-    ).all());
+    return (await db.prepare(sql).bind(...binds).all()).results;
   } catch (error) {
     if (!tableMissing(error)) throw error;
+    return [];
   }
-  const states = new Map(results.map((row) => [row.email, {
+}
+
+const countsBy = (rows) => new Map(rows.map((row) => [row.email, Number(row.n)]));
+
+// 資料日規則與「產生」的判斷都和朋友頁面一樣：取所有朋友最新的一天；那天沒有他的列（暫停、還沒輪到、失敗）就是沒產生，
+// 不拿前一天冒充。
+async function latestDay(db) {
+  const date = (await rowsOrNone(db, "SELECT MAX(data_date) AS data_date FROM friend_ai_daily"))[0]?.data_date ?? null;
+  if (!date) return null;
+  const digests = await rowsOrNone(db, "SELECT email, digest_type, status FROM friend_ai_daily WHERE data_date = ?", date);
+  const stocks = new Map((await rowsOrNone(db, "SELECT email, status FROM friend_ai_stock_daily WHERE data_date = ?", date))
+    .map((row) => [row.email, row.status]));
+  const section = (email, type) => digests.find((row) => row.email === email && row.digest_type === type);
+  const produced = (email) => allGenerated([section(email, "market"), section(email, "flow"), ...stockSection(stocks.get(email))]);
+  return { data_date: date, produced };
+}
+
+export async function keyStateLookup(db) {
+  const keys = await rowsOrNone(db, "SELECT email, status, last_success_at, last_failure_reason FROM friend_gemini_keys");
+  const watchlist = countsBy(await rowsOrNone(db, "SELECT email, COUNT(*) AS n FROM user_watchlist GROUP BY email"));
+  const holdings = countsBy(await rowsOrNone(db, "SELECT email, COUNT(*) AS n FROM user_holdings GROUP BY email"));
+  const day = keys.length ? await latestDay(db) : null;
+  const states = new Map(keys.map((row) => [row.email, {
     configured: true, paused: row.status === "paused",
     last_success_at: row.last_success_at ?? null, last_failure_reason: row.last_failure_reason ?? null,
+    digest: day ? { data_date: day.data_date, produced: day.produced(row.email) } : null,
   }]));
-  return (email) => states.get(email) ?? NO_KEY;
+  return (email) => ({
+    ...(states.get(email) ?? NO_KEY),
+    watchlist_count: watchlist.get(email) ?? 0,
+    holdings_count: holdings.get(email) ?? 0,
+  });
 }
