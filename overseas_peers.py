@@ -29,6 +29,8 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Protocol
 
+from eodhd_cache import ENDPOINT as EODHD_ENDPOINT, FetchError, SharedEodhd
+
 ROOT = Path(__file__).resolve().parent
 CLOUD = ROOT / "cloud"
 D1_DATABASE = "market-ana-accounts"
@@ -155,7 +157,7 @@ class EodhdSource:
         self.key, self.http = key, http
 
     def daily(self, symbol: str, start: date, end: date) -> list[dict]:
-        status, body = self.http(f"https://eodhd.com/api/eod/{symbol}?api_token={urllib.parse.quote(self.key, safe='')}&fmt=json&period=d&from={start}&to={end}")
+        status, body = self.http(f"{EODHD_ENDPOINT.format(symbol=symbol)}?api_token={urllib.parse.quote(self.key, safe='')}&fmt=json&period=d&from={start}&to={end}")
         _check_status(status)
         bars = _eodhd_bars(body)
         if not bars:
@@ -178,6 +180,19 @@ def _eodhd_bars(body: bytes) -> list[dict]:
     return bars
 
 
+def _failure(kind: str, status: int | None, message: str) -> SourceError:
+    """共用快取的錯誤種類 → 每日抓取原本的錯誤分類（查無代號、額度用完、沒有金鑰、格式、網路）。"""
+    if kind == "http" and status is not None:
+        try:
+            _check_status(status)
+        except SourceError as error:
+            return error
+    failure = {"format": FormatChanged, "invalid_symbol": NotFound}.get(kind, SourceError)(message)
+    if kind == "missing_key":
+        failure.problem = "no_key"
+    return failure
+
+
 class CachedEodhdSource:
     """EODHD 走共用的那一份（``eodhd_cache``，G 票延伸 2026-11-17）：大盤預測已經抓過的指數不再打，
     同一個收盤之後同一檔只抓一次。錯誤照原本的分類（查無代號、額度用完、格式不對）回給每日抓取。"""
@@ -188,14 +203,13 @@ class CachedEodhdSource:
         self.cache = cache
 
     def daily(self, symbol: str, start: date, end: date) -> list[dict]:
-        from eodhd_cache import FetchError
         try:
-            body, _ = self.cache.raw(symbol)
+            body, meta = self.cache.raw(symbol)
         except FetchError as error:
-            if error.status is None:
-                raise SourceError(str(error)) from None
-            _check_status(error.status)
-            raise FormatChanged(str(error)) from None
+            raise _failure(error.kind, error.status, str(error)) from None
+        if meta.get("refresh_error"):
+            # 共用的那一份這次沒能更新：照每日抓取原本的規則標過期（額度用完時後面的也不再打），舊資料留在資料庫。
+            raise _failure(meta.get("refresh_kind") or "network", meta.get("refresh_status"), meta["refresh_error"])
         bars = [bar for bar in _eodhd_bars(body) if start.isoformat() <= bar["date"] <= end.isoformat()]
         if not bars:
             raise NotFound()
@@ -354,11 +368,10 @@ def main(argv: list[str] | None = None) -> int:
     eodhd_key = os.environ.get("EODHD_API_KEY", "").strip()
     sources = {"massive": MassiveSource(massive_key) if massive_key else None,
                "eodhd": EodhdSource(eodhd_key) if eodhd_key else None}
-    if args.shared_cache:
-        # 共用快取：大盤預測已經抓過的不再打；沒有金鑰時照樣讀得到共用的那一份。
-        from eodhd_cache import SharedEodhd
-        from state_sync import R2Store
-        sources["eodhd"] = CachedEodhdSource(SharedEodhd(R2Store.from_env(), eodhd_key))
+    shared = SharedEodhd.from_env(eodhd_key) if args.shared_cache else None
+    if shared is not None:
+        # 共用快取：大盤預測已經抓過的不再打；沒有金鑰時照樣讀得到共用的那一份。R2 設定不齊時照原本的做法。
+        sources["eodhd"] = CachedEodhdSource(shared)
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     today = datetime.now(timezone(timedelta(hours=8))).date()
     print(json.dumps(daily(d1, sources, today=today, now=now), ensure_ascii=False))

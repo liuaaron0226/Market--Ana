@@ -3,17 +3,10 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { sendReadyNoticesFromGitHub } from "../watch-ready-notices.mjs";
-import { fakeD1, OWNER } from "./helpers.js";
+import { fakeCloudflareD1, fakeD1, OWNER } from "./helpers.js";
 import { makeVapid, makeDevice, pushRecorder } from "./push-helpers.js";
 
 let db, vapid, pushes, phone, env;
-const cloudflare = async (url, init) => {
-  const { sql, params } = JSON.parse(init.body);
-  const statement = db.prepare(sql).bind(...(params || []));
-  const out = /^\s*(SELECT|WITH)\b/i.test(sql) ? await statement.all() : await statement.run();
-  return Response.json({ success: true, errors: [], result: [{ success: true, results: out.results || [], meta: out.meta }] });
-};
-
 beforeEach(async () => {
   db = fakeD1();
   vapid = await makeVapid();
@@ -31,7 +24,7 @@ beforeEach(async () => {
 });
 
 const send = (overrides = {}) => sendReadyNoticesFromGitHub({ ...env, ...overrides },
-  { fetchImpl: cloudflare, pushFetch: pushes.fetch, now: () => Date.parse("2026-11-17T10:00:00Z") });
+  { fetchImpl: fakeCloudflareD1(db), pushFetch: pushes.fetch, now: () => Date.parse("2026-11-17T10:00:00Z") });
 
 test("判斷寫進資料庫之後馬上送：站主的裝置收到「變成可以留意」，再跑一次不重複", async () => {
   assert.equal((await send()).notified, 1);

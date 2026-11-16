@@ -25,16 +25,19 @@ def at(text: str) -> datetime:
 
 
 class FakeEodhd:
-    def __init__(self, status=200):
+    def __init__(self, status=200, last="2026-11-17"):
         self.urls = []
         self.status = status
+        self.last = last
 
     def __call__(self, url):
         self.urls.append(url)
         symbol = url.split("/eod/", 1)[1].split("?", 1)[0]
         if self.status != 200:
             return self.status, b""
-        return 200, eodhd([("2026-11-16", 100.0), ("2026-11-17", 101.0)]) if symbol != "EMPTY.INDX" else b"[]"
+        rows = [row for row in [("2026-11-16", 100.0), ("2026-11-17", 101.0), ("2026-11-18", 102.0)]
+                if row[0] <= self.last]
+        return 200, eodhd(rows) if symbol != "EMPTY.INDX" else b"[]"
 
     def symbols(self):
         return [url.split("/eod/", 1)[1].split("?", 1)[0] for url in self.urls]
@@ -88,6 +91,18 @@ class WhenToFetchTests(SharedCacheTestCase):
         # 不認得的指數兩邊都算：哪一邊收盤了都要重抓。
         self.assertEqual(ec.last_close(ec.market_zone("XYZ.INDX"), at("2026-11-16T09:00:00")), at("2026-11-16T08:00:00"))
 
+    def test_a_copy_fetched_before_eodhd_had_the_new_close_is_fetched_again_later(self):
+        # 週二 UTC 09:00 抓日經時 EODHD 還沒有週二的收盤（最後一天是週一）→ 隔天晨間版（週二 23:20）再抓一次。
+        self.cache("2026-11-17T09:00:00", net=FakeEodhd(last="2026-11-16")).raw("N225.INDX")
+        self.cache("2026-11-17T23:20:00").raw("N225.INDX")
+        self.assertEqual(self.net.symbols(), ["N225.INDX"])
+        # 收盤六小時以後還是沒有那一天（例如那天休市），就當成最新的，不再一直重抓。
+        holiday = FakeEodhd(last="2026-11-16")
+        self.cache("2026-11-17T09:00:00", net=holiday).raw("KS11.INDX")
+        self.cache("2026-11-17T15:00:00", net=holiday).raw("KS11.INDX")
+        self.cache("2026-11-17T23:20:00", net=holiday).raw("KS11.INDX")
+        self.assertEqual(holiday.symbols(), ["KS11.INDX", "KS11.INDX"])
+
 
 class SharedBetweenLinesTests(SharedCacheTestCase):
     def test_peers_read_what_the_forecast_already_fetched_and_fetch_the_rest_only_once(self):
@@ -103,6 +118,14 @@ class SharedBetweenLinesTests(SharedCacheTestCase):
         self.assertEqual(self.net.symbols(), ["005930.KO"])
         self.assertEqual([bar["close"] for bar in nikkei], [100.0, 101.0])
         self.assertEqual(samsung, again)
+
+    def test_peers_still_mark_a_symbol_stale_when_the_shared_copy_could_not_be_refreshed(self):
+        # 週二抓過三星；週三再要時 EODHD 回額度用完：同類股那一檔要標過期（額度用完），不能把週二的當成今天抓到的。
+        source = op.CachedEodhdSource(self.cache("2026-11-17T10:00:00"))
+        source.daily("005930.KO", datetime(2026, 11, 1).date(), datetime(2026, 11, 17).date())
+        tomorrow = op.CachedEodhdSource(self.cache("2026-11-18T10:00:00", net=FakeEodhd(status=429)))
+        with self.assertRaises(op.QuotaExceeded):
+            tomorrow.daily("005930.KO", datetime(2026, 11, 1).date(), datetime(2026, 11, 18).date())
 
     def test_peers_keep_their_errors_when_nothing_is_cached(self):
         source = op.CachedEodhdSource(self.cache("2026-11-17T10:00:00", net=FakeEodhd(status=429)))
@@ -128,6 +151,36 @@ class FailureTests(SharedCacheTestCase):
         self.assertIsNotNone(raw)
         with self.assertRaises(ec.FetchError):
             self.cache("2026-11-17T12:00:00", token="").raw("NEVER.INDX")
+
+    def test_a_storage_hiccup_never_stops_the_fetch(self):
+        # R2 暫時讀寫不了：照樣向 EODHD 拿（這一次不共用），預測的其他來源不受影響。
+        class Flaky:
+            def get(self, key):
+                raise OSError("R2 503")
+
+            def put(self, key, data):
+                raise OSError("R2 503")
+
+            def keys(self, prefix=""):
+                return []
+
+        raw, meta = ec.SharedEodhd(Flaky(), "k", http=self.net, now=lambda: at("2026-11-17T10:00:00")).raw("N225.INDX")
+        self.assertEqual(json.loads(raw)[-1]["date"], "2026-11-17")
+        self.assertEqual(meta["store_error"], "OSError")
+
+    def test_peers_say_no_key_when_there_is_neither_a_key_nor_a_shared_copy(self):
+        source = op.CachedEodhdSource(self.cache("2026-11-17T10:00:00", token=""))
+        with self.assertRaises(op.SourceError) as caught:
+            source.daily("005930.KO", datetime(2026, 11, 1).date(), datetime(2026, 11, 17).date())
+        self.assertEqual(caught.exception.problem, "no_key")
+
+    def test_without_r2_settings_there_is_no_shared_cache_and_callers_fall_back(self):
+        import os
+        saved = {name: os.environ.pop(name, None) for name in ("R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "CLOUDFLARE_ACCOUNT_ID")}
+        try:
+            self.assertIsNone(ec.SharedEodhd.from_env("k"))
+        finally:
+            os.environ.update({name: value for name, value in saved.items() if value is not None})
 
     def test_the_cache_never_holds_the_key(self):
         self.forecast("2026-11-17T10:00:00", "2026-11-17", "tue-evening")

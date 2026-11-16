@@ -4,21 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { d1OverHttp } from "../lib/d1-http.js";
-import { fakeD1 } from "./helpers.js";
-
-function cloudflare(db, calls) {
-  return async (url, init) => {
-    calls.push({ url: String(url), auth: init.headers.Authorization, body: JSON.parse(init.body) });
-    const { sql, params } = JSON.parse(init.body);
-    try {
-      const statement = db.prepare(sql).bind(...(params || []));
-      const out = /^\s*(SELECT|WITH)\b/i.test(sql) ? await statement.all() : await statement.run();
-      return Response.json({ success: true, errors: [], result: [{ success: true, results: out.results || [], meta: out.meta }] });
-    } catch (error) {
-      return Response.json({ success: false, errors: [{ code: 7500, message: String(error.message) }], result: [] }, { status: 400 });
-    }
-  };
-}
+import { fakeCloudflareD1 as cloudflare, fakeD1 } from "./helpers.js";
 
 test("和 Worker 的資料庫綁定同一個用法：參數由 Cloudflare 那一端代入，first／all／run 都拿得到結果", async () => {
   const calls = [];

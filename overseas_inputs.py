@@ -35,8 +35,9 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from eodhd_cache import ENDPOINT as EODHD_ENDPOINT, FetchError, SharedEodhd  # EODHD 網址只有一份
+
 SCHEMA = "overseas-sources/v1"
-EODHD_ENDPOINT = "https://eodhd.com/api/eod/{symbol}"
 TREASURY_URL = ("https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xml"
                 "?data=daily_treasury_yield_curve&field_tdr_date_value_month={month}")
 FED_BROAD_URL = "https://www.federalreserve.gov/releases/h10/summary/jrxwtfb_nb.htm"
@@ -61,7 +62,8 @@ LICENSES: dict[str, dict[str, Any]] = {
 }
 RECENT_SESSIONS = 5
 # 原件清單（manifest、紀錄）裡每一筆留的欄位。
-_SOURCE_FIELDS = ("name", "source", "url", "status", "fetched_at", "sha256", "bytes", "error_type")
+_SOURCE_FIELDS = ("name", "source", "url", "status", "fetched_at", "sha256", "bytes", "error_type", "shared",
+                  "refresh_error")
 CHANGE_WINDOW = 20
 TREASURY_MONTHS = 3
 EODHD_HISTORY_DAYS = 400  # 免費方案只給約一年，多要也拿不到
@@ -123,7 +125,9 @@ def fetch_sources(out_dir: Path | str, *, reference_date: str, eodhd_token: str,
     reference = date.fromisoformat(reference_date)
     start = (reference - timedelta(days=EODHD_HISTORY_DAYS)).isoformat()
     jobs: list[tuple[str, str, str | None, str]] = []
+    symbol_of: dict[str, str] = {}
     for _, _, symbol, _ in MARKETS:
+        symbol_of[f"eodhd-{symbol}"] = symbol
         base = EODHD_ENDPOINT.format(symbol=symbol)
         shown = f"{base}?api_token=REDACTED&fmt=json&period=d&from={start}&to={reference_date}"
         url = None if not eodhd_token else base + "?" + urllib.parse.urlencode(
@@ -139,7 +143,7 @@ def fetch_sources(out_dir: Path | str, *, reference_date: str, eodhd_token: str,
     for name, source, url, shown in jobs:
         entry: dict[str, Any] = {"name": name, "source": source, "url": shown}
         if source == "eodhd" and eodhd_cache is not None:
-            entries.append(_from_shared(folder, entry, name.removeprefix("eodhd-"), eodhd_cache))
+            entries.append(_from_shared(folder, entry, symbol_of[name], eodhd_cache))
             continue
         if url is None:
             entries.append({**entry, "status": "error", "error_type": "missing_key"})
@@ -160,11 +164,10 @@ def fetch_sources(out_dir: Path | str, *, reference_date: str, eodhd_token: str,
 
 
 def _from_shared(folder: Path, entry: dict[str, Any], symbol: str, cache: Any) -> dict[str, Any]:
-    from eodhd_cache import FetchError
     try:
         content, meta = cache.raw(symbol)
     except FetchError as error:
-        kind = "missing_key" if not cache.token else (f"HTTP {error.status}" if error.status else "FetchError")
+        kind = f"HTTP {error.status}" if error.kind == "http" else error.kind
         return {**entry, "status": "error", "error_type": kind}
     (folder / f"{entry['name']}.raw").write_bytes(content)
     return {**entry, "url": meta.get("url", entry["url"]), "status": "ok", "fetched_at": meta["fetched_at"],
@@ -430,11 +433,7 @@ def main(argv: list[str] | None = None) -> int:
     if not reference:
         parser.error("要給 --reference-date 或內含日 K 的 --analysis")
     token = os.environ.get("EODHD_API_KEY", "").strip()
-    cache = None
-    if args.shared_cache:
-        from eodhd_cache import SharedEodhd
-        from state_sync import R2Store
-        cache = SharedEodhd(R2Store.from_env(), token)
+    cache = SharedEodhd.from_env(token) if args.shared_cache else None   # R2 設定不齊時照原本的做法
     manifest = fetch_sources(args.out, reference_date=reference, eodhd_token=token, eodhd_cache=cache)
     summary = {entry["name"]: entry["status"] if entry["status"] == "ok" else entry.get("error_type")
                for entry in manifest["sources"]}

@@ -719,10 +719,10 @@ def main(argv: list[str] | None = None) -> int:
                                                                        ("eodhd", "EODHD_API_KEY"))}
         sources = {"massive": op.MassiveSource(keys["massive"]) if keys["massive"] else None,
                    "eodhd": op.EodhdSource(keys["eodhd"]) if keys["eodhd"] else None}
-        if args.shared_cache:
-            from eodhd_cache import SharedEodhd
-            from state_sync import R2Store
-            sources["eodhd"] = op.CachedEodhdSource(SharedEodhd(R2Store.from_env(), keys["eodhd"]))
+        from eodhd_cache import SharedEodhd
+        shared = SharedEodhd.from_env(keys["eodhd"]) if args.shared_cache else None
+        if shared is not None:
+            sources["eodhd"] = op.CachedEodhdSource(shared)
         today = datetime.now(TAIPEI).date().isoformat()
         result = _in_ledger(args.ledger, args.dry_run, lambda target: nominate_peers(
             target, stocks, owner_email=owner.lower(), model_bin=args.agy_bin, model=args.model,

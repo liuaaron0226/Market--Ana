@@ -22,11 +22,12 @@ const check = await sendPush({ endpoint: "https://web.push.apple.com/self-check"
   { title: "self-check" }, secrets, { fetchImpl: async () => new Response(null, { status: 201 }) });
 if (!check.ok) throw new Error("金鑰自我檢查失敗，沒有寫入任何設定");
 
+// GitHub 排第一個：它最容易因為權限失敗，失敗時其他兩處都還沒動，三處的金鑰不會不一致。
 const targets = [
-  ["網站 market-ana", "npx -y wrangler@4 pages secret put %s --project-name market-ana"],
-  ["排程程式 market-ana-cron-trigger", "npx -y wrangler@4 secret put %s --name market-ana-cron-trigger"],
   // gh secret set 沒給 --body 時從標準輸入讀值。
   ["GitHub liuaaron0226/Market--Ana", "gh secret set %s --repo liuaaron0226/Market--Ana"],
+  ["排程程式 market-ana-cron-trigger", "npx -y wrangler@4 secret put %s --name market-ana-cron-trigger"],
+  ["網站 market-ana", "npx -y wrangler@4 pages secret put %s --project-name market-ana"],
 ];
 
 if (dryRun) {
@@ -45,7 +46,7 @@ for (const [label, command] of [["GitHub CLI（gh auth login）", "gh auth statu
 }
 for (const [label, template] of targets) {
   for (const [name, value] of Object.entries(secrets)) {
-    // 值從標準輸入送進 wrangler，不出現在指令列、畫面或檔案裡。
+    // 值從標準輸入送進 wrangler／gh，不出現在指令列、畫面或檔案裡。
     execSync(template.replace("%s", name), { input: value, stdio: ["pipe", "ignore", "inherit"] });
     console.log(`已寫入 ${label} 的 ${name}`);
   }

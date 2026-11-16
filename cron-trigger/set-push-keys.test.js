@@ -9,6 +9,8 @@ test("乾跑列出三個要寫的地方（網站、排程程式、GitHub），�
   assert.match(out, /網站 market-ana/);
   assert.match(out, /排程程式 market-ana-cron-trigger/);
   assert.match(out, /GitHub liuaaron0226\/Market--Ana/);
+  // GitHub 最容易因為權限失敗，排第一個寫：它失敗時其他兩處都還沒動，不會三處的金鑰不一致。
+  assert.match(out, /寫進：GitHub liuaaron0226\/Market--Ana、/);
   // P-256 私鑰是 43 字的 base64url、公鑰 87 字：畫面上不能出現這種長度的字串。
   assert.doesNotMatch(out, /[A-Za-z0-9_-]{40,}/);
 });

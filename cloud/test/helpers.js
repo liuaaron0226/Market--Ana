@@ -83,3 +83,19 @@ export function fetchJwks(jwks) {
     return new Response(JSON.stringify(jwks), { headers: { "content-type": "application/json" } });
   };
 }
+
+// Cloudflare API 的 D1 /query（GitHub 排程用的 lib/d1-http.js 打的那一支）的假回應，背後是 fakeD1 的本機 SQLite。
+// calls 會記下每一次的網址、權杖與送出的 { sql, params }。
+export function fakeCloudflareD1(db, calls = []) {
+  return async (url, init) => {
+    const body = JSON.parse(init.body);
+    calls.push({ url: String(url), auth: init.headers.Authorization, body });
+    try {
+      const statement = db.prepare(body.sql).bind(...(body.params || []));
+      const out = /^\s*(SELECT|WITH)\b/i.test(body.sql) ? await statement.all() : await statement.run();
+      return Response.json({ success: true, errors: [], result: [{ success: true, results: out.results || [], meta: out.meta }] });
+    } catch (error) {
+      return Response.json({ success: false, errors: [{ code: 7500, message: String(error.message) }], result: [] }, { status: 400 });
+    }
+  };
+}

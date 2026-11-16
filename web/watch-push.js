@@ -29,6 +29,15 @@
     const text = atob(base64url.replace(/-/g, '+').replace(/_/g, '/'));
     return Uint8Array.from(text, c => c.charCodeAt(0));
   };
+  // 這台瀏覽器的訂閱是不是綁現在的推播公開金鑰（本人 11-17 換過金鑰之後，舊訂閱送不到，要重新訂閱）。
+  // 讀不到綁哪一把時（少數瀏覽器）當成相同，照原本的做法。
+  const sameServerKey = (subscription, publicKey) => {
+    const bound = subscription?.options?.applicationServerKey;
+    if (!bound) return true;
+    const want = keyBytes(publicKey);
+    const have = new Uint8Array(bound);
+    return have.length === want.length && have.every((byte, i) => byte === want[i]);
+  };
   const el = (tag, className, text) => {
     const node = document.createElement(tag);
     if (className) node.className = className;
@@ -78,6 +87,14 @@
       try {
         registration = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
         mine = await registration.pushManager.getSubscription();
+        // 綁的是舊金鑰：先把舊的退訂、從清單拿掉，畫面顯示「沒打開」，勾回來就用新金鑰訂閱。
+        if (mine && !sameServerKey(mine, info.public_key)) {
+          const stale = mine.endpoint;
+          await api('/api/watch/push', { method: 'DELETE', body: { endpoint: stale } }).catch(() => {});
+          await mine.unsubscribe().catch(() => {});
+          mine = null;
+          info.devices = info.devices.filter(device => device.endpoint !== stale);
+        }
       } catch (_) { registration = null; }
     }
     const registered = mine && info.devices.some(device => device.endpoint === mine.endpoint);

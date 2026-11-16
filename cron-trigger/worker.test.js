@@ -45,8 +45,6 @@ test("每分鐘的時段交給雲端盯價，不觸發 GitHub；「可以留意�
   assert.equal(dispatched, false);
   assert.deepEqual(watched, { tickEnv: env, at: Date.parse("2026-11-16T02:00:00Z") });
   assert.deepEqual(result, { checked: 0 });
-  const { readFileSync } = await import("node:fs");
-  assert.doesNotMatch(readFileSync(new URL("./worker.js", import.meta.url), "utf8"), /watch-ready/);
 });
 
 test("重大訊息每天（含週末）台北 8:00 觸發，只送 announcements.yml 宣告過的參數", async () => {

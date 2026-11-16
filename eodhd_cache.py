@@ -28,6 +28,8 @@ ENDPOINT = "https://eodhd.com/api/eod/{symbol}"
 HISTORY_DAYS = 400
 UTC = timezone.utc
 CLOSES = {"us": time(22, 0), "asia": time(8, 0)}
+# 收盤之後抓到的那一份還沒有那一天（EODHD 還沒更新）：下一次要再抓；過了這麼久還是沒有，就當那天休市、不再一直重抓。
+SETTLE = timedelta(hours=6)
 # 美國的指數（其他 .INDX 不認得就兩邊都算）。韓股 .KO／.KQ 與日韓指數看亞洲收盤。
 US_INDICES = {"GSPC", "IXIC", "DJI", "NDX", "RUT", "SOX", "VIX", "NYA", "XAX"}
 ASIA_INDICES = {"N225", "KS11", "KQ11", "HSI", "SSEC", "TWII", "STI", "AXJO"}
@@ -35,11 +37,12 @@ _SYMBOL = re.compile(r"^[0-9A-Z.^]{2,20}$")
 
 
 class FetchError(Exception):
-    """抓不到，也沒有舊的一份可用。``status`` 是 EODHD 回的 HTTP 狀態（連線失敗是 None）。"""
+    """抓不到，也沒有舊的一份可用。``kind``：missing_key／invalid_symbol／http／network／format；
+    ``status`` 是 EODHD 回的 HTTP 狀態（不是 HTTP 錯誤時是 None）。"""
 
-    def __init__(self, message: str, status: int | None = None):
+    def __init__(self, message: str, kind: str, status: int | None = None):
         super().__init__(message)
-        self.status = status
+        self.kind, self.status = kind, status
 
 
 def market_zone(symbol: str) -> str:
@@ -70,9 +73,32 @@ def _iso(moment: datetime) -> str:
     return moment.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def _last_date(body: bytes) -> str | None:
+    try:
+        days = [str(row.get("date") or "") for row in json.loads(body) if isinstance(row, dict)]
+    except (ValueError, UnicodeDecodeError, TypeError):
+        return None
+    return max(days) if days else None
+
+
+def _fresh(meta: dict[str, Any], close: datetime) -> bool:
+    """共用的那一份能不能直接用：是在最近一次收盤之後抓的，而且有那一天的收盤（或抓的時候已經是收盤後好幾小時，
+    那天大概休市）。"""
+    fetched = meta.get("fetched_at", "")
+    if fetched < _iso(close):
+        return False
+    return (meta.get("last_date") or "") >= close.date().isoformat() or fetched >= _iso(close + SETTLE)
+
+
 def _default_http(url: str) -> tuple[int, bytes]:
-    from overseas_peers import default_http
-    return default_http(url)
+    import urllib.error
+    import urllib.request
+    request = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "market-ana-eodhd-cache"})
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            return response.status, response.read()
+    except urllib.error.HTTPError as error:
+        return error.code, error.read() or b""
 
 
 class SharedEodhd:
@@ -85,8 +111,23 @@ class SharedEodhd:
         self.now = now or (lambda: datetime.now(UTC))
         self.calls = 0
 
+    @classmethod
+    def from_env(cls, token: str) -> "SharedEodhd | None":
+        """排程用：連 R2（state_sync 的設定）。R2 的設定不齊時回 None，呼叫的人照原本的做法直接打 EODHD。"""
+        from state_sync import R2Store
+        try:
+            return cls(R2Store.from_env(), token)
+        except (SystemExit, Exception):  # noqa: BLE001 — 沒有共用快取不擋抓取
+            return None
+
+    def _get(self, key: str) -> bytes | None:
+        try:
+            return self.store.get(key)
+        except Exception:  # noqa: BLE001 — R2 讀不到就當作沒有共用的那一份
+            return None
+
     def _cached(self, symbol: str) -> tuple[bytes | None, dict[str, Any] | None]:
-        meta_bytes, raw = self.store.get(f"{PREFIX}{symbol}.meta.json"), self.store.get(f"{PREFIX}{symbol}.raw")
+        meta_bytes, raw = self._get(f"{PREFIX}{symbol}.meta.json"), self._get(f"{PREFIX}{symbol}.raw")
         if not meta_bytes or raw is None:
             return None, None
         try:
@@ -98,15 +139,15 @@ class SharedEodhd:
 
     def raw(self, symbol: str) -> tuple[bytes, dict[str, Any]]:
         if not _SYMBOL.fullmatch(symbol or ""):
-            raise FetchError(f"代號不合法：{symbol!r}")
+            raise FetchError(f"代號不合法：{symbol!r}", "invalid_symbol")
         now = self.now()
         raw, meta = self._cached(symbol)
-        if raw is not None and meta.get("fetched_at", "") >= _iso(last_close(market_zone(symbol), now)):
+        if raw is not None and _fresh(meta, last_close(market_zone(symbol), now)):
             return raw, {**meta, "shared": True}
         if not self.token:
             if raw is not None:
-                return raw, {**meta, "shared": True, "refresh_error": "missing_key"}
-            raise FetchError("沒有 EODHD 金鑰，也沒有共用的那一份")
+                return raw, {**meta, "shared": True, "refresh_error": "missing_key", "refresh_kind": "missing_key"}
+            raise FetchError("沒有 EODHD 金鑰，也沒有共用的那一份", "missing_key")
         start = (now.astimezone(UTC).date() - timedelta(days=HISTORY_DAYS)).isoformat()
         end = now.astimezone(UTC).date().isoformat()
         query = {"fmt": "json", "period": "d", "from": start, "to": end}
@@ -115,24 +156,30 @@ class SharedEodhd:
         try:
             status, body = self.http(url)
         except Exception as error:  # noqa: BLE001 — 連線失敗：有舊的就用舊的
-            status, body, problem = None, b"", type(error).__name__
+            status, body, problem, kind = None, b"", type(error).__name__, "network"
         else:
-            problem = None if status == 200 and body else f"HTTP {status}"
+            problem, kind = (None, None) if status == 200 and body else (f"HTTP {status}", "http")
         if problem is None:
             try:
                 if not isinstance(json.loads(body), list):
-                    problem = "format"
+                    problem, kind = "format", "format"
             except (ValueError, UnicodeDecodeError):
-                problem = "format"
+                problem, kind = "format", "format"
         if problem is not None:
             if raw is not None:
-                return raw, {**meta, "shared": True, "refresh_error": problem}
-            raise FetchError(f"EODHD {symbol}：{problem}", status)
-        meta = {"symbol": symbol, "fetched_at": _iso(now), "from": start, "to": end, "bytes": len(body),
+                return raw, {**meta, "shared": True, "refresh_error": problem, "refresh_kind": kind,
+                             "refresh_status": status if kind == "http" else None}
+            raise FetchError(f"EODHD {symbol}：{problem}", kind, status if kind == "http" else None)
+        meta = {"symbol": symbol, "fetched_at": _iso(now), "from": start, "to": end, "last_date": _last_date(body),
+                "bytes": len(body),
                 "sha256": hashlib.sha256(body).hexdigest(),
                 "url": ENDPOINT.format(symbol=symbol) + "?" + urllib.parse.urlencode(
                     {"api_token": "REDACTED", **query})}
         # 先寫原件再寫 meta：讀的人以 meta 的雜湊核對，寫到一半的不會被當成新的一份。
-        self.store.put(f"{PREFIX}{symbol}.raw", body)
-        self.store.put(f"{PREFIX}{symbol}.meta.json", json.dumps(meta, ensure_ascii=False).encode("utf-8"))
+        # R2 暫時寫不進去：這一次拿到的照樣用（額度已經花了），只是沒有共用到。
+        try:
+            self.store.put(f"{PREFIX}{symbol}.raw", body)
+            self.store.put(f"{PREFIX}{symbol}.meta.json", json.dumps(meta, ensure_ascii=False).encode("utf-8"))
+        except Exception as error:  # noqa: BLE001
+            return body, {**meta, "shared": False, "store_error": type(error).__name__}
         return body, {**meta, "shared": False}
