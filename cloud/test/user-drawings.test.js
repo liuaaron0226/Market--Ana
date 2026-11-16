@@ -114,7 +114,7 @@ test("不合法的代號、識別碼、種類、日期、價格、錨點個數�
   }
   const bad = [
     { kind: "circle", anchors: [{ date: "2026-11-13", price: 1000 }] },
-    { kind: "trend", anchors: [{ date: "2026-11-13", price: 1000 }, { date: "2026-11-14", price: 1010 }] }, // 這張票只開放水平線
+    { kind: "rect", anchors: [{ date: "2026-11-13", price: 1000 }, { date: "2026-11-14", price: 1010 }] }, // 矩形還沒開放（票 03 開放了趨勢線與射線，這一列原本用趨勢線）
     { anchors: [{ date: "2026-11-13", price: 1000 }] },
     { kind: "hline" },
     { kind: "hline", anchors: [] },
@@ -242,4 +242,64 @@ test("滿 200 條時刪掉一條，就能再畫一條新的", async () => {
   assert.equal((await req("/api/drawings/2330/line-0007", { method: "DELETE" })).status, 204);
   assert.equal((await req("/api/drawings/2330/line-0200", { method: "PUT", body: hline(5) })).status, 201);
   assert.equal((await listOf("2330")).length, 200);
+});
+
+// ---------- 票 03：趨勢線與射線（兩個錨點） ----------
+
+const twoPoint = (kind, from = ["2026-10-01", 1000], to = ["2026-11-13", 1085.5]) =>
+  ({ kind, anchors: [{ date: from[0], price: from[1] }, { date: to[0], price: to[1] }] });
+
+test("趨勢線與射線各存兩個錨點：讀回來時兩端的日期、價位與先後順序都和寫入時相同", async () => {
+  const trend = await req("/api/drawings/2330/trend-0001", { method: "PUT", body: twoPoint("trend") });
+  assert.equal(trend.status, 201);
+  assert.deepEqual(await trend.json(), {
+    id: "trend-0001", kind: "trend", anchors: [{ date: "2026-10-01", price: 1000 }, { date: "2026-11-13", price: 1085.5 }], text: "",
+    created_at: "2026-11-14T06:00:00.000Z", updated_at: "2026-11-14T06:00:00.000Z",
+  });
+  // 射線的第一點可以比第二點晚（先點右邊再點左邊）：順序照寫入的，不重排。
+  assert.equal((await req("/api/drawings/2330/ray-00001", { method: "PUT", body: twoPoint("ray", ["2026-11-13", 1085.5], ["2026-10-01", 1000]) })).status, 201);
+  await req("/api/drawings/2330/line-0001", { method: "PUT", body: hline(1050) });
+
+  assert.deepEqual((await listOf("2330")).map((item) => [item.id, item.kind, item.anchors]), [
+    ["line-0001", "hline", [{ date: "2026-11-13", price: 1050 }]],
+    ["ray-00001", "ray", [{ date: "2026-11-13", price: 1085.5 }, { date: "2026-10-01", price: 1000 }]],
+    ["trend-0001", "trend", [{ date: "2026-10-01", price: 1000 }, { date: "2026-11-13", price: 1085.5 }]],
+  ]);
+});
+
+test("拖動端點後以同一個識別碼覆寫：仍是同一條，兩個錨點換成新的；同日不同價（直的線）也收", async () => {
+  await req("/api/drawings/2330/trend-0001", { method: "PUT", body: twoPoint("trend") });
+  const again = await req("/api/drawings/2330/trend-0001", { method: "PUT", body: twoPoint("trend", ["2026-10-01", 1000], ["2026-10-01", 1020]) });
+  assert.equal(again.status, 200);
+  assert.deepEqual((await listOf("2330")).map((item) => item.anchors), [[{ date: "2026-10-01", price: 1000 }, { date: "2026-10-01", price: 1020 }]]);
+});
+
+test("別的帳號讀不到、蓋不掉也刪不到我的趨勢線", async () => {
+  await req("/api/drawings/2330/trend-0001", { method: "PUT", body: twoPoint("trend") });
+  assert.deepEqual(await listOf("2330", { email: "b@example.com" }), []);
+  assert.equal((await req("/api/drawings/2330/trend-0001", { email: "b@example.com", method: "PUT", body: twoPoint("ray") })).status, 201);
+  assert.equal((await req("/api/drawings/2330/trend-0001", { email: "b@example.com", method: "DELETE" })).status, 204);
+  assert.deepEqual((await listOf("2330")).map((item) => [item.kind, item.anchors.length]), [["trend", 2]]);
+  assert.equal((await req("/api/drawings/2330/trend-0001", { method: "DELETE" })).status, 204);
+  assert.deepEqual(await listOf("2330"), []);
+});
+
+test("趨勢線與射線的不合法輸入被拒：錨點不是剛好兩個、兩點完全相同、第二個錨點的日期或價格不對、帶文字", async () => {
+  const put = (body) => req("/api/drawings/2330/trend-0001", { method: "PUT", body });
+  const first = { date: "2026-10-01", price: 1000 };
+  for (const kind of ["trend", "ray"]) {
+    const bad = [
+      { kind, anchors: [first] },
+      { kind, anchors: [first, { date: "2026-11-13", price: 1010 }, { date: "2026-11-14", price: 1020 }] },
+      { kind, anchors: [first, { ...first }] }, // 兩點落在同一位置：看不見也選不到的線
+      { kind, anchors: [first, { date: "2026-02-30", price: 1010 }] },
+      { kind, anchors: [first, { date: "2026-11-13", price: 0 }] },
+      { kind, anchors: [first, { date: "2026-11-13", price: "1010" }] },
+      { kind, anchors: [first, { date: "2026-11-13", price: 1e9 }] },
+      { kind, anchors: [first, null] },
+      { kind, anchors: [first, { date: "2026-11-13", price: 1010 }], text: "線上不帶文字" },
+    ];
+    for (const body of bad) assert.equal((await put(body)).status, 400, JSON.stringify(body));
+  }
+  assert.equal((await env.DB.prepare("SELECT COUNT(*) AS n FROM user_drawings").first()).n, 0);
 });

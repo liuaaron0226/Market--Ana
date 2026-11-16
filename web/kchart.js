@@ -1,6 +1,6 @@
 /* 可拖曳／縮放的K線圖（原生Canvas，無外部套件）。
    互動：滑鼠拖曳或單指左右平移；滾輪、雙指捏合或＋／−按鈕縮放；鍵盤左右鍵平移、+/- 縮放；點擊或移動顯示十字線。
-   有畫線時：點線選取、拖已選取的線移動、Delete 刪除、Esc 取消選取或放下工具。
+   有畫線時：點線選取、拖已選取的線移動（拖端點把手只動那一端）、Delete 刪除、Esc 取消選取或放下工具。
    資料：candles=[{t,label,open,high,low,close,amount}] 由舊到新。overlays 可放判斷線。
    畫線（選用）：頁面先載入 chart-drawings.js 並傳 opts.drawings={onChange,onTool,onSelect}，
    再用 setTool／setDrawings／deleteSelectedDrawing／cancelDrawing 操作。 */
@@ -98,7 +98,7 @@
       if (this.drawings) this.drawings.dataChanged();
       this.draw(); this.emit();
     }
-    // 畫線：目前要用的工具（'hline'；null＝一般模式），以及這張圖上的整組畫線（[{id,kind,anchors:[{date,price}]}]）。
+    // 畫線：目前要用的工具（'trend'、'hline'、'ray'；null＝一般模式），以及這張圖上的整組畫線（[{id,kind,anchors:[{date,price}]}]）。
     setTool(kind) { if (this.drawings) { this.drawings.setTool(kind); this.draw(); } }
     setDrawings(list) { if (this.drawings) { this.drawings.load(list); this.draw(); } }
     // 刪除目前選取的那一條，回傳有沒有刪（沒有選取就不做事）；放下工具並取消選取（Esc 做的事）。
@@ -160,8 +160,8 @@
       const geo = () => this.geo;
       c.addEventListener('pointerdown', e => {
         c.setPointerCapture(e.pointerId); pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        const rect = c.getBoundingClientRect();
         if (pts.size === 1) {
-          const rect = c.getBoundingClientRect();
           // 起點落在已選取的畫線上：這次拖曳是移動那條線，圖表不平移。
           drag = c === this.canvas && this.drawings && this.drawings.grab(e.clientX - rect.left, e.clientY - rect.top, e.pointerType)
             ? { kind: 'drawing', moved: false, hadPinch: false }
@@ -170,6 +170,8 @@
         // 拖線途中放上第二指：線回原位，改成雙指縮放。
         if (pts.size === 2 && drag?.kind === 'drawing') { this.drawings.drop(false); this.draw(); }
         if (pts.size === 2) { const xs = [...pts.values()].map(point => point.x); drag = { kind: 'pinch', pinch: Math.max(20, Math.abs(xs[0] - xs[1])), count: this.view.count, end: this.view.end, hadPinch: true, studySwipe: c !== this.canvas && !!this.studies }; }
+        // 兩點畫線點了第一下之後：手指一按下去，預覽線就跟到手指的位置（手機沒有游標可以先移過去）。
+        if (c === this.canvas && this.drawings && this.drawings.trackPointer(e.clientX - rect.left, e.clientY - rect.top)) this.draw();
         c.style.cursor = 'grabbing';
         if (drag?.studySwipe) { this.hover = this.selection; this.draw(); }
       });
@@ -179,6 +181,7 @@
         const rect = c.getBoundingClientRect(); const x = e.clientX - rect.left;
         // moved 一旦成立就不收回：拖到一半線被換掉或按了 Esc，放開時也不會被當成一次點擊。
         if (drag?.kind === 'drawing') { drag.moved = this.drawings.dragTo(x, e.clientY - rect.top) || drag.moved; this.draw(); return; }
+        if (c === this.canvas && this.drawings) this.drawings.trackPointer(x, e.clientY - rect.top); // 預覽線跟著游標或手指
         if (drag?.kind === 'pinch' && pts.size === 2) {
           if (drag.studySwipe) return;
           const xs = [...pts.values()].map(point => point.x); const d = Math.max(20, Math.abs(xs[0] - xs[1]));

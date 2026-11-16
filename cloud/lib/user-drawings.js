@@ -6,8 +6,8 @@ const DRAWINGS_LIMIT = 200;
 const MAX_PRICE = 10_000_000;
 const ID_RE = /^[A-Za-z0-9_-]{8,40}$/;
 const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
-// 種類 → 錨點個數。之後的票（趨勢線、射線、矩形、黃金分割、文字）在這裡加一行。
-const ANCHOR_COUNT = { hline: 1 };
+// 種類 → 錨點個數。之後的票（矩形、黃金分割、文字）在這裡加一行。
+const ANCHOR_COUNT = { hline: 1, trend: 2, ray: 2 };
 
 function isCalendarDate(value) {
   const parts = typeof value === "string" ? DATE_RE.exec(value) : null;
@@ -30,6 +30,10 @@ function drawingInput(body) {
     if (typeof anchor.price !== "number" || !Number.isFinite(anchor.price) || anchor.price <= 0 || anchor.price > MAX_PRICE) {
       throw new UserPortfolioError(400, "錨點價格須為正的有限數值");
     }
+  }
+  // 兩個錨點完全相同的線只是一個點，畫出來看不見也選不到。
+  if (anchors.length === 2 && anchors[0].date === anchors[1].date && anchors[0].price === anchors[1].price) {
+    throw new UserPortfolioError(400, "兩個錨點不能在同一位置");
   }
   if (body.text !== undefined && body.text !== "") throw new UserPortfolioError(400, "這種畫線不帶文字");
   return { kind, anchors: anchors.map(({ date, price }) => ({ date, price })), text: "" };

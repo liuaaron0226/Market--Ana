@@ -1,5 +1,6 @@
 """畫線工具的本機瀏覽器旅程（桌機與手機寬度各走一遍）。
 票 01：水平線畫得出來，而且存得住。票 02：點線選取、拖動、刪除（工具列與 Delete）、Esc。
+票 03：趨勢線與射線——點兩下成線、預覽線、取消、拖整條、拖端點、切日週月、重新整理後仍在。
 
 用真正的 gate.handle＋cloud/dist＋記憶體資料庫（cloud/test/journey-server.mjs），Access 由 cookie 模擬；
 不連正式站、不碰 8876／8897。先在 cloud/ 跑過 `node build.mjs` 讓 dist 是最新的。
@@ -60,6 +61,24 @@ HANDLE_JS = """lineY => {
   let hits = 0;
   for (let i = 0; i < data.length; i += 4) if (Math.abs(data[i] - r) + Math.abs(data[i + 1] - g) + Math.abs(data[i + 2] - b) < 60) hits++;
   return hits;
+}"""
+
+# 畫布上藍紫色（畫線色，含預覽線的淡色與斜線邊緣半透明的像素）的像素：個數與外框（CSS 像素，相對畫布左上角）。
+# 圖表其他東西是紅、綠、橘、金與帶一點藍的灰，藍得沒這麼明顯（幾乎透明的邊緣像素也不算）；斜線沒辦法像水平線那樣用「整列都是畫線色」來認。
+INK_JS = """() => {
+  const canvas = document.querySelector('#chartHost canvas');
+  const { width, height } = canvas;
+  const data = canvas.getContext('2d').getImageData(0, 0, width, height).data;
+  const scale = height / canvas.getBoundingClientRect().height;
+  let count = 0, minX = width, maxX = -1, minY = height, maxY = -1;
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    const i = (y * width + x) * 4;
+    if (data[i + 3] > 200 && data[i + 2] > 150 && data[i + 2] - data[i] > 30 && data[i + 2] - data[i + 1] > 25) {
+      count++; minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+    }
+  }
+  const css = value => Math.round(value / scale * 10) / 10;
+  return count ? { count, minX: css(minX), maxX: css(maxX), minY: css(minY), maxY: css(maxY), width: css(width) } : { count: 0, width: css(width) };
 }"""
 
 # 時間軸那一條（畫布最下面）的像素指紋：圖表有沒有平移，看它變了沒有。
@@ -142,6 +161,13 @@ class Journey:
         box = page.locator("#chartHost canvas").bounding_box()
         return box["x"] + box["width"] * fx, box["y"] + canvas_y
 
+    def ink(self, page) -> dict:
+        return page.evaluate(INK_JS)
+
+    def at(self, page, canvas_x: float, canvas_y: float) -> tuple[float, float]:
+        box = page.locator("#chartHost canvas").bounding_box()
+        return box["x"] + canvas_x, box["y"] + canvas_y
+
     def draw(self, page, fx: float, fy: float, touch: bool = False) -> float:
         tool = page.locator("#drawTools button[data-tool=hline]")
         x, y, canvas_y = self.point(page, fx, fy)
@@ -169,7 +195,7 @@ def desktop(journey: Journey, browser) -> None:
     tool.hover()
     page.wait_for_timeout(700)
     journey.check("滑鼠停留顯示「水平線」", page.evaluate(
-        "() => { const style = getComputedStyle(document.querySelector('#drawTools button'), '::after'); return style.content + '|' + style.opacity; }") == '"水平線"|1')
+        "() => { const style = getComputedStyle(document.querySelector('#drawTools button[data-tool=hline]'), '::after'); return style.content + '|' + style.opacity; }") == '"水平線"|1')
     page.mouse.move(5, 5)
     tool.focus()
     page.keyboard.press("Enter")
@@ -274,7 +300,7 @@ def mobile(journey: Journey, browser) -> None:
 
     tool.dispatch_event("pointerdown", {"pointerType": "touch", "pointerId": 7, "bubbles": True})
     page.wait_for_timeout(650)
-    shown = page.evaluate("() => getComputedStyle(document.querySelector('#drawTools button'), '::after').opacity")
+    shown = page.evaluate("() => getComputedStyle(document.querySelector('#drawTools button[data-tool=hline]'), '::after').opacity")
     page.locator(".bd-chart").screenshot(path=str(OUT / "mobile-01-longpress.png"))
     tool.dispatch_event("pointerup", {"pointerType": "touch", "pointerId": 7, "bubbles": True})
     tool.dispatch_event("click", {"bubbles": True})
@@ -528,6 +554,255 @@ def edit_mobile(journey: Journey, browser) -> None:
     context.close()
 
 
+def spans(ink: dict, a: tuple[float, float], b: tuple[float, float], slack_x: float = 10, slack_y: float = 7) -> bool:
+    """畫線色像素的外框是不是剛好框住 a、b 兩點（端點對在 K 棒正中央，所以橫向容許半根多一點；外框含把手的半徑）。"""
+    if not ink.get("count"):
+        return False
+    return (abs(ink["minX"] - min(a[0], b[0])) <= slack_x and abs(ink["maxX"] - max(a[0], b[0])) <= slack_x
+            and abs(ink["minY"] - min(a[1], b[1])) <= slack_y and abs(ink["maxY"] - max(a[1], b[1])) <= slack_y)
+
+
+def two_point_desktop(journey: Journey, browser) -> None:
+    print("票 03｜桌機寬度 1280：趨勢線與射線")
+    code = "2303"
+    context = journey.context(browser, OWNER, viewport={"width": 1280, "height": 900})
+    page = journey.open(context, code)
+    tools = page.locator("#drawTools")
+    trend, ray = tools.locator("button[data-tool=trend]"), tools.locator("button[data-tool=ray]")
+    delete = page.locator("#drawDelete")
+    box = page.locator("#chartHost canvas").bounding_box()
+    width, height = box["width"], box["height"]
+    a, b = (round(width * 0.35), round(height * 0.62)), (round(width * 0.6), round(height * 0.3))  # 畫布座標
+    mid = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
+
+    order = page.evaluate("() => [...document.querySelectorAll('#drawTools button[data-tool]')].map(button => button.dataset.tool + ':' + button.getAttribute('aria-label') + ':' + button.textContent.trim())")
+    journey.check("工具列依序是趨勢線、水平線、射線，只有圖示、各有可讀名稱", order == ["trend:趨勢線:", "hline:水平線:", "ray:射線:"], order)
+    for button, name in [(trend, "趨勢線"), (ray, "射線")]:
+        button.hover()
+        page.wait_for_timeout(700)
+        tip = button.evaluate("button => { const style = getComputedStyle(button, '::after'); return style.content + '|' + style.opacity; }")
+        journey.check(f"滑鼠停留顯示「{name}」", tip == f'"{name}"|1', tip)
+    page.mouse.move(5, 5)
+    journey.check("起點：這一檔沒有畫線，圖上沒有畫線色", journey.saved(page, code) == [] and journey.ink(page)["count"] == 0, journey.ink(page))
+
+    trend.click()
+    journey.check("選了趨勢線：工具列看得出已選中", trend.get_attribute("aria-pressed") == "true")
+    page.mouse.click(*journey.at(page, *a))
+    first = journey.ink(page)
+    journey.check("點第一下：起點出現記號，還沒有線、也還沒儲存，工具留著", 0 < first["count"] and first["maxX"] - first["minX"] <= 12
+                  and journey.saved(page, code) == [] and trend.get_attribute("aria-pressed") == "true", first)
+    page.mouse.move(*journey.at(page, *b), steps=8)
+    preview = journey.ink(page)
+    journey.check("移動游標：預覽線從起點跟到游標", spans(preview, a, b) and journey.saved(page, code) == [], {"ink": preview, "a": a, "b": b})
+    page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-08-trend-preview.png"))
+    page.keyboard.press("Escape")
+    journey.check("按 Esc：預覽線與起點記號都消失、工具放下、什麼都沒存", journey.ink(page)["count"] == 0
+                  and trend.get_attribute("aria-pressed") == "false" and journey.saved(page, code) == [])
+
+    trend.click()
+    page.mouse.click(*journey.at(page, *a))
+    trend.click()
+    page.mouse.move(*journey.at(page, *b), steps=4)
+    journey.check("點了第一下後再點一次同一個工具：取消，不留下半條線", journey.ink(page)["count"] == 0 and trend.get_attribute("aria-pressed") == "false")
+    page.mouse.click(*journey.at(page, *b))
+    journey.check("取消後點圖照舊顯示 K 棒數值，沒有畫出線", page.locator("#chartHost .kc-tip.show").count() == 1 and journey.saved(page, code) == [])
+    page.keyboard.press("Escape")
+
+    trend.click()
+    page.mouse.click(*journey.at(page, *a))
+    page.mouse.click(*journey.at(page, *a))
+    journey.check("同一個位置連點兩下：不成線，工具與起點留著", journey.saved(page, code) == [] and trend.get_attribute("aria-pressed") == "true")
+    with page.expect_response(drawing_request("PUT")) as created:
+        page.mouse.click(*journey.at(page, *b))
+    page.mouse.move(5, 5)
+    items = journey.saved(page, code)
+    drawn = journey.ink(page)
+    journey.check("點第二下：線畫出來並自動儲存（PUT 回 201），工具回一般模式", created.value.status == 201
+                  and trend.get_attribute("aria-pressed") == "false" and spans(drawn, a, b), {"ink": drawn, "a": a, "b": b})
+    journey.check("雲端存的是一條趨勢線、兩個錨點：起點日期較早、價位較低", len(items) == 1 and items[0]["kind"] == "trend"
+                  and len(items[0]["anchors"]) == 2 and items[0]["anchors"][0]["date"] < items[0]["anchors"][1]["date"]
+                  and items[0]["anchors"][0]["price"] < items[0]["anchors"][1]["price"], items)
+    journey.check("新畫的線沒有被選取", not delete.is_visible())
+    page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-09-trend-drawn.png"))
+    line_id, before = items[0]["id"], items[0]["anchors"]
+
+    page.mouse.click(*journey.at(page, a[0] + 40, a[1]))
+    journey.check("點在線的延長範圍外（起點右邊、離線很遠）：不選取", not delete.is_visible())
+    page.mouse.click(*journey.at(page, mid[0], mid[1] + 4))
+    journey.check("點在線身旁 4px：選取，工具列出現刪除", delete.is_visible())
+    page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-10-trend-selected.png"))
+
+    axis = journey.axis(page)
+    page.mouse.move(*journey.at(page, *mid))
+    page.mouse.down()
+    page.mouse.move(*journey.at(page, mid[0] - 60, mid[1] + 40), steps=6)
+    moving = journey.ink(page)
+    with page.expect_response(drawing_request("PUT")) as moved:
+        page.mouse.up()
+    after = journey.saved(page, code)[0]
+    journey.check("拖線身：整條跟著走，圖表不平移", spans(moving, (a[0] - 60, a[1] + 40), (b[0] - 60, b[1] + 40)) and journey.axis(page) == axis,
+                  {"ink": moving, "a": a, "b": b})
+    # 平移是以「根」為單位，放開後的端點位置從畫面量：選取中，外框比端點多出把手的半徑（約 5px）。
+    placed = journey.ink(page)
+    a2, b2 = (placed["minX"] + 5, placed["maxY"] - 5), (placed["maxX"] - 5, placed["minY"] + 5)
+    drop = [round(before[i]["price"] - after["anchors"][i]["price"], 2) for i in (0, 1)]
+    journey.check("放開後儲存（PUT 回 200，同一條）：兩端的價位降了同樣的幅度、日期都往前", moved.value.status == 200 and after["id"] == line_id
+                  and drop[0] > 0 and abs(drop[0] - drop[1]) <= 0.02
+                  and all(after["anchors"][i]["date"] < before[i]["date"] for i in (0, 1)), {"before": before, "after": after["anchors"]})
+    before = after["anchors"]
+
+    page.mouse.move(*journey.at(page, *b2))
+    page.mouse.down()
+    b3 = (b2[0] + 80, b2[1] - 50)
+    page.mouse.move(*journey.at(page, *b3), steps=6)
+    with page.expect_response(drawing_request("PUT")) as moved:
+        page.mouse.up()
+    after = journey.saved(page, code)[0]
+    reshaped = journey.ink(page)
+    journey.check("拖終點把手：只有那一端移動（往右、往上），起點不動；放開後儲存", moved.value.status == 200
+                  and after["anchors"][0] == before[0] and after["anchors"][1]["price"] > before[1]["price"]
+                  and after["anchors"][1]["date"] > before[1]["date"] and spans(reshaped, a2, b3) and delete.is_visible(),
+                  {"before": before, "after": after["anchors"], "ink": reshaped})
+    page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-11-trend-reshaped.png"))
+    kept = after["anchors"]
+
+    daily = journey.ink(page)
+    for period, name in [("weekly", "週 K"), ("monthly", "月 K")]:
+        journey.choose_period(page, period)
+        ink = journey.ink(page)
+        journey.check(f"{name}：線還在、選取還在，雲端的錨點沒有被改", ink["count"] > 0 and delete.is_visible()
+                      and journey.saved(page, code)[0]["anchors"] == kept, ink)
+        page.locator(".bd-chart").screenshot(path=str(OUT / f"desktop-12-trend-{period}.png"))
+    journey.choose_period(page, "5m")
+    journey.check("分 K：工具列與線都不顯示", not tools.is_visible() and journey.ink(page)["count"] == 0)
+    journey.choose_period(page, "daily")
+    back = journey.ink(page)
+    journey.check("切回日 K：線回到原本的位置", spans(back, a2, b3), {"ink": back, "was": daily})
+
+    page.reload()
+    journey.ready(page, code)
+    reloaded = journey.ink(page)
+    journey.check("重新整理後線還在原位，雲端的錨點相同", spans(reloaded, a2, b3) and journey.saved(page, code)[0]["anchors"] == kept
+                  and not delete.is_visible(), {"ink": reloaded, "a": a2, "b": b3})
+
+    # 射線：畫在另一個位置，穿過第二點一路延伸到繪圖區右緣，不畫進價格軸。
+    ra, rb = (round(width * 0.2), round(height * 0.25)), (round(width * 0.4), round(height * 0.3))
+    alone = journey.ink(page)
+    ray.click()
+    page.mouse.click(*journey.at(page, *ra))
+    page.mouse.move(*journey.at(page, *rb), steps=6)
+    with page.expect_response(drawing_request("PUT")) as created:
+        page.mouse.click(*journey.at(page, *rb))
+    page.mouse.move(5, 5)
+    both = journey.ink(page)
+    items = journey.saved(page, code)
+    rays = [item for item in items if item["kind"] == "ray"]
+    axis_width = 60  # 右側價格軸至少這麼寬（桌機 78 起）
+    journey.check("射線：點兩下成線並儲存，延伸超過第二點、到右緣為止，不畫進價格軸", created.value.status == 201 and len(rays) == 1 and len(items) == 2
+                  and both["maxX"] > rb[0] + 200 and both["maxX"] <= width - axis_width and both["count"] > alone["count"],
+                  {"ink": both, "second": rb, "canvas": width})
+    page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-13-ray-drawn.png"))
+
+    far = (rb[0] + 200, rb[1] + 200 * (rb[1] - ra[1]) / (rb[0] - ra[0]))  # 延伸出去的那一段上的一點
+    page.mouse.click(*journey.at(page, *far))
+    journey.check("射線延伸出去的那一段也點得到", delete.is_visible())
+    with page.expect_response(drawing_request("DELETE")) as removed:
+        page.keyboard.press("Delete")
+    left = journey.saved(page, code)
+    journey.check("按 Delete 刪掉射線：趨勢線還在", removed.value.status == 204 and [item["kind"] for item in left] == ["trend"]
+                  and spans(journey.ink(page), a2, b3))
+
+    other = journey.context(browser, OTHER, viewport={"width": 1280, "height": 900})
+    other_page = journey.open(other, code)
+    journey.check("別的帳號看不到我的趨勢線", journey.ink(other_page)["count"] == 0 and journey.saved(other_page, code) == [])
+    other.close()
+    context.close()
+
+
+def two_point_mobile(journey: Journey, browser) -> None:
+    print("票 03｜手機寬度 390（觸控）：趨勢線與射線")
+    code = "2303"
+    context = journey.context(browser, OWNER, viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True, has_touch=True)
+    page = journey.open(context, code)
+    tools = page.locator("#drawTools")
+    ray = tools.locator("button[data-tool=ray]")
+    delete = page.locator("#drawDelete")
+    box = page.locator("#chartHost canvas").bounding_box()
+    width, height = box["width"], box["height"]
+
+    start = journey.ink(page)
+    journey.check("手機：桌機畫的趨勢線看得到", start["count"] > 0 and len(journey.saved(page, code)) == 1, start)
+    sizes = [tools.locator(f"button[data-tool={name}]").bounding_box() for name in ("trend", "hline", "ray")]
+    journey.check("手機：三顆工具都夠大（至少 44px），工具列不造成橫向捲動", all(size["width"] >= 44 and size["height"] >= 44 for size in sizes)
+                  and page.evaluate("() => document.documentElement.scrollWidth <= innerWidth"), sizes)
+
+    ra, rb = (round(width * 0.15), round(height * 0.78)), (round(width * 0.4), round(height * 0.7))
+    ray.tap()
+    page.touchscreen.tap(*journey.at(page, *ra))
+    marked = journey.ink(page)
+    journey.check("手機：點第一下後起點有記號（沒有游標也看得出點到了），還沒儲存", marked["count"] > start["count"]
+                  and len(journey.saved(page, code)) == 1 and ray.get_attribute("aria-pressed") == "true", marked)
+    page.locator(".bd-chart").screenshot(path=str(OUT / "mobile-06-ray-first-tap.png"))
+
+    cdp = context.new_cdp_session(page)
+
+    def touch(kind: str, tx: float, ty: float) -> None:
+        cdp.send("Input.dispatchTouchEvent", {
+            "type": kind, "touchPoints": [] if kind == "touchEnd" else [{"x": round(tx), "y": round(ty)}]})
+
+    x, y = journey.at(page, *rb)
+    touch("touchStart", x, y)
+    page.wait_for_timeout(120)
+    held = journey.ink(page)
+    journey.check("手機：手指按下去還沒放開，預覽線就從起點延伸出來", held["count"] > marked["count"] and held["maxX"] > rb[0] + 60
+                  and len(journey.saved(page, code)) == 1, held)
+    page.locator(".bd-chart").screenshot(path=str(OUT / "mobile-07-ray-preview.png"))
+    with page.expect_response(drawing_request("PUT")) as created:
+        touch("touchEnd", x, y)
+    drawn = journey.ink(page)
+    items = journey.saved(page, code)
+    journey.check("手機：放開就畫出射線並儲存，延伸到右緣、不進價格軸，工具回一般模式", created.value.status == 201 and len(items) == 2
+                  and drawn["maxX"] > rb[0] + 100 and drawn["maxX"] <= width - 50 and ray.get_attribute("aria-pressed") == "false", {"ink": drawn, "canvas": width})
+    page.locator(".bd-chart").screenshot(path=str(OUT / "mobile-08-ray-drawn.png"))
+    ray_item = next(item for item in items if item["kind"] == "ray")
+
+    slope = (rb[1] - ra[1]) / (rb[0] - ra[0])
+    body = (rb[0] + 60, rb[1] + 60 * slope + 9)  # 延伸段旁 9px：手指的可點選範圍比滑鼠寬
+    page.touchscreen.tap(*journey.at(page, *body))
+    journey.check("手機：手指點在射線旁 9px 就選得到，工具列出現刪除", delete.is_visible())
+    page.locator(".bd-chart").screenshot(path=str(OUT / "mobile-09-ray-selected.png"))
+
+    axis = journey.axis(page)
+    scroll = page.evaluate("() => scrollY")
+    x, y = journey.at(page, *rb)
+    touch("touchStart", x, y)
+    for step in range(1, 7):
+        touch("touchMove", x, y - step * 6)
+        page.wait_for_timeout(16)
+    page.wait_for_timeout(250)  # 停一下再放開，不讓 Chromium 當成甩動（見票 02 的註記）
+    with page.expect_response(drawing_request("PUT")) as moved:
+        touch("touchEnd", x, y - 36)
+    after = next(item for item in journey.saved(page, code) if item["id"] == ray_item["id"])
+    journey.check("手機：手指拖第二個錨點往上，只有那一端變高、起點不動；圖表不平移、頁面不捲動", moved.value.status == 200
+                  and after["anchors"][0] == ray_item["anchors"][0] and after["anchors"][1]["price"] > ray_item["anchors"][1]["price"]
+                  and journey.axis(page) == axis and page.evaluate("() => scrollY") == scroll, {"before": ray_item["anchors"], "after": after["anchors"]})
+    page.locator(".bd-chart").screenshot(path=str(OUT / "mobile-10-ray-reshaped.png"))
+
+    journey.choose_period(page, "weekly")
+    journey.check("手機：切到週 K 兩條線都還在", journey.ink(page)["count"] > 0 and len(journey.saved(page, code)) == 2)
+    journey.choose_period(page, "daily")
+    page.reload()
+    journey.ready(page, code)
+    journey.check("手機：重新整理後兩條都還在", journey.ink(page)["count"] > 0 and len(journey.saved(page, code)) == 2)
+
+    page.touchscreen.tap(*journey.at(page, rb[0], rb[1] - 36))
+    with page.expect_response(drawing_request("DELETE")) as removed:
+        delete.tap()
+    journey.check("手機：選取射線後點刪除，剩下趨勢線", removed.value.status == 204
+                  and [item["kind"] for item in journey.saved(page, code)] == ["trend"] and not delete.is_visible())
+    context.close()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", help="已經開著的旅程伺服器；省略時自己起一個")
@@ -556,6 +831,8 @@ def main() -> int:
             mobile(journey, browser)
             edit_desktop(journey, browser)
             edit_mobile(journey, browser)
+            two_point_desktop(journey, browser)
+            two_point_mobile(journey, browser)
             browser.close()
     finally:
         if server:
