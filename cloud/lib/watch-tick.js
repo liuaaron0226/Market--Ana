@@ -12,7 +12,7 @@ const EDITION_ORDER = { evening: 0, morning: 1 };
 // 每分鐘最多查幾檔（關注上限也是 20）。Fugle 免費方案每分鐘 60 次，網站開著時也會用；查不完的下一分鐘先查。
 const DEFAULT_QUOTE_BUDGET = 20;
 // 免費方案每次執行最多 50 個對外連線（資料庫查詢也算），留一點餘裕。
-const DEFAULT_SUBREQUESTS = 45;
+export const DEFAULT_SUBREQUESTS = 45;
 // 連續幾檔都沒有今天的報價、也還沒看到任何一檔有，就當今天休市（休市日每分鐘只花這幾次報價）。
 const HOLIDAY_PROBES = 3;
 

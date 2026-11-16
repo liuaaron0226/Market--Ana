@@ -106,6 +106,21 @@ class ForecastStoreTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 fs.pull(Remote(), Path(self._tmp.name) / "restored")
 
+    def test_the_command_line_keeps_the_watch_ledger_under_its_own_prefix(self):
+        # 自選股關注的帳本（G 票）用同一支程式存回 R2，只是放在 watch-ledger/ 底下，和預測帳本分開。
+        store_dir = Path(self._tmp.name) / "r2"
+        self.assertEqual(fs.main(["push", "--ledger", str(self.ledger), "--store-dir", str(store_dir),
+                                  "--prefix", "watch-ledger/"]), 0)
+        self.assertEqual(DirectoryStore(store_dir).keys(), [
+            "watch-ledger/forecasts/2026-11-06__evening__m0.3__base-v1-x.json",
+            "watch-ledger/reconciliations/2026-11-06__evening__m0.3__base-v1-x__h1.json",
+        ])
+        restored = Path(self._tmp.name) / "restored"
+        self.assertEqual(fs.main(["pull", "--ledger", str(restored), "--store-dir", str(store_dir),
+                                  "--prefix", "watch-ledger/"]), 0)
+        self.assertEqual(sorted(path.name for path in restored.rglob("*.json")),
+                         ["2026-11-06__evening__m0.3__base-v1-x.json", "2026-11-06__evening__m0.3__base-v1-x__h1.json"])
+
 
 if __name__ == "__main__":
     unittest.main()

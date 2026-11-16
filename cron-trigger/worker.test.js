@@ -36,15 +36,28 @@ test("合併成一行的時段（30 7,8,12）依實際觸發的那個小時送�
   }
 });
 
-test("每分鐘的時段交給雲端盯價，不觸發 GitHub", async () => {
-  let dispatched = false, watched = null;
+test("每分鐘的時段交給雲端盯價，不觸發 GitHub；先送還沒通知的「可以留意」，盯價用剩下的連線額度", async () => {
+  let dispatched = false, watched = null, noticed = null;
   const result = await runScheduled(WATCH_CRON, Date.parse("2026-11-16T02:00:00Z"), env, {
     fetcher: async () => { dispatched = true; return { status: 204 }; },
+    readyNotices: async (noticeEnv, deps) => { noticed = { noticeEnv, at: deps.now() }; return { notified: 1, subrequests: 6 }; },
     watchTick: async (tickEnv, deps) => { watched = { tickEnv, at: deps.now() }; return { checked: 0 }; },
   });
   assert.equal(dispatched, false);
-  assert.deepEqual(watched, { tickEnv: env, at: Date.parse("2026-11-16T02:00:00Z") });
+  assert.deepEqual(noticed, { noticeEnv: env, at: Date.parse("2026-11-16T02:00:00Z") });
+  // 每次執行最多 45 個對外連線（cloud/lib/watch-tick.js），通知用掉 6 個，盯價只剩 39 個。
+  assert.deepEqual(watched, { tickEnv: { ...env, WATCH_TICK_SUBREQUESTS: 39 }, at: Date.parse("2026-11-16T02:00:00Z") });
   assert.deepEqual(result, { checked: 0 });
+});
+
+test("觸發 GitHub 的每個時段也順便送還沒通知的「可以留意」；通知出錯不擋觸發", async () => {
+  let noticed = 0;
+  const result = await runScheduled("0 10 * * MON-FRI", Date.parse("2026-11-16T10:00:00Z"), env, {
+    fetcher: async () => ({ status: 204 }),
+    readyNotices: async () => { noticed += 1; throw new Error("資料庫暫時連不上"); },
+  });
+  assert.equal(noticed, 1);
+  assert.equal(result.dispatched, "daily-update.yml");
 });
 
 test("重大訊息每天（含週末）台北 8:00 觸發，只送 announcements.yml 宣告過的參數", async () => {

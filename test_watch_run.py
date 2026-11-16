@@ -1,0 +1,386 @@
+"""關注股每日排程的執行程式（G 票第 14–16 片；規格〈Testing Decisions〉接縫 1：關注帳本的公開介面）。
+
+給一份「每日更新已發布」的大盤資料檔、一份關注清單、一個假的資料來源（個股日 K 與各層輸入），加上假的模型
+命令列程式（經真的子程序邊界，和預測帳本、關注帳本的測試同一支），檢查帳本、寫給資料庫的指令檔與執行紀錄。
+"""
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+import forecast_ledger as fl
+import watch_ledger as wl
+import watch_run as wr
+from test_forecast_ledger import answer_a, at, bar, calls, clock, day_input, envelope, fake_model, weekdays
+from test_watch_ledger import BASE, METHOD_TEXT, answer, index_bars, recording_model, stock_bars
+
+# 關注帳本測試的固定日 K（22 根，到 09/30）再往後接 5 個交易日，好讓轉變日有機會到期：
+#   個股收盤 10/01–10/07：111、112、113、114、115（開 = 收 − 0.5、高 = 收 + 1、低 = 收 − 1）
+#   加權指數收盤 10/01–10/07：1160、1165、1170、1175、1180
+LONG = weekdays("2026-09-01", 27)
+EXTRA_STOCK = [111, 112, 113, 114, 115]
+EXTRA_INDEX = [1160, 1165, 1170, 1175, 1180]
+
+
+def long_stock_bars():
+    return stock_bars() + [bar(day, c - 0.5, c + 1, c - 1, c) for day, c in zip(LONG[22:], EXTRA_STOCK)]
+
+
+def long_index_bars():
+    return index_bars() + [{"date": day, "close": c} for day, c in zip(LONG[22:], EXTRA_INDEX)]
+
+EVENING_OK = at(BASE, 17, 30)
+WATCHLIST = [{"code": "2330", "name": "台積電", "watch_since": "2026-09-01T09:00:00+08:00"},
+             {"code": "2317", "name": "鴻海", "watch_since": "2026-09-02T09:00:00+08:00"}]
+
+
+class FakeSource:
+    """假的資料來源：每一檔都用同一份固定日 K（基準日之後的根數切掉），公告依代號給。"""
+
+    def __init__(self, announcements=None, missing=(), broken=()):
+        self.announcement_map = announcements or {}
+        self.missing = set(missing)
+        self.broken = set(broken)
+        self.asked = []
+
+    def stock(self, code, base_date, edition):
+        self.asked.append((code, base_date, edition))
+        if code in self.broken:
+            raise OSError("讀不到行情庫")
+        if code in self.missing:
+            return {"stock_daily": [row for row in long_stock_bars() if row["date"] < base_date]}
+        return {
+            "stock_daily": [row for row in long_stock_bars() if row["date"] <= base_date],
+            "capital_events": [],
+            "technical": {"indicators": {"rsi14": 55}},
+            "sector": {"data_date": base_date, "average_day_pct": 0.5},
+            "margin": {"data_date": base_date, "margin_lots": 1000},
+            "environment": {"usdtwd": {"date": base_date, "close": 32.1}},
+            "data_cutoffs": {"stock": base_date},
+        }
+
+    def announcements(self, codes, base_date):
+        return {code: self.announcement_map.get(code, []) for code in codes}
+
+
+def analysis_file(folder: Path, until=BASE) -> Path:
+    rows = [{**row, "open": row["close"], "high": row["close"], "low": row["close"]} for row in long_index_bars()
+            if row["date"] <= until]
+    path = folder / "analysis-data.js"
+    path.write_text("window.MARKET_ANALYSIS = " + json.dumps({"daily": rows}) + ";\n", encoding="utf-8")
+    return path
+
+
+class WatchRunTestCase(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.ledger = self.tmp / "watch-ledger"
+        self.forecasts = self.tmp / "forecast-ledger"
+        self.bin = self.tmp / "bin"
+        self.bin.mkdir()
+        self.method = self.tmp / "method.md"
+        self.method.write_text(METHOD_TEXT, encoding="utf-8")
+        self.source = FakeSource()
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def write_forecast(self, edition="evening", session_date=None, moment=EVENING_OK):
+        folder = self.tmp / f"forecast-bin-{edition}"
+        folder.mkdir(exist_ok=True)
+        return fl.write_forecast(self.forecasts, day_input(), edition=edition, session_date=session_date,
+                                 model_bin=fake_model(folder, [envelope(answer_a())]), model="test-model",
+                                 now=clock(moment))
+
+    def model(self, *replies):
+        return fake_model(self.bin, [envelope(reply) for reply in replies] or [envelope(answer())])
+
+    def earlier_judgment(self, day, status="可以留意", code="2330", edition="evening", session_date=None):
+        """在某個較早的基準日替一檔寫一份合格的判斷（兩條線從那天的候選關卡挑：觸發線照狀態挑對的一側最近的一條、
+        看錯線挑觸發線下方最近的一條；觸發線不挑最低的那一條，好讓下方還有看錯線可挑）。"""
+        data = {"code": code, "name": "台積電", "base_date": day,
+                "stock_daily": [row for row in long_stock_bars() if row["date"] <= day],
+                "index_daily": [row for row in long_index_bars() if row["date"] <= day],
+                "technical": {"indicators": {}}, "method_text": METHOD_TEXT}
+        folder = self.tmp / f"earlier-{day}-{code}-{edition}"
+        folder.mkdir()
+        moment = at(day, 17, 30) if edition == "evening" else at(session_date, 7, 30)
+        probe = wl.write_judgment(folder / "probe", data, edition=edition, session_date=session_date,
+                                  model_bin=fake_model(folder, [envelope({})]), model="m", now=clock(moment))
+        candidates = probe["record"]["input"]["candidates"]
+        side = "at_or_below" if status == "可以留意" else "above"
+        lowest = min(c["value"] for c in candidates)
+        trigger = min((c for c in candidates if c["side"] == side and c["value"] > lowest),
+                      key=lambda c: abs(c["value"] - probe["record"]["base_close"]))
+        wrong = max((c for c in candidates if c["value"] < trigger["value"]), key=lambda c: c["value"])
+        reply = answer(status=status, trigger=trigger["id"], wrong=wrong["id"], base_date=day, code=code)
+        (folder / "calls.txt").unlink(missing_ok=True)
+        return wl.write_judgment(self.ledger, data, edition=edition, session_date=session_date,
+                                 model_bin=fake_model(folder, [envelope(reply)]), model="m", now=clock(moment))
+
+    def evening(self, *, watchlist=WATCHLIST, model=None, day=BASE, now=None, **kwargs):
+        return wr.run_evening(analysis_file(self.tmp, day), watchlist=watchlist, ledger=self.ledger,
+                              forecast_ledger=self.forecasts, method_path=self.method,
+                              model_bin=model or self.model(), model="test-model", now=clock(now or at(day, 17, 30)),
+                              source=self.source, **kwargs)
+
+
+class EveningTests(WatchRunTestCase):
+    def test_writes_one_locked_judgment_per_watched_stock_with_the_same_day_market_forecast(self):
+        self.write_forecast()
+        model = fake_model(self.bin, [envelope(answer(code="2330")), envelope(answer(code="2317"))])
+
+        log = self.evening(model=model, sql_output=self.tmp / "watch.sql")
+
+        self.assertEqual([(item["code"], item["outcome"], item["kind"]) for item in log["stocks"]],
+                         [("2330", "written", "judgment"), ("2317", "written", "judgment")])
+        judgments = wl.read_ledger(self.ledger)["judgments"]
+        self.assertEqual(sorted(record["code"] for record in judgments), ["2317", "2330"])
+        market = judgments[0]["input"]["market"]
+        # 預測帳本同一基準日、同一版那一份：盤勢類型與三格的落點（answer_a：線上、區間內、線下）。
+        self.assertEqual(market["regime"], "多頭中的回檔")
+        self.assertEqual({key: cell["zone"] for key, cell in market["cells"].items()},
+                         {"1": "above", "5": "between", "20": "below"})
+        self.assertEqual(judgments[0]["missing_layers"], [])
+        sql = (self.tmp / "watch.sql").read_text(encoding="utf-8")
+        self.assertEqual(sql.count("INSERT INTO watch_judgments"), 2)
+
+    def test_reconciles_due_transition_days_before_writing_and_publishes_the_result(self):
+        # 09/30 變成「可以留意」；之後第 5 個交易日是 10/07＝今天的基準日，所以這一次執行要對帳。
+        # 個股 09/30 收 110 → 10/07 收 115（+4.5%）；指數 09/30 1155 → 10/07 1180（+2.2%）→ 贏大盤。
+        self.assertTrue(self.earlier_judgment(BASE)["record"]["transition"])
+
+        log = self.evening(day=LONG[26], watchlist=WATCHLIST[:1], sql_output=self.tmp / "watch.sql")
+
+        self.assertEqual(log["reconciliation"]["appended"], 1)
+        [row] = wl.read_ledger(self.ledger)["reconciliations"]
+        self.assertEqual((row["base_date"], row["horizon"], row["beat_index"]), (BASE, 5, True))
+        sql = (self.tmp / "watch.sql").read_text(encoding="utf-8")
+        self.assertEqual(sql.count("INSERT INTO watch_reconciliations"), 1)
+
+    def test_locks_a_miss_for_each_day_the_schedule_never_ran_since_the_watch_was_last_switched_on(self):
+        # 09/30 有一份；10/01、10/02 整晚沒跑；10/05 這次執行。關注在 10/02 早上關掉又打開（watch_since），
+        # 所以只有 10/02 補記漏記（10/01 那天沒在關注，不算漏記）；補記不呼叫模型（沒有任何一次嘗試）。
+        self.earlier_judgment(BASE)
+        watchlist = [{"code": "2330", "name": "台積電", "watch_since": "2026-10-02T08:00:00+08:00"}]
+
+        log = self.evening(day=LONG[24], watchlist=watchlist)
+
+        self.assertEqual(log["backfilled_misses"], [{"code": "2330", "base_date": LONG[23]}])
+        by_day = {record["base_date"]: record for record in wl.read_ledger(self.ledger)["judgments"]}
+        self.assertEqual(sorted(by_day), [BASE, LONG[23], LONG[24]])
+        missed = by_day[LONG[23]]
+        self.assertEqual((missed["kind"], missed["miss_reason"], missed["attempts"]), ("miss", "deadline_passed", []))
+
+    def test_dry_run_replays_a_published_day_on_a_scratch_copy_and_reports_each_judgment(self):
+        # 已發布的資料到 10/07，重播 09/30：資料截到 09/30、時鐘停在那天收盤後；真的帳本一個檔案都不多，不輸出指令檔。
+        self.earlier_judgment(BASE, code="2317")
+        before = sorted(path.name for path in self.ledger.rglob("*.json"))
+
+        log = wr.run_evening(analysis_file(self.tmp, LONG[26]), watchlist=WATCHLIST[:1], ledger=self.ledger,
+                             forecast_ledger=self.forecasts, method_path=self.method, model_bin=self.model(),
+                             model="test-model", source=self.source, dry_run=True, as_of=BASE,
+                             sql_output=self.tmp / "watch.sql")
+
+        self.assertEqual(sorted(path.name for path in self.ledger.rglob("*.json")), before)
+        self.assertFalse((self.tmp / "watch.sql").exists())
+        [item] = log["stocks"]
+        self.assertEqual((log["base_date"], log["dry_run"], item["outcome"], item["status"]), (BASE, True, "written", "接近"))
+        self.assertEqual((item["trigger_line"]["id"], item["wrong_line"]["id"]),
+                         ("swing_high_20260921", "swing_low_20260925"))
+        self.assertEqual(item["reason"], "量縮整理等待表態")
+
+    def test_a_stock_whose_data_cannot_be_read_waits_without_stopping_the_others(self):
+        # 2330 的行情讀不到：期限前不寫（之後可以重跑），2317 照寫。
+        self.source = FakeSource(broken={"2330"})
+        model = fake_model(self.bin, [envelope(answer(code="2317"))])
+
+        log = self.evening(model=model)
+
+        self.assertEqual([(item["code"], item["outcome"]) for item in log["stocks"]],
+                         [("2330", "not_ready"), ("2317", "written")])
+        self.assertIn("OSError", log["stocks"][0]["detail"])
+
+    def test_after_the_deadline_a_stock_still_not_ready_is_locked_as_a_miss_with_the_reason(self):
+        # 2317 的日 K 到期限（基準日結束）都沒有基準日那一根：記漏記，原因寫明是資料沒到齊。
+        self.source = FakeSource(missing={"2317"})
+        log = self.evening(watchlist=WATCHLIST[1:], now=at(LONG[22], 0, 5), day=BASE)
+
+        [item] = log["stocks"]
+        self.assertEqual((item["kind"], item["miss_reason"]), ("miss", "input_not_ready"))
+
+
+class MorningTests(WatchRunTestCase):
+    def morning(self, session_date, *, published_until=BASE, holidays=frozenset(), now=None, **kwargs):
+        return wr.run_morning(analysis_file(self.tmp, published_until), watchlist=WATCHLIST[:1], ledger=self.ledger,
+                              forecast_ledger=self.forecasts, method_path=self.method, model_bin=self.model(),
+                              model="test-model", source=self.source, session_date=session_date,
+                              holidays=set(holidays), now=clock(now or at(session_date, 7, 30)), **kwargs)
+
+    def test_writes_a_morning_judgment_on_the_last_trading_day_with_the_morning_market_forecast(self):
+        # 開盤日 10/01 → 基準日 09/30。晚間版與晨間版的大盤預測都在，晨間的判斷用晨間那一份；
+        # 晨間的大盤預測換一個盤勢類型，才分得出用了哪一份。不對帳。
+        self.write_forecast()
+        folder = self.tmp / "forecast-bin-morning"
+        folder.mkdir()
+        fl.write_forecast(self.forecasts, day_input(), edition="morning", session_date=LONG[22],
+                          model_bin=fake_model(folder, [envelope(answer_a(regime="盤整"))]), model="m",
+                          now=clock(at(LONG[22], 7, 25)))
+
+        log = self.morning(LONG[22], sql_output=self.tmp / "watch.sql")
+
+        self.assertEqual((log["edition"], log["session_date"], log["base_date"]), ("morning", LONG[22], BASE))
+        self.assertNotIn("reconciliation", log)
+        [record] = wl.read_ledger(self.ledger)["judgments"]
+        self.assertEqual((record["edition"], record["base_date"], record["kind"]), ("morning", BASE, "judgment"))
+        self.assertEqual(record["input"]["market"]["regime"], "盤整")
+        self.assertIn("INSERT INTO watch_judgments", (self.tmp / "watch.sql").read_text(encoding="utf-8"))
+
+    def test_writes_nothing_on_a_holiday(self):
+        log = self.morning(LONG[22], holidays={LONG[22]})
+
+        self.assertEqual(log["outcome"], "holiday")
+        self.assertEqual(wl.read_ledger(self.ledger)["judgments"], [])
+
+
+class AuthorizeTests(unittest.TestCase):
+    """自動執行要看到大盤預測同一版真的跑完的紀錄（它的執行紀錄），才接著寫判斷。"""
+
+    def evidence(self, **fields):
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: [path.unlink() for path in folder.iterdir()] and folder.rmdir())
+        path = folder / "run.json"
+        path.write_text(json.dumps({"schema": "forecast-run/v1", "edition": "evening", "dry_run": False,
+                                    "base_date": BASE, "outcome": "written", **fields}), encoding="utf-8")
+        return path
+
+    def test_allows_after_a_real_forecast_run_of_the_same_edition_whatever_its_outcome(self):
+        for outcome in ("written", "unchanged", "not_ready"):
+            self.assertEqual(wr.authorize(self.evidence(outcome=outcome), "evening"),
+                             {"allowed": True, "forecast_base_date": BASE, "forecast_outcome": outcome})
+
+    def test_refuses_without_a_record_after_a_dry_run_or_for_the_other_edition(self):
+        self.assertFalse(wr.authorize(Path(tempfile.gettempdir()) / "no-such-run.json", "evening")["allowed"])
+        self.assertFalse(wr.authorize(self.evidence(dry_run=True), "evening")["allowed"])
+        self.assertFalse(wr.authorize(self.evidence(), "morning")["allowed"])
+        self.assertFalse(wr.authorize(self.evidence(schema="something-else"), "evening")["allowed"])
+
+
+def nomination(code="2330", peers=None):
+    return {"code": code, "peers": peers if peers is not None else [
+        {"symbol": "NVDA", "name": "NVIDIA", "reason": "先進製程的大客戶"},
+        {"symbol": "8035.T", "name": "Tokyo Electron", "reason": "半導體設備供應商"},
+        {"symbol": "INTC", "name": "Intel", "reason": "晶圓代工的競爭者"},
+        {"symbol": "ZZZZ", "name": "Unknown", "reason": "名字對不上的代號"},
+        {"symbol": "005930.KS", "name": "Samsung", "reason": "記憶體與代工的競爭者"},
+    ]}
+
+
+class NominationTests(unittest.TestCase):
+    """第 16 片：站主打開關注之後的下一次排程，Gemini 替還沒有名單的關注股提名國外同類股，各附一句理由。"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.ledger = self.tmp / "watch-ledger"
+        self.checked = []
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def check(self, symbol, market):
+        # 假的「來源拿得到行情」：ZZZZ 查無代號，其他拿得到。
+        self.checked.append(symbol)
+        return "not_found" if symbol == "ZZZZ.US" else "ok"
+
+    def nominate(self, model, stocks=None, **kwargs):
+        return wr.nominate_peers(self.ledger, stocks or [{"code": "2330", "name": "台積電", "industry": "半導體業"}],
+                                 owner_email="owner@example.com", model_bin=model, model="test-model",
+                                 now=clock(at(BASE, 18, 0)), check=self.check, **kwargs)
+
+    def test_lists_only_nominees_whose_quotes_the_source_can_fetch_and_records_them_as_nominated(self):
+        result = self.nominate(fake_model(self.tmp, [envelope(nomination())]))
+
+        # 日股沒有來源、ZZZZ 查無代號：都不列。查過的只有美股與韓股。
+        self.assertEqual(self.checked, ["NVDA.US", "INTC.US", "ZZZZ.US", "005930.KO"])
+        [item] = result["stocks"]
+        self.assertEqual([peer["symbol"] for peer in item["listed"]], ["NVDA.US", "INTC.US", "005930.KO"])
+        self.assertEqual({peer["symbol"]: peer["excluded"] for peer in item["excluded"]},
+                         {"8035.TSE": "no_source", "ZZZZ.US": "not_found"})
+        sql = result["sql"]
+        self.assertEqual(sql.count("INSERT INTO watch_peers"), 3)
+        self.assertIn("'nominated'", sql)
+        self.assertIn("'gemini'", sql)
+        self.assertIn("先進製程的大客戶", sql)
+        self.assertEqual(sql.count("INSERT INTO watch_peer_events"), 3)
+        self.assertTrue((self.ledger / "nominations" / "2330.json").exists())
+
+    def test_the_prompt_only_carries_public_company_facts(self):
+        model = recording_model(self.tmp, nomination())
+        self.nominate(model)
+
+        prompt = (self.tmp / "prompt.txt").read_text(encoding="utf-8")
+        given = json.loads(prompt.split("INPUT_JSON:", 1)[1])
+        self.assertEqual(given, {"code": "2330", "name": "台積電", "industry": "半導體業"})
+
+    def test_a_stock_already_nominated_is_not_asked_again_and_publishing_again_adds_nothing_new(self):
+        self.nominate(fake_model(self.tmp, [envelope(nomination())]))
+        (self.tmp / "calls.txt").unlink()
+
+        result = self.nominate(fake_model(self.tmp, [envelope(nomination())]))
+
+        self.assertEqual(calls(self.tmp), 0)
+        self.assertEqual(result["stocks"][0]["outcome"], "unchanged")
+        # 同一份提名再發布一次：名單與改動紀錄都靠資料庫的條件擋下重複，不多一筆。
+        self.assertIn("ON CONFLICT (email, code, symbol) DO NOTHING", result["sql"])
+        self.assertIn("WHERE NOT EXISTS", result["sql"])
+
+    def test_a_failed_or_invalid_answer_locks_nothing_so_the_next_schedule_asks_again(self):
+        result = self.nominate(fake_model(self.tmp, [envelope({"code": "2330", "peers": []})]))
+
+        self.assertEqual(result["stocks"][0]["outcome"], "not_nominated")
+        self.assertEqual(calls(self.tmp), 2)  # 不合格重試一次
+        self.assertFalse((self.ledger / "nominations").exists())
+        self.assertNotIn("INSERT INTO watch_peers", result["sql"])
+
+    def test_stops_asking_once_the_call_budget_is_spent(self):
+        stocks = [{"code": code, "name": name, "industry": "半導體業"} for code, name in (("2330", "台積電"), ("2303", "聯電"))]
+        result = self.nominate(fake_model(self.tmp, [envelope(nomination())]), stocks=stocks, call_budget=1)
+
+        self.assertEqual([item["outcome"] for item in result["stocks"]], ["written", "budget_spent"])
+        self.assertEqual(calls(self.tmp), 1)
+
+
+class SourceCheckTests(unittest.TestCase):
+    """「來源拿得到行情」：美股問 Massive、韓股與指數問 EODHD（每天 20 次和其他排程共用，每次排程最多查 2 檔）。"""
+
+    def test_maps_source_answers_and_caps_the_shared_eodhd_quota(self):
+        import overseas_peers as op
+
+        class Fake:
+            def __init__(self, name, answers):
+                self.name, self.pause, self.answers, self.asked = name, 0.0, answers, []
+
+            def daily(self, symbol, start, end):
+                self.asked.append(symbol)
+                outcome = self.answers[symbol]
+                if isinstance(outcome, Exception):
+                    raise outcome
+                return outcome
+
+        massive = Fake("massive", {"NVDA.US": [{"date": "2026-09-29", "close": 1.0}], "ZZZZ.US": op.NotFound(),
+                                   "AMD.US": op.QuotaExceeded()})
+        eodhd = Fake("eodhd", {"005930.KO": [{"date": "2026-09-29", "close": 1.0}], "000660.KO": [], "035420.KO": []})
+        check = wr.source_check({"massive": massive, "eodhd": eodhd}, today=BASE, sleep=lambda _: None)
+
+        self.assertEqual([check(symbol, market) for symbol, market in (
+            ("NVDA.US", "US"), ("ZZZZ.US", "US"), ("AMD.US", "US"),
+            ("005930.KO", "KR"), ("000660.KO", "KR"), ("035420.KO", "KR"))],
+            ["ok", "not_found", "quota", "ok", "not_found", "eodhd_limit"])
+        self.assertEqual(eodhd.asked, ["005930.KO", "000660.KO"])
+        self.assertEqual(wr.source_check({"massive": None, "eodhd": None}, today=BASE)("NVDA.US", "US"), "no_key")
+
+
+if __name__ == "__main__":
+    unittest.main()

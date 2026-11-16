@@ -114,6 +114,48 @@
     return li;
   }
 
+  // G 票第 16 片：每日排程請 Gemini 提名的幾檔，站主逐檔勾選後按一次「確認」——勾的進名單、沒勾的取消。
+  function nominations(payload, code, message) {
+    const box = el('form', 'wp-nominate');
+    box.append(el('h3', '', '提名・還沒確認'));
+    const list = el('ul', 'wp-nominees');
+    const picks = [];
+    for (const item of payload.nominations) {
+      const li = el('li');
+      const label = el('label');
+      const check = el('input');
+      check.type = 'checkbox';
+      check.checked = true;
+      check.value = item.symbol;
+      picks.push(check);
+      const text = el('span');
+      text.append(el('b', '', item.name), el('small', 'num', `${item.symbol.replace(/\.(US|INDX)$/, '')} · ${MARKET[item.market] || ''}`));
+      if (item.reason) text.append(el('em', '', item.reason));
+      label.append(check, text);
+      li.append(label);
+      list.append(li);
+    }
+    const button = el('button', '', '確認');
+    button.type = 'submit';
+    box.append(list, button);
+    box.addEventListener('submit', async event => {
+      event.preventDefault();
+      button.disabled = true;
+      message.textContent = '';
+      try {
+        for (const check of picks) {
+          const path = `/api/watch-peers/${code}/${encodeURIComponent(check.value)}`;
+          await send(check.checked ? 'POST' : 'DELETE', path);
+        }
+      } catch (error) {
+        message.textContent = error.message;
+      }
+      state.code = '';
+      await load(code);
+    });
+    return box;
+  }
+
   function render(payload, code) {
     const node = host();
     if (!node) return;
@@ -134,9 +176,10 @@
         return at ? ` ${shortDate(new Date(Date.parse(at) + 8 * 3600_000).toISOString())}` : '';
       };
       if (used.length) children.push(el('p', 'wp-source num', `出處 ${used.map(source => SOURCE[source] + lastOk(source)).join('、')}`));
-    } else {
+    } else if (!payload.nominations?.length) {
       children.push(el('p', 'wp-empty', '還沒有名單'));
     }
+    if (payload.nominations?.length) children.push(nominations(payload, code, message));
     const form = el('form', 'wp-add');
     const input = el('input');
     input.name = 'symbol';

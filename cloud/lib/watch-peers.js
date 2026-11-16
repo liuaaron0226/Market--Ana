@@ -127,8 +127,12 @@ async function list(db, email, code, now) {
     }
     items.push(itemFrom(peer, bars, fetched, today));
   }
+  // G 票第 16 片：每日排程請 Gemini 提名的（提名中），站主確認或取消之前另外列出，不算進名單、不抓行情。
+  const nominations = (await db.prepare(
+    "SELECT symbol, name, market, reason FROM watch_peers WHERE email = ? AND code = ? AND status = 'nominated' ORDER BY updated_at, rowid",
+  ).bind(email, code).all()).results.map((row) => ({ symbol: row.symbol, name: row.name, market: row.market, reason: row.reason }));
   return response(200, {
-    available: true, code, watching, items,
+    available: true, code, watching, items, nominations,
     limited_count: (await limitedSymbols(db, email)).size, limited_limit: EODHD_PEER_LIMIT, sources,
   });
 }
@@ -187,6 +191,33 @@ async function remove(db, email, code, symbolText, now) {
   return noContent();
 }
 
+// 站主確認一檔提名：提名中 → 已確認。行情在排程提名時已經查過，這裡不再花來源的額度；韓股與指數照樣受合計上限。
+async function confirm(db, email, code, symbolText, now) {
+  let text;
+  try {
+    text = decodeURIComponent(symbolText);
+  } catch {
+    text = "";
+  }
+  const parsed = parsePeerSymbol(text);
+  if (!parsed) throw new UserPortfolioError(400, "代號看不懂");
+  const peer = await db.prepare("SELECT name, market FROM watch_peers WHERE email = ? AND code = ? AND symbol = ? AND status = 'nominated'")
+    .bind(email, code, parsed.symbol).first();
+  if (!peer) throw new UserPortfolioError(404, "提名裡沒有這一檔");
+  if (LIMITED_MARKETS.has(peer.market)) {
+    const used = await limitedSymbols(db, email);
+    if (!used.has(parsed.symbol) && used.size >= EODHD_PEER_LIMIT) {
+      throw new UserPortfolioError(409, `韓股與指數全部合計最多 ${EODHD_PEER_LIMIT} 檔（每日額度的上限），請先移除一檔`);
+    }
+  }
+  const at = new Date(now).toISOString();
+  await db.prepare("UPDATE watch_peers SET status = 'confirmed', updated_at = ? WHERE email = ? AND code = ? AND symbol = ? AND status = 'nominated'")
+    .bind(at, email, code, parsed.symbol).run();
+  await db.prepare("INSERT INTO watch_peer_events (email, code, symbol, name, action, at) VALUES (?, ?, ?, ?, 'confirm', ?)")
+    .bind(email, code, parsed.symbol, peer.name, at).run();
+  return response(200, { available: true, code, symbol: parsed.symbol, status: "confirmed" });
+}
+
 export async function handleWatchPeersApi(request, env, path, email, deps, { isOwner, policy }) {
   if (!isOwner || !policy.features.watchlist_watch_v1) return response(200, { available: false });
   const [, codeText, symbolText] = WATCH_PEERS_PATH.exec(path);
@@ -199,5 +230,6 @@ export async function handleWatchPeersApi(request, env, path, email, deps, { isO
   }
   requireSameOrigin(request);
   if (request.method === "DELETE") return remove(env.DB, email, code, symbolText, now);
+  if (request.method === "POST") return confirm(env.DB, email, code, symbolText, now);
   throw new UserPortfolioError(405, "方法不允許");
 }
