@@ -32,24 +32,41 @@ function individuallyEnabled(raw) {
 // （預測帳本也只給站主，但它的旗標上線時就對所有人可見、頁面也依賴它，這裡不改它的行為。）
 const HIDDEN_FROM_OTHERS = ["watchlist_watch_v1"];
 
-// 個股頁事實區塊（2026-11-15 規格）：三種狀態，只認一字不差的 "owner"（只開站主）與 "all"（開給全部獲准使用者），
-// 其他寫法一律是關。和策略總開關、預測帳本、自選股關注都不綁在一起。
-function stockFactsMode(env) {
-  const raw = env?.MARKET_ANA_STOCK_FACTS;
+// 三種狀態的開關：只認一字不差的 "owner"（只開站主）與 "all"（開給全部獲准使用者），其他寫法一律是關。
+function threeStateMode(raw) {
   return raw === "owner" || raw === "all" ? raw : "off";
 }
 
-export function stockFactsVisible(env, isOwner) {
-  const mode = stockFactsMode(env);
+function modeAllowsViewer(mode, isOwner) {
   return mode === "all" || (mode === "owner" && Boolean(isOwner));
 }
 
-// env 沒給時，事實區塊對其他人一律是關（寧可少給，不可多給）。
+// 個股頁事實區塊（2026-11-15 規格）：三種狀態的開關，和策略總開關、預測帳本、自選股關注都不綁在一起。
+function stockFactsMode(env) {
+  return threeStateMode(env?.MARKET_ANA_STOCK_FACTS);
+}
+
+export function stockFactsVisible(env, isOwner) {
+  return modeAllowsViewer(stockFactsMode(env), isOwner);
+}
+
+// 個股頁五塊新功能（2026-11-16 規格）：自己一個三種狀態的開關。
+// 和事實區塊的開關各自獨立設定，不互相連動；也不掛在策略總開關底下。
+function stockSignalsMode(env) {
+  return threeStateMode(env?.MARKET_ANA_STOCK_SIGNALS);
+}
+
+export function stockSignalsVisible(env, isOwner) {
+  return modeAllowsViewer(stockSignalsMode(env), isOwner);
+}
+
+// env 沒給時，事實區塊與五塊對其他人一律是關（寧可少給，不可多給）。
 export function policyForViewer(policy, isOwner, env = {}) {
   if (isOwner) return policy;
   const features = { ...policy.features };
   for (const name of HIDDEN_FROM_OTHERS) features[name] = false;
   features.stock_facts_v1 = stockFactsVisible(env, false);
+  features.stock_signals_v1 = stockSignalsVisible(env, false);
   return { ...policy, features };
 }
 
@@ -81,6 +98,8 @@ export function releasePolicy(env = {}) {
       watchlist_watch_v1: env?.MARKET_ANA_WATCHLIST_WATCH === "owner",
       // 個股頁事實區塊：這裡是站主看到的值；其他人看到的值由 policyForViewer 依狀態決定。
       stock_facts_v1: stockFactsMode(env) !== "off",
+      // 個股頁五塊新功能：同上，這裡是站主看到的值。
+      stock_signals_v1: stockSignalsMode(env) !== "off",
     },
   };
 }
