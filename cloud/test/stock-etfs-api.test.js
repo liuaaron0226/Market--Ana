@@ -197,13 +197,13 @@ test("功能清單：只開站主時站主看到 stock_etfs_v1 開、其他獲�
   assert.equal(await features(FRIEND), true);
 });
 
-test("正式環境設定（wrangler.jsonc）裡 ETF 只開站主：其他獲准使用者看不到，也不連帶打開策略與 AI", () => {
+test("正式環境設定（wrangler.jsonc，本人 11-17「全部照做」）裡 ETF 開給全部獲准使用者，也不連帶打開策略與 AI", () => {
   const text = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8").replace(/^\s*\/\/.*$/gm, "");
   const vars = JSON.parse(text).vars;
-  assert.equal(vars.MARKET_ANA_STOCK_ETFS, "owner");
+  assert.equal(vars.MARKET_ANA_STOCK_ETFS, "all");
   const policy = releasePolicy(vars);
   assert.equal(policyForViewer(policy, true, vars).features.stock_etfs_v1, true);
-  assert.equal(policyForViewer(policy, false, vars).features.stock_etfs_v1, false);
+  assert.equal(policyForViewer(policy, false, vars).features.stock_etfs_v1, true);
   for (const feature of ["strategy_v1", "level_advice", "ai_digest", "ai_stock_advice"]) {
     assert.equal(policy.features[feature], false, feature);
   }

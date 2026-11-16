@@ -392,7 +392,14 @@
   }
 
   function renderPanel(panel) {
-    panel.replaceChildren(segmented('檢視', Object.entries(VIEWS), 'view', state.view));
+    // 標題列＋關閉鈕（本人 11-17：點開後找不到關的地方；手機浮板幾乎蓋滿畫面，點外面不好關）
+    const head = el('div', { class: 'forecast-head' });
+    const close = el('button', { type: 'button', class: 'forecast-close', 'data-close': '1', 'aria-label': '關閉大盤預測' });
+    const cross = svg('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' });
+    cross.append(svg('path', { d: 'm6 6 12 12M18 6 6 18', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.8', 'stroke-linecap': 'round' }));
+    close.append(cross);
+    head.append(el('span', { class: 'forecast-title' }, '大盤預測'), close);
+    panel.replaceChildren(head, segmented('檢視', Object.entries(VIEWS), 'view', state.view));
     const editions = Object.keys(EDITION).filter(key => state.latest.editions[key]);
     if (editions.length > 1) panel.append(segmented('版本', editions.map(key => [key, EDITION[key]]), 'edition', state.edition));
     if (state.view === 'summary') return summaryView(panel);
@@ -429,7 +436,8 @@
     panel.addEventListener('click', (event) => {
       const button = event.target.closest('button');
       if (!button) return;
-      const { horizon, edition, view, pick, more } = button.dataset;
+      const { horizon, edition, view, pick, more, close } = button.dataset;
+      if (close) { setOpen(false); chip.focus(); return; }
       if (more) { loadHistory(); return; }
       if (view) state.view = view;
       if (pick) state.picked = pick;
