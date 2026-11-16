@@ -85,6 +85,18 @@ class WatchWorkflowTests(unittest.TestCase):
         self.assertEqual(order, sorted(order))
         self.assertIn('--prefix watch-ledger/', step(self.source, "提名存回 R2（只新增）"))
 
+    def test_sends_the_ready_push_right_after_the_judgments_are_published(self):
+        # 本人 11-17「推播金鑰也放 GitHub」：寫進資料庫的同一次執行就送，不等 Cloudflare 的排程時段。
+        push = step(self.source, "送「可以留意」推播")
+        self.assertIn("node cloud/watch-ready-notices.mjs", push)
+        self.assertIn("if: success() && steps.mode.outputs.dry_run == 'false'", push)
+        for name in ("VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}", "VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}",
+                     "CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}", "OWNER_EMAIL: ${{ vars.OWNER_EMAIL }}"):
+            self.assertIn(name, push)
+        self.assertLess(self.source.index("- name: 發布到網站資料庫"), self.source.index("- name: 送「可以留意」推播"))
+        self.assertLess(self.source.index("- name: 送「可以留意」推播"),
+                        self.source.index("- name: 提名國外同類股（站主確認後才使用）"))
+
 
 if __name__ == "__main__":
     unittest.main()

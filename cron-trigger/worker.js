@@ -2,8 +2,7 @@
 // 改由 Cloudflare Workers Cron Trigger 準時呼叫 GitHub workflow_dispatch。
 // 每日更新只做觸發，不碰網站資料；GitHub token 只需要本 repo 的 Actions: write。
 // 2026-11-16 起另外負責自選股關注的每分鐘雲端盯價（WATCH_CRON），那一段才綁網站的資料庫與報價、推播金鑰。
-import { DEFAULT_SUBREQUESTS, runWatchTick } from "../cloud/lib/watch-tick.js";
-import { runReadyNotices } from "../cloud/lib/watch-ready.js";
+import { runWatchTick } from "../cloud/lib/watch-tick.js";
 
 const REPO = "liuaaron0226/Market--Ana";
 
@@ -59,23 +58,8 @@ export async function dispatch(cron, scheduledTime, env, fetcher = fetch) {
   return { dispatched: job.workflow, date: body.inputs.date };
 }
 
-// 自選股關注 G 票：早晚的判斷把某一檔變成「可以留意」時推播（推播金鑰只在這裡與網站）。不另占時段：
-// 每次被觸發都先把還沒通知的送出去（台北 08:00、09:00–13:59 每分鐘、15:30、16:30、18:00、20:30）。
-// 通知出錯只記下來，不擋原本的工作；每分鐘那一段的盯價用通知剩下的連線額度（免費方案每次 50 個）。
-export async function runScheduled(cron, scheduledTime, env,
-  { fetcher = fetch, watchTick = runWatchTick, readyNotices = runReadyNotices } = {}) {
-  let notices;
-  try {
-    notices = await readyNotices(env, { now: () => scheduledTime });
-  } catch (error) {
-    notices = { error: String(error?.message || error) };
-  }
-  if (notices?.error || notices?.notified) console.log(JSON.stringify({ ready_notices: notices }));
-  if (String(cron).trim() === WATCH_CRON) {
-    const used = Number(notices?.subrequests) || 0;
-    const tickEnv = used ? { ...env, WATCH_TICK_SUBREQUESTS: Math.max(10, DEFAULT_SUBREQUESTS - used) } : env;
-    return watchTick(tickEnv, { now: () => scheduledTime });
-  }
+export function runScheduled(cron, scheduledTime, env, { fetcher = fetch, watchTick = runWatchTick } = {}) {
+  if (String(cron).trim() === WATCH_CRON) return watchTick(env, { now: () => scheduledTime });
   return dispatch(cron, scheduledTime, env, fetcher);
 }
 
