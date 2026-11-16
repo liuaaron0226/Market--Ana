@@ -71,6 +71,10 @@ class OtcCatalog:
     def __len__(self) -> int:
         return len(self._entries)
 
+    def industries(self) -> dict[str, tuple[str, str]]:
+        """每一檔的（名稱, 官方產業別），不查價量資料。"""
+        return {code: (entry[0], entry[4]) for code, entry in self._entries.items()}
+
     def lookup(self, code: str) -> OtcSecurity | None:
         entry = self._entries.get(code)
         if entry is None:

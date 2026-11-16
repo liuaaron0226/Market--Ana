@@ -47,6 +47,7 @@ from ledger_core import (
     sha,
     text_problem,
 )
+import bollinger
 from twon_analysis import analyze_v2
 from twon_analysis.indicators import Bar
 from twon_analysis.price_adjustment import adjust_bars, price_factors
@@ -58,10 +59,43 @@ READY = "可以留意"
 HORIZONS = (5, 20)
 
 # 輸入分層（規格〈交給 Gemini 的輸入〉）。排程打開哪幾層由呼叫端給；打開的層算進輸入版本。
-LAYERS = ("technical", "market", "news", "peers", "lessons")
+# bollinger、sector、margin、environment 是 I 票（2026-11-16 本人定案）多加的四樣，每一樣各自一層，
+# 好讓輸入版本照實寫出多了哪幾樣；規格把前三樣歸在技術層、匯率與美債利率歸在環境層。
+LAYERS = ("technical", "bollinger", "sector", "margin", "environment", "market", "news", "peers", "lessons")
 DEFAULT_LAYERS = ("technical", "market", "news")
-# 每一層在一檔輸入資料裡的欄位。消息層這一版只收官方公告（重大訊息、月營收）。
-_LAYER_FIELDS = {"technical": "technical", "market": "market_forecast", "news": "announcements", "lessons": "lessons"}
+# 免費方案下可以放進提示的層（各來源條款查證見 ANALYSIS_PLAN.md 2026-11-15、11-16）；每日排程打開的就是這幾層。
+FREE_PLAN_LAYERS = ("technical", "bollinger", "sector", "margin", "environment", "market", "news")
+# 每一層在一檔輸入資料裡的欄位。消息層這一版只收官方公告（重大訊息、月營收）。布林通道由帳本從日 K 自己算，沒有欄位。
+_LAYER_FIELDS = {"technical": "technical", "sector": "sector", "margin": "margin", "environment": "environment",
+                 "market": "market_forecast", "news": "announcements", "lessons": "lessons"}
+# I 票四層各自的參數與提示規則：只有打開那一層時才算進輸入版本與提示，沒打開時舊版本一個字都不變。
+_LAYER_PARAMETERS: dict[str, dict[str, Any]] = {
+    "bollinger": {"period": bollinger.PERIOD, "deviations": bollinger.DEVIATIONS,
+                  "squeeze_window": bollinger.SQUEEZE_WINDOW, "squeeze_share": bollinger.SQUEEZE_SHARE},
+    "sector": {"classification": "官方產業別", "changes": ["當天", "近 5 日"]},
+    "margin": {"changes": "近 5 日", "prompt_sources": ["twse"]},
+    "environment": {"changes": "近 20 日", "series": ["usdtwd", "ust_2y", "ust_10y"]},
+}
+_LAYER_RULES: dict[str, tuple[str, ...]] = {
+    "bollinger": (
+        "bollinger 是這一檔收盤在布林通道（20 日均價 ± 2 個標準差）的位置：zone 是收盤落在哪一區，"
+        "squeezed 是通道寬度是否在近 120 個交易日最窄的兩成（null 是資料不足）；上緣與下緣也在 candidates 裡"
+        "（boll_upper、boll_lower），挑選規則和其他候選相同。"
+        "布林通道只是位置描述；單獨當買賣規則在歷史上贏不過買了放著，不可只憑它判斷。",
+    ),
+    "sector": (
+        "sector 是官方產業別相同、在網站分析範圍內的其他個股當天與近 5 日的漲跌（百分比）與全組平均；"
+        "data_date 是資料日期。只能當成同產業的對照，不是這一檔自己的走勢。",
+    ),
+    "margin": (
+        "margin 是這一檔的融資與融券餘額（張）與近 5 個交易日的變化；data_date 是資料日期。"
+        "withheld_layers 列出的層是依來源條款不放進提示，不是沒有發生。",
+    ),
+    "environment": (
+        "environment 是大環境：新臺幣對美元收盤匯率與美國公債 2 年、10 年殖利率，各自附資料日期與近 20 個交易日的變化；"
+        "某一項是 null 就是缺資料，不得猜測。",
+    ),
+}
 # 留位置、不放內容的層：依來源條款不能送進免費方案的提示（查證見 ANALYSIS_PLAN.md 2026-11-15）。
 WITHHELD_LAYERS = {"peers": "國外行情依來源條款不能放進免費方案的提示"}
 OFFICIAL_SOURCES = ("twse", "tpex")
@@ -125,15 +159,26 @@ def _enabled_layers(layers: Sequence[str]) -> list[str]:
     return [layer for layer in LAYERS if layer in layers]
 
 
+def _layer_parameters(enabled: Sequence[str]) -> dict[str, Any]:
+    return {layer: _LAYER_PARAMETERS[layer] for layer in enabled if layer in _LAYER_PARAMETERS}
+
+
+def _prompt_rules(enabled: Sequence[str]) -> tuple[str, ...]:
+    return _PROMPT_RULES + tuple(rule for layer in enabled for rule in _LAYER_RULES.get(layer, ()))
+
+
 def input_version_of(layers: Sequence[str] = DEFAULT_LAYERS) -> str:
     """輸入版本：打開的層、參數、回答格式、提示規則任何一項改了就是新系列，和舊系列分開對帳。
 
     某一層當天沒有資料不換版本（那一份判斷另外標 ``missing_layers``）；版本只看排程打開了哪幾層。
+    I 票的四層只在打開時才加進雜湊，所以沒打開它們的版本和 I 票之前相同。
     """
     enabled = _enabled_layers(layers)
-    digest = sha({"layers": enabled, "parameters": PARAMETERS, "output_schema": OUTPUT_SCHEMA,
-                  "prompt_rules": _PROMPT_RULES})[:8]
-    return f"{'+'.join(enabled)}-v1-{digest}"
+    basis: dict[str, Any] = {"layers": enabled, "parameters": PARAMETERS, "output_schema": OUTPUT_SCHEMA,
+                             "prompt_rules": _prompt_rules(enabled)}
+    if _layer_parameters(enabled):
+        basis["layer_parameters"] = _layer_parameters(enabled)
+    return f"{'+'.join(enabled)}-v1-{sha(basis)[:8]}"
 
 
 # ---- 個股日 K 與候選關卡 ----
@@ -177,6 +222,24 @@ def _candidate_levels(bars: list[Bar]) -> list[dict[str, Any]]:
             **({"date": day} if day else {}),
         })
     return sorted(levels, key=lambda level: (-level["value"], level["id"]))
+
+
+BOLLINGER_SOURCE = "本站以還原後日 K 自行計算（20 日均價 ± 2 個標準差）"
+
+
+def _bollinger(bars: list[Bar]) -> dict[str, Any] | None:
+    """這一檔收盤在布林通道的位置（還原後的日 K，和個股頁圖上同算法）。"""
+    found = bollinger.position([b.date for b in bars], [b.close for b in bars])
+    return None if found is None else {**found, "source": BOLLINGER_SOURCE}
+
+
+def _bollinger_levels(band: Mapping[str, Any] | None, close: float) -> list[dict[str, Any]]:
+    """布林上緣、下緣當成兩個有名字的候選關卡。"""
+    if band is None:
+        return []
+    return [{"id": f"boll_{edge}", "name": name, "kind": f"bollinger_{edge}", "value": band[edge],
+             "side": "above" if band[edge] > close else "at_or_below"}
+            for edge, name in (("upper", "布林上緣"), ("lower", "布林下緣"))]
 
 
 # ---- 輸入 ----
@@ -229,12 +292,42 @@ def _history(rows: Sequence[Any]) -> dict[str, Any]:
             "bars": len(rows), "sha256": sha(body)}
 
 
+# 融資融券只有這些來源可以放進提示：上市（證交所）的資料集標政府資料開放授權條款第 1 版；
+# 上櫃（櫃買）的資料集授權頁還沒找到（2026-11-16 查），照規格「照樣抓、照樣給站主看、不放進提示」。
+PROMPT_MARGIN_SOURCES = ("twse",)
+WITHHELD_MARGIN = "櫃買中心融資融券的資料集授權還沒查到，依規格不放進提示"
+
+
+def _margin(value: Any) -> tuple[Any, str | None]:
+    """（放進提示的融資融券, 不放的原因）。來源不在可放清單的整塊拿掉，只留原因。"""
+    if value is None:
+        return None, None
+    if not isinstance(value, Mapping) or not value.get("source"):
+        raise ValueError("融資融券那一層要標明來源（source）")
+    if value["source"] not in PROMPT_MARGIN_SOURCES:
+        return None, WITHHELD_MARGIN
+    return value, None
+
+
 def _model_input(data: Mapping[str, Any], edition: str, layers: list[str], raw: list[Bar], bars: list[Bar],
                  events: list[dict[str, Any]], unresolved: list[dict[str, Any]],
-                 candidates: list[dict[str, Any]] | None, index_rows: list[dict[str, Any]]) -> dict[str, Any]:
-    values = {layer: copy.deepcopy(data.get(_LAYER_FIELDS[layer])) for layer in layers}
+                 candidates: list[dict[str, Any]] | None, index_rows: list[dict[str, Any]],
+                 band: dict[str, Any] | None) -> dict[str, Any]:
+    values = {layer: copy.deepcopy(data.get(_LAYER_FIELDS[layer])) if layer in _LAYER_FIELDS else None
+              for layer in layers}
     if "news" in values:
         values["news"] = _announcements(values["news"])
+    if "bollinger" in values:
+        values["bollinger"] = band
+    withheld = {}
+    if "margin" in values:
+        values["margin"], reason = _margin(values["margin"])
+        if reason:
+            withheld["margin"] = reason
+    # I 票的四層只在打開時才出現在輸入裡，沒打開它們的輸入和 I 票之前相同。
+    extras = {layer: values[layer] for layer in layers if layer in _LAYER_PARAMETERS}
+    if extras:
+        extras = {"layer_parameters": _layer_parameters(layers), **extras, "withheld_layers": withheld}
     return {
         "schema": "watch-input/v1",
         "input_version": input_version_of(layers),
@@ -247,7 +340,8 @@ def _model_input(data: Mapping[str, Any], edition: str, layers: list[str], raw: 
         "price_basis": {"restored": analyze_v2.LABELS["price_basis"], "unresolved_capital_events": unresolved},
         "candidates": candidates,
         "layers": layers,
-        "missing_layers": [layer for layer in layers if values[layer] is None],
+        "missing_layers": [layer for layer in layers if values[layer] is None and layer not in withheld],
+        **extras,
         "technical": values.get("technical"),
         "market": values.get("market"),
         # headlines（新聞標題）與 peers（國外同類股）先留位置：免費方案下不放內容。
@@ -408,8 +502,11 @@ def _write(
     index_rows = clean_daily(data.get("index_daily") or [], keys=("close",))
     bars, unresolved = _restored(raw, events)
     problems = _readiness(data, bars, index_rows)
-    candidates = None if problems else _candidate_levels(bars)
-    model_input = _model_input(data, edition, enabled, raw, bars, events, unresolved, candidates, index_rows)
+    band = _bollinger(bars) if "bollinger" in enabled and not problems else None
+    candidates = None if problems else sorted(
+        _candidate_levels(bars) + _bollinger_levels(band, bars[-1].close),
+        key=lambda level: (-level["value"], level["id"]))
+    model_input = _model_input(data, edition, enabled, raw, bars, events, unresolved, candidates, index_rows, band)
     input_sha = sha(model_input)
     path = _judgment_path(folder, code, base_date, edition)
 
@@ -423,6 +520,7 @@ def _write(
         "method_version": method_version, "input_version": input_version, "model": model,
         "run_mode": "official" if official_since and base_date >= official_since else "trial",
         "layers": enabled, "missing_layers": list(model_input["missing_layers"]),
+        **({"withheld_layers": dict(model_input["withheld_layers"])} if model_input.get("withheld_layers") else {}),
         "data_cutoffs": copy.deepcopy(dict(data.get("data_cutoffs") or {})),
         "deadline": due.isoformat(), "base_close": model_input["base_close"],
         "input": model_input, "input_sha256": input_sha,
@@ -447,7 +545,7 @@ def _write(
 
     # 先讀這一檔的系列（順便核對雜湊）：原件被改動時在呼叫模型之前就停下。
     previous = _previous_judgment(folder, code, edition, base_date)
-    prompt = build_prompt(_PROMPT_RULES, model_input)
+    prompt = build_prompt(_prompt_rules(enabled), model_input)
     for _ in range(2):
         refusal = gate.refusal()
         if refusal:
@@ -483,8 +581,10 @@ def write_judgment(
 
     ``data`` 是一檔關注股的輸入：``code``、``name``、``base_date``、``stock_daily``（實際成交價日 K）、
     ``capital_events``（股本變動事件，可省）、``index_daily``（加權指數日 K）、``method_text``、``data_cutoffs``，
-    以及各層的資料 ``technical``、``market_forecast``、``announcements``、``lessons``。
-    技術、大盤、教訓三層的內容照原樣交給模型：只能放證交所／櫃買開放資料與由它算出來的東西，由呼叫端負責。
+    以及各層的資料 ``technical``、``market_forecast``、``announcements``、``lessons``，
+    I 票的 ``sector``、``margin``、``environment``（由 ``watch_inputs`` 從本機原件讀出；布林通道由帳本從日 K 自己算）。
+    技術、大盤、教訓、同產業、環境各層的內容照原樣交給模型：只能放條款允許的資料，由呼叫端負責；
+    融資融券由帳本依 ``source`` 把關（上櫃那一份不放進提示，判斷另標 ``withheld_layers``）。
 
     同一檔、同一基準日、同一版已有紀錄時不再呼叫模型：輸入相同回 ``unchanged``，輸入不同回 ``conflict``（拒寫）。
     資料沒到齊時期限前什麼都不寫（``not_ready``，可之後重跑）；過了期限仍沒到齊才記漏記。

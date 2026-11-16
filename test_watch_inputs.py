@@ -1,0 +1,448 @@
+"""自選股關注 I 票：多給 Gemini 看的四樣輸入（布林通道、融資融券、同產業其他股票、匯率與美債利率）。
+
+經關注帳本的公開介面（假模型程式經真的子程序邊界）與各輸入的讀取介面測試；預期值都是手算的固定數字。
+固定日 K、假模型、回答範本沿用 ``test_watch_ledger``。
+"""
+import hashlib
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+import otc_margin
+import treasury_yields
+import watch_inputs as wi
+import watch_ledger as wl
+from test_forecast_ledger import calls, envelope, weekdays
+from test_watch_ledger import BASE, WatchLedgerTestCase, answer, recording_model, stock_input
+
+WITH_BOLLINGER = ("technical", "bollinger", "market", "news")
+
+# 固定日 K 的最後 20 根收盤（第 3–22 根）：102、103、…、113、120、116、112、108、104、106、108、110
+#   中線 = MA20 = 108.7；離差平方和 384.2 → 母體變異數 19.21 → 標準差 4.382921…
+#   上緣 = 108.7 + 8.765843 = 117.47、下緣 = 108.7 − 8.765843 = 99.93（取到小數兩位）
+#   收盤 110 在中線到上緣；寬度 = 17.531686 / 108.7 = 0.1613；只有 22 根，湊不滿近 120 個交易日 → 窄不窄寫 None
+BOLL_UPPER, BOLL_LOWER = 117.47, 99.93
+
+
+class BollingerLayerTests(WatchLedgerTestCase):
+    def test_model_sees_where_the_close_sits_in_the_band(self):
+        record = self.write(layers=WITH_BOLLINGER)["record"]
+        self.assertEqual(record["input"]["bollinger"], {
+            "date": BASE, "close": 110, "middle": 108.7, "upper": BOLL_UPPER, "lower": BOLL_LOWER,
+            "zone": "中線到上緣", "width_ratio": 0.1613, "squeezed": None,
+            "source": "本站以還原後日 K 自行計算（20 日均價 ± 2 個標準差）",
+        })
+
+    def test_band_edges_join_the_candidate_levels_with_names(self):
+        candidates = self.write(layers=WITH_BOLLINGER)["record"]["input"]["candidates"]
+        levels = [(c["id"], c["name"], c["value"], c["kind"], c["side"]) for c in candidates]
+        self.assertIn(("boll_upper", "布林上緣", BOLL_UPPER, "bollinger_upper", "above"), levels)
+        self.assertIn(("boll_lower", "布林下緣", BOLL_LOWER, "bollinger_lower", "at_or_below"), levels)
+        # 依數值由高到低排進原本的清單：上緣在 120 與 115 之間、下緣在 103 與 95 之間。
+        ids = [c["id"] for c in candidates]
+        self.assertEqual(ids[ids.index("boll_upper") - 1:ids.index("boll_upper") + 2],
+                         ["high_20", "boll_upper", "gap_down_upper_20260923"])
+        self.assertEqual(ids[ids.index("boll_lower") - 1:ids.index("boll_lower") + 2],
+                         ["swing_low_20260925", "boll_lower", "low_20"])
+
+    def test_without_the_layer_nothing_changes(self):
+        record = self.write()["record"]
+        self.assertNotIn("bollinger", record["input"])
+        self.assertFalse([c for c in record["input"]["candidates"] if c["id"].startswith("boll_")])
+
+    def test_gemini_may_pick_the_upper_edge_as_its_trigger_line(self):
+        reply = answer(status="接近", trigger="boll_upper", wrong="boll_lower")
+        record = self.write(responses=[envelope(reply)], layers=WITH_BOLLINGER)["record"]
+        self.assertEqual(record["kind"], "judgment")
+        self.assertEqual(record["trigger_line"], {"id": "boll_upper", "name": "布林上緣", "value": BOLL_UPPER,
+                                                  "kind": "bollinger_upper"})
+        self.assertEqual(record["wrong_line"]["name"], "布林下緣")
+
+    def test_band_edges_follow_the_same_side_rules_as_other_levels(self):
+        # 「接近」卻挑收盤下方的下緣當觸發線：放錯邊，重試一次仍錯 → 漏記。
+        wrong_side = answer(status="接近", trigger="boll_lower", wrong="low_20")
+        result = self.write(responses=[envelope(wrong_side)] * 2, layers=WITH_BOLLINGER)
+        self.assertEqual((result["record"]["kind"], result["record"]["miss_reason"]), ("miss", "answer_invalid"))
+        self.assertEqual(calls(self.bin), 2)
+        # 「可以留意」挑已經站上的下緣當觸發線、看錯線在它下方：合格。
+        self.reset_calls()
+        ready = answer(status="可以留意", trigger="boll_lower", wrong="low_20")
+        record = self.write(responses=[envelope(ready)], layers=WITH_BOLLINGER, root=self.tmp / "ready")["record"]
+        self.assertEqual((record["kind"], record["trigger_line"]["id"]), ("judgment", "boll_lower"))
+        # 看錯線不在觸發線下方也一樣擋：上緣當看錯線、觸發線是收盤上方較低的 MA10。
+        self.reset_calls()
+        inverted = answer(status="接近", trigger="ma10", wrong="boll_upper")
+        result = self.write(responses=[envelope(inverted)] * 2, layers=WITH_BOLLINGER, root=self.tmp / "inverted")
+        self.assertEqual(result["record"]["miss_reason"], "answer_invalid")
+
+    def test_prompt_says_the_band_is_only_a_position_description(self):
+        self.write(model=recording_model(self.bin, answer()), layers=WITH_BOLLINGER)
+        prompt = (self.bin / "prompt.txt").read_text(encoding="utf-8")
+        self.assertIn("布林通道只是位置描述；單獨當買賣規則在歷史上贏不過買了放著", prompt)
+
+    def test_prompt_without_the_layer_does_not_mention_the_band(self):
+        self.write(model=recording_model(self.bin, answer()))
+        self.assertNotIn("布林", (self.bin / "prompt.txt").read_text(encoding="utf-8"))
+
+    def test_input_version_names_the_band(self):
+        record = self.write(layers=WITH_BOLLINGER)["record"]
+        self.assertTrue(record["input_version"].startswith("technical+bollinger+market+news-v1-"))
+        self.assertEqual(record["input_version"], wl.input_version_of(WITH_BOLLINGER))
+        # 沒打開這一層的舊版本不受影響（同一組層，版本和加這一層之前一樣）。
+        self.assertNotEqual(wl.input_version_of(WITH_BOLLINGER), wl.input_version_of())
+
+    def test_versions_without_the_new_layers_are_the_same_as_before_this_ticket(self):
+        # D 票寫定的版本（I 票之前）：沒打開新層的系列不換版本，舊紀錄和新紀錄照樣同一組對帳。
+        self.assertEqual(wl.input_version_of(), "technical+market+news-v1-f24f144e")
+
+
+# ---- 固定原件 ----
+
+LISTED_FIELDS = ["代號", "名稱", "買進", "賣出", "現金償還", "前日餘額", "今日餘額", "次一營業日限額",
+                 "買進", "賣出", "現券償還", "前日餘額", "今日餘額", "次一營業日限額", "資券互抵", "註記"]
+MARGIN_DAYS = ["20261102", "20261103", "20261104", "20261105", "20261106", "20261109", "20261110"]
+# 2330 每天的（融資今日餘額, 融券今日餘額），單位張；最後一天 11/10 在基準日之後。
+MARGIN_2330 = [(1000, 50), (1010, 45), (1020, 40), (1005, 35), (990, 32), (1100, 30), (1500, 10)]
+
+
+def listed_margin_file(root, day, rows):
+    """證交所 MI_MARGN（selectType=ALL）原件，和每日抓取存的外包同一種形式。rows：{代號: (融資餘額, 融券餘額)}。"""
+    stock_rows = [[code, "名稱", "0", "0", "0", "0", f"{margin:,}", "0", "0", "0", "0", "0", f"{short:,}", "0", "0", ""]
+                  for code, (margin, short) in rows.items()]
+    payload = {"stat": "OK", "date": day, "tables": [
+        {"fields": ["項目", "買進", "賣出", "現金(券)償還", "前日餘額", "今日餘額"],
+         "data": [["融資金額(仟元)", "0", "0", "0", "0", "0"]]},
+        {"fields": LISTED_FIELDS, "data": stock_rows}]}
+    path = root / "data/margin-history/raw" / f"margin-{day}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"fetched_at_utc": "x", "source_url": "https://www.twse.com.tw/", "data": payload},
+                               ensure_ascii=False), encoding="utf-8")
+
+
+def tpex_rows(roc_day, rows):
+    """櫃買 OpenAPI /tpex_mainboard_margin_balance 的回應（逐檔一列，日期是民國年；欄位照 2026-11-13 實際回應）。
+    rows：{代號: (融資餘額, 融券餘額)}。"""
+    return json.dumps([{"Date": roc_day, "SecuritiesCompanyCode": code, "CompanyName": "名稱",
+                        "MarginPurchaseBalancePreviousDay": "0", "MarginPurchase": "0", "MarginSales": "0",
+                        "CashRedemption": "0", "MarginPurchaseBalance": str(margin), "ShortSaleBalancePreviousDay": "0",
+                        "ShortSale": "0", "ShortConvering": "0", "StockRedemption": "0", "ShortSaleBalance": str(short),
+                        "Note": ""} for code, (margin, short) in rows.items()], ensure_ascii=False).encode("utf-8")
+
+
+def treasury_xml(rows):
+    """財政部每日 par yield curve 的 XML（和 2026-11 實際抓到的同一種結構）。rows：[(日期, 2 年, 10 年)]，None 是官方留空。"""
+    entries = []
+    for number, (day, two, ten) in enumerate(rows, start=1):
+        fields = [f'<d:Id m:type="Edm.Int32">{number}</d:Id>',
+                  f'<d:NEW_DATE m:type="Edm.DateTime">{day}T00:00:00</d:NEW_DATE>',
+                  '<d:BC_1MONTH m:type="Edm.Double">4.05</d:BC_1MONTH>']
+        if two is not None:
+            fields.append(f'<d:BC_2YEAR m:type="Edm.Double">{two}</d:BC_2YEAR>')
+        if ten is not None:
+            fields.append(f'<d:BC_10YEAR m:type="Edm.Double">{ten}</d:BC_10YEAR>')
+        entries.append('<entry><id>x</id><content type="application/xml"><m:properties>'
+                       + "".join(fields) + "</m:properties></content></entry>")
+    return ('<?xml version="1.0" encoding="utf-8" standalone="yes" ?>'
+            '<feed xmlns:d="http://schemas.microsoft.com/ado/2007/08/dataservices" '
+            'xmlns:m="http://schemas.microsoft.com/ado/2007/08/dataservices/metadata" xmlns="http://www.w3.org/2005/Atom">'
+            '<title type="text">DailyTreasuryYieldCurveRateData</title>' + "".join(entries) + "</feed>").encode("utf-8")
+
+
+def cbc_rows(rows):
+    """央行每日收盤匯率（FTDOpenData_Day）的 JSON 回應。rows：[(日期, 收盤)]。"""
+    return json.dumps([{"日期": day.replace("-", ""), "NTD_USD": f"{close:.3f}"} for day, close in rows]).encode("utf-8")
+
+
+class InputsTestCase(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+
+class MarginInputTests(InputsTestCase):
+    def test_listed_stock_balances_and_five_day_change_with_the_data_date(self):
+        for day, balances in zip(MARGIN_DAYS, MARGIN_2330):
+            listed_margin_file(self.root, day, {"2330": balances, "2317": (1, 1)})
+        # 基準日 11/09：當天融資 1100、融券 30；往前第 5 個有原件的交易日是 11/02（1000、50）
+        #   → 融資 +100、融券 −20。11/10 在基準日之後，不算。
+        self.assertEqual(wi.margin_input(self.root, "2330", "2026-11-09"), {
+            "source": "twse", "attribution": wi.SOURCES["twse_margin"], "data_date": "2026-11-09", "unit": "張",
+            "margin_balance": 1100, "margin_change_5d": 100, "short_balance": 30, "short_change_5d": -20,
+            "compared_with": "2026-11-02",
+        })
+
+    def test_change_is_null_until_five_earlier_days_are_on_file(self):
+        for day, balances in zip(MARGIN_DAYS[:3], MARGIN_2330[:3]):
+            listed_margin_file(self.root, day, {"2330": balances})
+        found = wi.margin_input(self.root, "2330", "2026-11-04")
+        self.assertEqual((found["margin_balance"], found["margin_change_5d"], found["short_change_5d"],
+                          found["compared_with"]), (1020, None, None, None))
+
+    def test_latest_day_before_the_base_date_is_labelled_with_its_own_date(self):
+        # 基準日 11/09 的原件還沒進來：給 11/06 那一天的數字，資料日期照實寫 11/06。
+        for day, balances in zip(MARGIN_DAYS[:5], MARGIN_2330[:5]):
+            listed_margin_file(self.root, day, {"2330": balances})
+        self.assertEqual(wi.margin_input(self.root, "2330", "2026-11-09")["data_date"], "2026-11-06")
+
+    def test_no_file_mentions_the_stock(self):
+        listed_margin_file(self.root, "20261109", {"2317": (1, 1)})
+        self.assertIsNone(wi.margin_input(self.root, "2330", "2026-11-09"))
+
+    def test_otc_stock_reads_what_the_tpex_store_has_accumulated(self):
+        days = [("1151102", (500, 9)), ("1151103", (510, 9)), ("1151104", (520, 8)), ("1151105", (530, 8)),
+                ("1151106", (540, 7)), ("1151109", (600, 5))]
+        for roc_day, balances in days:
+            otc_margin.store(self.root, tpex_rows(roc_day, {"5347": balances}), fetched_at="x", source_url="u")
+        # 11/09：融資 600、融券 5；往前第 5 個交易日 11/02：500、9 → +100、−4。
+        self.assertEqual(wi.margin_input(self.root, "5347", "2026-11-09"), {
+            "source": "tpex", "attribution": wi.SOURCES["tpex_margin"], "data_date": "2026-11-09", "unit": "張",
+            "margin_balance": 600, "margin_change_5d": 100, "short_balance": 5, "short_change_5d": -4,
+            "compared_with": "2026-11-02",
+        })
+
+
+class OtcMarginStoreTests(InputsTestCase):
+    def test_each_day_is_stored_once_under_its_own_date(self):
+        first = otc_margin.store(self.root, tpex_rows("1151109", {"5347": (600, 5)}), fetched_at="t1", source_url="u")
+        again = otc_margin.store(self.root, tpex_rows("1151109", {"5347": (999, 9)}), fetched_at="t2", source_url="u")
+        self.assertEqual((first, again), ({"day": "20261109", "outcome": "stored"},
+                                          {"day": "20261109", "outcome": "existing"}))
+        kept = json.loads((self.root / otc_margin.STORE_DIR / "margin-20261109.json").read_text(encoding="utf-8"))
+        self.assertEqual((kept["fetched_at_utc"], kept["data"][0]["MarginPurchaseBalance"]), ("t1", "600"))
+
+    def test_unexpected_responses_are_refused_without_writing(self):
+        mixed = json.loads(tpex_rows("1151109", {"5347": (1, 1)})) + json.loads(tpex_rows("1151106", {"6488": (1, 1)}))
+        for content in (b"<html>busy</html>", b"[]", json.dumps(mixed).encode("utf-8"),
+                        json.dumps([{"Date": "1151109", "SecuritiesCompanyCode": "5347"}]).encode("utf-8")):
+            with self.assertRaises(ValueError):
+                otc_margin.store(self.root, content, fetched_at="t", source_url="u")
+        self.assertFalse((self.root / otc_margin.STORE_DIR).exists())
+
+    def test_fetch_today_stores_the_official_response(self):
+        seen = []
+
+        def fetch(url):
+            seen.append(url)
+            return tpex_rows("1151113", {"5347": (1, 2)})
+
+        result = otc_margin.fetch_today(self.root, fetch=fetch, now=lambda: "2026-11-13T09:00:00+00:00")
+        self.assertEqual((result, seen), ({"day": "20261113", "outcome": "stored"}, [otc_margin.URL]))
+
+
+class SectorInputTests(InputsTestCase):
+    DAYS = weekdays("2026-11-02", 6)   # 11/02–11/09，基準日 11/09
+
+    def member(self, name, industry, closes, days=None):
+        return {"name": name, "industry": industry,
+                "daily": [{"date": day, "close": close} for day, close in zip(days or self.DAYS, closes)]}
+
+    def test_peers_in_the_same_official_industry_with_one_and_five_day_changes(self):
+        members = {
+            "2330": self.member("台積電", "半導體業", [600] * 6),
+            "2303": self.member("聯電", "半導體業", [50, 51, 52, 53, 54, 55]),
+            "2454": self.member("聯發科", "半導體業", [1000, 990, 980, 1000, 1010, 1000]),
+            "3008": self.member("大立光", "光電業", [2000] * 6),
+            "2408": self.member("南亞科", "半導體業", [70] * 5, days=self.DAYS[:5]),   # 基準日沒有日 K
+        }
+        # 聯電：當天 55/54−1 = +1.85%、近 5 日 55/50−1 = +10%；聯發科：1000/1010−1 = −0.99%、1000/1000−1 = 0%
+        # 平均：當天 (1.851852 − 0.990099)/2 = 0.43%、近 5 日 (10 + 0)/2 = 5%
+        self.assertEqual(wi.sector_input("2330", "2026-11-09", members), {
+            "industry": "半導體業", "source": wi.SOURCES["catalog"], "data_date": "2026-11-09",
+            "peers": [{"code": "2303", "name": "聯電", "change_1d_pct": 1.85, "change_5d_pct": 10.0},
+                      {"code": "2454", "name": "聯發科", "change_1d_pct": -0.99, "change_5d_pct": 0.0}],
+            "average_1d_pct": 0.43, "average_5d_pct": 5.0, "no_data": ["2408"],
+        })
+
+    def test_short_history_leaves_the_five_day_change_out_of_the_average(self):
+        members = {
+            "2330": self.member("台積電", "半導體業", [600] * 6),
+            "2303": self.member("聯電", "半導體業", [50, 51, 52, 53, 54, 55]),
+            "6770": self.member("力積電", "半導體業", [20, 22], days=self.DAYS[-2:]),
+        }
+        found = wi.sector_input("2330", "2026-11-09", members)
+        self.assertEqual(found["peers"][1], {"code": "6770", "name": "力積電", "change_1d_pct": 10.0,
+                                             "change_5d_pct": None})
+        # 當天平均 (1.851852 + 10)/2 = 5.93；近 5 日只有聯電一檔 → 10
+        self.assertEqual((found["average_1d_pct"], found["average_5d_pct"]), (5.93, 10.0))
+
+    def test_unknown_industry_or_no_peers(self):
+        self.assertIsNone(wi.sector_input("9999", "2026-11-09", {}))
+        alone = wi.sector_input("2330", "2026-11-09", {"2330": self.member("台積電", "半導體業", [600] * 6)})
+        self.assertEqual((alone["peers"], alone["average_1d_pct"], alone["average_5d_pct"]), ([], None, None))
+
+    def test_industries_come_from_the_official_catalogs(self):
+        listed = ("<table><tr><td>2330　台積電</td><td>TW0002330008</td><td>1994/09/05</td><td>上市</td>"
+                  "<td>半導體業</td><td>ESVUFR</td><td></td></tr></table>")
+        otc = ("<table><tr><td>5347　世界</td><td>TW0005347009</td><td>1998/03/09</td><td>上櫃</td>"
+               "<td>半導體業</td><td>ESVUFR</td><td></td></tr></table>")
+        for folder, name, html in (("data/listed-catalog/raw", "twse-isin-listed-20261108", listed),
+                                   ("data/otc-catalog/raw", "tpex-isin-otc-20261108", otc)):
+            raw = html.encode("cp950")
+            (self.root / folder).mkdir(parents=True)
+            (self.root / folder / f"{name}.html").write_bytes(raw)
+            (self.root / folder / f"{name}.meta.json").write_text(json.dumps({
+                "sha256": hashlib.sha256(raw).hexdigest(), "source_url": "u",
+                "retrieved_at_utc": "2026-11-08T00:00:00Z"}))
+        self.assertEqual(wi.catalog_industries(self.root), {"2330": ("台積電", "半導體業"), "5347": ("世界", "半導體業")})
+
+
+class EnvironmentInputTests(InputsTestCase):
+    def fx(self, folder, rows):
+        path = self.root / "data/level-signals" / folder / "cbc-usdtwd.raw"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(cbc_rows(rows))
+
+    def store_treasury(self, rows):
+        for month in sorted({day[:7].replace("-", "") for day, _, _ in rows}):
+            treasury_yields.store_month(self.root, month,
+                                        treasury_xml([row for row in rows if row[0][:7].replace("-", "") == month]),
+                                        fetched_at="t", source_url="u")
+
+    def test_exchange_rate_and_treasury_yields_with_their_own_dates(self):
+        days = weekdays("2026-10-13", 20)   # 10/13–11/09
+        # 匯率：第 1 根（10/12）30.000、最後一根（11/09）30.600 → 近 20 個交易日 30.6/30 − 1 = +2%（新臺幣貶值）
+        self.fx("2026-11-09", [("2026-10-12", 30.0)] + [(day, 30.6 if day == days[-1] else 30.3) for day in days])
+        # 美債：10 月與 11 月各一個月份檔；第 1 筆 2 年 4.50、10 年 4.90，最後一筆（美國 11/06）4.70、5.15
+        #   → 近 20 個交易日 +0.20、+0.25 個百分點。美國 11/09 那一筆還沒公布。
+        us_days = weekdays("2026-10-09", 21)   # 10/09–11/06
+        self.store_treasury([(day, 4.7 if day == us_days[-1] else 4.5, 5.15 if day == us_days[-1] else 4.9)
+                             for day in us_days])
+        self.assertEqual(wi.environment_input(self.root, "2026-11-09"), {
+            "usdtwd": {"date": "2026-11-09", "close": 30.6, "change_20d_pct": 2.0, "quote": "每 1 美元兌新臺幣",
+                       "source": wi.SOURCES["cbc_usdtwd"]},
+            "us_treasury": {"date": "2026-11-06", "yield_2y_pct": 4.7, "yield_10y_pct": 5.15,
+                            "change_20d_2y_pt": 0.2, "change_20d_10y_pt": 0.25, "source": wi.SOURCES["us_treasury"]},
+            "missing": [],
+        })
+
+    def test_missing_series_are_named_and_do_not_hide_the_others(self):
+        self.fx("2026-11-09", [(day, 30.0) for day in weekdays("2026-10-12", 21)])
+        found = wi.environment_input(self.root, "2026-11-09")
+        self.assertEqual((found["us_treasury"], found["missing"]), (None, ["us_treasury"]))
+        self.assertEqual(found["usdtwd"]["change_20d_pct"], 0.0)
+        self.assertIsNone(wi.environment_input(self.root / "empty", "2026-11-09"))
+
+    def test_exchange_rate_never_comes_from_after_the_as_of_date(self):
+        self.fx("2026-11-06", [(day, 30.0) for day in weekdays("2026-10-09", 21)])
+        self.fx("2026-11-10", [(day, 31.0) for day in weekdays("2026-10-13", 21)])
+        self.assertEqual(wi.environment_input(self.root, "2026-11-09")["usdtwd"]["date"], "2026-11-06")
+
+    def test_yield_left_blank_by_the_treasury_is_null_and_change_needs_twenty_earlier_days(self):
+        self.store_treasury([("2026-11-05", 4.6, 5.0), ("2026-11-06", None, 5.1)])
+        found = wi.environment_input(self.root, "2026-11-09")["us_treasury"]
+        self.assertEqual((found["date"], found["yield_2y_pct"], found["yield_10y_pct"], found["change_20d_2y_pt"],
+                          found["change_20d_10y_pt"]), ("2026-11-06", None, 5.1, None, None))
+
+
+class TreasuryStoreTests(InputsTestCase):
+    def test_parses_the_two_and_ten_year_yields_by_date(self):
+        content = treasury_xml([("2026-11-02", 4.59, 4.91), ("2026-11-13", 4.88, 5.15)])
+        self.assertEqual(treasury_yields.parse(content), [
+            {"date": "2026-11-02", "yield_2y": 4.59, "yield_10y": 4.91},
+            {"date": "2026-11-13", "yield_2y": 4.88, "yield_10y": 5.15}])
+
+    def test_month_file_is_replaced_as_the_month_fills_in_but_never_shrinks(self):
+        one = treasury_xml([("2026-11-02", 4.59, 4.91)])
+        two = treasury_xml([("2026-11-02", 4.59, 4.91), ("2026-11-03", 4.6, 4.92)])
+        self.assertEqual(treasury_yields.store_month(self.root, "202611", one, fetched_at="t1", source_url="u"), "stored")
+        self.assertEqual(treasury_yields.store_month(self.root, "202611", two, fetched_at="t2", source_url="u"), "stored")
+        self.assertEqual(treasury_yields.store_month(self.root, "202611", two, fetched_at="t3", source_url="u"),
+                         "unchanged")
+        with self.assertRaises(ValueError):
+            treasury_yields.store_month(self.root, "202611", one, fetched_at="t4", source_url="u")
+        self.assertEqual([row["date"] for row in treasury_yields.load(self.root)], ["2026-11-02", "2026-11-03"])
+        meta = json.loads((self.root / treasury_yields.STORE_DIR / "ust-202611.meta.json").read_text(encoding="utf-8"))
+        self.assertEqual((meta["fetched_at_utc"], meta["source_url"]), ("t2", "u"))
+
+    def test_unexpected_responses_are_refused_without_writing(self):
+        for content in (b"<html>maintenance</html>", b"not xml", treasury_xml([]),
+                        treasury_xml([("2026-10-30", 4.5, 4.9)])):   # 不是 11 月
+            with self.assertRaises(ValueError):
+                treasury_yields.store_month(self.root, "202611", content, fetched_at="t", source_url="u")
+        self.assertEqual(treasury_yields.load(self.root), [])
+
+    def test_fetch_month_asks_the_treasury_for_that_month(self):
+        seen = []
+
+        def fetch(url):
+            seen.append(url)
+            return treasury_xml([("2026-11-02", 4.59, 4.91)])
+
+        self.assertEqual(treasury_yields.fetch_month(self.root, "202611", fetch=fetch, now=lambda: "t"), "stored")
+        self.assertEqual(seen, ["https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xml"
+                                "?data=daily_treasury_yield_curve&field_tdr_date_value_month=202611"])
+
+
+# ---- 交給 Gemini 的輸入 ----
+
+ALL_NEW = ("technical", "bollinger", "sector", "margin", "environment", "market", "news")
+
+
+def extras(margin_source="twse"):
+    """I 票三層的固定輸入（各讀取介面回傳的形狀；數字是上面各測試手算過的）。"""
+    return {
+        "sector": {"industry": "半導體業", "source": wi.SOURCES["catalog"], "data_date": BASE,
+                   "peers": [{"code": "2303", "name": "聯電", "change_1d_pct": 1.85, "change_5d_pct": 10.0}],
+                   "average_1d_pct": 1.85, "average_5d_pct": 10.0, "no_data": []},
+        "margin": {"source": margin_source, "attribution": "出處", "data_date": BASE, "unit": "張",
+                   "margin_balance": 1100, "margin_change_5d": 100, "short_balance": 30, "short_change_5d": -20,
+                   "compared_with": "2026-09-23"},
+        "environment": {"usdtwd": {"date": BASE, "close": 30.6, "change_20d_pct": 2.0, "quote": "每 1 美元兌新臺幣",
+                                   "source": "出處"},
+                        "us_treasury": None, "missing": ["us_treasury"]},
+    }
+
+
+class NewLayersInPromptTests(WatchLedgerTestCase):
+    def sent(self):
+        prompt = (self.bin / "prompt.txt").read_text(encoding="utf-8")
+        return prompt, json.loads(prompt[prompt.index("{"):prompt.rindex("}") + 1])
+
+    def test_model_sees_each_input_with_its_data_date(self):
+        self.write(stock_input(**extras()), model=recording_model(self.bin, answer()), layers=ALL_NEW)
+        _, sent = self.sent()
+        self.assertEqual((sent["margin"]["margin_change_5d"], sent["margin"]["data_date"]), (100, BASE))
+        self.assertEqual((sent["sector"]["peers"][0]["change_5d_pct"], sent["sector"]["data_date"]), (10.0, BASE))
+        self.assertEqual(sent["environment"]["usdtwd"]["date"], BASE)
+        self.assertEqual(sent["environment"]["missing"], ["us_treasury"])
+        self.assertEqual((sent["bollinger"]["upper"], sent["bollinger"]["date"]), (BOLL_UPPER, BASE))
+        self.assertEqual(sent["withheld_layers"], {})
+
+    def test_missing_inputs_are_named_and_the_judgment_is_still_written(self):
+        record = self.write(stock_input(sector=None, margin=None, environment=None), layers=ALL_NEW)["record"]
+        self.assertEqual(record["kind"], "judgment")
+        self.assertEqual(record["missing_layers"], ["sector", "margin", "environment"])
+        self.assertEqual(record["input_version"], wl.input_version_of(ALL_NEW))
+
+    def test_otc_margin_stays_out_of_the_prompt_and_says_why(self):
+        model = recording_model(self.bin, answer())
+        record = self.write(stock_input(**extras(margin_source="tpex")), model=model, layers=ALL_NEW)["record"]
+        prompt, sent = self.sent()
+        self.assertNotIn("margin_balance", prompt)
+        self.assertEqual(sent["withheld_layers"], {"margin": wl.WITHHELD_MARGIN})
+        self.assertIsNone(record["input"]["margin"])
+        self.assertEqual(record["withheld_layers"], {"margin": wl.WITHHELD_MARGIN})
+        self.assertEqual(record["missing_layers"], [])   # 不是沒資料，是依條款不放
+        # 依條款不放不換版本：同一組層，和上市股同一個輸入版本、同一組對帳。
+        self.assertEqual(record["input_version"], wl.input_version_of(ALL_NEW))
+
+    def test_margin_must_name_its_source(self):
+        with self.assertRaises(ValueError):
+            self.write(stock_input(margin={"margin_balance": 1}), layers=ALL_NEW)
+
+    def test_each_new_input_is_its_own_input_version(self):
+        versions = {wl.input_version_of(ALL_NEW[:count] + ("market", "news")) for count in range(1, 6)}
+        self.assertEqual(len(versions), 5)
+        self.assertTrue(wl.input_version_of(ALL_NEW).startswith(
+            "technical+bollinger+sector+margin+environment+market+news-v1-"))
+
+    def test_free_plan_layers_are_the_four_new_inputs_on_top_of_the_existing_ones(self):
+        self.assertEqual(wl.FREE_PLAN_LAYERS, ALL_NEW)
+
+
+if __name__ == "__main__":
+    unittest.main()
