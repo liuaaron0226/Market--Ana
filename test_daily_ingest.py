@@ -19,6 +19,7 @@ from pathlib import Path
 
 import daily_ingest as di
 import listed_institutional as li
+import margin_history
 import otc_corporate_actions as oca
 import otc_history as oh
 import otc_market_data as omd
@@ -407,6 +408,42 @@ class ChipDetailTest(unittest.TestCase):
                                               datasets=("margin",))
             self.assertEqual(sorted(p.name for p in kept.parent.glob("*.json")), ["margin-20261106.json"])
             self.assertEqual(later["margin_history"]["stored"], [])
+
+    def test_days_missing_from_the_long_term_store_come_back_from_the_seed(self) -> None:
+        # 雲端的工作集一開始只有最近一段；更早的日子在專案帶的種子裡，每日抓取時補回長期保存區。
+        with tempfile.TemporaryDirectory() as tmp:
+            source, root = Path(tmp) / "source", Path(tmp) / "root"
+            early = source / "data/margin-history/raw/margin-20251103.json"
+            early.parent.mkdir(parents=True)
+            early.write_text(json.dumps({"fetched_at_utc": "x", "source_url": "u",
+                                         "data": self._complete_margin("20251103")}), encoding="utf-8")
+            margin_history.write_seed(source)
+            (root / "seeds").mkdir(parents=True)
+            (root / margin_history.SEED).write_bytes((source / margin_history.SEED).read_bytes())
+            rec = Recorder({("MI_MARGN", "20261106"): sh.Response(
+                200, "application/json", json.dumps(self._complete_margin("20261106")).encode(), "u")})
+            done = di.listed_chip_detail_day(root, "2026-11-06", get=rec.two_arg, sleep=lambda s: None,
+                                             datasets=("margin",))
+            kept = root / "data/margin-history/raw"
+            self.assertEqual(sorted(p.name for p in kept.glob("*.json")),
+                             ["margin-20251103.json", "margin-20261106.json"])
+            self.assertEqual((kept / "margin-20251103.json").read_bytes(), early.read_bytes())
+            self.assertEqual((done["margin_history"]["restored"], done["margin_history"]["stored"]),
+                             (["20251103"], ["20261106"]))
+
+    def test_broken_seed_does_not_stop_today_from_being_kept(self) -> None:
+        # 種子壞了是一回事；當天抓到的那一份還是要進長期保存區，不然過了近期明細的保留期就永遠缺那一天。
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "seeds").mkdir()
+            (root / margin_history.SEED).write_bytes(b"not an archive")
+            rec = Recorder({("MI_MARGN", "20261106"): sh.Response(
+                200, "application/json", json.dumps(self._complete_margin("20261106")).encode(), "u")})
+            done = di.listed_chip_detail_day(root, "2026-11-06", get=rec.two_arg, sleep=lambda s: None,
+                                             datasets=("margin",))
+            self.assertTrue((root / "data/margin-history/raw/margin-20261106.json").exists())
+            self.assertEqual((done["margin_history"]["status"], done["margin_history"]["stored"]), ("ok", ["20261106"]))
+            self.assertTrue(done["margin_history"]["seed_error"])
 
     def test_long_term_store_failure_does_not_hide_what_was_fetched(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

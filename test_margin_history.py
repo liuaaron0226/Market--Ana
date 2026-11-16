@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import io
 import json
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
@@ -201,6 +203,98 @@ class KeepUpTest(unittest.TestCase):
 
     def test_nothing_fetched_yet_is_not_an_error(self) -> None:
         self.assertEqual(mh.keep_up(self.root), {"stored": [], "skipped": []})
+
+
+class SeedTest(unittest.TestCase):
+    """雲端的工作集一開始只有最近一段；更早的日子隨專案帶一份種子，長期保存區缺了就從種子放回去。"""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name) / "root"
+        self.elsewhere = Path(self.tmp.name) / "elsewhere"     # 另一台機器：只有專案裡的種子，沒有資料
+        self.root.mkdir()
+        self.elsewhere.mkdir()
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def keep(self, day: str, mark: str = "daily") -> None:
+        fetch(self.root, day, mark=mark)
+        mh.keep_up(self.root)
+
+    def carry_seed(self) -> None:
+        target = self.elsewhere / mh.SEED
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((self.root / mh.SEED).read_bytes())
+
+    def test_seed_puts_every_packed_day_back_byte_for_byte(self) -> None:
+        self.keep("20251103")
+        self.keep("20251104")
+        packed = mh.write_seed(self.root)
+        self.assertEqual((packed["days"], packed["first"], packed["last"]), (2, "20251103", "20251104"))
+        self.carry_seed()
+        self.assertEqual(mh.restore_seed(self.elsewhere), ["20251103", "20251104"])
+        for day in ("20251103", "20251104"):
+            self.assertEqual(stored(self.elsewhere, day).read_bytes(), stored(self.root, day).read_bytes())
+
+    def test_day_already_in_the_store_is_left_alone(self) -> None:
+        self.keep("20251103", mark="packed")
+        self.keep("20251104", mark="packed")
+        mh.write_seed(self.root)
+        self.carry_seed()
+        fetch(self.elsewhere, "20251104", mark="own")
+        mh.keep_up(self.elsewhere)
+        self.assertEqual(mh.restore_seed(self.elsewhere), ["20251103"])
+        own = json.loads(stored(self.elsewhere, "20251104").read_text(encoding="utf-8"))
+        self.assertEqual(own["fetched_at_utc"], "own")
+        self.assertEqual(mh.restore_seed(self.elsewhere), [])          # 再放一次不會有事
+
+    def test_no_seed_is_not_an_error(self) -> None:
+        self.assertEqual(mh.restore_seed(self.elsewhere), [])
+        self.assertFalse((self.elsewhere / "data").exists())
+
+    def test_only_daily_originals_come_out_of_the_seed(self) -> None:
+        # 種子裡若混進別的東西（或想寫到保存區外面的路徑），一律不理。
+        target = self.elsewhere / mh.SEED
+        target.parent.mkdir(parents=True)
+        with tarfile.open(target, mode="w:xz") as tar:
+            for name in ("margin-20251103.json", "../margin-20251104.json", "notes.txt", "raw/margin-20251105.json"):
+                member = tarfile.TarInfo(name)
+                member.size = 2
+                tar.addfile(member, io.BytesIO(b"{}"))
+        self.assertEqual(mh.restore_seed(self.elsewhere), ["20251103"])
+        written = sorted(p.relative_to(self.elsewhere).as_posix() for p in self.elsewhere.rglob("*") if p.is_file())
+        self.assertEqual(written, ["data/margin-history/raw/margin-20251103.json", mh.SEED])
+
+    def test_packing_the_same_days_again_gives_the_same_file(self) -> None:
+        # 種子是入庫的檔案；內容沒變就不該每次打包都變成一個新版本。
+        self.keep("20251103")
+        mh.write_seed(self.root)
+        first = (self.root / mh.SEED).read_bytes()
+        stored(self.root, "20251103").touch()
+        mh.write_seed(self.root)
+        self.assertEqual((self.root / mh.SEED).read_bytes(), first)
+
+
+    def test_packing_refuses_to_drop_days_the_seed_already_has(self) -> None:
+        # 在資料比較少的機器上重打（例如沒有資料的工作副本），不能把入庫的那一年悄悄換成比較少的一包。
+        self.keep("20251103")
+        self.keep("20251104")
+        mh.write_seed(self.root)
+        before = (self.root / mh.SEED).read_bytes()
+        stored(self.root, "20251103").unlink()
+        with self.assertRaises(ValueError) as refused:
+            mh.write_seed(self.root)
+        self.assertIn("20251103", str(refused.exception))
+        self.assertEqual((self.root / mh.SEED).read_bytes(), before)
+        self.keep("20251103")
+        self.keep("20251105")                                   # 只多不少就可以重打
+        self.assertEqual(mh.write_seed(self.root)["days"], 3)
+
+    def test_packing_an_empty_store_is_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            mh.write_seed(self.root)
+        self.assertFalse((self.root / mh.SEED).exists())
 
 
 class CoverageTest(unittest.TestCase):
