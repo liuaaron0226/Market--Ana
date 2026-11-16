@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import subprocess
@@ -25,6 +26,22 @@ from ai_digest import (
 MODEL = "gemini-3.8-flash"
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 SECTIONS = ("market", "flow")
+# 單次呼叫上限：10 位朋友最壞也在 job 的 60 分鐘內跑完、寫得進資料庫。
+GEMINI_TIMEOUT_SECONDS = 120
+# 寫進 friend_gemini_keys.last_failure_reason：設定頁與後台會原樣顯示，所以存中文說明；分類碼另外存在 friend_ai_daily.error_code。
+FAILURE_TEXT = {
+    "key_invalid": "金鑰無效：可能已刪除或過期，請到 Gemini 設定換一把",
+    "key_revoked": "金鑰被撤銷或停用：Google 拒絕這把金鑰，請到 Gemini 設定換一把",
+    "quota": "今天的免費額度用完了，明天會照常再試",
+    "region": "Google 在你所在的地區不提供免費額度",
+    "gemini_unavailable": "暫時連不到 Google，今天的解讀沒有產生",
+    "key_decrypt_failed": "網站讀不到你的金鑰，請到 Gemini 設定重新貼一次",
+    "validation_failed": "今天的解讀沒有通過數字與代號檢查，所以沒有顯示",
+    "structured_output_invalid": "今天的解讀格式不正確，所以沒有顯示",
+    "gemini_failed": "今天的解讀格式不正確，所以沒有顯示",
+    "input_not_ready": "今天的盤後資料還沒齊，解讀沒有產生",
+    "internal_error": "網站處理時出錯，今天的解讀沒有產生",
+}
 
 
 class GeminiHttpError(Exception):
@@ -94,13 +111,14 @@ def classify_http_error(error: GeminiHttpError) -> str:
     return "gemini_unavailable"
 
 
-def call_gemini(prompt: str, model: str, *, api_key: str, post: Callable) -> tuple[Any, dict[str, int | None]]:
+def call_gemini(prompt: str, model: str, *, api_key: str, post: Callable,
+                url_template: str = GEMINI_URL) -> tuple[Any, dict[str, int | None]]:
     body = {
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "generationConfig": {"responseMimeType": "application/json", "responseJsonSchema": FRIEND_SCHEMA},
     }
     try:
-        reply = post(GEMINI_URL.format(model=model), body, api_key)
+        reply = post(url_template.format(model=model), body, api_key)
     except GeminiHttpError as error:
         raise ModelCallFailed(classify_http_error(error), None, {"http_status": error.status}) from None
     except OSError as error:
@@ -127,10 +145,10 @@ def _friend_validated_rows(payload, structured, model, usage):
     return [row for row in rows if row["digest_type"] in SECTIONS], rejected
 
 
-def _digest_one(payload: dict[str, Any], api_key: str, *, post: Callable, model: str) -> dict[str, Any]:
+def _digest_one(payload: dict[str, Any], api_key: str, *, post: Callable, model: str, url_template: str) -> dict[str, Any]:
     return digest_with_model(
         payload, prompt=build_friend_prompt(payload), model=model, crash_code="gemini_failed",
-        call_model=lambda prompt, chosen: call_gemini(prompt, chosen, api_key=api_key, post=post),
+        call_model=lambda prompt, chosen: call_gemini(prompt, chosen, api_key=api_key, post=post, url_template=url_template),
         validate=_friend_validated_rows, failure_rows=_friend_failure_rows,
     )
 
@@ -142,14 +160,14 @@ def _failed(payload: dict[str, Any], model: str, code: str, error: Exception) ->
 
 
 def _one_friend(payload: dict[str, Any], key_row: dict[str, Any], *, decrypt: Callable, post: Callable,
-                model: str) -> dict[str, Any]:
+                model: str, url_template: str) -> dict[str, Any]:
     # 每位朋友各自收尾：任何例外都只讓他自己這天「未產生」，例外內容只記類別，不記訊息（可能帶上游原文）。
     try:
         api_key = decrypt(key_row)
     except Exception as error:  # noqa: BLE001 — 解不開的原因不重要，重要的是不影響下一位
         return _failed(payload, model, "key_decrypt_failed", error)
     try:
-        return _digest_one(payload, api_key, post=post, model=model)
+        return _digest_one(payload, api_key, post=post, model=model, url_template=url_template)
     except Exception as error:  # noqa: BLE001
         return _failed(payload, model, "internal_error", error)
     finally:
@@ -157,14 +175,14 @@ def _one_friend(payload: dict[str, Any], key_row: dict[str, Any], *, decrypt: Ca
 
 
 def run_friends(payload: dict[str, Any], keys: list[dict[str, Any]], *, decrypt: Callable, post: Callable,
-                model: str = MODEL, now: Callable[[], str] | None = None) -> dict[str, Any]:
+                model: str = MODEL, now: Callable[[], str] | None = None, url_template: str = GEMINI_URL) -> dict[str, Any]:
     now = now or (lambda: datetime.now(timezone.utc).isoformat(timespec="seconds"))
     rows: list[dict[str, Any]] = []
     outcomes: dict[str, dict[str, Any]] = {}
     audit: list[dict[str, Any]] = []
     for key_row in keys:
         email = key_row["email"]
-        result = _one_friend(payload, key_row, decrypt=decrypt, post=post, model=model)
+        result = _one_friend(payload, key_row, decrypt=decrypt, post=post, model=model, url_template=url_template)
         at = now()
         for row in result["rows"]:
             rows.append({**row, "email": email, "created_at": at})
@@ -175,37 +193,38 @@ def run_friends(payload: dict[str, Any], keys: list[dict[str, Any]], *, decrypt:
     return {"rows": rows, "keys": outcomes, "audit": audit}
 
 
-def friend_sql(result: dict[str, Any]) -> str:
-    """寫進 friend_ai_daily（每位朋友各自當天的成功或未產生），並更新他金鑰的最後成功時間／最近失敗原因。"""
-    if not result["rows"]:
-        return ""
-    statements = ["BEGIN;"]
-    for row in result["rows"]:
-        values = [
-            row["email"], row["data_date"], row["digest_type"],
-            None if row["content"] is None else json.dumps(row["content"], ensure_ascii=False, separators=(",", ":")),
-            row["input_sha256"], row["model"], row["input_tokens"], row["output_tokens"], row["total_tokens"],
-            row["status"], row["error_code"], row["created_at"], row["created_at"],
-        ]
-        statements.append(
-            "INSERT INTO friend_ai_daily (email,data_date,digest_type,content_json,input_sha256,model,input_tokens,output_tokens,"
-            "total_tokens,status,error_code,created_at,updated_at) VALUES (" + ",".join(_sql_literal(v) for v in values) +
-            ") ON CONFLICT(email,data_date,digest_type) DO UPDATE SET content_json=excluded.content_json,"
-            "input_sha256=excluded.input_sha256,model=excluded.model,input_tokens=excluded.input_tokens,"
-            "output_tokens=excluded.output_tokens,total_tokens=excluded.total_tokens,status=excluded.status,"
-            "error_code=excluded.error_code,updated_at=excluded.updated_at;"
-        )
-    at_by_email = {row["email"]: row["created_at"] for row in result["rows"]}
+def friend_sql(result: dict[str, Any]) -> list[str]:
+    """每位朋友一份 SQL（各自 BEGIN／COMMIT）：寫進 friend_ai_daily 當天的成功或未產生，並更新他金鑰的
+    最後成功時間／最近失敗原因（中文說明）。排程逐份寫入，一位寫失敗不擋其他人。"""
+    scripts: list[str] = []
     for email, outcome in result["keys"].items():
-        at = _sql_literal(at_by_email.get(email))
+        rows = [row for row in result["rows"] if row["email"] == email]
+        statements = ["BEGIN;"]
+        for row in rows:
+            values = [
+                row["email"], row["data_date"], row["digest_type"],
+                None if row["content"] is None else json.dumps(row["content"], ensure_ascii=False, separators=(",", ":")),
+                row["input_sha256"], row["model"], row["input_tokens"], row["output_tokens"], row["total_tokens"],
+                row["status"], row["error_code"], row["created_at"], row["created_at"],
+            ]
+            statements.append(
+                "INSERT INTO friend_ai_daily (email,data_date,digest_type,content_json,input_sha256,model,input_tokens,output_tokens,"
+                "total_tokens,status,error_code,created_at,updated_at) VALUES (" + ",".join(_sql_literal(v) for v in values) +
+                ") ON CONFLICT(email,data_date,digest_type) DO UPDATE SET content_json=excluded.content_json,"
+                "input_sha256=excluded.input_sha256,model=excluded.model,input_tokens=excluded.input_tokens,"
+                "output_tokens=excluded.output_tokens,total_tokens=excluded.total_tokens,status=excluded.status,"
+                "error_code=excluded.error_code,updated_at=excluded.updated_at;"
+            )
+        at = _sql_literal(rows[0]["created_at"] if rows else None)
+        who = _sql_literal(email)
         if outcome["outcome"] == "success":
-            statements.append(f"UPDATE friend_gemini_keys SET last_success_at={at},last_failure_reason=NULL,updated_at={at} "
-                              f"WHERE email={_sql_literal(email)};")
+            statements.append(f"UPDATE friend_gemini_keys SET last_success_at={at},last_failure_reason=NULL,updated_at={at} WHERE email={who};")
         else:
-            statements.append(f"UPDATE friend_gemini_keys SET last_failure_reason={_sql_literal(outcome['reason'])},updated_at={at} "
-                              f"WHERE email={_sql_literal(email)};")
-    statements.append("COMMIT;")
-    return "\n".join(statements) + "\n"
+            text = FAILURE_TEXT.get(outcome["reason"], FAILURE_TEXT["internal_error"])
+            statements.append(f"UPDATE friend_gemini_keys SET last_failure_reason={_sql_literal(text)},updated_at={at} WHERE email={who};")
+        statements.append("COMMIT;")
+        scripts.append("\n".join(statements) + "\n")
+    return scripts
 
 
 def workflow_policy(event: str, switch: str | None, dry_run_input: str | None) -> dict[str, bool]:
@@ -225,24 +244,37 @@ ROOT = Path(__file__).resolve().parent
 SCHEDULE_JS = ROOT / "cloud" / "friend-ai-schedule.mjs"
 
 
-def http_post(url: str, body: dict[str, Any], api_key: str, *, timeout: float = 300) -> dict[str, Any]:
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """標頭裡有金鑰：不跟著轉址把金鑰帶去別的網址。"""
+
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
+def http_post(url: str, body: dict[str, Any], api_key: str, *, timeout: float = GEMINI_TIMEOUT_SECONDS) -> dict[str, Any]:
     """真的上游：金鑰只放 x-goog-api-key 標頭，不進網址。錯誤只取 HTTP 狀態與 Google 的 status／reason。"""
     request = urllib.request.Request(
         url, data=json.dumps(body, ensure_ascii=False).encode("utf-8"), method="POST",
         headers={"content-type": "application/json", "x-goog-api-key": api_key},
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 — 網址是程式常數
+        with _OPENER.open(request, timeout=timeout) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
         detail: dict[str, Any] = {}
         try:
             detail = json.loads(error.read().decode("utf-8")).get("error") or {}
-        except (ValueError, AttributeError, OSError):
+        except (ValueError, AttributeError, OSError, http.client.HTTPException):
             pass
         reasons = tuple(str(item.get("reason")) for item in detail.get("details") or [] if isinstance(item, dict))
+        # 和 01 票試呼叫一樣：400 的訊息提到 API key 也算金鑰無效。訊息本身不保存。
+        if "api key" in str(detail.get("message") or "").lower():
+            reasons = (*reasons, "API_KEY_INVALID")
         raise GeminiHttpError(error.code, detail.get("status"), reasons) from None
-    except (ValueError, TimeoutError) as error:
+    except (ValueError, TimeoutError, http.client.HTTPException) as error:
         raise OSError(type(error).__name__) from None
 
 
@@ -288,7 +320,7 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--market-dir", type=Path, required=True)
     run.add_argument("--screens-root", type=Path, required=True)
     run.add_argument("--keys-json", type=Path)
-    run.add_argument("--sql-output", type=Path, required=True)
+    run.add_argument("--sql-dir", type=Path, required=True, help="每位朋友一份 SQL，檔名只有序號、不含 email")
     run.add_argument("--audit", type=Path, required=True)
     run.add_argument("--prompt-output", type=Path)
     run.add_argument("--model", default=MODEL)
@@ -317,12 +349,11 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("非乾跑必須提供 --keys-json")
     if not os.environ.get("FRIEND_AI_MASTER_KEY"):
         parser.error("非乾跑必須設定 FRIEND_AI_MASTER_KEY")
-    url = args.gemini_url
     result = run_friends(payload, read_keys(args.keys_json), decrypt=node_decrypt, model=args.model,
-                         post=lambda target, body, api_key: http_post(url.format(model=args.model), body, api_key))
-    sql = friend_sql(result)
-    if sql:
-        args.sql_output.write_text(sql, encoding="utf-8")
+                         post=http_post, url_template=args.gemini_url)
+    args.sql_dir.mkdir(parents=True, exist_ok=True)
+    for index, script in enumerate(friend_sql(result), start=1):
+        (args.sql_dir / f"friend-{index:02d}.sql").write_text(script, encoding="utf-8")
     audit = {"data_date": args.date, "input_sha256": payload["input_sha256"], "model": args.model,
              **_summary(result), "friends_detail": result["audit"]}
     args.audit.write_text(json.dumps(audit, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -232,12 +232,25 @@ def _exchange_sections(data_date: str, market_dir: Path, screens_root: Path) -> 
 # 朋友那份只放證交所、櫃買的官方開放資料（DECISIONS 第 5 題）：期貨部位來自期交所，不放。
 FRIEND_INPUT_SCHEMA = "ai-digest-friend-input/v1"
 NON_EXCHANGE_MARKET_FIELDS = ("futures", "futures_chips")
+# dashboard-data.js 是人寫的劇本檔，以後可能多放國外指數：朋友那份只放列出的欄位（全是證交所資料算出來的）。
+FRIEND_LATEST_FIELDS = (
+    "close", "change", "change_percent", "low", "high", "previous_low", "turnover", "turnover_vs_20d",
+    "avg_turnover_20d", "foreign_net", "investment_net", "electronic_percent", "financial_percent",
+    "below_ma20", "ma20", "ma5",
+)
+FRIEND_THRESHOLD_FIELDS = ("upper", "lower")
+
+
+def _only(value: Any, fields: tuple[str, ...]) -> Any:
+    return {key: value[key] for key in fields if key in value} if isinstance(value, dict) else None
 
 
 def build_friend_input(*, data_date: str, market_dir: Path, screens_root: Path) -> dict[str, Any]:
     """朋友的大盤、籌碼解讀輸入：所有朋友共用同一份，不含任何人的自選股、庫存、email，也不含新聞與國外行情。"""
     exchange = _exchange_sections(data_date, market_dir, screens_root)
     market = {key: value for key, value in exchange["market"].items() if key not in NON_EXCHANGE_MARKET_FIELDS}
+    market["latest"] = _only(market.get("latest"), FRIEND_LATEST_FIELDS)
+    market["thresholds"] = _only(market.get("thresholds"), FRIEND_THRESHOLD_FIELDS)
     payload: dict[str, Any] = {
         "schema": FRIEND_INPUT_SCHEMA,
         "data_date": data_date,

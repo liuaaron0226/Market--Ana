@@ -22,7 +22,11 @@ def steps_running(marker):
 class FriendAiWorkflowTests(unittest.TestCase):
     def test_runs_after_daily_update_publishes_and_shares_the_state_lock_without_cancelling(self):
         self.assertEqual(TRIGGERS["workflow_run"], {"workflows": ["daily-update"], "types": ["completed"], "branches": ["main"]})
-        self.assertEqual(WORKFLOW["concurrency"], {"group": "market-state-write", "cancel-in-progress": False})
+        lock = WORKFLOW["concurrency"]
+        self.assertIs(lock["cancel-in-progress"], False)
+        # 正式跑用共用鎖；手動乾跑另開一把，不會把排隊中的正式那支擠掉。
+        self.assertTrue(lock["group"].endswith("|| 'market-state-write' }}"), lock["group"])
+        self.assertIn("inputs.dry_run != false && format('friend-ai-digest-dry-{0}', github.run_id)", lock["group"])
         self.assertIn("python ai_digest_trigger.py authorize", SOURCE)
         self.assertIn("daily-publication-", SOURCE)
 
@@ -32,10 +36,12 @@ class FriendAiWorkflowTests(unittest.TestCase):
         self.assertNotIn("MARKET_ANA_STRATEGIES_ENABLED", CODE)
         self.assertIn("python friend_ai_digest.py authorize", SOURCE)
         self.assertEqual(WORKFLOW["jobs"]["digest"]["if"], "needs.authorize.outputs.allowed == 'true'")
+        # 手動正式跑只能用預設分支的程式。
+        self.assertIn('[ "$GITHUB_REF" != "refs/heads/$EXPECTED_BRANCH" ]; then AUTH_DRY_RUN=true', SOURCE)
 
     def test_gemini_keys_and_writes_only_happen_on_real_runs(self):
         guard = "steps.mode.outputs.dry_run == 'false'"
-        for marker in ("keys-sql", "--keys-json", "--file"):
+        for marker in ("keys-sql", "--keys-json", "--file \"$file\""):
             matches = steps_running(marker)
             self.assertTrue(matches, marker)
             for step in matches:
@@ -51,7 +57,7 @@ class FriendAiWorkflowTests(unittest.TestCase):
         self.assertNotIn("echo \"$FRIEND_AI_MASTER_KEY", SOURCE)
         cleanup = STEPS[-1]
         self.assertEqual(cleanup["if"], "always()")
-        for name in ("friend-keys.json", "friend-ai.sql", "friend-ai-input", "friend-ai-audit.json"):
+        for name in ("friend-keys.json", "friend-ai-sql", "friend-ai-input", "friend-ai-audit.json"):
             self.assertIn(name, cleanup["run"])
         self.assertNotIn("state_sync.py upload", SOURCE)
         self.assertNotIn("agy", COMMANDS.replace("ai_digest", ""))

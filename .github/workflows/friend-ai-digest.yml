@@ -25,8 +25,9 @@ permissions:
   actions: read
 
 concurrency:
-  # 和其他寫入狀態的排程共用同一把鎖、不互相取消。
-  group: market-state-write
+  # 和其他寫入狀態的排程共用同一把鎖、不互相取消。手動乾跑另開一把（照 forecast-ledger.yml）：
+  # GitHub 同一把鎖只留一個排隊中的，乾跑插隊會把排隊中的正式那支取消掉。
+  group: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run != false && format('friend-ai-digest-dry-{0}', github.run_id) || 'market-state-write' }}
   cancel-in-progress: false
 
 jobs:
@@ -81,6 +82,8 @@ jobs:
           UPSTREAM_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
         run: |
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            # 手動正式跑只能用預設分支的程式（會解開所有朋友的金鑰）；其他分支一律乾跑。
+            if [ "$AUTH_DRY_RUN" = "false" ] && [ "$GITHUB_REF" != "refs/heads/$EXPECTED_BRANCH" ]; then AUTH_DRY_RUN=true; fi
             # 日期會原樣寫進 GITHUB_OUTPUT；夾帶換行就能多塞一行 dry_run=false，寫入前先擋。
             if [ -n "$INPUT_DATE" ] && ! [[ "$INPUT_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
               echo "::error::date 必須是 YYYY-MM-DD"; exit 1
@@ -175,7 +178,7 @@ jobs:
         run: |
           python friend_ai_digest.py run --dry-run --date "$DATA_DATE" \
             --market-dir data/daily-update-state/last-market-pack --screens-root data/market-screen-snapshots \
-            --sql-output "$RUNNER_TEMP/friend-ai.sql" --audit "$RUNNER_TEMP/friend-ai-audit.json" \
+            --sql-dir "$RUNNER_TEMP/friend-ai-sql" --audit "$RUNNER_TEMP/friend-ai-audit.json" \
             --prompt-output "$RUNNER_TEMP/friend-ai-input-prompt.txt"
 
       - name: 從 D1 讀取可用的朋友金鑰（密文）
@@ -196,7 +199,7 @@ jobs:
           python friend_ai_digest.py run --date "$DATA_DATE" \
             --market-dir data/daily-update-state/last-market-pack --screens-root data/market-screen-snapshots \
             --keys-json "$RUNNER_TEMP/friend-keys.json" \
-            --sql-output "$RUNNER_TEMP/friend-ai.sql" --audit "$RUNNER_TEMP/friend-ai-audit.json"
+            --sql-dir "$RUNNER_TEMP/friend-ai-sql" --audit "$RUNNER_TEMP/friend-ai-audit.json"
 
       - name: 寫入 D1
         if: success() && steps.mode.outputs.dry_run == 'false'
@@ -205,8 +208,15 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          if [ ! -f "$RUNNER_TEMP/friend-ai.sql" ]; then echo "沒有可用金鑰的朋友，今天不用寫入"; exit 0; fi
-          npx --yes wrangler@4 d1 execute market-ana-accounts --remote --file "$RUNNER_TEMP/friend-ai.sql"
+          # 每位朋友一份，逐份寫；一份寫失敗不擋其他人，全部寫完再回報失敗。
+          shopt -s nullglob
+          files=("$RUNNER_TEMP"/friend-ai-sql/*.sql)
+          if [ "${#files[@]}" -eq 0 ]; then echo "沒有可用金鑰的朋友，今天不用寫入"; exit 0; fi
+          failed=0
+          for file in "${files[@]}"; do
+            npx --yes wrangler@4 d1 execute market-ana-accounts --remote --file "$file" > /dev/null || failed=$((failed + 1))
+          done
+          if [ "$failed" -gt 0 ]; then echo "::error::$failed 位朋友的結果沒寫進資料庫"; exit 1; fi
 
       - name: 執行摘要（只有人數與結果分類，不含 email、金鑰、解讀內容）
         if: always()
@@ -221,4 +231,4 @@ jobs:
 
       - name: 清除金鑰密文與暫存檔
         if: always()
-        run: rm -f "$RUNNER_TEMP/friend-keys.json" "$RUNNER_TEMP/friend-ai.sql" "$RUNNER_TEMP/friend-ai-input-prompt.txt" "$RUNNER_TEMP/friend-ai-audit.json"
+        run: rm -rf "$RUNNER_TEMP/friend-keys.json" "$RUNNER_TEMP/friend-ai-sql" "$RUNNER_TEMP/friend-ai-input-prompt.txt" "$RUNNER_TEMP/friend-ai-audit.json"

@@ -164,9 +164,14 @@ class FriendSqlTests(unittest.TestCase):
     def test_each_friend_rows_land_in_friend_table_and_owner_table_is_untouched(self):
         gemini = FakeGemini({"KEY-amy": gemini_reply(valid_structured()), "KEY-bob": GeminiHttpError(429, "RESOURCE_EXHAUSTED")})
         result = run_friends(friend_payload(), KEYS, decrypt=fake_decrypt, post=gemini, now=lambda: "2026-11-10T10:00:00+00:00")
-        script = friend_sql(result)
-        self.db.executescript(script)
-        self.db.executescript(script)  # 同一天重跑：覆蓋，不重複
+        scripts = friend_sql(result)
+        self.assertEqual(len(scripts), 2)  # 每位朋友一份、各自一個交易：一份寫失敗不擋其他人
+        self.assertTrue(all(script.startswith("BEGIN;") and script.rstrip().endswith("COMMIT;") for script in scripts))
+        self.assertNotIn("bob@example.com", scripts[0])
+        self.assertNotIn("amy@example.com", scripts[1])
+        for _ in range(2):  # 同一天重跑：覆蓋，不重複
+            for script in scripts:
+                self.db.executescript(script)
         stored = self.db.execute(
             "SELECT email, digest_type, status, error_code, content_json IS NOT NULL FROM friend_ai_daily ORDER BY email, digest_type").fetchall()
         self.assertEqual(stored, [
@@ -178,10 +183,12 @@ class FriendSqlTests(unittest.TestCase):
         self.assertEqual(content["stance"], "偏多")
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM ai_daily").fetchone()[0], 0)
         keys = self.db.execute("SELECT email, last_success_at, last_failure_reason FROM friend_gemini_keys ORDER BY email").fetchall()
-        self.assertEqual(keys, [("amy@example.com", "2026-11-10T10:00:00+00:00", None), ("bob@example.com", None, "quota")])
+        # 設定頁與後台會原樣顯示最近失敗原因：存中文說明，不存分類碼。
+        self.assertEqual(keys, [("amy@example.com", "2026-11-10T10:00:00+00:00", None),
+                                ("bob@example.com", None, "今天的免費額度用完了，明天會照常再試")])
 
     def test_nothing_to_write_when_no_friend_has_a_usable_key(self):
-        self.assertEqual(friend_sql({"rows": [], "keys": {}, "audit": []}), "")
+        self.assertEqual(friend_sql({"rows": [], "keys": {}, "audit": []}), [])
 
 
 def write_js(path, name, value):
@@ -201,8 +208,8 @@ def write_market_fixture(root):
         "indicators": {"daily": [{"date": DATE, "ma5": 23150}]},
     })
     write_js(market / "dashboard-data.js", "MARKET_DASHBOARD", {
-        "market_date": DATE, "latest": {"close": 23280, "change_percent": 0.78},
-        "thresholds": {"upper": 23400, "lower": 23000},
+        "market_date": DATE, "latest": {"close": 23280, "change_percent": 0.78, "nasdaq_close": 19876.5},
+        "thresholds": {"upper": 23400, "lower": 23000, "sox_close": 5123.4},
         "news": [{"title": "美股那斯達克大漲", "source": "外電"}], "headline": "費半創高",
         "sources": [{"name": "Yahoo Finance"}],
     })
@@ -241,7 +248,10 @@ class FriendInputTests(unittest.TestCase):
         self.assertNotIn("futures_chips", payload["market"])
         self.assertRegex(payload["input_sha256"], r"^[0-9a-f]{64}$")
         prompt = build_friend_prompt(payload)
-        for banned in ("那斯達克", "外電", "費半", "Yahoo", "foreign_oi", "net_contracts", "holdings", "watchlist",
+        # 劇本檔 dashboard-data.js 以後多放國外指數也帶不進來：只放列出的欄位。
+        self.assertEqual(payload["market"]["latest"], {"close": 23280, "change_percent": 0.78})
+        self.assertEqual(payload["market"]["thresholds"], {"upper": 23400, "lower": 23000})
+        for banned in ("那斯達克", "外電", "費半", "Yahoo", "foreign_oi", "net_contracts", "holdings", "watchlist", "nasdaq", "sox",
                        "average_cost", "shares", "@"):
             self.assertNotIn(banned, prompt)
         self.assertIn("/market/latest/close", prompt)
@@ -326,7 +336,7 @@ class FriendCliTests(unittest.TestCase):
                 for email, plain in (("amy@example.com", "AIzaFAKE-amy"), ("bob@example.com", "AIzaFAKE-bob"))]
         self.keys_path = self.root / "keys.json"
         self.keys_path.write_text(json.dumps([{"results": keys, "success": True}]), encoding="utf-8")
-        self.sql_path, self.audit_path = self.root / "friend.sql", self.root / "audit.json"
+        self.sql_dir, self.audit_path = self.root / "friend-sql", self.root / "audit.json"
 
     def tearDown(self):
         self.server.shutdown()
@@ -335,7 +345,7 @@ class FriendCliTests(unittest.TestCase):
 
     def run_cli(self, *extra, master=MASTER):
         args = ["run", "--date", DATE, "--market-dir", str(self.market), "--screens-root", str(self.screens),
-                "--keys-json", str(self.keys_path), "--sql-output", str(self.sql_path), "--audit", str(self.audit_path),
+                "--keys-json", str(self.keys_path), "--sql-dir", str(self.sql_dir), "--audit", str(self.audit_path),
                 "--gemini-url", self.url, *extra]
         previous = os.environ.get("FRIEND_AI_MASTER_KEY")
         os.environ["FRIEND_AI_MASTER_KEY"] = master
@@ -358,24 +368,28 @@ class FriendCliTests(unittest.TestCase):
         db = sqlite3.connect(":memory:")
         for name in ("0014_friend_gemini_keys.sql", "0020_friend_ai_daily.sql"):
             db.executescript((MIGRATIONS / name).read_text(encoding="utf-8"))
-        db.executescript(self.sql_path.read_text(encoding="utf-8"))
+        files = sorted(self.sql_dir.glob("*.sql"))
+        self.assertEqual([path.name for path in files], ["friend-01.sql", "friend-02.sql"])  # 檔名不含 email
+        for path in files:
+            db.executescript(path.read_text(encoding="utf-8"))
         self.assertEqual(db.execute("SELECT email, digest_type, status, error_code FROM friend_ai_daily ORDER BY 1, 2").fetchall(), [
             ("amy@example.com", "flow", "generated", None), ("amy@example.com", "market", "generated", None),
             ("bob@example.com", "flow", "unproduced", "key_revoked"), ("bob@example.com", "market", "unproduced", "key_revoked"),
         ])
-        for path in (self.sql_path, self.audit_path):
+        for path in (*files, self.audit_path):
             self.assertNotIn("AIzaFAKE", path.read_text(encoding="utf-8"))
 
     def test_wrong_master_key_marks_everyone_unproduced_without_calling_gemini(self):
         self.assertEqual(self.run_cli(master=base64.b64encode(bytes([9]) * 32).decode()), 0)
         self.assertEqual(FakeGeminiServer.seen, [])
-        self.assertIn("key_decrypt_failed", self.sql_path.read_text(encoding="utf-8"))
+        written = "".join(path.read_text(encoding="utf-8") for path in self.sql_dir.glob("*.sql"))
+        self.assertEqual(written.count("'key_decrypt_failed'"), 4)
 
     def test_dry_run_only_checks_input_and_never_calls_gemini_or_writes_sql(self):
         prompt_path = self.root / "prompt.txt"
         self.assertEqual(self.run_cli("--dry-run", "--prompt-output", str(prompt_path)), 0)
         self.assertEqual(FakeGeminiServer.seen, [])
-        self.assertFalse(self.sql_path.exists())
+        self.assertFalse(self.sql_dir.exists())
         self.assertIn("/market/latest/close", prompt_path.read_text(encoding="utf-8"))
         self.assertTrue(json.loads(self.audit_path.read_text(encoding="utf-8"))["dry_run"])
 

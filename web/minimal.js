@@ -2684,13 +2684,9 @@
   // 開放給朋友 02 票：朋友的首頁放他用自己 Gemini 金鑰產生的那兩份。
   // 開關關著（available=false）或不是朋友（站主、本機版）時什麼都不做，首頁和以前一樣。
   function showSetup(message) {
-    card.dataset.state = 'unproduced';
+    showUnproduced();
     date.textContent = '';
     conclusion.textContent = message;
-    preview.replaceChildren();
-    marketPoints.replaceChildren();
-    flowPoints.replaceChildren();
-    details.hidden = true;
     if (setup) setup.hidden = false;
   }
 
