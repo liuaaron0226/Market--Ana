@@ -9,9 +9,15 @@ import unittest
 from datetime import date, timedelta
 from pathlib import Path
 
+from datetime import datetime
+
 import forecast_ledger as fl
 import forecast_replay as rp
+import forecast_replay_chips as chips
+from test_forecast_replay_chips import FakeHttp, bfi82u, taifex
 from test_forecast_run import analysis, weekdays
+
+NOON = datetime.fromisoformat("2026-11-17T12:00:00+08:00")
 
 # 方法稿 0.4 寫了 2026-10-12 至 11-13 的實際走勢（〈逐日對照〉）。
 METHOD_04 = "# 大盤分析方法\n\n版本：0.4，2026-11-15。\n"
@@ -72,7 +78,7 @@ class ReplayTestCase(unittest.TestCase):
         return [json.loads(line) for line in self.seen.read_text(encoding="utf-8").splitlines()]
 
     def run_replay(self, payload=None, *, fail=False, **kwargs):
-        options = dict(start="2026-04-01", end="2026-12-31", editions=("evening", "morning"))
+        options = dict(start="2026-04-01", end="2026-09-08", editions=("evening", "morning"), now=lambda: NOON)
         options.update(kwargs)
         return rp.run_replay(self.analysis_file(payload or analysis(DATES)), ledger=self.ledger,
                              method_path=self.method, model_bin=self.model(fail=fail), model="gemini-3.8-flash",
@@ -80,21 +86,51 @@ class ReplayTestCase(unittest.TestCase):
 
 
 class PlanTests(ReplayTestCase):
-    def test_only_days_after_the_model_cutoff_with_chips_and_no_method_spoilers_are_replayable(self):
-        # 法人只從 06-01 起才有：之前的日子缺籌碼。方法稿 0.4 寫了 10-12 起的行情：二十日到期日在 10-12（含）以後的不重播。
+    def test_only_days_after_the_model_cutoff_with_chips_are_replayable(self):
+        # 法人只從 06-01 起才有：之前的日子缺籌碼
         payload = analysis(DATES)
         payload["institutional"] = [row for row in payload["institutional"] if row["date"] >= "2026-06-01"]
         plan = rp.plan_replay(payload, method_text=METHOD_04, model="gemini-3.8-flash",
-                              start="2026-03-02", end="2026-12-31")
-        last_clean = DATES[DATES.index("2026-10-12") - 21]  # 二十個交易日後剛好是 10-09
-        self.assertEqual(plan["dates"][0], "2026-06-01")
-        self.assertEqual(plan["dates"][-1], last_clean)
+                              start="2026-03-02", end="2026-09-08")
+        self.assertEqual((plan["dates"][0], plan["dates"][-1]), ("2026-06-01", "2026-09-08"))
         self.assertEqual(plan["skipped"]["沒有當天的法人或期貨資料"][0], "2026-04-01")
-        self.assertIn(DATES[DATES.index(last_clean) + 1], plan["skipped"]["方法稿已寫了這段行情的結果"])
-        self.assertEqual(plan["skipped"]["方法稿已寫了這段行情的結果"][-1], DATES[-1])
+        self.assertEqual(plan["skipped"]["模型知識截止日（2026-03）以前"][0], "2026-03-02")
         # 早晚兩版各一份：模型呼叫次數至少是份數，每份不合格最多重試一次
         self.assertEqual(plan["forecasts"], 2 * len(plan["dates"]))
         self.assertEqual(plan["model_calls"], {"at_least": plan["forecasts"], "at_most": 2 * plan["forecasts"]})
+
+    def test_days_whose_outcome_the_method_text_already_describes_are_never_replayed(self):
+        # 方法稿 0.4 寫了 10-12 起的行情：二十日到期日在 10-12（含）以後、基準日在 11-13 以前的不重播。
+        # （09-08 的上限已經擋在前面；這一道是以後換方法稿或放寬上限時的保險。）
+        original = rp.REPLAY_UNTIL
+        rp.REPLAY_UNTIL = "2026-12-31"
+        self.addCleanup(setattr, rp, "REPLAY_UNTIL", original)
+        plan = rp.plan_replay(analysis(DATES), method_text=METHOD_04, model="gemini-3.8-flash",
+                              start="2026-04-01", end="2026-12-31")
+        last_clean = DATES[DATES.index("2026-10-12") - 21]  # 二十個交易日後剛好是 10-09
+        self.assertEqual(plan["dates"][-1], last_clean)
+        spoiled = plan["skipped"]["方法稿已寫了這段行情的結果"]
+        self.assertEqual((spoiled[0], spoiled[-1]), (DATES[DATES.index(last_clean) + 1], DATES[-1]))
+
+    def test_the_owners_upper_bound_of_september_eighth_is_never_passed(self):
+        # 本人 2026-11-17：基準日上限 09-08；迄日填得再晚也一樣
+        plan = rp.plan_replay(analysis(weekdays("2025-12-01", 260)), method_text=METHOD_04, model="gemini-3.8-flash",
+                              start="2026-04-01", end="2026-12-31")
+        self.assertEqual(plan["dates"][-1], "2026-09-08")
+
+    def test_backfilled_chips_make_the_days_before_the_pack_replayable(self):
+        payload = analysis(DATES)
+        payload["institutional"] = [row for row in payload["institutional"] if row["date"] >= "2026-06-01"]
+        payload["futures"] = [row for row in payload["futures"] if row["date"] >= "2026-06-01"]
+        needed = chips.needed_dates(payload, start="2026-04-01")
+        http = FakeHttp({"https://www.twse.com.tw/": bfi82u(-5),
+                         "https://www.taifex.com.tw/": taifex([d for d in DATES if d < "2026-06-01"])})
+        folder = self.tmp / "chips-backfill"
+        chips.fetch(folder, needed, http=http, now=lambda: "x", pause=0)
+        plan = rp.plan_replay(chips.merge(payload, chips.load(folder)), method_text=METHOD_04,
+                              model="gemini-3.8-flash", start="2026-04-01", end="2026-09-08")
+        self.assertEqual(plan["dates"][0], "2026-04-01")
+        self.assertNotIn("沒有當天的法人或期貨資料", plan["skipped"])
 
     def test_days_before_the_models_knowledge_cutoff_are_never_replayed(self):
         plan = rp.plan_replay(analysis(weekdays("2026-02-02", 120)), method_text=METHOD_04, model="gemini-3.8-flash",
@@ -145,6 +181,24 @@ class RunTests(ReplayTestCase):
         self.assertEqual(second["written"], 3)
         self.assertEqual(len(self.inputs()) - calls_after_first, 3)  # 已寫的不再呼叫模型
         self.assertEqual(len(fl.read_ledger(self.ledger)["forecasts"]), 6)
+
+    def test_no_more_than_forty_forecasts_a_day_across_runs(self):
+        # 本人 2026-11-17「分天跑，每天最多 40 份」：同一天觸發兩次也一樣
+        first = self.run_replay(max_forecasts=30, log_output=self.ledger / "runs" / "1.json")
+        self.assertEqual(first["written"], 30)
+        second = self.run_replay(max_forecasts=30, log_output=self.ledger / "runs" / "2.json")
+        self.assertEqual((second["written"], second["stop_reason"]), (10, "今天已寫滿 40 份"))
+        tomorrow = self.run_replay(max_forecasts=30, now=lambda: datetime.fromisoformat("2026-11-18T12:00:00+08:00"),
+                                   log_output=self.ledger / "runs" / "3.json")
+        self.assertEqual(tomorrow["written"], 30)
+
+    def test_it_only_runs_between_the_morning_and_evening_forecasts(self):
+        # 07:20 晨間版、收盤後晚間版的前後都不跑，免得剛好把額度用完害正式的漏記
+        for moment in ("2026-11-17T08:00:00+08:00", "2026-11-17T18:30:00+08:00", "2026-11-17T02:00:00+08:00"):
+            log = self.run_replay(end="2026-04-03", now=lambda moment=moment: datetime.fromisoformat(moment))
+            self.assertEqual(log["written"], 0, moment)
+            self.assertIn("可重播的時段", log["stop_reason"])
+        self.assertEqual(self.inputs(), [])
 
     def test_a_model_failure_stops_the_run_and_locks_nothing(self):
         log = self.run_replay(end="2026-04-03", fail=True)

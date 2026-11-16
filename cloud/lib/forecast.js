@@ -4,7 +4,7 @@
 //   /api/forecast/history  依日期範圍取過去的預測與各格對帳結果，供回看
 //   /api/forecast/replay   最新一份「歷史重播（參考）」摘要（F 票，本人 11-17；另外三張表 forecast_replay_*，不計入正式結論）
 // 公開之前只回給站主，而且要功能開關打開；其他人（含開關關著時的站主）一律得到「沒有內容」而不是錯誤，
-// 首頁維持原樣。資料只讀 D1 只能新增的表（migrations/0010；重播是 0022）。
+// 首頁維持原樣。資料只讀 D1 只能新增的表（migrations/0010；重播是 0023）。
 const HEADERS = {
   "content-type": "application/json; charset=utf-8",
   "cache-control": "private, no-store",

@@ -472,7 +472,8 @@ def write_forecast(
     timeout_seconds: float = 360,
     replay: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """寫一份預測。回傳 ``{"outcome": written|unchanged|conflict|not_ready, "record": 帳本裡那一筆}``。
+    """寫一份預測。回傳 ``{"outcome": written|unchanged|conflict|not_ready|model_failed, "record": 帳本裡那一筆}``
+    （``model_failed`` 只出現在重播）。
 
     同一識別已有紀錄時不再呼叫模型：輸入相同回 ``unchanged``，輸入不同回 ``conflict``（拒寫）。
     資料沒到齊時期限前什麼都不寫（``not_ready``，可之後重跑）；過了期限仍沒到齊才記漏記。
@@ -484,6 +485,8 @@ def write_forecast(
     """
     if edition not in EDITIONS:
         raise ValueError(f"edition 必須是 {EDITIONS} 之一")
+    if replay is not None and not replay:
+        raise ValueError("重播要附上說明（模型知識截止日、資料抓取時間），不能是空的")
     clock = now or _default_now
     base_date = str(data.get("base_date"))
     method_version = method_version_of(str(data.get("method_text") or ""))
@@ -633,6 +636,12 @@ def _rates(pairs: list[tuple[dict[str, Any], dict[str, Any]]]) -> dict[str, Any]
 # 正式起算日（F 票）：基準日在這一天（含）以後的預測記為正式、之前的是試跑。帳本在寫的當下就鎖定試跑或正式，
 # 所以只能訂在還沒寫的日子；本人點頭之前維持 None（全部試跑）。設定之後記進 ANALYSIS_PLAN.md。
 OFFICIAL_SINCE: str | None = None
+# 呼叫端沒指定時用的記號：在呼叫當下才讀 OFFICIAL_SINCE（不在函式定義時就綁死）。
+OFFICIAL_SINCE_DEFAULT = object()
+
+
+def official_since(value: str | None | object = OFFICIAL_SINCE_DEFAULT) -> str | None:
+    return OFFICIAL_SINCE if value is OFFICIAL_SINCE_DEFAULT else value  # type: ignore[return-value]
 
 # 本人定案：正式結論 1 日滿 3 個月、5 日滿 6 個月、20 日滿 1 年；之前只標「累積中」。
 VERDICT_MONTHS = {1: 3, 5: 6, 20: 12}
@@ -709,6 +718,9 @@ def summarize(root: Path | str, index_daily: Sequence[Mapping[str, Any]], *,
             bucket["forecasts"].append(record)
     groups = []
     for (run_mode, edition, method_version, input_version), bucket in sorted(series.items()):
+        # 每一組從自己的第一筆正式紀錄起算（起算後換方法或輸入版本的新一組，不沿用舊組已累積的時間）。
+        first = min((record["base_date"] for record in bucket["forecasts"] + bucket["misses"]), default=None)
+        since = max(official_since, first) if official_since and first else official_since
         for horizon in HORIZONS:
             reconciled, pullback = [], []
             open_cells = {"pending": 0, "undeterminable": 0}
@@ -722,7 +734,7 @@ def summarize(root: Path | str, index_daily: Sequence[Mapping[str, Any]], *,
                 reconciled.append((cell, outcome))
                 if record["regime"] == PULLBACK_REGIME:
                     pullback.append((cell, outcome))
-            verdict = _verdict(run_mode, horizon, official_since, as_of)
+            verdict = _verdict(run_mode, horizon, since, as_of)
             judgement = None
             if verdict == "可下結論":
                 # 漏記只在它的到期日已過時才算一次猜錯（還沒到期的漏記和還沒到期的預測一樣不算）。

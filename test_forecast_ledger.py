@@ -816,6 +816,23 @@ class VerdictStatusTests(LedgerTestCase):
         self.assertEqual([later[("official", h)] for h in (1, 5, 20)], ["可下結論", "可下結論", "可下結論"])
         self.assertEqual(later[("trial", 20)], "試跑")
 
+    def test_a_new_method_version_after_the_official_start_counts_its_time_from_its_own_first_record(self):
+        # 正式起算 09/30；10/01 起換成方法 0.3（新的一組）。12/30 時 0.2 的一日已滿三個月，0.3 的要到 2027-01-01
+        self.write(official_since=BASE_A)
+        newer = day_input(through("2026-10-01"), base_date="2026-10-01")
+        newer["method_text"] = METHOD_TEXT.replace("版本：0.2", "版本：0.3")
+        self.write(newer, model=fake_model(self.tmp, [envelope(answer_oct1())]),
+                   now=clock(at("2026-10-01", 17)), official_since=BASE_A)
+
+        def one_day(rows):
+            summary = fl.summarize(self.root, rows, official_since=BASE_A)
+            return {g["method_version"]: g["verdict"] for g in summary["groups"] if g["horizon"] == 1}
+
+        self.assertEqual(one_day(through("2026-10-08") + [bar("2026-12-30", 93, 94, 92, 93)]),
+                         {"0.2": "可下結論", "0.3": "累積中"})
+        self.assertEqual(one_day(through("2026-10-08") + [bar("2027-01-01", 93, 94, 92, 93)]),
+                         {"0.2": "可下結論", "0.3": "可下結論"})
+
     def test_without_an_official_start_every_official_group_is_accumulating(self):
         self.write(official_since=BASE_A)
         # 一年多以後也一樣：沒有寫下正式起算日，就不會出現結論
@@ -1017,7 +1034,7 @@ class PublishToDatabaseTests(LedgerTestCase):
         self.assertEqual(record["cells"]["1"]["reason"], "站回'均線'之上")
 
 
-REPLAY_MIGRATION = MIGRATION.parent / "0022_forecast_replay.sql"
+REPLAY_MIGRATION = MIGRATION.parent / "0023_forecast_replay.sql"
 
 
 class PublishReplayTests(LedgerTestCase):

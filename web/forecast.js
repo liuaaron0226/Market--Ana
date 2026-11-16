@@ -299,9 +299,12 @@
       }
       panel.append(block);
     }
+    // 資料缺漏、無法判定的格子不算對也不算錯，有的話另外列出來（F 票判定規則第 5 點）。
+    const undeterminable = groups.reduce((n, g) => n + (g.undeterminable || 0), 0);
+    const unknown = undeterminable ? ` · 無法判定 ${undeterminable} 格` : '';
     const tail = mode === 'replay' ? ' · 用模型知識截止日之後的過去日子重寫，不計入正式結論' : '';
     panel.append(el('p', { class: 'forecast-note' },
-      `${MODE[mode] || mode} · 漏記 ${groups[0].misses} 次 · 還沒到期 ${groups.reduce((n, g) => n + g.pending, 0)} 格${tail}`));
+      `${MODE[mode] || mode} · 漏記 ${groups[0].misses} 次 · 還沒到期 ${groups.reduce((n, g) => n + g.pending, 0)} 格${unknown}${tail}`));
   }
 
   // ---- 回看頁 ----

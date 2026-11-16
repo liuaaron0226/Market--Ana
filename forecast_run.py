@@ -332,10 +332,11 @@ def run_evening(
     overseas_dir: Path | str | None = None,
     data_root: Path | str | None = None,
     seeds_root: Path | str = SEEDS_ROOT,
-    official_since: str | None = fl.OFFICIAL_SINCE,
+    official_since: str | None | object = fl.OFFICIAL_SINCE_DEFAULT,
 ) -> dict[str, Any]:
     if as_of and not dry_run:
         raise ValueError("重播某一天（as_of）只能在乾跑使用，正式帳本不補寫過去的預測")
+    official_since = fl.official_since(official_since)
     analysis = load_analysis(analysis_path)
     clock = now
     if as_of:
@@ -407,7 +408,7 @@ def run_morning(
     replay: bool = False,
     data_root: Path | str | None = None,
     seeds_root: Path | str = SEEDS_ROOT,
-    official_since: str | None = fl.OFFICIAL_SINCE,
+    official_since: str | None | object = fl.OFFICIAL_SINCE_DEFAULT,
 ) -> dict[str, Any]:
     """寫一份晨間版：開盤日 session_date 的早上、開盤前 15 分鐘之前鎖定；基準日是前一個台股交易日。
 
@@ -417,6 +418,7 @@ def run_morning(
     """
     if replay and not dry_run:
         raise ValueError("重播某個開盤日只能在乾跑使用，正式帳本不補寫過去的預測")
+    official_since = fl.official_since(official_since)
     clock = now or (lambda: datetime.now(fl.TAIPEI))
     if replay:
         frozen = datetime.fromisoformat(f"{session_date}T{MORNING_REPLAY_CLOCK}").replace(tzinfo=fl.TAIPEI)

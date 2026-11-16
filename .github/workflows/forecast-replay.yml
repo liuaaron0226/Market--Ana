@@ -4,6 +4,8 @@
 # - 只能手動觸發，預設只算「可以重播幾天、要用幾次 Gemini、缺哪些日子」（plan_only），不呼叫模型。
 # - 真的跑要先回報本人、本人同意後由 owner 從預設分支觸發；每次最多寫 max_forecasts 份，模型一失敗就停
 #   （多半是額度用完），免得把 AI Pro 的每週額度用光害正式的晚間／晨間版漏記。下一次從沒寫的日子接著寫。
+#   同一天各次加起來最多 40 份、只在台北 09:30～15:30 寫（程式擋），避開 07:20 晨間版與收盤後的晚間版。
+# - 不另設 repository variable 開關：只能手動觸發、預設只算天數、真的跑只認預設分支，每一次都是 owner 問過本人才觸發。
 # - 自己的鎖，不用三支既有排程共用的 market-state-write；只讀工作集，不上傳工作集，不碰正式帳本。
 #   重播帳本放 R2 的 forecast-replay/ 前綴（只新增）；網站資料庫寫進重播專用的三張表。
 name: forecast-replay
@@ -17,12 +19,12 @@ on:
         type: string
         default: "2026-04-01"
       end:
-        description: "重播迄日 YYYY-MM-DD"
+        description: "重播迄日 YYYY-MM-DD（本人定的上限是 09-08，填得再晚也不會超過）"
         required: true
         type: string
-        default: "2026-11-13"
+        default: "2026-09-08"
       max_forecasts:
-        description: "這一次最多新寫幾份（早晚各算一份）"
+        description: "這一次最多新寫幾份（早晚各算一份；同一天各次加起來最多 40 份）"
         required: true
         type: string
         default: "40"
@@ -48,6 +50,10 @@ jobs:
       TZ: Asia/Taipei
       PYTHONIOENCODING: utf-8
       LEDGER: ${{ github.workspace }}/.forecast-replay
+    defaults:
+      run:
+        # 明寫 bash：GitHub 才會加 pipefail，管線前面的程式失敗不會被 tee 蓋掉。
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
@@ -101,6 +107,15 @@ jobs:
           python state_sync.py restore --target .
           python forecast_store.py pull --ledger "$LEDGER" --prefix forecast-replay/
 
+      # 本人選 A2：資料包只留 120 天法人與期貨，04-01 起缺的向證交所／期交所補抓（官方公開資料，每次間隔 3 秒）。
+      # 原件放進重播帳本的 chips-backfill/，真的跑時跟著重播帳本存回 R2；已經有的不再抓。
+      - name: 補抓重播要的法人與期貨原件
+        env:
+          START: ${{ steps.mode.outputs.start }}
+        run: |
+          python forecast_replay_chips.py fetch --analysis data/daily-update-state/last-market-pack/analysis-data.js \
+            --start "$START" --out "$LEDGER/chips-backfill"
+
       - name: 算可重播的日子（不呼叫模型）
         env:
           START: ${{ steps.mode.outputs.start }}
@@ -108,7 +123,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/forecast-replay"
           python forecast_replay.py --plan --analysis data/daily-update-state/last-market-pack/analysis-data.js \
-            --method MARKET_METHOD.md --model gemini-3.8-flash --start "$START" --end "$END" \
+            --method MARKET_METHOD.md --model gemini-3.8-flash --start "$START" --end "$END" --ledger "$LEDGER" \
             | tee "$RUNNER_TEMP/forecast-replay/plan.json"
           { echo "### 歷史重播：可以重播的日子"; echo '```json'; cat "$RUNNER_TEMP/forecast-replay/plan.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 

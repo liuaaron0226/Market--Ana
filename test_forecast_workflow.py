@@ -197,6 +197,18 @@ class ReplayWorkflowTests(unittest.TestCase):
         plan = step(self.source, "算可重播的日子（不呼叫模型）")
         self.assertIn("python forecast_replay.py", plan)
         self.assertIn("--plan", plan)
+        self.assertIn('--ledger "$LEDGER"', plan)  # 補抓的法人與期貨算進可重播的日子
+        # 管線（| tee）前面的程式失敗不能被當成成功
+        self.assertRegex(self.source, r"defaults:\n\s+run:\n\s+shell: bash")
+        self.assertRegex(self.source, r'end:\n(?:\s+.*\n)*?\s+default: "2026-09-08"')
+
+    def test_backfills_the_chips_before_counting_and_keeps_them_in_the_replay_ledger(self):
+        fetch = step(self.source, "補抓重播要的法人與期貨原件")
+        self.assertIn("python forecast_replay_chips.py fetch", fetch)
+        self.assertIn('--out "$LEDGER/chips-backfill"', fetch)
+        self.assertLess(self.source.index("從 R2 還原每日更新已發布的資料與重播帳本"),
+                        self.source.index("補抓重播要的法人與期貨原件"))
+        self.assertLess(self.source.index("補抓重播要的法人與期貨原件"), self.source.index("算可重播的日子（不呼叫模型）"))
 
     def test_real_runs_only_from_the_default_branch(self):
         mode = step(self.source, "決定執行模式並檢查機密")

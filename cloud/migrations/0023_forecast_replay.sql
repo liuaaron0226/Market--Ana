@@ -1,7 +1,7 @@
 -- 事前預測的「歷史重播（參考）」成績（本人 2026-11-17「要，重播當參考」；F 票）：網站讀的那一份。
 -- 和正式／試跑的三張表（0010）分開存、分開顯示；結構與只能新增的規則相同，run_mode 只允許 replay。
 -- 唯一的事實來源是重播帳本的鎖定原件（R2 的 forecast-replay/ 前綴）。
--- 編號是暫定的，由 owner 統一分配；套用到正式資料庫前要先問本人。
+-- 編號由 owner 分配（0022 是朋友 03 的 friend_ai_stock_daily）；套用到正式資料庫前要先問本人。
 CREATE TABLE forecast_replay_records (
   forecast_id     TEXT PRIMARY KEY,
   base_date       TEXT NOT NULL CHECK (length(base_date) = 10),
