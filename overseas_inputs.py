@@ -108,8 +108,11 @@ def _error_type(error: BaseException) -> str:
 
 
 def fetch_sources(out_dir: Path | str, *, reference_date: str, eodhd_token: str,
-                  fetch: Callable[..., bytes] | None = None, now: Callable[[], str] | None = None) -> dict[str, Any]:
+                  fetch: Callable[..., bytes] | None = None, now: Callable[[], str] | None = None,
+                  treasury_months: int = TREASURY_MONTHS) -> dict[str, Any]:
     """抓所有海外來源到 ``out_dir``：``<名稱>.raw`` 原件＋``manifest.json``。
+
+    ``treasury_months``：美債月份檔往回抓幾個月（歷史重播要涵蓋重播的整段日子；不影響輸入版本）。
 
     ``reference_date``：晚間版是基準日，晨間版是開盤日。沒有 EODHD 金鑰時不打 EODHD，記成 missing_key。
     """
@@ -126,7 +129,7 @@ def fetch_sources(out_dir: Path | str, *, reference_date: str, eodhd_token: str,
         url = None if not eodhd_token else base + "?" + urllib.parse.urlencode(
             {"api_token": eodhd_token, "fmt": "json", "period": "d", "from": start, "to": reference_date})
         jobs.append((f"eodhd-{symbol}", "eodhd", url, shown))
-    for month in _months(reference, TREASURY_MONTHS):
+    for month in _months(reference, treasury_months):
         url = TREASURY_URL.format(month=month)
         jobs.append((f"treasury-{month}", "treasury", url, url))
     jobs.append(("fed-h10-broad", "fed_h10", FED_BROAD_URL, FED_BROAD_URL))
@@ -400,6 +403,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--reference-date", help="晚間版＝基準日；晨間版＝開盤日")
     parser.add_argument("--analysis", type=Path, help="沒給 --reference-date 時，用這份已發布大盤資料的最後一天（晚間版）")
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--treasury-months", type=int, default=TREASURY_MONTHS,
+                        help="美債月份檔往回抓幾個月（歷史重播用）")
     args = parser.parse_args(argv)
     reference = args.reference_date
     if not reference and args.analysis:
@@ -409,7 +414,8 @@ def main(argv: list[str] | None = None) -> int:
     if not reference:
         parser.error("要給 --reference-date 或內含日 K 的 --analysis")
     manifest = fetch_sources(args.out, reference_date=reference,
-                             eodhd_token=os.environ.get("EODHD_API_KEY", "").strip())
+                             eodhd_token=os.environ.get("EODHD_API_KEY", "").strip(),
+                             treasury_months=args.treasury_months)
     summary = {entry["name"]: entry["status"] if entry["status"] == "ok" else entry.get("error_type")
                for entry in manifest["sources"]}
     print(json.dumps(summary, ensure_ascii=False))

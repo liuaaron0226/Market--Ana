@@ -117,6 +117,32 @@ test("站主讀得到最新一份對帳摘要", async () => {
   assert.deepEqual(summary, { available: true, summary: { as_of: "2026-10-08", groups: [{ horizon: 1, verdict: "累積中" }] } });
 });
 
+async function seedReplay(as_of, summary) {
+  const text = JSON.stringify(summary);
+  await env.DB.prepare("INSERT INTO forecast_replay_summaries (summary_sha256, as_of, summary_json, published_at) VALUES (?,?,?,?)")
+    .bind(createHash("sha256").update(text).digest("hex"), as_of, text, "2026-11-17T12:00:00+08:00").run();
+  const record = forecast("2026-10-30", "evening", { forecast_id: "replay|2026-10-30|evening|0.4|x", run_mode: "replay" });
+  await env.DB.prepare(
+    "INSERT INTO forecast_replay_records (forecast_id, base_date, edition, method_version, input_version, run_mode, kind, record_json, record_sha256, published_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+  ).bind(record.forecast_id, record.base_date, record.edition, record.method_version, record.input_version,
+    record.run_mode, record.kind, JSON.stringify(record), record.record_sha256, "2026-11-17T12:00:00+08:00").run();
+}
+
+test("歷史重播（參考）的成績另外一個入口；還沒重播時是空的", async () => {
+  assert.deepEqual(await body("/api/forecast/replay"), { available: true, summary: null });
+  const replay = { as_of: "2026-11-13", groups: [{ run_mode: "replay", horizon: 1, verdict: "歷史重播（參考）" }] };
+  await seedReplay("2026-11-13", replay);
+  assert.deepEqual(await body("/api/forecast/replay"), { available: true, summary: replay });
+});
+
+test("重播紀錄不會混進正式的最新預測、對帳摘要與回看", async () => {
+  await seedReplay("2026-11-13", { as_of: "2026-11-13", groups: [{ run_mode: "replay" }] });
+  assert.equal((await body("/api/forecast/latest")).base_date, "2026-10-01");
+  assert.equal((await body("/api/forecast/summary")).summary.as_of, "2026-10-08");
+  const history = await body("/api/forecast/history?from=2026-10-01&to=2026-11-13");
+  assert.deepEqual(history.items.map(item => item.forecast_id), ["2026-10-01|evening|0.2|base-v1-abcd1234"]);
+});
+
 test("歷史清單依日期範圍回傳過去的預測與各格對帳結果", async () => {
   const history = await body("/api/forecast/history?from=2026-09-30&to=2026-10-01");
   assert.equal(history.available, true);
@@ -143,7 +169,7 @@ test("歷史清單的日期輸入有驗證", async () => {
 });
 
 test("其他獲准的使用者得到「沒有內容」而不是錯誤，三個入口都一樣", async () => {
-  for (const path of ["/api/forecast/latest", "/api/forecast/summary", "/api/forecast/history?from=2026-09-01&to=2026-10-01"]) {
+  for (const path of ["/api/forecast/latest", "/api/forecast/summary", "/api/forecast/history?from=2026-09-01&to=2026-10-01", "/api/forecast/replay"]) {
     const response = await req(path, { email: "a@example.com" });
     assert.equal(response.status, 200, path);
     assert.deepEqual(await response.json(), { available: false }, path);
@@ -159,7 +185,7 @@ test("未登入被擋、未獲准被擋", async () => {
 test("功能開關關著時站主也讀不到", async () => {
   for (const value of [undefined, "", "1", "true", "TRUE", "public", "all", " owner "]) {
     env = { ...env, MARKET_ANA_FORECAST_LEDGER: value };
-    for (const path of ["/api/forecast/latest", "/api/forecast/summary", "/api/forecast/history?from=2026-09-01&to=2026-10-01"]) {
+    for (const path of ["/api/forecast/latest", "/api/forecast/summary", "/api/forecast/history?from=2026-09-01&to=2026-10-01", "/api/forecast/replay"]) {
       assert.deepEqual(await body(path), { available: false }, `${value} ${path}`);
     }
   }

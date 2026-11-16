@@ -10,6 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).parent
 WORKFLOW = ROOT / ".github/workflows/forecast-ledger.yml"
 MORNING = ROOT / ".github/workflows/forecast-morning.yml"
+REPLAY = ROOT / ".github/workflows/forecast-replay.yml"
 
 
 def settings_only(path: Path) -> str:
@@ -176,6 +177,62 @@ class MorningWorkflowTests(unittest.TestCase):
 
     def test_always_keeps_a_run_record_and_cleans_up_the_login(self):
         self.assertIn("forecast-morning-${{ github.run_id }}", self.source)
+        self.assertIn("if: always()", step(self.source, "保存執行紀錄"))
+        self.assertIn("agy-home", step(self.source, "清除登入檔與暫存"))
+
+
+
+class ReplayWorkflowTests(unittest.TestCase):
+    """歷史重播（F 票，本人 2026-11-17「要，重播當參考」）：只能手動觸發，預設只算天數不呼叫模型；
+    真的跑要從預設分支、帳本放在自己的 forecast-replay/ 前綴、成績寫進重播專用的表。"""
+
+    def setUp(self):
+        self.source = settings_only(REPLAY)
+
+    def test_only_runs_by_hand_and_by_default_only_counts_the_days(self):
+        self.assertIn("workflow_dispatch:", self.source)
+        self.assertNotIn("schedule:", self.source)
+        self.assertNotIn("workflow_run:", self.source)
+        self.assertRegex(self.source, r"plan_only:\n(?:\s+.*\n)*?\s+default: true")
+        plan = step(self.source, "算可重播的日子（不呼叫模型）")
+        self.assertIn("python forecast_replay.py", plan)
+        self.assertIn("--plan", plan)
+
+    def test_real_runs_only_from_the_default_branch(self):
+        mode = step(self.source, "決定執行模式並檢查機密")
+        self.assertIn('"$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH"', mode)
+        self.assertIn("DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}", mode)
+
+    def test_has_its_own_lock_and_never_touches_the_real_ledger(self):
+        group = re.search(r"concurrency:\n\s+group: (.+)\n\s+cancel-in-progress: false", self.source)
+        self.assertIsNotNone(group)
+        self.assertIn("forecast-replay", group.group(1))
+        self.assertNotIn("market-state-write", self.source)
+        self.assertNotIn("forecast_run.py", self.source)
+        for line in self.source.splitlines():
+            if "forecast_store.py" in line:
+                self.assertIn("--prefix forecast-replay/", line)
+        self.assertNotIn("state_sync.py upload", self.source)
+
+    def test_writes_with_a_budget_and_stores_before_publishing_to_the_replay_tables(self):
+        run = step(self.source, "重播並對帳")
+        self.assertIn("--max-forecasts \"$MAX_FORECASTS\"", run)
+        self.assertIn("--model gemini-3.8-flash", run)
+        self.assertIn("--sql-output", run)
+        self.assertNotIn("${{", run.split("run: |", 1)[1])
+        # 整批沒有海外原件就不是同一套輸入：不跑
+        self.assertIn('--overseas-dir "$RUNNER_TEMP/overseas"', run)
+        self.assertIn('if [ ! -f "$RUNNER_TEMP/overseas/manifest.json" ]', run)
+        push = step(self.source, "重播帳本存回 R2（只新增）")
+        self.assertIn("if: always() && steps.mode.outputs.plan_only == 'false' && steps.restore.outcome == 'success'", push)
+        d1 = step(self.source, "發布到網站資料庫（重播專用的表）")
+        self.assertIn("if: success() && steps.mode.outputs.plan_only == 'false'", d1)
+        self.assertLess(self.source.index("重播帳本存回 R2（只新增）"), self.source.index("發布到網站資料庫（重播專用的表）"))
+        fetch = step(self.source, "抓海外原件（不擋重播）")
+        self.assertIn("--treasury-months", fetch)
+        self.assertIn("1b4850599cce73a17f94ffb422df3bf9531531b77dbddc40c1a435e0c2c16807", self.source)
+
+    def test_always_keeps_a_record_and_cleans_up_the_login(self):
         self.assertIn("if: always()", step(self.source, "保存執行紀錄"))
         self.assertIn("agy-home", step(self.source, "清除登入檔與暫存"))
 

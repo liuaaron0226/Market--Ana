@@ -224,7 +224,8 @@ def _with_archive_names(data: dict[str, Any], overseas_dir: Path | str | None, l
     return {**data, "sources": oi.archive_sources(overseas_dir, ledger, write=False)}
 
 
-def _replay(analysis: Mapping[str, Any], day: str) -> dict[str, Any]:
+def trim_to_day(analysis: Mapping[str, Any], day: str) -> dict[str, Any]:
+    """已發布的大盤資料截到某一天（日 K、法人、期貨都只留那天以前），那天必須有日 K。乾跑重播與歷史重播共用。"""
     trimmed = {key: _until(analysis.get(key), day) for key in ("daily", "institutional", "futures")}
     if not trimmed["daily"] or trimmed["daily"][-1]["date"] != day:
         raise ValueError(f"已發布的日 K 裡沒有 {day}，不能重播")
@@ -233,7 +234,8 @@ def _replay(analysis: Mapping[str, Any], day: str) -> dict[str, Any]:
 
 def _backfill_misses(analysis: Mapping[str, Any], method_text: str, ledger: Path, base_date: str, *,
                      model_bin: Path | str, model: str, clock: Callable[[], datetime],
-                     edition: str = "evening", foreign_sources: Mapping[str, Any] | None = None) -> list[str]:
+                     edition: str = "evening", foreign_sources: Mapping[str, Any] | None = None,
+                     official_since: str | None = None) -> list[str]:
     """帳本這一版最後一份之後、今天這一份之前，有日 K 卻沒有任何紀錄的基準日（整個時段沒跑）補記漏記。
 
     那些日子都已過期限，帳本不會呼叫模型，只鎖一筆漏記並寫下原因。帳本還沒有任何這一版的紀錄時不補（起點之前不算）。
@@ -254,9 +256,10 @@ def _backfill_misses(analysis: Mapping[str, Any], method_text: str, ledger: Path
             if index + 1 >= len(dates):
                 continue
             session = dates[index + 1]
-        fl.write_forecast(ledger, build_day_input(_replay(analysis, day), method_text, None, foreign_sources,
+        fl.write_forecast(ledger, build_day_input(trim_to_day(analysis, day), method_text, None, foreign_sources,
                                           edition=edition, session_date=session), edition=edition,
-                          model_bin=model_bin, model=model, now=clock, session_date=session)
+                          model_bin=model_bin, model=model, now=clock, session_date=session,
+                          official_since=official_since)
         days.append(day)
     return days
 
@@ -285,10 +288,11 @@ def _log_result(log: dict[str, Any], result: Mapping[str, Any], *, overseas_dir:
 
 
 def _write_sql(ledger: Path | str, daily: list[dict[str, Any]], clock: Callable[[], datetime],
-               sql_output: Path | str) -> None:
+               sql_output: Path | str, official_since: str | None) -> None:
     published_at = clock().astimezone(fl.TAIPEI).isoformat()
     Path(sql_output).parent.mkdir(parents=True, exist_ok=True)
-    Path(sql_output).write_text(fl.d1_sql(ledger, daily, published_at=published_at), encoding="utf-8")
+    Path(sql_output).write_text(fl.d1_sql(ledger, daily, published_at=published_at, official_since=official_since),
+                                encoding="utf-8")
 
 
 def _finish_log(log: dict[str, Any], clock: Callable[[], datetime], log_output: Path | str | None) -> dict[str, Any]:
@@ -328,13 +332,14 @@ def run_evening(
     overseas_dir: Path | str | None = None,
     data_root: Path | str | None = None,
     seeds_root: Path | str = SEEDS_ROOT,
+    official_since: str | None = fl.OFFICIAL_SINCE,
 ) -> dict[str, Any]:
     if as_of and not dry_run:
         raise ValueError("重播某一天（as_of）只能在乾跑使用，正式帳本不補寫過去的預測")
     analysis = load_analysis(analysis_path)
     clock = now
     if as_of:
-        analysis = _replay(analysis, as_of)
+        analysis = trim_to_day(analysis, as_of)
         frozen = datetime.fromisoformat(f"{as_of}T{REPLAY_CLOCK}").replace(tzinfo=fl.TAIPEI)
         clock = lambda: frozen  # noqa: E731
     clock = clock or (lambda: datetime.now(fl.TAIPEI))
@@ -362,16 +367,16 @@ def run_evening(
             log["reconciliation"] = {key: len(value) for key, value in fl.reconcile(ledger, data["index_daily"]).items()}
             log["backfilled_misses"] = _backfill_misses(analysis, method_text, Path(ledger), base_date,
                                                         model_bin=model_bin, model=model, clock=clock,
-                                                        foreign_sources=foreign_sources)
+                                                        foreign_sources=foreign_sources, official_since=official_since)
         result = _write(ledger, data, dry_run=dry_run, edition="evening", model_bin=model_bin, model=model,
-                        now=clock, timeout_seconds=timeout_seconds)
+                        now=clock, timeout_seconds=timeout_seconds, official_since=official_since)
         _log_result(log, result, overseas_dir=overseas_dir, ledger=Path(ledger), dry_run=dry_run)
 
     if not dry_run:
         if "reconciliation" not in log:  # 要求的日期不對、沒寫預測時，照樣替舊預測對帳
             log["reconciliation"] = {key: len(value) for key, value in fl.reconcile(ledger, data["index_daily"]).items()}
         if sql_output:
-            _write_sql(ledger, data["index_daily"], clock, sql_output)
+            _write_sql(ledger, data["index_daily"], clock, sql_output, official_since)
     return _finish_log(log, clock, log_output)
 
 
@@ -402,6 +407,7 @@ def run_morning(
     replay: bool = False,
     data_root: Path | str | None = None,
     seeds_root: Path | str = SEEDS_ROOT,
+    official_since: str | None = fl.OFFICIAL_SINCE,
 ) -> dict[str, Any]:
     """寫一份晨間版：開盤日 session_date 的早上、開盤前 15 分鐘之前鎖定；基準日是前一個台股交易日。
 
@@ -440,17 +446,17 @@ def run_morning(
     if not dry_run:
         log["backfilled_misses"] = _backfill_misses(analysis, method_text, Path(ledger), base_date, model_bin=model_bin,
                                                     model=model, clock=clock, edition="morning",
-                                                    foreign_sources=foreign_sources)
+                                                    foreign_sources=foreign_sources, official_since=official_since)
     if data["base_date"] != base_date:
         # 日 K 停在更早的日子：基準日的資料還沒發布，或那天臨時休市（颱風假不在休市日曆裡）。交易日以日 K 實際
         # 有資料為準，所以這裡不寫也不記漏記；之後那天的日 K 出現了，下一次晨間執行會把它補記成漏記。
         log.update(outcome="not_ready", detail=f"日 K 還沒有基準日 {base_date}（資料沒發布或臨時休市）")
         return _finish_log(log, clock, log_output)
     result = _write(ledger, data, dry_run=dry_run, edition="morning", session_date=session_date, model_bin=model_bin,
-                    model=model, now=clock, timeout_seconds=timeout_seconds)
+                    model=model, now=clock, timeout_seconds=timeout_seconds, official_since=official_since)
     _log_result(log, result, overseas_dir=overseas_dir, ledger=Path(ledger), dry_run=dry_run)
     if not dry_run and sql_output:
-        _write_sql(ledger, data["index_daily"], clock, sql_output)
+        _write_sql(ledger, data["index_daily"], clock, sql_output, official_since)
     return _finish_log(log, clock, log_output)
 
 

@@ -2,8 +2,9 @@
 //   /api/forecast/latest   最新基準日的晚間版與晨間版
 //   /api/forecast/summary  最新一份對帳摘要（帳本模組算好發布的）
 //   /api/forecast/history  依日期範圍取過去的預測與各格對帳結果，供回看
+//   /api/forecast/replay   最新一份「歷史重播（參考）」摘要（F 票，本人 11-17；另外三張表 forecast_replay_*，不計入正式結論）
 // 公開之前只回給站主，而且要功能開關打開；其他人（含開關關著時的站主）一律得到「沒有內容」而不是錯誤，
-// 首頁維持原樣。資料只讀 D1 的只能新增的三張表（migrations/0010）。
+// 首頁維持原樣。資料只讀 D1 只能新增的表（migrations/0010；重播是 0022）。
 const HEADERS = {
   "content-type": "application/json; charset=utf-8",
   "cache-control": "private, no-store",
@@ -12,7 +13,7 @@ const HEADERS = {
 };
 const json = (status, body) => new Response(JSON.stringify(body), { status, headers: HEADERS });
 
-export const FORECAST_PATH = /^\/api\/forecast\/(latest|summary|history)$/;
+export const FORECAST_PATH = /^\/api\/forecast\/(latest|summary|history|replay)$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 // 回看一次最多取四百天（一年多一點），避免一次讀出整個帳本。
 const MAX_HISTORY_DAYS = 400;
@@ -37,6 +38,12 @@ async function latest(db) {
 
 async function summary(db) {
   const row = await db.prepare("SELECT summary_json FROM forecast_summaries ORDER BY as_of DESC, published_at DESC LIMIT 1").first();
+  return { available: true, summary: row ? parse(row.summary_json) : null };
+}
+
+async function replay(db) {
+  const row = await db.prepare(
+    "SELECT summary_json FROM forecast_replay_summaries ORDER BY as_of DESC, published_at DESC LIMIT 1").first();
   return { available: true, summary: row ? parse(row.summary_json) : null };
 }
 
@@ -70,5 +77,6 @@ export async function handleForecastApi(request, env, path, { isOwner, policy })
   const [, kind] = FORECAST_PATH.exec(path);
   if (kind === "latest") return json(200, await latest(env.DB));
   if (kind === "summary") return json(200, await summary(env.DB));
+  if (kind === "replay") return json(200, await replay(env.DB));
   return history(env.DB, new URL(request.url));
 }

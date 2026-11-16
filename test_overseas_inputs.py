@@ -145,6 +145,16 @@ class FetchTests(OverseasTestCase):
         self.assertNotIn(TOKEN, (folder / "manifest.json").read_text(encoding="utf-8"))
         self.assertIn("api_token=REDACTED", nasdaq["url"])
 
+    def test_a_history_replay_can_ask_for_more_months_of_treasury_yields(self):
+        # 歷史重播（F 票）要往回好幾個月的美債：月份檔各抓一次，EODHD 照舊每個代號一次（一年歷史一次給齊）
+        net = FakeNet(default_routes())
+        manifest = oi.fetch_sources(self.tmp / "replay", reference_date=BASE, eodhd_token=TOKEN, fetch=net,
+                                    now=lambda: "2026-11-09T10:00:00Z", treasury_months=6)
+        months = [entry["name"] for entry in manifest["sources"] if entry["source"] == "treasury"]
+        self.assertEqual(months, ["treasury-202611", "treasury-202610", "treasury-202609", "treasury-202608",
+                                  "treasury-202607", "treasury-202606"])
+        self.assertEqual(sum("eodhd.com" in url for url in net.urls), 4)
+
     def test_one_failed_source_does_not_stop_the_others(self):
         routes = default_routes()
         routes["https://eodhd.com/api/eod/KS11.INDX"] = TimeoutError()
