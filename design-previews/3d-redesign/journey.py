@@ -713,6 +713,13 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
               [count, title.inner_text()])
         page.locator(f"#panelBody .bar-hit[data-day='{latest}']").click()
         check(f"{tag}：點回最新一天，名單回到有連續天數的前 10", short(latest) in title.inner_text() and page.locator("#chipList td.streak").count() == 10, title.inner_text())
+        # D 包核銷：明細回來是空的（那一天還沒抓到）要說「還沒抓到」，不能和官方那天真的沒資料寫成同一句（換皮前就是這樣分）
+        page.route("**/api/market/detail?**", lambda route: route.fulfill(status=200, content_type="application/json", body="{}"))
+        page.locator("#panelBody .bar-hit").nth(8).click()
+        page.wait_for_function("!document.querySelector('#chipList [data-loading]') && !document.querySelector('#chipList.is-loading')")
+        empty = page.locator("#chipList").inner_text()
+        check(f"{tag}：那一天的明細還沒抓到時寫「還沒抓到」，不寫「沒有資料」", "還沒抓到" in empty and "沒有資料" not in empty, empty)
+        page.unroute("**/api/market/detail?**")
         close_chip()
         seen = {}
         for key in ("futures", "margin", "short", "trust", "volume"):
@@ -1842,6 +1849,36 @@ def theme_follows(page: Page, base: str, tag: str) -> None:
     check(f"{tag}：在個股頁改回淺色，回首頁也是淺色", seen == ["light"] * 2, seen)
 
 
+def dark_walk(browser, base: str) -> None:
+    """D 包驗收「切換深色後重走一條」：深色下 首頁搜尋 → 個股頁 → 開「價位」看價位階梯（桌機與手機各一次）。"""
+    for size, (width, height) in shoot.SIZES.items():
+        tag = f"深色重走 {size}"
+        context = browser.new_context(viewport={"width": width, "height": height}, color_scheme="light", reduced_motion="reduce",
+                                      locale="zh-TW", timezone_id="Asia/Taipei", has_touch=size == "390")
+        page = context.new_page()
+        page.set_default_timeout(15_000)
+        page.clock.set_fixed_time(shoot.FIXED_NOW)
+        dark = "getComputedStyle(document.documentElement).colorScheme.includes('dark')"
+
+        def run() -> None:
+            page.goto(base + "/", wait_until="domcontentloaded")
+            shoot.ready_home(page)
+            page.locator("#themeToggle").click()   # 系統是淺色，用頁面上的鍵切到深色
+            check(f"{tag}：首頁切到深色", page.evaluate(dark))
+            page.locator("#searchToggle").click()
+            page.locator("#stockSearchInput").fill("2330")
+            page.locator("#stockSearchForm button[type=submit]").click()
+            page.locator("#stockSearchResults a[data-code='2330']").click()
+            page.wait_for_url("**/stock.html?code=2330")
+            shoot.ready_stock(page)
+            check(f"{tag}：個股頁還是深色", page.evaluate(dark))
+            open_stock_cat(page, "levelsPanel")
+            check(f"{tag}：深色下開「價位」看得到價位階梯", page.locator("#ladder").is_visible())
+            check(f"{tag}：沒有橫向捲動", no_overflow(page))
+        step(tag, run)
+        context.close()
+
+
 TILT = "document.querySelector('[data-desk-tilt]').style.transform"
 TILT_PAGES = (
     ("首頁", "/", shoot.ready_home, "#chartTitle", "#mainChart canvas"),
@@ -1987,6 +2024,7 @@ def main() -> None:
                 step(f"主題 {size}", lambda: theme_follows(page, base, f"主題 {size}"))
                 context.close()
             desk_tilt(browser, base)
+            dark_walk(browser, base)
             browser.close()
     finally:
         proc.kill()

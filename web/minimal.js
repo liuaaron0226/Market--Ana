@@ -915,7 +915,9 @@
       });
     };
     if (day && day === nowDay(key)) { fill(listTable(NOW[list[1]], latestColumns(key, list[2]))); return; }
-    if (!detailDays.has(day)) { fill(`<p class="chip-date">這一天的個股明細還沒抓到（目前有 ${DT ? DT.days.length : 0} 天）。</p>`); return; }
+    // 那一天的明細還沒抓到（不在已有的日子裡，或取回來是空的）和官方那天真的沒資料要分開寫（換皮前就是這樣分；D 包核銷補回）
+    const notFetched = `<p class="chip-date">這一天的個股明細還沒抓到（目前有 ${DT ? DT.days.length : 0} 天）。</p>`;
+    if (!detailDays.has(day)) { fill(notFetched); return; }
     // 取資料的期間原本的名單先留著（變淡），不換成一行「載入中」：不然面板會先變矮再變高，往下捲過的話畫面會跳一下（本人 11-15 回報的抖動）
     if (target().firstElementChild) {
       target().classList.add('is-loading');
@@ -923,7 +925,7 @@
       target().firstElementChild.setAttribute('data-loading', '');
     } else fill('<p class="chip-date" data-loading>載入明細中…</p>');
     window.MarketData.detail(key, day).then(
-      detail => fill(listTable((detail || {})[list[1]], dayColumns(key))),
+      detail => fill(Object.keys(detail || {}).length ? listTable(detail[list[1]], dayColumns(key)) : notFetched),
       error => fill(`<p class="chip-date" role="alert">${esc(error && error.message ? error.message : '暫時無法取得明細。')}</p>`)
     );
   }
