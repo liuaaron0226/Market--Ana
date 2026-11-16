@@ -11,9 +11,10 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from .indicators import Bar, ma
 from .limit_up_momentum import limit_up_momentum
+from .margin_maintenance import estimated_range
 
 # 目前會算的幾塊（固定順序）；blocks 只列其中真的有的。建置報告用同一份名單統計「今天有幾檔有哪幾塊」。
-BLOCK_NAMES = ('limit_up_momentum', 'versus_market', 'ma_alignment', 'heavy_zones')
+BLOCK_NAMES = ('limit_up_momentum', 'versus_market', 'ma_alignment', 'margin_maintenance', 'heavy_zones')
 VERSUS_DAYS = (5, 20, 60)
 # 均線排列的四個條件（固定順序）與畫面上四盞燈的短標籤。這一組名字只屬於均線排列這一塊。
 MA_ALIGNMENT_CONDITIONS = (('close_above_ma20', '站上月線'), ('ma20_above_ma60', '月＞季'),
@@ -67,6 +68,16 @@ def _ma_alignment(bars: list[Bar], indicators: dict) -> dict | None:
             'met_count': count, 'summary': summary}
 
 
+def _margin_maintenance(**inputs) -> dict | None:
+    """融資維持率（估）：估計範圍的下限、上限（%，整數）與資料日。怎麼估、哪些股票不給、每日對帳怎麼擋，
+    都在 margin_maintenance（inputs 是 estimated_range 的參數）。"""
+    estimate = estimated_range(**inputs)
+    if estimate is None:
+        return None
+    low, high, data_date = estimate
+    return {'low_pct': int(_round(low, 0)), 'high_pct': int(_round(high, 0)), 'data_date': data_date}
+
+
 def _whole_as_int(value: float) -> float | int:
     """小圖用的數字：剛好是整數的寫成整數（100.0 → 100），少佔一點資料量。"""
     return int(value) if value == int(value) else value
@@ -110,14 +121,16 @@ def _heavy_zones(bars: list[Bar]) -> dict | None:
 
 
 def build_signals(*, bars: list[Bar], day_returns: list[float], index_closes: dict[str, float], indicators: dict,
-                  momentum_inputs: dict) -> dict:
+                  momentum_inputs: dict, margin_inputs: dict) -> dict:
     """bars：這一檔由舊到新的還原後日線，最後一根是資料日；day_returns：和 bars 逐根對齊的當日漲跌幅（比率）；
     index_closes：{日期: 加權指數收盤}；indicators：個股分析結果的指標快照；
-    momentum_inputs：漲停動能要的原始資料（limit_up_momentum 的參數，加權指數除外）。"""
+    momentum_inputs：漲停動能要的原始資料（limit_up_momentum 的參數，加權指數除外）；
+    margin_inputs：融資維持率（估）要的（margin_maintenance.estimated_range 的參數）。"""
     dates = [bar.date for bar in bars]
     builders = {'limit_up_momentum': lambda: limit_up_momentum(index_closes=index_closes, **momentum_inputs),
                 'versus_market': lambda: _versus_market(dates, day_returns, index_closes),
                 'ma_alignment': lambda: _ma_alignment(bars, indicators),
+                'margin_maintenance': lambda: _margin_maintenance(**margin_inputs),
                 'heavy_zones': lambda: _heavy_zones(bars)}
     found, failed = {}, []
     for name in BLOCK_NAMES:

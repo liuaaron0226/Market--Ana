@@ -458,6 +458,57 @@ class ChipDetailTest(unittest.TestCase):
             self.assertEqual(done["margin_history"]["status"], "error")
             self.assertTrue(done["margin_history"]["reason"])
 
+    def _quotes(self, root: Path, day: str, content: bytes | None = None) -> None:
+        """當天稍早已經抓到的上市每日收盤行情原件。"""
+        import gzip
+        payload = {"stat": "OK", "date": day, "tables": [
+            {"title": "每日收盤行情", "fields": ["證券代號", "證券名稱", "成交股數", "成交筆數", "成交金額", "開盤價", "最高價",
+                                             "最低價", "收盤價"],
+             "data": [["2330", "台積電", "1,000", "3", "2,235,000", "2,210.00", "2,290.00", "2,190.00", "2,235.00"]]}]}
+        path = root / "data/stock-history/raw" / day[:4] / f"MI_INDEX-{day}.json.gz"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(gzip.compress(json.dumps(payload, ensure_ascii=False).encode("utf-8")) if content is None else content)
+
+    def test_price_summary_of_the_day_is_kept_next_to_the_margin_original(self) -> None:
+        # 融資維持率（估）重播時要每天的收盤與成交均價；行情原件在雲端只留最近一段，所以存下個股融資後一起留一份摘要。
+        with tempfile.TemporaryDirectory() as tmp:
+            source, root = Path(tmp) / "source", Path(tmp) / "root"
+            # 更早的日子在專案帶的另一包種子裡，和融資原件的種子一樣缺了就放回去。
+            early = source / "data/margin-history/prices/prices-20251103.json"
+            early.parent.mkdir(parents=True)
+            early.write_text('{"date":"20251103","prices":{"2330":[1500.0,1000,1500000]}}\n', encoding="utf-8")
+            margin_history.write_seed(source, "prices")
+            (root / "seeds").mkdir(parents=True)
+            (root / margin_history.PRICE_SEED).write_bytes((source / margin_history.PRICE_SEED).read_bytes())
+            self._quotes(root, "20261106")
+            rec = Recorder({("MI_MARGN", "20261106"): sh.Response(
+                200, "application/json", json.dumps(self._complete_margin("20261106")).encode(), "u")})
+            done = di.listed_chip_detail_day(root, "2026-11-06", get=rec.two_arg, sleep=lambda s: None,
+                                             datasets=("margin",))
+            kept = root / "data/margin-history/prices"
+            self.assertEqual(sorted(p.name for p in kept.glob("*.json")), ["prices-20251103.json", "prices-20261106.json"])
+            self.assertEqual((kept / "prices-20251103.json").read_bytes(), early.read_bytes())
+            self.assertEqual(json.loads((kept / "prices-20261106.json").read_text(encoding="utf-8")),
+                             {"date": "20261106", "prices": {"2330": [2235.0, 1000, 2235000]}})
+            self.assertEqual(done["margin_history"]["prices"],
+                             {"status": "ok", "restored": ["20251103"], "stored": ["20261106"], "skipped": []})
+
+    def test_price_summary_trouble_does_not_hide_the_margin_original(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "seeds").mkdir()
+            (root / margin_history.PRICE_SEED).write_bytes(b"not an archive")     # 種子壞了
+            self._quotes(root, "20261106", content=b"not gzip")                   # 行情原件也壞了
+            rec = Recorder({("MI_MARGN", "20261106"): sh.Response(
+                200, "application/json", json.dumps(self._complete_margin("20261106")).encode(), "u")})
+            done = di.listed_chip_detail_day(root, "2026-11-06", get=rec.two_arg, sleep=lambda s: None,
+                                             datasets=("margin",))
+            self.assertEqual((done["margin_history"]["status"], done["margin_history"]["stored"]), ("ok", ["20261106"]))
+            prices = done["margin_history"]["prices"]
+            self.assertEqual((prices["status"], prices["restored"], prices["stored"]), ("ok", [], []))
+            self.assertTrue(prices["seed_error"])
+            self.assertEqual([item["day"] for item in prices["skipped"]], ["20261106"])
+
 
 class _FakeRequestsResponse:
     def __init__(self, content: bytes, content_type: str) -> None:

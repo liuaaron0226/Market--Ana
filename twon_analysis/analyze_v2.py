@@ -687,7 +687,8 @@ def _day_returns(code: str, raw_bars: list[Bar], returns: list[float | None],
 
 
 def _signals(code: str, raw_bars: list[Bar], bars: list[Bar], info: dict, indicators: dict,
-             reference_events: dict[str, list[dict]] | None, unscaled_institutional: list[dict]) -> dict | None:
+             reference_events: dict[str, list[dict]] | None, unscaled_institutional: list[dict],
+             capital_events: list[dict]) -> dict | None:
     # 和事實區塊一樣是附加內容：任何錯誤都只讓這一塊留空，不能讓整份分析失敗。
     try:
         from .signals import build_signals
@@ -698,7 +699,9 @@ def _signals(code: str, raw_bars: list[Bar], bars: list[Bar], info: dict, indica
                            'trust_nets': {row['date']: row['trust'] for row in unscaled_institutional}}
         return build_signals(bars=bars, day_returns=_day_returns(code, raw_bars, info['day_returns'], reference_events),
                              index_closes=_safe(lambda: taiex_closes(bars[-1].date)) or {}, indicators=indicators,
-                             momentum_inputs=momentum_inputs)
+                             momentum_inputs=momentum_inputs,
+                             margin_inputs={'code': code, 'market': info['market'], 'kind': info['kind'],
+                                            'as_of': bars[-1].date, 'capital_events': capital_events})
     except Exception:  # noqa: BLE001
         return None
 
@@ -753,7 +756,8 @@ def analyze_v2(code: str, as_of: str, db_path=DEFAULT_DB, otc_db_path=DEFAULT_OT
         # 個股頁事實區塊（本人 2026-11-15）：算不出來只讓這一塊留空，不影響其他內容。給誰看由網站入口的開關決定。
         'facts': _facts(last, info, x, institutional, [bar.date for bar in chart_bars], info['market'], code),
         # 個股頁五塊新功能的資料（本人 2026-11-16）：同樣算不出來只留空；給誰看由網站入口另一個獨立的開關決定。
-        'signals': _signals(code, raw_bars, bars, info, x, reference_events, unscaled_institutional),
+        'signals': _signals(code, raw_bars, bars, info, x, reference_events, unscaled_institutional,
+                            capital_actions.get(code, [])),
         'defense': defense_payload(x['low20_intraday']),
         'trend_classification': trend_classification_payload(),
         'conditions': conditions,

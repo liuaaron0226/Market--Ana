@@ -299,13 +299,46 @@ class VersionActivationTests(unittest.TestCase):
         # {"blocks":["ma_alignment"],"failed":["heavy_zones"]}＝52、{"blocks":[]}＝13；沒有五塊資料的兩檔不計。
         self.assertEqual(signals_report(rows), {
             "analyses": 5, "without_signals": 2,
-            "blocks": {"limit_up_momentum": 1, "versus_market": 1, "ma_alignment": 2, "heavy_zones": 1},
-            "failed": {"limit_up_momentum": 0, "versus_market": 0, "ma_alignment": 0, "heavy_zones": 1},
+            "blocks": {"limit_up_momentum": 1, "versus_market": 1, "ma_alignment": 2, "margin_maintenance": 0, "heavy_zones": 1},
+            "failed": {"limit_up_momentum": 0, "versus_market": 0, "ma_alignment": 0, "margin_maintenance": 0, "heavy_zones": 1},
             "payload_bytes": 142, "largest_payload_bytes": 77})
-        nothing = {"limit_up_momentum": 0, "versus_market": 0, "ma_alignment": 0, "heavy_zones": 0}
+        nothing = {"limit_up_momentum": 0, "versus_market": 0, "ma_alignment": 0, "margin_maintenance": 0, "heavy_zones": 0}
         self.assertEqual(signals_report([]), {
             "analyses": 0, "without_signals": 0, "blocks": nothing, "failed": nothing,
             "payload_bytes": 0, "largest_payload_bytes": 0})
+
+    def test_build_report_carries_the_daily_margin_check(self) -> None:
+        # 融資維持率（估）的每日對帳：建置報告要有當天估計的全市場融資金額和官方差多少、有沒有超過門檻。
+        import tempfile
+        from unittest import mock
+
+        from cloud.build_stock_pack import margin_check_report
+        from twon_analysis import margin_maintenance
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp) / "data/margin-history"
+            # 起點 2025-11-03 當天 2330 有 100 張、成交均價 250（250,000 元 ÷ 1,000 股）、收 255：
+            # 估計的全市場融資金額＝100 張 × 1,000 × 250 × 起點係數 0.9369126317402282 × 0.6＝14,053,689 元；官方 14,054 仟元。
+            official = {"stat": "OK", "date": "20251103", "tables": [
+                {"fields": ["項目", "買進", "賣出", "現金(券)償還", "前日餘額", "今日餘額"],
+                 "data": [["融資金額(仟元)", "1", "2", "3", "4", "14,054"]]},
+                {"fields": ["代號", "名稱", "買進", "賣出", "現金償還", "前日餘額", "今日餘額"],
+                 "data": [["2330", "台積電", "0", "0", "0", "100", "100"]]}]}
+            (store / "raw").mkdir(parents=True)
+            (store / "raw/margin-20251103.json").write_text(json.dumps({"data": official}, ensure_ascii=False), encoding="utf-8")
+            (store / "prices").mkdir()
+            (store / "prices/prices-20251103.json").write_text('{"date":"20251103","prices":{"2330":[255.0,1000,250000]}}',
+                                                               encoding="utf-8")
+            with mock.patch.object(margin_maintenance, "ROOT", Path(tmp)):
+                self.assertEqual(margin_check_report("2025-11-03"), {
+                    "status": "ok", "data_date": "2025-11-03", "gap_pct": 0.0, "threshold_pct": 8.0,
+                    "estimated": 14053689, "official": 14054000, "stocks": 1, "reason": None})
+                # 隔天的原件讀不了：對帳本身出錯不擋發布，報告寫明是出錯（不帶本機路徑）。
+                (store / "raw/margin-20251104.json").write_text("壞掉的檔", encoding="utf-8")
+                (store / "prices/prices-20251104.json").write_text('{"date":"20251104","prices":{}}', encoding="utf-8")
+                broken = margin_check_report("2025-11-04")
+            self.assertEqual((broken["status"], broken["reason"]), ("error", "JSONDecodeError"))
+            self.assertNotIn(tmp, json.dumps(broken, ensure_ascii=False))
 
     def test_strategy_isolation_never_hides_core_data_defects(self) -> None:
         from cloud.build_stock_pack import _check_payload, _isolate_strategy
@@ -689,7 +722,10 @@ class SampleBuildV2Tests(unittest.TestCase):
         self.assertEqual((report["blocks"]["versus_market"], report["blocks"]["ma_alignment"]), (3, 3))
         # 漲停動能只給上市普通股：三檔裡只有台積電有（環球晶是上櫃、0050 是 ETF）。
         self.assertEqual(report["blocks"]["limit_up_momentum"], 1)
-        self.assertEqual(report["failed"], {"limit_up_momentum": 0, "versus_market": 0, "ma_alignment": 0, "heavy_zones": 0})
+        self.assertEqual(report["failed"], {"limit_up_momentum": 0, "versus_market": 0, "ma_alignment": 0,
+                                            "margin_maintenance": 0, "heavy_zones": 0})
+        self.assertIn(report["margin_check"]["status"],
+                      ("ok", "over_threshold", "missing_days", "missing_prices", "stale", "no_start", "no_official"))
         self.assertGreater(report["payload_bytes"], 0)
 
     def test_functions_pack_has_target_date_and_valid_new_fields_per_stock(self) -> None:
