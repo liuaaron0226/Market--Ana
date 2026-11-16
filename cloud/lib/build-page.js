@@ -12,7 +12,7 @@ export const WEB_FILES = [
   // 立體重設計 A 包第 7 片（11-15）：K 線區的小鍵與浮出選單
   "chart-menus.js",
   // 立體重設計 B 包（11-14）：資金地形的版面計算與畫面
-  "terrain-layout.js", "terrain.js",
+  "terrain-layout.js", "terrain.js", "desk-tilt.js",
   // 立體重設計（11-15）：短中長期走勢的算票與畫面
   "trend-votes.js", "trend-matrix.js",
   // 立體重設計（11-15）：收復線／防守線點開之後那張圖的資料整理

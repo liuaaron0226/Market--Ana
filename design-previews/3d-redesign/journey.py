@@ -1814,7 +1814,115 @@ def theme_follows(page: Page, base: str, tag: str) -> None:
     check(f"{tag}：在個股頁改回淺色，回首頁也是淺色", seen == ["light"] * 2, seen)
 
 
+TILT = "document.querySelector('[data-desk-tilt]').style.transform"
+TILT_PAGES = (
+    ("首頁", "/", shoot.ready_home, "#chartTitle", "#mainChart canvas"),
+    ("個股", f"/stock.html?code={shoot.STOCK}", shoot.ready_stock, "#stockName", "#chartHost canvas"),
+    ("自選庫存", "/portfolio.html", shoot.ready_portfolio, "#portfolioMain h1", None),
+)
+
+
+def desk_tilt(browser, base: str) -> None:
+    """D 包第 1 片：桌機上桌面隨游標微傾；移到 K 線等要精準對位的地方回平；固定元件不在桌面裡；觸控與減少動態效果不啟用。
+    其他檢查都在「減少動態效果」下跑（不會傾斜），這裡另開一般設定的視窗。"""
+    context = browser.new_context(viewport={"width": 1440, "height": 900}, locale="zh-TW", timezone_id="Asia/Taipei")
+    page = context.new_page()
+    page.set_default_timeout(15_000)
+    page.clock.set_fixed_time(shoot.FIXED_NOW)
+    for name, path, ready, board, canvas in TILT_PAGES:
+        tag = f"微傾 {name} 1440"
+
+        def run() -> None:
+            page.goto(base + path, wait_until="domcontentloaded")
+            ready(page)
+            page.evaluate("scrollTo(0, 0)")
+            fixed = page.evaluate("""() => [...document.querySelectorAll('[data-desk-tilt] *')]
+              .filter(node => getComputedStyle(node).position === 'fixed').map(node => node.id || node.className)""")
+            check(f"{tag}：桌面裡沒有固定在畫面上的元件（傾斜不會讓它們跑位）", fixed == [], fixed)
+            check(f"{tag}：游標還沒動時是平的", page.evaluate(TILT) == "")
+            x, y = centre(page.locator(board).first)
+            page.mouse.move(x, y, steps=4)
+            page.wait_for_timeout(700)
+            tilted = page.evaluate(TILT)
+            check(f"{tag}：游標在板上時桌面微傾", tilted.startswith("perspective(1900px) rotateX(") and "rotateY(" in tilted, tilted)
+            angles = [abs(float(value)) for value in re.findall(r"rotate[XY]\((-?[\d.]+)deg\)", tilted)]
+            check(f"{tag}：角度很小（上下不到 0.8 度、左右不到 1.1 度）", len(angles) == 2 and angles[0] <= 0.8 and angles[1] <= 1.1, angles)
+            text = page.locator(board).first.inner_text().strip()
+            check(f"{tag}：傾斜時文字照樣讀得到", bool(text), text)
+            page.wait_for_timeout(1500)   # 傾過去要約 1.3 秒（每格靠近 8%），之後就停
+            still = page.evaluate(TILT)
+            page.wait_for_timeout(300)
+            check(f"{tag}：游標不動時停在原地（不再一直變）", page.evaluate(TILT) == still, still)
+            if canvas:
+                cx, cy = centre(page.locator(canvas).first)
+                page.mouse.move(cx, cy, steps=4)
+                page.wait_for_timeout(700)
+                check(f"{tag}：游標移到 K 線上回平（讀價、畫線照原本的位置）", page.evaluate(TILT) == "", page.evaluate(TILT))
+                page.mouse.move(x, y, steps=4)
+                page.wait_for_timeout(700)
+            page.mouse.move(x, y + 1)
+            page.mouse.down()
+            page.wait_for_timeout(700)
+            check(f"{tag}：按著滑鼠鍵（拖曳）時回平", page.evaluate(TILT) == "", page.evaluate(TILT))
+            page.mouse.up()
+        step(tag, run)
+
+    def panel() -> None:
+        page.goto(base + "/", wait_until="domcontentloaded")
+        shoot.ready_home(page)
+        x, y = centre(page.locator("#chartTitle"))
+        page.mouse.move(x, y, steps=4)
+        page.wait_for_timeout(500)
+        tilted = page.evaluate(TILT)
+        page.locator("#priceSummary").click()
+        page.wait_for_function(PANEL_OPEN)
+        page.wait_for_timeout(800)   # 這個視窗沒有減少動態效果，面板有進場動畫；等它停
+        box, view = page.locator("#detailPanel").bounding_box(), page.viewport_size
+        check("微傾 首頁 1440：傾斜時開下鑽面板，面板仍置中、完整在畫面裡",
+              bool(tilted) and abs(box["x"] + box["width"] / 2 - view["width"] / 2) <= 2
+              and abs(box["y"] + box["height"] / 2 - view["height"] / 2) <= 2 and box["x"] >= 0 and box["y"] >= 0 and box["y"] + box["height"] <= view["height"] + 1, [tilted, box])
+        page.keyboard.press("Escape")
+        page.wait_for_function(PANEL_CLOSED)
+    step("微傾 首頁 1440：下鑽面板", panel)
+
+    def terrain() -> None:
+        page.goto(base + "/", wait_until="domcontentloaded")
+        shoot.ready_home(page)
+        open_cat(page, "rotation")
+        page.locator("#rotationTerrain .terrain-stage").scroll_into_view_if_needed()
+        x, y = centre(page.locator("#rotationMeta"))
+        page.mouse.move(x, y, steps=4)
+        page.wait_for_timeout(700)
+        tilted = page.evaluate(TILT)
+        sx, sy = centre(page.locator("#rotationTerrain .terrain-stage"))
+        page.mouse.move(sx, sy, steps=4)
+        page.wait_for_timeout(700)
+        check("微傾 首頁 1440：游標移到資金地形上回平（點樓、旋轉照原本的位置）", bool(tilted) and page.evaluate(TILT) == "", [tilted, page.evaluate(TILT)])
+    step("微傾 首頁 1440：資金地形", terrain)
+    context.close()
+
+    for label, options in (("390 觸控", {"viewport": {"width": 390, "height": 844}, "has_touch": True, "is_mobile": True}),
+                           ("1440 減少動態效果", {"viewport": {"width": 1440, "height": 900}, "reduced_motion": "reduce"})):
+        context = browser.new_context(locale="zh-TW", timezone_id="Asia/Taipei", **options)
+        page = context.new_page()
+        page.set_default_timeout(15_000)
+        page.clock.set_fixed_time(shoot.FIXED_NOW)
+
+        def off() -> None:
+            page.goto(base + "/", wait_until="domcontentloaded")
+            shoot.ready_home(page)
+            box = page.locator("#chartTitle").bounding_box()
+            page.mouse.move(box["x"] + 4, box["y"] + 4, steps=4)
+            page.wait_for_timeout(700)
+            check(f"微傾 {label}：不啟用", page.evaluate(TILT) == "", page.evaluate(TILT))
+        step(f"微傾 {label}", off)
+        context.close()
+
+
 def main() -> None:
+    # 個股頁的事實區塊要靠這份樣本才會出現；缺了「報價卡只剩價格」「技術」那幾項會逾時，看不出原因（D 包 11-17 撞到）
+    sample = shoot.ROOT / ".tmp/3d-baseline/signals-preview.json"
+    check("預覽樣本 .tmp/3d-baseline/signals-preview.json 在（沒有就用 make-signals-preview.py 產生）", sample.exists(), sample)
     proc, base = shoot.start_server("--features", "core")
     errors: list[str] = []
     try:
@@ -1833,6 +1941,7 @@ def main() -> None:
                 step(f"自選庫存 {size}", lambda: portfolio(page, base, f"自選庫存 {size}"))
                 step(f"主題 {size}", lambda: theme_follows(page, base, f"主題 {size}"))
                 context.close()
+            desk_tilt(browser, base)
             browser.close()
     finally:
         proc.kill()
