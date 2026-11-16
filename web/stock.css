@@ -461,6 +461,8 @@ body.st :is(.st-top, .bd-stage, .bd-rail, #candidateReasons:not(:empty), .bd-com
 body.st .st-top { margin-top: 8px; padding: 24px 32px 20px; }
 body.st .st-top .bd-quote { padding: 0 0 20px; }
 body.st .st-top .bd-strategy { margin: 24px 0 0; }
+/* 當日三格在板裡不留下方間距（它原本的 28px 是給下一塊用的；操作策略關著時——正式站現在就是——板底下會空一截） */
+body.st .st-top .sf { margin-bottom: 0; }
 body.st .bd-stage { margin-top: 16px; padding: 4px 32px 16px; }
 body.st .bd-chart { padding-bottom: 0; }
 body.st .bd-rail { padding: 24px 28px 28px; }
