@@ -141,6 +141,8 @@
   background: var(--ink); color: var(--bg); font: 500 12px/1.4 var(--sans); white-space: nowrap;
   opacity: 0; pointer-events: none; transition: opacity 120ms var(--ease-out);
 }
+/* 最右邊那兩顆的提示往左長：靠左對齊時在 320 寬的手機上會超出畫面 1px，整頁出現橫向捲動 */
+.bd-draw button[data-tool="text"]::after, .bd-draw .bd-draw-delete::after { left: auto; right: 0; }
 .bd-draw button:focus-visible::after, .bd-draw button.is-tip::after { opacity: 1; }
 @media (hover: hover) {
   .bd-draw button:not([aria-pressed="true"]):hover { background: var(--panel2); color: var(--ink); }
@@ -443,4 +445,96 @@
 @keyframes hold-cell-in { from { opacity: 0; translate: 0 6px; } }
 @media (prefers-reduced-motion: reduce) {
   #bigHolders .col i { transition: none; }
+}
+
+/* ================= 看盤桌：個股頁（立體重設計 C 包第 2 片，2026-11-16） =================
+   和首頁同一套：頁面背景是桌面；報價那一段（報價、當日三格、操作策略）、K 線、價位階梯、籌碼名單、和 0050 對照各是一塊第 1 層的板；
+   板上可以按的是鍵。陰影、圓角、厚度一律引用 bold.css 的深度變數，這裡不自訂。
+   事實區塊照它自己的畫面原則（不加陰影、紅綠只在細記號）不加板；大戶持股那一張本來就是會浮起或凹下的列（.depth-row.on-page），
+   桌面上照舊。價位階梯的壓力與支撐用高低分層：壓力是凸起的鍵、支撐是凹下的槽、現價是深色的鍵，不加任何文字。 */
+/* 桌面的背景和首頁共用，寫在 bold.css〈看盤桌：頁面背景〉 */
+
+/* ---------- 第 1 層：板 ---------- */
+body.st :is(.st-top, .bd-stage, .bd-rail, #candidateReasons:not(:empty), .bd-compare) {
+  border: 0; border-radius: var(--r-slab); background: var(--slab); box-shadow: var(--slab-shadow);
+}
+body.st .st-top { margin-top: 8px; padding: 24px 32px 20px; }
+body.st .st-top .bd-quote { padding: 0 0 20px; }
+body.st .st-top .bd-strategy { margin: 24px 0 0; }
+/* 當日三格在板裡不留下方間距（它原本的 28px 是給下一塊用的；操作策略關著時——正式站現在就是——板底下會空一截） */
+body.st .st-top .sf { margin-bottom: 0; }
+body.st .bd-stage { margin-top: 16px; padding: 4px 32px 16px; }
+body.st .bd-chart { padding-bottom: 0; }
+body.st .bd-rail { padding: 24px 28px 28px; }
+body.st #candidateReasons:not(:empty) { margin-bottom: 20px; padding: 4px 28px 24px; }
+body.st .bd-compare { margin: 0; padding: 24px 32px 28px; }
+
+/* ---------- 價位階梯：壓力浮起、支撐凹下、現價是深色的鍵 ---------- */
+body.st .bd-ladder { margin-top: 20px; }
+body.st .lad { padding: 10px 14px; border-radius: var(--r-key); }
+body.st .lad-res { background: var(--key); box-shadow: var(--key-shadow); }
+body.st .lad-sup { background: var(--well); box-shadow: var(--well-shadow); }
+body.st .lad-now { padding: 12px 14px; background: var(--ink); box-shadow: var(--key-shadow-ink); }
+body.st .lad-now .lad-name { background: transparent; color: var(--bg); padding-left: 0; text-align: left; }
+body.st .lad-now b { color: var(--bg); }
+/* 列與列之間的距離照舊由 stock.js 照「離收盤幾 %」設（--gap），遠近一眼可比 */
+
+/* ---------- 板上的鍵：畫線工具、週期、均線、頂列 ---------- */
+body.st :is(.bd-back, .bd-theme, .bd-draw button, .bd-chart-bar .chart-chip, .bd-period select) {
+  border: 0; border-radius: var(--r-key); background: var(--key); box-shadow: var(--key-shadow);
+  transition: transform var(--t-lift) var(--ease-depth), box-shadow var(--t-lift) var(--ease-depth), color 160ms var(--ease-out);
+}
+body.st .bd-draw { gap: 6px; padding-bottom: 4px; }
+body.st .bd-draw button[aria-pressed="true"] { background: var(--ink); color: var(--bg); box-shadow: var(--key-shadow-ink); }
+@media (hover: hover) {
+  body.st :is(.bd-back, .bd-theme, .bd-draw button:not([aria-pressed="true"]), .bd-chart-bar .chart-chip, .bd-period select):hover {
+    background: var(--key); color: var(--ink); transform: translateY(var(--key-lift)); box-shadow: var(--key-shadow-hover);
+  }
+}
+body.st :is(.bd-back, .bd-theme, .bd-draw button, .bd-chart-bar .chart-chip, .bd-period select):active {
+  transform: translateY(var(--key-thick)); box-shadow: var(--key-shadow-press); transition-duration: var(--t-press);
+}
+
+@media (max-width: 860px) {
+  body.st .st-top { margin-top: 4px; padding: 16px 16px 14px; }
+  body.st .st-top .bd-quote { padding-bottom: 14px; }
+  body.st .bd-stage { margin-top: 12px; padding: 2px 12px 10px; }
+  body.st .bd-rail { padding: 20px 16px 22px; }
+  body.st #candidateReasons:not(:empty) { padding: 4px 16px 20px; }
+  body.st .bd-compare { padding: 20px 16px 24px; }
+}
+
+/* ---------- 收緊間距（本人 2026-11-16 定案版本 a 之後；樣子不變，只收卡片之間與卡片裡的空白） ----------
+   要過的兩條（本人 11-15 定的）：電腦上一進去三顆分類鍵在第一個畫面裡；手機一進去整頁不到兩個畫面。
+   改的只有間距：卡片的內距、卡片之間、當日三格的上下、畫線工具列下方、頁尾留白。字、顏色、卡片的樣子都不動。 */
+body.st .st-top { margin-top: 4px; padding: 18px 32px 14px; }
+body.st .st-top .bd-quote { padding-bottom: 14px; }
+body.st .st-top .sf-cell { padding-top: 10px; padding-bottom: 10px; }
+body.st .bd-stage { margin-top: 12px; padding: 2px 32px 10px; }
+body.st .bd-chart-bar { margin-bottom: 4px; }
+body.st .bd-draw { padding-bottom: 0; margin-bottom: 4px; }
+body.st .hm-cats { margin-top: 14px; }
+body.st .bd-shell { padding-bottom: 40px; }
+body.st .sf-blocks { margin-top: 18px; padding-top: 14px; }
+@media (max-width: 860px) {
+  body.st .st-top { padding: 12px 16px 8px; }
+  body.st .st-top .bd-quote { padding-bottom: 10px; }
+  body.st .st-top .sf-cell { padding-top: 6px; padding-bottom: 6px; }
+  body.st .bd-stage { margin-top: 10px; padding: 2px 12px 4px; }
+  body.st .hm-cats { margin-top: 10px; }
+  body.st .bd-shell { padding-bottom: 8px; }
+  body.st .sf-blocks { margin-top: 8px; padding-top: 8px; }
+  body.st .sf-panel { padding-top: 10px; }
+  body.st .st-top .bd-strategy { margin-top: 14px; }
+  body.st .sf-facts li { padding: 8px 0; }
+  body.st .sf-facts li:first-child { padding-top: 0; }
+}
+
+/* ---------- 當日三格與操作策略搬到「技術」（本人 2026-11-17：最上面太多資訊，圖二移到技術） ----------
+   報價卡只剩名稱、代號與價格；兩個區塊打開「技術」時排在那一塊的最前面，下面接三張卡。 */
+body.st .st-top .bd-quote:last-child { padding-bottom: 0; }
+body.st .sf-panel > .sf { margin: 0 0 18px; }
+body.st .sf-panel > .bd-strategy { margin: 0 0 6px; }
+@media (max-width: 860px) {
+  body.st .sf-panel > .sf { margin-bottom: 14px; }
 }

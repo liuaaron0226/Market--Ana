@@ -1181,13 +1181,25 @@ def stock(page: Page, base: str, tag: str, mobile: bool) -> None:
     shoot.ready_stock(page)
     check(f"{tag}：沒有橫向捲動", no_overflow(page))
     check(f"{tag}：報價有收盤價", page.locator("#close").inner_text().strip() not in ("", "—"))
+    # 本人 2026-11-17：最上面只留報價；當日三格與操作策略搬到「技術」，均線距離表與 RSI／量比／KD 拿掉
+    top = page.evaluate("[...document.querySelector('.st-top').children].map(node => node.id || node.className)")
+    check(f"{tag}：報價卡只剩名稱與價格（當日三格與操作策略不在最上面）", top == ["bd-quote"], top)
+    page.locator("#stockFactsBlocks .sf-tab", has_text="技術").click()
+    tech = page.evaluate("""() => { const panel = document.querySelector('#stockFactsBlocks .sf-panel');
+      return { order: [...panel.children].map(node => node.id || node.className.split(' ')[0]), table: panel.querySelectorAll('table, .sf-figs').length }; }""")
+    check(f"{tag}：「技術」最前面是當日三格與操作策略，後面接三張卡；沒有均線距離表與 RSI／量比／KD",
+          tech["order"][:3] == ["stockFacts", "strategy", "ss"] and tech["table"] == 0, tech)
     check(f"{tag}：操作策略有結論", page.locator("#strategy").is_visible() and page.locator("#strategyConclusion").inner_text().strip() != "—")
+    page.locator("#stockFactsBlocks .sf-tab", has_text="重點").click()
+    check(f"{tag}：切回「重點」時當日三格與操作策略不在畫面上", not page.locator("#strategy").is_visible() and not page.locator("#stockFacts").is_visible())
 
     def folded() -> None:
         """一進去只看報價與 K 線，其餘收在三顆分類鍵裡（本人 11-15：太長、全部攤開、沒辦法選現在要看什麼；看樣品後答「照這樣做」）。"""
         seen = page.evaluate("""() => { const shown = id => { const node = document.getElementById(id), box = node.getBoundingClientRect();
             return getComputedStyle(node).visibility !== 'hidden' && box.height > 0; };
-          const stage = document.querySelector('.bd-stage').getBoundingClientRect(), canvas = document.querySelector('#chartHost canvas').getBoundingClientRect();
+          const stageNode = document.querySelector('.bd-stage'), pad = getComputedStyle(stageNode), canvas = document.querySelector('#chartHost canvas').getBoundingClientRect();
+          // C 包起 K 線在一塊板裡：和板的內容寬（扣掉左右內距）比
+          const stage = { width: stageNode.getBoundingClientRect().width - parseFloat(pad.paddingLeft) - parseFloat(pad.paddingRight) };
           return { keys: [...document.querySelectorAll('#stockCats button')].map(key => [key.textContent, key.getAttribute('aria-expanded')]),
             open: document.querySelectorAll('[data-cat-panel][data-open]').length,
             shown: ['ladder', 'bigHolders', 'candidateReasons', 'compareBlock'].filter(shown),
@@ -1232,6 +1244,118 @@ def stock(page: Page, base: str, tag: str, mobile: bool) -> None:
         keys.nth(1).click()
         check(f"{tag}：分類鍵開合沒有造成橫向捲動", no_overflow(page) and page.evaluate("document.querySelectorAll('[data-cat-panel][data-open]').length") == 0)
     step(f"{tag}：一進去只看重點，其餘收在分類鍵", folded)
+
+    def desk() -> None:
+        """C 包第 2 片：個股頁也是看盤桌——背景是桌面；報價那一段、K 線、價位階梯、籌碼名單、和 0050 對照各是一塊第 1 層的板；
+        價位階梯的壓力浮起（鍵）、支撐凹下（槽）、現價是深色的鍵。陰影一律和首頁同一組變數，事實區塊照它自己的原則不加板。"""
+        def looks() -> dict:
+            return page.evaluate("""() => { const probe = document.createElement('div'); document.body.append(probe);
+              const as = value => { probe.style.boxShadow = value; return getComputedStyle(probe).boxShadow; };
+              const want = { slab: as('var(--slab-shadow)'), key: as('var(--key-shadow)'), well: as('var(--well-shadow)'), ink: as('var(--key-shadow-ink)') };
+              probe.style.background = 'var(--desk)'; const desk = getComputedStyle(probe).backgroundColor; probe.remove();
+              const kind = node => { if (!node) return null; const shadow = getComputedStyle(node).boxShadow;
+                return Object.keys(want).find(name => want[name] === shadow) || 'none'; };
+              return { desk: getComputedStyle(document.documentElement).backgroundColor === desk,
+                top: kind(document.querySelector('.st-top')), chart: kind(document.querySelector('.bd-stage')),
+                rail: kind(document.querySelector('.bd-rail')), compare: kind(document.getElementById('compareBlock')),
+                reasons: document.getElementById('candidateReasons').childElementCount ? kind(document.getElementById('candidateReasons')) : 'empty',
+                facts: kind(document.getElementById('stockFactsBlocks')),
+                res: [...document.querySelectorAll('#ladder .lad-res')].map(kind), sup: [...document.querySelectorAll('#ladder .lad-sup')].map(kind),
+                now: kind(document.querySelector('#ladder .lad-now')),
+                gaps: [...document.querySelectorAll('#ladder .lad-gap')].map(gap => [Math.round(gap.getBoundingClientRect().height), parseFloat(gap.style.getPropertyValue('--gap')) || null]) }; }""")
+        seen = looks()
+        check(f"{tag}：個股頁的背景是桌面", seen["desk"], seen)
+        check(f"{tag}：報價那一段與 K 線各是一塊板", seen["top"] == "slab" and seen["chart"] == "slab", seen)
+        check(f"{tag}：事實區塊照它自己的原則不加板", seen["facts"] == "none", seen["facts"])
+        open_stock_cat(page, "levelsPanel")
+        seen = looks()
+        check(f"{tag}：價位階梯是一塊板；壓力浮起、支撐凹下、現價是深色的鍵",
+              seen["rail"] == "slab" and seen["res"] == ["key", "key"] and seen["sup"] == ["well", "well"] and seen["now"] == "ink", seen)
+        # 審查抓到過：換成板時把每一格壓成同樣高，「離收盤幾 %」的遠近不見了
+        check(f"{tag}：價位階梯列與列的距離照舊照離收盤遠近拉開", bool(seen["gaps"]) and all(height == want for height, want in seen["gaps"])
+              and len({want for _, want in seen["gaps"]}) > 1, seen["gaps"])
+        open_stock_cat(page, "chipsPanel")
+        page.wait_for_timeout(300)
+        check(f"{tag}：籌碼名單是一塊板（不在名單上的不畫空板）", looks()["reasons"] in ("slab", "empty"), looks()["reasons"])
+        open_stock_cat(page, "comparePanel")
+        check(f"{tag}：和 0050 對照是一塊板", looks()["compare"] == "slab", looks()["compare"])
+        page.locator("#stockCats button[aria-controls='comparePanel']").click()
+        check(f"{tag}：換成板之後沒有橫向捲動", no_overflow(page))
+    step(f"{tag}：看盤桌（桌面與板）", desk)
+
+    def momentum() -> None:
+        """五塊新功能 06：「重點」三句下面一張漲停動能的板；按住整張板壓下去、浮出全部股票平均，放開收回。"""
+        page.locator("#stockFactsBlocks").scroll_into_view_if_needed()
+        # 照定案樣品 q2-1：六顆切換籤（台積電有產業別，所以有「消息」），一進去「重點」開著
+        tabs = page.locator("#stockFactsBlocks .sf-tab").all_inner_texts()
+        check(f"{tag}：事實區塊六顆切換籤都在（重點、法人、融資券、基本面、消息、技術）",
+              tabs == ["重點", "法人", "融資券", "基本面", "消息", "技術"], tabs)
+        board = page.locator("#stockFactsBlocks .ss-momentum")
+        board.wait_for(state="visible")
+        check(f"{tag}：「重點」裡有漲停動能那張板", page.locator("#stockFactsBlocks .sf-tab[aria-pressed='true']").inner_text() == "重點" and board.count() == 1)
+        page.wait_for_function("document.querySelector('#stockFactsBlocks .ss-momentum').classList.contains('is-in')", timeout=5000)
+        check(f"{tag}：「重點」裡有漲停動能那張板，給輔助工具讀的文字有名稱、分數、歷史比例、全部平均",
+              board.count() == 1 and all(part in (board.get_attribute("aria-label") or "") for part in ("漲停動能 0", "0.4%", "全部股票平均 1.7%")), board.get_attribute("aria-label"))
+        check(f"{tag}：板上沒有「漲停分數」字樣、沒有補充說明", "漲停分數" not in board.inner_text() and board.locator("p, small").count() == 0, board.inner_text())
+        box = board.bounding_box()
+        hold = Hold(page, mobile)
+        hold.down(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+        page.wait_for_timeout(250)
+        held = page.evaluate("[document.querySelector('.ss-momentum').classList.contains('is-held'), getComputedStyle(document.querySelector('.ss-tip')).opacity]")
+        hold.up()
+        check(f"{tag}：按住漲停動能整張板壓下去，浮出全部股票平均", held == [True, "1"], held)
+        page.wait_for_function("!document.querySelector('.ss-momentum').classList.contains('is-held')", timeout=4000)
+        check(f"{tag}：放開之後隔一下收回、沒有橫向捲動", no_overflow(page))
+    step(f"{tag}：漲停動能", momentum)
+
+    def technical_boards() -> None:
+        """五塊新功能 07：「技術」原有內容的後面三張板——和大盤比、均線排列、爆大量成交區（台積電 11-09：強於 3.2／2.8／1.5、4 項成立 1 項、一區 2,020～2,195）。"""
+        page.locator("#stockFactsBlocks .sf-tab", has_text="技術").click()
+        host = page.locator("#stockFactsBlocks .ss[data-panel='technical']")
+        host.wait_for(state="attached")
+        for index in range(host.locator(".ss-board").count()):
+            host.locator(".ss-board").nth(index).scroll_into_view_if_needed()
+            page.wait_for_timeout(150)
+        page.wait_for_function("[...document.querySelectorAll('#stockFactsBlocks .ss-board')].every(board => board.classList.contains('is-in'))", timeout=6000)
+        seen = page.evaluate("""() => { const host = document.querySelector("#stockFactsBlocks .ss[data-panel='technical']");
+          return { kinds: [...host.querySelectorAll('.ss-board')].map(board => board.className.split(' ')[1]),
+            versus: [...host.querySelectorAll('.ss-vs')].map(row => row.querySelector('.ss-vs-name').textContent + ' ' + row.querySelector('.ss-vs-read').textContent),
+            lamps: [...host.querySelectorAll('.ss-check')].map(lamp => lamp.textContent + (lamp.classList.contains('on') ? '●' : '○')),
+            summary: host.querySelector('.ss-word-read')?.textContent,
+            zones: [...host.querySelectorAll('.ss-zones li')].map(row => row.textContent),
+            afterTable: host.previousElementSibling !== null,
+            chart: host.querySelector('.ss-zchart')?.getAttribute('aria-label') || '' }; }""")
+        page.wait_for_timeout(1500)
+        seen["versus"] = page.evaluate("""[...document.querySelectorAll("#stockFactsBlocks .ss-vs")].map(row => row.querySelector('.ss-vs-name').textContent + ' ' + row.querySelector('.ss-vs-read').textContent)""")
+        check(f"{tag}：「技術」原有內容後面三張板：和大盤比、均線排列、爆大量成交區",
+              seen["kinds"] == ["ss-versus-market", "ss-ma-alignment", "ss-heavy-zones"] and seen["afterTable"], seen["kinds"])
+        check(f"{tag}：和大盤比三列，強弱與差距照資料", seen["versus"] == ["近 5 日 強於 +3.2", "近 20 日 強於 +2.8", "近 60 日 強於 +1.5"], seen["versus"])
+        check(f"{tag}：均線排列四盞燈固定順序、只亮成立的；右上那一句照資料",
+              seen["lamps"] == ["站上月線○", "月＞季○", "季＞半年●", "月線上彎○"] and seen["summary"] == "4 項成立 1 項", [seen["lamps"], seen["summary"]])
+        check(f"{tag}：爆大量成交區的清單由高到低、中間一列現價；小圖有給輔助工具讀的說明",
+              seen["zones"] == ["現價2,235", "2,020～2,195-1.8%"] and "爆大量成交區" in seen["chart"], [seen["zones"], seen["chart"]])
+        check(f"{tag}：三張板沒有造成橫向捲動", no_overflow(page))
+        page.locator("#stockFactsBlocks .sf-tab", has_text="重點").click()
+    step(f"{tag}：技術的三張板", technical_boards)
+
+    def margin_board() -> None:
+        """五塊新功能 08：「融資券」原有的表後面一張融資維持率（估）（台積電 11-09：156%～208%）；130 的紅虛線在光條上面。"""
+        page.locator("#stockFactsBlocks .sf-tab", has_text="融資券").click()
+        board = page.locator("#stockFactsBlocks .ss[data-panel='credit'] .ss-margin-maintenance")
+        board.scroll_into_view_if_needed()
+        page.wait_for_function("document.querySelector('.ss-margin-maintenance')?.classList.contains('is-in')", timeout=6000)
+        page.wait_for_timeout(1300)
+        seen = page.evaluate("""() => { const board = document.querySelector('.ss-margin-maintenance');
+          const band = board.querySelector('.ss-band').getBoundingClientRect(), call = board.querySelector('.ss-call');
+          const box = call.getBoundingClientRect(), top = document.elementFromPoint(box.left + box.width / 2, band.top + band.height / 2);
+          return { head: board.querySelector('.ss-head').textContent, label: board.getAttribute('aria-label'),
+            ticks: [...board.querySelectorAll('.ss-tick-label')].map(tick => tick.textContent),
+            callOnTop: top === call || call.contains(top), afterTable: board.closest('.ss').previousElementSibling?.tagName === 'TABLE' }; }""")
+        check(f"{tag}：「融資券」表的後面一張融資維持率（估），右上只寫範圍", seen["head"] == "融資維持率（估）156%～208%" and seen["afterTable"], seen)
+        check(f"{tag}：刻度有 130 與 300，給輔助工具讀的文字有追繳線", seen["ticks"][0] == "130" and seen["ticks"][-1] == "300" and "追繳線 130%" in (seen["label"] or ""), seen)
+        check(f"{tag}：130 的紅虛線在光條上面，沒有被蓋住", seen["callOnTop"], seen)
+        page.locator("#stockFactsBlocks .sf-tab", has_text="重點").click()
+    step(f"{tag}：融資維持率（估）", margin_board)
 
     def levels() -> None:
         open_stock_cat(page, "levelsPanel")

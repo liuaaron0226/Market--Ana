@@ -12,14 +12,15 @@
   <title>個股分析</title>
   <link rel="stylesheet" href="minimal.css?v=20261116-desk44">
   <link rel="stylesheet" href="chart-studies.css?v=20261116-desk44">
-  <link rel="stylesheet" href="bold.css?v=20261116-desk44">
-  <link rel="stylesheet" href="stock.css?v=20261116-desk44">
-  <link rel="stylesheet" href="stock-facts.css?v=20261116-desk44">
-  <link rel="stylesheet" href="watch-peers.css?v=20261116-desk44">
-  <link rel="stylesheet" href="forecast.css?v=20261116-desk44">
-  <link rel="stylesheet" href="watch-judgments.css?v=20261116-desk44">
+  <link rel="stylesheet" href="bold.css?v=20261116-desk50">
+  <link rel="stylesheet" href="stock.css?v=20261117-tech1">
+  <link rel="stylesheet" href="stock-facts.css?v=20261116-news1">
+  <link rel="stylesheet" href="stock-signals.css?v=20261116-card7">
+  <link rel="stylesheet" href="watch-peers.css?v=20261116-peers1">
+  <link rel="stylesheet" href="forecast.css?v=20261116-e1">
+  <link rel="stylesheet" href="watch-judgments.css?v=20261116-e1">
 </head>
-<body class="bd">
+<body class="bd st">
   <div class="bd-shell">
     <header class="bd-bar">
       <a class="bd-back" href="minimal.html"><span aria-hidden="true">‹</span> 大盤</a>
@@ -44,6 +45,8 @@
     </section>
 
     <main id="content" hidden>
+      <!-- 看盤桌（C 包第 2 片）：報價、當日三格、操作策略是同一塊板 -->
+      <div class="st-top">
       <section class="bd-quote" aria-label="報價">
         <div class="bd-ident">
           <h1><span id="stockName">—</span></h1>
@@ -71,6 +74,7 @@
           <p id="strategyEvidence"></p>
         </details>
       </section>
+      </div>
 
       <div class="bd-stage">
         <section class="bd-chart sk-chart-card" aria-labelledby="chartTitle">
@@ -164,8 +168,6 @@
             <li class="lad-gap" aria-hidden="true"></li>
             <li class="lad lad-sup" data-key="support2"><span class="lad-name">支撐二</span><b class="num" id="support2">—</b><small id="support2Meta"></small></li>
           </ol>
-          <section class="sf-blocks" id="stockFactsBlocks" aria-label="事實整理" hidden></section>
-          <section class="wp" id="watchPeers" aria-label="國外同類股" hidden></section>
         </aside>
       </section>
       <section class="bd-cat" id="chipsPanel" data-cat-panel="chips" aria-label="籌碼">
@@ -217,19 +219,25 @@
           </div>
         </section>
       </div>
+      <!-- 事實區塊（本人 2026-11-15 選擺法 A：K 線圖下面一排切換籤，一次只顯示一塊）。主線掛在價位階梯下面；立體版的價位階梯收進「價位」，
+           而本人 2026-11-15 也定了「電腦上三顆分類鍵不用捲就看得到」，所以排在三類之後（合併時助手的暫定，擺法另出樣品請本人選）。
+           國外同類股原本緊接在它後面，照舊。 -->
+      <section class="sf-blocks" id="stockFactsBlocks" aria-label="事實整理" hidden></section>
+      <section class="wp" id="watchPeers" aria-label="國外同類股" hidden></section>
     </main>
   </div>
   <script src="chart-studies.js?v=20261116-desk44"></script>
-  <script src="chart-drawings.js?v=20261116-desk44"></script>
-  <script src="drawing-sync.js?v=20261116-desk44"></script>
-  <script src="kchart.js?v=20261116-desk44"></script>
+  <script src="chart-drawings.js?v=20261116-draw8"></script>
+  <script src="drawing-sync.js?v=20261116-draw7"></script>
+  <script src="kchart.js?v=20261116-desk50"></script>
   <script src="intraday.js?v=20261111-ui2b"></script>
+  <script src="stock-signals.js?v=20261116-card2"></script>
+  <script src="stock-facts.js?v=20261117-tech1"></script>
+  <script src="watch-peers.js?v=20261116-peers1"></script>
+  <script src="watch-judgments.js?v=20261116-e1"></script>
   <script src="holders-weekly.js?v=20261116-desk44"></script>
   <script src="holders-card.js?v=20261116-desk44"></script>
-  <script src="stock-facts.js?v=20261116-desk44"></script>
-  <script src="watch-peers.js?v=20261116-desk44"></script>
-  <script src="watch-judgments.js?v=20261116-desk44"></script>
-  <script src="stock.js?v=20261116-desk44"></script>
+  <script src="stock.js?v=20261117-tech1"></script>
   <script src="period-switch.js?v=20261116-desk44"></script>
   <script src="chart-menus.js?v=20261116-desk44"></script>
   <script src="home-fold.js?v=20261116-desk44"></script>

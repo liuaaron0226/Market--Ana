@@ -1,6 +1,6 @@
 /* 可拖曳／縮放的K線圖（原生Canvas，無外部套件）。
    互動：滑鼠拖曳或單指左右平移；滾輪、雙指捏合或＋／−按鈕縮放；鍵盤左右鍵平移、+/- 縮放；點擊或移動顯示十字線（再點一次同一根取消），
-   並把那一天的開高低收標在右側價格欄、日期標在時間軸（本人 11-15；不再有浮窗）。主圖與指標區的手勢一樣（本人 11-15）。
+   並把那一天的開高低收標在右側價格欄、日期標在時間軸（本人 11-15；不再有浮窗）。
    有畫線時：點線選取、拖已選取的線移動（拖端點把手只動那一端）、Delete 刪除、Esc 取消選取或放下工具；
    文字標註再點一下（或 Enter）打開輸入框修改內容。
    資料：candles=[{t,label,open,high,low,close,amount}] 由舊到新。overlays 可放判斷線。
@@ -13,6 +13,9 @@
   // 手指在超過之前也先不平移，點一下時圖表不會跟著晃。
   // 和 chart-drawings.js 的 DRAG_START_PX 同值：按住線拖與拖圖平移，開始的門檻一樣。
   const TAP_SLOP = { mouse: 3, touch: 8 };
+  // K 棒落影往右下偏多少（CSS 像素）；滾輪縮放停下來多久算「縮放結束」、補畫落影。
+  const RELIEF = { x: 1.5, y: 2 };
+  const RELIEF_SETTLE_MS = 160;
   function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
   // 價籤用：千元以上取整；以下保留到台股升降單位（最多兩位小數，去掉尾端 0）。
   function fmtTag(n) { return !Number.isFinite(n) ? '缺值' : n >= 1000 ? fmt(n, 0) : n.toLocaleString('en-US', { maximumFractionDigits: 2 }); }
@@ -224,16 +227,16 @@
         if (c === this.canvas && this.drawings) this.drawings.trackPointer(x, e.clientY - rect.top); // 預覽線跟著游標或手指
         if (drag?.kind === 'pinch' && pts.size === 2) {
           const xs = [...pts.values()].map(point => point.x); const d = Math.max(20, Math.abs(xs[0] - xs[1]));
-          this.view.count = drag.count * drag.pinch / d; this.view.end = drag.end; this.clamp(); this.draw(); this.emit(); return;
+          this.busy = true; this.view.count = drag.count * drag.pinch / d; this.view.end = drag.end; this.clamp(); this.draw(); this.emit(); return;
         }
         if (drag?.kind === 'single' && pts.size === 1) {
-          // 往任何方向移超過門檻（包括上下滑）就算「動了」：手指在圖上往下滑想捲頁面，放開時不會被當成點選那一天；
-          // 也不拿來定位畫線（wandered，由畫線層決定）。手指的門檻比滑鼠寬（只有帶畫線層的圖，見 fingerSlop）。
           const dx = e.clientX - drag.x, slop = drag.touch ? TAP_SLOP.touch : TAP_SLOP.mouse;
+          // 往任何方向移超過門檻（包括上下滑）就算「動了」：手指在圖上往下滑想捲頁面，放開時不會被當成點選那一天；
+          // 選了畫線工具時這一下也不拿來定位（由畫線層決定）。手指在超過門檻之前先不平移，點一下時圖表不晃。
           if (Math.hypot(dx, e.clientY - drag.y) > slop) drag.moved = drag.wandered = true;
-          // 平移只看左右：手指斜斜往下滑時左右只動了一點點，圖不跟著挪（不然兩點畫線的第二點會落到別根）
+          // 手指要左右移超過門檻才開始平移（上下滑是在捲頁面，圖表不跟著橫移）；滑鼠照舊一按住就跟著拖。
           if (Math.abs(dx) > slop) drag.panning = true;
-          if (drag.panning || !drag.touch) { this.view.end = Math.round(drag.end - dx / g.step); this.clamp(); }
+          if (drag.panning || !drag.touch) { this.view.end = Math.round(drag.end - dx / g.step); this.clamp(); if (drag.moved) this.busy = true; }
         }
         this.hover = x >= g.l && x <= g.l + g.pw ? g.start + Math.floor((x - g.l) / g.step) : -1;
         if (!drag && c === this.canvas && this.drawings) c.style.cursor = this.drawings.cursorAt(x, e.clientY - rect.top);
@@ -267,13 +270,19 @@
         if (pts.size === 1 && drag?.kind === 'pinch') {
           const point = pts.values().next().value;
           drag = { kind: 'single', x: point.x, y: point.y, end: this.view.end, moved: false, wandered: false, touch: this.fingerSlop(e.pointerType), hadPinch: true };
-        } else if (pts.size === 0) { drag = null; c.style.cursor = c === this.canvas && this.drawings ? this.drawings.idleCursor() : 'grab'; }
+        } else if (pts.size === 0) {
+          drag = null; c.style.cursor = c === this.canvas && this.drawings ? this.drawings.idleCursor() : 'grab';
+          if (this.busy) { this.busy = false; this.draw(); }   // 拖完、縮放完：補畫落影
+        }
       };
       c.addEventListener('pointerup', up); c.addEventListener('pointercancel', up);
       c.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse' && !drag) { this.hover = this.selection; this.draw(); } });
       c.addEventListener('wheel', e => {
         const g = geo(); if (!g) return; e.preventDefault();
         const rect = c.getBoundingClientRect(); const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left - g.l) / g.pw));
+        // 滾輪是一連串的小縮放：轉動期間不畫落影，停下來一下再補畫
+        this.busy = true; clearTimeout(this.settle);
+        this.settle = setTimeout(() => { if (!pts.size) { this.busy = false; this.draw(); } }, RELIEF_SETTLE_MS);   // 停下來時手指還按著：等放開再補
         this.zoom(e.deltaY > 0 ? 1.15 : 1 / 1.15, ratio);
       }, { passive: false });
       c.addEventListener('keydown', e => {
@@ -493,17 +502,36 @@
       }
       // K棒
       const bw = Math.max(1, Math.min(14, step * .66));
-      vis.forEach((c, i) => {
-        if (!hasPrice(c)) return;
-        const cx = l + step * (i + .5), col = c.close >= c.open ? up : dn;
+      // 每根蠟燭本體的位置只算一次：落影、亮邊、本體都用同一份，影子不會和本體對不上。
+      const bodies = vis.map((c, i) => hasPrice(c) && {
+        c, cx: l + step * (i + .5), top: y(Math.max(c.open, c.close)), h: Math.max(1, Math.abs(y(c.open) - y(c.close))),
+        live: Boolean(this.opts.liveLast) && start + i === n - 1,
+      });
+      // 浮雕落影（立體重設計 C 包）：本體底下先畫一塊往右下偏的影子，蠟燭本身照舊畫在上面，位置、寬度、顏色不變。
+      // 顏色由主題的 --candle-shadow 給（沒有就不畫）；深色的底上影子看不出來，主題另給 --candle-rim 時，
+      // 本體上緣外面多一條 1px 的亮邊（和板的上緣亮邊同一個道理）。拖曳、縮放進行中不畫（this.busy），放開之後補畫。
+      // 盤中最後一根是半透明加外框的，底下的影子會透出來，那一根不畫。
+      if (!this.busy && bw >= 2) {
+        const passes = [
+          { fill: css('--candle-shadow'), dx: RELIEF.x, dy: RELIEF.y, height: body => body.h },
+          { fill: css('--candle-rim'), dx: 0, dy: -1, height: () => 1 },
+        ];
+        for (const pass of passes) {
+          if (!pass.fill || pass.fill === 'transparent') continue;
+          x.fillStyle = pass.fill;
+          for (const body of bodies) if (body && !body.live) x.fillRect(body.cx - bw / 2 + pass.dx, body.top + pass.dy, bw, pass.height(body));
+        }
+      }
+      for (const body of bodies) {
+        if (!body) continue;
+        const { c, cx, top, h } = body, col = c.close >= c.open ? up : dn;
         x.strokeStyle = col; x.fillStyle = col; x.lineWidth = 1;
         x.beginPath(); x.moveTo(cx, y(c.high)); x.lineTo(cx, y(c.low)); x.stroke();
-        const top = y(Math.max(c.open, c.close)), h = Math.max(1, Math.abs(y(c.open) - y(c.close)));
-        if (this.opts.liveLast && start + i === n - 1) {
+        if (body.live) {
           x.globalAlpha = .45; x.fillRect(cx - bw / 2, top, bw, h); x.globalAlpha = 1;
           x.lineWidth = 1.4; x.strokeRect(cx - bw / 2 - 1.5, top - 1.5, bw + 3, h + 3);
         } else x.fillRect(cx - bw / 2, top, bw, h);
-      });
+      }
       // 使用者自訂均線（最多四條，預設 MA18／MA45）。
       // 四條線四種看得出差別的顏色：橘、金、藍、灰（布林通道是更淡的灰帶）
       const maColors = [css('--accent'), css('--gold'), css('--study-dif') || css('--dim'), css('--dim')];

@@ -28,7 +28,7 @@ export const WEB_FILES = [
   // 預測帳本（2026-11-15，B 票第 4 片）：只有站主有預測內容時才會在首頁出現
   "forecast.js", "forecast.css",
   // 個股頁事實區塊（2026-11-15 規格，A 票）
-  "stock-facts.js", "stock-facts.css",
+  "stock-facts.js", "stock-facts.css", "stock-signals.js", "stock-signals.css",
   // 自選股關注 B 票：個股頁「國外同類股」（只有站主的關注股才出現）
   "watch-peers.js", "watch-peers.css",
   // 自選股關注的判斷（2026-11-16，E 票）：只有站主有判斷時才會在自選股頁與個股頁出現

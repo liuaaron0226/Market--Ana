@@ -53,6 +53,9 @@ for (const f of ["0006_cash_and_level.sql", "0007_ai_daily.sql"]) db._raw.exec(r
 const env = {
   DB: db, TEAM_DOMAIN: TEAM, MAIN_AUD, APPLY_AUD, OWNER_EMAIL: OWNER,
   ...(features === "all" ? { MARKET_ANA_STRATEGIES_ENABLED: "1" } : { MARKET_ANA_ENABLED_FEATURES: "strategy_v1,market_trend_v1" }),
+  // 個股頁事實區塊與五塊新功能：正式站目前都是「只開站主」（cloud/wrangler.jsonc），預覽預設以站主登入，所以照樣看得到。
+  // 樣本資料見下面 signals-preview.json；沒有那個檔時這兩塊就不出現（和資料包沒有這兩塊時一樣）。
+  MARKET_ANA_STOCK_FACTS: "owner", MARKET_ANA_STOCK_SIGNALS: "owner",
 };
 // --owner-extras：主線兩個只給站主的功能也打開——預測帳本（正式站已對站主試跑）與自選股關注——
 // 並放一筆樣本預測，才看得到它們在這個版面裡的樣子。線的數值取自樣本的日 K（五日線、月線、近二十日高低點），
@@ -137,6 +140,20 @@ if (!existsSync(historyFile)) {
   for (const [code, payload] of Object.entries(preview.analysis)) stockPack.results[code] = JSON.stringify(payload);
   for (const [code, payload] of Object.entries(preview.history)) {
     await db.prepare("INSERT INTO stock_history (code, data_date, payload) VALUES (?, ?, ?)").bind(code, payload.as_of, JSON.stringify(payload)).run();
+  }
+}
+
+// 事實區塊與五塊新功能的樣本：資料包是 11-09 的舊包，裡面沒有 facts、signals。用主資料夾的本機行情（唯讀）
+// 以正式的 twon_analysis.analyze_v2 替十幾檔重算一份（上市、上櫃、ETF 都有），只把 facts、signals 兩塊補進已有的分析；
+// 資料包裡沒有的那幾檔（上櫃）整份加進來。產生方式寫在 .scratch/3d-redesign/issues/C-stock-and-portfolio.md〈開工前〉。
+const signalsFile = new URL(".tmp/3d-baseline/signals-preview.json", root);
+if (!existsSync(signalsFile)) {
+  notes.push("沒有 .tmp/3d-baseline/signals-preview.json：個股頁沒有事實區塊與五塊新功能。");
+} else {
+  for (const [code, payload] of Object.entries(JSON.parse(readFileSync(signalsFile, "utf8")))) {
+    const have = stockPack.results[code];
+    const base = have ? (typeof have === "string" ? JSON.parse(have) : have) : payload;
+    stockPack.results[code] = JSON.stringify({ ...base, facts: payload.facts ?? null, signals: payload.signals ?? null });
   }
 }
 
