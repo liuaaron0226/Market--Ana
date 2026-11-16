@@ -470,15 +470,23 @@ def write_forecast(
     official_since: str | None = None,
     session_date: str | None = None,
     timeout_seconds: float = 360,
+    replay: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """寫一份預測。回傳 ``{"outcome": written|unchanged|conflict|not_ready, "record": 帳本裡那一筆}``。
+    """寫一份預測。回傳 ``{"outcome": written|unchanged|conflict|not_ready|model_failed, "record": 帳本裡那一筆}``
+    （``model_failed`` 只出現在重播）。
 
     同一識別已有紀錄時不再呼叫模型：輸入相同回 ``unchanged``，輸入不同回 ``conflict``（拒寫）。
     資料沒到齊時期限前什麼都不寫（``not_ready``，可之後重跑）；過了期限仍沒到齊才記漏記。
     整份全有或全無；其他任何失敗都寫成一筆鎖定的漏記。
+
+    ``replay``（本人 2026-11-17「要，重播當參考」）：寫成歷史重播紀錄，``run_mode`` 是 replay、識別加 ``replay|``
+    前綴，附上這份說明（模型知識截止日、資料何時抓的）。重播要寫在另一本帳裡。模型呼叫失敗（多半是額度）不鎖，
+    回 ``model_failed`` 讓那天之後能再重播；回答不合格照正式的規矩鎖成漏記。
     """
     if edition not in EDITIONS:
         raise ValueError(f"edition 必須是 {EDITIONS} 之一")
+    if replay is not None and not replay:
+        raise ValueError("重播要附上說明（模型知識截止日、資料抓取時間），不能是空的")
     clock = now or _default_now
     base_date = str(data.get("base_date"))
     method_version = method_version_of(str(data.get("method_text") or ""))
@@ -498,17 +506,19 @@ def write_forecast(
 
     record: dict[str, Any] = {
         "schema": SCHEMA,
-        "forecast_id": f"{base_date}|{edition}|{method_version}|{INPUT_VERSION}",
+        "forecast_id": f"{'replay|' if replay else ''}{base_date}|{edition}|{method_version}|{INPUT_VERSION}",
         "base_date": base_date, "edition": edition,
         "method_version": method_version, "input_version": INPUT_VERSION,
         "model": model,
-        "run_mode": "official" if official_since and base_date >= official_since else "trial",
+        "run_mode": "replay" if replay else "official" if official_since and base_date >= official_since else "trial",
         "data_cutoffs": _cutoffs(data),
         **{key: copy.deepcopy(data[key]) for key in _RECORD_ONLY if key in data},
         "deadline": deadline.isoformat(),
         "input": model_input, "input_sha256": input_sha,
         "attempts": [],
     }
+    if replay:
+        record["replay"] = copy.deepcopy(dict(replay))
     if data.get("record_only"):
         # 只存進紀錄、不交給模型（例如來源條款只允許私用的海外資料）；跟著整筆一起封存。
         record["record_only"] = copy.deepcopy(dict(data["record_only"]))
@@ -533,6 +543,8 @@ def write_forecast(
     for _ in range(2):
         status, structured, detail = call_model(model_bin, prompt, model, timeout_seconds, OUTPUT_SCHEMA)
         if status != "ok":
+            if replay:
+                return {"outcome": "model_failed", "record": None, "detail": f"{status}：{detail}"}
             record["attempts"].append({"status": status, "detail": detail})
             return finish("miss", miss_reason=status, miss_detail=detail)
         accepted, problem = _validate(structured, model_input)
@@ -621,18 +633,67 @@ def _rates(pairs: list[tuple[dict[str, Any], dict[str, Any]]]) -> dict[str, Any]
     }
 
 
+# 正式起算日（F 票）：基準日在這一天（含）以後的預測記為正式、之前的是試跑。帳本在寫的當下就鎖定試跑或正式，
+# 所以只能訂在還沒寫的日子；本人點頭之前維持 None（全部試跑）。設定之後記進 ANALYSIS_PLAN.md。
+OFFICIAL_SINCE: str | None = None
+# 呼叫端沒指定時用的記號：在呼叫當下才讀 OFFICIAL_SINCE（不在函式定義時就綁死）。
+OFFICIAL_SINCE_DEFAULT = object()
+
+
+def official_since(value: str | None | object = OFFICIAL_SINCE_DEFAULT) -> str | None:
+    return OFFICIAL_SINCE if value is OFFICIAL_SINCE_DEFAULT else value  # type: ignore[return-value]
+
 # 本人定案：正式結論 1 日滿 3 個月、5 日滿 6 個月、20 日滿 1 年；之前只標「累積中」。
 VERDICT_MONTHS = {1: 3, 5: 6, 20: 12}
 
 
 def _verdict(run_mode: str, horizon: int, official_since: str | None, as_of: str | None) -> str:
-    """「試跑」不下結論；正式紀錄在正式起算日之後滿規定時間才「可下結論」，之前一律「累積中」。"""
+    """「試跑」不下結論；正式紀錄在正式起算日之後滿規定時間才「可下結論」，之前一律「累積中」。
+    歷史重播只是參考成績，永遠不下結論。"""
+    if run_mode == "replay":
+        return "歷史重播（參考）"
     if run_mode != "official":
         return "試跑"
     if not official_since or not as_of:
         return "累積中"
     due = _add_months(date.fromisoformat(official_since), VERDICT_MONTHS[horizon])
     return "可下結論" if date.fromisoformat(as_of) >= due else "累積中"
+
+
+# F 票：「明顯比照歷史亂猜準」的判定，在第一筆正式紀錄之前寫定，之後不因結果好看或難看而改。
+# 白話版與本人的回覆記在 ANALYSIS_PLAN.md〈事前預測紀錄＋到期對帳〉。
+JUDGEMENT: dict[str, Any] = {
+    # 同時判 6 組（晚間／晨間 × 1／5／20 日），門檻用單邊 1% 而不是 5%，免得六組裡碰巧一組過關。
+    "z_threshold": 2.326,
+    # 漏記超過一成，那一組不下結論。
+    "max_miss_share": 0.1,
+}
+
+
+def judge(outcomes: Sequence[tuple[bool, float]], *, horizon: int, misses: int = 0) -> dict[str, Any]:
+    """判定一組正式紀錄是否明顯比照歷史亂猜準。
+
+    ``outcomes`` 是每一格的（猜中與否, 寫下當時鎖定的那一區歷史比例 p）；``misses`` 是到期日已過的漏記，一律算猜錯，
+    p 用這一組各格的平均（沒有任何格時用三分之一）。期間 5 日、20 日相鄰的紀錄看的幾乎是同一段行情，
+    判斷是不是運氣時樣本數除以期間天數（變異數乘上期間天數）。資料缺漏、無法判定的格子不放進來。
+    """
+    shares = [share for _, share in outcomes]
+    miss_share = misses / (len(outcomes) + misses) if outcomes or misses else 0.0
+    average = sum(shares) / len(shares) if shares else 1 / 3
+    cells = [(bool(hit), share) for hit, share in outcomes] + [(False, average)] * misses
+    hits = sum(hit for hit, _ in cells)
+    expected = sum(share for _, share in cells)
+    variance = sum(share * (1 - share) for _, share in cells) * horizon
+    result = {"hits": hits, "expected_hits": round(expected, 4), "cells": len(cells), "misses": misses,
+              "effective_samples": len(cells) / horizon, "z": None}
+    if miss_share > JUDGEMENT["max_miss_share"]:
+        return {**result, "conclusion": "漏記太多"}
+    if variance <= 0:
+        return {**result, "conclusion": "沒有明顯差別"}
+    z = (hits - expected) / math.sqrt(variance)
+    threshold = JUDGEMENT["z_threshold"]
+    conclusion = "明顯比亂猜準" if z >= threshold else "明顯比亂猜差" if z <= -threshold else "沒有明顯差別"
+    return {**result, "z": round(z, 4), "conclusion": conclusion}
 
 
 def summarize(root: Path | str, index_daily: Sequence[Mapping[str, Any]], *,
@@ -650,13 +711,16 @@ def summarize(root: Path | str, index_daily: Sequence[Mapping[str, Any]], *,
     series: dict[tuple[str, str, str, str], dict[str, Any]] = {}
     for record in ledger["forecasts"]:
         key = (record["run_mode"], record["edition"], record["method_version"], record["input_version"])
-        bucket = series.setdefault(key, {"misses": 0, "forecasts": []})
+        bucket = series.setdefault(key, {"misses": [], "forecasts": []})
         if record["kind"] == "miss":
-            bucket["misses"] += 1
+            bucket["misses"].append(record)
         else:
             bucket["forecasts"].append(record)
     groups = []
     for (run_mode, edition, method_version, input_version), bucket in sorted(series.items()):
+        # 每一組從自己的第一筆正式紀錄起算（起算後換方法或輸入版本的新一組，不沿用舊組已累積的時間）。
+        first = min((record["base_date"] for record in bucket["forecasts"] + bucket["misses"]), default=None)
+        since = max(official_since, first) if official_since and first else official_since
         for horizon in HORIZONS:
             reconciled, pullback = [], []
             open_cells = {"pending": 0, "undeterminable": 0}
@@ -670,12 +734,22 @@ def summarize(root: Path | str, index_daily: Sequence[Mapping[str, Any]], *,
                 reconciled.append((cell, outcome))
                 if record["regime"] == PULLBACK_REGIME:
                     pullback.append((cell, outcome))
+            verdict = _verdict(run_mode, horizon, since, as_of)
+            judgement = None
+            if verdict == "可下結論":
+                # 漏記只在它的到期日已過時才算一次猜錯（還沒到期的漏記和還沒到期的預測一樣不算）。
+                misses_due = sum(_expiry(position, rows, miss["base_date"], horizon)[0] != "pending"
+                                 for miss in bucket["misses"])
+                judgement = judge([(cell["zone"] == outcome["actual_zone"],
+                                    cell["baseline"][cell["zone"]] / cell["baseline"]["samples"])
+                                   for cell, outcome in reconciled if cell["baseline"]["samples"]],
+                                  horizon=horizon, misses=misses_due)
             groups.append({
                 "run_mode": run_mode, "edition": edition, "horizon": horizon,
                 "method_version": method_version, "input_version": input_version,
-                **_rates(reconciled), **open_cells, "misses": bucket["misses"],
+                **_rates(reconciled), **open_cells, "misses": len(bucket["misses"]),
                 "pullback": _rates(pullback),
-                "verdict": _verdict(run_mode, horizon, official_since, as_of),
+                "verdict": verdict, "judgement": judgement,
             })
     return {"as_of": as_of, "official_since": official_since, "groups": groups, "conflicts": len(ledger["conflicts"])}
 
@@ -689,30 +763,32 @@ _PUBLIC_FIELDS = ("forecast_id", "base_date", "edition", "method_version", "inpu
 
 
 def d1_sql(root: Path | str, index_daily: Sequence[Mapping[str, Any]], *, published_at: str,
-           official_since: str | None = None) -> str:
+           official_since: str | None = None, replay: bool = False) -> str:
     """把帳本整理成給網站資料庫的指令檔。只新增：同一筆再發布一次不會多一筆、也不會改內容。
 
     不包 BEGIN／COMMIT：部署工具（wrangler d1 execute）自己會包交易。
+    ``replay``：重播帳本寫進另外三張 ``forecast_replay_*`` 表（分開存、分開顯示）。
     """
+    table = "forecast_replay_{}" if replay else "forecast_{}"
     ledger = read_ledger(root)
     statements = []
     for record in ledger["forecasts"]:
         public = {key: record[key] for key in _PUBLIC_FIELDS if key in record}
-        statements.append(_insert("forecast_records", {
+        statements.append(_insert(table.format("records"), {
             "forecast_id": record["forecast_id"], "base_date": record["base_date"], "edition": record["edition"],
             "method_version": record["method_version"], "input_version": record["input_version"],
             "run_mode": record["run_mode"], "kind": record["kind"], "record_json": _json(public),
             "record_sha256": record["record_sha256"], "published_at": published_at,
         }, "forecast_id"))
     for row in ledger["reconciliations"]:
-        statements.append(_insert("forecast_reconciliations", {
+        statements.append(_insert(table.format("reconciliations"), {
             "forecast_id": row["forecast_id"], "horizon": row["horizon"], "expiry_date": row["expiry_date"],
             "actual_zone": row["actual_zone"], "record_json": _json(row), "record_sha256": row["record_sha256"],
             "published_at": published_at,
         }, "forecast_id,horizon"))
     summary = summarize(root, index_daily, official_since=official_since)
     if summary["as_of"]:
-        statements.append(_insert("forecast_summaries", {
+        statements.append(_insert(table.format("summaries"), {
             "summary_sha256": _sha(summary), "as_of": summary["as_of"], "summary_json": _json(summary),
             "published_at": published_at,
         }, "summary_sha256"))

@@ -349,6 +349,32 @@ class MorningRunTests(MorningTestCase):
         self.assertEqual(fl.read_ledger(self.ledger)["reconciliations"], [])
 
 
+class OfficialStartTests(MorningTestCase):
+    """F 票：正式起算日（本人點頭後設定）之後的基準日記為正式；之前的照舊是試跑。帳本在寫的當下就鎖定，不能事後改。"""
+
+    def test_evening_and_morning_from_the_official_start_are_official_and_earlier_ones_trial(self):
+        two_back = DATES[:-2]
+        self.run_evening(analysis(two_back), structured=answer(two_back[-1]), official_since=DATES[-2],
+                         now=datetime.fromisoformat(f"{two_back[-1]}T17:40:00+08:00"))
+        sql = self.tmp / "forecast.sql"
+        self.run_evening(official_since=DATES[-2], sql_output=sql)
+        self.run_morning(official_since=DATES[-2])
+        modes = {(r["base_date"], r["edition"]): (r["kind"], r["run_mode"]) for r in fl.read_ledger(self.ledger)["forecasts"]}
+        self.assertEqual(modes, {
+            (two_back[-1], "evening"): ("forecast", "trial"),
+            (DATES[-2], "evening"): ("miss", "official"),  # 起算日當天整天沒跑：補記的漏記也算正式
+            (BASE, "evening"): ("forecast", "official"),
+            (BASE, "morning"): ("forecast", "official"),
+        })
+        # 發布給網站的彙總帶著起算日（累積中／可下結論由它算）
+        self.assertIn(f'"official_since":"{DATES[-2]}"', sql.read_text(encoding="utf-8"))
+
+    def test_the_module_default_is_used_when_no_start_is_given(self):
+        self.assertIsNone(fl.OFFICIAL_SINCE)  # 本人點頭之前不設定：全部是試跑
+        self.run_evening()
+        self.assertEqual(fl.read_ledger(self.ledger)["forecasts"][0]["run_mode"], "trial")
+
+
 class OverseasRunTests(MorningTestCase):
     def test_evening_sees_the_us_close_of_the_night_before_and_morning_the_close_that_just_finished(self):
         self.run_evening(overseas_dir=self.overseas(BASE, "evening"))

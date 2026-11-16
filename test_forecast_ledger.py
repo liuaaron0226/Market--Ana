@@ -816,11 +816,124 @@ class VerdictStatusTests(LedgerTestCase):
         self.assertEqual([later[("official", h)] for h in (1, 5, 20)], ["可下結論", "可下結論", "可下結論"])
         self.assertEqual(later[("trial", 20)], "試跑")
 
+    def test_a_new_method_version_after_the_official_start_counts_its_time_from_its_own_first_record(self):
+        # 正式起算 09/30；10/01 起換成方法 0.3（新的一組）。12/30 時 0.2 的一日已滿三個月，0.3 的要到 2027-01-01
+        self.write(official_since=BASE_A)
+        newer = day_input(through("2026-10-01"), base_date="2026-10-01")
+        newer["method_text"] = METHOD_TEXT.replace("版本：0.2", "版本：0.3")
+        self.write(newer, model=fake_model(self.tmp, [envelope(answer_oct1())]),
+                   now=clock(at("2026-10-01", 17)), official_since=BASE_A)
+
+        def one_day(rows):
+            summary = fl.summarize(self.root, rows, official_since=BASE_A)
+            return {g["method_version"]: g["verdict"] for g in summary["groups"] if g["horizon"] == 1}
+
+        self.assertEqual(one_day(through("2026-10-08") + [bar("2026-12-30", 93, 94, 92, 93)]),
+                         {"0.2": "可下結論", "0.3": "累積中"})
+        self.assertEqual(one_day(through("2026-10-08") + [bar("2027-01-01", 93, 94, 92, 93)]),
+                         {"0.2": "可下結論", "0.3": "可下結論"})
+
     def test_without_an_official_start_every_official_group_is_accumulating(self):
         self.write(official_since=BASE_A)
         # 一年多以後也一樣：沒有寫下正式起算日，就不會出現結論
         summary = fl.summarize(self.root, through("2026-10-08") + [bar("2027-12-31", 93, 94, 92, 93)])
         self.assertEqual({g["verdict"] for g in summary["groups"]}, {"累積中"})
+
+
+REPLAY = {"model_knowledge_cutoff": "2026-03", "fetched_at": "2026-11-17T12:00:00+08:00"}
+
+
+class ReplayRecordTests(LedgerTestCase):
+    """本人 2026-11-17「要，重播當參考」：重播紀錄和正式、試跑分開存，標明是歷史重播，不計入正式結論。"""
+
+    def test_a_replayed_forecast_is_marked_replay_and_cannot_be_mistaken_for_an_official_one(self):
+        result = self.write(replay=REPLAY, official_since=BASE_A)
+        record = result["record"]
+        self.assertEqual((result["outcome"], record["kind"], record["run_mode"]), ("written", "forecast", "replay"))
+        self.assertTrue(record["forecast_id"].startswith("replay|"))
+        self.assertEqual(record["replay"], REPLAY)
+
+    def test_a_failed_model_call_is_not_locked_so_the_day_can_be_replayed_later(self):
+        # 正式帳本把模型失敗鎖成漏記；重播時的失敗多半是額度用完，鎖起來會讓那天永遠補不回來
+        result = self.write(replay=REPLAY, model=fake_model(self.bin, [envelope(answer_a())], exit_code=1))
+        self.assertEqual(result["outcome"], "model_failed")
+        self.assertIsNone(result["record"])
+        self.assertEqual(fl.read_ledger(self.root)["forecasts"], [])
+        again = self.write(replay=REPLAY, model=fake_model(self.tmp, [envelope(answer_a())]))
+        self.assertEqual(again["record"]["kind"], "forecast")
+
+    def test_an_invalid_answer_twice_is_still_locked_as_a_miss_like_the_real_ledger(self):
+        bad = answer_a(**{"1": cell("prev_low", "ma5", "above")})  # 兩條線放反
+        result = self.write(replay=REPLAY, responses=[envelope(bad), envelope(bad)])
+        self.assertEqual((result["record"]["kind"], result["record"]["miss_reason"], result["record"]["run_mode"]),
+                         ("miss", "answer_invalid", "replay"))
+
+    def test_replay_groups_are_labelled_as_reference_and_never_judged(self):
+        self.write(replay=REPLAY)
+        rows = through("2026-10-08") + [bar("2027-12-31", 93, 94, 92, 93)]
+        fl.reconcile(self.root, rows)
+        groups = fl.summarize(self.root, rows, official_since=BASE_A)["groups"]
+        self.assertEqual({(g["run_mode"], g["verdict"]) for g in groups}, {("replay", "歷史重播（參考）")})
+        self.assertEqual({g["judgement"] is None for g in groups}, {True})
+
+
+class JudgementTests(LedgerTestCase):
+    """F 票：「明顯比照歷史亂猜準」的判定，在第一筆正式紀錄之前寫定（白話版在 ANALYSIS_PLAN）。
+
+    z ＝（猜中次數 − Σp）÷ √（Σp(1−p) × 期間天數）；p 是寫下當時鎖定的那一區歷史比例。
+    漏記算猜錯（p 用同組有對帳那些格的平均）；漏記超過一成不下結論。門檻 z ≥ 2.326（單邊 1%）。
+    """
+
+    def test_sixty_one_day_calls_at_even_odds_with_forty_hits_is_clearly_better(self):
+        # Σp = 30、Σp(1−p) = 15；z = 10 ÷ √15 = 2.582 ≥ 2.326
+        result = fl.judge([(index < 40, 0.5) for index in range(60)], horizon=1)
+        self.assertEqual(result["conclusion"], "明顯比亂猜準")
+        self.assertAlmostEqual(result["z"], 10 / 15 ** 0.5, places=3)
+        self.assertEqual((result["hits"], result["expected_hits"], result["effective_samples"]), (40, 30.0, 60.0))
+
+    def test_overlapping_five_day_records_count_as_a_fifth_of_the_samples(self):
+        # 同樣的成績放在五日：樣本數 60 ÷ 5 = 12，z = 2.582 ÷ √5 = 1.155，不夠明顯
+        result = fl.judge([(index < 40, 0.5) for index in range(60)], horizon=5)
+        self.assertEqual(result["conclusion"], "沒有明顯差別")
+        self.assertAlmostEqual(result["z"], 10 / 75 ** 0.5, places=3)
+        self.assertEqual(result["effective_samples"], 12.0)
+
+    def test_equally_bad_results_are_called_clearly_worse(self):
+        result = fl.judge([(index < 20, 0.5) for index in range(60)], horizon=1)
+        self.assertEqual(result["conclusion"], "明顯比亂猜差")
+
+    def test_misses_count_as_wrong_calls_at_the_groups_average_odds(self):
+        # 60 格猜中 40（p 都是 0.5）＋ 6 次漏記（9.1%，未超過一成）：66 格、Σp = 33、Σp(1−p) = 16.5
+        # z = (40 − 33) ÷ √16.5 = 1.723 → 不夠明顯（沒有漏記時是 2.582）
+        result = fl.judge([(index < 40, 0.5) for index in range(60)], horizon=1, misses=6)
+        self.assertEqual(result["conclusion"], "沒有明顯差別")
+        self.assertAlmostEqual(result["z"], 7 / 16.5 ** 0.5, places=3)
+        self.assertEqual(result["misses"], 6)
+
+    def test_more_than_one_in_ten_missed_means_no_conclusion(self):
+        # 7 ÷ 67 = 10.4%
+        result = fl.judge([(True, 0.5) for _ in range(60)], horizon=1, misses=7)
+        self.assertEqual(result["conclusion"], "漏記太多")
+        self.assertIsNone(result["z"])
+
+    def test_summary_judges_only_groups_that_have_run_long_enough(self):
+        SummaryTests.build_ledger(self)
+        rows = through("2026-10-08") + [bar("2026-12-30", 93, 94, 92, 93)]
+        summary = fl.summarize(self.root, rows, official_since=BASE_A)
+
+        def group(edition, horizon):
+            return next(g for g in summary["groups"] if g["run_mode"] == "official" and g["edition"] == edition
+                        and g["horizon"] == horizon)
+
+        # 晚間一日已滿三個月：F1、F2 都中，但 10/02 那份漏記（一日到期日 10/05 已過）→ 1 ÷ 3 超過一成
+        self.assertEqual(group("evening", 1)["judgement"]["conclusion"], "漏記太多")
+        self.assertEqual(group("evening", 1)["judgement"]["misses"], 1)
+        # 晨間一日：只有一格、猜中、p = 2/21 → z = (1 − 2/21) ÷ √(2/21 × 19/21) = 3.08
+        self.assertEqual(group("morning", 1)["judgement"]["conclusion"], "明顯比亂猜準")
+        # 五日、二十日還在累積：沒有判定
+        self.assertIsNone(group("evening", 5)["judgement"])
+        trial = next(g for g in summary["groups"] if g["run_mode"] == "trial")
+        self.assertIsNone(trial["judgement"])
 
 
 MIGRATION = Path(__file__).resolve().parent / "cloud" / "migrations" / "0010_forecast_ledger.sql"
@@ -919,6 +1032,46 @@ class PublishToDatabaseTests(LedgerTestCase):
         db.executescript(fl.d1_sql(self.root, series_a(), published_at="2026-09-30T18:00:00+08:00"))
         record = json.loads(db.execute("SELECT record_json FROM forecast_records").fetchone()[0])
         self.assertEqual(record["cells"]["1"]["reason"], "站回'均線'之上")
+
+
+REPLAY_MIGRATION = MIGRATION.parent / "0023_forecast_replay.sql"
+
+
+class PublishReplayTests(LedgerTestCase):
+    def database(self):
+        connection = sqlite3.connect(":memory:")
+        connection.executescript(MIGRATION.read_text(encoding="utf-8"))
+        connection.executescript(REPLAY_MIGRATION.read_text(encoding="utf-8"))
+        return connection
+
+    def test_replay_rows_go_only_to_the_replay_tables(self):
+        self.write(replay=REPLAY)
+        fl.reconcile(self.root, through("2026-10-08"))
+        db = self.database()
+        db.executescript(fl.d1_sql(self.root, through("2026-10-08"), published_at="2026-11-17T12:00:00+08:00",
+                                   replay=True))
+        db.executescript(fl.d1_sql(self.root, through("2026-10-08"), published_at="2026-11-17T13:00:00+08:00",
+                                   replay=True))  # 再發布一次：不多一筆
+        self.assertEqual(db.execute("SELECT run_mode, kind FROM forecast_replay_records").fetchall(),
+                         [("replay", "forecast")])
+        self.assertEqual(db.execute("SELECT COUNT(*) FROM forecast_replay_reconciliations").fetchone(), (2,))
+        summary = json.loads(db.execute("SELECT summary_json FROM forecast_replay_summaries").fetchone()[0])
+        self.assertEqual({g["verdict"] for g in summary["groups"]}, {"歷史重播（參考）"})
+        for table in ("forecast_records", "forecast_reconciliations", "forecast_summaries"):
+            self.assertEqual(db.execute(f"SELECT COUNT(*) FROM {table}").fetchone(), (0,), table)
+
+    def test_the_replay_tables_refuse_official_rows_updates_and_deletes(self):
+        self.write(replay=REPLAY)
+        db = self.database()
+        db.executescript(fl.d1_sql(self.root, series_a(), published_at="2026-11-17T12:00:00+08:00", replay=True))
+        with self.assertRaises(sqlite3.DatabaseError):
+            db.execute("INSERT INTO forecast_replay_records (forecast_id, base_date, edition, method_version, "
+                       "input_version, run_mode, kind, record_json, record_sha256, published_at) VALUES "
+                       "('x', '2026-09-30', 'evening', '0.2', 'v', 'official', 'forecast', '{}', ?, 'now')", ("0" * 64,))
+        for statement in ("UPDATE forecast_replay_records SET kind = 'miss'", "DELETE FROM forecast_replay_records",
+                          "DELETE FROM forecast_replay_summaries"):
+            with self.subTest(statement), self.assertRaises(sqlite3.DatabaseError):
+                db.execute(statement)
 
 
 if __name__ == "__main__":
