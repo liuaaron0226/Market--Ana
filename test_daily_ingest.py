@@ -577,6 +577,26 @@ class CapitalChangeSourcesTest(unittest.TestCase):
 class BigHolderSourceTest(unittest.TestCase):
     """集保大戶持股每週一份（本人 2026-11-14「可以，用集保」）：這一週已經存了就不再下載。"""
 
+    def test_announcements_are_saved_under_the_data_root_and_never_raise(self) -> None:
+        # 個股頁事實區塊 D 票：重大訊息是非必要資料集；一個市場連不上只記錄，另一個照存。
+        import announcements as an
+        header = '出表日期,發言日期,發言時間,公司代號,公司名稱,主旨,符合條款,事實發生日,說明\n'
+        body = (header + '1151116,1151115,174706,2330,台積電,董事會決議,第14款,1151115,說明\n').encode('utf-8')
+
+        class Response:
+            def __init__(self, status, content=b''):
+                self.status, self.content = status, content
+        responses = {an.SOURCES['上市']: Response(200, body), an.SOURCES['上櫃']: Response(503)}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            result = di.announcements_day(root, get=lambda url, params=None: responses[url])
+            saved = sorted(p.name for p in (root / 'data/announcements/raw').glob('*.csv'))
+        self.assertEqual(result['status'], 'ok')
+        self.assertEqual(result['markets']['上市']['status'], 'saved')
+        self.assertEqual(result['markets']['上櫃'], {'status': 'stopped', 'reason': 'HTTP 503'})
+        self.assertEqual(len(saved), 1)
+        self.assertIn('announcements', di.OPTIONAL_DATASETS)
+
     def test_weekly_file_is_fetched_once_per_week(self) -> None:
         from stock_history import Response
         from test_tdcc_holders import ROWS_2330, csv
