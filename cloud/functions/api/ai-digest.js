@@ -35,7 +35,8 @@ export async function onRequest(context) {
     }
   }
   const policy = releasePolicy(context.env);
-  if (!policy.features.ai_digest) {
+  // 站主那份只給站主（DECISIONS 第 5 題）：朋友的功能清單裡這項一律是關的，朋友讀自己那份走 /api/friend-ai/digest。
+  if (!owner || !policy.features.ai_digest) {
     // 只給站主的功能，其他人拿到的功能清單裡一律是關的（和 /api/features 同一個規則）。
     const features = policyForViewer(policy, owner, context.env).features;
     return new Response(JSON.stringify({ error: "feature-disabled", message: "未驗證的 AI 摘要尚未啟用", features }),

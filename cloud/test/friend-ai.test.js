@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { handle } from "../lib/gate.js";
 import { CONSENT_VERSION, FRIEND_KEY_LIMIT, USABLE_FRIEND_KEYS_SQL, AAD_PREFIX } from "../lib/friend-ai.js";
+import { decryptFriendKey, usableKeysSql } from "../friend-ai-schedule.mjs";
 import { fakeD1, makeIssuer, claims, fetchJwks, TEAM, MAIN_AUD, APPLY_AUD, OWNER } from "./helpers.js";
 
 const ORIGIN = "https://market-ana.pages.dev";
@@ -423,4 +424,93 @@ test("正式設定下朋友 AI 的開關是關的，主金鑰也不寫在設定�
 
 test("開關打開時，設定頁照一般頁面放行", async () => {
   assert.equal((await req("/gemini/")).status, 200);
+});
+
+// 02 票：每日排程用 GitHub secret 裡同一把主金鑰解開；網站本身仍然沒有解密程式。
+test("排程解得開網站加密的金鑰；搬到別人名下或主金鑰不對就解不開", async () => {
+  await save();
+  const stored = row();
+  assert.equal(await decryptFriendKey(MASTER, { email: FRIEND, ciphertext: stored.ciphertext, iv: stored.iv }), FAKE_KEY);
+  await assert.rejects(decryptFriendKey(MASTER, { email: "other@example.com", ciphertext: stored.ciphertext, iv: stored.iv }));
+  await assert.rejects(decryptFriendKey(Buffer.alloc(32, 9).toString("base64"), { email: FRIEND, ciphertext: stored.ciphertext, iv: stored.iv }));
+  await assert.rejects(decryptFriendKey("", { email: FRIEND, ciphertext: stored.ciphertext, iv: stored.iv }), /主金鑰/);
+});
+
+test("排程挑金鑰的查詢：同意版本換掉或帳號停用的朋友不會被挑到", async () => {
+  await save();
+  await addUser("old@example.com");
+  await addUser("gone@example.com");
+  for (const email of ["old@example.com", "gone@example.com"]) {
+    env.DB._raw.prepare("INSERT INTO friend_gemini_keys (email,ciphertext,iv,alg,master_key_id,consent_at,consent_version,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)")
+      .run(email, "c", "i", "AES-256-GCM", "x", "t", email === "old@example.com" ? "2026-01-01" : CONSENT_VERSION, "active", "t", "t");
+  }
+  env.DB._raw.prepare("UPDATE users SET status = 'disabled' WHERE email = 'gone@example.com'").run();
+  const rows = env.DB._raw.prepare(usableKeysSql()).all();
+  assert.deepEqual(rows.map((r) => r.email), [FRIEND]);
+});
+
+// 02 票：朋友首頁讀自己的大盤、籌碼解讀。
+function addDigest(email, date, type, { status = "generated", content, error = null } = {}) {
+  env.DB._raw.prepare("INSERT INTO friend_ai_daily (email,data_date,digest_type,content_json,input_sha256,model,status,error_code,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)")
+    .run(email, date, type, status === "generated" ? JSON.stringify(content) : null, "d".repeat(64), "gemini-3.8-flash", status, error, "t", "t");
+}
+const MARKET = { stance: "偏多", conclusion: "我的結論【資料：收盤 23,280 點】", conclusion_refs: ["/market/latest/close"], points: [] };
+const FLOW = { signals: [{ text: "我的籌碼訊號", codes: ["2330"], refs: ["/flows/x"] }] };
+
+test("還沒設定金鑰的朋友：首頁拿到「尚未設定」，不給任何人的解讀", async () => {
+  addDigest("other@example.com", "2026-11-10", "market", { content: MARKET });
+  const body = await (await req("/api/friend-ai/digest")).json();
+  assert.deepEqual(body, { available: true, configured: false });
+});
+
+test("設定好的朋友讀到自己那兩份，讀不到別的朋友的", async () => {
+  await save();
+  addDigest(FRIEND, "2026-11-10", "market", { content: MARKET });
+  addDigest(FRIEND, "2026-11-10", "flow", { content: FLOW });
+  addDigest("other@example.com", "2026-11-10", "market", { content: { ...MARKET, conclusion: "別人的結論" } });
+  const res = await req("/api/friend-ai/digest");
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get("cache-control"), "private, no-store");
+  const body = await res.json();
+  assert.equal(body.configured, true);
+  assert.equal(body.consented, true);
+  assert.equal(body.data_date, "2026-11-10");
+  assert.equal(body.market.status, "generated");
+  assert.equal(body.market.content.conclusion, MARKET.conclusion);
+  assert.equal(body.flow.content.signals[0].text, "我的籌碼訊號");
+  assert.ok(!JSON.stringify(body).includes("別人的結論"));
+});
+
+test("今天別人有、自己沒有或未產生：如實回未產生與原因，不拿前一天的冒充", async () => {
+  await save();
+  addDigest(FRIEND, "2026-11-10", "market", { content: MARKET });
+  addDigest(FRIEND, "2026-11-11", "market", { status: "unproduced", error: "quota" });
+  addDigest("other@example.com", "2026-11-11", "flow", { content: FLOW });
+  const body = await (await req("/api/friend-ai/digest")).json();
+  assert.equal(body.data_date, "2026-11-11");
+  assert.deepEqual(body.market, { status: "unproduced", content: null, reason: "quota" });
+  assert.deepEqual(body.flow, { status: "unproduced", content: null, reason: null });
+});
+
+test("同意版本換掉了：要重新同意，不給內容", async () => {
+  await save();
+  addDigest(FRIEND, "2026-11-10", "market", { content: MARKET });
+  env.DB._raw.prepare("UPDATE friend_gemini_keys SET consent_version = '2026-01-01'").run();
+  const body = await (await req("/api/friend-ai/digest")).json();
+  assert.deepEqual(body, { available: true, configured: true, consented: false });
+});
+
+test("站主讀朋友的解讀入口被拒；開關關著時入口在讀資料庫前就回沒有內容", async () => {
+  assert.equal((await req("/api/friend-ai/digest", { email: OWNER })).status, 403);
+  env.MARKET_ANA_FRIEND_AI = undefined;
+  env.DB = { prepare() { throw new Error("開關關著不能讀資料庫"); } };
+  assert.deepEqual(await (await req("/api/friend-ai/digest")).json(), { available: false });
+});
+
+test("朋友的功能清單裡沒有站主的 AI 解讀（策略總開關打開也一樣）", async () => {
+  env.MARKET_ANA_STRATEGIES_ENABLED = "true";
+  const friend = await (await req("/api/features")).json();
+  assert.equal(friend.features.ai_digest, false);
+  const owner = await (await req("/api/features", { email: OWNER })).json();
+  assert.equal(owner.features.ai_digest, true);
 });

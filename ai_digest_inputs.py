@@ -189,6 +189,75 @@ def infer_data_date(stock_pack_path: Path, screens_root: Path) -> str:
     raise ValueError("找不到個股分析與籌碼快照共同的資料日")
 
 
+def _exchange_sections(data_date: str, market_dir: Path, screens_root: Path) -> dict[str, Any]:
+    """大盤與籌碼兩段：站主與朋友共用同一份整理，朋友那份再拿掉非證交所／櫃買的欄位。"""
+    market_dir = Path(market_dir)
+    screens_root = Path(screens_root)
+    analysis = _read_js_assignment(market_dir / "analysis-data.js")
+    dashboard = _read_js_assignment(market_dir / "dashboard-data.js")
+    chips = _read_js_assignment(market_dir / "chips-data.js")
+    screen_summaries = []
+    for kind in PREFERRED_SCREENS:
+        item = _screen_summary(screens_root / kind / f"{data_date}.json")
+        if item is not None:
+            screen_summaries.append(item)
+    rotation = _rotation_summary(screens_root / "rotation" / f"{data_date}.json")
+    screen_codes = {
+        str(item.get("code"))
+        for screen in screen_summaries
+        for item in screen.get("items", [])
+        if item.get("code")
+    }
+    indicators = analysis.get("indicators") or {}
+    return {
+        "market_date": str((analysis.get("meta") or {}).get("cutoff_date") or dashboard.get("market_date") or ""),
+        "screens": screen_summaries,
+        "rotation": rotation,
+        "screen_codes": screen_codes,
+        "market": {
+            "latest": dashboard.get("latest"),
+            "thresholds": dashboard.get("thresholds"),
+            "daily": _tail(analysis.get("daily"), 10),
+            "institutional": _tail(analysis.get("institutional"), 5),
+            "futures": _tail(analysis.get("futures"), 5),
+            "sectors": _tail(analysis.get("sectors"), 5),
+            "indicators": {"daily": _tail(indicators.get("daily"), 3)},
+            "margin": _tail(chips.get("margin"), 5),
+            "foreign": _tail(chips.get("foreign"), 5),
+            "futures_chips": _tail(chips.get("futures"), 5),
+        },
+    }
+
+
+# 朋友那份只放證交所、櫃買的官方開放資料（DECISIONS 第 5 題）：期貨部位來自期交所，不放。
+FRIEND_INPUT_SCHEMA = "ai-digest-friend-input/v1"
+NON_EXCHANGE_MARKET_FIELDS = ("futures", "futures_chips")
+
+
+def build_friend_input(*, data_date: str, market_dir: Path, screens_root: Path) -> dict[str, Any]:
+    """朋友的大盤、籌碼解讀輸入：所有朋友共用同一份，不含任何人的自選股、庫存、email，也不含新聞與國外行情。"""
+    exchange = _exchange_sections(data_date, market_dir, screens_root)
+    market = {key: value for key, value in exchange["market"].items() if key not in NON_EXCHANGE_MARKET_FIELDS}
+    payload: dict[str, Any] = {
+        "schema": FRIEND_INPUT_SCHEMA,
+        "data_date": data_date,
+        "availability": {
+            "market": exchange["market_date"] == data_date,
+            "flow": bool(exchange["screens"]) and exchange["rotation"] is not None,
+        },
+        "source_dates": {
+            "market": exchange["market_date"] or None,
+            "screens": data_date if exchange["screens"] else None,
+        },
+        "allowed_codes": sorted(exchange["screen_codes"]),
+        "portfolio_codes": [],
+        "market": market,
+        "flows": {"screens": exchange["screens"], "rotation": exchange["rotation"]},
+    }
+    payload["input_sha256"] = canonical_sha(payload)
+    return payload
+
+
 def build_digest_input(
     *,
     data_date: str,
@@ -199,11 +268,8 @@ def build_digest_input(
     portfolio_path: Path,
     owner_email: str,
 ) -> dict[str, Any]:
-    market_dir = Path(market_dir)
-    screens_root = Path(screens_root)
-    analysis = _read_js_assignment(market_dir / "analysis-data.js")
-    dashboard = _read_js_assignment(market_dir / "dashboard-data.js")
-    chips = _read_js_assignment(market_dir / "chips-data.js")
+    exchange = _exchange_sections(data_date, market_dir, screens_root)
+    screen_summaries, rotation = exchange["screens"], exchange["rotation"]
     stock_pack = _read_json(stock_pack_path)
     if stock_pack.get("analysis_schema") != "stock-analysis/v2":
         raise ValueError("個股資料包不是 stock-analysis/v2")
@@ -217,22 +283,8 @@ def build_digest_input(
     stocks = {code: _stock_summary(stock_results[code]) for code in portfolio_codes if code in stock_results}
     portfolio["holdings"] = _holding_metrics(portfolio["holdings"], stocks)
 
-    screen_summaries = []
-    for kind in PREFERRED_SCREENS:
-        item = _screen_summary(screens_root / kind / f"{data_date}.json")
-        if item is not None:
-            screen_summaries.append(item)
-    rotation = _rotation_summary(screens_root / "rotation" / f"{data_date}.json")
-    screen_codes = {
-        str(item.get("code"))
-        for screen in screen_summaries
-        for item in screen.get("items", [])
-        if item.get("code")
-    }
-    allowed_codes = sorted(set(portfolio_codes) | screen_codes)
-
-    indicators = analysis.get("indicators") or {}
-    market_date = str((analysis.get("meta") or {}).get("cutoff_date") or dashboard.get("market_date") or "")
+    allowed_codes = sorted(set(portfolio_codes) | exchange["screen_codes"])
+    market_date = exchange["market_date"]
     payload: dict[str, Any] = {
         "schema": INPUT_SCHEMA,
         "data_date": data_date,
@@ -249,18 +301,7 @@ def build_digest_input(
         },
         "allowed_codes": allowed_codes,
         "portfolio_codes": portfolio_codes,
-        "market": {
-            "latest": dashboard.get("latest"),
-            "thresholds": dashboard.get("thresholds"),
-            "daily": _tail(analysis.get("daily"), 10),
-            "institutional": _tail(analysis.get("institutional"), 5),
-            "futures": _tail(analysis.get("futures"), 5),
-            "sectors": _tail(analysis.get("sectors"), 5),
-            "indicators": {"daily": _tail(indicators.get("daily"), 3)},
-            "margin": _tail(chips.get("margin"), 5),
-            "foreign": _tail(chips.get("foreign"), 5),
-            "futures_chips": _tail(chips.get("futures"), 5),
-        },
+        "market": exchange["market"],
         "flows": {"screens": screen_summaries, "rotation": rotation},
         "portfolio": portfolio,
         "stocks": stocks,
