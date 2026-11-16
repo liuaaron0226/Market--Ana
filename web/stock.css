@@ -529,3 +529,12 @@ body.st .sf-blocks { margin-top: 18px; padding-top: 14px; }
   body.st .sf-facts li { padding: 8px 0; }
   body.st .sf-facts li:first-child { padding-top: 0; }
 }
+
+/* ---------- 當日三格與操作策略搬到「技術」（本人 2026-11-17：最上面太多資訊，圖二移到技術） ----------
+   報價卡只剩名稱、代號與價格；兩個區塊打開「技術」時排在那一塊的最前面，下面接三張卡。 */
+body.st .st-top .bd-quote:last-child { padding-bottom: 0; }
+body.st .sf-panel > .sf { margin: 0 0 18px; }
+body.st .sf-panel > .bd-strategy { margin: 0 0 6px; }
+@media (max-width: 860px) {
+  body.st .sf-panel > .sf { margin-bottom: 14px; }
+}

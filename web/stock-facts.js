@@ -11,6 +11,36 @@
   const NEWS_FIRST = 5;
   const newsCache = new Map();
   const state = { key: '', code: '', block: 'summary', signals: null };
+  // 本人 2026-11-17「我不太喜歡你在個股頁面最上面的排版，太多資訊了，圖二可以移到技術那邊」：
+  // 當日三格（#stockFacts）與操作策略（#strategy）平常收在看不到的停放處，打開「技術」時搬到那一塊的最前面。
+  // 兩個區塊的內容照舊由本檔的 renderToday 與 stock.js 填（它們一直留在頁面上，只是換位置），事實區塊沒有出現時留在報價卡。
+  const TECH_SLOTS = ['stockFacts', 'strategy'];
+  let parking = null, slots = null, home = null;
+  // 第一次用到時記下兩個區塊與它們原本所在的地方（報價卡）；之後一律用記下的節點，不靠 id 找（被換掉的面板裡就找不到了）
+  function slotNodes() {
+    if (!slots) {
+      slots = TECH_SLOTS.map(id => document.getElementById(id)).filter(Boolean);
+      home = slots[0]?.parentElement || null;
+    }
+    return slots;
+  }
+  function park() {
+    const host = document.getElementById('stockFactsBlocks');
+    if (!host || !slotNodes().length) return;
+    if (!parking) {
+      parking = el('div', 'sf-parking');
+      parking.hidden = true;
+      host.after(parking);
+    }
+    parking.append(...slots);
+  }
+  function unpark(panel) {
+    panel.prepend(...slotNodes());
+  }
+  // 事實區塊不出現（沒有 facts 或出錯）：兩個區塊放回報價卡
+  function restore() {
+    if (home && slots) home.append(...slots);
+  }
 
   const el = (tag, className, text) => {
     const node = document.createElement(tag);
@@ -117,34 +147,10 @@
     return [dateLine(block.data_date, facts.data_date), table];
   }
 
-  function technicalPanel(facts) {
-    const block = facts.technical;
-    const rows = block.rows || [];
-    const max = Math.max(0, ...rows.map(row => Math.abs(row.distance_pct || 0)));
-    const table = el('table', 'sf-table');
-    table.append(headRow(['', '價位', '收盤距離']));
-    const body = el('tbody');
-    for (const row of rows) {
-      const tr = el('tr');
-      tr.append(el('th', '', row.name), el('td', 'num', num(row.value)));
-      const distance = el('td', 'num');
-      distance.append(document.createTextNode(pct(row.distance_pct)), bar(row.distance_pct, max));
-      tr.append(distance);
-      body.append(tr);
-    }
-    table.append(body);
-    const figures = el('div', 'sf-figs');
-    const readings = [
-      ['RSI', has(block.rsi) ? num(block.rsi) : null],
-      ['量比', has(block.volume_ratio) ? `${num(block.volume_ratio)} 倍` : null],
-      ['KD', has(block.kd_k) && has(block.kd_d) ? `${Math.round(block.kd_k)} / ${Math.round(block.kd_d)}` : null],
-    ].filter(([, value]) => value !== null);
-    for (const [label, value] of readings) {
-      const box = el('div');
-      box.append(el('span', '', label), el('b', 'num', value));
-      figures.append(box);
-    }
-    return readings.length ? [table, figures] : [table];
+  // 技術：本人 2026-11-17「這裡的資訊我覺得我用不到，我也看不懂，你可以換成其他重要的資訊或者是操作手法」——
+  // 均線距離表與 RSI／量比／KD 拿掉。這一塊現在放：當日三格與操作策略（從報價卡搬來，見下面 TECH_SLOTS）＋五塊新功能的三張卡。
+  function technicalPanel() {
+    return [];
   }
 
   // 近 20 日走勢小圖：缺資料的日子斷開，不補線。
@@ -370,6 +376,7 @@
     if (!blocks.length) {
       state.key = '';
       state.code = '';
+      restore();
       host.hidden = true;
       host.replaceChildren();
       return;
@@ -390,11 +397,13 @@
     const show = name => {
       state.block = name;
       for (const button of tabs.children) button.setAttribute('aria-pressed', String(button.dataset.block === name));
+      park();
       try {
         panel.replaceChildren(...PANELS[name](facts, code).filter(Boolean));
       } catch (_) {
         panel.replaceChildren();
       }
+      if (name === 'technical') unpark(panel);
       // 五塊新功能的板（stock-signals.js，獨立檔）：接在這一塊原有內容的後面；它出錯只讓板不出現
       try { window.StockSignals?.fill(panel, name, state.signals, code); } catch (_) { /* 板不出現，這一塊照常 */ }
     };
@@ -405,6 +414,7 @@
       button.addEventListener('click', () => show(name));
       tabs.append(button);
     }
+    park();   // 換掉舊面板之前先收回（「技術」開著時兩個區塊在舊面板裡）
     host.replaceChildren(tabs, panel);
     host.hidden = false;
     show(state.block);
@@ -421,6 +431,7 @@
       renderBlocks(result?.facts, result?.code || '', result?.signals);
     } catch (_) {
       const host = document.getElementById('stockFactsBlocks');
+      restore();
       if (host) { host.hidden = true; host.replaceChildren(); }
       state.key = '';
       state.code = '';

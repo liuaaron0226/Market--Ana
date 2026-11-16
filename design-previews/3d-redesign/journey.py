@@ -1181,7 +1181,17 @@ def stock(page: Page, base: str, tag: str, mobile: bool) -> None:
     shoot.ready_stock(page)
     check(f"{tag}：沒有橫向捲動", no_overflow(page))
     check(f"{tag}：報價有收盤價", page.locator("#close").inner_text().strip() not in ("", "—"))
+    # 本人 2026-11-17：最上面只留報價；當日三格與操作策略搬到「技術」，均線距離表與 RSI／量比／KD 拿掉
+    top = page.evaluate("[...document.querySelector('.st-top').children].map(node => node.id || node.className)")
+    check(f"{tag}：報價卡只剩名稱與價格（當日三格與操作策略不在最上面）", top == ["bd-quote"], top)
+    page.locator("#stockFactsBlocks .sf-tab", has_text="技術").click()
+    tech = page.evaluate("""() => { const panel = document.querySelector('#stockFactsBlocks .sf-panel');
+      return { order: [...panel.children].map(node => node.id || node.className.split(' ')[0]), table: panel.querySelectorAll('table, .sf-figs').length }; }""")
+    check(f"{tag}：「技術」最前面是當日三格與操作策略，後面接三張卡；沒有均線距離表與 RSI／量比／KD",
+          tech["order"][:3] == ["stockFacts", "strategy", "ss"] and tech["table"] == 0, tech)
     check(f"{tag}：操作策略有結論", page.locator("#strategy").is_visible() and page.locator("#strategyConclusion").inner_text().strip() != "—")
+    page.locator("#stockFactsBlocks .sf-tab", has_text="重點").click()
+    check(f"{tag}：切回「重點」時當日三格與操作策略不在畫面上", not page.locator("#strategy").is_visible() and not page.locator("#stockFacts").is_visible())
 
     def folded() -> None:
         """一進去只看報價與 K 線，其餘收在三顆分類鍵裡（本人 11-15：太長、全部攤開、沒辦法選現在要看什麼；看樣品後答「照這樣做」）。"""
