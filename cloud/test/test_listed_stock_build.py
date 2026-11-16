@@ -672,9 +672,19 @@ class SampleBuildV2Tests(unittest.TestCase):
         from twon_analysis.analyze_v2 import analyze_v2
 
         compact = lambda value: json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+        from twon_analysis.facts import with_news
+
         rows = self.rows()
         for code in ("2330", "6488"):
-            self.assertEqual(compact(rows[code]), compact(analyze_v2(code, "9999-12-31")), code)
+            # 建置版本時只多做一件事：替事實資料加上名錄的產業別與「消息」按鈕（事實區塊 D 票）；其餘逐位元組相同。
+            direct = analyze_v2(code, "9999-12-31")
+            industry = rows[code]["facts"]["industry"]
+            self.assertTrue(industry, code)
+            self.assertNotIn("news", direct["facts"]["blocks"], code)
+            blocks = rows[code]["facts"]["blocks"]
+            self.assertEqual(blocks.index("news") + 1, blocks.index("technical"), code)
+            direct["facts"] = with_news(direct["facts"], industry=industry)
+            self.assertEqual(compact(rows[code]), compact(direct), code)
         self.assertEqual(rows["6488"]["market"], "上櫃")
         self.assertEqual(rows["2330"]["market"], "上市")
 
