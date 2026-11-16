@@ -270,36 +270,14 @@ body.pf::before {
 
 /* 損益條的底：一條很淡的長方形凹痕，標出整條的長度（全部庫存的市值）。和裡面兩段一樣高，沒有框線、沒有反光（本人：「框不要太明顯」） */
 .hv-bar { height: 24px; overflow: visible; }
-.hv-bar::before { top: 50%; height: 10px; margin-top: -5px; transform-origin: left; background: rgb(var(--shade) / calc(.12 * var(--shade-k))); }   /* 進場從左邊長出來，和裡面的兩段同一邊 */
-/* 最短 3px（原本 2px）：再短就看不出材質；不能更長，小部位的那一段才不會被撐得和別人一樣長 */
-.hv-bar i { height: 10px; min-width: 3px; overflow: hidden; animation: pf-drift var(--dt, 8s) ease-in-out var(--dd, 0s) infinite alternate; }
-/* 捲出畫面的那幾列，高光先停著（一百檔的清單不用每一條都一直重畫） */
-.hv-row:not(.is-seen) .hv-bar i { animation-play-state: paused; }
-/* 成本：金屬。顏色從墨色與底色調出來（深色背景是亮的鋼色，淺色背景是深的石墨色） */
-.hv-bar .base {
-  --base: linear-gradient(90deg, color-mix(in srgb, var(--ink) 76%, var(--bg)), color-mix(in srgb, var(--ink) 46%, var(--bg)));
-  background-image:
-    radial-gradient(42% 130% at var(--ex, 30%) -20%, rgb(255 255 255 / var(--hi, .7)) 0%, transparent 70%),
-    radial-gradient(30% 90% at calc(var(--ex, 30%) + 34%) 125%, rgb(255 255 255 / 20%) 0%, transparent 70%),
-    linear-gradient(180deg, rgb(255 255 255 / 20%) 0%, transparent var(--hl, 18%), transparent var(--hz, 52%), rgb(0 0 0 / var(--hs, .3)) calc(var(--hz, 52%) + 16%), rgb(0 0 0 / 8%) 100%),
-    var(--base);
-  box-shadow: inset 0 0 0 .5px rgb(0 0 0 / 30%);
-}
-/* 賺的那一段：紅色的液態玻璃；還差成本的那一段：綠色的液態玻璃。兩個色調（--a、--b）和個股頁那條線定的一樣。
-   玻璃的幾層是疊在原本的紅、綠實色上面的（上面 .hv-bar .gain／.lack 的底色）：本人看過並選的樣品就是這樣，顏色比墊在暗槽上飽滿 */
-.hv-bar .gain { --a: #ef6a55; --b: #c52c30; }
-.hv-bar .lack { --a: #3fd0a0; --b: #118a62; }
-.hv-bar :is(.gain, .lack) {
-  background-size: 150px 60px, auto, auto, auto, auto; background-blend-mode: soft-light, normal, normal, normal, normal;
-  background-image:
-    var(--ripple),   /* 裡面的水紋：像真的有液體 */
-    radial-gradient(16% 62% at var(--ex, 30%) 24%, rgb(255 255 255 / 80%) 0%, transparent 72%),
-    radial-gradient(38% 80% at calc(var(--ex, 30%) + 30%) 118%, rgb(255 255 255 / 34%) 0%, transparent 72%),
-    linear-gradient(180deg, rgb(255 255 255 / 36%) 0%, rgb(255 255 255 / 5%) 40%, transparent 62%, rgb(255 255 255 / 20%) 100%),
-    linear-gradient(90deg, color-mix(in srgb, var(--a) 62%, transparent), color-mix(in srgb, var(--b) 82%, transparent));
-  box-shadow: inset 0 0 0 .5px rgb(255 255 255 / 38%), inset 0 1px 0 rgb(255 255 255 / 55%), inset 0 -3px 6px -1px color-mix(in srgb, var(--a) 60%, transparent);
-  filter: drop-shadow(0 3px 5px color-mix(in srgb, var(--b) 50%, transparent));
-}
+.hv-bar::before { top: 50%; height: 10px; margin-top: -5px; transform-origin: left; background: rgb(var(--shade) / calc(.16 * var(--shade-k))); }   /* 進場從左邊長出來，和裡面的兩段同一邊 */
+/* 損益條的兩段：沒有光澤、整段同一個顏色（本人：「不要有光澤且分布均勻，不過顏色深淺要比背景更突出」）。
+   成本是實心的中性色（深色背景偏亮、淺色背景偏深，和金屬板拉開）；賺的是實心的紅、還差的是實心的綠。
+   最短 3px（原本 2px），不能更長：小部位的那一段才不會被撐得和別人一樣長 */
+.hv-bar i { height: 10px; min-width: 3px; }
+.hv-bar .base { background: color-mix(in srgb, var(--ink) 68%, var(--bg)); }
+.hv-bar .gain { background: var(--up); }
+.hv-bar .lack { background: var(--down); }
 
 /* 每一列是一塊金屬板，和選中的篩選鍵、「＋」同一種金屬（本人：「可以跟按鍵與總市值的金屬感一樣看看」）。
    窗光與反射只畫在上面那一條的高度（--plate-h），點開之後下面是平的板色；每一列光落的位置不同（--mx），不會一列一列長得一樣。
@@ -340,8 +318,6 @@ body.pf::before {
   background: linear-gradient(180deg, var(--ink) 0%, var(--ink) 30%, color-mix(in srgb, var(--ink) 70%, var(--bg)) 58%, color-mix(in srgb, var(--ink) 96%, var(--bg)) 100%);
   -webkit-background-clip: text; background-clip: text; color: transparent;
 }
-/* 減少動態：高光不漂，但每一條仍然停在各自的位置（不會全部亮在同一個地方） */
-@media (prefers-reduced-motion: reduce) { .hv-bar i { --ex: var(--e1, 30%); animation: none; } }
 /* 系統的高對比模式會把背景拿掉、列印通常不印背景：金屬字要退回一般的字，不然看不到 */
 @media (forced-colors: active) { #totalMarketValue.is-metal { background: none; color: CanvasText; } }
 @media print { #totalMarketValue.is-metal { background: none; color: inherit; } }
@@ -363,9 +339,8 @@ body.pf::before {
 /* 進場（只播一次）：一檔一檔來。成本那一段先長出來，賺的（或還差的）那一段接著長；長完這一列才定在最後的高度 */
 @media (prefers-reduced-motion: no-preference) {
   .hv-rows.is-entering .hv-bar::before { animation: hv-grow 460ms var(--ease-depth) both; animation-delay: var(--at); }
-  /* 兩段長出來的同時，高光就在各自的位置漂（pf-drift，見「材質」）：不然進場時每一條都亮在同一處，結束才各自跳開 */
-  .hv-rows.is-entering .hv-bar .base { animation: hv-grow 420ms var(--ease-depth) var(--at) both, pf-drift var(--dt, 8s) ease-in-out var(--dd, 0s) infinite alternate; }
-  .hv-rows.is-entering .hv-bar :is(.gain, .lack) { animation: hv-grow 420ms var(--ease-depth) calc(var(--at) + 300ms) both, pf-drift var(--dt, 8s) ease-in-out var(--dd, 0s) infinite alternate; }
+  .hv-rows.is-entering .hv-bar .base { animation: hv-grow 420ms var(--ease-depth) var(--at) both; }
+  .hv-rows.is-entering .hv-bar :is(.gain, .lack) { animation: hv-grow 420ms var(--ease-depth) calc(var(--at) + 300ms) both; }
   .hv-rows.is-entering .hv-ret { animation: hv-fade 300ms linear both; animation-delay: calc(var(--at) + 500ms); }
   .hv-rows.is-entering .hv-row { animation: hv-row-settle 700ms var(--ease-depth) both; animation-delay: calc(var(--at) + 560ms); }
   .hv-row.is-open .hv-facts li { animation: hv-fact-in 380ms var(--ease-depth) both; animation-delay: calc(var(--order) * 60ms + 60ms); }
