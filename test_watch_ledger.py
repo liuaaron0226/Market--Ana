@@ -483,7 +483,7 @@ class InputLayerTests(WatchLedgerTestCase):
         self.assertEqual(record["input"]["news"]["headlines"], None)
         self.assertIn("公告九月營收", prompt)
         # 紀錄寫明沒放的原因是條款，和「名單還沒確認」「當天沒抓到」分得開
-        self.assertEqual(record["withheld_layers"], {"peers": "國外同類股行情依來源條款不放進提示",
+        self.assertEqual(record["withheld_inputs"], {"peers": "國外同類股行情依來源條款不放進提示",
                                                      "headlines": "新聞標題依來源條款不放進提示"})
         # 條款擋下的不算缺漏
         self.assertEqual(record["missing_layers"], [])
@@ -949,7 +949,11 @@ class OfficialStartTests(SeriesTestCase):
         self.assertEqual(self.start()["outcome"], "not_ready")          # 帳本是空的
         self.day(BASE, "接近")
         self.assertEqual(self.start()["outcome"], "not_ready")          # 只有晚間版
-        self.day(BASE, None, edition="morning")                       # 晨間漏記也算有在跑
+        self.day(BASE, None, edition="morning")
+        self.assertEqual(self.start()["outcome"], "not_ready")          # 晨間是漏記（例如補記的整晚沒跑），不算到齊
+        self.day(BASE, "接近", edition="morning", code="2317")
+        self.assertEqual(self.start()["outcome"], "not_ready")          # 早晚要是同一檔
+        self.day(BASE, "接近", code="2317")                            # 2317 早晚都寫成了
         self.assertEqual(self.start(since=BASE)["outcome"], "not_ready")  # 起算日要在那一天之後
         started = self.start()
         self.assertEqual(started["outcome"], "written")
@@ -1128,6 +1132,34 @@ class ConclusionStageTests(SeriesTestCase):
 
         # 沒有寫下正式起算日，就不會出現結論
         self.assertEqual(self.stages("2027-12-31", official_since=None)[("all", None, 20)]["stage"], "累積中")
+
+    def test_each_group_uses_the_official_start_of_its_own_input_version_written_in_the_ledger(self):
+        # 09/29 早晚兩版都寫成判斷 → 這一組輸入的正式起算日 09/30 寫進帳本
+        earlier = DATES[-2]
+        data = stock_input(base_date=earlier, stock_daily=stock_bars()[:-1], index_daily=index_bars()[:-1],
+                           data_cutoffs={"stock": earlier, "index": earlier})
+        for edition, moment, session in (("evening", at(earlier, 17), None), ("morning", at(BASE, 8), BASE)):
+            self.reset_calls()
+            record = self.write(data, [envelope(answer(base_date=earlier))], edition=edition, now=clock(moment),
+                                session_date=session)["record"]
+            self.assertEqual(record["kind"], "judgment")
+        version = wl.input_version_of(wl.DEFAULT_LAYERS)
+        self.assertEqual(wl.start_official(self.root, since=BASE, input_version=version)["outcome"], "written")
+        stocks = [stock_input(code=code, name=code) for code in self.CODES]
+        replies = [envelope(answer("可以留意", code=code, **ANSWERS["可以留意"])) for code in self.CODES]
+        self.reset_calls()
+        wl.write_judgments(self.root, stocks, edition="evening", model_bin=fake_model(self.bin, replies),
+                           model="test-model", now=clock(EVENING_OK), official_since=BASE)
+
+        data = market("2026-10-29", codes=self.CODES)
+        wl.reconcile(self.root, data["index_daily"], data["stocks"])
+        index = data["index_daily"] + [{"date": "2027-03-30", "close": 1200}]
+        # 呼叫端沒給起算日也一樣：帳本裡這一組自己的起算日 09/30，滿 6 個月是 2027-03-30
+        summary = wl.summarize(self.root, index, data["stocks"])
+        [group] = [g for g in summary["groups"]
+                   if (g["scope"], g["run_mode"], g["edition"], g["horizon"]) == ("all", "official", "evening", 20)]
+        self.assertEqual((group["input_version"], group["reconciled"], group["stage"]), (version, 30, "可下結論"))
+        self.assertEqual(summary["official_starts"], {version: BASE})
 
 
 MIGRATION = Path(__file__).resolve().parent / "cloud" / "migrations" / "0017_watch_ledger.sql"

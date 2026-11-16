@@ -247,13 +247,13 @@ class MorningTests(WatchRunTestCase):
 class OfficialStartTests(WatchRunTestCase):
     """H 票：輸入到齊（排程打開的那一組層）、早晚兩版都跑過一天之後，晚間執行自動寫下正式起算日。"""
 
-    def judge(self, edition, day, session_date=None):
+    def judge(self, edition, day, session_date=None, **options):
         folder = self.tmp / f"bin-{edition}-{day}"
         folder.mkdir()
         model = fake_model(folder, [envelope(answer(base_date=day))])
         common = dict(watchlist=WATCHLIST[:1], ledger=self.ledger, forecast_ledger=self.forecasts,
                       method_path=self.method, model_bin=model, model="test-model", source=self.source,
-                      sql_output=self.tmp / f"{edition}-{day}.sql")
+                      sql_output=self.tmp / f"{edition}-{day}.sql", **options)
         if edition == "evening":
             return wr.run_evening(analysis_file(self.tmp, day), now=clock(at(day, 17, 30)), **common)
         return wr.run_morning(analysis_file(self.tmp, day), session_date=session_date, holidays=set(),
@@ -278,17 +278,14 @@ class OfficialStartTests(WatchRunTestCase):
         # 這一組輸入：官方資料算出的各層＋教訓層；國外同類股與新聞標題依條款不放
         self.assertEqual(records[(LONG[22], "evening")]["layers"],
                          ["technical", "bollinger", "sector", "margin", "environment", "market", "news", "lessons"])
-        self.assertEqual(set(records[(LONG[22], "evening")]["withheld_layers"]), {"peers", "headlines"})
+        self.assertEqual(set(records[(LONG[22], "evening")]["withheld_inputs"]), {"peers", "headlines"})
         sql = (self.tmp / f"evening-{LONG[22]}.sql").read_text(encoding="utf-8")
         self.assertIn(f'"official_since":"{LONG[22]}"', sql)
 
     def test_a_dry_run_never_writes_the_official_start_into_the_real_ledger(self):
         self.judge("evening", BASE)
         self.judge("morning", BASE, session_date=LONG[22])
-        log = wr.run_evening(analysis_file(self.tmp, LONG[22]), watchlist=WATCHLIST[:1], ledger=self.ledger,
-                             forecast_ledger=self.forecasts, method_path=self.method,
-                             model_bin=fake_model(self.bin, [envelope(answer(base_date=LONG[22]))]),
-                             model="test-model", source=self.source, dry_run=True)
+        log = self.judge("evening", LONG[22], dry_run=True)
         self.assertEqual(log["official_since"], LONG[22])         # 乾跑看得到「今天會起算」
         self.assertEqual(wl.official_starts(self.ledger), {})    # 真的帳本沒有寫
 

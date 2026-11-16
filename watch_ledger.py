@@ -105,7 +105,7 @@ _LAYER_RULES: dict[str, tuple[str, ...]] = {
 # 留位置、不放內容的資料：依來源條款不能送進目前用的 Gemini 方案（查證見 ANALYSIS_PLAN.md 2026-11-15）。
 # 每一份判斷的紀錄照實標出來，和「名單還沒確認」「當天沒抓到」（missing_layers）分得開；
 # 提示本身不變（已有規則要模型不把新聞與海外市場當事實），所以不換輸入版本。
-WITHHELD_LAYERS = {"peers": "國外同類股行情依來源條款不放進提示", "headlines": "新聞標題依來源條款不放進提示"}
+WITHHELD_INPUTS = {"peers": "國外同類股行情依來源條款不放進提示", "headlines": "新聞標題依來源條款不放進提示"}
 OFFICIAL_SOURCES = ("twse", "tpex")
 _ANNOUNCEMENT_FIELDS = ("id", "source", "kind", "published_at", "title", "body")
 _STOCK_KEYS = ("open", "high", "low", "close", "volume")
@@ -159,7 +159,7 @@ def _enabled_layers(layers: Sequence[str]) -> list[str]:
     unknown = [layer for layer in layers if layer not in LAYERS]
     if unknown:
         raise ValueError(f"不認得的輸入層：{unknown}")
-    withheld = [f"{layer}（{WITHHELD_LAYERS[layer]}）" for layer in layers if layer in WITHHELD_LAYERS]
+    withheld = [f"{layer}（{WITHHELD_INPUTS[layer]}）" for layer in layers if layer in WITHHELD_INPUTS]
     if withheld:
         raise ValueError(f"這一版不能打開的輸入層：{'、'.join(withheld)}")
     if "technical" not in layers:
@@ -359,7 +359,7 @@ def _model_input(data: Mapping[str, Any], edition: str, layers: list[str], raw: 
         **extras,
         "technical": values.get("technical"),
         "market": values.get("market"),
-        # headlines（新聞標題）與 peers（國外同類股）先留位置：免費方案下不放內容。
+        # headlines（新聞標題）與 peers（國外同類股）只留位置：依來源條款不放內容（WITHHELD_INPUTS）。
         "news": {"announcements": values.get("news"), "headlines": None},
         "peers": None,
         "lessons": values.get("lessons"),
@@ -537,7 +537,7 @@ def _write(
         "method_version": method_version, "input_version": input_version, "model": model,
         "run_mode": "official" if official_since and base_date >= official_since else "trial",
         "layers": enabled, "missing_layers": list(model_input["missing_layers"]),
-        "withheld_layers": dict(WITHHELD_LAYERS),
+        "withheld_inputs": dict(WITHHELD_INPUTS),
         "data_cutoffs": copy.deepcopy(dict(data.get("data_cutoffs") or {})),
         "deadline": due.isoformat(), "base_close": model_input["base_close"],
         "input": model_input, "input_sha256": input_sha,
@@ -761,7 +761,8 @@ def reconcile(root: Path | str, index_daily: Sequence[Mapping[str, Any]],
 # ---- 正式起算日 ----
 
 def _official_path(root: Path, input_version: str) -> Path:
-    if not re.fullmatch(r"[a-z+]+-v\d+-[0-9a-f]{8}", input_version):
+    # 輸入版本當檔名：只擋路徑字元，格式本身由 input_version_of 決定。
+    if not re.fullmatch(r"[0-9A-Za-z+.-]{1,200}", input_version):
         raise ValueError(f"輸入版本不合法：{input_version!r}")
     return root / "official" / f"{input_version}.json"
 
@@ -769,27 +770,29 @@ def _official_path(root: Path, input_version: str) -> Path:
 def start_official(root: Path | str, *, since: str, input_version: str) -> dict[str, Any]:
     """寫下某一個輸入版本的正式起算日。回傳 ``{"outcome": written|unchanged|conflict|not_ready, "record": ...}``。
 
-    要在 ``since`` 之前，有一個基準日早晚兩版都用這個輸入版本跑過（判斷或漏記都算有在跑）才寫得下；
+    要在 ``since`` 之前，有一個基準日、有一檔早晚兩版都用這個輸入版本寫成判斷才寫得下（漏記不算：
+    補記的「整晚沒跑」也是漏記）；
     哪幾層算「輸入到齊」由呼叫端決定（排程打開的那一組）。每個輸入版本各自一個起算日，寫了就不能改：
     同內容再寫一次是 ``unchanged``，不同的日子是 ``conflict``（拒寫）。
     """
     folder = Path(root)
-    date.fromisoformat(since)
+    date.fromisoformat(since)  # 起算日格式不對就停下
     path = _official_path(folder, input_version)
-    editions: dict[str, set[str]] = {}
-    for record in read_ledger(folder)["judgments"]:
-        if record["input_version"] == input_version and record["base_date"] < since:
-            editions.setdefault(record["base_date"], set()).add(record["edition"])
-    both = [day for day, ran in editions.items() if ran >= set(EDITIONS)]
-    if path.exists():
-        existing = read_record(path)
-        return {"outcome": "unchanged" if existing["since"] == since else "conflict", "record": existing}
-    if not both:
-        return {"outcome": "not_ready", "record": None}
-    record = seal({"schema": SCHEMA, "kind": "official_start", "input_version": input_version, "since": since,
-                   "ran_on": max(both)})
-    outcome = append(path, record)
-    return {"outcome": outcome, "record": read_record(path)}
+    if not path.exists():
+        editions: dict[tuple[str, str], set[str]] = {}
+        for record in read_ledger(folder)["judgments"]:
+            if record["input_version"] == input_version and record["base_date"] < since and record["kind"] == "judgment":
+                editions.setdefault((record["base_date"], record["code"]), set()).add(record["edition"])
+        both = [day for (day, _), ran in editions.items() if ran >= set(EDITIONS)]
+        if not both:
+            return {"outcome": "not_ready", "record": None}
+        written = append(path, seal({"schema": SCHEMA, "kind": "official_start", "input_version": input_version,
+                                     "since": since, "ran_on": max(both)}))
+        if written == "written":
+            return {"outcome": "written", "record": read_record(path)}
+    # 已經寫過（包括同時有另一個寫入者先寫下）：只看起算日是不是同一天。
+    existing = read_record(path)
+    return {"outcome": "unchanged" if existing["since"] == since else "conflict", "record": existing}
 
 
 def official_starts(root: Path | str) -> dict[str, str]:
@@ -850,10 +853,12 @@ def summarize(root: Path | str, index_daily: Sequence[Mapping[str, Any]],
     單一檔（``scope="stock"``）兩種口徑，各有 5 日、20 日兩格；試跑與正式各自成組，不混算。
 
     還沒對帳的轉變日依截至目前的日 K 分成「還沒到期」與「無法判定」，兩者都不算看錯。
-    每組另標 ``stage``：試跑／累積中／可下結論（只是顯示，不觸發任何其他功能）。
+    每組另標 ``stage``：試跑／累積中／可下結論（只是顯示，不觸發任何其他功能）。「滿 6 個月」從那一組輸入版本
+    自己寫在帳本裡的正式起算日算；帳本裡沒有時才用 ``official_since``。
     """
     ledger = read_ledger(root)
     market = _Market.of(index_daily, stocks)
+    starts = official_starts(root)
     reconciled = {(row["judgment_id"], row["horizon"]): row for row in ledger["reconciliations"]}
     series: dict[tuple[str, str, str, str], dict[str, list[dict[str, Any]]]] = {}
     for record in ledger["judgments"]:
@@ -865,12 +870,13 @@ def summarize(root: Path | str, index_daily: Sequence[Mapping[str, Any]],
         scopes = [("all", None, everything), *(("stock", code, records) for code, records in sorted(by_code.items()))]
         for scope, code, records in scopes:
             tallies = {horizon: _tally(records, horizon, reconciled, market) for horizon in HORIZONS}
-            stage = _stage(run_mode, tallies[20]["reconciled"], official_since, market.as_of)
+            stage = _stage(run_mode, tallies[20]["reconciled"], starts.get(input_version, official_since),
+                           market.as_of)
             for horizon in HORIZONS:
                 groups.append({"scope": scope, "code": code, "run_mode": run_mode, "edition": edition,
                                "horizon": horizon, "method_version": method_version, "input_version": input_version,
                                **tallies[horizon], "stage": stage})
-    return {"as_of": market.as_of, "official_since": official_since, "groups": groups,
+    return {"as_of": market.as_of, "official_since": official_since, "official_starts": starts, "groups": groups,
             "conflicts": len(ledger["conflicts"])}
 
 
@@ -878,7 +884,7 @@ def summarize(root: Path | str, index_daily: Sequence[Mapping[str, Any]],
 
 # 給網站顯示的欄位；完整輸入（含方法稿）、模型的重試細節與「隨便挑」的明細只留在原件（成績看彙總）。
 _PUBLIC_FIELDS = ("judgment_id", "code", "name", "base_date", "edition", "method_version", "input_version", "model",
-                  "run_mode", "kind", "locked_at", "deadline", "layers", "missing_layers", "withheld_layers",
+                  "run_mode", "kind", "locked_at", "deadline", "layers", "missing_layers", "withheld_inputs",
                   "data_cutoffs", "base_close", "status", "trigger_line", "wrong_line", "reason", "reason_news",
                   "transition", "compared_with", "miss_reason", "miss_detail", "record_sha256")
 
