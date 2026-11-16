@@ -71,7 +71,8 @@ def fake_decrypt(row):
 
 
 def rows_by(result, email):
-    return {row["digest_type"]: row for row in result["rows"] if row["email"] == email}
+    """大盤與籌碼兩份（02 票）。個股判斷那一列是 03 票的範圍，見 test_friend_ai_stocks.py。"""
+    return {row["digest_type"]: row for row in result["rows"] if row["email"] == email and row["digest_type"] != "stock"}
 
 
 class FriendDigestTests(unittest.TestCase):
@@ -153,7 +154,7 @@ class FriendDigestTests(unittest.TestCase):
 class FriendSqlTests(unittest.TestCase):
     def setUp(self):
         self.db = sqlite3.connect(":memory:")
-        for name in ("0007_ai_daily.sql", "0014_friend_gemini_keys.sql", "0020_friend_ai_daily.sql"):
+        for name in ("0007_ai_daily.sql", "0014_friend_gemini_keys.sql", "0020_friend_ai_daily.sql", "0022_friend_ai_stock_daily.sql"):
             self.db.executescript((MIGRATIONS / name).read_text(encoding="utf-8"))
         for row in KEYS:
             self.db.execute(
@@ -337,6 +338,12 @@ class FriendCliTests(unittest.TestCase):
         self.keys_path = self.root / "keys.json"
         self.keys_path.write_text(json.dumps([{"results": keys, "success": True}]), encoding="utf-8")
         self.sql_dir, self.audit_path = self.root / "friend-sql", self.root / "audit.json"
+        # 03 票的輸入：這兩位朋友沒有自選股也沒有庫存（有持股的情境在 test_friend_ai_stocks.py）。
+        self.packs = {"--stock-pack": {"analysis_schema": "stock-analysis/v2", "as_of": DATE, "results": {}},
+                      "--compare-pack": {"schema": "compare-0050-pack/v1", "data_date": DATE, "items": {}},
+                      "--portfolios-json": [{"results": [], "success": True}]}
+        for index, value in enumerate(self.packs.values()):
+            (self.root / f"pack-{index}.json").write_text(json.dumps(value), encoding="utf-8")
 
     def tearDown(self):
         self.server.shutdown()
@@ -344,9 +351,10 @@ class FriendCliTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def run_cli(self, *extra, master=MASTER):
+        packs = [arg for index, flag in enumerate(self.packs) for arg in (flag, str(self.root / f"pack-{index}.json"))]
         args = ["run", "--date", DATE, "--market-dir", str(self.market), "--screens-root", str(self.screens),
                 "--keys-json", str(self.keys_path), "--sql-dir", str(self.sql_dir), "--audit", str(self.audit_path),
-                "--gemini-url", self.url, *extra]
+                "--gemini-url", self.url, *packs, *extra]
         previous = os.environ.get("FRIEND_AI_MASTER_KEY")
         os.environ["FRIEND_AI_MASTER_KEY"] = master
         try:
@@ -366,7 +374,7 @@ class FriendCliTests(unittest.TestCase):
         self.assertEqual(sent["generationConfig"]["responseMimeType"], "application/json")
         self.assertNotIn("那斯達克", json.dumps(sent, ensure_ascii=False))
         db = sqlite3.connect(":memory:")
-        for name in ("0014_friend_gemini_keys.sql", "0020_friend_ai_daily.sql"):
+        for name in ("0014_friend_gemini_keys.sql", "0020_friend_ai_daily.sql", "0022_friend_ai_stock_daily.sql"):
             db.executescript((MIGRATIONS / name).read_text(encoding="utf-8"))
         files = sorted(self.sql_dir.glob("*.sql"))
         self.assertEqual([path.name for path in files], ["friend-01.sql", "friend-02.sql"])  # 檔名不含 email

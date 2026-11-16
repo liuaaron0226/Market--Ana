@@ -271,6 +271,61 @@ def build_friend_input(*, data_date: str, market_dir: Path, screens_root: Path) 
     return payload
 
 
+def load_stock_packs(stock_pack_path: Path, compare_pack_path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    """個股分析與 0050 對照資料包：都是本站用證交所、櫃買盤後資料算的，不含即時行情。"""
+    stock_pack = _read_json(stock_pack_path)
+    if stock_pack.get("analysis_schema") != "stock-analysis/v2":
+        raise ValueError("個股資料包不是 stock-analysis/v2")
+    compare_pack = _read_json(compare_pack_path)
+    if compare_pack.get("schema") != "compare-0050-pack/v1":
+        raise ValueError("0050 對照資料包格式不正確")
+    return stock_pack, compare_pack
+
+
+def _portfolio_section(portfolio: dict[str, list[dict[str, Any]]], stock_pack: dict[str, Any],
+                       compare_pack: dict[str, Any]) -> dict[str, Any]:
+    """一個人的持股段落：站主與朋友共用，送出的欄位逐欄一樣（開放給朋友 03 票，DECISIONS 第 8 題）。"""
+    portfolio_codes = sorted({str(row.get("code")) for row in [*portfolio["watchlist"], *portfolio["holdings"]] if row.get("code")})
+    stock_results = stock_pack.get("results") or {}
+    stocks = {code: _stock_summary(stock_results[code]) for code in portfolio_codes if code in stock_results}
+    compare_items = compare_pack.get("items") or {}
+    return {
+        "portfolio_codes": portfolio_codes,
+        "portfolio": {"watchlist": portfolio["watchlist"], "holdings": _holding_metrics(portfolio["holdings"], stocks)},
+        "stocks": stocks,
+        "compare_0050": {
+            "benchmark": _compact_compare(compare_pack.get("benchmark")),
+            "stocks": {code: _compact_compare(compare_items.get(code)) for code in portfolio_codes if code in compare_items},
+        },
+    }
+
+
+FRIEND_STOCK_INPUT_SCHEMA = "ai-digest-friend-stock-input/v1"
+
+
+def with_friend_portfolio(base: dict[str, Any], *, email: str, portfolio_path: Path, stock_pack: dict[str, Any],
+                          compare_pack: dict[str, Any]) -> dict[str, Any]:
+    """朋友的完整輸入：大盤、籌碼沿用 ``build_friend_input`` 那份，再加上「他自己」的自選股與庫存。
+
+    只取 ``email`` 這個人的列，其他朋友與站主的持股一列都不帶。自選股和庫存都空的朋友原樣回傳共用那份
+    （排程看到沒有 portfolio_codes 就不叫個股判斷）。
+    """
+    section = _portfolio_section(_portfolio_payload(portfolio_path, email), stock_pack, compare_pack)
+    if not section["portfolio_codes"]:
+        return base
+    payload = {key: value for key, value in base.items() if key != "input_sha256"}
+    payload.update({
+        "schema": FRIEND_STOCK_INPUT_SCHEMA,
+        "availability": {**base["availability"], "stocks": stock_pack.get("as_of") == base["data_date"]},
+        "source_dates": {**base["source_dates"], "stock_analysis": stock_pack.get("as_of"),
+                         "compare_0050": compare_pack.get("data_date")},
+        "allowed_codes": sorted(set(base["allowed_codes"]) | set(section["portfolio_codes"])),
+        **section,
+    })
+    payload["input_sha256"] = canonical_sha(payload)
+    return payload
+
+
 def build_digest_input(
     *,
     data_date: str,
@@ -283,18 +338,9 @@ def build_digest_input(
 ) -> dict[str, Any]:
     exchange = _exchange_sections(data_date, market_dir, screens_root)
     screen_summaries, rotation = exchange["screens"], exchange["rotation"]
-    stock_pack = _read_json(stock_pack_path)
-    if stock_pack.get("analysis_schema") != "stock-analysis/v2":
-        raise ValueError("個股資料包不是 stock-analysis/v2")
-    compare_pack = _read_json(compare_pack_path)
-    if compare_pack.get("schema") != "compare-0050-pack/v1":
-        raise ValueError("0050 對照資料包格式不正確")
-    portfolio = _portfolio_payload(portfolio_path, owner_email)
-    portfolio_codes = sorted({str(row.get("code")) for row in [*portfolio["watchlist"], *portfolio["holdings"]] if row.get("code")})
-
-    stock_results = stock_pack.get("results") or {}
-    stocks = {code: _stock_summary(stock_results[code]) for code in portfolio_codes if code in stock_results}
-    portfolio["holdings"] = _holding_metrics(portfolio["holdings"], stocks)
+    stock_pack, compare_pack = load_stock_packs(stock_pack_path, compare_pack_path)
+    section = _portfolio_section(_portfolio_payload(portfolio_path, owner_email), stock_pack, compare_pack)
+    portfolio_codes = section["portfolio_codes"]
 
     allowed_codes = sorted(set(portfolio_codes) | exchange["screen_codes"])
     market_date = exchange["market_date"]
@@ -316,12 +362,9 @@ def build_digest_input(
         "portfolio_codes": portfolio_codes,
         "market": exchange["market"],
         "flows": {"screens": screen_summaries, "rotation": rotation},
-        "portfolio": portfolio,
-        "stocks": stocks,
-        "compare_0050": {
-            "benchmark": _compact_compare(compare_pack.get("benchmark")),
-            "stocks": {code: _compact_compare((compare_pack.get("items") or {}).get(code)) for code in portfolio_codes if code in (compare_pack.get("items") or {})},
-        },
+        "portfolio": section["portfolio"],
+        "stocks": section["stocks"],
+        "compare_0050": section["compare_0050"],
     }
     payload["input_sha256"] = canonical_sha(payload)
     return payload
