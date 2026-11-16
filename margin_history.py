@@ -38,6 +38,7 @@ import sqlite3
 import sys
 import tarfile
 from pathlib import Path
+from typing import Callable
 
 ROOT = Path(__file__).resolve().parent
 STORE_DIR = "data/margin-history/raw"                       # 長期保存區：全部保留
@@ -61,7 +62,10 @@ OTC_PRICE_DIR = "data/margin-history/otc-prices"            # 上櫃行情摘要
 OTC_PRICE_SEED = "seeds/otc-margin-prices.tar.xz"
 OTC_PRICE_FILE = re.compile(r"otc-prices-(\d{8})\.json", re.ASCII)
 # 上櫃行情摘要只留股票（四位數代號）與 ETF（00 開頭）：上櫃每日行情一天一萬多檔，九成是權證，融資用不到。
+# ETF 不給這一塊，但它們的融資算在櫃買公布的上櫃全市場融資金裡，每日對帳要一起加總，所以也要留。
 OTC_KEPT_CODE = re.compile(r"\d{4}|00\d{3,4}[A-Z]?", re.ASCII)
+# 估算讀櫃買原件時用到的欄位（twon_analysis.margin_maintenance.read_otc_margin）；少一欄就不收進長期保存區。
+OTC_MARGIN_COLUMNS = ("代號", "資買", "資賣", "現償", "資餘額")
 # 長期保存區的四種檔："raw"／"otc-raw" 是上市／上櫃個股融資原件、"prices"／"otc-prices" 是上市／上櫃行情摘要；
 # 各自的資料夾、種子、檔名。
 STORES = {"raw": (STORE_DIR, SEED, DAILY_FILE), "prices": (PRICE_DIR, PRICE_SEED, PRICE_FILE),
@@ -119,10 +123,16 @@ def _why_unusable(payload: object, day: str) -> str | None:
 
 def keep_up(root: Path) -> dict:
     """把近期明細裡、長期保存區還沒有的日子原樣複製過來。已經有的不重寫；不能用的不收並回報。"""
+    return _copy_new_days(_days_in(root / RECENT_DIR), lambda day: stored_path(root, day), _why_unusable)
+
+
+def _copy_new_days(sources: dict[str, Path], target_of: Callable[[str], Path],
+                   why_unusable: Callable[[object, str], str | None]) -> dict:
+    """每日抓取存的原件（外包格式，官方回應在 data）→ 長期保存區：還沒有的日子原樣複製；不能用的不收並回報原因。"""
     stored: list[str] = []
     skipped: list[dict] = []
-    for day, source in sorted(_days_in(root / RECENT_DIR).items()):
-        target = stored_path(root, day)
+    for day, source in sorted(sources.items()):
+        target = target_of(day)
         if target.exists():
             continue
         data = source.read_bytes()
@@ -130,7 +140,7 @@ def keep_up(root: Path) -> dict:
             payload = json.loads(data.decode("utf-8")).get("data")
         except (UnicodeDecodeError, json.JSONDecodeError, AttributeError):
             payload = None
-        reason = _why_unusable(payload, day)
+        reason = why_unusable(payload, day)
         if reason:
             skipped.append({"day": day, "reason": reason})
             continue
@@ -166,23 +176,30 @@ def _price_summary(packed: bytes, day: str) -> dict:
 def keep_up_prices(root: Path) -> dict:
     """把每日收盤行情原件摘成行情摘要：從長期保存區最早那一份融資原件的日子起，還沒摘過的每一天。
     已經有的不重寫；不能用的不收並回報。長期保存區還沒有任何融資原件時什麼都不做。"""
-    stored: list[str] = []
-    skipped: list[dict] = []
-    held = _days_in(root / STORE_DIR)
-    if not held:
-        return {"stored": stored, "skipped": skipped}
-    first = min(held)
     originals: dict[str, Path] = {}
     for year in sorted((root / QUOTES_DIR).glob("*")):
         originals.update(_days_in(year, QUOTES_FILE))
+    return _summarize_new_days(_days_in(root / STORE_DIR), originals, root / PRICE_DIR, "prices", _price_summary)
+
+
+def _summarize_new_days(held: dict[str, Path], originals: dict[str, Path], folder: Path, prefix: str,
+                        summarize: Callable[[bytes, str], dict]) -> dict:
+    """行情原件 → 行情摘要（folder/<prefix>-YYYYMMDD.json）：從最早那一份融資原件（held）的日子起，還沒摘過的每一天。
+    已經有的不重寫；不能用的不收並回報。還沒有任何融資原件時什麼都不做。"""
+    stored: list[str] = []
+    skipped: list[dict] = []
+    if not held:
+        return {"stored": stored, "skipped": skipped}
+    first = min(held)
     for day, source in sorted(originals.items()):
-        target = root / PRICE_DIR / f"prices-{day}.json"
+        target = folder / f"{prefix}-{day}.json"
         if day < first or target.exists():
             continue
         try:
-            summary = _price_summary(source.read_bytes(), day)
-        except (OSError, EOFError, ValueError, KeyError, IndexError, TypeError) as error:   # gzip 壞掉是 OSError／EOFError
-            # 自己判斷出來的原因照寫（和融資原件那一邊同一種寫法）；檔案讀不了、格式不對的只寫錯誤的種類。
+            summary = summarize(source.read_bytes(), day)
+        except (OSError, EOFError, UnicodeDecodeError, ValueError, KeyError, IndexError, TypeError) as error:
+            # gzip 壞掉是 OSError／EOFError。自己判斷出來的原因照寫（和融資原件那一邊同一種寫法）；
+            # 檔案讀不了、格式不對的只寫錯誤的種類。
             reason = str(error) if type(error) is ValueError else f"原件讀不了（{type(error).__name__}）"
             skipped.append({"day": day, "reason": reason})
             continue
@@ -200,8 +217,12 @@ def _why_unusable_otc(payload: object, day: str) -> str | None:
     tables = payload.get("tables") or []
     table = tables[0] if tables and isinstance(tables[0], dict) else {}
     fields = [str(field).strip() for field in table.get("fields") or []]
-    if not ("代號" in fields and "資餘額" in fields and table.get("data")):
+    if not table.get("data"):
         return "沒有個股融資明細"
+    missing = [name for name in OTC_MARGIN_COLUMNS if name not in fields]
+    if missing:
+        # 存進來就不再改寫：缺一欄，之後每天的重播都會讀不了，所以這裡就擋下。
+        return f"欄位跟預期不同（少了 {'、'.join(missing)}）"
     if not any(len(row) > 1 and "融資金" in str(row[1]) for row in table.get("summary") or []):
         return "沒有全市場融資金額"
     return None
@@ -209,24 +230,8 @@ def _why_unusable_otc(payload: object, day: str) -> str | None:
 
 def keep_up_otc(root: Path) -> dict:
     """把 E 票抓到的上櫃融資原件裡、長期保存區還沒有的日子原樣複製過來。已經有的不重寫；不能用的不收並回報。"""
-    stored: list[str] = []
-    skipped: list[dict] = []
-    for day, source in sorted(_days_in(root / OTC_CREDIT_DIR, OTC_CREDIT_FILE).items()):
-        target = root / OTC_STORE_DIR / f"otc-margin-{day}.json"
-        if target.exists():
-            continue
-        data = source.read_bytes()
-        try:
-            payload = json.loads(data.decode("utf-8")).get("data")
-        except (UnicodeDecodeError, json.JSONDecodeError, AttributeError):
-            payload = None
-        reason = _why_unusable_otc(payload, day)
-        if reason:
-            skipped.append({"day": day, "reason": reason})
-            continue
-        _write_atomic(target, data)
-        stored.append(day)
-    return {"stored": stored, "skipped": skipped}
+    return _copy_new_days(_days_in(root / OTC_CREDIT_DIR, OTC_CREDIT_FILE),
+                          lambda day: root / OTC_STORE_DIR / f"otc-margin-{day}.json", _why_unusable_otc)
 
 
 def _otc_price_summary(content: bytes, day: str) -> dict:
@@ -243,27 +248,9 @@ def _otc_price_summary(content: bytes, day: str) -> dict:
 
 
 def keep_up_otc_prices(root: Path) -> dict:
-    """把上櫃每日收盤行情原件摘成行情摘要：從長期保存區最早那一份上櫃融資原件的日子起，還沒摘過的每一天。
-    已經有的不重寫；不能用的不收並回報。長期保存區還沒有任何上櫃融資原件時什麼都不做。"""
-    stored: list[str] = []
-    skipped: list[dict] = []
-    held = _days_in(root / OTC_STORE_DIR, OTC_DAILY_FILE)
-    if not held:
-        return {"stored": stored, "skipped": skipped}
-    first = min(held)
-    for day, source in sorted(_days_in(root / OTC_QUOTES_DIR, OTC_QUOTES_FILE).items()):
-        target = root / OTC_PRICE_DIR / f"otc-prices-{day}.json"
-        if day < first or target.exists():
-            continue
-        try:
-            summary = _otc_price_summary(source.read_bytes(), day)
-        except (OSError, UnicodeDecodeError, ValueError, KeyError, IndexError, TypeError) as error:
-            reason = str(error) if type(error) is ValueError else f"原件讀不了（{type(error).__name__}）"
-            skipped.append({"day": day, "reason": reason})
-            continue
-        _write_atomic(target, (json.dumps(summary, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8"))
-        stored.append(day)
-    return {"stored": stored, "skipped": skipped}
+    """把上櫃每日收盤行情原件摘成行情摘要：從長期保存區最早那一份上櫃融資原件的日子起，還沒摘過的每一天。"""
+    return _summarize_new_days(_days_in(root / OTC_STORE_DIR, OTC_DAILY_FILE), _days_in(root / OTC_QUOTES_DIR, OTC_QUOTES_FILE),
+                               root / OTC_PRICE_DIR, "otc-prices", _otc_price_summary)
 
 
 def import_backfill(root: Path, source: Path) -> dict:

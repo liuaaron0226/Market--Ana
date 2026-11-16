@@ -1767,8 +1767,7 @@ class StockSignalsOtcMarginMaintenanceTests(_SignalsFixture, unittest.TestCase):
         self.assertEqual((fixed.OTC_START_DATE, board.start, board.raw, board.prices), ('2025-11-03', '2025-11-03', 'otc-raw', 'otc-prices'))
         self.assertEqual(board.seed_scale, fixed.OTC_SEED_SCALE)
         self.assertEqual(round(fixed.OTC_SEED_SCALE, 10), OTC_SEED_SCALE_FROZEN)
-        self.assertEqual((board.blend_weight, board.full_year), (fixed.BLEND_WEIGHT, True))
-        self.assertEqual(fixed.BOARDS['上市'].full_year, False)
+        self.assertEqual((board.name, board.needs_full_year, fixed.BOARDS['上市'].needs_full_year), ('上櫃', True, False))
 
 
 class StockSignalsAlgorithmVersionTests(unittest.TestCase):

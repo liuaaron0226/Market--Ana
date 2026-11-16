@@ -882,7 +882,8 @@ def otc_margin_backfill(root: Path, since: str, until: str, *, get: Callable | N
     """上櫃融資維持率（估）的回補（10 票；要本人同意才跑）：since～until 之間上櫃行情庫的每個交易日，
     缺的上櫃融資原件（只有融資融券那一份，不抓借券）逐日補回 data/otc-credit/margin，再跟進長期保存區。
     和每日抓取同一個網址、同一種存法與停下規則；請求之間等 5 秒，一年約 250 個請求、約 21 分鐘。"""
-    days = [date_text for date_text in _otc_trading_days(root, until, 100_000) if date_text >= since]
+    import margin_history
+    days = [date_text for date_text in margin_history.otc_trading_days(root) if since <= date_text <= until]
     result = _fetch_otc_credit(root, days, {"margin": OTC_CREDIT_SOURCES["margin"]}, get, sleep)
     return {**result, "margin_history": _keep_otc_margin_history(root)}
 

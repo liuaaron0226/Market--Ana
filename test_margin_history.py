@@ -571,13 +571,18 @@ class OtcStoreTest(unittest.TestCase):
         otc_fetch(self.root, "20251105", otc_official("20251105", total_thousand=None))  # 沒有全市場融資金
         otc_fetch(self.root, "20251106", otc_official("20251106", stat="error"))
         otc_fetch(self.root, "20251107").write_text("壞掉", encoding="utf-8")
+        # 估算要讀的欄位（資買、資賣、現償、資餘額）少一欄：存進來就不再改寫，之後每天的重播都會壞，所以不收。
+        renamed = otc_official("20251110")
+        renamed["tables"][0]["fields"] = [("現金償還" if name == "現償" else name) for name in OTC_FIELDS]
+        otc_fetch(self.root, "20251110", renamed)
         report = mh.keep_up_otc(self.root)
         self.assertEqual(report["stored"], [])
         self.assertEqual(report["skipped"], [{"day": "20251103", "reason": "官方回應的日期和檔名不符"},
                                              {"day": "20251104", "reason": "沒有個股融資明細"},
                                              {"day": "20251105", "reason": "沒有全市場融資金額"},
                                              {"day": "20251106", "reason": "官方回應是查無資料"},
-                                             {"day": "20251107", "reason": "官方回應是查無資料"}])
+                                             {"day": "20251107", "reason": "官方回應是查無資料"},
+                                             {"day": "20251110", "reason": "欄位跟預期不同（少了 現償）"}])
         self.assertFalse((self.root / "data/margin-history/otc-raw").exists())
 
     def test_price_summary_keeps_stocks_and_etfs_from_the_first_stored_margin_day_on(self) -> None:

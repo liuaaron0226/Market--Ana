@@ -14,8 +14,9 @@ data/margin-history：個股融資原件加同一天的行情摘要）全部重�
 重播不存中間狀態，同樣的原件重跑結果相同。要改這幾個數字或核對門檻先問本人。
 
 上櫃（10 票）用同一種估法：讀櫃買「上櫃股票融資融券餘額」的原件（長期保存區的 otc-raw／otc-prices），對櫃買表尾
-公布的上櫃全市場融資金。起點日期和上市相同；起點係數另外求（讓起點那天的估計總額等於櫃買公布的數字）；
-混合權重、融資成數、門檻沿用上市的。從起點累積不滿一年不給（起點之前就有的餘額沒有來歷，要一年才換手得夠）。
+公布的上櫃全市場融資金。起點日期和上市相同；起點係數另外求（讓起點那天的估計總額等於櫃買公布的數字，推導見
+.scratch/stock-signals/otc-margin/seed_scale.py）；混合權重、融資成數、門檻沿用上市的（回補後看上櫃的每日差距分布，
+再請本人確認）。從起點累積不滿一年不給（起點之前就有的餘額沒有來歷，要一年才換手得夠）。
 沒處理的情況：個別股票被調降融資成數、股票股利、分割、減資（起點之後有股本變動的那一檔不給）；
 現金股利不調成本（除息後借的錢沒變）。
 """
@@ -32,7 +33,7 @@ BLEND_WEIGHT = 0.5508671333927683      # 每日對帳用的混合權重：高成
 LOAN_RATIO = 0.6                       # 融資成數六成
 CHECK_THRESHOLD_PCT = 8.0              # 估計的全市場融資金額和官方差超過這麼多（%），當天所有股票都不給（本人 2026-11-16 定案 8%）
 MAX_LAG_DAYS = 1                       # 融資原件最多可以比行情晚幾個交易日（官方晚上才公布，正常是晚一天）
-OTC_START_DATE = '2025-11-03'          # 上櫃起點：和上市同一天（10 票回補一年櫃買原件的第一天）
+OTC_START_DATE = '2025-11-03'          # 上櫃起點：和上市同一天（本人 2026-11-17 選「回補一年」，回補的第一天）
 OTC_SEED_SCALE = 0.9311973138947734     # 上櫃起點係數：讓 2025-11-03 的估計總額等於櫃買公布的上櫃融資金 1,111.7 億元（10 票求出）
 
 # 重播結果的快取：{(資料根目錄, 用到的融資原件日子, 用到的行情摘要日子): (結果, 例外)}。建置時每一檔股票都會問一次，
@@ -158,26 +159,26 @@ def replay(raw: dict[str, Path], prices: dict[str, Path], *, reader: Callable = 
         yield day, positions, unpriced, official
 
 
-def market_total(positions: dict[str, Position], blend_weight: float = BLEND_WEIGHT) -> float:
+def market_total(positions: dict[str, Position]) -> float:
     """每日對帳用：兩個成本用固定權重合成一個，加總成估計的全市場融資金額（張 × 1,000 股 × 成本 × 融資成數）。"""
-    return sum(p.balance * 1000 * (blend_weight * p.high_cost + (1 - blend_weight) * p.low_cost) * LOAN_RATIO
+    return sum(p.balance * 1000 * (BLEND_WEIGHT * p.high_cost + (1 - BLEND_WEIGHT) * p.low_cost) * LOAN_RATIO
                for p in positions.values())
 
 
 class Board(NamedTuple):
-    """一個市場的估法設定：長期保存區的兩種檔、起點、起點係數、混合權重、讀原件的方法、要不要等滿一年。"""
+    """一個市場的估法設定：長期保存區的兩種檔、起點、起點係數、讀原件的方法、從起點累積滿一年才給。"""
+    name: str
     raw: str
     prices: str
     start: str
     seed_scale: float
-    blend_weight: float
     reader: Callable
-    full_year: bool
+    needs_full_year: bool
 
 
 BOARDS = {
-    '上市': Board('raw', 'prices', START_DATE, SEED_SCALE, BLEND_WEIGHT, _read_margin, False),
-    '上櫃': Board('otc-raw', 'otc-prices', OTC_START_DATE, OTC_SEED_SCALE, BLEND_WEIGHT, read_otc_margin, True),
+    '上市': Board('上市', 'raw', 'prices', START_DATE, SEED_SCALE, _read_margin, False),
+    '上櫃': Board('上櫃', 'otc-raw', 'otc-prices', OTC_START_DATE, OTC_SEED_SCALE, read_otc_margin, True),
 }
 
 
@@ -242,14 +243,14 @@ def _estimate_from(raw: dict[str, Path], prices: dict[str, Path], board: Board =
     if behind > MAX_LAG_DAYS:
         return _check_result('stale', data_date, f'個股融資原件停在 {data_date}，比行情晚 {behind} 個交易日'), {}
     full_year = _one_year_after(board.start)
-    if board.full_year and data_date < full_year:
-        return _check_result('too_short', data_date, f'上櫃融資原件從 {board.start} 起累積到 {data_date}，'
+    if board.needs_full_year and data_date < full_year:
+        return _check_result('too_short', data_date, f'{board.name}融資原件從 {board.start} 起累積到 {data_date}，'
                              f'要到 {full_year} 才滿一年'), {}
     for _, positions, unpriced, official in replay(raw, prices, reader=board.reader, seed_scale=board.seed_scale):
         pass   # 只要最後一天（資料日）的結果
     if not official:
         return _check_result('no_official', data_date, f'{data_date} 的原件沒有官方的全市場融資金額'), {}
-    estimated = market_total(positions, board.blend_weight)
+    estimated = market_total(positions)
     gap_pct = (estimated / official - 1) * 100
     figures = {'gap_pct': round(gap_pct, 2) + 0.0, 'estimated': round(estimated), 'official': round(official)}
     if abs(gap_pct) > CHECK_THRESHOLD_PCT:
