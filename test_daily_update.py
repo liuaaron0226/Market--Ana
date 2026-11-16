@@ -627,6 +627,7 @@ class BuildAndDeployWiringTest(unittest.TestCase):
 
     def _build_dist_with_market(self, market_fails: bool, last_pack: bool):
         """build_dist 跑一次：market_pack_daily 依參數失敗或成功；last_pack 決定有沒有上一版大盤資料包。"""
+        self.status_saw = []
         steps = {s.name: s for s in du.real_steps()}
         ctx = self.ctx()
         ctx.outputs["build_seed"] = {"seed_dir": str(ctx.work_dir / "seed")}
@@ -645,14 +646,53 @@ class BuildAndDeployWiringTest(unittest.TestCase):
                 out = Path(args[args.index("--out") + 1])
                 out.mkdir(parents=True, exist_ok=True)
                 (out / "analysis-data.js").write_text("new", encoding="utf-8")
+                report = {"data_date": "2026-11-09", "detail_check": self.CHIP_DETAIL_FAILED}
+                stdout = '{"days": 20}\n' + json.dumps(report, ensure_ascii=False) + "\n"
+                return {"cmd": joined, "_stdout": stdout}
             return {"cmd": joined}
         with unittest.mock.patch.object(du, "_sh", fake_sh), \
                 unittest.mock.patch.object(du, "LAST_MARKET_DIR", last_dir), \
                 unittest.mock.patch.object(du, "_install_stock_pack", lambda src: {}), \
-                unittest.mock.patch.object(du, "_write_status_for_build", lambda ctx: {}):
+                unittest.mock.patch.object(du, "_write_status_for_build",
+                                           lambda ctx: self.status_saw.append(ctx.outputs.get("_chip_detail_check"))):
             report = steps["build_dist"].fn(ctx)
         build = [c for c in recorded if any(str(a).endswith("build.mjs") for a in c)]
         return report, build, last_dir
+
+    CHIP_DETAIL_FAILED = {"status": "failed", "data_date": "2026-11-09",
+                          "reason": "外資：2026-11-09 的名單是空的、缺 2026-11-09 的每日收盤行情原件"}
+
+    def test_chip_detail_check_reaches_the_site_status_from_a_fresh_market_pack(self) -> None:
+        # 11-17 本人回報首頁籌碼明細連續幾天是空的、沒有任何檢查擋下：大盤包的檢查結果要跟著寫進站台狀態
+        report, _, _ = self._build_dist_with_market(market_fails=False, last_pack=True)
+        self.assertEqual(report["chip_detail"], self.CHIP_DETAIL_FAILED)
+        self.assertEqual(self.status_saw, [self.CHIP_DETAIL_FAILED])
+
+    def test_chip_detail_check_fails_when_the_market_pack_falls_back_to_yesterday(self) -> None:
+        report, _, _ = self._build_dist_with_market(market_fails=True, last_pack=True)
+        self.assertEqual(report["chip_detail"]["status"], "failed")
+        self.assertIn("上一版", report["chip_detail"]["reason"])
+
+    def test_site_status_shows_the_chip_detail_check_next_to_the_margin_check(self) -> None:
+        target = Path(self.tmp.name) / "cloud"
+        target.mkdir()
+        steps = {s.name: s for s in du.real_steps()}
+        ctx = self.ctx()
+        self._seed_with_margin_check(ctx, self.MARGIN_CHECK)
+        ctx.outputs["build_seed"] = steps["build_seed"].fn(ctx)
+        ctx.outputs["_chip_detail_check"] = self.CHIP_DETAIL_FAILED
+        with unittest.mock.patch.object(du, "CLOUD", target):
+            du._write_status_for_build(ctx)
+        checks = json.loads((target / ".data-status.json").read_text(encoding="utf-8"))["checks"]
+        self.assertEqual(checks["chip_detail"], self.CHIP_DETAIL_FAILED)
+        self.assertEqual(checks["margin_maintenance"]["status"], "over_threshold")
+        # 只重新部署程式時站台狀態照執行紀錄寫：籌碼名單那一項也要跟著
+        success = {"data_date": "2026-11-09", "status": "success", "finished_at": "t1",
+                   "steps": [{"name": "build_seed", "status": "ok", "output": ctx.outputs["build_seed"]},
+                             {"name": "build_dist", "status": "ok", "output": {"chip_detail": self.CHIP_DETAIL_FAILED}}]}
+        log_dir = Path(self.tmp.name) / "log"
+        log_dir.mkdir()
+        self.assertEqual(du.write_status(log_dir, success)["checks"], checks)
 
     def test_build_dist_falls_back_to_last_market_pack_when_official_month_file_lags(self) -> None:
         # 11-09 Actions 試跑：證交所成交金額月檔晚於個股資料公布，大盤頁無法重建。
