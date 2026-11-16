@@ -1273,6 +1273,26 @@ def stock(page: Page, base: str, tag: str, mobile: bool) -> None:
         check(f"{tag}：換成板之後沒有橫向捲動", no_overflow(page))
     step(f"{tag}：看盤桌（桌面與板）", desk)
 
+    def momentum() -> None:
+        """五塊新功能 06：「重點」三句下面一張漲停動能的板；按住整張板壓下去、浮出全部股票平均，放開收回。"""
+        page.locator("#stockFactsBlocks").scroll_into_view_if_needed()
+        board = page.locator("#stockFactsBlocks .ss-momentum")
+        board.wait_for(state="visible")
+        page.wait_for_function("document.querySelector('#stockFactsBlocks .ss-momentum').classList.contains('is-in')", timeout=5000)
+        check(f"{tag}：「重點」裡有漲停動能那張板，給輔助工具讀的文字有名稱、分數、歷史比例、全部平均",
+              board.count() == 1 and all(part in (board.get_attribute("aria-label") or "") for part in ("漲停動能 0", "0.4%", "全部股票平均 1.7%")), board.get_attribute("aria-label"))
+        check(f"{tag}：板上沒有「漲停分數」字樣、沒有補充說明", "漲停分數" not in board.inner_text() and board.locator("p, small").count() == 0, board.inner_text())
+        box = board.bounding_box()
+        hold = Hold(page, mobile)
+        hold.down(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+        page.wait_for_timeout(250)
+        held = page.evaluate("[document.querySelector('.ss-momentum').classList.contains('is-held'), getComputedStyle(document.querySelector('.ss-tip')).opacity]")
+        hold.up()
+        check(f"{tag}：按住漲停動能整張板壓下去，浮出全部股票平均", held == [True, "1"], held)
+        page.wait_for_function("!document.querySelector('.ss-momentum').classList.contains('is-held')", timeout=4000)
+        check(f"{tag}：放開之後隔一下收回、沒有橫向捲動", no_overflow(page))
+    step(f"{tag}：漲停動能", momentum)
+
     def levels() -> None:
         open_stock_cat(page, "levelsPanel")
         ladder = page.locator("#ladder .lad b").all_inner_texts()

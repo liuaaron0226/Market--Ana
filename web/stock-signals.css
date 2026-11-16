@@ -1,0 +1,97 @@
+/* 個股頁五塊新功能的畫面（規格 .scratch/stock-signals/spec.md〈畫面〉；樣子照本人定案的樣品 q3f-1、q4n-2）。
+   每一塊一張第 1 層的板（陰影、圓角、厚度只引用 bold.css 的深度變數）；光條在一條凹下的槽裡。
+   光條是液態玻璃：半透明的有色玻璃、邊緣一圈亮、裡面一顆會慢慢漂的高光、底下透出一點同色的光。沒有紋路。
+   漸層、半透明與高光只用在光條上，不用在板、文字或大面積的底。 */
+
+.ss {
+  /* 四種色調（規格〈畫面〉）：金、紅（強於大盤）、綠（落後大盤）、金→銅→紅的漸層（漲停動能）。兩種主題同一組，取自定案樣品。 */
+  --ss-ramp-a: #e8c35c; --ss-ramp-b: #d27d3c; --ss-ramp-c: #d43c36;
+  --ss-gold-a: #ecc867; --ss-gold-b: #b9892b;
+  --ss-up-a: #ef6a55; --ss-up-b: #c52c30;
+  --ss-down-a: #3fd0a0; --ss-down-b: #118a62;
+  display: grid; gap: 14px; margin-top: 16px;
+}
+
+/* ---------- 板：進場時浮上來 ---------- */
+.ss-board {
+  display: block; width: 100%; margin: 0; padding: 14px 16px 16px; border: 0; border-radius: var(--r-slab);
+  background: var(--slab); box-shadow: var(--slab-shadow); color: var(--ink); font: inherit; text-align: left;
+  opacity: 0; transform: translateY(14px);
+  transition: opacity 500ms var(--ease-depth), transform 500ms var(--ease-depth), box-shadow var(--t-press) linear;
+}
+.ss-board.is-in { opacity: 1; transform: none; }
+.ss-board > span { display: block; }
+.ss-head { display: flex !important; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 12px; font-size: 13px; }
+.ss-name { color: var(--dim); font-weight: 600; }
+.ss-read { color: var(--dim); }
+.ss-read b { font: 500 15px var(--mono); font-variant-numeric: tabular-nums; }
+
+/* ---------- 漲停動能：按住整張板壓下去，「平均」上方浮出全部股票平均 ---------- */
+.ss-momentum { cursor: pointer; position: relative; -webkit-tap-highlight-color: transparent; touch-action: pan-y; -webkit-user-select: none; user-select: none; }
+.ss-momentum.is-held { transform: translateY(calc(var(--slab-thick) - 1px)); box-shadow: var(--slab-shadow-press); transition-duration: var(--t-press); }
+.ss-momentum:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.ss-lu { display: flex !important; align-items: center; gap: 14px; }
+
+/* 分數：像里程表一樣逐位滾到位；沒有底框 */
+.ss-odo { display: flex; flex: none; min-width: 40px; font: 500 32px/1 var(--mono); }
+.ss-odo > span { display: block; width: .62em; height: 1.19em; overflow: hidden; }
+.ss-odo i { display: block; font-style: normal; text-align: center; transition: transform 1500ms var(--ease-depth); }
+.ss-odo i b { display: block; height: 1.19em; line-height: 1.19em; font-weight: 500; }
+/* 一位一格 1.19em 高（stock-signals.js 的 DIGIT_EM 要一樣） */
+
+.ss-bar { flex: 1; min-width: 0; position: relative; padding: 11px 0 18px; }
+.ss-groove { display: block; height: 22px; position: relative; border-radius: 11px; background: var(--well); box-shadow: var(--well-shadow); }
+.ss-clip {
+  position: absolute; inset: 4px; border-radius: 7px; overflow: hidden;
+  clip-path: inset(0 100% 0 0 round 7px); transition: clip-path 1500ms var(--ease-depth);
+}
+.is-in .ss-clip { clip-path: inset(0 calc(100% - max(14px, 100% * var(--fill))) 0 0 round 7px); }
+.ss-avg {
+  position: absolute; top: 37px; width: 0; display: flex; flex-direction: column; align-items: center;
+  color: var(--faint); font-size: 10px; white-space: nowrap;
+}
+.ss-avg::before { content: ""; width: 0; height: 0; border: 4px solid transparent; border-top: 0; border-bottom: 5px solid var(--faint); }
+.ss-tip {
+  position: absolute; bottom: calc(100% - 4px); z-index: 2; padding: 6px 10px; border-radius: var(--r-key);
+  background: var(--key); box-shadow: var(--key-shadow-hover); color: var(--dim); font-size: 12px; white-space: nowrap;
+  pointer-events: none; opacity: 0; transform: translate(-50%, 8px);
+  transition: opacity 200ms var(--ease-depth), transform var(--t-lift) var(--ease-depth);
+}
+.ss-tip b { font: 500 12px var(--mono); color: var(--ink); }
+.is-held .ss-tip { opacity: 1; transform: translate(-50%, 0); }
+
+/* ---------- 液態玻璃 ---------- */
+@property --ex { syntax: "<percentage>"; inherits: false; initial-value: 30%; }
+.ss-glass {
+  --ex: var(--e1, 30%);
+  position: absolute; inset: 0; display: block; border-radius: inherit;
+  background-image:
+    radial-gradient(16% 62% at var(--ex) 24%, rgb(255 255 255 / var(--hi, .7)) 0%, transparent 72%),
+    radial-gradient(38% 80% at calc(var(--ex) + 30%) 118%, rgb(255 255 255 / .34) 0%, transparent 72%),
+    linear-gradient(180deg, rgb(255 255 255 / .36) 0%, rgb(255 255 255 / .05) 40%, transparent 62%, rgb(255 255 255 / .2) 100%),
+    linear-gradient(90deg, color-mix(in srgb, var(--a) 62%, transparent), color-mix(in srgb, var(--b) 82%, transparent));
+  box-shadow: inset 0 0 0 .5px rgb(255 255 255 / 38%), inset 0 1px 0 rgb(255 255 255 / 55%), inset 0 -3px 6px -1px color-mix(in srgb, var(--a) 60%, transparent);
+}
+.ss-glass[data-tone="gold"] { --a: var(--ss-gold-a); --b: var(--ss-gold-b); }
+.ss-glass[data-tone="up"] { --a: var(--ss-up-a); --b: var(--ss-up-b); }
+.ss-glass[data-tone="down"] { --a: var(--ss-down-a); --b: var(--ss-down-b); }
+.ss-glass[data-tone="ramp"] {
+  --a: var(--ss-ramp-a); --b: var(--ss-ramp-c);
+  background-image:
+    radial-gradient(10% 62% at var(--ex) 24%, rgb(255 255 255 / var(--hi, .8)) 0%, transparent 72%),
+    linear-gradient(180deg, rgb(255 255 255 / .36) 0%, rgb(255 255 255 / .05) 40%, transparent 62%, rgb(255 255 255 / .2) 100%),
+    linear-gradient(90deg, color-mix(in srgb, var(--ss-ramp-a) 66%, transparent) 0%, color-mix(in srgb, var(--ss-ramp-b) 76%, transparent) 50%, color-mix(in srgb, var(--ss-ramp-c) 84%, transparent) 100%);
+}
+/* 底下透出一點同色的光 */
+.ss-clip:has(> .ss-glass) { filter: drop-shadow(0 3px 5px color-mix(in srgb, var(--ss-ramp-b) 45%, transparent)); }
+/* 高光慢慢漂：只在瀏覽器能平滑地動自訂屬性時（程式偵測到 CSS.registerProperty 才加 .ss-drift），不然維持靜止的高光 */
+.ss-drift .is-in .ss-glass { animation: ss-drift var(--dt, 8s) ease-in-out var(--dd, 0s) infinite alternate; }
+@keyframes ss-drift { from { --ex: var(--e1, 10%); } to { --ex: var(--e2, 80%); } }
+
+@media (max-width: 860px) {
+  .ss { margin-top: 14px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ss-board, .ss-odo i, .ss-clip, .ss-tip { transition: none !important; }
+  .ss-glass { animation: none !important; }
+}

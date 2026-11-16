@@ -10,7 +10,7 @@
   // 消息那一塊的公告清單：第一次按「消息」才讀，同一檔讀過就不再讀（一次一頁，不會變）。
   const NEWS_FIRST = 5;
   const newsCache = new Map();
-  const state = { key: '', code: '', block: 'summary' };
+  const state = { key: '', code: '', block: 'summary', signals: null };
 
   const el = (tag, className, text) => {
     const node = document.createElement(tag);
@@ -361,7 +361,7 @@
   const PANELS = { summary: summaryPanel, institutional: institutionalPanel, credit: creditPanel, fundamentals: fundamentalsPanel,
     news: newsPanel, technical: technicalPanel };
 
-  function renderBlocks(facts, code) {
+  function renderBlocks(facts, code, signals) {
     const host = document.getElementById('stockFactsBlocks');
     if (!host) return;
     // 防呆：清單裡的每一塊都要有對應的內容才出現（「消息」的內容是產業別，公告清單另外讀）。
@@ -376,11 +376,12 @@
     }
     // 盤中每幾秒會重畫一次頁面；內容沒變就不重建，按下的那一塊也不跳回「重點」。
     // 比對整份 facts（不只資料日）：盤後法人資料日更新、K 線資料日不變時也要換新內容。
-    const key = `${code}|${JSON.stringify(facts)}`;
+    const key = `${code}|${JSON.stringify(facts)}|${JSON.stringify(signals ?? null)}`;
     if (key === state.key && host.childElementCount) return;
     if (code !== state.code || !blocks.includes(state.block)) state.block = blocks[0];  // 換一檔就回到「重點」
     state.key = key;
     state.code = code;
+    state.signals = signals ?? null;
 
     const tabs = el('div', 'sf-tabs');
     tabs.setAttribute('role', 'group');
@@ -394,6 +395,8 @@
       } catch (_) {
         panel.replaceChildren();
       }
+      // 五塊新功能的板（stock-signals.js，獨立檔）：接在這一塊原有內容的後面；它出錯只讓板不出現
+      try { window.StockSignals?.fill(panel, name, state.signals, code); } catch (_) { /* 板不出現，這一塊照常 */ }
     };
     for (const name of blocks) {
       const button = el('button', 'sf-tab', TABS[name]);
@@ -415,7 +418,7 @@
       if (host) { host.hidden = true; host.replaceChildren(); }
     }
     try {
-      renderBlocks(result?.facts, result?.code || '');
+      renderBlocks(result?.facts, result?.code || '', result?.signals);
     } catch (_) {
       const host = document.getElementById('stockFactsBlocks');
       if (host) { host.hidden = true; host.replaceChildren(); }
