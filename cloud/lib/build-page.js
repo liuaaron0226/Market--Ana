@@ -2,7 +2,7 @@
 // U2（11-09）：web/ 設計改版後 script 標籤帶版本 query（例如 kchart.js?v=20261109-ux1），
 // 比對改用 regex，允許 ?query，但檔名必須完全相同（kchart.js.bak 之類不算）。
 export const WEB_FILES = [
-  "minimal.html", "minimal.css", "minimal.js", "kchart.js", "chart-drawings.js", "chart-studies.js", "chart-studies.css",
+  "minimal.html", "minimal.css", "minimal.js", "kchart.js", "chart-drawings.js", "drawing-sync.js", "chart-studies.js", "chart-studies.css",
   "stock.html", "stock.css", "stock.js", "intraday.js",
   // claude-60 設計改版（11-09）新增的資產
   "bold.css", "home.css", "panel.css", "motion.js", "home-motion.js", "period-switch.js",

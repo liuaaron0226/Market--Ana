@@ -1,4 +1,4 @@
-/* K 線圖的畫線層（個股頁的日／週／月 K）。由 KChart 建立；頁面只透過 KChart 的 setTool／setDrawings／
+/* K 線圖的畫線層（個股頁的日／週／月 K）。由 KChart 建立；頁面只透過 KChart 的 setTool／setDrawings／setUnsavedDrawings／
    deleteSelectedDrawing／cancelDrawing 與 drawings.onChange／onTool／onSelect 往來，
    座標換算、命中判定、選取與拖動都封在這裡。
    種類：水平線（一個錨點，點一下）、趨勢線、射線、矩形與黃金分割（兩個錨點，點兩下；第一下之後有預覽；射線一律往右延伸）、
@@ -14,6 +14,7 @@
   const DRAG_START_PX = 3;                     // 按住後移動超過這個距離才算拖動（與圖表平移的門檻相同）
   const HANDLE_R = 4.5;
   const MIN_SPAN_PX = 4;                       // 兩點在畫面上至少要隔這麼遠才成一條線（連點兩下不會畫出看不見的線）
+  const UNSAVED_OPACITY = .45;                 // 還沒存上去的線畫得比較淡（濃淡是原本的幾成）
   const LABEL_H = 14;                          // 線旁標示（墊底色的那一塊）的高度
   const MAX_PRICE = 10000000;                  // 與儲存端相同的價格上限
   const LABEL_FONT = '500 11px "JetBrains Mono",Consolas,monospace';
@@ -433,6 +434,7 @@
       this.selectedId = null;   // 選取記的是識別碼：重畫、換週期、重新載入同一組線都不會選錯條
       this.move = null;         // 正在拖動的那一條：{ drawing, anchors（拖動前）, x, y（起點）, started, grip（只拖哪個把手；null＝整條） }
       this.swallowTap = false;  // 這次按下去是用來確定輸入框的：放開時不再當成一次點擊（圖表每次都先叫 grab、放開才叫 tap）
+      this.unsaved = new Set(); // 還沒存上去的線（識別碼）：畫得比較淡
       this.editing = null;      // 開著的文字輸入框：{ drawing（正在改的那一則；null＝新的）, anchor（新的要寫在哪）, box（noteEditor 給的那個表單） }
       // 手指點一下打開輸入框之後，瀏覽器還會補送滑鼠事件，其中「按下」的預設動作是把焦點給圖表——
       // 輸入框會馬上失去焦點而被收掉。輸入框開著時擋下這個預設動作。（滑鼠是先按下才開輸入框，不受影響。）
@@ -475,6 +477,9 @@
       }
       if (!this.selected) this.select(null);
     }
+    // 頁面告訴畫線層哪幾條還沒存上去（存檔失敗、等著補存或被拒絕的）。
+    markUnsaved(ids) { this.unsaved = new Set(ids); }
+    opacityOf(drawing) { return this.unsaved.has(drawing.id) ? UNSAVED_OPACITY : 1; }
     // 圖表換了資料（週期可能跟著換）：切到不能畫的週期時，選到一半的工具、拖到一半與選取的線一併放下。
     dataChanged() { if (!this.enabled) this.cancel(); }
     // 放下工具並取消選取（Esc）；拖到一半的線回到原位，寫到一半、改到一半的文字不留。
@@ -667,7 +672,7 @@
       };
       x.save();
       x.strokeStyle = x.fillStyle = css('--draw', DRAW_FALLBACK);
-      shown.forEach(({ drawing, at }) => paint(drawing.kind, at, drawing.id === this.selectedId ? 2.2 : 1.4, 1, []));
+      shown.forEach(({ drawing, at }) => paint(drawing.kind, at, drawing.id === this.selectedId ? 2.2 : 1.4, this.opacityOf(drawing), []));
       // 預覽：虛線、淡一點，和已經畫好的分得開。
       if (preview) paint(this.tool, preview, 1.4, .85, [5, 4]);
       x.restore();
@@ -692,7 +697,7 @@
         x.font = shape.font || LABEL_FONT;
         shape.labels(drawing, at, g, widthOf).forEach(({ text, x: left, cy, w = widthOf(text), h = LABEL_H }) => {
           x.globalAlpha = .86; x.fillStyle = paper; x.fillRect(left, cy - h / 2, w, h);
-          x.globalAlpha = 1; x.fillStyle = color; x.fillText(text, left + 4, cy + .5);
+          x.globalAlpha = this.opacityOf(drawing); x.fillStyle = color; x.fillText(text, left + 4, cy + .5);
         });
       });
       // 選取把手與起點記號：底色實心、畫線色描邊的小圓。文字標註是在整塊外面描一圈。

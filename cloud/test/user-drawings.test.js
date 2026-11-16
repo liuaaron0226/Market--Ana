@@ -459,3 +459,47 @@ test("文字的其他不收內容：行分隔字元（U+2028、U+2029、U+0085�
   assert.equal((await put(family)).status, 201);
   assert.deepEqual((await listOf("2330")).map((item) => item.text), [family]);
 });
+
+// ---------- 票 07：補存要靠的回應 ----------
+// 用戶端只看狀態碼決定要不要再送：4xx（除了 401、408、429）是「再送也不會過」，其餘是「等一下再送」。
+
+test("寫入的同時那一條被別的操作刪掉：回 503 請用戶端再送一次（不是 409——409 只留給超過上限，那是再送也不會過的）", async () => {
+  // 模擬寫入之後、讀回之前被另一個裝置刪掉：讀回那一句查不到東西。
+  const prepare = env.DB.prepare;
+  let raced = false;
+  env.DB.prepare = (sql) => {
+    const statement = prepare(sql);
+    if (raced || !/^SELECT id, kind/.test(sql) || /ORDER BY/.test(sql)) return statement;
+    return { bind: () => ({ first: async () => { raced = true; await env.DB._raw.exec("DELETE FROM user_drawings"); return null; } }) };
+  };
+  const lost = await req("/api/drawings/2330/line-0001", { method: "PUT", body: hline(1045) });
+  assert.equal(raced, true);
+  assert.equal(lost.status, 503);
+  const again = await req("/api/drawings/2330/line-0001", { method: "PUT", body: hline(1045) });
+  assert.equal(again.status, 201, "再送一次就存得住");
+  assert.deepEqual((await listOf("2330")).map((item) => item.id), ["line-0001"]);
+});
+
+test("被限速時告訴用戶端要等幾秒（到這一分鐘結束），寫入與刪除都不生效；等滿之後同一筆重送就存得住，重送幾次都只有一條", async () => {
+  let now = Date.parse("2026-11-14T06:00:20Z");
+  deps.now = () => now;
+  assert.equal((await req("/api/drawings/2330/line-0000", { method: "PUT", body: hline(1000) })).status, 201);
+  for (let index = 0; index < 59; index += 1) assert.equal((await req("/api/drawings/2330")).status, 200);
+
+  const limited = await req("/api/drawings/2330/line-0001", { method: "PUT", body: hline(1045) });
+  assert.equal(limited.status, 429);
+  assert.equal(limited.headers.get("retry-after"), "40", "06:00:20 → 這一分鐘還有 40 秒");
+  assert.equal((await req("/api/drawings/2330/line-0000", { method: "DELETE" })).status, 429);
+
+  now += 39_000;
+  const early = await req("/api/drawings/2330/line-0001", { method: "PUT", body: hline(1045) });
+  assert.deepEqual([early.status, early.headers.get("retry-after")], [429, "1"], "提早重送還是被擋");
+
+  now += 1000;
+  assert.deepEqual((await listOf("2330")).map((item) => item.id), ["line-0000"], "被擋下的寫入與刪除都沒有生效");
+  assert.equal((await req("/api/drawings/2330/line-0001", { method: "PUT", body: hline(1045) })).status, 201);
+  assert.equal((await req("/api/drawings/2330/line-0001", { method: "PUT", body: hline(1045) })).status, 200, "回應沒收到而重送：覆寫同一條");
+  assert.deepEqual((await listOf("2330")).map((item) => [item.id, item.anchors[0].price]), [["line-0000", 1000], ["line-0001", 1045]]);
+  for (const status of [204, 204]) assert.equal((await req("/api/drawings/2330/line-0000", { method: "DELETE" })).status, status, "刪除重送也不報錯");
+  assert.deepEqual((await listOf("2330")).map((item) => item.id), ["line-0001"]);
+});

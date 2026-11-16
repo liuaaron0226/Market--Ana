@@ -9,7 +9,7 @@ import vm from "node:vm";
 const WEB = new URL("../../web/", import.meta.url);
 const DRAW = "--draw";
 
-function load() {
+function load(files = ["chart-drawings.js", "kchart.js"]) {
   const strokes = [], texts = [], fills = [];
   let path = [], arcs = [];
   const context2d = new Proxy({}, {
@@ -21,7 +21,7 @@ function load() {
       if (name === "setLineDash") return dash => { target.dash = dash; };
       if (name === "stroke") return () => { strokes.push({ color: target.strokeStyle, points: path.slice(), arcs: arcs.slice(), alpha: target.globalAlpha, dash: target.dash || [], width: target.lineWidth }); };
       if (name === "fillRect") return (x, y, width, height) => { fills.push({ color: target.fillStyle, alpha: target.globalAlpha, rect: [x, y, width, height] }); };
-      if (name === "fillText") return (text, x, y) => { texts.push({ text: String(text), x, y, color: target.fillStyle }); };
+      if (name === "fillText") return (text, x, y) => { texts.push({ text: String(text), x, y, color: target.fillStyle, alpha: target.globalAlpha }); };
       if (name in target) return target[name];
       return () => {};
     },
@@ -57,18 +57,22 @@ function load() {
     getContext() { return context2d; }
     contains() { return false; }
   }
+  // 視窗與文件各自記下掛上來的事件（連線恢復、分頁回到前景、要離開頁面），測試用 dispatch 送。
+  const page = new FakeElement(), root = new FakeElement();
   const sandbox = {
-    window: { devicePixelRatio: 1 },
-    document: { documentElement: new FakeElement(), createElement: tag => new FakeElement(tag), addEventListener() {} },
+    window: { devicePixelRatio: 1, addEventListener: (type, handler) => page.addEventListener(type, handler), dispatch: (type, init) => page.dispatch(type, init) },
+    document: { documentElement: new FakeElement(), createElement: tag => new FakeElement(tag), hidden: false,
+      addEventListener: (type, handler) => root.addEventListener(type, handler), dispatch: (type, init) => root.dispatch(type, init) },
     ResizeObserver: class { observe() {} },
     getComputedStyle: () => ({ getPropertyValue: name => name }),
+    AbortController,
     console,
   };
   vm.createContext(sandbox);
-  for (const file of ["chart-drawings.js", "kchart.js"]) {
+  for (const file of files) {
     vm.runInContext(readFileSync(new URL(file, WEB), "utf8"), sandbox, { filename: file });
   }
-  return { KChart: sandbox.window.KChart, FakeElement, strokes, texts, fills, window: sandbox.window };
+  return { KChart: sandbox.window.KChart, FakeElement, strokes, texts, fills, window: sandbox.window, document: sandbox.document };
 }
 
 // 80 根日 K，日期從 2026-01-01 起每天一根（第 n 根＝1 月 1 日後 n 天）。收盤都是 100，布林通道因此是一條平線。
@@ -81,13 +85,15 @@ function dailyCandles() {
   });
 }
 
-function createChart() {
-  const { KChart, FakeElement, strokes, texts, fills, window } = load();
+// files：要載入哪些檔；connect(window, document)：回傳一個函式，畫線每次變動時也叫它（接上存檔用）。
+function createChart({ files, connect } = {}) {
+  const { KChart, FakeElement, strokes, texts, fills, window, document } = load(files);
   const changes = [], tools = [], selections = [];
+  const also = connect ? connect(window, document) : () => {};
   const chart = new KChart(new FakeElement(), {
     macd: false, height: () => 340,
     drawings: {
-      onChange: change => changes.push(JSON.parse(JSON.stringify(change))), onTool: tool => tools.push(tool),
+      onChange: change => { changes.push(JSON.parse(JSON.stringify(change))); also(change); }, onTool: tool => tools.push(tool),
       onSelect: drawing => selections.push(drawing ? drawing.id : null),
     },
   });
@@ -123,7 +129,7 @@ function createChart() {
     input.value = text; input.dispatch("input");
     return end === "submit" ? form.dispatch("submit") : end ? input.dispatch(end) : null;
   };
-  return { chart, changes, tools, selections, strokes, texts, fills, reset, tap, drag, key, drawnLines, drawnLabels, drawnHandles, drawnFills, editor, write, window };
+  return { chart, changes, tools, selections, strokes, texts, fills, reset, tap, drag, key, drawnLines, drawnLabels, drawnHandles, drawnFills, editor, write, window, document };
 }
 
 const ID_RE = /^[A-Za-z0-9_-]{8,40}$/;
@@ -2533,4 +2539,489 @@ test("只有看不見的字元（零寬字元）不算內容：確定後不留�
   // 載入時也一樣：只有零寬字元的不畫。
   chart.setDrawings([{ id: "invisible-001", kind: "text", anchors: [{ date: "2026-02-28", price: 100 }], text: "​" }]);
   assert.deepEqual(notesOf(view), { texts: [], paper: [] });
+});
+
+// ---------- 票 07：儲存失敗時不白畫 ----------
+// 圖表接上存檔（drawing-sync.js），連線與時鐘都是假的：
+//   net.requests 是送出去的每一筆請求，各自用 ok(狀態碼, 標頭)／fail() 決定結果（不回應＝一直沒有回應）；
+//   net.sent() 是到目前為止送出的 [方法, 路徑, 內容]；clock.advance(毫秒) 讓時間往前走；
+//   statuses 是每次通知頁面的狀態 { unsaved: 還在等補存的變動數, failed: 被拒絕不再試的變動數, ids: 目前這一檔還沒存上去的線 }。
+function createSavingChart(code = "2330") {
+  const requests = [], timers = [], statuses = [];
+  let now = 0, sync = null;
+  const fetch = (path, init) => new Promise((resolve, reject) => {
+    requests.push({
+      method: init.method, path, body: init.body === undefined ? undefined : JSON.parse(init.body), signal: init.signal, keepalive: init.keepalive,
+      ok: (status = 200, headers = {}) => resolve({ ok: status >= 200 && status < 300, status, headers: { get: name => headers[name.toLowerCase()] ?? null } }),
+      fail: () => reject(new TypeError("Failed to fetch")),
+    });
+  });
+  const clock = {
+    advance(ms) {
+      const until = now + ms;
+      for (;;) {
+        const due = timers.filter(timer => timer.at <= until).sort((a, b) => a.at - b.at)[0];
+        if (!due) break;
+        timers.splice(timers.indexOf(due), 1); now = due.at; due.run();
+      }
+      now = until;
+    },
+  };
+  const view = createChart({
+    files: ["chart-drawings.js", "drawing-sync.js", "kchart.js"],
+    connect: window => {
+      sync = window.DrawingSync.create({
+        fetch, onStatus: status => statuses.push(JSON.parse(JSON.stringify(status))),
+        setTimeout: (run, ms) => { const timer = { at: now + ms, run }; timers.push(timer); return timer; },
+        clearTimeout: timer => { const index = timers.indexOf(timer); if (index >= 0) timers.splice(index, 1); },
+      });
+      sync.open(code);
+      return change => sync.record(change);
+    },
+  });
+  const settle = () => new Promise(resolve => setImmediate(resolve));   // 等回應被處理完
+  const net = { requests, sent: () => requests.map(({ method, path, body }) => body === undefined ? [method, path] : [method, path, body]) };
+  return { ...view, sync, net, clock, statuses, settle };
+}
+// 畫一條水平線：回傳它的識別碼。y=87 → 102.85、y=164 → 100、y=241 → 97.15。
+const drawLine = ({ chart, changes, tap }, y) => { chart.setTool("hline"); tap(150, y); return changes.at(-1).drawing.id; };
+const putLine = (id, price, code = "2330") => ["PUT", `/api/drawings/${code}/${id}`, { kind: "hline", anchors: [{ date: "2026-02-28", price }] }];
+
+test("畫一條線時連不上：線留在畫面上，通知頁面有一筆還沒存上去；兩秒後自動再送，存上去之後通知清空", async () => {
+  const { chart, changes, tap, drawnLines, net, clock, statuses, settle } = createSavingChart();
+  chart.setTool("hline");
+  tap(150, 87); // 2026-02-28、102.85（同第一個測試）
+  const id = changes[0].drawing.id, put = ["PUT", `/api/drawings/2330/${id}`, { kind: "hline", anchors: [{ date: "2026-02-28", price: 102.85 }] }];
+  assert.deepEqual(net.sent(), [put], "畫完就送");
+  assert.deepEqual(statuses, [], "還在送的時候不算沒存上去");
+
+  net.requests[0].fail();
+  await settle();
+  assert.deepEqual(drawnLines(), [[[4, 87.5], [326, 87.5]]], "線還在");
+  assert.deepEqual(statuses, [{ unsaved: 1, failed: 0, ids: [id] }]);
+
+  clock.advance(1999);
+  assert.equal(net.requests.length, 1, "還沒到再試的時間");
+  clock.advance(1);
+  assert.deepEqual(net.sent(), [put, put], "同一筆再送一次");
+  net.requests[1].ok(201);
+  await settle();
+  assert.deepEqual(statuses.at(-1), { unsaved: 0, failed: 0, ids: [] });
+  assert.deepEqual(drawnLines(), [[[4, 87.5], [326, 87.5]]]);
+  clock.advance(600000);
+  assert.equal(net.requests.length, 2, "存上去之後不再送");
+  assert.equal(net.requests[1].signal.aborted, false, "已經回來的那一筆不會事後被放棄");
+
+  const next = drawLine({ chart, changes, tap }, 164);
+  net.requests[2].ok(201);
+  await settle();
+  assert.deepEqual(net.sent().slice(2), [putLine(next, 100)]);
+  assert.equal(statuses.length, 2, "恢復之後照常存的不再通知有東西沒存");
+});
+
+test("還沒說是哪一檔之前的變動不存（不會送出沒有代號的請求）", async () => {
+  const requests = [];
+  const { chart, changes, tap, window } = createChart({
+    files: ["chart-drawings.js", "drawing-sync.js", "kchart.js"],
+    connect: window => {
+      const sync = window.DrawingSync.create({ fetch: (...sent) => { requests.push(sent); return new Promise(() => {}); }, setTimeout: () => 0, clearTimeout() {} });
+      return change => sync.record(change);
+    },
+  });
+  drawLine({ chart, changes, tap }, 87);
+  assert.equal(changes.length, 1);
+  assert.deepEqual(requests, []);
+  assert.equal(window.dispatch("beforeunload").prevented, false);
+});
+
+test("移動、改文字、刪除時連不上：畫面維持最後看到的樣子，這時才讀回來的雲端舊資料蓋不掉；恢復後照做的先後補存", async () => {
+  const view = createSavingChart();
+  const { chart, sync, tap, drag, write, drawnLines, net, clock, statuses, settle } = view;
+  // 100 → y=164；96 → 10 + 9.7/11.4×308 = 272；文字在 102.85（y=87）。
+  const cloud = [saved(100), saved(96, "saved-line-02"), savedNote("突破前高")];
+  chart.setDrawings(sync.merge(cloud));
+
+  tap(150, 164);
+  drag([150, 164], [150, 110]); // 往上 54 像素 → 100 + 54/308×11.4 = 102
+  net.requests[0].fail();
+  await settle();
+  tap(170, 87);
+  tap(170, 87);
+  write("假突破");
+  tap(150, 272);
+  assert.equal(chart.deleteSelectedDrawing(), true);
+  assert.equal(net.requests.length, 1, "還在等再試：後面的變動先排著");
+
+  // 畫面上的線與寫的字（水平線旁的價位標示不算）。
+  const shown = () => ({ lines: drawnLines(), texts: notesOf(view).texts.filter(([text]) => !/^[\d.,]+$/.test(text)) });
+  const last = { lines: [[[4, 110.5], [326, 110.5]]], texts: [["假突破", 157, 87.5]] };
+  assert.deepEqual(shown(), last);
+  assert.deepEqual(statuses.at(-1), { unsaved: 3, failed: 0, ids: ["saved-line-01", "saved-note-01"] });
+  chart.setDrawings(sync.merge(cloud));
+  assert.deepEqual(shown(), last, "雲端那一份還是舊的：以這次做的為準");
+
+  clock.advance(2000);
+  for (const status of [200, 200, 204]) { net.requests.at(-1).ok(status); await settle(); }
+  assert.deepEqual(net.sent().slice(1), [
+    ["PUT", "/api/drawings/2330/saved-line-01", { kind: "hline", anchors: [{ date: "2026-02-28", price: 102 }] }],
+    ["PUT", "/api/drawings/2330/saved-note-01", { kind: "text", anchors: [{ date: "2026-02-28", price: 102.85 }], text: "假突破" }],
+    ["DELETE", "/api/drawings/2330/saved-line-02"],
+  ]);
+  assert.deepEqual(statuses.at(-1), { unsaved: 0, failed: 0, ids: [] });
+  chart.setDrawings(sync.merge(cloud));
+  assert.deepEqual(shown(), last, "存完之後，稍早發出的讀取才回來也一樣");
+});
+
+test("連續好幾次都存不上去：再試的間隔是 2、4、8、16、30 秒，之後每 30 秒；同一條線改了好幾次只送最後的樣子，各條線照第一次變動的先後", async () => {
+  const view = createSavingChart();
+  const { tap, drag, net, clock, statuses, settle } = view;
+  const a = drawLine(view, 87);
+  net.requests[0].fail();
+  await settle();
+  const b = drawLine(view, 164);
+  tap(150, 164);
+  drag([150, 164], [150, 187]); // 還沒送出去過的新線再拖一下：100 − 23/308×11.4 = 99.15
+  tap(150, 87);
+  drag([150, 87], [150, 110]); // 102.85 − 23/308×11.4 = 102
+  drag([150, 110], [150, 133]); // 102 − 23/308×11.4 = 101.15
+  assert.deepEqual(statuses.at(-1), { unsaved: 2, failed: 0, ids: [a, b] }, "五次變動、兩條線：算兩筆");
+
+  for (const wait of [2000, 4000, 8000, 16000, 30000, 30000]) {
+    const before = net.requests.length;
+    clock.advance(wait - 1);
+    assert.equal(net.requests.length, before, `還沒滿 ${wait} 毫秒不送`);
+    clock.advance(1);
+    assert.equal(net.requests.length, before + 1, `滿 ${wait} 毫秒送一次`);
+    net.requests.at(-1).fail();
+    await settle();
+  }
+  clock.advance(30000);
+  net.requests.at(-1).ok(201);
+  await settle();
+  net.requests.at(-1).ok(201);
+  await settle();
+  assert.deepEqual(net.sent().slice(1, 7), Array(6).fill(putLine(a, 101.15)), "每次再試都只送排最前面那一條的最後樣子");
+  assert.deepEqual(net.sent().slice(7), [putLine(a, 101.15), putLine(b, 99.15)]);
+  assert.deepEqual(statuses.at(-1), { unsaved: 0, failed: 0, ids: [] });
+
+  // 存上去之後，下一次失敗重新從 2 秒算起。
+  const c = drawLine(view, 241);
+  net.requests.at(-1).fail();
+  await settle();
+  clock.advance(2000);
+  assert.deepEqual(net.sent().at(-1), putLine(c, 97.15));
+  assert.equal(net.requests.length, 11);
+});
+
+test("補存途中又改了同一條線：送出去的那一版存上去之後，再送一次最後的樣子，都存上去才算存完；途中刪掉的話接著送刪除", async () => {
+  const view = createSavingChart();
+  const { chart, tap, drag, net, clock, statuses, settle } = view;
+  const a = drawLine(view, 87);
+  net.requests[0].fail();
+  await settle();
+  clock.advance(2000); // 補存送出去了，還沒回來
+  tap(150, 87);
+  drag([150, 87], [150, 110]);
+  assert.equal(net.requests.length, 2, "一筆送完才送下一筆");
+  net.requests[1].ok(201);
+  await settle();
+  assert.deepEqual(statuses.at(-1), { unsaved: 1, failed: 0, ids: [a] }, "存上去的是舊的樣子：還有一筆");
+  assert.deepEqual(net.sent().slice(1), [putLine(a, 102.85), putLine(a, 102)]);
+
+  assert.equal(chart.deleteSelectedDrawing(), true); // 第三筆還沒回來就刪掉
+  net.requests[2].ok(200);
+  await settle();
+  assert.deepEqual(net.sent().at(-1), ["DELETE", `/api/drawings/2330/${a}`]);
+  assert.deepEqual(statuses.at(-1), { unsaved: 1, failed: 0, ids: [] });
+  net.requests[3].ok(204);
+  await settle();
+  assert.deepEqual(statuses.at(-1), { unsaved: 0, failed: 0, ids: [] });
+  assert.equal(net.requests.length, 4);
+});
+
+test("連線正常時連續改同一條線：每一版都存上去，過程中不通知頁面有東西沒存", async () => {
+  const view = createSavingChart();
+  const { tap, drag, net, statuses, settle } = view;
+  const a = drawLine(view, 87);
+  tap(150, 87);
+  drag([150, 87], [150, 110]); // 第一筆還在送
+  net.requests[0].ok(201);
+  await settle();
+  net.requests[1].ok(200);
+  await settle();
+  assert.deepEqual(net.sent(), [putLine(a, 102.85), putLine(a, 102)]);
+  assert.deepEqual(statuses, []);
+});
+
+test("還沒送出去過的新線又被刪掉：兩筆都不用送；送過（可能已經存進去）的才補送刪除", async () => {
+  const view = createSavingChart();
+  const { chart, tap, net, clock, statuses, settle } = view;
+  const a = drawLine(view, 87);
+  net.requests[0].fail();
+  await settle();
+  drawLine(view, 164); // 排在後面，還沒送過
+  tap(150, 164);
+  assert.equal(chart.deleteSelectedDrawing(), true);
+  assert.deepEqual(statuses.at(-1), { unsaved: 1, failed: 0, ids: [a] });
+
+  tap(150, 87);
+  assert.equal(chart.deleteSelectedDrawing(), true); // 送過一次、沒有回應：伺服器可能已經收下
+  // 本來就存在雲端的線，拖了一下（排著還沒送）又刪掉：伺服器有它，刪除要送。
+  chart.setDrawings(view.sync.merge([saved(97.15)])); // y=241
+  tap(150, 241);
+  view.drag([150, 241], [150, 264]);
+  assert.equal(chart.deleteSelectedDrawing(), true);
+  clock.advance(2000);
+  assert.deepEqual(net.sent().slice(1), [["DELETE", `/api/drawings/2330/${a}`]]);
+  net.requests[1].ok(204);
+  await settle();
+  net.requests[2].ok(204);
+  await settle();
+  assert.deepEqual(net.sent().slice(2), [["DELETE", "/api/drawings/2330/saved-line-01"]]);
+  assert.deepEqual(statuses.at(-1), { unsaved: 0, failed: 0, ids: [] });
+  clock.advance(600000);
+  assert.equal(net.requests.length, 3);
+});
+
+test("被限速（429）：照伺服器說的秒數等，期間連線恢復、回到前景、再畫別的線都不會提早送；沒說幾秒就照一般的間隔，說得離譜最多等五分鐘", async () => {
+  const view = createSavingChart();
+  const { net, clock, statuses, settle, window, document } = view;
+  const a = drawLine(view, 87);
+  net.requests[0].ok(429, { "retry-after": "37" });
+  await settle();
+  assert.deepEqual(statuses.at(-1), { unsaved: 1, failed: 0, ids: [a] });
+  window.dispatch("online");
+  document.dispatch("visibilitychange");
+  const b = drawLine(view, 164);
+  clock.advance(36999);
+  assert.equal(net.requests.length, 1, "還沒滿 37 秒：一筆都不送");
+  clock.advance(1);
+  assert.deepEqual(net.sent().slice(1), [putLine(a, 102.85)]);
+
+  net.requests[1].ok(429); // 沒說要等多久：照一般的間隔（連續第二次失敗＝4 秒）
+  await settle();
+  clock.advance(3999);
+  assert.equal(net.requests.length, 2);
+  clock.advance(1);
+  assert.equal(net.requests.length, 3);
+
+  net.requests[2].ok(503, { "retry-after": "86400" }); // 伺服器暫時不收、也說了要等：一樣照等（最多五分鐘）
+  await settle();
+  window.dispatch("online");
+  clock.advance(299999);
+  assert.equal(net.requests.length, 3);
+  clock.advance(1);
+  assert.equal(net.requests.length, 4);
+  net.requests[3].ok(201);
+  await settle();
+  net.requests[4].ok(201);
+  await settle();
+  assert.deepEqual(net.sent().slice(3), [putLine(a, 102.85), putLine(b, 100)]);
+  assert.deepEqual(statuses.at(-1), { unsaved: 0, failed: 0, ids: [] });
+});
+
+test("伺服器暫時出錯（5xx）或十秒沒有回應：都算還沒存上去、之後再試；連線恢復或分頁回到前景時馬上再試，不等到時間", async () => {
+  const view = createSavingChart();
+  const { net, clock, statuses, settle, window, document } = view;
+  window.dispatch("online");
+  assert.equal(net.requests.length, 0, "沒有東西要存：連線恢復不送任何請求");
+  const a = drawLine(view, 87);
+  net.requests[0].ok(503);
+  await settle();
+  assert.deepEqual(statuses.at(-1), { unsaved: 1, failed: 0, ids: [a] });
+
+  window.dispatch("online");
+  assert.equal(net.requests.length, 2, "連線恢復：馬上再試");
+  net.requests[1].fail();
+  await settle();
+  clock.advance(3999);
+  assert.equal(net.requests.length, 2, "又失敗：從這時起等 4 秒（原本那個 2 秒的計時不算數了）");
+  clock.advance(1);
+  assert.equal(net.requests.length, 3);
+  clock.advance(9999);
+  await settle();
+  assert.equal(net.requests[2].signal.aborted, false);
+  clock.advance(1); // 十秒沒有回應：放棄這一次
+  await settle();
+  assert.equal(net.requests[2].signal.aborted, true, "不再等那一筆");
+  assert.deepEqual(statuses.at(-1), { unsaved: 1, failed: 0, ids: [a] });
+  clock.advance(8000);
+  assert.equal(net.requests.length, 4);
+  net.requests[2].ok(200); // 放棄的那一筆這時才回來：不算數
+  await settle();
+  assert.deepEqual(statuses.at(-1), { unsaved: 1, failed: 0, ids: [a] });
+
+  net.requests[3].ok(500);
+  await settle();
+  document.hidden = true;
+  document.dispatch("visibilitychange");
+  assert.equal(net.requests.length, 4, "分頁被切到背景：不動");
+  document.hidden = false;
+  document.dispatch("visibilitychange");
+  assert.equal(net.requests.length, 5, "回到前景：馬上再試");
+  net.requests[4].ok(201);
+  await settle();
+  assert.deepEqual(statuses.at(-1), { unsaved: 0, failed: 0, ids: [] });
+  assert.deepEqual(net.sent(), Array(5).fill(putLine(a, 102.85)));
+  window.dispatch("online");
+  clock.advance(600000);
+  assert.equal(net.requests.length, 5);
+});
+
+test("因為不合法或超過上限被拒絕（400、409）：那一筆不再重試、後面的照常存；通知頁面有一條沒存成，線留在畫面上；再動它會重新送", async () => {
+  const view = createSavingChart();
+  const { chart, tap, drag, drawnLines, net, clock, statuses, settle } = view;
+  const a = drawLine(view, 87);
+  net.requests[0].fail();
+  await settle();
+  const b = drawLine(view, 164);
+  clock.advance(2000);
+  net.requests[1].ok(409); // 這一檔已經滿 200 條
+  await settle();
+  assert.deepEqual(net.sent().slice(2), [putLine(b, 100)], "被拒絕的不擋住後面的：下一筆馬上送");
+  net.requests[2].ok(201);
+  await settle();
+  assert.deepEqual(statuses.at(-1), { unsaved: 0, failed: 1, ids: [a] });
+  assert.deepEqual(drawnLines(), [[[4, 87.5], [326, 87.5]], [[4, 164.5], [326, 164.5]]], "沒存成的那一條還在畫面上");
+  clock.advance(600000);
+  assert.equal(net.requests.length, 3, "不會一直重試");
+
+  tap(150, 87);
+  drag([150, 87], [150, 110]);
+  assert.deepEqual(net.sent().slice(3), [putLine(a, 102)], "再動它：重新送一次");
+  net.requests[3].ok(400);
+  await settle();
+  assert.deepEqual(statuses.at(-1), { unsaved: 0, failed: 1, ids: [a] });
+
+  assert.equal(chart.deleteSelectedDrawing(), true);
+  net.requests[4].ok(204);
+  await settle();
+  assert.deepEqual(net.sent().slice(4), [["DELETE", `/api/drawings/2330/${a}`]]);
+  assert.deepEqual(statuses.at(-1), { unsaved: 0, failed: 0, ids: [] }, "刪掉之後就沒有存不上去的了");
+});
+
+test("登入過期、伺服器等太久（401、408）不算被拒絕：留著之後再試；帳號被停用或跨站被擋（403）再試也不會過，算沒存成", async () => {
+  const view = createSavingChart();
+  const { net, clock, statuses, settle } = view;
+  const a = drawLine(view, 87);
+  for (const status of [401, 408]) {
+    net.requests.at(-1).ok(status);
+    await settle();
+    assert.deepEqual(statuses.at(-1), { unsaved: 1, failed: 0, ids: [a] });
+    clock.advance(4000);
+  }
+  assert.deepEqual(net.sent(), Array(3).fill(putLine(a, 102.85)));
+  net.requests.at(-1).ok(403);
+  await settle();
+  assert.deepEqual(statuses.at(-1), { unsaved: 0, failed: 1, ids: [a] });
+  clock.advance(600000);
+  assert.equal(net.requests.length, 3, "不會一直重試，也不會擋住之後的變動");
+});
+
+test("換股票時，上一檔還沒存上去的不會丟、也不會存到新的那一檔：各自補存到原本那一檔；回到上一檔時那些線還在", async () => {
+  const view = createSavingChart("2330");
+  const { chart, sync, drawnLines, net, clock, statuses, settle } = view;
+  const a = drawLine(view, 87);
+  net.requests[0].fail();
+  await settle();
+
+  chart.setDrawings(sync.open("2317"));
+  assert.deepEqual(drawnLines(), [], "新的一檔看不到上一檔的線");
+  assert.deepEqual(statuses.at(-1), { unsaved: 1, failed: 0, ids: [] }, "還有一筆沒存上去，但不是這一檔的線");
+  const b = drawLine(view, 164);
+  assert.deepEqual(statuses.at(-1), { unsaved: 2, failed: 0, ids: [b] });
+
+  chart.setDrawings(sync.open("2330"));
+  assert.deepEqual(drawnLines(), [[[4, 87.5], [326, 87.5]]], "回到上一檔：還沒存上去的那一條還在");
+  chart.setDrawings(sync.merge([]));
+  assert.deepEqual(drawnLines(), [[[4, 87.5], [326, 87.5]]], "雲端還沒有它");
+
+  chart.setDrawings(sync.open("2317"));
+  clock.advance(2000);
+  net.requests[1].ok(201);
+  await settle();
+  net.requests[2].ok(201);
+  await settle();
+  assert.deepEqual(net.sent().slice(1), [putLine(a, 102.85, "2330"), putLine(b, 100, "2317")]);
+  assert.deepEqual(statuses.at(-1), { unsaved: 0, failed: 0, ids: [] });
+  assert.equal(sync.open("2330").length, 0, "上一檔的都存上去了：回去時以雲端那一份為準");
+});
+
+test("換股票之後，上一檔被拒絕的那一條不再算；重新載入同一檔時，這次畫的先留著", async () => {
+  const view = createSavingChart("2330");
+  const { sync, net, statuses, settle } = view;
+  const a = drawLine(view, 87);
+  net.requests[0].ok(409);
+  await settle();
+  assert.deepEqual(Array.from(sync.open("2330"), drawing => drawing.id), [a], "同一檔重新載入：還在");
+  assert.deepEqual(statuses.at(-1), { unsaved: 0, failed: 1, ids: [a] });
+  assert.equal(sync.open("2317").length, 0);
+  assert.deepEqual(statuses.at(-1), { unsaved: 0, failed: 0, ids: [] });
+  assert.equal(sync.open("2330").length, 0, "存不進去的線不會一直跟著");
+});
+
+test("還有沒存上去的變動時要離開或重新整理：瀏覽器會先提醒；都存上去了、或只剩被拒絕的就不提醒", async () => {
+  const view = createSavingChart();
+  const { net, clock, settle, window } = view;
+  // 瀏覽器會先提醒：事件被擋下預設行為，而且 returnValue 被設成空字串（舊版瀏覽器看這個）。
+  const leaving = () => { const event = window.dispatch("beforeunload"); assert.equal(event.returnValue === "", event.prevented); return event.prevented; };
+  assert.equal(leaving(), false, "什麼都沒畫");
+
+  drawLine(view, 87);
+  assert.equal(leaving(), true, "還在送");
+  assert.equal(net.requests[0].keepalive, true, "手機上不會先問：正在送的那一筆標成頁面關掉也照樣送完");
+  net.requests[0].fail();
+  await settle();
+  assert.equal(leaving(), true, "等著補存");
+  clock.advance(2000);
+  net.requests[1].ok(201);
+  await settle();
+  assert.equal(leaving(), false, "存上去了");
+
+  drawLine(view, 164);
+  net.requests[2].ok(409);
+  await settle();
+  assert.equal(leaving(), false, "被拒絕的不會再存：提醒也沒有用");
+});
+
+test("還沒存上去的線畫得比較淡（線、旁邊的標示、寫的字都是），存上去就恢復原本的濃淡；照常可以選取與拖動", () => {
+  const { chart, changes, strokes, texts, reset, tap, drag } = createChart();
+  chart.setDrawings([saved(100), saved(96, "saved-line-02"), savedNote("突破前高")]);
+  const inks = () => {
+    reset(); chart.draw();
+    return { lines: strokes.filter(stroke => stroke.color === DRAW && stroke.points.length).map(stroke => stroke.alpha),
+      texts: Object.fromEntries(texts.filter(text => text.color === DRAW).map(text => [text.text, text.alpha])) };
+  };
+  assert.deepEqual(inks(), { lines: [1, 1], texts: { 100: 1, 96: 1, 突破前高: 1 } });
+
+  reset();
+  chart.setUnsavedDrawings(["saved-line-02", "saved-note-01"]);
+  assert.ok(strokes.length > 0, "馬上重畫，不必等下一次移動游標");
+  assert.deepEqual(inks(), { lines: [1, 0.45], texts: { 100: 1, 96: 0.45, 突破前高: 0.45 } });
+
+  tap(150, 272);
+  drag([150, 272], [150, 249]); // 96 + 23/308×11.4 = 96.85
+  assert.deepEqual(changes, [{ type: "update", drawing: { id: "saved-line-02", kind: "hline", anchors: [{ date: "2026-02-28", price: 96.85 }] } }]);
+  assert.deepEqual(inks().texts, { 100: 1, 96.85: 0.45, 突破前高: 0.45 });
+
+  chart.setUnsavedDrawings([]);
+  assert.deepEqual(inks(), { lines: [1, 1], texts: { 100: 1, 96.85: 1, 突破前高: 1 } });
+});
+
+test("換了股票之後上一檔那一筆才被拒絕：頁面仍會知道有一條沒存成（這一檔沒有線要畫淡）；再換股票就不再算，回上一檔時那條線不在", async () => {
+  const view = createSavingChart("2330");
+  const { chart, sync, drawnLines, net, clock, statuses, settle } = view;
+  drawLine(view, 87);
+  net.requests[0].fail();
+  await settle();
+  chart.setDrawings(sync.open("2317"));
+  clock.advance(2000);
+  net.requests[1].ok(409);
+  await settle();
+  assert.deepEqual(statuses.at(-1), { unsaved: 0, failed: 1, ids: [] });
+
+  chart.setDrawings(sync.open("2330"));
+  assert.deepEqual(statuses.at(-1), { unsaved: 0, failed: 0, ids: [] });
+  assert.deepEqual(drawnLines(), [], "存不進去的線不會留到下一次回來");
+  assert.equal(net.requests.length, 2);
 });

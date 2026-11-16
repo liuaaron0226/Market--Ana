@@ -113,12 +113,9 @@
   // 5 年歷史日線：個股分析只帶最近 120 根，更早的在背景載入後接在前面。拿不到或對不上就維持原樣，不顯示任何訊息。
   let olderBars = { code: '', firstDate: '', rows: [] };
   let maPeriods = [18, 45];
-  // 畫線：目前這一檔在這次瀏覽中畫過、拖過（items：識別碼 → 最後的樣子）與刪過（removed）的線。
-  // 雲端那一份晚一步讀回來時以這裡為準，不能把剛做的變動蓋掉，也不能把剛刪的線帶回來。
-  const noDrawingEdits = code => ({ code, items: new Map(), removed: new Set() });
-  let drawingEdits = noDrawingEdits('');
-  // 畫線的儲存一筆送完才送下一筆：拖完馬上刪的時候，刪除不會比前一筆儲存早到而讓線又冒出來。
-  let drawingSaves = Promise.resolve();
+  // 畫線的存檔與補存（drawing-sync.js）：存不上去時留著、之後自動補存，並告訴這裡有幾筆還沒存上去。
+  // 那支沒載入時整個畫線功能收起，個股頁其他內容照常。
+  const drawingSync = window.DrawingSync ? window.DrawingSync.create({ onStatus: showUnsavedDrawings }) : null;
   const INTRADAY_PERIODS = { '1m': '1', '5m': '5', '15m': '15', '60m': '60' };
   // 秒 K（本人 2026-11-14「可以，先做當天」）：當天逐筆在背景一頁一頁取回，由 Intraday.secondCandles 彙總。
   const SECOND_PERIODS = { '1s': 1, '5s': 5, '10s': 10, '15s': 15, '30s': 30 };
@@ -396,9 +393,9 @@
     // 歷史接上後，日 K 比伺服器預算的 MACD 多出很多根：改由圖表用完整序列自己算。
     const extended = !intraday && daily.length > r.bars.length;
     if (!chart) chart = new window.KChart($('chartHost'), { macd: false, studyHost: $('chartStudies'), studies: ['volume', 'macd', 'kd', 'rsi', 'foreign', 'trust', 'dealer'], maPeriods, selectionRoots: [$('chartHost').parentElement], volumeKind: 'volume', overlayLabels: 'tags', height: w => Math.max(300, Math.min(460, w * 0.52)),
-      drawings: { onChange: saveDrawingChange, onTool: showActiveTool, onSelect: showDrawingSelection } });
+      drawings: drawingSync && { onChange: drawingSync.record, onTool: showActiveTool, onSelect: showDrawingSelection } });
     // 畫線只在日、週、月 K：秒 K、分 K 連工具列一起收起。
-    $('drawTools').hidden = intraday;
+    $('drawTools').hidden = intraday || !drawingSync;
     const expected = { fast: 12, slow: 26, signal: 9, histogram_multiplier: 1, seed: 'first_close', warmup_bars: 34,
       precision: 3, missing_policy: 'omit_missing_price_rows', version: 'macd-first-close-v1' };
     const compatible = !r._intraday && chartPeriod === 'daily' && r.chart && Object.entries(expected).every(([field, value]) => r.chart.parameters?.[field] === value)
@@ -1012,36 +1009,24 @@
     $('drawDelete').hidden = !drawing;
   }
 
-  // 畫完、拖完、刪掉都立刻存到自己的帳號底下。存不上去時畫面維持使用者最後的樣子（補存與提示另案處理）。
-  function saveDrawingChange(change) {
-    const code = drawingEdits.code;
-    if (!code) return;
-    const { id, kind, anchors, text } = change.drawing;   // text 只有文字標註才有
-    const removing = change.type === 'remove';
-    if (removing) { drawingEdits.items.delete(id); drawingEdits.removed.add(id); }
-    else drawingEdits.items.set(id, change.drawing);
-    const url = `/api/drawings/${encodeURIComponent(code)}/${encodeURIComponent(id)}`;
-    const request = removing ? { method: 'DELETE', cache: 'no-store' }
-      : { method: 'PUT', cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind, anchors, text }) };
-    drawingSaves = drawingSaves.then(() => fetch(url, request)).catch(() => { /* 連不上：畫面不變 */ });
-  }
-
-  // 雲端的線依原本的順序，套上這次瀏覽的變動；雲端還沒有的（剛畫、還在存）排在最後。
-  function withDrawingEdits(cloud) {
-    const known = new Set(cloud.map(item => item.id));
-    return [
-      ...cloud.filter(item => !drawingEdits.removed.has(item.id)).map(item => drawingEdits.items.get(item.id) || item),
-      ...[...drawingEdits.items.values()].filter(drawing => !known.has(drawing.id)),
-    ];
+  // 有變動還沒存上去（存檔失敗、等著補存）時工具列那一行的右邊出現提示（秒 K、分 K 工具列收起時也在），
+  // 那幾條線畫得比較淡；都補存上去就消失。
+  // 只剩被拒絕、不會再試的（超過上限等）時改說「沒存成」。
+  function showUnsavedDrawings({ unsaved, failed, ids }) {
+    const hint = $('drawUnsaved');
+    hint.hidden = !(unsaved || failed);
+    hint.textContent = unsaved ? '未儲存' : failed ? '沒存成' : '';
+    if (chart) chart.setUnsavedDrawings(ids);
   }
 
   // 個股分析畫出來之後才讀；讀不到就當作沒有畫線，不影響其他內容。
   async function loadDrawings(code, sequence) {
+    if (!drawingSync) return;
     try {
       const response = await fetch(`/api/drawings/${encodeURIComponent(code)}`, { cache: 'no-store' });
       const data = response.ok ? await response.json() : null;
       if (sequence !== requestSequence || !chart || !Array.isArray(data?.items)) return;
-      chart.setDrawings(withDrawingEdits(data.items));
+      chart.setDrawings(drawingSync.merge(data.items));
     } catch (_) { /* 畫線是附加的：失敗就維持沒有畫線 */ }
   }
 
@@ -1095,9 +1080,10 @@
     stopTicks();
     if (pendingRequest) pendingRequest.abort();
     pendingRequest = new AbortController();
-    // 換股票：上一檔的畫線、選取與選到一半的工具都放下；重新載入同一檔時，這次畫過、拖過的先留著。
-    if (drawingEdits.code !== code) drawingEdits = noDrawingEdits(code);
-    if (chart) { chart.setTool(null); chart.setDrawings([...drawingEdits.items.values()]); }
+    // 換股票：上一檔的畫線、選取與選到一半的工具都放下（還沒存上去的照樣在背景補存到原本那一檔）；
+    // 重新載入同一檔時，這次畫過、拖過的先留著。
+    const drawn = drawingSync ? drawingSync.open(code) : [];
+    if (chart) { chart.setTool(null); chart.setDrawings(drawn); }
     $('content').hidden = true;
     $('outside').hidden = true;
     $('content').setAttribute('aria-busy', 'true');
@@ -1190,7 +1176,8 @@
     syncTickFeed();
   });
   window.addEventListener('popstate', () => load(codeFromUrl() || '2330'));
-  window.addEventListener('beforeunload', () => { livePoller.stop(); stopTicks(); });
+  // 還有畫線沒存上去時瀏覽器會先問要不要離開（drawing-sync.js）：使用者可能留下來，所以這時不停即時更新。
+  window.addEventListener('beforeunload', event => { if (!event.defaultPrevented) { livePoller.stop(); stopTicks(); } });
   document.addEventListener('visibilitychange', syncTickFeed);
   $('addMa').addEventListener('click', () => {
     if (maPeriods.length >= 4) return;

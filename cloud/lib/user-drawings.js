@@ -98,7 +98,9 @@ async function saveDrawing(request, db, email, code, id, deps) {
     throw error;
   }
   const stored = await db.prepare(`SELECT ${COLUMNS} FROM user_drawings WHERE email = ? AND code = ? AND id = ?`).bind(email, code, id).first();
-  if (!stored) throw new UserPortfolioError(409, "畫線已在其他操作中變更，請重試");
+  // 寫入的同時被別的操作刪掉：請用戶端再送一次。回 503 而不是 409——用戶端的補存只看狀態碼，
+  // 4xx 是「再送也不會過」（409 留給超過上限），這一種再送就會過。
+  if (!stored) throw new UserPortfolioError(503, "畫線已在其他操作中變更，請重試");
   return response(existing ? 200 : 201, fromRow(stored));
 }
 

@@ -4,7 +4,7 @@
    文字標註再點一下（或 Enter）打開輸入框修改內容。
    資料：candles=[{t,label,open,high,low,close,amount}] 由舊到新。overlays 可放判斷線。
    畫線（選用）：頁面先載入 chart-drawings.js 並傳 opts.drawings={onChange,onTool,onSelect}，
-   再用 setTool／setDrawings／deleteSelectedDrawing／cancelDrawing 操作。 */
+   再用 setTool／setDrawings／setUnsavedDrawings／deleteSelectedDrawing／cancelDrawing 操作。 */
 (function () {
   'use strict';
   const DPR = () => Math.max(1, Math.min(3, window.devicePixelRatio || 1));
@@ -103,6 +103,8 @@
     // 以及這張圖上的整組畫線（[{id,kind,anchors:[{date,price}]}]，文字標註另有 text）。
     setTool(kind) { if (this.drawings) { this.drawings.setTool(kind); this.draw(); } }
     setDrawings(list) { if (this.drawings) { this.drawings.load(list); this.draw(); } }
+    // 哪幾條線還沒存上去（識別碼）：畫得比較淡。
+    setUnsavedDrawings(ids) { if (this.drawings) { this.drawings.markUnsaved(ids); this.draw(); } }
     // 刪除目前選取的那一條，回傳有沒有刪（沒有選取就不做事）；放下工具並取消選取（Esc 做的事）。
     deleteSelectedDrawing() {
       const removed = Boolean(this.drawings && this.drawings.remove());
