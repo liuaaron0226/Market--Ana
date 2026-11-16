@@ -33,10 +33,18 @@ async function request(email, query = "") {
   });
 }
 
-test("核准使用者可讀首頁大盤與籌碼，但看不到本人個股判斷", async () => {
+test("站主那份不給朋友：策略總開關打開時，核准的朋友也讀不到站主的大盤與籌碼（開放給朋友 02 票，DECISIONS 第 5 題）", async () => {
   await env.DB.prepare("INSERT INTO users (email, nickname, status, applied_at) VALUES (?, 'A', 'approved', ?)")
     .bind("a@example.com", "2026-11-10T00:00:00Z").run();
   const response = await request("a@example.com");
+  assert.equal(response.status, 403);
+  const text = await response.text();
+  assert.ok(!text.includes("觀望"), text);
+  assert.equal(JSON.parse(text).features.ai_digest, false);
+});
+
+test("站主照舊讀得到自己的大盤與籌碼", async () => {
+  const response = await request(OWNER);
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("cache-control"), "private, no-store");
   const body = await response.json();
@@ -44,6 +52,14 @@ test("核准使用者可讀首頁大盤與籌碼，但看不到本人個股判�
   assert.equal(body.market.content.stance, "觀望");
   assert.equal(body.flow.content.signals[0].codes[0], "2330");
   assert.equal(body.stocks, undefined);
+});
+
+test("朋友那份不混進站主那份：朋友的解讀表有更新的日期與內容，站主讀到的仍是自己的", async () => {
+  env.DB._raw.prepare("INSERT INTO friend_ai_daily (email,data_date,digest_type,content_json,input_sha256,model,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)")
+    .run("a@example.com", "2026-11-12", "market", JSON.stringify({ stance: "偏空", conclusion: "朋友的結論", points: [] }), "c".repeat(64), "gemini", "generated", "t", "t");
+  const body = await (await request(OWNER)).json();
+  assert.equal(body.data_date, "2026-11-10");
+  assert.equal(body.market.content.stance, "觀望");
 });
 
 test("只有 OWNER_EMAIL 可取得自選股與庫存逐檔判斷", async () => {

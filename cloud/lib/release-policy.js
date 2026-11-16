@@ -30,7 +30,8 @@ function individuallyEnabled(raw) {
 // 只給站主、而且不讓其他人知道存在的功能：其他人看到的功能清單裡這幾項一律是關的，
 // 頁面就不會去問那個入口，和功能上線前完全一樣。
 // （預測帳本也只給站主，但它的旗標上線時就對所有人可見、頁面也依賴它，這裡不改它的行為。）
-const HIDDEN_FROM_OTHERS = ["watchlist_watch_v1"];
+// 站主的 AI 解讀（agy 產生）也不給朋友看：朋友用自己的金鑰產生自己那份（開放給朋友 02 票，DECISIONS 第 5 題）。
+const HIDDEN_FROM_OTHERS = ["watchlist_watch_v1", "ai_digest"];
 
 // 三種狀態的開關：只認一字不差的 "owner"（只開站主）與 "all"（開給全部獲准使用者），其他寫法一律是關。
 function threeStateMode(raw) {

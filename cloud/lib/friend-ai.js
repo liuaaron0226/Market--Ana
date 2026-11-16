@@ -6,7 +6,7 @@ import { UserPortfolioError, noContent, readBody, requireSameOrigin, response } 
 
 export { friendAiEnabled } from "./release-policy.js";
 
-export const FRIEND_AI_PATH = /^\/api\/friend-ai(?:\/(key|consent))?$/;
+export const FRIEND_AI_PATH = /^\/api\/friend-ai(?:\/(key|consent|digest))?$/;
 export const FRIEND_AI_PAGE = /^\/gemini(?:\/.*)?$/;
 // 人數上限同時寫在資料表的限制裡（migration 0014 的 friend_gemini_keys_limit）；要調整得兩邊一起改。
 export const FRIEND_KEY_LIMIT = 10;
@@ -179,6 +179,42 @@ async function renewConsent(request, env, email, deps) {
   return response(200, await statusBody(env.DB, email));
 }
 
+// 02 票：朋友首頁讀自己那兩份（大盤、籌碼）。資料日取所有朋友最新的一天：自己那天沒有或未產生就如實回未產生，
+// 不拿前一天的冒充。同意版本換掉了就不給內容，請他回設定頁重新同意。
+const unproduced = (row) => ({ status: "unproduced", content: null, reason: row?.error_code ?? null });
+
+function digestOf(row) {
+  if (row?.status !== "generated") return unproduced(row);
+  try {
+    return { status: "generated", content: JSON.parse(row.content_json) };
+  } catch {
+    return unproduced(null);
+  }
+}
+
+async function friendDigest(db, email) {
+  const key = await db.prepare("SELECT consent_version FROM friend_gemini_keys WHERE email = ?").bind(email).first();
+  if (!key) return { available: true, configured: false };
+  if (key.consent_version !== CONSENT_VERSION) return { available: true, configured: true, consented: false };
+  let latest = null;
+  let rows = [];
+  try {
+    latest = (await db.prepare("SELECT MAX(data_date) AS data_date FROM friend_ai_daily").first())?.data_date ?? null;
+    if (latest) {
+      ({ results: rows } = await db.prepare(
+        "SELECT digest_type, content_json, status, error_code FROM friend_ai_daily WHERE email = ? AND data_date = ?",
+      ).bind(email, latest).all());
+    }
+  } catch (error) {
+    if (!tableMissing(error)) throw error;
+  }
+  const pick = (type) => rows.find((row) => row.digest_type === type);
+  return {
+    available: true, configured: true, consented: true, data_date: latest,
+    market: digestOf(pick("market")), flow: digestOf(pick("flow")),
+  };
+}
+
 // 呼叫前 gate 已確認：開關打開、不是站主、帳號已核准。
 export async function handleFriendAiApi(request, env, path, email, deps = {}) {
   const [, part] = FRIEND_AI_PATH.exec(path);
@@ -186,6 +222,10 @@ export async function handleFriendAiApi(request, env, path, email, deps = {}) {
     if (part === undefined) {
       if (request.method !== "GET") throw new UserPortfolioError(405, "方法不允許");
       return response(200, await statusBody(env.DB, email));
+    }
+    if (part === "digest") {
+      if (request.method !== "GET") throw new UserPortfolioError(405, "方法不允許");
+      return response(200, await friendDigest(env.DB, email));
     }
     if (part === "consent") {
       if (request.method !== "POST") throw new UserPortfolioError(405, "方法不允許");

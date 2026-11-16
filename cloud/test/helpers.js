@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 const MIGRATION = ["0001_init.sql", "0003_api_hits.sql", "0004_listed_stock_data.sql", "0005_user_portfolio.sql",
   "0008_stock_history.sql", "0009_user_drawings.sql", "0010_forecast_ledger.sql", "0011_watchlist_watch.sql",
   "0013_stock_announcements.sql", "0014_friend_gemini_keys.sql", "0015_watch_news.sql", "0016_watch_peers.sql",
-  "0017_watch_ledger.sql", "0018_etf_securities.sql", "0019_watch_push.sql"]
+  "0017_watch_ledger.sql", "0018_etf_securities.sql", "0019_watch_push.sql", "0020_friend_ai_daily.sql"]
   .map((f) => readFileSync(new URL(`../migrations/${f}`, import.meta.url), "utf8"))
   .join("\n");
 
