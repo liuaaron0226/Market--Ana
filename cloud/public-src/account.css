@@ -34,6 +34,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 
 body {
   margin: 0;
@@ -86,7 +87,7 @@ button, .btn {
   cursor: pointer;
   text-decoration: none;
 }
-button.ghost { background: transparent; color: var(--ink); border-color: var(--line-strong); }
+button.ghost, .btn.ghost { background: transparent; color: var(--ink); border-color: var(--line-strong); }
 button.warn { background: transparent; color: var(--up); border-color: var(--up); }
 button:disabled { opacity: .5; cursor: progress; }
 
@@ -111,3 +112,33 @@ button:disabled { opacity: .5; cursor: progress; }
 .tabs button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
 .empty { color: var(--faint); padding: 18px 0; }
 .msg:empty { display: none; }
+
+/* Gemini 設定頁（開放給朋友 01 票）：步驟、勾選同意、金鑰輸入框。 */
+input[type="password"] {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--panel2);
+  color: var(--ink);
+  font: 14px/1.4 var(--mono);
+}
+input[type="password"]:focus-visible, input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.steps { list-style: none; counter-reset: step; margin: 20px 0 0; padding: 0; display: grid; gap: 22px; }
+.steps > li { counter-increment: step; position: relative; padding-left: 38px; }
+.steps > li::before {
+  content: counter(step); position: absolute; left: 0; top: 1px; width: 26px; height: 26px; border-radius: 999px;
+  display: grid; place-items: center; background: var(--ink); color: var(--bg); font: 700 13px/1 var(--mono);
+}
+.steps h2 { font-size: 16px; margin: 0 0 10px; line-height: 1.6; }
+.steps .row { margin-top: 0; }
+.steps .row + .row, .steps input + .row { margin-top: 12px; }
+fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+fieldset:disabled { opacity: .45; }
+label.check { display: flex; gap: 10px; align-items: flex-start; font-weight: 500; margin: 0 0 10px; cursor: pointer; }
+label.check input { width: 18px; height: 18px; margin: 3px 0 0; flex: none; accent-color: var(--accent); }
+.note.inline { margin: 0 0 0 10px; }
+.state.gemini { color: var(--faint); }
+.state.gemini.on { color: var(--down); }
+.chips { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.row + input[type="password"] { margin-top: 12px; }

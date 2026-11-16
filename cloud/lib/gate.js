@@ -12,11 +12,13 @@ import { policyForViewer, releasePolicy, stockFactsVisible, stockSignalsVisible 
 import { isOwnerEmail } from "./owner.js";
 import { FORECAST_PATH, handleForecastApi } from "./forecast.js";
 import { WATCH_PATH, handleWatchApi } from "./watch.js";
+import { FRIEND_AI_PAGE, FRIEND_AI_PATH, configuredEmails, deleteFriendKey, friendAiEnabled, handleFriendAiApi, notAvailable, ownerRefused } from "./friend-ai.js";
 
 const PENDING_CAP = 30;
 // 票 06 限速（Astra r1 建議值）：市場 API 全部每人每分 30 次；個股明細另限每分 12 次。固定一分鐘窗，邊界最多兩倍突發。
 // ticks：行情商免費方案的日內查詢是每分鐘 60 次，報價與分 K 輪詢約用掉 10 次，逐筆留 40 次。
-const RATE = { market: 30, detail: 12, userData: 60, live: 20, history: 30, ticks: 40 };
+// friendAi：朋友保存、同意、刪除 Gemini 金鑰（保存會替他試呼叫一次 Gemini），所以另外限得緊一點；讀狀態不扣這一份。
+const RATE = { market: 30, detail: 12, userData: 60, live: 20, history: 30, ticks: 40, friendAi: 10 };
 // 舊的整包資料檔：雲端已不部署，這裡再擋一次，避免預覽網址或殘留檔被讀到。
 const RETIRED_DATA = new Set(["/analysis-data.js", "/chips-data.js", "/dashboard-data.js", "/detail-data.js", "/plain-data.js"]);
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -115,7 +117,10 @@ async function handleAdminApi(request, env, path, owner) {
     const { results } = await env.DB
       .prepare("SELECT email, nickname, status, applied_at, decided_at FROM users ORDER BY applied_at DESC")
       .all();
-    return json(200, { users: results });
+    // 朋友 AI 的開關打開時，每位使用者旁邊多一個「已設定／未設定」；關著時回應和以前一樣。
+    if (!friendAiEnabled(env)) return json(200, { users: results });
+    const configured = await configuredEmails(env.DB);
+    return json(200, { users: results.map((user) => ({ ...user, gemini_configured: configured.has(user.email) })) });
   }
   const m = path.match(/^\/api\/admin\/users\/([^/]+)\/([a-z]+)$/);
   if (!m || !ACTIONS[m[2]]) throw new HttpError(404, "找不到");
@@ -127,6 +132,8 @@ async function handleAdminApi(request, env, path, owner) {
   const current = await statusOf(env.DB, target);
   if (current === "none") throw new HttpError(404, "沒有這個帳號");
   if (!rule.from.includes(current)) throw new HttpError(409, `目前狀態「${current}」不能這樣改`);
+  // 停權時先刪掉他的 Gemini 金鑰（開關關著也照刪），刪不掉就不停權，讓站主重試。
+  if (rule.to === "disabled") await deleteFriendKey(env.DB, target);
   await env.DB
     .prepare("UPDATE users SET status = ?, decided_at = ?, decided_by = ? WHERE email = ?")
     .bind(rule.to, nowIso(), owner, target)
@@ -572,6 +579,20 @@ async function handleUserDataApi(request, env, path, email, deps, access) {
   return handleUserPortfolio(request, env, path, email, deps);
 }
 
+// 讀狀態（首頁入口每一頁都會讀）走一般個人資料的額度；保存、同意、刪除才扣 friendAi。
+async function handleFriendAiRequest(request, env, path, email, deps) {
+  const bucket = request.method === "GET" ? "userData" : "friendAi";
+  try {
+    await consume(env.DB, email, bucket, (deps.now || Date.now)(), { ...RATE, ...deps.rate });
+  } catch (error) {
+    if (error instanceof RateLimited) {
+      return json(429, { error: "rate-limited", message: "操作太頻繁，請稍後再試" }, { "retry-after": String(error.retryAfter) });
+    }
+    throw new HttpError(503, "暫時無法處理，請稍後再試");
+  }
+  return handleFriendAiApi(request, env, path, email, deps);
+}
+
 function marketOverviewForRelease(overview, policy) {
   const analysis = { ...(overview.analysis || {}) };
   const dashboard = { ...(overview.dashboard || {}) };
@@ -633,6 +654,12 @@ export async function handle(request, env, next, deps = defaultDeps) {
   const owner = OWNER_EMAIL.toLowerCase();
   const isOwner = isOwnerEmail(env, email);
 
+  // 朋友 AI 的開關關著：入口在讀資料庫之前就回「沒有內容」，設定頁和不存在一樣。
+  if (!friendAiEnabled(env)) {
+    if (FRIEND_AI_PATH.test(path)) return notAvailable();
+    if (FRIEND_AI_PAGE.test(path)) return fail(404, "找不到");
+  }
+
   try {
     if (isApply) {
       if (path.startsWith("/apply/api/")) return await handleApplyApi(request, env, path, email, isOwner);
@@ -654,6 +681,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
       if (path === "/api/me") return json(200, { email, status: "approved", owner: true });
       if (path === "/api/holdings/level" && !policy.features.level_advice) return levelDisabled();
       if (FORECAST_PATH.test(path)) return await handleForecastApi(request, env, path, { isOwner: true, policy });
+      if (FRIEND_AI_PATH.test(path)) return ownerRefused();
       if (isUserData) return await handleUserDataApi(request, env, path, email, deps, { isOwner: true, policy });
       if (isMarket) return await handleMarketApi(request, env, path, email, deps, { isOwner: true });
       if (isComparePath(path)) return await handleCompareApi(request, env, path, email, deps);
@@ -678,6 +706,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
     if (path === "/api/features") return json(200, policyForViewer(policy, false, env));
     if (path === "/api/holdings/level" && !policy.features.level_advice) return levelDisabled();
     if (FORECAST_PATH.test(path)) return await handleForecastApi(request, env, path, { isOwner: false, policy });
+    if (FRIEND_AI_PATH.test(path)) return await handleFriendAiRequest(request, env, path, email, deps);
     if (isUserData) return await handleUserDataApi(request, env, path, email, deps, { isOwner: false, policy });
     if (path === "/api/live" || path === "/api/mis-probe") return fail(403, "即時行情僅限站主使用");
     if (isMarket) return await handleMarketApi(request, env, path, email, deps, { isOwner: false });

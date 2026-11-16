@@ -60,6 +60,12 @@ export function stockSignalsVisible(env, isOwner) {
   return modeAllowsViewer(stockSignalsMode(env), isOwner);
 }
 
+// 開放給朋友的 Gemini（2026-11-16，01 票）：只給朋友用、站主不走這條線，所以不放進功能清單；
+// 自己一個開關，不掛在策略總開關底下。只認一字不差的 "on"，其他寫法一律是關。
+export function friendAiEnabled(env) {
+  return env?.MARKET_ANA_FRIEND_AI === "on";
+}
+
 // env 沒給時，事實區塊與五塊對其他人一律是關（寧可少給，不可多給）。
 export function policyForViewer(policy, isOwner, env = {}) {
   if (isOwner) return policy;
