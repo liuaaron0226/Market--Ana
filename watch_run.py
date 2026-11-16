@@ -34,8 +34,9 @@ CALL_BUDGET = 40
 # 重播乾跑的時鐘：那一天收盤、每日更新與大盤預測晚間版之後；晨間版是開盤日早上、期限（08:45）之前。
 REPLAY_CLOCK = "17:30:00"
 MORNING_REPLAY_CLOCK = "07:30:00"
-# 這一版打開的輸入層：免費方案下只放官方資料與由它算出的東西（peers、新聞標題放不進；lessons 是 H 票）。
-LAYERS = ("technical", "bollinger", "sector", "margin", "environment", "market", "news")
+# 這一版打開的輸入層＝「輸入到齊」的那一組：官方資料與由它算出的東西，加上帳本自己整理的教訓層（H 票）。
+# 國外同類股與新聞標題依來源條款不放（Gemini 付費與否由本人決定；改了就換這一組、換輸入版本、重新起算）。
+LAYERS = ("technical", "bollinger", "sector", "margin", "environment", "market", "news", "lessons")
 
 
 class Source(Protocol):
@@ -354,6 +355,17 @@ def _in_ledger(ledger: Path | str, dry_run: bool, work: Callable[[Path], dict[st
         return work(copy)
 
 
+def _official_since(ledger: Path, edition: str, base_date: str) -> str | None:
+    """這一組輸入（``LAYERS``）的正式起算日。還沒寫下時，晚間執行看帳本：之前有一天早晚兩版都用這一組跑過，
+    就把今天寫成起算日（寫了不改）；今天起的判斷是正式，之前的是試跑。晨間只讀不寫。"""
+    version = wl.input_version_of(LAYERS)
+    since = wl.official_starts(ledger).get(version)
+    if since is None and edition == "evening":
+        started = wl.start_official(ledger, since=base_date, input_version=version)
+        since = started["record"]["since"] if started["record"] else None
+    return since
+
+
 def _run(ledger: Path, edition: str, watchlist: Sequence[Mapping[str, Any]], index_daily: list[dict[str, Any]],
          base_date: str, *, session_date: str | None, forecast_ledger: Path | str | None, method_path: Path | str,
          model_bin: Path | str, source: Source, model: str, clock: Callable[[], datetime], dry_run: bool,
@@ -375,18 +387,19 @@ def _run(ledger: Path, edition: str, watchlist: Sequence[Mapping[str, Any]], ind
         log["reconciliation"] = {key: len(value) for key, value in wl.reconcile(ledger, index_daily, loaded).items()}
     log["backfilled_misses"] = _backfill_misses(ledger, watchlist, loaded, index_daily, base_date, edition=edition,
                                                 method_text=method_text, model_bin=model_bin, model=model, clock=clock)
+    log["official_since"] = _official_since(ledger, edition, base_date)
     stocks = [stock_input(item, loaded[str(item["code"])], base_date=base_date, index_daily=index_daily,
                           method_text=method_text, market=market, announcements=news.get(str(item["code"])))
               for item in watchlist]
     results = wl.write_judgments(ledger, stocks, edition=edition, session_date=session_date, model_bin=model_bin,
                                  model=model, now=clock, layers=LAYERS, timeout_seconds=timeout_seconds,
-                                 call_budget=call_budget)
+                                 call_budget=call_budget, official_since=log["official_since"])
     log["stocks"] = [_summary(result, load_errors.get(result["code"])) for result in results]
     if sql_output:
         published_at = clock().astimezone(TAIPEI).isoformat()
         Path(sql_output).parent.mkdir(parents=True, exist_ok=True)
-        Path(sql_output).write_text(wl.d1_sql(ledger, index_daily, loaded, published_at=published_at),
-                                    encoding="utf-8")
+        Path(sql_output).write_text(wl.d1_sql(ledger, index_daily, loaded, published_at=published_at,
+                                              official_since=log["official_since"]), encoding="utf-8")
     return _finish(log, clock, log_output)
 
 
@@ -763,7 +776,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         log = run_evening(args.analysis, as_of=args.as_of, **common)
     summary = {key: log.get(key) for key in ("edition", "base_date", "session_date", "dry_run", "outcome",
-                                             "reconciliation", "backfilled_misses")}
+                                             "reconciliation", "backfilled_misses", "official_since")}
     summary["stocks"] = [{key: item.get(key) for key in ("code", "outcome", "kind", "status", "miss_reason")}
                          for item in log.get("stocks", [])]
     print(json.dumps(summary, ensure_ascii=False))

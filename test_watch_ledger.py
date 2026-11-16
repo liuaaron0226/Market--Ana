@@ -465,11 +465,9 @@ class InputLayerTests(WatchLedgerTestCase):
         self.assertIsNone(only_technical["input"]["market"])
         self.assertIsNone(only_technical["input"]["news"]["announcements"])
 
-        lessons = [{"transition_date": "2026-08-03", "trigger_line": "MA20", "beat_index_5": True}]
-        with_lessons = self.write(stock_input(lessons=lessons), layers=("lessons", "technical", "market", "news"),
-                                  root=self.tmp / "l")["record"]
+        with_lessons = self.write(layers=("lessons", "technical", "market", "news"), root=self.tmp / "l")["record"]
         self.assertRegex(with_lessons["input_version"], r"^technical\+market\+news\+lessons-v1-[0-9a-f]{8}$")
-        self.assertEqual(with_lessons["input"]["lessons"], lessons)
+        self.assertEqual(with_lessons["input"]["lessons"], {"transitions": []})
         self.assertEqual(wl.input_version_of(("technical",)), only_technical["input_version"])
         self.assertNotEqual(wl.input_version_of(("technical",)), wl.input_version_of(("technical", "market")))
 
@@ -484,6 +482,11 @@ class InputLayerTests(WatchLedgerTestCase):
         self.assertIsNone(record["input"]["peers"])
         self.assertEqual(record["input"]["news"]["headlines"], None)
         self.assertIn("公告九月營收", prompt)
+        # 紀錄寫明沒放的原因是條款，和「名單還沒確認」「當天沒抓到」分得開
+        self.assertEqual(record["withheld_layers"], {"peers": "國外同類股行情依來源條款不放進提示",
+                                                     "headlines": "新聞標題依來源條款不放進提示"})
+        # 條款擋下的不算缺漏
+        self.assertEqual(record["missing_layers"], [])
 
     def test_layers_that_may_not_be_sent_cannot_be_switched_on(self):
         with self.assertRaises(ValueError):
@@ -888,6 +891,86 @@ class ReconcileTests(SeriesTestCase):
         result = self.reconcile("2026-10-08")
         self.assertEqual(sorted((r["edition"], r["horizon"], r["expiry_date"]) for r in result["appended"]),
                          [("evening", 5, "2026-10-08"), ("morning", 5, "2026-10-08")])
+
+
+WITH_LESSONS = ("technical", "market", "news", "lessons")
+
+
+class LessonsLayerTests(SeriesTestCase):
+    """教訓層：帳本自己從過去的判斷與對帳整理這一檔的事實；只放事實，看不到基準日之後才知道的結果。"""
+
+    def lessons(self, base, status="接近", **extra):
+        return self.day(base, status, layers=WITH_LESSONS, **extra)["input"]["lessons"]
+
+    def test_past_transition_days_and_their_results_known_by_the_base_date(self):
+        self.day(BASE, "可以留意")
+        self.day(BASE, "可以留意", code="2317")      # 別檔的紀錄不放進來
+        data = market("2026-10-08", codes=("2330", "2317"))
+        wl.reconcile(self.root, data["index_daily"], data["stocks"])
+
+        # 09/30 的轉變日：觸發線是波段低點（09/25）103、看錯線是波段低點（09/07）95。
+        # 五日那一格 10/08 到期（個股 +2%、指數 +2%，沒贏）；二十日那一格還沒有結果。
+        transition = {"base_date": BASE, "edition": "evening",
+                      "trigger_line": {"name": "波段低點（09/25）", "value": 103},
+                      "wrong_line": {"name": "波段低點（09/07）", "value": 95}}
+        five = {"expiry_date": "2026-10-08", "stock_return": 0.02, "index_return": 0.02, "beat_index": False}
+
+        # 10/05 的判斷：五日那一格雖然已經對在帳本裡，但要到 10/08 才知道，所以還沒有結果
+        self.assertEqual(self.lessons("2026-10-05"), {"transitions": [{**transition, "results": {"5": None, "20": None}}]})
+        # 10/08 的判斷：五日那一格當天到期，看得到
+        self.assertEqual(self.lessons("2026-10-08"), {"transitions": [{**transition, "results": {"5": five, "20": None}}]})
+
+    def test_only_facts_are_given_and_a_stock_without_history_has_an_empty_list(self):
+        self.assertEqual(self.lessons(BASE), {"transitions": []})
+        self.day("2026-10-01", "可以留意")
+        lessons = self.lessons("2026-10-02", "可以留意")
+        # 理由是模型寫的文字，不放回提示；這一層也不算缺漏
+        self.assertNotIn("reason", json.dumps(lessons, ensure_ascii=False))
+        self.assertNotIn("量縮整理", json.dumps(lessons, ensure_ascii=False))
+        self.assertEqual(len(lessons["transitions"]), 1)
+
+    def test_lessons_from_the_caller_are_not_used(self):
+        # 教訓層由帳本自己整理，呼叫端給的內容（例如 AI 改寫的檢討）不進提示
+        made_up = [{"transition_date": "2026-08-03", "review": "上次太早喊進"}]
+        record = self.day(BASE, "接近", layers=WITH_LESSONS, data={"lessons": made_up})
+        self.assertEqual(record["input"]["lessons"], {"transitions": []})
+        self.assertEqual(record["missing_layers"], [])
+
+
+class OfficialStartTests(SeriesTestCase):
+    """正式起算日：同一個輸入版本早晚兩版都跑過一天之後才寫得下，寫了就不能改。"""
+
+    VERSION = wl.input_version_of(wl.DEFAULT_LAYERS)
+
+    def start(self, since="2026-10-01", input_version=VERSION):
+        return wl.start_official(self.root, since=since, input_version=input_version)
+
+    def test_needs_a_day_on_which_both_editions_ran_before_the_start(self):
+        self.assertEqual(self.start()["outcome"], "not_ready")          # 帳本是空的
+        self.day(BASE, "接近")
+        self.assertEqual(self.start()["outcome"], "not_ready")          # 只有晚間版
+        self.day(BASE, None, edition="morning")                       # 晨間漏記也算有在跑
+        self.assertEqual(self.start(since=BASE)["outcome"], "not_ready")  # 起算日要在那一天之後
+        started = self.start()
+        self.assertEqual(started["outcome"], "written")
+        self.assertEqual((started["record"]["since"], started["record"]["input_version"], started["record"]["ran_on"]),
+                         ("2026-10-01", self.VERSION, BASE))
+        self.assertEqual(wl.official_starts(self.root), {self.VERSION: "2026-10-01"})
+
+    def test_once_written_it_cannot_be_moved(self):
+        self.day(BASE, "接近")
+        self.day(BASE, "接近", edition="morning")
+        self.assertEqual(self.start()["outcome"], "written")
+        self.assertEqual(self.start()["outcome"], "unchanged")
+        self.assertEqual(self.start(since="2026-10-02")["outcome"], "conflict")
+        self.assertEqual(wl.official_starts(self.root), {self.VERSION: "2026-10-01"})
+
+    def test_each_input_version_starts_on_its_own(self):
+        self.day(BASE, "接近")
+        self.day(BASE, "接近", edition="morning")
+        other = wl.input_version_of(("technical",))
+        self.assertEqual(self.start(input_version=other)["outcome"], "not_ready")  # 那一版還沒跑過
+        self.assertEqual(wl.official_starts(self.root), {})
 
 
 class SummaryTests(SeriesTestCase):

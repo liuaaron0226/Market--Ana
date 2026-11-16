@@ -67,8 +67,9 @@ HORIZONS = (5, 20)
 LAYERS = ("technical", "bollinger", "sector", "margin", "environment", "market", "news", "peers", "lessons")
 DEFAULT_LAYERS = ("technical", "market", "news")
 # 每一層在一檔輸入資料裡的欄位。消息層這一版只收官方公告（重大訊息、月營收）。布林通道由帳本從日 K 自己算，沒有欄位。
+# 教訓層沒有欄位：由帳本自己從過去的判斷與對帳整理（只放事實），呼叫端給的內容不用。
 _LAYER_FIELDS = {"technical": "technical", "sector": "sector", "margin": "margin", "environment": "environment",
-                 "market": "market_forecast", "news": "announcements", "lessons": "lessons"}
+                 "market": "market_forecast", "news": "announcements"}
 # I 票四層各自的參數與提示規則：只有打開那一層時才算進輸入版本與提示，沒打開時舊版本一個字都不變。
 _LAYER_PARAMETERS: dict[str, dict[str, Any]] = {
     "bollinger": {"period": bollinger.PERIOD, "deviations": bollinger.DEVIATIONS,
@@ -78,6 +79,11 @@ _LAYER_PARAMETERS: dict[str, dict[str, Any]] = {
     "environment": {"changes": "近 20 日", "series": ["usdtwd", "ust_2y", "ust_10y"]},
 }
 _LAYER_RULES: dict[str, tuple[str, ...]] = {
+    "lessons": (
+        "lessons 是程式從帳本整理的這一檔過去事實：每一次變成「可以留意」的基準日（transitions）、當時的觸發線與看錯線，"
+        "以及之後第五、第二十個交易日有沒有贏過同期加權指數（results；null 是到基準日為止還沒有結果）。"
+        "寫之前先看這些，避免同一種錯一犯再犯；只能當成過去的事實引用，不得自己推算沒給的結果。",
+    ),
     "bollinger": (
         "bollinger 是這一檔收盤在布林通道（20 日均價 ± 2 個標準差）的位置：zone 是收盤落在哪一區，"
         "squeezed 是通道寬度是否在近 120 個交易日最窄的兩成（null 是資料不足）；上緣與下緣也在 candidates 裡"
@@ -96,8 +102,10 @@ _LAYER_RULES: dict[str, tuple[str, ...]] = {
         "某一項是 null 就是缺資料，不得猜測。",
     ),
 }
-# 留位置、不放內容的層：依來源條款不能送進免費方案的提示（查證見 ANALYSIS_PLAN.md 2026-11-15）。
-WITHHELD_LAYERS = {"peers": "國外行情依來源條款不能放進免費方案的提示"}
+# 留位置、不放內容的資料：依來源條款不能送進目前用的 Gemini 方案（查證見 ANALYSIS_PLAN.md 2026-11-15）。
+# 每一份判斷的紀錄照實標出來，和「名單還沒確認」「當天沒抓到」（missing_layers）分得開；
+# 提示本身不變（已有規則要模型不把新聞與海外市場當事實），所以不換輸入版本。
+WITHHELD_LAYERS = {"peers": "國外同類股行情依來源條款不放進提示", "headlines": "新聞標題依來源條款不放進提示"}
 OFFICIAL_SOURCES = ("twse", "tpex")
 _ANNOUNCEMENT_FIELDS = ("id", "source", "kind", "published_at", "title", "body")
 _STOCK_KEYS = ("open", "high", "low", "close", "volume")
@@ -293,12 +301,40 @@ def _history(rows: Sequence[Any]) -> dict[str, Any]:
             "bars": len(rows), "sha256": sha(body)}
 
 
+def _lessons(root: Path, code: str, base_date: str) -> dict[str, Any]:
+    """教訓層：這一檔在基準日之前的每一個轉變日（晚間、晨間都算），連同到期日不晚於基準日的對帳結果。
+
+    只放事實（兩條線的名字與數值、漲跌幅、有沒有贏大盤），不放模型寫的理由；基準日之後才知道的結果一律 null，
+    就算重跑時帳本裡已經有了也一樣，重跑同一天的輸入才會相同。
+    """
+    ledger = read_ledger(root)
+    known = {(row["judgment_id"], row["horizon"]): row for row in ledger["reconciliations"]
+             if row["expiry_date"] <= base_date}
+    transitions = []
+    for judgment in ledger["judgments"]:
+        if judgment["code"] != code or not judgment.get("transition") or judgment["base_date"] >= base_date:
+            continue
+        results = {}
+        for horizon in HORIZONS:
+            row = known.get((judgment["judgment_id"], horizon))
+            results[str(horizon)] = None if row is None else {
+                key: row[key] for key in ("expiry_date", "stock_return", "index_return", "beat_index")}
+        transitions.append({
+            "base_date": judgment["base_date"], "edition": judgment["edition"],
+            **{line: {key: judgment[line][key] for key in ("name", "value")} for line in ("trigger_line", "wrong_line")},
+            "results": results,
+        })
+    return {"transitions": transitions}
+
+
 def _model_input(data: Mapping[str, Any], edition: str, layers: list[str], raw: list[Bar], bars: list[Bar],
                  events: list[dict[str, Any]], unresolved: list[dict[str, Any]],
                  candidates: list[dict[str, Any]] | None, index_rows: list[dict[str, Any]],
-                 band: dict[str, Any] | None) -> dict[str, Any]:
+                 band: dict[str, Any] | None, lessons: dict[str, Any] | None) -> dict[str, Any]:
     values = {layer: copy.deepcopy(data.get(_LAYER_FIELDS[layer])) if layer in _LAYER_FIELDS else None
               for layer in layers}
+    if "lessons" in values:
+        values["lessons"] = lessons
     if "news" in values:
         values["news"] = _announcements(values["news"])
     if "bollinger" in values:
@@ -485,7 +521,9 @@ def _write(
     candidates = None if problems else sorted(
         _candidate_levels(bars) + _bollinger_levels(band, bars[-1].close),
         key=lambda level: (-level["value"], level["id"]))
-    model_input = _model_input(data, edition, enabled, raw, bars, events, unresolved, candidates, index_rows, band)
+    lessons = _lessons(folder, code, base_date) if "lessons" in enabled else None
+    model_input = _model_input(data, edition, enabled, raw, bars, events, unresolved, candidates, index_rows, band,
+                               lessons)
     input_sha = sha(model_input)
     path = _judgment_path(folder, code, base_date, edition)
 
@@ -499,6 +537,7 @@ def _write(
         "method_version": method_version, "input_version": input_version, "model": model,
         "run_mode": "official" if official_since and base_date >= official_since else "trial",
         "layers": enabled, "missing_layers": list(model_input["missing_layers"]),
+        "withheld_layers": dict(WITHHELD_LAYERS),
         "data_cutoffs": copy.deepcopy(dict(data.get("data_cutoffs") or {})),
         "deadline": due.isoformat(), "base_close": model_input["base_close"],
         "input": model_input, "input_sha256": input_sha,
@@ -719,6 +758,45 @@ def reconcile(root: Path | str, index_daily: Sequence[Mapping[str, Any]],
     return result
 
 
+# ---- 正式起算日 ----
+
+def _official_path(root: Path, input_version: str) -> Path:
+    if not re.fullmatch(r"[a-z+]+-v\d+-[0-9a-f]{8}", input_version):
+        raise ValueError(f"輸入版本不合法：{input_version!r}")
+    return root / "official" / f"{input_version}.json"
+
+
+def start_official(root: Path | str, *, since: str, input_version: str) -> dict[str, Any]:
+    """寫下某一個輸入版本的正式起算日。回傳 ``{"outcome": written|unchanged|conflict|not_ready, "record": ...}``。
+
+    要在 ``since`` 之前，有一個基準日早晚兩版都用這個輸入版本跑過（判斷或漏記都算有在跑）才寫得下；
+    哪幾層算「輸入到齊」由呼叫端決定（排程打開的那一組）。每個輸入版本各自一個起算日，寫了就不能改：
+    同內容再寫一次是 ``unchanged``，不同的日子是 ``conflict``（拒寫）。
+    """
+    folder = Path(root)
+    date.fromisoformat(since)
+    path = _official_path(folder, input_version)
+    editions: dict[str, set[str]] = {}
+    for record in read_ledger(folder)["judgments"]:
+        if record["input_version"] == input_version and record["base_date"] < since:
+            editions.setdefault(record["base_date"], set()).add(record["edition"])
+    both = [day for day, ran in editions.items() if ran >= set(EDITIONS)]
+    if path.exists():
+        existing = read_record(path)
+        return {"outcome": "unchanged" if existing["since"] == since else "conflict", "record": existing}
+    if not both:
+        return {"outcome": "not_ready", "record": None}
+    record = seal({"schema": SCHEMA, "kind": "official_start", "input_version": input_version, "since": since,
+                   "ran_on": max(both)})
+    outcome = append(path, record)
+    return {"outcome": outcome, "record": read_record(path)}
+
+
+def official_starts(root: Path | str) -> dict[str, str]:
+    """各輸入版本已寫下的正式起算日。"""
+    return {record["input_version"]: record["since"] for record in read_folders(root, ("official",))["official"]}
+
+
 # ---- 彙總 ----
 
 # 「可下結論」的判定（本人 2026-11-16 定案，第一筆正式紀錄之前寫定、之後不改）：
@@ -800,9 +878,9 @@ def summarize(root: Path | str, index_daily: Sequence[Mapping[str, Any]],
 
 # 給網站顯示的欄位；完整輸入（含方法稿）、模型的重試細節與「隨便挑」的明細只留在原件（成績看彙總）。
 _PUBLIC_FIELDS = ("judgment_id", "code", "name", "base_date", "edition", "method_version", "input_version", "model",
-                  "run_mode", "kind", "locked_at", "deadline", "layers", "missing_layers", "data_cutoffs", "base_close",
-                  "status", "trigger_line", "wrong_line", "reason", "reason_news", "transition", "compared_with",
-                  "miss_reason", "miss_detail", "record_sha256")
+                  "run_mode", "kind", "locked_at", "deadline", "layers", "missing_layers", "withheld_layers",
+                  "data_cutoffs", "base_close", "status", "trigger_line", "wrong_line", "reason", "reason_news",
+                  "transition", "compared_with", "miss_reason", "miss_detail", "record_sha256")
 
 
 def d1_sql(root: Path | str, index_daily: Sequence[Mapping[str, Any]], stocks: Mapping[str, Mapping[str, Any]], *,
