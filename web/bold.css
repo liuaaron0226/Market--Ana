@@ -273,6 +273,9 @@
   --shade-k: 2.6;
   --edge-ink: color-mix(in srgb, var(--ink) 62%, #000);
   --rim-ink: color-mix(in srgb, var(--ink) 78%, #fff);
+  /* K 棒的浮雕落影（C 包）：畫布直接拿這個顏色畫，所以寫成畫布看得懂的固定值；深淺比照板的陰影（rgb(--shade) 約一成，深色乘 --shade-k） */
+  --candle-shadow: rgb(0 0 0 / 34%);
+  --candle-rim: rgb(255 255 255 / 26%);
 
   /* 第 1 層：板 */
   --slab-shadow:
@@ -328,6 +331,8 @@
   --rim: #fff;
   --shade: 60 45 20;
   --shade-k: 1;
+  --candle-shadow: rgb(60 45 20 / 15%);
+  --candle-rim: transparent;
 }
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) {
@@ -340,6 +345,8 @@
     --rim: #fff;
     --shade: 60 45 20;
     --shade-k: 1;
+    --candle-shadow: rgb(60 45 20 / 15%);
+    --candle-rim: transparent;
   }
 }
 

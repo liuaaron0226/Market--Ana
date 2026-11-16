@@ -13,6 +13,9 @@
   // 手指在超過之前也先不平移，點一下時圖表不會跟著晃。
   // 和 chart-drawings.js 的 DRAG_START_PX 同值：按住線拖與拖圖平移，開始的門檻一樣。
   const TAP_SLOP = { mouse: 3, touch: 8 };
+  // K 棒落影往右下偏多少（CSS 像素）；滾輪縮放停下來多久算「縮放結束」、補畫落影。
+  const RELIEF = { x: 1.5, y: 2 };
+  const RELIEF_SETTLE_MS = 160;
   function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
   // 價籤用：千元以上取整；以下保留到台股升降單位（最多兩位小數，去掉尾端 0）。
   function fmtTag(n) { return !Number.isFinite(n) ? '缺值' : n >= 1000 ? fmt(n, 0) : n.toLocaleString('en-US', { maximumFractionDigits: 2 }); }
@@ -224,7 +227,7 @@
         if (c === this.canvas && this.drawings) this.drawings.trackPointer(x, e.clientY - rect.top); // 預覽線跟著游標或手指
         if (drag?.kind === 'pinch' && pts.size === 2) {
           const xs = [...pts.values()].map(point => point.x); const d = Math.max(20, Math.abs(xs[0] - xs[1]));
-          this.view.count = drag.count * drag.pinch / d; this.view.end = drag.end; this.clamp(); this.draw(); this.emit(); return;
+          this.busy = true; this.view.count = drag.count * drag.pinch / d; this.view.end = drag.end; this.clamp(); this.draw(); this.emit(); return;
         }
         if (drag?.kind === 'single' && pts.size === 1) {
           const dx = e.clientX - drag.x, slop = drag.touch ? TAP_SLOP.touch : TAP_SLOP.mouse;
@@ -233,7 +236,7 @@
           if (Math.hypot(dx, e.clientY - drag.y) > slop) drag.moved = drag.wandered = true;
           // 手指要左右移超過門檻才開始平移（上下滑是在捲頁面，圖表不跟著橫移）；滑鼠照舊一按住就跟著拖。
           if (Math.abs(dx) > slop) drag.panning = true;
-          if (drag.panning || !drag.touch) { this.view.end = Math.round(drag.end - dx / g.step); this.clamp(); }
+          if (drag.panning || !drag.touch) { this.view.end = Math.round(drag.end - dx / g.step); this.clamp(); if (drag.moved) this.busy = true; }
         }
         this.hover = x >= g.l && x <= g.l + g.pw ? g.start + Math.floor((x - g.l) / g.step) : -1;
         if (!drag && c === this.canvas && this.drawings) c.style.cursor = this.drawings.cursorAt(x, e.clientY - rect.top);
@@ -267,13 +270,19 @@
         if (pts.size === 1 && drag?.kind === 'pinch') {
           const point = pts.values().next().value;
           drag = { kind: 'single', x: point.x, y: point.y, end: this.view.end, moved: false, wandered: false, touch: this.fingerSlop(e.pointerType), hadPinch: true };
-        } else if (pts.size === 0) { drag = null; c.style.cursor = c === this.canvas && this.drawings ? this.drawings.idleCursor() : 'grab'; }
+        } else if (pts.size === 0) {
+          drag = null; c.style.cursor = c === this.canvas && this.drawings ? this.drawings.idleCursor() : 'grab';
+          if (this.busy) { this.busy = false; this.draw(); }   // 拖完、縮放完：補畫落影
+        }
       };
       c.addEventListener('pointerup', up); c.addEventListener('pointercancel', up);
       c.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse' && !drag) { this.hover = this.selection; this.draw(); } });
       c.addEventListener('wheel', e => {
         const g = geo(); if (!g) return; e.preventDefault();
         const rect = c.getBoundingClientRect(); const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left - g.l) / g.pw));
+        // 滾輪是一連串的小縮放：轉動期間不畫落影，停下來一下再補畫
+        this.busy = true; clearTimeout(this.settle);
+        this.settle = setTimeout(() => { this.busy = false; this.draw(); }, RELIEF_SETTLE_MS);
         this.zoom(e.deltaY > 0 ? 1.15 : 1 / 1.15, ratio);
       }, { passive: false });
       c.addEventListener('keydown', e => {
@@ -493,6 +502,19 @@
       }
       // K棒
       const bw = Math.max(1, Math.min(14, step * .66));
+      // 浮雕落影（立體重設計 C 包）：本體底下先畫一塊往右下偏的影子，蠟燭本身照舊畫在上面，位置、寬度、顏色不變。
+      // 顏色由主題的 --candle-shadow 給（沒有就不畫）；拖曳、縮放進行中不畫（this.busy），放開之後補畫。
+      // 深色的底上影子看不出來：主題另給 --candle-rim 時，本體上緣外面多一條 1px 的亮邊（和板的上緣亮邊同一個道理）。
+      const relief = !this.busy && bw >= 2 ? css('--candle-shadow') : '', rim = !this.busy && bw >= 2 ? css('--candle-rim') : '';
+      [[relief, RELIEF.x, RELIEF.y, 0], [rim, 0, -1, 1]].forEach(([fill, dx, dy, thin]) => {
+        if (!fill || fill === 'transparent') return;
+        x.fillStyle = fill;
+        vis.forEach((c, i) => {
+          if (!hasPrice(c)) return;
+          const cx = l + step * (i + .5), top = y(Math.max(c.open, c.close)), h = Math.max(1, Math.abs(y(c.open) - y(c.close)));
+          x.fillRect(cx - bw / 2 + dx, top + dy, bw, thin || h);
+        });
+      });
       vis.forEach((c, i) => {
         if (!hasPrice(c)) return;
         const cx = l + step * (i + .5), col = c.close >= c.open ? up : dn;
