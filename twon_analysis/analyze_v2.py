@@ -483,47 +483,93 @@ def _scale_shares(rows: list[dict], share_scale: dict[str, float]) -> list[dict]
     return scaled
 
 
-def _revenue_yoy(code: str, market: str, as_of: str) -> float | None:
+def _revenue_meta() -> tuple[dict, Path]:
     import json
-    from datetime import date
-    import fundamentals_history as fh
     root = DEFAULT_DB.parents[1] / 'fundamentals-history'
     meta = _REVENUE_CACHE.get(('meta',))
     if meta is None:
         meta = json.loads((root / 'meta.json').read_text(encoding='utf-8'))
         _REVENUE_CACHE[('meta',)] = meta
+    return meta, root
+
+
+def _monthly_revenue(code: str, key_market: str, period: str) -> int | None:
+    """某一期某一檔的月營收（千元）；同一期有國內、國外兩份表時取先查到的那份。每份原件只解析一次。"""
+    import fundamentals_history as fh
+    meta, root = _revenue_meta()
+    for item in (f for f in meta['files'] if f['dataset'] == 'monthly_revenue' and f['market'] == key_market
+                 and f['period'] == period):
+        cache_key = ('file', item['file'])
+        if cache_key not in _REVENUE_CACHE:
+            content = (root / item['file']).read_bytes()
+            rows = fh.parse_monthly_revenue(content, market=key_market, period=period, source_file=item['file'],
+                                            fetched_at_utc=item['fetched_at_utc'], sha256=item['sha256'],
+                                            source_scope=item.get('source_scope', 'domestic'))
+            _REVENUE_CACHE[cache_key] = {r['code']: r['revenue_thousand_twd'] for r in rows}
+        value = _REVENUE_CACHE[cache_key].get(code)
+        if value is not None:
+            return value
+    return None
+
+
+def _revenue_periods(market: str, as_of: str) -> tuple[str, list[str]]:
+    """截至 as_of 法定公布日已過的期別（由舊到新）。"""
+    meta, _ = _revenue_meta()
     key_market = 'listed' if market == '上市' else 'otc'
-    files = [f for f in meta['files'] if f['dataset'] == 'monthly_revenue' and f['market'] == key_market
-             and f['available_on'] <= as_of]
-    if not files:
+    periods = sorted({f['period'] for f in meta['files'] if f['dataset'] == 'monthly_revenue' and f['market'] == key_market
+                      and f['available_on'] <= as_of})
+    return key_market, periods
+
+
+def _revenue_yoy(code: str, market: str, as_of: str) -> float | None:
+    from datetime import date
+    key_market, periods = _revenue_periods(market, as_of)
+    if not periods:
         return None
-    latest = max(f['period'] for f in files)
+    latest = periods[-1]
     year, month = latest.split('-')
     prior = f'{int(year) - 1}-{month}'
-
-    def revenue(period: str) -> int | None:
-        for item in (f for f in meta['files'] if f['dataset'] == 'monthly_revenue' and f['market'] == key_market
-                     and f['period'] == period):
-            cache_key = ('file', item['file'])
-            if cache_key not in _REVENUE_CACHE:
-                content = (root / item['file']).read_bytes()
-                rows = fh.parse_monthly_revenue(content, market=key_market, period=period, source_file=item['file'],
-                                                fetched_at_utc=item['fetched_at_utc'], sha256=item['sha256'],
-                                                source_scope=item.get('source_scope', 'domestic'))
-                _REVENUE_CACHE[cache_key] = {r['code']: r['revenue_thousand_twd'] for r in rows}
-            value = _REVENUE_CACHE[cache_key].get(code)
-            if value is not None:
-                return value
-        return None
-
     date.fromisoformat(as_of)
-    now, then = revenue(latest), revenue(prior)
+    now, then = _monthly_revenue(code, key_market, latest), _monthly_revenue(code, key_market, prior)
     return round((now - then) / then * 100, 2) if now is not None and then else None
 
 
-def _pe(code: str, as_of: str) -> float | None:
+def revenue_series(code: str, market: str, as_of: str, months: int = 25) -> list[dict]:
+    """事實區塊用：最近 months 期（夠算 13 個月的年增）月營收，由舊到新；查不到的期別省略。"""
+    key_market, periods = _revenue_periods(market, as_of)
+    out = []
+    for period in periods[-months:]:
+        value = _monthly_revenue(code, key_market, period)
+        if value is not None:
+            out.append({'period': period, 'revenue': value})
+    return out
+
+
+def valuation_snapshot(code: str, as_of: str) -> dict | None:
+    """事實區塊用：這一檔截至 as_of 最近一筆本益比、淨值比、殖利率（每日更新已在抓，上市上櫃都有）。"""
     import valuation_history
-    row = valuation_history.as_of(valuation_history.DEFAULT_DB, as_of, code=code)
+    return valuation_history.as_of(valuation_history.DEFAULT_DB, as_of, code=code)
+
+
+def credit_series(code: str, market: str, as_of: str, days: int = 25) -> dict:
+    """事實區塊用：上市融資融券（MI_MARGN，張）與借券（TWT93U，股），由舊到新、資料日 ≤ as_of。
+    上櫃的原件要等 E 票補抓，在那之前回空的（融資券那一塊不出現）。"""
+    if market != '上市':
+        return {}
+    from . import chips
+
+    def recent(folder, prefix):   # 各看自己的原件有哪幾天，不借用法人原件的日期
+        stamps = sorted(path.stem.split('-')[1] for path in folder.glob(f'{prefix}-*.json'))
+        return [d for d in (f'{s[:4]}-{s[4:6]}-{s[6:]}' for s in stamps) if d <= as_of][-days:]
+    margin_days, borrow_days = recent(chips.DETAIL / 'margin', 'margin'), recent(chips.FUND / 'twt93u', 'twt93u')
+    margin = [{'date': d, 'margin': row['margin'], 'short': row['short']}
+              for d, row in zip(margin_days, chips.margin(code, margin_days)) if row]
+    borrow = [{'date': d, 'balance': row['balance']} for d, row in zip(borrow_days, chips.borrow(code, borrow_days)) if row]
+    return {'margin': margin, 'borrow': borrow}
+
+
+def _pe(code: str, as_of: str) -> float | None:
+    row = valuation_snapshot(code, as_of)
     return row['pe'] if row else None
 
 
@@ -541,13 +587,17 @@ def condition_inputs(code: str, market: str, as_of: str, bars: list[Bar], x: dic
     }
 
 
-def _facts(last: Bar, info: dict, indicators: dict, institutional: list[dict], trading_days: list[str]) -> dict | None:
+def _facts(last: Bar, info: dict, indicators: dict, institutional: list[dict], trading_days: list[str],
+           market: str, code: str) -> dict | None:
     # 這裡比 _safe 收得更寬：事實區塊是附加內容，任何錯誤都只讓它留空，不能讓整份分析失敗。
     try:
         from .facts import build_facts
         chg_pct = round(info['chg'], 2) if info.get('chg_known', True) else None
         return build_facts(data_date=last.date, close=last.close, chg_pct=chg_pct, indicators=indicators,
-                           institutional=institutional, trading_days=trading_days)
+                           institutional=institutional, trading_days=trading_days,
+                           credit=_safe(lambda: credit_series(code, market, last.date)) or {},
+                           valuation=_safe(lambda: valuation_snapshot(code, last.date)),
+                           revenue=_safe(lambda: revenue_series(code, market, last.date)) or [])
     except Exception:  # noqa: BLE001
         return None
 
@@ -597,7 +647,7 @@ def analyze_v2(code: str, as_of: str, db_path=DEFAULT_DB, otc_db_path=DEFAULT_OT
         # 集保每週的大戶持股（本人 2026-11-14：主力買賣超沒有合法免費來源，改看這個）。讀不到就是空的。
         'big_holders': _safe(lambda: big_holder_series(DEFAULT_DB.parents[1] / 'tdcc-holders', code, last.date)) or [],
         # 個股頁事實區塊（本人 2026-11-15）：算不出來只讓這一塊留空，不影響其他內容。給誰看由網站入口的開關決定。
-        'facts': _facts(last, info, x, institutional, [bar.date for bar in chart_bars]),
+        'facts': _facts(last, info, x, institutional, [bar.date for bar in chart_bars], info['market'], code),
         'defense': defense_payload(x['low20_intraday']),
         'trend_classification': trend_classification_payload(),
         'conditions': conditions,

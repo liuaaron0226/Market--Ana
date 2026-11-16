@@ -113,7 +113,7 @@ WORKING_SET: tuple[Item, ...] = (
     Item("data/listed-catalog/raw"),
     Item("data/otc-catalog/raw"),
     Item("data/market-snapshots/stock-detail", recent_files=60),  # 上市融資融券與法人明細（個股頁籌碼）
-    Item("data/fundamentals/twt93u", recent_files=20),
+    Item("data/fundamentals/twt93u", recent_files=30),  # 個股頁融資券那一塊要近 20 個交易日走勢與 5 日增減（11-16）
     Item("data/corporate-actions/events.json"),
     Item("data/corporate-actions/raw/TPEx-exDailyQ"),  # 櫃買除權息原件＋SHA＋涵蓋區間（2016 起全留）
     # 還原價的補充資料（ETF 分割、櫃買減資／面額變更、上市除權息現金股利）；第一次由 seeds/ 的種子起算。

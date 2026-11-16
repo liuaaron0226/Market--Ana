@@ -15,7 +15,8 @@ def _lots(shares: float) -> int:
 
 def _round(value: float, places: int) -> float:
     """四捨五入（不是銀行家捨入）；和張數的捨入一致。"""
-    return float(Decimal(str(value)).quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP))
+    # 加 0.0 把 -0.0 變成 0.0：很小的負數捨入後要是平常的 0，頁面才不會印出「-0」。
+    return float(Decimal(str(value)).quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP)) + 0.0
 
 
 def _num(value: float) -> str:
@@ -95,7 +96,7 @@ def _institutional_block(institutional: list[dict], trading_days: list[str]) -> 
     if not institutional:
         return None
     latest = institutional[-1]['date']
-    window = [day for day in trading_days if day <= latest] or [row['date'] for row in institutional]
+    window = ([day for day in trading_days if day < latest] + [latest]) if trading_days else [row['date'] for row in institutional]
     by_day = {row['date']: row for row in institutional}
     rows = []
     for key, name in INSTITUTIONS:
@@ -106,6 +107,82 @@ def _institutional_block(institutional: list[dict], trading_days: list[str]) -> 
     if not any(row['side'] or row['sum5'] is not None for row in rows):
         return None
     return {'data_date': latest, 'rows': rows}
+
+
+def _aligned(series: list[dict], key: str, trading_days: list[str]) -> tuple[str, list[str], list]:
+    """把一串（日期, 值）對齊到交易日：回傳 (最新資料日, 到最新資料日為止的交易日, 對應的值；缺的那天是 None)。"""
+    latest = series[-1]['date']
+    by_day = {row['date']: row.get(key) for row in series}
+    # 最新資料日一定排在最後，就算 K 線沒有那一天（例如當天停牌、原件仍有餘額）。
+    days = ([day for day in trading_days if day < latest] + [latest]) if trading_days else [row['date'] for row in series]
+    return latest, days, [by_day.get(day) for day in days]
+
+
+def _credit_row(name: str, series: list[dict], key: str, trading_days: list[str], to_lots: bool) -> dict | None:
+    """一列融資券：最新餘額、相對 5 個交易日前的增減（那天缺資料就不給）、近 20 個交易日走勢（從第一個有資料的日子起）。"""
+    if not series or series[-1].get(key) is None:
+        return None
+    latest, _, values = _aligned(series, key, trading_days)
+    lots = (lambda v: None if v is None else _lots(v)) if to_lots else (lambda v: v)
+    # 增減用「顯示出來的兩個餘額」相減，畫面上的數字才對得起來。
+    change = lots(values[-1]) - lots(values[-6]) if len(values) >= 6 and values[-6] is not None else None
+    window = values[-20:]
+    first = next((i for i, v in enumerate(window) if v is not None), len(window))
+    return {'name': name, 'balance': lots(values[-1]), 'change5': change,
+            'series': [lots(v) for v in window[first:]], 'data_date': latest}
+
+
+def _credit_block(credit: dict, trading_days: list[str]) -> dict | None:
+    margin, borrow = credit.get('margin') or [], credit.get('borrow') or []
+    rows = [row for row in (
+        _credit_row('融資', margin, 'margin', trading_days, to_lots=False),   # 融資融券原件單位就是張
+        _credit_row('融券', margin, 'short', trading_days, to_lots=False),
+        _credit_row('借券', borrow, 'balance', trading_days, to_lots=True),   # 借券原件是股
+    ) if row]
+    return {'rows': rows} if rows else None
+
+
+def _previous_month(period: str, months: int = 1) -> str:
+    year, month = map(int, period.split('-'))
+    index = year * 12 + (month - 1) - months
+    return f'{index // 12}-{index % 12 + 1:02d}'
+
+
+def _growth(now: float | None, then: float | None) -> float | None:
+    return _round((now / then - 1) * 100, 1) if now is not None and then else None
+
+
+def _fundamentals_block(valuation: dict | None, revenue: list[dict]) -> dict | None:
+    valuation_part = None
+    if valuation and any(valuation.get(k) is not None for k in ('pe', 'pb', 'dividend_yield_pct')):
+        valuation_part = {'pe': valuation.get('pe'), 'pb': valuation.get('pb'),
+                          'yield': valuation.get('dividend_yield_pct'), 'data_date': valuation.get('date')}
+    revenue_part, yoy_series = None, []
+    if revenue:
+        by_period = {row['period']: row['revenue'] for row in revenue}
+        latest = max(by_period)
+        revenue_part = {'period': latest, 'mom': _growth(by_period[latest], by_period.get(_previous_month(latest))),
+                        'yoy': _growth(by_period[latest], by_period.get(_previous_month(latest, 12)))}
+        periods = [_previous_month(latest, n) for n in range(12, -1, -1)]   # 近 13 個月，由舊到新
+        yoy_series = [{'period': period, 'yoy': _growth(by_period.get(period), by_period.get(_previous_month(period, 12)))}
+                      for period in periods]
+    if valuation_part is None and revenue_part is None:
+        return None
+    return {'valuation': valuation_part, 'revenue': revenue_part, 'revenue_yoy': yoy_series}
+
+
+def _earnings_sentence(fundamentals: dict | None) -> str | None:
+    if not fundamentals:
+        return None
+    parts = []
+    revenue = fundamentals.get('revenue')
+    if revenue and revenue.get('yoy') is not None:
+        yoy = revenue['yoy']
+        parts.append(f'{int(revenue["period"][5:7])} 月營收年增 {yoy:+.1f}%' if yoy else f'{int(revenue["period"][5:7])} 月營收年增 0.0%')
+    valuation = fundamentals.get('valuation')
+    if valuation and valuation.get('pe') is not None:
+        parts.append(f'本益比 {_num(valuation["pe"])}')
+    return f'{"，".join(parts)}。' if parts else None
 
 
 PRICE_ROWS = (('ma5', '5 日線'), ('ma10', '10 日線'), ('ma20', '月線'), ('ma60', '季線'), ('ma120', '半年線'),
@@ -123,9 +200,12 @@ def _technical_block(close: float, indicators: dict) -> dict | None:
 
 
 def build_facts(*, data_date: str, close: float, chg_pct: float | None, indicators: dict, institutional: list[dict],
-                trading_days: list[str] | None = None) -> dict:
+                trading_days: list[str] | None = None, credit: dict | None = None, valuation: dict | None = None,
+                revenue: list[dict] | None = None) -> dict:
     """data_date：資料日；close：資料日收盤；chg_pct：漲跌幅（%），不比價或沒有參考價時是 None；
-    institutional：由舊到新的三大法人買賣超（股，已依還原換算）；trading_days：由舊到新的交易日（K 線日期）。"""
+    institutional：由舊到新的三大法人買賣超（股，已依還原換算）；trading_days：由舊到新的交易日（K 線日期）；
+    credit：{'margin': [{date, margin, short}]（張）, 'borrow': [{date, balance}]（股）}；valuation：估值最近一筆；
+    revenue：[{period, revenue}] 由舊到新。"""
     today = []
     if chg_pct is not None:
         today.append(_close_cell(chg_pct))
@@ -135,14 +215,18 @@ def build_facts(*, data_date: str, close: float, chg_pct: float | None, indicato
     latest = institutional[-1] if institutional else None
     if latest and latest.get('date') == data_date and latest.get('foreign') is not None:
         today.append(_foreign_cell(latest['foreign']))
+    fundamentals_block = _fundamentals_block(valuation, revenue or [])
     summary = [sentence for sentence in (
         _position_sentence(close, indicators.get('ma20'), indicators.get('ma240')),
         _volume_sentence(ratio, indicators.get('rsi14')),
+        _earnings_sentence(fundamentals_block),
     ) if sentence]
     institutional_block = _institutional_block(institutional, trading_days or [])
+    credit_block = _credit_block(credit or {}, trading_days or [])
     technical_block = _technical_block(close, indicators)
     # 切換籤的順序（本人選的擺法 A）：重點｜法人｜融資券｜基本面｜消息｜技術；沒有內容的那一塊不出現。
     blocks = [name for name, present in (('summary', bool(summary)), ('institutional', institutional_block is not None),
+                                         ('credit', credit_block is not None), ('fundamentals', fundamentals_block is not None),
                                          ('technical', technical_block is not None)) if present]
     return {'data_date': data_date, 'today': today, 'summary': summary, 'institutional': institutional_block,
-            'technical': technical_block, 'blocks': blocks}
+            'credit': credit_block, 'fundamentals': fundamentals_block, 'technical': technical_block, 'blocks': blocks}

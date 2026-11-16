@@ -6,7 +6,7 @@
   'use strict';
   const TONES = new Set(['up', 'down']);
   // 切換籤的名字與順序（本人選的擺法 A）；出現哪幾個由 facts.blocks 決定，頁面不自己判斷。
-  const TABS = { summary: '重點', institutional: '法人', technical: '技術' };
+  const TABS = { summary: '重點', institutional: '法人', credit: '融資券', fundamentals: '基本面', technical: '技術' };
   const state = { key: '', code: '', block: 'summary' };
 
   const el = (tag, className, text) => {
@@ -17,7 +17,8 @@
   };
   const has = value => value !== null && value !== undefined;
   const num = value => Number(value).toLocaleString('en-US', { maximumFractionDigits: 2 });
-  const signed = value => `${value > 0 ? '+' : ''}${num(value)}`;
+  const signed = value => value === 0 ? '0' : `${value > 0 ? '+' : ''}${num(value)}`;   // 0 和 -0 都寫 0
+  const pct = value => value === 0 ? '0.0%' : `${value > 0 ? '+' : ''}${Number(value).toFixed(1)}%`;   // 一位小數，和句子一致
   const tick = tone => {
     const node = el('i', `sf-tick${TONES.has(tone) ? ` ${tone}` : ''}`);
     node.setAttribute('aria-hidden', 'true');
@@ -124,7 +125,7 @@
       const tr = el('tr');
       tr.append(el('th', '', row.name), el('td', 'num', num(row.value)));
       const distance = el('td', 'num');
-      distance.append(document.createTextNode(`${signed(row.distance_pct)}%`), bar(row.distance_pct, max));
+      distance.append(document.createTextNode(pct(row.distance_pct)), bar(row.distance_pct, max));
       tr.append(distance);
       body.append(tr);
     }
@@ -143,7 +144,118 @@
     return readings.length ? [table, figures] : [table];
   }
 
-  const PANELS = { summary: summaryPanel, institutional: institutionalPanel, technical: technicalPanel };
+  // 近 20 日走勢小圖：缺資料的日子斷開，不補線。
+  function sparkline(series) {
+    const W = 64, H = 20;
+    const values = series.filter(has);
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svg.setAttribute('class', 'sf-spark');
+    svg.setAttribute('aria-hidden', 'true');
+    if (values.length < 2) return svg;
+    const hi = Math.max(...values), lo = Math.min(...values);
+    const x = i => i / (series.length - 1) * W;
+    const y = v => hi === lo ? H / 2 : H - 2 - (v - lo) / (hi - lo) * (H - 4);
+    let segment = [];
+    const flush = () => {
+      if (segment.length > 1) {
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+        line.setAttribute('points', segment.join(' '));
+        svg.append(line);
+      } else if (segment.length === 1) {   // 前後都缺資料的單一天：畫一個小點，不讓它消失
+        const [cx, cy] = segment[0].split(',');
+        const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        for (const [k, v] of Object.entries({ cx, cy, r: 1.4 })) dot.setAttribute(k, v);
+        svg.append(dot);
+      }
+      segment = [];
+    };
+    series.forEach((v, i) => { if (has(v)) segment.push(`${x(i).toFixed(1)},${y(v).toFixed(1)}`); else flush(); });
+    flush();
+    return svg;
+  }
+
+  function creditPanel(facts) {
+    const rows = facts.credit.rows || [];
+    const table = el('table', 'sf-table');
+    table.append(headRow(['張', '餘額', '5 日增減', '近 20 日']));
+    const body = el('tbody');
+    for (const row of rows) {
+      const tr = el('tr');
+      tr.append(el('th', '', row.name), el('td', 'num', num(row.balance)), el('td', 'num', has(row.change5) ? signed(row.change5) : ''));
+      const spark = el('td', 'sf-spark-cell');
+      spark.append(sparkline(row.series || []));
+      tr.append(spark);
+      body.append(tr);
+    }
+    table.append(body);
+    // 融資融券比法人晚一個交易日；借券可能又不同一天，不同時分開標。
+    const dates = [...new Set(rows.map(row => row.data_date))];
+    const borrow = rows.find(row => row.name === '借券');
+    const main = rows.find(row => row.name !== '借券') || rows[0];
+    // 這一塊固定標資料日（票面要求；融資融券多半比法人晚一天）。
+    const text = dates.length > 1 && borrow ? `資料日 ${main.data_date}（借券 ${borrow.data_date}）` : `資料日 ${dates[0]}`;
+    return [el('p', 'sf-date num', text), table];
+  }
+
+  // 近 13 個月營收年增：零軸上下的直條，最新一個月加深；缺的月份留空。
+  function yoyBars(series) {
+    const W = 240, H = 64;
+    const values = series.map(item => item.yoy).filter(has);
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svg.setAttribute('class', 'sf-yoy');
+    svg.setAttribute('preserveAspectRatio', 'none');  // 拉滿整個寬度（直條本身沒有要保持的比例）
+    svg.setAttribute('aria-hidden', 'true');
+    const max = Math.max(1, ...values.map(Math.abs));
+    const step = W / Math.max(1, series.length);
+    series.forEach((item, i) => {
+      if (!has(item.yoy)) return;
+      const h = Math.abs(item.yoy) / max * (H / 2 - 3);
+      const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      rect.setAttribute('x', (i * step + step * 0.18).toFixed(1));
+      rect.setAttribute('width', (step * 0.64).toFixed(1));
+      // 年增 0 時畫一條 1 像素的線壓在零軸上，不落在零軸下方。
+      rect.setAttribute('y', (item.yoy > 0 ? H / 2 - h : item.yoy < 0 ? H / 2 : H / 2 - 0.5).toFixed(1));
+      rect.setAttribute('height', Math.max(1, h).toFixed(1));
+      if (i === series.length - 1) rect.setAttribute('class', 'latest');
+      svg.append(rect);
+    });
+    const axis = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    for (const [k, v] of Object.entries({ x1: 0, x2: W, y1: H / 2, y2: H / 2 })) axis.setAttribute(k, v);
+    svg.append(axis);
+    return svg;
+  }
+
+  function fundamentalsPanel(facts) {
+    const block = facts.fundamentals;
+    const parts = [];
+    const valuation = block.valuation;
+    if (valuation) {
+      const figures = el('div', 'sf-figs');
+      for (const [label, value] of [['本益比', valuation.pe], ['淨值比', valuation.pb], ['殖利率', has(valuation.yield) ? `${num(valuation.yield)}%` : null]]) {
+        if (!has(value)) continue;
+        const box = el('div');
+        box.append(el('span', '', label), el('b', 'num', typeof value === 'string' ? value : num(value)));
+        figures.append(box);
+      }
+      parts.push(dateLine(valuation.data_date, facts.data_date), figures);
+    }
+    const revenue = block.revenue;
+    if (revenue) {
+      const pieces = [has(revenue.mom) ? `月增 ${pct(revenue.mom)}` : null, has(revenue.yoy) ? `年增 ${pct(revenue.yoy)}` : null].filter(Boolean);
+      if (pieces.length) {   // 月增年增都算不出來就不放這一列（缺什麼就少什麼）
+        const sub = el('p', 'sf-sub');
+        sub.append(el('span', '', `${Number(revenue.period.slice(5, 7))} 月營收`), el('b', 'num', pieces.join('　')));
+        parts.push(sub);
+      }
+      if ((block.revenue_yoy || []).some(item => has(item.yoy))) parts.push(yoyBars(block.revenue_yoy), el('p', 'sf-caption', `近 ${block.revenue_yoy.length} 個月營收年增`));
+    }
+    return parts;
+  }
+
+  const PANELS = { summary: summaryPanel, institutional: institutionalPanel, credit: creditPanel, fundamentals: fundamentalsPanel,
+    technical: technicalPanel };
 
   function renderBlocks(facts, code) {
     const host = document.getElementById('stockFactsBlocks');

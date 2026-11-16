@@ -63,6 +63,19 @@
 .bd .sf-figs span { display: block; color: var(--dim); font-size: 12px; }
 .bd .sf-figs b { display: block; margin-top: 5px; font: 500 20px var(--mono); }
 
+/* 融資券的走勢小圖、基本面的營收列與年增直條 */
+.bd .sf-spark-cell { width: 68px; }
+.bd .sf-spark { display: block; width: 64px; height: 20px; margin-left: auto; }
+.bd .sf-spark polyline { fill: none; stroke: var(--ink); stroke-width: 1.2; vector-effect: non-scaling-stroke; }
+.bd .sf-sub { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-top: 14px; font-size: 13px; }
+.bd .sf-sub b { font: 500 13px var(--mono); white-space: nowrap; }
+.bd .sf-yoy { display: block; width: 100%; height: 64px; margin-top: 8px; }
+.bd .sf-yoy rect { fill: var(--ink); opacity: .32; }
+.bd .sf-yoy rect.latest { opacity: 1; }
+.bd .sf-yoy line { stroke: var(--line-strong); stroke-width: 1; }
+.bd .sf-caption { margin-top: 4px; color: var(--dim); font-size: 12px; }
+.bd .sf-spark circle { fill: var(--ink); }
+
 /* 桌機：右欄約 250 寬，表格收緊才放得下五欄 */
 @media (min-width: 861px) {
   .bd .sf-facts li { font-size: 14px; }
