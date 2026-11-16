@@ -37,7 +37,8 @@ function analysisView(a) {
         next_day_outcomes: pick(r.next_day_outcomes, ["sample_count", "counts", "percent"]),
       })),
       as_of: {
-        ...pick(bt.as_of, ["date", "close", "high", "low", "open", "previous_low", "default_sample"]),
+        // upper／lower：收復線、防守線，每天照規則算（logs/build_analysis_data.py 的 day_lines）。首頁的線讀這裡，不等人寫的劇本
+        ...pick(bt.as_of, ["date", "close", "high", "low", "open", "previous_low", "default_sample", "upper", "lower"]),
         features: pick(bt.as_of?.features, ["close_position"]),
       },
       limitations: bt.limitations,

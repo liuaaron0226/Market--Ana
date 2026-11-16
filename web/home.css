@@ -15,14 +15,15 @@
 
 /* ---------- 報價：報表式大標 ---------- */
 .hm .market-header {
-  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 480px) auto;
-  grid-template-areas: "price conclusion theme" "time conclusion theme";
+  /* 中間原本有「下一交易日」那一欄；那個框收起來了（本人 11-15），格線不再留它的位置 */
+  display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "price theme" "time theme";
   column-gap: 40px; row-gap: 12px; align-items: end;
   padding: 40px 0 32px; border-bottom: 1px solid var(--ink);
 }
 .hm .instrument-block { grid-area: price; gap: 12px; }
 .hm .time-grid { grid-area: time; align-self: start; }
-.hm .conclusion-trigger { grid-area: conclusion; }
+
 .hm .theme-toggle { grid-area: theme; align-self: start; }
 .hm .brand-line h1 { font: 600 20px var(--serif); letter-spacing: .02em; color: var(--dim); }
 .hm .market-mark { width: 20px; height: 20px; color: var(--dim); }
@@ -32,18 +33,6 @@
 .hm .price-summary .detail-cue { align-self: center; }
 .hm .status-compact { color: var(--faint); font-size: 12px; gap: 8px; }
 .hm .state-trigger { color: var(--dim); }
-
-/* 下一交易日結論：不再是浮起的卡片，改成上方一條細線的引文 */
-.hm .conclusion-trigger {
-  max-width: none; padding: 12px 32px 0 0; min-height: 0;
-  border: 0 !important; border-top: 1px solid var(--hair) !important; border-radius: 0 !important;
-  background: transparent !important; box-shadow: none;
-}
-.hm .conclusion-trigger strong { transition: color 160ms var(--ease-out); }
-.hm .conclusion-trigger:hover strong { color: var(--accent); }
-.hm .conclusion-label { font-size: 12px; color: var(--faint); }
-.hm .conclusion-trigger strong { font: 600 22px/1.45 var(--serif) !important; color: var(--ink); margin-top: 4px; }
-.hm .conclusion-trigger .detail-cue { right: 0; }
 
 .hm .theme-toggle {
   width: var(--btn-h); height: var(--btn-h); padding: 0; display: grid; place-items: center;
@@ -98,16 +87,6 @@
 .hm .chart-toolbar h2 { font: 600 22px var(--serif); }
 .hm .chart-toolbar p { color: var(--faint); font: 12px var(--mono); }
 .hm .chart-controls { gap: 8px; }
-.hm .chart-controls select,
-.hm .chart-controls button {
-  height: var(--btn-h); min-height: 0; border: 1px solid var(--hair); border-radius: var(--btn-r);
-  background: transparent; color: var(--ink); font: 500 13px var(--sans);
-  transition: background-color 160ms var(--ease-out), transform 120ms var(--ease-out);
-}
-.hm .chart-controls button { width: var(--btn-h); padding: 0; }
-.hm .chart-controls .reset-view { width: auto; padding: 0 12px; }
-.hm .chart-controls button:hover { background: var(--panel2); }
-.hm .chart-controls button:active { transform: var(--press); }
 .hm .chart-stage { height: clamp(380px, 52vh, 560px); }
 
 /* 收復線／防守線浮鈕：跟個股頁價籤同一套語言（實色小價籤＋數字） */
@@ -188,12 +167,12 @@
   .hm .app-shell { padding: 0 16px 64px; }
   .hm .market-header {
     grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas: "price theme" "time time" "conclusion conclusion";
+    grid-template-areas: "price theme" "time time";
     padding: 24px 0 20px; row-gap: 16px;
   }
   .hm .price-value { font-size: 44px; }
   .hm .price-change { font-size: 15px; }
-  .hm .conclusion-trigger strong { font-size: 18px !important; }
+
   .hm .hm-search { grid-template-columns: minmax(0, 1fr); row-gap: 12px; }
   .hm .stock-search-status, .hm .stock-search-results, .hm .stock-search-more { grid-column: 1; }
   .hm .chart-stage { height: 340px; }
@@ -212,16 +191,12 @@
 .hm .price-value { font: 500 64px/1 var(--mono) !important; }
 .hm .time-grid { padding: 0; border: 0; }
 .hm .instrument-block { gap: 16px; }
-.hm .conclusion-trigger { min-height: 0; overflow: visible; display: block; padding: 12px 48px 0 0; }
-.hm .conclusion-trigger::before,
-.hm .conclusion-trigger::after { display: none !important; }
-.hm .conclusion-trigger strong { font: 600 22px/1.5 var(--serif) !important; }
-.hm .conclusion-trigger .detail-cue { top: 14px; transform: none; }
+
 .hm .line-trigger { width: 156px; grid-template-columns: auto 1fr auto; }
 .hm .line-trigger span { white-space: nowrap; }
 @media (max-width: 860px) {
   .hm .price-value { font-size: 44px !important; }
-  .hm .conclusion-trigger strong { font-size: 18px !important; }
+
 }
 
 /* 收復／防守：線與數字由 K 線軸上價籤顯示；原浮鈕改成圖表左上角的可點圖例（點了開詳情） */
@@ -251,13 +226,11 @@
   .hm .stock-search-form button { padding: 0 12px; }
   .hm .chart-toolbar { gap: 8px; }
   .hm .chart-toolbar p { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .hm .chart-tools-toggle { width: auto !important; padding: 0 10px !important; white-space: nowrap; }
 }
 
 /* ================= 資訊密度整理（本人 11-09：「資訊比較多地方還是需要在優化一下」） ================= */
 
 /* 籌碼卡：日期統一寫在標題；迷你圖淡一點、矮一點，讓數字當主角 */
-.hm .chip-grid.hm-same-date .chip-date { display: none; }
 .hm .chip-card { gap: 4px; padding-top: 16px; padding-bottom: 16px; }
 .hm .chip-name i { opacity: 0; transition: opacity 160ms var(--ease-out), transform 160ms var(--ease-out); }
 .hm .chip-card:hover .chip-name i { opacity: 1; transform: translateX(2px); }
@@ -270,10 +243,8 @@
 .hm .read-list li + li { padding-left: 20px; border-left: 1px solid var(--hair); }
 .hm .read-list li b { font: 400 12px var(--sans); color: var(--faint); }
 .hm .read-list li span { font-size: 15px; line-height: 1.5; color: var(--ink); }
-.hm .read-card::after { content: "點這裡看完整數字與依據 ›"; font-size: 12px; color: var(--faint); transition: color 160ms var(--ease-out); }
-.hm .read-card:hover::after { color: var(--accent); }
 
-/* 選股看板：九頁全部顯示，沒有名單的一組排在後面、字色退一階 */
+/* 選股看板：九頁都列在排行小鍵的選單裡，沒有名單的一組排在後面、字色退一階 */
 .hm .hm-tab-cap {
   display: inline-flex; align-items: center; height: 32px; margin-left: 8px; padding-left: 12px;
   border-left: 1px solid var(--hair); color: var(--faint); font-size: 12px; white-space: nowrap;
@@ -282,8 +253,8 @@
 .hm .screen-tabs button.is-unlisted[aria-selected="true"] { color: var(--bg); }
 .hm .screen-head { align-items: baseline; }
 .hm .screen-meta { font-size: 12px; color: var(--faint); }
-.hm .screen-block[data-state="empty"] .screen-controls,
-.hm .screen-block[data-state="not_ready"] .screen-controls { opacity: .5; }
+.hm .screen-block[data-state="empty"] .screen-controls .chart-chip,
+.hm .screen-block[data-state="not_ready"] .screen-controls .chart-chip { opacity: .5; }
 
 /* 長期核心：兩張卡排成左右對照，同一指標在同一列，數字靠右對齊 */
 .hm .core-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0; margin-top: 16px; border-top: 1px solid var(--ink); }
@@ -324,16 +295,15 @@
 }
 
 /* ================= 正式版補強（11-09）：中寬度報價列 =================
-   861～1179px 三欄放不下 64px 指數＋漲跌（960px 時結論會蓋到漲跌），改成「報價一列、結論整列在下」；
-   指數字級隨寬度縮放，避免硬切。 */
+   861～1179px：日期那一列橫跨整個寬度；指數字級隨寬度縮放，避免硬切。 */
 .hm .price-value { font-size: clamp(44px, 4.4vw, 64px) !important; }
 @media (max-width: 1179px) and (min-width: 861px) {
   .hm .market-header {
     grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas: "price theme" "time time" "conclusion conclusion";
+    grid-template-areas: "price theme" "time time";
     row-gap: 16px;
   }
-  .hm .conclusion-trigger { max-width: 720px; }
+
 }
 
 /* 手機：收復／防守按鈕移到圖表下方一列（minimal.js 搬到 .chart-actions），維持 44px 觸控高度 */
@@ -350,8 +320,7 @@
 @media (min-width: 761px) {
   .hm .chart-host { top: 44px; }
 }
-/* 結論句：讓瀏覽器平均分配兩行，不在「不追」與「空」之間硬斷 */
-.hm .conclusion-trigger strong { text-wrap: balance; }
+/* 直白分析那一句：讓瀏覽器平均分配兩行 */
 .hm .read-line { text-wrap: balance; }
 
 /* 長期核心：0050 是主角用 accent；2330 是對照，用墨色的中性一階（取代原本唯一的冷紫色，稽核 #7 同類問題） */
@@ -360,13 +329,12 @@
 /* 籌碼選股分頁：可算的一列，「目前沒有名單」那組換到下一列，不會在中間被切斷 */
 .hm .screen-tabs { flex-wrap: wrap; row-gap: 4px; }
 .hm .hm-tab-cap { flex-basis: 100%; height: 24px; margin: 4px 0 0; padding-left: 0; border-left: 0; }
-.hm .conclusion-trigger strong { text-wrap: pretty; }
+
 /* 手機：「清空」不再獨占一整列，和搜尋鈕並排 */
 @media (max-width: 860px) {
   .hm .stock-search-form { grid-template-columns: minmax(0, 1fr) auto auto; }
   .hm .stock-search-form #stockSearchClear { grid-column: auto; }
 }
-.hm .conclusion-trigger .nowrap-phrase { display: inline-block; }
 
 /* 11-09 本人指出長期核心重疊：卡片太窄（每卡 200px），數字貼到分隔線、× 被切；
    列線因 dl 的 gap 而斷開；表格底部直接接註腳。改為：表格欄加寬、列線連續、表格與註腳間留白 */
@@ -389,3 +357,563 @@
 /* 圖表說明文字太長時換行，不截斷 */
 .hm .chart-toolbar > div:first-child { min-width: 0; }
 .hm .chart-toolbar p { white-space: normal; max-width: 40em; }
+
+/* ================= 看盤桌：首頁外殼（立體重設計 A 包第 1 片，2026-11-14） =================
+   頁面背景是桌面；頂列、搜尋、主 K 線是板；板上可按的是鍵，輸入框與切換軌道是槽。
+   陰影與圓角一律引用 bold.css 的深度變數。選擇器用 body.hm，才壓得過後載入的 panel.css。
+   外殼以下的區塊（直白分析、籌碼、選股看板）在第 3 片換。 */
+html:has(> body.hm) { background: var(--desk); }
+body.hm { background: radial-gradient(1200px 720px at 18% 0, var(--desk-hi), transparent 70%) no-repeat var(--desk); }
+body.hm .app-shell { padding-top: 24px; }
+
+/* ---------- 第 1 層：三塊板 ---------- */
+body.hm .market-header,
+body.hm .chart-workspace {
+  border: 0; border-radius: var(--r-slab); background: var(--slab); box-shadow: var(--slab-shadow);
+}
+body.hm .market-header { padding: 28px 32px; }
+body.hm .workspace { padding-top: 20px; }
+body.hm .chart-workspace { padding: 4px 32px 28px; border-bottom: 0 !important; }
+body.hm .ai-digest-card { margin-top: 20px; }
+body.hm .service-note {
+  margin-top: 20px; padding: 10px 16px; border-radius: var(--r-key); background: transparent; box-shadow: var(--well-shadow);
+}
+
+/* ---------- 鍵：凸起，懸停浮起，按下沉入（外殼與下面各區塊的按鈕共用這一組） ---------- */
+body.hm :is(.theme-toggle, .icon-key, .stock-search-form button[type="button"], .stock-search-more, .stock-search-result a,
+  .chart-actions .line-trigger, .chart-actions .mobile-candle-details, .chart-toolbar .chart-chip, .chart-stage .reset-view,
+  .screen-more, .core-selection-chip, .rotation-open) {
+  border: 0; border-radius: var(--r-key); background: var(--key); box-shadow: var(--key-shadow);
+  transition: transform var(--t-lift) var(--ease-depth), box-shadow var(--t-lift) var(--ease-depth), color 160ms var(--ease-out);
+}
+
+/* 實心墨色的主要動作：搜尋、加入比較 */
+body.hm .stock-search-form button[type="submit"],
+body.hm .core-compare-entry button {
+  border: 0; border-radius: var(--r-key); box-shadow: var(--key-shadow-ink);
+  transition: transform var(--t-lift) var(--ease-depth), background-color 160ms var(--ease-out);
+}
+body.hm .stock-search-results { gap: 8px; }
+@media (hover: hover) {
+  body.hm :is(.theme-toggle, .icon-key, .stock-search-form button[type="button"], .stock-search-more, .stock-search-result a,
+    .chart-actions .line-trigger, .chart-actions .mobile-candle-details, .chart-toolbar .chart-chip, .chart-stage .reset-view,
+    .screen-more, .core-selection-chip, .rotation-open):hover {
+    background: var(--key); color: var(--ink); transform: translateY(var(--key-lift)); box-shadow: var(--key-shadow-hover);
+  }
+  body.hm .stock-search-form button[type="submit"]:hover,
+  body.hm .core-compare-entry button:hover { transform: translateY(var(--key-lift)); }
+  body.hm :is(.price-summary, .state-trigger):hover { transform: translateY(var(--key-lift)); }
+}
+body.hm :is(.theme-toggle, .icon-key, .stock-search-form button[type="button"], .stock-search-more, .stock-search-result a,
+  .chart-actions .line-trigger, .chart-actions .mobile-candle-details, .chart-toolbar .chart-chip, .chart-stage .reset-view,
+  .screen-more, .core-selection-chip, .rotation-open):active {
+  transform: translateY(var(--key-thick)); box-shadow: var(--key-shadow-press); transition-duration: var(--t-press);
+}
+body.hm .stock-search-form button[type="submit"]:active,
+body.hm .core-compare-entry button:active {
+  transform: translateY(var(--key-thick)); box-shadow: none; transition-duration: var(--t-press);
+}
+body.hm :is(.price-summary, .state-trigger) { transition: transform var(--t-lift) var(--ease-depth); }
+body.hm :is(.price-summary, .state-trigger):active { transform: translateY(1px); transition-duration: var(--t-press); }
+
+/* ---------- 槽：搜尋框、代號輸入框 ---------- */
+body.hm .stock-search-form input,
+body.hm .core-compare-entry input {
+  border: 0; border-radius: var(--r-key); background: var(--well); box-shadow: var(--well-shadow);
+}
+body.hm .stock-search-form input:focus,
+body.hm .core-compare-entry input:focus { outline: 2px solid var(--ink); outline-offset: 0; }
+
+/* ---------- 圖上的小元件 ---------- */
+body.hm .chart-badges span,
+body.hm .line-trigger span,
+body.hm .current-point .point-label { border-radius: var(--r-tag); }
+/* 圖上的狀態小標（形成中、盤後暫用、分鐘推估）：不留細線框，底色不透明才壓得住 K 線 */
+body.hm .chart-badges span { border: 0; background: var(--well); }
+/* 焦點框的形狀也跟著變數走；主圖畫布的圓角是 kchart.js 寫在行內的，所以要 !important */
+body.hm .skip-link,
+body.hm .line-trigger { border-radius: var(--r-key); }
+body.hm #mainChart canvas { border-radius: var(--r-key) !important; }
+@media (min-width: 761px) {
+  /* 收復線／防守線圖例：外觀畫在 ::before（按鈕本身保留 44px 點擊區），所以鍵的樣子套在 ::before */
+  body.hm .line-trigger { transition: transform var(--t-lift) var(--ease-depth); }
+  body.hm .line-trigger::before {
+    border: 0; border-radius: var(--r-key); background: var(--key); box-shadow: var(--key-shadow);
+    transition: box-shadow var(--t-lift) var(--ease-depth);
+  }
+}
+@media (min-width: 761px) and (hover: hover) {
+  body.hm .line-trigger:hover { transform: translateY(var(--key-lift)); }
+  body.hm .line-trigger:hover::before { border: 0; background: var(--key); box-shadow: var(--key-shadow-hover); }
+}
+/* 按下的規則排在懸停之後：兩者同時成立時以按下為準 */
+@media (min-width: 761px) {
+  body.hm .line-trigger:active { transform: translateY(var(--key-thick)); transition-duration: var(--t-press); }
+  body.hm .line-trigger:active::before { box-shadow: var(--key-shadow-press); }
+}
+@media (max-width: 760px) {
+  body.hm .chart-actions { padding: 12px 0 4px; border-top: 0; }
+}
+
+/* ---------- 窄螢幕 ---------- */
+@media (max-width: 860px) {
+  body.hm .app-shell { padding: 12px 12px 64px; }
+  body.hm .market-header { padding: 20px 16px; }
+  body.hm .service-note { margin-top: 12px; }
+  body.hm .ai-digest-card { margin-top: 12px; }
+  body.hm .workspace { padding-top: 12px; }
+  body.hm .chart-workspace { padding: 0 14px 16px; }
+}
+/* 320 寬：板的內距讓圖下的收復線／防守線兩鍵並排放不下，改成上下各一列，避免橫向捲動 */
+@media (max-width: 359px) {
+  body.hm .chart-actions { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ================= 看盤桌：首頁其餘區塊（立體重設計 A 包第 3 片，2026-11-14） =================
+   今日 AI 解讀、直白分析、六張籌碼卡、選股看板的三個區塊都是第 1 層的板；區塊標題寫在桌面上。
+   可以點開明細的板（直白分析、籌碼卡）有懸停浮起與按下沉入。板裡的列表維持報表列，不再各自加框。
+   產業資金流向只換外面的板，裡面的圖、圖例、排行與表格留給 B 包。 */
+body.hm .ai-digest-card,
+body.hm .read-card,
+body.hm .chip-grid .chip-card,
+body.hm .market-screens .screen-block {
+  border: 0 !important; border-radius: var(--r-slab); background: var(--slab); box-shadow: var(--slab-shadow);
+}
+
+/* ---------- 直白分析、籌碼卡：可以點開明細的板 ---------- */
+body.hm .read-card { margin-top: 20px; padding: 28px 32px; }
+body.hm .chips { padding: 40px 0 0; border: 0; }
+body.hm .chip-grid { gap: 20px; border: 0; }
+body.hm .chip-grid .chip-card { padding: 18px 22px 16px; }
+body.hm .read-card,
+body.hm .chip-grid .chip-card {
+  transition: transform var(--t-lift) var(--ease-depth), box-shadow var(--t-lift) var(--ease-depth);
+}
+@media (hover: hover) {
+  body.hm .read-card:hover,
+  body.hm .chip-grid .chip-card:hover {
+    background: var(--slab); transform: translateY(var(--slab-lift)); box-shadow: var(--slab-shadow-hover);
+  }
+}
+body.hm .read-card:active,
+body.hm .chip-grid .chip-card:active {
+  transform: translateY(calc(var(--slab-thick) - 1px)); box-shadow: var(--slab-shadow-press); transition-duration: var(--t-press);
+}
+
+/* ---------- 選股看板：三塊板 ---------- */
+body.hm .hm-explore { padding: 40px 0 0; }
+body.hm .market-screens .screen-block { margin: 20px 0 0; padding: 24px 32px 28px; }
+body.hm .market-screens .screen-block:first-child { margin-top: 0; }
+/* 長期核心持有：板有了內距之後，左欄（表單與對照卡）固定回換皮前的 560px，指標名稱才不會被擠成一字一行 */
+@media (min-width: 861px) {
+  body.hm #coreHoldings { grid-template-columns: minmax(0, 560px) minmax(0, 1fr); column-gap: 32px; }
+}
+
+/* 分頁：選中的是凸起的鍵。分段切換（天數、買賣超）與週期切換同一種槽與鍵 */
+body.hm .screen-tabs button { border: 0; border-radius: var(--r-key); }
+body.hm .screen-tabs button[aria-selected="true"],
+body.hm .screen-tabs button[aria-selected="true"]:hover,
+body.hm .screen-tabs button.is-unlisted[aria-selected="true"],
+body.hm .screen-seg button[aria-pressed="true"],
+body.hm .screen-seg button[aria-pressed="true"]:hover {
+  background: var(--key); color: var(--ink); font-weight: 700; box-shadow: var(--key-shadow);
+}
+body.hm .screen-seg {
+  padding: var(--track-pad); gap: var(--track-gap); border: 0; border-radius: var(--r-track); background: var(--well); box-shadow: var(--well-shadow);
+}
+body.hm .screen-seg button { border: 0; border-radius: var(--r-key); }
+body.hm .screen-seg button:hover { background: transparent; }
+body.hm .screen-flag { border-radius: var(--r-tag); }
+body.hm .screen-list a:active { transform: translateY(1px); }
+
+/* 展開更多、已加入的比較標的、比較期間、代號輸入框、加入比較：樣式在上面外殼那一段的鍵與槽 */
+/* 長期核心持有走勢圖上資料點的說明：小的浮板（產業資金流向泡泡的說明框留給 B 包，不動） */
+body.hm .core-chart .chart-tip {
+  border: 0; border-radius: var(--r-key); background: var(--float); box-shadow: var(--float-shadow);
+}
+
+@media (max-width: 860px) {
+  body.hm .read-card { margin-top: 12px; padding: 20px 16px; }
+  body.hm .chips, body.hm .hm-explore { padding-top: 28px; }
+  body.hm .chip-grid { gap: 12px; }
+  body.hm .chip-grid .chip-card { padding: 14px 14px 12px; }
+  body.hm .market-screens .screen-block { margin-top: 12px; padding: 18px 14px 20px; }
+}
+
+/* ================= 看盤桌：首頁分類收合（立體重設計 A 包第 4 片，本人 2026-11-14 定案） =================
+   一進首頁只露出重點與結論：頂列、主 K 線與指標副圖、短中長期走勢、直白分析的一句話。
+   籌碼與資金、籌碼選股、產業資金流向、長期核心持有收成一排四顆分類鍵，一次只開一類（開關在 home-fold.js）。
+   搜尋與自選庫存收成右上角的圖示鍵；搜尋用浮起的面板（原生 dialog）打開。 */
+
+/* ---------- 右上角三顆圖示鍵：自選庫存、搜尋、主題 ---------- */
+body.hm .header-tools { grid-area: theme; align-self: start; display: flex; gap: 8px; }
+body.hm .header-tools > * {
+  width: var(--btn-h); height: var(--btn-h); min-height: 0; padding: 0;
+  display: grid; place-items: center; color: var(--ink);
+}
+body.hm .header-tools svg { width: 18px; height: 18px; }
+
+/* ---------- 直白分析：桌機也只留一句，四個重點點開才看 ---------- */
+body.hm .read-card .read-list,
+body.hm .read-card .read-date { display: none; }
+
+/* 四類的大標題（「籌碼與資金」「選股看板」）改由分類鍵承擔，在 minimal.html 標成只給螢幕閱讀器。 */
+body.hm .chips { padding-top: 20px; }
+body.hm .hm-explore { padding-top: 0; }
+body.hm .market-screens .screen-block,
+body.hm .market-screens .screen-block:first-child { margin-top: 20px; }
+/* 收起來的一類怎麼藏、展開時怎麼浮出來：在 bold.css「分類鍵」那一段，和個股頁共用。 */
+
+/* ---------- 浮起的面板（原生 dialog）：第 2 層的浮板，搜尋與產業資金流向的排行表格共用 ----------
+   出現在畫面上方（手機鍵盤彈出時內容不會被擋）。開關在 home-fold.js。 */
+body.hm dialog.float-dialog:not([open]) { display: none; }
+body.hm dialog.float-dialog {
+  width: min(640px, calc(100vw - 32px)); max-height: calc(100dvh - 10dvh - 16px);
+  margin: 10dvh auto auto; padding: 20px 24px 24px;
+  border: 0; border-radius: var(--r-float); background: var(--float); box-shadow: var(--float-shadow);
+  color: var(--ink); overflow: auto; overscroll-behavior: contain;
+  animation: float-rise 380ms var(--ease-depth);
+}
+/* 舊版瀏覽器的 ::backdrop 讀不到頁面的變數，所以給一個後備值 */
+body.hm dialog.float-dialog::backdrop { background: var(--scrim, rgb(28 25 20 / 42%)); }
+@keyframes float-rise {
+  from { opacity: 0; transform: translateY(16px) scale(.96); }
+}
+/* 面板的標題列黏在上緣：內容捲動時標題與關閉鈕都還在。
+   黏的位置是從面板的內距裡面算的，所以 top 要用負的內距，標題列才會貼到面板最上緣、不露出後面捲過的內容。 */
+body.hm .float-dialog-head {
+  position: sticky; top: -20px; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin: -20px -24px 4px; padding: 20px 24px 10px; background: var(--float);
+}
+body.hm .float-dialog-head h2 { font: 600 18px var(--serif); }
+body.hm dialog.hm-search { grid-template-columns: minmax(0, 1fr); row-gap: 12px; }
+body.hm dialog.hm-search .stock-search-heading { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 12px; }
+body.hm dialog.hm-search :is(.stock-search-suggestions, .stock-search-status, .stock-search-results, .stock-search-more) { grid-column: 1; }
+
+@media (max-width: 860px) {
+  /* 手機：三顆圖示鍵和「台股加權指數」同一列，指數數字自己一整列，才不會被擠到 */
+  body.hm .market-header { grid-template-areas: "brand theme" "price price" "time time"; column-gap: 12px; }
+  body.hm .instrument-block { display: contents; }
+  body.hm .brand-line { grid-area: brand; align-self: center; min-width: 0; }
+  body.hm .brand-line h1 { font-size: 18px; white-space: nowrap; }
+  body.hm .price-summary { grid-area: price; }
+  body.hm .chips { padding-top: 12px; }
+  body.hm .market-screens .screen-block[data-open] { margin-top: 12px; }
+  body.hm dialog.float-dialog { max-height: calc(100dvh - 28px); margin-top: 12px; padding: 16px; }
+  body.hm .float-dialog-head { top: -16px; margin: -16px -16px 4px; padding: 16px 16px 10px; }
+}
+/* 320 寬：三顆 44px 的圖示鍵旁邊放不下帶圖示的標題，拿掉標題前的小圖示 */
+@media (max-width: 359px) {
+  body.hm .market-mark { display: none; }
+  body.hm .brand-line h1 { font-size: 16px; }
+}
+
+/* ================= 產業資金流向：入口與面板（立體重設計 B 包） =================
+   首屏只有資金地形；資金效率排行、低基期回溫訊號、表格檢視收進浮起的面板，入口是標題列的「排行與表格」。 */
+body.hm .rotation-dialog { width: min(720px, calc(100vw - 32px)); }
+body.hm .rotation-dialog section { scroll-margin-top: 72px; outline: none; }
+body.hm .rotation-dialog .rotation-lists { margin-top: 12px; }
+body.hm .rotation-dialog .rotation-table { margin-top: 28px; }
+body.hm .rotation-dialog .rotation-table h4 { font: 400 12px var(--sans); color: var(--faint); }
+/* 窄螢幕上表格比面板寬：產業名稱不折行，表格自己左右捲 */
+body.hm .rotation-dialog #rotationTable { overflow-x: auto; }
+body.hm .rotation-dialog .rotation-table table { min-width: 440px; margin-top: 8px; }
+body.hm .rotation-dialog .rotation-table :is(th, td):first-child { white-space: nowrap; }
+
+/* ================= 資金地形（立體重設計 B 包，本人 2026-11-14 定案的方向） =================
+   每個產業一棟樓，樓高＝今日成交額，四個街區＝四個資金狀態；結構由 terrain.js 產生。
+   這裡是真的立體幾何：樓的厚度是 3D 的面、落影是壓在地面上的模糊色塊，
+   所以不走 bold.css 的陰影變數（那是給平面的板用的）。樓的底色、地面、圓角、浮板仍然引用變數；
+   各面的明暗是打光：在底色上混一點白（頂面）或黑（側面），這幾個比例直接寫在這裡。 */
+body.hm .terrain { position: relative; margin-top: 16px; }
+body.hm .terrain [data-quadrant="leading"] { --q: var(--q-leading); }
+body.hm .terrain [data-quadrant="weakening"] { --q: var(--q-weakening); }
+body.hm .terrain [data-quadrant="improving"] { --q: var(--q-improving); }
+body.hm .terrain [data-quadrant="lagging"] { --q: var(--q-lagging); }
+
+body.hm .terrain-stage {
+  /* 高度跟著寬度走：手機 300、平板約 500、桌機 600；街區會依這個框自動縮放 */
+  /* 再用視窗高度封頂：手機橫放時不能比畫面還高，不然整個畫面都是地形、沒有地方可以捲頁面 */
+  position: relative; height: min(clamp(300px, 62vw, 600px), 72svh);
+  /* 手指放在地形上拖就是旋轉，不分方向（本人 11-15）；要捲頁面，手指放在地形以外 */
+  touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none;
+  overflow: hidden; /* 立體的面轉出去的部分不能撐出橫向捲動 */
+}
+body.hm .terrain-stage.is-dragging { cursor: grabbing; }
+/* 透視、視角（--rx、--rz）、縮放（--s）、位置與長出來的時間（--grow-ms、--stagger-ms）都由 terrain.js 設定 */
+body.hm .terrain-city {
+  --s: 1;
+  position: absolute; left: 50%; top: 50%; width: 0; height: 0; transform-style: preserve-3d;
+  transform: scale3d(var(--s), var(--s), var(--s)) rotateX(var(--rx)) rotateZ(var(--rz));
+}
+body.hm .terrain-city * { position: absolute; transform-style: preserve-3d; }
+
+/* 街區：一塊有厚度的地面，名稱寫在地面上 */
+body.hm .terrain-ground { border-radius: var(--r-slab); background: var(--key); }
+body.hm .terrain-ground::before {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; background: var(--edge); transform: translateZ(-7px);
+}
+body.hm .terrain-ground::after {
+  content: ""; position: absolute; inset: 6px -4px -4px 6px; border-radius: var(--r-slab);
+  background: rgb(var(--shade) / calc(.3 * var(--shade-k))); filter: blur(14px);
+  transform: translateZ(-8px) translate(10px, -10px);
+}
+body.hm .terrain-ground-label {
+  color: var(--ink); font: 700 min(calc(18px / var(--s)), 24px)/1 var(--sans); white-space: nowrap;
+  transform: translateZ(.6px);
+}
+/* 轉到背面時名稱倒過來寫，從觀看的方向看才是正的 */
+body.hm .terrain-city.is-turned .terrain-ground-label { rotate: 180deg; }
+
+/* 樓：頂面加四個側面，一開始壓扁，進到畫面才長出來 */
+body.hm .terrain-tower {
+  left: calc(var(--x) - var(--w) / 2); top: calc(var(--y) - var(--w) / 2); width: var(--w); height: var(--w);
+  --tone: color-mix(in srgb, var(--q), var(--key) var(--fade, 0%));
+  transform: translateZ(var(--raise, 0px)) scale3d(1, 1, var(--grow, .001));
+  transition: transform var(--grow-ms) var(--ease-depth); transition-delay: calc(var(--i) * var(--stagger-ms));
+  cursor: pointer; outline: none;
+}
+body.hm .terrain-city.is-grown .terrain-tower { --grow: 1; }
+body.hm .terrain-city.is-settled .terrain-tower { transition-delay: 0s; transition-duration: 400ms; }
+body.hm .terrain-city.has-selection .terrain-tower:not(.is-selected) { --fade: 58%; }
+body.hm .terrain-tower.is-selected { --raise: 12px; }
+body.hm .terrain-tower .face { transition: background-color 300ms var(--ease-out); }
+/* 各面都往外多畫半個像素、彼此疊一點，縮小顯示時面與面之間才不會露出細縫 */
+body.hm .terrain-tower .top {
+  inset: -.5px; transform: translateZ(var(--h));
+  background: color-mix(in srgb, var(--tone), #fff 14%);
+}
+body.hm .terrain-tower:focus-visible .top { outline: 3px solid var(--accent); outline-offset: 2px; }
+body.hm .terrain-tower :is(.south, .north) { left: -.5px; width: calc(100% + 1px); height: calc(var(--h) + .5px); transform-origin: 50% 100%; transform: rotateX(-90deg); }
+body.hm .terrain-tower .south { bottom: 0; background: linear-gradient(to top, rgb(0 0 0 / 16%), transparent 45%), color-mix(in srgb, var(--tone), #000 6%); }
+body.hm .terrain-tower .north { top: calc(-1 * var(--h) - .5px); background: color-mix(in srgb, var(--tone), #000 30%); }
+body.hm .terrain-tower :is(.east, .west) { top: -.5px; width: calc(var(--h) + .5px); height: calc(100% + 1px); transform-origin: 0 50%; transform: rotateY(-90deg); }
+body.hm .terrain-tower .east { left: 100%; background: linear-gradient(to right, rgb(0 0 0 / 16%), transparent 45%), color-mix(in srgb, var(--tone), #000 24%); }
+body.hm .terrain-tower .west { left: 0; background: linear-gradient(to right, rgb(0 0 0 / 16%), transparent 45%), color-mix(in srgb, var(--tone), #000 13%); }
+body.hm .terrain-tower .shade {
+  left: 50%; top: 50%; width: calc(var(--w) * 1.15); height: calc(var(--w) * .6 + var(--h) * .42);
+  transform: translate(-50%, -100%) rotate(45deg) translateZ(.4px); transform-origin: 50% 100%;
+  background: linear-gradient(to top, rgb(var(--shade) / calc(.34 * var(--shade-k))), rgb(var(--shade) / 0));
+  filter: blur(6px); pointer-events: none;
+}
+/* 名稱牌：畫在街區上面的平面層，位置由 terrain.js 對到樓頂；永遠正對畫面，不會被前面的樓擋住 */
+body.hm .terrain-tags { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity 300ms var(--ease-out) 600ms; }
+body.hm .terrain-stage.is-grown .terrain-tags { opacity: 1; }
+body.hm .terrain-tag {
+  position: absolute; left: 0; top: 0; padding: 5px 8px; border-radius: var(--r-key);
+  background: var(--float); color: var(--ink); font: 700 12.5px/1 var(--sans); white-space: nowrap;
+  box-shadow: var(--key-shadow);
+}
+
+/* 點樓的明細：第 2 層的浮板，桌機浮在地形角落 */
+body.hm .terrain-detail {
+  position: absolute; z-index: 2; right: 0; top: 0; min-width: 216px; padding: 14px 16px;
+  border-radius: var(--r-float); background: var(--float); box-shadow: var(--float-shadow);
+  opacity: 0; transform: translateY(8px) scale(.96); transform-origin: 50% 100%; pointer-events: none;
+  transition: opacity 160ms var(--ease-out), transform 380ms var(--ease-depth);
+}
+body.hm .terrain.has-selection .terrain-detail { opacity: 1; transform: none; }
+body.hm .terrain-detail-state { display: flex; align-items: center; gap: 8px; color: var(--dim); font: 500 13px var(--sans); }
+body.hm .terrain-detail-state::before { content: ""; width: 10px; height: 10px; border-radius: var(--r-tag); background: var(--q); }
+body.hm .terrain-detail h4 { margin: 6px 0 10px; font: 600 18px/1.3 var(--serif); color: var(--ink); }
+body.hm .terrain-detail dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 18px; margin: 0; font-size: 13px; }
+body.hm .terrain-detail dt { color: var(--dim); }
+body.hm .terrain-detail dd { margin: 0; text-align: right; color: var(--ink); }
+
+@media (max-width: 860px) {
+  body.hm .terrain-tag { padding: 4px 6px; font-size: 11px; }
+  body.hm .terrain-tag.minor { display: none; }
+  /* 手機：明細排在街區下方，不蓋住街區 */
+  body.hm .terrain-detail { position: static; display: none; width: min(100%, 320px); margin: 4px auto 0; }
+  body.hm .terrain.has-selection .terrain-detail { display: block; }
+}
+
+/* ================= 看盤桌：K 線區的小鍵（立體重設計 A 包第 7 片，2026-11-15） =================
+   週期收成標題列的一枚鍵；「回到最新」只在圖被拖離最新一天時浮在圖的角落。
+   兩者凸起、浮起、沉入的樣子併在上面「鍵」那一組；小鍵與選單的共用樣式在 chart-studies.css。 */
+body.hm .chart-toolbar .chart-chip { min-height: 36px; }
+body.hm .chart-toolbar .chart-chip[aria-expanded="true"] { transform: translateY(var(--key-thick)); box-shadow: var(--key-shadow-press); }
+body.hm .chart-stage .reset-view {
+  position: absolute; z-index: 8; left: 10px; bottom: 32px; min-height: 36px; padding: 0 12px; color: var(--ink); font: 600 13px var(--sans); cursor: pointer;
+}
+
+/* 圖的左上角第一列是均線的名稱（kchart.js 畫在圖上），狀態小標（形成中、盤後暫用、分鐘推估）往下讓一列 */
+body.hm .chart-badges { top: 28px; }
+@media (min-width: 761px) {
+  body.hm .chart-badges { top: 68px; }
+}
+
+/* ================= 看盤桌：首頁其餘區塊的精簡（立體重設計 A 包第 11 片，2026-11-15） =================
+   本人：可以選的參數與功能不要全部攤在版面上，互動時才出現。小鍵與選單沿用 K 線區那一套（chart-studies.css、chart-menus.js）。 */
+/* 頂列：狀態只留燈號、行情狀態與日期（分析日、劇本日在「資料來源與時間」看；元素留給螢幕閱讀器） */
+body.hm .status-compact .status-separator { display: none; }
+/* 直白分析：不寫提示句，右上角一個箭頭表示點了有明細 */
+body.hm .read-card { position: relative; }
+body.hm .read-card::after {
+  content: "›"; position: absolute; top: 22px; right: 26px; display: block; margin: 0;
+  color: var(--faint); font: 400 20px/1 var(--sans); transition: color 160ms var(--ease-out), transform var(--t-lift) var(--ease-depth);
+}
+body.hm .read-card:hover::after { color: var(--ink); transform: translateX(3px); }
+/* 首頁的小鍵都是凸起的鍵（K 線工具列的那一枚在上面「鍵」那一組） */
+body.hm :is(.screen-picks, .core-picks) .chart-chip {
+  min-height: 36px; border: 0; border-radius: var(--r-key); background: var(--key); box-shadow: var(--key-shadow);
+  transition: transform var(--t-lift) var(--ease-depth), box-shadow var(--t-lift) var(--ease-depth);
+}
+body.hm :is(.screen-picks, .core-picks) .chart-chip:is(:active, [aria-expanded="true"]) {
+  transform: translateY(var(--key-thick)); box-shadow: var(--key-shadow-press); transition-duration: var(--t-press);
+}
+/* 籌碼選股：三枚小鍵排成一列；選單貼齊這一列的左緣 */
+body.hm .screen-picks { position: relative; display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 10px; }
+body.hm .screen-picks .screen-controls:not([hidden]) { display: contents; }
+body.hm .screen-picks .chart-menu { right: auto; left: 0; }
+body.hm .screen-tab-menu { flex-direction: column; flex-wrap: nowrap; width: min(300px, calc(100vw - 48px)); max-height: min(70vh, 520px); overflow-y: auto; }
+/* 這個選單畫面矮的時候要能捲：從裡面的按鈕開始上下拖是捲選單，不是拖框（按住小鍵拖進來仍然是拖框） */
+body.hm .screen-tab-menu button { touch-action: pan-y; }
+body.hm .screen-tab-menu .screen-tabs { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 2px; margin: 0; padding: 0; overflow: visible; }
+body.hm .screen-tab-menu .hm-tab-cap { flex-basis: auto; height: auto; margin: 8px 10px 2px; }
+body.hm .screen-tab-menu .screen-check { margin: 6px 10px 2px; padding-top: 8px; border-top: 1px solid var(--hair); }
+/* 這個排行不能調天數與買賣超時（原本整排控制項一起收掉），勾選框也不出現 */
+body.hm .screen-picks:has(.screen-controls[hidden]) .screen-check { display: none; }
+body.hm .chart-menu .screen-seg { display: flex; flex-direction: column; gap: 2px; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+body.hm .chart-menu :is(.screen-tabs, .screen-seg) button {
+  min-height: 40px; height: auto; padding: 0 12px; border: 0; border-radius: var(--r-key); background: transparent; box-shadow: none;
+  color: var(--ink); font: 500 14px var(--sans); text-align: left; white-space: nowrap;
+}
+body.hm .chart-menu .screen-tabs button.is-unlisted { color: var(--faint); }
+body.hm .chart-menu :is(.screen-tabs, .screen-seg) button:is([aria-selected="true"], [aria-pressed="true"]) { background: var(--ink); color: var(--bg); font-weight: 700; }
+/* 產業資金流向：排行與表格的入口在標題列右邊；資料還沒好就不出現 */
+body.hm #rotationBlock .screen-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+body.hm .rotation-open { margin-left: auto; min-height: 36px; padding: 0 12px; color: var(--ink); font: 600 13px var(--sans); white-space: nowrap; cursor: pointer; }
+body.hm #rotationBlock:has(.rotation-body[hidden]) .rotation-open { display: none; }
+/* 長期核心持有：已加入的標的、「＋ 加入」、比較期間排成一列 */
+body.hm .core-picks { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+body.hm .core-picks .chart-select { margin-left: auto; }
+body.hm .core-add-menu { right: auto; left: 0; padding: 12px; }
+body.hm .core-add-menu .core-compare-entry { grid-template-columns: minmax(0, 160px) auto; }
+
+/* ================= 看盤桌：籌碼與資金，圖為主（立體重設計 A 包第 12 片，2026-11-15） =================
+   本人選的排法：一列一項——左邊名稱與今天的數字，右邊近 20 天的迷你圖。
+   每張卡原本的一句判讀與資料日不放在卡上，點開的明細有完整的白話說明。寬螢幕排成兩欄。 */
+body.hm .chip-grid { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+body.hm .chip-grid .chip-card {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 46%); grid-template-rows: auto auto; align-items: center; column-gap: 14px; row-gap: 0;
+  min-height: 0; padding: 10px 14px; border-left: 0 !important;
+}
+body.hm .chip-card .chip-name { grid-area: 1 / 1; font-size: 12px; }
+body.hm .chip-card .chip-value { grid-area: 2 / 1; font-size: 19px; }
+body.hm .chip-card :is(.chip-read, .chip-date) { display: none; }
+body.hm .chip-card .spark { display: block; grid-area: 1 / 2 / span 2; width: 100%; height: 40px; opacity: 1; }
+@media (min-width: 900px) {
+  body.hm .chip-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 20px; }
+  body.hm .chip-grid .chip-card { padding: 14px 20px; }
+  body.hm .chip-card .chip-value { font-size: 22px; }
+  body.hm .chip-card .spark { height: 48px; }
+}
+
+/* ================= 看盤桌：籌碼與資金的明細板（立體重設計 A 包第 13 片，2026-11-15） =================
+   本人照樣品定案的順序：今天的數字與一句結論 → 近 20 天的圖 → 注意 → 解讀（先列兩點）→ 名單。
+   圖上點哪一天，名單就換成哪一天；那一天的日期與數字寫在圖的最上面。 */
+body.hm .chip-top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin: 0 0 12px; }
+body.hm .chip-top .chip-value { font: 600 26px/1.1 var(--mono); letter-spacing: -.01em; }
+body.hm .chip-top span { color: var(--dim); font-size: 14px; line-height: 1.5; }
+body.hm .chip-big { margin: 0 0 12px; }
+body.hm .drill-chart .bar-value { display: none; pointer-events: none; fill: var(--ink); font: 600 13px var(--mono); }
+/* 圖是照寬度縮放的：手機上整張圖縮到六成，字要放大才讀得到 */
+@media (max-width: 760px) {
+  body.hm .drill-chart text { font-size: 15px; }
+  body.hm .drill-chart .bar-value { font-size: 17px; }
+}
+body.hm .drill-chart .bar-hit.is-on .bar-value { display: block; }
+/* 柱狀圖按住左右拖：選中的直條框（.bar-thumb，程式在 minimal.js 的 bindBarDrag）跟著手指走，放開時靠近哪一天就選哪一天。
+   拖的時候原本選中那一根的底色先收掉、由框來畫；圖上那行字與深色的柱子都跟著手指底下那一天。上下拖仍然捲動面板。 */
+body.hm .drill-chart { touch-action: pan-y; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+body.hm .drill-chart .bar-thumb { display: none; pointer-events: none; fill: color-mix(in srgb, var(--ink) 6%, transparent); }
+body.hm .drill-chart.is-sliding .bar-thumb { display: block; }
+body.hm .drill-chart.is-settling .bar-thumb { transition: transform 200ms var(--ease-depth); }
+body.hm .drill-chart.is-sliding .bar-hit.is-on rect:first-child { fill: transparent; }
+body.hm .drill-chart.is-sliding .bar-hit rect:last-of-type { opacity: .32; }
+body.hm .drill-chart.is-sliding .bar-hit.is-slide-hot rect:last-of-type { opacity: 1; }
+body.hm .drill-chart.is-sliding .bar-hit .bar-value { display: none; }
+body.hm .drill-chart.is-sliding .bar-hit.is-slide-hot .bar-value { display: block; }
+body.hm .chip-watch { display: flex; align-items: baseline; gap: 8px; margin: 0 0 12px; font-size: 14px; line-height: 1.6; }
+body.hm .chip-watch i { flex: none; padding: 2px 6px; border-radius: var(--r-tag); background: var(--gold); color: var(--bg); font: 600 11px/1.4 var(--sans); }
+body.hm .chip-points { margin: 0 0 16px; padding: 0 0 12px; border-bottom: 1px solid var(--hair); }
+body.hm .chip-points ul { display: grid; gap: 4px; margin: 0; padding-left: 18px; font-size: 14px; line-height: 1.6; }
+body.hm .more-wrap:not(.is-all) .is-extra { display: none; }
+body.hm .chip-more { min-height: 32px; margin-top: 4px; padding: 0; border: 0; background: none; color: var(--faint); font: 500 12.5px var(--sans); cursor: pointer; }
+body.hm .chip-more:hover { color: var(--ink); }
+body.hm .chip-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+body.hm .chip-list-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; min-height: 36px; margin: 0 0 4px; }
+body.hm .chip-list-head h4 { margin: 0; font: 600 15px var(--sans); }
+body.hm .chip-list-head h4 small { margin-left: 8px; color: var(--faint); font: 400 12px var(--mono); }
+body.hm .chip-table { margin-top: 0; }
+/* 換一天、資料還沒回來的時候：原本的名單留著、變淡，面板的高度不變 */
+body.hm #chipList.is-loading { opacity: .45; transition: opacity 120ms var(--ease-out); }
+body.hm .chip-table th small { margin-left: 3px; font-size: 10px; }
+body.hm .chip-table td.streak { color: var(--dim); white-space: nowrap; }
+body.hm .chip-table td .stock-link { white-space: nowrap; }
+
+/* 成排的鍵「選中的框跟著手指走」（.slide-thumb）的樣子：在 bold.css「分類鍵」那一段，和個股頁共用。 */
+
+/* ================= 看盤桌：短中長期走勢（立體重設計，本人 2026-11-15 定案的 ⑤） =================
+   一列一期（桌機三期並排）。每一期：結論 → 以中線為界的橫條，一票一根小柱，偏多的在基準線上面、偏空的在線下面
+   （和外資現貨小圖「買超在上、賣超在下」同一種讀法）→ 點那一期才展開，每個指標一顆鍵。
+   高低就是結論，用的是現成的鍵與槽：偏多那一列＝浮起的鍵、偏空＝凹下的槽、盤整＝一條細框。紅綠只在小柱上。
+   程式在 trend-matrix.js（畫面）與 trend-votes.js（每一票怎麼來）。本人定的樣品：design-previews/3d-redesign/pro-samples/trend-matrix.html */
+body.hm .trend-align { margin: 8px 0 0; color: var(--ink); font: 600 14px var(--sans); }
+body.hm .trend-align small { margin-left: 4px; color: var(--dim); font: 400 13px var(--sans); }
+body.hm .trend-rows { margin: 12px 0 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+@media (min-width: 1180px) {
+  body.hm .trend-rows { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; gap: 12px; }
+}
+
+body.hm .trend-top { display: grid; grid-template-columns: 76px minmax(0, 1fr) 12px; align-items: center; column-gap: 12px; width: 100%; min-height: 48px; padding: 6px 12px; border: 0; border-radius: inherit; background: none; color: inherit; font: inherit; text-align: left; }
+body.hm button.trend-top { cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+body.hm button.trend-top:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+body.hm .trend-name { display: flex; align-items: baseline; gap: 6px; white-space: nowrap; }
+body.hm .trend-name span { color: var(--faint); font: 12px var(--sans); }
+body.hm .trend-name strong { color: var(--ink); font: 700 16px var(--sans); }
+/* 資料不足，或算出來的票和結論對不上：不畫小柱，只寫原本那句說明 */
+body.hm .trend-top.is-plain { grid-template-columns: 76px minmax(0, 1fr); align-items: baseline; padding-top: 12px; padding-bottom: 12px; }
+body.hm .trend-sentence { margin: 0; color: var(--dim); font: 13px/1.6 var(--sans); }
+
+/* 資料記號：一票一根小柱，平的、細的、方的（和外資現貨小圖的柱一樣；圓角只用 bold.css 那幾個，這裡不另外發明） */
+body.hm .trend-row .blk { flex: none; width: 8px; height: 13px; background: var(--faint); }
+body.hm .trend-row .blk.bull { background: var(--up); }
+body.hm .trend-row .blk.bear { background: var(--down); }
+
+body.hm .trend-bar { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 1px minmax(0, 1fr); column-gap: 4px; height: 32px; }
+body.hm .trend-bar::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 1px; margin-top: -.5px; background: var(--line); }
+body.hm .trend-row .mid { position: relative; background: var(--faint); }
+body.hm .trend-bar .side { display: flex; align-items: flex-start; gap: 3px; padding: 2px 0; }
+body.hm .trend-bar .side.bears { flex-direction: row-reverse; align-items: flex-end; }
+/* 點開的那一期：橫條上的小柱已經飛下去、落進各自的鍵裡了 */
+body.hm .trend-row.is-open .blk { opacity: 0; }
+
+/* 展開：高度用格線的 0fr → 1fr 帶；只裁下緣，小柱才能從上面的橫條飛下來 */
+/* 列的高低、箭頭與展開的高度在 bold.css（.depth-row），和個股頁、自選與庫存頁共用 */
+body.hm .trend-clip { min-height: 0; clip-path: inset(-70px -6px 0 -6px); }
+body.hm .trend-inner { padding: 2px 12px 12px; }
+
+/* 展開後：一個指標一顆鍵。偏空在中線左邊、小柱在名稱下面；偏多在右邊、小柱在名稱上面；沒有方向的在中間 */
+body.hm .trend-strip .mid { flex: 0 0 1px; }
+/* 鍵本身的樣子、選中的框與按住左右滑的框在 bold.css（.key-strip），和個股頁的大戶持股共用 */
+
+/* 點一顆：那個指標實際的數字寫在下面一行（短期沒選的時候寫不算票的量比與 5 日法人） */
+body.hm .trend-read { margin: 12px 0 0; color: var(--ink); font: 13px/1.5 var(--sans); }
+
+/* 進場（捲到這一塊才播一次）：基準線從中間畫出來；每一票從那一邊的盡頭滑進來；票都到了整列才定在最後的高度 */
+body.hm .market-trend.is-waiting .blk { opacity: 0; }
+body.hm .market-trend.is-waiting .trend-bar::before,
+body.hm .market-trend.is-waiting .trend-bar .mid { transform: scale(0); }
+body.hm .market-trend.is-waiting .trend-row { border-color: var(--line); background: transparent; box-shadow: none; transform: none; }
+body.hm .market-trend.is-entering .trend-bar::before { animation: trend-rail-in 460ms var(--ease-depth) both; animation-delay: var(--rail-at); }
+body.hm .market-trend.is-entering .trend-bar .mid { animation: trend-pin-in 380ms var(--ease-depth) both; animation-delay: var(--rail-at); }
+body.hm .market-trend.is-entering .blk { animation: trend-vote-in 420ms var(--ease-depth) both; animation-delay: var(--at); }
+body.hm .market-trend.is-entering .blk.bull { --from-x: 80px; }
+body.hm .market-trend.is-entering .blk.bear { --from-x: -80px; }
+body.hm .market-trend.is-entering .trend-row { animation: trend-row-settle var(--trend-settle, 700ms) var(--ease-depth) both; animation-delay: var(--settle-at); }
+@keyframes trend-rail-in { from { transform: scaleX(0); } }
+@keyframes trend-pin-in { from { transform: scaleY(0); } }
+@keyframes trend-vote-in { from { opacity: 0; translate: var(--from-x) 0; } 35% { opacity: 1; } }
+@keyframes trend-row-settle { from { transform: none; border-color: var(--line); background: transparent; box-shadow: none; } }

@@ -7,6 +7,24 @@ export const WEB_FILES = [
   // claude-60 設計改版（11-09）新增的資產
   "bold.css", "home.css", "panel.css", "motion.js", "home-motion.js", "period-switch.js",
   "portfolio.html", "portfolio.css", "portfolio.js",
+  // 立體重設計 A 包第 4 片（11-14）：首頁分類收合與搜尋面板
+  "home-fold.js",
+  // 立體重設計 A 包第 7 片（11-15）：K 線區的小鍵與浮出選單
+  "chart-menus.js",
+  // 立體重設計 B 包（11-14）：資金地形的版面計算與畫面
+  "terrain-layout.js", "terrain.js",
+  // 立體重設計（11-15）：短中長期走勢的算票與畫面
+  "trend-votes.js", "trend-matrix.js",
+  // 立體重設計（11-15）：收復線／防守線點開之後那張圖的資料整理
+  "line-zones.js",
+  // 立體重設計（11-15）：庫存總覽一列一檔的算法
+  "holdings-rows.js",
+  // 自選與庫存併成一份清單的資料整理（11-16）
+  "portfolio-list.js",
+  // 向左滑露出動作的列（11-16，自選與庫存頁的修改、移出、刪除）
+  "swipe-rows.js",
+  // 立體重設計（11-15）：大戶持股每週增減的算法與畫面
+  "holders-weekly.js", "holders-card.js",
   // 預測帳本（2026-11-15，B 票第 4 片）：只有站主有預測內容時才會在首頁出現
   "forecast.js", "forecast.css",
   // 個股頁事實區塊（2026-11-15 規格，A 票）

@@ -213,9 +213,6 @@ def check_standard_width(browser: Browser, width: int, height: int, screenshots:
         assert page.evaluate("window.MinimalApp.chart.geo.step >= 44"), "桌面／平板單根K棒命中寬度不足44px"
     assert upper_box and upper_box["height"] >= 44 and lower_box and lower_box["height"] >= 44
     assert page.locator("#marketState").inner_text().startswith("即時")
-    assert page.locator("#conclusionText").evaluate("el => parseFloat(getComputedStyle(el).fontSize)") >= 17
-    conclusion_box = page.locator("#conclusionText").evaluate("el => ({scroll:el.scrollHeight, client:el.clientHeight, overflow:getComputedStyle(el).overflow, text:el.textContent})")
-    assert conclusion_box["scroll"] <= conclusion_box["client"] + 1, f"結論句被截斷：{conclusion_box}"
     assert "詳情" in page.locator("#currentPoint").inner_text()
     assert page.locator("#analysisDate").get_attribute("title") == ANALYSIS["meta"]["cutoff_date"]
     assert page.locator("#analysisDate").inner_text() == ANALYSIS["meta"]["cutoff_date"][5:].replace("-", "/")
@@ -225,7 +222,7 @@ def check_standard_width(browser: Browser, width: int, height: int, screenshots:
     assert trend["schema"] == "market-trend/v1"
     assert trend["data_date"] == ANALYSIS["meta"]["cutoff_date"]
     assert [row["key"] for row in trend["periods"]] == ["short", "medium", "long"]
-    assert page.locator("#marketTrendGrid .market-trend-item").count() == 3
+    assert page.locator("#marketTrendRows .trend-row").count() == 3
     assert page.locator("#marketTrendDate").inner_text() == f"資料日 {trend['data_date']}"
     study_labels = page.locator("#chartStudies .kc-study-choice").all_inner_texts()
     assert study_labels == ["成交金額", "MACD", "KD", "RSI"], study_labels
@@ -275,10 +272,10 @@ def check_standard_width(browser: Browser, width: int, height: int, screenshots:
         assert page.evaluate("document.activeElement && document.activeElement.id") == "lineLower", "Esc 後焦點未回入口"
 
         page.locator("#lineLower").click()
-        assert int(page.locator("#panelBody .ob-bar").count()) == 1, "判斷線視窗缺歷史比例條"
+        assert int(page.locator("#panelBody .zone-rows").count()) == 1, "判斷線視窗缺歷史比例的圖"
         page.locator("#panelBody [data-outcome-panel='continue_break']").click()
         assert "不是明天的機率" in page.locator("#panelBody").inner_text(), "分布面板缺白話提醒"
-        page.locator("#panelBody .more-detail > summary").click()
+        page.locator("#panelBody .more-detail:has(.deep-links) > summary").click()
         result = ANALYSIS["backtest"]["results"][DEFAULT_SAMPLE]
         assert page.locator("#histogram").count() == 1
         expected_outcome_count = int(result["next_day_outcomes"]["counts"]["continue_break"])
@@ -292,27 +289,21 @@ def check_standard_width(browser: Browser, width: int, height: int, screenshots:
         for sample in ANALYSIS["backtest"]["samples"]:
             page.locator("#lineLower").click()
             page.locator("#panelBody [data-outcome-panel='between']").click()
-            page.locator("#panelBody .more-detail > summary").click()
+            page.locator("#panelBody .more-detail:has(.deep-links) > summary").click()
             page.locator("#panelBody [data-deep='samples']").click()
             page.locator(f"#panelBody [data-sample='{sample['key']}']").click()
             page.keyboard.press("Escape")
             for outcome in ("stand_back", "between", "continue_break"):
                 page.locator("#lineLower").click()
                 page.locator(f"#panelBody [data-outcome-panel='{outcome}']").click()
-                page.locator("#panelBody .more-detail > summary").click()
+                page.locator("#panelBody .more-detail:has(.deep-links) > summary").click()
                 expected_count = int(ANALYSIS["backtest"]["results"][sample["key"]]["next_day_outcomes"]["counts"][outcome])
                 assert int(page.locator("#histogram").get_attribute("data-sample-count")) == expected_count
                 assert int(page.locator("#histogram").get_attribute("data-expected-count")) == expected_count
                 page.keyboard.press("Escape")
 
         # 第2層入口都能進入並返回，樣本數量與資料一致。
-        page.locator("#conclusionTrigger").click()
-        page.locator("[data-evidence='trend']").click()
-        assert page.locator("#panelBack").is_visible()
-        assert page.locator(".detail-chart svg").count() == 4
-        page.locator("#panelBack").click()
-        assert page.locator("[data-evidence='trend']").is_visible()
-        page.keyboard.press("Escape")
+        # （頂列「下一交易日」的框與結論依據面板已拿掉，本人 2026-11-15；原本這裡從它進第二層）
         checks_deep = {
             "method": lambda: "回測規則" in page.locator("#panelBody").inner_text(),
             "sources": lambda: "分析截止日" in page.locator("#panelBody").inner_text(),
@@ -322,7 +313,7 @@ def check_standard_width(browser: Browser, width: int, height: int, screenshots:
         }
         for layer, ok in checks_deep.items():
             page.locator("#lineLower").click()
-            page.locator("#panelBody .more-detail > summary").click()
+            page.locator("#panelBody .more-detail:has(.deep-links) > summary").click()
             page.locator(f"#panelBody [data-deep='{layer}']").click()
             assert ok(), f"第2層 {layer} 內容不符"
             assert page.locator("#panelBack").is_visible()
@@ -400,7 +391,7 @@ def check_mobile_sheet(browser: Browser, screenshots: list[str]) -> None:
     if max_scroll > 0:
         target_scroll = min(40, max_scroll)
         page.locator("#panelBody").evaluate("(el, y) => { el.scrollTop = y; }", target_scroll)
-        page.locator("#panelBody .more-detail > summary").click()
+        page.locator("#panelBody .more-detail:has(.deep-links) > summary").click()
         page.locator("#panelBody").evaluate("(el, y) => { el.scrollTop = y; }", target_scroll)
         page.locator("#panelBody [data-deep='method']").click()
         page.locator("#panelBack").click()
@@ -424,6 +415,8 @@ def check_reduced_motion(browser: Browser) -> None:
     panel = page.locator("#detailPanel")
     panel.wait_for(state="visible")
     assert panel.evaluate("el => getComputedStyle(el).opacity") == "1"
+    # 手上沒股票／已經持有那兩句收在「怎麼應對」裡，點了才看得到（本人 11-15）
+    panel.locator("details > summary").first.click()
     assert panel.locator("#actionFlat").is_visible()
     page.close()
 
@@ -487,9 +480,12 @@ def check_official_date_alignment(browser: Browser) -> None:
     assert page.locator("#marketTime").inner_text() == "2026-11-10"
     assert page.locator("#analysisDate").inner_text() == "11/10"
     assert page.locator("#analysisDate").get_attribute("title") == "2026-11-10"
-    # 本人 11-14「過期就隱藏」：劇本比資料日舊時，日期、結論、兩條價位線與直白分析都不顯示。
-    for selector in ("#scenarioDate", "#conclusionTrigger", "#lineUpper", "#lineLower", "#readCard"):
+    # 本人 11-14「過期就隱藏」：劇本比資料日舊時，人寫的內容（劇本日期、直白分析）不顯示。
+    # 兩條價位線每天照規則算，照樣有（本人 2026-11-15）。
+    for selector in ("#scenarioDate", "#readCard"):
         assert not page.locator(selector).is_visible(), f"過期內容仍顯示：{selector}"
+    for selector in ("#lineUpper", "#lineLower"):
+        assert page.locator(selector).is_visible(), f"每天算的價位線沒有顯示：{selector}"
     assert "已過期" not in page.locator("body").inner_text()
     assert page.locator("#marketTrendDate").inner_text() == "資料日 2026-11-10"
     page.close()
@@ -562,11 +558,11 @@ def check_panel_return(browser: Browser, width: int) -> None:
     page.wait_for_function("document.getElementById('marketState').textContent.startsWith('即時')")
     original_view = page.evaluate("({...window.MinimalApp.chart.view})")
     page.locator("#lineUpper").click()
-    page.locator("#panelBody .more-detail > summary").click()
+    page.locator("#panelBody .more-detail:has(.deep-links) > summary").click()
     page.locator("#panelBody").evaluate("el => el.scrollTop = 80")
     page.locator("#panelBody [data-outcome-panel='between']").click()
     assert page.locator("#panelBack").is_visible(), "收復線進入歷史結果後缺少返回上一層"
-    page.locator("#panelBody .more-detail > summary").click()
+    page.locator("#panelBody .more-detail:has(.deep-links) > summary").click()
     page.locator("#panelBody [data-deep='samples']").click()
     page.locator("#panelBack").click()
     assert "歷史結果" in page.locator("#panelTitle").inner_text()
@@ -602,15 +598,6 @@ def check_half_window_header(browser: Browser) -> None:
         route_live(page)
         page.goto(PAGE_URL, wait_until="domcontentloaded")
         page.wait_for_function("window.MinimalApp && window.MinimalApp.ready")
-        overlap = page.evaluate("""() => {
-            const conclusion = document.getElementById('conclusionTrigger').getBoundingClientRect();
-            return ['currentPrice', 'currentChange', 'statusTrigger', 'analysisDate', 'scenarioDate'].filter(id => {
-                const r = document.getElementById(id).getBoundingClientRect();
-                return Math.min(r.right, conclusion.right) - Math.max(r.left, conclusion.left) > 1 &&
-                    Math.min(r.bottom, conclusion.bottom) - Math.max(r.top, conclusion.top) > 1;
-            });
-        }""")
-        assert not overlap, f"{width}px 結論卡蓋住 {overlap}"
         assert_no_overflow(page, width)
         if width in (375, 820, 1440):
             page.screenshot(path=str(OUT / f"minimal-header-fixed-{width}.png"), full_page=False)

@@ -10,14 +10,14 @@
   <meta name="apple-mobile-web-app-title" content="決策鏡">
   <meta name="theme-color" content="#0b0b0e">
   <title>個股分析</title>
-  <link rel="stylesheet" href="minimal.css?v=20261109-ux1">
-  <link rel="stylesheet" href="chart-studies.css?v=20261111-ui2b">
-  <link rel="stylesheet" href="bold.css?v=20261109-ux1">
-  <link rel="stylesheet" href="stock.css?v=20261116-draw8">
-  <link rel="stylesheet" href="stock-facts.css?v=20261116-news1">
-  <link rel="stylesheet" href="watch-peers.css?v=20261116-peers1">
-  <link rel="stylesheet" href="forecast.css?v=20261116-e1">
-  <link rel="stylesheet" href="watch-judgments.css?v=20261116-e1">
+  <link rel="stylesheet" href="minimal.css?v=20261116-desk44">
+  <link rel="stylesheet" href="chart-studies.css?v=20261116-desk44">
+  <link rel="stylesheet" href="bold.css?v=20261116-desk44">
+  <link rel="stylesheet" href="stock.css?v=20261116-desk44">
+  <link rel="stylesheet" href="stock-facts.css?v=20261116-desk44">
+  <link rel="stylesheet" href="watch-peers.css?v=20261116-desk44">
+  <link rel="stylesheet" href="forecast.css?v=20261116-desk44">
+  <link rel="stylesheet" href="watch-judgments.css?v=20261116-desk44">
 </head>
 <body class="bd">
   <div class="bd-shell">
@@ -72,9 +72,6 @@
         </details>
       </section>
 
-      <div id="candidateReasons"></div>
-      <div id="bigHolders"></div>
-
       <div class="bd-stage">
         <section class="bd-chart sk-chart-card" aria-labelledby="chartTitle">
           <div class="bd-chart-bar">
@@ -105,10 +102,15 @@
                 </optgroup>
               </select>
             </label>
-          </div>
-          <div class="bd-ma-row">
-            <div class="bd-ma-controls" id="maControls" aria-label="均線期數"></div>
-            <button class="bd-ma-add" id="addMa" type="button">新增均線</button>
+            <div class="chart-ma">
+              <button type="button" class="chart-chip" id="maChip" aria-expanded="false" aria-controls="maMenu">均線 <span id="maChipValue"></span></button>
+              <div class="chart-menu chart-ma-menu" id="maMenu" hidden>
+                <div class="bd-ma-row">
+                  <div class="bd-ma-controls" id="maControls" aria-label="均線期數"></div>
+                  <button class="bd-ma-add" id="addMa" type="button">新增均線</button>
+                </div>
+              </div>
+            </div>
           </div>
           <div class="bd-draw-row">
           <div class="bd-draw" id="drawTools" role="toolbar" aria-label="畫線工具" hidden>
@@ -139,7 +141,16 @@
           <div class="bd-chart-host sk-chart" id="chartHost"></div>
           <div id="chartStudies"></div>
         </section>
+      </div>
 
+      <!-- 分類鍵：報價與 K 線以外的都收在這三類裡（本人 2026-11-15：一進去全部攤開、沒辦法選現在要看什麼）。
+           一開始都收著，點哪一顆開哪一類，再點收回，一次只開一類；開合由 home-fold.js 處理，和首頁同一套。 -->
+      <div class="hm-cats" id="stockCats" role="group" aria-label="更多資料">
+        <button type="button" aria-expanded="false" aria-controls="levelsPanel">價位</button>
+        <button type="button" aria-expanded="false" aria-controls="chipsPanel">籌碼</button>
+        <button type="button" aria-expanded="false" aria-controls="comparePanel">對照 0050</button>
+      </div>
+      <section class="bd-cat" id="levelsPanel" data-cat-panel="levels" aria-label="價位">
         <aside class="bd-rail" aria-label="價格結構">
           <h2>價位階梯</h2>
           <ol class="bd-ladder" id="ladder">
@@ -156,59 +167,71 @@
           <section class="sf-blocks" id="stockFactsBlocks" aria-label="事實整理" hidden></section>
           <section class="wp" id="watchPeers" aria-label="國外同類股" hidden></section>
         </aside>
-      </div>
-
-
-      <section class="bd-compare" id="compareBlock" aria-labelledby="compareTitle" hidden>
-        <header class="bd-compare-head">
-          <h2 id="compareTitle">和 0050 對照</h2>
-          <p class="bd-compare-date num" id="compareDate"></p>
-        </header>
-        <p class="bd-compare-status" id="compareStatus" role="status" data-state="loading">讀取對照資料</p>
-        <p class="bd-compare-conclusion" id="compareConclusion">讀取中</p>
-
-        <div class="bd-compare-tools">
-          <form class="bd-compare-form" id="compareForm">
-            <label for="compareInput">加入比較股票</label>
-            <div class="bd-compare-input-row">
-              <input id="compareInput" name="compare-code" inputmode="numeric" autocomplete="off" maxlength="6"
-                     role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="compareSearchResults"
-                     placeholder="輸入代號或名稱">
-              <button id="compareAdd" type="submit">加入</button>
-            </div>
-            <div class="bd-compare-results" id="compareSearchResults" role="listbox" hidden></div>
-          </form>
-          <div class="bd-compare-chips" id="compareChips" aria-label="已選股票"></div>
-        </div>
-
-        <div class="bd-compare-table-wrap">
-          <table class="bd-compare-table" id="compareTable">
-            <caption class="sr-only">配息資料完整時，顯示各期間個股與 0050 的含息報酬、差距及最大回撤</caption>
-            <thead><tr><th>股票</th><th>期間</th><th>個股報酬</th><th>0050 報酬</th><th>差距</th><th>個股最大回撤</th><th>0050 最大回撤</th></tr></thead>
-            <tbody id="compareTableBody"></tbody>
-          </table>
-        </div>
-
-        <div class="bd-compare-chart-block">
-          <div class="bd-compare-chart-head">
-            <h3>報酬走勢</h3>
-            <div class="bd-compare-legend" id="compareLegend" aria-label="圖例"></div>
-          </div>
-          <div class="bd-compare-chart" id="compareChart"></div>
-          <div class="bd-compare-tooltip" id="compareTooltip" role="status" aria-live="polite" hidden></div>
-        </div>
       </section>
+      <section class="bd-cat" id="chipsPanel" data-cat-panel="chips" aria-label="籌碼">
+        <div id="candidateReasons"></div>
+        <div id="bigHolders"></div>
+        <p class="bd-cat-empty">這一檔目前不在籌碼選股名單上，也沒有大戶持股資料。</p>
+      </section>
+      <div class="bd-cat" id="comparePanel" data-cat-panel="compare">
+        <section class="bd-compare" id="compareBlock" aria-labelledby="compareTitle" hidden>
+          <header class="bd-compare-head">
+            <h2 id="compareTitle" class="sr-only">和 0050 對照</h2>
+            <p class="bd-compare-date num" id="compareDate"></p>
+          </header>
+          <p class="bd-compare-status" id="compareStatus" role="status" data-state="loading">讀取對照資料</p>
+          <p class="bd-compare-conclusion" id="compareConclusion">讀取中</p>
+
+          <div class="bd-compare-chart-block">
+            <div class="bd-compare-chart-head">
+              <h3>報酬走勢</h3>
+              <div class="bd-compare-legend" id="compareLegend" aria-label="圖例"></div>
+            </div>
+            <div class="bd-compare-chart" id="compareChart"></div>
+            <div class="bd-compare-tooltip" id="compareTooltip" role="status" aria-live="polite" hidden></div>
+          </div>
+
+          <!-- 五個期間各一顆鍵（領先 0050 的記號在上、落後的在下），點哪一個看哪一個期間的數字；由個股頁的程式畫 -->
+          <div class="bd-compare-periods" id="comparePeriods"></div>
+          <!-- 完整的表留給螢幕閱讀器；畫面上看的是上面那一排鍵 -->
+          <div class="bd-compare-table-wrap sr-only">
+            <table class="bd-compare-table" id="compareTable">
+              <caption class="sr-only">配息資料完整時，顯示各期間個股與 0050 的含息報酬、差距及最大回撤</caption>
+              <thead><tr><th>股票</th><th>期間</th><th>個股報酬</th><th>0050 報酬</th><th>差距</th><th>個股最大回撤</th><th>0050 最大回撤</th></tr></thead>
+              <tbody id="compareTableBody"></tbody>
+            </table>
+          </div>
+
+          <div class="bd-compare-tools">
+            <form class="bd-compare-form" id="compareForm">
+              <label for="compareInput">加入比較股票</label>
+              <div class="bd-compare-input-row">
+                <input id="compareInput" name="compare-code" inputmode="numeric" autocomplete="off" maxlength="6"
+                       role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="compareSearchResults"
+                       placeholder="輸入代號或名稱">
+                <button id="compareAdd" type="submit">加入</button>
+              </div>
+              <div class="bd-compare-results" id="compareSearchResults" role="listbox" hidden></div>
+            </form>
+            <div class="bd-compare-chips" id="compareChips" aria-label="已選股票"></div>
+          </div>
+        </section>
+      </div>
     </main>
   </div>
-  <script src="chart-studies.js?v=20261111-ui2b"></script>
-  <script src="chart-drawings.js?v=20261116-draw8"></script>
-  <script src="drawing-sync.js?v=20261116-draw7"></script>
-  <script src="kchart.js?v=20261116-draw8"></script>
+  <script src="chart-studies.js?v=20261116-desk44"></script>
+  <script src="chart-drawings.js?v=20261116-desk44"></script>
+  <script src="drawing-sync.js?v=20261116-desk44"></script>
+  <script src="kchart.js?v=20261116-desk44"></script>
   <script src="intraday.js?v=20261111-ui2b"></script>
-  <script src="stock-facts.js?v=20261116-news1"></script>
-  <script src="watch-peers.js?v=20261116-peers1"></script>
-  <script src="watch-judgments.js?v=20261116-e1"></script>
-  <script src="stock.js?v=20261116-int1"></script>
-  <script src="period-switch.js?v=20261109-ux1"></script>
+  <script src="holders-weekly.js?v=20261116-desk44"></script>
+  <script src="holders-card.js?v=20261116-desk44"></script>
+  <script src="stock-facts.js?v=20261116-desk44"></script>
+  <script src="watch-peers.js?v=20261116-desk44"></script>
+  <script src="watch-judgments.js?v=20261116-desk44"></script>
+  <script src="stock.js?v=20261116-desk44"></script>
+  <script src="period-switch.js?v=20261116-desk44"></script>
+  <script src="chart-menus.js?v=20261116-desk44"></script>
+  <script src="home-fold.js?v=20261116-desk44"></script>
 </body>
 </html>

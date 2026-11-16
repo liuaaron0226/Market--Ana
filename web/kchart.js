@@ -1,5 +1,6 @@
 /* 可拖曳／縮放的K線圖（原生Canvas，無外部套件）。
-   互動：滑鼠拖曳或單指左右平移；滾輪、雙指捏合或＋／−按鈕縮放；鍵盤左右鍵平移、+/- 縮放；點擊或移動顯示十字線。
+   互動：滑鼠拖曳或單指左右平移；滾輪、雙指捏合或＋／−按鈕縮放；鍵盤左右鍵平移、+/- 縮放；點擊或移動顯示十字線（再點一次同一根取消），
+   並把那一天的開高低收標在右側價格欄、日期標在時間軸（本人 11-15；不再有浮窗）。主圖與指標區的手勢一樣（本人 11-15）。
    有畫線時：點線選取、拖已選取的線移動（拖端點把手只動那一端）、Delete 刪除、Esc 取消選取或放下工具；
    文字標註再點一下（或 Enter）打開輸入框修改內容。
    資料：candles=[{t,label,open,high,low,close,amount}] 由舊到新。overlays 可放判斷線。
@@ -17,6 +18,36 @@
   function fmtTag(n) { return !Number.isFinite(n) ? '缺值' : n >= 1000 ? fmt(n, 0) : n.toLocaleString('en-US', { maximumFractionDigits: 2 }); }
   function fmt(n, d = 2) { return Number.isFinite(n) ? n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }) : '缺值'; }
   const hasPrice = candle => ['open', 'high', 'low', 'close'].every(key => Number.isFinite(candle[key]));
+
+  // 數值籤（選取那一天的開高低收、指標數值；chart-studies.js 也用這一組）。
+  const TAG_NAME_FONT = '500 11px "Noto Sans TC","Microsoft JhengHei",sans-serif', TAG_VALUE_FONT = '500 11.5px "JetBrains Mono",Consolas,monospace';
+  // 依位置由上到下排好；擠在一起時上下推開，彼此至少隔 gap，而且不超出上下界。沒有數值的不排。
+  function placeTags(items, top, bottom, gap) {
+    const placed = items.filter(item => Number.isFinite(item.y)).sort((a, b) => a.y - b.y);
+    placed.forEach((item, i) => { item.slot = Math.max(item.y, i ? placed[i - 1].slot + gap : top); });
+    for (let i = placed.length - 1; i >= 0; i--) {
+      const limit = i === placed.length - 1 ? bottom : placed[i + 1].slot - gap;
+      if (placed[i].slot > limit) placed[i].slot = limit;
+    }
+    return placed;
+  }
+  // 畫一組數值籤：左邊短名、右邊數值。
+  // namesOptional：欄位太窄、有任何一枚放不下兩者時，整組都只留數值——只給底色各不相同的指標籤用（顏色仍分得出是哪一條線）；
+  // 開高低收三枚同底色，短名不能省。
+  function drawTags(x, left, width, height, items, namesOptional = false) {
+    const wide = item => { x.font = TAG_VALUE_FONT; const value = x.measureText(item.text).width; x.font = TAG_NAME_FONT; return x.measureText(item.name).width + value + 14; };
+    const named = !namesOptional || items.every(item => !item.name || wide(item) <= width);
+    items.forEach(item => {
+      x.fillStyle = item.bg; x.strokeStyle = item.edge || item.bg; x.lineWidth = 1; x.beginPath();
+      const top = Math.round(item.slot - height / 2) + .5;
+      x.roundRect ? x.roundRect(left + .5, top, width - 1, height - 1, 4) : x.rect(left + .5, top, width - 1, height - 1);
+      x.fill(); x.stroke();
+      x.fillStyle = item.fg; x.textBaseline = 'middle';
+      if (named && item.name) { x.font = TAG_NAME_FONT; x.textAlign = 'left'; x.fillText(item.name, left + 6, item.slot + .5); }
+      x.font = TAG_VALUE_FONT; x.textAlign = 'right'; x.fillText(item.text, left + width - 6, item.slot + .5);
+    });
+    x.textAlign = 'left'; x.textBaseline = 'alphabetic';
+  }
 
   function ema(values, n) { const k = 2 / (n + 1); let prev = null; return values.map(v => (prev = prev === null ? v : v * k + prev * (1 - k))); }
   function sma(values, n) {
@@ -77,7 +108,6 @@
       this.canvas.setAttribute('role', 'img');
       this.canvas.style.cssText = 'display:block;width:100%;touch-action:none;cursor:grab;border-radius:10px';
       host.append(this.canvas);
-      this.tip = document.createElement('div'); this.tip.className = 'kc-tip'; host.append(this.tip);
       this.candles = []; this.view = { end: 0, count: 60 }; this.hover = -1; this.selection = -1; this.overlays = [];
       this.showMacd = this.opts.macd !== false;
       this.maPeriods = normalizePeriods(this.opts.maPeriods || [18, 45]);
@@ -163,6 +193,7 @@
       if (this.opts.onClear) this.opts.onClear();
       this.draw();
     }
+    // 主圖與指標區的畫布都綁同一組手勢（本人 11-15）：單指左右拖平移歷史、兩指捏合縮放、點一下選取那一天。
     // 手指用放寬的「點一下」門檻（只有帶畫線層的圖，也就是個股頁；首頁大盤的手勢維持原樣）。
     fingerSlop(pointerType) { return Boolean(this.drawings) && pointerType !== 'mouse'; }
     bindCanvas(c) {
@@ -175,15 +206,14 @@
           // 起點落在已選取的畫線上：這次拖曳是移動那條線，圖表不平移。
           drag = c === this.canvas && this.drawings && this.drawings.grab(e.clientX - rect.left, e.clientY - rect.top, e.pointerType)
             ? { kind: 'drawing', moved: false, hadPinch: false }
-            : { kind: 'single', x: e.clientX, y: e.clientY, end: this.view.end, moved: false, wandered: false, touch: this.fingerSlop(e.pointerType), hadPinch: false, studySwipe: c !== this.canvas && !!this.studies };
+            : { kind: 'single', x: e.clientX, y: e.clientY, end: this.view.end, moved: false, wandered: false, touch: this.fingerSlop(e.pointerType), hadPinch: false };
         }
         // 拖線途中放上第二指：線回原位，改成雙指縮放。
         if (pts.size === 2 && drag?.kind === 'drawing') { this.drawings.drop(false); this.draw(); }
-        if (pts.size === 2) { const xs = [...pts.values()].map(point => point.x); drag = { kind: 'pinch', pinch: Math.max(20, Math.abs(xs[0] - xs[1])), count: this.view.count, end: this.view.end, hadPinch: true, studySwipe: c !== this.canvas && !!this.studies }; }
+        if (pts.size === 2) { const xs = [...pts.values()].map(point => point.x); drag = { kind: 'pinch', pinch: Math.max(20, Math.abs(xs[0] - xs[1])), count: this.view.count, end: this.view.end, hadPinch: true }; }
         // 兩點畫線點了第一下之後：手指一按下去，預覽線就跟到手指的位置（手機沒有游標可以先移過去）。
         if (c === this.canvas && this.drawings && this.drawings.trackPointer(e.clientX - rect.left, e.clientY - rect.top)) this.draw();
         c.style.cursor = 'grabbing';
-        if (drag?.studySwipe) { this.hover = this.selection; this.draw(); }
       });
       c.addEventListener('pointermove', e => {
         const g = geo(); if (!g) return;
@@ -193,17 +223,17 @@
         if (drag?.kind === 'drawing') { drag.moved = this.drawings.dragTo(x, e.clientY - rect.top) || drag.moved; this.draw(); return; }
         if (c === this.canvas && this.drawings) this.drawings.trackPointer(x, e.clientY - rect.top); // 預覽線跟著游標或手指
         if (drag?.kind === 'pinch' && pts.size === 2) {
-          if (drag.studySwipe) return;
           const xs = [...pts.values()].map(point => point.x); const d = Math.max(20, Math.abs(xs[0] - xs[1]));
           this.view.count = drag.count * drag.pinch / d; this.view.end = drag.end; this.clamp(); this.draw(); this.emit(); return;
         }
         if (drag?.kind === 'single' && pts.size === 1) {
+          // 往任何方向移超過門檻（包括上下滑）就算「動了」：手指在圖上往下滑想捲頁面，放開時不會被當成點選那一天；
+          // 也不拿來定位畫線（wandered，由畫線層決定）。手指的門檻比滑鼠寬（只有帶畫線層的圖，見 fingerSlop）。
           const dx = e.clientX - drag.x, slop = drag.touch ? TAP_SLOP.touch : TAP_SLOP.mouse;
-          if ((drag.studySwipe ? Math.hypot(dx, e.clientY - drag.y) : Math.abs(dx)) > (drag.studySwipe ? TAP_SLOP.mouse : slop)) drag.moved = true;
-          // 往任何方向移超過門檻（包括上下滑）：放開時不算點一下——選了畫線工具時不拿來定位（由畫線層決定）。
-          if (Math.hypot(dx, e.clientY - drag.y) > slop) drag.wandered = true;
-          if (drag.studySwipe) return;
-          if (drag.moved || !drag.touch) { this.view.end = Math.round(drag.end - dx / g.step); this.clamp(); }
+          if (Math.hypot(dx, e.clientY - drag.y) > slop) drag.moved = drag.wandered = true;
+          // 平移只看左右：手指斜斜往下滑時左右只動了一點點，圖不跟著挪（不然兩點畫線的第二點會落到別根）
+          if (Math.abs(dx) > slop) drag.panning = true;
+          if (drag.panning || !drag.touch) { this.view.end = Math.round(drag.end - dx / g.step); this.clamp(); }
         }
         this.hover = x >= g.l && x <= g.l + g.pw ? g.start + Math.floor((x - g.l) / g.step) : -1;
         if (!drag && c === this.canvas && this.drawings) c.style.cursor = this.drawings.cursorAt(x, e.clientY - rect.top);
@@ -212,26 +242,31 @@
       const up = e => {
         // 放開正在拖的畫線：正常放開就定在新位置，手勢被系統取消則回原位。
         if (drag?.kind === 'drawing') { this.drawings.drop(e.type === 'pointerup'); this.draw(); }
-        if (e.type === 'pointerup' && drag?.kind === 'single' && drag.studySwipe && drag.moved && !drag.hadPinch) {
-          const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
-          if (Math.abs(dx) >= 40 && Math.abs(dx) > Math.abs(dy) * 1.3) this.studies.switchBy(dx < 0 ? 1 : -1);
-        }
         // 按在已選取的線上但沒有拖就放開，也是一次點擊（附近有更近的線時會改選那一條）。
         if (e.type === 'pointerup' && (drag?.kind === 'single' || drag?.kind === 'drawing') && !drag.moved && !drag.hadPinch && this.geo) {
           const g = this.geo, rect = c.getBoundingClientRect(), px = e.clientX - rect.left;
           // 主圖上的這一下先給畫線：選了工具就定位，沒選工具而點到線就選取那條線；都不是才選 K 棒。
           if (!(c === this.canvas && this.drawings && this.drawings.tap(px, e.clientY - rect.top, e.pointerType, Boolean(drag.wandered)))) {
-            this.hover = px >= g.l && px <= g.l + g.pw
+            const picked = px >= g.l && px <= g.l + g.pw
               ? Math.min(this.view.end - 1, g.start + Math.floor((px - g.l) / g.step)) : -1;
-            this.selection = this.hover;
-            if (c !== this.canvas && this.hover >= 0 && this.opts.onSelect) this.opts.onSelect(this.hover, c);
+            // 再點一次同一根就取消選取（本人 11-15：畫面上不再有「取消選取」鍵）；點到圖區以外（例如右側數值欄）也是取消。
+            // 取消一律走 clearSelection，頁面才收得到通知（首頁要跟著收掉「這一天的詳情」）。
+            if (picked < 0 || picked === this.selection) this.clearSelection();
+            else {
+              this.hover = this.selection = picked;
+              if (c !== this.canvas && this.opts.onSelect) this.opts.onSelect(picked, c);
+            }
           }
+          this.draw();
+        } else if (e.pointerType !== 'mouse' && drag?.kind === 'single' && drag.moved && this.hover !== this.selection) {
+          // 觸控拖完：十字線與右側數值回到選取的那一天（沒有選取就收掉），不要停在手指經過的那一天
+          this.hover = this.selection;
           this.draw();
         }
         pts.delete(e.pointerId);
         if (pts.size === 1 && drag?.kind === 'pinch') {
           const point = pts.values().next().value;
-          drag = { kind: 'single', x: point.x, y: point.y, end: this.view.end, moved: false, wandered: false, touch: this.fingerSlop(e.pointerType), hadPinch: true, studySwipe: drag.studySwipe };
+          drag = { kind: 'single', x: point.x, y: point.y, end: this.view.end, moved: false, wandered: false, touch: this.fingerSlop(e.pointerType), hadPinch: true };
         } else if (pts.size === 0) { drag = null; c.style.cursor = c === this.canvas && this.drawings ? this.drawings.idleCursor() : 'grab'; }
       };
       c.addEventListener('pointerup', up); c.addEventListener('pointercancel', up);
@@ -266,7 +301,7 @@
       if (!n) {
         c.getContext('2d').clearRect(0, 0, c.width, c.height);
         c.setAttribute('aria-label', '尚無K線資料');
-        this.tip.classList.remove('show'); this.geo = null;
+        this.geo = null;
         if (this.studies) this.studies.draw();
         return;
       }
@@ -283,7 +318,9 @@
       const tagWide = tags && this.overlays.concat(this.candles.slice(-1)).some(o => {
         const v = o.value ?? o.close; return v >= 10000 || (v < 1000 && fmtTag(v).length >= 6);
       });
-      const r = tags ? (W < 520 ? (tagWide ? 84 : 66) : (tagWide ? 100 : 78)) : stacked ? (compactStacked ? compactRail : 176) : 64, t = 10, b = 22, macdH = this.showMacd ? Math.round(H * .24) : 0, gapH = this.showMacd ? 10 : 0;
+      // 短名有三個字（預測帳本的「五日線」「缺口上」）而且數字是五位數：手機寬度再加寬一點，數字的第一位才不會被短名蓋住
+      const tagLong = tagWide && W < 520 && this.overlays.some(o => (o.short || '').length >= 3);
+      const r = tags ? (W < 520 ? (tagWide ? 84 : 66) : (tagWide ? 100 : 78)) + (tagLong ? 12 : 0) : stacked ? (compactStacked ? compactRail : 176) : 64, t = 10, b = 22, macdH = this.showMacd ? Math.round(H * .24) : 0, gapH = this.showMacd ? 10 : 0;
       const pw = W - l - r, ph = H - t - b - macdH - gapH;
       const start = this.view.end - this.view.count, end = this.view.end, step = pw / this.view.count;
       this.geo = { l, pw, step, start };
@@ -296,7 +333,6 @@
       if (!prices.length) {
         x.fillStyle = css('--dim'); x.font = '13px "Noto Sans TC","Microsoft JhengHei",sans-serif';
         x.fillText('此區間OHLC資料不足', 12, 32);
-        this.tip.classList.remove('show');
         if (this.studies) this.studies.draw();
         return;
       }
@@ -469,12 +505,23 @@
         } else x.fillRect(cx - bw / 2, top, bw, h);
       });
       // 使用者自訂均線（最多四條，預設 MA18／MA45）。
-      const maColors = [css('--accent'), css('--gold'), css('--dim'), css('--faint')];
+      // 四條線四種看得出差別的顏色：橘、金、藍、灰（布林通道是更淡的灰帶）
+      const maColors = [css('--accent'), css('--gold'), css('--study-dif') || css('--dim'), css('--dim')];
       this.maPeriods.forEach((p, index) => {
         x.strokeStyle = maColors[index]; x.lineWidth = index < 2 ? 1.8 : 1.2; x.beginPath(); let on = false;
         for (let i = start; i < end; i++) { const v = this.ma[p][i]; if (v == null) { on = false; continue; } const px = l + step * (i - start + .5); on ? x.lineTo(px, y(v)) : x.moveTo(px, y(v)); on = true; }
         x.stroke();
       });
+      // 均線與布林通道的名稱寫在圖的左上角，字的顏色就是線的顏色（本人 11-15：有顏色但看不出哪個顏色是哪一條）。
+      x.font = TAG_NAME_FONT; x.textBaseline = 'top'; x.textAlign = 'left';
+      let nameX = l + 6;
+      [...this.maPeriods.map((p, index) => [`MA${p}`, maColors[index]]), ['布林20', bandColor]].forEach(([name, color]) => {
+        // 布林通道的線是半透明的，名稱也用同樣的淡度，和同色系的第三條均線才分得出來
+        x.globalAlpha = color === bandColor ? .55 : 1;
+        x.fillStyle = color; x.fillText(name, nameX, t - 5); nameX += x.measureText(name).width + 10;
+      });
+      x.globalAlpha = 1;
+      x.font = '11.5px "JetBrains Mono",Consolas,monospace'; x.textBaseline = 'alphabetic';
       // 最新價標籤
       const last = this.candles[n - 1];
       if (tags && end === n && hasPrice(last)) {
@@ -501,25 +548,35 @@
         x.fillStyle = dim; x.textBaseline = 'top'; x.fillText('MACD(12,26,9)', l + 4, top + 2);
         for (let i = start; i < end; i++) { const m = this.macd[i]; if (!m.ready) continue; const px = l + step * (i - start + .5); x.fillStyle = m.hist >= 0 ? up : dn; x.globalAlpha = .7; x.fillRect(px - bw / 2, Math.min(my(0), my(m.hist)), bw, Math.abs(my(m.hist) - my(0)) || 1); x.globalAlpha = 1; }
         [['dif', ink], ['dea', css('--gold')]].forEach(([k, col]) => { x.strokeStyle = col; x.lineWidth = 1.2; x.beginPath(); let on = false; for (let i = start; i < end; i++) { const m = this.macd[i]; if (!m.ready) { on = false; continue; } const px = l + step * (i - start + .5); on ? x.lineTo(px, my(m[k])) : x.moveTo(px, my(m[k])); on = true; } x.stroke(); });
+        const picked = this.hover >= start && this.hover < end ? this.macd[this.hover] : null;
+        if (picked && picked.ready) {
+          const paper = css('--bg');
+          drawTags(x, tagX, tagW, tagH, placeTags([{ name: 'DIF', text: fmt(picked.dif, 1), y: my(picked.dif), bg: ink, fg: paper }, { name: 'DEA', text: fmt(picked.dea, 1), y: my(picked.dea), bg: css('--gold'), fg: paper },
+            { name: '柱', text: `${picked.hist < 0 ? '−' : '+'}${fmt(Math.abs(picked.hist), 1)}`, y: my(picked.hist), bg: picked.hist >= 0 ? up : dn, fg: paper }],
+          top + tagH / 2, H - tagH / 2, tagGap), true);
+          x.font = '11.5px "JetBrains Mono",Consolas,monospace';
+        }
       }
-      // 十字線與提示
+      // 十字線；選取那一天的開高低收標在右側價格欄，日期標在時間軸上、十字線的正下方。
+      this.debugBoxes.picked = null;
       if (this.hover >= start && this.hover < end) {
         const i = this.hover, c = this.candles[i], cx = l + step * (i - start + .5);
         x.strokeStyle = dim; x.setLineDash([3, 3]); x.beginPath(); x.moveTo(cx, t); x.lineTo(cx, H - 4); x.stroke(); x.setLineDash([]);
-        const prev = this.candles[i - 1], chg = prev && Number.isFinite(c.close) && Number.isFinite(prev.close) ? c.close - prev.close : NaN, m = this.macd[i];
-        const maText = this.maPeriods.map(p => this.ma[p][i] != null ? `MA${p} ${fmt(this.ma[p][i], 0)}` : '').filter(Boolean).join('　');
-        const band = this.boll[i], bandDigits = band && band.upper >= 1000 ? 0 : 2;
-        const bandText = band ? `布林 ${fmt(band.upper, bandDigits)}／${fmt(band.lower, bandDigits)}` : '';
-        this.tip.innerHTML = `<b>${c.label}</b><span class="${chg < 0 ? 'dn' : 'upc'}">收 ${fmt(c.close)}　${Number.isFinite(chg) ? `${chg >= 0 ? '+' : '−'}${fmt(Math.abs(chg))}` : '漲跌缺值'}</span><span>開 ${fmt(c.open)}　高 ${fmt(c.high)}　低 ${fmt(c.low)}</span>` + (this.opts.volumeKind === 'volume'
-          ? `<span>成交量 ${Number.isFinite(c.volume) ? `${fmt(c.volume / 1000)} 張（${fmt(c.volume, 0)} 股）` : '缺資料'}</span>`
-          : Number.isFinite(c.amount) ? `<span>成交金額 ${fmt(c.amount, 2)} 億元</span>` : '') + (m.ready ? `<span>MACD柱 ${fmt(m.hist)}　DIF ${fmt(m.dif)}</span>` : '') + (maText ? `<span>${maText}</span>` : '') + (bandText ? `<span>${bandText}</span>` : '');
-        this.tip.classList.add('show');
-        const tw = Math.min(this.tip.offsetWidth, W - 8); const want = cx + 14 + tw > W ? cx - tw - 14 : cx + 14; this.tip.style.left = Math.max(4, Math.min(W - tw - 4, want)) + 'px'; this.tip.style.top = '8px'; // 手機窄圖：左右都夾在圖表內，不出界
-      } else this.tip.classList.remove('show');
+        const paper = css('--bg'), tone = c.close >= c.open ? up : dn;
+        const prices = hasPrice(c) ? [['開', c.open], ['高', c.high], ['低', c.low], ['收', c.close]].map(([name, value]) => (
+          { name, text: fmtTag(value), y: y(value), bg: name === '收' ? tone : paper, fg: name === '收' ? paper : ink, edge: tone })) : [];
+        drawTags(x, tagX, tagW, tagH, placeTags(prices, t + tagH / 2, t + ph - tagH / 2, tagGap));
+        x.font = TAG_VALUE_FONT;
+        const dateWidth = x.measureText(c.label).width + 12;
+        drawTags(x, Math.max(l, Math.min(l + pw - dateWidth, cx - dateWidth / 2)), dateWidth, tagH, [{ name: '', text: c.label, slot: t + ph + b / 2 + 1, bg: ink, fg: paper }]);
+        // 驗收用：這一天實際標出來的日期與四個價位。
+        this.debugBoxes.picked = { date: c.label, tags: prices.map(({ name, text: value }) => ({ name, text: value })) };
+      }
       if (this.studies) this.studies.draw();
     }
   }
   window.KChart = KChart;
+  window.KChartTags = { place: placeTags, draw: drawTags };
   // 5 年歷史日線（欄位式：d 為 YYYYMMDD 整數）裡，比 bars 第一根更早的 K 棒。
   // 歷史必須涵蓋 bars 的第一根且收盤一致才接：還原係數不同步或資料不是同一檔時回空陣列，圖維持原樣。
   function olderBars(bars, history) {

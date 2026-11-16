@@ -7,6 +7,7 @@ const HOLDINGS_LIMIT = 100;
 const MAX_SHARES = 1_000_000_000;
 const MAX_AVERAGE_COST = 10_000_000;
 const NOTE_MAX = 200;
+const GROUP_MAX = 12;   // 和 migrations/0012_watchlist_group.sql 的上限是同一個
 
 export class UserPortfolioError extends Error {
   constructor(status, message) {
@@ -92,37 +93,64 @@ async function securityFor(db, code, deps) {
   }
 }
 
+// 自選的群組名稱：自己取名。前後空白去掉、中間連續空白併成一個；空字串是未分組。
+function groupFrom(value) {
+  if (typeof value !== "string" || /[\u0000-\u001f\u007f]/.test(value)) throw new UserPortfolioError(400, "群組名稱格式不正確");
+  const name = value.trim().replace(/\s+/g, " ");
+  if ([...name].length > GROUP_MAX) throw new UserPortfolioError(400, `群組名稱最多 ${GROUP_MAX} 個字`);
+  return name;
+}
+
 async function listWatchlist(db, email) {
   const { results } = await db.prepare(
-    "SELECT code, name, market, horizon, in_universe, created_at, updated_at " +
+    "SELECT code, name, market, horizon, group_name AS \"group\", in_universe, created_at, updated_at " +
       "FROM user_watchlist WHERE email = ? ORDER BY updated_at DESC, code",
   ).bind(email).all();
   return response(200, { items: results.map((item) => ({ ...item, in_universe: Boolean(item.in_universe) })) });
 }
 
+// 群組改名：這位使用者這個群組裡的每一檔一起改。改成已經有的名字就是併進去。
+async function renameWatchGroup(request, db, email) {
+  const body = await readBody(request);
+  const from = groupFrom(body.from), to = groupFrom(body.to);
+  if (!from || !to) throw new UserPortfolioError(400, "群組名稱不能是空的");
+  const result = await db.prepare("UPDATE user_watchlist SET group_name = ? WHERE email = ? AND group_name = ?").bind(to, email, from).run();
+  if (!result.meta.changes) throw new UserPortfolioError(404, "沒有這個群組");
+  return response(200, { from, to, changed: Number(result.meta.changes) });
+}
+
 async function saveWatchlist(request, db, email, deps) {
   const body = await readBody(request);
   const code = codeFrom(body.code);
-  const horizon = typeof body.horizon === "string" ? body.horizon : "none";
-  if (!HORIZONS.has(horizon)) throw new UserPortfolioError(400, "分類只接受短期、長期或未分類");
+  // 短期／長期與群組各改各的：沒帶的那一項，新加的是不標、未分組，已經有的那一檔保留原本的
+  const horizon = body.horizon === undefined ? null : body.horizon;
+  if (horizon !== null && !HORIZONS.has(horizon)) throw new UserPortfolioError(400, "短期／長期只接受 short、long 或 none");
+  const group = body.group === undefined ? null : groupFrom(body.group);
   const security = await securityFor(db, code, deps);
   const existing = await db.prepare("SELECT created_at FROM user_watchlist WHERE email = ? AND code = ?").bind(email, code).first();
   if (!existing) {
     const count = await db.prepare("SELECT COUNT(*) AS n FROM user_watchlist WHERE email = ?").bind(email).first();
     if (Number(count.n) >= WATCHLIST_LIMIT) throw new UserPortfolioError(409, `自選股最多 ${WATCHLIST_LIMIT} 檔`);
   }
-  const at = new Date((deps.now || Date.now)()).toISOString();
+  const now = (deps.now || Date.now)(), at = new Date(now).toISOString();
+  // 還原剛移出的那一檔時帶著它原本加入的時間：清單與群組照加入的先後排，放回去才會在原位。只在新加時採用
+  let createdAt = at;
+  if (body.created_at !== undefined) {
+    const stamp = typeof body.created_at === "string" ? Date.parse(body.created_at) : NaN;
+    if (!Number.isFinite(stamp) || stamp > now) throw new UserPortfolioError(400, "加入時間格式不正確");
+    createdAt = new Date(stamp).toISOString();
+  }
   let created = false;
   try {
     const inserted = await db.prepare(
-      "INSERT INTO user_watchlist (email, code, name, market, horizon, in_universe, created_at, updated_at) " +
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (email, code) DO NOTHING",
-    ).bind(email, code, security.name, security.market, horizon, security.in_universe, at, at).run();
+      "INSERT INTO user_watchlist (email, code, name, market, horizon, group_name, in_universe, created_at, updated_at) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (email, code) DO NOTHING",
+    ).bind(email, code, security.name, security.market, horizon ?? "none", group ?? "", security.in_universe, createdAt, at).run();
     created = Number(inserted.meta.changes) > 0;
     if (!created) {
       await db.prepare(
-        "UPDATE user_watchlist SET name = ?, market = ?, horizon = ?, in_universe = ?, updated_at = ? WHERE email = ? AND code = ?",
-      ).bind(security.name, security.market, horizon, security.in_universe, at, email, code).run();
+        "UPDATE user_watchlist SET name = ?, market = ?, horizon = COALESCE(?, horizon), group_name = COALESCE(?, group_name), in_universe = ?, updated_at = ? WHERE email = ? AND code = ?",
+      ).bind(security.name, security.market, horizon, group, security.in_universe, at, email, code).run();
     }
   } catch (error) {
     const count = await db.prepare("SELECT COUNT(*) AS n FROM user_watchlist WHERE email = ?").bind(email).first();
@@ -130,7 +158,7 @@ async function saveWatchlist(request, db, email, deps) {
     throw error;
   }
   const stored = await db.prepare(
-    "SELECT name, market, horizon, in_universe, created_at, updated_at FROM user_watchlist WHERE email = ? AND code = ?",
+    "SELECT name, market, horizon, group_name, in_universe, created_at, updated_at FROM user_watchlist WHERE email = ? AND code = ?",
   ).bind(email, code).first();
   if (!stored) throw new UserPortfolioError(409, "自選股已在其他操作中變更，請重試");
   return response(created ? 201 : 200, {
@@ -138,6 +166,7 @@ async function saveWatchlist(request, db, email, deps) {
     name: stored.name,
     market: stored.market,
     horizon: stored.horizon,
+    group: stored.group_name,
     in_universe: Boolean(stored.in_universe),
     created_at: stored.created_at,
     updated_at: stored.updated_at,
@@ -484,6 +513,10 @@ export async function handleUserPortfolio(request, env, path, email, deps = {}) 
   if (searchHistoryItem) {
     if (request.method !== "DELETE") throw new UserPortfolioError(405, "方法不允許");
     return deleteSearchHistory(request, env.DB, email, searchHistoryItem[1]);
+  }
+  if (path === "/api/watchlist/groups") {
+    if (request.method === "POST") return renameWatchGroup(request, env.DB, email);
+    throw new UserPortfolioError(405, "方法不允許");
   }
   const watchlistItem = path.match(/^\/api\/watchlist\/([^/]+)$/);
   if (watchlistItem) {

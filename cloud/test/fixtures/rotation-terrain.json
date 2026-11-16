@@ -1,0 +1,505 @@
+{
+ "source": {
+  "data_date": "2026-11-09",
+  "snapshot_sha256": "f7115c2e71d57e52895ca9546d29d73f9383f5b9c875444709cb9a0eeec116b2"
+ },
+ "quadrants": {
+  "improving": {
+   "label": "資金回補"
+  },
+  "lagging": {
+   "label": "資金落後"
+  },
+  "leading": {
+   "label": "資金領先"
+  },
+  "weakening": {
+   "label": "資金減速"
+  }
+ },
+ "bubbles": [
+  {
+   "amount_20d": 8107.6,
+   "amount_5d": 2214.3,
+   "amount_today": 3537.8,
+   "excluded_members": [],
+   "member_count": 202,
+   "name": "半導體業",
+   "quadrant": "leading",
+   "relative_pct": 1191,
+   "size": 8107.6,
+   "x": 3.69,
+   "y": 374.9
+  },
+  {
+   "amount_20d": 1267.5,
+   "amount_5d": 317.3,
+   "amount_today": 509.8,
+   "excluded_members": [
+    "3625",
+    "6825",
+    "7710"
+   ],
+   "member_count": 107,
+   "name": "電腦及週邊設備業",
+   "quadrant": "leading",
+   "relative_pct": 101,
+   "size": 1267.5,
+   "x": 1.01,
+   "y": 0.8
+  },
+  {
+   "amount_20d": 894.4,
+   "amount_5d": 240.6,
+   "amount_today": 406.4,
+   "excluded_members": [
+    "8047"
+   ],
+   "member_count": 92,
+   "name": "其他電子業",
+   "quadrant": "leading",
+   "relative_pct": 42,
+   "size": 894.4,
+   "x": 0.51,
+   "y": 34.0
+  },
+  {
+   "amount_20d": 5644.8,
+   "amount_5d": 1332.2,
+   "amount_today": 2212.3,
+   "excluded_members": [
+    "5355",
+    "6173"
+   ],
+   "member_count": 207,
+   "name": "電子零組件業",
+   "quadrant": "weakening",
+   "relative_pct": 800,
+   "size": 5644.8,
+   "x": 3.17,
+   "y": -157.9
+  },
+  {
+   "amount_20d": 1412.7,
+   "amount_5d": 266.9,
+   "amount_today": 453.9,
+   "excluded_members": [
+    "2323",
+    "3714",
+    "6167"
+   ],
+   "member_count": 113,
+   "name": "光電業",
+   "quadrant": "weakening",
+   "relative_pct": 125,
+   "size": 1412.7,
+   "x": 1.17,
+   "y": -172.5
+  },
+  {
+   "amount_20d": 847.3,
+   "amount_5d": 196.6,
+   "amount_today": 256.5,
+   "excluded_members": [
+    "3632",
+    "6142",
+    "8176"
+   ],
+   "member_count": 88,
+   "name": "通信網路業",
+   "quadrant": "weakening",
+   "relative_pct": 35,
+   "size": 847.3,
+   "x": 0.43,
+   "y": -30.5
+  },
+  {
+   "amount_20d": 806.0,
+   "amount_5d": 143.8,
+   "amount_today": 165.3,
+   "excluded_members": [],
+   "member_count": 25,
+   "name": "塑膠工業",
+   "quadrant": "weakening",
+   "relative_pct": 28,
+   "size": 806.0,
+   "x": 0.36,
+   "y": -115.4
+  },
+  {
+   "amount_20d": 504.3,
+   "amount_5d": 154.3,
+   "amount_today": 290.4,
+   "excluded_members": [],
+   "member_count": 40,
+   "name": "金融保險業",
+   "quadrant": "improving",
+   "relative_pct": -20,
+   "size": 504.3,
+   "x": -0.32,
+   "y": 56.4
+  },
+  {
+   "amount_20d": 418.2,
+   "amount_5d": 107.4,
+   "amount_today": 169.5,
+   "excluded_members": [
+    "1589",
+    "2067",
+    "2249",
+    "4534"
+   ],
+   "member_count": 97,
+   "name": "電機機械",
+   "quadrant": "improving",
+   "relative_pct": -34,
+   "size": 418.2,
+   "x": -0.59,
+   "y": 5.7
+  },
+  {
+   "amount_20d": 195.7,
+   "amount_5d": 56.6,
+   "amount_today": 41.1,
+   "excluded_members": [],
+   "member_count": 5,
+   "name": "玻璃陶瓷",
+   "quadrant": "improving",
+   "relative_pct": -69,
+   "size": 195.7,
+   "x": -1.68,
+   "y": 15.3
+  },
+  {
+   "amount_20d": 131.0,
+   "amount_5d": 49.4,
+   "amount_today": 113.0,
+   "excluded_members": [
+    "4155",
+    "6467"
+   ],
+   "member_count": 151,
+   "name": "生技醫療業",
+   "quadrant": "improving",
+   "relative_pct": -79,
+   "size": 131.0,
+   "x": -2.26,
+   "y": 33.3
+  },
+  {
+   "amount_20d": 114.0,
+   "amount_5d": 36.1,
+   "amount_today": 72.5,
+   "excluded_members": [
+    "1516"
+   ],
+   "member_count": 93,
+   "name": "其他業",
+   "quadrant": "improving",
+   "relative_pct": -82,
+   "size": 114.0,
+   "x": -2.46,
+   "y": 15.2
+  },
+  {
+   "amount_20d": 110.0,
+   "amount_5d": 32.3,
+   "amount_today": 67.6,
+   "excluded_members": [],
+   "member_count": 37,
+   "name": "電子通路業",
+   "quadrant": "improving",
+   "relative_pct": -83,
+   "size": 110.0,
+   "x": -2.52,
+   "y": 9.6
+  },
+  {
+   "amount_20d": 91.8,
+   "amount_5d": 42.7,
+   "amount_today": 73.2,
+   "excluded_members": [
+    "6898",
+    "6938"
+   ],
+   "member_count": 45,
+   "name": "資訊服務業",
+   "quadrant": "improving",
+   "relative_pct": -85,
+   "size": 91.8,
+   "x": -2.78,
+   "y": 39.4
+  },
+  {
+   "amount_20d": 59.7,
+   "amount_5d": 18.5,
+   "amount_today": 30.3,
+   "excluded_members": [],
+   "member_count": 48,
+   "name": "鋼鐵工業",
+   "quadrant": "improving",
+   "relative_pct": -91,
+   "size": 59.7,
+   "x": -3.4,
+   "y": 7.1
+  },
+  {
+   "amount_20d": 35.3,
+   "amount_5d": 12.4,
+   "amount_today": 27.5,
+   "excluded_members": [],
+   "member_count": 52,
+   "name": "紡織纖維",
+   "quadrant": "improving",
+   "relative_pct": -94,
+   "size": 35.3,
+   "x": -4.16,
+   "y": 7.2
+  },
+  {
+   "amount_20d": 32.3,
+   "amount_5d": 9.0,
+   "amount_today": 20.2,
+   "excluded_members": [
+    "4207",
+    "7806"
+   ],
+   "member_count": 32,
+   "name": "食品工業",
+   "quadrant": "improving",
+   "relative_pct": -95,
+   "size": 32.3,
+   "x": -4.29,
+   "y": 1.9
+  },
+  {
+   "amount_20d": 31.8,
+   "amount_5d": 8.1,
+   "amount_today": 11.7,
+   "excluded_members": [],
+   "member_count": 17,
+   "name": "電器電纜",
+   "quadrant": "improving",
+   "relative_pct": -95,
+   "size": 31.8,
+   "x": -4.31,
+   "y": 0.3
+  },
+  {
+   "amount_20d": 30.0,
+   "amount_5d": 8.3,
+   "amount_today": 14.2,
+   "excluded_members": [],
+   "member_count": 88,
+   "name": "建材營造業",
+   "quadrant": "improving",
+   "relative_pct": -95,
+   "size": 30.0,
+   "x": -4.39,
+   "y": 1.7
+  },
+  {
+   "amount_20d": 26.1,
+   "amount_5d": 9.1,
+   "amount_today": 14.6,
+   "excluded_members": [
+    "3085"
+   ],
+   "member_count": 36,
+   "name": "數位雲端",
+   "quadrant": "improving",
+   "relative_pct": -96,
+   "size": 26.1,
+   "x": -4.59,
+   "y": 5.1
+  },
+  {
+   "amount_20d": 23.3,
+   "amount_5d": 6.4,
+   "amount_today": 9.1,
+   "excluded_members": [],
+   "member_count": 27,
+   "name": "運動休閒",
+   "quadrant": "improving",
+   "relative_pct": -96,
+   "size": 23.3,
+   "x": -4.75,
+   "y": 1.1
+  },
+  {
+   "amount_20d": 22.7,
+   "amount_5d": 6.2,
+   "amount_today": 10.2,
+   "excluded_members": [],
+   "member_count": 40,
+   "name": "綠能環保",
+   "quadrant": "improving",
+   "relative_pct": -96,
+   "size": 22.7,
+   "x": -4.8,
+   "y": 1.1
+  },
+  {
+   "amount_20d": 13.3,
+   "amount_5d": 4.0,
+   "amount_today": 8.1,
+   "excluded_members": [
+    "7867"
+   ],
+   "member_count": 36,
+   "name": "居家生活",
+   "quadrant": "improving",
+   "relative_pct": -98,
+   "size": 13.3,
+   "x": -5.56,
+   "y": 1.3
+  },
+  {
+   "amount_20d": 10.8,
+   "amount_5d": 3.3,
+   "amount_today": 6.5,
+   "excluded_members": [],
+   "member_count": 11,
+   "name": "橡膠工業",
+   "quadrant": "improving",
+   "relative_pct": -98,
+   "size": 10.8,
+   "x": -5.86,
+   "y": 1.1
+  },
+  {
+   "amount_20d": 6.4,
+   "amount_5d": 2.1,
+   "amount_today": 4.1,
+   "excluded_members": [
+    "4804"
+   ],
+   "member_count": 50,
+   "name": "觀光餐旅",
+   "quadrant": "improving",
+   "relative_pct": -99,
+   "size": 6.4,
+   "x": -6.63,
+   "y": 1.1
+  },
+  {
+   "amount_20d": 0.2,
+   "amount_5d": 0.0,
+   "amount_today": 0.0,
+   "excluded_members": [],
+   "member_count": 4,
+   "name": "農業科技業",
+   "quadrant": "improving",
+   "relative_pct": -100,
+   "size": 0.2,
+   "x": -11.81,
+   "y": -0.0
+  },
+  {
+   "amount_20d": 220.7,
+   "amount_5d": 51.3,
+   "amount_today": 86.2,
+   "excluded_members": [],
+   "member_count": 34,
+   "name": "航運業",
+   "quadrant": "lagging",
+   "relative_pct": -65,
+   "size": 220.7,
+   "x": -1.51,
+   "y": -7.7
+  },
+  {
+   "amount_20d": 118.8,
+   "amount_5d": 26.4,
+   "amount_today": 36.2,
+   "excluded_members": [],
+   "member_count": 42,
+   "name": "化學工業",
+   "quadrant": "lagging",
+   "relative_pct": -81,
+   "size": 118.8,
+   "x": -2.4,
+   "y": -6.5
+  },
+  {
+   "amount_20d": 101.5,
+   "amount_5d": 16.0,
+   "amount_today": 29.3,
+   "excluded_members": [
+    "8908"
+   ],
+   "member_count": 11,
+   "name": "油電燃氣業",
+   "quadrant": "lagging",
+   "relative_pct": -84,
+   "size": 101.5,
+   "x": -2.63,
+   "y": -18.8
+  },
+  {
+   "amount_20d": 35.4,
+   "amount_5d": 8.8,
+   "amount_today": 11.5,
+   "excluded_members": [],
+   "member_count": 7,
+   "name": "水泥工業",
+   "quadrant": "lagging",
+   "relative_pct": -94,
+   "size": 35.4,
+   "x": -4.15,
+   "y": -0.1
+  },
+  {
+   "amount_20d": 29.2,
+   "amount_5d": 6.5,
+   "amount_today": 10.7,
+   "excluded_members": [],
+   "member_count": 40,
+   "name": "汽車工業",
+   "quadrant": "lagging",
+   "relative_pct": -95,
+   "size": 29.2,
+   "x": -4.43,
+   "y": -1.7
+  },
+  {
+   "amount_20d": 28.7,
+   "amount_5d": 5.6,
+   "amount_today": 8.4,
+   "excluded_members": [],
+   "member_count": 26,
+   "name": "文化創意業",
+   "quadrant": "lagging",
+   "relative_pct": -95,
+   "size": 28.7,
+   "x": -4.45,
+   "y": -3.2
+  },
+  {
+   "amount_20d": 15.9,
+   "amount_5d": 3.4,
+   "amount_today": 6.5,
+   "excluded_members": [],
+   "member_count": 18,
+   "name": "貿易百貨業",
+   "quadrant": "lagging",
+   "relative_pct": -97,
+   "size": 15.9,
+   "x": -5.31,
+   "y": -1.1
+  },
+  {
+   "amount_20d": 3.3,
+   "amount_5d": 0.8,
+   "amount_today": 1.5,
+   "excluded_members": [],
+   "member_count": 7,
+   "name": "造紙工業",
+   "quadrant": "lagging",
+   "relative_pct": -99,
+   "size": 3.3,
+   "x": -7.57,
+   "y": -0.1
+  }
+ ]
+}

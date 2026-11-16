@@ -51,17 +51,14 @@
     time: $('marketTime'),
     analysisDate: $('analysisDate'),
     scenarioDate: $('scenarioDate'),
-    scenarioLabel: $('conclusionLabel'),
     zone: $('zoneLabel'),
-    conclusion: $('conclusionText'),
     trendSection: $('marketTrend'),
     trendDate: $('marketTrendDate'),
-    trendGrid: $('marketTrendGrid'),
+    trendRows: $('marketTrendRows'),
     service: $('serviceNote'),
     chartContext: $('chartContext'),
     chartStage: $('chartStage'),
     chartActions: $('chartActions'),
-    chartTools: $('chartToolsToggle'),
     chartHost: $('mainChart'),
     chartSummary: $('chartSummary'),
     period: $('periodSelect'),
@@ -99,28 +96,45 @@
   };
   window.MinimalApp = api;
 
-  if (!A || !D || !A.backtest || !D.thresholds || !window.KChart) {
+  if (!A || !D || !A.backtest || !window.KChart) {
     els.service.hidden = false;
     els.service.textContent = '資料驗證失敗：缺少盤後分析、劇本或圖表元件。';
     return;
   }
 
-  const UPPER = Number(D.thresholds.upper);
-  const LOWER = Number(D.thresholds.lower);
   const AS_OF = A.backtest.as_of || {};
+  // 收復線、防守線：每日更新照規則從當天的 K 線算出來（回測的截止日資料），每天都有，優先讀這一份；
+  // 人寫的劇本裡也抄了一份同樣的數字，只有在資料包還沒有帶算出來的那一份時才退回去讀它（本人 2026-11-15：線與圖不等人寫劇本）。
+  const isNumber = value => value !== null && value !== '' && Number.isFinite(Number(value));
+  const numberOr = value => (isNumber(value) ? Number(value) : NaN);   // null、空字串不當成 0
+  const linesDaily = isNumber(AS_OF.upper) && isNumber(AS_OF.lower);
+  const scenarioThresholds = D.thresholds || {};
+  const UPPER = numberOr(linesDaily ? AS_OF.upper : scenarioThresholds.upper);
+  const LOWER = numberOr(linesDaily ? AS_OF.lower : scenarioThresholds.lower);
   const ACTIONS = D.actions || (D.forecast && D.forecast.actions) || {};
   const CLOSE = Number(AS_OF.close || (D.latest && D.latest.close));
-  const HEADLINE = D.headline || (D.forecast && D.forecast.headline) || {};
-  const DEFAULT_SAMPLE = D.default_sample || AS_OF.default_sample || (A.backtest.samples[0] && A.backtest.samples[0].key);
+  // 預設用哪一組比較樣本：也是每天照當天的型態定的，先讀算出來的；人寫的那一份可能是好幾天前的型態
+  const DEFAULT_SAMPLE = AS_OF.default_sample || D.default_sample || (A.backtest.samples[0] && A.backtest.samples[0].key);
   const scenarioDate = (() => {
     const horizon = String(D.forecast && D.forecast.horizon || '');
     const match = horizon.match(/\d{4}-\d{2}-\d{2}/);
     return match ? match[0] : String(D.expires_at || D.forecast && D.forecast.expiry || '').slice(0, 10);
   })();
-  const TARGET_LABEL = scenarioDate ? `${scenarioDate.slice(5, 7)}/${scenarioDate.slice(8, 10)}` : '下一交易日';
   const scenarioExpired = Boolean(scenarioDate && A.meta.cutoff_date && scenarioDate < A.meta.cutoff_date);
-  // 本人 2026-11-14「過期就隱藏」：劇本與直白分析是人寫的，不會跟每日資料一起更新。
-  // 比行情資料日舊時整組不顯示（劇本文字、收復線／防守線、靠這兩條線算的隔日分布），不拿舊解讀配新數字。
+  // 本人 2026-11-14「過期就隱藏」：劇本與直白分析是人寫的，不會跟每日資料一起更新，比行情資料日舊時不顯示，不拿舊解讀配新數字。
+  // 2026-11-15 本人同意把範圍縮小：過期只藏人寫的文字（scenarioHidden：劇本日期、怎麼應對、觸發條件、解讀）。
+  // 人寫的那幾句講的是「它那一天的兩條線」：線已經換成新一天算的（數字和劇本裡抄的不一樣）時，就算劇本的適用日還沒過也不能顯示——
+  // 劇本的適用日當天收盤後，資料更新到那一天，線就換了，劇本還要到隔天才算過期。
+  const sameLine = (a, b) => isNumber(a) && Math.abs(Number(a) - b) < 0.005;
+  const scenarioHidden = scenarioExpired || (linesDaily && !(sameLine(scenarioThresholds.upper, UPPER) && sameLine(scenarioThresholds.lower, LOWER)));
+  // 兩條線與靠它們算的東西每天都有。不顯示的情況只有三種：
+  // 兩邊都沒有數字（資料包壞了，不畫出「NaN」）；線還是從過期的劇本抄來的（資料包還沒帶算出來的那一份）；
+  // 行情已經走到線適用的那一天之後（每日更新沒跑成，見 setMarketHeader 裡的 linesOutdated）。
+  const linesMissing = !(Number.isFinite(UPPER) && Number.isFinite(LOWER)) || (!linesDaily && scenarioExpired);
+  let linesOutdated = false;
+  const linesHidden = () => linesMissing || linesOutdated;
+  // 線是哪一天畫的：那一天就是今天才寫「今天」，不然寫日期（line-zones.js 的 dayOf）
+  const drawnDay = () => window.LineZones.dayOf(AS_OF.date || A.meta.cutoff_date || '', new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Taipei' }));
   const plainSource = OV && OV.plain || null;
   const plainStale = Boolean(plainSource && plainSource.data_dates && A.meta.cutoff_date
     && String(plainSource.data_dates.price_and_foreign || '') < A.meta.cutoff_date);
@@ -180,21 +194,10 @@
     return getComputedStyle(root).getPropertyValue(name).trim() || fallback;
   }
 
-  function headlineSummary() {
-    const title = HEADLINE.title || '方向待確認';
-    return HEADLINE.tone ? `${title}｜${HEADLINE.tone}` : title;
-  }
-
-  function headlineDetail() {
-    const summary = headlineSummary();
-    return HEADLINE.lede ? `${summary}：${HEADLINE.lede}` : summary;
-  }
-
+  // 現價落在哪一區：規則和收復線／防守線那張圖是同一個（line-zones.js）
+  const ZONE_NAMES = { stand_back: { id: 'up', label: '站回收復線' }, between: { id: 'mid', label: '兩線之間' }, continue_break: { id: 'down', label: '跌破防守線' } };
   function zoneFor(price) {
-    if (!Number.isFinite(Number(price))) return { id: 'unknown', label: '尚未取得' };
-    if (price >= UPPER) return { id: 'up', label: '站回收復線' };
-    if (price >= LOWER) return { id: 'mid', label: '兩線之間' };
-    return { id: 'down', label: '跌破防守線' };
+    return ZONE_NAMES[window.LineZones.zoneOf(Number(price), UPPER, LOWER)] || { id: 'unknown', label: '尚未取得' };
   }
 
   function buildOfficialMarketSnapshot() {
@@ -238,6 +241,13 @@
   const fallbackMarketDate = () => officialMarketSnapshot.date || A.meta.cutoff_date || D.market_date || '—';
   const fallbackMarketData = () => officialMarketSnapshot.data;
 
+  // 圖旁兩個價位按鈕與隔日分布：有線才顯示（線過時與否會跟著即時行情變，所以做成可以重複呼叫的）
+  function showLineKeys() {
+    for (const node of [els.lineUpper, els.lineLower, $('distribution')]) {
+      if (node) node.hidden = linesHidden();
+    }
+  }
+
   let displayedMarketData = null;
   function currentMarketData() {
     if (displayedMarketData) return displayedMarketData;
@@ -255,17 +265,17 @@
     els.state.textContent = state.label;
     els.stateButton.dataset.state = state.id;
     els.time.textContent = stamp || fallbackMarketDate();
-    els.zone.textContent = scenarioExpired ? '' : zoneFor(price).label;
+    // 兩條線是照截止日那一天的收盤畫的，給下一個交易日用。即時行情的「昨收」已經不是那一天的收盤，
+    // 代表中間又過了交易日、每日更新卻沒跑成：線過時了，先收起來，不拿好幾天前的線配今天的價。
+    // （畫面上是盤後資料本身、或即時行情沒給昨收時不判斷。差一點以內當成同一個收盤，各來源的小數位數不同。）
+    const outdated = data !== fallbackMarketData() && isNumber(data.previous_close) && Number.isFinite(CLOSE) && Math.abs(Number(data.previous_close) - CLOSE) > 1;
+    if (outdated !== linesOutdated) { linesOutdated = outdated; showLineKeys(); }
+    els.zone.textContent = linesHidden() ? '' : zoneFor(price).label;
     const shortDate = value => (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}/.test(value)) ? `${value.slice(5, 7)}/${value.slice(8, 10)}` : (value || '—');
     els.analysisDate.textContent = shortDate(A.meta.cutoff_date || fallbackMarketDate());
     els.scenarioDate.textContent = shortDate(scenarioDate);
-    els.scenarioLabel.textContent = '下一交易日';
     els.analysisDate.title = A.meta.cutoff_date || fallbackMarketDate();
     els.scenarioDate.title = scenarioDate || '';
-    // 標題與語氣各自不斷行：只在「｜」處換行，避免「長下／影」這種把詞拆開的斷法。textContent 不變。
-    const title = HEADLINE.title || '方向待確認';
-    els.conclusion.replaceChildren(Object.assign(document.createElement('span'), { className: 'nowrap-phrase', textContent: title }));
-    if (HEADLINE.tone) els.conclusion.append('｜', Object.assign(document.createElement('span'), { className: 'nowrap-phrase', textContent: HEADLINE.tone }));
   }
 
   function setOffline(message) {
@@ -402,22 +412,20 @@
   }
 
   function overlays() {
-    if (scenarioExpired) return [];
+    if (linesHidden()) return [];
     return [
       { value: UPPER, label: '收復線', short: '收復', color: css('--gold', '#d9a94b'), pos: 'above' },
       { value: LOWER, label: '防守線', short: '防守', color: css('--down', '#2fd09a'), pos: 'below' }
     ];
   }
 
-  // 圖上的判斷線：人寫劇本的兩條線照舊，再加預測帳本的轉強線／轉弱線（forecast.js；只有站主有內容時才有）。
+  // 圖上的判斷線：每天算的收復線、防守線，再加預測帳本的轉強線／轉弱線（forecast.js；只有站主有內容時才有）。
   function chartOverlays() {
     return [...overlays(), ...(window.MarketForecast ? window.MarketForecast.overlays(currentPeriod) : [])];
   }
 
-  function trendSide(left, right) {
-    if (!Number.isFinite(left) || !Number.isFinite(right) || Math.abs(left - right) < 1e-9) return 0;
-    return left > right ? 1 : -1;
-  }
+  // 規則的比法只有一份，在 trend-votes.js
+  const trendSide = (left, right) => window.TrendVotes.sideOf(left, right);
 
   function trendState(score) {
     if (score >= 2) return ['bullish', '偏多'];
@@ -498,25 +506,10 @@
     const packaged = D.actions && D.actions.market_trend || A.market_trend;
     const trend = packaged && packaged.schema === 'market-trend/v1' ? packaged : localMarketTrend(instance);
     renderedTrend = trend;
-    if (!els.trendDate || !els.trendGrid) return;
-    if (!trend) {
-      els.trendDate.textContent = `資料日 ${A.meta.cutoff_date || '—'}`;
-      els.trendGrid.replaceChildren(Object.assign(document.createElement('p'), { className: 'market-trend-error', textContent: '走勢判讀尚未隨每日資料完成。' }));
-      return;
-    }
-    els.trendDate.textContent = `資料日 ${trend.data_date || '—'}`;
-    els.trendGrid.replaceChildren(...trend.periods.map(period => {
-      const article = document.createElement('article');
-      article.className = 'market-trend-item';
-      article.dataset.state = period.state;
-      article.setAttribute('role', 'listitem');
-      const heading = document.createElement('h4');
-      heading.textContent = `${period.label} ${period.conclusion}`;
-      const sentence = document.createElement('p');
-      sentence.textContent = period.sentence.replace(`${period.conclusion}：`, '');
-      article.append(heading, sentence);
-      return article;
-    }));
+    if (!els.trendDate || !els.trendRows) return;
+    els.trendDate.textContent = `資料日 ${(trend && trend.data_date) || A.meta.cutoff_date || '—'}`;
+    // 每一票與最上面那一句由 trend-votes.js 讀好，畫面由 trend-matrix.js 畫；同一份資料重複叫不會重畫
+    window.TrendMatrix.render(els.trendSection, trend ? window.TrendVotes.read(trend) : null);
   }
 
   function ensureChart() {
@@ -532,7 +525,7 @@
       overlayLabels: 'tags',
       minViewCount: 10,
       onSelect: (index, anchor) => selectCandle(index, anchor, false),
-      onClear: () => { selectedIndex = -1; els.marker.hidden = true; els.mobileDetails.hidden = true; },
+      onClear: () => { selectedIndex = -1; clearedByChart = true; els.marker.hidden = true; els.mobileDetails.hidden = true; },
       onView: (_first, _last, atEnd) => {
         els.reset.hidden = atEnd;
         requestAnimationFrame(updateOverlayControls);
@@ -557,7 +550,7 @@
     }
     currentPeriod = period;
     els.period.value = period;
-    els.period.dispatchEvent(new Event('periodsync')); // 週期分段按鈕（period-switch.js）同步
+    els.period.dispatchEvent(new Event('periodsync')); // 週期小鍵與選單（period-switch.js）同步
     selectedIndex = -1;
     els.mobileDetails.hidden = true;
     els.marker.hidden = true;
@@ -582,7 +575,7 @@
     els.estimate.hidden = !isMinutePeriod(period);
     els.chartContext.textContent = `${periodLabels[period]} · ${liveLast ? '最右一根形成中'
       : provisionalLast ? `最右一根暫用即時收盤，正式日K待更新（目前到 ${A.meta.cutoff_date}）` : `資料截至 ${A.meta.cutoff_date}`}`;
-    els.chartSummary.textContent = `${periodLabels[period]}，共 ${candles.length} 根。${scenarioExpired ? '' : `圖上有收復線 ${fmt(UPPER)} 與防守線 ${fmt(LOWER)}。`}`;
+    els.chartSummary.textContent = `${periodLabels[period]}，共 ${candles.length} 根。${linesHidden() ? '' : `圖上有收復線 ${fmt(UPPER)} 與防守線 ${fmt(LOWER)}。`}`;
     requestAnimationFrame(updateOverlayControls);
   }
 
@@ -610,9 +603,9 @@
     const ph = H - t - b - macdH - gapH;
     const end = chart.view.end;
     const visible = chart.candles.slice(start, end).filter(candle => ['open', 'high', 'low', 'close'].every(key => Number.isFinite(candle[key])));
-    const scenarioLines = scenarioExpired ? [] : [LOWER, UPPER];
-    let low = Math.min(...visible.map(candle => candle.low), ...scenarioLines);
-    let high = Math.max(...visible.map(candle => candle.high), ...scenarioLines);
+    const drawnLines = linesHidden() ? [] : [LOWER, UPPER];
+    let low = Math.min(...visible.map(candle => candle.low), ...drawnLines);
+    let high = Math.max(...visible.map(candle => candle.high), ...drawnLines);
     const pad = (high - low) * .07 || 10;
     low -= pad;
     high += pad;
@@ -670,10 +663,14 @@
     }
   }
 
+  // 這一次點擊裡，圖表是不是自己取消了選取（onClear 會設成 true）
+  let clearedByChart = false;
+
   function bindCandleSelection() {
     let start = null;
     chart.canvas.addEventListener('pointerdown', event => {
       start = { x: event.clientX, y: event.clientY, pointerId: event.pointerId };
+      clearedByChart = false;
     });
     chart.canvas.addEventListener('pointerup', event => {
       if (!start || start.pointerId !== event.pointerId) return;
@@ -685,6 +682,9 @@
       const rect = chart.canvas.getBoundingClientRect();
       const localX = event.clientX - rect.left;
       const index = Math.max(g.start, Math.min(g.end - 1, g.start + Math.floor((localX - g.l) / g.step)));
+      // 手機：這一下如果是圖表自己取消了選取（再點同一根、或點在圖區以外，kchart.js 會先處理並通知 onClear），不要又選回去。
+      // 桌機點 K 棒是開明細板，照舊。
+      if (isMobile() && clearedByChart) return;
       selectCandle(index, chart.canvas, !isMobile());
     });
     chart.canvas.addEventListener('keydown', event => {
@@ -733,17 +733,21 @@
 
   function plainBlock(meaning, watch) {
     const list = items => `<ul>${items.filter(Boolean).map(item => `<li>${item}</li>`).join('')}</ul>`;
-    return `<div class="plain"><section class="plain-group"><h4>這代表</h4>${list(meaning)}</section>${watch && watch.filter(Boolean).length ? `<section class="plain-group plain-watch"><h4>要注意</h4>${list(watch)}</section>` : ''}</div>`;
+    return `<div class="plain">${meaning.filter(Boolean).length ? `<section class="plain-group"><h4>這代表</h4>${list(meaning)}</section>` : ''}${watch && watch.filter(Boolean).length ? `<section class="plain-group plain-watch"><h4>要注意</h4>${list(watch)}</section>` : ''}</div>`;
   }
 
+  // 面板裡點了才展開的一列
+  const fold = (summary, html) => `<details class="more-detail"><summary>${summary}</summary>${html}</details>`;
   function moreDetail(html) {
-    return `<details class="more-detail"><summary>看詳細數字</summary>${html}<p class="deep-links">更深入：<button type="button" data-deep="method">方法</button><button type="button" data-deep="sources">來源</button><button type="button" data-deep="samples">換一組比較樣本</button><button type="button" data-deep="table">資料表</button><button type="button" data-deep="news">新聞</button></p></details>`;
+    return fold('看詳細數字', `${html}<p class="deep-links">更深入：<button type="button" data-deep="method">方法</button><button type="button" data-deep="sources">來源</button><button type="button" data-deep="samples">換一組比較樣本</button><button type="button" data-deep="table">資料表</button><button type="button" data-deep="news">新聞</button></p>`);
   }
 
 
   // 籌碼卡與直白分析（本人 2026-11-06：選 B、多一點數據、直白分析、要提空單與融資）
   const CH = OV.chips || null;
   const PL = OV.plain || null;
+  const NOW = OV.current || null;   // 最新一天各項的前 10 與連續天數（本人 11-07 定案）
+  const shortDay = date => (date ? date.slice(5).replace('-', '/') : '');
   function spark(values, tone, signedAxis) {
     const clean = values.map(Number).filter(Number.isFinite);
     if (clean.length < 2) return '';
@@ -764,6 +768,8 @@
     const f20 = F.slice(-20).reduce((s, r) => s + r.net_billion, 0);
     const t5 = F.slice(-5).reduce((s, r) => s + r.trust_billion, 0);
     const fut = last(U).net_contracts, futWeek = ago(U, 5).net_contracts;
+    const futDays = NOW ? NOW.futures_short_growing_days : 0;
+    const futStreak = futDays > 0 ? `，連 ${fmt(futDays, 0)} 天${futDays >= NOW.futures_days_available ? '以上' : ''}增加` : fut < futWeek ? '，還在加' : '';
     const mLast = last(M), mPeak = M.reduce((a, b) => (b.margin_balance_billion > a.margin_balance_billion ? b : a));
     const sNow = mLast.short_units, s20 = ago(M, 20).short_units;
     const amounts = A.daily.slice(-20).map(r => r.amount / 1e8), amtRatio = amounts.at(-1) / (amounts.reduce((s, v) => s + v, 0) / amounts.length);
@@ -771,10 +777,10 @@
     const md = d => d ? `${d.slice(5, 7)}/${d.slice(8, 10)}` : '';
     return [
       { key: 'foreign', name: '外資現貨', value: `${last(F).net_billion < 0 ? '賣' : '買'} ${fmt(Math.abs(last(F).net_billion), 0)} 億`, tone: last(F).net_billion < 0 ? 'down' : 'up', read: last(F).net_billion < 0 ? `連 ${streak} 天賣，一個月 ${fmt(Math.abs(f20) / 10000, 1)} 兆` : '今天轉為買超', chart: spark(F.slice(-20).map(r => r.net_billion), '', true), date: last(F).date, plain: pick('foreign') },
-      { key: 'futures', name: '外資期貨空單', value: `${fmt(Math.abs(fut), 0)} 口`, tone: fut < futWeek ? 'down' : 'up', read: fut < futWeek ? `比一週前多 ${fmt(Math.abs(fut - futWeek), 0)} 口，還在加` : `比一週前少 ${fmt(Math.abs(fut - futWeek), 0)} 口`, chart: spark(U.slice(-20).map(r => -r.net_contracts), 'var(--down)'), date: last(U).date, plain: pick('foreign') },
+      { key: 'futures', name: '外資期貨空單', value: `${fmt(Math.abs(fut), 0)} 口`, tone: fut < futWeek ? 'down' : 'up', read: `比一週前${fut < futWeek ? '多' : '少'} ${fmt(Math.abs(fut - futWeek), 0)} 口${futStreak}`, chart: spark(U.slice(-20).map(r => -r.net_contracts), 'var(--down)'), date: last(U).date, plain: pick('foreign') },
       { key: 'margin', name: '融資餘額', value: `${fmt(mLast.margin_balance_billion, 0)} 億`, tone: 'mid', read: `比 ${md(mPeak.date)} 高點少 ${fmt(mPeak.margin_balance_billion - mLast.margin_balance_billion, 0)} 億`, chart: spark(M.slice(-20).map(r => r.margin_balance_billion), 'var(--gold)'), date: mLast.date, plain: pick('margin') },
       { key: 'short', name: '融券餘額', value: `${fmt(sNow / 10000, 1)} 萬張`, tone: sNow > s20 ? 'down' : 'up', read: `比 20 天前${sNow > s20 ? '多' : '少'} ${fmt(Math.abs(sNow / s20 - 1) * 100, 0)}%`, chart: spark(M.slice(-20).map(r => r.short_units), 'var(--accent)'), date: mLast.date, plain: pick('short') },
-      { key: 'trust', name: '投信', value: `${t5 >= 0 ? '買' : '賣'} ${fmt(Math.abs(t5), 0)} 億`, tone: t5 >= 0 ? 'up' : 'down', read: '近一週合計', chart: spark(F.slice(-20).map(r => r.trust_billion), '', true), date: last(F).date, plain: pick('trust') },
+      { key: 'trust', name: '投信近一週', value: `${t5 >= 0 ? '買' : '賣'} ${fmt(Math.abs(t5), 0)} 億`, tone: t5 >= 0 ? 'up' : 'down', read: `最新一天${last(F).trust_billion < 0 ? '賣' : '買'} ${fmt(Math.abs(last(F).trust_billion), 0)} 億`, chart: spark(F.slice(-20).map(r => r.trust_billion), '', true), date: last(F).date, plain: pick('trust') },
       { key: 'volume', name: '成交金額', value: `${fmt(amounts.at(-1), 0)} 億`, tone: 'mid', read: `平常的 ${fmt(amtRatio, 1)} 倍`, chart: spark(amounts, 'var(--accent)'), date: A.daily.at(-1).date, plain: pick('volume') },
     ];
   }
@@ -784,7 +790,6 @@
     const cards = chipCards();
     grid.innerHTML = cards.map(card => `<button type="button" class="chip-card tone-${card.tone}" data-chip="${card.key}"><span class="chip-name">${esc(card.name)}<i aria-hidden="true">›</i></span><strong class="chip-value num">${esc(card.value)}</strong><span class="chip-read">${esc(card.read)}</span>${card.chart}<span class="chip-date num">資料 ${esc(card.date.slice(5).replace('-', '/'))}</span></button>`).join('');
     grid.querySelectorAll('[data-chip]').forEach(button => button.addEventListener('click', () => openPanel('chip', { key: button.dataset.chip }, button)));
-    grid.classList.remove('hm-same-date');
     if (PL) {
       $('readLine').textContent = PL.one_line;
       // 每點只留「主角＋一句判斷」；數字細節點開詳情看。標題沒有「主角：」時整句當判斷。
@@ -813,8 +818,10 @@
     if (!rows.length) return '';
     const signedAxis = key === 'foreign' || key === 'trust';
     const W = 560, H = 170, pad = 6, vals = rows.map(r => r.value);
-    const lo = signedAxis ? Math.min(0, ...vals) : Math.min(...vals) * .995, hi = signedAxis ? Math.max(0, ...vals) : Math.max(...vals) * 1.002;
-    const y = v => H - 22 - (v - lo) / ((hi - lo) || 1) * (H - 30);
+    const low = Math.min(...vals), high = Math.max(...vals);
+    // 只有高低的項目（餘額、成交）：底線放在最低那一天再往下一點，最低的那一根才看得到
+    const lo = signedAxis ? Math.min(0, low) : low - (high - low) * .12, hi = signedAxis ? Math.max(0, high) : high;
+    const y = v => H - 22 - (v - lo) / ((hi - lo) || 1) * (H - 48);   // 最上面 26 留給選到那一天的字
     const step = (W - pad * 2) / rows.length;
     const zero = signedAxis ? y(0) : H - 22;
     const bars = rows.map((r, i) => {
@@ -822,127 +829,195 @@
       const tone = signedAxis ? (r.value >= 0 ? 'var(--up)' : 'var(--down)') : key === 'margin' ? 'var(--gold)' : key === 'futures' ? 'var(--down)' : 'var(--accent)';
       const has = detailDays.has(r.date);
       const on = r.date === selected;
-      return `<g class="bar-hit${on ? ' is-on' : ''}" data-day="${r.date}" tabindex="0" role="button" aria-label="${esc(r.date)} ${esc(r.label)}${has ? '，點看明細' : ''}"><rect x="${pad + i * step}" y="0" width="${step}" height="${H}" fill="transparent"/><rect x="${pad + i * step + step * .14}" y="${top}" width="${step * .72}" height="${h}" rx="2" fill="${tone}" opacity="${on ? 1 : .72}"/></g>`;
+      // 選到的那一天，日期與數字寫在圖的最上面、對著那一根；靠邊的幾根改成靠左或靠右對齊，字才不會被切掉
+      const edge = i < 4 ? ['start', pad + i * step] : i > rows.length - 5 ? ['end', pad + (i + 1) * step] : ['middle', pad + i * step + step / 2];
+      return `<g class="bar-hit${on ? ' is-on' : ''}" data-day="${esc(r.date)}" tabindex="0" role="button" aria-label="${esc(r.date)} ${esc(r.label)}${has ? '，點看那一天的名單' : ''}"><rect x="${pad + i * step}" y="0" width="${step}" height="${H}" fill="transparent"/><rect x="${pad + i * step + step * .14}" y="${top}" width="${step * .72}" height="${h}" rx="2" fill="${tone}" opacity="${on ? 1 : .72}"/><text class="bar-value" x="${edge[1]}" y="17" text-anchor="${edge[0]}">${esc(shortDay(r.date))} ${esc(r.label)}</text></g>`;
     }).join('');
     const ticks = [0, Math.floor(rows.length / 2), rows.length - 1].map(i => `<text x="${pad + i * step + step / 2}" y="${H - 6}" text-anchor="middle">${esc(rows[i].date.slice(5).replace('-', '/'))}</text>`).join('');
-    return `<svg class="drill-chart" viewBox="0 0 ${W} ${H}" role="group" aria-label="近 20 個交易日，點任一天看明細">${signedAxis ? `<line x1="0" x2="${W}" y1="${zero}" y2="${zero}" stroke="var(--line-strong)"/>` : ''}${bars}${ticks}</svg>`;
+    return `<svg class="drill-chart" viewBox="0 0 ${W} ${H}" role="group" aria-label="近 20 個交易日，點任一天看那一天的名單">${signedAxis ? `<line x1="0" x2="${W}" y1="${zero}" y2="${zero}" stroke="var(--line-strong)"/>` : ''}<rect class="bar-thumb" x="0" y="0" width="${step}" height="${H}"/>${bars}${ticks}</svg>`;
   }
-  function detailTable(title, rows, cols) {
-    if (!rows || !rows.length) return `<section class="drill-table"><h4>${esc(title)}</h4><p class="chip-date">這天沒有資料。</p></section>`;
-    return `<section class="drill-table"><h4>${esc(title)}</h4><table><thead><tr><th>#</th><th>股票</th>${cols.map(c => `<th class="num">${esc(c[0])}</th>`).join('')}</tr></thead><tbody>${rows.map((r, i) => `<tr><td class="num">${i + 1}</td><td><a class="stock-link" href="stock.html?code=${encodeURIComponent(r.code)}"><span class="num">${esc(r.code)}</span> ${esc(r.name)}</a></td>${cols.map(c => `<td class="num ${c[2] ? c[2](r) : ''}">${esc(c[1](r))}</td>`).join('')}</tr>`).join('')}</tbody></table></section>`;
-  }
-  function dayHead(key, day) {
-    const point = chipSeries(key).find(r => r.date === day);
-    return `<div class="drill-day"><b>${esc(day.slice(5).replace('-', '/'))}</b><span>${esc(point ? point.label : '')}</span></div>`;
-  }
-  const noDetail = (key, day) => dayHead(key, day) + `<p class="chip-date">這一天的個股明細還沒抓到（目前有 ${DT ? DT.days.length : 0} 天）。</p>`;
-  // 明細按需取：先放「載入中」，取回後只在使用者仍停在同一張卡、同一天時才填入（舊請求不覆蓋新選擇）。
-  let drillToken = 0;
-  function loadDayDetail(key, day) {
-    const token = ++drillToken;
-    const target = () => els.panelBody.querySelector('#drillDetail');
-    if (!detailDays.has(day)) { if (target()) target().innerHTML = noDetail(key, day); return; }
-    if (target()) target().innerHTML = dayHead(key, day) + '<p class="chip-date" data-loading>載入明細中…</p>';
-    window.MarketData.detail(key, day).then(d => {
-      if (token !== drillToken || !target()) return;
-      target().innerHTML = Object.keys(d || {}).length ? dayDetail(key, day, d) : noDetail(key, day);
-    }, error => {
-      if (token !== drillToken || !target()) return;
-      target().innerHTML = dayHead(key, day) + `<p class="chip-date" role="alert">${esc(error && error.message ? error.message : '暫時無法取得明細。')}</p>`;
-    });
-  }
-  function dayDetail(key, day, d, side = chipSide()) {
-    const point = chipSeries(key).find(r => r.date === day);
-    const pick = (a, b) => side ? b : a;
-    const head = dayHead(key, day);
-    const lots = v => `${v >= 0 ? '+' : '−'}${fmt(Math.abs(v), 0)} 張`;
-    const bil = v => v == null ? '—' : `${v >= 0 ? '+' : '−'}${fmt(Math.abs(v), 1)} 億`;
-    const tone = v => (v >= 0 ? 'upc' : 'dn');
-    if (key === 'trust') return head + detailTable(pick('投信買超前 20', '投信賣超前 20'), pick(d.trust_buy, d.trust_sell), [['金額（估）', r => bil(r.trust_billion), r => tone(r.trust_billion)], ['張數', r => lots(r.trust_lots)]]);
-    if (key === 'foreign') return head + detailTable(pick('外資買超前 20', '外資賣超前 20'), pick(d.foreign_buy, d.foreign_sell), [['金額（估）', r => bil(r.foreign_billion), r => tone(r.foreign_billion)], ['張數', r => lots(r.foreign_lots)]]);
-    if (key === 'margin') return head + detailTable(pick('融資增加最多 20 檔', '融資減少最多 20 檔'), pick(d.margin_up, d.margin_down), [[pick('增加', '減少'), r => lots(r.margin_change)], ['融資餘額', r => `${fmt(r.margin_balance, 0)} 張`]]);
-    if (key === 'short') return head + detailTable(pick('融券增加最多 20 檔', '融券減少最多 20 檔'), pick(d.short_up, d.short_down), [[pick('增加', '減少'), r => lots(r.short_change)], ['融券餘額', r => `${fmt(r.short_balance, 0)} 張`]]);
-    if (key === 'volume') return head + detailTable('成交金額前 20', d.turnover_top, [['成交', r => `${fmt(r.amount_billion, 0)} 億`], ['漲跌', r => r.change_pct == null ? '—' : `${r.change_pct >= 0 ? '+' : ''}${fmt(r.change_pct, 2)}%`, r => tone(r.change_pct || 0)]]);
-    if (key === 'futures') {
-      const change = point && point.prev != null ? (-point.value) - point.prev : null;
-      return head + `<div class="plain"><section class="plain-group"><h4>這一天</h4><ul><li>外資台指期淨空單 <b>${fmt(Math.abs(point.value), 0)} 口</b>。</li>${change != null ? `<li>比前一天${change < 0 ? '多' : '少'} <b>${fmt(Math.abs(change), 0)} 口</b>空單。</li>` : ''}</ul></section></div>` + detailTable('外資同日現貨賣超前 20（對照）', d.foreign_sell, [['金額（估）', r => bil(r.foreign_billion), r => tone(r.foreign_billion)]]);
-    }
-    return head;
-  }
-  // 本人 11-07：每張卡加「目前（最新一天）前 10」，標連續幾天同方向；依最新一天排序。
-  const NOW = OV.current || null;
-  const NOW_TABLES = {
+  // 籌碼與資金的明細板（本人 2026-11-15 照樣品定案）：今天的數字與一句結論 → 近 20 天的圖 → 注意 → 解讀 → 名單。
+  // 名單預設是最新一天的前 10（有連續天數，本人 11-07 定案的資料）；點圖上的另一天，名單換成那一天的排行（按需取）。
+  const SIDE_LABELS = { foreign: ['買超', '賣超'], trust: ['買超', '賣超'], margin: ['增加', '減少'], short: ['增加', '減少'] };
+  // 每一項的名單：[標題, 資料欄位, 連續天數那一欄的欄名]；有兩組的在標題右邊切換
+  const CHIP_LISTS = {
     foreign: [['外資買超前 10', 'foreign_buy', '連買'], ['外資賣超前 10', 'foreign_sell', '連賣']],
     trust: [['投信買超前 10', 'trust_buy', '連買'], ['投信賣超前 10', 'trust_sell', '連賣']],
     margin: [['融資增加前 10', 'margin_up', '連增'], ['融資減少前 10', 'margin_down', '連減']],
     short: [['融券增加前 10', 'short_up', '連增'], ['融券減少前 10', 'short_down', '連減']],
     volume: [['成交金額前 10', 'turnover_top', '連續在前 20']],
-    futures: [['外資現貨賣超前 10（對照）', 'foreign_sell', '連賣']]
+    futures: [['外資現貨賣超前 10（對照）', 'foreign_sell', '連賣']]   // 期貨是整個台指、沒有個股，列同一天的外資現貨賣超對照
   };
-  function nowValue(key, v) {
-    if (key === 'margin' || key === 'short') return `${v >= 0 ? '+' : '−'}${fmt(Math.abs(v), 0)} 張`;
-    if (key === 'volume') return `${fmt(v, 0)} 億`;
-    return `${v >= 0 ? '+' : '−'}${fmt(Math.abs(v), 1)} 億`;
-  }
-  function nowTable(key, title, field, word) {
-    const rows = NOW && NOW[field] || [];
-    if (!rows.length) return `<section class="drill-table now-table"><h4>${esc(title)}</h4><p class="chip-date">沒有資料。</p></section>`;
-    const days = r => `${word} <b>${fmt(r.streak, 0)}</b> 天${r.capped ? '以上' : ''}`;
-    const tone = key === 'volume' ? () => '' : r => (r.value >= 0 ? 'upc' : 'dn');
-    return `<section class="drill-table now-table"><h4>${esc(title)}</h4><table><thead><tr><th>#</th><th>股票</th><th class="num">${key === 'volume' ? '成交' : key === 'margin' || key === 'short' ? '增減' : '金額（估）'}</th><th class="num">連續</th></tr></thead><tbody>${rows.map((r, i) => `<tr><td class="num">${i + 1}</td><td><a class="stock-link" href="stock.html?code=${encodeURIComponent(r.code)}"><span class="num">${esc(r.code)}</span> ${esc(r.name)}</a></td><td class="num ${tone(r)}">${esc(nowValue(key, r.value))}</td><td class="num streak">${days(r)}</td></tr>`).join('')}</tbody></table></section>`;
-  }
-  function nowBlock(key, side = 0) {
-    if (!NOW || !NOW_TABLES[key]) return '';
-    const table = NOW_TABLES[key][Math.min(side, NOW_TABLES[key].length - 1)];
-    const md = NOW.as_of ? NOW.as_of.slice(5).replace('-', '/') : '';
-    const head = key === 'futures'
-      ? `<p class="now-lede">外資台指期空單已連續增加 <b>${fmt(NOW.futures_short_growing_days, 0)}</b> 天${NOW.futures_short_growing_days >= NOW.futures_days_available ? '以上' : ''}（期貨是整個台指，沒有個股；下面列同日外資現貨賣超對照）。</p>`
-      : `<p class="now-lede">依 ${esc(md)} 排序；「連續」是往回數同方向幾天，資料只有近 ${fmt(NOW.days_available, 0)} 個交易日。</p>`;
-    return `<section class="now-block" id="nowBlock"><h3>目前前 10（${esc(md)}）</h3>${head}<div class="now-grid">${nowTable(key, ...table)}</div></section>`;
-  }
-  // 本人 11-07：不要一次全貼。一進來只給「目前前 10 × 買超（增加）」，其他（賣超、每天明細）用按鈕切換。
-  const SIDE_LABELS = { foreign: ['買超', '賣超'], trust: ['買超', '賣超'], margin: ['增加', '減少'], short: ['增加', '減少'] };
-  const chipView = () => (panelState.payload && panelState.payload.view) || 'now';
+  const LIST_ROWS = 10, POINT_ROWS = 2;
   const chipSide = () => (panelState.payload && panelState.payload.side) || 0;
+  const chipList = key => { const lists = CHIP_LISTS[key] || []; return lists[Math.min(chipSide(), lists.length - 1)]; };
+  // 名單現在是哪一天：在圖上點過就是點的那一天，還沒點就是最新一天
+  function chipDay(key) {
+    if (panelState.payload && panelState.payload.day) return panelState.payload.day;
+    const rows = chipSeries(key);
+    return NOW && rows.some(row => row.date === NOW.as_of) ? NOW.as_of : rows.length ? rows[rows.length - 1].date : '';
+  }
+  const signedLots = v => `${v >= 0 ? '+' : '−'}${fmt(Math.abs(v), 0)} 張`;
+  const signedBillion = v => (v == null ? '—' : `${v >= 0 ? '+' : '−'}${fmt(Math.abs(v), 1)} 億`);
+  const signTone = v => (v >= 0 ? 'upc' : 'dn');
+  const ESTIMATED = { html: '金額 <small>估</small>' };   // 個股的金額是用張數乘收盤價估的
+  // 欄位：[欄名, 取字, 取顏色類別]。欄名是一般的字（放進表格時會跳脫）；要帶標記的寫成 { html }，只能是這裡寫死的常數。
+  // 最新一天有連續天數；其他天是那一天的排行，欄位照當天抓到的資料。
+  const columnHead = name => (typeof name === 'string' ? esc(name) : name.html);
+  function latestColumns(key, word) {
+    const value = key === 'volume' ? ['成交', r => `${fmt(r.value, 0)} 億`]
+      : key === 'margin' || key === 'short' ? ['增減', r => signedLots(r.value), r => signTone(r.value)]
+        : [ESTIMATED, r => signedBillion(r.value), r => signTone(r.value)];
+    return [value, [word, r => `${fmt(r.streak, 0)} 天${r.capped ? '以上' : ''}`, () => 'streak']];
+  }
+  function dayColumns(key) {
+    if (key === 'foreign' || key === 'trust') return [[ESTIMATED, r => signedBillion(r[`${key}_billion`]), r => signTone(r[`${key}_billion`])], ['張數', r => signedLots(r[`${key}_lots`])]];
+    if (key === 'margin' || key === 'short') return [[SIDE_LABELS[key][chipSide()], r => signedLots(r[`${key}_change`])], ['餘額', r => `${fmt(r[`${key}_balance`], 0)} 張`]];
+    if (key === 'volume') return [['成交', r => `${fmt(r.amount_billion, 0)} 億`], ['漲跌', r => (r.change_pct == null ? '—' : `${r.change_pct >= 0 ? '+' : ''}${fmt(r.change_pct, 2)}%`), r => signTone(r.change_pct || 0)]];
+    return [[ESTIMATED, r => signedBillion(r.foreign_billion), r => signTone(r.foreign_billion)]];
+  }
+  // 先收著的內容：收著的項目帶 is-extra，按鈕切換外層（more-wrap）的 is-all
+  const moreButton = label => `<button type="button" class="chip-more" data-more="${esc(label)}" aria-expanded="false">${esc(label)}</button>`;
+  function bindMore(root) {
+    root.querySelectorAll('[data-more]').forEach(button => button.addEventListener('click', () => {
+      const open = button.closest('.more-wrap').classList.toggle('is-all');
+      button.setAttribute('aria-expanded', String(open));
+      button.textContent = open ? '收起' : button.dataset.more;
+    }));
+  }
+  function listTable(rows, columns) {
+    if (!rows || !rows.length) return '<p class="chip-date">這一天沒有資料。</p>';
+    const body = rows.map((r, i) => `<tr${i >= LIST_ROWS ? ' class="is-extra"' : ''}><td class="num">${i + 1}</td><td><a class="stock-link" href="stock.html?code=${encodeURIComponent(r.code)}"><span class="num">${esc(r.code)}</span> ${esc(r.name)}</a></td>${columns.map(c => `<td class="num ${c[2] ? c[2](r) : ''}">${esc(c[1](r))}</td>`).join('')}</tr>`).join('');
+    return `<div class="drill-table chip-table more-wrap"><table><thead><tr><th>#</th><th>股票</th>${columns.map(c => `<th class="num">${columnHead(c[0])}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table>${rows.length > LIST_ROWS ? moreButton(`看到前 ${rows.length} ›`) : ''}</div>`;
+  }
+  // 填名單：其他天的排行要去取，取回後只在使用者仍停在同一張卡、同一天、同一邊時才填入（舊請求不覆蓋新選擇）。
+  let drillToken = 0;
+  function showChipList(key) {
+    const list = chipList(key), day = chipDay(key), token = ++drillToken;
+    const target = () => els.panelBody.querySelector('#chipList'), title = els.panelBody.querySelector('#chipListTitle');
+    if (!list || !title || !target()) return;
+    const name = shown => `${esc(shown)} <small class="num">${esc(shortDay(day))}</small>`;
+    title.innerHTML = name(list[0]);
+    const fill = html => {
+      if (token !== drillToken || !target()) return;
+      target().classList.remove('is-loading');
+      target().removeAttribute('aria-busy');
+      target().innerHTML = html;
+      bindMore(target());
+      // 展開到全部之後，標題的「前 10」跟著寫成實際列出的檔數；收起再寫回來
+      const more = target().querySelector('[data-more]');
+      if (more) more.addEventListener('click', () => {
+        if (token !== drillToken) return;   // 已經在等另一天的資料：這份名單是舊的，標題不能被寫回舊的那一天
+        title.innerHTML = name(more.getAttribute('aria-expanded') === 'true' ? list[0].replace(`前 ${LIST_ROWS}`, `前 ${target().querySelectorAll('tbody tr').length}`) : list[0]);
+      });
+    };
+    if (NOW && day === NOW.as_of) { fill(listTable(NOW[list[1]], latestColumns(key, list[2]))); return; }
+    if (!detailDays.has(day)) { fill(`<p class="chip-date">這一天的個股明細還沒抓到（目前有 ${DT ? DT.days.length : 0} 天）。</p>`); return; }
+    // 取資料的期間原本的名單先留著（變淡），不換成一行「載入中」：不然面板會先變矮再變高，往下捲過的話畫面會跳一下（本人 11-15 回報的抖動）
+    if (target().firstElementChild) {
+      target().classList.add('is-loading');
+      target().setAttribute('aria-busy', 'true');
+      target().firstElementChild.setAttribute('data-loading', '');
+    } else fill('<p class="chip-date" data-loading>載入明細中…</p>');
+    window.MarketData.detail(key, day).then(
+      detail => fill(listTable((detail || {})[list[1]], dayColumns(key))),
+      error => fill(`<p class="chip-date" role="alert">${esc(error && error.message ? error.message : '暫時無法取得明細。')}</p>`)
+    );
+  }
   function segmented(name, options, current) {
     return `<div class="chip-seg" role="radiogroup" data-seg="${name}">${options.map(([value, label]) => `<button type="button" role="radio" data-value="${value}" aria-checked="${String(value) === String(current)}">${esc(label)}</button>`).join('')}</div>`;
   }
-  function chipBody(key, day) {
-    if (chipView() === 'now') return nowBlock(key, chipSide());
-    const rows = chipSeries(key);
-    const selected = day || (rows.length ? rows[rows.length - 1].date : '');
-    return `<div class="chip-big">${clickableBars(key, selected)}</div><div class="drill-detail" id="drillDetail" data-day="${esc(selected)}"></div><p class="chip-date">資料日 ${esc(selected)}</p>`;
-  }
-  function renderChipPanel(key, day) {
+  function renderChipPanel(key) {
     const card = chipCards().find(item => item.key === key);
     if (!card) return '';
     const watch = PL ? PL.worry.filter(w => (key === 'futures' || key === 'foreign') && w.includes('外資')) : [];
-    const sides = SIDE_LABELS[key];
-    const controls = `<div class="chip-controls">${segmented('view', [['now', '目前前 10'], ['daily', '每天明細']], chipView())}${sides ? segmented('side', sides.map((label, i) => [i, label]), chipSide()) : ''}</div>`;
-    return `${plainBlock(card.plain.lines.map(esc), watch.map(esc))}${controls}<div id="chipBody">${chipBody(key, day)}</div>`;
+    const lines = card.plain.lines, sides = SIDE_LABELS[key];
+    return `<div class="chip-top${card.tone === 'mid' ? '' : ` tone-${card.tone}`}"><strong class="chip-value num">${esc(card.value)}</strong><span>${esc(card.read)}</span></div>
+      <div class="chip-big">${clickableBars(key, chipDay(key))}</div>
+      ${watch.length ? `<p class="chip-watch"><i>注意</i><span>${watch.map(esc).join(' ')}</span></p>` : ''}
+      ${lines.length ? `<div class="chip-points more-wrap"><ul>${lines.map((line, i) => `<li${i >= POINT_ROWS ? ' class="is-extra"' : ''}>${esc(line)}</li>`).join('')}</ul>${lines.length > POINT_ROWS ? moreButton(`還有 ${lines.length - POINT_ROWS} 點 ›`) : ''}</div>` : ''}
+      <div class="chip-list-head"><h4 id="chipListTitle"></h4>${sides ? segmented('side', sides.map((label, i) => [i, label]), chipSide()) : ''}</div>
+      <div id="chipList"></div>`;
   }
   function bindChipPanel(key) {
-    els.panelBody.querySelectorAll('.chip-seg').forEach(group => group.querySelectorAll('button').forEach(button => button.addEventListener('click', () => {
-      const name = group.dataset.seg;
-      panelState.payload[name] = name === 'side' ? Number(button.dataset.value) : button.dataset.value;
-      group.querySelectorAll('button').forEach(b => b.setAttribute('aria-checked', String(b === button)));
-      els.panelBody.querySelector('#chipBody').innerHTML = chipBody(key, panelState.payload.day);
-      bindChipBody(key);
-    })));
-    bindChipBody(key);
-  }
-  function bindChipBody(key) {
-    const first = els.panelBody.querySelector('#drillDetail');
-    if (first) loadDayDetail(key, first.dataset.day);
-    els.panelBody.querySelectorAll('.bar-hit').forEach(node => {
-      const go = () => {
-        panelState.payload.day = node.dataset.day;
-        els.panelBody.querySelectorAll('.bar-hit').forEach(x => x.classList.toggle('is-on', x === node));
-        loadDayDetail(key, node.dataset.day);
-      };
-      node.addEventListener('click', go);
-      node.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); go(); } });
+    bindMore(els.panelBody);
+    els.panelBody.querySelectorAll('.chip-seg button').forEach(button => button.addEventListener('click', () => {
+      panelState.payload.side = Number(button.dataset.value);
+      button.parentElement.querySelectorAll('button').forEach(other => other.setAttribute('aria-checked', String(other === button)));
+      showChipList(key);
+    }));
+    const chart = els.panelBody.querySelector('.drill-chart'), bars = [...els.panelBody.querySelectorAll('.bar-hit')];
+    const pickDay = bar => {
+      panelState.payload.day = bar.dataset.day;
+      bars.forEach(other => other.classList.toggle('is-on', other === bar));
+      showChipList(key);
+    };
+    const justDragged = chart ? bindBarDrag(chart, bars, pickDay) : () => false;
+    bars.forEach(bar => {
+      bar.addEventListener('click', () => { if (!justDragged()) pickDay(bar); });   // 拖完放開後瀏覽器補發的那一下不算
+      bar.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); pickDay(bar); } });
     });
+    showChipList(key);
+  }
+  // 柱狀圖按住左右拖：選中的那個直條框跟著手指走，放開時靠近哪一天就選哪一天、名單跟著換（本人 11-15 更正）。點一下照舊。
+  // 框是圖裡的一塊（.bar-thumb），位置用圖自己的座標。拖的時候圖帶 is-sliding：原本選中那一根的底色先收掉、由框來畫，
+  // 圖上那行字寫手指底下那一天。名單等放開才換（一天一次取資料，不在拖的途中一直取）。回傳「是不是剛拖完」給點擊用。
+  const BAR_DRAG_START_PX = 8, BAR_SETTLE_MS = 200, BAR_STRAY_CLICK_MS = 150;
+  function bindBarDrag(chart, bars, pickDay) {
+    const thumb = chart.querySelector('.bar-thumb');
+    if (!bars.length || !thumb) return () => false;
+    const columns = bars.map(bar => Number(bar.firstElementChild.getAttribute('x'))), step = Number(thumb.getAttribute('width'));
+    const calm = window.matchMedia('(prefers-reduced-motion: reduce)');
+    let drag = null, settling = 0, releasedAt = -Infinity;   // drag：{ x 按下去的位置, id 哪一根手指, moved, hot 手指底下那一天 }
+    const place = x => { thumb.style.transform = `translateX(${x}px)`; };
+    const stop = () => {
+      window.clearTimeout(settling);
+      chart.classList.remove('is-sliding', 'is-settling');
+      bars.forEach(bar => bar.classList.remove('is-slide-hot'));
+    };
+    const follow = event => {
+      if (!drag.moved && Math.abs(event.clientX - drag.x) < BAR_DRAG_START_PX) return;
+      if (!drag.moved) {
+        drag.moved = true;
+        chart.classList.add('is-sliding');
+        try { chart.setPointerCapture(drag.id); } catch (error) { /* 抓不到就照一般的事件走 */ }
+      }
+      const box = chart.getBoundingClientRect();
+      const x = (event.clientX - box.left) / box.width * chart.viewBox.baseVal.width;   // 視窗座標換成圖的座標
+      place(Math.min(Math.max(x - step / 2, columns[0]), columns[columns.length - 1]));
+      const hot = bars[Math.min(Math.max(Math.floor((x - columns[0]) / step), 0), bars.length - 1)];
+      if (hot === drag.hot) return;
+      if (drag.hot) drag.hot.classList.remove('is-slide-hot');
+      drag.hot = hot;
+      hot.classList.add('is-slide-hot');
+    };
+    const finish = (event, cancelled) => {
+      if (!drag || event.pointerId !== drag.id) return;
+      if (!cancelled) follow(event);   // 以放開的位置為準
+      const { moved, hot } = drag;
+      drag = null;
+      if (!moved) return;   // 沒有拖：就是點一下
+      if (cancelled || !hot) { stop(); return; }
+      releasedAt = performance.now();
+      pickDay(hot);
+      if (calm.matches) { stop(); return; }
+      chart.classList.add('is-settling');   // 框滑到那一根的正上方，再交還給那一根自己的底色
+      place(columns[bars.indexOf(hot)]);
+      settling = window.setTimeout(stop, BAR_SETTLE_MS);
+    };
+    chart.addEventListener('pointerdown', event => {
+      if (!event.isPrimary || event.button !== 0) return;
+      stop();
+      drag = { x: event.clientX, id: event.pointerId, moved: false, hot: null };
+    });
+    chart.addEventListener('pointermove', event => {
+      if (!drag || event.pointerId !== drag.id) return;
+      if (event.pointerType === 'mouse' && !(event.buttons & 1)) { drag = null; stop(); return; }   // 滑鼠在圖外放開了：這一次按住已經結束
+      follow(event);
+    });
+    chart.addEventListener('pointerup', event => finish(event, false));
+    chart.addEventListener('pointercancel', event => finish(event, true));
+    return () => performance.now() - releasedAt < BAR_STRAY_CLICK_MS;
   }
   function renderPlainPanel() {
     if (!PL) return '';
@@ -1003,35 +1078,50 @@
     return `<div class="metric-row"><span>${esc(label)}</span><strong class="num">${esc(display)}</strong><div class="metric-track"><i style="--size:${size}%;--tone:${tone}"></i></div></div>`;
   }
 
-  function lineOutcomeBar() {
-    const result = A.backtest.results[selectedSample] || A.backtest.results[DEFAULT_SAMPLE];
-    const o = result.next_day_outcomes;
-    const seg = (key, label, tone) => `<button type="button" class="ob-seg" data-outcome-panel="${key}" style="--w:${o.percent[key]}%;--tone:${tone}"><span>${label}</span><b class="num">${fmt(o.percent[key], 0)}%</b></button>`;
-    return `<section class="plain-group ob"><h4>過去很像的 ${fmt(o.sample_count, 0)} 次，隔天的結果（不是明天的機率）</h4><div class="ob-bar">${seg('stand_back', '站回', 'var(--up)')}${seg('between', '兩線間', 'var(--gold)')}${seg('continue_break', '跌破', 'var(--down)')}</div></section>`;
-  }
-
+  // 收復線／防守線點開之後：一句重點、一張照價位高低排的圖，其餘點了才展開（本人 11-15：文字看不懂、內容太多，要整理過的圖表）。
+  // 圖的資料整理在 line-zones.js；兩顆鍵點開是同一張圖，只差上面那一句與哪一條線比較亮。
+  const ZONE_TONES = { stand_back: 'var(--up)', between: 'var(--gold)', continue_break: 'var(--down)', upper: 'var(--gold)', lower: 'var(--down)' };
   function renderLinePanel(line) {
     const upper = line === 'upper';
+    // 人寫的那幾句（手上沒股票／已經持有、觸發條件、解讀）：劇本過期、或講的不是現在這兩條線時不顯示，線與圖照樣有。
+    // 程式給的提醒（要注意）不是人寫的，每天都在：有人寫的那幾句時一起放在「怎麼應對」裡，沒有時自己一列
     const scenarioName = upper ? '轉強觀察' : '續弱觀察';
     const scenario = scenarioFor(scenarioName);
     const action = ACTIONS[scenarioName] || {};
+    const outcomes = (A.backtest.results[selectedSample] || A.backtest.results[DEFAULT_SAMPLE]).next_day_outcomes;
+    const drawn = drawnDay();
+    // 收復線那一句：那一天收盤跌破前一天的最低點時，線是「要收復的價位」；沒有跌破的日子線就是當天的最高點，談不上止跌
+    const broke = AS_OF.default_sample !== 'not_event';
+    const point = upper
+      ? (broke ? `收盤回到 <b class="num">${fmt(UPPER, 0)}</b> 以上，才算止跌。` : `收盤站上 <b class="num">${fmt(UPPER, 0)}</b>，就是越過${esc(drawn.word)}的高點。`)
+      : `收盤跌破 <b class="num">${fmt(LOWER, 0)}</b>，就是${esc(drawn.word)}的低點沒守住。`;
+    const figure = window.LineZones.read({ upper: UPPER, lower: LOWER, close: CLOSE, percent: outcomes.percent, count: outcomes.sample_count });
+    const row = item => (item.kind === 'zone'
+      ? `<li><button type="button" class="zone" data-outcome-panel="${item.key}" style="--w:${item.percent}%;--tone:${ZONE_TONES[item.key]}" aria-label="${esc(outcomeLabels[item.key])} ${item.text}${item.here ? `，${drawn.mark}落在這一區` : ''}，查看歷史分布詳情"><span class="zone-name">${item.label}${item.here ? `<em>${drawn.mark}</em>` : ''}</span><span class="zone-track"><i></i></span><b class="num">${item.text}</b></button></li>`
+      : `<li class="zone-line${item.key === line ? ' is-this' : ''}" style="--tone:${ZONE_TONES[item.key]}"><i class="tag">${item.label}</i><strong class="num">${fmt(item.value, 0)}</strong><span>${item.gap}</span></li>`);
+    // 這條線怎麼來的：規則是跌破前一天最低點時收復線取「前一天最低點、當天最高點」比較低的那一個，防守線取當天最低點。
+    // 對得上當天的最高、最低點才寫白話；對不上就照規則的原話，不猜
+    const same = (a, b) => Number.isFinite(Number(a)) && Math.abs(Number(a) - b) < 0.005;
+    const prior = Number(AS_OF.previous_low), dayName = esc(drawn.word);
     const source = upper
-      ? `依回測規則，本次收復線取 ${fmt(UPPER)}；原始前日低為 ${fmt(AS_OF.previous_low)}。`
-      : `依回測規則，防守線取分析截止日最低 ${fmt(LOWER)}。`;
-    const meaning = upper
-      ? [`這是<b>止穩的門檻</b>：${esc(TARGET_LABEL)} 收盤站上 ${fmt(UPPER, 0)}，才算短線止跌。`, `它是今天的最高點${AS_OF.previous_low > UPPER ? '（前一天最低點更高，所以取比較近的今天最高點）' : ''}。`]
-      : [`這是<b>停損的警戒線</b>：${esc(TARGET_LABEL)} 收盤跌破 ${fmt(LOWER, 0)}，代表今天的低點守不住。`, '它是今天的最低點。'];
+      ? (same(AS_OF.high, UPPER) ? `這條線取${dayName}的最高點 ${fmt(UPPER)}${prior > UPPER ? `（前一天的最低點 ${fmt(prior)} 比較高，所以取比較近的這一個）` : ''}。`
+        : same(AS_OF.previous_low, UPPER) ? `這條線取前一天的最低點 ${fmt(UPPER)}。`
+          : `依回測規則，本次收復線取 ${fmt(UPPER)}；原始前日低為 ${fmt(AS_OF.previous_low)}。`)
+      : (same(AS_OF.low, LOWER) ? `這條線取${dayName}的最低點 ${fmt(LOWER)}。` : `依回測規則，防守線取分析截止日最低 ${fmt(LOWER)}。`);
     const watch = upper
-      ? ['站上只代表<b>短線反彈</b>，不是趨勢翻多。', '要搭配外資賣超縮小才比較可信。']
-      : ['只看<b>收盤</b>，盤中跌破又收回來不算。', `這條線離今天收盤約 ${fmt(Math.abs(CLOSE - LOWER), 0)} 點，在兩線之間不代表安全。`];
+      ? ['站上只是反彈，不代表開始漲回去。', '外資賣得變少，才比較可信。']
+      : ['只看收盤，盤中跌破又收回來不算。', window.LineZones.zoneOf(CLOSE, UPPER, LOWER) === 'between' ? '還在兩條線中間，不代表安全。' : ''];
     return `
-      ${plainBlock(meaning, watch)}
-      <dl class="action-list">
+      <p class="line-point">${point}</p>
+      <figure class="zones">
+        <figcaption>過去很像的${figure.count === null ? '日子' : ` ${fmt(figure.count, 0)} 次`}，隔天收在哪裡（不是明天的機率）</figcaption>
+        <ol class="zone-rows">${figure.rows.map(row).join('')}</ol>
+      </figure>
+      ${scenarioHidden ? fold('要注意', `<div class="plain"><section class="plain-group plain-watch"><ul>${watch.filter(Boolean).map(item => `<li>${item}</li>`).join('')}</ul></section></div>`) : fold('怎麼應對', `<dl class="action-list">
         <div><dt>手上沒股票</dt><dd id="actionFlat">${esc(action.flat || '尚未取得')}</dd></div>
         <div><dt>已經持有</dt><dd id="actionHolding">${esc(action.holding || '尚未取得')}</dd></div>
-      </dl>
-      ${lineOutcomeBar()}
-      ${moreDetail(`<p class="panel-lede">${source}</p><dl class="action-list"><div><dt>觸發條件</dt><dd>${esc(scenario.trigger || '尚未取得')}</dd></div><div><dt>解讀</dt><dd>${esc(scenario.interpretation || '尚未取得')}</dd></div></dl><p class="panel-callout" style="--tone:${upper ? 'var(--gold)' : 'var(--down)'}">${esc(ACTIONS.basis || '一般情境應對，不是自動下單指示。')}</p>`)}
+      </dl>${plainBlock([], watch)}`)}
+      ${moreDetail(`<p class="panel-lede">${source}</p>${scenarioHidden ? '' : `<dl class="action-list"><div><dt>觸發條件</dt><dd>${esc(scenario.trigger || '尚未取得')}</dd></div><div><dt>解讀</dt><dd>${esc(scenario.interpretation || '尚未取得')}</dd></div></dl><p class="panel-callout" style="--tone:${upper ? 'var(--gold)' : 'var(--down)'}">${esc(ACTIONS.basis || '一般情境應對，不是自動下單指示。')}</p>`}`)}
     `;
   }
 
@@ -1135,14 +1225,14 @@
     const what = outcome === 'stand_back' ? `收盤站回收復線 ${fmt(UPPER, 0)}` : outcome === 'continue_break' ? `收盤跌破防守線 ${fmt(LOWER, 0)}` : '收盤留在兩條線之間';
     const posShare = positivePercent(currentReturns);
     const meaning = [
-      `過去和今天很像的日子有 <b>${fmt(total, 0)} 次</b>，其中 <b>${fmt(expectedCount, 0)} 次</b>隔天${what}，約佔 ${fmt(share, 0)}%。`,
+      `過去和${esc(drawnDay().word)}很像的日子有 <b>${fmt(total, 0)} 次</b>，其中 <b>${fmt(expectedCount, 0)} 次</b>隔天${what}，約佔 ${fmt(share, 0)}%。`,
       Number.isFinite(posShare) ? `這 ${fmt(currentReturns.length, 0)} 次裡，隔天上漲的有 ${fmt(posShare, 0)}%（平常日子約 ${fmt(positivePercent(rows.baseline), 0)}%）。` : '',
       Number.isFinite(currentMedian) ? `一般來說隔天${currentMedian >= 0 ? '漲' : '跌'}約 ${fmt(Math.abs(currentMedian), 2)}%（平常日子約${baselineMedian >= 0 ? '漲' : '跌'} ${fmt(Math.abs(baselineMedian), 2)}%）。` : '',
     ];
     const watch = [
       '這是<b>過去的比例，不是明天的機率</b>。',
       total < 50 ? `次數不多（${fmt(total, 0)} 次），參考就好。` : '',
-      outcome === 'between' ? '兩條線相差很大，「留在中間」也可能再跌一千點以上。' : '',
+      outcome === 'between' && CLOSE - LOWER >= 1000 ? `兩條線相差很大，「留在中間」也可能再跌 ${fmt(Math.floor((CLOSE - LOWER) / 1000) * 1000, 0)} 點以上。` : '',
     ];
     return `
       ${plainBlock(meaning, watch)}
@@ -1180,69 +1270,20 @@
       `現在 <b>${fmt(price, 0)}</b>，落在「${esc(zone)}」。`,
       `離收復線還差 <b>${fmt(Math.abs(upperGap), 0)} 點</b>${upperGap >= 0 ? '（已在上方）' : ''}；離防守線還有 <b>${fmt(Math.abs(lowerGap), 0)} 點</b>${lowerGap < 0 ? '（已跌破）' : ''}。`,
     ];
-    const watch = ['判斷看<b>收盤</b>，盤中位置會變。', '盤後劇本不會因盤中價格自動改寫。'];
+    const watch = ['判斷看<b>收盤</b>，盤中位置會變。', '兩條線是照上一個收盤畫的，盤中不會跟著改。'];
     return `
-      ${scenarioExpired ? '' : plainBlock(meaning, watch)}
+      ${linesHidden() ? '' : plainBlock(meaning, watch)}
       <div class="current-grid">
         <div><span>現價</span><strong class="num">${fmt(price)}</strong></div>
         <div><span>漲跌</span><strong class="num">${signed(data.change)}（${signed(data.change_percent)}%）</strong></div>
-        ${scenarioExpired ? '' : `<div><span>距收復線</span><strong class="num">${signed(upperGap)} 點</strong><small class="num">${signed(upperGap / UPPER * 100)}%</small></div>
+        ${linesHidden() ? '' : `<div><span>距收復線</span><strong class="num">${signed(upperGap)} 點</strong><small class="num">${signed(upperGap / UPPER * 100)}%</small></div>
         <div><span>距防守線</span><strong class="num">${signed(lowerGap)} 點</strong><small class="num">${signed(lowerGap / LOWER * 100)}%</small></div>`}
       </div>
       <dl class="action-list">
         <div><dt>行情狀態</dt><dd>${esc(els.state.textContent)}</dd></div>
         <div><dt>行情時間</dt><dd class="num">${esc(els.time.textContent)}</dd></div>
-        ${scenarioExpired ? '' : `<div><dt>現價落點</dt><dd>${esc(zoneFor(price).label)}</dd></div>`}
+        ${linesHidden() ? '' : `<div><dt>現價落點</dt><dd>${esc(zoneFor(price).label)}</dd></div>`}
       </dl>
-    `;
-  }
-
-  function evidenceData() {
-    const latest = D.latest || {};
-    const future = A.futures[A.futures.length - 1] || {};
-    const news = Array.isArray(D.news) ? D.news : [];
-    const close = Number(latest.close);
-    const ma20 = Number(latest.ma20);
-    const volumeRatio = Number(latest.turnover_vs_20d);
-    const foreign = Number(latest.foreign_net);
-    return [
-      {
-        key: 'trend', label: '趨勢', value: close < ma20 ? '還在下跌趨勢' : '在上升趨勢',
-        note: `指數 ${fmt(close, 0)}，${close < ma20 ? '低於' : '高於'}近一個月平均 ${fmt(ma20, 0)}`
-      },
-      {
-        key: 'money', label: '資金', value: foreign < 0 ? '外資還在賣' : '外資在買',
-        note: `今天${foreign < 0 ? '賣' : '買'} ${fmt(Math.abs(foreign), 0)} 億；期貨${future.foreign_oi_net_contracts < 0 ? '偏空' : '偏多'}部位 ${fmt(Math.abs(future.foreign_oi_net_contracts), 0)} 口`
-      },
-      {
-        key: 'volume', label: '成交量', value: volumeRatio >= 1.3 ? '比平常熱很多' : volumeRatio <= 0.75 ? '比平常冷' : '和平常差不多',
-        note: `成交 ${fmt(latest.turnover, 0)} 億，約平常的 ${fmt(volumeRatio, 1)} 倍`
-      },
-      {
-        key: 'event', label: '國際事件', value: news.length ? `${fmt(news.length, 0)} 件要留意` : '沒有重大事件',
-        note: news[0] ? esc((news[0].facts || [])[0] || news[0].source) : '目前沒有已整理的事件'
-      }
-    ];
-  }
-
-  function renderConclusionPanel() {
-    const latest = D.latest || {};
-    const pos = AS_OF.features && Number.isFinite(AS_OF.features.close_position) ? AS_OF.features.close_position : NaN;
-    const meaning = [
-      Number.isFinite(pos) && pos >= 0.6 ? '今天一開盤就大跌，但<b>收盤前被買回不少</b>，沒有收在最低點。' : '今天收在當天的低檔附近。',
-      Number(latest.foreign_net) < 0 ? '外資<b>還在賣</b>，股票和期貨兩邊都偏向看壞。' : '外資今天轉為買進。',
-      `所以下一個交易日先觀察：收盤能不能站回 <b>${fmt(UPPER, 0)}</b>。`,
-    ];
-    const watch = ['反彈不等於止跌，外資停止賣出才比較可信。'];
-    return `
-      ${plainBlock(meaning, watch)}
-      <div class="evidence-list">
-        ${evidenceData().map(item => `
-          <button class="evidence-row" type="button" data-evidence="${item.key}">
-            <span>${esc(item.label)}</span><strong>${esc(item.value)}</strong><small>${esc(item.note)}</small>
-          </button>
-        `).join('')}
-      </div>
     `;
   }
 
@@ -1251,7 +1292,6 @@
     if (kind === 'line') return payload.line === 'upper' ? '收復線' : '防守線';
     if (kind === 'distribution') return `${outcomeLabels[payload.outcome]}的歷史結果`;
     if (kind === 'current') return '現價落點';
-    if (kind === 'conclusion') return '結論依據';
     if (kind === 'plain') return '直白分析';
     if (kind === 'chip') { const c = chipCards().find(item => item.key === payload.key); return c ? c.name : '籌碼'; }
     return '詳情';
@@ -1320,11 +1360,7 @@
     else if (panelState.kind === 'distribution') els.panelBody.innerHTML = renderDistributionPanel(panelState.payload.outcome);
     else if (panelState.kind === 'current') els.panelBody.innerHTML = renderCurrentPanel();
     else if (panelState.kind === 'plain') els.panelBody.innerHTML = renderPlainPanel();
-    else if (panelState.kind === 'chip') { els.panelBody.innerHTML = renderChipPanel(panelState.payload.key, panelState.payload.day); bindChipPanel(panelState.payload.key); }
-    else if (panelState.kind === 'conclusion') {
-      els.panelBody.innerHTML = renderConclusionPanel();
-      els.panelBody.querySelectorAll('[data-evidence]').forEach(button => button.addEventListener('click', () => renderLayerTwo(`evidence:${button.dataset.evidence}`)));
-    }
+    else if (panelState.kind === 'chip') { els.panelBody.innerHTML = renderChipPanel(panelState.payload.key); bindChipPanel(panelState.payload.key); }
     els.panelBody.querySelectorAll('[data-deep]').forEach(button => button.addEventListener('click', () => renderLayerTwo(button.dataset.deep)));
     els.panelBody.scrollTop = 0;
   }
@@ -1343,7 +1379,6 @@
     else if (kind === 'samples') renderSamplesLayer();
     else if (kind === 'table') renderTableLayer();
     else if (kind === 'news') renderNewsLayer();
-    else if (kind.startsWith('evidence:')) renderEvidenceLayer(kind.split(':')[1]);
     els.panelBody.scrollTop = 0;
     if (remember && entering) els.panelBack.focus({ preventScroll: true });
   }
@@ -1378,7 +1413,7 @@
       <section class="detail-section"><h3>三個時間</h3><dl class="kv-list">
         <div><dt>行情時間</dt><dd class="num">${esc(els.time.textContent)}</dd></div>
         <div><dt>分析截止日</dt><dd class="num">${esc(A.meta.cutoff_date)}</dd></div>
-        ${scenarioExpired ? '' : `<div><dt>劇本適用日</dt><dd class="num">${esc(scenarioDate)}</dd></div>`}
+        ${scenarioHidden ? '' : `<div><dt>劇本適用日</dt><dd class="num">${esc(scenarioDate)}</dd></div>`}
         <div><dt>資料生成時間</dt><dd class="num">${esc(A.meta.generated_at)}</dd></div>
       </dl></section>
       <section class="detail-section"><h3>官方端點</h3><ul class="source-list">
@@ -1389,6 +1424,14 @@
       </ul></section>
     `;
   }
+
+  // 樣本清單長到面板要捲才看得完的時候（手機橫放），從按鈕開始上下拖要留給捲動，不拿來拖框（樣式看這個記號）。
+  // 面板開著時把手機轉向、視窗改大小也要重新判斷，不然橫放之後從按鈕上拖捲不動面板
+  function markSampleListScroll() {
+    const list = els.panelBody.querySelector('.sample-list');
+    if (list) list.classList.toggle('is-scrollable', els.panelBody.scrollHeight > els.panelBody.clientHeight);
+  }
+  window.addEventListener('resize', markSampleListScroll);
 
   function renderSamplesLayer() {
     els.panelTitle.textContent = '回測樣本切換';
@@ -1402,6 +1445,7 @@
         }).join('')}
       </div>
     `;
+    markSampleListScroll();
     els.panelBody.querySelectorAll('[data-sample]').forEach(button => button.addEventListener('click', () => {
       selectedSample = button.dataset.sample;
       renderDistribution();
@@ -1453,38 +1497,6 @@
     const labelIndexes = [...new Set([0, Math.floor((clean.length - 1) / 2), clean.length - 1])].filter(index => index >= 0);
     const text = labelIndexes.map(index => `<text x="${22 + index * step + step * .49}" y="148" text-anchor="middle">${esc(String(labels[index] || '').slice(5))}</text>`).join('');
     return `<svg viewBox="0 0 ${width} ${height}" role="img"><line class="axis" x1="18" y1="${baseline + .5}" x2="338" y2="${baseline + .5}"/>${bars}${text}</svg>`;
-  }
-
-  function renderEvidenceLayer(kind) {
-    const titles = { trend: '多週期趨勢', money: '現貨與期貨資金', volume: '成交金額', event: '事件時間軸' };
-    els.panelTitle.textContent = titles[kind] || '完整依據';
-    if (kind === 'event') {
-      renderNewsLayer();
-      els.panelTitle.textContent = titles[kind];
-      return;
-    }
-    if (kind === 'trend') {
-      const periods = ['monthly', 'weekly', 'daily', 'h60'];
-      els.panelBody.innerHTML = periods.map(period => {
-        const values = (A.indicators[period] || []).slice(-20).map(row => row.hist);
-        const rows = period === 'monthly' ? A.monthly : period === 'weekly' ? A.weekly : period === 'h60' ? A.h60 : A.daily;
-        const labels = rows.slice(-20).map(row => row.date || row.timestamp);
-        const latest = (A.indicators[period] || []).at(-1) || {};
-        return `<section class="detail-section"><h3>${periodLabels[period]}</h3><p>MACD 柱 ${signed(latest.hist)}，通用參數 ${A.indicators.parameters.macd.fast}, ${A.indicators.parameters.macd.slow}, ${A.indicators.parameters.macd.signal}。</p><div class="detail-chart">${svgBars(values, labels, 'var(--accent)', true)}</div></section>`;
-      }).join('');
-      return;
-    }
-    if (kind === 'money') {
-      const institution = A.institutional.slice(-20);
-      const futures = A.futures.slice(-20);
-      els.panelBody.innerHTML = `
-        <section class="detail-section"><h3>外資現貨，億元</h3><div class="detail-chart">${svgBars(institution.map(row => row.foreign.net / 100_000_000), institution.map(row => row.date), 'var(--accent)', true)}</div></section>
-        <section class="detail-section"><h3>外資台指期淨部位，口</h3><div class="detail-chart">${svgBars(futures.map(row => row.foreign_oi_net_contracts), futures.map(row => row.date), 'var(--accent)', true)}</div></section>
-      `;
-      return;
-    }
-    const rows = A.daily.slice(-20);
-    els.panelBody.innerHTML = `<section class="detail-section"><h3>近 20 個交易日成交金額</h3><p>單位：億元。</p><div class="detail-chart">${svgBars(rows.map(row => row.amount / 100_000_000), rows.map(row => row.date), 'var(--accent)', false)}</div></section>`;
   }
 
   function openPanel(kind, payload, anchor, focusAnchor = anchor) {
@@ -1646,27 +1658,16 @@
   els.upper.textContent = fmt(UPPER);
   els.lower.textContent = fmt(LOWER);
   renderDistribution();
-  // 過期的劇本整組收起來：標頭的劇本日期與結論、圖旁兩個價位按鈕、隔日分布；直白分析另看它自己的資料日。
-  for (const node of [els.scenarioDate.parentElement, els.scenarioDate.parentElement.previousElementSibling,
-    $('conclusionTrigger'), els.lineUpper, els.lineLower, $('distribution')]) {
-    if (node) node.hidden = scenarioExpired;
+  // 人寫的劇本過期：標頭的劇本日期收起來。圖旁兩個價位按鈕與隔日分布每天都有，只有線還是從過期的劇本抄來時才跟著收。
+  // 直白分析另看它自己的資料日。
+  for (const node of [els.scenarioDate.parentElement, els.scenarioDate.parentElement.previousElementSibling]) {
+    if (node) node.hidden = scenarioHidden;
   }
+  showLineKeys();
   $('readCard').hidden = plainStale;
   setMarketHeader(fallbackMarketData(), { id: 'closed', label: '休市' }, fallbackMarketDate());
 
   els.period.addEventListener('change', () => loadPeriod(els.period.value, true));
-  // 手機：縮放收在「圖表工具」裡，點了才展開（桌面一直顯示）。
-  els.chartTools.addEventListener('click', () => {
-    const open = els.chartTools.getAttribute('aria-expanded') !== 'true';
-    els.chartTools.setAttribute('aria-expanded', String(open));
-    document.querySelector('.chart-controls').classList.toggle('tools-open', open);
-  });
-  $('zoomIn').addEventListener('click', () => chart && chart.zoom(1 / 1.35));
-  $('zoomOut').addEventListener('click', () => {
-    if (!chart) return;
-    chart.zoom(1.35);
-    enforceCandleHitTarget();
-  });
   els.reset.addEventListener('click', () => {
     if (!chart) return;
     chart.reset();
@@ -1677,7 +1678,6 @@
   $('priceSummary').addEventListener('click', () => openPanel('current', {}, $('priceSummary')));
   els.stateButton.addEventListener('click', () => openPanel('current', {}, els.stateButton));
   els.point.addEventListener('click', () => openPanel('current', {}, els.point));
-  $('conclusionTrigger').addEventListener('click', () => openPanel('conclusion', {}, $('conclusionTrigger')));
   els.mobileDetails.addEventListener('click', () => {
     if (selectedIndex >= 0) openPanel('candle', { index: selectedIndex }, els.marker, els.mobileDetails);
   });
@@ -1701,6 +1701,24 @@
     if (!document.hidden) pollLive();
   });
 
+  // 主題的選擇存在瀏覽器裡，和個股頁、自選庫存頁用同一個名字：換頁之後才會是同一種背景色（本人 11-15 回報換頁會跑掉）。
+  const THEME_KEY = 'market-theme';
+  function readSavedTheme() {
+    try {
+      const saved = localStorage.getItem(THEME_KEY);
+      if (saved === 'light' || saved === 'dark') root.dataset.theme = saved;
+    } catch (_) { /* 私密視窗可能讀不到 */ }
+  }
+  readSavedTheme();
+  // 按瀏覽器「上一頁」回來時，頁面是整頁還原的、不會重新載入：這時要再讀一次（可能在別頁改過），圖也要用新的顏色重畫
+  window.addEventListener('pageshow', event => {
+    if (!event.persisted) return;
+    readSavedTheme();
+    updateThemeText();
+    chart && chart.draw();
+    requestAnimationFrame(updateOverlayControls);
+  });
+
   function updateThemeText() {
     const dark = getComputedStyle(root).colorScheme.includes('dark');
     $('themeText').textContent = dark ? '改用淺色' : '改用深色';
@@ -1709,6 +1727,7 @@
   $('themeToggle').addEventListener('click', () => {
     const dark = getComputedStyle(root).colorScheme.includes('dark');
     root.dataset.theme = dark ? 'light' : 'dark';
+    try { localStorage.setItem(THEME_KEY, root.dataset.theme); } catch (_) { /* 私密視窗可能存不了 */ }
     updateThemeText();
     chart && chart.draw();
     requestAnimationFrame(updateOverlayControls);
@@ -2049,12 +2068,12 @@
   });
 })();
 
-// G3：首頁三區塊（籌碼選股／產業資金流向／長期核心持有），只讀已封存的發布結果；搜尋時讓位，清空後回來。
+// G3：首頁三區塊（籌碼選股／產業資金流向／長期核心持有），只讀已封存的發布結果。
+// 本人 2026-11-14：搜尋改在浮起的面板裡，不再佔首頁版面，原本「搜尋時讓位」的行為取消。
 // 本人 2026-11-08：自創候選退役；演算法依參考網站反推結果，畫面名稱為本站用語。
 (() => {
   'use strict';
   const host = document.getElementById('marketScreens');
-  const input = document.getElementById('stockSearchInput');
   if (!host) return;
   const $ = id => document.getElementById(id);
   const SVG = 'http://www.w3.org/2000/svg';
@@ -2240,7 +2259,7 @@
       return;
     }
     chip.meta.textContent = view.catalog.data_date ? `資料日 ${view.catalog.data_date}` : '尚無已發布結果';
-    // 九頁全部顯示（不收進選單）：可算的排前面，沒有名單的（定義未公開、無合法資料來源）集中在後面一組。
+    // 九頁都列在第一枚小鍵的選單裡（本人 11-15 改成收進選單）：可算的排前面，沒有名單的（定義未公開、無合法資料來源）集中在後面一組。
     const listable = tab => ['rank', 'streak', 'relative_value'].includes(tab.kind);
     const ordered = [...view.catalog.tabs.filter(listable), ...view.catalog.tabs.filter(tab => !listable(tab))];
     let dividerAdded = false;
@@ -2270,93 +2289,13 @@
   }
 
   // ---- 產業資金流向 ----
+  // 首屏是資金地形（terrain.js）；資金效率排行、低基期回溫訊號與表格在點開的面板裡（本人 2026-11-14 定案）。
   const rot = {
     block: $('rotationBlock'), meta: $('rotationMeta'), status: $('rotationStatus'), body: $('rotationBody'),
-    legend: $('rotationLegend'), chart: $('rotationChart'), efficiency: $('rotationEfficiency'),
+    terrain: $('rotationTerrain'), efficiency: $('rotationEfficiency'),
     recovery: $('rotationRecovery'), table: $('rotationTable'),
   };
-  const QUADRANT_ORDER = ['leading', 'weakening', 'improving', 'lagging'];
-  const QUADRANT_VAR = { leading: '--q-leading', weakening: '--q-weakening', improving: '--q-improving', lagging: '--q-lagging' };
 
-  function drawRotation(payload) {
-    const bubbles = payload.latest.bubbles.filter(b => b.x !== null && b.y !== null);
-    // 畫布寬度＝實際容器寬度，文字維持 11px，不隨螢幕放大。
-    const width = Math.max(280, Math.round(rot.chart.clientWidth || 640));
-    const height = width < 520 ? 280 : 340;
-    const pad = { l: 36, r: 12, t: 16, b: 30 };
-    const xs = bubbles.map(b => b.x), ys = bubbles.map(b => b.y);
-    // 橫軸依實際範圍（含 0），不強迫左右對稱，避免一側大片空白。
-    const xLo = Math.min(0, ...xs), xHi = Math.max(0, ...xs);
-    const xPad = (xHi - xLo || 1) * 0.06;
-    const yAbs = Math.max(1, ...ys.map(Math.abs)) * 1.12;
-    const sx = x => pad.l + (x - xLo + xPad) / (xHi - xLo + 2 * xPad) * (width - pad.l - pad.r);
-    const sy = y => pad.t + (yAbs - y) / (2 * yAbs) * (height - pad.t - pad.b);
-    const maxSize = Math.max(...bubbles.map(b => b.size || 0), 1);
-    const radius = b => 4 + Math.sqrt((b.size || 0) / maxSize) * (width < 520 ? 12 : 16);
-    const root = svg('svg', { width, height, viewBox: `0 0 ${width} ${height}`, role: 'img',
-      'aria-label': '各產業資金位置：橫軸為成交額相對平均，縱軸為近 5 日加速度' });
-    root.append(svg('line', { class: 'chart-axis', x1: sx(0), x2: sx(0), y1: pad.t, y2: height - pad.b }));
-    root.append(svg('line', { class: 'chart-axis', x1: pad.l, x2: width - pad.r, y1: sy(0), y2: sy(0) }));
-    const label = (text, x, y, anchor, strong) => {
-      const t = svg('text', { class: `chart-label${strong ? ' strong' : ''}`, x, y, 'text-anchor': anchor });
-      t.textContent = text;
-      root.append(t);
-      return t;
-    };
-    label('← 成交額低於平均', pad.l, height - 8, 'start');
-    label('高於平均 →', width - pad.r, height - 8, 'end');
-    label('加速', pad.l - 6, pad.t + 10, 'end');
-    label('減速', pad.l - 6, height - pad.b - 2, 'end');
-    const tip = tooltip(rot.chart);
-    let pinned = null;
-    // 點圖上空白處也能關掉固定的說明
-    root.addEventListener('click', () => { if (pinned) { pinned.classList.remove('is-pinned'); pinned.setAttribute('aria-pressed', 'false'); pinned = null; tip.hide(); } });
-    const sorted = [...bubbles].sort((a, b) => (b.size || 0) - (a.size || 0));
-    sorted.forEach(b => {
-      const dot = svg('circle', { class: 'rotation-dot', cx: sx(b.x), cy: sy(b.y), r: radius(b), tabindex: '0',
-        fill: `var(${QUADRANT_VAR[b.quadrant]})`, 'fill-opacity': '0.85', 'aria-label': `${b.name}，${payload.quadrants[b.quadrant].label}` });
-      const lines = [b.name, payload.quadrants[b.quadrant].label, `成交額相對平均 ${signed(b.relative_pct, 0)}%`,
-        `近 5 日加速度 ${signed(b.y)} 億元/日`, `近 20 日成交額 ${fmtNum(b.amount_20d, 1)} 十億元`];
-      const show = () => tip.show(lines, sx(b.x), sy(b.y) - radius(b));
-      // 本人 11-09：點一下固定顯示、再點一下關掉；固定時滑過別的泡泡不會換掉。滑鼠移上仍可預覽。
-      const toggle = () => {
-        const pinnedHere = pinned === dot;
-        if (pinned) pinned.classList.remove('is-pinned');
-        pinned = pinnedHere ? null : dot;
-        if (pinned) { dot.classList.add('is-pinned'); show(); } else tip.hide();
-        dot.setAttribute('aria-pressed', String(!!pinned));
-      };
-      dot.setAttribute('role', 'button');
-      dot.setAttribute('aria-pressed', 'false');
-      dot.addEventListener('mouseenter', () => { if (!pinned) show(); });
-      dot.addEventListener('focus', () => { if (!pinned) show(); });
-      dot.addEventListener('mouseleave', () => { if (!pinned) tip.hide(); });
-      dot.addEventListener('blur', () => { if (!pinned) tip.hide(); });
-      dot.addEventListener('click', event => { event.stopPropagation(); toggle(); });
-      dot.addEventListener('keydown', event => {
-        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggle(); }
-        if (event.key === 'Escape' && pinned) { event.preventDefault(); pinned.classList.remove('is-pinned'); pinned = null; tip.hide(); }
-      });
-      root.append(dot);
-    });
-    // 直接標示規模最大的產業；與已放的標籤重疊就略過，其餘靠 hover 與表格檢視。
-    const placed = [];
-    sorted.slice(0, 6).forEach(b => {
-      const r = radius(b);
-      const x = sx(b.x);
-      const y = sy(b.y) - r - 5 < pad.t + 10 ? sy(b.y) + r + 13 : sy(b.y) - r - 5;
-      const w = b.name.length * 12;
-      const box = { x1: x - w / 2, x2: x + w / 2, y1: y - 12, y2: y + 2 };
-      if (box.x1 < 0 || box.x2 > width) return;
-      if (placed.some(p => box.x1 < p.x2 && box.x2 > p.x1 && box.y1 < p.y2 && box.y2 > p.y1)) return;
-      placed.push(box);
-      label(b.name, x, y, 'middle', true);
-    });
-    rot.chart.querySelector('svg')?.remove();
-    rot.chart.prepend(root);
-  }
-
-  let rotationPayload = null;
   function renderRotation(payload) {
     if (payload.status === 'not_ready') {
       rot.block.dataset.state = 'not_ready';
@@ -2369,17 +2308,7 @@
     rot.meta.textContent = `資料日 ${latest.date}`;
     const stale = payload.status === 'stale' ? `已過期（最新行情 ${payload.latest_market_data_date}），僅供查看舊結果。` : '';
     rot.status.textContent = `${stale}${latest.summary ? latest.summary.text : ''}`;
-    rot.legend.replaceChildren(...QUADRANT_ORDER.map(key => {
-      const li = el('li');
-      const swatch = el('i');
-      swatch.style.background = `var(${QUADRANT_VAR[key]})`;
-      li.append(swatch, `${payload.quadrants[key].label} `, el('b', '', String(latest.quadrant_counts[key] || 0)));
-      li.title = payload.quadrants[key].meaning;
-      return li;
-    }));
-    rot.body.hidden = false;
-    rotationPayload = payload;
-    drawRotation(payload);
+    window.Terrain.render(rot.terrain, { bubbles: latest.bubbles, quadrants: payload.quadrants });
     rot.efficiency.replaceChildren(...(latest.efficiency_ranking || []).map(r => {
       const li = el('li', '', `${r.name} `);
       li.append(el('small', '', fmtNum(r.score, 1)));
@@ -2411,6 +2340,8 @@
     try {
       renderRotation(await getJson('/api/rotation'));
     } catch (error) {
+      // 地形與「排行與表格」的入口只在整段都畫好之後才顯示；中途出錯就收起來，不留一個點開是空的面板
+      rot.body.hidden = true;
       rot.block.dataset.state = 'error';
       rot.status.textContent = '產業資金流向暫時無法讀取，請稍後再試。';
     }
@@ -2609,18 +2540,10 @@
     resizeTimer = window.setTimeout(() => {
       if (host.clientWidth === lastWidth) return;
       lastWidth = host.clientWidth;
-      if (rotationPayload) drawRotation(rotationPayload);
       if (coreReport) drawCore(coreReport);
     }, 150);
   });
 
-  // 規格：未輸入時顯示首頁區塊，輸入搜尋時讓位，清空後回來。
-  function syncWithSearch() { host.hidden = Boolean(input && input.value.trim()); }
-  if (input) {
-    input.addEventListener('input', syncWithSearch);
-    document.getElementById('stockSearchClear')?.addEventListener('click', () => { host.hidden = false; });
-  }
-  syncWithSearch();
   initChips();
   initRotation();
   initCore();

@@ -89,19 +89,6 @@
 
   window.StockStrategy = { build: buildStrategy };
 
-  // 大戶持股（集保股權分散表，每週一份）：一行講完，沒有資料就不顯示。
-  function holdersLine(rows) {
-    if (!Array.isArray(rows) || !rows.length) return null;
-    const latest = rows[rows.length - 1];
-    const parts = [`千張以上大戶持股 ${Number(latest.pct_1000).toFixed(2)}%`, `${fmt(latest.holders_1000, 0)} 人`];
-    if (rows.length > 1) {
-      const change = Math.round((latest.pct_1000 - rows[rows.length - 2].pct_1000) * 100) / 100;
-      parts.push(change === 0 ? '與前一週相同' : `較前一週 ${change > 0 ? '+' : '−'}${Math.abs(change).toFixed(2)} 個百分點`);
-    }
-    return { date: latest.date, text: parts.join('・') };
-  }
-  window.StockHolders = { line: holdersLine };
-
   let chart = null;
   let lastChartKey = '';
   let lastResult = null;
@@ -133,6 +120,7 @@
   const COMPARE_DASHES = ['', '10 4', '3 4', '12 4 3 4', '2 5'];
   const compareState = {
     current: '', codes: [], names: new Map(), colors: new Map(), hidden: new Set(), payload: null,
+    period: '1y', stocks: [],   // 期間的鍵選的是哪一個；每一檔每個期間整理好的資料（comparisonPeriods 的結果）
     request: 0, abort: null, searchAbort: null, searchTimer: null, searchOptions: [], activeOption: -1,
   };
 
@@ -140,11 +128,26 @@
     try { localStorage.setItem('stock-ma-periods', JSON.stringify(maPeriods)); } catch (_) { /* 私密視窗 */ }
   }
 
+  const MA_LIMIT = 4; // 和 kchart.js 的 normalizePeriods 一致：最多四條
+
   function applyMaPeriods(next) {
+    const before = maPeriods.length;
     maPeriods = window.KChartMath.normalizePeriods(next);
     saveMaPeriods();
-    renderMaControls();
+    // 條數沒變（只是改了某一格的數字）就把數字寫回原本的輸入框，不整組重畫：
+    // 重畫會把正在點的那一格換掉，手機上接著點另一格或「新增均線」的那一下會落空（本人 11-15 iPhone 回報）。
+    const inputs = [...$('maControls').querySelectorAll('input')];
+    if (maPeriods.length === before && inputs.length === before) inputs.forEach((input, index) => { input.value = String(maPeriods[index]); });
+    else renderMaControls();
+    syncMaLimit();
     if (chart) chart.setMaPeriods(maPeriods);
+  }
+
+  // 到四條上限時，「新增均線」停用並寫明原因（原本是按了沒反應）
+  function syncMaLimit() {
+    const full = maPeriods.length >= MA_LIMIT;
+    $('addMa').disabled = full;
+    $('addMa').textContent = full ? `最多 ${MA_LIMIT} 條均線` : '新增均線';
   }
 
   function renderMaControls() {
@@ -166,6 +169,14 @@
     }));
   }
 
+  // 按瀏覽器「上一頁」回來時，頁面是整頁還原的、不會重新載入：這時要再讀一次存起來的主題（可能在別頁改過）
+  window.addEventListener('pageshow', event => {
+    if (!event.persisted) return;
+    let stored = null;
+    try { stored = localStorage.getItem('market-theme'); } catch (_) { /* 私密視窗 */ }
+    if ((stored === 'light' || stored === 'dark') && stored !== document.documentElement.dataset.theme) setTheme(stored);
+  });
+
   function setTheme(theme) {
     document.documentElement.dataset.theme = theme;
     try { localStorage.setItem('market-theme', theme); } catch (_) { /* 私密視窗可能無法存 */ }
@@ -183,6 +194,12 @@
     const historical = new URLSearchParams(location.search).has('as_of');
     return !historical && result?.stock_state !== 'stale' && result?.analysis_status !== 'stale';
   }
+
+  // K 線的高度：照寬度算，最矮 300、最高 460。電腦上再多一個上限——視窗高度扣掉 K 線以外要擠進第一個畫面的東西
+  // （頂列、報價、圖上的工具列、指標區、三顆分類鍵，量起來約 570px），三顆分類鍵才不用捲就看得到（本人 2026-11-15「改矮一點」）。
+  // 視窗夠高時照舊是 460；手機本來就是 300，不受影響。
+  const CHART_REST_PX = 570;
+  const chartHeight = width => Math.max(300, Math.min(460, width * 0.52, innerHeight - CHART_REST_PX));
 
   function updateUrl(code) {
     const url = new URL(location.href);
@@ -397,7 +414,7 @@
     const shownBefore = chart ? chart.candles : [];
     // 歷史接上後，日 K 比伺服器預算的 MACD 多出很多根：改由圖表用完整序列自己算。
     const extended = !intraday && daily.length > r.bars.length;
-    if (!chart) chart = new window.KChart($('chartHost'), { macd: false, studyHost: $('chartStudies'), studies: ['volume', 'macd', 'kd', 'rsi', 'foreign', 'trust', 'dealer'], maPeriods, selectionRoots: [$('chartHost').parentElement], volumeKind: 'volume', overlayLabels: 'tags', height: w => Math.max(300, Math.min(460, w * 0.52)),
+    if (!chart) chart = new window.KChart($('chartHost'), { macd: false, studyHost: $('chartStudies'), studies: ['volume', 'macd', 'kd', 'rsi', 'foreign', 'trust', 'dealer'], maPeriods, selectionRoots: [$('chartHost').parentElement], volumeKind: 'volume', overlayLabels: 'tags', height: chartHeight,
       drawings: drawingSync && { onChange: drawingSync.record, onTool: showActiveTool, onSelect: showDrawingSelection } });
     // 畫線只在日、週、月 K：秒 K、分 K 連工具列一起收起。
     $('drawTools').hidden = intraday || !drawingSync;
@@ -458,16 +475,10 @@
     return [...groups.values()].map(g => `${g.title}：${g.parts.join('、')}`);
   }
 
+  // 大戶持股（集保股權分散表，每週一份）：算法在 holders-weekly.js，畫面在 holders-card.js；沒有資料整塊不顯示
   function showBigHolders(r) {
     const host = $('bigHolders');
-    if (!host) return;
-    const line = holdersLine(r.big_holders);
-    if (!line) { host.replaceChildren(); return; }
-    const section = reasonEl('section', 'sk-card sk-reason sk-membership');  // 與上方「籌碼選股名單」同一套版面
-    const head = reasonEl('div', 'sk-reason-head');
-    head.append(reasonEl('h2', '', '大戶持股'), reasonEl('span', 'sk-reason-meta', `資料日 ${line.date}`));
-    section.append(head, reasonEl('p', 'sk-reason-judgment', line.text));
-    host.replaceChildren(section);
+    if (host) window.HoldersCard.render(host, window.HoldersWeekly.read(r.big_holders));
   }
 
   async function showCandidateReasons(code) {
@@ -475,6 +486,7 @@
     if (!host || host.dataset.code === code) return;
     host.dataset.code = code;
     host.replaceChildren();
+    host.dataset.loading = '';
     try {
       const response = await fetch(`/api/screens/membership?${new URLSearchParams({ code })}`, { cache: 'no-store' });
       const data = response.ok ? await response.json() : null;
@@ -489,6 +501,7 @@
       if (data.industry) section.append(reasonEl('p', 'sk-reason-judgment', `所屬產業：${data.industry.name}｜${data.industry.label}`));
       host.replaceChildren(section);
     } catch (_) { /* 名單讀不到就不顯示，不影響分析 */ }
+    finally { if (host.dataset.code === code) delete host.dataset.loading; }
   }
 
   // ---------- 和 0050 對照 ----------
@@ -585,57 +598,98 @@
     return `${item.name} ${item.code} 在可比標的中近 1 年表現最佳，${gap >= 0 ? '領先' : '仍落後'} 0050 ${Math.abs(gap).toFixed(1)} 個百分點${excludedNote}`;
   }
 
-  window.StockComparison = { basis: comparisonBasis, conclusion: comparisonConclusion };
-
-  function appendCompareCell(row, text, label, className = '') {
-    const cell = node('td', className, text);
-    cell.dataset.label = label;
-    row.append(cell);
+  // 五個期間各一顆鍵要的東西：每一檔 { code, name, note, periods }，periods 照固定的順序，每個期間
+  // { key, label, short 鍵上的短名, kind 'bull' 領先 0050／'bear' 落後／'none' 沒有方向, gap 鍵上寫的差距, facts 點開看的四個數字 [名稱, 文字] }。
+  // 配息資料不完整就不宣告領先落後（note 寫原因、gap 寫「不可比」），有完整配息的那一邊照樣給數字；沒有資料的期間寫「資料不足」。
+  const PERIOD_NAMES = { '1m': ['近 1 個月', '近1月'], '3m': ['近 3 個月', '近3月'], '1y': ['近 1 年', '近1年'], '3y': ['近 3 年', '近3年'], '5y': ['近 5 年', '近5年'] };
+  function comparisonPeriods(items, benchmark) {
+    const facts = (stock, base, stockFall, baseFall) => [['個股報酬', stock], ['0050 報酬', base], ['個股最大回撤', stockFall], ['0050 最大回撤', baseFall]];
+    return items.map(item => {
+      const found = new Map((item.periods || []).map(period => [period.period, period]));
+      const basis = comparisonBasis(item, benchmark);
+      const itemComplete = item.dividends_included === true, benchmarkComplete = benchmark?.dividends_included === true;
+      return {
+        code: item.code, name: item.name || item.code, note: basis.label,
+        periods: COMPARE_PERIODS.map(key => {
+          const period = found.get(key) || { status: 'insufficient_history' };
+          const [label, short] = PERIOD_NAMES[key];
+          const named = { key, label: period.label || label, short };
+          if (period.status !== 'ok') return { ...named, kind: 'none', gap: '資料不足', facts: facts('—', '—', '—', '—') };
+          if (!basis.comparable) {
+            return { ...named, kind: 'none', gap: '不可比', facts: facts(
+              itemComplete ? comparePercent(period.stock_return_pct) : '—', benchmarkComplete ? comparePercent(period.benchmark_return_pct) : '—',
+              itemComplete ? compareDrawdown(period.stock_max_drawdown_pct) : '—', benchmarkComplete ? compareDrawdown(period.benchmark_max_drawdown_pct) : '—') };
+          }
+          return { ...named, kind: period.excess_pct > 0 ? 'bull' : period.excess_pct < 0 ? 'bear' : 'none', gap: comparePercent(period.excess_pct),
+            facts: facts(comparePercent(period.stock_return_pct), comparePercent(period.benchmark_return_pct),
+              compareDrawdown(period.stock_max_drawdown_pct), compareDrawdown(period.benchmark_max_drawdown_pct)) };
+        }),
+      };
+    });
   }
 
-  function renderCompareTable(items) {
-    const rows = [];
-    items.forEach(item => {
-      const periods = new Map((item.periods || []).map(period => [period.period, period]));
-      const basis = comparisonBasis(item, compareState.payload?.benchmark);
-      COMPARE_PERIODS.forEach((key, index) => {
-        const period = periods.get(key) || { period: key, label: key, status: 'insufficient_history' };
-        const tr = document.createElement('tr');
-        tr.dataset.code = item.code;
-        tr.dataset.groupStart = String(index === 0);
-        const stock = node('td', 'cmp-stock');
-        stock.append(node('span', '', item.name || item.code), node('small', '', item.code));
-        if (!basis.comparable) stock.append(node('small', '', basis.label));
-        tr.append(stock);
-        const periodHead = node('th', 'cmp-period', period.label);
-        periodHead.scope = 'row';
-        tr.append(periodHead);
-        if (period.status !== 'ok') {
-          appendCompareCell(tr, '資料不足', '個股報酬', 'cmp-missing');
-          appendCompareCell(tr, '—', '0050 報酬', 'cmp-missing');
-          appendCompareCell(tr, '—', '差距', 'cmp-missing');
-          appendCompareCell(tr, '—', '個股最大回撤', 'cmp-missing');
-          appendCompareCell(tr, '—', '0050 最大回撤', 'cmp-missing');
-        } else if (!basis.comparable) {
-          const itemComplete = item.dividends_included === true;
-          const benchmarkComplete = compareState.payload?.benchmark?.dividends_included === true;
-          appendCompareCell(tr, itemComplete ? comparePercent(period.stock_return_pct) : '—', '個股報酬', itemComplete ? '' : 'cmp-missing');
-          appendCompareCell(tr, benchmarkComplete ? comparePercent(period.benchmark_return_pct) : '—', '0050 報酬', benchmarkComplete ? '' : 'cmp-missing');
-          appendCompareCell(tr, '不可比', '差距', 'cmp-missing');
-          appendCompareCell(tr, itemComplete ? compareDrawdown(period.stock_max_drawdown_pct) : '—', '個股最大回撤', itemComplete ? '' : 'cmp-missing');
-          appendCompareCell(tr, benchmarkComplete ? compareDrawdown(period.benchmark_max_drawdown_pct) : '—', '0050 最大回撤', benchmarkComplete ? '' : 'cmp-missing');
-        } else {
-          appendCompareCell(tr, comparePercent(period.stock_return_pct), '個股報酬');
-          appendCompareCell(tr, comparePercent(period.benchmark_return_pct), '0050 報酬');
-          const gapClass = period.excess_pct > 0 ? 'cmp-positive' : period.excess_pct < 0 ? 'cmp-negative' : '';
-          appendCompareCell(tr, comparePercent(period.excess_pct), '差距', gapClass);
-          appendCompareCell(tr, compareDrawdown(period.stock_max_drawdown_pct), '個股最大回撤');
-          appendCompareCell(tr, compareDrawdown(period.benchmark_max_drawdown_pct), '0050 最大回撤');
-        }
-        rows.push(tr);
-      });
+  window.StockComparison = { basis: comparisonBasis, conclusion: comparisonConclusion, periods: comparisonPeriods };
+
+  // 每一檔一排期間的鍵（.key-strip，可以按住左右滑，由 chart-menus.js 處理），下面是選中那個期間的四個數字
+  const GAP_WORDS = { bull: '領先', bear: '落後' };
+  function comparePeriodFacts(stock) {
+    const period = stock.periods.find(item => item.key === compareState.period) || stock.periods[0];
+    return period.facts.map(([title, text]) => {
+      const item = node('div');
+      item.append(node('dt', '', title), node('dd', 'num', text));
+      return item;
     });
-    $('compareTableBody').replaceChildren(...rows);
+  }
+  function renderComparePeriods() {
+    $('comparePeriods').replaceChildren(...compareState.stocks.map(stock => {
+      const card = node('article', 'cmp-card');
+      card.dataset.code = stock.code;
+      const head = node('h3', '', stock.name);
+      head.append(node('small', 'num', stock.code));
+      if (stock.note) head.append(node('em', '', stock.note));
+      const strip = node('div', 'key-strip');
+      strip.setAttribute('role', 'group');
+      strip.setAttribute('aria-label', `${stock.name}各期間和 0050 的差距`);
+      strip.append(...stock.periods.map(period => {
+        const cell = node('button', `cell ${period.kind}`);
+        cell.type = 'button';
+        cell.dataset.period = period.key;
+        cell.setAttribute('aria-pressed', String(period.key === compareState.period));
+        cell.setAttribute('aria-label', GAP_WORDS[period.kind] ? `${period.label}，${GAP_WORDS[period.kind]} 0050 ${period.gap.replace(/^[+-]/, '')}` : `${period.label}，${period.gap}`);
+        const name = node('span', 'cell-name');
+        name.append(period.short, node('b', 'num', period.gap));
+        cell.append(node('span', 'cell-face'), node('i', 'tag'), name);
+        return cell;
+      }));
+      const facts = node('dl', 'cmp-facts');
+      facts.append(...comparePeriodFacts(stock));
+      card.append(head, strip, facts);
+      return card;
+    }));
+  }
+  // 換一個期間：鍵與數字就地換，不整塊重畫（按住滑過來放開時，選中的框還在滑向那一顆）
+  function pickComparePeriod(key) {
+    if (!COMPARE_PERIODS.includes(key)) return;
+    compareState.period = key;
+    $('comparePeriods').querySelectorAll('.cmp-card').forEach(card => {
+      const stock = compareState.stocks.find(item => item.code === card.dataset.code);
+      card.querySelectorAll('.cell').forEach(cell => cell.setAttribute('aria-pressed', String(cell.dataset.period === key)));
+      if (stock) card.querySelector('.cmp-facts').replaceChildren(...comparePeriodFacts(stock));
+    });
+  }
+
+  // 給螢幕閱讀器的完整表（畫面上看的是那一排期間的鍵）：照同一份整理好的資料畫，一檔五列
+  function renderCompareTable() {
+    $('compareTableBody').replaceChildren(...compareState.stocks.flatMap(stock => stock.periods.map(period => {
+      const row = node('tr');
+      row.dataset.code = stock.code;
+      const name = node('td', '', stock.note ? `${stock.name} ${stock.code}（${stock.note}）` : `${stock.name} ${stock.code}`);
+      const head = node('th', '', period.label);
+      head.scope = 'row';
+      const [stockReturn, baseReturn, stockFall, baseFall] = period.facts.map(([, text]) => node('td', '', text));
+      row.append(name, head, stockReturn, baseReturn, node('td', '', period.gap), stockFall, baseFall);
+      return row;
+    })));
   }
 
   function comparisonSeries(payload) {
@@ -809,7 +863,9 @@
     items.forEach(item => compareState.names.set(item.code, item.name || item.code));
     $('compareDate').textContent = `資料日 ${payload.data_date}`;
     $('compareConclusion').textContent = comparisonConclusion(items, payload.benchmark);
-    renderCompareTable(items);
+    compareState.stocks = comparisonPeriods(items, payload.benchmark);
+    renderCompareTable();
+    renderComparePeriods();
     renderCompareChips();
     drawComparisonChart(payload);
     $('compareBlock').hidden = false;
@@ -851,6 +907,7 @@
     $('compareConclusion').textContent = '讀取中';
     $('compareDate').textContent = '';
     $('compareTableBody').replaceChildren();
+    $('comparePeriods').replaceChildren();
     $('compareLegend').replaceChildren();
     $('compareChart').replaceChildren(node('p', 'bd-compare-empty', '讀取對照資料'));
     $('compareTooltip').hidden = true;
@@ -864,6 +921,10 @@
     compareState.colors = new Map();
     compareState.hidden = new Set();
     compareState.payload = null;
+    compareState.period = '1y';
+    compareState.stocks = [];
+    const openCat = $('stockCats').querySelector('button[aria-expanded="true"]');
+    if (openCat) openCat.click();
     compareColorToken(result.code);
     clearComparisonView();
     $('compareBlock').hidden = false;
@@ -1145,6 +1206,10 @@
     }
   }
 
+  $('comparePeriods').addEventListener('click', event => {
+    const cell = event.target.closest('.cell[data-period]');
+    if (cell) pickComparePeriod(cell.dataset.period);
+  });
   $('compareForm').addEventListener('submit', event => {
     event.preventDefault();
     addComparisonCode($('compareInput').value);
@@ -1190,14 +1255,16 @@
   window.addEventListener('beforeunload', event => { if (!event.defaultPrevented) { livePoller.stop(); stopTicks(); } });
   document.addEventListener('visibilitychange', syncTickFeed);
   $('addMa').addEventListener('click', () => {
-    if (maPeriods.length >= 4) return;
-    const next = [60, 120, 240].find(value => !maPeriods.includes(value)) || Math.min(240, maPeriods.at(-1) + 10);
+    if (maPeriods.length >= MA_LIMIT) return;
+    // 從常用的期數裡找第一個還沒用到的（最多四條，六個候選一定找得到），不會加出重複而被併掉
+    const next = [60, 120, 240, 20, 10, 5].find(value => !maPeriods.includes(value));
     applyMaPeriods([...maPeriods, next]);
   });
   $('themeToggle').addEventListener('click', () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
   let saved = null;
   try { saved = localStorage.getItem('market-theme'); } catch (_) { /* 私密視窗 */ }
   renderMaControls();
+  syncMaLimit();
   bindDrawTools();
   setTheme(saved === 'dark' ? 'dark' : 'light');
   window.StockView = { weeklyCandles, monthlyCandles };

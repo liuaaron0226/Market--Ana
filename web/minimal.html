@@ -10,12 +10,12 @@
   <meta name="apple-mobile-web-app-title" content="決策鏡">
   <meta name="theme-color" content="#0b0b0e">
   <title>台股決策鏡</title>
-  <link rel="stylesheet" href="minimal.css?v=20261109-ux1">
-  <link rel="stylesheet" href="chart-studies.css?v=20261108-01">
-  <link rel="stylesheet" href="bold.css?v=20261109-ux1">
-  <link rel="stylesheet" href="home.css?v=20261109-ux1">
-  <link rel="stylesheet" href="panel.css?v=20261109-ux1">
-  <link rel="stylesheet" href="forecast.css?v=20261116-e1">
+  <link rel="stylesheet" href="minimal.css?v=20261116-desk44">
+  <link rel="stylesheet" href="chart-studies.css?v=20261116-desk44">
+  <link rel="stylesheet" href="bold.css?v=20261116-desk44">
+  <link rel="stylesheet" href="home.css?v=20261116-desk44">
+  <link rel="stylesheet" href="panel.css?v=20261116-desk44">
+  <link rel="stylesheet" href="forecast.css?v=20261116-desk44">
 </head>
 <body class="bd hm">
   <a class="skip-link" href="#workspace">跳到主圖</a>
@@ -46,23 +46,25 @@
             <span aria-hidden="true">›</span>
           </button>
           <span class="status-separator" aria-hidden="true">·</span>
-          <span>分析 <b class="num" id="analysisDate">—</b></span>
+          <span class="sr-only">分析 <b class="num" id="analysisDate">—</b></span>
           <span class="status-separator" aria-hidden="true">·</span>
-          <span>劇本 <b class="num" id="scenarioDate">—</b></span>
+          <span class="sr-only">劇本 <b class="num" id="scenarioDate">—</b></span>
         </div>
         <span id="zoneLabel" class="sr-only">—</span>
       </div>
 
-      <button class="conclusion-trigger" id="conclusionTrigger" type="button" aria-label="查看結論依據">
-        <span class="conclusion-label" id="conclusionLabel">下一交易日</span>
-        <strong id="conclusionText">讀取判斷中</strong>
-        <span class="detail-cue">依據 <span aria-hidden="true">›</span></span>
-      </button>
-
-      <button class="theme-toggle" id="themeToggle" type="button" aria-label="切換深淺色主題">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.64 5.64l1.42 1.42m9.88 9.88 1.42 1.42m0-12.72-1.42 1.42M7.06 16.94l-1.42 1.42" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>
-        <span id="themeText">切換主題</span>
-      </button>
+      <div class="header-tools">
+        <a class="icon-key" id="portfolioEntry" href="portfolio.html" aria-label="自選股與庫存" title="自選股與庫存">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3.6 2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+        </a>
+        <button class="icon-key" id="searchToggle" type="button" aria-label="搜尋股票" title="搜尋股票" aria-haspopup="dialog" aria-controls="stockSearchDialog">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="m16 16 4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+        </button>
+        <button class="theme-toggle" id="themeToggle" type="button" aria-label="切換深淺色主題" title="切換深淺色主題">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.64 5.64l1.42 1.42m9.88 9.88 1.42 1.42m0-12.72-1.42 1.42M7.06 16.94l-1.42 1.42" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>
+          <span id="themeText">切換主題</span>
+        </button>
+      </div>
     </header>
 
     <section class="ai-digest-card" id="aiDigestCard" data-state="loading" aria-labelledby="aiDigestTitle" hidden>
@@ -88,14 +90,16 @@
       </details>
     </section>
 
-    <section class="stock-search-panel hm-search" aria-labelledby="stockSearchTitle">
+    <dialog class="float-dialog stock-search-panel hm-search" id="stockSearchDialog" aria-labelledby="stockSearchTitle">
       <div class="stock-search-heading">
         <h2 id="stockSearchTitle">搜尋上市／上櫃普通股</h2>
-        <a class="portfolio-entry" href="portfolio.html">自選股與庫存 <span aria-hidden="true">›</span></a>
+        <button class="panel-close" id="stockSearchClose" type="button" data-dialog-close aria-label="關閉搜尋">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </button>
       </div>
       <form class="stock-search-form" id="stockSearchForm" role="search">
         <label class="sr-only" for="stockSearchInput">股票代號或名稱</label>
-        <input id="stockSearchInput" name="q" type="search" autocomplete="off" placeholder="例如 2330、台積電、積電">
+        <input id="stockSearchInput" name="q" type="search" autocomplete="off" autofocus placeholder="例如 2330、台積電、積電">
         <button type="submit">搜尋</button>
         <button type="button" id="stockSearchClear">清空</button>
       </form>
@@ -103,7 +107,7 @@
       <p class="stock-search-status" id="stockSearchStatus" role="status" hidden></p>
       <ul class="stock-search-results" id="stockSearchResults" aria-label="股票搜尋結果"></ul>
       <button class="stock-search-more" id="stockSearchMore" type="button" hidden>載入更多</button>
-    </section>
+    </dialog>
 
     <p class="service-note" id="serviceNote" role="status" hidden></p>
 
@@ -131,10 +135,6 @@
                 </optgroup>
               </select>
             </label>
-            <button type="button" id="chartToolsToggle" class="chart-tools-toggle" aria-expanded="false" aria-controls="zoomOut zoomIn">圖表工具</button>
-            <button type="button" id="zoomOut" aria-label="縮小K線">−</button>
-            <button type="button" id="zoomIn" aria-label="放大K線">＋</button>
-            <button type="button" id="resetView" class="reset-view" hidden>回到最新</button>
           </div>
         </div>
 
@@ -157,17 +157,19 @@
             <span class="point-label">現價詳情 <span aria-hidden="true">›</span></span>
           </button>
           <span class="selected-candle-marker" id="selectedCandleMarker" aria-hidden="true" hidden></span>
+          <button type="button" id="resetView" class="reset-view" hidden>回到最新</button>
         </div>
+        <div id="chartStudies"></div>
         <div class="chart-actions" id="chartActions">
           <button class="mobile-candle-details" id="mobileCandleDetails" type="button" hidden>這一天的詳情 <span aria-hidden="true">›</span></button>
         </div>
-        <div id="chartStudies"></div>
         <section class="market-trend" id="marketTrend" aria-labelledby="marketTrendTitle" hidden>
           <header class="market-trend-head">
             <h3 id="marketTrendTitle">短中長期走勢</h3>
             <p id="marketTrendDate">資料日 —</p>
           </header>
-          <div class="market-trend-grid" id="marketTrendGrid" role="list"></div>
+          <p class="trend-align" hidden></p>
+          <ol class="trend-rows" id="marketTrendRows"></ol>
         </section>
         <p class="sr-only" id="chartSummary" aria-live="polite"></p>
       </section>
@@ -178,8 +180,14 @@
         <ul class="read-list" id="readList"></ul>
         <p class="read-date" id="readDate"></p>
       </section>
-      <section class="chips" aria-labelledby="chipsTitle">
-        <h2 id="chipsTitle" class="hm-section-title">籌碼與資金</h2>
+      <div class="hm-cats" id="homeCats" role="group" aria-label="更多資料">
+        <button type="button" data-cat="chips" aria-expanded="false" aria-controls="chipsSection">籌碼與資金</button>
+        <button type="button" data-cat="screens" aria-expanded="false" aria-controls="chipScreens">籌碼選股</button>
+        <button type="button" data-cat="rotation" aria-expanded="false" aria-controls="rotationBlock">產業資金流向</button>
+        <button type="button" data-cat="core" aria-expanded="false" aria-controls="coreHoldings">長期核心持有</button>
+      </div>
+      <section class="chips" id="chipsSection" data-cat-panel="chips" aria-labelledby="chipsTitle">
+        <h2 id="chipsTitle" class="hm-section-title sr-only">籌碼與資金</h2>
         <div class="chip-grid" id="chipGrid"></div>
       </section>
       <section class="distribution" id="distribution" aria-labelledby="distributionTitle">
@@ -201,69 +209,82 @@
       </section>
 
       <section class="hm-explore" aria-labelledby="exploreTitle">
-        <h2 id="exploreTitle" class="hm-section-title">選股看板</h2>
+        <h2 id="exploreTitle" class="hm-section-title sr-only">選股看板</h2>
         <div class="market-screens" id="marketScreens">
-          <section class="screen-block" id="chipScreens" data-state="loading" aria-labelledby="chipScreensTitle">
+          <section class="screen-block" id="chipScreens" data-cat-panel="screens" data-state="loading" aria-labelledby="chipScreensTitle">
             <div class="screen-head">
               <h3 id="chipScreensTitle">籌碼選股</h3>
               <p class="screen-meta" id="chipScreensMeta">讀取中…</p>
             </div>
-            <div class="screen-tabs" id="chipScreenTabs" role="tablist" aria-label="籌碼選股分頁"></div>
-            <div class="screen-panel" id="chipScreenPanel" role="tabpanel">
-              <div class="screen-controls" id="chipScreenControls">
-                <div class="screen-seg" id="chipScreenDays" role="group" aria-label="累計天數"></div>
-                <div class="screen-seg" id="chipScreenSide" role="group" aria-label="買超或賣超">
-                  <button type="button" data-side="buy" aria-pressed="true">淨買超</button>
-                  <button type="button" data-side="sell" aria-pressed="false">淨賣超</button>
-                </div>
+            <!-- 排行、天數、買賣超各收成一枚小鍵，點了才浮出選單（本人 11-15）；小鍵上的字跟著選單裡選中的那一項，開合在 chart-menus.js -->
+            <div class="screen-picks">
+              <button type="button" class="chart-chip" id="screenTabChip" aria-expanded="false" aria-controls="screenTabMenu" data-mirror="排行" data-mirror-flag="・只看流入"></button>
+              <div class="chart-menu screen-tab-menu" id="screenTabMenu" data-menu-autoclose hidden>
+                <div class="screen-tabs" id="chipScreenTabs" role="tablist" aria-label="籌碼選股分頁"></div>
                 <label class="screen-check"><input type="checkbox" id="chipScreenInflow"> 只顯示資金流入產業</label>
               </div>
+              <div class="screen-controls" id="chipScreenControls" hidden>
+                <button type="button" class="chart-chip" id="screenDaysChip" aria-expanded="false" aria-controls="screenDaysMenu" data-mirror="累計天數"></button>
+                <div class="chart-menu" id="screenDaysMenu" data-menu-autoclose hidden>
+                  <div class="screen-seg" id="chipScreenDays" role="group" aria-label="累計天數"></div>
+                </div>
+                <button type="button" class="chart-chip" id="screenSideChip" aria-expanded="false" aria-controls="screenSideMenu" data-mirror="買超或賣超"></button>
+                <div class="chart-menu" id="screenSideMenu" data-menu-autoclose hidden>
+                  <div class="screen-seg" id="chipScreenSide" role="group" aria-label="買超或賣超">
+                    <button type="button" data-side="buy" aria-pressed="true">淨買超</button>
+                    <button type="button" data-side="sell" aria-pressed="false">淨賣超</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="screen-panel" id="chipScreenPanel" role="tabpanel">
               <p class="screen-status" id="chipScreenStatus" role="status">讀取中…</p>
               <ol class="screen-list" id="chipScreenList" aria-label="選股結果"></ol>
               <button type="button" class="screen-more" id="chipScreenMore" hidden>展開到 50 名</button>
             </div>
           </section>
 
-          <section class="screen-block" id="rotationBlock" data-state="loading" aria-labelledby="rotationTitle">
+          <section class="screen-block" id="rotationBlock" data-cat-panel="rotation" data-state="loading" aria-labelledby="rotationTitle">
             <div class="screen-head">
               <h3 id="rotationTitle">產業資金流向</h3>
               <p class="screen-meta" id="rotationMeta">讀取中…</p>
+              <button type="button" class="rotation-open" aria-haspopup="dialog" aria-controls="rotationDialog">排行與表格 <span aria-hidden="true">›</span></button>
             </div>
             <p class="screen-status" id="rotationStatus" role="status">讀取中…</p>
             <div class="rotation-body" id="rotationBody" hidden>
-              <ul class="rotation-legend" id="rotationLegend" aria-label="四種資金狀態"></ul>
-              <div class="rotation-chart" id="rotationChart"></div>
-              <div class="rotation-lists">
-                <div><h4>資金效率排行</h4><ol id="rotationEfficiency"></ol></div>
-                <div><h4>低基期回溫訊號</h4><ol id="rotationRecovery"></ol></div>
-              </div>
-              <details class="rotation-table"><summary>表格檢視</summary><div id="rotationTable"></div></details>
+              <div id="rotationTerrain"></div>
             </div>
           </section>
 
-          <section class="screen-block" id="coreHoldings" data-state="loading" aria-labelledby="coreHoldingsTitle">
+          <section class="screen-block" id="coreHoldings" data-cat-panel="core" data-state="loading" aria-labelledby="coreHoldingsTitle">
             <div class="screen-head">
               <h3 id="coreHoldingsTitle">長期核心持有</h3>
               <p class="screen-meta" id="coreHoldingsMeta">讀取中…</p>
             </div>
             <form class="core-compare-form" id="coreCompareForm">
-              <label for="coreCompareInput">加入個股或 ETF</label>
-              <div class="core-compare-entry">
-                <input id="coreCompareInput" name="code" inputmode="text" autocomplete="off" maxlength="6" placeholder="輸入代號">
-                <button type="submit">加入比較</button>
+              <!-- 已加入的標的、「＋ 加入」、比較期間排成一列；輸入框與期間的選項點了才浮出來（本人 11-15） -->
+              <div class="core-picks">
+                <div class="core-selection" id="coreSelection" aria-label="已加入的比較標的"></div>
+                <button type="button" class="chart-chip is-plain" id="coreAddChip" aria-expanded="false" aria-controls="coreAddMenu">＋ 加入</button>
+                <div class="chart-menu core-add-menu" id="coreAddMenu" data-menu-focus hidden>
+                  <label class="sr-only" for="coreCompareInput">加入個股或 ETF</label>
+                  <div class="core-compare-entry">
+                    <input id="coreCompareInput" name="code" inputmode="text" autocomplete="off" maxlength="6" placeholder="輸入代號">
+                    <button type="submit">加入比較</button>
+                  </div>
+                </div>
+                <label class="core-period" for="corePeriodSelect"><span class="sr-only">比較期間</span>
+                  <select id="corePeriodSelect" data-chip-menu="比較期間">
+                    <option value="1m">近 1 個月</option>
+                    <option value="3m">近 3 個月</option>
+                    <option value="1y">近 1 年</option>
+                    <option value="3y">近 3 年</option>
+                    <option value="5y" selected>近 5 年</option>
+                  </select>
+                </label>
               </div>
-              <div class="core-selection" id="coreSelection" aria-label="已加入的比較標的"></div>
               <p class="core-status" id="coreStatus" role="status" hidden></p>
             </form>
-            <label class="core-period" for="corePeriodSelect">比較期間
-              <select id="corePeriodSelect">
-                <option value="1m">近 1 個月</option>
-                <option value="3m">近 3 個月</option>
-                <option value="1y">近 1 年</option>
-                <option value="3y">近 3 年</option>
-                <option value="5y" selected>近 5 年</option>
-              </select>
-            </label>
             <div class="core-cards" id="coreCards"></div>
             <div class="core-chart" id="coreChart"></div>
           </section>
@@ -271,6 +292,20 @@
       </section>
     </main>
   </div>
+
+  <dialog class="float-dialog rotation-dialog" id="rotationDialog" aria-labelledby="rotationDialogTitle">
+    <header class="float-dialog-head">
+      <h2 id="rotationDialogTitle">產業資金流向</h2>
+      <button class="panel-close" type="button" data-dialog-close aria-label="關閉">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      </button>
+    </header>
+    <div class="rotation-lists">
+      <section id="rotationEfficiencySection"><h4>資金效率排行</h4><ol id="rotationEfficiency"></ol></section>
+      <section id="rotationRecoverySection"><h4>低基期回溫訊號</h4><ol id="rotationRecovery"></ol></section>
+    </div>
+    <section class="rotation-table" id="rotationTableSection"><h4>表格檢視</h4><div id="rotationTable"></div></section>
+  </dialog>
 
   <div class="panel-backdrop" id="panelBackdrop" hidden></div>
   <aside class="detail-panel" id="detailPanel" role="dialog" aria-modal="true" aria-labelledby="panelTitle" aria-hidden="true" data-kind="">
@@ -302,11 +337,18 @@
   <script src="plain-data.js"></script>
   <script src="detail-data.js"></script>
   <script src="market-data-local.js"></script>
-  <script src="chart-studies.js?v=20261108-01"></script>
-  <script src="kchart.js?v=20261109-ux1"></script>
-  <script src="forecast.js?v=20261116-e1"></script>
-  <script src="minimal.js?v=20261111-core-release"></script>
-  <script src="period-switch.js?v=20261109-ux1"></script>
-  <script src="home-motion.js?v=20261109-ux1"></script>
+  <script src="terrain-layout.js?v=20261114-desk1"></script>
+  <script src="terrain.js?v=20261116-desk44"></script>
+  <script src="chart-studies.js?v=20261116-desk44"></script>
+  <script src="kchart.js?v=20261116-desk44"></script>
+  <script src="forecast.js?v=20261116-desk44"></script>
+  <script src="line-zones.js?v=20261116-desk44"></script>
+  <script src="trend-votes.js?v=20261116-desk44"></script>
+  <script src="trend-matrix.js?v=20261116-desk44"></script>
+  <script src="minimal.js?v=20261116-desk44"></script>
+  <script src="period-switch.js?v=20261116-desk44"></script>
+  <script src="chart-menus.js?v=20261116-desk44"></script>
+  <script src="home-motion.js?v=20261116-desk44"></script>
+  <script src="home-fold.js?v=20261116-desk44"></script>
 </body>
 </html>

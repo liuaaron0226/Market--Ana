@@ -85,11 +85,7 @@ def main() -> None:
                     "page_height": page.evaluate("document.documentElement.scrollHeight"),
                 }}
                 # 入口
-                open_panel(page, "#conclusionTrigger")
-                page.locator("#panelBody [data-evidence='trend']").click()
-                page.wait_for_timeout(300)
-                r["entry_trend_macd"] = page.locator("#panelBody .detail-section").count() >= 4 and "MACD" in page.locator("#panelBody").inner_text()
-                close_panel(page)
+                # 頂列「下一交易日」的框與結論依據面板已拿掉（本人 2026-11-15），這個入口不再檢查
                 open_panel(page, "#readCard")
                 txt = page.locator("#panelBody").inner_text()
                 r["entry_plain_full"] = "要擔心" in txt and "什麼時候比較安心" in txt and page.locator("#panelBody .plain-group").count() >= 4
@@ -157,7 +153,7 @@ def main() -> None:
                 else:
                     good = d["macd"] is False and d["read_list"] and d["chip_spark"]
                 good = good and d['studies_visible'] and d['study_teaching_closed']
-                good = good and not errors_axis and r["entry_trend_macd"] and r["entry_plain_full"] and r["chip_default_one_table"] and r["chip_sell_switch"] and r["chip_daily_bars"] and r["entry_distribution"] and not errors
+                good = good and not errors_axis and r["entry_plain_full"] and r["chip_default_one_table"] and r["chip_sell_switch"] and r["chip_daily_bars"] and r["entry_distribution"] and not errors
                 r["ok"] = bool(good)
                 out[f"{engine}-{w}"] = r
                 ctx.close()

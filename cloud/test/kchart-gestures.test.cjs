@@ -348,3 +348,96 @@ test('短合成序列與週K／月K／60分K標籤共用手勢路徑都不把有
     assertHealthy(chart, drawnText, `${scenario.unit}K縮回與平移`);
   }
 });
+
+// 「取消選取」鍵拿掉之後（本人 2026-11-15），取消的方式是再點一次同一根。
+test('再點一次同一根 K 棒就取消選取；點另一根則改選那一根', () => {
+  const { chart, canvas } = createChart();
+  let cleared = 0;
+  chart.opts.onClear = () => { cleared += 1; };
+  const tap = x => {
+    canvas.dispatch('pointerdown', { pointerId: 1, clientX: x, clientY: 100 });
+    canvas.dispatch('pointerup', { pointerId: 1, clientX: x, clientY: 100 });
+  };
+  tap(150);
+  const first = chart.selection;
+  assert.ok(first >= 0, '第一次點：選取');
+  tap(150);
+  assert.equal(chart.selection, -1, '再點同一根：取消選取');
+  assert.equal(chart.hover, -1, '十字線跟著收掉');
+  assert.equal(cleared, 1, '通知頁面選取已取消');
+  tap(150);
+  assert.equal(chart.selection, first, '取消之後再點：重新選取');
+  tap(220);
+  assert.ok(chart.selection >= 0 && chart.selection !== first, '點另一根：改選那一根');
+  assert.equal(cleared, 1, '改選不算取消');
+});
+
+test('點到圖區以外（右側數值欄）會取消選取，而且通知頁面', () => {
+  const { chart, canvas } = createChart();
+  let cleared = 0;
+  chart.opts.onClear = () => { cleared += 1; };
+  const tap = x => {
+    canvas.dispatch('pointerdown', { pointerId: 1, clientX: x, clientY: 100 });
+    canvas.dispatch('pointerup', { pointerId: 1, clientX: x, clientY: 100 });
+  };
+  tap(150);
+  assert.ok(chart.selection >= 0);
+  tap(385);
+  assert.equal(chart.selection, -1, '右側數值欄不是 K 棒，點了取消選取');
+  assert.equal(cleared, 1, '頁面要收到通知，才會跟著收掉自己的選取狀態');
+});
+
+test('觸控拖動平移之後，十字線回到選取的那一天，不停在手指經過的那一天', () => {
+  const { chart, canvas } = createChart();
+  canvas.dispatch('pointerdown', { pointerId: 1, clientX: 150, clientY: 100 });
+  canvas.dispatch('pointerup', { pointerId: 1, clientX: 150, clientY: 100 });
+  const selected = chart.selection;
+  assert.ok(selected >= 0);
+  canvas.dispatch('pointerdown', { pointerId: 1, clientX: 200, clientY: 100 });
+  canvas.dispatch('pointermove', { pointerId: 1, clientX: 260, clientY: 100 });
+  assert.notEqual(chart.hover, selected, '拖動中十字線跟著手指');
+  canvas.dispatch('pointerup', { pointerId: 1, clientX: 260, clientY: 100 });
+  assert.equal(chart.selection, selected, '拖動不改選取');
+  assert.equal(chart.hover, selected, '放手後十字線回到選取的那一天');
+
+  const fresh = createChart();
+  fresh.canvas.dispatch('pointerdown', { pointerId: 1, clientX: 200, clientY: 100 });
+  fresh.canvas.dispatch('pointermove', { pointerId: 1, clientX: 260, clientY: 100 });
+  fresh.canvas.dispatch('pointerup', { pointerId: 1, clientX: 260, clientY: 100 });
+  assert.equal(fresh.chart.hover, -1, '沒有選取時，拖完十字線收掉');
+});
+
+test('手指在主圖上下拖（想捲頁面）不算點選那一天', () => {
+  const { chart, canvas } = createChart();
+  canvas.dispatch('pointerdown', { pointerId: 1, clientX: 150, clientY: 60 });
+  canvas.dispatch('pointermove', { pointerId: 1, clientX: 150, clientY: 140 });
+  canvas.dispatch('pointerup', { pointerId: 1, clientX: 150, clientY: 140 });
+  assert.equal(chart.selection, -1, '上下拖不選取');
+});
+
+// 本人 2026-11-15：「用手機看k線圖，單指是可以左右滑動歷史資料，兩指是放大」。指標區和 K 線是同一張圖，手勢要一樣；
+// 切換指標改由指標名稱的選單，不再用左右滑。
+test('指標區的手勢和主圖一樣：單指左右拖是平移歷史，兩指是縮放，不再切換指標', () => {
+  const { chart, canvas } = createChart();
+  let switched = 0;
+  chart.studies = { draw() {}, switchBy() { switched += 1; } };
+  const study = new canvas.constructor('canvas');
+  chart.bindCanvas(study);
+
+  const endBefore = chart.view.end;
+  study.dispatch('pointerdown', { pointerId: 1, clientX: 150, clientY: 100 });
+  study.dispatch('pointermove', { pointerId: 1, clientX: 230, clientY: 100 });
+  study.dispatch('pointerup', { pointerId: 1, clientX: 230, clientY: 100 });
+  assert.ok(chart.view.end < endBefore, '往右拖：看到更早的資料');
+  assert.equal(switched, 0, '不切換指標');
+  assert.equal(chart.selection, -1, '拖動不算點選');
+
+  const countBefore = chart.view.count;
+  study.dispatch('pointerdown', { pointerId: 1, clientX: 180, clientY: 100 });
+  study.dispatch('pointerdown', { pointerId: 2, clientX: 210, clientY: 100 });
+  study.dispatch('pointermove', { pointerId: 2, clientX: 300, clientY: 100 });
+  study.dispatch('pointerup', { pointerId: 2, clientX: 300, clientY: 100 });
+  study.dispatch('pointerup', { pointerId: 1, clientX: 180, clientY: 100 });
+  assert.ok(chart.view.count < countBefore, '兩指張開：放大（顯示的根數變少）');
+  assert.equal(switched, 0);
+});

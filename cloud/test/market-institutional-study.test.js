@@ -59,10 +59,10 @@ test("大盤法人副圖的刻度也是億元", () => {
   });
   const range = { start: 0, end: 2, geo: { l: 0, pw: 200, step: 100 },
     candles: [{ foreign: -911.88 }, { foreign: 300 }] };
-  ChartStudies.prototype._drawInstitutional.call({ volumeKind: "amount", chart: {}, _drawCrosshair() {} }, context, 260, 120, range, "foreign");
+  ChartStudies.prototype._drawInstitutional.call({ volumeKind: "amount", chart: {}, _drawCrosshair() {}, _drawPicked() {} }, context, 260, 120, range, "foreign");
   assert.deepEqual(texts, ["912億", "0", "−912億"]);
   texts.length = 0;
-  ChartStudies.prototype._drawInstitutional.call({ volumeKind: "volume", chart: {}, _drawCrosshair() {} }, context, 260, 120,
+  ChartStudies.prototype._drawInstitutional.call({ volumeKind: "volume", chart: {}, _drawCrosshair() {}, _drawPicked() {} }, context, 260, 120,
     { ...range, candles: [{ foreign: -5_000_000 }, { foreign: 1_000_000 }] }, "foreign");
   assert.deepEqual(texts, ["5,000張", "0", "−5,000張"]);
 });
@@ -93,10 +93,12 @@ test("首頁大盤圖把外資、投信、自營商接進副圖", () => {
   assert.match(source, /ChartStudies\.withMarketInstitutional\(A\.daily\.map\(row => toChartCandle\(row, '日'\)\), A\.institutional\)/);
 });
 
-test("副圖按鈕排成兩列時，選取底塊跟到選中的那一列", () => {
+test("副圖切換：新的三種（外資、投信、自營商）也照左右方向滑進來；切換鍵收在選單裡，沒有滑動底塊", () => {
+  // 主線原本驗的是「按鈕排成兩列時底塊跟到選中的那一列」；立體重設計把切換鍵收進指標名稱的選單，底塊不存在了，
+  // 留下來要守的是：兩支動態程式的順序表都包含新的三種副圖（決定新的指標區從左邊還是右邊滑進來）。
   for (const file of ["web/home-motion.js", "web/motion.js"]) {
     const source = read(file);
-    assert.match(source, /translate\(\$\{r\.left - box\.left\}px, \$\{r\.top \+ r\.height \/ 2 - box\.top - box\.height \/ 2\}px\)/, file);
     assert.match(source, /order = \['volume', 'macd', 'kd', 'rsi', 'foreign', 'trust', 'dealer'\]/, file);
+    assert.doesNotMatch(source, /bd-switch-pill/, file);
   }
 });

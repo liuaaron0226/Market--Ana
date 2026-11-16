@@ -85,16 +85,23 @@ test("策略理由只在結論出現一次，展開後不再重複同一句（�
   assert.equal([...js.matchAll(/strategy\.reason/g)].length, 1);
 });
 
-test("首頁人寫的劇本與直白分析比資料日舊時整組隱藏，不留「已過期」字樣配新數字（本人 11-14）", () => {
+test("首頁人寫的劇本與直白分析比資料日舊時不顯示，不留「已過期」字樣配新數字（本人 11-14）；兩條線每天算得出來，不跟著藏（本人 11-15）", () => {
   const source = read("web/minimal.js");
-  assert.match(source, /function overlays\(\) \{\s+if \(scenarioExpired\) return \[\];/);
+  // 線優先讀每天算的那一份；只有線還是從過期的劇本抄來的時候才跟著藏
+  assert.match(source, /const UPPER = numberOr\(linesDaily \? AS_OF\.upper : scenarioThresholds\.upper\);/);
+  assert.match(source, /const linesMissing = !\(Number\.isFinite\(UPPER\) && Number\.isFinite\(LOWER\)\) \|\| \(!linesDaily && scenarioExpired\);/);
+  // 人寫的那幾句只在它講的就是現在這兩條線時顯示
+  assert.match(source, /const scenarioHidden = scenarioExpired \|\| \(linesDaily && !\(sameLine\(scenarioThresholds\.upper, UPPER\) && sameLine\(scenarioThresholds\.lower, LOWER\)\)\);/);
+  assert.match(source, /function overlays\(\) \{\s+if \(linesHidden\(\)\) return \[\];/);
   assert.match(source, /\$\('readCard'\)\.hidden = plainStale;/);
   assert.match(source, /plainSource\.data_dates\.price_and_foreign \|\| ''\) < A\.meta\.cutoff_date/);
   const hiddenGroup = source.slice(source.indexOf("for (const node of [els.scenarioDate.parentElement"));
-  for (const target of ["$('conclusionTrigger')", "els.lineUpper", "els.lineLower", "$('distribution')"]) {
-    assert.ok(hiddenGroup.slice(0, 400).includes(target), target);
+  assert.match(source, /for \(const node of \[els\.lineUpper, els\.lineLower, \$\('distribution'\)\]\) \{\s+if \(node\) node\.hidden = linesHidden\(\);/);
+  // 標頭「下一交易日」的框與它打開的「結論依據」面板拿掉了（本人 11-15：框多餘、文字看不懂；之後答「拿掉」）
+  for (const gone of ["conclusionTrigger", "conclusionText", "renderConclusionPanel", "renderEvidenceLayer", "data-evidence"]) {
+    assert.ok(!source.includes(gone) && !read("web/minimal.html").includes(gone), gone);
   }
-  assert.match(hiddenGroup.slice(0, 400), /node\.hidden = scenarioExpired/);
+  assert.match(hiddenGroup.slice(0, 400), /node\.hidden = scenarioHidden/);
   for (const removed of ["' 已過期'", "舊劇本", "未冒充當日分析"]) {
     assert.ok(!source.includes(removed), removed);
   }
@@ -148,20 +155,14 @@ test("個股頁週期多出 1／5／10／15／30 秒，只在選了秒 K 時才�
   assert.match(js, /if \(response\.status === 403 \|\| response\.status === 404\) return;/);  // 沒有權限就不再問
 });
 
-test("大戶持股一行講完：千張以上的持股比例、人數與較前一週的變化；沒有資料就不顯示（本人 11-14：用集保代替主力）", () => {
-  const { StockHolders } = loadStockWindow();
-  const week = (date, pct, holders) => ({ date, pct_1000: pct, holders_1000: holders, pct_400: pct + 3, holders_400: holders * 2, holders: 9999 });
-  assert.equal(StockHolders.line([]), null);
-  assert.equal(StockHolders.line(undefined), null);
-  assert.deepEqual({ ...StockHolders.line([week("2026-11-13", 84.17, 1466)]) },
-    { date: "2026-11-13", text: "千張以上大戶持股 84.17%・1,466 人" });
-  assert.equal(StockHolders.line([week("2026-11-13", 84.17, 1466), week("2026-11-20", 84.3, 1470)]).text,
-    "千張以上大戶持股 84.30%・1,470 人・較前一週 +0.13 個百分點");
-  assert.equal(StockHolders.line([week("2026-11-13", 84.17, 1466), week("2026-11-20", 83.9, 1460)]).text,
-    "千張以上大戶持股 83.90%・1,460 人・較前一週 −0.27 個百分點");
-  assert.equal(StockHolders.line([week("2026-11-13", 84.17, 1466), week("2026-11-20", 84.17, 1466)]).text,
-    "千張以上大戶持股 84.17%・1,466 人・與前一週相同");
-  assert.match(read("web/stock.html"), /<div id="bigHolders"><\/div>/);
+test("個股頁的大戶持股：算法與畫面各一支程式，排在 stock.js 前面；沒有資料整塊不顯示（本人 11-14：用集保代替主力；11-15：改成每週增減的小柱）", () => {
+  const html = read("web/stock.html");
+  assert.match(html, /<div id="bigHolders"><\/div>/);
+  const order = ["holders-weekly.js", "holders-card.js", "stock.js"].map((file) => html.indexOf(`<script src="${file}?`));
+  assert.ok(order.every((at) => at > 0) && order[0] < order[1] && order[1] < order[2], order);
+  const js = read("web/stock.js");
+  assert.match(js, /window\.HoldersCard\.render\(host, window\.HoldersWeekly\.read\(r\.big_holders\)\)/);
+  assert.doesNotMatch(js, /StockHolders/);   // 舊的「一行講完」已經拿掉；每一個數字怎麼算由 holders-weekly.test.js 驗
 });
 
 test("MA設定使用try catch保護localStorage", () => {

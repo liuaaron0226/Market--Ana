@@ -3,7 +3,7 @@
    1. 載入：報價→舞台→指標，依序淡入上移 8px（一次）
    2. 數字：收盤價與階梯價位從前一個值滾到新值（換股時看得出變化）
    3. 價位階梯：由收盤往外依序展開
-   4. 指標切換：滑動底塊跟著選中鈕移動；副圖從切換方向滑入
+   4. 指標切換：副圖從切換方向滑入
    5. 展開區塊：高度平滑展開
    系統設定「減少動態」時全部跳過。方法 unslop by @heydamir, CC BY 4.0 */
 (function () {
@@ -81,30 +81,14 @@
       .observe($('stockName'), { childList: true, characterData: true, subtree: true });
   }
 
-  // ---------- 4. 指標切換：滑動底塊＋副圖方向滑入 ----------
+  // ---------- 4. 指標切換：新的指標區從切換的方向滑入（切換鍵收進指標名稱的選單，不再有滑動底塊） ----------
   function setupSwitcher() {
     const host = $('chartStudies');
-    let indicator = null;
     let lastActive = null;
     const order = ['volume', 'macd', 'kd', 'rsi', 'foreign', 'trust', 'dealer'];
-    const place = animate => {
-      const sw = host.querySelector('.kc-study-switcher');
-      const on = sw && sw.querySelector('.kc-study-choice[aria-pressed="true"]');
-      if (!sw || !on) return;
-      if (!indicator || !sw.contains(indicator)) {
-        indicator = document.createElement('span');
-        indicator.className = 'bd-switch-pill';
-        indicator.setAttribute('aria-hidden', 'true');
-        sw.prepend(indicator);
-        sw.classList.add('bd-has-pill');
-        animate = false;
-      }
-      const box = sw.getBoundingClientRect();
-      const r = on.getBoundingClientRect();
-      // 底塊固定 100px 寬，用 scaleX 對齊按鈕寬度，只動 transform
-      indicator.style.transition = animate ? `transform 280ms ${EASE}` : 'none';
-      // 手機上按鈕會排成兩列：底塊要跟到選中的那一列，不能只算水平位置。
-      indicator.style.transform = `translate(${r.left - box.left}px, ${r.top + r.height / 2 - box.top - box.height / 2}px) scaleX(${r.width / 100})`;
+    const slide = animate => {
+      const on = host.querySelector('.kc-study-choice[aria-pressed="true"]');
+      if (!on) return;
       const kind = on.dataset.study;
       if (animate && lastActive && kind !== lastActive) {
         const pane = host.querySelector(`.kc-study-pane-${kind}`);
@@ -115,11 +99,8 @@
       }
       lastActive = kind;
     };
-    new MutationObserver(muts => {
-      if (muts.some(m => m.attributeName === 'aria-pressed')) place(true);
-      else place(false);
-    }).observe(host, { subtree: true, childList: true, attributes: true, attributeFilter: ['aria-pressed'] });
-    window.addEventListener('resize', () => place(false));
+    new MutationObserver(muts => slide(muts.some(m => m.attributeName === 'aria-pressed')))
+      .observe(host, { subtree: true, childList: true, attributes: true, attributeFilter: ['aria-pressed'] });
   }
 
   // ---------- 5. 展開區塊平滑 ----------

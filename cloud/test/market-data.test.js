@@ -34,7 +34,7 @@ function raw() {
         method: { lines: "規則", subset_near_low: "0.3%" },
         samples: [{ key: "all_events", label: "全部" }],
         results: { all_events: { event_count: 5, reliability: "r", next_day_outcomes: { sample_count: 5, counts: { stand_back: 1, between: 2, continue_break: 2 }, percent: { stand_back: 20, between: 40, continue_break: 40 } }, five_day_return: { secret: 1 } } },
-        as_of: { date: "d", close: 1, high: 2, low: 0, open: 1, previous_low: 1, previous_close: 1, default_sample: "all_events", features: { close_position: 0.7, foreign_net: -9 }, atr20: 5, historical_assessment: "內部" },
+        as_of: { date: "d", close: 1, high: 2, low: 0, open: 1, previous_low: 1, previous_close: 1, default_sample: "all_events", upper: 2, lower: 0.5, features: { close_position: 0.7, foreign_net: -9 }, atr20: 5, historical_assessment: "內部" },
         limitations: ["l"],
       },
     },
@@ -108,6 +108,9 @@ test("總覽保留畫面計算需要的完整序列（日K、法人、籌碼）�
   assert.deepEqual(A.indicators.parameters.macd, { fast: 12, slow: 26, signal: 9 });
   assert.deepEqual(A.backtest.results.all_events.next_day_outcomes.counts, { stand_back: 1, between: 2, continue_break: 2 });
   assert.equal(A.backtest.as_of.features.close_position, 0.7);
+  // 收復線、防守線每天照規則算在回測的截止日資料裡：要帶給畫面（首頁不再等人寫的劇本才有線，本人 2026-11-15）；其餘內部欄位照舊不給
+  assert.deepEqual([A.backtest.as_of.upper, A.backtest.as_of.lower, A.backtest.as_of.default_sample], [2, 0.5, "all_events"]);
+  assert.ok(!("atr20" in A.backtest.as_of) && !("historical_assessment" in A.backtest.as_of) && !("previous_close" in A.backtest.as_of));
   assert.equal(A.meta.cutoff_date, "2026-03-10");
   assert.equal(o.chips.foreign.length, 25);
   assert.equal(o.chips.margin[0].short_units, 10);

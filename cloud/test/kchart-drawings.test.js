@@ -2210,7 +2210,8 @@ test("輸入框開著時點圖上別處就是確定：寫的字留下，那一�
   assert.equal(chart.view.end, end);
   assert.deepEqual(changes.map(change => change.drawing.text), ["突破前高", "第二則"]);
   tap(250, 250);
-  assert.equal(chart.selection, 70);
+  // 照常處理了這一下：第 70 根本來就選著，同一根再點一次是取消（本人 11-15；設計分支合併 main 時改的預期）
+  assert.equal(chart.selection, -1);
 
   // 沒寫內容就點別處：不留東西。
   chart.setTool("text");

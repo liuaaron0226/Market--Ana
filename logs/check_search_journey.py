@@ -28,11 +28,26 @@ FROZEN_AS_OF = "2026-11-06"
 SHOT_DIR = ROOT / ".tmp/lane-A3"
 
 
-def goto_home(page: Page, base_url: str) -> None:
-    """首頁會管理行情輪詢，導航只等 DOM；真正可操作狀態用顯式 ready seam 判斷。"""
+def goto_home(page: Page, base_url: str, search: bool = True) -> None:
+    """首頁會管理行情輪詢，導航只等 DOM；真正可操作狀態用顯式 ready seam 判斷。
+
+    11-14 起搜尋收在右上角的放大鏡後面（浮起的面板）。要操作搜尋的檢查先把面板打開；
+    面板開著時點不到首頁其他地方，要看首頁區塊的檢查傳 search=False。
+    """
     page.goto(f"{base_url}/minimal.html", wait_until="domcontentloaded")
     page.wait_for_function("window.MinimalApp && window.MinimalApp.ready")
-    page.locator("#stockSearchForm").wait_for(state="visible")
+    if search:
+        page.locator("#searchToggle").click()
+        page.locator("#stockSearchForm").wait_for(state="visible")
+    else:
+        page.locator("#homeCats").wait_for(state="visible")
+
+
+def open_cat(page: Page, cat: str) -> None:
+    """首頁的籌碼與資金、籌碼選股、產業資金流向、長期核心持有預設是收著的；點分類鍵展開（已開著就不動）。"""
+    button = page.locator(f"#homeCats button[data-cat='{cat}']")
+    if button.get_attribute("aria-expanded") != "true":
+        button.click()
 
 
 class SearchJourneyHandler(live_server.Handler):
@@ -138,7 +153,8 @@ def check_shell(page: Page, base_url: str) -> dict[str, object]:
     assert search.get_attribute("type") == "search"
     assert page.locator("#stockSearchClear").is_visible()
     page.wait_for_function("document.querySelector('#chipScreens').dataset.state !== 'loading'")
-    assert page.locator("#marketScreens").is_visible()
+    # 選股看板預設收在分類鍵後面：四顆鍵都在，而且都還沒展開。
+    assert page.locator("#homeCats button[aria-expanded='false']").count() == 4
     return {
         "input_type": search.get_attribute("type"),
         "home_screens_visible": True,
@@ -401,7 +417,8 @@ def check_home_screens_journey(page: Page, base_url: str, server, width: int) ->
     """首頁三區塊：籌碼選股（可算／定義未公開／無合法來源）、產業資金流向、長期核心持有；名單可點入個股頁。"""
     result: dict[str, object] = {}
     server.screen_root = SCREEN_ROOTS["real"]
-    goto_home(page, base_url)
+    goto_home(page, base_url, search=False)
+    open_cat(page, "screens")
     assert wait_block(page, "chipScreens") in {"ok", "partial"}
     tabs = page.locator("#chipScreenTabs [role=tab]").all_inner_texts()
     assert tabs[:4] == ["外資淨買超排行", "投信淨買超排行", "外資連續淨買超", "投信連續淨買超"], tabs
@@ -428,17 +445,25 @@ def check_home_screens_journey(page: Page, base_url: str, server, width: int) ->
     click_and_wait(page, page.locator('#chipScreenDays button[data-days="1"]'))
     result["foreign_1d_top5"] = first_codes
 
+    open_cat(page, "rotation")
     assert wait_block(page, "rotationBlock") == "ok"
     assert page.locator("#rotationMeta").inner_text() == "資料日 2026-11-06"
-    legend = page.locator("#rotationLegend").inner_text()
+    # 11-14 起象限泡泡圖與四色圖例換成資金地形：每個產業一棟樓，四個街區各標資金狀態的名稱。
+    grounds = page.locator("#rotationTerrain .terrain-ground-label").all_text_contents()
     for label in ("資金領先", "資金減速", "資金回補", "資金落後"):
-        assert label in legend, legend
-    assert page.locator("#rotationChart circle").count() >= 30
+        assert label in grounds, grounds
+    assert page.locator("#rotationTerrain .terrain-tower").count() >= 30
     assert page.locator("#rotationEfficiency li").count() == 5
     assert page.locator("#rotationRecovery li").count() >= 1
-    page.locator("#rotationChart circle").last.hover()
-    assert page.locator("#rotationChart .chart-tip").is_visible()
+    # 排行與回溫訊號收在面板裡（上面兩行數的是面板裡的列，面板沒開也數得到）。用鍵盤選一棟樓，要出現它的明細。
+    tower = page.locator("#rotationTerrain .terrain-tower").first
+    tower.focus()
+    page.keyboard.press("Enter")
+    assert tower.get_attribute("aria-pressed") == "true"
+    assert "今日成交額" in page.locator("#rotationTerrain .terrain-detail").inner_text()
+    page.keyboard.press("Escape")
 
+    open_cat(page, "core")
     assert wait_block(page, "coreHoldings") == "ok"
     cards = page.locator("#coreCards .core-card").all_inner_texts()
     assert "0050" in cards[0] and "基準" in cards[0], cards
@@ -465,12 +490,14 @@ def check_home_screens_journey(page: Page, base_url: str, server, width: int) ->
     page.mouse.move(0, 0)
     page.screenshot(path=str(SCREEN_DIR / f"home-screens-{width}.png"), full_page=True)
 
-    body_text = page.locator("#marketScreens").inner_text()
+    # 三個區塊一次只展開一個，收起來的讀不到畫面文字，所以用 text_content 把三塊都掃過。
+    body_text = page.locator("#marketScreens").text_content() or ""
     for banned in BANNED_UI_WORDS:
         assert banned not in body_text, banned
     result["banned_words_absent"] = True
 
     # R1＋V2：相對低位階已可計算（發布時注入族群與乖離），首頁不再顯示「定義未公開」。
+    open_cat(page, "screens")
     state = click_and_wait(page, page.locator("#chipScreenTabs [role=tab]", has_text="資金流入族群・相對低位階"))
     assert state in {"ok", "partial"}, state
     assert page.locator(ROW).count() == 5
@@ -492,10 +519,12 @@ def check_home_screens_journey(page: Page, base_url: str, server, width: int) ->
     streak_value = page.locator("#chipScreenList .screen-value").first.inner_text()
     assert "天" in streak_value, streak_value
 
+    # 11-14 本人定案：搜尋改在浮起的面板裡，「搜尋框有字時選股看板讓位」的行為取消。
+    # 搜尋框留著字關掉面板，籌碼選股要照樣看得到。
+    page.locator("#searchToggle").click()
     page.locator("#stockSearchInput").fill("2330")
-    page.wait_for_function("document.querySelector('#marketScreens').hidden === true")
-    page.locator("#stockSearchClear").click()
-    assert page.locator("#marketScreens").is_visible()
+    page.keyboard.press("Escape")
+    assert page.locator("#chipScreenList").is_visible()
 
     target = page.locator("#chipScreenList a").first.get_attribute("data-code")
     page.locator("#chipScreenList a").first.click()
@@ -516,7 +545,8 @@ def check_home_screens_journey(page: Page, base_url: str, server, width: int) ->
     assert result["non_member_6168_card_count"] == 0
 
     server.screen_root = SCREEN_ROOTS["not_ready"]
-    goto_home(page, base_url)
+    goto_home(page, base_url, search=False)
+    open_cat(page, "screens")
     assert wait_block(page, "chipScreens") == "not_ready"
     assert "尚未就緒" in page.locator("#chipScreenStatus").inner_text()
     assert wait_block(page, "rotationBlock") == "not_ready"

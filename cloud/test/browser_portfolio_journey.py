@@ -42,24 +42,31 @@ with tempfile.TemporaryDirectory() as temp:
             page = browser.new_page(viewport={"width": 1440, "height": 900}, reduced_motion="reduce")
             page.set_default_timeout(60_000)
             page.on("pageerror", lambda error: report["errors"].append(str(error)))
-            page.on("dialog", lambda dialog: dialog.accept())
             page.goto(base + "/portfolio.html", wait_until="networkidle")
 
-            page.locator("#watchCode").fill("2330")
-            page.locator("#watchHorizon").select_option("short")
-            page.locator("#watchlistForm button[type=submit]").click()
-            page.get_by_text("2330 台積電").wait_for()
-            page.locator("#watchCode").fill("0050")
-            page.locator("#watchHorizon").select_option("long")
-            page.locator("#watchlistForm button[type=submit]").click()
-            page.get_by_text("0050 元大台灣50").wait_for()
+            # 自選與庫存併成一份清單（2026-11-16，同日改成手勢版）：新增收在「＋」裡（一格代號、兩顆鍵），存好會自己收回去；
+            # 一檔一列，認 data-code。短期／長期在加入之後點開那一檔才標。
+            def add_watch(code, horizon, word):
+                page.locator("#addToggle").click()
+                page.locator("#addCode").fill(code)
+                page.locator("#addWatch").click()
+                row = page.locator(f"#holdingRows .hv-row[data-code='{code}']")
+                row.wait_for()
+                row.locator(".hv-open").click()
+                row.locator(f".pf-horizon .cell[data-horizon='{horizon}']").click()
+                page.wait_for_function("([code, word]) => document.querySelector(`#holdingRows .hv-row[data-code='${code}'] .hv-name em`)?.textContent === word", arg=[code, word])
 
-            page.locator("#holdingCode").fill("1101")
+            add_watch("2330", "short", "短期")
+            add_watch("0050", "long", "長期")
+
+            page.locator("#addToggle").click()
+            page.locator("#addHolding").click()
+            page.locator("#addCode").fill("1101")
             page.locator("#holdingShares").fill("2000")
             page.locator("#holdingCost").fill("35")
             page.locator("#holdingNote").fill("長期觀察")
-            page.locator("#holdingForm button[type=submit]").click()
-            page.get_by_text("1101 台泥").wait_for()
+            page.locator("#saveHolding").click()
+            page.locator("#holdingRows .hv-row[data-code='1101']").wait_for()
             holding_text = page.locator("#holdingRows").inner_text()
             assert "10,000" in holding_text and "+14.29%" in holding_text, holding_text
             assert "不在本站分析範圍" in holding_text
@@ -72,6 +79,8 @@ with tempfile.TemporaryDirectory() as temp:
             page.goto(base + "/minimal.html", wait_until="networkidle")
             page.wait_for_timeout(500)
             assert not report["errors"], report["errors"]
+            # 11-14 起首頁的搜尋收在右上角的放大鏡後面，點了才出現（打開時游標就在輸入框）。
+            page.locator("#searchToggle").click()
             page.locator("#stockSearchInput").fill("2330")
             page.locator('#stockSearchForm button[type="submit"]').click()
             search_result = page.locator('#stockSearchResults a[data-code="2330"]')
@@ -79,7 +88,7 @@ with tempfile.TemporaryDirectory() as temp:
             search_result.click()
             page.wait_for_url("**/stock.html?code=2330")
             page.goto(base + "/minimal.html", wait_until="networkidle")
-            page.locator("#stockSearchInput").focus()
+            page.locator("#searchToggle").click()
             page.locator("#stockSearchSuggestions").wait_for(state="visible")
             page.locator(".stock-suggest-head h3").nth(2).wait_for()
             headings = page.locator(".stock-suggest-head h3").all_text_contents()
@@ -90,7 +99,7 @@ with tempfile.TemporaryDirectory() as temp:
 
             page.route("**/api/screens**", lambda route: route.abort())
             page.goto(base + "/minimal.html", wait_until="networkidle")
-            page.locator("#stockSearchInput").focus()
+            page.locator("#searchToggle").click()
             page.locator(".stock-suggest-head h3").nth(2).wait_for()
             assert "2330 台積電" in page.locator(".stock-suggest-group").nth(0).inner_text()
             assert "系統短期名單暫時無法讀取" in page.locator(".stock-suggest-group").nth(1).inner_text()
@@ -103,9 +112,12 @@ with tempfile.TemporaryDirectory() as temp:
             page.goto(base + "/portfolio.html", wait_until="networkidle")
             assert page.evaluate("document.documentElement.scrollWidth - innerWidth") == 0
             page.screenshot(path=str(OUT / "portfolio-375.png"), full_page=True)
-            page.get_by_label("從自選股刪除 2330 台積電").click()
-            page.get_by_text("2330 台積電").wait_for(state="detached")
-            assert "2330 台積電" not in page.locator("#watchlistRows").inner_text()
+            # 移出自選在那一列向左滑才有；這裡用鍵盤把它滑出來（在那一列上按 ←）
+            page.locator("#holdingRows .hv-row[data-code='2330'] .hv-open").focus()
+            page.keyboard.press("ArrowLeft")
+            page.locator("#holdingRows .hv-row[data-code='2330'] .swipe-act[data-act='unwatch']").click()
+            page.locator("#holdingRows .hv-row[data-code='2330']").wait_for(state="detached")
+            assert page.locator("#holdingRows .hv-row[data-code='2330']").count() == 0
             report["checks"].append("mobile-375:no-overflow:delete-watchlist")
             browser.close()
     finally:

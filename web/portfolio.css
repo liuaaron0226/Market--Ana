@@ -20,10 +20,9 @@
 .pf-brand svg { width: 20px; height: 20px; }
 .pf :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-.pf-title-row { display: flex; justify-content: space-between; align-items: end; gap: 24px; padding: 48px 0 32px; }
-.pf-title-row h1 { font: 600 36px/1.15 var(--serif); letter-spacing: .01em; }
-.pf-title-row > div > p { margin-top: 10px; color: var(--dim); font-size: 15px; }
-.pf-freshness { color: var(--faint); font: 12px var(--mono); }
+.pf-title-row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 6px 16px; padding: 24px 0 16px; }
+.pf-title-row h1 { font: 600 26px/1.15 var(--serif); letter-spacing: .01em; }
+.pf-freshness { color: var(--faint); font: 12px var(--mono); white-space: nowrap; }
 
 .pf-level { margin-bottom: 40px; padding: 24px 0; border-top: 1px solid var(--ink); }
 .pf-level-head { display: flex; align-items: end; justify-content: space-between; gap: 24px; }
@@ -59,69 +58,32 @@
 .pf-score-grid p { margin-top: 6px; color: var(--faint); font-size: 12px; line-height: 1.5; }
 .pf-level-warning { margin-top: 14px; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--gold) 45%, var(--hair)); border-radius: var(--btn-r); color: var(--gold); font-size: 13px; }
 
-.pf-summary { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 32px; padding: 24px 0; border-top: 1px solid var(--ink); border-bottom: 1px solid var(--hair); }
-.pf-summary h2 { font: 600 18px var(--serif); }
-.pf-summary > div > p { margin-top: 6px; color: var(--faint); font-size: 12px; }
-.pf-summary dl { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; }
-.pf-summary dl div { padding: 0 20px; border-left: 1px solid var(--hair); }
-.pf-summary dt { color: var(--faint); font-size: 12px; }
-.pf-summary dd { margin: 8px 0 0; color: var(--ink); font: 500 22px var(--mono); font-variant-numeric: tabular-nums; }
-.pf-summary dd.up { color: var(--up); }
-.pf-summary dd.down { color: var(--down); }
+.pf-summary { padding: 0 0 24px; border-bottom: 1px solid var(--hair); }
 
-.pf-section { padding: 48px 0 0; }
-.pf-section + .pf-section { margin-top: 24px; }
-.pf-section-head { display: flex; align-items: end; justify-content: space-between; gap: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--ink); }
-.pf-section-head h2 { font: 600 22px var(--serif); }
-.pf-section-head p { margin-top: 6px; color: var(--dim); font-size: 13px; }
-.pf-section-head > span { flex: none; color: var(--faint); font: 12px var(--mono); }
 
 .pf-form { display: grid; gap: 12px; align-items: end; padding: 20px 0; border-bottom: 1px solid var(--hair); }
-.pf-watch-form { grid-template-columns: minmax(160px, 1fr) minmax(150px, 220px) auto; }
-.pf-holding-form { grid-template-columns: minmax(120px, .7fr) minmax(120px, .7fr) minmax(140px, .8fr) minmax(200px, 1.4fr) auto; }
 .pf-form label { display: grid; gap: 8px; color: var(--dim); font-size: 13px; }
-.pf-form input, .pf-form select, .pf-form button, .pf-row button, .pf-row select {
+.pf-form input, .pf-form select, .pf-form button {
   min-height: 44px; border: 1px solid var(--hair); border-radius: var(--btn-r); font: 14px var(--sans);
 }
-.pf-form input, .pf-form select, .pf-row select { width: 100%; padding: 0 12px; background: var(--panel); color: var(--ink); }
+.pf-form input, .pf-form select { width: 100%; padding: 0 12px; background: var(--panel); color: var(--ink); }
 .pf-form input { font-size: 16px; }
 .pf-form button {
   padding: 0 18px; border-color: var(--ink); background: var(--ink); color: var(--bg); font-weight: 500; cursor: pointer;
   transition: background-color 160ms var(--ease-out), transform 120ms var(--ease-out);
 }
 .pf-form button:hover { background: color-mix(in srgb, var(--ink) 86%, var(--bg)); }
-.pf-form button:active, .pf-row button:active { transform: var(--press); }
+.pf-form button:active { transform: var(--press); }
 .pf-form button:disabled { opacity: .55; cursor: wait; }
 .pf-form-status { min-height: 20px; padding: 8px 0 0; color: var(--faint); font-size: 12px; }
 .pf-form-status[data-state="error"] { color: var(--up); }
 .pf-form-status[data-state="success"] { color: var(--down); }
 
-.pf-list { border-top: 1px solid var(--hair); }
-.pf-row { min-height: 68px; display: grid; align-items: center; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--hair); }
-.pf-watch-row { grid-template-columns: minmax(200px, 1fr) 160px auto; }
-.pf-watch-row.has-watch { grid-template-columns: minmax(200px, 1fr) auto 160px auto; }
 .pf-watch-toggle { min-height: 44px; display: inline-flex; align-items: center; gap: 8px; padding: 0 4px; color: var(--dim); font-size: 14px; cursor: pointer; }
 .pf-watch-toggle input { width: 20px; height: 20px; margin: 0; accent-color: var(--accent); cursor: pointer; }
 .pf-watch-toggle:has(input:checked) { color: var(--ink); }
 .pf-watch-toggle.is-dim { opacity: .45; }
 .pf-row-note { grid-column: 1 / -1; margin: 0; color: var(--up); font-size: 13px; line-height: 1.5; }
-.pf-holding-row { grid-template-columns: minmax(180px, 1.25fr) repeat(4, minmax(105px, .8fr)) minmax(120px, 1fr) auto; }
-.pf-stock { min-width: 0; }
-.pf-stock a { color: var(--ink); font: 600 15px var(--sans); text-decoration: none; }
-.pf-stock a:hover { color: var(--accent); }
-.pf-stock small, .pf-cell small { display: block; margin-top: 4px; color: var(--faint); font-size: 12px; line-height: 1.4; }
-.pf-cell { min-width: 0; text-align: right; }
-.pf-cell strong { display: block; color: var(--ink); font: 500 14px var(--mono); font-variant-numeric: tabular-nums; }
-.pf-cell strong.up { color: var(--up); }
-.pf-cell strong.down { color: var(--down); }
-.pf-note { text-align: left; overflow-wrap: anywhere; }
-.pf-row select { min-width: 0; }
-.pf-row .pf-delete {
-  width: 44px; padding: 0; background: transparent; color: var(--up); cursor: pointer;
-  transition: background-color 160ms var(--ease-out), transform 120ms var(--ease-out);
-}
-.pf-row .pf-delete:hover { background: color-mix(in srgb, var(--up) 8%, transparent); }
-.pf-empty { padding: 24px 0; color: var(--dim); font-size: 14px; border-bottom: 1px solid var(--hair); }
 .pf-scope { display: inline-block; margin-top: 5px; color: var(--faint); font-size: 12px; }
 .pf-scope.outside { color: var(--gold); }
 .pf-ai { margin-top: 10px; padding-left: 10px; border-left: 2px solid var(--accent); }
@@ -129,22 +91,260 @@
 .pf-ai p { margin-top: 4px; color: var(--dim); font-size: 12px; line-height: 1.5; }
 .pf-ai-empty { border-left-color: var(--hair); }
 
-@media (max-width: 980px) {
-  .pf-holding-form { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .pf-note-field { grid-column: 1 / 3; }
-  .pf-holding-row { grid-template-columns: minmax(180px, 1.2fr) repeat(2, minmax(110px, .8fr)) auto; }
-  .pf-holding-row .pf-secondary { grid-row: 2; }
-  .pf-holding-row .pf-note { grid-column: 1 / 4; grid-row: 2; }
-  .pf-holding-row .pf-delete { grid-column: 4; grid-row: 1 / 3; }
+/* ---------- 庫存總覽：一列一檔（立體重設計，本人 2026-11-15 定案的 ③） ----------
+   總數一行 → 一列一檔（照市值由大到小）：名稱 → 橫條（整條的寬度是全部庫存的市值；灰的是成本、紅的是賺的那一段；
+   賠錢時灰的是現在的市值、綠的是還差成本的那一段）→ 報酬率 → 點那一檔才看金額與備註。只呈現現況。
+   高低就是賺賠：賺的那一列浮起、賠的凹下、打平或沒有價格是薄的。每一列的材質（玻璃）與它的陰影在下面「材質」那一段。
+   每一列的高低、箭頭與展開的高度在 bold.css（.depth-row .on-page）。
+   算法在 holdings-rows.js，畫面在 portfolio.js。本人定的樣品：design-previews/3d-redesign/pro-samples/holdings-overview.html */
+.pf-summary .hv-total { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; margin: 0 0 16px; color: var(--dim); font: 13px var(--sans); }
+.hv-total strong { color: var(--ink); font: 500 26px var(--mono); font-variant-numeric: tabular-nums; }
+.hv-total b { color: var(--ink); font: 400 13px var(--mono); font-variant-numeric: tabular-nums; }
+.hv-total b.up, .hv-ret.up, .hv-facts b.up { color: var(--up); }
+.hv-total b.down, .hv-ret.down, .hv-facts b.down { color: var(--down); }
+
+.pf-summary .hv-rows { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+
+.hv-top { position: relative; display: grid; grid-template-columns: 88px minmax(0, 1fr) 72px 12px; align-items: center; column-gap: 10px; min-height: 48px; padding: 5px 12px; border-radius: inherit; }
+.hv-name { display: grid; gap: 1px; min-width: 0; white-space: nowrap; }
+.hv-name strong { color: var(--ink); font: 650 14px var(--sans); overflow: hidden; text-overflow: ellipsis; }
+.hv-name span { color: var(--faint); font: 11px var(--mono); }
+.hv-ret { color: var(--dim); text-align: right; font: 14px var(--mono); font-variant-numeric: tabular-nums; }
+
+/* 橫條：長度與分段在這裡；材質（玻璃管、金屬、液態玻璃）在下面「材質」那一段 */
+.hv-bar { position: relative; display: flex; align-items: center; min-width: 0; height: 20px; overflow: hidden; }
+.hv-bar::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 1px; margin-top: -.5px; background: var(--line); }
+.hv-bar i { position: relative; flex: none; height: 8px; width: calc(var(--w) * 1%); min-width: 2px; transform-origin: left; background: var(--faint); }
+.hv-bar .gain { background: var(--up); }
+.hv-bar .lack { background: var(--down); }
+
+
+/* ---------- 自選與庫存併成一份清單（本人 2026-11-16；同日改成手勢版） ----------
+   總數一行 → 一排鍵（全部／庫存／自選，共用的分類鍵）＋「＋」→ 一檔一列。
+   點名稱進個股頁，點那一列其他地方展開；向左滑露出修改、移出自選、刪除。
+   只在自選的那幾列沒有橫條，右邊寫群組；按「自選」時照群組分段，群組的名稱點了可以改。 */
+.pf-tools { display: flex; align-items: stretch; gap: 8px; margin-bottom: 12px; }
+/* 共用的分類鍵上面有留白（首頁、個股頁用得到）；這裡和「＋」排成一排，要用 id 才蓋得過共用的規則 */
+#listFilter { flex: 1; margin-top: 0; }
+.pf-tools .hm-cats small { margin-left: 4px; font: 400 12px var(--mono); color: var(--faint); }
+.pf-add {
+  flex: none; width: 50px; min-height: 50px; display: grid; place-items: center; border: 0; border-radius: var(--r-track);
+  background: var(--key); color: var(--ink); box-shadow: var(--key-shadow); cursor: pointer;
+  transition: transform var(--t-press) linear, box-shadow var(--t-press) linear;
+}
+.pf-add svg { width: 20px; height: 20px; transition: transform 220ms var(--ease-depth); }
+.pf-add:active { transform: translateY(calc(var(--key-thick) - 1px)); box-shadow: var(--key-shadow-press); }
+.pf-add[aria-expanded="true"] { background: var(--well); box-shadow: var(--well-shadow); }
+.pf-add[aria-expanded="true"] svg { transform: rotate(45deg); }
+.pf-add:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.pf-add-panel { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 320ms var(--ease-depth); }
+.pf-add-panel.is-open { grid-template-rows: 1fr; }
+.pf-add-clip { min-height: 0; overflow: hidden; }
+/* 收著的時候整個看不到（不只是高度 0）：收合的動態播完才藏，展開時馬上出現 */
+.pf-add-panel:not(.is-open) .pf-add-clip { visibility: hidden; transition: visibility 0s linear 320ms; }
+.pf-add-in { padding: 4px 2px 12px; }
+/* 「＋」：一格代號、兩顆鍵；按「新增庫存」才多出股數、平均成本、備註。就地修改（.pf-edit）用同一種排法 */
+.pf-add-form, .pf-edit { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 4px 0 0; border-bottom: 0; }
+.pf-add-form > label:first-child, .pf-form .pf-wide, .pf-add-form .pf-form-status { grid-column: 1 / -1; }
+.pf-add-more { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.pf-add-more[hidden] { display: none; }
+.pf-form button.pf-ghost { border-color: var(--line); background: transparent; color: var(--ink); }
+.pf-form button.pf-ghost:hover { background: color-mix(in srgb, var(--ink) 8%, transparent); }
+.pf-form button.pf-ghost[aria-expanded="true"] { border-color: transparent; background: var(--well); box-shadow: var(--well-shadow); }
+.pf-form-status:empty { display: none; }
+/* 清單上面那一行：結果，以及可以還原時的「還原」 */
+.pf-list-status { display: flex; align-items: center; gap: 12px; padding: 0 0 12px; }
+.pf-undo { position: relative; min-height: 36px; padding: 0 14px; border: 1px solid var(--line); border-radius: var(--btn-r); background: none; color: var(--ink); font: 600 13px var(--sans); cursor: pointer; }
+.pf-undo::before { content: ""; position: absolute; inset: -5px; }   /* 觸控範圍補到 44px 左右 */
+.pf-undo:hover { background: color-mix(in srgb, var(--ink) 8%, transparent); }
+.pf-undo:disabled { opacity: .55; cursor: wait; }
+.pf-undo:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+
+/* 一列：名稱（連到個股頁）疊在鋪滿整條的展開鍵（.hv-open）上面，其他的字與橫條不擋點擊 */
+.hv-open { position: absolute; inset: 0; z-index: 0; border: 0; border-radius: inherit; background: none; cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+.hv-open:focus-visible { outline: 2px solid var(--gold); outline-offset: -2px; }
+.hv-top > :not(.hv-open) { position: relative; z-index: 1; pointer-events: none; }
+.hv-top > a.hv-name { justify-self: start; max-width: 100%; pointer-events: auto; color: inherit; text-decoration: none; -webkit-touch-callout: none; }
+.hv-top > a.hv-name::after { content: ""; position: absolute; inset: -8px -10px; }   /* 觸控範圍補大 */
+.hv-top > a.hv-name:focus-visible { outline: 2px solid var(--gold); outline-offset: 4px; border-radius: var(--r-tag); }
+/* 浮起的那幾列按下去會沉：共用的規則認的是列裡第一層的按鈕，這裡的展開鍵在裡面一層 */
+.hv-row[data-state="bull"]:has(.hv-open:active) { transform: translateY(calc(var(--key-thick) - 1px)); box-shadow: var(--key-shadow-press); }
+.pf-only-watch .hv-top { grid-template-columns: minmax(0, 1fr) auto 12px; }
+/* 關注中的那幾檔：判斷那一行（watch-judgments.css）排在名稱下面、整條寬；金屬板的反光跟著這一列變高 */
+.hv-top > .wj-line { grid-column: 1 / -1; margin: 0 0 2px; }
+#holdingRows .hv-row.has-judgment { --plate-h: 74px; }
+.pf-tag { color: var(--dim); font: 12px var(--sans); white-space: nowrap; }
+.hv-name > span { overflow: hidden; text-overflow: ellipsis; }
+.hv-name em { margin-left: 6px; color: var(--faint); font: 400 11px var(--sans); font-style: normal; }
+
+/* 向左滑露出動作（程式在 swipe-rows.js）：動作是平的色塊，墊在上面那一條下面；那一條滑開才露出來。
+   平常那一條是透明的（列本身的底色與陰影照常），滑動與滑開的時候才鋪上底色把動作蓋住 */
+.swipe-clip { position: relative; overflow: hidden; border-radius: inherit; }
+.swipe-face { --face: var(--bg); touch-action: pan-y; -webkit-user-select: none; user-select: none; cursor: default; transition: transform 320ms var(--ease-depth), background-color 0s linear 320ms; }
+.swipe-row[data-state="bull"] .swipe-face { --face: var(--row-up); }
+.swipe-row[data-state="bear"] .swipe-face { --face: var(--row-down); }
+.swipe-row:is(.is-dragging, .is-swiped) .swipe-face { background-color: var(--face); transition: transform 320ms var(--ease-depth); }
+.swipe-row.is-dragging .swipe-face { transition: none; }
+.swipe-acts { position: absolute; inset: 0 0 0 auto; display: flex; visibility: hidden; transition: visibility 0s linear 320ms; }
+.swipe-row:is(.is-dragging, .is-swiped) .swipe-acts { visibility: visible; transition: none; }
+.swipe-act { width: 64px; padding: 0 4px; border: 0; border-left: 1px solid var(--hair); background: var(--well); color: var(--ink); font: 500 13px/1.25 var(--sans); cursor: pointer; }
+.swipe-act span { display: block; }
+/* 把這一檔拿掉的那一顆是紅色的（本人指定刪除要紅色；只在自選的那一列是「移出」，助手照同一個意思類推）。
+   紅色在這個站是漲的顏色，這裡是唯一用在按鈕上的地方 */
+.swipe-act.is-danger { border-left-color: color-mix(in srgb, var(--bg) 35%, transparent); background: var(--up); color: var(--bg); font-weight: 700; }
+.swipe-act:focus-visible { outline: 2px solid var(--gold); outline-offset: -3px; }
+/* 「⋯」：按了把動作滑出來。滑鼠沒有滑動的手勢，游標移到那一列它才出現在右邊；
+   觸控的畫面上看不到它（用滑的），但留在頁面裡縮成一個點，螢幕報讀與外接鍵盤才找得到、按得到 */
+.hv-top > .swipe-more { position: absolute; right: 8px; top: 50%; width: 1px; height: 1px; padding: 0; border: 0; overflow: hidden; clip-path: inset(50%); background: none; color: var(--faint); font: 700 16px var(--sans); white-space: nowrap; pointer-events: auto; }
+.hv-top > .swipe-more:focus-visible { width: 28px; height: 28px; translate: 0 -50%; clip-path: none; border-radius: var(--r-key); background: var(--well); outline: 2px solid var(--gold); outline-offset: 2px; }
+@media (hover: hover) and (pointer: fine) {
+  .hv-top { padding-right: 44px; }
+  .hv-top > .swipe-more { translate: 0 -50%; display: grid; place-items: center; width: 28px; height: 28px; clip-path: none; border-radius: var(--r-key); cursor: pointer; opacity: 0; transition: opacity 160ms linear; }
+  .hv-row:hover .swipe-more, .swipe-more:focus-visible, .hv-row.is-swiped .swipe-more { opacity: 1; }
+  .swipe-more:hover { background: var(--well); color: var(--ink); }
+  .swipe-more:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+  a.hv-name:hover strong { text-decoration: underline; text-underline-offset: 3px; }
+}
+
+/* 點開之後：自選的設定——群組小鍵（小鍵與選單是 K 線上那一套，chart-studies.css）、短期／長期三選一、關注開關 */
+.pf-set { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; }
+.hv-facts ~ .pf-set, .hv-note ~ .pf-set { padding-top: 12px; border-top: 1px solid var(--hair); }
+.pf-pop { position: relative; display: inline-flex; }
+.pf-group-chip b { color: var(--dim); font-weight: 600; max-width: 9em; overflow: hidden; text-overflow: ellipsis; }
+.pf-group-menu { left: 0; right: auto; flex-direction: column; flex-wrap: nowrap; align-items: stretch; min-width: 148px; transform-origin: 20% 0; }
+.pf-group-menu button { min-height: 40px; padding: 0 12px; border: 0; border-radius: var(--r-key); background: transparent; color: var(--ink); font: 500 14px var(--sans); text-align: left; white-space: nowrap; cursor: pointer; }
+.pf-group-menu hr { width: 100%; height: 1px; margin: 4px 0; border: 0; background: var(--hair); }
+.pf-new-group { display: inline-flex; gap: 6px; }
+.pf-new-group input, .pf-rename input { width: 148px; min-height: 36px; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--r-key); background: var(--panel); color: var(--ink); font: 16px var(--sans); }
+.pf-new-group button { min-height: 36px; padding: 0 12px; border: 0; border-radius: var(--r-key); background: var(--ink); color: var(--bg); font: 600 13px var(--sans); cursor: pointer; }
+#holdingRows .pf-horizon { flex: none; justify-content: flex-start; }
+#holdingRows .pf-horizon .cell { width: 60px; max-width: 60px; min-height: 36px; }
+#holdingRows .pf-horizon .cell-name { font: 500 13px var(--sans); color: var(--ink); }
+.pf-set .pf-watch-toggle { min-height: 36px; margin-left: auto; }
+.pf-watch-count { margin-left: 2px; color: var(--faint); font-size: 12px; }
+/* 群組的選單要能蓋到下面的列：展開完之後（is-settled）才放開裁切，開著的那一列疊在上面 */
+.hv-row.is-open { z-index: 2; }
+.hv-row.is-settled .hv-clip { overflow: visible; }
+
+/* 按「自選」時每一段的標題：群組的名稱（點了就地改名）與檔數 */
+.pf-group { display: flex; align-items: baseline; gap: 8px; margin-top: 10px; padding: 0 2px; }
+.pf-group:first-child { margin-top: 0; }
+.pf-group-name, .pf-group-word { padding: 4px 0; border: 0; background: none; color: var(--dim); font: 600 13px var(--sans); }
+.pf-group-name { position: relative; cursor: pointer; }
+.pf-group-name::before { content: ""; position: absolute; inset: -9px -12px; }   /* 觸控範圍補到 44px 左右 */
+.pf-group-name:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.pf-group small { color: var(--faint); font: 12px var(--mono); }
+@media (max-width: 760px) {
+  .pf-set .pf-watch-toggle { margin-left: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pf-add-panel, .pf-add svg, .pf-add-panel:not(.is-open) .pf-add-clip, .swipe-face, .swipe-acts { transition: none; }
+}
+
+/* ---------- 材質：金屬（本人 2026-11-16，來回調了幾輪，現在的樣子） ----------
+   金屬的做法沿用個股頁那條線本人定案的：一塊柔和的窗光、下半一點環境的反射、明暗交界是柔的，沒有紋路；每一塊光落的位置不同。
+   用在這一頁：每一列是一塊金屬板，和選中的篩選鍵、「＋」同一種金屬；總市值是金屬字；頁面後面有很淡的環境光（金色，右邊帶一點紅）。
+   損益條不用材質：沒有光澤、整段同一個顏色，底下一條很淡的凹痕標出整條的長度。陰影用網站現成的（鍵、槽）。
+   走過的路（本人的原話在 .scratch/3d-redesign/issues/O-portfolio-material.md）：每一列先是半透明的玻璃 →「太光滑了」→ 加水紋 →
+   「有點髒髒的感覺，沒有質感。可以跟按鍵與總市值的金屬感一樣看看」→ 金屬板。損益條先是玻璃管裡的金屬與液態玻璃 →「比較喜歡長方形條」→
+   「框不要太明顯」→「不要有光澤且分布均勻，不過顏色深淺要比背景更突出」→ 實色。 */
+
+/* 環境光：玻璃後面要有東西可以透。固定在畫面上、不跟著捲動（用一層固定的底，不用固定的背景圖：手機上固定的背景圖會卡） */
+body.pf::before {
+  content: ""; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background:
+    radial-gradient(70% 34% at 12% 30%, color-mix(in srgb, var(--gold) 18%, transparent), transparent 72%),
+    radial-gradient(60% 30% at 100% 46%, color-mix(in srgb, var(--up) 11%, transparent), transparent 72%),
+    radial-gradient(80% 40% at 40% 78%, color-mix(in srgb, var(--ink) 6%, transparent), transparent 72%);
+}
+.pf-shell { position: relative; z-index: 1; }
+
+/* 損益條的底：一條很淡的長方形凹痕，標出整條的長度（全部庫存的市值）。和裡面兩段一樣高，沒有框線、沒有反光（本人：「框不要太明顯」） */
+.hv-bar { height: 24px; overflow: visible; }
+.hv-bar::before { top: 50%; height: 10px; margin-top: -5px; transform-origin: left; background: rgb(var(--shade) / calc(.16 * var(--shade-k))); }   /* 進場從左邊長出來，和裡面的兩段同一邊 */
+/* 損益條的兩段：沒有光澤、整段同一個顏色（本人：「不要有光澤且分布均勻，不過顏色深淺要比背景更突出」）。
+   成本是實心的中性色（深色背景偏亮、淺色背景偏深，和金屬板拉開）；賺的是實心的紅、還差的是實心的綠。
+   最短 3px（原本 2px），不能更長：小部位的那一段才不會被撐得和別人一樣長 */
+.hv-bar i { height: 10px; min-width: 3px; }
+.hv-bar .base { background: color-mix(in srgb, var(--ink) 68%, var(--bg)); }
+.hv-bar .gain { background: var(--up); }
+.hv-bar .lack { background: var(--down); }
+
+/* 每一列是一塊金屬板，和選中的篩選鍵、「＋」同一種金屬（本人：「可以跟按鍵與總市值的金屬感一樣看看」）。
+   窗光與反射只畫在上面那一條的高度（--plate-h），點開之後下面是平的板色；每一列光落的位置不同（--mx），不會一列一列長得一樣。
+   高低照舊是賺賠，陰影就是共用的那幾組（bold.css 的 .depth-row）：賺的浮起、賠的凹下、打平與只在自選的是細框的薄板。 */
+#holdingRows .hv-row[data-state] {
+  --plate-a: color-mix(in srgb, var(--ink) 10%, var(--panel)); --plate-b: color-mix(in srgb, var(--ink) 4%, var(--panel)); --shine: 16%; --plate-h: 52px;
+  background-image:
+    radial-gradient(46% 120% at var(--mx, 28%) -30%, rgb(255 255 255 / var(--shine)) 0%, transparent 70%),
+    radial-gradient(34% 80% at calc(var(--mx, 28%) + 36%) 130%, rgb(255 255 255 / 6%) 0%, transparent 70%),
+    linear-gradient(180deg, rgb(255 255 255 / 6%) 0%, transparent 22%, transparent 54%, rgb(0 0 0 / 12%) 72%, transparent 100%),
+    linear-gradient(90deg, var(--plate-a), var(--plate-b));
+  background-size: 100% var(--plate-h), 100% var(--plate-h), 100% var(--plate-h), auto; background-repeat: no-repeat;
+}
+#holdingRows .hv-row:nth-child(4n + 2) { --mx: 58%; }
+#holdingRows .hv-row:nth-child(4n + 3) { --mx: 14%; }
+#holdingRows .hv-row:nth-child(4n) { --mx: 74%; }
+/* 賠的那一列凹下去：板色用比底色暗一階的桌面色，幾乎不反光 */
+#holdingRows .hv-row[data-state="bear"] { --plate-a: color-mix(in srgb, var(--ink) 4%, var(--desk)); --plate-b: var(--desk); --shine: 5%; }
+/* 打平、沒有價格、只在自選：薄板，反光少一點 */
+#holdingRows .hv-row:is([data-state="flat"], [data-state="none"]) { --plate-a: color-mix(in srgb, var(--ink) 7%, var(--panel)); --plate-b: color-mix(in srgb, var(--ink) 2%, var(--panel)); --shine: 9%; }
+/* 金屬板比原本的底亮一點：名稱下面的代號、群組與右邊的群組名用亮一階的字，才夠清楚 */
+#holdingRows .hv-name > span, #holdingRows .hv-name em, #holdingRows .pf-tag { color: var(--dim); }
+/* 向左滑的時候那一條要蓋住下面的動作：用這一列的板色 */
+#holdingRows .swipe-face { --face: var(--plate-b); }
+
+/* 選中的那一顆篩選鍵與「＋」是金屬鍵（光落的位置各自不同）。字照舊是墨色 */
+#listFilter button[aria-pressed="true"] small { color: var(--dim); }   /* 金屬鍵上的檔數：比平常亮一階，才夠清楚 */
+#listFilter button[aria-pressed="true"], #listFilter .slide-thumb, .pf-add:not([aria-expanded="true"]) {
+  background-image:
+    radial-gradient(46% 120% at var(--mx, 28%) -30%, rgb(255 255 255 / 22%) 0%, transparent 70%),
+    radial-gradient(34% 80% at calc(var(--mx, 28%) + 36%) 130%, rgb(255 255 255 / 8%) 0%, transparent 70%),
+    linear-gradient(180deg, rgb(255 255 255 / 8%) 0%, transparent 22%, transparent 54%, rgb(0 0 0 / 16%) 72%, rgb(0 0 0 / 5%) 100%),
+    linear-gradient(90deg, color-mix(in srgb, var(--ink) 20%, var(--panel)), color-mix(in srgb, var(--ink) 9%, var(--panel)));
+}
+.pf-add { --mx: 62%; }
+/* 總市值：金屬字。只有這一個數字，亮暗的範圍收窄，字不會糊。算不出來（寫「—」）的時候不套：那一橫會變成一塊 */
+#totalMarketValue.is-metal {
+  background: linear-gradient(180deg, var(--ink) 0%, var(--ink) 30%, color-mix(in srgb, var(--ink) 70%, var(--bg)) 58%, color-mix(in srgb, var(--ink) 96%, var(--bg)) 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+/* 系統的高對比模式會把背景拿掉、列印通常不印背景：金屬字要退回一般的字，不然看不到 */
+@media (forced-colors: active) { #totalMarketValue.is-metal { background: none; color: CanvasText; } }
+@media print { #totalMarketValue.is-metal { background: none; color: inherit; } }
+
+/* 展開：這一檔的三個數字與備註（或就地修改的表單）、自選的設定 */
+.hv-clip { min-height: 0; overflow: hidden; }
+.hv-inner { display: grid; gap: 12px; padding: 2px 12px 12px; }
+.pf-summary .hv-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 12px; margin: 0; padding: 0; list-style: none; }
+.hv-facts li { display: grid; gap: 2px; min-width: 0; }
+.hv-facts span { color: var(--faint); font: 12px var(--sans); }
+.hv-facts b { color: var(--ink); font: 400 14px var(--mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.pf-summary .hv-note { margin: 0; color: var(--dim); font: 13px/1.5 var(--sans); overflow-wrap: anywhere; }
+.hv-empty { padding: 4px 0; color: var(--dim); font-size: 14px; }
+@media (min-width: 761px) {
+  /* 寬螢幕：橫條不跟著拉到整個版面那麼長（大塊的紅綠太吵），報酬率靠右 */
+  .hv-top { grid-template-columns: 140px minmax(0, 420px) minmax(96px, 1fr) 12px; }
+}
+
+/* 進場（只播一次）：一檔一檔來。成本那一段先長出來，賺的（或還差的）那一段接著長；長完這一列才定在最後的高度 */
+@media (prefers-reduced-motion: no-preference) {
+  .hv-rows.is-entering .hv-bar::before { animation: hv-grow 460ms var(--ease-depth) both; animation-delay: var(--at); }
+  .hv-rows.is-entering .hv-bar .base { animation: hv-grow 420ms var(--ease-depth) var(--at) both; }
+  .hv-rows.is-entering .hv-bar :is(.gain, .lack) { animation: hv-grow 420ms var(--ease-depth) calc(var(--at) + 300ms) both; }
+  .hv-rows.is-entering .hv-ret { animation: hv-fade 300ms linear both; animation-delay: calc(var(--at) + 500ms); }
+  .hv-rows.is-entering .hv-row { animation: hv-row-settle 700ms var(--ease-depth) both; animation-delay: calc(var(--at) + 560ms); }
+  .hv-row.is-open .hv-facts li { animation: hv-fact-in 380ms var(--ease-depth) both; animation-delay: calc(var(--order) * 60ms + 60ms); }
+  @keyframes hv-fact-in { from { opacity: 0; translate: 0 6px; } }
+  @keyframes hv-grow { from { transform: scaleX(0); } }
+  @keyframes hv-fade { from { opacity: 0; } }
+  @keyframes hv-row-settle { from { transform: none; border-color: var(--line); background: transparent; box-shadow: none; } }
 }
 
 @media (max-width: 640px) {
   .pf-shell { padding: 0 16px 64px; }
   .pf-bar { grid-template-columns: 1fr auto; }
   .pf-brand { display: none; }
-  .pf-title-row { display: block; padding: 32px 0 24px; }
-  .pf-title-row h1 { font-size: 28px; }
-  .pf-freshness { margin-top: 12px; }
   .pf-level-head { align-items: start; }
   .pf-level-conclusion { font-size: 18px; }
   .pf-level-figures { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -153,37 +353,6 @@
   .pf-level-figures strong { font-size: 20px; overflow-wrap: anywhere; }
   .pf-cash-form { grid-template-columns: minmax(0, 1fr); gap: 8px; }
   .pf-score-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .pf-summary { grid-template-columns: minmax(0, 1fr); gap: 16px; }
-  .pf-summary dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .pf-summary dl div { padding: 12px 0; border-left: 0; }
-  .pf-summary dl div:nth-child(2n) { padding-left: 16px; border-left: 1px solid var(--hair); }
-  .pf-summary dd { font-size: 19px; }
-  .pf-section { padding-top: 36px; }
-  .pf-section-head { align-items: start; }
-  .pf-section-head p { max-width: 28em; }
-  .pf-watch-form, .pf-holding-form { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-  .pf-note-field { grid-column: 1 / -1; }
-  .pf-form button { grid-column: 1 / -1; }
-  .pf-watch-row { grid-template-columns: minmax(0, 1fr) 128px auto; gap: 8px; }
-  /* 窄螢幕：開關和刪除留在第一行，分類掉到第二行，股票名稱才不會被擠成很窄的一欄 */
-  .pf-watch-row.has-watch { grid-template-columns: minmax(0, 1fr) auto auto; }
-  .pf-watch-row.has-watch .pf-watch-toggle { grid-column: 2; grid-row: 1; }
-  .pf-watch-row.has-watch select { grid-column: 1 / 3; grid-row: 2; }
-  .pf-watch-row.has-watch .pf-delete { grid-column: 3; grid-row: 1 / 3; }
-  .pf-holding-row { grid-template-columns: minmax(0, 1fr) minmax(105px, .65fr) auto; gap: 8px 12px; padding: 16px 0; }
-  .pf-holding-row .pf-stock { grid-column: 1 / 3; }
-  .pf-holding-row .pf-delete { grid-column: 3; grid-row: 1; }
-  .pf-holding-row .pf-cell { text-align: left; }
-  .pf-holding-row .pf-secondary { grid-row: auto; }
-  .pf-holding-row .pf-note { grid-column: 1 / -1; grid-row: auto; }
-}
-
-@media (max-width: 390px) {
-  .pf-watch-form, .pf-holding-form { grid-template-columns: minmax(0, 1fr); }
-  .pf-note-field, .pf-form button { grid-column: 1; }
-  .pf-watch-row { grid-template-columns: minmax(0, 1fr) auto; }
-  .pf-watch-row select { grid-column: 1; grid-row: 2; }
-  .pf-watch-row .pf-delete { grid-column: 2; grid-row: 1 / 3; }
 }
 
 @media (prefers-reduced-motion: reduce) {
