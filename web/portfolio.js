@@ -216,7 +216,12 @@
           select.value = item.horizon;
         } finally { select.disabled = false; }
       });
-      row.append(stockIdentity(item), ...(state.watch ? [watchToggle(item, row)] : []), select, deleteButton(`從自選股刪除 ${item.code} ${item.name}`, async () => {
+      const identity = stockIdentity(item);
+      const judgments = state.watch?.judgments;
+      const judgment = judgments && state.watch.codes.has(item.code)
+        ? window.WatchJudgments.listLine(judgments.items[item.code], judgments.base_date) : null;
+      if (judgment) identity.append(judgment);
+      row.append(identity, ...(state.watch ? [watchToggle(item, row)] : []), select, deleteButton(`從自選股刪除 ${item.code} ${item.name}`, async () => {
         if (!confirm(`要從自選股刪除 ${item.code} ${item.name} 嗎？`)) return;
         try {
           await api(`/api/watchlist/${encodeURIComponent(item.code)}`, { method: 'DELETE', body: {} });
@@ -461,6 +466,8 @@
             count: payload.count, limit: payload.limit,
             codes: new Set((payload.items || []).map(item => item.code)),
             unwatchable: new Set(payload.unwatchable || []),
+            // 每一檔最新一份判斷（watch-judgments.js；E 票）。讀不到時是 null，清單照原樣。
+            judgments: window.WatchJudgments ? await window.WatchJudgments.loadList() : null,
           };
         }
       } catch (_) { /* 讀不到關注時，自選股照常顯示，只是沒有開關 */ }

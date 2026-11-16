@@ -249,6 +249,8 @@
   function applyLive(payload) {
     lastLive = payload;
     updateLiveStatus(payload);
+    // 關注股盤中觸價亮燈：沿用這一份即時報價，不另外取報價。
+    if (window.WatchJudgments) window.WatchJudgments.onLive(payload);
     if (payload?.ok && payload.market_open && payload.quote && baseResult) {
       const projected = window.Intraday.projectAnalysis(baseResult, payload);
       if (features.strategy_v1) projected.strategy = buildStrategy(projected);
@@ -387,6 +389,8 @@
     const lv = r.levels || {};
     (lv.resistance || []).forEach((c, i) => overlays.push({ value: c.tick, label: `壓力${i ? '二' : '一'} ${fmt(c.tick)}`, short: '壓力', color: css('--gold', '#94681a'), pos: 'above', align: i ? 'left' : 'right' }));
     (lv.support || []).forEach((c, i) => overlays.push({ value: c.tick, label: `支撐${i ? '二' : '一'} ${fmt(c.tick)}`, short: '支撐', color: css('--down', '#0f8058'), pos: 'below', align: i ? 'left' : 'right' }));
+    // 自選股關注的觸發線與看錯線（watch-judgments.js；只有站主有判斷時才有）。
+    if (window.WatchJudgments) overlays.push(...window.WatchJudgments.overlays(chartPeriod));
     const key = `${r.code}:${r.as_of}:${chartPeriod}`;
     const savedView = chart && key === lastChartKey ? { ...chart.view } : null;
     const shownBefore = chart ? chart.candles : [];
@@ -1124,6 +1128,11 @@
       render(data, true);
       loadHistory(data, sequence);
       loadDrawings(data.code, sequence);
+      // 自選股關注的判斷（watch-judgments.js）：只有站主、開關打開而且這一檔有判斷時才加小鍵與兩條線。
+      if (features.watchlist_watch_v1 && window.WatchJudgments) {
+        window.WatchJudgments.mount({ host: document.querySelector('.bd-chart-bar'), code: data.code,
+          onChange: () => { if (lastResult) drawChart(lastResult); }, getDaily: () => (baseResult ? dailyCandles(baseResult) : []) });
+      }
       syncTickFeed();
       if (canUseLive(data)) livePoller.start(code, data.market);
       else updateLiveStatus({ ok: true, market_open: false, live: false });
