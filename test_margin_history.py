@@ -5,9 +5,11 @@ import gzip
 import hashlib
 import io
 import json
+import sys
 import tarfile
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 import margin_history as mh
@@ -295,6 +297,148 @@ class SeedTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             mh.write_seed(self.root)
         self.assertFalse((self.root / mh.SEED).exists())
+
+
+QUOTE_FIELDS = ["證券代號", "證券名稱", "成交股數", "成交筆數", "成交金額", "開盤價", "最高價", "最低價", "收盤價"]
+
+
+def quotes(root: Path, day: str, rows: list[list[str]] | None = None, *, date: str | None = None) -> Path:
+    """模擬每日抓取存下的上市每日收盤行情原件（MI_INDEX，gzip）。"""
+    if rows is None:
+        rows = [["2330", "台積電", "44,725,218", "197,800", "99,993,671,215", "2,210.00", "2,290.00", "2,190.00", "2,235.00"],
+                ["2317", "鴻海", "1,000", "3", "250,500", "250.00", "251.00", "249.00", "250.00"],
+                ["00625K", "富邦上証+R", "0", "0", "0", "--", "--", "--", "--"]]     # 當天沒有成交
+    payload = {"stat": "OK", "date": date or day, "tables": [
+        {"title": "價格指數(臺灣證券交易所)", "fields": ["指數", "收盤指數"], "data": [["發行量加權股價指數", "40,000.00"]]},
+        {"title": "每日收盤行情(全部(不含權證、牛熊證、可展延牛熊證))", "fields": QUOTE_FIELDS, "data": rows}]}
+    path = root / "data/stock-history/raw" / day[:4] / f"MI_INDEX-{day}.json.gz"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(gzip.compress(json.dumps(payload, ensure_ascii=False).encode("utf-8")))
+    return path
+
+
+def summary(root: Path, day: str) -> Path:
+    """長期保存區裡那一天的行情摘要。"""
+    return root / "data/margin-history/prices" / f"prices-{day}.json"
+
+
+class PriceSummaryTest(unittest.TestCase):
+    """融資維持率（估）每天從起點重播，新買進的張數要用當天的成交均價入帳、維持率要用當天的收盤算。
+    每日收盤行情的原件在雲端只留最近一段，所以把重播要的三個數字（收盤、成交股數、成交金額）另外摘一份長期留著。"""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name) / "root"
+        self.elsewhere = Path(self.tmp.name) / "elsewhere"
+        self.root.mkdir()
+        self.elsewhere.mkdir()
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def keep(self, day: str) -> None:
+        fetch(self.root, day)
+        mh.keep_up(self.root)
+
+    def test_each_day_keeps_close_volume_and_turnover_of_every_traded_security(self) -> None:
+        self.keep("20261106")
+        quotes(self.root, "20261106")
+        self.assertEqual(mh.keep_up_prices(self.root), {"stored": ["20261106"], "skipped": []})
+        self.assertEqual(json.loads(summary(self.root, "20261106").read_text(encoding="utf-8")), {
+            "date": "20261106",
+            "prices": {"2330": [2235.0, 44725218, 99993671215], "2317": [250.0, 1000, 250500]}})   # 沒有成交的那一檔不放
+
+    def test_only_days_from_the_first_stored_margin_day_on_are_kept(self) -> None:
+        # 行情原件從 2016 年就有；重播從長期保存區最早那一份融資原件開始，更早的行情用不到。
+        self.keep("20261106")
+        for day in ("20261105", "20261106", "20261109"):
+            quotes(self.root, day)
+        self.assertEqual(mh.keep_up_prices(self.root)["stored"], ["20261106", "20261109"])
+        self.assertFalse(summary(self.root, "20261105").exists())
+
+    def test_nothing_is_kept_before_any_margin_day_is_stored(self) -> None:
+        quotes(self.root, "20261106")
+        self.assertEqual(mh.keep_up_prices(self.root), {"stored": [], "skipped": []})
+
+    def test_day_already_kept_is_not_rewritten(self) -> None:
+        self.keep("20261106")
+        quotes(self.root, "20261106")
+        mh.keep_up_prices(self.root)
+        before = summary(self.root, "20261106").read_bytes()
+        quotes(self.root, "20261106", [["2330", "台積電", "1", "1", "1", "1.00", "1.00", "1.00", "1.00"]])
+        self.assertEqual(mh.keep_up_prices(self.root), {"stored": [], "skipped": []})
+        self.assertEqual(summary(self.root, "20261106").read_bytes(), before)
+
+    def test_original_that_cannot_be_used_is_not_kept_and_is_reported(self) -> None:
+        self.keep("20261105")
+        quotes(self.root, "20261105", date="20261104")                       # 內容日期和檔名不符
+        quotes(self.root, "20261106", rows=[])                               # 沒有任何一檔的行情
+        quotes(self.root, "20261109").write_bytes(b"not gzip")               # 檔案壞了
+        report = mh.keep_up_prices(self.root)
+        self.assertEqual(report["stored"], [])
+        self.assertEqual(report["skipped"], [{"day": "20261105", "reason": "官方回應的日期和檔名不符"},
+                                             {"day": "20261106", "reason": "沒有任何一檔的收盤行情"},
+                                             {"day": "20261109", "reason": "原件讀不了（BadGzipFile）"}])
+        self.assertFalse((self.root / "data/margin-history/prices").exists())
+
+    def test_seed_brings_the_price_summaries_to_a_machine_without_the_originals(self) -> None:
+        for day in ("20251103", "20251104"):
+            self.keep(day)
+            quotes(self.root, day)
+        mh.keep_up_prices(self.root)
+        packed = mh.write_seed(self.root, "prices")
+        self.assertEqual((packed["days"], packed["first"], packed["last"]), (2, "20251103", "20251104"))
+        target = self.elsewhere / mh.PRICE_SEED
+        target.parent.mkdir(parents=True)
+        target.write_bytes((self.root / mh.PRICE_SEED).read_bytes())
+        self.assertEqual(mh.restore_seed(self.elsewhere, "prices"), ["20251103", "20251104"])
+        for day in ("20251103", "20251104"):
+            self.assertEqual(summary(self.elsewhere, day).read_bytes(), summary(self.root, day).read_bytes())
+        self.assertEqual(mh.restore_seed(self.elsewhere, "prices"), [])
+        # 兩種種子各放各的：融資原件的種子不會放出行情摘要，反過來也一樣。
+        self.assertEqual(mh.restore_seed(self.elsewhere), [])
+        self.assertFalse((self.elsewhere / "data/margin-history/raw").exists())
+
+    def test_restore_command_brings_a_fresh_checkout_up_to_date(self) -> None:
+        # 本機第一次用（或從雲端還原之後）：一個指令把兩包種子放回去，並把手上行情原件還沒摘的日子摘好。
+        import contextlib
+        for day in ("20251103", "20251104"):
+            self.keep(day)
+            quotes(self.root, day)
+        mh.keep_up_prices(self.root)
+        for seed in (mh.SEED, mh.PRICE_SEED):
+            mh.write_seed(self.root, "raw" if seed == mh.SEED else "prices")
+            (self.elsewhere / seed).parent.mkdir(parents=True, exist_ok=True)
+            (self.elsewhere / seed).write_bytes((self.root / seed).read_bytes())
+        quotes(self.elsewhere, "20251105")                       # 這台機器自己抓到的、種子裡沒有的一天
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), unittest.mock.patch.object(sys.stdout, "reconfigure", create=True):
+            self.assertEqual(mh.main(["--root", str(self.elsewhere), "restore"]), 0)
+        self.assertEqual(json.loads(out.getvalue()), {"raw": 2, "prices": 2, "prices_kept": {"stored": 1, "skipped": []}})
+        self.assertEqual(sorted(p.name for p in (self.elsewhere / "data/margin-history/prices").iterdir()),
+                         ["prices-20251103.json", "prices-20251104.json", "prices-20251105.json"])
+        self.assertTrue(stored(self.elsewhere, "20251104").exists())
+
+    def test_the_estimate_reads_what_is_kept_here(self) -> None:
+        # 抓取存下的兩種原件 → 長期保存區 → 估算，接得起來：起點 2025-11-03 當天 2330 有 100 張（當天沒有買進）、
+        # 成交均價＝250,000 ÷ 1,000＝250、收盤 255。成本＝250 × 起點係數 0.9369126317402282＝234.2282；
+        # 估計的全市場融資金額＝100 張 × 1,000 × 234.2282 × 0.6＝14,053,689 元，官方給 14,054 仟元 → 差 −0.00%。
+        from unittest import mock
+        from twon_analysis import margin_maintenance
+        payload = official("20251103", [["2330", "台積電", "0", "0", "0", "100", "100"]])
+        payload["tables"][0]["data"][1][5] = "14,054"
+        fetch(self.root, "20251103", payload)
+        mh.keep_up(self.root)
+        quotes(self.root, "20251103", [["2330", "台積電", "1,000", "3", "250,000", "250.00", "256.00", "249.00", "255.00"]])
+        mh.keep_up_prices(self.root)
+        with mock.patch.object(margin_maintenance, "ROOT", self.root):
+            check = margin_maintenance.daily_check("2025-11-03")
+            estimate = margin_maintenance.estimated_range(code="2330", market="上市", kind="common", as_of="2025-11-03",
+                                                          capital_events=[])
+        self.assertEqual((check["status"], check["estimated"], check["official"], check["stocks"]),
+                         ("ok", 14053689, 14054000, 1))
+        # 維持率＝255 ÷（234.2282 × 0.6）＝181.45%
+        self.assertEqual([round(estimate[0], 2), round(estimate[1], 2), estimate[2]], [181.45, 181.45, "2025-11-03"])
 
 
 class CoverageTest(unittest.TestCase):

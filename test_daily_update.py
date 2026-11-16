@@ -531,6 +531,51 @@ class BuildAndDeployWiringTest(unittest.TestCase):
         (seed / "manifest.json").write_text('{"version": "v-x", "failures": []}', encoding="utf-8")
         self.assertEqual(steps["build_seed"].fn(ctx)["problems"], {})
 
+    MARGIN_CHECK = {"status": "over_threshold", "data_date": "2026-11-06", "gap_pct": 8.01, "threshold_pct": 8.0,
+                    "estimated": 6330520, "official": 5861000, "stocks": 0,
+                    "reason": "估計的全市場融資金額和官方差 8.01%，超過 8%"}
+
+    def _seed_with_margin_check(self, ctx: du.RunContext, check: dict | None) -> None:
+        seed = ctx.work_dir / "seed"
+        seed.mkdir(parents=True)
+        signals = {"analyses": 3} if check is None else {"analyses": 3, "margin_check": check}
+        (seed / "manifest.json").write_text(json.dumps({"version": "v-x", "signals": signals}, ensure_ascii=False),
+                                            encoding="utf-8")
+
+    def test_build_seed_records_the_daily_margin_check(self) -> None:
+        # 融資維持率（估）的每日對帳（估計的全市場融資金額 對 官方）要進每日更新的執行紀錄。
+        steps = {s.name: s for s in du.real_steps()}
+        ctx = self.ctx()
+        self._seed_with_margin_check(ctx, self.MARGIN_CHECK)
+        self.assertEqual(steps["build_seed"].fn(ctx)["margin_check"], self.MARGIN_CHECK)
+
+    def test_site_status_shows_the_daily_margin_check(self) -> None:
+        # 站台狀態（/api/data-status 原樣回傳這個檔）看得到當天的對帳差距，以及全部不給的那一天的原因；不擋發布。
+        target = Path(self.tmp.name) / "cloud"
+        target.mkdir()
+        steps = {s.name: s for s in du.real_steps()}
+        ctx = self.ctx()
+        self._seed_with_margin_check(ctx, self.MARGIN_CHECK)
+        ctx.outputs["build_seed"] = steps["build_seed"].fn(ctx)      # 執行時每一步的結果記在這裡
+        with unittest.mock.patch.object(du, "CLOUD", target):
+            du._write_status_for_build(ctx)
+        status = json.loads((target / ".data-status.json").read_text(encoding="utf-8"))
+        self.assertEqual(status["checks"], {"margin_maintenance": {
+            "status": "over_threshold", "data_date": "2026-11-06", "gap_pct": 8.01, "threshold_pct": 8.0,
+            "reason": "估計的全市場融資金額和官方差 8.01%，超過 8%"}})
+        self.assertEqual((status["last_success_date"], status["stale"]), ("2026-11-09", False))
+
+    def test_site_status_has_no_margin_check_when_the_build_did_not_make_one(self) -> None:
+        target = Path(self.tmp.name) / "cloud"
+        target.mkdir()
+        steps = {s.name: s for s in du.real_steps()}
+        ctx = self.ctx()
+        self._seed_with_margin_check(ctx, None)
+        ctx.outputs["build_seed"] = steps["build_seed"].fn(ctx)
+        with unittest.mock.patch.object(du, "CLOUD", target):
+            du._write_status_for_build(ctx)
+        self.assertNotIn("checks", json.loads((target / ".data-status.json").read_text(encoding="utf-8")))
+
     def test_build_dist_runs_all_packs_then_build_mjs(self) -> None:
         steps = {s.name: s for s in du.real_steps()}
         ctx = self.ctx()
@@ -928,6 +973,24 @@ class StatusFileTest(unittest.TestCase):
         status = json.loads((self.log_dir / "status.json").read_text(encoding="utf-8"))
         self.assertTrue(status["stale"])
         self.assertEqual(status["run"]["failed_step"], "build_seed")
+
+    def test_run_status_keeps_the_margin_check_of_the_published_data(self) -> None:
+        # 執行狀態（status.json）也帶著融資維持率（估）的每日對帳：之後「資料不變、只重新部署程式」時站台狀態是照這一份寫的。
+        check = {"status": "ok", "data_date": "2026-11-06", "gap_pct": 3.5, "threshold_pct": 8.0, "estimated": 1,
+                 "official": 1, "stocks": 1237, "reason": None}
+        shown = {"margin_maintenance": {"status": "ok", "data_date": "2026-11-06", "gap_pct": 3.5, "threshold_pct": 8.0,
+                                        "reason": None}}
+        success = {"data_date": "2026-11-09", "status": "success", "finished_at": "t1",
+                   "steps": [{"name": "build_seed", "status": "ok", "output": {"version": "v", "margin_check": check}}]}
+        self.assertEqual(du.write_status(self.log_dir, success)["checks"], shown)
+        # 隔天更新失敗：站上還是 11-09 那一版資料，對帳也還是那一版的。
+        failed = {"data_date": "2026-11-10", "status": "failed", "failed_step": "fetch_incremental", "finished_at": "t2",
+                  "steps": []}
+        self.assertEqual(du.write_status(self.log_dir, failed)["checks"], shown)
+        # 之後成功發布、但那次建置沒有對帳結果（舊版建置清單）：不留著前一版的。
+        plain = {"data_date": "2026-11-11", "status": "success", "finished_at": "t3",
+                 "steps": [{"name": "build_seed", "status": "ok", "output": {"version": "v2"}}]}
+        self.assertNotIn("checks", du.write_status(self.log_dir, plain))
 
 
 class D1PruneTest(unittest.TestCase):

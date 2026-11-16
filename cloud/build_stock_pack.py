@@ -516,6 +516,17 @@ def signals_report(analyses: Sequence[dict]) -> dict:
             "payload_bytes": sum(sizes), "largest_payload_bytes": max(sizes, default=0)}
 
 
+def margin_check_report(data_date: str) -> dict:
+    """融資維持率（估）的每日對帳：估計的全市場融資金額和官方差多少、有沒有超過門檻（超過的那一天所有股票都沒有這一塊）。
+    對帳本身出錯不擋發布，報告只寫錯誤的種類（不帶訊息，訊息可能有本機路徑；這一份會進站台狀態）。"""
+    try:
+        from twon_analysis.margin_maintenance import daily_check
+
+        return daily_check(data_date)
+    except Exception as error:  # noqa: BLE001
+        return {"status": "error", "data_date": None, "reason": type(error).__name__}
+
+
 def _build_rows(
     items: Sequence[ListedSecurity | OtcSecurity],
     data_date: str,
@@ -753,7 +764,7 @@ def build_version(
     announcement_rows = attach_news(securities, analyses, data_date=data_date, skipped=announcement_skipped)
     manifest["announcement_count"] = len(announcement_rows)
     manifest["announcement_skipped"] = announcement_skipped
-    manifest["signals"] = signals_report(analyses)
+    manifest["signals"] = {**signals_report(analyses), "margin_check": margin_check_report(data_date)}
     _validate_seed(manifest, securities, analyses)
 
     database = partial / "staging.sqlite"

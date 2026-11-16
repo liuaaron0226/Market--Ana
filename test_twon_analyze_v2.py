@@ -758,6 +758,53 @@ class StockFactsReaderTests(unittest.TestCase):
         })
 
 
+BROKEN = '這一天的個股融資原件讀不了'
+
+
+def margin_day(day, trades, prices, official_thousand=1):
+    """融資重播用的一天。trades：{代號: (買進, 賣出, 現金償還, 前日餘額, 今日餘額)}，單位張；
+    prices：{代號: (收盤, 成交均價)}，沒有成交的那一檔不放；official_thousand：官方公布的全市場融資金額（仟元）。
+    trades 給 None 是這一天沒有融資原件（只有行情），給 BROKEN 是原件在、但內容讀不了；prices 給 None 是這一天沒有行情摘要。"""
+    return {'day': day, 'trades': trades, 'prices': prices, 'official_thousand': official_thousand}
+
+
+def write_margin_store(root: Path, days) -> Path:
+    """在資料根目錄 root 底下，把 margin_day 的清單寫成長期保存區（data/margin-history）的樣子：
+    raw/ 是每日抓取存的個股融資原件，prices/ 是同一天的行情摘要（收盤、成交股數、成交金額）。回傳 root。"""
+    store = root / 'data/margin-history'
+    for item in days:
+        compact = item['day'].replace('-', '')
+        if item['prices'] is not None:
+            # 成交 1,000 股、成交金額＝均價 × 1,000，所以成交均價就是給的那個數字。
+            quotes = {code: [close, 1000, round(average * 1000)] for code, (close, average) in item['prices'].items()}
+            price_file = store / 'prices' / f'prices-{compact}.json'
+            price_file.parent.mkdir(parents=True, exist_ok=True)
+            price_file.write_text(json.dumps({'date': compact, 'prices': quotes}), encoding='utf-8')
+        if item['trades'] is None:
+            continue
+        raw = store / 'raw' / f'margin-{compact}.json'
+        raw.parent.mkdir(parents=True, exist_ok=True)
+        if item['trades'] == BROKEN:
+            raw.write_text('讀不了的內容', encoding='utf-8')
+            continue
+        rows = [[code, '測試', *(f'{value:,}' for value in trade), '0'] for code, trade in item['trades'].items()]
+        official = {'stat': 'OK', 'date': compact, 'tables': [
+            {'fields': ['項目', '買進', '賣出', '現金(券)償還', '前日餘額', '今日餘額'],
+             'data': [['融資(交易單位)', '1', '2', '3', '4', '5'],
+                      ['融資金額(仟元)', '1', '2', '3', '4', f"{item['official_thousand']:,}"]]},
+            {'fields': ['代號', '名稱', '買進', '賣出', '現金償還', '前日餘額', '今日餘額', '次一營業日限額'], 'data': rows}]}
+        raw.write_text(json.dumps({'fetched_at_utc': 't', 'source_url': 'u', 'data': official}, ensure_ascii=False), encoding='utf-8')
+    return root
+
+
+def three_margin_days(held, official_thousand=6331, code='9999'):
+    """融資測試常用的三天：買 100 張均價 100、再買 100 張均價 120（兩種成本都是 110）、第 3 天賣出 50 張加現金償還 50 張
+    （按比例減 → 110；最近買的先減 → 100）。第 3 天收 132 → 維持率 200～220；估計的全市場融資金額 6,330,520 元。"""
+    return [margin_day(held[0], {code: (100, 0, 0, 0, 100)}, {code: (100.0, 100.0)}),
+            margin_day(held[1], {code: (100, 0, 0, 100, 200)}, {code: (120.0, 120.0)}),
+            margin_day(held[2], {code: (0, 50, 50, 200, 100)}, {code: (132.0, 130.0)}, official_thousand=official_thousand)]
+
+
 class _SignalsFixture:
     """五塊資料測試共用：行情庫每一根給（收盤、漲跌符號、漲跌），加權指數與其他讀取都用替身。"""
 
@@ -772,12 +819,13 @@ class _SignalsFixture:
         return [(date(2025, 1, 6) + timedelta(days=i)).isoformat() for i in range(count)]
 
     def analyze(self, rows, index, *, otc=False, code='9999', kind='common', days=None, ex_events=(), capital_actions=None,
-                institutional=()):
+                institutional=(), margin=()):
         """rows：由舊到新的（收盤、漲跌符號、漲跌），後面可以再接（最高、最低、成交股數、成交金額），不接就是收盤 ±1、
         1000 股、成交金額 1；
         index：{日期: 加權指數收盤}，給例外就是模擬加權指數讀取出錯；
         days：這一檔有交易的日子（不給就是連續的）；ex_events：這一檔帶官方參考價的除權息等事件（events.json 的形狀）；
-        institutional：法人買賣超逐日的列（institutional_series 的形狀），給例外就是模擬法人資料讀取出錯。"""
+        institutional：法人買賣超逐日的列（institutional_series 的形狀），給例外就是模擬法人資料讀取出錯；
+        margin：融資重播用的每日資料（margin_day 的清單），不給就是手上沒有任何融資原件。"""
         days = days or self.days(len(rows))
         self.calls += 1
         db = Path(self.tmp.name) / f's{self.calls}.sqlite'
@@ -793,12 +841,14 @@ class _SignalsFixture:
         connection.close()
         from twon_analysis.analyze_v2 import analyze_v2
         paths = {'db_path': Path(self.tmp.name) / 'none.sqlite', 'otc_db_path': db} if otc else {'db_path': db, 'otc_db_path': None}
+        margin_root = write_margin_store(Path(self.tmp.name) / f'margin{self.calls}', margin)
         taiex = {'side_effect': index} if isinstance(index, Exception) else {'return_value': index}
         chips = {'side_effect': institutional} if isinstance(institutional, Exception) else {'return_value': list(institutional)}
         with unittest.mock.patch('twon_analysis.analyze_v2.institutional_series', **chips), \
                 unittest.mock.patch('twon_analysis.analyze_v2.credit_series', return_value={}), \
                 unittest.mock.patch('twon_analysis.analyze_v2.valuation_snapshot', return_value=None), \
                 unittest.mock.patch('twon_analysis.analyze_v2.revenue_series', return_value=[]), \
+                unittest.mock.patch('twon_analysis.margin_maintenance.ROOT', margin_root), \
                 unittest.mock.patch('twon_analysis.analyze_v2.taiex_closes', **taiex):
             return analyze_v2(code, days[-1], capital_actions=capital_actions or {},
                               reference_events={code: list(ex_events)}, **paths)
@@ -1313,6 +1363,296 @@ class StockSignalsLimitUpMomentumTests(_SignalsFixture, unittest.TestCase):
         self.assertEqual((signals['blocks'], signals['failed']), (['versus_market'], ['limit_up_momentum']))
 
 
+class StockSignalsMarginMaintenanceTests(_SignalsFixture, unittest.TestCase):
+    """五塊資料的「融資維持率（估）」（本人 2026-11-16 共識，規格 .scratch/stock-signals/spec.md）：有融資餘額的上市股票，
+    每天從起點（2025-11-03）把保留的個股融資原件重播一次，同時追兩種成本——賣出與現金償還時按比例減（成本維持平均），
+    或最近買的先減——各算一個維持率＝收盤 ÷（成本 × 融資成數六成），取小的當下限、大的當上限。只給範圍與資料日。"""
+
+    START = '2025-11-03'   # 起點日期是固定的；測試的融資原件都從這一天開始
+
+    @staticmethod
+    def dates(count):
+        """行情 30 根，最後 count 根落在起點（2025-11-03）之後：回傳（這一檔的交易日、有融資原件的那幾天）。"""
+        from datetime import date, timedelta
+        first = date(2025, 11, 3)
+        days = [(first + timedelta(days=i)).isoformat() for i in range(count - 30, count)]
+        return days, days[-count:]
+
+    def estimate(self, margin, *, closes=None, **options):
+        days, _ = self.dates(len(margin))
+        rows = [FLAT] * (30 - len(margin)) + [(close, '', 0.0) for close in (closes or [100.0] * len(margin))]
+        return self.analyze(rows, {}, days=days, margin=margin, **options)['signals']
+
+    def test_range_comes_from_two_ways_of_reducing_the_cost_when_holders_sell(self):
+        # 第 1 天買 100 張、均價 100；第 2 天再買 100 張、均價 120 → 兩種成本都是 110。
+        # 第 3 天賣出 50 張、現金償還 50 張（共減 100 張）：
+        #   按比例減 → 成本仍是 110；最近買的先減 → 120 的那 100 張走了，剩 100 的 → 成本 100。
+        # 第 3 天收 132：132 ÷（110 × 0.6）＝200%；132 ÷（100 × 0.6）＝220% → 範圍 200～220。
+        # 全市場核對：混合成本 100＋10×0.5508671…＝105.5087，× 100 張 × 1,000 股 × 0.6＝6,330,520 元，官方給 6,331 仟元。
+        _, held = self.dates(3)
+        margin = [margin_day(held[0], {'9999': (100, 0, 0, 0, 100)}, {'9999': (100.0, 100.0)}),
+                  margin_day(held[1], {'9999': (100, 0, 0, 100, 200)}, {'9999': (120.0, 120.0)}),
+                  margin_day(held[2], {'9999': (0, 50, 50, 200, 100)}, {'9999': (132.0, 130.0)}, official_thousand=6331)]
+        signals = self.estimate(margin, closes=[100.0, 120.0, 132.0])
+        self.assertEqual(signals['margin_maintenance'], {'low_pct': 200, 'high_pct': 220, 'data_date': held[2]})
+        self.assertEqual(signals['blocks'], ['margin_maintenance'])
+        self.assertEqual(signals['failed'], [])
+
+    def test_lower_bound_stays_below_upper_bound_when_recent_buys_were_the_cheap_ones(self):
+        # 先買 100 張均價 120、再買 100 張均價 100（平均 110），第 3 天賣 100 張：
+        #   按比例減 → 110；最近買的先減 → 100 的走了，剩 120 的 → 這一次「最近買的先減」的成本反而比較高。
+        # 收 99：99 ÷ 66＝150%；99 ÷ 72＝137.5% → 四捨五入 138。下限是小的那個：138～150。
+        # 全市場核對：混合成本 0.5508671×110＋0.4491329×120＝114.4913，× 100,000 股 × 0.6＝6,869,480 元 → 6,869 仟元。
+        _, held = self.dates(3)
+        margin = [margin_day(held[0], {'9999': (100, 0, 0, 0, 100)}, {'9999': (120.0, 120.0)}),
+                  margin_day(held[1], {'9999': (100, 0, 0, 100, 200)}, {'9999': (100.0, 100.0)}),
+                  margin_day(held[2], {'9999': (0, 100, 0, 200, 100)}, {'9999': (99.0, 99.0)}, official_thousand=6869)]
+        signals = self.estimate(margin, closes=[120.0, 100.0, 99.0])
+        self.assertEqual(signals['margin_maintenance'], {'low_pct': 138, 'high_pct': 150, 'data_date': held[2]})
+
+    def test_balance_that_was_already_there_at_the_start_is_costed_with_the_fixed_start_factor(self):
+        # 起點那天就有 100 張、當天沒有買進：這些餘額沒有來歷，成本＝當天均價 100 × 起點係數 0.9369126317402282＝93.69。
+        # 收 100：100 ÷（93.69126 × 0.6）＝177.89% → 178～178。核對：100,000 股 × 93.69126 × 0.6＝5,621,476 元 → 5,621 仟元。
+        _, held = self.dates(1)
+        margin = [margin_day(held[0], {'9999': (0, 0, 0, 100, 100)}, {'9999': (100.0, 100.0)}, official_thousand=5621)]
+        self.assertEqual(held[0], self.START)
+        self.assertEqual(self.estimate(margin)['margin_maintenance'], {'low_pct': 178, 'high_pct': 178, 'data_date': held[0]})
+
+    def test_no_block_while_the_balance_is_zero_and_a_fresh_start_after_everyone_sold(self):
+        # 9999：第 1 天買 100 張均價 100，第 2 天全部賣光（餘額 0）→ 第 2 天沒有這一塊。
+        # 8888 同一天還有 100 張（成本 100），所以當天的全市場核對是過的：100,000 股 × 100 × 0.6＝6,000 仟元。
+        _, held = self.dates(3)
+        other = {'8888': (0, 0, 0, 100, 100)}
+        margin = [margin_day(held[0], {'9999': (100, 0, 0, 0, 100), '8888': (100, 0, 0, 0, 100)},
+                             {'9999': (100.0, 100.0), '8888': (100.0, 100.0)}),
+                  margin_day(held[1], {'9999': (0, 100, 0, 100, 0), **other}, {'9999': (90.0, 90.0), '8888': (100.0, 100.0)},
+                             official_thousand=6000)]
+        sold_out = self.estimate(margin, closes=[100.0, 90.0])
+        self.assertIsNone(sold_out['margin_maintenance'])
+        self.assertEqual((sold_out['blocks'], sold_out['failed']), ([], []))
+        # 同一份資料看 8888：100 ÷ 60＝166.67% → 167～167（核對有過，9999 沒有是因為餘額為零）。
+        self.assertEqual(self.estimate(margin, code='8888')['margin_maintenance'],
+                         {'low_pct': 167, 'high_pct': 167, 'data_date': held[1]})
+        # 第 3 天 9999 重新買 100 張均價 80：之前的成本不留，兩種成本都是 80。收 96：96 ÷ 48＝200%。
+        # 核對：（100×100＋100×80）× 1,000 × 0.6＝10,800 仟元。
+        margin.append(margin_day(held[2], {'9999': (100, 0, 0, 0, 100), **other}, {'9999': (96.0, 80.0), '8888': (100.0, 100.0)},
+                                 official_thousand=10800))
+        self.assertEqual(self.estimate(margin, closes=[100.0, 90.0, 96.0])['margin_maintenance'],
+                         {'low_pct': 200, 'high_pct': 200, 'data_date': held[2]})
+
+    def test_official_zero_balance_clears_the_position_even_if_the_sales_do_not_add_up(self):
+        # 第 1 天買 100 張均價 100；第 2 天只賣 40 張，但官方今日餘額是 0（帳對不上）：以官方為準，部位清空。
+        # 第 3 天買 100 張均價 80、收 96：兩種成本都是 80 → 96 ÷ 48＝200%。
+        # （沒有清空的話會留著 60 張成本 100，平均變 87.5，算出來是 183%。）核對：100,000 股 × 80 × 0.6＝4,800 仟元。
+        _, held = self.dates(3)
+        margin = [margin_day(held[0], {'9999': (100, 0, 0, 0, 100)}, {'9999': (100.0, 100.0)}),
+                  margin_day(held[1], {'9999': (0, 40, 0, 100, 0)}, {'9999': (90.0, 90.0)}),
+                  margin_day(held[2], {'9999': (100, 0, 0, 0, 100)}, {'9999': (96.0, 80.0)}, official_thousand=4800)]
+        self.assertEqual(self.estimate(margin, closes=[100.0, 90.0, 96.0])['margin_maintenance'],
+                         {'low_pct': 200, 'high_pct': 200, 'data_date': held[2]})
+
+    def test_estimated_position_is_scaled_to_the_official_balance_every_day(self):
+        # 第 1 天買 100 張均價 100；第 2 天買 100 張均價 120，但官方今日餘額只有 100 張（不是 200）：
+        # 估計的部位等比例對齊 → 50 張成本 100、50 張成本 120。第 3 天賣 50 張（官方餘額 50）：
+        #   按比例減 → 110；最近買的先減 → 120 的 50 張走了，剩 100 的 → 100。收 132 → 200～220。
+        # （沒有對齊的話，最近買的先減會剩 100 張 100、50 張 120，成本 106.67，上限會是 206。）
+        # 核對：50 張 × 1,000 × 105.5087 × 0.6＝3,165,260 元 → 3,165 仟元。
+        _, held = self.dates(3)
+        margin = [margin_day(held[0], {'9999': (100, 0, 0, 0, 100)}, {'9999': (100.0, 100.0)}),
+                  margin_day(held[1], {'9999': (100, 0, 0, 100, 100)}, {'9999': (120.0, 120.0)}),
+                  margin_day(held[2], {'9999': (0, 50, 0, 100, 50)}, {'9999': (132.0, 130.0)}, official_thousand=3165)]
+        self.assertEqual(self.estimate(margin, closes=[100.0, 120.0, 132.0])['margin_maintenance'],
+                         {'low_pct': 200, 'high_pct': 220, 'data_date': held[2]})
+
+    def three_days(self, official_thousand=6331):
+        return three_margin_days(self.dates(3)[1], official_thousand)
+
+    THREE_CLOSES = [100.0, 120.0, 132.0]
+
+    def test_only_listed_stocks_get_an_estimate(self):
+        # 同樣三天的融資資料：上市普通股有 200～220；上櫃（等上櫃融資資料那一張票）與 ETF（第一版不顯示）整塊沒有。
+        for options, expected in (({}, {'low_pct': 200, 'high_pct': 220}), ({'otc': True}, None), ({'kind': 'etf'}, None)):
+            signals = self.estimate(self.three_days(), closes=self.THREE_CLOSES, **options)
+            block = signals['margin_maintenance']
+            self.assertEqual(block and {key: block[key] for key in ('low_pct', 'high_pct')}, expected, options)
+            self.assertEqual('margin_maintenance' in signals['blocks'], expected is not None, options)
+            self.assertEqual(signals['failed'], [], options)
+
+    def test_no_block_when_the_share_capital_changed_after_the_start(self):
+        # 起點之後這一檔有分割、減資、面額變更或配股：估出來的成本沒有跟著調整，整塊不給。
+        # 起點以前的、起點當天的不影響（起點那天的成本是用當天——變動之後——的均價起算的）。
+        days, held = self.dates(3)
+        for event_day, expected in ((held[1], None), (held[2], None), (days[0], {'low_pct': 200, 'high_pct': 220}),
+                                    (held[0], {'low_pct': 200, 'high_pct': 220})):
+            event = {'code': '9999', 'date': event_day, 'type': '減資'}
+            signals = self.estimate(self.three_days(), closes=self.THREE_CLOSES, capital_actions={'9999': [event]})
+            block = signals['margin_maintenance']
+            self.assertEqual(block and {key: block[key] for key in ('low_pct', 'high_pct')}, expected, event_day)
+            self.assertEqual(signals['failed'], [], event_day)
+
+    def test_no_block_when_a_day_with_margin_buying_has_no_average_price(self):
+        # 第 2 天有融資買進 100 張，但行情摘要裡沒有這一檔（拿不到成交均價，新買的沒辦法入帳）：之後整塊不給。
+        _, held = self.dates(3)
+        margin = self.three_days()
+        margin[1] = margin_day(held[1], {'9999': (100, 0, 0, 100, 200), '8888': (0, 0, 0, 100, 100)}, {'8888': (100.0, 100.0)})
+        margin[0]['trades']['8888'], margin[0]['prices']['8888'] = (100, 0, 0, 0, 100), (100.0, 100.0)
+        # 第 3 天 8888 還有 100 張（成本 100）；9999 的帳對不上，整筆用第 3 天均價 130 重建（高成本那一邊仍是 100）。
+        # 核對：8888 的 6,000,000＋9999 的 100,000 股 ×（0.5508671×100＋0.4491329×130）× 0.6＝6,808,439 → 共 12,808 仟元。
+        margin[2] = margin_day(held[2], {'9999': (0, 50, 50, 200, 100), '8888': (0, 0, 0, 100, 100)},
+                               {'9999': (132.0, 130.0), '8888': (100.0, 100.0)}, official_thousand=12808)
+        signals = self.estimate(margin, closes=self.THREE_CLOSES)
+        self.assertIsNone(signals['margin_maintenance'])
+        self.assertEqual((signals['blocks'], signals['failed']), ([], []))
+        # 當天的全市場核對是過的、另一檔照常有（167～167），所以 9999 沒有是因為那一天拿不到成交均價。
+        check = self.margin_check(margin, held[2])
+        self.assertEqual((check['status'], check['stocks'], check['estimated']), ('ok', 1, 12808439))
+        self.assertEqual(self.estimate(margin, closes=self.THREE_CLOSES, code='8888')['margin_maintenance'],
+                         {'low_pct': 167, 'high_pct': 167, 'data_date': held[2]})
+
+    def test_a_day_without_trading_and_without_any_margin_activity_does_not_drop_the_block(self):
+        # 第 1 天買 100 張均價 100。第 2 天這一檔沒有成交（行情摘要沒有它），融資也沒有任何進出、餘額照舊 100 張：
+        # 那一天沒有東西要入帳，估計不受影響。第 3 天收 132：132 ÷ 60＝220% → 220～220。
+        # 核對：100 張 × 1,000 × 100 × 0.6＝6,000 仟元。
+        _, held = self.dates(3)
+        margin = [margin_day(held[0], {'9999': (100, 0, 0, 0, 100)}, {'9999': (100.0, 100.0)}),
+                  margin_day(held[1], {'9999': (0, 0, 0, 100, 100)}, {}),
+                  margin_day(held[2], {'9999': (0, 0, 0, 100, 100)}, {'9999': (132.0, 130.0)}, official_thousand=6000)]
+        self.assertEqual(self.estimate(margin, closes=self.THREE_CLOSES)['margin_maintenance'],
+                         {'low_pct': 220, 'high_pct': 220, 'data_date': held[2]})
+
+    def test_no_block_when_holders_sold_or_repaid_on_a_day_without_an_average_price(self):
+        # 第 2 天這一檔沒有成交、卻有現金償還 20 張（或賣出 20 張）：那一天的減少沒有照「最近買的先減」入帳，之後整塊不給。
+        # 8888 讓當天的全市場核對是過的：8888 的 6,000,000＋9999 的 80 張 × 1,000 × 100 × 0.6＝4,800,000 → 10,800 仟元。
+        _, held = self.dates(3)
+        for leaving in ((0, 0, 20), (0, 20, 0)):
+            margin = [margin_day(held[0], {'9999': (100, 0, 0, 0, 100), '8888': (100, 0, 0, 0, 100)},
+                                 {'9999': (100.0, 100.0), '8888': (100.0, 100.0)}),
+                      margin_day(held[1], {'9999': (*leaving, 100, 80), '8888': (0, 0, 0, 100, 100)}, {'8888': (100.0, 100.0)}),
+                      margin_day(held[2], {'9999': (0, 0, 0, 80, 80), '8888': (0, 0, 0, 100, 100)},
+                                 {'9999': (132.0, 130.0), '8888': (100.0, 100.0)}, official_thousand=10800)]
+            signals = self.estimate(margin, closes=self.THREE_CLOSES)
+            self.assertIsNone(signals['margin_maintenance'], leaving)
+            self.assertEqual((signals['blocks'], signals['failed']), ([], []), leaving)
+            check = self.margin_check(margin, held[2])
+            self.assertEqual((check['status'], check['stocks'], check['estimated']), ('ok', 1, 10800000), leaving)
+
+    def margin_check(self, margin, as_of):
+        """每日對帳的結果（建置報告與站台狀態用的那一份）。"""
+        from twon_analysis import margin_maintenance
+        self.calls += 1
+        margin_root = write_margin_store(Path(self.tmp.name) / f'margin{self.calls}', margin)
+        with unittest.mock.patch('twon_analysis.margin_maintenance.ROOT', margin_root):
+            return margin_maintenance.daily_check(as_of)
+
+    def test_daily_check_compares_the_estimated_market_total_with_the_official_figure(self):
+        # 估計的全市場融資金額＝100 張 × 1,000 股 ×（0.5508671×110＋0.4491329×100＝105.5087）× 0.6＝6,330,520 元。
+        # 官方 6,331 仟元 → 差 −0.01%，在門檻（8%）以內：照常給。
+        _, held = self.dates(3)
+        self.assertEqual(self.margin_check(self.three_days(6331), held[2]), {
+            'status': 'ok', 'data_date': held[2], 'gap_pct': -0.01, 'threshold_pct': 8.0,
+            'estimated': 6330520, 'official': 6331000, 'stocks': 1, 'reason': None})
+        # 官方 5,862 仟元 → +7.99%：照常。官方 5,861 仟元 → +8.01%：超過門檻。
+        self.assertEqual(self.margin_check(self.three_days(5862), held[2])['gap_pct'], 7.99)
+        self.assertEqual(self.estimate(self.three_days(5862), closes=self.THREE_CLOSES)['margin_maintenance'],
+                         {'low_pct': 200, 'high_pct': 220, 'data_date': held[2]})
+
+    def test_no_stock_gets_the_block_on_a_day_the_market_total_is_too_far_off(self):
+        # 官方 5,861 仟元 → 估計多 8.01%，超過門檻：當天所有股票都不給，對帳結果寫明原因。高估與低估都算。
+        _, held = self.dates(3)
+        for official_thousand, gap in ((5861, 8.01), (6882, -8.01)):
+            signals = self.estimate(self.three_days(official_thousand), closes=self.THREE_CLOSES)
+            self.assertIsNone(signals['margin_maintenance'], official_thousand)
+            self.assertEqual((signals['blocks'], signals['failed']), ([], []), official_thousand)
+            check = self.margin_check(self.three_days(official_thousand), held[2])
+            self.assertEqual((check['status'], check['gap_pct'], check['stocks']), ('over_threshold', gap, 0), official_thousand)
+            self.assertIn('8', check['reason'])
+            self.assertIn(f'{abs(gap)}', check['reason'])
+
+    def test_data_date_is_the_day_of_the_margin_data_even_when_prices_are_a_day_newer(self):
+        # 行情到第 4 天，融資原件只到第 3 天（官方晚上才公布，正常晚一個交易日）：
+        # 資料日標第 3 天，維持率用第 3 天的收盤 132 算（不拿第 4 天的收盤 150 去配第 3 天的成本）→ 200～220。
+        days, held = self.dates(4)
+        margin = self.three_days()
+        for item, day in zip(margin, held):
+            item['day'] = day
+        margin.append(margin_day(held[3], None, {'9999': (150.0, 150.0)}))
+        signals = self.analyze([FLAT] * 26 + [(close, '', 0.0) for close in (*self.THREE_CLOSES, 150.0)], {}, days=days,
+                               margin=margin)['signals']
+        self.assertEqual(signals['data_date'], held[3])
+        self.assertEqual(signals['margin_maintenance'], {'low_pct': 200, 'high_pct': 220, 'data_date': held[2]})
+        self.assertEqual(self.margin_check(margin, held[3])['status'], 'ok')
+
+    def test_no_block_when_the_margin_data_is_more_than_a_day_behind(self):
+        # 行情到第 5 天，融資原件停在第 3 天（落後兩個交易日）：不拿舊的範圍出來，所有股票都不給，對帳結果寫明停在哪一天。
+        days, held = self.dates(5)
+        margin = self.three_days()
+        for item, day in zip(margin, held):
+            item['day'] = day
+        margin += [margin_day(held[3], None, {'9999': (150.0, 150.0)}), margin_day(held[4], None, {'9999': (150.0, 150.0)})]
+        rows = [FLAT] * 25 + [(close, '', 0.0) for close in (*self.THREE_CLOSES, 150.0, 150.0)]
+        signals = self.analyze(rows, {}, days=days, margin=margin)['signals']
+        self.assertIsNone(signals['margin_maintenance'])
+        self.assertEqual((signals['blocks'], signals['failed']), ([], []))
+        check = self.margin_check(margin, held[4])
+        self.assertEqual((check['status'], check['data_date'], check['stocks']), ('stale', held[2], 0))
+        self.assertIn(held[2], check['reason'])
+
+    def test_no_block_when_a_trading_day_of_margin_data_is_missing(self):
+        # 第 2 天有行情、沒有融資原件（那天沒抓到）：那天的買賣接不起來，所有股票都不給，對帳結果列出缺哪幾天。
+        _, held = self.dates(3)
+        margin = self.three_days()
+        margin[1] = margin_day(held[1], None, {'9999': (120.0, 120.0)})
+        signals = self.estimate(margin, closes=self.THREE_CLOSES)
+        self.assertIsNone(signals['margin_maintenance'])
+        self.assertEqual((signals['blocks'], signals['failed']), ([], []))
+        check = self.margin_check(margin, held[2])
+        self.assertEqual((check['status'], check['missing_days'], check['stocks']), ('missing_days', [held[1]], 0))
+
+    def test_no_block_when_a_day_of_margin_data_has_no_price_summary(self):
+        # 第 2 天有融資原件、沒有行情摘要（整天的收盤與成交均價都拿不到）：所有股票都不給，對帳結果列出是哪幾天。
+        _, held = self.dates(3)
+        margin = self.three_days()
+        margin[1]['prices'] = None
+        self.assertIsNone(self.estimate(margin, closes=self.THREE_CLOSES)['margin_maintenance'])
+        check = self.margin_check(margin, held[2])
+        self.assertEqual((check['status'], check['missing_days'], check['stocks']), ('missing_prices', [held[1]], 0))
+
+    def test_an_original_that_cannot_be_read_drops_only_this_block_and_is_named(self):
+        # 第 2 天的個股融資原件內容壞了：這一塊算不出來，記進 failed 讓建置報告看得到；其他幾塊與整份分析照常。
+        days, held = self.dates(3)
+        margin = self.three_days()
+        margin[1] = margin_day(held[1], BROKEN, {'9999': (120.0, 120.0)})
+        rows = [FLAT] * 27 + [(close, '', 0.0) for close in self.THREE_CLOSES]
+        index = {days[-1]: 20000.0, days[-6]: 20000.0}
+        for _ in range(2):   # 同一批檔案再問一次（建置時每一檔股票都會問）也是同樣的結果
+            signals = self.analyze(rows, index, days=days, margin=margin)['signals']
+            self.assertIsNone(signals['margin_maintenance'])
+            self.assertEqual((signals['blocks'], signals['failed']), (['versus_market'], ['margin_maintenance']))
+
+    def test_no_block_without_the_fixed_start_day(self):
+        # 起點（2025-11-03）那一份原件不在：起點係數是照那一天定的，從別的日子開始算不對，所有股票都不給。
+        _, held = self.dates(3)
+        margin = self.three_days()[1:]
+        self.assertIsNone(self.estimate(margin, closes=self.THREE_CLOSES)['margin_maintenance'])
+        check = self.margin_check(margin, held[2])
+        self.assertEqual((check['status'], check['data_date'], check['stocks']), ('no_start', None, 0))
+        self.assertEqual(self.margin_check([], held[2])['status'], 'no_start')
+
+    def test_same_data_gives_the_same_result_every_time(self):
+        first = self.estimate(self.three_days(), closes=self.THREE_CLOSES)
+        second = self.estimate(self.three_days(), closes=self.THREE_CLOSES)
+        self.assertEqual(first, second)
+        _, held = self.dates(3)
+        self.assertEqual(self.margin_check(self.three_days(), held[2]), self.margin_check(self.three_days(), held[2]))
+
+    def test_fixed_numbers_of_the_estimate_have_not_changed(self):
+        # 起點日期、起點係數、混合權重是策略驗證線 2026-11-16 求出後固定下來的；融資成數六成；改這幾個數字或門檻要先問本人。
+        from twon_analysis import margin_maintenance as fixed
+        self.assertEqual((fixed.START_DATE, fixed.SEED_SCALE, fixed.BLEND_WEIGHT, fixed.LOAN_RATIO),
+                         ('2025-11-03', 0.9369126317402282, 0.5508671333927683, 0.6))
+        self.assertEqual((fixed.CHECK_THRESHOLD_PCT, fixed.MAX_LAG_DAYS), (8.0, 1))
+
+
 class StockSignalsAlgorithmVersionTests(unittest.TestCase):
     """漲停動能的算法版本是一個固定檔案。內容被改動（重新訓練、改門檻、改換算表、改歷史比例）時這裡會紅：
     八個條件用的固定數字（幾 %、幾倍、幾天）也在這個檔案裡。換算法版本要先問本人，然後換一個新的版本名稱與新的雜湊。"""
@@ -1345,8 +1685,8 @@ class StockSignalsBlockListTests(_SignalsFixture, unittest.TestCase):
         rows = [(100.0 + i, '+', 1.0, 101.0 + i, 99.0 + i, 10_000_000 if i == 120 else 1_000_000) for i in range(130)]
         signals = self.analyze(rows, {days[-1]: 20000.0, days[-6]: 20000.0})['signals']
         self.assertEqual(signals['blocks'], ['versus_market', 'ma_alignment', 'heavy_zones'])
-        self.assertEqual(set(signals), {'data_date', 'limit_up_momentum', 'versus_market', 'ma_alignment', 'heavy_zones',
-                                        'blocks', 'failed'})
+        self.assertEqual(set(signals), {'data_date', 'limit_up_momentum', 'versus_market', 'ma_alignment', 'margin_maintenance',
+                                        'heavy_zones', 'blocks', 'failed'})
         self.assertEqual(signals['failed'], [])
         # 這一檔近 5 日＝229 ÷ 224 − 1＝+2.23%（每天 +1 元連乘），大盤 0% → 強於大盤 2.2。
         self.assertEqual([(row['days'], row['gap']) for row in signals['versus_market']['rows']], [(5, 2.2)])
@@ -1366,10 +1706,24 @@ class StockSignalsBlockListTests(_SignalsFixture, unittest.TestCase):
         dumped = json.dumps(four, ensure_ascii=False)
         for word in BANNED_TEXT + ('反推',):
             self.assertNotIn(word, dumped)
+        # 同樣 130 根改成最後三天落在融資重播的起點（2025-11-03）之後，並給那三天的融資原件：五塊都有，照固定順序
+        # （漲停動能、和大盤比、均線排列、融資維持率（估）、爆大量成交區）。
+        from datetime import date, timedelta
+        late = [(date(2025, 11, 5) - timedelta(days=129 - i)).isoformat() for i in range(130)]
+        five = self.analyze(rows, {late[-1]: 20000.0, late[-6]: 20000.0, late[-21]: 20000.0}, days=late,
+                            margin=three_margin_days(late[-3:]))['signals']
+        self.assertEqual(five['blocks'], ['limit_up_momentum', 'versus_market', 'ma_alignment', 'margin_maintenance', 'heavy_zones'])
+        self.assertEqual(five['margin_maintenance'], {'low_pct': 200, 'high_pct': 220, 'data_date': late[-1]})
+        self.assertEqual(five['failed'], [])
+        dumped = json.dumps(five, ensure_ascii=False)
+        for word in BANNED_TEXT + ('反推',):
+            self.assertNotIn(word, dumped)
+        self.assertFalse(REMOVED_KEYS & set(all_keys(five)))
         # 20 根平盤、沒有加權指數：每一塊都沒有，清單是空的，鍵都還在（值是 null）。
         empty = self.analyze([FLAT] * 20, {})['signals']
         self.assertEqual((empty['blocks'], empty['versus_market'], empty['ma_alignment'], empty['heavy_zones']), ([], None, None, None))
         self.assertIsNone(empty['limit_up_momentum'])
+        self.assertIsNone(empty['margin_maintenance'])
         self.assertEqual(empty['failed'], [])   # 天生沒有不算算不出來
 
     def test_a_block_that_cannot_be_computed_drops_only_itself_and_is_named(self):
