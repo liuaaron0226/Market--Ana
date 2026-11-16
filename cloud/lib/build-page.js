@@ -11,6 +11,8 @@ export const WEB_FILES = [
   "forecast.js", "forecast.css",
   // 個股頁事實區塊（2026-11-15 規格，A 票）
   "stock-facts.js", "stock-facts.css",
+  // 自選股關注 B 票：個股頁「國外同類股」（只有站主的關注股才出現）
+  "watch-peers.js", "watch-peers.css",
 ];
 export const RETIRED = ["analysis-data.js", "chips-data.js", "dashboard-data.js", "detail-data.js", "plain-data.js", "market-data-local.js"];
 

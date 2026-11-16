@@ -17,6 +17,8 @@ const env = { DB: fakeD1(), TEAM_DOMAIN: TEAM, MAIN_AUD, APPLY_AUD, OWNER_EMAIL:
 // MARKET_ANA_FORECAST_LEDGER=owner 打開開關。兩者都沒設時與原本相同。
 if (process.env.JOURNEY_SEED_SQL) env.DB._raw.exec(await readFile(process.env.JOURNEY_SEED_SQL, "utf8"));
 if (process.env.MARKET_ANA_FORECAST_LEDGER) env.MARKET_ANA_FORECAST_LEDGER = process.env.MARKET_ANA_FORECAST_LEDGER;
+// 自選股關注的本機預覽：MARKET_ANA_WATCHLIST_WATCH=owner 打開開關（國外同類股的種子資料一樣走 JOURNEY_SEED_SQL）。
+if (process.env.MARKET_ANA_WATCHLIST_WATCH) env.MARKET_ANA_WATCHLIST_WATCH = process.env.MARKET_ANA_WATCHLIST_WATCH;
 // 自動化驗收會在一分鐘內點完全部下鑽；額度可由第三個參數放寬（正式版額度見 gate.js RATE，不受影響）。
 const rate = process.argv[3] === "relaxed" ? { market: 10_000, detail: 10_000, userData: 10_000 } : undefined;
 const deps = { fetchImpl: fetchJwks(issuer.jwks), now: () => Date.now(), marketPack, stockPack, screensPack, rate };

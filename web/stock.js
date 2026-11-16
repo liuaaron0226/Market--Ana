@@ -319,6 +319,7 @@
     }
     $('content').hidden = false;
     window.StockFacts?.render(r);  // 事實區塊（獨立檔）：沒有 facts 就不出現
+    window.WatchPeers?.load(r.code);  // 國外同類股（獨立檔）：只有站主的關注股才出現
     showBigHolders(r);
     drawChart(r);
     if (initial) syncComparison(r);
