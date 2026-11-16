@@ -182,6 +182,28 @@ class DetailCheckTest(unittest.TestCase):
             self.assertIn("融券", result["reason"])
             self.assertNotIn("外資", result["reason"])
 
+    def test_an_empty_day_in_the_middle_is_a_failure_too(self) -> None:
+        # 審查指出：只看最新一天的話，中間幾天（例如補不回行情的 11-10）是空的也會靜靜過關
+        with tempfile.TemporaryDirectory() as tmp:
+            source = _source(Path(tmp), {"t86": ["20261109", "20261110", "20261116"],
+                                         "quotes": ["20261109", "20261116"], "margin": ["20261116"]})
+            detail = _detail({"2026-11-09": FULL_DAY, "2026-11-10": {}, "2026-11-16": FULL_DAY},
+                             {**self.DATES, "margin": "2026-11-16", "short": "2026-11-16"})
+            result = mpd.check_detail(detail, source)
+            self.assertEqual(result["status"], "failed")
+            self.assertIn("外資：2026-11-10 的名單是空的", result["reason"])
+            self.assertIn("缺 2026-11-10 的每日收盤行情原件", result["reason"])
+            self.assertNotIn("融資", result["reason"])
+
+    def test_a_broken_check_is_reported_and_does_not_stop_the_market_pack(self) -> None:
+        # 檢查不擋發布：detail-data.js 讀不起來時回報失敗，不能讓整包大盤資料改用上一版
+        with tempfile.TemporaryDirectory() as tmp:
+            broken = Path(tmp) / "detail-data.js"
+            broken.write_text("not js", encoding="utf-8")
+            result = mpd._safe_check_detail(broken, Path(tmp))
+            self.assertEqual((result["status"], result["data_date"]), ("failed", None))
+            self.assertIn("檢查本身出錯", result["reason"])
+
     def test_no_sources_at_all_is_a_failure_not_a_pass(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             result = mpd.check_detail({"days": [], "by_date": {}, "current": {}}, Path(tmp) / "none")

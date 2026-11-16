@@ -570,14 +570,17 @@ def _backfill_listed_quotes(root: Path) -> dict:
     11-17 本人回報首頁籌碼明細 11-09 起都「這一天沒有資料」：那幾天只有 t86，算不出金額。"""
     folder = root / "data/market-snapshots/stock-detail"
     copied: list[str] = []
-    missing: list[str] = []
+    missing: dict[str, str] = {}   # 補不回來的日子 → 原因（沒有行情原件、或原件內容不對）
     for t86 in sorted((folder / "t86").glob("t86-*.json")):
         compact = t86.stem.split("-")[-1]
         target = _chip_target(root, "quotes", compact)
         if target.exists():
             continue
         outcome = _copy_listed_quotes(root, compact, target)
-        (copied if outcome["status"] == "copied" else missing).append(compact)
+        if outcome["status"] == "copied":
+            copied.append(compact)
+        else:
+            missing[compact] = outcome["reason"]
     return {"status": "ok", "copied": copied, "missing": missing}
 
 
@@ -633,7 +636,7 @@ def listed_chip_detail_day(root: Path, day: str, *, get: Callable | None = None,
             results["quotes_backfill"] = _backfill_listed_quotes(root)
         except Exception as error:  # noqa: BLE001 — 補舊日子出錯只記在這一項，不影響當天
             results["quotes_backfill"] = {"status": "error", "reason": f"{type(error).__name__}: {error}"}
-    backfill_sets =[dataset for dataset in LISTED_MARGIN_DATASETS if dataset in datasets]
+    backfill_sets = [dataset for dataset in LISTED_MARGIN_DATASETS if dataset in datasets]
     if backfill_sets and any(result.get("status") == "stopped" for result in results.values()):
         # 當天就被擋或回應不對：不再往回多打證交所（比照上櫃一停就全停），下一班再補
         results["margin_backfill"] = {"status": "skipped", "reason": "當天的請求已經停下", "requests": 0}

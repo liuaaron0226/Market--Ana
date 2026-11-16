@@ -97,8 +97,8 @@ def build(day: str, out: Path, *, root: Path = ROOT, fetch: bool = True) -> dict
     _run_script(root / "logs/build_chips_data.py", stage_root)
     _run_script(root / "logs/build_stock_detail.py", stage_root)
     # 首頁籌碼卡的名單對照原件檢查（11-17）：不擋發布，結果由 daily_update 放進站台狀態的 checks.chip_detail
-    report["detail_check"] = check_detail(_read_assignment(stage / "web/detail-data.js", "window.MARKET_DETAIL = "),
-                                          root / "data/market-snapshots/stock-detail")
+    # （daily_update 讀這支程式最後一行印出的 report JSON 取 detail_check，main() 要維持最後才印 report）
+    report["detail_check"] = _safe_check_detail(stage / "web/detail-data.js", root / "data/market-snapshots/stock-detail")
 
     for name in ("analysis-data.js", "chips-data.js", "detail-data.js"):
         shutil.copy2(stage / "web" / name, out / name)
@@ -117,50 +117,60 @@ def build(day: str, out: Path, *, root: Path = ROOT, fetch: bool = True) -> dict
 
 
 # 首頁六張籌碼卡點開的名單（11-17 本人回報最近幾天都「這一天沒有資料」，而且沒有任何檢查擋下）。
-# （卡名, detail current.dates 的鍵, 名單欄位, 應該到哪一天的原件）；外資期貨空單那張列的是外資賣超，跟外資一起檢查。
+# （卡名, detail current.dates 的鍵, 名單欄位, 該有名單的日子看哪幾份原件, 要不要靠每日收盤行情換算或排序）；
+# 外資期貨空單那張卡列的是外資賣超，跟外資一起檢查，所以這裡是五列。
 DETAIL_CARDS = (
-    ("外資", "foreign", ("foreign_buy", "foreign_sell"), ("t86",)),
-    ("投信", "trust", ("trust_buy", "trust_sell"), ("t86",)),
-    ("成交金額", "amount", ("turnover_top",), ("t86", "quotes")),
-    ("融資", "margin", ("margin_up", "margin_down"), ("margin",)),
-    ("融券", "short", ("short_up", "short_down"), ("margin",)),
+    ("外資", "foreign", ("foreign_buy", "foreign_sell"), ("t86",), True),
+    ("投信", "trust", ("trust_buy", "trust_sell"), ("t86",), True),
+    ("成交金額", "amount", ("turnover_top",), ("t86", "quotes"), True),
+    ("融資", "margin", ("margin_up", "margin_down"), ("margin",), False),
+    ("融券", "short", ("short_up", "short_down"), ("margin",), False),
 )
-_PRICED = ("foreign", "trust", "amount")   # 要靠每日收盤行情換算或排序的幾張
 
 
-def _latest_source_day(source: Path, dataset: str) -> str | None:
-    days = sorted(p.stem.split("-")[-1] for p in (source / dataset).glob(f"{dataset}-*.json"))
-    return f"{days[-1][:4]}-{days[-1][4:6]}-{days[-1][6:]}" if days else None
+def _source_days(source: Path, dataset: str) -> set[str]:
+    """近期明細某一份原件有哪幾天（ISO 日期）。"""
+    compacts = (path.stem.split("-")[-1] for path in (source / dataset).glob(f"{dataset}-*.json"))
+    return {f"{c[:4]}-{c[4:6]}-{c[6:]}" for c in compacts}
 
 
 def check_detail(detail: dict, source: Path) -> dict:
     """對照近期明細原件（source＝data/market-snapshots/stock-detail）檢查 detail-data.js：
-    每張卡在「最新有原件的那一天」，那天的名單與「目前前 10」都要有人、日期要對得上。不擋發布，結果進站台狀態。"""
+    每張卡在每一個有原件的日子，名單都要有人；最新那一天的「目前前 10」也要有人、日期要對得上。
+    不擋發布，結果進站台狀態。"""
     by_date, current = detail.get("by_date") or {}, detail.get("current") or {}
     dates = current.get("dates") or {}
-    quote_days = {p.stem.split("-")[-1] for p in (source / "quotes").glob("quotes-*.json")}
+    quote_days = _source_days(source, "quotes")
     problems: list[str] = []
-    expected_days: list[str] = []
-    for card, key, lists, datasets in DETAIL_CARDS:
-        days = [day for day in (_latest_source_day(source, dataset) for dataset in datasets) if day]
+    latest_days: list[str] = []
+    for card, key, lists, datasets, priced in DETAIL_CARDS:
+        days = sorted(set().union(*(_source_days(source, dataset) for dataset in datasets)))
         if not days:
             problems.append(f"{card}：沒有任何原件")
             continue
-        day = max(days)
-        expected_days.append(day)
-        wrong = []
-        if not any((by_date.get(day) or {}).get(name) for name in lists):
-            wrong.append(f"{day} 的名單是空的")
-        if dates.get(key) != day:
-            wrong.append(f"目前前 10 停在 {dates.get(key)}，不是 {day}")
+        latest = days[-1]
+        latest_days.append(latest)
+        empty = [day for day in days if not any((by_date.get(day) or {}).get(name) for name in lists)]
+        wrong = [f"{'、'.join(empty)} 的名單是空的"] if empty else []
+        if dates.get(key) != latest:
+            wrong.append(f"目前前 10 停在 {dates.get(key)}，不是 {latest}")
         elif not any(current.get(name) for name in lists):
             wrong.append("目前前 10 是空的")
+        unpriced = [day for day in (empty or ([latest] if wrong else [])) if day not in quote_days]
+        if priced and unpriced:
+            wrong.append(f"缺 {'、'.join(unpriced)} 的每日收盤行情原件")
         if wrong:
-            if key in _PRICED and day.replace("-", "") not in quote_days:
-                wrong.append(f"缺 {day} 的每日收盤行情原件")
             problems.append(f"{card}：{'、'.join(wrong)}")
-    return {"status": "failed" if problems else "ok", "data_date": max(expected_days, default=None),
+    return {"status": "failed" if problems else "ok", "data_date": max(latest_days, default=None),
             "reason": "；".join(problems) or None}
+
+
+def _safe_check_detail(detail_js: Path, source: Path) -> dict:
+    """檢查本身出錯（檔案讀不起來等）也只回報失敗：不能因為檢查讓整包大盤資料改用上一版。"""
+    try:
+        return check_detail(_read_assignment(detail_js, "window.MARKET_DETAIL = "), source)
+    except Exception as error:  # noqa: BLE001 — 檢查不擋發布
+        return {"status": "failed", "data_date": None, "reason": f"檢查本身出錯：{type(error).__name__}: {error}"}
 
 
 def _stage_root(root: Path, stage: Path) -> Path:

@@ -141,7 +141,7 @@ class HomepageChipListsTest(unittest.TestCase):
         old_quotes.unlink()
         result = ingest(self.root, "2026-11-09", t86=T86, quotes=QUOTES, network=network)
         self.assertEqual(result["quotes"]["status"], "copied")
-        self.assertEqual(result["quotes_backfill"], {"status": "ok", "copied": ["20261106"], "missing": []})
+        self.assertEqual(result["quotes_backfill"], {"status": "ok", "copied": ["20261106"], "missing": {}})
         self.assertNotIn("MI_INDEX", {name for name, _ in network.calls})
         saved = json.loads(old_quotes.read_text(encoding="utf-8"))
         self.assertEqual(saved["data"], mi_index("20261106", QUOTES))
@@ -155,7 +155,7 @@ class HomepageChipListsTest(unittest.TestCase):
         result = di.listed_chip_detail_day(self.root, "2026-11-10", get=Network({}), sleep=lambda s: None,
                                            datasets=("quotes",))
         self.assertEqual(result["quotes"]["status"], "not_published")
-        self.assertEqual(result["quotes_backfill"]["missing"], [compact])
+        self.assertEqual(result["quotes_backfill"]["missing"], {compact: "上市行情原件尚未抓到"})
         self.assertFalse((self.root / "data/market-snapshots/stock-detail/quotes").exists())
 
 
