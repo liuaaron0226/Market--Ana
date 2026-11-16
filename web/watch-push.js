@@ -103,7 +103,12 @@
           try {
             await api('/api/watch/push/test', { method: 'POST', body: { endpoint: mine.endpoint } });
             say('已送出，幾秒內這台會收到一則測試通知。', 'success');
-          } catch (error) { say(error.message, 'error'); await mount(host); }
+          } catch (error) {
+            // 失效的訂閱已在雲端移除：先重畫成「沒打開」，再把原因顯示在新的畫面上。
+            await mount(host);
+            host.querySelector('.wp-status').textContent = error.message;
+            host.querySelector('.wp-status').dataset.state = 'error';
+          }
           finally { test.disabled = false; }
         });
         body.append(test);

@@ -58,7 +58,7 @@ test("成交價碰到觸發線：站主的裝置收到一則推播，寫明哪�
   await tick();
   assert.equal(pushes.sent.length, 1);
   assert.deepEqual(phone.decrypt(pushes.sent[0].body), {
-    title: "2330 台積電 已到觸發線", body: "觸發線 1,000（前波高點），成交 1,005", url: "/stock.html?code=2330", tag: "watch-2330",
+    title: "2330 台積電 已到觸發線", body: "觸發線 1,000，成交 1,005", url: "/stock.html?code=2330", tag: "watch-2330",
   });
   await tick(OPEN + MINUTE);
   assert.equal(pushes.sent.length, 1, "同一份判斷只通知一次");
@@ -116,10 +116,10 @@ test("有新一份判斷之後改用新的線，新的一份碰到時再通知�
   quotes["2330"] = 1010;
   await tick(OPEN + 2 * MINUTE);
   assert.equal(pushes.sent.length, 2);
-  assert.equal(phone.decrypt(pushes.sent[1].body).body, "觸發線 1,010（季線），成交 1,010");
+  assert.equal(phone.decrypt(pushes.sent[1].body).body, "觸發線 1,010，成交 1,010");
 });
 
-test("用量接近額度：每分鐘只查得完一部分時輪流查，不漏盯；Fugle 回「太頻繁」就停，狀態看得到", async () => {
+test("用量接近額度：每分鐘只查得完一部分時輪流查，不漏盯；Fugle 回「太頻繁」就停，狀態記下來", async () => {
   for (const code of ["1101", "1102", "1103"]) { await watch(code, `股${code}`); await judge(code, { value: 50 }); quotes[code] = 40; }
   env.WATCH_TICK_BUDGET = "2";
   await tick();
@@ -128,8 +128,7 @@ test("用量接近額度：每分鐘只查得完一部分時輪流查，不漏�
   quotes["1102"] = { status: 429 };
   const limited = await tick(OPEN + 2 * MINUTE);
   assert.equal(limited.rate_limited, true);
-  const status = await env.DB.prepare("SELECT detail_json FROM watch_tick_state WHERE key = 'last-run'").first();
-  assert.equal(JSON.parse(status.detail_json).rate_limited, true);
+  assert.equal(limited.pending, 3, "最久沒查的 1102 先查就被限流，三檔都留到下一分鐘（站主在推播設定裡看得到，見 watch-push-api.test.js）");
 });
 
 test("推播服務說這台裝置已經沒有了（410）：觸價照記一次，那台自動移除，不重複嘗試", async () => {
@@ -151,4 +150,28 @@ test("關注功能的開關關著時什麼都不做", async () => {
   delete env.MARKET_ANA_WATCHLIST_WATCH;
   assert.deepEqual(await tick(), { skipped: "off" });
   assert.deepEqual(quoteCalls, []);
+});
+
+test("一檔報價還停在前一天（停牌或剛開盤還沒成交）不會讓整分鐘停下，也不會說成今天休市", async () => {
+  await watch("1101", "台泥");
+  await watch("2330", "台積電");
+  await judge("1101", { value: 50 });
+  await judge("2330", { value: 1000 });
+  quotes["1101"] = { price: 60, date: "2026-11-13" };
+  quotes["2330"] = 1005;
+  const result = await tick();
+  assert.equal(result.closed_today, false);
+  assert.equal(pushes.sent.length, 1, "台積電照常通知；台泥停在前一天的價不算觸價");
+  assert.equal(phone.decrypt(pushes.sent[0].body).tag, "watch-2330");
+});
+
+test("晨間版觸價之後，不會改回去盯同一天已被取代的晚間版舊線", async () => {
+  await watch("2330", "台積電");
+  await judge("2330", { edition: "evening", value: 990 });
+  await judge("2330", { edition: "morning", value: 1000 });
+  quotes["2330"] = 1005;
+  await tick();
+  await tick(OPEN + MINUTE);
+  assert.equal(pushes.sent.length, 1);
+  assert.equal(phone.decrypt(pushes.sent[0].body).body, "觸發線 1,000，成交 1,005");
 });

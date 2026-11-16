@@ -1,6 +1,7 @@
 // 每日更新的可靠觸發器：GitHub Actions 的 schedule 會延遲或略過（11-09、11-10 實際發生），
 // 改由 Cloudflare Workers Cron Trigger 準時呼叫 GitHub workflow_dispatch。
-// 只做觸發，不碰網站資料；GitHub token 只需要本 repo 的 Actions: write。
+// 每日更新只做觸發，不碰網站資料；GitHub token 只需要本 repo 的 Actions: write。
+// 2026-11-16 起另外負責自選股關注的每分鐘雲端盯價（WATCH_CRON），那一段才綁網站的資料庫與報價、推播金鑰。
 import { runWatchTick } from "../cloud/lib/watch-tick.js";
 
 const REPO = "liuaaron0226/Market--Ana";

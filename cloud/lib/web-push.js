@@ -68,16 +68,19 @@ async function encrypt(payload, subscription) {
 }
 
 // 送一則通知到一台裝置。回傳 { ok, gone, status }：gone＝推播服務說這個訂閱已經不存在（404／410），呼叫端要刪掉它。
-export async function sendPush(subscription, payload, env, { fetchImpl = fetch, now = Date.now, ttl = 3600 } = {}) {
+// vapidCache：同一次執行送好幾台時共用一個 Map，同一個推播服務的憑證只簽一次（免費方案每次執行只有 10ms CPU）。
+export async function sendPush(subscription, payload, env, { fetchImpl = fetch, now = Date.now, vapidCache = new Map() } = {}) {
   const body = await encrypt(payload, subscription);
+  const audience = new URL(subscription.endpoint).origin;
+  if (!vapidCache.has(audience)) vapidCache.set(audience, await vapidHeader(subscription.endpoint, env, now()));
   let response;
   try {
     response = await fetchImpl(subscription.endpoint, {
       method: "POST",
       headers: {
-        authorization: await vapidHeader(subscription.endpoint, env, now()),
+        authorization: vapidCache.get(audience),
         "content-encoding": "aes128gcm", "content-type": "application/octet-stream",
-        ttl: String(ttl), urgency: "high",
+        ttl: "3600", urgency: "high",   // 一小時內沒送達就不送了：到價提醒過時沒有意義
       },
       body,
     });
@@ -87,22 +90,10 @@ export async function sendPush(subscription, payload, env, { fetchImpl = fetch, 
   return { ok: response.status >= 200 && response.status < 300, gone: response.status === 404 || response.status === 410, status: response.status };
 }
 
-// 送給某位使用者登記的每一台裝置；失效的訂閱刪掉，其他失敗記在那一台上、不重試。回傳送達的台數。
-export async function sendToAll(db, email, payload, env, { fetchImpl, now = Date.now } = {}) {
-  const { results: rows } = await db.prepare(
-    "SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE email = ? ORDER BY created_at",
-  ).bind(email).all();
-  let delivered = 0;
-  for (const row of rows) {
-    const result = await sendOne(db, row, payload, env, { fetchImpl, now });
-    if (result.ok) delivered += 1;
-  }
-  return delivered;
-}
-
-export async function sendOne(db, row, payload, env, { fetchImpl, now = Date.now }) {
+// 送一則到一台已登記的裝置：失效的訂閱刪掉，其他失敗記在那一台上、不重試。
+export async function sendOne(db, row, payload, env, { fetchImpl, now = Date.now, vapidCache }) {
   const subscription = { endpoint: row.endpoint, keys: { p256dh: row.p256dh, auth: row.auth } };
-  const result = await sendPush(subscription, payload, env, { fetchImpl, now });
+  const result = await sendPush(subscription, payload, env, { fetchImpl, now, vapidCache });
   const at = new Date(now()).toISOString();
   if (result.gone) {
     await db.prepare("DELETE FROM push_subscriptions WHERE endpoint = ?").bind(row.endpoint).run();

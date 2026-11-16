@@ -22,7 +22,7 @@ CREATE TABLE watch_touches (
   price           REAL NOT NULL,
   quote_time      TEXT NOT NULL,
   touched_at      TEXT NOT NULL,
-  devices         INTEGER NOT NULL CHECK (devices >= 0)
+  devices         INTEGER NOT NULL CHECK (devices >= 0)   -- 記下這筆時登記著幾台（要送的台數，不是送達的台數）
 );
 CREATE INDEX watch_touches_code ON watch_touches (code, touched_at);
 CREATE TRIGGER watch_touches_no_update BEFORE UPDATE ON watch_touches

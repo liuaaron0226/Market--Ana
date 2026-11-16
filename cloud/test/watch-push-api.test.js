@@ -3,6 +3,7 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { handle } from "../lib/gate.js";
+import { runWatchTick } from "../lib/watch-tick.js";
 import { fakeD1, makeIssuer, claims, fetchJwks, TEAM, MAIN_AUD, APPLY_AUD, OWNER } from "./helpers.js";
 import { checkVapid, makeVapid, makeDevice, pushRecorder } from "./push-helpers.js";
 
@@ -85,4 +86,13 @@ test("其他獲准使用者、開關關著時的站主都得到「沒有內容�
   delete env.MARKET_ANA_WATCHLIST_WATCH;
   assert.deepEqual(await json("/api/watch/push"), { available: false });
   assert.equal(pushes.sent.length, 0);
+});
+
+test("雲端盯價最後一次的狀態，站主在推播設定裡看得到（例如排程程式還沒放報價金鑰）", async () => {
+  assert.equal((await json("/api/watch/push")).watcher, null);
+  await runWatchTick(env, { now: () => Date.parse("2026-11-16T02:00:00Z") });   // 週一台北 10:00，env 沒有 FUGLE_API_KEY
+  const { watcher } = await json("/api/watch/push");
+  assert.equal(watcher.at, "2026-11-16T02:00:00.000Z");
+  assert.equal(watcher.status, "error");
+  assert.equal(watcher.error, "排程程式缺少站主或報價金鑰設定");
 });
