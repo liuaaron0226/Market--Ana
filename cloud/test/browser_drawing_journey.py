@@ -1,6 +1,7 @@
 """畫線工具的本機瀏覽器旅程（桌機與手機寬度各走一遍）。
 票 01：水平線畫得出來，而且存得住。票 02：點線選取、拖動、刪除（工具列與 Delete）、Esc。
 票 03：趨勢線與射線——點兩下成線、預覽線、取消、拖整條、拖端點、切日週月、重新整理後仍在。
+票 04：矩形——點兩下對角、預覽、點邊線選取、拖整個、拖角落、切日週月、重新整理後仍在。
 
 用真正的 gate.handle＋cloud/dist＋記憶體資料庫（cloud/test/journey-server.mjs），Access 由 cookie 模擬；
 不連正式站、不碰 8876／8897。先在 cloud/ 跑過 `node build.mjs` 讓 dist 是最新的。
@@ -576,7 +577,7 @@ def two_point_desktop(journey: Journey, browser) -> None:
     mid = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
 
     order = page.evaluate("() => [...document.querySelectorAll('#drawTools button[data-tool]')].map(button => button.dataset.tool + ':' + button.getAttribute('aria-label') + ':' + button.textContent.trim())")
-    journey.check("工具列依序是趨勢線、水平線、射線，只有圖示、各有可讀名稱", order == ["trend:趨勢線:", "hline:水平線:", "ray:射線:"], order)
+    journey.check("工具列依序是趨勢線、水平線、射線、矩形，只有圖示、各有可讀名稱", order == ["trend:趨勢線:", "hline:水平線:", "ray:射線:", "rect:矩形:"], order)
     for button, name in [(trend, "趨勢線"), (ray, "射線")]:
         button.hover()
         page.wait_for_timeout(700)
@@ -803,6 +804,161 @@ def two_point_mobile(journey: Journey, browser) -> None:
     context.close()
 
 
+def rect_desktop(journey: Journey, browser) -> None:
+    print("票 04｜桌機寬度 1280：矩形")
+    code = "2308"
+    context = journey.context(browser, OWNER, viewport={"width": 1280, "height": 900})
+    page = journey.open(context, code)
+    tools = page.locator("#drawTools")
+    rect = tools.locator("button[data-tool=rect]")
+    delete = page.locator("#drawDelete")
+    box = page.locator("#chartHost canvas").bounding_box()
+    width, height = box["width"], box["height"]
+    a, b = (round(width * 0.3), round(height * 0.3)), (round(width * 0.55), round(height * 0.6))  # 左上、右下
+    inside = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
+
+    rect.hover()
+    page.wait_for_timeout(700)
+    tip = rect.evaluate("button => { const style = getComputedStyle(button, '::after'); return style.content + '|' + style.opacity; }")
+    journey.check("滑鼠停留顯示「矩形」", tip == '"矩形"|1', tip)
+    page.mouse.move(5, 5)
+    journey.check("起點：這一檔沒有畫線", journey.saved(page, code) == [] and journey.ink(page)["count"] == 0)
+
+    rect.click()
+    page.mouse.click(*journey.at(page, *b))  # 先點右下角
+    page.mouse.move(*journey.at(page, *a), steps=8)
+    preview = journey.ink(page)
+    journey.check("點第一下後移動游標：預覽的框跟著走，還沒儲存", spans(preview, a, b) and journey.saved(page, code) == [], preview)
+    page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-14-rect-preview.png"))
+    with page.expect_response(drawing_request("PUT")) as created:
+        page.mouse.click(*journey.at(page, *a))  # 再點左上角
+    page.mouse.move(5, 5)
+    items = journey.saved(page, code)
+    drawn = journey.ink(page)
+    journey.check("點第二下：矩形畫出來並儲存（PUT 回 201），工具回一般模式", created.value.status == 201 and spans(drawn, a, b)
+                  and rect.get_attribute("aria-pressed") == "false", drawn)
+    journey.check("先點右下再點左上，存的仍是「較早＋較高、較晚＋較低」", len(items) == 1 and items[0]["kind"] == "rect"
+                  and items[0]["anchors"][0]["date"] < items[0]["anchors"][1]["date"]
+                  and items[0]["anchors"][0]["price"] > items[0]["anchors"][1]["price"], items)
+    page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-15-rect-drawn.png"))
+    before = items[0]["anchors"]
+
+    page.mouse.click(*journey.at(page, b[0] + 30, inside[1]))
+    journey.check("點在框外 30px：不選取", not delete.is_visible())
+    page.mouse.click(*journey.at(page, *inside))
+    journey.check("點在框的內部：不選取，照舊顯示 K 棒數值", not delete.is_visible() and page.locator("#chartHost .kc-tip.show").count() == 1)
+    page.mouse.click(*journey.at(page, inside[0], a[1] + 3))
+    journey.check("點在上邊線旁 3px：選取，工具列出現刪除", delete.is_visible())
+    page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-16-rect-selected.png"))
+
+    axis = journey.axis(page)
+    page.mouse.move(*journey.at(page, *inside))
+    page.mouse.down()
+    page.mouse.move(*journey.at(page, inside[0] + 60, inside[1] + 30), steps=6)
+    with page.expect_response(drawing_request("PUT")) as moved:
+        page.mouse.up()
+    after = journey.saved(page, code)[0]["anchors"]
+    drop = [round(before[i]["price"] - after[i]["price"], 2) for i in (0, 1)]
+    journey.check("拖框的內部：整個平移（兩個角的價位降一樣多、日期都往後），圖表不平移", moved.value.status == 200 and drop[0] > 0
+                  and abs(drop[0] - drop[1]) <= 0.02 and all(after[i]["date"] > before[i]["date"] for i in (0, 1))
+                  and journey.axis(page) == axis, {"before": before, "after": after})
+    before = after
+
+    placed = journey.ink(page)  # 選取中：外框比角落多出把手的半徑（約 5px）
+    corner = (placed["maxX"] - 5, placed["maxY"] - 5)  # 右下角
+    page.mouse.move(*journey.at(page, *corner))
+    page.mouse.down()
+    page.mouse.move(*journey.at(page, corner[0] + 70, corner[1] + 40), steps=6)
+    with page.expect_response(drawing_request("PUT")) as moved:
+        page.mouse.up()
+    after = journey.saved(page, code)[0]["anchors"]
+    journey.check("拖右下角：只有右下角變（更晚、更低），左上角不動", moved.value.status == 200 and after[0] == before[0]
+                  and after[1]["date"] > before[1]["date"] and after[1]["price"] < before[1]["price"], {"before": before, "after": after})
+    page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-17-rect-resized.png"))
+    kept = after
+    daily = journey.ink(page)
+
+    for period, name in [("weekly", "週 K"), ("monthly", "月 K")]:
+        journey.choose_period(page, period)
+        journey.check(f"{name}：矩形還在，雲端的兩個角沒有被改", journey.ink(page)["count"] > 0 and journey.saved(page, code)[0]["anchors"] == kept)
+        page.locator(".bd-chart").screenshot(path=str(OUT / f"desktop-18-rect-{period}.png"))
+    journey.choose_period(page, "daily")
+    back = journey.ink(page)
+    journey.check("切回日 K：矩形回到原本的位置", all(abs(back[key] - daily[key]) <= 1.5 for key in ("minX", "maxX", "minY", "maxY")), {"back": back, "was": daily})
+
+    page.reload()
+    journey.ready(page, code)
+    journey.check("重新整理後矩形還在，雲端的兩個角相同，沒有選取", journey.ink(page)["count"] > 0
+                  and journey.saved(page, code)[0]["anchors"] == kept and not delete.is_visible())
+    context.close()
+
+
+def rect_mobile(journey: Journey, browser) -> None:
+    print("票 04｜手機寬度 390（觸控）：矩形")
+    code = "2308"
+    context = journey.context(browser, OWNER, viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True, has_touch=True)
+    page = journey.open(context, code)
+    tools = page.locator("#drawTools")
+    rect = tools.locator("button[data-tool=rect]")
+    delete = page.locator("#drawDelete")
+    box = page.locator("#chartHost canvas").bounding_box()
+    width, height = box["width"], box["height"]
+
+    journey.check("手機：桌機畫的矩形看得到", journey.ink(page)["count"] > 0 and len(journey.saved(page, code)) == 1)
+    sizes = [button.bounding_box() for button in tools.locator("button[data-tool]").all()]
+    journey.check("手機：四顆工具都夠大（至少 44px），工具列不造成橫向捲動", len(sizes) == 4 and all(size["width"] >= 44 and size["height"] >= 44 for size in sizes)
+                  and page.evaluate("() => document.documentElement.scrollWidth <= innerWidth"), sizes)
+
+    a, b = (round(width * 0.12), round(height * 0.7)), (round(width * 0.4), round(height * 0.88))
+    existing = {item["id"] for item in journey.saved(page, code)}
+    rect.tap()
+    page.touchscreen.tap(*journey.at(page, *a))
+    with page.expect_response(drawing_request("PUT")) as created:
+        page.touchscreen.tap(*journey.at(page, *b))
+    items = journey.saved(page, code)
+    journey.check("手機：點工具再點兩下，畫出第二個矩形並儲存，工具回一般模式", created.value.status == 201 and len(items) == 2
+                  and rect.get_attribute("aria-pressed") == "false", items)
+    page.locator(".bd-chart").screenshot(path=str(OUT / "mobile-11-rect-drawn.png"))
+    mine = next(item for item in items if item["id"] not in existing)
+
+    page.touchscreen.tap(*journey.at(page, (a[0] + b[0]) / 2, (a[1] + b[1]) / 2))
+    journey.check("手機：手指點框的內部不選取", not delete.is_visible())
+    page.touchscreen.tap(*journey.at(page, (a[0] + b[0]) / 2, a[1] + 9))
+    journey.check("手機：手指點在上邊線旁 9px 就選取，工具列出現刪除", delete.is_visible())
+    page.locator(".bd-chart").screenshot(path=str(OUT / "mobile-12-rect-selected.png"))
+
+    cdp = context.new_cdp_session(page)
+
+    def touch(kind: str, tx: float, ty: float) -> None:
+        cdp.send("Input.dispatchTouchEvent", {
+            "type": kind, "touchPoints": [] if kind == "touchEnd" else [{"x": round(tx), "y": round(ty)}]})
+
+    axis = journey.axis(page)
+    scroll = page.evaluate("() => scrollY")
+    x, y = journey.at(page, *b)
+    touch("touchStart", x, y)
+    for step in range(1, 7):
+        touch("touchMove", x + step * 5, y - step * 4)
+        page.wait_for_timeout(16)
+    page.wait_for_timeout(250)
+    with page.expect_response(drawing_request("PUT")) as moved:
+        touch("touchEnd", x + 30, y - 24)
+    after = next(item for item in journey.saved(page, code) if item["id"] == mine["id"])
+    journey.check("手機：手指拖右下角，只有右下角變（更晚、更高），左上角不動；圖表不平移、頁面不捲動", moved.value.status == 200
+                  and after["anchors"][0] == mine["anchors"][0] and after["anchors"][1]["price"] > mine["anchors"][1]["price"]
+                  and after["anchors"][1]["date"] >= mine["anchors"][1]["date"]
+                  and journey.axis(page) == axis and page.evaluate("() => scrollY") == scroll, {"before": mine["anchors"], "after": after["anchors"]})
+    page.locator(".bd-chart").screenshot(path=str(OUT / "mobile-13-rect-resized.png"))
+
+    with page.expect_response(drawing_request("DELETE")) as removed:
+        delete.tap()
+    journey.check("手機：點刪除，選取的矩形消失，另一個還在", removed.value.status == 204 and len(journey.saved(page, code)) == 1 and not delete.is_visible())
+    page.reload()
+    journey.ready(page, code)
+    journey.check("手機：重新整理後只剩一個矩形", journey.ink(page)["count"] > 0 and len(journey.saved(page, code)) == 1)
+    context.close()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", help="已經開著的旅程伺服器；省略時自己起一個")
@@ -833,6 +989,8 @@ def main() -> int:
             edit_mobile(journey, browser)
             two_point_desktop(journey, browser)
             two_point_mobile(journey, browser)
+            rect_desktop(journey, browser)
+            rect_mobile(journey, browser)
             browser.close()
     finally:
         if server:
