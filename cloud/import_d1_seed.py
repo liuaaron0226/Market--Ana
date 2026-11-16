@@ -50,14 +50,20 @@ DATABASE = "market-ana-accounts"
 MAX_BATCH_BYTES = 90_000
 DAILY_ROWS_WRITTEN_LIMIT = 100_000
 # 0004 新增的資料表；匯入器只會寫這些（stock_data_state 只在 activate／rollback 寫）。
-STAGING_TABLES = ("stock_data_versions", "listed_securities", "stock_analysis", "universe_outside", "stock_announcements")
-# 0013 新增、可以晚一步才套到資料庫的表：資料庫還沒有它時，匯入就略過它的批次（記在輸出裡），其他照常。
-OPTIONAL_TABLES = ("stock_announcements",)
+STAGING_TABLES = ("stock_data_versions", "listed_securities", "stock_analysis", "universe_outside", "stock_announcements",
+                  "etf_securities")
+# 0013、0018 新增、可以晚一步才套到資料庫的表：資料庫還沒有它時，匯入就略過它的批次（記在輸出裡），其他照常。
+OPTIONAL_TABLES = ("stock_announcements", "etf_securities")
+# 增量匯入時不從前一版複製、每次整份送的表。
+ALWAYS_SENT_TABLES = ("etf_securities",)
 
 _SECURITY_COLUMNS = ("version", "code", "name", "market", "security_type", "isin", "listed_date", "industry",
                      "cfi_code", "latest_bar_date", "available_bars", "analysis_status", "universe_rank",
                      "universe_rule")
 _OUTSIDE_COLUMNS = ("version", "code", "name", "market", "universe_rank", "reason", "universe_rule")
+# 12 票：ETF 名錄（0018），欄位和 build_stock_pack.ETF_COLUMNS 相同。
+_ETF_COLUMNS = ("version", "code", "name", "market", "etf_type", "latest_bar_date", "available_bars", "analysis_status",
+                "universe_rank", "universe_rule")
 
 
 def compact_json(value: object) -> str:
@@ -82,6 +88,7 @@ class Seed:
     analyses: list
     outside: list
     announcements: list = field(default_factory=list)   # 個股頁事實區塊 D 票：每檔一列近 90 天的公告清單；舊種子沒有這種列
+    etfs: list = field(default_factory=list)            # 12 票：名單內股票型 ETF 的名錄列；舊種子沒有這種列
 
     @property
     def version(self) -> str:
@@ -102,7 +109,7 @@ class Batch:
 
 def load_seed(seed_dir: Path) -> Seed:
     manifest = None
-    securities, analyses, outside, announcements = [], [], [], []
+    securities, analyses, outside, announcements, etfs = [], [], [], [], []
     with (Path(seed_dir) / "seed.jsonl").open(encoding="utf-8") as handle:
         for number, line in enumerate(handle, 1):
             if not line.strip():
@@ -121,11 +128,13 @@ def load_seed(seed_dir: Path) -> Seed:
                 outside.append(data)
             elif kind == "stock_announcement":
                 announcements.append(data)
+            elif kind == "etf_security":
+                etfs.append(data)
             else:
                 raise ValueError(f"seed 第 {number} 行有未知記錄類型：{kind}")
     if manifest is None:
         raise ValueError("seed 缺 version 記錄")
-    return Seed(manifest, securities, analyses, outside, announcements)
+    return Seed(manifest, securities, analyses, outside, announcements, etfs)
 
 
 def _check_seed(seed: Seed) -> None:
@@ -134,6 +143,8 @@ def _check_seed(seed: Seed) -> None:
         raise ValueError(f"catalog_count 與 seed 名錄列數不符：{manifest.get('catalog_count')} != {len(seed.securities)}")
     if manifest.get("analysis_count") != len(seed.analyses):
         raise ValueError(f"analysis_count 與 seed 分析列數不符：{manifest.get('analysis_count')} != {len(seed.analyses)}")
+    if manifest.get("etf_count", 0) != len(seed.etfs):
+        raise ValueError(f"etf_count 與 seed ETF 名錄列數不符：{manifest.get('etf_count', 0)} != {len(seed.etfs)}")
     for row in seed.analyses:
         payload = row["payload"]
         if payload.get("schema") != "stock-analysis/v2" or payload.get("code") != row["code"]:
@@ -150,6 +161,8 @@ def _row_values(seed: Seed, table: str, row: dict) -> str:
         values = [version] + [row.get(column) for column in _OUTSIDE_COLUMNS[1:]]
     elif table == "stock_announcements":
         values = [version, row["code"], row["as_of"], compact_json(row["payload"])]
+    elif table == "etf_securities":
+        values = [version] + [row.get(column) for column in _ETF_COLUMNS[1:]]
     else:  # pragma: no cover - 內部呼叫只有這幾種
         raise ValueError(table)
     return "(" + ", ".join(_literal(value) for value in values) + ")"
@@ -161,6 +174,7 @@ def _insert_prefix(table: str) -> str:
         "stock_analysis": ("version", "code", "as_of", "payload"),
         "universe_outside": _OUTSIDE_COLUMNS,
         "stock_announcements": ("version", "code", "as_of", "payload"),
+        "etf_securities": _ETF_COLUMNS,
     }[table]
     return f"INSERT OR IGNORE INTO {table} ({', '.join(columns)}) VALUES\n"
 
@@ -179,7 +193,7 @@ def plan_batches(seed: Seed, max_batch_bytes: int = MAX_BATCH_BYTES) -> list:
     _check_seed(seed)
     batches = [Batch("0000-stock_data_versions", "stock_data_versions", 1, _version_sql(seed))]
     groups = (("listed_securities", seed.securities), ("stock_analysis", seed.analyses),
-              ("universe_outside", seed.outside), ("stock_announcements", seed.announcements))
+              ("universe_outside", seed.outside), ("stock_announcements", seed.announcements), ("etf_securities", seed.etfs))
     for table, rows in groups:
         prefix = _insert_prefix(table)
         pending: list = []
@@ -212,6 +226,7 @@ _TABLE_COLUMNS = {
     "stock_analysis": ("version", "code", "as_of", "payload"),
     "universe_outside": _OUTSIDE_COLUMNS,
     "stock_announcements": ("version", "code", "as_of", "payload"),
+    "etf_securities": _ETF_COLUMNS,
 }
 
 
@@ -222,7 +237,7 @@ def _row_identity(seed: Seed, table: str, row: dict) -> str:
 
 def _rows_by_table(seed: Seed) -> dict:
     return {"listed_securities": seed.securities, "stock_analysis": seed.analyses, "universe_outside": seed.outside,
-            "stock_announcements": seed.announcements}
+            "stock_announcements": seed.announcements, "etf_securities": seed.etfs}
 
 
 def _copy_forward_sql(table: str, new_version: str, base_version: str, codes: list) -> str:
@@ -248,7 +263,8 @@ def plan_incremental(seed: Seed, base: Seed, max_batch_bytes: int = MAX_BATCH_BY
     stats = {"base_version": base.version, "copied": {}, "sent": {}}
     base_rows = _rows_by_table(base)
     for table, rows in _rows_by_table(seed).items():
-        old = {row["code"]: _row_identity(base, table, row) for row in base_rows[table]}
+        # 12 票：ETF 名錄每次整份送（只有幾十列）。前一版匯入時資料庫可能還沒有 0018、ETF 表被略過，從前一版複製會是空的。
+        old = {} if table in ALWAYS_SENT_TABLES else {row["code"]: _row_identity(base, table, row) for row in base_rows[table]}
         unchanged = [row["code"] for row in rows if old.get(row["code"]) == _row_identity(seed, table, row)]
         unchanged_set = set(unchanged)
         changed = [row for row in rows if row["code"] not in unchanged_set]

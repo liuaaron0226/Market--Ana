@@ -60,6 +60,25 @@ export function stockSignalsVisible(env, isOwner) {
   return modeAllowsViewer(stockSignalsMode(env), isOwner);
 }
 
+// ETF 上站（2026-11-16 規格「ETF 納入」，12 票）：自己一個三種狀態的開關，和五塊、事實區塊都不連動。
+// 對這個人是開的時候，名單內的股票型 ETF 搜尋得到、有個股頁、可加自選；關的時候一切和沒有這個功能時一樣（只有 0050）。
+function stockEtfsMode(env) {
+  return threeStateMode(env?.MARKET_ANA_STOCK_ETFS);
+}
+
+export function stockEtfsVisible(env, isOwner) {
+  return modeAllowsViewer(stockEtfsMode(env), isOwner);
+}
+
+// 0050 是核心持有的比較基準，一直都有個股頁；ETF 開關只管其他 ETF。
+export const ALWAYS_VISIBLE_ETF = "0050";
+
+// 這一檔的分析結果（kind 取自 payload）對這個人要不要當作不存在：0050 以外的 ETF，開關對他關著就藏起來，
+// 讓他拿到的回應和 ETF 上站之前一樣。
+export function etfAnalysisHidden(code, kind, etfsVisible) {
+  return kind === "etf" && code !== ALWAYS_VISIBLE_ETF && !etfsVisible;
+}
+
 // 開放給朋友的 Gemini（2026-11-16，01 票）：只給朋友用、站主不走這條線，所以不放進功能清單；
 // 自己一個開關，不掛在策略總開關底下。只認一字不差的 "on"，其他寫法一律是關。
 export function friendAiEnabled(env) {
@@ -73,6 +92,7 @@ export function policyForViewer(policy, isOwner, env = {}) {
   for (const name of HIDDEN_FROM_OTHERS) features[name] = false;
   features.stock_facts_v1 = stockFactsVisible(env, false);
   features.stock_signals_v1 = stockSignalsVisible(env, false);
+  features.stock_etfs_v1 = stockEtfsVisible(env, false);
   return { ...policy, features };
 }
 
@@ -106,6 +126,8 @@ export function releasePolicy(env = {}) {
       stock_facts_v1: stockFactsMode(env) !== "off",
       // 個股頁五塊新功能：同上，這裡是站主看到的值。
       stock_signals_v1: stockSignalsMode(env) !== "off",
+      // ETF 上站：同上，這裡是站主看到的值。
+      stock_etfs_v1: stockEtfsMode(env) !== "off",
     },
   };
 }

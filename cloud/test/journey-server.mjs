@@ -8,6 +8,7 @@ import { fakeD1, makeIssuer, claims, fetchJwks, TEAM, MAIN_AUD, APPLY_AUD, OWNER
 import marketPack from "../functions/_market-pack.js";
 import stockPack from "../functions/_stock-pack.js";
 import screensPack from "../functions/_screens-pack.js";
+import comparePack from "../functions/_compare-pack.js";
 
 const port = Number(process.argv[2] || 8899);
 const dist = new URL("../dist/", import.meta.url);
@@ -20,9 +21,11 @@ if (process.env.MARKET_ANA_FORECAST_LEDGER) env.MARKET_ANA_FORECAST_LEDGER = pro
 // 自選股關注的本機預覽：MARKET_ANA_WATCHLIST_WATCH=owner 打開開關。JOURNEY_SEED_SQL 可以放國外同類股的種子，
 // 或 watch_ledger.d1_sql 的指令檔加上站主的自選股（E 票）。
 if (process.env.MARKET_ANA_WATCHLIST_WATCH) env.MARKET_ANA_WATCHLIST_WATCH = process.env.MARKET_ANA_WATCHLIST_WATCH;
+// ETF 上站（12 票）的本機預覽：MARKET_ANA_STOCK_ETFS=owner／all 打開開關；ETF 名錄與分析放在 JOURNEY_SEED_SQL。
+if (process.env.MARKET_ANA_STOCK_ETFS) env.MARKET_ANA_STOCK_ETFS = process.env.MARKET_ANA_STOCK_ETFS;
 // 自動化驗收會在一分鐘內點完全部下鑽；額度可由第三個參數放寬（正式版額度見 gate.js RATE，不受影響）。
 const rate = process.argv[3] === "relaxed" ? { market: 10_000, detail: 10_000, userData: 10_000 } : undefined;
-const deps = { fetchImpl: fetchJwks(issuer.jwks), now: () => Date.now(), marketPack, stockPack, screensPack, rate };
+const deps = { fetchImpl: fetchJwks(issuer.jwks), now: () => Date.now(), marketPack, stockPack, screensPack, comparePack, rate };
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json" };
 
 async function serveStatic(pathname) {

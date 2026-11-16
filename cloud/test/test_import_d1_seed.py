@@ -16,7 +16,8 @@ from cloud import import_d1_seed as importer
 
 ROOT = Path(__file__).resolve().parents[2]
 MIGRATIONS = (sorted((ROOT / "cloud" / "migrations").glob("000[1-4]_*.sql"))
-              + [ROOT / "cloud" / "migrations" / "0013_stock_announcements.sql"])
+              + [ROOT / "cloud" / "migrations" / "0013_stock_announcements.sql",
+                 ROOT / "cloud" / "migrations" / "0018_etf_securities.sql"])
 EXAMPLE = json.loads((ROOT / "cloud" / "test" / "fixtures" / "stock-analysis-v2.example.json").read_text(encoding="utf-8"))
 PROTECTED = ("users", "audit", "eval_keys", "api_hits", "d1_migrations")
 VERSION = "liquid-20261108-test-v2"
@@ -398,7 +399,8 @@ class AnnouncementTest(unittest.TestCase):
         seed = importer.load_seed(write_seed(self.root / "s", announcements={"1101": ["董事會決議"]}))
         batches = importer.plan_batches(seed)
         kept, skipped = importer.drop_missing_tables(batches, existing={"stock_data_versions", "listed_securities",
-                                                                        "stock_analysis", "universe_outside"})
+                                                                        "stock_analysis", "universe_outside",
+                                                                        "etf_securities"})
         self.assertEqual(skipped, ["stock_announcements"])
         self.assertEqual([b.table for b in kept if b.table == "stock_announcements"], [])
         self.assertEqual(len(kept), len(batches) - 1)

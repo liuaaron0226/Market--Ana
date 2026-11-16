@@ -43,6 +43,11 @@ OTC_CATALOG_META = ROOT / "data/otc-catalog/raw/tpex-isin-otc-20261108.meta.json
 OTC_HISTORY_DB = ROOT / "data/otc-history/otc_history.sqlite"
 MIGRATION = ROOT / "cloud/migrations/0004_listed_stock_data.sql"
 DEFAULT_OUT = ROOT / ".tmp/lane-A2/full"
+ETF_MIGRATION = ROOT / "cloud/migrations/0018_etf_securities.sql"
+# 不進普通股名錄、分析另外給一筆的 ETF（核心持有的比較基準）。
+COMPATIBILITY_CODES = ("0050",)
+ETF_COLUMNS = ("version", "code", "name", "market", "etf_type", "latest_bar_date", "available_bars", "analysis_status",
+               "universe_rank", "universe_rule")
 # 契約 v2 §1／§9 已移除的欄位；seed 裡出現任何一個就拒絕，避免舊三方案或自創計分混進新版本。
 RETIRED_KEYS = frozenset({
     "preset", "available_presets", "score", "score_complete", "score_note", "dimensions", "coverage",
@@ -215,7 +220,9 @@ def _isolate_strategy(code: str, payload: dict) -> str | None:
     return None
 
 
-def _validate_seed(manifest: dict, securities: Sequence[dict], analyses: Sequence[dict]) -> None:
+def _validate_seed(manifest: dict, securities: Sequence[dict], analyses: Sequence[dict],
+                   etfs: Sequence[dict] = ()) -> None:
+    """``etfs`` 是 ETF 名錄列（12 票）：名錄裡可分析的 ETF 才能有分析列，分析列也必須是 ETF。"""
     if manifest["catalog_count"] != len(securities):
         raise ValueError("catalog_count 與 staging 名錄列數不符")
     if manifest["analysis_count"] != len(analyses):
@@ -228,6 +235,14 @@ def _validate_seed(manifest: dict, securities: Sequence[dict], analyses: Sequenc
             raise ValueError(f"staging 名錄代號重複：{code}")
         by_code[code] = row
 
+    if manifest.get("etf_count", 0) != len(etfs):
+        raise ValueError("etf_count 與 staging ETF 名錄列數不符")
+    etf_by_code: dict[str, dict] = {}
+    for row in etfs:
+        if row["code"] in etf_by_code or row["code"] in by_code:
+            raise ValueError(f"ETF 名錄代號重複或混進普通股名錄：{row['code']}")
+        etf_by_code[row["code"]] = row
+
     compatibility_codes = set(manifest.get("compatibility_codes", []))
     found: set[str] = set()
     for row in analyses:
@@ -238,7 +253,12 @@ def _validate_seed(manifest: dict, securities: Sequence[dict], analyses: Sequenc
         found.add(code)
         security = by_code.get(code)
         is_compatibility = code in compatibility_codes
-        if (security is None or security["analysis_status"] not in ("available", "stale")) and not is_compatibility:
+        etf = etf_by_code.get(code) if not is_compatibility else None
+        if etf is not None:
+            if etf["analysis_status"] not in ("available", "stale") or payload.get("kind") != "etf":
+                raise ValueError(f"ETF 分析列不屬於可分析的 ETF 名錄標的：{code}")
+            security = etf
+        elif (security is None or security["analysis_status"] not in ("available", "stale")) and not is_compatibility:
             raise ValueError(f"分析列不屬於可分析名錄標的：{code}")
         _check_payload(code, payload)
         if is_compatibility and (security is not None or payload.get("kind") != "etf"):
@@ -252,7 +272,9 @@ def _validate_seed(manifest: dict, securities: Sequence[dict], analyses: Sequenc
         if is_compatibility and manifest.get("data_date") is not None and payload["as_of"] != manifest["data_date"]:
             raise ValueError(f"相容入口資料日與版本資料日不一致：{code}")
 
-    for code, security in by_code.items():
+    # 0050 這類相容入口的分析另外核（下面那段），ETF 名錄裡的它不重複要求。
+    etfs_with_own_analysis = {code: row for code, row in etf_by_code.items() if code not in compatibility_codes}
+    for code, security in [*by_code.items(), *etfs_with_own_analysis.items()]:
         if security["analysis_status"] in ("available", "stale") and code not in found:
             raise ValueError(f"可分析標的缺分析列：{code}")
     for code in compatibility_codes:
@@ -266,9 +288,12 @@ def install_staging_version(
     securities: Sequence[dict],
     analyses: Sequence[dict],
     outside: Sequence[dict] = (),
+    *,
+    etfs: Sequence[dict] = (),
 ) -> None:
-    """同一交易中完整寫入、核數，最後才切 active；失敗時保留原 active。``outside`` 是母體外標的的名次或原因。"""
-    _validate_seed(manifest, securities, analyses)
+    """同一交易中完整寫入、核數，最後才切 active；失敗時保留原 active。``outside`` 是母體外標的的名次或原因。
+    ``etfs`` 是 ETF 名錄列（12 票，寫進 0018 的 etf_securities；沒有就不碰那張表）。"""
+    _validate_seed(manifest, securities, analyses, etfs)
     version = manifest["version"]
     try:
         connection.execute("BEGIN IMMEDIATE")
@@ -322,6 +347,11 @@ def install_staging_version(
             [(version, row["code"], row["name"], row["market"], row["universe_rank"], row["reason"], row["universe_rule"])
              for row in outside],
         )
+        if etfs:
+            connection.executemany(
+                f"INSERT INTO etf_securities ({', '.join(ETF_COLUMNS)}) VALUES ({', '.join('?' for _ in ETF_COLUMNS)})",
+                [(version, *(row[column] for column in ETF_COLUMNS[1:])) for row in etfs],
+            )
         actual_catalog = connection.execute(
             "SELECT COUNT(*) FROM listed_securities WHERE version = ?", (version,)
         ).fetchone()[0]
@@ -472,6 +502,27 @@ def _otc_data_date() -> str | None:
     return _latest_rows(OTC_HISTORY_DB)[0] if OTC_HISTORY_DB.exists() else None
 
 
+def _etf_bars(codes: Sequence[str]) -> dict[str, tuple[str | None, int]]:
+    """ETF 的最新日線日與根數（11 票把 ETF 日線收進兩個行情庫的 daily；同一代號上櫃庫有列時以上櫃庫為準）。"""
+    wanted = sorted(set(codes))
+    out: dict[str, tuple[str | None, int]] = {}
+    if not wanted:
+        return out
+    for db_path in (HISTORY_DB, OTC_HISTORY_DB):
+        if not db_path.exists():
+            continue
+        connection = _read_only(db_path)
+        try:
+            rows = connection.execute(
+                "SELECT code, MAX(date), COUNT(*) FROM daily WHERE open IS NOT NULL AND close IS NOT NULL "
+                f"AND code IN ({', '.join('?' for _ in wanted)}) GROUP BY code", wanted,
+            ).fetchall()
+        finally:
+            connection.close()
+        out.update({code: (latest, int(count)) for code, latest, count in rows})
+    return out
+
+
 def _security_row(item: ListedSecurity | OtcSecurity, status: str) -> dict:
     return {
         "code": item.code,
@@ -579,6 +630,47 @@ def _compatibility_rows(data_date: str, analyzer: Callable[..., dict]) -> list[d
     return [{"code": "0050", "as_of": payload["as_of"], "payload": payload}]
 
 
+def etf_rows(
+    universe: dict,
+    data_date: str,
+    suspended: dict[str, bool],
+    analyzer: Callable[..., dict],
+    bars_of: Callable[[str], tuple[str | None, int] | None],
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """12 票（ETF 上站）：名單內的股票型 ETF → ETF 名錄列（etf_securities）與個股分析列，依名次排。
+
+    只讀快照的 ``stock_etf_members``（11 票的股票型那一層；槓桿、反向、債券不在裡面）。
+    0050 也進名錄（讓開的人搜尋得到），但分析照舊由相容入口給一筆，這裡不重複產。
+    ``bars_of(code)`` 回 (最新日線日, 根數)，行情庫沒有就回 None。"""
+    directory: list[dict] = []
+    analyses: list[dict] = []
+    failures: list[dict] = []
+    members = sorted(universe.get("stock_etf_members") or (), key=lambda m: (int(m["equivalent_rank"]), str(m["code"])))
+    for member in members:
+        code = str(member["code"])
+        latest, bars = bars_of(code) or (None, 0)
+        status = analysis_status(bars, latest, suspended.get(code, False), data_date)
+        if status in ("available", "stale") and code not in COMPATIBILITY_CODES:
+            try:
+                payload = analyzer(code, "9999-12-31")
+                _isolate_strategy(code, payload)
+                _check_payload(code, payload)
+                if (payload.get("kind") != "etf" or payload.get("as_of") != latest
+                        or payload.get("market") != member["market"] or payload.get("qa", {}).get("blocking")):
+                    raise ValueError("ETF 分析 payload 的類別、資料日、市場別或 QA 不符")
+                analyses.append({"code": code, "as_of": payload["as_of"], "payload": payload})
+                failures.extend(_unresolved_capital_failures(code, payload))
+            except Exception as error:
+                status = "unavailable"
+                failures.append({"code": code, "scope": "etf", "error": type(error).__name__, "message": str(error)[:200]})
+        directory.append({
+            "code": code, "name": member["name"], "market": member["market"], "etf_type": member["etf_type"],
+            "latest_bar_date": latest, "available_bars": bars, "analysis_status": status,
+            "universe_rank": int(member["equivalent_rank"]), "universe_rule": universe["rule_version"],
+        })
+    return directory, analyses, failures
+
+
 def attach_news(securities: Sequence[dict], analyses: Sequence[dict], *, data_date: str,
                 raw_dir: Path | None = None, skipped: list | None = None) -> list[dict]:
     """個股頁事實區塊 D 票：**直接改** analyses 裡的事實資料（加產業別與「消息」），
@@ -603,7 +695,8 @@ def attach_news(securities: Sequence[dict], analyses: Sequence[dict], *, data_da
 
 
 def _write_seed_jsonl(path: Path, manifest: dict, securities: Iterable[dict], analyses: Iterable[dict],
-                      outside: Iterable[dict] = (), announcements: Iterable[dict] = ()) -> None:
+                      outside: Iterable[dict] = (), announcements: Iterable[dict] = (), *,
+                      etfs: Iterable[dict] = ()) -> None:
     with path.open("w", encoding="utf-8", newline="\n") as output:
         output.write(_compact_json({"type": "version", "data": manifest}) + "\n")
         for row in securities:
@@ -614,6 +707,8 @@ def _write_seed_jsonl(path: Path, manifest: dict, securities: Iterable[dict], an
             output.write(_compact_json({"type": "universe_outside", "data": row}) + "\n")
         for row in announcements:
             output.write(_compact_json({"type": "stock_announcement", "data": row}) + "\n")
+        for row in etfs:
+            output.write(_compact_json({"type": "etf_security", "data": row}) + "\n")
 
 
 LEGACY_PACK = ROOT / "cloud/.stock-pack.json"
@@ -717,6 +812,13 @@ def build_version(
         for row in securities:
             row["universe_rank"] = ranks.get(row["code"])
             row["universe_rule"] = universe["rule_version"]
+    # 12 票（ETF 上站）：名單內的股票型 ETF 另外寫 ETF 名錄與分析；給誰看由網站的 ETF 開關決定。
+    etfs: list[dict] = []
+    if universe is not None:
+        stock_etf_codes = [str(member["code"]) for member in universe.get("stock_etf_members") or ()]
+        etfs, etf_analyses, etf_failures = etf_rows(universe, data_date, suspended, analyzer, _etf_bars(stock_etf_codes).get)
+        analyses.extend(etf_analyses)
+        failures.extend(etf_failures)
     compatibility = _compatibility_rows(data_date, analyzer)
     analyses.extend(compatibility)
     for row in compatibility:  # 0050 不在普通股名錄裡，但它的未還原事件同樣要進清單
@@ -744,6 +846,8 @@ def build_version(
         "analysis_status_counts": status_counts,
         "market_status_counts": market_status_counts,
         "compatibility_codes": ["0050"],
+        "etf_count": len(etfs),
+        "etf_status_counts": dict(sorted(Counter(row["analysis_status"] for row in etfs).items())),
         "analysis_schema": SCHEMA,
         "failures": failures,
         "universe_rule": universe["rule_version"] if universe else None,
@@ -765,23 +869,24 @@ def build_version(
     manifest["announcement_count"] = len(announcement_rows)
     manifest["announcement_skipped"] = announcement_skipped
     manifest["signals"] = {**signals_report(analyses), "margin_check": margin_check_report(data_date)}
-    _validate_seed(manifest, securities, analyses)
+    _validate_seed(manifest, securities, analyses, etfs)
 
     database = partial / "staging.sqlite"
     connection = sqlite3.connect(database)
     try:
         connection.execute("PRAGMA foreign_keys = ON")
         connection.executescript(MIGRATION.read_text(encoding="utf-8"))
-        install_staging_version(connection, manifest, securities, analyses, outside)
+        connection.executescript(ETF_MIGRATION.read_text(encoding="utf-8"))
+        install_staging_version(connection, manifest, securities, analyses, outside, etfs=etfs)
         connection.execute("VACUUM")
     finally:
         connection.close()
 
     seed = partial / "seed.jsonl"
-    _write_seed_jsonl(seed, manifest, securities, analyses, outside, announcement_rows)
+    _write_seed_jsonl(seed, manifest, securities, analyses, outside, announcement_rows, etfs=etfs)
     analysis_payload_bytes = sum(len(_compact_json(row["payload"]).encode("utf-8")) for row in analyses)
     largest_payload_bytes = max((len(_compact_json(row["payload"]).encode("utf-8")) for row in analyses), default=0)
-    table_rows = 1 + len(securities) + len(analyses) + len(outside) + 1
+    table_rows = 1 + len(securities) + len(analyses) + len(outside) + len(etfs) + 1
     manifest["capacity"] = {
         "seed_bytes": seed.stat().st_size,
         "sqlite_bytes": database.stat().st_size,
