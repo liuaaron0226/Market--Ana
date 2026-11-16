@@ -14,12 +14,14 @@
   let users = [];
 
   const fmt = (iso) => (iso ? new Date(iso).toLocaleString("zh-TW", { hour12: false }) : "");
-  // 朋友 AI 開關打開時才有 u.gemini：只有狀態（已設定、暫停、最後成功、最近失敗），沒有解讀內容。
+  // 朋友 AI 開關打開時才有 u.gemini：只有狀態與數字（已設定、暫停、最後成功、最近失敗、最新一天是否產生、
+  // 自選股與庫存各幾檔），沒有解讀內容、持有哪些股票、股數或成本（DECISIONS 第 11 題）。
   const geminiChip = (g) => ` <span class="state gemini${g.paused ? " paused" : g.configured ? " on" : ""}">Gemini ${
     g.paused ? "已暫停" : g.configured ? "已設定" : "未設定"}</span>`;
-  const geminiNote = (g) => (g.configured
-    ? `<div class="note" style="margin-top:4px">Gemini 最後成功：${g.last_success_at ? fmt(g.last_success_at) : "尚未產生"}${
-      g.last_failure_reason ? `　最近失敗：${esc(g.last_failure_reason)}` : ""}</div>` : "");
+  const geminiNote = (g) => `${g.configured
+    ? `<div class="note" style="margin-top:4px">${g.digest ? `解讀（資料日 ${esc(g.digest.data_date)}）：${g.digest.produced ? "已產生" : "未產生"}　` : ""}Gemini 最後成功：${
+      g.last_success_at ? fmt(g.last_success_at) : "尚未產生"}${g.last_failure_reason ? `　最近失敗：${esc(g.last_failure_reason)}` : ""}</div>` : ""}
+    <div class="note" style="margin-top:4px">自選股 ${Number(g.watchlist_count) || 0} 檔・庫存 ${Number(g.holdings_count) || 0} 檔</div>`;
 
   async function api(path, opts) {
     const r = await fetch(path, { credentials: "same-origin", headers: { "content-type": "application/json" }, ...opts });

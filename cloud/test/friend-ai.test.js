@@ -386,7 +386,8 @@ test("後台每位使用者只多一份 Gemini 狀態，沒有密文也沒有解
   assert.equal(byEmail["none@example.com"].gemini.configured, false);
   for (const user of users) {
     assert.deepEqual(Object.keys(user).sort(), ["applied_at", "decided_at", "email", "gemini", "nickname", "status"]);
-    assert.deepEqual(Object.keys(user.gemini).sort(), ["configured", "last_failure_reason", "last_success_at", "paused"]);
+    assert.deepEqual(Object.keys(user.gemini).sort(),
+      ["configured", "digest", "holdings_count", "last_failure_reason", "last_success_at", "paused", "watchlist_count"]);
   }
 });
 
@@ -590,8 +591,11 @@ test("站主後台：每位朋友有最後成功時間、最近失敗原因與�
   await addUser("none@example.com");
   const { users } = await (await req("/api/admin/users", { email: OWNER })).json();
   const byEmail = Object.fromEntries(users.map((u) => [u.email, u]));
-  assert.deepEqual(byEmail[FRIEND].gemini, { configured: true, paused: true, last_success_at: "2026-11-11T10:00:00Z", last_failure_reason: QUOTA_TEXT });
-  assert.deepEqual(byEmail["none@example.com"].gemini, { configured: false, paused: false, last_success_at: null, last_failure_reason: null });
+  // 05 票補上第 11 題的另外兩項（最新一天是否產生、檔數），細節在 friend-ai-launch.test.js。
+  assert.deepEqual(byEmail[FRIEND].gemini, { configured: true, paused: true, last_success_at: "2026-11-11T10:00:00Z", last_failure_reason: QUOTA_TEXT,
+    digest: { data_date: "2026-11-11", produced: false }, watchlist_count: 0, holdings_count: 0 });
+  assert.deepEqual(byEmail["none@example.com"].gemini, { configured: false, paused: false, last_success_at: null, last_failure_reason: null,
+    digest: null, watchlist_count: 0, holdings_count: 0 });
   const text = JSON.stringify(users);
   for (const banned of ["我的結論", "ciphertext", "content", "2330"]) assert.ok(!text.includes(banned), banned);
 });
