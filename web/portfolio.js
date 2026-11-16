@@ -687,12 +687,9 @@
       const bar = element('span', 'hv-bar');
       bar.setAttribute('aria-hidden', 'true');
       if (priced) {
-        // 一段橫條：寬度，以及這一段自己的高光（位置、亮度、漂的速度各自不同；照代號固定，重畫之後不會換樣子）
         const segment = (kind, width) => {
           const part = element('i', kind);
           part.style.setProperty('--w', width.toFixed(2));
-          // 這支算法沒載到時橫條照畫，只是高光用樣式裡的預設位置
-          Object.entries(window.LiquidSpots?.of(`${entry.code} ${kind}`) || {}).forEach(([name, value]) => part.style.setProperty(name, value));
           bar.append(part);
         };
         segment('base', held.base);
@@ -798,12 +795,6 @@
     host.classList.add('is-entering');
   }
 
-  // 哪幾列在畫面上（is-seen）：損益條的高光只在看得到的時候漂，捲出畫面就停著
-  // 瀏覽器沒有這個功能時當作每一列都看得到
-  const onScreen = typeof IntersectionObserver === 'function'
-    ? new IntersectionObserver(entries => entries.forEach(item => item.target.classList.toggle('is-seen', item.isIntersecting)), { rootMargin: '120px 0px' })
-    : { disconnect() {}, observe(row) { row.classList.add('is-seen'); } };
-
   // 照現在的篩選與畫面上的狀態把清單畫出來。一列都沒有時寫一句怎麼新增
   function drawList() {
     if (!listModel) return;
@@ -816,8 +807,6 @@
     });
     if (!nodes.length) nodes.push(element('li', 'hv-empty pf-none', EMPTY_WORDS[listModel.rows.length ? listFilter : 'all']));
     host.replaceChildren(...nodes);
-    onScreen.disconnect();
-    host.querySelectorAll('.hv-row').forEach(row => onScreen.observe(row));
     const again = rowOf(openCode);
     if (again) setRowOpen(again, true, true);
     else openCode = editCode = namingCode = null;   // 開著的那一檔不在這個篩選裡（或已經刪掉）
