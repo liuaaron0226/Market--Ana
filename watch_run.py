@@ -65,6 +65,7 @@ class LocalSource:
         self.root = Path(root)
         self._industries: dict[str, tuple[str, str]] | None = None
         self._capital: dict[str, list[dict[str, Any]]] | None = None
+        self._members: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
 
     def _capital_events(self) -> dict[str, list[dict[str, Any]]]:
         if self._capital is None:
@@ -103,12 +104,12 @@ class LocalSource:
         industry = (self._industries.get(code) or (None, None))[1]
         if not industry:
             return None
-        members = {}
-        for other, (name, kind) in self._industries.items():
-            if kind == industry:
-                rows = self._bars(other, base_date, limit=CHIP_DAYS + 2)
-                members[other] = {"name": name, "industry": kind, "daily": rows}
-        return watch_inputs.sector_input(code, base_date, members)
+        key = (industry, base_date)
+        if key not in self._members:   # 同產業的關注股共用一份（半導體業一組就上百檔）
+            self._members[key] = {other: {"name": name, "industry": kind,
+                                          "daily": self._bars(other, base_date, limit=CHIP_DAYS + 2)}
+                                  for other, (name, kind) in self._industries.items() if kind == industry}
+        return watch_inputs.sector_input(code, base_date, self._members[key])
 
     def stock(self, code: str, base_date: str, edition: str) -> dict[str, Any]:
         import watch_inputs
