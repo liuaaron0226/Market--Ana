@@ -56,6 +56,17 @@ class ForecastStoreTests(unittest.TestCase):
         self.assertEqual(fs.pull(self.store, target), {"downloaded": 2, "unchanged": 0})
         self.assertEqual((target / "reconciliations" / "2026-11-06__evening__m0.3__base-v1-x__h1.json").read_text(encoding="utf-8"), '{"b": 2}\n')
 
+    def test_pull_leaves_archived_originals_in_the_cloud_and_push_still_adds_new_ones(self):
+        # 海外原件（D 票）以內容雜湊命名：同名就是同內容，不必每次拉回本機；新抓的照樣存上去。
+        write(self.ledger / "sources" / "aaa.raw.gz", "old original")
+        fs.push(self.ledger, self.store)
+        target = Path(self._tmp.name) / "restored"
+        self.assertEqual(fs.pull(self.store, target), {"downloaded": 2, "unchanged": 0})
+        self.assertFalse((target / "sources").exists())
+        write(target / "sources" / "bbb.raw.gz", "new original")
+        self.assertEqual(fs.push(target, self.store), {"uploaded": 1, "unchanged": 2})
+        self.assertEqual(self.store.get("forecast-ledger/sources/aaa.raw.gz"), b"old original")
+
     def test_pull_refuses_to_replace_a_different_local_file(self):
         fs.push(self.ledger, self.store)
         write(self.ledger / "forecasts" / "2026-11-06__evening__m0.3__base-v1-x.json", '{"a": "local"}\n')

@@ -484,7 +484,8 @@ def load_international_sources(
     return international, quality
 
 
-def parse_cbc_usdtwd(content: bytes, cutoff: str) -> dict[str, Any]:
+def cbc_usdtwd_rows(content: bytes, cutoff: str) -> list[tuple[str, float]]:
+    """央行每日新臺幣對美元收盤匯率（JSON 或 XML）→ 截止日（含）以前的（日期, 匯率），依日期排序。"""
     rows: list[tuple[str, float]] = []
     stripped = content.lstrip()
     if stripped.startswith(b"["):
@@ -510,7 +511,11 @@ def parse_cbc_usdtwd(content: bytes, cutoff: str) -> dict[str, Any]:
             continue
         if observed <= cutoff:
             rows.append((observed, value))
-    rows = sorted(dict(rows).items())
+    return sorted(dict(rows).items())
+
+
+def parse_cbc_usdtwd(content: bytes, cutoff: str) -> dict[str, Any]:
+    rows = cbc_usdtwd_rows(content, cutoff)
     if len(rows) < 21:
         raise ValueError("CBC USD/TWD XML has fewer than 21 observations")
     observed_at, current = rows[-1]
