@@ -8,6 +8,7 @@
 - 回答裡的自由文字與引用：``text_problem``（不得出現數字）、``refs_problem``、``render_refs``（數值由程式依編號代入）。
 - 版本與期限：``method_version_of``、``deadline``（晚間／晨間的鎖定期限）、``add_months``、``default_now``。
 - 日 K 與顯示：``clean_daily``、``label_date``、``format_number``。
+- 發布到網站資料庫：``sql_literal``、``sql_insert``、``compact_json``（指令檔不包交易，部署工具自己包）。
 
 這裡只放兩本帳意思相同的東西；各自的候選關卡、回答格式、對帳規則留在各自的模組。
 """
@@ -255,3 +256,27 @@ def render_refs(text: str, refs: Sequence[str], by_id: Mapping[str, Mapping[str,
         return text.strip()
     facts = "；".join(f"{by_id[ref]['name']} {format_number(by_id[ref]['value'])} {unit}" for ref in refs)
     return f"{text.strip()}【資料：{facts}】"
+
+
+# ---- 發布到網站讀的資料庫（寫入雲端資料庫的指令檔） ----
+
+def sql_literal(value: Any) -> str:
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, (int, float)):
+        return repr(value)
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def sql_insert(table: str, columns: Mapping[str, Any], key: str | None) -> str:
+    """只新增的一列：同一筆再發布一次被 ON CONFLICT 吸收；內容不同由資料表的觸發器拒絕。"""
+    names = ",".join(columns)
+    values = ",".join(sql_literal(value) for value in columns.values())
+    target = f"({key})" if key else ""
+    return f"INSERT INTO {table} ({names}) VALUES ({values}) ON CONFLICT{target} DO NOTHING;"
+
+
+def compact_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
