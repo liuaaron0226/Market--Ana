@@ -290,19 +290,19 @@ class VersionActivationTests(unittest.TestCase):
             item["payload"]["signals"] = signals
             return item
 
-        rows = [row("1101", {"blocks": ["versus_market", "ma_alignment", "heavy_zones"]}),
+        rows = [row("1101", {"blocks": ["limit_up_momentum", "versus_market", "ma_alignment", "heavy_zones"]}),
                 row("1102", {"blocks": ["ma_alignment"], "failed": ["heavy_zones"]}),   # 爆大量成交區算的時候出錯
                 row("1103", {"blocks": []}),
                 row("1104", None),       # 整塊算不出來（計算出錯時留空）
                 analysis("1105")]        # 舊資料：沒有這個鍵
-        # 位元組數是五塊資料壓成 JSON 的大小：{"blocks":["versus_market","ma_alignment","heavy_zones"]}＝57、
+        # 位元組數是五塊資料壓成 JSON 的大小：{"blocks":["limit_up_momentum","versus_market","ma_alignment","heavy_zones"]}＝77、
         # {"blocks":["ma_alignment"],"failed":["heavy_zones"]}＝52、{"blocks":[]}＝13；沒有五塊資料的兩檔不計。
         self.assertEqual(signals_report(rows), {
             "analyses": 5, "without_signals": 2,
-            "blocks": {"versus_market": 1, "ma_alignment": 2, "heavy_zones": 1},
-            "failed": {"versus_market": 0, "ma_alignment": 0, "heavy_zones": 1},
-            "payload_bytes": 122, "largest_payload_bytes": 57})
-        nothing = {"versus_market": 0, "ma_alignment": 0, "heavy_zones": 0}
+            "blocks": {"limit_up_momentum": 1, "versus_market": 1, "ma_alignment": 2, "heavy_zones": 1},
+            "failed": {"limit_up_momentum": 0, "versus_market": 0, "ma_alignment": 0, "heavy_zones": 1},
+            "payload_bytes": 142, "largest_payload_bytes": 77})
+        nothing = {"limit_up_momentum": 0, "versus_market": 0, "ma_alignment": 0, "heavy_zones": 0}
         self.assertEqual(signals_report([]), {
             "analyses": 0, "without_signals": 0, "blocks": nothing, "failed": nothing,
             "payload_bytes": 0, "largest_payload_bytes": 0})
@@ -687,7 +687,9 @@ class SampleBuildV2Tests(unittest.TestCase):
         report = self.manifest["signals"]
         self.assertEqual((report["analyses"], report["without_signals"]), (3, 0))
         self.assertEqual((report["blocks"]["versus_market"], report["blocks"]["ma_alignment"]), (3, 3))
-        self.assertEqual(report["failed"], {"versus_market": 0, "ma_alignment": 0, "heavy_zones": 0})
+        # 漲停動能只給上市普通股：三檔裡只有台積電有（環球晶是上櫃、0050 是 ETF）。
+        self.assertEqual(report["blocks"]["limit_up_momentum"], 1)
+        self.assertEqual(report["failed"], {"limit_up_momentum": 0, "versus_market": 0, "ma_alignment": 0, "heavy_zones": 0})
         self.assertGreater(report["payload_bytes"], 0)
 
     def test_functions_pack_has_target_date_and_valid_new_fields_per_stock(self) -> None:

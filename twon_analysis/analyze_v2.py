@@ -687,12 +687,18 @@ def _day_returns(code: str, raw_bars: list[Bar], returns: list[float | None],
 
 
 def _signals(code: str, raw_bars: list[Bar], bars: list[Bar], info: dict, indicators: dict,
-             reference_events: dict[str, list[dict]] | None) -> dict | None:
+             reference_events: dict[str, list[dict]] | None, unscaled_institutional: list[dict]) -> dict | None:
     # 和事實區塊一樣是附加內容：任何錯誤都只讓這一塊留空，不能讓整份分析失敗。
     try:
         from .signals import build_signals
+        # 漲停動能用驗證時的那一套原始資料：實際成交價的日線、行情庫原本的漲跌幅（不比價的日子沒有）、
+        # 沒有跟著分割換算過的投信買賣超。和大盤比用的 day_returns 則是補上官方參考價之後的。
+        momentum_inputs = {'market': info['market'], 'kind': info['kind'], 'bars': raw_bars,
+                           'returns': info['day_returns'], 'turnovers': info['turnovers'],
+                           'trust_nets': {row['date']: row['trust'] for row in unscaled_institutional}}
         return build_signals(bars=bars, day_returns=_day_returns(code, raw_bars, info['day_returns'], reference_events),
-                             index_closes=_safe(lambda: taiex_closes(bars[-1].date)) or {}, indicators=indicators)
+                             index_closes=_safe(lambda: taiex_closes(bars[-1].date)) or {}, indicators=indicators,
+                             momentum_inputs=momentum_inputs)
     except Exception:  # noqa: BLE001
         return None
 
@@ -720,8 +726,8 @@ def analyze_v2(code: str, as_of: str, db_path=DEFAULT_DB, otc_db_path=DEFAULT_OT
     levels = price_levels_v2(bars, x)
     conditions = condition_states(inputs)
     chart_bars = bars[-120:]
-    institutional = _scale_shares(
-        _safe(lambda: institutional_series(code, info['market'], [bar.date for bar in chart_bars])) or [], share_scale)
+    unscaled_institutional = _safe(lambda: institutional_series(code, info['market'], [bar.date for bar in chart_bars])) or []
+    institutional = _scale_shares(unscaled_institutional, share_scale)
     # strategy_v1 尚未通過驗證、對外預設關閉（本人 11-11／11-12 定案）：它出錯只讓 strategy 留空，
     # 不能讓這檔的行情、指標、價位、法人等核心資料跟著消失。
     try:
@@ -747,7 +753,7 @@ def analyze_v2(code: str, as_of: str, db_path=DEFAULT_DB, otc_db_path=DEFAULT_OT
         # 個股頁事實區塊（本人 2026-11-15）：算不出來只讓這一塊留空，不影響其他內容。給誰看由網站入口的開關決定。
         'facts': _facts(last, info, x, institutional, [bar.date for bar in chart_bars], info['market'], code),
         # 個股頁五塊新功能的資料（本人 2026-11-16）：同樣算不出來只留空；給誰看由網站入口另一個獨立的開關決定。
-        'signals': _signals(code, raw_bars, bars, info, x, reference_events),
+        'signals': _signals(code, raw_bars, bars, info, x, reference_events, unscaled_institutional),
         'defense': defense_payload(x['low20_intraday']),
         'trend_classification': trend_classification_payload(),
         'conditions': conditions,

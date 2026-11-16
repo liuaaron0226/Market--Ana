@@ -41,7 +41,7 @@ def _otc_rows(code: str, as_of: str, otc_db_path: Path | None, limit: int) -> li
 def load_bars(code: str, as_of: str, db_path: Path = DEFAULT_DB, limit: int = 300,
               otc_db_path: Path | None = DEFAULT_OTC_DB) -> tuple[list[Bar], dict]:
     """回傳 (bars 舊到新, 當日資訊)。當日資訊含 name、kind、chg（%）、change_sign、turnover，
-    以及和 bars 逐根對齊的 day_returns（每天相對前一日參考價的漲跌幅，比率；不比價的日子是 None）。"""
+    以及和 bars 逐根對齊的 day_returns（每天相對前一日參考價的漲跌幅，比率；不比價的日子是 None）與 turnovers（每天的成交金額）。"""
     if not isinstance(code, str) or not code:
         raise ValueError('代號必須是字串（保留 0050 前導零）')
     rows = _otc_rows(code, as_of, otc_db_path, limit)
@@ -63,7 +63,7 @@ def load_bars(code: str, as_of: str, db_path: Path = DEFAULT_DB, limit: int = 30
     # chg_known：不比價（X）或沒有參考價時 chg 只是 0.0 佔位，事實區塊靠它決定要不要寫漲跌（不拿假的零冒充平盤）。
     # day_returns：和 bars 逐根對齊的當日漲跌幅（比率）；不比價的日子是 None（行情庫沒有），由用的人決定怎麼補。
     return bars, {'name': last[1], 'kind': last[2], 'chg': chg, 'change_sign': last[7], 'turnover': last[10], 'date': last[0],
-                  'market': market, 'chg_known': comparable, 'day_returns': returns}
+                  'market': market, 'chg_known': comparable, 'day_returns': returns, 'turnovers': [r[10] for r in rows]}
 
 
 def _day_return(row: tuple) -> float | None:
