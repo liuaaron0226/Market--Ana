@@ -37,6 +37,7 @@ function load(files = ["chart-drawings.js", "kchart.js"]) {
     append(...added) { for (const child of added) { child.parent = this; this.children.push(child); } }
     remove() { if (this.parent) this.parent.children = this.parent.children.filter(child => child !== this); this.parent = null; }
     focus() { this.focused = true; }
+    setSelectionRange(start, end) { this.selection = [start, end]; }
     select() {}
     setAttribute() {}
     addEventListener(type, handler) { this.listeners.set(type, [...(this.listeners.get(type) || []), handler]); }
@@ -3024,4 +3025,167 @@ test("換了股票之後上一檔那一筆才被拒絕：頁面仍會知道有�
   assert.deepEqual(statuses.at(-1), { unsaved: 0, failed: 0, ids: [] });
   assert.deepEqual(drawnLines(), [], "存不進去的線不會留到下一次回來");
   assert.equal(net.requests.length, 2);
+});
+
+// ---------- 票 08：手機觸控驗收 ----------
+// 手指的一下：按下、可能晃幾像素、放開。滑鼠不會晃，所以這些只對手指放寬。
+const fingerTap = ({ chart }, [x, y], [ex, ey] = [x, y]) => {
+  chart.canvas.dispatch("pointerdown", { pointerType: "touch", clientX: x, clientY: y });
+  chart.canvas.dispatch("pointermove", { pointerType: "touch", clientX: ex, clientY: ey });
+  chart.canvas.dispatch("pointerup", { pointerType: "touch", clientX: ex, clientY: ey });
+};
+
+test("手指點一下難免晃幾像素：選了工具仍是定位、沒選工具仍選得到線與 K 棒，圖表不跟著晃；滑鼠移 5px 照舊是平移", () => {
+  const view = createChart();
+  const { chart, changes, selections, drag } = view;
+  chart.setTool("hline");
+  fingerTap(view, [150, 164], [156, 164]); // 往右晃 6px
+  assert.deepEqual(changes.map(change => change.drawing.anchors), [[{ date: "2026-02-28", price: 100 }]], "這一下是定位（放開的位置仍是第 58 根、100）");
+  assert.equal(chart.view.end, 80, "圖表沒有被晃動平移");
+
+  fingerTap(view, [150, 170], [155, 172]); // 離線 6～8px、晃 5px：選到剛畫的線
+  assert.deepEqual(selections, [changes[0].drawing.id]);
+  fingerTap(view, [150, 250], [143, 250]); // 空白處、往左晃 7px：取消選取，照舊選 K 棒
+  assert.deepEqual(selections, [changes[0].drawing.id, null]);
+  assert.equal(chart.selection, 57, "放開的位置在第 57 根");
+  assert.equal(chart.view.end, 80);
+
+  drag([150, 250], [155, 250]); // 滑鼠：超過 3px 就是平移，不算點
+  assert.equal(chart.selection, 57, "滑鼠拖 5px 不是一次點擊，不改選 K 棒");
+  assert.equal(chart.view.end, 79, "滑鼠照舊一動就平移（5px 進位成一根）");
+});
+
+test("手指移超過幾像素才開始平移；開始之後照舊整段跟著手指走", () => {
+  const { chart } = createChart();
+  chart.canvas.dispatch("pointerdown", { pointerType: "touch", clientX: 150, clientY: 100 });
+  chart.canvas.dispatch("pointermove", { pointerType: "touch", clientX: 157, clientY: 100 });
+  assert.equal(chart.view.end, 80, "晃 7px 還不算平移");
+  chart.canvas.dispatch("pointermove", { pointerType: "touch", clientX: 230, clientY: 100 });
+  chart.canvas.dispatch("pointerup", { pointerType: "touch", clientX: 230, clientY: 100 });
+  assert.equal(chart.view.end, 70, "往右拖 80px ÷ 每根 8.05px ≈ 10 根，和滑鼠一樣");
+});
+
+test("選了工具時手指上下滑過圖表不算點：不定位、不選 K 棒；兩點工具點了第一下之後也不會被滑成第二點", () => {
+  const view = createChart();
+  const { chart, changes, tools, tap } = view;
+  chart.setTool("hline");
+  fingerTap(view, [150, 100], [150, 250]); // 往下滑 150px（圖表不會上下平移）
+  assert.deepEqual(changes, []);
+  assert.equal(chart.selection, -1);
+  assert.deepEqual(tools, ["hline"], "工具留著");
+  view.drag([150, 100], [150, 140]); // 滑鼠按住往下拖 40px 放開：一樣不是點
+  assert.deepEqual(changes, []);
+  assert.equal(chart.selection, -1);
+
+  chart.setTool("trend");
+  tap(90, 241, "touch"); // 第一點：第 50 根（02-20）、97.15
+  fingerTap(view, [200, 120], [205, 280]); // 斜斜往下滑
+  assert.deepEqual(changes, [], "滑過去不是第二點");
+  tap(250, 164, "touch"); // 第二點：第 70 根（03-12）、100
+  assert.deepEqual(changes.map(change => [change.drawing.kind, change.drawing.anchors]),
+    [["trend", [{ date: "2026-02-20", price: 97.15 }, { date: "2026-03-12", price: 100 }]]]);
+});
+
+test("兩點工具點了第一下之後：雙指縮放、放開一指接著單指平移，都不會變成第二點；之後再點一下才畫完，起點仍是原本那一天與價位", () => {
+  const view = createChart();
+  const { chart, changes, tools, tap } = view;
+  chart.setTool("rect");
+  tap(90, 241, "touch"); // 第一個角：02-20、97.15
+  const count = chart.view.count;
+  chart.canvas.dispatch("pointerdown", { pointerId: 1, pointerType: "touch", clientX: 150, clientY: 150 });
+  chart.canvas.dispatch("pointerdown", { pointerId: 2, pointerType: "touch", clientX: 250, clientY: 150 });
+  chart.canvas.dispatch("pointermove", { pointerId: 2, pointerType: "touch", clientX: 300, clientY: 150 });
+  chart.canvas.dispatch("pointerup", { pointerId: 2, pointerType: "touch", clientX: 300, clientY: 150 });
+  assert.ok(chart.view.count < count, "雙指拉開是放大");
+  chart.canvas.dispatch("pointermove", { pointerId: 1, pointerType: "touch", clientX: 120, clientY: 150 });
+  chart.canvas.dispatch("pointerup", { pointerId: 1, pointerType: "touch", clientX: 120, clientY: 150 });
+  assert.deepEqual(changes, [], "縮放、接著平移，都還沒畫出來");
+  assert.deepEqual(tools, ["rect"]);
+
+  chart.canvas.dispatch("pointerdown", { pointerId: 3, pointerType: "touch", clientX: 200, clientY: 150 });
+  chart.canvas.dispatch("pointerdown", { pointerId: 4, pointerType: "touch", clientX: 240, clientY: 150 });
+  chart.canvas.dispatch("pointerup", { pointerId: 3, pointerType: "touch", clientX: 200, clientY: 150 });
+  chart.canvas.dispatch("pointerup", { pointerId: 4, pointerType: "touch", clientX: 240, clientY: 150 });
+  assert.deepEqual(changes, [], "兩指一起點一下也不是第二點");
+
+  chart.canvas.dispatch("keydown", { key: "End" }); // 回到最新一段：最後 60 根，價格座標 88.6～134.2，每根 322/60px
+  tap(250, 87, "touch"); // 第二個角：第 20＋⌊246÷5.367⌋＝65 根（03-07）、134.2 − 77/308×45.6 = 122.8
+  assert.deepEqual(changes.map(change => [change.drawing.kind, change.drawing.anchors]),
+    [["rect", [{ date: "2026-02-20", price: 122.8 }, { date: "2026-03-07", price: 97.15 }]]]);
+});
+
+test("手指按在已選取的線上晃幾像素就放開：是一次點擊，線不動、不儲存；選取的文字這樣點一下照樣打開輸入框修改", () => {
+  const view = createChart();
+  const { chart, changes, selections, editor } = view;
+  chart.setDrawings([saved(100), savedNote("突破前高", { price: 96 })]);
+  fingerTap(view, [150, 164]);
+  fingerTap(view, [150, 164], [151, 170]); // 往下晃 6px
+  assert.deepEqual(changes, [], "線沒有被拖動");
+  assert.deepEqual(selections, ["saved-line-01"]);
+
+  fingerTap(view, [160, 272]); // 文字那一塊（第 58 根右邊、96 那一行）
+  fingerTap(view, [160, 272], [165, 268]);
+  assert.ok(editor(), "再點一下（晃了幾像素）打開輸入框");
+  assert.deepEqual(changes, []);
+});
+
+test("把手對手指夠大：按在線的延長線外、離端點把手 18px 也抓得到那一端；滑鼠要對準，同一點只是平移", () => {
+  const view = createChart();
+  const { chart, changes, drag } = view;
+  chart.setDrawings([TREND()]); // (88.525, 241) → (249.525, 87)
+  fingerTap(view, [169, 164]);
+  drag([262, 75], [262, 152], { pointerType: "touch" }); // 離右端把手 17.7px、離線也是（在端點外）：拖那一端往下 77px
+  assert.deepEqual(changes.map(change => change.drawing.anchors), [[{ date: "2026-02-20", price: 97.15 }, { date: "2026-03-12", price: 100 }]]);
+
+  const mouse = createChart();
+  mouse.chart.setDrawings([TREND()]);
+  mouse.tap(169, 164);
+  mouse.drag([262, 75], [262, 152]);
+  assert.deepEqual(mouse.changes, [], "滑鼠離把手 17px 抓不到，線不動");
+});
+
+test("修改既有的文字：輸入框打開時游標在最後面，接著打的字接在原本的內容後面（不是插到最前面）", () => {
+  const view = createChart();
+  const { chart, editor } = view;
+  chart.setDrawings([savedNote("突破前高", { price: 96 })]);
+  fingerTap(view, [160, 272]);
+  fingerTap(view, [160, 272]);
+  const { input } = editor();
+  assert.equal(input.value, "突破前高");
+  assert.ok(input.focused);
+  assert.deepEqual(input.selection, [4, 4]);
+});
+
+test("手指點一下打開輸入框後，瀏覽器補送的滑鼠按下剛好落在輸入框上：不搬動游標（留在最後面）；之後在輸入框裡按照常可以移動游標", () => {
+  const view = createChart();
+  const { chart, editor } = view;
+  chart.setDrawings([savedNote("突破前高", { price: 96 })]);
+  fingerTap(view, [160, 272]);
+  fingerTap(view, [160, 272]);
+  const { form, input } = editor();
+  assert.equal(form.dispatch("mousedown", { target: input }).prevented, true, "補送的那一下");
+  assert.deepEqual(input.selection, [4, 4]);
+  assert.equal(form.dispatch("mousedown", { target: input }).prevented, false, "之後自己點的");
+});
+
+test("手指在把手旁邊（線的點選範圍外、把手的可抓範圍內）輕點一下：還是選著那一條，不取消選取、不改選 K 棒", () => {
+  const view = createChart();
+  const { chart, changes, selections } = view;
+  chart.setDrawings([TREND()]);
+  fingerTap(view, [169, 164]);
+  fingerTap(view, [262, 75]); // 離右端把手 17.7px、離線也是
+  assert.deepEqual(selections, ["saved-two-01"], "沒有被取消選取");
+  assert.equal(chart.selection, -1, "沒有改選 K 棒");
+  assert.deepEqual(changes, []);
+});
+
+test("沒有畫線層的圖（首頁大盤）手勢照舊：手指移 5px 就算平移、放開不算點一下", () => {
+  const { KChart, FakeElement } = load(["kchart.js"]);
+  const chart = new KChart(new FakeElement(), { macd: false, height: () => 340 });
+  chart.setData(dailyCandles(), { count: 40, unit: "日" });
+  chart.canvas.dispatch("pointerdown", { pointerType: "touch", clientX: 150, clientY: 100 });
+  chart.canvas.dispatch("pointermove", { pointerType: "touch", clientX: 155, clientY: 100 });
+  chart.canvas.dispatch("pointerup", { pointerType: "touch", clientX: 155, clientY: 100 });
+  assert.equal(chart.view.end, 79, "5px 進位成一根，跟著手指走");
+  assert.equal(chart.selection, -1, "移過 3px 就不是點一下");
 });

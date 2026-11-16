@@ -8,6 +8,10 @@
 (function () {
   'use strict';
   const DPR = () => Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+  // 按下到放開之間移動超過幾像素才不算「點一下」。手指點一下難免晃幾像素（滑鼠不會），所以手指放寬；
+  // 手指在超過之前也先不平移，點一下時圖表不會跟著晃。
+  // 和 chart-drawings.js 的 DRAG_START_PX 同值：按住線拖與拖圖平移，開始的門檻一樣。
+  const TAP_SLOP = { mouse: 3, touch: 8 };
   function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
   // 價籤用：千元以上取整；以下保留到台股升降單位（最多兩位小數，去掉尾端 0）。
   function fmtTag(n) { return !Number.isFinite(n) ? '缺值' : n >= 1000 ? fmt(n, 0) : n.toLocaleString('en-US', { maximumFractionDigits: 2 }); }
@@ -159,6 +163,8 @@
       if (this.opts.onClear) this.opts.onClear();
       this.draw();
     }
+    // 手指用放寬的「點一下」門檻（只有帶畫線層的圖，也就是個股頁；首頁大盤的手勢維持原樣）。
+    fingerSlop(pointerType) { return Boolean(this.drawings) && pointerType !== 'mouse'; }
     bindCanvas(c) {
       let drag = null; const pts = new Map();
       const geo = () => this.geo;
@@ -169,7 +175,7 @@
           // 起點落在已選取的畫線上：這次拖曳是移動那條線，圖表不平移。
           drag = c === this.canvas && this.drawings && this.drawings.grab(e.clientX - rect.left, e.clientY - rect.top, e.pointerType)
             ? { kind: 'drawing', moved: false, hadPinch: false }
-            : { kind: 'single', x: e.clientX, y: e.clientY, end: this.view.end, moved: false, hadPinch: false, studySwipe: c !== this.canvas && !!this.studies };
+            : { kind: 'single', x: e.clientX, y: e.clientY, end: this.view.end, moved: false, wandered: false, touch: this.fingerSlop(e.pointerType), hadPinch: false, studySwipe: c !== this.canvas && !!this.studies };
         }
         // 拖線途中放上第二指：線回原位，改成雙指縮放。
         if (pts.size === 2 && drag?.kind === 'drawing') { this.drawings.drop(false); this.draw(); }
@@ -192,9 +198,12 @@
           this.view.count = drag.count * drag.pinch / d; this.view.end = drag.end; this.clamp(); this.draw(); this.emit(); return;
         }
         if (drag?.kind === 'single' && pts.size === 1) {
-          const dx = e.clientX - drag.x; if ((drag.studySwipe ? Math.hypot(dx, e.clientY - drag.y) : Math.abs(dx)) > 3) drag.moved = true;
+          const dx = e.clientX - drag.x, slop = drag.touch ? TAP_SLOP.touch : TAP_SLOP.mouse;
+          if ((drag.studySwipe ? Math.hypot(dx, e.clientY - drag.y) : Math.abs(dx)) > (drag.studySwipe ? TAP_SLOP.mouse : slop)) drag.moved = true;
+          // 往任何方向移超過門檻（包括上下滑）：放開時不算點一下——選了畫線工具時不拿來定位（由畫線層決定）。
+          if (Math.hypot(dx, e.clientY - drag.y) > slop) drag.wandered = true;
           if (drag.studySwipe) return;
-          this.view.end = Math.round(drag.end - dx / g.step); this.clamp();
+          if (drag.moved || !drag.touch) { this.view.end = Math.round(drag.end - dx / g.step); this.clamp(); }
         }
         this.hover = x >= g.l && x <= g.l + g.pw ? g.start + Math.floor((x - g.l) / g.step) : -1;
         if (!drag && c === this.canvas && this.drawings) c.style.cursor = this.drawings.cursorAt(x, e.clientY - rect.top);
@@ -211,7 +220,7 @@
         if (e.type === 'pointerup' && (drag?.kind === 'single' || drag?.kind === 'drawing') && !drag.moved && !drag.hadPinch && this.geo) {
           const g = this.geo, rect = c.getBoundingClientRect(), px = e.clientX - rect.left;
           // 主圖上的這一下先給畫線：選了工具就定位，沒選工具而點到線就選取那條線；都不是才選 K 棒。
-          if (!(c === this.canvas && this.drawings && this.drawings.tap(px, e.clientY - rect.top, e.pointerType))) {
+          if (!(c === this.canvas && this.drawings && this.drawings.tap(px, e.clientY - rect.top, e.pointerType, Boolean(drag.wandered)))) {
             this.hover = px >= g.l && px <= g.l + g.pw
               ? Math.min(this.view.end - 1, g.start + Math.floor((px - g.l) / g.step)) : -1;
             this.selection = this.hover;
@@ -222,7 +231,7 @@
         pts.delete(e.pointerId);
         if (pts.size === 1 && drag?.kind === 'pinch') {
           const point = pts.values().next().value;
-          drag = { kind: 'single', x: point.x, y: point.y, end: this.view.end, moved: false, hadPinch: true, studySwipe: drag.studySwipe };
+          drag = { kind: 'single', x: point.x, y: point.y, end: this.view.end, moved: false, wandered: false, touch: this.fingerSlop(e.pointerType), hadPinch: true, studySwipe: drag.studySwipe };
         } else if (pts.size === 0) { drag = null; c.style.cursor = c === this.canvas && this.drawings ? this.drawings.idleCursor() : 'grab'; }
       };
       c.addEventListener('pointerup', up); c.addEventListener('pointercancel', up);

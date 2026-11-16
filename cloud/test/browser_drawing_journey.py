@@ -8,6 +8,9 @@
 票 07：儲存失敗時不白畫——斷線（真的關掉瀏覽器的網路）時畫、拖、寫字、刪都留在畫面上並出現「未儲存」，
        恢復後照先後補存；還沒存上去就重新整理會先被瀏覽器提醒；被限速照伺服器說的秒數等；伺服器出錯自動再試；
        被拒絕的不重試、提示改成「沒存成」；換股票不混檔。失敗用攔截請求製造，不改伺服器。
+票 08：手機觸控驗收——六種工具在手機上用手指（會晃幾像素、會滑、會兩指）逐一走過畫、選取、拖整個、拖把手、刪除、
+       重新整理後還在，並和桌機同一帳號看到的一致；長按工具顯示名稱、不能選取文字；320 寬（iPhone 顯示縮放）工具列放得下。
+       觸控用 CDP 的 Input.dispatchTouchEvent 送（瀏覽器的手機模擬）；真機才看得出來的另列在票檔，留給本人。
 
 用真正的 gate.handle＋cloud/dist＋記憶體資料庫（cloud/test/journey-server.mjs），Access 由 cookie 模擬；
 不連正式站、不碰 8876／8897。先在 cloud/ 跑過 `node build.mjs` 讓 dist 是最新的。
@@ -1882,10 +1885,287 @@ def save_mobile(journey: Journey, browser) -> None:
     context.close()
 
 
+class Finger:
+    """用 CDP 送真正的觸控事件（Playwright 的 touchscreen 只有「點一下」）：可以晃、可以滑、可以兩指。"""
+
+    def __init__(self, context, page) -> None:
+        self.page = page
+        self.cdp = context.new_cdp_session(page)
+
+    def send(self, kind: str, points: list[tuple[float, float]]) -> None:
+        self.cdp.send("Input.dispatchTouchEvent", {
+            "type": kind, "touchPoints": [{"x": round(x), "y": round(y), "id": index} for index, (x, y) in enumerate(points)]})
+
+    def tap(self, x: float, y: float, wobble: tuple[float, float] = (5, 2)) -> None:
+        """手指點一下：按下、晃幾像素、放開（放開的位置是晃過之後的地方）。"""
+        self.send("touchStart", [(x, y)])
+        self.send("touchMove", [(x + wobble[0], y + wobble[1])])
+        self.send("touchEnd", [])
+        self.page.wait_for_timeout(150)
+
+    def slide(self, x: float, y: float, dx: float, dy: float, steps: int = 6) -> None:
+        """按住滑過去：每一步之間停一下，放開前停久一點（不讓 Chromium 當成甩動）。"""
+        self.send("touchStart", [(x, y)])
+        for step in range(1, steps + 1):
+            self.send("touchMove", [(x + dx * step / steps, y + dy * step / steps)])
+            self.page.wait_for_timeout(16)
+        self.page.wait_for_timeout(250)
+        self.send("touchEnd", [])
+        self.page.wait_for_timeout(150)
+
+    def pinch(self, x: float, y: float, start: float, end: float, steps: int = 6) -> None:
+        """兩指以 (x, y) 為中心左右拉開或收攏（兩指距離由 start 變成 end），再先後放開。"""
+        self.send("touchStart", [(x - start / 2, y)])
+        self.send("touchStart", [(x - start / 2, y), (x + start / 2, y)])
+        for step in range(1, steps + 1):
+            gap = start + (end - start) * step / steps
+            self.send("touchMove", [(x - gap / 2, y), (x + gap / 2, y)])
+            self.page.wait_for_timeout(16)
+        self.page.wait_for_timeout(200)
+        self.send("touchEnd", [(x - end / 2, y)])
+        self.send("touchEnd", [])
+        self.page.wait_for_timeout(150)
+
+
+# 票 08 用的六種工具：在 390 寬的畫布（358×300；繪圖區上緣 10、下緣 278，右側約 0.8 之後是價格軸）上各畫在一塊不重疊的地方
+# （畫布寬、高的幾成）。pick：點這裡選取（線身上，不在把手的可抓範圍內）；grip：只拖這一端的把手（第幾個錨點）。
+# 選取之後每一條都整個往下拖 MOVE 像素，之後選取、拖把手、刪除都在往下 MOVE 的位置。
+TOUCH_TOOLS = [
+    {"kind": "hline", "name": "水平線", "taps": [(0.30, 0.10)], "pick": (0.60, 0.10)},
+    {"kind": "trend", "name": "趨勢線", "taps": [(0.06, 0.36), (0.28, 0.24)], "pick": (0.17, 0.30), "grip": 1},
+    {"kind": "ray", "name": "射線", "taps": [(0.06, 0.55), (0.26, 0.60)], "pick": (0.16, 0.575), "grip": 1},
+    {"kind": "rect", "name": "矩形", "taps": [(0.36, 0.24), (0.50, 0.40)], "pick": (0.43, 0.24), "grip": 1},
+    {"kind": "fib", "name": "黃金分割", "taps": [(0.56, 0.30), (0.66, 0.48)], "pick": (0.70, 0.30), "grip": 1},
+    {"kind": "text", "name": "文字標註", "taps": [(0.08, 0.80)], "pick": (0.08, 0.80), "text": "手機驗收"},
+]
+MOVE = 30
+PHONE = {"width": 390, "height": 844}
+FITS_JS = "() => document.documentElement.scrollWidth <= innerWidth"
+
+
+def touch_mobile(journey: Journey, browser) -> None:
+    print("票 08｜手機寬度 390（觸控）：六種工具逐一走過畫、選取、拖動、調整、刪除、重新整理後還在")
+    code = "2603"
+    context = journey.context(browser, OWNER, viewport=PHONE, device_scale_factor=3, is_mobile=True, has_touch=True)
+    page = journey.open(context, code)
+    finger = Finger(context, page)
+    tools = page.locator("#drawTools")
+    delete = page.locator("#drawDelete")
+    canvas = page.locator("#chartHost canvas")
+    box = canvas.bounding_box()
+    width, height = box["width"], box["height"]
+    px = lambda point: journey.at(page, width * point[0], height * point[1])   # noqa: E731
+    pressed = lambda kind: tools.locator(f"button[data-tool={kind}]").get_attribute("aria-pressed") == "true"   # noqa: E731
+
+    # ---- 工具列 ----
+    sizes = [tools.locator(f"button[data-tool={tool['kind']}]").bounding_box() for tool in TOUCH_TOOLS]
+    journey.check("08 手機：工具列在圖的上方、不造成橫向捲動，六顆都至少 44×44 且都在圖表寬度內",
+                  page.evaluate(FITS_JS) and all(size["width"] >= 44 and size["height"] >= 44 for size in sizes)
+                  and max(size["x"] + size["width"] for size in sizes) <= box["x"] + width + 0.5
+                  and tools.bounding_box()["y"] + tools.bounding_box()["height"] <= box["y"], sizes)
+    journey.choose_period(page, "5m")
+    hidden_height = canvas.bounding_box()["height"]
+    journey.choose_period(page, "daily")
+    journey.check("08 手機：工具列不擠壓圖表高度（日 K 有工具列、分 K 沒有，圖一樣高）", abs(canvas.bounding_box()["height"] - hidden_height) < 0.5,
+                  [canvas.bounding_box()["height"], hidden_height])
+
+    axis = journey.axis(page)
+    finger.pinch(*px((0.4, 0.4)), 60, 160)
+    zoomed = journey.axis(page)
+    finger.slide(*px((0.5, 0.4)), 80, 0)
+    journey.check("08 手機：沒選工具時雙指張開是縮放、單指左右拖是平移（時間軸都變了），不會畫出線",
+                  zoomed != axis and journey.axis(page) != zoomed and journey.saved(page, code) == [])
+    page.reload()
+    journey.ready(page, code)
+
+    for tool in TOUCH_TOOLS:
+        button = tools.locator(f"button[data-tool={tool['kind']}]")
+        button.dispatch_event("pointerdown", {"pointerType": "touch", "pointerId": 9, "bubbles": True})
+        page.wait_for_timeout(600)
+        tip = page.evaluate("""kind => { const b = document.querySelector(`#drawTools button[data-tool=${kind}]`), after = getComputedStyle(b, '::after');
+          return { content: after.content, opacity: after.opacity, select: getComputedStyle(b).userSelect, selected: String(getSelection()) }; }""", tool["kind"])
+        button.dispatch_event("pointerup", {"pointerType": "touch", "pointerId": 9, "bubbles": True})
+        button.dispatch_event("click", {"bubbles": True})
+        journey.check(f"08 手機：長按「{tool['name']}」顯示名稱、不能選取文字、放開不會選到工具",
+                      tip["content"] == f'"{tool["name"]}"' and tip["opacity"] == "1" and tip["select"] == "none" and tip["selected"] == ""
+                      and not pressed(tool["kind"]), tip)
+    page.screenshot(path=str(OUT / "mobile-40-touch-toolbar.png"))
+    journey.check("08 手機：圖表畫布不能被選取（長按不跳選取）", page.evaluate("() => getComputedStyle(document.querySelector('#chartHost canvas')).userSelect") == "none")
+
+    # ---- 畫 ----
+    before = {item["id"] for item in journey.saved(page, code)}
+    for tool in TOUCH_TOOLS:
+        button = tools.locator(f"button[data-tool={tool['kind']}]")
+        button.tap()
+        page.wait_for_timeout(100)
+        if tool["kind"] == "text":
+            finger.tap(*px(tool["taps"][0]))
+            form = page.locator("#chartHost .kc-note")
+            visible = form.is_visible()
+            sized = page.evaluate("() => { const i = document.querySelector('.kc-note-input'); return i && [getComputedStyle(i).fontSize, document.querySelector('.kc-note').getBoundingClientRect().height, document.activeElement === i]; }")
+            page.screenshot(path=str(OUT / "mobile-41-touch-text-editor.png"))
+            with page.expect_response(drawing_request("PUT")) as saved:
+                page.keyboard.type(tool["text"])
+                page.keyboard.press("Enter")
+            journey.check("08 手機：文字標註點一下（手指晃了幾像素）出現輸入框，字級 16px、高 44px、已聚焦；寫完按完成就存",
+                          visible and sized == ["16px", 44, True] and saved.value.status == 201, sized)
+            continue
+        if len(tool["taps"]) == 1:
+            with page.expect_response(drawing_request("PUT")) as saved:
+                finger.tap(*px(tool["taps"][0]))
+            journey.check(f"08 手機：{tool['name']}點一下（手指晃了幾像素）就畫好並儲存", saved.value.status == 201)
+            continue
+        finger.tap(*px(tool["taps"][0]))
+        count = len(journey.saved(page, code))
+        x, y = px((0.20, 0.15))
+        finger.slide(x, y, 4, 120)   # 上下滑過圖表：不是第二點
+        journey.check(f"08 手機：{tool['name']}點了第一下之後手指上下滑過圖表，不會被當成第二點、工具還在",
+                      len(journey.saved(page, code)) == count and pressed(tool["kind"]))
+        with page.expect_response(drawing_request("PUT")) as saved:
+            finger.tap(*px(tool["taps"][1]))
+        journey.check(f"08 手機：{tool['name']}點兩下（手指晃了幾像素）就畫好並儲存，工具回一般模式", saved.value.status == 201 and not pressed(tool["kind"]))
+    items = {item["kind"]: item for item in journey.saved(page, code) if item["id"] not in before}
+    journey.check("08 手機：六種各畫了一條", sorted(items) == sorted(tool["kind"] for tool in TOUCH_TOOLS), sorted(items))
+    page.screenshot(path=str(OUT / "mobile-42-touch-six-drawn.png"))
+
+    # ---- 選取、拖整條、拖把手 ----
+    for tool in TOUCH_TOOLS:
+        drawing = items[tool["kind"]]
+        pick = px(tool["pick"]) if tool["kind"] != "text" else journey.at(page, width * tool["pick"][0] + 14, height * tool["pick"][1])
+        finger.tap(*pick, wobble=(3, -3))
+        journey.check(f"08 手機：手指點{tool['name']}就選到（刪除鈕出現）", delete.is_visible())
+        with page.expect_response(drawing_request("PUT")) as moved:
+            finger.slide(pick[0], pick[1], 0, MOVE)
+        after = next(item for item in journey.saved(page, code) if item["id"] == drawing["id"])
+        journey.check(f"08 手機：拖{tool['name']}整個往下：每個錨點都變低，放開存一次", moved.value.status == 200
+                      and all(new["price"] < old["price"] for new, old in zip(after["anchors"], drawing["anchors"])),
+                      {"before": drawing["anchors"], "after": after["anchors"]})
+        drawing = after
+        if "grip" in tool:
+            index = tool["grip"]
+            end = journey.at(page, width * tool["taps"][index][0] + 8, height * tool["taps"][index][1] + MOVE - 8)   # 把手旁 11px
+            with page.expect_response(drawing_request("PUT")) as reshaped:
+                finger.slide(end[0], end[1], 0, 16)
+            after = next(item for item in journey.saved(page, code) if item["id"] == drawing["id"])
+            journey.check(f"08 手機：按在{tool['name']}的把手旁邊往下拖：只有那一端變低，另一端不動", reshaped.value.status == 200
+                          and after["anchors"][1 - index] == drawing["anchors"][1 - index] and after["anchors"][index]["price"] < drawing["anchors"][index]["price"],
+                          {"before": drawing["anchors"], "after": after["anchors"]})
+            drawing = after
+        if tool["kind"] == "text":
+            finger.tap(pick[0], pick[1] + MOVE, wobble=(2, 3))
+            opened = page.locator("#chartHost .kc-note").is_visible()
+            with page.expect_response(drawing_request("PUT")) as edited:
+                page.keyboard.type("改")
+                page.keyboard.press("Enter")
+            after = next(item for item in journey.saved(page, code) if item["id"] == drawing["id"])
+            journey.check("08 手機：選取的文字再點一下打開輸入框（游標在最後面），接著寫的字存上去", opened and edited.value.status == 200 and after["text"] == tool["text"] + "改", after)
+            drawing = after
+        items[tool["kind"]] = drawing
+        finger.tap(*journey.at(page, width * 0.45, height * 0.88), wobble=(0, 0))   # 點空白處取消選取
+    page.screenshot(path=str(OUT / "mobile-43-touch-six-edited.png"))
+
+    # ---- 兩點工具畫到一半時縮放與平移 ----
+    start = (0.25, 0.47)
+    with page.expect_response(drawing_request("PUT")):
+        tools.locator("button[data-tool=hline]").tap()
+        finger.tap(*px(start), wobble=(0, 0))
+    probe = next(item for item in journey.saved(page, code) if item["id"] not in before and item["id"] not in {d["id"] for d in items.values()})
+    finger.tap(*journey.at(page, width * 0.03, height * start[1]), wobble=(0, 0))
+    with page.expect_response(drawing_request("DELETE")):
+        delete.tap()
+    tools.locator("button[data-tool=trend]").tap()
+    finger.tap(*px(start), wobble=(0, 0))
+    axis = journey.axis(page)
+    count = len(journey.saved(page, code))
+    finger.pinch(*px((0.35, 0.3)), 60, 160)
+    zoomed = journey.axis(page)
+    finger.slide(*px((0.5, 0.3)), 60, 0)
+    journey.check("08 手機：趨勢線點了第一下之後，雙指放大、單指平移都照常，而且都不會變成第二點",
+                  zoomed != axis and journey.axis(page) != zoomed and len(journey.saved(page, code)) == count and pressed("trend"))
+    with page.expect_response(drawing_request("PUT")) as saved:
+        finger.tap(*px((0.5, 0.55)))
+    trend = next(item for item in journey.saved(page, code) if item["id"] not in before and item["id"] not in {d["id"] for d in items.values()})
+    journey.check("08 手機：縮放平移完再點一下才畫完，起點仍是原本點的那一天與價位", saved.value.status == 201 and trend["anchors"][0] == probe["anchors"][0],
+                  {"first": trend["anchors"][0], "expected": probe["anchors"][0]})
+    page.screenshot(path=str(OUT / "mobile-44-touch-pinch-then-second.png"))
+
+    # ---- 重新整理、換到桌機 ----
+    phone_items = sorted(journey.saved(page, code), key=lambda item: item["id"])
+    page.reload()
+    journey.ready(page, code)
+    ink = journey.ink(page)
+    journey.check("08 手機：重新整理後七條都還在、位置不變", sorted(journey.saved(page, code), key=lambda item: item["id"]) == phone_items
+                  and ink["count"] > 0 and len(phone_items) == 7, len(phone_items))
+    page.screenshot(path=str(OUT / "mobile-45-touch-reloaded.png"))
+    desk = journey.context(browser, OWNER, viewport={"width": 1280, "height": 900})
+    desk_page = journey.open(desk, code)
+    same = [{key: item[key] for key in ("id", "kind", "anchors", "text")} for item in sorted(journey.saved(desk_page, code), key=lambda item: item["id"])]
+    journey.check("08 桌機：同一帳號看到的就是手機畫的那七條（種類、日期、價位、文字都一樣），圖上畫得出來",
+                  same == [{key: item[key] for key in ("id", "kind", "anchors", "text")} for item in phone_items] and journey.ink(desk_page)["count"] > 0)
+    desk_page.screenshot(path=str(OUT / "desktop-40-touch-same-as-phone.png"))
+    desk.close()
+
+    # ---- 刪除 ----
+    for tool in TOUCH_TOOLS:
+        x, y = tool["pick"][0] * width + (14 if tool["kind"] == "text" else 0), tool["pick"][1] * height + MOVE
+        finger.tap(*journey.at(page, x, y), wobble=(2, 2))
+        shown = delete.is_visible()
+        with page.expect_response(drawing_request("DELETE")) as removed:
+            delete.tap()
+        journey.check(f"08 手機：選取{tool['name']}後點刪除就刪掉", shown and removed.value.status == 204
+                      and all(item["id"] != items[tool["kind"]]["id"] for item in journey.saved(page, code)) and not delete.is_visible())
+    page.reload()
+    journey.ready(page, code)
+    journey.check("08 手機：刪掉的六條重新整理後也不在（只剩縮放時畫的那條趨勢線）", [item["kind"] for item in journey.saved(page, code)] == ["trend"])
+    context.close()
+
+
+def touch_narrow(journey: Journey, browser) -> None:
+    print("票 08｜手機寬度 320（iPhone 開「顯示縮放」）：工具列")
+    code = "2882"
+    context = journey.context(browser, OWNER, viewport={"width": 320, "height": 640}, device_scale_factor=2, is_mobile=True, has_touch=True)
+    page = journey.open(context, code)
+    tools = page.locator("#drawTools")
+    host = page.locator("#chartHost")
+    buttons = tools.locator("button:visible")
+
+    # 大小用 offsetWidth／offsetHeight：剛按過的那一顆還在「按下去」的縮小動畫裡，外框會小一點。
+    def layout() -> dict:
+        boxes = [buttons.nth(index).bounding_box() for index in range(buttons.count())]
+        sizes = page.evaluate("() => [...document.querySelectorAll('#drawTools button')].filter(b => !b.hidden).map(b => [b.offsetWidth, b.offsetHeight])")
+        return {"fits": page.evaluate(FITS_JS), "right": max(b["x"] + b["width"] for b in boxes), "widths": [w for w, _ in sizes],
+                "heights": [h for _, h in sizes], "chart": {**host.bounding_box(), "top": page.evaluate("() => document.getElementById('chartHost').getBoundingClientRect().top + scrollY")}}
+
+    first = layout()
+    journey.check("08 320 寬：六顆都在圖表寬度內、不造成橫向捲動、高 44、寬至少 30", first["fits"] and first["right"] <= first["chart"]["x"] + first["chart"]["width"] + 0.5
+                  and len(first["widths"]) == 6 and min(first["widths"]) >= 30 and min(first["heights"]) >= 44, first)
+    x, y, line_y = journey.point(page, 0.3, 0.3)
+    tools.locator("button[data-tool=hline]").tap()
+    with page.expect_response(drawing_request("PUT")):
+        page.touchscreen.tap(x, y)
+    page.touchscreen.tap(*journey.canvas_xy(page, 0.5, line_y))
+    page.wait_for_timeout(150)
+    second = layout()
+    journey.check("08 320 寬：選了線多出刪除鈕：七顆仍都在圖表寬度內、不橫向捲動、寬至少 30，圖不移動", second["fits"] and len(second["widths"]) == 7
+                  and second["right"] <= second["chart"]["x"] + second["chart"]["width"] + 0.5 and min(second["widths"]) >= 30
+                  and abs(second["chart"]["top"] - first["chart"]["top"]) < 0.5 and abs(second["chart"]["height"] - first["chart"]["height"]) < 0.5, second)
+    page.screenshot(path=str(OUT / "mobile-46-touch-320-selected.png"))
+    for kind in ("trend", "hline", "ray", "rect", "fib", "text"):
+        button = tools.locator(f"button[data-tool={kind}]")
+        button.tap()
+        on = button.get_attribute("aria-pressed") == "true"
+        button.tap()
+        journey.check(f"08 320 寬：{kind} 點得到（點一下選中、再點一下放下）", on and button.get_attribute("aria-pressed") == "false")
+    with page.expect_response(drawing_request("DELETE")):
+        page.touchscreen.tap(*journey.canvas_xy(page, 0.5, line_y))
+        page.locator("#drawDelete").tap()
+    context.close()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", help="已經開著的旅程伺服器；省略時自己起一個")
-    parser.add_argument("--only", help="只跑名稱以這個開頭的段落（例如 text），開發時用；省略時全部跑")
+    parser.add_argument("--only", help="只跑名稱以這幾個開頭的段落（逗號分開，例如 text 或 desktop,mobile），開發時用；省略時全部跑")
     args = parser.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
     server = None
@@ -1907,8 +2187,8 @@ def main() -> int:
     try:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch()
-            for step in (desktop, mobile, edit_desktop, edit_mobile, two_point_desktop, two_point_mobile, rect_desktop, rect_mobile, fib_desktop, fib_mobile, text_desktop, text_mobile, save_desktop, save_mobile):
-                if not args.only or step.__name__.startswith(args.only):
+            for step in (desktop, mobile, edit_desktop, edit_mobile, two_point_desktop, two_point_mobile, rect_desktop, rect_mobile, fib_desktop, fib_mobile, text_desktop, text_mobile, save_desktop, save_mobile, touch_mobile, touch_narrow):
+                if not args.only or step.__name__.startswith(tuple(args.only.split(","))):
                     step(journey, browser)
             browser.close()
     finally:

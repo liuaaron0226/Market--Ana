@@ -11,7 +11,8 @@
   const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
   const DRAW_FALLBACK = '#4f5fd6';             // 頁面沒定義 --draw 時用的同色
   const HIT_PX = { mouse: 6, touch: 14 };      // 可點選範圍：線的兩側各幾像素。手指比滑鼠寬
-  const DRAG_START_PX = 3;                     // 按住後移動超過這個距離才算拖動（與圖表平移的門檻相同）
+  const GRIP_PX = { mouse: 6, touch: 22 };     // 把手的可抓範圍（半徑）：手指比線的可點選範圍再寬一點，只有選取的那一條有把手，不搶 K 棒
+  const DRAG_START_PX = { mouse: 3, touch: 8 }; // 按住後移動超過這個距離才算拖動（與 kchart.js 的 TAP_SLOP 同值；手指點一下難免晃幾像素）
   const HANDLE_R = 4.5;
   const MIN_SPAN_PX = 4;                       // 兩點在畫面上至少要隔這麼遠才成一條線（連點兩下不會畫出看不見的線）
   const UNSAVED_OPACITY = .45;                 // 還沒存上去的線畫得比較淡（濃淡是原本的幾成）
@@ -24,6 +25,7 @@
   const NOTE_KEYBOARD_GAP = 12;                // 手機鍵盤彈出時，輸入框與看得到的範圍邊緣至少留這麼多
   const NOTE_CONTROL_RE = /[\u0000-\u001f\u007f\u0085\u2028\u2029]+/g;   // 控制字元與行分隔字元（定位字元等）：儲存端不收，確定時換成空白
   const NOTE_VISIBLE_RE = /[^\s\p{Cf}]/u;                       // 至少一個看得見的字：空白與零寬字元不算內容
+  const NOTE_ECHO_MS = 800;                    // 手指點一下放開之後，瀏覽器補送滑鼠事件的時間窗（多抓一點）
   const NOTE_LIMIT = 200;                      // 文字標註最多幾個字（與儲存端相同；一個表情符號算一個字）
   const css = (name, fallback) => getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
   const priceText = value => value.toLocaleString('en-US', { maximumFractionDigits: 2 });
@@ -334,14 +336,24 @@
     input.addEventListener('keydown', event => { if (event.key === 'Escape' && !event.isComposing) { event.stopPropagation(); finish(event, false); } });
     // 在輸入框以外的地方按下（取消鈕、邊框）不搬走焦點：手指點的位置常常剛好落在剛出現的取消鈕上，
     // 瀏覽器補送的滑鼠事件會讓取消鈕拿到焦點、輸入框失去焦點而被收掉。
-    form.addEventListener('mousedown', event => { if (event.target !== input) event.preventDefault(); });
+    // 手指打開的：放開之後瀏覽器補送的那一下按下，常常剛好落在剛出現的輸入框上，會把游標從最後面搬到點的位置——也擋下。
+    // 只擋那一下（開始打字就表示它已經過去了）；之後在輸入框裡按，照常可以移動游標。
+    // 補送的事件緊接在放開之後，所以只認打開後 NOTE_ECHO_MS 之內的那一下（萬一沒補送到輸入框上，也不會吞掉之後自己點的）。
+    let echo = touch ? Date.now() + NOTE_ECHO_MS : 0;
+    input.addEventListener('keydown', () => { echo = 0; });
+    form.addEventListener('mousedown', event => {
+      if (event.target !== input || Date.now() < echo) event.preventDefault();
+      echo = 0;
+    });
     // 點到別的地方、收起手機鍵盤（輸入框失去焦點）也是確定。
     input.addEventListener('blur', () => onClose(true, false));
     input.value = value; enforce({});
     host.append(form);
     // 滑鼠與鍵盤打開的沒有螢幕鍵盤：不監看也不動頁面，使用者自己捲到哪就留在哪。
     const leave = touch ? watchKeyboard(form) : () => {};
-    return { form, focus: () => input.focus(), text: () => noteText(input.value), remove() { form.remove(); leave(); } };
+    // 聚焦時游標放在最後面：改既有的文字通常是接著寫（手機上由程式聚焦時，游標預設停在最前面）。
+    const focus = () => { input.focus(); input.setSelectionRange(input.value.length, input.value.length); };
+    return { form, focus, text: () => noteText(input.value), remove() { form.remove(); leave(); } };
   }
 
   // 寬 w、高 h 的一塊想放在 (x, y)（左上角）：整塊收進繪圖區之後的左上角。比繪圖區還大時靠左上。
@@ -432,7 +444,7 @@
       this.pending = null;      // 兩點工具點了第一下、還沒點第二下時的起點錨點
       this.pointer = null;      // 游標或手指最後在主圖上的位置（預覽線的另一端）
       this.selectedId = null;   // 選取記的是識別碼：重畫、換週期、重新載入同一組線都不會選錯條
-      this.move = null;         // 正在拖動的那一條：{ drawing, anchors（拖動前）, x, y（起點）, started, grip（只拖哪個把手；null＝整條） }
+      this.move = null;         // 正在拖動的那一條：{ drawing, anchors（拖動前）, x, y（起點）, started, grip（只拖哪個把手；null＝整條）, slop（移多遠才算拖） }
       this.swallowTap = false;  // 這次按下去是用來確定輸入框的：放開時不再當成一次點擊（圖表每次都先叫 grab、放開才叫 tap）
       this.unsaved = new Set(); // 還沒存上去的線（識別碼）：畫得比較淡
       this.editing = null;      // 開著的文字輸入框：{ drawing（正在改的那一則；null＝新的）, anchor（新的要寫在哪）, box（noteEditor 給的那個表單） }
@@ -496,12 +508,15 @@
       return true;
     }
     // 主圖上的一次點擊。回傳 true 表示這一下被畫線用掉了，圖表不再拿去選 K 棒。
-    tap(x, y, pointerType) {
+    // slid：按下到放開之間滑過一段（上下滑也算，圖表只會左右平移）。選了工具時那不是點一下：不定位，也不選 K 棒。
+    tap(x, y, pointerType, slid = false) {
       if (this.swallowTap) { this.swallowTap = false; return true; }
       if (!this.enabled) return false;
+      if (this.tool && slid) return true;
       if (!this.tool) {
         // 一般模式：先看有沒有點到線。點到就選取；沒點到就取消選取，這一下還給圖表。
-        const hit = this.hit(x, y, pointerType);
+        // 按在已選取那一條的把手旁邊（把手比線好抓）也算點到它。
+        const hit = this.hit(x, y, pointerType) || (this.gripAt(x, y, pointerType) !== null ? this.selected : null);
         // 再點一下已經選取的文字：打開輸入框修改內容。
         if (hit && hit.id === this.selectedId && this.edit(pointerType)) return true;
         this.select(hit ? hit.id : null);
@@ -580,16 +595,26 @@
       // 輸入框開著時在圖上按下去：就是確定。這一下到放開為止都不做別的事（不選 K 棒、不平移、不放新的標註）。
       this.swallowTap = Boolean(this.editing);
       if (this.swallowTap) { this.closeEditor(true); this.chart.draw(); return true; }
-      const drawing = this.tool ? null : this.selected, reach = this.reach(pointerType);
+      const drawing = this.tool ? null : this.selected;
       const at = drawing && this.locate(drawing), shape = drawing && SHAPES[drawing.kind];
-      if (!at || !(this.distanceTo(drawing, x, y) <= reach || (shape.contains && shape.contains(at, x, y)))) return false;
-      const grips = shape.handles(at, this.chart.geo).filter(handle => handle.length > 2);
+      if (!at) return false;
+      const grip = this.gripAt(x, y, pointerType);
+      // 按在把手附近（可以在線外），或線的可點選範圍內，或已選取的框裡面：這次是拖它。
+      if (grip === null && !(this.distanceTo(drawing, x, y) <= this.reach(pointerType) || (shape.contains && shape.contains(at, x, y)))) return false;
+      this.move = { drawing, anchors: drawing.anchors, x, y, started: false, grip, slop: pointerType === 'mouse' ? DRAG_START_PX.mouse : DRAG_START_PX.touch };
+      return true;
+    }
+    // 指標位置抓得到已選取那一條的哪個把手（把手編號）；抓不到、沒有選取或選了工具時回 null。
+    gripAt(x, y, pointerType) {
+      const drawing = this.tool ? null : this.selected, at = drawing && this.locate(drawing);
+      if (!at) return null;
+      const grips = SHAPES[drawing.kind].handles(at, this.chart.geo).filter(handle => handle.length > 2);
       // 把手的可抓範圍不超過最近兩個把手間距的三分之一：再短的線、再小的框，中段也留給整條平移。
       const span = Math.min(Infinity, ...grips.flatMap((one, i) => grips.slice(i + 1).map(other => Math.hypot(other[0] - one[0], other[1] - one[1]))));
+      const reach = Math.min(pointerType === 'mouse' ? GRIP_PX.mouse : GRIP_PX.touch, span / 3);
       const near = grips.map(([hx, hy, grip]) => ({ grip, distance: Math.hypot(x - hx, y - hy) }))
-        .filter(grip => grip.distance <= Math.min(reach, span / 3)).sort((a, b) => a.distance - b.distance)[0];
-      this.move = { drawing, anchors: drawing.anchors, x, y, started: false, grip: near ? near.grip : null };
-      return true;
+        .filter(grip => grip.distance <= reach).sort((a, b) => a.distance - b.distance)[0];
+      return near ? near.grip : null;
     }
     // 回傳這次按住到目前為止算不算拖動（超過門檻才算；沒超過的話放開時仍是一次點擊）。
     dragTo(x, y) {
@@ -598,7 +623,7 @@
       if (!this.inView(g)) return move.started;
       // 手拖出繪圖區時當作停在邊緣：線不會被整條拖到看不見的地方。
       const dx = clamp(x, g.l, g.l + g.pw) - move.x, dy = clamp(y, g.t, g.t + g.ph) - move.y;
-      if (!move.started && Math.hypot(dx, dy) <= DRAG_START_PX) return false;
+      if (!move.started && Math.hypot(dx, dy) <= move.slop) return false;
       move.started = true;
       const shape = SHAPES[move.drawing.kind];
       const next = move.grip === null ? shape.dragged(move.anchors, dx, dy, g, this.chart, move.drawing)
