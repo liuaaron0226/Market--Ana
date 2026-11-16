@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gzip
+import hashlib
 import json
 import sqlite3
 import tempfile
@@ -33,7 +34,6 @@ def listed_raw(out: Path, day: str, rows=None) -> None:
 
 def _otc_raw_plain(out: Path, day: str, content: bytes) -> None:
     """與 otc_history.fetch_history 存的一樣：原件＋「雜湊  檔名」的 sidecar。"""
-    import hashlib
     path = out / "raw" / f"{day}.csv"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(content)
@@ -123,9 +123,27 @@ class ListedBackfillTest(unittest.TestCase):
         self.assertEqual(di.listed_quotes_day(other, db, "2026-11-06", get=rec.two_arg, sleep=lambda s: None)["status"],
                          "already-present")
 
-    def test_without_recorded_etfs_daily_append_is_unchanged(self) -> None:
-        self.assertEqual(eh.recorded_codes(self.db), set())
+    def test_without_recorded_etfs_daily_append_adds_no_etf_rows(self) -> None:
+        other = self.out / "plain"
+        listed_raw(other, "20261105")
+        db = other / "stock-history.sqlite"
+        sh.build_database(other, db)
+        rec = Recorder({("MI_INDEX", "20261106"): sh.Response(200, "application/json",
+                                                              official_payload("20261106", LISTED_DAY_ROWS), "u")})
+        di.listed_quotes_day(other, db, "2026-11-06", get=rec.two_arg, sleep=lambda s: None)
+        self.assertEqual(eh.recorded_codes(db), set())
+        self.assertEqual(codes_on(db, "2026-11-06"), {"0050": "etf", "2330": "common"})
+
+    def test_force_rescans_and_fills_a_day_whose_raw_came_back(self) -> None:
+        raw = sh.raw_file(self.out, "20261106")
+        good = raw.read_bytes()
+        raw.unlink()
+        eh.backfill(self.db, self.out, "上市", {"0056"})
         self.assertNotIn("0056", codes_on(self.db, "2026-11-06"))
+        raw.write_bytes(good)
+        self.assertEqual(eh.backfill(self.db, self.out, "上市", {"0056"})["status"], "up-to-date")
+        self.assertEqual(eh.backfill(self.db, self.out, "上市", {"0056"}, force=True)["rows"], 1)
+        self.assertIn("0056", codes_on(self.db, "2026-11-06"))
 
 
 class OtcBackfillTest(unittest.TestCase):
@@ -169,6 +187,8 @@ class RefreshTest(unittest.TestCase):
             self.assertEqual(codes_on(listed / "stock-history.sqlite", "2026-11-05"),
                              {"0050": "etf", "0056": "etf", "2330": "common"})
             self.assertEqual(eh.refresh(root)["上市"]["status"], "up-to-date")
+            (otc / "otc_history.sqlite").unlink()
+            self.assertEqual(eh.refresh(root)["status"], "incomplete")   # 行情庫不在就不報 ok
 
 
 def trading_days(count: int) -> list[str]:

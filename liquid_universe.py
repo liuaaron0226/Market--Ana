@@ -365,7 +365,8 @@ def default_sources(include_etfs: bool = False) -> Sources:
     if include_etfs:
         import etf_classification
 
-        etf_catalog = etf_classification.load_default_catalog(ROOT)
+        etf_catalog = etf_classification.load_etf_catalog((listed_raw, listed_raw.with_suffix(".meta.json")),
+                                                          (otc_raw, otc_raw.with_suffix(".meta.json")))
     return Sources(listed_db, otc_db, listed_codes, otc_codes - listed_codes,
                    RawEtfSource(listed_db) if include_etfs else None, etf_catalog)
 

@@ -24,7 +24,12 @@ from typing import Iterable
 
 ROOT = Path(__file__).resolve().parent
 TABLE = "etf_codes"
-ALREADY_IN_HISTORY = frozenset({"0050"})   # stock_history.security_kind 本來就收的 ETF
+
+
+def _already_in_history(code: str) -> bool:
+    """stock_history 本來就收的 ETF（目前只有 0050）：不進 etf_codes，免得同一套規則寫兩份。"""
+    import stock_history as sh
+    return sh.security_kind(code, "") is not None
 
 
 def _ensure_table(connection: sqlite3.Connection) -> None:
@@ -114,8 +119,8 @@ def backfill(db_path: Path, out: Path, market: str, codes: Iterable[str], *, for
 
     db_path, out = Path(db_path), Path(out)
     if not db_path.exists():
-        return {"status": "no-database", "codes": []}
-    wanted = set(codes) - ALREADY_IN_HISTORY
+        return {"status": "no-database", "codes": [], "rows": 0}
+    wanted = {code for code in codes if not _already_in_history(code)}
     todo = wanted if force else wanted - recorded_codes(db_path)
     if not todo:
         return {"status": "up-to-date", "codes": [], "rows": 0}
@@ -131,24 +136,30 @@ def backfill(db_path: Path, out: Path, market: str, codes: Iterable[str], *, for
                                  "last": missing[-1] if missing else None}}
 
 
-def refresh(root: Path = ROOT) -> dict:
-    """每日更新用：名錄裡新出現的股票型 ETF 補歷史；已收錄的什麼都不做（每天的新一天由附加帶上）。"""
+def refresh(root: Path = ROOT, *, force: bool = False) -> dict:
+    """每日更新用：名錄裡新出現的股票型 ETF 補歷史；已收錄的什麼都不做（每天的新一天由附加帶上）。
+
+    已收錄的代號不再重掃：回補當時缺原件或雜湊不符的日子會一直缺著（回報裡有天數）。原件補齊之後要手動
+    ``python etf_history.py --force`` 重掃一次；已有的列不動。"""
     import etf_classification as ec
 
     catalog = ec.load_default_catalog(root)
     data = Path(root) / "data"
-    report: dict = {"status": "ok"}
+    report: dict = {}
     for market, out, db in (("上市", data / "stock-history", data / "stock-history/stock-history.sqlite"),
                             ("上櫃", data / "otc-history", data / "otc-history/otc_history.sqlite")):
-        report[market] = backfill(db, out, market, ec.stock_etf_codes(catalog, market))
+        report[market] = backfill(db, out, market, ec.stock_etf_codes(catalog, market), force=force)
+    # 行情庫不在（還沒建）就不是 ok：每日更新的報告裡看得出這一步其實沒做
+    report["status"] = "ok" if all(report[m]["status"] != "no-database" for m in ("上市", "上櫃")) else "incomplete"
     return report
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="股票型 ETF 的日線從原件回補進行情庫（不抓新資料）")
     parser.add_argument("--root", type=Path, default=ROOT, help="資料根目錄（底下要有 data/）；驗證時請指向複本")
+    parser.add_argument("--force", action="store_true", help="已收錄的代號也重掃全部原件（補回當初缺的日子；已有的列不動）")
     args = parser.parse_args(argv)
-    print(json.dumps(refresh(args.root), ensure_ascii=False, indent=1))
+    print(json.dumps(refresh(args.root, force=args.force), ensure_ascii=False, indent=1))
     return 0
 
 

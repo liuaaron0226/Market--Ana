@@ -55,12 +55,18 @@ def suffix_of(code: str) -> str:
     return code[-1] if code and code[-1].isalpha() else ""
 
 
+def _cfi_asset(cfi: str | None) -> str | None:
+    """CFI 第 5 碼（資產類別）；名錄查不到或不是 ETF 的 CFI（CE 開頭）就是 None。"""
+    return cfi[4] if cfi and cfi.startswith("CE") and len(cfi) >= 5 else None
+
+
 def official_label(cfi: str | None) -> str:
     if not cfi:
         return "官方名錄查不到"
-    if not cfi.startswith("CE") or len(cfi) < 5:
+    asset = _cfi_asset(cfi)
+    if asset is None:
         return f"不是 ETF（CFI {cfi}）"
-    return CFI_ASSETS.get(cfi[4], f"其他（CFI {cfi}）")
+    return CFI_ASSETS.get(asset, f"其他（CFI {cfi}）")
 
 
 def classify(code: str, cfi: str | None) -> Classification:
@@ -71,7 +77,8 @@ def classify(code: str, cfi: str | None) -> Classification:
     suffix_label, claims_stock = SUFFIXES[suffix]
     if claims_stock is None:
         return Classification(code, EXCLUDED, suffix_label, label, suffix_label)
-    official_stock = None if not cfi or not cfi.startswith("CE") or len(cfi) < 5 else cfi[4] == "E"
+    asset = _cfi_asset(cfi)
+    official_stock = None if asset is None else asset == "E"
     if official_stock is None:
         if claims_stock:
             return Classification(code, MISMATCH, suffix_label, label, f"字尾看是{suffix_label}，但官方名錄查不到這一檔")
