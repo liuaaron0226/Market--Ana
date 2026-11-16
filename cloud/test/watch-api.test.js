@@ -2,7 +2,7 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { handle } from "../lib/gate.js";
-import { releasePolicy, strategyWorkflowPolicy } from "../lib/release-policy.js";
+import { policyForViewer, releasePolicy, strategyWorkflowPolicy } from "../lib/release-policy.js";
 import { fakeD1, makeIssuer, claims, fetchJwks, TEAM, MAIN_AUD, APPLY_AUD, OWNER } from "./helpers.js";
 
 const ON = { MARKET_ANA_WATCHLIST_WATCH: "owner" };
@@ -160,10 +160,18 @@ test("關注開關是獨立的：打開它不會連帶打開其他功能，別�
   assert.equal(releasePolicy({}).features.watchlist_watch_v1, false);
 });
 
-test("正式環境設定：關注開關還沒有打開", async () => {
+test("正式環境設定：關注只對站主打開，其他人的功能清單看不到，也不連帶打開策略與 AI", async () => {
   const { readFileSync } = await import("node:fs");
   const text = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8").replace(/^\s*\/\/.*$/gm, "");
-  assert.equal(releasePolicy(JSON.parse(text).vars).features.watchlist_watch_v1, false);
+  const vars = JSON.parse(text).vars;
+  assert.equal(vars.MARKET_ANA_WATCHLIST_WATCH, "owner");
+  const policy = releasePolicy(vars);
+  assert.equal(policy.features.watchlist_watch_v1, true);
+  assert.equal(policyForViewer(policy, false).features.watchlist_watch_v1, false);
+  assert.equal(policy.strategies_enabled, false);
+  for (const feature of ["strategy_v1", "level_advice", "ai_digest", "ai_stock_advice"]) {
+    assert.equal(policy.features[feature], false, feature);
+  }
 });
 
 test("從自選股刪除一檔，它的關注一併結束；之後再加回來不會自己變成關注", async () => {
