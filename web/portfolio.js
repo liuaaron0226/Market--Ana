@@ -668,11 +668,6 @@
     const mark = !watch ? '' : held && !titled ? group || '自選' : horizon;
     if (mark) under.append(element('em', '', mark));
     name.append(element('strong', '', entry.name), under);
-    // 關注中的那幾檔：名稱下面多一行最新的判斷（主線自選股關注 E 票，watch-judgments.js；讀不到就不加）
-    const judgments = state.watch?.judgments;
-    const judgment = watch && judgments && state.watch.codes.has(entry.code) && window.WatchJudgments
-      ? window.WatchJudgments.listLine(judgments.items[entry.code], judgments.base_date) : null;
-    if (judgment) name.append(judgment);
     const open = element('button', 'hv-open');
     open.type = 'button';
     open.setAttribute('aria-expanded', 'false');
