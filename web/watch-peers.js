@@ -6,8 +6,10 @@
   'use strict';
   const MARKET = { US: '美股', KR: '韓股', INDEX: '指數', JP: '日股' };
   const SOURCE = { massive: 'Massive', eodhd: 'EODHD' };
-  // 狀態標籤：正常（ok）不標。
+  // 狀態標籤：正常（ok）不標。過期時寫出那個來源這次為什麼沒抓到（各來源各自失敗、各自標示）。
   const TAG = { stale: '過期', no_source: '沒有來源', pending: '等每日更新' };
+  const PROBLEM = { quota: '額度用完', no_key: '沒有金鑰', auth: '金鑰無效', not_found: '查無代號', over_limit: '超過上限',
+    format: '今天沒抓到', network: '今天沒抓到' };
   const SWIPE_PX = 48;
   const state = { code: '', token: 0 };
 
@@ -59,7 +61,7 @@
     });
     if (response.status === 204) return null;
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || payload.message || '暫時無法處理，請稍後再試');
+    if (!response.ok) throw new Error(payload.message || payload.error || '暫時無法處理，請稍後再試');
     return payload;
   }
 
@@ -77,7 +79,8 @@
     value.append(tick, el('b', 'num', item.latest ? pct(change) : '—'));
     const meta = el('small', 'wp-meta num');
     if (item.latest) meta.append(document.createTextNode(`${shortDate(item.latest.date)} 收`));
-    if (TAG[item.status]) meta.append(el('span', `wp-tag wp-tag-${item.status}`, TAG[item.status]));
+    const tag = item.status === 'stale' ? PROBLEM[item.problem] || TAG.stale : TAG[item.status];
+    if (tag) meta.append(el('span', `wp-tag wp-tag-${item.status}`, tag));
     value.append(meta);
     const remove = el('button', 'wp-remove', '移除');
     remove.type = 'button';
@@ -124,8 +127,13 @@
       const list = el('ul', 'wp-list');
       for (const item of payload.items) list.append(row(item, code, message));
       children.push(list);
+      // 出處＋各來源最後一次成功抓到的日期（台北時間）。
       const used = [...new Set(payload.items.map(item => item.source).filter(Boolean))];
-      if (used.length) children.push(el('p', 'wp-source', `出處 ${used.map(source => SOURCE[source]).join('、')}`));
+      const lastOk = source => {
+        const at = payload.sources?.[source]?.last_success_at;
+        return at ? ` ${shortDate(new Date(Date.parse(at) + 8 * 3600_000).toISOString())}` : '';
+      };
+      if (used.length) children.push(el('p', 'wp-source num', `出處 ${used.map(source => SOURCE[source] + lastOk(source)).join('、')}`));
     } else {
       children.push(el('p', 'wp-empty', '還沒有名單'));
     }

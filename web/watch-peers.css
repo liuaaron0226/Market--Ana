@@ -47,7 +47,7 @@
   background: var(--ink); color: var(--bg); font: 500 13px var(--sans); cursor: pointer;
 }
 .bd .wp-add button:disabled { opacity: .6; cursor: default; }
-.bd .wp-message { min-height: 1em; margin: 6px 0 0; color: var(--up); font: 13px var(--sans); }
+.bd .wp-message { min-height: 1em; margin: 6px 0 0; color: var(--ink); font: 13px var(--sans); }
 .bd .wp-message:empty { min-height: 0; margin: 0; }
 
 /* 右欄（約 250 寬）與窄手機：名稱一行、走勢線放第二行，漲跌在右邊跨兩行。 */

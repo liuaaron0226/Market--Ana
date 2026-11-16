@@ -23,6 +23,7 @@ import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -36,7 +37,7 @@ KEEP_DAYS = 366
 # 有舊資料時從最後一筆往前一週重抓，補上來源事後修正與漏掉的日子。
 OVERLAP_DAYS = 7
 # EODHD 免費方案每天 20 次，要和水位的 S&P 500、事前預測的海外指數共用：國外同類股最多用 12 次。
-# 和 cloud/lib/watch-peers.js 的 LIMITED_LIMIT 是同一個數字，要調整得兩邊一起改。
+# 和 cloud/lib/watch-peers.js 的 EODHD_PEER_LIMIT 是同一個數字，要調整得兩邊一起改。
 EODHD_SYMBOL_LIMIT = 12
 SOURCE_OF = {"US": "massive", "KR": "eodhd", "INDEX": "eodhd"}   # JP：沒有來源
 SYMBOL_RE = re.compile(r"^[0-9A-Z.]{2,16}$")
@@ -125,7 +126,7 @@ class MassiveSource:
     def daily(self, symbol: str, start: date, end: date) -> list[dict]:
         ticker = symbol.removesuffix(".US")
         status, body = self.http(f"https://api.massive.com/v2/aggs/ticker/{ticker}/range/1/day/{start}/{end}"
-                                 f"?adjusted=true&sort=asc&limit=50000&apiKey={self.key}")
+                                 f"?adjusted=true&sort=asc&limit=50000&apiKey={urllib.parse.quote(self.key, safe='')}")
         _check_status(status)
         payload = _json(body)
         if not isinstance(payload, dict):
@@ -154,7 +155,7 @@ class EodhdSource:
         self.key, self.http = key, http
 
     def daily(self, symbol: str, start: date, end: date) -> list[dict]:
-        status, body = self.http(f"https://eodhd.com/api/eod/{symbol}?api_token={self.key}&fmt=json&period=d&from={start}&to={end}")
+        status, body = self.http(f"https://eodhd.com/api/eod/{symbol}?api_token={urllib.parse.quote(self.key, safe='')}&fmt=json&period=d&from={start}&to={end}")
         _check_status(status)
         payload = _json(body)
         if not isinstance(payload, list):
@@ -183,7 +184,7 @@ PEERS_SQL = ("SELECT DISTINCT p.symbol AS symbol, p.market AS market FROM watch_
 LATEST_SQL = "SELECT symbol, MAX(date) AS latest FROM overseas_quotes GROUP BY symbol"
 
 
-def _quote(value) -> str:
+def _sql_literal(value) -> str:
     if value is None:
         return "NULL"
     if isinstance(value, (int, float)):
@@ -191,8 +192,8 @@ def _quote(value) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
-def _quote_sql(symbol: str, source: str, bar: dict, now: str) -> str:
-    values = ", ".join(_quote(v) for v in (symbol, bar["date"], bar["open"], bar["high"], bar["low"], bar["close"], bar["volume"], source, now))
+def _upsert_quote_sql(symbol: str, source: str, bar: dict, now: str) -> str:
+    values = ", ".join(_sql_literal(v) for v in (symbol, bar["date"], bar["open"], bar["high"], bar["low"], bar["close"], bar["volume"], source, now))
     return ("INSERT INTO overseas_quotes (symbol, date, open, high, low, close, volume, source, fetched_at) VALUES "
             f"({values}) ON CONFLICT (symbol, date) DO UPDATE SET open = excluded.open, high = excluded.high, low = excluded.low, "
             "close = excluded.close, volume = excluded.volume, source = excluded.source, fetched_at = excluded.fetched_at;")
@@ -202,7 +203,7 @@ def _status_sql(symbol: str, source: str, now: str, problem: str | None) -> str:
     # 失敗時保留上一次成功的時間（畫面用它標「最後成功」）。
     ok = problem is None
     return ("INSERT INTO overseas_fetch_status (symbol, source, attempted_at, ok, succeeded_at, problem) VALUES "
-            f"({_quote(symbol)}, {_quote(source)}, {_quote(now)}, {int(ok)}, {_quote(now if ok else None)}, {_quote(problem)}) "
+            f"({_sql_literal(symbol)}, {_sql_literal(source)}, {_sql_literal(now)}, {int(ok)}, {_sql_literal(now if ok else None)}, {_sql_literal(problem)}) "
             "ON CONFLICT (symbol) DO UPDATE SET source = excluded.source, attempted_at = excluded.attempted_at, ok = excluded.ok, "
             "succeeded_at = CASE WHEN excluded.ok = 1 THEN excluded.succeeded_at ELSE overseas_fetch_status.succeeded_at END, "
             "problem = excluded.problem;")
@@ -216,7 +217,8 @@ def daily(d1: D1, sources: dict[str, Source | None], *, today: date, now: str,
     latest = {row["symbol"]: row["latest"] for row in d1.query(LATEST_SQL)}
     keep_from = today - timedelta(days=KEEP_DAYS)
     exhausted: set[str] = set()
-    used = {"eodhd": 0}
+    # 有每日次數上限的來源，這一輪還能打幾次。
+    budget = {"eodhd": EODHD_SYMBOL_LIMIT}
     called: set[str] = set()
     statements: list[str] = []
     problems: dict[str, int] = {}
@@ -231,7 +233,7 @@ def daily(d1: D1, sources: dict[str, Source | None], *, today: date, now: str,
             problem = "no_key"
         elif source_name in exhausted:
             problem = "quota"
-        elif source_name in used and used[source_name] >= EODHD_SYMBOL_LIMIT:
+        elif budget.get(source_name, 1) <= 0:
             problem = "over_limit"
         else:
             last = latest.get(symbol)
@@ -239,8 +241,8 @@ def daily(d1: D1, sources: dict[str, Source | None], *, today: date, now: str,
             if source_name in called and source.pause:
                 sleep(source.pause)
             called.add(source_name)
-            if source_name in used:
-                used[source_name] += 1
+            if source_name in budget:
+                budget[source_name] -= 1
             try:
                 bars = source.daily(symbol, start, today)
             except QuotaExceeded:
@@ -252,13 +254,13 @@ def daily(d1: D1, sources: dict[str, Source | None], *, today: date, now: str,
                 problem = "network"
         if problem is None:
             unique = {bar["date"]: bar for bar in bars if bar["date"] >= keep_from.isoformat()}
-            statements.extend(_quote_sql(symbol, source_name, bar, now) for _, bar in sorted(unique.items()))
+            statements.extend(_upsert_quote_sql(symbol, source_name, bar, now) for _, bar in sorted(unique.items()))
             ok += 1
             rows += len(unique)
         else:
             problems[problem] = problems.get(problem, 0) + 1
         statements.append(_status_sql(symbol, source_name, now, problem))
-    statements.append(f"DELETE FROM overseas_quotes WHERE date < {_quote(keep_from.isoformat())};")
+    statements.append(f"DELETE FROM overseas_quotes WHERE date < {_sql_literal(keep_from.isoformat())};")
     d1.execute(statements)
     return {"symbols": len(peers), "ok": ok, "problems": problems, "rows": rows}
 

@@ -156,6 +156,16 @@ test("韓股與指數全部關注股合計最多 12 檔（重複的只算一次�
   assert.equal((await add("N225.INDX", {}, "2317")).status, 201, "移除一檔後可以再加");
 });
 
+test("上限只算還在關注的股票：關掉一檔的關注，它的韓股與指數就不佔名額（每日也不抓它）", async () => {
+  for (let i = 0; i < 12; i += 1) await add(`00${String(i).padStart(4, "0")}.KO`);
+  await req("/api/watchlist", { method: "POST", body: { code: "2317", horizon: "none" } });
+  await req("/api/watch/2317", { method: "POST" });
+  assert.equal((await add("N225.INDX", {}, "2317")).status, 409);
+  await req("/api/watch/2330", { method: "DELETE" });
+  assert.equal((await add("N225.INDX", {}, "2317")).status, 201);
+  assert.equal((await json("/api/watch-peers/2317")).limited_count, 1);
+});
+
 test("移除一檔：從名單拿掉、紀錄只新增；再加回來會重新檢查來源", async () => {
   await add("NVDA");
   assert.equal((await remove("NVDA.US")).status, 204);

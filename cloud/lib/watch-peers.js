@@ -8,7 +8,7 @@ export const WATCH_PEERS_PATH = /^\/api\/watch-peers\/([^/]+)(?:\/([^/]+))?$/;
 // EODHD 免費方案每天 20 次，要和水位的 S&P 500（1 次）、事前預測的海外指數（D 票，約 4 次）共用，
 // 另留幾次給站主加代號時的檢查：韓股與指數全部關注股合計 12 檔。美股走 Massive，不受這個限制。
 // 每日抓取（overseas_peers.py 的 EODHD_SYMBOL_LIMIT）用同一個數字，要調整得兩邊一起改。
-export const LIMITED_LIMIT = 12;
+export const EODHD_PEER_LIMIT = 12;
 const LIMITED_MARKETS = new Set(["KR", "INDEX"]);
 const SOURCE_OF = { US: "massive", KR: "eodhd", INDEX: "eodhd", JP: null };
 // 最近一筆收盤比今天早超過這麼多天，就算當天的抓取沒有回報失敗也標過期（例如每日更新整天沒跑）。
@@ -77,8 +77,10 @@ async function isWatching(db, email, code) {
 }
 
 async function limitedSymbols(db, email) {
+  // 和每日抓取（overseas_peers.py 的 PEERS_SQL）同一個範圍：已確認、而且那一檔關注股還開著。
   const rows = await db.prepare(
-    "SELECT DISTINCT symbol FROM watch_peers WHERE email = ? AND status = 'confirmed' AND market IN ('KR', 'INDEX')",
+    "SELECT DISTINCT p.symbol FROM watch_peers p JOIN user_watchlist w ON w.email = p.email AND w.code = p.code " +
+      "WHERE p.email = ? AND p.status = 'confirmed' AND w.watching = 1 AND p.market IN ('KR', 'INDEX')",
   ).bind(email).all();
   return new Set(rows.results.map((row) => row.symbol));
 }
@@ -127,7 +129,7 @@ async function list(db, email, code, now) {
   }
   return response(200, {
     available: true, code, watching, items,
-    limited_count: (await limitedSymbols(db, email)).size, limited_limit: LIMITED_LIMIT, sources,
+    limited_count: (await limitedSymbols(db, email)).size, limited_limit: EODHD_PEER_LIMIT, sources,
   });
 }
 
@@ -145,8 +147,8 @@ async function add(request, env, email, code, deps, now) {
   if (existing?.status === "confirmed") throw new UserPortfolioError(409, `名單裡已經有 ${parsed.symbol}`);
   if (LIMITED_MARKETS.has(parsed.market)) {
     const used = await limitedSymbols(db, email);
-    if (!used.has(parsed.symbol) && used.size >= LIMITED_LIMIT) {
-      throw new UserPortfolioError(409, `韓股與指數全部合計最多 ${LIMITED_LIMIT} 檔（每日額度的上限），請先移除一檔`);
+    if (!used.has(parsed.symbol) && used.size >= EODHD_PEER_LIMIT) {
+      throw new UserPortfolioError(409, `韓股與指數全部合計最多 ${EODHD_PEER_LIMIT} 檔（每日額度的上限），請先移除一檔`);
     }
   }
   // 日本個股目前沒有來源：照樣收（之後 Gemini 提名也可能有），畫面標「沒有來源」而不是空白。
