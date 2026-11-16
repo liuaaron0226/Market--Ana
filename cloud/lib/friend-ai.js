@@ -6,7 +6,7 @@ import { UserPortfolioError, noContent, readBody, requireSameOrigin, response } 
 
 export { friendAiEnabled } from "./release-policy.js";
 
-export const FRIEND_AI_PATH = /^\/api\/friend-ai(?:\/(key|consent|digest))?$/;
+export const FRIEND_AI_PATH = /^\/api\/friend-ai(?:\/(key|consent|digest|stocks))?$/;
 export const FRIEND_AI_PAGE = /^\/gemini(?:\/.*)?$/;
 // 人數上限同時寫在資料表的限制裡（migration 0014 的 friend_gemini_keys_limit）；要調整得兩邊一起改。
 export const FRIEND_KEY_LIMIT = 10;
@@ -22,10 +22,17 @@ export const STUDIO_URL = "https://aistudio.google.com/app/apikey";
 // 試呼叫用的模型：官方的 latest 別名，模型換代時不必改程式。
 export const TRIAL_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent";
 // 排程（02 票）挑金鑰用的查詢：已核准、金鑰有效、同意是現行版本（參數＝CONSENT_VERSION）。
-export const USABLE_FRIEND_KEYS_SQL =
-  "SELECT k.email, k.ciphertext, k.iv, k.alg, k.master_key_id FROM friend_gemini_keys k " +
-  "JOIN users u ON u.email = k.email " +
-  "WHERE u.status = 'approved' AND k.status = 'active' AND k.consent_version = ? ORDER BY k.email";
+const USABLE_FRIENDS =
+  "FROM friend_gemini_keys k JOIN users u ON u.email = k.email " +
+  "WHERE u.status = 'approved' AND k.status = 'active' AND k.consent_version = ?";
+export const USABLE_FRIEND_KEYS_SQL = `SELECT k.email, k.ciphertext, k.iv, k.alg, k.master_key_id ${USABLE_FRIENDS} ORDER BY k.email`;
+// 03 票：同一批朋友各自的自選股與庫存（兩個參數都是 CONSENT_VERSION）。欄位和站主那條線（ai-digest.yml）一模一樣；
+// 備註、價格來源不讀。排程再依 email 逐位分開，每位朋友的提示只放他自己的。
+export const USABLE_FRIEND_PORTFOLIOS_SQL =
+  "SELECT 'watchlist' AS kind,email,code,name,market,horizon,NULL AS shares,NULL AS average_cost,NULL AS last_price,NULL AS price_as_of " +
+  `FROM user_watchlist WHERE email IN (SELECT k.email ${USABLE_FRIENDS}) UNION ALL ` +
+  "SELECT 'holding' AS kind,email,code,name,market,NULL AS horizon,shares,average_cost,last_price,price_as_of " +
+  `FROM user_holdings WHERE email IN (SELECT k.email ${USABLE_FRIENDS})`;
 
 const KEY_RE = /^[A-Za-z0-9_.-]{30,200}$/;
 const OWNER_REFUSED = "站主不使用這個頁面（站主的解讀照舊由 agy 產生）";
@@ -215,6 +222,40 @@ async function friendDigest(db, email) {
   };
 }
 
+// 03 票：朋友在自選股頁讀自己的個股判斷。只讀登入者自己那一列（不收 email 參數），資料日規則和大盤、籌碼那份一樣：
+// 取所有朋友最新的一天，自己那天沒有或未產生就如實回未產生，不拿前一天的冒充。
+const STOCK_SHOWN = new Set(["generated", "partial"]);
+
+function stocksOf(row) {
+  const empty = { status: row?.status === "no_holdings" ? "no_holdings" : "unproduced", items: [], reason: row?.error_code ?? null };
+  if (!STOCK_SHOWN.has(row?.status)) return empty;
+  try {
+    const items = JSON.parse(row.content_json)?.items;
+    return Array.isArray(items) ? { status: row.status, items } : { ...empty, status: "unproduced" };
+  } catch {
+    return { ...empty, status: "unproduced" };
+  }
+}
+
+async function friendStocks(db, email) {
+  const key = await db.prepare("SELECT consent_version FROM friend_gemini_keys WHERE email = ?").bind(email).first();
+  if (!key) return { available: true, configured: false };
+  if (key.consent_version !== CONSENT_VERSION) return { available: true, configured: true, consented: false };
+  let latest = null;
+  let row = null;
+  try {
+    latest = (await db.prepare("SELECT MAX(data_date) AS data_date FROM friend_ai_stock_daily").first())?.data_date ?? null;
+    if (latest) {
+      row = await db.prepare(
+        "SELECT status, content_json, error_code FROM friend_ai_stock_daily WHERE email = ? AND data_date = ?",
+      ).bind(email, latest).first();
+    }
+  } catch (error) {
+    if (!tableMissing(error)) throw error;
+  }
+  return { available: true, configured: true, consented: true, data_date: latest, stocks: stocksOf(row) };
+}
+
 // 呼叫前 gate 已確認：開關打開、不是站主、帳號已核准。
 export async function handleFriendAiApi(request, env, path, email, deps = {}) {
   const [, part] = FRIEND_AI_PATH.exec(path);
@@ -226,6 +267,10 @@ export async function handleFriendAiApi(request, env, path, email, deps = {}) {
     if (part === "digest") {
       if (request.method !== "GET") throw new UserPortfolioError(405, "方法不允許");
       return response(200, await friendDigest(env.DB, email));
+    }
+    if (part === "stocks") {
+      if (request.method !== "GET") throw new UserPortfolioError(405, "方法不允許");
+      return response(200, await friendStocks(env.DB, email));
     }
     if (part === "consent") {
       if (request.method !== "POST") throw new UserPortfolioError(405, "方法不允許");

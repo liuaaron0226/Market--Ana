@@ -25,7 +25,14 @@
     return digest?.byCode?.get(String(code).toUpperCase()) || { status: 'unproduced', text: '今日未產生' };
   }
 
-  if (typeof window !== 'undefined') window.PortfolioAi = Object.freeze({ normalize: normalizeAiDigest, entryFor: aiEntryFor });
+  // 開放給朋友 03 票：朋友那份（/api/friend-ai/stocks，他自己的金鑰、他自己的持股）。開關關著、不是朋友、
+  // 還沒設定金鑰或要重新同意時回 null：自選股頁不顯示 AI 那一行，和現在一樣。
+  function friendAiDigest(payload) {
+    if (!payload?.available || !payload.configured || !payload.consented) return null;
+    return normalizeAiDigest(payload);
+  }
+
+  if (typeof window !== 'undefined') window.PortfolioAi = Object.freeze({ normalize: normalizeAiDigest, entryFor: aiEntryFor, friend: friendAiDigest });
   if (typeof document === 'undefined') return;
 
   const $ = id => document.getElementById(id);
@@ -33,7 +40,7 @@
   const number = new Intl.NumberFormat('zh-TW', { maximumFractionDigits: 2 });
   // watch：站主才有（其他人是 null）——已關注的代號、目前幾檔、上限。
   const state = { watchlist: [], watch: null, holdings: [], level: null, aiDigest: null, aiVisible: false };
-  let features = { level_advice: false, ai_stock_advice: false, watchlist_watch_v1: false };
+  let features = { level_advice: false, ai_digest: false, ai_stock_advice: false, watchlist_watch_v1: false };
 
   async function loadReleaseFeatures() {
     try {
@@ -964,7 +971,18 @@
     renderList();
   }
 
+  async function loadFriendAiDigest() {
+    try {
+      state.aiDigest = friendAiDigest(await api('/api/friend-ai/stocks'));
+    } catch (_) {
+      state.aiDigest = null; // 站主（403）、未核准、讀不到：不顯示
+    }
+    state.aiVisible = Boolean(state.aiDigest);
+  }
+
   async function loadAiDigest() {
+    // 站主那份（agy）只給站主；其他人的功能清單裡 ai_digest 一律是關的，改讀自己那份。
+    if (!(features.ai_digest && features.ai_stock_advice)) { await loadFriendAiDigest(); return; }
     try {
       state.aiDigest = normalizeAiDigest(await api('/api/ai-digest?scope=portfolio'));
       state.aiVisible = true;
@@ -1034,7 +1052,7 @@
     await Promise.all([loadWatchlist(), loadHoldings(), ...(features.level_advice ? [loadLevel()] : [])]);
     // 到價推播（F 票）：只有站主、關注開關打開時才出現。
     if (features.watchlist_watch_v1 && window.WatchPush) window.WatchPush.mount($('pushPanel'));
-    if (features.ai_stock_advice) await loadAiDigest();
+    await loadAiDigest();
     listReady = true;
     renderList();
     const dates = state.holdings.map(item => item.price_as_of).filter(Boolean).sort();
