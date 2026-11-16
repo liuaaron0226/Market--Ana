@@ -6,6 +6,7 @@
    2. 浮起的面板：用瀏覽器原生的 <dialog>（Esc 收回、焦點留在面板內都是原生行為）。
       任何帶 aria-haspopup="dialog" 與 aria-controls 的按鈕都會打開它指到的面板；面板裡帶 data-dialog-close 的按鈕會關掉它。
       目前有兩個：搜尋（右上角的放大鏡）與產業資金流向的排行、回溫訊號、表格（標題列的「排行與表格」）。
+      面板開著的時候底下的頁面鎖住不捲（scroll-lock.js，本人 11-17）。
    搜尋與各區塊本身的邏輯仍在 minimal.js，這裡不碰。 */
 (function () {
   'use strict';
@@ -53,10 +54,15 @@
   document.querySelectorAll('button[aria-haspopup="dialog"][aria-controls]').forEach(opener => {
     const dialog = document.getElementById(opener.getAttribute('aria-controls'));
     if (!dialog || typeof dialog.showModal !== 'function') return;
-    opener.addEventListener('click', () => { if (!dialog.open) dialog.showModal(); });
+    opener.addEventListener('click', () => {
+      if (dialog.open) return;
+      dialog.showModal();
+      window.ScrollLock?.lock(dialog);   // 底下的頁面不跟著手指捲（scroll-lock.js）；Esc、關閉鈕、點外面都會觸發 close，在下面解開
+    });
   });
 
   document.querySelectorAll('dialog.float-dialog').forEach(dialog => {
+    dialog.addEventListener('close', () => window.ScrollLock?.unlock(dialog));
     dialog.querySelectorAll('[data-dialog-close]').forEach(closeKey => closeKey.addEventListener('click', () => dialog.close()));
     // 點面板以外的地方收回。點在背景上時事件目標是 dialog 本身，但點在面板的內距上也是，所以再用座標確認落在面板外。
     // 先比對目標，鍵盤按出來的點擊（座標是 0,0）才不會被當成點在外面；

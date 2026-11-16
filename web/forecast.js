@@ -446,6 +446,9 @@
     if (open) (narrow() ? document.body : state.root).append(panel);
     panel.hidden = !open;
     chip.setAttribute('aria-expanded', String(open));
+    // 手機貼底的時候底下的頁面鎖住不捲（scroll-lock.js，本人 11-17）；桌機的小浮板掛在小鍵旁、跟著頁面走，不鎖。
+    if (open && narrow()) window.ScrollLock?.lock(panel);
+    else window.ScrollLock?.unlock(panel);
     if (open) renderPanel(panel);
   }
 
