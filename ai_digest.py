@@ -445,8 +445,24 @@ def _validated_rows(payload: dict[str, Any], structured: Any, model: str,
     return rows, rejected
 
 
-def run_digest(payload: dict[str, Any], *, agy_bin: Path | str, model: str = MODEL_DEFAULT) -> dict[str, Any]:
-    prompt = build_prompt(payload)
+EMPTY_USAGE: dict[str, int | None] = {"input_tokens": None, "output_tokens": None, "total_tokens": None}
+
+
+class ModelCallFailed(Exception):
+    """模型沒有回來可驗證的結構化輸出；``code`` 會寫進每一列的 error_code。
+
+    ``detail`` 只放可以進稽核紀錄的資訊（結束碼、例外類別），不放金鑰、提示或上游原文。
+    """
+
+    def __init__(self, code: str, usage: dict[str, int | None] | None = None, detail: dict[str, Any] | None = None):
+        super().__init__(code)
+        self.code = code
+        self.usage = usage or dict(EMPTY_USAGE)
+        self.detail = detail or {}
+
+
+def call_agy(prompt: str, model: str, *, agy_bin: Path | str) -> tuple[Any, dict[str, int | None]]:
+    """站主那條線：用官方 agy -p 取 structured_output。失敗一律丟 ModelCallFailed("agy_failed")。"""
     envelope: dict[str, Any] = {}
     try:
         completed = subprocess.run(
@@ -455,17 +471,42 @@ def run_digest(payload: dict[str, Any], *, agy_bin: Path | str, model: str = MOD
         )
         # 輸出不是 UTF-8 時 stdout 會是 None；當成沒有 envelope，走 agy_failed。
         envelope = _parse_envelope(completed.stdout or "")
-        usage = _token_usage(envelope)
-        if completed.returncode != 0 or envelope.get("status") != "SUCCESS":
-            return {"rows": _failure_rows(payload, model, usage, "agy_failed"), "usage": usage,
-                    "audit": {"failure": "agy_failed", "returncode": completed.returncode, "rejected": []}}
-        # 明確只讀 structured_output；response 即使混入狀態欄也完全不使用。
-        rows, rejected = _validated_rows(payload, envelope.get("structured_output"), model, usage)
-        return {"rows": rows, "usage": usage, "audit": {"failure": None, "rejected": rejected}}
     except (OSError, ValueError, subprocess.TimeoutExpired) as error:
-        usage = _token_usage(envelope)
-        return {"rows": _failure_rows(payload, model, usage, "agy_failed"), "usage": usage,
-                "audit": {"failure": "agy_failed", "error": type(error).__name__, "rejected": []}}
+        raise ModelCallFailed("agy_failed", _token_usage(envelope), {"error": type(error).__name__}) from None
+    usage = _token_usage(envelope)
+    if completed.returncode != 0 or envelope.get("status") != "SUCCESS":
+        raise ModelCallFailed("agy_failed", usage, {"returncode": completed.returncode})
+    # 明確只讀 structured_output；response 即使混入狀態欄也完全不使用。
+    return envelope.get("structured_output"), usage
+
+
+def digest_with_model(payload: dict[str, Any], *, prompt: str, call_model, model: str,
+                      validate=None, failure_rows=None, crash_code: str = "model_failed") -> dict[str, Any]:
+    """共用的驗證與失敗處理：agy 與 Gemini API 都走這裡。
+
+    ``call_model(prompt, model)`` 回傳 (structured, usage)，失敗丟 ModelCallFailed。
+    失敗時當天每一類都標「未產生」，不補猜、不沿用舊內容。
+    """
+    validate = validate or _validated_rows
+    failure_rows = failure_rows or _failure_rows
+    usage = dict(EMPTY_USAGE)
+    try:
+        structured, usage = call_model(prompt, model)
+        rows, rejected = validate(payload, structured, model, usage)
+    except ModelCallFailed as failure:
+        return {"rows": failure_rows(payload, model, failure.usage, failure.code), "usage": failure.usage,
+                "audit": {"failure": failure.code, **failure.detail, "rejected": []}}
+    except ValueError as error:
+        return {"rows": failure_rows(payload, model, usage, crash_code), "usage": usage,
+                "audit": {"failure": crash_code, "error": type(error).__name__, "rejected": []}}
+    return {"rows": rows, "usage": usage, "audit": {"failure": None, "rejected": rejected}}
+
+
+def run_digest(payload: dict[str, Any], *, agy_bin: Path | str, model: str = MODEL_DEFAULT) -> dict[str, Any]:
+    return digest_with_model(
+        payload, prompt=build_prompt(payload), model=model, crash_code="agy_failed",
+        call_model=lambda prompt, chosen: call_agy(prompt, chosen, agy_bin=agy_bin),
+    )
 
 
 def _sql_literal(value: Any) -> str:
@@ -518,7 +559,7 @@ def main(argv: list[str] | None = None) -> int:
         result = {"rows": [], "usage": {"input_tokens": None, "output_tokens": None, "total_tokens": None},
                   "audit": {"dry_run": True, "failure": None, "rejected": []}}
     elif args.mark_failure:
-        usage = {"input_tokens": None, "output_tokens": None, "total_tokens": None}
+        usage = dict(EMPTY_USAGE)
         result = {"rows": _failure_rows(payload, args.model, usage, args.mark_failure), "usage": usage,
                   "audit": {"failure": args.mark_failure, "rejected": []}}
     else:
