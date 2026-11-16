@@ -3,13 +3,14 @@
 // 個股頁：K 線控制列一枚「判斷」小鍵；日／週／月 K 上畫觸發線與看錯線；小鍵點開的浮板三頁——
 //   判斷（理由、是否試跑、資料截止日、缺了哪一層）、成績（贏大盤與隨便挑兩條並排，一次一版；本人選 A）、
 //   回看（過去任一份判斷的兩條線畫在當時的 K 線上，加上之後的走勢與對帳結果）。
-// 開著個股頁時，沿用頁面現有的即時報價：成交價碰到觸發線就亮燈（只是提醒，不改已鎖定的判斷）。
+// 開著個股頁時，沿用頁面現有的即時報價：成交價碰到觸發線就把小鍵改寫成「判斷 已到 價位」、觸發線標「已到」並加粗
+// （只是提醒，不改已鎖定的判斷）。本人 2026-11-16：不用紅色亮燈，免得誤會是漲停；選 A 只換字。紅綠只留給漲跌。
 // 資料來自 /api/watch/judgments*、/api/watch/summary：只有站主、而且功能開關打開時才有內容。
 // 沒有內容、載入失敗時這個檔案什麼都不加，頁面和原本一模一樣。
 // 對外：window.WatchJudgments = { loadList, listLine, mount, overlays, onLive }。
 (() => {
   const WATCHED = new Set(['還沒到', '接近']); // 盤中只盯這兩種；「可以留意」在判斷當下就標著了
-  const TONE = { 可以留意: 'lit', 接近: 'near', 還沒到: 'far' };
+  const TONE = { 可以留意: 'ready', 接近: 'near', 還沒到: 'far' };
   const EDITION = { evening: '晚間版', morning: '晨間版' };
   const VIEWS = { judgment: '判斷', score: '成績', history: '回看' };
   const HORIZONS = [5, 20];
@@ -42,6 +43,23 @@
     if (!Number.isFinite(price)) return false;
     if (!payload.quote.data_date || payload.quote.data_date <= record.base_date) return false;
     return price >= record.trigger_line.value;
+  }
+
+  // 個股頁小鍵上的字。reached：盤中已碰到觸發線。
+  function chipText(record, reached) {
+    if (!record) return '判斷';
+    if (record.kind !== 'judgment') return '判斷 漏記';
+    return reached ? `判斷 已到 ${fmt(record.trigger_line.value)}` : `判斷 ${record.status}`;
+  }
+
+  // 圖上的兩條線（tone 是設計變數名）。觸發線一律金色；碰到了只換標籤字並加粗，不換顏色。
+  function lineSpecs(record, reached) {
+    if (!record || record.kind !== 'judgment') return [];
+    return [
+      { value: record.trigger_line.value, label: `觸發線 ${record.trigger_line.name}`, short: reached ? '已到' : '觸發',
+        tone: '--gold', pos: 'above', ...(reached ? { strong: true } : {}) },
+      { value: record.wrong_line.value, label: `看錯線 ${record.wrong_line.name}`, short: '看錯', tone: '--down', pos: 'below' },
+    ];
   }
 
   // 成績要取哪一組：這一版；和最新一份同方法、同輸入版本（沒有最新一份時取最新的方法版本）；正式優先於試跑。
@@ -116,30 +134,25 @@
 
   const state = {
     code: null, data: null, edition: null, view: 'judgment', root: null, chip: null, panel: null,
-    onChange: null, getDaily: null, summary: undefined, picked: null, shown: HISTORY_PAGE, lit: new Set(),
+    onChange: null, getDaily: null, summary: undefined, picked: null, shown: HISTORY_PAGE, reached: new Set(),
   };
 
   const recordOf = (edition) => (state.data && state.data.latest[edition]) || null;
   const current = () => (state.edition ? recordOf(state.edition) : null);
   // 盯價用最後寫成的那一版（和觸價推播同一個規則），不跟著畫面切換的版本走。
   const newest = () => (state.data && state.data.default_edition ? recordOf(state.data.default_edition) : null);
-  const isLit = () => { const record = newest(); return Boolean(record && state.lit.has(record.judgment_id)); };
+  const isReached = () => { const record = newest(); return Boolean(record && state.reached.has(record.judgment_id)); };
 
   function overlays(period) {
+    if (!['daily', 'weekly', 'monthly'].includes(period)) return [];
     const record = current();
-    if (!record || record.kind !== 'judgment' || !['daily', 'weekly', 'monthly'].includes(period)) return [];
-    const lit = isLit() && record === newest();
-    return [
-      { value: record.trigger_line.value, label: `觸發線 ${record.trigger_line.name}`, short: lit ? '觸價' : '觸發',
-        color: color(record.status === '可以留意' || lit ? '--up' : '--gold'), pos: 'above' },
-      { value: record.wrong_line.value, label: `看錯線 ${record.wrong_line.name}`, short: '看錯', color: color('--down'), pos: 'below' },
-    ];
+    return lineSpecs(record, isReached() && record === newest()).map(({ tone, ...line }) => ({ ...line, color: color(tone) }));
   }
 
   function onLive(payload) {
     const record = newest();
-    if (!record || state.lit.has(record.judgment_id) || !touched(record, payload)) return;
-    state.lit.add(record.judgment_id);
+    if (!record || state.reached.has(record.judgment_id) || !touched(record, payload)) return;
+    state.reached.add(record.judgment_id);
     render();
     state.onChange && state.onChange();
   }
@@ -173,9 +186,9 @@
       panel.append(facts([['判斷', `漏記：${MISS[record.miss_reason] || '沒有寫成'}`], ['紀錄', recordLabel(record)]]));
       return;
     }
-    const lit = isLit() && record === newest();
+    const reached = isReached() && record === newest();
     panel.append(facts([
-      ['狀態', lit ? `${record.status} · 盤中已碰到觸發線` : record.status, record.status === '可以留意' || lit ? 'is-up' : ''],
+      ['狀態', reached ? `${record.status} · 盤中已到觸發線` : record.status, 'is-strong'],
       ['觸發線', `${record.trigger_line.name} ${fmt(record.trigger_line.value)}`],
       ['看錯線', `${record.wrong_line.name} ${fmt(record.wrong_line.value)}`, 'is-down'],
       ['理由', record.reason],
@@ -254,7 +267,7 @@
     if (items.length > state.shown) list.append(el('button', { type: 'button', class: 'forecast-more', 'data-more': '1' }, '更早'));
     panel.append(list, revisitChart(picked));
     const pairs = [
-      ['狀態', `${picked.status}（${mmdd(picked.base_date)} ${EDITION[picked.edition]}）`, picked.status === '可以留意' ? 'is-up' : ''],
+      ['狀態', `${picked.status}（${mmdd(picked.base_date)} ${EDITION[picked.edition]}）`, 'is-strong'],
       ['觸發線', `${picked.trigger_line.name} ${fmt(picked.trigger_line.value)}`],
       ['看錯線', `${picked.wrong_line.name} ${fmt(picked.wrong_line.value)}`, 'is-down'],
       ['理由', picked.reason],
@@ -262,7 +275,7 @@
     if (picked.transition) {
       for (const h of HORIZONS) {
         const outcome = picked.reconciliations && picked.reconciliations[h];
-        pairs.push([`${h}日`, outcomeText(outcome), outcome ? (outcome.beat_index ? 'is-up' : 'is-down') : '']);
+        pairs.push([`${h}日`, outcomeText(outcome)]);
       }
     }
     panel.append(facts(pairs));
@@ -295,7 +308,7 @@
     const baseX = x(baseIndex - start);
     box.append(svg('line', { x1: baseX, x2: baseX, y1: pad.t, y2: H - pad.b, stroke: faint, 'stroke-dasharray': '2 3' }));
     // 基準日之前畫淡虛線（關卡當時已在圖上），之後畫實線（判斷之後）。
-    const trigger = item.status === '可以留意' ? up : color('--gold');
+    const trigger = color('--gold');
     for (const [value, tone] of [[item.trigger_line.value, trigger], [item.wrong_line.value, down]]) {
       box.append(svg('line', { x1: pad.l, x2: baseX, y1: y(value), y2: y(value), stroke: tone, 'stroke-width': 1, 'stroke-dasharray': '3 3', opacity: 0.5 }));
       box.append(svg('line', { x1: baseX, x2: W - pad.r, y1: y(value), y2: y(value), stroke: tone, 'stroke-width': 1.5 }));
@@ -328,9 +341,10 @@
     const { chip, panel } = state;
     if (!chip) return;
     const record = newest();
-    const lit = isLit();
-    chip.classList.toggle('is-lit', lit || Boolean(record && record.status === '可以留意'));
-    chip.textContent = lit ? '判斷 觸價' : !record ? '判斷' : record.kind === 'judgment' ? `判斷 ${record.status}` : '判斷 漏記';
+    const reached = isReached();
+    chip.classList.toggle('is-reached', reached);
+    chip.classList.toggle('is-ready', Boolean(record && record.status === '可以留意'));
+    chip.textContent = chipText(record, reached);
     if (!panel.hidden) renderPanel(panel);
   }
 
@@ -409,5 +423,5 @@
     }
   }
 
-  window.WatchJudgments = { loadList, listLine, mount, overlays, onLive, _logic: { listParts, touched, scoreGroups } };
+  window.WatchJudgments = { loadList, listLine, mount, overlays, onLive, _logic: { listParts, touched, scoreGroups, chipText, lineSpecs } };
 })();

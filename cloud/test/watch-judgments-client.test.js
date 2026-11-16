@@ -34,7 +34,7 @@ test("清單一行：狀態、觸發價、過去幾次對幾次；可以留意�
     { tone: "near", status: "接近", verb: "站上", trigger: 239.5, record: { reconciled: 5, wins: 3 } });
   const ready = { ...entry, status: "可以留意", trigger_line: line(2235) };
   assert.equal(logic.listParts(ready, "2026-10-02").verb, "已站上");
-  assert.equal(logic.listParts(ready, "2026-10-02").tone, "lit");
+  assert.equal(logic.listParts(ready, "2026-10-02").tone, "ready");
   assert.equal(logic.listParts({ ...entry, status: "還沒到" }, "2026-10-02").tone, "far");
 });
 
@@ -86,4 +86,19 @@ test("成績：取這一版、正式優先、和最新一份同方法與輸入�
   const trialOnly = logic.scoreGroups({ groups: summary.groups.filter((g) => g.run_mode === "trial") }, "evening", null, "2330");
   assert.deepEqual(plain(trialOnly.stock.map((g) => [g.horizon, g.reconciled])), [[5, 3], [20, 1]]);
   assert.deepEqual(plain(logic.scoreGroups(null, "evening", null, "2330")), { all: [], stock: null });
+});
+
+// 本人 2026-11-16：「到了」不用紅色亮燈（會誤會是漲停），選 A 只換字——小鍵寫「判斷 已到 239.5」，觸發線標「已到」、變粗。
+test("到了觸發線只換字：小鍵寫已到與價位，觸發線標「已到」並加粗；任何狀態都不用紅色", () => {
+  const near = judgment("接近");
+  assert.equal(logic.chipText(near, false), "判斷 接近");
+  assert.equal(logic.chipText(near, true), "判斷 已到 122");
+  assert.equal(logic.chipText(judgment("可以留意"), false), "判斷 可以留意");
+  assert.equal(logic.chipText({ kind: "miss" }, false), "判斷 漏記");
+  assert.equal(logic.chipText(null, false), "判斷");
+  const touched = plain(logic.lineSpecs(near, true));
+  assert.deepEqual(touched.map((l) => [l.short, l.tone, Boolean(l.strong)]), [["已到", "--gold", true], ["看錯", "--down", false]]);
+  assert.deepEqual(plain(logic.lineSpecs(near, false)).map((l) => [l.short, l.tone, Boolean(l.strong)]), [["觸發", "--gold", false], ["看錯", "--down", false]]);
+  assert.equal(plain(logic.lineSpecs(judgment("可以留意"), false))[0].tone, "--gold");
+  assert.deepEqual(plain(logic.lineSpecs({ kind: "miss" }, false)), []);
 });

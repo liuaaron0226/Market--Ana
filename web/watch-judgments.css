@@ -1,10 +1,11 @@
-/* 自選股關注的判斷（E 票）。清單一行（本人 2026-11-16 選 A 最精簡）＋個股頁「判斷」小鍵亮燈。
-   小鍵與浮板沿用 forecast.css 的樣子；紅綠只放在細小的記號上。 */
+/* 自選股關注的判斷（E 票）。清單一行（本人 2026-11-16 選 A 最精簡）＋個股頁「判斷」小鍵。
+   本人 2026-11-16：「到了」不用紅色亮燈（會誤會是漲停），選 A 只換字——紅綠只留給漲跌，這裡用墨色與金色。
+   小鍵與浮板沿用 forecast.css 的樣子。 */
 .wj-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0 0; color: var(--dim); font: 500 13px var(--sans); }
 .wj-line .num { font-family: var(--mono); }
 .wj-line b { color: var(--ink); font-weight: 600; }
 .wj-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
-.wj-line.is-lit .wj-dot { background: var(--up); box-shadow: 0 0 0 3px color-mix(in srgb, var(--up) 22%, transparent); }
+.wj-line.is-ready .wj-dot { background: var(--ink); }
 .wj-line.is-near .wj-dot { background: var(--gold); }
 .wj-line.is-miss, .wj-line.is-none { color: var(--faint); }
 .wj-line.is-miss b, .wj-line.is-none b { color: var(--faint); font-weight: 500; }
@@ -12,12 +13,11 @@
 .wj-rec { color: var(--faint); font-size: 12px; }
 .wj-rec::before { content: "·"; margin-right: 8px; color: var(--line-strong); }
 
-/* 個股頁：小鍵放在 K 線控制列；「可以留意」或盤中觸價時亮起。 */
+/* 個股頁：小鍵放在 K 線控制列。「可以留意」是墨點；盤中到了觸發線，字改成「判斷 已到 價位」、外框加粗。 */
 .wj-control { margin-left: auto; }
 .wj-chip { display: inline-flex; align-items: center; gap: 6px; }
 .wj-chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
-.wj-chip.is-lit { border-color: var(--up); }
-.wj-chip.is-lit::before { background: var(--up); box-shadow: 0 0 0 3px color-mix(in srgb, var(--up) 22%, transparent); animation: wj-pulse 1.6s var(--ease) 3; }
-@keyframes wj-pulse { 50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--up) 8%, transparent); } }
-@media (prefers-reduced-motion: reduce) { .wj-chip.is-lit::before { animation: none; } }
-.forecast-days .wj-day.is-lit { border-color: color-mix(in srgb, var(--up) 55%, var(--line)); }
+.wj-chip.is-ready::before, .wj-chip.is-reached::before { background: var(--ink); }
+.wj-chip.is-reached { border: 2px solid var(--ink); font-weight: 600; }
+.forecast-facts .is-strong { font-weight: 600; }
+.forecast-days .wj-day.is-ready { border-color: var(--line-strong); font-weight: 600; }
