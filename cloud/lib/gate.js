@@ -8,7 +8,7 @@ import { handleUserDrawings } from "./user-drawings.js";
 import { defaultLiveQuoteService } from "./live-quotes.js";
 import { fetchTickPage } from "./live-ticks.js";
 import { defaultIndexLiveService } from "./index-live.js";
-import { policyForViewer, releasePolicy, stockFactsVisible } from "./release-policy.js";
+import { policyForViewer, releasePolicy, stockFactsVisible, stockSignalsVisible } from "./release-policy.js";
 import { isOwnerEmail } from "./owner.js";
 import { FORECAST_PATH, handleForecastApi } from "./forecast.js";
 import { WATCH_PATH, handleWatchApi } from "./watch.js";
@@ -261,13 +261,16 @@ async function handleStockApi(request, env, path, email, deps, options = {}) {
   // 舊資料包與 D1 都保存 build 時序列化好的結果；完整模式原樣回傳。
   // 核心 release 預設只移除未驗 strategy_v1 操作建議，支撐壓力等觀察資料仍保留。
   // 個股頁事實區塊依開關決定給誰（只開站主時，其他人拿到的內容和開關關著時一樣）。
+  // 五塊新功能的資料（signals）同樣寫法，看它自己那一個開關。
   let body = typeof result === "string" ? result : JSON.stringify(result);
   const dropStrategy = !releasePolicy(env).features.strategy_v1;
   const dropFacts = !stockFactsVisible(env, options.isOwner);
-  if (dropStrategy || dropFacts) {
+  const dropSignals = !stockSignalsVisible(env, options.isOwner);
+  if (dropStrategy || dropFacts || dropSignals) {
     const projected = typeof result === "string" ? JSON.parse(result) : { ...result };
     if (dropStrategy) delete projected.strategy;
     if (dropFacts) delete projected.facts;
+    if (dropSignals) delete projected.signals;
     body = JSON.stringify(projected);
   }
   return new Response(body, {

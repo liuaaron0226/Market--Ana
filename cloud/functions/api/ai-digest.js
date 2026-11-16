@@ -1,6 +1,6 @@
 import { verifyAccessJwt } from "../../lib/jwt.js";
 import { AiDigestError, handleAiDigest } from "../../lib/ai-digest.js";
-import { releasePolicy } from "../../lib/release-policy.js";
+import { policyForViewer, releasePolicy } from "../../lib/release-policy.js";
 import { isOwnerEmail } from "../../lib/owner.js";
 
 const HEADERS = {
@@ -36,7 +36,9 @@ export async function onRequest(context) {
   }
   const policy = releasePolicy(context.env);
   if (!policy.features.ai_digest) {
-    return new Response(JSON.stringify({ error: "feature-disabled", message: "未驗證的 AI 摘要尚未啟用", features: policy.features }),
+    // 只給站主的功能，其他人拿到的功能清單裡一律是關的（和 /api/features 同一個規則）。
+    const features = policyForViewer(policy, owner, context.env).features;
+    return new Response(JSON.stringify({ error: "feature-disabled", message: "未驗證的 AI 摘要尚未啟用", features }),
       { status: 403, headers: HEADERS });
   }
   try {

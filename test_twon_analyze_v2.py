@@ -14,7 +14,7 @@ from twon_analysis.indicators import Bar
 
 TOP_KEYS = {'schema', 'analysis_version', 'code', 'name', 'kind', 'market', 'as_of', 'requested_as_of', 'quote', 'qa',
             'indicators', 'levels', 'defense', 'trend_classification', 'conditions', 'trading_rules', 'reference',
-            'undisclosed', 'provenance', 'bars', 'chart', 'labels', 'strategy', 'institutional', 'big_holders', 'facts'}
+            'undisclosed', 'provenance', 'bars', 'chart', 'labels', 'strategy', 'institutional', 'big_holders', 'facts', 'signals'}
 BLOCKING_KEYS = {'schema', 'analysis_version', 'code', 'as_of', 'requested_as_of', 'qa', 'trading_rules', 'undisclosed',
                  'provenance', 'labels'}
 INDICATOR_KEYS = {'ma5', 'ma10', 'ma20', 'ma60', 'ma120', 'ma240', 'rsi14', 'atr14', 'atr_pct', 'relative_volume',
@@ -40,7 +40,7 @@ REMOVED_KEYS = {'score', 'score_complete', 'score_note', 'preset', 'available_pr
                 'strategy_counts', 'sweet', 'evidence_levels', 'support1', 'pressure1', 'own_formula', 'range_position',
                 'limit_up_ref', 'strength', 'ma20_slope5', 'k', 'd'}
 REMOVED_KINDS = {'trendline_resistance', 'trendline_support', 'platform', 'inst_cost'}
-BANNED_TEXT = ('2TON', '漲停寶寶', '甜甜價', '甜價', '私藏', 'CP值', '抄底', 'FIT-V1', 'MOMENTUM-V1', 'SWING-SAFE')
+BANNED_TEXT = ('2TON', '漲停寶寶', '甜甜價', '甜價', '私藏', 'CP值', '抄底', 'FIT-V1', 'MOMENTUM-V1', 'SWING-SAFE', '漲停分數')
 
 
 def all_keys(value):
@@ -756,6 +756,165 @@ class StockFactsReaderTests(unittest.TestCase):
             'margin': [{'date': '2026-11-10', 'margin': 9612, 'short': 202}, {'date': '2026-11-11', 'margin': 9021, 'short': 198}],
             'borrow': [{'date': '2026-11-10', 'balance': 12_577_000}, {'date': '2026-11-11', 'balance': 12_089_000}],
         })
+
+
+class _SignalsFixture:
+    """五塊資料測試共用：行情庫每一根給（收盤、漲跌符號、漲跌），加權指數與其他讀取都用替身。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.calls = 0
+
+    @staticmethod
+    def days(count):
+        from datetime import date, timedelta
+        return [(date(2025, 1, 6) + timedelta(days=i)).isoformat() for i in range(count)]
+
+    def analyze(self, rows, index, *, otc=False, code='9999', kind='common', days=None):
+        """rows：由舊到新的（收盤、漲跌符號、漲跌）；index：{日期: 加權指數收盤}，給例外就是模擬加權指數讀取出錯；
+        days：這一檔有交易的日子（不給就是連續的）。"""
+        days = days or self.days(len(rows))
+        self.calls += 1
+        db = Path(self.tmp.name) / f's{self.calls}.sqlite'
+        connection = sqlite3.connect(db)
+        connection.execute("""CREATE TABLE daily (date TEXT, code TEXT, name TEXT, kind TEXT, open REAL, high REAL, low REAL,
+                              close REAL, change_sign TEXT, change REAL, volume_shares INTEGER, trades INTEGER, turnover INTEGER,
+                              suspended INTEGER)""")
+        for day, (close, sign, change) in zip(days, rows):
+            connection.execute("INSERT INTO daily VALUES (?, ?, '測試', ?, ?, ?, ?, ?, ?, ?, 1000, 1, 1, 0)",
+                               (day, code, kind, close, close + 1, close - 1, close, sign, change))
+        connection.commit()
+        connection.close()
+        from twon_analysis.analyze_v2 import analyze_v2
+        paths = {'db_path': Path(self.tmp.name) / 'none.sqlite', 'otc_db_path': db} if otc else {'db_path': db, 'otc_db_path': None}
+        taiex = {'side_effect': index} if isinstance(index, Exception) else {'return_value': index}
+        with unittest.mock.patch('twon_analysis.analyze_v2.institutional_series', return_value=[]), \
+                unittest.mock.patch('twon_analysis.analyze_v2.credit_series', return_value={}), \
+                unittest.mock.patch('twon_analysis.analyze_v2.valuation_snapshot', return_value=None), \
+                unittest.mock.patch('twon_analysis.analyze_v2.revenue_series', return_value=[]), \
+                unittest.mock.patch('twon_analysis.analyze_v2.taiex_closes', **taiex):
+            return analyze_v2(code, days[-1], capital_actions={}, **paths)
+
+
+FLAT = (100.0, '', 0.0)
+# 70 根：第 50 根 100→125（+25%）、第 64 根 125→100（−20%）、第 69 根 100→110（+10%）、第 70 根 110→99（−10%）。
+# 近 5 日＝1.1×0.9−1＝−1.00%；近 20 日＝0.8×1.1×0.9−1＝−20.80%；近 60 日＝1.25×0.8×1.1×0.9−1＝−1.00%。
+SEVENTY = ([FLAT] * 49 + [(125.0, '+', 25.0)] + [(125.0, '', 0.0)] * 13 + [(100.0, '-', -25.0)] + [FLAT] * 4
+           + [(110.0, '+', 10.0)] + [(99.0, '-', -11.0)])
+
+
+class StockSignalsVersusMarketTests(_SignalsFixture, unittest.TestCase):
+    """五塊資料的「和大盤比」（本人 2026-11-16 共識，規格 .scratch/stock-signals/spec.md）：
+    近 5、20、60 個交易日，這一檔的漲跌幅減加權指數的漲跌幅（百分點）。"""
+
+    def index(self, **closes):
+        """加權指數收盤：用「倒數第幾根」指定（d0＝資料日、d5＝5 個交易日前…）。"""
+        days = self.days(70)
+        return {days[-1 - int(key[1:])]: value for key, value in closes.items()}
+
+    def test_stronger_than_the_market(self):
+        # 大盤近 20 日：19,602 ÷ 25,000 − 1＝−21.592% → 這一檔 −20.80% 減它＝+0.792 → 強於大盤 0.8。
+        signals = self.analyze(SEVENTY, self.index(d0=19602.0, d20=25000.0))['signals']
+        self.assertEqual(signals['data_date'], self.days(70)[-1])
+        self.assertEqual(signals['versus_market']['rows'], [
+            {'days': 20, 'stock_pct': -20.8, 'market_pct': -21.59, 'gap': 0.8, 'tone': 'up', 'label': '強於大盤'}])
+        self.assertEqual(signals['blocks'], ['versus_market'])
+
+    def test_weaker_than_the_market(self):
+        # 大盤近 60 日：19,602 ÷ 19,000 − 1＝+3.168% → 這一檔 −1.00% 減它＝−4.168 → 落後大盤 4.2。
+        rows = self.analyze(SEVENTY, self.index(d0=19602.0, d60=19000.0))['signals']['versus_market']['rows']
+        self.assertEqual(rows, [
+            {'days': 60, 'stock_pct': -1.0, 'market_pct': 3.17, 'gap': -4.2, 'tone': 'down', 'label': '落後大盤'}])
+
+    def test_zero_gap_names_neither_side(self):
+        # 大盤近 5 日：19,602 ÷ 19,800 − 1＝−1.00%，和這一檔一樣 → 差距 0，不寫強弱。
+        rows = self.analyze(SEVENTY, self.index(d0=19602.0, d5=19800.0))['signals']['versus_market']['rows']
+        self.assertEqual(rows, [{'days': 5, 'stock_pct': -1.0, 'market_pct': -1.0, 'gap': 0.0, 'tone': None, 'label': None}])
+
+    def test_three_rows_come_in_fixed_order(self):
+        index = self.index(d0=19602.0, d5=19800.0, d20=25000.0, d60=19000.0)
+        rows = self.analyze(SEVENTY, index)['signals']['versus_market']['rows']
+        self.assertEqual([(row['days'], row['gap']) for row in rows], [(5, 0.0), (20, 0.8), (60, -4.2)])
+
+    def test_ex_dividend_day_does_not_count_as_a_drop(self):
+        # 倒數第 4 根除息：收盤 100→95，官方標不比價（X）、沒有漲跌。之後持平，資料日 95→96.9（漲 1.9＝+2%）。
+        # 這一檔近 5 日＝+2.00%（不是收盤對收盤的 −3.1%）；大盤 20,200 ÷ 20,000 − 1＝+1.00% → 強於大盤 1.0。
+        # 不比價的那一天整天記 0（行情庫在這種日子沒有漲跌，那一天相對除息參考價的漲跌也不算）；
+        # 就算原件帶了漲跌數字（−5）也不算進去。
+        for ex_dividend_change in (None, -5.0):
+            rows = [FLAT] * 66 + [(95.0, 'X', ex_dividend_change), (95.0, '', 0.0), (95.0, '', 0.0), (96.9, '+', 1.9)]
+            result = self.analyze(rows, self.index(d0=20200.0, d5=20000.0))['signals']['versus_market']['rows']
+            self.assertEqual(result, [
+                {'days': 5, 'stock_pct': 2.0, 'market_pct': 1.0, 'gap': 1.0, 'tone': 'up', 'label': '強於大盤'}], ex_dividend_change)
+
+    def test_too_few_bars_drops_only_the_rows_that_need_them(self):
+        # 近 N 日要 N＋1 根：21 根有近 5、20 日，沒有近 60 日；20 根只剩近 5 日。
+        for count, expected in ((21, [5, 20]), (20, [5])):
+            days = self.days(count)
+            signals = self.analyze([FLAT] * count, {day: 20000.0 for day in days})['signals']
+            self.assertEqual([row['days'] for row in signals['versus_market']['rows']], expected, count)
+
+    def test_no_index_on_the_data_day_means_no_block(self):
+        # 加權指數沒有對到這一檔的資料日（或三段的起點都沒有）→ 整塊沒有，清單裡也沒有這一塊。
+        for index in ({}, self.index(d1=20000.0, d5=20000.0, d20=20000.0, d60=20000.0), self.index(d0=20000.0)):
+            signals = self.analyze(SEVENTY, index)['signals']
+            self.assertIsNone(signals['versus_market'], index)
+            self.assertEqual(signals['blocks'], [], index)
+
+    def test_otc_stock_is_compared_with_the_same_weighted_index(self):
+        result = self.analyze(SEVENTY, self.index(d0=19602.0, d20=25000.0), otc=True)
+        self.assertEqual(result['market'], '上櫃')
+        self.assertEqual(result['signals']['versus_market']['rows'], [
+            {'days': 20, 'stock_pct': -20.8, 'market_pct': -21.59, 'gap': 0.8, 'tone': 'up', 'label': '強於大盤'}])
+
+    def test_etf_is_compared_with_the_same_weighted_index(self):
+        result = self.analyze(SEVENTY, self.index(d0=19602.0, d60=19000.0), code='0050', kind='etf')
+        self.assertEqual(result['kind'], 'etf')
+        self.assertEqual(result['signals']['versus_market']['rows'], [
+            {'days': 60, 'stock_pct': -1.0, 'market_pct': 3.17, 'gap': -4.2, 'tone': 'down', 'label': '落後大盤'}])
+
+    def test_a_stock_suspended_inside_the_window_is_compared_over_the_same_dates(self):
+        # 72 個交易日裡這一檔停牌兩天（倒數第 3、4 個交易日），所以它最近 5 根的起點是 7 個交易日前。
+        # 大盤跟著用同一段：19,602 ÷ 19,800（7 個交易日前）− 1＝−1.00% → 差距 0；
+        # 不是拿大盤自己的 5 個交易日前（20,000）去比。
+        market_days = self.days(72)
+        stock_days = market_days[:68] + market_days[70:]
+        index = {market_days[-1]: 19602.0, market_days[-8]: 19800.0, market_days[-6]: 20000.0}
+        rows = self.analyze(SEVENTY, index, days=stock_days)['signals']['versus_market']['rows']
+        self.assertEqual(rows, [{'days': 5, 'stock_pct': -1.0, 'market_pct': -1.0, 'gap': 0.0, 'tone': None, 'label': None}])
+
+    def test_existing_content_is_untouched_and_a_failure_only_empties_this_block(self):
+        normal = self.analyze(SEVENTY, self.index(d0=19602.0, d20=25000.0))
+        broken = self.analyze(SEVENTY, RuntimeError('index reader bug'))
+        self.assertIsNone(broken['signals'])
+        self.assertEqual(set(normal), TOP_KEYS)
+        for key in TOP_KEYS - {'signals'}:
+            self.assertEqual(broken[key], normal[key], key)
+
+    def test_text_carries_no_reference_site_or_method_wording(self):
+        index = self.index(d0=19602.0, d5=19800.0, d20=25000.0, d60=19000.0)
+        dumped = json.dumps(self.analyze(SEVENTY, index)['signals'], ensure_ascii=False)
+        for word in BANNED_TEXT + ('反推',):
+            self.assertNotIn(word, dumped)
+
+
+class StockSignalsReaderTests(unittest.TestCase):
+    """加權指數收盤：從每日更新已經在抓的月檔讀，由 as_of 當月往回只讀最近幾個月。"""
+
+    def test_reads_closes_from_the_monthly_files_up_to_the_data_month(self):
+        import stock_history
+        from twon_analysis import analyze_v2 as module
+        with tempfile.TemporaryDirectory() as tmp:
+            for month, rows in (('202609', [['115/09/30', '1', '2', '3', '40,100.50']]),
+                                ('202610', [['115/10/01', '1', '2', '3', '40,200.25'], ['115/10/02', '1', '2', '3', '39,900.00']]),
+                                ('202611', [['115/11/02', '1', '2', '3', '41,000.00']])):
+                (Path(tmp) / f'taiex-{month}.json').write_text(json.dumps({'data': {'data': rows}}), encoding='utf-8')
+            # 沒有資料列的月檔（官方回「沒有符合條件的資料」）不讓其他月份跟著讀不到。
+            (Path(tmp) / 'taiex-202608.json').write_text(json.dumps({'data': {'stat': '很抱歉，沒有符合條件的資料!'}}), encoding='utf-8')
+            with unittest.mock.patch.object(stock_history, 'DEFAULT_INDEX_DIR', Path(tmp)):
+                closes = module.taiex_closes('2026-10-02', months=3)
+        self.assertEqual(closes, {'2026-09-30': 40100.5, '2026-10-01': 40200.25, '2026-10-02': 39900.0})
 
 
 class BlockingTests(unittest.TestCase):

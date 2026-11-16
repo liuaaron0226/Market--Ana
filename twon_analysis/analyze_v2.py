@@ -642,6 +642,46 @@ def _facts(last: Bar, info: dict, indicators: dict, institutional: list[dict], t
         return None
 
 
+_TAIEX_MONTH_CACHE: dict = {}
+
+
+def _taiex_month(path: Path) -> dict[str, float]:
+    """一份加權指數月檔 → {日期: 收盤}。檔案沒變就用快取（建置時每一檔股票都會問同樣幾個月）；
+    沒有資料列的月檔是空的，不當成錯誤。"""
+    import json
+    stamp = path.stat().st_mtime_ns
+    cached = _TAIEX_MONTH_CACHE.get(path)
+    if cached and cached[0] == stamp:
+        return cached[1]
+    closes = {}
+    for row in json.loads(path.read_text(encoding='utf-8')).get('data', {}).get('data') or []:
+        year, month, day = row[0].split('/')
+        closes[f'{int(year) + 1911}-{month}-{day}'] = float(row[4].replace(',', ''))
+    _TAIEX_MONTH_CACHE[path] = (stamp, closes)
+    return closes
+
+
+def taiex_closes(as_of: str, months: int = 6) -> dict[str, float]:
+    """五塊資料用：加權指數收盤 {日期: 收盤}，讀每日更新已經在抓的月檔（MI_5MINS_HIST）。
+    只讀到 as_of 當月為止最近幾個月（6 個月超過 100 個交易日，夠算近 60 日）。"""
+    import stock_history
+    paths = [p for p in sorted(stock_history.DEFAULT_INDEX_DIR.glob('taiex-*.json')) if p.stem[6:] <= as_of[:4] + as_of[5:7]]
+    closes: dict[str, float] = {}
+    for path in paths[-months:]:
+        closes.update(_taiex_month(path))
+    return closes
+
+
+def _signals(bars: list[Bar], info: dict) -> dict | None:
+    # 和事實區塊一樣是附加內容：任何錯誤都只讓這一塊留空，不能讓整份分析失敗。
+    try:
+        from .signals import build_signals
+        return build_signals(dates=[bar.date for bar in bars], day_returns=info['day_returns'],
+                             index_closes=_safe(lambda: taiex_closes(bars[-1].date)) or {})
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def analyze_v2(code: str, as_of: str, db_path=DEFAULT_DB, otc_db_path=DEFAULT_OTC_DB,
                capital_actions: dict[str, list[dict]] | None = None) -> dict:
     """capital_actions：每檔代號的股本變動事件（price_adjustment.capital_events 的形狀）；不給就讀資料根目錄的。"""
@@ -688,6 +728,8 @@ def analyze_v2(code: str, as_of: str, db_path=DEFAULT_DB, otc_db_path=DEFAULT_OT
         'big_holders': _safe(lambda: big_holder_series(DEFAULT_DB.parents[1] / 'tdcc-holders', code, last.date)) or [],
         # 個股頁事實區塊（本人 2026-11-15）：算不出來只讓這一塊留空，不影響其他內容。給誰看由網站入口的開關決定。
         'facts': _facts(last, info, x, institutional, [bar.date for bar in chart_bars], info['market'], code),
+        # 個股頁五塊新功能的資料（本人 2026-11-16）：同樣算不出來只留空；給誰看由網站入口另一個獨立的開關決定。
+        'signals': _signals(bars, info),
         'defense': defense_payload(x['low20_intraday']),
         'trend_classification': trend_classification_payload(),
         'conditions': conditions,
