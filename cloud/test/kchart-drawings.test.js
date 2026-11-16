@@ -684,3 +684,499 @@ test("兩條線離點擊位置一樣近時選後畫的那一條（疊在上面�
   tap(150, 164);
   assert.deepEqual(selections, ["saved-line-02", null, "saved-line-01"], "底下那一條還在，選得到");
 });
+
+// ---------- 票 03：趨勢線與射線 ----------
+// 只看後 40 根時每根寬 322/40＝8.05，第 k 根（從 0 起算）的中心在 x＝4＋8.05×(k＋0.5)：
+// 第 10 根＝88.525、第 20 根＝169.025、第 30 根＝249.525。價位 97.15／100／102.85 在 y＝241／164／87。
+// 斜線的座標不落在整數像素上，比對時容許 0.01 像素的誤差。
+function assertLines(actual, expected, message) {
+  const flat = lines => lines.flat(2), note = `${message || "位置"}：${JSON.stringify(actual)} 應為 ${JSON.stringify(expected)}`;
+  assert.equal(actual.length, expected.length, note);
+  assert.equal(flat(actual).length, flat(expected).length, note);
+  flat(actual).forEach((value, index) => assert.ok(Math.abs(value - flat(expected)[index]) <= 0.01, note));
+}
+// 把手（圓心）的位置，同樣容許 0.01 像素。
+const assertHandles = (actual, expected, message) => assertLines([actual], [expected], message);
+
+test("選了趨勢線工具後點兩下：兩點之間出現一條線，兩端各自對在所點的交易日與價位，工具自動回到一般模式", () => {
+  const { chart, changes, tools, tap, drawnLines, drawnLabels } = createChart();
+  chart.setTool("trend");
+  tap(90, 241);  // x=90 → 可見的第 10 根＝第 50 根＝2026-02-20；y=241 → 97.15
+  assert.deepEqual(changes, [], "只點了第一下：還沒有線");
+  assert.deepEqual(tools, ["trend"], "工具留著等第二下");
+
+  tap(250, 87);  // x=250 → 可見的第 30 根＝第 70 根＝2026-03-12；y=87 → 102.85
+  assert.equal(changes.length, 1);
+  const [{ type, drawing }] = changes;
+  assert.equal(type, "add");
+  assert.match(drawing.id, ID_RE);
+  assert.deepEqual(drawing, { id: drawing.id, kind: "trend", anchors: [{ date: "2026-02-20", price: 97.15 }, { date: "2026-03-12", price: 102.85 }] });
+  assert.deepEqual(tools, ["trend", null], "畫完自動回一般模式");
+
+  assertLines(drawnLines(), [[[88.525, 241], [249.525, 87]]]);
+  assert.deepEqual(drawnLabels(), [], "趨勢線不標價位");
+});
+
+const savedLine = (kind, from, to, id = "saved-two-01") => ({
+  id, kind, anchors: [{ date: from[0], price: from[1] }, { date: to[0], price: to[1] }], text: "",
+  created_at: "2026-11-16T06:00:00.000Z", updated_at: "2026-11-16T06:00:00.000Z",
+});
+
+test("射線穿過兩點一路往右延伸到繪圖區的邊緣為止：到圖的右緣、不進價格軸；太陡的在上緣就停；先點右邊再點左邊也一樣往右", () => {
+  const { chart, changes, tools, tap, drawnLines } = createChart();
+  chart.setTool("ray");
+  tap(90, 241);
+  tap(250, 164); // 第 30 根、100
+  assert.deepEqual(changes.map(change => [change.type, change.drawing.kind, change.drawing.anchors]),
+    [["add", "ray", [{ date: "2026-02-20", price: 97.15 }, { date: "2026-03-12", price: 100 }]]]);
+  assert.deepEqual(tools, ["ray", null]);
+  // 每往右 161px 上升 77px；起點到右緣 326 還有 237.475px → 上升 113.575 → y＝127.425。
+  assertLines(drawnLines(), [[[88.525, 241], [326, 127.425]]]);
+
+  // 起點到第二點每往右 80.5px 上升 154px：再上升 231px 就到上緣 y=10，那時 x＝88.525＋120.75＝209.275。
+  chart.setDrawings([savedLine("ray", ["2026-02-20", 97.15], ["2026-03-02", 102.85])]);
+  assertLines(drawnLines(), [[[88.525, 241], [209.275, 10]]]);
+
+  // 先點右邊、再點左邊（本人 2026-11-16 選樣本 B）：仍然從比較早的那一點穿過比較晚的那一點往右延伸，和第一條一模一樣。
+  chart.setDrawings([]);
+  chart.setTool("ray");
+  tap(250, 164);
+  tap(90, 241);
+  assert.deepEqual(changes.at(-1).drawing.anchors, [{ date: "2026-03-12", price: 100 }, { date: "2026-02-20", price: 97.15 }], "錨點照點的順序存");
+  assertLines(drawnLines(), [[[88.525, 241], [326, 127.425]]]);
+  // 預覽線也是往右：起點在右、游標在左。
+  chart.setDrawings([]);
+  chart.setTool("ray");
+  tap(250, 164);
+  chart.canvas.dispatch("pointermove", { clientX: 90, clientY: 241 });
+  assertLines(drawnLines(), [[[88.525, 241], [326, 127.425]]]);
+});
+
+test("端點在畫面外時，畫面內的那一段仍在原本的斜率上；整條都在畫面外就不畫", () => {
+  const { chart, drawnLines } = createChart();
+  // 起點是第 20 根（2026-01-21，在畫面左邊之外，x＝−152.975）、終點第 70 根：線在左緣 x=4 的高度是 241−154×156.975/402.5＝180.94。
+  chart.setDrawings([savedLine("trend", ["2026-01-21", 97.15], ["2026-03-12", 102.85])]);
+  assertLines(drawnLines(), [[[4, 180.94], [249.525, 87]]]);
+
+  // 終點的價位 111.4 在畫面上方之外（y＝−144）：線走到一半就碰到上緣，那時 x＝88.525＋80.5＝169.025。
+  chart.setDrawings([savedLine("trend", ["2026-02-20", 100], ["2026-03-12", 111.4])]);
+  assertLines(drawnLines(), [[[88.525, 164], [169.025, 10]]]);
+
+  // 兩端都在畫面左邊之外的趨勢線：不畫。同樣兩點的射線則會穿進畫面（y＝241 的水平線，從左緣到右緣）。
+  chart.setDrawings([savedLine("trend", ["2026-01-11", 97.15], ["2026-01-21", 97.15])]);
+  assertLines(drawnLines(), []);
+  chart.setDrawings([savedLine("ray", ["2026-01-11", 97.15], ["2026-01-21", 97.15])]);
+  assertLines(drawnLines(), [[[4, 241], [326, 241]]]);
+  // 整條在畫面上方之外。
+  chart.setDrawings([savedLine("trend", ["2026-02-20", 110], ["2026-03-12", 111.4])]);
+  assertLines(drawnLines(), []);
+});
+
+test("平移、縮放後趨勢線的兩端仍在原本的交易日與價位", () => {
+  const { chart, drawnLines } = createChart();
+  chart.setDrawings([savedLine("trend", ["2026-02-20", 97.15], ["2026-03-12", 102.85])]);
+  assertLines(drawnLines(), [[[88.525, 241], [249.525, 87]]]);
+
+  // 放大成最後 20 根（第 60～79 根，每根 16.1px）：起點第 50 根在左邊之外（x＝−148.95），終點第 70 根在 x＝173.05。
+  // 線在左緣的高度：241−154×152.95/322＝167.85。
+  chart.zoom(0.5);
+  assertLines(drawnLines(), [[[4, 167.85], [173.05, 87]]]);
+
+  // 縮回 40 根再往左平移 10 根（第 30～69 根，價格座標 88.6～134.2）：97.15 → y＝260.25、102.85 → y＝221.75。
+  // 起點第 50 根在 x＝169.025，終點第 70 根在右緣之外（x＝330.025）：線在右緣的高度是 260.25−38.5×156.975/161＝222.7125。
+  chart.zoom(2);
+  chart.pan(-10);
+  assertLines(drawnLines(), [[[169.025, 260.25], [326, 222.7125]]]);
+
+  chart.pan(10);
+  assertLines(drawnLines(), [[[88.525, 241], [249.525, 87]]]);
+});
+
+test("在日 K 畫的線切到週 K、月 K：兩端落在包含該日期的那一根（正中央）與同一價位，切回日 K 回到原位", () => {
+  const { chart, changes, tap, drawnLines } = createChart();
+  // 兩端都不是週五、也不是月底：2026-02-18 是週三，2026-03-12 是週四。
+  chart.setDrawings([savedLine("trend", ["2026-02-18", 97.15], ["2026-03-12", 102.85])]);
+  const bars = (count, time) => Array.from({ length: count }, (_, index) => ({ t: time(index), label: `第${index + 1}根`, open: 100, close: 100, high: 105, low: 95, volume: 1 }));
+  // 週 K：每根的日期是那一週的週五（2026-01-02 起）。02-18 那一週的週五是 02-20（第 7 根），03-12 那一週是 03-13（第 10 根）。
+  // 16 根、每根寬 20.125：第 7 根中心 x＝4＋20.125×7.5＝154.9375，第 10 根＝215.3125。
+  chart.setData(bars(16, index => new Date(Date.UTC(2026, 0, 2 + index * 7)).toISOString().slice(0, 10)), { count: 16, unit: "週" });
+  assertLines(drawnLines(), [[[154.9375, 241], [215.3125, 87]]], "週 K");
+  // 月 K：每根的日期是當月 28 日（2025-01 起）。2026-02 是第 13 根（x＝275.6875），2026-03 是第 14 根（x＝295.8125）。
+  chart.setData(bars(16, index => new Date(Date.UTC(2025, index, 28)).toISOString().slice(0, 10)), { count: 16, unit: "月" });
+  assertLines(drawnLines(), [[[275.6875, 241], [295.8125, 87]]], "月 K");
+
+  // 在月 K 上畫：兩端的日期各取點到的那一根（x=150 → 第 7 根＝2025-08-28；x=250 → 第 12 根＝2026-01-28）。
+  chart.setTool("trend");
+  tap(150, 241);
+  tap(250, 87);
+  assert.deepEqual(changes.map(change => change.drawing.anchors), [[{ date: "2025-08-28", price: 97.15 }, { date: "2026-01-28", price: 102.85 }]]);
+
+  chart.setDrawings([savedLine("trend", ["2026-02-18", 97.15], ["2026-03-12", 102.85])]);
+  chart.setData(dailyCandles(), { count: 40, unit: "日" });
+  // 日 K：02-18 是第 48 根（可見的第 8 根，x＝4＋8.05×8.5＝72.425）。
+  assertLines(drawnLines(), [[[72.425, 241], [249.525, 87]]], "切回日 K");
+});
+
+test("五年歷史接到圖前面後線仍對在原本的日期與價位；起點比圖上第一根還早時先不畫，歷史接上才出現", () => {
+  const { chart, drawnLines } = createChart();
+  const recent = savedLine("trend", ["2026-02-20", 97.15], ["2026-03-12", 102.85]);
+  const old = savedLine("trend", ["2025-12-20", 97.15], ["2026-03-12", 102.85], "saved-two-02"); // 起點在還沒載入的歷史裡
+  chart.setDrawings([recent, old]);
+  assertLines(drawnLines(), [[[88.525, 241], [249.525, 87]]], "歷史還沒接上：位置算不出來的那一條不畫");
+
+  const older = Array.from({ length: 30 }, (_, index) => {
+    const date = new Date(Date.UTC(2025, 11, 2 + index)).toISOString().slice(0, 10);
+    return { t: date, label: date, open: 100, close: 100, high: 105, low: 95, volume: 1 };
+  });
+  chart.setData([...older, ...dailyCandles()], { count: 40, unit: "日" });
+  // 接上 30 根之後畫面仍是最後 40 根：近期那條原地不動。
+  // 較早那條的起點 2025-12-20 是第 18 根，在畫面第一根（第 70 根）左邊 52 根：x＝4−8.05×51.5＝−410.575。
+  // 到終點 249.525 共 660.1px、上升 154px；在左緣 x=4 的高度是 241−154×414.575/660.1＝144.28。
+  assertLines(drawnLines(), [[[88.525, 241], [249.525, 87]], [[4, 144.28], [249.525, 87]]], "歷史接上後");
+});
+
+test("點了第一下之後：起點有記號，預覽線從起點跟到游標所在的那一根與價位；還沒點第二下不算畫完、不儲存", () => {
+  const { chart, changes, tools, tap, drawnLines, drawnHandles } = createChart();
+  chart.setTool("trend");
+  assertHandles(drawnHandles(), [], "還沒點：沒有記號");
+  tap(90, 241);
+  assertHandles(drawnHandles(), [[88.525, 241]], "起點記號在所點的那一根正中央與價位");
+  assertLines(drawnLines(), [], "游標還在起點上：沒有預覽線");
+
+  chart.canvas.dispatch("pointermove", { clientX: 250, clientY: 87 });
+  assertLines(drawnLines(), [[[88.525, 241], [249.525, 87]]], "預覽線的終點就是點下去會落的位置");
+  chart.canvas.dispatch("pointermove", { clientX: 170, clientY: 164 });
+  assertLines(drawnLines(), [[[88.525, 241], [169.025, 164]]], "跟著游標走");
+  chart.canvas.dispatch("pointermove", { clientX: 350, clientY: 164 }); // 游標移到右側價格軸上
+  assertLines(drawnLines(), [], "游標不在繪圖區內：不預覽");
+  assertHandles(drawnHandles(), [[88.525, 241]]);
+  assert.deepEqual(changes, []);
+  assert.deepEqual(tools, ["trend"]);
+
+  tap(250, 87);
+  assert.equal(changes.length, 1);
+  assertLines(drawnLines(), [[[88.525, 241], [249.525, 87]]], "畫完只剩那一條線，預覽不留");
+  assertHandles(drawnHandles(), [], "起點記號收掉，新畫的線沒有被選取");
+});
+
+test("射線的預覽也一路延伸到邊緣；手指按下去（還沒放開）預覽線就跟到手指的位置", () => {
+  const { chart, changes, strokes, reset, tap, drawnLines } = createChart();
+  chart.setTool("ray");
+  tap(90, 241, "touch");
+  reset();
+  chart.canvas.dispatch("pointerdown", { clientX: 250, clientY: 164, pointerType: "touch" });
+  assertLines(strokes.filter(stroke => stroke.color === DRAW && stroke.points.length).map(stroke => stroke.points),
+    [[[88.525, 241], [326, 127.425]]], "按下去當下就重畫出預覽");
+  assert.deepEqual(changes, [], "還沒放開：還沒畫完");
+  chart.canvas.dispatch("pointerup", { clientX: 250, clientY: 164, pointerType: "touch" });
+  assert.deepEqual(changes.map(change => change.drawing.anchors), [[{ date: "2026-02-20", price: 97.15 }, { date: "2026-03-12", price: 100 }]]);
+  assertLines(drawnLines(), [[[88.525, 241], [326, 127.425]]]);
+});
+
+test("點了第一下後按 Esc、再點一次同一個工具、或改選別的工具：都不留下半條線", () => {
+  const { chart, changes, tools, tap, key, drawnLines, drawnHandles } = createChart();
+  chart.setTool("trend");
+  tap(90, 241);
+  chart.canvas.dispatch("pointermove", { clientX: 250, clientY: 87 });
+  key("Escape");
+  assert.deepEqual(tools, ["trend", null], "Esc：工具放下");
+  assertLines(drawnLines(), []);
+  assertHandles(drawnHandles(), []);
+  tap(250, 87);
+  assert.deepEqual(changes, [], "這一下不會接著畫完");
+  assert.equal(chart.selection, 70, "而是照舊選 K 棒");
+
+  chart.setTool("trend");
+  tap(90, 241);
+  chart.setTool(null); // 頁面在使用者再點一次同一個工具時這樣呼叫
+  assertHandles(drawnHandles(), []);
+  chart.setTool("trend");
+  tap(250, 87);
+  assert.deepEqual(changes, [], "重新選工具後這是新的第一下，不會接到上次的起點");
+  assertHandles(drawnHandles(), [[249.525, 87]]);
+
+  chart.setTool("ray"); // 點到一半改選射線
+  assertHandles(drawnHandles(), [], "換工具：原本點的起點不留");
+  tap(90, 241);
+  assert.deepEqual(changes, []);
+  tap(250, 164);
+  assert.deepEqual(changes.map(change => [change.drawing.kind, change.drawing.anchors[0].date]), [["ray", "2026-02-20"]]);
+
+  chart.setTool("trend");
+  tap(90, 241);
+  chart.cancelDrawing(); // 焦點在工具列時由頁面呼叫
+  assertHandles(drawnHandles(), []);
+  assert.equal(changes.length, 1);
+});
+
+test("點到一半時切換日週月，起點留在原本的日期與價位；切到分 K 則連同工具一起放下", () => {
+  const { chart, changes, tools, tap, drawnHandles } = createChart();
+  chart.setTool("trend");
+  tap(90, 241); // 2026-02-20、97.15
+  const weekly = Array.from({ length: 16 }, (_, index) => ({
+    t: new Date(Date.UTC(2026, 0, 2 + index * 7)).toISOString().slice(0, 10), label: `第${index + 1}週`, open: 100, close: 100, high: 105, low: 95, volume: 1,
+  }));
+  chart.setData(weekly, { count: 16, unit: "週" });
+  assertHandles(drawnHandles(), [[154.9375, 241]], "週 K：起點在 02-20 那一根");
+  tap(250, 87); // 週 K 每根 20.125：x=250 → 第 12 根＝2026-03-27
+  assert.deepEqual(changes.map(change => change.drawing.anchors), [[{ date: "2026-02-20", price: 97.15 }, { date: "2026-03-27", price: 102.85 }]]);
+
+  chart.setTool("ray");
+  tap(90, 241);
+  const minutes = Array.from({ length: 40 }, (_, index) => ({
+    t: `2026-03-20T09:${String(index).padStart(2, "0")}:00+08:00`, label: `第${index + 1}根`, open: 100, close: 100, high: 105, low: 95, volume: 1,
+  }));
+  chart.setData(minutes, { count: 40, unit: "5分" });
+  assert.deepEqual(tools.slice(-2), ["ray", null]);
+  chart.setData(dailyCandles(), { count: 40, unit: "日" });
+  assertHandles(drawnHandles(), [], "切回日 K：半條線沒有留下來");
+  assert.equal(changes.length, 1);
+});
+
+test("兩點落在同一位置（或近到看不出是一條線）時不畫：第二下不算，工具與起點留著等下一下", () => {
+  const { chart, changes, tools, tap, drawnLines, drawnHandles } = createChart();
+  chart.setTool("trend");
+  tap(90, 241);
+  tap(90, 241);  // 同一點再點一次（例如手機上連點兩下）
+  tap(92, 243);  // 同一根、差 2px
+  assert.deepEqual(changes, []);
+  assert.deepEqual(tools, ["trend"]);
+  assertHandles(drawnHandles(), [[88.525, 241]], "起點還在");
+
+  tap(90, 233);  // 同一根、往上 8px：是一條看得到的直線。y=233 → 97.446… 取到分＝97.45 → y＝232.9
+  assert.deepEqual(changes.map(change => change.drawing.anchors), [[{ date: "2026-02-20", price: 97.15 }, { date: "2026-02-20", price: 97.45 }]]);
+  assertLines(drawnLines(), [[[88.525, 241], [88.525, 232.895]]]);
+
+  // 已存的資料裡兩點完全相同的線（看不見也選不到）：載入時略過。
+  chart.setDrawings([savedLine("trend", ["2026-02-20", 100], ["2026-02-20", 100]), savedLine("ray", ["2026-02-20", 100], ["2026-02-20", 100], "saved-two-02")]);
+  assertLines(drawnLines(), []);
+});
+
+// 選取與拖動用的那條趨勢線：(88.525, 241) → (249.525, 87)，長 222.79px，中點 (169.025, 164)。
+// 中點正下方 d 像素的點，離線 d×161/222.79 像素：d=6 → 4.3、d=11 → 7.9、d=18 → 13.0、d=21 → 15.2。
+const TREND = () => savedLine("trend", ["2026-02-20", 97.15], ["2026-03-12", 102.85]);
+
+test("點在趨勢線的可點選範圍內就選取：兩個端點各出現一個把手；超出線段兩端的延長線上點不到，射線則點得到", () => {
+  const { chart, changes, selections, tap, drawnHandles } = createChart();
+  chart.setDrawings([TREND()]);
+  tap(169, 175); // 滑鼠離線 7.9px：點不到
+  assert.deepEqual(selections, []);
+  assert.equal(chart.selection, 60, "照舊選 K 棒");
+  tap(169, 170); // 滑鼠離線 4.3px
+  assert.deepEqual(selections, ["saved-two-01"]);
+  assertHandles(drawnHandles(), [[88.525, 241], [249.525, 87]]);
+  assert.deepEqual(changes, [], "選取不是資料變動");
+
+  tap(169, 280);
+  tap(169, 182, "touch"); // 手指離線 13px：點得到
+  tap(169, 280, "touch");
+  tap(169, 185, "touch"); // 手指離線 15.2px：點不到
+  assert.deepEqual(selections, ["saved-two-01", null, "saved-two-01", null]);
+
+  tap(270, 68); // 線往右上延長 28px 的位置：趨勢線只到第二點為止
+  assert.deepEqual(selections.length, 4);
+  chart.setDrawings([savedLine("ray", ["2026-02-20", 97.15], ["2026-03-12", 102.85], "saved-ray-01")]);
+  tap(270, 68); // 同樣兩點的射線會延伸過去
+  assert.deepEqual(selections.at(-1), "saved-ray-01");
+  assertHandles(drawnHandles(), [[88.525, 241], [249.525, 87]], "射線的把手在兩個錨點上，不在延伸到邊緣的那一端");
+});
+
+test("端點在畫面外時只有畫面內的那個端點有把手；平移回來兩個都在，選取的仍是同一條", () => {
+  const { chart, selections, tap, drawnHandles } = createChart();
+  chart.setDrawings([TREND()]);
+  tap(169, 164);
+  assert.equal(chart.selection, -1, "點到線時不選 K 棒");
+  chart.zoom(0.5); // 最後 20 根：起點在左邊之外，終點在 x=173.05
+  assertHandles(drawnHandles(), [[173.05, 87]]);
+  chart.zoom(2);
+  assertHandles(drawnHandles(), [[88.525, 241], [249.525, 87]]);
+  assert.deepEqual(selections, ["saved-two-01"]);
+});
+
+test("拖已選取的趨勢線的線身：整條平移，兩端一起移動同樣的根數與價差，圖表不平移，放開才儲存一次", () => {
+  const { chart, changes, tap, drawnLines, drawnHandles } = createChart();
+  chart.setDrawings([TREND()]);
+  tap(169, 164);
+  const end = chart.view.end;
+
+  chart.canvas.dispatch("pointerdown", { clientX: 169, clientY: 164 });
+  chart.canvas.dispatch("pointermove", { clientX: 129, clientY: 87 }); // 往左 40px＝5 根，往上 77px＝＋2.85
+  assertLines(drawnLines(), [[[48.275, 164], [209.275, 10]]], "拖的時候線就跟著走");
+  assert.deepEqual(changes, [], "還沒放開不儲存");
+  chart.canvas.dispatch("pointerup", { clientX: 129, clientY: 87 });
+
+  assert.equal(chart.view.end, end, "圖表沒有跟著平移");
+  assert.deepEqual(changes, [{ type: "update", drawing: { id: "saved-two-01", kind: "trend", anchors: [{ date: "2026-02-15", price: 100 }, { date: "2026-03-07", price: 105.7 }] } }]);
+  assertHandles(drawnHandles(), [[48.275, 164], [209.275, 10]], "放開後仍選取著");
+  assert.equal(chart.selection, -1);
+});
+
+test("整條拖到超過最後一根 K 棒或拖出繪圖區：停在最後一根，線的長度與斜率不變", () => {
+  const { chart, changes, tap, drag, drawnLines } = createChart();
+  chart.setDrawings([TREND()]);
+  tap(169, 164);
+  drag([169, 164], [500, 164]); // 終點原本在第 70 根，最多只能再往右 9 根（第 79 根＝2026-03-21）
+  assert.deepEqual(changes.map(change => change.drawing.anchors), [[{ date: "2026-03-01", price: 97.15 }, { date: "2026-03-21", price: 102.85 }]]);
+  assertLines(drawnLines(), [[[160.975, 241], [321.975, 87]]]);
+});
+
+test("拖已選取的線的端點：只有那一端跟著走（改變角度與長度），另一端不動；放開後儲存", () => {
+  const { chart, changes, tap, drawnLines, drawnHandles } = createChart();
+  chart.setDrawings([TREND()]);
+  tap(169, 164);
+  const end = chart.view.end;
+
+  chart.canvas.dispatch("pointerdown", { clientX: 250, clientY: 88 });  // 抓在終點把手上
+  chart.canvas.dispatch("pointermove", { clientX: 170, clientY: 165 }); // 往左 80px、往下 77px → 第 20 根（2026-03-02）、100
+  assertLines(drawnLines(), [[[88.525, 241], [169.025, 164]]]);
+  assert.deepEqual(changes, []);
+  chart.canvas.dispatch("pointerup", { clientX: 170, clientY: 165 });
+  assert.deepEqual(changes, [{ type: "update", drawing: { id: "saved-two-01", kind: "trend", anchors: [{ date: "2026-02-20", price: 97.15 }, { date: "2026-03-02", price: 100 }] } }]);
+  assert.equal(chart.view.end, end, "圖表沒有跟著平移");
+
+  chart.canvas.dispatch("pointerdown", { clientX: 88, clientY: 241 });  // 換抓起點把手
+  chart.canvas.dispatch("pointermove", { clientX: 48, clientY: 164 });  // 往左 40px、往上 77px → 第 5 根（2026-02-15）、100
+  chart.canvas.dispatch("pointerup", { clientX: 48, clientY: 164 });
+  assert.deepEqual(changes.at(-1).drawing.anchors, [{ date: "2026-02-15", price: 100 }, { date: "2026-03-02", price: 100 }]);
+  assertLines(drawnLines(), [[[48.275, 164], [169.025, 164]]]);
+  assertHandles(drawnHandles(), [[48.275, 164], [169.025, 164]]);
+  assert.equal(changes.length, 2);
+});
+
+test("把端點拖到和另一端同一位置：那一端停在上一個還成線的位置，不會變成看不見的線", () => {
+  const { chart, changes, tap, drawnLines } = createChart();
+  chart.setDrawings([TREND()]);
+  tap(169, 164);
+  chart.canvas.dispatch("pointerdown", { clientX: 250, clientY: 88 });
+  chart.canvas.dispatch("pointermove", { clientX: 170, clientY: 165 }); // 先到第 20 根、100
+  chart.canvas.dispatch("pointermove", { clientX: 89, clientY: 242 });  // 再拖到起點上
+  assertLines(drawnLines(), [[[88.525, 241], [169.025, 164]]]);
+  chart.canvas.dispatch("pointerup", { clientX: 89, clientY: 242 });
+  assert.deepEqual(changes.map(change => change.drawing.anchors), [[{ date: "2026-02-20", price: 97.15 }, { date: "2026-03-02", price: 100 }]]);
+});
+
+test("拖端點途中按 Esc 或手勢被系統取消：線回到原本的樣子，不儲存", () => {
+  const { chart, changes, tap, key, drag, drawnLines } = createChart();
+  chart.setDrawings([TREND()]);
+  tap(169, 164);
+  chart.canvas.dispatch("pointerdown", { clientX: 250, clientY: 88 });
+  chart.canvas.dispatch("pointermove", { clientX: 170, clientY: 165 });
+  key("Escape");
+  chart.canvas.dispatch("pointerup", { clientX: 170, clientY: 165 });
+  assertLines(drawnLines(), [[[88.525, 241], [249.525, 87]]]);
+
+  tap(169, 164, "touch");
+  drag([250, 88], [170, 165], { pointerType: "touch", release: "pointercancel" });
+  assertLines(drawnLines(), [[[88.525, 241], [249.525, 87]]]);
+  assert.deepEqual(changes, []);
+});
+
+test("射線：點在延伸出去的那一段也選得到、拖得動（整條平移）；拖錨點則改變方向", () => {
+  const { chart, changes, tap, drag, drawnLines } = createChart();
+  chart.setDrawings([savedLine("ray", ["2026-02-20", 97.15], ["2026-03-12", 100], "saved-ray-01")]); // (88.525, 241) → (249.525, 164) → 右緣 (326, 127.425)
+  tap(300, 140); // 射線在 x=300 的高度是 139.86
+  drag([300, 140], [300, 217]); // 往下 77px＝−2.85
+  assert.deepEqual(changes.map(change => [change.type, change.drawing.anchors]),
+    [["update", [{ date: "2026-02-20", price: 94.3 }, { date: "2026-03-12", price: 97.15 }]]]);
+  assertLines(drawnLines(), [[[88.525, 318], [326, 204.425]]]);
+
+  drag([250, 241], [250, 164]); // 第二個錨點現在在 (249.525, 241)：往上拖 77px → 100
+  assert.deepEqual(changes.at(-1).drawing.anchors, [{ date: "2026-02-20", price: 94.3 }, { date: "2026-03-12", price: 100 }]);
+  // 每往右 161px 上升 154px：從起點 (88.525, 318) 到右緣 237.475px → 上升 227.15 → y＝90.85。
+  assertLines(drawnLines(), [[[88.525, 318], [326, 90.85]]]);
+});
+
+test("很短的線用手指也分得出拖線身與拖端點：線身的中段一定留給整條平移", () => {
+  const { chart, changes, tap, drag } = createChart();
+  // 第 10 根到第 12 根、同一價位：長 16.1px，比手指的可點選範圍（14px）的兩倍還短。
+  chart.setDrawings([savedLine("trend", ["2026-02-20", 100], ["2026-02-22", 100])]); // (88.525, 164) → (104.625, 164)
+  tap(96, 164, "touch");
+  drag([96, 164], [177, 164], { pointerType: "touch" }); // 抓中間往右 81px＝10 根：兩端一起走
+  assert.deepEqual(changes.at(-1).drawing.anchors, [{ date: "2026-03-02", price: 100 }, { date: "2026-03-04", price: 100 }]);
+
+  drag([185, 164], [185, 87], { pointerType: "touch" }); // 抓右端（現在在 x=185.125）往上 77px：只有那一端走
+  assert.deepEqual(changes.at(-1).drawing.anchors, [{ date: "2026-03-02", price: 100 }, { date: "2026-03-04", price: 102.85 }]);
+  assert.equal(changes.length, 2);
+});
+
+test("刪除選取的趨勢線（Delete 或刪除鈕）：線消失並通知儲存端刪除；切換日週月後選取還在同一條", () => {
+  const { chart, changes, selections, tap, key, drawnLines, drawnHandles } = createChart();
+  chart.setDrawings([TREND(), saved(100)]);
+  tap(169, 170);
+  const weekly = Array.from({ length: 16 }, (_, index) => ({
+    t: new Date(Date.UTC(2026, 0, 2 + index * 7)).toISOString().slice(0, 10), label: `第${index + 1}週`, open: 100, close: 100, high: 105, low: 95, volume: 1,
+  }));
+  chart.setData(weekly, { count: 16, unit: "週" }); // 02-20 是第 7 根（154.9375），03-12 那一週是第 10 根（215.3125）
+  assertHandles(drawnHandles(), [[154.9375, 241], [215.3125, 87]]);
+  chart.setData(dailyCandles(), { count: 40, unit: "日" });
+  assert.deepEqual(selections, ["saved-two-01"]);
+
+  key("Delete");
+  assert.deepEqual(changes, [{ type: "remove", drawing: { id: "saved-two-01", kind: "trend", anchors: [{ date: "2026-02-20", price: 97.15 }, { date: "2026-03-12", price: 102.85 }] } }]);
+  assertLines(drawnLines(), [[[4, 164.5], [326, 164.5]]], "水平線不受影響");
+  assert.deepEqual(selections, ["saved-two-01", null]);
+});
+
+test("斜線和水平線交叉的地方：選到離點擊位置最近的那一條", () => {
+  const { chart, selections, tap } = createChart();
+  chart.setDrawings([saved(100), TREND()]); // 兩條在 (169.025, 164) 交叉
+  tap(120, 166); // 離水平線 2px；斜線在 x=120 的高度是 210.9，遠得多
+  tap(140, 190); // 斜線在 x=140 的高度是 191.8：離斜線 1.3px、離水平線 26px
+  assert.deepEqual(selections, ["saved-line-01", "saved-two-01"]);
+});
+
+test("在週 K 上只上下拖整條：兩端的日期維持原本的交易日（不會被換成那一週的最後一天），切回日 K 仍在原本那兩根", () => {
+  const { chart, changes, tap, drag, drawnLines } = createChart();
+  chart.setDrawings([savedLine("trend", ["2026-02-18", 97.15], ["2026-03-12", 102.85])]); // 週三、週四
+  const weekly = Array.from({ length: 16 }, (_, index) => ({
+    t: new Date(Date.UTC(2026, 0, 2 + index * 7)).toISOString().slice(0, 10), label: `第${index + 1}週`, open: 100, close: 100, high: 105, low: 95, volume: 1,
+  }));
+  chart.setData(weekly, { count: 16, unit: "週" }); // 線在 (154.9375, 241) → (215.3125, 87)，中點 (185.125, 164)
+  tap(185, 164);
+  drag([185, 164], [185, 87]); // 往上 77px＝＋2.85，左右沒有動
+  assert.deepEqual(changes.map(change => change.drawing.anchors), [[{ date: "2026-02-18", price: 100 }, { date: "2026-03-12", price: 105.7 }]]);
+
+  drag([185, 87], [205, 87]); // 往右 20px＝1 根：兩端各往後一週，日期是那一根週 K 的日期（02-27、03-20）
+  assert.deepEqual(changes.at(-1).drawing.anchors, [{ date: "2026-02-27", price: 100 }, { date: "2026-03-20", price: 105.7 }]);
+  chart.setData(dailyCandles(), { count: 40, unit: "日" });
+  // 日 K：02-27 是第 57 根（可見的第 17 根，x＝144.875），03-20 是第 78 根（x＝313.925）。
+  assertLines(drawnLines(), [[[144.875, 164], [313.925, 10]]]);
+});
+
+// ---------- 票 03：審查後補的邊界情況 ----------
+const WEEKLY = () => Array.from({ length: 16 }, (_, index) => ({
+  t: new Date(Date.UTC(2026, 0, 2 + index * 7)).toISOString().slice(0, 10), label: `第${index + 1}週`, open: 100, close: 100, high: 105, low: 95, volume: 1,
+}));
+
+test("日 K 上同一週內、同一價位的短線切到週 K：兩端落在同一根，仍畫成看得到的一小段，也點得到（趨勢線與射線都一樣）", () => {
+  for (const kind of ["trend", "ray"]) {
+    const { chart, changes, selections, tap, drag, drawnLines } = createChart();
+    chart.setDrawings([savedLine(kind, ["2026-02-16", 100], ["2026-02-19", 100])]); // 週一到週四
+    chart.setData(WEEKLY(), { count: 16, unit: "週" }); // 兩端都在 02-20 那一根：(154.9375, 164)
+    assertLines(drawnLines(), [[[152.9375, 164], [156.9375, 164]]], kind);
+    tap(155, 164);
+    assert.deepEqual(selections, ["saved-two-01"], kind);
+    drag([155, 164], [175, 164]); // 在週 K 上往右拖一根：兩端會變成同一天同一價位，這一步不成立，線留在原位
+    assert.deepEqual(changes, [], kind);
+  }
+});
+
+test("在週 K 上只把端點上下拖：那一端的日期維持原本的交易日，只有價位變", () => {
+  const { chart, changes, tap, drag } = createChart();
+  chart.setDrawings([savedLine("trend", ["2026-02-18", 97.15], ["2026-03-12", 102.85])]);
+  chart.setData(WEEKLY(), { count: 16, unit: "週" }); // (154.9375, 241) → (215.3125, 87)
+  tap(185, 164);
+  drag([215, 87], [215, 164]); // 抓終點往下 77px
+  assert.deepEqual(changes.map(change => change.drawing.anchors), [[{ date: "2026-02-18", price: 97.15 }, { date: "2026-03-12", price: 100 }]]);
+});
+
+test("點了第一下之後圖上的資料換成不含起點那一天的範圍：下一下重新當第一下，不會之後怎麼點都沒反應", () => {
+  const { chart, changes, tap } = createChart();
+  chart.setTool("trend");
+  tap(90, 241); // 2026-02-20
+  chart.setData(dailyCandles().slice(60), { count: 20, unit: "日" }); // 只剩 2026-03-02 起的 20 根，每根 16.1px
+  tap(90, 241);  // 第 5 根＝2026-03-07
+  assert.deepEqual(changes, []);
+  tap(250, 87);  // 第 15 根＝2026-03-17
+  assert.deepEqual(changes.map(change => change.drawing.anchors), [[{ date: "2026-03-07", price: 97.15 }, { date: "2026-03-17", price: 102.85 }]]);
+});
