@@ -851,11 +851,16 @@ def otc_credit_day(root: Path, day: str, *, get: Callable | None = None, sleep: 
 
 # ---- 外資台指期部位（預測帳本 G 票第 14 片；期交所只開放查近三年，要每天存下來才拉得長） ----
 
-def foreign_futures_day(root: Path, day: str, *, post: Callable | None = None, sleep: Callable = time.sleep) -> dict:
-    """期交所「三大法人－區分各期貨契約」當天的大台、小台各一份，原件存 data/foreign-futures/raw/。"""
+FOREIGN_FUTURES_BACKFILL_DAYS = 10   # 漏抓的日子在這幾個交易日內補回來；平常每天只有當天那兩個請求
+
+
+def foreign_futures_day(root: Path, day: str, *, post: Callable | None = None, sleep: Callable = time.sleep,
+                        backfill_days: int = FOREIGN_FUTURES_BACKFILL_DAYS) -> dict:
+    """期交所「三大法人－區分各期貨契約」的大台、小台各一份，原件存 data/foreign-futures/raw/；最近幾天缺的一併補。"""
     import foreign_futures as ff
 
-    return ff.fetch_day(root / "data/foreign-futures", day, post=post, sleep=sleep)
+    return ff.fetch_recent(root / "data/foreign-futures", _otc_trading_days(root, day, backfill_days),
+                           post=post, sleep=sleep)
 
 
 # ---- 每日協調器呼叫的兩個入口 ----

@@ -109,8 +109,8 @@ class TrendReadingTest(unittest.TestCase):
 FUT_DATES = weekdays("2026-07-08", 10)
 FUT_NET = [-100, -110, -130, -120, -150, -300, -310, -305, -340, -360]
 FUT_CLOSE = [100, 101, 99, 100, 102, 101, 103, 104, 102, 105]
-SMALL = {"rel_window": 3, "chg_window": 2, "forward": [1, 2], "mini_per_big": 4,
-         "cuts": {"rel60": [50], "chg5": [50], "chg1": [50]}}
+SMALL = {"rel_window": 3, "chg_window": 2, "forward": [1, 2],
+         "cuts": {"rel_mean": [50], "chg_window": [50], "chg1": [50]}}
 
 
 def positions(dates=FUT_DATES, nets=FUT_NET):
@@ -127,6 +127,8 @@ class SettlementDaysTest(unittest.TestCase):
         self.assertEqual(sorted(ff.settlement_days(days)), ["2026-07-15", "2026-08-19", "2026-09-16"])
         without = [d for d in days if d != "2026-08-19"]
         self.assertIn("2026-08-20", ff.settlement_days(without))
+        # 日曆從七月第三個星期三之後才開始：七月不判斷，不把第一天當成結算日
+        self.assertEqual(sorted(ff.settlement_days(weekdays("2026-07-17", 5))), [])
 
 
 class FuturesReadingTest(unittest.TestCase):
@@ -136,9 +138,9 @@ class FuturesReadingTest(unittest.TestCase):
         self.assertEqual(reading["net_contracts"], -360)
         self.assertFalse(reading["settlement_day_today"])
         # 相對近 3 日平均：-360 - (-310-305-340)/3 = -41.67 → -42 口
-        self.assertEqual(reading["relative_to_60d_mean"]["contracts"], -42)
+        self.assertEqual(reading["relative_to_recent_mean"]["contracts"], -42)
         # 近 2 日：-360 - (-305) = -55（07-20、07-21 都不是結算日）
-        self.assertEqual(reading["change_5d"]["contracts"], -55)
+        self.assertEqual(reading["change_over_window"]["contracts"], -55)
         change = reading["change_1d"]
         self.assertEqual(change["contracts"], -20)
         # 當日增減的歷史（結算日 07-15 不算）：-10,-20,+10,-30,-10,+5,-35,-20；小於等於 -20 的 4/8 → 50 分位；
@@ -157,16 +159,16 @@ class FuturesReadingTest(unittest.TestCase):
         self.assertTrue(on["settlement_day_today"])
         self.assertIsNone(on["change_1d"]["contracts"])
         self.assertIn("結算日", on["change_1d"]["not_applicable"])
-        self.assertIsNone(on["change_5d"]["contracts"])
+        self.assertIsNone(on["change_over_window"]["contracts"])
         after = ff.futures_reading(positions(), fut_index(), "2026-07-16", SMALL)
         self.assertEqual(after["change_1d"]["contracts"], -10)       # -310 - (-300)
-        self.assertIsNone(after["change_5d"]["contracts"])            # 視窗 07-15～07-16 含結算日
-        self.assertIn("結算日", after["change_5d"]["not_applicable"])
+        self.assertIsNone(after["change_over_window"]["contracts"])            # 視窗 07-15～07-16 含結算日
+        self.assertIn("結算日", after["change_over_window"]["not_applicable"])
 
     def test_not_enough_days_for_the_average(self):
         reading = ff.futures_reading(positions(), fut_index(), "2026-07-10", SMALL)
-        self.assertIsNone(reading["relative_to_60d_mean"]["contracts"])
-        self.assertIn("不到", reading["relative_to_60d_mean"]["not_applicable"])
+        self.assertIsNone(reading["relative_to_recent_mean"]["contracts"])
+        self.assertIn("不到", reading["relative_to_recent_mean"]["not_applicable"])
 
     def test_positions_without_the_base_day_are_missing(self):
         reading = ff.futures_reading(positions()[:-1], fut_index(), "2026-07-21", SMALL)
@@ -177,7 +179,7 @@ class FuturesReadingTest(unittest.TestCase):
         rows = [row for row in positions() if row["date"] != "2026-07-13"]
         reading = ff.futures_reading(rows, fut_index(), "2026-07-21", SMALL)
         self.assertEqual(reading["history_period"]["from"], "2026-07-14")
-        self.assertEqual(reading["relative_to_60d_mean"]["contracts"], -42)
+        self.assertEqual(reading["relative_to_recent_mean"]["contracts"], -42)
 
 
 # 那斯達克（美國日期）：07-02 跌 2%、07-06 漲 1.0204%、07-07 平盤；07-03 美股休市。
@@ -210,6 +212,18 @@ class NasdaqReadingTest(unittest.TestCase):
         morning = ff.nasdaq_reading(NASDAQ, PROXY, TW_FLOW, "2026-07-07", "morning")
         self.assertEqual((evening["us_close_date"], evening["range"]), ("2026-07-06", "漲 0.5～1.5%"))
         self.assertEqual((morning["us_close_date"], morning["range"]), ("2026-07-07", "±0.5% 內"))
+        self.assertEqual(evening["taiwan_day_it_applies_to"], "基準日（已收盤）")
+        self.assertEqual(morning["taiwan_day_it_applies_to"], "基準日的下一個交易日")
+
+    def test_morning_before_a_long_weekend_sees_the_friday_us_close(self):
+        # 基準日週四 07-09，週五台股休市、週一 07-13 開盤：晨間版看得到美國週五 07-10 的收盤
+        series = NASDAQ + [{"date": "2026-07-09", "close": 99}, {"date": "2026-07-10", "close": 97.02}]
+        flow = TW_FLOW + [{"date": "2026-07-09", "foreign": -1, "foreign_tsmc": 0, "turnover": 100, "n_buy": 1, "n_sell": 1}]
+        morning = ff.nasdaq_reading(series, PROXY, flow, "2026-07-09", "morning", us_before="2026-07-13")
+        self.assertEqual((morning["us_close_date"], morning["change_pct"], morning["range"]),
+                         ("2026-07-10", -2.0, "跌逾 1.5%"))
+        evening = ff.nasdaq_reading(series, PROXY, flow, "2026-07-09", "evening")
+        self.assertEqual(evening["us_close_date"], "2026-07-07")   # 晚間版只看美國日期早於 07-09 的（07-08 沒開）
 
     def test_without_nasdaq_it_is_missing(self):
         self.assertEqual(ff.nasdaq_reading([], PROXY, TW_FLOW, "2026-07-08")["status"], "missing")
@@ -247,6 +261,19 @@ class DollarReadingTest(unittest.TestCase):
         self.assertEqual(ff.dollar_reading([], [], FX_FLOW, FX_DATES[-1])["status"], "missing")
 
 class BuildLayerTest(unittest.TestCase):
+    def test_nasdaq_is_kept_out_of_the_model_input_until_its_licence_allows(self):
+        layer = ff.build_layer(base_date="2026-07-08", index_daily=index([100] * 6, "2026-07-01"), daily_flow=TW_FLOW,
+                               futures_positions=[], proxy_daily=PROXY, nasdaq=NASDAQ)
+        self.assertEqual(layer["readings"]["nasdaq_last_session"]["status"], "withheld")
+        self.assertEqual(layer["withheld"], ["nasdaq_last_session"])
+        self.assertNotIn("nasdaq", layer["notes"])
+        self.assertEqual(layer["record_only"]["nasdaq_last_session"]["us_close_date"], "2026-07-07")
+        allowed = ff.build_layer(base_date="2026-07-08", index_daily=index([100] * 6, "2026-07-01"), daily_flow=TW_FLOW,
+                                 futures_positions=[], proxy_daily=PROXY, nasdaq=NASDAQ, nasdaq_in_prompt=True)
+        self.assertEqual(allowed["readings"]["nasdaq_last_session"]["status"], "ok")
+        self.assertIn("nasdaq", allowed["notes"])
+        self.assertEqual(allowed["record_only"], {})
+
     def test_layer_marks_missing_readings_and_carries_the_notes(self):
         rows = flow(SPOT, TSMC)
         base = rows[-1]["date"]
@@ -255,8 +282,12 @@ class BuildLayerTest(unittest.TestCase):
         self.assertEqual(layer["missing"], ["nasdaq_last_session", "dollar_and_twd_vs_foreign", "futures_net_position"])
         self.assertEqual(layer["readings"]["streak_and_cumulative"]["streak"], {"side": "sell", "days": 2})
         self.assertIn("不代表之後會續漲或續跌", layer["notes"]["spot"])
-        self.assertIn("空單多不代表看空", layer["notes"]["futures"])
-        self.assertIn("只有近三年", layer["notes"]["futures"])
+        # 缺的讀數不給說明：期貨、那斯達克、美元都沒有資料
+        self.assertEqual(sorted(layer["notes"]), ["spot", "trend"])
+        with_futures = ff.build_layer(base_date=FUT_DATES[-1], index_daily=fut_index(), daily_flow=[],
+                                      futures_positions=positions())
+        self.assertIn("空單多不代表看空", with_futures["notes"]["futures"])
+        self.assertIn("只有近三年", with_futures["notes"]["futures"])
         other = ff.build_layer(base_date=rows[-2]["date"], index_daily=index([100] * 8), daily_flow=rows[:-1],
                                futures_positions=[])
         self.assertEqual(layer["version"], other["version"])
@@ -277,7 +308,8 @@ class DailyFlowTest(unittest.TestCase):
             con.execute("CREATE TABLE daily (date TEXT, code TEXT, close REAL, turnover INTEGER)")
             con.executemany("INSERT INTO daily VALUES (?,?,?,?)", [
                 ("2026-11-13", "2330", 1000.0, 60_000_000_000), ("2026-11-13", "2317", 200.0, 20_000_000_000),
-                ("2026-11-13", "0050", 50.0, 20_000_000_000)])
+                ("2026-11-13", "0050", 50.0, 20_000_000_000),
+                ("2026-11-13", "1101", None, 5_000_000_000)])   # 沒有收盤：成交金額也不加
             con.commit(); con.close()
             rows = ff.daily_flow_from_sources(inst, stock)
         # 2330：-200 萬股 × 1000 = -20 億；2317：+500 萬股 × 200 = +10 億；合計 -10 億；成交金額 1000 億

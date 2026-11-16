@@ -252,6 +252,27 @@ class ForeignFlowLayerTests(RunTestCase):
         self.assertEqual(layer["sources"]["futures_to"], BASE)
         self.assertIn("foreign_flow", record["input"]["parameters"]["layers"])
 
+    def test_nasdaq_numbers_are_sealed_in_the_record_but_not_given_to_the_model(self):
+        root = self.data_root()
+        real = fr.load_foreign_sources
+        nasdaq = [{"date": d, "close": 100 + i} for i, d in enumerate(DATES[:-1])]
+
+        def with_nasdaq(data_root, seeds_root=fr.SEEDS_ROOT):
+            sources = real(data_root, seeds_root)
+            sources["nasdaq"] = nasdaq
+            return sources
+
+        fr.load_foreign_sources = with_nasdaq
+        try:
+            self.run_evening(data_root=root, seeds_root=self.tmp / "no-seeds")
+        finally:
+            fr.load_foreign_sources = real
+        record = fl.read_ledger(self.ledger)["forecasts"][0]
+        self.assertEqual(record["input"]["foreign_flow"]["readings"]["nasdaq_last_session"]["status"], "withheld")
+        self.assertNotIn("record_only", record["input"]["foreign_flow"])
+        kept = record["record_only"]["foreign_flow"]["nasdaq_last_session"]
+        self.assertEqual(kept["us_close_date"], DATES[-2])
+
     def test_without_data_the_forecast_is_still_written_and_the_gap_is_named(self):
         result = self.run_evening()
         self.assertEqual(result["outcome"], "written")

@@ -124,6 +124,30 @@ class FetchAndPositionsTest(unittest.TestCase):
         self.assertEqual(ff.positions(self.store, self.seed), [])
 
 
+class FetchRecentTest(unittest.TestCase):
+    def test_missed_days_are_filled_and_present_days_send_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp) / "foreign-futures"
+            day13 = {"TXF": csv_bytes(row("2026/11/13", "臺股期貨", "外資及陸資", -1100)),
+                     "MXF": csv_bytes(row("2026/11/13", "小型臺指期貨", "外資及陸資", 200))}
+            ff.fetch_day(store, "2026-11-16", post=FakePost({"TXF": TXF_DAY, "MXF": MXF_DAY}), sleep=lambda s: None)
+            post, waits = FakePost(day13), []
+            result = ff.fetch_recent(store, ["2026-11-16", "2026-11-13"], post=post, sleep=waits.append)
+            self.assertEqual([call[1]["queryStartDate"] for call in post.calls], ["2026/11/13", "2026/11/13"])
+            self.assertEqual((result["status"], result["appended"], result["requests"]),
+                             ("already-present", ["2026-11-13"], 2))
+            self.assertEqual(waits, [5.0])        # 兩個請求之間；今天已經有了不再抓
+
+    def test_stops_when_blocked(self):
+        class Blocked(FakePost):
+            def __call__(self, url, data):
+                self.calls.append((url, dict(data)))
+                return ff.Response(403, "text/html", b"", url)
+        with tempfile.TemporaryDirectory() as tmp:
+            result = ff.fetch_recent(Path(tmp), ["2026-11-13", "2026-11-16"], post=Blocked({}), sleep=lambda s: None)
+        self.assertEqual((result["status"], result["day"]), ("stopped", "2026-11-13"))
+
+
 class SeedTest(unittest.TestCase):
     def test_seed_from_downloaded_ranges_skips_error_pages_and_records_sources(self):
         with tempfile.TemporaryDirectory() as tmp:

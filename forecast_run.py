@@ -64,16 +64,23 @@ def _trend(daily: list[dict[str, Any]], institutional: list[dict[str, Any]]) -> 
     return labels, indicators
 
 
+def _error(error: Exception) -> dict[str, str]:
+    """``kind`` 進模型輸入（各機器一樣）；``detail`` 可能有本機路徑，只進執行紀錄。"""
+    return {"kind": type(error).__name__, "detail": str(error)}
+
+
 def load_foreign_sources(data_root: Path | str | None, seeds_root: Path | str = SEEDS_ROOT) -> dict[str, Any]:
     """外資層要的兩份序列（現貨每日彙總、期貨淨部位）。讀不到或原件不符時那一份是空的，原因記在 errors。
 
     ``data_root`` 是 None 時什麼都不讀（外資讀數全部標 missing），測試用。"""
     # 那斯達克（nasdaq）、美元指數（dollar_index）、美元兌台幣（usdtwd）由 D 票的海外資料接進這裡，
     # 每個都是 [{"date", "close"}]；沒接上之前是空的，讀數 1、4 標 missing。
+    # nasdaq_in_prompt：那斯達克的來源條款允許交給模型時才設 True（D 票 overseas_inputs 的 LICENSES 旗標）。
     sources: dict[str, Any] = {"daily_flow": [], "futures": [], "proxy_daily": [], "nasdaq": [], "dollar_index": [],
-                               "usdtwd": [], "errors": {}}
+                               "usdtwd": [], "nasdaq_in_prompt": False, "errors": {}}
     if data_root is None:
-        sources["errors"] = {"daily_flow": "沒有指定資料位置", "futures": "沒有指定資料位置"}
+        sources["errors"] = {name: {"kind": "no_data_root", "detail": "沒有指定資料位置"}
+                             for name in ("daily_flow", "futures")}
         return sources
     root = Path(data_root)
     stock_db = root / "stock-history/stock-history.sqlite"
@@ -82,30 +89,34 @@ def load_foreign_sources(data_root: Path | str | None, seeds_root: Path | str = 
             root / "listed-institutional/listed_institutional.sqlite", stock_db,
             seed=Path(seeds_root) / foreign_flow.FLOW_SEED.name)
     except Exception as error:  # noqa: BLE001 — 讀不到就讓讀數標 missing，預測照寫
-        sources["errors"]["daily_flow"] = f"{type(error).__name__}: {error}"
+        sources["errors"]["daily_flow"] = _error(error)
     try:
         if stock_db.exists():
             sources["proxy_daily"] = foreign_flow.proxy_daily_from_stock_db(stock_db)
     except Exception as error:  # noqa: BLE001
-        sources["errors"]["proxy_daily"] = f"{type(error).__name__}: {error}"
+        sources["errors"]["proxy_daily"] = _error(error)
     try:
         sources["futures"] = foreign_futures.positions(root / "foreign-futures",
                                                        Path(seeds_root) / foreign_futures.SEED.name)
     except Exception as error:  # noqa: BLE001
-        sources["errors"]["futures"] = f"{type(error).__name__}: {error}"
+        sources["errors"]["futures"] = _error(error)
     return sources
 
 
-def _foreign_layer(daily: list[dict[str, Any]], base_date: str, sources: Mapping[str, Any]) -> dict[str, Any]:
+def _foreign_layer(daily: list[dict[str, Any]], base_date: str,
+                   sources: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """回傳（交給模型的外資層, 只存進紀錄的部分）。"""
     flow = [row for row in sources.get("daily_flow") or [] if row["date"] <= base_date]
     futures = [row for row in sources.get("futures") or [] if row["date"] <= base_date]
-    return foreign_flow.build_layer(
+    layer = foreign_flow.build_layer(
         base_date=base_date, index_daily=daily, daily_flow=flow, futures_positions=futures,
         proxy_daily=sources.get("proxy_daily") or [], nasdaq=sources.get("nasdaq") or [],
         dollar_index=sources.get("dollar_index") or [], usdtwd=sources.get("usdtwd") or [], edition="evening",
+        nasdaq_in_prompt=bool(sources.get("nasdaq_in_prompt")),
         sources={"daily_flow_to": flow[-1]["date"] if flow else None,
                  "futures_to": futures[-1]["date"] if futures else None,
-                 "errors": dict(sources.get("errors") or {})})
+                 "errors": {name: error["kind"] for name, error in (sources.get("errors") or {}).items()}})
+    return layer, layer.pop("record_only")
 
 
 def build_day_input(analysis: Mapping[str, Any], method_text: str,
@@ -118,6 +129,7 @@ def build_day_input(analysis: Mapping[str, Any], method_text: str,
     futures = list(analysis.get("futures") or [])
     base_date = daily[-1]["date"] if daily else None
     labels, indicators = _trend(daily, institutional) if daily else ({}, [])
+    layer, record_only = _foreign_layer(daily, base_date, foreign_sources or {}) if base_date else (None, {})
     return {
         "base_date": base_date,
         "index_daily": [{key: row.get(key) for key in ("date", "open", "high", "low", "close", "amount")} for row in daily],
@@ -137,7 +149,9 @@ def build_day_input(analysis: Mapping[str, Any], method_text: str,
             "institutional": institutional[-1]["date"] if institutional else None,
             "futures": futures[-1]["date"] if futures else None,
         },
-        "foreign_flow": _foreign_layer(daily, base_date, foreign_sources or {}) if base_date else None,
+        "foreign_flow": layer,
+        # 只存進紀錄、不交給模型的內容（例如條款不允許交給模型的那斯達克讀數）。
+        "record_only": {"foreign_flow": record_only} if record_only else None,
         "method_text": method_text,
     }
 
@@ -207,6 +221,7 @@ def run_evening(
         "schema": SCHEMA, "edition": "evening", "dry_run": dry_run, "base_date": base_date, "model": model,
         "started_at": clock().astimezone(fl.TAIPEI).isoformat(), "backfilled_misses": [],
         "foreign_flow_missing": (data.get("foreign_flow") or {}).get("missing"),
+        "foreign_flow_errors": foreign_sources.get("errors"),
     }
 
     if date and date != base_date:

@@ -39,7 +39,7 @@ class NotContractsCsv(ValueError):
 
 
 class PositionsConflict(ValueError):
-    """原件雜湊不符，或同一天兩份來源的口數不一樣。"""
+    """原件雜湊不符，或同一天出現兩個不一樣的口數（同一份檔裡或兩份來源之間）。"""
 
 
 def _iso(text: str) -> str:
@@ -66,7 +66,7 @@ def parse_contracts_csv(content: bytes, contract: str) -> dict[str, int]:
         day = _iso(row["日期"])
         value = int(row["多空未平倉口數淨額"].replace(",", "").strip())
         if day in out and out[day] != value:
-            raise ValueError(f"{contract} {day} 同一天出現兩個不同的口數")
+            raise PositionsConflict(f"{contract} {day} 同一天出現兩個不同的口數")
         out[day] = value
     return out
 
@@ -119,6 +119,30 @@ def fetch_day(store: Path | str, day: str, *, post: Callable[[str, dict[str, str
     for contract, content in bodies.items():
         write_raw(store, _raw_name(contract, day), content)
     return {"status": "appended", "requests": len(missing), "contracts": sorted(bodies)}
+
+
+def fetch_recent(store: Path | str, days: list[str], *,
+                 post: Callable[[str, dict[str, str]], Response] | None = None,
+                 sleep: Callable[[float], None] = time.sleep) -> dict[str, Any]:
+    """最近幾個交易日缺哪天補哪天（漏抓一天，近 60 日平均就要從缺口之後重新起算，所以要補）。
+
+    已經有的不發請求；兩個請求之間（跨日也一樣）至少等 5 秒；被擋或連不上就停，已存的保留。
+    回傳的 status 看最後一天（通常是今天）：appended／already-present／not_published／stopped。"""
+    summary: dict[str, Any] = {"appended": [], "not_published": [], "requests": 0}
+    last: dict[str, Any] = {"status": "already-present"}
+    for day in sorted(days):
+        complete = all((Path(store) / "raw" / _raw_name(c, day)).exists() for c in CONTRACTS)
+        if summary["requests"] and not complete:
+            sleep(MIN_INTERVAL_SECONDS)
+        last = fetch_day(store, day, post=post, sleep=sleep)
+        summary["requests"] += last.get("requests", 0)
+        if last["status"] == "appended":
+            summary["appended"].append(day)
+        elif last["status"] == "not_published":
+            summary["not_published"].append(day)
+        elif last["status"] == "stopped":
+            return {**summary, "status": "stopped", "reason": last.get("reason"), "day": day}
+    return {**summary, "status": last["status"]}
 
 
 def _merge(target: dict[str, dict[str, int | None]], day: str, contract: str, value: int | None, origin: str) -> None:

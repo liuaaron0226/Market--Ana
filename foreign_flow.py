@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 import math
@@ -35,8 +36,9 @@ PARAMETERS: dict[str, Any] = {
     "nasdaq": {"edges_pct": [-1.5, -0.5, 0.5, 1.5], "proxy_code": "0050"},
     # 讀數 4：美元指數、美元兌台幣近 20 個交易日變化，對照外資近 20 日累計。
     "dollar": {"window": 20, "dividend_months": [7, 8, 9]},
-    "futures": {"rel_window": 60, "chg_window": 5, "forward": [5, 20], "mini_per_big": 4,
-                "cuts": {"rel60": [20, 80], "chg5": [20, 80], "chg1": [10, 30, 70, 90]}},
+    # 淨部位（大台＋小台÷4）在 foreign_futures 算好才進來，這裡只管增減與統計。
+    "futures": {"rel_window": 60, "chg_window": 5, "forward": [5, 20],
+                "cuts": {"rel_mean": [20, 80], "chg_window": [20, 80], "chg1": [10, 30, 70, 90]}},
 }
 
 NOTES = {
@@ -44,8 +46,9 @@ NOTES = {
             "單日金額雜訊大（有一半是短線與避險資金），近五日、二十日累計比較有意義；外資金額裡台積電一檔占四成上下。",
     "futures": "外資台指期淨空單的水準幾乎是投信（槓桿型 ETF）多單的反面，空單多不代表看空，要看的是增減。"
                "這個讀數的歷史統計只有近三年、全在多頭期間，加空之後是漲得比較少而不是下跌，可信度比其他外資讀數低。",
-    "nasdaq": "開盤跳空與盤中漲跌是用 0050 的實際開盤價算的（加權指數的開盤值只反映約一半跳空，會算出不存在的盤中續跌）；"
-              "照附上的平均讀，不要自己推論大跌隔天盤中會續跌。",
+    "nasdaq": "統計表是「這種那斯達克收盤之後的那一個台股交易日」；晚間版看的是前一晚美股，對應的就是基準日當天"
+              "（已經收盤），要預測的下一個交易日還要看今晚美股。開盤跳空與盤中漲跌是用 0050 的實際開盤價算的"
+              "（加權指數的開盤值只反映約一半跳空，會算出不存在的盤中續跌）；照附上的平均讀，不要自己推論大跌隔天盤中會續跌。",
     "dollar": "美元走強、台幣走貶時外資通常在賣，是同時發生的確認，不是預告；除息季（約七到九月）股匯常不同調，"
               "這段期間外資數字要打折看。",
     "trend": "加權指數在年線、季線之上或之下，決定一段下跌比較像回檔還是轉弱；外資賣多少不能代替這個判斷。",
@@ -93,6 +96,20 @@ def _closes(index_daily: Iterable[Mapping[str, Any]], base_date: str) -> list[tu
             if row.get("close") is not None and str(row["date"]) <= base_date]
 
 
+def _series(rows: Iterable[Mapping[str, Any]]) -> list[tuple[str, float]]:
+    """[{date, close}] → 依日期排好的 (日期, 收盤)，收盤空白的略過。"""
+    return sorted((str(row["date"]), float(row["close"])) for row in rows if row.get("close") is not None)
+
+
+def _cumulative_share(foreign: Sequence[float], turnover: Sequence[float], end: int, window: int) -> float | None:
+    """到第 end 天為止 window 天的外資累計淨額 ÷ 同期成交金額（讀數 2 與讀數 4 共用這一套）。"""
+    start = end - window + 1
+    if start < 0:
+        return None
+    amount = sum(turnover[start:end + 1])
+    return sum(foreign[start:end + 1]) / amount if amount else None
+
+
 def _forward(closes: Sequence[float], position: int, horizon: int) -> float | None:
     end = position + horizon
     return None if end >= len(closes) else closes[end] / closes[position] - 1
@@ -129,7 +146,7 @@ def _streaks(values: Sequence[float]) -> list[int]:
 def spot_readings(daily_flow: Sequence[Mapping[str, Any]], base_date: str) -> dict[str, Any]:
     """讀數 2 與 3。``daily_flow`` 每列：date、foreign、foreign_tsmc、turnover（億元）、n_buy、n_sell。"""
     rows = [row for row in daily_flow if str(row["date"]) <= base_date]
-    if not rows or rows[-1]["date"] != base_date:
+    if not rows or str(rows[-1]["date"]) != base_date:
         return {"streak_and_cumulative": _missing("外資買賣超截止日不是基準日"),
                 "tsmc_split": _missing("外資買賣超截止日不是基準日")}
     params = PARAMETERS["spot"]
@@ -140,11 +157,7 @@ def spot_readings(daily_flow: Sequence[Mapping[str, Any]], base_date: str) -> di
     last = len(rows) - 1
 
     def ratio(end: int, window: int) -> float | None:
-        start = end - window + 1
-        if start < 0:
-            return None
-        amount = sum(turnover[start:end + 1])
-        return sum(foreign[start:end + 1]) / amount if amount else None
+        return _cumulative_share(foreign, turnover, end, window)
 
     today_streak = streaks[last]
     side = "buy" if today_streak > 0 else "sell" if today_streak < 0 else "flat"
@@ -231,7 +244,9 @@ def _third_wednesday(year: int, month: int) -> date:
 
 
 def settlement_days(trading_days: Sequence[str]) -> set[str]:
-    """每個月第三個星期三；那天休市就是之後的第一個交易日（同一個月、一週內）。"""
+    """每個月第三個星期三；那天休市就是之後的第一個交易日（一週內）。
+
+    日曆在第三個星期三之後才開始的那個月不判斷（看不出那天之前是不是已經結算過）。"""
     days = sorted(trading_days)
     out: set[str] = set()
     if not days:
@@ -239,6 +254,8 @@ def settlement_days(trading_days: Sequence[str]) -> set[str]:
     months = sorted({(int(day[:4]), int(day[5:7])) for day in days})
     for year, month in months:
         target = _third_wednesday(year, month)
+        if date.fromisoformat(days[0]) > target:
+            continue
         for day in days:
             current = date.fromisoformat(day)
             if current >= target:
@@ -305,8 +322,8 @@ def futures_reading(positions: Sequence[Mapping[str, Any]], index_daily: Sequenc
     overall = {h: _mean(list(by_day.values())) for h, by_day in forwards.items()}
     metrics = {}
     for key, fn, na_reason in (
-            ("rel60", rel, f"期貨部位不到 {rel_window + 1} 個交易日"),
-            ("chg5", chg5, f"近 {chg_window} 日含結算日（近月到期會讓口數跳動）"),
+            ("rel_mean", rel, f"期貨部位不到 {rel_window + 1} 個交易日"),
+            ("chg_window", chg5, f"近 {chg_window} 日含結算日（近月到期會讓口數跳動）"),
             ("chg1", chg1, "基準日是結算日（近月到期會讓口數跳動）")):
         history = {t: value for t in range(len(days)) if (value := fn(t)) is not None}
         current = fn(last)
@@ -320,8 +337,8 @@ def futures_reading(positions: Sequence[Mapping[str, Any]], index_daily: Sequenc
         "status": "ok",
         "net_contracts": round(net[last]),
         "settlement_day_today": base_date in settle,
-        "relative_to_60d_mean": metrics["rel60"],
-        "change_5d": metrics["chg5"],
+        "relative_to_recent_mean": {"window_days": rel_window, **metrics["rel_mean"]},
+        "change_over_window": {"window_days": chg_window, **metrics["chg_window"]},
         "change_1d": metrics["chg1"],
         "history_period": _period(days),
     }
@@ -329,10 +346,18 @@ def futures_reading(positions: Sequence[Mapping[str, Any]], index_daily: Sequenc
 
 # ---- 讀數 1：那斯達克 ----
 
-def _known_us(series: Sequence[Mapping[str, Any]], base_date: str, edition: str) -> list[tuple[str, float]]:
-    """晚間版看得到的是基準日前一晚（美國日期早於基準日）的收盤；晨間版多看得到基準日當晚。"""
-    rows = sorted((str(row["date"]), float(row["close"])) for row in series if row.get("close") is not None)
-    return [row for row in rows if (row[0] <= base_date if edition == "morning" else row[0] < base_date)]
+def _us_before(base_date: str, edition: str, us_before: str | None) -> str:
+    """看得到「美國日期早於這一天」的收盤。晚間版是基準日；晨間版是下一個台股開盤日（呼叫端給，
+    例如週四基準、週五休市、週一開盤時看得到美股週五收盤）；沒給就當成基準日隔天。"""
+    if us_before:
+        return us_before
+    if edition == "morning":
+        return (date.fromisoformat(base_date) + timedelta(days=1)).isoformat()
+    return base_date
+
+
+def _known_us(series: Sequence[Mapping[str, Any]], before: str) -> list[tuple[str, float]]:
+    return [row for row in _series(series) if row[0] < before]
 
 
 _NASDAQ_LABELS = ("跌逾 1.5%", "跌 0.5～1.5%", "±0.5% 內", "漲 0.5～1.5%", "漲逾 1.5%")
@@ -352,17 +377,18 @@ def _nasdaq_bucket(change_pct: float) -> int:
 
 
 def nasdaq_reading(nasdaq: Sequence[Mapping[str, Any]], proxy_daily: Sequence[Mapping[str, Any]],
-                   daily_flow: Sequence[Mapping[str, Any]], base_date: str, edition: str = "evening") -> dict[str, Any]:
+                   daily_flow: Sequence[Mapping[str, Any]], base_date: str, edition: str = "evening",
+                   us_before: str | None = None) -> dict[str, Any]:
     """讀數 1。``nasdaq``：美國日期與收盤；``proxy_daily``：0050 的 date、open、close、reference（參考價）。
 
     歷史統計：每個台股交易日配上它前一個美股交易日的那斯達克漲跌，分五區算那個台股交易日的外資賣超機率、
     開盤跳空（開盤 ÷ 參考價）與盤中漲跌（收盤 ÷ 開盤）。參考價已經扣掉除權息與分割，這些日子不會算出假的跳空。"""
-    known = _known_us(nasdaq, base_date, edition)
+    known = _known_us(nasdaq, _us_before(base_date, edition, us_before))
     if len(known) < 2:
         return _missing("那斯達克收盤還沒接上或不足兩天（來源屬 D 票）")
     (_, prev_close), (last_day, last_close) = known[-2], known[-1]
     change = (last_close / prev_close - 1) * 100
-    all_us = sorted((str(row["date"]), float(row["close"])) for row in nasdaq if row.get("close") is not None)
+    all_us = _series(nasdaq)
     us_change = {all_us[i][0]: (all_us[i][1] / all_us[i - 1][1] - 1) * 100 for i in range(1, len(all_us))}
     us_days = sorted(us_change)
     proxy = {str(row["date"]): row for row in proxy_daily}
@@ -392,8 +418,11 @@ def nasdaq_reading(nasdaq: Sequence[Mapping[str, Any]], proxy_daily: Sequence[Ma
                       "intraday_mean_pct": None if not slot["intraday"] else _pct(_mean(slot["intraday"])),
                       "price_days": len(slot["gap"])})
     proxy_days = [day for day in sorted(proxy) if day <= base_date]
+    # 統計表是「這種美股收盤之後的那一個台股交易日」：晚間版那一天就是基準日（已經收盤，用來解釋今天），
+    # 晨間版才是下一個交易日（要預測的那天）。
     return {"status": "ok", "us_close_date": last_day, "change_pct": round(change, 2),
             "range": _NASDAQ_LABELS[_nasdaq_bucket(change)],
+            "taiwan_day_it_applies_to": "基準日（已收盤）" if edition != "morning" else "基準日的下一個交易日",
             "history": {"next_taiwan_day_by_range": table, "proxy": PARAMETERS["nasdaq"]["proxy_code"],
                         "period": _period(proxy_days)}}
 
@@ -411,30 +440,28 @@ def _corr(xs: Sequence[float], ys: Sequence[float]) -> float | None:
 
 
 def dollar_reading(dollar_index: Sequence[Mapping[str, Any]], usdtwd: Sequence[Mapping[str, Any]],
-                   daily_flow: Sequence[Mapping[str, Any]], base_date: str, edition: str = "evening") -> dict[str, Any]:
+                   daily_flow: Sequence[Mapping[str, Any]], base_date: str, edition: str = "evening",
+                   us_before: str | None = None) -> dict[str, Any]:
     """讀數 4。美元指數是美國日期（晚間版看前一晚）；美元兌台幣是台灣日期（看得到基準日當天）。
 
     「和外資同向」指照常見的關係走：美元（或美元兌台幣）近 20 日上升、外資近 20 日累計賣超，或反過來。
     外資近 20 日累計和讀數 2 同一套算法（股數 × 收盤的加總）。"""
     window = PARAMETERS["dollar"]["window"]
     flow = [row for row in daily_flow if str(row["date"]) <= base_date]
-    if not flow or flow[-1]["date"] != base_date or len(flow) < window:
+    if not flow or str(flow[-1]["date"]) != base_date or len(flow) < window:
         return _missing("外資買賣超截止日不是基準日或不足二十天")
     dates = [str(row["date"]) for row in flow]
     foreign = [float(row["foreign"]) for row in flow]
     turnover = [float(row["turnover"]) for row in flow]
-    f20 = {}
-    for t in range(window - 1, len(flow)):
-        amount = sum(turnover[t - window + 1:t + 1])
-        if amount:
-            f20[dates[t]] = sum(foreign[t - window + 1:t + 1]) / amount
+    f20 = {dates[t]: share for t in range(len(flow))
+           if (share := _cumulative_share(foreign, turnover, t, window)) is not None}
     today_f20 = sum(foreign[-window:])
     out: dict[str, Any] = {"status": "ok", "foreign_20d_net_billion": round(today_f20, 2),
                            "dividend_season": int(base_date[5:7]) in PARAMETERS["dollar"]["dividend_months"]}
     for key, series, us_dated in (("dollar_index", dollar_index, True), ("usd_twd", usdtwd, False)):
-        rows = sorted((str(row["date"]), float(row["close"])) for row in series if row.get("close") is not None)
-        sees_same_day = not us_dated or edition == "morning"
-        known = [row for row in rows if (row[0] <= base_date if sees_same_day else row[0] < base_date)]
+        rows = _series(series)
+        known = (_known_us(series, _us_before(base_date, edition, us_before)) if us_dated
+                 else [row for row in rows if row[0] <= base_date])
         if len(known) <= window:
             out[key] = {"status": "missing", "reason": "資料還沒接上或不足二十一天（來源屬 D 票）"}
             continue
@@ -477,30 +504,48 @@ def build_layer(*, base_date: str, index_daily: Sequence[Mapping[str, Any]],
                 daily_flow: Sequence[Mapping[str, Any]], futures_positions: Sequence[Mapping[str, Any]],
                 proxy_daily: Sequence[Mapping[str, Any]] = (), nasdaq: Sequence[Mapping[str, Any]] = (),
                 dollar_index: Sequence[Mapping[str, Any]] = (), usdtwd: Sequence[Mapping[str, Any]] = (),
-                edition: str = "evening", sources: Mapping[str, Any] | None = None) -> dict[str, Any]:
+                edition: str = "evening", us_before: str | None = None, nasdaq_in_prompt: bool = False,
+                sources: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """交給 Gemini 的外資層（六個讀數）。缺資料的讀數標 missing 並寫原因，其他照給；預測照樣寫。
 
-    那斯達克、美元指數、美元兌台幣的來源屬 D 票，接上之前讀數 1、4 是 missing。"""
+    那斯達克、美元指數、美元兌台幣的來源屬 D 票，接上之前讀數 1、4 是 missing。
+    ``nasdaq_in_prompt`` 是 False 時（那斯達克來源 EODHD 條款只允許私用，本人還沒決定），讀數 1 在這一層標
+    withheld，算好的內容放在 ``record_only``：**呼叫端要把它拿出來，只存進紀錄、不放進模型輸入**。"""
     spot = spot_readings(daily_flow, base_date)
+    nasdaq_full = nasdaq_reading(nasdaq, proxy_daily, daily_flow, base_date, edition, us_before)
+    record_only: dict[str, Any] = {}
+    nasdaq_shown = nasdaq_full
+    if not nasdaq_in_prompt and nasdaq_full.get("status") == "ok":
+        record_only["nasdaq_last_session"] = nasdaq_full
+        nasdaq_shown = {"status": "withheld", "reason": "來源條款只允許私用，本人決定前不交給模型"}
     layer = {
         "schema": SCHEMA,
         "version": VERSION,
         "base_date": base_date,
         "edition": edition,
         "readings": {
-            "nasdaq_last_session": nasdaq_reading(nasdaq, proxy_daily, daily_flow, base_date, edition),
+            "nasdaq_last_session": nasdaq_shown,
             "streak_and_cumulative": spot["streak_and_cumulative"],
             "tsmc_split": spot["tsmc_split"],
-            "dollar_and_twd_vs_foreign": dollar_reading(dollar_index, usdtwd, daily_flow, base_date, edition),
+            "dollar_and_twd_vs_foreign": dollar_reading(dollar_index, usdtwd, daily_flow, base_date, edition,
+                                                        us_before),
             "index_vs_year_and_quarter_lines": trend_reading(index_daily, base_date),
             "futures_net_position": futures_reading(futures_positions, index_daily, base_date),
         },
-        "notes": dict(NOTES),
+        "notes": None,
         "units": {"amount": "億元（上市個股外資買賣超股數 × 當日收盤的加總，近似值）", "futures": "口（大台＋小台÷4）",
                   "percent": "%"},
         "sources": dict(sources or {}),
     }
-    layer["missing"] = [key for key, value in layer["readings"].items() if value.get("status") != "ok"]
+    layer["missing"] = [key for key, value in layer["readings"].items() if value.get("status") == "missing"]
+    layer["withheld"] = [key for key, value in layer["readings"].items() if value.get("status") == "withheld"]
+    # 讀數缺的時候不給它的說明（例如海外來源還沒接上時不提那斯達克、美元，免得模型去引用不存在的資料）。
+    note_of = {"nasdaq_last_session": "nasdaq", "streak_and_cumulative": "spot", "tsmc_split": "spot",
+               "dollar_and_twd_vs_foreign": "dollar", "index_vs_year_and_quarter_lines": "trend",
+               "futures_net_position": "futures"}
+    present = {note_of[key] for key, value in layer["readings"].items() if value.get("status") == "ok"}
+    layer["notes"] = {key: text for key, text in NOTES.items() if key in present}
+    layer["record_only"] = record_only
     return layer
 
 
@@ -510,13 +555,13 @@ def aggregate_day(foreign_shares: Mapping[str, float], quotes: Mapping[str, tupl
                   tsmc_code: str = PARAMETERS["spot"]["tsmc_code"]) -> dict[str, Any]:
     """一天的外資金額彙總。``foreign_shares``：代號 → 外資買賣超股數；``quotes``：代號 → (收盤, 成交金額元)。
 
-    沒有收盤價的股票不計（金額算不出來）；成交金額是個股日線全部加總。"""
+    沒有收盤價的股票不計（金額算不出來），成交金額也只加有收盤價的，兩邊同一批股票。"""
     amounts = {code: shares * quotes[code][0] for code, shares in foreign_shares.items()
                if code in quotes and quotes[code][0] is not None and shares}
     return {
         "foreign": round(sum(amounts.values()) / 1e8, 4),
         "foreign_tsmc": round(amounts.get(tsmc_code, 0.0) / 1e8, 4),
-        "turnover": round(sum(turnover for _, turnover in quotes.values()) / 1e8, 4),
+        "turnover": round(sum(turnover for close, turnover in quotes.values() if close is not None) / 1e8, 4),
         "n_buy": sum(1 for value in amounts.values() if value > 0),
         "n_sell": sum(1 for value in amounts.values() if value < 0),
     }
@@ -585,25 +630,23 @@ def t86_foreign_shares(payload: Mapping[str, Any]) -> dict[str, float]:
 
 def build_flow_seed(t86_dir: Path | str, stock_db: Path | str, out: Path | str = FLOW_SEED) -> dict[str, Any]:
     """把下載好的 T86 原件（``YYYYMMDD.json.gz``）× 個股日線算成每天的外資彙總，寫成起始資料。"""
-    import gzip
-
     rows, sources, skipped = [], [], []
     with closing(_connect_ro(stock_db)) as stock:
         for path in sorted(Path(t86_dir).glob("*.json.gz")):
             day = f"{path.name[:4]}-{path.name[4:6]}-{path.name[6:8]}"
             data = path.read_bytes()
-            payload = json.loads(gzip.decompress(data).decode("utf-8"))
+            t86 = json.loads(gzip.decompress(data).decode("utf-8"))
             quotes = _quotes_of(stock, day)
             if not quotes:
                 skipped.append(path.name)
                 continue
-            rows.append({"date": day, **aggregate_day(t86_foreign_shares(payload), quotes)})
+            rows.append({"date": day, **aggregate_day(t86_foreign_shares(t86), quotes)})
             sources.append([path.name, hashlib.sha256(data).hexdigest()])
-    payload = {"schema": FLOW_SEED_SCHEMA, "unit": "億元（外資買賣超股數 × 當日收盤，只含上市）",
-               "source_url": "https://www.twse.com.tw/rwd/zh/fund/T86（selectType=ALLBUT0999）",
-               "sources": sources, "rows": rows}
+    seed = {"schema": FLOW_SEED_SCHEMA, "unit": "億元（外資買賣超股數 × 當日收盤，只含上市）",
+            "source_url": "https://www.twse.com.tw/rwd/zh/fund/T86（selectType=ALLBUT0999）",
+            "sources": sources, "rows": rows}
     Path(out).parent.mkdir(parents=True, exist_ok=True)
-    Path(out).write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
+    Path(out).write_text(json.dumps(seed, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
     return {"days": len(rows), "from": rows[0]["date"] if rows else None, "to": rows[-1]["date"] if rows else None,
             "skipped": skipped}
 

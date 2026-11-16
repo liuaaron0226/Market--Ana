@@ -418,6 +418,9 @@ def write_forecast(
         "input": model_input, "input_sha256": input_sha,
         "attempts": [],
     }
+    if data.get("record_only"):
+        # 只存進紀錄、不交給模型（例如來源條款只允許私用的海外資料）；跟著整筆一起封存。
+        record["record_only"] = copy.deepcopy(dict(data["record_only"]))
 
     def finish(kind: str, **fields: Any) -> dict[str, Any]:
         record.update(kind=kind, locked_at=clock().astimezone(TAIPEI).isoformat(), **fields)
