@@ -226,6 +226,8 @@ class FriendStockRunTests(Fixture):
         result = self.run_all()
         cat = rows_by(result, CAT)
         self.assertEqual((cat["stock"]["status"], cat["stock"]["content"], cat["stock"]["error_code"]), ("no_holdings", None, None))
+        self.assertIsNone(cat["stock"]["total_tokens"])  # 沒呼叫就沒有用量，不重複記大盤那次的
+        self.assertEqual(cat["market"]["total_tokens"], 1020)
         self.assertEqual({cat["market"]["status"], cat["flow"]["status"]}, {"generated"})
         self.assertEqual(result["keys"][CAT], {"outcome": "success", "reason": None})
         cat_calls = [call for call in self.gemini.calls if call["api_key"] == "KEY-cat"]

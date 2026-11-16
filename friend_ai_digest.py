@@ -143,8 +143,9 @@ def _friend_failure_rows(payload: dict[str, Any], model: str, usage: dict[str, i
     return [_row(payload, digest_type, "market", "unproduced", None, model, usage, error_code) for digest_type in SECTIONS]
 
 
-def _no_holdings_row(payload: dict[str, Any], model: str, usage: dict[str, int | None]) -> dict[str, Any]:
-    return _row(payload, "stock", "*", "no_holdings", None, model, usage)
+def _no_holdings_row(payload: dict[str, Any], model: str) -> dict[str, Any]:
+    # 沒有呼叫個股判斷：用量留空，不重複記大盤那次呼叫的 token 數。
+    return _row(payload, "stock", "*", "no_holdings", None, model, dict(EMPTY_USAGE))
 
 
 def _stock_row(payload: dict[str, Any], rows: list[dict[str, Any]], model: str, usage: dict[str, int | None]) -> dict[str, Any]:
@@ -179,7 +180,7 @@ def _holds_stocks(payload: dict[str, Any]) -> bool:
 def _failure_rows_for(payload: dict[str, Any], model: str, usage: dict[str, int | None], error_code: str) -> list[dict[str, Any]]:
     if _holds_stocks(payload):
         return _holder_failure_rows(payload, model, usage, error_code)
-    return [*_friend_failure_rows(payload, model, usage, error_code), _no_holdings_row(payload, model, usage)]
+    return [*_friend_failure_rows(payload, model, usage, error_code), _no_holdings_row(payload, model)]
 
 
 def _friend_validated_rows(payload, structured, model, usage):
@@ -205,7 +206,7 @@ def _digest_one(payload: dict[str, Any], api_key: str, *, post: Callable, model:
         call_model=lambda prompt, chosen: call_gemini(prompt, chosen, api_key=api_key, post=post, url_template=url_template),
         validate=_friend_validated_rows, failure_rows=_friend_failure_rows,
     )
-    return {**result, "rows": [*result["rows"], _no_holdings_row(payload, model, result["usage"])]}
+    return {**result, "rows": [*result["rows"], _no_holdings_row(payload, model)]}
 
 
 def _failed(payload: dict[str, Any], model: str, code: str, error: Exception) -> dict[str, Any]:
