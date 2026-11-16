@@ -548,8 +548,31 @@ def _compatibility_rows(data_date: str, analyzer: Callable[..., dict]) -> list[d
     return [{"code": "0050", "as_of": payload["as_of"], "payload": payload}]
 
 
+def attach_news(securities: Sequence[dict], analyses: Sequence[dict], *, data_date: str,
+                raw_dir: Path | None = None, skipped: list | None = None) -> list[dict]:
+    """個股頁事實區塊 D 票：**直接改** analyses 裡的事實資料（加產業別與「消息」），
+    並回傳重大訊息整理成的種子列（每檔一列、近 90 天、分析範圍內）。
+
+    公告是附加內容：某一份原件讀不了就跳過那一份（記進 skipped），其他照常；分析與「消息」按鈕不受影響。"""
+    import announcements
+    from twon_analysis.facts import with_news
+
+    industry = {row["code"]: row.get("industry") for row in securities}
+    for row in analyses:
+        payload = row.get("payload")
+        if isinstance(payload, dict) and isinstance(payload.get("facts"), dict):
+            payload["facts"] = with_news(payload["facts"], industry=industry.get(row["code"]))
+    try:
+        rows = announcements.collect(raw_dir or announcements.RAW_DIR, as_of=data_date, codes=set(industry), skipped=skipped)
+    except Exception as error:  # noqa: BLE001 — 附加內容，任何意外都不能擋住發布
+        if skipped is not None:
+            skipped.append(f"collect: {type(error).__name__}")
+        return []
+    return announcements.seed_rows(rows, as_of=data_date)
+
+
 def _write_seed_jsonl(path: Path, manifest: dict, securities: Iterable[dict], analyses: Iterable[dict],
-                      outside: Iterable[dict] = ()) -> None:
+                      outside: Iterable[dict] = (), announcements: Iterable[dict] = ()) -> None:
     with path.open("w", encoding="utf-8", newline="\n") as output:
         output.write(_compact_json({"type": "version", "data": manifest}) + "\n")
         for row in securities:
@@ -558,6 +581,8 @@ def _write_seed_jsonl(path: Path, manifest: dict, securities: Iterable[dict], an
             output.write(_compact_json({"type": "stock_analysis", "data": row}) + "\n")
         for row in outside:
             output.write(_compact_json({"type": "universe_outside", "data": row}) + "\n")
+        for row in announcements:
+            output.write(_compact_json({"type": "stock_announcement", "data": row}) + "\n")
 
 
 LEGACY_PACK = ROOT / "cloud/.stock-pack.json"
@@ -703,6 +728,11 @@ def build_version(
             "outside_reasons": dict(sorted(Counter(row["reason"] for row in outside).items())),
         },
     }
+    # 個股頁事實區塊 D 票：事實資料加產業別與「消息」，重大訊息整理成每檔一列（近 90 天、分析範圍內）。
+    announcement_skipped: list = []
+    announcement_rows = attach_news(securities, analyses, data_date=data_date, skipped=announcement_skipped)
+    manifest["announcement_count"] = len(announcement_rows)
+    manifest["announcement_skipped"] = announcement_skipped
     _validate_seed(manifest, securities, analyses)
 
     database = partial / "staging.sqlite"
@@ -716,7 +746,7 @@ def build_version(
         connection.close()
 
     seed = partial / "seed.jsonl"
-    _write_seed_jsonl(seed, manifest, securities, analyses, outside)
+    _write_seed_jsonl(seed, manifest, securities, analyses, outside, announcement_rows)
     analysis_payload_bytes = sum(len(_compact_json(row["payload"]).encode("utf-8")) for row in analyses)
     largest_payload_bytes = max((len(_compact_json(row["payload"]).encode("utf-8")) for row in analyses), default=0)
     table_rows = 1 + len(securities) + len(analyses) + len(outside) + 1

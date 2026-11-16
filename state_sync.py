@@ -114,8 +114,8 @@ WORKING_SET: tuple[Item, ...] = (
     Item("data/otc-catalog/raw"),
     Item("data/market-snapshots/stock-detail", recent_files=60),  # 上市融資融券與法人明細（個股頁籌碼）
     Item("data/fundamentals/twt93u", recent_files=30),  # 個股頁融資券那一塊要近 20 個交易日走勢與 5 日增減（11-16）
-    # 公司重大訊息的官方快照原件（個股頁事實區塊 D 票）：官方只留前一天、隔天就換掉，全部保留、不得裁（每天幾 KB）。
-    Item("data/announcements/raw"),
+    # 公司重大訊息的官方快照原件不在這裡：工作集整批換新，早上的排程寫進來會被每日更新蓋掉；
+    # 改存 R2 的 announcements/raw/（檔名不重複、只增不改），見 announcements.py 的 daily()。
     Item("data/corporate-actions/events.json"),
     Item("data/corporate-actions/raw/TPEx-exDailyQ"),  # 櫃買除權息原件＋SHA＋涵蓋區間（2016 起全留）
     # 還原價的補充資料（ETF 分割、櫃買減資／面額變更、上市除權息現金股利）；第一次由 seeds/ 的種子起算。

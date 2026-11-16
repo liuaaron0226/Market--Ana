@@ -730,13 +730,8 @@ def tdcc_holders_day(root: Path, day: str, *, get: Callable | None = None) -> di
     return th.refresh(out, get=get or th.http_get)
 
 
-# ---- 公司重大訊息（個股頁事實區塊 D 票）：官方快照只有前一天的、隔天就換掉，抓到就整份存下 ----
-
-def announcements_day(root: Path, *, get: Callable | None = None) -> dict:
-    """上市、上櫃各抓一次當日快照存進 data/announcements/raw；一個市場失敗只記錄，不丟例外。"""
-    import announcements
-
-    return {"status": "ok", "markets": announcements.fetch(root / "data/announcements/raw", get=get)}
+# 公司重大訊息（個股頁事實區塊 D 票）不在這裡抓：每日更新工作流程在這之前先跑 `announcements.py daily --r2`，
+# 補齊 R2 上的原件、抓當日、把新的傳回 R2。在這裡再抓一次只會存在本機、不會進雲端。
 
 
 # ---- 每日協調器呼叫的兩個入口 ----
@@ -744,7 +739,7 @@ def announcements_day(root: Path, *, get: Callable | None = None) -> dict:
 REQUIRED_DATASETS = ("listed_quotes", "otc_quotes", "listed_institutional", "otc_institutional")
 OPTIONAL_DATASETS = ("otc_index", "twse_valuation", "tpex_valuation", "otc_corporate_actions",
                      "listed_corporate_actions", "capital_supplement", "tdcc_holders",
-                     "fundamentals", "taiex_index", "listed_chip_detail", "announcements")
+                     "fundamentals", "taiex_index", "listed_chip_detail")
 
 
 def _interval(previous: dict | None, sleep: Callable) -> None:
@@ -849,7 +844,6 @@ def fetch_day(day: str, *, root: Path = ROOT, sleep: Callable = time.sleep, incl
     sleep(5.0)
     timed("tdcc_holders", lambda: tdcc_holders_day(root, day))  # 集保另一個網域，不與證交所／櫃買共用間隔
     timed("listed_chip_detail", lambda: {"status": "ok", "datasets": listed_chip_detail_day(root, day, sleep=sleep)})
-    timed("announcements", lambda: announcements_day(root))  # 公開資訊觀測站另一個網域，不與證交所／櫃買共用間隔
     if include_fundamentals:
         timed("fundamentals", lambda: fundamentals_day(data / "fundamentals-history", day))
     blocking = [name for name in REQUIRED_DATASETS if datasets.get(name, {}).get("status") not in

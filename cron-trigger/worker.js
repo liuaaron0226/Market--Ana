@@ -12,6 +12,8 @@ export const JOBS = {
   "30 8": { workflow: "daily-update.yml", slot: "30 8 * * 1-5", inputs: { dry_run: "false" } },    // 16:30
   "0 10": { workflow: "daily-update.yml", slot: "0 10 * * 1-5", inputs: { dry_run: "false" } },    // 18:00
   "30 12": { workflow: "daily-update.yml", slot: "30 12 * * 1-5", inputs: { dry_run: "false" } },  // 20:30
+  // 公司重大訊息的每日原件（個股頁事實區塊 D 票，本人 2026-11-16）：官方快照只留前一天，所以每天都抓、含週末。
+  "0 0": { workflow: "announcements.yml", slot: "0 0 * * *", inputs: {} },                         // 08:00
 };
 
 // 台北日期（YYYY-MM-DD）：dispatch 一律帶日期，不讓 runner 自己猜。

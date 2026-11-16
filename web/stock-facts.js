@@ -6,7 +6,10 @@
   'use strict';
   const TONES = new Set(['up', 'down']);
   // 切換籤的名字與順序（本人選的擺法 A）；出現哪幾個由 facts.blocks 決定，頁面不自己判斷。
-  const TABS = { summary: '重點', institutional: '法人', credit: '融資券', fundamentals: '基本面', technical: '技術' };
+  const TABS = { summary: '重點', institutional: '法人', credit: '融資券', fundamentals: '基本面', news: '消息', technical: '技術' };
+  // 消息那一塊的公告清單：第一次按「消息」才讀，同一檔讀過就不再讀（一次一頁，不會變）。
+  const NEWS_FIRST = 5;
+  const newsCache = new Map();
   const state = { key: '', code: '', block: 'summary' };
 
   const el = (tag, className, text) => {
@@ -254,13 +257,59 @@
     return parts;
   }
 
+  function newsItem(item) {
+    const box = el('details', 'sf-news-item');
+    const summary = el('summary');
+    summary.append(el('span', 'sf-news-when num', `${item.date.slice(5)} ${item.time.slice(0, 5)}`), el('span', 'sf-news-subject', item.subject));
+    box.append(summary);
+    if (item.body) box.append(el('div', 'sf-news-body', item.body));
+    const meta = [item.clause, item.fact_date ? `事實發生日 ${item.fact_date}` : null].filter(Boolean).join('・');
+    if (meta) box.append(el('p', 'sf-news-meta', meta));
+    return box;
+  }
+
+  function fillNews(list, items) {
+    list.replaceChildren(...items.slice(0, NEWS_FIRST).map(newsItem));
+    if (items.length > NEWS_FIRST) {
+      const more = el('button', 'sf-news-more', `更多（共 ${items.length} 則）`);
+      more.type = 'button';
+      more.addEventListener('click', () => {
+        more.remove();
+        list.append(...items.slice(NEWS_FIRST).map(newsItem));
+      });
+      list.append(more);
+    }
+  }
+
+  async function newsItems(code) {
+    if (!newsCache.has(code)) {
+      // 只記住成功的回應；限流或伺服器錯誤不記，下次按「消息」再讀一次。
+      newsCache.set(code, fetch(`/api/stocks/${encodeURIComponent(code)}/announcements`, { cache: 'no-store' })
+        .then(response => { if (!response.ok) throw new Error(String(response.status)); return response.json(); })
+        .then(body => (body?.available && Array.isArray(body.items) ? body.items : []))
+        .catch(() => { newsCache.delete(code); return []; }));
+    }
+    return newsCache.get(code);
+  }
+
+  function newsPanel(facts, code) {
+    const industry = el('div', 'sf-kv');
+    industry.append(el('span', '', '產業'), el('b', '', facts.industry || ''));
+    const list = el('div', 'sf-news');
+    // 讀到之前只有產業別；讀不到或這幾天沒有公告也只有產業別（不放說明文字）。
+    newsItems(code).then(items => { if (list.isConnected) fillNews(list, items); });
+    return [industry, list];
+  }
+
   const PANELS = { summary: summaryPanel, institutional: institutionalPanel, credit: creditPanel, fundamentals: fundamentalsPanel,
-    technical: technicalPanel };
+    news: newsPanel, technical: technicalPanel };
 
   function renderBlocks(facts, code) {
     const host = document.getElementById('stockFactsBlocks');
     if (!host) return;
-    const blocks = (Array.isArray(facts?.blocks) ? facts.blocks : []).filter(name => TABS[name] && facts[name]);
+    // 防呆：清單裡的每一塊都要有對應的內容才出現（「消息」的內容是產業別，公告清單另外讀）。
+    const present = name => (name === 'news' ? Boolean(facts.industry) : Boolean(facts[name]));
+    const blocks = (Array.isArray(facts?.blocks) ? facts.blocks : []).filter(name => TABS[name] && present(name));
     if (!blocks.length) {
       state.key = '';
       state.code = '';
@@ -284,7 +333,7 @@
       state.block = name;
       for (const button of tabs.children) button.setAttribute('aria-pressed', String(button.dataset.block === name));
       try {
-        panel.replaceChildren(...PANELS[name](facts).filter(Boolean));
+        panel.replaceChildren(...PANELS[name](facts, code).filter(Boolean));
       } catch (_) {
         panel.replaceChildren();
       }

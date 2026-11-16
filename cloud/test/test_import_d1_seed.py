@@ -15,7 +15,8 @@ from cloud import import_d1_seed as importer
 
 
 ROOT = Path(__file__).resolve().parents[2]
-MIGRATIONS = sorted((ROOT / "cloud" / "migrations").glob("000[1-4]_*.sql"))
+MIGRATIONS = (sorted((ROOT / "cloud" / "migrations").glob("000[1-4]_*.sql"))
+              + [ROOT / "cloud" / "migrations" / "0013_stock_announcements.sql"])
 EXAMPLE = json.loads((ROOT / "cloud" / "test" / "fixtures" / "stock-analysis-v2.example.json").read_text(encoding="utf-8"))
 PROTECTED = ("users", "audit", "eval_keys", "api_hits", "d1_migrations")
 VERSION = "liquid-20261108-test-v2"
@@ -29,7 +30,13 @@ def _payload(code: str, market: str, kind: str = "common", name: str = "測試")
     return payload
 
 
-def write_seed(directory: Path, *, analyses: int = 3, outside: int = 4) -> Path:
+def announcement_payload(code: str, subjects: list) -> dict:
+    return {"schema": "stock-announcements/v1", "code": code, "items": [
+        {"market": "上市", "code": code, "date": "2026-11-05", "time": f"1{i}:00:00", "subject": subject,
+         "clause": "第51款", "fact_date": "2026-11-05", "body": "說明 it's ' \\ 全文"} for i, subject in enumerate(subjects)]}
+
+
+def write_seed(directory: Path, *, analyses: int = 3, outside: int = 4, announcements: dict | None = None) -> Path:
     manifest = {
         "version": VERSION, "source_date": "2026-11-08", "source_url": "https://example.test/isin",
         "source_sha256": "b" * 64, "built_at": "2026-11-08T18:55:35Z", "catalog_count": analyses - 1,
@@ -54,6 +61,9 @@ def write_seed(directory: Path, *, analyses: int = 3, outside: int = 4) -> Path:
         lines.append({"type": "universe_outside", "data": {
             "code": f"{2101 + index}", "name": f"外{index}", "market": "上市",
             "universe_rank": 500 + index, "reason": "below_rank", "universe_rule": "liquid-v1"}})
+    for code, subjects in (announcements or {}).items():
+        lines.append({"type": "stock_announcement", "data": {"code": code, "as_of": "2026-11-06",
+                                                             "payload": announcement_payload(code, subjects)}})
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "seed.jsonl").write_text(
         "\n".join(json.dumps(line, ensure_ascii=False) for line in lines) + "\n", encoding="utf-8")
@@ -228,9 +238,9 @@ class ProgressTest(unittest.TestCase):
 
 
 def write_variant(directory: Path, *, version: str, change_code: str | None = None, drop_outside: int = 0,
-                  extra_outside: int = 0) -> Path:
+                  extra_outside: int = 0, announcements: dict | None = None) -> Path:
     """以 write_seed 為底產生新版本：可改一檔分析、刪減或增加名單外列，其餘逐列相同。"""
-    base_dir = write_seed(directory)
+    base_dir = write_seed(directory, announcements=announcements)
     lines = [json.loads(line) for line in (base_dir / "seed.jsonl").read_text(encoding="utf-8").splitlines() if line]
     lines[0]["data"]["version"] = version
     out = []
@@ -340,6 +350,68 @@ class IncrementalTest(unittest.TestCase):
         apply_batches(connection, batches)
         with self.assertRaises(sqlite3.IntegrityError):
             connection.executescript(importer.activate_sql(self.new, "2026-11-09T00:00:00Z"))
+
+
+class AnnouncementTest(unittest.TestCase):
+    """個股頁事實區塊 D 票：重大訊息跟著同一個版本走，每檔一列（內容是那一檔近 90 天的清單）。"""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_full_import_stores_one_row_per_code_with_the_list(self) -> None:
+        seed = importer.load_seed(write_seed(self.root / "s", announcements={"1101": ["董事會決議", "法說會"], "1102": ["更名"]}))
+        connection = fresh_db()
+        apply_batches(connection, importer.plan_batches(seed))
+        stored = dict(connection.execute("SELECT code, payload FROM stock_announcements WHERE version = ?", (VERSION,)).fetchall())
+        self.assertEqual(sorted(stored), ["1101", "1102"])
+        self.assertEqual([item["subject"] for item in json.loads(stored["1101"])["items"]], ["董事會決議", "法說會"])
+
+    def test_incremental_copies_unchanged_lists_and_sends_changed_ones(self) -> None:
+        base = importer.load_seed(write_seed(self.root / "base", announcements={"1101": ["董事會決議"], "1102": ["更名"]}))
+        new = importer.load_seed(write_variant(self.root / "new", version="liquid-20261109-test-v2", change_code="1102",
+                                               drop_outside=0, extra_outside=0,
+                                               announcements={"1101": ["董事會決議"], "1102": ["更名", "新的一則"]}))
+        _, stats = importer.plan_incremental(new, base)
+        self.assertEqual((stats["copied"]["stock_announcements"], stats["sent"]["stock_announcements"]), (1, 1))
+        connection = fresh_db()
+        apply_batches(connection, importer.plan_batches(base))
+        connection.executescript(importer.activate_sql(base, "2026-11-08T00:00:00Z"))
+        batches, _ = importer.plan_incremental(new, base)
+        apply_batches(connection, batches)
+        rows = dict(connection.execute("SELECT code, payload FROM stock_announcements WHERE version = ?", (new.version,)).fetchall())
+        self.assertEqual([item["subject"] for item in json.loads(rows["1102"])["items"]], ["更名", "新的一則"])
+        self.assertEqual(len(json.loads(rows["1101"])["items"]), 1)
+
+    def test_a_base_from_before_announcements_existed_sends_everything(self) -> None:
+        base = importer.load_seed(write_seed(self.root / "base"))
+        new = importer.load_seed(write_variant(self.root / "new", version="liquid-20261109-test-v2", change_code="1102",
+                                               drop_outside=0, extra_outside=0, announcements={"1101": ["董事會決議"]}))
+        _, stats = importer.plan_incremental(new, base)
+        self.assertEqual((stats["copied"]["stock_announcements"], stats["sent"]["stock_announcements"]), (0, 1))
+
+    def test_batches_for_a_table_the_database_does_not_have_yet_are_left_out(self) -> None:
+        # 程式先上線、資料庫變更檔還沒套：公告的批次拿掉，其他照常；套好之後下一次發布自然開始寫。
+        seed = importer.load_seed(write_seed(self.root / "s", announcements={"1101": ["董事會決議"]}))
+        batches = importer.plan_batches(seed)
+        kept, skipped = importer.drop_missing_tables(batches, existing={"stock_data_versions", "listed_securities",
+                                                                        "stock_analysis", "universe_outside"})
+        self.assertEqual(skipped, ["stock_announcements"])
+        self.assertEqual([b.table for b in kept if b.table == "stock_announcements"], [])
+        self.assertEqual(len(kept), len(batches) - 1)
+        all_kept, none_skipped = importer.drop_missing_tables(batches, existing=set(importer.STAGING_TABLES))
+        self.assertEqual((len(all_kept), none_skipped), (len(batches), []))
+
+    def test_announcement_lists_never_touch_protected_tables(self) -> None:
+        seed = importer.load_seed(write_seed(self.root / "s", announcements={"1101": ["DROP TABLE users; --"]}))
+        sql = "".join(batch.sql for batch in importer.plan_batches(seed))
+        connection = fresh_db()
+        apply_batches(connection, importer.plan_batches(seed))
+        self.assertEqual(connection.execute("SELECT COUNT(*) FROM users").fetchone()[0], 1)
+        self.assertNotRegex(sql, r"(?i)\bDROP\s+TABLE\s+(?!users; --)")
 
 
 class GroupingTest(unittest.TestCase):

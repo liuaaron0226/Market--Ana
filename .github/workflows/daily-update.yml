@@ -145,6 +145,16 @@ jobs:
       - name: 從 R2 還原工作集
         run: python state_sync.py restore --target .
 
+      - name: 公司重大訊息：補齊原件、抓當日、存回 R2
+        # 個股頁事實區塊 D 票：原件另存在 R2 的 announcements/raw/（不在工作集），建置前先補齊才有近 90 天。
+        # 失敗不擋發布：網站只是少了當天新增的公告。
+        # 試跑只下載與在本機抓，不寫 R2（daily_update.py 的 --dry-run 也只跑不會動到遠端的步驟）。
+        continue-on-error: true
+        env:
+          DRY_RUN: ${{ steps.day.outputs.dry_run }}
+        run: |
+          if [ -n "$DRY_RUN" ]; then python announcements.py daily --r2 --no-upload; else python announcements.py daily --r2; fi
+
       - name: 每日更新
         id: run
         env:

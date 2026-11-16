@@ -4,17 +4,36 @@ import { JOBS, dispatch, taipeiDate } from "./worker.js";
 
 const env = { GITHUB_DISPATCH_TOKEN: "t" };
 
-test("wrangler.toml 的四個時段都有對應工作，且星期用 MON-FRI（Cloudflare 的 1 是週日，1-5 會漏掉週五）", async () => {
+const DAILY_UPDATE_JOBS = () => Object.values(JOBS).filter(job => job.workflow === "daily-update.yml");
+
+test("wrangler.toml 的每個時段都有對應工作；每日更新的四個用 MON-FRI（Cloudflare 的 1 是週日，1-5 會漏掉週五）", async () => {
   const { readFileSync } = await import("node:fs");
   const toml = readFileSync(new URL("./wrangler.toml", import.meta.url), "utf8");
   const crons = [...toml.match(/crons = \[(.*)\]/)[1].matchAll(/"([^"]+)"/g)].map(m => m[1]);
-  assert.equal(crons.length, 4);
+  assert.equal(crons.length, 5);
   for (const cron of crons) {
     const [minute, hour, , , weekday] = cron.split(" ");
-    assert.equal(weekday, "MON-FRI", cron);
-    assert.ok(JOBS[`${minute} ${hour}`], cron);
+    const job = JOBS[`${minute} ${hour}`];
+    assert.ok(job, cron);
+    assert.equal(weekday, job.workflow === "daily-update.yml" ? "MON-FRI" : "*", cron);
   }
-  assert.equal(Object.keys(JOBS).length, 4);
+  assert.equal(Object.keys(JOBS).length, 5);
+  assert.equal(DAILY_UPDATE_JOBS().length, 4);
+});
+
+test("重大訊息每天（含週末）台北 8:00 觸發，只送 announcements.yml 宣告過的參數", async () => {
+  const { readFileSync } = await import("node:fs");
+  const workflow = readFileSync(new URL("../.github/workflows/announcements.yml", import.meta.url), "utf8");
+  const declared = [...workflow.split("  workflow_dispatch:\n")[1].split("\npermissions:")[0].matchAll(/^      ([a-z_]+):$/gm)].map(m => m[1]);
+  let url, body;
+  const result = await dispatch("0 0 * * *", Date.parse("2026-11-15T00:00:00Z"), env, async (u, init) => {   // 週日
+    url = u; body = JSON.parse(init.body); return { status: 204 };
+  });
+  assert.equal(result.dispatched, "announcements.yml");
+  assert.match(url, /workflows\/announcements\.yml\/dispatches$/);
+  assert.equal(body.inputs.date, "2026-11-15");
+  for (const key of Object.keys(body.inputs)) assert.ok(declared.includes(key), `workflow rejects unknown input ${key}`);
+  assert.ok(!("dry_run" in body.inputs));
 });
 
 test("Cloudflare 不論怎麼回報星期欄位，都送出 daily_update.py 認得的時段字串", async () => {
@@ -35,7 +54,7 @@ test("送出的時段字串與 daily_update.py 的 RETRY_SLOTS 完全一致", as
   const python = readFileSync(new URL("../daily_update.py", import.meta.url), "utf8");
   const block = python.split("RETRY_SLOTS = {")[1].split("}")[0];
   const expected = [...block.matchAll(/"([^"]+)":/g)].map(m => m[1]).sort();
-  assert.deepEqual(Object.values(JOBS).map(job => job.slot).sort(), expected);
+  assert.deepEqual(DAILY_UPDATE_JOBS().map(job => job.slot).sort(), expected);
 });
 
 test("台北日期：UTC 07:30 是台北同一天 15:30", () => {

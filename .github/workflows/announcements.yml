@@ -1,0 +1,46 @@
+# 公司重大訊息的每日原件（個股頁事實區塊 D 票；本人 2026-11-16 定案「每天早上另抓一次」）。
+# 官方快照只有「前一天」的公告、隔天就換掉，每日更新只在交易日跑會漏掉週五與週六的公告；
+# 這裡每天（含週末連假）台北 8:00 由 cron-trigger 觸發，只抓兩份官方 CSV、原件存進 R2 的 announcements/raw/。
+# 不碰網站、不碰工作集（工作集整批換新，會被每日更新蓋掉）；網站上的公告仍隨每日更新發布。
+# 只接受 cron-trigger 的 workflow_dispatch：排程何時生效由部署 cron-trigger 決定（本人要求部署前先問），
+# 不另放 GitHub schedule（推上 main 就會自己開始跑）。重跑沒有副作用：同內容不重存、雲端已有的檔案不覆蓋。
+name: announcements
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: 台北日期（cron-trigger 帶入，僅供紀錄）
+        required: false
+      trigger_source:
+        description: 觸發來源
+        required: false
+      trigger_slot:
+        description: 觸發時段
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: announcements-raw
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: market-ana-state
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: 安裝相依
+        run: python -m pip install requests
+      - name: 補齊原件、抓當日快照、存回 R2
+        run: python announcements.py daily --r2

@@ -199,6 +199,17 @@ def _technical_block(close: float, indicators: dict) -> dict | None:
             'kd_k': indicators.get('k9'), 'kd_d': indicators.get('d9')}
 
 
+def with_news(facts: dict | None, *, industry: str | None) -> dict | None:
+    """建置版本時加上產業別與「消息」按鈕（產業別來自名錄，分析時不知道）。公告清單另由讀取入口提供。
+
+    「消息」排在「技術」前面（本人選的擺法 A 的順序）；沒有產業別（例如不在名錄的 0050）就不加。"""
+    if not facts or not industry:
+        return facts
+    blocks = [name for name in facts.get("blocks", []) if name != "news"]
+    at = blocks.index("technical") if "technical" in blocks else len(blocks)
+    return {**facts, "industry": industry, "blocks": blocks[:at] + ["news"] + blocks[at:]}
+
+
 def build_facts(*, data_date: str, close: float, chg_pct: float | None, indicators: dict, institutional: list[dict],
                 trading_days: list[str] | None = None, credit: dict | None = None, valuation: dict | None = None,
                 revenue: list[dict] | None = None) -> dict:

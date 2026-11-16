@@ -125,3 +125,61 @@ test("正式環境設定（wrangler.jsonc）裡事實區塊是關的", () => {
   const text = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8").replace(/^\s*\/\/.*$/gm, "");
   assert.equal(releasePolicy(JSON.parse(text).vars).features.stock_facts_v1, false);
 });
+
+
+// ---------- 重大訊息（D 票）：/api/stocks/<代號>/announcements，跟著事實區塊的開關 ----------
+const ITEMS = [
+  { market: "上市", code: "2330", name: "台積電", date: "2026-11-15", time: "17:47:06", subject: "董事會決議", clause: "第14款", fact_date: "2026-11-15", body: "說明全文" },
+  { market: "上市", code: "2330", name: "台積電", date: "2026-11-03", time: "07:00:04", subject: "法說會", clause: "第12款", fact_date: "2026-11-20", body: null },
+];
+
+async function seedAnnouncements() {
+  await env.DB.prepare("INSERT INTO stock_data_versions (version, source_date, source_url, source_sha256, built_at, catalog_count, analysis_count) VALUES ('v-1', '2026-11-16', 'u', ?, '2026-11-16T10:00:00Z', 1, 1)")
+    .bind("5".repeat(64)).run();
+  await env.DB.prepare("INSERT INTO stock_data_state (key, active_version, previous_version, updated_at) VALUES ('current', 'v-1', NULL, '2026-11-16T10:00:00Z')").run();
+  await env.DB.prepare("INSERT INTO stock_announcements (version, code, as_of, payload) VALUES ('v-1', '2330', '2026-11-16', ?)")
+    .bind(JSON.stringify({ schema: "stock-announcements/v1", code: "2330", items: ITEMS })).run();
+}
+const announcementsOf = (code, email) => get(`/api/stocks/${code}/announcements`, email);
+
+test("重大訊息：只開站主時站主拿得到這一檔近 90 天的清單（新到舊），其他人拿到「沒有內容」", async () => {
+  await seedAnnouncements();
+  env.MARKET_ANA_STOCK_FACTS = "owner";
+  assert.deepEqual(await announcementsOf("2330", OWNER), { available: true, code: "2330", items: ITEMS });
+  assert.deepEqual(await announcementsOf("2330", FRIEND), { available: false });
+});
+
+test("重大訊息：開關關著時連站主也是「沒有內容」；開給全部時其他獲准使用者也拿得到", async () => {
+  await seedAnnouncements();
+  assert.deepEqual(await announcementsOf("2330", OWNER), { available: false });
+  env.MARKET_ANA_STOCK_FACTS = "all";
+  assert.deepEqual((await announcementsOf("2330", FRIEND)).items, ITEMS);
+});
+
+test("重大訊息：這幾天沒有公告的代號是空清單；資料表還沒建立時也是空清單，不是錯誤", async () => {
+  await seedAnnouncements();
+  env.MARKET_ANA_STOCK_FACTS = "owner";
+  assert.deepEqual(await announcementsOf("1101", OWNER), { available: true, code: "1101", items: [] });
+  env.DB._raw.exec("DROP TABLE stock_announcements");
+  assert.deepEqual(await announcementsOf("2330", OWNER), { available: true, code: "2330", items: [] });
+});
+
+test("重大訊息：未登入擋下、代號格式不對回 400", async () => {
+  env.MARKET_ANA_STOCK_FACTS = "all";
+  const anonymous = await handle(new Request("https://market-ana.pages.dev/api/stocks/2330/announcements"), env, next, deps);
+  assert.equal(anonymous.status, 401);
+  const h = new Headers();
+  h.set("cf-access-jwt-assertion", await issuer.sign(claims(OWNER)));
+  const bad = await handle(new Request("https://market-ana.pages.dev/api/stocks/23%2730/announcements", { headers: h }), env, next, deps);
+  assert.notEqual(bad.status, 200);
+});
+
+
+test("重大訊息：已登入但還沒核准的人被擋下", async () => {
+  env.MARKET_ANA_STOCK_FACTS = "all";
+  await env.DB.prepare("INSERT INTO users (email, nickname, status, applied_at) VALUES ('pending@x.com', 'p', 'pending', '2026-11-07T00:00:00Z')").run();
+  const h = new Headers();
+  h.set("cf-access-jwt-assertion", await issuer.sign(claims("pending@x.com")));
+  const response = await handle(new Request("https://market-ana.pages.dev/api/stocks/2330/announcements", { headers: h }), env, next, deps);
+  assert.equal(response.status, 403);
+});

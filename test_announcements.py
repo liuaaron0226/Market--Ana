@@ -31,6 +31,10 @@ class ParseTests(unittest.TestCase):
             'body': '1.董事會決議日期:115/11/15\n2.內容:略'})
         self.assertEqual((rows[1]['time'], rows[1]['fact_date']), ('07:00:04', '2026-11-20'))
 
+    def test_an_impossible_fact_date_is_left_empty_instead_of_losing_the_whole_day(self):
+        row = '1151116,1151115,90000,2330,台積電,事實發生日寫錯,第51款,1151332,說明'
+        self.assertIsNone(an.parse(csv_bytes(row), market='上市')[0]['fact_date'])
+
     def test_an_empty_day_is_no_rows_not_an_error(self):
         self.assertEqual(an.parse(csv_bytes(), market='上櫃'), [])
 
@@ -91,8 +95,8 @@ class CollectTests(unittest.TestCase):
         an.fetch(self.raw, get=lambda url, params=None: responses[url], now='2026-11-16T03:00:00+00:00')
 
     def test_last_90_days_inside_the_universe_newest_first_without_duplicates(self):
-        old = '1150818,1150817,90000,2330,台積電,太舊的公告,第51款,1150817,x'              # 2026-08-17：超過 90 天
-        edge = '1150818,1150818,90000,2330,台積電,剛好 90 天前,第51款,1150818,x'           # 2026-08-18：剛好 90 天
+        old = '1150818,1150818,90000,2330,台積電,太舊的公告,第51款,1150818,x'              # 2026-08-18：第 91 天，不算
+        edge = '1150820,1150819,90000,2330,台積電,第 90 天,第51款,1150819,x'               # 2026-08-19：含資料日共 90 天
         later = '1151116,1151115,180000,2330,台積電,同一天晚一點,第51款,1151115,x'
         outside = '1151116,1151115,90000,9999,不在範圍,範圍外的公告,第51款,1151115,x'
         self.save('上市', old, edge, ROW_2330, outside)
@@ -103,8 +107,24 @@ class CollectTests(unittest.TestCase):
             ('2330', '2026-11-15', '18:00:00', '同一天晚一點'),
             ('2330', '2026-11-15', '17:47:06', '公告本公司董事會決議股利分派'),
             ('6488', '2026-11-15', '07:00:04', '公告本公司受邀參加法說會'),
-            ('2330', '2026-08-18', '09:00:00', '剛好 90 天前'),
+            ('2330', '2026-08-19', '09:00:00', '第 90 天'),
         ])
+
+    def test_a_stock_added_to_the_universe_gets_its_older_announcements_too(self):
+        # 每次發布從原件重算：今天新進分析範圍的股票，前幾天的公告也會出現。
+        self.save('上櫃', ROW_6488)
+        self.assertEqual(an.collect(self.raw, as_of='2026-11-16', codes={'2330'}), [])
+        self.assertEqual(len(an.collect(self.raw, as_of='2026-11-16', codes={'2330', '6488'})), 1)
+
+    def test_an_unreadable_raw_file_is_skipped_and_named_the_rest_still_counts(self):
+        self.save('上市', ROW_2330)
+        (self.raw / 'listed-20261117-broken.json').write_text('{"market": "上市"}', encoding='utf-8')
+        (self.raw / 'listed-20261117-broken.csv').write_bytes(b'<html>broken</html>')
+        (self.raw / 'otc-20261117-orphan.json').write_text('{"market": "上櫃"}', encoding='utf-8')   # 只有說明檔、沒有 CSV
+        skipped = []
+        rows = an.collect(self.raw, as_of='2026-11-16', codes={'2330'}, skipped=skipped)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(sorted(name.split(':')[0] for name in skipped), ['listed-20261117-broken.csv', 'otc-20261117-orphan.csv'])
 
     def test_a_correction_is_its_own_announcement(self):
         correction = '1151116,1151115,174706,2330,台積電,更正公告本公司董事會決議,第14款,1151115,x'
@@ -114,6 +134,46 @@ class CollectTests(unittest.TestCase):
     def test_announcements_after_the_data_day_are_left_out(self):
         self.save('上市', ROW_2330)
         self.assertEqual(an.collect(self.raw, as_of='2026-11-14', codes={'2330'}), [])
+
+
+class CloudSyncTest(unittest.TestCase):
+    """原件另存在 R2 的 announcements/raw/：檔名不重複、只增不改，早上的排程與每日更新各自補齊、各自上傳，不互蓋。"""
+
+    def setUp(self):
+        import state_sync
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name)
+        self.store = state_sync.DirectoryStore(root / 'r2')
+        self.raw = root / 'raw'
+
+    def get(self, *rows):
+        responses = {an.SOURCES['上市']: Response(200, csv_bytes(*rows)), an.SOURCES['上櫃']: Response(200, csv_bytes())}
+        return lambda url, params=None: responses[url]
+
+    def test_daily_downloads_what_is_missing_fetches_and_uploads_only_new_files(self):
+        other = Path(self.tmp.name) / 'other-runner'
+        first = an.daily(other, store=self.store, get=self.get(ROW_2330), now='2026-11-15T00:00:00+00:00')
+        self.assertEqual((first['downloaded'], first['uploaded']), (0, 4))          # 兩份 CSV＋兩份說明檔
+        second = an.daily(self.raw, store=self.store, get=self.get(ROW_6488), now='2026-11-16T00:00:00+00:00')
+        self.assertEqual(second['downloaded'], 4)                                    # 前一天的原件先補回來
+        self.assertEqual(second['markets']['上市']['status'], 'saved')
+        self.assertEqual(second['uploaded'], 2)                                      # 只上傳新的那一份（上櫃同內容不重存）
+        self.assertEqual(len(self.store.keys(an.R2_PREFIX)), 6)
+        codes = {r['code'] for r in an.collect(self.raw, as_of='2026-11-16', codes={'2330', '6488'})}
+        self.assertEqual(codes, {'2330', '6488'})
+
+    def test_a_dry_run_downloads_but_never_uploads(self):
+        result = an.daily(self.raw, store=self.store, get=self.get(ROW_2330), now='2026-11-15T00:00:00+00:00', upload=False)
+        self.assertEqual(result['uploaded'], 0)
+        self.assertEqual(self.store.keys(an.R2_PREFIX), [])
+
+    def test_files_already_in_the_cloud_are_never_overwritten(self):
+        an.daily(self.raw, store=self.store, get=self.get(ROW_2330), now='2026-11-15T00:00:00+00:00')
+        key = next(k for k in self.store.keys(an.R2_PREFIX) if k.endswith('.csv'))
+        self.store.put(key, b'cloud copy stays')
+        an.daily(self.raw, store=self.store, get=self.get(ROW_2330), now='2026-11-15T00:00:00+00:00')
+        self.assertEqual(self.store.get(key), b'cloud copy stays')
 
 
 if __name__ == '__main__':
