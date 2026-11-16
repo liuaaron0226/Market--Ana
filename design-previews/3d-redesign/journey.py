@@ -1251,7 +1251,8 @@ def stock(page: Page, base: str, tag: str, mobile: bool) -> None:
                 reasons: document.getElementById('candidateReasons').childElementCount ? kind(document.getElementById('candidateReasons')) : 'empty',
                 facts: kind(document.getElementById('stockFactsBlocks')),
                 res: [...document.querySelectorAll('#ladder .lad-res')].map(kind), sup: [...document.querySelectorAll('#ladder .lad-sup')].map(kind),
-                now: kind(document.querySelector('#ladder .lad-now')) }; }""")
+                now: kind(document.querySelector('#ladder .lad-now')),
+                gaps: [...document.querySelectorAll('#ladder .lad-gap')].map(gap => [Math.round(gap.getBoundingClientRect().height), parseFloat(gap.style.getPropertyValue('--gap')) || null]) }; }""")
         seen = looks()
         check(f"{tag}：個股頁的背景是桌面", seen["desk"], seen)
         check(f"{tag}：報價那一段與 K 線各是一塊板", seen["top"] == "slab" and seen["chart"] == "slab", seen)
@@ -1260,6 +1261,9 @@ def stock(page: Page, base: str, tag: str, mobile: bool) -> None:
         seen = looks()
         check(f"{tag}：價位階梯是一塊板；壓力浮起、支撐凹下、現價是深色的鍵",
               seen["rail"] == "slab" and seen["res"] == ["key", "key"] and seen["sup"] == ["well", "well"] and seen["now"] == "ink", seen)
+        # 審查抓到過：換成板時把每一格壓成同樣高，「離收盤幾 %」的遠近不見了
+        check(f"{tag}：價位階梯列與列的距離照舊照離收盤遠近拉開", bool(seen["gaps"]) and all(height == want for height, want in seen["gaps"])
+              and len({want for _, want in seen["gaps"]}) > 1, seen["gaps"])
         open_stock_cat(page, "chipsPanel")
         page.wait_for_timeout(300)
         check(f"{tag}：籌碼名單是一塊板（不在名單上的不畫空板）", looks()["reasons"] in ("slab", "empty"), looks()["reasons"])

@@ -123,3 +123,11 @@ test("深色主題給了亮邊顏色時：每根本體的上緣外面多一條 1
   assert.deepEqual(view.bodies.map(({ pass, ...rect }) => rect), drawn().bodies.map(({ pass, ...rect }) => rect), "本體和沒有亮邊時相同");
   assert.equal(drawn().rects.filter(rect => rect.fill === "rgba(255,255,255,.2)").length, 0, "沒給亮邊顏色就沒有");
 });
+
+test("盤中最後一根（半透明加外框）底下不畫影子，不然影子會透出來；其他根照畫", () => {
+  const view = load();
+  const chart = new view.KChart(new view.FakeElement(), { macd: false, height: () => 340, liveLast: true });
+  chart.setData(candles(40), { count: 40 });
+  const inPass = view.rects.filter(rect => rect.pass === view.lastPass());
+  assert.equal(inPass.filter(rect => rect.fill === "rgba(0,0,0,.2)").length, 39);
+});

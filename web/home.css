@@ -362,8 +362,7 @@
    頁面背景是桌面；頂列、搜尋、主 K 線是板；板上可按的是鍵，輸入框與切換軌道是槽。
    陰影與圓角一律引用 bold.css 的深度變數。選擇器用 body.hm，才壓得過後載入的 panel.css。
    外殼以下的區塊（直白分析、籌碼、選股看板）在第 3 片換。 */
-html:has(> body.hm) { background: var(--desk); }
-body.hm { background: radial-gradient(1200px 720px at 18% 0, var(--desk-hi), transparent 70%) no-repeat var(--desk); }
+/* 桌面的背景與個股頁共用，寫在 bold.css〈看盤桌：頁面背景〉 */
 body.hm .app-shell { padding-top: 24px; }
 
 /* ---------- 第 1 層：三塊板 ---------- */

@@ -282,7 +282,7 @@
         const rect = c.getBoundingClientRect(); const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left - g.l) / g.pw));
         // 滾輪是一連串的小縮放：轉動期間不畫落影，停下來一下再補畫
         this.busy = true; clearTimeout(this.settle);
-        this.settle = setTimeout(() => { this.busy = false; this.draw(); }, RELIEF_SETTLE_MS);
+        this.settle = setTimeout(() => { if (!pts.size) { this.busy = false; this.draw(); } }, RELIEF_SETTLE_MS);   // 停下來時手指還按著：等放開再補
         this.zoom(e.deltaY > 0 ? 1.15 : 1 / 1.15, ratio);
       }, { passive: false });
       c.addEventListener('keydown', e => {
@@ -502,30 +502,36 @@
       }
       // K棒
       const bw = Math.max(1, Math.min(14, step * .66));
-      // 浮雕落影（立體重設計 C 包）：本體底下先畫一塊往右下偏的影子，蠟燭本身照舊畫在上面，位置、寬度、顏色不變。
-      // 顏色由主題的 --candle-shadow 給（沒有就不畫）；拖曳、縮放進行中不畫（this.busy），放開之後補畫。
-      // 深色的底上影子看不出來：主題另給 --candle-rim 時，本體上緣外面多一條 1px 的亮邊（和板的上緣亮邊同一個道理）。
-      const relief = !this.busy && bw >= 2 ? css('--candle-shadow') : '', rim = !this.busy && bw >= 2 ? css('--candle-rim') : '';
-      [[relief, RELIEF.x, RELIEF.y, 0], [rim, 0, -1, 1]].forEach(([fill, dx, dy, thin]) => {
-        if (!fill || fill === 'transparent') return;
-        x.fillStyle = fill;
-        vis.forEach((c, i) => {
-          if (!hasPrice(c)) return;
-          const cx = l + step * (i + .5), top = y(Math.max(c.open, c.close)), h = Math.max(1, Math.abs(y(c.open) - y(c.close)));
-          x.fillRect(cx - bw / 2 + dx, top + dy, bw, thin || h);
-        });
+      // 每根蠟燭本體的位置只算一次：落影、亮邊、本體都用同一份，影子不會和本體對不上。
+      const bodies = vis.map((c, i) => hasPrice(c) && {
+        c, cx: l + step * (i + .5), top: y(Math.max(c.open, c.close)), h: Math.max(1, Math.abs(y(c.open) - y(c.close))),
+        live: Boolean(this.opts.liveLast) && start + i === n - 1,
       });
-      vis.forEach((c, i) => {
-        if (!hasPrice(c)) return;
-        const cx = l + step * (i + .5), col = c.close >= c.open ? up : dn;
+      // 浮雕落影（立體重設計 C 包）：本體底下先畫一塊往右下偏的影子，蠟燭本身照舊畫在上面，位置、寬度、顏色不變。
+      // 顏色由主題的 --candle-shadow 給（沒有就不畫）；深色的底上影子看不出來，主題另給 --candle-rim 時，
+      // 本體上緣外面多一條 1px 的亮邊（和板的上緣亮邊同一個道理）。拖曳、縮放進行中不畫（this.busy），放開之後補畫。
+      // 盤中最後一根是半透明加外框的，底下的影子會透出來，那一根不畫。
+      if (!this.busy && bw >= 2) {
+        const passes = [
+          { fill: css('--candle-shadow'), dx: RELIEF.x, dy: RELIEF.y, height: body => body.h },
+          { fill: css('--candle-rim'), dx: 0, dy: -1, height: () => 1 },
+        ];
+        for (const pass of passes) {
+          if (!pass.fill || pass.fill === 'transparent') continue;
+          x.fillStyle = pass.fill;
+          for (const body of bodies) if (body && !body.live) x.fillRect(body.cx - bw / 2 + pass.dx, body.top + pass.dy, bw, pass.height(body));
+        }
+      }
+      for (const body of bodies) {
+        if (!body) continue;
+        const { c, cx, top, h } = body, col = c.close >= c.open ? up : dn;
         x.strokeStyle = col; x.fillStyle = col; x.lineWidth = 1;
         x.beginPath(); x.moveTo(cx, y(c.high)); x.lineTo(cx, y(c.low)); x.stroke();
-        const top = y(Math.max(c.open, c.close)), h = Math.max(1, Math.abs(y(c.open) - y(c.close)));
-        if (this.opts.liveLast && start + i === n - 1) {
+        if (body.live) {
           x.globalAlpha = .45; x.fillRect(cx - bw / 2, top, bw, h); x.globalAlpha = 1;
           x.lineWidth = 1.4; x.strokeRect(cx - bw / 2 - 1.5, top - 1.5, bw + 3, h + 3);
         } else x.fillRect(cx - bw / 2, top, bw, h);
-      });
+      }
       // 使用者自訂均線（最多四條，預設 MA18／MA45）。
       // 四條線四種看得出差別的顏色：橘、金、藍、灰（布林通道是更淡的灰帶）
       const maColors = [css('--accent'), css('--gold'), css('--study-dif') || css('--dim'), css('--dim')];
