@@ -98,7 +98,7 @@
       if (this.drawings) this.drawings.dataChanged();
       this.draw(); this.emit();
     }
-    // 畫線：目前要用的工具（'trend'、'hline'、'ray'、'rect'；null＝一般模式），以及這張圖上的整組畫線（[{id,kind,anchors:[{date,price}]}]）。
+    // 畫線：目前要用的工具（'trend'、'hline'、'ray'、'rect'、'fib'；null＝一般模式），以及這張圖上的整組畫線（[{id,kind,anchors:[{date,price}]}]）。
     setTool(kind) { if (this.drawings) { this.drawings.setTool(kind); this.draw(); } }
     setDrawings(list) { if (this.drawings) { this.drawings.load(list); this.draw(); } }
     // 刪除目前選取的那一條，回傳有沒有刪（沒有選取就不做事）；放下工具並取消選取（Esc 做的事）。

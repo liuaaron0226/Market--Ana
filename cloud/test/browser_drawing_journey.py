@@ -2,6 +2,7 @@
 票 01：水平線畫得出來，而且存得住。票 02：點線選取、拖動、刪除（工具列與 Delete）、Esc。
 票 03：趨勢線與射線——點兩下成線、預覽線、取消、拖整條、拖端點、切日週月、重新整理後仍在。
 票 04：矩形——點兩下對角、預覽、點邊線選取、拖整個、拖角落、切日週月、重新整理後仍在。
+票 05：黃金分割——點兩下出七條線、預覽、比例的位置、選取、拖整組、拖一端、切日週月、重新整理後仍在。
 
 用真正的 gate.handle＋cloud/dist＋記憶體資料庫（cloud/test/journey-server.mjs），Access 由 cookie 模擬；
 不連正式站、不碰 8876／8897。先在 cloud/ 跑過 `node build.mjs` 讓 dist 是最新的。
@@ -30,7 +31,9 @@ OUT = ROOT / ".tmp/drawing-journey"
 OWNER, OTHER = "owner@example.com", "a@example.com"
 
 # 回傳畫布上「用畫線顏色畫滿三成以上寬度」的橫線位置（CSS 像素，相對畫布上緣）。
-LINES_JS = """() => {
+# 可以指定只看畫布的右邊一段（from：從寬度的幾成看起）與門檻（share：佔畫布寬度幾成才算）。
+LINES_JS = """options => {
+  const { from = 0, share = 0.3 } = options || {};
   const canvas = document.querySelector('#chartHost canvas');
   const { width, height } = canvas;
   const data = canvas.getContext('2d').getImageData(0, 0, width, height).data;
@@ -39,11 +42,11 @@ LINES_JS = """() => {
   const rows = [];
   for (let y = 0; y < height; y++) {
     let hits = 0;
-    for (let x = 0; x < width; x++) {
+    for (let x = Math.round(width * from); x < width; x++) {
       const i = (y * width + x) * 4;
       if (Math.abs(data[i] - r) + Math.abs(data[i + 1] - g) + Math.abs(data[i + 2] - b) < 60) hits++;
     }
-    if (hits > width * 0.3) rows.push(y);
+    if (hits > width * share) rows.push(y);
   }
   const scale = height / canvas.getBoundingClientRect().height;
   const lines = [];
@@ -577,7 +580,7 @@ def two_point_desktop(journey: Journey, browser) -> None:
     mid = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
 
     order = page.evaluate("() => [...document.querySelectorAll('#drawTools button[data-tool]')].map(button => button.dataset.tool + ':' + button.getAttribute('aria-label') + ':' + button.textContent.trim())")
-    journey.check("工具列依序是趨勢線、水平線、射線、矩形，只有圖示、各有可讀名稱", order == ["trend:趨勢線:", "hline:水平線:", "ray:射線:", "rect:矩形:"], order)
+    journey.check("工具列依序是趨勢線、水平線、射線、矩形、黃金分割，只有圖示、各有可讀名稱", order == ["trend:趨勢線:", "hline:水平線:", "ray:射線:", "rect:矩形:", "fib:黃金分割:"], order)
     for button, name in [(trend, "趨勢線"), (ray, "射線")]:
         button.hover()
         page.wait_for_timeout(700)
@@ -906,7 +909,7 @@ def rect_mobile(journey: Journey, browser) -> None:
 
     journey.check("手機：桌機畫的矩形看得到", journey.ink(page)["count"] > 0 and len(journey.saved(page, code)) == 1)
     sizes = [button.bounding_box() for button in tools.locator("button[data-tool]").all()]
-    journey.check("手機：四顆工具都夠大（至少 44px），工具列不造成橫向捲動", len(sizes) == 4 and all(size["width"] >= 44 and size["height"] >= 44 for size in sizes)
+    journey.check("手機：每顆工具都夠大（至少 44px），工具列不造成橫向捲動", len(sizes) == TOOL_COUNT and all(size["width"] >= 44 and size["height"] >= 44 for size in sizes)
                   and page.evaluate("() => document.documentElement.scrollWidth <= innerWidth"), sizes)
 
     a, b = (round(width * 0.12), round(height * 0.7)), (round(width * 0.4), round(height * 0.88))
@@ -958,6 +961,240 @@ def rect_mobile(journey: Journey, browser) -> None:
     journey.check("手機：重新整理後只剩一個矩形", journey.ink(page)["count"] > 0 and len(journey.saved(page, code)) == 1)
     context.close()
 
+FIB_RATIOS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1]
+TOOL_COUNT = 5  # 工具列目前有幾顆畫線工具（不含刪除）
+
+
+def fib_levels(page) -> list[float]:
+    """黃金分割的橫線位置：只看畫布右半邊（標示文字在線的左端，不會到這裡），而且線會被前面的 K 棒遮掉一部分，
+    所以用「右半邊有畫布寬度一成以上是畫線色」的列來認（把手、兩點的連線都不到一成）。"""
+    return page.evaluate(LINES_JS, {"from": 0.5, "share": 0.1})
+
+
+def in_ratio(levels: list[float], tolerance: float = 2) -> bool:
+    """七條線由上到下（或由下到上）是不是照 0、0.236、0.382、0.5、0.618、0.786、1 的比例排。"""
+    if len(levels) != 7:
+        return False
+    top, span = levels[0], levels[-1] - levels[0]
+    ratios = [(y - top) / span for y in levels]
+    return any(all(abs(ratio - want) * span <= tolerance for ratio, want in zip(ratios, wanted))
+               for wanted in (FIB_RATIOS, [1 - ratio for ratio in reversed(FIB_RATIOS)]))
+
+
+def marker(page, journey: Journey) -> tuple[float, float]:
+    """點了第一下之後起點記號（小圓）的圓心：就是那個錨點實際落的位置（K 棒正中央、取到分的價位）。"""
+    ink = journey.ink(page)
+    return (ink["minX"] + ink["maxX"]) / 2, (ink["minY"] + ink["maxY"]) / 2
+
+
+def fib_desktop(journey: Journey, browser) -> None:
+    print("票 05｜桌機寬度 1280：黃金分割")
+    code = "2454"
+    context = journey.context(browser, OWNER, viewport={"width": 1280, "height": 900})
+    page = journey.open(context, code)
+    tools = page.locator("#drawTools")
+    fib = tools.locator("button[data-tool=fib]")
+    delete = page.locator("#drawDelete")
+    box = page.locator("#chartHost canvas").bounding_box()
+    width, height = box["width"], box["height"]
+    axis_width = 60  # 右側價格軸至少這麼寬（桌機 78 起）
+    low, high = (round(width * 0.3), round(height * 0.66)), (round(width * 0.5), round(height * 0.3))  # 由低往高拉
+
+    fib.hover()
+    page.wait_for_timeout(700)
+    tip = fib.evaluate("button => { const style = getComputedStyle(button, '::after'); return style.content + '|' + style.opacity; }")
+    journey.check("滑鼠停留顯示「黃金分割」", tip == '"黃金分割"|1', tip)
+    page.mouse.move(5, 5)
+    journey.check("起點：這一檔沒有畫線", journey.saved(page, code) == [] and journey.ink(page)["count"] == 0)
+
+    # 先各點一下再取消，量出兩個點實際落的位置（對在 K 棒正中央）；順便驗 Esc 取消不留東西。
+    fib.click()
+    page.mouse.click(*journey.at(page, *high))
+    b = marker(page, journey)
+    page.keyboard.press("Escape")
+    journey.check("點了第一下後按 Esc：記號消失、工具放下、什麼都沒存", journey.ink(page)["count"] == 0
+                  and fib.get_attribute("aria-pressed") == "false" and journey.saved(page, code) == [])
+
+    fib.click()
+    journey.check("選了黃金分割：工具列看得出已選中", fib.get_attribute("aria-pressed") == "true")
+    page.mouse.click(*journey.at(page, *low))
+    a = marker(page, journey)
+    page.mouse.move(*journey.at(page, *high), steps=8)
+    preview = fib_levels(page)
+    ink = journey.ink(page)
+    journey.check("點第一下後移動游標：七條線的預覽跟著走，從起點延伸到右緣，還沒儲存", in_ratio(preview) and abs(preview[0] - b[1]) <= 2
+                  and abs(preview[-1] - a[1]) <= 2 and ink["maxX"] > width - axis_width - 60 and journey.saved(page, code) == [],
+                  {"levels": preview, "a": a, "b": b, "ink": ink})
+    page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-19-fib-preview.png"))
+    with page.expect_response(drawing_request("PUT")) as created:
+        page.mouse.click(*journey.at(page, *high))
+    page.mouse.move(5, 5)
+    items = journey.saved(page, code)
+    levels = fib_levels(page)
+    ink = journey.ink(page)
+    journey.check("點第二下：畫出七條線並儲存（PUT 回 201），工具回一般模式", created.value.status == 201 and len(levels) == 7
+                  and fib.get_attribute("aria-pressed") == "false", levels)
+    journey.check("七條線照 0、0.236、0.382、0.5、0.618、0.786、1 的比例排：0 在第二點（上）、1 在第一點（下）", in_ratio(levels)
+                  and abs(levels[0] - b[1]) <= 2 and abs(levels[-1] - a[1]) <= 2, {"levels": levels, "a": a, "b": b})
+    journey.check("雲端存的是一組黃金分割、兩個錨點照點的順序（第一點較早、較低）", len(items) == 1 and items[0]["kind"] == "fib"
+                  and items[0]["anchors"][0]["date"] < items[0]["anchors"][1]["date"]
+                  and items[0]["anchors"][0]["price"] < items[0]["anchors"][1]["price"], items)
+    journey.check("橫線延伸到繪圖區右緣為止、不進價格軸；標示在線的左端外側", width - axis_width - 60 < ink["maxX"] <= width - axis_width
+                  and ink["minX"] < a[0] - 30, {"ink": ink, "start": a, "canvas": width})
+    journey.check("新畫的沒有被選取", not delete.is_visible())
+    page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-20-fib-drawn.png"))
+    before = items[0]["anchors"]
+    line_id = items[0]["id"]
+
+    right = b[0] + 120  # 兩點右邊、只有橫線經過的地方
+    page.mouse.click(*journey.at(page, right, (levels[5] + levels[6]) / 2))
+    journey.check("點在兩條橫線中間：不選取，照舊顯示 K 棒數值", not delete.is_visible() and page.locator("#chartHost .kc-tip.show").count() == 1)
+    page.mouse.click(*journey.at(page, right, levels[3] + 3))
+    journey.check("點在 0.5 那條旁 3px：選取，工具列出現刪除", delete.is_visible())
+    page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-21-fib-selected.png"))
+
+    page.mouse.move(*journey.at(page, *b))
+    axis = journey.axis(page)  # 游標停好再記：游標所在那一根的日期也畫在時間軸上
+    page.mouse.down()
+    page.mouse.move(*journey.at(page, b[0] + 70, b[1] - 40), steps=6)
+    with page.expect_response(drawing_request("PUT")) as moved:
+        page.mouse.up()
+    after = journey.saved(page, code)[0]
+    reshaped = fib_levels(page)
+    journey.check("拖第二點的把手：只有那一端移動（更晚、更高），第一點不動；七條線照新的範圍重排；圖表不平移", moved.value.status == 200
+                  and after["id"] == line_id and after["anchors"][0] == before[0] and after["anchors"][1]["date"] > before[1]["date"]
+                  and after["anchors"][1]["price"] > before[1]["price"] and in_ratio(reshaped) and abs(reshaped[0] - (b[1] - 40)) <= 2
+                  and abs(reshaped[-1] - a[1]) <= 2 and journey.axis(page) == axis, {"before": before, "after": after["anchors"], "levels": reshaped})
+    page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-22-fib-reshaped.png"))
+    before = after["anchors"]
+
+    page.mouse.move(*journey.at(page, right + 80, reshaped[3]))
+    axis = journey.axis(page)
+    page.mouse.down()
+    page.mouse.move(*journey.at(page, right + 40, reshaped[3] + 30), steps=6)
+    with page.expect_response(drawing_request("PUT")) as moved:
+        page.mouse.up()
+    after = journey.saved(page, code)[0]["anchors"]
+    dragged = fib_levels(page)
+    drop = [round(before[i]["price"] - after[i]["price"], 2) for i in (0, 1)]
+    journey.check("拖任一條橫線：整組平移（兩點的價位降一樣多、日期都往前），圖表不平移", moved.value.status == 200 and drop[0] > 0
+                  and abs(drop[0] - drop[1]) <= 0.02 and all(after[i]["date"] < before[i]["date"] for i in (0, 1))
+                  and in_ratio(dragged) and abs(dragged[0] - reshaped[0] - 30) <= 2 and journey.axis(page) == axis,
+                  {"before": before, "after": after, "levels": dragged})
+    kept = after
+
+    for period, name in [("weekly", "週 K"), ("monthly", "月 K")]:
+        journey.choose_period(page, period)
+        journey.check(f"{name}：黃金分割還在、選取還在，雲端的兩個錨點沒有被改", journey.ink(page)["count"] > 0 and delete.is_visible()
+                      and journey.saved(page, code)[0]["anchors"] == kept)
+        page.locator(".bd-chart").screenshot(path=str(OUT / f"desktop-23-fib-{period}.png"))
+    journey.choose_period(page, "5m")
+    journey.check("分 K：工具列與線都不顯示", not tools.is_visible() and journey.ink(page)["count"] == 0)
+    journey.choose_period(page, "daily")
+    back = fib_levels(page)
+    journey.check("切回日 K：七條線回到原本的位置", len(back) == 7 and all(abs(one - other) <= 1.5 for one, other in zip(back, dragged)), {"back": back, "was": dragged})
+
+    page.reload()
+    journey.ready(page, code)
+    reloaded = fib_levels(page)
+    journey.check("重新整理後七條線還在原位，雲端的錨點相同，沒有選取", len(reloaded) == 7 and all(abs(one - other) <= 1.5 for one, other in zip(reloaded, dragged))
+                  and journey.saved(page, code)[0]["anchors"] == kept and not delete.is_visible(), {"levels": reloaded, "was": dragged})
+    page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-24-fib-reloaded.png"))
+    context.close()
+
+
+def fib_mobile(journey: Journey, browser) -> None:
+    print("票 05｜手機寬度 390（觸控）：黃金分割")
+    code = "2454"
+    context = journey.context(browser, OWNER, viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True, has_touch=True)
+    page = journey.open(context, code)
+    tools = page.locator("#drawTools")
+    fib = tools.locator("button[data-tool=fib]")
+    delete = page.locator("#drawDelete")
+    box = page.locator("#chartHost canvas").bounding_box()
+    width, height = box["width"], box["height"]
+
+    seen = fib_levels(page)
+    journey.check("手機：桌機畫的黃金分割看得到", len(seen) > 0 and len(journey.saved(page, code)) == 1, seen)
+    sizes = [button.bounding_box() for button in tools.locator("button[data-tool]").all()]
+    journey.check("手機：加上黃金分割後每顆工具仍夠大（至少 44px），工具列不造成橫向捲動", len(sizes) == TOOL_COUNT and all(size["width"] >= 44 and size["height"] >= 44 for size in sizes)
+                  and page.evaluate("() => document.documentElement.scrollWidth <= innerWidth"), sizes)
+    page.locator(".bd-chart").screenshot(path=str(OUT / "mobile-14-fib-from-desktop.png"))
+
+    page.touchscreen.tap(*journey.at(page, width * 0.7, seen[len(seen) // 2] + 5))
+    journey.check("手機：手指點在橫線旁 5px 就選取，工具列出現刪除", delete.is_visible())
+    with page.expect_response(drawing_request("DELETE")) as removed:
+        delete.tap()
+    journey.check("手機：點刪除，整組消失並從雲端刪掉", removed.value.status == 204 and journey.saved(page, code) == []
+                  and journey.ink(page)["count"] == 0 and not delete.is_visible())
+
+    high, low = (round(width * 0.15), round(height * 0.3)), (round(width * 0.45), round(height * 0.72))  # 由高往低拉
+    fib.tap()
+    page.touchscreen.tap(*journey.at(page, *high))
+    marked = journey.ink(page)
+    journey.check("手機：點第一下後起點有記號，還沒儲存", 0 < marked["count"] and marked["maxX"] - marked["minX"] <= 12
+                  and journey.saved(page, code) == [] and fib.get_attribute("aria-pressed") == "true", marked)
+    a = marker(page, journey)
+
+    cdp = context.new_cdp_session(page)
+
+    def touch(kind: str, tx: float, ty: float) -> None:
+        cdp.send("Input.dispatchTouchEvent", {
+            "type": kind, "touchPoints": [] if kind == "touchEnd" else [{"x": round(tx), "y": round(ty)}]})
+
+    x, y = journey.at(page, *low)
+    touch("touchStart", x, y)
+    page.wait_for_timeout(120)
+    held = fib_levels(page)
+    journey.check("手機：手指按下去還沒放開，七條線的預覽就出現", in_ratio(held, 3) and journey.saved(page, code) == [], held)
+    page.locator(".bd-chart").screenshot(path=str(OUT / "mobile-15-fib-preview.png"))
+    with page.expect_response(drawing_request("PUT")) as created:
+        touch("touchEnd", x, y)
+    items = journey.saved(page, code)
+    levels = fib_levels(page)
+    ink = journey.ink(page)
+    journey.check("手機：放開就畫出七條線並儲存，工具回一般模式", created.value.status == 201 and len(items) == 1 and in_ratio(levels, 3)
+                  and fib.get_attribute("aria-pressed") == "false", levels)
+    journey.check("手機：由高往低拉，第一點（1）較高、第二點（0）較低；1 那條在上、0 那條在下", items[0]["kind"] == "fib"
+                  and items[0]["anchors"][0]["price"] > items[0]["anchors"][1]["price"] and abs(levels[0] - a[1]) <= 3
+                  and abs(levels[-1] - low[1]) <= 3, {"items": items, "levels": levels, "a": a, "low": low})
+    journey.check("手機：橫線到右緣為止、不進價格軸，標示留在圖內", ink["maxX"] <= width - 40 and ink["minX"] >= 0, {"ink": ink, "canvas": width})
+    page.locator(".bd-chart").screenshot(path=str(OUT / "mobile-16-fib-drawn.png"))
+    mine = items[0]
+
+    page.touchscreen.tap(*journey.at(page, width * 0.7, levels[0] + 9))
+    journey.check("手機：手指點在最上面那條旁 9px 就選取", delete.is_visible())
+    page.locator(".bd-chart").screenshot(path=str(OUT / "mobile-17-fib-selected.png"))
+
+    axis = journey.axis(page)
+    scroll = page.evaluate("() => scrollY")
+    x, y = journey.at(page, low[0], levels[-1])
+    touch("touchStart", x, y)
+    for step in range(1, 7):
+        touch("touchMove", x, y - step * 6)
+        page.wait_for_timeout(16)
+    page.wait_for_timeout(250)  # 停一下再放開，不讓 Chromium 當成甩動（見票 02 的註記）
+    with page.expect_response(drawing_request("PUT")) as moved:
+        touch("touchEnd", x, y - 36)
+    after = journey.saved(page, code)[0]
+    reshaped = fib_levels(page)
+    journey.check("手機：手指拖第二點往上，只有那一端變高、第一點不動，七條線重排；圖表不平移、頁面不捲動", moved.value.status == 200
+                  and after["id"] == mine["id"] and after["anchors"][0] == mine["anchors"][0]
+                  and after["anchors"][1]["price"] > mine["anchors"][1]["price"] and in_ratio(reshaped, 3)
+                  and abs(reshaped[-1] - (levels[-1] - 36)) <= 3 and journey.axis(page) == axis and page.evaluate("() => scrollY") == scroll,
+                  {"before": mine["anchors"], "after": after["anchors"], "levels": reshaped})
+    page.locator(".bd-chart").screenshot(path=str(OUT / "mobile-18-fib-reshaped.png"))
+
+    journey.choose_period(page, "weekly")
+    journey.check("手機：切到週 K 黃金分割還在", journey.ink(page)["count"] > 0 and len(journey.saved(page, code)) == 1)
+    journey.choose_period(page, "daily")
+    page.reload()
+    journey.ready(page, code)
+    reloaded = fib_levels(page)
+    journey.check("手機：重新整理後七條線還在原位", len(reloaded) == 7 and all(abs(one - other) <= 1.5 for one, other in zip(reloaded, reshaped))
+                  and journey.saved(page, code)[0]["anchors"] == after["anchors"], {"levels": reloaded, "was": reshaped})
+    context.close()
+
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -991,6 +1228,8 @@ def main() -> int:
             two_point_mobile(journey, browser)
             rect_desktop(journey, browser)
             rect_mobile(journey, browser)
+            fib_desktop(journey, browser)
+            fib_mobile(journey, browser)
             browser.close()
     finally:
         if server:

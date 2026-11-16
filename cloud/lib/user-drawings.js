@@ -6,8 +6,8 @@ const DRAWINGS_LIMIT = 200;
 const MAX_PRICE = 10_000_000;
 const ID_RE = /^[A-Za-z0-9_-]{8,40}$/;
 const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
-// 種類 → 錨點個數。之後的票（黃金分割、文字）在這裡加一行。
-const ANCHOR_COUNT = { hline: 1, trend: 2, ray: 2, rect: 2 };
+// 種類 → 錨點個數。之後的票（文字）在這裡加一行。
+const ANCHOR_COUNT = { hline: 1, trend: 2, ray: 2, rect: 2, fib: 2 };
 
 function isCalendarDate(value) {
   const parts = typeof value === "string" ? DATE_RE.exec(value) : null;

@@ -18,7 +18,8 @@ function load() {
       if (name === "beginPath") return () => { path = []; arcs = []; };
       if (name === "arc") return (x, y, radius) => { arcs.push([x, y, radius]); };
       if (name === "moveTo" || name === "lineTo") return (x, y) => { path.push([x, y]); };
-      if (name === "stroke") return () => { strokes.push({ color: target.strokeStyle, points: path.slice(), arcs: arcs.slice() }); };
+      if (name === "setLineDash") return dash => { target.dash = dash; };
+      if (name === "stroke") return () => { strokes.push({ color: target.strokeStyle, points: path.slice(), arcs: arcs.slice(), alpha: target.globalAlpha, dash: target.dash || [], width: target.lineWidth }); };
       if (name === "fillRect") return (x, y, width, height) => { fills.push({ color: target.fillStyle, alpha: target.globalAlpha, rect: [x, y, width, height] }); };
       if (name === "fillText") return (text, x, y) => { texts.push({ text: String(text), x, y, color: target.fillStyle }); };
       if (name in target) return target[name];
@@ -700,6 +701,8 @@ function assertLines(actual, expected, message) {
 }
 // 把手（圓心）的位置，同樣容許 0.01 像素。
 const assertHandles = (actual, expected, message) => assertLines([actual], [expected], message);
+// 一串數字（例如各個標示的位置），同樣容許 0.01。
+const assertNumbers = (actual, expected, message) => assertLines([actual], [expected], message);
 
 test("選了趨勢線工具後點兩下：兩點之間出現一條線，兩端各自對在所點的交易日與價位，工具自動回到一般模式", () => {
   const { chart, changes, tools, tap, drawnLines, drawnLabels } = createChart();
@@ -1371,4 +1374,320 @@ test("矩形比畫面還大（四個邊都在畫面外）：底色照畫，但�
   const end = chart.view.end;
   drag([150, 150], [230, 150]);
   assert.equal(chart.view.end, end - 10);
+});
+
+// ---------- 票 05：黃金分割 ----------
+// 第一點是 1、第二點是 0。由低往高拉：第一點 (88.525, 241)＝2026-02-20、97.15，第二點 (249.525, 87)＝2026-03-12、102.85；
+// 兩點相差 5.7 元＝154px。各比例的價位＝102.85 − 比例×5.7，y＝87＋比例×154：
+//   0 → 102.85（87）、0.236 → 101.5048（123.34）、0.382 → 100.6726（145.83）、0.5 → 100（164）、
+//   0.618 → 99.3274（182.17）、0.786 → 98.3698（208.04）、1 → 97.15（241）。
+// 七條橫線和水平線一樣對在整數像素的正中央（y 取整數＋0.5），一筆畫完，由 0 排到 1；每條從靠左的那一點畫到繪圖區右緣 x=326。
+// 兩點之間另有一條連線（看得出量的是哪一段），畫在七條橫線之前。
+const fibLevels = (from, ys, to = 326) => ys.flatMap(y => [[from, y], [to, y]]);
+const FIB_UP_YS = [87.5, 123.5, 146.5, 164.5, 182.5, 208.5, 241.5];
+const FIB_UP_LABELS = ["0 (102.85)", "0.236 (101.5)", "0.382 (100.67)", "0.5 (100)", "0.618 (99.33)", "0.786 (98.37)", "1 (97.15)"];
+const FIB = (id = "saved-fib-01") => savedLine("fib", ["2026-02-20", 97.15], ["2026-03-12", 102.85], id);
+// 1 在 97.15（y=241）、0 在 101.63（y＝10＋4.07/11.4×308＝119.96）時的七條線。
+const FIB_SHORT_YS = [120.5, 149.5, 166.5, 180.5, 195.5, 215.5, 241.5];
+
+test("選了黃金分割工具後點兩下：畫出 0 到 1 七條橫線（0 在第二點、1 在第一點），每條標出比例與價位，工具自動回一般模式", () => {
+  const { chart, changes, tools, tap, drawnLines, drawnLabels } = createChart();
+  chart.setTool("fib");
+  tap(90, 241);
+  assert.deepEqual(changes, [], "只點了第一下：還沒有東西");
+  assert.deepEqual(tools, ["fib"]);
+  tap(250, 87);
+  assert.equal(changes.length, 1);
+  const [{ type, drawing }] = changes;
+  assert.equal(type, "add");
+  assert.match(drawing.id, ID_RE);
+  assert.deepEqual(drawing, { id: drawing.id, kind: "fib", anchors: [{ date: "2026-02-20", price: 97.15 }, { date: "2026-03-12", price: 102.85 }] });
+  assert.deepEqual(tools, ["fib", null], "畫完自動回一般模式");
+
+  assertLines(drawnLines(), [[[88.525, 241], [249.525, 87]], fibLevels(88.525, FIB_UP_YS)]);
+  assert.deepEqual(drawnLabels().sort(), FIB_UP_LABELS);
+});
+
+test("由高往低拉：比例方向跟著拉的方向（1 在高點、0 在低點）；由右往左拉：錨點照點的順序存，橫線仍從靠左的那一點畫到右緣", () => {
+  const { chart, changes, tap, drawnLines, drawnLabels } = createChart();
+  chart.setTool("fib");
+  tap(90, 87);    // 第一點：2026-02-20、102.85（1）
+  tap(250, 241);  // 第二點：2026-03-12、97.15（0）
+  assert.deepEqual(changes[0].drawing.anchors, [{ date: "2026-02-20", price: 102.85 }, { date: "2026-03-12", price: 97.15 }]);
+  // 價位＝97.15＋比例×5.7，y＝241−比例×154：0.236 → 98.4952（204.66）、0.382 → 99.3274（182.17）、0.5 → 100（164）、
+  // 0.618 → 100.6726（145.83）、0.786 → 101.6302（119.96）。
+  assertLines(drawnLines(), [[[88.525, 87], [249.525, 241]], fibLevels(88.525, [241.5, 205.5, 182.5, 164.5, 146.5, 120.5, 87.5])]);
+  assert.deepEqual(drawnLabels().sort(), ["0 (97.15)", "0.236 (98.5)", "0.382 (99.33)", "0.5 (100)", "0.618 (100.67)", "0.786 (101.63)", "1 (102.85)"]);
+
+  // 由右往左拉（先點右下、再點左上）：1 在右下那一點（97.15）、0 在左上（102.85），和由低往高拉的七條線一樣。
+  chart.setDrawings([]);
+  chart.setTool("fib");
+  tap(250, 241);
+  tap(90, 87);
+  assert.deepEqual(changes.at(-1).drawing.anchors, [{ date: "2026-03-12", price: 97.15 }, { date: "2026-02-20", price: 102.85 }], "不重排");
+  assertLines(drawnLines(), [[[249.525, 241], [88.525, 87]], fibLevels(88.525, FIB_UP_YS)]);
+  assert.deepEqual(drawnLabels().sort(), FIB_UP_LABELS);
+});
+
+test("黃金分割點了第一下之後有預覽：起點有記號，七條線跟著游標，還不標文字、不儲存；Esc 取消不留東西", () => {
+  const { chart, changes, tools, tap, key, drawnLines, drawnLabels, drawnHandles } = createChart();
+  chart.setTool("fib");
+  tap(90, 241);
+  assertHandles(drawnHandles(), [[88.525, 241]]);
+  assertLines(drawnLines(), [], "游標還在起點上：沒有預覽");
+  chart.canvas.dispatch("pointermove", { clientX: 250, clientY: 87 });
+  assertLines(drawnLines(), [[[88.525, 241], [249.525, 87]], fibLevels(88.525, FIB_UP_YS)]);
+  // 游標移到第 20 根、y=120（101.6286 取到分＝101.63 → y＝119.96）：兩點相差 121.04px，
+  // y＝119.96＋比例×121.04 → 119.96、148.53、166.20、180.48、194.76、215.10、241。
+  chart.canvas.dispatch("pointermove", { clientX: 170, clientY: 120 });
+  assertLines(drawnLines(), [[[88.525, 241], [169.025, 119.96]], fibLevels(88.525, FIB_SHORT_YS)]);
+  assert.deepEqual(drawnLabels(), []);
+  assert.deepEqual(changes, []);
+  key("Escape");
+  assertLines(drawnLines(), []);
+  assertHandles(drawnHandles(), []);
+  assert.deepEqual(tools, ["fib", null]);
+  assert.deepEqual(changes, []);
+});
+
+test("兩點在同一個價位（或近到七條線疊在一起）時不成立：第二下不算，工具與起點留著；同一根、不同價位則可以", () => {
+  const { chart, changes, tools, tap, drawnLines } = createChart();
+  chart.setTool("fib");
+  tap(90, 241);
+  tap(250, 241);  // 同一個價位
+  tap(250, 243);  // 只差 2px
+  assert.deepEqual(changes, []);
+  assert.deepEqual(tools, ["fib"]);
+  tap(90, 120);   // 同一根、往上 121px（101.63）：七條線從那一根往右畫
+  assert.deepEqual(changes.map(change => change.drawing.anchors), [[{ date: "2026-02-20", price: 97.15 }, { date: "2026-02-20", price: 101.63 }]]);
+  assertLines(drawnLines(), [[[88.525, 241], [88.525, 119.96]], fibLevels(88.525, FIB_SHORT_YS)]);
+});
+
+test("黃金分割的線畫在布林通道、K 棒、均線之前，不擋住它們；橫線到繪圖區右緣為止，不進價格軸", () => {
+  const { chart, strokes, reset } = createChart();
+  chart.setDrawings([FIB()]);
+  reset(); chart.draw();
+  const first = color => strokes.findIndex(stroke => stroke.color === color);
+  assert.ok(first(DRAW) >= 0);
+  for (const color of ["--dim", "--up", "--accent"]) assert.ok(first(color) > first(DRAW), `${color} 疊在黃金分割上面`);
+  assert.ok(strokes.filter(stroke => stroke.color === DRAW).every(stroke => stroke.points.every(([x]) => x >= 4 && x <= 326)));
+});
+
+// 標示用的假字寬是每個字 7px；墊底那一塊左右各多 4px、高 14px，文字的 x 是那一塊的左緣＋4、y 是正中央＋0.5。
+function fibLabels({ chart, texts, reset }) {
+  reset(); chart.draw();
+  return texts.filter(text => text.color === DRAW).map(({ text, x, y }) => ({ text, left: x - 4, right: x + text.length * 7 + 4, cy: y - 0.5 }));
+}
+
+test("每條線的標示貼在線的左端外側；左邊放不下就留在繪圖區內；都不進右側價格軸、不出繪圖區上下緣，彼此不重疊", () => {
+  const context = createChart();
+  // 起點在第 30 根（x＝249.525）：左邊有位置，標示整個在線的左端之外。
+  context.chart.setDrawings([savedLine("fib", ["2026-03-12", 97.15], ["2026-03-17", 102.85])]);
+  let labels = fibLabels(context);
+  assert.deepEqual(labels.map(label => label.text).sort(), FIB_UP_LABELS);
+  for (const label of labels) assert.ok(label.left >= 4 && label.right <= 249.525 - 4 + 0.01, `${label.text} 在線的左端外側：${JSON.stringify(label)}`);
+  // 依 FIB_UP_LABELS 的順序（0 到 1）。字數 10、13、14、9、13、13、9 → 墊底那一塊寬 78、99、106、71、99、99、71。
+  const positions = key => FIB_UP_LABELS.map(text => labels.find(label => label.text === text)[key]);
+  assertNumbers(positions("cy"), [87, 123.344, 145.828, 164, 182.172, 208.044, 241], "在外側時上下對齊各自的線");
+  assertNumbers(positions("right"), Array(7).fill(245.525), "右緣都貼在線的左端外 4px");
+  assertNumbers(positions("left"), [167.525, 146.525, 139.525, 174.525, 146.525, 146.525, 174.525]);
+
+  // 起點在第 10 根（x＝88.525）：左邊放不下最長的標示（寬 106px），整組改貼繪圖區左緣（x=6）、
+  // 標在各條線的上方（正中央在線上方 9px，和水平線的價位一樣），不壓住線頭與把手。
+  context.chart.setDrawings([FIB()]);
+  labels = fibLabels(context);
+  assert.equal(labels.length, 7);
+  for (const label of labels) assert.ok(label.left >= 4 && label.right <= 326, `${label.text} 在繪圖區內：${JSON.stringify(label)}`);
+  assertNumbers(positions("cy"), [78, 114.344, 136.828, 155, 173.172, 199.044, 232], "放不下時標在線的上方");
+  assertNumbers(positions("left"), Array(7).fill(6), "整組對齊左緣");
+  // 最上面那條貼著繪圖區上緣（105.7 → y=10）：上方沒有位置，改標在線的下方（正中央在線下方 10px）。
+  context.chart.setDrawings([savedLine("fib", ["2026-02-20", 100], ["2026-03-12", 105.7])]);
+  assert.equal(fibLabels(context).find(label => label.text === "0 (105.7)").cy, 20);
+
+  // 起點在最後一根（第 39 根，x＝321.975）而且貼著上下緣：標示仍在繪圖區內。
+  context.chart.setDrawings([savedLine("fib", ["2026-03-21", 94.3], ["2026-03-21", 105.7])]);
+  labels = fibLabels(context);
+  assert.equal(labels.length, 7);
+  for (const label of labels) {
+    assert.ok(label.left >= 4 && label.right <= 326, `${label.text} 不進價格軸：${JSON.stringify(label)}`);
+    assert.ok(label.cy - 7 >= 10 && label.cy + 7 <= 318, `${label.text} 不出上下緣：${JSON.stringify(label)}`);
+  }
+  for (const one of labels) for (const other of labels) assert.ok(one === other || Math.abs(one.cy - other.cy) >= 14, `${one.text} 與 ${other.text} 不重疊`);
+});
+
+test("七條線擠在一起時只標放得下的：先標 0 與 1，再來 0.618、0.382，然後才是其他；線本身七條都還在", () => {
+  const { chart, drawnLines, drawnLabels } = createChart();
+  // 100 → y=164、100.74 → y=144：七條線擠在 20px 內，只放得下頭尾兩個標示。
+  chart.setDrawings([savedLine("fib", ["2026-02-20", 100], ["2026-03-12", 100.74])]);
+  assert.deepEqual(drawnLabels().sort(), ["0 (100.74)", "1 (100)"]);
+  assert.equal(drawnLines().at(-1).length, 14, "七條線都畫");
+  // 100 → y=164、101.48 → y=124：40px，中間多放得下一個，給 0.618（101.48−0.618×1.48＝100.5654，y=148.7）。
+  chart.setDrawings([savedLine("fib", ["2026-02-20", 100], ["2026-03-12", 101.48])]);
+  assert.deepEqual(drawnLabels().sort(), ["0 (101.48)", "0.618 (100.57)", "1 (100)"]);
+  // 100 → y=164、103.7 → y=64：100px，各條相距 23.6、14.6、11.8、11.8、16.8、21.4px。
+  // 0.618（y=125.8）與 0.382（y=102.2）相距 23.6px 都放得下；0.5（y=114）夾在中間放不下；0.236（y=87.6）、0.786（y=142.6）放得下。
+  chart.setDrawings([savedLine("fib", ["2026-02-20", 100], ["2026-03-12", 103.7])]);
+  assert.deepEqual(drawnLabels().sort(), ["0 (103.7)", "0.236 (102.83)", "0.382 (102.29)", "0.618 (101.41)", "0.786 (100.79)", "1 (100)"]);
+});
+
+test("平移、縮放後七條線仍在各自的價位；起點在畫面左邊之外時從左緣畫起；價位在畫面外的那幾條不畫；整組在畫面外就不畫", () => {
+  const { chart, drawnLines, drawnLabels } = createChart();
+  chart.setDrawings([FIB()]);
+  // 放大成最後 20 根（每根 16.1px）：第一點在左邊之外（x＝−148.95）、第二點在 x＝173.05；價格範圍不變。
+  // 兩點的連線在左緣的高度是 241−154×152.95/322＝167.85。
+  chart.zoom(0.5);
+  assertLines(drawnLines(), [[[4, 167.85], [173.05, 87]], fibLevels(4, FIB_UP_YS)]);
+  assert.deepEqual(drawnLabels().sort(), FIB_UP_LABELS);
+
+  // 縮回 40 根再往左平移 10 根（第 30～69 根，價格座標 88.6～134.2，每元 6.754px）：102.85 → y＝221.75、97.15 → y＝260.25，相差 38.5px。
+  // y＝221.75＋比例×38.5 → 221.75、230.84、236.46、241、245.54、252.01、260.25。第一點在 x＝169.025，第二點在右緣之外（330.025）。
+  chart.zoom(2);
+  chart.pan(-10);
+  assertLines(drawnLines(), [[[169.025, 260.25], [326, 222.7125]], fibLevels(169.025, [222.5, 231.5, 236.5, 241.5, 246.5, 252.5, 260.5])]);
+  assert.deepEqual(drawnLabels().sort(), ["0 (102.85)", "0.618 (99.33)", "1 (97.15)"], "擠在 38.5px 內：只標放得下的");
+
+  // 再往左平移 20 根（第 10～49 根）：兩點都在畫面右邊之外，整組不畫。
+  chart.pan(-20);
+  assertLines(drawnLines(), []);
+  assert.deepEqual(drawnLabels(), []);
+  chart.pan(30);
+  assertLines(drawnLines(), [[[88.525, 241], [249.525, 87]], fibLevels(88.525, FIB_UP_YS)]);
+
+  // 1 在 100、0 在 111.4（畫面上方之外）：0、0.236（108.71）、0.382（107.05）都在畫面外，不畫；
+  // 0.5 → 105.7（y=10，正好在上緣）、0.618 → 104.3548（46.34）、0.786 → 102.4396（98.09）、1 → 100（164）。連線到上緣為止。
+  chart.setDrawings([savedLine("fib", ["2026-02-20", 100], ["2026-03-12", 111.4])]);
+  assertLines(drawnLines(), [[[88.525, 164], [169.025, 10]], fibLevels(88.525, [10.5, 46.5, 98.5, 164.5])]);
+  assert.deepEqual(drawnLabels().sort(), ["0.5 (105.7)", "0.618 (104.35)", "0.786 (102.44)", "1 (100)"]);
+
+  chart.setDrawings([savedLine("fib", ["2026-02-20", 110], ["2026-03-12", 111.4])]); // 整組在畫面上方之外
+  assertLines(drawnLines(), []);
+});
+
+test("黃金分割切到週 K、月 K：七條線的價位不變，起點落在包含那一天的那一根；切回日 K 回到原位", () => {
+  const { chart, drawnLines, drawnLabels } = createChart();
+  chart.setDrawings([savedLine("fib", ["2026-02-18", 97.15], ["2026-03-12", 102.85])]);
+  const bars = (count, time) => Array.from({ length: count }, (_, index) => ({ t: time(index), label: `第${index + 1}根`, open: 100, close: 100, high: 105, low: 95, volume: 1 }));
+  chart.setData(bars(16, index => new Date(Date.UTC(2026, 0, 2 + index * 7)).toISOString().slice(0, 10)), { count: 16, unit: "週" });
+  assertLines(drawnLines(), [[[154.9375, 241], [215.3125, 87]], fibLevels(154.9375, FIB_UP_YS)], "週 K");
+  assert.deepEqual(drawnLabels().sort(), FIB_UP_LABELS, "週 K");
+  chart.setData(bars(16, index => new Date(Date.UTC(2025, index, 28)).toISOString().slice(0, 10)), { count: 16, unit: "月" });
+  assertLines(drawnLines(), [[[275.6875, 241], [295.8125, 87]], fibLevels(275.6875, FIB_UP_YS)], "月 K");
+  assert.deepEqual(drawnLabels().sort(), FIB_UP_LABELS, "月 K");
+  chart.setData(dailyCandles(), { count: 40, unit: "日" });
+  assertLines(drawnLines(), [[[72.425, 241], [249.525, 87]], fibLevels(72.425, FIB_UP_YS)], "切回日 K");
+});
+
+test("點在任一條橫線或兩點的連線上就選取黃金分割：兩個點各出現一個把手；線與線之間、起點左邊點不到", () => {
+  const { chart, changes, selections, tap, drawnHandles } = createChart();
+  chart.setDrawings([FIB()]);
+  tap(300, 174);  // 0.5 那條（y=164）下方 10px、0.618 那條（y=182.17）上方 8px：滑鼠點不到
+  assert.deepEqual(selections, []);
+  assert.equal(chart.selection, 76, "照舊選 K 棒");
+  tap(40, 164);   // 0.5 那條的高度，但在起點（x=88.525）左邊 48px
+  assert.deepEqual(selections, []);
+  tap(300, 168);  // 0.5 那條下方 4px
+  assert.deepEqual(selections, ["saved-fib-01"]);
+  assertHandles(drawnHandles(), [[88.525, 241], [249.525, 87]]);
+  assert.deepEqual(changes, [], "選取不是資料變動");
+
+  tap(300, 280);
+  tap(300, 174, "touch"); // 手指離 0.618 那條 8px：點得到
+  tap(300, 280, "touch");
+  tap(200, 135);  // 兩點的連線在 x=200 的高度是 134.4；上下兩條橫線（123.34、145.83）都在 10px 以外：點到的是連線
+  assert.deepEqual(selections, ["saved-fib-01", null, "saved-fib-01", null, "saved-fib-01"]);
+});
+
+test("拖已選取的黃金分割的線身：整組平移（兩點移動同樣的根數與價差）；拖任一端的把手：只有那一端移動，比例跟著重算；放開各儲存一次", () => {
+  const { chart, changes, tap, drag, drawnLines, drawnLabels } = createChart();
+  chart.setDrawings([FIB()]);
+  tap(300, 164);
+  const end = chart.view.end;
+  drag([300, 172], [260, 95], { pointerType: "touch" }); // 手指抓在 0.5 那條下方 8px：往左 40px＝5 根、往上 77px＝＋2.85
+  assert.deepEqual(changes, [{ type: "update", drawing: { id: "saved-fib-01", kind: "fib", anchors: [{ date: "2026-02-15", price: 100 }, { date: "2026-03-07", price: 105.7 }] } }]);
+  assert.equal(chart.view.end, end, "圖表沒有跟著平移");
+  // 現在是 (48.275, 164) → (209.275, 10)：七條線整組往上 77px。
+  assertLines(drawnLines(), [[[48.275, 164], [209.275, 10]], fibLevels(48.275, [10.5, 46.5, 69.5, 87.5, 105.5, 131.5, 164.5])]);
+
+  drag([209, 11], [129, 44]); // 抓第二點（0）往左 80px、往下 33px → 第 15 根（2026-02-25）、y=43（104.4786 取到分＝104.48 → y＝42.96）
+  assert.deepEqual(changes.at(-1).drawing.anchors, [{ date: "2026-02-15", price: 100 }, { date: "2026-02-25", price: 104.48 }]);
+  // 1 在 100（y=164）、0 在 104.48（y=42.96），相差 121.04px：y＝42.96＋比例×121.04 → 42.96、71.53、89.20、103.48、117.76、138.10、164。
+  // 價位＝104.48−比例×4.48 → 104.48、103.4227、102.7686、102.24、101.7114、100.9587、100。
+  assertLines(drawnLines(), [[[48.275, 164], [128.775, 42.96]], fibLevels(48.275, [43.5, 72.5, 89.5, 103.5, 118.5, 138.5, 164.5])]);
+  assert.deepEqual(drawnLabels().sort(), ["0 (104.48)", "0.236 (103.42)", "0.382 (102.77)", "0.5 (102.24)", "0.618 (101.71)", "0.786 (100.96)", "1 (100)"]);
+
+  drag([48, 164], [48, 241]); // 抓第一點（1）往下 77px → 97.15，日期不變
+  assert.deepEqual(changes.at(-1).drawing.anchors, [{ date: "2026-02-15", price: 97.15 }, { date: "2026-02-25", price: 104.48 }]);
+  assert.equal(changes.length, 3);
+});
+
+test("把一端拖到和另一端同一個價位：那一端停在上一個還分得出七條線的位置；拖動中按 Esc 回到原樣不儲存", () => {
+  const { chart, changes, tap, key, drawnLines } = createChart();
+  chart.setDrawings([FIB()]);
+  tap(300, 164);
+  chart.canvas.dispatch("pointerdown", { clientX: 250, clientY: 88 });
+  chart.canvas.dispatch("pointermove", { clientX: 170, clientY: 121 }); // 先往左 80px、往下 33px：第 20 根、101.63
+  chart.canvas.dispatch("pointermove", { clientX: 170, clientY: 242 }); // 再往下拖到 97.15：和第一點同價位，不成立
+  chart.canvas.dispatch("pointerup", { clientX: 170, clientY: 242 });
+  assert.deepEqual(changes.map(change => change.drawing.anchors), [[{ date: "2026-02-20", price: 97.15 }, { date: "2026-03-02", price: 101.63 }]]);
+
+  chart.canvas.dispatch("pointerdown", { clientX: 170, clientY: 121 });
+  chart.canvas.dispatch("pointermove", { clientX: 250, clientY: 88 });
+  key("Escape");
+  chart.canvas.dispatch("pointerup", { clientX: 250, clientY: 88 });
+  assert.equal(changes.length, 1, "Esc：不儲存");
+  assertLines(drawnLines(), [[[88.525, 241], [169.025, 119.96]], fibLevels(88.525, FIB_SHORT_YS)]);
+});
+
+test("刪除選取的黃金分割：七條線與標示都消失並通知儲存端刪除，別的線不受影響", () => {
+  const { chart, changes, selections, tap, key, drawnLines, drawnLabels } = createChart();
+  chart.setDrawings([FIB(), saved(105)]); // 水平線 105 → y＝10＋0.7/11.4×308＝28.9
+  tap(300, 241);
+  assert.deepEqual(selections, ["saved-fib-01"]);
+  key("Delete");
+  assert.deepEqual(changes, [{ type: "remove", drawing: { id: "saved-fib-01", kind: "fib", anchors: [{ date: "2026-02-20", price: 97.15 }, { date: "2026-03-12", price: 102.85 }] } }]);
+  assertLines(drawnLines(), [[[4, 29.5], [326, 29.5]]]);
+  assert.deepEqual(drawnLabels(), ["105"]);
+});
+
+// ---------- 票 05：審查後補的 ----------
+
+test("兩點的連線是襯在後面的細虛線，比七條橫線淡、比它們細；橫線是實線。選取時兩者都變粗；預覽時橫線也是虛線", () => {
+  const { chart, strokes, reset, tap } = createChart();
+  const styles = () => {
+    reset(); chart.draw();
+    return strokes.filter(stroke => stroke.color === DRAW && stroke.points.length)
+      .map(stroke => ({ points: stroke.points.length, dashed: stroke.dash.length > 0, alpha: stroke.alpha, width: stroke.width }));
+  };
+  chart.setDrawings([FIB()]);
+  const [guide, levels] = styles();
+  assert.deepEqual([guide.points, levels.points], [2, 14], "先畫連線，再畫七條橫線");
+  assert.deepEqual([guide.dashed, levels.dashed], [true, false]);
+  assert.ok(guide.alpha < levels.alpha && guide.width < levels.width, JSON.stringify({ guide, levels }));
+
+  tap(300, 164);
+  const [pickedGuide, pickedLevels] = styles();
+  assert.ok(pickedGuide.width > guide.width && pickedLevels.width > levels.width, "選取時連線與橫線都變粗");
+  assert.deepEqual([pickedGuide.dashed, pickedLevels.dashed], [true, false]);
+
+  chart.setDrawings([]);
+  chart.setTool("fib");
+  tap(90, 241);
+  chart.canvas.dispatch("pointermove", { clientX: 250, clientY: 87 });
+  assert.deepEqual(styles().map(style => [style.points, style.dashed]), [[2, true], [14, true]], "預覽");
+});
+
+test("黃金分割的起點比圖上第一根還早時先不畫；五年歷史接上後出現，七條線在原本的價位、從繪圖區左緣畫起", () => {
+  const { chart, drawnLines, drawnLabels } = createChart();
+  chart.setDrawings([savedLine("fib", ["2025-12-20", 97.15], ["2026-03-12", 102.85])]); // 第一點在還沒載入的歷史裡
+  assertLines(drawnLines(), [], "歷史還沒接上：位置算不出來，先不畫");
+  assert.deepEqual(drawnLabels(), []);
+
+  const older = Array.from({ length: 30 }, (_, index) => {
+    const date = new Date(Date.UTC(2025, 11, 2 + index)).toISOString().slice(0, 10);
+    return { t: date, label: date, open: 100, close: 100, high: 105, low: 95, volume: 1 };
+  });
+  chart.setData([...older, ...dailyCandles()], { count: 40, unit: "日" });
+  // 第一點 2025-12-20 是第 18 根，在畫面第一根（第 70 根）左邊：x＝−410.575。連線在左緣的高度是 241−154×414.575/660.1＝144.28。
+  assertLines(drawnLines(), [[[4, 144.28], [249.525, 87]], fibLevels(4, FIB_UP_YS)]);
+  assert.deepEqual(drawnLabels().sort(), FIB_UP_LABELS);
 });
