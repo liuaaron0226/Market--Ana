@@ -1,0 +1,16 @@
+{
+  "_note": "國外同類股代號的寫法：網站 cloud/lib/watch-peers.js parsePeerSymbol 與排程 watch_run.py peer_symbol 共用這一份對照（G 票）。null 是看不懂。",
+  "cases": [
+    ["NVDA", {"symbol": "NVDA.US", "market": "US"}],
+    ["nvda.us", {"symbol": "NVDA.US", "market": "US"}],
+    ["BRK.B", {"symbol": "BRK.B.US", "market": "US"}],
+    ["005930.KS", {"symbol": "005930.KO", "market": "KR"}],
+    ["035720.KQ", {"symbol": "035720.KQ", "market": "KR"}],
+    ["^N225", {"symbol": "N225.INDX", "market": "INDEX"}],
+    ["GSPC.INDX", {"symbol": "GSPC.INDX", "market": "INDEX"}],
+    ["8035.T", {"symbol": "8035.TSE", "market": "JP"}],
+    ["", null],
+    ["TOOLONGSYMBOL123456", null],
+    ["12AB", null]
+  ]
+}

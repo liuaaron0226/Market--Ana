@@ -76,6 +76,8 @@ class WatchWorkflowTests(unittest.TestCase):
         # 第 16 片：提名不能拖到判斷（晨間版 08:45 前要鎖定），所以排在判斷發布之後；提名也存回 R2 再寫資料庫。
         nominate = step(self.source, "提名國外同類股（站主確認後才使用）")
         self.assertIn("python watch_run.py nominate", nominate)
+        # 只在正式的晚間版：晨間版與晚間版各一把鎖，同時提名會撞同一個檔；乾跑不碰正式資料庫與行情來源的額度。
+        self.assertIn("if: success() && env.EDITION == 'evening' && steps.mode.outputs.dry_run == 'false'", nominate)
         for name in ("MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}", "EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}"):
             self.assertIn(name, nominate)
         order = [self.source.index(f"- name: {name}") for name in (

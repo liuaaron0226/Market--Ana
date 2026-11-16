@@ -16,7 +16,7 @@ import re
 import shutil
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -393,6 +393,9 @@ def _run(ledger: Path, edition: str, watchlist: Sequence[Mapping[str, Any]], ind
 
 NOMINATION_SCHEMA = "watch-nomination/v1"
 NOMINATION_BUDGET = 20            # 每次排程最多叫幾次模型來提名（一檔一次、不合格重試也算）
+# 查出確定結果的排除原因；其他（EODHD 這一次的檢查額度、網路、金鑰、額度）是這一次沒查成，下一次排程再查。
+SETTLED_EXCLUSIONS = {"not_found", "no_source", "unreadable_symbol"}
+CHECK_PATIENCE_DAYS = 3
 NOMINEES_MIN, NOMINEES_MAX = 3, 5
 REASON_LIMIT = 60
 NOMINATION_OUTPUT: dict[str, Any] = {
@@ -515,6 +518,46 @@ def _nomination_sql(record: Mapping[str, Any], owner_email: str, at: str) -> lis
     return out
 
 
+def _ask_for_nominees(model_input: Mapping[str, Any], *, model_bin: Path | str, model: str, timeout_seconds: float,
+                      budget: list[int]) -> tuple[dict[str, Any] | None, list[dict[str, str]]]:
+    """問模型一次（不合格同一份輸入重試一次）；budget 是這一批剩下的呼叫次數（會被扣）。"""
+    prompt = build_prompt(NOMINATION_RULES, model_input)
+    attempts: list[dict[str, str]] = []
+    for _ in range(2):
+        if budget[0] <= 0:
+            break
+        budget[0] -= 1
+        status, structured, detail = call_model(model_bin, prompt, model, timeout_seconds, NOMINATION_OUTPUT)
+        if status != "ok":
+            attempts.append({"status": status, "detail": detail})
+            break
+        problem = _nomination_problem(structured, str(model_input["code"]))
+        if problem is None:
+            return structured, attempts
+        attempts.append({"status": "answer_invalid", "detail": problem})
+    return None, attempts
+
+
+def _checked(answer: Mapping[str, Any], check: Callable[[str, str], str]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """每一檔提名過一次「來源拿得到行情」：（列出的, 不列的連同原因）。日股沒有來源、代號看不懂的不查。"""
+    listed: list[dict[str, Any]] = []
+    excluded: list[dict[str, Any]] = []
+    for peer in answer["peers"]:
+        parsed = peer_symbol(peer["symbol"])
+        item = {"symbol": parsed["symbol"] if parsed else peer["symbol"], "market": parsed["market"] if parsed else None,
+                "name": peer["name"].strip()[:40], "reason": peer["reason"].strip()}
+        if parsed is None:
+            excluded.append({**item, "excluded": "unreadable_symbol"})
+        elif parsed["market"] == "JP":
+            excluded.append({**item, "excluded": "no_source"})
+        elif any(other["symbol"] == item["symbol"] for other in listed + excluded):
+            continue
+        else:
+            verdict = check(item["symbol"], item["market"])
+            (listed if verdict == "ok" else excluded).append(item if verdict == "ok" else {**item, "excluded": verdict})
+    return listed, excluded
+
+
 def nominate_peers(
     ledger: Path | str,
     stocks: Sequence[Mapping[str, Any]],
@@ -531,12 +574,15 @@ def nominate_peers(
 
     ``stocks`` 是 ``{"code", "name", "industry"}``——提示裡只有這三樣公開資訊。``check(symbol, market)`` 是
     「來源拿得到行情」的檢查，回 ``ok``／``not_found``／其他原因；只有 ``ok`` 的才列出（日股沒有來源，不查直接不列）。
-    提名寫成就鎖在帳本 ``nominations/<代號>.json``，之後不再問；模型失敗或兩次都不合格什麼都不鎖，下一次排程再問。
-    站主確認、取消、自己加在網站上做（``cloud/lib/watch-peers.js``），這裡只寫「提名中」。
+
+    兩段鎖：模型的回答一拿到就鎖在 ``nominations/answers/<代號>.json``（之後不再問模型）；每一檔都查出確定的結果
+    （拿得到或查無代號）才鎖名單 ``nominations/<代號>.json`` 並發布。這一次沒查成的（EODHD 這一次的檢查額度、網路、
+    金鑰）下一次排程再查；回答鎖下來滿 ``CHECK_PATIENCE_DAYS`` 天還查不成，就照能查的鎖名單、沒查成的寫明原因不列。
+    模型失敗或兩次都不合格什麼都不鎖，下一次排程再問。站主確認、取消、自己加在網站上做（``cloud/lib/watch-peers.js``）。
     """
     clock = now or default_now
     folder = Path(ledger) / "nominations"
-    left = call_budget
+    budget = [call_budget]
     results: list[dict[str, Any]] = []
     statements: list[str] = []
     for stock in stocks:
@@ -544,56 +590,37 @@ def nominate_peers(
         if not re.fullmatch(r"[0-9A-Za-z]{1,12}", code):
             results.append({"code": code, "outcome": "rejected", "detail": "代號不合法"})
             continue
-        path = folder / f"{code}.json"
+        path, answer_path = folder / f"{code}.json", folder / "answers" / f"{code}.json"
         if path.exists():
             record = read_record(path)
             results.append({"code": code, "outcome": "unchanged", "listed": record["listed"],
                             "excluded": record["excluded"]})
             statements += _nomination_sql(record, owner_email, record["locked_at"])
             continue
-        model_input = {"code": code, "name": stock.get("name"), "industry": stock.get("industry")}
-        prompt = build_prompt(NOMINATION_RULES, model_input)
-        attempts: list[dict[str, str]] = []
-        accepted = None
-        for _ in range(2):
-            if left <= 0:
-                break
-            left -= 1
-            status, structured, detail = call_model(model_bin, prompt, model, timeout_seconds, NOMINATION_OUTPUT)
-            if status != "ok":
-                attempts.append({"status": status, "detail": detail})
-                break
-            problem = _nomination_problem(structured, code)
-            if problem is None:
-                accepted = structured
-                break
-            attempts.append({"status": "answer_invalid", "detail": problem})
-        if accepted is None:
-            results.append({"code": code, "outcome": "not_nominated" if attempts else "budget_spent",
-                            "attempts": attempts})
-            continue
-        listed: list[dict[str, Any]] = []
-        excluded: list[dict[str, Any]] = []
-        for peer in accepted["peers"]:
-            parsed = peer_symbol(peer["symbol"])
-            item = {"symbol": parsed["symbol"] if parsed else peer["symbol"],
-                    "market": parsed["market"] if parsed else None,
-                    "name": peer["name"].strip()[:40], "reason": peer["reason"].strip()}
-            if parsed is None:
-                excluded.append({**item, "excluded": "unreadable_symbol"})
-            elif parsed["market"] == "JP":
-                excluded.append({**item, "excluded": "no_source"})
-            elif any(other["symbol"] == item["symbol"] for other in listed):
+        if answer_path.exists():
+            answered = read_record(answer_path)
+        else:
+            model_input = {"code": code, "name": stock.get("name"), "industry": stock.get("industry")}
+            accepted, attempts = _ask_for_nominees(model_input, model_bin=model_bin, model=model,
+                                                   timeout_seconds=timeout_seconds, budget=budget)
+            if accepted is None:
+                results.append({"code": code, "outcome": "not_nominated" if attempts else "budget_spent",
+                                "attempts": attempts})
                 continue
-            else:
-                verdict = check(item["symbol"], item["market"])
-                if verdict == "ok":
-                    listed.append(item)
-                else:
-                    excluded.append({**item, "excluded": verdict})
-        record = seal({"schema": NOMINATION_SCHEMA, "kind": "nomination", "code": code, "input": model_input,
-                       "input_sha256": sha(model_input), "model": model, "answer": accepted, "attempts": attempts, "listed": listed,
-                       "excluded": excluded, "locked_at": clock().astimezone(TAIPEI).isoformat()})
+            append(answer_path, seal({"schema": NOMINATION_SCHEMA, "kind": "nomination_answer", "code": code,
+                                      "input": model_input, "input_sha256": sha(model_input), "model": model,
+                                      "answer": accepted, "attempts": attempts,
+                                      "locked_at": clock().astimezone(TAIPEI).isoformat()}))
+            answered = read_record(answer_path)
+        listed, excluded = _checked(answered["answer"], check)
+        unsettled = [item for item in excluded if item["excluded"] not in SETTLED_EXCLUSIONS]
+        waited = clock() - datetime.fromisoformat(answered["locked_at"])
+        if unsettled and waited < timedelta(days=CHECK_PATIENCE_DAYS):
+            results.append({"code": code, "outcome": "check_pending", "listed": listed, "excluded": excluded})
+            continue
+        record = seal({"schema": NOMINATION_SCHEMA, "kind": "nomination", "code": code,
+                       "answer_sha256": answered["record_sha256"], "listed": listed, "excluded": excluded,
+                       "locked_at": clock().astimezone(TAIPEI).isoformat()})
         outcome = append(path, record)
         record = read_record(path)
         results.append({"code": code, "outcome": outcome, "listed": record["listed"], "excluded": record["excluded"]})
@@ -622,23 +649,25 @@ def authorize(evidence: Path | str, edition: str) -> dict[str, Any]:
     return {"allowed": True, "forecast_base_date": log.get("base_date"), "forecast_outcome": log.get("outcome")}
 
 
-_EMAIL = re.compile(r"[^@\s'\"\;]+@[^@\s'\"\;]+")
+def _owner_literal(owner_email: str) -> str:
+    """站主 email 的 SQL 字面值：先用 watch_news 同一個格式檢查，再交給共用的跳脫。"""
+    from ledger_core import sql_literal
+    from watch_news import _EMAIL
+    if not _EMAIL.fullmatch(owner_email or ""):
+        raise ValueError("站主 email 格式不對")
+    return sql_literal(owner_email)
 
 
 def watchlist_sql(owner_email: str) -> str:
     """站主現在正在關注的股票，依最後一次打開關注的先後（被額度擠掉的固定是排在後面的同一批）。"""
-    if not _EMAIL.fullmatch(owner_email or ""):
-        raise ValueError("站主 email 格式不對")
     return ("SELECT code, name, market, watch_since FROM user_watchlist "
-            f"WHERE lower(email) = lower('{owner_email}') AND watching = 1 ORDER BY watch_since, code")
+            f"WHERE lower(email) = lower({_owner_literal(owner_email)}) AND watching = 1 ORDER BY watch_since, code")
 
 
 def nomination_candidates_sql(owner_email: str) -> str:
     """正在關注、而且還沒有任何國外同類股紀錄（提名中、已確認、已移除都算有）的股票，依打開關注的先後。"""
-    if not _EMAIL.fullmatch(owner_email or ""):
-        raise ValueError("站主 email 格式不對")
     return ("SELECT w.code, w.name FROM user_watchlist w "
-            f"WHERE lower(w.email) = lower('{owner_email}') AND w.watching = 1 AND NOT EXISTS "
+            f"WHERE lower(w.email) = lower({_owner_literal(owner_email)}) AND w.watching = 1 AND NOT EXISTS "
             "(SELECT 1 FROM watch_peers p WHERE p.email = w.email AND p.code = w.code) ORDER BY w.watch_since, w.code")
 
 

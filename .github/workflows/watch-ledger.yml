@@ -269,24 +269,21 @@ jobs:
       # 代號與產業）；代號要通過「來源拿得到行情」的檢查才列出。排在判斷發布之後，不拖到判斷的期限。
       - name: 提名國外同類股（站主確認後才使用）
         id: nominate
-        if: success()
+        # 只在正式的晚間版：晚間與晨間各一把鎖，同時提名會撞同一個檔；乾跑不碰正式資料庫與行情來源的額度。
+        if: success() && env.EDITION == 'evening' && steps.mode.outputs.dry_run == 'false'
         continue-on-error: true
         env:
           HOME: ${{ runner.temp }}/agy-home
-          DRY_RUN: ${{ steps.mode.outputs.dry_run }}
           OWNER_EMAIL: ${{ vars.OWNER_EMAIL }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
           EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
         run: |
-          args=(--ledger "$LEDGER" --agy-bin "$RUNNER_TEMP/agy/antigravity" --model gemini-3.8-flash
-                --log-output "$RUNNER_TEMP/watch-run/nominate.json")
-          if [ "$DRY_RUN" = "false" ]; then args+=(--sql-output "$RUNNER_TEMP/nominate.sql"); else args+=(--dry-run); fi
-          python watch_run.py nominate "${args[@]}"
+          python watch_run.py nominate --ledger "$LEDGER" --agy-bin "$RUNNER_TEMP/agy/antigravity" --model gemini-3.8-flash             --log-output "$RUNNER_TEMP/watch-run/nominate.json" --sql-output "$RUNNER_TEMP/nominate.sql"
 
       - name: 提名存回 R2（只新增）
-        if: always() && steps.nominate.outcome != 'skipped' && steps.mode.outputs.dry_run == 'false' && steps.restore.outcome == 'success'
+        if: always() && steps.nominate.outcome != 'skipped' && steps.restore.outcome == 'success'
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}

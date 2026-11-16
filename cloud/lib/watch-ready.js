@@ -1,6 +1,7 @@
 // 自選股關注 G 票第 14 片：早晚的判斷把某一檔變成「可以留意」時推播一次（規格〈推播〉：同一個轉變日一次）。
 // 判斷由 GitHub 的排程（watch-ledger.yml）寫進資料庫；推播金鑰只放在 Cloudflare，所以由 cron-trigger 每次被觸發時
 // 呼叫這裡，把還沒通知過的轉變日送出去。只看帳本最新的那一天：舊的轉變日（功能剛打開、整晚沒送出）不補發。
+// 先記再送：推播服務當下失敗的那一則不重送（和觸價同一個取捨）；沒有金鑰或沒有裝置時不記，之後補送。
 import { releasePolicy } from "./release-policy.js";
 import { pushConfigured, sendOne } from "./web-push.js";
 
@@ -30,6 +31,8 @@ export async function runReadyNotices(env, { now = Date.now, pushFetch = fetch }
   subrequests += 1;
   const { results: devices } = await db.prepare("SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE email = ? ORDER BY created_at")
     .bind(email).all();
+  // 推播金鑰還沒設定、或還沒有任何一台裝置：先不記，等設定好之後的下一次觸發再送（同一個轉變日還是最新的那天時）。
+  if (!pushConfigured(env) || !devices.length) return { notified: 0, waiting: "no_push", subrequests };
   const nowIso = new Date(nowMs).toISOString();
   const vapidCache = new Map();
   let notified = 0;
@@ -43,7 +46,6 @@ export async function runReadyNotices(env, { now = Date.now, pushFetch = fetch }
     subrequests += 1;
     if (!claimed.meta.changes) continue;
     notified += 1;
-    if (!pushConfigured(env)) continue;
     const payload = {
       title: `${row.code} ${row.name} 變成可以留意`,
       body: Number.isFinite(value) ? `觸發線 ${fmt(value)}` : "",   // 規格：只有代號、名稱、事件與價位

@@ -91,11 +91,15 @@ test("開關關著或沒有站主設定時什麼都不做", async () => {
   assert.equal(pushes.sent.length, 0);
 });
 
-test("推播金鑰還沒設定時照樣記下已處理，之後設定好也不補發舊的", async () => {
+test("推播金鑰還沒設定、或還沒有任何裝置時先不記：設定好之後（同一個轉變日還是最新的那天）才送出那一則", async () => {
   await watch("2330", "台積電");
   await judge("2330");
-  const result = await runReadyNotices({ ...env, VAPID_PRIVATE_KEY: undefined }, { now: () => EVENING, pushFetch: pushes.fetch });
-  assert.equal(result.notified, 1);
-  await run(EVENING + 60_000);
-  assert.equal(pushes.sent.length, 0);
+  const waiting = await runReadyNotices({ ...env, VAPID_PRIVATE_KEY: undefined }, { now: () => EVENING, pushFetch: pushes.fetch });
+  assert.equal(waiting.notified, 0);
+  await env.DB.prepare("DELETE FROM push_subscriptions").run();
+  assert.equal((await run(EVENING + 60_000)).notified, 0);
+  await env.DB.prepare("INSERT INTO push_subscriptions (endpoint, email, p256dh, auth, label, created_at) VALUES (?, ?, ?, ?, 'iPhone', '2026-11-16T00:00:00Z')")
+    .bind(phone.subscription.endpoint, OWNER, phone.subscription.keys.p256dh, phone.subscription.keys.auth).run();
+  await run(EVENING + 120_000);
+  assert.equal(pushes.sent.length, 1);
 });

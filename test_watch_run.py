@@ -344,12 +344,49 @@ class NominationTests(unittest.TestCase):
         self.assertFalse((self.ledger / "nominations").exists())
         self.assertNotIn("INSERT INTO watch_peers", result["sql"])
 
+    def test_a_nominee_the_source_could_not_check_this_time_is_checked_again_without_asking_the_model_again(self):
+        # 第一次：韓股那一檔因為 EODHD 這一次的檢查額度用完沒查成——不鎖名單、不發布，模型的回答先鎖下來。
+        verdicts = {"005930.KO": "eodhd_limit"}
+        self.check = lambda symbol, market: verdicts.get(symbol, "not_found" if symbol == "ZZZZ.US" else "ok")
+        first = self.nominate(fake_model(self.tmp, [envelope(nomination())]))
+        self.assertEqual(first["stocks"][0]["outcome"], "check_pending")
+        self.assertNotIn("INSERT INTO watch_peers", first["sql"])
+        (self.tmp / "calls.txt").unlink()
+
+        # 下一次排程：額度回來了，再查一次就鎖名單，不再問模型。
+        verdicts.clear()
+        second = self.nominate(fake_model(self.tmp, [envelope(nomination())]))
+
+        self.assertEqual(calls(self.tmp), 0)
+        self.assertEqual([peer["symbol"] for peer in second["stocks"][0]["listed"]], ["NVDA.US", "INTC.US", "005930.KO"])
+        self.assertEqual(second["sql"].count("INSERT INTO watch_peers"), 3)
+
+    def test_after_three_days_of_failed_checks_the_list_is_locked_with_what_could_be_checked(self):
+        self.check = lambda symbol, market: "network" if market == "KR" else ("not_found" if symbol == "ZZZZ.US" else "ok")
+        self.nominate(fake_model(self.tmp, [envelope(nomination())]))
+        result = wr.nominate_peers(self.ledger, [{"code": "2330", "name": "台積電", "industry": "半導體業"}],
+                                   owner_email="owner@example.com", model_bin=fake_model(self.tmp, [envelope({})]),
+                                   model="test-model", now=clock(at(LONG[25], 18, 0)), check=self.check)
+
+        [item] = result["stocks"]
+        self.assertEqual(item["outcome"], "written")
+        self.assertEqual([peer["symbol"] for peer in item["listed"]], ["NVDA.US", "INTC.US"])
+        self.assertEqual({peer["symbol"]: peer["excluded"] for peer in item["excluded"]}["005930.KO"], "network")
+
     def test_stops_asking_once_the_call_budget_is_spent(self):
         stocks = [{"code": code, "name": name, "industry": "半導體業"} for code, name in (("2330", "台積電"), ("2303", "聯電"))]
         result = self.nominate(fake_model(self.tmp, [envelope(nomination())]), stocks=stocks, call_budget=1)
 
         self.assertEqual([item["outcome"] for item in result["stocks"]], ["written", "budget_spent"])
         self.assertEqual(calls(self.tmp), 1)
+
+
+class PeerSymbolTests(unittest.TestCase):
+    def test_reads_symbols_the_same_way_as_the_site(self):
+        # 對照表和網站的測試（cloud/test/watch-peers-symbols.test.js）共用，兩邊改一邊另一邊會紅。
+        table = json.loads((Path(__file__).parent / "cloud/test/fixtures/peer-symbols.json").read_text(encoding="utf-8"))
+        for text, expected in table["cases"]:
+            self.assertEqual(wr.peer_symbol(text), expected, text)
 
 
 class SourceCheckTests(unittest.TestCase):
