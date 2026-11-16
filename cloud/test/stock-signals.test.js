@@ -180,3 +180,12 @@ test("融資維持率（估）：超出軸的那一端貼邊；很窄的範圍�
   assert.deepEqual(plain(read(credit({ low_pct: null, high_pct: 208 }), "credit")), []);
   assert.deepEqual(plain(read(credit({ low_pct: 210, high_pct: 150, data_date: "2026-11-09" }), "credit")), [], "下限比上限高：不畫");
 });
+
+test("爆大量成交區：小圖的收盤或成交量有缺值就不畫這張板（縱軸不會被拉壞）；某一區缺距離就不寫距離", () => {
+  const { read } = load();
+  const base = technical().heavy_zones;
+  const holes = technical({ heavy_zones: { ...base, chart: { ...base.chart, closes: [240, null, 245.5] } } });
+  assert.equal(plain(read(holes, "technical")).some(board => board.kind === "heavy_zones"), false);
+  const noDistance = technical({ heavy_zones: { ...base, zones: [{ low: 200, high: 222.5, position: "below", distance_pct: null }] } });
+  assert.deepEqual(plain(read(noDistance, "technical"))[2].list.map(item => item.note), ["245.5", ""]);
+});

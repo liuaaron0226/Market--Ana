@@ -41,11 +41,10 @@
 
 .ss-bar { flex: 1; min-width: 0; position: relative; padding: 11px 0 18px; }
 .ss-groove { display: block; height: 22px; position: relative; border-radius: 11px; background: var(--well); box-shadow: var(--well-shadow); }
-.ss-clip {
-  position: absolute; inset: 4px; border-radius: 7px; overflow: hidden;
-  clip-path: inset(0 100% 0 0 round 7px); transition: clip-path 1500ms var(--ease-depth);
-}
-.is-in .ss-clip { clip-path: inset(0 calc(100% - max(14px, 100% * var(--fill))) 0 0 round 7px); }
+.ss-clip { position: absolute; inset: 4px; }
+/* 裁切做在光條自己身上：外層的 drop-shadow（底下透出的光）才不會被一起裁掉 */
+.ss-clip > .ss-glass { border-radius: 7px; clip-path: inset(0 100% 0 0 round 7px); transition: clip-path 1500ms var(--ease-depth); }
+.is-in .ss-clip > .ss-glass { clip-path: inset(0 calc(100% - max(14px, 100% * var(--fill))) 0 0 round 7px); }
 .ss-avg {
   position: absolute; top: 37px; width: 0; display: flex; flex-direction: column; align-items: center;
   color: var(--faint); font-size: 10px; white-space: nowrap;
@@ -80,7 +79,7 @@
 .ss-lamps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 .ss-lamp { display: grid; gap: 7px; text-align: center; font-size: 11px; color: var(--faint); }
 .ss-lamp.on { color: var(--ink); font-weight: 600; }
-.ss-lamp-groove { position: relative; height: 18px; border-radius: 9px; background: var(--well); box-shadow: var(--well-shadow); overflow: hidden; }
+.ss-lamp-groove { position: relative; height: 18px; border-radius: 9px; background: var(--well); box-shadow: var(--well-shadow); }
 .ss-lamp-groove .ss-glass { opacity: 0; transition: opacity 400ms linear; }
 .is-in .ss-lamp-groove .ss-glass { opacity: 1; }
 
@@ -147,6 +146,6 @@
   .ss { margin-top: 14px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .ss-board, .ss-odo i, .ss-clip, .ss-tip, .ss-vs-bar, .ss-lamp-groove .ss-glass, .ss-draw, .ss-fade, .ss-rng-band { transition: none !important; }
+  .ss-board, .ss-odo i, .ss-clip > .ss-glass, .ss-tip, .ss-vs-bar, .ss-lamp-groove .ss-glass, .ss-draw, .ss-fade, .ss-rng-band { transition: none !important; }
   .ss-glass { animation: none !important; }
 }

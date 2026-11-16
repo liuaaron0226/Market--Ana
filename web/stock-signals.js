@@ -43,7 +43,8 @@
       .filter(row => row && [5, 20, 60].includes(row.days) && finite(row.gap))
       .sort((a, b) => a.days - b.days)
       .map(row => {
-        const [side, word] = row.gap === 0 ? ['', ''] : SIDE[row.gap > 0 ? 'up' : 'down'];
+        // 強弱照資料給的方向（tone）；差距是 0 時資料不給方向，不畫條、不寫強弱
+        const [side, word] = SIDE[row.tone] && row.gap !== 0 ? SIDE[row.tone] : ['', ''];
         return { days: row.days, name: `近 ${row.days} 日`, side, word, gapText: signed(row.gap), width: Math.min(1, Math.abs(row.gap) / VERSUS_FULL),
           said: `近 ${row.days} 日${word ? `${word}大盤 ${Math.abs(row.gap).toFixed(1)} 個百分點` : '和大盤一樣'}` };
       });
@@ -71,10 +72,11 @@
   function zones(block) {
     const list = Array.isArray(block?.zones) ? block.zones.filter(zone => zone && finite(zone.low) && finite(zone.high)) : [];
     const chart = block?.chart;
-    if (!list.length || !finite(block.close) || !Array.isArray(chart?.closes) || !Array.isArray(chart?.volumes)) return null;
+    const series = values => Array.isArray(values) && values.length > 1 && values.every(finite);
+    if (!list.length || !finite(block.close) || !series(chart?.closes) || !series(chart?.volumes)) return null;
     const price = priceWriter([block.close, ...list.flatMap(zone => [zone.low, zone.high])]);
     const byHigh = (a, b) => b.high - a.high;
-    const row = zone => ({ range: `${price(zone.low)}～${price(zone.high)}`, note: zone.position === 'inside' ? '現價在區內' : `${signed(zone.distance_pct)}%`, now: false });
+    const row = zone => ({ range: `${price(zone.low)}～${price(zone.high)}`, note: zone.position === 'inside' ? '現價在區內' : finite(zone.distance_pct) ? `${signed(zone.distance_pct)}%` : '', now: false });
     const above = list.filter(zone => zone.position === 'above').sort(byHigh), rest = list.filter(zone => zone.position !== 'above').sort(byHigh);
     const items = [...above.map(row), { range: '現價', note: price(block.close), now: true }, ...rest.map(row)];
     return {
@@ -126,7 +128,8 @@
   }
 
   // ---------- 畫面 ----------
-  const played = new Set();      // 「代號|哪一塊」：播過進場的就不再播
+  const played = new Set();      // 「哪一塊」：這一檔播過進場的就不再播（切面板再切回來直接是最後的樣子）
+  let playedCode = '';            // 換一檔就清掉，換回來也重播一次
   const still = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
   const el = (tag, className, text) => {
     const node = document.createElement(tag);
@@ -296,8 +299,8 @@
   function marginBoard(model, code, panel) {
     const board = plainBoard(model, el('b', 'num', model.rangeText));
     // 資料日：融資比行情晚一個交易日。「融資券」面板上面已經標了同一天就不重複標，不同天才標（寫法和面板一樣）
-    const shown = panel?.querySelector('.sf-date')?.textContent || '';
-    if (model.dataDate && !shown.includes(model.dataDate)) board.append(el('p', 'sf-date num', `資料日 ${model.dataDate}`));
+    const shown = (panel?.querySelector('.sf-date')?.textContent || '').match(/資料日 (\S+?)(?:（|$)/)?.[1] || '';
+    if (model.dataDate && model.dataDate !== shown) board.append(el('p', 'sf-date num', `資料日 ${model.dataDate}`));
     const axis = el('div', 'ss-rng');
     axis.setAttribute('aria-hidden', 'true');
     const at = value => `calc((100% - 8px) * ${value.toFixed(4)} + 4px)`;
@@ -356,28 +359,30 @@
   // 把某個面板的板放進去。panel 是事實區塊那一塊的內容容器；name 是面板名（summary、technical、credit）。
   function fill(panel, name, signals, code) {
     const models = read(signals, name);
+    if (code !== playedCode) { played.clear(); playedCode = code; }
     if (!models.length) return;
     const host = el('div', `ss${typeof CSS !== 'undefined' && CSS.registerProperty ? ' ss-drift' : ''}`);
     host.dataset.panel = name;
     const boards = models.map(model => BOARD[model.kind](model, code, panel));
     host.append(...boards);
     panel.append(host);
-    const fresh = models.map(model => !played.has(`${code}|${model.kind}`));
+    const fresh = models.map(model => !played.has(model.kind));
     // 播過的（同一檔切回這個面板）直接是最後的樣子
     boards.forEach((board, index) => { if (!fresh[index]) settle(board); });
     if (!fresh.some(Boolean)) return;
     if (typeof IntersectionObserver !== 'function') {
-      boards.forEach((board, index) => { if (fresh[index]) { played.add(`${code}|${models[index].kind}`); settle(board); } });
+      boards.forEach((board, index) => { if (fresh[index]) { played.add(models[index].kind); settle(board); } });
       return;
     }
     // 第一次出現在畫面上才播（面板收著、還沒捲到時不跑動畫）
-    let order = 0;
+    let order = 0, waiting = fresh.filter(Boolean).length;
     const watch = new IntersectionObserver(entries => {
       for (const entry of entries) {
         if (!entry.isIntersecting) continue;
         const index = boards.indexOf(entry.target);
         watch.unobserve(entry.target);
-        played.add(`${code}|${models[index].kind}`);
+        if (--waiting === 0) watch.disconnect();
+        played.add(models[index].kind);
         enter(entry.target, order++);
       }
     }, { threshold: 0.35 });
