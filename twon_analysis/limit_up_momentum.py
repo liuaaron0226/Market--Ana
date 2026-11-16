@@ -80,7 +80,8 @@ def conditions_met(*, bars: list[Bar], returns: list[float | None], turnovers: l
 
 
 def limit_up_momentum(*, market: str, kind: str, **daily) -> dict | None:
-    """漲停動能這一塊：分數、級距、這個級距的歷史比例、全部平均、算法版本。八個條件各自成不成立不給到頁面。
+    """漲停動能這一塊：分數、級距、這個級距的歷史比例、全部平均、最高一級的歷史比例（頁面光條的滿格）、算法版本。
+    八個條件各自成不成立不給到頁面。
     上市、上櫃普通股都給，同一個算法版本、同一組歷史比例（上櫃：本人 2026-11-16 看過 09 票驗證報告
     .scratch/stock-signals/otc-validation/REPORT.md，定「開，沿用上市的比例」）；ETF 與特別股不給。
     daily 是 conditions_met 的參數。"""
@@ -92,4 +93,5 @@ def limit_up_momentum(*, market: str, kind: str, **daily) -> dict | None:
     fixed = algorithm()
     points, band = fixed['table'][''.join('1' if hit else '0' for hit in met)]
     return {'points': points, 'band': band, 'band_rate_pct': fixed['band_rates_pct'][band - 1],
-            'average_rate_pct': fixed['average_rate_pct'], 'algorithm': fixed['version']}
+            'average_rate_pct': fixed['average_rate_pct'], 'top_rate_pct': max(fixed['band_rates_pct']),
+            'algorithm': fixed['version']}

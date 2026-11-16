@@ -683,7 +683,8 @@ class StockFactsReaderTests(unittest.TestCase):
                     {'data': {'tables': [{'fields': ['代號'], 'data': [row]}]}}), encoding='utf-8')
                 borrow_row = ['9999', '測試', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', str(borrow), '0', '']
                 (fund / 'twt93u' / f'twt93u-{day}.json').write_text(json.dumps({'data': [borrow_row]}), encoding='utf-8')
-            with unittest.mock.patch.object(chips, 'DETAIL', detail), unittest.mock.patch.object(chips, 'FUND', fund):
+            with unittest.mock.patch.object(chips, 'DETAIL', detail), unittest.mock.patch.object(chips, 'KEPT_ROOT', Path(tmp) / 'kept'), \
+                    unittest.mock.patch.object(chips, 'FUND', fund):
                 for cached in (chips._margin, chips._borrow):
                     cached.cache_clear()
                 try:
@@ -695,6 +696,38 @@ class StockFactsReaderTests(unittest.TestCase):
             'margin': [{'date': '2026-01-05', 'margin': 300, 'short': 9}, {'date': '2026-01-06', 'margin': 310, 'short': 7}],
             'borrow': [{'date': '2026-01-05', 'balance': 70_000}, {'date': '2026-01-06', 'balance': 71_000}],
         })
+
+    def test_listed_margin_also_reads_the_long_term_store_so_it_matches_the_maintenance_estimate(self):
+        # 近期明細只到 01-05（例如雲端當天那一班抓不到、之後也不回頭補），長期保存區（種子放回的）已經有 01-06。
+        # 兩邊是同一份證交所原件；融資券面板要和融資維持率（估）一樣讀到 01-06，不能停在 01-05。
+        # 長期保存區沒有、近期明細有的那天照樣讀得到；晚於資料日（01-07）的不讀。
+        from twon_analysis import analyze_v2 as module, chips
+        with tempfile.TemporaryDirectory() as tmp:
+            detail, kept_root, fund = Path(tmp) / 'detail', Path(tmp) / 'kept', Path(tmp) / 'fund'
+            kept = kept_root / 'data/margin-history/raw'
+            for folder in (detail / 'margin', kept, fund / 'twt93u'):
+                folder.mkdir(parents=True)
+
+            def margin_file(folder, day, margin):
+                row = ['9999', '測試', '0', '0', '0', '0', str(margin), '0', '0', '0', '0', '0', '5', '0', '0', '']
+                (folder / f'margin-{day}.json').write_text(json.dumps(
+                    {'data': {'tables': [{'fields': ['代號'], 'data': [row]}]}}), encoding='utf-8')
+            margin_file(detail / 'margin', '20260102', 290)
+            margin_file(detail / 'margin', '20260105', 300)
+            margin_file(kept, '20260105', 300)
+            margin_file(kept, '20260106', 310)
+            margin_file(kept, '20260107', 999)
+            (kept / 'margin-copy.json').write_text('{}', encoding='utf-8')   # 檔名不合規則：不算一天
+            with unittest.mock.patch.object(chips, 'DETAIL', detail), unittest.mock.patch.object(chips, 'KEPT_ROOT', kept_root), \
+                    unittest.mock.patch.object(chips, 'FUND', fund):
+                chips._margin.cache_clear()
+                try:
+                    series = module.credit_series('9999', '上市', '2026-01-06')
+                finally:
+                    chips._margin.cache_clear()
+        self.assertEqual(series['margin'], [{'date': '2026-01-02', 'margin': 290, 'short': 5},
+                                            {'date': '2026-01-05', 'margin': 300, 'short': 5},
+                                            {'date': '2026-01-06', 'margin': 310, 'short': 5}])
 
     def test_valuation_and_revenue_readers_use_the_daily_data(self):
         # 估值：資料日以前最近一筆；月營收：只用法定公布日已過的期別（2026-10 還沒到公布日，不算）。
@@ -1163,8 +1196,10 @@ class StockSignalsHeavyZonesTests(_SignalsFixture, unittest.TestCase):
 
 # 漲停動能的預期值（分數、級距）都抄自凍結的算法版本檔 twon_analysis/limit_up_momentum_20261116.json 的換算表；
 # 每個例子成立哪幾個條件是手算的（寫在各測試的註解）。六個級距的歷史比例是 0.4、0.8、2.6、3.1、5.1、17.6，全部平均 1.7。
+# top_rate_pct 是最高一級（17.6）：頁面畫光條的滿格，跟著資料走，頁面不再自己寫死。
 def momentum(points, band, rate):
-    return {'points': points, 'band': band, 'band_rate_pct': rate, 'average_rate_pct': 1.7, 'algorithm': 'limit-up-momentum-20261116'}
+    return {'points': points, 'band': band, 'band_rate_pct': rate, 'average_rate_pct': 1.7, 'top_rate_pct': 17.6,
+            'algorithm': 'limit-up-momentum-20261116'}
 
 
 class StockSignalsLimitUpMomentumTests(_SignalsFixture, unittest.TestCase):
