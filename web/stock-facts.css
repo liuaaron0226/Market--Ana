@@ -122,3 +122,16 @@
   .bd .sf-table th, .bd .sf-table td { padding-left: 8px; }
   .bd .sf-figs b { font-size: 18px; }
 }
+
+/* ---------- 立體版（個股頁 body.st）：照五塊新功能定案的擺法樣品 q2-1（本人 2026-11-16 要求「複製貼上之前的版面」） ----------
+   六顆切換籤是有細框的鍵、選中的是墨色；重點那幾句是一列一句、細線分隔。數值照樣品原樣。 */
+body.st .sf-blocks { margin-top: 18px; padding-top: 0; border-top: 0; }
+body.st .sf-tabs { gap: 5px; }
+body.st .sf-tab {
+  flex: 1 1 auto; height: 36px; padding: 0 6px; border: 1px solid var(--hair); border-radius: 8px;
+  color: var(--dim); font: 400 14px var(--sans);
+}
+body.st .sf-tab[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+body.st .sf-panel { padding-top: 14px; }
+body.st .sf-facts li { padding: 10px 0; font-size: 14px; line-height: 1.6; }
+body.st .sf-facts li:first-child { padding-top: 0; }

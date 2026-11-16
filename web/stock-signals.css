@@ -141,6 +141,9 @@
 /* ---------- 桌機寬度的排法：三張並排（本人 2026-11-16 看過三個樣品後選「1 三張並排」） ---------- */
 @media (min-width: 861px) {
   .ss[data-panel="technical"] { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; }
+  /* 只有一張板的「重點」（漲停動能）與「融資券」（融資維持率）：和定案樣品一樣寬（樣品是手機寬的一欄，約 400px），
+     也就是「技術」三張並排的一張寬、靠左（本人 11-16「複製貼上之前的版面」） */
+  .ss:is([data-panel="summary"], [data-panel="credit"]) { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; }
 }
 @media (max-width: 860px) {
   .ss { margin-top: 14px; }
