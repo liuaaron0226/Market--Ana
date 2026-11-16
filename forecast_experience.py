@@ -92,10 +92,6 @@ def _episodes(labels: list[str | None], regime: str) -> list[list[int]]:
     return episodes
 
 
-def _pct(start: float, end: float) -> float:
-    return round((end / start - 1) * 100, 2)
-
-
 def _median(values: list[float]) -> float:
     ordered = sorted(values)
     middle = len(ordered) // 2
@@ -138,15 +134,17 @@ def similar_regimes(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             for horizon in HORIZONS:
                 end = start + horizon
                 if end <= last:
-                    moves[horizon].append(closes[end] / closes[start] - 1)
-                    returns[str(horizon)] = _pct(closes[start], closes[end])
+                    move = closes[end] / closes[start] - 1
+                    moves[horizon].append(move)
+                    returns[str(horizon)] = round(move * 100, 2)
                 else:
                     returns[str(horizon)] = None  # 還沒滿那麼多天
             episodes.append({"start": dates[start], "returns_pct": returns})
         classes[regime] = {
             "episodes": episodes,
-            "horizons": {str(h): {**_distribution(moves[h], with_range=True), "low_sample": len(moves[h]) < minimum}
-                         for h in HORIZONS},
+            # 本人定的是「少於 10 段」：以歷史段數判斷，不因最近一段的 20 日還沒滿而改變。
+            "low_sample": len(episodes) < minimum,
+            "horizons": {str(h): _distribution(moves[h], with_range=True) for h in HORIZONS},
         }
     all_days = {str(h): _distribution([closes[t + h] / closes[t] - 1 for t in range(len(closes) - h)],
                                       with_range=False) for h in HORIZONS}

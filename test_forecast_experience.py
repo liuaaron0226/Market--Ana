@@ -102,14 +102,16 @@ class SimilarRegimeTests(SimilarRegimeTestCase):
         pullback = layer["classes"][PULLBACK]["horizons"]
         # 五日：+2.94% 與 −8.42%，中位數 = 兩者平均 (0.0294118 − 0.0842105)/2 = −2.74%
         self.assertEqual(pullback["5"], {"samples": 2, "up": 1, "down": 1, "median_pct": -2.74,
-                                         "min_pct": -8.42, "max_pct": 2.94, "low_sample": True})
+                                         "min_pct": -8.42, "max_pct": 2.94})
         self.assertEqual(pullback["1"], {"samples": 2, "up": 0, "down": 0, "median_pct": 0.0,
-                                         "min_pct": 0.0, "max_pct": 0.0, "low_sample": True})
+                                         "min_pct": 0.0, "max_pct": 0.0})
         # 二十日：(0.0764706 − 0.1236842)/2 = −2.36%
         self.assertEqual(pullback["20"]["median_pct"], -2.36)
         self.assertEqual(layer["classes"][WEAK]["horizons"]["20"],
                          {"samples": 1, "up": 0, "down": 1, "median_pct": -5.73,
-                          "min_pct": -5.73, "max_pct": -5.73, "low_sample": True})
+                          "min_pct": -5.73, "max_pct": -5.73})
+        # 少於 10 段標樣本少：兩段、一段都是
+        self.assertEqual((layer["classes"][PULLBACK]["low_sample"], layer["classes"][WEAK]["low_sample"]), (True, True))
         self.assertEqual(layer["min_episodes"], 10)
 
     def test_all_trading_days_are_given_as_the_comparison(self):
@@ -126,7 +128,7 @@ class SimilarRegimeTests(SimilarRegimeTestCase):
         self.assertEqual(layer["classes"][WEAK]["episodes"], [])
         self.assertEqual(layer["classes"][WEAK]["horizons"]["1"],
                          {"samples": 0, "up": 0, "down": 0, "median_pct": None,
-                          "min_pct": None, "max_pct": None, "low_sample": True})
+                          "min_pct": None, "max_pct": None})
         # 第二段回檔起點 300：基準日 304 時只知道 1 日（301）；5 日（305）、20 日（320）還沒發生，不算
         self.assertEqual(layer["classes"][PULLBACK]["episodes"][1],
                          {"start": D[300], "returns_pct": {"1": 0.0, "5": None, "20": None}})
@@ -156,10 +158,9 @@ class SimilarRegimeTests(SimilarRegimeTestCase):
         self.assertEqual(record["similar_regimes"], layer)
         self.assertIn('"similar_regimes"', fl.d1_sql(self.root, series_e(), published_at="2026-11-16T18:00:00+08:00"))
 
-    def test_similar_layer_is_part_of_a_new_input_version(self):
-        self.assertIn("similar", fl.PARAMETERS["layers"])
-        self.assertEqual(fl.PARAMETERS["similar_regimes"]["pullback_min_drop_pct"], 5)
-        self.assertRegex(fl.INPUT_VERSION, r"^base\+similar\+lessons-v1-[0-9a-f]{8}$")
+    def test_similar_and_lesson_layers_name_a_new_input_version(self):
+        _, record = self.layer()
+        self.assertRegex(record["input_version"], r"^base\+similar\+lessons-v1-[0-9a-f]{8}$")
 
 
 # ---- 教訓層：沿用帳本測試的日 K（a）與之後的 FUTURE ----
@@ -243,7 +244,6 @@ class LessonTests(LedgerTestCase):
         grown = self.write_oct6()["record"]
         self.assertNotEqual(grown["input"]["lessons"], empty["input"]["lessons"])
         self.assertEqual(grown["input_version"], empty["input_version"])
-        self.assertIn("lessons", fl.PARAMETERS["layers"])
 
 
 if __name__ == "__main__":

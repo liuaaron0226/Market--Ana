@@ -134,7 +134,7 @@
       panel.append(section);
       return;
     }
-    const small = info.horizons['20'].low_sample;
+    const small = info.low_sample;
     const head = el('div', { class: 'forecast-score-head' });
     head.append(el('strong', {}, regime), el('span', { class: 'forecast-tag' }, `${mmdd(layer.today.since)} 起`),
       el('span', { class: 'forecast-count num' }, `${info.episodes.length} 段${small ? ' · 樣本少' : ''}`));

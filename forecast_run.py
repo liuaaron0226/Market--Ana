@@ -154,6 +154,9 @@ def run_evening(
         log.update(outcome="not_ready", detail=f"要求的日期 {date} 不是已發布的資料日 {base_date}")
     else:
         if not dry_run:
+            # 先對帳再寫（E 票）：今天到期的格子要先對完，今天這份的教訓層才看得到。
+            # 今天這份最早的到期日在明天，寫完之後不必再對一次。
+            log["reconciliation"] = {key: len(value) for key, value in fl.reconcile(ledger, data["index_daily"]).items()}
             log["backfilled_misses"] = _backfill_misses(analysis, method_text, Path(ledger), base_date,
                                                         model_bin=model_bin, model=model, clock=clock)
         with tempfile.TemporaryDirectory() as scratch:
@@ -162,15 +165,11 @@ def run_evening(
                 target = Path(scratch) / "ledger"
                 if Path(ledger).is_dir():
                     shutil.copytree(ledger, target)
-            # 先對帳再寫（E 票）：今天到期的格子要先對完，今天這份的教訓層才看得到；乾跑只對暫存副本。
-            # 今天這份最早的到期日在明天，寫完之後不必再對一次。
-            reconciliation = fl.reconcile(target, data["index_daily"])
+                fl.reconcile(target, data["index_daily"])  # 乾跑也先對帳，但只對暫存副本
             result = fl.write_forecast(target, data, edition="evening", model_bin=model_bin, model=model,
                                        now=clock, timeout_seconds=timeout_seconds)
         record = result.get("record")
         log["outcome"] = result["outcome"]
-        if not dry_run:
-            log["reconciliation"] = {key: len(value) for key, value in reconciliation.items()}
         if result.get("detail"):
             log["detail"] = result["detail"]
         if record:
@@ -182,7 +181,7 @@ def run_evening(
                                  "lessons_counts": (model_input.get("lessons") or {}).get("counts")}
 
     if not dry_run:
-        if "reconciliation" not in log:
+        if "reconciliation" not in log:  # 要求的日期不對、沒寫預測時，照樣替舊預測對帳
             log["reconciliation"] = {key: len(value) for key, value in fl.reconcile(ledger, data["index_daily"]).items()}
         if sql_output:
             published_at = clock().astimezone(fl.TAIPEI).isoformat()
