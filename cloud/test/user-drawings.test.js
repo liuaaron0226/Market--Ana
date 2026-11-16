@@ -114,7 +114,7 @@ test("不合法的代號、識別碼、種類、日期、價格、錨點個數�
   }
   const bad = [
     { kind: "circle", anchors: [{ date: "2026-11-13", price: 1000 }] },
-    { kind: "fib", anchors: [{ date: "2026-11-13", price: 1000 }, { date: "2026-11-14", price: 1010 }] }, // 黃金分割還沒開放（這一列原本用趨勢線、再來是矩形，票 03、04 陸續開放了）
+    { kind: "text", anchors: [{ date: "2026-11-13", price: 1000 }] }, // 文字標註還沒開放（這一列原本用趨勢線、矩形、黃金分割，票 03、04、05 陸續開放了）
     { anchors: [{ date: "2026-11-13", price: 1000 }] },
     { kind: "hline" },
     { kind: "hline", anchors: [] },
@@ -324,6 +324,39 @@ test("矩形的不合法輸入被拒：只有一個角、兩個角完全相同�
     { kind: "rect", anchors: [corner, { ...corner }] },
     { kind: "rect", anchors: [corner, { date: "2026-11-13", price: -1 }] },
     { kind: "rect", anchors: [corner, { date: "2026-11-13", price: 1010 }], text: "框上不帶文字" },
+  ]) assert.equal((await put(body)).status, 400, JSON.stringify(body));
+  assert.equal((await env.DB.prepare("SELECT COUNT(*) AS n FROM user_drawings").first()).n, 0);
+});
+
+// ---------- 票 05：黃金分割 ----------
+
+test("黃金分割存兩個錨點，照拉的方向存、不重排（第一點是 1、第二點是 0）：由低往高、由高往低都讀得回來；別的帳號看不到", async () => {
+  const up = await req("/api/drawings/2330/fib-00001", { method: "PUT", body: twoPoint("fib", ["2026-10-01", 1000], ["2026-11-13", 1085.5]) });
+  assert.equal(up.status, 201);
+  assert.deepEqual(await up.json(), {
+    id: "fib-00001", kind: "fib", anchors: [{ date: "2026-10-01", price: 1000 }, { date: "2026-11-13", price: 1085.5 }], text: "",
+    created_at: "2026-11-14T06:00:00.000Z", updated_at: "2026-11-14T06:00:00.000Z",
+  });
+  assert.equal((await req("/api/drawings/2330/fib-00002", { method: "PUT", body: twoPoint("fib", ["2026-10-01", 1085.5], ["2026-11-13", 1000]) })).status, 201);
+  // 拖動一端後以同一個識別碼覆寫：仍是同一組。
+  assert.equal((await req("/api/drawings/2330/fib-00001", { method: "PUT", body: twoPoint("fib", ["2026-10-01", 1000], ["2026-11-06", 1100]) })).status, 200);
+  assert.deepEqual((await listOf("2330")).map((item) => [item.id, item.kind, item.anchors]), [
+    ["fib-00001", "fib", [{ date: "2026-10-01", price: 1000 }, { date: "2026-11-06", price: 1100 }]],
+    ["fib-00002", "fib", [{ date: "2026-10-01", price: 1085.5 }, { date: "2026-11-13", price: 1000 }]],
+  ]);
+  assert.deepEqual(await listOf("2330", { email: "b@example.com" }), []);
+  assert.equal((await req("/api/drawings/2330/fib-00002", { method: "DELETE" })).status, 204);
+  assert.deepEqual((await listOf("2330")).map((item) => item.id), ["fib-00001"]);
+});
+
+test("黃金分割的不合法輸入被拒：只有一個錨點、兩個錨點完全相同、價格不對、帶文字", async () => {
+  const put = (body) => req("/api/drawings/2330/fib-00001", { method: "PUT", body });
+  const first = { date: "2026-10-01", price: 1000 };
+  for (const body of [
+    { kind: "fib", anchors: [first] },
+    { kind: "fib", anchors: [first, { ...first }] },
+    { kind: "fib", anchors: [first, { date: "2026-11-13", price: 0 }] },
+    { kind: "fib", anchors: [first, { date: "2026-11-13", price: 1010 }], text: "線上不帶文字" },
   ]) assert.equal((await put(body)).status, 400, JSON.stringify(body));
   assert.equal((await env.DB.prepare("SELECT COUNT(*) AS n FROM user_drawings").first()).n, 0);
 });
