@@ -543,6 +543,8 @@ def listed_chip_detail_day(root: Path, day: str, *, get: Callable | None = None,
     - margin（MI_MARGN）：同 logs/fetch_stock_detail.py 的外包格式。
     - twt93u（借券）：同 fundamentals.py，存官方原始位元組。
     官方查無（未公布）不寫檔、不當 0；已存在不重抓。兩次請求間隔 5 秒。
+    個股融資原件另外在長期保存區（data/margin-history/raw）留一份，那裡不裁；結果多一項 margin_history。
+    長期保存區缺的日子先從專案帶的種子（seeds/margin-history.tar.xz）放回去，再跟上近期明細。
     """
     from datetime import datetime, timezone
     import stock_history as sh
@@ -595,6 +597,20 @@ def listed_chip_detail_day(root: Path, day: str, *, get: Callable | None = None,
         else:
             _write_atomic(target, response.content)
         results[dataset] = {"status": "saved"}
+    if "margin" in datasets:
+        # 近期明細只留最近一段；融資維持率（估）要連續的每日原件，另外長期留一份（已有的不重寫）。
+        # 這一步出錯不能蓋掉上面已經抓到的結果；缺哪些交易日一起回報，每日更新的紀錄才看得到缺口。
+        import margin_history
+        try:
+            try:
+                seed = {"restored": margin_history.restore_seed(root)}
+            except Exception as error:  # noqa: BLE001 — 種子壞了不能擋住當天那一份進長期保存區
+                seed = {"restored": [], "seed_error": f"{type(error).__name__}: {error}"}
+            kept = margin_history.keep_up(root)
+            missing = margin_history.coverage(root, margin_history.trading_days(root))["missing"]
+            results["margin_history"] = {"status": "ok", **seed, **kept, "missing": missing}
+        except Exception as error:  # noqa: BLE001 — 長期保存區失敗只記在自己這一項
+            results["margin_history"] = {"status": "error", "reason": f"{type(error).__name__}: {error}"}
     return results
 
 
