@@ -36,6 +36,8 @@ from ledger_core import (
     render_refs,
 )
 from ledger_core import add_months as _add_months
+from ledger_core import compact_json as _json
+from ledger_core import sql_insert as _insert
 from ledger_core import append as _append
 from ledger_core import clean_daily as _clean_daily
 from ledger_core import deadline as _deadline
@@ -583,26 +585,6 @@ def summarize(root: Path | str, index_daily: Sequence[Mapping[str, Any]], *,
 _PUBLIC_FIELDS = ("forecast_id", "base_date", "edition", "method_version", "input_version", "model", "run_mode",
                   "kind", "locked_at", "deadline", "data_cutoffs", "regime", "cells", "miss_reason", "miss_detail",
                   "record_sha256")
-
-
-def _sql_literal(value: Any) -> str:
-    if value is None:
-        return "NULL"
-    if isinstance(value, bool):
-        return "1" if value else "0"
-    if isinstance(value, (int, float)):
-        return repr(value)
-    return "'" + str(value).replace("'", "''") + "'"
-
-
-def _insert(table: str, columns: dict[str, Any], key: str) -> str:
-    names = ",".join(columns)
-    values = ",".join(_sql_literal(value) for value in columns.values())
-    return f"INSERT INTO {table} ({names}) VALUES ({values}) ON CONFLICT({key}) DO NOTHING;"
-
-
-def _json(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def d1_sql(root: Path | str, index_daily: Sequence[Mapping[str, Any]], *, published_at: str,

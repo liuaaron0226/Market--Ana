@@ -7,6 +7,7 @@
 - ``write_judgments``：依固定順序替一批關注股各寫一份；額度用完時後面的檔記漏記並寫明原因。
 - ``reconcile``：給帳本、截至某一天的指數日 K 與各檔個股日 K，替到期的轉變日新增對帳紀錄。
 - ``summarize``：把帳本整理成成績摘要（全部關注股合計與單一檔；贏大盤、隨便挑、還沒到期、漏記）。
+- ``d1_sql``：把帳本（判斷、對帳、成績摘要）整理成寫入網站資料庫的指令檔；重複發布不多一筆、不改內容。
 - ``read_ledger``：讀出全部紀錄，順便核對封存雜湊（原件被改動時丟 ``LedgerIntegrityError``）。
 - ``input_version_of``：打開某幾層輸入時的輸入版本。
 
@@ -35,6 +36,7 @@ from ledger_core import (
     build_prompt,
     call_model,
     clean_daily,
+    compact_json,
     deadline,
     default_now,
     label_date,
@@ -45,6 +47,7 @@ from ledger_core import (
     render_refs,
     seal,
     sha,
+    sql_insert,
     text_problem,
 )
 from twon_analysis import analyze_v2
@@ -716,6 +719,48 @@ def summarize(root: Path | str, index_daily: Sequence[Mapping[str, Any]],
                                **tallies[horizon], "stage": stage})
     return {"as_of": market.as_of, "official_since": official_since, "groups": groups,
             "conflicts": len(ledger["conflicts"])}
+
+
+# ---- 發布到網站讀的資料庫 ----
+
+# 給網站顯示的欄位；完整輸入（含方法稿）、模型的重試細節與「隨便挑」的明細只留在原件（成績看彙總）。
+_PUBLIC_FIELDS = ("judgment_id", "code", "name", "base_date", "edition", "method_version", "input_version", "model",
+                  "run_mode", "kind", "locked_at", "deadline", "layers", "missing_layers", "data_cutoffs", "base_close",
+                  "status", "trigger_line", "wrong_line", "reason", "reason_news", "transition", "compared_with",
+                  "miss_reason", "miss_detail", "record_sha256")
+
+
+def d1_sql(root: Path | str, index_daily: Sequence[Mapping[str, Any]], stocks: Mapping[str, Mapping[str, Any]], *,
+           published_at: str, official_since: str | None = None) -> str:
+    """把帳本整理成給網站資料庫的指令檔（migrations/0014）。只新增：同一筆再發布一次不會多一筆、也不會改內容。
+
+    ``index_daily``、``stocks`` 和 ``summarize`` 的參數相同，用來算一併發布的成績摘要。
+    不包 BEGIN／COMMIT：部署工具（wrangler d1 execute）自己會包交易。
+    """
+    ledger = read_ledger(root)
+    statements = []
+    for record in ledger["judgments"]:
+        statements.append(sql_insert("watch_judgments", {
+            "judgment_id": record["judgment_id"], "code": record["code"], "base_date": record["base_date"],
+            "edition": record["edition"], "method_version": record["method_version"],
+            "input_version": record["input_version"], "run_mode": record["run_mode"], "kind": record["kind"],
+            "status": record.get("status"),
+            "record_json": compact_json({key: record[key] for key in _PUBLIC_FIELDS if key in record}),
+            "record_sha256": record["record_sha256"], "published_at": published_at,
+        }, None))
+    for row in ledger["reconciliations"]:
+        statements.append(sql_insert("watch_reconciliations", {
+            "judgment_id": row["judgment_id"], "horizon": row["horizon"], "code": row["code"], "edition": row["edition"],
+            "expiry_date": row["expiry_date"], "beat_index": row["beat_index"], "record_json": compact_json(row),
+            "record_sha256": row["record_sha256"], "published_at": published_at,
+        }, "judgment_id,horizon"))
+    summary = summarize(root, index_daily, stocks, official_since=official_since)
+    if summary["as_of"]:
+        statements.append(sql_insert("watch_summaries", {
+            "summary_sha256": sha(summary), "as_of": summary["as_of"], "summary_json": compact_json(summary),
+            "published_at": published_at,
+        }, "summary_sha256"))
+    return "\n".join(statements) + "\n"
 
 
 # ---- 讀帳本 ----

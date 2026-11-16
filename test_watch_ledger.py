@@ -5,6 +5,7 @@
 """
 import hashlib
 import json
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -1044,6 +1045,127 @@ class ConclusionStageTests(SeriesTestCase):
 
         # 沒有寫下正式起算日，就不會出現結論
         self.assertEqual(self.stages("2027-12-31", official_since=None)[("all", None, 20)]["stage"], "累積中")
+
+
+MIGRATION = Path(__file__).resolve().parent / "cloud" / "migrations" / "0014_watch_ledger.sql"
+
+
+class PublishToDatabaseTests(SeriesTestCase):
+    """E 票第 8 片：帳本的鎖定原件發布成網站資料庫的一筆；資料表只能新增。"""
+
+    def database(self):
+        connection = sqlite3.connect(":memory:")
+        connection.executescript(MIGRATION.read_text(encoding="utf-8"))
+        return connection
+
+    def published(self, root=None):
+        data = market("2026-10-09")
+        if root is None:
+            # 2330 晚間：09/30 接近、10/01 可以留意（轉變日）、10/02 漏記；對帳到 10/09，五日那一格到期
+            self.day(BASE, "接近")
+            self.day("2026-10-01", "可以留意")
+            self.day("2026-10-02", None)
+            wl.reconcile(self.root, data["index_daily"], data["stocks"])
+        return wl.d1_sql(root or self.root, data["index_daily"], data["stocks"],
+                         published_at="2026-10-09T18:00:00+08:00", official_since=None)
+
+    def test_publishing_twice_keeps_one_row_per_record_with_the_original_hash(self):
+        sql = self.published()
+        self.assertNotRegex(sql, r"(?im)^\s*(BEGIN|COMMIT)\s*;")  # 部署工具自己包交易
+        db = self.database()
+        db.executescript(sql)
+        query = ("SELECT judgment_id, code, base_date, edition, kind, status, record_sha256, record_json "
+                 "FROM watch_judgments ORDER BY base_date")
+        first = db.execute(query).fetchall()
+        db.executescript(sql)
+        self.assertEqual(db.execute(query).fetchall(), first)
+        self.assertEqual([(row[2], row[4], row[5]) for row in first],
+                         [(BASE, "judgment", "接近"), ("2026-10-01", "judgment", "可以留意"), ("2026-10-02", "miss", None)])
+        ledger = {r["judgment_id"]: r for r in wl.read_ledger(self.root)["judgments"]}
+        for judgment_id, *_, sha, _ in first:
+            self.assertEqual(sha, ledger[judgment_id]["record_sha256"])
+        reconciliations = db.execute("SELECT code, edition, horizon, expiry_date, beat_index FROM watch_reconciliations").fetchall()
+        # 10/01 收盤 111 → 10/09 113（+1.8018%），指數 1160 → 1180（+1.7241%）→ 贏
+        self.assertEqual(reconciliations, [("2330", "evening", 5, "2026-10-09", 1)])
+        self.assertEqual(db.execute("SELECT COUNT(*), MAX(as_of) FROM watch_summaries").fetchone(), (1, "2026-10-09"))
+
+    def test_published_rows_carry_display_fields_but_not_the_model_input(self):
+        db = self.database()
+        db.executescript(self.published())
+        record = json.loads(db.execute("SELECT record_json FROM watch_judgments WHERE base_date = '2026-10-01'").fetchone()[0])
+        for hidden in ("input", "attempts", "random_pick", "input_sha256"):
+            self.assertNotIn(hidden, record)
+        self.assertNotIn("方法內容", json.dumps(record, ensure_ascii=False))
+        self.assertEqual((record["status"], record["transition"], record["run_mode"], record["edition"]),
+                         ("可以留意", True, "trial", "evening"))
+        self.assertEqual(record["trigger_line"], {"id": "swing_low_20260925", "name": record["trigger_line"]["name"],
+                                                  "value": 103.0, "kind": record["trigger_line"]["kind"]})
+        self.assertEqual(record["wrong_line"]["value"], 95.0)
+        self.assertEqual(record["reason"], "量縮整理等待表態")
+        self.assertEqual((record["data_cutoffs"], record["missing_layers"]), ({"stock": "2026-10-01", "index": "2026-10-01"}, []))
+        miss = json.loads(db.execute("SELECT record_json FROM watch_judgments WHERE kind = 'miss'").fetchone()[0])
+        self.assertEqual((miss["kind"], miss.get("status")), ("miss", None))
+        self.assertTrue(miss["miss_reason"])
+        summary = json.loads(db.execute("SELECT summary_json FROM watch_summaries").fetchone()[0])
+        five = [g for g in summary["groups"] if g["scope"] == "all" and g["horizon"] == 5]
+        self.assertEqual([(g["reconciled"], g["wins"], g["misses"], g["stage"]) for g in five], [(1, 1, 1, "試跑")])
+
+    def test_database_refuses_updates_and_deletes(self):
+        db = self.database()
+        db.executescript(self.published())
+        for statement in ("UPDATE watch_judgments SET status = '還沒到'",
+                          "DELETE FROM watch_judgments",
+                          "UPDATE watch_reconciliations SET beat_index = 0",
+                          "DELETE FROM watch_reconciliations",
+                          "UPDATE watch_summaries SET summary_json = '{}'",
+                          "DELETE FROM watch_summaries"):
+            with self.subTest(statement):
+                with self.assertRaises(sqlite3.DatabaseError):
+                    db.execute(statement)
+        self.assertEqual(db.execute("SELECT COUNT(*) FROM watch_judgments").fetchone(), (3,))
+
+    def test_database_refuses_replacing_a_row_with_different_content(self):
+        db = self.database()
+        db.executescript(self.published())
+        judgment_id, sha = db.execute("SELECT judgment_id, record_sha256 FROM watch_judgments WHERE status = '可以留意'").fetchone()
+        with self.assertRaises(sqlite3.DatabaseError):
+            db.execute("INSERT OR REPLACE INTO watch_judgments (judgment_id, code, base_date, edition, method_version, "
+                       "input_version, run_mode, kind, status, record_json, record_sha256, published_at) "
+                       "VALUES (?, '2330', '2026-10-01', 'evening', '0.4', 'v', 'trial', 'judgment', '還沒到', '{}', ?, 'now')",
+                       (judgment_id, "0" * 64))
+        with self.assertRaises(sqlite3.DatabaseError):
+            db.execute("INSERT OR REPLACE INTO watch_reconciliations (judgment_id, horizon, code, edition, expiry_date, "
+                       "beat_index, record_json, record_sha256, published_at) "
+                       "VALUES (?, 5, '2330', 'evening', '2026-10-09', 0, '{}', ?, 'now')", (judgment_id, "0" * 64))
+        self.assertEqual(db.execute("SELECT record_sha256 FROM watch_judgments WHERE judgment_id = ?", (judgment_id,)).fetchone(), (sha,))
+        self.assertEqual(db.execute("SELECT beat_index FROM watch_reconciliations").fetchone(), (1,))
+
+    def test_a_different_record_for_the_same_stock_day_and_edition_fails_loudly(self):
+        db = self.database()
+        self.day(BASE, "接近")
+        db.executescript(self.published(self.root))
+        other = self.tmp / "other-ledger"
+        self.root, mine = other, self.root
+        self.day(BASE, "可以留意")
+        self.root = mine
+        with self.assertRaises(sqlite3.DatabaseError):
+            db.executescript(self.published(other))
+        self.assertEqual(db.execute("SELECT status FROM watch_judgments").fetchall(), [("接近",)])
+
+    def test_text_with_quotes_survives_publishing(self):
+        self.day(BASE, "接近")
+        path = next((self.root / "judgments").glob("*.json"))
+        self.assertIn("量縮整理", path.read_text(encoding="utf-8"))
+        self.reset_calls()
+        base = "2026-10-01"
+        data = stock_input(base_date=base, stock_daily=stock_through(base), index_daily=index_through(base),
+                           data_cutoffs={"stock": base, "index": base})
+        self.write(data, [envelope(answer("接近", base_date=base, reason="站回'前高'之前先觀望", **ANSWERS["接近"]))],
+                   now=clock(at(base, 17)))
+        db = self.database()
+        db.executescript(self.published(self.root))
+        record = json.loads(db.execute("SELECT record_json FROM watch_judgments WHERE base_date = ?", (base,)).fetchone()[0])
+        self.assertEqual(record["reason"], "站回'前高'之前先觀望")
 
 
 if __name__ == "__main__":

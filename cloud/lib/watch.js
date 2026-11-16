@@ -1,8 +1,10 @@
 // 自選股關注（2026-11-15 規格）：站主逐檔打開的開關。只有站主、而且功能開關打開時才有內容；
 // 其他人一律得到「沒有內容」，自選股本身的入口與回應不變。
 import { UserPortfolioError, codeFrom, noContent, requireSameOrigin, response } from "./user-portfolio.js";
+import { handleWatchLedgerApi } from "./watch-judgments.js";
 
-export const WATCH_PATH = /^\/api\/watch(?:\/([^/]+))?$/;
+// /api/watch 與底下的每一條路徑：開關（/api/watch/<代號>）與判斷、成績（watch-judgments.js）。
+export const WATCH_PATH = /^\/api\/watch(?:\/.*)?$/;
 // 上限同時寫在資料表的限制裡（migration 0011 的 user_watchlist_watch_limit）；要調整得兩邊一起改。
 export const WATCH_LIMIT = 20;
 
@@ -66,7 +68,11 @@ async function close(db, email, code) {
 
 export async function handleWatchApi(request, env, path, email, deps, { isOwner, policy }) {
   if (!isOwner || !policy.features.watchlist_watch_v1) return response(200, { available: false });
-  const [, codeText] = WATCH_PATH.exec(path);
+  const parts = path.split("/").slice(3);
+  const ledger = await handleWatchLedgerApi(request, env, parts, email);
+  if (ledger) return ledger;
+  if (parts.length > 1) throw new UserPortfolioError(404, "找不到");
+  const [codeText] = parts;
   if (codeText === undefined) {
     if (request.method !== "GET") throw new UserPortfolioError(405, "方法不允許");
     return list(env.DB, email);
