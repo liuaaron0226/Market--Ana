@@ -1187,7 +1187,9 @@ def stock(page: Page, base: str, tag: str, mobile: bool) -> None:
         """一進去只看報價與 K 線，其餘收在三顆分類鍵裡（本人 11-15：太長、全部攤開、沒辦法選現在要看什麼；看樣品後答「照這樣做」）。"""
         seen = page.evaluate("""() => { const shown = id => { const node = document.getElementById(id), box = node.getBoundingClientRect();
             return getComputedStyle(node).visibility !== 'hidden' && box.height > 0; };
-          const stage = document.querySelector('.bd-stage').getBoundingClientRect(), canvas = document.querySelector('#chartHost canvas').getBoundingClientRect();
+          const stageNode = document.querySelector('.bd-stage'), pad = getComputedStyle(stageNode), canvas = document.querySelector('#chartHost canvas').getBoundingClientRect();
+          // C 包起 K 線在一塊板裡：和板的內容寬（扣掉左右內距）比
+          const stage = { width: stageNode.getBoundingClientRect().width - parseFloat(pad.paddingLeft) - parseFloat(pad.paddingRight) };
           return { keys: [...document.querySelectorAll('#stockCats button')].map(key => [key.textContent, key.getAttribute('aria-expanded')]),
             open: document.querySelectorAll('[data-cat-panel][data-open]').length,
             shown: ['ladder', 'bigHolders', 'candidateReasons', 'compareBlock'].filter(shown),
@@ -1232,6 +1234,40 @@ def stock(page: Page, base: str, tag: str, mobile: bool) -> None:
         keys.nth(1).click()
         check(f"{tag}：分類鍵開合沒有造成橫向捲動", no_overflow(page) and page.evaluate("document.querySelectorAll('[data-cat-panel][data-open]').length") == 0)
     step(f"{tag}：一進去只看重點，其餘收在分類鍵", folded)
+
+    def desk() -> None:
+        """C 包第 2 片：個股頁也是看盤桌——背景是桌面；報價那一段、K 線、價位階梯、籌碼名單、和 0050 對照各是一塊第 1 層的板；
+        價位階梯的壓力浮起（鍵）、支撐凹下（槽）、現價是深色的鍵。陰影一律和首頁同一組變數，事實區塊照它自己的原則不加板。"""
+        def looks() -> dict:
+            return page.evaluate("""() => { const probe = document.createElement('div'); document.body.append(probe);
+              const as = value => { probe.style.boxShadow = value; return getComputedStyle(probe).boxShadow; };
+              const want = { slab: as('var(--slab-shadow)'), key: as('var(--key-shadow)'), well: as('var(--well-shadow)'), ink: as('var(--key-shadow-ink)') };
+              probe.style.background = 'var(--desk)'; const desk = getComputedStyle(probe).backgroundColor; probe.remove();
+              const kind = node => { if (!node) return null; const shadow = getComputedStyle(node).boxShadow;
+                return Object.keys(want).find(name => want[name] === shadow) || 'none'; };
+              return { desk: getComputedStyle(document.documentElement).backgroundColor === desk,
+                top: kind(document.querySelector('.st-top')), chart: kind(document.querySelector('.bd-stage')),
+                rail: kind(document.querySelector('.bd-rail')), compare: kind(document.getElementById('compareBlock')),
+                reasons: document.getElementById('candidateReasons').childElementCount ? kind(document.getElementById('candidateReasons')) : 'empty',
+                facts: kind(document.getElementById('stockFactsBlocks')),
+                res: [...document.querySelectorAll('#ladder .lad-res')].map(kind), sup: [...document.querySelectorAll('#ladder .lad-sup')].map(kind),
+                now: kind(document.querySelector('#ladder .lad-now')) }; }""")
+        seen = looks()
+        check(f"{tag}：個股頁的背景是桌面", seen["desk"], seen)
+        check(f"{tag}：報價那一段與 K 線各是一塊板", seen["top"] == "slab" and seen["chart"] == "slab", seen)
+        check(f"{tag}：事實區塊照它自己的原則不加板", seen["facts"] == "none", seen["facts"])
+        open_stock_cat(page, "levelsPanel")
+        seen = looks()
+        check(f"{tag}：價位階梯是一塊板；壓力浮起、支撐凹下、現價是深色的鍵",
+              seen["rail"] == "slab" and seen["res"] == ["key", "key"] and seen["sup"] == ["well", "well"] and seen["now"] == "ink", seen)
+        open_stock_cat(page, "chipsPanel")
+        page.wait_for_timeout(300)
+        check(f"{tag}：籌碼名單是一塊板（不在名單上的不畫空板）", looks()["reasons"] in ("slab", "empty"), looks()["reasons"])
+        open_stock_cat(page, "comparePanel")
+        check(f"{tag}：和 0050 對照是一塊板", looks()["compare"] == "slab", looks()["compare"])
+        page.locator("#stockCats button[aria-controls='comparePanel']").click()
+        check(f"{tag}：換成板之後沒有橫向捲動", no_overflow(page))
+    step(f"{tag}：看盤桌（桌面與板）", desk)
 
     def levels() -> None:
         open_stock_cat(page, "levelsPanel")

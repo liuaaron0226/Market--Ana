@@ -13,13 +13,13 @@
   <link rel="stylesheet" href="minimal.css?v=20261116-desk44">
   <link rel="stylesheet" href="chart-studies.css?v=20261116-desk44">
   <link rel="stylesheet" href="bold.css?v=20261116-desk47">
-  <link rel="stylesheet" href="stock.css?v=20261116-desk45">
+  <link rel="stylesheet" href="stock.css?v=20261116-desk49">
   <link rel="stylesheet" href="stock-facts.css?v=20261116-news1">
   <link rel="stylesheet" href="watch-peers.css?v=20261116-peers1">
   <link rel="stylesheet" href="forecast.css?v=20261116-e1">
   <link rel="stylesheet" href="watch-judgments.css?v=20261116-e1">
 </head>
-<body class="bd">
+<body class="bd st">
   <div class="bd-shell">
     <header class="bd-bar">
       <a class="bd-back" href="minimal.html"><span aria-hidden="true">‹</span> 大盤</a>
@@ -44,6 +44,8 @@
     </section>
 
     <main id="content" hidden>
+      <!-- 看盤桌（C 包第 2 片）：報價、當日三格、操作策略是同一塊板 -->
+      <div class="st-top">
       <section class="bd-quote" aria-label="報價">
         <div class="bd-ident">
           <h1><span id="stockName">—</span></h1>
@@ -71,6 +73,7 @@
           <p id="strategyEvidence"></p>
         </details>
       </section>
+      </div>
 
       <div class="bd-stage">
         <section class="bd-chart sk-chart-card" aria-labelledby="chartTitle">
