@@ -1,6 +1,6 @@
 // 個股頁五塊新功能的畫面（規格 .scratch/stock-signals/spec.md〈畫面〉；票 06 漲停動能＋共用基礎）。
-// 只驗頁面這一層對外的整理結果：哪個面板出現哪幾張板、板上的數字與光條長短、每一條光條的高光由「代號＋位置」決定。
-// 畫面本身（板、液態玻璃、進場動態）在瀏覽器實看。
+// 只驗頁面這一層對外的整理結果：哪個面板出現哪幾張卡片、卡片上的數字與細條長短。
+// 畫面本身（卡片、細條、進場動態）在瀏覽器實看。本人 11-16 更正後不再有液態玻璃與每條各自的高光。
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -33,7 +33,6 @@ test("漲停動能在「重點」：一張板，分數、隔天漲停的比例�
   assert.equal(board.kind, "limit_up_momentum");
   assert.equal(board.name, "漲停動能");
   assert.equal(board.points, 84);
-  assert.deepEqual(board.digits, ["8", "4"]);
   assert.equal(board.rateText, "2.6%");
   assert.equal(board.averageText, "1.7%");
   assert.match(board.label, /漲停動能 84/);
@@ -52,8 +51,6 @@ test("光條長度是這個級距的歷史比例相對最高一級（17.6%）；
   assert.ok(low.fill > 0.4 / 17.6, "最低一級放大到看得到");
   assert.ok(low.fill <= 0.08, "但仍然是一小段");
   assert.ok(Math.abs(mid.averageAt - 1.7 / 17.6) < 1e-9);
-  assert.deepEqual(top.digits, ["9", "9"]);
-  assert.deepEqual(low.digits, ["0"]);
 });
 
 test("出現哪幾張板由資料的 blocks 決定，頁面不自己判斷；資料不齊或算法版本不認得就不出現", () => {
@@ -65,21 +62,6 @@ test("出現哪幾張板由資料的 blocks 決定，頁面不自己判斷；資
   assert.deepEqual(plain(read(signals({ limit_up_momentum: { ...momentum(84, 3, 2.6), points: "84" } }), "summary")), []);
   assert.deepEqual(plain(read(null, "summary")), []);
   assert.deepEqual(plain(read({ blocks: "limit_up_momentum" }, "summary")), []);
-});
-
-test("每一條光條的高光（位置、亮度、漂移範圍與速度）由代號加上這一條的位置決定：同一檔每次一樣，不同條、不同檔不一樣", () => {
-  const { finish } = load();
-  const a = plain(finish("2330", "limit_up_momentum"));
-  assert.deepEqual(plain(finish("2330", "limit_up_momentum")), a, "同一檔同一條每次一樣");
-  const others = [finish("2330", "versus_market:5"), finish("2330", "versus_market:20"), finish("2603", "limit_up_momentum")].map(plain);
-  for (const other of others) assert.notDeepEqual(other, a);
-  assert.notEqual(others[0].seconds, others[1].seconds, "不同條漂的速度不同（不同步）");
-  for (const one of [a, ...others]) {
-    assert.ok(one.from >= 4 && one.from <= 96 && one.to >= 4 && one.to <= 96 && Math.abs(one.to - one.from) >= 14, "漂移範圍在條內、而且看得出在動");
-    assert.ok(one.shine >= 0.45 && one.shine <= 0.85, "亮度");
-    assert.ok(one.seconds >= 5.5 && one.seconds <= 11, "一趟幾秒");
-    assert.ok(one.delay <= 0 && one.delay >= -9, "從週期中間開始，條與條不同步");
-  }
 });
 
 // ---------- 07：「技術」的三張板 ----------

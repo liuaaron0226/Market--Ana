@@ -1310,7 +1310,7 @@ def stock(page: Page, base: str, tag: str, mobile: bool) -> None:
         seen = page.evaluate("""() => { const host = document.querySelector("#stockFactsBlocks .ss[data-panel='technical']");
           return { kinds: [...host.querySelectorAll('.ss-board')].map(board => board.className.split(' ')[1]),
             versus: [...host.querySelectorAll('.ss-vs')].map(row => row.querySelector('.ss-vs-name').textContent + ' ' + row.querySelector('.ss-vs-read').textContent),
-            lamps: [...host.querySelectorAll('.ss-lamp')].map(lamp => lamp.textContent + (lamp.classList.contains('on') ? '●' : '○')),
+            lamps: [...host.querySelectorAll('.ss-check')].map(lamp => lamp.textContent + (lamp.classList.contains('on') ? '●' : '○')),
             summary: host.querySelector('.ss-word-read')?.textContent,
             zones: [...host.querySelectorAll('.ss-zones li')].map(row => row.textContent),
             afterTable: host.previousElementSibling !== null,
@@ -1336,10 +1336,10 @@ def stock(page: Page, base: str, tag: str, mobile: bool) -> None:
         page.wait_for_function("document.querySelector('.ss-margin-maintenance')?.classList.contains('is-in')", timeout=6000)
         page.wait_for_timeout(1300)
         seen = page.evaluate("""() => { const board = document.querySelector('.ss-margin-maintenance');
-          const band = board.querySelector('.ss-rng-band').getBoundingClientRect(), call = board.querySelector('.ss-rng-call');
-          const box = call.getBoundingClientRect(), top = document.elementFromPoint(box.left + 1, band.top + band.height / 2);
+          const band = board.querySelector('.ss-band').getBoundingClientRect(), call = board.querySelector('.ss-call');
+          const box = call.getBoundingClientRect(), top = document.elementFromPoint(box.left + box.width / 2, band.top + band.height / 2);
           return { head: board.querySelector('.ss-head').textContent, label: board.getAttribute('aria-label'),
-            ticks: [...board.querySelectorAll('.ss-rng-tick')].map(tick => tick.textContent),
+            ticks: [...board.querySelectorAll('.ss-tick-label')].map(tick => tick.textContent),
             callOnTop: top === call || call.contains(top), afterTable: board.closest('.ss').previousElementSibling?.tagName === 'TABLE' }; }""")
         check(f"{tag}：「融資券」表的後面一張融資維持率（估），右上只寫範圍", seen["head"] == "融資維持率（估）156%～208%" and seen["afterTable"], seen)
         check(f"{tag}：刻度有 130 與 300，給輔助工具讀的文字有追繳線", seen["ticks"][0] == "130" and seen["ticks"][-1] == "300" and "追繳線 130%" in (seen["label"] or ""), seen)

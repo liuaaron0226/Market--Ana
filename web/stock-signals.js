@@ -1,10 +1,11 @@
-/* 個股頁五塊新功能的畫面（規格 .scratch/stock-signals/spec.md〈畫面〉；本人 2026-11-16 定案的樣子：樣品 q3f-1、q4n-2）。
-   每一塊一張板，放進事實區塊的面板裡：漲停動能在「重點」；和大盤比、均線排列、爆大量成交區在「技術」；融資維持率（估）在「融資券」。
-   出現哪幾張板只看五塊資料的 blocks，頁面不自己判斷、不計算數字；這裡只做排版（光條長短、千分位）。
-   光條是液態玻璃：每一條的高光位置、亮度、漂移的範圍與速度由「代號＋這一條的位置」決定，同一檔每次看到的一樣，條與條不同步。
-   進場：板浮上來、數字跳到位、光條伸出去；每一檔、每一張板只在第一次出現在畫面上時播。開了「減少動態效果」就直接畫好、高光不漂。
-   這裡出錯只讓板不出現，事實區塊與頁面其他部分照常（呼叫的那一邊包了 try）。
-   對外：window.StockSignals = { read, finish, fill }。read、finish 不碰畫面（Node 測試直接驗）。 */
+/* 個股頁五塊新功能的畫面（規格 .scratch/stock-signals/spec.md〈畫面〉）。
+   樣子：本人 2026-11-16 更正——不要深色液態玻璃，和個股頁上半的報價卡、K 線卡同一套淺色看盤桌（米白卡片、圓角、柔和陰影），
+   光條是卡片裡乾淨的細條、紅綠只在細記號上；深色主題用同一套卡片的深色版（取代第 4 題原本選的 q4n-2 液態玻璃材質）。
+   每一塊一張卡片，放進事實區塊的面板裡：漲停動能在「重點」；和大盤比、均線排列、爆大量成交區在「技術」；融資維持率（估）在「融資券」。
+   出現哪幾張只看五塊資料的 blocks，頁面不自己判斷、不計算數字；這裡只做排版（細條長短、千分位）。
+   進場：卡片第一次出現在畫面上時輕輕浮上來、數字由零跳到位、細條伸出去；開了「減少動態效果」就直接畫好。
+   這裡出錯只讓卡片不出現，事實區塊與頁面其他部分照常（呼叫的那一邊包了 try）。
+   對外：window.StockSignals = { read, fill }。read 不碰畫面（Node 測試直接驗）。 */
 (function () {
   'use strict';
   // 每一塊放在事實區塊的哪個面板；排列照五塊資料 blocks 的固定順序
@@ -13,8 +14,6 @@
   const TOP_RATE = { 'limit-up-momentum-20261116': 17.6 };
   // 最低一級（0.4%）照比例只有 2%，放大到看得到一小段
   const MIN_FILL = 0.06;
-  // 里程表一格的高度（em），和 stock-signals.css 的 .ss-odo 一致
-  const DIGIT_EM = 1.19;
 
   const finite = value => typeof value === 'number' && Number.isFinite(value);
   const pct = value => `${Number(value).toFixed(1)}%`;
@@ -26,7 +25,7 @@
     if (!top) return null;
     const points = Math.round(block.points);
     return {
-      kind: 'limit_up_momentum', name: '漲停動能', points, digits: String(points).split(''),
+      kind: 'limit_up_momentum', name: '漲停動能', points,
       rate: block.band_rate_pct, rateText: pct(block.band_rate_pct), averageText: pct(block.average_rate_pct),
       fill: Math.min(1, Math.max(MIN_FILL, block.band_rate_pct / top)),
       averageAt: Math.min(1, Math.max(0, block.average_rate_pct / top)),
@@ -114,20 +113,9 @@
       .filter(Boolean);
   }
 
-  // 一條光條的高光：由「代號＋位置」算出一串固定的亂數（FNV-1a 當種子、線性同餘往下走），同一檔每次一樣。
-  function finish(code, slot) {
-    let seed = 2166136261;
-    for (const ch of `${code}|${slot}`) { seed ^= ch.codePointAt(0); seed = Math.imul(seed, 16777619) >>> 0; }
-    const next = (lo, hi) => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return lo + seed / 4294967296 * (hi - lo); };
-    const near = next(4, 38), far = next(52, 96), flip = next(0, 1) > 0.5;
-    const round = (value, digits) => Number(value.toFixed(digits));
-    return {
-      from: round(flip ? far : near, 1), to: round(flip ? near : far, 1),
-      shine: round(next(0.45, 0.85), 2), seconds: round(next(5.5, 11), 1), delay: round(-next(0, 9), 1),
-    };
-  }
-
   // ---------- 畫面 ----------
+  // 本人 2026-11-16 更正：不要深色液態玻璃，五塊和個股頁上半的報價卡、K 線卡同一套——米白卡片、圓角、柔和陰影（bold.css 的板），
+  // 光條是卡片裡乾淨的細條（和事實區塊的細橫條同一種），紅綠只在細記號上。進場只做克制的淡入、數字由零跳到位。
   const played = new Set();      // 「哪一塊」：這一檔播過進場的就不再播（切面板再切回來直接是最後的樣子）
   let playedCode = '';            // 換一檔就清掉，換回來也重播一次
   const still = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -137,65 +125,56 @@
     if (text !== undefined) node.textContent = text;
     return node;
   };
+  const at = value => `${(value * 100).toFixed(2)}%`;
+  // 紅綠的細記號：沿用事實區塊的 .sf-tick（3px 寬的一小條）
+  const tick = tone => { const mark = el('i', `sf-tick${tone ? ` ${tone}` : ''}`); mark.setAttribute('aria-hidden', 'true'); return mark; };
+  // 會由零跳到位的數字
+  const counter = (text, value, { sign = false, suffix = '%', digits = 1 } = {}) => {
+    const node = el('b', 'num', text);
+    Object.assign(node.dataset, { count: String(value), suffix, digits: String(digits) });
+    if (sign) node.dataset.sign = '1';
+    return node;
+  };
 
-  function glass(code, slot, tone) {
-    const bar = el('i', 'ss-glass');
-    bar.dataset.tone = tone;
-    const look = finish(code, slot);
-    bar.style.setProperty('--e1', `${look.from}%`);
-    bar.style.setProperty('--e2', `${look.to}%`);
-    bar.style.setProperty('--hi', String(look.shine));
-    bar.style.setProperty('--dt', `${look.seconds}s`);
-    bar.style.setProperty('--dd', `${look.delay}s`);
-    return bar;
-  }
-
-  // 「隔天漲停」那個數字的顏色跟著光條：低的偏金、高的偏紅（金 → 銅 → 紅，和光條同一組）
-  const rampColor = t => (t <= 0.5
-    ? `color-mix(in srgb, var(--ss-ramp-b) ${Math.round(t * 200)}%, var(--ss-ramp-a))`
-    : `color-mix(in srgb, var(--ss-ramp-c) ${Math.round((t - 0.5) * 200)}%, var(--ss-ramp-b))`);
-
-  function momentumBoard(model, code) {
-    const board = el('button', 'ss-board ss-momentum');
-    board.type = 'button';
+  // 卡片：一個標題列（左邊塊名、右邊讀數），內容接在下面
+  function card(model, read, tag = 'section') {
+    const board = el(tag, `ss-board ss-${model.kind.replace(/_/g, '-')}`);
     board.setAttribute('aria-label', model.label);
     const head = el('span', 'ss-head');
-    const rate = el('span', 'ss-read', '隔天漲停 ');
-    const value = el('b', 'num', model.rateText);
-    value.dataset.count = String(model.rate);
-    value.style.color = rampColor(model.fill);
-    rate.append(value);
-    head.append(el('span', 'ss-name', model.name), rate);
+    head.append(el('span', 'ss-name', model.name));
+    if (read) head.append(read);
+    board.append(head);
+    return board;
+  }
 
+  function momentumBoard(model) {
+    const read = el('span', 'ss-read', '隔天漲停 ');
+    read.append(counter(model.rateText, model.rate));
+    const board = card(model, read, 'button');
+    board.type = 'button';
+    board.classList.add('ss-momentum');   // 按住壓下去的樣式（stock-signals.css）認這個名字
     const main = el('span', 'ss-lu');
-    const odo = el('span', 'ss-odo');
-    odo.setAttribute('aria-hidden', 'true');
-    for (const digit of model.digits) {
-      const wheel = el('span');
-      const strip = el('i');
-      strip.dataset.d = digit;
-      for (let n = 0; n <= 9; n++) strip.append(el('b', '', String(n)));
-      wheel.append(strip);
-      odo.append(wheel);
-    }
-    const track = el('span', 'ss-bar');
-    track.setAttribute('aria-hidden', 'true');
-    const groove = el('span', 'ss-groove');
-    const clip = el('span', 'ss-clip');
-    clip.style.setProperty('--fill', String(model.fill));
-    clip.append(glass(code, model.kind, 'ramp'));
-    groove.append(clip);
-    const at = `calc((100% - 8px) * ${model.averageAt.toFixed(4)} + 4px)`;
+    const big = counter(String(model.points), model.points, { suffix: '', digits: 0 });
+    big.classList.add('ss-big');
+    big.setAttribute('aria-hidden', 'true');
+    const meter = el('span', 'ss-meter');
+    meter.setAttribute('aria-hidden', 'true');
+    const track = el('span', 'ss-track');
+    const fill = el('span', 'ss-fill');
+    fill.style.width = at(model.fill);
+    track.append(fill);
+    const mark = el('span', 'ss-mark');
+    mark.style.left = at(model.averageAt);
     const avg = el('span', 'ss-avg', '平均');
-    avg.style.left = at;
+    avg.style.left = at(model.averageAt);
     const tip = el('span', 'ss-tip', '全部股票平均 ');
     tip.append(el('b', 'num', model.averageText));
-    tip.style.left = at;
-    track.append(groove, avg, tip);
-    main.append(odo, track);
-    board.append(head, main);
+    tip.style.left = at(model.averageAt);
+    meter.append(track, mark, avg, tip);
+    main.append(big, meter);
+    board.append(main);
 
-    // 按住（或鍵盤）：整張板壓下去，「平均」上方浮出全部股票平均；放開後隔一下收回
+    // 按住（或鍵盤）：整張卡壓下去，「平均」上方浮出全部股票平均；放開後隔一下收回
     let timer = 0;
     const hold = () => { clearTimeout(timer); board.classList.add('is-held'); };
     const release = () => { clearTimeout(timer); timer = setTimeout(() => board.classList.remove('is-held'), 1400); };
@@ -207,63 +186,41 @@
     board.addEventListener('contextmenu', event => event.preventDefault());
     return board;
   }
-  // 一般的板：一個 <section>，標題列左邊是塊名、右邊是讀數（可以沒有）
-  function plainBoard(model, read) {
-    const board = el('section', `ss-board ss-${model.kind.replace(/_/g, '-')}`);
-    board.setAttribute('aria-label', model.label);
-    const head = el('div', 'ss-head');
-    head.append(el('span', 'ss-name', model.name));
-    if (read) head.append(read);
-    board.append(head);
-    return board;
-  }
 
-  function versusBoard(model, code) {
-    const board = plainBoard(model);
+  function versusBoard(model) {
+    const board = card(model);
     for (const row of model.rows) {
-      const line = el('div', 'ss-vs');
+      const line = el('span', 'ss-vs');
       line.setAttribute('aria-hidden', 'true');
-      const groove = el('span', 'ss-vs-groove');
+      const track = el('span', 'ss-track ss-two');
       if (row.side) {
-        const bar = el('span', `ss-vs-bar ${row.side}`);
-        bar.style.width = `${(row.width * 50).toFixed(2)}%`;
-        bar.append(glass(code, `${model.kind}:${row.days}`, row.side));
-        groove.append(bar);
+        const fill = el('span', `ss-fill ${row.side}`);
+        fill.style.width = at(row.width / 2);
+        track.append(fill);
       }
       const read = el('span', 'ss-vs-read');
-      if (row.word) read.append(el('span', `ss-word ${row.side}`, row.word), document.createTextNode(' '));
-      const number = el('b', 'num', row.gapText);
-      number.dataset.count = row.gapText;
-      number.dataset.sign = '1';
-      number.dataset.suffix = '';
-      read.append(number);
-      line.append(el('span', 'ss-vs-name', row.name), groove, read);
+      if (row.word) read.append(tick(row.side), document.createTextNode(`${row.word} `));
+      read.append(counter(row.gapText, Number(row.gapText), { sign: true, suffix: '' }));
+      line.append(el('span', 'ss-vs-name', row.name), track, read);
       board.append(line);
     }
     return board;
   }
 
-  function alignmentBoard(model, code) {
-    const board = plainBoard(model, el('b', 'ss-word-read', model.summary));
-    const lamps = el('div', 'ss-lamps');
-    lamps.setAttribute('aria-hidden', 'true');
-    let lit = 0;
-    model.lamps.forEach((lamp, index) => {
-      const item = el('span', `ss-lamp${lamp.on ? ' on' : ''}`);
-      const groove = el('span', 'ss-lamp-groove');
-      if (lamp.on) {
-        const light = glass(code, `${model.kind}:${index}`, 'gold');
-        light.style.transitionDelay = `${300 + lit++ * 160}ms`;   // 亮的那幾盞依序亮起
-        groove.append(light);
-      }
-      item.append(groove, el('span', 'ss-lamp-name', lamp.name));
-      lamps.append(item);
-    });
-    board.append(lamps);
+  function alignmentBoard(model) {
+    const board = card(model, el('b', 'ss-word-read', model.summary));
+    const checks = el('span', 'ss-checks');
+    checks.setAttribute('aria-hidden', 'true');
+    for (const lamp of model.lamps) {
+      const item = el('span', `ss-check${lamp.on ? ' on' : ''}`);
+      item.append(el('i', 'ss-dot'), document.createTextNode(lamp.name));
+      checks.append(item);
+    }
+    board.append(checks);
     return board;
   }
 
-  // 小圖：近 240 個交易日的收盤線（進場時自己畫出來）、成交量（爆量那幾天金色）、金色的區塊
+  // 小圖：近 240 個交易日的收盤線（進場時自己畫出來）、成交量（爆量那幾天金色）、淡金色的區塊
   const SVG = 'http://www.w3.org/2000/svg';
   const svg = (tag, attrs) => { const node = document.createElementNS(SVG, tag); for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value); return node; };
   function zonesChart(model) {
@@ -271,7 +228,7 @@
     const lows = [...closes, ...model.zones.map(zone => zone.low)], highs = [...closes, ...model.zones.map(zone => zone.high)];
     const lo = Math.min(...lows), hi = Math.max(...highs), span = hi - lo || 1, count = Math.max(2, closes.length);
     const x = i => 2 + i / (count - 1) * (W - 4), y = v => 4 + (1 - (v - lo) / span) * (top - 8);
-    // 寬度跟著板走、高度固定（樣式表給）：不等比縮放，線寬不跟著變
+    // 寬度跟著卡片走、高度固定（樣式表給）：不等比縮放，線寬不跟著變
     const chart = svg('svg', { viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none', class: 'ss-zchart', role: 'img', 'aria-label': `近 ${closes.length} 個交易日的收盤、成交量與爆大量成交區` });
     const bands = svg('g', { class: 'ss-fade' });
     for (const zone of model.zones) bands.append(svg('rect', { x: 2, width: W - 4, y: y(zone.high).toFixed(1), height: Math.max(2, y(zone.low) - y(zone.high)).toFixed(1), class: 'ss-zband' }));
@@ -284,8 +241,7 @@
     return chart;
   }
   function zonesBoard(model) {
-    const read = el('b', 'num', model.countText);
-    const board = plainBoard(model, read);
+    const board = card(model, el('b', 'num', model.countText));
     board.append(zonesChart(model));
     const list = el('ul', 'ss-zones');
     for (const item of model.list) {
@@ -297,24 +253,21 @@
     return board;
   }
   function marginBoard(model, code, panel) {
-    const board = plainBoard(model, el('b', 'num', model.rangeText));
+    const board = card(model, el('b', 'num', model.rangeText));
     // 資料日：融資比行情晚一個交易日。「融資券」面板上面已經標了同一天就不重複標，不同天才標（寫法和面板一樣）
     const shown = (panel?.querySelector('.sf-date')?.textContent || '').match(/資料日 (\S+?)(?:（|$)/)?.[1] || '';
     if (model.dataDate && model.dataDate !== shown) board.append(el('p', 'sf-date num', `資料日 ${model.dataDate}`));
-    const axis = el('div', 'ss-rng');
+    const axis = el('span', 'ss-rng');
     axis.setAttribute('aria-hidden', 'true');
-    const at = value => `calc((100% - 8px) * ${value.toFixed(4)} + 4px)`;
-    const groove = el('span', 'ss-rng-groove');
-    const band = el('span', 'ss-rng-band');
+    const band = el('span', 'ss-band');
     band.style.left = at(model.from);
-    band.style.right = `calc(100% - ${at(model.to)})`;
-    band.append(glass(code, model.kind, 'gold'));
-    const call = el('span', 'ss-rng-call');
+    band.style.width = at(model.to - model.from);
+    const call = el('span', 'ss-call');
     call.style.left = at(model.callAt);
-    axis.append(groove, band, call);
-    for (const tick of model.ticks) {
-      const mark = el('span', `ss-rng-tick num${tick.hot ? ' hot' : ''}`, String(tick.value));
-      mark.style.left = at(tick.at);
+    axis.append(el('span', 'ss-track'), band, call);
+    for (const one of model.ticks) {
+      const mark = el('span', `ss-tick-label num${one.hot ? ' hot' : ''}`, String(one.value));
+      mark.style.left = at(one.at);
       axis.append(mark);
     }
     board.append(axis);
@@ -324,12 +277,12 @@
 
   // 數字由零跳到位（減少動態效果時直接是最後的值）
   function countUp(node, quiet) {
-    const target = Number(node.dataset.count), digits = 1, suffix = node.dataset.suffix ?? '%';
+    const target = Number(node.dataset.count), digits = Number(node.dataset.digits ?? 1), suffix = node.dataset.suffix ?? '%';
     const show = v => { node.textContent = `${node.dataset.sign && v > 0 ? '+' : ''}${v.toFixed(digits)}${suffix}`; };
     if (quiet || !Number.isFinite(target)) return show(target);
     const start = performance.now();
     const step = now => {
-      const t = Math.min(1, (now - start) / 1300), eased = t === 1 ? 1 : 1 - Math.pow(2, -10 * t);
+      const t = Math.min(1, (now - start) / 900), eased = t === 1 ? 1 : 1 - Math.pow(2, -10 * t);
       show(target * eased);
       if (t < 1 && node.isConnected) requestAnimationFrame(step);
     };
@@ -337,23 +290,15 @@
     requestAnimationFrame(step);
   }
 
-  function settle(board) {   // 直接是最後的樣子
-    board.classList.add('is-in');
-    board.querySelectorAll('.ss-odo i').forEach(strip => { strip.style.transform = `translateY(${-Number(strip.dataset.d) * DIGIT_EM}em)`; });
-  }
+  function settle(board) { board.classList.add('is-in'); }   // 直接是最後的樣子
 
   function enter(board, order) {
-    const quiet = still();
-    if (quiet) { settle(board); board.querySelectorAll('[data-count]').forEach(node => countUp(node, true)); return; }
+    if (still()) { settle(board); board.querySelectorAll('[data-count]').forEach(node => countUp(node, true)); return; }
     setTimeout(() => {
       if (!board.isConnected) return;
       board.classList.add('is-in');
-      board.querySelectorAll('.ss-odo i').forEach((strip, index) => {
-        strip.style.transitionDelay = `${index * 120}ms`;
-        strip.style.transform = `translateY(${-Number(strip.dataset.d) * DIGIT_EM}em)`;
-      });
       board.querySelectorAll('[data-count]').forEach(node => countUp(node, false));
-    }, 120 + order * 200);
+    }, 80 + order * 120);
   }
 
   // 把某個面板的板放進去。panel 是事實區塊那一塊的內容容器；name 是面板名（summary、technical、credit）。
@@ -361,7 +306,7 @@
     const models = read(signals, name);
     if (code !== playedCode) { played.clear(); playedCode = code; }
     if (!models.length) return;
-    const host = el('div', `ss${typeof CSS !== 'undefined' && CSS.registerProperty ? ' ss-drift' : ''}`);
+    const host = el('div', 'ss');
     host.dataset.panel = name;
     const boards = models.map(model => BOARD[model.kind](model, code, panel));
     host.append(...boards);
@@ -389,5 +334,5 @@
     boards.forEach((board, index) => { if (fresh[index]) watch.observe(board); });
   }
 
-  window.StockSignals = { read, finish, fill };
+  window.StockSignals = { read, fill };
 })();
