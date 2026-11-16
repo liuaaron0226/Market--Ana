@@ -148,7 +148,7 @@ if (!existsSync(historyFile)) {
 // 資料包裡沒有的那幾檔（上櫃）整份加進來。產生方式寫在 .scratch/3d-redesign/issues/C-stock-and-portfolio.md〈開工前〉。
 const signalsFile = new URL(".tmp/3d-baseline/signals-preview.json", root);
 if (!existsSync(signalsFile)) {
-  notes.push("沒有 .tmp/3d-baseline/signals-preview.json：個股頁沒有事實區塊與五塊新功能。");
+  notes.push("沒有 .tmp/3d-baseline/signals-preview.json：個股頁沒有事實區塊與五塊新功能（產生方式見 make-signals-preview.py）。");
 } else {
   for (const [code, payload] of Object.entries(JSON.parse(readFileSync(signalsFile, "utf8")))) {
     const have = stockPack.results[code];
