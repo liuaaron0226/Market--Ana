@@ -7,6 +7,7 @@ import hashlib
 import json
 import tempfile
 import unittest
+from unittest import mock
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -170,13 +171,13 @@ class CutoffTests(OverseasTestCase):
                           status["us_nasdaq"]["status"]), ("2026-11-06", "2026-11-06", "ok"))
         # 日經：11/10 那根是未來，最新是基準日 11/09
         self.assertEqual((status["japan_nikkei"]["latest_date"], status["japan_nikkei"]["status"]), (BASE, "ok"))
-        nikkei = layer["withheld"]["markets"]["japan_nikkei"]
+        nikkei = layer["prompt"]["markets"]["japan_nikkei"]
         # 11/09 1030.2 ÷ 11/06 1010 − 1 = +2%
         self.assertEqual(nikkei["recent"][-1], {"date": BASE, "close": 1030.2, "change_pct": 2.0})
 
     def test_morning_sees_the_us_close_that_just_finished(self):
         layer = self.layer("morning")
-        nasdaq = layer["withheld"]["markets"]["us_nasdaq"]
+        nasdaq = layer["prompt"]["markets"]["us_nasdaq"]
         # 晨間版（11/10 開盤前）：美股 11/09 剛收盤 105 ÷ 101.1048 − 1 = +3.85%
         self.assertEqual(nasdaq["recent"][-1], {"date": "2026-11-09", "close": 105, "change_pct": 3.85})
         self.assertEqual(layer["status"]["us_nasdaq"]["status"], "ok")
@@ -195,16 +196,26 @@ class CutoffTests(OverseasTestCase):
 
 
 class PromptGateTests(OverseasTestCase):
-    def test_index_numbers_from_eodhd_are_kept_but_not_handed_to_the_model(self):
+    def test_index_numbers_go_to_the_model_as_the_owner_decided(self):
+        # 本人 2026-11-16 選「交」：EODHD 的美日韓指數也交給模型。
         layer = self.layer("evening")
-        prompt = json.dumps(layer["prompt"], ensure_ascii=False)
-        self.assertNotIn("1030.2", prompt)
-        self.assertNotIn("markets", layer["prompt"])
+        self.assertIn("1030.2", json.dumps(layer["prompt"], ensure_ascii=False))
+        self.assertNotIn("not_provided", layer["prompt"])
+        self.assertTrue(layer["status"]["japan_nikkei"]["in_prompt"])
+        self.assertEqual(layer["cutoffs"]["japan_nikkei"], BASE)
+        self.assertEqual(layer["withheld"], {})
+
+    def test_with_the_switch_off_index_numbers_are_only_kept(self):
+        with mock.patch.dict(oi.LICENSES["eodhd"], {"in_prompt": False}):
+            layer = self.layer("evening")
+        self.assertNotIn("1030.2", json.dumps(layer["prompt"], ensure_ascii=False))
         self.assertIn("日本日經 225", layer["prompt"]["not_provided"])
+        self.assertEqual(layer["withheld"]["markets"]["japan_nikkei"]["latest_close"], 1030.2)
         self.assertFalse(layer["status"]["japan_nikkei"]["in_prompt"])
         self.assertTrue(layer["status"]["treasury"]["in_prompt"])
         self.assertNotIn("japan_nikkei", layer["cutoffs"])
         self.assertIn("treasury", layer["cutoffs"])
+        self.assertFalse(layer["series_in_prompt"]["nasdaq"])
 
     def test_prompt_notes_never_say_a_selloff_continues_intraday(self):
         layer = self.layer("evening")
@@ -239,8 +250,8 @@ class SeriesForForeignReadingsTests(OverseasTestCase):
         morning = self.layer("morning")
         self.assertEqual(evening["series"]["nasdaq"][-1], {"date": "2026-11-06", "close": 101.1048})
         self.assertEqual(morning["series"]["nasdaq"][-1], {"date": "2026-11-09", "close": 105})
-        # 那斯達克來自 EODHD：條款待決，算出來的讀數不能交給模型；美元指數與台幣可以
-        self.assertEqual(evening["series_in_prompt"], {"nasdaq": False, "dollar_index": True, "usdtwd": True})
+        # 本人 11-16 選「交」：三個序列算出的讀數都交給模型
+        self.assertEqual(evening["series_in_prompt"], {"nasdaq": True, "dollar_index": True, "usdtwd": True})
 
     def test_dollar_index_and_usdtwd_series_carry_their_own_dates(self):
         series = self.layer("evening")["series"]

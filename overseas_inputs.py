@@ -13,9 +13,9 @@
   晨間版在下一個開盤日早上寫，用開盤日之前的收盤（剛收盤那一晚）。
 - 日韓與美元兌台幣：兩版都只用到基準日當天（晨間版寫的時候日韓還沒開盤）。
 
-哪些來源可以交給模型，依各家條款（``LICENSES``）：Gemini 目前用的方案會拿輸入改進產品，EODHD 的條款只允許
-本人私用，所以 EODHD 的指數數字只存、只給站主看，本人決定之前不交給模型（ANALYSIS_PLAN 2026-11-15
-「先做能做的，付費晚點決定」）。官方與公有領域的資料（財政部、聯準會、央行、證交所）可以交。
+哪些來源交給模型記在 ``LICENSES``：官方與公有領域的資料（財政部、聯準會、央行、證交所）交。EODHD 的條款只允許
+本人私用、Gemini 目前用的方案會拿輸入改進產品，本人知道這點之後 2026-11-16 決定「交」（D 票第 8 片的選項題，
+沒選「先存不交」），所以 EODHD 的指數也交。``in_prompt`` 改成 False 就回到只存、只給站主看（``withheld``）。
 """
 from __future__ import annotations
 
@@ -50,8 +50,8 @@ MARKETS: tuple[tuple[str, str, str, str], ...] = (
     ("korea_kospi", "韓國綜合", "KS11.INDX", "asia"),
 )
 LICENSES: dict[str, dict[str, Any]] = {
-    "eodhd": {"in_prompt": False, "credit": "EODHD",
-              "terms": "個人使用：可私人儲存與分析，不得讓他人取得；Gemini 目前方案會拿輸入改進產品，本人決定前不交給模型"},
+    "eodhd": {"in_prompt": True, "credit": "EODHD",
+              "terms": "個人使用：可私人儲存與分析，不得讓他人取得；本人 2026-11-16 知道 Gemini 目前方案會拿輸入改進產品後決定交給模型"},
     "treasury": {"in_prompt": True, "credit": "美國財政部 Daily Treasury Par Yield Curve Rates",
                  "terms": "美國聯邦政府資料；catalog.data.gov 標 CC0，財政部網站未另寫條款"},
     "fed_h10": {"in_prompt": True, "credit": "美國聯準會 H.10 Nominal Broad Dollar Index",

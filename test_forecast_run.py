@@ -333,11 +333,12 @@ class OverseasRunTests(MorningTestCase):
         records = {r["edition"]: r for r in fl.read_ledger(self.ledger)["forecasts"]}
         self.assertEqual(records["evening"]["overseas_status"]["us_nasdaq"]["latest_date"], DATES[-2])
         self.assertEqual(records["morning"]["overseas_status"]["us_nasdaq"]["latest_date"], BASE)
-        # 條款待決：那斯達克的數字存在紀錄裡，但不在交給模型的輸入裡
+        # 本人 11-16 選「交」：晨間版交給模型的輸入裡就有剛收盤那一晚的那斯達克
         morning = records["morning"]
-        nasdaq = morning["record_only"]["overseas"]["markets"]["us_nasdaq"]
-        self.assertEqual(nasdaq["recent"][-1]["change_pct"], 2.0)  # 103.02 ÷ 101 − 1
-        self.assertNotIn("103.02", json.dumps(morning["input"], ensure_ascii=False))
+        nasdaq = morning["input"]["overseas"]["markets"]["us_nasdaq"]
+        self.assertEqual(nasdaq["recent"][-1], {"date": BASE, "close": 103.02, "change_pct": 2.0})  # 103.02 ÷ 101 − 1
+        self.assertEqual(morning["input"]["data_cutoffs"]["us_nasdaq"], BASE)
+        self.assertNotIn("record_only", morning)  # 沒有只存不交的東西
         self.assertIn("us_sp500", {item["key"] for item in morning["missing_inputs"]})
 
     def test_originals_are_kept_in_the_ledger_and_the_record_points_at_them(self):
