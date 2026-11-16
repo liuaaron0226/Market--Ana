@@ -6,7 +6,9 @@
 - 中央通訊社產經證券、國際、科技 RSS，整批抓，以公司名稱與代號對到關注股；對不到的存成大環境消息（code 是 ''）。
   個人非商業、引用要標「中央通訊社」、保留發稿訊頭、不得引用全文。
 每則只存標題、前言、連結、出處、發布時間、取得時間。新聞不進 Gemini 的提示（免費方案條款不允許，見規格）。
-一天只抓一次（隨每日更新），遠低於各家的 ttl；來源回 429／503 時這一輪不再打它。
+一天只抓一次（隨每日更新），遠低於各家的 ttl（Yahoo max-age 30 秒、中央社 no-cache），所以不另做條件請求：
+條件請求拿到 304 時，新打開關注的股票就對不到中央社已經發過的新聞。來源回 429／503 時這一輪不再打它。
+保留 90 天和 cloud/lib/watch.js 的 NEWS_KEEP_DAYS 是同一個數字，要調整得兩邊一起改。
 """
 from __future__ import annotations
 
@@ -23,6 +25,8 @@ from urllib.parse import urlsplit
 KEEP_DAYS = 90
 SUMMARY_MAX = 200     # 前言上限（字）：RSS 本身給的就是前言，這裡只是保證不會存成全文
 YAHOO_URL = "https://tw.stock.yahoo.com/rss?s={code}.{suffix}"
+YAHOO_ALL = "https://tw.stock.yahoo.com/rss"   # 不篩個股的那一份：拿來比對篩選有沒有失效
+SAME_FEED_MIN = 3   # 兩份至少這麼多則、而且一模一樣，才算同一份（只共用一兩則合報新聞不算）
 CNA_FEEDS = {
     "cna-finance": "https://feeds.feedburner.com/rsscna/finance",
     "cna-intworld": "https://feeds.feedburner.com/rsscna/intworld",
@@ -85,12 +89,12 @@ def parse(content: bytes, *, source: str) -> list[dict]:
     return items
 
 
-def _http_get(url: str, headers=None):
+def _http_get(url: str, params=None):
     from types import SimpleNamespace
 
     import requests
-    response = requests.get(url, headers={"User-Agent": USER_AGENT, **(headers or {})}, timeout=30)
-    return SimpleNamespace(status=response.status_code, content=response.content, headers=response.headers)
+    response = requests.get(url, params=params, headers={"User-Agent": USER_AGENT}, timeout=30)
+    return SimpleNamespace(status=response.status_code, content=response.content)
 
 
 def _fetch(get: Callable, url: str, source: str) -> tuple[list[dict] | None, str | None, bool]:
@@ -133,11 +137,17 @@ def gather(stocks: list[dict], *, get: Callable, now: str, sleep: Callable[[floa
             record("yahoo", stock["code"], error)
         else:
             yahoo[stock["code"]] = items
-    # 按個股篩選失效時 Yahoo 會給每一檔同一份大盤新聞：兩檔以上內容一模一樣就當成篩選失效，不存成個股新聞。
-    signatures = {code: tuple(item["link"] for item in items) for code, items in yahoo.items() if items}
-    shared = {sig for sig in signatures.values() if list(signatures.values()).count(sig) > 1}
+    # 按個股篩選失效時 Yahoo 會給每一檔同一份大盤新聞：某一檔和不篩個股的那一份、或和另一檔一模一樣，
+    # 就當成篩選失效，不存成個股新聞（只關注一檔時靠前者；那一份抓不到時退回只比各檔之間）。
+    feeds = {code: frozenset(item["link"] for item in items) for code, items in yahoo.items()}
+    if yahoo and not slowed:
+        sleep(YAHOO_PAUSE_SECONDS)
+        general, _, _ = _fetch(get, YAHOO_ALL, "yahoo")
+        if general is not None:
+            feeds[None] = frozenset(item["link"] for item in general)
+    same = [feed for feed in feeds.values() if len(feed) >= SAME_FEED_MIN]
     for code, items in yahoo.items():
-        if signatures.get(code) in shared:
+        if same.count(feeds[code]) > 1:
             record("yahoo", code, "按個股篩選失效：每一檔拿到同一份新聞")
             continue
         record("yahoo", code, None)
@@ -226,10 +236,11 @@ if __name__ == "__main__":
     if sys.argv[1:] == ["daily", "--d1"]:
         print(json.dumps(daily(os.environ.get("OWNER_EMAIL", ""), query=_wrangler_query, execute=_wrangler_execute),
                          ensure_ascii=False))
-    elif sys.argv[1:2] == ["probe"]:   # 用真的網路抓一次、不寫資料庫：python watch_news.py probe 2330:台積電:上市 6488:環球晶:上櫃
+    elif sys.argv[1:2] == ["probe"]:
+        import time   # 用真的網路抓一次、不寫資料庫：python watch_news.py probe 2330:台積電:上市 6488:環球晶:上櫃
         stocks = [dict(zip(("code", "name", "market"), arg.split(":"))) for arg in sys.argv[2:]]
         result = gather(stocks, get=_http_get, now=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        sleep=__import__("time").sleep)
+                        sleep=time.sleep)
         print(json.dumps({"fetches": result["fetches"], "news": result["news"]}, ensure_ascii=False, indent=1))
     else:
         print("用法：python watch_news.py daily --d1 ｜ python watch_news.py probe 代號:名稱:市場 ...", file=sys.stderr)

@@ -71,6 +71,14 @@ test("各來源的最後成功時間：這一檔的 Yahoo 與中央社三個分�
   ], "失敗原因不外露，只說有沒有抓到");
 });
 
+test("好幾天都沒有成功抓到（整步沒跑、寫入前就壞了）也算沒抓到；週末沒跑不算", async () => {
+  await fetched("yahoo", "2330", { attempt: "2026-11-13T09:00:00Z" });                       // 週五晚上抓到，今天週一
+  await fetched("cna-finance", "", { attempt: "2026-11-12T08:59:59Z" });                    // 超過 4 天沒有新的成功
+  await fetched("cna-intworld", "", { attempt: "2026-11-16T08:00:00Z", success: null, error: "HTTP 500" });   // 從沒成功過
+  const { sources } = await json("/api/watch/2330/news");
+  assert.deepEqual(sources.map((source) => [source.source, source.ok]), [["yahoo", true], ["cna-finance", false], ["cna-intworld", false]]);
+});
+
 test("超過 90 天的新聞不給（每日清除之前也一樣）", async () => {
   await news({ code: "2330", link: "https://tw.stock.yahoo.com/news/old.html", source: "yahoo", title: "舊聞", published_at: "2026-08-18T08:59:59Z" });
   await news({ code: "2330", link: "https://tw.stock.yahoo.com/news/edge.html", source: "yahoo", title: "剛好 90 天", published_at: "2026-08-18T09:00:00Z" });

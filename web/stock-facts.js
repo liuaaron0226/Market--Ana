@@ -304,15 +304,17 @@
     return link;
   }
 
-  // 沒抓到的來源各一行；這幾天一則都沒有、而且至少有一個來源抓到了，才說「這幾天沒有消息」。
+  // 沒抓到的來源各一行：今天試過但失敗是「今天沒抓到」，好幾天沒有新的成功是「MM-DD 之後沒抓到」。
+  // 這幾天一則都沒有、而且至少有一個來源抓到了，才說「這幾天沒有消息」。
   function fillHeadlines(host, body) {
     if (!body?.available || !body.watching) return;
     const items = Array.isArray(body.items) ? body.items : [];
     const sources = Array.isArray(body.sources) ? body.sources : [];
     const today = taipei(Date.now()).day;
     const parts = sources.filter(source => !source.ok).map(source => {
-      const when = taipei(source.last_attempt_at);
-      return el('p', 'sf-miss', `${source.label} ${when.day === today ? '今天' : when.text.slice(0, 5) + ' '}沒抓到`);
+      const triedToday = taipei(source.last_attempt_at).day === today;
+      const since = source.last_success_at ? `${taipei(source.last_success_at).text.slice(0, 5)} 之後` : '';
+      return el('p', 'sf-miss', `${source.label} ${triedToday || !since ? '今天' : since}沒抓到`);
     });
     if (items.length) {
       const list = el('div', 'sf-headlines');

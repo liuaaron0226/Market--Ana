@@ -8,7 +8,9 @@ from pathlib import Path
 import watch_news as wn
 
 ROOT = Path(__file__).resolve().parent
-MIGRATION = (ROOT / "cloud/migrations/0014_watch_news.sql").read_text(encoding="utf-8")
+MIGRATIONS = ROOT / "cloud/migrations"
+WATCHLIST = "".join((MIGRATIONS / name).read_text(encoding="utf-8") for name in ("0005_user_portfolio.sql", "0011_watchlist_watch.sql"))
+MIGRATION = (MIGRATIONS / "0014_watch_news.sql").read_text(encoding="utf-8")
 NOW = "2026-11-16T09:00:00Z"
 
 
@@ -31,12 +33,14 @@ def cna_link(n):
 
 
 class Response:
-    def __init__(self, status=200, content=b"", headers=None):
-        self.status, self.content, self.headers = status, content, headers or {}
+    def __init__(self, status=200, content=b""):
+        self.status, self.content = status, content
 
 
 STOCKS = [{"code": "2330", "name": "台積電", "market": "上市"}, {"code": "6488", "name": "環球晶", "market": "上櫃"}]
 YAHOO = {"2330": "https://tw.stock.yahoo.com/rss?s=2330.TW", "6488": "https://tw.stock.yahoo.com/rss?s=6488.TWO"}
+YAHOO_ALL = "https://tw.stock.yahoo.com/rss"
+MARKET_WIDE = rss(*(item(f"大盤新聞{n}", yahoo_link(100 + n)) for n in range(4)))
 CNA = {name: f"https://feeds.feedburner.com/rsscna/{name}" for name in ("finance", "intworld", "technology")}
 
 
@@ -44,6 +48,7 @@ def normal_web():
     return {
         YAHOO["2330"]: Response(content=rss(item("台積電法說會", yahoo_link(1)), item("外資賣超台積電", yahoo_link(2)))),
         YAHOO["6488"]: Response(content=rss(item("環球晶10月營收", yahoo_link(3)))),
+        YAHOO_ALL: Response(content=MARKET_WIDE),
         CNA["finance"]: Response(content=rss(
             item("台積電擴產", cna_link(1), "Mon, 16 Nov 2026 15:51:54 +0800", "（中央社記者張建中新竹16日電）台積電今天宣布擴產。"),
             item("三大法人賣超", cna_link(2), "Mon, 16 Nov 2026 15:13:30 +0800", "（中央社台北16日電）台股今天下跌。"),
@@ -59,15 +64,15 @@ class FakeD1:
     def __init__(self, watched=STOCKS, owner="owner@example.com", migrated=True):
         self.db = sqlite3.connect(":memory:")
         self.db.row_factory = sqlite3.Row
-        self.db.executescript("""CREATE TABLE user_watchlist (email TEXT, code TEXT, name TEXT, market TEXT,
-                                 watching INTEGER NOT NULL DEFAULT 0, watch_since TEXT);""")
+        self.db.executescript(WATCHLIST)
         if migrated:
             self.db.executescript(MIGRATION)
+        add = ("INSERT INTO user_watchlist (email, code, name, market, in_universe, created_at, updated_at, watching, watch_since) "
+               "VALUES (?, ?, ?, ?, 1, '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z', ?, ?)")
         for index, stock in enumerate(watched):
-            self.db.execute("INSERT INTO user_watchlist VALUES (?, ?, ?, ?, 1, ?)",
-                            (owner, stock["code"], stock["name"], stock["market"], f"2026-11-1{index}T00:00:00Z"))
-        self.db.execute("INSERT INTO user_watchlist VALUES ('friend@example.com', '2317', '鴻海', '上市', 1, NULL)")
-        self.db.execute("INSERT INTO user_watchlist VALUES (?, '2603', '長榮', '上市', 0, NULL)", (owner,))
+            self.db.execute(add, (owner, stock["code"], stock["name"], stock["market"], 1, f"2026-11-1{index}T00:00:00Z"))
+        self.db.execute(add, ("friend@example.com", "2317", "鴻海", "上市", 1, "2026-11-10T00:00:00Z"))
+        self.db.execute(add, (owner, "2603", "長榮", "上市", 0, None))
         self.scripts = []
 
     def query(self, sql):
@@ -110,7 +115,7 @@ class ParseTests(unittest.TestCase):
         long = "<p>第一段<b>重點</b></p>" + "很長的內文" * 200
         lead = wn.parse(rss(item("標題", yahoo_link(9), summary=long)), source="yahoo")[0]["summary"]
         self.assertTrue(lead.startswith("第一段重點"))
-        self.assertLessEqual(len(lead), wn.SUMMARY_MAX)
+        self.assertLessEqual(len(lead), 200)
 
     def test_an_empty_feed_is_no_items_not_an_error(self):
         self.assertEqual(wn.parse(rss(), source="yahoo"), [])
@@ -133,7 +138,7 @@ class DailyTests(unittest.TestCase):
     def test_stores_each_watched_stocks_headlines_with_source_and_times(self):
         d1 = FakeD1()
         report, calls = run(d1, normal_web())
-        self.assertEqual(sorted(calls), sorted([*YAHOO.values(), *CNA.values()]), "只抓站主關注中的股票，不抓別人的、也不抓沒關注的")
+        self.assertEqual(sorted(calls), sorted([*YAHOO.values(), YAHOO_ALL, *CNA.values()]), "只抓站主關注中的股票，不抓別人的、也不抓沒關注的")
         tsmc = d1.news("2330")
         self.assertEqual([(row["source"], row["title"]) for row in tsmc],
                          [("cna-finance", "台積電擴產"), ("yahoo", "台積電法說會"), ("yahoo", "外資賣超台積電")])
@@ -175,7 +180,7 @@ class DailyTests(unittest.TestCase):
         run(d1, normal_web(), now="2026-11-16T09:00:00Z")
         self.assertEqual(len(d1.news("6488")), 2)
         # 90 天後：11-16 07:44 發布的那幾則已經超過 90 天（2027-02-14 09:00 往前 90 天是 11-16 09:00）。
-        web = {url: Response(content=rss()) for url in [*YAHOO.values(), *CNA.values()]}
+        web = {url: Response(content=rss()) for url in [*YAHOO.values(), YAHOO_ALL, *CNA.values()]}
         web[YAHOO["6488"]] = Response(content=rss(item("新的一則", yahoo_link(7), "Sun, 14 Feb 2027 01:00:00 GMT")))
         run(d1, web, now="2027-02-14T09:00:00Z")
         self.assertEqual([row["title"] for row in d1.news()], ["新的一則"])
@@ -213,21 +218,41 @@ class DailyTests(unittest.TestCase):
     def test_when_yahoo_ignores_the_stock_filter_every_stock_is_marked_not_fetched(self):
         d1 = FakeD1()
         web = normal_web()
-        same = rss(item("六都房價", yahoo_link(8)), item("國泰金獲利", yahoo_link(9)))
+        same = rss(item("六都房價", yahoo_link(8)), item("國泰金獲利", yahoo_link(9)), item("證交所喊話", yahoo_link(10)))
         web[YAHOO["2330"]] = Response(content=same)
         web[YAHOO["6488"]] = Response(content=same)
+        web[YAHOO_ALL] = Response(status=500)   # 不篩個股的那一份抓不到時，靠各檔之間比對
         run(d1, web)
         fetches = d1.fetches()
         for code in ("2330", "6488"):
             self.assertIn("篩選", fetches[("yahoo", code)]["last_error"])
         self.assertEqual([row["source"] for row in d1.news("2330")], ["cna-finance"], "大盤新聞不能被當成個股新聞存下")
 
+    def test_with_one_watched_stock_a_broken_filter_is_caught_by_the_unfiltered_feed(self):
+        d1 = FakeD1(watched=STOCKS[:1])
+        web = normal_web()
+        web[YAHOO["2330"]] = Response(content=MARKET_WIDE)
+        run(d1, web)
+        self.assertIn("篩選", d1.fetches()[("yahoo", "2330")]["last_error"])
+        self.assertEqual([row["source"] for row in d1.news("2330")], ["cna-finance"])
+
+    def test_two_stocks_sharing_one_joint_story_is_not_a_broken_filter(self):
+        d1 = FakeD1()
+        web = normal_web()
+        joint = rss(item("台積電、環球晶合作", yahoo_link(11)))
+        web[YAHOO["2330"]] = Response(content=joint)
+        web[YAHOO["6488"]] = Response(content=joint)
+        run(d1, web)
+        self.assertEqual([row["title"] for row in d1.news("6488") if row["source"] == "yahoo"], ["台積電、環球晶合作"])
+        self.assertIsNone(d1.fetches()[("yahoo", "2330")]["last_error"])
+
     def test_when_yahoo_asks_to_slow_down_the_rest_are_not_requested(self):
         d1 = FakeD1()
         web = normal_web()
-        web[YAHOO["2330"]] = Response(status=429, headers={"Retry-After": "120"})
+        web[YAHOO["2330"]] = Response(status=429)
         _, calls = run(d1, web)
         self.assertNotIn(YAHOO["6488"], calls, "來源要求放慢時，這一輪不再打它")
+        self.assertNotIn(YAHOO_ALL, calls)
         self.assertEqual(d1.fetches()[("yahoo", "6488")]["last_error"], "來源要求放慢，這一輪沒抓")
         self.assertEqual(len(d1.news("")), 2, "中央社照常")
 
