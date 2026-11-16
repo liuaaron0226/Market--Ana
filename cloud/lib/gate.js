@@ -12,6 +12,7 @@ import { policyForViewer, releasePolicy, stockFactsVisible, stockSignalsVisible 
 import { isOwnerEmail } from "./owner.js";
 import { FORECAST_PATH, handleForecastApi } from "./forecast.js";
 import { WATCH_PATH, handleWatchApi } from "./watch.js";
+import { WATCH_PEERS_PATH, handleWatchPeersApi } from "./watch-peers.js";
 
 const PENDING_CAP = 30;
 // 票 06 限速（Astra r1 建議值）：市場 API 全部每人每分 30 次；個股明細另限每分 12 次。固定一分鐘窗，邊界最多兩倍突發。
@@ -569,6 +570,7 @@ async function handleUserDataApi(request, env, path, email, deps, access) {
   const drawing = path.match(DRAWINGS_PATH);
   if (drawing) return handleUserDrawings(request, env, { code: drawing[1], id: drawing[2] }, email, deps);
   if (WATCH_PATH.test(path)) return handleWatchApi(request, env, path, email, deps, access);
+  if (WATCH_PEERS_PATH.test(path)) return handleWatchPeersApi(request, env, path, email, deps, access);
   return handleUserPortfolio(request, env, path, email, deps);
 }
 
@@ -643,7 +645,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
     const isMarket = path.startsWith("/api/market/");
     const isStock = path.startsWith("/api/stocks/");
     const isScreens = SCREEN_PATHS.has(path);
-    const isUserData = USER_DATA_PATH.test(path) || DRAWINGS_PATH.test(path) || WATCH_PATH.test(path);
+    const isUserData = USER_DATA_PATH.test(path) || DRAWINGS_PATH.test(path) || WATCH_PATH.test(path) || WATCH_PEERS_PATH.test(path);
     const policy = releasePolicy(env);
     // 只給站主的功能，其他人拿到的功能清單裡一律是關的（和 /api/features 同一個規則）。
     const levelDisabled = () => json(403, { error: "feature-disabled", message: "未驗證的水位建議尚未啟用", features: policyForViewer(policy, isOwner, env).features });
