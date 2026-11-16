@@ -702,7 +702,10 @@ body.hm .terrain-tag {
   position: absolute; left: 0; top: 0; padding: 5px 8px; border-radius: var(--r-key);
   background: var(--float); color: var(--ink); font: 700 12.5px/1 var(--sans); white-space: nowrap;
   box-shadow: var(--key-shadow);
+  transition: opacity 160ms var(--ease-out), visibility 0s;
 }
+/* 和名次較前的牌疊到、讓開一格也放不下的那一刻先淡出（terrain.js 的 stackTags） */
+body.hm .terrain-tag.is-crowded { opacity: 0; visibility: hidden; transition: opacity 160ms var(--ease-out), visibility 0s 160ms; }
 
 /* 點樓的明細：第 2 層的浮板，桌機浮在地形角落 */
 body.hm .terrain-detail {
