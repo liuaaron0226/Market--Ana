@@ -100,12 +100,9 @@
   // 5 年歷史日線：個股分析只帶最近 120 根，更早的在背景載入後接在前面。拿不到或對不上就維持原樣，不顯示任何訊息。
   let olderBars = { code: '', firstDate: '', rows: [] };
   let maPeriods = [18, 45];
-  // 畫線：目前這一檔在這次瀏覽中畫過、拖過（items：識別碼 → 最後的樣子）與刪過（removed）的線。
-  // 雲端那一份晚一步讀回來時以這裡為準，不能把剛做的變動蓋掉，也不能把剛刪的線帶回來。
-  const noDrawingEdits = code => ({ code, items: new Map(), removed: new Set() });
-  let drawingEdits = noDrawingEdits('');
-  // 畫線的儲存一筆送完才送下一筆：拖完馬上刪的時候，刪除不會比前一筆儲存早到而讓線又冒出來。
-  let drawingSaves = Promise.resolve();
+  // 畫線的存檔與補存（drawing-sync.js）：存不上去時留著、之後自動補存，並告訴這裡有幾筆還沒存上去。
+  // 那支沒載入時整個畫線功能收起，個股頁其他內容照常。
+  const drawingSync = window.DrawingSync ? window.DrawingSync.create({ onStatus: showUnsavedDrawings }) : null;
   const INTRADAY_PERIODS = { '1m': '1', '5m': '5', '15m': '15', '60m': '60' };
   // 秒 K（本人 2026-11-14「可以，先做當天」）：當天逐筆在背景一頁一頁取回，由 Intraday.secondCandles 彙總。
   const SECOND_PERIODS = { '1s': 1, '5s': 5, '10s': 10, '15s': 15, '30s': 30 };
@@ -269,6 +266,8 @@
   function applyLive(payload) {
     lastLive = payload;
     updateLiveStatus(payload);
+    // 關注股盤中觸價亮燈：沿用這一份即時報價，不另外取報價。
+    if (window.WatchJudgments) window.WatchJudgments.onLive(payload);
     if (payload?.ok && payload.market_open && payload.quote && baseResult) {
       const projected = window.Intraday.projectAnalysis(baseResult, payload);
       if (features.strategy_v1) projected.strategy = buildStrategy(projected);
@@ -338,6 +337,8 @@
       delete $('status').dataset.stockState;
     }
     $('content').hidden = false;
+    window.StockFacts?.render(r);  // 事實區塊（獨立檔）：沒有 facts 就不出現
+    window.WatchPeers?.load(r.code);  // 國外同類股（獨立檔）：只有站主的關注股才出現
     showBigHolders(r);
     drawChart(r);
     if (initial) syncComparison(r);
@@ -406,15 +407,17 @@
     const lv = r.levels || {};
     (lv.resistance || []).forEach((c, i) => overlays.push({ value: c.tick, label: `壓力${i ? '二' : '一'} ${fmt(c.tick)}`, short: '壓力', color: css('--gold', '#94681a'), pos: 'above', align: i ? 'left' : 'right' }));
     (lv.support || []).forEach((c, i) => overlays.push({ value: c.tick, label: `支撐${i ? '二' : '一'} ${fmt(c.tick)}`, short: '支撐', color: css('--down', '#0f8058'), pos: 'below', align: i ? 'left' : 'right' }));
+    // 自選股關注的觸發線與看錯線（watch-judgments.js；只有站主有判斷時才有）。
+    if (window.WatchJudgments) overlays.push(...window.WatchJudgments.overlays(chartPeriod));
     const key = `${r.code}:${r.as_of}:${chartPeriod}`;
     const savedView = chart && key === lastChartKey ? { ...chart.view } : null;
     const shownBefore = chart ? chart.candles : [];
     // 歷史接上後，日 K 比伺服器預算的 MACD 多出很多根：改由圖表用完整序列自己算。
     const extended = !intraday && daily.length > r.bars.length;
     if (!chart) chart = new window.KChart($('chartHost'), { macd: false, studyHost: $('chartStudies'), studies: ['volume', 'macd', 'kd', 'rsi', 'foreign', 'trust', 'dealer'], maPeriods, selectionRoots: [$('chartHost').parentElement], volumeKind: 'volume', overlayLabels: 'tags', height: chartHeight,
-      drawings: { onChange: saveDrawingChange, onTool: showActiveTool, onSelect: showDrawingSelection } });
+      drawings: drawingSync && { onChange: drawingSync.record, onTool: showActiveTool, onSelect: showDrawingSelection } });
     // 畫線只在日、週、月 K：秒 K、分 K 連工具列一起收起。
-    $('drawTools').hidden = intraday;
+    $('drawTools').hidden = intraday || !drawingSync;
     const expected = { fast: 12, slow: 26, signal: 9, histogram_multiplier: 1, seed: 'first_close', warmup_bars: 34,
       precision: 3, missing_policy: 'omit_missing_price_rows', version: 'macd-first-close-v1' };
     const compatible = !r._intraday && chartPeriod === 'daily' && r.chart && Object.entries(expected).every(([field, value]) => r.chart.parameters?.[field] === value)
@@ -1072,36 +1075,24 @@
     $('drawDelete').hidden = !drawing;
   }
 
-  // 畫完、拖完、刪掉都立刻存到自己的帳號底下。存不上去時畫面維持使用者最後的樣子（補存與提示另案處理）。
-  function saveDrawingChange(change) {
-    const code = drawingEdits.code;
-    if (!code) return;
-    const { id, kind, anchors } = change.drawing;
-    const removing = change.type === 'remove';
-    if (removing) { drawingEdits.items.delete(id); drawingEdits.removed.add(id); }
-    else drawingEdits.items.set(id, change.drawing);
-    const url = `/api/drawings/${encodeURIComponent(code)}/${encodeURIComponent(id)}`;
-    const request = removing ? { method: 'DELETE', cache: 'no-store' }
-      : { method: 'PUT', cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind, anchors }) };
-    drawingSaves = drawingSaves.then(() => fetch(url, request)).catch(() => { /* 連不上：畫面不變 */ });
-  }
-
-  // 雲端的線依原本的順序，套上這次瀏覽的變動；雲端還沒有的（剛畫、還在存）排在最後。
-  function withDrawingEdits(cloud) {
-    const known = new Set(cloud.map(item => item.id));
-    return [
-      ...cloud.filter(item => !drawingEdits.removed.has(item.id)).map(item => drawingEdits.items.get(item.id) || item),
-      ...[...drawingEdits.items.values()].filter(drawing => !known.has(drawing.id)),
-    ];
+  // 有變動還沒存上去（存檔失敗、等著補存）時工具列那一行的右邊出現提示（秒 K、分 K 工具列收起時也在），
+  // 那幾條線畫得比較淡；都補存上去就消失。
+  // 只剩被拒絕、不會再試的（超過上限等）時改說「沒存成」。
+  function showUnsavedDrawings({ unsaved, failed, ids }) {
+    const hint = $('drawUnsaved');
+    hint.hidden = !(unsaved || failed);
+    hint.textContent = unsaved ? '未儲存' : failed ? '沒存成' : '';
+    if (chart) chart.setUnsavedDrawings(ids);
   }
 
   // 個股分析畫出來之後才讀；讀不到就當作沒有畫線，不影響其他內容。
   async function loadDrawings(code, sequence) {
+    if (!drawingSync) return;
     try {
       const response = await fetch(`/api/drawings/${encodeURIComponent(code)}`, { cache: 'no-store' });
       const data = response.ok ? await response.json() : null;
       if (sequence !== requestSequence || !chart || !Array.isArray(data?.items)) return;
-      chart.setDrawings(withDrawingEdits(data.items));
+      chart.setDrawings(drawingSync.merge(data.items));
     } catch (_) { /* 畫線是附加的：失敗就維持沒有畫線 */ }
   }
 
@@ -1121,6 +1112,9 @@
       });
       ['pointerup', 'pointercancel', 'pointerleave'].forEach(type => button.addEventListener(type, release));
       button.addEventListener('contextmenu', event => event.preventDefault());
+      // 按工具列不搬走焦點：文字標註寫到一半時再按一次文字工具是「不寫了」，按垃圾桶是刪掉那一則——
+      // 焦點要是先被按鈕拿走，輸入框會當成「確定」把寫到一半的存下去。鍵盤（Tab、Enter、空白鍵）不受影響。
+      button.addEventListener('mousedown', event => event.preventDefault());
       button.addEventListener('click', () => {
         if (held) { held = false; return; }
         if (!chart) return;
@@ -1152,9 +1146,10 @@
     stopTicks();
     if (pendingRequest) pendingRequest.abort();
     pendingRequest = new AbortController();
-    // 換股票：上一檔的畫線、選取與選到一半的工具都放下；重新載入同一檔時，這次畫過、拖過的先留著。
-    if (drawingEdits.code !== code) drawingEdits = noDrawingEdits(code);
-    if (chart) { chart.setTool(null); chart.setDrawings([...drawingEdits.items.values()]); }
+    // 換股票：上一檔的畫線、選取與選到一半的工具都放下（還沒存上去的照樣在背景補存到原本那一檔）；
+    // 重新載入同一檔時，這次畫過、拖過的先留著。
+    const drawn = drawingSync ? drawingSync.open(code) : [];
+    if (chart) { chart.setTool(null); chart.setDrawings(drawn); }
     $('content').hidden = true;
     $('outside').hidden = true;
     $('content').setAttribute('aria-busy', 'true');
@@ -1195,6 +1190,11 @@
       render(data, true);
       loadHistory(data, sequence);
       loadDrawings(data.code, sequence);
+      // 自選股關注的判斷（watch-judgments.js）：只有站主、開關打開而且這一檔有判斷時才加小鍵與兩條線。
+      if (features.watchlist_watch_v1 && window.WatchJudgments) {
+        window.WatchJudgments.mount({ host: document.querySelector('.bd-chart-bar'), code: data.code,
+          onChange: () => { if (lastResult) drawChart(lastResult); }, getDaily: () => (baseResult ? dailyCandles(baseResult) : []) });
+      }
       syncTickFeed();
       if (canUseLive(data)) livePoller.start(code, data.market);
       else updateLiveStatus({ ok: true, market_open: false, live: false });
@@ -1251,7 +1251,8 @@
     syncTickFeed();
   });
   window.addEventListener('popstate', () => load(codeFromUrl() || '2330'));
-  window.addEventListener('beforeunload', () => { livePoller.stop(); stopTicks(); });
+  // 還有畫線沒存上去時瀏覽器會先問要不要離開（drawing-sync.js）：使用者可能留下來，所以這時不停即時更新。
+  window.addEventListener('beforeunload', event => { if (!event.defaultPrevented) { livePoller.stop(); stopTicks(); } });
   document.addEventListener('visibilitychange', syncTickFeed);
   $('addMa').addEventListener('click', () => {
     if (maPeriods.length >= MA_LIMIT) return;

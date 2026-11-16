@@ -15,6 +15,7 @@
     input_not_ready: '資料沒到齊', deadline_passed: '過了期限', model_failed: '模型失敗',
     model_timeout: '模型逾時', output_garbled: '回答亂碼', answer_invalid: '回答不合格',
   };
+  const SHORT_SOURCE = { us_sp500: '標普', us_nasdaq: '那斯達克', japan_nikkei: '日經', korea_kospi: '韓國' };
   const MA = { 5: '五日線', 10: '十日線', 20: '月線', 60: '季線', 120: '半年線', 240: '年線' };
   // 回看一次取最近六十天的預測（API 上限四百天）。
   const HISTORY_DAYS = 60;
@@ -101,7 +102,6 @@
       return;
     }
     const cell = record.cells[state.horizon];
-    const cutoffs = [...new Set(Object.values(record.data_cutoffs || {}))].map(mmdd).join('、') || '—';
     panel.append(facts([
       ['落點', ZONE[cell.zone] || cell.zone],
       ['轉強線', `${cell.strong_line.name} ${fmt(cell.strong_line.value)}`, 'is-up'],
@@ -110,8 +110,126 @@
       ['看錯條件', cell.invalidation],
       ['盤勢', record.regime],
       ['紀錄', `${record.run_mode === 'official' ? '正式' : '試跑'} · ${EDITION[record.edition]} · 基準日 ${mmdd(record.base_date)}`],
-      ['資料截止', cutoffs],
+      ...cutoffRows(record),
     ]));
+    similarView(panel, record);
+  }
+
+  // ---- 相似盤勢（E 票第 11 片；本人 2026-11-16 選「A 每段一點」）----
+  // 三列 1／5／20 日：歷史上同一類的每一段一個點（紅漲綠跌），粗線是這一類的中位數、菱形是平常（所有交易日）；
+  // 浮板選中的期間那一列實色。數字取自寫預測時鎖定的那一份統計（和交給 Gemini 的是同一份）。
+  const PULLBACK = '多頭中的回檔';
+  const WEAK = '高檔轉弱';
+  const signed = (value) => `${value > 0 ? '+' : ''}${Number(value).toFixed(1)}%`;
+
+  function similarView(panel, record) {
+    const layer = record.similar_regimes;
+    if (!layer || !layer.classes) return;
+    const section = el('section', { class: 'forecast-sim', 'aria-label': '相似盤勢' });
+    section.append(el('h4', {}, '相似盤勢'));
+    const regime = layer.today && layer.today.regime;
+    const info = regime && layer.classes[regime];
+    if (!info) {
+      section.append(el('p', { class: 'forecast-note' }, `目前不屬於「${PULLBACK}」或「${WEAK}」`));
+      panel.append(section);
+      return;
+    }
+    const small = info.low_sample;
+    const head = el('div', { class: 'forecast-score-head' });
+    head.append(el('strong', {}, regime), el('span', { class: 'forecast-tag' }, `${mmdd(layer.today.since)} 起`),
+      el('span', { class: 'forecast-count num' }, `${info.episodes.length} 段${small ? ' · 樣本少' : ''}`));
+    section.append(head, similarChart(layer, info, regime));
+    const legend = el('p', { class: 'forecast-sim-legend' });
+    for (const [mark, text] of [['up', '之後漲'], ['down', '之後跌'], ['med', '中位數'], ['base', '平常']]) {
+      legend.append(el('i', { class: `is-${mark}`, 'aria-hidden': 'true' }), el('span', {}, text));
+    }
+    section.append(legend);
+    const stat = info.horizons[state.horizon];
+    const usual = layer.all_days[state.horizon];
+    section.append(el('p', { class: 'forecast-sim-line' }, stat.median_pct === null ? `${state.horizon} 日還沒有樣本`
+      : `${state.horizon} 日後中位數 ${signed(stat.median_pct)}（平常 ${signed(usual.median_pct)}），${stat.samples} 段裡漲 ${stat.up}、跌 ${stat.down}`));
+    if (regime === WEAK) {
+      section.append(el('p', { class: 'forecast-note' },
+        '這是「和歷史上某些情況相似」，不保證能避開大跌：2017 年以來 19 次大跌的高點當天，現有資料沒有訊號能事先看出來。'));
+    } else {
+      const weak = record.cells['20'] && record.cells['20'].weak_line;
+      section.append(el('p', { class: 'forecast-note' }, weak
+        ? `20 日那一格的轉弱線（${weak.name} ${fmt(weak.value)}）就是「跌破才算趨勢轉壞」的那條線；沒跌破之前是回檔，不是轉壞。`
+        : '20 日那一格的轉弱線就是「跌破才算趨勢轉壞」的那條線。'));
+    }
+    if (small) section.append(el('p', { class: 'forecast-note' }, `少於 ${layer.min_episodes} 段，只能參考，不能當成規律。`));
+    panel.append(section);
+  }
+
+  function similarChart(layer, info, regime) {
+    const W = 316; const rowH = 40; const pad = { l: 34, r: 8, t: 6, b: 6 };
+    const H = pad.t + rowH * HORIZONS.length + pad.b;
+    const box = svg('svg', { viewBox: `0 0 ${W} ${H}`, class: 'forecast-sim-chart', role: 'img',
+      'aria-label': `${regime}：歷史上每一段之後 1、5、20 日的漲跌` });
+    const up = color('--up'); const down = color('--down'); const faint = color('--faint'); const ink = color('--ink');
+    HORIZONS.forEach((horizon, row) => {
+      const moves = info.episodes.map(item => item.returns_pct[horizon]).filter(value => value !== null && value !== undefined);
+      const span = Math.max(2, ...moves.map(Math.abs)) * 1.1;
+      const cx = (value) => pad.l + (value + span) / (2 * span) * (W - pad.l - pad.r);
+      const cy = pad.t + rowH * row + rowH / 2;
+      const group = svg('g', { class: `forecast-sim-row${horizon === state.horizon ? ' is-active' : ''}` });
+      group.append(svg('line', { x1: pad.l, x2: W - pad.r, y1: cy, y2: cy, stroke: color('--line'), 'stroke-width': 1 }));
+      group.append(svg('line', { x1: cx(0), x2: cx(0), y1: cy - 14, y2: cy + 14, stroke: color('--line-strong'), 'stroke-width': 1 }));
+      const label = svg('text', { x: 0, y: cy + 4, fill: horizon === state.horizon ? ink : faint, 'font-size': 12 });
+      label.textContent = `${horizon}日`;
+      const edge = svg('text', { x: W - pad.r, y: cy - 12, fill: faint, 'font-size': 10, 'text-anchor': 'end' });
+      edge.textContent = `±${Math.round(span)}%`;
+      group.append(label, edge);
+      // 點擠在一起時往上下錯開，每一段都看得到。
+      const crowd = new Map();
+      info.episodes.forEach((item, index) => {
+        const value = item.returns_pct[horizon];
+        if (value === null || value === undefined) return;
+        const slot = Math.round(cx(value) / 7);
+        const k = crowd.get(slot) || 0;
+        crowd.set(slot, k + 1);
+        const dot = svg('circle', { cx: cx(value), cy: cy + (k % 2 ? -1 : 1) * Math.ceil(k / 2) * 6, r: 3.4,
+          fill: value > 0 ? up : value < 0 ? down : faint, class: 'forecast-sim-dot', style: `--d:${index * 22}ms` });
+        const tip = svg('title');
+        tip.textContent = `${item.start} 起：${signed(value)}`;
+        dot.append(tip);
+        group.append(dot);
+      });
+      const stat = info.horizons[horizon];
+      if (stat.median_pct !== null) {
+        group.append(svg('line', { x1: cx(stat.median_pct), x2: cx(stat.median_pct), y1: cy - 12, y2: cy + 12,
+          stroke: ink, 'stroke-width': 2, 'stroke-linecap': 'round' }));
+      }
+      const usual = cx(Math.max(-span, Math.min(span, layer.all_days[horizon].median_pct)));
+      group.append(svg('path', { d: `M${usual} ${cy - 17} l3 3 l-3 3 l-3 -3 z`, fill: 'none', stroke: faint, 'stroke-width': 1.2 }));
+      box.append(group);
+    });
+    return box;
+  }
+
+  // 資料截止：台股、美股（晚間版是前一晚、晨間版是剛收盤那一晚）、日韓各標日期；缺了哪幾項、哪些沒交給模型另列。
+  // D 票之前的紀錄沒有 overseas_status，照舊列出各項日期。
+  function cutoffRows(record) {
+    const status = record.overseas_status;
+    if (!status) {
+      return [['資料截止', [...new Set(Object.values(record.data_cutoffs || {}))].map(mmdd).join('、') || '—']];
+    }
+    const parts = [`台股 ${mmdd(record.data_cutoffs?.index)}`];
+    // 美國那一晚：優先用有交給模型的美債日期（美國日期），沒有才用指數的日期。
+    const us = [status.treasury, status.us_nasdaq, status.us_sp500].find((item) => item?.latest_date);
+    if (us) parts.push(`美國 ${mmdd(us.latest_date)} 收盤`);
+    const asia = [status.japan_nikkei, status.korea_kospi].find((item) => item?.latest_date);
+    if (asia) parts.push(`日韓 ${mmdd(asia.latest_date)}`);
+    const rows = [['資料截止', parts.join(' · ')]];
+    const missing = (record.missing_inputs || []).filter((item) => item.name);
+    if (missing.length) {
+      rows.push(['缺漏', missing.map((item) => `${item.name}${item.status === 'stale' ? '（休市或未更新）' : ''}`).join('、')]);
+    }
+    const withheld = Object.entries(status).filter(([, item]) => item && item.in_prompt === false && item.latest_date);
+    if (withheld.length) {
+      rows.push(['未交給模型', `${withheld.map(([key, item]) => SHORT_SOURCE[key] || item.name).join('、')}（條款待決，只存不交）`]);
+    }
+    return rows;
   }
 
   // ---- 對帳頁 ----

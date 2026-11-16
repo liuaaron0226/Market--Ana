@@ -3,20 +3,23 @@
 // 任何設定缺漏或資料庫錯誤一律拒絕。
 import { verifyAccessJwt } from "./jwt.js";
 import { detailFor } from "./market-data.js";
-import { handleUserPortfolio, UserPortfolioError } from "./user-portfolio.js";
+import { etfTableMissing, handleUserPortfolio, UserPortfolioError } from "./user-portfolio.js";
 import { handleUserDrawings } from "./user-drawings.js";
 import { defaultLiveQuoteService } from "./live-quotes.js";
 import { fetchTickPage } from "./live-ticks.js";
 import { defaultIndexLiveService } from "./index-live.js";
-import { policyForViewer, releasePolicy } from "./release-policy.js";
+import { etfAnalysisHidden, policyForViewer, releasePolicy, stockEtfsVisible, stockFactsVisible, stockSignalsVisible } from "./release-policy.js";
 import { isOwnerEmail } from "./owner.js";
 import { FORECAST_PATH, handleForecastApi } from "./forecast.js";
 import { WATCH_PATH, handleWatchApi } from "./watch.js";
+import { FRIEND_AI_PAGE, FRIEND_AI_PATH, configuredEmails, deleteFriendKey, friendAiEnabled, handleFriendAiApi, notAvailable, ownerRefused } from "./friend-ai.js";
+import { WATCH_PEERS_PATH, handleWatchPeersApi } from "./watch-peers.js";
 
 const PENDING_CAP = 30;
 // 票 06 限速（Astra r1 建議值）：市場 API 全部每人每分 30 次；個股明細另限每分 12 次。固定一分鐘窗，邊界最多兩倍突發。
 // ticks：行情商免費方案的日內查詢是每分鐘 60 次，報價與分 K 輪詢約用掉 10 次，逐筆留 40 次。
-const RATE = { market: 30, detail: 12, userData: 60, live: 20, history: 30, ticks: 40 };
+// friendAi：朋友保存、同意、刪除 Gemini 金鑰（保存會替他試呼叫一次 Gemini），所以另外限得緊一點；讀狀態不扣這一份。
+const RATE = { market: 30, detail: 12, userData: 60, live: 20, history: 30, ticks: 40, friendAi: 10 };
 // 舊的整包資料檔：雲端已不部署，這裡再擋一次，避免預覽網址或殘留檔被讀到。
 const RETIRED_DATA = new Set(["/analysis-data.js", "/chips-data.js", "/dashboard-data.js", "/detail-data.js", "/plain-data.js"]);
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -115,7 +118,10 @@ async function handleAdminApi(request, env, path, owner) {
     const { results } = await env.DB
       .prepare("SELECT email, nickname, status, applied_at, decided_at FROM users ORDER BY applied_at DESC")
       .all();
-    return json(200, { users: results });
+    // 朋友 AI 的開關打開時，每位使用者旁邊多一個「已設定／未設定」；關著時回應和以前一樣。
+    if (!friendAiEnabled(env)) return json(200, { users: results });
+    const configured = await configuredEmails(env.DB);
+    return json(200, { users: results.map((user) => ({ ...user, gemini_configured: configured.has(user.email) })) });
   }
   const m = path.match(/^\/api\/admin\/users\/([^/]+)\/([a-z]+)$/);
   if (!m || !ACTIONS[m[2]]) throw new HttpError(404, "找不到");
@@ -127,6 +133,8 @@ async function handleAdminApi(request, env, path, owner) {
   const current = await statusOf(env.DB, target);
   if (current === "none") throw new HttpError(404, "沒有這個帳號");
   if (!rule.from.includes(current)) throw new HttpError(409, `目前狀態「${current}」不能這樣改`);
+  // 停權時先刪掉他的 Gemini 金鑰（開關關著也照刪），刪不掉就不停權，讓站主重試。
+  if (rule.to === "disabled") await deleteFriendKey(env.DB, target);
   await env.DB
     .prepare("UPDATE users SET status = ?, decided_at = ?, decided_by = ? WHERE email = ?")
     .bind(rule.to, nowIso(), owner, target)
@@ -164,7 +172,7 @@ async function consume(db, email, bucket, now, rate = RATE) {
 // 個股搜尋與分析：搜尋讀版本化官方名錄；分析先兼容舊包，再讀同一 active version 的 D1 預算結果。
 const STOCK_PATH = /^\/api\/stocks\/([0-9A-Z]{4,6})\/analysis$/;
 const ANALYSIS_SCHEMA = "stock-analysis/v2";
-async function handleStockSearch(request, env, email, deps) {
+async function handleStockSearch(request, env, email, deps, { isOwner } = {}) {
   const params = new URL(request.url).searchParams;
   if (params.getAll("q").length > 1 || params.getAll("limit").length > 1 || params.getAll("cursor").length > 1) {
     throw new HttpError(400, "搜尋參數不可重複");
@@ -191,11 +199,23 @@ async function handleStockSearch(request, env, email, deps) {
   if (!query) return json(200, { source_date: active.source_date, items: [], next_cursor: null });
   const escaped = query.replace(/[\\%_]/g, (character) => `\\${character}`);
   // V2：名錄只含大量股母體（listed_securities），母體外的股票自然不會出現在搜尋結果；名次與規則版本只增欄位。
-  const rows = await env.DB.prepare(
-    "SELECT code, name, market, security_type, latest_bar_date, available_bars, analysis_status, universe_rank, universe_rule " +
-      "FROM listed_securities WHERE version = ? AND (code = ? OR name LIKE ? ESCAPE '\\') " +
-      "ORDER BY CASE WHEN code = ? THEN 0 WHEN name = ? THEN 1 ELSE 2 END, code LIMIT ? OFFSET ?",
-  ).bind(active.version, query, `%${escaped}%`, query, query, limit + 1, offset).all();
+  // ETF 上站（12 票）：ETF 開關對這個人是開的時候，再把 ETF 名錄（etf_securities）一起搜，類別記成 ETF。
+  const tail = "latest_bar_date, available_bars, analysis_status, universe_rank, universe_rule";
+  const match = "WHERE version = ? AND (code = ? OR name LIKE ? ESCAPE '\\')";
+  const order = "ORDER BY CASE WHEN code = ? THEN 0 WHEN name = ? THEN 1 ELSE 2 END, code LIMIT ? OFFSET ?";
+  const ordinary = `SELECT code, name, market, security_type, ${tail} FROM listed_securities ${match}`;
+  const matchArgs = [active.version, query, `%${escaped}%`];
+  const orderArgs = [query, query, limit + 1, offset];
+  let rows = null;
+  if (stockEtfsVisible(env, isOwner)) {
+    rows = await env.DB.prepare(
+      `SELECT * FROM (${ordinary} UNION ALL SELECT code, name, market, 'ETF' AS security_type, ${tail} FROM etf_securities ${match}) ${order}`,
+    ).bind(...matchArgs, ...matchArgs, ...orderArgs).all().catch((error) => {
+      if (etfTableMissing(error)) return null; // 0018 還沒套：當作沒有 ETF 名錄，走原本的查詢
+      throw error;
+    });
+  }
+  rows ??= await env.DB.prepare(`${ordinary} ${order}`).bind(...matchArgs, ...orderArgs).all();
   const hasMore = rows.results.length > limit;
   const items = rows.results.slice(0, limit).map((item) => ({
     ...item,
@@ -206,9 +226,9 @@ async function handleStockSearch(request, env, email, deps) {
   return json(200, { source_date: active.source_date, items, next_cursor: hasMore ? String(offset + limit) : null });
 }
 
-async function handleStockApi(request, env, path, email, deps) {
+async function handleStockApi(request, env, path, email, deps, options = {}) {
   if (request.method !== "GET") throw new HttpError(405, "方法不允許");
-  if (path === "/api/stocks/search") return handleStockSearch(request, env, email, deps);
+  if (path === "/api/stocks/search") return handleStockSearch(request, env, email, deps, options);
   const pack = deps.stockPack;
   // 個股分析契約 v2（本人 11-08「自創部分不保留」）：每檔一筆。舊三方案格式的資料包不能當 v2 回傳，視同未就緒。
   if (!pack || pack.analysis_schema !== ANALYSIS_SCHEMA) throw new HttpError(503, "資料尚未就緒");
@@ -229,11 +249,13 @@ async function handleStockApi(request, env, path, email, deps) {
   let resultAsOf = pack.as_of;
   if (!result) {
     const stored = await env.DB.prepare(
-      "SELECT a.as_of, a.payload FROM stock_data_state s " +
+      "SELECT a.as_of, a.payload, json_extract(a.payload, '$.kind') AS kind FROM stock_data_state s " +
         "JOIN stock_analysis a ON a.version = s.active_version " +
         "WHERE s.key = 'current' AND a.code = ?",
     ).bind(m[1]).first();
-    if (stored) {
+    // ETF 上站（12 票）：0050 以外的 ETF 只給 ETF 開關對他是開的人；關的人拿到的回應和沒有這檔分析時一樣。
+    // （Functions 內建的快取子集合只放舊代號與 0050，不會有其他 ETF。）
+    if (stored && !etfAnalysisHidden(m[1], stored.kind, stockEtfsVisible(env, options.isOwner))) {
       result = stored.payload;
       resultAsOf = stored.as_of;
     }
@@ -260,10 +282,17 @@ async function handleStockApi(request, env, path, email, deps) {
   }
   // 舊資料包與 D1 都保存 build 時序列化好的結果；完整模式原樣回傳。
   // 核心 release 預設只移除未驗 strategy_v1 操作建議，支撐壓力等觀察資料仍保留。
+  // 個股頁事實區塊依開關決定給誰（只開站主時，其他人拿到的內容和開關關著時一樣）。
+  // 五塊新功能的資料（signals）同樣寫法，看它自己那一個開關。
   let body = typeof result === "string" ? result : JSON.stringify(result);
-  if (!releasePolicy(env).features.strategy_v1) {
+  const dropStrategy = !releasePolicy(env).features.strategy_v1;
+  const dropFacts = !stockFactsVisible(env, options.isOwner);
+  const dropSignals = !stockSignalsVisible(env, options.isOwner);
+  if (dropStrategy || dropFacts || dropSignals) {
     const projected = typeof result === "string" ? JSON.parse(result) : { ...result };
-    delete projected.strategy;
+    if (dropStrategy) delete projected.strategy;
+    if (dropFacts) delete projected.facts;
+    if (dropSignals) delete projected.signals;
     body = JSON.stringify(projected);
   }
   return new Response(body, {
@@ -272,11 +301,39 @@ async function handleStockApi(request, env, path, email, deps) {
   });
 }
 
+// 個股頁事實區塊 D 票：這一檔近 90 天的重大訊息（跟著目前上線的個股資料版本走，每檔一列）。
+// 給誰看照事實區塊的開關；看不到的人拿到「沒有內容」。資料表還沒建立（0013 未套）或沒有這一檔就是空清單。
+const ANNOUNCEMENTS_PATH = /^\/api\/stocks\/([0-9A-Z]{4,6})\/announcements$/;
+
+async function handleAnnouncementsApi(request, env, path, email, deps, { isOwner }) {
+  if (request.method !== "GET") throw new HttpError(405, "方法不允許");
+  const headers = { "cache-control": "private, no-store" };
+  if (!stockFactsVisible(env, isOwner)) return json(200, { available: false }, headers);
+  const code = path.match(ANNOUNCEMENTS_PATH)[1];
+  try {
+    await consume(env.DB, email, "market", (deps.now || Date.now)(), deps.rate);
+  } catch (e) {
+    if (e instanceof RateLimited) return json(429, { error: "rate-limited", message: "查詢太頻繁，請稍後再試" }, { "retry-after": String(e.retryAfter) });
+    throw new HttpError(503, "暫時無法處理，請稍後再試");
+  }
+  let items = [];
+  try {
+    const row = await env.DB.prepare(
+      "SELECT a.payload FROM stock_data_state s JOIN stock_announcements a ON a.version = s.active_version " +
+        "WHERE s.key = 'current' AND a.code = ?",
+    ).bind(code).first();
+    if (row) items = JSON.parse(row.payload).items || [];
+  } catch {
+    items = [];
+  }
+  return json(200, { available: true, code, items }, headers);
+}
+
 // 5 年歷史日線（本人 2026-11-14：先做 5 年、放進資料庫）。每檔一列，由每日更新在發布通過後覆寫；
 // 個股分析已帶最近 120 根，這裡只供圖往前拉。沒有資料（含資料表尚未建立）一律 404，頁面照舊顯示 120 根。
 const HISTORY_STOCK_PATH = /^\/api\/stocks\/([0-9A-Z]{4,6})\/history$/;
 
-async function handleStockHistoryApi(request, env, path, email, deps) {
+async function handleStockHistoryApi(request, env, path, email, deps, { isOwner } = {}) {
   if (request.method !== "GET") throw new HttpError(405, "方法不允許");
   const code = path.match(HISTORY_STOCK_PATH)[1];
   const headers = { "cache-control": "private, no-store" };
@@ -289,6 +346,14 @@ async function handleStockHistoryApi(request, env, path, email, deps) {
   let stored = null;
   try {
     stored = await env.DB.prepare("SELECT payload FROM stock_history WHERE code = ?").bind(code).first();
+    // ETF 上站（12 票）：開關對這個人關著時，0050 以外的 ETF 和上站之前一樣沒有長日線（只有關的人多查這一筆）。
+    if (stored && !stockEtfsVisible(env, isOwner)) {
+      const kind = await env.DB.prepare(
+        "SELECT json_extract(a.payload, '$.kind') AS kind FROM stock_data_state s " +
+          "JOIN stock_analysis a ON a.version = s.active_version WHERE s.key = 'current' AND a.code = ?",
+      ).bind(code).first();
+      if (etfAnalysisHidden(code, kind?.kind, false)) stored = null;
+    }
   } catch {
     stored = null;
   }
@@ -330,12 +395,16 @@ async function handleStockLiveApi(request, env, path, email, deps) {
   if (!payload) {
     // 內嵌資料包只是快取；個股分析會退回 D1 現行版本，即時行情的涵蓋範圍必須和它一致。
     payload = await env.DB.prepare(
-      "SELECT json_extract(a.payload, '$.schema') AS schema, json_extract(a.payload, '$.market') AS market " +
+      "SELECT json_extract(a.payload, '$.schema') AS schema, json_extract(a.payload, '$.market') AS market, " +
+        "json_extract(a.payload, '$.kind') AS kind " +
         "FROM stock_data_state s JOIN stock_analysis a ON a.version = s.active_version " +
         "WHERE s.key = 'current' AND a.code = ?",
     ).bind(match[1]).first();
   }
-  if (!payload || payload.schema !== ANALYSIS_SCHEMA) throw new HttpError(404, "雲端目前沒有這檔股票的分析資料");
+  // 即時行情只給站主；ETF 開關關著時，0050 以外的 ETF 和 ETF 上站之前一樣查不到。
+  if (!payload || payload.schema !== ANALYSIS_SCHEMA || etfAnalysisHidden(match[1], payload.kind, stockEtfsVisible(env, true))) {
+    throw new HttpError(404, "雲端目前沒有這檔股票的分析資料");
+  }
   try {
     await consume(env.DB, email, "live", (deps.now || Date.now)(), deps.rate);
   } catch (error) {
@@ -534,7 +603,23 @@ async function handleUserDataApi(request, env, path, email, deps, access) {
   const drawing = path.match(DRAWINGS_PATH);
   if (drawing) return handleUserDrawings(request, env, { code: drawing[1], id: drawing[2] }, email, deps);
   if (WATCH_PATH.test(path)) return handleWatchApi(request, env, path, email, deps, access);
-  return handleUserPortfolio(request, env, path, email, deps);
+  if (WATCH_PEERS_PATH.test(path)) return handleWatchPeersApi(request, env, path, email, deps, access);
+  // ETF 上站：加自選／持股時，名單內 ETF 算不算在分析範圍內，看 ETF 開關對這個人開不開。
+  return handleUserPortfolio(request, env, path, email, { ...deps, includeEtfs: stockEtfsVisible(env, access.isOwner) });
+}
+
+// 讀狀態（首頁入口每一頁都會讀）走一般個人資料的額度；保存、同意、刪除才扣 friendAi。
+async function handleFriendAiRequest(request, env, path, email, deps) {
+  const bucket = request.method === "GET" ? "userData" : "friendAi";
+  try {
+    await consume(env.DB, email, bucket, (deps.now || Date.now)(), { ...RATE, ...deps.rate });
+  } catch (error) {
+    if (error instanceof RateLimited) {
+      return json(429, { error: "rate-limited", message: "操作太頻繁，請稍後再試" }, { "retry-after": String(error.retryAfter) });
+    }
+    throw new HttpError(503, "暫時無法處理，請稍後再試");
+  }
+  return handleFriendAiApi(request, env, path, email, deps);
 }
 
 function marketOverviewForRelease(overview, policy) {
@@ -549,7 +634,7 @@ function marketOverviewForRelease(overview, policy) {
   return { ...overview, analysis, dashboard, features: policy.features };
 }
 
-async function handleMarketApi(request, env, path, email, deps) {
+async function handleMarketApi(request, env, path, email, deps, options = {}) {
   if (request.method !== "GET") throw new HttpError(405, "方法不允許");
   const pack = deps.marketPack;
   if (!pack) throw new HttpError(503, "資料尚未就緒");
@@ -565,7 +650,7 @@ async function handleMarketApi(request, env, path, email, deps) {
     throw new HttpError(503, "暫時無法處理，請稍後再試");
   }
   const headers = { "cache-control": "private, no-store", "x-data-version": pack.version };
-  if (isOverview) return json(200, marketOverviewForRelease(pack.overview, releasePolicy(env)), headers);
+  if (isOverview) return json(200, marketOverviewForRelease(pack.overview, policyForViewer(releasePolicy(env), options.isOwner, env)), headers);
   const q = new URL(request.url).searchParams;
   const kind = q.get("kind") || "";
   const date = q.get("date") || "";
@@ -598,6 +683,12 @@ export async function handle(request, env, next, deps = defaultDeps) {
   const owner = OWNER_EMAIL.toLowerCase();
   const isOwner = isOwnerEmail(env, email);
 
+  // 朋友 AI 的開關關著：入口在讀資料庫之前就回「沒有內容」，設定頁和不存在一樣。
+  if (!friendAiEnabled(env)) {
+    if (FRIEND_AI_PATH.test(path)) return notAvailable();
+    if (FRIEND_AI_PAGE.test(path)) return fail(404, "找不到");
+  }
+
   try {
     if (isApply) {
       if (path.startsWith("/apply/api/")) return await handleApplyApi(request, env, path, email, isOwner);
@@ -608,9 +699,10 @@ export async function handle(request, env, next, deps = defaultDeps) {
     const isMarket = path.startsWith("/api/market/");
     const isStock = path.startsWith("/api/stocks/");
     const isScreens = SCREEN_PATHS.has(path);
-    const isUserData = USER_DATA_PATH.test(path) || DRAWINGS_PATH.test(path) || WATCH_PATH.test(path);
+    const isUserData = USER_DATA_PATH.test(path) || DRAWINGS_PATH.test(path) || WATCH_PATH.test(path) || WATCH_PEERS_PATH.test(path);
     const policy = releasePolicy(env);
-    const levelDisabled = () => json(403, { error: "feature-disabled", message: "未驗證的水位建議尚未啟用", features: policy.features });
+    // 只給站主的功能，其他人拿到的功能清單裡一律是關的（和 /api/features 同一個規則）。
+    const levelDisabled = () => json(403, { error: "feature-disabled", message: "未驗證的水位建議尚未啟用", features: policyForViewer(policy, isOwner, env).features });
     if (isOwner) {
       if (path === "/api/features") return json(200, policy);
       if (path === "/api/live") return await handleIndexLiveApi(request, env, email, deps);
@@ -618,13 +710,15 @@ export async function handle(request, env, next, deps = defaultDeps) {
       if (path === "/api/me") return json(200, { email, status: "approved", owner: true });
       if (path === "/api/holdings/level" && !policy.features.level_advice) return levelDisabled();
       if (FORECAST_PATH.test(path)) return await handleForecastApi(request, env, path, { isOwner: true, policy });
+      if (FRIEND_AI_PATH.test(path)) return ownerRefused();
       if (isUserData) return await handleUserDataApi(request, env, path, email, deps, { isOwner: true, policy });
-      if (isMarket) return await handleMarketApi(request, env, path, email, deps);
+      if (isMarket) return await handleMarketApi(request, env, path, email, deps, { isOwner: true });
       if (isComparePath(path)) return await handleCompareApi(request, env, path, email, deps);
       if (LIVE_STOCK_PATH.test(path)) return await handleStockLiveApi(request, env, path, email, deps);
       if (TICKS_STOCK_PATH.test(path)) return await handleStockTicksApi(request, env, path, email, deps);
-      if (HISTORY_STOCK_PATH.test(path)) return await handleStockHistoryApi(request, env, path, email, deps);
-      if (isStock) return await handleStockApi(request, env, path, email, deps);
+      if (HISTORY_STOCK_PATH.test(path)) return await handleStockHistoryApi(request, env, path, email, deps, { isOwner: true });
+      if (ANNOUNCEMENTS_PATH.test(path)) return await handleAnnouncementsApi(request, env, path, email, deps, { isOwner: true });
+      if (isStock) return await handleStockApi(request, env, path, email, deps, { isOwner: true });
       if (isScreens) return await handleScreensApi(request, env, path, email, deps);
       if (path === DATA_STATUS_PATH) return handleDataStatusApi(request, deps);
       if (RETIRED_DATA.has(path)) return fail(404, "找不到");
@@ -638,16 +732,18 @@ export async function handle(request, env, next, deps = defaultDeps) {
     }
     if (isAdmin) return fail(403, "沒有管理權限");
     if (path === "/api/me") return json(200, { email, status, owner: false });
-    if (path === "/api/features") return json(200, policyForViewer(policy, false));
+    if (path === "/api/features") return json(200, policyForViewer(policy, false, env));
     if (path === "/api/holdings/level" && !policy.features.level_advice) return levelDisabled();
     if (FORECAST_PATH.test(path)) return await handleForecastApi(request, env, path, { isOwner: false, policy });
+    if (FRIEND_AI_PATH.test(path)) return await handleFriendAiRequest(request, env, path, email, deps);
     if (isUserData) return await handleUserDataApi(request, env, path, email, deps, { isOwner: false, policy });
     if (path === "/api/live" || path === "/api/mis-probe") return fail(403, "即時行情僅限站主使用");
-    if (isMarket) return await handleMarketApi(request, env, path, email, deps);
+    if (isMarket) return await handleMarketApi(request, env, path, email, deps, { isOwner: false });
     if (isComparePath(path)) return await handleCompareApi(request, env, path, email, deps);
     if (LIVE_STOCK_PATH.test(path) || TICKS_STOCK_PATH.test(path)) return fail(403, "即時行情僅限站主使用");
-    if (HISTORY_STOCK_PATH.test(path)) return await handleStockHistoryApi(request, env, path, email, deps);
-    if (isStock) return await handleStockApi(request, env, path, email, deps);
+    if (HISTORY_STOCK_PATH.test(path)) return await handleStockHistoryApi(request, env, path, email, deps, { isOwner: false });
+    if (ANNOUNCEMENTS_PATH.test(path)) return await handleAnnouncementsApi(request, env, path, email, deps, { isOwner: false });
+    if (isStock) return await handleStockApi(request, env, path, email, deps, { isOwner: false });
     if (isScreens) return await handleScreensApi(request, env, path, email, deps);
     if (path === DATA_STATUS_PATH) return handleDataStatusApi(request, deps);
     if (RETIRED_DATA.has(path)) return fail(404, "找不到");

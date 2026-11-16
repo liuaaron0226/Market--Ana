@@ -19,6 +19,7 @@ from pathlib import Path
 
 import daily_ingest as di
 import listed_institutional as li
+import margin_history
 import otc_corporate_actions as oca
 import otc_history as oh
 import otc_market_data as omd
@@ -379,6 +380,271 @@ class ChipDetailTest(unittest.TestCase):
                                               datasets=("margin", "twt93u"))
             self.assertEqual((again["margin"]["status"], again["twt93u"]["status"]), ("existing", "existing"))
 
+    def _complete_margin(self, day: str) -> dict:
+        return {"stat": "OK", "date": day, "tables": [
+            {"fields": ["項目", "買進", "賣出", "現金(券)償還", "前日餘額", "今日餘額"],
+             "data": [["融資金額(仟元)", "1", "2", "3", "4", "539900000"]]},
+            {"fields": ["代號", "名稱", "買進", "賣出", "現金償還", "前日餘額", "今日餘額"],
+             "data": [["2330", "台積電", "100", "80", "5", "35000", "35015"]]}]}
+
+    def test_individual_margin_original_is_also_kept_in_the_long_term_store(self) -> None:
+        # 近期明細只留最近一段；融資維持率（估）要連續的每日原件，所以每天抓到的那一份另外長期留一份。
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            empty = {"stat": "很抱歉，沒有符合條件的資料!", "total": 0}
+            rec = Recorder({
+                ("MI_MARGN", "20261106"): sh.Response(200, "application/json",
+                                                      json.dumps(self._complete_margin("20261106")).encode(), "u"),
+                ("MI_MARGN", "20261109"): sh.Response(200, "application/json", json.dumps(empty).encode(), "u"),
+            })
+            done = di.listed_chip_detail_day(root, "2026-11-06", get=rec.two_arg, sleep=lambda s: None,
+                                             datasets=("margin",))
+            recent = root / "data/market-snapshots/stock-detail/margin/margin-20261106.json"
+            kept = root / "data/margin-history/raw/margin-20261106.json"
+            self.assertEqual(kept.read_bytes(), recent.read_bytes())
+            self.assertEqual((done["margin_history"]["status"], done["margin_history"]["stored"]), ("ok", ["20261106"]))
+            # 官方還沒公布的那一天：近期明細沒有，長期保存區也不會憑空多一份。
+            later = di.listed_chip_detail_day(root, "2026-11-09", get=rec.two_arg, sleep=lambda s: None,
+                                              datasets=("margin",))
+            self.assertEqual(sorted(p.name for p in kept.parent.glob("*.json")), ["margin-20261106.json"])
+            self.assertEqual(later["margin_history"]["stored"], [])
+
+    def test_days_missing_from_the_long_term_store_come_back_from_the_seed(self) -> None:
+        # 雲端的工作集一開始只有最近一段；更早的日子在專案帶的種子裡，每日抓取時補回長期保存區。
+        with tempfile.TemporaryDirectory() as tmp:
+            source, root = Path(tmp) / "source", Path(tmp) / "root"
+            early = source / "data/margin-history/raw/margin-20251103.json"
+            early.parent.mkdir(parents=True)
+            early.write_text(json.dumps({"fetched_at_utc": "x", "source_url": "u",
+                                         "data": self._complete_margin("20251103")}), encoding="utf-8")
+            margin_history.write_seed(source)
+            (root / "seeds").mkdir(parents=True)
+            (root / margin_history.SEED).write_bytes((source / margin_history.SEED).read_bytes())
+            rec = Recorder({("MI_MARGN", "20261106"): sh.Response(
+                200, "application/json", json.dumps(self._complete_margin("20261106")).encode(), "u")})
+            done = di.listed_chip_detail_day(root, "2026-11-06", get=rec.two_arg, sleep=lambda s: None,
+                                             datasets=("margin",))
+            kept = root / "data/margin-history/raw"
+            self.assertEqual(sorted(p.name for p in kept.glob("*.json")),
+                             ["margin-20251103.json", "margin-20261106.json"])
+            self.assertEqual((kept / "margin-20251103.json").read_bytes(), early.read_bytes())
+            self.assertEqual((done["margin_history"]["restored"], done["margin_history"]["stored"]),
+                             (["20251103"], ["20261106"]))
+
+    def test_broken_seed_does_not_stop_today_from_being_kept(self) -> None:
+        # 種子壞了是一回事；當天抓到的那一份還是要進長期保存區，不然過了近期明細的保留期就永遠缺那一天。
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "seeds").mkdir()
+            (root / margin_history.SEED).write_bytes(b"not an archive")
+            rec = Recorder({("MI_MARGN", "20261106"): sh.Response(
+                200, "application/json", json.dumps(self._complete_margin("20261106")).encode(), "u")})
+            done = di.listed_chip_detail_day(root, "2026-11-06", get=rec.two_arg, sleep=lambda s: None,
+                                             datasets=("margin",))
+            self.assertTrue((root / "data/margin-history/raw/margin-20261106.json").exists())
+            self.assertEqual((done["margin_history"]["status"], done["margin_history"]["stored"]), ("ok", ["20261106"]))
+            self.assertTrue(done["margin_history"]["seed_error"])
+
+    def test_long_term_store_failure_does_not_hide_what_was_fetched(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "data").mkdir()
+            (root / "data/margin-history").write_text("擋路的檔案", encoding="utf-8")   # 長期保存區建不起來
+            rec = Recorder({("MI_MARGN", "20261106"): sh.Response(
+                200, "application/json", json.dumps(self._complete_margin("20261106")).encode(), "u")})
+            done = di.listed_chip_detail_day(root, "2026-11-06", get=rec.two_arg, sleep=lambda s: None,
+                                             datasets=("margin",))
+            self.assertEqual(done["margin"]["status"], "saved")
+            self.assertEqual(done["margin_history"]["status"], "error")
+            self.assertTrue(done["margin_history"]["reason"])
+
+    def _quotes(self, root: Path, day: str, content: bytes | None = None) -> None:
+        """當天稍早已經抓到的上市每日收盤行情原件。"""
+        import gzip
+        payload = {"stat": "OK", "date": day, "tables": [
+            {"title": "每日收盤行情", "fields": ["證券代號", "證券名稱", "成交股數", "成交筆數", "成交金額", "開盤價", "最高價",
+                                             "最低價", "收盤價"],
+             "data": [["2330", "台積電", "1,000", "3", "2,235,000", "2,210.00", "2,290.00", "2,190.00", "2,235.00"]]}]}
+        path = root / "data/stock-history/raw" / day[:4] / f"MI_INDEX-{day}.json.gz"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(gzip.compress(json.dumps(payload, ensure_ascii=False).encode("utf-8")) if content is None else content)
+
+    def test_price_summary_of_the_day_is_kept_next_to_the_margin_original(self) -> None:
+        # 融資維持率（估）重播時要每天的收盤與成交均價；行情原件在雲端只留最近一段，所以存下個股融資後一起留一份摘要。
+        with tempfile.TemporaryDirectory() as tmp:
+            source, root = Path(tmp) / "source", Path(tmp) / "root"
+            # 更早的日子在專案帶的另一包種子裡，和融資原件的種子一樣缺了就放回去。
+            early = source / "data/margin-history/prices/prices-20251103.json"
+            early.parent.mkdir(parents=True)
+            early.write_text('{"date":"20251103","prices":{"2330":[1500.0,1000,1500000]}}\n', encoding="utf-8")
+            margin_history.write_seed(source, "prices")
+            (root / "seeds").mkdir(parents=True)
+            (root / margin_history.PRICE_SEED).write_bytes((source / margin_history.PRICE_SEED).read_bytes())
+            self._quotes(root, "20261106")
+            rec = Recorder({("MI_MARGN", "20261106"): sh.Response(
+                200, "application/json", json.dumps(self._complete_margin("20261106")).encode(), "u")})
+            done = di.listed_chip_detail_day(root, "2026-11-06", get=rec.two_arg, sleep=lambda s: None,
+                                             datasets=("margin",))
+            kept = root / "data/margin-history/prices"
+            self.assertEqual(sorted(p.name for p in kept.glob("*.json")), ["prices-20251103.json", "prices-20261106.json"])
+            self.assertEqual((kept / "prices-20251103.json").read_bytes(), early.read_bytes())
+            self.assertEqual(json.loads((kept / "prices-20261106.json").read_text(encoding="utf-8")),
+                             {"date": "20261106", "prices": {"2330": [2235.0, 1000, 2235000]}})
+            self.assertEqual(done["margin_history"]["prices"],
+                             {"status": "ok", "restored": ["20251103"], "stored": ["20261106"], "skipped": []})
+
+    def test_price_summary_trouble_does_not_hide_the_margin_original(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "seeds").mkdir()
+            (root / margin_history.PRICE_SEED).write_bytes(b"not an archive")     # 種子壞了
+            self._quotes(root, "20261106", content=b"not gzip")                   # 行情原件也壞了
+            rec = Recorder({("MI_MARGN", "20261106"): sh.Response(
+                200, "application/json", json.dumps(self._complete_margin("20261106")).encode(), "u")})
+            done = di.listed_chip_detail_day(root, "2026-11-06", get=rec.two_arg, sleep=lambda s: None,
+                                             datasets=("margin",))
+            self.assertEqual((done["margin_history"]["status"], done["margin_history"]["stored"]), ("ok", ["20261106"]))
+            prices = done["margin_history"]["prices"]
+            self.assertEqual((prices["status"], prices["restored"], prices["stored"]), ("ok", [], []))
+            self.assertTrue(prices["seed_error"])
+            self.assertEqual([item["day"] for item in prices["skipped"]], ["20261106"])
+
+
+class ListedMarginBackfillTest(unittest.TestCase):
+    """G 票（本人 11-16 選做法一）：官方晚上才公布上市融資，傍晚那一班抓不到當天；
+    每天順便把最近幾個交易日缺的上市融資原件（個股 margin、大盤 margin_summary）補回來。"""
+
+    EMPTY = {"stat": "很抱歉，沒有符合條件的資料!", "total": 0}
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.calls: list[tuple[str, str]] = []
+        self.published: dict[tuple[str, str], dict] = {}
+
+    def trading_days(self, *days: str) -> None:
+        db = self.root / "data/otc-history/otc_history.sqlite"
+        db.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(db)
+        connection.execute("CREATE TABLE IF NOT EXISTS daily (date TEXT, code TEXT)")
+        connection.executemany("INSERT INTO daily VALUES (?, '6488')", [(day,) for day in days])
+        connection.commit()
+        connection.close()
+
+    def publish(self, compact: str, *, answered_date: str | None = None) -> None:
+        """官方已公布這一天的個股（ALL）與大盤（MS）；answered_date 模擬官方回了別天。"""
+        answer = answered_date or compact
+        self.published[("ALL", compact)] = {"stat": "OK", "date": answer, "tables": [
+            {"fields": ["項目", "買進", "賣出", "現金(券)償還", "前日餘額", "今日餘額"],
+             "data": [["融資金額(仟元)", "1", "2", "3", "4", "539900000"]]},
+            {"fields": ["代號", "名稱", "買進", "賣出", "現金償還", "前日餘額", "今日餘額"],
+             "data": [["2330", "台積電", "100", "80", "5", "35000", "35015"]]}]}
+        self.published[("MS", compact)] = {"stat": "OK", "date": answer,
+                                           "tables": [{"title": "信用交易統計", "data": [["融資"]]}]}
+
+    def get(self, url, params):
+        key = (params["selectType"], params["date"])
+        self.calls.append(key)
+        payload = self.published.get(key, self.EMPTY)
+        return sh.Response(200, "application/json", json.dumps(payload).encode(), url)
+
+    def run_day(self, day: str, sleeps: list | None = None) -> dict:
+        return di.listed_chip_detail_day(self.root, day, get=self.get,
+                                         sleep=(sleeps.append if sleeps is not None else lambda s: None),
+                                         datasets=("margin", "margin_summary"))
+
+    def recent(self, compact: str) -> Path:
+        return self.root / "data/market-snapshots/stock-detail/margin" / f"margin-{compact}.json"
+
+    def summary(self, compact: str) -> Path:
+        return self.root / "data/market-snapshots/margin" / f"mi-margn-{compact}.json"
+
+    def test_previous_trading_day_published_later_is_filled_in_when_today_is_not_yet(self) -> None:
+        # 11-13（週五）傍晚那一班沒抓到；11-16（週一）傍晚那一班當天也還沒公布，但 11-13 已經公布了。
+        self.trading_days("2026-11-12", "2026-11-13")
+        self.recent("20261112").parent.mkdir(parents=True)
+        self.recent("20261112").write_text("{}", encoding="utf-8")
+        self.summary("20261112").parent.mkdir(parents=True)
+        self.summary("20261112").write_text("{}", encoding="utf-8")
+        self.publish("20261113")
+        done = self.run_day("2026-11-16")
+        self.assertEqual((done["margin"]["status"], done["margin_summary"]["status"]), ("not_published", "not_published"))
+        self.assertFalse(self.recent("20261116").exists())
+        self.assertEqual(json.loads(self.recent("20261113").read_text(encoding="utf-8"))["data"],
+                         self.published[("ALL", "20261113")])
+        self.assertEqual(json.loads(self.summary("20261113").read_text(encoding="utf-8"))["data"],
+                         self.published[("MS", "20261113")])
+        self.assertEqual(done["margin_backfill"], {"status": "ok", "requests": 2, "not_published": [],
+                                            "saved": ["2026-11-13 margin", "2026-11-13 margin_summary"]})
+        # 補回來的個股融資也進長期保存區（融資維持率（估）要連續的每日原件）
+        self.assertTrue((self.root / "data/margin-history/raw/margin-20261113.json").exists())
+        self.assertEqual(done["margin_history"]["stored"], ["20261113"])
+
+    def test_closed_days_are_never_asked_and_requests_stay_five_seconds_apart(self) -> None:
+        # 行情庫沒有 10-09（國慶連假休市）與週末：補抓只問交易日。當天兩份，往回 10-07、10-08、10-12 各兩份。
+        self.trading_days("2026-10-07", "2026-10-08", "2026-10-12")
+        for compact in ("20261007", "20261008", "20261012"):
+            self.publish(compact)
+        sleeps: list[float] = []
+        done = self.run_day("2026-10-13", sleeps)
+        self.assertEqual(self.calls, [("ALL", "20261013"), ("MS", "20261013"),
+                                      ("ALL", "20261007"), ("MS", "20261007"), ("ALL", "20261008"), ("MS", "20261008"),
+                                      ("ALL", "20261012"), ("MS", "20261012")])
+        self.assertEqual(sleeps, [5.0] * 7)
+        self.assertEqual(done["margin_backfill"]["requests"], 6)
+        self.assertEqual(len(done["margin_backfill"]["saved"]), 6)
+
+    def test_days_already_held_are_not_fetched_again(self) -> None:
+        # 平常的一天：前一個交易日以前都有了，只缺前一天的；每天只多前一天那兩個請求。
+        self.trading_days("2026-11-10", "2026-11-11", "2026-11-12")
+        for compact in ("20261110", "20261111"):
+            for path in (self.recent(compact), self.summary(compact)):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("{}", encoding="utf-8")
+        self.summary("20261112").write_text("{}", encoding="utf-8")   # 大盤那一份已經有了，只缺個股
+        self.publish("20261112")
+        done = self.run_day("2026-11-13")
+        self.assertEqual(self.calls, [("ALL", "20261113"), ("MS", "20261113"), ("ALL", "20261112")])
+        self.assertEqual(done["margin_backfill"]["saved"], ["2026-11-12 margin"])
+        self.assertEqual(self.recent("20261110").read_text(encoding="utf-8"), "{}")   # 已有的不改寫
+
+    def test_official_answering_another_date_stops_the_backfill_without_writing(self) -> None:
+        # 問 11-10 卻回 11-13：官方的查法可能改了，不寫入、不再往下問（11-11 明明有也先不抓），回報原因。
+        self.trading_days("2026-11-10", "2026-11-11", "2026-11-12")
+        self.publish("20261110", answered_date="20261113")
+        self.publish("20261111")
+        done = self.run_day("2026-11-12")
+        self.assertEqual(self.calls, [("ALL", "20261112"), ("MS", "20261112"), ("ALL", "20261110")])
+        self.assertFalse(self.recent("20261110").exists())
+        self.assertFalse(self.recent("20261113").exists())
+        self.assertEqual((done["margin_backfill"]["status"], done["margin_backfill"]["requests"], done["margin_backfill"]["saved"]),
+                         ("stopped", 1, []))
+        self.assertIn("2026-11-10 margin", done["margin_backfill"]["reason"])
+        self.assertIn("20261113", done["margin_backfill"]["reason"])
+
+    def test_no_backfill_when_today_was_already_refused(self) -> None:
+        # 當天就被證交所擋（HTTP 403）：不再往回多打，比照上櫃一停就全停。
+        self.trading_days("2026-11-10", "2026-11-11")
+        self.publish("20261110")
+
+        def refused(url, params):
+            self.calls.append((params["selectType"], params["date"]))
+            return sh.Response(403, "text/html", b"blocked", url)
+        done = di.listed_chip_detail_day(self.root, "2026-11-11", get=refused, sleep=lambda s: None,
+                                         datasets=("margin", "margin_summary"))
+        self.assertEqual(self.calls, [("ALL", "20261111"), ("MS", "20261111")])
+        self.assertEqual((done["margin_backfill"]["status"], done["margin_backfill"]["requests"]), ("skipped", 0))
+        self.assertFalse(self.recent("20261110").exists())
+
+    def test_today_answered_with_another_date_is_stopped_not_counted_as_unpublished(self) -> None:
+        self.publish("20261112", answered_date="20261111")
+        done = self.run_day("2026-11-12")
+        self.assertEqual(done["margin"]["status"], "stopped")
+        self.assertIn("20261111", done["margin"]["reason"])
+        self.assertFalse(self.recent("20261112").exists())
+        self.assertFalse(self.recent("20261111").exists())
+
 
 class _FakeRequestsResponse:
     def __init__(self, content: bytes, content_type: str) -> None:
@@ -608,6 +874,177 @@ class TradingCalendarTest(unittest.TestCase):
         self.assertIn("2026-02-12", holidays)
         self.assertNotIn("2026-01-02", holidays)  # 「開始交易日」是交易日，不是休市
 
+    # 2026-11-16 實際發生：證交所 holidaySchedule 開放資料在年底改成只給隔年（2027）的日曆，
+    # 快取被整份換掉後，2026 年剩下的日子就判斷不了（水位排程與晨間預測會停）。日曆要新舊年份合併保存。
+    Y2026 = [{"Name": "中華民國開國紀念日", "Date": "1150101", "Weekday": "四", "Description": ""},
+             {"Name": "行憲紀念日", "Date": "1151225", "Weekday": "五", "Description": ""}]
+    Y2027 = [{"Name": "中華民國開國紀念日", "Date": "1160101", "Weekday": "五", "Description": ""}]
+
+    def official(self, rows):
+        body = json.dumps(rows, ensure_ascii=False).encode("utf-8")
+        return lambda url: type("Response", (), {"status": 200, "content": body})()
+
+    def test_a_new_year_from_the_official_api_is_added_to_the_cached_year_not_replacing_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "holiday-schedule.json"
+            cache.write_bytes(json.dumps(self.Y2026, ensure_ascii=False).encode("utf-8"))
+            holidays = di.fetch_holidays(cache, get=self.official(self.Y2027), seed=None)
+            self.assertEqual(holidays, {"2026-01-01", "2026-12-25", "2027-01-01"})
+            self.assertEqual(di.parse_holiday_schedule(cache.read_bytes()), holidays)   # 快取也是合併後的
+
+    def test_the_project_seed_fills_a_year_the_cache_lost(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "holiday-schedule.json"
+            cache.write_bytes(json.dumps(self.Y2027, ensure_ascii=False).encode("utf-8"))   # 雲端快取已經被換成隔年
+            seed = Path(tmp) / "seed.json"
+            seed.write_bytes(json.dumps(self.Y2026, ensure_ascii=False).encode("utf-8"))
+            offline = lambda url: (_ for _ in ()).throw(OSError("連不上"))   # noqa: E731
+            self.assertEqual(di.fetch_holidays(cache, get=offline, seed=seed), {"2026-01-01", "2026-12-25", "2027-01-01"})
+
+    def test_the_repository_carries_the_official_2026_calendar(self) -> None:
+        days = di.parse_holiday_schedule(di.HOLIDAY_SEED.read_bytes())
+        self.assertIn("2026-12-25", days)
+        self.assertIn("2026-10-09", days)
+
+
+class OtcCreditTest(unittest.TestCase):
+    """個股頁事實區塊 E 票：上櫃融資融券與借券。最近 20 個交易日缺哪天補哪天（本人 11-16「補抓 20 個交易日」）。"""
+
+    MARGIN_FIELDS = ['代號', '名稱', '前資餘額(張)', '資買', '資賣', '現償', '資餘額', '資屬證金', '資使用率(%)', '資限額',
+                     '前券餘額(張)', '券賣', '券買', '券償', '券餘額', '券屬證金', '券使用率(%)', '券限額', '資券相抵(張)', '備註']
+    SBL_FIELDS = ['股票代號', '股票名稱', '前日餘額', '賣出', '買進', '現券', '當日餘額', '限額', '前日餘額', '當日賣出',
+                  '當日還券', '當日調整數額', '當日餘額', '次一營業日可借券賣出限額', '備註']
+
+    class Response:
+        def __init__(self, status, payload=None):
+            self.status, self.content_type = status, 'application/json;charset=UTF-8'
+            self.content = json.dumps(payload or {}, ensure_ascii=False).encode('utf-8')
+            self.url = ''
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        db = self.root / 'data/otc-history/otc_history.sqlite'
+        db.parent.mkdir(parents=True)
+        connection = sqlite3.connect(db)
+        connection.execute('CREATE TABLE daily (date TEXT, code TEXT)')
+        for day in ('2026-11-10', '2026-11-11', '2026-11-12'):
+            connection.execute("INSERT INTO daily VALUES (?, '6488')", (day,))
+        connection.commit()
+        connection.close()
+
+    def payload(self, kind, compact, empty=False):
+        fields = self.MARGIN_FIELDS if kind == 'margin' else self.SBL_FIELDS
+        row = ['6488', '環球晶'] + ['1,000'] * (len(fields) - 2)
+        return {'stat': 'ok', 'date': compact, 'tables': [{'fields': fields, 'data': [] if empty else [row]}]}
+
+    def run_day(self, day, *, unpublished=(), blocked_after=None, backfill_days=20):
+        calls, waits = [], []
+
+        def get(_session, url, params):
+            calls.append((url, params['date']))
+            if blocked_after is not None and len(calls) > blocked_after:
+                return self.Response(403)
+            compact = params['date'].replace('/', '')
+            kind = 'margin' if url.endswith('/balance') else 'sbl'
+            return self.Response(200, self.payload(kind, compact, empty=compact in unpublished))
+        result = di.otc_credit_day(self.root, day, get=get, sleep=waits.append, backfill_days=backfill_days)
+        return result, calls, waits
+
+    def files(self):
+        return sorted(str(p.relative_to(self.root / 'data/otc-credit')).replace('\\', '/')
+                      for p in (self.root / 'data/otc-credit').rglob('*.json'))
+
+    def test_first_run_backfills_the_recent_trading_days_then_only_what_is_missing(self):
+        result, calls, waits = self.run_day('2026-11-12')
+        self.assertEqual(result['status'], 'ok')
+        self.assertEqual(result['saved'], 6)                     # 3 個交易日 × 融資融券、借券
+        self.assertEqual(len(calls), 6)
+        self.assertEqual(len(waits), 5)                          # 同一個網域：請求之間都等
+        self.assertEqual(self.files(), ['margin/20261110.json', 'margin/20261111.json', 'margin/20261112.json',
+                                        'sbl/20261110.json', 'sbl/20261111.json', 'sbl/20261112.json'])
+        again, calls_again, _ = self.run_day('2026-11-12')
+        self.assertEqual((again['saved'], len(calls_again)), (0, 0))
+
+    def test_backfill_is_limited_to_the_most_recent_days(self):
+        result, calls, _ = self.run_day('2026-11-12', backfill_days=2)
+        self.assertEqual(sorted({date for _, date in calls}), ['2026/11/11', '2026/11/12'])
+
+    def test_a_day_not_published_yet_is_not_written_and_is_named(self):
+        result, _, _ = self.run_day('2026-11-12', unpublished={'20261112'})
+        self.assertEqual(result['not_published'], ['2026-11-12 margin', '2026-11-12 sbl'])
+        self.assertNotIn('margin/20261112.json', self.files())
+
+    def test_a_refusal_stops_the_run_and_keeps_what_was_saved(self):
+        result, calls, _ = self.run_day('2026-11-12', blocked_after=2)
+        self.assertEqual(result['status'], 'stopped')
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(self.files()), 2)
+
+    def test_a_changed_format_or_wrong_day_stops_without_writing(self):
+        def run(payload_fix):
+            calls = []
+
+            def get(_session, url, params):
+                calls.append(url)
+                compact = params['date'].replace('/', '')
+                payload = self.payload('margin' if url.endswith('/balance') else 'sbl', compact)
+                payload_fix(payload)
+                return self.Response(200, payload)
+            return di.otc_credit_day(self.root, '2026-11-12', get=get, sleep=lambda s: None, backfill_days=1)
+        renamed = run(lambda p: p['tables'][0].__setitem__('fields', ['代號', '名稱', '餘額']))
+        self.assertEqual(renamed['status'], 'stopped')
+        self.assertIn('欄位', renamed['reason'])
+        wrong_day = run(lambda p: p.__setitem__('date', '20261111'))
+        self.assertIn('資料日不符', wrong_day['reason'])
+        no_day = run(lambda p: p.pop('date'))
+        self.assertEqual(no_day['status'], 'stopped')
+        self.assertEqual(self.files(), [])
+
+    def test_a_connection_error_stops_and_keeps_what_was_saved(self):
+        calls = []
+
+        def get(_session, url, params):
+            calls.append(url)
+            if len(calls) == 2:
+                raise TimeoutError('slow')
+            compact = params['date'].replace('/', '')
+            return self.Response(200, self.payload('margin' if url.endswith('/balance') else 'sbl', compact))
+        result = di.otc_credit_day(self.root, '2026-11-12', get=get, sleep=lambda s: None)
+        self.assertEqual(result['status'], 'stopped')
+        self.assertIn('TimeoutError', result['reason'])
+        self.assertEqual(result['saved'], 1)
+
+    def test_raw_files_carry_fetch_time_source_and_hash(self):
+        self.run_day('2026-11-12', backfill_days=1)
+        raw = json.loads((self.root / 'data/otc-credit/margin/20261112.json').read_text(encoding='utf-8'))
+        self.assertEqual(sorted(raw), ['data', 'fetched_at_utc', 'sha256', 'source_url'])
+        self.assertEqual(raw['data']['date'], '20261112')
+        self.assertEqual(len(raw['sha256']), 64)
+
+    def test_it_is_an_optional_dataset(self):
+        self.assertIn('otc_credit', di.OPTIONAL_DATASETS)
+
+
+
+class ForeignFuturesDayTest(unittest.TestCase):
+    """外資台指期部位（預測帳本 G 票第 14 片）：每日更新每天各存一份大台、小台原件，失敗不擋發布。"""
+
+    def test_it_is_an_optional_dataset(self):
+        self.assertIn('foreign_futures', di.OPTIONAL_DATASETS)
+        self.assertNotIn('foreign_futures', di.REQUIRED_DATASETS)
+
+    def test_saves_both_contracts_under_the_working_set_folder(self):
+        from test_foreign_futures import FakePost, MXF_DAY, TXF_DAY
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            result = di.foreign_futures_day(root, '2026-11-16', post=FakePost({'TXF': TXF_DAY, 'MXF': MXF_DAY}),
+                                            sleep=lambda s: None)
+            saved = sorted(path.name for path in (root / 'data/foreign-futures/raw').iterdir())
+        self.assertEqual(result['status'], 'appended')
+        self.assertEqual(saved, ['MXF-20261116.csv', 'MXF-20261116.csv.sha256',
+                                 'TXF-20261116.csv', 'TXF-20261116.csv.sha256'])
 
 if __name__ == "__main__":
     unittest.main()

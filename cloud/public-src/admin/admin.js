@@ -36,7 +36,8 @@
         <article class="item" data-email="${esc(u.email)}">
           <div class="item-head">
             <span class="item-name">${esc(u.nickname)}</span>
-            <span class="state ${esc(u.status)}">${LABEL[u.status] || esc(u.status)}</span>
+            <span class="chips"><span class="state ${esc(u.status)}">${LABEL[u.status] || esc(u.status)}</span>${"gemini_configured" in u
+              ? ` <span class="state gemini${u.gemini_configured ? " on" : ""}">Gemini ${u.gemini_configured ? "已設定" : "未設定"}</span>` : ""}</span>
           </div>
           <div class="who">${esc(u.email)}</div>
           <div class="note" style="margin-top:4px">申請：${fmt(u.applied_at)}${u.decided_at ? `　處理：${fmt(u.decided_at)}` : ""}</div>

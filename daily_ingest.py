@@ -120,6 +120,7 @@ def _append(db_path: Path, write: Callable[[sqlite3.Connection], None], build_ne
 def listed_quotes_day(out: Path, db_path: Path, day: str, *, get: Callable | None = None,
                       sleep: Callable = time.sleep) -> dict:
     import stock_history as sh
+    import etf_history
 
     compact = _compact(day)
     if _has_row(db_path, "SELECT 1 FROM source_days WHERE date = ?", (day,)):
@@ -146,6 +147,8 @@ def listed_quotes_day(out: Path, db_path: Path, day: str, *, get: Callable | Non
             raise ValueError(f"{raw} 內容日期 {payload.get('date')} 與檔名不符")
         table = sh.quote_table(payload)
         rows = [sh.parse_row(compact, table["fields"], r) for r in table["data"] if sh.security_kind(r[0], r[1])]
+        # 已回補進庫的股票型 ETF（etf_history）每天跟著帶上新的一天
+        rows += etf_history.day_rows("上市", content, compact, etf_history.recorded_in(connection))
         connection.executemany(f"INSERT INTO daily VALUES ({','.join('?' * len(sh.COLUMNS))})",
                                [[r[c] for c in sh.COLUMNS] for r in rows])
         connection.execute("INSERT INTO source_days VALUES (?, ?, ?, ?)",
@@ -178,6 +181,7 @@ def _otc_quotes_empty(response) -> bool:
 def otc_quotes_day(out: Path, db_path: Path, day: str, catalog, *, get: Callable | None = None,
                    sleep: Callable = time.sleep) -> dict:
     import otc_history as oh
+    import etf_history
 
     compact = _compact(day)
     if _has_row(db_path, "SELECT 1 FROM source_days WHERE date = ?", (day,)):
@@ -199,6 +203,7 @@ def otc_quotes_day(out: Path, db_path: Path, day: str, catalog, *, get: Callable
         if hashlib.sha256(content).hexdigest() != expected:
             raise ValueError(f"{raw.name} SHA-256 不符")
         rows = [{**row, "kind": "common"} for row in oh.parse_csv(content, compact) if catalog.lookup(row["code"])]
+        rows += etf_history.day_rows("上櫃", content, compact, etf_history.recorded_in(connection))
         connection.executemany(f"INSERT INTO daily VALUES ({','.join('?' * len(oh.COLUMNS))})",
                                [[r[c] for c in oh.COLUMNS] for r in rows])
         connection.execute("INSERT INTO source_days VALUES (?, ?, ?, ?)",
@@ -521,6 +526,11 @@ CHIP_SOURCES = {
 }
 
 
+# 上市融資（證交所 MI_MARGN）官方大約晚上才公布，傍晚那一班抓不到當天、發布後當天不再重跑。
+# G 票（本人 11-16 選做法一，不加排程）：每天順便把最近幾個交易日缺的補回來，天數和上櫃 otc_credit_day 相同。
+LISTED_MARGIN_DATASETS = ("margin", "margin_summary")
+
+
 def _chip_target(root: Path, dataset: str, compact: str) -> Path:
     if dataset == "twt93u":
         return root / "data/fundamentals/twt93u" / f"twt93u-{compact}.json"
@@ -543,11 +553,17 @@ def listed_chip_detail_day(root: Path, day: str, *, get: Callable | None = None,
     - margin（MI_MARGN）：同 logs/fetch_stock_detail.py 的外包格式。
     - twt93u（借券）：同 fundamentals.py，存官方原始位元組。
     官方查無（未公布）不寫檔、不當 0；已存在不重抓。兩次請求間隔 5 秒。
+    上市融資（margin、margin_summary）官方晚上才公布：另外把最近幾個交易日缺的補回來，結果在 margin_backfill（G 票）。
+    個股融資原件另外在長期保存區（data/margin-history/raw）留一份，那裡不裁；結果多一項 margin_history。
+    長期保存區缺的日子先從專案帶的種子（seeds/margin-history.tar.xz）放回去，再跟上近期明細。
+    同一步也把每日收盤行情摘成行情摘要留在長期保存區（融資維持率（估）重播要每天的收盤與成交均價；種子是
+    seeds/margin-prices.tar.xz），結果在 margin_history 底下的 prices。
     """
     from datetime import datetime, timezone
     import stock_history as sh
 
     compact = _compact(day)
+    get = get or sh.http_get
     results: dict[str, dict] = {}
     requested = False
     for dataset in datasets:
@@ -568,39 +584,105 @@ def listed_chip_detail_day(root: Path, day: str, *, get: Callable | None = None,
             _write_atomic(target, (json.dumps(body, ensure_ascii=False) + "\n").encode("utf-8"))
             results[dataset] = {"status": "copied"}
             continue
-        url, params = CHIP_SOURCES[dataset]
         if requested:
             sleep(5.0)
         requested = True
+        results[dataset] = _fetch_chip(target, dataset, compact, get)
+    backfill_sets = [dataset for dataset in LISTED_MARGIN_DATASETS if dataset in datasets]
+    if backfill_sets and any(result.get("status") == "stopped" for result in results.values()):
+        # 當天就被擋或回應不對：不再往回多打證交所（比照上櫃一停就全停），下一班再補
+        results["margin_backfill"] = {"status": "skipped", "reason": "當天的請求已經停下", "requests": 0}
+    elif backfill_sets:
+        results["margin_backfill"] = _backfill_listed_margin(root, day, backfill_sets, get, sleep,
+                                                             already_requested=requested)
+    if "margin" in datasets:
+        # 近期明細只留最近一段；融資維持率（估）要連續的每日原件，另外長期留一份（已有的不重寫）。
+        # 這一步出錯不能蓋掉上面已經抓到的結果；缺哪些交易日一起回報，每日更新的紀錄才看得到缺口。
+        import margin_history
         try:
-            response = (get or sh.http_get)(url, params(compact))
-        except Exception as error:  # noqa: BLE001 — 連線錯誤只停這個資料集
-            results[dataset] = {"status": "stopped", "reason": f"連線錯誤：{type(error).__name__}: {error}"}
-            continue
-        if response.status != 200:
-            results[dataset] = {"status": "stopped", "reason": f"HTTP {response.status}"}
-            continue
+            kept = _restore_then_keep_up(root, "raw", margin_history.keep_up)
+            missing = margin_history.coverage(root, margin_history.trading_days(root))["missing"]
+            results["margin_history"] = {"status": "ok", **kept, "missing": missing}
+        except Exception as error:  # noqa: BLE001 — 長期保存區失敗只記在自己這一項
+            results["margin_history"] = {"status": "error", "reason": f"{type(error).__name__}: {error}"}
+        # 重播還要每天的收盤與成交均價：把每日收盤行情摘一份進長期保存區（更早的日子在另一包種子裡）。
+        # 出錯只記在 prices 這一項，不影響融資原件那一邊。
         try:
-            payload = json.loads(response.content.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            results[dataset] = {"status": "stopped", "reason": f"非 JSON 回應（{response.content_type}）"}
-            continue
-        if payload.get("stat") != "OK" or str(payload.get("date")) != compact:
-            results[dataset] = {"status": "not_published", "reason": str(payload.get("stat"))}
-            continue
-        if dataset in ("margin", "margin_summary"):
-            body = {"fetched_at_utc": datetime.now(timezone.utc).isoformat(), "source_url": response.url,
-                    "data": payload}
-            _write_atomic(target, (json.dumps(body, ensure_ascii=False) + "\n").encode("utf-8"))
-        else:
-            _write_atomic(target, response.content)
-        results[dataset] = {"status": "saved"}
+            prices = {"status": "ok", **_restore_then_keep_up(root, "prices", margin_history.keep_up_prices)}
+        except Exception as error:  # noqa: BLE001
+            prices = {"status": "error", "reason": f"{type(error).__name__}: {error}"}
+        results["margin_history"]["prices"] = prices
     return results
+
+
+def _fetch_chip(target: Path, dataset: str, compact: str, get: Callable) -> dict:
+    """抓一份上市籌碼原件並寫入 target；回 {"status": saved／not_published／stopped, ...}。"""
+    from datetime import datetime, timezone
+
+    url, params = CHIP_SOURCES[dataset]
+    try:
+        response = get(url, params(compact))
+    except Exception as error:  # noqa: BLE001 — 連線錯誤只停這個資料集
+        return {"status": "stopped", "reason": f"連線錯誤：{type(error).__name__}: {error}"}
+    if response.status != 200:
+        return {"status": "stopped", "reason": f"HTTP {response.status}"}
+    try:
+        payload = json.loads(response.content.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return {"status": "stopped", "reason": f"非 JSON 回應（{response.content_type}）"}
+    if payload.get("stat") != "OK":
+        return {"status": "not_published", "reason": str(payload.get("stat"))}
+    if str(payload.get("date")) != compact:   # 問這天卻回別天：查法可能改了，不寫入
+        return {"status": "stopped", "reason": f"資料日不符（回 {payload.get('date')!r}）"}
+    if dataset in LISTED_MARGIN_DATASETS:
+        body = {"fetched_at_utc": datetime.now(timezone.utc).isoformat(), "source_url": response.url, "data": payload}
+        _write_atomic(target, (json.dumps(body, ensure_ascii=False) + "\n").encode("utf-8"))
+    else:
+        _write_atomic(target, response.content)
+    return {"status": "saved"}
+
+
+def _backfill_listed_margin(root: Path, day: str, datasets: list[str], get: Callable, sleep: Callable, *,
+                            already_requested: bool) -> dict:
+    """資料日以前（不含當天，當天由呼叫端抓）最近幾個交易日缺的上市融資原件，由舊到新逐份補抓。"""
+    saved: list[str] = []
+    not_published: list[str] = []
+    requests_made = 0
+    for date_text in _otc_trading_days(root, day, OTC_CREDIT_BACKFILL_DAYS):
+        if date_text >= day:
+            continue
+        compact = _compact(date_text)
+        for dataset in datasets:
+            target = _chip_target(root, dataset, compact)
+            if target.exists():
+                continue
+            if already_requested or requests_made:
+                sleep(5.0)
+            requests_made += 1
+            outcome = _fetch_chip(target, dataset, compact, get)
+            if outcome["status"] == "stopped":   # 被拒絕、連不上、格式或日期不對：不再往下問，已補的保留
+                return {"status": "stopped", "reason": f"{date_text} {dataset}：{outcome['reason']}",
+                        "requests": requests_made, "not_published": not_published, "saved": saved}
+            (saved if outcome["status"] == "saved" else not_published).append(f"{date_text} {dataset}")
+    return {"status": "ok", "requests": requests_made, "not_published": not_published, "saved": saved}
+
+
+def _restore_then_keep_up(root: Path, store: str, keep_up: Callable[[Path], dict]) -> dict:
+    """長期保存區的一種檔（margin_history.STORES）：缺的日子先從專案帶的種子放回去，再跟上手上的原件。"""
+    import margin_history
+    try:
+        seed = {"restored": margin_history.restore_seed(root, store)}
+    except Exception as error:  # noqa: BLE001 — 種子壞了不能擋住當天那一份進長期保存區
+        seed = {"restored": [], "seed_error": f"{type(error).__name__}: {error}"}
+    return {**seed, **keep_up(root)}
 
 
 # ---- 交易日曆（證交所官方休市日） ----
 
 HOLIDAY_URL = "https://openapi.twse.com.tw/v1/holidaySchedule/holidaySchedule"
+# 官方開放資料只給「當年或隔年」其中一年：2026-11 起改成只給 2027。抓到的新年份要和已有的年份合併保存，
+# 專案另帶一份官方 2026 年原件當種子，快取遺失或被換掉時補回（本人 2026-11-16 要求當晚所有功能上線時發現）。
+HOLIDAY_SEED = Path(__file__).resolve().parent / "seeds" / "twse-holiday-schedule.json"
 _OPEN_MARKERS = ("開始交易", "最後交易")
 
 
@@ -616,8 +698,26 @@ def parse_holiday_schedule(content: bytes) -> set[str]:
     return holidays
 
 
-def fetch_holidays(cache: Path, *, get: Callable | None = None) -> set[str]:
-    """抓一次官方休市日並快取原件；抓不到就用快取，再沒有就回空集合（交由就緒判斷處理）。"""
+def merge_holiday_contents(*contents: bytes | None) -> bytes:
+    """把幾份官方 holidaySchedule 原件合成一份（依日期去重，後面的蓋前面的），格式和官方一樣是一個陣列。"""
+    rows: dict[str, dict] = {}
+    for content in contents:
+        if not content:
+            continue
+        for row in json.loads(content.decode("utf-8")):
+            rows[str(row["Date"])] = row
+    return json.dumps([rows[key] for key in sorted(rows)], ensure_ascii=False, indent=1).encode("utf-8")
+
+
+def _read(path: Path | None) -> bytes | None:
+    try:
+        return path.read_bytes() if path is not None and path.exists() else None
+    except OSError:
+        return None
+
+
+def fetch_holidays(cache: Path, *, get: Callable | None = None, seed: Path | None = HOLIDAY_SEED) -> set[str]:
+    """抓一次官方休市日，和快取、種子合併後存回快取；抓不到就用快取加種子，再沒有就回空集合（交由就緒判斷處理）。"""
     try:
         if get is None:
             import requests
@@ -627,15 +727,17 @@ def fetch_holidays(cache: Path, *, get: Callable | None = None) -> set[str]:
             response = get(HOLIDAY_URL)
             content, status = response.content, response.status
         if status == 200:
-            holidays = parse_holiday_schedule(content)
+            parse_holiday_schedule(content)   # 格式不對就丟例外，不寫進快取
+            merged = merge_holiday_contents(_read(seed), _read(cache), content)
             cache.parent.mkdir(parents=True, exist_ok=True)
             partial = cache.with_name(cache.name + ".partial")
-            partial.write_bytes(content)
+            partial.write_bytes(merged)
             os.replace(partial, cache)
-            return holidays
+            return parse_holiday_schedule(merged)
     except Exception:  # noqa: BLE001 — 抓不到休市清單不擋流程，退回快取或就緒判斷
         pass
-    return parse_holiday_schedule(cache.read_bytes()) if cache.exists() else set()
+    known = merge_holiday_contents(_read(seed), _read(cache))
+    return parse_holiday_schedule(known)
 
 
 # ---- 櫃買除權除息（exDailyQ） ----
@@ -730,12 +832,114 @@ def tdcc_holders_day(root: Path, day: str, *, get: Callable | None = None) -> di
     return th.refresh(out, get=get or th.http_get)
 
 
+# ---- 上櫃融資融券與借券（個股頁事實區塊 E 票；櫃買網站可指定日期，政府資料開放授權） ----
+
+OTC_CREDIT_SOURCES = {
+    "margin": "https://www.tpex.org.tw/www/zh-tw/margin/balance",   # 融資、融券（張）
+    "sbl": "https://www.tpex.org.tw/www/zh-tw/margin/sbl",          # 融券與借券賣出（股）
+}
+OTC_CREDIT_BACKFILL_DAYS = 20   # 本人 11-16「補抓 20 個交易日」：每次都檢查最近 20 個交易日缺哪天補哪天
+# 寫入前要看得到的欄位：融資融券要有「資餘額」「券餘額」；借券要有「當日還券」之後的「當日餘額」（前面那個是融券的）。
+OTC_CREDIT_REQUIRED = {"margin": ("資餘額", "券餘額"), "sbl": ("當日還券", "當日餘額")}
+
+
+def _otc_credit_fields_ok(kind: str, fields: list) -> bool:
+    names = [str(f).strip() for f in fields]
+    if kind == "margin":
+        return all(name in names for name in OTC_CREDIT_REQUIRED["margin"])
+    return "當日還券" in names and "當日餘額" in names[names.index("當日還券"):]
+
+
+def _otc_trading_days(root: Path, day: str, count: int) -> list[str]:
+    """上櫃行情庫裡資料日以前（含）最近 count 個交易日；行情庫沒有這一天時仍把它放在最後。"""
+    db = root / "data/otc-history/otc_history.sqlite"
+    days: list[str] = []
+    if db.exists():
+        connection = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
+        try:
+            days = [row[0] for row in connection.execute(
+                "SELECT DISTINCT date FROM daily WHERE date <= ? ORDER BY date DESC LIMIT ?", (day, count))]
+        finally:
+            connection.close()
+    days = sorted(set(days) | {day})
+    return days[-count:]
+
+
+def otc_credit_day(root: Path, day: str, *, get: Callable | None = None, sleep: Callable = time.sleep,
+                   backfill_days: int = OTC_CREDIT_BACKFILL_DAYS) -> dict:
+    """最近 backfill_days 個交易日裡，缺哪天的融資融券或借券原件就補哪天（同一網域請求之間固定等 5 秒）。
+
+    官方還沒公布（stat 不是 ok 或沒有資料）不寫入，記進 not_published；被拒絕、連不上、格式改了或資料日不符
+    就停下（不寫入那一份），已存的保留。原件和上市明細同一個外包格式：取得時間、來源網址、雜湊、官方原文。"""
+    import otc_market_data as omd
+
+    get = get or _session_getter(omd.http_get)
+    base = root / "data/otc-credit"
+    saved = requests_made = 0
+    not_published: list[str] = []
+    for date_text in _otc_trading_days(root, day, backfill_days):
+        compact = _compact(date_text)
+        for kind, url in OTC_CREDIT_SOURCES.items():
+            target = base / kind / f"{compact}.json"
+            if target.exists():
+                continue
+            if requests_made:
+                sleep(5.0)
+            requests_made += 1
+            stop = lambda reason: {"status": "stopped", "reason": f"{kind} {date_text}：{reason}", "saved": saved,  # noqa: E731
+                                   "requests": requests_made, "not_published": not_published}
+            try:
+                response = get(None, url, {"date": date_text.replace("-", "/"), "id": "", "response": "json"})
+            except Exception as error:  # noqa: BLE001 — 連不上就停在這裡，已存的與未公布的照實回報
+                return stop(type(error).__name__)
+            if getattr(response, "status", 200) != 200:
+                return stop(f"HTTP {response.status}")
+            try:
+                payload = json.loads(response.content.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                return stop("非 JSON 回應")
+            tables = payload.get("tables") or []
+            if str(payload.get("stat") or "").lower() != "ok" or not tables or not tables[0].get("data"):
+                not_published.append(f"{date_text} {kind}")
+                continue
+            if str(payload.get("date") or "") != compact:
+                return stop(f"資料日不符（回 {payload.get('date')!r}）")
+            if not _otc_credit_fields_ok(kind, tables[0].get("fields") or []):
+                return stop("欄位跟預期不同，不寫入")
+            import hashlib
+            from datetime import datetime, timezone
+            _write_atomic(target, json.dumps({
+                "fetched_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "source_url": getattr(response, "url", "") or url, "sha256": hashlib.sha256(response.content).hexdigest(),
+                "data": payload}, ensure_ascii=False).encode("utf-8"))
+            saved += 1
+    return {"status": "ok", "saved": saved, "requests": requests_made, "not_published": not_published}
+
+
+# 公司重大訊息（個股頁事實區塊 D 票）不在這裡抓：每日更新工作流程在這之前先跑 `announcements.py daily --r2`，
+# 補齊 R2 上的原件、抓當日、把新的傳回 R2。在這裡再抓一次只會存在本機、不會進雲端。
+
+
+# ---- 外資台指期部位（預測帳本 G 票第 14 片；期交所只開放查近三年，要每天存下來才拉得長） ----
+
+FOREIGN_FUTURES_BACKFILL_DAYS = 10   # 漏抓的日子在這幾個交易日內補回來；平常每天只有當天那兩個請求
+
+
+def foreign_futures_day(root: Path, day: str, *, post: Callable | None = None, sleep: Callable = time.sleep,
+                        backfill_days: int = FOREIGN_FUTURES_BACKFILL_DAYS) -> dict:
+    """期交所「三大法人－區分各期貨契約」的大台、小台各一份，原件存 data/foreign-futures/raw/；最近幾天缺的一併補。"""
+    import foreign_futures as ff
+
+    return ff.fetch_recent(root / "data/foreign-futures", _otc_trading_days(root, day, backfill_days),
+                           post=post, sleep=sleep)
+
+
 # ---- 每日協調器呼叫的兩個入口 ----
 
 REQUIRED_DATASETS = ("listed_quotes", "otc_quotes", "listed_institutional", "otc_institutional")
 OPTIONAL_DATASETS = ("otc_index", "twse_valuation", "tpex_valuation", "otc_corporate_actions",
                      "listed_corporate_actions", "capital_supplement", "tdcc_holders",
-                     "fundamentals", "taiex_index", "listed_chip_detail")
+                     "fundamentals", "taiex_index", "listed_chip_detail", "otc_credit", "foreign_futures")
 
 
 def _interval(previous: dict | None, sleep: Callable) -> None:
@@ -816,6 +1020,9 @@ def fetch_day(day: str, *, root: Path = ROOT, sleep: Callable = time.sleep, incl
     timed("otc_quotes", lambda: otc_quotes_day(data / "otc-history", data / "otc-history/otc_history.sqlite", day,
                                                catalog, sleep=sleep))
     _interval(datasets["otc_quotes"], sleep)
+    # 股票型 ETF 的日線：名錄裡新出現的才從原件補歷史，沒有新的就只讀名錄（不發請求）；非必要資料集，失敗不擋發布
+    import etf_history
+    timed("etf_history", lambda: etf_history.refresh(root))
 
     def otc_market() -> dict:
         result = otc_market_day(data / "otc-history", data / "otc-history/otc_market.sqlite", day, sleep=sleep)
@@ -840,6 +1047,9 @@ def fetch_day(day: str, *, root: Path = ROOT, sleep: Callable = time.sleep, incl
     sleep(5.0)
     timed("tdcc_holders", lambda: tdcc_holders_day(root, day))  # 集保另一個網域，不與證交所／櫃買共用間隔
     timed("listed_chip_detail", lambda: {"status": "ok", "datasets": listed_chip_detail_day(root, day, sleep=sleep)})
+    sleep(5.0)   # 前一步打證交所，這裡固定再等一下才打櫃買（不靠前一步回報的請求數）
+    timed("otc_credit", lambda: otc_credit_day(root, day, sleep=sleep))
+    timed("foreign_futures", lambda: foreign_futures_day(root, day, sleep=sleep))  # 期交所，另一個網域
     if include_fundamentals:
         timed("fundamentals", lambda: fundamentals_day(data / "fundamentals-history", day))
     blocking = [name for name in REQUIRED_DATASETS if datasets.get(name, {}).get("status") not in

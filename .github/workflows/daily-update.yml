@@ -37,6 +37,11 @@ on:
         required: false
         type: boolean
         default: false
+      etf_raw_days:
+        description: "一次性補抓 ETF 要用的每日行情原件：最近幾個資料日（1～300；留空＝不補）。本人 11-16 同意 130。要 dry_run=false，並勾 republish 重新發布目前線上那一天"
+        required: false
+        type: string
+        default: ""
       trigger_source:
         description: "自動排程來源（Cloudflare 使用 cloudflare-cron；手動留空＝嚴格）"
         required: false
@@ -145,6 +150,49 @@ jobs:
       - name: 從 R2 還原工作集
         run: python state_sync.py restore --target .
 
+      - name: 一次性補抓 ETF 要用的每日行情原件（手動填 etf_raw_days 才跑）
+        # 2026-11-16 本人同意「最近 130 個交易日」：雲端工作集的原件只剩最近幾天，ETF 只回補得到幾根日線。
+        # 對行情庫記著、原件卻不在的最近 N 個資料日，向證交所／櫃買重抓同一份每日行情原件（上市、上櫃同時，各自間隔 5 秒），
+        # 位元組雜湊要和行情庫當初記的相同才放回，不同就丟；第一天就不同或任何不正常回應就停。補回後重掃 ETF（已有的列不動）。
+        # 一天也沒補回而且有停下來就讓整個 run 失敗：不發布、不同步工作集。只放回原件與 ETF 列，同步回 R2 照原本只在發布成功時。
+        if: inputs.etf_raw_days != ''
+        shell: bash
+        env:
+          ETF_RAW_DAYS: ${{ inputs.etf_raw_days }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [ "$INPUT_DRY_RUN" = "true" ]; then
+            echo "::error::etf_raw_days 要搭配 dry_run=false（試跑不同步工作集，補抓的原件會白抓）"; exit 1
+          fi
+          if ! printf '%s' "$ETF_RAW_DAYS" | grep -Eq '^[0-9]{1,3}$'; then
+            echo "::error::etf_raw_days 必須是 1～300 的整數"; exit 1
+          fi
+          status=0
+          python etf_history.py --restore-raw-days "$ETF_RAW_DAYS" > "$RUNNER_TEMP/etf-raw-restore.json" || status=$?
+          cat "$RUNNER_TEMP/etf-raw-restore.json"
+          { echo "### ETF 原件補抓（結束碼 $status）"; echo '```json'; cat "$RUNNER_TEMP/etf-raw-restore.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      - name: 公司重大訊息：補齊原件、抓當日、存回 R2
+        # 個股頁事實區塊 D 票：原件另存在 R2 的 announcements/raw/（不在工作集），建置前先補齊才有近 90 天。
+        # 失敗不擋發布：網站只是少了當天新增的公告。
+        # 試跑只下載與在本機抓，不寫 R2（daily_update.py 的 --dry-run 也只跑不會動到遠端的步驟）。
+        continue-on-error: true
+        env:
+          DRY_RUN: ${{ steps.day.outputs.dry_run }}
+        run: |
+          if [ -n "$DRY_RUN" ]; then python announcements.py daily --r2 --no-upload; else python announcements.py daily --r2; fi
+
+      - name: 關注股的新聞標題：抓 Yahoo股市與中央社，寫進 D1
+        # 自選股關注 C 票：只抓站主正在關注的股票（Yahoo 每檔一次）與中央社三個分類，標題、前言、連結直接寫進 D1 的 watch_news
+        # （不跟個股資料版本走），超過 90 天的同時清掉。資料表還沒建立（0015 未套）就什麼都不抓。
+        # 失敗不擋發布：個股頁的新聞那一塊會標「今天沒抓到」。試跑不寫 D1，所以整步跳過。
+        if: steps.day.outputs.dry_run == ''
+        continue-on-error: true
+        env:
+          OWNER_EMAIL: ${{ vars.OWNER_EMAIL }}
+        run: python watch_news.py daily --d1
+
       - name: 每日更新
         id: run
         env:
@@ -171,6 +219,23 @@ jobs:
             python state_sync.py upload --data-date "${{ steps.day.outputs.date }}" --cursor-domain market
           else
             echo "本次沒有新發布，雲端工作集維持上一版"
+          fi
+
+      - name: 國外同類股行情（只在發布成功時）
+        # 自選股關注 B 票：站主確認過的國外同類股逐檔取日線，寫進雲端資料庫的 overseas_quotes（只給站主看）。
+        # 每個交易日只在發布成功那一班跑一次（EODHD 每天 20 次要和水位、事前預測共用）。
+        # 失敗不擋發布：每一檔各自標「過期」，網站照常。金鑰沒設定時那個來源整批標「沒有金鑰」。
+        if: success() && steps.day.outputs.dry_run == ''
+        continue-on-error: true
+        env:
+          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+          EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
+        run: |
+          sync=$(python -c "import json,sys; print(json.load(open(sys.argv[1], encoding='utf-8'))['sync_state'])" "${{ runner.temp }}/daily-result.json")
+          if [ "$sync" = "True" ]; then
+            python overseas_peers.py daily
+          else
+            echo "本次沒有新發布，不抓國外同類股"
           fi
 
       - name: 建立本次發布證據

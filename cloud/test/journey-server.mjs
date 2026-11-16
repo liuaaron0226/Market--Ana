@@ -8,6 +8,7 @@ import { fakeD1, makeIssuer, claims, fetchJwks, TEAM, MAIN_AUD, APPLY_AUD, OWNER
 import marketPack from "../functions/_market-pack.js";
 import stockPack from "../functions/_stock-pack.js";
 import screensPack from "../functions/_screens-pack.js";
+import comparePack from "../functions/_compare-pack.js";
 
 const port = Number(process.argv[2] || 8899);
 const dist = new URL("../dist/", import.meta.url);
@@ -17,10 +18,25 @@ const env = { DB: fakeD1(), TEAM_DOMAIN: TEAM, MAIN_AUD, APPLY_AUD, OWNER_EMAIL:
 // MARKET_ANA_FORECAST_LEDGER=owner 打開開關。兩者都沒設時與原本相同。
 if (process.env.JOURNEY_SEED_SQL) env.DB._raw.exec(await readFile(process.env.JOURNEY_SEED_SQL, "utf8"));
 if (process.env.MARKET_ANA_FORECAST_LEDGER) env.MARKET_ANA_FORECAST_LEDGER = process.env.MARKET_ANA_FORECAST_LEDGER;
+// 自選股關注的本機預覽：MARKET_ANA_WATCHLIST_WATCH=owner 打開開關。JOURNEY_SEED_SQL 可以放國外同類股的種子，
+// 或 watch_ledger.d1_sql 的指令檔加上站主的自選股（E 票）。
+if (process.env.MARKET_ANA_WATCHLIST_WATCH) env.MARKET_ANA_WATCHLIST_WATCH = process.env.MARKET_ANA_WATCHLIST_WATCH;
+// ETF 上站（12 票）的本機預覽：MARKET_ANA_STOCK_ETFS=owner／all 打開開關；ETF 名錄與分析放在 JOURNEY_SEED_SQL。
+if (process.env.MARKET_ANA_STOCK_ETFS) env.MARKET_ANA_STOCK_ETFS = process.env.MARKET_ANA_STOCK_ETFS;
 // 自動化驗收會在一分鐘內點完全部下鑽；額度可由第三個參數放寬（正式版額度見 gate.js RATE，不受影響）。
 const rate = process.argv[3] === "relaxed" ? { market: 10_000, detail: 10_000, userData: 10_000 } : undefined;
-const deps = { fetchImpl: fetchJwks(issuer.jwks), now: () => Date.now(), marketPack, stockPack, screensPack, rate };
-const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json" };
+// 推播的本機預覽（F 票）：JOURNEY_PUSH=test 用每次啟動新產生的測試推播金鑰（不是正式金鑰）；推播只記在這裡、不真的送出。
+const pushed = [];
+if (process.env.JOURNEY_PUSH === "test") {
+  const { makeVapid } = await import("./push-helpers.js");
+  const vapid = await makeVapid();
+  Object.assign(env, { VAPID_PUBLIC_KEY: vapid.publicKey, VAPID_PRIVATE_KEY: vapid.privateKey });
+}
+const pushFetch = async (url) => { pushed.push(String(url)); console.log(`push → ${new URL(url).host}`); return new Response(null, { status: 201 }); };
+const deps = { fetchImpl: fetchJwks(issuer.jwks), now: () => Date.now(), marketPack, stockPack, screensPack, comparePack, rate,
+  pushFetch };
+const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json",
+  ".webmanifest": "application/manifest+json", ".png": "image/png" };
 
 async function serveStatic(pathname) {
   let p = pathname.endsWith("/") ? pathname + "index.html" : pathname;

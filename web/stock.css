@@ -119,12 +119,15 @@
 /* ---------- 畫線工具列：只有圖示；名稱在滑鼠停留、鍵盤聚焦或手機長按時出現 ----------
    --draw 是畫線用色，沿用既有色票的藍紫（--core-b）：與漲跌的紅綠、均線的橘金灰、支撐壓力的金綠都分得開。 */
 :root { --draw: var(--core-b); }
-.bd-draw { display: flex; gap: 4px; margin: 0 0 6px; }
+/* 窄螢幕（iPhone 開「顯示縮放」是 320 寬）放不下七顆 44px 時，按鈕一起變窄（高度不變，至少 30px），
+   不讓工具列超出圖表右緣或造成橫向捲動；放得下就維持 44px。未儲存的提示先讓位（只剩圓點），按鈕才變窄。 */
+.bd-draw-row { display: flex; align-items: center; }
+.bd-draw { display: flex; flex: 0 1 auto; min-width: 0; gap: 4px; margin: 0 0 6px; }
 .bd-draw[hidden], .bd-draw button[hidden] { display: none; }
 .bd-draw button {
   position: relative; width: var(--btn-h); height: var(--btn-h); display: grid; place-items: center; padding: 0;
   border: 1px solid var(--hair); border-radius: var(--btn-r); background: transparent; color: var(--dim); cursor: pointer;
-  touch-action: manipulation; -webkit-touch-callout: none; user-select: none;
+  touch-action: manipulation; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; flex: 0 1 auto; min-width: 30px;
   transition: background-color 160ms var(--ease-out), color 160ms var(--ease-out), transform 120ms var(--ease-out);
 }
 .bd-draw svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; pointer-events: none; }
@@ -138,12 +141,65 @@
   background: var(--ink); color: var(--bg); font: 500 12px/1.4 var(--sans); white-space: nowrap;
   opacity: 0; pointer-events: none; transition: opacity 120ms var(--ease-out);
 }
+/* 最右邊那兩顆的提示往左長：靠左對齊時在 320 寬的手機上會超出畫面 1px，整頁出現橫向捲動 */
+.bd-draw button[data-tool="text"]::after, .bd-draw .bd-draw-delete::after { left: auto; right: 0; }
 .bd-draw button:focus-visible::after, .bd-draw button.is-tip::after { opacity: 1; }
 @media (hover: hover) {
   .bd-draw button:not([aria-pressed="true"]):hover { background: var(--panel2); color: var(--ink); }
   .bd-draw button:hover::after { opacity: 1; transition-delay: 320ms; }
 }
 @media (prefers-reduced-motion: reduce) { .bd-draw button, .bd-draw button::after { transition: none; } }
+/* 還有畫線沒存上去時的提示：和工具列同一行、靠右的一個小圓點加三個字，不蓋到圖。
+   它不在工具列裡面：秒 K、分 K 把工具列收起時，還沒存上去的提示照樣看得到。
+   它比工具列先讓位（手機上按鈕盡量維持 44px）；窄螢幕上選了線、多出刪除鈕時放不下三個字，只留圓點
+   （不認得 :has 的舊瀏覽器是把放不下的字裁掉）。 */
+.bd-draw-unsaved {
+  display: inline-flex; align-items: center; gap: 6px; flex: 0 1000 auto; min-width: 14px; overflow: hidden;
+  margin: 0 0 6px auto; padding-left: 8px; color: var(--dim); font: 500 12px var(--sans); white-space: nowrap;
+}
+.bd-draw-unsaved[hidden] { display: none; }
+.bd-draw-unsaved::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--draw); }
+@media (max-width: 480px) { .bd-draw-row:has(.bd-draw-delete:not([hidden])) .bd-draw-unsaved { gap: 0; font-size: 0; } }
+
+/* 手機長按圖表（按住線準備拖、按住看 K 棒）不跳出系統的選取放大鏡或「儲存影像」選單。只加在畫布上：
+   加在圖表容器上的話，iOS 上容器裡的文字標註輸入框會打不了字。 */
+.bd-chart-host > canvas { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+
+/* ---------- 文字標註的輸入框：疊在圖上、對在要寫的位置（位置由 chart-drawings.js 算） ----------
+   一個輸入框加一顆取消；外框用畫線色，外圈的淡色環沿用站上聚焦狀態的作法。
+   手機上字級 16px：小於 16 的輸入框在 iOS 聚焦時整頁會被放大，寫完畫面就回不到原位。 */
+.kc-note {
+  position: absolute; z-index: 8; display: flex; width: min(240px, calc(100% - 16px)); height: 32px; margin: 0;
+  border: 1px solid var(--draw); border-radius: var(--btn-r); background: var(--panel);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--draw) 18%, transparent);
+}
+.kc-note-input {
+  flex: 1; min-width: 0; padding: 0 2px 0 8px; border: 0; border-radius: var(--btn-r);
+  background: transparent; color: var(--ink); font: 500 13px var(--sans);
+}
+/* 聚焦的樣子由外框與淡色環表示，輸入框自己不再加全站那一圈聚焦外框（會變成兩層框）。 */
+.bd .kc-note-input, .bd .kc-note-input:focus-visible { outline: none; }
+.kc-note-cancel {
+  position: relative; flex: none; width: 32px; padding: 0; border: 0; border-radius: var(--btn-r);
+  background: transparent; color: var(--dim); cursor: pointer; touch-action: manipulation; outline: none;
+}
+.kc-note-cancel::before, .kc-note-cancel::after {
+  content: ""; position: absolute; left: 50%; top: 50%; width: 12px; height: 1.6px; margin: -.8px 0 0 -6px;
+  border-radius: 1px; background: currentColor; transform: rotate(45deg);
+}
+.kc-note-cancel::after { transform: rotate(-45deg); }
+.kc-note-limit {
+  /* 放在輸入框上方：手機鍵盤彈出時，鍵盤上方只保證輸入框露出來，放下面會被鍵盤遮住。 */
+  position: absolute; left: 0; bottom: calc(100% + 6px); padding: 4px 8px; border-radius: 6px;
+  background: var(--ink); color: var(--bg); font: 500 12px/1.4 var(--sans); white-space: nowrap;
+}
+.kc-note-limit[hidden] { display: none; }
+@media (hover: hover) { .kc-note-cancel:hover { color: var(--ink); } }
+@media (pointer: coarse) {
+  .kc-note { height: 44px; }
+  .kc-note-input { font-size: 16px; }
+  .kc-note-cancel { width: 44px; }
+}
 
 /* 操作策略：首屏只露出一句結論，價位與理由在原生 details 內。 */
 .bd-strategy { margin: 8px 0 28px; padding: 22px 0 0; border-top: 2px solid var(--ink); }

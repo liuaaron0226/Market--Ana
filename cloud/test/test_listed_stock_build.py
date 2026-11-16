@@ -281,6 +281,65 @@ class VersionActivationTests(unittest.TestCase):
             {"code": "1102", "scope": "price_adjustment", "error": "UnresolvedCapitalEvent",
              "message": "2026-09-02 除權息 未還原：缺官方參考價或現金股利"}])
 
+    def test_build_report_counts_which_signal_blocks_the_stocks_have(self) -> None:
+        # 五塊資料（規格使用者故事 81）：某一塊算不出來不擋發布，但建置報告要看得到今天有幾檔有哪幾塊。
+        from cloud.build_stock_pack import signals_report
+
+        def row(code: str, signals: object) -> dict:
+            item = analysis(code)
+            item["payload"]["signals"] = signals
+            return item
+
+        rows = [row("1101", {"blocks": ["limit_up_momentum", "versus_market", "ma_alignment", "heavy_zones"]}),
+                row("1102", {"blocks": ["ma_alignment"], "failed": ["heavy_zones"]}),   # 爆大量成交區算的時候出錯
+                row("1103", {"blocks": []}),
+                row("1104", None),       # 整塊算不出來（計算出錯時留空）
+                analysis("1105")]        # 舊資料：沒有這個鍵
+        # 位元組數是五塊資料壓成 JSON 的大小：{"blocks":["limit_up_momentum","versus_market","ma_alignment","heavy_zones"]}＝77、
+        # {"blocks":["ma_alignment"],"failed":["heavy_zones"]}＝52、{"blocks":[]}＝13；沒有五塊資料的兩檔不計。
+        self.assertEqual(signals_report(rows), {
+            "analyses": 5, "without_signals": 2,
+            "blocks": {"limit_up_momentum": 1, "versus_market": 1, "ma_alignment": 2, "margin_maintenance": 0, "heavy_zones": 1},
+            "failed": {"limit_up_momentum": 0, "versus_market": 0, "ma_alignment": 0, "margin_maintenance": 0, "heavy_zones": 1},
+            "payload_bytes": 142, "largest_payload_bytes": 77})
+        nothing = {"limit_up_momentum": 0, "versus_market": 0, "ma_alignment": 0, "margin_maintenance": 0, "heavy_zones": 0}
+        self.assertEqual(signals_report([]), {
+            "analyses": 0, "without_signals": 0, "blocks": nothing, "failed": nothing,
+            "payload_bytes": 0, "largest_payload_bytes": 0})
+
+    def test_build_report_carries_the_daily_margin_check(self) -> None:
+        # 融資維持率（估）的每日對帳：建置報告要有當天估計的全市場融資金額和官方差多少、有沒有超過門檻。
+        import tempfile
+        from unittest import mock
+
+        from cloud.build_stock_pack import margin_check_report
+        from twon_analysis import margin_maintenance
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp) / "data/margin-history"
+            # 起點 2025-11-03 當天 2330 有 100 張、成交均價 250（250,000 元 ÷ 1,000 股）、收 255：
+            # 估計的全市場融資金額＝100 張 × 1,000 × 250 × 起點係數 0.9369126317402282 × 0.6＝14,053,689 元；官方 14,054 仟元。
+            official = {"stat": "OK", "date": "20251103", "tables": [
+                {"fields": ["項目", "買進", "賣出", "現金(券)償還", "前日餘額", "今日餘額"],
+                 "data": [["融資金額(仟元)", "1", "2", "3", "4", "14,054"]]},
+                {"fields": ["代號", "名稱", "買進", "賣出", "現金償還", "前日餘額", "今日餘額"],
+                 "data": [["2330", "台積電", "0", "0", "0", "100", "100"]]}]}
+            (store / "raw").mkdir(parents=True)
+            (store / "raw/margin-20251103.json").write_text(json.dumps({"data": official}, ensure_ascii=False), encoding="utf-8")
+            (store / "prices").mkdir()
+            (store / "prices/prices-20251103.json").write_text('{"date":"20251103","prices":{"2330":[255.0,1000,250000]}}',
+                                                               encoding="utf-8")
+            with mock.patch.object(margin_maintenance, "ROOT", Path(tmp)):
+                self.assertEqual(margin_check_report("2025-11-03"), {
+                    "status": "ok", "data_date": "2025-11-03", "gap_pct": 0.0, "threshold_pct": 8.0,
+                    "estimated": 14053689, "official": 14054000, "stocks": 1, "reason": None})
+                # 隔天的原件讀不了：對帳本身出錯不擋發布，報告寫明是出錯（不帶本機路徑）。
+                (store / "raw/margin-20251104.json").write_text("壞掉的檔", encoding="utf-8")
+                (store / "prices/prices-20251104.json").write_text('{"date":"20251104","prices":{}}', encoding="utf-8")
+                broken = margin_check_report("2025-11-04")
+            self.assertEqual((broken["status"], broken["reason"]), ("error", "JSONDecodeError"))
+            self.assertNotIn(tmp, json.dumps(broken, ensure_ascii=False))
+
     def test_strategy_isolation_never_hides_core_data_defects(self) -> None:
         from cloud.build_stock_pack import _check_payload, _isolate_strategy
         payload = analysis()["payload"]
@@ -656,6 +715,19 @@ class SampleBuildV2Tests(unittest.TestCase):
         self.assertEqual(self.manifest["analysis_schema"], "stock-analysis/v2")
         self.assertNotIn("presets", self.manifest)
 
+    def test_build_report_says_which_signal_blocks_were_built(self) -> None:
+        # 台積電、環球晶、0050 都有夠長的日線與加權指數可比：三檔都有「和大盤比」與「均線排列」，沒有整塊空掉的。
+        report = self.manifest["signals"]
+        self.assertEqual((report["analyses"], report["without_signals"]), (3, 0))
+        self.assertEqual((report["blocks"]["versus_market"], report["blocks"]["ma_alignment"]), (3, 3))
+        # 漲停動能給上市、上櫃普通股（上櫃：本人 2026-11-16 看過 09 票驗證報告後開）：台積電、環球晶有，0050 是 ETF 沒有。
+        self.assertEqual(report["blocks"]["limit_up_momentum"], 2)
+        self.assertEqual(report["failed"], {"limit_up_momentum": 0, "versus_market": 0, "ma_alignment": 0,
+                                            "margin_maintenance": 0, "heavy_zones": 0})
+        self.assertIn(report["margin_check"]["status"],
+                      ("ok", "over_threshold", "missing_days", "missing_prices", "stale", "no_start", "no_official"))
+        self.assertGreater(report["payload_bytes"], 0)
+
     def test_functions_pack_has_target_date_and_valid_new_fields_per_stock(self) -> None:
         pack = json.loads((self.out / "stock-pack-v2.json").read_text(encoding="utf-8"))
         self.assertEqual(pack["as_of"], self.manifest["data_date"])
@@ -672,9 +744,19 @@ class SampleBuildV2Tests(unittest.TestCase):
         from twon_analysis.analyze_v2 import analyze_v2
 
         compact = lambda value: json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+        from twon_analysis.facts import with_news
+
         rows = self.rows()
         for code in ("2330", "6488"):
-            self.assertEqual(compact(rows[code]), compact(analyze_v2(code, "9999-12-31")), code)
+            # 建置版本時只多做一件事：替事實資料加上名錄的產業別與「消息」按鈕（事實區塊 D 票）；其餘逐位元組相同。
+            direct = analyze_v2(code, "9999-12-31")
+            industry = rows[code]["facts"]["industry"]
+            self.assertTrue(industry, code)
+            self.assertNotIn("news", direct["facts"]["blocks"], code)
+            blocks = rows[code]["facts"]["blocks"]
+            self.assertEqual(blocks.index("news") + 1, blocks.index("technical"), code)
+            direct["facts"] = with_news(direct["facts"], industry=industry)
+            self.assertEqual(compact(rows[code]), compact(direct), code)
         self.assertEqual(rows["6488"]["market"], "上櫃")
         self.assertEqual(rows["2330"]["market"], "上市")
 

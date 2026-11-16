@@ -30,12 +30,70 @@ function individuallyEnabled(raw) {
 // 只給站主、而且不讓其他人知道存在的功能：其他人看到的功能清單裡這幾項一律是關的，
 // 頁面就不會去問那個入口，和功能上線前完全一樣。
 // （預測帳本也只給站主，但它的旗標上線時就對所有人可見、頁面也依賴它，這裡不改它的行為。）
-const HIDDEN_FROM_OTHERS = ["watchlist_watch_v1"];
+// 站主的 AI 解讀（agy 產生）也不給朋友看：朋友用自己的金鑰產生自己那份（開放給朋友 02 票，DECISIONS 第 5 題）。
+const HIDDEN_FROM_OTHERS = ["watchlist_watch_v1", "ai_digest"];
 
-export function policyForViewer(policy, isOwner) {
+// 三種狀態的開關：只認一字不差的 "owner"（只開站主）與 "all"（開給全部獲准使用者），其他寫法一律是關。
+function threeStateMode(raw) {
+  return raw === "owner" || raw === "all" ? raw : "off";
+}
+
+function modeAllowsViewer(mode, isOwner) {
+  return mode === "all" || (mode === "owner" && Boolean(isOwner));
+}
+
+// 個股頁事實區塊（2026-11-15 規格）：三種狀態的開關，和策略總開關、預測帳本、自選股關注都不綁在一起。
+function stockFactsMode(env) {
+  return threeStateMode(env?.MARKET_ANA_STOCK_FACTS);
+}
+
+export function stockFactsVisible(env, isOwner) {
+  return modeAllowsViewer(stockFactsMode(env), isOwner);
+}
+
+// 個股頁五塊新功能（2026-11-16 規格）：自己一個三種狀態的開關。
+// 和事實區塊的開關各自獨立設定，不互相連動；也不掛在策略總開關底下。
+function stockSignalsMode(env) {
+  return threeStateMode(env?.MARKET_ANA_STOCK_SIGNALS);
+}
+
+export function stockSignalsVisible(env, isOwner) {
+  return modeAllowsViewer(stockSignalsMode(env), isOwner);
+}
+
+// ETF 上站（2026-11-16 規格「ETF 納入」，12 票）：自己一個三種狀態的開關，和五塊、事實區塊都不連動。
+// 對這個人是開的時候，名單內的股票型 ETF 搜尋得到、有個股頁、可加自選；關的時候一切和沒有這個功能時一樣（只有 0050）。
+function stockEtfsMode(env) {
+  return threeStateMode(env?.MARKET_ANA_STOCK_ETFS);
+}
+
+export function stockEtfsVisible(env, isOwner) {
+  return modeAllowsViewer(stockEtfsMode(env), isOwner);
+}
+
+// 0050 是核心持有的比較基準，一直都有個股頁；ETF 開關只管其他 ETF。
+export const ALWAYS_VISIBLE_ETF = "0050";
+
+// 這一檔的分析結果（kind 取自 payload）對這個人要不要當作不存在：0050 以外的 ETF，開關對他關著就藏起來，
+// 讓他拿到的回應和 ETF 上站之前一樣。
+export function etfAnalysisHidden(code, kind, etfsVisible) {
+  return kind === "etf" && code !== ALWAYS_VISIBLE_ETF && !etfsVisible;
+}
+
+// 開放給朋友的 Gemini（2026-11-16，01 票）：只給朋友用、站主不走這條線，所以不放進功能清單；
+// 自己一個開關，不掛在策略總開關底下。只認一字不差的 "on"，其他寫法一律是關。
+export function friendAiEnabled(env) {
+  return env?.MARKET_ANA_FRIEND_AI === "on";
+}
+
+// env 沒給時，事實區塊與五塊對其他人一律是關（寧可少給，不可多給）。
+export function policyForViewer(policy, isOwner, env = {}) {
   if (isOwner) return policy;
   const features = { ...policy.features };
   for (const name of HIDDEN_FROM_OTHERS) features[name] = false;
+  features.stock_facts_v1 = stockFactsVisible(env, false);
+  features.stock_signals_v1 = stockSignalsVisible(env, false);
+  features.stock_etfs_v1 = stockEtfsVisible(env, false);
   return { ...policy, features };
 }
 
@@ -65,6 +123,12 @@ export function releasePolicy(env = {}) {
       forecast_ledger_v1: env?.MARKET_ANA_FORECAST_LEDGER === "owner",
       // 自選股關注（2026-11-15 規格）：同樣是獨立的開關、只認一字不差的 "owner"，不和預測帳本綁在一起。
       watchlist_watch_v1: env?.MARKET_ANA_WATCHLIST_WATCH === "owner",
+      // 個股頁事實區塊：這裡是站主看到的值；其他人看到的值由 policyForViewer 依狀態決定。
+      stock_facts_v1: stockFactsMode(env) !== "off",
+      // 個股頁五塊新功能：同上，這裡是站主看到的值。
+      stock_signals_v1: stockSignalsMode(env) !== "off",
+      // ETF 上站：同上，這裡是站主看到的值。
+      stock_etfs_v1: stockEtfsMode(env) !== "off",
     },
   };
 }

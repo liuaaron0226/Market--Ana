@@ -276,8 +276,23 @@ def write_status(log_dir: Path, record: dict) -> dict:
     stale = outcome in ("failed", "incomplete", "waiting", "running")
     status = {"schema": STATUS_SCHEMA, "last_success_date": last_date, "last_success_at": last_at,
               "run": run, "stale": stale}
+    # 對帳跟著發布出去的那一版資料走：這次成功發布就換成這次建置的，否則沿用上一次成功發布的。
+    checks = previous.get("checks")
+    if outcome == "success":
+        built = next((step.get("output") or {} for step in record.get("steps") or [] if step.get("name") == "build_seed"), {})
+        checks = _site_checks(built.get("margin_check"))
+    if checks:
+        status["checks"] = checks
     _write_record(path, status)
     return status
+
+
+def _site_checks(margin_check: dict | None) -> dict | None:
+    """站台狀態裡的每日對帳：融資維持率（估）估計的全市場融資金額和官方差多少、當天全部不給的原因。只留看得懂的幾項。"""
+    if not isinstance(margin_check, dict):
+        return None
+    return {"margin_maintenance": {key: margin_check.get(key) for key in
+                                   ("status", "data_date", "gap_pct", "threshold_pct", "reason")}}
 
 
 # ---- 真實步驟（本機與 GitHub Actions 共用）；本切片只接 dry-run 能跑的部分 ----
@@ -721,6 +736,12 @@ def _seed_problems(manifest: dict) -> dict:
     return problems
 
 
+def _margin_check(manifest: dict) -> dict | None:
+    """建置清單裡融資維持率（估）的每日對帳結果（估計的全市場融資金額 對 官方）；舊的清單沒有就是 None。"""
+    check = (manifest.get("signals") or {}).get("margin_check")
+    return check if isinstance(check, dict) else None
+
+
 def _seed_dir(ctx: RunContext) -> Path:
     return Path(ctx.outputs.get("build_seed", {}).get("seed_dir") or ctx.work_dir / "seed")
 
@@ -785,6 +806,10 @@ def _write_status_for_build(ctx: RunContext) -> dict:
               "stale": False}
     if previous.get("run", {}).get("status") == "failed" and previous["run"].get("data_date") != ctx.data_date:
         status["previous_failure"] = {k: previous["run"].get(k) for k in ("data_date", "failed_step", "reason")}
+    # 融資維持率（估）的每日對帳：站台狀態看得到當天的差距與全部不給的原因（不擋發布）。
+    checks = _site_checks((ctx.outputs.get("build_seed") or {}).get("margin_check"))
+    if checks:
+        status["checks"] = checks
     _write_record(CLOUD / ".data-status.json", status)
     return {"status_file": ".data-status.json", "last_success_date": ctx.data_date}
 
@@ -834,6 +859,8 @@ def _remote_active_version() -> str | None:
 # D1 免費方案單庫上限 500MB；每版約 13MB、原本從不清除。本人 2026-11-14 同意：發布成功後只留最近 3 版。
 D1_KEEP_VERSIONS = 3
 _D1_VERSION_TABLES = ("stock_analysis", "listed_securities", "universe_outside", "stock_data_versions")
+# 0013（個股頁事實區塊 D 票）新增的公告表：資料庫套了變更檔才有，有的話排在刪版本登記之前一起刪。
+_D1_OPTIONAL_VERSION_TABLE = "stock_announcements"
 _PROTECTED_VERSIONS_SQL = ("(SELECT active_version FROM stock_data_state UNION "
                            "SELECT previous_version FROM stock_data_state WHERE previous_version IS NOT NULL)")
 
@@ -852,7 +879,9 @@ def versions_to_prune(rows: list[dict], *, active: str | None, previous: str | N
 def _prune_d1_versions(expected_active: str | None) -> dict:
     """刪掉正式 D1 裡更舊的個股資料版本。線上版本不是剛發布的那一版就不動手。"""
     result = _sh(_npx("d1", "execute", D1_DATABASE, "--remote", "--json", "--command",
-                      "SELECT v.version, v.built_at, s.active_version, s.previous_version FROM stock_data_versions v "
+                      "SELECT v.version, v.built_at, s.active_version, s.previous_version, "
+                      f"(SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '{_D1_OPTIONAL_VERSION_TABLE}') "
+                      "AS has_announcements FROM stock_data_versions v "
                       "LEFT JOIN stock_data_state s ON s.key = 'current'"), cwd=CLOUD)
     text = result.get("_stdout") or ""
     rows = json.loads(text[text.index("["):])[0]["results"]
@@ -865,6 +894,8 @@ def _prune_d1_versions(expected_active: str | None) -> dict:
     for version in prune:  # 版本名來自資料庫；只接受單純識別字才拼進 SQL
         if not re.fullmatch(r"[A-Za-z0-9._-]{1,120}", version):
             raise ValueError("版本名稱格式不符，不執行刪除")
+    tables = (_D1_VERSION_TABLES[:-1] + ((_D1_OPTIONAL_VERSION_TABLE,) if rows[0].get("has_announcements") else ())
+              + _D1_VERSION_TABLES[-1:])
     # 一版一個指令、由舊到新：先刪掛在版本下的列，最後才刪版本登記（不依賴外鍵連帶刪除）；
     # 每句再擋一次使用中與回退用的版本。中途失敗就停，已刪的照實回報，剩下的下次再清。
     pruned: list[str] = []
@@ -872,7 +903,7 @@ def _prune_d1_versions(expected_active: str | None) -> dict:
         try:
             _sh(_npx("d1", "execute", D1_DATABASE, "--remote", "--json", "--command",
                      " ".join(f"DELETE FROM {table} WHERE version = '{version}' AND version NOT IN {_PROTECTED_VERSIONS_SQL};"
-                              for table in _D1_VERSION_TABLES)), cwd=CLOUD)
+                              for table in tables)), cwd=CLOUD)
         except Exception as error:  # noqa: BLE001
             return {"pruned_versions": pruned, "kept_versions": len(rows) - len(pruned),
                     "prune_error": type(error).__name__}
@@ -949,14 +980,15 @@ def real_steps() -> list[Step]:
         if (out / "manifest.json").exists():
             manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
             return {"seed_dir": str(out), "version": manifest.get("version"), "reused": True,
-                    "problems": _seed_problems(manifest)}
+                    "problems": _seed_problems(manifest), "margin_check": _margin_check(manifest)}
         universe = ctx.work_dir / "liquid-universe" / f"{ctx.data_date}.json"
         command = [sys.executable, str(CLOUD / "build_stock_pack.py"), "--out", str(out), "--universe", str(universe)]
         if ctx.outputs.get("_seed_version"):  # 同日重新發布：資料日與來源相同，版本名要另外給才不會撞到原版
             command += ["--version", ctx.outputs["_seed_version"]]
         result = _sh(command)
         manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8")) if (out / "manifest.json").exists() else {}
-        return {**result, "seed_dir": str(out), "version": manifest.get("version"), "problems": _seed_problems(manifest)}
+        return {**result, "seed_dir": str(out), "version": manifest.get("version"), "problems": _seed_problems(manifest),
+                "margin_check": _margin_check(manifest)}
 
     def build_dist(ctx: RunContext) -> dict:
         report: dict = {}

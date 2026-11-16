@@ -2,7 +2,7 @@
 // U2（11-09）：web/ 設計改版後 script 標籤帶版本 query（例如 kchart.js?v=20261109-ux1），
 // 比對改用 regex，允許 ?query，但檔名必須完全相同（kchart.js.bak 之類不算）。
 export const WEB_FILES = [
-  "minimal.html", "minimal.css", "minimal.js", "kchart.js", "chart-drawings.js", "chart-studies.js", "chart-studies.css",
+  "minimal.html", "minimal.css", "minimal.js", "kchart.js", "chart-drawings.js", "drawing-sync.js", "chart-studies.js", "chart-studies.css",
   "stock.html", "stock.css", "stock.js", "intraday.js",
   // claude-60 設計改版（11-09）新增的資產
   "bold.css", "home.css", "panel.css", "motion.js", "home-motion.js", "period-switch.js",
@@ -27,6 +27,14 @@ export const WEB_FILES = [
   "holders-weekly.js", "holders-card.js",
   // 預測帳本（2026-11-15，B 票第 4 片）：只有站主有預測內容時才會在首頁出現
   "forecast.js", "forecast.css",
+  // 個股頁事實區塊（2026-11-15 規格，A 票）
+  "stock-facts.js", "stock-facts.css",
+  // 自選股關注 B 票：個股頁「國外同類股」（只有站主的關注股才出現）
+  "watch-peers.js", "watch-peers.css",
+  // 自選股關注的判斷（2026-11-16，E 票）：只有站主有判斷時才會在自選股頁與個股頁出現
+  "watch-judgments.js", "watch-judgments.css",
+  // 自選股關注 F 票：加入主畫面（iPhone 收推播的前提）、推播的 service worker、自選股頁的到價推播設定
+  "manifest.webmanifest", "icon-180.png", "icon-192.png", "icon-512.png", "sw.js", "watch-push.js", "watch-push.css",
 ];
 export const RETIRED = ["analysis-data.js", "chips-data.js", "dashboard-data.js", "detail-data.js", "plain-data.js", "market-data-local.js"];
 

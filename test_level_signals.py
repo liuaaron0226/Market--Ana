@@ -219,6 +219,23 @@ class LevelSignalStorageTests(unittest.TestCase):
                 connection.execute("UPDATE level_daily SET payload='{}' WHERE data_date='2026-11-10' AND version=1")
 
 
+class HolidayCalendarTests(unittest.TestCase):
+    """2026-11-16：雲端快取被換成 2027 年的日曆後，2026 年的日子要靠專案帶的種子判斷，不能停。"""
+
+    def test_a_year_missing_from_the_cache_is_read_from_the_seed_without_network(self):
+        import level_signals
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "holiday-schedule.json"
+            cache.write_text(json.dumps([{"Name": "中華民國開國紀念日", "Date": "1160101", "Weekday": "五",
+                                          "Description": ""}], ensure_ascii=False), encoding="utf-8")
+            with patch.object(level_signals, "HOLIDAY_CACHE", cache):
+                holidays = level_signals.ensure_holiday_calendar("2026-11-17", allow_network=False)
+        self.assertIn("2026-12-25", holidays)
+        self.assertIn("2027-01-01", holidays)
+        self.assertTrue(trading_day_status("2026-11-17", holidays=holidays))
+        self.assertFalse(trading_day_status("2026-12-25", holidays=holidays))
+
+
 class LevelStateMergeTests(unittest.TestCase):
     def test_d1_newer_than_r2_replaces_local_state(self):
         with tempfile.TemporaryDirectory() as temp:

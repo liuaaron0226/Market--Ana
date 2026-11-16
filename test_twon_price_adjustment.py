@@ -152,6 +152,26 @@ class DefaultCapitalEventsTest(unittest.TestCase):
             self.assertEqual(by_code['0050'], [split])
             self.assertEqual(by_code['2230'][0]['cash_dividend'], 1.0)
 
+    def test_reference_events_keep_cash_dividends_and_the_supplement(self):
+        # 算事件日當天漲跌用的參考價：除息（還原價不用它）也要在裡面；補充資料的 ETF 分割同樣算。
+        import json
+        import tempfile
+        from pathlib import Path
+        from twon_analysis.price_adjustment import default_reference_events
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(default_reference_events(root), {})   # 沒有任何資料：空的，不出錯
+            cash = {'date': '2026-07-21', 'code': '0050', 'type': '除息', 'close_before': 99.2, 'reference': 98.6, 'value': 0.6}
+            (root / 'data/corporate-actions').mkdir(parents=True)
+            (root / 'data/corporate-actions/events.json').write_text(json.dumps([cash]), encoding='utf-8')
+            split = {'date': '2025-06-18', 'code': '0050', 'type': '分割', 'close_before': 188.65, 'reference': 47.16,
+                     'source': 'TWSE-TWTCAU'}
+            (root / 'seeds').mkdir()
+            (root / 'seeds/capital-supplement.json').write_text(json.dumps(
+                {'schema': 'capital-supplement/v1', 'events': [split], 'cash_dividends': {}}), encoding='utf-8')
+            self.assertEqual(default_reference_events(root), {'0050': [cash, split]})
+            self.assertEqual(default_capital_events(root), {'0050': [split]})   # 還原價那一份照舊不含除息
+
 
 if __name__ == '__main__':
     unittest.main()

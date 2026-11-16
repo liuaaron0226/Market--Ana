@@ -281,6 +281,17 @@ export function createLiveQuoteService({ fetchImpl = fetch, now = Date.now,
   };
 }
 
+// 雲端每分鐘盯價（watch-tick.js）用：查一檔的 Fugle 即時報價。失敗時丟出帶 status 的錯誤（429＝太頻繁）。
+export async function fetchFugleQuote(code, market, key, fetchImpl = fetch) {
+  const response = await fetchImpl(fugleUrl("quote", code).toString(), { headers: { accept: "application/json", "X-API-KEY": key } });
+  if (!response.ok) {
+    const error = new Error(`Fugle HTTP ${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
+  return parseFugleQuote(await response.json(), code, market);
+}
+
 export async function probeMis({ fetchImpl = fetch, now = Date.now } = {}) {
   const url = quoteUrl(PROBE_CODE, "tse");
   url.searchParams.set("_", String(now()));
