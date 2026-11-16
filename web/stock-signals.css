@@ -98,6 +98,18 @@
 .ss-zones .num { font: 500 13px var(--mono); font-variant-numeric: tabular-nums; }
 .ss-zones li.now { border-top-style: dashed; border-top-color: var(--line-strong); color: var(--dim); }
 
+/* ---------- 融資維持率（估）：100～300 的槽，上面一段金色的範圍，130 一條紅虛線（畫在光條上面，不會被蓋住） ---------- */
+.ss-margin-maintenance .sf-date { margin: -6px 0 8px; }
+.ss-rng { position: relative; height: 56px; }
+.ss-rng-groove { position: absolute; left: 0; right: 0; top: 8px; height: 22px; border-radius: 11px; background: var(--well); box-shadow: var(--well-shadow); }
+.ss-rng-band { position: absolute; top: 12px; height: 14px; border-radius: 7px; overflow: hidden; --b: var(--ss-gold-b);
+  transform: scaleX(0); transform-origin: center; transition: transform 1100ms var(--ease-depth); }
+.is-in .ss-rng-band { transform: none; }
+.ss-rng-call { position: absolute; top: 2px; height: 34px; width: 0; border-left: 2px dashed var(--up); transform: translateX(-1px); z-index: 1; }
+.ss-rng-tick { position: absolute; top: 38px; color: var(--faint); font: 10px var(--mono); transform: translateX(-50%); }
+.ss-rng-tick.hot { color: var(--up); }
+.ss-rng-tick:last-child { transform: translateX(-100%); }
+
 /* ---------- 液態玻璃 ---------- */
 @property --ex { syntax: "<percentage>"; inherits: false; initial-value: 30%; }
 .ss-glass {
@@ -122,7 +134,7 @@
 }
 /* 底下透出一點同色的光 */
 .ss-clip:has(> .ss-glass) { filter: drop-shadow(0 3px 5px color-mix(in srgb, var(--ss-ramp-b) 45%, transparent)); }
-.ss-vs-bar, .ss-lamp-groove .ss-glass { filter: drop-shadow(0 3px 5px color-mix(in srgb, var(--b) 50%, transparent)); }
+.ss-vs-bar, .ss-rng-band, .ss-lamp-groove .ss-glass { filter: drop-shadow(0 3px 5px color-mix(in srgb, var(--b) 50%, transparent)); }
 /* 高光慢慢漂：只在瀏覽器能平滑地動自訂屬性時（程式偵測到 CSS.registerProperty 才加 .ss-drift），不然維持靜止的高光 */
 .ss-drift .is-in .ss-glass { animation: ss-drift var(--dt, 8s) ease-in-out var(--dd, 0s) infinite alternate; }
 @keyframes ss-drift { from { --ex: var(--e1, 10%); } to { --ex: var(--e2, 80%); } }
@@ -135,6 +147,6 @@
   .ss { margin-top: 14px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .ss-board, .ss-odo i, .ss-clip, .ss-tip, .ss-vs-bar, .ss-lamp-groove .ss-glass, .ss-draw, .ss-fade { transition: none !important; }
+  .ss-board, .ss-odo i, .ss-clip, .ss-tip, .ss-vs-bar, .ss-lamp-groove .ss-glass, .ss-draw, .ss-fade, .ss-rng-band { transition: none !important; }
   .ss-glass { animation: none !important; }
 }

@@ -149,3 +149,34 @@ test("爆大量成交區：清單由高到低——現價上方的區、一列�
   assert.deepEqual(zones.chart.heavy, [1]);
   assert.equal(plain(read(technical({ heavy_zones: { close: 1, zones: [], chart: { closes: [], volumes: [], heavy: [] } } }), "technical")).some(board => board.kind === "heavy_zones"), false);
 });
+
+// ---------- 08：「融資券」的融資維持率（估） ----------
+const credit = margin => ({ blocks: ["margin_maintenance"], margin_maintenance: margin });
+
+test("融資維持率（估）在「融資券」：右上只寫範圍；100%～300% 的軸上一段範圍，130 是追繳線", () => {
+  const { read } = load();
+  const [board] = plain(read(credit({ low_pct: 156, high_pct: 208, data_date: "2026-11-09" }), "credit"));
+  assert.equal(board.name, "融資維持率（估）");
+  assert.equal(board.rangeText, "156%～208%");
+  assert.ok(Math.abs(board.from - 0.28) < 1e-9 && Math.abs(board.to - 0.54) < 1e-9, "(156-100)/200、(208-100)/200");
+  assert.equal(board.callAt, 0.15);
+  assert.deepEqual(board.ticks.map(tick => tick.value), [130, 200, 250, 300]);
+  assert.equal(board.ticks[0].hot, true);
+  assert.equal(board.dataDate, "2026-11-09");
+  assert.match(board.label, /融資維持率（估）156%～208%，追繳線 130%/);
+  assert.deepEqual(plain(read(credit({ low_pct: 156, high_pct: 208, data_date: "2026-11-09" }), "technical")), []);
+});
+
+test("融資維持率（估）：超出軸的那一端貼邊；很窄的範圍也看得到一小段；資料不齊就不出現", () => {
+  const { read } = load();
+  const [wide] = plain(read(credit({ low_pct: 136, high_pct: 391, data_date: "2026-11-09" }), "credit"));
+  assert.equal(wide.to, 1, "超過 300 貼右邊");
+  assert.equal(wide.rangeText, "136%～391%", "字照實寫");
+  const [low] = plain(read(credit({ low_pct: 80, high_pct: 120, data_date: "2026-11-09" }), "credit"));
+  assert.equal(low.from, 0, "低於 100 貼左邊");
+  const [narrow] = plain(read(credit({ low_pct: 158, high_pct: 163, data_date: "2026-11-09" }), "credit"));
+  assert.ok(narrow.to - narrow.from >= 0.03, "窄的放寬到看得到");
+  assert.ok(narrow.from <= (158 - 100) / 200 && narrow.to >= (163 - 100) / 200, "放寬時仍蓋住真正的範圍");
+  assert.deepEqual(plain(read(credit({ low_pct: null, high_pct: 208 }), "credit")), []);
+  assert.deepEqual(plain(read(credit({ low_pct: 210, high_pct: 150, data_date: "2026-11-09" }), "credit")), [], "下限比上限高：不畫");
+});

@@ -1323,6 +1323,25 @@ def stock(page: Page, base: str, tag: str, mobile: bool) -> None:
         page.locator("#stockFactsBlocks .sf-tab", has_text="重點").click()
     step(f"{tag}：技術的三張板", technical_boards)
 
+    def margin_board() -> None:
+        """五塊新功能 08：「融資券」原有的表後面一張融資維持率（估）（台積電 11-09：156%～208%）；130 的紅虛線在光條上面。"""
+        page.locator("#stockFactsBlocks .sf-tab", has_text="融資券").click()
+        board = page.locator("#stockFactsBlocks .ss[data-panel='credit'] .ss-margin-maintenance")
+        board.scroll_into_view_if_needed()
+        page.wait_for_function("document.querySelector('.ss-margin-maintenance')?.classList.contains('is-in')", timeout=6000)
+        page.wait_for_timeout(1300)
+        seen = page.evaluate("""() => { const board = document.querySelector('.ss-margin-maintenance');
+          const band = board.querySelector('.ss-rng-band').getBoundingClientRect(), call = board.querySelector('.ss-rng-call');
+          const box = call.getBoundingClientRect(), top = document.elementFromPoint(box.left + 1, band.top + band.height / 2);
+          return { head: board.querySelector('.ss-head').textContent, label: board.getAttribute('aria-label'),
+            ticks: [...board.querySelectorAll('.ss-rng-tick')].map(tick => tick.textContent),
+            callOnTop: top === call || call.contains(top), afterTable: board.closest('.ss').previousElementSibling?.tagName === 'TABLE' }; }""")
+        check(f"{tag}：「融資券」表的後面一張融資維持率（估），右上只寫範圍", seen["head"] == "融資維持率（估）156%～208%" and seen["afterTable"], seen)
+        check(f"{tag}：刻度有 130 與 300，給輔助工具讀的文字有追繳線", seen["ticks"][0] == "130" and seen["ticks"][-1] == "300" and "追繳線 130%" in (seen["label"] or ""), seen)
+        check(f"{tag}：130 的紅虛線在光條上面，沒有被蓋住", seen["callOnTop"], seen)
+        page.locator("#stockFactsBlocks .sf-tab", has_text="重點").click()
+    step(f"{tag}：融資維持率（估）", margin_board)
+
     def levels() -> None:
         open_stock_cat(page, "levelsPanel")
         ladder = page.locator("#ladder .lad b").all_inner_texts()

@@ -84,7 +84,25 @@
       label: `爆大量成交區 ${list.length} 區：${items.map(item => (item.now ? `現價 ${item.note}` : `${item.range}，${item.note}`)).join('；')}`,
     };
   }
-  const BUILD = { limit_up_momentum: momentum, versus_market: versus, ma_alignment: alignment, heavy_zones: zones };
+  // 融資維持率（估）：軸 100%～300%，超出的那一端貼邊；追繳線 130%；很窄的範圍放寬到看得到一小段（仍蓋住真正的範圍）
+  const AXIS = { low: 100, high: 300, call: 130, ticks: [130, 200, 250, 300], minSpan: 0.03 };
+  const onAxis = value => Math.min(1, Math.max(0, (value - AXIS.low) / (AXIS.high - AXIS.low)));
+  function margin(block) {
+    if (!block || !finite(block.low_pct) || !finite(block.high_pct) || block.low_pct > block.high_pct) return null;
+    let from = onAxis(block.low_pct), to = onAxis(block.high_pct);
+    if (to - from < AXIS.minSpan) {
+      const middle = Math.min(1 - AXIS.minSpan / 2, Math.max(AXIS.minSpan / 2, (from + to) / 2));
+      from = middle - AXIS.minSpan / 2; to = middle + AXIS.minSpan / 2;
+    }
+    const rangeText = `${Math.round(block.low_pct)}%～${Math.round(block.high_pct)}%`;
+    return {
+      kind: 'margin_maintenance', name: '融資維持率（估）', rangeText, from, to, callAt: onAxis(AXIS.call),
+      ticks: AXIS.ticks.map(value => ({ value, at: onAxis(value), hot: value === AXIS.call })),
+      dataDate: typeof block.data_date === 'string' ? block.data_date : '',
+      label: `融資維持率（估）${rangeText}，追繳線 ${AXIS.call}%`,
+    };
+  }
+  const BUILD = { limit_up_momentum: momentum, versus_market: versus, ma_alignment: alignment, heavy_zones: zones, margin_maintenance: margin };
 
   // 某個面板要出現的板（照 blocks 的順序）。資料缺、形狀不對、這一塊還沒有畫面的，都不出現。
   function read(signals, panel) {
@@ -275,7 +293,31 @@
     board.append(list);
     return board;
   }
-  const BOARD = { limit_up_momentum: momentumBoard, versus_market: versusBoard, ma_alignment: alignmentBoard, heavy_zones: zonesBoard };
+  function marginBoard(model, code, panel) {
+    const board = plainBoard(model, el('b', 'num', model.rangeText));
+    // 資料日：融資比行情晚一個交易日。「融資券」面板上面已經標了同一天就不重複標，不同天才標（寫法和面板一樣）
+    const shown = panel?.querySelector('.sf-date')?.textContent || '';
+    if (model.dataDate && !shown.includes(model.dataDate)) board.append(el('p', 'sf-date num', `資料日 ${model.dataDate}`));
+    const axis = el('div', 'ss-rng');
+    axis.setAttribute('aria-hidden', 'true');
+    const at = value => `calc((100% - 8px) * ${value.toFixed(4)} + 4px)`;
+    const groove = el('span', 'ss-rng-groove');
+    const band = el('span', 'ss-rng-band');
+    band.style.left = at(model.from);
+    band.style.right = `calc(100% - ${at(model.to)})`;
+    band.append(glass(code, model.kind, 'gold'));
+    const call = el('span', 'ss-rng-call');
+    call.style.left = at(model.callAt);
+    axis.append(groove, band, call);
+    for (const tick of model.ticks) {
+      const mark = el('span', `ss-rng-tick num${tick.hot ? ' hot' : ''}`, String(tick.value));
+      mark.style.left = at(tick.at);
+      axis.append(mark);
+    }
+    board.append(axis);
+    return board;
+  }
+  const BOARD = { limit_up_momentum: momentumBoard, versus_market: versusBoard, ma_alignment: alignmentBoard, heavy_zones: zonesBoard, margin_maintenance: marginBoard };
 
   // 數字由零跳到位（減少動態效果時直接是最後的值）
   function countUp(node, quiet) {
@@ -317,7 +359,7 @@
     if (!models.length) return;
     const host = el('div', `ss${typeof CSS !== 'undefined' && CSS.registerProperty ? ' ss-drift' : ''}`);
     host.dataset.panel = name;
-    const boards = models.map(model => BOARD[model.kind](model, code));
+    const boards = models.map(model => BOARD[model.kind](model, code, panel));
     host.append(...boards);
     panel.append(host);
     const fresh = models.map(model => !played.has(`${code}|${model.kind}`));
