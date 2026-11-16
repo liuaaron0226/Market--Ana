@@ -2,7 +2,6 @@
 (function () {
   'use strict';
   const $ = id => document.getElementById(id);
-  const css = (name, fallback) => getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
   const fmt = n => n === null || n === undefined ? '—' : Number(n).toLocaleString('en-US', { maximumFractionDigits: 2 });
   const SCHEMA = 'stock-analysis/v2';
   const TIER = { near: '近端（10% 內）', mid: '中距（10～20%）', far: '遠端（20% 以上）' };
@@ -404,10 +403,9 @@
       : intraday ? (lastLive?.candles?.[intradayKey] || [])
       : chartPeriod === 'weekly' ? weeklyCandles(daily.map(row => ({ ...row, date: row.t })))
       : chartPeriod === 'monthly' ? monthlyCandles(daily.map(row => ({ ...row, date: row.t }))) : daily;
+    // 支撐、壓力不再疊在 K 線上（本人 11-17：右側只放簡單的數字，價位看圖下方的價位階梯）；
+    // 只剩線沒有名稱會看不懂，所以線也一起拿掉。
     const overlays = [];
-    const lv = r.levels || {};
-    (lv.resistance || []).forEach((c, i) => overlays.push({ value: c.tick, label: `壓力${i ? '二' : '一'} ${fmt(c.tick)}`, short: '壓力', color: css('--gold', '#94681a'), pos: 'above', align: i ? 'left' : 'right' }));
-    (lv.support || []).forEach((c, i) => overlays.push({ value: c.tick, label: `支撐${i ? '二' : '一'} ${fmt(c.tick)}`, short: '支撐', color: css('--down', '#0f8058'), pos: 'below', align: i ? 'left' : 'right' }));
     // 自選股關注的觸發線與看錯線（watch-judgments.js；只有站主有判斷時才有）。
     if (window.WatchJudgments) overlays.push(...window.WatchJudgments.overlays(chartPeriod));
     const key = `${r.code}:${r.as_of}:${chartPeriod}`;
@@ -443,7 +441,7 @@
     if (intraday) $('stockChartContext').textContent = `${unit}K · ${candles.length} 根`;
     else $('stockChartContext').textContent = `${unit}K · 資料日 ${r.as_of}`;
     chart.canvas.setAttribute('aria-label', candles.length
-      ? `${r.name}${unit}K，${candles[0].label}至${candles[candles.length - 1].label}，含支撐與壓力參考線。`
+      ? `${r.name}${unit}K，${candles[0].label}至${candles[candles.length - 1].label}。`
       : `${r.name}${unit}K，尚無盤中資料。`);
   }
 
