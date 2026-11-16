@@ -281,6 +281,32 @@ class VersionActivationTests(unittest.TestCase):
             {"code": "1102", "scope": "price_adjustment", "error": "UnresolvedCapitalEvent",
              "message": "2026-09-02 除權息 未還原：缺官方參考價或現金股利"}])
 
+    def test_build_report_counts_which_signal_blocks_the_stocks_have(self) -> None:
+        # 五塊資料（規格使用者故事 81）：某一塊算不出來不擋發布，但建置報告要看得到今天有幾檔有哪幾塊。
+        from cloud.build_stock_pack import signals_report
+
+        def row(code: str, signals: object) -> dict:
+            item = analysis(code)
+            item["payload"]["signals"] = signals
+            return item
+
+        rows = [row("1101", {"blocks": ["versus_market", "ma_alignment", "heavy_zones"]}),
+                row("1102", {"blocks": ["ma_alignment"], "failed": ["heavy_zones"]}),   # 爆大量成交區算的時候出錯
+                row("1103", {"blocks": []}),
+                row("1104", None),       # 整塊算不出來（計算出錯時留空）
+                analysis("1105")]        # 舊資料：沒有這個鍵
+        # 位元組數是五塊資料壓成 JSON 的大小：{"blocks":["versus_market","ma_alignment","heavy_zones"]}＝57、
+        # {"blocks":["ma_alignment"],"failed":["heavy_zones"]}＝52、{"blocks":[]}＝13；沒有五塊資料的兩檔不計。
+        self.assertEqual(signals_report(rows), {
+            "analyses": 5, "without_signals": 2,
+            "blocks": {"versus_market": 1, "ma_alignment": 2, "heavy_zones": 1},
+            "failed": {"versus_market": 0, "ma_alignment": 0, "heavy_zones": 1},
+            "payload_bytes": 122, "largest_payload_bytes": 57})
+        nothing = {"versus_market": 0, "ma_alignment": 0, "heavy_zones": 0}
+        self.assertEqual(signals_report([]), {
+            "analyses": 0, "without_signals": 0, "blocks": nothing, "failed": nothing,
+            "payload_bytes": 0, "largest_payload_bytes": 0})
+
     def test_strategy_isolation_never_hides_core_data_defects(self) -> None:
         from cloud.build_stock_pack import _check_payload, _isolate_strategy
         payload = analysis()["payload"]
@@ -655,6 +681,14 @@ class SampleBuildV2Tests(unittest.TestCase):
         self.assertEqual(self.manifest["analysis_count"], 3)
         self.assertEqual(self.manifest["analysis_schema"], "stock-analysis/v2")
         self.assertNotIn("presets", self.manifest)
+
+    def test_build_report_says_which_signal_blocks_were_built(self) -> None:
+        # 台積電、環球晶、0050 都有夠長的日線與加權指數可比：三檔都有「和大盤比」與「均線排列」，沒有整塊空掉的。
+        report = self.manifest["signals"]
+        self.assertEqual((report["analyses"], report["without_signals"]), (3, 0))
+        self.assertEqual((report["blocks"]["versus_market"], report["blocks"]["ma_alignment"]), (3, 3))
+        self.assertEqual(report["failed"], {"versus_market": 0, "ma_alignment": 0, "heavy_zones": 0})
+        self.assertGreater(report["payload_bytes"], 0)
 
     def test_functions_pack_has_target_date_and_valid_new_fields_per_stock(self) -> None:
         pack = json.loads((self.out / "stock-pack-v2.json").read_text(encoding="utf-8"))

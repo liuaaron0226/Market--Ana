@@ -496,6 +496,26 @@ def _unresolved_capital_failures(code: str, payload: dict) -> list[dict]:
             for event in events]
 
 
+def signals_report(analyses: Sequence[dict]) -> dict:
+    """個股頁五塊資料：今天有幾檔有哪幾塊（blocks）、哪幾塊是算的時候出錯（failed）、整塊都沒有的有幾檔、佔多少資料量。
+    某一塊算不出來不擋發布，但要在建置報告看得到。"""
+    from twon_analysis.signals import BLOCK_NAMES
+
+    blocks, failed = dict.fromkeys(BLOCK_NAMES, 0), dict.fromkeys(BLOCK_NAMES, 0)
+    sizes = []
+    for row in analyses:
+        payload = row.get("payload")
+        signals = payload.get("signals") if isinstance(payload, dict) else None
+        if not isinstance(signals, dict):
+            continue
+        sizes.append(len(_compact_json(signals).encode("utf-8")))
+        for counts, names in ((blocks, signals.get("blocks")), (failed, signals.get("failed"))):
+            for name in names or ():
+                counts[name] = counts.get(name, 0) + 1   # 名單外的塊名也照記，不默默丟掉
+    return {"analyses": len(analyses), "without_signals": len(analyses) - len(sizes), "blocks": blocks, "failed": failed,
+            "payload_bytes": sum(sizes), "largest_payload_bytes": max(sizes, default=0)}
+
+
 def _build_rows(
     items: Sequence[ListedSecurity | OtcSecurity],
     data_date: str,
@@ -733,6 +753,7 @@ def build_version(
     announcement_rows = attach_news(securities, analyses, data_date=data_date, skipped=announcement_skipped)
     manifest["announcement_count"] = len(announcement_rows)
     manifest["announcement_skipped"] = announcement_skipped
+    manifest["signals"] = signals_report(analyses)
     _validate_seed(manifest, securities, analyses)
 
     database = partial / "staging.sqlite"
