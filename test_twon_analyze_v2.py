@@ -1168,7 +1168,7 @@ def momentum(points, band, rate):
 
 
 class StockSignalsLimitUpMomentumTests(_SignalsFixture, unittest.TestCase):
-    """五塊資料的「漲停動能」（本人 2026-11-16 共識，規格 .scratch/stock-signals/spec.md）：上市普通股每天收盤後
+    """五塊資料的「漲停動能」（本人 2026-11-16 共識，規格 .scratch/stock-signals/spec.md）：上市、上櫃普通股每天收盤後
     依八個條件查固定的換算表，給 0～99 分、級距（1～6）、這個級距的歷史比例、全部平均與算法版本。"""
 
     def flat_index(self, count=70):
@@ -1302,15 +1302,26 @@ class StockSignalsLimitUpMomentumTests(_SignalsFixture, unittest.TestCase):
         for back, expected in ((20, momentum(87, 4, 3.1)), (1, momentum(87, 4, 3.1)), (21, momentum(14, 2, 0.8))):
             self.assertEqual(self.analyze(rows(back), self.flat_index())['signals']['limit_up_momentum'], expected, back)
 
-    def test_only_listed_common_stocks_with_sixty_one_bars_get_it(self):
-        # 上櫃（等驗證報告）、ETF、特別股、日線不足 61 根：整塊沒有，也不算「算不出來」。61 根就有。
-        cases = (({'otc': True}, 70, None), ({'kind': 'etf', 'code': '0050'}, 70, None), ({'kind': 'preferred'}, 70, None),
-                 ({}, 60, None), ({}, 61, momentum(14, 2, 0.8)))
+    def test_only_common_stocks_with_sixty_one_bars_get_it(self):
+        # 上市、上櫃普通股都有（上櫃：本人 2026-11-16 看過 09 票驗證報告，定「開，沿用上市的比例」）。
+        # ETF、特別股、日線不足 61 根：整塊沒有，也不算「算不出來」。61 根就有。
+        cases = (({}, 70, momentum(14, 2, 0.8)), ({'otc': True}, 70, momentum(14, 2, 0.8)),
+                 ({'kind': 'etf', 'code': '0050'}, 70, None), ({'kind': 'etf', 'code': '006201', 'otc': True}, 70, None),
+                 ({'kind': 'preferred'}, 70, None), ({}, 60, None), ({'otc': True}, 60, None), ({}, 61, momentum(14, 2, 0.8)))
         for options, count, expected in cases:
             signals = self.analyze([FLAT] * count, self.flat_index(count), **options)['signals']
             self.assertEqual(signals['limit_up_momentum'], expected, (options, count))
             self.assertEqual('limit_up_momentum' in signals['blocks'], expected is not None, (options, count))
             self.assertEqual(signals['failed'], [], (options, count))
+
+    def test_otc_stocks_use_the_same_algorithm_and_the_listed_rates(self):
+        # 上櫃沒有另外一套：同一個算法版本、同一張換算表、同樣和加權指數比，歷史比例與全部平均也是上市那一組
+        # （本人 2026-11-16 選「沿用上市的比例」；上櫃自己的比例只在驗證報告裡）。今天漲停 → 97 分、第 5 級、5.1%、平均 1.7%。
+        today = (110.0, '+', 10.0)
+        listed = self.analyze(self.after_a_fall(today), self.flat_index())['signals']['limit_up_momentum']
+        otc = self.analyze(self.after_a_fall(today), self.flat_index(), otc=True)['signals']['limit_up_momentum']
+        self.assertEqual(otc, momentum(97, 5, 5.1))
+        self.assertEqual(otc, listed)
 
     def test_without_the_index_on_the_data_date_or_twenty_days_back_there_is_no_block(self):
         # 加權指數沒有對到資料日，或沒有 20 個交易日前那一天（條件 ⑥ 沒得比）：整塊不給，不拿別的日子代替；不算「算不出來」。

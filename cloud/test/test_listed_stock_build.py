@@ -720,8 +720,8 @@ class SampleBuildV2Tests(unittest.TestCase):
         report = self.manifest["signals"]
         self.assertEqual((report["analyses"], report["without_signals"]), (3, 0))
         self.assertEqual((report["blocks"]["versus_market"], report["blocks"]["ma_alignment"]), (3, 3))
-        # 漲停動能只給上市普通股：三檔裡只有台積電有（環球晶是上櫃、0050 是 ETF）。
-        self.assertEqual(report["blocks"]["limit_up_momentum"], 1)
+        # 漲停動能給上市、上櫃普通股（上櫃：本人 2026-11-16 看過 09 票驗證報告後開）：台積電、環球晶有，0050 是 ETF 沒有。
+        self.assertEqual(report["blocks"]["limit_up_momentum"], 2)
         self.assertEqual(report["failed"], {"limit_up_momentum": 0, "versus_market": 0, "ma_alignment": 0,
                                             "margin_maintenance": 0, "heavy_zones": 0})
         self.assertIn(report["margin_check"]["status"],
