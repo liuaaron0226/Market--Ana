@@ -224,6 +224,7 @@ jobs:
       - name: 國外同類股行情（只在發布成功時）
         # 自選股關注 B 票：站主確認過的國外同類股逐檔取日線，寫進雲端資料庫的 overseas_quotes（只給站主看）。
         # 每個交易日只在發布成功那一班跑一次（EODHD 每天 20 次要和水位、事前預測共用）。
+        # EODHD 走共用快取（R2 eodhd-cache/，G 票延伸 2026-11-17）：大盤預測已經抓過的指數不再打。
         # 失敗不擋發布：每一檔各自標「過期」，網站照常。金鑰沒設定時那個來源整批標「沒有金鑰」。
         if: success() && steps.day.outputs.dry_run == ''
         continue-on-error: true
@@ -233,7 +234,7 @@ jobs:
         run: |
           sync=$(python -c "import json,sys; print(json.load(open(sys.argv[1], encoding='utf-8'))['sync_state'])" "${{ runner.temp }}/daily-result.json")
           if [ "$sync" = "True" ]; then
-            python overseas_peers.py daily
+            python overseas_peers.py daily --shared-cache
           else
             echo "本次沒有新發布，不抓國外同類股"
           fi

@@ -1,6 +1,5 @@
 # 自選股關注 G 票：大盤預測晚間版跑完之後寫晚間版判斷並對帳；大盤預測晨間版跑完之後寫晨間版判斷。
-# 每一份鎖定、存回 R2、發布到網站資料庫；變成「可以留意」的推播由 cron-trigger 讀資料庫送出（推播金鑰只在
-# Cloudflare）。規格：.scratch/watchlist-watch/spec.md；票：.scratch/watchlist-watch/issues/G-daily-schedule.md。
+# 每一份鎖定、存回 R2、發布到網站資料庫；變成「可以留意」的推播寫完就由這裡送（推播金鑰也放 GitHub，本人 11-17）。規格：.scratch/watchlist-watch/spec.md；票：.scratch/watchlist-watch/issues/G-daily-schedule.md。
 # 邊界：
 # - 自己的鎖：晚間 watch-ledger、晨間 watch-ledger-morning，不加入 market-state-write，也不和大盤預測共用，
 #   不會把其他排程排隊中的執行擠掉。只讀工作集（state_sync restore），不上傳工作集。帳本原件存在 R2 的
@@ -265,6 +264,19 @@ jobs:
           if [ ! -s "$RUNNER_TEMP/watch.sql" ]; then echo "::notice::沒有要發布的紀錄"; exit 0; fi
           npx --yes wrangler@4 d1 execute market-ana-accounts --remote --file "$RUNNER_TEMP/watch.sql"
 
+      # 「變成可以留意」的推播（本人 2026-11-17 定案：推播金鑰也放 GitHub）：寫進資料庫之後馬上送，同一檔同一個
+      # 轉變日只一次（0021）。GitHub 還沒放金鑰時不送也不記，補上之後下一次排程照送；送不出去不擋後面的步驟。
+      - name: 送「可以留意」推播
+        if: success() && steps.mode.outputs.dry_run == 'false'
+        continue-on-error: true
+        env:
+          OWNER_EMAIL: ${{ vars.OWNER_EMAIL }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+        run: node cloud/watch-ready-notices.mjs
+
       # 第 16 片：站主打開關注之後的下一次排程，替還沒有名單的關注股請 Gemini 提名 3～5 檔國外同類股（只給公司名稱、
       # 代號與產業）；代號要通過「來源拿得到行情」的檢查才列出。排在判斷發布之後，不拖到判斷的期限。
       - name: 提名國外同類股（站主確認後才使用）
@@ -279,8 +291,11 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
           EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: market-ana-state
         run: |
-          python watch_run.py nominate --ledger "$LEDGER" --agy-bin "$RUNNER_TEMP/agy/antigravity" --model gemini-3.8-flash             --log-output "$RUNNER_TEMP/watch-run/nominate.json" --sql-output "$RUNNER_TEMP/nominate.sql"
+          python watch_run.py nominate --ledger "$LEDGER" --agy-bin "$RUNNER_TEMP/agy/antigravity" --model gemini-3.8-flash             --log-output "$RUNNER_TEMP/watch-run/nominate.json" --sql-output "$RUNNER_TEMP/nominate.sql" --shared-cache
 
       - name: 提名存回 R2（只新增）
         if: always() && steps.nominate.outcome != 'skipped' && steps.restore.outcome == 'success'

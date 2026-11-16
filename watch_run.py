@@ -716,6 +716,8 @@ def main(argv: list[str] | None = None) -> int:
     nominate.add_argument("--dry-run", action="store_true", help="只在暫存副本上寫、不輸出資料庫指令檔")
     nominate.add_argument("--sql-output", type=Path)
     nominate.add_argument("--log-output", type=Path)
+    nominate.add_argument("--shared-cache", action="store_true",
+                          help="韓股與指數的檢查走 R2 的 EODHD 共用快取（eodhd-cache/），和大盤預測、每日同類股同一份")
     args = parser.parse_args(argv)
 
     if args.command == "nominate":
@@ -730,6 +732,10 @@ def main(argv: list[str] | None = None) -> int:
                                                                        ("eodhd", "EODHD_API_KEY"))}
         sources = {"massive": op.MassiveSource(keys["massive"]) if keys["massive"] else None,
                    "eodhd": op.EodhdSource(keys["eodhd"]) if keys["eodhd"] else None}
+        from eodhd_cache import SharedEodhd
+        shared = SharedEodhd.from_env(keys["eodhd"]) if args.shared_cache else None
+        if shared is not None:
+            sources["eodhd"] = op.CachedEodhdSource(shared)
         today = datetime.now(TAIPEI).date().isoformat()
         result = _in_ledger(args.ledger, args.dry_run, lambda target: nominate_peers(
             target, stocks, owner_email=owner.lower(), model_bin=args.agy_bin, model=args.model,

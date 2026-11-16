@@ -1,6 +1,6 @@
 // 自選股關注 G 票第 14 片：早晚的判斷把某一檔變成「可以留意」時推播一次（規格〈推播〉：同一個轉變日一次）。
-// 判斷由 GitHub 的排程（watch-ledger.yml）寫進資料庫；推播金鑰只放在 Cloudflare，所以由 cron-trigger 每次被觸發時
-// 呼叫這裡，把還沒通知過的轉變日送出去。只看帳本最新的那一天：舊的轉變日（功能剛打開、整晚沒送出）不補發。
+// 判斷由 GitHub 的排程（watch-ledger.yml）寫進資料庫，寫完同一個排程就呼叫這裡（cloud/watch-ready-notices.mjs，
+// 本人 11-17 定案推播金鑰也放 GitHub），把還沒通知過的轉變日送出去。只看帳本最新的那一天：舊的轉變日不補發。
 // 先記再送：推播服務當下失敗的那一則不重送（和觸價同一個取捨）；沒有金鑰或沒有裝置時不記，之後補送。
 import { releasePolicy } from "./release-policy.js";
 import { pushConfigured, sendOne } from "./web-push.js";
@@ -15,11 +15,8 @@ export async function runReadyNotices(env, { now = Date.now, pushFetch = fetch }
   if (!email || !env.DB) return { skipped: "unconfigured" };
   const db = env.DB;
   const nowMs = now();
-  // 用掉幾個對外連線（資料庫查詢與推播都算）：cron-trigger 每分鐘那一段的盯價用剩下的額度。
-  let subrequests = 1;
   const latest = await db.prepare("SELECT MAX(base_date) AS base_date FROM watch_judgments").first();
-  if (!latest?.base_date) return { notified: 0, subrequests };
-  subrequests += 1;
+  if (!latest?.base_date) return { notified: 0 };
   const { results } = await db.prepare(
     "SELECT j.judgment_id, j.code, j.edition, j.record_json, w.name FROM watch_judgments j " +
     "JOIN user_watchlist w ON w.code = j.code AND w.email = ? AND w.watching = 1 " +
@@ -27,12 +24,11 @@ export async function runReadyNotices(env, { now = Date.now, pushFetch = fetch }
     "WHERE j.base_date = ? AND j.kind = 'judgment' AND j.status = ? AND n.code IS NULL ORDER BY j.code, j.edition",
   ).bind(email, latest.base_date, READY).all();
   const ready = results.map((row) => ({ ...row, record: parse(row.record_json) })).filter((row) => row.record?.transition === true);
-  if (!ready.length) return { notified: 0, subrequests };
-  subrequests += 1;
+  if (!ready.length) return { notified: 0 };
   const { results: devices } = await db.prepare("SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE email = ? ORDER BY created_at")
     .bind(email).all();
   // 推播金鑰還沒設定、或還沒有任何一台裝置：先不記，等設定好之後的下一次觸發再送（同一個轉變日還是最新的那天時）。
-  if (!pushConfigured(env) || !devices.length) return { notified: 0, waiting: "no_push", subrequests };
+  if (!pushConfigured(env) || !devices.length) return { notified: 0, waiting: "no_push" };
   const nowIso = new Date(nowMs).toISOString();
   const vapidCache = new Map();
   let notified = 0;
@@ -43,7 +39,6 @@ export async function runReadyNotices(env, { now = Date.now, pushFetch = fetch }
       "INSERT INTO watch_ready_notices (code, base_date, judgment_id, edition, trigger_value, noticed_at, devices) VALUES (?, ?, ?, ?, ?, ?, ?) " +
       "ON CONFLICT (code, base_date) DO NOTHING",
     ).bind(row.code, latest.base_date, row.judgment_id, row.edition, Number.isFinite(value) ? value : null, nowIso, devices.length).run();
-    subrequests += 1;
     if (!claimed.meta.changes) continue;
     notified += 1;
     const payload = {
@@ -52,9 +47,8 @@ export async function runReadyNotices(env, { now = Date.now, pushFetch = fetch }
       url: `/stock.html?code=${encodeURIComponent(row.code)}`, tag: `watch-ready-${row.code}`,
     };
     for (const device of devices) {
-      subrequests += 2;   // 送出＋記下結果
       await sendOne(db, device, payload, env, { fetchImpl: pushFetch, now: () => nowMs, vapidCache });
     }
   }
-  return { notified, base_date: latest.base_date, subrequests };
+  return { notified, base_date: latest.base_date };
 }
