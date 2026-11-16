@@ -280,19 +280,23 @@ def write_status(log_dir: Path, record: dict) -> dict:
     checks = previous.get("checks")
     if outcome == "success":
         built = next((step.get("output") or {} for step in record.get("steps") or [] if step.get("name") == "build_seed"), {})
-        checks = _site_checks(built.get("margin_check"))
+        checks = _site_checks(built)
     if checks:
         status["checks"] = checks
     _write_record(path, status)
     return status
 
 
-def _site_checks(margin_check: dict | None) -> dict | None:
-    """站台狀態裡的每日對帳：融資維持率（估）估計的全市場融資金額和官方差多少、當天全部不給的原因。只留看得懂的幾項。"""
-    if not isinstance(margin_check, dict):
-        return None
-    return {"margin_maintenance": {key: margin_check.get(key) for key in
-                                   ("status", "data_date", "gap_pct", "threshold_pct", "reason")}}
+# 站台狀態裡每日對帳的名稱 ← build_seed 結果裡的那一份：上市、上櫃（10 票）的融資維持率（估）各一項。
+SITE_CHECKS = (("margin_maintenance", "margin_check"), ("otc_margin_maintenance", "otc_margin_check"))
+
+
+def _site_checks(built: dict) -> dict | None:
+    """站台狀態裡的每日對帳（built 是 build_seed 的結果）：融資維持率（估）估計的全市場融資金額和官方差多少、
+    當天全部不給的原因，上市與上櫃各一項。只留看得懂的幾項；建置沒有做的那一項不放。"""
+    checks = {name: {key: check.get(key) for key in ("status", "data_date", "gap_pct", "threshold_pct", "reason")}
+              for name, field in SITE_CHECKS if isinstance(check := built.get(field), dict)}
+    return checks or None
 
 
 # ---- 真實步驟（本機與 GitHub Actions 共用）；本切片只接 dry-run 能跑的部分 ----
@@ -736,10 +740,11 @@ def _seed_problems(manifest: dict) -> dict:
     return problems
 
 
-def _margin_check(manifest: dict) -> dict | None:
-    """建置清單裡融資維持率（估）的每日對帳結果（估計的全市場融資金額 對 官方）；舊的清單沒有就是 None。"""
-    check = (manifest.get("signals") or {}).get("margin_check")
-    return check if isinstance(check, dict) else None
+def _margin_checks(manifest: dict) -> dict:
+    """建置清單裡融資維持率（估）的每日對帳結果（估計的全市場融資金額 對 官方）：上市 margin_check、上櫃
+    otc_margin_check；舊的清單沒有就是 None。"""
+    signals = manifest.get("signals") or {}
+    return {field: signals.get(field) if isinstance(signals.get(field), dict) else None for _, field in SITE_CHECKS}
 
 
 def _seed_dir(ctx: RunContext) -> Path:
@@ -807,7 +812,7 @@ def _write_status_for_build(ctx: RunContext) -> dict:
     if previous.get("run", {}).get("status") == "failed" and previous["run"].get("data_date") != ctx.data_date:
         status["previous_failure"] = {k: previous["run"].get(k) for k in ("data_date", "failed_step", "reason")}
     # 融資維持率（估）的每日對帳：站台狀態看得到當天的差距與全部不給的原因（不擋發布）。
-    checks = _site_checks((ctx.outputs.get("build_seed") or {}).get("margin_check"))
+    checks = _site_checks(ctx.outputs.get("build_seed") or {})
     if checks:
         status["checks"] = checks
     _write_record(CLOUD / ".data-status.json", status)
@@ -980,7 +985,7 @@ def real_steps() -> list[Step]:
         if (out / "manifest.json").exists():
             manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
             return {"seed_dir": str(out), "version": manifest.get("version"), "reused": True,
-                    "problems": _seed_problems(manifest), "margin_check": _margin_check(manifest)}
+                    "problems": _seed_problems(manifest), **_margin_checks(manifest)}
         universe = ctx.work_dir / "liquid-universe" / f"{ctx.data_date}.json"
         command = [sys.executable, str(CLOUD / "build_stock_pack.py"), "--out", str(out), "--universe", str(universe)]
         if ctx.outputs.get("_seed_version"):  # 同日重新發布：資料日與來源相同，版本名要另外給才不會撞到原版
@@ -988,7 +993,7 @@ def real_steps() -> list[Step]:
         result = _sh(command)
         manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8")) if (out / "manifest.json").exists() else {}
         return {**result, "seed_dir": str(out), "version": manifest.get("version"), "problems": _seed_problems(manifest),
-                "margin_check": _margin_check(manifest)}
+                **_margin_checks(manifest)}
 
     def build_dist(ctx: RunContext) -> dict:
         report: dict = {}

@@ -340,6 +340,34 @@ class VersionActivationTests(unittest.TestCase):
             self.assertEqual((broken["status"], broken["reason"]), ("error", "JSONDecodeError"))
             self.assertNotIn(tmp, json.dumps(broken, ensure_ascii=False))
 
+    def test_build_report_carries_the_otc_margin_check_separately(self) -> None:
+        # 上櫃融資維持率（估）（10 票）另外對櫃買公布的上櫃全市場融資金。起點 2025-11-03 當天就是資料日：
+        # 從起點累積不滿一年，上櫃全部不給，報告寫明要到哪一天才滿一年；上市那一份不受影響（這裡沒有上市原件 → 沒有起點）。
+        import tempfile
+        from unittest import mock
+
+        from cloud.build_stock_pack import margin_check_report
+        from twon_analysis import margin_maintenance
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp) / "data/margin-history"
+            fields = ["代號", "名稱", "前資餘額(張)", "資買", "資賣", "現償", "資餘額"]
+            official = {"stat": "ok", "date": "20251103", "tables": [{
+                "fields": fields, "data": [["6488", "環球晶", "100", "0", "0", "0", "100"]],
+                "summary": [["", "合計(張)", "100", "0", "0", "0", "100"], ["", "融資金(仟元)", "1", "0", "0", "0", "22,350"]]}]}
+            (store / "otc-raw").mkdir(parents=True)
+            (store / "otc-raw/otc-margin-20251103.json").write_text(json.dumps({"data": official}, ensure_ascii=False),
+                                                                    encoding="utf-8")
+            (store / "otc-prices").mkdir()
+            (store / "otc-prices/otc-prices-20251103.json").write_text('{"date":"20251103","prices":{"6488":[400.0,1000,400000]}}',
+                                                                       encoding="utf-8")
+            with mock.patch.object(margin_maintenance, "ROOT", Path(tmp)):
+                self.assertEqual(margin_check_report("2025-11-03", "上櫃"), {
+                    "status": "too_short", "data_date": "2025-11-03", "gap_pct": None, "threshold_pct": 8.0,
+                    "estimated": None, "official": None, "stocks": 0,
+                    "reason": "上櫃融資原件從 2025-11-03 起累積到 2025-11-03，要到 2026-11-03 才滿一年"})
+                self.assertEqual(margin_check_report("2025-11-03")["status"], "no_start")
+
     def test_strategy_isolation_never_hides_core_data_defects(self) -> None:
         from cloud.build_stock_pack import _check_payload, _isolate_strategy
         payload = analysis()["payload"]

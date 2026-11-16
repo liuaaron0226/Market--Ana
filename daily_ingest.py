@@ -870,16 +870,51 @@ def otc_credit_day(root: Path, day: str, *, get: Callable | None = None, sleep: 
     """最近 backfill_days 個交易日裡，缺哪天的融資融券或借券原件就補哪天（同一網域請求之間固定等 5 秒）。
 
     官方還沒公布（stat 不是 ok 或沒有資料）不寫入，記進 not_published；被拒絕、連不上、格式改了或資料日不符
-    就停下（不寫入那一份），已存的保留。原件和上市明細同一個外包格式：取得時間、來源網址、雜湊、官方原文。"""
+    就停下（不寫入那一份），已存的保留。原件和上市明細同一個外包格式：取得時間、來源網址、雜湊、官方原文。
+    上櫃融資原件另外在長期保存區（data/margin-history/otc-raw）留一份、上櫃行情摘一份（10 票，融資維持率（估）
+    要連續的每日原件）；結果多一項 margin_history，停下時也照樣跟上已存的。"""
+    result = _fetch_otc_credit(root, _otc_trading_days(root, day, backfill_days), OTC_CREDIT_SOURCES, get, sleep)
+    return {**result, "margin_history": _keep_otc_margin_history(root)}
+
+
+def otc_margin_backfill(root: Path, since: str, until: str, *, get: Callable | None = None,
+                        sleep: Callable = time.sleep) -> dict:
+    """上櫃融資維持率（估）的回補（10 票；要本人同意才跑）：since～until 之間上櫃行情庫的每個交易日，
+    缺的上櫃融資原件（只有融資融券那一份，不抓借券）逐日補回 data/otc-credit/margin，再跟進長期保存區。
+    和每日抓取同一個網址、同一種存法與停下規則；請求之間等 5 秒，一年約 250 個請求、約 21 分鐘。"""
+    days = [date_text for date_text in _otc_trading_days(root, until, 100_000) if date_text >= since]
+    result = _fetch_otc_credit(root, days, {"margin": OTC_CREDIT_SOURCES["margin"]}, get, sleep)
+    return {**result, "margin_history": _keep_otc_margin_history(root)}
+
+
+def _keep_otc_margin_history(root: Path) -> dict:
+    """上櫃融資原件與上櫃行情摘要跟進長期保存區（缺的先從種子放回）；出錯只記在這一項，不影響抓到的原件。"""
+    import margin_history
+    try:
+        kept = _restore_then_keep_up(root, "otc-raw", margin_history.keep_up_otc)
+        missing = margin_history.coverage(root, margin_history.otc_trading_days(root), "otc-raw")["missing"]
+        history = {"status": "ok", **kept, "missing": missing}
+    except Exception as error:  # noqa: BLE001 — 長期保存區失敗只記在自己這一項
+        return {"status": "error", "reason": f"{type(error).__name__}: {error}"}
+    try:
+        history["prices"] = {"status": "ok", **_restore_then_keep_up(root, "otc-prices", margin_history.keep_up_otc_prices)}
+    except Exception as error:  # noqa: BLE001
+        history["prices"] = {"status": "error", "reason": f"{type(error).__name__}: {error}"}
+    return history
+
+
+def _fetch_otc_credit(root: Path, days: list[str], sources: dict[str, str], get: Callable | None,
+                      sleep: Callable) -> dict:
+    """days（YYYY-MM-DD）的每一天、sources 的每一種，缺的就抓（規則見 otc_credit_day）。"""
     import otc_market_data as omd
 
     get = get or _session_getter(omd.http_get)
     base = root / "data/otc-credit"
     saved = requests_made = 0
     not_published: list[str] = []
-    for date_text in _otc_trading_days(root, day, backfill_days):
+    for date_text in days:
         compact = _compact(date_text)
-        for kind, url in OTC_CREDIT_SOURCES.items():
+        for kind, url in sources.items():
             target = base / kind / f"{compact}.json"
             if target.exists():
                 continue
@@ -1062,7 +1097,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="每日增量抓取並附加入庫（只抓指定交易日缺的原件）")
     parser.add_argument("--date", required=True, help="資料日 YYYY-MM-DD")
     parser.add_argument("--no-fundamentals", action="store_true")
+    parser.add_argument("--otc-margin-backfill", metavar="SINCE",
+                        help="只回補上櫃融資原件：SINCE（YYYY-MM-DD）到 --date 之間缺的交易日（10 票，要本人同意才跑）")
     args = parser.parse_args(argv)
+    if args.otc_margin_backfill:
+        report = otc_margin_backfill(ROOT, args.otc_margin_backfill, args.date)
+        print(json.dumps(report, ensure_ascii=False, indent=1))
+        return 0 if report["status"] == "ok" else 2
     report = fetch_day(args.date, include_fundamentals=not args.no_fundamentals)
     print(json.dumps(report, ensure_ascii=False, indent=1))
     return 0 if report["status"] == "ok" else 2
