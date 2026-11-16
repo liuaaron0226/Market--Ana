@@ -238,25 +238,24 @@
   .pf-add-panel, .pf-add svg, .pf-add-panel:not(.is-open) .pf-add-clip, .swipe-face, .swipe-acts { transition: none; }
 }
 
-/* ---------- 材質：液態玻璃＋金屬（本人 2026-11-16 看過三個樣品選了第三個：整頁玻璃） ----------
-   材質沿用個股頁那條線本人定案的做法：液態玻璃＝半透明的有色玻璃、邊緣一圈亮、裡面一顆慢慢漂的高光、底下透出一點同色的光；
-   金屬＝一塊柔和的窗光、下半一點環境的反射、明暗交界是柔的，沒有紋路。每一條的高光各自不同、不同步（liquid-spots.js 算，portfolio.js 設到每一條上）。
-   用在這一頁：損益條在一支玻璃管裡，成本那一段是金屬、賺的（還差的）那一段是紅（綠）的液態玻璃；選中的篩選鍵與「＋」是金屬鍵；
-   總市值是金屬字；每一列是一片半透明的玻璃，後面有很淡的環境光（金色，右邊帶一點紅）。
-   漸層、光暈與會漂的高光是這一頁才有的效果；紅綠用在這兩段液態玻璃上，是本人對這一頁的指定。
-   玻璃的陰影是這一頁自己的三組（下面的 --glass-*），用網站現成的陰影色、邊色組出來，不另外加重。
-   本人看過做進去的樣子說「太光滑了」，在三個質感裡選了水紋玻璃：每一列、玻璃管與紅綠那一段裡有很淡、不規則的水紋（--ripple，
-   一張橫向拉長的雜訊圖；不是拉絲、不是一格一格）。金屬照舊。同時說「比較喜歡長方形條」：損益條是方角的，不是圓頭的管子。 */
+/* ---------- 材質：金屬＋液態玻璃（本人 2026-11-16，來回調了幾輪，現在的樣子） ----------
+   材質沿用個股頁那條線本人定案的做法：金屬＝一塊柔和的窗光、下半一點環境的反射、明暗交界是柔的，沒有紋路；
+   液態玻璃＝半透明的有色玻璃、邊緣一圈亮、裡面一顆慢慢漂的高光、底下透出一點同色的光。
+   每一條的高光各自不同、不同步（liquid-spots.js 算，portfolio.js 設到每一條上）。
+   用在這一頁：
+   - 每一列是一塊金屬板，和選中的篩選鍵、「＋」同一種金屬；總市值是金屬字。
+   - 損益條：成本那一段是金屬、賺的（還差的）那一段是紅（綠）的液態玻璃，裡面有很淡的水紋（--ripple）。方角的長方形。
+     底下只有一條很淡的凹痕標出整條的長度，沒有框。
+   - 頁面後面有很淡的環境光（金色，右邊帶一點紅）。
+   漸層、光暈與會漂的高光是這一頁才有的效果；紅綠用在這兩段液態玻璃上，是本人對這一頁的指定。陰影用網站現成的（鍵、槽）。
+   走過的路（本人的原話在 .scratch/3d-redesign/issues/O-portfolio-material.md）：每一列先做成半透明的玻璃 →「太光滑了」→ 加水紋 →
+   「有點髒髒的感覺，沒有質感。可以跟按鍵與總市值的金屬感一樣看看」→ 改成金屬板。損益條先是圓頭的玻璃管 →「比較喜歡長方形條」→
+   「框的設計我喜歡在簡單一點框不要太明顯」→ 拿掉框。 */
 @property --ex { syntax: "<percentage>"; inherits: false; initial-value: 30%; }
 @keyframes pf-drift { from { --ex: var(--e1, 10%); } to { --ex: var(--e2, 80%); } }
 body.pf {
-  /* 水紋：一張灰階的雜訊圖（大片、橫向拉長、不規則的起伏），用柔光混上去——亮的地方亮一點、暗的地方暗一點，深淺兩種背景都看得到 */
+  /* 水紋：一張灰階的雜訊圖（大片、橫向拉長、不規則的起伏），用柔光混上去。只用在紅綠那一段液態玻璃裡 */
   --ripple: url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20width%3D%27420%27%20height%3D%27420%27%3E%3Cfilter%20id%3D%27n%27%20x%3D%270%27%20y%3D%270%27%20width%3D%27100%25%27%20height%3D%27100%25%27%3E%3CfeTurbulence%20type%3D%27fractalNoise%27%20baseFrequency%3D%27.011%20.034%27%20numOctaves%3D%272%27%20seed%3D%277%27%20stitchTiles%3D%27stitch%27/%3E%3CfeColorMatrix%20values%3D%27.33%20.33%20.33%200%200%20.33%20.33%20.33%200%200%20.33%20.33%20.33%200%200%200%200%200%200%201%27/%3E%3CfeComponentTransfer%3E%3CfeFuncR%20type%3D%27linear%27%20slope%3D%271.3%27%20intercept%3D%27-0.150%27/%3E%3CfeFuncG%20type%3D%27linear%27%20slope%3D%271.3%27%20intercept%3D%27-0.150%27/%3E%3CfeFuncB%20type%3D%27linear%27%20slope%3D%271.3%27%20intercept%3D%27-0.150%27/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect%20width%3D%27100%25%27%20height%3D%27100%25%27%20filter%3D%27url%28%23n%29%27/%3E%3C/svg%3E");
-  --glass-edge: inset 0 0 0 1px color-mix(in srgb, var(--ink) 10%, transparent);
-  /* 浮起的玻璃（賺）：上緣亮邊、有厚度的邊；凹下的玻璃（賠）：網站的槽；薄玻璃（打平、沒有價格、只在自選）：只有亮邊 */
-  --glass-rise: inset 0 1px 0 rgb(255 255 255 / 26%), var(--glass-edge), 0 var(--key-thick) 0 var(--edge), 0 6px 16px rgb(var(--shade) / calc(.10 * var(--shade-k)));
-  --glass-sink: var(--well-shadow), var(--glass-edge);
-  --glass-thin: inset 0 1px 0 rgb(255 255 255 / 16%), var(--glass-edge);
 }
 
 /* 環境光：玻璃後面要有東西可以透。固定在畫面上、不跟著捲動（用一層固定的底，不用固定的背景圖：手機上固定的背景圖會卡） */
@@ -269,16 +268,9 @@ body.pf::before {
 }
 .pf-shell { position: relative; z-index: 1; }
 
-/* 損益條：一道長方形的玻璃槽（整條的長度是全部庫存的市值），上緣一道亮邊、槽壁一層淡淡的反光與水紋。方角（本人：「比較喜歡長方形條」） */
-.hv-bar { height: 24px; padding: 0 3px; overflow: visible; }
-.hv-bar::before {
-  top: 50%; height: 16px; margin-top: -8px; transform-origin: left;   /* 進場從左邊長出來，和裡面的兩段同一邊 */
-  background-color: color-mix(in srgb, var(--well) 72%, transparent);
-  /* 槽壁的水紋上面再蓋一層槽的底色，只透出三成多：槽要夠暗，裡面金屬與紅綠那兩段的長度才看得清楚 */
-  background-image: linear-gradient(color-mix(in srgb, var(--well) 64%, transparent) 0 0), var(--ripple), linear-gradient(180deg, rgb(255 255 255 / 16%) 0%, rgb(255 255 255 / 2%) 38%, transparent 62%, rgb(255 255 255 / 9%) 100%);
-  background-size: auto, 220px 70px, auto; background-blend-mode: normal, soft-light, normal;
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 30%), inset 0 0 0 .5px rgb(255 255 255 / 16%), inset 0 -4px 6px -3px rgb(255 255 255 / 12%), inset 0 0 0 1px color-mix(in srgb, var(--ink) 10%, transparent);
-}
+/* 損益條的底：一條很淡的長方形凹痕，標出整條的長度（全部庫存的市值）。和裡面兩段一樣高，沒有框線、沒有反光（本人：「框不要太明顯」） */
+.hv-bar { height: 24px; overflow: visible; }
+.hv-bar::before { top: 50%; height: 10px; margin-top: -5px; transform-origin: left; background: rgb(var(--shade) / calc(.12 * var(--shade-k))); }   /* 進場從左邊長出來，和裡面的兩段同一邊 */
 /* 最短 3px（原本 2px）：再短就看不出材質；不能更長，小部位的那一段才不會被撐得和別人一樣長 */
 .hv-bar i { height: 10px; min-width: 3px; overflow: hidden; animation: pf-drift var(--dt, 8s) ease-in-out var(--dd, 0s) infinite alternate; }
 /* 捲出畫面的那幾列，高光先停著（一百檔的清單不用每一條都一直重畫） */
@@ -309,36 +301,31 @@ body.pf::before {
   filter: drop-shadow(0 3px 5px color-mix(in srgb, var(--b) 50%, transparent));
 }
 
-/* 每一列是一片玻璃：半透明、透出後面的環境光、上緣一道亮邊。高低照舊是賺賠：賺的浮起（有厚度的邊）、賠的凹下、打平與只在自選的是薄玻璃。
-   不加背景模糊：列後面只有平滑的環境光，模糊看不出差別，一百檔卻要一百個合成層 */
-#holdingRows .hv-row[data-state] { border-color: transparent; isolation: isolate; }
-/* 玻璃不是一整片平的：每一列墊一層很淡的水紋，在內容下面（字不受影響；isolation 讓這一層留在這一列自己的底上面）。
-   每一列截到圖上不同的位置，不會一列一列長得一樣 */
-#holdingRows .hv-row[data-state]::before {
-  content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none;
-  background-image: var(--ripple); background-size: 420px 420px; mix-blend-mode: soft-light; opacity: .3;
+/* 每一列是一塊金屬板，和選中的篩選鍵、「＋」同一種金屬（本人：「可以跟按鍵與總市值的金屬感一樣看看」）。
+   窗光與反射只畫在上面那一條的高度（--plate-h），點開之後下面是平的板色；每一列光落的位置不同（--mx），不會一列一列長得一樣。
+   高低照舊是賺賠，陰影就是共用的那幾組（bold.css 的 .depth-row）：賺的浮起、賠的凹下、打平與只在自選的是細框的薄板。 */
+#holdingRows .hv-row[data-state] {
+  --plate-a: color-mix(in srgb, var(--ink) 10%, var(--panel)); --plate-b: color-mix(in srgb, var(--ink) 4%, var(--panel)); --shine: 16%; --plate-h: 52px;
+  background-image:
+    radial-gradient(46% 120% at var(--mx, 28%) -30%, rgb(255 255 255 / var(--shine)) 0%, transparent 70%),
+    radial-gradient(34% 80% at calc(var(--mx, 28%) + 36%) 130%, rgb(255 255 255 / 6%) 0%, transparent 70%),
+    linear-gradient(180deg, rgb(255 255 255 / 6%) 0%, transparent 22%, transparent 54%, rgb(0 0 0 / 12%) 72%, transparent 100%),
+    linear-gradient(90deg, var(--plate-a), var(--plate-b));
+  background-size: 100% var(--plate-h), 100% var(--plate-h), 100% var(--plate-h), auto; background-repeat: no-repeat;
 }
-#holdingRows .hv-row:nth-child(4n + 2)::before { background-position: 170px 96px; }
-#holdingRows .hv-row:nth-child(4n + 3)::before { background-position: 60px 230px; }
-#holdingRows .hv-row:nth-child(4n)::before { background-position: 290px 330px; }
-/* 向左滑的時候那一條要蓋住下面的動作，所以暫時是不透明的板色 */
-#holdingRows .swipe-face { --face: var(--panel); }
-#holdingRows .hv-row[data-state="bull"] {
-  background: linear-gradient(155deg, color-mix(in srgb, var(--panel3) 62%, transparent), color-mix(in srgb, var(--panel) 34%, transparent));
-  box-shadow: var(--glass-rise);
-}
-#holdingRows .hv-row[data-state="bull"]:has(.hv-open:active) { box-shadow: var(--glass-thin); }
-#holdingRows .hv-row[data-state="bear"] {
-  background: linear-gradient(155deg, color-mix(in srgb, var(--desk) 82%, transparent), color-mix(in srgb, var(--desk) 62%, transparent));
-  box-shadow: var(--glass-sink);
-}
-#holdingRows .hv-row:is([data-state="flat"], [data-state="none"]) {
-  background: linear-gradient(155deg, color-mix(in srgb, var(--panel) 40%, transparent), color-mix(in srgb, var(--panel) 20%, transparent));
-  box-shadow: var(--glass-thin);
-}
+#holdingRows .hv-row:nth-child(4n + 2) { --mx: 58%; }
+#holdingRows .hv-row:nth-child(4n + 3) { --mx: 14%; }
+#holdingRows .hv-row:nth-child(4n) { --mx: 74%; }
+/* 賠的那一列凹下去：板色用比底色暗一階的桌面色，幾乎不反光 */
+#holdingRows .hv-row[data-state="bear"] { --plate-a: color-mix(in srgb, var(--ink) 4%, var(--desk)); --plate-b: var(--desk); --shine: 5%; }
+/* 打平、沒有價格、只在自選：薄板，反光少一點 */
+#holdingRows .hv-row:is([data-state="flat"], [data-state="none"]) { --plate-a: color-mix(in srgb, var(--ink) 7%, var(--panel)); --plate-b: color-mix(in srgb, var(--ink) 2%, var(--panel)); --shine: 9%; }
+/* 金屬板比原本的底亮一點：名稱下面的代號、群組與右邊的群組名用亮一階的字，才夠清楚 */
+#holdingRows .hv-name > span, #holdingRows .hv-name em, #holdingRows .pf-tag { color: var(--dim); }
+/* 向左滑的時候那一條要蓋住下面的動作：用這一列的板色 */
+#holdingRows .swipe-face { --face: var(--plate-b); }
 
-/* 三顆篩選鍵的槽是玻璃；選中的那一顆與「＋」是金屬鍵（光落的位置各自不同）。字照舊是墨色 */
-#listFilter { background: color-mix(in srgb, var(--panel) 36%, transparent); }
+/* 選中的那一顆篩選鍵與「＋」是金屬鍵（光落的位置各自不同）。字照舊是墨色 */
 #listFilter button[aria-pressed="true"] small { color: var(--dim); }   /* 金屬鍵上的檔數：比平常亮一階，才夠清楚 */
 #listFilter button[aria-pressed="true"], #listFilter .slide-thumb, .pf-add:not([aria-expanded="true"]) {
   background-image:
