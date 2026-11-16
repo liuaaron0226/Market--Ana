@@ -18,14 +18,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
-import urllib.request
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from level_signals import HostPacer, atomic_write
 
 URL = ("https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xml"
        "?data=daily_treasury_yield_curve&field_tdr_date_value_month={month}")
@@ -82,15 +82,17 @@ def store_month(root: Path, month: str, content: bytes, *, fetched_at: str, sour
         held = target.read_bytes()
         if held == content:
             return "unchanged"
-        if len(rows) < len(parse(held)):
+        try:
+            held_rows = len(parse(held))
+        except ValueError:     # 已存的那一份壞了（不是這裡寫壞的）：讓新的一份換上，不要整個月卡住
+            held_rows = 0
+        if len(rows) < held_rows:
             raise ValueError("官方回應的筆數比已存的少，不收")
-    folder.mkdir(parents=True, exist_ok=True)
-    for path, data in ((target, content), (folder / f"ust-{month}.meta.json", json.dumps({
-            "fetched_at_utc": fetched_at, "source_url": source_url, "sha256": hashlib.sha256(content).hexdigest(),
-            "rows": len(rows)}, ensure_ascii=False).encode("utf-8"))):
-        partial = path.with_name(path.name + ".partial")
-        partial.write_bytes(data)
-        os.replace(partial, path)
+    # 原件先換、說明檔後換：讀的時候只看原件，說明檔只記抓取時間、來源與雜湊。
+    atomic_write(target, content)
+    atomic_write(folder / f"ust-{month}.meta.json", json.dumps({
+        "fetched_at_utc": fetched_at, "source_url": source_url, "sha256": hashlib.sha256(content).hexdigest(),
+        "rows": len(rows)}, ensure_ascii=False).encode("utf-8"))
     return "stored"
 
 
@@ -106,9 +108,7 @@ def load(root: Path) -> list[dict[str, Any]]:
 
 
 def _default_fetch(url: str) -> bytes:
-    request = urllib.request.Request(url, headers={"Accept": "application/xml", "User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(request, timeout=60) as response:
-        return response.read()
+    return HostPacer().fetch(url, timeout=60, accept="application/xml")
 
 
 def fetch_month(root: Path, month: str, *, fetch: Callable[[str], bytes] = _default_fetch,

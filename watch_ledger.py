@@ -63,8 +63,6 @@ HORIZONS = (5, 20)
 # 好讓輸入版本照實寫出多了哪幾樣；規格把前三樣歸在技術層、匯率與美債利率歸在環境層。
 LAYERS = ("technical", "bollinger", "sector", "margin", "environment", "market", "news", "peers", "lessons")
 DEFAULT_LAYERS = ("technical", "market", "news")
-# 免費方案下可以放進提示的層（各來源條款查證見 ANALYSIS_PLAN.md 2026-11-15、11-16）；每日排程打開的就是這幾層。
-FREE_PLAN_LAYERS = ("technical", "bollinger", "sector", "margin", "environment", "market", "news")
 # 每一層在一檔輸入資料裡的欄位。消息層這一版只收官方公告（重大訊息、月營收）。布林通道由帳本從日 K 自己算，沒有欄位。
 _LAYER_FIELDS = {"technical": "technical", "sector": "sector", "margin": "margin", "environment": "environment",
                  "market": "market_forecast", "news": "announcements", "lessons": "lessons"}
@@ -73,7 +71,7 @@ _LAYER_PARAMETERS: dict[str, dict[str, Any]] = {
     "bollinger": {"period": bollinger.PERIOD, "deviations": bollinger.DEVIATIONS,
                   "squeeze_window": bollinger.SQUEEZE_WINDOW, "squeeze_share": bollinger.SQUEEZE_SHARE},
     "sector": {"classification": "官方產業別", "changes": ["當天", "近 5 日"]},
-    "margin": {"changes": "近 5 日", "prompt_sources": ["twse"]},
+    "margin": {"changes": "近 5 日"},
     "environment": {"changes": "近 20 日", "series": ["usdtwd", "ust_2y", "ust_10y"]},
 }
 _LAYER_RULES: dict[str, tuple[str, ...]] = {
@@ -88,8 +86,7 @@ _LAYER_RULES: dict[str, tuple[str, ...]] = {
         "data_date 是資料日期。只能當成同產業的對照，不是這一檔自己的走勢。",
     ),
     "margin": (
-        "margin 是這一檔的融資與融券餘額（張）與近 5 個交易日的變化；data_date 是資料日期。"
-        "withheld_layers 列出的層是依來源條款不放進提示，不是沒有發生。",
+        "margin 是這一檔的融資與融券餘額（張）與近 5 個交易日的變化；data_date 是資料日期。",
     ),
     "environment": (
         "environment 是大環境：新臺幣對美元收盤匯率與美國公債 2 年、10 年殖利率，各自附資料日期與近 20 個交易日的變化；"
@@ -176,8 +173,9 @@ def input_version_of(layers: Sequence[str] = DEFAULT_LAYERS) -> str:
     enabled = _enabled_layers(layers)
     basis: dict[str, Any] = {"layers": enabled, "parameters": PARAMETERS, "output_schema": OUTPUT_SCHEMA,
                              "prompt_rules": _prompt_rules(enabled)}
-    if _layer_parameters(enabled):
-        basis["layer_parameters"] = _layer_parameters(enabled)
+    layer_parameters = _layer_parameters(enabled)
+    if layer_parameters:
+        basis["layer_parameters"] = layer_parameters
     return f"{'+'.join(enabled)}-v1-{sha(basis)[:8]}"
 
 
@@ -292,23 +290,6 @@ def _history(rows: Sequence[Any]) -> dict[str, Any]:
             "bars": len(rows), "sha256": sha(body)}
 
 
-# 融資融券只有這些來源可以放進提示：上市（證交所）的資料集標政府資料開放授權條款第 1 版；
-# 上櫃（櫃買）的資料集授權頁還沒找到（2026-11-16 查），照規格「照樣抓、照樣給站主看、不放進提示」。
-PROMPT_MARGIN_SOURCES = ("twse",)
-WITHHELD_MARGIN = "櫃買中心融資融券的資料集授權還沒查到，依規格不放進提示"
-
-
-def _margin(value: Any) -> tuple[Any, str | None]:
-    """（放進提示的融資融券, 不放的原因）。來源不在可放清單的整塊拿掉，只留原因。"""
-    if value is None:
-        return None, None
-    if not isinstance(value, Mapping) or not value.get("source"):
-        raise ValueError("融資融券那一層要標明來源（source）")
-    if value["source"] not in PROMPT_MARGIN_SOURCES:
-        return None, WITHHELD_MARGIN
-    return value, None
-
-
 def _model_input(data: Mapping[str, Any], edition: str, layers: list[str], raw: list[Bar], bars: list[Bar],
                  events: list[dict[str, Any]], unresolved: list[dict[str, Any]],
                  candidates: list[dict[str, Any]] | None, index_rows: list[dict[str, Any]],
@@ -319,15 +300,10 @@ def _model_input(data: Mapping[str, Any], edition: str, layers: list[str], raw: 
         values["news"] = _announcements(values["news"])
     if "bollinger" in values:
         values["bollinger"] = band
-    withheld = {}
-    if "margin" in values:
-        values["margin"], reason = _margin(values["margin"])
-        if reason:
-            withheld["margin"] = reason
     # I 票的四層只在打開時才出現在輸入裡，沒打開它們的輸入和 I 票之前相同。
     extras = {layer: values[layer] for layer in layers if layer in _LAYER_PARAMETERS}
     if extras:
-        extras = {"layer_parameters": _layer_parameters(layers), **extras, "withheld_layers": withheld}
+        extras = {"layer_parameters": _layer_parameters(layers), **extras}
     return {
         "schema": "watch-input/v1",
         "input_version": input_version_of(layers),
@@ -340,7 +316,7 @@ def _model_input(data: Mapping[str, Any], edition: str, layers: list[str], raw: 
         "price_basis": {"restored": analyze_v2.LABELS["price_basis"], "unresolved_capital_events": unresolved},
         "candidates": candidates,
         "layers": layers,
-        "missing_layers": [layer for layer in layers if values[layer] is None and layer not in withheld],
+        "missing_layers": [layer for layer in layers if values[layer] is None],
         **extras,
         "technical": values.get("technical"),
         "market": values.get("market"),
@@ -520,7 +496,6 @@ def _write(
         "method_version": method_version, "input_version": input_version, "model": model,
         "run_mode": "official" if official_since and base_date >= official_since else "trial",
         "layers": enabled, "missing_layers": list(model_input["missing_layers"]),
-        **({"withheld_layers": dict(model_input["withheld_layers"])} if model_input.get("withheld_layers") else {}),
         "data_cutoffs": copy.deepcopy(dict(data.get("data_cutoffs") or {})),
         "deadline": due.isoformat(), "base_close": model_input["base_close"],
         "input": model_input, "input_sha256": input_sha,
@@ -583,8 +558,8 @@ def write_judgment(
     ``capital_events``（股本變動事件，可省）、``index_daily``（加權指數日 K）、``method_text``、``data_cutoffs``，
     以及各層的資料 ``technical``、``market_forecast``、``announcements``、``lessons``，
     I 票的 ``sector``、``margin``、``environment``（由 ``watch_inputs`` 從本機原件讀出；布林通道由帳本從日 K 自己算）。
-    技術、大盤、教訓、同產業、環境各層的內容照原樣交給模型：只能放條款允許的資料，由呼叫端負責；
-    融資融券由帳本依 ``source`` 把關（上櫃那一份不放進提示，判斷另標 ``withheld_layers``）。
+    各層的內容照原樣交給模型：只能放條款允許的資料，由呼叫端負責（I 票四樣的來源都是政府資料開放授權、
+    本站自己算的，或美國財政部的公有領域資料）。
 
     同一檔、同一基準日、同一版已有紀錄時不再呼叫模型：輸入相同回 ``unchanged``，輸入不同回 ``conflict``（拒寫）。
     資料沒到齊時期限前什麼都不寫（``not_ready``，可之後重跑）；過了期限仍沒到齊才記漏記。

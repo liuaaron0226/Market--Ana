@@ -9,7 +9,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import otc_margin
 import treasury_yields
 import watch_inputs as wi
 import watch_ledger as wl
@@ -120,14 +119,20 @@ def listed_margin_file(root, day, rows):
                                ensure_ascii=False), encoding="utf-8")
 
 
-def tpex_rows(roc_day, rows):
-    """櫃買 OpenAPI /tpex_mainboard_margin_balance 的回應（逐檔一列，日期是民國年；欄位照 2026-11-13 實際回應）。
-    rows：{代號: (融資餘額, 融券餘額)}。"""
-    return json.dumps([{"Date": roc_day, "SecuritiesCompanyCode": code, "CompanyName": "名稱",
-                        "MarginPurchaseBalancePreviousDay": "0", "MarginPurchase": "0", "MarginSales": "0",
-                        "CashRedemption": "0", "MarginPurchaseBalance": str(margin), "ShortSaleBalancePreviousDay": "0",
-                        "ShortSale": "0", "ShortConvering": "0", "StockRedemption": "0", "ShortSaleBalance": str(short),
-                        "Note": ""} for code, (margin, short) in rows.items()], ensure_ascii=False).encode("utf-8")
+OTC_FIELDS = ["代號", "名稱", "前資餘額(張)", "資買", "資賣", "現償", "資餘額", "資屬證金", "資使用率(%)", "資限額",
+              "前券餘額(張)", "券賣", "券買", "券償", "券餘額", "券屬證金", "券使用率(%)", "券限額", "資券相抵(張)", "備註"]
+
+
+def otc_margin_file(root, day, rows):
+    """每日更新存的上櫃融資融券原件（daily_ingest.otc_credit_day，櫃買網站 margin/balance）。
+    rows：{代號: (融資餘額, 融券餘額)}，單位張。"""
+    data = [[code, "名稱", "0", "0", "0", "0", f"{margin:,}", "0", "0", "0", "0", "0", "0", "0", f"{short:,}",
+             "0", "0", "0", "0", ""] for code, (margin, short) in rows.items()]
+    path = root / "data/otc-credit/margin" / f"{day}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"fetched_at_utc": "x", "source_url": "u", "sha256": "x", "data": {
+        "stat": "ok", "date": day, "tables": [{"fields": OTC_FIELDS, "data": data}]}}, ensure_ascii=False),
+        encoding="utf-8")
 
 
 def treasury_xml(rows):
@@ -192,45 +197,17 @@ class MarginInputTests(InputsTestCase):
         listed_margin_file(self.root, "20261109", {"2317": (1, 1)})
         self.assertIsNone(wi.margin_input(self.root, "2330", "2026-11-09"))
 
-    def test_otc_stock_reads_what_the_tpex_store_has_accumulated(self):
-        days = [("1151102", (500, 9)), ("1151103", (510, 9)), ("1151104", (520, 8)), ("1151105", (530, 8)),
-                ("1151106", (540, 7)), ("1151109", (600, 5))]
-        for roc_day, balances in days:
-            otc_margin.store(self.root, tpex_rows(roc_day, {"5347": balances}), fetched_at="x", source_url="u")
+    def test_otc_stock_reads_what_the_daily_update_already_stores(self):
+        days = [("20261102", (500, 9)), ("20261103", (510, 9)), ("20261104", (520, 8)), ("20261105", (530, 8)),
+                ("20261106", (540, 7)), ("20261109", (600, 5))]
+        for day, balances in days:
+            otc_margin_file(self.root, day, {"5347": balances, "6488": (1, 1)})
         # 11/09：融資 600、融券 5；往前第 5 個交易日 11/02：500、9 → +100、−4。
         self.assertEqual(wi.margin_input(self.root, "5347", "2026-11-09"), {
             "source": "tpex", "attribution": wi.SOURCES["tpex_margin"], "data_date": "2026-11-09", "unit": "張",
             "margin_balance": 600, "margin_change_5d": 100, "short_balance": 5, "short_change_5d": -4,
             "compared_with": "2026-11-02",
         })
-
-
-class OtcMarginStoreTests(InputsTestCase):
-    def test_each_day_is_stored_once_under_its_own_date(self):
-        first = otc_margin.store(self.root, tpex_rows("1151109", {"5347": (600, 5)}), fetched_at="t1", source_url="u")
-        again = otc_margin.store(self.root, tpex_rows("1151109", {"5347": (999, 9)}), fetched_at="t2", source_url="u")
-        self.assertEqual((first, again), ({"day": "20261109", "outcome": "stored"},
-                                          {"day": "20261109", "outcome": "existing"}))
-        kept = json.loads((self.root / otc_margin.STORE_DIR / "margin-20261109.json").read_text(encoding="utf-8"))
-        self.assertEqual((kept["fetched_at_utc"], kept["data"][0]["MarginPurchaseBalance"]), ("t1", "600"))
-
-    def test_unexpected_responses_are_refused_without_writing(self):
-        mixed = json.loads(tpex_rows("1151109", {"5347": (1, 1)})) + json.loads(tpex_rows("1151106", {"6488": (1, 1)}))
-        for content in (b"<html>busy</html>", b"[]", json.dumps(mixed).encode("utf-8"),
-                        json.dumps([{"Date": "1151109", "SecuritiesCompanyCode": "5347"}]).encode("utf-8")):
-            with self.assertRaises(ValueError):
-                otc_margin.store(self.root, content, fetched_at="t", source_url="u")
-        self.assertFalse((self.root / otc_margin.STORE_DIR).exists())
-
-    def test_fetch_today_stores_the_official_response(self):
-        seen = []
-
-        def fetch(url):
-            seen.append(url)
-            return tpex_rows("1151113", {"5347": (1, 2)})
-
-        result = otc_margin.fetch_today(self.root, fetch=fetch, now=lambda: "2026-11-13T09:00:00+00:00")
-        self.assertEqual((result, seen), ({"day": "20261113", "outcome": "stored"}, [otc_margin.URL]))
 
 
 class SectorInputTests(InputsTestCase):
@@ -311,7 +288,7 @@ class EnvironmentInputTests(InputsTestCase):
         us_days = weekdays("2026-10-09", 21)   # 10/09–11/06
         self.store_treasury([(day, 4.7 if day == us_days[-1] else 4.5, 5.15 if day == us_days[-1] else 4.9)
                              for day in us_days])
-        self.assertEqual(wi.environment_input(self.root, "2026-11-09"), {
+        self.assertEqual(wi.environment_input(self.root, "2026-11-09", edition="evening"), {
             "usdtwd": {"date": "2026-11-09", "close": 30.6, "change_20d_pct": 2.0, "quote": "每 1 美元兌新臺幣",
                        "source": wi.SOURCES["cbc_usdtwd"]},
             "us_treasury": {"date": "2026-11-06", "yield_2y_pct": 4.7, "yield_10y_pct": 5.15,
@@ -321,19 +298,30 @@ class EnvironmentInputTests(InputsTestCase):
 
     def test_missing_series_are_named_and_do_not_hide_the_others(self):
         self.fx("2026-11-09", [(day, 30.0) for day in weekdays("2026-10-12", 21)])
-        found = wi.environment_input(self.root, "2026-11-09")
+        found = wi.environment_input(self.root, "2026-11-09", edition="evening")
         self.assertEqual((found["us_treasury"], found["missing"]), (None, ["us_treasury"]))
         self.assertEqual(found["usdtwd"]["change_20d_pct"], 0.0)
-        self.assertIsNone(wi.environment_input(self.root / "empty", "2026-11-09"))
+        self.assertIsNone(wi.environment_input(self.root / "empty", "2026-11-09", edition="evening"))
 
     def test_exchange_rate_never_comes_from_after_the_as_of_date(self):
         self.fx("2026-11-06", [(day, 30.0) for day in weekdays("2026-10-09", 21)])
         self.fx("2026-11-10", [(day, 31.0) for day in weekdays("2026-10-13", 21)])
-        self.assertEqual(wi.environment_input(self.root, "2026-11-09")["usdtwd"]["date"], "2026-11-06")
+        self.assertEqual(wi.environment_input(self.root, "2026-11-09", edition="evening")["usdtwd"]["date"], "2026-11-06")
+
+    def test_evening_edition_never_sees_the_us_close_of_the_same_date(self):
+        # 台灣晚間寫判斷時，美國同一天還沒收盤：晚間版只能用美國前一個交易日；晨間版看得到美國剛收盤的那一天。
+        # 之後補進來的同日資料也不會讓晚間版重跑時看到（重跑的輸入和當初相同）。
+        self.store_treasury([("2026-11-06", 4.6, 5.0), ("2026-11-09", 4.7, 5.1)])
+        evening = wi.environment_input(self.root, "2026-11-09", edition="evening")["us_treasury"]
+        morning = wi.environment_input(self.root, "2026-11-09", edition="morning")["us_treasury"]
+        self.assertEqual((evening["date"], evening["yield_2y_pct"]), ("2026-11-06", 4.6))
+        self.assertEqual((morning["date"], morning["yield_2y_pct"]), ("2026-11-09", 4.7))
+        with self.assertRaises(ValueError):
+            wi.environment_input(self.root, "2026-11-09", edition="noon")
 
     def test_yield_left_blank_by_the_treasury_is_null_and_change_needs_twenty_earlier_days(self):
         self.store_treasury([("2026-11-05", 4.6, 5.0), ("2026-11-06", None, 5.1)])
-        found = wi.environment_input(self.root, "2026-11-09")["us_treasury"]
+        found = wi.environment_input(self.root, "2026-11-09", edition="evening")["us_treasury"]
         self.assertEqual((found["date"], found["yield_2y_pct"], found["yield_10y_pct"], found["change_20d_2y_pt"],
                           found["change_20d_10y_pt"]), ("2026-11-06", None, 5.1, None, None))
 
@@ -357,6 +345,15 @@ class TreasuryStoreTests(InputsTestCase):
         self.assertEqual([row["date"] for row in treasury_yields.load(self.root)], ["2026-11-02", "2026-11-03"])
         meta = json.loads((self.root / treasury_yields.STORE_DIR / "ust-202611.meta.json").read_text(encoding="utf-8"))
         self.assertEqual((meta["fetched_at_utc"], meta["source_url"]), ("t2", "u"))
+
+    def test_a_damaged_month_file_does_not_block_that_month_forever(self):
+        held = self.root / treasury_yields.STORE_DIR / "ust-202611.xml"
+        held.parent.mkdir(parents=True)
+        held.write_bytes(b"<feed broken")
+        content = treasury_xml([("2026-11-02", 4.59, 4.91)])
+        self.assertEqual(treasury_yields.store_month(self.root, "202611", content, fetched_at="t", source_url="u"),
+                         "stored")
+        self.assertEqual(held.read_bytes(), content)
 
     def test_unexpected_responses_are_refused_without_writing(self):
         for content in (b"<html>maintenance</html>", b"not xml", treasury_xml([]),
@@ -410,7 +407,6 @@ class NewLayersInPromptTests(WatchLedgerTestCase):
         self.assertEqual(sent["environment"]["usdtwd"]["date"], BASE)
         self.assertEqual(sent["environment"]["missing"], ["us_treasury"])
         self.assertEqual((sent["bollinger"]["upper"], sent["bollinger"]["date"]), (BOLL_UPPER, BASE))
-        self.assertEqual(sent["withheld_layers"], {})
 
     def test_missing_inputs_are_named_and_the_judgment_is_still_written(self):
         record = self.write(stock_input(sector=None, margin=None, environment=None), layers=ALL_NEW)["record"]
@@ -418,30 +414,18 @@ class NewLayersInPromptTests(WatchLedgerTestCase):
         self.assertEqual(record["missing_layers"], ["sector", "margin", "environment"])
         self.assertEqual(record["input_version"], wl.input_version_of(ALL_NEW))
 
-    def test_otc_margin_stays_out_of_the_prompt_and_says_why(self):
-        model = recording_model(self.bin, answer())
-        record = self.write(stock_input(**extras(margin_source="tpex")), model=model, layers=ALL_NEW)["record"]
-        prompt, sent = self.sent()
-        self.assertNotIn("margin_balance", prompt)
-        self.assertEqual(sent["withheld_layers"], {"margin": wl.WITHHELD_MARGIN})
-        self.assertIsNone(record["input"]["margin"])
-        self.assertEqual(record["withheld_layers"], {"margin": wl.WITHHELD_MARGIN})
-        self.assertEqual(record["missing_layers"], [])   # 不是沒資料，是依條款不放
-        # 依條款不放不換版本：同一組層，和上市股同一個輸入版本、同一組對帳。
-        self.assertEqual(record["input_version"], wl.input_version_of(ALL_NEW))
-
-    def test_margin_must_name_its_source(self):
-        with self.assertRaises(ValueError):
-            self.write(stock_input(margin={"margin_balance": 1}), layers=ALL_NEW)
+    def test_otc_margin_goes_into_the_prompt_like_listed_margin(self):
+        # 上櫃融資融券在政府資料開放平台 11387 標政府資料開放授權（ANALYSIS_PLAN.md 2026-11-16 E 票第 1 片查到）。
+        self.write(stock_input(**extras(margin_source="tpex")), model=recording_model(self.bin, answer()),
+                   layers=ALL_NEW)
+        _, sent = self.sent()
+        self.assertEqual((sent["margin"]["source"], sent["margin"]["margin_balance"]), ("tpex", 1100))
 
     def test_each_new_input_is_its_own_input_version(self):
         versions = {wl.input_version_of(ALL_NEW[:count] + ("market", "news")) for count in range(1, 6)}
         self.assertEqual(len(versions), 5)
         self.assertTrue(wl.input_version_of(ALL_NEW).startswith(
             "technical+bollinger+sector+margin+environment+market+news-v1-"))
-
-    def test_free_plan_layers_are_the_four_new_inputs_on_top_of_the_existing_ones(self):
-        self.assertEqual(wl.FREE_PLAN_LAYERS, ALL_NEW)
 
 
 if __name__ == "__main__":

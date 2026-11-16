@@ -4,7 +4,7 @@
 ``margin``、``sector``、``environment`` 欄位；讀不到就回 None（帳本把那一層標成缺漏，判斷照寫）。這裡不連網：
 
 - ``margin_input``：上市讀 ``data/margin-history/raw/``（每日抓取已在存，``margin_history.py``），
-  上櫃讀 ``data/otc-margin/raw/``（``otc_margin.py``，從開始抓那天起累積）。
+  上櫃讀 ``data/otc-credit/margin/``（每日更新已在存，``daily_ingest.otc_credit_day``，會補最近 20 個交易日）。
 - ``sector_input``：官方產業別相同、在分析範圍內的其他個股當天與近 5 日漲跌；產業別用 ``catalog_industries``
   從本機名錄原件讀，分析範圍與日 K 由呼叫端給。
 - ``environment_input``：央行每日收盤匯率（水位訊號每日存的 ``cbc-usdtwd`` 原件）與財政部公債殖利率
@@ -20,26 +20,26 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-import otc_margin
 import treasury_yields
+from margin_history import held_days
 from level_signals import parse_cbc_usdtwd
 from listed_catalog import load_listed_catalog
 from otc_catalog import load_otc_catalog
 
 SOURCES = {
     "twse_margin": "臺灣證券交易所 融資融券餘額（MI_MARGN）；政府資料開放授權條款第 1 版",
-    "tpex_margin": "證券櫃檯買賣中心 上櫃股票融資融券餘額（OpenAPI）",
+    "tpex_margin": "證券櫃檯買賣中心 上櫃股票融資融券餘額；政府資料開放授權條款第 1 版",
     "catalog": "臺灣證券交易所／證券櫃檯買賣中心 有價證券名錄的產業別；漲跌由本站從官方收盤行情計算",
     "cbc_usdtwd": "中央銀行 新臺幣對美元銀行間收盤匯率；政府資料開放授權條款第 1 版",
     "us_treasury": "U.S. Department of the Treasury, Daily Treasury Par Yield Curve Rates",
 }
-MARGIN_DIR = "data/margin-history/raw"
+OTC_MARGIN_DIR = "data/otc-credit/margin"
 LEVEL_SIGNALS_DIR = "data/level-signals"
 CATALOG_FILES = (("data/listed-catalog/raw", "twse-isin-listed-*.html", load_listed_catalog),
                  ("data/otc-catalog/raw", "tpex-isin-otc-*.html", load_otc_catalog))
 CHANGE_DAYS = 5          # 融資融券、同產業：近 5 個交易日
 ENVIRONMENT_DAYS = 20    # 匯率、美債：近 20 個交易日
-_LISTED_FILE = re.compile(r"margin-(\d{8})\.json", re.ASCII)
+_OTC_FILE = re.compile(r"(\d{8})\.json", re.ASCII)
 
 
 def _iso(day: str) -> str:
@@ -67,17 +67,23 @@ def _listed_balances(path: Path, code: str) -> tuple[int, int] | None:
 
 
 def _otc_balances(path: Path, code: str) -> tuple[int, int] | None:
-    for row in json.loads(path.read_text(encoding="utf-8")).get("data") or []:
-        if str(row.get("SecuritiesCompanyCode")).strip() == code:
-            return _lots(row["MarginPurchaseBalance"]), _lots(row["ShortSaleBalance"])
+    """櫃買網站 margin/balance 原件裡這一檔的（資餘額, 券餘額），單位張。"""
+    payload = json.loads(path.read_text(encoding="utf-8")).get("data") or {}
+    for table in payload.get("tables") or []:
+        fields = [str(field).strip() for field in table.get("fields") or []]
+        if "代號" not in fields or "資餘額" not in fields or "券餘額" not in fields:
+            continue
+        for row in table.get("data") or []:
+            if str(row[fields.index("代號")]).strip() == code:
+                return _lots(row[fields.index("資餘額")]), _lots(row[fields.index("券餘額")])
     return None
 
 
-def _listed_days(root: Path) -> dict[str, Path]:
-    folder = root / MARGIN_DIR
+def _otc_days(root: Path) -> dict[str, Path]:
+    folder = root / OTC_MARGIN_DIR
     if not folder.is_dir():
         return {}
-    return {match.group(1): path for path in folder.iterdir() if (match := _LISTED_FILE.fullmatch(path.name))}
+    return {match.group(1): path for path in folder.iterdir() if (match := _OTC_FILE.fullmatch(path.name))}
 
 
 def _margin_from(days: Mapping[str, Path], read, code: str, base_date: str) -> dict[str, Any] | None:
@@ -100,11 +106,11 @@ def _margin_from(days: Mapping[str, Path], read, code: str, base_date: str) -> d
 def margin_input(root: Path | str, code: str, base_date: str) -> dict[str, Any] | None:
     """這一檔在基準日（或之前最近一個有原件的交易日）的融資、融券餘額，與往前第 5 個有原件的交易日相比的變化。
 
-    上市先找、找不到再找上櫃；``source`` 是 ``twse`` 或 ``tpex``（上櫃那一份依條款不放進提示，由帳本把關）。
+    上市先找、找不到再找上櫃；``source`` 是 ``twse`` 或 ``tpex``。兩份都是政府資料開放授權，可以放進提示。
     """
     root = Path(root)
-    for source, days, read in (("twse", _listed_days(root), _listed_balances),
-                               ("tpex", otc_margin.stored_days(root), _otc_balances)):
+    for source, days, read in (("twse", held_days(root, "raw"), _listed_balances),
+                               ("tpex", _otc_days(root), _otc_balances)):
         found = _margin_from(days, read, code, base_date)
         if found:
             return {"source": source, "attribution": SOURCES[f"{source}_margin"], **found}
@@ -120,6 +126,7 @@ def catalog_industries(root: Path | str) -> dict[str, tuple[str, str]]:
         found = sorted((Path(root) / folder).glob(pattern))
         if found:
             raw = found[-1]
+            # 名錄的第三個參數是價量資料庫，只有 lookup() 會查；industries() 不碰它，所以不必給真的路徑。
             out.update(loader(raw, raw.with_suffix(".meta.json"), Path(".")).industries())
     return out
 
@@ -186,8 +193,10 @@ def _usdtwd(root: Path, as_of: str) -> dict[str, Any] | None:
             "source": SOURCES["cbc_usdtwd"]}
 
 
-def _treasury(root: Path, as_of: str) -> dict[str, Any] | None:
-    rows = [row for row in treasury_yields.load(root) if row["date"] <= as_of]
+def _treasury(root: Path, base_date: str, edition: str) -> dict[str, Any] | None:
+    """晚間版只用美國前一個交易日以前的（台灣晚間時美國同一天還沒收盤）；晨間版看得到美國基準日當天收盤。"""
+    usable = (lambda day: day < base_date) if edition == "evening" else (lambda day: day <= base_date)
+    rows = [row for row in treasury_yields.load(root) if usable(row["date"])]
     if not rows:
         return None
     last = rows[-1]
@@ -203,14 +212,18 @@ def _treasury(root: Path, as_of: str) -> dict[str, Any] | None:
             "source": SOURCES["us_treasury"]}
 
 
-def environment_input(root: Path | str, as_of: str) -> dict[str, Any] | None:
-    """新臺幣對美元收盤匯率與美債 2 年、10 年殖利率，各取資料日期不晚於 ``as_of`` 的最新一筆，附近 20 個交易日的變化。
+def environment_input(root: Path | str, base_date: str, *, edition: str) -> dict[str, Any] | None:
+    """新臺幣對美元收盤匯率與美債 2 年、10 年殖利率的最新一筆，附資料日期與近 20 個交易日的變化。
 
-    匯率變化是百分比（正數是新臺幣貶值）；殖利率變化是百分點。某一項讀不到就是 None 並列在 ``missing``；
-    兩項都讀不到回 None（整層缺漏）。
+    匯率取資料日期不晚於基準日的（央行在台灣下午公布）。美債：晚間版（``evening``）只取美國基準日以前的
+    交易日，晨間版（``morning``）可以取到美國基準日當天——之後才補進來的資料不會讓晚間版重跑時看到未來。
+    匯率變化是百分比（正數是新臺幣貶值）；殖利率變化是百分點、官方留空的值是 None。某一項讀不到就是 None
+    並列在 ``missing``；兩項都讀不到回 None（整層缺漏）。
     """
+    if edition not in ("evening", "morning"):
+        raise ValueError("edition 必須是 evening 或 morning")
     root = Path(root)
-    found = {"usdtwd": _usdtwd(root, as_of), "us_treasury": _treasury(root, as_of)}
+    found = {"usdtwd": _usdtwd(root, base_date), "us_treasury": _treasury(root, base_date, edition)}
     if not any(found.values()):
         return None
     return {**found, "missing": [name for name, value in found.items() if value is None]}
