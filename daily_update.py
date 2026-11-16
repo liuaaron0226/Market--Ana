@@ -834,6 +834,8 @@ def _remote_active_version() -> str | None:
 # D1 免費方案單庫上限 500MB；每版約 13MB、原本從不清除。本人 2026-11-14 同意：發布成功後只留最近 3 版。
 D1_KEEP_VERSIONS = 3
 _D1_VERSION_TABLES = ("stock_analysis", "listed_securities", "universe_outside", "stock_data_versions")
+# 0013（個股頁事實區塊 D 票）新增的公告表：資料庫套了變更檔才有，有的話排在刪版本登記之前一起刪。
+_D1_OPTIONAL_VERSION_TABLE = "stock_announcements"
 _PROTECTED_VERSIONS_SQL = ("(SELECT active_version FROM stock_data_state UNION "
                            "SELECT previous_version FROM stock_data_state WHERE previous_version IS NOT NULL)")
 
@@ -852,7 +854,9 @@ def versions_to_prune(rows: list[dict], *, active: str | None, previous: str | N
 def _prune_d1_versions(expected_active: str | None) -> dict:
     """刪掉正式 D1 裡更舊的個股資料版本。線上版本不是剛發布的那一版就不動手。"""
     result = _sh(_npx("d1", "execute", D1_DATABASE, "--remote", "--json", "--command",
-                      "SELECT v.version, v.built_at, s.active_version, s.previous_version FROM stock_data_versions v "
+                      "SELECT v.version, v.built_at, s.active_version, s.previous_version, "
+                      f"(SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '{_D1_OPTIONAL_VERSION_TABLE}') "
+                      "AS has_announcements FROM stock_data_versions v "
                       "LEFT JOIN stock_data_state s ON s.key = 'current'"), cwd=CLOUD)
     text = result.get("_stdout") or ""
     rows = json.loads(text[text.index("["):])[0]["results"]
@@ -865,6 +869,8 @@ def _prune_d1_versions(expected_active: str | None) -> dict:
     for version in prune:  # 版本名來自資料庫；只接受單純識別字才拼進 SQL
         if not re.fullmatch(r"[A-Za-z0-9._-]{1,120}", version):
             raise ValueError("版本名稱格式不符，不執行刪除")
+    tables = (_D1_VERSION_TABLES[:-1] + ((_D1_OPTIONAL_VERSION_TABLE,) if rows[0].get("has_announcements") else ())
+              + _D1_VERSION_TABLES[-1:])
     # 一版一個指令、由舊到新：先刪掛在版本下的列，最後才刪版本登記（不依賴外鍵連帶刪除）；
     # 每句再擋一次使用中與回退用的版本。中途失敗就停，已刪的照實回報，剩下的下次再清。
     pruned: list[str] = []
@@ -872,7 +878,7 @@ def _prune_d1_versions(expected_active: str | None) -> dict:
         try:
             _sh(_npx("d1", "execute", D1_DATABASE, "--remote", "--json", "--command",
                      " ".join(f"DELETE FROM {table} WHERE version = '{version}' AND version NOT IN {_PROTECTED_VERSIONS_SQL};"
-                              for table in _D1_VERSION_TABLES)), cwd=CLOUD)
+                              for table in tables)), cwd=CLOUD)
         except Exception as error:  # noqa: BLE001
             return {"pruned_versions": pruned, "kept_versions": len(rows) - len(pruned),
                     "prune_error": type(error).__name__}

@@ -5,7 +5,8 @@ workers_dev = false
 
 [triggers]
 # Cloudflare 的星期：1＝週日…7＝週六。一律用縮寫，不要寫數字。
-crons = ["30 7 * * MON-FRI", "30 8 * * MON-FRI", "0 10 * * MON-FRI", "30 12 * * MON-FRI"]
+# 0 0 * * *：公司重大訊息每天台北 8:00（含週末），見 worker.js JOBS 與 .github/workflows/announcements.yml。
+crons = ["30 7 * * MON-FRI", "30 8 * * MON-FRI", "0 10 * * MON-FRI", "30 12 * * MON-FRI", "0 0 * * *"]
 
 [observability]
 enabled = true

@@ -14,7 +14,7 @@ from twon_analysis.indicators import Bar
 
 TOP_KEYS = {'schema', 'analysis_version', 'code', 'name', 'kind', 'market', 'as_of', 'requested_as_of', 'quote', 'qa',
             'indicators', 'levels', 'defense', 'trend_classification', 'conditions', 'trading_rules', 'reference',
-            'undisclosed', 'provenance', 'bars', 'chart', 'labels', 'strategy', 'institutional', 'big_holders'}
+            'undisclosed', 'provenance', 'bars', 'chart', 'labels', 'strategy', 'institutional', 'big_holders', 'facts'}
 BLOCKING_KEYS = {'schema', 'analysis_version', 'code', 'as_of', 'requested_as_of', 'qa', 'trading_rules', 'undisclosed',
                  'provenance', 'labels'}
 INDICATOR_KEYS = {'ma5', 'ma10', 'ma20', 'ma60', 'ma120', 'ma240', 'rsi14', 'atr14', 'atr_pct', 'relative_volume',
@@ -355,6 +355,407 @@ class AdjustedPriceTests(unittest.TestCase):
         with unittest.mock.patch('twon_analysis.analyze_v2.default_capital_events', return_value={'9999': [self.split]}):
             result = self.analyze(None)
         self.assertEqual(result['bars'][0]['close'], 100.0)
+
+
+class _FactsFixture:
+    """事實區塊測試共用的行情庫：前面都收 100，最後一根依參數；法人資料用替身。"""
+
+    def setUp(self):
+        from datetime import date, timedelta
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        # 和 analyze() 預設的 60 個交易日相同，測試可以先用這些日期組法人資料。
+        self.days = [(date(2025, 1, 6) + timedelta(days=i)).isoformat() for i in range(60)]
+
+    def analyze(self, *, change, close=100.0, last_volume=1000, volume=1000, foreign=None, foreign_day=None, change_sign='+',
+                capital_actions=None, rows=None, n_days=60, credit=None, valuation=None, revenue=None):
+        from datetime import date, timedelta
+        self.days = [(date(2025, 1, 6) + timedelta(days=i)).isoformat() for i in range(n_days)]
+        self.calls = getattr(self, 'calls', 0) + 1
+        db = Path(self.tmp.name) / f'h{self.calls}.sqlite'
+        connection = sqlite3.connect(db)
+        connection.execute("""CREATE TABLE daily (date TEXT, code TEXT, name TEXT, kind TEXT, open REAL, high REAL, low REAL,
+                              close REAL, change_sign TEXT, change REAL, volume_shares INTEGER, trades INTEGER, turnover INTEGER,
+                              suspended INTEGER)""")
+        for i, day in enumerate(self.days):
+            last = i == len(self.days) - 1
+            price = close if last else 100.0
+            connection.execute("INSERT INTO daily VALUES (?, '9999', '測試', 'common', ?, ?, ?, ?, ?, ?, ?, 1, 1, 0)",
+                               (day, price, price + 1, price - 1, price, change_sign if last else '+', change if last else 0.5,
+                                last_volume if last else volume))
+        connection.commit()
+        connection.close()
+        rows = list(rows or [])
+        if foreign is not None:
+            rows.append({'date': foreign_day or self.days[-1], 'foreign': foreign, 'trust': 0, 'dealer': 0, 'total': foreign})
+        from twon_analysis.analyze_v2 import analyze_v2
+        # 融資券、估值、月營收的讀取都換成替身（沒給就是沒有資料），只驗事實區塊怎麼整理。
+        with unittest.mock.patch('twon_analysis.analyze_v2.institutional_series', return_value=rows), \
+                unittest.mock.patch('twon_analysis.analyze_v2.credit_series', return_value=credit or {}), \
+                unittest.mock.patch('twon_analysis.analyze_v2.valuation_snapshot', return_value=valuation), \
+                unittest.mock.patch('twon_analysis.analyze_v2.revenue_series', return_value=revenue or []):
+            return analyze_v2('9999', self.days[-1], db_path=db, otc_db_path=None, capital_actions=capital_actions or {})
+
+
+
+class StockFactsTodayTests(_FactsFixture, unittest.TestCase):
+    """個股頁事實區塊（本人 2026-11-15 共識，規格 .scratch/stock-facts/spec.md）：當日三格只報數字，缺什麼就少什麼。"""
+
+    def test_red_close_volume_ratio_and_foreign_net_sell(self):
+        # 收盤 100.5、漲 0.5 → 0.50%；均量＝(19×1000＋2300)/20＝1065 → 2300/1065＝2.16 倍；外資 −8,758,880 股＝賣超 8,759 張。
+        facts = self.analyze(change=0.5, close=100.5, last_volume=2300, foreign=-8_758_880)['facts']
+        self.assertEqual(facts['data_date'], self.days[-1])
+        self.assertEqual(facts['today'], [
+            {'key': 'close', 'label': '收盤', 'tone': 'up', 'text': '收紅 +0.50%'},
+            {'key': 'volume', 'label': '成交量', 'tone': None, 'text': '均量的 2.16 倍'},
+            {'key': 'foreign', 'label': '外資', 'tone': 'down', 'text': '賣超 8,759 張'},
+        ])
+
+    def test_black_close_and_foreign_net_buy_rounds_half_up(self):
+        # 收盤 98、跌 2 → 前一日 100 → −2.00%；外資 2,500 股＝2.5 張 → 3 張（四捨五入，不是銀行家捨入）。
+        facts = self.analyze(change=-2.0, close=98.0, foreign=2_500)['facts']
+        self.assertEqual(facts['today'][0], {'key': 'close', 'label': '收盤', 'tone': 'down', 'text': '收黑 -2.00%'})
+        self.assertEqual(facts['today'][2], {'key': 'foreign', 'label': '外資', 'tone': 'up', 'text': '買超 3 張'})
+
+    def test_flat_close_and_zero_foreign(self):
+        facts = self.analyze(change=0.0, foreign=0)['facts']
+        self.assertEqual(facts['today'][0], {'key': 'close', 'label': '收盤', 'tone': None, 'text': '平盤 0.00%'})
+        self.assertEqual(facts['today'][2], {'key': 'foreign', 'label': '外資', 'tone': None, 'text': '買賣超 0 張'})
+
+    def test_missing_volume_ratio_or_same_day_foreign_drops_that_cell(self):
+        # 近 20 日量全是 0 → 量比算不出來；法人最新一筆不是資料日 → 外資那格不給（不拿前一天冒充）。
+        facts = self.analyze(change=0.5, close=100.5, last_volume=0, volume=0, foreign=5_000, foreign_day=self.days[-2])['facts']
+        self.assertEqual([cell['key'] for cell in facts['today']], ['close'])
+
+    def test_day_without_a_price_comparison_has_no_close_cell_instead_of_a_fake_flat(self):
+        # 官方標 X（不比價，例如除權息或新上市）時沒有可信的漲跌幅；不能寫成「平盤 0.00%」。
+        facts = self.analyze(change=0.0, change_sign='X', foreign=1_000)['facts']
+        self.assertEqual([cell['key'] for cell in facts['today']], ['volume', 'foreign'])
+
+    def test_volume_multiple_drops_trailing_zeros(self):
+        # 均量＝(19×1000＋1106)/20＝1005.3 → 1005；1106/1005＝1.1005 → 1.10 → 寫「1.1」。
+        facts = self.analyze(change=0.5, close=100.5, last_volume=1106)['facts']
+        self.assertEqual(facts['today'][1]['text'], '均量的 1.1 倍')
+
+    def test_foreign_lots_on_the_data_day_are_unaffected_by_an_earlier_split(self):
+        # 第 31 天一拆四：之前的法人股數乘 4 換算，資料日當天的股數不變 → 外資 3,000 股＝買超 3 張。
+        split = {'date': self.days[30], 'code': '9999', 'type': '變更面額', 'close_before': 100.0,
+                 'reference': 25.0, 'source': 'TWTB8U-202602.json.gz'}
+        earlier = [{'date': self.days[29], 'foreign': 1_000, 'trust': 0, 'dealer': 0, 'total': 1_000}]
+        result = self.analyze(change=0.5, close=100.5, foreign=3_000, capital_actions={'9999': [split]}, rows=earlier)
+        self.assertEqual(result['institutional'][0]['foreign'], 4_000)
+        self.assertEqual(result['facts']['today'][2]['text'], '買超 3 張')
+
+
+class StockFactsSummaryTests(_FactsFixture, unittest.TestCase):
+    """重點三句（B 票先兩句）：固定句型、只報數字；缺一項只寫另一半，兩項都缺整句不寫。"""
+
+    def test_position_and_volume_sentences(self):
+        # 60 根：59 根收 100、最後一根 110 → 月線＝(19×100＋110)/20＝100.5；只有 60 根所以沒有年線那一半。
+        # RSI：近 14 個變動只有 +10 → 100；量都 1000 → 均量的 1 倍。
+        facts = self.analyze(change=10.0, close=110.0)['facts']
+        self.assertEqual(facts['summary'], ['收盤 110，在月線 100.5 之上。', '成交量是均量的 1 倍，RSI 100。'])
+        self.assertIn('summary', facts['blocks'])
+
+    def test_position_sentence_with_year_line_below_both(self):
+        # 250 根：249 根收 100、最後一根 90 → 月線＝(19×100＋90)/20＝99.5；年線＝(239×100＋90)/240＝99.958… → 99.96。
+        facts = self.analyze(change=-10.0, close=90.0, n_days=250)['facts']
+        self.assertEqual(facts['summary'][0], '收盤 90，在月線 99.5 之下、年線 99.96 之下。')
+
+    def test_volume_sentence_keeps_the_half_that_exists(self):
+        # 全部收 100 → RSI 算不出來（不是 50）；量也全是 0 → 兩項都缺，整句不寫。
+        self.assertEqual(self.analyze(change=0.0, volume=0, last_volume=0)['facts']['summary'], ['收盤 100，在月線 100 之上。'])
+        self.assertEqual(self.analyze(change=0.0)['facts']['summary'][1], '成交量是均量的 1 倍。')
+        self.assertEqual(self.analyze(change=10.0, close=110.0, volume=0, last_volume=0)['facts']['summary'][1], 'RSI 100。')
+
+
+class StockFactsInstitutionalTests(_FactsFixture, unittest.TestCase):
+    """法人：連買或連賣天數（從資料日往回數同方向），近 5／10／20 日累計（張）。"""
+
+    def rows(self, foreign, trust, dealer):
+        days = self.days[-len(foreign):]
+        return [{'date': d, 'foreign': f, 'trust': t, 'dealer': x, 'total': f + t + x}
+                for d, f, t, x in zip(days, foreign, trust, dealer)]
+
+    def test_streaks_and_cumulative_lots(self):
+        # 22 個交易日（舊→新）：
+        # 外資：前 2 天各 +5,000 股，後 20 天各 −1,000 股 → 連賣 20 天（數到 +5,000 停）；5／10／20 日＝−5／−10／−20 張。
+        # 投信：22 天都 +1,500 股 → 連買 22 天、數到最早一天仍同方向＝「以上」；7,500→8 張、15,000→15、30,000→30。
+        # 自營商：前 21 天各 +100、資料日 0 → 不寫連續；400→0 張、900→1、1,900→2。
+        rows = self.rows([5_000] * 2 + [-1_000] * 20, [1_500] * 22, [100] * 21 + [0])
+        facts = self.analyze(change=0.5, close=100.5, rows=rows)['facts']
+        self.assertEqual(facts['institutional'], {'data_date': self.days[-1], 'rows': [
+            {'name': '外資', 'side': 'sell', 'days': 20, 'at_least': False, 'sum5': -5, 'sum10': -10, 'sum20': -20},
+            {'name': '投信', 'side': 'buy', 'days': 22, 'at_least': True, 'sum5': 8, 'sum10': 15, 'sum20': 30},
+            {'name': '自營商', 'side': None, 'days': None, 'at_least': False, 'sum5': 0, 'sum10': 1, 'sum20': 2},
+        ]})
+        self.assertEqual(facts['blocks'], ['summary', 'institutional', 'technical'])
+
+    def test_short_series_leaves_out_the_longer_sums(self):
+        # 只有 7 天：5 日累計有，10、20 日沒有。
+        rows = self.rows([-2_000] * 7, [0] * 7, [0] * 7)
+        foreign = self.analyze(change=0.5, close=100.5, rows=rows)['facts']['institutional']['rows'][0]
+        self.assertEqual((foreign['days'], foreign['at_least'], foreign['sum5'], foreign['sum10'], foreign['sum20']),
+                         (7, True, -10, None, None))
+
+    def test_a_missing_trading_day_stops_the_streak_and_voids_sums_that_span_it(self):
+        # 最後 6 個交易日外資都賣 1,000 股，但倒數第 3 天沒有資料：只能確定最近 2 天 → 「賣 2 天以上」；
+        # 5、10、20 日的時間窗都跨過那個缺日 → 不給。
+        rows = [row for row in self.rows([-1_000] * 6, [0] * 6, [0] * 6) if row['date'] != self.days[-3]]
+        foreign = self.analyze(change=0.5, close=100.5, rows=rows)['facts']['institutional']['rows'][0]
+        self.assertEqual((foreign['side'], foreign['days'], foreign['at_least'], foreign['sum5'], foreign['sum10'], foreign['sum20']),
+                         ('sell', 2, True, None, None, None))
+
+    def test_cumulative_lots_follow_the_split_adjustment(self):
+        # 倒數第 3 天一拆四：之前兩天的 −1,000 股換算成 −4,000 股 → 5 日累計＝2×(−4,000)＋3×(−1,000)＝−11,000 股＝−11 張。
+        split = {'date': self.days[-3], 'code': '9999', 'type': '變更面額', 'close_before': 100.0,
+                 'reference': 25.0, 'source': 'TWTB8U-202602.json.gz'}
+        rows = self.rows([-1_000] * 5, [0] * 5, [0] * 5)
+        foreign = self.analyze(change=0.5, close=100.5, rows=rows, capital_actions={'9999': [split]})['facts']['institutional']['rows'][0]
+        self.assertEqual((foreign['days'], foreign['sum5']), (5, -11))
+
+    def test_no_institutional_rows_means_no_block(self):
+        facts = self.analyze(change=0.5, close=100.5)['facts']
+        self.assertIsNone(facts['institutional'])
+        self.assertNotIn('institutional', facts['blocks'])
+
+
+class StockFactsTechnicalTests(_FactsFixture, unittest.TestCase):
+    """技術：均線與近 20 日收盤高低的價位、收盤距離（%，一位小數），與 RSI、量比、KD。"""
+
+    def test_price_rows_and_readings(self):
+        # 60 根：59 根收 100（高 101、低 99）、最後一根 110（高 111、低 109）。
+        # 5 日線＝(4×100＋110)/5＝102 → 110/102−1＝7.84% → 7.8；10 日線＝101 → 8.9；月線＝100.5 → 9.5；
+        # 季線＝(59×100＋110)/60＝100.1666… → 100.17 → 9.8；20 日收盤最高 110 → 0.0；最低 100 → 10.0。
+        # KD：持平時 RSV＝50、K＝D＝50；最後一天 RSV＝(110−99)/(111−99)＝91.67 → K＝63.89、D＝54.63。
+        technical = self.analyze(change=10.0, close=110.0)['facts']['technical']
+        self.assertEqual(technical['rows'], [
+            {'name': '5 日線', 'value': 102.0, 'distance_pct': 7.8},
+            {'name': '10 日線', 'value': 101.0, 'distance_pct': 8.9},
+            {'name': '月線', 'value': 100.5, 'distance_pct': 9.5},
+            {'name': '季線', 'value': 100.17, 'distance_pct': 9.8},
+            {'name': '20 日高', 'value': 110.0, 'distance_pct': 0.0},
+            {'name': '20 日低', 'value': 100.0, 'distance_pct': 10.0},
+        ])
+        self.assertEqual((technical['rsi'], technical['volume_ratio'], technical['kd_k'], technical['kd_d']), (100.0, 1.0, 63.89, 54.63))
+
+    def test_values_are_the_same_numbers_as_the_analysis_indicators(self):
+        # 和圖上的線同一套數字：技術表不另外算。
+        result = self.analyze(change=10.0, close=110.0)
+        x = result['indicators']
+        self.assertEqual([row['value'] for row in result['facts']['technical']['rows']],
+                         [x['ma5'], x['ma10'], x['ma20'], x['ma60'], x['high20_close'], x['low20_close']])
+
+    def test_half_year_and_year_lines_appear_with_enough_history(self):
+        # 250 根、最後收 90：半年線＝(119×100＋90)/120＝99.92 → −9.9%；年線＝99.96 → −10.0%。
+        rows = self.analyze(change=-10.0, close=90.0, n_days=250)['facts']['technical']['rows']
+        self.assertEqual([row['name'] for row in rows], ['5 日線', '10 日線', '月線', '季線', '半年線', '年線', '20 日高', '20 日低'])
+        self.assertEqual(rows[4:6], [{'name': '半年線', 'value': 99.92, 'distance_pct': -9.9},
+                                     {'name': '年線', 'value': 99.96, 'distance_pct': -10.0}])
+
+    def test_block_list_follows_what_exists(self):
+        facts = self.analyze(change=10.0, close=110.0)['facts']
+        self.assertEqual(facts['blocks'], ['summary', 'technical'])
+
+
+class StockFactsCreditTests(_FactsFixture, unittest.TestCase):
+    """融資券（C 票）：融資、融券、借券的最新餘額（張）、相對 5 個交易日前的增減、近 20 日走勢；各自標資料日。"""
+
+    def credit(self, margin_days, borrow_days):
+        # 融資融券：餘額 100、101…（融資）與 10、11…（融券），單位張；借券：50,000 股起每天加 1,500 股。
+        return {'margin': [{'date': d, 'margin': 100 + i, 'short': 10 + i} for i, d in enumerate(margin_days)],
+                'borrow': [{'date': d, 'balance': 50_000 + 1_500 * i} for i, d in enumerate(borrow_days)]}
+
+    def test_balances_five_day_changes_and_series(self):
+        # 融資融券 8 天、到倒數第 2 天（比法人晚一天）：最新 107 張，5 個交易日前 102 → +5；融券 17、12 → +5。
+        # 借券 8 天、到資料日：最新 60,500 股＝61 張（60.5 四捨五入），5 個交易日前 53,000 股 → 增 7,500 股＝8 張。
+        # 借券走勢逐日換成張：50、51.5→52、53、54.5→55、56、57.5→58、59、60.5→61。
+        facts = self.analyze(change=0.5, close=100.5, credit=self.credit(self.days[-9:-1], self.days[-8:]))['facts']
+        self.assertEqual(facts['credit']['rows'], [
+            {'name': '融資', 'balance': 107, 'change5': 5, 'series': [100, 101, 102, 103, 104, 105, 106, 107], 'data_date': self.days[-2]},
+            {'name': '融券', 'balance': 17, 'change5': 5, 'series': [10, 11, 12, 13, 14, 15, 16, 17], 'data_date': self.days[-2]},
+            {'name': '借券', 'balance': 61, 'change5': 8, 'series': [50, 52, 53, 55, 56, 58, 59, 61], 'data_date': self.days[-1]},
+        ])
+        self.assertEqual(facts['blocks'], ['summary', 'credit', 'technical'])
+
+    def test_a_missing_day_five_days_back_gives_no_change(self):
+        # 融資融券缺了 5 個交易日前那一天 → 增減不給；走勢照樣畫手上有的日子（缺的那天是 None）。
+        days = [d for d in self.days[-8:] if d != self.days[-6]]
+        rows = self.analyze(change=0.5, close=100.5, credit=self.credit(days, []))['facts']['credit']['rows']
+        self.assertEqual([row['name'] for row in rows], ['融資', '融券'])
+        self.assertIsNone(rows[0]['change5'])
+        self.assertEqual(rows[0]['series'], [100, 101, None, 102, 103, 104, 105, 106])
+
+    def test_fewer_than_six_days_gives_no_change(self):
+        rows = self.analyze(change=0.5, close=100.5, credit=self.credit(self.days[-5:], []))['facts']['credit']['rows']
+        self.assertEqual((rows[0]['balance'], rows[0]['change5'], rows[0]['series']), (104, None, [100, 101, 102, 103, 104]))
+
+    def test_latest_credit_day_outside_the_price_days_still_shows_its_balance(self):
+        # 例如資料日當天停牌：K 線沒有那一天，融資原件有。最新餘額照樣顯示，不能讓整份事實區塊消失。
+        extra = '2025-03-07'   # 比 K 線最後一天（2025-03-06）晚一天
+        facts = self.analyze(change=0.5, close=100.5, credit=self.credit(self.days[-6:] + [extra], []))['facts']
+        self.assertEqual(facts['credit']['rows'][0]['balance'], 106)
+        self.assertEqual(facts['credit']['rows'][0]['data_date'], extra)
+        self.assertEqual([cell['key'] for cell in facts['today']], ['close', 'volume'])   # 其他內容照常（這則沒給法人）
+
+    def test_borrow_change_is_the_difference_of_the_shown_balances(self):
+        # 60,400 股顯示 60 張、5 個交易日前 53,600 股顯示 54 張 → 增減寫 +6（兩個顯示的數字相減），不是 6,800 股＝7 張。
+        borrow = [{'date': d, 'balance': v} for d, v in zip(self.days[-6:], [53_600, 55_000, 56_000, 57_000, 58_000, 60_400])]
+        row = self.analyze(change=0.5, close=100.5, credit={'margin': [], 'borrow': borrow})['facts']['credit']['rows'][0]
+        self.assertEqual((row['name'], row['balance'], row['change5']), ('借券', 60, 6))
+
+    def test_no_credit_data_means_no_block(self):
+        facts = self.analyze(change=0.5, close=100.5)['facts']
+        self.assertIsNone(facts['credit'])
+        self.assertNotIn('credit', facts['blocks'])
+
+
+class StockFactsFundamentalsTests(_FactsFixture, unittest.TestCase):
+    """基本面（C 票）：本益比、淨值比、殖利率；最新月營收的月增年增；近 13 個月營收年增。重點補上第三句。"""
+
+    VALUATION = {'date': '2025-03-06', 'pe': 25.91, 'pb': 9.01, 'dividend_yield_pct': 0.98}
+
+    def revenue(self):
+        # 2024-09～2025-08 每月 100；2025-09～2026-07 每月 110；2026-08＝130；2026-09＝150（千元）。
+        periods = ([f'2024-{m:02d}' for m in range(9, 13)] + [f'2025-{m:02d}' for m in range(1, 13)]
+                   + [f'2026-{m:02d}' for m in range(1, 10)])
+        values = [100] * 12 + [110] * 11 + [130, 150]
+        return [{'period': p, 'revenue': v} for p, v in zip(periods, values)]
+
+    def test_valuation_latest_revenue_and_yoy_series(self):
+        # 2026-09：年增＝150/110−1＝36.36% → 36.4；月增＝150/130−1＝15.38% → 15.4。
+        # 近 13 個月（2025-09～2026-09）年增：前 11 個月 110/100 → 10.0；2026-08 130/100 → 30.0；2026-09 → 36.4。
+        facts = self.analyze(change=0.5, close=100.5, valuation=self.VALUATION, revenue=self.revenue())['facts']
+        self.assertEqual(facts['fundamentals'], {
+            'valuation': {'pe': 25.91, 'pb': 9.01, 'yield': 0.98, 'data_date': '2025-03-06'},
+            'revenue': {'period': '2026-09', 'mom': 15.4, 'yoy': 36.4},
+            'revenue_yoy': [{'period': p, 'yoy': y} for p, y in zip(
+                ['2025-09', '2025-10', '2025-11', '2025-12'] + [f'2026-{m:02d}' for m in range(1, 10)],
+                [10.0] * 11 + [30.0, 36.4])],
+        })
+        self.assertEqual(facts['summary'][2], '9 月營收年增 +36.4%，本益比 25.91。')
+        self.assertEqual(facts['blocks'], ['summary', 'fundamentals', 'technical'])
+
+    def test_months_without_last_year_have_no_yoy(self):
+        # 只有 2025-10 起的月營收：近 13 個月裡 2025-09～2026-09 都沒有去年同期 → 年增都不給；最新一期仍有月增。
+        revenue = [row for row in self.revenue() if row['period'] >= '2025-10']
+        block = self.analyze(change=0.5, close=100.5, revenue=revenue)['facts']['fundamentals']
+        self.assertEqual(block['revenue'], {'period': '2026-09', 'mom': 15.4, 'yoy': None})
+        self.assertTrue(all(item['yoy'] is None for item in block['revenue_yoy']))
+
+    def test_a_tiny_decline_rounds_to_plain_zero_not_minus_zero(self):
+        # 9,999 對 10,000：年增 −0.01% → 一位小數是 0.0（不能是 −0.0，頁面會印成「-0%」）。
+        revenue = [{'period': '2025-09', 'revenue': 10_000}, {'period': '2026-09', 'revenue': 9_999}]
+        facts = self.analyze(change=0.5, close=100.5, revenue=revenue)['facts']
+        import math
+        self.assertEqual(math.copysign(1, facts['fundamentals']['revenue']['yoy']), 1.0)
+        self.assertEqual(facts['summary'][2], '9 月營收年增 0.0%。')
+
+    def test_third_sentence_keeps_the_half_that_exists(self):
+        only_valuation = self.analyze(change=0.5, close=100.5, valuation=self.VALUATION)['facts']
+        self.assertEqual(only_valuation['summary'][2], '本益比 25.91。')
+        self.assertIsNone(only_valuation['fundamentals']['revenue'])
+        only_revenue = self.analyze(change=0.5, close=100.5, revenue=self.revenue())['facts']
+        self.assertEqual(only_revenue['summary'][2], '9 月營收年增 +36.4%。')
+        self.assertIsNone(only_revenue['fundamentals']['valuation'])
+
+    def test_no_valuation_and_no_revenue_means_no_block_and_two_sentences(self):
+        # 例如 ETF：沒有本益比也沒有月營收 → 沒有基本面這個按鈕，重點只有兩句。
+        facts = self.analyze(change=0.5, close=100.5)['facts']
+        self.assertIsNone(facts['fundamentals'])
+        self.assertNotIn('fundamentals', facts['blocks'])
+        self.assertEqual(len(facts['summary']), 2)
+
+
+class StockFactsReaderTests(unittest.TestCase):
+    """融資券讀取：從每日更新已經在抓的上市原件（融資融券 MI_MARGN、借券 TWT93U）讀出單一個股，由舊到新。"""
+
+    def test_listed_credit_series_reads_the_daily_raw_files(self):
+        from twon_analysis import analyze_v2 as module, chips
+        with tempfile.TemporaryDirectory() as tmp:
+            detail, fund = Path(tmp) / 'detail', Path(tmp) / 'fund'
+            for folder in (detail / 'margin', detail / 't86', fund / 'twt93u'):
+                folder.mkdir(parents=True)
+            for day, margin, short, borrow in (('20260105', 300, 9, 70_000), ('20260106', 310, 7, 71_000)):
+                (detail / 't86' / f't86-{day}.json').write_text('{"data": {"fields": [], "data": []}}', encoding='utf-8')
+                row = ['9999', '測試', '0', '0', '0', '0', str(margin), '0', '0', '0', '0', '0', str(short), '0', '0', '']
+                (detail / 'margin' / f'margin-{day}.json').write_text(json.dumps(
+                    {'data': {'tables': [{'fields': ['代號'], 'data': [row]}]}}), encoding='utf-8')
+                borrow_row = ['9999', '測試', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', str(borrow), '0', '']
+                (fund / 'twt93u' / f'twt93u-{day}.json').write_text(json.dumps({'data': [borrow_row]}), encoding='utf-8')
+            with unittest.mock.patch.object(chips, 'DETAIL', detail), unittest.mock.patch.object(chips, 'FUND', fund):
+                for cached in (chips._margin, chips._borrow):
+                    cached.cache_clear()
+                try:
+                    series = module.credit_series('9999', '上市', '2026-01-06')
+                finally:
+                    for cached in (chips._margin, chips._borrow):
+                        cached.cache_clear()
+        self.assertEqual(series, {
+            'margin': [{'date': '2026-01-05', 'margin': 300, 'short': 9}, {'date': '2026-01-06', 'margin': 310, 'short': 7}],
+            'borrow': [{'date': '2026-01-05', 'balance': 70_000}, {'date': '2026-01-06', 'balance': 71_000}],
+        })
+
+    def test_valuation_and_revenue_readers_use_the_daily_data(self):
+        # 估值：資料日以前最近一筆；月營收：只用法定公布日已過的期別（2026-10 還沒到公布日，不算）。
+        import valuation_history
+        import fundamentals_history as fh
+        from twon_analysis import analyze_v2 as module
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db = root / 'valuation.sqlite'
+            connection = sqlite3.connect(db)
+            connection.execute('CREATE TABLE valuation (market TEXT, date TEXT, code TEXT, name TEXT, close REAL, dividend_yield_pct REAL, '
+                               'dividend_year_roc INTEGER, pe REAL, pb REAL, fin_period_roc TEXT, schema TEXT)')
+            for day, pe in (('2026-11-05', 24.0), ('2026-11-06', 25.91), ('2026-11-10', 30.0)):
+                connection.execute("INSERT INTO valuation VALUES ('上市', ?, '9999', '測試', 1, 0.98, 114, ?, 9.01, '115/2', 'v8')", (day, pe))
+            connection.commit()
+            connection.close()
+            (root / 'fundamentals-history').mkdir()
+            files = [{'dataset': 'monthly_revenue', 'market': 'listed', 'period': period, 'available_on': available,
+                      'file': f'{period}.html', 'fetched_at_utc': 'x', 'sha256': 'x'}
+                     for period, available in (('2026-08', '2026-09-10'), ('2026-09', '2026-10-10'), ('2026-10', '2026-11-10'))]
+            (root / 'fundamentals-history' / 'meta.json').write_text(json.dumps({'files': files}), encoding='utf-8')
+            for item in files:
+                (root / 'fundamentals-history' / item['file']).write_bytes(b'')
+            values = {'2026-08': 130, '2026-09': 150, '2026-10': 999}
+
+            def parse(content, *, market, period, **_):
+                return [{'code': '9999', 'revenue_thousand_twd': values[period]}]
+            with unittest.mock.patch.object(valuation_history, 'DEFAULT_DB', db), \
+                    unittest.mock.patch.object(module, 'DEFAULT_DB', root / 'stock-history' / 'h.sqlite'), \
+                    unittest.mock.patch.object(fh, 'parse_monthly_revenue', parse), \
+                    unittest.mock.patch.dict(module._REVENUE_CACHE, clear=True):
+                valuation = module.valuation_snapshot('9999', '2026-11-09')
+                revenue = module.revenue_series('9999', '上市', '2026-11-09')
+        self.assertEqual((valuation['date'], valuation['pe'], valuation['pb'], valuation['dividend_yield_pct']), ('2026-11-06', 25.91, 9.01, 0.98))
+        self.assertEqual(revenue, [{'period': '2026-08', 'revenue': 130}, {'period': '2026-09', 'revenue': 150}])
+
+    def test_otc_credit_series_reads_the_tpex_raw_files(self):
+        # E 票：上櫃融資融券（張）在「資餘額」「券餘額」，借券（股）在第二個「當日餘額」；只讀資料日以前的。
+        from twon_analysis import analyze_v2 as module
+        margin_fields = ['代號', '名稱', '前資餘額(張)', '資買', '資賣', '現償', '資餘額', '資屬證金', '資使用率(%)', '資限額',
+                         '前券餘額(張)', '券賣', '券買', '券償', '券餘額', '券屬證金']
+        sbl_fields = ['股票代號', '股票名稱', '前日餘額', '賣出', '買進', '現券', '當日餘額', '限額', '前日餘額', '當日賣出',
+                      '當日還券', '當日調整數額', '當日餘額', '次一營業日可借券賣出限額', '備註']
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for kind in ('margin', 'sbl'):
+                (root / 'otc-credit' / kind).mkdir(parents=True)
+            for day, margin, short, borrow in (('20261110', '9,612', '202', '12,577,000'), ('20261111', '9,021', '198', '12,089,000'),
+                                               ('20261112', '1', '1', '1')):
+                margin_row = ['6488', '環球晶', '0', '0', '0', '0', margin, '0', '0', '0', '0', '0', '0', '0', short, '0']
+                sbl_row = ['6488', '環球晶', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', borrow, '0', '']
+                (root / 'otc-credit/margin' / f'{day}.json').write_text(json.dumps(
+                    {'stat': 'ok', 'tables': [{'fields': margin_fields, 'data': [margin_row]}]}), encoding='utf-8')
+                (root / 'otc-credit/sbl' / f'{day}.json').write_text(json.dumps(
+                    {'stat': 'ok', 'tables': [{'fields': sbl_fields, 'data': [sbl_row]}]}), encoding='utf-8')
+            with unittest.mock.patch.object(module, 'DEFAULT_DB', root / 'stock-history' / 'h.sqlite'):
+                series = module.credit_series('6488', '上櫃', '2026-11-11')
+        self.assertEqual(series, {
+            'margin': [{'date': '2026-11-10', 'margin': 9612, 'short': 202}, {'date': '2026-11-11', 'margin': 9021, 'short': 198}],
+            'borrow': [{'date': '2026-11-10', 'balance': 12_577_000}, {'date': '2026-11-11', 'balance': 12_089_000}],
+        })
 
 
 class BlockingTests(unittest.TestCase):

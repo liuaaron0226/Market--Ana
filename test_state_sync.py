@@ -467,6 +467,17 @@ class StateSyncTest(unittest.TestCase):
         for path in ("data/stock-history/raw", "data/otc-history/raw"):
             self.assertGreaterEqual(by_path[path].recent_files, needed, path)
 
+    def test_credit_raw_files_cover_the_stock_page_credit_block(self) -> None:
+        # 個股頁事實區塊（2026-11-15 規格，C 票）：融資券那一塊要畫近 20 個交易日的走勢、算 5 日增減，
+        # 借券與融資融券原件都要留到 20 個交易日再多一點緩衝（原本借券只留 20 個檔，剛好在邊界）。
+        by_path = {item.path: item for item in ss.WORKING_SET}
+        for path in ("data/fundamentals/twt93u", "data/market-snapshots/stock-detail", "data/otc-credit"):
+            self.assertGreaterEqual(by_path[path].recent_files, 25, path)
+
+    def test_announcement_raw_files_are_not_in_the_working_set(self) -> None:
+        # 重大訊息原件由早上的排程與每日更新各自寫入 R2 的獨立資料夾；放進整批換新的工作集會被蓋掉。
+        self.assertNotIn("data/announcements/raw", {item.path for item in ss.WORKING_SET})
+
     def test_working_set_covers_market_pack_inputs(self) -> None:
         # U3：大盤頁資料包（cloud/market_pack_daily.py）從原件重建；Actions 上只有 R2 工作集，缺一項就在 build_dist 失敗。
         # logs/build_analysis_data.py 要求的窗：日K與成交金額＝2016 起全部月份、5 秒指數 30 日、法人 120 日、類股 60 日、期貨 1 份；

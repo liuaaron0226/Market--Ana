@@ -116,7 +116,11 @@ WORKING_SET: tuple[Item, ...] = (
     # 個股融資原件的長期保存區：融資維持率（估）每天從起點重播，全部保留、不得裁（每日約 150 KB）。
     # 上面 stock-detail 裡的近期明細另有用途（首頁籌碼明細會把那裡的每一天都列出來），所以不放在一起。
     Item("data/margin-history"),
-    Item("data/fundamentals/twt93u", recent_files=20),
+    Item("data/fundamentals/twt93u", recent_files=30),  # 個股頁融資券那一塊要近 20 個交易日走勢與 5 日增減（11-16）
+    # 上櫃融資融券與借券原件（個股頁事實區塊 E 票）：融資券那一塊要近 20 個交易日；margin／sbl 兩個子資料夾各留 30 個。
+    Item("data/otc-credit", recent_files=30),
+    # 公司重大訊息的官方快照原件不在這裡：工作集整批換新，早上的排程寫進來會被每日更新蓋掉；
+    # 改存 R2 的 announcements/raw/（檔名不重複、只增不改），見 announcements.py 的 daily()。
     Item("data/corporate-actions/events.json"),
     Item("data/corporate-actions/raw/TPEx-exDailyQ"),  # 櫃買除權息原件＋SHA＋涵蓋區間（2016 起全留）
     # 還原價的補充資料（ETF 分割、櫃買減資／面額變更、上市除權息現金股利）；第一次由 seeds/ 的種子起算。

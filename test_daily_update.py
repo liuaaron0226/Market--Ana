@@ -980,6 +980,24 @@ class D1PruneTest(unittest.TestCase):
             for other in (11, 12, 13):
                 self.assertNotIn(self.name(other), delete)
 
+    def test_announcement_rows_are_deleted_too_once_the_table_exists(self) -> None:
+        # 個股頁事實區塊 D 票：公告表（0012）套到資料庫之後，清舊版本時一起刪，而且排在刪版本登記之前。
+        calls: list[str] = []
+        state = {"active_version": self.name(13), "previous_version": self.name(12), "has_announcements": 1}
+        with unittest.mock.patch.object(du, "_sh", self.remote(state, calls)):
+            du._prune_d1_versions(self.name(13))
+        self.assertIn("stock_announcements", calls[0])   # 同一次查詢順便問表在不在，不多打一次
+        for delete in calls[1:]:
+            self.assertLess(delete.index("DELETE FROM stock_announcements "), delete.index("DELETE FROM stock_data_versions "))
+
+    def test_announcement_rows_are_not_touched_before_the_table_exists(self) -> None:
+        calls: list[str] = []
+        state = {"active_version": self.name(13), "previous_version": self.name(12), "has_announcements": 0}
+        with unittest.mock.patch.object(du, "_sh", self.remote(state, calls)):
+            du._prune_d1_versions(self.name(13))
+        for delete in calls[1:]:
+            self.assertNotIn("stock_announcements", delete)
+
     def test_a_failed_delete_stops_there_and_reports_what_was_already_removed(self) -> None:
         calls: list[str] = []
         state = {"active_version": self.name(13), "previous_version": self.name(12)}
