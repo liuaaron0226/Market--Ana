@@ -268,17 +268,69 @@
     return box;
   }
 
-  function fillNews(list, items) {
-    list.replaceChildren(...items.slice(0, NEWS_FIRST).map(newsItem));
+  // 先放前 NEWS_FIRST 則，其餘收在「更多」後面（公告與新聞標題同一個做法）。
+  function fillList(list, items, make) {
+    list.replaceChildren(...items.slice(0, NEWS_FIRST).map(make));
     if (items.length > NEWS_FIRST) {
       const more = el('button', 'sf-news-more', `更多（共 ${items.length} 則）`);
       more.type = 'button';
       more.addEventListener('click', () => {
         more.remove();
-        list.append(...items.slice(NEWS_FIRST).map(newsItem));
+        list.append(...items.slice(NEWS_FIRST).map(make));
       });
       list.append(more);
     }
+  }
+  const fillNews = (list, items) => fillList(list, items, newsItem);
+
+  // ---------- 關注股的新聞標題（自選股關注 C 票：只給站主、只有正在關注的那幾檔） ----------
+  // 發布時間是 UTC，畫面一律換成台北時間；「今天」也以台北的日期為準。
+  const TAIPEI = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+  const taipei = iso => {
+    const part = Object.fromEntries(TAIPEI.formatToParts(new Date(iso)).map(p => [p.type, p.value]));
+    return { day: `${part.year}-${part.month}-${part.day}`, text: `${part.month}-${part.day} ${part.hour}:${part.minute}` };
+  };
+  const headlineCache = new Map();
+
+  function headlineItem(item) {
+    const link = el('a', 'sf-headline');
+    if (/^https:\/\//.test(item.link)) link.href = item.link;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.append(el('span', 'sf-news-when num', taipei(item.published_at).text), el('span', 'sf-headline-title', item.title));
+    if (item.summary) link.append(el('span', 'sf-headline-lead', item.summary));
+    link.append(el('span', 'sf-headline-src', item.publisher || ''));
+    return link;
+  }
+
+  // 沒抓到的來源各一行；這幾天一則都沒有、而且至少有一個來源抓到了，才說「這幾天沒有消息」。
+  function fillHeadlines(host, body) {
+    if (!body?.available || !body.watching) return;
+    const items = Array.isArray(body.items) ? body.items : [];
+    const sources = Array.isArray(body.sources) ? body.sources : [];
+    const today = taipei(Date.now()).day;
+    const parts = sources.filter(source => !source.ok).map(source => {
+      const when = taipei(source.last_attempt_at);
+      return el('p', 'sf-miss', `${source.label} ${when.day === today ? '今天' : when.text.slice(0, 5) + ' '}沒抓到`);
+    });
+    if (items.length) {
+      const list = el('div', 'sf-headlines');
+      fillList(list, items, headlineItem);
+      parts.push(list);
+    } else if (sources.some(source => source.ok)) {
+      parts.push(el('p', 'sf-quiet', '這幾天沒有消息'));
+    }
+    host.replaceChildren(...parts);
+  }
+
+  async function headlines(code) {
+    if (!headlineCache.has(code)) {
+      headlineCache.set(code, fetch(`/api/watch/${encodeURIComponent(code)}/news`, { cache: 'no-store' })
+        .then(response => { if (!response.ok) throw new Error(String(response.status)); return response.json(); })
+        .catch(() => { headlineCache.delete(code); return null; }));
+    }
+    return headlineCache.get(code);
   }
 
   async function newsItems(code) {
@@ -298,7 +350,10 @@
     const list = el('div', 'sf-news');
     // 讀到之前只有產業別；讀不到或這幾天沒有公告也只有產業別（不放說明文字）。
     newsItems(code).then(items => { if (list.isConnected) fillNews(list, items); });
-    return [industry, list];
+    // 新聞標題接在公告後面；不是站主或這一檔沒有關注時什麼都不出現。
+    const press = el('div', 'sf-press');
+    headlines(code).then(body => { if (press.isConnected) fillHeadlines(press, body); });
+    return [industry, list, press];
   }
 
   const PANELS = { summary: summaryPanel, institutional: institutionalPanel, credit: creditPanel, fundamentals: fundamentalsPanel,

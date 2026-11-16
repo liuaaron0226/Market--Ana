@@ -155,6 +155,16 @@ jobs:
         run: |
           if [ -n "$DRY_RUN" ]; then python announcements.py daily --r2 --no-upload; else python announcements.py daily --r2; fi
 
+      - name: 關注股的新聞標題：抓 Yahoo股市與中央社，寫進 D1
+        # 自選股關注 C 票：只抓站主正在關注的股票（Yahoo 每檔一次）與中央社三個分類，標題、前言、連結直接寫進 D1 的 watch_news
+        # （不跟個股資料版本走），超過 90 天的同時清掉。資料表還沒建立（0014 未套）就什麼都不抓。
+        # 失敗不擋發布：個股頁的新聞那一塊會標「今天沒抓到」。試跑不寫 D1，所以整步跳過。
+        if: steps.day.outputs.dry_run == ''
+        continue-on-error: true
+        env:
+          OWNER_EMAIL: ${{ vars.OWNER_EMAIL }}
+        run: python watch_news.py daily --d1
+
       - name: 每日更新
         id: run
         env:

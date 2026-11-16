@@ -2,7 +2,8 @@
 // 其他人一律得到「沒有內容」，自選股本身的入口與回應不變。
 import { UserPortfolioError, codeFrom, noContent, requireSameOrigin, response } from "./user-portfolio.js";
 
-export const WATCH_PATH = /^\/api\/watch(?:\/([^/]+))?$/;
+// /api/watch、/api/watch/<代號>（打開／關掉）、/api/watch/<代號>/news（C 票：這一檔的新聞標題）。
+export const WATCH_PATH = /^\/api\/watch(?:\/([^/]+)(\/news)?)?$/;
 // 上限同時寫在資料表的限制裡（migration 0011 的 user_watchlist_watch_limit）；要調整得兩邊一起改。
 export const WATCH_LIMIT = 20;
 
@@ -64,9 +65,52 @@ async function close(db, email, code) {
   return noContent();
 }
 
+// ---- C 票：關注股的新聞標題（watch_news.py 每天寫入；migration 0014 建表） ----
+// 只給站主、而且這一檔正在關注；每則標出處，連結是原文，不含全文。來源條款都限本人私用。
+const NEWS_KEEP_DAYS = 90;
+const NEWS_MAX = 100;
+const PUBLISHER = { yahoo: "Yahoo股市", "cna-finance": "中央通訊社", "cna-intworld": "中央通訊社", "cna-technology": "中央通訊社" };
+// 畫面依這個順序列出沒抓到的來源；Yahoo 是這一檔的那一份，中央社三個分類是整批的（code 是 ''）。
+const NEWS_SOURCES = [["yahoo", "Yahoo股市"], ["cna-finance", "中央通訊社產經證券"], ["cna-intworld", "中央通訊社國際"],
+  ["cna-technology", "中央通訊社科技"]];
+const isoSeconds = (ms) => new Date(ms).toISOString().slice(0, 19) + "Z";   // 和寫入端同一個格式，字串才能直接比大小
+
+async function news(db, email, code, now) {
+  const row = await db.prepare("SELECT watching FROM user_watchlist WHERE email = ? AND code = ?").bind(email, code).first();
+  if (!row?.watching) return response(200, { available: true, code, watching: false, items: [], sources: [] });
+  let items = [];
+  let sources = [];
+  try {
+    const cutoff = isoSeconds(now - NEWS_KEEP_DAYS * 86_400_000);
+    const stored = await db.prepare(
+      "SELECT source, title, summary, link, published_at FROM watch_news WHERE code = ? AND published_at >= ? " +
+        "ORDER BY published_at DESC, link LIMIT ?",
+    ).bind(code, cutoff, NEWS_MAX).all();
+    items = stored.results.map((item) => ({ source: item.source, publisher: PUBLISHER[item.source], title: item.title,
+      summary: item.summary, link: item.link, published_at: item.published_at }));
+    const fetches = await db.prepare(
+      "SELECT source, code, last_attempt_at, last_success_at, last_error FROM watch_news_fetches " +
+        "WHERE (source = 'yahoo' AND code = ?) OR (source <> 'yahoo' AND code = '')",
+    ).bind(code).all();
+    const bySource = new Map(fetches.results.map((fetch) => [fetch.source, fetch]));
+    sources = NEWS_SOURCES.filter(([source]) => bySource.has(source)).map(([source, label]) => {
+      const fetch = bySource.get(source);
+      return { source, label, ok: fetch.last_error === null, last_attempt_at: fetch.last_attempt_at, last_success_at: fetch.last_success_at };
+    });
+  } catch {
+    items = [];   // 資料表還沒建立（0014 未套）
+    sources = [];
+  }
+  return response(200, { available: true, code, watching: true, items, sources });
+}
+
 export async function handleWatchApi(request, env, path, email, deps, { isOwner, policy }) {
   if (!isOwner || !policy.features.watchlist_watch_v1) return response(200, { available: false });
-  const [, codeText] = WATCH_PATH.exec(path);
+  const [, codeText, newsPath] = WATCH_PATH.exec(path);
+  if (newsPath) {
+    if (request.method !== "GET") throw new UserPortfolioError(405, "方法不允許");
+    return news(env.DB, email, codeFrom(codeText), (deps.now || Date.now)());
+  }
   if (codeText === undefined) {
     if (request.method !== "GET") throw new UserPortfolioError(405, "方法不允許");
     return list(env.DB, email);
