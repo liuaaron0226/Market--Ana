@@ -10,7 +10,7 @@ const WEB = new URL("../../web/", import.meta.url);
 const DRAW = "--draw";
 
 function load() {
-  const strokes = [], texts = [];
+  const strokes = [], texts = [], fills = [];
   let path = [], arcs = [];
   const context2d = new Proxy({}, {
     get(target, name) {
@@ -19,6 +19,7 @@ function load() {
       if (name === "arc") return (x, y, radius) => { arcs.push([x, y, radius]); };
       if (name === "moveTo" || name === "lineTo") return (x, y) => { path.push([x, y]); };
       if (name === "stroke") return () => { strokes.push({ color: target.strokeStyle, points: path.slice(), arcs: arcs.slice() }); };
+      if (name === "fillRect") return (x, y, width, height) => { fills.push({ color: target.fillStyle, alpha: target.globalAlpha, rect: [x, y, width, height] }); };
       if (name === "fillText") return (text, x, y) => { texts.push({ text: String(text), x, y, color: target.fillStyle }); };
       if (name in target) return target[name];
       return () => {};
@@ -53,7 +54,7 @@ function load() {
   for (const file of ["chart-drawings.js", "kchart.js"]) {
     vm.runInContext(readFileSync(new URL(file, WEB), "utf8"), sandbox, { filename: file });
   }
-  return { KChart: sandbox.window.KChart, FakeElement, strokes, texts };
+  return { KChart: sandbox.window.KChart, FakeElement, strokes, texts, fills };
 }
 
 // 80 根日 K，日期從 2026-01-01 起每天一根（第 n 根＝1 月 1 日後 n 天）。收盤都是 100，布林通道因此是一條平線。
@@ -67,7 +68,7 @@ function dailyCandles() {
 }
 
 function createChart() {
-  const { KChart, FakeElement, strokes, texts } = load();
+  const { KChart, FakeElement, strokes, texts, fills } = load();
   const changes = [], tools = [], selections = [];
   const chart = new KChart(new FakeElement(), {
     macd: false, height: () => 340,
@@ -77,7 +78,7 @@ function createChart() {
     },
   });
   chart.setData(dailyCandles(), { count: 40, unit: "日" });
-  const reset = () => { strokes.length = 0; texts.length = 0; };
+  const reset = () => { strokes.length = 0; texts.length = 0; fills.length = 0; };
   reset();
   const tap = (x, y, pointerType = "mouse") => {
     chart.canvas.dispatch("pointerdown", { clientX: x, clientY: y, pointerType });
@@ -93,7 +94,9 @@ function createChart() {
   const drawnLines = () => { reset(); chart.draw(); return strokes.filter(stroke => stroke.color === DRAW && stroke.points.length).map(stroke => stroke.points); };
   const drawnLabels = () => { reset(); chart.draw(); return texts.filter(text => text.color === DRAW).map(text => text.text); };
   const drawnHandles = () => { reset(); chart.draw(); return strokes.filter(stroke => stroke.color === DRAW).flatMap(stroke => stroke.arcs.map(([x, y]) => [x, y])); };
-  return { chart, changes, tools, selections, strokes, texts, reset, tap, drag, key, drawnLines, drawnLabels, drawnHandles };
+  // 最後一次重畫時，用畫線顏色填滿的矩形（[x, y, 寬, 高]）。
+  const drawnFills = () => { reset(); chart.draw(); return fills.filter(fill => fill.color === DRAW).map(fill => fill.rect); };
+  return { chart, changes, tools, selections, strokes, texts, fills, reset, tap, drag, key, drawnLines, drawnLabels, drawnHandles, drawnFills };
 }
 
 const ID_RE = /^[A-Za-z0-9_-]{8,40}$/;
@@ -1179,4 +1182,193 @@ test("點了第一下之後圖上的資料換成不含起點那一天的範圍�
   assert.deepEqual(changes, []);
   tap(250, 87);  // 第 15 根＝2026-03-17
   assert.deepEqual(changes.map(change => change.drawing.anchors), [[{ date: "2026-03-07", price: 97.15 }, { date: "2026-03-17", price: 102.85 }]]);
+});
+
+// ---------- 票 04：矩形 ----------
+// 兩個對角：(88.525, 87)＝2026-02-20、102.85 與 (249.525, 241)＝2026-03-12、97.15。寬 161、高 154。
+// 邊框一筆畫完，四個邊依序是上、右、下、左，每個邊兩個點。
+const BOX = [[88.525, 87], [249.525, 87], [249.525, 87], [249.525, 241], [249.525, 241], [88.525, 241], [88.525, 241], [88.525, 87]];
+const RECT = (id = "saved-rect-01") => savedLine("rect", ["2026-02-20", 102.85], ["2026-03-12", 97.15], id);
+
+test("選了矩形工具後點兩下對角：框出那段日期與價位的區間（邊框加底色），工具自動回一般模式；不論先點哪一角結果都一樣", () => {
+  for (const [first, second] of [[[90, 87], [250, 241]], [[250, 241], [90, 87]], [[90, 241], [250, 87]], [[250, 87], [90, 241]]]) {
+    const { chart, changes, tools, tap, drawnLines, drawnFills, drawnLabels } = createChart();
+    chart.setTool("rect");
+    tap(...first);
+    assert.deepEqual(changes, [], "只點了第一下：還沒有矩形");
+    tap(...second);
+    assert.equal(changes.length, 1);
+    const { type, drawing } = changes[0];
+    assert.equal(type, "add");
+    // 存的一律是「左上、右下」：日期較早＋價位較高，日期較晚＋價位較低。
+    assert.deepEqual(drawing, { id: drawing.id, kind: "rect", anchors: [{ date: "2026-02-20", price: 102.85 }, { date: "2026-03-12", price: 97.15 }] });
+    assert.deepEqual(tools, ["rect", null]);
+    assertLines(drawnLines(), [BOX]);
+    assertLines(drawnFills(), [[[88.525, 87], [161, 154]]], "底色");
+    assert.deepEqual(drawnLabels(), []);
+  }
+});
+
+test("矩形點了第一下之後有預覽：起點有記號，框跟著游標；Esc 取消不留東西", () => {
+  const { chart, changes, tap, key, drawnLines, drawnFills, drawnHandles } = createChart();
+  chart.setTool("rect");
+  tap(250, 241);
+  assertHandles(drawnHandles(), [[249.525, 241]]);
+  chart.canvas.dispatch("pointermove", { clientX: 90, clientY: 87 });
+  assertLines(drawnLines(), [BOX]);
+  assertLines(drawnFills(), [[[88.525, 87], [161, 154]]]);
+  key("Escape");
+  assertLines(drawnLines(), []);
+  assertLines(drawnFills(), []);
+  assert.deepEqual(changes, []);
+});
+
+test("矩形的底色與邊框都畫在布林通道、K 棒、均線之前：不蓋住它們", () => {
+  const { chart, strokes, reset } = createChart();
+  chart.setDrawings([RECT()]);
+  reset(); chart.draw();
+  const first = color => strokes.findIndex(stroke => stroke.color === color);
+  assert.ok(first(DRAW) >= 0);
+  for (const color of ["--dim", "--up", "--accent"]) assert.ok(first(color) > first(DRAW), `${color} 疊在矩形上面`);
+});
+
+test("矩形部分在畫面外：只畫畫面內的邊與底色，不沿著繪圖區邊緣多畫一條；整個在畫面外就不畫", () => {
+  const { chart, drawnLines, drawnFills } = createChart();
+  chart.setDrawings([RECT()]);
+  chart.zoom(0.5); // 最後 20 根：左邊在 x＝−148.95（畫面外），右邊在 x＝173.05
+  assertLines(drawnLines(), [[[4, 87], [173.05, 87], [173.05, 87], [173.05, 241], [173.05, 241], [4, 241]]], "上、右、下三個邊，左邊在畫面外");
+  assertLines(drawnFills(), [[[4, 87], [169.05, 154]]]);
+  chart.zoom(2);
+
+  // 上緣 111.4 在畫面上方之外（y＝−144）、下緣 100（y＝164）：上邊不畫，左右兩邊從上緣 y=10 開始。
+  chart.setDrawings([savedLine("rect", ["2026-02-20", 111.4], ["2026-03-12", 100])]);
+  assertLines(drawnLines(), [[[249.525, 10], [249.525, 164], [249.525, 164], [88.525, 164], [88.525, 164], [88.525, 10]]]);
+  assertLines(drawnFills(), [[[88.525, 10], [161, 154]]]);
+
+  chart.setDrawings([savedLine("rect", ["2026-01-11", 102.85], ["2026-01-21", 97.15])]); // 整個在左邊之外
+  assertLines(drawnLines(), []);
+  assertLines(drawnFills(), []);
+});
+
+test("矩形切到週 K、月 K：起訖落在包含那兩天的那兩根，上下價位不變", () => {
+  const { chart, drawnLines } = createChart();
+  chart.setDrawings([savedLine("rect", ["2026-02-18", 102.85], ["2026-03-12", 97.15])]);
+  const bars = (count, time) => Array.from({ length: count }, (_, index) => ({ t: time(index), label: `第${index + 1}根`, open: 100, close: 100, high: 105, low: 95, volume: 1 }));
+  chart.setData(bars(16, index => new Date(Date.UTC(2026, 0, 2 + index * 7)).toISOString().slice(0, 10)), { count: 16, unit: "週" });
+  assertLines(drawnLines(), [[[154.9375, 87], [215.3125, 87], [215.3125, 87], [215.3125, 241], [215.3125, 241], [154.9375, 241], [154.9375, 241], [154.9375, 87]]], "週 K");
+  chart.setData(bars(16, index => new Date(Date.UTC(2025, index, 28)).toISOString().slice(0, 10)), { count: 16, unit: "月" });
+  assertLines(drawnLines(), [[[275.6875, 87], [295.8125, 87], [295.8125, 87], [295.8125, 241], [295.8125, 241], [275.6875, 241], [275.6875, 241], [275.6875, 87]]], "月 K");
+});
+
+// 本人 2026-11-16 看過樣本後選 B：只有點邊線才選取矩形，框裡的 K 棒照常可以點。
+test("點矩形的邊線才選取（四個角各一個把手）；點框的裡面照舊選 K 棒；框裡有線時點在線旁選到的是線", () => {
+  const { chart, selections, tap, drawnHandles } = createChart();
+  chart.setDrawings([saved(100), RECT()]); // 水平線 y=164 穿過矩形
+  tap(169, 200); // 矩形內部，離四個邊都很遠
+  assert.deepEqual(selections, []);
+  assert.equal(chart.selection, 60, "框裡的 K 棒照常選得到");
+  tap(169, 89);  // 上邊線內側 2px
+  assert.deepEqual(selections, ["saved-rect-01"]);
+  assertHandles(drawnHandles(), [[88.525, 87], [249.525, 241], [88.525, 241], [249.525, 87]]);
+  tap(169, 166); // 矩形內部，離水平線 2px
+  assert.deepEqual(selections, ["saved-rect-01", "saved-line-01"]);
+  tap(252, 200); // 右邊線外側 2.5px
+  assert.deepEqual(selections.at(-1), "saved-rect-01");
+  tap(258, 200); // 右邊框外側 8.5px：點不到，取消選取
+  assert.deepEqual(selections.at(-1), null);
+  tap(262, 200, "touch"); // 手指 12.5px：點得到
+  assert.deepEqual(selections.at(-1), "saved-rect-01");
+});
+
+test("拖已選取的矩形內部：整個平移，大小不變；拖任一個角：只有那個角移動，對角不動；放開各儲存一次；沒選取的框從裡面拖只是平移圖表", () => {
+  const { chart, changes, tap, drag, drawnLines } = createChart();
+  chart.setDrawings([RECT()]);
+  const before = chart.view.end;
+  drag([169, 200], [249, 200]); // 還沒選取：從框裡拖是平移圖表（10 根）
+  assert.equal(chart.view.end, before - 10);
+  assert.deepEqual(changes, []);
+  chart.pan(10);
+  tap(169, 88);
+  const end = chart.view.end;
+  drag([169, 200], [129, 123]); // 往左 40px＝5 根、往上 77px＝＋2.85
+  assert.deepEqual(changes, [{ type: "update", drawing: { id: "saved-rect-01", kind: "rect", anchors: [{ date: "2026-02-15", price: 105.7 }, { date: "2026-03-07", price: 100 }] } }]);
+  assert.equal(chart.view.end, end, "圖表沒有跟著平移");
+  // 現在是 (48.275, 10) ～ (209.275, 164)。
+
+  drag([209, 163], [129, 86]); // 抓右下角往左 80px、往上 77px → 第 15 根（2026-02-25）、102.85
+  assert.deepEqual(changes.at(-1).drawing.anchors, [{ date: "2026-02-15", price: 105.7 }, { date: "2026-02-25", price: 102.85 }]);
+
+  drag([129, 11], [209, 11]); // 抓右上角（x 在第二個錨點、y 在第一個錨點）往右 80px → 第 25 根（2026-03-07），價位不變
+  assert.deepEqual(changes.at(-1).drawing.anchors, [{ date: "2026-02-15", price: 105.7 }, { date: "2026-03-07", price: 102.85 }]);
+
+  drag([48, 87], [48, 164]); // 抓左下角（x 在第一個錨點、y 在第二個錨點）往下 77px → 100，日期不變
+  assert.deepEqual(changes.at(-1).drawing.anchors, [{ date: "2026-02-15", price: 105.7 }, { date: "2026-03-07", price: 100 }]);
+  assertLines(drawnLines(), [[[48.275, 10], [209.275, 10], [209.275, 10], [209.275, 164], [209.275, 164], [48.275, 164], [48.275, 164], [48.275, 10]]]);
+  assert.equal(changes.length, 4);
+});
+
+test("刪除選取的矩形：框與底色都消失並通知儲存端刪除", () => {
+  const { chart, changes, tap, key, drawnLines, drawnFills } = createChart();
+  chart.setDrawings([RECT()]);
+  tap(169, 88);
+  key("Delete");
+  assert.deepEqual(changes.map(change => [change.type, change.drawing.id]), [["remove", "saved-rect-01"]]);
+  assertLines(drawnLines(), []);
+  assertLines(drawnFills(), []);
+});
+
+// ---------- 票 04：審查後補的邊界情況 ----------
+
+test("矩形的底色很淡（不透明度不超過一成五），選取與預覽時也一樣：不會把後面畫的 K 棒與通道蓋到看不清", () => {
+  const { chart, fills, reset, tap } = createChart();
+  chart.setDrawings([RECT()]);
+  const alphas = () => { reset(); chart.draw(); return fills.filter(fill => fill.color === DRAW).map(fill => fill.alpha); };
+  assert.deepEqual(alphas().map(alpha => alpha > 0 && alpha <= 0.15), [true]);
+  tap(169, 88);
+  assert.deepEqual(alphas().map(alpha => alpha > 0 && alpha <= 0.15), [true], "選取時");
+  chart.setTool("rect");
+  tap(90, 87);
+  chart.canvas.dispatch("pointermove", { clientX: 250, clientY: 241 });
+  assert.deepEqual(alphas().map(alpha => alpha > 0 && alpha <= 0.15), [true, true], "預覽時");
+});
+
+test("矩形要有寬也有高：兩下在同一根或同一價位時不算；把角落拖到沒有寬度的位置時停在上一個位置", () => {
+  const { chart, changes, tools, tap, drag } = createChart();
+  chart.setTool("rect");
+  tap(90, 87);
+  tap(90, 241);  // 同一根：沒有寬度
+  tap(250, 87);  // 同一價位：沒有高度
+  assert.deepEqual(changes, []);
+  assert.deepEqual(tools, ["rect"], "工具與第一下留著");
+  tap(250, 241);
+  assert.equal(changes.length, 1);
+
+  tap(169, 88);
+  drag([250, 240], [90, 240]); // 右下角往左拖到左邊那一根
+  assert.equal(changes.length, 1, "沒有寬度的框不成立，不儲存");
+});
+
+test("手指點在矩形裡面、離線 10px：選到的是線；手指點在邊線內側 12px：選到矩形", () => {
+  const { chart, selections, tap } = createChart();
+  chart.setDrawings([saved(100), RECT()]);
+  tap(169, 174, "touch");
+  assert.deepEqual(selections, ["saved-line-01"]);
+  tap(169, 229, "touch"); // 下邊線（y=241）內側 12px
+  assert.deepEqual(selections, ["saved-line-01", "saved-rect-01"]);
+  tap(169, 205, "touch"); // 離下邊線 36px、離水平線 41px：都點不到
+  assert.deepEqual(selections.at(-1), null);
+});
+
+test("矩形比畫面還大（四個邊都在畫面外）：底色照畫，但點圖不會選到它，照舊選 K 棒、拖曳照舊平移", () => {
+  const { chart, selections, tap, drag, drawnLines, drawnFills } = createChart();
+  chart.setDrawings([savedLine("rect", ["2026-01-21", 140], ["2026-03-21", 80])]);
+  chart.pan(-10); // 畫面是第 30～69 根、88.6～134.2：矩形的四個邊都在外面
+  assertLines(drawnLines(), []);
+  assertLines(drawnFills(), [[[4, 10], [322, 308]]]);
+  tap(150, 150);
+  assert.deepEqual(selections, []);
+  assert.equal(chart.selection, 48);
+  const end = chart.view.end;
+  drag([150, 150], [230, 150]);
+  assert.equal(chart.view.end, end - 10);
 });

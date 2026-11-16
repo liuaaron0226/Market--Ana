@@ -114,7 +114,7 @@ test("不合法的代號、識別碼、種類、日期、價格、錨點個數�
   }
   const bad = [
     { kind: "circle", anchors: [{ date: "2026-11-13", price: 1000 }] },
-    { kind: "rect", anchors: [{ date: "2026-11-13", price: 1000 }, { date: "2026-11-14", price: 1010 }] }, // 矩形還沒開放（票 03 開放了趨勢線與射線，這一列原本用趨勢線）
+    { kind: "fib", anchors: [{ date: "2026-11-13", price: 1000 }, { date: "2026-11-14", price: 1010 }] }, // 黃金分割還沒開放（這一列原本用趨勢線、再來是矩形，票 03、04 陸續開放了）
     { anchors: [{ date: "2026-11-13", price: 1000 }] },
     { kind: "hline" },
     { kind: "hline", anchors: [] },
@@ -301,5 +301,29 @@ test("趨勢線與射線的不合法輸入被拒：錨點不是剛好兩個、�
     ];
     for (const body of bad) assert.equal((await put(body)).status, 400, JSON.stringify(body));
   }
+  assert.equal((await env.DB.prepare("SELECT COUNT(*) AS n FROM user_drawings").first()).n, 0);
+});
+
+// ---------- 票 04：矩形 ----------
+
+test("矩形存兩個對角：寫入後讀得回來，拖角落後以同一個識別碼覆寫；別的帳號看不到", async () => {
+  const saved = await req("/api/drawings/2330/rect-0001", { method: "PUT", body: twoPoint("rect", ["2026-10-01", 1085.5], ["2026-11-13", 1000]) });
+  assert.equal(saved.status, 201);
+  assert.deepEqual((await saved.json()).anchors, [{ date: "2026-10-01", price: 1085.5 }, { date: "2026-11-13", price: 1000 }]);
+  assert.equal((await req("/api/drawings/2330/rect-0001", { method: "PUT", body: twoPoint("rect", ["2026-10-01", 1085.5], ["2026-11-06", 1020]) })).status, 200);
+  assert.deepEqual((await listOf("2330")).map((item) => [item.kind, item.anchors]),
+    [["rect", [{ date: "2026-10-01", price: 1085.5 }, { date: "2026-11-06", price: 1020 }]]]);
+  assert.deepEqual(await listOf("2330", { email: "b@example.com" }), []);
+});
+
+test("矩形的不合法輸入被拒：只有一個角、兩個角完全相同、帶文字", async () => {
+  const put = (body) => req("/api/drawings/2330/rect-0001", { method: "PUT", body });
+  const corner = { date: "2026-10-01", price: 1000 };
+  for (const body of [
+    { kind: "rect", anchors: [corner] },
+    { kind: "rect", anchors: [corner, { ...corner }] },
+    { kind: "rect", anchors: [corner, { date: "2026-11-13", price: -1 }] },
+    { kind: "rect", anchors: [corner, { date: "2026-11-13", price: 1010 }], text: "框上不帶文字" },
+  ]) assert.equal((await put(body)).status, 400, JSON.stringify(body));
   assert.equal((await env.DB.prepare("SELECT COUNT(*) AS n FROM user_drawings").first()).n, 0);
 });
