@@ -263,13 +263,13 @@ class DollarReadingTest(unittest.TestCase):
 class BuildLayerTest(unittest.TestCase):
     def test_nasdaq_is_kept_out_of_the_model_input_until_its_licence_allows(self):
         layer = ff.build_layer(base_date="2026-07-08", index_daily=index([100] * 6, "2026-07-01"), daily_flow=TW_FLOW,
-                               futures_positions=[], proxy_daily=PROXY, nasdaq=NASDAQ)
+                               futures_positions=[], proxy_daily=PROXY, nasdaq=NASDAQ, nasdaq_in_prompt=False)
         self.assertEqual(layer["readings"]["nasdaq_last_session"]["status"], "withheld")
         self.assertEqual(layer["withheld"], ["nasdaq_last_session"])
         self.assertNotIn("nasdaq", layer["notes"])
         self.assertEqual(layer["record_only"]["nasdaq_last_session"]["us_close_date"], "2026-07-07")
         allowed = ff.build_layer(base_date="2026-07-08", index_daily=index([100] * 6, "2026-07-01"), daily_flow=TW_FLOW,
-                                 futures_positions=[], proxy_daily=PROXY, nasdaq=NASDAQ, nasdaq_in_prompt=True)
+                                 futures_positions=[], proxy_daily=PROXY, nasdaq=NASDAQ)   # 預設交
         self.assertEqual(allowed["readings"]["nasdaq_last_session"]["status"], "ok")
         self.assertIn("nasdaq", allowed["notes"])
         self.assertEqual(allowed["record_only"], {})

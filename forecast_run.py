@@ -75,9 +75,10 @@ def load_foreign_sources(data_root: Path | str | None, seeds_root: Path | str = 
     ``data_root`` 是 None 時什麼都不讀（外資讀數全部標 missing），測試用。"""
     # 那斯達克（nasdaq）、美元指數（dollar_index）、美元兌台幣（usdtwd）由 D 票的海外資料接進這裡，
     # 每個都是 [{"date", "close"}]；沒接上之前是空的，讀數 1、4 標 missing。
-    # nasdaq_in_prompt：那斯達克的來源條款允許交給模型時才設 True（D 票 overseas_inputs 的 LICENSES 旗標）。
+    # nasdaq_in_prompt：本人 2026-11-16 決定 EODHD 的那斯達克也交給模型（D 票第 8 片）；整合時接
+    # overseas_inputs.LICENSES["eodhd"]["in_prompt"]，改成 False 就只存進紀錄、不交。
     sources: dict[str, Any] = {"daily_flow": [], "futures": [], "proxy_daily": [], "nasdaq": [], "dollar_index": [],
-                               "usdtwd": [], "nasdaq_in_prompt": False, "errors": {}}
+                               "usdtwd": [], "nasdaq_in_prompt": True, "errors": {}}
     if data_root is None:
         sources["errors"] = {name: {"kind": "no_data_root", "detail": "沒有指定資料位置"}
                              for name in ("daily_flow", "futures")}

@@ -43,8 +43,11 @@ PARAMETERS: dict[str, Any] = {
 
 NOTES = {
     "spot": "外資的買賣解釋當天的漲跌，不代表之後會續漲或續跌：歷史上外資大賣之後二十、六十個交易日的大盤漲跌和平常差不多。"
-            "單日金額雜訊大（有一半是短線與避險資金），近五日、二十日累計比較有意義；外資金額裡台積電一檔占四成上下。",
-    "futures": "外資台指期淨空單的水準幾乎是投信（槓桿型 ETF）多單的反面，空單多不代表看空，要看的是增減。"
+            "單日金額雜訊大（有一半是短線與避險資金），近五日、二十日累計比較有意義；外資金額裡台積電一檔占四成上下。"
+            "「隔天續賣（買）的機率」講的是外資自己明天的方向，不是大盤明天的漲跌：歷史上外資單日大賣的隔天，"
+            "大盤平均只再跌約 0.15%。這幾個外資統計也沒有講均線、壓力或反彈，不能把別的判斷說成是外資統計的結論。",
+    "futures": "外資台指期淨空單的水準幾乎是投信（槓桿型 ETF）多單的反面，空單多不代表看空，要看的是增減；"
+               "不能用「空單很多、空單壓力未解」當理由。"
                "這個讀數的歷史統計只有近三年、全在多頭期間，加空之後是漲得比較少而不是下跌，可信度比其他外資讀數低。",
     "nasdaq": "統計表是「這種那斯達克收盤之後的那一個台股交易日」；晚間版看的是前一晚美股，對應的就是基準日當天"
               "（已經收盤），要預測的下一個交易日還要看今晚美股。開盤跳空與盤中漲跌是用 0050 的實際開盤價算的"
@@ -504,12 +507,13 @@ def build_layer(*, base_date: str, index_daily: Sequence[Mapping[str, Any]],
                 daily_flow: Sequence[Mapping[str, Any]], futures_positions: Sequence[Mapping[str, Any]],
                 proxy_daily: Sequence[Mapping[str, Any]] = (), nasdaq: Sequence[Mapping[str, Any]] = (),
                 dollar_index: Sequence[Mapping[str, Any]] = (), usdtwd: Sequence[Mapping[str, Any]] = (),
-                edition: str = "evening", us_before: str | None = None, nasdaq_in_prompt: bool = False,
+                edition: str = "evening", us_before: str | None = None, nasdaq_in_prompt: bool = True,
                 sources: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """交給 Gemini 的外資層（六個讀數）。缺資料的讀數標 missing 並寫原因，其他照給；預測照樣寫。
 
     那斯達克、美元指數、美元兌台幣的來源屬 D 票，接上之前讀數 1、4 是 missing。
-    ``nasdaq_in_prompt`` 是 False 時（那斯達克來源 EODHD 條款只允許私用，本人還沒決定），讀數 1 在這一層標
+    那斯達克來源 EODHD 條款只允許私用；本人 2026-11-16 知道這點後決定「交」（D 票第 8 片），所以預設交給模型。
+    ``nasdaq_in_prompt`` 改成 False（跟 D 票 overseas_inputs.LICENSES["eodhd"]["in_prompt"] 同步）時，讀數 1 在這一層標
     withheld，算好的內容放在 ``record_only``：**呼叫端要把它拿出來，只存進紀錄、不放進模型輸入**。"""
     spot = spot_readings(daily_flow, base_date)
     nasdaq_full = nasdaq_reading(nasdaq, proxy_daily, daily_flow, base_date, edition, us_before)

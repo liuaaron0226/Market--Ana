@@ -260,6 +260,7 @@ class ForeignFlowLayerTests(RunTestCase):
         def with_nasdaq(data_root, seeds_root=fr.SEEDS_ROOT):
             sources = real(data_root, seeds_root)
             sources["nasdaq"] = nasdaq
+            sources["nasdaq_in_prompt"] = False      # 條款開關關掉時
             return sources
 
         fr.load_foreign_sources = with_nasdaq
