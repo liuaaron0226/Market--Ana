@@ -357,19 +357,23 @@ class AdjustedPriceTests(unittest.TestCase):
         self.assertEqual(result['bars'][0]['close'], 100.0)
 
 
-class StockFactsTodayTests(unittest.TestCase):
-    """個股頁事實區塊（本人 2026-11-15 共識，規格 .scratch/stock-facts/spec.md）：當日三格只報數字，缺什麼就少什麼。"""
+class _FactsFixture:
+    """事實區塊測試共用的行情庫：前面都收 100，最後一根依參數；法人資料用替身。"""
 
     def setUp(self):
         from datetime import date, timedelta
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.db = Path(self.tmp.name) / 'h.sqlite'
-        self.days = [(date(2026, 1, 5) + timedelta(days=i)).isoformat() for i in range(60)]
+        # 和 analyze() 預設的 60 個交易日相同，測試可以先用這些日期組法人資料。
+        self.days = [(date(2025, 1, 6) + timedelta(days=i)).isoformat() for i in range(60)]
 
     def analyze(self, *, change, close=100.0, last_volume=1000, volume=1000, foreign=None, foreign_day=None, change_sign='+',
-                capital_actions=None, rows=None):
-        connection = sqlite3.connect(self.db)
+                capital_actions=None, rows=None, n_days=60):
+        from datetime import date, timedelta
+        self.days = [(date(2025, 1, 6) + timedelta(days=i)).isoformat() for i in range(n_days)]
+        self.calls = getattr(self, 'calls', 0) + 1
+        db = Path(self.tmp.name) / f'h{self.calls}.sqlite'
+        connection = sqlite3.connect(db)
         connection.execute("""CREATE TABLE daily (date TEXT, code TEXT, name TEXT, kind TEXT, open REAL, high REAL, low REAL,
                               close REAL, change_sign TEXT, change REAL, volume_shares INTEGER, trades INTEGER, turnover INTEGER,
                               suspended INTEGER)""")
@@ -386,7 +390,12 @@ class StockFactsTodayTests(unittest.TestCase):
             rows.append({'date': foreign_day or self.days[-1], 'foreign': foreign, 'trust': 0, 'dealer': 0, 'total': foreign})
         from twon_analysis.analyze_v2 import analyze_v2
         with unittest.mock.patch('twon_analysis.analyze_v2.institutional_series', return_value=rows):
-            return analyze_v2('9999', self.days[-1], db_path=self.db, otc_db_path=None, capital_actions=capital_actions or {})
+            return analyze_v2('9999', self.days[-1], db_path=db, otc_db_path=None, capital_actions=capital_actions or {})
+
+
+
+class StockFactsTodayTests(_FactsFixture, unittest.TestCase):
+    """個股頁事實區塊（本人 2026-11-15 共識，規格 .scratch/stock-facts/spec.md）：當日三格只報數字，缺什麼就少什麼。"""
 
     def test_red_close_volume_ratio_and_foreign_net_sell(self):
         # 收盤 100.5、漲 0.5 → 0.50%；均量＝(19×1000＋2300)/20＝1065 → 2300/1065＝2.16 倍；外資 −8,758,880 股＝賣超 8,759 張。
@@ -397,7 +406,6 @@ class StockFactsTodayTests(unittest.TestCase):
             {'key': 'volume', 'label': '成交量', 'tone': None, 'text': '均量的 2.16 倍'},
             {'key': 'foreign', 'label': '外資', 'tone': 'down', 'text': '賣超 8,759 張'},
         ])
-        self.assertEqual(facts['blocks'], [])
 
     def test_black_close_and_foreign_net_buy_rounds_half_up(self):
         # 收盤 98、跌 2 → 前一日 100 → −2.00%；外資 2,500 股＝2.5 張 → 3 張（四捨五入，不是銀行家捨入）。
@@ -433,6 +441,117 @@ class StockFactsTodayTests(unittest.TestCase):
         result = self.analyze(change=0.5, close=100.5, foreign=3_000, capital_actions={'9999': [split]}, rows=earlier)
         self.assertEqual(result['institutional'][0]['foreign'], 4_000)
         self.assertEqual(result['facts']['today'][2]['text'], '買超 3 張')
+
+
+class StockFactsSummaryTests(_FactsFixture, unittest.TestCase):
+    """重點三句（B 票先兩句）：固定句型、只報數字；缺一項只寫另一半，兩項都缺整句不寫。"""
+
+    def test_position_and_volume_sentences(self):
+        # 60 根：59 根收 100、最後一根 110 → 月線＝(19×100＋110)/20＝100.5；只有 60 根所以沒有年線那一半。
+        # RSI：近 14 個變動只有 +10 → 100；量都 1000 → 均量的 1 倍。
+        facts = self.analyze(change=10.0, close=110.0)['facts']
+        self.assertEqual(facts['summary'], ['收盤 110，在月線 100.5 之上。', '成交量是均量的 1 倍，RSI 100。'])
+        self.assertIn('summary', facts['blocks'])
+
+    def test_position_sentence_with_year_line_below_both(self):
+        # 250 根：249 根收 100、最後一根 90 → 月線＝(19×100＋90)/20＝99.5；年線＝(239×100＋90)/240＝99.958… → 99.96。
+        facts = self.analyze(change=-10.0, close=90.0, n_days=250)['facts']
+        self.assertEqual(facts['summary'][0], '收盤 90，在月線 99.5 之下、年線 99.96 之下。')
+
+    def test_volume_sentence_keeps_the_half_that_exists(self):
+        # 全部收 100 → RSI 算不出來（不是 50）；量也全是 0 → 兩項都缺，整句不寫。
+        self.assertEqual(self.analyze(change=0.0, volume=0, last_volume=0)['facts']['summary'], ['收盤 100，在月線 100 之上。'])
+        self.assertEqual(self.analyze(change=0.0)['facts']['summary'][1], '成交量是均量的 1 倍。')
+        self.assertEqual(self.analyze(change=10.0, close=110.0, volume=0, last_volume=0)['facts']['summary'][1], 'RSI 100。')
+
+
+class StockFactsInstitutionalTests(_FactsFixture, unittest.TestCase):
+    """法人：連買或連賣天數（從資料日往回數同方向），近 5／10／20 日累計（張）。"""
+
+    def rows(self, foreign, trust, dealer):
+        days = self.days[-len(foreign):]
+        return [{'date': d, 'foreign': f, 'trust': t, 'dealer': x, 'total': f + t + x}
+                for d, f, t, x in zip(days, foreign, trust, dealer)]
+
+    def test_streaks_and_cumulative_lots(self):
+        # 22 個交易日（舊→新）：
+        # 外資：前 2 天各 +5,000 股，後 20 天各 −1,000 股 → 連賣 20 天（數到 +5,000 停）；5／10／20 日＝−5／−10／−20 張。
+        # 投信：22 天都 +1,500 股 → 連買 22 天、數到最早一天仍同方向＝「以上」；7,500→8 張、15,000→15、30,000→30。
+        # 自營商：前 21 天各 +100、資料日 0 → 不寫連續；400→0 張、900→1、1,900→2。
+        rows = self.rows([5_000] * 2 + [-1_000] * 20, [1_500] * 22, [100] * 21 + [0])
+        facts = self.analyze(change=0.5, close=100.5, rows=rows)['facts']
+        self.assertEqual(facts['institutional'], {'data_date': self.days[-1], 'rows': [
+            {'name': '外資', 'side': 'sell', 'days': 20, 'at_least': False, 'sum5': -5, 'sum10': -10, 'sum20': -20},
+            {'name': '投信', 'side': 'buy', 'days': 22, 'at_least': True, 'sum5': 8, 'sum10': 15, 'sum20': 30},
+            {'name': '自營商', 'side': None, 'days': None, 'at_least': False, 'sum5': 0, 'sum10': 1, 'sum20': 2},
+        ]})
+        self.assertEqual(facts['blocks'], ['summary', 'institutional', 'technical'])
+
+    def test_short_series_leaves_out_the_longer_sums(self):
+        # 只有 7 天：5 日累計有，10、20 日沒有。
+        rows = self.rows([-2_000] * 7, [0] * 7, [0] * 7)
+        foreign = self.analyze(change=0.5, close=100.5, rows=rows)['facts']['institutional']['rows'][0]
+        self.assertEqual((foreign['days'], foreign['at_least'], foreign['sum5'], foreign['sum10'], foreign['sum20']),
+                         (7, True, -10, None, None))
+
+    def test_a_missing_trading_day_stops_the_streak_and_voids_sums_that_span_it(self):
+        # 最後 6 個交易日外資都賣 1,000 股，但倒數第 3 天沒有資料：只能確定最近 2 天 → 「賣 2 天以上」；
+        # 5、10、20 日的時間窗都跨過那個缺日 → 不給。
+        rows = [row for row in self.rows([-1_000] * 6, [0] * 6, [0] * 6) if row['date'] != self.days[-3]]
+        foreign = self.analyze(change=0.5, close=100.5, rows=rows)['facts']['institutional']['rows'][0]
+        self.assertEqual((foreign['side'], foreign['days'], foreign['at_least'], foreign['sum5'], foreign['sum10'], foreign['sum20']),
+                         ('sell', 2, True, None, None, None))
+
+    def test_cumulative_lots_follow_the_split_adjustment(self):
+        # 倒數第 3 天一拆四：之前兩天的 −1,000 股換算成 −4,000 股 → 5 日累計＝2×(−4,000)＋3×(−1,000)＝−11,000 股＝−11 張。
+        split = {'date': self.days[-3], 'code': '9999', 'type': '變更面額', 'close_before': 100.0,
+                 'reference': 25.0, 'source': 'TWTB8U-202602.json.gz'}
+        rows = self.rows([-1_000] * 5, [0] * 5, [0] * 5)
+        foreign = self.analyze(change=0.5, close=100.5, rows=rows, capital_actions={'9999': [split]})['facts']['institutional']['rows'][0]
+        self.assertEqual((foreign['days'], foreign['sum5']), (5, -11))
+
+    def test_no_institutional_rows_means_no_block(self):
+        facts = self.analyze(change=0.5, close=100.5)['facts']
+        self.assertIsNone(facts['institutional'])
+        self.assertNotIn('institutional', facts['blocks'])
+
+
+class StockFactsTechnicalTests(_FactsFixture, unittest.TestCase):
+    """技術：均線與近 20 日收盤高低的價位、收盤距離（%，一位小數），與 RSI、量比、KD。"""
+
+    def test_price_rows_and_readings(self):
+        # 60 根：59 根收 100（高 101、低 99）、最後一根 110（高 111、低 109）。
+        # 5 日線＝(4×100＋110)/5＝102 → 110/102−1＝7.84% → 7.8；10 日線＝101 → 8.9；月線＝100.5 → 9.5；
+        # 季線＝(59×100＋110)/60＝100.1666… → 100.17 → 9.8；20 日收盤最高 110 → 0.0；最低 100 → 10.0。
+        # KD：持平時 RSV＝50、K＝D＝50；最後一天 RSV＝(110−99)/(111−99)＝91.67 → K＝63.89、D＝54.63。
+        technical = self.analyze(change=10.0, close=110.0)['facts']['technical']
+        self.assertEqual(technical['rows'], [
+            {'name': '5 日線', 'value': 102.0, 'distance_pct': 7.8},
+            {'name': '10 日線', 'value': 101.0, 'distance_pct': 8.9},
+            {'name': '月線', 'value': 100.5, 'distance_pct': 9.5},
+            {'name': '季線', 'value': 100.17, 'distance_pct': 9.8},
+            {'name': '20 日高', 'value': 110.0, 'distance_pct': 0.0},
+            {'name': '20 日低', 'value': 100.0, 'distance_pct': 10.0},
+        ])
+        self.assertEqual((technical['rsi'], technical['volume_ratio'], technical['kd_k'], technical['kd_d']), (100.0, 1.0, 63.89, 54.63))
+
+    def test_values_are_the_same_numbers_as_the_analysis_indicators(self):
+        # 和圖上的線同一套數字：技術表不另外算。
+        result = self.analyze(change=10.0, close=110.0)
+        x = result['indicators']
+        self.assertEqual([row['value'] for row in result['facts']['technical']['rows']],
+                         [x['ma5'], x['ma10'], x['ma20'], x['ma60'], x['high20_close'], x['low20_close']])
+
+    def test_half_year_and_year_lines_appear_with_enough_history(self):
+        # 250 根、最後收 90：半年線＝(119×100＋90)/120＝99.92 → −9.9%；年線＝99.96 → −10.0%。
+        rows = self.analyze(change=-10.0, close=90.0, n_days=250)['facts']['technical']['rows']
+        self.assertEqual([row['name'] for row in rows], ['5 日線', '10 日線', '月線', '季線', '半年線', '年線', '20 日高', '20 日低'])
+        self.assertEqual(rows[4:6], [{'name': '半年線', 'value': 99.92, 'distance_pct': -9.9},
+                                     {'name': '年線', 'value': 99.96, 'distance_pct': -10.0}])
+
+    def test_block_list_follows_what_exists(self):
+        facts = self.analyze(change=10.0, close=110.0)['facts']
+        self.assertEqual(facts['blocks'], ['summary', 'technical'])
 
 
 class BlockingTests(unittest.TestCase):

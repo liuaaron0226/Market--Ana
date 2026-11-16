@@ -541,12 +541,13 @@ def condition_inputs(code: str, market: str, as_of: str, bars: list[Bar], x: dic
     }
 
 
-def _facts(data_date: str, info: dict, indicators: dict, institutional: list[dict]) -> dict | None:
+def _facts(last: Bar, info: dict, indicators: dict, institutional: list[dict], trading_days: list[str]) -> dict | None:
     # 這裡比 _safe 收得更寬：事實區塊是附加內容，任何錯誤都只讓它留空，不能讓整份分析失敗。
     try:
         from .facts import build_facts
         chg_pct = round(info['chg'], 2) if info.get('chg_known', True) else None
-        return build_facts(data_date=data_date, chg_pct=chg_pct, indicators=indicators, institutional=institutional)
+        return build_facts(data_date=last.date, close=last.close, chg_pct=chg_pct, indicators=indicators,
+                           institutional=institutional, trading_days=trading_days)
     except Exception:  # noqa: BLE001
         return None
 
@@ -596,7 +597,7 @@ def analyze_v2(code: str, as_of: str, db_path=DEFAULT_DB, otc_db_path=DEFAULT_OT
         # 集保每週的大戶持股（本人 2026-11-14：主力買賣超沒有合法免費來源，改看這個）。讀不到就是空的。
         'big_holders': _safe(lambda: big_holder_series(DEFAULT_DB.parents[1] / 'tdcc-holders', code, last.date)) or [],
         # 個股頁事實區塊（本人 2026-11-15）：算不出來只讓這一塊留空，不影響其他內容。給誰看由網站入口的開關決定。
-        'facts': _facts(last.date, info, x, institutional),
+        'facts': _facts(last, info, x, institutional, [bar.date for bar in chart_bars]),
         'defense': defense_payload(x['low20_intraday']),
         'trend_classification': trend_classification_payload(),
         'conditions': conditions,
