@@ -2560,6 +2560,7 @@
   const marketPoints = document.getElementById('aiDigestMarketPoints');
   const flowPoints = document.getElementById('aiDigestFlowPoints');
   const setup = document.getElementById('aiDigestSetup');
+  const reason = document.getElementById('aiDigestReason');
   if (!card || !date || !conclusion || !preview || !details || !marketPoints || !flowPoints) return;
 
   const listItem = text => {
@@ -2622,6 +2623,11 @@
     if (!payload.configured) { showSetup('尚未設定 Gemini'); return; }
     if (!payload.consented) { showSetup('同意內容已更新，請回設定頁重新同意'); return; }
     renderDigest(payload);
+    // 04 票：當天沒產生（額度用完、金鑰失效…）時寫出原因，附回設定頁的入口。
+    if (payload.notice?.text) {
+      if (reason) { reason.textContent = payload.notice.text; reason.hidden = false; }
+      if (setup) setup.hidden = false;
+    }
   }
 
   async function initAiDigest() {

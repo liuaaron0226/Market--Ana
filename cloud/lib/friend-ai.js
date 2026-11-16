@@ -199,8 +199,22 @@ function digestOf(row) {
   }
 }
 
+// 04 票：當天沒產生時告訴朋友原因。原因是排程寫進 last_failure_reason 的中文說明（friend_ai_digest.py 的 FAILURE_TEXT）；
+// 金鑰被暫停時排程跳過他、當天不會有任何一列，所以看金鑰狀態，不看當天的列。
+const PAUSED_TEXT = "這把金鑰已暫停使用，請到 Gemini 設定換一把";
+
+function noticeOf(key, sections) {
+  if (key.status === "paused") return { text: key.last_failure_reason || PAUSED_TEXT };
+  if (key.last_failure_reason && sections.some((section) => section.status !== "generated")) {
+    return { text: key.last_failure_reason };
+  }
+  return null;
+}
+
 async function friendDigest(db, email) {
-  const key = await db.prepare("SELECT consent_version FROM friend_gemini_keys WHERE email = ?").bind(email).first();
+  const key = await db.prepare(
+    "SELECT consent_version, status, last_failure_reason FROM friend_gemini_keys WHERE email = ?",
+  ).bind(email).first();
   if (!key) return { available: true, configured: false };
   if (key.consent_version !== CONSENT_VERSION) return { available: true, configured: true, consented: false };
   let latest = null;
@@ -216,9 +230,11 @@ async function friendDigest(db, email) {
     if (!tableMissing(error)) throw error;
   }
   const pick = (type) => rows.find((row) => row.digest_type === type);
+  const market = digestOf(pick("market"));
+  const flow = digestOf(pick("flow"));
   return {
     available: true, configured: true, consented: true, data_date: latest,
-    market: digestOf(pick("market")), flow: digestOf(pick("flow")),
+    market, flow, notice: noticeOf(key, [market, flow]),
   };
 }
 
@@ -304,13 +320,21 @@ export async function deleteFriendKey(db, email) {
   }
 }
 
-// 後台用：每位使用者只標「已設定／未設定」，不帶密文、狀態以外的任何內容。
-export async function configuredEmails(db) {
+// 後台用：每位使用者只有狀態——已設定與否、是否暫停、最後成功時間、最近失敗原因。不帶密文、解讀內容或持股。
+const NO_KEY = Object.freeze({ configured: false, paused: false, last_success_at: null, last_failure_reason: null });
+
+export async function keyStateLookup(db) {
+  let results = [];
   try {
-    const { results } = await db.prepare("SELECT email FROM friend_gemini_keys").all();
-    return new Set(results.map((row) => row.email));
+    ({ results } = await db.prepare(
+      "SELECT email, status, last_success_at, last_failure_reason FROM friend_gemini_keys",
+    ).all());
   } catch (error) {
-    if (tableMissing(error)) return new Set();
-    throw error;
+    if (!tableMissing(error)) throw error;
   }
+  const states = new Map(results.map((row) => [row.email, {
+    configured: true, paused: row.status === "paused",
+    last_success_at: row.last_success_at ?? null, last_failure_reason: row.last_failure_reason ?? null,
+  }]));
+  return (email) => states.get(email) ?? NO_KEY;
 }

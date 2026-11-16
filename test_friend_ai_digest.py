@@ -10,8 +10,12 @@ import unittest
 from pathlib import Path
 
 from ai_digest_inputs import build_friend_input
+from unittest import mock
+
+import ai_digest
 from friend_ai_digest import (
-    GeminiHttpError, build_friend_prompt, friend_sql, main as friend_main, run_friends, workflow_policy,
+    GEMINI_ATTEMPTS, FAILURE_TEXT, GeminiHttpError, GeminiTimeout, build_friend_prompt, friend_sql, main as friend_main,
+    run_friends, workflow_policy,
 )
 
 MIGRATIONS = Path(__file__).resolve().parent / "cloud" / "migrations"
@@ -61,6 +65,8 @@ class FakeGemini:
     def __call__(self, url, body, api_key):
         self.calls.append({"url": url, "body": body, "api_key": api_key})
         reply = self.replies[api_key]
+        if isinstance(reply, list):  # 依序回：用來測重試
+            reply = reply.pop(0)
         if isinstance(reply, Exception):
             raise reply
         return reply
@@ -78,8 +84,9 @@ def rows_by(result, email):
 class FriendDigestTests(unittest.TestCase):
     def run_with(self, replies, keys=KEYS, decrypt=fake_decrypt):
         self.gemini = FakeGemini(replies)
+        self.slept = []
         return run_friends(friend_payload(), keys, decrypt=decrypt, post=self.gemini,
-                           now=lambda: "2026-11-10T10:00:00+00:00")
+                           now=lambda: "2026-11-10T10:00:00+00:00", sleep=self.slept.append)
 
     def test_friend_gets_own_market_and_flow_digest_from_own_key(self):
         result = self.run_with({"KEY-amy": gemini_reply(valid_structured()), "KEY-bob": gemini_reply(valid_structured())})
@@ -118,7 +125,12 @@ class FriendDigestTests(unittest.TestCase):
             (GeminiHttpError(429, "RESOURCE_EXHAUSTED"), "quota"),
             (GeminiHttpError(400, "FAILED_PRECONDITION"), "region"),
             (GeminiHttpError(503), "gemini_unavailable"),
+            (GeminiHttpError(500), "gemini_unavailable"),
+            (GeminiHttpError(408), "gemini_unavailable"),
             (OSError("connection reset"), "gemini_unavailable"),
+            (GeminiTimeout("TimeoutError"), "gemini_unavailable"),
+            (GeminiHttpError(404, "NOT_FOUND"), "gemini_rejected"),
+            (GeminiHttpError(400, "INVALID_ARGUMENT"), "gemini_rejected"),
         ]
         for failure, code in cases:
             with self.subTest(code=code, failure=failure):
@@ -129,6 +141,46 @@ class FriendDigestTests(unittest.TestCase):
                 self.assertEqual(result["keys"]["amy@example.com"], {"outcome": "failure", "reason": code})
                 bob = rows_by(result, "bob@example.com")
                 self.assertEqual({row["status"] for row in bob.values()}, {"generated"})
+
+    def test_every_failure_code_has_plain_chinese_text(self):
+        for code in ("quota", "key_invalid", "key_revoked", "gemini_unavailable", "gemini_rejected", "region"):
+            with self.subTest(code=code):
+                self.assertRegex(FAILURE_TEXT[code], r"[\u4e00-\u9fff]")
+                self.assertNotRegex(FAILURE_TEXT[code], r"HTTP|[0-9]{3}|API|quota", "朋友看得懂的中文，不帶錯誤碼")
+
+    def test_transient_error_is_retried_a_limited_number_of_times_then_succeeds(self):
+        result = self.run_with({"KEY-amy": [GeminiHttpError(503), OSError("reset"), gemini_reply(valid_structured())]}, keys=KEYS[:1])
+        self.assertEqual({row["status"] for row in rows_by(result, "amy@example.com").values()}, {"generated"})
+        self.assertEqual(len(self.gemini.calls), 3)
+        self.assertEqual(len(self.slept), 2, "每次重試前先等一下")
+
+    def test_transient_error_that_keeps_failing_gives_up_and_is_unproduced(self):
+        replies = [GeminiHttpError(503) for _ in range(GEMINI_ATTEMPTS + 2)]
+        result = self.run_with({"KEY-amy": replies}, keys=KEYS[:1])
+        self.assertEqual(len(self.gemini.calls), GEMINI_ATTEMPTS)
+        self.assertGreaterEqual(GEMINI_ATTEMPTS, 2)
+        self.assertLessEqual(GEMINI_ATTEMPTS, 3, "有限次：十位朋友也要在排程時限內跑完")
+        amy = rows_by(result, "amy@example.com")
+        self.assertEqual({(row["status"], row["error_code"]) for row in amy.values()}, {("unproduced", "gemini_unavailable")})
+        self.assertEqual(result["audit"][0]["attempts"], GEMINI_ATTEMPTS)
+
+    def test_quota_key_failures_other_errors_and_timeouts_are_not_retried(self):
+        for failure in (GeminiHttpError(429, "RESOURCE_EXHAUSTED"), GeminiHttpError(403, "PERMISSION_DENIED"),
+                        GeminiHttpError(401), GeminiHttpError(404), GeminiTimeout("TimeoutError")):
+            with self.subTest(failure=failure):
+                self.run_with({"KEY-amy": [failure, gemini_reply(valid_structured())]}, keys=KEYS[:1])
+                self.assertEqual(len(self.gemini.calls), 1)
+                self.assertEqual(self.slept, [])
+
+    def test_failure_never_falls_back_to_owner_agy(self):
+        with mock.patch.object(ai_digest, "call_agy", side_effect=AssertionError("不可改用站主的 agy")) as agy, \
+                mock.patch.object(ai_digest, "run_digest", side_effect=AssertionError("不可改用站主的 agy")) as owner_run:
+            for failure in (GeminiHttpError(429), GeminiHttpError(403), GeminiHttpError(503), GeminiHttpError(404)):
+                result = self.run_with({"KEY-amy": failure}, keys=KEYS[:1])
+                self.assertEqual({row["status"] for row in result["rows"]}, {"unproduced"})
+                self.assertTrue(all(row["content"] is None and row["model"] == "gemini-3.8-flash" for row in result["rows"]))
+        agy.assert_not_called()
+        owner_run.assert_not_called()
 
     def test_key_that_cannot_be_decrypted_is_unproduced_and_others_continue(self):
         def decrypt(row):
@@ -154,13 +206,85 @@ class FriendDigestTests(unittest.TestCase):
 class FriendSqlTests(unittest.TestCase):
     def setUp(self):
         self.db = sqlite3.connect(":memory:")
-        for name in ("0007_ai_daily.sql", "0014_friend_gemini_keys.sql", "0020_friend_ai_daily.sql", "0022_friend_ai_stock_daily.sql"):
-            self.db.executescript((MIGRATIONS / name).read_text(encoding="utf-8"))
+        for name in ("0001_init.sql", "0007_ai_daily.sql", "0014_friend_gemini_keys.sql", "0020_friend_ai_daily.sql",
+                     "0022_friend_ai_stock_daily.sql"):            self.db.executescript((MIGRATIONS / name).read_text(encoding="utf-8"))
         for row in KEYS:
             self.db.execute(
                 "INSERT INTO friend_gemini_keys (email,ciphertext,iv,alg,master_key_id,consent_at,consent_version,status,"
                 "last_success_at,last_failure_reason,created_at,updated_at) VALUES (?,?,?,?,?,'t','v','active',NULL,'quota','t','t')",
                 (row["email"], row["ciphertext"], row["iv"], row["alg"], row["master_key_id"]))
+
+    def ready_for_schedule(self):
+        """兩位朋友都已核准、同意是現行版本：排程的查詢挑得到他們。"""
+        module = json.dumps((ROOT / "cloud" / "lib" / "friend-ai.js").as_uri())
+        version = subprocess.run(
+            ["node", "--input-type=module", "-e", f"const m = await import({module}); process.stdout.write(m.CONSENT_VERSION)"],
+            capture_output=True, text=True, check=True).stdout
+        for row in KEYS:
+            self.db.execute("INSERT INTO users (email, nickname, status, applied_at) VALUES (?, 'n', 'approved', 't')", (row["email"],))
+        self.db.execute("UPDATE friend_gemini_keys SET consent_version=?, last_failure_reason=NULL", (version,))
+
+    def usable_emails(self):
+        sql = subprocess.run(["node", str(ROOT / "cloud" / "friend-ai-schedule.mjs"), "keys-sql"], capture_output=True,
+                             text=True, check=True).stdout
+        return [row[0] for row in self.db.execute(sql).fetchall()]
+
+    def write_day(self, day, replies, keys=KEYS):
+        replies = {key: gemini_reply({**valid_structured(), "data_date": day}) if reply == "ok" else reply
+                   for key, reply in replies.items()}
+        gemini = FakeGemini(replies)
+        result = run_friends({**friend_payload(), "data_date": day}, keys, decrypt=fake_decrypt, post=gemini,
+                             now=lambda: f"{day}T10:00:00+00:00", sleep=lambda _: None)
+        for script in friend_sql(result):
+            self.db.executescript(script)
+        return gemini
+
+    def key_state(self, email):
+        return self.db.execute("SELECT status, last_failure_reason FROM friend_gemini_keys WHERE email=?", (email,)).fetchone()
+
+    def test_quota_leaves_key_active_and_next_day_uses_it_again(self):
+        self.ready_for_schedule()
+        self.write_day(DATE, {"KEY-amy": GeminiHttpError(429, "RESOURCE_EXHAUSTED"), "KEY-bob": "ok"})
+        self.assertEqual(self.key_state("amy@example.com"), ("active", FAILURE_TEXT["quota"]))
+        self.assertIn("amy@example.com", self.usable_emails())
+        gemini = self.write_day("2026-11-11", {"KEY-amy": "ok", "KEY-bob": "ok"})
+        self.assertEqual([call["api_key"] for call in gemini.calls], ["KEY-amy", "KEY-bob"])
+        self.assertEqual(self.key_state("amy@example.com"), ("active", None))
+
+    def test_invalid_or_revoked_key_is_paused_and_skipped_until_a_new_key_is_saved(self):
+        for failure, code in ((GeminiHttpError(403, "PERMISSION_DENIED"), "key_revoked"), (GeminiHttpError(401), "key_invalid")):
+            with self.subTest(code=code):
+                self.setUp()
+                self.ready_for_schedule()
+                self.write_day(DATE, {"KEY-amy": failure, "KEY-bob": "ok"})
+                self.assertEqual(self.key_state("amy@example.com"), ("paused", FAILURE_TEXT[code]))
+                self.assertEqual(self.key_state("bob@example.com"), ("active", None))
+                self.assertEqual(self.usable_emails(), ["bob@example.com"], "之後的排程跳過他")
+                # 朋友換上新金鑰、試呼叫成功：網站（lib/friend-ai.js saveKey）把狀態改回可用。
+                self.db.execute("UPDATE friend_gemini_keys SET iv='i-new', ciphertext='c-new', status='active', "
+                                "last_success_at=NULL, last_failure_reason=NULL WHERE email='amy@example.com'")
+                self.assertEqual(self.usable_emails(), ["amy@example.com", "bob@example.com"])
+
+    def test_pause_does_not_hit_a_new_key_saved_while_the_schedule_was_running(self):
+        self.ready_for_schedule()
+        gemini = FakeGemini({"KEY-amy": GeminiHttpError(403, "PERMISSION_DENIED")})
+        result = run_friends(friend_payload(), KEYS[:1], decrypt=fake_decrypt, post=gemini,
+                             now=lambda: "2026-11-10T10:00:00+00:00", sleep=lambda _: None)
+        # 排程還在跑時，朋友已經換上一把新的（iv 換了）：舊金鑰的失敗不能把新金鑰暫停或寫上失敗原因。
+        self.db.execute("UPDATE friend_gemini_keys SET iv='i-new', ciphertext='c-new', status='active', last_failure_reason=NULL "
+                        "WHERE email='amy@example.com'")
+        for script in friend_sql(result):
+            self.db.executescript(script)
+        self.assertEqual(self.key_state("amy@example.com"), ("active", None))
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM friend_ai_daily WHERE email='amy@example.com'").fetchone()[0], 2)
+
+    def test_failure_today_never_carries_yesterdays_content(self):
+        self.write_day("2026-11-09", {"KEY-amy": "ok", "KEY-bob": "ok"})
+        self.write_day(DATE, {"KEY-amy": GeminiHttpError(429), "KEY-bob": GeminiHttpError(503)})
+        today = self.db.execute("SELECT status, content_json FROM friend_ai_daily WHERE data_date=?", (DATE,)).fetchall()
+        self.assertEqual(set(today), {("unproduced", None)})
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM friend_ai_daily WHERE data_date='2026-11-09' AND status='generated'")
+                         .fetchone()[0], 4, "前一天的照舊留在前一天，不搬到今天")
 
     def test_each_friend_rows_land_in_friend_table_and_owner_table_is_untouched(self):
         gemini = FakeGemini({"KEY-amy": gemini_reply(valid_structured()), "KEY-bob": GeminiHttpError(429, "RESOURCE_EXHAUSTED")})
@@ -189,7 +313,7 @@ class FriendSqlTests(unittest.TestCase):
                                 ("bob@example.com", None, "今天的免費額度用完了，明天會照常再試")])
 
     def test_nothing_to_write_when_no_friend_has_a_usable_key(self):
-        self.assertEqual(friend_sql({"rows": [], "keys": {}, "audit": []}), [])
+        self.assertEqual(friend_sql({"rows": [], "keys": {}, "audit": [], "ivs": {}}), [])
 
 
 def write_js(path, name, value):
