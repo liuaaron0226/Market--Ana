@@ -125,6 +125,14 @@ test("朋友那兩張解讀表還沒建立（migration 未套）：後台照常�
   assert.equal(users[AMY].gemini.watchlist_count, 1);
 });
 
+test("只缺個股那張表（0022 未套）：後台與朋友頁同一個判斷——大盤、籌碼都產生就算產生、沒有提示", async () => {
+  addKey(AMY, { failure: "舊的失敗原因" });
+  addDay(AMY, "2026-11-11", null);
+  env.DB._raw.exec("DROP TABLE friend_ai_stock_daily");
+  assert.deepEqual((await adminUsers())[AMY].gemini.digest, { data_date: "2026-11-11", produced: true });
+  assert.equal((await (await get("/api/friend-ai/digest", AMY)).json()).notice, null);
+});
+
 test("只有個股判斷沒產生（大盤、籌碼都有）：朋友拿得到原因與回設定頁的提示", async () => {
   addKey(AMY, { failure: VALIDATION_TEXT });
   addDay(AMY, "2026-11-11", "partial");

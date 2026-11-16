@@ -205,24 +205,17 @@ const PAUSED_TEXT = "這把金鑰已暫停使用，請到 Gemini 設定換一把
 
 function noticeOf(key, sections) {
   if (key.status === "paused") return { text: key.last_failure_reason || PAUSED_TEXT };
-  if (key.last_failure_reason && sections.some((section) => section.status !== "generated")) {
+  if (key.last_failure_reason && !allGenerated(sections)) {
     return { text: key.last_failure_reason };
   }
   return null;
 }
 
-// 05 票：個股判斷那一列（03 票）也算進提示——只有個股沒產生、大盤與籌碼都有時，朋友一樣要看到原因。
-// 沒有持股算成功；那天沒有個股那一列（0022 還沒套）就不列入。
+// 05 票：個股判斷那一列（03 票）也算進「那天產生了沒」——只有個股沒產生、大盤與籌碼都有時，朋友一樣要看到原因。
+// 朋友頁的提示與站主後台共用這一個判斷：沒有持股算成功；那天沒有個股那一列（0022 還沒套）就不列入。
 const STOCK_DONE = new Set(["generated", "no_holdings"]);
-
-async function stockStatusOn(db, email, date) {
-  try {
-    return (await db.prepare("SELECT status FROM friend_ai_stock_daily WHERE email = ? AND data_date = ?").bind(email, date).first())?.status ?? null;
-  } catch (error) {
-    if (!tableMissing(error)) throw error;
-    return null;
-  }
-}
+const stockSection = (status) => (status ? [{ status: STOCK_DONE.has(status) ? "generated" : status }] : []);
+const allGenerated = (sections) => sections.every((section) => section?.status === "generated");
 
 async function friendDigest(db, email) {
   const key = await db.prepare(
@@ -245,9 +238,9 @@ async function friendDigest(db, email) {
   const pick = (type) => rows.find((row) => row.digest_type === type);
   const market = digestOf(pick("market"));
   const flow = digestOf(pick("flow"));
-  const sections = [market, flow];
-  const stock = latest ? await stockStatusOn(db, email, latest) : null;
-  if (stock) sections.push({ status: STOCK_DONE.has(stock) ? "generated" : stock });
+  const [stock] = latest
+    ? await rowsOrNone(db, "SELECT status FROM friend_ai_stock_daily WHERE email = ? AND data_date = ?", email, latest) : [];
+  const sections = [market, flow, ...stockSection(stock?.status)];
   return {
     available: true, configured: true, consented: true, data_date: latest,
     market, flow, notice: noticeOf(key, sections),
@@ -352,27 +345,28 @@ async function rowsOrNone(db, sql, ...binds) {
 
 const countsBy = (rows) => new Map(rows.map((row) => [row.email, Number(row.n)]));
 
-// 資料日規則和朋友頁面一樣：取所有朋友最新的一天。大盤、籌碼都產生，個股產生或沒有持股，才算「那天產生了」；
-// 那天沒有他的列（暫停、還沒輪到、失敗）就是沒產生，不拿前一天冒充。
-async function latestProduced(db) {
-  const [{ data_date: date = null } = {}] = await rowsOrNone(db, "SELECT MAX(data_date) AS data_date FROM friend_ai_daily");
-  if (!date) return { date: null, produced: () => false };
+// 資料日規則與「產生」的判斷都和朋友頁面一樣：取所有朋友最新的一天；那天沒有他的列（暫停、還沒輪到、失敗）就是沒產生，
+// 不拿前一天冒充。
+async function latestDay(db) {
+  const date = (await rowsOrNone(db, "SELECT MAX(data_date) AS data_date FROM friend_ai_daily"))[0]?.data_date ?? null;
+  if (!date) return null;
   const digests = await rowsOrNone(db, "SELECT email, digest_type, status FROM friend_ai_daily WHERE data_date = ?", date);
-  const stocks = await rowsOrNone(db, "SELECT email, status FROM friend_ai_stock_daily WHERE data_date = ?", date);
-  const done = new Set(stocks.filter((row) => STOCK_DONE.has(row.status)).map((row) => row.email));
-  const generated = (email, type) => digests.some((row) => row.email === email && row.digest_type === type && row.status === "generated");
-  return { date, produced: (email) => generated(email, "market") && generated(email, "flow") && done.has(email) };
+  const stocks = new Map((await rowsOrNone(db, "SELECT email, status FROM friend_ai_stock_daily WHERE data_date = ?", date))
+    .map((row) => [row.email, row.status]));
+  const section = (email, type) => digests.find((row) => row.email === email && row.digest_type === type);
+  const produced = (email) => allGenerated([section(email, "market"), section(email, "flow"), ...stockSection(stocks.get(email))]);
+  return { data_date: date, produced };
 }
 
 export async function keyStateLookup(db) {
   const keys = await rowsOrNone(db, "SELECT email, status, last_success_at, last_failure_reason FROM friend_gemini_keys");
   const watchlist = countsBy(await rowsOrNone(db, "SELECT email, COUNT(*) AS n FROM user_watchlist GROUP BY email"));
   const holdings = countsBy(await rowsOrNone(db, "SELECT email, COUNT(*) AS n FROM user_holdings GROUP BY email"));
-  const latest = keys.length ? await latestProduced(db) : { date: null };
+  const day = keys.length ? await latestDay(db) : null;
   const states = new Map(keys.map((row) => [row.email, {
     configured: true, paused: row.status === "paused",
     last_success_at: row.last_success_at ?? null, last_failure_reason: row.last_failure_reason ?? null,
-    digest: latest.date ? { data_date: latest.date, produced: latest.produced(row.email) } : null,
+    digest: day ? { data_date: day.data_date, produced: day.produced(row.email) } : null,
   }]));
   return (email) => ({
     ...(states.get(email) ?? NO_KEY),
