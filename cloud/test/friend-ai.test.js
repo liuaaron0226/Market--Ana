@@ -4,6 +4,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { handle } from "../lib/gate.js";
+import { releasePolicy } from "../lib/release-policy.js";
 import { CONSENT_VERSION, FRIEND_KEY_LIMIT, USABLE_FRIEND_KEYS_SQL, AAD_PREFIX } from "../lib/friend-ai.js";
 import { decryptFriendKey, usableKeysSql } from "../friend-ai-schedule.mjs";
 import { fakeD1, makeIssuer, claims, fetchJwks, TEAM, MAIN_AUD, APPLY_AUD, OWNER } from "./helpers.js";
@@ -414,10 +415,15 @@ test("開關關著：入口在讀資料庫之前就回沒有內容，設定頁�
   }
 });
 
-test("正式設定下朋友 AI 的開關是關的，主金鑰也不寫在設定檔裡", () => {
+test("正式設定下朋友 AI 的開關是開的（本人 11-16 「現在打開」），主金鑰不寫在設定檔裡，也不連帶打開站主的策略與 AI", () => {
   const text = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
   const vars = JSON.parse(text.replace(/^\s*\/\/.*$/gm, "")).vars;
-  assert.equal(vars.MARKET_ANA_FRIEND_AI, undefined);
+  assert.equal(vars.MARKET_ANA_FRIEND_AI, "on");
+  const policy = releasePolicy(vars);
+  assert.equal(policy.strategies_enabled, false);
+  for (const feature of ["strategy_v1", "level_advice", "ai_digest", "ai_stock_advice"]) {
+    assert.equal(policy.features[feature], false, feature);
+  }
   assert.equal(vars.FRIEND_AI_MASTER_KEY, undefined);
   assert.ok(!text.includes("FRIEND_AI_MASTER_KEY"));
 });
