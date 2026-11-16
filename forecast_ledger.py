@@ -46,6 +46,9 @@ from ledger_core import seal as _seal
 from ledger_core import sha as _sha
 from ledger_core import text_problem as _text_problem
 
+# 過去的經驗（E 票）：相似盤勢層與教訓層，自成一個模組。
+import forecast_experience as _experience
+
 SCHEMA = "forecast-ledger/v1"
 HORIZONS = (1, 5, 20)
 ZONES = ("above", "between", "below")
@@ -56,7 +59,8 @@ REQUIRED_INPUTS = ("index", "institutional", "futures")
 
 # 候選關卡與基準的參數：在第一筆紀錄之前寫定，整組算進輸入版本，改了就是新系列。
 PARAMETERS: dict[str, Any] = {
-    "layers": ["base"],
+    # 交給模型的輸入層；某一層「有或沒有」才換輸入版本（教訓層內容隨時間增長不換）。
+    "layers": ["base", "similar", "lessons"],
     "ma_periods": [5, 10, 20, 60, 120, 240],
     "high_low_windows": [20, 60, 240],
     "gap_lookback_bars": 240,
@@ -66,6 +70,9 @@ PARAMETERS: dict[str, Any] = {
     # 基本層交給模型的資料組成（規格〈交給 Gemini 的輸入〉）；加減任何一項都會換輸入版本。
     "base_inputs": ["index_ohlc_amount", "indicators_short_medium_long", "trend_labels", "chips_institutional_futures",
                     "candidates", "method_text"],
+    # 相似盤勢的歸類定義與教訓層的筆數（本人 2026-11-16 選「照這樣」）；改任何一個數字都是新系列。
+    "similar_regimes": _experience.PARAMETERS["similar_regimes"],
+    "lessons": _experience.PARAMETERS["lessons"],
 }
 
 _MA_NAMES = {5: "五日線", 10: "十日線", 20: "月線", 60: "季線", 120: "半年線", 240: "年線"}
@@ -110,9 +117,16 @@ _PROMPT_RULES = (
     "每一格到期後，程式會把你的落點命中率和「照歷史亂猜」並排比較：照歷史亂猜是不看任何判斷、只看歷史上同樣距離的兩條線"
     "收盤落在各區的比例。兩條線拉得越寬，「兩線之間」在歷史上本來就越常中，所以只為了保險把線拉寬，比不贏照歷史亂猜。",
     f"regime 從固定清單選一個：{'、'.join(REGIMES)}。base_date 照抄 INPUT_JSON 的 base_date。",
+    # 過去的經驗（E 票）：本人「不要讓歷史重演，根據過去的經驗去輔助判斷」。
+    "similar_regimes 是程式依事先寫定的定義，把歷史上的日子歸成「多頭中的回檔」「高檔轉弱」兩類，"
+    "統計各類起點之後一、五、二十個交易日的漲跌（每一段行情只算一次），all_days 是不分類的對照；today 是今天屬於哪一類。"
+    "這是事實可以參考，但 low_sample 為 true 的類別樣本太少，不能當成規律；「高檔轉弱」只代表和歷史上某些情況相似，"
+    "不保證會大跌、也不保證能避開。today 是多頭中的回檔時，二十日那一格的轉弱線要挑「跌破才算趨勢轉壞」的那條線。",
+    "lessons 是程式整理的過去對帳事實：各期間猜中與沒中的次數，以及最近幾次沒中的那一格當時選的落點、兩條線、盤勢、"
+    "看錯條件與實際落點。寫之前先看這些，避免同一種錯一犯再犯；lessons 是空的代表還沒有對完帳的紀錄。",
 )
 # 輸入版本：參數、回答格式、提示規則任何一項改了就是新系列，和舊系列分開對帳。
-INPUT_VERSION = "base-v1-" + hashlib.sha256(json.dumps(
+INPUT_VERSION = "+".join(PARAMETERS["layers"]) + "-v1-" + hashlib.sha256(json.dumps(
     {"parameters": PARAMETERS, "output_schema": OUTPUT_SCHEMA, "prompt_rules": _PROMPT_RULES},
     ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:8]
 
@@ -237,7 +251,7 @@ def _readiness(data: Mapping[str, Any], rows: list[dict[str, Any]]) -> list[str]
 
 
 def _model_input(data: Mapping[str, Any], rows: list[dict[str, Any]], edition: str,
-                 candidates: list[dict[str, Any]] | None) -> dict[str, Any]:
+                 candidates: list[dict[str, Any]] | None, experience: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "schema": "forecast-input/v1",
         "input_version": INPUT_VERSION,
@@ -253,6 +267,16 @@ def _model_input(data: Mapping[str, Any], rows: list[dict[str, Any]], edition: s
         "history": {"from": rows[0]["date"] if rows else None, "to": rows[-1]["date"] if rows else None,
                     "bars": len(rows), "sha256": _sha(rows)},
         "method_text": data.get("method_text"),
+        **experience,
+    }
+
+
+def _experience_layers(root: Path, base_date: str, rows: list[dict[str, Any]], ready: bool) -> dict[str, Any]:
+    """相似盤勢層只在日 K 截到基準日時才算（不偷看之後）；教訓層只用寫這一份時已知結果的對帳。"""
+    ledger = read_ledger(root)
+    return {
+        "similar_regimes": _experience.similar_regimes(rows) if ready else None,
+        "lessons": _experience.lessons(ledger["forecasts"], ledger["reconciliations"], base_date),
     }
 
 
@@ -391,7 +415,8 @@ def write_forecast(
     rows = _clean_daily(data.get("index_daily") or [])
     problems = _readiness(data, rows)
     candidates = None if problems else _candidate_levels(rows)
-    model_input = _model_input(data, rows, edition, candidates)
+    model_input = _model_input(data, rows, edition, candidates,
+                               _experience_layers(Path(root), base_date, rows, not problems))
     input_sha = _sha(model_input)
 
     if path.exists():
@@ -414,7 +439,7 @@ def write_forecast(
     def finish(kind: str, **fields: Any) -> dict[str, Any]:
         record.update(kind=kind, locked_at=clock().astimezone(TAIPEI).isoformat(), **fields)
         if kind == "forecast" and datetime.fromisoformat(record["locked_at"]) >= deadline:
-            for key in ("regime", "cells"):
+            for key in ("regime", "cells", "similar_regimes"):
                 record.pop(key, None)
             record.update(kind="miss", miss_reason="deadline_passed", miss_detail="鎖定時已過期限")
         outcome = _append(path, _seal(record))
@@ -435,7 +460,8 @@ def write_forecast(
             return finish("miss", miss_reason=status, miss_detail=detail)
         accepted, problem = _validate(structured, model_input)
         if accepted is not None:
-            return finish("forecast", **_with_baselines(accepted, rows, data["trend_labels"]))
+            return finish("forecast", **_with_baselines(accepted, rows, data["trend_labels"]),
+                          similar_regimes=model_input["similar_regimes"])
         record["attempts"].append({"status": "answer_invalid", "detail": problem})
     return finish("miss", miss_reason="answer_invalid", miss_detail=record["attempts"][-1]["detail"])
 
@@ -582,7 +608,7 @@ def summarize(root: Path | str, index_daily: Sequence[Mapping[str, Any]], *,
 # 給網站顯示的欄位；完整輸入（含方法稿）與模型的重試細節只留在原件。
 _PUBLIC_FIELDS = ("forecast_id", "base_date", "edition", "method_version", "input_version", "model", "run_mode",
                   "kind", "locked_at", "deadline", "data_cutoffs", "regime", "cells", "miss_reason", "miss_detail",
-                  "record_sha256")
+                  "similar_regimes", "record_sha256")
 
 
 def _sql_literal(value: Any) -> str:

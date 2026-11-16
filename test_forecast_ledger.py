@@ -371,7 +371,7 @@ class RecordMetadataTests(LedgerTestCase):
         self.assertEqual(record["base_date"], "2026-09-30")
         self.assertEqual(record["edition"], "evening")
         self.assertEqual(record["method_version"], "0.2")
-        self.assertRegex(record["input_version"], r"^base-v1-[0-9a-f]{8}$")
+        self.assertRegex(record["input_version"], r"^base\+similar\+lessons-v1-[0-9a-f]{8}$")
         self.assertEqual(record["model"], "test-model")
         self.assertRegex(record["input_sha256"], r"^[0-9a-f]{64}$")
         self.assertEqual(record["locked_at"], "2026-09-30T17:00:00+08:00")
