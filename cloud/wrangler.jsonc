@@ -22,6 +22,9 @@
     "MARKET_ANA_WATCHLIST_WATCH": "owner",
     // 本人 2026-11-16 18:3x「我今天晚上10點前要看到你把正式網站的所有功能都上線」：五塊新功能先只開站主（資料先到，
     // 畫面做在立體重設計上）。開給全部＝改成 "all"（要另外問本人），關閉＝拿掉這一行再部署。
-    "MARKET_ANA_STOCK_SIGNALS": "owner"
+    "MARKET_ANA_STOCK_SIGNALS": "owner",
+    // 本人 2026-11-16 18:3x 同上：ETF 上站（12 票，股票型 ETF 搜尋得到、有個股頁、可加自選與對照）先只開站主。
+    // 要先套 0018 到正式資料庫、每日發布才會寫入 ETF 名錄；開給全部＝改成 "all"（要另外問本人），關閉＝拿掉這一行再部署。
+    "MARKET_ANA_STOCK_ETFS": "owner"
   }
 }
