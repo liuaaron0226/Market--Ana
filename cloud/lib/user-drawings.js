@@ -4,10 +4,13 @@ import { UserPortfolioError, codeFrom, noContent, readBody, requireSameOrigin, r
 
 const DRAWINGS_LIMIT = 200;
 const MAX_PRICE = 10_000_000;
+const TEXT_LIMIT = 200; // 與資料表的 CHECK (length(text) <= 200) 相同；一個表情符號算一個字
 const ID_RE = /^[A-Za-z0-9_-]{8,40}$/;
 const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
-// 種類 → 錨點個數。之後的票（文字）在這裡加一行。
-const ANCHOR_COUNT = { hline: 1, trend: 2, ray: 2, rect: 2, fib: 2 };
+const CONTROL_RE = /[\u0000-\u001f\u007f\u0085\u2028\u2029]/; // 控制字元與行分隔字元
+const VISIBLE_RE = /[^\s\p{Cf}]/u; // 至少一個看得見的字：空白與零寬字元不算
+// 種類 → 錨點個數。
+const ANCHOR_COUNT = { hline: 1, trend: 2, ray: 2, rect: 2, fib: 2, text: 1 };
 
 function isCalendarDate(value) {
   const parts = typeof value === "string" ? DATE_RE.exec(value) : null;
@@ -18,6 +21,22 @@ function isCalendarDate(value) {
 
 function requireId(id) {
   if (!ID_RE.test(id)) throw new UserPortfolioError(400, "畫線識別碼格式不正確");
+}
+
+// 文字標註的那一段文字：一行純文字，要有看得見的內容、不超過上限。其他種類不帶文字。
+// 照使用者寫的原樣存，不改寫也不跳脫（它是資料，顯示的那一端一律當純文字畫出來）；
+// 換行與控制字元畫不出來、不成對的代理字元存進去會變樣，這兩種不收。
+// 長度以字元（碼位）算，和資料表的 length() 一致：一個單一的表情符號算一個字，組合表情（國旗、家庭）算好幾個。
+function textInput(kind, text) {
+  if (kind !== "text") {
+    if (text !== undefined && text !== "") throw new UserPortfolioError(400, "這種畫線不帶文字");
+    return "";
+  }
+  if (typeof text !== "string" || !VISIBLE_RE.test(text)) throw new UserPortfolioError(400, "文字標註要有內容");
+  // 一個字元最多佔兩個單位：先用單位數擋掉長得離譜的，不必把整段展開來數。
+  if (text.length > TEXT_LIMIT * 2 || [...text].length > TEXT_LIMIT) throw new UserPortfolioError(400, `文字最多 ${TEXT_LIMIT} 字`);
+  if (CONTROL_RE.test(text) || !text.isWellFormed()) throw new UserPortfolioError(400, "文字不能含換行或控制字元");
+  return text;
 }
 
 function drawingInput(body) {
@@ -35,8 +54,7 @@ function drawingInput(body) {
   if (anchors.length === 2 && anchors[0].date === anchors[1].date && anchors[0].price === anchors[1].price) {
     throw new UserPortfolioError(400, "兩個錨點不能在同一位置");
   }
-  if (body.text !== undefined && body.text !== "") throw new UserPortfolioError(400, "這種畫線不帶文字");
-  return { kind, anchors: anchors.map(({ date, price }) => ({ date, price })), text: "" };
+  return { kind, anchors: anchors.map(({ date, price }) => ({ date, price })), text: textInput(kind, body.text) };
 }
 
 const fromRow = (row) => ({

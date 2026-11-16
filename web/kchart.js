@@ -1,6 +1,7 @@
 /* 可拖曳／縮放的K線圖（原生Canvas，無外部套件）。
    互動：滑鼠拖曳或單指左右平移；滾輪、雙指捏合或＋／−按鈕縮放；鍵盤左右鍵平移、+/- 縮放；點擊或移動顯示十字線。
-   有畫線時：點線選取、拖已選取的線移動（拖端點把手只動那一端）、Delete 刪除、Esc 取消選取或放下工具。
+   有畫線時：點線選取、拖已選取的線移動（拖端點把手只動那一端）、Delete 刪除、Esc 取消選取或放下工具；
+   文字標註再點一下（或 Enter）打開輸入框修改內容。
    資料：candles=[{t,label,open,high,low,close,amount}] 由舊到新。overlays 可放判斷線。
    畫線（選用）：頁面先載入 chart-drawings.js 並傳 opts.drawings={onChange,onTool,onSelect}，
    再用 setTool／setDrawings／deleteSelectedDrawing／cancelDrawing 操作。 */
@@ -98,7 +99,8 @@
       if (this.drawings) this.drawings.dataChanged();
       this.draw(); this.emit();
     }
-    // 畫線：目前要用的工具（'trend'、'hline'、'ray'、'rect'、'fib'；null＝一般模式），以及這張圖上的整組畫線（[{id,kind,anchors:[{date,price}]}]）。
+    // 畫線：目前要用的工具（'trend'、'hline'、'ray'、'rect'、'fib'、'text'；null＝一般模式），
+    // 以及這張圖上的整組畫線（[{id,kind,anchors:[{date,price}]}]，文字標註另有 text）。
     setTool(kind) { if (this.drawings) { this.drawings.setTool(kind); this.draw(); } }
     setDrawings(list) { if (this.drawings) { this.drawings.load(list); this.draw(); } }
     // 刪除目前選取的那一條，回傳有沒有刪（沒有選取就不做事）；放下工具並取消選取（Esc 做的事）。
@@ -239,6 +241,8 @@
         else if (e.key === 'Escape') { e.preventDefault(); if (this.drawings) this.drawings.cancel(); this.clearSelection(); }
         // Mac 與 iPad 鍵盤上標著 delete 的那一顆送出的是 Backspace。
         else if ((e.key === 'Delete' || e.key === 'Backspace') && this.deleteSelectedDrawing()) e.preventDefault();
+        // 選取的是文字標註：Enter 打開輸入框修改內容（按住不放的重複鍵不算：確定用的那一下還按著時不會又打開）。
+        else if (e.key === 'Enter' && c === this.canvas && !e.repeat && this.drawings && this.drawings.edit()) { e.preventDefault(); this.draw(); }
         else if (e.key === 'Enter' && c !== this.canvas) {
           e.preventDefault(); this.hover = this.selection = this.view.end - 1;
           if (this.opts.onSelect) this.opts.onSelect(this.hover, c);

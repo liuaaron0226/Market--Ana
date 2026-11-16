@@ -114,7 +114,7 @@ test("不合法的代號、識別碼、種類、日期、價格、錨點個數�
   }
   const bad = [
     { kind: "circle", anchors: [{ date: "2026-11-13", price: 1000 }] },
-    { kind: "text", anchors: [{ date: "2026-11-13", price: 1000 }] }, // 文字標註還沒開放（這一列原本用趨勢線、矩形、黃金分割，票 03、04、05 陸續開放了）
+    { kind: "text", anchors: [{ date: "2026-11-13", price: 1000 }] }, // 文字標註不帶文字（這一列原本是「還沒開放的種類」的佔位例子；票 03～06 把六種都開放了，現在擋的是沒有內容）
     { anchors: [{ date: "2026-11-13", price: 1000 }] },
     { kind: "hline" },
     { kind: "hline", anchors: [] },
@@ -359,4 +359,103 @@ test("黃金分割的不合法輸入被拒：只有一個錨點、兩個錨點�
     { kind: "fib", anchors: [first, { date: "2026-11-13", price: 1010 }], text: "線上不帶文字" },
   ]) assert.equal((await put(body)).status, 400, JSON.stringify(body));
   assert.equal((await env.DB.prepare("SELECT COUNT(*) AS n FROM user_drawings").first()).n, 0);
+});
+
+// ---------- 票 06：文字標註（一個錨點＋一段文字） ----------
+
+const note = (text, price = 1085.5, date = "2026-11-13") => ({ kind: "text", anchors: [{ date, price }], text });
+
+test("文字標註存一個錨點與一段文字：寫入後讀得回來；含 HTML 標籤的文字原樣存、原樣當純文字回", async () => {
+  const saved = await req("/api/drawings/2330/note-0001", { method: "PUT", body: note("突破前高，等回測") });
+  assert.equal(saved.status, 201);
+  assert.deepEqual(await saved.json(), {
+    id: "note-0001", kind: "text", anchors: [{ date: "2026-11-13", price: 1085.5 }], text: "突破前高，等回測",
+    created_at: "2026-11-14T06:00:00.000Z", updated_at: "2026-11-14T06:00:00.000Z",
+  });
+
+  const markup = `<img src=x onerror="alert(1)"> <b>粗體</b> &amp; <script>alert('x')</script> 'quote' "double"`;
+  assert.equal((await req("/api/drawings/2330/note-0002", { method: "PUT", body: note(markup, 1000) })).status, 201);
+  const list = await req("/api/drawings/2330");
+  assert.match(list.headers.get("content-type"), /^application\/json/, "回的是資料，不是網頁");
+  assert.deepEqual((await list.json()).items.map((item) => [item.id, item.kind, item.text]), [
+    ["note-0001", "text", "突破前高，等回測"],
+    ["note-0002", "text", markup],
+  ]);
+  const stored = await env.DB.prepare("SELECT text FROM user_drawings WHERE id = 'note-0002'").first();
+  assert.equal(stored.text, markup, "資料庫裡也是原樣，沒有被改寫或跳脫");
+});
+
+test("文字標註一定要有內容：沒帶文字、空字串、只有空白（含全形空白）、不是字串的都被拒，什麼都沒寫進去", async () => {
+  const put = (body) => req("/api/drawings/2330/note-0001", { method: "PUT", body });
+  const anchors = [{ date: "2026-11-13", price: 1085.5 }];
+  for (const body of [
+    { kind: "text", anchors },
+    { kind: "text", anchors, text: "" },
+    { kind: "text", anchors, text: "   " },
+    { kind: "text", anchors, text: "\u3000\u3000" },
+    { kind: "text", anchors, text: null },
+    { kind: "text", anchors, text: 12345 },
+    { kind: "text", anchors, text: ["突破前高"] },
+  ]) assert.equal((await put(body)).status, 400, JSON.stringify(body));
+  assert.equal((await env.DB.prepare("SELECT COUNT(*) AS n FROM user_drawings").first()).n, 0);
+});
+
+test("文字最多 200 字：剛好 200 字存得住，201 字被拒、原本的內容不變；一個表情符號算一個字", async () => {
+  const put = (id, text) => req(`/api/drawings/2330/${id}`, { method: "PUT", body: note(text) });
+  assert.equal((await put("note-0001", "線".repeat(200))).status, 201);
+  assert.equal((await put("note-0002", "線".repeat(201))).status, 400);
+  assert.equal((await put("note-0001", "a".repeat(201))).status, 400, "覆寫成太長的也不行");
+  assert.equal((await put("note-0003", "📈".repeat(200))).status, 201);
+  assert.equal((await put("note-0004", "📈".repeat(201))).status, 400);
+  assert.deepEqual((await listOf("2330")).map((item) => [item.id, item.text]), [
+    ["note-0001", "線".repeat(200)],
+    ["note-0003", "📈".repeat(200)],
+  ]);
+});
+
+test("文字是一行純文字：含換行、定位字元、控制字元或不成對的代理字元被拒；錨點個數不對也被拒", async () => {
+  const put = (body) => req("/api/drawings/2330/note-0001", { method: "PUT", body });
+  for (const text of ["第一行\n第二行", "回車\r", "定位\t字元", "空\u0000字元", "刪除\u007f字元", "半個\ud83d表情", "\udc00開頭"]) {
+    assert.equal((await put(note(text))).status, 400, JSON.stringify(text));
+  }
+  assert.equal((await put({ kind: "text", anchors: [], text: "沒有錨點" })).status, 400);
+  assert.equal((await put({ kind: "text", anchors: [{ date: "2026-11-13", price: 1000 }, { date: "2026-11-14", price: 1010 }], text: "兩個錨點" })).status, 400);
+  assert.equal((await env.DB.prepare("SELECT COUNT(*) AS n FROM user_drawings").first()).n, 0);
+  // 一般的標點、全形字、表情符號與前後的空白都照收、照原樣回。
+  const plain = " 12/05 法說會前減碼 1/3？（成本 985.5）📉 ";
+  assert.equal((await put(note(plain))).status, 201);
+  assert.deepEqual((await listOf("2330")).map((item) => item.text), [plain]);
+});
+
+test("修改文字或拖動位置後以同一個識別碼覆寫：仍是同一則，內容與位置換成新的；別的帳號讀不到、蓋不掉也刪不到", async () => {
+  let tick = Date.parse("2026-11-14T06:00:00Z");
+  deps.now = () => tick;
+  assert.equal((await req("/api/drawings/2330/note-0001", { method: "PUT", body: note("突破前高") })).status, 201);
+  tick += 60_000;
+  assert.equal((await req("/api/drawings/2330/note-0001", { method: "PUT", body: note("假突破，停損", 1070, "2026-11-12") })).status, 200);
+  const mine = [{
+    id: "note-0001", kind: "text", anchors: [{ date: "2026-11-12", price: 1070 }], text: "假突破，停損",
+    created_at: "2026-11-14T06:00:00.000Z", updated_at: "2026-11-14T06:01:00.000Z",
+  }];
+  assert.deepEqual(await listOf("2330"), mine);
+
+  assert.deepEqual(await listOf("2330", { email: "b@example.com" }), []);
+  assert.equal((await req("/api/drawings/2330/note-0001", { email: "b@example.com", method: "PUT", body: note("別人的備註") })).status, 201);
+  assert.equal((await req("/api/drawings/2330/note-0001", { email: "b@example.com", method: "DELETE" })).status, 204);
+  assert.deepEqual(await listOf("2330"), mine);
+  assert.equal((await req("/api/drawings/2330/note-0001", { method: "DELETE" })).status, 204);
+  assert.deepEqual(await listOf("2330"), []);
+});
+
+test("文字的其他不收內容：行分隔字元（U+2028、U+2029、U+0085）、只有看不見的零寬字元；長得離譜的直接拒絕", async () => {
+  const put = (text) => req("/api/drawings/2330/note-0001", { method: "PUT", body: note(text) });
+  for (const text of ["第一段\u2028第二段", "第一段\u2029第二段", "下一行\u0085", "\u200b", "\u200b\u200d \ufeff\u2060"]) {
+    assert.equal((await put(text)).status, 400, JSON.stringify(text));
+  }
+  assert.equal((await put("線".repeat(50_000))).status, 400);
+  assert.equal((await env.DB.prepare("SELECT COUNT(*) AS n FROM user_drawings").first()).n, 0);
+  // 字裡面夾著零寬連接字元的組合表情照收（一個家庭表情是 5 個字元）。
+  const family = "👨\u200d👩\u200d👧 全家持股";
+  assert.equal((await put(family)).status, 201);
+  assert.deepEqual((await listOf("2330")).map((item) => item.text), [family]);
 });

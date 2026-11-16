@@ -3,6 +3,8 @@
 票 03：趨勢線與射線——點兩下成線、預覽線、取消、拖整條、拖端點、切日週月、重新整理後仍在。
 票 04：矩形——點兩下對角、預覽、點邊線選取、拖整個、拖角落、切日週月、重新整理後仍在。
 票 05：黃金分割——點兩下出七條線、預覽、比例的位置、選取、拖整組、拖一端、切日週月、重新整理後仍在。
+票 06：文字標註——點一下出現輸入框、確定／取消／空白、字數上限、純文字顯示、選取、拖動、修改、切日週月、重新整理後仍在；
+       手機另驗輸入框大小、鍵盤彈出（用縮小視窗模擬）時不被遮住、寫完頁面回到原位。
 
 用真正的 gate.handle＋cloud/dist＋記憶體資料庫（cloud/test/journey-server.mjs），Access 由 cookie 模擬；
 不連正式站、不碰 8876／8897。先在 cloud/ 跑過 `node build.mjs` 讓 dist 是最新的。
@@ -580,7 +582,7 @@ def two_point_desktop(journey: Journey, browser) -> None:
     mid = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
 
     order = page.evaluate("() => [...document.querySelectorAll('#drawTools button[data-tool]')].map(button => button.dataset.tool + ':' + button.getAttribute('aria-label') + ':' + button.textContent.trim())")
-    journey.check("工具列依序是趨勢線、水平線、射線、矩形、黃金分割，只有圖示、各有可讀名稱", order == ["trend:趨勢線:", "hline:水平線:", "ray:射線:", "rect:矩形:", "fib:黃金分割:"], order)
+    journey.check("工具列依序是趨勢線、水平線、射線、矩形、黃金分割、文字標註，只有圖示、各有可讀名稱", order == ["trend:趨勢線:", "hline:水平線:", "ray:射線:", "rect:矩形:", "fib:黃金分割:", "text:文字標註:"], order)
     for button, name in [(trend, "趨勢線"), (ray, "射線")]:
         button.hover()
         page.wait_for_timeout(700)
@@ -962,7 +964,7 @@ def rect_mobile(journey: Journey, browser) -> None:
     context.close()
 
 FIB_RATIOS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1]
-TOOL_COUNT = 5  # 工具列目前有幾顆畫線工具（不含刪除）
+TOOL_COUNT = 6  # 工具列目前有幾顆畫線工具（不含刪除）
 
 
 def fib_levels(page) -> list[float]:
@@ -1196,9 +1198,394 @@ def fib_mobile(journey: Journey, browser) -> None:
     context.close()
 
 
+# 文字標註的輸入框（圖表容器裡的小表單）：沒開著回 null。位置是相對瀏覽器視窗的 CSS 像素。
+EDITOR_JS = """() => {
+  const form = document.querySelector('#chartHost .kc-note');
+  if (!form) return null;
+  const input = form.querySelector('.kc-note-input'), cancel = form.querySelector('.kc-note-cancel'), limit = form.querySelector('.kc-note-limit');
+  const box = form.getBoundingClientRect(), host = document.querySelector('#chartHost canvas').getBoundingClientRect();
+  return { left: box.left, top: box.top, right: box.right, bottom: box.bottom, height: box.height, value: input.value,
+    focused: document.activeElement === input, fontSize: parseFloat(getComputedStyle(input).fontSize), cancelWidth: cancel.getBoundingClientRect().width,
+    label: input.getAttribute('aria-label'), cancelLabel: cancel.getAttribute('aria-label'),
+    limit: limit.hidden ? '' : limit.textContent, hostLeft: host.left, hostRight: host.right, viewport: innerHeight };
+}"""
+
+# 畫布上某一塊（CSS 像素，相對畫布左上角）裡，顏色接近漲跌色（K 棒）的像素數。
+CANDLE_JS = """([left, top, width, height]) => {
+  const canvas = document.querySelector('#chartHost canvas');
+  const scale = canvas.height / canvas.getBoundingClientRect().height;
+  const rgb = name => { const hex = getComputedStyle(document.documentElement).getPropertyValue(name).trim(); return [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16)); };
+  const colors = [rgb('--up'), rgb('--down')];
+  const data = canvas.getContext('2d').getImageData(Math.round(left * scale), Math.round(top * scale), Math.max(1, Math.round(width * scale)), Math.max(1, Math.round(height * scale))).data;
+  let hits = 0;
+  for (let i = 0; i < data.length; i += 4) if (colors.some(([r, g, b]) => Math.abs(data[i] - r) + Math.abs(data[i + 1] - g) + Math.abs(data[i + 2] - b) < 60)) hits++;
+  return hits;
+}"""
+
+# 在畫布寬度 from～to 成之間找一個落在 K 棒實體上的點（CSS 像素，相對畫布左上角）：文字要寫在 K 棒上面才驗得到「不被 K 棒顏色吃掉」。
+ON_CANDLE_JS = """([from, to]) => {
+  const canvas = document.querySelector('#chartHost canvas');
+  const { width, height } = canvas, scale = height / canvas.getBoundingClientRect().height;
+  const rgb = name => { const hex = getComputedStyle(document.documentElement).getPropertyValue(name).trim(); return [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16)); };
+  const colors = [rgb('--up'), rgb('--down')];
+  const data = canvas.getContext('2d').getImageData(0, 0, width, height).data;
+  for (let x = Math.round(width * from); x < width * to; x += 2) for (let y = Math.round(height * 0.2); y < height * 0.7; y += 2) {
+    const i = (y * width + x) * 4;
+    if (colors.some(([r, g, b]) => Math.abs(data[i] - r) + Math.abs(data[i + 1] - g) + Math.abs(data[i + 2] - b) < 30)) return [Math.round(x / scale), Math.round(y / scale)];
+  }
+  return null;
+}"""
+
+MARKUP = "<b>粗體</b> <img src=x onerror=alert(1)> &amp;"
+
+
+def editor(page) -> dict | None:
+    return page.evaluate(EDITOR_JS)
+
+
+def text_desktop(journey: Journey, browser) -> None:
+    print("票 06｜桌機寬度 1280：文字標註")
+    code = "2412"
+    context = journey.context(browser, OWNER, viewport={"width": 1280, "height": 900})
+    page = journey.open(context, code)
+    dialogs: list[str] = []
+    page.on("dialog", lambda dialog: (dialogs.append(dialog.message), dialog.dismiss()))
+    tools = page.locator("#drawTools")
+    text = tools.locator("button[data-tool=text]")
+    delete = page.locator("#drawDelete")
+    box = page.locator("#chartHost canvas").bounding_box()
+    width, height = box["width"], box["height"]
+    axis_width = 60
+
+    order = page.evaluate("() => [...document.querySelectorAll('#drawTools button[data-tool]')].map(button => button.dataset.tool + ':' + button.getAttribute('aria-label') + ':' + button.textContent.trim())")
+    journey.check("工具列第六顆是文字標註，只有圖示、有可讀名稱", order[-1] == "text:文字標註:" and len(order) == TOOL_COUNT, order)
+    text.hover()
+    page.wait_for_timeout(700)
+    tip = text.evaluate("button => { const style = getComputedStyle(button, '::after'); return style.content + '|' + style.opacity; }")
+    journey.check("滑鼠停留顯示「文字標註」", tip == '"文字標註"|1', tip)
+    page.mouse.move(5, 5)
+    journey.check("起點：這一檔沒有畫線", journey.saved(page, code) == [] and journey.ink(page)["count"] == 0)
+
+    spot = page.evaluate(ON_CANDLE_JS, [0.6, 0.7])  # 寫在一根 K 棒的實體上；放在圖的右半，手機預設只看最近 50 根也看得到
+    journey.check("找到一根 K 棒當落點", spot is not None, spot)
+    spot = spot or [round(width * 0.65), round(height * 0.4)]
+    text.click()
+    journey.check("選了文字工具：工具列看得出已選中，還沒有輸入框", text.get_attribute("aria-pressed") == "true" and editor(page) is None)
+    click = journey.at(page, *spot)
+    page.mouse.click(*click)
+    box_now = editor(page)
+    journey.check("在圖上點一下：那個位置出現輸入框，可以直接打字；還沒儲存，工具仍選著", box_now is not None and box_now["focused"]
+                  and abs(box_now["left"] - click[0]) <= 12 and abs((box_now["top"] + box_now["bottom"]) / 2 - click[1]) <= 2
+                  and journey.saved(page, code) == [] and text.get_attribute("aria-pressed") == "true", {"editor": box_now, "click": click})
+    journey.check("輸入框與取消鈕有給輔助科技讀的名稱", box_now and box_now["label"] == "文字標註的內容" and box_now["cancelLabel"] == "取消", box_now)
+    page.keyboard.insert_text("突破前高，等回測")
+    page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-25-text-editor.png"))
+    with page.expect_response(drawing_request("PUT")) as created:
+        page.keyboard.press("Enter")
+    page.mouse.move(5, 5)
+    items = journey.saved(page, code)
+    ink = journey.ink(page)
+    journey.check("按 Enter 確定：文字留在圖上並儲存（PUT 回 201），輸入框收起、工具回一般模式", created.value.status == 201 and editor(page) is None
+                  and text.get_attribute("aria-pressed") == "false" and ink["count"] > 0, ink)
+    journey.check("雲端存的是一則文字標註：一個錨點、內容原樣", len(items) == 1 and items[0]["kind"] == "text" and len(items[0]["anchors"]) == 1
+                  and items[0]["text"] == "突破前高，等回測", items)
+    journey.check("文字就在點的位置：左緣在那一根、上下置中在那個價位", abs(ink["minX"] - spot[0]) <= 16 and abs((ink["minY"] + ink["maxY"]) / 2 - spot[1]) <= 6
+                  and ink["maxX"] - ink["minX"] < 140, {"ink": ink, "spot": spot})
+    region = [ink["minX"], ink["minY"], ink["maxX"] - ink["minX"], ink["maxY"] - ink["minY"]]
+    journey.check("字底下墊了底色：那一塊裡沒有 K 棒的紅綠透上來", page.evaluate(CANDLE_JS, region) == 0, page.evaluate(CANDLE_JS, region))
+    journey.check("新寫的沒有被選取", not delete.is_visible())
+    page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-26-text-drawn.png"))
+    note_id = items[0]["id"]
+    placed = items[0]["anchors"][0]
+
+    centre = ((ink["minX"] + ink["maxX"]) / 2, (ink["minY"] + ink["maxY"]) / 2)
+    page.mouse.click(*journey.at(page, *centre))
+    journey.check("點文字：選取（工具列出現刪除），第一下不會打開輸入框", delete.is_visible() and editor(page) is None)
+    page.mouse.move(5, 5)
+    outlined = journey.ink(page)
+    journey.check("選取時整塊文字外面多一圈外框", outlined["minX"] < ink["minX"] and outlined["maxX"] > ink["maxX"] and outlined["count"] > ink["count"], {"before": ink, "selected": outlined})
+    page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-27-text-selected.png"))
+
+    page.mouse.move(*journey.at(page, *centre))
+    axis = journey.axis(page)
+    page.mouse.down()
+    page.mouse.move(*journey.at(page, centre[0] + 90, centre[1] + 50), steps=6)
+    with page.expect_response(drawing_request("PUT")) as moved:
+        page.mouse.up()
+    after = journey.saved(page, code)[0]
+    journey.check("拖文字：移到較晚的日期、較低的價位，內容不變，自動儲存（PUT 回 200）；圖表不平移", moved.value.status == 200 and after["id"] == note_id
+                  and after["anchors"][0]["date"] > placed["date"] and after["anchors"][0]["price"] < placed["price"]
+                  and after["text"] == "突破前高，等回測" and journey.axis(page) == axis, {"before": placed, "after": after})
+    page.mouse.move(5, 5)
+    moved_ink = journey.ink(page)
+    journey.check("畫面上的文字跟著移了 90、50 左右", abs(moved_ink["minX"] - outlined["minX"] - 90) <= 12 and abs(moved_ink["minY"] - outlined["minY"] - 50) <= 3,
+                  {"before": outlined, "after": moved_ink})
+    centre = ((moved_ink["minX"] + moved_ink["maxX"]) / 2, (moved_ink["minY"] + moved_ink["maxY"]) / 2)
+    placed = after["anchors"][0]
+
+    page.mouse.click(*journey.at(page, *centre))
+    opened = editor(page)
+    journey.check("再點一下已選取的文字：輸入框帶著原本的內容打開", opened is not None and opened["value"] == "突破前高，等回測" and opened["focused"], opened)
+    page.keyboard.press("Control+A")
+    page.keyboard.insert_text("假突破，停損")
+    with page.expect_response(drawing_request("PUT")) as edited:
+        page.keyboard.press("Enter")
+    after = journey.saved(page, code)[0]
+    journey.check("改完按 Enter：內容換成新的並儲存（PUT 回 200），位置不變、仍選取著", edited.value.status == 200 and after["id"] == note_id
+                  and after["text"] == "假突破，停損" and after["anchors"][0] == placed and editor(page) is None and delete.is_visible(), after)
+
+    page.keyboard.press("Enter")  # 確定之後焦點回到圖表：直接按 Enter 又能改
+    opened = editor(page)
+    journey.check("鍵盤：選取著文字時按 Enter 也能打開輸入框", opened is not None and opened["value"] == "假突破，停損", opened)
+    page.keyboard.press("Control+A")
+    page.keyboard.insert_text("假突破，停損出場")
+    with page.expect_response(drawing_request("PUT")) as edited:
+        page.mouse.click(*journey.at(page, width * 0.15, height * 0.8))
+    journey.check("改到一半點圖上別處：就是確定（PUT 回 200），輸入框收起", edited.value.status == 200 and editor(page) is None
+                  and journey.saved(page, code)[0]["text"] == "假突破，停損出場")
+
+    page.mouse.click(*journey.at(page, *centre))  # 仍選取著：再點一下打開
+    page.keyboard.press("Control+A")
+    page.keyboard.insert_text("不要這個修改")
+    page.keyboard.press("Escape")
+    journey.check("改到一半按 Esc：輸入框收起，內容維持原樣；只是不改了，那一則仍選取著", editor(page) is None
+                  and journey.saved(page, code)[0]["text"] == "假突破，停損出場" and delete.is_visible())
+    page.mouse.click(*journey.at(page, *centre))
+    page.keyboard.press("Control+A")
+    page.keyboard.press("Delete")
+    cleared = editor(page)
+    page.keyboard.press("Enter")
+    page.mouse.move(5, 5)
+    journey.check("清空後確定：不會變成空白的標註，內容維持原樣", cleared is not None and cleared["value"] == "" and editor(page) is None
+                  and journey.saved(page, code)[0]["text"] == "假突破，停損出場" and journey.ink(page)["count"] > 0,
+                  {"cleared": cleared, "editor": editor(page), "saved": journey.saved(page, code), "ink": journey.ink(page)})
+
+    # 新的標註：沒寫就確定、按 Esc、按取消鈕都不留東西。
+    empty = journey.at(page, width * 0.25, height * 0.25)
+    for name, finish in [("沒寫內容就按 Enter", lambda: page.keyboard.press("Enter")),
+                         ("寫到一半按 Esc", lambda: (page.keyboard.insert_text("寫到一半"), page.keyboard.press("Escape"))),
+                         ("寫到一半按取消鈕", lambda: (page.keyboard.insert_text("寫到一半"), page.locator("#chartHost .kc-note-cancel").click())),
+                         ("寫到一半再按一次文字工具", lambda: (page.keyboard.insert_text("寫到一半"), text.click())),
+                         ("只打空白就按 Enter", lambda: (page.keyboard.insert_text("   "), page.keyboard.press("Enter")))]:
+        text.click()
+        page.mouse.click(*empty)
+        opened = editor(page) is not None
+        finish()
+        journey.check(f"{name}：不留下標註，輸入框收起、工具回一般模式", opened and editor(page) is None and len(journey.saved(page, code)) == 1
+                      and text.get_attribute("aria-pressed") == "false")
+
+    text.click()
+    page.mouse.click(*empty)
+    page.keyboard.insert_text("線" * 199)
+    journey.check("打到 199 字：沒有提示", editor(page)["limit"] == "" and len(editor(page)["value"]) == 199)
+    page.keyboard.insert_text("超過了" * 20)
+    limited = editor(page)
+    notice = page.locator("#chartHost .kc-note-limit").bounding_box()
+    journey.check("超過 200 字：多的進不去，並出現「最多 200 字」（在輸入框上方，不會被手機鍵盤遮住）", len(limited["value"]) == 200 and limited["limit"] == "最多 200 字"
+                  and notice["y"] + notice["height"] <= limited["top"], {"length": len(limited["value"]), "limit": limited["limit"], "notice": notice, "top": limited["top"]})
+    page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-28-text-limit.png"))
+    page.keyboard.press("Escape")
+
+    # 內容像標記語言：原樣存、原樣當成字畫出來，不會變成元素、不會執行。
+    text.click()
+    page.mouse.click(*journey.at(page, width * 0.2, height * 0.6))
+    page.keyboard.insert_text(MARKUP)
+    with page.expect_response(drawing_request("PUT")) as created:
+        page.keyboard.press("Enter")
+    page.wait_for_timeout(200)
+    items = journey.saved(page, code)
+    # 圖表自己的 K 棒數值提示裡本來就有粗體字，所以粗體只看有沒有帶著那兩個字的。
+    injected = page.evaluate("() => document.querySelectorAll('#chartHost img, #chartHost script').length"
+                             " + [...document.querySelectorAll('#chartHost b')].filter(b => b.textContent.includes('粗體')).length")
+    journey.check("寫了像 HTML 的內容：原樣存、畫成字，頁面上沒有多出元素、沒有跳出對話框", created.value.status == 201 and len(items) == 2
+                  and items[1]["text"] == MARKUP and injected == 0 and dialogs == [], {"items": items, "injected": injected, "dialogs": dialogs})
+    page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-29-text-markup.png"))
+    page.mouse.click(*journey.at(page, width * 0.2 + 30, height * 0.6))
+    with page.expect_response(drawing_request("DELETE")) as removed:
+        page.keyboard.press("Delete")
+    journey.check("選取那一則按 Delete：刪掉並從雲端移除，另一則還在", removed.value.status == 204
+                  and [item["id"] for item in journey.saved(page, code)] == [note_id] and not delete.is_visible())
+    kept = journey.saved(page, code)[0]
+    page.mouse.move(5, 5)
+    daily = journey.ink(page)
+
+    for period, name in [("weekly", "週 K"), ("monthly", "月 K")]:
+        journey.choose_period(page, period)
+        journey.check(f"{name}：文字還在，雲端的錨點與內容沒有被改", journey.ink(page)["count"] > 0 and journey.saved(page, code)[0] == kept)
+        page.locator(".bd-chart").screenshot(path=str(OUT / f"desktop-30-text-{period}.png"))
+    journey.choose_period(page, "5m")
+    journey.check("分 K：工具列與文字都不顯示", not tools.is_visible() and journey.ink(page)["count"] == 0)
+    journey.choose_period(page, "daily")
+    back = journey.ink(page)
+    journey.check("切回日 K：文字回到原本的位置", back["count"] > 0 and abs(back["minX"] - daily["minX"]) <= 1.5 and abs(back["minY"] - daily["minY"]) <= 1.5, {"back": back, "was": daily})
+
+    page.locator("#chartHost canvas").focus()
+    for _ in range(6):
+        page.keyboard.press("+")  # 放大到只看二十幾根
+    page.keyboard.press("Home")   # 再移到最前面：那一天不在畫面內
+    journey.check("平移到那一天不在畫面內：文字不顯示", journey.ink(page)["count"] == 0, journey.ink(page))
+    page.keyboard.press("ArrowRight")
+    journey.check("（文字不在畫面上時雲端那一則沒有被動到）", journey.saved(page, code)[0] == kept)
+
+    page.reload()
+    journey.ready(page, code)
+    page.mouse.move(5, 5)
+    reloaded = journey.ink(page)
+    journey.check("重新整理後文字還在原位、內容相同，沒有選取", reloaded["count"] > 0 and abs(reloaded["minX"] - daily["minX"]) <= 1.5
+                  and abs(reloaded["minY"] - daily["minY"]) <= 1.5 and journey.saved(page, code)[0] == kept and not delete.is_visible(), {"reloaded": reloaded, "was": daily})
+    page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-31-text-reloaded.png"))
+    context.close()
+
+    # 另一個帳號（前面的段落核准過的；單跑這一段時還沒核准，那就是 403）：讀不到這則文字。
+    other = journey.context(browser, OTHER, viewport={"width": 1280, "height": 900})
+    theirs = other.request.get(f"{journey.base}/api/drawings/{code}")
+    journey.check("別的帳號讀同一檔：讀不到這則文字", theirs.status == 403 or (theirs.status == 200 and theirs.json()["items"] == []), theirs.status)
+    other.close()
+
+
+def text_mobile(journey: Journey, browser) -> None:
+    print("票 06｜手機寬度 390（觸控）：文字標註")
+    code = "2412"
+    size = {"width": 390, "height": 844}
+    context = journey.context(browser, OWNER, viewport=size, device_scale_factor=2, is_mobile=True, has_touch=True)
+    page = journey.open(context, code)
+    tools = page.locator("#drawTools")
+    text = tools.locator("button[data-tool=text]")
+    delete = page.locator("#drawDelete")
+    box = page.locator("#chartHost canvas").bounding_box()
+    width, height = box["width"], box["height"]
+
+    # 這一段的截圖都用整頁的：元素截圖會讓 Chromium 的觸控模擬失去「粗指標」（pointer: coarse），之後量到的會是桌機的樣式。
+    seen = journey.ink(page)
+    journey.check("手機：桌機寫的文字看得到，整塊在圖內、沒有進價格軸", seen["count"] > 0 and seen["minX"] >= 0 and seen["maxX"] <= width - 40
+                  and len(journey.saved(page, code)) == 1, {"ink": seen, "canvas": width})
+    sizes = [button.bounding_box() for button in tools.locator("button[data-tool]").all()]
+    journey.check("手機：六顆工具每顆仍夠大（至少 44px），工具列不造成橫向捲動", len(sizes) == TOOL_COUNT and all(one["width"] >= 44 and one["height"] >= 44 for one in sizes)
+                  and page.evaluate("() => document.documentElement.scrollWidth <= innerWidth"), sizes)
+    page.screenshot(path=str(OUT / "mobile-19-text-from-desktop.png"))
+    desktop_note = journey.saved(page, code)[0]
+
+    # 把圖捲到畫面下半（手機上圖常在這個位置），在圖的下半部寫字：鍵盤一彈出來就會蓋到。
+    page.evaluate("() => { const top = document.querySelector('#chartHost canvas').getBoundingClientRect().top + scrollY; scrollTo(0, top - 420); }")
+    page.wait_for_timeout(100)
+    home = page.evaluate("() => scrollY")
+    spot = (round(width * 0.08), round(height * 0.62))  # 靠左：不和桌機寫的那一則疊在一起
+    text.tap()
+    tap = journey.at(page, *spot)
+    page.touchscreen.tap(*tap)
+    opened = editor(page)
+    journey.check("手機：點一下出現輸入框並取得焦點（鍵盤會跟著出來），位置在點的地方", opened is not None and opened["focused"]
+                  and abs(opened["left"] - tap[0]) <= 12 and abs((opened["top"] + opened["bottom"]) / 2 - tap[1]) <= 2
+                  and page.evaluate("() => matchMedia('(pointer: coarse)').matches"), {"editor": opened, "tap": tap})
+    journey.check("手機：輸入框字級至少 16px（iOS 才不會在聚焦時把整頁放大）、高度與取消鈕都至少 44px、整個在圖內",
+                  opened and opened["fontSize"] >= 16 and opened["height"] >= 44 and opened["cancelWidth"] >= 44
+                  and opened["left"] >= opened["hostLeft"] and opened["right"] <= opened["hostRight"] - 40, opened)
+    journey.check("手機：打開輸入框不會自己捲動頁面", page.evaluate("() => scrollY") == home)
+    page.screenshot(path=str(OUT / "mobile-20-text-editor.png"))
+
+    # 模擬螢幕鍵盤彈出：看得到的範圍從 844 變成 430（Chromium 沒有真的鍵盤，用縮小視窗代替）。
+    covered = opened["bottom"] > 430
+    page.set_viewport_size({"width": 390, "height": 430})
+    page.wait_for_timeout(300)
+    lifted = editor(page)
+    journey.check("手機：鍵盤彈出前輸入框的位置會被鍵盤蓋住（這一步才驗得到東西）", covered, opened)
+    journey.check("手機：鍵盤彈出後輸入框整個露在鍵盤上方、仍是焦點", lifted is not None and lifted["focused"] and lifted["top"] >= 0
+                  and lifted["bottom"] <= lifted["viewport"] - 8, lifted)
+    page.keyboard.insert_text("手機寫的備註")
+    page.screenshot(path=str(OUT / "mobile-21-text-keyboard.png"))
+    with page.expect_response(drawing_request("PUT")) as created:
+        page.keyboard.press("Enter")  # 鍵盤上的「完成」
+    page.set_viewport_size(size)      # 鍵盤收起
+    page.wait_for_timeout(300)
+    items = journey.saved(page, code)
+    journey.check("手機：按完成就儲存（PUT 回 201），輸入框收起、工具回一般模式", created.value.status == 201 and editor(page) is None
+                  and text.get_attribute("aria-pressed") == "false" and len(items) == 2 and items[1]["text"] == "手機寫的備註", items)
+    journey.check("手機：寫完後頁面回到打開輸入框之前的位置", page.evaluate("() => scrollY") == home, {"scrollY": page.evaluate("() => scrollY"), "home": home})
+    page.screenshot(path=str(OUT / "mobile-22-text-drawn.png"))
+    mine = items[1]
+
+    # 這一則的位置：左緣在點的那一根、上下置中在點的價位（另一則是桌機寫的，用位置分開）。
+    target = (spot[0] + 20, spot[1])
+    page.touchscreen.tap(*journey.at(page, *target))
+    journey.check("手機：手指點文字就選取（工具列出現刪除），K 棒數值沒有跳出來", delete.is_visible() and editor(page) is None
+                  and page.locator("#chartHost .kc-tip.show").count() == 0)
+    page.screenshot(path=str(OUT / "mobile-23-text-selected.png"))
+
+    cdp = context.new_cdp_session(page)
+
+    def touch(kind: str, tx: float, ty: float) -> None:
+        cdp.send("Input.dispatchTouchEvent", {
+            "type": kind, "touchPoints": [] if kind == "touchEnd" else [{"x": round(tx), "y": round(ty)}]})
+
+    axis = journey.axis(page)
+    scroll = page.evaluate("() => scrollY")
+    x, y = journey.at(page, *target)
+    touch("touchStart", x, y)
+    for step in range(1, 7):
+        touch("touchMove", x + step * 5, y - step * 8)
+        page.wait_for_timeout(16)
+    page.wait_for_timeout(250)  # 停一下再放開，不讓 Chromium 當成甩動
+    with page.expect_response(drawing_request("PUT")) as moved:
+        touch("touchEnd", x + 30, y - 48)
+    after = [item for item in journey.saved(page, code) if item["id"] == mine["id"]][0]
+    journey.check("手機：手指拖文字往右上，移到較高的價位，內容不變；圖表不平移、頁面不捲動", moved.value.status == 200
+                  and after["anchors"][0]["price"] > mine["anchors"][0]["price"] and after["anchors"][0]["date"] >= mine["anchors"][0]["date"]
+                  and after["text"] == mine["text"] and journey.axis(page) == axis and page.evaluate("() => scrollY") == scroll,
+                  {"before": mine["anchors"], "after": after["anchors"]})
+    target = (target[0] + 30, target[1] - 48)
+    page.screenshot(path=str(OUT / "mobile-24-text-moved.png"))
+
+    page.touchscreen.tap(*journey.at(page, *target))
+    opened = editor(page)
+    journey.check("手機：再點一下已選取的文字，輸入框帶著原本的內容打開", opened is not None and opened["value"] == "手機寫的備註" and opened["focused"], opened)
+    page.keyboard.press("Control+A")
+    page.keyboard.insert_text("手機改過的備註")
+    with page.expect_response(drawing_request("PUT")) as edited:
+        page.touchscreen.tap(*journey.at(page, width * 0.2, height * 0.12))
+    after = [item for item in journey.saved(page, code) if item["id"] == mine["id"]][0]
+    journey.check("手機：改完點圖上別處就是確定並儲存（PUT 回 200）；那一下沒有選到 K 棒", edited.value.status == 200 and after["text"] == "手機改過的備註"
+                  and editor(page) is None and page.locator("#chartHost .kc-tip.show").count() == 0, after)
+
+    page.touchscreen.tap(*journey.at(page, *target))
+    opened = editor(page)
+    page.keyboard.press("Control+A")
+    page.keyboard.insert_text("不要這個修改")
+    page.locator("#chartHost .kc-note-cancel").tap()
+    journey.check("手機：改到一半點取消鈕，輸入框收起、內容維持原樣", opened is not None and editor(page) is None
+                  and [item for item in journey.saved(page, code) if item["id"] == mine["id"]][0]["text"] == "手機改過的備註")
+
+    # 靠近圖的右緣寫一則長的：輸入框與文字都收在圖內、不進價格軸，文字自動換行。
+    text.tap()
+    page.touchscreen.tap(*journey.at(page, width - 110, height * 0.25))
+    near_edge = editor(page)
+    journey.check("手機：靠右緣點一下，輸入框整個留在圖內（不蓋到價格軸、不超出畫面）", near_edge is not None
+                  and near_edge["right"] <= near_edge["hostRight"] - 40 and near_edge["left"] >= near_edge["hostLeft"], near_edge)
+    long_text = "跌破季線後連三天收不回，量縮反彈先減碼三分之一"
+    page.keyboard.insert_text(long_text)
+    before = journey.ink(page)
+    with page.expect_response(drawing_request("PUT")) as created:
+        page.keyboard.press("Enter")
+    ink = journey.ink(page)
+    journey.check("手機：靠右緣的長文字換成兩行以上，整塊留在圖內、不進價格軸", created.value.status == 201 and ink["maxX"] <= width - 40 and ink["minX"] >= 0
+                  and ink["count"] > before["count"], {"ink": ink, "canvas": width})
+    page.screenshot(path=str(OUT / "mobile-25-text-wrapped.png"))
+
+    journey.choose_period(page, "weekly")
+    journey.check("手機：切到週 K 三則文字都還在", journey.ink(page)["count"] > 0 and len(journey.saved(page, code)) == 3)
+    journey.choose_period(page, "daily")
+    page.reload()
+    journey.ready(page, code)
+    reloaded = journey.saved(page, code)
+    journey.check("手機：重新整理後三則都還在，內容相同（桌機寫的那一則沒被動到）", [item["text"] for item in reloaded] == [desktop_note["text"], "手機改過的備註", long_text]
+                  and reloaded[0] == desktop_note and journey.ink(page)["count"] > 0, reloaded)
+    page.screenshot(path=str(OUT / "mobile-26-text-reloaded.png"))
+    context.close()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", help="已經開著的旅程伺服器；省略時自己起一個")
+    parser.add_argument("--only", help="只跑名稱以這個開頭的段落（例如 text），開發時用；省略時全部跑")
     args = parser.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
     server = None
@@ -1220,16 +1607,9 @@ def main() -> int:
     try:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch()
-            desktop(journey, browser)
-            mobile(journey, browser)
-            edit_desktop(journey, browser)
-            edit_mobile(journey, browser)
-            two_point_desktop(journey, browser)
-            two_point_mobile(journey, browser)
-            rect_desktop(journey, browser)
-            rect_mobile(journey, browser)
-            fib_desktop(journey, browser)
-            fib_mobile(journey, browser)
+            for step in (desktop, mobile, edit_desktop, edit_mobile, two_point_desktop, two_point_mobile, rect_desktop, rect_mobile, fib_desktop, fib_mobile, text_desktop, text_mobile):
+                if not args.only or step.__name__.startswith(args.only):
+                    step(journey, browser)
             browser.close()
     finally:
         if server:
