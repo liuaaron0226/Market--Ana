@@ -120,6 +120,7 @@ def _append(db_path: Path, write: Callable[[sqlite3.Connection], None], build_ne
 def listed_quotes_day(out: Path, db_path: Path, day: str, *, get: Callable | None = None,
                       sleep: Callable = time.sleep) -> dict:
     import stock_history as sh
+    import etf_history
 
     compact = _compact(day)
     if _has_row(db_path, "SELECT 1 FROM source_days WHERE date = ?", (day,)):
@@ -146,6 +147,8 @@ def listed_quotes_day(out: Path, db_path: Path, day: str, *, get: Callable | Non
             raise ValueError(f"{raw} 內容日期 {payload.get('date')} 與檔名不符")
         table = sh.quote_table(payload)
         rows = [sh.parse_row(compact, table["fields"], r) for r in table["data"] if sh.security_kind(r[0], r[1])]
+        # 已回補進庫的股票型 ETF（etf_history）每天跟著帶上新的一天
+        rows += etf_history.day_rows("上市", content, compact, etf_history.recorded_in(connection))
         connection.executemany(f"INSERT INTO daily VALUES ({','.join('?' * len(sh.COLUMNS))})",
                                [[r[c] for c in sh.COLUMNS] for r in rows])
         connection.execute("INSERT INTO source_days VALUES (?, ?, ?, ?)",
@@ -178,6 +181,7 @@ def _otc_quotes_empty(response) -> bool:
 def otc_quotes_day(out: Path, db_path: Path, day: str, catalog, *, get: Callable | None = None,
                    sleep: Callable = time.sleep) -> dict:
     import otc_history as oh
+    import etf_history
 
     compact = _compact(day)
     if _has_row(db_path, "SELECT 1 FROM source_days WHERE date = ?", (day,)):
@@ -199,6 +203,7 @@ def otc_quotes_day(out: Path, db_path: Path, day: str, catalog, *, get: Callable
         if hashlib.sha256(content).hexdigest() != expected:
             raise ValueError(f"{raw.name} SHA-256 不符")
         rows = [{**row, "kind": "common"} for row in oh.parse_csv(content, compact) if catalog.lookup(row["code"])]
+        rows += etf_history.day_rows("上櫃", content, compact, etf_history.recorded_in(connection))
         connection.executemany(f"INSERT INTO daily VALUES ({','.join('?' * len(oh.COLUMNS))})",
                                [[r[c] for c in oh.COLUMNS] for r in rows])
         connection.execute("INSERT INTO source_days VALUES (?, ?, ?, ?)",
@@ -935,6 +940,9 @@ def fetch_day(day: str, *, root: Path = ROOT, sleep: Callable = time.sleep, incl
     timed("otc_quotes", lambda: otc_quotes_day(data / "otc-history", data / "otc-history/otc_history.sqlite", day,
                                                catalog, sleep=sleep))
     _interval(datasets["otc_quotes"], sleep)
+    # 股票型 ETF 的日線：名錄裡新出現的才從原件補歷史，沒有新的就只讀名錄（不發請求）；非必要資料集，失敗不擋發布
+    import etf_history
+    timed("etf_history", lambda: etf_history.refresh(root))
 
     def otc_market() -> dict:
         result = otc_market_day(data / "otc-history", data / "otc-history/otc_market.sqlite", day, sleep=sleep)
