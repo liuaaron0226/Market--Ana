@@ -1,0 +1,219 @@
+# 預測帳本 D 票第 10 片：每個台股交易日開盤前，寫一份晨間版大盤預測（看得到剛收盤的美股），鎖定、存回 R2、
+# 發布到網站資料庫。規格：.scratch/forecast-ledger/spec.md（工作目錄，不入版控）。這個階段的紀錄都是試跑。
+# 邊界：
+# - 自己的鎖（forecast-ledger-morning）：不加入三支既有排程共用的 market-state-write，也不和晚間版共用一把，
+#   不會把對方排隊中的執行擠掉。兩支寫的是不同的檔案（晨間版不對帳；漏記各補各的；sources/ 以內容雜湊命名）。
+# - 自動執行要 repository variable MARKET_ANA_FORECAST_MORNING=on；沒設就什麼都不寫（新增排程本人另外同意）。
+#   手動觸發預設乾跑：用真的 Gemini，但只寫暫存副本、不存 R2、不寫資料庫。
+# - 期限是開盤前 15 分鐘（08:45）；排程在台北 07:20 開始，留一個多小時給 GitHub 排程延遲。過了期限才開始就記漏記。
+# - 早上另有水位排程（level-daily，台北 07:30，共用鎖 market-state-write）：鎖不同，彼此不擋。
+name: forecast-morning
+
+on:
+  schedule:
+    # 台北週一至週五 07:20；UTC 為前一日 23:20。休市日由程式依證交所休市日曆判斷，不寫。
+    - cron: "20 23 * * 0-4"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "乾跑：用真的 Gemini 寫在暫存副本，不存 R2、不寫資料庫"
+        required: false
+        type: boolean
+        default: true
+      as_of:
+        description: "乾跑時重播過去某個開盤日 YYYY-MM-DD（時鐘停在那天 07:30；只在乾跑有效）"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  # 晨間版自己的鎖；手動乾跑各自一組，才不會把排隊中的正式寫入替換掉。
+  group: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run != false && format('forecast-ledger-morning-dry-{0}', github.run_id) || 'forecast-ledger-morning' }}
+  cancel-in-progress: false
+
+jobs:
+  authorize:
+    runs-on: ubuntu-latest
+    outputs:
+      allowed: ${{ steps.auth.outputs.allowed }}
+      dry_run: ${{ steps.auth.outputs.dry_run }}
+    steps:
+      - name: Fail-closed 核准執行模式
+        id: auth
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          MORNING_SWITCH: ${{ vars.MARKET_ANA_FORECAST_MORNING }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            dry_run=true
+            # 手動正式跑要晨間開關打開，而且只能用預設分支的程式；其他情況一律乾跑。
+            if [ "$INPUT_DRY_RUN" = "false" ] && [ "$MORNING_SWITCH" = "on" ] && [ "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH" ]; then
+              dry_run=false
+            fi
+            echo "allowed=true" >> "$GITHUB_OUTPUT"
+            echo "dry_run=$dry_run" >> "$GITHUB_OUTPUT"
+          elif [ "$MORNING_SWITCH" = "on" ] && [ "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH" ]; then
+            echo "allowed=true" >> "$GITHUB_OUTPUT"
+            echo "dry_run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "allowed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::MARKET_ANA_FORECAST_MORNING 不是 on，晨間預測不執行"
+          fi
+
+  forecast:
+    needs: authorize
+    if: needs.authorize.outputs.allowed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      TZ: Asia/Taipei
+      PYTHONIOENCODING: utf-8
+      LEDGER: ${{ github.workspace }}/.forecast-ledger
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: 決定執行模式並檢查機密
+        id: mode
+        env:
+          AUTH_DRY_RUN: ${{ needs.authorize.outputs.dry_run }}
+          INPUT_AS_OF: ${{ inputs.as_of }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AGY_LOGIN_BUNDLE: ${{ secrets.AGY_LOGIN_BUNDLE }}
+        run: |
+          if [ -n "$INPUT_AS_OF" ]; then
+            python -c 'from state_sync import require_iso_date; import sys; require_iso_date(sys.argv[1], "workflow date")' "$INPUT_AS_OF" || { echo "::error::as_of 必須是真實的 YYYY-MM-DD"; exit 1; }
+          fi
+          dry_run=true
+          if [ "$AUTH_DRY_RUN" = "false" ]; then dry_run=false; fi
+          if [ -n "$INPUT_AS_OF" ] && [ "$dry_run" = "false" ]; then echo "::error::as_of 只能用在乾跑"; exit 1; fi
+          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY AGY_LOGIN_BUNDLE; do
+            if [ -z "${!name}" ]; then echo "::error::缺少 secret $name"; exit 1; fi
+          done
+          # 開盤日＝台北今天；乾跑重播時是指定的那一天。
+          session="${INPUT_AS_OF:-$(TZ=Asia/Taipei date +%F)}"
+          echo "dry_run=$dry_run" >> "$GITHUB_OUTPUT"
+          echo "session_date=$session" >> "$GITHUB_OUTPUT"
+          echo "as_of=$INPUT_AS_OF" >> "$GITHUB_OUTPUT"
+
+      - name: 從 R2 還原每日更新已發布的資料（唯讀）
+        id: restore
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: market-ana-state
+        run: |
+          python state_sync.py restore --target .
+          python forecast_store.py pull --ledger "$LEDGER"
+
+      - name: 抓海外原件（不擋預測）
+        continue-on-error: true
+        env:
+          EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
+          SESSION_DATE: ${{ steps.mode.outputs.session_date }}
+        run: |
+          python overseas_inputs.py fetch --reference-date "$SESSION_DATE" --out "$RUNNER_TEMP/overseas"
+
+      - name: 下載官方 agy 1.5.3 並核對 SHA-256
+        id: agy_download
+        continue-on-error: true
+        run: |
+          mkdir -p "$RUNNER_TEMP/agy" && cd "$RUNNER_TEMP/agy"
+          curl -fsSL -o agy.tgz https://github.com/google-antigravity/antigravity-cli/releases/download/1.5.3/agy_cli_linux_x64.tar.gz
+          echo "1b4850599cce73a17f94ffb422df3bf9531531b77dbddc40c1a435e0c2c16807  agy.tgz" | sha256sum -c
+          tar xzf agy.tgz
+          ./antigravity --version
+
+      - name: 還原登入檔到隔離 HOME
+        id: agy_auth
+        if: steps.agy_download.outcome == 'success'
+        continue-on-error: true
+        env:
+          AGY_LOGIN_BUNDLE: ${{ secrets.AGY_LOGIN_BUNDLE }}
+        run: |
+          home="$RUNNER_TEMP/agy-home"; mkdir -p "$home"; chmod 700 "$home"
+          printf '%s' "$AGY_LOGIN_BUNDLE" | tr -d ' \r\n' | base64 -d | tar xzf - -C "$home"
+
+      - name: 寫晨間版預測
+        env:
+          HOME: ${{ runner.temp }}/agy-home
+          SESSION_DATE: ${{ steps.mode.outputs.session_date }}
+          AS_OF: ${{ steps.mode.outputs.as_of }}
+          DRY_RUN: ${{ steps.mode.outputs.dry_run }}
+        run: |
+          # agy 沒裝好時照樣交給帳本：模型呼叫失敗會記成一筆漏記（原因看得到），不靜默跳過。
+          args=(--edition morning --session-date "$SESSION_DATE"
+                --analysis data/daily-update-state/last-market-pack/analysis-data.js --method MARKET_METHOD.md
+                --ledger "$LEDGER" --agy-bin "$RUNNER_TEMP/agy/antigravity" --model gemini-3.8-flash
+                --overseas-dir "$RUNNER_TEMP/overseas"
+                --stock-db data/stock-history/stock-history.sqlite
+                --institutional-db data/listed-institutional/listed_institutional.sqlite)
+          if [ "$DRY_RUN" = "false" ]; then
+            args+=(--sql-output "$RUNNER_TEMP/forecast.sql" --log-output "$LEDGER/runs/$GITHUB_RUN_ID.json")
+          else
+            args+=(--dry-run --log-output "$RUNNER_TEMP/forecast-run/run.json")
+            if [ -n "$AS_OF" ]; then args+=(--as-of "$AS_OF"); fi
+          fi
+          python forecast_run.py "${args[@]}"
+          mkdir -p "$RUNNER_TEMP/forecast-run"
+          if [ -f "$LEDGER/runs/$GITHUB_RUN_ID.json" ]; then cp "$LEDGER/runs/$GITHUB_RUN_ID.json" "$RUNNER_TEMP/forecast-run/run.json"; fi
+
+      - name: 帳本原件存回 R2（只新增）
+        if: always() && steps.mode.outputs.dry_run == 'false' && steps.restore.outcome == 'success'
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: market-ana-state
+        run: |
+          for attempt in 1 2 3; do
+            if python forecast_store.py push --ledger "$LEDGER"; then exit 0; fi
+            echo "::warning::存回 R2 第 $attempt 次失敗"; sleep 20
+          done
+          echo "::error::帳本原件三次都沒能存回 R2"; exit 1
+
+      - name: 發布到網站資料庫
+        if: success() && steps.mode.outputs.dry_run == 'false'
+        working-directory: cloud
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ ! -s "$RUNNER_TEMP/forecast.sql" ]; then echo "::notice::沒有要發布的紀錄"; exit 0; fi
+          npx --yes wrangler@4 d1 execute market-ana-accounts --remote --file "$RUNNER_TEMP/forecast.sql"
+
+      - name: 執行摘要
+        if: always()
+        run: |
+          {
+            echo "### 晨間版大盤預測（${{ steps.mode.outputs.dry_run == 'false' && '試跑紀錄' || '乾跑或未寫入' }}）"
+            if [ -f "$RUNNER_TEMP/forecast-run/run.json" ]; then echo '```json'; cat "$RUNNER_TEMP/forecast-run/run.json"; echo '```'; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 保存執行紀錄
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: forecast-morning-${{ github.run_id }}
+          path: ${{ runner.temp }}/forecast-run/
+          retention-days: 90
+          if-no-files-found: warn
+
+      - name: 清除登入檔與暫存
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/agy-home" "$RUNNER_TEMP/agy" "$RUNNER_TEMP/forecast.sql" "$RUNNER_TEMP/overseas"

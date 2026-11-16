@@ -15,6 +15,7 @@
     input_not_ready: '資料沒到齊', deadline_passed: '過了期限', model_failed: '模型失敗',
     model_timeout: '模型逾時', output_garbled: '回答亂碼', answer_invalid: '回答不合格',
   };
+  const SHORT_SOURCE = { us_sp500: '標普', us_nasdaq: '那斯達克', japan_nikkei: '日經', korea_kospi: '韓國' };
   const MA = { 5: '五日線', 10: '十日線', 20: '月線', 60: '季線', 120: '半年線', 240: '年線' };
   // 回看一次取最近六十天的預測（API 上限四百天）。
   const HISTORY_DAYS = 60;
@@ -101,7 +102,6 @@
       return;
     }
     const cell = record.cells[state.horizon];
-    const cutoffs = [...new Set(Object.values(record.data_cutoffs || {}))].map(mmdd).join('、') || '—';
     panel.append(facts([
       ['落點', ZONE[cell.zone] || cell.zone],
       ['轉強線', `${cell.strong_line.name} ${fmt(cell.strong_line.value)}`, 'is-up'],
@@ -110,8 +110,32 @@
       ['看錯條件', cell.invalidation],
       ['盤勢', record.regime],
       ['紀錄', `${record.run_mode === 'official' ? '正式' : '試跑'} · ${EDITION[record.edition]} · 基準日 ${mmdd(record.base_date)}`],
-      ['資料截止', cutoffs],
+      ...cutoffRows(record),
     ]));
+  }
+
+  // 資料截止：台股、美股（晚間版是前一晚、晨間版是剛收盤那一晚）、日韓各標日期；缺了哪幾項、哪些沒交給模型另列。
+  // D 票之前的紀錄沒有 overseas_status，照舊列出各項日期。
+  function cutoffRows(record) {
+    const status = record.overseas_status;
+    if (!status) {
+      return [['資料截止', [...new Set(Object.values(record.data_cutoffs || {}))].map(mmdd).join('、') || '—']];
+    }
+    const parts = [`台股 ${mmdd(record.data_cutoffs?.index)}`];
+    const us = [status.us_nasdaq, status.us_sp500].find((item) => item?.latest_date);
+    if (us) parts.push(`美股 ${mmdd(us.latest_date)} 收盤`);
+    const asia = [status.japan_nikkei, status.korea_kospi].find((item) => item?.latest_date);
+    if (asia) parts.push(`日韓 ${mmdd(asia.latest_date)}`);
+    const rows = [['資料截止', parts.join(' · ')]];
+    const missing = (record.missing_inputs || []).filter((item) => item.name);
+    if (missing.length) {
+      rows.push(['缺漏', missing.map((item) => `${item.name}${item.status === 'stale' ? '（休市或未更新）' : ''}`).join('、')]);
+    }
+    const withheld = Object.entries(status).filter(([, item]) => item && item.in_prompt === false && item.latest_date);
+    if (withheld.length) {
+      rows.push(['未交給模型', `${withheld.map(([key, item]) => SHORT_SOURCE[key] || item.name).join('、')}（條款待決，只存不交）`]);
+    }
+    return rows;
   }
 
   // ---- 對帳頁 ----

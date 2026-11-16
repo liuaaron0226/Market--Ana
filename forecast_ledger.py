@@ -45,6 +45,7 @@ from ledger_core import read_record as _read
 from ledger_core import seal as _seal
 from ledger_core import sha as _sha
 from ledger_core import text_problem as _text_problem
+from overseas_inputs import PARAMETERS as _OVERSEAS_PARAMETERS
 
 SCHEMA = "forecast-ledger/v1"
 HORIZONS = (1, 5, 20)
@@ -56,7 +57,7 @@ REQUIRED_INPUTS = ("index", "institutional", "futures")
 
 # 候選關卡與基準的參數：在第一筆紀錄之前寫定，整組算進輸入版本，改了就是新系列。
 PARAMETERS: dict[str, Any] = {
-    "layers": ["base"],
+    "layers": ["base", "overseas"],
     "ma_periods": [5, 10, 20, 60, 120, 240],
     "high_low_windows": [20, 60, 240],
     "gap_lookback_bars": 240,
@@ -65,9 +66,15 @@ PARAMETERS: dict[str, Any] = {
     "recent_bars_for_model": 60,
     # 基本層交給模型的資料組成（規格〈交給 Gemini 的輸入〉）；加減任何一項都會換輸入版本。
     "base_inputs": ["index_ohlc_amount", "indicators_short_medium_long", "trend_labels", "chips_institutional_futures",
-                    "candidates", "method_text"],
+                    "candidates", "bollinger", "method_text"],
+    # 本人 2026-11-16「兩樣都加」：加權指數的布林位置（20 日、2 倍；近 120 根最窄兩成算變窄），上下緣列進候選關卡。
+    "bollinger": {"period": 20, "k": 2, "squeeze_window": 120, "squeeze_share": 0.2},
+    # 海外層（D 票）：美日韓指數、美債、美元指數、美元兌台幣、外資讀數 1 與 4；哪些來源交給模型也算在內。
+    "overseas": _OVERSEAS_PARAMETERS,
 }
 
+_BOLL_ZONES = {"below": "下緣以下", "lower_half": "下緣到中線", "upper_half": "中線到上緣", "above": "上緣以上"}
+_BOLL_NOTE = "布林位置只是位置描述；歷史上用它調整持股水位沒有通過及格線（.scratch/bollinger-study/report.html）。"
 _MA_NAMES = {5: "五日線", 10: "十日線", 20: "月線", 60: "季線", 120: "半年線", 240: "年線"}
 _WINDOW_NAMES = {20: "近二十日", 60: "近六十日", 240: "近一年"}
 _HORIZON_NAMES = {1: "一日", 5: "五日", 20: "二十日"}
@@ -105,16 +112,53 @@ _PROMPT_RULES = (
     "reason（理由）與 invalidation（什麼情況代表看錯）只寫繁體中文質化判斷，不得出現任何阿拉伯／全形／中文數字、日期或價格；"
     "要引用價位就把候選 id 放進 reason_refs／invalidation_refs，程式會代入名字與數值。",
     # 本人 2026-11-15 看過真 Gemini 乾跑後選「先改提示再乾跑」：下面兩條是那次加的。
-    "理由與看錯條件只能引用 INPUT_JSON 裡有的資料（日 K、指標、法人與期貨、候選關卡、方法稿）；"
-    "INPUT_JSON 沒給的資料（例如融資、新聞、海外市場）不得當成事實寫進去。",
+    "理由與看錯條件只能引用 INPUT_JSON 裡有的資料（日 K、指標、法人與期貨、候選關卡、布林位置、overseas、方法稿）；"
+    "INPUT_JSON 沒給的資料（例如融資、新聞、overseas.not_provided 列出的項目）不得當成事實寫進去。",
+    # D 票（2026-11-16）：布林位置與海外層的使用規則。
+    "bollinger 只是位置描述：歷史上用布林通道調整持股水位沒有通過及格線，不可單獨當成轉強或轉弱的理由。",
+    "overseas 每一項都標了資料日期：美國的收盤是台北前一晚（晨間版是剛收盤那一晚），status 不是 ok 的項目代表休市、"
+    "沒抓到或不是預期那天的收盤，不得當成最新行情。外資的買賣解釋當天的漲跌，不代表之後會續漲或續跌。",
     "每一格到期後，程式會把你的落點命中率和「照歷史亂猜」並排比較：照歷史亂猜是不看任何判斷、只看歷史上同樣距離的兩條線"
     "收盤落在各區的比例。兩條線拉得越寬，「兩線之間」在歷史上本來就越常中，所以只為了保險把線拉寬，比不贏照歷史亂猜。",
     f"regime 從固定清單選一個：{'、'.join(REGIMES)}。base_date 照抄 INPUT_JSON 的 base_date。",
 )
 # 輸入版本：參數、回答格式、提示規則任何一項改了就是新系列，和舊系列分開對帳。
-INPUT_VERSION = "base-v1-" + hashlib.sha256(json.dumps(
+INPUT_VERSION = "-".join(PARAMETERS["layers"]) + "-v1-" + hashlib.sha256(json.dumps(
     {"parameters": PARAMETERS, "output_schema": OUTPUT_SCHEMA, "prompt_rules": _PROMPT_RULES},
     ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:8]
+
+
+# ---- 布林通道 ----
+
+def _band(closes: list[Any], end: int) -> tuple[float, float, float] | None:
+    """第 end 根（含）往前 period 根的（中線, 上緣, 下緣）；和 web/kchart.js 的 bollinger() 同算法（母體標準差）。"""
+    period, k = PARAMETERS["bollinger"]["period"], PARAMETERS["bollinger"]["k"]
+    window = closes[end - period + 1:end + 1]
+    if end + 1 < period or len(window) != period or any(value is None for value in window):
+        return None
+    mid = sum(window) / period
+    width = k * math.sqrt(sum((value - mid) ** 2 for value in window) / period)
+    return mid, mid + width, mid - width
+
+
+def _bollinger(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """基準日收盤在布林通道的哪一區，以及通道寬度是不是近 120 根裡最窄的兩成（資料不足時是 None）。"""
+    closes = [row["close"] for row in rows]
+    last = len(closes) - 1
+    band = _band(closes, last) if closes else None
+    if band is None:
+        return None
+    mid, upper, lower = band
+    close = closes[-1]
+    zone = "below" if close < lower else "above" if close > upper else "lower_half" if close < mid else "upper_half"
+    window, share = PARAMETERS["bollinger"]["squeeze_window"], PARAMETERS["bollinger"]["squeeze_share"]
+    widths = [None if (b := _band(closes, end)) is None or b[0] <= 0 else (b[1] - b[2]) / b[0]
+              for end in range(last - window + 1, last + 1)] if last + 1 >= window else [None]
+    squeezed = None
+    if widths[0] is not None and widths[-1] is not None and None not in widths:
+        squeezed = sum(width < widths[-1] for width in widths) < window * share
+    return {"middle": round(mid, 2), "upper": round(upper, 2), "lower": round(lower, 2), "zone": _BOLL_ZONES[zone],
+            "width_pct": round((upper - lower) / mid * 100, 2), "squeezed": squeezed, "note": _BOLL_NOTE}
 
 
 # ---- 候選關卡 ----
@@ -122,6 +166,10 @@ INPUT_VERSION = "base-v1-" + hashlib.sha256(json.dumps(
 def _structural_levels(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     levels: list[dict[str, Any]] = []
     closes = [row["close"] for row in rows]
+    band = _band(closes, len(closes) - 1) if closes else None
+    if band is not None:
+        levels.append({"id": "boll_upper", "name": "布林上緣", "kind": "bollinger", "value": band[1]})
+        levels.append({"id": "boll_lower", "name": "布林下緣", "kind": "bollinger", "value": band[2]})
     for period in PARAMETERS["ma_periods"]:
         window = closes[-period:]
         if len(window) == period and all(value is not None for value in window):
@@ -203,7 +251,8 @@ def _candidate_levels(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         kept.append({**level, "value": value, "side": "above" if value > close else "below"})
     closes = [row["close"] for row in rows]
     for side, prefix, percentile_key, word, history, direction in _DISTANCE_SIDES:
-        if any(level["side"] == side for level in kept):
+        # 布林上下緣永遠在收盤兩側附近，不算「圖上的結構關卡」：創新高／新低時照樣補距離關卡。
+        if any(level["side"] == side and level["kind"] != "bollinger" for level in kept):
             continue
         for horizon in HORIZONS:
             returns = _forward_returns(closes, horizon)
@@ -236,6 +285,15 @@ def _readiness(data: Mapping[str, Any], rows: list[dict[str, Any]]) -> list[str]
     return problems
 
 
+def _cutoffs(data: Mapping[str, Any]) -> dict[str, Any]:
+    """台股各項的截止日，加上交給模型的海外各項資料日期。"""
+    return {**copy.deepcopy(dict(data.get("data_cutoffs") or {})), **copy.deepcopy(dict(data.get("overseas_cutoffs") or {}))}
+
+
+# 只存在原件、不進模型輸入的海外欄位：各項狀態、缺漏、條款不允許交給模型的數字、原件清單。
+_RECORD_ONLY = ("overseas_status", "missing_inputs", "withheld_inputs", "sources")
+
+
 def _model_input(data: Mapping[str, Any], rows: list[dict[str, Any]], edition: str,
                  candidates: list[dict[str, Any]] | None) -> dict[str, Any]:
     return {
@@ -248,8 +306,10 @@ def _model_input(data: Mapping[str, Any], rows: list[dict[str, Any]], edition: s
         "trend_labels": copy.deepcopy(dict(data.get("trend_labels") or {})),
         "indicators": copy.deepcopy(data.get("indicators")),
         "chips": copy.deepcopy(data.get("chips")),
-        "data_cutoffs": copy.deepcopy(dict(data.get("data_cutoffs") or {})),
+        "data_cutoffs": _cutoffs(data),
         "candidates": candidates,
+        "bollinger": _bollinger(rows),
+        "overseas": copy.deepcopy(data.get("overseas")),
         "history": {"from": rows[0]["date"] if rows else None, "to": rows[-1]["date"] if rows else None,
                     "bars": len(rows), "sha256": _sha(rows)},
         "method_text": data.get("method_text"),
@@ -405,7 +465,8 @@ def write_forecast(
         "method_version": method_version, "input_version": INPUT_VERSION,
         "model": model,
         "run_mode": "official" if official_since and base_date >= official_since else "trial",
-        "data_cutoffs": copy.deepcopy(dict(data.get("data_cutoffs") or {})),
+        "data_cutoffs": _cutoffs(data),
+        **{key: copy.deepcopy(data[key]) for key in _RECORD_ONLY if key in data},
         "deadline": deadline.isoformat(),
         "input": model_input, "input_sha256": input_sha,
         "attempts": [],
@@ -582,7 +643,7 @@ def summarize(root: Path | str, index_daily: Sequence[Mapping[str, Any]], *,
 # 給網站顯示的欄位；完整輸入（含方法稿）與模型的重試細節只留在原件。
 _PUBLIC_FIELDS = ("forecast_id", "base_date", "edition", "method_version", "input_version", "model", "run_mode",
                   "kind", "locked_at", "deadline", "data_cutoffs", "regime", "cells", "miss_reason", "miss_detail",
-                  "record_sha256")
+                  "overseas_status", "missing_inputs", "record_sha256")
 
 
 def _sql_literal(value: Any) -> str:

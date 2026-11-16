@@ -213,22 +213,58 @@ class CandidateLevelTests(LedgerTestCase):
         #   月線 = (17×100 + 95 + 96 + 97)/20 = 99.4；十日線 = (7×100 + 95 + 96 + 97)/10 = 98.8
         #   缺口：第 20 根（09/28）高 97 < 第 19 根低 99；第 21 根高 98 部分回補 → 剩 98–99
         #   前一交易日高點 97.2 離收盤 0.21%，小於門檻 0.3%，不列入
+        #   布林（20 日、2 倍母體標準差）：中線 99.4；離差平方和 17×0.36 + 4.4² + 3.4² + 2.4² = 42.8，
+        #   σ = √(42.8/20) = 1.46287；上緣 99.4 + 2.92575 = 102.33、下緣 96.47
         self.assertEqual(self.candidates(series_a()), [
             ("high20", 108, "above"),
+            ("boll_upper", 102.33, "above"),
             ("ma20", 99.4, "above"),
             ("gap20260928_upper", 99, "above"),
             ("ma10", 98.8, "above"),
             ("gap20260928_lower", 98, "above"),
             ("ma5", 97.6, "above"),
+            ("boll_lower", 96.47, "below"),
             ("prev_low", 95, "below"),
             ("low20", 93, "below"),
         ])
+
+    def test_bollinger_position_is_described_for_the_model(self):
+        record = self.write()["record"]
+        names = {c["id"]: c["name"] for c in record["input"]["candidates"]}
+        self.assertEqual((names["boll_upper"], names["boll_lower"]), ("布林上緣", "布林下緣"))
+        band = record["input"]["bollinger"]
+        # 收盤 97 在下緣 96.47 與中線 99.4 之間；寬度 (102.33−96.47)/99.4 = 5.89%；不到 139 根算不出近 120 根的窄度
+        self.assertEqual({k: band[k] for k in ("middle", "upper", "lower", "zone", "width_pct", "squeezed")},
+                         {"middle": 99.4, "upper": 102.33, "lower": 96.47, "zone": "下緣到中線", "width_pct": 5.89,
+                          "squeezed": None})
+        self.assertIn("沒有通過", band["note"])
+
+    def test_bollinger_squeeze_means_narrowest_fifth_of_the_last_120_bars(self):
+        # 前 120 根在 100 與 110 之間跳（通道很寬），最後 20 根只在 100 與 101 之間跳：最後一根的寬度是近 120 根最窄
+        wide_then_narrow = [100 if i % 2 == 0 else 110 for i in range(120)] + [100 if i % 2 == 0 else 101 for i in range(20)]
+        # 反過來：前 120 根窄、最後 20 根寬，最後一根是近 120 根最寬，不算變窄
+        narrow_then_wide = [100 if i % 2 == 0 else 101 for i in range(120)] + [100 if i % 2 == 0 else 110 for i in range(20)]
+        for closes, expected in ((wide_then_narrow, True), (narrow_then_wide, False)):
+            rows = flat_series(closes, start="2026-03-02")
+            base = rows[-1]["date"]
+            data = day_input(rows, base_date=base)
+            record = self.write(data, [envelope(answer_a(base_date=base))], now=clock(at(base, 17)),
+                                root=self.tmp / f"ledger-{expected}")["record"]
+            self.assertIs(record["input"]["bollinger"]["squeezed"], expected)
 
     def test_new_high_adds_distance_levels_from_historical_gains(self):
         levels = self.candidates(flat_series(CLOSES_NEW_HIGH))
         self.assertEqual([c for c in levels if c[2] == "above"],
                          [("dist_up_1", 210.16, "above"), ("dist_up_5", 208.1, "above")])
         self.assertFalse(any(c[0].startswith("dist_down") for c in levels))
+
+    def test_bollinger_band_does_not_replace_distance_levels_at_a_new_high(self):
+        # 22 根：前 21 根在 200 與 204 之間跳，最後一根 205 創新高（布林上緣約 206.4，離收盤夠遠）；布林上緣在收盤上方，但它不是圖上的結構關卡，
+        # 上方仍然沒有結構關卡，所以照樣補距離關卡。
+        closes = [200 if i % 2 == 0 else 204 for i in range(21)] + [205]
+        ids = [c[0] for c in self.candidates(flat_series(closes)) if c[2] == "above"]
+        self.assertIn("boll_upper", ids)
+        self.assertIn("dist_up_1", ids)
 
     def test_new_low_adds_distance_levels_from_historical_declines(self):
         levels = self.candidates(flat_series(CLOSES_NEW_LOW))
@@ -365,13 +401,53 @@ class AnswerValidationTests(LedgerTestCase):
         self.assertEqual(late["record"]["miss_reason"], "deadline_passed")
 
 
+OVERSEAS = {
+    "overseas": {"treasury": {"date": "2026-09-29", "yield_2y": 4.1}, "not_provided": ["日本日經 225"]},
+    "overseas_cutoffs": {"treasury": "2026-09-29"},
+    "overseas_status": {"japan_nikkei": {"name": "日本日經 225", "status": "ok", "latest_date": BASE_A,
+                                         "in_prompt": False}},
+    "missing_inputs": [{"key": "korea_kospi", "name": "韓國綜合", "status": "stale", "reason": "休市"}],
+    "withheld_inputs": {"markets": {"japan_nikkei": {"latest_close": 1030.2}}},
+    "sources": [{"name": "eodhd-N225.INDX", "fetched_at": "2026-09-30T09:00:00Z", "sha256": "a" * 64}],
+}
+
+
+class OverseasLayerTests(LedgerTestCase):
+    def test_overseas_layer_reaches_the_model_and_the_record_keeps_status_sources_and_withheld_numbers(self):
+        record = self.write({**day_input(), **OVERSEAS})["record"]
+        self.assertEqual(record["kind"], "forecast")
+        self.assertEqual(record["input"]["overseas"], OVERSEAS["overseas"])
+        self.assertEqual(record["data_cutoffs"]["treasury"], "2026-09-29")
+        self.assertEqual(record["input"]["data_cutoffs"]["treasury"], "2026-09-29")
+        # 條款不允許交給模型的數字只在紀錄裡，不在輸入裡
+        self.assertNotIn("1030.2", json.dumps(record["input"], ensure_ascii=False))
+        self.assertEqual(record["withheld_inputs"], OVERSEAS["withheld_inputs"])
+        self.assertEqual(record["overseas_status"], OVERSEAS["overseas_status"])
+        self.assertEqual(record["missing_inputs"], OVERSEAS["missing_inputs"])
+        self.assertEqual(record["sources"], OVERSEAS["sources"])
+
+    def test_rerun_with_a_new_fetch_time_but_the_same_numbers_is_unchanged(self):
+        self.write({**day_input(), **OVERSEAS})
+        again = {**day_input(), **OVERSEAS,
+                 "sources": [{"name": "eodhd-N225.INDX", "fetched_at": "2026-09-30T09:30:00Z", "sha256": "b" * 64}]}
+        result = self.write(again)
+        self.assertEqual(result["outcome"], "unchanged")
+        self.assertEqual(result["record"]["sources"], OVERSEAS["sources"])
+
+    def test_a_missing_overseas_item_does_not_block_the_forecast(self):
+        data = {**day_input(), "overseas": None, "missing_inputs": [{"key": "us_sp500", "status": "missing"}]}
+        record = self.write(data)["record"]
+        self.assertEqual(record["kind"], "forecast")
+        self.assertEqual(record["missing_inputs"], [{"key": "us_sp500", "status": "missing"}])
+
+
 class RecordMetadataTests(LedgerTestCase):
     def test_forecast_records_identity_versions_hashes_and_cutoffs(self):
         record = self.write()["record"]
         self.assertEqual(record["base_date"], "2026-09-30")
         self.assertEqual(record["edition"], "evening")
         self.assertEqual(record["method_version"], "0.2")
-        self.assertRegex(record["input_version"], r"^base-v1-[0-9a-f]{8}$")
+        self.assertRegex(record["input_version"], r"^base-overseas-v1-[0-9a-f]{8}$")
         self.assertEqual(record["model"], "test-model")
         self.assertRegex(record["input_sha256"], r"^[0-9a-f]{64}$")
         self.assertEqual(record["locked_at"], "2026-09-30T17:00:00+08:00")

@@ -11,6 +11,8 @@ from pathlib import Path
 
 import forecast_ledger as fl
 import forecast_run as fr
+import overseas_inputs as oi
+from test_overseas_inputs import FakeNet, eodhd
 
 TAIPEI = timezone(timedelta(hours=8))
 METHOD = "# 大盤分析方法\n\n版本：0.3，2026-11-15。\n"
@@ -206,6 +208,134 @@ class DryRunTests(RunTestCase):
     def test_replaying_an_earlier_day_is_only_allowed_in_a_dry_run(self):
         with self.assertRaises(ValueError):
             self.run_evening(as_of=DATES[-3])
+
+
+def next_weekday(day, steps=1):
+    current = date.fromisoformat(day)
+    while steps:
+        current += timedelta(days=1)
+        if current.weekday() < 5:
+            steps -= 1
+    return current.isoformat()
+
+
+SESSION = next_weekday(BASE)  # 基準日之後的下一個開盤日（晨間版）
+
+
+def at_taipei(day, clock_time):
+    return datetime.fromisoformat(f"{day}T{clock_time}+08:00")
+
+
+class MorningTestCase(RunTestCase):
+    def run_morning(self, payload=None, *, session=SESSION, now=None, structured=None, holidays=frozenset(), **kwargs):
+        return fr.run_morning(
+            self.analysis_file(payload or analysis()), ledger=self.ledger, method_path=self.method,
+            model_bin=self.model(structured or answer()), model="gemini-3.8-flash", session_date=session,
+            holidays=set(holidays), now=lambda: now or at_taipei(session, "07:30:00"), **kwargs)
+
+    def overseas(self, reference, name):
+        # 那斯達克：基準日前一天、基準日（美國日期）各有一根；其他來源都沒抓到
+        routes = {"https://eodhd.com/api/eod/IXIC.INDX": eodhd([(DATES[-3], 100), (DATES[-2], 101), (BASE, 103.02)])}
+        folder = self.tmp / name
+        oi.fetch_sources(folder, reference_date=reference, eodhd_token="KEY", fetch=FakeNet(routes),
+                         now=lambda: "2026-10-20T23:00:00Z")
+        return folder
+
+
+class MorningRunTests(MorningTestCase):
+    def test_writes_a_morning_forecast_on_the_previous_trading_day_before_the_open(self):
+        log = self.tmp / "run.json"
+        result = self.run_morning(log_output=log)
+        self.assertEqual((result["outcome"], result["edition"], result["base_date"], result["session_date"]),
+                         ("written", "morning", BASE, SESSION))
+        record = fl.read_ledger(self.ledger)["forecasts"][0]
+        self.assertEqual((record["kind"], record["edition"], record["base_date"]), ("forecast", "morning", BASE))
+        self.assertEqual(record["deadline"], f"{SESSION}T08:45:00+08:00")
+        self.assertEqual(json.loads(log.read_text(encoding="utf-8"))["edition"], "morning")
+
+    def test_morning_and_evening_of_the_same_base_date_are_two_records_and_morning_never_sees_evening(self):
+        self.run_evening()
+        self.run_morning()
+        records = {r["edition"]: r for r in fl.read_ledger(self.ledger)["forecasts"]}
+        self.assertEqual({e: r["base_date"] for e, r in records.items()}, {"evening": BASE, "morning": BASE})
+        self.assertNotIn(records["evening"]["forecast_id"], json.dumps(records["morning"]["input"], ensure_ascii=False))
+        self.assertNotIn("evening", json.dumps(records["morning"]["input"], ensure_ascii=False))
+
+    def test_holidays_and_weekends_write_nothing(self):
+        saturday = next(d for d in (date.fromisoformat(BASE) + timedelta(days=n) for n in range(1, 8)) if d.weekday() == 5)
+        for session, holidays in ((saturday.isoformat(), set()), (SESSION, {SESSION})):
+            result = self.run_morning(session=session, holidays=holidays)
+            self.assertEqual(result["outcome"], "holiday")
+        self.assertEqual(fl.read_ledger(self.ledger)["forecasts"], [])
+        self.assertEqual(self.calls_made(), 0)
+
+    def test_the_base_date_skips_a_holiday_before_the_session(self):
+        later = next_weekday(BASE, 2)
+        result = self.run_morning(session=later, holidays={SESSION})
+        self.assertEqual((result["outcome"], result["base_date"]), ("written", BASE))
+
+    def test_base_date_data_not_yet_published_writes_nothing_before_the_deadline(self):
+        result = self.run_morning(analysis(DATES[:-1]))
+        self.assertEqual((result["outcome"], result["base_date"]), ("not_ready", BASE))
+        self.assertEqual(fl.read_ledger(self.ledger)["forecasts"], [])
+        self.assertEqual(self.calls_made(), 0)
+
+    def test_not_locked_fifteen_minutes_before_the_open_is_a_miss(self):
+        result = self.run_morning(now=at_taipei(SESSION, "08:46:00"))
+        self.assertEqual((result["outcome"], result["kind"], result["miss_reason"]), ("written", "miss", "deadline_passed"))
+        self.assertEqual(self.calls_made(), 0)
+
+    def test_missed_mornings_are_locked_as_misses_and_never_rewritten(self):
+        earlier = DATES[:-2]
+        self.run_morning(analysis(earlier), session=DATES[-2], structured=answer(earlier[-1]))
+        result = self.run_morning()
+        # DATES[-2] 那一份晨間版（開盤日是基準日 BASE）整個早上沒跑：今天補一筆漏記
+        self.assertEqual(result["backfilled_misses"], [DATES[-2]])
+        records = {r["base_date"]: r for r in fl.read_ledger(self.ledger)["forecasts"]}
+        self.assertEqual((records[DATES[-2]]["kind"], records[DATES[-2]]["miss_reason"]), ("miss", "deadline_passed"))
+        self.assertEqual(records[BASE]["kind"], "forecast")
+
+    def test_a_dry_run_can_replay_a_past_morning_with_the_clock_before_the_open(self):
+        log = self.tmp / "run.json"
+        result = self.run_morning(dry_run=True, replay=True, log_output=log,
+                                  now=datetime.fromisoformat("2026-11-15T10:00:00+08:00"))
+        self.assertEqual((result["outcome"], result["kind"], result["base_date"]), ("written", "forecast", BASE))
+        self.assertEqual(result["locked_at"], f"{SESSION}T07:30:00+08:00")
+        self.assertFalse(self.ledger.exists() and any(self.ledger.rglob("*.json")))
+        with self.assertRaises(ValueError):
+            self.run_morning(replay=True)
+
+    def test_morning_runs_never_reconcile(self):
+        early = DATES[:-1]
+        self.run_evening(analysis(early), structured=answer(early[-1]),
+                         now=datetime.fromisoformat(f"{early[-1]}T17:40:00+08:00"))
+        self.run_morning()
+        self.assertEqual(fl.read_ledger(self.ledger)["reconciliations"], [])
+
+
+class OverseasRunTests(MorningTestCase):
+    def test_evening_sees_the_us_close_of_the_night_before_and_morning_the_close_that_just_finished(self):
+        self.run_evening(overseas_dir=self.overseas(BASE, "evening"))
+        self.run_morning(overseas_dir=self.overseas(SESSION, "morning"))
+        records = {r["edition"]: r for r in fl.read_ledger(self.ledger)["forecasts"]}
+        self.assertEqual(records["evening"]["overseas_status"]["us_nasdaq"]["latest_date"], DATES[-2])
+        self.assertEqual(records["morning"]["overseas_status"]["us_nasdaq"]["latest_date"], BASE)
+        # 條款待決：那斯達克的數字存在紀錄裡，但不在交給模型的輸入裡
+        morning = records["morning"]
+        self.assertEqual(morning["withheld_inputs"]["nasdaq_reading"]["change_pct"], 2.0)  # 103.02 ÷ 101 − 1
+        self.assertNotIn("103.02", json.dumps(morning["input"], ensure_ascii=False))
+        self.assertIn("us_sp500", {item["key"] for item in morning["missing_inputs"]})
+
+    def test_originals_are_kept_in_the_ledger_and_the_record_points_at_them(self):
+        self.run_evening(overseas_dir=self.overseas(BASE, "evening"))
+        record = fl.read_ledger(self.ledger)["forecasts"][0]
+        kept = [item for item in record["sources"] if item["status"] == "ok"]
+        self.assertEqual([item["name"] for item in kept], ["eodhd-IXIC.INDX"])
+        self.assertTrue((self.ledger / kept[0]["archived_as"]).exists())
+
+    def test_a_dry_run_keeps_no_originals(self):
+        self.run_evening(dry_run=True, overseas_dir=self.overseas(BASE, "evening"))
+        self.assertFalse((self.ledger / "sources").exists())
 
 
 if __name__ == "__main__":
