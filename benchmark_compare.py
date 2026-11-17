@@ -132,20 +132,25 @@ def period_rows(stock: Sequence[tuple[str, float]], bench: Sequence[tuple[str, f
         if found is None:
             rows.append({**base, "status": "insufficient_history", "reason": "history_not_loaded"})
             continue
-        start, window = found
-        bench_first = _value_on_or_before(bench, start)
-        bench_window = _window(bench, bench_first[0]) if bench_first else []
-        if not bench_window:
-            rows.append({**base, "status": "insufficient_history", "reason": "benchmark_not_loaded"})
-            continue
-        stock_ret = _return_pct(window[0][1], window[-1][1])
-        bench_ret = _return_pct(bench_window[0][1], bench_window[-1][1])
-        rows.append({**base, "status": "ok", "from": start, "to": window[-1][0],
-                     "stock_return_pct": stock_ret, "benchmark_return_pct": bench_ret,
-                     "excess_pct": round(stock_ret - bench_ret, 1),
-                     "stock_max_drawdown_pct": _max_drawdown_pct(window),
-                     "benchmark_max_drawdown_pct": _max_drawdown_pct(bench_window)})
+        rows.append(compare_row(base, found[1], bench))
     return rows
+
+
+def compare_row(base: dict[str, Any], window: Sequence[tuple[str, float]],
+                bench: Sequence[tuple[str, float]]) -> dict[str, Any]:
+    """一個期間：window 是個股從期初交易日起的序列，0050 用同一個期初日（當天或之前最近一筆）。"""
+    start = window[0][0]
+    bench_first = _value_on_or_before(bench, start)
+    bench_window = _window(bench, bench_first[0]) if bench_first else []
+    if not bench_window:
+        return {**base, "status": "insufficient_history", "reason": "benchmark_not_loaded"}
+    stock_ret = _return_pct(window[0][1], window[-1][1])
+    bench_ret = _return_pct(bench_window[0][1], bench_window[-1][1])
+    return {**base, "status": "ok", "from": start, "to": window[-1][0],
+            "stock_return_pct": stock_ret, "benchmark_return_pct": bench_ret,
+            "excess_pct": round(stock_ret - bench_ret, 1),
+            "stock_max_drawdown_pct": _max_drawdown_pct(window),
+            "benchmark_max_drawdown_pct": _max_drawdown_pct(bench_window)}
 
 
 def chart_points(series: Sequence[tuple[str, float]], start: str) -> tuple[str | None, list[list[Any]]]:

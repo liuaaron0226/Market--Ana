@@ -383,6 +383,7 @@ NOTES = (
     "基金淨值換成台幣：每天淨值 × 央行當天新臺幣對美元收盤匯率（台灣休市日用前一個營業日）；「匯率影響」＝台幣報酬−原幣報酬。",
     "配息再投入：除息日用當天淨值買回同一檔，不計申購手續費與稅；0050 用本站既有算法（除息日收盤價再投入）。",
     "基金淨值通常比 0050 晚幾天公布，兩邊都比到雙方都有資料的同一天。成立以來從集保有淨值的第一天算起。",
+    "資料來源：集保結算所基金資訊觀測站與開放資料、中央銀行（政府資料開放授權條款第 1 版）、臺灣證券交易所。",
 )
 
 
@@ -401,39 +402,26 @@ def compare_item(code: str, *, navs: Sequence[tuple[str, float]], distributions:
     fund = FUNDS[code]
     usd_all = total_return_series(navs, distributions)
     twd_all = to_twd(usd_all, fx)
-    end = min(twd_all[-1][0], benchmark[-1][0]) if twd_all and benchmark else None
-    usd, twd, bench = (_upto(usd_all, end), _upto(twd_all, end), _upto(benchmark, end)) if end else ([], [], [])
-    periods = bc.period_rows(twd, bench, end, fund["class_launch"]) if end else [
-        {"period": key, "label": label, "status": "insufficient_history", "reason": "history_not_loaded"}
-        for key, label, _ in bc.PERIODS]
-    if twd:
-        start = twd[0][0]
-        bench_first = bc._value_on_or_before(bench, start)
-        bench_window = bc._window(bench, bench_first[0]) if bench_first else []
-        base = {"period": "since", "label": "成立以來"}
-        if bench_window:
-            stock_ret, bench_ret = bc._return_pct(twd[0][1], twd[-1][1]), bc._return_pct(bench_window[0][1], bench_window[-1][1])
-            periods.append({**base, "status": "ok", "from": start, "to": twd[-1][0],
-                            "stock_return_pct": stock_ret, "benchmark_return_pct": bench_ret,
-                            "excess_pct": round(stock_ret - bench_ret, 1),
-                            "stock_max_drawdown_pct": bc._max_drawdown_pct(twd),
-                            "benchmark_max_drawdown_pct": bc._max_drawdown_pct(bench_window)})
-        else:
-            periods.append({**base, "status": "insufficient_history", "reason": "benchmark_not_loaded"})
+    end = min(twd_all[-1][0], benchmark[-1][0]) if twd_all and benchmark else ""
+    usd, twd, bench = _upto(usd_all, end), _upto(twd_all, end), _upto(benchmark, end)
+    if not twd or not bench:
+        raise ValueError("沒有雙方都有資料的日子（淨值、匯率或 0050）")
+    periods = [*bc.period_rows(twd, bench, end, fund["class_launch"]),
+               bc.compare_row({"period": "since", "label": "成立以來"}, twd, bench)]
     for row in periods:
         if row["status"] == "ok":
-            native_first = bc._value_on_or_before(usd, row["from"])
-            native = bc._return_pct(native_first[1], usd[-1][1])
-            row["stock_native_return_pct"] = native
-            row["fx_effect_pct"] = round(row["stock_return_pct"] - native, 1)
-    chart_from, chart = bc.chart_points(twd, twd[0][0]) if twd else (None, [])
+            # 匯率影響用沒四捨五入的兩個報酬相減再進位，不是兩個已進位的數字相減（差 0.1 個百分點）
+            native_ratio = usd[-1][1] / bc._value_on_or_before(usd, row["from"])[1]
+            twd_ratio = twd[-1][1] / bc._value_on_or_before(twd, row["from"])[1]
+            row["stock_native_return_pct"] = round((native_ratio - 1) * 100, 1)
+            row["fx_effect_pct"] = round((twd_ratio - native_ratio) * 100, 1)
+    chart_from, chart = bc.chart_points(twd, twd[0][0])
     bench_start = bc._value_on_or_before(bench, chart_from) if chart_from else None
     _, bench_chart = bc.chart_points(bench, bench_start[0]) if bench_start else (None, [])
     return {"code": code, "name": fund["short_name"], "market": "境外基金", "kind": "fund", "currency": fund["currency"],
             "status": "ok", "dividends_included": True, "dividend_source": "TDCC 境外基金配息",
             "listed_date": fund["class_launch"],
-            "history": {"from": twd[0][0] if twd else None, "to": twd[-1][0] if twd else None, "points": len(twd)},
-            "nav_date": navs[-1][0] if navs else None,
+            "history": {"from": twd[0][0], "to": twd[-1][0], "points": len(twd)}, "nav_date": navs[-1][0],
             "periods": periods, "chart_from": chart_from, "chart": chart, "benchmark_chart": bench_chart,
             "issues": [dict(i) for i in issues], "notes": list(NOTES)}
 
@@ -463,11 +451,12 @@ def precompute(loader, end: str, *, as_of: str, raw_dir: Path | None = None, see
         if not history["fx"]:
             problems[code] = "沒有匯率資料"
             continue
-        if not history["navs"]:
-            problems[code] = "沒有淨值資料"
+        try:
+            item = compare_item(code, navs=history["navs"], distributions=history["distributions"], fx=history["fx"],
+                                benchmark=bench, issues=[i for i in history["issues"] if i["kind"] != "fx-missing"])
+        except ValueError as error:
+            problems[code] = str(error)
             continue
-        item = compare_item(code, navs=history["navs"], distributions=history["distributions"], fx=history["fx"],
-                            benchmark=bench, issues=[i for i in history["issues"] if i["kind"] != "fx-missing"])
         funds[code] = json.dumps(item, ensure_ascii=False, separators=(",", ":"))
     return funds, problems
 

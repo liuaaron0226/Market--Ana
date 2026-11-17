@@ -2367,7 +2367,10 @@
 
   function coreEntities(report) {
     const benchmark = { ...report.benchmark, role: '0050 基準', isBenchmark: true };
-    return [benchmark, ...(report.items || []).filter(item => item.status === 'ok' && item.code !== '0050').map(item => ({ ...item, role: item.market || '比較標的' }))];
+    // 基金淨值約晚 3 個營業日，報酬比到它自己的最後淨值日（0050 也截在同一天）；和資料日不同時寫在名稱旁（05 票）
+    const role = item => item.kind === 'fund' && item.history?.to && item.history.to < report.data_date
+      ? `${item.market} · 淨值至 ${item.history.to}` : item.market || '比較標的';
+    return [benchmark, ...(report.items || []).filter(item => item.status === 'ok' && item.code !== '0050').map(item => ({ ...item, role: role(item) }))];
   }
 
   function periodAnchor(end, key) {

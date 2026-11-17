@@ -664,8 +664,8 @@
     return `${item.name} ${item.code} 在可比標的中近 1 年表現最佳，${gap >= 0 ? '領先' : '仍落後'} 0050 ${Math.abs(gap).toFixed(1)} 個百分點${excludedNote}`;
   }
 
-  // 五個期間各一顆鍵要的東西：每一檔 { code, name, note, periods }，periods 照固定的順序，每個期間
-  // { key, label, short 鍵上的短名, kind 'bull' 領先 0050／'bear' 落後／'none' 沒有方向, gap 鍵上寫的差距, facts 點開看的四個數字 [名稱, 文字] }。
+  // 每個期間一顆鍵（股票五個、基金多一個「成立以來」）要的東西：每一檔 { code, name, note, periods }，periods 照固定的順序，每個期間
+  // { key, label, short 鍵上的短名, kind 'bull' 領先 0050／'bear' 落後／'none' 沒有方向, gap 鍵上寫的差距, facts 點開看的數字 [名稱, 文字]（四個，基金多一行匯率影響） }。
   // 配息資料不完整就不宣告領先落後（note 寫原因、gap 寫「不可比」），有完整配息的那一邊照樣給數字；沒有資料的期間寫「資料不足」。
   // 基金（05 票）：報酬是台幣含息，名稱寫「基金」；股票的五個期間之後多一顆「成立以來」（本人 11-17 選的期間），
   // 每個期間多一行「其中匯率影響 x.x 個百分點」（規格第 27 條）。
@@ -705,7 +705,7 @@
 
   window.StockComparison = { basis: comparisonBasis, conclusion: comparisonConclusion, periods: comparisonPeriods };
 
-  // 每一檔一排期間的鍵（.key-strip，可以按住左右滑，由 chart-menus.js 處理），下面是選中那個期間的四個數字
+  // 每一檔一排期間的鍵（.key-strip，可以按住左右滑，由 chart-menus.js 處理），下面是選中那個期間的數字
   const GAP_WORDS = { bull: '領先', bear: '落後' };
   // 選的期間這一檔沒有（例如「成立以來」只有基金有）：照樣列名稱、數字都是一槓，不拿別的期間的數字頂替
   function comparePeriodFacts(stock) {
@@ -766,7 +766,10 @@
       const name = node('td', '', stock.note ? `${stock.name} ${stock.code}（${stock.note}）` : `${stock.name} ${stock.code}`);
       const head = node('th', '', period.label);
       head.scope = 'row';
-      const [stockReturn, baseReturn, stockFall, baseFall] = period.facts.map(([, text]) => node('td', '', text));
+      // 基金的第五個數字（其中匯率影響）併進報酬那一格念出來，表的欄位和股票一樣
+      const [stockText, baseText, fallText, baseFallText, fxText] = period.facts.map(([, text]) => text);
+      const [stockReturn, baseReturn, stockFall, baseFall] = [fxText && fxText !== '—' ? `${stockText}（其中匯率影響 ${fxText}）` : stockText,
+        baseText, fallText, baseFallText].map(text => node('td', '', text));
       row.append(name, head, stockReturn, baseReturn, node('td', '', period.gap), stockFall, baseFall);
       return row;
     })));
@@ -1234,9 +1237,9 @@
     if (cell) pickComparePeriod(cell.dataset.period);
   });
   // 加入比較與頂列都用全站共用的選股下拉（stock-picker.js，本人 11-17：代號、名稱都能打）。
-  // 比較只收大量股母體內、還沒加入的股票（基金加入比較由 05 票接上）；頂列什麼都收，基金也是進個股頁。
+  // 比較只收大量股母體內、名單 ETF 與基金裡還沒加入的；頂列什麼都收，基金也是進個股頁。
   const comparePicker = window.StockPicker.attach($('compareInput'), {
-    // 大量股、名單 ETF 與基金（05 票：基金沒有名次，但比較資料包有它）
+    // 基金沒有名次，但比較資料包有它（05 票）
     accept: item => (item.security_type === '基金' || (item.universe_rank !== null && item.universe_rank !== undefined))
       && !compareState.codes.includes(item.code),
     onPick: option => addComparisonCode(option.code, option.name),

@@ -1618,17 +1618,9 @@ class Handler(SimpleHTTPRequestHandler):
         loader, end = benchmark_compare.Loader(), self._compare_end(universe)
         try:
             kind, detail = self._compare_resolver(universe, loader, end)(code)
-        except Exception as error:  # 不把 stack trace 送到瀏覽器
-            print(f"vs-0050 failed for {code}: {type(error).__name__}: {error}")
-            self._send_json({"error": "compare-failed", "message": "對照暫時無法計算"}, 500)
-            return
-        if kind == "not-found":
-            self._send_json({"error": "not-found", "code": code, **detail}, 404)
-            return
-        if kind == "outside-universe":
-            self._send_json({"error": "outside-universe", "code": code, **detail}, 404)
-            return
-        try:
+            if kind in ("not-found", "outside-universe"):
+                self._send_json({"error": kind, "code": code, **detail}, 404)
+                return
             payload = benchmark_compare.single_payload(loader, code, end, None if kind == "item" else detail,
                                                        item=detail if kind == "item" else None)
         except Exception as error:  # 不把 stack trace 送到瀏覽器

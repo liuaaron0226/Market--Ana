@@ -304,7 +304,7 @@ class CompareItemTest(unittest.TestCase):
         twd = round((18 * 33 / (16 * 30) - 1) * 100, 1)
         self.assertEqual(one_month["stock_return_pct"], twd)
         self.assertEqual(one_month["stock_native_return_pct"], 12.5)
-        self.assertEqual(one_month["fx_effect_pct"], round(twd - 12.5, 1))
+        self.assertEqual(one_month["fx_effect_pct"], round((18 * 33 / (16 * 30) - 18 / 16) * 100, 1))
         self.assertEqual(one_month["benchmark_return_pct"], round((3.6 / 3.2 - 1) * 100, 1))
         self.assertEqual(one_month["excess_pct"], round(twd - one_month["benchmark_return_pct"], 1))
         self.assertEqual(one_month["stock_max_drawdown_pct"], round((18 * 33 / (20 * 32) - 1) * 100, 1))
@@ -332,6 +332,21 @@ class CompareItemTest(unittest.TestCase):
         item = self.build()
         self.assertEqual((item["chart_from"], item["chart"][0][1], item["benchmark_chart"][0][1]), ("2023-01-02", 1.0, 1.0))
         self.assertEqual((item["chart"][-1][0], item["benchmark_chart"][-1][0]), ("2026-11-13", "2026-11-13"))
+
+    def test_fx_effect_is_rounded_once(self) -> None:
+        # 台幣 +10.04%、原幣 +9.96%：分別進位後相減是 0.0，實際差 0.08 → 0.1
+        item = self.build(navs=[("2026-10-13", 10.0), ("2026-11-13", 10.996)], fx=[("2026-10-13", 30.0), ("2026-11-13", 30.0 * 11.004 / 10.996)],
+                          benchmark=[("2026-10-13", 1.0), ("2026-11-13", 1.1)])
+        one_month = item["periods"][0]
+        self.assertEqual((one_month["stock_return_pct"], one_month["stock_native_return_pct"]), (10.0, 10.0))
+        self.assertEqual(one_month["fx_effect_pct"], 0.1)
+
+    def test_no_common_day_is_an_error_not_an_empty_item(self) -> None:
+        # 匯率比所有淨值都晚才有、或 0050 全在基金淨值之前：沒有可比的一天，不出半套項目
+        with self.assertRaisesRegex(ValueError, "雙方都有資料"):
+            self.build(fx=[("2027-01-04", 30.0)])
+        with self.assertRaisesRegex(ValueError, "雙方都有資料"):
+            self.build(benchmark=[("2016-01-04", 1.0)])
 
     def test_fund_issues_pass_through(self) -> None:
         item = self.build(issues=[{"kind": "stale", "latest": "2026-11-13", "weekdays_behind": 9}])
@@ -424,6 +439,12 @@ class PrecomputeTest(unittest.TestCase):
     def test_no_fx_means_no_fund_and_a_reason(self) -> None:
         funds, problems = fc.precompute(self.loader, "2026-11-10", as_of="2026-11-17", raw_dir=self.raw)
         self.assertEqual((funds, problems), ({}, {"BLKTENAU": "沒有匯率資料"}))
+
+    def test_no_common_day_means_no_fund_and_a_reason(self) -> None:
+        self.write_fx()
+        funds, problems = fc.precompute(_FakeLoader([("2016-01-04", 1.0)]), "2026-11-10", as_of="2026-11-17", raw_dir=self.raw)
+        self.assertEqual(funds, {})
+        self.assertIn("雙方都有資料", problems["BLKTENAU"])
 
     def test_no_0050_means_no_fund(self) -> None:
         self.write_fx()
