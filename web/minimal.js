@@ -1956,13 +1956,14 @@
   }
 
   // 基金對照頁那檔基金（本人 11-17：搜尋打基金名稱也找得到）：點了進基金頁，不記進最近搜尋（那裡只放股票）。
+  // fund 是 StockPicker.options 整理好的選項（名稱與基金頁網址和其他搜尋框同一份）。
   function fundItem(fund) {
     const row = document.createElement('li');
     row.className = 'stock-search-result';
     const link = document.createElement('a');
-    link.href = `fund.html?code=${encodeURIComponent(fund.code)}`;
+    link.href = fund.href;
     const title = document.createElement('strong');
-    title.textContent = fund.name;
+    title.textContent = fund.title;
     const market = document.createElement('small');
     market.className = 'stock-search-market';
     market.textContent = `基金 · ${fund.code}`;
@@ -2031,7 +2032,7 @@
       if (!response.ok || payload.error) throw new Error(payload.message || '搜尋暫時無法使用');
       const items = Array.isArray(payload.items) ? payload.items : [];
       results.append(...items.map(resultItem));
-      if (!append && Array.isArray(payload.funds)) results.append(...payload.funds.filter(fund => fund?.code).map(fundItem));
+      if (!append) results.append(...window.StockPicker.options({ funds: payload.funds }, { funds: true }).map(fundItem));
       nextCursor = payload.next_cursor || null;
       more.hidden = nextCursor === null;
       const shown = results.children.length;
@@ -2548,12 +2549,9 @@
     const picker = window.StockPicker.attach(core.input, { host: core.input.closest('.core-add-menu'), inline: true, onPick: option => addCoreCode(option.code) });
     core.form.addEventListener('submit', async event => {
       event.preventDefault();
-      const typed = core.input.value.trim();
-      const option = await picker.resolve(typed);
-      if (!option && typed && !window.StockPicker.codeOf(typed)) {
-        core.status.hidden = false; core.status.textContent = `查無「${typed}」，請改打代號或從清單選擇。`; return;
-      }
-      addCoreCode(option ? option.code : typed.toUpperCase());
+      const { option, message } = await picker.choose();
+      if (message) { core.status.hidden = false; core.status.textContent = message; return; }
+      addCoreCode(option.code);
     });
     core.period.addEventListener('change', () => { if (coreReport) renderCore(coreReport); });
     renderCoreSelection();

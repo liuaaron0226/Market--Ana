@@ -3,14 +3,17 @@
    打的是代號就照舊直接用（名錄外的代號也一樣交給原本的流程說明）；選了某一檔，框裡寫「代號 名稱」。
    基金：搜尋回應的 funds（目前只有基金對照頁那檔），只有個股頁頂列這種「看東西」的框收（funds: true），
    加自選、加入比較這類只能放股票的框不收。
-   用法：StockPicker.attach(input, { funds, accept(item), onPick(option), host, inline }) → { resolve(text), close() }。
-   inline：放在會收合（overflow: hidden）的區塊裡時，下拉不浮起、直接排在輸入框下面。 */
+   用法：StockPicker.attach(input, { funds, accept(item), onPick(option), host, inline, strict }) → { choose(text), close() }。
+   choose：按「查詢／加入」時用，回 { option } 或 { message }（要顯示給本人的一句話）。
+   inline：放在會收合（overflow: hidden）的區塊裡時，下拉不浮起、直接排在輸入框下面。
+   strict：會存資料的框（加自選、新增庫存）——打的名稱符合好幾檔又沒有完全相同的，不默默取第一個，攤開下拉要本人挑。 */
 (function (global) {
   'use strict';
 
   const CODE = /^\s*([0-9A-Za-z]{4,6})(?=\s|$)/;
   const MIN_LENGTH = 2;
   const LIMIT = 6;
+  const QUERY_BYTES = 48;   // /api/stocks/search 的上限（gate.js handleStockSearch）
   let serial = 0;
 
   // 打的字開頭是 4～6 碼代號（後面可以接空白和名稱）就拿那個代號；其他（名稱、基金代碼）回 null。
@@ -35,8 +38,26 @@
     return list;
   }
 
+  // 搜尋字超過 API 上限（48 個 UTF-8 位元組，約 16 個中文字，例如貼上基金全名）就從尾巴截短，不讓整個搜尋失敗。
+  const utf8Length = text => encodeURIComponent(text).replace(/%[0-9A-F]{2}/g, '.').length;
+  function fitQuery(term) {
+    let fitted = String(term);
+    while (utf8Length(fitted) > QUERY_BYTES) fitted = Array.from(fitted).slice(0, -1).join('');
+    return fitted.trim();
+  }
+
+  // 按「查詢／加入」沒選下拉時，從搜尋結果決定用哪一檔：名稱完全相同的優先，否則第一個；
+  // strict 的框遇到好幾檔又沒有完全相同的，回 choose 要本人挑。
+  function decide(term, choices, { strict = false } = {}) {
+    if (!choices.length) return { message: `查無「${term}」，請改打代號或從清單選擇。` };
+    const exact = choices.find(option => option.name === term);
+    if (exact) return { option: exact };
+    if (strict && choices.length > 1) return { choose: true, message: `有好幾檔符合「${term}」，請從下面選一檔。` };
+    return { option: choices[0] };
+  }
+
   async function fetchOptions(term, settings, signal) {
-    const response = await fetch(`/api/stocks/search?${new URLSearchParams({ q: term, limit: String(LIMIT) })}`, { cache: 'no-store', signal });
+    const response = await fetch(`/api/stocks/search?${new URLSearchParams({ q: fitQuery(term), limit: String(LIMIT) })}`, { cache: 'no-store', signal });
     if (!response.ok) throw new Error('search-failed');
     return options(await response.json(), settings).slice(0, LIMIT);
   }
@@ -57,12 +78,13 @@
     input.setAttribute('aria-controls', id);
     input.setAttribute('aria-expanded', 'false');
 
-    const state = { timer: null, abort: null, choices: [], buttons: [], active: -1 };
+    const state = { timer: null, abort: null, term: '', choices: [], buttons: [], active: -1 };
 
     function close() {
       clearTimeout(state.timer);
       if (state.abort) state.abort.abort();
       state.abort = null;
+      state.term = '';
       state.choices = [];
       state.buttons = [];
       state.active = -1;
@@ -84,6 +106,7 @@
       button.className = 'sp-option';
       button.id = `${id}-${index}`;
       button.setAttribute('role', 'option');
+      button.tabIndex = -1;   // 選項用上下鍵在輸入框裡選（aria-activedescendant），不進 Tab 順序
       button.setAttribute('aria-selected', 'false');
       const title = document.createElement('strong');
       title.textContent = option.title;
@@ -95,6 +118,7 @@
     }
 
     function show(term, choices) {
+      state.term = term;
       state.choices = choices;
       state.buttons = choices.map(row);
       state.active = -1;
@@ -169,24 +193,28 @@
     list.addEventListener('pointerdown', event => event.preventDefault());
     document.addEventListener('click', event => { if (!host.contains(event.target)) close(); });
 
-    // 按「查詢／加入」時：打的是代號就直接用；有反白的選項用那個；否則用名稱搜一次，取第一個。找不到回 null。
-    async function resolve(text = input.value) {
-      const code = codeOf(text);
-      if (code) { close(); return { kind: 'stock', code, name: code }; }
-      if (state.active >= 0) { const option = state.choices[state.active]; close(); return option; }
+    // 按「查詢／加入」時：打的是代號就直接用；有反白的選項用那個；下拉已經列出同一串字的結果就直接用，否則搜一次；
+    // 再由 decide 決定用哪一檔。回 { option } 或 { message }。
+    async function choose(text = input.value) {
       const term = String(text).trim();
-      if (term.length < 1) return null;
-      close();
-      try {
-        const [first] = await fetchOptions(term, settings);
-        return first || null;
-      } catch {
-        return null;
+      if (!term) return { message: '請先輸入股票代號或名稱。' };
+      const code = codeOf(term);
+      if (code) { close(); return { option: { kind: 'stock', code, name: code } }; }
+      if (state.active >= 0) { const option = state.choices[state.active]; close(); return { option }; }
+      let choices = !list.hidden && state.term === term ? state.choices : null;
+      if (!choices) {
+        close();
+        try { choices = await fetchOptions(term, settings); }
+        catch { return { message: '搜尋暫時無法使用，請稍後再試。' }; }
       }
+      const result = decide(term, choices, settings);
+      if (result.choose) show(term, choices);
+      else close();
+      return result;
     }
 
-    return { resolve, close };
+    return { choose, close };
   }
 
-  global.StockPicker = { codeOf, options, attach };
+  global.StockPicker = { codeOf, options, decide, fitQuery, attach };
 })(window);

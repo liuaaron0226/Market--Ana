@@ -1488,7 +1488,7 @@ class Handler(SimpleHTTPRequestHandler):
             "next_cursor": next_cursor,
         }
         # 本人 11-17：基金名稱也搜得到（只在第一頁、有符合才帶 funds 欄，和雲端 gate 相同）；本機沒有帳號，不分站主。
-        if cursor in (None, "0"):
+        if int(cursor or 0) == 0:
             import fund_compare
 
             funds = fund_compare.search_funds(term)

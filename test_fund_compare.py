@@ -503,6 +503,13 @@ class SearchFundsTest(unittest.TestCase):
         for query in ["貝萊德", "世界科技", "A10", "a10", "BLKTENAU", "blktenau", "世界科技A10", " 總報酬 "]:
             self.assertEqual(fc.search_funds(query), self.EXPECTED, query)
 
+    def test_fund_without_seed_data_is_not_listed(self) -> None:
+        # 和雲端只列有資料的基金一致：沒有回補原件的基金，基金頁算不出來，搜尋也不列
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as empty:
+            self.assertEqual(fc.search_funds("貝萊德", seed_dir=Path(empty)), [])
+
     def test_stock_names_and_blank_find_no_fund(self) -> None:
         for query in ["台積電", "2330", "", "   "]:
             self.assertEqual(fc.search_funds(query), [], query)

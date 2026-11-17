@@ -316,8 +316,8 @@
   const GROUP_MAX = 12;   // 群組名稱最多幾個字；伺服器（cloud/lib/user-portfolio.js）也擋同一個數字
   const EMPTY_WORDS = {
     all: '還沒有自選或庫存。按右邊的「＋」，輸入股票代號或名稱。',
-    holding: '還沒有庫存。按右邊的「＋」，輸入代號後按「新增庫存」。',
-    watch: '還沒有自選股。按右邊的「＋」，輸入代號後按「加入自選」。',
+    holding: '還沒有庫存。按右邊的「＋」，輸入代號或名稱後按「新增庫存」。',
+    watch: '還沒有自選股。按右邊的「＋」，輸入代號或名稱後按「加入自選」。',
   };
   const host = $('holdingRows');
   let listReady = false;     // 第一次要等庫存、自選與 AI 整理都讀到了才畫：進場只播一次，中途重畫會把它打斷
@@ -987,20 +987,20 @@
   }
 
   // 「＋」的兩種新增共用一格。代號、名稱都能打（stock-picker.js，本人 11-17）；基金不是股票，這格不收。
-  const addPicker = window.StockPicker.attach($('addCode'), { inline: true });
-  // 打的是代號就直接用；打名稱就取搜尋第一個（有反白的選項就用那個）。找不到回 null，原因寫在表單裡。
-  async function addCodeFromForm() {
-    const typed = $('addCode').value.trim();
-    if (!typed) { setStatus($('addStatus'), '請先輸入股票代號或名稱。', 'error'); $('addCode').focus(); return null; }
-    const option = await addPicker.resolve(typed);
-    if (!option) { setStatus($('addStatus'), `查無「${typed}」，請改打代號或從清單選擇。`, 'error'); $('addCode').focus(); return null; }
-    return option.code;
-  }
-  // 做完把表單收回去，結果寫在清單上面那一行；存不成的原因留在表單裡
-  async function addFromForm(button, send, done, reload, kind, code) {
+  // 會存資料：打的名稱符合好幾檔又沒有完全相同的，攤開下拉要本人挑，不默默存第一個（strict）。
+  const addPicker = window.StockPicker.attach($('addCode'), { inline: true, strict: true });
+  // 做完把表單收回去，結果寫在清單上面那一行；存不成的原因留在表單裡。
+  // 按下去就先鎖住鍵（找代號也要時間），連按兩下不會送兩次。
+  async function addFromForm(button, send, done, reload, kind, { skip } = {}) {
+    if (button.disabled) return;
     button.disabled = true;
-    setStatus($('addStatus'), '正在儲存…');
     try {
+      const { option, message } = await addPicker.choose();
+      if (message) { setStatus($('addStatus'), message, 'error'); $('addCode').focus(); return; }
+      const code = option.code;
+      const reason = skip?.(code);
+      if (reason) { setStatus($('addStatus'), reason); return; }
+      setStatus($('addStatus'), '正在儲存…');
       const saved = await send(code);
       $('addForm').reset();
       setStatus($('addStatus'), '');
@@ -1013,20 +1013,12 @@
     finally { button.disabled = false; }
   }
   // 加入自選：先不分組、不標短期長期，之後點開那一檔再設。已經在自選的那一檔不重寫，只在表單裡說一聲
-  const addWatch = async () => {
-    const code = await addCodeFromForm();
-    if (!code) return undefined;
-    const existing = state.watchlist.find(item => item.code === code);
-    if (existing) { setStatus($('addStatus'), `${existing.name} 已經在自選了。`); return undefined; }
-    return addFromForm($('addWatch'), code => api('/api/watchlist', { method: 'POST', body: { code } }), name => `已把 ${name} 加入自選。`, loadWatchlist, 'watch', code);
-  };
-  const addHolding = async () => {
-    const code = await addCodeFromForm();
-    if (!code) return undefined;
-    return addFromForm($('saveHolding'),
-      code => saveHolding({ code, shares: Number($('holdingShares').value), average_cost: Number($('holdingCost').value), note: $('holdingNote').value.trim() }),
-      name => `已儲存 ${name} 的庫存。`, reloadHoldings, 'holding', code);
-  };
+  const addWatch = () => addFromForm($('addWatch'), code => api('/api/watchlist', { method: 'POST', body: { code } }), name => `已把 ${name} 加入自選。`, loadWatchlist, 'watch', {
+    skip: code => { const existing = state.watchlist.find(item => item.code === code); return existing ? `${existing.name} 已經在自選了。` : ''; },
+  });
+  const addHolding = () => addFromForm($('saveHolding'),
+    code => saveHolding({ code, shares: Number($('holdingShares').value), average_cost: Number($('holdingCost').value), note: $('holdingNote').value.trim() }),
+    name => `已儲存 ${name} 的庫存。`, reloadHoldings, 'holding');
   $('addForm').addEventListener('submit', event => { event.preventDefault(); addWatch(); });
   $('saveHolding').addEventListener('click', addHolding);
   // 表單預設的送出是「加入自選」。股數那幾格開著的時候按 Enter 是存庫存：在代號那一格是跳到股數，在其他格是儲存

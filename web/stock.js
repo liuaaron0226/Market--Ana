@@ -1157,10 +1157,9 @@
   });
   $('compareForm').addEventListener('submit', async event => {
     event.preventDefault();
-    const typed = $('compareInput').value;
-    const option = await comparePicker.resolve(typed);
-    if (!option && !window.StockPicker.codeOf(typed) && typed.trim()) { setCompareStatus('error', `查無「${typed.trim()}」可加入比較的股票，請改打代號或從清單選擇。`); return; }
-    addComparisonCode(option ? option.code : typed, option ? option.name : undefined);
+    const { option, message } = await comparePicker.choose();
+    if (message) { setCompareStatus('error', message); return; }
+    addComparisonCode(option.code, option.name);
   });
 
   const openFromBar = option => {
@@ -1171,10 +1170,9 @@
   const barPicker = window.StockPicker.attach($('codeInput'), { funds: true, onPick: openFromBar });
   $('searchForm').addEventListener('submit', async event => {
     event.preventDefault();
-    const typed = $('codeInput').value.trim();
-    if (!typed) return;
-    const option = await barPicker.resolve(typed);
-    if (!option) { $('status').hidden = false; $('status').textContent = `查無「${typed}」，請改打代號或從清單選擇。`; return; }
+    if (!$('codeInput').value.trim()) return;
+    const { option, message } = await barPicker.choose();
+    if (message) { $('status').hidden = false; $('status').textContent = message; return; }
     openFromBar(option);
   });
   $('periodSelect').addEventListener('change', () => {

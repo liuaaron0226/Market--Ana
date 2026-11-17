@@ -27,10 +27,8 @@
 .sp-list .sp-option small { color: var(--dim); font-size: 12px; line-height: 1.3; }
 .sp-list .sp-option[aria-selected="true"] { outline: 2px solid var(--ink); outline-offset: -2px; }
 @media (hover: hover) {
-  .sp-list .sp-option:hover { background: var(--key); transform: translateY(var(--key-lift)); box-shadow: var(--key-shadow-hover); }
+  .sp-list .sp-option:hover { background: var(--key); /* 蓋過頂列「查詢」鍵的懸停底色 */ transform: translateY(var(--key-lift)); box-shadow: var(--key-shadow-hover); }
 }
 .sp-list .sp-option:active { transform: translateY(var(--key-thick)); box-shadow: var(--key-shadow-press); transition-duration: var(--t-press); }
 .sp-empty { margin: 0; padding: 8px 4px; color: var(--dim); font-size: 13px; }
 @media (prefers-reduced-motion: reduce) { .sp-list { animation: none; } .sp-list .sp-option { transition: none; } }
-/* 首頁核心持有「＋ 加入」浮出選單裡：一列列排在輸入框下面、佔滿選單寬度 */
-.core-add-menu .sp-inline { flex-basis: 100%; }

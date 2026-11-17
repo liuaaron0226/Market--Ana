@@ -218,8 +218,12 @@ FUNDS: dict[str, dict[str, str]] = {
 }
 
 
-def search_funds(query: str) -> list[dict[str, str]]:
-    """本人 11-17：搜尋框打基金名稱、級別或代碼也找得到（不分大小寫、忽略空白）；規則同雲端 gate.matchFunds。"""
+def search_funds(query: str, *, seed_dir: Path = SEED_DIR) -> list[dict[str, str]]:
+    """本人 11-17：搜尋框打基金名稱、級別或代碼也找得到（不分大小寫、忽略空白）；規則同雲端 gate.matchFunds。
+
+    雲端只列 compare pack 有資料的基金；本機沒有預算好的包，改成只列有回補原件（``seeds/funds/<代碼>/``）的，
+    基金頁才算得出來。
+    """
     def squash(text: str) -> str:
         return "".join(str(text).split()).upper()
 
@@ -228,7 +232,7 @@ def search_funds(query: str) -> list[dict[str, str]]:
         return []
     return [{"code": code, "name": fund["short_name"], "full_name": fund["name"]}
             for code, fund in FUNDS.items()
-            if any(needle in squash(text) for text in (code, fund["short_name"], fund["name"]))]
+            if (seed_dir / code).is_dir() and any(needle in squash(text) for text in (code, fund["short_name"], fund["name"]))]
 
 
 def taipei_today() -> str:
