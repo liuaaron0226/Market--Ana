@@ -210,11 +210,13 @@ def _failure(returncode: int, stderr: bytes) -> str:
 
 
 def call_model(model_bin: Path | str, prompt: str, model: str, timeout: float,
-               output_schema: Mapping[str, Any]) -> tuple[str, Any, str]:
-    """回傳 (狀態, structured_output, 說明)；狀態是 ok／model_failed／model_timeout／output_garbled。"""
+               output_schema: Mapping[str, Any], *, env: Mapping[str, str] | None = None) -> tuple[str, Any, str]:
+    """回傳 (狀態, structured_output, 說明)；狀態是 ok／model_failed／model_timeout／output_garbled。
+    env 給了就只用在 agy 這個子行程（例如登入檔放在隔離 HOME，不改呼叫端整個步驟的 HOME）。"""
     try:
         completed = subprocess.run(_model_command(model_bin, model, output_schema), input=_stream_input(prompt),
-                                   capture_output=True, timeout=timeout, check=False)
+                                   capture_output=True, timeout=timeout, check=False,
+                                   env=dict(env) if env is not None else None)
     except subprocess.TimeoutExpired:
         return "model_timeout", None, f"超過 {timeout} 秒沒有回應"
     except OSError as error:

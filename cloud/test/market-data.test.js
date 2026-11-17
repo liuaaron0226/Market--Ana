@@ -155,3 +155,16 @@ test("版本由內容決定：內容不變版本不變，內容改了版本跟�
   changed.detail.by_date["2026-03-10"].trust_buy[0].trust_lots = 4;
   assert.notEqual(buildMarketPack(changed).version, a);
 });
+
+test("每天重寫的白話分析：帶出來源與期貨資料日，模型名稱與內部原因不外送（本人 11-17）", () => {
+  const r = raw();
+  r.plain = { schema: "market-plain/v2", id: "20260310-plain-ai", source: "ai", model: "gemini-x", generated_at: "g", fallback_reason: "核對沒過",
+    one_line: "一句", points: [{ key: "foreign", title: "外資：偏空", lines: ["a"] }], worry: ["w"], relief: ["r"],
+    data_dates: { price_and_foreign: "2026-03-10", margin: "2026-03-09", futures: "2026-03-10" } };
+  const { overview: o } = buildMarketPack(r);
+  assert.equal(o.plain.source, "ai");
+  assert.deepEqual(o.plain.data_dates, { price_and_foreign: "2026-03-10", margin: "2026-03-09", futures: "2026-03-10" });
+  for (const key of ["model", "generated_at", "fallback_reason", "schema", "id"]) assert.ok(!(key in o.plain), key);
+  // 人寫的舊版沒有 source：不補一個假的
+  assert.ok(!("source" in buildMarketPack(raw()).overview.plain));
+});

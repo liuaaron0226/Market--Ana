@@ -5,9 +5,12 @@
   logs/build_analysis_data.py 建置。兩支腳本把根目錄寫死成本機路徑，所以不直接改它們的計算邏輯，
   而是在工作目錄放一份「同樣相對結構」的副本，以模組方式載入後把 ROOT 換成工作目錄再執行。
 - chips-data.js、detail-data.js：由 logs/build_chips_data.py、logs/build_stock_detail.py 建置，同樣換 ROOT 執行。
-- dashboard-data.js（劇本）與 plain-data.js（白話分析）：本人 11-06 定案「白話分析的文字仍需人寫，自動化只更新數字」，
-  這兩份是人審過的文字，每日流程**不重寫**，原樣沿用上一版；它們的 market_date／for_trading_day 會落後，
-  由前端讀 /api/data-status 判斷是否過期，不在這裡偽造新日期。
+- dashboard-data.js（劇本）與 plain-data.js（白話分析）：先原樣沿用上一版人寫的那份（本人 11-06 定案「文字人寫」）。
+  它們的日期會落後，由前端依資料日判斷是否過期，不在這裡偽造新日期。
+- plain-data.js 例外（本人 11-17 定案，取代 11-06）：開關 MARKET_ANA_PLAIN_DAILY＝on 時，截止日核對過之後
+  由 plain_daily.py 依當天數字重寫（Gemini 寫、程式核對數字；不過就改程式套句），標明資料日與來源。
+  dry＝照樣呼叫並核對，但只寫進執行紀錄 data/daily-update-log/plain-daily/<資料日>.json，網站沿用舊的；
+  off（預設）＝完全不呼叫。workflow 以環境變數 PLAIN_DAILY_MODE／PLAIN_AGY_BIN／PLAIN_AGY_HOME 傳進來。
 
 輸出：工作目錄 <out>/ 下的五個 *-data.js；build.mjs 以環境變數 MARKET_DATA_DIR 指向它。web/ 不被寫入。
 抓取沿用原腳本的限流（單路、≥3 秒、403/429 即停、不覆寫既有原件）；只補指定資料日缺的原件。
@@ -16,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sys
 from datetime import date
@@ -113,7 +117,53 @@ def build(day: str, out: Path, *, root: Path = ROOT, fetch: bool = True) -> dict
     report["analysis_cutoff"] = _analysis_cutoff(out / "analysis-data.js")
     if report["analysis_cutoff"] != day:
         raise RuntimeError(f"analysis-data.js 截止日 {report['analysis_cutoff']} 不是 {day}")
+    # 截止日對了才重寫白話分析（不對就整包改用上一版，模型這一次也不用呼叫）
+    mode, caller = _plain_settings(os.environ)
+    report["plain_daily"] = _apply_plain(out, day, mode=mode, call_model=caller,
+                                         audit_dir=root / "data/daily-update-log/plain-daily")
+    if report["plain_daily"].get("published"):
+        report["files"]["plain-data.js"] = f"rewritten（{report['plain_daily']['source']}）"
     return report
+
+
+def _plain_settings(environ) -> tuple[str, object]:
+    """workflow 傳進來的白話分析模式與 agy 位置（沒裝好就是 agy_unavailable，交給 produce 改用程式套句）。"""
+    plain_daily = _plain_module()
+    mode = plain_daily.normalize_mode(environ.get("PLAIN_DAILY_MODE"))
+    caller = plain_daily.agy_caller(environ.get("PLAIN_AGY_BIN") or None, home=environ.get("PLAIN_AGY_HOME") or None)
+    return mode, caller
+
+
+def _plain_module():
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    import plain_daily
+    return plain_daily
+
+
+def _apply_plain(out: Path, day: str, *, mode: str, call_model, audit_dir: Path) -> dict:
+    """依模式處理 out/plain-data.js；永遠不丟例外（白話分析出錯不能讓整包大盤資料改用上一版）。
+    回傳的摘要會印在 report 最後一行，所以不放全文；全文與核對結果寫在 audit_dir/<資料日>.json。"""
+    plain_daily = _plain_module()
+    mode = plain_daily.normalize_mode(mode)
+    if mode == "off":
+        return {"mode": "off"}
+    try:
+        analysis = _read_assignment(out / "analysis-data.js", "window.MARKET_ANALYSIS = ")
+        chips = _read_assignment(out / "chips-data.js", "window.MARKET_CHIPS = ")
+        plain, audit = plain_daily.produce(analysis, chips, mode=mode, call_model=call_model)
+    except Exception as error:  # noqa: BLE001
+        plain, audit = None, {"mode": mode, "source": None, "failure": f"read_failed: {type(error).__name__}", "rejected": []}
+    if plain is not None:
+        plain_daily.write_plain(out / "plain-data.js", plain)
+    try:
+        audit_dir.mkdir(parents=True, exist_ok=True)
+        (audit_dir / f"{day}.json").write_text(json.dumps({"data_date": day, **audit, "published": plain},
+                                                          ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+    return {"mode": mode, "source": audit.get("source"), "failure": audit.get("failure"),
+            "rejected": len(audit.get("rejected") or []), "published": plain is not None}
 
 
 # 首頁六張籌碼卡點開的名單（11-17 本人回報最近幾天都「這一天沒有資料」，而且沒有任何檢查擋下）。

@@ -60,7 +60,7 @@ class ScriptLoadingTest(unittest.TestCase):
 
 
 class OutputContractTest(unittest.TestCase):
-    def test_human_authored_files_are_carried_over_not_regenerated(self) -> None:
+    def test_human_authored_files_are_carried_over_before_the_optional_rewrite(self) -> None:
         self.assertEqual(set(mpd.HUMAN_AUTHORED), {"dashboard-data.js", "plain-data.js"})
         self.assertEqual(set(mpd.FILES), {"analysis-data.js", "chips-data.js", "detail-data.js",
                                           "dashboard-data.js", "plain-data.js"})
@@ -208,6 +208,89 @@ class DetailCheckTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             result = mpd.check_detail({"days": [], "by_date": {}, "current": {}}, Path(tmp) / "none")
             self.assertEqual(result["status"], "failed")
+
+
+class PlainDailyTest(unittest.TestCase):
+    """本人 11-17：首頁「籌碼與資金」白話分析改成每天依當天數字重寫；開關 MARKET_ANA_PLAIN_DAILY 預設關。"""
+
+    def setUp(self) -> None:
+        import sys
+        sys.path.insert(0, str(ROOT))
+        from test_plain_daily import good_ai, market
+        self.good_ai = good_ai
+        self.tmp = tempfile.TemporaryDirectory()
+        self.out = Path(self.tmp.name) / "out"
+        self.out.mkdir()
+        self.audit_dir = Path(self.tmp.name) / "audit"
+        analysis, chips = market()
+        mpd._write_assignment(self.out / "analysis-data.js", "window.MARKET_ANALYSIS = ", analysis)
+        mpd._write_assignment(self.out / "chips-data.js", "window.MARKET_CHIPS = ", chips)
+        self.carried = "window.MARKET_PLAIN = " + json.dumps({"id": "人寫"}, ensure_ascii=False) + ";\n"
+        (self.out / "plain-data.js").write_text(self.carried, encoding="utf-8")
+        self.calls = 0
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def caller(self, result):
+        def call(prompt, schema):
+            self.calls += 1
+            return result
+        return call
+
+    def apply(self, mode, result=("ok", None, "")):
+        result = ("ok", self.good_ai(), "") if result == ("ok", None, "") else result
+        return mpd._apply_plain(self.out, "2026-11-06", mode=mode, call_model=self.caller(result), audit_dir=self.audit_dir)
+
+    def plain(self) -> dict:
+        return mpd._read_assignment(self.out / "plain-data.js", "window.MARKET_PLAIN = ")
+
+    def test_off_keeps_the_carried_file_and_calls_nothing(self) -> None:
+        report = self.apply("off")
+        self.assertEqual((self.out / "plain-data.js").read_text(encoding="utf-8"), self.carried)
+        self.assertEqual(self.calls, 0)
+        self.assertEqual(report["mode"], "off")
+        self.assertFalse(self.audit_dir.exists())
+
+    def test_on_replaces_the_file_with_todays_checked_text(self) -> None:
+        report = self.apply("on")
+        plain = self.plain()
+        self.assertEqual(plain["source"], "ai")
+        self.assertEqual(plain["data_dates"]["price_and_foreign"], "2026-11-06")
+        self.assertEqual(report["source"], "ai")
+        audit = json.loads((self.audit_dir / "2026-11-06.json").read_text(encoding="utf-8"))
+        self.assertEqual(audit["source"], "ai")
+
+    def test_on_with_a_failed_model_publishes_the_program_text(self) -> None:
+        report = self.apply("on", ("model_timeout", None, "超過"))
+        self.assertEqual(self.plain()["source"], "template")
+        self.assertEqual(report["failure"], "model_timeout")
+
+    def test_dry_run_keeps_the_page_but_records_what_would_be_published(self) -> None:
+        report = self.apply("dry")
+        self.assertEqual((self.out / "plain-data.js").read_text(encoding="utf-8"), self.carried)
+        self.assertEqual(self.calls, 1)
+        audit = json.loads((self.audit_dir / "2026-11-06.json").read_text(encoding="utf-8"))
+        self.assertEqual(audit["candidate"]["source"], "ai")
+        self.assertNotIn("candidate", report, "印在最後一行的報告只放摘要")
+
+    def test_broken_inputs_keep_the_carried_file_and_do_not_raise(self) -> None:
+        (self.out / "chips-data.js").write_text("broken", encoding="utf-8")
+        report = self.apply("on")
+        self.assertEqual((self.out / "plain-data.js").read_text(encoding="utf-8"), self.carried)
+        self.assertTrue(report["failure"])
+
+    def test_settings_come_from_the_workflow_environment(self) -> None:
+        mode, caller = mpd._plain_settings({"PLAIN_DAILY_MODE": "on", "PLAIN_AGY_BIN": "", "PLAIN_AGY_HOME": ""})
+        self.assertEqual(mode, "on")
+        self.assertEqual(caller("p", {})[0], "agy_unavailable")
+        self.assertEqual(mpd._plain_settings({})[0], "off")
+        self.assertEqual(mpd._plain_settings({"PLAIN_DAILY_MODE": "maybe"})[0], "off")
+
+    def test_build_rewrites_only_after_the_cutoff_check(self) -> None:
+        import inspect
+        source = inspect.getsource(mpd.build)
+        self.assertLess(source.index("analysis_cutoff"), source.index("_apply_plain("))
 
 
 if __name__ == "__main__":
