@@ -91,7 +91,7 @@ test("null／0 點位與行情時間不會被造為有效行情，錯誤狀態�
   assert.doesNotMatch(JSON.stringify(result), /server-only-secret/);
 });
 
-test("quote 15 秒、candles 60 秒 isolate 快取，並合併同時請求", async () => {
+test("quote 15 秒、candles 60 秒 isolate 快取；冷啟動同時請求各自抓，不共用進行中 promise", async () => {
   let now = NOW;
   const requests = [];
   const service = createIndexLiveService({
@@ -109,21 +109,22 @@ test("quote 15 秒、candles 60 秒 isolate 快取，並合併同時請求", asy
     service.snapshot({ fugleApiKey: "k" }),
     service.snapshot({ fugleApiKey: "k" }),
   ]);
-  assert.equal(requests.length, 2, "同一 isolate 的同時請求只各抓 quote/candles 一次");
+  // 還沒有任何一筆可用時，每個請求都要自己抓：Workers 不准等別的請求建立的 promise。
+  assert.equal(requests.length, 4, "冷啟動同時請求各抓自己的 quote/candles");
   assert.equal(first.data.price, concurrent.data.price);
 
   now += 10_000;
   const cached = await service.snapshot({ fugleApiKey: "k" });
-  assert.equal(requests.length, 2);
+  assert.equal(requests.length, 4);
   assert.equal(cached.cache_age_seconds, 10);
 
   now += 5_000;
   await service.snapshot({ fugleApiKey: "k" });
-  assert.equal(requests.length, 3, "15 秒只重抓 quote");
+  assert.equal(requests.length, 5, "15 秒只重抓 quote");
 
   now += 45_000;
   await service.snapshot({ fugleApiKey: "k" });
-  assert.equal(requests.length, 5, "60 秒時 quote 與 candles 都可重抓");
+  assert.equal(requests.length, 7, "60 秒時 quote 與 candles 都可重抓");
 });
 
 test("上游例外即使夾帶 key，也不會把 server secret 放進 payload", async () => {
@@ -326,4 +327,97 @@ test("closePrice／lastUpdated 無效時只採合法 fallback，試撮 lastPrice
     assert.equal(result.ok, false);
     assert.equal(result.data, null);
   });
+});
+
+// Cloudflare Workers 不准一個請求去等另一個請求建立的 promise：建立它的請求一結束，
+// 其他在等的請求就拿到「This promise was created by a request that has since ended…」。
+// 正式站首頁 11-17 出現過這句英文。這裡把「前一個請求建立的抓取失敗」模擬成那句錯誤。
+const CROSS_REQUEST_ERROR = "This promise was created by a request that has since ended, so it can never settle.";
+
+
+test("同時進來的請求各自抓上游，不會拿到前一個請求的進行中 promise（Workers 跨請求錯誤）", async () => {
+  const first = { quote: Promise.withResolvers(), candles: Promise.withResolvers() };
+  const calls = { quote: 0, candles: 0 };
+  const service = createIndexLiveService({
+    now: () => NOW,
+    fetchImpl: async url => {
+      const kind = String(url).includes("/quote/") ? "quote" : "candles";
+      calls[kind] += 1;
+      if (calls[kind] === 1) return first[kind].promise; // 請求 A 的抓取：還沒回來
+      return kind === "quote" ? json(quote()) : json(candles());
+    },
+  });
+
+  const requestA = service.snapshot({ fugleApiKey: "k" });
+  const requestB = service.snapshot({ fugleApiKey: "k" });
+  // 請求 A 已結束，它建立的 promise 對其他請求來說永遠不會正常完成。
+  first.quote.reject(new Error(CROSS_REQUEST_ERROR));
+  first.candles.reject(new Error(CROSS_REQUEST_ERROR));
+  const b = await requestB;
+  await requestA;
+
+  assert.equal(calls.quote, 2, "請求 B 要自己抓 quote");
+  assert.equal(calls.candles, 2, "請求 B 要自己抓 candles");
+  assert.equal(b.ok, true);
+  assert.equal(b.data.price, 28088.25);
+  assert.equal(b.error, null);
+  assert.doesNotMatch(JSON.stringify(b), /request that has since ended/);
+});
+
+test("已有上一筆、別的請求正在抓時，先回上一筆，不重打上游也不等那個請求", async () => {
+  let now = NOW;
+  let quoteCalls = 0;
+  let hold = null;
+  const service = createIndexLiveService({
+    now: () => now,
+    fetchImpl: async url => {
+      if (!String(url).includes("/quote/")) return json(candles());
+      quoteCalls += 1;
+      if (quoteCalls === 2) { hold = Promise.withResolvers(); return hold.promise; } // 請求 A 的更新卡住
+      return json(quote({ lastUpdated: now * 1000 }));
+    },
+  });
+
+  await service.snapshot({ fugleApiKey: "k" });
+  now += 15_000;
+  const requestA = service.snapshot({ fugleApiKey: "k" });
+  const b = await service.snapshot({ fugleApiKey: "k" }); // A 還沒回來，B 也必須自己結束
+  assert.equal(quoteCalls, 2, "B 不重打 quote");
+  assert.equal(b.ok, true);
+  assert.equal(b.data.price, 28088.25);
+  assert.equal(b.error, null);
+
+  hold.reject(new Error(CROSS_REQUEST_ERROR));
+  await requestA;
+
+  now += 10_001; // A 的失敗觸發 5 秒退避；退避與卡住判定都過了之後，下一個請求自己抓
+  const later = await service.snapshot({ fugleApiKey: "k" });
+  assert.equal(quoteCalls, 3);
+  assert.equal(later.error, null);
+  assert.equal(later.live, true);
+});
+
+test("較舊的抓取晚到失敗，不會蓋掉較新抓取的成功、也不觸發退避", async () => {
+  const first = Promise.withResolvers();
+  let quoteCalls = 0;
+  const service = createIndexLiveService({
+    now: () => NOW,
+    fetchImpl: async url => {
+      if (!String(url).includes("/quote/")) return json(candles());
+      quoteCalls += 1;
+      return quoteCalls === 1 ? first.promise : json(quote());
+    },
+  });
+
+  const requestA = service.snapshot({ fugleApiKey: "k" });
+  const b = await service.snapshot({ fugleApiKey: "k" });
+  assert.equal(b.error, null);
+  first.reject(new Error("Fugle HTTP 503"));
+  await requestA;
+
+  const after = await service.snapshot({ fugleApiKey: "k" });
+  assert.equal(quoteCalls, 2, "快取內不重抓");
+  assert.equal(after.error, null);
+  assert.equal(after.retry_after_seconds, 0);
+  assert.equal(after.live, true);
 });

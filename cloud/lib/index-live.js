@@ -5,6 +5,9 @@ const QUOTE_TTL_MS = 15_000;
 const CANDLES_TTL_MS = 60_000;
 const FRESH_MS = 30_000;
 const MAX_RETRY_MS = 120_000;
+// 別的請求的抓取開始多久內，同時進來的請求先用上一筆、不重打上游；超過就當那次抓取卡住，自己抓。
+// （發起的請求中途被取消時 finally 不會跑，pendingSince 會留著；這個上限就是為了讓它自己過期。）
+const PENDING_MS = 10_000;
 
 const finite = value => value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value))
   ? Number(value) : null;
@@ -129,7 +132,9 @@ function sanitizedError(error, secret) {
 }
 
 function resourceState() {
-  return { value: null, fetchedAt: 0, inFlight: null, retryAt: 0, failures: 0, error: null };
+  // 只放已完成的資料值；不放 promise（見 load 的說明）。
+  return { value: null, valueSeq: 0, fetchedAt: 0, attempts: 0, pendingSince: 0, pendingSeq: 0,
+    retryAt: 0, failures: 0, error: null };
 }
 
 function rememberError(state, error, nowMs) {
@@ -151,32 +156,41 @@ export function createIndexLiveService({ fetchImpl = fetch, now = Date.now,
   const quoteState = resourceState();
   const candleState = resourceState();
 
+  // 這個 service 是模組層物件，同一個 isolate 的所有請求共用。Workers 不准一個請求去等別的請求建立的
+  // promise（建立它的請求一結束，其他人拿到「This promise was created by a request that has since ended」），
+  // 所以跨請求只共用已經完成的資料值（value、時間、退避），進行中的抓取永遠只由發起它的請求自己 await。
   async function load(state, kind, ttlMs, key, parser, nowMs) {
     if (state.value !== null && nowMs - state.fetchedAt < ttlMs) return state.value;
     if (nowMs < state.retryAt) {
       if (state.value !== null) return state.value;
       throw new Error(state.error || "Fugle 指數行情退避中");
     }
-    if (state.inFlight) return state.inFlight;
-    state.inFlight = (async () => {
-      try {
-        const value = parser(await requestJson(fetchImpl, urlFor(kind), key, nowMs));
+    // 別的請求正在抓、手上又有上一筆：先用上一筆，不重複打上游（也不去等那個請求的 promise）。
+    if (state.value !== null && state.pendingSince && nowMs - state.pendingSince < PENDING_MS) return state.value;
+    const seq = ++state.attempts;
+    state.pendingSince = nowMs;
+    state.pendingSeq = seq;
+    try {
+      const value = parser(await requestJson(fetchImpl, urlFor(kind), key, nowMs));
+      // 較晚發起的抓取已先成功時，不用較舊的結果蓋掉它。
+      if (seq > state.valueSeq) {
         state.value = value;
+        state.valueSeq = seq;
         state.fetchedAt = now();
         state.retryAt = 0;
         state.failures = 0;
         state.error = null;
-        return value;
-      } catch (error) {
-        const safe = sanitizedError(error, key);
-        rememberError(state, safe, nowMs);
-        if (state.value !== null) return state.value;
-        throw safe;
-      } finally {
-        state.inFlight = null;
       }
-    })();
-    return state.inFlight;
+      return state.value;
+    } catch (error) {
+      const safe = sanitizedError(error, key);
+      // 較晚發起的抓取已經成功，這次較舊的失敗不必記成錯誤或觸發退避。
+      if (state.valueSeq < seq) rememberError(state, safe, nowMs);
+      if (state.value !== null) return state.value;
+      throw safe;
+    } finally {
+      if (state.pendingSeq === seq) state.pendingSince = 0;
+    }
   }
 
   function unavailable(nowMs, error, retryAfter = 0) {

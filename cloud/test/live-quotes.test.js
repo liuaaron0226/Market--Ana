@@ -198,3 +198,34 @@ test("盤後不呼叫 MIS，回傳收盤狀態且不亮 LIVE", async () => {
   assert.equal(result.live, false);
   assert.equal(result.candles["1"].length, 0);
 });
+
+// Workers 不准一個請求等別的請求建立的 promise（首頁 /api/live 11-17 出過這個錯）。個股即時報價也是模組層共用
+// service：鎖住「A 的上游抓取還沒回來時，B 自己結束、不等 A」，以免以後加去重時把進行中的 promise 共用出去。
+test("個股即時：A 的 Fugle 抓取卡住時，同時進來的 B 不等 A 的 promise", async () => {
+  const now = Date.parse("2026-11-10T02:22:05Z");
+  let hold = null;
+  const service = createLiveQuoteService({
+    now: () => now,
+    fetchImpl: async url => {
+      if (!hold) { hold = Promise.withResolvers(); return hold.promise; } // 只有 A 的第一個呼叫卡住
+      return new Response(JSON.stringify(String(url).includes("/quote/")
+        ? { symbol: "2330", previousClose: 2235, closePrice: 2265, lastUpdated: 1794277320000000 }
+        : { date: "2026-11-10", symbol: "2330", timeframe: "60", data: [] }), { status: 200 });
+    },
+  });
+
+  const requestA = service.snapshot("2330", "tse", { fugleApiKey: "k" });
+  let timer;
+  try {
+    // B 只等自己的抓取（微任務內就完成）；若去等 A 的 promise 就永遠不會結束，1 秒內判定卡住。
+    const settledB = await Promise.race([
+      service.snapshot("2330", "tse", { fugleApiKey: "k" }).then(() => "B 結束"),
+      new Promise(resolve => { timer = setTimeout(() => resolve("B 卡住"), 1_000); }),
+    ]);
+    assert.equal(settledB, "B 結束");
+  } finally {
+    clearTimeout(timer);
+    hold.reject(new Error("Fugle HTTP 503"));
+    await requestA;
+  }
+});
