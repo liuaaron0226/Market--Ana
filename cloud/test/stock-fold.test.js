@@ -1,5 +1,5 @@
 // 個股頁重新整理（本人 2026-11-15：太長、一進去全部攤開、沒辦法選現在要看什麼；看樣品後答「照這樣做」）：
-// 報價與 K 線以外的收進三顆分類鍵；「對照 0050」的五個期間變成一排鍵。
+// 報價與 K 線以外的收進三顆分類鍵；「比較」（0050 是基準線，原名「對照 0050」，本人 11-18 改名）的五個期間變成一排鍵。
 // 這裡驗兩件事：頁面的結構（哪一塊在哪一類）、五個期間整理出來的資料。畫面上的操作由旅程檢查驗。
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -113,28 +113,30 @@ test("加了別的比較股票：每一檔各一份，順序照傳進來的", ()
 const html = read("web/stock.html").replace(/<!--[\s\S]*?-->/g, "");
 const between = (startMark, endMark) => html.slice(html.indexOf(startMark), html.indexOf(endMark, html.indexOf(startMark)));
 
-test("K 線下面一排三顆分類鍵：價位、籌碼、對照 0050，一開始都收著", () => {
+test("K 線下面一排三顆分類鍵：價位、籌碼、比較，一開始都收著", () => {
   const bar = between('id="stockCats"', "</div>");
   const keys = [...bar.matchAll(/<button type="button" aria-expanded="(\w+)" aria-controls="(\w+)">([^<]+)<\/button>/g)].map((m) => [m[1], m[2], m[3]]);
-  assert.deepEqual(keys, [["false", "levelsPanel", "價位"], ["false", "chipsPanel", "籌碼"], ["false", "comparePanel", "對照 0050"]]);
+  assert.deepEqual(keys, [["false", "levelsPanel", "價位"], ["false", "chipsPanel", "籌碼"], ["false", "comparePanel", "比較"]]);
   assert.match(html, /class="hm-cats" id="stockCats"/);
   assert.ok(html.indexOf('id="stockCats"') > html.indexOf('id="chartStudies"'));
   assert.doesNotMatch(html, /data-cat-panel="[^"]+"[^>]*data-open/);
 });
 
-test("三類各自裝的東西：價位階梯、籌碼名單與大戶持股、和 0050 對照", () => {
+test("三類各自裝的東西：價位階梯、籌碼名單與大戶持股、比較（和 0050 對照）", () => {
   const levels = between('id="levelsPanel"', 'id="chipsPanel"');
   const chips = between('id="chipsPanel"', 'id="comparePanel"');
   const compare = html.slice(html.indexOf('id="comparePanel"'));
   assert.match(levels, /id="ladder"/);
   assert.match(chips, /id="candidateReasons"[\s\S]*id="bigHolders"/);
   assert.match(compare, /id="compareBlock"/);
+  // 螢幕閱讀器念的面板標題和鍵同名（本人 11-18：「對照 0050」改叫「比較」，0050 仍是基準線）
+  assert.match(compare, /<h2 id="compareTitle" class="sr-only">比較<\/h2>/);
   for (const id of ["levelsPanel", "chipsPanel", "comparePanel"]) assert.match(html, new RegExp(`id="${id}" data-cat-panel=`));
   // K 線那一塊裡不再有價位階梯（電腦上也收進「價位」）
   assert.doesNotMatch(between('class="bd-stage"', 'id="stockCats"'), /bd-rail|id="ladder"/);
 });
 
-test("對照 0050 裡面的順序：一句結論、報酬走勢圖、期間的鍵、加入比較；完整的表留給螢幕閱讀器", () => {
+test("比較裡面的順序：一句結論、報酬走勢圖、期間的鍵、加入比較；完整的表留給螢幕閱讀器", () => {
   const compare = html.slice(html.indexOf('id="compareBlock"'));
   const order = ['id="compareConclusion"', 'id="compareChart"', 'id="comparePeriods"', 'id="compareForm"'].map((mark) => compare.indexOf(mark));
   assert.ok(order.every((at) => at > 0) && order.every((at, index) => index === 0 || at > order[index - 1]), String(order));
