@@ -71,6 +71,16 @@ export function stockEtfsVisible(env, isOwner) {
   return modeAllowsViewer(stockEtfsMode(env), isOwner);
 }
 
+// 基金當成一般個股（2026-11-18 規格 .scratch/fund-as-stock/spec.md，03 票）：自己一個三種狀態的開關，比照 ETF、和其他開關都不連動。
+// 對這個人是開的時候，名錄裡的基金（目前只有貝萊德世界科技 A10）搜尋得到、有個股頁；關的時候和沒有這個功能時一樣。
+function stockFundsMode(env) {
+  return threeStateMode(env?.MARKET_ANA_STOCK_FUNDS);
+}
+
+export function stockFundsVisible(env, isOwner) {
+  return modeAllowsViewer(stockFundsMode(env), isOwner);
+}
+
 // 0050 是核心持有的比較基準，一直都有個股頁；ETF 開關只管其他 ETF。
 export const ALWAYS_VISIBLE_ETF = "0050";
 
@@ -78,6 +88,12 @@ export const ALWAYS_VISIBLE_ETF = "0050";
 // 讓他拿到的回應和 ETF 上站之前一樣。
 export function etfAnalysisHidden(code, kind, etfsVisible) {
   return kind === "etf" && code !== ALWAYS_VISIBLE_ETF && !etfsVisible;
+}
+
+// 這一檔的分析結果對這個人要不要當作不存在：ETF 看 ETF 開關、基金看基金開關，其他一律看得到。
+export function analysisHidden(code, kind, env, isOwner) {
+  if (kind === "fund") return !stockFundsVisible(env, isOwner);
+  return etfAnalysisHidden(code, kind, stockEtfsVisible(env, isOwner));
 }
 
 // 開放給朋友的 Gemini（2026-11-16，01 票）：只給朋友用、站主不走這條線，所以不放進功能清單；
@@ -94,6 +110,7 @@ export function policyForViewer(policy, isOwner, env = {}) {
   features.stock_facts_v1 = stockFactsVisible(env, false);
   features.stock_signals_v1 = stockSignalsVisible(env, false);
   features.stock_etfs_v1 = stockEtfsVisible(env, false);
+  features.stock_funds_v1 = stockFundsVisible(env, false);
   return { ...policy, features };
 }
 
@@ -129,6 +146,8 @@ export function releasePolicy(env = {}) {
       stock_signals_v1: stockSignalsMode(env) !== "off",
       // ETF 上站：同上，這裡是站主看到的值。
       stock_etfs_v1: stockEtfsMode(env) !== "off",
+      // 基金上站：同上，這裡是站主看到的值。
+      stock_funds_v1: stockFundsMode(env) !== "off",
     },
   };
 }

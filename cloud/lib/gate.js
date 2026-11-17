@@ -8,7 +8,7 @@ import { handleUserDrawings } from "./user-drawings.js";
 import { defaultLiveQuoteService } from "./live-quotes.js";
 import { fetchTickPage } from "./live-ticks.js";
 import { defaultIndexLiveService } from "./index-live.js";
-import { etfAnalysisHidden, policyForViewer, releasePolicy, stockEtfsVisible, stockFactsVisible, stockSignalsVisible } from "./release-policy.js";
+import { analysisHidden, policyForViewer, releasePolicy, stockEtfsVisible, stockFactsVisible, stockFundsVisible, stockSignalsVisible } from "./release-policy.js";
 import { isOwnerEmail } from "./owner.js";
 import { CODE_PATTERN, CODE_RE, isExchangeCode } from "./codes.js";
 import { FORECAST_PATH, handleForecastApi } from "./forecast.js";
@@ -200,26 +200,40 @@ async function handleStockSearch(request, env, email, deps, { isOwner } = {}) {
   ).first();
   if (!active) throw new HttpError(503, "上市或上櫃普通股名錄尚未就緒");
   if (!query) return json(200, { source_date: active.source_date, items: [], next_cursor: null });
-  const funds = isOwner && offset === 0 ? matchFunds(query, deps.comparePack) : [];
   const escaped = query.replace(/[\\%_]/g, (character) => `\\${character}`);
   // V2：名錄只含大量股母體（listed_securities），母體外的股票自然不會出現在搜尋結果；名次與規則版本只增欄位。
   // ETF 上站（12 票）：ETF 開關對這個人是開的時候，再把 ETF 名錄（etf_securities）一起搜，類別記成 ETF。
+  // 基金上站（基金當成一般個股 03 票）：基金開關對這個人是開的時候，再把基金名錄（fund_securities）一起搜，
+  // 類別「基金」、市場「境外基金」，沒有名次。基金名稱有空白（「貝萊德世界科技 A10」），比對時兩邊都去掉空白、代碼不分大小寫。
   const tail = "latest_bar_date, available_bars, analysis_status, universe_rank, universe_rule";
   const match = "WHERE version = ? AND (code = ? OR name LIKE ? ESCAPE '\\')";
   const order = "ORDER BY CASE WHEN code = ? THEN 0 WHEN name = ? THEN 1 ELSE 2 END, code LIMIT ? OFFSET ?";
   const ordinary = `SELECT code, name, market, security_type, ${tail} FROM listed_securities ${match}`;
   const matchArgs = [active.version, query, `%${escaped}%`];
-  const orderArgs = [query, query, limit + 1, offset];
-  let rows = null;
+  const squashed = `%${escaped.replace(/\s+/g, "")}%`;
+  const parts = [{ sql: ordinary, args: matchArgs }];
   if (stockEtfsVisible(env, isOwner)) {
-    rows = await env.DB.prepare(
-      `SELECT * FROM (${ordinary} UNION ALL SELECT code, name, market, 'ETF' AS security_type, ${tail} FROM etf_securities ${match}) ${order}`,
-    ).bind(...matchArgs, ...matchArgs, ...orderArgs).all().catch((error) => {
-      if (etfTableMissing(error)) return null; // 0018 還沒套：當作沒有 ETF 名錄，走原本的查詢
-      throw error;
+    parts.push({ table: "etf_securities", args: matchArgs,
+      sql: `SELECT code, name, market, 'ETF' AS security_type, ${tail} FROM etf_securities ${match}` });
+  }
+  if (stockFundsVisible(env, isOwner)) {
+    parts.push({ table: "fund_securities", args: [active.version, query.toUpperCase(), squashed, squashed],
+      sql: "SELECT code, name, '境外基金' AS market, '基金' AS security_type, latest_bar_date, available_bars, analysis_status, " +
+        "NULL AS universe_rank, NULL AS universe_rule FROM fund_securities WHERE version = ? AND (code = ? OR " +
+        "REPLACE(name, ' ', '') LIKE ? ESCAPE '\\' OR REPLACE(full_name, ' ', '') LIKE ? ESCAPE '\\')" });
+  }
+  const orderArgs = [query.toUpperCase(), query, limit + 1, offset];
+  let rows = null;
+  // 名錄表（0018、0026）還沒套到資料庫時，當作沒有那份名錄，其他照常。
+  while (!rows) {
+    const sql = parts.length === 1 ? `${ordinary} ${order}` : `SELECT * FROM (${parts.map((part) => part.sql).join(" UNION ALL ")}) ${order}`;
+    rows = await env.DB.prepare(sql).bind(...parts.flatMap((part) => part.args), ...orderArgs).all().catch((error) => {
+      const missing = parts.findIndex((part) => part.table && new RegExp(`no such table: ${part.table}`).test(String(error?.message)));
+      if (missing < 0) throw error;
+      parts.splice(missing, 1);
+      return null;
     });
   }
-  rows ??= await env.DB.prepare(`${ordinary} ${order}`).bind(...matchArgs, ...orderArgs).all();
   const hasMore = rows.results.length > limit;
   const items = rows.results.slice(0, limit).map((item) => ({
     ...item,
@@ -227,31 +241,7 @@ async function handleStockSearch(request, env, email, deps, { isOwner } = {}) {
     analysis_available: item.analysis_status === "available" || item.analysis_status === "stale",
     source_date: active.source_date,
   }));
-  return json(200, { source_date: active.source_date, items, next_cursor: hasMore ? String(offset + limit) : null, ...(funds.length ? { funds } : {}) });
-}
-
-// 本人 11-17：搜尋框打基金名稱也找得到基金對照頁那檔。只列 compare pack 已有資料的基金（有頁可看），
-// 名稱來自 build 時預算的那份（fund_compare.FUNDS）；比對不分大小寫、忽略空白。和自選股頁的基金列一樣只給站主。
-// 沒有符合的基金就不帶 funds 欄（既有回應契約不變）。
-const fundCatalogs = new WeakMap();
-function fundCatalog(pack) {
-  if (!pack || typeof pack !== "object") return [];
-  if (fundCatalogs.has(pack)) return fundCatalogs.get(pack);
-  const catalog = [];
-  for (const [code, text] of Object.entries(pack.funds ?? {})) {
-    try {
-      const fund = JSON.parse(text).fund ?? {};
-      catalog.push({ code, name: fund.short_name || fund.name || code, full_name: fund.name || fund.short_name || code });
-    } catch { /* 壞掉的那檔不列；基金頁本身會說資料還沒準備好 */ }
-  }
-  fundCatalogs.set(pack, catalog);
-  return catalog;
-}
-const squash = (text) => String(text).replace(/\s+/g, "").toUpperCase();
-function matchFunds(query, pack) {
-  const needle = squash(query);
-  if (!needle) return [];
-  return fundCatalog(pack).filter((fund) => [fund.code, fund.name, fund.full_name].some((text) => squash(text).includes(needle)));
+  return json(200, { source_date: active.source_date, items, next_cursor: hasMore ? String(offset + limit) : null });
 }
 
 async function handleStockApi(request, env, path, email, deps, options = {}) {
@@ -281,9 +271,9 @@ async function handleStockApi(request, env, path, email, deps, options = {}) {
         "JOIN stock_analysis a ON a.version = s.active_version " +
         "WHERE s.key = 'current' AND a.code = ?",
     ).bind(m[1]).first();
-    // ETF 上站（12 票）：0050 以外的 ETF 只給 ETF 開關對他是開的人；關的人拿到的回應和沒有這檔分析時一樣。
-    // （Functions 內建的快取子集合只放舊代號與 0050，不會有其他 ETF。）
-    if (stored && !etfAnalysisHidden(m[1], stored.kind, stockEtfsVisible(env, options.isOwner))) {
+    // ETF 上站（12 票）：0050 以外的 ETF 只給 ETF 開關對他是開的人；基金（03 票）同樣只給基金開關對他是開的人。
+    // 關的人拿到的回應和沒有這檔分析時一樣。（Functions 內建的快取子集合只放舊代號與 0050，不會有其他 ETF 或基金。）
+    if (stored && !analysisHidden(m[1], stored.kind, env, options.isOwner)) {
       result = stored.payload;
       resultAsOf = stored.as_of;
     }
@@ -375,12 +365,13 @@ async function handleStockHistoryApi(request, env, path, email, deps, { isOwner 
   try {
     stored = await env.DB.prepare("SELECT payload FROM stock_history WHERE code = ?").bind(code).first();
     // ETF 上站（12 票）：開關對這個人關著時，0050 以外的 ETF 和上站之前一樣沒有長日線（只有關的人多查這一筆）。
-    if (stored && !stockEtfsVisible(env, isOwner)) {
+    // 基金（03 票）的長日線是淨值序列，同樣看基金開關。
+    if (stored && !(stockEtfsVisible(env, isOwner) && stockFundsVisible(env, isOwner))) {
       const kind = await env.DB.prepare(
         "SELECT json_extract(a.payload, '$.kind') AS kind FROM stock_data_state s " +
           "JOIN stock_analysis a ON a.version = s.active_version WHERE s.key = 'current' AND a.code = ?",
       ).bind(code).first();
-      if (etfAnalysisHidden(code, kind?.kind, false)) stored = null;
+      if (analysisHidden(code, kind?.kind, env, isOwner)) stored = null;
     }
   } catch {
     stored = null;
@@ -417,6 +408,8 @@ async function handleStockLiveApi(request, env, path, email, deps) {
   if (request.method !== "GET") throw new HttpError(405, "方法不允許");
   const match = path.match(LIVE_STOCK_PATH);
   if (!match) throw new HttpError(400, "代號格式不正確");
+  // 即時行情只有上市櫃股票有；基金這類長代碼直接查無，不扣額度、不問行情來源（和逐筆相同）
+  if (!isExchangeCode(match[1])) throw new HttpError(404, "這檔沒有即時行情");
   const stored = deps.stockPack?.results?.[match[1]];
   let payload = null;
   try { payload = typeof stored === "string" ? JSON.parse(stored) : stored; } catch { /* 資料包錯誤由既有分析 API 處理 */ }
@@ -430,7 +423,7 @@ async function handleStockLiveApi(request, env, path, email, deps) {
     ).bind(match[1]).first();
   }
   // 即時行情只給站主；ETF 開關關著時，0050 以外的 ETF 和 ETF 上站之前一樣查不到。
-  if (!payload || payload.schema !== ANALYSIS_SCHEMA || etfAnalysisHidden(match[1], payload.kind, stockEtfsVisible(env, true))) {
+  if (!payload || payload.schema !== ANALYSIS_SCHEMA || analysisHidden(match[1], payload.kind, env, true)) {
     throw new HttpError(404, "雲端目前沒有這檔股票的分析資料");
   }
   try {
