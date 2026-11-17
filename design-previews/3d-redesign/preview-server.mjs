@@ -235,7 +235,7 @@ async function serveSample(pathname) {
 async function serveStatic(pathname) {
   // 手機上好打的短網址，轉到樣品：/s 是 ⑤ 短中長期走勢、/s6 是 ⑥ 大戶持股、/s3 是 ③ 庫存總覽、/s1 是收復線／防守線點開之後
   // /pa、/pb 是自選與庫存頁整合的兩個方向：併成一份清單、分成兩個分頁
-  const SHORT = { "/s": "trend-matrix", "/s6": "holders-weekly", "/s3": "holdings-overview", "/s1": "line-panel", "/pa": "portfolio-one-list", "/pb": "portfolio-two-tabs", "/pc": "portfolio-lean", "/pd": "portfolio-gesture", "/ma": "portfolio-material-a", "/mb": "portfolio-material-b", "/mc": "portfolio-material-c", "/ta": "portfolio-texture-a", "/tb": "portfolio-texture-b", "/tc": "portfolio-texture-c" };
+  const SHORT = { "/s": "trend-matrix", "/s6": "holders-weekly", "/s3": "holdings-overview", "/s1": "line-panel", "/pa": "portfolio-one-list", "/pb": "portfolio-two-tabs", "/pc": "portfolio-lean", "/pd": "portfolio-gesture", "/ma": "portfolio-material-a", "/mb": "portfolio-material-b", "/mc": "portfolio-material-c", "/ta": "portfolio-texture-a", "/tb": "portfolio-texture-b", "/tc": "portfolio-texture-c", "/ca": "current-point-a", "/cb": "current-point-b", "/cc": "current-point-c" };
   if (SHORT[pathname]) return new Response(null, { status: 302, headers: { location: `/samples/${SHORT[pathname]}.html` } });
   // /s2 是個股頁（報價與 K 線以外的收進三顆分類鍵，已做進正式的頁面）
   if (pathname === "/s2") return new Response(null, { status: 302, headers: { location: "/stock.html?code=2330" } });

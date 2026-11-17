@@ -83,10 +83,13 @@ def look(base, tag, script_shown, stale_text):
                           and all(word not in seen["text"] for word in ("觸發條件", "解讀", "手上沒股票", "已經持有")), [seen["folds"], seen["notes"]])
                 page.keyboard.press("Escape")
                 page.wait_for_function(PANEL_CLOSED)
+            # 點報價開的是收復線那一張（本人 11-17）：兩條線、離多遠、收盤在哪一區都在那張圖上
             page.locator("#priceSummary").click()
             page.wait_for_function(PANEL_OPEN)
+            page.locator("#panelBody .line-point").wait_for()
             current = page.locator("#panelBody").inner_text()
-            check(f"{label}：現價的面板寫得出離兩條線多遠", "距收復線" in current and "距防守線" in current and "現價落點" in current, current[:120])
+            check(f"{label}：點報價開的是收復線那一張，寫得出離兩條線多遠", page.locator("#panelTitle").inner_text() == "收復線"
+                  and "還差" in current and "還有" in current, [page.locator("#panelTitle").inner_text(), current[:120]])
             page.keyboard.press("Escape")
             check(f"{label}：沒有橫向捲動、沒有腳本錯誤", not page.evaluate("document.documentElement.scrollWidth > document.documentElement.clientWidth") and not errors, errors)
             ctx.close()
@@ -119,10 +122,12 @@ def live(base):
             else:
                 check(f"即時行情・{tag}：兩顆鍵、圖上的線、落點都收起來",
                       not home["upper"] and not home["lower"] and "收復線" not in home["summary"] and home["zone"] == "", home)
-                page.locator("#priceSummary").click()
-                page.wait_for_function(PANEL_OPEN)
-                current = page.locator("#panelBody").inner_text()
-                check(f"即時行情・{tag}：現價的面板不寫離線多遠", "距收復線" not in current and "現價落點" not in current, current[:120])
+                # 兩條線收起來了：點報價沒有東西可開，「詳情 ›」也收起來（報價標成 aria-disabled，所以硬點一下）
+                check(f"即時行情・{tag}：報價標成不能點", page.locator("#priceSummary").get_attribute("aria-disabled") == "true")
+                page.locator("#priceSummary").click(force=True)
+                page.wait_for_timeout(500)
+                check(f"即時行情・{tag}：點報價不開面板", not page.evaluate(PANEL_OPEN), page.locator("#priceSummary").inner_text())
+                check(f"即時行情・{tag}：報價上沒有「詳情 ›」", not page.locator("#priceSummary .detail-cue").is_visible())
             check(f"即時行情・{tag}：沒有腳本錯誤", not errors, errors)
             ctx.close()
         browser.close()

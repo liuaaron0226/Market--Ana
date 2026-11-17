@@ -248,6 +248,12 @@
     for (const node of [els.lineUpper, els.lineLower, $('distribution')]) {
       if (node) node.hidden = linesHidden();
     }
+    // 報價與行情狀態點了是開收復線那一張：線收起來時沒有東西可開，「詳情 ›」的提示也跟著收（data-no-detail，樣式在 panel.css）
+    for (const node of [$('priceSummary'), els.stateButton]) {
+      if (!node) continue;
+      node.toggleAttribute('data-no-detail', linesHidden());
+      node.setAttribute('aria-disabled', String(linesHidden()));
+    }
   }
 
   let displayedMarketData = null;
@@ -1283,38 +1289,10 @@
     return `<div class="compare-row"><span>${esc(label)}</span><span class="compare-track"><i class="compare-fill" style="--size:${size}%;--direction:${direction};--tone:${tone}"></i></span><strong class="num">${signed(value)}%</strong></div>`;
   }
 
-  function renderCurrentPanel() {
-    const data = currentMarketData();
-    const price = Number(data.price);
-    const upperGap = price - UPPER;
-    const lowerGap = price - LOWER;
-    const zone = zoneFor(price).label;
-    const meaning = [
-      `現在 <b>${fmt(price, 0)}</b>，落在「${esc(zone)}」。`,
-      `離收復線還差 <b>${fmt(Math.abs(upperGap), 0)} 點</b>${upperGap >= 0 ? '（已在上方）' : ''}；離防守線還有 <b>${fmt(Math.abs(lowerGap), 0)} 點</b>${lowerGap < 0 ? '（已跌破）' : ''}。`,
-    ];
-    const watch = ['判斷看<b>收盤</b>，盤中位置會變。', '兩條線是照上一個收盤畫的，盤中不會跟著改。'];
-    return `
-      ${linesHidden() ? '' : plainBlock(meaning, watch)}
-      <div class="current-grid">
-        <div><span>現價</span><strong class="num">${fmt(price)}</strong></div>
-        <div><span>漲跌</span><strong class="num">${signed(data.change)}（${signed(data.change_percent)}%）</strong></div>
-        ${linesHidden() ? '' : `<div><span>距收復線</span><strong class="num">${signed(upperGap)} 點</strong><small class="num">${signed(upperGap / UPPER * 100)}%</small></div>
-        <div><span>距防守線</span><strong class="num">${signed(lowerGap)} 點</strong><small class="num">${signed(lowerGap / LOWER * 100)}%</small></div>`}
-      </div>
-      <dl class="action-list">
-        <div><dt>行情狀態</dt><dd>${esc(els.state.textContent)}</dd></div>
-        <div><dt>行情時間</dt><dd class="num">${esc(els.time.textContent)}</dd></div>
-        ${linesHidden() ? '' : `<div><dt>現價落點</dt><dd>${esc(zoneFor(price).label)}</dd></div>`}
-      </dl>
-    `;
-  }
-
   function panelTitleFor(kind, payload) {
     if (kind === 'candle') return chart.candles[payload.index].label;
     if (kind === 'line') return payload.line === 'upper' ? '收復線' : '防守線';
     if (kind === 'distribution') return `${outcomeLabels[payload.outcome]}的歷史結果`;
-    if (kind === 'current') return '現價落點';
     if (kind === 'plain') return '直白分析';
     if (kind === 'chip') { const c = chipCards().find(item => item.key === payload.key); return c ? c.name : '籌碼'; }
     return '詳情';
@@ -1381,7 +1359,6 @@
       }));
     }
     else if (panelState.kind === 'distribution') els.panelBody.innerHTML = renderDistributionPanel(panelState.payload.outcome);
-    else if (panelState.kind === 'current') els.panelBody.innerHTML = renderCurrentPanel();
     else if (panelState.kind === 'plain') els.panelBody.innerHTML = renderPlainPanel();
     else if (panelState.kind === 'chip') { els.panelBody.innerHTML = renderChipPanel(panelState.payload.key); bindChipPanel(panelState.payload.key); }
     els.panelBody.querySelectorAll('[data-deep]').forEach(button => button.addEventListener('click', () => renderLayerTwo(button.dataset.deep)));
@@ -1705,9 +1682,11 @@
   });
   els.lineUpper.addEventListener('click', () => openPanel('line', { line: 'upper' }, els.lineUpper));
   els.lineLower.addEventListener('click', () => openPanel('line', { line: 'lower' }, els.lineLower));
-  $('priceSummary').addEventListener('click', () => openPanel('current', {}, $('priceSummary')));
-  els.stateButton.addEventListener('click', () => openPanel('current', {}, els.stateButton));
-  els.point.addEventListener('click', () => openPanel('current', {}, els.point));
+  // 點報價、行情狀態、K 線上的現價點：直接打開收復線那一張（本人 2026-11-17 看樣品後選「點報價直接開收復線那張」，
+  // 原本另一張全是字的「現價落點」拿掉）。兩條線收起來的時候（劇本過期、線過時）沒有東西可開，點了不做事
+  for (const trigger of [$('priceSummary'), els.stateButton, els.point]) {
+    trigger.addEventListener('click', () => { if (!linesHidden()) openPanel('line', { line: 'upper' }, trigger); });
+  }
   els.mobileDetails.addEventListener('click', () => {
     if (selectedIndex >= 0) openPanel('candle', { index: selectedIndex }, els.marker, els.mobileDetails);
   });
