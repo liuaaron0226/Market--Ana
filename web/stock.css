@@ -241,7 +241,7 @@
   .bd-ma-add { width: 100%; }
 }
 
-/* ================= 和 0050 對照 =================
+/* ================= 比較（0050 是基準線，可再加其他股票；原名「對照 0050」，本人 11-18 改名） =================
    沿用紙本報表語言：先結論，再五期數字與同基準走勢；資料範圍收合。 */
 .bd-compare {
   --cmp-benchmark: #f2f0ec;
@@ -261,7 +261,7 @@
   --cmp-series-4: #eda100;
   --cmp-series-5: #e87ba4;
 }
-/* 「和 0050 對照」這個標題寫在分類鍵上了（留給螢幕閱讀器），這一列只剩靠右的資料日 */
+/* 「比較」這個標題寫在分類鍵上了（留給螢幕閱讀器），這一列只剩靠右的資料日 */
 .bd-compare-head { display: flex; align-items: baseline; justify-content: flex-end; gap: 16px; }
 .bd-compare-head p { margin-top: 4px; color: var(--faint); font-size: 12px; }
 .bd .bd-compare-date { margin: 0; white-space: nowrap; }
@@ -298,7 +298,7 @@
 .bd-compare-chip.is-current button { display: none; }
 
 
-/* ---------- 三類的內容（價位／籌碼／對照 0050）：收著的不佔位置，藏法與浮出來的動態在 bold.css ---------- */
+/* ---------- 三類的內容（價位／籌碼／比較）：收著的不佔位置，藏法與浮出來的動態在 bold.css ---------- */
 .bd-cat[data-open] { margin-top: 20px; }
 .bd-cat > :first-child, .bd-cat > .bd-compare { margin-top: 0; }
 .bd-cat > .bd-compare { padding-top: 0; border-top: 0; }
@@ -306,7 +306,7 @@
 /* 兩塊都沒有東西才寫這一句；名單還在讀的時候（data-loading）不算沒有 */
 .bd-cat:has(#candidateReasons:empty:not([data-loading])):has(#bigHolders:empty) > .bd-cat-empty { display: block; }
 
-/* ---------- 對照 0050：五個期間一排鍵（.key-strip，樣子在 bold.css），點哪一個看哪一個期間的數字 ---------- */
+/* ---------- 比較：五個期間一排鍵（.key-strip，樣子在 bold.css），點哪一個看哪一個期間的數字 ---------- */
 .bd-compare-periods { margin-top: 24px; display: grid; gap: 24px; }
 .bd-compare-periods:empty { display: none; }
 .cmp-card h3 { font: 600 14px var(--sans); color: var(--ink); }
@@ -437,7 +437,7 @@
 }
 
 /* ================= 看盤桌：個股頁（立體重設計 C 包第 2 片，2026-11-16） =================
-   和首頁同一套：頁面背景是桌面；報價那一段（報價、當日三格、操作策略）、K 線、價位階梯、籌碼名單、和 0050 對照各是一塊第 1 層的板；
+   和首頁同一套：頁面背景是桌面；報價那一段（報價、當日三格、操作策略）、K 線、價位階梯、籌碼名單、比較各是一塊第 1 層的板；
    板上可以按的是鍵。陰影、圓角、厚度一律引用 bold.css 的深度變數，這裡不自訂。
    事實區塊照它自己的畫面原則（不加陰影、紅綠只在細記號）不加板；大戶持股那一張本來就是會浮起或凹下的列（.depth-row.on-page），
    桌面上照舊。價位階梯的壓力與支撐用高低分層：壓力是凸起的鍵、支撐是凹下的槽、現價是深色的鍵，不加任何文字。 */

@@ -1243,9 +1243,9 @@ def stock(page: Page, base: str, tag: str, mobile: bool) -> None:
             shown: ['ladder', 'bigHolders', 'candidateReasons', 'compareBlock'].filter(shown),
             screens: document.documentElement.scrollHeight / innerHeight, chart: canvas.width / stage.width,
             order: document.querySelector('.bd-stage').compareDocumentPosition(document.getElementById('stockCats')) & Node.DOCUMENT_POSITION_FOLLOWING }; }""")
-        check(f"{tag}：K 線下面一排三顆分類鍵（價位、籌碼、對照 0050），一開始都收著",
-              seen["keys"] == [["價位", "false"], ["籌碼", "false"], ["對照 0050", "false"]] and seen["open"] == 0 and seen["order"], seen)
-        check(f"{tag}：一進去看不到價位階梯、籌碼名單、大戶持股、和 0050 對照", seen["shown"] == [], seen["shown"])
+        check(f"{tag}：K 線下面一排三顆分類鍵（價位、籌碼、比較），一開始都收著",
+              seen["keys"] == [["價位", "false"], ["籌碼", "false"], ["比較", "false"]] and seen["open"] == 0 and seen["order"], seen)
+        check(f"{tag}：一進去看不到價位階梯、籌碼名單、大戶持股、比較", seen["shown"] == [], seen["shown"])
         check(f"{tag}：一進去整頁不到兩個畫面（原本手機 4.2 個、電腦 3.1 個）", seen["screens"] < 1.7, seen["screens"])
         check(f"{tag}：K 線占滿整個寬度（價位階梯不在右邊了）", seen["chart"] > 0.97, seen["chart"])
         if not mobile:
@@ -1284,7 +1284,7 @@ def stock(page: Page, base: str, tag: str, mobile: bool) -> None:
     step(f"{tag}：一進去只看重點，其餘收在分類鍵", folded)
 
     def desk() -> None:
-        """C 包第 2 片：個股頁也是看盤桌——背景是桌面；報價那一段、K 線、價位階梯、籌碼名單、和 0050 對照各是一塊第 1 層的板；
+        """C 包第 2 片：個股頁也是看盤桌——背景是桌面；報價那一段、K 線、價位階梯、籌碼名單、比較各是一塊第 1 層的板；
         價位階梯的壓力浮起（鍵）、支撐凹下（槽）、現價是深色的鍵。陰影一律和首頁同一組變數，事實區塊照它自己的原則不加板。"""
         def looks() -> dict:
             return page.evaluate("""() => { const probe = document.createElement('div'); document.body.append(probe);
@@ -1316,7 +1316,7 @@ def stock(page: Page, base: str, tag: str, mobile: bool) -> None:
         page.wait_for_timeout(300)
         check(f"{tag}：籌碼名單是一塊板（不在名單上的不畫空板）", looks()["reasons"] in ("slab", "empty"), looks()["reasons"])
         open_stock_cat(page, "comparePanel")
-        check(f"{tag}：和 0050 對照是一塊板", looks()["compare"] == "slab", looks()["compare"])
+        check(f"{tag}：比較是一塊板", looks()["compare"] == "slab", looks()["compare"])
         page.locator("#stockCats button[aria-controls='comparePanel']").click()
         check(f"{tag}：換成板之後沒有橫向捲動", no_overflow(page))
     step(f"{tag}：看盤桌（桌面與板）", desk)
@@ -1542,7 +1542,7 @@ def stock(page: Page, base: str, tag: str, mobile: bool) -> None:
 
     def compare() -> None:
         open_stock_cat(page, "comparePanel")
-        check(f"{tag}：點「對照 0050」先看到一句結論與報酬走勢圖",
+        check(f"{tag}：點「比較」先看到一句結論與報酬走勢圖",
               "0050" in page.locator("#compareConclusion").inner_text() and page.locator("#compareChart svg").is_visible())
         cells = page.locator("#comparePeriods .cell")
         seen = cells.evaluate_all("cells => cells.map(cell => [cell.querySelector('.cell-name').firstChild.textContent, cell.querySelector('b').textContent, cell.className.replace('cell ', ''), cell.getAttribute('aria-pressed')])")
@@ -1567,14 +1567,14 @@ def stock(page: Page, base: str, tag: str, mobile: bool) -> None:
         cells.nth(2).click()
         box = page.locator(".bd-compare-table-wrap").bounding_box()
         check(f"{tag}：完整的表還在頁面裡給螢幕閱讀器（五列），畫面上不佔位置", page.locator("#compareTableBody tr").count() == 5 and box["width"] <= 1 and box["height"] <= 1, box)
-        check(f"{tag}：對照 0050 展開後沒有橫向捲動", no_overflow(page))
+        check(f"{tag}：比較展開後沒有橫向捲動", no_overflow(page))
         columns = page.evaluate("getComputedStyle(document.querySelector('#comparePeriods .cmp-facts')).gridTemplateColumns.split(' ').length")
-        check(f"{tag}：四個數字手機排兩欄、電腦排四欄；「和 0050 對照」的標題不再顯示（寫在鍵上了）",
+        check(f"{tag}：四個數字手機排兩欄、電腦排四欄；「比較」的標題不再顯示（寫在鍵上了）",
               columns == (2 if mobile else 4) and page.locator("#compareTitle").bounding_box()["width"] <= 1, columns)
         strip = page.evaluate("""() => { const strip = document.querySelector('#comparePeriods .key-strip'), cell = strip.querySelector('.cell');
           return [getComputedStyle(strip).justifyContent, cell.getBoundingClientRect().height, strip.getBoundingClientRect().left - cell.getBoundingClientRect().left]; }""")
         check(f"{tag}：期間的鍵靠左排、每顆至少 64 高（放得下短名與差距兩行）", strip[0] == "flex-start" and strip[1] >= 64 and abs(strip[2]) <= 1, strip)
-    step(f"{tag}：和 0050 對照", compare)
+    step(f"{tag}：比較（和 0050 對照）", compare)
 
     def chips_empty() -> None:
         """這一檔不在任何籌碼名單、也沒有大戶持股資料時，「籌碼」展開後寫一句，不是一片空白。"""

@@ -376,7 +376,7 @@ html:has(> :is(body.hm, body.st)) { background: var(--desk); }
 }
 
 /* ================= 分類鍵（.hm-cats）與收起來的一類（立體重設計；首頁與個股頁共用） =================
-   首頁四類、個股頁三類（價位／籌碼／對照 0050）。和週期切換同一種槽與鍵，展開的那一類是凸起的鍵；有幾顆就平分成幾欄。
+   首頁四類、個股頁三類（價位／籌碼／比較）。和週期切換同一種槽與鍵，展開的那一類是凸起的鍵；有幾顆就平分成幾欄。
    開合的程式在 home-fold.js：每顆鍵用 aria-controls 指到自己的區塊，展開時區塊帶 data-open。 */
 :is(body.hm, body.bd) .hm-cats {
   position: relative; margin-top: 20px; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr);

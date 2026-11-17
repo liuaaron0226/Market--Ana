@@ -570,7 +570,7 @@
     finally { if (host.dataset.code === code) delete host.dataset.loading; }
   }
 
-  // ---------- 和 0050 對照 ----------
+  // ---------- 比較（0050 是基準線） ----------
   const svgNode = (tag, attrs = {}) => {
     const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
     Object.entries(attrs).forEach(([key, value]) => el.setAttribute(key, String(value)));
