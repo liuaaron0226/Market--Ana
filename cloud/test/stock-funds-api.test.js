@@ -130,6 +130,35 @@ test("個股入口：開的人拿到 kind fund 的分析（淨值、幣別、淨
   }
 });
 
+// 04 票：只看淨值算的策略與價位（fund_stock.nav_strategy／nav_levels 的輸出形狀，數字取自 11-16 真淨值的建置結果）。
+const FUND_LEVEL = (tick, distance, kinds) => ({ tick, level: tick, low: tick, high: tick, distance_pct: distance, tier: "near",
+  signal_count: kinds.length, structural: true, strength_score: null, sources: kinds.map((kind) => ({ kind, label: kind, value: tick, date: "2026-11-05" })) });
+const FUND_STRATEGY_LEVELS = {
+  strategy: { strategy_version: "fund-nav-close-v1", recommendation: "減碼", reason: "淨值和月線都跌到季線下，趨勢向下；先降低部位，跌破停損價不等反彈。",
+    prices: { entry: 17.11, add: null, stop: 15.01, target: 17.76 }, evidence_strength: "完整",
+    signals: { close: 17.14, ma20: 18.733, ma60: 20.3378 } },
+  levels: { status: "available", method: "fund-nav-close-v1", aggregation_tolerance_pct: 1.31, observable_range_pct: 20,
+    resistance: [FUND_LEVEL(17.76, 3.62, ["ma5", "ma10"]), FUND_LEVEL(18.67, 8.93, ["swing_low", "ma20"])],
+    support: [FUND_LEVEL(17.11, -0.18, ["low_20", "low_60", "swing_low"]), FUND_LEVEL(15.01, -12.43, ["low_240"])],
+    resistance_all: [], support_all: [], no_resistance_above: false, limit_up_reference: null },
+};
+
+test("個股入口（04 票）：基金的價位照給；策略和股票一樣看 strategy_v1 開關，開了才有", async () => {
+  env.MARKET_ANA_STOCK_FUNDS = "all";
+  await run("UPDATE stock_analysis SET payload = ? WHERE version = ? AND code = ?",
+    JSON.stringify({ ...FUND_ANALYSIS, ...FUND_STRATEGY_LEVELS }), VERSION, FUND.code);
+  for (const email of [OWNER, FRIEND]) {
+    delete env.MARKET_ANA_ENABLED_FEATURES;
+    let body = await (await call(`/api/stocks/${FUND.code}/analysis`, email)).json();
+    assert.equal(Object.hasOwn(body, "strategy"), false, `${email}：核心版不給未驗證的操作建議`);
+    assert.deepEqual(body.levels, FUND_STRATEGY_LEVELS.levels, email);
+    env.MARKET_ANA_ENABLED_FEATURES = "strategy_v1";
+    body = await (await call(`/api/stocks/${FUND.code}/analysis`, email)).json();
+    assert.deepEqual([body.kind, body.strategy, body.levels], ["fund", FUND_STRATEGY_LEVELS.strategy, FUND_STRATEGY_LEVELS.levels], email);
+  }
+  delete env.MARKET_ANA_ENABLED_FEATURES;
+});
+
 test("長日線：開的人拿到淨值序列（只有日期與收盤）；關的人和沒有這檔一樣", async () => {
   for (const [value, open] of SWITCH_CASES) {
     setSwitch(value);

@@ -86,11 +86,16 @@ def _validate_strategy(
     *,
     institutional_day: Decimal | None,
     institutional_5d: Decimal | None,
+    kind: object = None,
 ) -> None:
     if not isinstance(strategy, dict):
         raise ValueError(f"payload strategy 必須是 object：{code}")
     if not isinstance(strategy.get("strategy_version"), str) or not strategy["strategy_version"]:
         raise ValueError(f"payload strategy 缺有效版本：{code}")
+    # 基金（04 票）用只看淨值的策略（fund_stock.nav_strategy）：只能出現在 kind fund，訊號是淨值、月線、季線，沒有法人。
+    is_fund_strategy = strategy["strategy_version"] == fund_stock.STRATEGY_VERSION
+    if is_fund_strategy != (kind == "fund"):
+        raise ValueError(f"payload strategy 版本與類別不符：{code}")
     if strategy.get("recommendation") not in {"持有", "分批進場", "觀望", "減碼"}:
         raise ValueError(f"payload strategy 建議無效：{code}")
     prices = strategy.get("prices")
@@ -104,6 +109,10 @@ def _validate_strategy(
     if strategy.get("evidence_strength") not in {"完整", "部分", "有限"}:
         raise ValueError(f"payload strategy 證據狀態無效：{code}")
     signals = strategy.get("signals")
+    if is_fund_strategy:
+        if not isinstance(signals, dict) or not all(_is_finite_number(signals.get(key)) for key in ("close", "ma20", "ma60")):
+            raise ValueError(f"payload strategy 基金訊號（淨值、月線、季線）無效：{code}")
+        return
     if not isinstance(signals, dict) or not {"positive", "risk", "institutional_day", "institutional_5d"}.issubset(signals):
         raise ValueError(f"payload strategy 訊號結構無效：{code}")
     for key in ("positive", "risk"):
@@ -204,6 +213,7 @@ def _check_payload(code: str, payload: object) -> None:
             payload["strategy"],
             institutional_day=institutional_day,
             institutional_5d=institutional_5d,
+            kind=payload.get("kind"),
         )
 
 
@@ -217,8 +227,8 @@ def _isolate_strategy(code: str, payload: dict) -> str | None:
     as_of = _parse_payload_date(code, payload.get("as_of"))
     institutional_day, institutional_5d = _validate_institutional(code, payload.get("institutional"), as_of)
     try:
-        _validate_strategy(code, payload["strategy"],
-                           institutional_day=institutional_day, institutional_5d=institutional_5d)
+        _validate_strategy(code, payload["strategy"], institutional_day=institutional_day,
+                           institutional_5d=institutional_5d, kind=payload.get("kind"))
     except ValueError as error:
         payload["strategy"] = None
         return str(error)[:200]
@@ -854,6 +864,10 @@ def build_version(
     funds: list[dict] = []
     if not selected_codes:
         funds, fund_analyses, fund_failures = fund_stock.fund_rows(data_date, **({"loader": fund_loader} if fund_loader else {}))
+        for row in fund_analyses:  # 只看淨值的策略（04 票）不合格時和股票一樣只隔離策略，不擋整包發布
+            isolated = _isolate_strategy(row["code"], row["payload"])
+            if isolated:
+                fund_failures.append({"code": row["code"], "scope": "fund_strategy", "error": "ValueError", "message": isolated})
         analyses.extend(fund_analyses)
         failures.extend(fund_failures)
     compatibility = _compatibility_rows(data_date, analyzer)

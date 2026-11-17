@@ -77,11 +77,12 @@
 
   function renderStrategy(r) {
     $('strategy').hidden = !features.strategy_v1;
-    // 基金的操作策略要用淨值另算（04 票）；還沒有的時候照實寫「資料不足」、不出操作價位，不拿股票的規則猜（規格第 15 條）。
+    // 基金的操作策略只看淨值另算（fund_stock.py，04 票）；淨值不足或過期算不出來時照實寫「資料不足」和原因、
+    // 不出操作價位，不拿股票的規則猜（規格第 15 條）。
     const pending = isFund(r) && !r.strategy;
     $('strategyDetails').hidden = pending;
     if (!features.strategy_v1) return;
-    if (pending) { $('strategyConclusion').textContent = `資料不足｜${r.levels?.reason || '基金的操作價位尚未提供'}`; return; }
+    if (pending) { $('strategyConclusion').textContent = `資料不足｜${r.levels?.reason || '操作價位暫時算不出來'}`; return; }
     const strategy = buildStrategy(r);
     $('strategyConclusion').textContent = `${strategy.recommendation}｜${strategy.reason}`;
     for (const [key, id] of Object.entries({ entry: 'strategyEntry', add: 'strategyAdd', stop: 'strategyStop', target: 'strategyTarget' })) {
@@ -94,7 +95,7 @@
 
   // 基金當成一般個股 03 票（本人 11-18 選樣品 B）：分析契約 v2 的 kind "fund"。基金每天只有一個淨值（約晚 3 個營業日公布），
   // 沒有即時行情、逐筆、當日三格、籌碼、事實整理、大戶持股、國外同類股與公告，這些區塊整個不出現；
-  // 分類鍵先只留「比較」（價位、配息、成分股由 04、06、08 票加上）。圖是淨值線，週期只有日／週／月，
+  // 分類鍵沒有籌碼；「價位」是只看淨值算的壓力與支撐（04 票），配息、成分股由 06、08 票加上。圖是淨值線，週期只有日／週／月，
   // 指標只留不需要量、高低價與法人的 MACD、RSI。
   const isFund = r => r?.kind === 'fund';
   const FUND_PERIODS = ['daily', 'weekly', 'monthly'];
@@ -106,10 +107,8 @@
   function applyKind(r) {
     const fund = isFund(r);
     document.body.dataset.kind = fund ? 'fund' : 'stock';
-    for (const id of ['levelsPanel', 'chipsPanel']) {
-      const button = $('stockCats').querySelector(`[aria-controls="${id}"]`);
-      if (button) button.hidden = fund;
-    }
+    const chips = $('stockCats').querySelector('[aria-controls="chipsPanel"]');
+    if (chips) chips.hidden = fund;
     for (const group of $('periodSelect').querySelectorAll('optgroup')) {
       const longOnly = [...group.querySelectorAll('option')].every(option => FUND_PERIODS.includes(option.value));
       group.hidden = fund && !longOnly;
@@ -354,9 +353,11 @@
     $('ladderCurrentLabel').textContent = caption.ladderLabel;
     $('ladderCurrentMeta').textContent = caption.ladderMeta;
     if (isFund(r)) {
-      // 基金寫淨值日（不是資料日）；漲跌連金額一起寫，例如「-0.59（-3.33%）」
+      // 基金寫淨值日（不是資料日）；漲跌連金額一起寫，例如「-0.59（-3.33%）」。價位階梯中間那列是最新淨值。
       $('quoteMode').textContent = '淨值日';
       $('asOf').textContent = r.quote.nav_date || r.as_of;
+      $('ladderCurrentLabel').textContent = '淨值';
+      $('ladderCurrentMeta').textContent = `淨值日 ${r.quote.nav_date || r.as_of}`;
     }
     $('close').textContent = fmt(r.quote.close);
     const chg = r.quote.chg_pct;
@@ -369,8 +370,11 @@
     const lv = r.levels || {};
     const res = lv.resistance || [];
     const sup = lv.support || [];
-    const noRes = lv.no_resistance_above ? '上方無結構價位' : '無';
+    // 基金淨值不足或過期時價位算不出來（levels.status insufficient）：壓力一那列寫「資料不足」和原因。
+    const insufficient = lv.status === 'insufficient';
+    const noRes = insufficient ? '資料不足' : lv.no_resistance_above ? '上方無結構價位' : '無';
     setLevel('resistance1', res[0], noRes);
+    if (insufficient) $('resistance1Meta').textContent = lv.reason || '';
     setLevel('resistance2', res[1], '無');
     setLevel('support1', sup[0], '無');
     setLevel('support2', sup[1], '無');
