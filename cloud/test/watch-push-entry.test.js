@@ -1,5 +1,6 @@
-// 到價推播的入口（本人 2026-11-17：「你把它放在我的庫存有點奇怪且占空間，我覺得你可以把他隱藏」）：
-// 設定不再攤在自選股清單底下，收進頁首一顆小鈴鐺，點了才打開浮層。這裡驗入口的開關，推播本身的流程照舊（watch-push-api.test.js）。
+// 到價推播的畫面（本人 2026-11-17：「你把它放在我的庫存有點奇怪且占空間，我覺得你可以把他隱藏」→ 同日選設定樣品 A）：
+// 收進三頁頁首齒輪的設定浮板「通知」那一籤，由 settings.js 呼叫 WatchPush.mount 畫進去。
+// 這裡驗 mount 什麼時候畫、什麼時候不畫；浮板的開關由瀏覽器旅程驗（browser_settings_journey.py），推播本身的流程照舊（watch-push-api.test.js）。
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -41,49 +42,21 @@ function load(info) {
   return { WatchPush: window.WatchPush, locks };
 }
 
-const parts = () => ({ opener: Object.assign(fakeElement("button"), { hidden: true }), dialog: fakeElement("dialog"), host: fakeElement() });
-
-test("站主而且推播可用：頁首的鈴鐺才出現，設定畫在浮層裡、平常不佔清單的版面", async () => {
+test("站主而且推播可用：設定畫進浮板的通知籤，回報可以用", async () => {
   const { WatchPush } = load({ available: true, configured: false, devices: [] });
-  const { opener, dialog, host } = parts();
-  await WatchPush.attach({ opener, dialog, host });
-  assert.equal(opener.hidden, false);
-  assert.equal(dialog.open, false, "載入時不自己打開");
-  assert.ok(host.children.length > 0, "浮層裡的設定先畫好，打開就看得到");
+  const host = Object.assign(fakeElement(), { hidden: true });
+  assert.equal(await WatchPush.mount(host), true);
+  assert.ok(host.children.length > 0, "設定先畫好，切到通知籤就看得到");
 });
 
-test("不是站主或開關關著：鈴鐺一直藏著，點不到也打不開", async () => {
+test("不是站主或開關關著：什麼都不畫，回報不能用（設定浮板改顯示「目前沒有開放」）", async () => {
   const { WatchPush } = load({ available: false });
-  const { opener, dialog, host } = parts();
-  await WatchPush.attach({ opener, dialog, host });
-  assert.equal(opener.hidden, true);
+  const host = fakeElement();
+  assert.equal(await WatchPush.mount(host), false);
   assert.equal(host.children.length, 0);
 });
 
-test("點鈴鐺打開浮層並鎖住底下的頁面；關掉（Esc、關閉鈕、點外面都會觸發 close）時解開", async () => {
-  const { WatchPush, locks } = load({ available: true, configured: false, devices: [] });
-  const { opener, dialog, host } = parts();
-  await WatchPush.attach({ opener, dialog, host });
-  opener.dispatch("click");
-  assert.equal(dialog.open, true);
-  assert.deepEqual(locks, [["lock", dialog]]);
-  assert.equal(opener.getAttribute("aria-expanded"), "true");
-  opener.dispatch("click");   // 已經開著再點不會重鎖
-  assert.equal(locks.length, 1);
-  dialog.close();
-  assert.deepEqual(locks, [["lock", dialog], ["unlock", dialog]]);
-  assert.equal(opener.getAttribute("aria-expanded"), "false");
-});
-
-test("點在浮層外面（背景）收回；點在浮層裡面不收", async () => {
-  const { WatchPush } = load({ available: true, configured: false, devices: [] });
-  const { opener, dialog, host } = parts();
-  await WatchPush.attach({ opener, dialog, host });
-  opener.dispatch("click");
-  dialog.dispatch("pointerdown", { clientX: 50, clientY: 50 });
-  dialog.dispatch("click", { clientX: 50, clientY: 50 });
-  assert.equal(dialog.open, true, "點在面板範圍內");
-  dialog.dispatch("pointerdown", { clientX: 300, clientY: 300 });
-  dialog.dispatch("click", { clientX: 300, clientY: 300 });
-  assert.equal(dialog.open, false, "按下與放開都在面板外");
+test("鈴鐺與浮層的開關已搬到 settings.js，watch-push.js 只留畫面", () => {
+  const { WatchPush } = load({ available: false });
+  assert.equal(WatchPush.attach, undefined);
 });

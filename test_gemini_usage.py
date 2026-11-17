@@ -60,12 +60,13 @@ class SnapshotSql(unittest.TestCase):
     def test_one_row_per_run_with_task_calls_and_buckets(self):
         db = self.table()
         sql = gu.snapshot_sql(gu.parse_usage(json.dumps(REAL)), task="watch-ledger", run_id="19876543210",
-                              taken_at="2026-11-17T08:05:00Z", calls=38)
+                              taken_at="2026-11-17T08:05:00Z", calls=38, model="gemini-3.8-flash-medium")
         db.executescript(sql)
-        rows = db.execute("SELECT taken_at, task, run_id, calls, buckets_json FROM gemini_usage_snapshots").fetchall()
+        rows = db.execute("SELECT taken_at, task, run_id, calls, model, buckets_json FROM gemini_usage_snapshots").fetchall()
         self.assertEqual(len(rows), 1)
-        taken_at, task, run_id, calls, buckets = rows[0]
-        self.assertEqual((taken_at, task, run_id, calls), ("2026-11-17T08:05:00Z", "watch-ledger", "19876543210", 38))
+        taken_at, task, run_id, calls, model, buckets = rows[0]
+        self.assertEqual((taken_at, task, run_id, calls, model),
+                         ("2026-11-17T08:05:00Z", "watch-ledger", "19876543210", 38, "gemini-3.8-flash-medium"))
         self.assertEqual(json.loads(buckets)[3]["id"], "gemini-argon-wtu-weekly")
 
     def test_unknown_call_count_is_null_and_quotes_are_escaped(self):
@@ -100,20 +101,42 @@ class CommandLine(unittest.TestCase):
             f"sys.stdout.write({stdout!r} if ok else '{{\"status\":\"SUCCESS\",\"response\":\"hi\"}}')\n"
             f"raise SystemExit({exit_code})\n", encoding="utf-8")
         out = folder / "usage.sql"
-        code = gu.main(["--agy-bin", str(fake), "--task", "watch-ledger", "--run-id", "42", "--calls", "38", "--sql-output", str(out)])
+        code = gu.main(["--agy-bin", str(fake), "--task", "watch-ledger", "--run-id", "42", "--calls", "38",
+                        "--model", "gemini-3.8-flash-medium", "--sql-output", str(out)])
         db = sqlite3.connect(":memory:")
         db.executescript(gu.TABLE_SQL)
         db.executescript(out.read_text(encoding="utf-8"))
-        return code, db.execute("SELECT task, run_id, calls, buckets_json FROM gemini_usage_snapshots").fetchone()
+        return code, db.execute("SELECT task, run_id, calls, buckets_json, model FROM gemini_usage_snapshots").fetchone()
 
     def test_writes_the_reading(self):
-        code, (task, run_id, calls, buckets) = self.run_with(json.dumps(REAL))
-        self.assertEqual((code, task, run_id, calls), (0, "watch-ledger", "42", 38))
+        code, (task, run_id, calls, buckets, model) = self.run_with(json.dumps(REAL))
+        self.assertEqual((code, task, run_id, calls, model), (0, "watch-ledger", "42", 38, "gemini-3.8-flash-medium"))
         self.assertEqual(len(json.loads(buckets)), 4)
 
     def test_broken_agy_still_records_the_run_and_exits_zero(self):
-        code, (task, _, calls, buckets) = self.run_with("Error: login expired", exit_code=1)
+        code, (task, _, calls, buckets, _model) = self.run_with("Error: login expired", exit_code=1)
         self.assertEqual((code, task, calls, buckets), (0, "watch-ledger", 38, None))
+
+
+class WorkflowWiring(unittest.TestCase):
+    """每支用 agy 的排程，清除登入檔之前都要讀一次用量；這一步失敗不能讓排程失敗，任務名稱就是排程檔名（設定頁照它對中文名稱）。"""
+
+    def test_every_agy_workflow_records_usage_before_cleanup(self):
+        import yaml
+        root = Path(__file__).parent / ".github" / "workflows"
+        for name in ("ai-digest", "forecast-ledger", "forecast-morning", "forecast-replay", "watch-ledger"):
+            with self.subTest(name=name):
+                jobs = yaml.safe_load((root / f"{name}.yml").read_text(encoding="utf-8"))["jobs"]
+                steps = next(job["steps"] for job in jobs.values() if any("agy-bin" in s.get("run", "") for s in job["steps"]))
+                usage = [i for i, s in enumerate(steps) if "gemini_usage.py" in s.get("run", "")]
+                cleanup = [i for i, s in enumerate(steps) if s.get("name", "").startswith("清除登入檔")]
+                self.assertEqual(len(usage), 1)
+                step = steps[usage[0]]
+                self.assertLess(usage[0], cleanup[0])
+                self.assertIs(step["continue-on-error"], True)
+                self.assertTrue(step["if"].startswith("always()"))
+                self.assertIn(f"--task {name} ", step["run"])
+                self.assertIn("gemini-usage.sql", steps[cleanup[0]]["run"])
 
 
 if __name__ == "__main__":

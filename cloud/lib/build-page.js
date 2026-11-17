@@ -37,13 +37,16 @@ export const WEB_FILES = [
   "watch-judgments.js", "watch-judgments.css",
   // 自選股關注 F 票：加入主畫面（iPhone 收推播的前提）、推播的 service worker、自選股頁的到價推播設定
   "manifest.webmanifest", "icon-180.png", "icon-192.png", "icon-512.png", "sw.js", "watch-push.js", "watch-push.css",
+  // 設定（2026-11-17，本人選樣品 A）：三頁頁首的齒輪浮板（Gemini 用量、到價推播、外觀，帳號管理入口）
+  "settings.js", "settings.css",
 ];
 export const RETIRED = ["analysis-data.js", "chips-data.js", "dashboard-data.js", "detail-data.js", "plain-data.js", "market-data-local.js"];
 
 const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const scriptTag = (file) => new RegExp(`<script src="${escape(file)}(\\?[^"]*)?"></script>`);
 
-// 雲端版頁面：拿掉本機資料檔，在 kchart 之前插入雲端資料來源，站主另加帳號管理入口（一般使用者不顯示）。
+// 雲端版頁面：拿掉本機資料檔，在 kchart 之前插入雲端資料來源。
+// 帳號管理（站主）與 Gemini 設定（朋友）的入口 11-17 起在設定浮板最下面一列（settings.js），不再另外插右下角的浮動鈕。
 export function cloudPage(html, retired = RETIRED) {
   let page = html;
   for (const f of retired) {
@@ -55,5 +58,5 @@ export function cloudPage(html, retired = RETIRED) {
   if (!kchart || !page.includes("</body>")) throw new Error("minimal.html 結構不符，無法插入雲端資料來源");
   const open = kchart[0].slice(0, kchart[0].indexOf("</script>"));
   page = page.replace(open, `<script src="/market-data-cloud.js"></script>\n  ${open}`);
-  return page.replace("</body>", '  <script src="/owner-entry.js" defer></script>\n</body>');
+  return page;
 }

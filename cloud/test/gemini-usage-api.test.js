@@ -27,9 +27,9 @@ beforeEach(async () => {
     .bind("a@example.com", "A", "2026-11-09T00:00:00Z").run();
 });
 
-const snap = (task, runId, takenAt, calls, buckets) => env.DB
-  .prepare("INSERT INTO gemini_usage_snapshots (task, run_id, taken_at, calls, buckets_json) VALUES (?, ?, ?, ?, ?)")
-  .bind(task, runId, takenAt, calls, buckets === null ? null : JSON.stringify(buckets)).run();
+const snap = (task, runId, takenAt, calls, buckets, model = null) => env.DB
+  .prepare("INSERT INTO gemini_usage_snapshots (task, run_id, taken_at, calls, model, buckets_json) VALUES (?, ?, ?, ?, ?, ?)")
+  .bind(task, runId, takenAt, calls, model, buckets === null ? null : JSON.stringify(buckets)).run();
 
 async function get(email = OWNER) {
   const headers = new Headers({ "cf-access-jwt-assertion": await issuer.sign(claims(email)) });
@@ -60,15 +60,15 @@ test("最新一筆讀不到用量時，顯示上一筆讀得到的，並說最�
   assert.equal(body.flash.five_hour.remaining, 0.8861);
 });
 
-test("今天各任務：台灣時間今天跑了幾次、呼叫加總；昨天的不算", async () => {
-  await snap("watch-ledger", "1", "2026-11-16T15:59:00Z", 40, READING); // 台灣 11-16 23:59 → 昨天
-  await snap("watch-ledger", "2", "2026-11-16T16:00:00Z", 30, READING); // 台灣 11-17 00:00 → 今天
-  await snap("watch-ledger", "3", "2026-11-17T08:05:00Z", 8, READING);
+test("今天各任務：台灣時間今天跑了幾次、呼叫加總、最近一次用的模型；昨天的不算", async () => {
+  await snap("watch-ledger", "1", "2026-11-16T15:59:00Z", 40, READING, "gemini-4-argon-high"); // 台灣 11-16 23:59 → 昨天
+  await snap("watch-ledger", "2", "2026-11-16T16:00:00Z", 30, READING, "gemini-3.8-flash-high"); // 台灣 11-17 00:00 → 今天
+  await snap("watch-ledger", "3", "2026-11-17T08:05:00Z", 8, READING, "gemini-3.8-flash-medium");
   await snap("forecast-ledger", "4", "2026-11-17T07:00:00Z", null, READING);
   const body = await (await get()).json();
   assert.deepEqual(body.today, [
-    { task: "forecast-ledger", runs: 1, calls: null },
-    { task: "watch-ledger", runs: 2, calls: 38 },
+    { task: "forecast-ledger", runs: 1, calls: null, model: null },
+    { task: "watch-ledger", runs: 2, calls: 38, model: "gemini-3.8-flash-medium" },
   ]);
 });
 

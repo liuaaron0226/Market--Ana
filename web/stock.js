@@ -179,7 +179,6 @@
   function setTheme(theme) {
     document.documentElement.dataset.theme = theme;
     try { localStorage.setItem('market-theme', theme); } catch (_) { /* 私密視窗可能無法存 */ }
-    $('themeText').textContent = theme === 'dark' ? '淺色' : '深色';
     if (lastResult) drawChart(lastResult);
     if (compareState.payload) drawComparisonChart(compareState.payload);
   }
@@ -1260,7 +1259,8 @@
     const next = [60, 120, 240, 20, 10, 5].find(value => !maPeriods.includes(value));
     applyMaPeriods([...maPeriods, next]);
   });
-  $('themeToggle').addEventListener('click', () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
+  // 主題在設定浮板裡切換（settings.js，本人 11-17 選樣品 A）：已經存好、套好了，這裡跟著重畫圖
+  document.addEventListener('market:theme', event => setTheme(event.detail?.theme === 'dark' ? 'dark' : 'light'));
   let saved = null;
   try { saved = localStorage.getItem('market-theme'); } catch (_) { /* 私密視窗 */ }
   renderMaControls();

@@ -7,7 +7,7 @@ Pro 方案的 Argon 是另一組額度（回傳原文「For paid Pro plans, Argo
 
 用法（排程裡，清除登入檔之前）：
   python gemini_usage.py --agy-bin "$RUNNER_TEMP/agy/antigravity" --task watch-ledger --run-id "$GITHUB_RUN_ID" \
-      --calls 38 --sql-output "$RUNNER_TEMP/gemini-usage.sql"
+      --calls 38 --model gemini-3.8-flash-medium --sql-output "$RUNNER_TEMP/gemini-usage.sql"
 讀不到用量也照樣寫一筆（用量欄空著），且一律以 0 結束：用量只是附帶資訊，不能讓原本的排程失敗。
 """
 from __future__ import annotations
@@ -64,10 +64,11 @@ def _literal(value: Any) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
-def snapshot_sql(buckets: Iterable[dict[str, Any]] | None, *, task: str, run_id: str, taken_at: str, calls: int | None) -> str:
+def snapshot_sql(buckets: Iterable[dict[str, Any]] | None, *, task: str, run_id: str, taken_at: str, calls: int | None,
+                 model: str | None = None) -> str:
     buckets_json = None if buckets is None else json.dumps(list(buckets), ensure_ascii=False, separators=(",", ":"))
-    values = ", ".join(_literal(v) for v in (task, str(run_id), taken_at, calls, buckets_json))
-    return ("INSERT INTO gemini_usage_snapshots (task, run_id, taken_at, calls, buckets_json) VALUES "
+    values = ", ".join(_literal(v) for v in (task, str(run_id), taken_at, calls, model or None, buckets_json))
+    return ("INSERT INTO gemini_usage_snapshots (task, run_id, taken_at, calls, model, buckets_json) VALUES "
             f"({values}) ON CONFLICT (task, run_id) DO UPDATE SET taken_at = excluded.taken_at, "
             "calls = excluded.calls, buckets_json = excluded.buckets_json;\n")
 
@@ -90,6 +91,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--task", required=True)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--calls", type=int)
+    parser.add_argument("--model", help="這次用的模型（例如 gemini-3.8-flash-medium）")
     parser.add_argument("--sql-output", required=True)
     args = parser.parse_args(argv)
     try:
@@ -99,7 +101,8 @@ def main(argv: list[str] | None = None) -> int:
         buckets = None
         print(f"::warning::讀不到 Gemini 用量（{error}）；只記下這次任務")
     taken_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    Path(args.sql_output).write_text(snapshot_sql(buckets, task=args.task, run_id=args.run_id, taken_at=taken_at, calls=args.calls),
+    Path(args.sql_output).write_text(snapshot_sql(buckets, task=args.task, run_id=args.run_id, taken_at=taken_at, calls=args.calls,
+                                                 model=args.model),
                                      encoding="utf-8")
     return 0
 

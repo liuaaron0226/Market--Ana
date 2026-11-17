@@ -15,7 +15,8 @@
   <link rel="stylesheet" href="bold.css?v=20261116-desk50">
   <link rel="stylesheet" href="portfolio.css?v=20261117-bell1">
   <link rel="stylesheet" href="watch-judgments.css?v=20261116-e1">
-  <link rel="stylesheet" href="watch-push.css?v=20261117-bell1">
+  <link rel="stylesheet" href="watch-push.css?v=20261117-set1">
+  <link rel="stylesheet" href="settings.css?v=20261117-set1">
 </head>
 <body class="bd pf">
   <a class="skip-link" href="#portfolioMain">跳到自選股與庫存</a>
@@ -27,12 +28,9 @@
         <span>台股決策鏡</span>
       </div>
       <div class="pf-bar-end">
-        <!-- 到價推播的設定收在這顆鈴鐺後面（本人 2026-11-17：放在庫存底下奇怪又佔空間）；只有站主、推播可用時才出現，見 watch-push.js -->
-        <button class="pf-theme pf-bell" id="pushOpen" type="button" aria-haspopup="dialog" aria-controls="pushDialog" aria-label="到價推播設定" hidden>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 1.5h-15zM10 20.5a2.2 2.2 0 0 0 4 0" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        </button>
-        <button class="pf-theme" id="portfolioTheme" type="button" aria-label="改用深色主題">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.64 5.64l1.42 1.42m9.88 9.88 1.42 1.42m0-12.72-1.42 1.42M7.06 16.94l-1.42 1.42" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>
+        <!-- 設定（本人 2026-11-17 選樣品 A）：到價推播原本的鈴鐺與主題鍵都收進這顆齒輪，見 settings.js -->
+        <button class="pf-theme" id="settingsOpen" type="button" data-settings-open aria-label="設定" title="設定">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.3 3.5h3.4l.5 2.3 1.6.9 2.2-.8 1.7 2.9-1.7 1.6v1.8l1.7 1.6-1.7 2.9-2.2-.8-1.6.9-.5 2.3h-3.4l-.5-2.3-1.6-.9-2.2.8-1.7-2.9 1.7-1.6v-1.8L4.1 8.8l1.7-2.9 2.2.8 1.6-.9z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><circle cx="12" cy="12" r="2.6" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
         </button>
       </div>
     </header>
@@ -109,24 +107,16 @@
         <ol class="hv-rows" id="holdingRows"></ol>
       </section>
     </main>
-    <dialog class="wp-dialog" id="pushDialog" aria-labelledby="pushTitle">
-      <div class="wp-dialog-head">
-        <h2 id="pushTitle">到價推播</h2>
-        <button type="button" class="wp-close" data-dialog-close aria-label="關閉">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-        </button>
-      </div>
-      <div class="wp" id="pushPanel"></div>
-    </dialog>
   </div>
   <script src="watch-judgments.js?v=20261117-lock1" defer></script>
   <script src="scroll-lock.js?v=20261117-lock1" defer></script>
-  <script src="watch-push.js?v=20261117-bell1" defer></script>
+  <script src="watch-push.js?v=20261117-set1" defer></script>
   <script src="holdings-rows.js?v=20261116-desk44" defer></script>
   <script src="portfolio-list.js?v=20261116-desk44" defer></script>
   <script src="swipe-rows.js?v=20261116-desk44" defer></script>
-  <script src="portfolio.js?v=20261117-bell1" defer></script>
+  <script src="portfolio.js?v=20261117-set1" defer></script>
   <script src="chart-menus.js?v=20261116-desk44" defer></script>
   <script src="desk-tilt.js?v=20261117-tilt3" defer></script>
+  <script src="settings.js?v=20261117-set1" defer></script>
 </body>
 </html>
