@@ -91,6 +91,21 @@ class FundRowsTests(unittest.TestCase):
         self.assertFalse({"o", "h", "l", "v"} & history.keys())
 
 
+class FundSearchTests(unittest.TestCase):
+    """本機 live_server 的搜尋用同一組規則（和雲端 gate 的 SQL 相同）：代碼不分大小寫完全相同，或名稱／全名去掉空白後含打的字。"""
+
+    def test_name_part_class_or_code_ignoring_case_and_spaces(self) -> None:
+        for query in ["貝萊德", "世界科技", "A10", "a10", "BLKTENAU", "blktenau", "世界科技A10", " 總報酬穩定配息 "]:
+            items = fund_stock.search_items(query, as_of=DATA_DATE, loader=REAL)
+            self.assertEqual([(i["code"], i["name"], i["market"], i["security_type"], i["analysis_status"], i["data_date"],
+                               i["analysis_available"]) for i in items],
+                             [("BLKTENAU", "貝萊德世界科技 A10", "境外基金", "基金", "available", "2026-11-16", True)], query)
+
+    def test_stock_names_and_blank_find_no_fund(self) -> None:
+        for query in ["台積電", "2330", "", "   ", "BLKTEN"]:
+            self.assertEqual(fund_stock.search_items(query, as_of=DATA_DATE, loader=REAL), [], query)
+
+
 def staging_db() -> sqlite3.Connection:
     connection = sqlite3.connect(":memory:")
     connection.execute("PRAGMA foreign_keys = ON")

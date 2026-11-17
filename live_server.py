@@ -1488,13 +1488,14 @@ class Handler(SimpleHTTPRequestHandler):
             "items": [project_search_item(item, universe) for item in items],
             "next_cursor": next_cursor,
         }
-        # 本人 11-17：基金名稱也搜得到（只在第一頁、有符合才帶 funds 欄，和雲端 gate 相同）；本機沒有帳號，不分站主。
+        # 基金當成一般個股 03 票：基金是 items 裡的一般一筆（類別基金、市場境外基金），和雲端 gate 同一組比對規則；
+        # 本機沒有開關與帳號，一律看得到。基金只有一檔，只放在第一頁最後面，不佔股票的分頁。
         if int(cursor or 0) == 0:
             import fund_compare
+            import fund_stock
 
-            funds = fund_compare.search_funds(term)
-            if funds:
-                payload["funds"] = funds
+            payload["items"].extend(fund_stock.search_items(term, as_of=fund_compare.taipei_today(),
+                                                            source_date=LISTED_SOURCE_DATE))
         self._send_json(payload)
 
     def _universe(self) -> dict[str, Any] | None:
@@ -1659,9 +1660,49 @@ class Handler(SimpleHTTPRequestHandler):
             return
         self._send_json(json.loads(funds[code]))
 
+    def _fund_navs(self, code: str) -> tuple[dict[str, Any] | None, str]:
+        """基金（03 票）到今天為止的淨值與分析狀態；和每日建置同一個 fund_stock.fund_rows。"""
+        import fund_compare
+        import fund_stock
+
+        as_of = fund_compare.taipei_today()
+        rows, analyses, _ = fund_stock.fund_rows(as_of, codes=[code])
+        return (analyses[0]["payload"] if analyses else None), rows[0]["analysis_status"]
+
+    def _send_fund_analysis(self, code: str) -> None:
+        """GET /api/stocks/<基金代碼>/analysis：分析契約 v2 的 kind fund（和雲端 D1 裡的那一份同一個產生方式）。"""
+        try:
+            payload, status = self._fund_navs(code)
+        except Exception as error:  # 不把 stack trace 送到瀏覽器
+            print(f"fund analysis failed for {code}: {type(error).__name__}: {error}")
+            self._send_json({"error": "analysis-failed", "message": "分析暫時無法完成"}, 500)
+            return
+        if payload is None:
+            self._send_json({"code": code, "error": "insufficient-data", "analysis_status": status,
+                             "qa": {"blocking": True, "reason": "基金淨值資料不足"}}, 404)
+            return
+        self._send_json(payload)
+
+    def _send_stock_history(self, code: str) -> None:
+        """GET /api/stocks/<代號>/history：本機只有基金的淨值序列（03 票）；股票的 5 年長日線只在雲端，和以前一樣 404。"""
+        import fund_compare
+        import fund_stock
+
+        if code in fund_compare.FUNDS:
+            payloads = fund_stock.history_payloads(fund_compare.taipei_today())
+            if code in payloads:
+                self._send_json(payloads[code])
+                return
+        self._send_json({"error": "no-history", "message": "這檔目前沒有較長的歷史日線"}, 404)
+
     def _send_stock_analysis(self, path: str, query: str) -> None:
         """GET /api/stocks/{code}/analysis?as_of=YYYY-MM-DD：回個股分析契約 v2（每檔一筆，無方案）。"""
         code = path[len("/api/stocks/"):-len("/analysis")]
+        import fund_compare
+
+        if code in fund_compare.FUNDS:
+            self._send_fund_analysis(code)
+            return
         params = urllib.parse.parse_qs(query, keep_blank_values=True)
         as_of = (params.get("as_of") or ["9999-12-31"])[0]
         if "preset" in params:
@@ -1787,6 +1828,10 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if path.startswith("/api/stocks/") and path.endswith("/analysis"):
             self._send_stock_analysis(path, urllib.parse.urlsplit(self.path).query)
+            return
+        history_match = re.fullmatch(rf"/api/stocks/({stock_codes.CODE_PATTERN})/history", path)
+        if history_match:
+            self._send_stock_history(history_match.group(1))
             return
         if path.startswith("/api/stocks/") and path.endswith("/vs-0050"):
             self._send_vs_0050(path)

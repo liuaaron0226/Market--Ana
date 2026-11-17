@@ -96,6 +96,29 @@ def fund_rows(as_of: str, *, loader: Loader = fund_compare.load_history,
     return directory, analyses, failures
 
 
+def _squash(text: str) -> str:
+    return "".join(str(text).split()).upper()
+
+
+def search_items(term: str, *, as_of: str, loader: Loader = fund_compare.load_history,
+                 source_date: str | None = None) -> list[dict[str, Any]]:
+    """本機 live_server 的搜尋：和雲端 gate 的 SQL 同一組規則——代碼不分大小寫完全相同，或名稱／全名去掉空白後含打的字。
+    回傳和雲端搜尋 items 同形狀的列（類別「基金」、市場「境外基金」、沒有名次）。"""
+    needle = _squash(term)
+    if not needle:
+        return []
+    codes = [code for code, fund in sorted(fund_compare.FUNDS.items())
+             if code == needle or needle in _squash(fund["short_name"]) or needle in _squash(fund["name"])]
+    if not codes:
+        return []
+    rows, _, _ = fund_rows(as_of, loader=loader, codes=codes)
+    return [{"code": row["code"], "name": row["name"], "market": MARKET, "security_type": SECURITY_TYPE,
+             "latest_bar_date": row["latest_bar_date"], "available_bars": row["available_bars"],
+             "analysis_status": row["analysis_status"], "universe_rank": None, "universe_rule": None,
+             "data_date": row["latest_bar_date"], "analysis_available": row["analysis_status"] in ("available", "stale"),
+             "source_date": source_date} for row in rows]
+
+
 def fund_history(code: str, navs: Sequence[tuple[str, float]]) -> dict[str, Any]:
     """長日線（欄位式，和 cloud/build_stock_history.history_payload 同格式）；基金只有日期（d）與淨值（c）。"""
     return {"schema": HISTORY_SCHEMA, "code": code, "as_of": navs[-1][0],
