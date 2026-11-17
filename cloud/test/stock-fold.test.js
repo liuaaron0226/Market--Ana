@@ -109,6 +109,43 @@ test("加了別的比較股票：每一檔各一份，順序照傳進來的", ()
   assert.ok(stocks.every((stock) => stock.periods.length === 5));
 });
 
+// 基金當成一般個股 05 票：基金項目和股票同形狀，報酬是台幣含息；多一列「成立以來」（本人 11-17 選的期間），
+// 每個期間多一行「其中匯率影響 x.x 個百分點」（規格第 27 條）；名稱寫「基金」不寫「個股」。
+const FUND = {
+  code: "BLKTENAU", name: "貝萊德世界科技 A10", kind: "fund", status: "ok", dividends_included: true,
+  periods: [
+    { period: "1m", label: "近 1 個月", status: "ok", stock_return_pct: -16.7, benchmark_return_pct: -15.2, excess_pct: -1.5,
+      stock_max_drawdown_pct: -22.2, benchmark_max_drawdown_pct: -20.6, stock_native_return_pct: -19.2, fx_effect_pct: 2.5 },
+    { period: "5y", label: "近 5 年", status: "insufficient_history", reason: "listed_recently" },
+    { period: "since", label: "成立以來", status: "ok", stock_return_pct: 152.7, benchmark_return_pct: 265.7, excess_pct: -113.0,
+      stock_max_drawdown_pct: -30.1, benchmark_max_drawdown_pct: -25.0, stock_native_return_pct: 135.4, fx_effect_pct: -0.4 },
+  ],
+};
+
+test("基金：股票的五個期間之後多一顆「成立以來」，近 5 年不夠長寫資料不足", () => {
+  const [fund] = loadComparison()([FUND], BENCHMARK);
+  assert.deepEqual(fund.periods.map((period) => [period.key, period.label, period.short, period.gap]), [
+    ["1m", "近 1 個月", "近1月", "-1.5%"], ["3m", "近 3 個月", "近3月", "資料不足"], ["1y", "近 1 年", "近1年", "資料不足"],
+    ["3y", "近 3 年", "近3年", "資料不足"], ["5y", "近 5 年", "近5年", "資料不足"], ["since", "成立以來", "成立以來", "-113.0%"],
+  ]);
+});
+
+test("基金的每個期間多一行匯率影響，報酬與回撤寫「基金」", () => {
+  const [fund] = loadComparison()([FUND], BENCHMARK);
+  assert.deepEqual(fund.periods[0].facts, [
+    ["基金報酬（台幣）", "-16.7%"], ["0050 報酬", "-15.2%"], ["基金最大回撤", "-22.2%"], ["0050 最大回撤", "-20.6%"],
+    ["其中匯率影響", "+2.5 個百分點"],
+  ]);
+  assert.deepEqual(fund.periods[5].facts.at(-1), ["其中匯率影響", "-0.4 個百分點"]);
+  assert.deepEqual(fund.periods[1].facts.map(([title, text]) => [title, text]).at(-1), ["其中匯率影響", "—"]);
+});
+
+test("股票和基金一起比：股票還是五顆鍵，基金六顆", () => {
+  const stocks = loadComparison()([TSMC, FUND], BENCHMARK);
+  assert.deepEqual(stocks.map((stock) => stock.periods.length), [5, 6]);
+  assert.equal(stocks[0].periods[0].facts.length, 4);
+});
+
 // ---- 頁面的結構 ----
 const html = read("web/stock.html").replace(/<!--[\s\S]*?-->/g, "");
 const between = (startMark, endMark) => html.slice(html.indexOf(startMark), html.indexOf(endMark, html.indexOf(startMark)));

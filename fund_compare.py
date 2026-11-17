@@ -1,9 +1,10 @@
 """基金對照 0050（2026-11-17 本人定案）：貝萊德世界科技 A10 美元（總報酬穩定配息）含息再投入，換成台幣和 0050 比。
 
 本人定案（owner 轉述，記在 ANALYSIS_PLAN）：
-- 唯讀比較：不進庫存、不算損益、不存進使用者清單；自選股頁有一個固定的比較入口。
+- 【已被 11-18 更正取代】唯讀比較、固定入口——本人 11-18：基金當成一般個股（.scratch/fund-as-stock/spec.md）；
+  比較改成資料包裡和股票同形狀的一筆（``compare_item``，05 票），期間＝股票的五個＋成立以來。
 - 台幣含匯率（淨值 × 央行當天新臺幣對美元收盤匯率），另寫匯率影響幾個百分點。
-- 期間：近 1 個月、3 個月、1 年、3 年＋成立以來（集保淨值從 2022-12-01 起）。
+- 期間：近 1 個月、3 個月、1 年、3 年＋成立以來（集保淨值從 2022-12-01 起）；05 票起另有近 5 年（不夠長＝資料不足）。
 - 配息再投入：除息日用當天（已除息）淨值買回同一檔，不計手續費與稅；
   0050 照 ``benchmark_compare`` 既有含息算法（除息日收盤再投入）。
 
@@ -373,18 +374,15 @@ def load_history(code: str, *, raw_dir: Path = RAW_DIR, seed_dir: Path = SEED_DI
     return {"navs": navs, "distributions": dists, "fx": fx, "issues": issues}
 
 
-# ---- 和 0050 對照 ----
+# ---- 比較（基金當成一般個股 05 票）----
+# 基金在比較資料包裡是和股票同形狀的一筆（benchmark_compare.Loader.item 的欄位、同一個 period_rows），
+# 報酬是台幣、含息再投入；另帶基金專屬欄位：kind／currency、每個期間的原幣報酬與匯率影響、「成立以來」一列（本人 11-17 選的期間）。
+# 舊的 fund-vs-0050/v1 整頁形狀（含配息摘要，06 票改由「配息」分類提供）與 /api/funds/<代碼>/vs-0050 退場。
 
-SCHEMA = "fund-vs-0050/v1"
-PERIODS: tuple[tuple[str, str, int | None], ...] = (
-    ("1m", "近 1 個月", 1), ("3m", "近 3 個月", 3), ("1y", "近 1 年", 12), ("3y", "近 3 年", 36), ("since", "成立以來", None),
-)
 NOTES = (
-    "基金淨值換成台幣：每天淨值 × 央行當天新臺幣對美元收盤匯率（台灣休市日用前一個營業日）；「匯率影響」＝台幣報酬−美元報酬。",
+    "基金淨值換成台幣：每天淨值 × 央行當天新臺幣對美元收盤匯率（台灣休市日用前一個營業日）；「匯率影響」＝台幣報酬−原幣報酬。",
     "配息再投入：除息日用當天淨值買回同一檔，不計申購手續費與稅；0050 用本站既有算法（除息日收盤價再投入）。",
-    "兩邊的管理費都已內含在淨值裡。基金淨值通常比 0050 晚幾天公布，兩邊都比到雙方都有資料的同一天。",
-    "成立以來從集保有淨值的第一天（2022-12-01）算起；級別成立日是 2022-10-26。過去表現不代表未來。",
-    "資料來源：集保結算所基金資訊觀測站與開放資料、中央銀行（政府資料開放授權條款第 1 版）、臺灣證券交易所。",
+    "基金淨值通常比 0050 晚幾天公布，兩邊都比到雙方都有資料的同一天。成立以來從集保有淨值的第一天算起。",
 )
 
 
@@ -392,100 +390,71 @@ def _upto(series: Sequence[tuple[str, float]], end: str) -> list[tuple[str, floa
     return [point for point in series if point[0] <= end]
 
 
-def _capital_summary(dists: Sequence[Mapping[str, Any]]) -> tuple[list[dict[str, Any]], str]:
-    years: dict[str, dict[str, Any]] = {}
-    for row in dists:
-        year = years.setdefault(row["ex_date"][:4], {"year": row["ex_date"][:4], "count": 0, "known": 0,
-                                                     "all_capital": 0, "some_capital": 0})
-        year["count"] += 1
-        capital = row.get("capital_pct")
-        if capital is not None:
-            year["known"] += 1
-            year["all_capital"] += capital >= 99.995
-            year["some_capital"] += capital > 0
-    by_year = [years[y] for y in sorted(years)]
-    parts = []
-    for y in by_year:
-        if y["some_capital"]:
-            parts.append(f"{y['year']} 年 {y['count']} 次配息全部來自本金" if y["all_capital"] == y["count"]
-                         else f"{y['year']} 年 {y['count']} 次配息中 {y['all_capital']} 次全部來自本金")
-    known = [row for row in dists if row.get("capital_pct") is not None]
-    since = None
-    for row in reversed(known):
-        if row["capital_pct"] > 0:
-            break
-        since = row["ex_date"]
-    if since and since != (known[0]["ex_date"] if known else None):
-        parts.append(f"{int(since[:4])} 年 {int(since[5:7])} 月起公布的配息都來自可分配淨利益")
-    note = "這檔配息可能來自本金" + (f"：{'；'.join(parts)}。" if parts else "。")
-    return by_year, note
-
-
-def fund_payload(code: str, *, navs: Sequence[tuple[str, float]], distributions: Sequence[Mapping[str, Any]],
-                 fx: Sequence[tuple[str, float]], benchmark: Sequence[tuple[str, float]], benchmark_date: str,
+def compare_item(code: str, *, navs: Sequence[tuple[str, float]], distributions: Sequence[Mapping[str, Any]],
+                 fx: Sequence[tuple[str, float]], benchmark: Sequence[tuple[str, float]],
                  issues: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    """基金（含息、台幣）和 0050（含息）同一期初、同一截止日的對照；benchmark 是 0050 的含息總報酬序列。"""
+    """基金（含息、台幣）和 0050（含息）同一期初、同一截止日（雙方都有資料的最後一天）的比較項目。
+
+    ``benchmark`` 是 0050 的含息總報酬序列（benchmark_compare.Loader.series）。"""
     import benchmark_compare as bc
 
+    fund = FUNDS[code]
     usd_all = total_return_series(navs, distributions)
     twd_all = to_twd(usd_all, fx)
-    end = min(twd_all[-1][0], benchmark_date) if twd_all else benchmark_date
-    usd, twd, bench = _upto(usd_all, end), _upto(twd_all, end), _upto(benchmark, end)
-    periods = []
-    for key, label, months in PERIODS:
-        base = {"period": key, "label": label}
-        found = (twd[0][0], twd) if (months is None and twd) else (bc._period_window(twd, end, months) if months else None)
-        if found is None:
-            periods.append({**base, "status": "insufficient_history", "reason": "since_launch"})
-            continue
-        start, window = found
-        usd_first = bc._value_on_or_before(usd, start)
+    end = min(twd_all[-1][0], benchmark[-1][0]) if twd_all and benchmark else None
+    usd, twd, bench = (_upto(usd_all, end), _upto(twd_all, end), _upto(benchmark, end)) if end else ([], [], [])
+    periods = bc.period_rows(twd, bench, end, fund["class_launch"]) if end else [
+        {"period": key, "label": label, "status": "insufficient_history", "reason": "history_not_loaded"}
+        for key, label, _ in bc.PERIODS]
+    if twd:
+        start = twd[0][0]
         bench_first = bc._value_on_or_before(bench, start)
-        if usd_first is None or bench_first is None:
+        bench_window = bc._window(bench, bench_first[0]) if bench_first else []
+        base = {"period": "since", "label": "成立以來"}
+        if bench_window:
+            stock_ret, bench_ret = bc._return_pct(twd[0][1], twd[-1][1]), bc._return_pct(bench_window[0][1], bench_window[-1][1])
+            periods.append({**base, "status": "ok", "from": start, "to": twd[-1][0],
+                            "stock_return_pct": stock_ret, "benchmark_return_pct": bench_ret,
+                            "excess_pct": round(stock_ret - bench_ret, 1),
+                            "stock_max_drawdown_pct": bc._max_drawdown_pct(twd),
+                            "benchmark_max_drawdown_pct": bc._max_drawdown_pct(bench_window)})
+        else:
             periods.append({**base, "status": "insufficient_history", "reason": "benchmark_not_loaded"})
-            continue
-        bench_window = bc._window(bench, bench_first[0])
-        fund_ret = bc._return_pct(window[0][1], window[-1][1])
-        usd_ret = bc._return_pct(usd_first[1], usd[-1][1])
-        bench_ret = bc._return_pct(bench_window[0][1], bench_window[-1][1])
-        periods.append({**base, "status": "ok", "from": start, "to": window[-1][0],
-                        "fund_return_pct": fund_ret, "fund_usd_return_pct": usd_ret,
-                        "fx_effect_pct": round(fund_ret - usd_ret, 1),
-                        "benchmark_return_pct": bench_ret, "excess_pct": round(fund_ret - bench_ret, 1),
-                        "fund_max_drawdown_pct": bc._max_drawdown_pct(window),
-                        "benchmark_max_drawdown_pct": bc._max_drawdown_pct(bench_window)})
+    for row in periods:
+        if row["status"] == "ok":
+            native_first = bc._value_on_or_before(usd, row["from"])
+            native = bc._return_pct(native_first[1], usd[-1][1])
+            row["stock_native_return_pct"] = native
+            row["fx_effect_pct"] = round(row["stock_return_pct"] - native, 1)
     chart_from, chart = bc.chart_points(twd, twd[0][0]) if twd else (None, [])
     bench_start = bc._value_on_or_before(bench, chart_from) if chart_from else None
     _, bench_chart = bc.chart_points(bench, bench_start[0]) if bench_start else (None, [])
-    by_year, note = _capital_summary(distributions)
-    last_nav = _upto(navs, end)[-1] if navs else None
-    last_fx = bc._value_on_or_before(fx, end) if fx else None
-    latest_dist = distributions[-1] if distributions else None
-    return {
-        "schema": SCHEMA, "fund": dict(FUNDS[code]), "basis": "含息總報酬（台幣），期初＝1",
-        "data_date": end, "fund_nav_date": navs[-1][0] if navs else None, "benchmark_date": benchmark_date,
-        "latest": {"nav": last_nav[1] if last_nav else None, "nav_date": last_nav[0] if last_nav else None,
-                   "fx": last_fx[1] if last_fx else None, "fx_date": last_fx[0] if last_fx else None},
-        "periods": periods, "chart_from": chart_from, "chart": chart, "benchmark_chart": bench_chart,
-        "distributions": {"count": len(distributions), "by_year": by_year,
-                          "latest": {"ex_date": latest_dist["ex_date"], "amount": latest_dist["amount"]} if latest_dist else None},
-        "capital_note": note, "issues": [dict(i) for i in issues], "notes": list(NOTES),
-    }
+    return {"code": code, "name": fund["short_name"], "market": "境外基金", "kind": "fund", "currency": fund["currency"],
+            "status": "ok", "dividends_included": True, "dividend_source": "TDCC 境外基金配息",
+            "listed_date": fund["class_launch"],
+            "history": {"from": twd[0][0] if twd else None, "to": twd[-1][0] if twd else None, "points": len(twd)},
+            "nav_date": navs[-1][0] if navs else None,
+            "periods": periods, "chart_from": chart_from, "chart": chart, "benchmark_chart": bench_chart,
+            "issues": [dict(i) for i in issues], "notes": list(NOTES)}
 
 
-def precompute(loader, end: str, *, as_of: str, raw_dir: Path = RAW_DIR,
-               seed_dir: Path = SEED_DIR) -> tuple[dict[str, str], dict[str, str]]:
-    """build_compare_pack 用：{代碼: 預算好的 JSON 字串}，以及資料不齊而沒出的那幾檔與原因。
+def precompute(loader, end: str, *, as_of: str, raw_dir: Path | None = None, seed_dir: Path | None = None,
+               codes: Sequence[str] | None = None) -> tuple[dict[str, str], dict[str, str]]:
+    """build_compare_pack（和本機 live_server）用：{代碼: 預算好的比較項目 JSON 字串}，以及資料不齊而沒出的那幾檔與原因。
 
-    loader 是 benchmark_compare.Loader（0050 含息序列只用它，和個股頁對照同一套）；end 是資料包的資料日。"""
+    loader 是 benchmark_compare.Loader（0050 含息序列只用它，和個股比較同一套）；end 是資料包的資料日。
+    raw_dir／seed_dir 沒給就用呼叫當下的 RAW_DIR／SEED_DIR。"""
+    raw_dir = RAW_DIR if raw_dir is None else raw_dir
+    seed_dir = SEED_DIR if seed_dir is None else seed_dir
+    wanted = list(FUNDS) if codes is None else [code for code in codes if code in FUNDS]
     funds: dict[str, str] = {}
+    if not wanted:
+        return {}, {}
     bench, _, _ = loader.series("0050", end)
     if not bench:
-        return {}, {code: "沒有 0050 資料" for code in FUNDS}
-    # 和個股對照同一個檢查：0050 的除息表要涵蓋到資料日，否則數字照出、頁面提醒
-    bench_issues = [] if loader.dividends_included("上市", bench, "0050") else [{"kind": "benchmark-dividends-incomplete"}]
+        return {}, {code: "沒有 0050 資料" for code in wanted}
     problems: dict[str, str] = {}
-    for code in FUNDS:
+    for code in wanted:
         try:
             history = load_history(code, raw_dir=raw_dir, seed_dir=seed_dir, as_of=as_of)
         except (OSError, ValueError, KeyError) as error:
@@ -494,10 +463,12 @@ def precompute(loader, end: str, *, as_of: str, raw_dir: Path = RAW_DIR,
         if not history["fx"]:
             problems[code] = "沒有匯率資料"
             continue
-        payload = fund_payload(code, navs=history["navs"], distributions=history["distributions"], fx=history["fx"],
-                               benchmark=bench, benchmark_date=bench[-1][0],
-                               issues=[*(i for i in history["issues"] if i["kind"] != "fx-missing"), *bench_issues])
-        funds[code] = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        if not history["navs"]:
+            problems[code] = "沒有淨值資料"
+            continue
+        item = compare_item(code, navs=history["navs"], distributions=history["distributions"], fx=history["fx"],
+                            benchmark=bench, issues=[i for i in history["issues"] if i["kind"] != "fx-missing"])
+        funds[code] = json.dumps(item, ensure_ascii=False, separators=(",", ":"))
     return funds, problems
 
 

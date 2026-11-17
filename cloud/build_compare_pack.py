@@ -51,7 +51,8 @@ def build_pack(universe_path: Path) -> dict[str, Any]:
         detail = live_server.outside_universe_payload(security.code, security, state)
         outside[security.code] = _dump({k: v for k, v in detail.items() if k not in ("error", "code")})
 
-    # 基金對照 0050（2026-11-17 本人定案）：和個股對照同一個 Loader 的 0050 含息序列。資料不齊就不出那檔，不擋整個資料包。
+    # 基金當成一般個股 05 票（本人 11-18）：基金是 items 裡和股票同形狀的一筆（台幣、含息再投入，另帶匯率影響），
+    # 和個股同一個 Loader 的 0050 含息序列。資料不齊就不出那檔，不擋整個資料包。原本的 funds 欄退場。
     try:
         funds, problems = fund_compare.precompute(loader, end, as_of=fund_compare.taipei_today())
     except Exception as error:  # noqa: BLE001 —— 基金資料壞掉不能讓個股對照跟著停
@@ -65,12 +66,15 @@ def build_pack(universe_path: Path) -> dict[str, Any]:
         "max_codes": pre["max_codes"],
         "notes": pre["notes"],
         "benchmark": pre["benchmark"],
-        "items": pre["items"],
+        "items": {**pre["items"], **funds},
         "outside": outside,
-        "funds": funds,
     }
     pack["pack_sha256"] = hashlib.sha256(_dump(pack).encode("utf-8")).hexdigest()
     return pack
+
+
+def funds_in(pack: dict[str, Any]) -> list[str]:
+    return [code for code, text in pack["items"].items() if json.loads(text).get("kind") == "fund"]
 
 
 def main() -> int:
@@ -85,7 +89,7 @@ def main() -> int:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(text, encoding="utf-8")
     print(_dump({"out": args.out.name, "bytes": len(text.encode("utf-8")), "data_date": pack["data_date"],
-                 "items": len(pack["items"]), "outside": len(pack["outside"]), "funds": sorted(pack["funds"]),
+                 "items": len(pack["items"]), "outside": len(pack["outside"]), "funds": sorted(funds_in(pack)),
                  "pack_sha256": pack["pack_sha256"]}))
     return 0
 

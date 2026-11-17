@@ -1574,11 +1574,20 @@ class Handler(SimpleHTTPRequestHandler):
 
     # B1／UI-2a：和 0050 比（含息報酬）。提供大量普通股、核心持有與同日大量 ETF 名單。
     # 資料日＝母體快照的資料日（與個股分析、選股同一天），不是行情庫最新一天。
-    def _compare_resolver(self, universe: dict[str, Any] | None):
+    # 基金當成一般個股 05 票：名錄裡的基金回和雲端資料包同一個比較項目（fund_compare.precompute）；本機沒有開關，一律看得到。
+    def _compare_resolver(self, universe: dict[str, Any] | None, loader: Any, end: str):
+        import fund_compare
+
         etfs = ({str(item["code"]): item for item in universe["universe"].get("etf_members", ())}
                 if universe is not None else {})
 
         def resolve(code: str) -> tuple[str, Any]:
+            if code in fund_compare.FUNDS:
+                funds, problems = fund_compare.precompute(loader, end, as_of=fund_compare.taipei_today(), codes=[code])
+                if code in funds:
+                    return "item", json.loads(funds[code])
+                print(f"fund compare unavailable for {code}: {problems.get(code)}")
+                return "not-found", {"message": "這檔基金今天的比較資料還沒準備好"}
             security = lookup_security(code)
             in_universe = universe is None or code in universe["members"] or code in universe["core"] or code in etfs
             if in_universe and (security is not None or code == "0050" or code in etfs):
@@ -1606,7 +1615,13 @@ class Handler(SimpleHTTPRequestHandler):
             self._send_json({"error": "bad-request", "message": "代號格式不正確"}, 400)
             return
         universe = self._universe()
-        kind, detail = self._compare_resolver(universe)(code)
+        loader, end = benchmark_compare.Loader(), self._compare_end(universe)
+        try:
+            kind, detail = self._compare_resolver(universe, loader, end)(code)
+        except Exception as error:  # 不把 stack trace 送到瀏覽器
+            print(f"vs-0050 failed for {code}: {type(error).__name__}: {error}")
+            self._send_json({"error": "compare-failed", "message": "對照暫時無法計算"}, 500)
+            return
         if kind == "not-found":
             self._send_json({"error": "not-found", "code": code, **detail}, 404)
             return
@@ -1614,7 +1629,8 @@ class Handler(SimpleHTTPRequestHandler):
             self._send_json({"error": "outside-universe", "code": code, **detail}, 404)
             return
         try:
-            payload = benchmark_compare.single_payload(benchmark_compare.Loader(), code, self._compare_end(universe), detail)
+            payload = benchmark_compare.single_payload(loader, code, end, None if kind == "item" else detail,
+                                                       item=detail if kind == "item" else None)
         except Exception as error:  # 不把 stack trace 送到瀏覽器
             print(f"vs-0050 failed for {code}: {type(error).__name__}: {error}")
             self._send_json({"error": "compare-failed", "message": "對照暫時無法計算"}, 500)
@@ -1631,34 +1647,13 @@ class Handler(SimpleHTTPRequestHandler):
             return
         universe = self._universe()
         try:
-            payload = benchmark_compare.multi_payload(benchmark_compare.Loader(), codes, self._compare_end(universe),
-                                                      self._compare_resolver(universe))
+            loader, end = benchmark_compare.Loader(), self._compare_end(universe)
+            payload = benchmark_compare.multi_payload(loader, codes, end, self._compare_resolver(universe, loader, end))
         except Exception as error:  # 不把 stack trace 送到瀏覽器
             print(f"compare-0050 failed: {type(error).__name__}: {error}")
             self._send_json({"error": "compare-failed", "message": "對照暫時無法計算"}, 500)
             return
         self._send_json(payload)
-
-    def _send_fund_vs_0050(self, path: str) -> None:
-        """GET /api/funds/{集保基金代碼}/vs-0050：和雲端同一份（fund_compare.precompute），資料不齊回 404。"""
-        import benchmark_compare
-        import fund_compare
-
-        code = path[len("/api/funds/"):-len("/vs-0050")]
-        if not stock_codes.is_code(code):
-            self._send_json({"error": "bad-request", "message": "基金代碼格式不正確"}, 400)
-            return
-        try:
-            funds, _ = fund_compare.precompute(benchmark_compare.Loader(), self._compare_end(self._universe()),
-                                               as_of=fund_compare.taipei_today())
-        except Exception as error:  # 不把 stack trace 送到瀏覽器
-            print(f"fund vs-0050 failed for {code}: {type(error).__name__}: {error}")
-            self._send_json({"error": "compare-failed", "message": "對照暫時無法計算"}, 500)
-            return
-        if code not in funds:
-            self._send_json({"error": "fund-unavailable", "message": "這檔基金今天的對照資料還沒準備好"}, 404)
-            return
-        self._send_json(json.loads(funds[code]))
 
     def _send_fund_analysis(self, code: str, as_of: str) -> None:
         """GET /api/stocks/<基金代碼>/analysis：分析契約 v2 的 kind fund，和每日建置同一個 fund_stock.fund_rows。
@@ -1834,9 +1829,6 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if path == "/api/compare-0050":
             self._send_compare_0050(urllib.parse.urlsplit(self.path).query)
-            return
-        if path.startswith("/api/funds/") and path.endswith("/vs-0050"):
-            self._send_fund_vs_0050(path)
             return
         if path == "/api/candidates":
             self._send_candidates(urllib.parse.urlsplit(self.path).query)

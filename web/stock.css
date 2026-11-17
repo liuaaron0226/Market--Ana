@@ -321,6 +321,12 @@
 .cmp-facts div { padding: 10px 8px 0 0; }
 .cmp-facts dt { font-size: 12px; color: var(--faint); }
 .cmp-facts dd { margin: 4px 0 0; font: 500 16px var(--mono); font-variant-numeric: tabular-nums; color: var(--ink); }
+/* 基金（05 票）：「其中匯率影響」自己一整行，單位用一般字；多一顆「成立以來」共六顆鍵，手機寬度下字縮一號、不折行 */
+.cmp-facts .cmp-fx { grid-column: 1 / -1; }
+.cmp-facts .cmp-fx dd small { margin-left: 4px; font: 400 12px var(--sans); color: var(--dim); }
+#comparePeriods .key-strip .cell-name b { white-space: nowrap; }
+#comparePeriods .key-strip:has(> .cell:nth-of-type(6)) .cell-name { font-size: 11px; white-space: nowrap; }
+#comparePeriods .key-strip:has(> .cell:nth-of-type(6)) .cell-name b { font-size: 11px; letter-spacing: -.02em; }
 @media (max-width: 520px) { .cmp-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 4px; } }
 
 .bd-compare-chart-block { position: relative; margin-top: 24px; }
