@@ -26,7 +26,7 @@
   const $ = id => document.getElementById(id);
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
   const isMobile = () => matchMedia('(max-width: 760px)').matches;
-  // 收復／防守改由 K 線軸上價籤顯示線與數字（unslop 11-09），左側不再留浮鈕欄。
+  // 收復／防守的線畫在 K 線上，名稱與數字在收復線／防守線鍵（本人 11-17 起右側價格欄不掛它們的價籤），左側不再留浮鈕欄。
   const marketLabelRail = () => 4;
   const outcomeLabels = {
     stand_back: '站回收復線',
@@ -413,11 +413,13 @@
     return dailyWithLive();
   }
 
+  // 收復線、防守線只畫線、右側價格欄不掛價籤（tag:false；本人 11-17：右側只放簡單的數字）。
+  // 名稱與數字由圖表上的收復線／防守線鍵標示（桌面在圖左上角當圖例、手機在圖下方），顏色和線相同。
   function overlays() {
     if (linesHidden()) return [];
     return [
-      { value: UPPER, label: '收復線', short: '收復', color: css('--gold', '#d9a94b'), pos: 'above' },
-      { value: LOWER, label: '防守線', short: '防守', color: css('--down', '#2fd09a'), pos: 'below' }
+      { value: UPPER, label: '收復線', short: '收復', color: css('--gold', '#d9a94b'), pos: 'above', tag: false },
+      { value: LOWER, label: '防守線', short: '防守', color: css('--down', '#2fd09a'), pos: 'below', tag: false }
     ];
   }
 
@@ -562,7 +564,7 @@
     instance.opts.liveLast = liveLast;
     instance.showMacd = period !== 'daily' && !isMobile();
     const desiredCount = period === 'monthly' ? 60 : period === 'weekly' ? 70 : period === 'h60' ? 80 : isMinutePeriod(period) ? Math.min(candles.length, 120) : 70;
-    // 右側價格欄寬：軸上價籤模式（收復／防守／收盤）約 78～100px，取已畫過的實際值；第一次畫之前用 100 保守估。
+    // 右側價格欄寬：軸上價籤模式（收盤與預測線）約 78～100px，取已畫過的實際值；第一次畫之前用 100 保守估。
     const priceRail = instance.geo ? Math.max(64, instance.canvas.clientWidth - instance.geo.l - instance.geo.pw) : 100;
     const plotWidth = Math.max(0, els.chartStage.clientWidth - marketLabelRail() - priceRail);
     const touchSafeCount = Math.max(10, Math.floor(plotWidth / 44));

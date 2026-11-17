@@ -3,7 +3,8 @@
    並把那一天的開高低收標在右側價格欄、日期標在時間軸（本人 11-15；不再有浮窗）。
    有畫線時：點線選取、拖已選取的線移動（拖端點把手只動那一端）、Delete 刪除、Esc 取消選取或放下工具；
    文字標註再點一下（或 Enter）打開輸入框修改內容。
-   資料：candles=[{t,label,open,high,low,close,amount}] 由舊到新。overlays 可放判斷線。
+   資料：candles=[{t,label,open,high,low,close,amount}] 由舊到新。overlays 可放判斷線；
+   軸上價籤模式（overlayLabels:'tags'）下，判斷線帶 tag:false 就只畫線、右側價格欄不掛它的價籤。
    畫線（選用）：頁面先載入 chart-drawings.js 並傳 opts.drawings={onChange,onTool,onSelect}，
    再用 setTool／setDrawings／setUnsavedDrawings／deleteSelectedDrawing／cancelDrawing 操作。 */
 (function () {
@@ -323,12 +324,14 @@
       const requestedLeft = typeof this.opts.leftRail === 'function' ? this.opts.leftRail(W) : this.opts.leftRail;
       const l = Math.max(4, Number.isFinite(Number(requestedLeft)) ? Math.round(Number(requestedLeft)) : 4);
       const tags = this.opts.overlayLabels === 'tags';
+      // 右側要掛價籤的判斷線（本人 11-17：右側只放簡單的數字；帶 tag:false 的只畫線，名稱與數字由頁面另外標）。
+      const tagged = this.overlays.filter(o => o.tag !== false);
       // 價籤寬度：五位數或帶兩位小數（例如 128.5、28.35）都要加寬，避免文字擠到短名上。
-      const tagWide = tags && this.overlays.concat(this.candles.slice(-1)).some(o => {
+      const tagWide = tags && tagged.concat(this.candles.slice(-1)).some(o => {
         const v = o.value ?? o.close; return v >= 10000 || (v < 1000 && fmtTag(v).length >= 6);
       });
       // 短名有三個字（預測帳本的「五日線」「缺口上」）而且數字是五位數：手機寬度再加寬一點，數字的第一位才不會被短名蓋住
-      const tagLong = tagWide && W < 520 && this.overlays.some(o => (o.short || '').length >= 3);
+      const tagLong = tagWide && W < 520 && tagged.some(o => (o.short || '').length >= 3);
       const r = tags ? (W < 520 ? (tagWide ? 84 : 66) : (tagWide ? 100 : 78)) + (tagLong ? 12 : 0) : stacked ? (compactStacked ? compactRail : 176) : 64, t = 10, b = 22, macdH = this.showMacd ? Math.round(H * .24) : 0, gapH = this.showMacd ? 10 : 0;
       const pw = W - l - r, ph = H - t - b - macdH - gapH;
       const start = this.view.end - this.view.count, end = this.view.end, step = pw / this.view.count;
@@ -360,7 +363,7 @@
       if (tags) {
         // 收盤也當成一枚價籤一起排序：先由上往下確保間距，再由下往上收回界內，順序永遠跟價位一致。
         const lc = this.view.end === n && hasPrice(this.candles[n - 1]) ? this.candles[n - 1].close : null;
-        const items = this.overlays.map(o => ({ o, value: o.value }));
+        const items = tagged.map(o => ({ o, value: o.value }));
         if (lc !== null) items.push({ o: null, value: lc, close: true });
         items.sort((a2, b2) => b2.value - a2.value);
         const top0 = t + tagH / 2, bot = t + ph - tagH / 2;
@@ -405,14 +408,18 @@
       const sortedOv = [...this.overlays].sort((a, b2) => b2.value - a.value);
       if (tags) {
         const boxes = [];
-        tagSlots.filter(g => !g.close).forEach(({ o, yy, slot }) => {
-          const col = o.color || css('--gold');
-          // 整條淡細實線＋右端一小段實色錨點
-          // strong：要特別看出來的那一條（例如自選股關注「已到」的觸發線）畫成較粗的實線。
-          x.strokeStyle = col; x.lineWidth = o.strong ? 2 : 1; x.globalAlpha = o.strong ? .9 : .38;
+        // 整條淡細實線＋右端一小段實色錨點；掛不掛價籤都一樣畫。
+        // strong：要特別看出來的那一條（例如自選股關注「已到」的觸發線）畫成較粗的實線。
+        const drawLine = (o, yy) => {
+          x.strokeStyle = o.color || css('--gold'); x.lineWidth = o.strong ? 2 : 1; x.globalAlpha = o.strong ? .9 : .38;
           x.beginPath(); x.moveTo(l, Math.round(yy) + .5); x.lineTo(l + pw, Math.round(yy) + .5); x.stroke();
           x.globalAlpha = 1; x.lineWidth = 2;
           x.beginPath(); x.moveTo(l + pw - 20, Math.round(yy) + .5); x.lineTo(l + pw, Math.round(yy) + .5); x.stroke();
+        };
+        this.overlays.filter(o => o.tag === false).forEach(o => drawLine(o, y(o.value)));
+        tagSlots.filter(g => !g.close).forEach(({ o, yy, slot }) => {
+          const col = o.color || css('--gold');
+          drawLine(o, yy);
           // 標籤被擠開時，才畫一小段折線接回
           if (Math.abs(slot - yy) > 1) {
             x.lineWidth = 1; x.beginPath(); x.moveTo(l + pw, yy); x.lineTo(l + pw + 2, yy); x.lineTo(tagX, slot); x.stroke();
