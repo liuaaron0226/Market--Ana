@@ -47,22 +47,33 @@ function fugleUrl(kind, code) {
   return url;
 }
 
-function marketWindow(nowMs) {
+const OPEN_MINUTES = 9 * 60;
+const CLOSE_MINUTES = 13 * 60 + 30;
+
+// 台北時間的星期與分鐘（台灣沒有日光節約，固定 UTC+8）。
+function taipeiClock(nowMs) {
   const local = new Date(nowMs + 8 * 60 * 60 * 1000);
-  const weekday = local.getUTCDay();
-  const minutes = local.getUTCHours() * 60 + local.getUTCMinutes();
-  return weekday >= 1 && weekday <= 5 && minutes >= 9 * 60 && minutes < 13 * 60 + 30;
+  return { weekday: local.getUTCDay(), minutes: local.getUTCHours() * 60 + local.getUTCMinutes() };
+}
+const isWeekday = ({ weekday }) => weekday >= 1 && weekday <= 5;
+
+function marketWindow(nowMs) {
+  const clock = taipeiClock(nowMs);
+  return isWeekday(clock) && clock.minutes >= OPEN_MINUTES && clock.minutes < CLOSE_MINUTES;
 }
 
 function taipeiDate(nowMs) {
   return taipeiIso(nowMs)?.slice(0, 10) || null;
 }
 
-function marketSessionStarted(nowMs) {
-  const local = new Date(nowMs + 8 * 60 * 60 * 1000);
-  const weekday = local.getUTCDay();
-  const minutes = local.getUTCHours() * 60 + local.getUTCMinutes();
-  return weekday >= 1 && weekday <= 5 && minutes >= 9 * 60;
+// 收盤後（交易日 13:30 以後）：收盤價定了，抓到今天的收盤就不再隨請求重打上游。
+function afterCloseToday(nowMs) {
+  const clock = taipeiClock(nowMs);
+  return isWeekday(clock) && clock.minutes >= CLOSE_MINUTES;
+}
+
+function sessionCloseMs(nowMs) {
+  return Date.parse(`${taipeiDate(nowMs)}T13:30:00+08:00`);
 }
 
 function parseQuote(payload, code, market) {
@@ -163,6 +174,8 @@ export function createLiveQuoteService({ fetchImpl = fetch, now = Date.now,
     state.failures = 0;
     state.retryAt = 0;
     state.error = null;
+    // 收盤後抓的是收盤報價，不是盤中取樣，不加進分時點。
+    if (afterCloseToday(nowMs)) return;
     if (state.lastChartAt === 0 || nowMs - state.lastChartAt >= sampleIntervalMs) {
       const cumulative = quote.volume_shares;
       const volumeDelta = cumulative !== null && state.lastCumulativeVolume !== null
@@ -221,9 +234,20 @@ export function createLiveQuoteService({ fetchImpl = fetch, now = Date.now,
     state.provider = "fugle";
   }
 
-  async function fetchFugle(code, market, state, nowMs, key) {
-    const shouldQuote = state.lastAttempt === 0 || nowMs - state.lastAttempt >= fugleQuoteIntervalMs;
-    const shouldCandles = state.lastFugleCandlesAt === 0 || nowMs - state.lastFugleCandlesAt >= fugleCandleIntervalMs;
+  const quoteDue = (state, nowMs, interval) => state.lastAttempt === 0 || nowMs - state.lastAttempt >= interval;
+  const fugleCandlesDue = (state, nowMs) => state.lastFugleCandlesAt === 0 || nowMs - state.lastFugleCandlesAt >= fugleCandleIntervalMs;
+
+  // 收盤後手上這一筆是不是今天的收盤：13:30 之後抓的，而且成交時間到 13:30（收盤集合競價撮合）、
+  // 或報價本來就是前一個交易日（今天休市）、或已經是 13:31 以後才抓的（沒有收盤撮合的冷門股，最後成交就是收盤）。
+  // 13:30 剛過、撮合結果還沒出來時抓到的是收盤前的價，不算數，之後再抓。
+  function closeSettled(state, nowMs) {
+    const closeMs = sessionCloseMs(nowMs);
+    const quote = state.quote;
+    return Boolean(quote && state.fetchedAt >= closeMs && (quote.data_date < taipeiDate(nowMs)
+      || Date.parse(quote.data_time) >= closeMs || state.fetchedAt >= closeMs + 60_000));
+  }
+
+  async function fetchFugle(code, market, state, nowMs, key, shouldQuote, shouldCandles) {
     try {
       if (shouldQuote) {
         state.lastAttempt = nowMs;
@@ -244,15 +268,20 @@ export function createLiveQuoteService({ fetchImpl = fetch, now = Date.now,
       const scheduledOpen = marketWindow(nowMs);
       const provider = fugleApiKey ? "fugle" : "mis";
       const interval = fugleApiKey ? fugleQuoteIntervalMs : quoteIntervalMs;
-      if (scheduledOpen && allowFetch && nowMs >= state.retryAt
-          && (state.lastAttempt === 0 || nowMs - state.lastAttempt >= interval
-              || fugleApiKey && (state.lastFugleCandlesAt === 0 || nowMs - state.lastFugleCandlesAt >= fugleCandleIntervalMs))) {
-        if (fugleApiKey) await fetchFugle(code, market, state, nowMs, fugleApiKey);
-        else await fetchMisQuote(code, market, state, nowMs);
-      } else if (!scheduledOpen && fugleApiKey && allowFetch && marketSessionStarted(nowMs) && nowMs >= state.retryAt
-          && (state.lastFugleCandlesAt === 0 || nowMs - state.lastFugleCandlesAt >= fugleCandleIntervalMs)) {
-        try { await fetchFugleCandles(code, state, nowMs, fugleApiKey); }
-        catch (error) { rememberError(state, error, nowMs, "Fugle"); }
+      // 收盤後（交易日 13:30 以後；週末、開盤前不打上游）。
+      const afterClose = !scheduledOpen && afterCloseToday(nowMs);
+      if (scheduledOpen && allowFetch && nowMs >= state.retryAt) {
+        const wantQuote = quoteDue(state, nowMs, interval);
+        const wantCandles = Boolean(fugleApiKey) && fugleCandlesDue(state, nowMs);
+        if (fugleApiKey && (wantQuote || wantCandles)) await fetchFugle(code, market, state, nowMs, fugleApiKey, wantQuote, wantCandles);
+        else if (!fugleApiKey && wantQuote) await fetchMisQuote(code, market, state, nowMs);
+      } else if (afterClose && allowFetch && nowMs >= state.retryAt) {
+        // 收盤後到每日更新發布前（約 15:30／16:30），日資料還是前一天；今天的收盤報價要照樣給（本人 11-17）。
+        // 抓到收盤（closeSettled）之後當天不重抓；之前照報價間隔重抓（lastAttempt 在 await 之前記，同時進來的請求不會一起打上游）。
+        const wantQuote = !closeSettled(state, nowMs) && quoteDue(state, nowMs, interval);
+        const wantCandles = Boolean(fugleApiKey) && fugleCandlesDue(state, nowMs);
+        if (fugleApiKey && (wantQuote || wantCandles)) await fetchFugle(code, market, state, nowMs, fugleApiKey, wantQuote, wantCandles);
+        else if (!fugleApiKey && wantQuote) await fetchMisQuote(code, market, state, nowMs);
       }
       const marketOpen = Boolean(scheduledOpen && state.quote?.data_date === taipeiDate(nowMs));
       const quoteAge = state.quote ? Math.max(0, (nowMs - Date.parse(state.quote.data_time)) / 1000) : null;
@@ -265,8 +294,13 @@ export function createLiveQuoteService({ fetchImpl = fetch, now = Date.now,
         ? { quote: fugleQuoteIntervalMs / 1000, chart: fugleCandleIntervalMs / 1000 }
         : { quote: quoteIntervalMs / 1000, chart: chartIntervalMs / 1000 };
       if (!scheduledOpen) {
-        return { ok: true, code, market, provider, market_open: false, market_phase: "closed", live: false,
-          delay_seconds: delays, retry_after_seconds: 0, quote: null, chart_samples: state.points.length, candles };
+        // quote 是最後一筆報價（交易日收盤後＝今天的收盤）；比日資料新才用，由前端看 data_date 決定。
+        // close_pending：收盤後還沒拿到收盤（撮合結果還沒出來或上游失敗），前端照 retry 再問一次。
+        return { ok: true, code, market, provider: state.provider || provider, market_open: false, market_phase: "closed",
+          live: false, close_pending: Boolean(afterClose && !closeSettled(state, nowMs)),
+          fetched_at: state.fetchedAt ? taipeiIso(state.fetchedAt) : null,
+          delay_seconds: delays, retry_after_seconds: retrySeconds(state, nowMs), error: state.error,
+          quote: state.quote, chart_samples: state.points.length, candles };
       }
       return {
         ok: Boolean(state.quote), code, market, provider: state.provider || provider, market_open: marketOpen,

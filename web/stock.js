@@ -254,29 +254,29 @@
   function updateLiveStatus(payload) {
     const badge = $('liveBadge');
     const status = $('liveStatus');
-    const cloudUnavailable = payload?.error === 'cloud-live-unavailable' || payload?.environment === 'cloud' && payload?.ok === false;
+    const cloudUnavailable = window.Intraday.liveUnavailable(payload);
     badge.hidden = !payload?.live;
     status.dataset.state = cloudUnavailable ? 'error' : payload?.live ? 'live' : 'closed';
-    if (cloudUnavailable) status.textContent = '雲端無法取得即時資料';
-    else if (payload?.live && payload.quote?.data_time) status.textContent = `${payload.quote.data_time.slice(11, 19)} 更新`;
-    else if (payload?.market_open) status.textContent = '即時資料逾 30 秒，顯示最近一筆';
-    else status.textContent = '已收盤，顯示收盤資料';
+    // 收盤後一定寫出顯示的是哪一天的收盤（intraday.js liveStatusText）。
+    // 換股票載入中（baseResult 已清空）不拿上一檔的日期來寫。
+    status.textContent = window.Intraday.liveStatusText(payload, baseResult && lastResult?.code === baseResult.code ? lastResult : baseResult);
   }
 
   function applyLive(payload) {
     lastLive = payload;
-    updateLiveStatus(payload);
     // 關注股盤中觸價亮燈：沿用這一份即時報價，不另外取報價。
     if (window.WatchJudgments) window.WatchJudgments.onLive(payload);
-    if (payload?.ok && payload.market_open && payload.quote && baseResult) {
-      const projected = window.Intraday.projectAnalysis(baseResult, payload);
+    // 盤中用現價投影；收盤後到每日更新發布前，今天的收盤報價比日資料新也投影（本人 11-17：收盤後看到的是昨天的）。
+    const projected = payload?.ok && payload.quote && baseResult ? window.Intraday.projectAnalysis(baseResult, payload) : baseResult;
+    if (projected && projected !== baseResult) {
       if (features.strategy_v1) projected.strategy = buildStrategy(projected);
       else delete projected.strategy;
       render(projected, false);
     } else if (baseResult) {
-      // 13:30 後或休市回到盤後基準；不能只熄掉 LIVE 卻把最後盤中價留在主報價與操作重點。
+      // 13:30 後日資料已是今天、或休市：回到盤後基準；不能只熄掉 LIVE 卻把最後盤中價留在主報價與操作重點。
       render(baseResult, false);
     }
+    updateLiveStatus(payload);   // 畫完再寫狀態字：要用畫面上這一份的日期
   }
 
   function render(r, initial = false) {
@@ -302,10 +302,11 @@
         }
       });
     }
-    $('quoteMode').textContent = intraday ? '盤中' : '資料日';
-    $('asOf').textContent = intraday && r._intraday.data_time ? r._intraday.data_time.slice(0, 16).replace('T', ' ') : r.as_of;
-    $('ladderCurrentLabel').textContent = intraday ? '現價' : '收盤';
-    $('ladderCurrentMeta').textContent = intraday ? '盤中更新' : '資料日收盤';
+    const caption = window.Intraday.quoteCaption(r);
+    $('quoteMode').textContent = caption.mode;
+    $('asOf').textContent = caption.stamp;
+    $('ladderCurrentLabel').textContent = caption.ladderLabel;
+    $('ladderCurrentMeta').textContent = caption.ladderMeta;
     $('close').textContent = fmt(r.quote.close);
     const chg = r.quote.chg_pct;
     $('chg').textContent = chg === null || chg === undefined ? '' : `${chg > 0 ? '+' : ''}${Number(chg).toFixed(2)}%`;

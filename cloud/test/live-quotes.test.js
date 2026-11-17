@@ -128,24 +128,149 @@ test("有 FUGLE_API_KEY 時優先讀 Fugle 報價與當日 60 分K，且速率�
   assert.equal(requests.length, 3, "15 秒只新增一次報價請求");
 });
 
-test("收盤後有 Fugle Key 時只抓當日 60 分K，不抓即時報價", async () => {
+// 本人 11-17：「我剛剛看股票卻是昨天的」。13:30 收盤到每日更新發布（約 15:30／16:30）之間，
+// 舊版收盤後一律回 quote:null，個股頁只能退回前一天的日資料。收盤後要照樣給今天最後一筆（收盤）報價。
+const FUGLE_CLOSE_QUOTE = {
+  symbol: "2330", date: "2026-11-17", previousClose: 2215, openPrice: 2190, highPrice: 2200,
+  lowPrice: 2160, closePrice: 2165, change: -50, changePercent: -2.26, isClose: true,
+  total: { tradeVolume: 30123 }, lastUpdated: Date.parse("2026-11-17T13:30:00+08:00") * 1000,
+};
+const FUGLE_CANDLES_1117 = {
+  date: "2026-11-17", symbol: "2330", timeframe: "60",
+  data: [{ date: "2026-11-17T13:00:00.000+08:00", open: 2170, high: 2175, low: 2160, close: 2165, volume: 3000 }],
+};
+function fugleFake(requests, quote = FUGLE_CLOSE_QUOTE) {
+  return async (url, init) => {
+    requests.push({ url: String(url), init });
+    return new Response(JSON.stringify(String(url).includes("/quote/") ? quote : FUGLE_CANDLES_1117), { status: 200 });
+  };
+}
+
+test("收盤後、每日更新前：照樣回今天的收盤報價（標收盤、不亮 LIVE），當天只抓一次", async () => {
+  let now = Date.parse("2026-11-17T14:56:00+08:00");   // 週二，已收盤，日資料還是 11-16
+  const requests = [];
+  const service = createLiveQuoteService({ now: () => now, fetchImpl: fugleFake(requests) });
+  const result = await service.snapshot("2330", "tse", { fugleApiKey: "fake-key" });
+  assert.equal(result.ok, true);
+  assert.equal(result.market_open, false);
+  assert.equal(result.market_phase, "closed");
+  assert.equal(result.live, false);
+  assert.ok(result.quote, "收盤後不可回 quote:null");
+  assert.equal(result.quote.price, 2165);
+  assert.equal(result.quote.change_percent, -2.26);
+  assert.equal(result.quote.data_date, "2026-11-17");
+  assert.equal(result.quote.data_time, "2026-11-17T13:30:00+08:00");
+  assert.equal(result.candles["60"].length, 1);
+  assert.ok(requests.every(request => request.init.headers["X-API-KEY"] === "fake-key"));
+
+  const quoteCalls = () => requests.filter(request => request.url.includes("/quote/")).length;
+  assert.equal(quoteCalls(), 1);
+  now += 10 * 60_000;
+  const later = await service.snapshot("2330", "tse", { fugleApiKey: "fake-key" });
+  assert.equal(quoteCalls(), 1, "收盤價不會再變，同一天收盤後不重抓報價");
+  assert.equal(later.quote.price, 2165);
+});
+
+test("13:29 盤中抓過的報價不是收盤價：13:30 一過要再抓一次收盤報價", async () => {
+  let now = Date.parse("2026-11-17T13:29:50+08:00");
+  const requests = [];
+  let quote = { ...FUGLE_CLOSE_QUOTE, closePrice: 2170, lastUpdated: Date.parse("2026-11-17T13:29:45+08:00") * 1000 };
+  const service = createLiveQuoteService({ now: () => now, fetchImpl: async (url, init) => fugleFake(requests, quote)(url, init) });
+  const during = await service.snapshot("2330", "tse", { fugleApiKey: "fake-key" });
+  assert.equal(during.quote.price, 2170);
+  quote = FUGLE_CLOSE_QUOTE;
+  now = Date.parse("2026-11-17T13:30:20+08:00");
+  const after = await service.snapshot("2330", "tse", { fugleApiKey: "fake-key" });
+  assert.equal(after.market_phase, "closed");
+  assert.equal(after.quote.price, 2165);
+  assert.equal(after.quote.data_time, "2026-11-17T13:30:00+08:00");
+});
+
+// 雙軸審查：13:30 剛過、收盤集合競價結果還沒出來時抓到的是收盤前的價，不能當成收盤鎖住一整個下午。
+test("13:30 剛過抓到收盤前的價：標 close_pending，過了報價間隔再抓，拿到 13:30 的收盤後才停", async () => {
+  let now = Date.parse("2026-11-17T13:30:03+08:00");
+  const requests = [];
+  let quote = { ...FUGLE_CLOSE_QUOTE, closePrice: 2170, lastUpdated: Date.parse("2026-11-17T13:24:58+08:00") * 1000 };
+  const service = createLiveQuoteService({ now: () => now, fetchImpl: async (url, init) => fugleFake(requests, quote)(url, init) });
+  const quoteCalls = () => requests.filter(request => request.url.includes("/quote/")).length;
+  const early = await service.snapshot("2330", "tse", { fugleApiKey: "k" });
+  assert.equal(early.quote.price, 2170);
+  assert.equal(early.close_pending, true);
+  quote = FUGLE_CLOSE_QUOTE;
+  now += 5_000;
+  await service.snapshot("2330", "tse", { fugleApiKey: "k" });
+  assert.equal(quoteCalls(), 1, "報價間隔（15 秒）內不重抓");
+  now += 15_000;
+  const settled = await service.snapshot("2330", "tse", { fugleApiKey: "k" });
+  assert.equal(quoteCalls(), 2);
+  assert.equal(settled.quote.price, 2165);
+  assert.equal(settled.close_pending, false);
+  now += 30 * 60_000;
+  await service.snapshot("2330", "tse", { fugleApiKey: "k" });
+  assert.equal(quoteCalls(), 2);
+});
+
+test("收盤後同時進來的請求只打一次上游報價", async () => {
+  const requests = [];
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const service = createLiveQuoteService({
+    now: () => Date.parse("2026-11-17T14:00:00+08:00"),
+    fetchImpl: async (url, init) => { await gate; return fugleFake(requests)(url, init); },
+  });
+  const both = Promise.all([1, 2, 3].map(() => service.snapshot("2330", "tse", { fugleApiKey: "k" })));
+  release();
+  await both;
+  assert.equal(requests.filter(request => request.url.includes("/quote/")).length, 1);
+});
+
+test("收盤後抓失敗：回 close_pending、錯誤與退避秒數，不把它當成收盤", async () => {
+  let now = Date.parse("2026-11-17T14:00:00+08:00");
+  let fail = true;
   const requests = [];
   const service = createLiveQuoteService({
-    now: () => Date.parse("2026-11-10T06:00:00Z"),
-    fetchImpl: async (url, init) => {
-      requests.push({ url: String(url), init });
-      return new Response(JSON.stringify({
-        date: "2026-11-10", symbol: "2330", timeframe: "60",
-        data: [{ date: "2026-11-10T13:00:00.000+08:00", open: 2260, high: 2270, low: 2255, close: 2265, volume: 3000 }],
-      }), { status: 200 });
-    },
+    now: () => now,
+    fetchImpl: async (url, init) => (fail ? new Response("down", { status: 503 }) : fugleFake(requests)(url, init)),
   });
-  const result = await service.snapshot("2330", "tse", { fugleApiKey: "fake-key" });
-  assert.equal(requests.length, 1);
-  assert.match(requests[0].url, /\/intraday\/candles\/2330\?timeframe=60$/);
-  assert.doesNotMatch(requests[0].url, /\/quote\//);
-  assert.equal(result.market_open, false);
-  assert.equal(result.candles["60"].length, 1);
+  const failed = await service.snapshot("2330", "tse", { fugleApiKey: "k" });
+  assert.equal(failed.ok, true);
+  assert.equal(failed.close_pending, true);
+  assert.equal(failed.quote, null);
+  assert.match(failed.error, /503/);
+  assert.ok(failed.retry_after_seconds > 0);
+  fail = false;
+  now += Math.max(failed.retry_after_seconds, 15) * 1000;   // 退避與報價間隔都過了
+  const recovered = await service.snapshot("2330", "tse", { fugleApiKey: "k" });
+  assert.equal(recovered.close_pending, false);
+  assert.equal(recovered.quote.price, 2165);
+  assert.equal(recovered.error, null);
+});
+
+test("沒有收盤撮合的冷門股（最後成交在盤中）與平日休市（報價是前一個交易日）都算抓到收盤，不一直重抓", async () => {
+  for (const [label, quote, at] of [
+    ["冷門股 13:31 後抓到 11:05 的最後成交", { ...FUGLE_CLOSE_QUOTE, lastUpdated: Date.parse("2026-11-17T11:05:00+08:00") * 1000 }, "2026-11-17T13:31:10+08:00"],
+    ["國定假日週二下午，報價停在週一", { ...FUGLE_CLOSE_QUOTE, date: "2026-11-16", lastUpdated: Date.parse("2026-11-16T13:30:00+08:00") * 1000 }, "2026-11-17T14:00:00+08:00"],
+  ]) {
+    let now = Date.parse(at);
+    const requests = [];
+    const service = createLiveQuoteService({ now: () => now, fetchImpl: fugleFake(requests, quote) });
+    const first = await service.snapshot("2330", "tse", { fugleApiKey: "k" });
+    assert.equal(first.close_pending, false, label);
+    now += 10 * 60_000;
+    await service.snapshot("2330", "tse", { fugleApiKey: "k" });
+    assert.equal(requests.filter(request => request.url.includes("/quote/")).length, 1, label);
+  }
+});
+
+test("週末與開盤前不打上游（顯示上一個交易日由日資料負責）", async () => {
+  for (const at of ["2026-11-21T10:00:00+08:00", "2026-11-17T08:30:00+08:00"]) {
+    const requests = [];
+    const service = createLiveQuoteService({ now: () => Date.parse(at), fetchImpl: fugleFake(requests) });
+    const result = await service.snapshot("2330", "tse", { fugleApiKey: "fake-key" });
+    assert.equal(requests.length, 0, at);
+    assert.equal(result.quote, null, at);
+    assert.equal(result.market_phase, "closed", at);
+  }
 });
 
 test("沒有 Fugle Key 時才退回 MIS", async () => {
@@ -185,18 +310,30 @@ test("盤中時段上游還停在前一日報價：標 unknown 而不是 closed�
   assert.equal(second.market_phase, "open");
 });
 
-test("盤後不呼叫 MIS，回傳收盤狀態且不亮 LIVE", async () => {
+test("盤後 MIS 也只抓一次收盤報價，回傳收盤狀態且不亮 LIVE、不加分時點", async () => {
+  let now = Date.parse("2026-11-10T06:00:00Z");
   let calls = 0;
   const service = createLiveQuoteService({
-    now: () => Date.parse("2026-11-10T06:00:00Z"),
-    fetchImpl: async () => { calls += 1; return new Response(JSON.stringify(MIS_QUOTE)); },
+    now: () => now,
+    fetchImpl: async () => {
+      calls += 1;
+      const payload = structuredClone(MIS_QUOTE);
+      payload.msgArray[0].tlong = String(Date.parse("2026-11-10T13:30:00+08:00"));
+      return new Response(JSON.stringify(payload));
+    },
   });
   const result = await service.snapshot("2330", "tse");
-  assert.equal(calls, 0);
+  assert.equal(calls, 1);
   assert.equal(result.ok, true);
   assert.equal(result.market_open, false);
+  assert.equal(result.market_phase, "closed");
   assert.equal(result.live, false);
-  assert.equal(result.candles["1"].length, 0);
+  assert.equal(result.quote.price, 2265);
+  assert.equal(result.quote.data_date, "2026-11-10");
+  assert.equal(result.candles["1"].length, 0, "盤後的收盤報價不是盤中取樣，不加進分時 K");
+  now += 60 * 60_000;
+  await service.snapshot("2330", "tse");
+  assert.equal(calls, 1);
 });
 
 // Workers 不准一個請求等別的請求建立的 promise（首頁 /api/live 11-17 出過這個錯）。個股即時報價也是模組層共用
