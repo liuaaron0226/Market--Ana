@@ -16,6 +16,9 @@
    範圍外的判斷線不畫線，在圖的上緣或下緣右邊留一個同色的小三角形。
    判斷線帶 ma: 期數（名稱是均線的，例如「半年線」）就畫成整條均線，不是一條水平線。
    legendItems() 給名稱、顏色與目前的數值和方向（選了某一天就是那一天的），由頁面寫在圖上方；onDraw 每畫一次通知頁面。
+   自己設定的均線（本人 11-17「不要有上限」）：setMaPeriods(天數, 顏色) 條數與天數都不設上限，顏色由頁面給（ma-lines.js 的 8 色）；
+   判斷線帶 ma 而且自設清單裡已經有同一期數（「合成一條」）：不另外畫，那條均線的圖例多一枚小字（role，例如「轉強」）。
+   legendItems() 裡自設均線帶 kind:'ma'（頁面拿來判斷哪些名稱可以點開設定）。
    畫線（選用）：頁面先載入 chart-drawings.js 並傳 opts.drawings={onChange,onTool,onSelect}，
    再用 setTool／setDrawings／setUnsavedDrawings／deleteSelectedDrawing／cancelDrawing 操作。 */
 (function () {
@@ -89,14 +92,12 @@
       return { mid, upper: mid + width, lower: mid - width };
     });
   }
+  // 均線天數：2 以上的整數、不重複；條數與天數都不設上限（本人 11-17；原本最多四條、240 日）
   function normalizePeriods(values) {
     const periods = [];
     for (const value of values || []) {
       const numeric = Math.round(Number(value) || 0);
-      if (numeric < 2) continue;
-      const parsed = Math.min(240, numeric);
-      if (!periods.includes(parsed)) periods.push(parsed);
-      if (periods.length >= 4) break;
+      if (numeric >= 2 && !periods.includes(numeric)) periods.push(numeric);
     }
     return periods.length ? periods : [18, 45];
   }
@@ -126,6 +127,7 @@
       this.candles = []; this.view = { end: 0, count: 60 }; this.hover = -1; this.selection = -1; this.overlays = [];
       this.showMacd = this.opts.macd !== false;
       this.maPeriods = normalizePeriods(this.opts.maPeriods || [18, 45]);
+      this.maColorList = this.opts.maColors || null;   // 均線的顏色（CSS 變數名稱或顏色值；沒給就照八色輪）
       this.drawings = this.opts.drawings && window.ChartDrawings ? new window.ChartDrawings(this, this.opts.drawings) : null;
       this.bindCanvas(this.canvas);
       this.studies = this.opts.studyHost ? new window.ChartStudies(this, this.opts.studyHost, { volumeKind: this.opts.volumeKind || 'amount', studies: this.opts.studies }) : null;
@@ -182,8 +184,19 @@
       if (atEnd) this.view.end = candles.length;
       this.clamp(); this.draw(); this.emit();
     }
-    // 四條均線四種看得出差別的顏色：橘、金、藍、灰（布林通道是更淡的灰帶）
-    maColors() { return [css('--accent'), css('--gold'), css('--study-dif') || css('--dim'), css('--dim')]; }
+    // 均線的顏色：頁面給的（setMaPeriods 的第二個參數，ma-lines.js 使用者挑的）；沒給就照橘、金、藍、灰、紫、青、褐、玫瑰輪。
+    // 給的是 CSS 變數名稱（'--accent'）就在畫的時候才取值：換深淺色主題不用重設
+    maColors() {
+      const fallback = ['--accent', '--gold', '--study-dif', '--dim', '--ma-purple', '--ma-teal', '--ma-brown', '--ma-rose'];
+      const resolve = value => (String(value).startsWith('--') ? css(value) : value);
+      return this.maPeriods.map((_, index) => resolve((this.maColorList && this.maColorList[index]) || fallback[index % fallback.length]) || css('--dim'));
+    }
+    // 判斷線帶 ma、而且自設清單裡已經有同一期數、那條均線也算得出來：合成一條（不另外畫、圖例併到那條均線）。
+    // 算不出來（載入的 K 棒不夠）就不合成，照 curveOf 的規則退回畫預測給的那一個價，預測線不會整條不見
+    mergedMa(o) {
+      const series = o.ma && this.maPeriods.includes(o.ma) && this.ma[o.ma];
+      return Boolean(series) && Number.isFinite(series[series.length - 1]);
+    }
     // 某個期數的均線（每一根一個值）：使用者自選的那幾條直接拿，判斷線要的（例如半年線 120）另外算一次存起來
     maSeries(period) {
       if (this.ma[period]) return this.ma[period];
@@ -193,7 +206,7 @@
     // 這條判斷線要不要畫成整條均線：帶 ma，而且載入的 K 棒夠算出最後一根的均線。
     // 不夠（例如年線 240 日、只載入 80 根）就退回畫預測給的那一個價（水平線），圖上方也寫那一個價，線不會整條不見
     curveOf(o) {
-      if (!o.ma || !this.candles.length) return null;
+      if (!o.ma || !this.candles.length || this.mergedMa(o)) return null;
       const series = this.maSeries(o.ma);
       return Number.isFinite(series[series.length - 1]) ? series : null;
     }
@@ -208,15 +221,22 @@
         if (!Number.isFinite(value)) return {};
         return { value, dir: Number.isFinite(prev) ? (value > prev ? 'up' : value < prev ? 'down' : '') : '' };
       };
+      // 合成一條的判斷線：在那條均線的圖例加一枚小字（例如「轉強」，判斷線的顏色）
+      const tagsOf = period => this.overlays.filter(o => o.ma === period && this.mergedMa(o))
+        .map(o => ({ text: o.role, color: o.color }));
       return [
-        ...this.maPeriods.map((period, index) => ({ name: `MA${period}`, color: colors[index], alpha: 1, ...read(this.ma[period]) })),
+        ...this.maPeriods.map((period, index) => {
+          const tags = tagsOf(period);
+          return { name: `MA${period}`, kind: 'ma', color: colors[index], alpha: 1, ...read(this.ma[period]), ...(tags.length ? { tags } : {}) };
+        }),
         { name: '布林20', color: css('--dim'), alpha: .55 },
-        ...this.overlays.filter(o => o.tag !== false).map(o => ({ name: o.short || o.label, color: o.color, alpha: 1, mark: true,
+        ...this.overlays.filter(o => o.tag !== false && !this.mergedMa(o)).map(o => ({ name: o.short || o.label, color: o.color, alpha: 1, mark: true,
           ...(this.curveOf(o) ? read(this.curveOf(o)) : { value: o.value }) })),
       ];
     }
-    setMaPeriods(periods) {
+    setMaPeriods(periods, colors) {
       this.maPeriods = normalizePeriods(periods);
+      if (colors !== undefined) this.maColorList = colors;
       this.compute(this.candles);
       this.draw();
     }
@@ -465,7 +485,7 @@
       const sortedOv = [...this.overlays].sort((a, b2) => b2.value - a.value);
       if (inline) {
         // 不是均線的判斷線（前高、缺口、收復線…）：整條淡細實線＋右端一小段實色；範圍外的不畫（數值在圖上方的圖例）
-        const flat = this.overlays.filter(o => !this.curveOf(o));
+        const flat = this.overlays.filter(o => !this.curveOf(o) && !this.mergedMa(o));
         flat.filter(o => !outside(o.value)).forEach(o => {
           const yy = Math.round(y(o.value)) + .5;
           x.strokeStyle = o.color || css('--gold'); x.lineWidth = o.strong ? 2 : 1; x.globalAlpha = o.strong ? .9 : .45;
@@ -617,14 +637,17 @@
           x.lineWidth = 1.4; x.strokeRect(cx - bw / 2 - 1.5, top - 1.5, bw + 3, h + 3);
         } else x.fillRect(cx - bw / 2, top, bw, h);
       }
-      // 使用者自訂均線（最多四條，預設 MA18／MA45）。
+      // 使用者自訂均線（不設上限，預設 MA18／MA45；本人 11-17）。
       // 四條線四種看得出差別的顏色：橘、金、藍、灰（布林通道是更淡的灰帶）
       const maColors = this.maColors();
+      // 上下範圍只看 K 棒（fitCandles）時，天數長的均線（例如 MA240）可能在範圍外：裁在 K 線區裡，不畫到日期上
+      x.save(); x.beginPath(); x.rect(l, t, pw, ph); x.clip();
       this.maPeriods.forEach((p, index) => {
         x.strokeStyle = maColors[index]; x.lineWidth = index < 2 ? 1.8 : 1.2; x.beginPath(); let on = false;
         for (let i = start; i < end; i++) { const v = this.ma[p][i]; if (v == null) { on = false; continue; } const px = l + step * (i - start + .5); on ? x.lineTo(px, y(v)) : x.moveTo(px, y(v)); on = true; }
         x.stroke();
       });
+      x.restore();
       // 帶 ma 的判斷線（例如轉強線是半年線）：整條均線，虛線、判斷線的顏色；超出畫面上下的部分裁掉
       const trendLines = inline ? this.overlays.filter(o => this.curveOf(o)) : [];
       if (trendLines.length) {

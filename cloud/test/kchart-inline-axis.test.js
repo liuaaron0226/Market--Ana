@@ -64,7 +64,7 @@ function draw(options = {}, overlays = [], data = candles()) {
 }
 
 const sma = (data, period, index) => data.slice(index - period + 1, index + 1).reduce((sum, c) => sum + c.close, 0) / period;
-const HALF_YEAR = { value: 40_300, label: "轉強線 半年線", short: "半年線", color: "red", ma: 20 };
+const HALF_YEAR = { value: 40_300, label: "轉強線 半年線", short: "半年線", color: "red", ma: 30 };   // 自設清單（5、20）裡沒有的期數
 const PREV_HIGH = { value: 41_100, label: "轉弱線 前高", short: "前高", color: "green" };
 
 test("inlineAxis：右邊不留價格欄，K 線畫滿整個寬度", () => {
@@ -88,15 +88,15 @@ test("inlineAxis：判斷線不掛價籤，名稱與數字不寫在圖上（由�
   assert.ok(!texts.some(item => item.text === "41,100" || item.text === "40,300"), "沒有判斷線的價籤數字");
 });
 
-test("名稱是均線的判斷線（ma: 20）畫成整條均線，不是一條水平線", () => {
+test("名稱是均線的判斷線（ma: 30）畫成整條均線，不是一條水平線", () => {
   const { strokes, chart, data } = draw({ inlineAxis: true }, [HALF_YEAR]);
   const own = strokes.filter(item => item.stroke === "red");
   assert.ok(!own.some(item => item.points.length === 2 && Math.abs(item.points[0][1] - item.points[1][1]) < .01 && item.points[1][0] - item.points[0][0] > 100), "不是水平線");
   const curve = own.find(item => item.points.length >= 40);
   assert.ok(curve, "有一條沿著每一根 K 棒的曲線");
   const { t, ph, lo, hi } = chart.geo;
-  const lastY = t + (hi - sma(data, 20, data.length - 1)) / (hi - lo) * ph;
-  assert.ok(Math.abs(curve.points[curve.points.length - 1][1] - lastY) < .5, "最右一點就是最後一天的 20 日均線");
+  const lastY = t + (hi - sma(data, 30, data.length - 1)) / (hi - lo) * ph;
+  assert.ok(Math.abs(curve.points[curve.points.length - 1][1] - lastY) < .5, "最右一點就是最後一天的 30 日均線");
 });
 
 test("不是均線的判斷線（前高）照樣是水平線", () => {
@@ -111,7 +111,7 @@ test("legendItems：均線、布林、判斷線的名稱，加上目前的數值
   const last = data.length - 1;
   const near = (a, b, message) => assert.ok(Math.abs(a - b) < 1e-6, `${message}：${a} ≠ ${b}`);
   near(items[0].value, sma(data, 5, last), "MA5 最後一天");
-  near(items[3].value, sma(data, 20, last), "半年線（ma: 20）的數值跟著均線走");
+  near(items[3].value, sma(data, 30, last), "半年線（ma: 30）的數值跟著均線走");
   assert.equal(items[3].dir, "up", "這段在往上");
   assert.equal(items[4].value, 41_100, "前高就是那一個價");
   assert.equal(items[2].value, undefined, "布林只寫名稱");
@@ -176,4 +176,39 @@ test("inlineAxis：收盤不掛數字小塊（只留虛線；現價在頁面的�
   const close = data[data.length - 1].close.toLocaleString("en-US", { maximumFractionDigits: 0 });
   const onLeft = texts.filter(item => item.text === close && item.x < 40);
   assert.equal(onLeft.length, 0, "左邊沒有收盤數字");
+});
+
+// 本人 11-17：「五日線不就是ma5?，另外我希望我可以自己設定均線，不要有上限」；顏色自己挑；
+// 預測線和自設均線同一期數時「合成一條」：只畫自設那條，名稱後面加「轉強」或「轉弱」
+test("均線不設上限：六條、天數超過 240 都照收；顏色照頁面給的", () => {
+  const { chart } = draw({ inlineAxis: true });
+  chart.setMaPeriods([5, 10, 20, 30, 40, 300], ["c1", "c2", "c3", "c4", "c5", "c6"]);
+  assert.deepEqual([...chart.maPeriods], [5, 10, 20, 30, 40, 300]);
+  const items = JSON.parse(JSON.stringify(chart.legendItems())).filter(item => item.name.startsWith("MA"));
+  assert.deepEqual(items.map(item => item.color), ["c1", "c2", "c3", "c4", "c5", "c6"]);
+});
+
+test("預測線和自設均線同一期數：只剩一個名稱、後面帶「轉強」，圖上不另外畫那條虛線", () => {
+  const FIVE = { value: 40_300, label: "轉強線 五日線", short: "MA5", color: "red", ma: 5, role: "轉強" };
+  const { chart, strokes } = draw({ inlineAxis: true, maPeriods: [5, 20] }, [FIVE]);
+  const items = JSON.parse(JSON.stringify(chart.legendItems()));
+  assert.equal(items.filter(item => item.name === "MA5").length, 1, "只有一個 MA5");
+  assert.deepEqual(items.find(item => item.name === "MA5").tags, [{ text: "轉強", color: "red" }]);
+  assert.ok(!strokes.some(item => item.stroke === "red" && item.points.length >= 40), "沒有另外畫紅色那條");
+});
+
+test("預測線的期數不在自設清單裡：照舊畫成整條虛線、圖上方另外一個名稱", () => {
+  const TEN = { value: 40_300, label: "轉弱線 十日線", short: "MA10", color: "green", ma: 10, role: "轉弱" };
+  const { chart, strokes } = draw({ inlineAxis: true, maPeriods: [5, 20] }, [TEN]);
+  const items = JSON.parse(JSON.stringify(chart.legendItems()));
+  assert.ok(items.some(item => item.name === "MA10" && item.mark), "另外一個 MA10");
+  assert.ok(strokes.some(item => item.stroke === "green" && item.points.length >= 40), "畫成整條");
+});
+
+test("合成的那條自設均線資料不夠（例如自設 MA240、只載入 80 根）：不合成，預測線退回畫那一個價", () => {
+  const YEAR = { value: 40_500, label: "轉弱線 年線", short: "MA240", color: "blue", ma: 240, role: "轉弱" };
+  const { chart, strokes } = draw({ inlineAxis: true, maPeriods: [5, 240] }, [YEAR]);
+  assert.ok(strokes.some(item => item.stroke === "blue" && item.points.length === 2 && Math.abs(item.points[0][1] - item.points[1][1]) < .01), "畫成水平線");
+  const items = JSON.parse(JSON.stringify(chart.legendItems()));
+  assert.ok(items.some(item => item.name === "MA240" && item.mark && item.value === 40_500), "圖上方另外寫預測給的那一個價");
 });

@@ -98,7 +98,10 @@
   let chartPeriod = 'daily';
   // 5 年歷史日線：個股分析只帶最近 120 根，更早的在背景載入後接在前面。拿不到或對不上就維持原樣，不顯示任何訊息。
   let olderBars = { code: '', firstDate: '', rows: [] };
-  let maPeriods = [18, 45];
+  // 均線（本人 11-17）：和首頁大盤共用一組、不設上限、顏色自己挑；存在這台裝置（ma-lines.js）
+  let maLines = window.MaLines.read();
+  const maPeriodsOf = () => maLines.map(line => line.period);
+  const maTokensOf = () => maLines.map(line => window.MaLines.tokenOf(line.color));
   // 畫線的存檔與補存（drawing-sync.js）：存不上去時留著、之後自動補存，並告訴這裡有幾筆還沒存上去。
   // 那支沒載入時整個畫線功能收起，個股頁其他內容照常。
   const drawingSync = window.DrawingSync ? window.DrawingSync.create({ onStatus: showUnsavedDrawings }) : null;
@@ -106,10 +109,6 @@
   // 秒 K（本人 2026-11-14「可以，先做當天」）：當天逐筆在背景一頁一頁取回，由 Intraday.secondCandles 彙總。
   const SECOND_PERIODS = { '1s': 1, '5s': 5, '10s': 10, '15s': 15, '30s': 30 };
   let tickFeed = { code: '', date: null, ticks: [], offset: 0, timer: null, generation: 0 };
-  try {
-    const stored = JSON.parse(localStorage.getItem('stock-ma-periods') || 'null');
-    if (Array.isArray(stored)) maPeriods = window.KChartMath.normalizePeriods(stored);
-  } catch (_) { /* 私密視窗或損壞設定使用預設值 */ }
   const livePoller = window.Intraday.createPoller({
     onData: applyLive,
     onError: () => updateLiveStatus({ ok: false, environment: 'local', message: '暫時無法取得即時資料', live: false }),
@@ -123,45 +122,34 @@
     request: 0, abort: null, searchAbort: null, searchTimer: null, searchOptions: [], activeOption: -1,
   };
 
-  function saveMaPeriods() {
-    try { localStorage.setItem('stock-ma-periods', JSON.stringify(maPeriods)); } catch (_) { /* 私密視窗 */ }
-  }
-
-  const MA_LIMIT = 4; // 和 kchart.js 的 normalizePeriods 一致：最多四條
-
-  function applyMaPeriods(next) {
-    const before = maPeriods.length;
-    maPeriods = window.KChartMath.normalizePeriods(next);
-    saveMaPeriods();
+  function applyMaLines(next) {
+    const before = maLines.length;
+    maLines = window.MaLines.write(next);
     // 條數沒變（只是改了某一格的數字）就把數字寫回原本的輸入框，不整組重畫：
     // 重畫會把正在點的那一格換掉，手機上接著點另一格或「新增均線」的那一下會落空（本人 11-15 iPhone 回報）。
     const inputs = [...$('maControls').querySelectorAll('input')];
-    if (maPeriods.length === before && inputs.length === before) inputs.forEach((input, index) => { input.value = String(maPeriods[index]); });
+    if (maLines.length === before && inputs.length === before) inputs.forEach((input, index) => { input.value = String(maLines[index].period); });
     else renderMaControls();
-    syncMaLimit();
-    if (chart) chart.setMaPeriods(maPeriods);
-  }
-
-  // 到四條上限時，「新增均線」停用並寫明原因（原本是按了沒反應）
-  function syncMaLimit() {
-    const full = maPeriods.length >= MA_LIMIT;
-    $('addMa').disabled = full;
-    $('addMa').textContent = full ? `最多 ${MA_LIMIT} 條均線` : '新增均線';
+    if (chart) chart.setMaPeriods(maPeriodsOf(), maTokensOf());
   }
 
   function renderMaControls() {
-    $('maControls').replaceChildren(...maPeriods.map((period, index) => {
+    $('maControls').replaceChildren(...maLines.map((line, index) => {
       const group = node('label', 'bd-ma-control');
       group.append(node('span', '', `MA${index + 1}`));
       const input = node('input');
-      input.type = 'number'; input.min = '2'; input.max = '240'; input.value = String(period);
+      input.type = 'number'; input.min = '2'; input.value = String(line.period);
       input.setAttribute('aria-label', `MA${index + 1}期數`);
-      input.addEventListener('change', () => applyMaPeriods(maPeriods.map((value, itemIndex) => itemIndex === index ? Number(input.value) : value)));
+      // 和別條重複或不是 2 以上的數字：格子改回原本的數字，不改（不然重複的那條會被默默丟掉）
+      input.addEventListener('change', () => {
+        const next = window.MaLines.setPeriod(maLines, index, input.value);
+        if (next) applyMaLines(next); else input.value = String(maLines[index].period);
+      });
       group.append(input);
-      if (maPeriods.length > 1) {
+      if (maLines.length > 1) {
         const remove = node('button', 'bd-ma-remove', '×');
         remove.type = 'button'; remove.setAttribute('aria-label', `移除 MA${index + 1}`);
-        remove.addEventListener('click', () => applyMaPeriods(maPeriods.filter((_, itemIndex) => itemIndex !== index)));
+        remove.addEventListener('click', () => applyMaLines(maLines.filter((_, itemIndex) => itemIndex !== index)));
         group.append(remove);
       }
       return group;
@@ -414,7 +402,7 @@
     const shownBefore = chart ? chart.candles : [];
     // 歷史接上後，日 K 比伺服器預算的 MACD 多出很多根：改由圖表用完整序列自己算。
     const extended = !intraday && daily.length > r.bars.length;
-    if (!chart) chart = new window.KChart($('chartHost'), { macd: false, studyHost: $('chartStudies'), studies: ['volume', 'macd', 'kd', 'rsi', 'foreign', 'trust', 'dealer'], maPeriods, selectionRoots: [$('chartHost').parentElement], volumeKind: 'volume', overlayLabels: 'tags', height: chartHeight,
+    if (!chart) chart = new window.KChart($('chartHost'), { macd: false, studyHost: $('chartStudies'), studies: ['volume', 'macd', 'kd', 'rsi', 'foreign', 'trust', 'dealer'], maPeriods: maPeriodsOf(), maColors: maTokensOf(), selectionRoots: [$('chartHost').parentElement], volumeKind: 'volume', overlayLabels: 'tags', height: chartHeight,
       drawings: drawingSync && { onChange: drawingSync.record, onTool: showActiveTool, onSelect: showDrawingSelection } });
     // 畫線只在日、週、月 K：秒 K、分 K 連工具列一起收起。
     $('drawTools').hidden = intraday || !drawingSync;
@@ -1254,17 +1242,14 @@
   // 還有畫線沒存上去時瀏覽器會先問要不要離開（drawing-sync.js）：使用者可能留下來，所以這時不停即時更新。
   window.addEventListener('beforeunload', event => { if (!event.defaultPrevented) { livePoller.stop(); stopTicks(); } });
   document.addEventListener('visibilitychange', syncTickFeed);
-  $('addMa').addEventListener('click', () => {
-    if (maPeriods.length >= MA_LIMIT) return;
-    // 從常用的期數裡找第一個還沒用到的（最多四條，六個候選一定找得到），不會加出重複而被併掉
-    const next = [60, 120, 240, 20, 10, 5].find(value => !maPeriods.includes(value));
-    applyMaPeriods([...maPeriods, next]);
-  });
+  // 不設上限（本人 11-17）：天數取常用裡還沒有的，顏色取還沒用過的（ma-lines.js）
+  $('addMa').addEventListener('click', () => applyMaLines(window.MaLines.add(maLines)));
+  // 首頁改了（別的分頁、或按上一頁回來）：這一頁的設定列與圖跟著換
+  window.MaLines.watch(lines => { maLines = lines; renderMaControls(); if (chart) chart.setMaPeriods(maPeriodsOf(), maTokensOf()); });
   $('themeToggle').addEventListener('click', () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
   let saved = null;
   try { saved = localStorage.getItem('market-theme'); } catch (_) { /* 私密視窗 */ }
   renderMaControls();
-  syncMaLimit();
   bindDrawTools();
   setTheme(saved === 'dark' ? 'dark' : 'light');
   // chart：驗收用（畫線旅程讀選了哪一根 K 棒、右側標了什麼），頁面自己不用

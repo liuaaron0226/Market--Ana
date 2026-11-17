@@ -1,5 +1,5 @@
 /* 向左滑露出動作的列（本人 2026-11-16：刪除庫存改成把那一列向左滑、露出紅色的刪除，點一下就刪）。
-   目前自選與庫存頁在用（portfolio.js）；樣式在 portfolio.css「向左滑露出動作」那一段。
+   自選與庫存頁（portfolio.js）、均線設定的列（ma-settings.js）在用；共用樣式在 swipe-rows.css。
 
    頁面要畫出這樣的結構（類別名稱是約定）：
      .swipe-row                這一列
@@ -164,5 +164,5 @@
     return { close };
   }
 
-  global.SwipeRows = { follow, intent, settle, bind };
+  global.SwipeRows = { follow, intent, settle, bind, GHOST_MS };
 })(window);

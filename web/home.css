@@ -955,6 +955,12 @@ body.hm .legend-name i { font-style: normal; font-size: 9px; }
 body.hm .legend-name i.is-up { color: var(--up); }
 body.hm .legend-name i.is-down { color: var(--down); }
 body.hm .legend-name i.is-flat { visibility: hidden; }
+/* 自設的均線名稱是一顆鍵（本人 11-17 選「點名稱打開」設定）：外觀和其他名稱一樣，觸控範圍補到 44px 高 */
+body.hm button.legend-name { position: relative; padding: 0; border: 0; background: none; font: inherit; cursor: pointer; }
+body.hm button.legend-name::before { content: ""; position: absolute; inset: -12px -4px; }
+body.hm button.legend-name:focus-visible { outline: 2px solid var(--gold); outline-offset: 3px; border-radius: 3px; }
+/* 預測線和這條均線同一期數（合成一條）：名稱後面一枚小字，判斷線的顏色 */
+body.hm .legend-tag { padding: 0 4px; border-radius: var(--r-tag); background: var(--tag); color: var(--bg); font: 600 10px/16px var(--sans); font-style: normal; }
 /* 判斷線（預測的轉強線／轉弱線）：名稱前面一小段和圖上一樣顏色的線 */
 body.hm .legend-name.is-line::before { content: ""; display: inline-block; width: 10px; height: 2px; margin: 0 4px 3px 0; vertical-align: middle; background: var(--tone); }
 /* 手機：原本圖下方那一列收復／防守鍵拿掉了，那一列只剩選了某一天才出現的「這一天的詳情」；圖本身高一點 */
