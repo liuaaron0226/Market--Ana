@@ -2529,7 +2529,8 @@
   }
 
   function initCore() {
-    const picker = window.StockPicker.attach(core.input, { host: core.input.closest('.core-add-menu'), inline: true, onPick: option => addCoreCode(option.code) });
+    const picker = window.StockPicker.attach(core.input, { host: core.input.closest('.core-add-menu'), inline: true,
+      accept: window.StockPicker.notFund, onPick: option => addCoreCode(option.code) });
     core.form.addEventListener('submit', async event => {
       event.preventDefault();
       const { option, message } = await picker.choose();

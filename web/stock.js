@@ -76,10 +76,12 @@
   }
 
   function renderStrategy(r) {
-    // 基金的操作策略要用淨值另算（04 票）；還沒有的時候整塊不出現，不拿股票的規則猜。
-    if (isFund(r) && !r.strategy) { $('strategy').hidden = true; return; }
     $('strategy').hidden = !features.strategy_v1;
+    // 基金的操作策略要用淨值另算（04 票）；還沒有的時候照實寫「資料不足」、不出操作價位，不拿股票的規則猜（規格第 15 條）。
+    const pending = isFund(r) && !r.strategy;
+    $('strategyDetails').hidden = pending;
     if (!features.strategy_v1) return;
+    if (pending) { $('strategyConclusion').textContent = `資料不足｜${r.levels?.reason || '基金的操作價位尚未提供'}`; return; }
     const strategy = buildStrategy(r);
     $('strategyConclusion').textContent = `${strategy.recommendation}｜${strategy.reason}`;
     for (const [key, id] of Object.entries({ entry: 'strategyEntry', add: 'strategyAdd', stop: 'strategyStop', target: 'strategyTarget' })) {

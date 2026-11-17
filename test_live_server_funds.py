@@ -60,6 +60,12 @@ class LocalFundContractTest(unittest.TestCase):
         self.assertEqual(body["quote"]["nav_date"], body["bars"][-1]["date"])
         self.assertIn(body["analysis_status"], ("available", "stale"))
 
+    def test_analysis_as_of_uses_only_navs_up_to_that_day(self) -> None:
+        # 回補原件：2026-11-13 是 17.73（11-14、11-15 是週末，下一筆 11-16）
+        status, body = get_json(f"{self.base}/api/stocks/BLKTENAU/analysis?as_of=2026-11-14")
+        self.assertEqual(status, 200)
+        self.assertEqual((body["quote"]["nav_date"], body["quote"]["close"]), ("2026-11-13", 17.73))
+
     def test_history_is_the_nav_series_and_stocks_have_none_locally(self) -> None:
         status, body = get_json(f"{self.base}/api/stocks/BLKTENAU/history")
         self.assertEqual(status, 200)

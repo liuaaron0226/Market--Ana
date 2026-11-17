@@ -1,5 +1,6 @@
 import { etfAnalysisHidden } from "./release-policy.js";
 import { CODE_RE, isExchangeCode } from "./codes.js";
+import { withoutMissingTables } from "./optional-tables.js";
 const HORIZONS = new Set(["none", "short", "long"]);
 const WATCHLIST_LIMIT = 100;
 const HOLDINGS_LIMIT = 100;
@@ -58,25 +59,14 @@ async function securityFor(db, code, deps, { funds = false } = {}) {
     funds && deps.includeFunds && { table: "fund_securities",
       sql: "UNION ALL SELECT version, code, name, '境外基金' AS market, 1 AS in_universe FROM fund_securities " },
   ].filter(Boolean);
-  const directory = () => db.prepare(
+  // 名錄表（0018、0026）還沒套到資料庫時，當作沒有那份名錄，其他照常。
+  const row = await withoutMissingTables(extra, (kept) => db.prepare(
     "SELECT x.code, x.name, x.market, x.in_universe FROM stock_data_state s JOIN (" +
       "SELECT version, code, name, market, 1 AS in_universe FROM listed_securities " +
-      extra.map((part) => part.sql).join("") +
+      kept.map((part) => part.sql).join("") +
       "UNION ALL SELECT version, code, name, market, 0 AS in_universe FROM universe_outside" +
       ") x ON x.version = s.active_version WHERE s.key = 'current' AND x.code = ? LIMIT 1",
-  ).bind(code).first();
-  let row = null;
-  // 名錄表（0018、0026）還沒套到資料庫時，當作沒有那份名錄，其他照常。
-  for (;;) {
-    try {
-      row = await directory();
-      break;
-    } catch (error) {
-      const missing = extra.findIndex((part) => new RegExp(`no such table: ${part.table}`).test(String(error?.message)));
-      if (missing < 0) throw error;
-      extra.splice(missing, 1);
-    }
-  }
+  ).bind(code).first());
   if (row) return row;
   // 名錄外的代號才問證交所即時行情；那裡只認得上市櫃股票的形狀（基金這類長代碼不拿去問）
   if (typeof deps.quoteFetch !== "function" || !isExchangeCode(code)) throw new UserPortfolioError(404, "查無此上市或上櫃股票");

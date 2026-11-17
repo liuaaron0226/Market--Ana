@@ -988,7 +988,7 @@
 
   // 「＋」的兩種新增共用一格。代號、名稱都能打（stock-picker.js，本人 11-17）；基金不是股票，這格不收。
   // 會存資料：打的名稱符合好幾檔又沒有完全相同的，攤開下拉要本人挑，不默默存第一個（strict）。
-  const addPicker = window.StockPicker.attach($('addCode'), { inline: true, strict: true });
+  const addPicker = window.StockPicker.attach($('addCode'), { inline: true, strict: true, accept: window.StockPicker.notFund });
   // 做完把表單收回去，結果寫在清單上面那一行；存不成的原因留在表單裡。
   // 按下去就先鎖住鍵（找代號也要時間），連按兩下不會送兩次。
   async function addFromForm(button, send, done, reload, kind, { skip } = {}) {

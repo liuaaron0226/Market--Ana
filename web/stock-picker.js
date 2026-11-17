@@ -212,5 +212,9 @@
     return { choose, close };
   }
 
-  global.StockPicker = { codeOf, isCode, options, decide, fitQuery, attach };
+  // 還不收基金的框用的 accept（基金當成一般個股 03 票）：首頁核心持有比較要等 05 票、自選股頁加自選與庫存要等 07 票，
+  // 在那之前選到基金只會被說查無此股，所以先不列；那兩張票做完就拿掉。
+  const notFund = item => item.security_type !== '基金';
+
+  global.StockPicker = { codeOf, isCode, options, decide, fitQuery, attach, notFund };
 })(window);

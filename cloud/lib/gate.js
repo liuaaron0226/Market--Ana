@@ -4,6 +4,7 @@
 import { verifyAccessJwt } from "./jwt.js";
 import { detailFor } from "./market-data.js";
 import { handleUserPortfolio, UserPortfolioError } from "./user-portfolio.js";
+import { withoutMissingTables } from "./optional-tables.js";
 import { handleUserDrawings } from "./user-drawings.js";
 import { defaultLiveQuoteService } from "./live-quotes.js";
 import { fetchTickPage } from "./live-ticks.js";
@@ -223,17 +224,11 @@ async function handleStockSearch(request, env, email, deps, { isOwner } = {}) {
         "REPLACE(name, ' ', '') LIKE ? ESCAPE '\\' OR REPLACE(full_name, ' ', '') LIKE ? ESCAPE '\\')" });
   }
   const orderArgs = [query.toUpperCase(), query, limit + 1, offset];
-  let rows = null;
   // 名錄表（0018、0026）還沒套到資料庫時，當作沒有那份名錄，其他照常。
-  while (!rows) {
-    const sql = parts.length === 1 ? `${ordinary} ${order}` : `SELECT * FROM (${parts.map((part) => part.sql).join(" UNION ALL ")}) ${order}`;
-    rows = await env.DB.prepare(sql).bind(...parts.flatMap((part) => part.args), ...orderArgs).all().catch((error) => {
-      const missing = parts.findIndex((part) => part.table && new RegExp(`no such table: ${part.table}`).test(String(error?.message)));
-      if (missing < 0) throw error;
-      parts.splice(missing, 1);
-      return null;
-    });
-  }
+  const rows = await withoutMissingTables(parts, (kept) => {
+    const sql = kept.length === 1 ? `${ordinary} ${order}` : `SELECT * FROM (${kept.map((part) => part.sql).join(" UNION ALL ")}) ${order}`;
+    return env.DB.prepare(sql).bind(...kept.flatMap((part) => part.args), ...orderArgs).all();
+  });
   const hasMore = rows.results.length > limit;
   const items = rows.results.slice(0, limit).map((item) => ({
     ...item,

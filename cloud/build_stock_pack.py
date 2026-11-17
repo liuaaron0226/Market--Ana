@@ -34,6 +34,7 @@ sys.path.insert(0, str(ROOT))
 from listed_catalog import ListedSecurity, load_listed_catalog  # noqa: E402
 from otc_catalog import OtcSecurity, load_otc_catalog  # noqa: E402
 from twon_analysis.analyze_v2 import MIN_ANALYSIS_BARS, SCHEMA, analyze_v2  # noqa: E402
+import fund_stock  # noqa: E402
 
 CATALOG_RAW = ROOT / "data/listed-catalog/raw/twse-isin-listed-20261108.html"
 CATALOG_META = ROOT / "data/listed-catalog/raw/twse-isin-listed-20261108.meta.json"
@@ -52,7 +53,6 @@ ETF_COLUMNS = ("version", "code", "name", "market", "etf_type", "latest_bar_date
 FUND_MIGRATION = ROOT / "cloud/migrations/0026_fund_securities.sql"
 FUND_COLUMNS = ("version", "code", "name", "full_name", "currency", "isin", "latest_bar_date", "available_bars",
                 "analysis_status")
-FUND_MARKET = "境外基金"
 # 契約 v2 §1／§9 已移除的欄位；seed 裡出現任何一個就拒絕，避免舊三方案或自創計分混進新版本。
 RETIRED_KEYS = frozenset({
     "preset", "available_presets", "score", "score_complete", "score_note", "dimensions", "coverage",
@@ -254,7 +254,7 @@ def _validate_seed(manifest: dict, securities: Sequence[dict], analyses: Sequenc
     for row in funds:
         if row["code"] in fund_by_code or row["code"] in by_code or row["code"] in etf_by_code:
             raise ValueError(f"基金名錄代號重複或混進其他名錄：{row['code']}")
-        fund_by_code[row["code"]] = {**row, "market": FUND_MARKET}
+        fund_by_code[row["code"]] = {**row, "market": fund_stock.MARKET}
 
     compatibility_codes = set(manifest.get("compatibility_codes", []))
     found: set[str] = set()
@@ -853,8 +853,6 @@ def build_version(
     # 基金當成一般個股 03 票：基金名錄與分析（淨值）；給誰看由網站的基金開關決定。小樣本建置（--codes）不放。
     funds: list[dict] = []
     if not selected_codes:
-        import fund_stock
-
         funds, fund_analyses, fund_failures = fund_stock.fund_rows(data_date, **({"loader": fund_loader} if fund_loader else {}))
         analyses.extend(fund_analyses)
         failures.extend(fund_failures)

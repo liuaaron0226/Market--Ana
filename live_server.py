@@ -1660,28 +1660,24 @@ class Handler(SimpleHTTPRequestHandler):
             return
         self._send_json(json.loads(funds[code]))
 
-    def _fund_navs(self, code: str) -> tuple[dict[str, Any] | None, str]:
-        """基金（03 票）到今天為止的淨值與分析狀態；和每日建置同一個 fund_stock.fund_rows。"""
+    def _send_fund_analysis(self, code: str, as_of: str) -> None:
+        """GET /api/stocks/<基金代碼>/analysis：分析契約 v2 的 kind fund，和每日建置同一個 fund_stock.fund_rows。
+        沒帶 as_of（9999-12-31）就是到今天為止；帶了就只用那一天以前的淨值。"""
         import fund_compare
         import fund_stock
 
-        as_of = fund_compare.taipei_today()
-        rows, analyses, _ = fund_stock.fund_rows(as_of, codes=[code])
-        return (analyses[0]["payload"] if analyses else None), rows[0]["analysis_status"]
-
-    def _send_fund_analysis(self, code: str) -> None:
-        """GET /api/stocks/<基金代碼>/analysis：分析契約 v2 的 kind fund（和雲端 D1 裡的那一份同一個產生方式）。"""
         try:
-            payload, status = self._fund_navs(code)
+            day = min(as_of, fund_compare.taipei_today())
+            rows, analyses, _ = fund_stock.fund_rows(day, codes=[code])
         except Exception as error:  # 不把 stack trace 送到瀏覽器
             print(f"fund analysis failed for {code}: {type(error).__name__}: {error}")
             self._send_json({"error": "analysis-failed", "message": "分析暫時無法完成"}, 500)
             return
-        if payload is None:
-            self._send_json({"code": code, "error": "insufficient-data", "analysis_status": status,
+        if not analyses:
+            self._send_json({"code": code, "error": "insufficient-data", "analysis_status": rows[0]["analysis_status"],
                              "qa": {"blocking": True, "reason": "基金淨值資料不足"}}, 404)
             return
-        self._send_json(payload)
+        self._send_json(analyses[0]["payload"])
 
     def _send_stock_history(self, code: str) -> None:
         """GET /api/stocks/<代號>/history：本機只有基金的淨值序列（03 票）；股票的 5 年長日線只在雲端，和以前一樣 404。"""
@@ -1698,11 +1694,6 @@ class Handler(SimpleHTTPRequestHandler):
     def _send_stock_analysis(self, path: str, query: str) -> None:
         """GET /api/stocks/{code}/analysis?as_of=YYYY-MM-DD：回個股分析契約 v2（每檔一筆，無方案）。"""
         code = path[len("/api/stocks/"):-len("/analysis")]
-        import fund_compare
-
-        if code in fund_compare.FUNDS:
-            self._send_fund_analysis(code)
-            return
         params = urllib.parse.parse_qs(query, keep_blank_values=True)
         as_of = (params.get("as_of") or ["9999-12-31"])[0]
         if "preset" in params:
@@ -1712,6 +1703,11 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if not stock_codes.is_code(code) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", as_of):
             self._send_json({"error": "bad-request", "message": "代號或日期格式不正確"}, 400)
+            return
+        import fund_compare
+
+        if code in fund_compare.FUNDS:
+            self._send_fund_analysis(code, as_of)
             return
         universe = self._universe()
         if universe is not None and code not in universe["members"] and code not in universe["core"]:
