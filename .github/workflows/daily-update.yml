@@ -257,6 +257,9 @@ jobs:
           PLAIN_DAILY_MODE: ${{ steps.plain.outputs.mode }}
           PLAIN_AGY_BIN: ${{ steps.plain_auth.outcome == 'success' && format('{0}/agy/antigravity', runner.temp) || '' }}
           PLAIN_AGY_HOME: ${{ steps.plain_auth.outcome == 'success' && format('{0}/agy-home', runner.temp) || '' }}
+          # 白話分析用的模型與思考程度（本人 11-17：Flash、medium）；要換只改這兩行
+          PLAIN_MODEL: gemini-3.8-flash
+          PLAIN_EFFORT: medium
         run: >-
           python daily_update.py
           --date "${{ steps.day.outputs.date }}"
@@ -347,7 +350,7 @@ jobs:
               python -c 'import json,sys; a=json.load(open(sys.argv[1],encoding="utf-8")); c=a.get("published") or a.get("candidate") or {}; print("- 來源：", a.get("source"), "；失敗原因：", a.get("failure"), "；核對沒過：", len(a.get("rejected") or []), "處"); [print("  -", r) for r in (a.get("rejected") or [])[:5]]; print("- 一句話：", c.get("one_line"))' "$file"
               echo "（全文與核對紀錄在執行紀錄 artifact 的 plain-daily/$DAY.json）"
             else
-              echo "這一班沒有建大盤資料包（等待、已完成或失敗在前面的步驟）"
+              echo "沒有白話分析紀錄檔：這一班沒建大盤資料包（等待、已完成或失敗在前面的步驟），或紀錄寫入失敗（看每日更新輸出裡 plain_daily 的 audit_error）"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 

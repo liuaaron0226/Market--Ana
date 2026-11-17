@@ -74,7 +74,7 @@ const chipsView = (c) => ({
 const plainView = (p) => ({
   ...pick(p, ["one_line", "worry", "relief", "source"]),
   points: pickAll(p.points, ["key", "title", "lines"]),
-  data_dates: pick(p.data_dates, ["price_and_foreign", "margin", "futures"]),
+  data_dates: pick(p.data_dates, ["price_and_foreign", "foreign", "futures", "margin"]),
 });
 
 // 本人 11-07：每張卡「目前前 10＋連續天數」，資料小，放總覽。

@@ -29,6 +29,15 @@ test("融資融券晚一天公布：另外標它自己的日期", () => {
     "資料 11/17（融資融券 11/14）・AI 整理，數字已由程式核對");
 });
 
+test("外資或期貨晚一天：各自標出來，順序固定", () => {
+  const dates = { price_and_foreign: "2026-11-17", foreign: "2026-11-14", futures: "2026-11-14", margin: "2026-11-14" };
+  assert.equal(plainFootnote({ ...ai, data_dates: dates }), "資料 11/17（外資 11/14、期貨 11/14、融資融券 11/14）・AI 整理，數字已由程式核對");
+});
+
+test("首頁卡片的資料日那一行也用同一行小字", () => {
+  assert.match(source, /\$\('readDate'\)\.textContent = plainFootnote\(PL\);/);
+});
+
 test("模型沒寫成、改用程式套句：不冒充 AI", () => {
   const note = plainFootnote({ ...ai, source: "template" });
   assert.equal(note, "資料 11/17・依當天數字自動整理");

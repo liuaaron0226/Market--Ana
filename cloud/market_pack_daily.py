@@ -118,52 +118,30 @@ def build(day: str, out: Path, *, root: Path = ROOT, fetch: bool = True) -> dict
     if report["analysis_cutoff"] != day:
         raise RuntimeError(f"analysis-data.js 截止日 {report['analysis_cutoff']} 不是 {day}")
     # 截止日對了才重寫白話分析（不對就整包改用上一版，模型這一次也不用呼叫）
-    mode, caller = _plain_settings(os.environ)
-    report["plain_daily"] = _apply_plain(out, day, mode=mode, call_model=caller,
-                                         audit_dir=root / "data/daily-update-log/plain-daily")
+    report["plain_daily"] = _rewrite_plain(out, day, environ=os.environ, audit_dir=root / "data/daily-update-log/plain-daily")
     if report["plain_daily"].get("published"):
         report["files"]["plain-data.js"] = f"rewritten（{report['plain_daily']['source']}）"
     return report
 
 
-def _plain_settings(environ) -> tuple[str, object]:
-    """workflow 傳進來的白話分析模式與 agy 位置（沒裝好就是 agy_unavailable，交給 produce 改用程式套句）。"""
-    plain_daily = _plain_module()
-    mode = plain_daily.normalize_mode(environ.get("PLAIN_DAILY_MODE"))
-    caller = plain_daily.agy_caller(environ.get("PLAIN_AGY_BIN") or None, home=environ.get("PLAIN_AGY_HOME") or None)
-    return mode, caller
-
-
-def _plain_module():
-    if str(ROOT) not in sys.path:
-        sys.path.insert(0, str(ROOT))
-    import plain_daily
-    return plain_daily
-
-
-def _apply_plain(out: Path, day: str, *, mode: str, call_model, audit_dir: Path) -> dict:
-    """依模式處理 out/plain-data.js；永遠不丟例外（白話分析出錯不能讓整包大盤資料改用上一版）。
+def _rewrite_plain(out: Path, day: str, *, environ, audit_dir: Path, ask_model=None) -> dict:
+    """白話分析每日重寫（plain_daily.rewrite_pack）：只有它回傳要發布的那份才覆寫 out/plain-data.js，否則留著沿用的人寫版。
+    永遠不丟例外——白話分析出任何錯（連模組載入失敗都算）都不能讓整包大盤資料改用上一版。
     回傳的摘要會印在 report 最後一行，所以不放全文；全文與核對結果寫在 audit_dir/<資料日>.json。"""
-    plain_daily = _plain_module()
-    mode = plain_daily.normalize_mode(mode)
-    if mode == "off":
-        return {"mode": "off"}
     try:
-        analysis = _read_assignment(out / "analysis-data.js", "window.MARKET_ANALYSIS = ")
-        chips = _read_assignment(out / "chips-data.js", "window.MARKET_CHIPS = ")
-        plain, audit = plain_daily.produce(analysis, chips, mode=mode, call_model=call_model)
+        if str(ROOT) not in sys.path:
+            sys.path.insert(0, str(ROOT))
+        import plain_daily
+        plain, summary = plain_daily.rewrite_pack(
+            _read_assignment(out / "analysis-data.js", "window.MARKET_ANALYSIS = "),
+            _read_assignment(out / "chips-data.js", "window.MARKET_CHIPS = "),
+            day=day, environ=environ, audit_dir=audit_dir, ask_model=ask_model)
+        if plain is not None:
+            plain_daily.write_plain(out / "plain-data.js", plain)
+        return summary
     except Exception as error:  # noqa: BLE001
-        plain, audit = None, {"mode": mode, "source": None, "failure": f"read_failed: {type(error).__name__}", "rejected": []}
-    if plain is not None:
-        plain_daily.write_plain(out / "plain-data.js", plain)
-    try:
-        audit_dir.mkdir(parents=True, exist_ok=True)
-        (audit_dir / f"{day}.json").write_text(json.dumps({"data_date": day, **audit, "published": plain},
-                                                          ensure_ascii=False, indent=2), encoding="utf-8")
-    except OSError:
-        pass
-    return {"mode": mode, "source": audit.get("source"), "failure": audit.get("failure"),
-            "rejected": len(audit.get("rejected") or []), "published": plain is not None}
+        return {"mode": str(environ.get("PLAIN_DAILY_MODE") or "off"), "published": False,
+                "failure": f"rewrite_failed: {type(error).__name__}: {str(error)[:200]}"}
 
 
 # 首頁六張籌碼卡點開的名單（11-17 本人回報最近幾天都「這一天沒有資料」，而且沒有任何檢查擋下）。

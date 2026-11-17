@@ -802,7 +802,7 @@
         const [who, ...rest] = String(p.title).split('：');
         return rest.length ? `<li><b>${esc(who)}</b><span>${esc(rest.join('：'))}</span></li>` : `<li><b>${esc(p.title)}</b><span>${esc(p.lines[0] || '')}</span></li>`;
       }).join('');
-      $('readDate').textContent = `股價、外資、期貨：${PL.data_dates.price_and_foreign.slice(5).replace('-', '/')}；融資融券：${PL.data_dates.margin.slice(5).replace('-', '/')}${PL.data_dates.margin < PL.data_dates.price_and_foreign ? '（官方還沒公布最新一天）' : ''}`;
+      $('readDate').textContent = plainFootnote(PL);
     }
     $('readCard').addEventListener('click', () => openPanel('plain', {}, $('readCard')));
   }
@@ -1033,8 +1033,12 @@
   function plainFootnote(pl) {
     if (!pl || !pl.data_dates) return '';
     const day = value => String(value || '').slice(5).replace('-', '/');
-    const { price_and_foreign: price, margin } = pl.data_dates;
-    const dates = `資料 ${day(price)}${margin && margin < price ? `（融資融券 ${day(margin)}）` : ''}`;
+    const price = pl.data_dates.price_and_foreign;
+    // 資料日以加權指數那天為準；外資、期貨、融資融券哪一份比它晚公布，就另外標它自己的日子
+    const late = [['foreign', '外資'], ['futures', '期貨'], ['margin', '融資融券']]
+      .filter(([key]) => pl.data_dates[key] && pl.data_dates[key] < price)
+      .map(([key, label]) => `${label} ${day(pl.data_dates[key])}`);
+    const dates = `資料 ${day(price)}${late.length ? `（${late.join('、')}）` : ''}`;
     const from = pl.source === 'ai' ? 'AI 整理，數字已由程式核對' : pl.source === 'template' ? '依當天數字自動整理' : '';
     return from ? `${dates}・${from}` : dates;
   }

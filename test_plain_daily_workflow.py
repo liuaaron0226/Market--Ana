@@ -97,6 +97,16 @@ class PlainDailyWorkflowTest(unittest.TestCase):
         order = [s.get("id") for s in steps()]
         self.assertLess(order.index("plain_auth"), order.index("run"))
 
+    def test_model_and_effort_are_one_constant_each(self):
+        # 本人 11-17 更正：這張用 Flash、思考程度 medium；要換模型只改這一處
+        env = step("run")["env"]
+        self.assertEqual((env["PLAIN_MODEL"], env["PLAIN_EFFORT"]), ("gemini-3.8-flash", "medium"))
+        self.assertEqual(DAILY.read_text(encoding="utf-8").count("PLAIN_MODEL:"), 1)
+
+    def test_summary_names_both_reasons_when_there_is_no_record(self):
+        summary = next(s for s in steps() if s.get("name") == "白話分析摘要")
+        self.assertIn("audit_error", summary["run"])
+
     def test_login_and_binary_are_wiped_at_the_end(self):
         wipe = [s for s in steps() if "agy-home" in s.get("run", "") and "rm -rf" in s.get("run", "")]
         self.assertTrue(wipe)
