@@ -74,6 +74,11 @@ with tempfile.TemporaryDirectory() as temp:
             page.evaluate("document.activeElement && document.activeElement.blur()")
             page.screenshot(path=str(OUT / "portfolio-desktop.png"), full_page=True)
             report["checks"].append("desktop:add-watchlist:add-holding:pnl:outside-scope")
+            # 到價推播收在頁首鈴鐺後面（本人 11-17）：本機伺服器沒有推播，鈴鐺不出現，清單底下也不再有設定區塊。
+            assert page.locator("#pushOpen").is_hidden()
+            assert page.locator("#pushDialog").is_hidden()
+            assert page.locator("#holdingRows ~ #pushPanel").count() == 0
+            report["checks"].append("push-settings:not-on-the-list")
 
             # 只在點進個股後才新增搜尋紀錄。
             page.goto(base + "/minimal.html", wait_until="networkidle")

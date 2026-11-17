@@ -629,12 +629,23 @@ class StockFactsFundamentalsTests(_FactsFixture, unittest.TestCase):
         self.assertEqual(facts['fundamentals'], {
             'valuation': {'pe': 25.91, 'pb': 9.01, 'yield': 0.98, 'data_date': '2025-03-06'},
             'revenue': {'period': '2026-09', 'mom': 15.4, 'yoy': 36.4},
-            'revenue_yoy': [{'period': p, 'yoy': y} for p, y in zip(
+            # 每一個月另附當月營收（億元，原件是千元；這組樣本金額很小，兩位小數都是 0）
+            'revenue_yoy': [{'period': p, 'yoy': y, 'revenue_100m': 0.0} for p, y in zip(
                 ['2025-09', '2025-10', '2025-11', '2025-12'] + [f'2026-{m:02d}' for m in range(1, 10)],
                 [10.0] * 11 + [30.0, 36.4])],
         })
         self.assertEqual(facts['summary'][2], '9 月營收年增 +36.4%，本益比 25.91。')
         self.assertEqual(facts['blocks'], ['summary', 'fundamentals', 'technical'])
+
+    def test_each_month_carries_its_revenue_in_hundred_millions(self):
+        # 本人 11-17「營收長條圖 x 軸我不知道是什麼，看不懂圖」：圖改畫每月營收（億元），所以每個月要帶當月營收。
+        # 原件單位是千元：2,365,432 千元＝23.65 億元；沒有那個月的資料就是 None（圖上留空）。
+        revenue = [{'period': '2025-09', 'revenue': 1_000_000}, {'period': '2026-08', 'revenue': 2_000_000},
+                   {'period': '2026-09', 'revenue': 2_365_432}]
+        series = self.analyze(change=0.5, close=100.5, revenue=revenue)['facts']['fundamentals']['revenue_yoy']
+        self.assertEqual(series[0], {'period': '2025-09', 'yoy': None, 'revenue_100m': 10.0})
+        self.assertEqual(series[1], {'period': '2025-10', 'yoy': None, 'revenue_100m': None})
+        self.assertEqual(series[-1], {'period': '2026-09', 'yoy': 136.5, 'revenue_100m': 23.65})
 
     def test_months_without_last_year_have_no_yoy(self):
         # 只有 2025-10 起的月營收：近 13 個月裡 2025-09～2026-09 都沒有去年同期 → 年增都不給；最新一期仍有月增。

@@ -63,17 +63,54 @@
 .bd .sf-figs span { display: block; color: var(--dim); font-size: 12px; }
 .bd .sf-figs b { display: block; margin-top: 5px; font: 500 20px var(--mono); }
 
-/* 融資券的走勢小圖、基本面的營收列與年增直條 */
+/* 融資券的走勢小圖、基本面的營收列與月營收圖 */
 .bd .sf-spark-cell { width: 68px; }
 .bd .sf-spark { display: block; width: 64px; height: 20px; margin-left: auto; }
 .bd .sf-spark polyline { fill: none; stroke: var(--ink); stroke-width: 1.2; vector-effect: non-scaling-stroke; }
 .bd .sf-sub { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-top: 14px; font-size: 13px; }
 .bd .sf-sub b { font: 500 13px var(--mono); white-space: nowrap; }
-.bd .sf-yoy { display: block; width: 100%; height: 64px; margin-top: 8px; }
-.bd .sf-yoy rect { fill: var(--ink); opacity: .32; }
-.bd .sf-yoy rect.latest { opacity: 1; }
-.bd .sf-yoy line { stroke: var(--line-strong); stroke-width: 1; }
-.bd .sf-caption { margin-top: 4px; color: var(--dim); font-size: 12px; }
+/* 月營收圖（本人 11-17 看不懂原本的年增直條）：上方一行讀數、每月一根長條、橫軸隔 3 個月標月份。
+   每一根是一顆鍵，畫圖區上留 18px 放選中那一根的數值、下留 20px 放月份；長條位置由 stock-facts.js 給的 --top、--h（0～1）換算。 */
+.bd .sf-rev { margin: 16px 0 0; }
+.bd .sf-rev-head { display: grid; gap: 2px; }
+.bd .sf-rev-title { color: var(--dim); font-size: 12px; }
+.bd .sf-rev-read { display: flex; flex-wrap: wrap; gap: 0 14px; min-height: 22px; font: 500 14px/22px var(--sans); font-variant-numeric: tabular-nums; }
+.bd .sf-rev-read span { white-space: nowrap; }
+.bd .sf-rev-read span:first-child { font-weight: 600; }
+/* 窄螢幕最新一個月（多一段月增）會排成兩行：先留兩行高，點別的月份時圖不會上下跳 */
+@media (max-width: 480px) { .bd .sf-rev-read { min-height: 44px; align-content: flex-start; } }
+.bd .sf-rev-plot {
+  --pad-top: 18px; --pad-bottom: 20px; --area: calc(100% - var(--pad-top) - var(--pad-bottom));
+  position: relative; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); height: 136px; margin-top: 6px;
+}
+/* 零軸（營收圖就是底線） */
+.bd .sf-rev-plot::after {
+  content: ""; position: absolute; left: 0; right: 0; height: 1px; pointer-events: none;
+  top: calc(var(--pad-top) + var(--zero) * (100% - var(--pad-top) - var(--pad-bottom))); background: var(--line-strong);
+}
+.bd .sf-rev-col {
+  position: relative; min-width: 0; height: 100%; padding: 0; border: 0; border-radius: var(--r-tag, 4px);
+  background: transparent; color: var(--ink); font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.bd .sf-rev-col:disabled { cursor: default; }
+.bd .sf-rev-col:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.bd .sf-rev-bar {
+  position: absolute; left: 20%; right: 20%; min-height: 1px; border-radius: 2px 2px 0 0; background: var(--ink); opacity: .26;
+  top: calc(var(--pad-top) + var(--top) * var(--area)); height: calc(var(--h) * var(--area));
+  transition: opacity 160ms var(--ease-out, ease-out);
+}
+.bd .sf-rev-col:hover .sf-rev-bar { opacity: .5; }
+.bd .sf-rev-col[aria-pressed="true"] .sf-rev-bar { opacity: 1; }
+/* 選中那一根的數值，貼在長條頂上；頭尾兩根靠內側對齊，才不會超出圖框 */
+.bd .sf-rev-val {
+  position: absolute; left: 50%; translate: -50% 0; bottom: calc(100% - var(--pad-top) - var(--top) * var(--area) + 3px);
+  font: 600 12px var(--mono); white-space: nowrap; visibility: hidden;
+}
+.bd .sf-rev-col[aria-pressed="true"] .sf-rev-val { visibility: visible; }
+.bd .sf-rev-x { position: absolute; left: 50%; translate: -50% 0; bottom: 0; color: var(--faint); font: 11px/16px var(--mono); white-space: nowrap; }
+.bd .sf-rev-col[aria-pressed="true"] .sf-rev-x { color: var(--ink); }
+.bd .sf-rev-col:nth-child(-n+2) :is(.sf-rev-val, .sf-rev-x) { left: 0; translate: none; }
+.bd .sf-rev-col:nth-last-child(-n+2) :is(.sf-rev-val, .sf-rev-x) { left: auto; right: 0; translate: none; }
 .bd .sf-spark circle { fill: var(--ink); }
 
 /* 消息：產業別一列＋公告清單（每則一列，點開看全文）；全文保留原本的換行 */

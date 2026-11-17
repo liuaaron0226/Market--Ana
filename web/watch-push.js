@@ -1,5 +1,7 @@
 // 自選股頁的「到價推播」（自選股關注 F 票）：站主在每一台裝置上自己打開或關掉、發一則測試通知、看已登記的裝置。
 // 只有站主、而且關注開關打開時 /api/watch/push 才有內容；其他人這一塊一直藏著，不發任何推播請求以外的東西。
+// 本人 2026-11-17「你把它放在我的庫存有點奇怪且占空間，我覺得你可以把他隱藏」：設定收進頁首的小鈴鐺，點了才浮出來（attach）；
+// 浮層開著時底下的頁面鎖住（scroll-lock.js）。
 (function () {
   const isIos = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   const standalone = () => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
@@ -64,21 +66,20 @@
     return parts.join('，');
   }
 
+  // 畫出設定；推播可用時回 true（不是站主、開關關著或讀不到時回 false，什麼都不畫）。
   async function mount(host) {
-    if (!host) return;
+    if (!host) return false;
     let info;
-    try { info = await api('/api/watch/push'); } catch (_) { return; }
-    if (!info?.available) return;
+    try { info = await api('/api/watch/push'); } catch (_) { return false; }
+    if (!info?.available) return false;
     host.hidden = false;
     host.replaceChildren();
-    const head = el('div', 'wp-head');
-    head.append(el('h3', '', '到價推播'));
     const status = el('p', 'wp-status');
     status.setAttribute('role', 'status');
     const body = el('div', 'wp-body');
     const devices = el('ul', 'wp-devices');
     const watcher = el('p', 'wp-watcher', watcherText(info.watcher));
-    host.append(head, body, status, devices, watcher);
+    host.append(body, status, devices, watcher);
     const say = (message, kind = '') => { status.textContent = message; if (kind) status.dataset.state = kind; else status.removeAttribute('data-state'); };
 
     let registration = null;
@@ -176,7 +177,44 @@
       item.append(name, meta, off);
       devices.append(item);
     }
+    return true;
   }
 
-  window.WatchPush = { mount, _logic: { watcherText } };
+  // 頁首的鈴鐺（opener）打開原生 <dialog>：Esc、關閉鈕（data-dialog-close）、點外面都收回，收回時解開頁面的鎖。
+  // 推播不可用時鈴鐺一直藏著。
+  function wireDialog(opener, dialog) {
+    opener.setAttribute('aria-expanded', 'false');
+    opener.addEventListener('click', () => {
+      if (dialog.open) return;
+      window.ScrollLock?.lock(dialog);
+      dialog.showModal();
+      opener.setAttribute('aria-expanded', 'true');
+    });
+    dialog.addEventListener('close', () => {
+      window.ScrollLock?.unlock(dialog);
+      opener.setAttribute('aria-expanded', 'false');
+    });
+    for (const key of dialog.querySelectorAll('[data-dialog-close]')) key.addEventListener('click', () => dialog.close());
+    // 和首頁浮板同一個判斷（home-fold.js）：按下與放開都落在面板外才收，在面板裡拖曳、鍵盤按出來的點擊不會誤關。
+    const outside = event => {
+      if (event.target !== dialog) return false;
+      const box = dialog.getBoundingClientRect();
+      return event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom;
+    };
+    let pressedOutside = false;
+    dialog.addEventListener('pointerdown', event => { pressedOutside = outside(event); });
+    dialog.addEventListener('click', event => {
+      if (pressedOutside && outside(event)) dialog.close();
+      pressedOutside = false;
+    });
+  }
+
+  async function attach({ opener, dialog, host }) {
+    if (!opener || !dialog || !host) return;
+    if (!(await mount(host))) return;
+    wireDialog(opener, dialog);
+    opener.hidden = false;
+  }
+
+  window.WatchPush = { mount, attach, _logic: { watcherText } };
 })();

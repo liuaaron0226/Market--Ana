@@ -164,7 +164,9 @@ def _fundamentals_block(valuation: dict | None, revenue: list[dict]) -> dict | N
         revenue_part = {'period': latest, 'mom': _growth(by_period[latest], by_period.get(_previous_month(latest))),
                         'yoy': _growth(by_period[latest], by_period.get(_previous_month(latest, 12)))}
         periods = [_previous_month(latest, n) for n in range(12, -1, -1)]   # 近 13 個月，由舊到新
-        yoy_series = [{'period': period, 'yoy': _growth(by_period.get(period), by_period.get(_previous_month(period, 12)))}
+        # 每個月另附當月營收（億元；原件單位千元，十萬千元＝一億）——個股頁的圖畫的是它（本人 11-17：原本只畫年增看不懂）
+        yoy_series = [{'period': period, 'yoy': _growth(by_period.get(period), by_period.get(_previous_month(period, 12))),
+                       'revenue_100m': _round(by_period[period] / 100_000, 2) if by_period.get(period) is not None else None}
                       for period in periods]
     if valuation_part is None and revenue_part is None:
         return None
