@@ -71,6 +71,8 @@
     upper: $('upperValue'),
     lower: $('lowerValue'),
     lineUpper: $('lineUpper'),
+    chartLegend: $('chartLegend'),
+    legendNames: $('legendNames'),
     lineLower: $('lineLower'),
     point: $('currentPoint'),
     marker: $('selectedCandleMarker'),
@@ -533,6 +535,10 @@
       volumeKind: 'amount',
       leftRail: marketLabelRail,
       overlayLabels: 'tags',
+      // 本人 2026-11-17：右側只寫數字、名稱與顏色寫在圖上方（這一頁的 #legendNames）；放大時上下範圍只看 K 棒
+      numbersOnly: true,
+      legend: false,
+      fitCandles: true,
       minViewCount: 10,
       onSelect: (index, anchor) => selectCandle(index, anchor, false),
       onClear: () => { selectedIndex = -1; clearedByChart = true; els.marker.hidden = true; els.mobileDetails.hidden = true; },
@@ -631,31 +637,37 @@
     element.style.top = `${y}px`;
   }
 
-  // 手機：收復／防守按鈕放到畫布下方操作列（不蓋 K 棒）；桌面維持貼在線旁。
-  function placeLineButtons() {
-    const target = isMobile() ? els.chartActions : els.chartStage;
-    [els.lineUpper, els.lineLower].forEach(button => {
-      if (button.parentElement !== target) target.prepend(button);
-      if (isMobile()) button.style.top = '';
-    });
-    if (els.lineUpper.parentElement === els.chartActions && els.lineUpper.nextElementSibling !== els.lineLower) els.lineUpper.after(els.lineLower);
+  // 圖上方那一行的名稱：均線、布林（顏色和圖上的線一樣），再加有掛價籤的判斷線（預測的轉強線／轉弱線）。
+  // 收復線、防守線的名稱已經在合成一顆的那顆鍵上，不重複寫。內容一樣就不重畫
+  let legendShown = '';
+  function renderLegend() {
+    if (!chart) return;
+    const items = [...chart.legendItems(),
+      ...chart.overlays.filter(o => o.tag !== false).map(o => ({ name: o.short || o.label, color: o.color, alpha: 1, mark: true }))];
+    const key = JSON.stringify(items);
+    if (key !== legendShown) {
+      legendShown = key;
+      els.legendNames.replaceChildren(...items.map(item => {
+        const name = document.createElement('span');
+        name.className = item.mark ? 'legend-name is-line' : 'legend-name';
+        name.textContent = item.name;
+        name.style.setProperty('--tone', item.color);
+        if (item.alpha < 1) name.style.opacity = String(item.alpha);
+        return name;
+      }));
+    }
+    // K 線從這一行下面開始畫：手機上可能排成兩行，量實際的高度
+    const height = Math.ceil(els.chartLegend.getBoundingClientRect().height);
+    if (els.chartStage.style.getPropertyValue('--legend-h') !== `${height}px`) {
+      els.chartStage.style.setProperty('--legend-h', `${height}px`);
+      requestAnimationFrame(() => chart.draw());
+    }
   }
 
   function updateOverlayControls() {
-    placeLineButtons();
+    renderLegend();
     const g = visibleGeometry();
     if (!g) return;
-    let upperTop = Math.max(48, Math.min(g.H - 50, g.y(UPPER) - 22));
-    let lowerTop = Math.max(48, Math.min(g.H - 50, g.y(LOWER) - 22));
-    if (Math.abs(lowerTop - upperTop) < 54) {
-      const middle = (upperTop + lowerTop) / 2;
-      upperTop = Math.max(48, Math.min(g.H - 104, middle - 27));
-      lowerTop = Math.min(g.H - 50, upperTop + 54);
-    }
-    if (!isMobile()) {
-      els.lineUpper.style.top = `${upperTop}px`;
-      els.lineLower.style.top = `${lowerTop}px`;
-    }
     const lastIndex = chart.candles.length - 1;
     const currentVisible = chart.view.end === chart.candles.length && lastIndex >= g.start && Number.isFinite(chart.candles[lastIndex].close);
     els.point.hidden = !currentVisible;

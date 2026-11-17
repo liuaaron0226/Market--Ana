@@ -583,7 +583,20 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
         check(f"{tag}：指標切回成交金額", study_pressed(page, "volume"))
     step(f"{tag}：指標切換", studies)
     step(f"{tag}：K 線與指標同一個圖框",
-         lambda: joined_chart(page, tag, "#mainChart", ["成交金額", "MACD", "KD", "RSI", "外資", "投信", "自營商"], "#chartActions" if mobile else None))
+         lambda: joined_chart(page, tag, "#mainChart", ["成交金額", "MACD", "KD", "RSI", "外資", "投信", "自營商"], None))
+    # 本人 11-17：收復線、防守線合成一顆鍵，和各條線的名稱一起放在 K 線上方；右側價格欄只寫數字
+    def legend_row() -> None:
+        seen = page.evaluate("""() => {
+          const box = s => document.querySelector(s).getBoundingClientRect();
+          const legend = box('#chartLegend'), chart = box('#mainChart canvas');
+          const names = [...document.querySelectorAll('#legendNames .legend-name')].map(n => n.textContent);
+          return { above: legend.bottom <= chart.top + 1, keys: ['#lineUpper', '#lineLower'].every(k => document.querySelector('#chartLegend ' + k)),
+                   names, actions: getComputedStyle(document.getElementById('chartActions')).display };
+        }""")
+        check(f"{tag}：收復線、防守線合成一顆鍵在 K 線上方，旁邊寫各條線的名稱", seen["above"] and seen["keys"] and seen["names"][:2] == ["MA18", "MA45"] and "布林20" in seen["names"], seen)
+        if mobile:
+            check(f"{tag}：圖下方那一列沒選某一天時不佔位置", seen["actions"] == "none", seen)
+    step(f"{tag}：K 線上方一行", legend_row)
 
     def swipe_study() -> None:
         # 指標區和 K 線是同一張圖，手勢一樣（本人 11-15）：左右拖是平移歷史，不再是切換指標。
