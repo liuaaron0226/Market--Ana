@@ -102,8 +102,8 @@
 
     const compact = innerWidth <= 700;
     const W = compact ? 620 : 900, H = compact ? 340 : 310, L = compact ? 48 : 54, R = compact ? 24 : 72, T = 20, B = 34;
-    const times = series.flatMap(item => item.points.map(point => Date.parse(point[0])));
-    const values = series.flatMap(item => item.points.map(point => point[1]));
+    const times = series.flatMap(item => item.points.map(point => Date.parse(point[0]))).filter(Number.isFinite);
+    const values = series.flatMap(item => item.points.map(point => point[1])).filter(Number.isFinite);
     const minTime = Math.min(...times), maxTime = Math.max(...times);
     let minValue = Math.min(100, ...values), maxValue = Math.max(100, ...values);
     const pad = Math.max(2, (maxValue - minValue) * .08);
@@ -120,6 +120,9 @@
       svg.append(label);
     }
     svg.append(svgNode('line', { x1: L, x2: W - R, y1: y(100), y2: y(100), class: 'cmp-base' }));
+    const zeroLabel = svgNode('text', { x: L - 8, y: y(100) + 4, 'text-anchor': 'end', class: 'cmp-axis-label' });
+    zeroLabel.textContent = '0%';
+    svg.append(zeroLabel);
     for (let i = 0; i < 4; i += 1) {
       const time = minTime + (maxTime - minTime) * i / 3;
       const label = svgNode('text', { x: x(time), y: H - 8, 'text-anchor': i === 0 ? 'start' : i === 3 ? 'end' : 'middle', class: 'cmp-axis-label' });
@@ -148,14 +151,16 @@
 
     const dates = [...new Set(series.flatMap(item => item.points.map(point => point[0])))].sort();
     let keyboardIndex = dates.length - 1;
-    const nearest = (list, time) => list.reduce((best, item) => (Math.abs(Date.parse(item[0] ?? item) - time) < Math.abs(Date.parse(best[0] ?? best) - time) ? item : best), list[0]);
+    // 日期是字串、線上的點是 [日期, 值]：分開找最近的（字串取 [0] 會變成第一個字）
+    const nearestDate = time => dates.reduce((best, day) => (Math.abs(Date.parse(day) - time) < Math.abs(Date.parse(best) - time) ? day : best), dates[0]);
+    const nearestPoint = (list, time) => list.reduce((best, point) => (Math.abs(Date.parse(point[0]) - time) < Math.abs(Date.parse(best[0]) - time) ? point : best), list[0]);
     const showAt = (time, clientX = null) => {
-      const day = nearest(dates, time), picked = Date.parse(day), xx = x(picked);
+      const day = nearestDate(time), picked = Date.parse(day), xx = x(picked);
       crosshair.setAttribute('x1', xx); crosshair.setAttribute('x2', xx); crosshair.removeAttribute('hidden');
       const title = document.createElement('time');
       title.textContent = day;
       tooltip.replaceChildren(title, ...series.map(item => {
-        const point = nearest(item.points, picked), row = document.createElement('p'), label = node('span'), line = node('i');
+        const point = nearestPoint(item.points, picked), row = document.createElement('p'), label = node('span'), line = node('i');
         line.style.setProperty('--series-color', colorOf(item.key));
         label.append(line, document.createTextNode(item.label));
         row.append(label, node('b', '', signed(point[1] - 100)));

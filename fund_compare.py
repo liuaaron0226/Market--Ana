@@ -124,16 +124,17 @@ def load_seed(code: str, *, seed_dir: Path = SEED_DIR) -> tuple[list[tuple[str, 
     """瀏覽器回補的原件：逐檔核對清單上的 SHA-256，對不上就停（不拿被改過的檔算）。"""
     folder = seed_dir / code
     manifest = json.loads((folder / "backfill-manifest.json").read_text(encoding="utf-8"))
-    navs: list[tuple[str, float]] = []
+    nav_files: list[list[tuple[str, float]]] = []
     pages: list[str] = []
     for entry in manifest["files"]:
         data = (folder / entry["file"]).read_bytes()
         if _sha256(data) != entry["sha256"]:
             raise ValueError(f"{code} 回補原件 {entry['file']} 的 SHA-256 和清單不符，停止")
         if entry["kind"] == "nav":
-            navs = parse_nav_csv(data.decode("utf-8"))
+            nav_files.append(parse_nav_csv(data.decode("utf-8")))
         elif entry["kind"] == "distributions":
             pages.append(data.decode("utf-8"))
+    navs, _ = merge_navs(nav_files)   # 之後補缺口的檔只會補沒有的日子；同一天不同數字由 load_history 的合併記錄
     return navs, parse_backfill_distributions(pages)
 
 
@@ -148,7 +149,7 @@ def merge_navs(sources: Sequence[Sequence[tuple[str, float]]]) -> tuple[list[tup
             if day not in merged:
                 merged[day] = nav
             elif abs(merged[day] - nav) > 1e-9:
-                issues.append({"kind": "conflict", "date": day, "kept": merged[day], "other": nav})
+                issues.append({"kind": "nav-conflict", "date": day, "kept": merged[day], "other": nav})
     return sorted(merged.items()), issues
 
 
@@ -162,7 +163,7 @@ def merge_distributions(sources: Sequence[Sequence[Mapping[str, Any]]]) -> tuple
             if current is None:
                 merged[row["ex_date"]] = dict(row)
             elif abs(current["amount"] - row["amount"]) > 1e-12:
-                issues.append({"kind": "conflict", "ex_date": row["ex_date"], "kept": current["amount"], "other": row["amount"]})
+                issues.append({"kind": "dist-conflict", "ex_date": row["ex_date"], "kept": current["amount"], "other": row["amount"]})
             elif current["capital_pct"] is None and row["capital_pct"] is not None:
                 merged[row["ex_date"]] = dict(row)
     return [merged[day] for day in sorted(merged)], issues
@@ -209,11 +210,16 @@ CBC_URL = "https://cpx.cbc.gov.tw/api/OpenData/FTDOpenData_Day"   # 同 level_si
 LICENSE = "政府資料開放授權條款第 1 版"
 RAW_DIR = ROOT / "data/funds/raw"
 R2_PREFIX = "funds/raw/"
+TAIPEI = timezone(timedelta(hours=8))
 FX_FROM = "2022-11-01"   # 集保淨值從 2022-12-01 起；匯率留到那之前一點就夠
 FUNDS: dict[str, dict[str, str]] = {
     "BLKTENAU": {"code": "BLKTENAU", "isin": "LU2533723974", "currency": "USD", "class_launch": "2022-10-26",
                  "name": "貝萊德世界科技基金 A10美元(總報酬穩定配息)", "short_name": "貝萊德世界科技 A10"},
 }
+
+
+def taipei_today() -> str:
+    return datetime.now(TAIPEI).date().isoformat()
 
 
 def _http_get(url: str) -> bytes:
@@ -224,25 +230,20 @@ def _http_get(url: str) -> bytes:
         return response.read()
 
 
-def _dump(payload: Any) -> bytes:
+def _extract_bytes(payload: Any) -> bytes:
     return (json.dumps(payload, ensure_ascii=False, indent=1) + "\n").encode("utf-8")
 
 
-def _fetched_today(raw_dir: Path, prefix: str, today: str) -> bool:
-    for path in raw_dir.glob(prefix + "*.json"):
-        try:
-            if str(json.loads(path.read_text(encoding="utf-8")).get("fetched_at", ""))[:10] == today:
-                return True
-        except (OSError, ValueError):
-            continue
-    return False
+def _mark_name(today: str, key: str) -> str:
+    """當天抓過的記號：fetched-<日期>-<來源>.json。檔名每天都不同，和抽取檔一樣只增不改，R2 照樣同步。"""
+    return f"fetched-{today}-{key}.json"
 
 
 def _save(raw_dir: Path, name: str, payload: dict[str, Any]) -> str:
     target = raw_dir / name
     if target.exists():
         return "unchanged"
-    target.write_bytes(_dump(payload))
+    target.write_bytes(_extract_bytes(payload))
     return "saved"
 
 
@@ -317,24 +318,27 @@ def daily(*, store, get: Callable[[str], bytes] | None = None, now: str | None =
     開放資料淨值只留約 4 個交易日：每個平日都跑，漏一次下一次仍涵蓋得到；漏太久由缺日檢查報出來。
     一個來源失敗不擋其他來源，也不擋每日更新（工作流程裡這一步 continue-on-error）。"""
     get = get or _http_get
-    now = now or datetime.now(timezone(timedelta(hours=8))).isoformat(timespec="seconds")
+    now = now or datetime.now(TAIPEI).isoformat(timespec="seconds")
     today = now[:10]
     downloaded = sync_down(store, raw_dir) if store is not None else 0
     raw_dir.mkdir(parents=True, exist_ok=True)
     sources: dict[str, Any] = {}
     jobs: list[tuple[str, str, str, Callable[[bytes], dict[str, Any]]]] = []
     for code in FUNDS:
-        jobs.append(("nav", f"{code}-nav-", NAV_URL, lambda c, code=code: _extract_nav(code, c, now, raw_dir)))
-        jobs.append(("dist", f"{code}-dist-", DIST_URL, lambda c, code=code: _extract_dist(code, c, now, raw_dir)))
-    jobs.append(("fx", "cbc-usdtwd-", CBC_URL, lambda c: _extract_fx(c, now, raw_dir)))
-    for key, prefix, url, extract in jobs:
-        if _fetched_today(raw_dir, prefix, today):
+        jobs.append(("nav", f"nav-{code}", NAV_URL, lambda c, code=code: _extract_nav(code, c, now, raw_dir)))
+        jobs.append(("dist", f"dist-{code}", DIST_URL, lambda c, code=code: _extract_dist(code, c, now, raw_dir)))
+    jobs.append(("fx", "fx", CBC_URL, lambda c: _extract_fx(c, now, raw_dir)))
+    for key, mark, url, extract in jobs:
+        mark_path = raw_dir / _mark_name(today, mark)
+        if mark_path.exists():
             sources[key] = {"status": "already-fetched-today"}
             continue
         try:
             sources[key] = extract(get(url))
         except Exception as error:  # noqa: BLE001 —— 任何一個來源壞掉都只記下來
             sources[key] = {"status": "failed", "error": f"{type(error).__name__}: {error}"}
+            continue
+        mark_path.write_bytes(_extract_bytes({"fetched_at": now, "url": url, **sources[key]}))
     uploaded = sync_up(store, raw_dir) if (store is not None and upload) else 0
     return {"now": now, "downloaded": downloaded, "sources": sources, "uploaded": uploaded}
 
@@ -475,8 +479,12 @@ def precompute(loader, end: str, *, as_of: str, raw_dir: Path = RAW_DIR,
 
     loader 是 benchmark_compare.Loader（0050 含息序列只用它，和個股頁對照同一套）；end 是資料包的資料日。"""
     funds: dict[str, str] = {}
-    problems: dict[str, str] = {}
     bench, _, _ = loader.series("0050", end)
+    if not bench:
+        return {}, {code: "沒有 0050 資料" for code in FUNDS}
+    # 和個股對照同一個檢查：0050 的除息表要涵蓋到資料日，否則數字照出、頁面提醒
+    bench_issues = [] if loader.dividends_included("上市", bench, "0050") else [{"kind": "benchmark-dividends-incomplete"}]
+    problems: dict[str, str] = {}
     for code in FUNDS:
         try:
             history = load_history(code, raw_dir=raw_dir, seed_dir=seed_dir, as_of=as_of)
@@ -486,12 +494,9 @@ def precompute(loader, end: str, *, as_of: str, raw_dir: Path = RAW_DIR,
         if not history["fx"]:
             problems[code] = "沒有匯率資料"
             continue
-        if not bench:
-            problems[code] = "沒有 0050 資料"
-            continue
         payload = fund_payload(code, navs=history["navs"], distributions=history["distributions"], fx=history["fx"],
                                benchmark=bench, benchmark_date=bench[-1][0],
-                               issues=[i for i in history["issues"] if i["kind"] != "fx-missing"])
+                               issues=[*(i for i in history["issues"] if i["kind"] != "fx-missing"), *bench_issues])
         funds[code] = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     return funds, problems
 
@@ -510,7 +515,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     check = sub.add_parser("check")
     check.add_argument("--as-of")
     args = parser.parse_args(argv)
-    today = datetime.now(timezone(timedelta(hours=8))).date().isoformat()
+    today = taipei_today()
     report: dict[str, Any] = {}
     if args.command == "daily":
         store = None

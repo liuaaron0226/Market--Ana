@@ -57,7 +57,7 @@
       if (!response.ok) return response.status === 404;   // 本機版沒有帳號
       return Boolean((await response.json()).owner);
     } catch {
-      return true;
+      return false;   // 連線出錯時不確定是誰，寧可不顯示
     }
   }
 

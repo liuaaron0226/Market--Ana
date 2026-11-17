@@ -71,12 +71,16 @@ test("提醒：缺日、太久沒更新、數字對不上，各一句白話", ()
   const issues = [
     { kind: "gap", from: "2026-11-17", to: "2026-11-19", weekdays: 3 },
     { kind: "stale", latest: "2026-11-24", weekdays_behind: 9 },
-    { kind: "conflict", date: "2026-11-13", kept: 17.73, other: 17.8 },
+    { kind: "nav-conflict", date: "2026-11-13", kept: 17.73, other: 17.8 },
+    { kind: "dist-conflict", ex_date: "2026-10-30", kept: 0.162, other: 0.17 },
+    { kind: "benchmark-dividends-incomplete" },
   ];
   assert.deepEqual(read({ ...PAYLOAD, issues }).issues, [
     "缺 2026-11-17～2026-11-19 的淨值（3 個平日沒抓到），這段報酬可能不準。",
     "基金淨值停在 2026-11-24，已經 9 個平日沒有更新。",
     "2026-11-13 的淨值兩份資料不一致（17.73／17.8），先用 17.73。",
+    "2026-10-30 的配息兩份資料不一致（0.162／0.17），先用 0.162。",
+    "0050 最近的除息資料還沒抓齊，0050 的含息報酬可能少算。",
   ]);
   assert.deepEqual(read(PAYLOAD).issues, []);
 });

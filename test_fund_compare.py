@@ -118,6 +118,28 @@ class ParseTest(unittest.TestCase):
                 fc.load_seed("BLKTENAU", seed_dir=Path(tmp))
 
 
+class SeedMergeTest(unittest.TestCase):
+    def test_later_nav_backfill_files_are_merged_not_overwritten(self) -> None:
+        # 之後若有缺口要再從集保網頁補一段，清單多一份 kind nav 的檔即可，不必整份重讀。
+        import hashlib
+        import json
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            dst = Path(tmp) / "BLKTENAU"
+            dst.mkdir()
+            src = fc.SEED_DIR / "BLKTENAU"
+            for path in src.iterdir():
+                (dst / path.name).write_bytes(path.read_bytes())
+            extra = b"2026-11-17,17.200000\n"
+            (dst / "nav-backfill-2.csv").write_bytes(extra)
+            manifest = json.loads((dst / "backfill-manifest.json").read_text(encoding="utf-8"))
+            manifest["files"].append({"file": "nav-backfill-2.csv", "kind": "nav", "sha256": hashlib.sha256(extra).hexdigest()})
+            (dst / "backfill-manifest.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+            navs, _ = fc.load_seed("BLKTENAU", seed_dir=Path(tmp))
+        self.assertEqual((len(navs), navs[0][0], navs[-1]), (992, "2022-12-01", ("2026-11-17", 17.2)))
+
+
 class GapTest(unittest.TestCase):
     """缺日檢查：官方檔涵蓋的區間內沒有淨值＝基金休市（正常）；沒有任何一份官方檔涵蓋到的平日才算缺。"""
 
@@ -154,7 +176,12 @@ class MergeTest(unittest.TestCase):
         merged, issues = fc.merge_navs([[("2026-11-12", 18.02), ("2026-11-13", 17.73)],
                                         [("2026-11-13", 17.80), ("2026-11-16", 17.14)]])
         self.assertEqual(merged, [("2026-11-12", 18.02), ("2026-11-13", 17.73), ("2026-11-16", 17.14)])
-        self.assertEqual(issues, [{"kind": "conflict", "date": "2026-11-13", "kept": 17.73, "other": 17.8}])
+        self.assertEqual(issues, [{"kind": "nav-conflict", "date": "2026-11-13", "kept": 17.73, "other": 17.8}])
+
+    def test_distribution_amount_conflict_has_its_own_kind(self) -> None:
+        row = {"ex_date": "2026-10-30", "amount": 0.162, "capital_pct": 0.0}
+        _, issues = fc.merge_distributions([[row], [{**row, "amount": 0.17}]])
+        self.assertEqual(issues, [{"kind": "dist-conflict", "ex_date": "2026-10-30", "kept": 0.162, "other": 0.17}])
 
     def test_distribution_with_ratio_replaces_one_without(self) -> None:
         # 配息來源比例常常晚幾天才公布（先是 N/A）：同一個除息日，有比例的那份優先。
@@ -319,9 +346,13 @@ class WorkflowTest(unittest.TestCase):
 
 
 class _FakeLoader:
-    def __init__(self, series):
+    def __init__(self, series, dividends_ok: bool = True):
         self._series = series
+        self.dividends_ok = dividends_ok
         self.asked: list[tuple[str, str]] = []
+
+    def dividends_included(self, market, series, code=None) -> bool:
+        return self.dividends_ok
 
     def series(self, code: str, end: str):
         self.asked.append((code, end))
@@ -350,6 +381,18 @@ class PrecomputeTest(unittest.TestCase):
         payload = json.loads(funds["BLKTENAU"])
         self.assertEqual((payload["schema"], payload["fund"]["code"], payload["data_date"]), ("fund-vs-0050/v1", "BLKTENAU", "2026-11-10"))
         self.assertEqual(self.loader.asked, [("0050", "2026-11-10")])
+
+    def test_benchmark_dividends_not_complete_is_flagged(self) -> None:
+        # 個股對照會檢查 0050 的除息表是否完整；基金這邊也一樣，不完整就在頁面上提醒（數字照出）。
+        import json
+        (self.raw / "cbc-usdtwd-2026-11-16.json").write_text(json.dumps({"rows": [["2022-11-30", 31.0]]}), encoding="utf-8")
+        self.loader.dividends_ok = False
+        funds, _ = fc.precompute(self.loader, "2026-11-10", as_of="2026-11-17", raw_dir=self.raw)
+        self.assertIn({"kind": "benchmark-dividends-incomplete"}, json.loads(funds["BLKTENAU"])["issues"])
+
+    def test_taipei_today_is_a_date(self) -> None:
+        import re
+        self.assertRegex(fc.taipei_today(), r"^\d{4}-\d{2}-\d{2}$")
 
     def test_no_fx_means_no_fund_and_a_reason(self) -> None:
         funds, problems = fc.precompute(self.loader, "2026-11-10", as_of="2026-11-17", raw_dir=self.raw)
@@ -386,7 +429,7 @@ class DailyTest(unittest.TestCase):
         result = self.run_daily(self.get_for(nav, _opendata_dist(("2026-10-30", "0.162000000", "N/A")),
                                              _cbc(("2026-11-16", "32.8"), ("2022-10-31", "32.0"))))
         self.assertEqual(result["sources"]["nav"]["status"], "saved")
-        saved = sorted(p.name for p in self.raw.iterdir())
+        saved = sorted(p.name for p in self.raw.iterdir() if not p.name.startswith("fetched-"))
         self.assertEqual(saved, ["BLKTENAU-dist-2026-11-16.json", "BLKTENAU-nav-2026-11-12.json", "cbc-usdtwd-2026-11-16.json"])
         import hashlib
         import json
@@ -394,7 +437,9 @@ class DailyTest(unittest.TestCase):
         self.assertEqual(body["file_sha256"], hashlib.sha256(nav).hexdigest())
         self.assertEqual(body["window"], ["2026-11-09", "2026-11-12"])
         self.assertEqual(len(body["rows"]), 2)
-        self.assertEqual(sorted(self.store.keys("funds/raw/")), ["funds/raw/" + name for name in saved])
+        uploaded = sorted(self.store.keys("funds/raw/"))
+        self.assertEqual([k for k in uploaded if "/fetched-" not in k], ["funds/raw/" + name for name in saved])
+        self.assertEqual(len(uploaded), len(saved) + 3)   # 三個來源各一個當天抓過的記號
 
     def test_second_run_same_day_does_not_fetch_again(self) -> None:
         get = self.get_for(_opendata_nav(("2026-11-12", "18.02")), _opendata_dist(("2026-10-30", "0.162", "N/A")),
@@ -404,6 +449,26 @@ class DailyTest(unittest.TestCase):
         result = self.run_daily(get, now="2026-11-17T15:00:00+08:00")
         self.assertEqual(self.calls, [])
         self.assertEqual(result["sources"]["nav"]["status"], "already-fetched-today")
+
+    def test_unchanged_file_next_day_still_counts_as_fetched_that_day(self) -> None:
+        # 配息檔一個月才換一次、休市日匯率也不變：檔名相同不重寫，但當天抓過要留記號，同一天後面幾個時段不再抓。
+        get = self.get_for(_opendata_nav(("2026-11-12", "18.02")), _opendata_dist(("2026-10-30", "0.162", "N/A")),
+                           _cbc(("2026-11-16", "32.8")))
+        self.run_daily(get, now="2026-11-17T09:00:00+08:00")
+        second = self.run_daily(get, now="2026-11-18T09:00:00+08:00")
+        self.assertEqual(second["sources"]["dist"]["status"], "unchanged")
+        self.calls.clear()
+        third = self.run_daily(get, now="2026-11-18T15:00:00+08:00")
+        self.assertEqual((self.calls, third["sources"]["dist"]["status"]), ([], "already-fetched-today"))
+        self.assertIn("funds/raw/fetched-2026-11-18-dist-BLKTENAU.json", self.store.keys("funds/raw/"))
+
+    def test_failed_fetch_leaves_no_mark_so_a_later_slot_retries(self) -> None:
+        def broken(url: str) -> bytes:
+            raise OSError("timeout")
+        self.run_daily(broken)
+        get = self.get_for(_opendata_nav(("2026-11-12", "18.02")), _opendata_dist(("2026-10-30", "0.162", "N/A")),
+                           _cbc(("2026-11-16", "32.8")))
+        self.assertEqual(self.run_daily(get, now="2026-11-17T15:00:00+08:00")["sources"]["nav"]["status"], "saved")
 
     def test_restores_files_from_r2_before_fetching(self) -> None:
         self.store.put("funds/raw/BLKTENAU-nav-2026-11-05.json", b'{"old": true}')

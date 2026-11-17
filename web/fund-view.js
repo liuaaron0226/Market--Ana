@@ -44,8 +44,9 @@
   function issueText(issue) {
     if (issue.kind === 'gap') return `缺 ${issue.from}～${issue.to} 的淨值（${issue.weekdays} 個平日沒抓到），這段報酬可能不準。`;
     if (issue.kind === 'stale') return `基金淨值停在 ${issue.latest}，已經 ${issue.weekdays_behind} 個平日沒有更新。`;
-    if (issue.kind === 'conflict' && issue.date) return `${issue.date} 的淨值兩份資料不一致（${issue.kept}／${issue.other}），先用 ${issue.kept}。`;
-    if (issue.kind === 'conflict') return `${issue.ex_date} 的配息兩份資料不一致（${issue.kept}／${issue.other}），先用 ${issue.kept}。`;
+    if (issue.kind === 'nav-conflict') return `${issue.date} 的淨值兩份資料不一致（${issue.kept}／${issue.other}），先用 ${issue.kept}。`;
+    if (issue.kind === 'dist-conflict') return `${issue.ex_date} 的配息兩份資料不一致（${issue.kept}／${issue.other}），先用 ${issue.kept}。`;
+    if (issue.kind === 'benchmark-dividends-incomplete') return '0050 最近的除息資料還沒抓齊，0050 的含息報酬可能少算。';
     return '';
   }
 

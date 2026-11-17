@@ -1631,8 +1631,6 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _send_fund_vs_0050(self, path: str) -> None:
         """GET /api/funds/{集保基金代碼}/vs-0050：和雲端同一份（fund_compare.precompute），資料不齊回 404。"""
-        from datetime import timedelta
-
         import benchmark_compare
         import fund_compare
 
@@ -1641,8 +1639,8 @@ class Handler(SimpleHTTPRequestHandler):
             self._send_json({"error": "bad-request", "message": "基金代碼格式不正確"}, 400)
             return
         try:
-            today = datetime.now(timezone(timedelta(hours=8))).date().isoformat()
-            funds, _ = fund_compare.precompute(benchmark_compare.Loader(), self._compare_end(self._universe()), as_of=today)
+            funds, _ = fund_compare.precompute(benchmark_compare.Loader(), self._compare_end(self._universe()),
+                                               as_of=fund_compare.taipei_today())
         except Exception as error:  # 不把 stack trace 送到瀏覽器
             print(f"fund vs-0050 failed for {code}: {type(error).__name__}: {error}")
             self._send_json({"error": "compare-failed", "message": "對照暫時無法計算"}, 500)

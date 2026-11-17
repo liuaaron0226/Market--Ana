@@ -27,11 +27,6 @@ PACK_SCHEMA = "compare-0050-pack/v1"
 DEFAULT_OUT = Path(__file__).resolve().parent / ".compare-pack.json"
 
 
-def _taipei_today() -> str:
-    from datetime import datetime, timedelta, timezone
-    return datetime.now(timezone(timedelta(hours=8))).date().isoformat()
-
-
 def _dump(payload: Any) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
@@ -58,7 +53,7 @@ def build_pack(universe_path: Path) -> dict[str, Any]:
 
     # 基金對照 0050（2026-11-17 本人定案）：和個股對照同一個 Loader 的 0050 含息序列。資料不齊就不出那檔，不擋整個資料包。
     try:
-        funds, problems = fund_compare.precompute(loader, end, as_of=_taipei_today())
+        funds, problems = fund_compare.precompute(loader, end, as_of=fund_compare.taipei_today())
     except Exception as error:  # noqa: BLE001 —— 基金資料壞掉不能讓個股對照跟著停
         funds, problems = {}, {"*": f"{type(error).__name__}: {error}"}
     for code, reason in problems.items():

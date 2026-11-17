@@ -542,36 +542,45 @@ function compareCodes(params, max) {
   return codes.length > max ? null : codes;
 }
 
+// 和其他市場 API 共用每分鐘的查詢額度；超過回 429（回傳 Response），沒超過回 null。
+async function consumeMarket(env, email, deps) {
+  try {
+    await consume(env.DB, email, "market", (deps.now || Date.now)(), deps.rate);
+    return null;
+  } catch (e) {
+    if (e instanceof RateLimited) return json(429, { error: "rate-limited", message: "查詢太頻繁，請稍後再試" }, { "retry-after": String(e.retryAfter) });
+    throw new HttpError(503, "暫時無法處理，請稍後再試");
+  }
+}
+
+// 基金對照 0050：build 前已預算好整份，原樣回傳；這檔今天資料不齊（或舊資料包沒有 funds）就是 404。代碼格式不對不扣額度。
+async function handleFundCompare(env, email, deps, pack, code, privateError) {
+  if (!FUND_CODE_RE.test(code)) return badRequest("基金代碼格式不正確");
+  const limited = await consumeMarket(env, email, deps);
+  if (limited) return limited;
+  const text = Object.hasOwn(pack.funds ?? {}, code) ? pack.funds[code] : null;
+  if (text === null) return privateError(404, { error: "fund-unavailable", message: "這檔基金今天的對照資料還沒準備好" });
+  return rawJson(text);
+}
+
 async function handleCompareApi(request, env, path, email, deps) {
   if (request.method !== "GET") throw new HttpError(405, "方法不允許");
   const pack = deps.comparePack;
   if (!pack || pack.schema !== COMPARE_SCHEMA) throw new HttpError(503, "資料尚未就緒");
   const privateError = (status, body) => json(status, body, { "cache-control": "private, no-store" });
-  let codes;
   const fund = path.match(FUND_PATH);
-  if (fund && !FUND_CODE_RE.test(fund[1])) return badRequest("基金代碼格式不正確");
+  if (fund) return handleFundCompare(env, email, deps, pack, fund[1], privateError);
+  let codes;
   const vs = path.match(VS_PATH);
-  if (fund) {
-    codes = [];
-  } else if (vs) {
+  if (vs) {
     if (!CODE_RE.test(vs[1])) return badRequest("代號格式不正確");
     codes = [vs[1]];
   } else {
     codes = compareCodes(new URL(request.url).searchParams, pack.max_codes);
     if (!codes) return badRequest(`codes 需為 1～${pack.max_codes} 個以逗號分隔的代號`);
   }
-  try {
-    await consume(env.DB, email, "market", (deps.now || Date.now)(), deps.rate);
-  } catch (e) {
-    if (e instanceof RateLimited) return json(429, { error: "rate-limited", message: "查詢太頻繁，請稍後再試" }, { "retry-after": String(e.retryAfter) });
-    throw new HttpError(503, "暫時無法處理，請稍後再試");
-  }
-  if (fund) {
-    // 基金對照 0050：build 前已預算好整份，原樣回傳；這檔今天資料不齊（或舊資料包沒有 funds）就是 404。
-    const text = Object.hasOwn(pack.funds ?? {}, fund[1]) ? pack.funds[fund[1]] : null;
-    if (text === null) return privateError(404, { error: "fund-unavailable", message: "這檔基金今天的對照資料還沒準備好" });
-    return rawJson(text);
-  }
+  const limited = await consumeMarket(env, email, deps);
+  if (limited) return limited;
   const itemFor = (code) => {
     if (Object.hasOwn(pack.items, code)) return JSON.parse(pack.items[code]);
     if (Object.hasOwn(pack.outside, code)) return { code, status: "outside-universe", ...JSON.parse(pack.outside[code]) };
