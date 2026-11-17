@@ -68,6 +68,73 @@ test("同資料日只替換當日暫定 K，不重複新增", () => {
   assert.equal(projected.bars.at(-1).close, 2265);
 });
 
+// ---- 收盤後到每日更新發布前（本人 11-17「我剛剛看股票卻是昨天的」） ----
+const plainCopy = value => JSON.parse(JSON.stringify(value));
+const dayAfter = (day, count = 1) => new Date(Date.parse(`${day}T00:00:00Z`) + count * 86_400_000).toISOString().slice(0, 10);
+const TODAY = dayAfter(base.as_of);   // 日資料停在前一天，今天已收盤
+const closedLive = {
+  ok: true, environment: "cloud", market_open: false, market_phase: "closed", live: false,
+  quote: {
+    price: 2165, previous_close: 2235, change: -70, change_percent: -3.13,
+    open: 2200, high: 2210, low: 2160, volume_shares: 30123000,
+    data_time: `${TODAY}T13:30:00+08:00`, data_date: TODAY,
+  },
+  candles: { "1": [], "5": [], "15": [], "60": [] },
+};
+const taipeiAt = (day, time) => Date.parse(`${day}T${time}+08:00`);
+const shortDay = day => `${day.slice(5, 7)}/${day.slice(8, 10)}`;
+
+test("收盤後、日資料仍是前一天：報價卡顯示今天的收盤價、漲跌與資料時間，寫明是今日收盤", () => {
+  const I = loadIntraday();
+  const shown = I.projectAnalysis(base, closedLive);
+  assert.equal(shown.quote.close, 2165);
+  assert.equal(shown.quote.chg_pct, -3.13);
+  assert.equal(shown.as_of, TODAY);
+  assert.equal(shown.bars.at(-1).date, TODAY);
+  assert.equal(shown.bars.length, base.bars.length + 1);
+  assert.deepEqual(plainCopy(I.quoteCaption(shown, taipeiAt(TODAY, "14:56:00"))),
+    { mode: "今日收盤", stamp: `${TODAY} 13:30`, ladderLabel: "收盤", ladderMeta: "盤後暫用即時報價" });
+  assert.equal(I.liveStatusText(closedLive, shown, taipeiAt(TODAY, "14:56:00")), "已收盤，顯示今日收盤（日資料稍後更新）");
+});
+
+test("每日更新發布後日資料已到今天：用日資料，不再拿即時報價蓋過", () => {
+  const I = loadIntraday();
+  const published = structuredClone(closedLive);
+  published.quote.data_date = base.as_of;
+  published.quote.data_time = `${base.as_of}T13:30:00+08:00`;
+  const shown = I.projectAnalysis(base, published);
+  assert.strictEqual(shown, base);
+  const now = taipeiAt(base.as_of, "17:00:00");
+  assert.deepEqual(plainCopy(I.quoteCaption(shown, now)),
+    { mode: "資料日", stamp: base.as_of, ladderLabel: "收盤", ladderMeta: "資料日收盤" });
+  assert.equal(I.liveStatusText(published, shown, now), "已收盤，顯示今日收盤");
+});
+
+test("週末、盤前沒有今天的報價：仍顯示上一個交易日，並寫明是哪一天", () => {
+  const I = loadIntraday();
+  const none = { ok: true, market_open: false, market_phase: "closed", live: false, quote: null };
+  assert.strictEqual(I.projectAnalysis(base, none), base);
+  // 比日資料舊的快取報價也不能蓋過日資料
+  const older = structuredClone(closedLive);
+  older.quote.data_date = dayAfter(base.as_of, -1);
+  assert.strictEqual(I.projectAnalysis(base, older), base);
+  const saturday = (() => { let day = base.as_of; while (new Date(`${day}T12:00:00Z`).getUTCDay() !== 6) day = dayAfter(day); return day; })();
+  assert.equal(I.liveStatusText(none, base, taipeiAt(saturday, "10:00:00")), `休市，顯示 ${shortDay(base.as_of)} 收盤`);
+  const nextWeekday = (() => { let day = dayAfter(base.as_of); while ([0, 6].includes(new Date(`${day}T12:00:00Z`).getUTCDay())) day = dayAfter(day); return day; })();
+  assert.equal(I.liveStatusText(none, base, taipeiAt(nextWeekday, "08:30:00")), `尚未開盤，顯示 ${shortDay(base.as_of)} 收盤`);
+  assert.equal(I.liveStatusText({ ...none, market_phase: "unknown" }, base, taipeiAt(nextWeekday, "09:05:00")),
+    `尚未取得今日報價，顯示 ${shortDay(base.as_of)} 收盤`);
+});
+
+test("盤中與雲端失敗的狀態字不變", () => {
+  const I = loadIntraday();
+  const shown = I.projectAnalysis(base, live);
+  assert.equal(I.quoteCaption(shown, taipeiAt("2026-11-10", "10:22:05")).mode, "盤中");
+  assert.equal(I.liveStatusText(live, shown, taipeiAt("2026-11-10", "10:22:05")), "10:22:00 更新");
+  assert.equal(I.liveStatusText({ ok: true, market_open: true, live: false, quote: live.quote }, shown, 0), "即時資料逾 30 秒，顯示最近一筆");
+  assert.equal(I.liveStatusText({ ok: false, environment: "cloud", error: "cloud-live-unavailable" }, base, 0), "雲端無法取得即時資料");
+});
+
 test("前端輪詢：主報價 5 秒、429 依伺服器退避、休市停止", () => {
   const { nextPollDelay } = loadIntraday();
   assert.equal(nextPollDelay({ ok: true, market_open: true, delay_seconds: { quote: 5 } }), 5000);
@@ -94,7 +161,7 @@ test("個股頁接上 1／5／15 分、LIVE 新鮮度與雲端失敗明示", () 
   const stock = readFileSync(new URL("web/stock.js", ROOT), "utf8");
   assert.match(stock, /Intraday\.createPoller/);
   assert.match(stock, /Intraday\.projectAnalysis/);
-  assert.match(stock, /雲端無法取得即時資料/);
+  assert.match(stock, /Intraday.liveStatusText/, "狀態字（含雲端失敗明示）由 intraday.js 的 liveStatusText 決定");
   assert.match(stock, /has\('as_of'\)/, "歷史查詢不得啟動盤中輪詢");
   assert.doesNotMatch(stock, /3 \* 86_400_000/, "不可用固定 72 小時誤擋週末後開盤");
 });

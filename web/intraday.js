@@ -261,8 +261,15 @@
     return result;
   }
 
+  // 收盤後到每日更新發布前（約 15:30／16:30）：即時服務給的今天收盤報價比日資料新，就用它（本人 11-17
+  // 「我剛剛看股票卻是昨天的」）。日資料一更新到同一天就不再用；比日資料舊的快取報價也不用。
+  function closeQuoteNewer(base, live) {
+    const day = live?.quote?.data_date;
+    return Boolean(live?.ok !== false && !live?.market_open && day && base?.as_of && day > base.as_of);
+  }
+
   function projectAnalysis(base, live) {
-    if (!base || !live?.quote || !live.market_open) return base;
+    if (!base || !live?.quote || !(live.market_open || closeQuoteNewer(base, live))) return base;
     const result = clone(base);
     const quote = live.quote;
     const bar = { date: quote.data_date, open: quote.open, high: quote.high, low: quote.low, close: quote.price, volume: quote.volume_shares };
@@ -278,8 +285,44 @@
     result.levels = priceLevels(bars, values);
     result.conditions = projectedConditions(base.conditions, values, bars);
     result.reference = { ...(result.reference || {}), low20_intraday: { ...(result.reference?.low20_intraday || {}), value: values.low20_intraday } };
-    result._intraday = { live: Boolean(live.live), data_time: quote.data_time, environment: live.environment || null };
+    result._intraday = { live: Boolean(live.live), data_time: quote.data_time, environment: live.environment || null,
+      closed: !live.market_open };
     return result;
+  }
+
+  // ---- 報價卡上的字：顯示的是哪一天、哪一種價格 ----
+  function taipeiParts(nowMs) {
+    const local = new Date(nowMs + 8 * 60 * 60 * 1000);
+    return { day: local.toISOString().slice(0, 10), weekday: local.getUTCDay(), minutes: local.getUTCHours() * 60 + local.getUTCMinutes() };
+  }
+  const shortDay = day => `${day.slice(5, 7)}/${day.slice(8, 10)}`;
+
+  // 主報價那一行（模式＋時間）與價位階梯的標籤。shown 是畫面上這一份分析（盤後原樣或已投影）。
+  function quoteCaption(shown, nowMs = Date.now()) {
+    const intraday = shown?._intraday;
+    const stamp = intraday?.data_time ? intraday.data_time.slice(0, 16).replace('T', ' ') : shown?.as_of;
+    if (intraday && !intraday.closed) return { mode: '盤中', stamp, ladderLabel: '現價', ladderMeta: '盤中更新' };
+    if (intraday) {
+      const day = intraday.data_time?.slice(0, 10) || shown.as_of;
+      return { mode: day === taipeiParts(nowMs).day ? '今日收盤' : `${shortDay(day)} 收盤`, stamp,
+        ladderLabel: '收盤', ladderMeta: '盤後暫用即時報價' };
+    }
+    return { mode: '資料日', stamp: shown?.as_of, ladderLabel: '收盤', ladderMeta: '資料日收盤' };
+  }
+
+  // 價格下面那一行狀態字。收盤之後一定寫出顯示的是哪一天的收盤，不再只寫「收盤資料」。
+  function liveStatusText(payload, shown, nowMs = Date.now()) {
+    if (payload?.error === 'cloud-live-unavailable' || payload?.environment === 'cloud' && payload?.ok === false) return '雲端無法取得即時資料';
+    if (payload?.live && payload.quote?.data_time) return `${payload.quote.data_time.slice(11, 19)} 更新`;
+    if (payload?.market_open) return '即時資料逾 30 秒，顯示最近一筆';
+    const now = taipeiParts(nowMs);
+    const day = shown?._intraday?.data_time?.slice(0, 10) || shown?.as_of;
+    const which = !day ? '收盤資料' : day === now.day ? '今日收盤' : ` ${shortDay(day)} 收盤`;
+    const prefix = payload?.market_phase === 'unknown' ? '尚未取得今日報價'
+      : now.weekday === 0 || now.weekday === 6 ? '休市'
+        : now.minutes < 9 * 60 ? '尚未開盤' : '已收盤';
+    const note = shown?._intraday?.closed ? (day === now.day ? '（日資料稍後更新）' : '（暫用即時報價）') : '';
+    return `${prefix}，顯示${which}${note}`;
   }
 
   function nextPollDelay(payload) {
@@ -334,5 +377,5 @@
     return candles;
   }
 
-  window.Intraday = { createPoller, nextPollDelay, projectAnalysis, secondCandles, _test: { indicators, priceLevels, projectedConditions } };
+  window.Intraday = { createPoller, nextPollDelay, projectAnalysis, quoteCaption, liveStatusText, secondCandles, _test: { indicators, priceLevels, projectedConditions } };
 })();

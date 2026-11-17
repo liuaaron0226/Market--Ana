@@ -421,3 +421,21 @@ test("較舊的抓取晚到失敗，不會蓋掉較新抓取的成功、也不�
   assert.equal(after.retry_after_seconds, 0);
   assert.equal(after.live, true);
 });
+
+// 本人 11-17 個股頁收盤後看到昨天的資料；首頁大盤同一個時段要照樣拿到今天的收盤（首頁再用它補一根暫用 K、顯示今天的點位）。
+test("收盤後、每日更新前：首頁大盤照樣回今天的收盤點位，標收盤、不亮 LIVE", async () => {
+  const closeAt = micros("2026-11-11T13:30:00+08:00");
+  const service = createIndexLiveService({
+    now: () => Date.parse("2026-11-11T14:56:00+08:00"),
+    fetchImpl: async url => (String(url).includes("/quote/")
+      ? json(quote({ isClose: true, closePrice: 28010.5, lastUpdated: closeAt, total: { tradeValue: 1, time: closeAt } }))
+      : json(candles())),
+  });
+  const result = await service.snapshot({ fugleApiKey: "k" });
+  assert.equal(result.ok, true);
+  assert.equal(result.market_open, false);
+  assert.equal(result.phase, "closed");
+  assert.equal(result.live, false);
+  assert.equal(result.data.price, 28010.5);
+  assert.equal(result.data_time, "2026-11-11T13:30:00+08:00");
+});
