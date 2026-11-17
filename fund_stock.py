@@ -11,7 +11,7 @@
 """
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 import fund_compare
@@ -54,7 +54,7 @@ def _quote(navs: Sequence[tuple[str, float]], currency: str) -> dict[str, Any]:
 
 
 def fund_analysis(code: str, navs: Sequence[tuple[str, float]], status: str, *,
-                  distributions: Sequence[dict[str, Any]], as_of: str) -> dict[str, Any]:
+                  distributions: Sequence[Mapping[str, Any]], as_of: str) -> dict[str, Any]:
     """分析契約 v2 的基金版。``navs`` 已截到資料日、至少 MIN_NAVS 筆；``status`` 是 available 或 stale。
     ``distributions`` 是合併好的配息列，``as_of`` 是資料日：除息日在它之後的配息不用（06 票「配息」分類）。"""
     fund = fund_compare.FUNDS[code]

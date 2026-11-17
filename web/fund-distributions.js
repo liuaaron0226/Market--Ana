@@ -2,13 +2,15 @@
    資料是分析契約 kind fund 的 distributions 欄（每日建置由集保配息原件算出：fund_distributions.py），股票沒有這欄。
 
    FundDistributions.read(dist) → { latest, years, note, hint, empty }：把契約整理成畫面上的字，不碰畫面（測試只驗這個）。
-   FundDistributions.render(container, dist)：畫進個股頁的「配息」區塊；stock.js 在換股時呼叫（股票傳 null，區塊清空）。 */
+   FundDistributions.render(container, dist)：畫進個股頁的「配息」區塊；stock.js 換到基金時呼叫（股票不呼叫，區塊由它清空）。 */
 (function (global) {
   'use strict';
 
   const CURRENCY = { USD: '美元', TWD: '台幣' };
   const EMPTY = '目前沒有這檔基金的配息紀錄。';
-  const HINT = '配息來自本金，等於把你投入的錢拿一部分還給你，淨值會跟著變少；所以看報酬要含息一起算（「比較」那一類就是含息再投入）。';
+  const MISSING = '這檔基金的配息資料尚未提供。';   // 舊的分析資料沒有這一欄：和「真的沒配過息」分開說
+  // 只解釋名詞，不說這檔現在還在配本金（現況看上面那一句與各年來源）
+  const HINT = '「配息來自本金」是把你投入的錢拿一部分還給你，淨值會跟著變少；所以報酬要含息一起看（「比較」那一類就是含息再投入）。';
   const amountText = value => String(Math.round(Number(value) * 1e4) / 1e4);
 
   function latestSource(latest) {
@@ -34,7 +36,7 @@
       years,
       note: dist?.capital_note || '',
       hint: dist?.capital_note ? HINT : '',
-      empty: latest ? '' : EMPTY,
+      empty: latest ? '' : dist ? EMPTY : MISSING,
     };
   }
 
@@ -47,7 +49,6 @@
 
   function render(container, dist) {
     if (!container) return;
-    if (!dist) { container.replaceChildren(); return; }
     const view = read(dist);
     const box = el('section', 'fd');
     box.setAttribute('aria-labelledby', 'fdTitle');

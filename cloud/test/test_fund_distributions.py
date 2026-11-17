@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from functools import partial
@@ -66,6 +67,27 @@ class FundDistributionsFromRealDataTests(unittest.TestCase):
 
     def test_payload_with_distributions_still_passes_the_build_check(self) -> None:
         build._check_payload("BLKTENAU", fund_payload())
+
+
+class FundDistributionsFromDailyFetchTests(unittest.TestCase):
+    """每日抓取（集保開放資料 3-5 的抽取檔，fund_compare._extract_dist 存的格式）接在回補原件後面：
+    新的除息出現在最近一次，原本來源未公布（N/A）的那次被補上比例。"""
+
+    def test_new_open_data_distribution_shows_up_and_fills_the_missing_source(self) -> None:
+        def row(ex: str, record: str, pay: str, amount: str, income: str, capital: str) -> dict:
+            return {"﻿基金代碼": "BLKTENAU", "資料日期": "2026/12/01", "除息日": ex, "配息基準日": record, "配息發放日": pay,
+                    "單位數": amount, "可分配淨利益/配息": income, "本金/配息": capital}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "BLKTENAU-dist-2026-12-01.json").write_text(json.dumps({"rows": [
+                row("2026/10/30", "2026/10/29", "2026/11/06", "0.162", "100.00%", "0.00%"),
+                row("2026/11/28", "2026/11/27", "2026/12/05", "0.162", "N/A", "N/A"),
+            ]}, ensure_ascii=False), encoding="utf-8")
+            loader = partial(fund_compare.load_history, raw_dir=Path(tmp))
+            dist = fund_payload("2026-12-01", loader=loader)["distributions"]
+        self.assertEqual((dist["count"], dist["latest"]["ex_date"], dist["latest"]["pay_date"]), (48, "2026-11-28", "2026-12-05"))
+        self.assertEqual((dist["years"][0]["count"], dist["years"][0]["total"], dist["years"][0]["source"]),
+                         (11, 1.6275, "10 次來自可分配淨利益、1 次來源未公布"))
 
 
 class FundDistributionsEdgeTests(unittest.TestCase):

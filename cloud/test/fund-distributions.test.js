@@ -37,7 +37,9 @@ test("頁面：「配息」鍵排在「比較」後面、一開始藏著，指�
   const keys = [...html.matchAll(/<button type="button"[^>]*aria-controls="(\w+)"[^>]*>([^<]+)<\/button>/g)]
     .filter((m) => m[1].endsWith("Panel")).map((m) => m[2]);
   assert.deepEqual(keys.slice(keys.indexOf("比較"), keys.indexOf("比較") + 2), ["比較", "配息"]);
-  assert.match(html, /<button type="button" aria-expanded="false" aria-controls="distributionsPanel" hidden>配息<\/button>/);
+  const key = html.match(/<button\s[^>]*aria-controls="distributionsPanel"[^>]*>配息<\/button>/);
+  assert.ok(key, "有「配息」鍵");
+  assert.match(key[0], /\shidden[\s>]/, "一開始藏著（只有基金才打開）");
   assert.match(html, /<section class="bd-cat" id="distributionsPanel" data-cat-panel="distributions" aria-label="配息">/);
   assert.match(html, /<script src="fund-distributions\.js\?v=[^"]+"><\/script>\s*(<script[^>]*><\/script>\s*)*<script src="stock\.js/);
 });
@@ -68,10 +70,12 @@ test("本金註記照契約那一句，另外白話說明「來自本金」是�
   assert.match(view.hint, /本金.*淨值/);
 });
 
-test("沒有配息紀錄或沒有這一欄：寫一句沒有，不畫空的表", () => {
-  for (const dist of [{ currency: "USD", count: 0, latest: null, years: [], capital_note: null }, null, undefined]) {
-    const view = read(dist);
-    assert.deepEqual([view.empty, view.latest, view.years], ["目前沒有這檔基金的配息紀錄。", null, []]);
+test("真的沒有配息紀錄寫「沒有」；分析資料缺這一欄寫「尚未提供」（兩者分開說）；都不畫空的表", () => {
+  const none = read({ currency: "USD", count: 0, latest: null, years: [], capital_note: null });
+  assert.deepEqual([none.empty, none.latest, none.years, none.hint], ["目前沒有這檔基金的配息紀錄。", null, [], ""]);
+  for (const missing of [null, undefined]) {
+    const view = read(missing);
+    assert.deepEqual([view.empty, view.latest, view.years], ["這檔基金的配息資料尚未提供。", null, []]);
   }
 });
 

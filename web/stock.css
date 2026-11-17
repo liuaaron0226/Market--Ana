@@ -548,12 +548,12 @@ body.st .fd-meta { margin-top: 2px; color: var(--dim); font-size: 13px; }
 body.st .fd-note { margin-top: 18px; max-width: 780px; color: var(--ink); font-size: 15px; line-height: 1.6; }
 body.st .fd-hint { margin-top: 6px; max-width: 780px; color: var(--faint); font-size: 12px; line-height: 1.6; }
 body.st .fd-years { margin: 18px 0 0; padding: 0; list-style: none; }
-body.st .fd-year { display: grid; grid-template-columns: 48px 1fr; column-gap: 12px; row-gap: 2px; padding: 10px 0 10px 10px;
-  border-top: 1px solid var(--hair); box-shadow: inset 2px 0 0 transparent; }
+body.st .fd-year { display: grid; grid-template-columns: 48px 1fr; column-gap: 12px; row-gap: 2px; padding: 10px 0 10px 8px;
+  border-top: 1px solid var(--hair); border-left: 2px solid transparent; }
 body.st .fd-year b { color: var(--ink); font-weight: 600; }
 body.st .fd-year span { color: var(--ink); }
 body.st .fd-year small { grid-column: 2; color: var(--faint); font-size: 12px; }
-body.st .fd-year[data-capital] { box-shadow: inset 2px 0 0 var(--accent); }
+body.st .fd-year[data-capital] { border-left-color: var(--accent); }
 body.st .fd-src { margin-top: 14px; color: var(--faint); font-size: 11px; }
 body.st .fd-empty { color: var(--faint); font-size: 13px; }
 @media (max-width: 860px) {

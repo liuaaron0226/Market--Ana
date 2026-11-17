@@ -28,10 +28,10 @@ _PHRASES = (("all_capital", "全部來自本金"), ("part_capital", "部分來�
 def _source(year: Mapping[str, Any]) -> str:
     """一年的來源事實，例如「全部來自本金」「11 次全部來自本金、1 次部分來自本金」「9 次來自可分配淨利益、1 次來源未公布」。"""
     present = [(key, phrase) for key, phrase in _PHRASES if year[key]]
-    if len(present) == 1:
-        key, phrase = present[0]
-        return {"income_only": "全部來自可分配淨利益"}.get(key, phrase)
-    return "、".join(f"{year[key]} 次{phrase}" for key, phrase in present)
+    if len(present) > 1:
+        return "、".join(f"{year[key]} 次{phrase}" for key, phrase in present)
+    key, phrase = present[0]
+    return "全部來自可分配淨利益" if key == "income_only" else phrase
 
 
 def capital_note(dists: Sequence[Mapping[str, Any]]) -> str | None:
@@ -58,7 +58,10 @@ def capital_note(dists: Sequence[Mapping[str, Any]]) -> str | None:
 
 
 def summary(dists: Sequence[Mapping[str, Any]], *, as_of: str, currency: str) -> dict[str, Any]:
-    """分析契約 kind fund 的 ``distributions`` 欄。只用除息日在資料日（含）以前的配息；年份新的在前。"""
+    """分析契約 kind fund 的 ``distributions`` 欄。只用除息日在資料日（含）以前的配息；年份新的在前。
+
+    ``as_of`` 是建置的資料日（和淨值同一個截止日）。淨值約晚 3 個營業日公布、配息是事先公告的，
+    所以最近一次除息可能比淨值線最後一天還新——那是集保已公布的事實，照寫。"""
     rows = sorted((row for row in dists if row["ex_date"] <= as_of), key=lambda row: row["ex_date"])
     years: dict[str, dict[str, Any]] = {}
     for row in rows:

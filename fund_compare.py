@@ -403,7 +403,7 @@ def _capital_summary(dists: Sequence[Mapping[str, Any]]) -> tuple[list[dict[str,
         capital = row.get("capital_pct")
         if capital is not None:
             year["known"] += 1
-            year["all_capital"] += capital >= 99.995
+            year["all_capital"] += capital >= fund_distributions.ALL_CAPITAL
             year["some_capital"] += capital > 0
     # 本金註記和個股頁「配息」分類同一句（fund_distributions，06 票）
     return [years[y] for y in sorted(years)], fund_distributions.capital_note(dists) or "這檔配息可能來自本金。"

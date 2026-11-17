@@ -122,11 +122,10 @@
         }
       });
     }
-    // 「配息」只有基金有（06 票，fund-distributions.js 畫）。換成股票時鍵藏起來；正開著就先收回，免得留下一塊沒有鍵的區塊。
-    const distributionsKey = $('stockCats').querySelector('[aria-controls="distributionsPanel"]');
-    if (!fund && distributionsKey.getAttribute('aria-expanded') === 'true') distributionsKey.click();
-    distributionsKey.hidden = !fund;
-    window.FundDistributions?.render($('distributionsPanel'), fund ? r.distributions || {} : null);
+    // 「配息」只有基金有（06 票，fund-distributions.js 畫）；股票的鍵藏著、區塊清空。換股時開著的分類由 syncComparison 收回。
+    $('stockCats').querySelector('[aria-controls="distributionsPanel"]').hidden = !fund;
+    if (fund) window.FundDistributions?.render($('distributionsPanel'), r.distributions);
+    else $('distributionsPanel').replaceChildren();
     if (fund && !FUND_PERIODS.includes(chartPeriod)) { chartPeriod = 'daily'; $('periodSelect').value = 'daily'; }
     $('periodSelect').dataset.line = fund ? '1' : '';
     $('periodSelect').dispatchEvent(new Event('periodsync'));  // 週期小鍵與選單跟著改（period-switch.js）
