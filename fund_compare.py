@@ -467,3 +467,64 @@ def fund_payload(code: str, *, navs: Sequence[tuple[str, float]], distributions:
                           "latest": {"ex_date": latest_dist["ex_date"], "amount": latest_dist["amount"]} if latest_dist else None},
         "capital_note": note, "issues": [dict(i) for i in issues], "notes": list(NOTES),
     }
+
+
+def precompute(loader, end: str, *, as_of: str, raw_dir: Path = RAW_DIR,
+               seed_dir: Path = SEED_DIR) -> tuple[dict[str, str], dict[str, str]]:
+    """build_compare_pack 用：{代碼: 預算好的 JSON 字串}，以及資料不齊而沒出的那幾檔與原因。
+
+    loader 是 benchmark_compare.Loader（0050 含息序列只用它，和個股頁對照同一套）；end 是資料包的資料日。"""
+    funds: dict[str, str] = {}
+    problems: dict[str, str] = {}
+    bench, _, _ = loader.series("0050", end)
+    for code in FUNDS:
+        try:
+            history = load_history(code, raw_dir=raw_dir, seed_dir=seed_dir, as_of=as_of)
+        except (OSError, ValueError, KeyError) as error:
+            problems[code] = f"讀不到資料：{type(error).__name__}: {error}"
+            continue
+        if not history["fx"]:
+            problems[code] = "沒有匯率資料"
+            continue
+        if not bench:
+            problems[code] = "沒有 0050 資料"
+            continue
+        payload = fund_payload(code, navs=history["navs"], distributions=history["distributions"], fx=history["fx"],
+                               benchmark=bench, benchmark_date=bench[-1][0],
+                               issues=[i for i in history["issues"] if i["kind"] != "fx-missing"])
+        funds[code] = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return funds, problems
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """python fund_compare.py daily [--r2] [--no-upload]：每日抓取（工作流程用 --r2）。
+    python fund_compare.py check [--as-of YYYY-MM-DD]：只檢查目前資料的缺日／衝突／過期，不抓。"""
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(description="基金對照 0050：每日抓取與缺日檢查")
+    sub = parser.add_subparsers(dest="command", required=True)
+    run = sub.add_parser("daily")
+    run.add_argument("--r2", action="store_true", help="先從 R2 funds/raw/ 補齊、抓完上傳新的")
+    run.add_argument("--no-upload", action="store_true", help="試跑：不寫 R2")
+    check = sub.add_parser("check")
+    check.add_argument("--as-of")
+    args = parser.parse_args(argv)
+    today = datetime.now(timezone(timedelta(hours=8))).date().isoformat()
+    report: dict[str, Any] = {}
+    if args.command == "daily":
+        store = None
+        if args.r2:
+            import state_sync
+            store = state_sync.R2Store.from_env()
+        report = daily(store=store, upload=not args.no_upload)
+    as_of = getattr(args, "as_of", None) or today
+    report["checks"] = {code: load_history(code, as_of=as_of)["issues"] for code in FUNDS}
+    sys.stdout.write(json.dumps(report, ensure_ascii=False, indent=1) + "\n")
+    failed = any(s.get("status") == "failed" for s in report.get("sources", {}).values())
+    problems = any(report["checks"].values())
+    return 1 if failed or problems else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

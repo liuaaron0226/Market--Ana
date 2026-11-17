@@ -1629,6 +1629,29 @@ class Handler(SimpleHTTPRequestHandler):
             return
         self._send_json(payload)
 
+    def _send_fund_vs_0050(self, path: str) -> None:
+        """GET /api/funds/{集保基金代碼}/vs-0050：和雲端同一份（fund_compare.precompute），資料不齊回 404。"""
+        from datetime import timedelta
+
+        import benchmark_compare
+        import fund_compare
+
+        code = path[len("/api/funds/"):-len("/vs-0050")]
+        if not re.fullmatch(r"[0-9A-Z]{4,12}", code):
+            self._send_json({"error": "bad-request", "message": "基金代碼格式不正確"}, 400)
+            return
+        try:
+            today = datetime.now(timezone(timedelta(hours=8))).date().isoformat()
+            funds, _ = fund_compare.precompute(benchmark_compare.Loader(), self._compare_end(self._universe()), as_of=today)
+        except Exception as error:  # 不把 stack trace 送到瀏覽器
+            print(f"fund vs-0050 failed for {code}: {type(error).__name__}: {error}")
+            self._send_json({"error": "compare-failed", "message": "對照暫時無法計算"}, 500)
+            return
+        if code not in funds:
+            self._send_json({"error": "fund-unavailable", "message": "這檔基金今天的對照資料還沒準備好"}, 404)
+            return
+        self._send_json(json.loads(funds[code]))
+
     def _send_stock_analysis(self, path: str, query: str) -> None:
         """GET /api/stocks/{code}/analysis?as_of=YYYY-MM-DD：回個股分析契約 v2（每檔一筆，無方案）。"""
         code = path[len("/api/stocks/"):-len("/analysis")]
@@ -1759,6 +1782,9 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if path == "/api/compare-0050":
             self._send_compare_0050(urllib.parse.urlsplit(self.path).query)
+            return
+        if path.startswith("/api/funds/") and path.endswith("/vs-0050"):
+            self._send_fund_vs_0050(path)
             return
         if path == "/api/candidates":
             self._send_candidates(urllib.parse.urlsplit(self.path).query)

@@ -526,6 +526,9 @@ async function handleScreensApi(request, env, path, email, deps) {
 const COMPARE_SCHEMA = "compare-0050-pack/v1";
 const VS_PATH = /^\/api\/stocks\/([^/]+)\/vs-0050$/;
 const COMPARE_PATH = "/api/compare-0050";
+// 基金對照 0050（2026-11-17 本人定案）：/api/funds/<集保基金代碼>/vs-0050，例如 BLKTENAU（貝萊德世界科技 A10）。
+const FUND_PATH = /^\/api\/funds\/([^/]+)\/vs-0050$/;
+const FUND_CODE_RE = /^[0-9A-Z]{4,12}$/;
 const COMPARE_BASIS = "含息總報酬，期初＝1";
 const NOT_FOUND_MESSAGE = "查無此上市或上櫃普通股";
 
@@ -545,8 +548,12 @@ async function handleCompareApi(request, env, path, email, deps) {
   if (!pack || pack.schema !== COMPARE_SCHEMA) throw new HttpError(503, "資料尚未就緒");
   const privateError = (status, body) => json(status, body, { "cache-control": "private, no-store" });
   let codes;
+  const fund = path.match(FUND_PATH);
+  if (fund && !FUND_CODE_RE.test(fund[1])) return badRequest("基金代碼格式不正確");
   const vs = path.match(VS_PATH);
-  if (vs) {
+  if (fund) {
+    codes = [];
+  } else if (vs) {
     if (!CODE_RE.test(vs[1])) return badRequest("代號格式不正確");
     codes = [vs[1]];
   } else {
@@ -558,6 +565,12 @@ async function handleCompareApi(request, env, path, email, deps) {
   } catch (e) {
     if (e instanceof RateLimited) return json(429, { error: "rate-limited", message: "查詢太頻繁，請稍後再試" }, { "retry-after": String(e.retryAfter) });
     throw new HttpError(503, "暫時無法處理，請稍後再試");
+  }
+  if (fund) {
+    // 基金對照 0050：build 前已預算好整份，原樣回傳；這檔今天資料不齊（或舊資料包沒有 funds）就是 404。
+    const text = Object.hasOwn(pack.funds ?? {}, fund[1]) ? pack.funds[fund[1]] : null;
+    if (text === null) return privateError(404, { error: "fund-unavailable", message: "這檔基金今天的對照資料還沒準備好" });
+    return rawJson(text);
   }
   const itemFor = (code) => {
     if (Object.hasOwn(pack.items, code)) return JSON.parse(pack.items[code]);
@@ -577,7 +590,7 @@ async function handleCompareApi(request, env, path, email, deps) {
     benchmark, items: codes.map(itemFor), notes: pack.notes }));
 }
 
-const isComparePath = (path) => path === COMPARE_PATH || VS_PATH.test(path);
+const isComparePath = (path) => path === COMPARE_PATH || VS_PATH.test(path) || FUND_PATH.test(path);
 
 // U2：每日更新狀態。build 前由 daily_update 產生 status.json，包進 Functions；這裡只原樣回傳。
 // 每頁載入都會讀，所以不扣查詢額度（只有通過登入與核准才看得到）。

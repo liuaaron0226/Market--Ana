@@ -302,6 +302,60 @@ class PayloadTest(unittest.TestCase):
         self.assertTrue(any("不計申購手續費" in note for note in p["notes"]))
 
 
+class WorkflowTest(unittest.TestCase):
+    def test_daily_step_runs_before_build_and_never_blocks_publishing(self) -> None:
+        from pathlib import Path
+        import yaml
+        doc = yaml.safe_load((Path(fc.__file__).parent / ".github/workflows/daily-update.yml").read_text(encoding="utf-8"))
+        steps = next(iter(doc["jobs"].values()))["steps"]
+        names = [s.get("name", "") for s in steps]
+        fund = next(i for i, n in enumerate(names) if n.startswith("基金對照 0050"))
+        self.assertLess(fund, names.index("每日更新"))
+        self.assertGreater(fund, names.index("從 R2 還原工作集"))
+        step = steps[fund]
+        self.assertIs(step.get("continue-on-error"), True)
+        self.assertIn("python fund_compare.py daily --r2 --no-upload", step["run"])   # 試跑不寫 R2
+        self.assertIn("python fund_compare.py daily --r2 >", step["run"])
+
+
+class _FakeLoader:
+    def __init__(self, series):
+        self._series = series
+        self.asked: list[tuple[str, str]] = []
+
+    def series(self, code: str, end: str):
+        self.asked.append((code, end))
+        return [p for p in self._series if p[0] <= end], "元大台灣50", "上市"
+
+
+class PrecomputeTest(unittest.TestCase):
+    """build_compare_pack 用：每檔基金一份預算好的 JSON 字串；資料不齊就不出那檔，不擋整個資料包。"""
+
+    def setUp(self) -> None:
+        import tempfile
+        from pathlib import Path
+        self.tmp = tempfile.TemporaryDirectory()
+        self.raw = Path(self.tmp.name)
+        self.loader = _FakeLoader([("2022-11-30", 1.0), ("2026-11-09", 3.0), ("2026-11-10", 3.1)])
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_one_json_text_per_fund(self) -> None:
+        import json
+        (self.raw / "cbc-usdtwd-2026-11-16.json").write_text(json.dumps({"rows": [["2022-11-30", 31.0], ["2026-11-16", 32.8]]}),
+                                                              encoding="utf-8")
+        funds, problems = fc.precompute(self.loader, "2026-11-10", as_of="2026-11-17", raw_dir=self.raw)
+        self.assertEqual((list(funds), problems), (["BLKTENAU"], {}))
+        payload = json.loads(funds["BLKTENAU"])
+        self.assertEqual((payload["schema"], payload["fund"]["code"], payload["data_date"]), ("fund-vs-0050/v1", "BLKTENAU", "2026-11-10"))
+        self.assertEqual(self.loader.asked, [("0050", "2026-11-10")])
+
+    def test_no_fx_means_no_fund_and_a_reason(self) -> None:
+        funds, problems = fc.precompute(self.loader, "2026-11-10", as_of="2026-11-17", raw_dir=self.raw)
+        self.assertEqual((funds, problems), ({}, {"BLKTENAU": "沒有匯率資料"}))
+
+
 class DailyTest(unittest.TestCase):
     """每日排程：補齊 R2 已有的抽取檔 → 抓開放資料（一天每個來源最多一次）→ 只留這檔的列存檔 → 上傳新的。"""
 

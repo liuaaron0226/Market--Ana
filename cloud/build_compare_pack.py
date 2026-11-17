@@ -20,10 +20,16 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import benchmark_compare  # noqa: E402
+import fund_compare  # noqa: E402
 import live_server  # noqa: E402
 
 PACK_SCHEMA = "compare-0050-pack/v1"
 DEFAULT_OUT = Path(__file__).resolve().parent / ".compare-pack.json"
+
+
+def _taipei_today() -> str:
+    from datetime import datetime, timedelta, timezone
+    return datetime.now(timezone(timedelta(hours=8))).date().isoformat()
 
 
 def _dump(payload: Any) -> str:
@@ -50,6 +56,14 @@ def build_pack(universe_path: Path) -> dict[str, Any]:
         detail = live_server.outside_universe_payload(security.code, security, state)
         outside[security.code] = _dump({k: v for k, v in detail.items() if k not in ("error", "code")})
 
+    # 基金對照 0050（2026-11-17 本人定案）：和個股對照同一個 Loader 的 0050 含息序列。資料不齊就不出那檔，不擋整個資料包。
+    try:
+        funds, problems = fund_compare.precompute(loader, end, as_of=_taipei_today())
+    except Exception as error:  # noqa: BLE001 —— 基金資料壞掉不能讓個股對照跟著停
+        funds, problems = {}, {"*": f"{type(error).__name__}: {error}"}
+    for code, reason in problems.items():
+        print(f"fund {code} 沒有放進資料包：{reason}", file=sys.stderr)
+
     pack = {
         "schema": PACK_SCHEMA,
         "data_date": end,
@@ -58,6 +72,7 @@ def build_pack(universe_path: Path) -> dict[str, Any]:
         "benchmark": pre["benchmark"],
         "items": pre["items"],
         "outside": outside,
+        "funds": funds,
     }
     pack["pack_sha256"] = hashlib.sha256(_dump(pack).encode("utf-8")).hexdigest()
     return pack
@@ -75,7 +90,8 @@ def main() -> int:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(text, encoding="utf-8")
     print(_dump({"out": args.out.name, "bytes": len(text.encode("utf-8")), "data_date": pack["data_date"],
-                 "items": len(pack["items"]), "outside": len(pack["outside"]), "pack_sha256": pack["pack_sha256"]}))
+                 "items": len(pack["items"]), "outside": len(pack["outside"]), "funds": sorted(pack["funds"]),
+                 "pack_sha256": pack["pack_sha256"]}))
     return 0
 
 
