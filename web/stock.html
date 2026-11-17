@@ -13,7 +13,7 @@
   <link rel="stylesheet" href="minimal.css?v=20261117-m53">
   <link rel="stylesheet" href="chart-studies.css?v=20261117-m53">
   <link rel="stylesheet" href="bold.css?v=20261117-m53">
-  <link rel="stylesheet" href="stock.css?v=20261117-n1">
+  <link rel="stylesheet" href="stock.css?v=20261118-f6">
   <link rel="stylesheet" href="stock-facts.css?v=20261117-m53">
   <link rel="stylesheet" href="stock-signals.css?v=20261117-m53">
   <link rel="stylesheet" href="watch-peers.css?v=20261117-m53">
@@ -156,6 +156,7 @@
         <button type="button" aria-expanded="false" aria-controls="levelsPanel">價位</button>
         <button type="button" aria-expanded="false" aria-controls="chipsPanel">籌碼</button>
         <button type="button" aria-expanded="false" aria-controls="comparePanel">比較</button>
+        <button type="button" aria-expanded="false" aria-controls="distributionsPanel" hidden>配息</button>
       </div>
       <section class="bd-cat" id="levelsPanel" data-cat-panel="levels" aria-label="價位">
         <aside class="bd-rail" aria-label="價格結構">
@@ -219,6 +220,8 @@
           </div>
         </section>
       </div>
+      <!-- 配息（基金當成一般個股 06 票）：只有基金有這一類，股票的鍵藏著；內容由 fund-distributions.js 畫 -->
+      <section class="bd-cat" id="distributionsPanel" data-cat-panel="distributions" aria-label="配息"></section>
       <!-- 事實區塊（本人 2026-11-15 選擺法 A：K 線圖下面一排切換籤，一次只顯示一塊）。主線掛在價位階梯下面；立體版的價位階梯收進「價位」，
            而本人 2026-11-15 也定了「電腦上三顆分類鍵不用捲就看得到」，所以排在三類之後（合併時助手的暫定，擺法另出樣品請本人選）。
            國外同類股原本緊接在它後面，照舊。 -->
@@ -239,7 +242,8 @@
   <script src="holders-weekly.js?v=20261117-m53"></script>
   <script src="holders-card.js?v=20261117-m53"></script>
   <script src="stock-picker.js?v=20261118-f3"></script>
-  <script src="stock.js?v=20261118-f3"></script>
+  <script src="fund-distributions.js?v=20261118-f6"></script>
+  <script src="stock.js?v=20261118-f6"></script>
   <script src="period-switch.js?v=20261118-f3"></script>
   <script src="chart-menus.js?v=20261117-m53"></script>
   <script src="home-fold.js?v=20261117-m53"></script>

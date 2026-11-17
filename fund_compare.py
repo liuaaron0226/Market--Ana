@@ -393,6 +393,8 @@ def _upto(series: Sequence[tuple[str, float]], end: str) -> list[tuple[str, floa
 
 
 def _capital_summary(dists: Sequence[Mapping[str, Any]]) -> tuple[list[dict[str, Any]], str]:
+    import fund_distributions
+
     years: dict[str, dict[str, Any]] = {}
     for row in dists:
         year = years.setdefault(row["ex_date"][:4], {"year": row["ex_date"][:4], "count": 0, "known": 0,
@@ -403,22 +405,8 @@ def _capital_summary(dists: Sequence[Mapping[str, Any]]) -> tuple[list[dict[str,
             year["known"] += 1
             year["all_capital"] += capital >= 99.995
             year["some_capital"] += capital > 0
-    by_year = [years[y] for y in sorted(years)]
-    parts = []
-    for y in by_year:
-        if y["some_capital"]:
-            parts.append(f"{y['year']} 年 {y['count']} 次配息全部來自本金" if y["all_capital"] == y["count"]
-                         else f"{y['year']} 年 {y['count']} 次配息中 {y['all_capital']} 次全部來自本金")
-    known = [row for row in dists if row.get("capital_pct") is not None]
-    since = None
-    for row in reversed(known):
-        if row["capital_pct"] > 0:
-            break
-        since = row["ex_date"]
-    if since and since != (known[0]["ex_date"] if known else None):
-        parts.append(f"{int(since[:4])} 年 {int(since[5:7])} 月起公布的配息都來自可分配淨利益")
-    note = "這檔配息可能來自本金" + (f"：{'；'.join(parts)}。" if parts else "。")
-    return by_year, note
+    # 本金註記和個股頁「配息」分類同一句（fund_distributions，06 票）
+    return [years[y] for y in sorted(years)], fund_distributions.capital_note(dists) or "這檔配息可能來自本金。"
 
 
 def fund_payload(code: str, *, navs: Sequence[tuple[str, float]], distributions: Sequence[Mapping[str, Any]],
