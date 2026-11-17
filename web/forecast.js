@@ -65,6 +65,16 @@
     return state.edition ? forecastOf(state.edition) : null;
   }
 
+  // 本人 11-17 預測換 Argon：換模型＝新系列。和目前這一份不同模型的系列或紀錄標「Flash 舊版」，不和新的混在一起看。
+  // 對帳摘要從 11-17 起才帶 model；之前發布的摘要沒有這一欄，那時預測只用過 Flash。
+  const BEFORE_MODEL_TAG = 'gemini-3.8-flash';
+  const modelName = (model) => (/argon/i.test(model || '') ? 'Argon' : /flash/i.test(model || '') ? 'Flash' : model || '');
+  function legacyLabel(model) {
+    const now = (current() || Object.values(state.latest.editions).find(Boolean) || {}).model;
+    const then = model || BEFORE_MODEL_TAG;
+    return now && then !== now ? `${modelName(then)} 舊版` : '';
+  }
+
   function overlays(period) {
     const record = current();
     if (period !== 'daily' || !record) return [];
@@ -109,7 +119,7 @@
       ['理由', cell.reason],
       ['看錯條件', cell.invalidation],
       ['盤勢', record.regime],
-      ['紀錄', `${record.run_mode === 'official' ? '正式' : '試跑'} · ${EDITION[record.edition]} · 基準日 ${mmdd(record.base_date)}`],
+      ['紀錄', `${record.run_mode === 'official' ? '正式' : '試跑'} · ${EDITION[record.edition]} · 基準日 ${mmdd(record.base_date)}${record.model ? ` · ${modelName(record.model)}` : ''}`],
       ...cutoffRows(record),
     ]));
     similarView(panel, record);
@@ -282,7 +292,9 @@
 
   function seriesView(panel, groups, titled) {
     const mode = groups[0].run_mode;
-    if (titled) panel.append(el('h4', { class: 'forecast-series' }, MODE[mode] || mode));
+    // 目前這一版還沒有同模型的重播時，取到的是舊模型那一組：標題直接寫出來
+    const legacy = legacyLabel(groups[0].model);
+    if (titled || legacy) panel.append(el('h4', { class: 'forecast-series' }, legacy ? `${MODE[mode] || mode} · ${legacy}（參考）` : MODE[mode] || mode));
     for (const horizon of HORIZONS) {
       const group = groups.find(g => String(g.horizon) === horizon);
       if (!group) continue;
@@ -333,6 +345,7 @@
     const outcome = picked.reconciliations && picked.reconciliations[state.horizon];
     panel.append(facts([
       ['預測', `${ZONE[cell.zone]}（${mmdd(picked.base_date)} ${EDITION[picked.edition]}）`],
+      ...(legacyLabel(picked.model) ? [['版本', `${legacyLabel(picked.model)}（參考）`]] : []),
       ['實際', outcome ? `${mmdd(outcome.expiry_date)} 收 ${fmt(outcome.expiry_close)}，${ZONE[outcome.actual_zone]}` : '還沒到期'],
       ['結果', outcome ? (outcome.actual_zone === cell.zone ? '猜中' : '沒中') : '—', outcome ? (outcome.actual_zone === cell.zone ? 'is-up' : 'is-down') : ''],
     ]));

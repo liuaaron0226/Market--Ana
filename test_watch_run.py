@@ -11,6 +11,7 @@ from pathlib import Path
 import forecast_ledger as fl
 import watch_ledger as wl
 import watch_run as wr
+from test_forecast_ledger import EVENING_OK as FORECAST_OK
 from test_forecast_ledger import answer_a, at, bar, calls, clock, day_input, envelope, fake_model, weekdays
 from test_watch_ledger import BASE, METHOD_TEXT, answer, index_bars, recording_model, stock_bars
 
@@ -209,6 +210,29 @@ class EveningTests(WatchRunTestCase):
 
         [item] = log["stocks"]
         self.assertEqual((item["kind"], item["miss_reason"]), ("miss", "input_not_ready"))
+
+
+class MarketLayerModelTests(WatchRunTestCase):
+    def test_the_market_layer_prefers_the_current_forecast_model_when_both_models_wrote_that_day(self):
+        # 本人 2026-11-17 預測換 Argon：換模型那天同一基準日可能有 Flash 與 Argon 各一份，取現在這個模型的。
+        # 舊模型挑一個輸入版本排在現在這個之前的名字，帳本讀出來時它在前面，才測得出「不是碰巧排第一」。
+        older = next(name for name in (f"older-model-{n}" for n in range(100))
+                     if fl.input_version(name) < fl.INPUT_VERSION)
+        for name, regime in ((older, "盤整"), (fl.MODEL, "多頭中的回檔")):
+            folder = self.tmp / f"forecast-bin-{name}"
+            folder.mkdir()
+            fl.write_forecast(self.forecasts, day_input(), edition="evening", model=name,
+                              model_bin=fake_model(folder, [envelope(answer_a(regime=regime))]), now=clock(FORECAST_OK))
+        layer = wr.market_layer(self.forecasts, day_input()["base_date"], "evening")
+        self.assertEqual(layer["regime"], "多頭中的回檔")
+        self.assertTrue(layer["forecast_id"].endswith(fl.INPUT_VERSION))
+
+    def test_an_older_models_forecast_is_still_used_when_it_is_the_only_one(self):
+        folder = self.tmp / "forecast-bin-flash"
+        folder.mkdir()
+        fl.write_forecast(self.forecasts, day_input(), edition="evening", model="gemini-3.8-flash",
+                          model_bin=fake_model(folder, [envelope(answer_a(regime="盤整"))]), now=clock(FORECAST_OK))
+        self.assertEqual(wr.market_layer(self.forecasts, day_input()["base_date"], "evening")["regime"], "盤整")
 
 
 class MorningTests(WatchRunTestCase):

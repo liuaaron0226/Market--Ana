@@ -77,11 +77,11 @@ class ReplayTestCase(unittest.TestCase):
             return []
         return [json.loads(line) for line in self.seen.read_text(encoding="utf-8").splitlines()]
 
-    def run_replay(self, payload=None, *, fail=False, **kwargs):
+    def run_replay(self, payload=None, *, fail=False, model_name="gemini-3.8-flash", **kwargs):
         options = dict(start="2026-04-01", end="2026-09-08", editions=("evening", "morning"), now=lambda: NOON)
         options.update(kwargs)
         return rp.run_replay(self.analysis_file(payload or analysis(DATES)), ledger=self.ledger,
-                             method_path=self.method, model_bin=self.model(fail=fail), model="gemini-3.8-flash",
+                             method_path=self.method, model_bin=self.model(fail=fail), model=model_name,
                              fetched_at="2026-11-17T12:00:00+08:00", **options)
 
 
@@ -181,6 +181,25 @@ class RunTests(ReplayTestCase):
         self.assertEqual(second["written"], 3)
         self.assertEqual(len(self.inputs()) - calls_after_first, 3)  # 已寫的不再呼叫模型
         self.assertEqual(len(fl.read_ledger(self.ledger)["forecasts"]), 6)
+
+    def test_switching_to_argon_replays_from_the_start_and_keeps_the_flash_replays_apart(self):
+        # 本人 2026-11-17「預測也換 Argon」：已寫的 Flash 重播另存、不混算；Argon 從頭重播，
+        # 不把 Flash 寫過的日子當成已寫，也不拿 Flash 的對帳當教訓。
+        flash = self.run_replay(max_forecasts=4)
+        argon = self.run_replay(max_forecasts=4, model_name="gemini-4-argon")
+        self.assertEqual((flash["written"], argon["written"], argon["unchanged"]), (4, 4, 0))
+        records = fl.read_ledger(self.ledger)["forecasts"]
+        by_model = {}
+        for record in records:
+            by_model.setdefault(record["model"], set()).add((record["base_date"], record["edition"], record["input_version"]))
+        self.assertEqual({day for day, _, _ in by_model["gemini-4-argon"]}, {day for day, _, _ in by_model["gemini-3.8-flash"]})
+        self.assertEqual({version for _, _, version in by_model["gemini-4-argon"]}, {fl.input_version("gemini-4-argon")})
+        self.assertTrue(all(r["replay"]["model_knowledge_source"].endswith("gemini-4-argon/")
+                            for r in records if r["model"] == "gemini-4-argon"))
+        self.assertEqual(rp.plan_replay(analysis(DATES), method_text=METHOD_04, model="gemini-4-argon",
+                                        start="2026-04-01", end="2026-09-08")["dates"],
+                         rp.plan_replay(analysis(DATES), method_text=METHOD_04, model="gemini-3.8-flash",
+                                        start="2026-04-01", end="2026-09-08")["dates"])
 
     def test_no_more_than_forty_forecasts_a_day_across_runs(self):
         # 本人 2026-11-17「分天跑，每天最多 40 份」：同一天觸發兩次也一樣

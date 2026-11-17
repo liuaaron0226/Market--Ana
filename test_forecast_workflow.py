@@ -81,7 +81,8 @@ class ForecastWorkflowTests(unittest.TestCase):
     def test_writes_with_the_existing_gemini_setup_and_records_the_model(self):
         run = step(self.source, "寫晚間版預測並對帳")
         self.assertIn("python forecast_run.py", run)
-        self.assertIn("--model gemini-3.8-flash", run)
+        # 模型不寫在排程檔：用 forecast_run 的預設（gemini_models.FORECAST，本人 2026-11-17 換 Argon）
+        self.assertNotIn("--model", run)
         self.assertIn("--analysis data/daily-update-state/last-market-pack/analysis-data.js", run)
         self.assertIn("--method MARKET_METHOD.md", run)
         self.assertIn("1b4850599cce73a17f94ffb422df3bf9531531b77dbddc40c1a435e0c2c16807", self.source)
@@ -238,7 +239,7 @@ class ReplayWorkflowTests(unittest.TestCase):
     def test_writes_with_a_budget_and_stores_before_publishing_to_the_replay_tables(self):
         run = step(self.source, "重播並對帳")
         self.assertIn("--max-forecasts \"$MAX_FORECASTS\"", run)
-        self.assertIn("--model gemini-3.8-flash", run)
+        self.assertNotIn("--model", run)  # 和正式同一個模型（gemini_models.FORECAST）
         self.assertIn("--sql-output", run)
         self.assertNotIn("${{", run.split("run: |", 1)[1])
         # 整批沒有海外原件就不是同一套輸入：不跑

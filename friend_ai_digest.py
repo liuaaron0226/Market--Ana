@@ -25,13 +25,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+import gemini_models
 from ai_digest_inputs import build_friend_input, load_stock_packs, with_friend_portfolio
 from ai_digest import (
     EMPTY_USAGE, OUTPUT_SCHEMA, ModelCallFailed, _evidence_catalog, _failure_rows, _row, _sql_literal, _validated_rows,
     build_prompt, digest_with_model,
 )
 
-MODEL = "gemini-3.8-flash"
+# 朋友自己的 Gemini API 金鑰，維持 Flash（本人 2026-11-17；名稱只在 gemini_models 改）。
+MODEL = gemini_models.FRIEND_DIGEST
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 SECTIONS = ("market", "flow")
 # 單次呼叫上限：10 位朋友最壞也在 job 的 60 分鐘內跑完、寫得進資料庫。

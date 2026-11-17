@@ -226,7 +226,7 @@ jobs:
           # agy 沒裝好時照樣交給帳本：模型呼叫失敗會記成漏記（原因看得到），不靜默跳過。
           args=(--edition "$EDITION" --analysis data/daily-update-state/last-market-pack/analysis-data.js
                 --watchlist "$RUNNER_TEMP/watchlist.json" --method MARKET_METHOD.md --ledger "$LEDGER"
-                --forecast-ledger "$FORECAST_LEDGER" --agy-bin "$RUNNER_TEMP/agy/antigravity" --model gemini-3.8-flash)
+                --forecast-ledger "$FORECAST_LEDGER" --agy-bin "$RUNNER_TEMP/agy/antigravity")
           if [ "$EDITION" = "morning" ]; then args+=(--session-date "$SESSION_DATE"); fi
           if [ "$DRY_RUN" = "false" ]; then
             # 每一次正式執行的紀錄放進帳本（runs/），跟著帳本存回 R2。
@@ -295,7 +295,7 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET: market-ana-state
         run: |
-          python watch_run.py nominate --ledger "$LEDGER" --agy-bin "$RUNNER_TEMP/agy/antigravity" --model gemini-3.8-flash             --log-output "$RUNNER_TEMP/watch-run/nominate.json" --sql-output "$RUNNER_TEMP/nominate.sql" --shared-cache
+          python watch_run.py nominate --ledger "$LEDGER" --agy-bin "$RUNNER_TEMP/agy/antigravity"             --log-output "$RUNNER_TEMP/watch-run/nominate.json" --sql-output "$RUNNER_TEMP/nominate.sql" --shared-cache
 
       - name: 提名存回 R2（只新增）
         if: always() && steps.nominate.outcome != 'skipped' && steps.restore.outcome == 'success'

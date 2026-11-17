@@ -21,13 +21,16 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import forecast_ledger as fl
+import gemini_models
 import watch_ledger as wl
 from forecast_run import load_analysis, previous_trading_day
 from level_signals import trading_day_status
 from ledger_core import TAIPEI, append, build_prompt, call_model, default_now, read_record, seal, sha
 
 SCHEMA = "watch-run/v1"
-MODEL_DEFAULT = "gemini-3.8-flash"
+# 本人 2026-11-17：每日判斷量大（每次最多 40 次）維持 Flash，提名同類股交給 Argon（名稱只在 gemini_models 改）。
+JUDGE_MODEL = gemini_models.WATCH_JUDGE
+NOMINATE_MODEL = gemini_models.WATCH_NOMINATE
 ROOT = Path(__file__).resolve().parent
 # 本人 2026-11-16 選「照規格最多」：每次排程最多叫模型 40 次（20 檔各一次，加上不合格時的重試）。
 CALL_BUDGET = 40
@@ -148,17 +151,21 @@ class LocalSource:
 
 
 def market_layer(forecast_ledger: Path | str | None, base_date: str, edition: str) -> dict[str, Any] | None:
-    """同一基準日、同一版的大盤預測：盤勢類型與三格的落點。沒有那一份或那一份是漏記時是 None（標缺漏）。"""
+    """同一基準日、同一版的大盤預測：盤勢類型與三格的落點。沒有那一份或那一份是漏記時是 None（標缺漏）。
+
+    換模型那天同一基準日可能有新舊模型各一份（本人 2026-11-17 預測換 Argon），先取現在這個模型的輸入版本。"""
     if forecast_ledger is None or not Path(forecast_ledger).is_dir():
         return None
-    for record in fl.read_ledger(forecast_ledger)["forecasts"]:
-        if record["base_date"] == base_date and record["edition"] == edition and record["kind"] == "forecast":
-            return {"forecast_id": record["forecast_id"], "regime": record["regime"],
-                    "cells": {key: {"zone": cell["zone"],
-                                    "strong_line": {k: cell["strong_line"][k] for k in ("name", "value")},
-                                    "weak_line": {k: cell["weak_line"][k] for k in ("name", "value")}}
-                              for key, cell in record["cells"].items()}}
-    return None
+    found = [record for record in fl.read_ledger(forecast_ledger)["forecasts"]
+             if record["base_date"] == base_date and record["edition"] == edition and record["kind"] == "forecast"]
+    if not found:
+        return None
+    record = min(found, key=lambda record: record["input_version"] != fl.INPUT_VERSION)
+    return {"forecast_id": record["forecast_id"], "regime": record["regime"],
+            "cells": {key: {"zone": cell["zone"],
+                            "strong_line": {k: cell["strong_line"][k] for k in ("name", "value")},
+                            "weak_line": {k: cell["weak_line"][k] for k in ("name", "value")}}
+                      for key, cell in record["cells"].items()}}
 
 
 def stock_input(item: Mapping[str, Any], data: Mapping[str, Any], *, base_date: str,
@@ -265,7 +272,7 @@ def run_evening(
     method_path: Path | str,
     model_bin: Path | str,
     source: Source,
-    model: str = MODEL_DEFAULT,
+    model: str = JUDGE_MODEL,
     now: Callable[[], datetime] | None = None,
     dry_run: bool = False,
     as_of: str | None = None,
@@ -306,7 +313,7 @@ def run_morning(
     source: Source,
     session_date: str,
     holidays: set[str],
-    model: str = MODEL_DEFAULT,
+    model: str = JUDGE_MODEL,
     now: Callable[[], datetime] | None = None,
     dry_run: bool = False,
     replay: bool = False,
@@ -579,7 +586,7 @@ def nominate_peers(
     owner_email: str,
     model_bin: Path | str,
     check: Callable[[str, str], str],
-    model: str = MODEL_DEFAULT,
+    model: str = NOMINATE_MODEL,
     now: Callable[[], datetime] | None = None,
     call_budget: int = NOMINATION_BUDGET,
     timeout_seconds: float = 360,
@@ -685,7 +692,7 @@ def nomination_candidates_sql(owner_email: str) -> str:
             "(SELECT 1 FROM watch_peers p WHERE p.email = w.email AND p.code = w.code) ORDER BY w.watch_since, w.code")
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="自選股關注：每日排程（判斷、對帳、同類股提名）")
     commands = parser.add_subparsers(dest="command", required=True)
     gate = commands.add_parser("authorize", help="看大盤預測的執行紀錄，決定這一次自動執行要不要寫")
@@ -702,7 +709,7 @@ def main(argv: list[str] | None = None) -> int:
     judge.add_argument("--forecast-ledger", type=Path, help="大盤預測帳本（同一基準日、同一版那一份當大盤層）")
     judge.add_argument("--method", type=Path, required=True, help="方法稿（MARKET_METHOD.md）")
     judge.add_argument("--agy-bin", type=Path, required=True)
-    judge.add_argument("--model", default=MODEL_DEFAULT)
+    judge.add_argument("--model", default=JUDGE_MODEL)
     judge.add_argument("--session-date", help="晨間版：開盤日（台北今天）")
     judge.add_argument("--dry-run", action="store_true", help="只在暫存副本上寫，不碰帳本、不輸出資料庫指令檔")
     judge.add_argument("--as-of", help="乾跑時重播：晚間版是已發布的某一天，晨間版是開盤日（須等於 --session-date）")
@@ -712,13 +719,17 @@ def main(argv: list[str] | None = None) -> int:
     nominate = commands.add_parser("nominate", help="替還沒有國外同類股名單的關注股請 Gemini 提名（站主確認後才使用）")
     nominate.add_argument("--ledger", type=Path, required=True)
     nominate.add_argument("--agy-bin", type=Path, required=True)
-    nominate.add_argument("--model", default=MODEL_DEFAULT)
+    nominate.add_argument("--model", default=NOMINATE_MODEL)
     nominate.add_argument("--dry-run", action="store_true", help="只在暫存副本上寫、不輸出資料庫指令檔")
     nominate.add_argument("--sql-output", type=Path)
     nominate.add_argument("--log-output", type=Path)
     nominate.add_argument("--shared-cache", action="store_true",
                           help="韓股與指數的檢查走 R2 的 EODHD 共用快取（eodhd-cache/），和大盤預測、每日同類股同一份")
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
 
     if args.command == "nominate":
         import overseas_peers as op

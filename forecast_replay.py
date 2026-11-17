@@ -44,6 +44,10 @@ MODEL_KNOWLEDGE = {
     # https://deepmind.google/models/model-cards/gemini-3-8-flash/（2026-09-02 發布；2026-11-17 F 票查證）
     "gemini-3.8-flash": {"cutoff": "2026-03", "replay_from": "2026-04-01",
                          "source": "https://deepmind.google/models/model-cards/gemini-3-8-flash/"},
+    # DeepMind 模型卡〈Known Limitations〉：「The knowledge cutoff for Gemini 4 is March 2026」
+    # https://deepmind.google/models/model-cards/gemini-4-argon/（2026-10-13 發布；2026-11-17 換 Argon 時查證）
+    "gemini-4-argon": {"cutoff": "2026-03", "replay_from": "2026-04-01",
+                       "source": "https://deepmind.google/models/model-cards/gemini-4-argon/"},
 }
 
 # 方法稿寫了實際結果的那段行情（含頭尾）：到期日落在這段、而且基準日在這段結束之前的預測不重播。

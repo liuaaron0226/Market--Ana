@@ -164,7 +164,7 @@ jobs:
           # agy 沒裝好時照樣交給帳本：模型呼叫失敗會記成一筆漏記（原因看得到），不靜默跳過。
           args=(--edition morning --session-date "$SESSION_DATE"
                 --analysis data/daily-update-state/last-market-pack/analysis-data.js --method MARKET_METHOD.md
-                --ledger "$LEDGER" --agy-bin "$RUNNER_TEMP/agy/antigravity" --model gemini-3.8-flash
+                --ledger "$LEDGER" --agy-bin "$RUNNER_TEMP/agy/antigravity"
                 --overseas-dir "$RUNNER_TEMP/overseas")
           if [ "$DRY_RUN" = "false" ]; then
             args+=(--sql-output "$RUNNER_TEMP/forecast.sql" --log-output "$LEDGER/runs/$GITHUB_RUN_ID.json")

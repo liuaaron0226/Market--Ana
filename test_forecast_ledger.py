@@ -157,10 +157,10 @@ class LedgerTestCase(unittest.TestCase):
         self._tmp.cleanup()
 
     def write(self, data=None, responses=None, *, edition="evening", now=None, official_since=None,
-              model=None, root=None, **kwargs):
+              model=None, root=None, model_name="test-model", **kwargs):
         model = model or fake_model(self.bin, responses or [envelope(answer_a())])
         return fl.write_forecast(
-            root or self.root, data or day_input(), edition=edition, model_bin=model, model="test-model",
+            root or self.root, data or day_input(), edition=edition, model_bin=model, model=model_name,
             now=now or clock(EVENING_OK), official_since=official_since, **kwargs,
         )
 
@@ -475,6 +475,41 @@ class RecordMetadataTests(LedgerTestCase):
             fl.method_version_of("# 沒有版本行\n")
 
 
+class ModelSeriesTests(LedgerTestCase):
+    """本人 2026-11-17：預測換 Argon。換模型＝新的輸入版本，舊模型的紀錄另成一個系列、不混算。"""
+    FLASH_ERA = "base+overseas+foreign_flow+similar+lessons-v1-1fbcaa45"  # 換模型前（Flash 試跑與 40 份重播）
+
+    def test_the_input_version_follows_the_model(self):
+        self.assertEqual(fl.INPUT_VERSION, fl.input_version(fl.MODEL))
+        self.assertNotEqual(fl.input_version("gemini-4-argon"), fl.input_version("gemini-3.8-flash"))
+        self.assertNotIn(self.FLASH_ERA, {fl.input_version("gemini-4-argon"), fl.input_version("gemini-3.8-flash")})
+        self.assertRegex(fl.input_version("gemini-4-argon"), r"^base\+overseas\+foreign_flow\+similar\+lessons-v1-[0-9a-f]{8}$")
+
+    def test_a_record_carries_the_input_version_of_the_model_that_wrote_it(self):
+        record = self.write(model_name="gemini-4-argon")["record"]
+        self.assertEqual(record["model"], "gemini-4-argon")
+        self.assertEqual(record["input_version"], fl.input_version("gemini-4-argon"))
+        self.assertEqual(record["input"]["input_version"], record["input_version"])
+        self.assertTrue(record["forecast_id"].endswith("|" + fl.input_version("gemini-4-argon")))
+
+    def test_the_same_day_by_another_model_is_a_separate_record_not_a_conflict(self):
+        flash = self.write(model_name="gemini-3.8-flash")
+        argon = self.write(model_name="gemini-4-argon")
+        self.assertEqual((flash["outcome"], argon["outcome"]), ("written", "written"))
+        self.assertNotEqual(flash["record"]["forecast_id"], argon["record"]["forecast_id"])
+        self.assertEqual(len(fl.read_ledger(self.root)["forecasts"]), 2)
+
+    def test_summary_keeps_each_model_in_its_own_group_and_names_the_model(self):
+        self.write(model_name="gemini-3.8-flash")
+        self.write(model_name="gemini-4-argon")
+        fl.reconcile(self.root, through("2026-10-08"))
+        groups = [g for g in fl.summarize(self.root, through("2026-10-08"))["groups"] if g["horizon"] == 1]
+        self.assertEqual(sorted((g["model"], g["input_version"], g["reconciled"]) for g in groups), [
+            ("gemini-3.8-flash", fl.input_version("gemini-3.8-flash"), 1),
+            ("gemini-4-argon", fl.input_version("gemini-4-argon"), 1),
+        ])
+
+
 class LockingTests(LedgerTestCase):
     def forecast_file(self):
         files = list((self.root / "forecasts").glob("*.json"))
@@ -716,7 +751,7 @@ class SummaryTests(LedgerTestCase):
     def test_groups_by_edition_horizon_method_and_input_version(self):
         self.build_ledger()
         summary = fl.summarize(self.root, through("2026-10-08"))
-        series = dict(run_mode="official", method_version="0.2", input_version=fl.INPUT_VERSION)
+        series = dict(run_mode="official", method_version="0.2", input_version=fl.input_version("test-model"))
 
         # 晚間一日：F1 10/01 收 97.6 ≥ 97.6 線上（猜線上，中）；F2 10/02 收 96 < 96.5 線下（猜線下，中）
         #   照歷史亂猜：F1 線上 2/21；F2 線下 1/22（一日漲跌幅 22 筆只有 −5% 低於 −1.127%）
