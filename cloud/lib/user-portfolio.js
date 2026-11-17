@@ -6,6 +6,8 @@ const WATCHLIST_LIMIT = 100;
 const HOLDINGS_LIMIT = 100;
 const MAX_SHARES = 1_000_000_000;
 const MAX_AVERAGE_COST = 10_000_000;
+const MAX_TOTAL_COST_TWD = 1_000_000_000_000;   // 和現金上限同一個數字
+const FUND_MARKET = "境外基金";
 const NOTE_MAX = 200;
 const GROUP_MAX = 12;   // 和 migrations/0012_watchlist_group.sql 的上限是同一個
 
@@ -51,12 +53,12 @@ export async function readBody(request) {
 }
 
 // deps.includeEtfs 由入口依 ETF 開關決定；開的人，名單內的 ETF 也算在分析範圍內。
-// 基金（基金當成一般個股 03 票）：只有 { funds: true } 的呼叫（目前是最近搜尋）而且 deps.includeFunds（基金開關對這個人開）才查基金名錄；
-// 加自選與庫存收基金等 07 票（單位數＋台幣總成本、淨值×匯率計價）一起開。
-async function securityFor(db, code, deps, { funds = false } = {}) {
+// 基金（基金當成一般個股 03、07 票）：deps.includeFunds（基金開關對這個人開）才查基金名錄；最近搜尋、自選、庫存都收。
+// 開關關著時和 ETF 一樣不能新增，之前存的保留。
+async function securityFor(db, code, deps) {
   const extra = [
     deps.includeEtfs && { table: "etf_securities", sql: "UNION ALL SELECT version, code, name, market, 1 AS in_universe FROM etf_securities " },
-    funds && deps.includeFunds && { table: "fund_securities",
+    deps.includeFunds && { table: "fund_securities",
       sql: "UNION ALL SELECT version, code, name, '境外基金' AS market, 1 AS in_universe FROM fund_securities " },
   ].filter(Boolean);
   // 名錄表（0018、0026）還沒套到資料庫時，當作沒有那份名錄，其他照常。
@@ -172,6 +174,26 @@ async function saveWatchlist(request, db, email, deps) {
 
 const rounded = (value, digits = 2) => Number(value.toFixed(digits));
 
+// 基金（07 票，本人 11-17 定案）：照基富通對帳單抄「單位數＋台幣總成本」。單位數可以有小數；
+// 存成單位數＋每單位台幣成本（總成本÷單位數），沿用股票的欄位，讀回時再乘回台幣總成本。
+function fundHoldingInput(body) {
+  const shares = body.shares, total = body.total_cost_twd;
+  const note = typeof body.note === "string" ? body.note.trim() : "";
+  if (body.average_cost !== undefined || total === undefined) throw new UserPortfolioError(400, "基金請填單位數與台幣總成本");
+  if (typeof shares !== "number" || !Number.isFinite(shares) || shares <= 0 || shares > MAX_SHARES) {
+    throw new UserPortfolioError(400, `單位數須大於 0 且不超過 ${MAX_SHARES.toLocaleString("en-US")}`);
+  }
+  if (typeof total !== "number" || !Number.isFinite(total) || total <= 0 || total > MAX_TOTAL_COST_TWD) {
+    throw new UserPortfolioError(400, `台幣總成本須大於 0 且不超過 ${MAX_TOTAL_COST_TWD.toLocaleString("en-US")}`);
+  }
+  const averageCost = total / shares;
+  if (averageCost > MAX_AVERAGE_COST) {
+    throw new UserPortfolioError(400, `每單位成本超過 ${MAX_AVERAGE_COST.toLocaleString("en-US")}，請確認單位數與總成本`);
+  }
+  if (note.length > NOTE_MAX) throw new UserPortfolioError(400, `備註最多 ${NOTE_MAX} 字`);
+  return { shares, averageCost, note, totalCost: rounded(total) };
+}
+
 function holdingInput(body) {
   const shares = Number(body.shares);
   const averageCost = Number(body.average_cost);
@@ -189,8 +211,9 @@ function holdingInput(body) {
 async function saveHolding(request, db, email, deps) {
   const body = await readBody(request);
   const code = codeFrom(body.code);
-  const { shares, averageCost, note } = holdingInput(body);
   const security = await securityFor(db, code, deps);
+  const fund = security.market === FUND_MARKET;
+  const { shares, averageCost, note, totalCost } = fund ? fundHoldingInput(body) : holdingInput(body);
   const existing = await db.prepare("SELECT 1 AS found FROM user_holdings WHERE email = ? AND code = ?").bind(email, code).first();
   if (!existing) {
     const count = await db.prepare("SELECT COUNT(*) AS n FROM user_holdings WHERE email = ?").bind(email).first();
@@ -211,6 +234,7 @@ async function saveHolding(request, db, email, deps) {
   }
   return response(existing ? 200 : 201, {
     code, name: security.name, market: security.market, shares, average_cost: averageCost, note,
+    ...(fund ? { kind: "fund", total_cost_twd: totalCost } : {}),
     in_universe: Boolean(security.in_universe), source: "manual", updated_at: at,
   });
 }
@@ -223,6 +247,22 @@ function closeFromPayload(payload) {
     const bars = Array.isArray(parsed?.bars) ? parsed.bars : [];
     const close = Number(bars.at(-1)?.close);
     return Number.isFinite(close) && close >= 0 ? close : null;
+  } catch {
+    return null;
+  }
+}
+
+// 基金（07 票）：每單位台幣價格＝最新淨值（原幣）×最新匯率（每日建置寫進分析的 fx，fund_stock.py）。
+// 淨值或匯率缺一個就是沒有價格，不拿別的數字湊。
+function fundQuoteFromPayload(payload) {
+  try {
+    const parsed = typeof payload === "string" ? JSON.parse(payload) : payload;
+    const nav = Number(parsed?.quote?.close), rate = Number(parsed?.fx?.rate);
+    if (!(nav > 0) || !(rate > 0) || !Number.isFinite(nav) || !Number.isFinite(rate)) return null;
+    return {
+      price: nav * rate, nav, currency: parsed.currency ?? parsed.quote.currency ?? null,
+      navDate: parsed.quote.nav_date ?? parsed.as_of ?? null, fxRate: rate, fxDate: parsed.fx.date ?? null,
+    };
   } catch {
     return null;
   }
@@ -275,10 +315,14 @@ async function listHoldings(db, email, deps) {
       "LEFT JOIN stock_analysis a ON a.version = s.active_version AND a.code = h.code " +
       "WHERE h.email = ? ORDER BY h.updated_at DESC, h.code",
   ).bind(email).all();
+  // 基金（07 票）：用淨值×匯率；基金開關對這個人關著時不給價格（存的資料保留，只是不算）。基金不問證交所。
+  const isFund = (item) => item.market === FUND_MARKET;
+  const funds = new Map(results.filter(isFund).map((item) => [item.code,
+    deps.includeFunds && item.kind === "fund" ? fundQuoteFromPayload(item.payload) : null]));
   // ETF 開關對這個人關著時，0050 以外的 ETF 不用本站分析的收盤價（和 ETF 上站之前一樣走官方行情）。
-  const analysis = new Map(results.map((item) => [item.code,
+  const analysis = new Map(results.filter((item) => !isFund(item)).map((item) => [item.code,
     etfAnalysisHidden(item.code, item.kind, Boolean(deps.includeEtfs)) ? null : closeFromPayload(item.payload)]));
-  const unresolved = results.filter((item) => analysis.get(item.code) === null);
+  const unresolved = results.filter((item) => !isFund(item) && analysis.get(item.code) === null);
   const official = await officialPrices(unresolved, deps.quoteFetch, deps.now || Date.now);
   for (const [code, quote] of official) {
     await db.prepare(
@@ -286,6 +330,7 @@ async function listHoldings(db, email, deps) {
     ).bind(quote.price, quote.asOf, quote.source, email, code).run();
   }
   const items = results.map((item) => {
+    if (isFund(item)) return fundHoldingItem(item, funds.get(item.code));
     const analysisPrice = analysis.get(item.code);
     const quote = official.get(item.code);
     const latestPrice = analysisPrice ?? quote?.price ?? (item.last_price === null ? null : Number(item.last_price));
@@ -305,6 +350,24 @@ async function listHoldings(db, email, deps) {
     };
   });
   return response(200, { items });
+}
+
+// 基金那一列：價格是每單位台幣（淨值×匯率），另帶淨值、幣別、淨值日、匯率、匯率日與台幣總成本（表單與明細用）。
+function fundHoldingItem(item, quote) {
+  const shares = Number(item.shares), costBasis = rounded(shares * Number(item.average_cost));
+  const marketValue = quote ? rounded(shares * quote.price) : null;
+  const unrealized = marketValue === null ? null : rounded(marketValue - costBasis);
+  return {
+    code: item.code, name: item.name, market: item.market, kind: "fund", shares, average_cost: Number(item.average_cost),
+    total_cost_twd: costBasis, note: item.note, in_universe: Boolean(item.in_universe), source: item.source, source_ref: item.source_ref,
+    latest_price: quote ? rounded(quote.price, 4) : null, price_as_of: quote?.navDate ?? null,
+    price_source: quote ? "本站淨值×匯率" : null, price_stale: false,
+    nav: quote?.nav ?? null, currency: quote?.currency ?? null, nav_date: quote?.navDate ?? null,
+    fx_rate: quote?.fxRate ?? null, fx_date: quote?.fxDate ?? null,
+    cost_basis: costBasis, market_value: marketValue, unrealized_pnl: unrealized,
+    return_pct: unrealized === null ? null : rounded(unrealized / costBasis * 100),
+    created_at: item.created_at, updated_at: item.updated_at,
+  };
 }
 
 const MAX_CASH_TWD = 1_000_000_000_000;
@@ -433,7 +496,7 @@ async function listSearchHistory(db, email) {
 async function saveSearchHistory(request, db, email, deps) {
   const body = await readBody(request);
   const code = codeFrom(body.code);
-  const security = await securityFor(db, code, deps, { funds: true });
+  const security = await securityFor(db, code, deps);
   const existing = await db.prepare("SELECT 1 AS found FROM user_search_history WHERE email = ? AND code = ?").bind(email, code).first();
   const at = new Date((deps.now || Date.now)()).toISOString();
   await db.prepare(

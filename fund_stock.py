@@ -6,6 +6,7 @@
   操作策略（strategy）與價位（levels）要用只看收盤的規則另算（04 票），這張先回資料不足，不填假數字。
 發布後（daily_update._publish_stock_history）用 ``history_payloads`` 把整段淨值寫進 D1 ``stock_history``，個股頁的圖往前拉用。
 本機 live_server 用 ``fund_analysis``／``fund_history`` 給同一個契約。
+自選股與庫存（07 票）：分析多帶最新匯率（``fx``），庫存的每單位台幣價格＝淨值×匯率（``twd_quote``；雲端 user-portfolio.js 同一個算法）。
 
 淨值與配息資料沿用基金對照分支的 ``fund_compare.load_history``（瀏覽器回補原件＋每日抽取檔，逐檔核 SHA-256）。
 """
@@ -52,8 +53,37 @@ def _quote(navs: Sequence[tuple[str, float]], currency: str) -> dict[str, Any]:
             "nav_date": day, "currency": currency}
 
 
-def fund_analysis(code: str, navs: Sequence[tuple[str, float]], status: str) -> dict[str, Any]:
-    """分析契約 v2 的基金版。``navs`` 已截到資料日、至少 MIN_NAVS 筆；``status`` 是 available 或 stale。"""
+# 匯率只接了央行的美元兌台幣（fund_compare 每日抓的 cbc-usdtwd）；其他幣別的基金沒有匯率，庫存就沒有台幣價格。
+FX_PAIRS = {"USD": "USD/TWD"}
+FX_SOURCE = "中央銀行"
+TWD_PRICE_SOURCE = "本站淨值×匯率"
+
+
+def latest_fx(currency: str, fx: Sequence[tuple[str, float]], as_of: str) -> dict[str, Any] | None:
+    """資料日（含）以前最新的一筆匯率；資料日之後的不用（和淨值一樣）。沒有就是 None，不拿別的數字湊。"""
+    pair = FX_PAIRS.get(currency)
+    usable = [(day, float(rate)) for day, rate in fx if day <= as_of and float(rate) > 0] if pair else []
+    if not usable:
+        return None
+    day, rate = max(usable)
+    return {"pair": pair, "rate": rate, "date": day, "source": FX_SOURCE}
+
+
+def twd_quote(payload: dict[str, Any] | None) -> dict[str, Any] | None:
+    """基金分析 → 庫存用的每單位台幣價格（淨值×匯率）與它的來源日期；淨值或匯率缺一個就是 None。"""
+    quote, fx = (payload or {}).get("quote") or {}, (payload or {}).get("fx") or {}
+    nav, rate = quote.get("close"), fx.get("rate")
+    if not isinstance(nav, (int, float)) or not isinstance(rate, (int, float)) or nav <= 0 or rate <= 0:
+        return None
+    return {"price": nav * rate, "as_of": quote.get("nav_date"), "source": TWD_PRICE_SOURCE, "nav": nav,
+            "currency": payload.get("currency") or quote.get("currency"), "nav_date": quote.get("nav_date"),
+            "fx_rate": rate, "fx_date": fx.get("date")}
+
+
+def fund_analysis(code: str, navs: Sequence[tuple[str, float]], status: str,
+                  fx: dict[str, Any] | None = None) -> dict[str, Any]:
+    """分析契約 v2 的基金版。``navs`` 已截到資料日、至少 MIN_NAVS 筆；``status`` 是 available 或 stale；
+    ``fx`` 是 ``latest_fx`` 的結果（庫存換台幣用），沒有就是 None。"""
     fund = fund_compare.FUNDS[code]
     return {
         "schema": ANALYSIS_SCHEMA, "analysis_version": ANALYSIS_VERSION,
@@ -61,6 +91,7 @@ def fund_analysis(code: str, navs: Sequence[tuple[str, float]], status: str) -> 
         "currency": fund["currency"], "isin": fund["isin"],
         "as_of": navs[-1][0], "requested_as_of": "9999-12-31", "analysis_status": status,
         "quote": _quote(navs, fund["currency"]),
+        "fx": fx,
         "qa": {"blocking": False, "bars": len(navs)},
         # 04 票：只看收盤的操作策略與壓力／支撐；在那之前回資料不足（個股頁不顯示策略、價位階梯寫「無」）。
         "strategy": None,
@@ -80,14 +111,17 @@ def fund_rows(as_of: str, *, loader: Loader = fund_compare.load_history,
     failures: list[dict] = []
     for code in codes or sorted(fund_compare.FUNDS):
         fund = fund_compare.FUNDS[code]
+        fx = None
         try:
-            navs = _navs_upto(loader(code, as_of=as_of), as_of)
+            history = loader(code, as_of=as_of)
+            navs = _navs_upto(history, as_of)
+            fx = latest_fx(fund["currency"], history.get("fx") or [], as_of)
         except (OSError, ValueError, KeyError) as error:
             navs = []
             failures.append({"code": code, "scope": "fund", "error": type(error).__name__, "message": str(error)[:200]})
         status = _status(navs, as_of)
         if status in ("available", "stale"):
-            analyses.append({"code": code, "as_of": navs[-1][0], "payload": fund_analysis(code, navs, status)})
+            analyses.append({"code": code, "as_of": navs[-1][0], "payload": fund_analysis(code, navs, status, fx)})
         directory.append({
             "code": code, "name": fund["short_name"], "full_name": fund["name"], "currency": fund["currency"],
             "isin": fund["isin"], "latest_bar_date": navs[-1][0] if navs else None, "available_bars": len(navs),

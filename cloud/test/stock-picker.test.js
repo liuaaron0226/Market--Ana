@@ -32,7 +32,7 @@ test("搜尋結果照順序變成選項；基金是一般的一筆，標「基�
   assert.deepEqual(plain(options(PAYLOAD)), [
     { kind: "stock", code: "2330", name: "台積電", title: "2330 台積電", meta: "上市普通股" },
     { kind: "stock", code: "4441", name: "振大環球", title: "4441 振大環球", meta: "上櫃普通股" },
-    { kind: "stock", code: "BLKTENAU", name: "貝萊德世界科技 A10", title: "BLKTENAU 貝萊德世界科技 A10", meta: "基金" },
+    { kind: "stock", code: "BLKTENAU", name: "貝萊德世界科技 A10", title: "BLKTENAU 貝萊德世界科技 A10", meta: "基金", fund: true },
   ]);
 });
 
@@ -81,7 +81,7 @@ test("打的字剛好是某一檔的代碼（例如基金 BLKTENAU，不分大�
   assert.equal(decide("blktenau", [長榮航, fund], { strict: true }).option.code, "BLKTENAU");
 });
 
-test("還不收基金的框（首頁核心持有等 05 票、自選股頁等 07 票）用 notFund 先不列基金", () => {
+test("還不收基金的框（首頁核心持有等 05 票）用 notFund 先不列基金", () => {
   const { notFund } = window.StockPicker;
   assert.deepEqual(plain(options(PAYLOAD, { accept: notFund })).map((option) => option.code), ["2330", "4441"]);
 });

@@ -38,6 +38,8 @@
   const $ = id => document.getElementById(id);
   const money = new Intl.NumberFormat('zh-TW', { style: 'currency', currency: 'TWD', maximumFractionDigits: 0 });
   const number = new Intl.NumberFormat('zh-TW', { maximumFractionDigits: 2 });
+  const units = new Intl.NumberFormat('zh-TW', { maximumFractionDigits: 4 });   // 基金單位數常有 4 位小數
+  const CURRENCY_WORDS = { USD: '美元', TWD: '台幣' };
   // watch：站主才有（其他人是 null）——已關注的代號、目前幾檔、上限。
   const state = { watchlist: [], watch: null, holdings: [], level: null, aiDigest: null, aiVisible: false };
   let features = { level_advice: false, ai_digest: false, ai_stock_advice: false, watchlist_watch_v1: false };
@@ -375,7 +377,18 @@
   }
   // 下一次讀回來就算資料一樣也重畫（畫面上的狀態變了，例如修改的表單要收起來）
   const redrawNext = () => { listShown = null; };
-  const saveHolding = item => api('/api/holdings', { method: 'POST', body: { code: item.code, shares: item.shares, average_cost: item.average_cost, note: item.note || '' } });
+  // 基金（07 票）送單位數＋台幣總成本（照基富通對帳單抄）；股票送股數＋平均成本
+  const saveHolding = item => api('/api/holdings', { method: 'POST', body: item.kind === 'fund'
+    ? { code: item.code, shares: item.shares, total_cost_twd: item.total_cost_twd, note: item.note || '' }
+    : { code: item.code, shares: item.shares, average_cost: item.average_cost, note: item.note || '' } });
+  // 庫存兩格各叫什麼、收什麼：股票是股數（整數）與平均成本；基金是單位數（可小數）與台幣總成本
+  const HOLDING_FIELDS = {
+    stock: [['股數', 'shares', { inputmode: 'numeric', min: '1', max: '1000000000', step: '1' }],
+      ['平均成本', 'average_cost', { inputmode: 'decimal', min: '0.01', max: '10000000', step: 'any' }]],
+    fund: [['單位數', 'shares', { inputmode: 'decimal', min: '0', max: '1000000000', step: 'any' }],
+      ['台幣總成本', 'total_cost_twd', { inputmode: 'decimal', min: '1', max: '1000000000000', step: 'any' }]],
+  };
+  const holdingKind = item => (item?.kind === 'fund' ? 'fund' : 'stock');
   const reloadHoldings = () => Promise.all([loadHoldings(), ...(features.level_advice ? [loadLevel()] : [])]);
   // 「還原」要做的事：把庫存存回原本的那一筆
   const restoreHolding = before => async () => { await saveHolding(before); await reloadHoldings(); return { code: before.code }; };
@@ -580,9 +593,9 @@
     host.querySelector(`.pf-group-name[data-group="${CSS.escape(to)}"]`)?.focus();
   }
 
-  // 就地修改庫存：股數、平均成本、備註。同一個代號再存一次就是更新
+  // 就地修改庫存：股數、平均成本、備註（基金是單位數、台幣總成本、備註）。同一個代號再存一次就是更新
   function editForm(entry) {
-    const item = entry.holding.item, form = element('form', 'pf-form pf-edit');
+    const item = entry.holding.item, form = element('form', 'pf-form pf-edit'), kind = holdingKind(item);
     form.dataset.code = entry.code;
     const field = (label, name, attributes, value, wide) => {
       const wrap = element('label', wide ? 'pf-wide' : '', label), input = element('input');
@@ -596,8 +609,7 @@
     save.type = 'submit';
     cancel.type = 'button';
     form.append(
-      field('股數', 'shares', { type: 'number', inputmode: 'numeric', min: '1', max: '1000000000', step: '1', required: '' }, String(item.shares)),
-      field('平均成本', 'average_cost', { type: 'number', inputmode: 'decimal', min: '0.01', max: '10000000', step: 'any', required: '' }, String(item.average_cost)),
+      ...HOLDING_FIELDS[kind].map(([label, name, attributes]) => field(label, name, { type: 'number', ...attributes, required: '' }, String(item[name]))),
       field('備註', 'note', { maxlength: '200', placeholder: '選填，最多 200 字' }, item.note || '', true),
       save, cancel,
     );
@@ -612,7 +624,8 @@
     rowNote(row, '');
     say('');
     try {
-      await saveHolding({ code, shares: Number(form.elements.shares.value), average_cost: Number(form.elements.average_cost.value), note: form.elements.note.value.trim() });
+      const kind = holdingKind(before), [, costName] = HOLDING_FIELDS[kind].map(([, name]) => name);
+      await saveHolding({ code, kind, shares: Number(form.elements.shares.value), [costName]: Number(form.elements[costName].value), note: form.elements.note.value.trim() });
     } catch (error) {
       rowNote(row, error.message);
       button.disabled = false;
@@ -707,11 +720,12 @@
     const clip = element('div', 'hv-clip'), inner = element('div', 'hv-inner');
     if (held && editing) inner.append(editForm(entry));
     else if (held) {
-      const facts = element('ul', 'hv-facts');
+      const facts = element('ul', 'hv-facts'), fund = holdingKind(item) === 'fund';
       [
         [item.price_stale ? '市值（上次收盤）' : '市值', priced ? money.format(item.market_value) : '—', ''],
         [word, priced ? signedMoney(held.gain) : '—', tone],
-        ['股數・均價', `${number.format(item.shares)}・${number.format(item.average_cost)}`, ''],
+        fund ? ['單位數・台幣成本', `${units.format(item.shares)}・${money.format(item.total_cost_twd)}`, '']
+          : ['股數・均價', `${number.format(item.shares)}・${number.format(item.average_cost)}`, ''],
       ].forEach(([label, text, factTone], index) => {
         const fact = element('li');
         fact.style.setProperty('--order', String(index));   // 展開時一格一格浮出來
@@ -719,6 +733,12 @@
         facts.append(fact);
       });
       inner.append(facts);
+      // 基金的現值怎麼來的：淨值（原幣）×匯率，各自的日期；不含已領的配息（本人 11-18 同意）
+      if (fund) {
+        inner.append(element('p', 'hv-note', Number.isFinite(item.nav) && Number.isFinite(item.fx_rate)
+          ? `淨值 ${item.nav} ${CURRENCY_WORDS[item.currency] || item.currency || ''}（${item.nav_date}）× 匯率 ${item.fx_rate}（${item.fx_date}），不含已領配息`
+          : '淨值或匯率還沒有，暫時算不出現值'));
+      }
       if (item.note) inner.append(element('p', 'hv-note', `備註：${item.note}`));
     }
     if (watch && !editing) inner.append(watchSettings(entry, li));
@@ -986,9 +1006,25 @@
     }
   }
 
-  // 「＋」的兩種新增共用一格。代號、名稱都能打（stock-picker.js，本人 11-17）；基金不是股票，這格不收。
+  // 新增庫存的兩格：選到基金時換成「單位數」「台幣總成本」（07 票，本人 11-17 定案：照基富通對帳單抄），換的時候清掉已經填的數字
+  let addKind = 'stock', addPicked = '';
+  function setAddKind(kind) {
+    if (kind === addKind) return;
+    addKind = kind;
+    [[$('holdingSharesLabel'), $('holdingShares')], [$('holdingCostLabel'), $('holdingCost')]].forEach(([label, input], index) => {
+      const [text, name, attributes] = HOLDING_FIELDS[kind][index];
+      label.textContent = text;
+      input.name = name;
+      input.value = '';
+      Object.entries(attributes).forEach(([key, value]) => input.setAttribute(key, value));
+    });
+  }
+  // 「＋」的兩種新增共用一格。代號、名稱都能打（stock-picker.js，本人 11-17）；基金（07 票）也收，加進來就是一般的一列。
   // 會存資料：打的名稱符合好幾檔又沒有完全相同的，攤開下拉要本人挑，不默默存第一個（strict）。
-  const addPicker = window.StockPicker.attach($('addCode'), { inline: true, strict: true, accept: window.StockPicker.notFund });
+  const addPicker = window.StockPicker.attach($('addCode'), { inline: true, strict: true,
+    onPick: option => { addPicked = $('addCode').value; setAddKind(option.fund ? 'fund' : 'stock'); } });
+  // 選完又改了框裡的字：先回到股票的兩格，按儲存時再照實際選到的那一檔對一次
+  $('addCode').addEventListener('input', () => { if ($('addCode').value !== addPicked) setAddKind('stock'); });
   // 做完把表單收回去，結果寫在清單上面那一行；存不成的原因留在表單裡。
   // 按下去就先鎖住鍵（找代號也要時間），連按兩下不會送兩次。
   async function addFromForm(button, send, done, reload, kind, { skip } = {}) {
@@ -998,11 +1034,12 @@
       const { option, message } = await addPicker.choose();
       if (message) { setStatus($('addStatus'), message, 'error'); $('addCode').focus(); return; }
       const code = option.code;
-      const reason = skip?.(code);
+      const reason = skip?.(code, option);
       if (reason) { setStatus($('addStatus'), reason); return; }
       setStatus($('addStatus'), '正在儲存…');
       const saved = await send(code);
       $('addForm').reset();
+      setAddKind('stock');
       setStatus($('addStatus'), '');
       setAddOpen(false);
       $('addToggle').focus({ preventScroll: true });
@@ -1017,8 +1054,17 @@
     skip: code => { const existing = state.watchlist.find(item => item.code === code); return existing ? `${existing.name} 已經在自選了。` : ''; },
   });
   const addHolding = () => addFromForm($('saveHolding'),
-    code => saveHolding({ code, shares: Number($('holdingShares').value), average_cost: Number($('holdingCost').value), note: $('holdingNote').value.trim() }),
-    name => `已儲存 ${name} 的庫存。`, reloadHoldings, 'holding');
+    code => saveHolding({ code, kind: addKind, shares: Number($('holdingShares').value), [HOLDING_FIELDS[addKind][1][1]]: Number($('holdingCost').value), note: $('holdingNote').value.trim() }),
+    name => `已儲存 ${name} 的庫存。`, reloadHoldings, 'holding', {
+      // 沒從下拉選、直接打字就按儲存：選到的是基金（或股票）但兩格還是另一種，先換成對的兩格請本人重填，不存錯的數字
+      skip: (code, option) => {
+        const kind = option.fund ? 'fund' : 'stock';
+        if (kind === addKind) return '';
+        setAddKind(kind);
+        $('holdingShares').focus();
+        return kind === 'fund' ? `${option.name} 是基金：請填單位數與台幣總成本（照基富通對帳單）。` : `${option.name} 是股票：請填股數與平均成本。`;
+      },
+    });
   $('addForm').addEventListener('submit', event => { event.preventDefault(); addWatch(); });
   $('saveHolding').addEventListener('click', addHolding);
   // 表單預設的送出是「加入自選」。股數那幾格開著的時候按 Enter 是存庫存：在代號那一格是跳到股數，在其他格是儲存

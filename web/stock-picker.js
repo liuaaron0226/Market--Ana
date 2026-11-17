@@ -30,6 +30,8 @@
     return items.filter(item => item && item.code && accept(item)).map(item => ({
       kind: 'stock', code: item.code, name: item.name || item.code, title: `${item.code} ${item.name || ''}`.trim(),
       meta: item.security_type === '基金' ? '基金' : `${item.market || ''}${item.security_type || ''}`,
+      // 基金（07 票）：自選股頁的新增庫存要換成單位數與台幣總成本
+      ...(item.security_type === '基金' ? { fund: true } : {}),
     }));
   }
 
@@ -75,6 +77,9 @@
     input.setAttribute('aria-expanded', 'false');
 
     const state = { timer: null, abort: null, term: '', choices: [], buttons: [], active: -1 };
+    // 剛從下拉選的那一檔：框裡是「代號 名稱」。基金代號（例如 BLKTENAU）不是 4～6 碼，codeOf 認不出來，
+    // 所以框裡的字沒改過就直接用它，不再拿整串字去搜（07 票在自選股頁實走時找到）。
+    let picked = null;
 
     function close() {
       clearTimeout(state.timer);
@@ -92,6 +97,7 @@
 
     function pick(option) {
       input.value = `${option.code} ${option.name}`;
+      picked = { option, text: input.value };
       close();
       settings.onPick?.(option);
     }
@@ -194,6 +200,7 @@
     async function choose(text = input.value) {
       const term = String(text).trim();
       if (!term) return { message: '請先輸入股票代號或名稱。' };
+      if (picked && picked.text.trim() === term) { close(); return { option: picked.option }; }
       const code = codeOf(term);
       if (code) { close(); return { option: { kind: 'stock', code, name: code } }; }
       if (state.active >= 0) { const option = state.choices[state.active]; close(); return { option }; }
@@ -212,8 +219,8 @@
     return { choose, close };
   }
 
-  // 還不收基金的框用的 accept（基金當成一般個股 03 票）：首頁核心持有比較要等 05 票、自選股頁加自選與庫存要等 07 票，
-  // 在那之前選到基金只會被說查無此股，所以先不列；那兩張票做完就拿掉。
+  // 還不收基金的框用的 accept（基金當成一般個股 03 票）：首頁核心持有比較要等 05 票（自選股頁 07 票已經收基金），
+  // 在那之前選到基金只會被說查無此股，所以先不列；05 票做完就拿掉。
   const notFund = item => item.security_type !== '基金';
 
   global.StockPicker = { codeOf, isCode, options, decide, fitQuery, attach, notFund };

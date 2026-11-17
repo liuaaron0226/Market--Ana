@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import http.cookiejar
 import json
+import math
 import os
 import re
 import sqlite3
@@ -980,6 +981,15 @@ _PORTFOLIO_SCHEMA_READY: set[str] = set()
 _PORTFOLIO_EMAIL = "local"
 _PORTFOLIO_CODE = stock_codes.CODE_RE
 _PORTFOLIO_LIMIT = 100
+# 基金（07 票）：和雲端 cloud/lib/user-portfolio.js 同一組規則與字句
+_FUND_MARKET = "境外基金"
+_MAX_UNITS = 1_000_000_000
+_MAX_TOTAL_COST_TWD = 1_000_000_000_000
+_MAX_UNIT_COST = 10_000_000
+# 本機自選／庫存資料庫只套 0005、0006 建表（代號 4～6 碼、市場只收上市上櫃）；雲端在 0025 放寬，這裡在打開時同樣放寬。
+_PORTFOLIO_WIDEN = (("length(code) BETWEEN 4 AND 6", "length(code) BETWEEN 4 AND 12"),
+                    ("market IN ('上市', '上櫃')", "market IN ('上市', '上櫃', '境外基金')"))
+_PORTFOLIO_WIDEN_TABLES = ("user_watchlist", "user_holdings", "user_search_history")
 
 
 def _portfolio_code(value: Any) -> str:
@@ -989,7 +999,20 @@ def _portfolio_code(value: Any) -> str:
     return code
 
 
+def _fund_security(code: str) -> dict[str, Any] | None:
+    """名錄裡的基金（本機沒有開關，一律看得到）：自選與庫存當一般的一列，可以點進個股頁。"""
+    import fund_compare
+
+    fund = fund_compare.FUNDS.get(code)
+    if fund is None:
+        return None
+    return {"code": code, "name": fund["short_name"], "market": _FUND_MARKET, "in_universe": True}
+
+
 def _portfolio_security(code: str, universe: dict[str, Any]) -> dict[str, Any] | None:
+    fund = _fund_security(code)
+    if fund is not None:
+        return fund
     security = lookup_security(code)
     if security is not None:
         return {"code": code, "name": security.name, "market": security.market,
@@ -1003,11 +1026,26 @@ def _default_portfolio_security(code: str) -> dict[str, Any] | None:
     return _portfolio_security(code, universe_state())
 
 
+def _fund_prices(codes: list[str]) -> dict[str, dict[str, Any]]:
+    """基金的每單位台幣價格（淨值×匯率），和每日建置同一個 fund_stock.fund_rows／twd_quote。"""
+    import fund_compare
+    import fund_stock
+
+    wanted = [code for code in codes if code in fund_compare.FUNDS]
+    if not wanted:
+        return {}
+    _, analyses, _ = fund_stock.fund_rows(fund_compare.taipei_today(), codes=wanted)
+    quotes = {row["code"]: fund_stock.twd_quote(row["payload"]) for row in analyses}
+    return {code: quote for code, quote in quotes.items() if quote is not None}
+
+
 def _default_portfolio_prices(codes: list[str]) -> dict[str, dict[str, Any]]:
-    prices: dict[str, dict[str, Any]] = {}
+    prices: dict[str, dict[str, Any]] = _fund_prices(codes)
     connections: dict[Path, sqlite3.Connection] = {}
     try:
         for code in codes:
+            if code in prices:
+                continue
             security = lookup_security(code)
             path = OTC_HISTORY_DB if security is not None and security.market == "上櫃" else STOCK_HISTORY_DB
             if not path.exists():
@@ -1060,7 +1098,27 @@ class LocalPortfolioStore:
                 scripts.append(script)
             with sqlite3.connect(self.path, factory=_ClosingConnection) as connection:
                 connection.executescript("\n".join(scripts))
+                self._widen(connection, "\n".join(scripts))
             _PORTFOLIO_SCHEMA_READY.add(key)
+
+    @staticmethod
+    def _widen(connection: sqlite3.Connection, scripts: str) -> None:
+        """舊表照原樣重建（SQLite 不能改 CHECK）：只放寬代號長度與市場，資料原樣搬過去；索引與上限觸發器再建回來。"""
+        steps = []
+        for table in _PORTFOLIO_WIDEN_TABLES:
+            row = connection.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)).fetchone()
+            if row is None or _FUND_MARKET in row[0]:
+                continue
+            ddl = row[0]
+            for old, new in _PORTFOLIO_WIDEN:
+                if old not in ddl:
+                    raise RuntimeError(f"本機 {table} 的結構和 0005 不同，不自動放寬")
+                ddl = ddl.replace(old, new)
+            ddl = ddl.replace(f"CREATE TABLE {table}", f"CREATE TABLE {table}_wide", 1)
+            steps += [ddl + ";", f"INSERT INTO {table}_wide SELECT * FROM {table};", f"DROP TABLE {table};",
+                      f"ALTER TABLE {table}_wide RENAME TO {table};"]
+        if steps:
+            connection.executescript("BEGIN;\n" + "\n".join(steps) + "\n" + scripts + "\nCOMMIT;")
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, factory=_ClosingConnection)
@@ -1134,10 +1192,31 @@ class LocalPortfolioStore:
             raise PortfolioApiError(400, "備註最多 200 字")
         return shares, float(average_cost), note.strip()
 
+    @staticmethod
+    def _fund_holding_input(body: dict[str, Any]) -> tuple[float, float, str, float]:
+        """基金：單位數（可小數）＋台幣總成本，存成單位數＋每單位台幣成本。字句和雲端相同。"""
+        shares, total, note = body.get("shares"), body.get("total_cost_twd"), body.get("note", "")
+        number = lambda value: isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+        if "average_cost" in body or total is None:
+            raise PortfolioApiError(400, "基金請填單位數與台幣總成本")
+        if not number(shares) or not 0 < shares <= _MAX_UNITS:
+            raise PortfolioApiError(400, f"單位數須大於 0 且不超過 {_MAX_UNITS:,}")
+        if not number(total) or not 0 < total <= _MAX_TOTAL_COST_TWD:
+            raise PortfolioApiError(400, f"台幣總成本須大於 0 且不超過 {_MAX_TOTAL_COST_TWD:,}")
+        if total / shares > _MAX_UNIT_COST:
+            raise PortfolioApiError(400, f"每單位成本超過 {_MAX_UNIT_COST:,}，請確認單位數與總成本")
+        if not isinstance(note, str) or len(note.strip()) > 200:
+            raise PortfolioApiError(400, "備註最多 200 字")
+        return float(shares), total / shares, note.strip(), round(float(total), 2)
+
     def save_holding(self, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         code = _portfolio_code(body.get("code"))
-        shares, average_cost, note = self._holding_input(body)
         security = self._security(code)
+        fund = security["market"] == _FUND_MARKET
+        if fund:
+            shares, average_cost, note, total_cost = self._fund_holding_input(body)
+        else:
+            shares, average_cost, note = self._holding_input(body)
         at = self._at()
         with self._connect() as connection:
             existing = connection.execute(
@@ -1158,6 +1237,7 @@ class LocalPortfolioStore:
             )
         return (200 if existing else 201), {"code": code, "name": security["name"], "market": security["market"],
             "shares": shares, "average_cost": average_cost, "note": note,
+            **({"kind": "fund", "total_cost_twd": total_cost} if fund else {}),
             "in_universe": bool(security.get("in_universe")), "source": "manual", "updated_at": at}
 
     def list_holdings(self) -> dict[str, Any]:
@@ -1176,6 +1256,9 @@ class LocalPortfolioStore:
             items = []
             for row in rows:
                 quote = quotes.get(row["code"])
+                if row["market"] == _FUND_MARKET:
+                    items.append(self._fund_item(row, quote))
+                    continue
                 price = float(quote["price"]) if quote else (float(row["last_price"]) if row["last_price"] is not None else None)
                 cost = round(float(row["shares"]) * float(row["average_cost"]), 2)
                 value = round(float(row["shares"]) * price, 2) if price is not None else None
@@ -1190,6 +1273,26 @@ class LocalPortfolioStore:
                     "return_pct": round(pnl / cost * 100, 2) if pnl is not None else None,
                     "created_at": row["created_at"], "updated_at": row["updated_at"]})
         return {"items": items}
+
+    @staticmethod
+    def _fund_item(row: sqlite3.Row, quote: dict[str, Any] | None) -> dict[str, Any]:
+        """基金那一列（和雲端 fundHoldingItem 同形狀）：價格是每單位台幣（淨值×匯率），沒有淨值或匯率就沒有價格。"""
+        shares = float(row["shares"])
+        cost = round(shares * float(row["average_cost"]), 2)
+        price = float(quote["price"]) if quote else None
+        value = round(shares * price, 2) if price is not None else None
+        pnl = round(value - cost, 2) if value is not None else None
+        fund = quote or {}
+        return {"code": row["code"], "name": row["name"], "market": row["market"], "kind": "fund",
+                "shares": shares, "average_cost": float(row["average_cost"]), "total_cost_twd": cost, "note": row["note"],
+                "in_universe": bool(row["in_universe"]), "source": row["source"], "source_ref": row["source_ref"],
+                "latest_price": round(price, 4) if price is not None else None, "price_as_of": fund.get("nav_date"),
+                "price_source": fund.get("source"), "price_stale": False,
+                "nav": fund.get("nav"), "currency": fund.get("currency"), "nav_date": fund.get("nav_date"),
+                "fx_rate": fund.get("fx_rate"), "fx_date": fund.get("fx_date"),
+                "cost_basis": cost, "market_value": value, "unrealized_pnl": pnl,
+                "return_pct": round(pnl / cost * 100, 2) if pnl is not None else None,
+                "created_at": row["created_at"], "updated_at": row["updated_at"]}
 
     def list_cash(self) -> dict[str, Any]:
         with self._connect() as connection:
