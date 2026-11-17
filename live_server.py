@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import stock_codes
 from local_ai_digest import LocalAiDigestError, LocalAiDigestStore
 
 ROOT = Path(__file__).resolve().parent
@@ -977,7 +978,7 @@ class PortfolioApiError(Exception):
 _PORTFOLIO_SCHEMA_LOCK = threading.Lock()
 _PORTFOLIO_SCHEMA_READY: set[str] = set()
 _PORTFOLIO_EMAIL = "local"
-_PORTFOLIO_CODE = re.compile(r"^[0-9A-Z]{4,6}$")
+_PORTFOLIO_CODE = stock_codes.CODE_RE
 _PORTFOLIO_LIMIT = 100
 
 
@@ -1560,7 +1561,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _send_screen_membership(self, query: str) -> None:
         codes = urllib.parse.parse_qs(query, keep_blank_values=True).get("code", [])
-        if len(codes) != 1 or not re.fullmatch(r"[0-9A-Z]{4,6}", codes[0]):
+        if len(codes) != 1 or not stock_codes.is_code(codes[0]):
             self._send_json({"error": "bad-request", "message": "代號格式不正確"}, 400)
             return
         self._send_screen_payload(lambda: screen_membership(self._screen_root(), codes[0]), "screen membership")
@@ -1600,7 +1601,7 @@ class Handler(SimpleHTTPRequestHandler):
         import benchmark_compare
 
         code = path[len("/api/stocks/"):-len("/vs-0050")]
-        if not re.fullmatch(r"[0-9A-Z]{4,6}", code):
+        if not stock_codes.is_code(code):
             self._send_json({"error": "bad-request", "message": "代號格式不正確"}, 400)
             return
         universe = self._universe()
@@ -1668,7 +1669,7 @@ class Handler(SimpleHTTPRequestHandler):
             self._send_json({"error": "bad-request",
                              "message": "分析方案已移除，個股分析每檔只有一份，請拿掉 preset 參數"}, 400)
             return
-        if not re.fullmatch(r"[0-9A-Z]{4,6}", code) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", as_of):
+        if not stock_codes.is_code(code) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", as_of):
             self._send_json({"error": "bad-request", "message": "代號或日期格式不正確"}, 400)
             return
         universe = self._universe()
@@ -1768,7 +1769,7 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/stocks/search":
             self._send_stock_search(urllib.parse.urlsplit(self.path).query)
             return
-        live_match = re.fullmatch(r"/api/stocks/([0-9A-Z]{4,6})/live", path)
+        live_match = re.fullmatch(rf"/api/stocks/({stock_codes.CODE_PATTERN})/live", path)
         if live_match:
             code = live_match.group(1)
             markets = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("market", ["tse"])

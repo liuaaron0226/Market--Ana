@@ -11,6 +11,9 @@
   'use strict';
 
   const CODE = /^\s*([0-9A-Za-z]{4,6})(?=\s|$)/;
+  // 全站代號規則（基金當成一般個股 01 票，本人 11-18）：4～12 碼大寫英數；和雲端 cloud/lib/codes.js 的 CODE_PATTERN 同一個。
+  const VALID_CODE = /^[0-9A-Z]{4,12}$/;
+  const isCode = code => VALID_CODE.test(String(code ?? ''));
   const MIN_LENGTH = 2;
   const LIMIT = 6;
   const QUERY_BYTES = 48;   // /api/stocks/search 的上限（gate.js handleStockSearch）
@@ -46,11 +49,12 @@
     return fitted.trim();
   }
 
-  // 按「查詢／加入」沒選下拉時，從搜尋結果決定用哪一檔：名稱完全相同的優先，否則第一個；
+  // 按「查詢／加入」沒選下拉時，從搜尋結果決定用哪一檔：代碼或名稱完全相同的優先（例如打基金代碼 BLKTENAU），否則第一個；
   // strict 的框遇到好幾檔又沒有完全相同的，回 choose 要本人挑。
   function decide(term, choices, { strict = false } = {}) {
     if (!choices.length) return { message: `查無「${term}」，請改打代號或從清單選擇。` };
-    const exact = choices.find(option => option.name === term);
+    const upper = term.toUpperCase();
+    const exact = choices.find(option => option.code === upper) || choices.find(option => option.name === term);
     if (exact) return { option: exact };
     if (strict && choices.length > 1) return { choose: true, message: `有好幾檔符合「${term}」，請從下面選一檔。` };
     return { option: choices[0] };
@@ -216,5 +220,5 @@
     return { choose, close };
   }
 
-  global.StockPicker = { codeOf, options, decide, fitQuery, attach };
+  global.StockPicker = { codeOf, isCode, options, decide, fitQuery, attach };
 })(window);

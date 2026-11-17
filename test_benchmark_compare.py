@@ -96,6 +96,13 @@ class ParseCodesTest(unittest.TestCase):
             with self.subTest(raw=raw):
                 self.assertIsNone(bc.parse_codes(raw))
 
+    def test_fund_codes_up_to_twelve_characters(self) -> None:
+        # 基金當成一般個股 01 票（本人 2026-11-18）：基金代碼 BLKTENAU 是 8 碼，比較也要收；超過 12 碼或小寫照樣擋
+        self.assertEqual(bc.parse_codes(["2330,BLKTENAU"]), ["2330", "BLKTENAU"])
+        for raw in (["ABCDEFGHIJKLM"], ["blktenau"], ["BLK-TENAU"]):
+            with self.subTest(raw=raw):
+                self.assertIsNone(bc.parse_codes(raw))
+
     def test_max_codes_is_five(self) -> None:
         self.assertEqual(bc.MAX_CODES, 5)
         self.assertEqual(len(bc.parse_codes(["2330,6488,0050,1102,2454"])), 5)

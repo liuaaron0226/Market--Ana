@@ -66,3 +66,14 @@ test("搜尋字太長（API 上限 48 個 UTF-8 位元組，約 16 個中文字�
   assert.ok(new TextEncoder().encode(fitted).length <= 48, fitted);
   assert.ok(full.startsWith(fitted) && fitted.length >= 14, fitted);
 });
+
+test("全站代號規則（基金當成一般個股 01 票）：4～12 碼大寫英數都是合法代號，給網址與加入比較用", () => {
+  const { isCode } = window.StockPicker;
+  for (const code of ["2330", "00981A", "BLKTENAU", "ABCDEFGHIJKL"]) assert.equal(isCode(code), true, code);
+  for (const code of ["ABC", "ABCDEFGHIJKLM", "blktenau", "BLK-TENAU", ""]) assert.equal(isCode(code), false, code);
+});
+
+test("打的字剛好是某一檔的代碼（例如基金 BLKTENAU，不分大小寫）就用那一檔", () => {
+  const fund = { kind: "stock", code: "BLKTENAU", name: "貝萊德世界科技 A10", title: "BLKTENAU 貝萊德世界科技 A10", meta: "境外基金基金" };
+  assert.equal(decide("blktenau", [長榮航, fund], { strict: true }).option.code, "BLKTENAU");
+});

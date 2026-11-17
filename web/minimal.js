@@ -2530,7 +2530,7 @@
   // 加入比較：代號、名稱都能打（stock-picker.js，本人 11-17）；下拉排在浮出的加入選單裡、輸入框下面。
   function addCoreCode(code) {
     core.status.hidden = true;
-    if (!/^[0-9A-Z]{4,6}$/.test(code)) {
+    if (!window.StockPicker.isCode(code)) {
       core.status.hidden = false; core.status.textContent = '代號格式不正確。'; return;
     }
     if (code === '0050') {

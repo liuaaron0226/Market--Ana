@@ -185,7 +185,7 @@
 
   function codeFromUrl() {
     const code = new URLSearchParams(location.search).get('code');
-    return code && /^[0-9A-Z]{4,6}$/.test(code) ? code : null;
+    return code && window.StockPicker.isCode(code) ? code : null;
   }
 
   function canUseLive(result) {
@@ -933,7 +933,7 @@
 
   function addComparisonCode(code, name = code) {
     const normalized = code.trim().toUpperCase();
-    if (!/^[0-9A-Z]{4,6}$/.test(normalized)) {
+    if (!window.StockPicker.isCode(normalized)) {
       setCompareStatus('error', '請從搜尋結果選擇股票，或輸入正確代號。');
       return;
     }
