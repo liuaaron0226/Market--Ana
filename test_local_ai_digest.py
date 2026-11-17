@@ -35,6 +35,11 @@ class LocalAiDigestStoreTests(unittest.TestCase):
         self.assertEqual(payload["data_date"], "2026-11-11")
         self.assertEqual(payload["stocks"]["items"], [{"code": "2330", "generation_status": "unproduced", "content": None}])
 
+    def test_fund_code_in_watchlist_does_not_reject_the_batch(self):
+        # 基金當成一般個股 01 票（本人 2026-11-18）：自選裡有 8 碼基金代碼，整批照樣回
+        payload = LocalAiDigestStore(self.path).get(scope="portfolio", owner=True, codes=["2330", "BLKTENAU"])
+        self.assertEqual([item["code"] for item in payload["stocks"]["items"]], ["2330"])
+
     def test_non_owner_portfolio_scope_is_forbidden(self):
         with self.assertRaises(LocalAiDigestError) as caught:
             LocalAiDigestStore(self.path).get(scope="portfolio", owner=False)

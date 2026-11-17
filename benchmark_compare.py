@@ -24,6 +24,8 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from stock_codes import CODE_RE  # 全站代號規則（4～12 碼，含基金；基金當成一般個股 01 票）
+
 import market_screens_publish as msp
 import otc_corporate_actions as oca
 from market_screens_publish import total_return_series  # noqa: F401 —— 共用算法（測試以 is 確認）
@@ -45,7 +47,6 @@ MAX_CODES = 5
 PERIODS: tuple[tuple[str, str, int], ...] = (
     ("1m", "近 1 個月", 1), ("3m", "近 3 個月", 3), ("1y", "近 1 年", 12), ("3y", "近 3 年", 36), ("5y", "近 5 年", 60),
 )
-CODE_RE = re.compile(r"[0-9A-Z]{4,6}")
 NOTES = (
     "含息總報酬：現金股利於除息日以收盤價再投入；分割依官方表或參考價換算股數。",
     "期初點取期間起點當天或之前最近一個交易日的收盤。",

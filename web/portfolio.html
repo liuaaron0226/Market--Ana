@@ -13,10 +13,11 @@
   <link rel="stylesheet" href="minimal.css?v=20261117-m53">
   <link rel="stylesheet" href="chart-studies.css?v=20261117-m53">
   <link rel="stylesheet" href="bold.css?v=20261117-m53">
-  <link rel="stylesheet" href="portfolio.css?v=20261117-m53">
+  <link rel="stylesheet" href="portfolio.css?v=20261117-n1">
   <link rel="stylesheet" href="watch-judgments.css?v=20261117-m53">
   <link rel="stylesheet" href="watch-push.css?v=20261117-m53">
   <link rel="stylesheet" href="settings.css?v=20261117-m53">
+  <link rel="stylesheet" href="stock-picker.css?v=20261117-n1">
 </head>
 <body class="bd pf">
   <a class="skip-link" href="#portfolioMain">跳到自選股與庫存</a>
@@ -89,7 +90,7 @@
           <div class="pf-add-clip" id="addClip" inert>
             <div class="pf-add-in">
               <form class="pf-form pf-add-form" id="addForm" novalidate>
-                <label>股票代號<input id="addCode" name="code" inputmode="text" autocomplete="off" maxlength="6" placeholder="例如 2330"></label>
+                <div class="pf-add-code"><label for="addCode">股票代號或名稱</label><input id="addCode" name="code" autocomplete="off" maxlength="24" placeholder="例如 2330、台積電"></div>
                 <button type="submit" id="addWatch">加入自選</button>
                 <button type="button" class="pf-ghost" id="addHolding" aria-expanded="false" aria-controls="addMore">新增庫存</button>
                 <div class="pf-add-more" id="addMore" hidden>
@@ -105,6 +106,8 @@
         </div>
         <p class="pf-form-status pf-list-status" id="listStatus" role="status"></p>
         <ol class="hv-rows" id="holdingRows"></ol>
+        <!-- 基金對照入口（本人 2026-11-17）：固定一列、不是自選的一筆，由 fund-entry.js 畫（只給站主） -->
+        <div class="pf-fund-slot" id="fundEntry"></div>
       </section>
     </main>
   </div>
@@ -114,7 +117,10 @@
   <script src="holdings-rows.js?v=20261117-m53" defer></script>
   <script src="portfolio-list.js?v=20261117-m53" defer></script>
   <script src="swipe-rows.js?v=20261117-m53" defer></script>
-  <script src="portfolio.js?v=20261117-m53" defer></script>
+  <script src="stock-picker.js?v=20261117-n1" defer></script>
+  <script src="portfolio.js?v=20261117-n1" defer></script>
+  <script src="fund-view.js?v=20261117-f1" defer></script>
+  <script src="fund-entry.js?v=20261117-f1" defer></script>
   <script src="chart-menus.js?v=20261117-m53" defer></script>
   <script src="desk-tilt.js?v=20261117-m53" defer></script>
   <script src="settings.js?v=20261117-m53" defer></script>

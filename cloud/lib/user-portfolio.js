@@ -1,6 +1,5 @@
 import { etfAnalysisHidden } from "./release-policy.js";
-
-const CODE_RE = /^[0-9A-Z]{4,6}$/;
+import { CODE_RE, isExchangeCode } from "./codes.js";
 const HORIZONS = new Set(["none", "short", "long"]);
 const WATCHLIST_LIMIT = 100;
 const HOLDINGS_LIMIT = 100;
@@ -72,7 +71,8 @@ async function securityFor(db, code, deps) {
     row = await directory(false);
   }
   if (row) return row;
-  if (typeof deps.quoteFetch !== "function") throw new UserPortfolioError(404, "查無此上市或上櫃股票");
+  // 名錄外的代號才問證交所即時行情；那裡只認得上市櫃股票的形狀（基金這類長代碼不拿去問）
+  if (typeof deps.quoteFetch !== "function" || !isExchangeCode(code)) throw new UserPortfolioError(404, "查無此上市或上櫃股票");
   const url = new URL("https://mis.twse.com.tw/stock/api/getStockInfo.jsp");
   url.searchParams.set("ex_ch", `tse_${code}.tw|otc_${code}.tw`);
   url.searchParams.set("json", "1");

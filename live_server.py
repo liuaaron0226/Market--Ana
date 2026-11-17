@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import stock_codes
 from local_ai_digest import LocalAiDigestError, LocalAiDigestStore
 
 ROOT = Path(__file__).resolve().parent
@@ -977,7 +978,7 @@ class PortfolioApiError(Exception):
 _PORTFOLIO_SCHEMA_LOCK = threading.Lock()
 _PORTFOLIO_SCHEMA_READY: set[str] = set()
 _PORTFOLIO_EMAIL = "local"
-_PORTFOLIO_CODE = re.compile(r"^[0-9A-Z]{4,6}$")
+_PORTFOLIO_CODE = stock_codes.CODE_RE
 _PORTFOLIO_LIMIT = 100
 
 
@@ -1482,11 +1483,19 @@ class Handler(SimpleHTTPRequestHandler):
         universe = self._universe()
         members = None if universe is None else set(universe["members"])
         items, next_cursor = search_securities(term, limit, cursor, members)
-        self._send_json({
+        payload: dict[str, Any] = {
             "source_date": LISTED_SOURCE_DATE,
             "items": [project_search_item(item, universe) for item in items],
             "next_cursor": next_cursor,
-        })
+        }
+        # 本人 11-17：基金名稱也搜得到（只在第一頁、有符合才帶 funds 欄，和雲端 gate 相同）；本機沒有帳號，不分站主。
+        if int(cursor or 0) == 0:
+            import fund_compare
+
+            funds = fund_compare.search_funds(term)
+            if funds:
+                payload["funds"] = funds
+        self._send_json(payload)
 
     def _universe(self) -> dict[str, Any] | None:
         if not self.server.universe_enabled:
@@ -1552,7 +1561,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _send_screen_membership(self, query: str) -> None:
         codes = urllib.parse.parse_qs(query, keep_blank_values=True).get("code", [])
-        if len(codes) != 1 or not re.fullmatch(r"[0-9A-Z]{4,6}", codes[0]):
+        if len(codes) != 1 or not stock_codes.is_code(codes[0]):
             self._send_json({"error": "bad-request", "message": "代號格式不正確"}, 400)
             return
         self._send_screen_payload(lambda: screen_membership(self._screen_root(), codes[0]), "screen membership")
@@ -1592,7 +1601,7 @@ class Handler(SimpleHTTPRequestHandler):
         import benchmark_compare
 
         code = path[len("/api/stocks/"):-len("/vs-0050")]
-        if not re.fullmatch(r"[0-9A-Z]{4,6}", code):
+        if not stock_codes.is_code(code):
             self._send_json({"error": "bad-request", "message": "代號格式不正確"}, 400)
             return
         universe = self._universe()
@@ -1629,6 +1638,27 @@ class Handler(SimpleHTTPRequestHandler):
             return
         self._send_json(payload)
 
+    def _send_fund_vs_0050(self, path: str) -> None:
+        """GET /api/funds/{集保基金代碼}/vs-0050：和雲端同一份（fund_compare.precompute），資料不齊回 404。"""
+        import benchmark_compare
+        import fund_compare
+
+        code = path[len("/api/funds/"):-len("/vs-0050")]
+        if not stock_codes.is_code(code):
+            self._send_json({"error": "bad-request", "message": "基金代碼格式不正確"}, 400)
+            return
+        try:
+            funds, _ = fund_compare.precompute(benchmark_compare.Loader(), self._compare_end(self._universe()),
+                                               as_of=fund_compare.taipei_today())
+        except Exception as error:  # 不把 stack trace 送到瀏覽器
+            print(f"fund vs-0050 failed for {code}: {type(error).__name__}: {error}")
+            self._send_json({"error": "compare-failed", "message": "對照暫時無法計算"}, 500)
+            return
+        if code not in funds:
+            self._send_json({"error": "fund-unavailable", "message": "這檔基金今天的對照資料還沒準備好"}, 404)
+            return
+        self._send_json(json.loads(funds[code]))
+
     def _send_stock_analysis(self, path: str, query: str) -> None:
         """GET /api/stocks/{code}/analysis?as_of=YYYY-MM-DD：回個股分析契約 v2（每檔一筆，無方案）。"""
         code = path[len("/api/stocks/"):-len("/analysis")]
@@ -1639,7 +1669,7 @@ class Handler(SimpleHTTPRequestHandler):
             self._send_json({"error": "bad-request",
                              "message": "分析方案已移除，個股分析每檔只有一份，請拿掉 preset 參數"}, 400)
             return
-        if not re.fullmatch(r"[0-9A-Z]{4,6}", code) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", as_of):
+        if not stock_codes.is_code(code) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", as_of):
             self._send_json({"error": "bad-request", "message": "代號或日期格式不正確"}, 400)
             return
         universe = self._universe()
@@ -1739,9 +1769,13 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/stocks/search":
             self._send_stock_search(urllib.parse.urlsplit(self.path).query)
             return
-        live_match = re.fullmatch(r"/api/stocks/([0-9A-Z]{4,6})/live", path)
+        live_match = re.fullmatch(rf"/api/stocks/({stock_codes.CODE_PATTERN})/live", path)
         if live_match:
             code = live_match.group(1)
+            if not stock_codes.is_exchange_code(code):
+                # 和雲端一樣：基金這類長代碼沒有即時行情，直接查無，不拿去問證交所
+                self._send_json({"error": "not-found", "message": "這檔沒有即時行情", "live": False}, 404)
+                return
             markets = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("market", ["tse"])
             if len(markets) != 1 or markets[0] not in {"tse", "otc"}:
                 self._send_json({"error": "bad-request", "message": "市場格式不正確", "live": False}, 400)
@@ -1759,6 +1793,9 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if path == "/api/compare-0050":
             self._send_compare_0050(urllib.parse.urlsplit(self.path).query)
+            return
+        if path.startswith("/api/funds/") and path.endswith("/vs-0050"):
+            self._send_fund_vs_0050(path)
             return
         if path == "/api/candidates":
             self._send_candidates(urllib.parse.urlsplit(self.path).query)

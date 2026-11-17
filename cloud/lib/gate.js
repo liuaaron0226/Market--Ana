@@ -10,6 +10,7 @@ import { fetchTickPage } from "./live-ticks.js";
 import { defaultIndexLiveService } from "./index-live.js";
 import { etfAnalysisHidden, policyForViewer, releasePolicy, stockEtfsVisible, stockFactsVisible, stockSignalsVisible } from "./release-policy.js";
 import { isOwnerEmail } from "./owner.js";
+import { CODE_PATTERN, CODE_RE, isExchangeCode } from "./codes.js";
 import { FORECAST_PATH, handleForecastApi } from "./forecast.js";
 import { WATCH_PATH, handleWatchApi } from "./watch.js";
 import { GEMINI_USAGE_PATH, handleGeminiUsageApi } from "./gemini-usage.js";
@@ -172,7 +173,7 @@ async function consume(db, email, bucket, now, rate = RATE) {
 }
 
 // 個股搜尋與分析：搜尋讀版本化官方名錄；分析先兼容舊包，再讀同一 active version 的 D1 預算結果。
-const STOCK_PATH = /^\/api\/stocks\/([0-9A-Z]{4,6})\/analysis$/;
+const STOCK_PATH = new RegExp(`^/api/stocks/(${CODE_PATTERN})/analysis$`);
 const ANALYSIS_SCHEMA = "stock-analysis/v2";
 async function handleStockSearch(request, env, email, deps, { isOwner } = {}) {
   const params = new URL(request.url).searchParams;
@@ -199,6 +200,7 @@ async function handleStockSearch(request, env, email, deps, { isOwner } = {}) {
   ).first();
   if (!active) throw new HttpError(503, "上市或上櫃普通股名錄尚未就緒");
   if (!query) return json(200, { source_date: active.source_date, items: [], next_cursor: null });
+  const funds = isOwner && offset === 0 ? matchFunds(query, deps.comparePack) : [];
   const escaped = query.replace(/[\\%_]/g, (character) => `\\${character}`);
   // V2：名錄只含大量股母體（listed_securities），母體外的股票自然不會出現在搜尋結果；名次與規則版本只增欄位。
   // ETF 上站（12 票）：ETF 開關對這個人是開的時候，再把 ETF 名錄（etf_securities）一起搜，類別記成 ETF。
@@ -225,7 +227,31 @@ async function handleStockSearch(request, env, email, deps, { isOwner } = {}) {
     analysis_available: item.analysis_status === "available" || item.analysis_status === "stale",
     source_date: active.source_date,
   }));
-  return json(200, { source_date: active.source_date, items, next_cursor: hasMore ? String(offset + limit) : null });
+  return json(200, { source_date: active.source_date, items, next_cursor: hasMore ? String(offset + limit) : null, ...(funds.length ? { funds } : {}) });
+}
+
+// 本人 11-17：搜尋框打基金名稱也找得到基金對照頁那檔。只列 compare pack 已有資料的基金（有頁可看），
+// 名稱來自 build 時預算的那份（fund_compare.FUNDS）；比對不分大小寫、忽略空白。和自選股頁的基金列一樣只給站主。
+// 沒有符合的基金就不帶 funds 欄（既有回應契約不變）。
+const fundCatalogs = new WeakMap();
+function fundCatalog(pack) {
+  if (!pack || typeof pack !== "object") return [];
+  if (fundCatalogs.has(pack)) return fundCatalogs.get(pack);
+  const catalog = [];
+  for (const [code, text] of Object.entries(pack.funds ?? {})) {
+    try {
+      const fund = JSON.parse(text).fund ?? {};
+      catalog.push({ code, name: fund.short_name || fund.name || code, full_name: fund.name || fund.short_name || code });
+    } catch { /* 壞掉的那檔不列；基金頁本身會說資料還沒準備好 */ }
+  }
+  fundCatalogs.set(pack, catalog);
+  return catalog;
+}
+const squash = (text) => String(text).replace(/\s+/g, "").toUpperCase();
+function matchFunds(query, pack) {
+  const needle = squash(query);
+  if (!needle) return [];
+  return fundCatalog(pack).filter((fund) => [fund.code, fund.name, fund.full_name].some((text) => squash(text).includes(needle)));
 }
 
 async function handleStockApi(request, env, path, email, deps, options = {}) {
@@ -305,7 +331,7 @@ async function handleStockApi(request, env, path, email, deps, options = {}) {
 
 // 個股頁事實區塊 D 票：這一檔近 90 天的重大訊息（跟著目前上線的個股資料版本走，每檔一列）。
 // 給誰看照事實區塊的開關；看不到的人拿到「沒有內容」。資料表還沒建立（0013 未套）或沒有這一檔就是空清單。
-const ANNOUNCEMENTS_PATH = /^\/api\/stocks\/([0-9A-Z]{4,6})\/announcements$/;
+const ANNOUNCEMENTS_PATH = new RegExp(`^/api/stocks/(${CODE_PATTERN})/announcements$`);
 
 async function handleAnnouncementsApi(request, env, path, email, deps, { isOwner }) {
   if (request.method !== "GET") throw new HttpError(405, "方法不允許");
@@ -333,7 +359,7 @@ async function handleAnnouncementsApi(request, env, path, email, deps, { isOwner
 
 // 5 年歷史日線（本人 2026-11-14：先做 5 年、放進資料庫）。每檔一列，由每日更新在發布通過後覆寫；
 // 個股分析已帶最近 120 根，這裡只供圖往前拉。沒有資料（含資料表尚未建立）一律 404，頁面照舊顯示 120 根。
-const HISTORY_STOCK_PATH = /^\/api\/stocks\/([0-9A-Z]{4,6})\/history$/;
+const HISTORY_STOCK_PATH = new RegExp(`^/api/stocks/(${CODE_PATTERN})/history$`);
 
 async function handleStockHistoryApi(request, env, path, email, deps, { isOwner } = {}) {
   if (request.method !== "GET") throw new HttpError(405, "方法不允許");
@@ -386,7 +412,7 @@ async function handleIndexLiveApi(request, env, email, deps) {
   return json(hasData ? 200 : 503, result, headers);
 }
 
-const LIVE_STOCK_PATH = /^\/api\/stocks\/([0-9A-Z]{4,6})\/live$/;
+const LIVE_STOCK_PATH = new RegExp(`^/api/stocks/(${CODE_PATTERN})/live$`);
 async function handleStockLiveApi(request, env, path, email, deps) {
   if (request.method !== "GET") throw new HttpError(405, "方法不允許");
   const match = path.match(LIVE_STOCK_PATH);
@@ -431,11 +457,13 @@ async function handleStockLiveApi(request, env, path, email, deps) {
 
 // 秒級第一步：當天逐筆成交（站主限定，與既有即時行情相同；行情商條款不得轉給第三方）。
 // 只轉送一頁逐筆，金鑰留在伺服器端；秒 K 由瀏覽器彙總。
-const TICKS_STOCK_PATH = /^\/api\/stocks\/([0-9A-Z]{4,6})\/ticks$/;
+const TICKS_STOCK_PATH = new RegExp(`^/api/stocks/(${CODE_PATTERN})/ticks$`);
 
 async function handleStockTicksApi(request, env, path, email, deps) {
   if (request.method !== "GET") throw new HttpError(405, "方法不允許");
   const code = path.match(TICKS_STOCK_PATH)[1];
+  // 逐筆只有上市櫃股票有；基金這類長代碼直接查無，不扣額度、不問行情商
+  if (!isExchangeCode(code)) throw new HttpError(404, "這檔沒有逐筆成交");
   const rawOffset = new URL(request.url).searchParams.get("offset") ?? "0";
   if (!/^\d{1,6}$/.test(rawOffset)) throw new HttpError(400, "位移格式不正確");
   const headers = { "cache-control": "private, no-store" };
@@ -467,7 +495,6 @@ async function handleStockTicksApi(request, env, path, email, deps) {
 // 這裡只做參數驗證（與 live_server 相同規則）、權限與限速，再原樣回傳預算好的 JSON 字串。
 const SCREENS_SCHEMA = "market-screens-pack/v1";
 const SCREEN_PATHS = new Set(["/api/screens", "/api/screens/membership", "/api/rotation", "/api/core-holdings"]);
-const CODE_RE = /^[0-9A-Z]{4,6}$/;
 const PRIVATE_JSON = { "content-type": "application/json; charset=utf-8", "cache-control": "private, no-store", "x-content-type-options": "nosniff", "x-robots-tag": "noindex, nofollow" };
 const rawJson = (body) => new Response(body, { status: 200, headers: PRIVATE_JSON });
 const badRequest = (message) => json(400, { error: "bad-request", message }, { "cache-control": "private, no-store" });
@@ -526,6 +553,8 @@ async function handleScreensApi(request, env, path, email, deps) {
 const COMPARE_SCHEMA = "compare-0050-pack/v1";
 const VS_PATH = /^\/api\/stocks\/([^/]+)\/vs-0050$/;
 const COMPARE_PATH = "/api/compare-0050";
+// 基金對照 0050（2026-11-17 本人定案）：/api/funds/<集保基金代碼>/vs-0050，例如 BLKTENAU（貝萊德世界科技 A10）。
+const FUND_PATH = /^\/api\/funds\/([^/]+)\/vs-0050$/;
 const COMPARE_BASIS = "含息總報酬，期初＝1";
 const NOT_FOUND_MESSAGE = "查無此上市或上櫃普通股";
 
@@ -539,11 +568,34 @@ function compareCodes(params, max) {
   return codes.length > max ? null : codes;
 }
 
+// 和其他市場 API 共用每分鐘的查詢額度；超過回 429（回傳 Response），沒超過回 null。
+async function consumeMarket(env, email, deps) {
+  try {
+    await consume(env.DB, email, "market", (deps.now || Date.now)(), deps.rate);
+    return null;
+  } catch (e) {
+    if (e instanceof RateLimited) return json(429, { error: "rate-limited", message: "查詢太頻繁，請稍後再試" }, { "retry-after": String(e.retryAfter) });
+    throw new HttpError(503, "暫時無法處理，請稍後再試");
+  }
+}
+
+// 基金對照 0050：build 前已預算好整份，原樣回傳；這檔今天資料不齊（或舊資料包沒有 funds）就是 404。代碼格式不對不扣額度。
+async function handleFundCompare(env, email, deps, pack, code, privateError) {
+  if (!CODE_RE.test(code)) return badRequest("基金代碼格式不正確");
+  const limited = await consumeMarket(env, email, deps);
+  if (limited) return limited;
+  const text = Object.hasOwn(pack.funds ?? {}, code) ? pack.funds[code] : null;
+  if (text === null) return privateError(404, { error: "fund-unavailable", message: "這檔基金今天的對照資料還沒準備好" });
+  return rawJson(text);
+}
+
 async function handleCompareApi(request, env, path, email, deps) {
   if (request.method !== "GET") throw new HttpError(405, "方法不允許");
   const pack = deps.comparePack;
   if (!pack || pack.schema !== COMPARE_SCHEMA) throw new HttpError(503, "資料尚未就緒");
   const privateError = (status, body) => json(status, body, { "cache-control": "private, no-store" });
+  const fund = path.match(FUND_PATH);
+  if (fund) return handleFundCompare(env, email, deps, pack, fund[1], privateError);
   let codes;
   const vs = path.match(VS_PATH);
   if (vs) {
@@ -553,12 +605,8 @@ async function handleCompareApi(request, env, path, email, deps) {
     codes = compareCodes(new URL(request.url).searchParams, pack.max_codes);
     if (!codes) return badRequest(`codes 需為 1～${pack.max_codes} 個以逗號分隔的代號`);
   }
-  try {
-    await consume(env.DB, email, "market", (deps.now || Date.now)(), deps.rate);
-  } catch (e) {
-    if (e instanceof RateLimited) return json(429, { error: "rate-limited", message: "查詢太頻繁，請稍後再試" }, { "retry-after": String(e.retryAfter) });
-    throw new HttpError(503, "暫時無法處理，請稍後再試");
-  }
+  const limited = await consumeMarket(env, email, deps);
+  if (limited) return limited;
   const itemFor = (code) => {
     if (Object.hasOwn(pack.items, code)) return JSON.parse(pack.items[code]);
     if (Object.hasOwn(pack.outside, code)) return { code, status: "outside-universe", ...JSON.parse(pack.outside[code]) };
@@ -577,7 +625,7 @@ async function handleCompareApi(request, env, path, email, deps) {
     benchmark, items: codes.map(itemFor), notes: pack.notes }));
 }
 
-const isComparePath = (path) => path === COMPARE_PATH || VS_PATH.test(path);
+const isComparePath = (path) => path === COMPARE_PATH || VS_PATH.test(path) || FUND_PATH.test(path);
 
 // U2：每日更新狀態。build 前由 daily_update 產生 status.json，包進 Functions；這裡只原樣回傳。
 // 每頁載入都會讀，所以不扣查詢額度（只有通過登入與核准才看得到）。

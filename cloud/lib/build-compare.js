@@ -28,8 +28,17 @@ export function validateComparePack(pack) {
     if (!isJsonText(text)) throw new Error(`.compare-pack.json 的 outside ${code} 不正確`);
   }
   if (!Object.hasOwn(pack.items, "0050")) throw new Error(".compare-pack.json 缺核心持有 0050");
+  // 基金對照 0050（2026-11-17）：fund_compare.precompute 預算的 {代碼: JSON 字串}；舊資料包沒有這欄也可以。
+  if (pack.funds !== undefined && (!pack.funds || typeof pack.funds !== "object" || Array.isArray(pack.funds))) {
+    throw new Error(".compare-pack.json 的 funds 格式不對");
+  }
+  for (const [code, text] of Object.entries(pack.funds ?? {})) {
+    const fund = isJsonText(text) ? JSON.parse(text) : null;
+    if (fund?.schema !== "fund-vs-0050/v1" || fund?.fund?.code !== code) throw new Error(`.compare-pack.json 的 funds ${code} 不正確`);
+  }
   if (/C:(\\\\|[\\/])Users|\/home\/runner/.test(JSON.stringify(pack))) throw new Error(".compare-pack.json 含本機路徑");
-  return { dataDate: pack.data_date, items: Object.keys(pack.items).length, outside: Object.keys(pack.outside).length };
+  return { dataDate: pack.data_date, items: Object.keys(pack.items).length, outside: Object.keys(pack.outside).length,
+    funds: Object.keys(pack.funds ?? {}).length };
 }
 
 export function compareModuleText(pack) {

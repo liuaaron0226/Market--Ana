@@ -152,7 +152,10 @@
 .pf-add-in { padding: 4px 2px 12px; }
 /* 「＋」：一格代號、兩顆鍵；按「新增庫存」才多出股數、平均成本、備註。就地修改（.pf-edit）用同一種排法 */
 .pf-add-form, .pf-edit { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 4px 0 0; border-bottom: 0; }
-.pf-add-form > label:first-child, .pf-form .pf-wide, .pf-add-form .pf-form-status { grid-column: 1 / -1; }
+.pf-form .pf-wide, .pf-add-form .pf-form-status { grid-column: 1 / -1; }
+/* 代號或名稱那一格（本人 11-17）：標題、輸入框，打名稱時下面排出選股的列（stock-picker.js）。
+   下拉不放在 <label> 裡，輸入框的名稱才不會連選項一起唸 */
+.pf-add-code { grid-column: 1 / -1; display: grid; gap: 8px; }
 .pf-add-more { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .pf-add-more[hidden] { display: none; }
 .pf-form button.pf-ghost { border-color: var(--line); background: transparent; color: var(--ink); }
@@ -365,3 +368,15 @@ body.pf::before {
 @media (prefers-reduced-motion: reduce) {
   .pf *, .pf *::before, .pf *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; }
 }
+
+/* ---------- 基金對照入口（本人 2026-11-17）：清單最下面固定一列，點進基金對照頁；fund-entry.js 畫 ---------- */
+.pf-fund-slot { margin-top: 8px; }
+.pf-fund-slot:empty, .pf-fund-slot[hidden] { display: none; }
+.pf-fund { display: grid; grid-template-columns: minmax(0, 1fr) auto 12px; align-items: center; column-gap: 10px; min-height: 48px; padding: 5px 12px; color: inherit; text-decoration: none; }
+.pf-fund .hv-name span { font-family: var(--sans); }
+.pf-fund-gap { color: var(--dim); font: 13px var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pf-fund-gap.up { color: var(--up); }
+.pf-fund-gap.down { color: var(--down); }
+.pf-fund-chev { color: var(--faint); font: 600 16px var(--sans); }
+.pf-fund:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.pf-fund:active { background: var(--well); }

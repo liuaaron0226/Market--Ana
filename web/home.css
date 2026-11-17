@@ -792,6 +792,8 @@ body.hm .core-picks { position: relative; display: flex; flex-wrap: wrap; align-
 body.hm .core-picks .chart-select { margin-left: auto; }
 body.hm .core-add-menu { right: auto; left: 0; padding: 12px; }
 body.hm .core-add-menu .core-compare-entry { grid-template-columns: minmax(0, 160px) auto; }
+/* 打名稱時的選股列（stock-picker.js，本人 11-17）：排在輸入框下面、佔滿選單寬度 */
+body.hm .core-add-menu .sp-inline { flex-basis: 100%; }
 
 /* ================= 看盤桌：籌碼與資金，圖為主（立體重設計 A 包第 12 片，2026-11-15） =================
    本人選的排法：一列一項——左邊名稱與今天的數字，右邊近 20 天的迷你圖。
