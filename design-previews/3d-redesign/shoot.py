@@ -100,6 +100,7 @@ def settle(page: Page) -> None:
 
 
 def open_price_panel(page: Page) -> None:
+    """點報價：11-17 起開的是收復線那一張。"""
     page.locator("#priceSummary").click()
     page.wait_for_function("document.getElementById('detailPanel').getAttribute('aria-hidden') === 'false'")
 

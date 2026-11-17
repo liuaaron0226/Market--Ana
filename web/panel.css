@@ -66,11 +66,6 @@
 }
 
 /* ---------- 現價：數字表 ---------- */
-.hm .current-grid { margin-top: 24px; gap: 0; border-top: 1px solid var(--ink); }
-.hm .current-grid div { padding: 14px 16px 14px 0; border-radius: 0; background: transparent; border-bottom: 1px solid var(--hair); }
-.hm .current-grid div:nth-child(2n) { padding-left: 16px; border-left: 1px solid var(--hair); }
-.hm .current-grid span { font-size: 12px; }
-.hm .current-grid strong { margin-top: 6px; font: 500 20px var(--mono); font-variant-numeric: tabular-nums; }
 .hm .kv-list { margin-top: 20px; gap: 0; background: transparent; border: 0; border-radius: 0; border-top: 1px solid var(--hair); }
 .hm .kv-list div { padding: 10px 0; background: transparent; border-bottom: 1px solid var(--hair); grid-template-columns: 112px minmax(0, 1fr); }
 .hm .kv-list dt { font-size: 12px; }
@@ -314,3 +309,8 @@ body.hm .chip-seg button[aria-checked="true"]:hover { background: var(--key); co
 body.hm .detail-chart { border-radius: var(--r-key); background: var(--well); box-shadow: var(--well-shadow); }
 body.hm .table-scroll { border: 0; border-radius: var(--r-key); box-shadow: var(--well-shadow); }
 body.hm .plain-watch h4 { border-radius: var(--r-tag); }
+
+/* ---------- 報價點了是開收復線那一張（本人 2026-11-17） ----------
+   兩條線收起來的時候（劇本過期、線過時）沒有東西可開：「詳情 ›」與行情狀態後面的 › 收起來，游標也不是可以點的樣子 */
+.hm [data-no-detail] { cursor: default; }
+.hm .price-summary[data-no-detail] .detail-cue, .hm .state-trigger[data-no-detail] > span:last-child { display: none; }

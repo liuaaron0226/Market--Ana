@@ -591,7 +591,10 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
         page.locator("#resetView").click()
     step(f"{tag}：指標區手勢", swipe_study)
 
-    open_panel(page, tag, "#priceSummary", "現價")
+    # 點報價直接開收復線那一張（本人 11-17 選 /cb），沒有另外一張「現價落點」
+    open_panel(page, tag, "#priceSummary", "收復線")
+    check(f"{tag}：點報價開的是收復線那一張（一句重點＋價位圖），不是一堆字", page.locator("#panelBody .line-point").count() == 1
+          and page.locator("#panelBody .zone-rows").count() == 1 and "現價落點" not in page.locator("#panelBody").inner_text())
     check(f"{tag}：頂列沒有「下一交易日」的框了（本人 11-15）", page.locator("#conclusionTrigger, .conclusion-trigger").count() == 0
           and "下一交易日" not in page.locator(".market-header").inner_text())
     open_panel(page, tag, "#lineUpper", "收復線")
