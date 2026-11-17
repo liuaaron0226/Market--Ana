@@ -535,10 +535,12 @@
       volumeKind: 'amount',
       leftRail: marketLabelRail,
       overlayLabels: 'tags',
-      // 本人 2026-11-17：右側只寫數字、名稱與顏色寫在圖上方（這一頁的 #legendNames）；放大時上下範圍只看 K 棒
-      numbersOnly: true,
+      // 本人 2026-11-17（附券商 K 線截圖）：左右不留價格欄、K 棒畫滿整個寬度，刻度寫在圖裡；
+      // 名稱、顏色與目前數值寫在圖上方（這一頁的 #legendNames）；放大時上下範圍只看 K 棒；每畫一次（十字線移動）更新數值
+      inlineAxis: true,
       legend: false,
       fitCandles: true,
+      onDraw: () => renderLegend(),
       minViewCount: 10,
       onSelect: (index, anchor) => selectCandle(index, anchor, false),
       onClear: () => { selectedIndex = -1; clearedByChart = true; els.marker.hidden = true; els.mobileDetails.hidden = true; },
@@ -576,8 +578,8 @@
     instance.opts.liveLast = liveLast;
     instance.showMacd = period !== 'daily' && !isMobile();
     const desiredCount = period === 'monthly' ? 60 : period === 'weekly' ? 70 : period === 'h60' ? 80 : isMinutePeriod(period) ? Math.min(candles.length, 120) : 70;
-    // 右側價格欄寬：軸上價籤模式（收盤與預測線）約 78～100px，取已畫過的實際值；第一次畫之前用 100 保守估。
-    const priceRail = instance.geo ? Math.max(64, instance.canvas.clientWidth - instance.geo.l - instance.geo.pw) : 100;
+    // 右側價格欄寬：券商版面（inlineAxis）不留欄，只有 2px
+    const priceRail = instance.opts.inlineAxis ? 2 : instance.geo ? Math.max(64, instance.canvas.clientWidth - instance.geo.l - instance.geo.pw) : 100;
     const plotWidth = Math.max(0, els.chartStage.clientWidth - marketLabelRail() - priceRail);
     const touchSafeCount = Math.max(10, Math.floor(plotWidth / 44));
     const count = Math.min(candles.length, isMobile() ? desiredCount : Math.min(desiredCount, touchSafeCount));
@@ -637,23 +639,41 @@
     element.style.top = `${y}px`;
   }
 
-  // 圖上方那一行的名稱：均線、布林（顏色和圖上的線一樣），再加有掛價籤的判斷線（預測的轉強線／轉弱線）。
-  // 收復線、防守線的名稱已經在合成一顆的那顆鍵上，不重複寫。內容一樣就不重畫
+  // 圖上方那一行：均線、布林、預測的轉強線／轉弱線的名稱（顏色和圖上的線一樣）＋目前的數值與方向
+  // （本人 11-17 券商版面：數值不再掛在圖右側；選了某一天就是那一天的值）。
+  // 收復線、防守線的名稱與數值已經在合成一顆的那顆鍵上，不重複寫。內容一樣就不重畫
+  const legendValue = value => value >= 1000 ? Math.round(value).toLocaleString('en-US') : value.toLocaleString('en-US', { maximumFractionDigits: 2 });
   let legendShown = '';
   function renderLegend() {
     if (!chart) return;
-    const items = [...chart.legendItems(),
-      ...chart.overlays.filter(o => o.tag !== false).map(o => ({ name: o.short || o.label, color: o.color, alpha: 1, mark: true }))];
+    const items = chart.legendItems();
     const key = JSON.stringify(items);
     if (key !== legendShown) {
       legendShown = key;
       els.legendNames.replaceChildren(...items.map(item => {
-        const name = document.createElement('span');
-        name.className = item.mark ? 'legend-name is-line' : 'legend-name';
+        const row = document.createElement('span');
+        row.className = item.mark ? 'legend-name is-line' : 'legend-name';
+        row.style.setProperty('--tone', item.color);
+        if (item.alpha < 1) row.style.opacity = String(item.alpha);
+        const name = document.createElement('b');
         name.textContent = item.name;
-        name.style.setProperty('--tone', item.color);
-        if (item.alpha < 1) name.style.opacity = String(item.alpha);
-        return name;
+        row.append(name);
+        if (Number.isFinite(item.value)) {
+          const value = document.createElement('span');
+          value.className = 'num';
+          value.textContent = legendValue(item.value);
+          row.append(value);
+        }
+        // 有數值的一律留箭頭的位置（持平時看不見）：拖十字線時寬度不變，手機上這一行不會在一行、兩行之間跳
+        if (Number.isFinite(item.value)) {
+          const arrow = document.createElement('i');
+          arrow.className = item.dir === 'up' ? 'is-up' : item.dir === 'down' ? 'is-down' : 'is-flat';
+          arrow.textContent = item.dir === 'down' ? '▼' : '▲';
+          if (item.dir) arrow.setAttribute('aria-label', item.dir === 'up' ? '往上' : '往下');
+          else arrow.setAttribute('aria-hidden', 'true');
+          row.append(arrow);
+        }
+        return row;
       }));
     }
     // K 線從這一行下面開始畫：手機上可能排成兩行，量實際的高度

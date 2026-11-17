@@ -65,14 +65,20 @@
     return state.edition ? forecastOf(state.edition) : null;
   }
 
+  // 關卡是均線（id 是 ma 加期數）就回傳期數：圖上畫成整條均線（本人 11-17「你應該是給我完整的趨勢線不是只給一個價格說這是半年線」）
+  function maPeriod(line) {
+    const m = /^ma(\d+)$/.exec(line.id || '');
+    return m ? Number(m[1]) : undefined;
+  }
+
   function overlays(period) {
     const record = current();
     if (period !== 'daily' || !record) return [];
     const cell = record.cells[state.horizon];
     if (!cell) return [];
     return [
-      { value: cell.strong_line.value, label: `轉強線 ${cell.strong_line.name}`, short: shortName(cell.strong_line), color: color('--up'), pos: 'above' },
-      { value: cell.weak_line.value, label: `轉弱線 ${cell.weak_line.name}`, short: shortName(cell.weak_line), color: color('--down'), pos: 'below' },
+      { value: cell.strong_line.value, label: `轉強線 ${cell.strong_line.name}`, short: shortName(cell.strong_line), color: color('--up'), pos: 'above', ma: maPeriod(cell.strong_line) },
+      { value: cell.weak_line.value, label: `轉弱線 ${cell.weak_line.name}`, short: shortName(cell.weak_line), color: color('--down'), pos: 'below', ma: maPeriod(cell.weak_line) },
     ];
   }
 

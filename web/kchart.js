@@ -9,6 +9,13 @@
    numbersOnly：右側價籤只寫數字（判斷線與收盤都不寫名稱），欄位窄一點；選取那一天的開高低收照樣寫名稱，往左借位置。
    legend:false：畫布左上角不寫均線與布林的名稱，由頁面寫在圖上方（chart.legendItems() 給名稱與顏色）。
    fitCandles：上下範圍只看畫面上的 K 棒與布林通道，判斷線不把範圍撐開；範圍外的判斷線不畫線，價籤貼在上下緣、數字前加 ▲／▼。
+   券商看盤版面（本人 2026-11-17「左右可以多一點空間可以放股票的k線，不是被特殊標記的價格所佔用，另外你應該是給我完整的趨勢線
+   不是只給一個價格說這是半年線」）：
+   inlineAxis：左右都不留價格欄，K 棒畫滿整個寬度；刻度數字小小地寫在圖裡左邊，判斷線不掛價籤；
+   收盤只畫虛線不掛數字（現價在頁面的報價上）；畫面上最高與最低的那一根旁邊標價；選了某一天的開高低收寫在十字線的另一邊；
+   範圍外的判斷線不畫線，在圖的上緣或下緣右邊留一個同色的小三角形。
+   判斷線帶 ma: 期數（名稱是均線的，例如「半年線」）就畫成整條均線，不是一條水平線。
+   legendItems() 給名稱、顏色與目前的數值和方向（選了某一天就是那一天的），由頁面寫在圖上方；onDraw 每畫一次通知頁面。
    畫線（選用）：頁面先載入 chart-drawings.js 並傳 opts.drawings={onChange,onTool,onSelect}，
    再用 setTool／setDrawings／setUnsavedDrawings／deleteSelectedDrawing／cancelDrawing 操作。 */
 (function () {
@@ -157,6 +164,7 @@
     compute(candles) {
       this.candles = candles; this.shownLength = candles.length;
       const closes = candles.map(c => hasPrice(c) ? c.close : null);
+      this.closes = closes; this.extraMa = {};
       this.ma = Object.fromEntries(this.maPeriods.map(period => [period, sma(closes, period)]));
       this.boll = bollinger(closes);
       const supplied = this.sourceMacd && new Map(this.sourceMacd.map(row => [row.date, row]));
@@ -176,10 +184,36 @@
     }
     // 四條均線四種看得出差別的顏色：橘、金、藍、灰（布林通道是更淡的灰帶）
     maColors() { return [css('--accent'), css('--gold'), css('--study-dif') || css('--dim'), css('--dim')]; }
-    // 圖例：均線與布林通道的名稱與顏色（legend:false 時頁面拿這個寫在圖上方）。alpha 是布林那樣半透明的淡度
+    // 某個期數的均線（每一根一個值）：使用者自選的那幾條直接拿，判斷線要的（例如半年線 120）另外算一次存起來
+    maSeries(period) {
+      if (this.ma[period]) return this.ma[period];
+      if (!this.extraMa[period]) this.extraMa[period] = sma(this.closes, period);
+      return this.extraMa[period];
+    }
+    // 這條判斷線要不要畫成整條均線：帶 ma，而且載入的 K 棒夠算出最後一根的均線。
+    // 不夠（例如年線 240 日、只載入 80 根）就退回畫預測給的那一個價（水平線），圖上方也寫那一個價，線不會整條不見
+    curveOf(o) {
+      if (!o.ma || !this.candles.length) return null;
+      const series = this.maSeries(o.ma);
+      return Number.isFinite(series[series.length - 1]) ? series : null;
+    }
+    // 圖例：均線、布林通道、判斷線的名稱與顏色（legend:false 時頁面拿這個寫在圖上方）。alpha 是布林那樣半透明的淡度。
+    // value／dir：目前的數值與方向（和前一根比，'up'／'down'）；選了某一天就是那一天的，沒選就是畫面最右一根。
+    // 帶 ma 的判斷線數值跟著那條均線走；其他判斷線就是那一個價；布林只寫名稱。mark：判斷線（頁面在名稱前畫一小段線）
     legendItems() {
-      const colors = this.maColors();
-      return [...this.maPeriods.map((period, index) => ({ name: `MA${period}`, color: colors[index], alpha: 1 })), { name: '布林20', color: css('--dim'), alpha: .55 }];
+      const colors = this.maColors(), n = this.candles.length;
+      const at = this.hover >= 0 && this.hover < n ? this.hover : Math.min(n, this.view.end) - 1;
+      const read = series => {
+        const value = series && series[at], prev = series && series[at - 1];
+        if (!Number.isFinite(value)) return {};
+        return { value, dir: Number.isFinite(prev) ? (value > prev ? 'up' : value < prev ? 'down' : '') : '' };
+      };
+      return [
+        ...this.maPeriods.map((period, index) => ({ name: `MA${period}`, color: colors[index], alpha: 1, ...read(this.ma[period]) })),
+        { name: '布林20', color: css('--dim'), alpha: .55 },
+        ...this.overlays.filter(o => o.tag !== false).map(o => ({ name: o.short || o.label, color: o.color, alpha: 1, mark: true,
+          ...(this.curveOf(o) ? read(this.curveOf(o)) : { value: o.value }) })),
+      ];
     }
     setMaPeriods(periods) {
       this.maPeriods = normalizePeriods(periods);
@@ -329,12 +363,13 @@
       const W = this.host.clientWidth || 600, H = this.opts.height ? this.opts.height(W) : Math.max(300, Math.min(460, W * .56));
       const dpr = DPR(); c.width = W * dpr; c.height = H * dpr; c.style.height = H + 'px';
       const x = c.getContext('2d'); x.setTransform(dpr, 0, 0, dpr, 0, 0); x.clearRect(0, 0, W, H);
-      const stacked = this.opts.overlayLabels === 'stacked';
+      const stacked = !this.opts.inlineAxis && this.opts.overlayLabels === 'stacked';
       const compactStacked = stacked && W < 520;
       const compactRail = Math.min(102, Math.max(92, Math.round(W * .33)));
       const requestedLeft = typeof this.opts.leftRail === 'function' ? this.opts.leftRail(W) : this.opts.leftRail;
       const l = Math.max(4, Number.isFinite(Number(requestedLeft)) ? Math.round(Number(requestedLeft)) : 4);
-      const tags = this.opts.overlayLabels === 'tags';
+      const inline = Boolean(this.opts.inlineAxis);
+      const tags = !inline && this.opts.overlayLabels === 'tags';
       // 右側要掛價籤的判斷線（本人 11-17：右側只放簡單的數字；帶 tag:false 的只畫線，名稱與數字由頁面另外標）。
       const tagged = this.overlays.filter(o => o.tag !== false);
       // 價籤寬度：五位數或帶兩位小數（例如 128.5、28.35）都要加寬，避免文字擠到短名上。
@@ -344,10 +379,10 @@
       // 短名有三個字（預測帳本的「五日線」「缺口上」）而且數字是五位數：手機寬度再加寬一點，數字的第一位才不會被短名蓋住
       const tagLong = tagWide && W < 520 && tagged.some(o => (o.short || '').length >= 3);
       const numbersOnly = tags && this.opts.numbersOnly;
-      const r = tags ? (numbersOnly ? (W < 520 ? 52 : 60) + (tagWide ? 10 : 0) : (W < 520 ? (tagWide ? 84 : 66) : (tagWide ? 100 : 78)) + (tagLong ? 12 : 0)) : stacked ? (compactStacked ? compactRail : 176) : 64, t = 10, b = 22, macdH = this.showMacd ? Math.round(H * .24) : 0, gapH = this.showMacd ? 10 : 0;
+      const r = inline ? 2 : tags ? (numbersOnly ? (W < 520 ? 52 : 60) + (tagWide ? 10 : 0) : (W < 520 ? (tagWide ? 84 : 66) : (tagWide ? 100 : 78)) + (tagLong ? 12 : 0)) : stacked ? (compactStacked ? compactRail : 176) : 64, t = 10, b = 22, macdH = this.showMacd ? Math.round(H * .24) : 0, gapH = this.showMacd ? 10 : 0;
       const pw = W - l - r, ph = H - t - b - macdH - gapH;
       const start = this.view.end - this.view.count, end = this.view.end, step = pw / this.view.count;
-      this.geo = { l, pw, step, start };
+      this.geo = { l, pw, step, start, inline };
       if (this.selection >= 0 && (this.selection < start || this.selection >= end)) {
         this.selection = -1; this.hover = -1;
         if (this.opts.onClear) this.opts.onClear();
@@ -391,8 +426,15 @@
         }
         tagSlots.push(...items);
       }
+      // 圖裡面的小字（inlineAxis 的刻度、最高最低價）：外面先描一圈底色，壓在 K 棒或格線上也讀得出來
+      const inlineText = (text, tx, ty, align, color = dim) => {
+        x.save(); x.font = '500 10.5px "JetBrains Mono",Consolas,monospace'; x.textAlign = align; x.textBaseline = 'middle';
+        x.lineJoin = 'round'; x.lineWidth = 3; x.strokeStyle = css('--bg'); x.globalAlpha = .9; if (x.strokeText) x.strokeText(text, tx, ty);
+        x.globalAlpha = 1; x.fillStyle = color; x.fillText(text, tx, ty); x.restore();
+      };
       // 價格刻度
-      const axisBoxes = [];
+      const axisBoxes = [], inlineTicks = [];
+      let outsideMarks = [];
       const raw = (hi - lo) / 5, mag = Math.pow(10, Math.floor(Math.log10(raw))), tick = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s >= raw);
       // 現價標籤（最右一根在畫面內才畫）所占的高度區間：與它重疊的刻度只略過文字、保留格線（本人 11-07：現價不可壓字）。
       const lastClose = this.view.end === n && hasPrice(this.candles[n - 1]) ? this.candles[n - 1].close : null;
@@ -405,6 +447,7 @@
         // 手機個股圖把有限的右側空間留給有語意的關鍵價位；格線仍保留刻度感。
         if (compactStacked) continue;
         if (tags && tagSlots.some(g => Math.abs(g.slot - y(v)) < tagH)) continue;
+        if (inline) { inlineTicks.push(v); axisBoxes.push({ y: boxTop, h: 14, v }); continue; }   // 均線、K 棒畫完才寫，不被線壓過
         x.fillStyle = dim; x.fillText(fmt(v, 0), l + pw + 8, y(v));
         axisBoxes.push({ y: boxTop, h: 14, v });
       }
@@ -420,7 +463,27 @@
       });
       // 判斷線
       const sortedOv = [...this.overlays].sort((a, b2) => b2.value - a.value);
-      if (tags) {
+      if (inline) {
+        // 不是均線的判斷線（前高、缺口、收復線…）：整條淡細實線＋右端一小段實色；範圍外的不畫（數值在圖上方的圖例）
+        const flat = this.overlays.filter(o => !this.curveOf(o));
+        flat.filter(o => !outside(o.value)).forEach(o => {
+          const yy = Math.round(y(o.value)) + .5;
+          x.strokeStyle = o.color || css('--gold'); x.lineWidth = o.strong ? 2 : 1; x.globalAlpha = o.strong ? .9 : .45;
+          x.beginPath(); x.moveTo(l, yy); x.lineTo(l + pw, yy); x.stroke();
+          x.globalAlpha = 1; x.lineWidth = 2; x.beginPath(); x.moveTo(l + pw - 20, yy); x.lineTo(l + pw, yy); x.stroke();
+        });
+        // 範圍外的：上緣或下緣右邊一個同色小三角形（尖端朝線所在的方向），同一邊有好幾條就往左排
+        const sides = { up: 0, down: 0 };
+        outsideMarks = flat.filter(o => outside(o.value)).sort((a, b2) => b2.value - a.value).map(o => {
+          const side = outside(o.value), k = sides[side]++, mx = l + pw - 8 - k * 12, my = side === 'up' ? t + 4 : t + ph - 4;
+          x.fillStyle = o.color || css('--gold'); x.beginPath();
+          if (side === 'up') { x.moveTo(mx - 5, my + 5); x.lineTo(mx + 5, my + 5); x.lineTo(mx, my - 2); }
+          else { x.moveTo(mx - 5, my - 5); x.lineTo(mx + 5, my - 5); x.lineTo(mx, my + 2); }
+          x.closePath(); x.fill();
+          return { side, y: my, label: o.label };
+        });
+        window.__kchartLabelBoxes = [];
+      } else if (tags) {
         const boxes = [];
         // 整條淡細實線＋右端一小段實色錨點；掛不掛價籤都一樣畫。
         // strong：要特別看出來的那一條（例如自選股關注「已到」的觸發線）畫成較粗的實線。
@@ -562,6 +625,18 @@
         for (let i = start; i < end; i++) { const v = this.ma[p][i]; if (v == null) { on = false; continue; } const px = l + step * (i - start + .5); on ? x.lineTo(px, y(v)) : x.moveTo(px, y(v)); on = true; }
         x.stroke();
       });
+      // 帶 ma 的判斷線（例如轉強線是半年線）：整條均線，虛線、判斷線的顏色；超出畫面上下的部分裁掉
+      const trendLines = inline ? this.overlays.filter(o => this.curveOf(o)) : [];
+      if (trendLines.length) {
+        x.save(); x.beginPath(); x.rect(l, t, pw, ph); x.clip();
+        trendLines.forEach(o => {
+          const series = this.curveOf(o);
+          x.strokeStyle = o.color || css('--gold'); x.lineWidth = 1.6; x.setLineDash([6, 4]); x.beginPath(); let on = false;
+          for (let i = start; i < end; i++) { const v = series[i]; if (v == null) { on = false; continue; } const px = l + step * (i - start + .5); on ? x.lineTo(px, y(v)) : x.moveTo(px, y(v)); on = true; }
+          x.stroke(); x.setLineDash([]);
+        });
+        x.restore();
+      }
       // 均線與布林通道的名稱寫在圖的左上角，字的顏色就是線的顏色（本人 11-15：有顏色但看不出哪個顏色是哪一條）。
       x.font = TAG_NAME_FONT; x.textBaseline = 'top'; x.textAlign = 'left';
       let nameX = l + 6;
@@ -585,11 +660,27 @@
         x.font = '500 11px "Noto Sans TC","Microsoft JhengHei",sans-serif'; x.textAlign = 'left'; if (!numbersOnly) x.fillText('收盤', tagX + 6, py + .5);
         x.font = '600 11.5px "JetBrains Mono",Consolas,monospace'; x.textAlign = 'right'; x.fillText(fmtTag(last.close), tagX + tagW - (numbersOnly ? 5 : 6), py + .5);
         x.textAlign = 'left'; x.font = '11.5px "JetBrains Mono",Consolas,monospace';
+      } else if (inline) {
+        inlineTicks.forEach(v => inlineText(fmtTag(v), l + 4, y(v) - 7, 'left'));
+        if (end === n && hasPrice(last)) {
+          const real = Math.round(y(last.close)) + .5;
+          x.strokeStyle = ink; x.lineWidth = 1; x.setLineDash([2, 3]); x.beginPath(); x.moveTo(l, real); x.lineTo(l + pw, real); x.stroke(); x.setLineDash([]);
+        }
+        // 畫面上最高、最低的那一根：旁邊一小段線接價格，往圖中間的方向寫（不會跑出圖外）
+        let hiAt = -1, loAt = -1;
+        vis.forEach((c, i) => { if (!hasPrice(c)) return; if (hiAt < 0 || c.high > vis[hiAt].high) hiAt = i; if (loAt < 0 || c.low < vis[loAt].low) loAt = i; });
+        [[hiAt, 'high'], [loAt, 'low']].forEach(([i, key]) => {
+          if (i < 0) return;
+          const cx = l + step * (i + .5), py = y(vis[i][key]), right = cx < l + pw / 2;
+          x.strokeStyle = dim; x.lineWidth = 1; x.beginPath(); x.moveTo(cx + (right ? 3 : -3), py); x.lineTo(cx + (right ? 12 : -12), py); x.stroke();
+          inlineText(fmtTag(vis[i][key]), cx + (right ? 14 : -14), py, right ? 'left' : 'right', css('--dim'));
+        });
+        x.font = '11.5px "JetBrains Mono",Consolas,monospace'; x.textBaseline = 'alphabetic'; x.textAlign = 'left';
       } else if (end === n && hasPrice(last)) { const pw2 = stacked ? 46 : r - 4; x.fillStyle = ink; x.textBaseline = 'middle'; x.fillRect(l + pw + 2, y(last.close) - 9, pw2, 18); x.fillStyle = css('--bg'); x.fillText(fmt(last.close, 0), l + pw + 7, y(last.close)); }
       // 畫線的價位標示與選取把手最後才畫：壓在 K 棒與現價虛線上面，才看得到。
       if (this.drawings) this.drawings.drawOnTop(x, this.geo);
       // 驗收用：右側刻度文字框與現價框的位置。
-      this.debugBoxes = { axis: axisBoxes, price: end === n && hasPrice(last) ? { y: y(last.close) - 9, h: 18 } : null, height: H };
+      this.debugBoxes = { axis: axisBoxes, price: end === n && hasPrice(last) ? { y: y(last.close) - 9, h: 18 } : null, height: H, outside: outsideMarks };
       // MACD
       if (this.showMacd) {
         const top = H - macdH, mv = this.macd.slice(start, end).filter(m => m.ready);
@@ -602,9 +693,10 @@
         const picked = this.hover >= start && this.hover < end ? this.macd[this.hover] : null;
         if (picked && picked.ready) {
           const paper = css('--bg');
-          drawTags(x, tagX, tagW, tagH, placeTags([{ name: 'DIF', text: fmt(picked.dif, 1), y: my(picked.dif), bg: ink, fg: paper }, { name: 'DEA', text: fmt(picked.dea, 1), y: my(picked.dea), bg: css('--gold'), fg: paper },
+          const hx = l + step * (this.hover - start + .5), macdX = inline ? (hx > l + pw / 2 ? l + 4 : l + pw - 88) : tagX;
+          drawTags(x, macdX, inline ? 84 : tagW, tagH, placeTags([{ name: 'DIF', text: fmt(picked.dif, 1), y: my(picked.dif), bg: ink, fg: paper }, { name: 'DEA', text: fmt(picked.dea, 1), y: my(picked.dea), bg: css('--gold'), fg: paper },
             { name: '柱', text: `${picked.hist < 0 ? '−' : '+'}${fmt(Math.abs(picked.hist), 1)}`, y: my(picked.hist), bg: picked.hist >= 0 ? up : dn, fg: paper }],
-          top + tagH / 2, H - tagH / 2, tagGap), true);
+          top + tagH / 2 + (inline ? 14 : 0), H - tagH / 2, tagGap), true);   // 圖裡面時讓開左上角的「MACD(12,26,9)」
           x.font = '11.5px "JetBrains Mono",Consolas,monospace';
         }
       }
@@ -616,8 +708,9 @@
         const paper = css('--bg'), tone = c.close >= c.open ? up : dn;
         const prices = hasPrice(c) ? [['開', c.open], ['高', c.high], ['低', c.low], ['收', c.close]].map(([name, value]) => (
           { name, text: fmtTag(value), y: y(value), bg: name === '收' ? tone : paper, fg: name === '收' ? paper : ink, edge: tone })) : [];
-        const pickW = numbersOnly ? Math.max(tagW, 84) : tagW;   // 只寫數字的窄欄：開高低收往左借位置，名稱照寫
-        drawTags(x, tagX + tagW - pickW, pickW, tagH, placeTags(prices, t + tagH / 2, t + ph - tagH / 2, tagGap));
+        const pickW = inline ? 84 : numbersOnly ? Math.max(tagW, 84) : tagW;   // 只寫數字的窄欄：開高低收往左借位置，名稱照寫
+        const pickX = inline ? (cx > l + pw / 2 ? l + 4 : l + pw - pickW - 4) : tagX + tagW - pickW;   // 圖裡面：十字線的另一邊
+        drawTags(x, pickX, pickW, tagH, placeTags(prices, t + tagH / 2, t + ph - tagH / 2, tagGap));
         x.font = TAG_VALUE_FONT;
         const dateWidth = x.measureText(c.label).width + 12;
         drawTags(x, Math.max(l, Math.min(l + pw - dateWidth, cx - dateWidth / 2)), dateWidth, tagH, [{ name: '', text: c.label, slot: t + ph + b / 2 + 1, bg: ink, fg: paper }]);
@@ -625,6 +718,7 @@
         this.debugBoxes.picked = { date: c.label, tags: prices.map(({ name, text: value }) => ({ name, text: value })) };
       }
       if (this.studies) this.studies.draw();
+      if (this.opts.onDraw) this.opts.onDraw();
     }
   }
   window.KChart = KChart;

@@ -584,16 +584,20 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
     step(f"{tag}：指標切換", studies)
     step(f"{tag}：K 線與指標同一個圖框",
          lambda: joined_chart(page, tag, "#mainChart", ["成交金額", "MACD", "KD", "RSI", "外資", "投信", "自營商"], None))
-    # 本人 11-17：收復線、防守線合成一顆鍵，和各條線的名稱一起放在 K 線上方；右側價格欄只寫數字
+    # 本人 11-17：收復線、防守線合成一顆鍵，和各條線的名稱、目前數值一起放在 K 線上方；
     def legend_row() -> None:
         seen = page.evaluate("""() => {
           const box = s => document.querySelector(s).getBoundingClientRect();
           const legend = box('#chartLegend'), chart = box('#mainChart canvas');
-          const names = [...document.querySelectorAll('#legendNames .legend-name')].map(n => n.textContent);
+          const rows = [...document.querySelectorAll('#legendNames .legend-name')];
+          const names = rows.map(n => (n.querySelector('b') || n).textContent);
+          const values = rows.map(n => (n.querySelector('.num') || {}).textContent || '');
           return { above: legend.bottom <= chart.top + 1, keys: ['#lineUpper', '#lineLower'].every(k => document.querySelector('#chartLegend ' + k)),
-                   names, actions: getComputedStyle(document.getElementById('chartActions')).display };
+                   names, values, actions: getComputedStyle(document.getElementById('chartActions')).display };
         }""")
-        check(f"{tag}：收復線、防守線合成一顆鍵在 K 線上方，旁邊寫各條線的名稱", seen["above"] and seen["keys"] and seen["names"][:2] == ["MA18", "MA45"] and "布林20" in seen["names"], seen)
+        check(f"{tag}：收復線、防守線合成一顆鍵在 K 線上方，旁邊寫各條線的名稱與數值",
+              seen["above"] and seen["keys"] and seen["names"][:2] == ["MA18", "MA45"] and "布林20" in seen["names"]
+              and all(v.replace(",", "").replace(".", "").isdigit() for v in seen["values"][:2]), seen)
         if mobile:
             check(f"{tag}：圖下方那一列沒選某一天時不佔位置", seen["actions"] == "none", seen)
     step(f"{tag}：K 線上方一行", legend_row)
@@ -908,11 +912,18 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
                   not page.locator("#mobileCandleDetails").is_visible() and main.get("cover") == 0 and main.get("rail") == 0 and study.get("rail") == 0, [main, study])
             page.touchscreen.tap(x, y)
             page.locator("#mobileCandleDetails").wait_for(state="visible")
-            # 點在右側數值欄（不是 K 棒）也是取消，「這一天的詳情」要跟著收掉，不能留著一顆對不上的鈕。
+            # 券商版面（本人 11-17）：右邊不再有數值欄，點最右邊就是點到最後一根 K 棒——改成選那一根，
+            # 「這一天的詳情」跟著換成那一天；再點一次同一根才取消，詳情鈕跟著收掉。
             box = page.locator("#mainChart canvas").first.bounding_box()
-            page.touchscreen.tap(box["x"] + box["width"] - 20, y)
+            first_label = page.locator("#mobileCandleDetails").inner_text()
+            page.touchscreen.tap(box["x"] + box["width"] - 6, y)
             page.wait_for_timeout(250)
-            check(f"{tag}：點右側數值欄會取消選取，詳情鈕跟著收掉", not page.locator("#mobileCandleDetails").is_visible())
+            check(f"{tag}：點最右邊（沒有數值欄了）選到最後一根，詳情鈕換成那一天",
+                  page.locator("#mobileCandleDetails").is_visible() and page.locator("#mobileCandleDetails").inner_text() != first_label,
+                  page.locator("#mobileCandleDetails").inner_text())
+            page.touchscreen.tap(box["x"] + box["width"] - 6, y)
+            page.wait_for_timeout(250)
+            check(f"{tag}：再點一次最後一根就取消，詳情鈕跟著收掉", not page.locator("#mobileCandleDetails").is_visible())
             page.touchscreen.tap(x, y)
             page.locator("#mobileCandleDetails").wait_for(state="visible")
         if mobile:

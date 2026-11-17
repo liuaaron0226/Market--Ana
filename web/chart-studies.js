@@ -529,14 +529,34 @@
       context.restore();
     }
 
+    // 刻度數字寫在哪：平常寫在右側價格欄；主圖是券商版面（geo.inline，左右不留欄）時寫在圖裡面右邊，
+    // 靠右對齊、外面描一圈底色（左上角是指標名稱，所以放右邊）。回傳 (context, 文字, 高度) 的畫字函式
+    _axisText(width, geo) {
+      if (!geo.inline) {
+        const x = Math.min(width - 2, geo.l + geo.pw + 7);
+        return (context, text, y) => context.fillText(text, x, y);
+      }
+      const x = geo.l + geo.pw - 4;
+      return (context, text, y) => {
+        context.save(); context.textAlign = 'right';
+        context.lineJoin = 'round'; context.lineWidth = 3; context.strokeStyle = token('--bg'); context.globalAlpha = .9;
+        if (context.strokeText) context.strokeText(text, x, y);
+        context.globalAlpha = 1; context.fillText(text, x, y); context.restore();
+      };
+    }
+
     // 選取那一天的數值標在右側 Y 軸的位置（本人 11-15：「選哪一天就顯示哪一天」）。原本的刻度不動，數值籤蓋到刻度時疊在上面。
     // values 是這一種指標那一天要標的數值 { name, value, text, bg }；y 把數值換成畫布上的高度。只畫目前顯示的那一種。
     _drawPicked(kind, context, width, height, range, y, values) {
       const hover = this.chart.hover;
       if (kind !== this.active || !Number.isInteger(hover) || hover < range.start || hover >= range.end) return;
-      const tags = window.KChartTags, paper = token('--bg'), left = range.geo.l + range.geo.pw + 4;
+      // 券商版面（geo.inline）沒有右側欄：寫在圖裡面、十字線的另一邊，和主圖的開高低收同一邊
+      const { l, pw, step } = range.geo, cx = l + step * (hover - range.start + 0.5);
+      const tagWidth = range.geo.inline ? 84 : width - (l + pw + 4) - 2;
+      const left = range.geo.inline ? (cx > l + pw / 2 ? l + 4 : l + pw - tagWidth - 4) : l + pw + 4;
+      const tags = window.KChartTags, paper = token('--bg');
       const items = values(hover).filter(item => finite(item.value)).map(item => ({ ...item, y: y(item.value), fg: paper }));
-      tags.draw(context, left, width - left - 2, TAG_HEIGHT_PX, tags.place(items, TAG_HEIGHT_PX / 2 + 1, height - TAG_HEIGHT_PX / 2 - 1, TAG_HEIGHT_PX + 2), true);
+      tags.draw(context, left, tagWidth, TAG_HEIGHT_PX, tags.place(items, TAG_HEIGHT_PX / 2 + 1, height - TAG_HEIGHT_PX / 2 - 1, TAG_HEIGHT_PX + 2), true);
       // 驗收用：這一天實際標出來的數值。
       this.debugPicked = items.map(({ name, text: value }) => ({ name, text: value }));
     }
@@ -581,12 +601,12 @@
       context.font = `11px ${token('--mono') || 'monospace'}`;
       context.textAlign = 'left';
       context.textBaseline = 'top';
-      const axisX = Math.min(width - 2, geo.l + geo.pw + 7);
+      const axisText = this._axisText(width, geo);
       const unitLabel = this.volumeKind === 'amount' ? '億元' : '張';
-      context.fillText(unitLabel, axisX, top - 18);
-      context.fillText(this.volumeKind === 'volume' ? formatNumber(maximum / 1000, 1) : formatNumber(maximum, 1), axisX, top - 5);
+      axisText(context, unitLabel, top - 18);
+      axisText(context, this.volumeKind === 'volume' ? formatNumber(maximum / 1000, 1) : formatNumber(maximum, 1), top - 5);
       context.textBaseline = 'bottom';
-      context.fillText('0', axisX, height - 2);
+      axisText(context, '0', height - 2);
 
       if (maximum === 0) {
         const hasFiniteZero = candles.slice(start, end).some(candle => candle && finite(candle[key]) && candle[key] === 0);
@@ -636,10 +656,10 @@
       context.restore();
       context.fillStyle = token('--dim'); context.font = `11px ${token('--mono') || 'monospace'}`;
       context.textAlign = 'left'; context.textBaseline = 'middle';
-      const axisX = Math.min(width - 2, range.geo.l + range.geo.pw + 7);
-      context.fillText(institutionalText(amplitude, this.volumeKind, true), axisX, top + 3);
-      context.fillText('0', axisX, middle);
-      context.fillText(`−${institutionalText(amplitude, this.volumeKind, true)}`, axisX, bottom - 3);
+      const axisText = this._axisText(width, range.geo);
+      axisText(context, institutionalText(amplitude, this.volumeKind, true), top + 3);
+      axisText(context, '0', middle);
+      axisText(context, `−${institutionalText(amplitude, this.volumeKind, true)}`, bottom - 3);
       this._drawCrosshair(context, height, range);
       this._drawPicked(kind, context, width, height, range, y, index => {
         const value = range.candles[index] && range.candles[index][kind];
@@ -729,10 +749,10 @@
       context.font = `11px ${token('--mono') || 'monospace'}`;
       context.textAlign = 'left';
       context.textBaseline = 'middle';
-      const axisX = Math.min(width - 2, range.geo.l + range.geo.pw + 7);
-      context.fillText(formatNumber(amplitude / 1.1, 1), axisX, top + 2);
-      context.fillText('0 零線', axisX, zeroY);
-      context.fillText(`−${formatNumber(amplitude / 1.1, 1)}`, axisX, bottom - 2);
+      const axisText = this._axisText(width, range.geo);
+      axisText(context, formatNumber(amplitude / 1.1, 1), top + 2);
+      axisText(context, '0 零線', zeroY);
+      axisText(context, `−${formatNumber(amplitude / 1.1, 1)}`, bottom - 2);
 
       if (!hasReady) {
         context.fillStyle = token('--dim');
@@ -794,8 +814,8 @@
       context.font = `11px ${token('--mono') || 'monospace'}`;
       context.textAlign = 'left';
       context.textBaseline = 'middle';
-      const axisX = Math.min(width - 2, range.geo.l + range.geo.pw + 7);
-      for (const ref of refs) context.fillText(String(ref), axisX, y(ref));
+      const axisText = this._axisText(width, range.geo);
+      for (const ref of refs) axisText(context, String(ref), y(ref));
       if (!hasReady) {
         context.font = `12px ${token('--sans') || 'sans-serif'}`;
         context.fillText(emptyText, range.geo.l + 6, height / 2);
