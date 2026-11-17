@@ -1513,6 +1513,7 @@
     els.backdrop.hidden = false;
     els.panel.setAttribute('aria-hidden', 'false');
     document.body.classList.add('panel-open');
+    window.ScrollLock?.lock(els.panel);   // 底下的頁面不跟著手指捲（scroll-lock.js）
     placePanel(panelAnchor);
     window.cancelAnimationFrame(openFrame);
     openFrame = requestAnimationFrame(() => {
@@ -1553,6 +1554,7 @@
     els.panel.classList.remove('is-open');
     els.panel.setAttribute('aria-hidden', 'true');
     document.body.classList.remove('panel-open');
+    window.ScrollLock?.unlock(els.panel);
     const target = activeAnchor;
     activeAnchor = null;
     panelAnchor = null;

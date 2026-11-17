@@ -27,6 +27,8 @@ export const WEB_FILES = [
   "holders-weekly.js", "holders-card.js",
   // 預測帳本（2026-11-15，B 票第 4 片）：只有站主有預測內容時才會在首頁出現
   "forecast.js", "forecast.css",
+  // 浮層打開時把底下的頁面鎖住（11-17，首頁明細板、對話框、預測與關注浮板共用）
+  "scroll-lock.js",
   // 個股頁事實區塊（2026-11-15 規格，A 票）
   "stock-facts.js", "stock-facts.css", "stock-signals.js", "stock-signals.css",
   // 自選股關注 B 票：個股頁「國外同類股」（只有站主的關注股才出現）
