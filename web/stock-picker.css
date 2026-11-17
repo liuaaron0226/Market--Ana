@@ -1,0 +1,36 @@
+/* 全站股票輸入框的選股下拉（stock-picker.js，本人 11-17）。
+   樣子照首頁搜尋結果：浮起的板（同 K 線區浮出選單）上一列一檔的凸起鍵，粗體「代號 名稱」、下面一行小字類別。
+   選項寫成 .sp-list .sp-option：放在頂列搜尋、表單裡時，蓋過那裡「按鈕＝墨色主要動作」的樣式。
+   只用 bold.css 的變數，不自訂陰影與圓角；浮出動畫沿用 chart-studies.css 的 chart-menu-rise（三頁都有載）。 */
+.sp-host { position: relative; }
+.sp-list {
+  position: absolute; z-index: 40; top: calc(100% + 6px); left: 0;
+  width: max(100%, 260px); max-width: calc(100vw - 32px); max-height: min(60vh, 360px); overflow-y: auto;
+  display: grid; gap: 6px; padding: 8px;
+  border-radius: var(--r-float); background: var(--float); box-shadow: var(--float-shadow);
+  transform-origin: 20% 0; animation: chart-menu-rise 380ms var(--ease-depth);
+  text-align: left;
+}
+.sp-list[hidden] { display: none; }
+/* 放在會收合（overflow: hidden）的表單裡時（自選股頁「＋」）：不浮起，直接排在輸入框下面，和首頁搜尋結果一樣是板上的一列列鍵 */
+.sp-list.sp-inline {
+  position: static; width: auto; max-width: none; max-height: none; overflow: visible; margin-top: 2px; padding: 0 0 4px;
+  border-radius: 0; background: none; box-shadow: none; animation: none;
+}
+.sp-list .sp-option {
+  width: 100%; height: auto; min-height: 48px; display: grid; gap: 2px; align-content: center; justify-items: start;
+  padding: 7px 12px; border: 0; border-radius: var(--r-key); background: var(--key); box-shadow: var(--key-shadow);
+  color: var(--ink); font: 14px var(--sans); text-align: left; cursor: pointer;
+  transition: transform var(--t-lift) var(--ease-depth), box-shadow var(--t-lift) var(--ease-depth);
+}
+.sp-list .sp-option strong { font-size: 14px; font-weight: 600; line-height: 1.3; }
+.sp-list .sp-option small { color: var(--dim); font-size: 12px; line-height: 1.3; }
+.sp-list .sp-option[aria-selected="true"] { outline: 2px solid var(--ink); outline-offset: -2px; }
+@media (hover: hover) {
+  .sp-list .sp-option:hover { background: var(--key); transform: translateY(var(--key-lift)); box-shadow: var(--key-shadow-hover); }
+}
+.sp-list .sp-option:active { transform: translateY(var(--key-thick)); box-shadow: var(--key-shadow-press); transition-duration: var(--t-press); }
+.sp-empty { margin: 0; padding: 8px 4px; color: var(--dim); font-size: 13px; }
+@media (prefers-reduced-motion: reduce) { .sp-list { animation: none; } .sp-list .sp-option { transition: none; } }
+/* 首頁核心持有「＋ 加入」浮出選單裡：一列列排在輸入框下面、佔滿選單寬度 */
+.core-add-menu .sp-inline { flex-basis: 100%; }

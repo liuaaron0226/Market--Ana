@@ -199,6 +199,7 @@ async function handleStockSearch(request, env, email, deps, { isOwner } = {}) {
   ).first();
   if (!active) throw new HttpError(503, "上市或上櫃普通股名錄尚未就緒");
   if (!query) return json(200, { source_date: active.source_date, items: [], next_cursor: null });
+  const funds = isOwner && offset === 0 ? matchFunds(query, deps.comparePack) : [];
   const escaped = query.replace(/[\\%_]/g, (character) => `\\${character}`);
   // V2：名錄只含大量股母體（listed_securities），母體外的股票自然不會出現在搜尋結果；名次與規則版本只增欄位。
   // ETF 上站（12 票）：ETF 開關對這個人是開的時候，再把 ETF 名錄（etf_securities）一起搜，類別記成 ETF。
@@ -225,7 +226,31 @@ async function handleStockSearch(request, env, email, deps, { isOwner } = {}) {
     analysis_available: item.analysis_status === "available" || item.analysis_status === "stale",
     source_date: active.source_date,
   }));
-  return json(200, { source_date: active.source_date, items, next_cursor: hasMore ? String(offset + limit) : null });
+  return json(200, { source_date: active.source_date, items, next_cursor: hasMore ? String(offset + limit) : null, ...(funds.length ? { funds } : {}) });
+}
+
+// 本人 11-17：搜尋框打基金名稱也找得到基金對照頁那檔。只列 compare pack 已有資料的基金（有頁可看），
+// 名稱來自 build 時預算的那份（fund_compare.FUNDS）；比對不分大小寫、忽略空白。和自選股頁的基金列一樣只給站主。
+// 沒有符合的基金就不帶 funds 欄（既有回應契約不變）。
+const fundCatalogs = new WeakMap();
+function fundCatalog(pack) {
+  if (!pack || typeof pack !== "object") return [];
+  if (fundCatalogs.has(pack)) return fundCatalogs.get(pack);
+  const catalog = [];
+  for (const [code, text] of Object.entries(pack.funds ?? {})) {
+    try {
+      const fund = JSON.parse(text).fund ?? {};
+      catalog.push({ code, name: fund.short_name || fund.name || code, full_name: fund.name || fund.short_name || code });
+    } catch { /* 壞掉的那檔不列；基金頁本身會說資料還沒準備好 */ }
+  }
+  fundCatalogs.set(pack, catalog);
+  return catalog;
+}
+const squash = (text) => String(text).replace(/\s+/g, "").toUpperCase();
+function matchFunds(query, pack) {
+  const needle = squash(query);
+  if (!needle) return [];
+  return fundCatalog(pack).filter((fund) => [fund.code, fund.name, fund.full_name].some((text) => squash(text).includes(needle)));
 }
 
 async function handleStockApi(request, env, path, email, deps, options = {}) {

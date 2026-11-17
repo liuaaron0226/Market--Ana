@@ -13,7 +13,7 @@
   <link rel="stylesheet" href="minimal.css?v=20261117-m53">
   <link rel="stylesheet" href="chart-studies.css?v=20261117-m53">
   <link rel="stylesheet" href="bold.css?v=20261117-m53">
-  <link rel="stylesheet" href="stock.css?v=20261117-m53">
+  <link rel="stylesheet" href="stock.css?v=20261117-n1">
   <link rel="stylesheet" href="stock-facts.css?v=20261117-m53">
   <link rel="stylesheet" href="stock-signals.css?v=20261117-m53">
   <link rel="stylesheet" href="watch-peers.css?v=20261117-m53">
@@ -21,14 +21,15 @@
   <link rel="stylesheet" href="watch-judgments.css?v=20261117-m53">
   <link rel="stylesheet" href="watch-push.css?v=20261117-m53">
   <link rel="stylesheet" href="settings.css?v=20261117-m53">
+  <link rel="stylesheet" href="stock-picker.css?v=20261117-n1">
 </head>
 <body class="bd st">
   <div class="bd-shell" data-desk-tilt>
     <header class="bd-bar">
       <a class="bd-back" href="minimal.html"><span aria-hidden="true">‹</span> 大盤</a>
       <form class="bd-search" id="searchForm" role="search">
-        <label class="sr-only" for="codeInput">股票代號</label>
-        <input id="codeInput" name="code" inputmode="numeric" autocomplete="off" placeholder="代號，例如 2330" maxlength="6">
+        <label class="sr-only" for="codeInput">股票代號或名稱</label>
+        <input id="codeInput" name="code" type="search" enterkeyhint="search" autocomplete="off" placeholder="代號或名稱，例如 2330、台積電" maxlength="24">
         <button type="submit">查詢</button>
       </form>
       <!-- 設定（本人 2026-11-17 選樣品 A），見 settings.js -->
@@ -210,12 +211,9 @@
             <form class="bd-compare-form" id="compareForm">
               <label for="compareInput">加入比較股票</label>
               <div class="bd-compare-input-row">
-                <input id="compareInput" name="compare-code" inputmode="numeric" autocomplete="off" maxlength="6"
-                       role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="compareSearchResults"
-                       placeholder="輸入代號或名稱">
+                <input id="compareInput" name="compare-code" autocomplete="off" maxlength="24" placeholder="輸入代號或名稱">
                 <button id="compareAdd" type="submit">加入</button>
               </div>
-              <div class="bd-compare-results" id="compareSearchResults" role="listbox" hidden></div>
             </form>
             <div class="bd-compare-chips" id="compareChips" aria-label="已選股票"></div>
           </div>
@@ -240,7 +238,8 @@
   <script src="watch-judgments.js?v=20261117-m53"></script>
   <script src="holders-weekly.js?v=20261117-m53"></script>
   <script src="holders-card.js?v=20261117-m53"></script>
-  <script src="stock.js?v=20261117-m53"></script>
+  <script src="stock-picker.js?v=20261117-n1"></script>
+  <script src="stock.js?v=20261117-n1"></script>
   <script src="period-switch.js?v=20261117-m53"></script>
   <script src="chart-menus.js?v=20261117-m53"></script>
   <script src="home-fold.js?v=20261117-m53"></script>

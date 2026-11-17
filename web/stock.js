@@ -120,7 +120,7 @@
   const compareState = {
     current: '', codes: [], names: new Map(), colors: new Map(), hidden: new Set(), payload: null,
     period: '1y', stocks: [],   // 期間的鍵選的是哪一個；每一檔每個期間整理好的資料（comparisonPeriods 的結果）
-    request: 0, abort: null, searchAbort: null, searchTimer: null, searchOptions: [], activeOption: -1,
+    request: 0, abort: null,
   };
 
   function saveMaPeriods() {
@@ -931,67 +931,7 @@
     loadComparison();
   }
 
-  function closeCompareResults() {
-    clearTimeout(compareState.searchTimer);
-    if (compareState.searchAbort) compareState.searchAbort.abort();
-    compareState.searchAbort = null;
-    compareState.searchOptions = [];
-    compareState.activeOption = -1;
-    $('compareSearchResults').hidden = true;
-    $('compareInput').setAttribute('aria-expanded', 'false');
-    $('compareInput').removeAttribute('aria-activedescendant');
-  }
-
-  function setActiveCompareOption(index) {
-    const options = compareState.searchOptions;
-    if (!options.length) return;
-    compareState.activeOption = (index + options.length) % options.length;
-    options.forEach((button, buttonIndex) => button.setAttribute('aria-selected', String(buttonIndex === compareState.activeOption)));
-    const active = options[compareState.activeOption];
-    $('compareInput').setAttribute('aria-activedescendant', active.id);
-    active.scrollIntoView({ block: 'nearest' });
-  }
-
-  async function searchComparison(term) {
-    if (compareState.searchAbort) compareState.searchAbort.abort();
-    const controller = new AbortController();
-    compareState.searchAbort = controller;
-    try {
-      const response = await fetch(`/api/stocks/search?${new URLSearchParams({ q: term, limit: '5' })}`, {
-        cache: 'no-store', signal: controller.signal,
-      });
-      const data = response.ok ? await response.json() : null;
-      if ($('compareInput').value.trim() !== term || controller.signal.aborted) return;
-      const items = (data && data.items || []).filter(item => item.universe_rank !== null && item.universe_rank !== undefined
-        && !compareState.codes.includes(item.code));
-      const buttons = items.map((item, index) => {
-        const button = node('button');
-        button.type = 'button';
-        button.id = `compareOption${index}`;
-        button.setAttribute('role', 'option');
-        button.setAttribute('aria-selected', 'false');
-        button.append(node('span', '', `${item.name} ${item.code}`), node('small', '', item.market));
-        button.addEventListener('click', () => {
-          $('compareInput').value = item.code;
-          closeCompareResults();
-          addComparisonCode(item.code, item.name);
-        });
-        return button;
-      });
-      compareState.searchAbort = null;
-      compareState.searchOptions = buttons;
-      compareState.activeOption = -1;
-      $('compareSearchResults').replaceChildren(...buttons);
-      $('compareSearchResults').hidden = buttons.length === 0;
-      $('compareInput').setAttribute('aria-expanded', String(buttons.length > 0));
-      $('compareInput').removeAttribute('aria-activedescendant');
-    } catch (error) {
-      if (error.name !== 'AbortError') closeCompareResults();
-    }
-  }
-
   function addComparisonCode(code, name = code) {
-    clearTimeout(compareState.searchTimer);
     const normalized = code.trim().toUpperCase();
     if (!/^[0-9A-Z]{4,6}$/.test(normalized)) {
       setCompareStatus('error', '請從搜尋結果選擇股票，或輸入正確代號。');
@@ -1013,7 +953,7 @@
     compareState.names.set(normalized, name);
     compareColorToken(normalized);
     $('compareInput').value = '';
-    closeCompareResults();
+    comparePicker.close();
     renderCompareChips();
     loadComparison();
   }
@@ -1209,39 +1149,33 @@
     const cell = event.target.closest('.cell[data-period]');
     if (cell) pickComparePeriod(cell.dataset.period);
   });
-  $('compareForm').addEventListener('submit', event => {
+  // 加入比較與頂列都用全站共用的選股下拉（stock-picker.js，本人 11-17：代號、名稱都能打）。
+  // 比較只收大量股母體內、還沒加入的股票；頂列也收基金（選了導到基金對照頁）。
+  const comparePicker = window.StockPicker.attach($('compareInput'), {
+    accept: item => item.universe_rank !== null && item.universe_rank !== undefined && !compareState.codes.includes(item.code),
+    onPick: option => addComparisonCode(option.code, option.name),
+  });
+  $('compareForm').addEventListener('submit', async event => {
     event.preventDefault();
-    addComparisonCode($('compareInput').value);
-  });
-  $('compareInput').addEventListener('input', () => {
-    const term = $('compareInput').value.trim();
-    closeCompareResults();
-    if (term.length < 2) return;
-    compareState.searchTimer = setTimeout(() => searchComparison(term), 180);
-  });
-  $('compareInput').addEventListener('keydown', event => {
-    if (event.key === 'Escape') { closeCompareResults(); return; }
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      if (!compareState.searchOptions.length) return;
-      event.preventDefault();
-      setActiveCompareOption(compareState.activeOption + (event.key === 'ArrowDown' ? 1 : -1));
-      return;
-    }
-    if (event.key === 'Enter' && compareState.activeOption >= 0) {
-      event.preventDefault();
-      compareState.searchOptions[compareState.activeOption].click();
-    }
-  });
-  document.addEventListener('click', event => {
-    if (!$('compareForm').contains(event.target)) closeCompareResults();
+    const typed = $('compareInput').value;
+    const option = await comparePicker.resolve(typed);
+    if (!option && !window.StockPicker.codeOf(typed) && typed.trim()) { setCompareStatus('error', `查無「${typed.trim()}」可加入比較的股票，請改打代號或從清單選擇。`); return; }
+    addComparisonCode(option ? option.code : typed, option ? option.name : undefined);
   });
 
-  $('searchForm').addEventListener('submit', event => {
+  const openFromBar = option => {
+    if (option.kind === 'fund') { location.href = option.href; return; }
+    updateUrl(option.code);
+    load(option.code);
+  };
+  const barPicker = window.StockPicker.attach($('codeInput'), { funds: true, onPick: openFromBar });
+  $('searchForm').addEventListener('submit', async event => {
     event.preventDefault();
-    const code = $('codeInput').value.trim().toUpperCase();
-    if (!/^[0-9A-Z]{4,6}$/.test(code)) { $('status').hidden = false; $('status').textContent = '代號格式不正確。'; return; }
-    updateUrl(code);
-    load(code);
+    const typed = $('codeInput').value.trim();
+    if (!typed) return;
+    const option = await barPicker.resolve(typed);
+    if (!option) { $('status').hidden = false; $('status').textContent = `查無「${typed}」，請改打代號或從清單選擇。`; return; }
+    openFromBar(option);
   });
   $('periodSelect').addEventListener('change', () => {
     const selected = $('periodSelect').value;

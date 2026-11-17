@@ -41,6 +41,8 @@ export const WEB_FILES = [
   "settings.js", "settings.css",
   // 基金對照 0050（2026-11-17 本人定案）：自選股頁一列入口＋基金對照頁
   "fund.html", "fund.css", "fund.js", "fund-view.js", "fund-entry.js",
+  // 股票輸入框打名稱也能找（2026-11-17 本人）：個股頁頂列與加入比較、自選股新增、首頁核心持有比較共用的選股下拉
+  "stock-picker.js", "stock-picker.css",
 ];
 export const RETIRED = ["analysis-data.js", "chips-data.js", "dashboard-data.js", "detail-data.js", "plain-data.js", "market-data-local.js"];
 

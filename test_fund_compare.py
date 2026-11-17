@@ -492,3 +492,17 @@ class DailyTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SearchFundsTest(unittest.TestCase):
+    """本人 11-17：搜尋框打基金名稱也找得到這檔（本機 live_server 的 /api/stocks/search，和雲端 gate 同一組規則）。"""
+
+    EXPECTED = [{"code": "BLKTENAU", "name": "貝萊德世界科技 A10", "full_name": "貝萊德世界科技基金 A10美元(總報酬穩定配息)"}]
+
+    def test_name_part_class_or_code_ignoring_case_and_spaces(self) -> None:
+        for query in ["貝萊德", "世界科技", "A10", "a10", "BLKTENAU", "blktenau", "世界科技A10", " 總報酬 "]:
+            self.assertEqual(fc.search_funds(query), self.EXPECTED, query)
+
+    def test_stock_names_and_blank_find_no_fund(self) -> None:
+        for query in ["台積電", "2330", "", "   "]:
+            self.assertEqual(fc.search_funds(query), [], query)

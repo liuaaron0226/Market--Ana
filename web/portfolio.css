@@ -152,7 +152,10 @@
 .pf-add-in { padding: 4px 2px 12px; }
 /* 「＋」：一格代號、兩顆鍵；按「新增庫存」才多出股數、平均成本、備註。就地修改（.pf-edit）用同一種排法 */
 .pf-add-form, .pf-edit { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 4px 0 0; border-bottom: 0; }
-.pf-add-form > label:first-child, .pf-form .pf-wide, .pf-add-form .pf-form-status { grid-column: 1 / -1; }
+.pf-form .pf-wide, .pf-add-form .pf-form-status { grid-column: 1 / -1; }
+/* 代號或名稱那一格（本人 11-17）：標題、輸入框，打名稱時下面排出選股的列（stock-picker.js）。
+   下拉不放在 <label> 裡，輸入框的名稱才不會連選項一起唸 */
+.pf-add-code { grid-column: 1 / -1; display: grid; gap: 8px; }
 .pf-add-more { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .pf-add-more[hidden] { display: none; }
 .pf-form button.pf-ghost { border-color: var(--line); background: transparent; color: var(--ink); }

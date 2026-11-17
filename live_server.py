@@ -1482,11 +1482,19 @@ class Handler(SimpleHTTPRequestHandler):
         universe = self._universe()
         members = None if universe is None else set(universe["members"])
         items, next_cursor = search_securities(term, limit, cursor, members)
-        self._send_json({
+        payload: dict[str, Any] = {
             "source_date": LISTED_SOURCE_DATE,
             "items": [project_search_item(item, universe) for item in items],
             "next_cursor": next_cursor,
-        })
+        }
+        # 本人 11-17：基金名稱也搜得到（只在第一頁、有符合才帶 funds 欄，和雲端 gate 相同）；本機沒有帳號，不分站主。
+        if cursor in (None, "0"):
+            import fund_compare
+
+            funds = fund_compare.search_funds(term)
+            if funds:
+                payload["funds"] = funds
+        self._send_json(payload)
 
     def _universe(self) -> dict[str, Any] | None:
         if not self.server.universe_enabled:

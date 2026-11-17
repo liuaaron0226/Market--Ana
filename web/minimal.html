@@ -10,7 +10,7 @@
   <meta name="apple-mobile-web-app-title" content="決策鏡">
   <meta name="theme-color" content="#0b0b0e">
   <title>台股決策鏡</title>
-  <link rel="stylesheet" href="minimal.css?v=20261117-m53">
+  <link rel="stylesheet" href="minimal.css?v=20261117-n1">
   <link rel="stylesheet" href="chart-studies.css?v=20261117-m53">
   <link rel="stylesheet" href="bold.css?v=20261117-m53">
   <link rel="stylesheet" href="home.css?v=20261117-m53">
@@ -18,6 +18,7 @@
   <link rel="stylesheet" href="forecast.css?v=20261117-m53">
   <link rel="stylesheet" href="watch-push.css?v=20261117-m53">
   <link rel="stylesheet" href="settings.css?v=20261117-m53">
+  <link rel="stylesheet" href="stock-picker.css?v=20261117-n1">
 </head>
 <body class="bd hm">
   <a class="skip-link" href="#workspace">跳到主圖</a>
@@ -272,7 +273,7 @@
                 <div class="chart-menu core-add-menu" id="coreAddMenu" data-menu-focus hidden>
                   <label class="sr-only" for="coreCompareInput">加入個股或 ETF</label>
                   <div class="core-compare-entry">
-                    <input id="coreCompareInput" name="code" inputmode="text" autocomplete="off" maxlength="6" placeholder="輸入代號">
+                    <input id="coreCompareInput" name="code" autocomplete="off" maxlength="24" placeholder="代號或名稱">
                     <button type="submit">加入比較</button>
                   </div>
                 </div>
@@ -349,7 +350,8 @@
   <script src="line-zones.js?v=20261117-m53"></script>
   <script src="trend-votes.js?v=20261117-m53"></script>
   <script src="trend-matrix.js?v=20261117-m53"></script>
-  <script src="minimal.js?v=20261117-m53"></script>
+  <script src="stock-picker.js?v=20261117-n1"></script>
+  <script src="minimal.js?v=20261117-n1"></script>
   <script src="period-switch.js?v=20261117-m53"></script>
   <script src="chart-menus.js?v=20261117-m53"></script>
   <script src="home-motion.js?v=20261117-m53"></script>

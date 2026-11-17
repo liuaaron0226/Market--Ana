@@ -218,6 +218,19 @@ FUNDS: dict[str, dict[str, str]] = {
 }
 
 
+def search_funds(query: str) -> list[dict[str, str]]:
+    """本人 11-17：搜尋框打基金名稱、級別或代碼也找得到（不分大小寫、忽略空白）；規則同雲端 gate.matchFunds。"""
+    def squash(text: str) -> str:
+        return "".join(str(text).split()).upper()
+
+    needle = squash(query)
+    if not needle:
+        return []
+    return [{"code": code, "name": fund["short_name"], "full_name": fund["name"]}
+            for code, fund in FUNDS.items()
+            if any(needle in squash(text) for text in (code, fund["short_name"], fund["name"]))]
+
+
 def taipei_today() -> str:
     return datetime.now(TAIPEI).date().isoformat()
 

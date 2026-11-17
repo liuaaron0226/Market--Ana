@@ -1955,6 +1955,25 @@
     setStatus(message, 'empty');
   }
 
+  // 基金對照頁那檔基金（本人 11-17：搜尋打基金名稱也找得到）：點了進基金頁，不記進最近搜尋（那裡只放股票）。
+  function fundItem(fund) {
+    const row = document.createElement('li');
+    row.className = 'stock-search-result';
+    const link = document.createElement('a');
+    link.href = `fund.html?code=${encodeURIComponent(fund.code)}`;
+    const title = document.createElement('strong');
+    title.textContent = fund.name;
+    const market = document.createElement('small');
+    market.className = 'stock-search-market';
+    market.textContent = `基金 · ${fund.code}`;
+    const meta = document.createElement('small');
+    meta.className = 'stock-search-meta';
+    meta.textContent = '和 0050 比含息報酬';
+    link.append(title, market, meta);
+    row.append(link);
+    return row;
+  }
+
   function resultItem(item) {
     const row = document.createElement('li');
     row.className = 'stock-search-result';
@@ -2012,11 +2031,12 @@
       if (!response.ok || payload.error) throw new Error(payload.message || '搜尋暫時無法使用');
       const items = Array.isArray(payload.items) ? payload.items : [];
       results.append(...items.map(resultItem));
+      if (!append && Array.isArray(payload.funds)) results.append(...payload.funds.filter(fund => fund?.code).map(fundItem));
       nextCursor = payload.next_cursor || null;
       more.hidden = nextCursor === null;
       const shown = results.children.length;
       setStatus(
-        shown === 0 ? `查無「${normalized}」的上市或上櫃普通股。` : `已顯示 ${shown} 檔結果，名錄資料日 ${payload.source_date || '未提供'}。`,
+        shown === 0 ? `查無「${normalized}」的上市或上櫃股票。` : `已顯示 ${shown} 檔結果，名錄資料日 ${payload.source_date || '未提供'}。`,
         shown === 0 ? 'no-results' : 'ready'
       );
     } catch (error) {
@@ -2506,24 +2526,34 @@
     }
   }
 
+  // 加入比較：代號、名稱都能打（stock-picker.js，本人 11-17）；下拉排在浮出的加入選單裡、輸入框下面。
+  function addCoreCode(code) {
+    core.status.hidden = true;
+    if (!/^[0-9A-Z]{4,6}$/.test(code)) {
+      core.status.hidden = false; core.status.textContent = '代號格式不正確。'; return;
+    }
+    if (code === '0050') {
+      core.status.hidden = false; core.status.textContent = '0050 已固定為比較基準。'; return;
+    }
+    if (coreCodes.includes(code)) {
+      core.status.hidden = false; core.status.textContent = `${code} 已在比較中。`; return;
+    }
+    if (coreCodes.length >= 5) {
+      core.status.hidden = false; core.status.textContent = '最多加入 5 檔比較標的。'; return;
+    }
+    coreCodes.push(code); core.input.value = ''; loadCore();
+  }
+
   function initCore() {
-    core.form.addEventListener('submit', event => {
+    const picker = window.StockPicker.attach(core.input, { host: core.input.closest('.core-add-menu'), inline: true, onPick: option => addCoreCode(option.code) });
+    core.form.addEventListener('submit', async event => {
       event.preventDefault();
-      const code = core.input.value.trim().toUpperCase();
-      core.status.hidden = true;
-      if (!/^[0-9A-Z]{4,6}$/.test(code)) {
-        core.status.hidden = false; core.status.textContent = '代號格式不正確。'; return;
+      const typed = core.input.value.trim();
+      const option = await picker.resolve(typed);
+      if (!option && typed && !window.StockPicker.codeOf(typed)) {
+        core.status.hidden = false; core.status.textContent = `查無「${typed}」，請改打代號或從清單選擇。`; return;
       }
-      if (code === '0050') {
-        core.status.hidden = false; core.status.textContent = '0050 已固定為比較基準。'; return;
-      }
-      if (coreCodes.includes(code)) {
-        core.status.hidden = false; core.status.textContent = `${code} 已在比較中。`; return;
-      }
-      if (coreCodes.length >= 5) {
-        core.status.hidden = false; core.status.textContent = '最多加入 5 檔比較標的。'; return;
-      }
-      coreCodes.push(code); core.input.value = ''; loadCore();
+      addCoreCode(option ? option.code : typed.toUpperCase());
     });
     core.period.addEventListener('change', () => { if (coreReport) renderCore(coreReport); });
     renderCoreSelection();

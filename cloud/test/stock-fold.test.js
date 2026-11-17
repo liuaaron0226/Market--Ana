@@ -24,6 +24,7 @@ function loadComparison() {
     createElement: element, createElementNS: element, querySelectorAll: () => [], addEventListener() {},
   };
   const window = {
+    StockPicker: { attach: () => ({ resolve: async () => null, close() {} }), codeOf: () => null },
     Intraday: { createPoller: () => ({ start() {}, stop() {} }), projectAnalysis: (value) => value },
     KChartMath: { normalizePeriods: (values) => values },
     addEventListener() {},

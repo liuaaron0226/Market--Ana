@@ -20,6 +20,7 @@ function loadStockWindow() {
     createElement: element, createElementNS: element, querySelectorAll: () => [], addEventListener() {},
   };
   const window = {
+    StockPicker: { attach: () => ({ resolve: async () => null, close() {} }), codeOf: () => null },
     Intraday: { createPoller: () => ({ start() {}, stop() {} }), projectAnalysis: value => value },
     KChartMath: { normalizePeriods: values => [...new Set(values.map(Number).filter(value => value >= 2).map(value => Math.min(240, Math.round(value))))].slice(0, 4) },
     addEventListener() {},
