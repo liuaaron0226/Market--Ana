@@ -749,7 +749,8 @@
 
   // 籌碼卡與直白分析（本人 2026-11-06：選 B、多一點數據、直白分析、要提空單與融資）
   const CH = OV.chips || null;
-  const PL = OV.plain || null;
+  // 過期（比行情資料日舊）就整份不用：籌碼卡詳情也不拿舊的解讀配新數字（本人 11-14「過期就隱藏」）。
+  const PL = plainStale ? null : (OV.plain || null);
   const NOW = OV.current || null;   // 最新一天各項的前 10 與連續天數（本人 11-07 定案）
   const shortDay = date => (date ? date.slice(5).replace('-', '/') : '');
   function spark(values, tone, signedAxis) {
@@ -801,7 +802,7 @@
         const [who, ...rest] = String(p.title).split('：');
         return rest.length ? `<li><b>${esc(who)}</b><span>${esc(rest.join('：'))}</span></li>` : `<li><b>${esc(p.title)}</b><span>${esc(p.lines[0] || '')}</span></li>`;
       }).join('');
-      $('readDate').textContent = `股價、外資、期貨：${PL.data_dates.price_and_foreign.slice(5).replace('-', '/')}；融資融券：${PL.data_dates.margin.slice(5).replace('-', '/')}${PL.data_dates.margin < PL.data_dates.price_and_foreign ? '（官方還沒公布最新一天）' : ''}`;
+      $('readDate').textContent = plainFootnote(PL);
     }
     $('readCard').addEventListener('click', () => openPanel('plain', {}, $('readCard')));
   }
@@ -944,7 +945,7 @@
     return `<div class="chip-top${card.tone === 'mid' ? '' : ` tone-${card.tone}`}"><strong class="chip-value num">${esc(card.value)}</strong><span>${esc(card.read)}</span></div>
       <div class="chip-big">${clickableBars(key, chipDay(key))}</div>
       ${watch.length ? `<p class="chip-watch"><i>注意</i><span>${watch.map(esc).join(' ')}</span></p>` : ''}
-      ${lines.length ? `<div class="chip-points more-wrap"><ul>${lines.map((line, i) => `<li${i >= POINT_ROWS ? ' class="is-extra"' : ''}>${esc(line)}</li>`).join('')}</ul>${lines.length > POINT_ROWS ? moreButton(`還有 ${lines.length - POINT_ROWS} 點 ›`) : ''}</div>` : ''}
+      ${lines.length ? `<div class="chip-points more-wrap"><ul>${lines.map((line, i) => `<li${i >= POINT_ROWS ? ' class="is-extra"' : ''}>${esc(line)}</li>`).join('')}</ul>${lines.length > POINT_ROWS ? moreButton(`還有 ${lines.length - POINT_ROWS} 點 ›`) : ''}<p class="read-date plain-note">${esc(plainFootnote(PL))}</p></div>` : ''}
       <div class="chip-list-head"><h4 id="chipListTitle"></h4>${sides ? segmented('side', sides.map((label, i) => [i, label]), chipSide()) : ''}</div>
       <div id="chipList"></div>`;
   }
@@ -1028,9 +1029,22 @@
     chart.addEventListener('pointercancel', event => finish(event, true));
     return () => performance.now() - releasedAt < BAR_STRAY_CLICK_MS;
   }
+  // 白話分析的小字：照實標資料日與來源（本人 11-17 起每天重寫；ai＝Gemini 寫、數字由程式核對，template＝程式依數字套句）。
+  function plainFootnote(pl) {
+    if (!pl || !pl.data_dates) return '';
+    const day = value => String(value || '').slice(5).replace('-', '/');
+    const price = pl.data_dates.price_and_foreign;
+    // 資料日以加權指數那天為準；外資、期貨、融資融券哪一份比它晚公布，就另外標它自己的日子
+    const late = [['foreign', '外資'], ['futures', '期貨'], ['margin', '融資融券']]
+      .filter(([key]) => pl.data_dates[key] && pl.data_dates[key] < price)
+      .map(([key, label]) => `${label} ${day(pl.data_dates[key])}`);
+    const dates = `資料 ${day(price)}${late.length ? `（${late.join('、')}）` : ''}`;
+    const from = pl.source === 'ai' ? 'AI 整理，數字已由程式核對' : pl.source === 'template' ? '依當天數字自動整理' : '';
+    return from ? `${dates}・${from}` : dates;
+  }
   function renderPlainPanel() {
     if (!PL) return '';
-    return `<p class="read-line big">${esc(PL.one_line)}</p>${PL.points.map(p => `<section class="plain-group"><h4>${esc(p.title)}</h4><ul>${p.lines.map(l => `<li>${esc(l)}</li>`).join('')}</ul></section>`).join('')}<section class="plain-group plain-watch"><h4>要擔心</h4><ul>${PL.worry.map(l => `<li>${esc(l)}</li>`).join('')}</ul></section><section class="plain-group"><h4>什麼時候比較安心</h4><ul>${PL.relief.map(l => `<li>${esc(l)}</li>`).join('')}</ul></section>`;
+    return `<p class="read-line big">${esc(PL.one_line)}</p>${PL.points.map(p => `<section class="plain-group"><h4>${esc(p.title)}</h4><ul>${p.lines.map(l => `<li>${esc(l)}</li>`).join('')}</ul></section>`).join('')}<section class="plain-group plain-watch"><h4>要擔心</h4><ul>${PL.worry.map(l => `<li>${esc(l)}</li>`).join('')}</ul></section><section class="plain-group"><h4>什麼時候比較安心</h4><ul>${PL.relief.map(l => `<li>${esc(l)}</li>`).join('')}</ul></section><p class="read-date plain-note">${esc(plainFootnote(PL))}</p>`;
   }
 
   function renderCandlePanel(index) {

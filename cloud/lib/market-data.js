@@ -70,10 +70,11 @@ const chipsView = (c) => ({
   margin: pickAll(c.margin, ["date", "margin_balance_billion", "short_units"]),
 });
 
+// source：本人 11-17 起每天重寫，ai＝Gemini 寫、數字由程式核對；template＝模型沒寫成時程式依數字套句；人寫的舊版沒有這欄。
 const plainView = (p) => ({
-  ...pick(p, ["one_line", "worry", "relief"]),
+  ...pick(p, ["one_line", "worry", "relief", "source"]),
   points: pickAll(p.points, ["key", "title", "lines"]),
-  data_dates: pick(p.data_dates, ["price_and_foreign", "margin"]),
+  data_dates: pick(p.data_dates, ["price_and_foreign", "foreign", "futures", "margin"]),
 });
 
 // 本人 11-07：每張卡「目前前 10＋連續天數」，資料小，放總覽。

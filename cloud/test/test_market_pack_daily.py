@@ -60,7 +60,7 @@ class ScriptLoadingTest(unittest.TestCase):
 
 
 class OutputContractTest(unittest.TestCase):
-    def test_human_authored_files_are_carried_over_not_regenerated(self) -> None:
+    def test_human_authored_files_are_carried_over_before_the_optional_rewrite(self) -> None:
         self.assertEqual(set(mpd.HUMAN_AUTHORED), {"dashboard-data.js", "plain-data.js"})
         self.assertEqual(set(mpd.FILES), {"analysis-data.js", "chips-data.js", "detail-data.js",
                                           "dashboard-data.js", "plain-data.js"})
@@ -208,6 +208,74 @@ class DetailCheckTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             result = mpd.check_detail({"days": [], "by_date": {}, "current": {}}, Path(tmp) / "none")
             self.assertEqual(result["status"], "failed")
+
+
+class PlainDailyTest(unittest.TestCase):
+    """本人 11-17：首頁「籌碼與資金」白話分析改成每天依當天數字重寫；開關 MARKET_ANA_PLAIN_DAILY 預設關。
+    內容與核對的細節在 test_plain_daily.py；這裡只測大盤包這一端：什麼時候覆寫、出錯時絕不擋發布。"""
+
+    def setUp(self) -> None:
+        import sys
+        sys.path.insert(0, str(ROOT))
+        from test_plain_daily import good_ai, market
+        self.good_ai = good_ai
+        self.tmp = tempfile.TemporaryDirectory()
+        self.out = Path(self.tmp.name) / "out"
+        self.out.mkdir()
+        self.audit_dir = Path(self.tmp.name) / "audit"
+        analysis, chips = market()
+        mpd._write_assignment(self.out / "analysis-data.js", "window.MARKET_ANALYSIS = ", analysis)
+        mpd._write_assignment(self.out / "chips-data.js", "window.MARKET_CHIPS = ", chips)
+        self.carried = "window.MARKET_PLAIN = " + json.dumps({"id": "人寫"}, ensure_ascii=False) + ";"
+        (self.out / "plain-data.js").write_text(self.carried, encoding="utf-8")
+        self.calls = 0
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def rewrite(self, mode):
+        def ask(prompt, schema):
+            self.calls += 1
+            return "ok", self.good_ai(), ""
+        return mpd._rewrite_plain(self.out, "2026-11-06", environ={"PLAIN_DAILY_MODE": mode},
+                                  audit_dir=self.audit_dir, ask_model=ask)
+
+    def carried_kept(self) -> bool:
+        return (self.out / "plain-data.js").read_text(encoding="utf-8") == self.carried
+
+    def test_off_keeps_the_carried_file_and_calls_nothing(self) -> None:
+        self.assertEqual(self.rewrite("off"), {"mode": "off"})
+        self.assertTrue(self.carried_kept())
+        self.assertEqual(self.calls, 0)
+
+    def test_on_replaces_the_file_with_todays_checked_text(self) -> None:
+        summary = self.rewrite("on")
+        plain = mpd._read_assignment(self.out / "plain-data.js", "window.MARKET_PLAIN = ")
+        self.assertEqual((plain["source"], summary["source"], summary["published"]), ("ai", "ai", True))
+
+    def test_dry_run_keeps_the_page(self) -> None:
+        self.rewrite("dry")
+        self.assertTrue(self.carried_kept())
+        self.assertEqual(self.calls, 1)
+
+    def test_broken_inputs_keep_the_carried_file_and_do_not_raise(self) -> None:
+        (self.out / "chips-data.js").write_text("broken", encoding="utf-8")
+        summary = self.rewrite("on")
+        self.assertTrue(self.carried_kept())
+        self.assertIn("rewrite_failed", summary["failure"])
+
+    def test_even_a_broken_plain_module_does_not_stop_the_market_pack(self) -> None:
+        import plain_daily
+        from unittest import mock
+        with mock.patch.object(plain_daily, "rewrite_pack", side_effect=AttributeError("壞掉")):
+            summary = self.rewrite("on")
+        self.assertTrue(self.carried_kept())
+        self.assertFalse(summary["published"])
+
+    def test_build_rewrites_only_after_the_cutoff_check(self) -> None:
+        import inspect
+        source = inspect.getsource(mpd.build)
+        self.assertLess(source.index("analysis_cutoff"), source.index("_rewrite_plain("))
 
 
 if __name__ == "__main__":
