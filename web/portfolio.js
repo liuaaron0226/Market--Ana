@@ -51,23 +51,12 @@
     $('levelPanel').hidden = !features.level_advice;
   }
 
-  function setThemeLabel() {
-    const dark = getComputedStyle(document.documentElement).colorScheme.includes('dark');
-    $('portfolioTheme').setAttribute('aria-label', dark ? '改用淺色主題' : '改用深色主題');
-  }
-  $('portfolioTheme').addEventListener('click', () => {
-    const root = document.documentElement;
-    const dark = getComputedStyle(root).colorScheme.includes('dark');
-    root.dataset.theme = dark ? 'light' : 'dark';
-    try { localStorage.setItem('market-theme', root.dataset.theme); } catch (_) {}
-    setThemeLabel();
-  });
+  // 主題在設定浮板裡切換（settings.js，本人 11-17 選樣品 A）；這一頁沒有要跟著重畫的圖
   function readSavedTheme() {
     try {
       const saved = localStorage.getItem('market-theme');
       if (saved === 'light' || saved === 'dark') document.documentElement.dataset.theme = saved;
     } catch (_) {}
-    setThemeLabel();
   }
   readSavedTheme();
   // 按瀏覽器「上一頁」回來時頁面是整頁還原的，要再讀一次存起來的主題（可能在別頁改過）
@@ -1050,8 +1039,7 @@
 
   loadReleaseFeatures().then(async () => {
     await Promise.all([loadWatchlist(), loadHoldings(), ...(features.level_advice ? [loadLevel()] : [])]);
-    // 到價推播（F 票）收在頁首的鈴鐺後面（本人 11-17）：只有站主、關注開關打開而且推播可用時鈴鐺才出現。
-    if (features.watchlist_watch_v1 && window.WatchPush) window.WatchPush.attach({ opener: $('pushOpen'), dialog: $('pushDialog'), host: $('pushPanel') });
+    // 到價推播（F 票）在頁首齒輪的設定浮板裡（settings.js，本人 11-17 選樣品 A）
     await loadAiDigest();
     listReady = true;
     renderList();

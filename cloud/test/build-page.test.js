@@ -28,7 +28,8 @@ test("帶版本 query 的 kchart 標籤也能插入雲端資料來源，且插�
   assert.match(out, /<script src="\/market-data-cloud\.js"><\/script>\n  <script src="kchart\.js\?v=20261109-ux1">/);
   assert.ok(out.indexOf("/market-data-cloud.js") < out.indexOf("kchart.js?v="));
   assert.doesNotMatch(out, /analysis-data\.js/);
-  assert.match(out, /<script src="\/owner-entry\.js" defer><\/script>\n<\/body>/);
+  // 帳號管理與 Gemini 設定的入口 11-17 起在設定浮板裡（settings.js），不再插右下角的浮動鈕
+  assert.doesNotMatch(out, /owner-entry/);
 });
 
 test("沒有版本 query 的舊寫法照常可用", () => {

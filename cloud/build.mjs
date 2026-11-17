@@ -111,7 +111,7 @@ const statusInfo = validateDataStatus(dataStatus);
 writeFileSync(new URL("functions/_data-status.js", root), dataStatusModuleText(dataStatus));
 
 // 部署前掃描：dist 只能有允許的檔，且不得含資料或本機路徑。
-const ALLOWED = new Set([...WEB_FILES, "index.html", "_headers", "_routes.json", "owner-entry.js", "market-data-cloud.js",
+const ALLOWED = new Set([...WEB_FILES, "index.html", "_headers", "_routes.json", "market-data-cloud.js",
   "apply/index.html", "apply/apply.js", "apply/account.css", "admin/index.html", "admin/admin.js", "admin/account.css",
   "gemini/index.html", "gemini/gemini.js", "gemini/account.css"]);
 const listed = [];

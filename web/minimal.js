@@ -1744,33 +1744,22 @@
   window.addEventListener('pageshow', event => {
     if (!event.persisted) return;
     readSavedTheme();
-    updateThemeText();
     chart && chart.draw();
     requestAnimationFrame(updateOverlayControls);
   });
 
-  function updateThemeText() {
-    const dark = getComputedStyle(root).colorScheme.includes('dark');
-    $('themeText').textContent = dark ? '改用淺色' : '改用深色';
-    $('themeToggle').setAttribute('aria-label', dark ? '改用淺色主題' : '改用深色主題');
-  }
-  $('themeToggle').addEventListener('click', () => {
-    const dark = getComputedStyle(root).colorScheme.includes('dark');
-    root.dataset.theme = dark ? 'light' : 'dark';
-    try { localStorage.setItem(THEME_KEY, root.dataset.theme); } catch (_) { /* 私密視窗可能存不了 */ }
-    updateThemeText();
+  // 主題在設定浮板裡切換（settings.js，本人 11-17 選樣品 A），切換後發 market:theme：圖用新的顏色重畫
+  document.addEventListener('market:theme', () => {
     chart && chart.draw();
     requestAnimationFrame(updateOverlayControls);
   });
   matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
     if (!root.dataset.theme) {
-      updateThemeText();
       chart && chart.draw();
       requestAnimationFrame(updateOverlayControls);
     }
   });
 
-  updateThemeText();
   renderChips();
   loadPeriod('daily', true);
   api.ready = true;

@@ -1,0 +1,123 @@
+/* 設定浮板（本人 2026-11-17 選樣品 A：齒輪浮板＋三顆籤；畫面在 settings.js）。
+   和到價推播原本的浮層同一套：第 2 層的板（--float／--float-shadow），桌機浮在右上角齒輪下方、手機從下緣升起。
+   陰影、圓角只用 bold.css 的變數。 */
+
+/* ---------- 桌面背景的選擇：只換首頁與個股頁的桌面兩個顏色（自選股頁沒有桌面底色，不受影響）；只有淺色主題換 ----------
+   色值只寫在這裡：--desk-<key> 是桌面、--desk-<key>-hi 是左上角那片光；設定浮板的色票也讀同一組。米白照 bold.css 的淺色 --desk。 */
+:root {
+  --desk-beige: #e9e5dc; --desk-sand: #e6ddcc; --desk-paper: #efebe3; --desk-mist: #e4e3df; --desk-sage: #e1e3da;
+  --desk-sand-hi: #efe8db; --desk-paper-hi: #f7f5f0; --desk-mist-hi: #eeedea; --desk-sage-hi: #ecede6;
+}
+:root[data-theme="light"][data-desk="sand"]:has(> :is(body.hm, body.st))  { --desk: var(--desk-sand); --desk-hi: var(--desk-sand-hi); }
+:root[data-theme="light"][data-desk="paper"]:has(> :is(body.hm, body.st)) { --desk: var(--desk-paper); --desk-hi: var(--desk-paper-hi); }
+:root[data-theme="light"][data-desk="mist"]:has(> :is(body.hm, body.st))  { --desk: var(--desk-mist); --desk-hi: var(--desk-mist-hi); }
+:root[data-theme="light"][data-desk="sage"]:has(> :is(body.hm, body.st))  { --desk: var(--desk-sage); --desk-hi: var(--desk-sage-hi); }
+
+/* ---------- 頁首的齒輪：借各頁原本主題鍵的外觀；等待核准的人數標在右上角 ---------- */
+[data-settings-open] { position: relative; }
+[data-settings-open] svg { transition: transform 420ms var(--ease-depth, ease-out); }
+[data-settings-open][aria-expanded="true"] svg { transform: rotate(60deg); }
+/* 等待核准人數的小膠囊：齒輪右上角與浮板最下面那一列共用 */
+.st-badge, .st-link-end b {
+  min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px;
+  display: inline-grid; place-items: center; background: var(--accent); color: #fff; font: 700 12px/1 var(--mono);
+}
+.st-badge { position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px; padding: 0 5px; font-size: 11px; pointer-events: none; }
+
+/* ---------- 浮板 ---------- */
+.st-sheet:not([open]) { display: none; }
+.st-sheet {
+  width: min(420px, calc(100vw - 32px)); max-height: calc(100dvh - 96px);
+  margin: 72px max(16px, calc((100vw - 1280px) / 2 + 32px)) auto auto; padding: 18px 20px 16px;
+  border: 0; border-radius: var(--r-float); background: var(--float); box-shadow: var(--float-shadow);
+  color: var(--ink); font: 15px/1.5 var(--sans); overflow: auto; overscroll-behavior: contain;
+  animation: st-rise 320ms var(--ease-depth, ease-out);
+}
+.st-sheet:focus-visible { outline: none; }
+.st-sheet :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.st-sheet::backdrop { background: var(--scrim, rgb(28 25 20 / 42%)); }
+@keyframes st-rise { from { opacity: 0; transform: translateY(-8px) scale(.97); } }
+.st-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.st-title { margin: 0; font: 600 17px var(--serif); }
+.st-close {
+  width: 44px; height: 44px; margin: -10px -12px -10px 0; display: inline-grid; place-items: center;
+  border: 0; border-radius: var(--btn-r, 8px); background: transparent; color: var(--dim); cursor: pointer;
+}
+.st-close:hover { background: var(--panel2); color: var(--ink); }
+.st-close svg { width: 18px; height: 18px; }
+@media (max-width: 640px) {
+  .st-sheet {
+    width: 100%; max-width: none; max-height: 85dvh; margin: auto 0 0;
+    padding: 16px 16px calc(16px + env(safe-area-inset-bottom)); border-radius: var(--r-float) var(--r-float) 0 0;
+    animation-name: st-up;
+  }
+  @keyframes st-up { from { transform: translateY(100%); } }
+}
+
+/* 三顆籤：一條槽，選到的那顆是嵌在裡面的鍵 */
+.st-tabs { margin: 14px 0 6px; }
+.st-tabs[hidden] { display: none; }
+.st-track, .st-seg { display: flex; padding: var(--track-pad); gap: var(--track-gap); border-radius: var(--r-track); background: var(--well); box-shadow: var(--well-shadow); }
+.st-tab, .st-seg button {
+  flex: 1; min-height: 36px; padding: 0 12px; border: 0; border-radius: var(--r-key); background: transparent;
+  color: var(--dim); font: 500 14px var(--sans); cursor: pointer; transition: background-color 160ms var(--ease-out), color 160ms var(--ease-out);
+}
+.st-tab[aria-selected="true"], .st-seg button[aria-pressed="true"] { background: var(--key); color: var(--ink); box-shadow: var(--key-shadow); }
+@media (pointer: coarse) { .st-tab, .st-seg button { min-height: 44px; } }
+.st-pane[hidden] { display: none; }
+.st-pane:not([hidden]) { animation: st-pane 260ms var(--ease-depth, ease-out); }
+@keyframes st-pane { from { opacity: 0; transform: translateX(8px); } }
+.st-note { margin: 0; padding: 12px 0; color: var(--dim); font-size: 14px; line-height: 1.6; }
+
+/* ---------- 外觀 ---------- */
+.st-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 56px; border-top: 1px solid var(--hair); }
+.st-row:first-child { border-top: 0; }
+.st-row-stack { grid-template-columns: 1fr; padding: 12px 0 4px; }
+.st-label small { display: block; color: var(--faint); font-size: 12px; }
+.st-seg button { min-width: 64px; flex: none; }
+.st-swatches { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+.st-swatch { display: grid; gap: 6px; justify-items: center; padding: 0; border: 0; background: none; color: var(--dim); font: 12px var(--sans); cursor: pointer; }
+/* 每一張色票是一小塊桌面，上面放一小塊板 */
+.st-swatch i { position: relative; width: 100%; aspect-ratio: 1.25; border-radius: var(--r-key); background: var(--desk-beige); box-shadow: var(--well-shadow); }
+.st-swatch i::after { content: ""; position: absolute; inset: 28% 18% 22%; border-radius: var(--r-tag); background: var(--panel); box-shadow: var(--key-shadow); }
+.st-swatch[data-desk-set="sand"] i { background: var(--desk-sand); }
+.st-swatch[data-desk-set="paper"] i { background: var(--desk-paper); }
+.st-swatch[data-desk-set="mist"] i { background: var(--desk-mist); }
+.st-swatch[data-desk-set="sage"] i { background: var(--desk-sage); }
+.st-swatch[aria-pressed="true"] { color: var(--ink); font-weight: 600; }
+.st-swatch[aria-pressed="true"] i { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+/* ---------- Gemini 用量：剩餘量是一條槽，墨色往右填滿；剩不到兩成改金色 ---------- */
+.st-group { margin: 0; padding: 12px 0 2px; color: var(--dim); font-size: 12px; }
+.st-meter { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; align-items: end; padding: 6px 0 4px; }
+.st-meter-name { font-size: 14px; }
+.st-meter-val { font: 600 22px/1 var(--mono); }
+.st-meter-val small { margin-left: 2px; color: var(--faint); font-size: 12px; font-weight: 400; }
+.st-meter-bar { grid-column: 1 / -1; height: 10px; border-radius: 999px; background: var(--well); box-shadow: var(--well-shadow); overflow: hidden; }
+.st-meter-bar i { display: block; width: var(--v); height: 100%; border-radius: inherit; background: var(--ink); transform-origin: left; animation: st-fill 900ms var(--ease-depth, ease-out) both; }
+.st-meter[data-low] .st-meter-bar i { background: var(--gold); }
+.st-meter-reset { grid-column: 1 / -1; color: var(--faint); font-size: 12px; }
+@keyframes st-fill { from { transform: scaleX(0); } }
+.st-today { list-style: none; margin: 0; padding: 0; }
+.st-today li { display: grid; grid-template-columns: minmax(0, 1fr) auto 3ch; gap: 12px; align-items: center; min-height: 36px; border-top: 1px solid var(--hair); font-size: 14px; }
+.st-today li span:last-child { text-align: right; }
+.st-model { color: var(--faint); font-size: 12px; }
+.st-updated { margin: 0; padding-top: 10px; color: var(--faint); font-size: 12px; }
+
+/* ---------- 通知：到價推播的畫面由 watch-push.js 畫（樣式在 watch-push.css），這裡補上勾選框（原本借自選股頁的樣式） ---------- */
+.st-pane-notify .wp-toggle { min-height: 44px; display: inline-flex; align-items: center; gap: 8px; color: var(--dim); font-size: 14px; cursor: pointer; }
+.st-pane-notify .wp-toggle input { width: 20px; height: 20px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.st-pane-notify .wp-toggle:has(input:checked) { color: var(--ink); }
+
+/* ---------- 最下面一列 ---------- */
+.st-foot:empty { display: none; }
+.st-foot { margin-top: 8px; }
+.st-link { display: flex; align-items: center; justify-content: space-between; min-height: 48px; border-top: 1px solid var(--hair); color: var(--ink); text-decoration: none; }
+.st-link-end { display: inline-flex; align-items: center; gap: 6px; color: var(--dim); font-size: 13px; }
+.st-chev { color: var(--faint); font-size: 16px; }
+.st-link:hover .st-chev { color: var(--ink); }
+
+@media (prefers-reduced-motion: reduce) {
+  .st-sheet, .st-pane:not([hidden]), .st-meter-bar i { animation: none; }
+  [data-settings-open] svg { transition: none; }
+}
