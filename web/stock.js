@@ -111,9 +111,18 @@
     for (const group of $('periodSelect').querySelectorAll('optgroup')) {
       const longOnly = [...group.querySelectorAll('option')].every(option => FUND_PERIODS.includes(option.value));
       group.hidden = fund && !longOnly;
-      group.querySelectorAll('option').forEach(option => { option.disabled = fund && !longOnly; });
+      group.querySelectorAll('option').forEach(option => {
+        option.disabled = fund && !longOnly;
+        // 基金沒有 K 棒：日／週／月不寫「K」（原本的字記在 data-k，換回股票時還原）
+        if (longOnly) {
+          option.dataset.k ??= option.textContent;
+          option.textContent = fund ? option.dataset.k.replace('K', '') : option.dataset.k;
+        }
+      });
     }
     if (fund && !FUND_PERIODS.includes(chartPeriod)) { chartPeriod = 'daily'; $('periodSelect').value = 'daily'; }
+    $('periodSelect').dataset.line = fund ? '1' : '';
+    $('periodSelect').dispatchEvent(new Event('periodsync'));  // 週期小鍵與選單跟著改（period-switch.js）
     if (fund) {
       for (const id of ['stockFacts', 'stockFactsBlocks', 'watchPeers', 'liveBadge']) $(id).hidden = true;
       $('liveStatus').dataset.state = 'closed';

@@ -975,6 +975,8 @@
       const daily = this.chart.unit === '日';
       this.debugPicked = [];
       this.notice.hidden = daily;
+      // 線模式（基金淨值）沒有 K 棒，提示改說「日線」
+      this.notice.textContent = this.chart.line ? '日線副圖：切回日線查看' : '日線副圖：切回日K查看';
       // 非日線沒有指標區，指標的選單也跟著收起來（不然會懸在空的地方）
       if (!daily && !this.switcher.hidden) {
         this.switcher.hidden = true;

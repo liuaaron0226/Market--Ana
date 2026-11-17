@@ -334,7 +334,7 @@
       const tagged = this.overlays.filter(o => o.tag !== false);
       // 價籤寬度：五位數或帶兩位小數（例如 128.5、28.35）都要加寬，避免文字擠到短名上。
       const tagWide = tags && tagged.concat(this.candles.slice(-1)).some(o => {
-        const v = o.value ?? o.close; return v >= 10000 || (v < 1000 && fmtTag(v).length >= 6);
+        const v = o.value ?? o.close; return v >= 10000 || (v < 1000 && fmtTag(v).length >= 5);
       });
       // 短名有三個字（預測帳本的「五日線」「缺口上」）而且數字是五位數：手機寬度再加寬一點，數字的第一位才不會被短名蓋住
       const tagLong = tagWide && W < 520 && tagged.some(o => (o.short || '').length >= 3);

@@ -168,3 +168,33 @@ test("基金開關是獨立的：打開它只多 stock_funds_v1，不連帶打�
   assert.equal(policyForViewer(releasePolicy({ MARKET_ANA_STOCK_FUNDS: "owner" }), false, { MARKET_ANA_STOCK_FUNDS: "owner" }).features.stock_funds_v1, false);
   assert.equal(policyForViewer(releasePolicy({ MARKET_ANA_STOCK_FUNDS: "all" }), false, { MARKET_ANA_STOCK_FUNDS: "all" }).features.stock_funds_v1, true);
 });
+
+// 規格第 8 條：首頁搜尋點了基金，和股票一樣記進「最近搜尋」（市場記「境外基金」）。開關對這個人關著時和名錄外代號一樣查無。
+// （加自選、庫存收基金是 07 票：要先有單位數＋台幣總成本與淨值×匯率的計價，這張不開。）
+test("最近搜尋：開的人點基金會記下來（市場境外基金）；關的人查無", async () => {
+  const post = (email) => call("/api/search-history", email, {
+    method: "POST", headers: { "content-type": "application/json", origin: "https://market-ana.pages.dev" },
+    body: JSON.stringify({ code: FUND.code }),
+  });
+  for (const [value, open] of SWITCH_CASES) {
+    setSwitch(value);
+    for (const email of [OWNER, FRIEND]) {
+      const label = `${value}/${email}`;
+      const response = await post(email);
+      assert.equal(response.ok, open[email], `${label} ${response.status}`);
+      const listed = await (await call("/api/search-history", email)).json();
+      const row = listed.items.find((item) => item.code === FUND.code);
+      if (open[email]) assert.deepEqual([row?.name, row?.market], [FUND.name, "境外基金"], label);
+    }
+  }
+});
+
+test("最近搜尋：基金名錄的表還沒建（0026 未套）時，股票照常記錄", async () => {
+  env.MARKET_ANA_STOCK_FUNDS = "all";
+  env.DB._raw.exec("DROP TABLE fund_securities");
+  const response = await call("/api/search-history", OWNER, {
+    method: "POST", headers: { "content-type": "application/json", origin: "https://market-ana.pages.dev" },
+    body: JSON.stringify({ code: "2330" }),
+  });
+  assert.equal(response.ok, true, String(response.status));
+});

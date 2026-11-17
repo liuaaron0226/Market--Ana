@@ -176,6 +176,24 @@ await db.prepare("INSERT INTO universe_outside (version, code, name, market, uni
   .bind(VERSION, OUTSIDE.code, OUTSIDE.name, OUTSIDE.market).run();
 await db.prepare("INSERT INTO stock_data_state (key, active_version, previous_version, updated_at) VALUES ('current', ?, NULL, ?)").bind(VERSION, `${stockPack.as_of}T12:01:00Z`).run();
 
+// 基金當成一般個股 03 票：基金名錄、kind fund 的分析與淨值長日線，用正式的 fund_stock（讀 seeds/funds 回補原件＋本機每日抽取檔）
+// 以今天為資料日產生一份，和每日建置寫進 D1 的同一個樣子。基金開關比照正式站的打算先「只開站主」（預覽以站主登入）。
+{
+  const run = spawnSync("python", ["-c", "import json,sys,fund_compare,fund_stock; d=fund_compare.taipei_today(); rows,an,_=fund_stock.fund_rows(d); json.dump({'rows':rows,'analyses':an,'history':fund_stock.history_payloads(d)}, sys.stdout, ensure_ascii=False)"],
+    { cwd: fileURLToPath(root), encoding: "utf8", maxBuffer: 64 * 1024 * 1024, env: { ...process.env, PYTHONIOENCODING: "utf-8" } });
+  if (run.status !== 0) notes.push("基金資料算不出來（需要 python 與 fund_stock.py）：搜尋不到基金。");
+  else {
+    const fund = JSON.parse(run.stdout);
+    for (const row of fund.rows) {
+      await db.prepare("INSERT INTO fund_securities (version, code, name, full_name, currency, isin, latest_bar_date, available_bars, analysis_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .bind(VERSION, row.code, row.name, row.full_name, row.currency, row.isin, row.latest_bar_date, row.available_bars, row.analysis_status).run();
+    }
+    for (const row of fund.analyses) await db.prepare("INSERT INTO stock_analysis (version, code, as_of, payload) VALUES (?, ?, ?, ?)").bind(VERSION, row.code, row.as_of, JSON.stringify(row.payload)).run();
+    for (const [code, payload] of Object.entries(fund.history)) await db.prepare("INSERT INTO stock_history (code, data_date, payload) VALUES (?, ?, ?)").bind(code, payload.as_of, JSON.stringify(payload)).run();
+    env.MARKET_ANA_STOCK_FUNDS = "owner";
+  }
+}
+
 async function asUser(email, path, { method = "GET", body } = {}) {
   const origin = `http://127.0.0.1:${port}`;
   const headers = new Headers({ origin, "content-type": "application/json" });

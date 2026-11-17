@@ -3,7 +3,7 @@
 // 任何設定缺漏或資料庫錯誤一律拒絕。
 import { verifyAccessJwt } from "./jwt.js";
 import { detailFor } from "./market-data.js";
-import { etfTableMissing, handleUserPortfolio, UserPortfolioError } from "./user-portfolio.js";
+import { handleUserPortfolio, UserPortfolioError } from "./user-portfolio.js";
 import { handleUserDrawings } from "./user-drawings.js";
 import { defaultLiveQuoteService } from "./live-quotes.js";
 import { fetchTickPage } from "./live-ticks.js";
@@ -648,7 +648,9 @@ async function handleUserDataApi(request, env, path, email, deps, access) {
   if (WATCH_PATH.test(path)) return handleWatchApi(request, env, path, email, deps, access);
   if (WATCH_PEERS_PATH.test(path)) return handleWatchPeersApi(request, env, path, email, deps, access);
   // ETF 上站：加自選／持股時，名單內 ETF 算不算在分析範圍內，看 ETF 開關對這個人開不開。
-  return handleUserPortfolio(request, env, path, email, { ...deps, includeEtfs: stockEtfsVisible(env, access.isOwner) });
+  // 基金（03 票）：最近搜尋收不收基金，看基金開關對這個人開不開。
+  return handleUserPortfolio(request, env, path, email, { ...deps, includeEtfs: stockEtfsVisible(env, access.isOwner),
+    includeFunds: stockFundsVisible(env, access.isOwner) });
 }
 
 // 讀狀態（首頁入口每一頁都會讀）走一般個人資料的額度；保存、同意、刪除才扣 friendAi。

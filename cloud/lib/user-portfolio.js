@@ -49,26 +49,33 @@ export async function readBody(request) {
   }
 }
 
-// ETF 上站（12 票）：ETF 名錄的表（0018）還沒套到資料庫時，讀它的地方當作沒有 ETF，其他照常。
-export function etfTableMissing(error) {
-  return /no such table: etf_securities/.test(String(error?.message));
-}
-
 // deps.includeEtfs 由入口依 ETF 開關決定；開的人，名單內的 ETF 也算在分析範圍內。
-async function securityFor(db, code, deps) {
-  const directory = (withEtfs) => db.prepare(
+// 基金（基金當成一般個股 03 票）：只有 { funds: true } 的呼叫（目前是最近搜尋）而且 deps.includeFunds（基金開關對這個人開）才查基金名錄；
+// 加自選與庫存收基金等 07 票（單位數＋台幣總成本、淨值×匯率計價）一起開。
+async function securityFor(db, code, deps, { funds = false } = {}) {
+  const extra = [
+    deps.includeEtfs && { table: "etf_securities", sql: "UNION ALL SELECT version, code, name, market, 1 AS in_universe FROM etf_securities " },
+    funds && deps.includeFunds && { table: "fund_securities",
+      sql: "UNION ALL SELECT version, code, name, '境外基金' AS market, 1 AS in_universe FROM fund_securities " },
+  ].filter(Boolean);
+  const directory = () => db.prepare(
     "SELECT x.code, x.name, x.market, x.in_universe FROM stock_data_state s JOIN (" +
       "SELECT version, code, name, market, 1 AS in_universe FROM listed_securities " +
-      (withEtfs ? "UNION ALL SELECT version, code, name, market, 1 AS in_universe FROM etf_securities " : "") +
+      extra.map((part) => part.sql).join("") +
       "UNION ALL SELECT version, code, name, market, 0 AS in_universe FROM universe_outside" +
       ") x ON x.version = s.active_version WHERE s.key = 'current' AND x.code = ? LIMIT 1",
   ).bind(code).first();
-  let row;
-  try {
-    row = await directory(Boolean(deps.includeEtfs));
-  } catch (error) {
-    if (!deps.includeEtfs || !etfTableMissing(error)) throw error;
-    row = await directory(false);
+  let row = null;
+  // 名錄表（0018、0026）還沒套到資料庫時，當作沒有那份名錄，其他照常。
+  for (;;) {
+    try {
+      row = await directory();
+      break;
+    } catch (error) {
+      const missing = extra.findIndex((part) => new RegExp(`no such table: ${part.table}`).test(String(error?.message)));
+      if (missing < 0) throw error;
+      extra.splice(missing, 1);
+    }
   }
   if (row) return row;
   // 名錄外的代號才問證交所即時行情；那裡只認得上市櫃股票的形狀（基金這類長代碼不拿去問）
@@ -436,7 +443,7 @@ async function listSearchHistory(db, email) {
 async function saveSearchHistory(request, db, email, deps) {
   const body = await readBody(request);
   const code = codeFrom(body.code);
-  const security = await securityFor(db, code, deps);
+  const security = await securityFor(db, code, deps, { funds: true });
   const existing = await db.prepare("SELECT 1 AS found FROM user_search_history WHERE email = ? AND code = ?").bind(email, code).first();
   const at = new Date((deps.now || Date.now)()).toISOString();
   await db.prepare(
