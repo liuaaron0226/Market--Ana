@@ -1,0 +1,81 @@
+{
+  "schema": "fund-backfill/v1",
+  "fund_code": "BLKTENAU",
+  "isin": "LU2533723974",
+  "name": "貝萊德世界科技基金 A10美元(總報酬穩定配息)",
+  "method": "內建瀏覽器以人的速度開啟集保「基金資訊觀測站」網頁、點選畫面上的期間與分頁；只記錄頁面自己發出的請求所收到的回應，沒有另外呼叫任何 API，沒有遇到驗證碼。核對：寫檔後的 SHA-256 與頁內對同一份內容算的 SHA-256 相同。",
+  "owner_decision": "2026-11-17 owner session 定案：用瀏覽器以人的速度從集保網頁讀一次、存原件（含讀取時間與網址），遇到驗證碼就停下回報，不打內部 API、不解驗證碼。",
+  "files": [
+    {
+      "file": "nav-backfill.csv",
+      "kind": "nav",
+      "page_url": "https://www.fundclear.com.tw/fund-basic-info?site=offshore&key=BLKTENAU&tab=fund-nav",
+      "page_action": "淨值期間點「五年」",
+      "response_of": "POST /api/offshore/fund-basic/query-nav-value/picture",
+      "request_body": "{\"fundCode\":\"BLKTENAU\",\"startDate\":\"2021/11/17\",\"endDate\":\"2026/11/16\"}",
+      "read_at": "2026-11-17T14:02:51.055Z",
+      "format": "回應是 991 筆 {navDate, nav, navChangeRate, newestNav} 的 JSON 陣列；本檔只留 navDate（改成 YYYY-MM-DD）與 nav 原字串，依日期由舊到新、每行一筆、結尾換行。",
+      "raw_response_bytes": 84115,
+      "raw_response_sha256": "51e821467c7719141d33f4b81eab4029023f67e469fcd4aecc2913e72bbc263e",
+      "rows": 991,
+      "first": "2022-12-01",
+      "last": "2026-11-16",
+      "sha256": "668a7277e32f5b23b28f5085a5e6352968dd2b6463fa84ed900c39ae4db85f25"
+    },
+    {
+      "file": "distributions-backfill-p1.json",
+      "kind": "distributions",
+      "page_url": "https://www.fundclear.com.tw/fund-basic-info?site=offshore&key=BLKTENAU&tab=latest-distribution",
+      "page_action": "配息基準日 2019年1月～2026年11月，按「查詢」",
+      "response_of": "POST /api/offshore/fund-basic/query-latest-nav",
+      "request_body": "{\"fundCode\":\"BLKTENAU\",\"startDate\":\"2019/01\",\"endDate\":\"2026/11\",\"_pageNum\":1,\"_pageSize\":10}",
+      "read_at": "2026-11-17T14:05:32.104Z",
+      "format": "原始回應全文（未改動）",
+      "sha256": "fa6d8d5bfcec722f169f280dbb15182e3d990430d7727e140f685bbbb1943a8e"
+    },
+    {
+      "file": "distributions-backfill-p2.json",
+      "kind": "distributions",
+      "page_url": "https://www.fundclear.com.tw/fund-basic-info?site=offshore&key=BLKTENAU&tab=latest-distribution",
+      "page_action": "表格下方按「下一頁」",
+      "response_of": "POST /api/offshore/fund-basic/query-latest-nav",
+      "request_body": "{\"fundCode\":\"BLKTENAU\",\"startDate\":\"2019/01\",\"endDate\":\"2026/11\",\"_pageNum\":2,\"_pageSize\":10}",
+      "read_at": "2026-11-17T14:05:52.590Z",
+      "format": "原始回應全文（未改動）",
+      "sha256": "bb44e62b757cbe69ec0d4275a60307928775d7173ce3a422259b933b2fd3f5fe"
+    },
+    {
+      "file": "distributions-backfill-p3.json",
+      "kind": "distributions",
+      "page_url": "https://www.fundclear.com.tw/fund-basic-info?site=offshore&key=BLKTENAU&tab=latest-distribution",
+      "page_action": "表格下方按「下一頁」",
+      "response_of": "POST /api/offshore/fund-basic/query-latest-nav",
+      "request_body": "{\"fundCode\":\"BLKTENAU\",\"startDate\":\"2019/01\",\"endDate\":\"2026/11\",\"_pageNum\":3,\"_pageSize\":10}",
+      "read_at": "2026-11-17T14:06:05.566Z",
+      "format": "原始回應全文（未改動）",
+      "sha256": "4e818c3106df6aa8031bd1c8afd1b58a90cfd7717862e29f5ac06764dce097d5"
+    },
+    {
+      "file": "distributions-backfill-p4.json",
+      "kind": "distributions",
+      "page_url": "https://www.fundclear.com.tw/fund-basic-info?site=offshore&key=BLKTENAU&tab=latest-distribution",
+      "page_action": "表格下方按「下一頁」",
+      "response_of": "POST /api/offshore/fund-basic/query-latest-nav",
+      "request_body": "{\"fundCode\":\"BLKTENAU\",\"startDate\":\"2019/01\",\"endDate\":\"2026/11\",\"_pageNum\":4,\"_pageSize\":10}",
+      "read_at": "2026-11-17T14:06:09.517Z",
+      "format": "原始回應全文（未改動）",
+      "sha256": "ef527f01b84595b4338a762bc0a2c576b6b7eb76504f453353b7b9c8ef5db97f"
+    },
+    {
+      "file": "distributions-backfill-p5.json",
+      "kind": "distributions",
+      "page_url": "https://www.fundclear.com.tw/fund-basic-info?site=offshore&key=BLKTENAU&tab=latest-distribution",
+      "page_action": "表格下方按「下一頁」",
+      "response_of": "POST /api/offshore/fund-basic/query-latest-nav",
+      "request_body": "{\"fundCode\":\"BLKTENAU\",\"startDate\":\"2019/01\",\"endDate\":\"2026/11\",\"_pageNum\":5,\"_pageSize\":10}",
+      "read_at": "2026-11-17T14:06:13.544Z",
+      "format": "原始回應全文（未改動）",
+      "sha256": "c04dfed65049d03b9ae51650db100b4a1f12d9615eaa3f0fc89134ea8f04ab57"
+    }
+  ]
+}
