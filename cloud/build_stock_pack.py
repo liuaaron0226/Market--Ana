@@ -86,7 +86,7 @@ def _validate_strategy(
     *,
     institutional_day: Decimal | None,
     institutional_5d: Decimal | None,
-    kind: object = None,
+    kind: object,
 ) -> None:
     if not isinstance(strategy, dict):
         raise ValueError(f"payload strategy 必須是 object：{code}")

@@ -137,7 +137,7 @@ const FUND_STRATEGY_LEVELS = {
   strategy: { strategy_version: "fund-nav-close-v1", recommendation: "減碼", reason: "淨值和月線都跌到季線下，趨勢向下；先降低部位，跌破停損價不等反彈。",
     prices: { entry: 17.11, add: null, stop: 15.01, target: 17.76 }, evidence_strength: "完整",
     signals: { close: 17.14, ma20: 18.733, ma60: 20.3378 } },
-  levels: { status: "available", method: "fund-nav-close-v1", aggregation_tolerance_pct: 1.31, observable_range_pct: 20,
+  levels: { status: "available", aggregation_tolerance_pct: 1.31, observable_range_pct: 20,
     resistance: [FUND_LEVEL(17.76, 3.62, ["ma5", "ma10"]), FUND_LEVEL(18.67, 8.93, ["swing_low", "ma20"])],
     support: [FUND_LEVEL(17.11, -0.18, ["low_20", "low_60", "swing_low"]), FUND_LEVEL(15.01, -12.43, ["low_240"])],
     resistance_all: [], support_all: [], no_resistance_above: false, limit_up_reference: null },

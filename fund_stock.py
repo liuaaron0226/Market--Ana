@@ -17,7 +17,8 @@
 一、會被當成壓力／支撐的價（全部取自淨值）
   - 均線：5 日、10 日、月線（20 日）、季線（60 日）、半年線（120 日）、年線（240 日）的平均淨值；筆數不夠的那條不算。
   - 近期高低點：近 20 日、近 60 日、近一年（240 個淨值日）的最高與最低淨值。
-  - 轉折點：最近 120 個淨值日裡，比前後各 5 天都高（低）的那天淨值。
+  - 轉折點：最近 120 個淨值日裡，比前 5 天都高、後 5 天沒有更高的那天淨值（低點反過來）；後面幾天持平時算較早那天。
+    最近 5 天還看不到「後 5 天」，不算轉折點。
 二、把很接近的價併成一群
   - 「很接近」＝和這群第一個價相差不到容差；容差＝近 14 天平均每日漲跌幅 × 0.6，最少 1%、最多 3%
     （和股票的聚合容差同一個公式，只是股票用 ATR，基金沒有高低價，用每日淨值漲跌）。
@@ -44,7 +45,7 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 import fund_compare
-from twon_analysis.strategy_v1 import _price_plan
+from twon_analysis.strategy_v1 import _price_plan as stock_price_plan  # 和股票同一套四個價的取法
 
 ANALYSIS_SCHEMA = "stock-analysis/v2"
 HISTORY_SCHEMA = "stock-history/v1"
@@ -62,7 +63,7 @@ MA_LABELS = {5: "5 日均線", 10: "10 日均線", 20: "月線（20 日均線）
              120: "半年線（120 日均線）", 240: "年線（240 日均線）"}
 RANGE_LABELS = {20: "近 20 日", 60: "近 60 日", 240: "近一年"}
 SWING_LOOKBACK = 120             # 轉折點只看最近 120 個淨值日
-SWING_SIDE = 5                   # 比前後各 5 天都高（低）才算轉折點
+SWING_SIDE = 5                   # 比前 5 天都高、後 5 天沒有更高才算轉折高點（低點反過來）
 VOLATILITY_DAYS = 14
 STRUCTURAL_KINDS = frozenset({"high_20", "low_20", "high_60", "low_60", "high_240", "low_240",
                               "swing_high", "swing_low", "ma60", "ma120", "ma240"})
@@ -169,7 +170,7 @@ def nav_levels(navs: Sequence[tuple[str, float]]) -> dict[str, Any]:
     resistance_all = [c for c in (_cluster(g, close, "resistance") for g in _groups(above, tolerance)) if _qualified(c)]
     support_all = [c for c in (_cluster(g, close, "support") for g in _groups(below, tolerance)) if _qualified(c)]
     return {
-        "status": "available", "method": STRATEGY_VERSION, "aggregation_tolerance_pct": tolerance,
+        "status": "available", "aggregation_tolerance_pct": tolerance,
         "observable_range_pct": FAR_PCT,
         "resistance": [c for c in resistance_all if c["tier"] != "far"][:2],
         "support": [c for c in support_all if c["tier"] != "far"][:2],
@@ -184,7 +185,7 @@ def nav_strategy(navs: Sequence[tuple[str, float]], levels: dict[str, Any]) -> d
     close = closes[-1]
     ma20 = sum(closes[-20:]) / 20
     ma60 = sum(closes[-60:]) / 60
-    prices = _price_plan(close, levels)
+    prices = stock_price_plan(close, levels)
     if ma20 >= ma60 and close >= ma20:
         recommendation, reason = "持有", "淨值在月線上、月線在季線上，趨勢向上；續抱到目標價，跌破停損價就出場。"
     elif ma20 >= ma60 and ma60 <= close < ma20 and prices["entry"] is not None and prices["target"] is not None:
