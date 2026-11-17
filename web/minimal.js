@@ -7,7 +7,9 @@
     OV = window.MarketData ? await window.MarketData.overview() : null;
   } catch (error) {
     const note = document.getElementById('serviceNote');
-    if (note) { note.hidden = false; note.textContent = error && error.message ? error.message : '暫時無法取得資料。'; }
+    // 雲端資料層（MarketDataError，帶 kind）的中文說明可以直接顯示；其他原文（例如 JSON 解析錯誤）只進 console。
+    console.warn('[資料讀取]', error);
+    if (note) { note.hidden = false; note.textContent = error && error.kind ? error.message : '暫時無法取得資料，請稍後再試。'; }
     return;
   }
   const A = OV && OV.analysis;
@@ -1585,7 +1587,9 @@
     if (!data) {
       latestLive = false;
       els.service.hidden = false;
-      els.service.textContent = `即時行情暫時無法更新：${payload && payload.error ? payload.error : '未取得資料'}。目前顯示盤後資料。`;
+      // 伺服器錯誤原文（可能是英文的執行環境訊息）只進 console，畫面只放固定中文說明。
+      console.warn('[即時行情]', payload && payload.error);
+      els.service.textContent = '即時行情暫時無法更新，目前顯示盤後資料。';
       setMarketHeader(fallbackMarketData(), { id: 'delay', label: '延遲' }, fallbackMarketDate());
       setIntradayOptions(false);
       loadPeriod(isMinutePeriod(currentPeriod) ? 'daily' : currentPeriod, false);
@@ -1638,7 +1642,7 @@
         setIntradayOptions(false);
         return; // 雲端沒有即時行情，不再輪詢
       }
-      if (!isJson) throw new Error('回應不是行情資料（可能是登入已失效，請重新整理）');
+      if (!isJson) throw Object.assign(new Error('回應不是行情資料'), { note: '即時行情無法更新：登入可能已失效，請重新整理。目前顯示盤後資料。' });
       const payload = body;
       if (!response.ok && !payload) throw new Error(`HTTP ${response.status}`);
       renderPayload(payload);
@@ -1649,7 +1653,10 @@
     } catch (error) {
       latestLive = false;
       els.service.hidden = false;
-      els.service.textContent = `即時行情連線中斷：${error.name === 'AbortError' ? '本機服務逾時' : error.message}。目前顯示盤後資料。`;
+      // 瀏覽器／伺服器的原文（例如 Failed to fetch）只進 console。
+      console.warn('[即時行情]', error);
+      els.service.textContent = error.note
+        || (error.name === 'AbortError' ? '即時行情連線逾時，目前顯示盤後資料。' : '即時行情連線中斷，目前顯示盤後資料。');
       setMarketHeader(fallbackMarketData(), { id: 'delay', label: '延遲' }, fallbackMarketDate());
       setIntradayOptions(false);
       loadPeriod(isMinutePeriod(currentPeriod) ? 'daily' : currentPeriod, false);
