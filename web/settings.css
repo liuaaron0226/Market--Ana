@@ -2,20 +2,27 @@
    和到價推播原本的浮層同一套：第 2 層的板（--float／--float-shadow），桌機浮在右上角齒輪下方、手機從下緣升起。
    陰影、圓角只用 bold.css 的變數。 */
 
-/* ---------- 桌面背景的選擇：只換首頁與個股頁的桌面兩個顏色（自選股頁沒有桌面底色，不受影響）；深色主題不換 ---------- */
-:root:not([data-theme="dark"])[data-desk="sand"]:has(> :is(body.hm, body.st))  { --desk: #e6ddcc; --desk-hi: #efe8db; }
-:root:not([data-theme="dark"])[data-desk="paper"]:has(> :is(body.hm, body.st)) { --desk: #efebe3; --desk-hi: #f7f5f0; }
-:root:not([data-theme="dark"])[data-desk="mist"]:has(> :is(body.hm, body.st))  { --desk: #e4e3df; --desk-hi: #eeedea; }
-:root:not([data-theme="dark"])[data-desk="sage"]:has(> :is(body.hm, body.st))  { --desk: #e1e3da; --desk-hi: #ecede6; }
+/* ---------- 桌面背景的選擇：只換首頁與個股頁的桌面兩個顏色（自選股頁沒有桌面底色，不受影響）；只有淺色主題換 ----------
+   色值只寫在這裡：--desk-<key> 是桌面、--desk-<key>-hi 是左上角那片光；設定浮板的色票也讀同一組。米白照 bold.css 的淺色 --desk。 */
+:root {
+  --desk-beige: #e9e5dc; --desk-sand: #e6ddcc; --desk-paper: #efebe3; --desk-mist: #e4e3df; --desk-sage: #e1e3da;
+  --desk-sand-hi: #efe8db; --desk-paper-hi: #f7f5f0; --desk-mist-hi: #eeedea; --desk-sage-hi: #ecede6;
+}
+:root[data-theme="light"][data-desk="sand"]:has(> :is(body.hm, body.st))  { --desk: var(--desk-sand); --desk-hi: var(--desk-sand-hi); }
+:root[data-theme="light"][data-desk="paper"]:has(> :is(body.hm, body.st)) { --desk: var(--desk-paper); --desk-hi: var(--desk-paper-hi); }
+:root[data-theme="light"][data-desk="mist"]:has(> :is(body.hm, body.st))  { --desk: var(--desk-mist); --desk-hi: var(--desk-mist-hi); }
+:root[data-theme="light"][data-desk="sage"]:has(> :is(body.hm, body.st))  { --desk: var(--desk-sage); --desk-hi: var(--desk-sage-hi); }
 
 /* ---------- 頁首的齒輪：借各頁原本主題鍵的外觀；等待核准的人數標在右上角 ---------- */
 [data-settings-open] { position: relative; }
 [data-settings-open] svg { transition: transform 420ms var(--ease-depth, ease-out); }
 [data-settings-open][aria-expanded="true"] svg { transform: rotate(60deg); }
-.st-badge {
-  position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
-  display: inline-grid; place-items: center; background: var(--accent); color: #fff; font: 700 11px/1 var(--mono); pointer-events: none;
+/* 等待核准人數的小膠囊：齒輪右上角與浮板最下面那一列共用 */
+.st-badge, .st-link-end b {
+  min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px;
+  display: inline-grid; place-items: center; background: var(--accent); color: #fff; font: 700 12px/1 var(--mono);
 }
+.st-badge { position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px; padding: 0 5px; font-size: 11px; pointer-events: none; }
 
 /* ---------- 浮板 ---------- */
 .st-sheet:not([open]) { display: none; }
@@ -71,8 +78,12 @@
 .st-swatches { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
 .st-swatch { display: grid; gap: 6px; justify-items: center; padding: 0; border: 0; background: none; color: var(--dim); font: 12px var(--sans); cursor: pointer; }
 /* 每一張色票是一小塊桌面，上面放一小塊板 */
-.st-swatch i { position: relative; width: 100%; aspect-ratio: 1.25; border-radius: 10px; background: var(--c); box-shadow: var(--well-shadow); }
-.st-swatch i::after { content: ""; position: absolute; inset: 28% 18% 22%; border-radius: 5px; background: var(--panel); box-shadow: var(--key-shadow); }
+.st-swatch i { position: relative; width: 100%; aspect-ratio: 1.25; border-radius: var(--r-key); background: var(--desk-beige); box-shadow: var(--well-shadow); }
+.st-swatch i::after { content: ""; position: absolute; inset: 28% 18% 22%; border-radius: var(--r-tag); background: var(--panel); box-shadow: var(--key-shadow); }
+.st-swatch[data-desk-set="sand"] i { background: var(--desk-sand); }
+.st-swatch[data-desk-set="paper"] i { background: var(--desk-paper); }
+.st-swatch[data-desk-set="mist"] i { background: var(--desk-mist); }
+.st-swatch[data-desk-set="sage"] i { background: var(--desk-sage); }
 .st-swatch[aria-pressed="true"] { color: var(--ink); font-weight: 600; }
 .st-swatch[aria-pressed="true"] i { outline: 2px solid var(--ink); outline-offset: 2px; }
 
@@ -103,7 +114,6 @@
 .st-foot { margin-top: 8px; }
 .st-link { display: flex; align-items: center; justify-content: space-between; min-height: 48px; border-top: 1px solid var(--hair); color: var(--ink); text-decoration: none; }
 .st-link-end { display: inline-flex; align-items: center; gap: 6px; color: var(--dim); font-size: 13px; }
-.st-link-end b { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; display: inline-grid; place-items: center; background: var(--accent); color: #fff; font: 700 12px/1 var(--mono); }
 .st-chev { color: var(--faint); font-size: 16px; }
 .st-link:hover .st-chev { color: var(--ink); }
 

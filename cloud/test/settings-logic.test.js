@@ -24,9 +24,9 @@ const USAGE = {
   flash: { five_hour: { remaining: 0.8861, reset_time: "2026-11-17T10:21:54Z" }, weekly: { remaining: 0.9282, reset_time: "2026-11-22T03:36:29Z" } },
   argon: { weekly: { remaining: 0.1584, reset_time: "2026-11-24T07:56:20Z" } },
   today: [
-    { task: "forecast-ledger", runs: 1, calls: null, model: "gemini-4-argon-medium" },
-    { task: "some-new-task", runs: 2, calls: null, model: null },
-    { task: "watch-ledger", runs: 2, calls: 38, model: "gemini-3.8-flash-medium" },
+    { task: "forecast-ledger", runs: 1, model: "gemini-4-argon" },
+    { task: "some-new-task", runs: 2, model: null },
+    { task: "watch-ledger", runs: 2, model: "gemini-3.8-flash" },
   ],
 };
 
@@ -64,7 +64,7 @@ test("今天各任務：用中文名稱與模型簡稱，認不得的任務照�
   const view = S.usageView(USAGE, NOW);
   assert.deepEqual(view.today, [
     { label: "some-new-task", model: "", runs: 2 },
-    { label: "自選股每日判斷", model: "Flash", runs: 2 },
+    { label: "自選股判斷與提名", model: "Flash", runs: 2 },
     { label: "晚間事前預測", model: "Argon", runs: 1 },
   ]);
 });
@@ -82,9 +82,16 @@ test("最新一次排程沒讀到用量：數字照上一筆，並說明讀取�
 
 test("模型簡稱", () => {
   assert.equal(S.modelLabel("gemini-3.8-flash-medium"), "Flash");
+  assert.equal(S.modelLabel("gemini-4-argon"), "Argon");
+  assert.equal(S.modelLabel("gemini-3.8-flash"), "Flash");
   assert.equal(S.modelLabel("gemini-4-argon-high"), "Argon");
   assert.equal(S.modelLabel("gemini-4-hydrogen-low"), "Hydrogen");
   assert.equal(S.modelLabel(null), "");
+});
+
+test("任務名稱：籌碼與資金白話（每日更新那支排程）與首頁每日解讀分開", () => {
+  const view = S.usageView({ ...USAGE, today: [{ task: "daily-update", runs: 1, model: "gemini-3.8-flash" }, { task: "ai-digest", runs: 1, model: null }] }, NOW);
+  assert.deepEqual(view.today.map((t) => t.label), ["籌碼與資金白話", "首頁每日解讀"]);
 });
 
 test("籤：站主看到用量、通知、外觀三顆；推播不能用時少通知；一般使用者只剩外觀、不顯示籤列", () => {

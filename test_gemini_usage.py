@@ -10,6 +10,9 @@ import unittest
 
 import gemini_usage as gu
 
+# 表的結構只在遷移檔維護
+TABLE_SQL = (Path(__file__).parent / "cloud" / "migrations" / "0024_gemini_usage.sql").read_text(encoding="utf-8")
+
 REAL = {
     "conversation_id": "", "status": "SUCCESS", "response": "Gemini Models\tWeekly Limit Remaining\t93%\t...", "duration_seconds": 0,
     "num_turns": 0, "usage": {"input_tokens": 0, "output_tokens": 0, "thinking_tokens": 0, "cache_read_tokens": 0, "total_tokens": 0},
@@ -54,37 +57,37 @@ class ParseUsage(unittest.TestCase):
 class SnapshotSql(unittest.TestCase):
     def table(self):
         db = sqlite3.connect(":memory:")
-        db.executescript(gu.TABLE_SQL)
+        db.executescript(TABLE_SQL)
         return db
 
     def test_one_row_per_run_with_task_calls_and_buckets(self):
         db = self.table()
         sql = gu.snapshot_sql(gu.parse_usage(json.dumps(REAL)), task="watch-ledger", run_id="19876543210",
-                              taken_at="2026-11-17T08:05:00Z", calls=38, model="gemini-3.8-flash-medium")
+                              taken_at="2026-11-17T08:05:00Z", model="gemini-3.8-flash")
         db.executescript(sql)
-        rows = db.execute("SELECT taken_at, task, run_id, calls, model, buckets_json FROM gemini_usage_snapshots").fetchall()
+        rows = db.execute("SELECT taken_at, task, run_id, model, buckets_json FROM gemini_usage_snapshots").fetchall()
         self.assertEqual(len(rows), 1)
-        taken_at, task, run_id, calls, model, buckets = rows[0]
-        self.assertEqual((taken_at, task, run_id, calls, model),
-                         ("2026-11-17T08:05:00Z", "watch-ledger", "19876543210", 38, "gemini-3.8-flash-medium"))
+        taken_at, task, run_id, model, buckets = rows[0]
+        self.assertEqual((taken_at, task, run_id, model), ("2026-11-17T08:05:00Z", "watch-ledger", "19876543210", "gemini-3.8-flash"))
         self.assertEqual(json.loads(buckets)[3]["id"], "gemini-argon-wtu-weekly")
 
-    def test_unknown_call_count_is_null_and_quotes_are_escaped(self):
+    def test_unknown_model_is_null_and_quotes_are_escaped(self):
         db = self.table()
-        db.executescript(gu.snapshot_sql([], task="it's", run_id="1", taken_at="2026-11-17T08:05:00Z", calls=None))
-        self.assertEqual(db.execute("SELECT task, calls FROM gemini_usage_snapshots").fetchone(), ("it's", None))
+        db.executescript(gu.snapshot_sql([], task="it's", run_id="1", taken_at="2026-11-17T08:05:00Z"))
+        self.assertEqual(db.execute("SELECT task, model FROM gemini_usage_snapshots").fetchone(), ("it's", None))
 
     def test_same_run_and_task_twice_keeps_the_later_reading(self):
         # 重跑同一個 run（GitHub 的 re-run 沿用 run_id）不要算兩次
         db = self.table()
-        for calls in (3, 5):
-            db.executescript(gu.snapshot_sql([], task="ai-digest", run_id="7", taken_at="2026-11-17T08:05:00Z", calls=calls))
-        self.assertEqual(db.execute("SELECT count(*), max(calls) FROM gemini_usage_snapshots").fetchone(), (1, 5))
+        for model, taken_at in (("gemini-3.8-flash", "2026-11-17T08:05:00Z"), ("gemini-4-argon", "2026-11-17T08:30:00Z")):
+            db.executescript(gu.snapshot_sql([], task="ai-digest", run_id="7", taken_at=taken_at, model=model))
+        self.assertEqual(db.execute("SELECT count(*), taken_at, model FROM gemini_usage_snapshots").fetchone(),
+                         (1, "2026-11-17T08:30:00Z", "gemini-4-argon"))
 
     def test_unavailable_reading_still_records_the_run(self):
         # 讀不到用量（agy 壞掉、登入過期）時仍記下這次任務跑了，用量欄是空的；設定頁會顯示上一筆讀得到的
         db = self.table()
-        db.executescript(gu.snapshot_sql(None, task="forecast-ledger", run_id="9", taken_at="2026-11-17T08:05:00Z", calls=1))
+        db.executescript(gu.snapshot_sql(None, task="forecast-ledger", run_id="9", taken_at="2026-11-17T08:05:00Z"))
         self.assertEqual(db.execute("SELECT buckets_json FROM gemini_usage_snapshots").fetchone(), (None,))
 
 
@@ -101,21 +104,45 @@ class CommandLine(unittest.TestCase):
             f"sys.stdout.write({stdout!r} if ok else '{{\"status\":\"SUCCESS\",\"response\":\"hi\"}}')\n"
             f"raise SystemExit({exit_code})\n", encoding="utf-8")
         out = folder / "usage.sql"
-        code = gu.main(["--agy-bin", str(fake), "--task", "watch-ledger", "--run-id", "42", "--calls", "38",
-                        "--model", "gemini-3.8-flash-medium", "--sql-output", str(out)])
+        code = gu.main(["--agy-bin", str(fake), "--task", "watch-ledger", "--run-id", "42",
+                        "--model", "gemini-3.8-flash", "--sql-output", str(out)])
         db = sqlite3.connect(":memory:")
-        db.executescript(gu.TABLE_SQL)
+        db.executescript(TABLE_SQL)
         db.executescript(out.read_text(encoding="utf-8"))
-        return code, db.execute("SELECT task, run_id, calls, buckets_json, model FROM gemini_usage_snapshots").fetchone()
+        return code, db.execute("SELECT task, run_id, buckets_json, model FROM gemini_usage_snapshots").fetchone()
 
     def test_writes_the_reading(self):
-        code, (task, run_id, calls, buckets, model) = self.run_with(json.dumps(REAL))
-        self.assertEqual((code, task, run_id, calls, model), (0, "watch-ledger", "42", 38, "gemini-3.8-flash-medium"))
+        code, (task, run_id, buckets, model) = self.run_with(json.dumps(REAL))
+        self.assertEqual((code, task, run_id, model), (0, "watch-ledger", "42", "gemini-3.8-flash"))
         self.assertEqual(len(json.loads(buckets)), 4)
 
     def test_broken_agy_still_records_the_run_and_exits_zero(self):
-        code, (task, _, calls, buckets, _model) = self.run_with("Error: login expired", exit_code=1)
-        self.assertEqual((code, task, calls, buckets), (0, "watch-ledger", 38, None))
+        code, (task, _, buckets, _model) = self.run_with("Error: login expired", exit_code=1)
+        self.assertEqual((code, task, buckets), (0, "watch-ledger", None))
+
+
+class ModelForTask(unittest.TestCase):
+    """排程不另外寫模型名稱：沒給 --model 時照 gemini_models.py（model-routing 那條線的唯一設定處）查這個任務用哪個模型。"""
+
+    def fake_models(self):
+        import sys
+        import types
+        module = types.SimpleNamespace(FORECAST="gemini-4-argon", WATCH_JUDGE="gemini-3.8-flash", FLASH="gemini-3.8-flash")
+        sys.modules["gemini_models"] = module
+        self.addCleanup(sys.modules.pop, "gemini_models", None)
+
+    def test_reads_the_task_model_from_gemini_models(self):
+        self.fake_models()
+        self.assertEqual(gu.model_for_task("forecast-ledger"), "gemini-4-argon")
+        self.assertEqual(gu.model_for_task("forecast-replay"), "gemini-4-argon")
+        self.assertEqual(gu.model_for_task("watch-ledger"), "gemini-3.8-flash")
+        self.assertIsNone(gu.model_for_task("someone-else"))
+
+    def test_without_gemini_models_the_model_is_left_empty(self):
+        import sys
+        sys.modules["gemini_models"] = None   # 讓 import 失敗
+        self.addCleanup(sys.modules.pop, "gemini_models", None)
+        self.assertIsNone(gu.model_for_task("forecast-ledger"))
 
 
 class WorkflowWiring(unittest.TestCase):
@@ -137,6 +164,7 @@ class WorkflowWiring(unittest.TestCase):
                 self.assertTrue(step["if"].startswith("always()"))
                 self.assertIn(f"--task {name} ", step["run"])
                 self.assertIn("gemini-usage.sql", steps[cleanup[0]]["run"])
+                self.assertNotIn("--model", step["run"], "模型名稱只在 gemini_models.py 維護")
 
 
 if __name__ == "__main__":

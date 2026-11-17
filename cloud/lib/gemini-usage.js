@@ -32,10 +32,10 @@ export async function geminiUsage(db, now) {
     "SELECT taken_at, buckets_json FROM gemini_usage_snapshots WHERE buckets_json IS NOT NULL ORDER BY taken_at DESC LIMIT 1",
   ).first();
   const last = await db.prepare("SELECT taken_at FROM gemini_usage_snapshots ORDER BY taken_at DESC LIMIT 1").first();
-  // 每個任務今天跑了幾次、呼叫加總，以及今天最近一次記下的模型（模型分配會調整，以紀錄為準）
+  // 每個任務今天跑了幾次，以及今天最近一次記下的模型（模型分配會調整，以紀錄為準）
   const since = taipeiMidnightUtc(now);
   const { results: today } = await db.prepare(
-    "SELECT task, count(*) AS runs, sum(calls) AS calls, (SELECT latest.model FROM gemini_usage_snapshots AS latest "
+    "SELECT task, count(*) AS runs, (SELECT latest.model FROM gemini_usage_snapshots AS latest "
     + "WHERE latest.task = runs.task AND latest.taken_at >= ? AND latest.model IS NOT NULL ORDER BY latest.taken_at DESC LIMIT 1) AS model "
     + "FROM gemini_usage_snapshots AS runs WHERE taken_at >= ? GROUP BY task ORDER BY task",
   ).bind(since, since).all();
@@ -44,7 +44,7 @@ export async function geminiUsage(db, now) {
     read_at: reading?.taken_at ?? null,
     last_run_at: last?.taken_at ?? null,
     ...groups(reading ? parse(reading.buckets_json) : null),
-    today: today.map(({ task, runs, calls, model }) => ({ task, runs: Number(runs), calls: calls === null ? null : Number(calls), model: model ?? null })),
+    today: today.map(({ task, runs, model }) => ({ task, runs: Number(runs), model: model ?? null })),
   };
 }
 

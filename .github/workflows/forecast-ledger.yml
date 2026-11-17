@@ -276,7 +276,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           python gemini_usage.py --agy-bin "$RUNNER_TEMP/agy/antigravity" --task forecast-ledger --run-id "$GITHUB_RUN_ID" \
-            --model gemini-3.8-flash --sql-output "$RUNNER_TEMP/gemini-usage.sql"
+            --sql-output "$RUNNER_TEMP/gemini-usage.sql"
           cd cloud && npx --yes wrangler@4 d1 execute market-ana-accounts --remote --file "$RUNNER_TEMP/gemini-usage.sql"
 
       - name: 清除登入檔與暫存

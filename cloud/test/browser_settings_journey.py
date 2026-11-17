@@ -38,10 +38,10 @@ def seed_sql() -> str:
         {"id": "gemini-5h", "group": "Gemini Models", "window": "5h", "remaining": 0.1861, "reset_time": iso(now + timedelta(hours=2))},
         {"id": "gemini-argon-wtu-weekly", "group": "Gemini 4 Argon", "window": "weekly", "remaining": 0.9884, "reset_time": iso(now + timedelta(days=6))},
     ]
-    sql = gemini_usage.snapshot_sql(buckets, task="watch-ledger", run_id="1", taken_at=iso(now - timedelta(minutes=5)), calls=38,
-                                    model="gemini-3.8-flash-medium")
-    sql += gemini_usage.snapshot_sql(buckets, task="forecast-ledger", run_id="2", taken_at=iso(now - timedelta(minutes=9)), calls=1,
-                                     model="gemini-4-argon-medium")
+    sql = gemini_usage.snapshot_sql(buckets, task="watch-ledger", run_id="1", taken_at=iso(now - timedelta(minutes=5)),
+                                    model="gemini-3.8-flash")
+    sql += gemini_usage.snapshot_sql(buckets, task="forecast-ledger", run_id="2", taken_at=iso(now - timedelta(minutes=9)),
+                                     model="gemini-4-argon")
     sql += ("INSERT INTO users (email, nickname, status, applied_at) VALUES "
             f"('{FRIEND}', 'F', 'approved', '2026-11-09T00:00:00Z'), ('new@example.com', 'N', 'pending', '2026-11-17T00:00:00Z');\n")
     return sql
@@ -106,11 +106,13 @@ def owner_page(journey: Journey, browser, name: str, path: str, width: int) -> N
     journey.check(f"{tag}：Flash 兩條（5 小時偏低標金色）、Argon 一條",
                   meters == [["5 小時", "19%", True], ["本週", "93%", False], ["本週", "99%", False]], meters)
     today = page.eval_on_selector_all("#settingsDialog .st-today li", "ls => ls.map(l => l.innerText.replace(/\\s+/g, ' '))")
-    journey.check(f"{tag}：今天各任務用中文名稱與模型", "自選股每日判斷 Flash 1" in today and "晚間事前預測 Argon 1" in today, today)
+    journey.check(f"{tag}：今天各任務用中文名稱與模型", "自選股判斷與提名 Flash 1" in today and "晚間事前預測 Argon 1" in today, today)
     journey.check(f"{tag}：最下面是帳號管理", page.locator("#settingsDialog .st-foot a").get_attribute("href") == "/admin/")
     page.screenshot(path=str(OUT / f"owner-{name}-{width}-usage.png"))
 
     page.get_by_role("tab", name="通知").click()
+    focused = page.evaluate("() => document.activeElement?.textContent")
+    journey.check(f"{tag}：點了籤之後焦點還在那顆籤上", focused == "通知", focused)
     # 推播畫面先清空、等瀏覽器註冊完推播才畫出開關；等到開關或說明真的畫出來
     page.wait_for_function("() => { const p = document.querySelector('#settings-notify');"
                            " return p.querySelector('.wp-body')?.childElementCount || (p.querySelector('.st-note') && !p.textContent.includes('讀取中')); }")

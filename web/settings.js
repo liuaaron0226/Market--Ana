@@ -12,17 +12,19 @@
 
   const THEME_KEY = 'market-theme';
   const DESK_KEY = 'market-desk';
-  // 第一個是現在的米白（bold.css 的 --desk）；其他的色值在 settings.css
+  // 第一個是現在的米白（bold.css 的 --desk）。色值只在 settings.css（--desk-<key>），色票也照那裡畫
   const DESKS = [
-    { key: '', name: '米白', color: '#e9e5dc' },
-    { key: 'sand', name: '暖沙', color: '#e6ddcc' },
-    { key: 'paper', name: '紙白', color: '#efebe3' },
-    { key: 'mist', name: '霧灰', color: '#e4e3df' },
-    { key: 'sage', name: '淡青', color: '#e1e3da' },
+    { key: '', name: '米白' },
+    { key: 'sand', name: '暖沙' },
+    { key: 'paper', name: '紙白' },
+    { key: 'mist', name: '霧灰' },
+    { key: 'sage', name: '淡青' },
   ];
-  // 任務的 key 是排程檔名（.github/workflows/<key>.yml，gemini_usage.py --task）
+  // 任務的 key 是排程檔名（.github/workflows/<key>.yml，gemini_usage.py --task）。
+  // 自選股那支排程同時跑每日判斷與提名同類股；籌碼與資金白話是在每日更新那支排程裡寫的。
   const TASKS = {
-    'watch-ledger': '自選股每日判斷',
+    'watch-ledger': '自選股判斷與提名',
+    'daily-update': '籌碼與資金白話',
     'ai-digest': '首頁每日解讀',
     'forecast-ledger': '晚間事前預測',
     'forecast-morning': '晨間事前預測',
@@ -165,7 +167,14 @@
     const keys = tabsFor(access);
     if (!keys.includes(current)) current = keys[0];
     tabBar.hidden = keys.length < 2;
-    track.replaceChildren(...keys.map(key => {
+    // 籤的組合沒變時只換選取狀態：不把按鈕整排換掉，按著的那顆不會因此失去焦點
+    const shown = [...track.children].map(tab => tab.dataset.tab);
+    if (shown.join() === keys.join()) {
+      for (const tab of track.children) {
+        tab.setAttribute('aria-selected', String(tab.dataset.tab === current));
+        tab.tabIndex = tab.dataset.tab === current ? 0 : -1;
+      }
+    } else track.replaceChildren(...keys.map(key => {
       const tab = el('button', 'st-tab', TAB_NAMES[key]);
       tab.type = 'button';
       tab.id = `settings-tab-${key}`;
@@ -232,7 +241,6 @@
       const button = el('button', 'st-swatch');
       button.type = 'button';
       button.dataset.deskSet = desk.key;
-      button.style.setProperty('--c', desk.color);
       button.setAttribute('aria-pressed', String(desk.key === chosen));
       button.append(el('i'), el('span', '', desk.name));
       swatches.append(button);
@@ -308,9 +316,11 @@
     const pane = panes.notify;
     pane.classList.add('wp');
     pane.append(el('p', 'st-note', '讀取中…'));
-    const ok = global.WatchPush ? await global.WatchPush.mount(pane) : false;
+    let ok = false;
+    try { ok = await global.WatchPush.mount(pane); }
+    catch (_) { notifyMounted = false; }   // 讀不到：下次切回這一籤再試
     pane.hidden = current !== 'notify';   // mount 會把容器打開，照目前選的籤
-    if (!ok) pane.replaceChildren(el('p', 'st-note', '到價推播目前沒有開放。'));
+    if (!ok) pane.replaceChildren(el('p', 'st-note', notifyMounted ? '到價推播目前沒有開放。' : '推播設定暫時讀不到，稍後再切回這一籤看看。'));
   }
 
   // ---- 最下面一列：帳號管理（站主）或 Gemini 設定（朋友）----
@@ -329,8 +339,11 @@
     try { me = await getJson('/api/me'); } catch (_) { /* 本機版沒有帳號 */ }
     if (me?.owner) {
       access.usage = true;
-      access.notify = Boolean(global.WatchPush);
-      current = 'usage';
+      // 到價推播跟著自選股關注的開關（和原本自選股頁的鈴鐺同一個判斷）；/api/features 對站主不扣額度
+      try { access.notify = Boolean(global.WatchPush) && Boolean((await getJson('/api/features')).features?.watchlist_watch_v1); }
+      catch (_) { access.notify = false; }
+      // 浮板還沒打開才預設先看用量；使用者已經打開、選好的籤不去動它
+      if (!dialog.open) current = 'usage';
       let pending = 0;
       try { pending = (await getJson('/api/admin/users')).users.filter(u => u.status === 'pending').length; } catch (_) { /* 讀不到就不標 */ }
       footLink('/admin/', '帳號管理', pending);
