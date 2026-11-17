@@ -219,3 +219,20 @@ test("0050 比較只在雙方配息完整時宣告領先落後", () => {
   assert.match(unknownBenchmark, /不可比較/);
   assert.doesNotMatch(unknownBenchmark, /領先|落後|贏過|百分點/);
 });
+
+test("首頁 #serviceNote 只顯示中文固定說明，執行環境／瀏覽器的錯誤原文只進 console（11-17 正式站出現 Workers 英文原文）", () => {
+  const source = read("web/minimal.js");
+  // 寫進 #serviceNote 的每一處（含開頭的總覽讀取失敗）
+  const noteTexts = [...source.matchAll(/(?:els\.service|note)\.textContent = ([^;]+);/g)].map(match => match[1]);
+  assert.ok(noteTexts.length >= 5);
+  for (const text of noteTexts) {
+    assert.doesNotMatch(text, /payload\.error|error && error\.message|\$\{[^}]*error\.message/, text);
+  }
+  assert.match(source, /'即時行情暫時無法更新，目前顯示盤後資料。'/);
+  assert.match(source, /'即時行情連線中斷，目前顯示盤後資料。'/);
+  assert.match(source, /'即時行情連線逾時，目前顯示盤後資料。'/);
+  // 總覽讀取失敗：只有雲端資料層自己寫的中文說明（帶 kind）才上畫面
+  assert.match(source, /error && error\.kind \? error\.message : '暫時無法取得資料，請稍後再試。'/);
+  assert.match(source, /console\.warn\([^)]*payload && payload\.error/);
+  assert.equal([...source.matchAll(/console\.warn\(/g)].length >= 3, true);
+});

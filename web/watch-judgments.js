@@ -356,6 +356,9 @@
     if (open) (narrow() ? document.body : state.root).append(panel);
     panel.hidden = !open;
     chip.setAttribute('aria-expanded', String(open));
+    // 手機貼底的時候底下的頁面鎖住不捲（scroll-lock.js，本人 11-17）；桌機的小浮板掛在小鍵旁、跟著頁面走，不鎖。
+    if (open && narrow()) window.ScrollLock?.lock(panel);
+    else window.ScrollLock?.unlock(panel);
     if (open) renderPanel(panel);
   }
 
@@ -388,12 +391,15 @@
       document.addEventListener('keydown', (event) => {
         if (event.key === 'Escape' && state.panel && !state.panel.hidden) { setOpen(false); state.chip.focus(); }
       });
+      // 開著時跨過手機／桌機寬度（拉視窗、手機轉向）：重新打開一次，浮板換到對的地方、底下頁面鎖不鎖也跟著對。
+      window.matchMedia('(max-width: 720px)').addEventListener('change', () => { if (state.panel && !state.panel.hidden) setOpen(true); });
     }
     host.append(root);
     Object.assign(state, { root, chip, panel });
   }
 
   function unmount() {
+    if (state.panel) window.ScrollLock?.unlock(state.panel);
     if (state.root) state.root.remove();
     if (state.panel) state.panel.remove();
     Object.assign(state, { code: null, data: null, edition: null, root: null, chip: null, panel: null,

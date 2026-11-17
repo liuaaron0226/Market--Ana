@@ -57,6 +57,7 @@ function raw() {
     detail: {
       generated_at: "g", days: ["2026-03-09", "2026-03-10"], notes: { money: "m", scope: "s", sources: "internal" },
       current: { as_of: "2026-03-10", days_available: 2, futures_short_growing_days: 4, futures_days_available: 1, secret: "x",
+        dates: { foreign: "2026-03-10", trust: "2026-03-10", margin: "2026-03-09", short: "2026-03-09", amount: "2026-03-10", extra: "x" },
         trust_buy: [{ code: "2330", name: "台積電", value: 99.7, streak: 20, capped: true, secret: "x" }] },
       by_date: {
         "2026-03-09": {},
@@ -122,6 +123,8 @@ test("總覽保留畫面計算需要的完整序列（日K、法人、籌碼）�
   assert.deepEqual(o.current.trust_buy[0], { code: "2330", name: "台積電", value: 99.7, streak: 20, capped: true });
   assert.equal(o.current.futures_short_growing_days, 4);
   assert.equal(o.current.as_of, "2026-03-10");
+  // 11-17：各項「目前前 10」是自己最新有資料的那天（融資晚上才公布），日期跟著帶
+  assert.deepEqual(o.current.dates, { foreign: "2026-03-10", trust: "2026-03-10", margin: "2026-03-09", short: "2026-03-09", amount: "2026-03-10" });
 });
 
 test("明細一次只給一張卡需要的表與欄位", () => {

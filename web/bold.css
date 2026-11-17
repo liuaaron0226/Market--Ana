@@ -213,7 +213,7 @@
 }
 
 /* ================= 價位：更簡約、更清楚（本人 11-09） =================
-   圖上：淡細實線＋軸上實色價籤（壓力 金／支撐 綠／收盤 墨），和右側階梯同一套
+   圖上：收盤用軸上實色價籤（墨）；支撐、壓力 11-17 起不再畫在圖上（本人：右側只放簡單的數字），只在階梯
    階梯：拿掉虛線色票與縱軸，改成和圖上一樣的實色小價籤；距離文字只留百分比 */
 .bd-ladder::before { display: none; }
 .lad { grid-template-columns: 48px 1fr; padding-left: 0; column-gap: 16px; align-items: center; }
@@ -273,6 +273,9 @@
   --shade-k: 2.6;
   --edge-ink: color-mix(in srgb, var(--ink) 62%, #000);
   --rim-ink: color-mix(in srgb, var(--ink) 78%, #fff);
+  /* K 棒的浮雕落影（C 包）：畫布直接拿這個顏色畫，所以寫成畫布看得懂的固定值；深淺比照板的陰影（rgb(--shade) 約一成，深色乘 --shade-k） */
+  --candle-shadow: rgb(0 0 0 / 34%);
+  --candle-rim: rgb(255 255 255 / 26%);
 
   /* 第 1 層：板 */
   --slab-shadow:
@@ -328,6 +331,8 @@
   --rim: #fff;
   --shade: 60 45 20;
   --shade-k: 1;
+  --candle-shadow: rgb(60 45 20 / 15%);
+  --candle-rim: transparent;
 }
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) {
@@ -340,8 +345,15 @@
     --rim: #fff;
     --shade: 60 45 20;
     --shade-k: 1;
+    --candle-shadow: rgb(60 45 20 / 15%);
+    --candle-rim: transparent;
   }
 }
+
+/* ================= 看盤桌：頁面背景（首頁 A 包、個股頁 C 包共用） =================
+   頁面是一張桌面：底色是桌面色，左上角一片比桌面亮一階的光。 */
+html:has(> :is(body.hm, body.st)) { background: var(--desk); }
+:is(body.hm, body.st) { background: radial-gradient(1200px 720px at 18% 0, var(--desk-hi), transparent 70%) no-repeat var(--desk); }
 
 /* ================= 會浮起或凹下、可以點開的列（.depth-row）（立體重設計，2026-11-15） =================
    首頁短中長期走勢的每一期、個股頁大戶持股的那一張、自選與庫存頁庫存總覽的每一檔共用。高低就是方向：

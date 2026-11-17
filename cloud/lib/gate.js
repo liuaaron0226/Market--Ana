@@ -12,7 +12,7 @@ import { etfAnalysisHidden, policyForViewer, releasePolicy, stockEtfsVisible, st
 import { isOwnerEmail } from "./owner.js";
 import { FORECAST_PATH, handleForecastApi } from "./forecast.js";
 import { WATCH_PATH, handleWatchApi } from "./watch.js";
-import { FRIEND_AI_PAGE, FRIEND_AI_PATH, configuredEmails, deleteFriendKey, friendAiEnabled, handleFriendAiApi, notAvailable, ownerRefused } from "./friend-ai.js";
+import { FRIEND_AI_PAGE, FRIEND_AI_PATH, keyStateLookup, deleteFriendKey, friendAiEnabled, handleFriendAiApi, notAvailable, ownerRefused } from "./friend-ai.js";
 import { WATCH_PEERS_PATH, handleWatchPeersApi } from "./watch-peers.js";
 
 const PENDING_CAP = 30;
@@ -118,10 +118,11 @@ async function handleAdminApi(request, env, path, owner) {
     const { results } = await env.DB
       .prepare("SELECT email, nickname, status, applied_at, decided_at FROM users ORDER BY applied_at DESC")
       .all();
-    // 朋友 AI 的開關打開時，每位使用者旁邊多一個「已設定／未設定」；關著時回應和以前一樣。
+    // 朋友 AI 的開關打開時，每位使用者多一份狀態（已設定、暫停、最後成功、最近失敗、最新一天是否產生、自選股與庫存各幾檔）；
+    // 關著時回應和以前一樣。
     if (!friendAiEnabled(env)) return json(200, { users: results });
-    const configured = await configuredEmails(env.DB);
-    return json(200, { users: results.map((user) => ({ ...user, gemini_configured: configured.has(user.email) })) });
+    const stateOf = await keyStateLookup(env.DB);
+    return json(200, { users: results.map((user) => ({ ...user, gemini: stateOf(user.email) })) });
   }
   const m = path.match(/^\/api\/admin\/users\/([^/]+)\/([a-z]+)$/);
   if (!m || !ACTIONS[m[2]]) throw new HttpError(404, "找不到");

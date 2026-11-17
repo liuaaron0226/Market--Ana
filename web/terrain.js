@@ -23,6 +23,8 @@
   const TAP_SLOP = 6, NEAR_PICK = 28;
   // 名稱牌：桌機標成交額前六大，手機只留前三大（其餘用樣式藏起來）。
   const TAGGED = 6, TAGGED_NARROW = 3;
+  // 名稱牌的下緣比樓頂高出自己高度的幾成（原本樣式的 translate(-50%, -120%)）；互相讓開時上下留的空隙（像素）。
+  const TAG_LIFT = 1.2, TAG_GAP = 3;
 
   const el = (tag, className, text) => {
     const node = document.createElement(tag);
@@ -82,12 +84,14 @@
           const tag = el('b', `terrain-tag${tower.rank >= TAGGED_NARROW ? ' minor' : ''}`, shortName(tower.name));
           tag.setAttribute('aria-hidden', 'true');
           tagLayer.append(tag);
-          tags.push({ tag, roof: node.querySelector('.top') });
+          tags.push({ tag, roof: node.querySelector('.top'), rank: tower.rank });
         }
         city.append(node);
         towers.push(node);
       });
     });
+    // 名稱牌照成交額名次排（疊到時名次後面的讓開）；街區是一區一區建的，這裡重排一次。
+    tags.sort((a, b) => a.rank - b.rank);
     return { city, tagLayer, towers, tags, corners };
   }
 
@@ -97,11 +101,19 @@
     let running = 0, still = 0, deadline = 0, last = '';
     const place = () => {
       const frame = stage.getBoundingClientRect();
-      const spots = tags.map(({ tag, roof }) => {
-        const box = roof.getBoundingClientRect();
-        const spot = `translate(${(box.left + box.width / 2 - frame.left).toFixed(1)}px, ${(box.top - frame.top).toFixed(1)}px) translate(-50%, -120%)`;
+      // 名稱牌放在樓頂正上方。兩個疊到時名次後面的往上讓開一格；一格不夠或會高過框頂，這一刻先淡出（轉開了就回來）。
+      // tags 已照名次排；手機用樣式藏起來的寬是 0，不參與。
+      const boxes = tags.map(({ tag, roof }) => {
+        const box = roof.getBoundingClientRect(), width = tag.offsetWidth, height = tag.offsetHeight;
+        return { left: box.left + box.width / 2 - frame.left - width / 2, top: box.top - frame.top - height * TAG_LIFT, width, height };
+      });
+      const tops = global.TerrainLayout.stackTags(boxes, { gap: TAG_GAP, ceiling: 0 });
+      const spots = tags.map(({ tag }, index) => {
+        const crowded = tops[index] === null;
+        const spot = `translate(${boxes[index].left.toFixed(1)}px, ${(crowded ? boxes[index].top : tops[index]).toFixed(1)}px)`;
         tag.style.transform = spot;
-        return spot;
+        tag.classList.toggle('is-crowded', crowded);
+        return crowded ? `${spot}~` : spot;
       }).join('|');
       still = spots === last ? still + 1 : 0;
       last = spots;

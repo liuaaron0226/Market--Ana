@@ -279,20 +279,41 @@ def write_status(log_dir: Path, record: dict) -> dict:
     # 對帳跟著發布出去的那一版資料走：這次成功發布就換成這次建置的，否則沿用上一次成功發布的。
     checks = previous.get("checks")
     if outcome == "success":
-        built = next((step.get("output") or {} for step in record.get("steps") or [] if step.get("name") == "build_seed"), {})
-        checks = _site_checks(built.get("margin_check"))
+        outputs = {step.get("name"): step.get("output") or {} for step in record.get("steps") or []}
+        checks = _site_checks(outputs.get("build_seed") or {}, (outputs.get("build_dist") or {}).get("chip_detail"))
     if checks:
         status["checks"] = checks
     _write_record(path, status)
     return status
 
 
-def _site_checks(margin_check: dict | None) -> dict | None:
-    """站台狀態裡的每日對帳：融資維持率（估）估計的全市場融資金額和官方差多少、當天全部不給的原因。只留看得懂的幾項。"""
-    if not isinstance(margin_check, dict):
-        return None
-    return {"margin_maintenance": {key: margin_check.get(key) for key in
-                                   ("status", "data_date", "gap_pct", "threshold_pct", "reason")}}
+# 站台狀態裡每日對帳的名稱 ← build_seed 結果裡的那一份：上市、上櫃（10 票）的融資維持率（估）各一項。
+SITE_CHECKS = (("margin_maintenance", "margin_check"), ("otc_margin_maintenance", "otc_margin_check"))
+
+
+def _site_checks(built: dict, chip_detail: dict | None = None) -> dict | None:
+    """站台狀態裡的每日對帳（built 是 build_seed 的結果）：融資維持率（估）估計的全市場融資金額和官方差多少、
+    當天全部不給的原因，上市與上櫃各一項。只留看得懂的幾項；建置沒有做的那一項不放。
+    chip_detail 是首頁籌碼卡名單對照原件的檢查（build_dist 的結果，11-17）。"""
+    checks = {name: {key: check.get(key) for key in ("status", "data_date", "gap_pct", "threshold_pct", "reason")}
+              for name, field in SITE_CHECKS if isinstance(check := built.get(field), dict)}
+    if isinstance(chip_detail, dict):
+        checks["chip_detail"] = {key: chip_detail.get(key) for key in ("status", "data_date", "reason")}
+    return checks or None
+
+
+def _chip_detail_check(market: dict) -> dict:
+    """大盤包（market_pack_daily.py）印出的建置結果裡的籌碼名單檢查；沿用上一版大盤包時名單也沒有更新，算失敗。"""
+    if market.get("fallback"):
+        return {"status": "failed", "data_date": None, "reason": "大盤資料包沿用上一版，籌碼卡的名單沒有更新"}
+    lines = [line for line in (market.get("_stdout") or "").splitlines() if line.strip()]
+    try:
+        check = json.loads(lines[-1]).get("detail_check")
+    except (IndexError, ValueError, AttributeError):
+        check = None
+    if not isinstance(check, dict):
+        return {"status": "failed", "data_date": None, "reason": "大盤資料包沒有回報籌碼名單的檢查結果"}
+    return {key: check.get(key) for key in ("status", "data_date", "reason")}
 
 
 # ---- 真實步驟（本機與 GitHub Actions 共用）；本切片只接 dry-run 能跑的部分 ----
@@ -736,10 +757,11 @@ def _seed_problems(manifest: dict) -> dict:
     return problems
 
 
-def _margin_check(manifest: dict) -> dict | None:
-    """建置清單裡融資維持率（估）的每日對帳結果（估計的全市場融資金額 對 官方）；舊的清單沒有就是 None。"""
-    check = (manifest.get("signals") or {}).get("margin_check")
-    return check if isinstance(check, dict) else None
+def _margin_checks(manifest: dict) -> dict:
+    """建置清單裡融資維持率（估）的每日對帳結果（估計的全市場融資金額 對 官方）：上市 margin_check、上櫃
+    otc_margin_check；舊的清單沒有就是 None。"""
+    signals = manifest.get("signals") or {}
+    return {field: signals.get(field) if isinstance(signals.get(field), dict) else None for _, field in SITE_CHECKS}
 
 
 def _seed_dir(ctx: RunContext) -> Path:
@@ -807,7 +829,7 @@ def _write_status_for_build(ctx: RunContext) -> dict:
     if previous.get("run", {}).get("status") == "failed" and previous["run"].get("data_date") != ctx.data_date:
         status["previous_failure"] = {k: previous["run"].get(k) for k in ("data_date", "failed_step", "reason")}
     # 融資維持率（估）的每日對帳：站台狀態看得到當天的差距與全部不給的原因（不擋發布）。
-    checks = _site_checks((ctx.outputs.get("build_seed") or {}).get("margin_check"))
+    checks = _site_checks(ctx.outputs.get("build_seed") or {}, ctx.outputs.get("_chip_detail_check"))
     if checks:
         status["checks"] = checks
     _write_record(CLOUD / ".data-status.json", status)
@@ -980,7 +1002,7 @@ def real_steps() -> list[Step]:
         if (out / "manifest.json").exists():
             manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
             return {"seed_dir": str(out), "version": manifest.get("version"), "reused": True,
-                    "problems": _seed_problems(manifest), "margin_check": _margin_check(manifest)}
+                    "problems": _seed_problems(manifest), **_margin_checks(manifest)}
         universe = ctx.work_dir / "liquid-universe" / f"{ctx.data_date}.json"
         command = [sys.executable, str(CLOUD / "build_stock_pack.py"), "--out", str(out), "--universe", str(universe)]
         if ctx.outputs.get("_seed_version"):  # 同日重新發布：資料日與來源相同，版本名要另外給才不會撞到原版
@@ -988,7 +1010,7 @@ def real_steps() -> list[Step]:
         result = _sh(command)
         manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8")) if (out / "manifest.json").exists() else {}
         return {**result, "seed_dir": str(out), "version": manifest.get("version"), "problems": _seed_problems(manifest),
-                "margin_check": _margin_check(manifest)}
+                **_margin_checks(manifest)}
 
     def build_dist(ctx: RunContext) -> dict:
         report: dict = {}
@@ -1010,6 +1032,8 @@ def real_steps() -> list[Step]:
                 raise
             market_dir = LAST_MARKET_DIR
             report["market"] = {"fallback": True, "reason": str(error)[-300:]}
+        # 首頁籌碼卡的名單對照原件檢查（11-17）：進執行紀錄與站台狀態，不擋發布
+        report["chip_detail"] = ctx.outputs["_chip_detail_check"] = _chip_detail_check(report["market"])
         report["stock_pack"] = _install_stock_pack(_seed_dir(ctx) / "stock-pack-v2.json")
         report["status"] = _write_status_for_build(ctx)
         report["build"] = _build_site(market_dir)

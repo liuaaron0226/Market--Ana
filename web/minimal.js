@@ -7,7 +7,9 @@
     OV = window.MarketData ? await window.MarketData.overview() : null;
   } catch (error) {
     const note = document.getElementById('serviceNote');
-    if (note) { note.hidden = false; note.textContent = error && error.message ? error.message : '暫時無法取得資料。'; }
+    // 雲端資料層（MarketDataError，帶 kind）的中文說明可以直接顯示；其他原文（例如 JSON 解析錯誤）只進 console。
+    console.warn('[資料讀取]', error);
+    if (note) { note.hidden = false; note.textContent = error && error.kind ? error.message : '暫時無法取得資料，請稍後再試。'; }
     return;
   }
   const A = OV && OV.analysis;
@@ -24,7 +26,7 @@
   const $ = id => document.getElementById(id);
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
   const isMobile = () => matchMedia('(max-width: 760px)').matches;
-  // 收復／防守改由 K 線軸上價籤顯示線與數字（unslop 11-09），左側不再留浮鈕欄。
+  // 收復／防守的線畫在 K 線上，名稱與數字在收復線／防守線鍵（本人 11-17 起右側價格欄不掛它們的價籤），左側不再留浮鈕欄。
   const marketLabelRail = () => 4;
   const outcomeLabels = {
     stand_back: '站回收復線',
@@ -417,11 +419,13 @@
     return dailyWithLive();
   }
 
+  // 收復線、防守線只畫線、右側價格欄不掛價籤（tag:false；本人 11-17：右側只放簡單的數字）。
+  // 名稱與數字由圖表上的收復線／防守線鍵標示（桌面在圖左上角當圖例、手機在圖下方），顏色和線相同。
   function overlays() {
     if (linesHidden()) return [];
     return [
-      { value: UPPER, label: '收復線', short: '收復', color: css('--gold', '#d9a94b'), pos: 'above' },
-      { value: LOWER, label: '防守線', short: '防守', color: css('--down', '#2fd09a'), pos: 'below' }
+      { value: UPPER, label: '收復線', short: '收復', color: css('--gold', '#d9a94b'), pos: 'above', tag: false },
+      { value: LOWER, label: '防守線', short: '防守', color: css('--down', '#2fd09a'), pos: 'below', tag: false }
     ];
   }
 
@@ -566,7 +570,7 @@
     instance.opts.liveLast = liveLast;
     instance.showMacd = period !== 'daily' && !isMobile();
     const desiredCount = period === 'monthly' ? 60 : period === 'weekly' ? 70 : period === 'h60' ? 80 : isMinutePeriod(period) ? Math.min(candles.length, 120) : 70;
-    // 右側價格欄寬：軸上價籤模式（收復／防守／收盤）約 78～100px，取已畫過的實際值；第一次畫之前用 100 保守估。
+    // 右側價格欄寬：軸上價籤模式（收盤與預測線）約 78～100px，取已畫過的實際值；第一次畫之前用 100 保守估。
     const priceRail = instance.geo ? Math.max(64, instance.canvas.clientWidth - instance.geo.l - instance.geo.pw) : 100;
     const plotWidth = Math.max(0, els.chartStage.clientWidth - marketLabelRail() - priceRail);
     const touchSafeCount = Math.max(10, Math.floor(plotWidth / 44));
@@ -857,11 +861,14 @@
   const LIST_ROWS = 10, POINT_ROWS = 2;
   const chipSide = () => (panelState.payload && panelState.payload.side) || 0;
   const chipList = key => { const lists = CHIP_LISTS[key] || []; return lists[Math.min(chipSide(), lists.length - 1)]; };
-  // 名單現在是哪一天：在圖上點過就是點的那一天，還沒點就是最新一天
+  // 「目前前 10」各項自己最新有資料的那一天（11-17：融資晚上才公布，常比外資晚一天）；舊資料包沒有 dates 就用全體最新一天
+  const NOW_KEY = { foreign: 'foreign', futures: 'foreign', trust: 'trust', margin: 'margin', short: 'short', volume: 'amount' };
+  const nowDay = key => (!NOW ? null : NOW.dates ? NOW.dates[NOW_KEY[key]] || null : NOW.as_of);
+  // 名單現在是哪一天：在圖上點過就是點的那一天，還沒點就是這一項的最新一天
   function chipDay(key) {
     if (panelState.payload && panelState.payload.day) return panelState.payload.day;
-    const rows = chipSeries(key);
-    return NOW && rows.some(row => row.date === NOW.as_of) ? NOW.as_of : rows.length ? rows[rows.length - 1].date : '';
+    const rows = chipSeries(key), today = nowDay(key);
+    return today && rows.some(row => row.date === today) ? today : rows.length ? rows[rows.length - 1].date : '';
   }
   const signedLots = v => `${v >= 0 ? '+' : '−'}${fmt(Math.abs(v), 0)} 張`;
   const signedBillion = v => (v == null ? '—' : `${v >= 0 ? '+' : '−'}${fmt(Math.abs(v), 1)} 億`);
@@ -917,8 +924,10 @@
         title.innerHTML = name(more.getAttribute('aria-expanded') === 'true' ? list[0].replace(`前 ${LIST_ROWS}`, `前 ${target().querySelectorAll('tbody tr').length}`) : list[0]);
       });
     };
-    if (NOW && day === NOW.as_of) { fill(listTable(NOW[list[1]], latestColumns(key, list[2]))); return; }
-    if (!detailDays.has(day)) { fill(`<p class="chip-date">這一天的個股明細還沒抓到（目前有 ${DT ? DT.days.length : 0} 天）。</p>`); return; }
+    if (day && day === nowDay(key)) { fill(listTable(NOW[list[1]], latestColumns(key, list[2]))); return; }
+    // 那一天的明細還沒抓到（不在已有的日子裡，或取回來是空的）和官方那天真的沒資料要分開寫（換皮前就是這樣分；D 包核銷補回）
+    const notFetched = `<p class="chip-date">這一天的個股明細還沒抓到（目前有 ${DT ? DT.days.length : 0} 天）。</p>`;
+    if (!detailDays.has(day)) { fill(notFetched); return; }
     // 取資料的期間原本的名單先留著（變淡），不換成一行「載入中」：不然面板會先變矮再變高，往下捲過的話畫面會跳一下（本人 11-15 回報的抖動）
     if (target().firstElementChild) {
       target().classList.add('is-loading');
@@ -926,7 +935,7 @@
       target().firstElementChild.setAttribute('data-loading', '');
     } else fill('<p class="chip-date" data-loading>載入明細中…</p>');
     window.MarketData.detail(key, day).then(
-      detail => fill(listTable((detail || {})[list[1]], dayColumns(key))),
+      detail => fill(Object.keys(detail || {}).length ? listTable(detail[list[1]], dayColumns(key)) : notFetched),
       error => fill(`<p class="chip-date" role="alert">${esc(error && error.message ? error.message : '暫時無法取得明細。')}</p>`)
     );
   }
@@ -1487,6 +1496,7 @@
     els.backdrop.hidden = false;
     els.panel.setAttribute('aria-hidden', 'false');
     document.body.classList.add('panel-open');
+    window.ScrollLock?.lock(els.panel);   // 底下的頁面不跟著手指捲（scroll-lock.js）
     placePanel(panelAnchor);
     window.cancelAnimationFrame(openFrame);
     openFrame = requestAnimationFrame(() => {
@@ -1527,6 +1537,7 @@
     els.panel.classList.remove('is-open');
     els.panel.setAttribute('aria-hidden', 'true');
     document.body.classList.remove('panel-open');
+    window.ScrollLock?.unlock(els.panel);
     const target = activeAnchor;
     activeAnchor = null;
     panelAnchor = null;
@@ -1557,7 +1568,9 @@
     if (!data) {
       latestLive = false;
       els.service.hidden = false;
-      els.service.textContent = `即時行情暫時無法更新：${payload && payload.error ? payload.error : '未取得資料'}。目前顯示盤後資料。`;
+      // 伺服器錯誤原文（可能是英文的執行環境訊息）只進 console，畫面只放固定中文說明。
+      console.warn('[即時行情]', payload && payload.error);
+      els.service.textContent = '即時行情暫時無法更新，目前顯示盤後資料。';
       setMarketHeader(fallbackMarketData(), { id: 'delay', label: '延遲' }, fallbackMarketDate());
       setIntradayOptions(false);
       loadPeriod(isMinutePeriod(currentPeriod) ? 'daily' : currentPeriod, false);
@@ -1610,7 +1623,7 @@
         setIntradayOptions(false);
         return; // 雲端沒有即時行情，不再輪詢
       }
-      if (!isJson) throw new Error('回應不是行情資料（可能是登入已失效，請重新整理）');
+      if (!isJson) throw Object.assign(new Error('回應不是行情資料'), { note: '即時行情無法更新：登入可能已失效，請重新整理。目前顯示盤後資料。' });
       const payload = body;
       if (!response.ok && !payload) throw new Error(`HTTP ${response.status}`);
       renderPayload(payload);
@@ -1621,7 +1634,10 @@
     } catch (error) {
       latestLive = false;
       els.service.hidden = false;
-      els.service.textContent = `即時行情連線中斷：${error.name === 'AbortError' ? '本機服務逾時' : error.message}。目前顯示盤後資料。`;
+      // 瀏覽器／伺服器的原文（例如 Failed to fetch）只進 console。
+      console.warn('[即時行情]', error);
+      els.service.textContent = error.note
+        || (error.name === 'AbortError' ? '即時行情連線逾時，目前顯示盤後資料。' : '即時行情連線中斷，目前顯示盤後資料。');
       setMarketHeader(fallbackMarketData(), { id: 'delay', label: '延遲' }, fallbackMarketDate());
       setIntradayOptions(false);
       loadPeriod(isMinutePeriod(currentPeriod) ? 'daily' : currentPeriod, false);
@@ -2539,6 +2555,7 @@
   const marketPoints = document.getElementById('aiDigestMarketPoints');
   const flowPoints = document.getElementById('aiDigestFlowPoints');
   const setup = document.getElementById('aiDigestSetup');
+  const reason = document.getElementById('aiDigestReason');
   if (!card || !date || !conclusion || !preview || !details || !marketPoints || !flowPoints) return;
 
   const listItem = text => {
@@ -2601,6 +2618,11 @@
     if (!payload.configured) { showSetup('尚未設定 Gemini'); return; }
     if (!payload.consented) { showSetup('同意內容已更新，請回設定頁重新同意'); return; }
     renderDigest(payload);
+    // 04 票：當天沒產生（額度用完、金鑰失效…）時寫出原因，附回設定頁的入口。
+    if (payload.notice?.text) {
+      if (reason) { reason.textContent = payload.notice.text; reason.hidden = false; }
+      if (setup) setup.hidden = false;
+    }
   }
 
   async function initAiDigest() {

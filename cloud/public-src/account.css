@@ -140,5 +140,93 @@ label.check input { width: 18px; height: 18px; margin: 3px 0 0; flex: none; acce
 .note.inline { margin: 0 0 0 10px; }
 .state.gemini { color: var(--faint); }
 .state.gemini.on { color: var(--down); }
+.state.paused, .state.gemini.paused { color: var(--up); }
 .chips { display: inline-flex; gap: 6px; flex-wrap: wrap; }
 .row + input[type="password"] { margin-top: 12px; }
+
+/* ================= 看盤桌（立體重設計 D 包第 2 片，2026-11-17） =================
+   這三頁（申請、站主後台、Gemini 設定）不載入主站的樣式檔，所以把主站 web/bold.css〈看盤桌：全站唯一的深度系統〉
+   的顏色與陰影再寫一份：桌面底色、卡片＝板、按鈕＝鍵、輸入框＝槽。只換顏色與卡片樣式，版面不動。
+   主站那一段改了，這裡要跟著改（數值一字不差照抄）。 */
+:root {
+  --r-key: 8px;
+  --r-slab: 18px;
+  --slab-thick: 4px;
+  --key-thick: 2px;
+  --desk: #e9e5dc;
+  --desk-hi: #f1eee7;
+  --key: var(--panel);
+  --well: var(--panel2);
+  --edge: #d6cfc0;
+  --rim: #fff;
+  --shade: 60 45 20;
+  --shade-k: 1;
+  --edge-ink: color-mix(in srgb, var(--ink) 62%, #000);
+  --rim-ink: color-mix(in srgb, var(--ink) 78%, #fff);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --desk: #070709;
+    --desk-hi: #0e0e12;
+    --key: #202028;
+    --well: var(--bg);
+    --edge: #0d0d11;
+    --rim: rgb(255 255 255 / 11%);
+    --shade: 0 0 0;
+    --shade-k: 2.6;
+  }
+}
+:root {
+  --slab-shadow:
+    inset 0 1px 0 var(--rim),
+    0 var(--slab-thick) 0 var(--edge),
+    0 calc(var(--slab-thick) + 2px) 3px rgb(var(--shade) / calc(.08 * var(--shade-k))),
+    0 calc(var(--slab-thick) + 10px) 20px -6px rgb(var(--shade) / calc(.16 * var(--shade-k))),
+    0 calc(var(--slab-thick) + 30px) 48px -20px rgb(var(--shade) / calc(.2 * var(--shade-k)));
+  --key-shadow:
+    inset 0 1px 0 var(--rim),
+    0 var(--key-thick) 0 var(--edge),
+    0 calc(var(--key-thick) + 1px) 5px rgb(var(--shade) / calc(.16 * var(--shade-k)));
+  --key-shadow-press:
+    inset 0 1px 0 var(--rim),
+    0 0 0 var(--edge),
+    0 1px 2px rgb(var(--shade) / calc(.12 * var(--shade-k)));
+  --key-shadow-ink:
+    inset 0 1px 0 var(--rim-ink),
+    0 var(--key-thick) 0 var(--edge-ink),
+    0 calc(var(--key-thick) + 1px) 5px rgb(var(--shade) / calc(.2 * var(--shade-k)));
+  --well-shadow:
+    inset 0 2px 4px rgb(var(--shade) / calc(.12 * var(--shade-k))),
+    inset 0 -1px 0 var(--rim);
+}
+
+/* 頁面是一張桌面：底色是桌面色，左上角一片亮一階的光（和首頁、個股頁同一句） */
+html { background: var(--desk); }
+body { background: radial-gradient(1200px 720px at 18% 0, var(--desk-hi), transparent 70%) no-repeat var(--desk); }
+/* 品牌記號和主站頁首一樣用字色 */
+.brand svg { color: var(--ink); }
+
+/* 卡片＝板 */
+.card { border: 0; border-radius: var(--r-slab); box-shadow: var(--slab-shadow); }
+.item { border-radius: var(--r-key); }
+
+/* 輸入框＝凹下的槽 */
+:is(input[type="text"], input[type="password"]) {
+  border-color: var(--line); border-radius: var(--r-key); background: var(--well); box-shadow: var(--well-shadow);
+}
+
+/* 按鈕＝凸起的鍵：主要動作是墨色鍵（同個股頁的「查詢」），其他是板色的鍵；按下去壓平 */
+button, .btn {
+  border-color: var(--ink); border-radius: var(--r-key); background: var(--ink); color: var(--bg); box-shadow: var(--key-shadow-ink);
+  transition: background-color 160ms ease, box-shadow 80ms linear, transform 80ms linear;
+}
+button:hover:not(:disabled), .btn:hover { background: color-mix(in srgb, var(--ink) 86%, var(--bg)); }
+:is(button.ghost, .btn.ghost, .tabs button) { border-color: transparent; background: var(--key); color: var(--ink); box-shadow: var(--key-shadow); }
+:is(button.ghost, .btn.ghost, .tabs button):hover:not(:disabled) { background: var(--key); color: var(--ink); }
+button.warn { border-color: var(--up); background: var(--key); color: var(--up); box-shadow: var(--key-shadow); }
+button.warn:hover:not(:disabled) { background: var(--key); }
+.tabs button[aria-pressed="true"] { border-color: var(--ink); background: var(--ink); color: var(--bg); box-shadow: var(--key-shadow-ink); }
+:is(button, .btn):active:not(:disabled) { transform: translateY(var(--key-thick)); box-shadow: var(--key-shadow-press); }
+@media (prefers-reduced-motion: reduce) {
+  :is(button, .btn) { transition: none; }
+}

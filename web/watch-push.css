@@ -1,6 +1,37 @@
-/* 自選股頁「到價推播」（自選股關注 F 票）：沿用自選股區塊的線與字級，只有站主看得到。 */
-.wp { padding: 20px 0 4px; border-bottom: 1px solid var(--hair); }
-.wp-head h3 { font: 600 16px var(--serif); }
+/* 自選股頁「到價推播」（自選股關注 F 票）：只有站主看得到。
+   本人 2026-11-17：放在庫存底下奇怪又佔空間 → 收進頁首的鈴鐺，點了才浮出來（watch-push.js 的 attach）。
+   頁首鈴鐺的位置在 portfolio.css。浮層和首頁的浮板同一套（第 2 層的板、--float／--float-shadow）；手機從下緣升起，桌機浮在右上角鈴鐺下方。 */
+
+.wp-dialog:not([open]) { display: none; }
+.wp-dialog {
+  width: min(400px, calc(100vw - 32px)); max-height: calc(100dvh - 96px);
+  margin: 72px max(16px, calc((100vw - 1280px) / 2 + 32px)) auto auto; padding: 18px 20px 20px;
+  border: 0; border-radius: var(--r-float); background: var(--float); box-shadow: var(--float-shadow);
+  color: var(--ink); overflow: auto; overscroll-behavior: contain;
+  animation: wp-rise 320ms var(--ease-depth, ease-out);
+}
+/* 舊版瀏覽器的 ::backdrop 讀不到頁面的變數，給後備值（和首頁浮板相同） */
+.wp-dialog::backdrop { background: var(--scrim, rgb(28 25 20 / 42%)); }
+@keyframes wp-rise { from { opacity: 0; transform: translateY(-8px) scale(.97); } }
+.wp-dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.wp-dialog-head h2 { font: 600 17px var(--serif); }
+.wp-close {
+  width: 44px; height: 44px; margin: -10px -12px -10px 0; display: inline-grid; place-items: center;
+  border: 0; border-radius: var(--btn-r); background: transparent; color: var(--dim); cursor: pointer;
+}
+.wp-close:hover { background: var(--panel2); color: var(--ink); }
+.wp-close svg { width: 18px; height: 18px; }
+@media (max-width: 640px) {
+  .wp-dialog {
+    width: 100%; max-width: none; max-height: 85dvh; margin: auto 0 0;
+    padding: 16px 16px calc(20px + env(safe-area-inset-bottom)); border-radius: var(--r-float) var(--r-float) 0 0;
+    animation-name: wp-sheet;
+  }
+  @keyframes wp-sheet { from { transform: translateY(100%); } }
+}
+@media (prefers-reduced-motion: reduce) { .wp-dialog { animation: none; } }
+
+.wp { padding: 0; }
 .wp-body { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding-top: 10px; }
 .wp-toggle { padding-left: 0; }
 .wp-test {

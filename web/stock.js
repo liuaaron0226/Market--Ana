@@ -2,7 +2,6 @@
 (function () {
   'use strict';
   const $ = id => document.getElementById(id);
-  const css = (name, fallback) => getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
   const fmt = n => n === null || n === undefined ? '—' : Number(n).toLocaleString('en-US', { maximumFractionDigits: 2 });
   const SCHEMA = 'stock-analysis/v2';
   const TIER = { near: '近端（10% 內）', mid: '中距（10～20%）', far: '遠端（20% 以上）' };
@@ -198,7 +197,8 @@
   // K 線的高度：照寬度算，最矮 300、最高 460。電腦上再多一個上限——視窗高度扣掉 K 線以外要擠進第一個畫面的東西
   // （頂列、報價、圖上的工具列、指標區、三顆分類鍵，量起來約 570px），三顆分類鍵才不用捲就看得到（本人 2026-11-15「改矮一點」）。
   // 視窗夠高時照舊是 460；手機本來就是 300，不受影響。
-  const CHART_REST_PX = 570;
+  // 2026-11-17 重量：當日三格與操作策略搬到「技術」之後，報價卡只剩價格，K 線以外的高度量起來是 500（1440×900），留 4px 餘裕
+  const CHART_REST_PX = 504;
   const chartHeight = width => Math.max(300, Math.min(460, width * 0.52, innerHeight - CHART_REST_PX));
 
   function updateUrl(code) {
@@ -254,29 +254,29 @@
   function updateLiveStatus(payload) {
     const badge = $('liveBadge');
     const status = $('liveStatus');
-    const cloudUnavailable = payload?.error === 'cloud-live-unavailable' || payload?.environment === 'cloud' && payload?.ok === false;
+    const cloudUnavailable = window.Intraday.liveUnavailable(payload);
     badge.hidden = !payload?.live;
     status.dataset.state = cloudUnavailable ? 'error' : payload?.live ? 'live' : 'closed';
-    if (cloudUnavailable) status.textContent = '雲端無法取得即時資料';
-    else if (payload?.live && payload.quote?.data_time) status.textContent = `${payload.quote.data_time.slice(11, 19)} 更新`;
-    else if (payload?.market_open) status.textContent = '即時資料逾 30 秒，顯示最近一筆';
-    else status.textContent = '已收盤，顯示收盤資料';
+    // 收盤後一定寫出顯示的是哪一天的收盤（intraday.js liveStatusText）。
+    // 換股票載入中（baseResult 已清空）不拿上一檔的日期來寫。
+    status.textContent = window.Intraday.liveStatusText(payload, baseResult && lastResult?.code === baseResult.code ? lastResult : baseResult);
   }
 
   function applyLive(payload) {
     lastLive = payload;
-    updateLiveStatus(payload);
     // 關注股盤中觸價亮燈：沿用這一份即時報價，不另外取報價。
     if (window.WatchJudgments) window.WatchJudgments.onLive(payload);
-    if (payload?.ok && payload.market_open && payload.quote && baseResult) {
-      const projected = window.Intraday.projectAnalysis(baseResult, payload);
+    // 盤中用現價投影；收盤後到每日更新發布前，今天的收盤報價比日資料新也投影（本人 11-17：收盤後看到的是昨天的）。
+    const projected = payload?.ok && payload.quote && baseResult ? window.Intraday.projectAnalysis(baseResult, payload) : baseResult;
+    if (projected && projected !== baseResult) {
       if (features.strategy_v1) projected.strategy = buildStrategy(projected);
       else delete projected.strategy;
       render(projected, false);
     } else if (baseResult) {
-      // 13:30 後或休市回到盤後基準；不能只熄掉 LIVE 卻把最後盤中價留在主報價與操作重點。
+      // 13:30 後日資料已是今天、或休市：回到盤後基準；不能只熄掉 LIVE 卻把最後盤中價留在主報價與操作重點。
       render(baseResult, false);
     }
+    updateLiveStatus(payload);   // 畫完再寫狀態字：要用畫面上這一份的日期
   }
 
   function render(r, initial = false) {
@@ -302,10 +302,11 @@
         }
       });
     }
-    $('quoteMode').textContent = intraday ? '盤中' : '資料日';
-    $('asOf').textContent = intraday && r._intraday.data_time ? r._intraday.data_time.slice(0, 16).replace('T', ' ') : r.as_of;
-    $('ladderCurrentLabel').textContent = intraday ? '現價' : '收盤';
-    $('ladderCurrentMeta').textContent = intraday ? '盤中更新' : '資料日收盤';
+    const caption = window.Intraday.quoteCaption(r);
+    $('quoteMode').textContent = caption.mode;
+    $('asOf').textContent = caption.stamp;
+    $('ladderCurrentLabel').textContent = caption.ladderLabel;
+    $('ladderCurrentMeta').textContent = caption.ladderMeta;
     $('close').textContent = fmt(r.quote.close);
     const chg = r.quote.chg_pct;
     $('chg').textContent = chg === null || chg === undefined ? '' : `${chg > 0 ? '+' : ''}${Number(chg).toFixed(2)}%`;
@@ -403,10 +404,9 @@
       : intraday ? (lastLive?.candles?.[intradayKey] || [])
       : chartPeriod === 'weekly' ? weeklyCandles(daily.map(row => ({ ...row, date: row.t })))
       : chartPeriod === 'monthly' ? monthlyCandles(daily.map(row => ({ ...row, date: row.t }))) : daily;
+    // 支撐、壓力不再疊在 K 線上（本人 11-17：右側只放簡單的數字，價位看圖下方的價位階梯）；
+    // 只剩線沒有名稱會看不懂，所以線也一起拿掉。
     const overlays = [];
-    const lv = r.levels || {};
-    (lv.resistance || []).forEach((c, i) => overlays.push({ value: c.tick, label: `壓力${i ? '二' : '一'} ${fmt(c.tick)}`, short: '壓力', color: css('--gold', '#94681a'), pos: 'above', align: i ? 'left' : 'right' }));
-    (lv.support || []).forEach((c, i) => overlays.push({ value: c.tick, label: `支撐${i ? '二' : '一'} ${fmt(c.tick)}`, short: '支撐', color: css('--down', '#0f8058'), pos: 'below', align: i ? 'left' : 'right' }));
     // 自選股關注的觸發線與看錯線（watch-judgments.js；只有站主有判斷時才有）。
     if (window.WatchJudgments) overlays.push(...window.WatchJudgments.overlays(chartPeriod));
     const key = `${r.code}:${r.as_of}:${chartPeriod}`;
@@ -442,7 +442,7 @@
     if (intraday) $('stockChartContext').textContent = `${unit}K · ${candles.length} 根`;
     else $('stockChartContext').textContent = `${unit}K · 資料日 ${r.as_of}`;
     chart.canvas.setAttribute('aria-label', candles.length
-      ? `${r.name}${unit}K，${candles[0].label}至${candles[candles.length - 1].label}，含支撐與壓力參考線。`
+      ? `${r.name}${unit}K，${candles[0].label}至${candles[candles.length - 1].label}。`
       : `${r.name}${unit}K，尚無盤中資料。`);
   }
 
@@ -1267,6 +1267,7 @@
   syncMaLimit();
   bindDrawTools();
   setTheme(saved === 'dark' ? 'dark' : 'light');
-  window.StockView = { weeklyCandles, monthlyCandles };
+  // chart：驗收用（畫線旅程讀選了哪一根 K 棒、右側標了什麼），頁面自己不用
+  window.StockView = { weeklyCandles, monthlyCandles, chart: () => chart };
   loadReleaseFeatures().then(() => load(codeFromUrl() || '2330'));
 })();

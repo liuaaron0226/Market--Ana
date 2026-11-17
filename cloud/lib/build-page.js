@@ -12,7 +12,7 @@ export const WEB_FILES = [
   // 立體重設計 A 包第 7 片（11-15）：K 線區的小鍵與浮出選單
   "chart-menus.js",
   // 立體重設計 B 包（11-14）：資金地形的版面計算與畫面
-  "terrain-layout.js", "terrain.js",
+  "terrain-layout.js", "terrain.js", "desk-tilt.js",
   // 立體重設計（11-15）：短中長期走勢的算票與畫面
   "trend-votes.js", "trend-matrix.js",
   // 立體重設計（11-15）：收復線／防守線點開之後那張圖的資料整理
@@ -27,8 +27,10 @@ export const WEB_FILES = [
   "holders-weekly.js", "holders-card.js",
   // 預測帳本（2026-11-15，B 票第 4 片）：只有站主有預測內容時才會在首頁出現
   "forecast.js", "forecast.css",
+  // 浮層打開時把底下的頁面鎖住（11-17，首頁明細板、對話框、預測與關注浮板共用）
+  "scroll-lock.js",
   // 個股頁事實區塊（2026-11-15 規格，A 票）
-  "stock-facts.js", "stock-facts.css",
+  "stock-facts.js", "stock-facts.css", "stock-signals.js", "stock-signals.css",
   // 自選股關注 B 票：個股頁「國外同類股」（只有站主的關注股才出現）
   "watch-peers.js", "watch-peers.css",
   // 自選股關注的判斷（2026-11-16，E 票）：只有站主有判斷時才會在自選股頁與個股頁出現

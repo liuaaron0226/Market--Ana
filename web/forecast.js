@@ -1,6 +1,6 @@
 // 大盤事前預測（規格 .scratch/forecast-ledger/spec.md，B 票第 4、5 片）。
 // 首屏只多兩樣東西：日 K 上一版的轉強線／轉弱線，和 K 線控制列一枚「預測」小鍵。
-// 小鍵點開的浮板有三頁：預測（落點、理由、看錯條件…）、對帳（猜中／照歷史亂猜／固定規則並排）、
+// 小鍵點開的浮板有三頁：預測（落點、理由、看錯條件…）、對帳（猜中／照歷史亂猜／固定規則並排；下面另一區是歷史重播（參考））、
 // 回看（過去任一份預測的兩條線畫在當時的 K 線上，加上到期的實際收盤）。
 // 線取自 /api/forecast/latest（預測帳本發布到資料庫的那一筆），和對帳用的是同一筆數值。
 // 只有站主、而且功能開關打開時 API 才有內容；沒有內容、載入失敗或本機版沒有這個 API 時，
@@ -21,7 +21,7 @@
   const HISTORY_DAYS = 60;
   const state = {
     latest: null, horizon: '1', edition: null, view: 'forecast', onChange: null, getDaily: null, root: null,
-    summary: undefined, history: undefined, historyFrom: null, picked: null,
+    summary: undefined, replay: undefined, history: undefined, historyFrom: null, picked: null,
   };
 
   // 顏色一律取首頁的設計變數；取不到時的備用色只寫這一份（淺色主題的值）。
@@ -252,6 +252,18 @@
     return ['official', 'trial'].map(mode => groups.filter(g => g.run_mode === mode)).filter(list => list.length);
   }
 
+  // 歷史重播（參考）：另一份摘要（本人 11-17）。和目前這一版同方法與輸入版本的那一組優先，沒有就取這一版的第一組。
+  function replaySeries(summary) {
+    const record = current() || Object.values(state.latest.editions).find(Boolean);
+    const groups = (summary.groups || []).filter(g => g.run_mode === 'replay' && g.edition === state.edition);
+    const same = groups.filter(g => record && g.method_version === record.method_version && g.input_version === record.input_version);
+    if (same.length) return same;
+    const first = groups[0];
+    return first ? groups.filter(g => g.method_version === first.method_version && g.input_version === first.input_version) : [];
+  }
+
+  const MODE = { official: '正式', trial: '試跑', replay: '歷史重播（參考）' };
+
   function summaryView(panel) {
     if (state.summary === undefined) {
       panel.append(el('p', { class: 'forecast-note' }, '載入中'));
@@ -259,22 +271,26 @@
       return;
     }
     const series = state.summary ? seriesByRunMode(state.summary) : [];
-    if (!series.length) {
+    const replay = state.replay ? replaySeries(state.replay) : [];
+    if (!series.length && !replay.length) {
       panel.append(el('p', { class: 'forecast-note' }, '還沒有對帳紀錄'));
       return;
     }
-    for (const groups of series) seriesView(panel, groups, series.length > 1);
+    for (const groups of series) seriesView(panel, groups, series.length > 1 || replay.length > 0);
+    if (replay.length) seriesView(panel, replay, true);
   }
 
   function seriesView(panel, groups, titled) {
-    const official = groups[0].run_mode === 'official';
-    if (titled) panel.append(el('h4', { class: 'forecast-series' }, official ? '正式' : '試跑'));
+    const mode = groups[0].run_mode;
+    if (titled) panel.append(el('h4', { class: 'forecast-series' }, MODE[mode] || mode));
     for (const horizon of HORIZONS) {
       const group = groups.find(g => String(g.horizon) === horizon);
       if (!group) continue;
       const block = el('section', { class: 'forecast-score' });
       const head = el('header', { class: 'forecast-score-head' });
-      head.append(el('strong', {}, `${horizon}日`), el('span', { class: 'forecast-tag' }, group.verdict),
+      // 正式滿規定時間才換成判定結果（明顯比亂猜準／沒有明顯差別／明顯比亂猜差／漏記太多）；重播只標「參考」。
+      const tag = mode === 'replay' ? '參考' : (group.judgement && group.judgement.conclusion) || group.verdict;
+      head.append(el('strong', {}, `${horizon}日`), el('span', { class: 'forecast-tag' }, tag),
         el('span', { class: 'forecast-count num' }, `${group.reconciled} 筆`));
       block.append(head, bar('猜中', group.hit_rate, 'is-hit'), bar('照歷史亂猜', group.baseline_rate, 'is-base'),
         bar('固定規則', group.fixed_rule_rate, 'is-rule'));
@@ -283,8 +299,12 @@
       }
       panel.append(block);
     }
+    // 資料缺漏、無法判定的格子不算對也不算錯，有的話另外列出來（F 票判定規則第 5 點）。
+    const undeterminable = groups.reduce((n, g) => n + (g.undeterminable || 0), 0);
+    const unknown = undeterminable ? ` · 無法判定 ${undeterminable} 格` : '';
+    const tail = mode === 'replay' ? ' · 用模型知識截止日之後的過去日子重寫，不計入正式結論' : '';
     panel.append(el('p', { class: 'forecast-note' },
-      `${official ? '正式' : '試跑'} · 漏記 ${groups[0].misses} 次 · 還沒到期 ${groups.reduce((n, g) => n + g.pending, 0)} 格`));
+      `${MODE[mode] || mode} · 漏記 ${groups[0].misses} 次 · 還沒到期 ${groups.reduce((n, g) => n + g.pending, 0)} 格${unknown}${tail}`));
   }
 
   // ---- 回看頁 ----
@@ -371,7 +391,10 @@
   }
 
   async function loadSummary() {
-    try { state.summary = (await getJson('/api/forecast/summary'))?.summary || null; } catch { state.summary = null; }
+    const [summary, replay] = await Promise.all(['/api/forecast/summary', '/api/forecast/replay'].map(url =>
+      getJson(url).then(body => body?.summary || null, () => null)));
+    state.summary = summary;
+    state.replay = replay;
     render();
   }
 
@@ -392,7 +415,14 @@
   }
 
   function renderPanel(panel) {
-    panel.replaceChildren(segmented('檢視', Object.entries(VIEWS), 'view', state.view));
+    // 標題列＋關閉鈕（本人 11-17：點開後找不到關的地方；手機浮板幾乎蓋滿畫面，點外面不好關）
+    const head = el('div', { class: 'forecast-head' });
+    const close = el('button', { type: 'button', class: 'forecast-close', 'data-close': '1', 'aria-label': '關閉大盤預測' });
+    const cross = svg('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' });
+    cross.append(svg('path', { d: 'm6 6 12 12M18 6 6 18', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.8', 'stroke-linecap': 'round' }));
+    close.append(cross);
+    head.append(el('span', { class: 'forecast-title' }, '大盤預測'), close);
+    panel.replaceChildren(head, segmented('檢視', Object.entries(VIEWS), 'view', state.view));
     const editions = Object.keys(EDITION).filter(key => state.latest.editions[key]);
     if (editions.length > 1) panel.append(segmented('版本', editions.map(key => [key, EDITION[key]]), 'edition', state.edition));
     if (state.view === 'summary') return summaryView(panel);
@@ -416,6 +446,9 @@
     if (open) (narrow() ? document.body : state.root).append(panel);
     panel.hidden = !open;
     chip.setAttribute('aria-expanded', String(open));
+    // 手機貼底的時候底下的頁面鎖住不捲（scroll-lock.js，本人 11-17）；桌機的小浮板掛在小鍵旁、跟著頁面走，不鎖。
+    if (open && narrow()) window.ScrollLock?.lock(panel);
+    else window.ScrollLock?.unlock(panel);
     if (open) renderPanel(panel);
   }
 
@@ -429,7 +462,8 @@
     panel.addEventListener('click', (event) => {
       const button = event.target.closest('button');
       if (!button) return;
-      const { horizon, edition, view, pick, more } = button.dataset;
+      const { horizon, edition, view, pick, more, close } = button.dataset;
+      if (close) { setOpen(false); chip.focus(); return; }
       if (more) { loadHistory(); return; }
       if (view) state.view = view;
       if (pick) state.picked = pick;
@@ -444,6 +478,8 @@
       if (!path.includes(root) && !path.includes(panel)) setOpen(false);
     });
     document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && !panel.hidden) { setOpen(false); chip.focus(); } });
+    // 開著時跨過手機／桌機寬度（拉視窗、手機轉向）：重新打開一次，浮板換到對的地方、底下頁面鎖不鎖也跟著對。
+    window.matchMedia('(max-width: 720px)').addEventListener('change', () => { if (!panel.hidden) setOpen(true); });
     host.prepend(root);
     Object.assign(state, { root, chip, panel });
   }

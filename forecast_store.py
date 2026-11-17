@@ -18,6 +18,9 @@ import sys
 from pathlib import Path, PurePosixPath
 
 PREFIX = "forecast-ledger/"
+WATCH_PREFIX = "watch-ledger/"
+# 事前預測的歷史重播（F 票，本人 2026-11-17「要，重播當參考」）：和正式帳本分開存。
+REPLAY_PREFIX = "forecast-replay/"
 # 海外原件（D 票）：檔名是內容的雜湊，同名必定同內容，只會越來越多；還原時不拉回本機（寫預測用不到舊原件）。
 ARCHIVE_DIR = "sources/"
 
@@ -89,10 +92,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("command", choices=["push", "pull"])
     parser.add_argument("--ledger", type=Path, required=True)
     parser.add_argument("--store-dir", type=Path, help="以本機目錄模擬 R2（不給就用環境變數連 R2）")
+    # 自選股關注的帳本（G 票）用同一套只新增的存法，放在自己的前綴底下。
+    parser.add_argument("--prefix", choices=[PREFIX, WATCH_PREFIX, REPLAY_PREFIX], default=PREFIX)
     args = parser.parse_args(argv)
     store = DirectoryStore(args.store_dir) if args.store_dir else R2Store.from_env()
     try:
-        result = push(args.ledger, store) if args.command == "push" else pull(store, args.ledger)
+        result = (push(args.ledger, store, args.prefix) if args.command == "push"
+                  else pull(store, args.ledger, args.prefix))
     except (LedgerStoreConflict, ValueError) as error:
         print(f"::error::{error}", file=sys.stderr)
         return 2

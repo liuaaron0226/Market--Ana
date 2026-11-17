@@ -414,7 +414,11 @@ class PriceSummaryTest(unittest.TestCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out), unittest.mock.patch.object(sys.stdout, "reconfigure", create=True):
             self.assertEqual(mh.main(["--root", str(self.elsewhere), "restore"]), 0)
-        self.assertEqual(json.loads(out.getvalue()), {"raw": 2, "prices": 2, "prices_kept": {"stored": 1, "skipped": []}})
+        # 上櫃那兩包（10 票）在這台還沒有：放回 0 天、跟上 0 天。
+        self.assertEqual(json.loads(out.getvalue()), {"raw": 2, "prices": 2, "otc-raw": 0, "otc-prices": 0,
+                                                      "prices_kept": {"stored": 1, "skipped": []},
+                                                      "otc_kept": {"stored": 0, "skipped": []},
+                                                      "otc_prices_kept": {"stored": 0, "skipped": []}})
         self.assertEqual(sorted(p.name for p in (self.elsewhere / "data/margin-history/prices").iterdir()),
                          ["prices-20251103.json", "prices-20251104.json", "prices-20251105.json"])
         self.assertTrue(stored(self.elsewhere, "20251104").exists())
@@ -460,6 +464,212 @@ class CoverageTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(mh.coverage(Path(tmp), ["2025-11-03"]),
                              {"first": None, "last": None, "held": 0, "missing": []})
+
+
+# ---- 上櫃（10 票）：E 票每天抓的上櫃融資原件（data/otc-credit/margin，雲端只留最近 30 份）另外長期留一份 ----
+
+OTC_FIELDS = ["代號", "名稱", "前資餘額(張)", "資買", "資賣", "現償", "資餘額", "資屬證金", "資使用率(%)", "資限額",
+              "前券餘額(張)", "券賣", "券買", "券償", "券餘額", "券屬證金", "券使用率(%)", "券限額", "資券相抵(張)", "備註"]
+
+
+def otc_official(day: str, rows: list[list[str]] | None = None, *, total_thousand: str | None = "111,172,301",
+                 stat: str = "ok") -> dict:
+    """櫃買「上櫃股票融資融券餘額」的官方回應（只寫到融資那幾欄，其餘補空字串）。表尾第二列是全市場融資金（仟元）。"""
+    pad = lambda row: row + [""] * (len(OTC_FIELDS) - len(row))   # noqa: E731
+    rows = [["6488", "環球晶", "1,000", "50", "40", "0", "1,010"]] if rows is None else rows
+    summary = [pad(["", "合計(張)", "2,103,219", "80,272", "66,294", "1,731", "2,115,466"])]
+    if total_thousand is not None:
+        summary.append(pad(["", "融資金(仟元)", "109,742,145", "6,371,359", "4,856,702", "84,501", total_thousand]))
+    return {"date": day, "stat": stat, "tables": [
+        {"title": "上櫃股票融資融券餘額", "fields": OTC_FIELDS, "data": [pad(row) for row in rows], "summary": summary}]}
+
+
+def otc_fetch(root: Path, day: str, payload: dict | None = None) -> Path:
+    """模擬 E 票的每日抓取（daily_ingest.otc_credit_day）把當天的上櫃融資存進 data/otc-credit/margin。"""
+    path = root / "data/otc-credit/margin" / f"{day}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = {"fetched_at_utc": "t", "source_url": "u", "sha256": "x", "data": otc_official(day) if payload is None else payload}
+    path.write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def otc_stored(root: Path, day: str) -> Path:
+    return root / "data/margin-history/otc-raw" / f"otc-margin-{day}.json"
+
+
+OTC_QUOTE_HEADER = ('"代號","名稱","收盤","漲跌","開盤","最高","最低","均價","成交股數","成交金額(元)","成交筆數","最後買價",'
+                    '"最後買量(千股)","最後賣價","最後賣量(千股)","發行股數","次日參考價","次日漲停價","次日跌停價"')
+OTC_QUOTE_ROWS = [("6488", "400.00", "2,000", "801,000"), ("00679B", "27.43", "25,110,647", "689,398,743"),
+                  ("731234", "1.20", "1,000", "1,200"),     # 權證：一天上萬檔、融資用不到，不留
+                  ("8069", "---", "0", "0")]                # 當天沒有成交
+
+
+def otc_quotes(root: Path, day: str, rows: list[tuple] | None = None, *, roc_date: str | None = None) -> Path:
+    """模擬每日抓取存下的上櫃每日收盤行情原件（data/otc-history/raw/YYYYMMDD.csv，MS950）。rows：（代號, 收盤, 成交股數, 成交金額）。"""
+    roc = roc_date or f"{int(day[:4]) - 1911}/{day[4:6]}/{day[6:]}"
+    lines = ["上櫃股票行情(含等價、零股、盤後、鉅額交易)", f"資料日期:{roc}", OTC_QUOTE_HEADER]
+    for code, close, volume, turnover in (OTC_QUOTE_ROWS if rows is None else rows):
+        cells = [code, "測試", close, "+0.10", close, close, close, close, volume, turnover, "1", close, "1", close, "1",
+                 "1,000", close, close, close]
+        lines.append(",".join(f'"{cell}"' for cell in cells))
+    lines.append('總成交金額,"1",')
+    path = root / "data/otc-history/raw" / f"{day}.csv"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(("\r\n".join(lines) + "\r\n").encode("cp950"))
+    return path
+
+
+def otc_summary(root: Path, day: str) -> Path:
+    return root / "data/margin-history/otc-prices" / f"otc-prices-{day}.json"
+
+
+def run_main(argv: list[str]) -> dict:
+    import contextlib
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out), unittest.mock.patch.object(sys.stdout, "reconfigure", create=True):
+        code = mh.main(argv)
+    assert code == 0, code
+    return json.loads(out.getvalue())
+
+
+class OtcStoreTest(unittest.TestCase):
+    """上櫃融資維持率（估）也要連續、長期的每日原件：E 票存在 data/otc-credit/margin 的那一份在雲端只留最近 30 份，
+    所以和上市一樣另外留一份不裁的（data/margin-history/otc-raw），重播要的行情另外摘一份（otc-prices）。"""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name) / "root"
+        self.elsewhere = Path(self.tmp.name) / "elsewhere"
+        self.root.mkdir()
+        self.elsewhere.mkdir()
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_days_fetched_by_the_daily_run_are_copied_byte_for_byte_and_survive_the_trim(self) -> None:
+        sources = [otc_fetch(self.root, day) for day in ("20251103", "20251104")]
+        originals = [source.read_bytes() for source in sources]
+        self.assertEqual(mh.keep_up_otc(self.root), {"stored": ["20251103", "20251104"], "skipped": []})
+        for day, original in zip(("20251103", "20251104"), originals):
+            self.assertEqual(otc_stored(self.root, day).read_bytes(), original)
+        sources[0].unlink()                                  # 雲端工作集把舊的修掉之後，長期保存區的還在
+        self.assertEqual(mh.keep_up_otc(self.root), {"stored": [], "skipped": []})
+        self.assertTrue(otc_stored(self.root, "20251103").exists())
+        self.assertEqual(sorted(mh.held_days(self.root, "otc-raw")), ["20251103", "20251104"])
+
+    def test_day_already_stored_is_not_rewritten(self) -> None:
+        otc_fetch(self.root, "20251103")
+        mh.keep_up_otc(self.root)
+        before = otc_stored(self.root, "20251103").read_bytes()
+        otc_fetch(self.root, "20251103", otc_official("20251103", [["6488", "環球晶", "1", "1", "1", "1", "1"]]))
+        self.assertEqual(mh.keep_up_otc(self.root), {"stored": [], "skipped": []})
+        self.assertEqual(otc_stored(self.root, "20251103").read_bytes(), before)
+
+    def test_day_that_cannot_be_used_is_not_stored_and_is_reported(self) -> None:
+        otc_fetch(self.root, "20251103", otc_official("20251104"))                       # 內容日期和檔名不符
+        otc_fetch(self.root, "20251104", otc_official("20251104", []))                   # 沒有個股
+        otc_fetch(self.root, "20251105", otc_official("20251105", total_thousand=None))  # 沒有全市場融資金
+        otc_fetch(self.root, "20251106", otc_official("20251106", stat="error"))
+        otc_fetch(self.root, "20251107").write_text("壞掉", encoding="utf-8")
+        # 估算要讀的欄位（資買、資賣、現償、資餘額）少一欄：存進來就不再改寫，之後每天的重播都會壞，所以不收。
+        renamed = otc_official("20251110")
+        renamed["tables"][0]["fields"] = [("現金償還" if name == "現償" else name) for name in OTC_FIELDS]
+        otc_fetch(self.root, "20251110", renamed)
+        report = mh.keep_up_otc(self.root)
+        self.assertEqual(report["stored"], [])
+        self.assertEqual(report["skipped"], [{"day": "20251103", "reason": "官方回應的日期和檔名不符"},
+                                             {"day": "20251104", "reason": "沒有個股融資明細"},
+                                             {"day": "20251105", "reason": "沒有全市場融資金額"},
+                                             {"day": "20251106", "reason": "官方回應是查無資料"},
+                                             {"day": "20251107", "reason": "官方回應是查無資料"},
+                                             {"day": "20251110", "reason": "欄位跟預期不同（少了 現償）"}])
+        self.assertFalse((self.root / "data/margin-history/otc-raw").exists())
+
+    def test_price_summary_keeps_stocks_and_etfs_from_the_first_stored_margin_day_on(self) -> None:
+        otc_fetch(self.root, "20251104")
+        mh.keep_up_otc(self.root)
+        for day in ("20251103", "20251104", "20251105"):
+            otc_quotes(self.root, day)
+        self.assertEqual(mh.keep_up_otc_prices(self.root), {"stored": ["20251104", "20251105"], "skipped": []})
+        self.assertFalse(otc_summary(self.root, "20251103").exists())
+        # 權證不留，當天沒有成交（收盤是 ---）的也不放。
+        self.assertEqual(json.loads(otc_summary(self.root, "20251104").read_text(encoding="utf-8")), {
+            "date": "20251104", "prices": {"6488": [400.0, 2000, 801000], "00679B": [27.43, 25110647, 689398743]}})
+        self.assertEqual(mh.keep_up_otc_prices(self.root), {"stored": [], "skipped": []})
+
+    def test_price_original_that_cannot_be_used_is_reported(self) -> None:
+        otc_fetch(self.root, "20251103")
+        mh.keep_up_otc(self.root)
+        otc_quotes(self.root, "20251103", roc_date="114/11/04")
+        otc_quotes(self.root, "20251104", rows=[])
+        report = mh.keep_up_otc_prices(self.root)
+        self.assertEqual(report["stored"], [])
+        self.assertEqual(report["skipped"], [{"day": "20251103", "reason": "原件資料日期不是 20251103"},
+                                             {"day": "20251104", "reason": "沒有任何一檔的收盤行情"}])
+
+    def test_nothing_is_kept_before_any_otc_margin_day_is_stored(self) -> None:
+        otc_quotes(self.root, "20251103")
+        self.assertEqual(mh.keep_up_otc_prices(self.root), {"stored": [], "skipped": []})
+
+    def test_seed_and_restore_carry_the_otc_stores_to_another_machine(self) -> None:
+        for day in ("20251103", "20251104"):
+            otc_fetch(self.root, day)
+            otc_quotes(self.root, day)
+        report = run_main(["--root", str(self.root), "seed"])
+        # 上市的保存區在這台是空的：不打包、照實寫；上櫃兩包各兩天（打包前先跟上）。
+        self.assertEqual((report["raw"], report["prices"]), ({"skipped": "長期保存區是空的"}, {"skipped": "長期保存區是空的"}))
+        self.assertEqual((report["otc-raw"]["days"], report["otc-prices"]["days"]), (2, 2))
+        for seed in (mh.OTC_SEED, mh.OTC_PRICE_SEED):
+            (self.elsewhere / seed).parent.mkdir(parents=True, exist_ok=True)
+            (self.elsewhere / seed).write_bytes((self.root / seed).read_bytes())
+        report = run_main(["--root", str(self.elsewhere), "restore"])
+        self.assertEqual((report["otc-raw"], report["otc-prices"]), (2, 2))
+        for day in ("20251103", "20251104"):
+            self.assertEqual(otc_stored(self.elsewhere, day).read_bytes(), otc_stored(self.root, day).read_bytes())
+            self.assertEqual(otc_summary(self.elsewhere, day).read_bytes(), otc_summary(self.root, day).read_bytes())
+
+    def test_restore_command_also_keeps_up_with_otc_days_fetched_on_this_machine(self) -> None:
+        otc_fetch(self.root, "20251103")
+        otc_quotes(self.root, "20251103")
+        report = run_main(["--root", str(self.root), "restore"])
+        self.assertEqual(report["otc_kept"], {"stored": 1, "skipped": []})
+        self.assertEqual(report["otc_prices_kept"], {"stored": 1, "skipped": []})
+
+    def test_otc_coverage_uses_the_otc_trading_days(self) -> None:
+        import sqlite3
+        otc_fetch(self.root, "20251103")
+        otc_fetch(self.root, "20251105")
+        mh.keep_up_otc(self.root)
+        db = self.root / "data/otc-history/otc_history.sqlite"
+        db.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(db)
+        connection.execute("CREATE TABLE daily (date TEXT, code TEXT)")
+        connection.executemany("INSERT INTO daily VALUES (?, '6488')",
+                               [(day,) for day in ("2025-10-31", "2025-11-03", "2025-11-04", "2025-11-05")])
+        connection.commit()
+        connection.close()
+        self.assertEqual(mh.coverage(self.root, mh.otc_trading_days(self.root), "otc-raw"),
+                         {"first": "2025-11-03", "last": "2025-11-05", "held": 2, "missing": ["2025-11-04"]})
+
+    def test_the_otc_estimate_reads_what_is_kept_here(self) -> None:
+        # 抓取存下的兩種原件 → 長期保存區 → 重播接得起來：上櫃起點那天 6488 有 1,000 張、當天沒有買進，
+        # 成交均價＝801,000 ÷ 2,000＝400.5。成本＝400.5 × 上櫃起點係數；官方全市場融資金從表尾讀（仟元 × 1,000）。
+        from unittest import mock
+        from twon_analysis import margin_maintenance as mm
+        start = mm.OTC_START_DATE.replace("-", "")
+        otc_fetch(self.root, start, otc_official(start, [["6488", "環球晶", "1,000", "0", "0", "0", "1,000"]],
+                                                 total_thousand="240,000"))
+        otc_quotes(self.root, start, [("6488", "400.00", "2,000", "801,000")])
+        mh.keep_up_otc(self.root)
+        mh.keep_up_otc_prices(self.root)
+        with mock.patch.object(mm, "ROOT", self.root):
+            board = mm.BOARDS["上櫃"]
+            raw, prices = (mm.kept_days(store, board.start, board.start) for store in (board.raw, board.prices))
+            *_, (day, positions, _, official) = mm.replay(raw, prices, reader=board.reader, seed_scale=board.seed_scale)
+        self.assertEqual((day, official), (mm.OTC_START_DATE, 240_000_000))
+        self.assertEqual(positions["6488"].balance, 1000)
+        self.assertAlmostEqual(positions["6488"].high_cost, 400.5 * mm.OTC_SEED_SCALE)
+        self.assertAlmostEqual(positions["6488"].low_cost, 400.5 * mm.OTC_SEED_SCALE)
 
 
 if __name__ == "__main__":

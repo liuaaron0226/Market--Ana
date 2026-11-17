@@ -1,0 +1,110 @@
+/* 個股頁五塊新功能的畫面（規格 .scratch/stock-signals/spec.md〈畫面〉）。
+   本人 2026-11-16 更正：不要深色液態玻璃，和個股頁上半的報價卡、K 線卡同一套淺色看盤桌——
+   每一塊一張米白卡片（背景、圓角、陰影都是 bold.css 的板，和報價卡同一組；深色主題自然換成同一套的深色版），
+   卡片裡的條是乾淨的細條（和事實區塊的細橫條同一種：淡灰的軌、實色的條），紅綠只在細記號上，沒有漸層、光澤、凹槽。
+   進場只做克制的淡入與細條伸出去。 */
+
+.ss { display: grid; gap: 16px; margin-top: 20px; padding-bottom: 16px; }   /* 下方留給卡片的陰影：事實區塊的面板會裁掉超出的部分（overflow-x: auto） */
+
+/* ---------- 卡片：和報價卡、K 線卡同一套 ---------- */
+.ss-board {
+  display: block; width: 100%; margin: 0; padding: 20px 24px 22px; border: 0; border-radius: var(--r-slab);
+  background: var(--slab); box-shadow: var(--slab-shadow); color: var(--ink); font: inherit; text-align: left;
+  opacity: 0; transform: translateY(8px);
+  transition: opacity 320ms var(--ease-out), transform 420ms var(--ease-depth), box-shadow var(--t-press) linear;
+}
+.ss-board.is-in { opacity: 1; transform: none; }
+.ss-board > span, .ss-head { display: flex; }
+.ss-head { justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 14px; }
+/* 塊名與讀數的字：和當日三格的名稱（灰、13 號）、數值（墨色）同一種 */
+.ss-name { color: var(--dim); font: 13px var(--sans); }
+.ss-read { color: var(--dim); font: 13px var(--sans); }
+.ss-head b, .ss-read b { color: var(--ink); font: 500 15px var(--mono); font-variant-numeric: tabular-nums; }
+.ss-head .ss-word-read { font: 600 15px var(--sans); }
+
+/* ---------- 細條：淡灰的軌、實色的條（和事實區塊 .sf-bar 同一種，粗一點好看清楚） ---------- */
+.ss-track { position: relative; display: block; height: 4px; border-radius: 2px; background: var(--panel3); overflow: hidden; }
+.ss-fill { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 2px; background: var(--ink);
+  transform: scaleX(0); transform-origin: left; transition: transform 700ms var(--ease-depth); }
+.is-in .ss-fill { transform: none; }
+
+/* ---------- 漲停動能：大數字＋一條細條，「平均」是條上的一道細刻度；按住整張卡壓下去、浮出全部股票平均 ---------- */
+.ss-momentum { cursor: pointer; position: relative; -webkit-tap-highlight-color: transparent; touch-action: pan-y; -webkit-user-select: none; user-select: none; }
+.ss-momentum.is-held { transform: translateY(calc(var(--slab-thick) - 1px)); box-shadow: var(--slab-shadow-press); transition-duration: var(--t-press); }
+.ss-momentum:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.ss-lu { align-items: center; gap: 18px; }
+.ss-big { flex: none; min-width: 1.4em; font: 500 34px/1 var(--mono); font-variant-numeric: tabular-nums; color: var(--ink); }
+.ss-meter { flex: 1; min-width: 0; position: relative; display: block; padding: 6px 0 20px; }
+.ss-mark { position: absolute; top: 2px; width: 1px; height: 12px; background: var(--dim); transform: translateX(-.5px); }
+.ss-avg { position: absolute; top: 18px; color: var(--faint); font-size: 11px; white-space: nowrap; transform: translateX(-50%); }
+/* 資料沒給最高一級時沒有光條，全部平均直接寫在大數字旁 */
+.ss-avg-text { color: var(--dim); font-size: 12px; white-space: nowrap; }
+.ss-tip {
+  position: absolute; bottom: calc(100% - 2px); z-index: 2; padding: 6px 10px; border-radius: var(--r-key);
+  background: var(--key); box-shadow: var(--key-shadow-hover); color: var(--dim); font-size: 12px; white-space: nowrap;
+  pointer-events: none; opacity: 0; transform: translate(-50%, 6px);
+  transition: opacity 180ms var(--ease-out), transform var(--t-lift) var(--ease-depth);
+}
+.ss-tip b { font: 500 12px var(--mono); color: var(--ink); }
+.is-held .ss-tip { opacity: 1; transform: translate(-50%, 0); }
+
+/* ---------- 和大盤比：三列，細條從中間往右（紅，強於）或往左（綠，落後）；強弱的字是墨色，顏色只在前面的細記號 ---------- */
+.ss-vs { display: grid !important; grid-template-columns: 56px minmax(0, 1fr) 92px; align-items: center; gap: 12px; padding: 8px 0; font-size: 13px; }
+.ss-vs + .ss-vs { border-top: 1px solid var(--hair); }
+.ss-vs-name { color: var(--dim); }
+.ss-two { overflow: visible; }
+.ss-two::before { content: ""; position: absolute; left: 50%; top: -4px; bottom: -4px; width: 1px; background: var(--line-strong); }
+.ss-two .ss-fill.up { left: 50%; background: var(--up); }
+.ss-two .ss-fill.down { left: auto; right: 50%; background: var(--down); transform-origin: right; }
+.ss-vs-read { display: flex; align-items: center; justify-content: flex-end; white-space: nowrap; color: var(--ink); }
+.ss-vs-read b { margin-left: 4px; font: 500 13px var(--mono); font-variant-numeric: tabular-nums; }   /* 字和數字之間（彈性排版會吃掉文字後面的空白） */
+
+/* ---------- 均線排列：四格（和當日三格一樣用細線隔開），成立的是墨色實心點、不成立的是空心點與淡字 ---------- */
+.ss-checks { display: grid !important; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.ss-check { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 2px 0 2px 10px; border-left: 1px solid var(--hair); color: var(--faint); font-size: 13px; white-space: nowrap; }
+.ss-check:first-child { padding-left: 0; border-left: 0; }
+.ss-check.on { color: var(--ink); font-weight: 600; }
+.ss-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; border: 1px solid var(--line-strong); }
+.ss-check.on .ss-dot { background: var(--ink); border-color: var(--ink); }
+
+/* ---------- 爆大量成交區：小圖＋各區清單 ---------- */
+.ss-zchart { display: block; width: 100%; height: 150px; }
+.ss-zband { fill: var(--gold); opacity: .16; }
+.ss-draw { fill: none; stroke: var(--ink); stroke-width: 1.2; vector-effect: non-scaling-stroke; stroke-dasharray: 1; stroke-dashoffset: 1; transition: stroke-dashoffset 1200ms var(--ease-depth); }
+.is-in .ss-draw { stroke-dashoffset: 0; }
+.ss-fade { opacity: 0; transition: opacity 600ms linear 300ms; }
+.is-in .ss-fade { opacity: 1; }
+.ss-vol rect { fill: var(--line-strong); }
+.ss-vol rect.hot { fill: var(--gold); }
+.ss-zones { margin: 8px 0 0; padding: 0; list-style: none; }
+.ss-zones li { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 9px 0; border-top: 1px solid var(--hair); font-size: 13px; }
+.ss-zones .num { font: 500 13px var(--mono); font-variant-numeric: tabular-nums; }
+.ss-zones li.now { border-top-style: dashed; border-top-color: var(--line-strong); color: var(--dim); }
+
+/* ---------- 融資維持率（估）：100～300 的細軸，上面一段實色的範圍，130 一道紅色細虛線 ---------- */
+.ss-margin-maintenance .sf-date { margin: -6px 0 6px; }
+.ss-rng { position: relative; display: block !important; height: 40px; }
+.ss-rng .ss-track { position: absolute; left: 0; right: 0; top: 10px; }
+.ss-band { position: absolute; top: 8px; height: 8px; min-width: 4px; border-radius: 4px; background: var(--ink);
+  transform: scaleX(0); transition: transform 700ms var(--ease-depth); }
+.is-in .ss-band { transform: none; }
+.ss-call { position: absolute; top: 2px; height: 20px; width: 0; border-left: 1px dashed var(--up); z-index: 1; }
+.ss-tick-label { position: absolute; top: 26px; color: var(--faint); font: 10px var(--mono); transform: translateX(-50%); }
+.ss-tick-label.hot { color: var(--up); }
+.ss-tick-label:last-child { transform: translateX(-100%); }
+
+/* ---------- 電腦寬度 ---------- */
+@media (min-width: 861px) {
+  /* 「技術」三張並排（本人 2026-11-16 定案）；只有一張的「重點」與「融資券」和三張的一張同寬、靠左 */
+  .ss[data-panel] { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; }
+}
+@media (max-width: 860px) {
+  .ss { gap: 12px; margin-top: 12px; padding-bottom: 10px; }
+  .ss-board { padding: 14px 16px 14px; }
+  .ss-head { margin-bottom: 10px; }
+  .ss-meter { padding-bottom: 16px; }
+  .ss-avg { top: 15px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ss-board, .ss-fill, .ss-band, .ss-draw, .ss-fade, .ss-tip { transition: none !important; }
+}

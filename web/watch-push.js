@@ -1,5 +1,7 @@
 // 自選股頁的「到價推播」（自選股關注 F 票）：站主在每一台裝置上自己打開或關掉、發一則測試通知、看已登記的裝置。
 // 只有站主、而且關注開關打開時 /api/watch/push 才有內容；其他人這一塊一直藏著，不發任何推播請求以外的東西。
+// 本人 2026-11-17「你把它放在我的庫存有點奇怪且占空間，我覺得你可以把他隱藏」：設定收進頁首的小鈴鐺，點了才浮出來（attach）；
+// 浮層開著時底下的頁面鎖住（scroll-lock.js）。
 (function () {
   const isIos = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   const standalone = () => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
@@ -29,6 +31,15 @@
     const text = atob(base64url.replace(/-/g, '+').replace(/_/g, '/'));
     return Uint8Array.from(text, c => c.charCodeAt(0));
   };
+  // 這台瀏覽器的訂閱是不是綁現在的推播公開金鑰（本人 11-17 換過金鑰之後，舊訂閱送不到，要重新訂閱）。
+  // 讀不到綁哪一把時（少數瀏覽器）當成相同，照原本的做法。
+  const sameServerKey = (subscription, publicKey) => {
+    const bound = subscription?.options?.applicationServerKey;
+    if (!bound) return true;
+    const want = keyBytes(publicKey);
+    const have = new Uint8Array(bound);
+    return have.length === want.length && have.every((byte, i) => byte === want[i]);
+  };
   const el = (tag, className, text) => {
     const node = document.createElement(tag);
     if (className) node.className = className;
@@ -55,21 +66,20 @@
     return parts.join('，');
   }
 
+  // 畫出設定；推播可用時回 true（不是站主、開關關著或讀不到時回 false，什麼都不畫）。
   async function mount(host) {
-    if (!host) return;
+    if (!host) return false;
     let info;
-    try { info = await api('/api/watch/push'); } catch (_) { return; }
-    if (!info?.available) return;
+    try { info = await api('/api/watch/push'); } catch (_) { return false; }
+    if (!info?.available) return false;
     host.hidden = false;
     host.replaceChildren();
-    const head = el('div', 'wp-head');
-    head.append(el('h3', '', '到價推播'));
     const status = el('p', 'wp-status');
     status.setAttribute('role', 'status');
     const body = el('div', 'wp-body');
     const devices = el('ul', 'wp-devices');
     const watcher = el('p', 'wp-watcher', watcherText(info.watcher));
-    host.append(head, body, status, devices, watcher);
+    host.append(body, status, devices, watcher);
     const say = (message, kind = '') => { status.textContent = message; if (kind) status.dataset.state = kind; else status.removeAttribute('data-state'); };
 
     let registration = null;
@@ -78,6 +88,14 @@
       try {
         registration = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
         mine = await registration.pushManager.getSubscription();
+        // 綁的是舊金鑰：先把舊的退訂、從清單拿掉，畫面顯示「沒打開」，勾回來就用新金鑰訂閱。
+        if (mine && !sameServerKey(mine, info.public_key)) {
+          const stale = mine.endpoint;
+          await api('/api/watch/push', { method: 'DELETE', body: { endpoint: stale } }).catch(() => {});
+          await mine.unsubscribe().catch(() => {});
+          mine = null;
+          info.devices = info.devices.filter(device => device.endpoint !== stale);
+        }
       } catch (_) { registration = null; }
     }
     const registered = mine && info.devices.some(device => device.endpoint === mine.endpoint);
@@ -159,7 +177,46 @@
       item.append(name, meta, off);
       devices.append(item);
     }
+    // 在浮層裡重畫（切換開關、測試通知失敗、逐台關掉之後）：原本有焦點的鍵被換掉了，焦點放回浮層裡第一個能按的東西，鍵盤操作不中斷
+    if (host.closest?.('dialog[open]') && (!document.activeElement || document.activeElement === document.body)) host.querySelector('input, button')?.focus();
+    return true;
   }
 
-  window.WatchPush = { mount, _logic: { watcherText } };
+  // 頁首的鈴鐺（opener）打開原生 <dialog>：Esc、關閉鈕（data-dialog-close）、點外面都收回，收回時解開頁面的鎖。
+  // 推播不可用時鈴鐺一直藏著。
+  function wireDialog(opener, dialog) {
+    opener.setAttribute('aria-expanded', 'false');
+    opener.addEventListener('click', () => {
+      if (dialog.open) return;
+      window.ScrollLock?.lock(dialog);
+      dialog.showModal();
+      opener.setAttribute('aria-expanded', 'true');
+    });
+    dialog.addEventListener('close', () => {
+      window.ScrollLock?.unlock(dialog);
+      opener.setAttribute('aria-expanded', 'false');
+    });
+    for (const key of dialog.querySelectorAll('[data-dialog-close]')) key.addEventListener('click', () => dialog.close());
+    // 和首頁浮板同一個判斷（home-fold.js）：按下與放開都落在面板外才收，在面板裡拖曳、鍵盤按出來的點擊不會誤關。
+    const outside = event => {
+      if (event.target !== dialog) return false;
+      const box = dialog.getBoundingClientRect();
+      return event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom;
+    };
+    let pressedOutside = false;
+    dialog.addEventListener('pointerdown', event => { pressedOutside = outside(event); });
+    dialog.addEventListener('click', event => {
+      if (pressedOutside && outside(event)) dialog.close();
+      pressedOutside = false;
+    });
+  }
+
+  async function attach({ opener, dialog, host }) {
+    if (!opener || !dialog || !host || typeof dialog.showModal !== 'function') return;   // 太舊的瀏覽器沒有 <dialog>：鈴鐺不出現
+    if (!(await mount(host))) return;
+    wireDialog(opener, dialog);
+    opener.hidden = false;
+  }
+
+  window.WatchPush = { mount, attach, _logic: { watcherText } };
 })();

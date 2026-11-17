@@ -6,7 +6,7 @@ import { UserPortfolioError, noContent, readBody, requireSameOrigin, response } 
 
 export { friendAiEnabled } from "./release-policy.js";
 
-export const FRIEND_AI_PATH = /^\/api\/friend-ai(?:\/(key|consent|digest))?$/;
+export const FRIEND_AI_PATH = /^\/api\/friend-ai(?:\/(key|consent|digest|stocks))?$/;
 export const FRIEND_AI_PAGE = /^\/gemini(?:\/.*)?$/;
 // 人數上限同時寫在資料表的限制裡（migration 0014 的 friend_gemini_keys_limit）；要調整得兩邊一起改。
 export const FRIEND_KEY_LIMIT = 10;
@@ -22,10 +22,17 @@ export const STUDIO_URL = "https://aistudio.google.com/app/apikey";
 // 試呼叫用的模型：官方的 latest 別名，模型換代時不必改程式。
 export const TRIAL_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent";
 // 排程（02 票）挑金鑰用的查詢：已核准、金鑰有效、同意是現行版本（參數＝CONSENT_VERSION）。
-export const USABLE_FRIEND_KEYS_SQL =
-  "SELECT k.email, k.ciphertext, k.iv, k.alg, k.master_key_id FROM friend_gemini_keys k " +
-  "JOIN users u ON u.email = k.email " +
-  "WHERE u.status = 'approved' AND k.status = 'active' AND k.consent_version = ? ORDER BY k.email";
+const USABLE_FRIENDS =
+  "FROM friend_gemini_keys k JOIN users u ON u.email = k.email " +
+  "WHERE u.status = 'approved' AND k.status = 'active' AND k.consent_version = ?";
+export const USABLE_FRIEND_KEYS_SQL = `SELECT k.email, k.ciphertext, k.iv, k.alg, k.master_key_id ${USABLE_FRIENDS} ORDER BY k.email`;
+// 03 票：同一批朋友各自的自選股與庫存（兩個參數都是 CONSENT_VERSION）。欄位和站主那條線（ai-digest.yml）一模一樣；
+// 備註、價格來源不讀。排程再依 email 逐位分開，每位朋友的提示只放他自己的。
+export const USABLE_FRIEND_PORTFOLIOS_SQL =
+  "SELECT 'watchlist' AS kind,email,code,name,market,horizon,NULL AS shares,NULL AS average_cost,NULL AS last_price,NULL AS price_as_of " +
+  `FROM user_watchlist WHERE email IN (SELECT k.email ${USABLE_FRIENDS}) UNION ALL ` +
+  "SELECT 'holding' AS kind,email,code,name,market,NULL AS horizon,shares,average_cost,last_price,price_as_of " +
+  `FROM user_holdings WHERE email IN (SELECT k.email ${USABLE_FRIENDS})`;
 
 const KEY_RE = /^[A-Za-z0-9_.-]{30,200}$/;
 const OWNER_REFUSED = "站主不使用這個頁面（站主的解讀照舊由 agy 產生）";
@@ -192,8 +199,28 @@ function digestOf(row) {
   }
 }
 
+// 04 票：當天沒產生時告訴朋友原因。原因是排程寫進 last_failure_reason 的中文說明（friend_ai_digest.py 的 FAILURE_TEXT）；
+// 金鑰被暫停時排程跳過他、當天不會有任何一列，所以看金鑰狀態，不看當天的列。
+const PAUSED_TEXT = "這把金鑰已暫停使用，請到 Gemini 設定換一把";
+
+function noticeOf(key, sections) {
+  if (key.status === "paused") return { text: key.last_failure_reason || PAUSED_TEXT };
+  if (key.last_failure_reason && !allGenerated(sections)) {
+    return { text: key.last_failure_reason };
+  }
+  return null;
+}
+
+// 05 票：個股判斷那一列（03 票）也算進「那天產生了沒」——只有個股沒產生、大盤與籌碼都有時，朋友一樣要看到原因。
+// 朋友頁的提示與站主後台共用這一個判斷：沒有持股算成功；那天沒有個股那一列（0022 還沒套）就不列入。
+const STOCK_DONE = new Set(["generated", "no_holdings"]);
+const stockSection = (status) => (status ? [{ status: STOCK_DONE.has(status) ? "generated" : status }] : []);
+const allGenerated = (sections) => sections.every((section) => section?.status === "generated");
+
 async function friendDigest(db, email) {
-  const key = await db.prepare("SELECT consent_version FROM friend_gemini_keys WHERE email = ?").bind(email).first();
+  const key = await db.prepare(
+    "SELECT consent_version, status, last_failure_reason FROM friend_gemini_keys WHERE email = ?",
+  ).bind(email).first();
   if (!key) return { available: true, configured: false };
   if (key.consent_version !== CONSENT_VERSION) return { available: true, configured: true, consented: false };
   let latest = null;
@@ -209,10 +236,49 @@ async function friendDigest(db, email) {
     if (!tableMissing(error)) throw error;
   }
   const pick = (type) => rows.find((row) => row.digest_type === type);
+  const market = digestOf(pick("market"));
+  const flow = digestOf(pick("flow"));
+  const [stock] = latest
+    ? await rowsOrNone(db, "SELECT status FROM friend_ai_stock_daily WHERE email = ? AND data_date = ?", email, latest) : [];
+  const sections = [market, flow, ...stockSection(stock?.status)];
   return {
     available: true, configured: true, consented: true, data_date: latest,
-    market: digestOf(pick("market")), flow: digestOf(pick("flow")),
+    market, flow, notice: noticeOf(key, sections),
   };
+}
+
+// 03 票：朋友在自選股頁讀自己的個股判斷。只讀登入者自己那一列（不收 email 參數），資料日規則和大盤、籌碼那份一樣：
+// 取所有朋友最新的一天，自己那天沒有或未產生就如實回未產生，不拿前一天的冒充。
+const STOCK_SHOWN = new Set(["generated", "partial"]);
+
+function stocksOf(row) {
+  const empty = { status: row?.status === "no_holdings" ? "no_holdings" : "unproduced", items: [], reason: row?.error_code ?? null };
+  if (!STOCK_SHOWN.has(row?.status)) return empty;
+  try {
+    const items = JSON.parse(row.content_json)?.items;
+    return Array.isArray(items) ? { status: row.status, items } : { ...empty, status: "unproduced" };
+  } catch {
+    return { ...empty, status: "unproduced" };
+  }
+}
+
+async function friendStocks(db, email) {
+  const key = await db.prepare("SELECT consent_version FROM friend_gemini_keys WHERE email = ?").bind(email).first();
+  if (!key) return { available: true, configured: false };
+  if (key.consent_version !== CONSENT_VERSION) return { available: true, configured: true, consented: false };
+  let latest = null;
+  let row = null;
+  try {
+    latest = (await db.prepare("SELECT MAX(data_date) AS data_date FROM friend_ai_stock_daily").first())?.data_date ?? null;
+    if (latest) {
+      row = await db.prepare(
+        "SELECT status, content_json, error_code FROM friend_ai_stock_daily WHERE email = ? AND data_date = ?",
+      ).bind(email, latest).first();
+    }
+  } catch (error) {
+    if (!tableMissing(error)) throw error;
+  }
+  return { available: true, configured: true, consented: true, data_date: latest, stocks: stocksOf(row) };
 }
 
 // 呼叫前 gate 已確認：開關打開、不是站主、帳號已核准。
@@ -226,6 +292,10 @@ export async function handleFriendAiApi(request, env, path, email, deps = {}) {
     if (part === "digest") {
       if (request.method !== "GET") throw new UserPortfolioError(405, "方法不允許");
       return response(200, await friendDigest(env.DB, email));
+    }
+    if (part === "stocks") {
+      if (request.method !== "GET") throw new UserPortfolioError(405, "方法不允許");
+      return response(200, await friendStocks(env.DB, email));
     }
     if (part === "consent") {
       if (request.method !== "POST") throw new UserPortfolioError(405, "方法不允許");
@@ -259,13 +329,48 @@ export async function deleteFriendKey(db, email) {
   }
 }
 
-// 後台用：每位使用者只標「已設定／未設定」，不帶密文、狀態以外的任何內容。
-export async function configuredEmails(db) {
+// 後台用（DECISIONS 第 11 題）：每位使用者只有狀態與數字——已設定與否、是否暫停、最後成功時間、最近失敗原因、
+// 最新一天的解讀是否產生、自選股與庫存各幾檔。不帶密文、解讀內容、持有哪些股票、股數或成本。
+const NO_KEY = Object.freeze({ configured: false, paused: false, last_success_at: null, last_failure_reason: null, digest: null });
+
+// 資料表還沒建立時當成沒有任何一列。
+async function rowsOrNone(db, sql, ...binds) {
   try {
-    const { results } = await db.prepare("SELECT email FROM friend_gemini_keys").all();
-    return new Set(results.map((row) => row.email));
+    return (await db.prepare(sql).bind(...binds).all()).results;
   } catch (error) {
-    if (tableMissing(error)) return new Set();
-    throw error;
+    if (!tableMissing(error)) throw error;
+    return [];
   }
+}
+
+const countsBy = (rows) => new Map(rows.map((row) => [row.email, Number(row.n)]));
+
+// 資料日規則與「產生」的判斷都和朋友頁面一樣：取所有朋友最新的一天；那天沒有他的列（暫停、還沒輪到、失敗）就是沒產生，
+// 不拿前一天冒充。
+async function latestDay(db) {
+  const date = (await rowsOrNone(db, "SELECT MAX(data_date) AS data_date FROM friend_ai_daily"))[0]?.data_date ?? null;
+  if (!date) return null;
+  const digests = await rowsOrNone(db, "SELECT email, digest_type, status FROM friend_ai_daily WHERE data_date = ?", date);
+  const stocks = new Map((await rowsOrNone(db, "SELECT email, status FROM friend_ai_stock_daily WHERE data_date = ?", date))
+    .map((row) => [row.email, row.status]));
+  const section = (email, type) => digests.find((row) => row.email === email && row.digest_type === type);
+  const produced = (email) => allGenerated([section(email, "market"), section(email, "flow"), ...stockSection(stocks.get(email))]);
+  return { data_date: date, produced };
+}
+
+export async function keyStateLookup(db) {
+  const keys = await rowsOrNone(db, "SELECT email, status, last_success_at, last_failure_reason FROM friend_gemini_keys");
+  const watchlist = countsBy(await rowsOrNone(db, "SELECT email, COUNT(*) AS n FROM user_watchlist GROUP BY email"));
+  const holdings = countsBy(await rowsOrNone(db, "SELECT email, COUNT(*) AS n FROM user_holdings GROUP BY email"));
+  const day = keys.length ? await latestDay(db) : null;
+  const states = new Map(keys.map((row) => [row.email, {
+    configured: true, paused: row.status === "paused",
+    last_success_at: row.last_success_at ?? null, last_failure_reason: row.last_failure_reason ?? null,
+    digest: day ? { data_date: day.data_date, produced: day.produced(row.email) } : null,
+  }]));
+  return (email) => ({
+    ...(states.get(email) ?? NO_KEY),
+    watchlist_count: watchlist.get(email) ?? 0,
+    holdings_count: holdings.get(email) ?? 0,
+  });
 }

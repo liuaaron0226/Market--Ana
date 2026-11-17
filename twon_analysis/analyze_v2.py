@@ -602,7 +602,9 @@ def credit_series(code: str, market: str, as_of: str, days: int = 25) -> dict:
     def recent(folder, prefix):   # 各看自己的原件有哪幾天，不借用法人原件的日期
         stamps = sorted(path.stem.split('-')[1] for path in folder.glob(f'{prefix}-*.json'))
         return [d for d in (f'{s[:4]}-{s[4:6]}-{s[6:]}' for s in stamps) if d <= as_of][-days:]
-    margin_days, borrow_days = recent(chips.DETAIL / 'margin', 'margin'), recent(chips.FUND / 'twt93u', 'twt93u')
+    # 融資融券：近期明細與長期保存區合起來看（同一份原件），和融資維持率（估）同一個資料日。
+    margin_days = [d for d in chips.margin_days() if d <= as_of][-days:]
+    borrow_days = recent(chips.FUND / 'twt93u', 'twt93u')
     margin = [{'date': d, 'margin': row['margin'], 'short': row['short']}
               for d, row in zip(margin_days, chips.margin(code, margin_days)) if row]
     borrow = [{'date': d, 'balance': row['balance']} for d, row in zip(borrow_days, chips.borrow(code, borrow_days)) if row]

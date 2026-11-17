@@ -16,6 +16,9 @@
 .pf-theme { justify-self: end; width: 44px; justify-content: center; padding: 0; }
 .pf-back:hover, .pf-theme:hover { background: var(--panel2); border-color: color-mix(in srgb, var(--ink) 22%, transparent); }
 .pf-theme svg { width: 18px; height: 18px; }
+/* 頁首右邊：到價推播的鈴鐺（只有站主、推播可用時出現，見 watch-push.js）＋主題鍵；鈴鐺借主題鍵的外觀 */
+.pf-bar-end { justify-self: end; display: flex; gap: 8px; }
+.pf-bell[hidden] { display: none; }
 .pf-brand { display: inline-flex; align-items: center; gap: 8px; color: var(--dim); font: 600 14px var(--serif); }
 .pf-brand svg { width: 20px; height: 20px; }
 .pf :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -23,6 +26,11 @@
 .pf-title-row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 6px 16px; padding: 24px 0 16px; }
 .pf-title-row h1 { font: 600 26px/1.15 var(--serif); letter-spacing: .01em; }
 .pf-freshness { color: var(--faint); font: 12px var(--mono); white-space: nowrap; }
+/* 04 票：朋友當天的 AI 解讀沒產生的原因，附回 Gemini 設定的入口。 */
+.pf-ai-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin: 0 0 14px; color: var(--dim); font-size: 13.5px; line-height: 1.55; }
+.pf-ai-notice[hidden] { display: none; }
+.pf-ai-notice a { min-height: 44px; display: inline-flex; align-items: center; gap: 4px; color: var(--accent); font-weight: 600; text-decoration: none; }
+.pf-ai-notice a:hover { text-decoration: underline; }
 
 .pf-level { margin-bottom: 40px; padding: 24px 0; border-top: 1px solid var(--ink); }
 .pf-level-head { display: flex; align-items: end; justify-content: space-between; gap: 24px; }

@@ -68,3 +68,6 @@ design-previews/unslop-20261109/shots/
 .scratch/unslop-audit-20261109/baseline-web-20261109/
 .scratch/unslop-audit-20261109/*.log
 .scratch/virtual-portfolio-cloud/*.png
+
+# 本機 Claude Code 權限設定（個人用，不入庫）
+.claude/settings.local.json

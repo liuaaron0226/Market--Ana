@@ -160,13 +160,13 @@ test("打開五塊不連帶打開任何其他功能；其他開關也打不開�
   assert.doesNotMatch(JSON.stringify(releasePolicy({ MARKET_ANA_STOCK_SIGNALS: "owner" })), /MARKET_ANA_STOCK_SIGNALS/);
 });
 
-test("正式環境設定（wrangler.jsonc）裡五塊只開站主：其他獲准使用者看不到，也不連帶打開策略與 AI", () => {
+test("正式環境設定（wrangler.jsonc，本人 11-17「全部照做」）裡五塊開給全部獲准使用者，也不連帶打開策略與 AI", () => {
   const text = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8").replace(/^\s*\/\/.*$/gm, "");
   const vars = JSON.parse(text).vars;
-  assert.equal(vars.MARKET_ANA_STOCK_SIGNALS, "owner");
+  assert.equal(vars.MARKET_ANA_STOCK_SIGNALS, "all");
   const policy = releasePolicy(vars);
   assert.equal(policyForViewer(policy, true, vars).features.stock_signals_v1, true);
-  assert.equal(policyForViewer(policy, false, vars).features.stock_signals_v1, false);
+  assert.equal(policyForViewer(policy, false, vars).features.stock_signals_v1, true);
   assert.equal(policy.strategies_enabled, false);
   for (const feature of ["strategy_v1", "level_advice", "ai_digest", "ai_stock_advice"]) {
     assert.equal(policy.features[feature], false, feature);

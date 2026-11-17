@@ -629,12 +629,23 @@ class StockFactsFundamentalsTests(_FactsFixture, unittest.TestCase):
         self.assertEqual(facts['fundamentals'], {
             'valuation': {'pe': 25.91, 'pb': 9.01, 'yield': 0.98, 'data_date': '2025-03-06'},
             'revenue': {'period': '2026-09', 'mom': 15.4, 'yoy': 36.4},
-            'revenue_yoy': [{'period': p, 'yoy': y} for p, y in zip(
+            # 每一個月另附當月營收（億元，原件是千元；這組樣本金額很小，兩位小數都是 0）
+            'revenue_yoy': [{'period': p, 'yoy': y, 'revenue_100m': 0.0} for p, y in zip(
                 ['2025-09', '2025-10', '2025-11', '2025-12'] + [f'2026-{m:02d}' for m in range(1, 10)],
                 [10.0] * 11 + [30.0, 36.4])],
         })
         self.assertEqual(facts['summary'][2], '9 月營收年增 +36.4%，本益比 25.91。')
         self.assertEqual(facts['blocks'], ['summary', 'fundamentals', 'technical'])
+
+    def test_each_month_carries_its_revenue_in_hundred_millions(self):
+        # 本人 11-17「營收長條圖 x 軸我不知道是什麼，看不懂圖」：圖改畫每月營收（億元），所以每個月要帶當月營收。
+        # 原件單位是千元：2,365,432 千元＝23.65 億元；沒有那個月的資料就是 None（圖上留空）。
+        revenue = [{'period': '2025-09', 'revenue': 1_000_000}, {'period': '2026-08', 'revenue': 2_000_000},
+                   {'period': '2026-09', 'revenue': 2_365_432}]
+        series = self.analyze(change=0.5, close=100.5, revenue=revenue)['facts']['fundamentals']['revenue_yoy']
+        self.assertEqual(series[0], {'period': '2025-09', 'yoy': None, 'revenue_100m': 10.0})
+        self.assertEqual(series[1], {'period': '2025-10', 'yoy': None, 'revenue_100m': None})
+        self.assertEqual(series[-1], {'period': '2026-09', 'yoy': 136.5, 'revenue_100m': 23.65})
 
     def test_months_without_last_year_have_no_yoy(self):
         # 只有 2025-10 起的月營收：近 13 個月裡 2025-09～2026-09 都沒有去年同期 → 年增都不給；最新一期仍有月增。
@@ -683,7 +694,8 @@ class StockFactsReaderTests(unittest.TestCase):
                     {'data': {'tables': [{'fields': ['代號'], 'data': [row]}]}}), encoding='utf-8')
                 borrow_row = ['9999', '測試', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', str(borrow), '0', '']
                 (fund / 'twt93u' / f'twt93u-{day}.json').write_text(json.dumps({'data': [borrow_row]}), encoding='utf-8')
-            with unittest.mock.patch.object(chips, 'DETAIL', detail), unittest.mock.patch.object(chips, 'FUND', fund):
+            with unittest.mock.patch.object(chips, 'DETAIL', detail), unittest.mock.patch.object(chips, 'KEPT_ROOT', Path(tmp) / 'kept'), \
+                    unittest.mock.patch.object(chips, 'FUND', fund):
                 for cached in (chips._margin, chips._borrow):
                     cached.cache_clear()
                 try:
@@ -695,6 +707,38 @@ class StockFactsReaderTests(unittest.TestCase):
             'margin': [{'date': '2026-01-05', 'margin': 300, 'short': 9}, {'date': '2026-01-06', 'margin': 310, 'short': 7}],
             'borrow': [{'date': '2026-01-05', 'balance': 70_000}, {'date': '2026-01-06', 'balance': 71_000}],
         })
+
+    def test_listed_margin_also_reads_the_long_term_store_so_it_matches_the_maintenance_estimate(self):
+        # 近期明細只到 01-05（例如雲端當天那一班抓不到、之後也不回頭補），長期保存區（種子放回的）已經有 01-06。
+        # 兩邊是同一份證交所原件；融資券面板要和融資維持率（估）一樣讀到 01-06，不能停在 01-05。
+        # 長期保存區沒有、近期明細有的那天照樣讀得到；晚於資料日（01-07）的不讀。
+        from twon_analysis import analyze_v2 as module, chips
+        with tempfile.TemporaryDirectory() as tmp:
+            detail, kept_root, fund = Path(tmp) / 'detail', Path(tmp) / 'kept', Path(tmp) / 'fund'
+            kept = kept_root / 'data/margin-history/raw'
+            for folder in (detail / 'margin', kept, fund / 'twt93u'):
+                folder.mkdir(parents=True)
+
+            def margin_file(folder, day, margin):
+                row = ['9999', '測試', '0', '0', '0', '0', str(margin), '0', '0', '0', '0', '0', '5', '0', '0', '']
+                (folder / f'margin-{day}.json').write_text(json.dumps(
+                    {'data': {'tables': [{'fields': ['代號'], 'data': [row]}]}}), encoding='utf-8')
+            margin_file(detail / 'margin', '20260102', 290)
+            margin_file(detail / 'margin', '20260105', 300)
+            margin_file(kept, '20260105', 300)
+            margin_file(kept, '20260106', 310)
+            margin_file(kept, '20260107', 999)
+            (kept / 'margin-copy.json').write_text('{}', encoding='utf-8')   # 檔名不合規則：不算一天
+            with unittest.mock.patch.object(chips, 'DETAIL', detail), unittest.mock.patch.object(chips, 'KEPT_ROOT', kept_root), \
+                    unittest.mock.patch.object(chips, 'FUND', fund):
+                chips._margin.cache_clear()
+                try:
+                    series = module.credit_series('9999', '上市', '2026-01-06')
+                finally:
+                    chips._margin.cache_clear()
+        self.assertEqual(series['margin'], [{'date': '2026-01-02', 'margin': 290, 'short': 5},
+                                            {'date': '2026-01-05', 'margin': 300, 'short': 5},
+                                            {'date': '2026-01-06', 'margin': 310, 'short': 5}])
 
     def test_valuation_and_revenue_readers_use_the_daily_data(self):
         # 估值：資料日以前最近一筆；月營收：只用法定公布日已過的期別（2026-10 還沒到公布日，不算）。
@@ -759,6 +803,7 @@ class StockFactsReaderTests(unittest.TestCase):
 
 
 BROKEN = '這一天的個股融資原件讀不了'
+OTC_SEED_SCALE_FROZEN = 0.9311973139   # 上櫃起點係數（10 票用 2025-11-03 的櫃買原件求出，四捨五入到小數 10 位）
 
 
 def margin_day(day, trades, prices, official_thousand=1):
@@ -768,24 +813,36 @@ def margin_day(day, trades, prices, official_thousand=1):
     return {'day': day, 'trades': trades, 'prices': prices, 'official_thousand': official_thousand}
 
 
-def write_margin_store(root: Path, days) -> Path:
+def write_margin_store(root: Path, days, *, otc: bool = False) -> Path:
     """在資料根目錄 root 底下，把 margin_day 的清單寫成長期保存區（data/margin-history）的樣子：
-    raw/ 是每日抓取存的個股融資原件，prices/ 是同一天的行情摘要（收盤、成交股數、成交金額）。回傳 root。"""
+    raw/ 是每日抓取存的個股融資原件，prices/ 是同一天的行情摘要（收盤、成交股數、成交金額）。回傳 root。
+    otc：寫成上櫃的那兩種（otc-raw/ 是櫃買「上櫃股票融資融券餘額」的原件，otc-prices/ 是上櫃行情摘要）。"""
     store = root / 'data/margin-history'
     for item in days:
         compact = item['day'].replace('-', '')
         if item['prices'] is not None:
             # 成交 1,000 股、成交金額＝均價 × 1,000，所以成交均價就是給的那個數字。
             quotes = {code: [close, 1000, round(average * 1000)] for code, (close, average) in item['prices'].items()}
-            price_file = store / 'prices' / f'prices-{compact}.json'
+            price_file = store / (f'otc-prices/otc-prices-{compact}.json' if otc else f'prices/prices-{compact}.json')
             price_file.parent.mkdir(parents=True, exist_ok=True)
             price_file.write_text(json.dumps({'date': compact, 'prices': quotes}), encoding='utf-8')
         if item['trades'] is None:
             continue
-        raw = store / 'raw' / f'margin-{compact}.json'
+        raw = store / (f'otc-raw/otc-margin-{compact}.json' if otc else f'raw/margin-{compact}.json')
         raw.parent.mkdir(parents=True, exist_ok=True)
         if item['trades'] == BROKEN:
             raw.write_text('讀不了的內容', encoding='utf-8')
+            continue
+        if otc:
+            # 櫃買的欄位：代號 名稱 前資餘額(張) 資買 資賣 現償 資餘額 …；表尾「融資金(仟元)」那一列的資餘額是官方總額。
+            rows = [[code, '測試', f'{previous:,}', f'{buy:,}', f'{sell:,}', f'{repay:,}', f'{today:,}', '0', '0.0', '1']
+                    for code, (buy, sell, repay, previous, today) in item['trades'].items()]
+            fields = ['代號', '名稱', '前資餘額(張)', '資買', '資賣', '現償', '資餘額', '資屬證金', '資使用率(%)', '資限額']
+            official = {'date': compact, 'stat': 'ok', 'tables': [{'title': '上櫃股票融資融券餘額', 'fields': fields, 'data': rows,
+                        'summary': [['', '合計(張)', '1', '2', '3', '4', '5', '', '', ''],
+                                    ['', '融資金(仟元)', '1', '2', '3', '4', f"{item['official_thousand']:,}", '', '', '']]}]}
+            raw.write_text(json.dumps({'fetched_at_utc': 't', 'source_url': 'u', 'sha256': 'x', 'data': official},
+                                      ensure_ascii=False), encoding='utf-8')
             continue
         rows = [[code, '測試', *(f'{value:,}' for value in trade), '0'] for code, trade in item['trades'].items()]
         official = {'stat': 'OK', 'date': compact, 'tables': [
@@ -841,7 +898,7 @@ class _SignalsFixture:
         connection.close()
         from twon_analysis.analyze_v2 import analyze_v2
         paths = {'db_path': Path(self.tmp.name) / 'none.sqlite', 'otc_db_path': db} if otc else {'db_path': db, 'otc_db_path': None}
-        margin_root = write_margin_store(Path(self.tmp.name) / f'margin{self.calls}', margin)
+        margin_root = write_margin_store(Path(self.tmp.name) / f'margin{self.calls}', margin, otc=otc)
         taiex = {'side_effect': index} if isinstance(index, Exception) else {'return_value': index}
         chips = {'side_effect': institutional} if isinstance(institutional, Exception) else {'return_value': list(institutional)}
         with unittest.mock.patch('twon_analysis.analyze_v2.institutional_series', **chips), \
@@ -1163,8 +1220,10 @@ class StockSignalsHeavyZonesTests(_SignalsFixture, unittest.TestCase):
 
 # 漲停動能的預期值（分數、級距）都抄自凍結的算法版本檔 twon_analysis/limit_up_momentum_20261116.json 的換算表；
 # 每個例子成立哪幾個條件是手算的（寫在各測試的註解）。六個級距的歷史比例是 0.4、0.8、2.6、3.1、5.1、17.6，全部平均 1.7。
+# top_rate_pct 是最高一級（17.6）：頁面畫光條的滿格，跟著資料走，頁面不再自己寫死。
 def momentum(points, band, rate):
-    return {'points': points, 'band': band, 'band_rate_pct': rate, 'average_rate_pct': 1.7, 'algorithm': 'limit-up-momentum-20261116'}
+    return {'points': points, 'band': band, 'band_rate_pct': rate, 'average_rate_pct': 1.7, 'top_rate_pct': 17.6,
+            'algorithm': 'limit-up-momentum-20261116'}
 
 
 class StockSignalsLimitUpMomentumTests(_SignalsFixture, unittest.TestCase):
@@ -1480,8 +1539,9 @@ class StockSignalsMarginMaintenanceTests(_SignalsFixture, unittest.TestCase):
 
     THREE_CLOSES = [100.0, 120.0, 132.0]
 
-    def test_only_listed_stocks_get_an_estimate(self):
-        # 同樣三天的融資資料：上市普通股有 200～220；上櫃（等上櫃融資資料那一張票）與 ETF（第一版不顯示）整塊沒有。
+    def test_etfs_get_no_estimate_and_otc_needs_a_full_year(self):
+        # 同樣三天的融資資料：上市普通股有 200～220；ETF（第一版不顯示）整塊沒有；上櫃從起點只累積三天、不滿一年也沒有
+        # （上櫃滿一年的情況見 StockSignalsOtcMarginMaintenanceTests）。
         for options, expected in (({}, {'low_pct': 200, 'high_pct': 220}), ({'otc': True}, None), ({'kind': 'etf'}, None)):
             signals = self.estimate(self.three_days(), closes=self.THREE_CLOSES, **options)
             block = signals['margin_maintenance']
@@ -1662,6 +1722,98 @@ class StockSignalsMarginMaintenanceTests(_SignalsFixture, unittest.TestCase):
         self.assertEqual((fixed.START_DATE, fixed.SEED_SCALE, fixed.BLEND_WEIGHT, fixed.LOAN_RATIO),
                          ('2025-11-03', 0.9369126317402282, 0.5508671333927683, 0.6))
         self.assertEqual((fixed.CHECK_THRESHOLD_PCT, fixed.MAX_LAG_DAYS), (8.0, 1))
+
+
+class StockSignalsOtcMarginMaintenanceTests(_SignalsFixture, unittest.TestCase):
+    """上櫃股票的融資維持率（估）（10 票）：和上市同一種估法（兩種成本、範圍），讀櫃買的個股融資原件，
+    用上櫃自己的起點與起點係數、對櫃買公布的上櫃全市場融資金額。從起點累積不滿一年不給（滿一年＝資料日到了
+    起點的隔年同一天）；起點之前就有的餘額沒有來歷，滿一年之後這些部位的影響才小。"""
+
+    START = '2025-11-03'
+    FULL_YEAR = '2026-11-03'
+
+    def held(self, last):
+        """有上櫃融資原件的三天：起點、滿一年前一天（2026-11-02）、last。"""
+        return [self.START, '2026-11-02', last]
+
+    def estimate(self, margin, held, *, closes=(100.0, 120.0, 132.0), **options):
+        from datetime import date, timedelta
+        before = [(date(2025, 10, 1) + timedelta(days=i)).isoformat() for i in range(27)]
+        rows = [FLAT] * 27 + [(close, '', 0.0) for close in closes]
+        return self.analyze(rows, {}, days=before + held, margin=margin, otc=True, **options)['signals']
+
+    def otc_check(self, margin, as_of):
+        from twon_analysis import margin_maintenance
+        self.calls += 1
+        margin_root = write_margin_store(Path(self.tmp.name) / f'margin{self.calls}', margin, otc=True)
+        with unittest.mock.patch('twon_analysis.margin_maintenance.ROOT', margin_root):
+            return margin_maintenance.daily_check(as_of, '上櫃')
+
+    def test_otc_stock_gets_the_same_estimate_as_a_listed_one_once_a_full_year_is_kept(self):
+        # 和上市同一段買賣（three_margin_days）：兩種成本 110、100，收 132 → 200～220；官方 6,331 仟元，差 −0.01%。
+        held = self.held(self.FULL_YEAR)
+        signals = self.estimate(three_margin_days(held), held)
+        self.assertEqual(signals['margin_maintenance'], {'low_pct': 200, 'high_pct': 220, 'data_date': self.FULL_YEAR})
+        self.assertIn('margin_maintenance', signals['blocks'])
+        self.assertEqual(signals['failed'], [])
+
+    def test_no_otc_estimate_until_a_full_year_is_kept(self):
+        # 資料日 2026-11-02：起點 2025-11-03 起還差一天才滿一年 → 所有上櫃股票都沒有，每日對帳寫明原因。
+        held = [self.START, '2026-10-30', '2026-11-02']
+        signals = self.estimate(three_margin_days(held), held)
+        self.assertIsNone(signals['margin_maintenance'])
+        self.assertEqual((signals['blocks'], signals['failed']), ([], []))
+        check = self.otc_check(three_margin_days(held), '2026-11-02')
+        self.assertEqual((check['status'], check['data_date']), ('too_short', '2026-11-02'))
+        self.assertEqual(check['reason'], '上櫃融資原件從 2025-11-03 起累積到 2026-11-02，要到 2026-11-03 才滿一年')
+
+    def test_no_otc_estimate_while_the_balance_is_zero(self):
+        # 第 3 天全部賣光（今日餘額 0）：這一檔沒有。另一檔 8888 還有 100 張成本 100，所以當天的核對是過的（6,000 仟元）。
+        held = self.held(self.FULL_YEAR)
+        other = {'8888': (0, 0, 0, 100, 100)}
+        margin = [margin_day(held[0], {'9999': (100, 0, 0, 0, 100), '8888': (100, 0, 0, 0, 100)},
+                             {'9999': (100.0, 100.0), '8888': (100.0, 100.0)}),
+                  margin_day(held[1], {'9999': (0, 0, 0, 100, 100), **other}, {'9999': (100.0, 100.0), '8888': (100.0, 100.0)}),
+                  margin_day(held[2], {'9999': (0, 100, 0, 100, 0), **other}, {'9999': (90.0, 90.0), '8888': (100.0, 100.0)},
+                             official_thousand=6000)]
+        signals = self.estimate(margin, held, closes=(100.0, 100.0, 90.0))
+        self.assertIsNone(signals['margin_maintenance'])
+        self.assertEqual(self.estimate(margin, held, code='8888')['margin_maintenance'],
+                         {'low_pct': 167, 'high_pct': 167, 'data_date': self.FULL_YEAR})
+
+    def test_otc_etfs_get_no_estimate(self):
+        held = self.held(self.FULL_YEAR)
+        self.assertIsNone(self.estimate(three_margin_days(held), held, kind='etf')['margin_maintenance'])
+
+    def test_otc_daily_check_compares_with_the_official_otc_total_and_blocks_over_the_threshold(self):
+        held = self.held(self.FULL_YEAR)
+        self.assertEqual(self.otc_check(three_margin_days(held, 6331), self.FULL_YEAR), {
+            'status': 'ok', 'data_date': self.FULL_YEAR, 'gap_pct': -0.01, 'threshold_pct': 8.0,
+            'estimated': 6330520, 'official': 6331000, 'stocks': 1, 'reason': None})
+        # 官方 5,800 仟元：估計多 9.15%，超過 8% → 所有上櫃股票都沒有。
+        over = self.otc_check(three_margin_days(held, 5800), self.FULL_YEAR)
+        self.assertEqual((over['status'], over['gap_pct']), ('over_threshold', 9.15))
+        self.assertIsNone(self.estimate(three_margin_days(held, 5800), held)['margin_maintenance'])
+
+    def test_listed_and_otc_are_checked_separately(self):
+        # 上櫃的原件不會被當成上市的（反之亦然）：只有上櫃原件時，上市那一份是「沒有起點」。
+        held = self.held(self.FULL_YEAR)
+        from twon_analysis import margin_maintenance
+        self.calls += 1
+        margin_root = write_margin_store(Path(self.tmp.name) / f'margin{self.calls}', three_margin_days(held), otc=True)
+        with unittest.mock.patch('twon_analysis.margin_maintenance.ROOT', margin_root):
+            self.assertEqual(margin_maintenance.daily_check(self.FULL_YEAR)['status'], 'no_start')
+            self.assertEqual(margin_maintenance.daily_check(self.FULL_YEAR, '上櫃')['status'], 'ok')
+
+    def test_otc_start_numbers_are_fixed(self):
+        # 上櫃的起點（和上市同一天）與起點係數（讓起點那天的估計總額等於櫃買公布的上櫃全市場融資金額；
+        # 10 票用 2025-11-03 的櫃買原件與上櫃行情求出）固定下來，不每天重算。混合權重、融資成數、門檻沿用上市的。
+        from twon_analysis import margin_maintenance as fixed
+        board = fixed.BOARDS['上櫃']
+        self.assertEqual((fixed.OTC_START_DATE, board.start, board.raw, board.prices), ('2025-11-03', '2025-11-03', 'otc-raw', 'otc-prices'))
+        self.assertEqual(board.seed_scale, fixed.OTC_SEED_SCALE)
+        self.assertEqual(round(fixed.OTC_SEED_SCALE, 10), OTC_SEED_SCALE_FROZEN)
+        self.assertEqual((board.name, board.needs_full_year, fixed.BOARDS['上市'].needs_full_year), ('上櫃', True, False))
 
 
 class StockSignalsAlgorithmVersionTests(unittest.TestCase):

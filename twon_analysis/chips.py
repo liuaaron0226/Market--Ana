@@ -11,6 +11,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DETAIL = ROOT / 'data/market-snapshots/stock-detail'
+# 個股融資原件的長期保存區（data/margin-history/raw）所在的資料根目錄：和近期明細是同一份證交所原件，只是不裁。
+# 種子放回的日子只在那裡，所以融資融券兩邊都讀，融資券面板才會和融資維持率（估）停在同一天。
+# 資料夾位置與檔名規則只在 margin_history 定一份（融資維持率（估）也是問它）。
+KEPT_ROOT = ROOT
 
 
 def _int(text) -> int:
@@ -36,8 +40,11 @@ def _t86(day: str) -> dict:
 
 @lru_cache(maxsize=64)
 def _margin(day: str) -> dict:
-    path = DETAIL / 'margin' / f'margin-{day.replace("-", "")}.json'
-    if not path.exists():
+    import margin_history
+    compact = day.replace("-", "")
+    recent = DETAIL / 'margin' / f'margin-{compact}.json'
+    path = next((p for p in (recent, margin_history.stored_path(KEPT_ROOT, compact)) if p.exists()), None)
+    if path is None:
         return {}
     data = json.loads(path.read_text(encoding='utf-8'))['data']
     table = next(t for t in data['tables'] if t.get('fields') and t['fields'][0] == '代號')
@@ -55,6 +62,14 @@ def available_days() -> list[str]:
 
 def institutional(code: str, dates: list[str]) -> list[dict | None]:
     return [_t86(d).get(code) for d in dates]
+
+
+def margin_days() -> list[str]:
+    """近期明細與長期保存區合起來有融資原件的日子（YYYY-MM-DD，由舊到新）。檔名不合規則的不算。"""
+    import margin_history
+    stamps = {*margin_history.held_days(KEPT_ROOT, 'raw'),
+              *(m.group(1) for p in (DETAIL / 'margin').glob('margin-*.json') if (m := margin_history.DAILY_FILE.fullmatch(p.name)))}
+    return [f'{s[:4]}-{s[4:6]}-{s[6:]}' for s in sorted(stamps)]
 
 
 def margin(code: str, dates: list[str]) -> list[dict | None]:

@@ -121,13 +121,15 @@ test("打開事實區塊不連帶打開任何其他功能", () => {
   assert.doesNotMatch(JSON.stringify(releasePolicy({ MARKET_ANA_STOCK_FACTS: "owner" })), /MARKET_ANA_STOCK_FACTS/);
 });
 
-test("正式環境設定（本人 11-16）：事實區塊只開站主，其他獲准使用者看不到", () => {
+// 預測帳本的站主限制在 API 層（forecast.js：非站主一律 available:false），不在功能清單，這裡只鎖自選股關注。
+test("正式環境設定（本人 11-17「全部照做」）：事實區塊開給全部獲准使用者；自選股關注仍只給站主", () => {
   const text = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8").replace(/^\s*\/\/.*$/gm, "");
   const vars = JSON.parse(text).vars;
-  assert.equal(vars.MARKET_ANA_STOCK_FACTS, "owner");
+  assert.equal(vars.MARKET_ANA_STOCK_FACTS, "all");
   const policy = releasePolicy(vars);
   assert.equal(policyForViewer(policy, true, vars).features.stock_facts_v1, true);
-  assert.equal(policyForViewer(policy, false, vars).features.stock_facts_v1, false);
+  assert.equal(policyForViewer(policy, false, vars).features.stock_facts_v1, true);
+  assert.equal(policyForViewer(policy, false, vars).features.watchlist_watch_v1, false);
 });
 
 

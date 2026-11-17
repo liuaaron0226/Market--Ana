@@ -199,7 +199,7 @@
 
 }
 
-/* 收復／防守：線與數字由 K 線軸上價籤顯示；原浮鈕改成圖表左上角的可點圖例（點了開詳情） */
+/* 收復／防守：線畫在 K 線上，名稱與數字只在這兩顆鍵（11-17 起右側價格欄不掛價籤）；原浮鈕改成圖表左上角的可點圖例（點了開詳情） */
 @media (min-width: 761px) {
   /* 圖例外觀約 28px 高，但按鈕本身仍是 44px 點擊區（透明上下緣），不縮觸控目標 */
   .hm .line-trigger {
@@ -362,8 +362,7 @@
    頁面背景是桌面；頂列、搜尋、主 K 線是板；板上可按的是鍵，輸入框與切換軌道是槽。
    陰影與圓角一律引用 bold.css 的深度變數。選擇器用 body.hm，才壓得過後載入的 panel.css。
    外殼以下的區塊（直白分析、籌碼、選股看板）在第 3 片換。 */
-html:has(> body.hm) { background: var(--desk); }
-body.hm { background: radial-gradient(1200px 720px at 18% 0, var(--desk-hi), transparent 70%) no-repeat var(--desk); }
+/* 桌面的背景與個股頁共用，寫在 bold.css〈看盤桌：頁面背景〉 */
 body.hm .app-shell { padding-top: 24px; }
 
 /* ---------- 第 1 層：三塊板 ---------- */
@@ -703,7 +702,10 @@ body.hm .terrain-tag {
   position: absolute; left: 0; top: 0; padding: 5px 8px; border-radius: var(--r-key);
   background: var(--float); color: var(--ink); font: 700 12.5px/1 var(--sans); white-space: nowrap;
   box-shadow: var(--key-shadow);
+  transition: opacity 160ms var(--ease-out), visibility 0s;
 }
+/* 和名次較前的牌疊到、讓開一格也放不下的那一刻先淡出（terrain.js 的 stackTags） */
+body.hm .terrain-tag.is-crowded { opacity: 0; visibility: hidden; transition: opacity 160ms var(--ease-out), visibility 0s 160ms; }
 
 /* 點樓的明細：第 2 層的浮板，桌機浮在地形角落 */
 body.hm .terrain-detail {

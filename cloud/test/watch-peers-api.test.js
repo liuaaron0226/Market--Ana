@@ -72,7 +72,7 @@ const putStatus = (symbol, source, ok, problem = null, succeeded = "2026-11-16T0
 
 test("還沒有名單的關注股：讀得到一份空名單；沒關注的股票不出現這一塊", async () => {
   assert.deepEqual(await json("/api/watch-peers/2330"), {
-    available: true, code: "2330", watching: true, items: [], limited_count: 0, limited_limit: 12, sources: {},
+    available: true, code: "2330", watching: true, items: [], nominations: [], limited_count: 0, limited_limit: 12, sources: {},
   });
   assert.equal((await json("/api/watch-peers/2317")).watching, false);
 });
@@ -226,4 +226,53 @@ test("只有站主、而且開關打開時才有內容；其他人得到「沒�
   delete env.MARKET_ANA_WATCHLIST_WATCH;
   assert.deepEqual(await json("/api/watch-peers/2330"), { available: false });
   assert.equal(calls.length, 1);
+});
+
+// ---- G 票第 16 片：Gemini 提名（每日排程寫進「提名中」），站主在個股頁勾選確認 ----
+
+async function nominate(symbol, name, market, reason, code = "2330") {
+  await env.DB.prepare("INSERT INTO watch_peers (email, code, symbol, name, market, status, reason, added_by, updated_at) VALUES (?, ?, ?, ?, ?, 'nominated', ?, 'gemini', '2026-11-16T10:00:00Z')")
+    .bind(OWNER, code, symbol, name, market, reason).run();
+  await env.DB.prepare("INSERT INTO watch_peer_events (email, code, symbol, name, action, at) VALUES (?, ?, ?, ?, 'nominate', '2026-11-16T10:00:00Z')")
+    .bind(OWNER, code, symbol, name).run();
+}
+const confirm = (symbol, code = "2330") => req(`/api/watch-peers/${code}/${encodeURIComponent(symbol)}`, { method: "POST" });
+const events = async () => (await env.DB.prepare("SELECT symbol, action FROM watch_peer_events WHERE code = '2330' ORDER BY id").all()).results
+  .map((row) => `${row.action}:${row.symbol}`);
+
+test("提名中的另外列出（附提名理由），還不算進名單；站主確認一檔、取消一檔，各留一筆改動紀錄", async () => {
+  await nominate("NVDA.US", "NVIDIA", "US", "先進製程的大客戶");
+  await nominate("INTC.US", "Intel", "US", "晶圓代工的競爭者");
+  const before = await json("/api/watch-peers/2330");
+  assert.deepEqual(before.items, []);
+  assert.deepEqual(before.nominations, [
+    { symbol: "NVDA.US", name: "NVIDIA", market: "US", reason: "先進製程的大客戶" },
+    { symbol: "INTC.US", name: "Intel", market: "US", reason: "晶圓代工的競爭者" },
+  ]);
+  assert.equal((await confirm("NVDA.US")).status, 200);
+  assert.equal((await remove("INTC.US")).status, 204);
+  const after = await json("/api/watch-peers/2330");
+  assert.deepEqual(after.items.map((item) => item.symbol), ["NVDA.US"]);
+  assert.deepEqual(after.nominations, []);
+  assert.deepEqual(await events(), ["nominate:NVDA.US", "nominate:INTC.US", "confirm:NVDA.US", "remove:INTC.US"]);
+  assert.deepEqual(calls, [], "提名在排程裡已經查過行情，確認時不再花來源的額度");
+});
+
+test("只能確認提名中的那幾檔；韓股與指數確認時照樣受合計上限", async () => {
+  assert.equal((await confirm("AMD")).status, 404);
+  for (let i = 0; i < 12; i += 1) {
+    await env.DB.prepare("INSERT INTO watch_peers (email, code, symbol, name, market, status, reason, added_by, updated_at) VALUES (?, '2330', ?, 'x', 'KR', 'confirmed', NULL, 'owner', 'x')")
+      .bind(OWNER, `00000${i}`.slice(-6) + ".KO").run();
+  }
+  await nominate("005930.KO", "Samsung", "KR", "記憶體與代工的競爭者");
+  const refused = await confirm("005930.KO");
+  assert.equal(refused.status, 409);
+  assert.match((await refused.json()).error, /最多 12 檔/);
+});
+
+test("其他使用者確認不了站主的提名", async () => {
+  await nominate("NVDA.US", "NVIDIA", "US", "先進製程的大客戶");
+  const other = await req("/api/watch-peers/2330/NVDA.US", { method: "POST", email: "a@example.com" });
+  assert.deepEqual(await other.json(), { available: false });
+  assert.deepEqual((await json("/api/watch-peers/2330")).items, []);
 });

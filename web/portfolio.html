@@ -10,25 +10,31 @@
   <meta name="apple-mobile-web-app-title" content="決策鏡">
   <meta name="theme-color" content="#0b0b0e">
   <title>自選股與庫存｜台股決策鏡</title>
-  <link rel="stylesheet" href="minimal.css?v=20261109-ux1">
-  <link rel="stylesheet" href="chart-studies.css?v=20261117-desk45">
-  <link rel="stylesheet" href="bold.css?v=20261117-desk45">
-  <link rel="stylesheet" href="portfolio.css?v=20261117-desk45">
-  <link rel="stylesheet" href="watch-judgments.css?v=20261117-desk45">
-  <link rel="stylesheet" href="watch-push.css?v=20261117-desk45">
+  <link rel="stylesheet" href="minimal.css?v=20261117-desk51">
+  <link rel="stylesheet" href="chart-studies.css?v=20261117-desk51">
+  <link rel="stylesheet" href="bold.css?v=20261117-desk51">
+  <link rel="stylesheet" href="portfolio.css?v=20261117-desk51">
+  <link rel="stylesheet" href="watch-judgments.css?v=20261117-desk51">
+  <link rel="stylesheet" href="watch-push.css?v=20261117-desk51">
 </head>
 <body class="bd pf">
   <a class="skip-link" href="#portfolioMain">跳到自選股與庫存</a>
-  <div class="pf-shell" data-ui>
+  <div class="pf-shell" data-ui data-desk-tilt>
     <header class="pf-bar">
       <a class="pf-back" href="minimal.html" aria-label="回到大盤首頁"><span aria-hidden="true">←</span> 大盤首頁</a>
       <div class="pf-brand" aria-label="台股決策鏡">
         <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M4 23.5 10.5 17l4.5 3.5L24.5 9l3.5 3.5M22 9h6v6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
         <span>台股決策鏡</span>
       </div>
-      <button class="pf-theme" id="portfolioTheme" type="button" aria-label="改用深色主題">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.64 5.64l1.42 1.42m9.88 9.88 1.42 1.42m0-12.72-1.42 1.42M7.06 16.94l-1.42 1.42" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>
-      </button>
+      <div class="pf-bar-end">
+        <!-- 到價推播的設定收在這顆鈴鐺後面（本人 2026-11-17：放在庫存底下奇怪又佔空間）；只有站主、推播可用時才出現，見 watch-push.js -->
+        <button class="pf-theme pf-bell" id="pushOpen" type="button" aria-haspopup="dialog" aria-controls="pushDialog" aria-label="到價推播設定" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 1.5h-15zM10 20.5a2.2 2.2 0 0 0 4 0" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="pf-theme" id="portfolioTheme" type="button" aria-label="改用深色主題">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.64 5.64l1.42 1.42m9.88 9.88 1.42 1.42m0-12.72-1.42 1.42M7.06 16.94l-1.42 1.42" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>
+        </button>
+      </div>
     </header>
 
     <main id="portfolioMain">
@@ -36,6 +42,7 @@
         <h1>自選股與庫存</h1>
         <p class="pf-freshness" id="portfolioFreshness" role="status">讀取中</p>
       </div>
+      <p class="pf-ai-notice" id="friendAiNotice" role="status" hidden><span id="friendAiNoticeText"></span><a href="/gemini/">前往 Gemini 設定 <span aria-hidden="true">›</span></a></p>
 
       <section class="pf-level" id="levelPanel" aria-labelledby="levelTitle" hidden>
         <div class="pf-level-head">
@@ -100,17 +107,26 @@
         </div>
         <p class="pf-form-status pf-list-status" id="listStatus" role="status"></p>
         <ol class="hv-rows" id="holdingRows"></ol>
-        <!-- 到價推播（自選股關注 F 票）：只有站主、關注開關打開時才出現 -->
-        <div class="wp" id="pushPanel" hidden></div>
       </section>
     </main>
+    <dialog class="wp-dialog" id="pushDialog" aria-labelledby="pushTitle">
+      <div class="wp-dialog-head">
+        <h2 id="pushTitle">到價推播</h2>
+        <button type="button" class="wp-close" data-dialog-close aria-label="關閉">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <div class="wp" id="pushPanel"></div>
+    </dialog>
   </div>
-  <script src="holdings-rows.js?v=20261117-desk45" defer></script>
-  <script src="portfolio-list.js?v=20261117-desk45" defer></script>
-  <script src="swipe-rows.js?v=20261117-desk45" defer></script>
-  <script src="watch-judgments.js?v=20261117-desk45" defer></script>
-  <script src="watch-push.js?v=20261117-desk45" defer></script>
-  <script src="portfolio.js?v=20261117-desk45" defer></script>
-  <script src="chart-menus.js?v=20261117-desk45" defer></script>
+  <script src="watch-judgments.js?v=20261117-desk51" defer></script>
+  <script src="scroll-lock.js?v=20261117-desk51" defer></script>
+  <script src="watch-push.js?v=20261117-desk51" defer></script>
+  <script src="holdings-rows.js?v=20261117-desk51" defer></script>
+  <script src="portfolio-list.js?v=20261117-desk51" defer></script>
+  <script src="swipe-rows.js?v=20261117-desk51" defer></script>
+  <script src="portfolio.js?v=20261117-desk51" defer></script>
+  <script src="chart-menus.js?v=20261117-desk51" defer></script>
+  <script src="desk-tilt.js?v=20261117-desk51" defer></script>
 </body>
 </html>

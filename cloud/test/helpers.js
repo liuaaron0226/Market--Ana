@@ -5,7 +5,8 @@ import { readFileSync } from "node:fs";
 const MIGRATION = ["0001_init.sql", "0003_api_hits.sql", "0004_listed_stock_data.sql", "0005_user_portfolio.sql",
   "0008_stock_history.sql", "0009_user_drawings.sql", "0010_forecast_ledger.sql", "0011_watchlist_watch.sql", "0012_watchlist_group.sql",
   "0013_stock_announcements.sql", "0014_friend_gemini_keys.sql", "0015_watch_news.sql", "0016_watch_peers.sql",
-  "0017_watch_ledger.sql", "0018_etf_securities.sql", "0019_watch_push.sql", "0020_friend_ai_daily.sql"]
+  "0017_watch_ledger.sql", "0018_etf_securities.sql", "0019_watch_push.sql", "0020_friend_ai_daily.sql",
+  "0021_watch_ready_notices.sql", "0022_friend_ai_stock_daily.sql", "0023_forecast_replay.sql"]
   .map((f) => readFileSync(new URL(`../migrations/${f}`, import.meta.url), "utf8"))
   .join("\n");
 
@@ -80,5 +81,21 @@ export function fetchJwks(jwks) {
   return async (url) => {
     if (String(url) !== `${TEAM}/cdn-cgi/access/certs`) throw new Error("unexpected fetch " + url);
     return new Response(JSON.stringify(jwks), { headers: { "content-type": "application/json" } });
+  };
+}
+
+// Cloudflare API 的 D1 /query（GitHub 排程用的 lib/d1-http.js 打的那一支）的假回應，背後是 fakeD1 的本機 SQLite。
+// calls 會記下每一次的網址、權杖與送出的 { sql, params }。
+export function fakeCloudflareD1(db, calls = []) {
+  return async (url, init) => {
+    const body = JSON.parse(init.body);
+    calls.push({ url: String(url), auth: init.headers.Authorization, body });
+    try {
+      const statement = db.prepare(body.sql).bind(...(body.params || []));
+      const out = /^\s*(SELECT|WITH)\b/i.test(body.sql) ? await statement.all() : await statement.run();
+      return Response.json({ success: true, errors: [], result: [{ success: true, results: out.results || [], meta: out.meta }] });
+    } catch (error) {
+      return Response.json({ success: false, errors: [{ code: 7500, message: String(error.message) }], result: [] }, { status: 400 });
+    }
   };
 }

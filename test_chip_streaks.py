@@ -42,6 +42,13 @@ class StreakTests(unittest.TestCase):
         rows = rank_streak_top(amounts, DAYS, top=2, member_top=2)
         self.assertEqual([(r['code'], r['streak'], r['capped']) for r in rows], [('A', 1, False), ('B', 4, True)])
 
+    def test_days_through_each_items_own_latest_day(self):
+        # 11-17：融資晚上才公布，全體最新一天 d4 還沒有融資 → 融資的「目前」是 d3，不是空的
+        from chip_streaks import days_through_latest
+        self.assertEqual(days_through_latest({'A': {'d2': 1, 'd3': -2}, 'B': {'d4': None}}, DAYS), ['d1', 'd2', 'd3'])
+        self.assertEqual(days_through_latest({'A': {'d4': 1}}, DAYS), DAYS)
+        self.assertEqual(days_through_latest({}, DAYS), [])
+
 
 if __name__ == '__main__':
     unittest.main()

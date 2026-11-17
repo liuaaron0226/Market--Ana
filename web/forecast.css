@@ -26,6 +26,13 @@
   animation: forecast-rise .18s var(--ease);
 }
 .forecast-pop[hidden] { display: none; }
+/* 標題列：左邊標題、右邊關閉鈕 */
+.forecast-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: -2px 0 10px; }
+.forecast-title { color: var(--ink); font: 600 14px/1.2 var(--sans); }
+.forecast-close { flex: none; width: 36px; height: 36px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 9px; background: transparent; color: var(--ink); }
+.forecast-close:hover { background: var(--panel2); }
+.forecast-close svg { width: 16px; height: 16px; }
+@media (max-width: 720px) { .forecast-close { width: 44px; height: 44px; } }
 @keyframes forecast-rise { from { opacity: 0; transform: translateY(-4px); } }
 @media (prefers-reduced-motion: reduce) { .forecast-pop { animation: none; } }
 .forecast-seg { display: flex; gap: 4px; margin-bottom: 10px; }

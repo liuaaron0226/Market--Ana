@@ -36,7 +36,7 @@ test("合併成一行的時段（30 7,8,12）依實際觸發的那個小時送�
   }
 });
 
-test("每分鐘的時段交給雲端盯價，不觸發 GitHub", async () => {
+test("每分鐘的時段交給雲端盯價，不觸發 GitHub；「可以留意」推播改由 GitHub 的排程送，這裡不碰（本人 11-17）", async () => {
   let dispatched = false, watched = null;
   const result = await runScheduled(WATCH_CRON, Date.parse("2026-11-16T02:00:00Z"), env, {
     fetcher: async () => { dispatched = true; return { status: 204 }; },
