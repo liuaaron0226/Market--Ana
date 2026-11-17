@@ -18,11 +18,14 @@ const tilt = load();
 const plain = (value) => JSON.parse(JSON.stringify(value));
 
 test("只在可懸停且精細指標、桌機寬度、沒有開減少動態效果、開關開著時啟用", () => {
-  assert.equal(tilt.allowed({ fineHover: true, width: 1440, reduceMotion: false }), true);
-  assert.equal(tilt.allowed({ fineHover: false, width: 1440, reduceMotion: false }), false, "觸控裝置");
-  assert.equal(tilt.allowed({ fineHover: true, width: 860, reduceMotion: false }), false, "手機寬度（860 以下，和全站的手機版面同一條線）");
-  assert.equal(tilt.allowed({ fineHover: true, width: 861, reduceMotion: false }), true);
-  assert.equal(tilt.allowed({ fineHover: true, width: 1440, reduceMotion: true }), false, "減少動態效果");
+  // 開關的現值另有一項測試；這裡驗「開著時」的條件，所以明確帶 enabled: true。
+  const on = { enabled: true };
+  assert.equal(tilt.allowed({ ...on, fineHover: true, width: 1440, reduceMotion: false }), true);
+  assert.equal(tilt.allowed({ ...on, fineHover: false, width: 1440, reduceMotion: false }), false, "觸控裝置");
+  assert.equal(tilt.allowed({ ...on, fineHover: true, width: 860, reduceMotion: false }), false, "手機寬度（860 以下，和全站的手機版面同一條線）");
+  assert.equal(tilt.allowed({ ...on, fineHover: true, width: 861, reduceMotion: false }), true);
+  assert.equal(tilt.allowed({ ...on, fineHover: true, width: 1440, reduceMotion: true }), false, "減少動態效果");
+  assert.equal(tilt.allowed({ fineHover: true, width: 1440, reduceMotion: false }), tilt.ENABLED, "沒帶 enabled 時照檔頭開關");
   assert.equal(tilt.allowed({ fineHover: true, width: 1440, reduceMotion: false, enabled: false }), false, "開關關掉");
 });
 
