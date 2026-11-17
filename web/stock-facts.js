@@ -215,40 +215,45 @@
   const yearMonth = period => `${period.slice(0, 4)} 年 ${Number(period.slice(5, 7))} 月`;
   const shortMonth = period => `${period.slice(2, 4)}/${period.slice(5, 7)}`;
   // 億元的位數：百億以上取整數、十億以上一位小數、更小兩位小數
-  const hundredMillion = value => Number(value).toLocaleString('en-US', {
-    minimumFractionDigits: value >= 100 ? 0 : value >= 10 ? 1 : 2, maximumFractionDigits: value >= 100 ? 0 : value >= 10 ? 1 : 2,
-  });
+  const hundredMillion = value => {
+    // 位數照捨入後的值決定：99.96 億捨成整數是 100，就寫 100，不寫 100.0（只捨入一次，不重複捨入）
+    const digits = Math.round(value) >= 100 ? 0 : Math.round(value * 10) / 10 >= 10 ? 1 : 2;
+    return Number(value).toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  };
 
   function revenueChart(series, latest) {
     if (!Array.isArray(series) || !series.length) return null;
     const kind = series.some(item => has(item?.revenue_100m)) ? 'revenue' : series.some(item => has(item?.yoy)) ? 'yoy' : null;
     if (!kind) return null;
-    const key = kind === 'revenue' ? 'revenue_100m' : 'yoy';
-    const values = series.map(item => item[key]).filter(has);
+    const field = kind === 'revenue' ? 'revenue_100m' : 'yoy';
+    const values = series.map(item => item[field]).filter(has);
     const high = Math.max(0, ...values), low = Math.min(0, ...values);
     const span = high - low || 1;
     const zero = high / span;   // 零軸離圖頂多遠（0～1）；營收都是正的，零軸就在最底
     const last = series.length - 1;
     const bars = series.map((item, i) => {
-      const value = item[key];
+      const value = item[field];
       const tick = (last - i) % TICK_EVERY === 0 ? shortMonth(item.period) : '';
       if (!has(value)) {
-        return { period: item.period, tick, missing: true, top: zero, height: 0, label: '', read: `${yearMonth(item.period)}　沒有營收資料`, aria: `${yearMonth(item.period)}沒有營收資料` };
+        return { period: item.period, tick, missing: true, top: zero, height: 0, label: '', parts: [yearMonth(item.period), '沒有營收資料'], read: `${yearMonth(item.period)}　沒有營收資料`, aria: `${yearMonth(item.period)}沒有營收資料` };
       }
       const size = Math.abs(value) / span;
       const mom = latest?.period === item.period && has(latest.mom) ? latest.mom : null;
       const growth = [has(mom) ? `月增 ${pct(mom)}` : null, has(item.yoy) ? `年增 ${pct(item.yoy)}` : kind === 'revenue' ? '年增：去年同月沒有資料' : null].filter(Boolean);
       const amount = kind === 'revenue' ? `營收 ${hundredMillion(value)} 億元` : null;
       return {
-        period: item.period, tick, missing: false,
+        period: item.period, tick, missing: false, negative: value < 0,
         top: value >= 0 ? zero - size : zero, height: size,
         label: kind === 'revenue' ? hundredMillion(value) : pct(value),
+        // 讀數的每一段（月份、營收、月增、年增）；畫面一段一個不斷行的區塊，read／aria 是同一組接起來的文字
+        parts: [yearMonth(item.period), amount, ...growth].filter(Boolean),
         read: [yearMonth(item.period), amount, ...growth].filter(Boolean).join('　'),
         aria: `${yearMonth(item.period)}${[amount, ...growth].filter(Boolean).join('，')}`,
       };
     });
     let selected = last;
     while (selected > 0 && bars[selected].missing) selected -= 1;
+    bars[selected].latest = true;   // 最新一個有資料的月份：數值一直標著，選別的月份時也不拿掉
     return { kind, title: kind === 'revenue' ? '每月營收（億元）' : '每月營收年增率（%）', zero, bars, selected };
   }
 
@@ -257,14 +262,13 @@
     const figure = el('figure', `sf-rev sf-rev-${chart.kind}`);
     const head = el('figcaption', 'sf-rev-head');
     const read = el('p', 'sf-rev-read num');
-    read.setAttribute('aria-live', 'polite');
     head.append(el('span', 'sf-rev-title', chart.title), read);
     const plot = el('div', 'sf-rev-plot');
     plot.setAttribute('role', 'group');
     plot.setAttribute('aria-label', `${chart.title}，近 ${chart.bars.length} 個月`);
     plot.style.setProperty('--zero', String(chart.zero));
     const keys = chart.bars.map(bar => {
-      const key = el('button', 'sf-rev-col');
+      const key = el('button', `sf-rev-col${bar.latest ? ' is-latest' : ''}${bar.negative ? ' is-negative' : ''}`);
       key.type = 'button';
       key.disabled = bar.missing;
       key.setAttribute('aria-label', bar.aria);
@@ -287,7 +291,7 @@
         key.tabIndex = i === index ? 0 : -1;
       });
       // 每一段（月份、營收、月增、年增）不從中間斷行，窄螢幕放不下時整段換到下一行
-      read.replaceChildren(...chart.bars[index].read.split('　').map(text => el('span', '', text)));
+      read.replaceChildren(...chart.bars[index].parts.map(text => el('span', '', text)));
     };
     // 點（或鍵盤選）的那一根會留著；滑鼠滑過只是先看一下，離開圖就回到留著的那一根
     let pinned = chart.selected;

@@ -177,6 +177,8 @@
       item.append(name, meta, off);
       devices.append(item);
     }
+    // 在浮層裡重畫（切換開關、測試通知失敗、逐台關掉之後）：原本有焦點的鍵被換掉了，焦點放回浮層裡第一個能按的東西，鍵盤操作不中斷
+    if (host.closest?.('dialog[open]') && (!document.activeElement || document.activeElement === document.body)) host.querySelector('input, button')?.focus();
     return true;
   }
 
@@ -210,7 +212,7 @@
   }
 
   async function attach({ opener, dialog, host }) {
-    if (!opener || !dialog || !host) return;
+    if (!opener || !dialog || !host || typeof dialog.showModal !== 'function') return;   // 太舊的瀏覽器沒有 <dialog>：鈴鐺不出現
     if (!(await mount(host))) return;
     wireDialog(opener, dialog);
     opener.hidden = false;

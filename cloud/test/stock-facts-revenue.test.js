@@ -104,3 +104,19 @@ test("營收全部一樣多：每一根一樣高，不會除以零", () => {
   const chart = plain(revenueChart(series(PERIODS.map(() => 7))));
   assert.ok(chart.bars.every((bar) => bar.height === 1 && bar.top === 0));
 });
+
+test("位數照捨入後的值決定：99.996 億寫 100、9.996 億寫 10.0（審查抓到的邊界）", () => {
+  const chart = revenueChart(series([99.996, 9.996, ...PERIODS.slice(2).map(() => 1)]));
+  assert.equal(chart.bars[0].label, "100");
+  assert.equal(chart.bars[1].label, "10.0");
+});
+
+test("最新一個有資料的月份帶 latest（數值一直標著）；年增率畫法的負值帶 negative（數值標在長條下方）", () => {
+  const revenues = PERIODS.map(() => 80);
+  revenues[12] = null;
+  const chart = revenueChart(series(revenues));
+  assert.deepEqual(chart.bars.map((bar, i) => (bar.latest ? i : null)).filter((i) => i !== null), [11]);
+  const yoy = revenueChart(PERIODS.map((period, i) => ({ period, yoy: i === 12 ? -5 : 5 })));
+  assert.equal(yoy.bars[12].negative, true);
+  assert.equal(yoy.bars[11].negative, false);
+});

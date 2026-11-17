@@ -1,9 +1,6 @@
 /* 自選股頁「到價推播」（自選股關注 F 票）：只有站主看得到。
    本人 2026-11-17：放在庫存底下奇怪又佔空間 → 收進頁首的鈴鐺，點了才浮出來（watch-push.js 的 attach）。
-   浮層和首頁的浮板同一套（第 2 層的板、--float／--float-shadow）；手機從下緣升起，桌機浮在右上角鈴鐺下方。 */
-.pf-bar-end { justify-self: end; display: flex; gap: 8px; }
-.pf-bell[hidden] { display: none; }
-.pf-bell svg { width: 18px; height: 18px; }
+   頁首鈴鐺的位置在 portfolio.css。浮層和首頁的浮板同一套（第 2 層的板、--float／--float-shadow）；手機從下緣升起，桌機浮在右上角鈴鐺下方。 */
 
 .wp-dialog:not([open]) { display: none; }
 .wp-dialog {
@@ -27,7 +24,7 @@
 @media (max-width: 640px) {
   .wp-dialog {
     width: 100%; max-width: none; max-height: 85dvh; margin: auto 0 0;
-    padding: 16px 16px max(20px, env(safe-area-inset-bottom)); border-radius: var(--r-float) var(--r-float) 0 0;
+    padding: 16px 16px calc(20px + env(safe-area-inset-bottom)); border-radius: var(--r-float) var(--r-float) 0 0;
     animation-name: wp-sheet;
   }
   @keyframes wp-sheet { from { transform: translateY(100%); } }
