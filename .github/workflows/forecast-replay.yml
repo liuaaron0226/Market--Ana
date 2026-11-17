@@ -133,7 +133,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/forecast-replay"
           python forecast_replay.py --plan --analysis data/daily-update-state/last-market-pack/analysis-data.js \
-            --method MARKET_METHOD.md --model gemini-3.8-flash --start "$START" --end "$END" --ledger "$LEDGER" \
+            --method MARKET_METHOD.md --start "$START" --end "$END" --ledger "$LEDGER" \
             | tee "$RUNNER_TEMP/forecast-replay/plan.json"
           { echo "### 歷史重播：可以重播的日子"; echo '```json'; cat "$RUNNER_TEMP/forecast-replay/plan.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
@@ -179,7 +179,7 @@ jobs:
           if [ ! -f "$RUNNER_TEMP/overseas/manifest.json" ]; then echo "::error::海外原件沒抓到，這次不重播"; exit 1; fi
           python -c 'import json, sys; bad = [s["name"] for s in json.load(open(sys.argv[1], encoding="utf-8"))["sources"] if s["status"] != "ok"]; print("::error::這些海外原件沒抓到，這次不重播：" + "、".join(bad)) if bad else None; sys.exit(1 if bad else 0)' "$RUNNER_TEMP/overseas/manifest.json"
           python forecast_replay.py --analysis data/daily-update-state/last-market-pack/analysis-data.js \
-            --method MARKET_METHOD.md --model gemini-3.8-flash --start "$START" --end "$END" \
+            --method MARKET_METHOD.md --start "$START" --end "$END" \
             --ledger "$LEDGER" --agy-bin "$RUNNER_TEMP/agy/antigravity" --fetched-at "$(date -Iseconds)" \
             --max-forecasts "$MAX_FORECASTS" --overseas-dir "$RUNNER_TEMP/overseas" \
             --sql-output "$RUNNER_TEMP/forecast-replay.sql" --log-output "$LEDGER/runs/$GITHUB_RUN_ID.json"

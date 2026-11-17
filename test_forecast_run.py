@@ -91,10 +91,10 @@ class RunTestCase(unittest.TestCase):
     def calls_made(self):
         return len(self.calls.read_text()) if self.calls.exists() else 0
 
-    def run_evening(self, payload=None, *, now=None, structured=None, **kwargs):
+    def run_evening(self, payload=None, *, now=None, structured=None, model_name="gemini-3.8-flash", **kwargs):
         return fr.run_evening(
             self.analysis_file(payload or analysis()), ledger=self.ledger, method_path=self.method,
-            model_bin=self.model(structured or answer()), model="gemini-3.8-flash",
+            model_bin=self.model(structured or answer()), model=model_name,
             now=lambda: now or datetime.fromisoformat(f"{BASE}T17:40:00+08:00"), **kwargs)
 
 
@@ -166,6 +166,16 @@ class EveningRunTests(RunTestCase):
         self.assertEqual((records[DATES[-2]]["kind"], records[DATES[-2]]["miss_reason"]), ("miss", "deadline_passed"))
         self.assertEqual(records[BASE]["kind"], "forecast")
         self.assertEqual(self.calls_made(), 2)
+
+    def test_a_new_model_series_does_not_backfill_from_the_old_models_records(self):
+        # 本人 2026-11-17 換 Argon：Argon 這一系列從第一份起算，Flash 最後一份與今天之間的空檔不算 Argon 漏記。
+        two_back = DATES[:-2]
+        self.run_evening(analysis(two_back), structured=answer(two_back[-1]),
+                         now=datetime.fromisoformat(f"{two_back[-1]}T17:40:00+08:00"))
+        result = self.run_evening(model_name="gemini-4-argon")
+        self.assertEqual(result["backfilled_misses"], [])
+        self.assertEqual(sorted((r["base_date"], r["model"]) for r in fl.read_ledger(self.ledger)["forecasts"]),
+                         [(two_back[-1], "gemini-3.8-flash"), (BASE, "gemini-4-argon")])
 
     def test_an_empty_ledger_does_not_backfill_anything(self):
         result = self.run_evening()

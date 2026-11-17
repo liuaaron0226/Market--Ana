@@ -29,8 +29,10 @@ const parse = (text) => { try { return JSON.parse(text); } catch { return null; 
 async function latest(db) {
   const top = await db.prepare("SELECT MAX(base_date) AS base_date FROM forecast_records").first();
   if (!top?.base_date) return { available: true, base_date: null, editions: { evening: null, morning: null } };
-  const { results } = await db.prepare("SELECT edition, record_json FROM forecast_records WHERE base_date = ?")
-    .bind(top.base_date).all();
+  // 換模型那天同一版可能有新舊模型各一份（本人 11-17 預測換 Argon）：依鎖定時間排，後鎖定的蓋掉先鎖定的。
+  const { results } = await db.prepare(
+    "SELECT edition, record_json FROM forecast_records WHERE base_date = ? " +
+    "ORDER BY json_extract(record_json, '$.locked_at'), forecast_id").bind(top.base_date).all();
   const editions = { evening: null, morning: null };
   for (const row of results) editions[row.edition] = parse(row.record_json);
   return { available: true, base_date: top.base_date, editions };

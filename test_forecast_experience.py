@@ -239,6 +239,16 @@ class LessonTests(LedgerTestCase):
         self.assertEqual(morning["input"]["lessons"], evening["input"]["lessons"])
         self.assertNotIn(evening["forecast_id"], json.dumps(morning["input"], ensure_ascii=False))
 
+    def test_lessons_come_only_from_the_same_model_series(self):
+        # 本人 2026-11-17：換 Argon 後舊 Flash 的紀錄另存、不混算；Argon 不拿 Flash 的對帳當自己的教訓。
+        self.build_ledger()  # 三份都是 test-model 寫的
+        other = self.write_oct6(model_name="gemini-4-argon")["record"]
+        self.assertEqual(other["input"]["lessons"], {
+            "counts": {"1": {"hits": 0, "misses": 0}, "5": {"hits": 0, "misses": 0}, "20": {"hits": 0, "misses": 0}},
+            "recent_misses": []})
+        same = self.write_oct6()["record"]
+        self.assertEqual(same["input"]["lessons"]["counts"]["1"], {"hits": 2, "misses": 1})
+
     def test_a_growing_lesson_layer_does_not_change_the_input_version(self):
         empty = self.write()["record"]
         self.build_ledger()

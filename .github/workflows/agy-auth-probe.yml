@@ -3,10 +3,17 @@
 # - 只能手動觸發；不碰網站資料，不帶 Cloudflare／R2 金鑰。
 # - 登入檔只寫進 runner 暫存的隔離 HOME，結束時清掉；不印內容、不上傳 artifact、不用 cache。
 # 設計與風險：.scratch/g4-gemini-runner/CI-AUTH.md
+# 2026-11-17 換 Argon（gemini_models.py）：加上列模型與額度（/usage，本機 1.5.9 實測不呼叫模型）兩步。
+# 上線前用 model=gemini-4-argon 觸發一次，確認 runner 上的 1.5.3 認得 Argon、/usage 一樣不花額度（num_turns 0）。
 name: agy-auth-probe
 
 on:
   workflow_dispatch:
+    inputs:
+      model:
+        description: 最小呼叫用的模型（換 Argon 前填 gemini-4-argon 核對一次；只呼叫一次）
+        required: false
+        default: gemini-3.8-flash-low
 
 permissions:
   contents: read
@@ -33,11 +40,22 @@ jobs:
           printf '%s' "$AGY_LOGIN_BUNDLE" | tr -d ' \r\n' | base64 -d | tar xzf - -C "$home"
           echo "還原的檔案（只列路徑與大小）："; find "$home" -type f -printf '%s\t%P\n'
 
+      - name: 列出這個帳號可用的模型（不呼叫模型）
+        run: HOME="$RUNNER_TEMP/agy-home" "$RUNNER_TEMP/agy/antigravity" models || echo "::warning::這一版 agy 沒有 models 子指令"
+
+      - name: 額度（呼叫前）
+        run: |
+          HOME="$RUNNER_TEMP/agy-home" "$RUNNER_TEMP/agy/antigravity" -p /usage --output-format json --print-timeout 60s \
+            < /dev/null > "$RUNNER_TEMP/usage.json" 2>/dev/null || true
+          python3 -c "import json,sys; t=open(sys.argv[1]).read(); d=json.loads(t[t.find('{'):]) if '{' in t else {}; print('num_turns:', d.get('num_turns'), '| total_tokens:', (d.get('usage') or {}).get('total_tokens')); print(d.get('response',''))" "$RUNNER_TEMP/usage.json"
+
       - name: 跑一次最小的 agy -p
+        env:
+          MODEL: ${{ inputs.model || 'gemini-3.8-flash-low' }}
         run: |
           cd "$RUNNER_TEMP"
           HOME="$RUNNER_TEMP/agy-home" "$RUNNER_TEMP/agy/antigravity" -p "只回答 OK" \
-            --model gemini-3.8-flash-low --output-format json --print-timeout 120s < /dev/null > out.json 2> err.txt || true
+            --model "$MODEL" --output-format json --print-timeout 120s < /dev/null > out.json 2> err.txt || true
           python3 - <<'PY'
           import json, os
           t = open(os.path.join(os.environ["RUNNER_TEMP"], "out.json"), encoding="utf-8", errors="replace").read()
@@ -50,6 +68,13 @@ jobs:
           PY
           echo "stderr 末段（不含憑證）："; tail -c 400 err.txt | grep -v -i -E 'token|secret|bearer' || true
 
+      - name: 額度（呼叫後）
+        if: always()
+        run: |
+          HOME="$RUNNER_TEMP/agy-home" "$RUNNER_TEMP/agy/antigravity" -p /usage --output-format json --print-timeout 60s \
+            < /dev/null > "$RUNNER_TEMP/usage.json" 2>/dev/null || true
+          python3 -c "import json,sys; t=open(sys.argv[1]).read(); d=json.loads(t[t.find('{'):]) if '{' in t else {}; print('num_turns:', d.get('num_turns'), '| total_tokens:', (d.get('usage') or {}).get('total_tokens')); print(d.get('response',''))" "$RUNNER_TEMP/usage.json"
+
       - name: 清除登入檔
         if: always()
-        run: rm -rf "$RUNNER_TEMP/agy-home" "$RUNNER_TEMP/out.json" "$RUNNER_TEMP/err.txt"
+        run: rm -rf "$RUNNER_TEMP/agy-home" "$RUNNER_TEMP/out.json" "$RUNNER_TEMP/err.txt" "$RUNNER_TEMP/usage.json"

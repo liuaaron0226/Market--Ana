@@ -29,13 +29,14 @@ from typing import Any
 import forecast_ledger as fl
 import foreign_flow
 import foreign_futures
+import gemini_models
 import market_trend
 import overseas_inputs as oi
 from level_signals import trading_day_status
 
 SCHEMA = "forecast-run/v1"
-# 沿用每日 AI 解讀用的模型（本人已訂閱的 Google AI Pro，不新增付費服務）。
-MODEL_DEFAULT = "gemini-3.8-flash"
+# 本人 2026-11-17：大盤預測交給 Argon（模型名稱只在 gemini_models 改；本人已訂閱的 Google AI Pro，不新增付費服務）。
+MODEL_DEFAULT = gemini_models.FORECAST
 # 重播乾跑的時鐘：那一天收盤、每日更新發布之後。
 REPLAY_CLOCK = "17:30:00"
 # 重播晨間版乾跑的時鐘：開盤日早上、期限（08:45）之前。
@@ -242,7 +243,9 @@ def _backfill_misses(analysis: Mapping[str, Any], method_text: str, ledger: Path
     晨間版的開盤日是日 K 裡基準日的下一根，所以基準日要有下一根才補。晚間版只由晚間的執行補、晨間版只由晨間的
     執行補：兩支排程各自寫各自的檔案，不會同時寫到同一筆。
     """
-    earlier = [record["base_date"] for record in fl.read_ledger(ledger)["forecasts"] if record["edition"] == edition]
+    version = fl.input_version(model)  # 換模型＝新系列：舊模型的紀錄不算這一版的起點
+    earlier = [record["base_date"] for record in fl.read_ledger(ledger)["forecasts"]
+               if record["edition"] == edition and record["input_version"] == version]
     if not earlier:
         return []
     last = max(earlier)

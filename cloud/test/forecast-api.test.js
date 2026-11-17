@@ -112,6 +112,18 @@ test("站主讀到的最新預測帶著線的名字與數值、落點、盤勢�
   assert.equal(latest.editions.morning.regime, "盤整");
 });
 
+test("換模型那天同一版有新舊模型各一份時，最新預測取最後鎖定的那一份（本人 11-17 預測換 Argon）", async () => {
+  env = { ...env, DB: fakeD1() };
+  // 先放 Argon、後放 Flash：不靠寫入先後，靠鎖定時間
+  await seedRecord(forecast("2026-09-30", "evening", { forecast_id: "2026-09-30|evening|0.2|v-argon", input_version: "v-argon",
+    model: "gemini-4-argon", regime: "盤整", locked_at: "2026-09-30T18:10:00+08:00" }));
+  await seedRecord(forecast("2026-09-30", "evening", { forecast_id: "2026-09-30|evening|0.2|v-flash", input_version: "v-flash",
+    model: "gemini-3.8-flash", locked_at: "2026-09-30T17:00:00+08:00" }));
+  const latest = await body("/api/forecast/latest");
+  assert.equal(latest.editions.evening.model, "gemini-4-argon");
+  assert.equal(latest.editions.evening.regime, "盤整");
+});
+
 test("站主讀得到最新一份對帳摘要", async () => {
   const summary = await body("/api/forecast/summary");
   assert.deepEqual(summary, { available: true, summary: { as_of: "2026-10-08", groups: [{ horizon: 1, verdict: "累積中" }] } });

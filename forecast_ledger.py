@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 import foreign_flow
+import gemini_models
 # 鎖定、雜湊、模型呼叫、期限與方法版本和關注帳本共用（ledger_core），這裡只留預測帳本自己的規則。
 from ledger_core import (
     EDITIONS,
@@ -54,6 +55,8 @@ from overseas_inputs import PARAMETERS as _OVERSEAS_PARAMETERS
 import forecast_experience as _experience
 
 SCHEMA = "forecast-ledger/v1"
+# 寫預測用的模型（本人 2026-11-17 換 Argon；名稱只在 gemini_models 改）。模型算進輸入版本，見 input_version()。
+MODEL = gemini_models.FORECAST
 HORIZONS = (1, 5, 20)
 ZONES = ("above", "between", "below")
 REGIMES = ("多頭延續", "多頭中的回檔", "高檔轉弱", "空頭延續", "空頭中的反彈", "盤整")
@@ -147,10 +150,17 @@ _PROMPT_RULES = (
     "lessons 是程式整理的過去對帳事實：各期間猜中與沒中的次數，以及最近幾次沒中的那一格當時選的落點、兩條線、盤勢、"
     "看錯條件與實際落點。寫之前先看這些，避免同一種錯一犯再犯；lessons 是空的代表還沒有對完帳的紀錄。",
 )
-# 輸入版本：參數、回答格式、提示規則任何一項改了就是新系列，和舊系列分開對帳。
-INPUT_VERSION = "+".join(PARAMETERS["layers"]) + "-v1-" + hashlib.sha256(json.dumps(
-    {"parameters": PARAMETERS, "output_schema": OUTPUT_SCHEMA, "prompt_rules": _PROMPT_RULES},
-    ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:8]
+def input_version(model: str) -> str:
+    """輸入版本：參數、回答格式、提示規則、模型任何一項改了就是新系列，和舊系列分開對帳（教訓層也只讀同一系列）。
+
+    本人 2026-11-17「預測也換 Argon」：換模型＝新的輸入版本；換模型前 Flash 寫的試跑與重播是
+    ``base+overseas+foreign_flow+similar+lessons-v1-1fbcaa45``（那時模型還沒算進來）。"""
+    return "+".join(PARAMETERS["layers"]) + "-v1-" + hashlib.sha256(json.dumps(
+        {"parameters": PARAMETERS, "output_schema": OUTPUT_SCHEMA, "prompt_rules": _PROMPT_RULES, "model": model},
+        ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:8]
+
+
+INPUT_VERSION = input_version(MODEL)
 
 
 # ---- 布林通道 ----
@@ -321,10 +331,10 @@ _RECORD_ONLY = ("overseas_status", "missing_inputs", "record_only", "sources")
 
 
 def _model_input(data: Mapping[str, Any], rows: list[dict[str, Any]], edition: str,
-                 candidates: list[dict[str, Any]] | None, experience: Mapping[str, Any]) -> dict[str, Any]:
+                 candidates: list[dict[str, Any]] | None, experience: Mapping[str, Any], version: str) -> dict[str, Any]:
     return {
         "schema": "forecast-input/v1",
-        "input_version": INPUT_VERSION,
+        "input_version": version,
         "parameters": copy.deepcopy(PARAMETERS),
         "base_date": data.get("base_date"),
         "edition": edition,
@@ -344,12 +354,15 @@ def _model_input(data: Mapping[str, Any], rows: list[dict[str, Any]], edition: s
     }
 
 
-def _experience_layers(root: Path, base_date: str, rows: list[dict[str, Any]], ready: bool) -> dict[str, Any]:
-    """相似盤勢層只在日 K 截到基準日時才算（不偷看之後）；教訓層只用寫這一份時已知結果的對帳。"""
+def _experience_layers(root: Path, base_date: str, rows: list[dict[str, Any]], ready: bool,
+                       version: str) -> dict[str, Any]:
+    """相似盤勢層只在日 K 截到基準日時才算（不偷看之後）；教訓層只用寫這一份時已知結果的對帳，
+    而且只讀同一輸入版本的紀錄（換模型後不拿舊模型的對帳當教訓）。"""
     ledger = read_ledger(root)
+    forecasts = [record for record in ledger["forecasts"] if record.get("input_version") == version]
     return {
         "similar_regimes": _experience.similar_regimes(rows) if ready else None,
-        "lessons": _experience.lessons(ledger["forecasts"], ledger["reconciliations"], base_date),
+        "lessons": _experience.lessons(forecasts, ledger["reconciliations"], base_date),
     }
 
 
@@ -410,13 +423,13 @@ def _validate(structured: Any, model_input: Mapping[str, Any]) -> tuple[dict[str
 
 # ---- 寫一份預測 ----
 
-def _stem(base_date: str, edition: str, method_version: str, input_version: str) -> str:
+def _stem(base_date: str, edition: str, method_version: str, version: str) -> str:
     date.fromisoformat(base_date)
-    return f"{base_date}__{edition}__m{method_version}__{input_version}"
+    return f"{base_date}__{edition}__m{method_version}__{version}"
 
 
-def _forecast_path(root: Path, base_date: str, edition: str, method_version: str) -> Path:
-    return Path(root) / "forecasts" / f"{_stem(base_date, edition, method_version, INPUT_VERSION)}.json"
+def _forecast_path(root: Path, base_date: str, edition: str, method_version: str, version: str) -> Path:
+    return Path(root) / "forecasts" / f"{_stem(base_date, edition, method_version, version)}.json"
 
 
 _FIXED_RULE = {"偏多": "above", "偏空": "below", "盤整": "between"}
@@ -490,14 +503,15 @@ def write_forecast(
     clock = now or _default_now
     base_date = str(data.get("base_date"))
     method_version = method_version_of(str(data.get("method_text") or ""))
-    path = _forecast_path(Path(root), base_date, edition, method_version)
+    version = input_version(model)
+    path = _forecast_path(Path(root), base_date, edition, method_version, version)
     deadline = _deadline(edition, base_date, session_date)
 
     rows = _clean_daily(data.get("index_daily") or [])
     problems = _readiness(data, rows)
     candidates = None if problems else _candidate_levels(rows)
     model_input = _model_input(data, rows, edition, candidates,
-                               _experience_layers(Path(root), base_date, rows, not problems))
+                               _experience_layers(Path(root), base_date, rows, not problems, version), version)
     input_sha = _sha(model_input)
 
     if path.exists():
@@ -506,9 +520,9 @@ def write_forecast(
 
     record: dict[str, Any] = {
         "schema": SCHEMA,
-        "forecast_id": f"{'replay|' if replay else ''}{base_date}|{edition}|{method_version}|{INPUT_VERSION}",
+        "forecast_id": f"{'replay|' if replay else ''}{base_date}|{edition}|{method_version}|{version}",
         "base_date": base_date, "edition": edition,
-        "method_version": method_version, "input_version": INPUT_VERSION,
+        "method_version": method_version, "input_version": version,
         "model": model,
         "run_mode": "replay" if replay else "official" if official_since and base_date >= official_since else "trial",
         "data_cutoffs": _cutoffs(data),
@@ -711,13 +725,14 @@ def summarize(root: Path | str, index_daily: Sequence[Mapping[str, Any]], *,
     series: dict[tuple[str, str, str, str], dict[str, Any]] = {}
     for record in ledger["forecasts"]:
         key = (record["run_mode"], record["edition"], record["method_version"], record["input_version"])
-        bucket = series.setdefault(key, {"misses": [], "forecasts": []})
+        # 輸入版本含模型，所以同一組只有一個模型
+        bucket = series.setdefault(key, {"misses": [], "forecasts": [], "model": record.get("model")})
         if record["kind"] == "miss":
             bucket["misses"].append(record)
         else:
             bucket["forecasts"].append(record)
     groups = []
-    for (run_mode, edition, method_version, input_version), bucket in sorted(series.items()):
+    for (run_mode, edition, method_version, version), bucket in sorted(series.items()):
         # 每一組從自己的第一筆正式紀錄起算（起算後換方法或輸入版本的新一組，不沿用舊組已累積的時間）。
         first = min((record["base_date"] for record in bucket["forecasts"] + bucket["misses"]), default=None)
         since = max(official_since, first) if official_since and first else official_since
@@ -746,7 +761,9 @@ def summarize(root: Path | str, index_daily: Sequence[Mapping[str, Any]], *,
                                   horizon=horizon, misses=misses_due)
             groups.append({
                 "run_mode": run_mode, "edition": edition, "horizon": horizon,
-                "method_version": method_version, "input_version": input_version,
+                "method_version": method_version, "input_version": version,
+                # 網頁靠它標出舊模型的系列（例如「Flash 舊版（參考）」）。
+                "model": bucket["model"],
                 **_rates(reconciled), **open_cells, "misses": len(bucket["misses"]),
                 "pullback": _rates(pullback),
                 "verdict": verdict, "judgement": judgement,

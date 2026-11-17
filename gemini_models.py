@@ -1,0 +1,29 @@
+"""每個任務用哪個 Gemini 模型：只在這裡改，排程檔不另外寫模型名稱。
+
+本人 2026-11-17 定案（ANALYSIS_PLAN.md〈Gemini 依任務分模型〉）：AI Pro 方案只有 Flash 與 Argon，
+事前預測（晚間、晨間、歷史重播）交給 Argon；同日更正「籌碼與資金白話分析、自選股提名同類股可以用 flash，
+其他不變」，所以自選股提名、每日判斷與朋友解讀都是 Flash。思考程度一律 medium（本人沒有要調高），
+``ledger_core`` 呼叫時帶 ``--effort medium``。白話分析（``ai_digest``）由另一個對話負責，不在這裡設定。
+
+名稱是本人帳號 ``agy models`` 列出的基本名稱（2026-11-17 核實：gemini-4-argon-{low,medium,high}、
+gemini-3.8-flash-{low,medium,high}）；呼叫時另帶 ``--effort medium``。亂填名稱 agy 會直接拒絕，不會悄悄換模型。
+知識截止日與出處記在 ``forecast_replay.MODEL_KNOWLEDGE``。
+
+Argon 和 Flash 在 Antigravity 是同一個「Gemini 模型」額度群組，共用 5 小時與每週上限
+（https://antigravity.google/docs/cli/commands/usage）；本人帳號 ``agy -p /usage``（不呼叫模型）另外列出
+「Gemini 4 Argon Weekly Limit」，Argon 還有自己的每週上限。換模型會多吃額度，排程照舊「失敗就停」。
+
+換大盤預測的模型會換預測帳本的輸入版本（``forecast_ledger.input_version(model)`` 把模型算進雜湊），新舊系列分開對帳。
+"""
+
+ARGON = "gemini-4-argon"
+FLASH = "gemini-3.8-flash"
+
+# 大盤事前預測：晚間版、晨間版、歷史重播（重播必須和正式同一個模型，成績才能當參考）。
+FORECAST = ARGON
+# 自選股關注：替關注股提名國外同類股（每檔只問一次）。本人 11-17 更正：用 Flash。
+WATCH_NOMINATE = FLASH
+# 自選股關注每日判斷：每次排程最多 40 次呼叫，量大，維持 Flash。
+WATCH_JUDGE = FLASH
+# 朋友解讀：用朋友自己的 Gemini API 金鑰（不是 agy），維持 Flash。
+FRIEND_DIGEST = FLASH
