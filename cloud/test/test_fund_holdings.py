@@ -45,6 +45,11 @@ class FundAnalysisFxTests(unittest.TestCase):
         self.assertEqual(payload["fx"], {"pair": "USD/TWD", "rate": 32.4, "date": "2026-11-17", "source": "中央銀行"})
         build._check_payload("BLKTENAU", payload)
 
+    def test_broken_fx_rows_do_not_drop_the_nav_analysis(self) -> None:
+        rows, analyses, failures = fund_stock.fund_rows("2026-11-18", loader=with_fx([("2026-11-17", "壞掉")]))
+        self.assertEqual((rows[0]["analysis_status"], len(analyses), failures), ("available", 1, []))
+        self.assertIsNone(analyses[0]["payload"]["fx"])
+
     def test_no_fx_means_no_fx_and_no_made_up_number(self) -> None:
         _, analyses, _ = fund_stock.fund_rows("2026-11-18", loader=with_fx([]))
         self.assertIsNone(analyses[0]["payload"]["fx"])
@@ -57,13 +62,14 @@ class FundAnalysisFxTests(unittest.TestCase):
         quote = fund_stock.twd_quote(payload)
         self.assertAlmostEqual(quote.pop("price"), 686.4, places=9)
         self.assertEqual(quote, {"as_of": "2026-11-12", "source": "本站淨值×匯率", "nav": 21.12, "currency": "USD",
-                                 "nav_date": "2026-11-12", "fx_rate": 32.5, "fx_date": "2026-11-17"})
+                                 "nav_date": "2026-11-12", "fx_rate": 32.5, "fx_date": "2026-11-17", "stale": False})
+        self.assertTrue(fund_stock.twd_quote({**payload, "analysis_status": "stale"})["stale"], "淨值過期要標出來")
         self.assertIsNone(fund_stock.twd_quote({**payload, "fx": None}))
         self.assertIsNone(fund_stock.twd_quote(None))
 
 
 FUND_QUOTE = {"price": 21.12 * 32.5, "as_of": "2026-11-12", "source": "本站淨值×匯率", "nav": 21.12, "currency": "USD",
-              "nav_date": "2026-11-12", "fx_rate": 32.5, "fx_date": "2026-11-17"}
+              "nav_date": "2026-11-12", "fx_rate": 32.5, "fx_date": "2026-11-17", "stale": False}
 
 
 class LocalFundPortfolioTest(unittest.TestCase):
@@ -122,6 +128,9 @@ class LocalFundPortfolioTest(unittest.TestCase):
         self.assertEqual((item["nav"], item["currency"], item["nav_date"], item["fx_rate"], item["fx_date"]),
                          (21.12, "USD", "2026-11-12", 32.5, "2026-11-17"))
         self.assertEqual((item["price_as_of"], item["price_source"], item["price_stale"]), ("2026-11-12", "本站淨值×匯率", False))
+        self.prices["BLKTENAU"] = {**FUND_QUOTE, "stale": True}
+        self.assertTrue(self.fund_item()["price_stale"], "淨值過期要標出來")
+        self.prices["BLKTENAU"] = FUND_QUOTE
 
         status, _ = self.request("/api/holdings", "POST", {"code": "BLKTENAU", "shares": 200.5, "total_cost_twd": 130000.5})
         self.assertEqual(status, 200)

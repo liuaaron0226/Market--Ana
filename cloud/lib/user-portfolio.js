@@ -59,7 +59,7 @@ async function securityFor(db, code, deps) {
   const extra = [
     deps.includeEtfs && { table: "etf_securities", sql: "UNION ALL SELECT version, code, name, market, 1 AS in_universe FROM etf_securities " },
     deps.includeFunds && { table: "fund_securities",
-      sql: "UNION ALL SELECT version, code, name, '境外基金' AS market, 1 AS in_universe FROM fund_securities " },
+      sql: `UNION ALL SELECT version, code, name, '${FUND_MARKET}' AS market, 1 AS in_universe FROM fund_securities ` },
   ].filter(Boolean);
   // 名錄表（0018、0026）還沒套到資料庫時，當作沒有那份名錄，其他照常。
   const row = await withoutMissingTables(extra, (kept) => db.prepare(
@@ -253,7 +253,8 @@ function closeFromPayload(payload) {
 }
 
 // 基金（07 票）：每單位台幣價格＝最新淨值（原幣）×最新匯率（每日建置寫進分析的 fx，fund_stock.py）。
-// 淨值或匯率缺一個就是沒有價格，不拿別的數字湊。
+// 淨值或匯率缺一個就是沒有價格，不拿別的數字湊。淨值超過 6 個平日沒更新（分析狀態 stale）照樣算，但標成舊價格。
+// 和 fund_stock.twd_quote 是同一個算法（本機 live_server 用那一份），要調整得兩邊一起改。
 function fundQuoteFromPayload(payload) {
   try {
     const parsed = typeof payload === "string" ? JSON.parse(payload) : payload;
@@ -261,7 +262,7 @@ function fundQuoteFromPayload(payload) {
     if (!(nav > 0) || !(rate > 0) || !Number.isFinite(nav) || !Number.isFinite(rate)) return null;
     return {
       price: nav * rate, nav, currency: parsed.currency ?? parsed.quote.currency ?? null,
-      navDate: parsed.quote.nav_date ?? parsed.as_of ?? null, fxRate: rate, fxDate: parsed.fx.date ?? null,
+      navDate: parsed.quote.nav_date ?? null, fxRate: rate, fxDate: parsed.fx.date ?? null, stale: parsed.analysis_status === "stale",
     };
   } catch {
     return null;
@@ -315,10 +316,11 @@ async function listHoldings(db, email, deps) {
       "LEFT JOIN stock_analysis a ON a.version = s.active_version AND a.code = h.code " +
       "WHERE h.email = ? ORDER BY h.updated_at DESC, h.code",
   ).bind(email).all();
-  // 基金（07 票）：用淨值×匯率；基金開關對這個人關著時不給價格（存的資料保留，只是不算）。基金不問證交所。
+  // 基金（07 票）：用淨值×匯率，基金不問證交所。基金開關對這個人關著時不能新增，但已存的照樣算現值
+  // （和 ETF 關著時改用官方行情一樣，總資金與水位不會因此整個算不出來）。
   const isFund = (item) => item.market === FUND_MARKET;
   const funds = new Map(results.filter(isFund).map((item) => [item.code,
-    deps.includeFunds && item.kind === "fund" ? fundQuoteFromPayload(item.payload) : null]));
+    item.kind === "fund" ? fundQuoteFromPayload(item.payload) : null]));
   // ETF 開關對這個人關著時，0050 以外的 ETF 不用本站分析的收盤價（和 ETF 上站之前一樣走官方行情）。
   const analysis = new Map(results.filter((item) => !isFund(item)).map((item) => [item.code,
     etfAnalysisHidden(item.code, item.kind, Boolean(deps.includeEtfs)) ? null : closeFromPayload(item.payload)]));
@@ -361,7 +363,7 @@ function fundHoldingItem(item, quote) {
     code: item.code, name: item.name, market: item.market, kind: "fund", shares, average_cost: Number(item.average_cost),
     total_cost_twd: costBasis, note: item.note, in_universe: Boolean(item.in_universe), source: item.source, source_ref: item.source_ref,
     latest_price: quote ? rounded(quote.price, 4) : null, price_as_of: quote?.navDate ?? null,
-    price_source: quote ? "本站淨值×匯率" : null, price_stale: false,
+    price_source: quote ? "本站淨值×匯率" : null, price_stale: Boolean(quote?.stale),
     nav: quote?.nav ?? null, currency: quote?.currency ?? null, nav_date: quote?.navDate ?? null,
     fx_rate: quote?.fxRate ?? null, fx_date: quote?.fxDate ?? null,
     cost_basis: costBasis, market_value: marketValue, unrealized_pnl: unrealized,

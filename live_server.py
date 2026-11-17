@@ -1287,7 +1287,7 @@ class LocalPortfolioStore:
                 "shares": shares, "average_cost": float(row["average_cost"]), "total_cost_twd": cost, "note": row["note"],
                 "in_universe": bool(row["in_universe"]), "source": row["source"], "source_ref": row["source_ref"],
                 "latest_price": round(price, 4) if price is not None else None, "price_as_of": fund.get("nav_date"),
-                "price_source": fund.get("source"), "price_stale": False,
+                "price_source": fund.get("source"), "price_stale": bool(fund.get("stale")),
                 "nav": fund.get("nav"), "currency": fund.get("currency"), "nav_date": fund.get("nav_date"),
                 "fx_rate": fund.get("fx_rate"), "fx_date": fund.get("fx_date"),
                 "cost_basis": cost, "market_value": value, "unrealized_pnl": pnl,

@@ -172,7 +172,17 @@ test("淨值或匯率缺的時候不亂算：基金那一列沒有價格、水�
   assert.deepEqual(quoteCalls, []);
 });
 
-test("基金開關對這個人關著：不能新增自選或庫存；之前存的保留、照樣列出（沒有價格）", async () => {
+test("淨值超過 6 個平日沒更新（分析狀態過期）：照樣算現值，但標成舊價格", async () => {
+  await run("UPDATE stock_analysis SET payload = ? WHERE code = ?", JSON.stringify(fundAnalysis({ analysis_status: "stale" })), FUND.code);
+  await req("/api/holdings", OWNER, { method: "POST", body: { code: FUND.code, shares: 10, total_cost_twd: 6000 } });
+  const item = await fundHolding(OWNER);
+  assert.deepEqual([item.market_value, item.price_stale], [6864, true]);
+  await run("UPDATE stock_analysis SET payload = ? WHERE code = ?", JSON.stringify(fundAnalysis({ analysis_status: "available" })), FUND.code);
+  assert.equal((await fundHolding(OWNER)).price_stale, false);
+});
+
+// 和 ETF 一樣：開關關著不能新增，之前存的保留；已存的基金庫存照樣算現值，這個人的總資金與水位才不會整個算不出來（審查修正）
+test("基金開關對這個人關著：不能新增自選或庫存；之前存的保留、照樣列出並算現值", async () => {
   await req("/api/watchlist", FRIEND, { method: "POST", body: { code: FUND.code } });
   await req("/api/holdings", FRIEND, { method: "POST", body: { code: FUND.code, shares: 10, total_cost_twd: 6000 } });
   for (const value of ["owner", "off", undefined]) {
@@ -181,7 +191,7 @@ test("基金開關對這個人關著：不能新增自選或庫存；之前存�
     assert.equal((await req("/api/holdings", FRIEND, { method: "POST", body: { code: FUND.code, shares: 20, total_cost_twd: 9000 } })).status, 404, String(value));
     assert.deepEqual((await json(await req("/api/watchlist", FRIEND))).body.items.map((item) => item.code), [FUND.code]);
     const item = await fundHolding(FRIEND);
-    assert.deepEqual([item.shares, item.total_cost_twd, item.market_value], [10, 6000, null], String(value));
+    assert.deepEqual([item.shares, item.total_cost_twd, item.market_value], [10, 6000, 6864], String(value));
   }
   env.MARKET_ANA_STOCK_FUNDS = "owner";
   assert.equal((await req("/api/holdings", OWNER, { method: "POST", body: { code: FUND.code, shares: 1, total_cost_twd: 700 } })).status, 201);

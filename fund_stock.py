@@ -62,7 +62,14 @@ TWD_PRICE_SOURCE = "本站淨值×匯率"
 def latest_fx(currency: str, fx: Sequence[tuple[str, float]], as_of: str) -> dict[str, Any] | None:
     """資料日（含）以前最新的一筆匯率；資料日之後的不用（和淨值一樣）。沒有就是 None，不拿別的數字湊。"""
     pair = FX_PAIRS.get(currency)
-    usable = [(day, float(rate)) for day, rate in fx if day <= as_of and float(rate) > 0] if pair else []
+    usable = []
+    for day, rate in fx if pair else []:
+        try:
+            value = float(rate)
+        except (TypeError, ValueError):
+            continue   # 壞掉的一筆跳過，不連累淨值分析
+        if day <= as_of and value > 0:
+            usable.append((day, value))
     if not usable:
         return None
     day, rate = max(usable)
@@ -77,7 +84,9 @@ def twd_quote(payload: dict[str, Any] | None) -> dict[str, Any] | None:
         return None
     return {"price": nav * rate, "as_of": quote.get("nav_date"), "source": TWD_PRICE_SOURCE, "nav": nav,
             "currency": payload.get("currency") or quote.get("currency"), "nav_date": quote.get("nav_date"),
-            "fx_rate": rate, "fx_date": fx.get("date")}
+            "fx_rate": rate, "fx_date": fx.get("date"),
+            # 淨值超過 6 個平日沒更新：照樣算，但標成舊價格（雲端 fundQuoteFromPayload 同一個規則）
+            "stale": payload.get("analysis_status") == "stale"}
 
 
 def fund_analysis(code: str, navs: Sequence[tuple[str, float]], status: str,
