@@ -135,5 +135,5 @@ console.log(sums.join("\n"));
 console.log(`stock pack ${stockPack.as_of}（${Object.keys(stockPack.results).length} 檔，${ANALYSIS_SCHEMA}）`);
 console.log(`screens pack ${screensInfo.dataDate}（${screensInfo.screens} 組結果，${screensInfo.membership} 檔名單代號，${(Buffer.byteLength(JSON.stringify(screensPack)) / 1024) | 0} KB）`);
 console.log(`market pack ${pack.version}（${(JSON.stringify(pack).length / 1024) | 0} KB，明細 ${pack.overview.detailIndex.days.length} 天）`);
-console.log(`compare pack ${compareInfo.dataDate}（${compareInfo.items} 檔對照，母體外 ${compareInfo.outside} 檔，${(Buffer.byteLength(JSON.stringify(comparePack)) / 1024) | 0} KB）`);
+console.log(`compare pack ${compareInfo.dataDate}（${compareInfo.items} 檔對照，母體外 ${compareInfo.outside} 檔，基金 ${compareInfo.funds} 檔，${(Buffer.byteLength(JSON.stringify(comparePack)) / 1024) | 0} KB）`);
 console.log(`data status 最後成功 ${statusInfo.lastSuccessDate ?? "無"}（本次 ${statusInfo.runStatus ?? "—"}，stale=${statusInfo.stale}）`);

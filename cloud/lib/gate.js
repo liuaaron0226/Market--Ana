@@ -526,6 +526,9 @@ async function handleScreensApi(request, env, path, email, deps) {
 const COMPARE_SCHEMA = "compare-0050-pack/v1";
 const VS_PATH = /^\/api\/stocks\/([^/]+)\/vs-0050$/;
 const COMPARE_PATH = "/api/compare-0050";
+// 基金對照 0050（2026-11-17 本人定案）：/api/funds/<集保基金代碼>/vs-0050，例如 BLKTENAU（貝萊德世界科技 A10）。
+const FUND_PATH = /^\/api\/funds\/([^/]+)\/vs-0050$/;
+const FUND_CODE_RE = /^[0-9A-Z]{4,12}$/;
 const COMPARE_BASIS = "含息總報酬，期初＝1";
 const NOT_FOUND_MESSAGE = "查無此上市或上櫃普通股";
 
@@ -539,11 +542,34 @@ function compareCodes(params, max) {
   return codes.length > max ? null : codes;
 }
 
+// 和其他市場 API 共用每分鐘的查詢額度；超過回 429（回傳 Response），沒超過回 null。
+async function consumeMarket(env, email, deps) {
+  try {
+    await consume(env.DB, email, "market", (deps.now || Date.now)(), deps.rate);
+    return null;
+  } catch (e) {
+    if (e instanceof RateLimited) return json(429, { error: "rate-limited", message: "查詢太頻繁，請稍後再試" }, { "retry-after": String(e.retryAfter) });
+    throw new HttpError(503, "暫時無法處理，請稍後再試");
+  }
+}
+
+// 基金對照 0050：build 前已預算好整份，原樣回傳；這檔今天資料不齊（或舊資料包沒有 funds）就是 404。代碼格式不對不扣額度。
+async function handleFundCompare(env, email, deps, pack, code, privateError) {
+  if (!FUND_CODE_RE.test(code)) return badRequest("基金代碼格式不正確");
+  const limited = await consumeMarket(env, email, deps);
+  if (limited) return limited;
+  const text = Object.hasOwn(pack.funds ?? {}, code) ? pack.funds[code] : null;
+  if (text === null) return privateError(404, { error: "fund-unavailable", message: "這檔基金今天的對照資料還沒準備好" });
+  return rawJson(text);
+}
+
 async function handleCompareApi(request, env, path, email, deps) {
   if (request.method !== "GET") throw new HttpError(405, "方法不允許");
   const pack = deps.comparePack;
   if (!pack || pack.schema !== COMPARE_SCHEMA) throw new HttpError(503, "資料尚未就緒");
   const privateError = (status, body) => json(status, body, { "cache-control": "private, no-store" });
+  const fund = path.match(FUND_PATH);
+  if (fund) return handleFundCompare(env, email, deps, pack, fund[1], privateError);
   let codes;
   const vs = path.match(VS_PATH);
   if (vs) {
@@ -553,12 +579,8 @@ async function handleCompareApi(request, env, path, email, deps) {
     codes = compareCodes(new URL(request.url).searchParams, pack.max_codes);
     if (!codes) return badRequest(`codes 需為 1～${pack.max_codes} 個以逗號分隔的代號`);
   }
-  try {
-    await consume(env.DB, email, "market", (deps.now || Date.now)(), deps.rate);
-  } catch (e) {
-    if (e instanceof RateLimited) return json(429, { error: "rate-limited", message: "查詢太頻繁，請稍後再試" }, { "retry-after": String(e.retryAfter) });
-    throw new HttpError(503, "暫時無法處理，請稍後再試");
-  }
+  const limited = await consumeMarket(env, email, deps);
+  if (limited) return limited;
   const itemFor = (code) => {
     if (Object.hasOwn(pack.items, code)) return JSON.parse(pack.items[code]);
     if (Object.hasOwn(pack.outside, code)) return { code, status: "outside-universe", ...JSON.parse(pack.outside[code]) };
@@ -577,7 +599,7 @@ async function handleCompareApi(request, env, path, email, deps) {
     benchmark, items: codes.map(itemFor), notes: pack.notes }));
 }
 
-const isComparePath = (path) => path === COMPARE_PATH || VS_PATH.test(path);
+const isComparePath = (path) => path === COMPARE_PATH || VS_PATH.test(path) || FUND_PATH.test(path);
 
 // U2：每日更新狀態。build 前由 daily_update 產生 status.json，包進 Functions；這裡只原樣回傳。
 // 每頁載入都會讀，所以不扣查詢額度（只有通過登入與核准才看得到）。
