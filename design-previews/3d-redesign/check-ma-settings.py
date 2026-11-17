@@ -43,7 +43,7 @@ with sync_playwright() as p:
     check("預設 MA18、MA45，名稱是可以點的鍵", [n["name"] for n in names if n["button"]] == ["MA18", "MA45"], names)
     check("預測線用 MA 寫法（沒有「五日線」這種叫法）", not any("日線" in n["name"] or n["name"] in ("月線", "季線", "半年線", "年線") for n in names), names)
 
-    page.locator("#legendNames .legend-name.is-ma").first.tap()
+    page.locator("#legendNames .legend-name.is-ma").first.tap(force=True)   # 名稱排成多行時觸控範圍上下重疊；每個均線名稱打開的都是同一塊
     page.wait_for_timeout(300)
     check("點均線名稱打開設定那一小塊", page.locator(".ma-pop").is_visible())
     for _ in range(8):
@@ -112,11 +112,23 @@ with sync_playwright() as p:
     check("重新整理後還是那九條", after == ["MA18", "MA30", "MA5", "MA10", "MA20", "MA60", "MA120", "MA240", "MA480"], after)
     page.goto(BASE + "/stock.html?code=2330", wait_until="networkidle")
     page.wait_for_timeout(1500)
-    stock = page.evaluate("[...document.querySelectorAll('#maControls input')].map(i => Number(i.value))")
-    check("個股頁讀到同一組（共用）", stock == [18, 30, 5, 10, 20, 60, 120, 240, 480], stock)
-    # 在個股頁拿掉最後一條，按上一頁回首頁：首頁的圖跟著換（整頁還原時也重讀）
-    page.evaluate("[...document.querySelectorAll('#maControls .bd-ma-remove')].pop().click()")   # 那一列收在摺疊區裡；這裡驗的是同步
-    page.wait_for_timeout(200)
+    stock = [n["name"] for n in legend(page) if n["button"]]
+    check("個股頁讀到同一組（共用）", stock == ["MA18", "MA30", "MA5", "MA10", "MA20", "MA60", "MA120", "MA240", "MA480"], stock)
+    # 在個股頁拿掉最後一條（點名稱打開、向左滑刪除），按上一頁回首頁：首頁的圖跟著換（整頁還原時也重讀）
+    page.locator("#legendNames .legend-name.is-ma").first.tap(force=True)   # 名稱排成多行時觸控範圍上下重疊；每個均線名稱打開的都是同一塊
+    page.wait_for_timeout(300)
+    last = page.locator(".ma-list .swipe-row").last
+    last.scroll_into_view_if_needed()
+    box = last.locator(".swipe-face").bounding_box()
+    page.evaluate("""([x, y]) => {
+      const face = document.elementFromPoint(x, y).closest('.swipe-face');
+      const fire = (type, cx) => face.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 9, pointerType: 'touch', clientX: cx, clientY: y, isPrimary: true }));
+      fire('pointerdown', x); for (let i = 1; i <= 10; i++) fire('pointermove', x - i * 14); fire('pointerup', x - 140);
+    }""", [box["x"] + box["width"] - 30, box["y"] + box["height"] / 2])
+    page.wait_for_timeout(450)
+    last.locator(".swipe-act").tap()
+    page.wait_for_timeout(300)
+    check("個股頁也能點名稱打開、滑動刪除", page.locator(".ma-list .swipe-row").count() == 8, page.locator(".ma-list .swipe-row").count())
     page.go_back(wait_until="networkidle")
     page.wait_for_timeout(1200)
     back = [n["name"] for n in legend(page) if n["button"]]

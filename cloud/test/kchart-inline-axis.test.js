@@ -212,3 +212,12 @@ test("合成的那條自設均線資料不夠（例如自設 MA240、只載入 8
   const items = JSON.parse(JSON.stringify(chart.legendItems()));
   assert.ok(items.some(item => item.name === "MA240" && item.mark && item.value === 40_500), "圖上方另外寫預測給的那一個價");
 });
+
+test("沒有 K 棒（例如盤後切到秒 K）也通知頁面，圖上方那一行跟著清掉數值", () => {
+  let count = 0;
+  const { chart } = draw({ inlineAxis: true, onDraw: () => { count++; } });
+  const before = count;
+  chart.setData([], { count: 60, overlays: [] });
+  assert.ok(count > before, "空的也通知");
+  assert.ok(JSON.parse(JSON.stringify(chart.legendItems())).every(item => item.value === undefined), "沒有數值");
+});

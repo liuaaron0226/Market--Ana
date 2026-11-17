@@ -1246,14 +1246,21 @@ def stock(page: Page, base: str, tag: str, mobile: bool) -> None:
     # 本人 2026-11-17：最上面只留報價；當日三格與操作策略搬到「技術」，均線距離表與 RSI／量比／KD 拿掉
     top = page.evaluate("[...document.querySelector('.st-top').children].map(node => node.id || node.className)")
     check(f"{tag}：報價卡只剩名稱與價格（當日三格與操作策略不在最上面）", top == ["bd-quote"], top)
-    page.locator("#stockFactsBlocks .sf-tab", has_text="技術").click()
-    tech = page.evaluate("""() => { const panel = document.querySelector('#stockFactsBlocks .sf-panel');
-      return { order: [...panel.children].map(node => node.id || node.className.split(' ')[0]), table: panel.querySelectorAll('table, .sf-figs').length }; }""")
-    check(f"{tag}：「技術」最前面是當日三格與操作策略，後面接三張卡；沒有均線距離表與 RSI／量比／KD",
-          tech["order"][:3] == ["stockFacts", "strategy", "ss"] and tech["table"] == 0, tech)
-    check(f"{tag}：操作策略有結論", page.locator("#strategy").is_visible() and page.locator("#strategyConclusion").inner_text().strip() != "—")
-    page.locator("#stockFactsBlocks .sf-tab", has_text="重點").click()
-    check(f"{tag}：切回「重點」時當日三格與操作策略不在畫面上", not page.locator("#strategy").is_visible() and not page.locator("#stockFacts").is_visible())
+    # 個股資料區（stock-facts）在 main 上換過版面時，「技術」「重點」分頁可能不在：記一筆沒過、繼續往下驗後面的個股頁
+    # （以前這一下點不到會逾時、整個個股頁後段都沒跑到）
+    tech_tab = page.locator("#stockFactsBlocks .sf-tab", has_text="技術")
+    if not tech_tab.count():
+        check(f"{tag}：個股資料區有「技術」分頁（沒有：資料區換過版面，這一段檢查要跟著改）", False,
+              page.evaluate("[...document.querySelectorAll('#stockFactsBlocks button, #stockFactsBlocks [role=tab]')].map(n => n.textContent.trim()).slice(0, 12)"))
+    else:
+        tech_tab.click()
+        tech = page.evaluate("""() => { const panel = document.querySelector('#stockFactsBlocks .sf-panel');
+          return { order: [...panel.children].map(node => node.id || node.className.split(' ')[0]), table: panel.querySelectorAll('table, .sf-figs').length }; }""")
+        check(f"{tag}：「技術」最前面是當日三格與操作策略，後面接三張卡；沒有均線距離表與 RSI／量比／KD",
+              tech["order"][:3] == ["stockFacts", "strategy", "ss"] and tech["table"] == 0, tech)
+        check(f"{tag}：操作策略有結論", page.locator("#strategy").is_visible() and page.locator("#strategyConclusion").inner_text().strip() != "—")
+        page.locator("#stockFactsBlocks .sf-tab", has_text="重點").click()
+        check(f"{tag}：切回「重點」時當日三格與操作策略不在畫面上", not page.locator("#strategy").is_visible() and not page.locator("#stockFacts").is_visible())
 
     def folded() -> None:
         """一進去只看報價與 K 線，其餘收在三顆分類鍵裡（本人 11-15：太長、全部攤開、沒辦法選現在要看什麼；看樣品後答「照這樣做」）。"""
@@ -1484,45 +1491,32 @@ def stock(page: Page, base: str, tag: str, mobile: bool) -> None:
          ["1秒", "5秒", "10秒", "15秒", "30秒", "1分K", "5分K", "15分K", "60分K", "日K", "週K", "月K"], ["成交量", "MACD", "KD", "RSI", "外資", "投信", "自營商"]))
 
     def averages() -> None:
-        # 均線設定收在一枚小鍵裡：小鍵寫著現在的期數，點了才浮出設定板。
-        chip, inputs = page.locator("#maChip"), page.locator("#maControls input")
-        before, label = inputs.count(), chip.inner_text().strip()
-        periods_now = inputs.evaluate_all("nodes => nodes.map(node => node.value)")
-        check(f"{tag}：平常看不到均線的輸入框，小鍵寫著現在的期數",
-              page.evaluate(VISIBLE_COUNT, "#maControls input") == 0 and all(period in label for period in periods_now) and before >= 1, [label, periods_now])
-        chip.click()
-        page.locator("#addMa").click()
-        check(f"{tag}：新增均線", inputs.count() == before + 1)
-        added = inputs.evaluate_all("nodes => nodes.map(node => node.value)")
-        check(f"{tag}：新增之後小鍵跟著寫出新的期數", all(period in chip.inner_text() for period in added), [chip.inner_text(), added])
-        page.locator("#maControls .bd-ma-remove").last.click()
-        check(f"{tag}：刪掉一條均線後設定板還開著，小鍵跟著變回來",
-              inputs.count() == before and page.evaluate(VISIBLE_COUNT, "#maControls input") == before and chip.inner_text().strip() == label, chip.inner_text())
-        page.keyboard.press("Escape")
-        check(f"{tag}：按 Esc 收回均線設定板", page.evaluate(VISIBLE_COUNT, "#maControls input") == 0)
-        page.locator(".hm-period .chart-chip").click()
-        chip.click()
-        check(f"{tag}：一次只開一個選單（開均線時週期選單收回）",
-              page.evaluate(VISIBLE_COUNT, ".hm-period [data-value]") == 0 and page.evaluate(VISIBLE_COUNT, "#maControls input") == before)
+        # 本人 11-17：均線在 K 線上方那一行點名稱設定（和首頁同一套、共用一組，不設上限）；「均線」小鍵拿掉了。
+        # 滑動刪除、挑顏色、上一頁同步在 check-ma-settings.py 驗。
+        names = page.locator("#legendNames .legend-name.is-ma")
+        before = names.count()
+        legend = page.evaluate("document.getElementById('legendNames').innerText")
+        check(f"{tag}：K 線上方一行寫著均線名稱與數值，沒有「均線」小鍵", before >= 1 and page.locator("#maChip").count() == 0
+              and any(ch.isdigit() for ch in legend.split("MA", 2)[-1]), legend)
+        names.first.click()
+        pop, rows = page.locator(".ma-pop"), page.locator(".ma-list .swipe-row")
+        check(f"{tag}：點均線名稱打開設定", pop.is_visible() and rows.count() == before, rows.count())
+        page.locator(".ma-add").click()
+        page.wait_for_timeout(150)
+        check(f"{tag}：加一條均線，上方那一行跟著多一個名稱", rows.count() == before + 1 and names.count() == before + 1, [rows.count(), names.count()])
         # 改一格的數字之後直接點另一格（本人 11-15 iPhone 回報：一次只能設一個）：不能把輸入框整組換掉，不然接著的那一下會落空。
-        values = "nodes => nodes.map(node => node.value)"
+        inputs = page.locator(".ma-list input")
         inputs.first.evaluate("node => { node.dataset.kept = 'yes'; }")
-        inputs.first.fill("20")
+        inputs.first.fill("33")
         inputs.nth(1).click()
-        check(f"{tag}：改一格的數字後直接點另一格，輸入框沒有被換掉、游標進了另一格、小鍵跟著變",
-              inputs.first.get_attribute("data-kept") == "yes" and inputs.evaluate_all(values)[0] == "20" and "20" in chip.inner_text()
-              and page.evaluate("document.activeElement === document.querySelectorAll('#maControls input')[1]"), [inputs.evaluate_all(values), chip.inner_text()])
-        add = page.locator("#addMa")
-        while inputs.count() < 4:
-            add.click()
-        check(f"{tag}：加到四條時「新增均線」停用並寫明上限（原本是按了沒反應）", add.is_disabled() and "最多" in add.inner_text(), add.inner_text())
-        while inputs.count() > before:
-            page.locator("#maControls .bd-ma-remove").last.click()
-        inputs.first.fill(periods_now[0])
-        inputs.first.press("Tab")
-        check(f"{tag}：均線改回原本的期數，「新增均線」恢復可按", inputs.evaluate_all(values) == periods_now and add.is_enabled() and add.inner_text().strip() == "新增均線",
-              [inputs.evaluate_all(values), add.inner_text()])
+        check(f"{tag}：改一格的數字後直接點另一格，輸入框沒有被換掉、游標進了另一格、上方名稱跟著變",
+              inputs.first.get_attribute("data-kept") == "yes" and "MA33" in page.evaluate("document.getElementById('legendNames').innerText")
+              and page.evaluate("document.activeElement === document.querySelectorAll('.ma-list input')[1]"))
         page.keyboard.press("Escape")
+        check(f"{tag}：按 Esc 收回設定", not pop.is_visible())
+        page.evaluate("localStorage.removeItem('ma-lines')")   # 還原成預設，後面的檢查照原本的 MA18／MA45
+        page.reload(wait_until="networkidle")
+        page.wait_for_timeout(1500)
     step(f"{tag}：均線", averages)
 
     def studies() -> None:

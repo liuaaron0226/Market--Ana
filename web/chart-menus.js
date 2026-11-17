@@ -249,13 +249,4 @@
     sync();
   });
 
-  // 個股頁的均線小鍵：寫著現在的期數（例如 18·45）。期數由 stock.js 畫進 #maControls，這裡只跟著讀。
-  // 新增、刪除會重畫（MutationObserver 看得到）；直接改某一格的數字不一定重畫，所以也聽 change。
-  const periods = document.getElementById('maControls'), value = document.getElementById('maChipValue');
-  if (periods && value) {
-    const sync = () => { value.textContent = [...periods.querySelectorAll('input')].map(input => input.value).filter(Boolean).join('·') || '未設定'; };
-    new MutationObserver(sync).observe(periods, { childList: true, subtree: true });
-    periods.addEventListener('change', sync);
-    sync();
-  }
 })();

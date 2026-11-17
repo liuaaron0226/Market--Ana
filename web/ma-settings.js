@@ -2,8 +2,9 @@
    每條一列：顏色點（點了從 8 色裡挑）、名稱、天數（可改）；向左滑露出刪除（swipe-rows.js）；最下面「＋ 加一條均線」。
    條數、天數都不設上限（本人「不要有上限」）；至少留一條（最後一條不能刪）。
    改了立刻存（ma-lines.js，首頁與個股頁共用一組）並通知頁面重畫。
-   用法：const panel = MaSettings.mount({ host, onChange(lines) { … } })；panel.open()／panel.close()。
-   host 是要放進去的外框（要是定位的，例如 K 線那一塊）；樣式在 ma-settings.css。 */
+   用法：const panel = MaSettings.mount({ host, opener, onChange(lines) { … } })；panel.open()／panel.close()。
+   host 是要放進去的外框（要是定位的）；opener 是圖例那一行：點裡面的 [data-ma-open]（均線名稱）打開，已經開著就收起來。
+   樣式在 ma-settings.css。 */
 (function (global) {
   'use strict';
 
@@ -14,7 +15,7 @@
     return node;
   }
 
-  function mount({ host, onChange }) {
+  function mount({ host, opener: trigger, onChange }) {
     const MaLines = global.MaLines;
     const pop = el('div', 'ma-pop');
     pop.hidden = true;
@@ -160,6 +161,10 @@
       },
       get isOpen() { return !pop.hidden; },
     };
+    if (trigger) trigger.addEventListener('click', event => {
+      if (!event.target.closest('[data-ma-open]')) return;
+      if (api.isOpen) api.close(); else api.open();
+    });
     return api;
   }
 

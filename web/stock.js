@@ -102,6 +102,10 @@
   let maLines = window.MaLines.read();
   const maPeriodsOf = () => maLines.map(line => line.period);
   const maTokensOf = () => maLines.map(line => window.MaLines.tokenOf(line.color));
+  function applyMaLines(lines) {
+    maLines = lines;
+    if (chart) chart.setMaPeriods(maPeriodsOf(), maTokensOf());
+  }
   // 畫線的存檔與補存（drawing-sync.js）：存不上去時留著、之後自動補存，並告訴這裡有幾筆還沒存上去。
   // 那支沒載入時整個畫線功能收起，個股頁其他內容照常。
   const drawingSync = window.DrawingSync ? window.DrawingSync.create({ onStatus: showUnsavedDrawings }) : null;
@@ -122,39 +126,6 @@
     request: 0, abort: null, searchAbort: null, searchTimer: null, searchOptions: [], activeOption: -1,
   };
 
-  function applyMaLines(next) {
-    const before = maLines.length;
-    maLines = window.MaLines.write(next);
-    // 條數沒變（只是改了某一格的數字）就把數字寫回原本的輸入框，不整組重畫：
-    // 重畫會把正在點的那一格換掉，手機上接著點另一格或「新增均線」的那一下會落空（本人 11-15 iPhone 回報）。
-    const inputs = [...$('maControls').querySelectorAll('input')];
-    if (maLines.length === before && inputs.length === before) inputs.forEach((input, index) => { input.value = String(maLines[index].period); });
-    else renderMaControls();
-    if (chart) chart.setMaPeriods(maPeriodsOf(), maTokensOf());
-  }
-
-  function renderMaControls() {
-    $('maControls').replaceChildren(...maLines.map((line, index) => {
-      const group = node('label', 'bd-ma-control');
-      group.append(node('span', '', `MA${index + 1}`));
-      const input = node('input');
-      input.type = 'number'; input.min = '2'; input.value = String(line.period);
-      input.setAttribute('aria-label', `MA${index + 1}期數`);
-      // 和別條重複或不是 2 以上的數字：格子改回原本的數字，不改（不然重複的那條會被默默丟掉）
-      input.addEventListener('change', () => {
-        const next = window.MaLines.setPeriod(maLines, index, input.value);
-        if (next) applyMaLines(next); else input.value = String(maLines[index].period);
-      });
-      group.append(input);
-      if (maLines.length > 1) {
-        const remove = node('button', 'bd-ma-remove', '×');
-        remove.type = 'button'; remove.setAttribute('aria-label', `移除 MA${index + 1}`);
-        remove.addEventListener('click', () => applyMaLines(maLines.filter((_, itemIndex) => itemIndex !== index)));
-        group.append(remove);
-      }
-      return group;
-    }));
-  }
 
   // 按瀏覽器「上一頁」回來時，頁面是整頁還原的、不會重新載入：這時要再讀一次存起來的主題（可能在別頁改過）
   window.addEventListener('pageshow', event => {
@@ -186,7 +157,8 @@
   // （頂列、報價、圖上的工具列、指標區、三顆分類鍵，量起來約 570px），三顆分類鍵才不用捲就看得到（本人 2026-11-15「改矮一點」）。
   // 視窗夠高時照舊是 460；手機本來就是 300，不受影響。
   // 2026-11-17 重量：當日三格與操作策略搬到「技術」之後，報價卡只剩價格，K 線以外的高度量起來是 500（1440×900），留 4px 餘裕
-  const CHART_REST_PX = 504;
+  // 2026-11-17 券商版面：K 線上方多一行均線名稱與數值（上下各 6px＋字高，量起來 33px），一起扣掉
+  const CHART_REST_PX = 504 + 34;
   const chartHeight = width => Math.max(300, Math.min(460, width * 0.52, innerHeight - CHART_REST_PX));
 
   function updateUrl(code) {
@@ -402,8 +374,14 @@
     const shownBefore = chart ? chart.candles : [];
     // 歷史接上後，日 K 比伺服器預算的 MACD 多出很多根：改由圖表用完整序列自己算。
     const extended = !intraday && daily.length > r.bars.length;
-    if (!chart) chart = new window.KChart($('chartHost'), { macd: false, studyHost: $('chartStudies'), studies: ['volume', 'macd', 'kd', 'rsi', 'foreign', 'trust', 'dealer'], maPeriods: maPeriodsOf(), maColors: maTokensOf(), selectionRoots: [$('chartHost').parentElement], volumeKind: 'volume', overlayLabels: 'tags', height: chartHeight,
-      drawings: drawingSync && { onChange: drawingSync.record, onTool: showActiveTool, onSelect: showDrawingSelection } });
+    if (!chart) {
+      // 券商版面（本人 11-17「首頁與個股頁都套」）：左右不留價格欄、名稱與數值寫在圖上方一行、放大時只看 K 棒的範圍
+      chart = new window.KChart($('chartHost'), { macd: false, studyHost: $('chartStudies'), studies: ['volume', 'macd', 'kd', 'rsi', 'foreign', 'trust', 'dealer'], maPeriods: maPeriodsOf(), maColors: maTokensOf(), selectionRoots: [$('chartHost').parentElement], volumeKind: 'volume', overlayLabels: 'tags', height: chartHeight,
+        inlineAxis: true, legend: false, fitCandles: true, onDraw: () => window.ChartLegend.render($('legendNames'), chart.legendItems()),
+        drawings: drawingSync && { onChange: drawingSync.record, onTool: showActiveTool, onSelect: showDrawingSelection } });
+      // 點上方那一行的均線名稱打開設定（和首頁同一套、共用一組）
+      window.MaSettings.mount({ host: $('chartLegend'), opener: $('legendNames'), onChange: applyMaLines });
+    }
     // 畫線只在日、週、月 K：秒 K、分 K 連工具列一起收起。
     $('drawTools').hidden = intraday || !drawingSync;
     const expected = { fast: 12, slow: 26, signal: 9, histogram_multiplier: 1, seed: 'first_close', warmup_bars: 34,
@@ -1243,13 +1221,11 @@
   window.addEventListener('beforeunload', event => { if (!event.defaultPrevented) { livePoller.stop(); stopTicks(); } });
   document.addEventListener('visibilitychange', syncTickFeed);
   // 不設上限（本人 11-17）：天數取常用裡還沒有的，顏色取還沒用過的（ma-lines.js）
-  $('addMa').addEventListener('click', () => applyMaLines(window.MaLines.add(maLines)));
-  // 首頁改了（別的分頁、或按上一頁回來）：這一頁的設定列與圖跟著換
-  window.MaLines.watch(lines => { maLines = lines; renderMaControls(); if (chart) chart.setMaPeriods(maPeriodsOf(), maTokensOf()); });
+  // 首頁改了（別的分頁、或按上一頁回來）：圖跟著換
+  window.MaLines.watch(applyMaLines);
   $('themeToggle').addEventListener('click', () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
   let saved = null;
   try { saved = localStorage.getItem('market-theme'); } catch (_) { /* 私密視窗 */ }
-  renderMaControls();
   bindDrawTools();
   setTheme(saved === 'dark' ? 'dark' : 'light');
   // chart：驗收用（畫線旅程讀選了哪一根 K 棒、右側標了什麼），頁面自己不用

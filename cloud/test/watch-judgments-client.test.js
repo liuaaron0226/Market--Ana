@@ -102,3 +102,21 @@ test("到了觸發線只換字：小鍵寫已到與價位，觸發線標「已�
   assert.equal(plain(logic.lineSpecs(judgment("可以留意"), false))[0].tone, "--gold");
   assert.deepEqual(plain(logic.lineSpecs({ kind: "miss" }, false)), []);
 });
+
+// 本人 11-17（券商版面）：「你應該是給我完整的趨勢線不是只給一個價格說這是半年線」——
+// 觸發線、看錯線是均線（id 是 ma 加天數，例如 MA20）時帶天數，日 K 上畫成整條均線；名稱後面的小字是「觸發」「看錯」
+test("觸發線／看錯線是均線時帶天數與角色；不是均線的不帶", () => {
+  const ma = { id: "ma20", name: "MA20", value: 118, kind: "ma20" };
+  const specs = plain(logic.lineSpecs(judgment("接近", { trigger_line: ma }), false));
+  assert.equal(specs[0].ma, 20);
+  assert.equal(specs[0].role, "觸發");
+  assert.equal(specs[1].ma, undefined, "前波低點不是均線");
+  assert.equal(specs[1].role, "看錯");
+});
+
+test("週 K、月 K：均線是日 K 算的，不畫成整條，名稱也不寫 MA20（寫角色），免得把一個價格說成均線", () => {
+  const source = readFileSync(new URL("../../web/watch-judgments.js", import.meta.url), "utf8");
+  const block = source.slice(source.indexOf("function overlays(period) {"), source.indexOf("function onLive("));
+  assert.match(block, /period === 'daily'/);
+  assert.match(block, /short: .*role/, "非日 K 時名稱退回角色");
+});

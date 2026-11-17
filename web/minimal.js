@@ -554,7 +554,7 @@
     chart.canvas.setAttribute('aria-describedby', 'chartSummary');
     // 自己設定的均線（本人 11-17：點上方那一行的均線名稱打開設定；不設上限、顏色自己挑；和個股頁共用一組）
     applyMaLines(window.MaLines.read());
-    maSettings = window.MaSettings.mount({ host: els.chartStage, onChange: applyMaLines });
+    maSettings = window.MaSettings.mount({ host: els.chartStage, opener: els.legendNames, onChange: applyMaLines });
     window.MaLines.watch(applyMaLines);   // 個股頁改了（別的分頁、或按上一頁回來）：圖跟著換
     bindCandleSelection();
     chart.canvas.addEventListener('wheel', () => requestAnimationFrame(enforceCandleHitTarget));
@@ -652,55 +652,9 @@
   // 圖上方那一行：均線、布林、預測的轉強線／轉弱線的名稱（顏色和圖上的線一樣）＋目前的數值與方向
   // （本人 11-17 券商版面：數值不再掛在圖右側；選了某一天就是那一天的值）。
   // 收復線、防守線的名稱與數值已經在合成一顆的那顆鍵上，不重複寫。內容一樣就不重畫
-  const legendValue = value => value >= 1000 ? Math.round(value).toLocaleString('en-US') : value.toLocaleString('en-US', { maximumFractionDigits: 2 });
-  let legendShown = '';
   function renderLegend() {
     if (!chart) return;
-    const items = chart.legendItems();
-    const key = JSON.stringify(items);
-    if (key !== legendShown) {
-      legendShown = key;
-      els.legendNames.replaceChildren(...items.map(item => {
-        // 自設的均線是一顆鍵：點了打開設定那一小塊（data-ma-open：點它不算點到外面）
-        const isMa = item.kind === 'ma';
-        const row = document.createElement(isMa ? 'button' : 'span');
-        row.className = item.mark ? 'legend-name is-line' : isMa ? 'legend-name is-ma' : 'legend-name';
-        if (isMa) {
-          row.type = 'button';
-          row.dataset.maOpen = '';
-          row.setAttribute('aria-label', `${item.name}${Number.isFinite(item.value) ? ` ${legendValue(item.value)}` : ''}，設定均線`);
-        }
-        row.style.setProperty('--tone', item.color);
-        if (item.alpha < 1) row.style.opacity = String(item.alpha);
-        const name = document.createElement('b');
-        name.textContent = item.name;
-        row.append(name);
-        if (Number.isFinite(item.value)) {
-          const value = document.createElement('span');
-          value.className = 'num';
-          value.textContent = legendValue(item.value);
-          row.append(value);
-        }
-        // 有數值的一律留箭頭的位置（持平時看不見）：拖十字線時寬度不變，手機上這一行不會在一行、兩行之間跳
-        if (Number.isFinite(item.value)) {
-          const arrow = document.createElement('i');
-          arrow.className = item.dir === 'up' ? 'is-up' : item.dir === 'down' ? 'is-down' : 'is-flat';
-          arrow.textContent = item.dir === 'down' ? '▼' : '▲';
-          if (item.dir) arrow.setAttribute('aria-label', item.dir === 'up' ? '往上' : '往下');
-          else arrow.setAttribute('aria-hidden', 'true');
-          row.append(arrow);
-        }
-        // 預測線和這條均線同一期數（合成一條）：後面一枚小字「轉強」或「轉弱」，判斷線的顏色
-        for (const tag of item.tags || []) {
-          const mark = document.createElement('em');
-          mark.className = 'legend-tag';
-          mark.textContent = tag.text;
-          mark.style.setProperty('--tag', tag.color);
-          row.append(mark);
-        }
-        return row;
-      }));
-    }
+    window.ChartLegend.render(els.legendNames, chart.legendItems());
     // K 線從這一行下面開始畫：手機上可能排成兩行，量實際的高度
     const height = Math.ceil(els.chartLegend.getBoundingClientRect().height);
     if (els.chartStage.style.getPropertyValue('--legend-h') !== `${height}px`) {
@@ -709,11 +663,6 @@
     }
   }
 
-  // 點上方那一行的均線名稱：打開（已經開著就收起來）
-  els.legendNames.addEventListener('click', event => {
-    if (!event.target.closest('[data-ma-open]') || !maSettings) return;
-    if (maSettings.isOpen) maSettings.close(); else maSettings.open();
-  });
 
   function updateOverlayControls() {
     renderLegend();

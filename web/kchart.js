@@ -230,7 +230,9 @@
           return { name: `MA${period}`, kind: 'ma', color: colors[index], alpha: 1, ...read(this.ma[period]), ...(tags.length ? { tags } : {}) };
         }),
         { name: '布林20', color: css('--dim'), alpha: .55 },
+        // 沒合成的判斷線：名稱（均線類是 MA 寫法）＋角色小字（例如 MA10 後面「轉弱」；名稱本身就是角色的不重複寫）
         ...this.overlays.filter(o => o.tag !== false && !this.mergedMa(o)).map(o => ({ name: o.short || o.label, color: o.color, alpha: 1, mark: true,
+          ...(o.role && o.role !== o.short ? { tags: [{ text: o.role, color: o.color }] } : {}),
           ...(this.curveOf(o) ? read(this.curveOf(o)) : { value: o.value }) })),
       ];
     }
@@ -378,6 +380,7 @@
         c.setAttribute('aria-label', '尚無K線資料');
         this.geo = null;
         if (this.studies) this.studies.draw();
+        if (this.opts.onDraw) this.opts.onDraw();   // 圖上方那一行也要清掉上一個週期的數值
         return;
       }
       const W = this.host.clientWidth || 600, H = this.opts.height ? this.opts.height(W) : Math.max(300, Math.min(460, W * .56));

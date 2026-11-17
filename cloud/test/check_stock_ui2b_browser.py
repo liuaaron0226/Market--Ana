@@ -89,14 +89,17 @@ def main() -> int:
                 page.wait_for_function("document.querySelector('#stockChartContext').textContent.startsWith('週K')")
                 assert "週K" in page.locator("#stockChartContext").inner_text()
 
-                inputs = page.locator("#maControls input")
+                # 均線在 K 線上方那一行點名稱設定（本人 11-17；和首頁共用一組，存在 ma-lines）
+                page.locator("#legendNames .legend-name.is-ma").first.click()
+                inputs = page.locator(".ma-list input")
                 assert inputs.evaluate_all("nodes => nodes.map(node => node.value)")[:2] == ["18", "45"]
                 inputs.nth(0).fill("21")
                 inputs.nth(0).dispatch_event("change")
-                assert page.evaluate("JSON.parse(localStorage.getItem('stock-ma-periods'))")[:2] == [21, 45]
+                assert [line["period"] for line in page.evaluate("JSON.parse(localStorage.getItem('ma-lines'))")][:2] == [21, 45]
                 page.reload(wait_until="domcontentloaded")
                 wait_ready(page)
-                assert page.locator("#maControls input").nth(0).input_value() == "21"
+                assert "MA21" in page.locator("#legendNames").inner_text()
+                page.evaluate("localStorage.removeItem('ma-lines')")
 
                 choose_period(page, "daily")
                 page.locator('[data-study="foreign"]').click()
