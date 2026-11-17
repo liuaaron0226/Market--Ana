@@ -1,82 +1,20 @@
 <!doctype html>
-<html lang="zh-Hant" data-theme="light">
+<html lang="zh-Hant">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="color-scheme" content="light dark">
-  <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
-  <link rel="apple-touch-icon" href="/icon-180.png">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-title" content="決策鏡">
-  <meta name="theme-color" content="#0b0b0e">
-  <title>基金對照 0050</title>
-  <link rel="stylesheet" href="minimal.css?v=20261117-m53">
-  <link rel="stylesheet" href="bold.css?v=20261117-m53">
-  <link rel="stylesheet" href="stock.css?v=20261117-m53">
-  <link rel="stylesheet" href="settings.css?v=20261117-m53">
-  <link rel="stylesheet" href="fund.css?v=20261117-f1">
+  <title>基金</title>
+  <!-- 基金當成一般個股 03 票（本人 2026-11-18）：基金對照頁退場，基金就在個股頁看（stock.html?code=<代碼>）。
+       這一頁只把舊書籤與舊連結（fund.html?code=BLKTENAU）帶過去；代碼不合規則就帶到個股頁預設那一檔。 -->
+  <script>
+    (function () {
+      var code = new URLSearchParams(location.search).get('code') || '';
+      code = code.trim().toUpperCase();
+      location.replace(/^[0-9A-Z]{4,12}$/.test(code) ? 'stock.html?code=' + encodeURIComponent(code) : 'stock.html');
+    })();
+  </script>
 </head>
-<!-- 基金對照 0050（本人 2026-11-17 定案）：唯讀比較，從自選股頁那一列進來。和個股頁同一套看盤桌：
-     上面一塊報價板（只放名稱與淨值），下面一塊對照板，圖與五個期間鍵和個股頁「對照 0050」同一種。 -->
-<body class="bd st fd">
-  <div class="bd-shell" data-desk-tilt>
-    <header class="bd-bar">
-      <a class="bd-back" href="portfolio.html"><span aria-hidden="true">‹</span> 自選股</a>
-      <button class="bd-theme" id="settingsOpen" type="button" data-settings-open aria-label="設定" title="設定">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.3 3.5h3.4l.5 2.3 1.6.9 2.2-.8 1.7 2.9-1.7 1.6v1.8l1.7 1.6-1.7 2.9-2.2-.8-1.6.9-.5 2.3h-3.4l-.5-2.3-1.6-.9-2.2.8-1.7-2.9 1.7-1.6v-1.8L4.1 8.8l1.7-2.9 2.2.8 1.6-.9z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><circle cx="12" cy="12" r="2.6" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
-      </button>
-    </header>
-
-    <p class="bd-status" id="status" role="status">讀取中</p>
-
-    <main id="content" hidden>
-      <div class="st-top">
-        <section class="bd-quote" aria-label="基金淨值">
-          <div class="bd-ident">
-            <h1 id="fundTitle">—</h1>
-            <p class="num" id="fundSub"></p>
-          </div>
-          <div class="bd-price">
-            <div class="bd-price-line"><b class="num" id="fundNav">—</b><span class="fd-unit">美元</span></div>
-            <p class="bd-live-status num" id="fundNavDate"></p>
-          </div>
-        </section>
-      </div>
-
-      <section class="bd-compare" id="compareBlock" aria-labelledby="compareTitle">
-        <header class="bd-compare-head">
-          <h2 id="compareTitle" class="sr-only">和 0050 對照</h2>
-          <p class="bd-compare-date num" id="compareDate"></p>
-        </header>
-        <p class="bd-compare-conclusion" id="compareConclusion">讀取中</p>
-        <ul class="fd-issues" id="fundIssues" hidden></ul>
-
-        <div class="bd-compare-chart-block">
-          <div class="bd-compare-chart-head">
-            <h3>報酬走勢（台幣、含息）</h3>
-            <div class="bd-compare-legend" id="compareLegend" aria-label="圖例"></div>
-          </div>
-          <div class="bd-compare-chart" id="compareChart"></div>
-          <div class="bd-compare-tooltip" id="compareTooltip" role="status" aria-live="polite" hidden></div>
-        </div>
-
-        <!-- 五個期間各一顆鍵（領先 0050 的記號在上、落後的在下），點哪一個看哪一個期間的數字；下面另一行是匯率影響 -->
-        <div class="bd-compare-periods" id="comparePeriods"></div>
-
-        <p class="bd-compare-dividend" id="fundCapital"></p>
-        <details class="fd-notes">
-          <summary>怎麼算的</summary>
-          <ul id="fundNotes"></ul>
-        </details>
-      </section>
-    </main>
-  </div>
-  <script src="scroll-lock.js?v=20261117-m53"></script>
-  <script src="fund-view.js?v=20261117-f1"></script>
-  <script src="fund.js?v=20261117-f1"></script>
-  <script src="chart-menus.js?v=20261117-m53"></script>
-  <script src="desk-tilt.js?v=20261117-m53"></script>
-  <script src="watch-push.js?v=20261117-m53"></script>
-  <script src="settings.js?v=20261117-m53"></script>
+<body>
+  <p><a href="stock.html">前往個股頁</a></p>
 </body>
 </html>

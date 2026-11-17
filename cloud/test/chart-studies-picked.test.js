@@ -100,3 +100,20 @@ test("沒有選取、或指標還在暖機沒有數值時，不標", () => {
   warming.studies.select("macd");
   assert.deepEqual(picked(warming.studies), [], "MACD 要 34 根才有值，第 26 根不標");
 });
+
+// 基金當成一般個股 03 票：基金只有淨值，指標選單藏掉要量（成交量）、高低價（KD）或法人的指標，只留 MACD、RSI；換回股票時全部回來。
+test("只開放部分指標（基金）：目前看的指標不在名單就換成名單第一個，名單外的選不到；放寬後恢復", () => {
+  const { studies } = studiesWith({ volumeKind: "volume", studies: ["volume", "macd", "kd", "rsi", "foreign", "trust", "dealer"] }, 70);
+  assert.equal(studies.active, "volume");
+  studies.setAvailable(["macd", "rsi"]);
+  assert.equal(studies.active, "macd");
+  for (const kind of ["volume", "kd", "foreign"]) {
+    studies.select(kind);
+    assert.equal(studies.active, "macd", kind);
+  }
+  studies.select("rsi");
+  assert.equal(studies.active, "rsi");
+  studies.setAvailable(null);
+  studies.select("foreign");
+  assert.equal(studies.active, "foreign");
+});

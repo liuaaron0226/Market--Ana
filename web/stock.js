@@ -76,6 +76,8 @@
   }
 
   function renderStrategy(r) {
+    // 基金的操作策略要用淨值另算（04 票）；還沒有的時候整塊不出現，不拿股票的規則猜。
+    if (isFund(r) && !r.strategy) { $('strategy').hidden = true; return; }
     $('strategy').hidden = !features.strategy_v1;
     if (!features.strategy_v1) return;
     const strategy = buildStrategy(r);
@@ -87,6 +89,37 @@
   }
 
   window.StockStrategy = { build: buildStrategy };
+
+  // 基金當成一般個股 03 票（本人 11-18 選樣品 B）：分析契約 v2 的 kind "fund"。基金每天只有一個淨值（約晚 3 個營業日公布），
+  // 沒有即時行情、逐筆、當日三格、籌碼、事實整理、大戶持股、國外同類股與公告，這些區塊整個不出現；
+  // 分類鍵先只留「比較」（價位、配息、成分股由 04、06、08 票加上）。圖是淨值線，週期只有日／週／月，
+  // 指標只留不需要量、高低價與法人的 MACD、RSI。
+  const isFund = r => r?.kind === 'fund';
+  const FUND_PERIODS = ['daily', 'weekly', 'monthly'];
+  const FUND_STUDIES = ['macd', 'rsi'];
+  const CURRENCY_NAMES = { USD: '美元', TWD: '台幣' };
+  const NAV_LAG_NOTE = '淨值每天一個，約晚 3 個營業日公布';
+  let chartKind = '';
+
+  function applyKind(r) {
+    const fund = isFund(r);
+    document.body.dataset.kind = fund ? 'fund' : 'stock';
+    for (const id of ['levelsPanel', 'chipsPanel']) {
+      const button = $('stockCats').querySelector(`[aria-controls="${id}"]`);
+      if (button) button.hidden = fund;
+    }
+    for (const group of $('periodSelect').querySelectorAll('optgroup')) {
+      const longOnly = [...group.querySelectorAll('option')].every(option => FUND_PERIODS.includes(option.value));
+      group.hidden = fund && !longOnly;
+      group.querySelectorAll('option').forEach(option => { option.disabled = fund && !longOnly; });
+    }
+    if (fund && !FUND_PERIODS.includes(chartPeriod)) { chartPeriod = 'daily'; $('periodSelect').value = 'daily'; }
+    if (fund) {
+      for (const id of ['stockFacts', 'stockFactsBlocks', 'watchPeers', 'liveBadge']) $(id).hidden = true;
+      $('liveStatus').dataset.state = 'closed';
+      $('liveStatus').textContent = r.notes?.nav_lag || NAV_LAG_NOTE;
+    }
+  }
 
   let chart = null;
   let lastChartKey = '';
@@ -190,7 +223,8 @@
 
   function canUseLive(result) {
     const historical = new URLSearchParams(location.search).has('as_of');
-    return !historical && result?.stock_state !== 'stale' && result?.analysis_status !== 'stale';
+    // 基金沒有即時行情與逐筆（只有每天一個淨值）
+    return !historical && result?.kind !== 'fund' && result?.stock_state !== 'stale' && result?.analysis_status !== 'stale';
   }
 
   // K 線的高度：照寬度算，最矮 300、最高 460。電腦上再多一個上限——視窗高度扣掉 K 線以外要擠進第一個畫面的東西
@@ -251,6 +285,7 @@
   }
 
   function updateLiveStatus(payload) {
+    if (isFund(baseResult)) return;  // 基金那一行寫的是淨值公布時間（applyKind），不是行情狀態
     const badge = $('liveBadge');
     const status = $('liveStatus');
     const cloudUnavailable = window.Intraday.liveUnavailable(payload);
@@ -284,8 +319,9 @@
       $('content').dataset.schema = r.schema;
       $('stockName').textContent = r.name;
       $('stockCode').textContent = r.code;
+      applyKind(r);
       showMarket(r);
-      showCandidateReasons(r.code);
+      if (!isFund(r)) showCandidateReasons(r.code);
     }
     lastResult = r;
     const intraday = Boolean(r._intraday);
@@ -306,9 +342,17 @@
     $('asOf').textContent = caption.stamp;
     $('ladderCurrentLabel').textContent = caption.ladderLabel;
     $('ladderCurrentMeta').textContent = caption.ladderMeta;
+    if (isFund(r)) {
+      // 基金寫淨值日（不是資料日）；漲跌連金額一起寫，例如「-0.59（-3.33%）」
+      $('quoteMode').textContent = '淨值日';
+      $('asOf').textContent = r.quote.nav_date || r.as_of;
+    }
     $('close').textContent = fmt(r.quote.close);
     const chg = r.quote.chg_pct;
-    $('chg').textContent = chg === null || chg === undefined ? '' : `${chg > 0 ? '+' : ''}${Number(chg).toFixed(2)}%`;
+    const pctText = chg === null || chg === undefined ? '' : `${chg > 0 ? '+' : ''}${Number(chg).toFixed(2)}%`;
+    const change = r.quote.change;
+    $('chg').textContent = isFund(r) && Number.isFinite(change) && pctText
+      ? `${change > 0 ? '+' : ''}${fmt(change)}（${pctText}）` : pctText;
     $('chg').className = `num ${chg > 0 ? 'up' : chg < 0 ? 'down' : ''}`;
 
     const lv = r.levels || {};
@@ -337,9 +381,11 @@
       delete $('status').dataset.stockState;
     }
     $('content').hidden = false;
-    window.StockFacts?.render(r);  // 事實區塊（獨立檔）：沒有 facts 就不出現
-    window.WatchPeers?.load(r.code);  // 國外同類股（獨立檔）：只有站主的關注股才出現
-    showBigHolders(r);
+    if (!isFund(r)) {
+      window.StockFacts?.render(r);  // 事實區塊（獨立檔）：沒有 facts 就不出現
+      window.WatchPeers?.load(r.code);  // 國外同類股（獨立檔）：只有站主的關注股才出現
+      showBigHolders(r);
+    }
     drawChart(r);
     if (initial) syncComparison(r);
   }
@@ -413,8 +459,13 @@
     const shownBefore = chart ? chart.candles : [];
     // 歷史接上後，日 K 比伺服器預算的 MACD 多出很多根：改由圖表用完整序列自己算。
     const extended = !intraday && daily.length > r.bars.length;
+    const fund = isFund(r);
     if (!chart) chart = new window.KChart($('chartHost'), { macd: false, studyHost: $('chartStudies'), studies: ['volume', 'macd', 'kd', 'rsi', 'foreign', 'trust', 'dealer'], maPeriods, selectionRoots: [$('chartHost').parentElement], volumeKind: 'volume', overlayLabels: 'tags', height: chartHeight,
       drawings: drawingSync && { onChange: drawingSync.record, onTool: showActiveTool, onSelect: showDrawingSelection } });
+    // 換了種類（股票↔基金）才重設指標選單：基金只有淨值，藏掉要量、高低價或法人的指標。
+    const kind = fund ? 'fund' : 'stock';
+    if (chart.studies && chartKind !== kind) chart.studies.setAvailable(fund ? FUND_STUDIES : null);
+    chartKind = kind;
     // 畫線只在日、週、月 K：秒 K、分 K 連工具列一起收起。
     $('drawTools').hidden = intraday || !drawingSync;
     const expected = { fast: 12, slow: 26, signal: 9, histogram_multiplier: 1, seed: 'first_close', warmup_bars: 34,
@@ -424,9 +475,11 @@
       && r.chart.macd.every((row, i) => row.date === daily[i].t);
     const unit = seconds ? `${seconds}秒` : intraday ? `${intradayKey}分` : chartPeriod === 'monthly' ? '月' : chartPeriod === 'weekly' ? '週' : '日';
     const defaultCount = intraday ? 80 : innerWidth < 600 ? 50 : 90;
+    // 基金：淨值畫成一條線（K 線元件的線模式），MACD 由圖用淨值自己算（伺服器沒有預算）。
     chart.setData(candles, { count: Math.min(candles.length, defaultCount), overlays, unit,
-      macd: intraday || chartPeriod !== 'daily' || r._intraday || extended ? null : compatible ? r.chart.macd : [],
-      macdNotice: compatible || intraday || chartPeriod !== 'daily' || r._intraday || extended ? '' : 'MACD版本或日期不符，暫不顯示' });
+      ...(fund ? { mode: 'line', closeLabel: '淨值' } : {}),
+      macd: fund || intraday || chartPeriod !== 'daily' || r._intraday || extended ? null : compatible ? r.chart.macd : [],
+      macdNotice: fund || compatible || intraday || chartPeriod !== 'daily' || r._intraday || extended ? '' : 'MACD版本或日期不符，暫不顯示' });
     if (savedView) {
       // 歷史接在前面時，原本看的那一段往後移了幾根就跟著移，畫面停在原地。
       const shift = shownBefore.length ? candles.findIndex(candle => candle.t === shownBefore[0].t) : 0;
@@ -438,18 +491,21 @@
       chart.view = savedView; chart.clamp(); chart.draw();
     }
     lastChartKey = key;
-    if (intraday) $('stockChartContext').textContent = `${unit}K · ${candles.length} 根`;
+    if (fund) $('stockChartContext').textContent = `淨值 · ${unit}`;
+    else if (intraday) $('stockChartContext').textContent = `${unit}K · ${candles.length} 根`;
     else $('stockChartContext').textContent = `${unit}K · 資料日 ${r.as_of}`;
+    const what = fund ? `${r.name}淨值走勢（${unit}）` : `${r.name}${unit}K`;
     chart.canvas.setAttribute('aria-label', candles.length
-      ? `${r.name}${unit}K，${candles[0].label}至${candles[candles.length - 1].label}。`
-      : `${r.name}${unit}K，尚無盤中資料。`);
+      ? `${what}，${candles[0].label}至${candles[candles.length - 1].label}。`
+      : `${what}，尚無盤中資料。`);
   }
 
-  // 契約 v2 本身帶市場別，不必再打一次搜尋 API。
+  // 契約 v2 本身帶市場別，不必再打一次搜尋 API。基金寫「基金 · 美元」（計價幣別）。
   function showMarket(r) {
     const badge = $('stockMarket');
-    badge.hidden = !r.market;
-    badge.textContent = r.market || '';
+    const text = isFund(r) ? `基金 · ${CURRENCY_NAMES[r.currency] || r.currency || ''}` : r.market || '';
+    badge.hidden = !text;
+    badge.textContent = text;
   }
 
   // G3：此股若出現在已封存的籌碼選股名單中，顯示在哪些分頁、第幾名，以及所屬產業的資金狀態；不在名單就不顯示。
@@ -928,6 +984,13 @@
     clearComparisonView();
     $('compareBlock').hidden = false;
     renderCompareChips();
+    // 基金和 0050、其他股票的比較由 05 票接上；在那之前照實說還沒有，不去問股票的比較資料（會被說成查無此股）。
+    if (isFund(result)) {
+      $('compareConclusion').textContent = '';
+      $('compareChart').replaceChildren();
+      setCompareStatus('empty', '這檔基金的比較資料尚未提供。');
+      return;
+    }
     loadComparison();
   }
 
@@ -1130,7 +1193,7 @@
       loadHistory(data, sequence);
       loadDrawings(data.code, sequence);
       // 自選股關注的判斷（watch-judgments.js）：只有站主、開關打開而且這一檔有判斷時才加小鍵與兩條線。
-      if (features.watchlist_watch_v1 && window.WatchJudgments) {
+      if (features.watchlist_watch_v1 && window.WatchJudgments && !isFund(data)) {
         window.WatchJudgments.mount({ host: document.querySelector('.bd-chart-bar'), code: data.code,
           onChange: () => { if (lastResult) drawChart(lastResult); }, getDaily: () => (baseResult ? dailyCandles(baseResult) : []) });
       }
@@ -1150,7 +1213,7 @@
     if (cell) pickComparePeriod(cell.dataset.period);
   });
   // 加入比較與頂列都用全站共用的選股下拉（stock-picker.js，本人 11-17：代號、名稱都能打）。
-  // 比較只收大量股母體內、還沒加入的股票；頂列也收基金（選了導到基金對照頁）。
+  // 比較只收大量股母體內、還沒加入的股票（基金加入比較由 05 票接上）；頂列什麼都收，基金也是進個股頁。
   const comparePicker = window.StockPicker.attach($('compareInput'), {
     accept: item => item.universe_rank !== null && item.universe_rank !== undefined && !compareState.codes.includes(item.code),
     onPick: option => addComparisonCode(option.code, option.name),
@@ -1163,11 +1226,10 @@
   });
 
   const openFromBar = option => {
-    if (option.kind === 'fund') { location.href = option.href; return; }
     updateUrl(option.code);
     load(option.code);
   };
-  const barPicker = window.StockPicker.attach($('codeInput'), { funds: true, onPick: openFromBar });
+  const barPicker = window.StockPicker.attach($('codeInput'), { onPick: openFromBar });
   $('searchForm').addEventListener('submit', async event => {
     event.preventDefault();
     if (!$('codeInput').value.trim()) return;

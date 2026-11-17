@@ -17,30 +17,33 @@ test("打代號（或選了之後框裡是「代號 名稱」）就直接拿代�
   for (const text of ["台積電", "積電", "A10", "BLKTENAU", "2330台積電", "23", ""]) assert.equal(codeOf(text), null, text);
 });
 
+// 基金當成一般個股 03 票：基金（貝萊德世界科技 A10）是 items 裡的一般一筆（類別「基金」、市場「境外基金」），
+// 每個框都收（加自選、加入比較也可以）；名稱搜尋分支的 funds 欄退場，回應裡就算還有也不讀。
 const PAYLOAD = {
   items: [
     { code: "2330", name: "台積電", market: "上市", security_type: "普通股", universe_rank: 1 },
     { code: "4441", name: "振大環球", market: "上櫃", security_type: "普通股", universe_rank: null },
+    { code: "BLKTENAU", name: "貝萊德世界科技 A10", market: "境外基金", security_type: "基金", universe_rank: null },
   ],
-  funds: [{ code: "BLKTENAU", name: "貝萊德世界科技 A10", full_name: "貝萊德世界科技基金 A10美元(總報酬穩定配息)" }],
+  funds: [{ code: "OLDFUND", name: "舊的 funds 欄" }],
 };
 
-test("股票在前、基金在後；基金點了去基金頁", () => {
-  assert.deepEqual(plain(options(PAYLOAD, { funds: true })), [
+test("搜尋結果照順序變成選項；基金是一般的一筆，標「基金」", () => {
+  assert.deepEqual(plain(options(PAYLOAD)), [
     { kind: "stock", code: "2330", name: "台積電", title: "2330 台積電", meta: "上市普通股" },
     { kind: "stock", code: "4441", name: "振大環球", title: "4441 振大環球", meta: "上櫃普通股" },
-    { kind: "fund", code: "BLKTENAU", name: "貝萊德世界科技 A10", title: "貝萊德世界科技 A10", meta: "基金 · 和 0050 比", href: "fund.html?code=BLKTENAU" },
+    { kind: "stock", code: "BLKTENAU", name: "貝萊德世界科技 A10", title: "BLKTENAU 貝萊德世界科技 A10", meta: "基金" },
   ]);
 });
 
-test("不收基金的框（加自選、加入比較）只留股票；accept 篩掉不能用的股票", () => {
+test("accept 篩掉這個框不能用的那幾筆", () => {
   const picked = options(PAYLOAD, { accept: (item) => item.universe_rank !== null });
   assert.deepEqual(plain(picked).map((option) => option.code), ["2330"]);
 });
 
 test("回應壞掉或空的：沒有選項", () => {
-  assert.deepEqual(plain(options(null, { funds: true })), []);
-  assert.deepEqual(plain(options({ items: "x" }, { funds: true })), []);
+  assert.deepEqual(plain(options(null)), []);
+  assert.deepEqual(plain(options({ items: "x" })), []);
 });
 
 const choice = (code, name) => ({ kind: "stock", code, name, title: `${code} ${name}`, meta: "上市普通股" });

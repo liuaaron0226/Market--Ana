@@ -851,6 +851,38 @@ class BuildAndDeployWiringTest(unittest.TestCase):
         self.assertEqual(sql.count("INSERT INTO stock_history"), 2)
         self.assertTrue(sql.rstrip().endswith("DELETE FROM stock_history WHERE data_date < '2026-11-09';"))
 
+    def test_fund_history_is_its_nav_series_not_the_stock_loader(self) -> None:
+        # 基金當成一般個股 03 票：基金（名錄列 fund_security）的長日線是整段淨值，由 fund_stock 給；股票的還原日線照舊。
+        import cloud.build_stock_history as history
+        import fund_stock
+        ctx = self.ctx()
+        seed = ctx.work_dir / "seed"
+        seed.mkdir(parents=True)
+        rows = [{"type": "version", "data": {"version": "v-new"}},
+                {"type": "stock_analysis", "data": {"code": "2327"}},
+                {"type": "stock_analysis", "data": {"code": "BLKTENAU"}},
+                {"type": "fund_security", "data": {"code": "BLKTENAU"}}]
+        (seed / "seed.jsonl").write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+        ctx.outputs["build_seed"] = {"seed_dir": str(seed), "version": "v-new"}
+        asked = []
+
+        def fake_build(codes, as_of):
+            asked.append(list(codes))
+            return {code: {"schema": "stock-history/v1", "code": code, "as_of": as_of, "d": [20261109], "o": [1.0],
+                           "h": [1.0], "l": [1.0], "c": [1.0], "v": [1]} for code in codes}
+
+        def fake_funds(as_of):
+            return {"BLKTENAU": {"schema": "stock-history/v1", "code": "BLKTENAU", "as_of": "2026-11-06",
+                                 "d": [20261105, 20261106], "c": [18.0, 18.2]}}
+        with unittest.mock.patch.object(history, "build_history", fake_build), \
+                unittest.mock.patch.object(fund_stock, "history_payloads", fake_funds):
+            out = du._publish_stock_history(ctx)
+        self.assertEqual(asked, [["2327"]])
+        self.assertEqual(out["history_rows"], 2)
+        sql = Path(self.cmds[0][self.cmds[0].index("--file") + 1]).read_text(encoding="utf-8")
+        self.assertIn('"code":"BLKTENAU"', sql)
+        self.assertIn('"c":[18.0,18.2]', sql)
+
     def test_history_is_published_only_after_a_verified_publish_and_never_fails_it(self) -> None:
         steps = {s.name: s for s in du.real_steps()}
         ctx = self.ctx()

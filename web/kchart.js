@@ -4,6 +4,8 @@
    有畫線時：點線選取、拖已選取的線移動（拖端點把手只動那一端）、Delete 刪除、Esc 取消選取或放下工具；
    文字標註再點一下（或 Enter）打開輸入框修改內容。
    資料：candles=[{t,label,open,high,low,close,amount}] 由舊到新。overlays 可放判斷線；
+   線模式（setData 的 mode:'line'，基金淨值這種只有收盤的資料）：不畫 K 棒、畫一條收盤線，只要 close 就算有價；
+   十字線只標那一天的收盤，名稱用 closeLabel（預設「收盤」，基金寫「淨值」）。均線、布林、畫線照常。
    軸上價籤模式（overlayLabels:'tags'）下，判斷線帶 tag:false 就只畫線、右側價格欄不掛它的價籤。
    畫線（選用）：頁面先載入 chart-drawings.js 並傳 opts.drawings={onChange,onTool,onSelect}，
    再用 setTool／setDrawings／setUnsavedDrawings／deleteSelectedDrawing／cancelDrawing 操作。 */
@@ -113,6 +115,7 @@
       this.canvas.style.cssText = 'display:block;width:100%;touch-action:none;cursor:grab;border-radius:10px';
       host.append(this.canvas);
       this.candles = []; this.view = { end: 0, count: 60 }; this.hover = -1; this.selection = -1; this.overlays = [];
+      this.line = false; this.priced = hasPrice; this.closeLabel = '收盤';
       this.showMacd = this.opts.macd !== false;
       this.maPeriods = normalizePeriods(this.opts.maPeriods || [18, 45]);
       this.drawings = this.opts.drawings && window.ChartDrawings ? new window.ChartDrawings(this, this.opts.drawings) : null;
@@ -127,6 +130,9 @@
     }
     setData(candles, opts = {}) {
       this.unit = opts.unit || '日';
+      this.line = opts.mode === 'line';
+      this.priced = this.line ? candle => Number.isFinite(candle.close) : hasPrice;
+      this.closeLabel = opts.closeLabel || '收盤';
       this.sourceMacd = opts.macd || null;
       this.macdNotice = opts.macdNotice || '';
       this.compute(candles);
@@ -152,7 +158,7 @@
     cancelDrawing() { if (this.drawings) { this.drawings.cancel(); this.draw(); } }
     compute(candles) {
       this.candles = candles; this.shownLength = candles.length;
-      const closes = candles.map(c => hasPrice(c) ? c.close : null);
+      const closes = candles.map(c => this.priced(c) ? c.close : null);
       this.ma = Object.fromEntries(this.maPeriods.map(period => [period, sma(closes, period)]));
       this.boll = bollinger(closes);
       const supplied = this.sourceMacd && new Map(this.sourceMacd.map(row => [row.date, row]));
@@ -341,14 +347,14 @@
         if (this.opts.onClear) this.opts.onClear();
       }
       const vis = this.candles.slice(start, end);
-      const prices = vis.filter(hasPrice);
+      const prices = vis.filter(this.priced);
       if (!prices.length) {
         x.fillStyle = css('--dim'); x.font = '13px "Noto Sans TC","Microsoft JhengHei",sans-serif';
         x.fillText('此區間OHLC資料不足', 12, 32);
         if (this.studies) this.studies.draw();
         return;
       }
-      let lo = Math.min(...prices.map(c => c.low)), hi = Math.max(...prices.map(c => c.high));
+      let lo = Math.min(...prices.map(c => this.line ? c.close : c.low)), hi = Math.max(...prices.map(c => this.line ? c.close : c.high));
       this.overlays.forEach(o => { if (o.inView !== false) { lo = Math.min(lo, o.value); hi = Math.max(hi, o.value); } });
       // 布林通道常比 K 棒寬，價格座標要把可見範圍內的上下軌算進去，通道才不會畫到圖外。
       for (let i = start; i < end; i++) { const band = this.boll[i]; if (band) { lo = Math.min(lo, band.lower); hi = Math.max(hi, band.upper); } }
@@ -362,7 +368,7 @@
       const tagSlots = [];
       if (tags) {
         // 收盤也當成一枚價籤一起排序：先由上往下確保間距，再由下往上收回界內，順序永遠跟價位一致。
-        const lc = this.view.end === n && hasPrice(this.candles[n - 1]) ? this.candles[n - 1].close : null;
+        const lc = this.view.end === n && this.priced(this.candles[n - 1]) ? this.candles[n - 1].close : null;
         const items = tagged.map(o => ({ o, value: o.value }));
         if (lc !== null) items.push({ o: null, value: lc, close: true });
         items.sort((a2, b2) => b2.value - a2.value);
@@ -381,7 +387,7 @@
       const axisBoxes = [];
       const raw = (hi - lo) / 5, mag = Math.pow(10, Math.floor(Math.log10(raw))), tick = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s >= raw);
       // 現價標籤（最右一根在畫面內才畫）所占的高度區間：與它重疊的刻度只略過文字、保留格線（本人 11-07：現價不可壓字）。
-      const lastClose = this.view.end === n && hasPrice(this.candles[n - 1]) ? this.candles[n - 1].close : null;
+      const lastClose = this.view.end === n && this.priced(this.candles[n - 1]) ? this.candles[n - 1].close : null;
       const tagTop = lastClose === null ? null : y(lastClose) - 9, tagBottom = tagTop === null ? null : tagTop + 18;
       for (let v = Math.ceil(lo / tick) * tick; v <= hi; v += tick) {
         x.strokeStyle = line; x.lineWidth = 1; x.beginPath(); x.moveTo(l, Math.round(y(v)) + .5); x.lineTo(l + pw, Math.round(y(v)) + .5); x.stroke();
@@ -510,7 +516,7 @@
       // K棒
       const bw = Math.max(1, Math.min(14, step * .66));
       // 每根蠟燭本體的位置只算一次：落影、亮邊、本體都用同一份，影子不會和本體對不上。
-      const bodies = vis.map((c, i) => hasPrice(c) && {
+      const bodies = this.line ? [] : vis.map((c, i) => hasPrice(c) && {
         c, cx: l + step * (i + .5), top: y(Math.max(c.open, c.close)), h: Math.max(1, Math.abs(y(c.open) - y(c.close))),
         live: Boolean(this.opts.liveLast) && start + i === n - 1,
       });
@@ -539,6 +545,16 @@
           x.lineWidth = 1.4; x.strokeRect(cx - bw / 2 - 1.5, top - 1.5, bw + 3, h + 3);
         } else x.fillRect(cx - bw / 2, top, bw, h);
       }
+      // 線模式：收盤（淨值）連成一條墨色線，缺值處斷開（本人 11-18 選樣品 B）。
+      if (this.line) {
+        x.strokeStyle = ink; x.lineWidth = 1.6; x.lineJoin = 'round'; x.beginPath(); let on = false;
+        vis.forEach((c, i) => {
+          if (!this.priced(c)) { on = false; return; }
+          const px = l + step * (i + .5);
+          on ? x.lineTo(px, y(c.close)) : x.moveTo(px, y(c.close)); on = true;
+        });
+        x.stroke(); x.lineWidth = 1;
+      }
       // 使用者自訂均線（最多四條，預設 MA18／MA45）。
       // 四條線四種看得出差別的顏色：橘、金、藍、灰（布林通道是更淡的灰帶）
       const maColors = [css('--accent'), css('--gold'), css('--study-dif') || css('--dim'), css('--dim')];
@@ -559,21 +575,21 @@
       x.font = '11.5px "JetBrains Mono",Consolas,monospace'; x.textBaseline = 'alphabetic';
       // 最新價標籤
       const last = this.candles[n - 1];
-      if (tags && end === n && hasPrice(last)) {
+      if (tags && end === n && this.priced(last)) {
         const real = y(last.close), cs = tagSlots.find(g => g.close), py = cs ? cs.slot : real;
         x.strokeStyle = ink; x.lineWidth = 1; x.setLineDash([2, 3]);
         x.beginPath(); x.moveTo(l, Math.round(real) + .5); x.lineTo(l + pw, Math.round(real) + .5); x.stroke(); x.setLineDash([]);
         if (Math.abs(py - real) > 1) { x.beginPath(); x.moveTo(l + pw, real); x.lineTo(l + pw + 2, real); x.lineTo(tagX, py); x.stroke(); }
         x.fillStyle = ink; x.beginPath(); x.roundRect ? x.roundRect(tagX, py - tagH / 2, tagW, tagH, 4) : x.rect(tagX, py - tagH / 2, tagW, tagH); x.fill();
         x.fillStyle = css('--bg'); x.textBaseline = 'middle';
-        x.font = '500 11px "Noto Sans TC","Microsoft JhengHei",sans-serif'; x.textAlign = 'left'; x.fillText('收盤', tagX + 6, py + .5);
+        x.font = '500 11px "Noto Sans TC","Microsoft JhengHei",sans-serif'; x.textAlign = 'left'; x.fillText(this.closeLabel, tagX + 6, py + .5);
         x.font = '600 11.5px "JetBrains Mono",Consolas,monospace'; x.textAlign = 'right'; x.fillText(fmtTag(last.close), tagX + tagW - 6, py + .5);
         x.textAlign = 'left'; x.font = '11.5px "JetBrains Mono",Consolas,monospace';
-      } else if (end === n && hasPrice(last)) { const pw2 = stacked ? 46 : r - 4; x.fillStyle = ink; x.textBaseline = 'middle'; x.fillRect(l + pw + 2, y(last.close) - 9, pw2, 18); x.fillStyle = css('--bg'); x.fillText(fmt(last.close, 0), l + pw + 7, y(last.close)); }
+      } else if (end === n && this.priced(last)) { const pw2 = stacked ? 46 : r - 4; x.fillStyle = ink; x.textBaseline = 'middle'; x.fillRect(l + pw + 2, y(last.close) - 9, pw2, 18); x.fillStyle = css('--bg'); x.fillText(fmt(last.close, 0), l + pw + 7, y(last.close)); }
       // 畫線的價位標示與選取把手最後才畫：壓在 K 棒與現價虛線上面，才看得到。
       if (this.drawings) this.drawings.drawOnTop(x, this.geo);
       // 驗收用：右側刻度文字框與現價框的位置。
-      this.debugBoxes = { axis: axisBoxes, price: end === n && hasPrice(last) ? { y: y(last.close) - 9, h: 18 } : null, height: H };
+      this.debugBoxes = { axis: axisBoxes, price: end === n && this.priced(last) ? { y: y(last.close) - 9, h: 18 } : null, height: H };
       // MACD
       if (this.showMacd) {
         const top = H - macdH, mv = this.macd.slice(start, end).filter(m => m.ready);
@@ -598,8 +614,9 @@
         const i = this.hover, c = this.candles[i], cx = l + step * (i - start + .5);
         x.strokeStyle = dim; x.setLineDash([3, 3]); x.beginPath(); x.moveTo(cx, t); x.lineTo(cx, H - 4); x.stroke(); x.setLineDash([]);
         const paper = css('--bg'), tone = c.close >= c.open ? up : dn;
-        const prices = hasPrice(c) ? [['開', c.open], ['高', c.high], ['低', c.low], ['收', c.close]].map(([name, value]) => (
-          { name, text: fmtTag(value), y: y(value), bg: name === '收' ? tone : paper, fg: name === '收' ? paper : ink, edge: tone })) : [];
+        const prices = this.line ? (this.priced(c) ? [{ name: this.closeLabel, text: fmtTag(c.close), y: y(c.close), bg: ink, fg: paper, edge: ink }] : [])
+          : hasPrice(c) ? [['開', c.open], ['高', c.high], ['低', c.low], ['收', c.close]].map(([name, value]) => (
+            { name, text: fmtTag(value), y: y(value), bg: name === '收' ? tone : paper, fg: name === '收' ? paper : ink, edge: tone })) : [];
         drawTags(x, tagX, tagW, tagH, placeTags(prices, t + tagH / 2, t + ph - tagH / 2, tagGap));
         x.font = TAG_VALUE_FONT;
         const dateWidth = x.measureText(c.label).width + 12;
@@ -614,16 +631,20 @@
   window.KChartTags = { place: placeTags, draw: drawTags };
   // 5 年歷史日線（欄位式：d 為 YYYYMMDD 整數）裡，比 bars 第一根更早的 K 棒。
   // 歷史必須涵蓋 bars 的第一根且收盤一致才接：還原係數不同步或資料不是同一檔時回空陣列，圖維持原樣。
+  // 基金的長日線只有 d 與 c（淨值）：接出來的每一天只有日期與收盤。
   function olderBars(bars, history) {
     if (!Array.isArray(bars) || !bars.length || !history || history.schema !== 'stock-history/v1') return [];
-    const columns = ['d', 'o', 'h', 'l', 'c', 'v'].map(key => history[key]);
+    const closeOnly = ['o', 'h', 'l', 'v'].every(key => !(key in history));
+    const columns = (closeOnly ? ['d', 'c'] : ['d', 'o', 'h', 'l', 'c', 'v']).map(key => history[key]);
     if (columns.some(column => !Array.isArray(column) || column.length !== history.d.length)) return [];
     const first = bars[0];
     const join = history.d.indexOf(Number(String(first.date).replaceAll('-', '')));
     if (join < 0 || Math.abs(history.c[join] - first.close) > 0.011) return [];
     return history.d.slice(0, join).map((day, i) => {
       const text = String(day);
-      return { date: `${text.slice(0, 4)}-${text.slice(4, 6)}-${text.slice(6, 8)}`, open: history.o[i], high: history.h[i],
+      const date = `${text.slice(0, 4)}-${text.slice(4, 6)}-${text.slice(6, 8)}`;
+      if (closeOnly) return { date, close: history.c[i] };
+      return { date, open: history.o[i], high: history.h[i],
         low: history.l[i], close: history.c[i], volume: history.v[i] };
     });
   }

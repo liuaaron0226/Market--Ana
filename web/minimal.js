@@ -1955,27 +1955,10 @@
     setStatus(message, 'empty');
   }
 
-  // 基金對照頁那檔基金（本人 11-17：搜尋打基金名稱也找得到）：點了進基金頁，不記進最近搜尋（那裡只放股票）。
-  // fund 是 StockPicker.options 整理好的選項（名稱與基金頁網址和其他搜尋框同一份）。
-  function fundItem(fund) {
-    const row = document.createElement('li');
-    row.className = 'stock-search-result';
-    const link = document.createElement('a');
-    link.href = fund.href;
-    const title = document.createElement('strong');
-    title.textContent = fund.title;
-    const market = document.createElement('small');
-    market.className = 'stock-search-market';
-    market.textContent = `基金 · ${fund.code}`;
-    const meta = document.createElement('small');
-    meta.className = 'stock-search-meta';
-    meta.textContent = '和 0050 比含息報酬';
-    link.append(title, market, meta);
-    row.append(link);
-    return row;
-  }
-
+  // 基金（基金當成一般個股 03 票，本人 11-18）是搜尋結果裡的一般一筆：點了進個股頁、記進最近搜尋，和股票一樣；
+  // 只是寫「基金」而不是市場別，資料日是淨值日（基金一天一個淨值、約晚 3 個營業日公布）。
   function resultItem(item) {
+    const fund = item.security_type === '基金';
     const row = document.createElement('li');
     row.className = 'stock-search-result';
     const link = document.createElement('a');
@@ -1987,17 +1970,18 @@
     title.textContent = `${item.code} ${item.name}`;
     const market = document.createElement('small');
     market.className = 'stock-search-market';
-    market.textContent = `${item.market}${item.security_type} · 名錄資料日 ${item.source_date}`;
+    market.textContent = fund ? '基金 · 境外基金' : `${item.market}${item.security_type} · 名錄資料日 ${item.source_date}`;
     const availability = document.createElement('small');
     availability.className = 'stock-search-meta';
+    const dataWord = fund ? '淨值' : '資料';
     if (item.analysis_status === 'stale') {
-      availability.textContent = `可分析 · 資料至 ${item.data_date || '未提供'}，已過期`;
+      availability.textContent = `可分析 · ${dataWord}至 ${item.data_date || '未提供'}，已過期`;
     } else if (item.analysis_status === 'insufficient') {
-      availability.textContent = `無法分析 · 歷史資料不足（${item.available_bars || 0} 根）`;
+      availability.textContent = fund ? `無法分析 · 淨值資料不足（${item.available_bars || 0} 筆）` : `無法分析 · 歷史資料不足（${item.available_bars || 0} 根）`;
     } else if (item.analysis_status === 'unavailable') {
       availability.textContent = '無法分析 · 最新交易日停牌或無有效行情';
     } else {
-      availability.textContent = `可分析 · 資料至 ${item.data_date || '未提供'}`;
+      availability.textContent = `可分析 · ${dataWord}至 ${item.data_date || '未提供'}`;
     }
     link.append(title, market, availability);
     row.append(link);
@@ -2032,7 +2016,6 @@
       if (!response.ok || payload.error) throw new Error(payload.message || '搜尋暫時無法使用');
       const items = Array.isArray(payload.items) ? payload.items : [];
       results.append(...items.map(resultItem));
-      if (!append) results.append(...window.StockPicker.options({ funds: payload.funds }, { funds: true }).map(fundItem));
       nextCursor = payload.next_cursor || null;
       more.hidden = nextCursor === null;
       const shown = results.children.length;

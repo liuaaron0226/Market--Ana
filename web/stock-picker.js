@@ -1,9 +1,8 @@
 /* 全站股票輸入框共用的選股下拉（本人 11-17「搜尋股票只能透過代號很不方便」）。
    代號、名稱（全名或部分字，例如「台積電」「積電」）都能打；名稱走既有的 /api/stocks/search，不另寫一套。
    打的是代號就照舊直接用（名錄外的代號也一樣交給原本的流程說明）；選了某一檔，框裡寫「代號 名稱」。
-   基金：搜尋回應的 funds（目前只有基金對照頁那檔），只有個股頁頂列這種「看東西」的框收（funds: true），
-   加自選、加入比較這類只能放股票的框不收。
-   用法：StockPicker.attach(input, { funds, accept(item), onPick(option), host, inline, strict }) → { choose(text), close() }。
+   基金（基金當成一般個股 03 票，本人 11-18）：搜尋回應 items 裡的一般一筆（類別「基金」），和股票一樣每個框都收。
+   用法：StockPicker.attach(input, { accept(item), onPick(option), host, inline, strict }) → { choose(text), close() }。
    choose：按「查詢／加入」時用，回 { option } 或 { message }（要顯示給本人的一句話）。
    inline：放在會收合（overflow: hidden）的區塊裡時，下拉不浮起、直接排在輸入框下面。
    strict：會存資料的框（加自選、新增庫存）——打的名稱符合好幾檔又沒有完全相同的，不默默取第一個，攤開下拉要本人挑。 */
@@ -25,20 +24,13 @@
     return match && /\d/.test(match[1]) ? match[1].toUpperCase() : null;
   }
 
-  // /api/stocks/search 的回應 → 下拉選項。股票在前、基金在後。
-  function options(payload, { funds = false, accept = () => true } = {}) {
+  // /api/stocks/search 的回應 → 下拉選項，照回應的順序。基金標「基金」（市場「境外基金」不必再寫一次）。
+  function options(payload, { accept = () => true } = {}) {
     const items = Array.isArray(payload?.items) ? payload.items : [];
-    const list = items.filter(item => item && item.code && accept(item)).map(item => ({
+    return items.filter(item => item && item.code && accept(item)).map(item => ({
       kind: 'stock', code: item.code, name: item.name || item.code, title: `${item.code} ${item.name || ''}`.trim(),
-      meta: `${item.market || ''}${item.security_type || ''}`,
+      meta: item.security_type === '基金' ? '基金' : `${item.market || ''}${item.security_type || ''}`,
     }));
-    if (funds && Array.isArray(payload?.funds)) {
-      payload.funds.filter(fund => fund && fund.code).forEach(fund => list.push({
-        kind: 'fund', code: fund.code, name: fund.name || fund.code, title: fund.name || fund.code,
-        meta: '基金 · 和 0050 比', href: `fund.html?code=${encodeURIComponent(fund.code)}`,
-      }));
-    }
-    return list;
   }
 
   // 搜尋字超過 API 上限（48 個 UTF-8 位元組，約 16 個中文字，例如貼上基金全名）就從尾巴截短，不讓整個搜尋失敗。
@@ -99,7 +91,7 @@
     }
 
     function pick(option) {
-      if (option.kind === 'stock') input.value = `${option.code} ${option.name}`;
+      input.value = `${option.code} ${option.name}`;
       close();
       settings.onPick?.(option);
     }

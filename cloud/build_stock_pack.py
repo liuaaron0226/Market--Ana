@@ -48,6 +48,11 @@ ETF_MIGRATION = ROOT / "cloud/migrations/0018_etf_securities.sql"
 COMPATIBILITY_CODES = ("0050",)
 ETF_COLUMNS = ("version", "code", "name", "market", "etf_type", "latest_bar_date", "available_bars", "analysis_status",
                "universe_rank", "universe_rule")
+# 基金當成一般個股 03 票：基金名錄（0026 暫定），欄位和 import_d1_seed._FUND_COLUMNS 相同。
+FUND_MIGRATION = ROOT / "cloud/migrations/0026_fund_securities.sql"
+FUND_COLUMNS = ("version", "code", "name", "full_name", "currency", "isin", "latest_bar_date", "available_bars",
+                "analysis_status")
+FUND_MARKET = "境外基金"
 # 契約 v2 §1／§9 已移除的欄位；seed 裡出現任何一個就拒絕，避免舊三方案或自創計分混進新版本。
 RETIRED_KEYS = frozenset({
     "preset", "available_presets", "score", "score_complete", "score_note", "dimensions", "coverage",
@@ -221,8 +226,9 @@ def _isolate_strategy(code: str, payload: dict) -> str | None:
 
 
 def _validate_seed(manifest: dict, securities: Sequence[dict], analyses: Sequence[dict],
-                   etfs: Sequence[dict] = ()) -> None:
-    """``etfs`` 是 ETF 名錄列（12 票）：名錄裡可分析的 ETF 才能有分析列，分析列也必須是 ETF。"""
+                   etfs: Sequence[dict] = (), funds: Sequence[dict] = ()) -> None:
+    """``etfs`` 是 ETF 名錄列（12 票）：名錄裡可分析的 ETF 才能有分析列，分析列也必須是 ETF。
+    ``funds`` 是基金名錄列（基金 03 票）：同樣的規則，分析列必須是 kind fund、市場「境外基金」。"""
     if manifest["catalog_count"] != len(securities):
         raise ValueError("catalog_count 與 staging 名錄列數不符")
     if manifest["analysis_count"] != len(analyses):
@@ -242,6 +248,13 @@ def _validate_seed(manifest: dict, securities: Sequence[dict], analyses: Sequenc
         if row["code"] in etf_by_code or row["code"] in by_code:
             raise ValueError(f"ETF 名錄代號重複或混進普通股名錄：{row['code']}")
         etf_by_code[row["code"]] = row
+    if manifest.get("fund_count", 0) != len(funds):
+        raise ValueError("fund_count 與 staging 基金名錄列數不符")
+    fund_by_code: dict[str, dict] = {}
+    for row in funds:
+        if row["code"] in fund_by_code or row["code"] in by_code or row["code"] in etf_by_code:
+            raise ValueError(f"基金名錄代號重複或混進其他名錄：{row['code']}")
+        fund_by_code[row["code"]] = {**row, "market": FUND_MARKET}
 
     compatibility_codes = set(manifest.get("compatibility_codes", []))
     found: set[str] = set()
@@ -254,7 +267,14 @@ def _validate_seed(manifest: dict, securities: Sequence[dict], analyses: Sequenc
         security = by_code.get(code)
         is_compatibility = code in compatibility_codes
         etf = etf_by_code.get(code) if not is_compatibility else None
-        if etf is not None:
+        fund = fund_by_code.get(code)
+        if fund is not None:
+            if fund["analysis_status"] not in ("available", "stale") or payload.get("kind") != "fund":
+                raise ValueError(f"基金分析列不屬於可分析的基金名錄標的：{code}")
+            security = fund
+        elif payload.get("kind") == "fund":
+            raise ValueError(f"基金分析列沒有基金名錄列：{code}")
+        elif etf is not None:
             if etf["analysis_status"] not in ("available", "stale") or payload.get("kind") != "etf":
                 raise ValueError(f"ETF 分析列不屬於可分析的 ETF 名錄標的：{code}")
             security = etf
@@ -274,7 +294,7 @@ def _validate_seed(manifest: dict, securities: Sequence[dict], analyses: Sequenc
 
     # 0050 這類相容入口的分析另外核（下面那段），ETF 名錄裡的它不重複要求。
     etfs_with_own_analysis = {code: row for code, row in etf_by_code.items() if code not in compatibility_codes}
-    for code, security in [*by_code.items(), *etfs_with_own_analysis.items()]:
+    for code, security in [*by_code.items(), *etfs_with_own_analysis.items(), *fund_by_code.items()]:
         if security["analysis_status"] in ("available", "stale") and code not in found:
             raise ValueError(f"可分析標的缺分析列：{code}")
     for code in compatibility_codes:
@@ -290,10 +310,12 @@ def install_staging_version(
     outside: Sequence[dict] = (),
     *,
     etfs: Sequence[dict] = (),
+    funds: Sequence[dict] = (),
 ) -> None:
     """同一交易中完整寫入、核數，最後才切 active；失敗時保留原 active。``outside`` 是母體外標的的名次或原因。
-    ``etfs`` 是 ETF 名錄列（12 票，寫進 0018 的 etf_securities；沒有就不碰那張表）。"""
-    _validate_seed(manifest, securities, analyses, etfs)
+    ``etfs`` 是 ETF 名錄列（12 票，寫進 0018 的 etf_securities；沒有就不碰那張表）。
+    ``funds`` 是基金名錄列（基金 03 票，寫進 0026 的 fund_securities；沒有就不碰那張表）。"""
+    _validate_seed(manifest, securities, analyses, etfs, funds)
     version = manifest["version"]
     try:
         connection.execute("BEGIN IMMEDIATE")
@@ -351,6 +373,11 @@ def install_staging_version(
             connection.executemany(
                 f"INSERT INTO etf_securities ({', '.join(ETF_COLUMNS)}) VALUES ({', '.join('?' for _ in ETF_COLUMNS)})",
                 [(version, *(row[column] for column in ETF_COLUMNS[1:])) for row in etfs],
+            )
+        if funds:
+            connection.executemany(
+                f"INSERT INTO fund_securities ({', '.join(FUND_COLUMNS)}) VALUES ({', '.join('?' for _ in FUND_COLUMNS)})",
+                [(version, *(row[column] for column in FUND_COLUMNS[1:])) for row in funds],
             )
         actual_catalog = connection.execute(
             "SELECT COUNT(*) FROM listed_securities WHERE version = ?", (version,)
@@ -697,7 +724,7 @@ def attach_news(securities: Sequence[dict], analyses: Sequence[dict], *, data_da
 
 def _write_seed_jsonl(path: Path, manifest: dict, securities: Iterable[dict], analyses: Iterable[dict],
                       outside: Iterable[dict] = (), announcements: Iterable[dict] = (), *,
-                      etfs: Iterable[dict] = ()) -> None:
+                      etfs: Iterable[dict] = (), funds: Iterable[dict] = ()) -> None:
     with path.open("w", encoding="utf-8", newline="\n") as output:
         output.write(_compact_json({"type": "version", "data": manifest}) + "\n")
         for row in securities:
@@ -710,6 +737,8 @@ def _write_seed_jsonl(path: Path, manifest: dict, securities: Iterable[dict], an
             output.write(_compact_json({"type": "stock_announcement", "data": row}) + "\n")
         for row in etfs:
             output.write(_compact_json({"type": "etf_security", "data": row}) + "\n")
+        for row in funds:
+            output.write(_compact_json({"type": "fund_security", "data": row}) + "\n")
 
 
 LEGACY_PACK = ROOT / "cloud/.stock-pack.json"
@@ -756,6 +785,7 @@ def build_version(
     analyzer: Callable[..., dict] = analyze_v2,
     universe_path: Path | None = None,
     use_universe: bool | None = None,
+    fund_loader: Callable[..., dict] | None = None,
 ) -> dict:
     """``use_universe`` 預設：完整建置時套用大量股母體，``selected_codes`` 小樣本時不套用（測試用）。"""
     if out_dir.exists():
@@ -820,6 +850,14 @@ def build_version(
         etfs, etf_analyses, etf_failures = etf_rows(universe, data_date, suspended, analyzer, _etf_bars(stock_etf_codes).get)
         analyses.extend(etf_analyses)
         failures.extend(etf_failures)
+    # 基金當成一般個股 03 票：基金名錄與分析（淨值）；給誰看由網站的基金開關決定。小樣本建置（--codes）不放。
+    funds: list[dict] = []
+    if not selected_codes:
+        import fund_stock
+
+        funds, fund_analyses, fund_failures = fund_stock.fund_rows(data_date, **({"loader": fund_loader} if fund_loader else {}))
+        analyses.extend(fund_analyses)
+        failures.extend(fund_failures)
     compatibility = _compatibility_rows(data_date, analyzer)
     analyses.extend(compatibility)
     for row in compatibility:  # 0050 不在普通股名錄裡，但它的未還原事件同樣要進清單
@@ -849,6 +887,8 @@ def build_version(
         "compatibility_codes": ["0050"],
         "etf_count": len(etfs),
         "etf_status_counts": dict(sorted(Counter(row["analysis_status"] for row in etfs).items())),
+        "fund_count": len(funds),
+        "fund_status_counts": dict(sorted(Counter(row["analysis_status"] for row in funds).items())),
         "analysis_schema": SCHEMA,
         "failures": failures,
         "universe_rule": universe["rule_version"] if universe else None,
@@ -871,7 +911,7 @@ def build_version(
     manifest["announcement_skipped"] = announcement_skipped
     manifest["signals"] = {**signals_report(analyses), "margin_check": margin_check_report(data_date),
                            "otc_margin_check": margin_check_report(data_date, "上櫃")}
-    _validate_seed(manifest, securities, analyses, etfs)
+    _validate_seed(manifest, securities, analyses, etfs, funds)
 
     database = partial / "staging.sqlite"
     connection = sqlite3.connect(database)
@@ -879,16 +919,17 @@ def build_version(
         connection.execute("PRAGMA foreign_keys = ON")
         connection.executescript(MIGRATION.read_text(encoding="utf-8"))
         connection.executescript(ETF_MIGRATION.read_text(encoding="utf-8"))
-        install_staging_version(connection, manifest, securities, analyses, outside, etfs=etfs)
+        connection.executescript(FUND_MIGRATION.read_text(encoding="utf-8"))
+        install_staging_version(connection, manifest, securities, analyses, outside, etfs=etfs, funds=funds)
         connection.execute("VACUUM")
     finally:
         connection.close()
 
     seed = partial / "seed.jsonl"
-    _write_seed_jsonl(seed, manifest, securities, analyses, outside, announcement_rows, etfs=etfs)
+    _write_seed_jsonl(seed, manifest, securities, analyses, outside, announcement_rows, etfs=etfs, funds=funds)
     analysis_payload_bytes = sum(len(_compact_json(row["payload"]).encode("utf-8")) for row in analyses)
     largest_payload_bytes = max((len(_compact_json(row["payload"]).encode("utf-8")) for row in analyses), default=0)
-    table_rows = 1 + len(securities) + len(analyses) + len(outside) + len(etfs) + 1
+    table_rows = 1 + len(securities) + len(analyses) + len(outside) + len(etfs) + len(funds) + 1
     manifest["capacity"] = {
         "seed_bytes": seed.stat().st_size,
         "sqlite_bytes": database.stat().st_size,

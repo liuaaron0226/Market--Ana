@@ -939,15 +939,23 @@ def _publish_stock_history(ctx: RunContext) -> dict:
     非必要：個股分析已帶最近 120 根，這裡失敗只是圖暫時不能往前拉，由呼叫端記錄、不擋發布。
     """
     from cloud import build_stock_history as history
+    import fund_stock
 
     seed_file = Path(ctx.outputs["build_seed"]["seed_dir"]) / "seed.jsonl"
-    codes = []
+    codes, funds = [], set()
     with seed_file.open(encoding="utf-8") as lines:
         for line in lines:
             row = json.loads(line)
             if row.get("type") == "stock_analysis":
                 codes.append(row["data"]["code"])
-    statements, skipped = history.history_sql(history.build_history(codes, ctx.data_date), ctx.data_date)
+            elif row.get("type") == "fund_security":
+                funds.add(row["data"]["code"])
+    payloads = history.build_history([code for code in codes if code not in funds], ctx.data_date)
+    # 基金當成一般個股 03 票：基金沒有日 K，長日線是整段淨值（只有日期與收盤）。
+    if funds:
+        payloads.update({code: payload for code, payload in fund_stock.history_payloads(ctx.data_date).items()
+                         if code in funds and code in codes})
+    statements, skipped = history.history_sql(payloads, ctx.data_date)
     out = ctx.work_dir / "stock-history"
     out.mkdir(parents=True, exist_ok=True)
     groups: list[list[str]] = [[]]

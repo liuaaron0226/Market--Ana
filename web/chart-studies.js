@@ -215,8 +215,18 @@
     }
 
     select(kind) {
-      if (!this.kinds.includes(kind)) return;
+      if (!(this.available || this.kinds).includes(kind)) return;
       this.active = kind;
+      this.draw();
+    }
+
+    // 只開放其中幾種指標（基金當成一般個股 03 票：基金只有淨值，沒有量、高低價與法人，只留 MACD、RSI）；null＝全部。
+    // 名單外的指標選單鍵收起、選不到；目前看的指標不在名單時換成名單第一個。
+    setAvailable(kinds) {
+      this.available = Array.isArray(kinds) ? this.kinds.filter(kind => kinds.includes(kind)) : null;
+      const allowed = this.available || this.kinds;
+      for (const button of this.switcher.querySelectorAll('[data-study]')) button.hidden = !allowed.includes(button.dataset.study);
+      if (!allowed.includes(this.active)) this.active = allowed[0] || this.kinds[0];
       this.draw();
     }
 
