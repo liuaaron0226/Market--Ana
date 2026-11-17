@@ -1284,7 +1284,7 @@ def stock(page: Page, base: str, tag: str, mobile: bool) -> None:
     step(f"{tag}：一進去只看重點，其餘收在分類鍵", folded)
 
     def desk() -> None:
-        """C 包第 2 片：個股頁也是看盤桌——背景是桌面；報價那一段、K 線、價位階梯、籌碼名單、和 0050 對照各是一塊第 1 層的板；
+        """C 包第 2 片：個股頁也是看盤桌——背景是桌面；報價那一段、K 線、價位階梯、籌碼名單、比較各是一塊第 1 層的板；
         價位階梯的壓力浮起（鍵）、支撐凹下（槽）、現價是深色的鍵。陰影一律和首頁同一組變數，事實區塊照它自己的原則不加板。"""
         def looks() -> dict:
             return page.evaluate("""() => { const probe = document.createElement('div'); document.body.append(probe);
