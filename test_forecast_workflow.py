@@ -189,9 +189,18 @@ class ReplayWorkflowTests(unittest.TestCase):
     def setUp(self):
         self.source = settings_only(REPLAY)
 
+    def test_weekday_schedule_writes_only_when_its_own_switch_is_on(self):
+        # 本人 2026-11-17「今天開跑」：之後每個交易日白天自動跑一次到 110 天跑完；開關在 repository variable，跑完關掉。
+        self.assertRegex(self.source, r"schedule:\n\s+- cron: \"0 2 \* \* 1-5\"")  # 台北 10:00，避開 07:20 晨間版與晚間版
+        mode = step(self.source, "決定執行模式並檢查機密")
+        self.assertIn("REPLAY_SCHEDULE: ${{ vars.MARKET_ANA_REPLAY_SCHEDULE }}", mode)
+        self.assertIn('[ "$EVENT_NAME" = "schedule" ] && [ "$REPLAY_SCHEDULE" = "on" ]', mode)
+        self.assertIn("inputs.start || '2026-04-01'", mode)
+        self.assertIn("inputs.end || '2026-09-08'", mode)
+        self.assertIn("inputs.max_forecasts || '40'", mode)
+
     def test_only_runs_by_hand_and_by_default_only_counts_the_days(self):
         self.assertIn("workflow_dispatch:", self.source)
-        self.assertNotIn("schedule:", self.source)
         self.assertNotIn("workflow_run:", self.source)
         self.assertRegex(self.source, r"plan_only:\n(?:\s+.*\n)*?\s+default: true")
         plan = step(self.source, "算可重播的日子（不呼叫模型）")

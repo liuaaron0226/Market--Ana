@@ -1,16 +1,22 @@
 # 事前預測的歷史重播（參考）（F 票；本人 2026-11-17「要，重播當參考」，ANALYSIS_PLAN.md〈事前預測加做「歷史重播」〉）。
 # 拿模型知識截止日之後的過去交易日，照正式的方法重寫晚間版與晨間版，成績分開存、分開顯示，不計入正式結論。
 # 邊界：
-# - 只能手動觸發，預設只算「可以重播幾天、要用幾次 Gemini、缺哪些日子」（plan_only），不呼叫模型。
+# - 手動觸發預設只算「可以重播幾天、要用幾次 Gemini、缺哪些日子」（plan_only），不呼叫模型。
+#   平日台北 10:00 的排程只有 MARKET_ANA_REPLAY_SCHEDULE=on 才真的寫（本人 11-17「今天開跑」）。
 # - 真的跑要先回報本人、本人同意後由 owner 從預設分支觸發；每次最多寫 max_forecasts 份，模型一失敗就停
 #   （多半是額度用完），免得把 AI Pro 的每週額度用光害正式的晚間／晨間版漏記。下一次從沒寫的日子接著寫。
 #   同一天各次加起來最多 40 份、只在台北 09:30～15:30 寫（程式擋），避開 07:20 晨間版與收盤後的晚間版。
-# - 不另設 repository variable 開關：只能手動觸發、預設只算天數、真的跑只認預設分支，每一次都是 owner 問過本人才觸發。
+# - 自動排程的開關是 repository variable MARKET_ANA_REPLAY_SCHEDULE（本人 11-17 同意開跑後由 owner 打開，跑完關掉）；
+#   手動觸發照舊只認預設分支。
 # - 自己的鎖，不用三支既有排程共用的 market-state-write；只讀工作集，不上傳工作集，不碰正式帳本。
 #   重播帳本放 R2 的 forecast-replay/ 前綴（只新增）；網站資料庫寫進重播專用的三張表。
 name: forecast-replay
 
 on:
+  # 本人 2026-11-17「今天開跑」：之後每個交易日台北 10:00 自動跑一次（同一天最多 40 份的上限照舊），
+  # 只有 repository variable MARKET_ANA_REPLAY_SCHEDULE=on 才真的寫；110 天跑完就把它關掉。
+  schedule:
+    - cron: "0 2 * * 1-5"
   workflow_dispatch:
     inputs:
       start:
@@ -68,10 +74,12 @@ jobs:
       - name: 決定執行模式並檢查機密
         id: mode
         env:
-          INPUT_START: ${{ inputs.start }}
-          INPUT_END: ${{ inputs.end }}
-          INPUT_MAX: ${{ inputs.max_forecasts }}
+          INPUT_START: ${{ inputs.start || '2026-04-01' }}
+          INPUT_END: ${{ inputs.end || '2026-09-08' }}
+          INPUT_MAX: ${{ inputs.max_forecasts || '40' }}
           INPUT_PLAN_ONLY: ${{ inputs.plan_only }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPLAY_SCHEDULE: ${{ vars.MARKET_ANA_REPLAY_SCHEDULE }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -86,6 +94,8 @@ jobs:
           plan_only=true
           # 真的跑只能用預設分支的程式；其他情況一律只算天數。
           if [ "$INPUT_PLAN_ONLY" = "false" ] && [ "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH" ]; then plan_only=false; fi
+          # 排程：只有開關打開才真的寫（排程本來就跑預設分支）；開關沒開時只算天數。
+          if [ "$EVENT_NAME" = "schedule" ] && [ "$REPLAY_SCHEDULE" = "on" ]; then plan_only=false; fi
           for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY AGY_LOGIN_BUNDLE; do
             if [ -z "${!name}" ]; then echo "::error::缺少 secret $name"; exit 1; fi
           done
