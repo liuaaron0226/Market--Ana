@@ -1,0 +1,2 @@
+# 回補原件以位元組 SHA-256 核對（backfill-manifest.json），不讓 Git 轉換行。
+* -text
