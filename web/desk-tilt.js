@@ -16,7 +16,8 @@
 (function (global) {
   'use strict';
 
-  const ENABLED = true;
+  // owner 11-17 整合時先關：桌機畫線旅程兩項位置差約 5px（傾斜回平的過程中游標對位跑掉），等本人決定要不要微傾再開。
+  const ENABLED = false;
   const RANGE = { rx: 1.6, ry: 2.2 };     // 合計角度（度）
   const EASE_IN = 0.08, EASE_OUT = 0.25;  // 每一格往目標靠近的比例；回平比較快
   const SETTLE = 0.002;                   // 和目標差不到這麼多就停下來

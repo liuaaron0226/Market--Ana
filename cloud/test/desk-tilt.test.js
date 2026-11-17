@@ -26,8 +26,9 @@ test("只在可懸停且精細指標、桌機寬度、沒有開減少動態效�
   assert.equal(tilt.allowed({ fineHover: true, width: 1440, reduceMotion: false, enabled: false }), false, "開關關掉");
 });
 
-test("單一開關：DeskTilt.ENABLED 預設開著", () => {
-  assert.equal(tilt.ENABLED, true);
+// owner 11-17：上線先關（桌機畫線對位差約 5px），等本人決定。打開時改回 true。
+test("單一開關：DeskTilt.ENABLED 目前關著", () => {
+  assert.equal(tilt.ENABLED, false);
 });
 
 test("游標在畫面正中間時不傾斜；四個角落是最大角度（上下 1.6 度、左右 2.2 度）", () => {
