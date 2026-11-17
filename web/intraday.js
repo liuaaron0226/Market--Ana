@@ -285,8 +285,9 @@
     result.levels = priceLevels(bars, values);
     result.conditions = projectedConditions(base.conditions, values, bars);
     result.reference = { ...(result.reference || {}), low20_intraday: { ...(result.reference?.low20_intraday || {}), value: values.low20_intraday } };
+    // closed：收盤後的報價；final：伺服器確認是收盤價（close_pending 時還只是收盤前最後一筆成交）。
     result._intraday = { live: Boolean(live.live), data_time: quote.data_time, environment: live.environment || null,
-      closed: !live.market_open };
+      closed: !live.market_open, final: !live.market_open && !live.close_pending };
     return result;
   }
 
@@ -296,6 +297,9 @@
     return { day: local.toISOString().slice(0, 10), weekday: local.getUTCDay(), minutes: local.getUTCHours() * 60 + local.getUTCMinutes() };
   }
   const shortDay = day => `${day.slice(5, 7)}/${day.slice(8, 10)}`;
+  // 「今日收盤」「11/16 收盤」「今日最後成交」：顯示的是哪一天、哪一種價。
+  const dayPrice = (day, today, word) => (day === today ? `今日${word}` : `${shortDay(day)} ${word}`);
+  const liveUnavailable = payload => payload?.error === 'cloud-live-unavailable' || payload?.environment === 'cloud' && payload?.ok === false;
 
   // 主報價那一行（模式＋時間）與價位階梯的標籤。shown 是畫面上這一份分析（盤後原樣或已投影）。
   function quoteCaption(shown, nowMs = Date.now()) {
@@ -303,32 +307,39 @@
     const stamp = intraday?.data_time ? intraday.data_time.slice(0, 16).replace('T', ' ') : shown?.as_of;
     if (intraday && !intraday.closed) return { mode: '盤中', stamp, ladderLabel: '現價', ladderMeta: '盤中更新' };
     if (intraday) {
-      const day = intraday.data_time?.slice(0, 10) || shown.as_of;
-      return { mode: day === taipeiParts(nowMs).day ? '今日收盤' : `${shortDay(day)} 收盤`, stamp,
-        ladderLabel: '收盤', ladderMeta: '盤後暫用即時報價' };
+      const word = intraday.final ? '收盤' : '最後成交';
+      return { mode: dayPrice(intraday.data_time?.slice(0, 10) || shown.as_of, taipeiParts(nowMs).day, word), stamp,
+        ladderLabel: word, ladderMeta: '盤後暫用即時報價' };
     }
     return { mode: '資料日', stamp: shown?.as_of, ladderLabel: '收盤', ladderMeta: '資料日收盤' };
   }
 
   // 價格下面那一行狀態字。收盤之後一定寫出顯示的是哪一天的收盤，不再只寫「收盤資料」。
   function liveStatusText(payload, shown, nowMs = Date.now()) {
-    if (payload?.error === 'cloud-live-unavailable' || payload?.environment === 'cloud' && payload?.ok === false) return '雲端無法取得即時資料';
+    if (liveUnavailable(payload)) return '雲端無法取得即時資料';
     if (payload?.live && payload.quote?.data_time) return `${payload.quote.data_time.slice(11, 19)} 更新`;
     if (payload?.market_open) return '即時資料逾 30 秒，顯示最近一筆';
     const now = taipeiParts(nowMs);
-    const day = shown?._intraday?.data_time?.slice(0, 10) || shown?.as_of;
-    const which = !day ? '收盤資料' : day === now.day ? '今日收盤' : ` ${shortDay(day)} 收盤`;
+    const intraday = shown?._intraday;
+    const day = intraday?.data_time?.slice(0, 10) || shown?.as_of;
+    const which = !day ? '收盤資料' : dayPrice(day, now.day, intraday && !intraday.final ? '最後成交' : '收盤');
+    const weekday = now.weekday >= 1 && now.weekday <= 5;
+    // 平日收盤後，伺服器抓到的最後報價還是前一個交易日：今天沒開市（國定假日）。
+    const holiday = weekday && now.minutes >= 13 * 60 + 30 && !payload?.close_pending
+      && payload?.quote?.data_date && payload.quote.data_date < now.day;
     const prefix = payload?.market_phase === 'unknown' ? '尚未取得今日報價'
-      : now.weekday === 0 || now.weekday === 6 ? '休市'
-        : now.minutes < 9 * 60 ? '尚未開盤' : '已收盤';
-    const note = shown?._intraday?.closed ? (day === now.day ? '（日資料稍後更新）' : '（暫用即時報價）') : '';
-    return `${prefix}，顯示${which}${note}`;
+      : !weekday ? '休市' : holiday ? '今日休市' : now.minutes < 9 * 60 ? '尚未開盤' : '已收盤';
+    const note = !intraday?.closed ? '' : !intraday.final ? '（收盤價更新中）'
+      : day === now.day ? '（日資料稍後更新）' : '（暫用即時報價）';
+    return `${prefix}，顯示${which.startsWith('今日') ? '' : ' '}${which}${note}`;
   }
 
   function nextPollDelay(payload) {
     const retry = Number(payload?.retry_after_seconds);
     if (!payload?.ok && Number.isFinite(retry) && retry > 0) return Math.max(5_000, retry * 1000);
     if (payload?.market_phase === 'unknown') return 15_000;
+    // 收盤後還沒拿到收盤價（撮合結果未出或上游失敗）：照退避再問，拿到就停。
+    if (payload?.close_pending) return Math.max(15_000, Number.isFinite(retry) ? retry * 1000 : 0);
     if (payload?.error === 'cloud-live-unavailable' || payload?.market_open === false) return null;
     if (!payload?.ok) return 15_000;
     const quote = Number(payload.delay_seconds?.quote);
@@ -377,5 +388,5 @@
     return candles;
   }
 
-  window.Intraday = { createPoller, nextPollDelay, projectAnalysis, quoteCaption, liveStatusText, secondCandles, _test: { indicators, priceLevels, projectedConditions } };
+  window.Intraday = { createPoller, nextPollDelay, projectAnalysis, quoteCaption, liveStatusText, liveUnavailable, secondCandles, _test: { indicators, priceLevels, projectedConditions } };
 })();

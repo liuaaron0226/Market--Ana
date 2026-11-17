@@ -254,11 +254,12 @@
   function updateLiveStatus(payload) {
     const badge = $('liveBadge');
     const status = $('liveStatus');
-    const cloudUnavailable = payload?.error === 'cloud-live-unavailable' || payload?.environment === 'cloud' && payload?.ok === false;
+    const cloudUnavailable = window.Intraday.liveUnavailable(payload);
     badge.hidden = !payload?.live;
     status.dataset.state = cloudUnavailable ? 'error' : payload?.live ? 'live' : 'closed';
     // 收盤後一定寫出顯示的是哪一天的收盤（intraday.js liveStatusText）。
-    status.textContent = window.Intraday.liveStatusText(payload, lastResult);
+    // 換股票載入中（baseResult 已清空）不拿上一檔的日期來寫。
+    status.textContent = window.Intraday.liveStatusText(payload, baseResult && lastResult?.code === baseResult.code ? lastResult : baseResult);
   }
 
   function applyLive(payload) {

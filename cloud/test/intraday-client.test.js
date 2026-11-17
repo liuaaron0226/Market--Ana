@@ -126,6 +126,33 @@ test("週末、盤前沒有今天的報價：仍顯示上一個交易日，並�
     `尚未取得今日報價，顯示 ${shortDay(base.as_of)} 收盤`);
 });
 
+// 雙軸審查：13:30 剛過還沒拿到收盤價（或上游失敗）時，手上的是收盤前最後一筆，不能寫成「今日收盤」。
+test("收盤價還沒確認（close_pending）：寫「今日最後成交」並在 15 秒後再問", () => {
+  const I = loadIntraday();
+  const pending = structuredClone(closedLive);
+  pending.close_pending = true;
+  pending.quote.data_time = `${TODAY}T13:24:58+08:00`;
+  const shown = I.projectAnalysis(base, pending);
+  assert.equal(shown.quote.close, 2165);
+  const now = taipeiAt(TODAY, "13:30:05");
+  assert.equal(I.quoteCaption(shown, now).mode, "今日最後成交");
+  assert.equal(I.quoteCaption(shown, now).ladderLabel, "最後成交");
+  assert.equal(I.liveStatusText(pending, shown, now), "已收盤，顯示今日最後成交（收盤價更新中）");
+  assert.equal(I.nextPollDelay(pending), 15000);
+  assert.equal(I.nextPollDelay({ ...pending, retry_after_seconds: 40 }), 40000);
+  assert.equal(I.nextPollDelay(closedLive), null, "拿到收盤價就停");
+});
+
+test("平日國定假日下午：伺服器的最後報價停在前一個交易日，寫「今日休市」", () => {
+  const I = loadIntraday();
+  const holiday = structuredClone(closedLive);
+  holiday.quote.data_date = base.as_of;
+  holiday.quote.data_time = `${base.as_of}T13:30:00+08:00`;
+  let day = dayAfter(base.as_of);
+  while ([0, 6].includes(new Date(`${day}T12:00:00Z`).getUTCDay())) day = dayAfter(day);
+  assert.equal(I.liveStatusText(holiday, base, taipeiAt(day, "14:00:00")), `今日休市，顯示 ${shortDay(base.as_of)} 收盤`);
+});
+
 test("盤中與雲端失敗的狀態字不變", () => {
   const I = loadIntraday();
   const shown = I.projectAnalysis(base, live);
