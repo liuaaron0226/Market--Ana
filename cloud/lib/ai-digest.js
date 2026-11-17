@@ -1,4 +1,4 @@
-const CODE_RE = /^[0-9A-Z]{4,6}$/;
+import { CODE_RE } from "./codes.js";   // 全站代號規則（自選裡可能有基金，基金當成一般個股 01 票）
 
 const HEADERS = {
   "content-type": "application/json; charset=utf-8",

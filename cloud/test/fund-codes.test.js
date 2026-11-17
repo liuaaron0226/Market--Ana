@@ -82,7 +82,8 @@ const notFormatError = async (r, label) => {
 
 test("個股各路由收 8 碼代碼：名錄還沒有它時回查無，不是格式錯誤", async () => {
   for (const path of ["/api/stocks/BLKTENAU/analysis", "/api/stocks/BLKTENAU/history", "/api/stocks/BLKTENAU/announcements",
-    "/api/stocks/BLKTENAU/live", "/api/stocks/BLKTENAU/ticks", "/api/stocks/BLKTENAU/vs-0050", "/api/drawings/BLKTENAU"]) {
+    "/api/stocks/BLKTENAU/live", "/api/stocks/BLKTENAU/ticks", "/api/stocks/BLKTENAU/vs-0050", "/api/drawings/BLKTENAU",
+    "/api/screens/membership?code=BLKTENAU"]) {
     await notFormatError(await call(path), path);
   }
   const compare = await call("/api/compare-0050?codes=2330,BLKTENAU");

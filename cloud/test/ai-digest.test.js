@@ -62,6 +62,12 @@ test("朋友那份不混進站主那份：朋友的解讀表有更新的日期�
   assert.equal(body.market.content.stance, "觀望");
 });
 
+test("自選裡有基金（8 碼代碼，基金當成一般個股 01 票）時，整批逐檔判斷照樣回，不因代號長度拒絕", async () => {
+  const response = await request(OWNER, "?scope=portfolio&code=2330&code=BLKTENAU");
+  assert.equal(response.status, 200);
+  assert.deepEqual((await response.json()).stocks.items.map(item => item.code), ["2330"]);
+});
+
 test("只有 OWNER_EMAIL 可取得自選股與庫存逐檔判斷", async () => {
   const response = await request(OWNER, "?scope=portfolio&code=2330");
   assert.equal(response.status, 200);

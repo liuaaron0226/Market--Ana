@@ -7,7 +7,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-CODE_RE = re.compile(r"^[0-9A-Z]{4,6}$")
+from stock_codes import CODE_RE  # 全站代號規則（自選裡可能有基金，基金當成一般個股 01 票）
 
 
 class LocalAiDigestError(Exception):

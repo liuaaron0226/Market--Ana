@@ -8,8 +8,8 @@ from __future__ import annotations
 import re
 
 CODE_PATTERN = r"[0-9A-Z]{4,12}"
-CODE_RE = re.compile(CODE_PATTERN)
-_EXCHANGE_RE = re.compile(r"[0-9A-Z]{4,6}")
+CODE_RE = re.compile(rf"^{CODE_PATTERN}$")  # 有錨點：用 match、search、fullmatch 結果都一樣
+_EXCHANGE_RE = re.compile(r"^[0-9A-Z]{4,6}$")
 
 
 def is_code(text: str) -> bool:

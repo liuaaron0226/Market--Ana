@@ -1644,7 +1644,7 @@ class Handler(SimpleHTTPRequestHandler):
         import fund_compare
 
         code = path[len("/api/funds/"):-len("/vs-0050")]
-        if not re.fullmatch(r"[0-9A-Z]{4,12}", code):
+        if not stock_codes.is_code(code):
             self._send_json({"error": "bad-request", "message": "基金代碼格式不正確"}, 400)
             return
         try:
@@ -1772,6 +1772,10 @@ class Handler(SimpleHTTPRequestHandler):
         live_match = re.fullmatch(rf"/api/stocks/({stock_codes.CODE_PATTERN})/live", path)
         if live_match:
             code = live_match.group(1)
+            if not stock_codes.is_exchange_code(code):
+                # 和雲端一樣：基金這類長代碼沒有即時行情，直接查無，不拿去問證交所
+                self._send_json({"error": "not-found", "message": "這檔沒有即時行情", "live": False}, 404)
+                return
             markets = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("market", ["tse"])
             if len(markets) != 1 or markets[0] not in {"tse", "otc"}:
                 self._send_json({"error": "bad-request", "message": "市場格式不正確", "live": False}, 400)
