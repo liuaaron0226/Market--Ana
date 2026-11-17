@@ -24,12 +24,12 @@ class TaskModelTests(unittest.TestCase):
         self.assertEqual(gm.ARGON, "gemini-4-argon")
         self.assertEqual(gm.FLASH, "gemini-3.8-flash")
 
-    def test_complex_analysis_goes_to_argon(self):
+    def test_market_forecasts_go_to_argon(self):
         self.assertEqual(gm.FORECAST, gm.ARGON)  # 晚間、晨間、歷史重播
-        self.assertEqual(gm.WATCH_NOMINATE, gm.ARGON)
-        self.assertEqual(gm.PLAIN_DAILY, gm.ARGON)
 
-    def test_daily_judgement_and_friends_stay_on_flash(self):
+    def test_watch_and_friends_stay_on_flash(self):
+        # 本人 11-17 更正：「籌碼與資金白話分析、自選股提名同類股 可以用flash，其他不變」
+        self.assertEqual(gm.WATCH_NOMINATE, gm.FLASH)
         self.assertEqual(gm.WATCH_JUDGE, gm.FLASH)
         self.assertEqual(gm.FRIEND_DIGEST, gm.FLASH)
 

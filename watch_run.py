@@ -28,7 +28,7 @@ from level_signals import trading_day_status
 from ledger_core import TAIPEI, append, build_prompt, call_model, default_now, read_record, seal, sha
 
 SCHEMA = "watch-run/v1"
-# 本人 2026-11-17：每日判斷量大（每次最多 40 次）維持 Flash，提名同類股交給 Argon（名稱只在 gemini_models 改）。
+# 本人 2026-11-17：每日判斷與提名同類股都用 Flash（名稱只在 gemini_models 改；兩者分開設定）。
 JUDGE_MODEL = gemini_models.WATCH_JUDGE
 NOMINATE_MODEL = gemini_models.WATCH_NOMINATE
 ROOT = Path(__file__).resolve().parent

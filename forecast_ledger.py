@@ -423,9 +423,9 @@ def _validate(structured: Any, model_input: Mapping[str, Any]) -> tuple[dict[str
 
 # ---- 寫一份預測 ----
 
-def _stem(base_date: str, edition: str, method_version: str, input_version: str) -> str:
+def _stem(base_date: str, edition: str, method_version: str, version: str) -> str:
     date.fromisoformat(base_date)
-    return f"{base_date}__{edition}__m{method_version}__{input_version}"
+    return f"{base_date}__{edition}__m{method_version}__{version}"
 
 
 def _forecast_path(root: Path, base_date: str, edition: str, method_version: str, version: str) -> Path:
@@ -725,8 +725,8 @@ def summarize(root: Path | str, index_daily: Sequence[Mapping[str, Any]], *,
     series: dict[tuple[str, str, str, str], dict[str, Any]] = {}
     for record in ledger["forecasts"]:
         key = (record["run_mode"], record["edition"], record["method_version"], record["input_version"])
-        bucket = series.setdefault(key, {"misses": [], "forecasts": [], "models": set()})
-        bucket["models"].add(str(record.get("model")))
+        # 輸入版本含模型，所以同一組只有一個模型
+        bucket = series.setdefault(key, {"misses": [], "forecasts": [], "model": record.get("model")})
         if record["kind"] == "miss":
             bucket["misses"].append(record)
         else:
@@ -762,8 +762,8 @@ def summarize(root: Path | str, index_daily: Sequence[Mapping[str, Any]], *,
             groups.append({
                 "run_mode": run_mode, "edition": edition, "horizon": horizon,
                 "method_version": method_version, "input_version": version,
-                # 輸入版本含模型，同一組只會有一個；網頁靠它標出舊模型的系列（例如「Flash 舊版（參考）」）。
-                "model": "／".join(sorted(bucket["models"])),
+                # 網頁靠它標出舊模型的系列（例如「Flash 舊版（參考）」）。
+                "model": bucket["model"],
                 **_rates(reconciled), **open_cells, "misses": len(bucket["misses"]),
                 "pullback": _rates(pullback),
                 "verdict": verdict, "judgement": judgement,

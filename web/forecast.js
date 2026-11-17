@@ -336,16 +336,19 @@
     for (const item of items) {
       const outcome = item.reconciliations && item.reconciliations[state.horizon];
       const mark = !outcome ? '' : outcome.actual_zone === item.cells[state.horizon].zone ? ' ✓' : ' ✗';
-      list.append(el('button', { type: 'button', 'aria-pressed': String(item === picked), 'data-pick': item.forecast_id }, `${mmdd(item.base_date)}${mark}`));
+      // 換模型那天同一天可能有兩份：舊模型那份在日期後面寫模型名
+      const old = legacyLabel(item.model) ? ` ${modelName(item.model)}` : '';
+      list.append(el('button', { type: 'button', 'aria-pressed': String(item === picked), 'data-pick': item.forecast_id }, `${mmdd(item.base_date)}${old}${mark}`));
     }
     // 一次載六十天；要回到更早的任一份就再往前載一段。
     list.append(el('button', { type: 'button', class: 'forecast-more', 'data-more': '1' }, '更早'));
     panel.append(list, revisitChart(picked));
     const cell = picked.cells[state.horizon];
     const outcome = picked.reconciliations && picked.reconciliations[state.horizon];
+    const legacy = legacyLabel(picked.model);
     panel.append(facts([
       ['預測', `${ZONE[cell.zone]}（${mmdd(picked.base_date)} ${EDITION[picked.edition]}）`],
-      ...(legacyLabel(picked.model) ? [['版本', `${legacyLabel(picked.model)}（參考）`]] : []),
+      ...(legacy ? [['版本', `${legacy}（參考）`]] : []),
       ['實際', outcome ? `${mmdd(outcome.expiry_date)} 收 ${fmt(outcome.expiry_close)}，${ZONE[outcome.actual_zone]}` : '還沒到期'],
       ['結果', outcome ? (outcome.actual_zone === cell.zone ? '猜中' : '沒中') : '—', outcome ? (outcome.actual_zone === cell.zone ? 'is-up' : 'is-down') : ''],
     ]));
