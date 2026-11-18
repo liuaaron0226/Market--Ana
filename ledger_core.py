@@ -72,9 +72,11 @@ _WINDOWS_PATH_LIMIT = 240
 
 
 def long_path(path: Path) -> Path:
-    if os.name != "nt" or len(str(path)) < _WINDOWS_PATH_LIMIT and len(str(Path(path).absolute())) < _WINDOWS_PATH_LIMIT:
+    if os.name != "nt":
         return Path(path)
-    text = str(Path(path).absolute())
+    text = os.path.abspath(str(path))   # 收掉 ..（延伸長度寫法不會幫忙整理路徑）
+    if len(text) < _WINDOWS_PATH_LIMIT:
+        return Path(path)
     return Path(text if text.startswith("\\\\?\\") else "\\\\?\\" + text)
 
 
@@ -91,7 +93,7 @@ def append(path: Path, record: Mapping[str, Any]) -> str:
     """只新增：檔案不存在才寫；已存在時同內容回 ``unchanged``、不同內容回 ``conflict``，都不覆寫。"""
     if exists(path):
         return _against_existing(path, record)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    long_path(path.parent).mkdir(parents=True, exist_ok=True)
     partial = long_path(path.with_name(f".{path.name}.{os.getpid()}.partial"))
     partial.write_bytes(json.dumps(record, ensure_ascii=False, sort_keys=True, indent=2).encode("utf-8") + b"\n")
     try:

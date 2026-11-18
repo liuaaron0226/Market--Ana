@@ -203,6 +203,10 @@ class EveningTests(WatchRunTestCase):
         self.assertEqual((item["trigger_line"]["id"], item["wrong_line"]["id"]),
                          ("swing_high_20260921", "swing_low_20260925"))
         self.assertEqual(item["reason"], "量縮整理等待表態")
+        # J 票：重播舊日期沒有富果盤中、新聞與同類股當時的樣子，三層一律缺（不用今天的資料冒充）
+        self.assertEqual(item["missing_layers"][:1], ["intraday"])
+        self.assertTrue({"intraday", "headlines", "peers"} <= set(item["missing_layers"]))
+        self.assertIn("重播", log["licensed_skipped"])
 
     def test_a_stock_whose_data_cannot_be_read_waits_without_stopping_the_others(self):
         # 2330 的行情讀不到：期限前不寫（之後可以重跑），2317 照寫。
@@ -550,7 +554,8 @@ class LicensedSourceTests(unittest.TestCase):
         self.asked = []
         source = wr.LocalSource(query=self.query, owner_email="owner@example.com")
         # 晚間版 2026-11-06 20:00（台北）＝ 12:00Z
-        found = source.licensed(["2330"], before="2026-11-06", cutoff="2026-11-06T20:00:00+08:00")["2330"]
+        found = source.licensed(["2330"], base_date="2026-11-06", before="2026-11-06",
+                                cutoff="2026-11-06T20:00:00+08:00")["2330"]
         self.assertEqual([item["title"] for item in found["news_headlines"]], ["同業擴產"])
         # 美國 11-05 收 110（11-06 那一筆在基準日當天、而且 22:00Z 才抓到，看不到）；1 日 110 ÷ 100 − 1 ＝ 10%
         self.assertEqual(found["peers"]["peers"][0]["close"], 110.0)
@@ -558,13 +563,33 @@ class LicensedSourceTests(unittest.TestCase):
         self.assertTrue(all("DELETE" not in sql and "INSERT" not in sql for sql in self.asked))   # 只查不寫
 
     def test_without_a_connection_both_layers_are_missing(self):
-        found = wr.LocalSource().licensed(["2330"], before="2026-11-06", cutoff="2026-11-06T20:00:00+08:00")
-        self.assertEqual(found, {"2330": {}})
+        found = wr.LocalSource().licensed(["2330"], base_date="2026-11-06", before="2026-11-06",
+                                          cutoff="2026-11-06T20:00:00+08:00")
+        self.assertEqual(found, {"2330": {"intraday": None}})   # 沒有富果金鑰也沒有連線：三層都缺
 
     def test_without_a_fugle_key_the_intraday_layer_is_missing(self):
         source = wr.LocalSource()
         self.assertIsNone(source._intraday("2330", "2026-11-06"))
         self.assertEqual(source.fugle_errors["2330"], {"fugle": "no_api_key"})
+        self.assertEqual(source.fugle_status["2330"]["status"], "missing")
+
+    def test_the_fugle_status_says_which_day_and_which_parts(self):
+        import test_licensed_inputs as tl
+
+        class Fake:
+            def candles(self, code):
+                return tl.candles(tl.ROWS)
+
+            def quote(self, code):
+                return tl.quote()
+
+            def hourly(self, code, start, end):
+                raise TimeoutError("timed out")
+
+        source = wr.LocalSource(fugle=Fake())
+        self.assertEqual(source._intraday("2330", tl.BASE)["data_date"], tl.BASE)
+        self.assertEqual(source.fugle_status["2330"], {"status": "ok", "data_date": tl.BASE,
+                                                       "missing": ["hourly_history"]})
 
     def test_the_schedule_opens_the_three_layers(self):
         for layer in ("intraday", "headlines", "peers"):

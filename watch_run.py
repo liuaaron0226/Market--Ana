@@ -76,6 +76,8 @@ class LocalSource:
         self.root = Path(root)
         self.fugle, self.query, self.owner_email = fugle, query, owner_email
         self.fugle_errors: dict[str, dict[str, str]] = {}
+        # 執行紀錄（乾跑時上傳成產物）：每一檔富果那一層有沒有值、是哪一天、缺哪幾部分。
+        self.fugle_status: dict[str, dict[str, Any]] = {}
         self.licensed_errors: dict[str, str] = {}
         self._industries: dict[str, tuple[str, str]] | None = None
         self._capital: dict[str, list[dict[str, Any]]] | None = None
@@ -166,13 +168,16 @@ class LocalSource:
         layer, errors = licensed_inputs.fetch_stock_intraday(self.fugle, code, base_date)
         if errors:
             self.fugle_errors[code] = errors
+        self.fugle_status[code] = ({"status": "ok", "data_date": layer["data_date"], "missing": layer["missing"]}
+                                   if layer.get("status") == "ok" else {"status": "missing", "reason": layer.get("reason")})
         return layer if layer.get("status") == "ok" else None
 
-    def licensed(self, codes: Sequence[str], *, before: str, cutoff: str) -> dict[str, dict[str, Any]]:
-        """新聞標題與國外同類股（J 票），從網站資料庫唯讀查。只用 cutoff（寫的那一刻）以前已經抓到的；
-        國外收盤只用 before（晚間版是基準日、晨間版是開盤日）以前的。查不到就是空的（那兩層缺）。"""
+    def licensed(self, codes: Sequence[str], *, base_date: str, before: str, cutoff: str) -> dict[str, dict[str, Any]]:
+        """J 票三層：富果盤中（只打關注中的股票）、新聞標題與國外同類股（網站資料庫唯讀查）。只用 cutoff（寫的那一刻）
+        以前已經抓到的；國外收盤只用 before（晚間版是基準日、晨間版是開盤日）以前的。抓不到的那一層是空的（缺）。"""
         import licensed_inputs
-        out: dict[str, dict[str, Any]] = {code: {} for code in codes}
+        self.fugle_errors, self.fugle_status, self.licensed_errors = {}, {}, {}
+        out: dict[str, dict[str, Any]] = {code: {"intraday": self._intraday(code, base_date)} for code in codes}
         safe = [code for code in codes if re.fullmatch(r"[0-9A-Za-z]{1,10}", code)]
         if self.query is None or not safe:
             return out
@@ -230,7 +235,6 @@ class LocalSource:
                           ("valuation", lambda: watch_inputs.valuation_input(self.root, code, base_date)),
                           ("lending_eps", lambda: self._lending_eps(code, base_date)),
                           ("signals", lambda: self._signals(code, base_date)),
-                          ("intraday", lambda: self._intraday(code, base_date)),
                           ("environment", lambda: watch_inputs.environment_input(self.root, base_date,
                                                                                  edition=edition))):
             try:
@@ -414,7 +418,7 @@ def run_evening(
         target, "evening", watchlist, index_daily, base_date, session_date=None, forecast_ledger=forecast_ledger,
         method_path=method_path, model_bin=model_bin, source=source, model=model, clock=clock, dry_run=dry_run,
         sql_output=None if dry_run else sql_output, log_output=log_output, call_budget=call_budget,
-        timeout_seconds=timeout_seconds))
+        timeout_seconds=timeout_seconds, replay=bool(as_of)))
 
 
 def run_morning(
@@ -463,7 +467,7 @@ def run_morning(
         target, "morning", watchlist, index_daily, base_date, session_date=session_date,
         forecast_ledger=forecast_ledger, method_path=method_path, model_bin=model_bin, source=source, model=model,
         clock=clock, dry_run=dry_run, sql_output=None if dry_run else sql_output, log_output=log_output,
-        call_budget=call_budget, timeout_seconds=timeout_seconds))
+        call_budget=call_budget, timeout_seconds=timeout_seconds, replay=replay))
 
 
 def _in_ledger(ledger: Path | str, dry_run: bool, work: Callable[[Path], dict[str, Any]]) -> dict[str, Any]:
@@ -492,7 +496,7 @@ def _run(ledger: Path, edition: str, watchlist: Sequence[Mapping[str, Any]], ind
          base_date: str, *, session_date: str | None, forecast_ledger: Path | str | None, method_path: Path | str,
          model_bin: Path | str, source: Source, model: str, clock: Callable[[], datetime], dry_run: bool,
          sql_output: Path | str | None, log_output: Path | str | None, call_budget: int,
-         timeout_seconds: float) -> dict[str, Any]:
+         timeout_seconds: float, replay: bool = False) -> dict[str, Any]:
     method_text = Path(method_path).read_text(encoding="utf-8")
     codes = [str(item["code"]) for item in watchlist]
     market = market_layer(forecast_ledger, base_date, edition)
@@ -506,12 +510,19 @@ def _run(ledger: Path, edition: str, watchlist: Sequence[Mapping[str, Any]], ind
     loaded, load_errors = _load(source, [*codes, *ledger_codes], base_date, edition)
     # J 票：新聞標題與國外同類股（只用寫的那一刻以前已經有的；國外收盤只用開盤日——晚間版是基準日——以前的）。
     licensed = getattr(source, "licensed", None)
-    if licensed is not None:
-        extra = licensed(codes, before=session_date or base_date, cutoff=clock().astimezone(TAIPEI).isoformat())
+    if replay:
+        # 重播（乾跑的舊日期）：沒有富果盤中、新聞與同類股當時的樣子，一律缺，不用今天的資料冒充。
+        for code in codes:
+            loaded.setdefault(code, {}).update(intraday=None, news_headlines=None, peers=None)
+        log["licensed_skipped"] = "重播：舊日期沒有富果盤中、新聞與國外同類股的歷史，三層一律缺"
+    elif licensed is not None:
+        extra = licensed(codes, base_date=base_date, before=session_date or base_date,
+                         cutoff=clock().astimezone(TAIPEI).isoformat())
         for code in codes:
             loaded.setdefault(code, {}).update(extra.get(code) or {})
         log["licensed_errors"] = dict(getattr(source, "licensed_errors", {}) or {})
         log["fugle_errors"] = dict(getattr(source, "fugle_errors", {}) or {})
+        log["fugle_status"] = dict(getattr(source, "fugle_status", {}) or {})
     if edition == "evening":
         # 先對帳再寫：今天到期的格子先對完；今天這份最早的到期日在明天，寫完不必再對。
         log["reconciliation"] = {key: len(value) for key, value in wl.reconcile(ledger, index_daily, loaded).items()}

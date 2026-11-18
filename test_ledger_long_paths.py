@@ -23,6 +23,21 @@ class LongPathTests(unittest.TestCase):
                              [1])
             ledger_core.long_path(path).unlink()   # 暫存資料夾清得掉
 
+    def test_a_relative_path_with_dots_still_works(self):
+        import os
+        with tempfile.TemporaryDirectory() as tmp:
+            inner = Path(tmp) / "a"
+            inner.mkdir()
+            here = os.getcwd()
+            os.chdir(inner)
+            try:
+                path = Path("..") / "ledger" / ("y" * 230 + ".json")
+                self.assertEqual(ledger_core.append(path, ledger_core.seal({"kind": "test"})), "written")
+                self.assertTrue(ledger_core.exists(path))
+                ledger_core.long_path(path).unlink()
+            finally:
+                os.chdir(here)
+
     def test_short_paths_are_unchanged(self):
         self.assertEqual(ledger_core.long_path(Path("a.json")), Path("a.json"))
 

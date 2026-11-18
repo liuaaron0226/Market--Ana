@@ -16,6 +16,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
@@ -38,6 +40,9 @@ FUGLE_ORIGIN = "https://api.fugle.tw"
 FUGLE_INTRADAY = "/marketdata/v1.0/stock/intraday/"
 FUGLE_HISTORICAL = "/marketdata/v1.0/stock/historical/candles/"
 FUGLE_TIMEOUT_SECONDS = 20
+# 富果的每分鐘額度可能和網站共用（11-19 owner 轉述本人新開的 github-actions 金鑰）：每次呼叫之間至少隔這麼久，
+# 遇到 429 這一輪就不再打、也不重試（之後的都記缺）。
+FUGLE_MIN_INTERVAL_SECONDS = 2.0
 INDEX_SYMBOL = "IX0001"
 
 NOTES = {
@@ -53,7 +58,8 @@ NOTES = {
     "headlines": "新聞標題與摘要（Yahoo股市、中央社），只到寫的那一刻以前已經發布、也已經抓到的；只有標題、摘要與發布時間，"
                  "沒有全文。新聞是當時的消息與說法，標題常比內容誇張；不得把標題當成事實或價格會怎麼走的依據，"
                  "不能單獨決定方向，也不得寫出摘要裡沒有的內容。",
-    "peers": "站主確認過的國外同類股，最後一個在基準日（晨間版是開盤日）之前的收盤，與 1 日、5 日漲跌。"
+    "peers": "站主確認過的國外同類股，最後一個在基準日（晨間版是開盤日）之前的收盤，與 1 日、5 日漲跌（date 是收盤日；"
+             "國外行情在每日更新時才存，所以晨間版看到的可能是前兩晚的收盤）。"
              "國外收盤時間和台股不同，同類股漲跌只是同產業的對照，不代表這一檔隔天會跟著漲跌，不能單獨決定狀態。",
 }
 PARAMETERS: dict[str, Any] = {
@@ -93,7 +99,7 @@ def minute_rows(payload: Mapping[str, Any] | None, base_date: str) -> list[dict[
     for row in payload["data"]:
         stamp = str(row.get("date") or "")
         prices = [_positive(row.get(key)) for key in ("open", "high", "low", "close")]
-        if stamp[:10] != base_date or None in prices:
+        if stamp[:10] != base_date or len(stamp) < 16 or None in prices:
             continue
         rows.append({"t": stamp, "time": stamp[11:16], "open": prices[0], "high": prices[1], "low": prices[2],
                      "close": prices[3], "volume": _number(row.get("volume")), "average": _positive(row.get("average"))})
@@ -207,18 +213,40 @@ def index_intraday_layer(candles: Mapping[str, Any] | None, base_date: str) -> d
             "note": NOTES["index_intraday"]}
 
 
+class FugleExhausted(RuntimeError):
+    """這一輪已經遇過 429（額度用完）：之後的呼叫一律不打。"""
+
+
 class Fugle:
-    """富果行情（金鑰 FUGLE_API_KEY）。每一次各自成敗：失敗丟例外，呼叫端把那一部分記成缺。"""
+    """富果行情（金鑰 FUGLE_API_KEY）。每一次各自成敗：失敗丟例外，呼叫端把那一部分記成缺；不重試。"""
 
     def __init__(self, api_key: str, *, opener: Callable[..., Any] = urllib.request.urlopen,
-                 timeout: float = FUGLE_TIMEOUT_SECONDS):
+                 timeout: float = FUGLE_TIMEOUT_SECONDS, min_interval: float = FUGLE_MIN_INTERVAL_SECONDS,
+                 clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep):
         self.api_key, self.opener, self.timeout = api_key, opener, timeout
+        self.min_interval, self.clock, self.sleep = min_interval, clock, sleep
+        self.last_call: float | None = None
+        self.exhausted = False
+        self.calls = 0
 
     def _get(self, path: str, params: Mapping[str, str] | None = None) -> dict[str, Any]:
+        if self.exhausted:
+            raise FugleExhausted("這一輪已經遇過 429，不再打")
+        if self.last_call is not None:
+            wait = self.min_interval - (self.clock() - self.last_call)
+            if wait > 0:
+                self.sleep(wait)
         url = FUGLE_ORIGIN + path + ("?" + urllib.parse.urlencode(params) if params else "")
         request = urllib.request.Request(url, headers={"X-API-KEY": self.api_key, "Accept": "application/json"})
-        with self.opener(request, timeout=self.timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
+        self.last_call = self.clock()
+        self.calls += 1
+        try:
+            with self.opener(request, timeout=self.timeout) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            if error.code == 429:
+                self.exhausted = True
+            raise
 
     def candles(self, symbol: str) -> dict[str, Any]:
         return self._get(FUGLE_INTRADAY + "candles/" + urllib.parse.quote(symbol), {"timeframe": "1"})
@@ -250,17 +278,26 @@ def fetch_stock_intraday(fugle: Fugle | None, code: str, base_date: str) -> tupl
     errors: dict[str, str] = {}
     start = (datetime.fromisoformat(base_date) - timedelta(days=14)).date().isoformat()
     previous = (datetime.fromisoformat(base_date) - timedelta(days=1)).date().isoformat()
-    layer = stock_intraday_layer(_attempt(lambda: fugle.candles(code), errors, "candles"),
-                                 _attempt(lambda: fugle.quote(code), errors, "quote"),
-                                 _attempt(lambda: fugle.hourly(code, start, previous), errors, "hourly"), base_date)
-    return layer, errors
+    candles = _attempt(lambda: fugle.candles(code), errors, "candles")
+    quote = _attempt(lambda: fugle.quote(code), errors, "quote")
+    history = _attempt(lambda: fugle.hourly(code, start, previous), errors, "hourly")
+    try:
+        return stock_intraday_layer(candles, quote, history, base_date), errors
+    except Exception as error:  # noqa: BLE001 — 回應格式不是預期：整層缺，不擋判斷
+        return {"status": "missing", "reason": f"富果回應格式不對（{type(error).__name__}）"}, {**errors,
+                                                                                         "parse": type(error).__name__}
 
 
 def fetch_index_intraday(fugle: Fugle | None, base_date: str) -> tuple[dict[str, Any], dict[str, str]]:
     if fugle is None:
         return {"status": "missing", "reason": "沒有富果金鑰"}, {"fugle": "no_api_key"}
     errors: dict[str, str] = {}
-    return index_intraday_layer(_attempt(lambda: fugle.candles(INDEX_SYMBOL), errors, "candles"), base_date), errors
+    candles = _attempt(lambda: fugle.candles(INDEX_SYMBOL), errors, "candles")
+    try:
+        return index_intraday_layer(candles, base_date), errors
+    except Exception as error:  # noqa: BLE001 — 回應格式不是預期：整層缺，不擋預測
+        return {"status": "missing", "reason": f"富果回應格式不對（{type(error).__name__}）"}, {**errors,
+                                                                                         "parse": type(error).__name__}
 
 
 # ---- 新聞 ----
@@ -327,5 +364,7 @@ def peers_layer(peers: Sequence[Mapping[str, Any]], quotes: Sequence[Mapping[str
         out.append({"symbol": peer["symbol"], "name": peer.get("name"), "market": peer.get("market"),
                     "date": rows[-1]["date"], "close": close, "change_1d_pct": change(1),
                     "change_5d_pct": change(PEER_CHANGE_DAYS)})
-    return {"peers": out, "no_data": no_data, "before": before, "note": NOTES["peers"],
+    if not out:
+        return None   # 每一檔都沒有資料：整層算缺
+    return {"status": "ok", "peers": out, "no_data": no_data, "before": before, "note": NOTES["peers"],
             "source": "Massive（美股）、EODHD（韓股與指數）日線"}

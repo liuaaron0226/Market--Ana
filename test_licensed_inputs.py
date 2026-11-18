@@ -152,12 +152,73 @@ class PeersTests(unittest.TestCase):
         self.assertEqual(layer["peers"], [{"symbol": "NVDA", "name": "NVIDIA", "market": "US", "date": "2026-11-05",
                                            "close": 110.0, "change_1d_pct": 5.77, "change_5d_pct": 10.0}])
 
-    def test_peers_without_quotes_are_listed_and_none_at_all_is_none(self):
-        layer = li.peers_layer([{"symbol": "SKH", "name": "SK", "market": "KR"}], self.QUOTES, before="2026-11-06",
-                               cutoff="2026-11-06T20:00:00+08:00")
-        self.assertEqual((layer["peers"], layer["no_data"]), ([], ["SKH"]))
+    def test_peers_without_quotes_are_listed_and_none_with_data_is_none(self):
+        both = [{"symbol": "NVDA", "name": "NVIDIA", "market": "US"}, {"symbol": "SKH", "name": "SK", "market": "KR"}]
+        layer = li.peers_layer(both, self.QUOTES, before="2026-11-06", cutoff="2026-11-06T20:00:00+08:00")
+        self.assertEqual((layer["status"], [peer["symbol"] for peer in layer["peers"]], layer["no_data"]),
+                         ("ok", ["NVDA"], ["SKH"]))
+        # 每一檔都沒有資料、或根本沒有同類股：整層缺（呼叫端記進 missing_layers）
+        self.assertIsNone(li.peers_layer(both[1:], self.QUOTES, before="2026-11-06", cutoff="2026-11-06T20:00:00+08:00"))
         self.assertIsNone(li.peers_layer([], self.QUOTES, before="2026-11-06", cutoff="2026-11-06T20:00:00+08:00"))
+
+    def test_a_malformed_fugle_answer_is_missing_not_an_error(self):
+        class Broken:
+            def candles(self, *args):
+                return {"date": BASE, "data": [{"date": BASE, "open": 1, "high": 1, "low": 1, "close": 1}, "壞的"]}
+            quote = hourly = candles
+        layer, errors = li.fetch_stock_intraday(Broken(), "2330", BASE)
+        self.assertEqual(layer["status"], "missing")
+        index, _ = li.fetch_index_intraday(Broken(), BASE)
+        self.assertEqual(index["status"], "missing")
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FugleQuotaTests(unittest.TestCase):
+    """富果的每分鐘額度可能和網站共用（11-19 owner 轉述）：呼叫之間隔一段時間；遇到 429 這一輪就不再打，也不重試。"""
+
+    class Response:
+        def __init__(self, body):
+            self.body = body
+
+        def read(self):
+            return self.body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def test_calls_are_spaced_and_a_429_stops_the_rest_of_the_round(self):
+        import io
+        import urllib.error
+        clock = {"now": 100.0}
+        slept, asked = [], []
+
+        def opener(request, timeout):
+            asked.append(request.full_url)
+            if len(asked) == 2:
+                raise urllib.error.HTTPError(request.full_url, 429, "Too Many Requests", {}, io.BytesIO(b""))
+            return self.Response(b'{"date": "2026-11-06", "data": []}')
+
+        fugle = li.Fugle("KEY", opener=opener, min_interval=2.0, clock=lambda: clock["now"],
+                         sleep=lambda s: (slept.append(s), clock.__setitem__("now", clock["now"] + s)))
+        fugle.candles("2330")
+        with self.assertRaises(Exception):
+            fugle.quote("2330")                       # 第二次回 429
+        with self.assertRaises(li.FugleExhausted):
+            fugle.hourly("2330", "2026-10-23", "2026-11-05")   # 之後同一輪不再打
+        self.assertEqual(len(asked), 2)
+        self.assertEqual(slept, [2.0])                # 第二次之前等了 2 秒（第一次不用等）
+
+    def test_exhaustion_makes_every_later_stock_missing_without_calls(self):
+        class Exhausted:
+            def candles(self, *args):
+                raise li.FugleExhausted("429")
+            quote = hourly = candles
+        layer, errors = li.fetch_stock_intraday(Exhausted(), "2330", BASE)
+        self.assertEqual(layer["status"], "missing")
+        self.assertEqual(set(errors.values()), {"FugleExhausted"})

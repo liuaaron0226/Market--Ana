@@ -100,8 +100,9 @@ _LAYER_PARAMETERS: dict[str, dict[str, Any]] = {
     # J 票三層：整理方式與說明都在 licensed_inputs.PARAMETERS（說明改一個字也換版本）。
     "intraday": {"layer": licensed_inputs.VERSION, "parts": ["summary", "bars_10min", "hourly", "book"],
                  "parameters": licensed_inputs.PARAMETERS},
-    "headlines": {"layer": licensed_inputs.VERSION, "fields": ["id", "source", "published_at", "title", "summary"]},
-    "peers": {"layer": licensed_inputs.VERSION, "changes": ["1 日", "5 日"]},
+    "headlines": {"layer": licensed_inputs.VERSION, "fields": ["id", "source", "published_at", "title", "summary"],
+                  "parameters": licensed_inputs.PARAMETERS},
+    "peers": {"layer": licensed_inputs.VERSION, "changes": ["1 日", "5 日"], "parameters": licensed_inputs.PARAMETERS},
     "environment": {"changes": "近 20 日", "series": ["usdtwd", "ust_2y", "ust_10y"]},
 }
 _LAYER_RULES: dict[str, tuple[str, ...]] = {
@@ -152,12 +153,11 @@ _LAYER_RULES: dict[str, tuple[str, ...]] = {
         + "missing 列出的部分是沒抓到的，不得猜。",
     ),
     "headlines": (
-        "news.headlines 是這一檔的新聞（前面「沒給的資料」裡的新聞指的是這裡沒有的；這裡有的可以照說明引用）："
-        + licensed_inputs.NOTES["headlines"]
+        "news.headlines 是這一檔的新聞：" + licensed_inputs.NOTES["headlines"]
         + "要引用新聞就把它的 id 放進 news_refs（和官方公告一樣），理由裡不要抄標題。",
     ),
     "peers": (
-        "peers 是國外同類股（前面「沒給的資料」裡的海外市場指的是這裡沒有的）：" + licensed_inputs.NOTES["peers"] + "no_data 列出的是沒有資料的代號。",
+        "peers 是國外同類股：" + licensed_inputs.NOTES["peers"] + "no_data 列出的是沒有資料的代號。",
     ),
     "environment": (
         "environment 是大環境：新臺幣對美元收盤匯率與美國公債 2 年、10 年殖利率，各自附資料日期與近 20 個交易日的變化；"
@@ -234,8 +234,18 @@ def _layer_parameters(enabled: Sequence[str]) -> dict[str, Any]:
     return {layer: _LAYER_PARAMETERS[layer] for layer in enabled if layer in _LAYER_PARAMETERS}
 
 
+_NOT_GIVEN_RULE = next(rule for rule in _PROMPT_RULES if rule.startswith("理由只能引用 INPUT_JSON 裡有的資料"))
+# J 票：打開新聞或國外同類股時，「沒給的資料」那一句改成只指沒給的那些（沒打開時一個字都不變，舊版本照舊）。
+_NOT_GIVEN_RULE_WITH_LICENSED = (
+    "理由只能引用 INPUT_JSON 裡有的資料；INPUT_JSON 沒給的資料（missing_layers 列出的層、值是 null 的欄位、"
+    "news.headlines 以外的新聞、peers 以外的海外市場）不得當成事實寫進去。")
+
+
 def _prompt_rules(enabled: Sequence[str]) -> tuple[str, ...]:
-    return _PROMPT_RULES + tuple(rule for layer in enabled for rule in _LAYER_RULES.get(layer, ()))
+    base = _PROMPT_RULES
+    if "headlines" in enabled or "peers" in enabled:
+        base = tuple(_NOT_GIVEN_RULE_WITH_LICENSED if rule == _NOT_GIVEN_RULE else rule for rule in _PROMPT_RULES)
+    return base + tuple(rule for layer in enabled for rule in _LAYER_RULES.get(layer, ()))
 
 
 # 換成這些模型就是新系列（模型算進版本雜湊）。Flash 時代的版本號不帶模型、維持原樣；本人 11-18 晚每日判斷改 Argon。

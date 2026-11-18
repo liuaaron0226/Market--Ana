@@ -508,7 +508,24 @@ class LicensedRunTests(MorningTestCase):
         self.assertEqual(result["outcome"], "written")
         record = fl.read_ledger(self.ledger)["forecasts"][0]
         self.assertEqual(record["input"]["intraday"]["summary"]["close"], 102)
+        # 執行紀錄（乾跑時上傳成產物）看得出富果那一層有值、是哪一天的
+        self.assertEqual(result["licensed"]["intraday"], {"status": "ok", "data_date": BASE})
+        self.assertEqual(result["licensed"]["news"]["status"], "ok")
         self.assertEqual([item["title"] for item in record["input"]["news"]["items"]], ["美股收高"])
+
+    def test_a_dry_run_replay_of_an_earlier_day_never_fetches_and_says_why(self):
+        # 乾跑重播舊日期：富果與新聞一律缺（不用今天的資料冒充），也不去抓
+        calls = []
+
+        class Counting:
+            def candles(self, symbol):
+                calls.append(symbol)
+                return {}
+
+        result = self.run_evening(dry_run=True, as_of=DATES[-2], fugle=Counting(), news_query=lambda sql: calls.append(sql))
+        self.assertEqual(calls, [])
+        self.assertEqual(result["licensed"]["intraday"]["status"], "missing")
+        self.assertIn("重播", result["licensed"]["news"]["reason"])
 
     def test_morning_never_sees_the_session_days_intraday(self):
         # 晨間版：富果回的是開盤日（例如時鐘之後已經進入新的一天）就整塊缺，不會看到開盤日的盤中

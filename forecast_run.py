@@ -285,6 +285,10 @@ def _backfill_misses(analysis: Mapping[str, Any], method_text: str, ledger: Path
 
 
 LICENSED_TITLES = {"intraday": "加權指數盤中（富果）", "news": "大環境新聞"}
+# J 票：舊日期（歷史重播、乾跑重播）沒有富果盤中與新聞的歷史，一律寫缺，不用今天的資料冒充
+# （重播和正式預測因此不完全可比）。
+REPLAY_LICENSED = {"intraday": {"status": "missing", "reason": "重播：舊日期沒有富果盤中的歷史資料"},
+                   "news": {"status": "missing", "reason": "重播：舊日期沒有當時抓到的新聞"}}
 
 
 def licensed_layers(base_date: str | None, *, fugle: Any = None, news_query: Callable[[str], list[dict]] | None = None,
@@ -309,12 +313,23 @@ def licensed_layers(base_date: str | None, *, fugle: Any = None, news_query: Cal
     return {"intraday": intraday, "news": headlines}, errors
 
 
+def _licensed_log(data: Mapping[str, Any]) -> dict[str, Any]:
+    """執行紀錄（乾跑時上傳成產物）：富果與新聞兩層各自有沒有值、是哪一天或為什麼缺。"""
+    out = {}
+    for name in fl.LICENSED_LAYERS:
+        layer = data.get(name) or {}
+        out[name] = ({"status": "ok", "data_date": layer.get("data_date") or layer.get("cutoff")}
+                     if layer.get("status") == "ok" else {"status": "missing", "reason": layer.get("reason")})
+    return out
+
+
 def _market_log(data: Mapping[str, Any], sources: Mapping[str, Any]) -> dict[str, Any]:
     """執行紀錄：I 票五層哪幾層缺、讀資料時的錯誤種類。"""
     return {"market_layers_missing": [name for name in market_layers.LAYER_NAMES
                                       if (data.get(name) or {}).get("status") != "ok"],
             "market_layers_errors": sources.get("errors"),
-            "licensed_missing": [name for name in fl.LICENSED_LAYERS if (data.get(name) or {}).get("status") != "ok"]}
+            "licensed_missing": [name for name in fl.LICENSED_LAYERS if (data.get(name) or {}).get("status") != "ok"],
+            "licensed": _licensed_log(data)}
 
 
 def _report(record: Mapping[str, Any]) -> dict[str, Any]:
@@ -408,8 +423,10 @@ def run_evening(
     foreign_sources = load_foreign_sources(data_root, seeds_root)
     market_sources = market_layers.load_sources(data_root, analysis_path,
                                                 base_date=daily[-1]["date"] if daily else None, ofr=ofr_fetch)
-    licensed, licensed_errors = licensed_layers(daily[-1]["date"] if daily else None, fugle=fugle, news_query=news_query,
-                                                cutoff=clock().astimezone(fl.TAIPEI).isoformat())
+    licensed, licensed_errors = (({**REPLAY_LICENSED}, {}) if as_of else
+                                 licensed_layers(daily[-1]["date"] if daily else None, fugle=fugle,
+                                                 news_query=news_query,
+                                                 cutoff=clock().astimezone(fl.TAIPEI).isoformat()))
     data = _with_archive_names(build_day_input(analysis, method_text, layer, foreign_sources,
                                                market_sources=market_sources, licensed=licensed),
                                overseas_dir, Path(ledger))
@@ -507,8 +524,9 @@ def run_morning(
     # 外資讀數（G 票）：晨間版的那斯達克只看開盤日之前收盤的那一晚（us_before＝開盤日）。
     foreign_sources = load_foreign_sources(data_root, seeds_root)
     market_sources = market_layers.load_sources(data_root, analysis_path, base_date=base_date, ofr=ofr_fetch)
-    licensed, licensed_errors = licensed_layers(base_date, fugle=fugle, news_query=news_query,
-                                                cutoff=clock().astimezone(fl.TAIPEI).isoformat())
+    licensed, licensed_errors = (({**REPLAY_LICENSED}, {}) if replay else
+                                 licensed_layers(base_date, fugle=fugle, news_query=news_query,
+                                                 cutoff=clock().astimezone(fl.TAIPEI).isoformat()))
     data = _with_archive_names(build_day_input(analysis, method_text, layer, foreign_sources, edition="morning",
                                                session_date=session_date, market_sources=market_sources,
                                                licensed=licensed),
