@@ -93,10 +93,11 @@ class WatchLedgerTestCase(unittest.TestCase):
         """把假模型的呼叫次數歸零（換下一個情境前）。"""
         (self.bin / "calls.txt").unlink(missing_ok=True)
 
-    def write(self, data=None, responses=None, *, edition="evening", now=None, model=None, root=None, **kwargs):
+    def write(self, data=None, responses=None, *, edition="evening", now=None, model=None, root=None,
+              model_name="test-model", **kwargs):
         model = model or fake_model(self.bin, responses or [envelope(answer())])
         return wl.write_judgment(root or self.root, data or stock_input(), edition=edition, model_bin=model,
-                                 model="test-model", now=now or clock(EVENING_OK), **kwargs)
+                                 model=model_name, now=now or clock(EVENING_OK), **kwargs)
 
 
 class CandidateLevelTests(WatchLedgerTestCase):
@@ -470,6 +471,17 @@ class InputLayerTests(WatchLedgerTestCase):
         self.assertEqual(with_lessons["input"]["lessons"], {"transitions": []})
         self.assertEqual(wl.input_version_of(("technical",)), only_technical["input_version"])
         self.assertNotEqual(wl.input_version_of(("technical",)), wl.input_version_of(("technical", "market")))
+
+    def test_switching_the_judge_to_argon_starts_a_new_series(self):
+        # 本人 11-18 晚每日判斷改 Argon：換模型＝新系列，和 Flash 時代的判斷分開對帳；Flash 時代的版本號不變。
+        import gemini_models as gm
+        layers = ("technical", "market", "news")
+        self.assertEqual(wl.input_version_of(layers, gm.FLASH), wl.input_version_of(layers))
+        self.assertNotEqual(wl.input_version_of(layers, gm.ARGON), wl.input_version_of(layers))
+        self.assertTrue(wl.input_version_of(layers, gm.ARGON).startswith("technical+market+news-v1-"))
+        record = self.write(model=fake_model(self.tmp, [envelope(answer())]), model_name=gm.ARGON)["record"]
+        self.assertEqual(record["input_version"], wl.input_version_of(wl.DEFAULT_LAYERS, gm.ARGON))
+        self.assertEqual(record["input"]["input_version"], record["input_version"])
 
     def test_news_headlines_and_overseas_peers_keep_their_place_but_never_reach_the_model(self):
         data = stock_input(news_headlines=[{"id": "h1", "source": "cna", "title": "外電報導同業大漲"}],

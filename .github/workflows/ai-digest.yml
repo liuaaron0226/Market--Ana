@@ -239,7 +239,7 @@ jobs:
         env:
           HOME: ${{ runner.temp }}/agy-home
         run: |
-          common="--input $RUNNER_TEMP/ai-digest-input.json --model gemini-3.8-flash --output $RUNNER_TEMP/ai-digest-result.json --audit $RUNNER_TEMP/ai-digest-audit.json --sql-output $RUNNER_TEMP/ai-digest.sql"
+          common="--input $RUNNER_TEMP/ai-digest-input.json --model gemini-4-argon --output $RUNNER_TEMP/ai-digest-result.json --audit $RUNNER_TEMP/ai-digest-audit.json --sql-output $RUNNER_TEMP/ai-digest.sql"
           if [ "${{ steps.agy_download.outcome }}" = "success" ] && [ "${{ steps.agy_auth.outcome }}" = "success" ]; then
             python ai_digest.py $common --agy-bin "$RUNNER_TEMP/agy/antigravity"
           else

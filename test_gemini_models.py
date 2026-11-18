@@ -27,11 +27,39 @@ class TaskModelTests(unittest.TestCase):
     def test_market_forecasts_go_to_argon(self):
         self.assertEqual(gm.FORECAST, gm.ARGON)  # 晚間、晨間、歷史重播
 
-    def test_watch_and_friends_stay_on_flash(self):
-        # 本人 11-17 更正：「籌碼與資金白話分析、自選股提名同類股 可以用flash，其他不變」
-        self.assertEqual(gm.WATCH_NOMINATE, gm.FLASH)
-        self.assertEqual(gm.WATCH_JUDGE, gm.FLASH)
-        self.assertEqual(gm.FRIEND_DIGEST, gm.FLASH)
+    def test_owner_choices_of_11_18_evening(self):
+        # 本人 11-18 晚（ANALYSIS_PLAN〈各 AI 任務的模型與思考程度〉）：每日判斷、白話、站主解讀改 Argon，三項思考「中」；
+        # 提名同類股、朋友解讀留 Flash，思考「高」。
+        self.assertEqual((gm.WATCH_JUDGE, gm.WATCH_JUDGE_EFFORT), (gm.ARGON, "medium"))
+        self.assertEqual((gm.PLAIN, gm.DIGEST), (gm.ARGON, gm.ARGON))
+        self.assertEqual((gm.WATCH_NOMINATE, gm.WATCH_NOMINATE_EFFORT), (gm.FLASH, "high"))
+        self.assertEqual((gm.FRIEND_DIGEST, gm.FRIEND_DIGEST_EFFORT), (gm.FLASH, "high"))
+        self.assertEqual(gm.FORECAST_EFFORT, "medium")
+
+    def test_workflows_that_name_their_model_use_the_owner_choice(self):
+        # 白話（daily-update.yml 的 PLAIN_MODEL）與站主解讀（ai-digest.yml 的 --model）在排程檔裡寫名稱，要和這裡一致。
+        daily = (ROOT / ".github/workflows/daily-update.yml").read_text(encoding="utf-8")
+        digest = (ROOT / ".github/workflows/ai-digest.yml").read_text(encoding="utf-8")
+        self.assertIn(f"PLAIN_MODEL: {gm.PLAIN}", daily)
+        self.assertIn("PLAIN_EFFORT: medium", daily)
+        self.assertIn(f"--model {gm.DIGEST} ", digest)
+
+    def test_nomination_asks_with_its_own_effort_and_friends_send_a_thinking_level(self):
+        seen = {}
+        original = watch_run.call_model
+        watch_run.call_model = lambda *args, **kwargs: (seen.update(kwargs), ("model_failed", None, "x"))[1]
+        try:
+            watch_run._ask_for_nominees({"code": "2330"}, model_bin="b", model=gm.WATCH_NOMINATE, timeout_seconds=1, budget=[1])
+        finally:
+            watch_run.call_model = original
+        self.assertEqual(seen.get("effort"), "high")
+        captured = {}
+        def post(url, body, api_key):
+            captured.update(body)
+            raise OSError("stop")
+        with self.assertRaises(Exception):
+            friend_ai_digest.call_gemini("p", gm.FRIEND_DIGEST, api_key="k", post=post, sleep=lambda s: None)
+        self.assertEqual(captured["generationConfig"].get("thinkingConfig"), {"thinkingLevel": "high"})
 
     def test_each_task_reads_its_model_from_the_one_place(self):
         self.assertEqual(fr.MODEL_DEFAULT, gm.FORECAST)

@@ -276,8 +276,8 @@ jobs:
           PLAIN_DAILY_MODE: ${{ steps.plain.outputs.mode }}
           PLAIN_AGY_BIN: ${{ steps.plain_auth.outcome == 'success' && format('{0}/agy/antigravity', runner.temp) || '' }}
           PLAIN_AGY_HOME: ${{ steps.plain_auth.outcome == 'success' && format('{0}/agy-home', runner.temp) || '' }}
-          # 白話分析用的模型與思考程度（本人 11-17：Flash、medium）；要換只改這兩行
-          PLAIN_MODEL: gemini-3.8-flash
+          # 白話分析用的模型與思考程度（本人 11-18 晚改 Argon、思考「中」；gemini_models.PLAIN）；要換只改這兩行
+          PLAIN_MODEL: gemini-4-argon
           PLAIN_EFFORT: medium
         run: >-
           python daily_update.py

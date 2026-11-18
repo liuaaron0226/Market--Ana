@@ -380,10 +380,10 @@ def _in_ledger(ledger: Path | str, dry_run: bool, work: Callable[[Path], dict[st
         return work(copy)
 
 
-def _official_since(ledger: Path, edition: str, base_date: str) -> str | None:
-    """這一組輸入（``LAYERS``）的正式起算日。還沒寫下時，晚間執行看帳本：之前有一天早晚兩版都用這一組跑過，
+def _official_since(ledger: Path, edition: str, base_date: str, model: str = JUDGE_MODEL) -> str | None:
+    """這一組輸入（``LAYERS``，連同這次用的模型）的正式起算日。還沒寫下時，晚間執行看帳本：之前有一天早晚兩版都用這一組跑過，
     就把今天寫成起算日（寫了不改）；今天起的判斷是正式，之前的是試跑。晨間只讀不寫。"""
-    version = wl.input_version_of(LAYERS)
+    version = wl.input_version_of(LAYERS, model)
     since = wl.official_starts(ledger).get(version)
     if since is None and edition == "evening":
         started = wl.start_official(ledger, since=base_date, input_version=version)
@@ -412,7 +412,7 @@ def _run(ledger: Path, edition: str, watchlist: Sequence[Mapping[str, Any]], ind
         log["reconciliation"] = {key: len(value) for key, value in wl.reconcile(ledger, index_daily, loaded).items()}
     log["backfilled_misses"] = _backfill_misses(ledger, watchlist, loaded, index_daily, base_date, edition=edition,
                                                 method_text=method_text, model_bin=model_bin, model=model, clock=clock)
-    log["official_since"] = _official_since(ledger, edition, base_date)
+    log["official_since"] = _official_since(ledger, edition, base_date, model)
     stocks = [stock_input(item, loaded[str(item["code"])], base_date=base_date, index_daily=index_daily,
                           method_text=method_text, market=market, announcements=news.get(str(item["code"])))
               for item in watchlist]
@@ -588,7 +588,8 @@ def _ask_for_nominees(model_input: Mapping[str, Any], *, model_bin: Path | str, 
         if budget[0] <= 0:
             break
         budget[0] -= 1
-        status, structured, detail = call_model(model_bin, prompt, model, timeout_seconds, NOMINATION_OUTPUT)
+        status, structured, detail = call_model(model_bin, prompt, model, timeout_seconds, NOMINATION_OUTPUT,
+                                                effort=gemini_models.WATCH_NOMINATE_EFFORT)
         if status != "ok":
             attempts.append({"status": status, "detail": detail})
             break

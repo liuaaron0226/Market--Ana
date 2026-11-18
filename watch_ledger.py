@@ -51,6 +51,7 @@ from ledger_core import (
     text_problem,
 )
 import bollinger
+import gemini_models
 import wyckoff_lpsy
 from twon_analysis import analyze_v2
 from twon_analysis.indicators import Bar
@@ -188,8 +189,12 @@ def _prompt_rules(enabled: Sequence[str]) -> tuple[str, ...]:
     return _PROMPT_RULES + tuple(rule for layer in enabled for rule in _LAYER_RULES.get(layer, ()))
 
 
-def input_version_of(layers: Sequence[str] = DEFAULT_LAYERS) -> str:
-    """輸入版本：打開的層、參數、回答格式、提示規則任何一項改了就是新系列，和舊系列分開對帳。
+# 換成這些模型就是新系列（模型算進版本雜湊）。Flash 時代的版本號不帶模型、維持原樣；本人 11-18 晚每日判斷改 Argon。
+_MODEL_IN_VERSION = (gemini_models.ARGON,)
+
+
+def input_version_of(layers: Sequence[str] = DEFAULT_LAYERS, model: str | None = None) -> str:
+    """輸入版本：打開的層、參數、回答格式、提示規則、模型任何一項改了就是新系列，和舊系列分開對帳。
 
     某一層當天沒有資料不換版本（那一份判斷另外標 ``missing_layers``）；版本只看排程打開了哪幾層。
     I 票的四層只在打開時才加進雜湊，所以沒打開它們的版本和 I 票之前相同。
@@ -197,6 +202,8 @@ def input_version_of(layers: Sequence[str] = DEFAULT_LAYERS) -> str:
     enabled = _enabled_layers(layers)
     basis: dict[str, Any] = {"layers": enabled, "parameters": PARAMETERS, "output_schema": OUTPUT_SCHEMA,
                              "prompt_rules": _prompt_rules(enabled)}
+    if model in _MODEL_IN_VERSION:
+        basis["model"] = model
     layer_parameters = _layer_parameters(enabled)
     if layer_parameters:
         basis["layer_parameters"] = layer_parameters
@@ -343,7 +350,7 @@ def _lessons(root: Path, code: str, base_date: str) -> dict[str, Any]:
 def _model_input(data: Mapping[str, Any], edition: str, layers: list[str], raw: list[Bar], bars: list[Bar],
                  events: list[dict[str, Any]], unresolved: list[dict[str, Any]],
                  candidates: list[dict[str, Any]] | None, index_rows: list[dict[str, Any]],
-                 band: dict[str, Any] | None, lessons: dict[str, Any] | None) -> dict[str, Any]:
+                 band: dict[str, Any] | None, lessons: dict[str, Any] | None, model: str | None = None) -> dict[str, Any]:
     values = {layer: copy.deepcopy(data.get(_LAYER_FIELDS[layer])) if layer in _LAYER_FIELDS else None
               for layer in layers}
     if "lessons" in values:
@@ -358,7 +365,7 @@ def _model_input(data: Mapping[str, Any], edition: str, layers: list[str], raw: 
         extras = {"layer_parameters": _layer_parameters(layers), **extras}
     return {
         "schema": "watch-input/v1",
-        "input_version": input_version_of(layers),
+        "input_version": input_version_of(layers, model),
         "parameters": copy.deepcopy(PARAMETERS),
         "code": data.get("code"), "name": data.get("name"),
         "base_date": data.get("base_date"), "edition": edition,
@@ -523,7 +530,7 @@ def _write(
     enabled = _enabled_layers(layers)
     code, base_date = str(data.get("code")), str(data.get("base_date"))
     method_version = method_version_of(str(data.get("method_text") or ""))
-    input_version = input_version_of(enabled)
+    input_version = input_version_of(enabled, model)
     due = deadline(edition, base_date, session_date)
     raw = _raw_bars(data.get("stock_daily"))
     events = _capital_events(data.get("capital_events"))
@@ -536,7 +543,7 @@ def _write(
         key=lambda level: (-level["value"], level["id"]))
     lessons = _lessons(folder, code, base_date) if "lessons" in enabled else None
     model_input = _model_input(data, edition, enabled, raw, bars, events, unresolved, candidates, index_rows, band,
-                               lessons)
+                               lessons, model)
     input_sha = sha(model_input)
     path = _judgment_path(folder, code, base_date, edition)
 

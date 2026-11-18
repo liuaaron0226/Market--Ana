@@ -100,7 +100,7 @@ class PlainDailyWorkflowTest(unittest.TestCase):
     def test_model_and_effort_are_one_constant_each(self):
         # 本人 11-17 更正：這張用 Flash、思考程度 medium；要換模型只改這一處
         env = step("run")["env"]
-        self.assertEqual((env["PLAIN_MODEL"], env["PLAIN_EFFORT"]), ("gemini-3.8-flash", "medium"))
+        self.assertEqual((env["PLAIN_MODEL"], env["PLAIN_EFFORT"]), ("gemini-4-argon", "medium"))  # 本人 11-18 晚改 Argon
         self.assertEqual(DAILY.read_text(encoding="utf-8").count("PLAIN_MODEL:"), 1)
 
     def test_summary_names_both_reasons_when_there_is_no_record(self):

@@ -495,7 +495,7 @@ class FriendCliTests(unittest.TestCase):
     def test_full_run_with_fake_upstream_writes_each_friend_and_keeps_keys_out_of_files(self):
         self.assertEqual(self.run_cli(), 0)
         self.assertEqual([call["api_key"] for call in FakeGeminiServer.seen], ["AIzaFAKE-amy", "AIzaFAKE-bob"])
-        self.assertTrue(all("/models/gemini-3.8-flash:generateContent" in call["path"] for call in FakeGeminiServer.seen))
+        self.assertTrue(all("/models/gemini-3.8-flash:generateContent" in call["path"] for call in FakeGeminiServer.seen))  # 朋友維持 Flash
         self.assertTrue(all("AIzaFAKE" not in call["path"] for call in FakeGeminiServer.seen))
         sent = FakeGeminiServer.seen[0]["body"]
         self.assertEqual(sent["generationConfig"]["responseMimeType"], "application/json")

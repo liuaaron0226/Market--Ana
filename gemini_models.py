@@ -19,11 +19,22 @@ Argon 和 Flash 在 Antigravity 是同一個「Gemini 模型」額度群組，�
 ARGON = "gemini-4-argon"
 FLASH = "gemini-3.8-flash"
 
+# 本人 2026-11-18 晚（ANALYSIS_PLAN〈各 AI 任務的模型與思考程度〉）：「用量一個禮拜會重置，所以都使用 ARGON 好像可以」，
+# 逐項選：每日判斷、白話分析、站主解讀改 Argon，三項思考「中」；提名同類股、朋友解讀留 Flash，思考「高」。
+
 # 大盤事前預測：晚間版、晨間版、歷史重播（重播必須和正式同一個模型，成績才能當參考）。
 FORECAST = ARGON
-# 自選股關注：替關注股提名國外同類股（每檔只問一次）。本人 11-17 更正：用 Flash。
+FORECAST_EFFORT = "medium"
+# 自選股關注：替關注股提名國外同類股（每檔只問一次）。Flash、思考高。
 WATCH_NOMINATE = FLASH
-# 自選股關注每日判斷：每次排程最多 40 次呼叫，量大，維持 Flash。
-WATCH_JUDGE = FLASH
-# 朋友解讀：用朋友自己的 Gemini API 金鑰（不是 agy），維持 Flash。
+WATCH_NOMINATE_EFFORT = "high"
+# 自選股關注每日判斷：每次排程最多 40 次呼叫。11-18 晚改 Argon（換模型＝關注帳本新輸入版本）。
+WATCH_JUDGE = ARGON
+WATCH_JUDGE_EFFORT = "medium"
+# 朋友解讀：用朋友自己的 Gemini API 金鑰（不是 agy；朋友的金鑰用不到 Argon），Flash、思考高（API 的 thinkingLevel）。
 FRIEND_DIGEST = FLASH
+FRIEND_DIGEST_EFFORT = "high"
+# 首頁「籌碼與資金」白話（daily-update.yml 的 PLAIN_MODEL／PLAIN_EFFORT）與站主 AI 解讀（ai-digest.yml 的 --model）
+# 在排程檔裡寫名稱；這裡記本人選的值，test_gemini_models 核對兩邊一致。
+PLAIN = ARGON
+DIGEST = ARGON

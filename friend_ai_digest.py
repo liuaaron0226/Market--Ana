@@ -160,7 +160,9 @@ def call_gemini(prompt: str, model: str, *, api_key: str, post: Callable, url_te
                 sleep: Callable[[float], None] = time.sleep) -> tuple[Any, dict[str, int | None]]:
     body = {
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-        "generationConfig": {"responseMimeType": "application/json", "responseJsonSchema": schema},
+        # 思考程度：本人 11-18 晚選「高」（gemini_models.FRIEND_DIGEST_EFFORT）。
+        "generationConfig": {"responseMimeType": "application/json", "responseJsonSchema": schema,
+                             "thinkingConfig": {"thinkingLevel": gemini_models.FRIEND_DIGEST_EFFORT}},
     }
     reply = _post_with_retry(post, url_template.format(model=model), body, api_key, sleep=sleep)
     usage = _usage(reply)
