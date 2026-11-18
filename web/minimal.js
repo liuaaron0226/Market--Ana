@@ -812,12 +812,13 @@
     if (!CH) return [];
     if (key === 'foreign') return CH.foreign.slice(-20).map(r => ({ date: r.date, value: r.net_billion, label: `${r.net_billion < 0 ? '賣' : '買'} ${fmt(Math.abs(r.net_billion), 0)} 億` }));
     if (key === 'trust') return CH.foreign.slice(-20).map(r => ({ date: r.date, value: r.trust_billion, label: `${r.trust_billion < 0 ? '賣' : '買'} ${fmt(Math.abs(r.trust_billion), 0)} 億` }));
-    // 圖上每一天：那天的空單＋比前一天加空或回補（第一天往前再找一天；整份最前面那一天沒有前一天就不寫）
+    // 圖上每一天只寫那天比前一天加空或回補幾口（本人 11-19：「上面已經有寫總勘酖了，所以這裡只需要寫當天的」，總口數在上面）。
+    // 第一天往前再找一天；整份最前面那一天沒有前一天，才退回寫那天的空單口數
     if (key === 'futures') {
       const all = CH.futures, from = Math.max(0, all.length - 20);
       return all.slice(from).map((r, i, a) => {
         const before = all[from + i - 1];
-        return { date: r.date, value: -r.net_contracts, label: `空單 ${fmt(Math.abs(r.net_contracts), 0)} 口${before ? `，${shortChange(before.net_contracts, r.net_contracts)}` : ''}`, prev: i ? a[i - 1].net_contracts : null };
+        return { date: r.date, value: -r.net_contracts, label: before ? shortChange(before.net_contracts, r.net_contracts) : `空單 ${fmt(Math.abs(r.net_contracts), 0)} 口`, prev: i ? a[i - 1].net_contracts : null };
       });
     }
     if (key === 'margin') return CH.margin.slice(-20).map((r, i, a) => ({ date: r.date, value: r.margin_balance_billion, label: `${fmt(r.margin_balance_billion, 0)} 億`, prev: i ? a[i - 1].margin_balance_billion : null }));

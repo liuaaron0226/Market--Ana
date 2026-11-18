@@ -59,8 +59,9 @@ with sync_playwright() as p:
                 top = page.locator("#panelBody .chip-top").inner_text()
                 check(f"{tag}：空單點開那一張寫今天加空或回補幾口", bool(CHANGE.search(top)), top)
                 picked = page.evaluate("[...document.querySelectorAll('#panelBody .bar-hit .bar-value')].map(t => t.textContent)")
-                check(f"{tag}：圖上每一天的字也寫那天加空或回補（第一天沒有前一天，不寫）",
-                      bool(picked) and all(CHANGE.search(t) for t in picked[1:]), picked[-3:])
+                # 本人 11-19：「上面已經有寫總勘酖了，所以這裡只需要寫當天的」——圖上只寫那天加空或回補，不重複寫空單總口數
+                check(f"{tag}：圖上每一天只寫那天加空或回補，不重複寫空單總口數",
+                      bool(picked) and all(CHANGE.search(t) and "空單 " not in t for t in picked[1:]), picked[-3:])
                 page.screenshot(path=os.path.join(SHOTS, f"{tag}-futures.png"))
             if key == "foreign":
                 page.screenshot(path=os.path.join(SHOTS, f"{tag}-foreign.png"))
