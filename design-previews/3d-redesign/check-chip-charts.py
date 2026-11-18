@@ -31,6 +31,12 @@ LABELS = """() => { const svg = document.querySelector('#panelBody .drill-chart'
   return [...svg.querySelectorAll('.bar-value')].map(t => { const was = t.style.display; t.style.display = 'block'; const b = t.getBBox(); t.style.display = was;
     return { text: t.textContent, left: Math.round(b.x), right: Math.round(b.x + b.width), W }; }).filter(b => b.left < -0.5 || b.right > b.W + 0.5); }"""
 
+COLORS = """() => { const on = document.querySelector('#panelBody .drill-chart .bar-hit.is-on'); if (!on) return null;
+  const css = el => getComputedStyle(el).fill, probe = document.createElement('i'); probe.style.color = 'var(--ink)'; document.body.append(probe);
+  const ink = getComputedStyle(probe).color; probe.remove();
+  const num = on.querySelector('.bar-value .bar-num'), date = on.querySelector('.bar-value .bar-day'), bar = on.querySelector('rect:last-of-type');
+  return { num: num && css(num), date: date && css(date), bar: bar && (bar.getAttribute('fill').startsWith('var') ? (() => { const p = document.createElement('i'); p.style.color = bar.getAttribute('fill'); document.body.append(p); const c = getComputedStyle(p).color; p.remove(); return c; })() : bar.getAttribute('fill')), ink }; }"""
+
 with sync_playwright() as p:
     browser = p.chromium.launch()
     for w, h, tag in ((390, 844, "手機"), (1440, 900, "電腦")):
@@ -55,6 +61,10 @@ with sync_playwright() as p:
             # 選到每一天時圖最上面那一行字（日期＋數字）也要整行在圖框裡：一根一根打開量
             labels = page.evaluate(LABELS)
             check(f"{tag}：{key} 選到任何一天，最上面那一行字都整行在圖框裡", not labels, labels[:3])
+            # 本人 11-19「你數字可以在明顯一點顏色方面」：選到那一天的那一行，數字是那根長條的顏色、日期是墨色
+            colors = page.evaluate(COLORS)
+            check(f"{tag}：{key} 選到那一天，數字是那根長條的顏色、日期是墨色",
+                  bool(colors) and colors["num"] == colors["bar"] and colors["date"] == colors["ink"] and colors["num"] != colors["ink"], colors)
             if key == "futures":
                 top = page.locator("#panelBody .chip-top").inner_text()
                 check(f"{tag}：空單點開那一張寫今天加空或回補幾口", bool(CHANGE.search(top)), top)

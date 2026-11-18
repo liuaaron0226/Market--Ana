@@ -855,9 +855,10 @@
       const tone = signedAxis ? (r.value >= 0 ? 'var(--up)' : 'var(--down)') : key === 'margin' ? 'var(--gold)' : key === 'futures' ? 'var(--down)' : 'var(--accent)';
       const has = detailDays.has(r.date);
       const on = r.date === selected;
-      // 選到的那一天，日期與數字寫在圖的最上面、對著那一根；靠邊的幾根改成靠左或靠右對齊，字才不會被切掉
+      // 選到的那一天，日期與數字寫在圖的最上面、對著那一根；靠邊的幾根改成靠左或靠右對齊，字才不會被切掉。
+      // 數字用那根長條的顏色、日期是墨色（本人 11-19「你數字可以在明顯一點顏色方面」）
       const edge = i < 4 ? ['start', pad + i * step] : i > rows.length - 5 ? ['end', pad + (i + 1) * step] : ['middle', pad + i * step + step / 2];
-      return `<g class="bar-hit${on ? ' is-on' : ''}" data-day="${esc(r.date)}" tabindex="0" role="button" aria-label="${esc(r.date)} ${esc(r.label)}${has ? '，點看那一天的名單' : ''}"><rect x="${pad + i * step}" y="0" width="${step}" height="${H}" fill="transparent"/><rect x="${pad + i * step + step * .14}" y="${top}" width="${step * .72}" height="${h}" rx="2" fill="${tone}" opacity="${on ? 1 : .72}"/><text class="bar-value" x="${edge[1]}" y="17" text-anchor="${edge[0]}">${esc(shortDay(r.date))} ${esc(r.label)}</text></g>`;
+      return `<g class="bar-hit${on ? ' is-on' : ''}" data-day="${esc(r.date)}" tabindex="0" role="button" aria-label="${esc(r.date)} ${esc(r.label)}${has ? '，點看那一天的名單' : ''}"><rect x="${pad + i * step}" y="0" width="${step}" height="${H}" fill="transparent"/><rect x="${pad + i * step + step * .14}" y="${top}" width="${step * .72}" height="${h}" rx="2" fill="${tone}" opacity="${on ? 1 : .72}"/><text class="bar-value" x="${edge[1]}" y="17" text-anchor="${edge[0]}"><tspan class="bar-day">${esc(shortDay(r.date))}</tspan> <tspan class="bar-num" fill="${tone}">${esc(r.label)}</tspan></text></g>`;
     }).join('');
     // 底下的三個日期（本人 11-19 第二次說「最右邊的日期會被擋到看不清楚」）：置中對著靠邊那一根會超出圖框、手機字大時被切掉，
     // 所以第一個靠左對齊第一根的左緣、最後一個靠右對齊最後一根的右緣，中間那個照舊置中
