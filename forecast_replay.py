@@ -32,6 +32,7 @@ import forecast_ledger as fl
 import forecast_replay_chips as chips
 import forecast_run as fr
 import forecast_store
+import market_layers
 import overseas_inputs as oi
 from ledger_core import method_version_of
 
@@ -230,8 +231,11 @@ def run_replay(
                 break
             layer = (oi.build_layer(overseas_dir, edition=edition, base_date=day, session_date=session)
                      if overseas_dir is not None else None)
+            # I 票五層照晚間、晨間同一套讀；每一層只看基準日（OFR 是截止日）以前的資料。
             data = fr.build_day_input(trimmed, method_text, layer, foreign_sources, edition=edition,
-                                      session_date=session)
+                                      session_date=session,
+                                      market_sources=market_layers.load_sources(data_root, analysis_path,
+                                                                                base_date=day))
             if sources is not None:
                 data["sources"] = sources
             frozen = _frozen(session, MORNING_CLOCK) if session else _frozen(day, REPLAY_CLOCK)

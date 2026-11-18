@@ -484,6 +484,39 @@ class ForeignFlowLayerTests(RunTestCase):
                                                           "dollar_and_twd_vs_foreign", "futures_net_position"])
 
 
+class MarketLayersRunTests(MorningTestCase):
+    """I 票：晚間、晨間版都從工作集讀大盤五層（融資讀 analysis-data.js 旁邊的 chips-data.js）。"""
+
+    def chips_file(self):
+        # 最後 6 天融資餘額 1000、1010、1005、1020、1030、1040.5（億元）
+        balances = [1000.0, 1010.0, 1005.0, 1020.0, 1030.0, 1040.5]
+        margin = [{"date": d, "margin_balance_billion": b, "margin_units": 2_000_000, "short_units": 60_000}
+                  for d, b in zip(DATES[-6:], balances)]
+        (self.tmp / "chips-data.js").write_text(
+            "window.MARKET_CHIPS = " + json.dumps({"margin": margin}) + ";\n", encoding="utf-8")
+
+    def test_evening_layer_is_sealed_and_missing_layers_are_named(self):
+        self.chips_file()
+        result = self.run_evening(data_root=self.tmp / "data", seeds_root=self.tmp / "no-seeds")
+        self.assertEqual(result["outcome"], "written")
+        record = fl.read_ledger(self.ledger)["forecasts"][0]
+        margin = record["input"]["market_margin"]
+        self.assertEqual((margin["status"], margin["data_date"]), ("ok", BASE))
+        self.assertEqual(margin["change_5d_billion"], 40.5)     # 1040.5 − 1000
+        self.assertEqual(record["input"]["otc_index"]["status"], "missing")
+        self.assertEqual(result["market_layers_missing"], ["otc_index", "sector_share", "screens", "ofr_stress"])
+        missing = {item["key"] for item in record["missing_inputs"]}
+        self.assertTrue({"otc_index", "sector_share", "screens", "ofr_stress"} <= missing)
+        self.assertNotIn("market_margin", missing)
+
+    def test_morning_reads_the_same_layers(self):
+        self.chips_file()
+        result = self.run_morning(data_root=self.tmp / "data", seeds_root=self.tmp / "no-seeds")
+        self.assertEqual(result["outcome"], "written")
+        record = fl.read_ledger(self.ledger)["forecasts"][0]
+        self.assertEqual(record["input"]["market_margin"]["data_date"], BASE)
+
+
 class OverseasFeedsForeignFlowTests(MorningTestCase):
     """D 票與 G 票接在一起（owner 2026-11-16 整合）：海外層的那斯達克序列就是外資讀數 1 用的那一份。"""
 

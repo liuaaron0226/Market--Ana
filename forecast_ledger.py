@@ -25,6 +25,7 @@ from typing import Any
 
 import foreign_flow
 import gemini_models
+import market_layers
 import wyckoff_lpsy
 # 鎖定、雜湊、模型呼叫、期限與方法版本和關注帳本共用（ledger_core），這裡只留預測帳本自己的規則。
 from ledger_core import (
@@ -72,9 +73,12 @@ PARAMETERS: dict[str, Any] = {
     # 相似盤勢與教訓層（E 票）同時上，輸入版本照五層一起算。
     # H 票（本人 2026-11-18「把最後供應點加進事前預測」）：今天加權指數是否處在威科夫最後供應點，由 wyckoff_lpsy
     # 從同一份日 K 算好，附固定歷史統計；新的一層＝新的輸入版本（共識第 8 點）。
-    "layers": ["base", "overseas", "foreign_flow", "wyckoff_lpsy", "similar", "lessons"],
+    # I 票（本人 2026-11-18 晚「更多整合所有網站可以獲取的資料」→「大盤＋自選股判斷」）：大盤融資融券、櫃買指數、
+    # 產業成交比重、選股快照與資金輪動、OFR 金融壓力五層，由 market_layers 從工作集算好；新的層＝新的輸入版本。
+    "layers": ["base", "overseas", "foreign_flow", "wyckoff_lpsy", *market_layers.LAYER_NAMES, "similar", "lessons"],
     "foreign_flow_layer": foreign_flow.VERSION,
     "wyckoff_lpsy_layer": wyckoff_lpsy.INDEX_VERSION,
+    "market_layers": market_layers.PARAMETERS,
     "ma_periods": [5, 10, 20, 60, 120, 240],
     "high_low_windows": [20, 60, 240],
     "gap_lookback_bars": 240,
@@ -132,8 +136,11 @@ _PROMPT_RULES = (
     "reason（理由）與 invalidation（什麼情況代表看錯）只寫繁體中文質化判斷，不得出現任何阿拉伯／全形／中文數字、日期或價格；"
     "要引用價位就把候選 id 放進 reason_refs／invalidation_refs，程式會代入名字與數值。",
     # 本人 2026-11-15 看過真 Gemini 乾跑後選「先改提示再乾跑」：下面兩條是那次加的。
-    "理由與看錯條件只能引用 INPUT_JSON 裡有的資料（日 K、指標、法人與期貨、外資讀數、候選關卡、布林位置、overseas、方法稿）；"
-    "INPUT_JSON 沒給的資料（例如融資、新聞、overseas.not_provided 列出的項目）不得當成事實寫進去。",
+    # I 票改了這一句：大盤融資融券、櫃買指數等五層現在有給，「沒給的資料」不再舉融資當例子。
+    "理由與看錯條件只能引用 INPUT_JSON 裡有的資料（日 K、指標、法人與期貨、外資讀數、候選關卡、布林位置、overseas、"
+    "market_margin、otc_index、sector_share、screens、ofr_stress、方法稿）；"
+    "INPUT_JSON 沒給的資料（例如新聞、overseas.not_provided 列出的項目、status 是 missing 的層、值是 null 的欄位）"
+    "不得當成事實寫進去。",
     # D 票（2026-11-16）：布林位置與海外層的使用規則。
     "bollinger 只是位置描述：歷史上用布林通道調整持股水位沒有通過及格線，不可單獨當成轉強或轉弱的理由。",
     "overseas 每一項都標了資料日期：美國的收盤是台北前一晚（晨間版是剛收盤那一晚），status 不是 ok 的項目代表休市、"
@@ -149,6 +156,16 @@ _PROMPT_RULES = (
     "是避開記號，不是放空訊號，不能單獨用來改變預測方向，也不能單獨當成轉弱或看空的理由；no 也不代表看多。"
     # 本人 2026-11-18 看過乾跑（Gemini 寫出「最後供應點顯示上檔仍有套牢賣壓」）後定案收緊。
     "理由裡提到它時只能照寫是或否與歷史次數，不得拿來推論賣壓、套牢、壓力位置或之後的方向。",
+    # I 票：五層新輸入的讀法（每一層另附 note，要一起看）。
+    "market_margin、otc_index、sector_share、screens、ofr_stress 是程式從網站每天已存的資料算好的五層，只能照讀，"
+    "不可自己重算或改數字；status 是 missing 的層當作沒有，每一層的 note 說明怎麼讀，要一起看。"
+    "這五層都只描述籌碼、資金與外部環境的狀態，每一層都不能單獨決定方向，也不能單獨當成轉強或轉弱的理由：",
+    "market_margin 是大盤融資融券：融資增加不代表看多、減少也不代表看空，要和指數走勢一起看；"
+    "交易所不公布大盤融資維持率，maintenance_ratio 是 null，不得自己推估或寫出維持率，也不得寫斷頭、追繳。"
+    "same_day_as_base 是 false 時融資資料比基準日早，不得當成基準日的數字。",
+    "otc_index 是櫃買指數和加權指數比強弱；sector_share 是各產業的成交比重與近 5 日變化；screens 是資金輪動四象限與"
+    "法人買賣超排行前五，排行裡的個股與 ETF 不得寫成大盤會漲跌的理由；ofr_stress 是美國信用市場壓力，"
+    "資料日比台股早，只是背景。",
     "每一格到期後，程式會把你的落點命中率和「照歷史亂猜」並排比較：照歷史亂猜是不看任何判斷、只看歷史上同樣距離的兩條線"
     "收盤落在各區的比例。兩條線拉得越寬，「兩線之間」在歷史上本來就越常中，所以只為了保險把線拉寬，比不贏照歷史亂猜。",
     f"regime 從固定清單選一個：{'、'.join(REGIMES)}。base_date 照抄 INPUT_JSON 的 base_date。",
@@ -354,6 +371,9 @@ def _model_input(data: Mapping[str, Any], rows: list[dict[str, Any]], edition: s
         "chips": copy.deepcopy(data.get("chips")),
         "foreign_flow": copy.deepcopy(data.get("foreign_flow")),
         "wyckoff_lpsy": wyckoff_lpsy.index_layer(rows),
+        # I 票五層：呼叫端（forecast_run）算好放在 data；沒給的那一層寫缺（例如晚間補記漏記、舊的呼叫端）。
+        **{name: copy.deepcopy(data.get(name)) or {"status": "missing", "reason": "這一份沒有這一層的資料"}
+           for name in market_layers.LAYER_NAMES},
         "data_cutoffs": _cutoffs(data),
         "candidates": candidates,
         "bollinger": _bollinger(rows),

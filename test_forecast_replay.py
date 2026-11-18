@@ -161,6 +161,18 @@ class RunTests(ReplayTestCase):
             self.assertLessEqual(seen["data_cutoffs"]["institutional"], seen["base_date"])
         self.assertEqual((log["written"], log["stop_reason"]), (6, None))
 
+    def test_market_layers_are_read_the_same_way_and_only_up_to_the_base_date(self):
+        # I 票：重播照同一套五層；融資讀 analysis-data.js 旁邊的 chips-data.js，04-02 的那一份看不到 04-03 的餘額。
+        margin = [{"date": d, "margin_balance_billion": b, "margin_units": 1000, "short_units": 10}
+                  for d, b in (("2026-04-01", 100.0), ("2026-04-02", 101.0), ("2026-04-03", 103.0))]
+        (self.tmp / "chips-data.js").write_text("window.MARKET_CHIPS = " + json.dumps({"margin": margin}) + ";\n",
+                                                encoding="utf-8")
+        self.run_replay(end="2026-04-03", editions=("evening",), data_root=self.tmp / "data")
+        seen = {item["base_date"]: item for item in self.inputs()}
+        self.assertEqual(seen["2026-04-02"]["market_margin"]["margin_balance_billion"], 101.0)
+        self.assertEqual(seen["2026-04-02"]["market_margin"]["change_1d_billion"], 1.0)   # 101 − 100
+        self.assertEqual(seen["2026-04-03"]["otc_index"]["status"], "missing")
+
     def test_lessons_only_see_outcomes_that_had_expired_by_the_base_date(self):
         self.run_replay(end="2026-04-08", editions=("evening",))
 
