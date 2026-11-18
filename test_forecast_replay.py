@@ -247,6 +247,20 @@ class RunTests(ReplayTestCase):
         log = self.run_replay(end="2026-04-03", daily_limit=None)
         self.assertEqual((log["daily_limit"], log["written"]), (rp.DAILY_LIMIT, rp.DAILY_LIMIT))
 
+    def test_the_command_line_refuses_a_daily_setting_below_one_and_reports_the_one_it_uses(self):
+        import contextlib
+        import io
+        args = ["--plan", "--analysis", str(self.analysis_file(analysis(DATES))), "--method", str(self.method),
+                "--start", "2026-04-01", "--end", "2026-04-03"]
+        for bad in ("0", "-5", "x"):
+            with self.subTest(bad), self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+                rp.main([*args, "--daily-limit", bad])
+        for extra, expected in (([], rp.DAILY_LIMIT), (["--daily-limit", "7"], 7)):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rp.main([*args, *extra])
+            self.assertEqual(json.loads(out.getvalue())["daily_limit"], expected)
+
     def test_a_daily_setting_below_one_is_refused(self):
         with self.assertRaisesRegex(ValueError, "每天份數"):
             self.run_replay(end="2026-04-03", daily_limit=0)

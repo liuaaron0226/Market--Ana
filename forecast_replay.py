@@ -61,11 +61,11 @@ METHOD_SPOILERS = {
 # 本人 2026-11-17 選 A2：基準日上限 09-08（迄日填得再晚也一樣）；分天跑。
 REPLAY_UNTIL = "2026-09-08"
 # 每天份數（同一天各次加起來）：排程用 repository variable MARKET_ANA_REPLAY_DAILY_LIMIT 設定，這裡是沒設時的預設。
-# 11-17 定的 40 份是 Flash 的時候；改 Argon 後（11-17 定案「重播先停、量完再說」）照最保守的估法先填 1：
-#   官方沒公布 Argon 每週上限；唯一的讀數是 11-17 叫一次只回「OK」的 Argon，Argon 每週額度 100%→99%，
-#   保守當成每次呼叫 1%（一週約 100 次）。正式工作一個交易日約 15 次 Argon（晚間 1、晨間 1、每日判斷約 12、
-#   白話 1），一週約 75 次；留兩成餘裕 → 每週還能用 100×0.8−75＝5 次，五個交易日每天 1 份。
-#   正式跑 2～3 天後，用設定頁（D1 gemini_usage_snapshots）實際的「每次掉幾 %」重算，再設 repository variable。
+# 11-17 的 40 份是 Flash 的時候；換 Argon 後還量不到用量（2026-11-19 前只真的叫過 1 次 Argon），照最保守填 1：
+#   官方沒公布 Argon 每週上限。唯一讀數是一次只回「OK」的 Argon 呼叫讓 Argon 每週額度 100%→99%；當成每次 1%
+#   （一週約 100 次）、正式工作一個交易日約 15 次（一週約 75 次），留兩成：100×0.8−75＝每週 5 次 → 每天 1 份。
+#   這仍可能高估：額度若按 token 算，預測的提示比「OK」長得多；百分比有取整；每份不合格會重試一次。
+#   算法與重算步驟見交接筆記 replay-argon-resume；正式跑幾天後用設定頁的實際讀數重算，再設 repository variable。
 DAILY_LIMIT = 1
 # 可重播的時段（台北）：07:20 晨間版跑完、開盤之後，到收盤後每日更新與晚間版之前。
 # 其他時段不跑，免得剛好把 AI Pro 的額度用完，害正式的晨間或晚間版漏記。
@@ -305,6 +305,13 @@ def run_replay(
     return log
 
 
+def _positive(text: str) -> int:
+    value = int(text)
+    if value < 1:
+        raise argparse.ArgumentTypeError("至少要 1")
+    return value
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="事前預測的歷史重播（參考）：先 --plan 算天數，本人同意後才真的跑")
     parser.add_argument("--analysis", type=Path, required=True, help="已發布的 analysis-data.js")
@@ -316,8 +323,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ledger", type=Path, help="重播帳本（不可以是正式帳本）；裡面的 chips-backfill/ 會補進資料包")
     parser.add_argument("--agy-bin", type=Path)
     parser.add_argument("--fetched-at", help="這次資料抓取的時間（ISO 8601）")
-    parser.add_argument("--max-forecasts", type=int)
-    parser.add_argument("--daily-limit", type=int, help=f"每天份數（同一天各次加起來的上限；沒給用 {DAILY_LIMIT}）")
+    parser.add_argument("--max-forecasts", type=_positive)
+    parser.add_argument("--daily-limit", type=_positive, help=f"每天份數（同一天各次加起來的上限；沒給用 {DAILY_LIMIT}）")
     parser.add_argument("--edition", action="append", choices=list(fl.EDITIONS))
     parser.add_argument("--overseas-dir", type=Path)
     parser.add_argument("--data-root", type=Path, default=fr.DATA_ROOT)
@@ -331,7 +338,7 @@ def main(argv: list[str] | None = None) -> int:
                            start=args.start, end=args.end, editions=editions)
         summary = {"replayable": len(plan["dates"]), "from": plan["dates"][0] if plan["dates"] else None,
                    "to": plan["dates"][-1] if plan["dates"] else None, "forecasts": plan["forecasts"],
-                   "model_calls": plan["model_calls"], "daily_limit": args.daily_limit or DAILY_LIMIT,
+                   "model_calls": plan["model_calls"], "daily_limit": DAILY_LIMIT if args.daily_limit is None else args.daily_limit,
                    "skipped": {reason: {"days": len(days), "from": days[0], "to": days[-1]}
                                for reason, days in plan["skipped"].items()}}
         print(json.dumps(summary, ensure_ascii=False, indent=2))

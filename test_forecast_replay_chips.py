@@ -124,6 +124,35 @@ class FetchTests(ChipsTestCase):
         self.assertIn("2026-03-31", days)
         self.assertEqual(len(days), len(set(days)))
 
+    def test_an_old_gap_does_not_drag_the_request_back_to_the_whole_range(self):
+        # 期交所某天就是沒有外資那一列（03-27）：之後只抓已涵蓋的最後一天以後，不再從 03-27 整段拉到最新
+        first = FakeHttp({"https://www.twse.com.tw/fund/BFI82U": bfi82u(-5),
+                          "https://www.taifex.com.tw/": taifex(["2026-03-30"])})
+        chips.fetch(self.out, ["2026-03-30"], http=first, now=lambda: "x", pause=0)
+        later = FakeHttp({"https://www.twse.com.tw/fund/BFI82U": bfi82u(-5),
+                          "https://www.taifex.com.tw/": taifex(["2026-03-31"])})
+        chips.fetch(self.out, ["2026-03-27", "2026-03-30", "2026-03-31"], http=later, now=lambda: "y", pause=0)
+        futures = [data for method, _, data in later.requests if method == "POST"]
+        self.assertEqual(futures, [{"queryStartDate": "2026/03/31", "queryEndDate": "2026/03/31", "commodityId": "TXF"}])
+
+    def test_a_range_already_fetched_that_still_lacks_days_stops_loudly(self):
+        # 同一段已經抓過、原件裡還是沒有那幾天：不悄悄跳過，停下來說明（否則那幾天永遠補不到又沒人知道）
+        empty = FakeHttp({"https://www.twse.com.tw/fund/BFI82U": bfi82u(-5),
+                          "https://www.taifex.com.tw/": taifex([])})
+        chips.fetch(self.out, ["2026-03-31"], http=empty, now=lambda: "x", pause=0)
+        with self.assertRaisesRegex(chips.BackfillStopped, "2026-03-31"):
+            chips.fetch(self.out, ["2026-03-31"], http=FakeHttp({}), now=lambda: "y", pause=0)
+
+    def test_an_http_error_names_its_status_code(self):
+        import io
+        import urllib.error
+
+        def refuse(url, data):
+            raise urllib.error.HTTPError(url, 503, "Service Unavailable", {}, io.BytesIO(b""))
+        http = FakeHttp({"https://www.twse.com.tw/fund/BFI82U": bfi82u(-5), "https://www.taifex.com.tw/": refuse})
+        with self.assertRaisesRegex(chips.BackfillStopped, "HTTP 503"):
+            chips.fetch(self.out, ["2026-03-31"], http=http, now=lambda: "x", pause=0)
+
     def test_nothing_is_requested_when_saved_originals_already_cover_every_day(self):
         chips.fetch(self.out, ["2026-03-30", "2026-03-31"], http=self.http(), now=lambda: "x", pause=0)
         again = FakeHttp({})
