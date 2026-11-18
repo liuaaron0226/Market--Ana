@@ -6,6 +6,20 @@
 /* ---------- 盤中狀態：只在 30 秒內有新資料時顯示 LIVE ---------- */
 .bd .bd-price { display: grid; grid-template-columns: auto auto; align-items: baseline; justify-items: end; gap: 4px 16px; }
 .bd-price-line { display: inline-flex; align-items: center; gap: 10px; }
+/* 名稱旁的自選星號（本人 11-18）：空心＝還沒加、金色實心＝已在自選；觸控範圍 44px */
+.bd-ident h1 { display: flex; align-items: center; gap: 6px; }
+.st-fav { display: inline-grid; place-items: center; width: 44px; height: 44px; margin: -4px 0; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--faint); cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+.st-fav svg { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 1.6; transition: transform 160ms ease; }
+.st-fav[aria-pressed="true"] { color: var(--gold); }
+.st-fav[aria-pressed="true"] svg { fill: currentColor; }
+.st-fav:active svg { transform: scale(.88); }
+@media (hover: hover) { .st-fav:hover { color: var(--gold); } }
+.st-fav[data-busy] { opacity: .6; }
+.st-fav[hidden] { display: none; }
+/* 現價碰到漲停紅底、跌停綠底，白字（本人 11-18「漲停跟跌停的數字反白（紅綠）」；看盤軟體的慣例） */
+.bd-price #close[data-limit="up"], .bd-price #close[data-limit="down"] { padding: 2px 8px; border-radius: 8px; color: #fff; }
+.bd-price #close[data-limit="up"] { background: var(--up); }
+.bd-price #close[data-limit="down"] { background: var(--down); }
 .bd-live-badge {
   flex: none; padding: 2px 6px; border-radius: 4px; background: var(--ink); color: var(--bg);
   font: 600 11px/1.4 var(--sans); letter-spacing: .04em;

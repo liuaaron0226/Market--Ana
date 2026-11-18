@@ -904,9 +904,17 @@
     } else if (form.matches('.pf-rename')) renameGroup(form);
   });
   // 兩個就地的輸入框（群組改名、取新群組的名字）：按 Enter（或「確定」）才算數；離開焦點或按 Esc 是不改（照本人看過的樣品）
+  // iPhone Safari 按按鈕不會把焦點移過去（relatedTarget 是空的）：按「確定」時輸入框先離開焦點，
+  // 原本會被當成「按了別處」收掉，確定就落空了——本人 11-18「新增群組卻沒有顯示出來，一樣顯示未分組」。
+  // 手指或滑鼠是按在這個表單裡面的，就不算離開。
+  host.addEventListener('pointerdown', event => {
+    const form = event.target.closest('.pf-rename, .pf-new-group');
+    if (form) form.dataset.pressing = '1';
+  });
+  host.addEventListener('pointerup', () => setTimeout(() => host.querySelectorAll('[data-pressing]').forEach(form => delete form.dataset.pressing), 400));
   host.addEventListener('focusout', event => {
     const form = event.target.closest('.pf-rename, .pf-new-group');
-    if (!form || !form.isConnected || form.dataset.busy || form.contains(event.relatedTarget)) return;
+    if (!form || !form.isConnected || form.dataset.busy || form.dataset.pressing || form.contains(event.relatedTarget)) return;
     if (form.matches('.pf-rename')) closeRename(false);
     else closeNaming(false);
   });

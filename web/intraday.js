@@ -177,6 +177,21 @@
   const tickFloor = price => pyRound(Math.max(.01, Math.floor((price + 1e-9) / tickStep(price)) * tickStep(price)), 2);
   const tickCeil = price => pyRound(Math.max(.01, Math.ceil((price - 1e-9) / tickStep(price)) * tickStep(price)), 2);
   const tickRound = price => price - tickFloor(price) < tickCeil(price) - price ? tickFloor(price) : tickCeil(price);
+
+  // 漲跌停價（本人 11-18 要現價碰到時紅綠反白）：前一天收盤 ±10%，照跳動單位取到 10% 以內——漲停往下取、跌停往上取。
+  // ETF 的跳動單位和股票不同：50 元以下 0.01、50 元以上 0.05。
+  const etfStep = price => (price < 50 ? .01 : .05);
+  function limitPrices(previousClose, { etf = false } = {}) {
+    const step = etf ? etfStep : tickStep;
+    const up = previousClose * 1.1, down = previousClose * .9;
+    return { up: pyRound(Math.floor((up + 1e-9) / step(up)) * step(up), 2), down: pyRound(Math.ceil((down - 1e-9) / step(down)) * step(down), 2) };
+  }
+  // 現價碰到漲停是 'up'、跌停是 'down'，其他（含資料不全）是空字串
+  function limitState(price, previousClose, options) {
+    if (!finite(price) || !finite(previousClose) || previousClose <= 0) return '';
+    const { up, down } = limitPrices(previousClose, options);
+    return Math.abs(price - up) < 1e-6 ? 'up' : Math.abs(price - down) < 1e-6 ? 'down' : '';
+  }
   const supportTick = (price, close) => pyRound(Math.max(.01, tickRound(price) >= close ? tickFloor(close - tickStepDown(close)) : tickRound(price)), 2);
   const resistanceTick = (price, close) => pyRound(tickRound(price) <= close ? tickCeil(close + tickStep(close)) : tickRound(price), 2);
   const tier = distance => Math.abs(distance) <= 10 ? 'near' : Math.abs(distance) <= 20 ? 'mid' : 'far';
@@ -388,5 +403,5 @@
     return candles;
   }
 
-  window.Intraday = { createPoller, nextPollDelay, projectAnalysis, quoteCaption, liveStatusText, liveUnavailable, secondCandles, _test: { indicators, priceLevels, projectedConditions } };
+  window.Intraday = { createPoller, nextPollDelay, projectAnalysis, quoteCaption, liveStatusText, liveUnavailable, secondCandles, limitPrices, limitState, _test: { indicators, priceLevels, projectedConditions } };
 })();

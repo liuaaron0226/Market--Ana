@@ -324,6 +324,9 @@
       $('ladderCurrentMeta').textContent = `淨值日 ${r.quote.nav_date || r.as_of}`;
     }
     $('close').textContent = fmt(r.quote.close);
+    // 漲停紅底、跌停綠底的反白（本人 11-18）：前一天收盤取日線倒數第二根（盤中那一根已接在最後）；基金沒有漲跌停。
+    const previous = isFund(r) ? null : (r.bars || []).at(-2)?.close ?? null;
+    $('close').dataset.limit = window.Intraday.limitState(r.quote.close, previous, { etf: /^00/.test(r.code) });
     const chg = r.quote.chg_pct;
     const pctText = chg === null || chg === undefined ? '' : `${chg > 0 ? '+' : ''}${Number(chg).toFixed(2)}%`;
     const change = r.quote.change;
@@ -1188,6 +1191,7 @@
       }
       baseResult = data;
       render(data, true);
+      syncFavorite(data.code);
       loadHistory(data, sequence);
       loadDrawings(data.code, sequence);
       // 自選股關注的判斷（watch-judgments.js）：只有站主、開關打開而且這一檔有判斷時才加小鍵與兩條線。
@@ -1205,6 +1209,45 @@
       if (sequence === requestSequence) $('content').setAttribute('aria-busy', 'false');
     }
   }
+
+  // 個股頁直接加自選（本人 11-18「在個股頁想要加入自選很麻煩，還要去庫存裡面加入」）：名稱旁一顆星，
+  // 點一下加入、再點一下移出。自選清單只讀一次，之後照按的結果更新；讀不到（未登入、服務暫時失敗）就不出現。
+  let favorites = null;
+  async function syncFavorite(code) {
+    const button = $('favToggle');
+    if (!favorites) {
+      try {
+        const response = await fetch('/api/watchlist', { credentials: 'same-origin', cache: 'no-store', headers: { accept: 'application/json' } });
+        if (!response.ok) throw new Error(String(response.status));
+        favorites = new Set(((await response.json()).items || []).map(item => item.code));
+      } catch (_) { button.hidden = true; return; }
+    }
+    const on = favorites.has(code);
+    button.dataset.code = code;
+    button.setAttribute('aria-pressed', String(on));
+    button.setAttribute('aria-label', on ? '從自選移出' : '加入自選');
+    button.title = on ? '已在自選（點一下移出）' : '加入自選';
+    button.hidden = false;
+  }
+  $('favToggle').addEventListener('click', async () => {
+    const button = $('favToggle'), code = button.dataset.code;
+    if (!code || button.dataset.busy || !favorites) return;
+    const on = favorites.has(code);
+    button.dataset.busy = '1';
+    button.setAttribute('aria-pressed', String(!on));   // 先翻過去，失敗再翻回來
+    try {
+      const response = await fetch(on ? `/api/watchlist/${encodeURIComponent(code)}` : '/api/watchlist', {
+        method: on ? 'DELETE' : 'POST', credentials: 'same-origin',
+        headers: { 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify(on ? {} : { code }),
+      });
+      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).message || '暫時無法處理，請稍後再試');
+      if (on) favorites.delete(code); else favorites.add(code);
+    } catch (error) {
+      button.title = error.message;
+    }
+    delete button.dataset.busy;
+    if (button.dataset.code === code) syncFavorite(code);
+  });
 
   $('comparePeriods').addEventListener('click', event => {
     const cell = event.target.closest('.cell[data-period]');
