@@ -6,7 +6,8 @@
 韓股與指數走專案現有的 EODHD（EODHD_API_KEY）；日本個股目前沒有來源，不抓。
 每一檔各自成敗：查無代號、額度用完、回應格式不是預期、連線失敗都只標那一檔（額度用完時同一來源後面的不再打），
 不寫入壞資料，舊資料保留。兩家條款都限本人私用、終止使用時要整批刪除：``python overseas_peers.py purge --source massive --yes``。
-這裡抓到的數字只給站主看，不放進交給 Gemini 的提示（本人 2026-11-15 定案；改付費方案是 H 包的事）。
+本人 2026-11-19 00:1x「富果、新聞來源、國外同類股都交給 Gemini 做詳細分析」推翻 11-15「只給站主看、不放進提示」：
+自選股每日判斷讀這裡存的收盤（licensed_inputs.peers_layer）。
 
   python overseas_peers.py daily
   python overseas_peers.py purge --source massive|eodhd|all --yes
