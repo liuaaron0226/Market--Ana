@@ -31,6 +31,11 @@ on:
         description: "乾跑時重播：晚間版是已發布的某一天，晨間版是開盤日 YYYY-MM-DD（只在乾跑有效）"
         required: false
         type: string
+      rewrite_today:
+        description: "只在乾跑：暫存副本裡先拿掉當天這一版已有的判斷，讓 Gemini 真的寫一次（J 票驗新輸入用；不寫入任何地方）"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -218,6 +223,7 @@ jobs:
 
       - name: 寫判斷
         env:
+          REWRITE_TODAY: ${{ inputs.rewrite_today }}
           # J 票（本人 2026-11-19）：富果盤中（沒有這個機密就那一層寫缺）、網站資料庫的新聞與國外同類股（唯讀查）。
           FUGLE_API_KEY: ${{ secrets.FUGLE_API_KEY }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -239,6 +245,7 @@ jobs:
           else
             args+=(--dry-run --log-output "$RUNNER_TEMP/watch-run/run.json")
             if [ -n "$AS_OF" ]; then args+=(--as-of "$AS_OF"); fi
+            if [ "$REWRITE_TODAY" = "true" ]; then args+=(--rewrite-today); fi
           fi
           python watch_run.py judge "${args[@]}"
           mkdir -p "$RUNNER_TEMP/watch-run"

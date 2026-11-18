@@ -208,6 +208,23 @@ class EveningTests(WatchRunTestCase):
         self.assertTrue({"intraday", "headlines", "peers"} <= set(item["missing_layers"]))
         self.assertIn("重播", log["licensed_skipped"])
 
+    def test_a_dry_run_can_rewrite_a_day_that_already_has_judgments_without_touching_the_ledger(self):
+        # J 票（owner 11-19）：Actions 乾跑的那天已經有正式判斷，照帳本規矩 unchanged／conflict、不會呼叫模型；
+        # rewrite_today 只在乾跑的暫存副本裡先拿掉那一天那一版的判斷，模型就會真的寫，真的帳本一個檔案都不動。
+        self.earlier_judgment(BASE, code="2330")
+        before = sorted(path.name for path in self.ledger.rglob("*.json"))
+        model = self.model()
+        plain = self.evening(watchlist=WATCHLIST[:1], dry_run=True, model=model)
+        self.assertNotEqual(plain["stocks"][0]["outcome"], "written")
+        fresh = self.evening(watchlist=WATCHLIST[:1], dry_run=True, rewrite_today=True)
+        self.assertEqual(fresh["stocks"][0]["outcome"], "written")
+        self.assertEqual(fresh["rewrite_today"], 1)
+        self.assertEqual(sorted(path.name for path in self.ledger.rglob("*.json")), before)
+
+    def test_rewriting_is_only_for_dry_runs(self):
+        with self.assertRaises(ValueError):
+            self.evening(rewrite_today=True)
+
     def test_a_stock_whose_data_cannot_be_read_waits_without_stopping_the_others(self):
         # 2330 的行情讀不到：期限前不寫（之後可以重跑），2317 照寫。
         self.source = FakeSource(broken={"2330"})

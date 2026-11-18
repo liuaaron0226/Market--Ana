@@ -399,6 +399,7 @@ def run_evening(
     log_output: Path | str | None = None,
     call_budget: int = CALL_BUDGET,
     timeout_seconds: float = 360,
+    rewrite_today: bool = False,
 ) -> dict[str, Any]:
     """寫晚間版：先對帳、補記整晚沒跑的漏記，再依打開關注的先後一檔一檔寫。
 
@@ -407,6 +408,8 @@ def run_evening(
     """
     if as_of and not dry_run:
         raise ValueError("重播某一天（as_of）只能在乾跑使用，正式帳本不補寫過去的判斷")
+    if rewrite_today and not dry_run:
+        raise ValueError("rewrite_today 只能在乾跑使用：它會在暫存副本裡拿掉當天已有的判斷")
     clock = _frozen(as_of, REPLAY_CLOCK) if as_of else (now or default_now)
     index_daily = _index_daily(load_analysis(analysis_path))
     if as_of:
@@ -418,7 +421,7 @@ def run_evening(
         target, "evening", watchlist, index_daily, base_date, session_date=None, forecast_ledger=forecast_ledger,
         method_path=method_path, model_bin=model_bin, source=source, model=model, clock=clock, dry_run=dry_run,
         sql_output=None if dry_run else sql_output, log_output=log_output, call_budget=call_budget,
-        timeout_seconds=timeout_seconds, replay=bool(as_of)))
+        timeout_seconds=timeout_seconds, replay=bool(as_of), rewrite_today=rewrite_today))
 
 
 def run_morning(
@@ -440,6 +443,7 @@ def run_morning(
     log_output: Path | str | None = None,
     call_budget: int = CALL_BUDGET,
     timeout_seconds: float = 360,
+    rewrite_today: bool = False,
 ) -> dict[str, Any]:
     """寫晨間版：開盤日 ``session_date`` 早上、開盤前 15 分鐘之前鎖定；基準日是前一個台股交易日（和大盤預測晨間版同一套）。
 
@@ -449,6 +453,8 @@ def run_morning(
     """
     if replay and not dry_run:
         raise ValueError("重播某個開盤日只能在乾跑使用，正式帳本不補寫過去的判斷")
+    if rewrite_today and not dry_run:
+        raise ValueError("rewrite_today 只能在乾跑使用：它會在暫存副本裡拿掉當天已有的判斷")
     clock = _frozen(session_date, MORNING_REPLAY_CLOCK) if replay else (now or default_now)
     if not trading_day_status(session_date, holidays):
         log = {"schema": SCHEMA, "edition": "morning", "dry_run": dry_run, "session_date": session_date,
@@ -467,7 +473,7 @@ def run_morning(
         target, "morning", watchlist, index_daily, base_date, session_date=session_date,
         forecast_ledger=forecast_ledger, method_path=method_path, model_bin=model_bin, source=source, model=model,
         clock=clock, dry_run=dry_run, sql_output=None if dry_run else sql_output, log_output=log_output,
-        call_budget=call_budget, timeout_seconds=timeout_seconds, replay=replay))
+        call_budget=call_budget, timeout_seconds=timeout_seconds, replay=replay, rewrite_today=rewrite_today))
 
 
 def _in_ledger(ledger: Path | str, dry_run: bool, work: Callable[[Path], dict[str, Any]]) -> dict[str, Any]:
@@ -496,15 +502,25 @@ def _run(ledger: Path, edition: str, watchlist: Sequence[Mapping[str, Any]], ind
          base_date: str, *, session_date: str | None, forecast_ledger: Path | str | None, method_path: Path | str,
          model_bin: Path | str, source: Source, model: str, clock: Callable[[], datetime], dry_run: bool,
          sql_output: Path | str | None, log_output: Path | str | None, call_budget: int,
-         timeout_seconds: float, replay: bool = False) -> dict[str, Any]:
+         timeout_seconds: float, replay: bool = False, rewrite_today: bool = False) -> dict[str, Any]:
     method_text = Path(method_path).read_text(encoding="utf-8")
     codes = [str(item["code"]) for item in watchlist]
     market = market_layer(forecast_ledger, base_date, edition)
     # 晨間版看得到開盤日早上（開盤前）才發的公告；排程在寫之前另抓一次當天的官方快照。
     news = source.announcements(codes, session_date or base_date)
+    if rewrite_today:
+        # 只會在乾跑的暫存副本上（run_evening／run_morning 已擋住非乾跑）：拿掉這一天、這一版、關注中的股票已有的判斷，
+        # 模型才會真的寫一次（帳本一檔一天一版只有一個檔案，已有正式判斷時照規矩是 unchanged／conflict、不呼叫模型）。
+        removed = 0
+        for code in codes:
+            path = ledger / "judgments" / f"{base_date}__{edition}__{code}.json"
+            if path.exists():
+                path.unlink()
+                removed += 1
     log: dict[str, Any] = {"schema": SCHEMA, "edition": edition, "dry_run": dry_run, "base_date": base_date,
                            **({"session_date": session_date} if session_date else {}),
-                           "model": model, "started_at": clock().astimezone(TAIPEI).isoformat(), "watched": codes}
+                           "model": model, "started_at": clock().astimezone(TAIPEI).isoformat(), "watched": codes,
+                           **({"rewrite_today": removed} if rewrite_today else {})}
     # 帳本裡有轉變日的每一檔（含已經關掉關注的）都要對帳，所以晚間版的行情要讀關注清單與帳本兩邊的代號。
     ledger_codes = sorted({record["code"] for record in wl.read_ledger(ledger)["judgments"]})
     loaded, load_errors = _load(source, [*codes, *ledger_codes], base_date, edition)
@@ -870,6 +886,8 @@ def build_parser() -> argparse.ArgumentParser:
     judge.add_argument("--session-date", help="晨間版：開盤日（台北今天）")
     judge.add_argument("--dry-run", action="store_true", help="只在暫存副本上寫，不碰帳本、不輸出資料庫指令檔")
     judge.add_argument("--as-of", help="乾跑時重播：晚間版是已發布的某一天，晨間版是開盤日（須等於 --session-date）")
+    judge.add_argument("--rewrite-today", action="store_true",
+                       help="只在乾跑：暫存副本裡先拿掉當天這一版已有的判斷，讓模型真的寫一次（看新輸入怎麼被讀）")
     judge.add_argument("--call-budget", type=int, default=CALL_BUDGET)
     judge.add_argument("--sql-output", type=Path)
     judge.add_argument("--log-output", type=Path)
@@ -943,7 +961,7 @@ def main(argv: list[str] | None = None) -> int:
                   source=LocalSource(fugle=licensed_inputs.fugle_from_env(), query=_wrangler_query,
                                      owner_email=os.environ.get("OWNER_EMAIL", "")),
                   dry_run=args.dry_run, sql_output=args.sql_output, log_output=args.log_output,
-                  call_budget=args.call_budget)
+                  call_budget=args.call_budget, rewrite_today=args.rewrite_today)
     if args.edition == "morning":
         if not args.session_date:
             parser.error("晨間版要給 --session-date")
