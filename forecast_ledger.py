@@ -27,6 +27,7 @@ import foreign_flow
 import gemini_models
 import licensed_inputs
 import market_layers
+import order_flow
 import wyckoff_lpsy
 # 鎖定、雜湊、模型呼叫、期限與方法版本和關注帳本共用（ledger_core），這裡只留預測帳本自己的規則。
 from ledger_core import (
@@ -68,7 +69,8 @@ PULLBACK_REGIME = "多頭中的回檔"
 TREND_LABELS = ("偏多", "偏空", "盤整")
 REQUIRED_INPUTS = ("index", "institutional", "futures")
 
-LICENSED_LAYERS = ("intraday", "news")
+# order_flow：本人 2026-11-19 題 1「要找」——證交所每 5 秒委託成交統計整理的全市場委買委賣（order_flow.py）。
+LICENSED_LAYERS = ("intraday", "news", "order_flow")
 
 # 候選關卡與基準的參數：在第一筆紀錄之前寫定，整組算進輸入版本，改了就是新系列。
 PARAMETERS: dict[str, Any] = {
@@ -84,6 +86,7 @@ PARAMETERS: dict[str, Any] = {
     "layers": ["base", "overseas", "foreign_flow", "wyckoff_lpsy", *market_layers.LAYER_NAMES, *LICENSED_LAYERS,
                "similar", "lessons"],
     "licensed": licensed_inputs.PARAMETERS,
+    "order_flow": order_flow.PARAMETERS,
     "foreign_flow_layer": foreign_flow.VERSION,
     "wyckoff_lpsy_layer": wyckoff_lpsy.INDEX_VERSION,
     "market_layers": market_layers.PARAMETERS,
@@ -187,6 +190,7 @@ _PROMPT_RULES = (
     "news 是大環境新聞：items 是中央社對不到個股的那些，us_items 是美國 CNBC、紐約時報、華爾街日報的英文財經新聞"
     "（本人 2026-11-19 加）：" + licensed_inputs.NOTES["headlines"]
     + "理由裡提到新聞只能寫成「新聞提到…」這種轉述，不能單獨決定方向，也不得抄標題。",
+    order_flow.NOTE,
     "每一格到期後，程式會把你的落點命中率和「照歷史亂猜」並排比較：照歷史亂猜是不看任何判斷、只看歷史上同樣距離的兩條線"
     "收盤落在各區的比例。兩條線拉得越寬，「兩線之間」在歷史上本來就越常中，所以只為了保險把線拉寬，比不贏照歷史亂猜。",
     f"regime 從固定清單選一個：{'、'.join(REGIMES)}。base_date 照抄 INPUT_JSON 的 base_date。",
@@ -494,9 +498,22 @@ def _rejected(structured: Any, model_input: Mapping[str, Any]) -> dict[str, str]
 
 # ---- 寫一份預測 ----
 
+# 輸入版本越來越長（J 票加到 14 層、148 字），對帳檔的完整路徑在 Windows 上超過 260 字、連暫存資料夾都刪不掉。
+# 超過這個長度的版本，檔名改用「層數＋雜湊」的短寫法；已上線的版本都比它短，舊紀錄與對帳檔的路徑一個都不變。
+# 版本全文照樣寫在紀錄（input_version、forecast_id）裡。
+_FILE_VERSION_MAX = 130
+
+
+def _file_version(version: str) -> str:
+    if len(version) <= _FILE_VERSION_MAX or "-v1-" not in version:
+        return version
+    layers, digest = version.rsplit("-v1-", 1)
+    return f"{len(layers.split('+'))}layers-v1-{digest}"
+
+
 def _stem(base_date: str, edition: str, method_version: str, version: str) -> str:
     date.fromisoformat(base_date)
-    return f"{base_date}__{edition}__m{method_version}__{version}"
+    return f"{base_date}__{edition}__m{method_version}__{_file_version(version)}"
 
 
 def _forecast_path(root: Path, base_date: str, edition: str, method_version: str, version: str) -> Path:

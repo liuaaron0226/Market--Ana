@@ -546,6 +546,36 @@ class LicensedRunTests(MorningTestCase):
         self.assertEqual((result["licensed"]["news"]["items"], result["licensed"]["news"]["us_items"]), (0, 1))
         self.assertEqual(result["licensed"]["news"]["status"], "ok")
 
+    def fake_order_stats(self):
+        asked = []
+
+        class Fake:
+            def layer(self, base_date, earlier_dates):
+                asked.append((base_date, tuple(earlier_dates)))
+                return {"status": "ok", "data_date": base_date, "qty_ratio": 1.25}, {}
+        return Fake(), asked
+
+    def test_the_order_flow_layer_uses_the_base_date_and_the_three_days_before_it(self):
+        # 本人 2026-11-19 題 1「要找」：證交所每 5 秒委託成交統計，基準日與前三個交易日
+        stats, asked = self.fake_order_stats()
+        result = self.run_evening(order_stats=stats)
+        record = fl.read_ledger(self.ledger)["forecasts"][0]
+        self.assertEqual(asked, [(BASE, tuple(DATES[-4:-1]))])
+        self.assertEqual(record["input"]["order_flow"]["qty_ratio"], 1.25)
+        self.assertEqual(result["licensed"]["order_flow"], {"status": "ok", "data_date": BASE})
+
+    def test_the_morning_order_flow_never_asks_for_the_session_day(self):
+        stats, asked = self.fake_order_stats()
+        self.run_morning(order_stats=stats)
+        self.assertEqual(asked, [(BASE, tuple(DATES[-4:-1]))])   # 開盤日 SESSION 不在裡面
+
+    def test_a_dry_run_replay_still_uses_the_official_history_of_that_day(self):
+        stats, asked = self.fake_order_stats()
+        result = self.run_evening(dry_run=True, as_of=DATES[-2], order_stats=stats)
+        self.assertEqual(asked, [(DATES[-2], tuple(DATES[-5:-2]))])
+        self.assertEqual(result["licensed"]["order_flow"]["status"], "ok")
+        self.assertEqual(result["licensed"]["intraday"]["status"], "missing")   # 富果沒有歷史，照舊寫缺
+
     def test_morning_never_sees_the_session_days_intraday(self):
         # 晨間版：富果回的是開盤日（例如時鐘之後已經進入新的一天）就整塊缺，不會看到開盤日的盤中
         result = self.run_morning(fugle=self.fake_fugle(SESSION))

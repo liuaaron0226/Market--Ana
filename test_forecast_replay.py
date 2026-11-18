@@ -189,6 +189,19 @@ class RunTests(ReplayTestCase):
         self.assertEqual(seen["2026-04-02"]["observed_at"], "2026-03-30")
         self.assertEqual(seen["2026-04-03"]["observed_at"], "2026-03-31")
 
+    def test_replays_get_the_order_flow_from_the_official_history(self):
+        asked = []
+
+        class Fake:
+            def layer(self, base_date, earlier_dates):
+                asked.append(base_date)
+                return {"status": "ok", "data_date": base_date}, {}
+
+        self.run_replay(end="2026-04-02", editions=("evening", "morning"), order_stats=Fake())
+        self.assertEqual(sorted(set(asked)), ["2026-04-01", "2026-04-02"])
+        for seen in self.inputs():
+            self.assertEqual(seen["order_flow"]["data_date"], seen["base_date"])
+
     def test_replays_never_get_intraday_or_news_and_say_why(self):
         # J 票：舊日期沒有富果盤中與新聞的歷史，重播一律寫缺，不用今天的資料冒充（和正式預測因此不完全可比）
         self.run_replay(end="2026-04-02", editions=("evening",))

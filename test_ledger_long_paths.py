@@ -44,3 +44,17 @@ class LongPathTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ForecastFileNameTests(unittest.TestCase):
+    """J 票再加委買委賣後，輸入版本長到 148 字：檔名改用短的寫法（只有超過 130 字的版本才換，已上線的 I 票版本
+    123 字照舊，舊紀錄與對帳檔的路徑一個都不變）。版本全文照樣寫在紀錄裡。"""
+
+    def test_long_versions_get_a_short_file_tag_and_existing_ones_keep_theirs(self):
+        import forecast_ledger as fl
+        live = ("base+overseas+foreign_flow+wyckoff_lpsy+market_margin+otc_index+sector_share+screens+ofr_stress"
+                "+similar+lessons-v1-74371474")
+        self.assertEqual(fl._stem("2026-11-18", "evening", "0.4", live), f"2026-11-18__evening__m0.4__{live}")
+        long = ("base+overseas+foreign_flow+wyckoff_lpsy+market_margin+otc_index+sector_share+screens+ofr_stress"
+                "+intraday+news+order_flow+similar+lessons-v1-8eb80757")
+        self.assertEqual(fl._stem("2026-11-18", "evening", "0.4", long), "2026-11-18__evening__m0.4__14layers-v1-8eb80757")

@@ -447,7 +447,7 @@ class RecordMetadataTests(LedgerTestCase):
         self.assertEqual(record["base_date"], "2026-09-30")
         self.assertEqual(record["edition"], "evening")
         self.assertEqual(record["method_version"], "0.2")
-        self.assertRegex(record["input_version"], r"^base\+overseas\+foreign_flow\+wyckoff_lpsy\+market_margin\+otc_index\+sector_share\+screens\+ofr_stress\+intraday\+news\+similar\+lessons-v1-[0-9a-f]{8}$")
+        self.assertRegex(record["input_version"], r"^base\+overseas\+foreign_flow\+wyckoff_lpsy\+market_margin\+otc_index\+sector_share\+screens\+ofr_stress\+intraday\+news\+order_flow\+similar\+lessons-v1-[0-9a-f]{8}$")
         self.assertEqual(record["model"], "test-model")
         self.assertRegex(record["input_sha256"], r"^[0-9a-f]{64}$")
         self.assertEqual(record["locked_at"], "2026-09-30T17:00:00+08:00")
@@ -483,7 +483,7 @@ class ModelSeriesTests(LedgerTestCase):
         self.assertEqual(fl.INPUT_VERSION, fl.input_version(fl.MODEL))
         self.assertNotEqual(fl.input_version("gemini-4-argon"), fl.input_version("gemini-3.8-flash"))
         self.assertNotIn(self.FLASH_ERA, {fl.input_version("gemini-4-argon"), fl.input_version("gemini-3.8-flash")})
-        self.assertRegex(fl.input_version("gemini-4-argon"), r"^base\+overseas\+foreign_flow\+wyckoff_lpsy\+market_margin\+otc_index\+sector_share\+screens\+ofr_stress\+intraday\+news\+similar\+lessons-v1-[0-9a-f]{8}$")
+        self.assertRegex(fl.input_version("gemini-4-argon"), r"^base\+overseas\+foreign_flow\+wyckoff_lpsy\+market_margin\+otc_index\+sector_share\+screens\+ofr_stress\+intraday\+news\+order_flow\+similar\+lessons-v1-[0-9a-f]{8}$")
 
     def test_a_record_carries_the_input_version_of_the_model_that_wrote_it(self):
         record = self.write(model_name="gemini-4-argon")["record"]
@@ -913,7 +913,7 @@ class MarketLayersTests(LedgerTestCase):
             self.assertIn(name, fl.PARAMETERS["layers"])
         self.assertRegex(fl.input_version("gemini-4-argon"),
                          r"^base\+overseas\+foreign_flow\+wyckoff_lpsy\+market_margin\+otc_index\+sector_share\+screens"
-                         r"\+ofr_stress\+intraday\+news\+similar\+lessons-v1-[0-9a-f]{8}$")
+                         r"\+ofr_stress\+intraday\+news\+order_flow\+similar\+lessons-v1-[0-9a-f]{8}$")
         rules = "".join(fl._PROMPT_RULES)
         # 融資現在有給了：「沒給的資料（例如融資…）」那一句要改，換成融資的讀法與維持率不給。
         self.assertNotIn("例如融資", rules)
