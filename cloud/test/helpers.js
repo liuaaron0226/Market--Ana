@@ -2,14 +2,16 @@
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
 
-const MIGRATION = ["0001_init.sql", "0003_api_hits.sql", "0004_listed_stock_data.sql", "0005_user_portfolio.sql",
+// 照編號套用的 migration（測試直接讀檔建表）。也匯出清單：0028 的「舊資料搬過去」要先套前面幾支、寫進舊資料，再套它來驗
+export const MIGRATION_FILES = ["0001_init.sql", "0003_api_hits.sql", "0004_listed_stock_data.sql", "0005_user_portfolio.sql",
   "0008_stock_history.sql", "0009_user_drawings.sql", "0010_forecast_ledger.sql", "0011_watchlist_watch.sql", "0012_watchlist_group.sql",
   "0013_stock_announcements.sql", "0014_friend_gemini_keys.sql", "0015_watch_news.sql", "0016_watch_peers.sql",
   "0017_watch_ledger.sql", "0018_etf_securities.sql", "0019_watch_push.sql", "0020_friend_ai_daily.sql",
   "0021_watch_ready_notices.sql", "0022_friend_ai_stock_daily.sql", "0023_forecast_replay.sql",
-  "0024_gemini_usage.sql", "0025_fund_codes.sql", "0026_fund_securities.sql", "0027_stock_hourly_candles.sql"]
-  .map((f) => readFileSync(new URL(`../migrations/${f}`, import.meta.url), "utf8"))
-  .join("\n");
+  "0024_gemini_usage.sql", "0025_fund_codes.sql", "0026_fund_securities.sql", "0027_stock_hourly_candles.sql",
+  "0028_user_drawings_frame.sql"];
+export const migrationSql = (f) => readFileSync(new URL(`../migrations/${f}`, import.meta.url), "utf8");
+const MIGRATION = MIGRATION_FILES.map(migrationSql).join("\n");
 
 export function fakeD1() {
   const db = new DatabaseSync(":memory:");

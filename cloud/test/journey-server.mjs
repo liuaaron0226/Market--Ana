@@ -40,6 +40,9 @@ const deps = { fetchImpl: fetchJwks(issuer.jwks), now: () => Date.now(), marketP
   pushFetch };
 // 分時旅程（本人 11-18）：JOURNEY_LIVE_FIXTURE 指向一個 JSON（{ stock: 個股即時回應, index: 大盤即時回應 }），每次請求重讀，
 // 旅程中途改檔就能換成盤中／盤後。沒設時照舊連真的即時服務。
+// 沒給假即時資料時：個股即時服務一律「暫時沒有」，旅程不去問真的證交所／富果（60 分K 的 /hourly 也會叫它拿今天的那幾根）
+if (!fakeLive) deps.liveQuoteService = { snapshot: async () => ({ ok: false, market_open: false, market_phase: "closed", live: false, quote: null,
+  candles: {}, book: null, retry_after_seconds: 0, error: "journey-offline" }) };
 if (fakeLive) {
   const fixture = async () => JSON.parse(await readFile(process.env.JOURNEY_LIVE_FIXTURE, "utf8"));
   deps.liveQuoteService = { snapshot: async (code) => ({ ...(await fixture()).stock, code }) };

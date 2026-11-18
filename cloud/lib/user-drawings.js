@@ -6,17 +6,21 @@ const DRAWINGS_LIMIT = 200;
 const MAX_PRICE = 10_000_000;
 const TEXT_LIMIT = 200; // 與資料表的 CHECK (length(text) <= 200) 相同；一個表情符號算一個字
 const ID_RE = /^[A-Za-z0-9_-]{8,40}$/;
-const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+// 錨點的日期：日線（日／週／月共用）是「YYYY-MM-DD」；60 分是「YYYY-MM-DDTHH:MM」，那一根 60 分 K 開始的時分（本人 11-18：各畫各的）
+const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?$/;
 const CONTROL_RE = /[\u0000-\u001f\u007f\u0085\u2028\u2029]/; // 控制字元與行分隔字元
 const VISIBLE_RE = /[^\s\p{Cf}]/u; // 至少一個看得見的字：空白與零寬字元不算
 // 種類 → 錨點個數。
 const ANCHOR_COUNT = { hline: 1, trend: 2, ray: 2, rect: 2, fib: 2, text: 1 };
 
-function isCalendarDate(value) {
+// 合法的錨點日期是哪一種週期：'day'、'hour'；不合法回 null
+function frameOf(value) {
   const parts = typeof value === "string" ? DATE_RE.exec(value) : null;
-  if (!parts) return false;
+  if (!parts) return null;
   const date = new Date(Date.UTC(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3])));
-  return date.toISOString().slice(0, 10) === value;
+  if (date.toISOString().slice(0, 10) !== value.slice(0, 10)) return null;
+  if (parts[4] === undefined) return "day";
+  return Number(parts[4]) <= 23 && Number(parts[5]) <= 59 ? "hour" : null;
 }
 
 function requireId(id) {
@@ -44,8 +48,10 @@ function drawingInput(body) {
   if (typeof kind !== "string" || !Object.hasOwn(ANCHOR_COUNT, kind)) throw new UserPortfolioError(400, "畫線種類不正確");
   const anchors = body.anchors;
   if (!Array.isArray(anchors) || anchors.length !== ANCHOR_COUNT[kind]) throw new UserPortfolioError(400, "錨點個數與畫線種類不符");
+  const frames = new Set(anchors.map((anchor) => frameOf(anchor?.date)));
+  if (frames.has(null)) throw new UserPortfolioError(400, "錨點日期格式不正確");
+  if (frames.size !== 1) throw new UserPortfolioError(400, "兩個錨點要在同一種週期（都是日線或都是 60 分）");
   for (const anchor of anchors) {
-    if (!isCalendarDate(anchor?.date)) throw new UserPortfolioError(400, "錨點日期格式不正確");
     if (typeof anchor.price !== "number" || !Number.isFinite(anchor.price) || anchor.price <= 0 || anchor.price > MAX_PRICE) {
       throw new UserPortfolioError(400, "錨點價格須為正的有限數值");
     }
@@ -54,7 +60,7 @@ function drawingInput(body) {
   if (anchors.length === 2 && anchors[0].date === anchors[1].date && anchors[0].price === anchors[1].price) {
     throw new UserPortfolioError(400, "兩個錨點不能在同一位置");
   }
-  return { kind, anchors: anchors.map(({ date, price }) => ({ date, price })), text: textInput(kind, body.text) };
+  return { kind, frame: [...frames][0], anchors: anchors.map(({ date, price }) => ({ date, price })), text: textInput(kind, body.text) };
 }
 
 const fromRow = (row) => ({
@@ -80,18 +86,18 @@ async function listDrawings(db, email, code) {
 async function saveDrawing(request, db, email, code, id, deps) {
   const body = await readBody(request);
   requireId(id);
-  const { kind, anchors, text } = drawingInput(body);
+  const { kind, frame, anchors, text } = drawingInput(body);
   const tooMany = () => new UserPortfolioError(409, `每一檔最多 ${DRAWINGS_LIMIT} 條畫線`);
   const existing = await db.prepare("SELECT 1 AS found FROM user_drawings WHERE email = ? AND code = ? AND id = ?").bind(email, code, id).first();
   if (!existing && await countOf(db, email, code) >= DRAWINGS_LIMIT) throw tooMany();
   const at = new Date((deps.now || Date.now)()).toISOString();
   try {
     await db.prepare(
-      "INSERT INTO user_drawings (email, code, id, kind, date1, price1, date2, price2, text, created_at, updated_at) " +
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (email, code, id) DO UPDATE SET " +
-        "kind = excluded.kind, date1 = excluded.date1, price1 = excluded.price1, date2 = excluded.date2, " +
+      "INSERT INTO user_drawings (email, code, id, kind, frame, date1, price1, date2, price2, text, created_at, updated_at) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (email, code, id) DO UPDATE SET " +
+        "kind = excluded.kind, frame = excluded.frame, date1 = excluded.date1, price1 = excluded.price1, date2 = excluded.date2, " +
         "price2 = excluded.price2, text = excluded.text, updated_at = excluded.updated_at",
-    ).bind(email, code, id, kind, anchors[0].date, anchors[0].price, anchors[1]?.date ?? null, anchors[1]?.price ?? null, text, at, at).run();
+    ).bind(email, code, id, kind, frame, anchors[0].date, anchors[0].price, anchors[1]?.date ?? null, anchors[1]?.price ?? null, text, at, at).run();
   } catch (error) {
     // 併發寫入繞過上面的前置檢查時，由資料表的觸發器擋下；其他資料庫錯誤照原樣往上丟。
     if (!existing && await countOf(db, email, code) >= DRAWINGS_LIMIT) throw tooMany();

@@ -276,7 +276,7 @@ def desktop(journey: Journey, browser) -> None:
     journey.choose_period(page, "monthly")
     journey.check("月 K：工具列在、線在", tools.is_visible() and len(journey.lines(page)) == 1, journey.lines(page))
     journey.choose_period(page, "60m")
-    journey.check("60 分 K：工具列與畫線都不顯示", not tools.is_visible() and journey.lines(page) == [], journey.lines(page))
+    journey.check("60 分 K：工具列在（本人 11-18 可以畫）、日 K 畫的線不出現（各畫各的）", tools.is_visible() and journey.lines(page) == [], journey.lines(page))
     # 本人 11-18：秒 K 換成分時；分時下 K 線整塊讓位，分析工具鍵也不出現
     journey.choose_period(page, "ts")
     journey.check("分時：分析工具鍵與 K 線（連同畫線）都不顯示", not tools.is_visible() and not page.locator("#toolsKey").is_visible()
@@ -356,7 +356,7 @@ def mobile(journey: Journey, browser) -> None:
     page.locator(".bd-chart").screenshot(path=str(OUT / "mobile-03-chart.png"))
 
     journey.choose_period(page, "60m")
-    journey.check("手機：60 分 K 不顯示工具列與畫線", not tools.is_visible() and journey.lines(page) == [])
+    journey.check("手機：60 分 K 工具列在、日 K 畫的線不出現", tools.is_visible() and journey.lines(page) == [])
     journey.choose_period(page, "daily")
     page.reload()
     journey.ready(page, "2330")
@@ -511,7 +511,7 @@ def edit_desktop(journey: Journey, browser) -> None:
     journey.choose_period(page, "weekly")
     journey.check("切到週 K：選取還在", delete.is_visible() and len(journey.lines(page)) == 1 and journey.handle(page, journey.lines(page)[0]))
     journey.choose_period(page, "60m")
-    journey.check("切到60 分 K：工具列與刪除都收起", not tools.is_visible() and not delete.is_visible())
+    journey.check("切到 60 分 K：日 K 選取的那條不在這一套，刪除收起（工具列在）", tools.is_visible() and not delete.is_visible())
     page.keyboard.press("Delete")
     journey.choose_period(page, "daily")
     journey.check("切回日 K：線還在、沒有被60 分 K 上的 Delete 刪掉、不會自己恢復選取", len(journey.lines(page)) == 1
@@ -718,7 +718,7 @@ def two_point_desktop(journey: Journey, browser) -> None:
                       and journey.saved(page, code)[0]["anchors"] == kept, ink)
         page.locator(".bd-chart").screenshot(path=str(OUT / f"desktop-12-trend-{period}.png"))
     journey.choose_period(page, "60m")
-    journey.check("60 分 K：工具列與線都不顯示", not tools.is_visible() and journey.ink(page)["count"] == 0)
+    journey.check("60 分 K：工具列在、日 K 畫的線不出現", tools.is_visible() and journey.ink(page)["count"] == 0)
     journey.choose_period(page, "daily")
     back = journey.ink(page)
     journey.check("切回日 K：線回到原本的位置", spans(back, a2, b3), {"ink": back, "was": daily})
@@ -1134,7 +1134,7 @@ def fib_desktop(journey: Journey, browser) -> None:
                       and journey.saved(page, code)[0]["anchors"] == kept)
         page.locator(".bd-chart").screenshot(path=str(OUT / f"desktop-23-fib-{period}.png"))
     journey.choose_period(page, "60m")
-    journey.check("60 分 K：工具列與線都不顯示", not tools.is_visible() and journey.ink(page)["count"] == 0)
+    journey.check("60 分 K：工具列在、日 K 畫的線不出現", tools.is_visible() and journey.ink(page)["count"] == 0)
     journey.choose_period(page, "daily")
     back = fib_levels(page)
     journey.check("切回日 K：七條線回到原本的位置", len(back) == 7 and all(abs(one - other) <= 1.5 for one, other in zip(back, dragged)), {"back": back, "was": dragged})
@@ -1457,7 +1457,7 @@ def text_desktop(journey: Journey, browser) -> None:
         journey.check(f"{name}：文字還在，雲端的錨點與內容沒有被改", journey.ink(page)["count"] > 0 and journey.saved(page, code)[0] == kept)
         page.locator(".bd-chart").screenshot(path=str(OUT / f"desktop-30-text-{period}.png"))
     journey.choose_period(page, "60m")
-    journey.check("60 分 K：工具列與文字都不顯示", not tools.is_visible() and journey.ink(page)["count"] == 0)
+    journey.check("60 分 K：工具列在、日 K 寫的文字不出現", tools.is_visible() and journey.ink(page)["count"] == 0)
     journey.choose_period(page, "daily")
     back = journey.ink(page)
     journey.check("切回日 K：文字回到原本的位置", back["count"] > 0 and abs(back["minX"] - daily["minX"]) <= 1.5 and abs(back["minY"] - daily["minY"]) <= 1.5, {"back": back, "was": daily})
@@ -1824,7 +1824,7 @@ def save_desktop(journey: Journey, browser) -> None:
     hint.wait_for(state="visible", timeout=5000)
     journey.choose_period(page, "60m")
     box = hint.bounding_box() or {"y": 0, "height": 9999}
-    journey.check("切到60 分 K：工具列收起，「未儲存」還看得到、不蓋到圖", not page.locator("#drawTools").is_visible() and hint.is_visible()
+    journey.check("切到 60 分 K：「未儲存」還看得到、不蓋到圖", hint.is_visible()
                   and box["y"] + box["height"] <= host.bounding_box()["y"] + 0.5, box)
     page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-37-unsaved-intraday.png"))
     journey.choose_period(page, "daily")
@@ -2004,7 +2004,7 @@ def touch_mobile(journey: Journey, browser) -> None:
     journey.choose_period(page, "60m")
     hidden_height = canvas.bounding_box()["height"]
     journey.choose_period(page, "daily")
-    journey.check("08 手機：工具列不擠壓圖表高度（日 K 有工具列、60 分 K 沒有，圖一樣高）", abs(canvas.bounding_box()["height"] - hidden_height) < 0.5,
+    journey.check("08 手機：工具列不擠壓圖表高度（日 K 與 60 分 K 一樣高）", abs(canvas.bounding_box()["height"] - hidden_height) < 0.5,
                   [canvas.bounding_box()["height"], hidden_height])
 
     axis = journey.axis(page)
@@ -2201,6 +2201,87 @@ def touch_narrow(journey: Journey, browser) -> None:
     context.close()
 
 
+HOURLY_DAYS = 24  # 種進 D1 的 60 分 K：今天以前最近 24 個平日、每天五根（2330；旅程不連富果）
+
+
+def hourly_seed_sql() -> str:
+    import datetime as dt
+    rows, day, price = [], dt.date.today() - dt.timedelta(days=1), 2235.0
+    days = []
+    while len(days) < HOURLY_DAYS:
+        if day.weekday() < 5:
+            days.append(day)
+        day -= dt.timedelta(days=1)
+    for index, d in enumerate(reversed(days)):
+        for hour in range(9, 14):
+            close = round(price + (5 if (index + hour) % 3 else -5), 2)
+            rows.append(f"('2330', '{d.isoformat()}T{hour:02d}:00:00.000+08:00', {price}, {max(price, close) + 5}, {min(price, close) - 5}, {close}, 1000000)")
+            price = close
+    return ("INSERT INTO stock_hourly_candles (code, t, open, high, low, close, volume) VALUES " + ", ".join(rows) + ";\n"
+            + f"INSERT INTO stock_hourly_state (code, through, fetched_at) VALUES ('2330', '{(dt.date.today() - dt.timedelta(days=1)).isoformat()}', 'journey');\n")
+
+
+# 本人 11-18：60 分 K 也能畫線，各畫各的——60 分畫的線只在 60 分出現（錨點記到那一根開始的時分），日／週／月畫的不在 60 分出現。
+def hourly(journey: Journey, browser, touch: bool) -> None:
+    name = "手機" if touch else "桌機"
+    print(f"60 分畫線（{name}）")
+    options = ({"viewport": {"width": 390, "height": 844}, "device_scale_factor": 2, "is_mobile": True, "has_touch": True}
+               if touch else {"viewport": {"width": 1280, "height": 900}})
+    code = "2330"
+    context = journey.context(browser, OWNER, **options)
+    page = journey.open(context, code)
+    before = journey.saved(page, code)
+    day_lines = len(journey.lines(page))
+    journey.choose_period(page, "60m")
+    page.wait_for_function("() => /60分K · \\d+ 根/.test(document.getElementById('stockChartContext').textContent)", timeout=10_000)
+    tools = page.locator("#drawTools")
+    journey.check(f"60 分（{name}）：「分析工具」出現、六種工具都能按", page.locator("#toolsKey").is_visible() and tools.is_visible()
+                  and all(page.locator(f"#drawTools button[data-tool={kind}]").is_enabled() for kind in ["trend", "hline", "ray", "rect", "fib", "text"]))
+    journey.check(f"60 分（{name}）：日 K 畫的線不出現", journey.lines(page) == [], journey.lines(page))
+    canvas_y = journey.draw(page, 0.45, 0.4, touch=touch)
+    drawn = [item for item in journey.saved(page, code) if item["id"] not in {d["id"] for d in before}]
+    journey.check(f"60 分（{name}）：存下來的錨點記到那一根 60 分 K 開始的時分", len(drawn) == 1
+                  and len(drawn[0]["anchors"][0]["date"]) == 16 and drawn[0]["anchors"][0]["date"][11:] in {"09:00", "10:00", "11:00", "12:00", "13:00"}, drawn)
+    journey.check(f"60 分（{name}）：畫的那條在點的價位", any(abs(line - canvas_y) <= 1.5 for line in journey.lines(page)), journey.lines(page))
+    page.locator(".bd-chart").screenshot(path=str(OUT / f"hourly-{'mobile' if touch else 'desktop'}-1-drawn.png"))
+
+    journey.choose_period(page, "daily")
+    journey.check(f"60 分（{name}）：切到日 K，60 分畫的不出現、日 K 原本的照舊", len(journey.lines(page)) == day_lines, journey.lines(page))
+    journey.choose_period(page, "60m")
+    page.wait_for_timeout(400)
+    journey.check(f"60 分（{name}）：切回 60 分又出現", any(abs(line - canvas_y) <= 1.5 for line in journey.lines(page)), journey.lines(page))
+
+    page.reload()
+    journey.ready(page, code)
+    journey.choose_period(page, "60m")
+    page.wait_for_function("() => /60分K · \\d+ 根/.test(document.getElementById('stockChartContext').textContent)", timeout=10_000)
+    page.wait_for_timeout(500)
+    journey.check(f"60 分（{name}）：重新整理後還在", any(abs(line - canvas_y) <= 1.5 for line in journey.lines(page)), journey.lines(page))
+    page.locator(".bd-chart").screenshot(path=str(OUT / f"hourly-{'mobile' if touch else 'desktop'}-2-after-reload.png"))
+    if touch:
+        journey.check("60 分（手機）：工具列不造成橫向捲動", page.evaluate("() => document.documentElement.scrollWidth <= innerWidth"))
+        page.screenshot(path=str(OUT / "hourly-mobile-3-page.png"))
+
+    # 收尾：刪掉這一條（點選、再按刪除），日 K 的線不受影響
+    x, y = journey.canvas_xy(page, 0.5, canvas_y)
+    if touch:
+        page.touchscreen.tap(x, y)
+    else:
+        page.mouse.click(x, y)
+    with page.expect_response(drawing_request("DELETE")):
+        (page.locator("#drawDelete").tap() if touch else page.locator("#drawDelete").click())
+    journey.check(f"60 分（{name}）：刪得掉，日 K 的線都還在", [d["id"] for d in journey.saved(page, code)] == [d["id"] for d in before])
+    context.close()
+
+
+def hourly_desktop(journey: Journey, browser) -> None:
+    hourly(journey, browser, touch=False)
+
+
+def hourly_mobile(journey: Journey, browser) -> None:
+    hourly(journey, browser, touch=True)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", help="已經開著的旅程伺服器；省略時自己起一個")
@@ -2211,7 +2292,10 @@ def main() -> int:
     base = args.base
     if not base:
         port = free_port()
-        server = subprocess.Popen(["node", str(ROOT / "cloud/test/journey-server.mjs"), str(port), "relaxed"], cwd=ROOT / "cloud")
+        seed = OUT / "hourly-seed.sql"
+        seed.write_text(hourly_seed_sql(), encoding="utf-8")
+        server = subprocess.Popen(["node", str(ROOT / "cloud/test/journey-server.mjs"), str(port), "relaxed"], cwd=ROOT / "cloud",
+                                  env={**__import__("os").environ, "JOURNEY_SEED_SQL": str(seed)})
         base = f"http://127.0.0.1:{port}"
         for _ in range(100):
             try:
@@ -2226,7 +2310,7 @@ def main() -> int:
     try:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch()
-            for step in (desktop, mobile, edit_desktop, edit_mobile, two_point_desktop, two_point_mobile, rect_desktop, rect_mobile, fib_desktop, fib_mobile, text_desktop, text_mobile, save_desktop, save_mobile, touch_mobile, touch_narrow):
+            for step in (desktop, mobile, edit_desktop, edit_mobile, two_point_desktop, two_point_mobile, rect_desktop, rect_mobile, fib_desktop, fib_mobile, text_desktop, text_mobile, save_desktop, save_mobile, touch_mobile, touch_narrow, hourly_desktop, hourly_mobile):
                 if not args.only or step.__name__.startswith(tuple(args.only.split(","))):
                     step(journey, browser)
             browser.close()

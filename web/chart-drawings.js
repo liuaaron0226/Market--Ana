@@ -1,14 +1,20 @@
-/* K 線圖的畫線層（個股頁的日／週／月 K）。由 KChart 建立；頁面只透過 KChart 的 setTool／setDrawings／setUnsavedDrawings／
+/* K 線圖的畫線層（個股頁的日／週／月 K 與 60 分 K）。由 KChart 建立；頁面只透過 KChart 的 setTool／setDrawings／setUnsavedDrawings／
    deleteSelectedDrawing／cancelDrawing 與 drawings.onChange／onTool／onSelect 往來，
    座標換算、命中判定、選取與拖動都封在這裡。
    種類：水平線（一個錨點，點一下）、趨勢線、射線、矩形與黃金分割（兩個錨點，點兩下；第一下之後有預覽；射線一律往右延伸）、
    文字標註（一個錨點加一段文字：點一下出現輸入框，確定後才畫出來；輸入框是圖表容器裡的一個小表單，樣式由頁面的 .kc-note 決定）。
    每個錨點存「交易日日期＋價格」，畫的時候才依圖表目前的可見範圍換算成像素，
-   所以平移、縮放、切換週期、歷史接到前面、即時重畫都不需要改資料。 */
+   所以平移、縮放、切換週期、歷史接到前面、即時重畫都不需要改資料。
+   60 分 K（本人 11-18：各畫各的）：錨點的日期記到那一根開始的時分（「YYYY-MM-DDTHH:MM」），只在 60 分出現；
+   日／週／月共用只有日期的那一套，60 分看不到它們。 */
 (function () {
   'use strict';
-  const UNITS = new Set(['日', '週', '月']);   // 秒 K、分 K 只有當天資料，不畫跨日的線
-  const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+  const UNITS = new Set(['日', '週', '月', '60分']);   // 能畫線的週期
+  const HOUR_UNIT = '60分';
+  const DATE_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/;
+  // 線屬於哪一套：錨點只有日期的是日線（日／週／月），帶時分的是 60 分
+  const frameOfDrawing = drawing => (drawing.anchors[0].date.length > 10 ? 'hour' : 'day');
+  const frameOfUnit = unit => (unit === HOUR_UNIT ? 'hour' : 'day');
   const DRAW_FALLBACK = '#4f5fd6';             // 頁面沒定義 --draw 時用的同色
   const HIT_PX = { mouse: 6, touch: 14 };      // 可點選範圍：線的兩側各幾像素。手指比滑鼠寬
   const GRIP_PX = { mouse: 6, touch: 22 };     // 把手的可抓範圍（半徑）：手指比線的可點選範圍再寬一點，只有選取的那一條有把手，不搶 K 棒
@@ -51,7 +57,8 @@
   // 不管在不在畫面內的 y：斜線的端點可以在畫面外，畫的時候再裁到繪圖區。
   const yRaw = (price, g) => g.t + (g.hi - price) / (g.hi - g.lo) * g.ph;
 
-  const dateOf = candle => String(candle.t).slice(0, 10);
+  // 一根 K 棒的錨點日期：日／週／月 K 的 t 只有日期；60 分 K 的 t 是那一根開始的時間，取到分（「YYYY-MM-DDTHH:MM」）
+  const dateOf = candle => String(candle.t).slice(0, 16);
   // 一根 K 棒涵蓋的第一天：週 K 是那一週的星期一，月 K 是那個月的一號（K 棒自己的日期是期間內最後一個交易日）。
   function periodStart(date, unit) {
     if (unit === '月') return `${date.slice(0, 7)}-01`;
@@ -493,7 +500,12 @@
     markUnsaved(ids) { this.unsaved = new Set(ids); }
     opacityOf(drawing) { return this.unsaved.has(drawing.id) ? UNSAVED_OPACITY : 1; }
     // 圖表換了資料（週期可能跟著換）：切到不能畫的週期時，選到一半的工具、拖到一半與選取的線一併放下。
-    dataChanged() { if (!this.enabled) this.cancel(); }
+    // 日／週／月與 60 分之間切換也一樣（兩套的錨點格式不同，點到一半的那一下接不起來）。
+    dataChanged() {
+      const frame = frameOfUnit(this.chart.unit), switched = this.frame !== undefined && this.frame !== frame;
+      this.frame = frame;
+      if (!this.enabled || switched) this.cancel();
+    }
     // 放下工具並取消選取（Esc）；拖到一半的線回到原位，寫到一半、改到一半的文字不留。
     cancel() { this.closeEditor(false); this.drop(false); this.setTool(null); this.select(null); }
     // 刪除目前選取的那一條；沒有選取、或它不在畫面上（看不到的線不刪）時不做事。回傳有沒有刪。
@@ -655,7 +667,12 @@
     }
     reach(pointerType) { return pointerType === 'mouse' ? HIT_PX.mouse : HIT_PX.touch; }
     inView(g) { return Boolean(this.enabled && g && g.hi > g.lo); }
-    locate(drawing) { const g = this.chart.geo; return this.inView(g) ? SHAPES[drawing.kind].locate(drawing, g, this.chart) : null; }
+    // 不是這個週期那一套的線（日線畫的在 60 分、60 分畫的在日週月）：當作不在畫面上——不畫、點不到、刪不到
+    locate(drawing) {
+      const g = this.chart.geo;
+      if (!this.inView(g) || frameOfDrawing(drawing) !== frameOfUnit(this.chart.unit)) return null;
+      return SHAPES[drawing.kind].locate(drawing, g, this.chart);
+    }
     shown(drawing) { return Boolean(this.locate(drawing)); }
     distanceTo(drawing, x, y) {
       const g = this.chart.geo, at = this.locate(drawing);

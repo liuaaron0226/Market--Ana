@@ -1128,9 +1128,11 @@
     if (open && matchMedia('(prefers-reduced-motion: reduce)').matches) tray.classList.add('is-settled');
   }
 
-  // 畫線只在日、週、月 K（分時、60 分不能畫：線的位置只記日期，一天好幾根時對不準）。不能畫時鍵不出現、工具收起來。
+  // 畫線在 60 分、日、週、月 K（本人 11-18：60 分也能畫，各畫各的——60 分的錨點記到時分、只在 60 分出現，見 chart-drawings.js）。
+  // 分時不能畫：鍵不出現、工具收起來。
+  const DRAWABLE_PERIODS = ['60m', 'daily', 'weekly', 'monthly'];
   function syncTools(r) {
-    const allowed = Boolean(drawingSync) && ['daily', 'weekly', 'monthly'].includes(chartPeriod) && Boolean(r);
+    const allowed = Boolean(drawingSync) && DRAWABLE_PERIODS.includes(chartPeriod) && Boolean(r);
     if (!allowed) setToolsOpen(false);
     $('toolsKey').hidden = !allowed;
     $('toolsTray').hidden = !allowed;  // 不能畫的週期：工具整排不在（「未儲存」提示在托盤外面，照樣看得到）

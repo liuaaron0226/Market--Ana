@@ -240,7 +240,8 @@ def main() -> int:
                 j.check(f"{prefix}週期小鍵寫「分時」（不補 K）", page.locator(".hm-period .chart-chip").inner_text() == "分時")
                 choose(page, "60m")
                 page.wait_for_function("() => /60分K · \d{3,} 根/.test(document.getElementById('stockChartContext').textContent)", timeout=10_000)
-                j.check(f"{prefix}60 分：K 線回來、仍不能畫線", page.locator("#chartHost").is_visible() and not page.locator("#toolsKey").is_visible())
+                # 本人 11-18：60 分也能畫線（各畫各的，畫線旅程另外驗）
+                j.check(f"{prefix}60 分：K 線回來、「分析工具」出現", page.locator("#chartHost").is_visible() and page.locator("#toolsKey").is_visible())
                 hourly = page.evaluate("() => { const c = window.StockView.chart().candles; return [c.length, c[0].label, c.at(-1).label, c.at(-1).close]; }")
                 j.check(f"{prefix}60 分：近 6 個月的歷史（5/18 起）接上今天盤中那幾根", hourly[0] > 600 and hourly[1] == "05/18 09:00"
                         and hourly[2] == "11/18 11:00", hourly)

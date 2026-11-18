@@ -193,7 +193,7 @@ test("平移、縮放後線仍在同一個價位；價位落在畫面外時整�
   assert.deepEqual(drawnLines(), [[[4, 164.5], [326, 164.5]]]);
 });
 
-test("切到週 K、月 K 線留在同一個價位；秒 K、分 K 不顯示畫線也不能畫，切回日 K 恢復", () => {
+test("切到週 K、月 K 線留在同一個價位；秒 K、1 分 K 不顯示畫線也不能畫，切回日 K 恢復（60 分另有一套，見下一個）", () => {
   const { chart, changes, tools, tap, drawnLines, drawnLabels } = createChart();
   chart.setDrawings([saved(100)]);
   const bars = (count, time) => Array.from({ length: count }, (_, index) => ({ t: time(index), label: `第${index + 1}根`, open: 100, close: 100, high: 105, low: 95, volume: 1 }));
@@ -216,7 +216,7 @@ test("切到週 K、月 K 線留在同一個價位；秒 K、分 K 不顯示畫�
   chart.setDrawings([saved(100)]);
 
   chart.setTool("hline");
-  for (const unit of ["5秒", "1分", "60分"]) {
+  for (const unit of ["5秒", "1分"]) {
     chart.setData(minutes, { count: 40, unit });
     assert.deepEqual(drawnLines(), [], unit);
     assert.deepEqual(drawnLabels(), [], unit);
@@ -585,6 +585,55 @@ test("平移、縮放、切換日週月、即時更新重畫、重新載入同�
 
   drag([150, 164], [150, 87]); // 仍然拖得動原本選的那一條
   assert.deepEqual(changes.map(change => [change.type, change.drawing.id, change.drawing.anchors[0].price]), [["update", "saved-line-01", 102.85]]);
+});
+
+// 本人 11-18：60 分 K 也能畫線，各畫各的——60 分畫的錨點記到那一根開始的時分，只在 60 分出現；日／週／月畫的不在 60 分出現。
+test("60 分 K：可以畫線，錨點記到時分；日線畫的不出現、60 分畫的不出現在日 K，切回 60 分又出現", () => {
+  const { chart, changes, tools, selections, tap, drawnLines } = createChart();
+  const hourly = Array.from({ length: 40 }, (_, index) => {
+    const day = String(2 + Math.floor(index / 5)).padStart(2, "0"), hour = String(9 + index % 5).padStart(2, "0");
+    return { t: `2026-03-${day}T${hour}:00:00.000+08:00`, label: `03/${day} ${hour}:00`, open: 100, close: 100, high: 105, low: 95, volume: 1 };
+  });
+  const hourLine = { id: "hour-line-01", kind: "hline", anchors: [{ date: "2026-03-03T10:00", price: 100 }] };
+  chart.setDrawings([saved(100), hourLine]);
+  assert.deepEqual(drawnLines(), [[[4, 164.5], [326, 164.5]]], "日 K：只有日線畫的那一條");
+  tap(150, 164);
+  assert.deepEqual(selections, ["saved-line-01"]);
+
+  chart.setData(hourly, { count: 40, unit: "60分" });
+  assert.deepEqual(drawnLines(), [[[4, 164.5], [326, 164.5]]], "60 分：只有 60 分畫的那一條（同一個價位）");
+  assert.deepEqual(selections, ["saved-line-01", null], "日線那一條在 60 分看不到：解除選取");
+  chart.setTool("hline");
+  assert.deepEqual(tools, ["hline"], "60 分選得到工具");
+  tap(150, 87);  // 每根寬 322/40＝8.05，x=150 → 第 18 根（index 18）＝03/05 12:00
+  assert.deepEqual(changes.map(change => change.drawing.anchors), [[{ date: "2026-03-05T12:00", price: 102.85 }]]);
+  assert.equal(drawnLines().length, 2);
+
+  chart.setData(dailyCandles(), { count: 40, unit: "日" });
+  assert.deepEqual(drawnLines(), [[[4, 164.5], [326, 164.5]]], "切到日 K：60 分畫的兩條都不出現");
+  chart.setData(hourly, { count: 40, unit: "60分" });
+  assert.equal(drawnLines().length, 2, "切回 60 分又出現");
+});
+
+test("趨勢線點了第一下就從日 K 切到 60 分（或反過來）：點到一半的那一下不留，不會畫出一端日期、一端時分的線", () => {
+  const { chart, changes, tools, tap } = createChart();
+  const hourly = Array.from({ length: 40 }, (_, index) => ({
+    t: `2026-03-${String(2 + Math.floor(index / 5)).padStart(2, "0")}T${String(9 + index % 5).padStart(2, "0")}:00:00.000+08:00`,
+    label: `第${index + 1}根`, open: 100, close: 100, high: 105, low: 95, volume: 1,
+  }));
+  chart.setTool("trend");
+  tap(100, 120);
+  chart.setData(hourly, { count: 40, unit: "60分" });
+  assert.deepEqual(tools, ["trend", null], "換了另一套：工具放下");
+  tap(200, 60);
+  assert.deepEqual(changes, []);
+  chart.setTool("trend");
+  tap(100, 120);
+  chart.setData(dailyCandles(), { count: 40, unit: "日" });
+  tap(200, 60);
+  assert.deepEqual(changes, [], "反過來也一樣");
+  chart.setData(dailyCandles(), { count: 40, unit: "週" });
+  assert.deepEqual(tools, ["trend", null, "trend", null], "日、週、月之間切換是同一套，不受影響（工具已放下就不再通知）");
 });
 
 test("選取的線不在了就解除選取：換了一組沒有它的線、或切到不能畫線的分 K", () => {
@@ -1960,7 +2009,7 @@ test("切到週 K、月 K 文字留在包含那一天的那一根與同一個價
   chart.setData(monthly, { count: 16, unit: "月" }); // 02-27 落在 2026-02-28 那一根（第 13 根）：x = 4 + 20.125×13.5 = 275.7
   assert.deepEqual(notesOf(view), { texts: [["突破前高", 280, 87.5]], paper: [[276, 79, 36, 16]] });
 
-  for (const unit of ["5秒", "1分", "60分"]) {
+  for (const unit of ["5秒", "1分"]) {
     chart.setData(minutes, { count: 40, unit });
     assert.deepEqual(notesOf(view), { texts: [], paper: [] }, unit);
     chart.setTool("text");
