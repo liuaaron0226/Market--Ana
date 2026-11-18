@@ -103,3 +103,30 @@ test("MIS 在 Cloudflare 機房失敗時明確回雲端無法取得，不冒充 
   assert.equal(body.error, "cloud-live-unavailable");
   assert.equal(body.message, "雲端無法取得即時資料");
 });
+
+// 本人 11-18：分時下面的五檔與內外盤比「大家看到的一樣」——所有核准使用者都拿得到；但只有五檔，報價、分K 照舊只給站主。
+test("五檔 API：站主與核准使用者都拿得到五檔與內外盤，回應裡沒有報價與分K；待審、停權拿不到", async () => {
+  const book = { source: "fugle", time: "2026-11-10T10:22:00+08:00", bids: [[2265, 12]], asks: [[2270, 3]], flow: { at_ask: 10, at_bid: 5 } };
+  deps.liveQuoteService = { snapshot: async () => ({ ok: true, code: "2330", market: "tse", market_open: true, live: true, quote: { price: 2265 }, candles: { "1": [{ close: 1 }] }, book, retry_after_seconds: 0 }) };
+  await seed("friend@example.com");
+  for (const email of [OWNER, "friend@example.com"]) {
+    const response = await req("/api/stocks/2330/book", email);
+    assert.equal(response.status, 200, email);
+    assert.equal(response.headers.get("cache-control"), "private, no-store");
+    assert.deepEqual(await response.json(), { ok: true, code: "2330", market_open: true, book });
+  }
+  for (const status of ["pending", "disabled"]) {
+    await seed(`${status}@example.com`, status);
+    assert.equal((await req("/api/stocks/2330/book", `${status}@example.com`)).status, 403);
+  }
+  assert.equal((await req("/api/stocks/9999/book")).status, 404, "不在涵蓋範圍");
+});
+
+test("五檔 API：還沒有五檔時回 book:null（不是錯誤），有自己的限速", async () => {
+  deps.liveQuoteService = { snapshot: async () => ({ ok: false, market_open: false, quote: null, candles: {}, book: null, retry_after_seconds: 0 }) };
+  deps.rate = { book: 1 };
+  const first = await req("/api/stocks/2330/book");
+  assert.equal(first.status, 200);
+  assert.deepEqual(await first.json(), { ok: true, code: "2330", market_open: false, book: null });
+  assert.equal((await req("/api/stocks/2330/book")).status, 429);
+});

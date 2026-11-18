@@ -17,6 +17,7 @@
   <link rel="stylesheet" href="panel.css?v=20261118-m55">
   <link rel="stylesheet" href="forecast.css?v=20261118-m55">
   <link rel="stylesheet" href="chart-legend.css?v=20261118-m55">
+  <link rel="stylesheet" href="time-share.css?v=20261118-m55">
   <link rel="stylesheet" href="swipe-rows.css?v=20261118-m55">
   <link rel="stylesheet" href="ma-settings.css?v=20261118-m55">
   <link rel="stylesheet" href="watch-push.css?v=20261118-m55">
@@ -130,9 +131,7 @@
               <span class="sr-only">週期</span>
               <select id="periodSelect">
                 <optgroup label="盤中">
-                  <option value="m1">1 分</option>
-                  <option value="m5">5 分</option>
-                  <option value="m15">15 分</option>
+                  <option value="ts">分時</option>
                 </optgroup>
                 <optgroup label="趨勢">
                   <option value="h60">60 分</option>
@@ -145,11 +144,18 @@
           </div>
         </div>
 
+        <!-- 分時（本人 11-18，照 design-previews/time-share 樣品）：選「分時」時取代 K 線，大盤沒有均價線與五檔 -->
+        <div class="ts-panel" id="timeShare" hidden>
+          <div class="ts-head">
+            <p class="ts-quote" data-ts-quote aria-live="polite"></p>
+            <p class="ts-ohlc" data-ts-ohlc></p>
+          </div>
+          <div class="ts-chart" data-ts-chart></div>
+        </div>
         <div class="chart-stage" id="chartStage">
           <div class="chart-badges" aria-live="polite">
             <span id="formingBadge" hidden>最右一根：形成中</span>
             <span id="provisionalBadge" hidden>最右一根：盤後暫用即時收盤，正式日K待更新</span>
-            <span id="estimateBadge" hidden>分鐘點推估，非完整 OHLC</span>
           </div>
           <!-- 圖上方一行（本人 2026-11-17）：收復線、防守線合成一顆鍵（左右兩半各開各的那一張），後面是各條線的名稱與顏色；
                名稱後面寫目前的數值與方向；圖的左右不留價格欄（kchart inlineAxis，本人 11-17 參考券商版面）。
@@ -355,6 +361,7 @@
   <script src="terrain.js?v=20261118-m55"></script>
   <script src="chart-studies.js?v=20261118-m55"></script>
   <script src="kchart.js?v=20261118-m55"></script>
+  <script src="time-share.js?v=20261118-m55"></script>
   <script src="ma-lines.js?v=20261118-m55"></script>
   <script src="chart-legend.js?v=20261118-m55"></script>
   <script src="swipe-rows.js?v=20261118-m55"></script>

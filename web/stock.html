@@ -17,6 +17,7 @@
   <link rel="stylesheet" href="swipe-rows.css?v=20261118-m55">
   <link rel="stylesheet" href="ma-settings.css?v=20261118-m55">
   <link rel="stylesheet" href="stock.css?v=20261118-m55">
+  <link rel="stylesheet" href="time-share.css?v=20261118-m55">
   <link rel="stylesheet" href="stock-facts.css?v=20261118-m55">
   <link rel="stylesheet" href="stock-signals.css?v=20261118-m55">
   <link rel="stylesheet" href="watch-peers.css?v=20261118-m55">
@@ -89,32 +90,31 @@
               <h2 id="chartTitle" class="sr-only">價格走勢</h2>
               <p id="stockChartContext">日K</p>
             </div>
-            <label class="bd-period" for="periodSelect">
-              <span class="sr-only">週期</span>
-              <select id="periodSelect">
-                <optgroup label="">
-                  <option value="1s">1秒</option>
-                  <option value="5s">5秒</option>
-                  <option value="10s">10秒</option>
-                  <option value="15s">15秒</option>
-                  <option value="30s">30秒</option>
-                </optgroup>
-                <optgroup label="">
-                  <option value="1m">1分K</option>
-                  <option value="5m">5分K</option>
-                  <option value="15m">15分K</option>
-                  <option value="60m">60分K</option>
-                </optgroup>
-                <optgroup label="">
-                  <option value="daily" selected>日K</option>
-                  <option value="weekly">週K</option>
-                  <option value="monthly">月K</option>
-                </optgroup>
-              </select>
-            </label>
+            <!-- 分析工具（本人 11-18）：畫線工具一開始收在這一顆鍵裡，點了由左到右依序落下；分時下不能畫線，這顆鍵不出現 -->
+            <div class="ts-bar-keys">
+              <button type="button" class="chart-chip is-plain ts-tools-key" id="toolsKey" data-own-toggle aria-expanded="false" aria-controls="toolsTray" hidden>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 5.5 4 4L9 19H5v-4z"/><path d="m12.5 7.5 4 4"/></svg>
+                分析工具
+              </button>
+              <label class="bd-period" for="periodSelect">
+                <span class="sr-only">週期</span>
+                <select id="periodSelect">
+                  <optgroup label="">
+                    <option value="ts">分時</option>
+                    <option value="60m">60分</option>
+                  </optgroup>
+                  <optgroup label="">
+                    <option value="daily" selected>日</option>
+                    <option value="weekly">週</option>
+                    <option value="monthly">月</option>
+                  </optgroup>
+                </select>
+              </label>
+            </div>
           </div>
           <div class="bd-draw-row">
-          <div class="bd-draw" id="drawTools" role="toolbar" aria-label="畫線工具" hidden>
+          <div class="ts-tools" id="toolsTray" inert>
+          <div class="bd-draw" id="drawTools" role="toolbar" aria-label="畫線工具">
             <button type="button" data-tool="trend" data-tip="趨勢線" aria-label="趨勢線" aria-pressed="false">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.4 16.2 16.6 7.8"/><circle cx="5.5" cy="18" r="2.5"/><circle cx="18.5" cy="6" r="2.5"/></svg>
             </button>
@@ -137,6 +137,7 @@
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 7h15M9.5 7V4.5h5V7M6.5 7l1 12.5h9l1-12.5M10.2 10.5v5.5m3.6-5.5v5.5"/></svg>
             </button>
           </div>
+          </div>
           <span class="bd-draw-unsaved" id="drawUnsaved" role="status" hidden></span>
           </div>
           <!-- K 線上方一行（本人 2026-11-17 券商版面，和首頁同一套）：均線、布林、關注線的名稱＋目前數值；
@@ -144,6 +145,29 @@
           <div class="bd-chart-legend" id="chartLegend"><span class="legend-names" id="legendNames"></span></div>
           <div class="bd-chart-host sk-chart" id="chartHost"></div>
           <div id="chartStudies"></div>
+          <!-- 分時（本人 11-18，照 design-previews/time-share 樣品）：選「分時」時取代 K 線；下面是內外盤比與五檔（富果，所有核准使用者都看得到） -->
+          <div class="ts-panel" id="timeShare" hidden>
+            <div class="ts-head">
+              <p class="ts-quote" data-ts-quote aria-live="polite"></p>
+              <p class="ts-ohlc" data-ts-ohlc></p>
+            </div>
+            <div class="ts-chart" data-ts-chart></div>
+            <p class="ts-empty" id="timeShareEmpty" role="status" hidden></p>
+            <div class="ts-extra">
+              <section data-ts-flow aria-labelledby="flowTitle" hidden>
+                <h3 class="ts-sub" id="flowTitle">內外盤比 <small>單位：張</small></h3>
+                <div class="ts-flow-labels"><span class="is-out" data-flow-out></span><span class="is-in" data-flow-in></span></div>
+                <div class="ts-flow-bar" data-flow-bar role="img"><i class="is-out"></i><i class="is-in"></i></div>
+              </section>
+              <section data-ts-book aria-labelledby="bookTitle" hidden>
+                <h3 class="ts-sub" id="bookTitle">五檔 <small class="num" data-book-time></small></h3>
+                <div class="ts-book-cols">
+                  <div class="ts-bid"><h4><span>委買量</span><span>買價</span></h4><ol data-book-bid></ol></div>
+                  <div class="ts-ask"><h4><span>賣價</span><span>委賣量</span></h4><ol data-book-ask></ol></div>
+                </div>
+              </section>
+            </div>
+          </div>
         </section>
       </div>
 
@@ -235,6 +259,7 @@
   <script src="swipe-rows.js?v=20261118-m55"></script>
   <script src="ma-settings.js?v=20261118-m55"></script>
   <script src="intraday.js?v=20261118-m55"></script>
+  <script src="time-share.js?v=20261118-m55"></script>
   <script src="stock-signals.js?v=20261118-m55"></script>
   <script src="stock-facts.js?v=20261118-m55"></script>
   <script src="watch-peers.js?v=20261118-m55"></script>

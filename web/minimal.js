@@ -34,16 +34,14 @@
     continue_break: '跌破防守線'
   };
   const periodLabels = {
-    m1: '1 分K',
-    m5: '5 分K',
-    m15: '15 分K',
+    ts: '分時',
     h60: '60 分K',
     daily: '日K',
     weekly: '週K',
     monthly: '月K'
   };
-  const minutePeriods = new Set(['m1', 'm5', 'm15']);
-  const isMinutePeriod = period => minutePeriods.has(period);
+  // 分時（本人 11-18：1／5／15 分 K 換成分時）要即時服務的 1 分K；拿不到時選項停用、退回日K
+  const isTimeShare = period => period === 'ts';
 
   const els = {
     price: $('currentPrice'),
@@ -64,10 +62,12 @@
     chartHost: $('mainChart'),
     chartSummary: $('chartSummary'),
     period: $('periodSelect'),
+    timeShare: $('timeShare'),
+    chartWorkspace: document.querySelector('.chart-workspace'),
+    chartTitle: $('chartTitle'),
     reset: $('resetView'),
     forming: $('formingBadge'),
     provisional: $('provisionalBadge'),
-    estimate: $('estimateBadge'),
     upper: $('upperValue'),
     lower: $('lowerValue'),
     lineUpper: $('lineUpper'),
@@ -295,12 +295,12 @@
     els.service.textContent = message;
     setMarketHeader(fallbackMarketData(), { id: 'closed', label: '即時服務未啟動' }, fallbackMarketDate());
     setIntradayOptions(false);
-    loadPeriod(isMinutePeriod(currentPeriod) ? 'daily' : currentPeriod, true);
+    loadPeriod(isTimeShare(currentPeriod) ? 'daily' : currentPeriod, true);
   }
 
   function setIntradayOptions(enabled) {
     [...els.period.options].forEach(option => {
-      if (isMinutePeriod(option.value)) option.disabled = !enabled;
+      if (isTimeShare(option.value)) option.disabled = !enabled;
     });
   }
 
@@ -319,51 +319,6 @@
       close: Number.isFinite(row.close) ? row.close : null,
       amount: Number.isFinite(rawAmount) ? rawAmount / 100_000_000 : null
     };
-  }
-
-  function clock(minute) {
-    return `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
-  }
-
-  function buildIntradayCandles(rows, data, size) {
-    const startMinute = 9 * 60;
-    const points = (Array.isArray(rows) ? rows : [])
-      .map(row => {
-        const stamp = String(row && row.timestamp || '');
-        const match = stamp.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2}):(\d{2})/);
-        const price = Number(row && row.price);
-        if (!match || !Number.isFinite(price)) return null;
-        const seconds = Number(match[2]) * 3600 + Number(match[3]) * 60 + Number(match[4]);
-        return { day: match[1], stamp, endMinute: Math.ceil(seconds / 60), price };
-      })
-      .filter(Boolean)
-      .sort((a, b) => a.stamp.localeCompare(b.stamp));
-    if (!points.length) return [];
-    const day = points[points.length - 1].day;
-    const buckets = new Map();
-    points.filter(point => point.day === day).forEach(point => {
-      const index = Math.max(0, Math.floor((point.endMinute - startMinute - 1) / size));
-      if (!buckets.has(index)) buckets.set(index, []);
-      buckets.get(index).push(point.price);
-    });
-    let previousClose = Number.isFinite(Number(data.open)) ? Number(data.open) : null;
-    return [...buckets.keys()].sort((a, b) => a - b).map(index => {
-      const prices = buckets.get(index);
-      const open = previousClose ?? prices[0];
-      const close = prices[prices.length - 1];
-      previousClose = close;
-      const start = startMinute + index * size;
-      const span = size > 1 ? `${clock(start)}–${clock(start + size)}` : clock(start);
-      return {
-        t: `${day}T${clock(start)}:00+08:00`,
-        label: `${day.slice(5).replace('-', '/')} ${span}`,
-        open,
-        high: Math.max(open, ...prices),
-        low: Math.min(open, ...prices),
-        close,
-        amount: null
-      };
-    });
   }
 
   // 收盤後、正式日K還沒更新前：用即時報價（MIS）今天的開高低收暫補一根，並標示是暫用值。
@@ -408,13 +363,26 @@
     return candles;
   }
 
+  // 大盤分時：即時服務的 1 分K 與當日開高低；參考價是昨收。大盤沒有漲跌停，縱軸照當日高低加邊界。
+  function timeShareModel() {
+    const data = latestPayload && latestPayload.data;
+    if (!data || !isNumber(data.previous_close)) return null;
+    const day = window.TimeShare.slots(window.TimeShare.indexMinutes(latestPayload.series));
+    if (day.last < 0) return null;
+    const ref = Number(data.previous_close);
+    const high = Math.max(...[data.high, day.high && day.high.value].filter(isNumber));
+    const low = Math.min(...[data.low, day.low && day.low.value].filter(isNumber));
+    return { kind: 'index', day, ref, ...window.TimeShare.range({ kind: 'index', ref, high, low }),
+      open: data.open, high: data.high, low: data.low };
+  }
+
+  function showTimeShare(on) {
+    els.timeShare.hidden = !on;
+    els.chartWorkspace.classList.toggle('is-time-share', on);
+    els.chartTitle.textContent = on ? '分時' : '主K線';
+  }
+
   function candlesFor(period) {
-    if (period === 'm1' || period === 'm5' || period === 'm15') {
-      const minutes = Number(period.slice(1));
-      return latestPayload && latestPayload.data
-        ? buildIntradayCandles(latestPayload.series, latestPayload.data, minutes)
-        : [];
-    }
     if (period === 'h60') return A.h60.map(row => toChartCandle(row, '60分'));
     if (period === 'weekly') return A.weekly.map(row => toChartCandle(row, '週'));
     if (period === 'monthly') return A.monthly.map(row => toChartCandle(row, '月'));
@@ -564,24 +532,34 @@
   }
 
   function loadPeriod(period, reset = true) {
-    const candles = candlesFor(period);
-    if (!candles.length && isMinutePeriod(period)) {
-      currentPeriod = 'daily';
-      els.period.value = 'daily';
-      return loadPeriod('daily', reset);
+    if (isTimeShare(period)) {
+      const model = timeShareModel();
+      if (!model) return loadPeriod('daily', reset);
+      currentPeriod = period;
+      els.period.value = period;
+      els.period.dispatchEvent(new Event('periodsync'));
+      showTimeShare(true);
+      window.TimeShare.render(els.timeShare, model);
+      els.forming.hidden = true;
+      els.provisional.hidden = true;
+      els.chartContext.textContent = `分時 · ${model.day.date}`;
+      els.chartSummary.textContent = `加權指數 ${model.day.date} 分時走勢。`;
+      return;
     }
+    const candles = candlesFor(period);
     currentPeriod = period;
     els.period.value = period;
     els.period.dispatchEvent(new Event('periodsync')); // 週期小鍵與選單（period-switch.js）同步
+    showTimeShare(false);
     selectedIndex = -1;
     els.mobileDetails.hidden = true;
     els.marker.hidden = true;
-    const unit = period === 'h60' ? '60分' : period === 'weekly' ? '週' : period === 'monthly' ? '月' : isMinutePeriod(period) ? `${period.slice(1)}分` : '日';
-    const liveLast = latestLive && (isMinutePeriod(period) || period === 'daily');
+    const unit = period === 'h60' ? '60分' : period === 'weekly' ? '週' : period === 'monthly' ? '月' : '日';
+    const liveLast = latestLive && period === 'daily';
     const instance = ensureChart();
     instance.opts.liveLast = liveLast;
     instance.showMacd = period !== 'daily' && !isMobile();
-    const desiredCount = period === 'monthly' ? 60 : period === 'weekly' ? 70 : period === 'h60' ? 80 : isMinutePeriod(period) ? Math.min(candles.length, 120) : 70;
+    const desiredCount = period === 'monthly' ? 60 : period === 'weekly' ? 70 : period === 'h60' ? 80 : 70;
     // 右側價格欄寬：券商版面（inlineAxis）不留欄，只有 2px
     const priceRail = instance.opts.inlineAxis ? 2 : instance.geo ? Math.max(64, instance.canvas.clientWidth - instance.geo.l - instance.geo.pw) : 100;
     const plotWidth = Math.max(0, els.chartStage.clientWidth - marketLabelRail() - priceRail);
@@ -594,7 +572,6 @@
     const provisionalLast = period === 'daily' && !liveLast && lastCandle && lastCandle.provisional === true;
     els.forming.hidden = !liveLast;
     els.provisional.hidden = !provisionalLast;
-    els.estimate.hidden = !isMinutePeriod(period);
     els.chartContext.textContent = `${periodLabels[period]} · ${liveLast ? '最右一根形成中'
       : provisionalLast ? `最右一根暫用即時收盤，正式日K待更新（目前到 ${A.meta.cutoff_date}）` : `資料截至 ${A.meta.cutoff_date}`}`;
     els.chartSummary.textContent = `${periodLabels[period]}，共 ${candles.length} 根。${linesHidden() ? '' : `圖上有收復線 ${fmt(UPPER)} 與防守線 ${fmt(LOWER)}。`}`;
@@ -1599,7 +1576,7 @@
       els.service.textContent = '即時行情暫時無法更新，目前顯示盤後資料。';
       setMarketHeader(fallbackMarketData(), { id: 'delay', label: '延遲' }, fallbackMarketDate());
       setIntradayOptions(false);
-      loadPeriod(isMinutePeriod(currentPeriod) ? 'daily' : currentPeriod, false);
+      loadPeriod(isTimeShare(currentPeriod) ? 'daily' : currentPeriod, false);
       return;
     }
     const fetched = new Date(payload.fetched_at).getTime();
@@ -1666,7 +1643,7 @@
         || (error.name === 'AbortError' ? '即時行情連線逾時，目前顯示盤後資料。' : '即時行情連線中斷，目前顯示盤後資料。');
       setMarketHeader(fallbackMarketData(), { id: 'delay', label: '延遲' }, fallbackMarketDate());
       setIntradayOptions(false);
-      loadPeriod(isMinutePeriod(currentPeriod) ? 'daily' : currentPeriod, false);
+      loadPeriod(isTimeShare(currentPeriod) ? 'daily' : currentPeriod, false);
       schedulePoll(15000);
     } finally {
       window.clearTimeout(timeout);

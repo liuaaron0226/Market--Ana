@@ -22,7 +22,8 @@ const PENDING_CAP = 30;
 // 票 06 限速（Astra r1 建議值）：市場 API 全部每人每分 30 次；個股明細另限每分 12 次。固定一分鐘窗，邊界最多兩倍突發。
 // ticks：行情商免費方案的日內查詢是每分鐘 60 次，報價與分 K 輪詢約用掉 10 次，逐筆留 40 次。
 // friendAi：朋友保存、同意、刪除 Gemini 金鑰（保存會替他試呼叫一次 Gemini），所以另外限得緊一點；讀狀態不扣這一份。
-const RATE = { market: 30, detail: 12, userData: 60, live: 20, history: 30, ticks: 40, friendAi: 10 };
+const RATE = { market: 30, detail: 12, userData: 60, live: 20, history: 30, ticks: 40, book: 20, friendAi: 10 };
+// book：分時下面的五檔，盤中每 10 秒一次＝每分鐘 6 次，留到 20 次給重新整理與換股（和 live 同額度）。
 // 舊的整包資料檔：雲端已不部署，這裡再擋一次，避免預覽網址或殘留檔被讀到。
 const RETIRED_DATA = new Set(["/analysis-data.js", "/chips-data.js", "/dashboard-data.js", "/detail-data.js", "/plain-data.js"]);
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -399,13 +400,13 @@ async function handleIndexLiveApi(request, env, email, deps) {
 }
 
 const LIVE_STOCK_PATH = new RegExp(`^/api/stocks/(${CODE_PATTERN})/live$`);
-async function handleStockLiveApi(request, env, path, email, deps) {
-  if (request.method !== "GET") throw new HttpError(405, "方法不允許");
-  const match = path.match(LIVE_STOCK_PATH);
-  if (!match) throw new HttpError(400, "代號格式不正確");
+const BOOK_STOCK_PATH = new RegExp(`^/api/stocks/(${CODE_PATTERN})/book$`);
+
+// 即時行情與五檔的涵蓋範圍：和個股分析一致（內嵌資料包，沒有再退 D1 現行版本）；查不到就 404。回傳上市／上櫃。
+async function liveCoverage(env, deps, code, isOwner) {
   // 即時行情只有上市櫃股票有；基金這類長代碼直接查無，不扣額度、不問行情來源（和逐筆相同）
-  if (!isExchangeCode(match[1])) throw new HttpError(404, "這檔沒有即時行情");
-  const stored = deps.stockPack?.results?.[match[1]];
+  if (!isExchangeCode(code)) throw new HttpError(404, "這檔沒有即時行情");
+  const stored = deps.stockPack?.results?.[code];
   let payload = null;
   try { payload = typeof stored === "string" ? JSON.parse(stored) : stored; } catch { /* 資料包錯誤由既有分析 API 處理 */ }
   if (!payload) {
@@ -415,12 +416,42 @@ async function handleStockLiveApi(request, env, path, email, deps) {
         "json_extract(a.payload, '$.kind') AS kind " +
         "FROM stock_data_state s JOIN stock_analysis a ON a.version = s.active_version " +
         "WHERE s.key = 'current' AND a.code = ?",
-    ).bind(match[1]).first();
+    ).bind(code).first();
   }
-  // 即時行情只給站主；ETF 開關關著時，0050 以外的 ETF 和 ETF 上站之前一樣查不到。
-  if (!payload || payload.schema !== ANALYSIS_SCHEMA || analysisHidden(match[1], payload.kind, env, true)) {
+  // ETF 開關關著時，0050 以外的 ETF 和 ETF 上站之前一樣查不到。
+  if (!payload || payload.schema !== ANALYSIS_SCHEMA || analysisHidden(code, payload.kind, env, isOwner)) {
     throw new HttpError(404, "雲端目前沒有這檔股票的分析資料");
   }
+  return payload.market === "上櫃" ? "otc" : "tse";
+}
+
+// 分時下面的五檔與內外盤比（本人 11-18：「大家看到的一樣」，所有核准使用者都看得到，推翻「富果只給站主」在這兩項的適用）。
+// 只回五檔，報價與分K 照舊只給站主（/live）。富果資料不進 Gemini：這裡只給畫面。
+async function handleStockBookApi(request, env, path, email, deps, { isOwner }) {
+  if (request.method !== "GET") throw new HttpError(405, "方法不允許");
+  const code = path.match(BOOK_STOCK_PATH)[1];
+  const market = await liveCoverage(env, deps, code, isOwner);
+  const headers = { "cache-control": "private, no-store" };
+  try {
+    await consume(env.DB, email, "book", (deps.now || Date.now)(), { ...RATE, ...deps.rate });
+  } catch (error) {
+    if (error instanceof RateLimited) {
+      return json(429, { error: "rate-limited", message: "五檔查詢太頻繁，請稍後再試", retry_after_seconds: error.retryAfter },
+        { ...headers, "retry-after": String(error.retryAfter) });
+    }
+    throw new HttpError(503, "暫時無法處理，請稍後再試");
+  }
+  const service = deps.liveQuoteService || defaultLiveQuoteService;
+  const result = await service.snapshot(code, market, { fugleApiKey: env.FUGLE_API_KEY || null });
+  return json(200, { ok: true, code, market_open: Boolean(result.market_open), book: result.book || null }, headers);
+}
+
+async function handleStockLiveApi(request, env, path, email, deps) {
+  if (request.method !== "GET") throw new HttpError(405, "方法不允許");
+  const match = path.match(LIVE_STOCK_PATH);
+  if (!match) throw new HttpError(400, "代號格式不正確");
+  // 即時行情只給站主
+  const market = await liveCoverage(env, deps, match[1], true);
   try {
     await consume(env.DB, email, "live", (deps.now || Date.now)(), deps.rate);
   } catch (error) {
@@ -432,7 +463,6 @@ async function handleStockLiveApi(request, env, path, email, deps) {
     throw new HttpError(503, "暫時無法處理，請稍後再試");
   }
   const service = deps.liveQuoteService || defaultLiveQuoteService;
-  const market = payload.market === "上櫃" ? "otc" : "tse";
   const result = await service.snapshot(match[1], market, { fugleApiKey: env.FUGLE_API_KEY || null });
   const headers = { "cache-control": "private, no-store" };
   if (!result.ok) {
@@ -750,6 +780,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
       if (isComparePath(path)) return await handleCompareApi(request, env, path, email, deps, { isOwner: true });
       if (RETIRED_FUND_PATH.test(path)) return fail(404, "找不到");
       if (LIVE_STOCK_PATH.test(path)) return await handleStockLiveApi(request, env, path, email, deps);
+      if (BOOK_STOCK_PATH.test(path)) return await handleStockBookApi(request, env, path, email, deps, { isOwner: true });
       if (TICKS_STOCK_PATH.test(path)) return await handleStockTicksApi(request, env, path, email, deps);
       if (HISTORY_STOCK_PATH.test(path)) return await handleStockHistoryApi(request, env, path, email, deps, { isOwner: true });
       if (ANNOUNCEMENTS_PATH.test(path)) return await handleAnnouncementsApi(request, env, path, email, deps, { isOwner: true });
@@ -777,6 +808,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
     if (isMarket) return await handleMarketApi(request, env, path, email, deps, { isOwner: false });
     if (isComparePath(path)) return await handleCompareApi(request, env, path, email, deps, { isOwner: false });
     if (RETIRED_FUND_PATH.test(path)) return fail(404, "找不到");
+    if (BOOK_STOCK_PATH.test(path)) return await handleStockBookApi(request, env, path, email, deps, { isOwner: false });
     if (LIVE_STOCK_PATH.test(path) || TICKS_STOCK_PATH.test(path)) return fail(403, "即時行情僅限站主使用");
     if (HISTORY_STOCK_PATH.test(path)) return await handleStockHistoryApi(request, env, path, email, deps, { isOwner: false });
     if (ANNOUNCEMENTS_PATH.test(path)) return await handleAnnouncementsApi(request, env, path, email, deps, { isOwner: false });

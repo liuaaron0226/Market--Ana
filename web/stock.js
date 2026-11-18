@@ -98,6 +98,8 @@
   // 分類鍵沒有籌碼；「價位」是只看淨值算的壓力與支撐（04 票），配息、成分股由 06、08 票加上。圖是淨值線，週期只有日／週／月，
   // 指標只留不需要量、高低價與法人的 MACD、RSI。
   const isFund = r => r?.kind === 'fund';
+  // ETF 代號 00 開頭：跳動單位和股票不同（漲跌停價、分時縱軸）
+  const isEtf = code => /^00/.test(code);
   const FUND_PERIODS = ['daily', 'weekly', 'monthly'];
   const FUND_STUDIES = ['macd', 'rsi'];
   const CURRENCY_NAMES = { USD: '美元', TWD: '台幣' };
@@ -112,14 +114,8 @@
     for (const group of $('periodSelect').querySelectorAll('optgroup')) {
       const longOnly = [...group.querySelectorAll('option')].every(option => FUND_PERIODS.includes(option.value));
       group.hidden = fund && !longOnly;
-      group.querySelectorAll('option').forEach(option => {
-        option.disabled = fund && !longOnly;
-        // 基金沒有 K 棒：日／週／月不寫「K」（原本的字記在 data-k，換回股票時還原）
-        if (longOnly) {
-          option.dataset.k ??= option.textContent;
-          option.textContent = fund ? option.dataset.k.replace('K', '') : option.dataset.k;
-        }
-      });
+      // 基金只有日／週／月（淨值線），分時與 60 分整組藏起來
+      group.querySelectorAll('option').forEach(option => { option.disabled = fund && !longOnly; });
     }
     // 「配息」只有基金有（06 票，fund-distributions.js 畫）；股票的鍵藏著、區塊清空。換股時開著的分類由 syncComparison 收回。
     $('stockCats').querySelector('[aria-controls="distributionsPanel"]').hidden = !fund;
@@ -156,10 +152,11 @@
   // 畫線的存檔與補存（drawing-sync.js）：存不上去時留著、之後自動補存，並告訴這裡有幾筆還沒存上去。
   // 那支沒載入時整個畫線功能收起，個股頁其他內容照常。
   const drawingSync = window.DrawingSync ? window.DrawingSync.create({ onStatus: showUnsavedDrawings }) : null;
-  const INTRADAY_PERIODS = { '1m': '1', '5m': '5', '15m': '15', '60m': '60' };
-  // 秒 K（本人 2026-11-14「可以，先做當天」）：當天逐筆在背景一頁一頁取回，由 Intraday.secondCandles 彙總。
-  const SECOND_PERIODS = { '1s': 1, '5s': 5, '10s': 10, '15s': 15, '30s': 30 };
-  let tickFeed = { code: '', date: null, ticks: [], offset: 0, timer: null, generation: 0 };
+  // 週期（本人 11-18）：分時、60 分、日、週、月。秒 K 與 1／5／15 分 K 拿掉（換成分時）。
+  const PERIODS = ['ts', '60m', 'daily', 'weekly', 'monthly'];
+  const INTRADAY_PERIODS = { '60m': '60' };
+  // 分時下面的五檔與內外盤比：所有核准使用者都看得到（/book，本人 11-18），只在看分時、頁面看得到時才問
+  let bookFeed = { code: '', timer: null, generation: 0 };
   const livePoller = window.Intraday.createPoller({
     onData: applyLive,
     onError: () => updateLiveStatus({ ok: false, environment: 'local', message: '暫時無法取得即時資料', live: false }),
@@ -326,7 +323,7 @@
     $('close').textContent = fmt(r.quote.close);
     // 漲停紅底、跌停綠底的反白（本人 11-18）：前一天收盤取日線倒數第二根（盤中那一根已接在最後）；基金沒有漲跌停。
     const previous = isFund(r) ? null : (r.bars || []).at(-2)?.close ?? null;
-    $('close').dataset.limit = window.Intraday.limitState(r.quote.close, previous, { etf: /^00/.test(r.code) });
+    $('close').dataset.limit = window.Intraday.limitState(r.quote.close, previous, { etf: isEtf(r.code) });
     const chg = r.quote.chg_pct;
     const pctText = chg === null || chg === undefined ? '' : `${chg > 0 ? '+' : ''}${Number(chg).toFixed(2)}%`;
     const change = r.quote.change;
@@ -422,13 +419,45 @@
     });
   }
 
+  // 分時（本人 11-18）：今天（盤後是今天完整的、非交易日是最近一個交易日）每分鐘的價量，來自即時服務的 1 分K。
+  // 參考價、開高低、總量：即時報價是同一天的就用它；不然用日線上那一天的 K 棒與前一天收盤。
+  function timeShareModel(r) {
+    const minutes = lastLive?.code === r.code || !lastLive?.code ? lastLive?.candles?.['1'] || [] : [];
+    const day = window.TimeShare.slots(minutes);
+    if (day.last < 0) return null;
+    const quote = lastLive?.quote?.data_date === day.date ? lastLive.quote : null;
+    const bars = baseResult?.code === r.code ? baseResult.bars || [] : r.bars || [];
+    const at = bars.findIndex(bar => bar.date === day.date);
+    const bar = at >= 0 ? bars[at] : null;
+    const ref = quote?.previous_close ?? (at > 0 ? bars[at - 1].close : null);
+    if (!Number.isFinite(ref)) return null;
+    const axis = window.TimeShare.range({ kind: 'stock', ref, etf: isEtf(r.code) });
+    return { kind: 'stock', day, ref, ...axis, open: quote?.open ?? bar?.open, high: quote?.high ?? bar?.high,
+      low: quote?.low ?? bar?.low, total: quote?.volume_shares ?? bar?.volume };
+  }
+
+  function drawTimeShare(r) {
+    const model = timeShareModel(r);
+    const panel = $('timeShare');
+    for (const part of panel.querySelectorAll('.ts-head, [data-ts-chart]')) part.hidden = !model;
+    $('timeShareEmpty').hidden = Boolean(model);
+    if (model) window.TimeShare.render(panel, model);
+    // 拿不到的時候寫明；伺服器給了中文原因（例如站主以外的人拿不到即時走勢）就照寫，英文的技術訊息不上畫面
+    const reason = [lastLive?.message, lastLive?.error].find(text => typeof text === 'string' && /[一-鿿]/.test(text));
+    if (!model) $('timeShareEmpty').textContent = reason ? `分時走勢：${reason}` : '目前拿不到最近一個交易日的分時資料';
+    $('stockChartContext').textContent = model ? `分時 · ${model.day.date}` : '分時';
+  }
+
   function drawChart(r) {
+    const timeShare = chartPeriod === 'ts' && !isFund(r);
+    $('timeShare').hidden = !timeShare;
+    for (const id of ['chartHost', 'chartStudies', 'chartLegend']) $(id).hidden = timeShare;
+    syncTools(r);
+    if (timeShare) { drawTimeShare(r); return; }
     const daily = dailyCandles(r);
     const intradayKey = INTRADAY_PERIODS[chartPeriod];
-    const seconds = SECOND_PERIODS[chartPeriod];
-    const intraday = Boolean(intradayKey) || Boolean(seconds);
-    const candles = seconds ? window.Intraday.secondCandles(tickFeed.code === r.code ? tickFeed.ticks : [], seconds)
-      : intraday ? (lastLive?.candles?.[intradayKey] || [])
+    const intraday = Boolean(intradayKey);
+    const candles = intraday ? (lastLive?.candles?.[intradayKey] || [])
       : chartPeriod === 'weekly' ? weeklyCandles(daily.map(row => ({ ...row, date: row.t })))
       : chartPeriod === 'monthly' ? monthlyCandles(daily.map(row => ({ ...row, date: row.t }))) : daily;
     // 支撐、壓力不再疊在 K 線上（本人 11-17：右側只放簡單的數字，價位看圖下方的價位階梯）；
@@ -454,14 +483,12 @@
     const kind = fund ? 'fund' : 'stock';
     if (chart.studies && chartKind !== kind) chart.studies.setAvailable(fund ? FUND_STUDIES : null);
     chartKind = kind;
-    // 畫線只在日、週、月 K：秒 K、分 K 連工具列一起收起。
-    $('drawTools').hidden = intraday || !drawingSync;
     const expected = { fast: 12, slow: 26, signal: 9, histogram_multiplier: 1, seed: 'first_close', warmup_bars: 34,
       precision: 3, missing_policy: 'omit_missing_price_rows', version: 'macd-first-close-v1' };
     const compatible = !r._intraday && chartPeriod === 'daily' && r.chart && Object.entries(expected).every(([field, value]) => r.chart.parameters?.[field] === value)
       && Array.isArray(r.chart.macd) && r.chart.macd.length === daily.length
       && r.chart.macd.every((row, i) => row.date === daily[i].t);
-    const unit = seconds ? `${seconds}秒` : intraday ? `${intradayKey}分` : chartPeriod === 'monthly' ? '月' : chartPeriod === 'weekly' ? '週' : '日';
+    const unit = intraday ? `${intradayKey}分` : chartPeriod === 'monthly' ? '月' : chartPeriod === 'weekly' ? '週' : '日';
     const defaultCount = intraday ? 80 : innerWidth < 600 ? 50 : 90;
     // 基金：淨值畫成一條線（K 線元件的線模式），MACD 由圖用淨值自己算（伺服器沒有預算）。
     chart.setData(candles, { count: Math.min(candles.length, defaultCount), overlays, unit,
@@ -1022,48 +1049,41 @@
     loadComparison();
   }
 
-  function stopTicks() {
-    if (tickFeed.timer) clearTimeout(tickFeed.timer);
-    tickFeed.timer = null;
-    tickFeed.generation += 1;
+  function stopBook() {
+    if (bookFeed.timer) clearTimeout(bookFeed.timer);
+    bookFeed.timer = null;
+    bookFeed.generation += 1;
   }
 
-  // 只在選了秒 K、頁面看得到的時候才問逐筆：還在補當天稍早的成交時一秒一頁，追上之後每 3 秒問一次新成交。
-  async function pollTicks(code, generation) {
-    if (generation !== tickFeed.generation) return;
+  // 五檔：盤中 10 秒問一次，收盤後、非交易時段問一次就停；伺服器一時失敗（5xx）或連不上 15 秒後再試。
+  // 拿到的畫在分時下面（time-share.js renderBook）。
+  async function pollBook(code, generation) {
+    if (generation !== bookFeed.generation) return;
+    bookFeed.timer = null;
     let delay = 15_000;
     try {
-      const response = await fetch(`/api/stocks/${encodeURIComponent(code)}/ticks?offset=${tickFeed.offset}`, { cache: 'no-store' });
-      if (generation !== tickFeed.generation) return;
-      if (response.status === 403 || response.status === 404) return;  // 沒有權限：不再問
+      const response = await fetch(`/api/stocks/${encodeURIComponent(code)}/book`, { cache: 'no-store' });
+      if (generation !== bookFeed.generation) return;
       if (response.status === 429) delay = (Number(response.headers.get('retry-after')) || 60) * 1000;
       else if (response.ok) {
-        const page = await response.json();
-        if (generation !== tickFeed.generation) return;
-        if (tickFeed.date && page.date !== tickFeed.date) {
-          // 換了交易日：前一天的逐筆不能和今天的接在一起，從頭來。
-          tickFeed = { ...tickFeed, date: page.date, ticks: [], offset: 0 };
-          delay = 0;
-        } else {
-          tickFeed.date = page.date;
-          tickFeed.offset = page.next_offset;
-          if (page.ticks.length) {
-            tickFeed.ticks.push(...page.ticks);
-            if (lastResult && lastResult.code === code && SECOND_PERIODS[chartPeriod]) drawChart(lastResult);
-          }
-          delay = !page.complete ? 1000 : lastLive?.market_open ? 3000 : 60_000;
-        }
-      }
-    } catch (_) { /* 連不上：稍後再試，圖維持已取得的部分 */ }
-    if (generation === tickFeed.generation) tickFeed.timer = setTimeout(() => pollTicks(code, generation), delay);
+        const data = await response.json();
+        if (generation !== bookFeed.generation) return;
+        window.TimeShare.renderBook($('timeShare'), data.book);
+        delay = data.market_open ? 10_000 : null;
+      } else if (response.status < 500) delay = null;  // 沒有權限、查無這檔：不再問
+    } catch (_) { /* 連不上：稍後再試，五檔維持上一份 */ }
+    if (delay !== null && generation === bookFeed.generation) bookFeed.timer = setTimeout(() => pollBook(code, generation), delay);
   }
 
-  function syncTickFeed() {
-    const wanted = Boolean(SECOND_PERIODS[chartPeriod]) && lastResult && canUseLive(lastResult) && !document.hidden;
-    stopTicks();
+  function syncBookFeed() {
+    const wanted = chartPeriod === 'ts' && lastResult && canUseLive(lastResult) && !document.hidden;
+    const sameCode = bookFeed.code === lastResult?.code;
+    if (wanted && sameCode && bookFeed.timer) return;  // 已經在問了
+    stopBook();
+    if (!sameCode) window.TimeShare.renderBook($('timeShare'), null);
     if (!wanted) return;
-    if (tickFeed.code !== lastResult.code) tickFeed = { ...tickFeed, code: lastResult.code, date: null, ticks: [], offset: 0 };
-    pollTicks(lastResult.code, tickFeed.generation);
+    bookFeed.code = lastResult.code;
+    pollBook(lastResult.code, bookFeed.generation);
   }
 
   // ---------- 畫線 ----------
@@ -1073,9 +1093,32 @@
     drawToolButtons().forEach(button => button.setAttribute('aria-pressed', String(button.dataset.tool === tool)));
   }
 
-  // 選取了一條線，工具列才出現刪除。
+  // 選取了一條線，工具列才出現刪除；工具收著時一起展開，刪除才按得到。
   function showDrawingSelection(drawing) {
     $('drawDelete').hidden = !drawing;
+    if (drawing && $('toolsKey').getAttribute('aria-expanded') !== 'true' && !$('toolsKey').hidden) setToolsOpen(true);
+  }
+
+  // 「分析工具」（本人 11-18）：畫線工具一開始收著，點了由左到右依序落下（time-share.css）、再點倒著收回。
+  // 收起來時，畫到一半、選取中的照 Esc 同一套放下（chart.cancelDrawing）。
+  function setToolsOpen(open) {
+    const key = $('toolsKey'), tray = $('toolsTray');
+    if ((key.getAttribute('aria-expanded') === 'true') === open) return;
+    key.setAttribute('aria-expanded', String(open));
+    tray.classList.remove('is-settled');
+    tray.classList.toggle('is-open', open);
+    tray.inert = !open;
+    if (!open && chart) chart.cancelDrawing();
+    // 動畫不播（prefers-reduced-motion）或沒有轉場時，直接算播完
+    if (open && matchMedia('(prefers-reduced-motion: reduce)').matches) tray.classList.add('is-settled');
+  }
+
+  // 畫線只在日、週、月 K（分時、60 分不能畫：線的位置只記日期，一天好幾根時對不準）。不能畫時鍵不出現、工具收起來。
+  function syncTools(r) {
+    const allowed = Boolean(drawingSync) && ['daily', 'weekly', 'monthly'].includes(chartPeriod) && Boolean(r);
+    if (!allowed) setToolsOpen(false);
+    $('toolsKey').hidden = !allowed;
+    $('toolsTray').hidden = !allowed;  // 不能畫的週期：工具整排不在（「未儲存」提示在托盤外面，照樣看得到）
   }
 
   // 有變動還沒存上去（存檔失敗、等著補存）時工具列那一行的右邊出現提示（秒 K、分 K 工具列收起時也在），
@@ -1101,6 +1144,11 @@
 
   // 工具列只有圖示：名稱在滑鼠停留與鍵盤聚焦時由樣式顯示，手機則是長按；長按只看名稱，不切換工具、也不刪除。
   function bindDrawTools() {
+    $('toolsKey').addEventListener('click', () => setToolsOpen($('toolsKey').getAttribute('aria-expanded') !== 'true'));
+    $('toolsTray').addEventListener('transitionend', event => {
+      if (event.target === $('toolsTray') && $('toolsTray').classList.contains('is-open')) $('toolsTray').classList.add('is-settled');
+    });
+    $('drawTools').querySelectorAll('button').forEach((button, index) => button.style.setProperty('--i', index));
     // Esc 不管焦點在哪都有效（剛點完工具時焦點在按鈕上，有些瀏覽器則根本不給按鈕焦點）：放下工具、取消選取。
     document.addEventListener('keydown', event => {
       if (event.key === 'Escape' && chart) chart.cancelDrawing();
@@ -1146,7 +1194,7 @@
     baseResult = null;
     lastLive = null;
     olderBars = { code: '', firstDate: '', rows: [] };
-    stopTicks();
+    stopBook();
     if (pendingRequest) pendingRequest.abort();
     pendingRequest = new AbortController();
     // 換股票：上一檔的畫線、選取與選到一半的工具都放下（還沒存上去的照樣在背景補存到原本那一檔）；
@@ -1199,7 +1247,7 @@
         window.WatchJudgments.mount({ host: document.querySelector('.bd-chart-bar'), code: data.code,
           onChange: () => { if (lastResult) drawChart(lastResult); }, getDaily: () => (baseResult ? dailyCandles(baseResult) : []) });
       }
-      syncTickFeed();
+      syncBookFeed();
       if (canUseLive(data)) livePoller.start(code, data.market);
       else updateLiveStatus({ ok: true, market_open: false, live: false });
     } catch (error) {
@@ -1282,14 +1330,14 @@
   });
   $('periodSelect').addEventListener('change', () => {
     const selected = $('periodSelect').value;
-    chartPeriod = ['1s', '5s', '10s', '15s', '30s', '1m', '5m', '15m', '60m', 'weekly', 'monthly'].includes(selected) ? selected : 'daily';
+    chartPeriod = PERIODS.includes(selected) ? selected : 'daily';
     if (lastResult) drawChart(lastResult);
-    syncTickFeed();
+    syncBookFeed();
   });
   window.addEventListener('popstate', () => load(codeFromUrl() || '2330'));
   // 還有畫線沒存上去時瀏覽器會先問要不要離開（drawing-sync.js）：使用者可能留下來，所以這時不停即時更新。
-  window.addEventListener('beforeunload', event => { if (!event.defaultPrevented) { livePoller.stop(); stopTicks(); } });
-  document.addEventListener('visibilitychange', syncTickFeed);
+  window.addEventListener('beforeunload', event => { if (!event.defaultPrevented) { livePoller.stop(); stopBook(); } });
+  document.addEventListener('visibilitychange', syncBookFeed);
   // 不設上限（本人 11-17）：天數取常用裡還沒有的，顏色取還沒用過的（ma-lines.js）
   // 首頁改了（別的分頁、或按上一頁回來）：圖跟著換
   window.MaLines.watch(applyMaLines);

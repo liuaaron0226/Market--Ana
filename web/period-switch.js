@@ -56,7 +56,7 @@
       buttons.forEach(([b, opt]) => {
         const on = select.value === opt.value;
         b.disabled = opt.disabled;
-        // 個股頁換到基金時，秒／分 K 的選項整組藏起來、日週月改寫成不帶 K（stock.js applyKind），選單跟著
+        // 個股頁換到基金時，分時與 60 分整組藏起來（stock.js applyKind），選單跟著
         b.hidden = opt.hidden || Boolean(opt.parentElement?.hidden);
         b.textContent = compact(opt.textContent);
         b.setAttribute('aria-checked', String(on));
@@ -79,9 +79,9 @@
   }
 
   const period = document.getElementById('periodSelect');
-  // 週期的小鍵：首頁的選項是「日」「60分」，補成「日K」「60分K」（秒 K 不補）；
+  // 週期的小鍵：選項是「分時」「60分」「日」「週」「月」（本人 11-18），小鍵上補成「60分K」「日K」（分時不補）；
   // 個股頁看基金時（data-line="1"，淨值線沒有 K 棒）照寫「日」「週」「月」，不補 K。
-  if (period) chipMenu(period, { wrapClass: 'hm-period', menuId: 'periodMenu', name: 'K 線週期', label: text => (/[K秒]$/.test(text) || period.dataset.line === '1' ? text : `${text}K`), disabledHint: '即時資料目前連不上' });
+  if (period) chipMenu(period, { wrapClass: 'hm-period', menuId: 'periodMenu', name: '週期', label: text => (/(K|分時)$/.test(text) || period.dataset.line === '1' ? text : `${text}K`), disabledHint: '即時資料目前連不上' });
 
   document.querySelectorAll('select[data-chip-menu]').forEach(select => {
     chipMenu(select, { wrapClass: 'chart-select', menuId: `${select.id}Menu`, name: select.dataset.chipMenu || '選項' });

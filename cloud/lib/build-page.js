@@ -4,6 +4,8 @@
 export const WEB_FILES = [
   "minimal.html", "minimal.css", "minimal.js", "kchart.js", "chart-drawings.js", "drawing-sync.js", "chart-studies.js", "chart-studies.css",
   "stock.html", "stock.css", "stock.js", "intraday.js",
+  // 分時圖、五檔、分析工具收合（本人 11-18）
+  "time-share.js", "time-share.css",
   // claude-60 設計改版（11-09）新增的資產
   "bold.css", "home.css", "panel.css", "motion.js", "home-motion.js", "period-switch.js",
   "portfolio.html", "portfolio.css", "portfolio.js",

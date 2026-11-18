@@ -177,11 +177,10 @@ test("前端輪詢：盤中時段來源還停在前一日（unknown）不得永�
   assert.equal(nextPollDelay({ ok: false, market_open: false, market_phase: "unknown", retry_after_seconds: 60 }), 60000);
 });
 
-test("個股頁接上 1／5／15 分、LIVE 新鮮度與雲端失敗明示", () => {
+test("個股頁週期是分時、60 分、日、週、月（本人 11-18：秒 K 與 1／5／15 分 K 拿掉）、LIVE 新鮮度與雲端失敗明示", () => {
   const html = readFileSync(new URL("web/stock.html", ROOT), "utf8");
-  for (const [value, label] of [["1m", "1分"], ["5m", "5分"], ["15m", "15分"]]) {
-    assert.match(html, new RegExp(`<option value="${value}">${label}K</option>`));
-  }
+  const options = [...html.matchAll(/<option value="([^"]+)"[^>]*>([^<]+)<\/option>/g)].map(m => [m[1], m[2]]);
+  assert.deepEqual(options, [["ts", "分時"], ["60m", "60分"], ["daily", "日"], ["weekly", "週"], ["monthly", "月"]]);
   assert.match(html, /id="liveBadge"/);
   assert.match(html, /id="liveStatus"/);
   assert.ok(html.indexOf("intraday.js") < html.indexOf("stock.js"));
@@ -193,24 +192,7 @@ test("個股頁接上 1／5／15 分、LIVE 新鮮度與雲端失敗明示", () 
   assert.doesNotMatch(stock, /3 \* 86_400_000/, "不可用固定 72 小時誤擋週末後開盤");
 });
 
-// ---- 秒級第一步（本人 2026-11-14「可以，先做當天」）：逐筆彙總成秒 K ----
-const at = (second, ms = 0) => Date.parse(`2026-11-10T09:00:${String(second).padStart(2, "0")}+08:00`) + ms;
-const TICKS = [[at(0, 100), 100, 5, 1], [at(0, 900), 101, 2, 2], [at(4), 99, 1, 3], [at(5), 102, 3, 4], [at(12, 500), 103, 4, 5]];
-const plain = value => JSON.parse(JSON.stringify(value));
-
-test("逐筆彙總成 1 秒 K：同一秒的成交合成一根，沒有成交的那幾秒不補假 K 棒", () => {
-  const candles = plain(loadIntraday().secondCandles(TICKS, 1));
-  assert.deepEqual(candles.map(c => [c.label, c.open, c.high, c.low, c.close, c.volume]), [
-    ["09:00:00", 100, 101, 100, 101, 7000], ["09:00:04", 99, 99, 99, 99, 1000],
-    ["09:00:05", 102, 102, 102, 102, 3000], ["09:00:12", 103, 103, 103, 103, 4000]]);
-  assert.equal(candles[0].t, "2026-11-10T09:00:00+08:00");
-});
-
-test("5 秒與 30 秒 K 以整點對齊（09:00:00、09:00:05…），成交量單位與日 K 相同（股）", () => {
-  const five = plain(loadIntraday().secondCandles(TICKS, 5));
-  assert.deepEqual(five.map(c => [c.label, c.open, c.high, c.low, c.close, c.volume]), [
-    ["09:00:00", 100, 101, 99, 99, 8000], ["09:00:05", 102, 102, 102, 102, 3000], ["09:00:10", 103, 103, 103, 103, 4000]]);
-  const thirty = plain(loadIntraday().secondCandles(TICKS, 30));
-  assert.deepEqual(thirty.map(c => [c.label, c.open, c.high, c.low, c.close, c.volume]), [["09:00:00", 100, 103, 99, 103, 15000]]);
-  assert.deepEqual(plain(loadIntraday().secondCandles([], 5)), []);
+// 本人 11-18：秒 K 拿掉（換成分時），逐筆彙總的程式一起拿掉
+test("秒 K 的逐筆彙總已經拿掉", () => {
+  assert.equal(loadIntraday().secondCandles, undefined);
 });
