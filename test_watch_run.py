@@ -57,6 +57,7 @@ class FakeSource:
             "sector": {"data_date": base_date, "average_day_pct": 0.5},
             "margin": {"data_date": base_date, "margin_lots": 1000},
             "environment": {"usdtwd": {"date": base_date, "close": 32.1}},
+            "wyckoff_lpsy": {"reading": {"status": "no", "date": base_date}},
             "data_cutoffs": {"stock": base_date},
         }
 
@@ -299,9 +300,10 @@ class OfficialStartTests(WatchRunTestCase):
         self.assertEqual({key: r["run_mode"] for key, r in records.items()}, {
             (BASE, "evening"): "trial", (BASE, "morning"): "trial",
             (LONG[22], "evening"): "official", (LONG[22], "morning"): "official"})
-        # 這一組輸入：官方資料算出的各層＋教訓層；國外同類股與新聞標題依條款不放
+        # 這一組輸入：官方資料算出的各層＋教訓層（H 票加最後供應點）；國外同類股與新聞標題依條款不放
         self.assertEqual(records[(LONG[22], "evening")]["layers"],
-                         ["technical", "bollinger", "sector", "margin", "environment", "market", "news", "lessons"])
+                         ["technical", "bollinger", "wyckoff_lpsy", "sector", "margin", "environment", "market", "news",
+                          "lessons"])
         self.assertEqual(set(records[(LONG[22], "evening")]["withheld_inputs"]), {"peers", "headlines"})
         sql = (self.tmp / f"evening-{LONG[22]}.sql").read_text(encoding="utf-8")
         self.assertIn(f'"official_since":"{LONG[22]}"', sql)
@@ -512,6 +514,48 @@ class SourceCheckTests(unittest.TestCase):
             ["ok", "not_found", "quota", "ok", "not_found", "eodhd_limit"])
         self.assertEqual(eodhd.asked, ["005930.KO", "000660.KO"])
         self.assertEqual(wr.source_check({"massive": None, "eodhd": None}, today=BASE)("NVDA.US", "US"), "no_key")
+
+
+class LocalSourceLpsyTests(unittest.TestCase):
+    """H 票：關注股的最後供應點讀數從行情庫（實際成交價＋逐日漲跌）算，和大盤共用 wyckoff_lpsy。"""
+
+    def setUp(self):
+        import sqlite3
+        import test_wyckoff_lpsy as lpsy
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        db = self.root / "data/stock-history/stock-history.sqlite"
+        db.parent.mkdir(parents=True)
+        # test_wyckoff_lpsy 的固定日線：第 80 天收 90 跌破 95，第 81 天收 92、量 70 → 是。
+        self.series = lpsy.basic_break().add(close=92, high=94, low=91, amount=70)
+        con = sqlite3.connect(db)
+        try:
+            con.execute("CREATE TABLE daily (date TEXT, code TEXT, name TEXT, kind TEXT, open REAL, high REAL, low REAL,"
+                        " close REAL, change_sign TEXT, change REAL, volume_shares INTEGER, turnover INTEGER)")
+            previous = None
+            for row in self.series.index_rows():
+                change = 0.0 if previous is None else row["close"] - previous
+                con.execute("INSERT INTO daily VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                            (row["date"], "2330", "台積電", "common", row["open"], row["high"], row["low"], row["close"],
+                             "-" if change < 0 else "+", change, int(row["amount"]), 0))
+                previous = row["close"]
+            con.commit()
+        finally:
+            con.close()
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_the_reading_is_computed_from_the_stock_history_database(self):
+        base = self.series.date(81)
+        layer = wr.LocalSource(self.root)._lpsy("2330", base)
+        self.assertEqual(layer["reading"], {"status": "yes", "date": base, "break_date": self.series.date(80),
+                                            "range_low": 95.0, "volume_ratio": 0.7})
+        # 前一天（跌破日）不是
+        self.assertEqual(wr.LocalSource(self.root)._lpsy("2330", self.series.date(80))["reading"]["status"], "no")
+
+    def test_the_schedule_opens_the_layer(self):
+        self.assertIn("wyckoff_lpsy", wr.LAYERS)
 
 
 if __name__ == "__main__":

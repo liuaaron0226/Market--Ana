@@ -120,3 +120,9 @@ test("週 K、月 K：均線是日 K 算的，不畫成整條，名稱也不寫 
   assert.match(block, /period === 'daily'/);
   assert.match(block, /short: .*role/, "非日 K 時名稱退回角色");
 });
+
+test("缺了哪幾層：每一層都寫中文名，不出現英文層名（H 票的最後供應點、I 票四層）", () => {
+  const record = { missing_layers: ["wyckoff_lpsy", "bollinger", "sector", "margin", "environment", "market"] };
+  assert.equal(logic.missingOf(record), "威科夫最後供應點、布林通道、同產業、融資融券、匯率與美債利率、大盤預測");
+  assert.equal(logic.missingOf({}), "");
+});

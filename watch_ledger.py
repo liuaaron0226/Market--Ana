@@ -51,6 +51,7 @@ from ledger_core import (
     text_problem,
 )
 import bollinger
+import wyckoff_lpsy
 from twon_analysis import analyze_v2
 from twon_analysis.indicators import Bar
 from twon_analysis.price_adjustment import adjust_bars, price_factors
@@ -64,16 +65,20 @@ HORIZONS = (5, 20)
 # 輸入分層（規格〈交給 Gemini 的輸入〉）。排程打開哪幾層由呼叫端給；打開的層算進輸入版本。
 # bollinger、sector、margin、environment 是 I 票（2026-11-16 本人定案）多加的四樣，每一樣各自一層，
 # 好讓輸入版本照實寫出多了哪幾樣；規格把前三樣歸在技術層、匯率與美債利率歸在環境層。
-LAYERS = ("technical", "bollinger", "sector", "margin", "environment", "market", "news", "peers", "lessons")
+# wyckoff_lpsy 是 H 票（本人 2026-11-18 追加「要，也加進去」）：這一檔今天是否處在威科夫最後供應點，由呼叫端用
+# wyckoff_lpsy（和大盤事前預測共用的判斷）算好，含息還原價要逐日漲跌，所以不是帳本從日 K 自己算。
+LAYERS = ("technical", "bollinger", "wyckoff_lpsy", "sector", "margin", "environment", "market", "news", "peers",
+          "lessons")
 DEFAULT_LAYERS = ("technical", "market", "news")
 # 每一層在一檔輸入資料裡的欄位。消息層這一版只收官方公告（重大訊息、月營收）。布林通道由帳本從日 K 自己算，沒有欄位。
 # 教訓層沒有欄位：由帳本自己從過去的判斷與對帳整理（只放事實），呼叫端給的內容不用。
-_LAYER_FIELDS = {"technical": "technical", "sector": "sector", "margin": "margin", "environment": "environment",
-                 "market": "market_forecast", "news": "announcements"}
+_LAYER_FIELDS = {"technical": "technical", "wyckoff_lpsy": "wyckoff_lpsy", "sector": "sector", "margin": "margin",
+                 "environment": "environment", "market": "market_forecast", "news": "announcements"}
 # I 票四層各自的參數與提示規則：只有打開那一層時才算進輸入版本與提示，沒打開時舊版本一個字都不變。
 _LAYER_PARAMETERS: dict[str, dict[str, Any]] = {
     "bollinger": {"period": bollinger.PERIOD, "deviations": bollinger.DEVIATIONS,
                   "squeeze_window": bollinger.SQUEEZE_WINDOW, "squeeze_share": bollinger.SQUEEZE_SHARE},
+    "wyckoff_lpsy": {"layer": wyckoff_lpsy.STOCK_VERSION},
     "sector": {"classification": "官方產業別", "changes": ["當天", "近 5 日"]},
     "margin": {"changes": "近 5 日"},
     "environment": {"changes": "近 20 日", "series": ["usdtwd", "ust_2y", "ust_10y"]},
@@ -89,6 +94,14 @@ _LAYER_RULES: dict[str, tuple[str, ...]] = {
         "squeezed 是通道寬度是否在近 120 個交易日最窄的兩成（null 是資料不足）；上緣與下緣也在 candidates 裡"
         "（boll_upper、boll_lower），挑選規則和其他候選相同。"
         "布林通道只是位置描述；單獨當買賣規則在歷史上贏不過買了放著，不可只憑它判斷。",
+    ),
+    "wyckoff_lpsy": (
+        "wyckoff_lpsy 是程式算好的「這一檔今天是否處在威科夫最後供應點」（yes／no／undeterminable，跌破整理區之後量縮、"
+        "碰不到原整理區低點的一天反彈）與固定的個股歷史統計，只能照讀，不可自己重算或改數字；undeterminable 當作沒有。"
+        "它是避開記號，不是放空訊號：歷史上之後二十個交易日平均比同日選股池少賺約一個百分點，扣掉賣出成本後好處只剩一半；"
+        "可以當成「條件還沒到」的參考之一，但不能單獨決定 status，理由裡也不得寫成賣出、放空或之後會跌；no 也不代表看多。"
+        # 本人 2026-11-18 看過乾跑後定案收緊（大盤、個股兩邊都加）。
+        "理由裡提到它時只能照寫是或否與歷史次數，不得拿來推論賣壓、套牢、壓力位置或之後的方向。",
     ),
     "sector": (
         "sector 是官方產業別相同、在網站分析範圍內的其他個股當天與近 5 日的漲跌（百分比）與全組平均；"
@@ -761,8 +774,8 @@ def reconcile(root: Path | str, index_daily: Sequence[Mapping[str, Any]],
 # ---- 正式起算日 ----
 
 def _official_path(root: Path, input_version: str) -> Path:
-    # 輸入版本當檔名：只擋路徑字元，格式本身由 input_version_of 決定。
-    if not re.fullmatch(r"[0-9A-Za-z+.-]{1,200}", input_version):
+    # 輸入版本當檔名：只擋路徑字元，格式本身由 input_version_of 決定（H 票的 wyckoff_lpsy 層名有底線）。
+    if not re.fullmatch(r"[0-9A-Za-z+._-]{1,200}", input_version):
         raise ValueError(f"輸入版本不合法：{input_version!r}")
     return root / "official" / f"{input_version}.json"
 

@@ -39,7 +39,8 @@ REPLAY_CLOCK = "17:30:00"
 MORNING_REPLAY_CLOCK = "07:30:00"
 # 這一版打開的輸入層＝「輸入到齊」的那一組：官方資料與由它算出的東西，加上帳本自己整理的教訓層（H 票）。
 # 國外同類股與新聞標題依來源條款不放（Gemini 付費與否由本人決定；改了就換這一組、換輸入版本、重新起算）。
-LAYERS = ("technical", "bollinger", "sector", "margin", "environment", "market", "news", "lessons")
+# wyckoff_lpsy：H 票（本人 2026-11-18 追加）威科夫最後供應點，打開它＝新的輸入版本，和之前的紀錄分開對帳。
+LAYERS = ("technical", "bollinger", "wyckoff_lpsy", "sector", "margin", "environment", "market", "news", "lessons")
 
 
 class Source(Protocol):
@@ -70,6 +71,7 @@ class LocalSource:
         self._industries: dict[str, tuple[str, str]] | None = None
         self._capital: dict[str, list[dict[str, Any]]] | None = None
         self._members: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
+        self._loaded: dict[tuple[str, str, int], tuple[list[Any], dict[str, Any]]] = {}
 
     def _capital_events(self) -> dict[str, list[dict[str, Any]]]:
         if self._capital is None:
@@ -77,12 +79,26 @@ class LocalSource:
             self._capital = default_capital_events(self.root)
         return self._capital
 
+    def _load(self, code: str, base_date: str, limit: int) -> tuple[list[Any], dict[str, Any]]:
+        """行情庫的日 K 與當日資訊；同一檔、同一天、同樣根數只讀一次（日 K 與最後供應點共用）。"""
+        key = (code, base_date, limit)
+        if key not in self._loaded:
+            from twon_analysis.data import load_bars
+            self._loaded[key] = load_bars(code, base_date, db_path=self.root / "data/stock-history/stock-history.sqlite",
+                                          otc_db_path=self.root / "data/otc-history/otc_history.sqlite", limit=limit)
+        return self._loaded[key]
+
     def _bars(self, code: str, base_date: str, limit: int = STOCK_HISTORY_BARS) -> list[dict[str, Any]]:
-        from twon_analysis.data import load_bars
-        bars, _ = load_bars(code, base_date, db_path=self.root / "data/stock-history/stock-history.sqlite",
-                            otc_db_path=self.root / "data/otc-history/otc_history.sqlite", limit=limit)
+        bars, _ = self._load(code, base_date, limit)
         return [{"date": b.date, "open": b.open, "high": b.high, "low": b.low, "close": b.close, "volume": b.volume}
                 for b in bars]
+
+    def _lpsy(self, code: str, base_date: str) -> dict[str, Any] | None:
+        """威科夫最後供應點（H 票）：實際成交價與逐日漲跌換成含息還原價（和研究的歷史統計同一種價格），
+        判斷和大盤事前預測共用 ``wyckoff_lpsy``。"""
+        import wyckoff_lpsy
+        bars, info = self._load(code, base_date, STOCK_HISTORY_BARS)
+        return wyckoff_lpsy.stock_layer(bars, info["day_returns"]) if bars else None
 
     def _technical(self, code: str, base_date: str) -> dict[str, Any] | None:
         """個股頁同一套計算（還原後的價格）：指標、法人買賣超、集保大戶持股、月營收。
@@ -120,6 +136,7 @@ class LocalSource:
         out: dict[str, Any] = {"stock_daily": self._bars(code, base_date),
                                "capital_events": self._capital_events().get(code, [])}
         for key, read in (("technical", lambda: self._technical(code, base_date)),
+                          ("wyckoff_lpsy", lambda: self._lpsy(code, base_date)),
                           ("sector", lambda: self._sector(code, base_date)),
                           ("margin", lambda: watch_inputs.margin_input(self.root, code, base_date)),
                           ("environment", lambda: watch_inputs.environment_input(self.root, base_date,
@@ -175,7 +192,8 @@ def stock_input(item: Mapping[str, Any], data: Mapping[str, Any], *, base_date: 
         "code": str(item["code"]), "name": item.get("name"), "base_date": base_date,
         "stock_daily": data.get("stock_daily") or [], "capital_events": data.get("capital_events") or [],
         "index_daily": index_daily, "method_text": method_text,
-        "technical": data.get("technical"), "sector": data.get("sector"), "margin": data.get("margin"),
+        "technical": data.get("technical"), "wyckoff_lpsy": data.get("wyckoff_lpsy"), "sector": data.get("sector"),
+        "margin": data.get("margin"),
         "environment": data.get("environment"), "market_forecast": market, "announcements": announcements,
         "data_cutoffs": {**(data.get("data_cutoffs") or {}), "index": index_daily[-1]["date"] if index_daily else None},
     }

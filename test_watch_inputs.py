@@ -428,5 +428,47 @@ class NewLayersInPromptTests(WatchLedgerTestCase):
             "technical+bollinger+sector+margin+environment+market+news-v1-"))
 
 
+# ---- H 票：威科夫最後供應點（本人 2026-11-18 追加「要，也加進去」）----
+
+WITH_LPSY = ("technical", "wyckoff_lpsy", "market", "news")
+
+
+def lpsy_layer():
+    """共用判斷算出的一層（test_wyckoff_lpsy 的固定日線：第 80 天跌破 95、第 81 天量 0.7 的反彈 → 是）。"""
+    import test_wyckoff_lpsy as lpsy
+    import wyckoff_lpsy
+    return wyckoff_lpsy.stock_layer(*lpsy.basic_break().add(close=92, high=94, low=91, amount=70).stock_bars())
+
+
+class LpsyLayerTests(WatchLedgerTestCase):
+    def sent(self):
+        prompt = (self.bin / "prompt.txt").read_text(encoding="utf-8")
+        return prompt, json.loads(prompt[prompt.index("{"):prompt.rindex("}") + 1])
+
+    def test_model_sees_the_reading_with_stock_level_history_and_the_avoid_note(self):
+        layer = lpsy_layer()
+        self.write(stock_input(wyckoff_lpsy=layer), model=recording_model(self.bin, answer()), layers=WITH_LPSY)
+        prompt, sent = self.sent()
+        self.assertEqual(sent["wyckoff_lpsy"]["reading"]["status"], "yes")
+        self.assertEqual(sent["wyckoff_lpsy"]["reading"]["volume_ratio"], 0.7)
+        self.assertEqual((sent["wyckoff_lpsy"]["history"]["count"], sent["wyckoff_lpsy"]["history"]["t"]), (1492, -4.8))
+        self.assertEqual(sent["layer_parameters"]["wyckoff_lpsy"], {"layer": layer["version"]})
+        for words in ("wyckoff_lpsy", "避開記號", "不是放空訊號", "不能單獨決定 status", "只能照寫", "不得拿來推論賣壓"):
+            self.assertIn(words, prompt)
+
+    def test_a_missing_reading_is_named_and_the_judgment_is_still_written(self):
+        record = self.write(stock_input(wyckoff_lpsy=None), layers=WITH_LPSY)["record"]
+        self.assertEqual(record["kind"], "judgment")
+        self.assertEqual(record["missing_layers"], ["wyckoff_lpsy"])
+
+    def test_the_layer_is_its_own_input_version_and_off_leaves_the_old_version_unchanged(self):
+        self.assertNotEqual(wl.input_version_of(WITH_LPSY), wl.input_version_of(("technical", "market", "news")))
+        self.assertTrue(wl.input_version_of(WITH_LPSY).startswith("technical+wyckoff_lpsy+market+news-v1-"))
+        # 沒打開這一層的版本和 H 票之前相同（上一版排程那一組）
+        self.assertEqual(wl.input_version_of(("technical", "bollinger", "sector", "margin", "environment", "market",
+                                              "news", "lessons")),
+                         "technical+bollinger+sector+margin+environment+market+news+lessons-v1-b68cbcd8")
+
+
 if __name__ == "__main__":
     unittest.main()
