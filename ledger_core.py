@@ -236,13 +236,64 @@ def call_model(model_bin: Path | str, prompt: str, model: str, timeout: float,
     return "ok", envelope.get("structured_output"), ""
 
 
-def text_problem(text: Any) -> str | None:
-    """模型寫的自由文字：不可空白、不可過長、不可出現任何數字（數值一律由程式依編號代入）。"""
+# 放寬檢查（本人 2026-11-18 晚「放寬檢查（推薦）」）：方法稿用詞至少幾個字、其中至少幾個字不是數字才算一個詞。
+_TERM_SPAN = (3, 8)
+_TERM_MIN_WORDS = 2
+_MASK = "\x00"
+
+
+def _is_numeral(character: str) -> bool:
+    return character.isnumeric() or character in CHINESE_NUMERAL_CHARS
+
+
+def _is_han(character: str) -> bool:
+    return "一" <= character <= "鿿" or character in CHINESE_NUMERAL_CHARS
+
+
+def _name_forms(names: Sequence[str]) -> list[str]:
+    """候選名字的整個名字，加上去掉結尾括號（日期）的那一段；長的先比，才不會把長名字拆開。"""
+    forms = set()
+    for name in names:
+        name = str(name or "").strip()
+        if len(name) >= 2:
+            forms.add(name)
+            short = re.sub(r"[（(][^（）()]*[）)]$", "", name).strip()
+            if len(short) >= 2:
+                forms.add(short)
+    return sorted(forms, key=len, reverse=True)
+
+
+def _in_method_term(text: str, at: int, method_text: str) -> bool:
+    """text[at] 這個中文數字是不是落在方法稿原文的一個詞裡：包含它、全是漢字、至少 3 個字且至少 2 個字不是數字的
+    一段，原樣出現在方法稿裡。"""
+    low, high = _TERM_SPAN
+    for start in range(max(0, at - high + 1), at + 1):
+        for end in range(at + 1, min(len(text), start + high) + 1):
+            piece = text[start:end]
+            if (len(piece) >= low and all(_is_han(c) for c in piece)
+                    and sum(not _is_numeral(c) for c in piece) >= _TERM_MIN_WORDS and piece in method_text):
+                return True
+    return False
+
+
+def text_problem(text: Any, *, names: Sequence[str] = (), method_text: str = "") -> str | None:
+    """模型寫的自由文字：不可空白、不可過長、不可出現任何數字（數值一律由程式依編號代入）。
+
+    唯一的例外是照抄這一份輸入裡本來就有的名稱（本人 2026-11-18 晚「放寬檢查（推薦）」）：``names`` 是候選關卡的名字
+    （整個名字，或去掉結尾括號日期的那一段），``method_text`` 是方法稿原文——落在其中一個詞裡的數字放行。
+    先把名字整個遮掉，剩下的阿拉伯／全形數字一律擋；中文數字要落在方法稿原文的一個詞裡才放行，貼在名字旁邊的照擋。"""
     if not isinstance(text, str) or not text.strip():
         return "文字為空"
     if len(text) > TEXT_LIMIT:
         return "文字過長"
-    if any(character.isnumeric() or character in CHINESE_NUMERAL_CHARS for character in text):
+    masked = text
+    for form in _name_forms(names):
+        masked = masked.replace(form, _MASK)
+    for at, character in enumerate(masked):
+        if not _is_numeral(character):
+            continue
+        if character in CHINESE_NUMERAL_CHARS and method_text and _in_method_term(masked, at, method_text):
+            continue
         return "自由文字不得包含數字；價位請用候選編號"
     return None
 

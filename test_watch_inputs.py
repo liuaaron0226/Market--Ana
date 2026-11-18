@@ -92,8 +92,9 @@ class BollingerLayerTests(WatchLedgerTestCase):
         self.assertNotEqual(wl.input_version_of(WITH_BOLLINGER), wl.input_version_of())
 
     def test_versions_without_the_new_layers_are_the_same_as_before_this_ticket(self):
-        # D 票寫定的版本（I 票之前）：沒打開新層的系列不換版本，舊紀錄和新紀錄照樣同一組對帳。
-        self.assertEqual(wl.input_version_of(), "technical+market+news-v1-f24f144e")
+        # D 票寫定的版本是 …-f24f144e（I 票之前）：沒打開新層的系列不因 I 票的層換版本。
+        # 本人 2026-11-18 晚「放寬檢查（推薦）」改了所有組合共用的提示（照抄名稱裡的數字放行），所以全部一起換成新系列。
+        self.assertEqual(wl.input_version_of(), "technical+market+news-v1-4669c18a")
 
 
 # ---- 固定原件 ----
@@ -467,7 +468,7 @@ class LpsyLayerTests(WatchLedgerTestCase):
         # 沒打開這一層的版本和 H 票之前相同（上一版排程那一組）
         self.assertEqual(wl.input_version_of(("technical", "bollinger", "sector", "margin", "environment", "market",
                                               "news", "lessons")),
-                         "technical+bollinger+sector+margin+environment+market+news+lessons-v1-b68cbcd8")
+                         "technical+bollinger+sector+margin+environment+market+news+lessons-v1-bb7f6136")  # 11-18 放寬檢查後（之前 …-b68cbcd8）
 
 
 # ---- I 票（11-18 晚）：估值、借券與季 EPS、個股五塊訊號 ----
@@ -579,6 +580,20 @@ class SignalsInputTests(unittest.TestCase):
         self.assertIsNone(wi.signals_input({"data_date": "2026-10-30", "blocks": [], "failed": []}))
 
 
+class NamesInWatchReasonTests(WatchLedgerTestCase):
+    """自選股判斷有同一條「理由不得有數字」檢查，用同一套白名單（本人 2026-11-18 晚「放寬檢查（推薦）」）。"""
+
+    def test_a_reason_copying_a_candidate_name_is_accepted(self):
+        reply = answer(reason="站上前波高點（09/21）之前先觀察量能")
+        record = self.write(stock_input(), model=recording_model(self.bin, reply))["record"]
+        self.assertEqual(record["kind"], "judgment")
+
+    def test_a_price_beside_the_name_is_refused(self):
+        record = self.write(stock_input(), model=recording_model(self.bin, answer(reason="前波高點一百二十二元有壓")))["record"]
+        self.assertEqual(record["kind"], "miss")
+        self.assertIn("不得包含數字", record["attempts"][-1]["detail"])
+
+
 WITH_NEW_THREE = ("technical", "valuation", "lending_eps", "signals", "market", "news")
 
 
@@ -616,7 +631,7 @@ class NewThreeLayersTests(WatchLedgerTestCase):
             "technical+valuation+lending_eps+signals+market+news-v1-"))
         self.assertEqual(wl.input_version_of(("technical", "bollinger", "sector", "margin", "environment", "market",
                                               "news", "lessons")),
-                         "technical+bollinger+sector+margin+environment+market+news+lessons-v1-b68cbcd8")
+                         "technical+bollinger+sector+margin+environment+market+news+lessons-v1-bb7f6136")  # 11-18 放寬檢查後（之前 …-b68cbcd8）
 
 if __name__ == "__main__":
     unittest.main()

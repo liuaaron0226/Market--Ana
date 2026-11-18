@@ -134,7 +134,9 @@ _PROMPT_RULES = (
     "每一格從 candidates 挑一個 side=above 的 id 當 strong_line（轉強線）、一個 side=below 的 id 當 weak_line（轉弱線）；"
     "帶 horizon 的候選只能用在同一格。zone 只能是 above（收盤大於等於轉強線）、between、below（收盤小於轉弱線）之一。",
     "reason（理由）與 invalidation（什麼情況代表看錯）只寫繁體中文質化判斷，不得出現任何阿拉伯／全形／中文數字、日期或價格；"
-    "要引用價位就把候選 id 放進 reason_refs／invalidation_refs，程式會代入名字與數值。",
+    "要引用價位就把候選 id 放進 reason_refs／invalidation_refs，程式會代入名字與數值。"
+    # 本人 2026-11-18 晚「放寬檢查（推薦）」：照抄名稱裡的數字放行（ledger_core.text_problem 的白名單）。
+    "唯一的例外：照抄 candidates 的 name（例如五日線、前一交易日高點）或方法稿原文裡的用詞（例如兩個頻道、第一頻道）時，名字裡本來就有的數字可以寫，但要一字不差照抄；名字旁邊不得再加任何數字（例如價位、幾成、幾天），也不得寫 candidates 與方法稿裡沒有的線名或自己縮寫的詞。",
     # 本人 2026-11-15 看過真 Gemini 乾跑後選「先改提示再乾跑」：下面兩條是那次加的。
     # I 票改了這一句：大盤融資融券、櫃買指數等五層現在有給，「沒給的資料」不再舉融資當例子。
     "理由與看錯條件只能引用 INPUT_JSON 裡有的資料（日 K、指標、法人與期貨、外資讀數、候選關卡、布林位置、overseas、"
@@ -440,7 +442,8 @@ def _validate(structured: Any, model_input: Mapping[str, Any]) -> tuple[dict[str
         if item["zone"] not in ZONES:
             return None, f"{key} 日落點不在清單內"
         for text_field, refs_field in (("reason", "reason_refs"), ("invalidation", "invalidation_refs")):
-            problem = _text_problem(item[text_field])
+            problem = _text_problem(item[text_field], names=[level["name"] for level in model_input["candidates"]],
+                                    method_text=str(model_input.get("method_text") or ""))
             if problem:
                 return None, f"{key} 日 {text_field}：{problem}"
             if refs_problem(item[refs_field], usable):
