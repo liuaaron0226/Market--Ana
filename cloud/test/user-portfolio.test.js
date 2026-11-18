@@ -3,6 +3,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { handle } from "../lib/gate.js";
 import { fakeD1, makeIssuer, claims, fetchJwks, TEAM, MAIN_AUD, APPLY_AUD, OWNER } from "./helpers.js";
+import { createLiveQuoteService } from "../lib/live-quotes.js";
 
 let issuer, env, deps;
 const next = async () => new Response("static-ok", { status: 200 });
@@ -227,4 +228,126 @@ test("官方報價失敗而沿用快取時，明確標示價格已過期", async
   assert.equal(item.latest_price, 39.5);
   assert.equal(item.price_as_of, "2026-11-08");
   assert.equal(item.price_stale, true);
+});
+
+// ---- 收盤後到日資料發布前（本人 11-19「現在就都處理完成」）：站主的庫存現價、市值、損益改用今天的收盤，
+// 和個股頁同一個即時服務、同一套判斷（報價日期比日資料新才用）。盤中、週末、日資料發布後照舊用日資料。
+const FUGLE_CLOSE = (day, overrides = {}) => ({
+  symbol: "2330", date: day, previousClose: 600, openPrice: 605, highPrice: 615, lowPrice: 598,
+  closePrice: 610, change: 10, changePercent: 1.67, total: { tradeVolume: 30000 },
+  lastUpdated: Date.parse(`${day}T13:30:00+08:00`) * 1000, ...overrides,
+});
+async function ownerHolding2330({ asOf = "2026-11-09" } = {}) {
+  await env.DB.prepare("INSERT INTO stock_analysis (version, code, as_of, payload) VALUES (?, ?, ?, ?)")
+    .bind("v1", "2330", asOf, JSON.stringify({ schema: "stock-analysis/v2", code: "2330", market: "上市", as_of: asOf, quote: { close: 600 } })).run();
+  await env.DB.prepare("INSERT INTO user_holdings (email, code, name, market, shares, average_cost, note, in_universe, source, created_at, updated_at) VALUES (?, '2330', '台積電', '上市', 1000, 500, '', 1, 'manual', ?, ?)")
+    .bind(OWNER, "2026-11-09T00:00:00Z", "2026-11-09T00:00:00Z").run();
+}
+function fakeLive(at, quote) {
+  const requests = [];
+  deps.now = () => Date.parse(at);
+  env.FUGLE_API_KEY = "fake-key";
+  deps.liveQuoteService = createLiveQuoteService({
+    now: deps.now,
+    fetchImpl: async (url) => { requests.push(String(url)); return new Response(JSON.stringify(quote), { status: 200 }); },
+  });
+  return requests;
+}
+const holdingsOf = async (email = OWNER) => (await (await req("/api/holdings", { email })).json()).items;
+
+test("收盤後、日資料仍是前一天：站主的庫存現價、市值、損益改用今天的收盤，標今日收盤", async () => {
+  await ownerHolding2330();
+  const requests = fakeLive("2026-11-10T14:56:00+08:00", FUGLE_CLOSE("2026-11-10"));
+  const [item] = await holdingsOf();
+  assert.equal(item.latest_price, 610);
+  assert.equal(item.market_value, 610000);
+  assert.equal(item.unrealized_pnl, 110000);
+  assert.equal(item.return_pct, 22);
+  assert.equal(item.price_as_of, "2026-11-10");
+  assert.equal(item.price_session, "close");
+  assert.equal(item.price_stale, false);
+  assert.equal(requests.length, 1);
+  assert.match(requests[0], /\/intraday\/quote\/2330$/, "只抓報價，不抓 K 線");
+  await holdingsOf();
+  assert.equal(requests.length, 1, "同一天拿到收盤後不重抓");
+});
+
+test("13:30 剛過還沒拿到收盤價：用最後成交並標 close_pending", async () => {
+  await ownerHolding2330();
+  fakeLive("2026-11-10T13:30:04+08:00", FUGLE_CLOSE("2026-11-10", { closePrice: 608, lastUpdated: Date.parse("2026-11-10T13:24:58+08:00") * 1000 }));
+  const [item] = await holdingsOf();
+  assert.equal(item.latest_price, 608);
+  assert.equal(item.price_session, "close_pending");
+});
+
+test("日資料已發布到今天、盤中、週末：照舊用日資料，不打上游", async () => {
+  for (const [label, at, asOf] of [
+    ["日資料已是今天", "2026-11-10T17:00:00+08:00", "2026-11-10"],
+    ["盤中", "2026-11-10T10:00:00+08:00", "2026-11-09"],
+    ["週六", "2026-11-14T10:00:00+08:00", "2026-11-13"],
+  ]) {
+    await env.DB.prepare("DELETE FROM stock_analysis").run();
+    await env.DB.prepare("DELETE FROM user_holdings").run();
+    await ownerHolding2330({ asOf });
+    const requests = fakeLive(at, FUGLE_CLOSE(at.slice(0, 10)));
+    const [item] = await holdingsOf();
+    assert.equal(item.latest_price, 600, label);
+    assert.equal(item.price_as_of, asOf, label);
+    assert.equal(item.price_session, "daily", label);
+    assert.equal(requests.length, 0, label);
+  }
+});
+
+test("國定假日下午：抓到的最後報價是前一個交易日，不比日資料新，照舊用日資料", async () => {
+  await ownerHolding2330({ asOf: "2026-11-09" });
+  fakeLive("2026-11-10T14:00:00+08:00", FUGLE_CLOSE("2026-11-09"));
+  const [item] = await holdingsOf();
+  assert.equal(item.latest_price, 600);
+  assert.equal(item.price_session, "daily");
+});
+
+test("即時報價只給站主：核准的朋友收盤後照舊用日資料，不打上游", async () => {
+  await env.DB.prepare("INSERT INTO stock_analysis (version, code, as_of, payload) VALUES (?, ?, ?, ?)")
+    .bind("v1", "2330", "2026-11-09", JSON.stringify({ schema: "stock-analysis/v2", code: "2330", quote: { close: 600 } })).run();
+  await env.DB.prepare("INSERT INTO user_holdings (email, code, name, market, shares, average_cost, note, in_universe, source, created_at, updated_at) VALUES ('a@example.com', '2330', '台積電', '上市', 1000, 500, '', 1, 'manual', ?, ?)")
+    .bind("2026-11-09T00:00:00Z", "2026-11-09T00:00:00Z").run();
+  const requests = fakeLive("2026-11-10T14:56:00+08:00", FUGLE_CLOSE("2026-11-10"));
+  const [item] = await holdingsOf("a@example.com");
+  assert.equal(item.latest_price, 600);
+  assert.equal(item.price_session, "daily");
+  assert.equal(requests.length, 0);
+});
+
+test("收盤報價抓失敗：照舊用日資料，庫存照常列出", async () => {
+  await ownerHolding2330();
+  deps.now = () => Date.parse("2026-11-10T14:56:00+08:00");
+  env.FUGLE_API_KEY = "fake-key";
+  deps.liveQuoteService = createLiveQuoteService({ now: deps.now, fetchImpl: async () => new Response("down", { status: 503 }) });
+  const [item] = await holdingsOf();
+  assert.equal(item.latest_price, 600);
+  assert.equal(item.price_session, "daily");
+});
+
+test("上櫃的庫存用 otc 問收盤報價；拿到的報價不是今天的（每日更新失敗、昨天的報價比日資料新）不冒充今日收盤", async () => {
+  await env.DB.prepare("INSERT INTO stock_analysis (version, code, as_of, payload) VALUES (?, ?, ?, ?)")
+    .bind("v1", "6488", "2026-11-07", JSON.stringify({ schema: "stock-analysis/v2", code: "6488", market: "上櫃", quote: { close: 400 } })).run();
+  await env.DB.prepare("INSERT INTO user_holdings (email, code, name, market, shares, average_cost, note, in_universe, source, created_at, updated_at) VALUES (?, '6488', '環球晶', '上櫃', 1000, 350, '', 1, 'manual', ?, ?)")
+    .bind(OWNER, "2026-11-09T00:00:00Z", "2026-11-09T00:00:00Z").run();
+  const asked = [];
+  let quoteDay = "2026-11-10";
+  deps.now = () => Date.parse("2026-11-10T15:00:00+08:00");
+  deps.liveQuoteService = {
+    async closingQuote(code, market) {
+      asked.push(`${market}:${code}`);
+      return { quote: { price: 420, data_date: quoteDay }, pending: false };
+    },
+  };
+  let [item] = await holdingsOf();
+  assert.deepEqual(asked, ["otc:6488"]);
+  assert.equal(item.latest_price, 420);
+  assert.equal(item.price_session, "close");
+  quoteDay = "2026-11-09";
+  [item] = await holdingsOf();
+  assert.equal(item.latest_price, 400);
+  assert.equal(item.price_session, "daily");
 });

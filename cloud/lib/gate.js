@@ -698,8 +698,10 @@ async function handleUserDataApi(request, env, path, email, deps, access) {
   if (WATCH_PEERS_PATH.test(path)) return handleWatchPeersApi(request, env, path, email, deps, access);
   // ETF 上站：加自選／持股時，名單內 ETF 算不算在分析範圍內，看 ETF 開關對這個人開不開。
   // 基金（03 票）：最近搜尋收不收基金，看基金開關對這個人開不開。
+  // 庫存收盤後改用今天的收盤（本人 11-19）：和個股頁 /live 同一個即時服務；即時行情只給站主，所以只有站主有。
   return handleUserPortfolio(request, env, path, email, { ...deps, includeEtfs: stockEtfsVisible(env, access.isOwner),
-    includeFunds: stockFundsVisible(env, access.isOwner) });
+    includeFunds: stockFundsVisible(env, access.isOwner),
+    closeQuotes: access.isOwner ? { service: deps.liveQuoteService || defaultLiveQuoteService, fugleApiKey: env.FUGLE_API_KEY || null } : null });
 }
 
 // 讀狀態（首頁入口每一頁都會讀）走一般個人資料的額度；保存、同意、刪除才扣 friendAi。

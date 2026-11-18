@@ -724,7 +724,7 @@
     else if (held) {
       const facts = element('ul', 'hv-facts'), fund = holdingKind(item) === 'fund';
       [
-        [item.price_stale ? '市值（上次收盤）' : '市值', priced ? money.format(item.market_value) : '—', ''],
+        [window.HoldingsRows.valueLabel(item), priced ? money.format(item.market_value) : '—', ''],
         [word, priced ? signedMoney(held.gain) : '—', tone],
         fund ? ['單位數・台幣成本', `${units.format(item.shares)}・${money.format(item.total_cost_twd)}`, '']
           : ['股數・均價', `${number.format(item.shares)}・${number.format(item.average_cost)}`, ''],
@@ -988,6 +988,25 @@
     const payload = await api('/api/holdings');
     state.holdings = payload.items || [];
     renderList();
+    if (listReady) showFreshness();
+  }
+
+  // 價格是哪一天、哪一種（holdings-rows.js priceLine）。13:30 剛過、收盤價還沒確認時，15 秒後再讀一次（和個股頁一樣），
+  // 庫存與水位一起讀，兩邊的價才一致。最多再讀 4 次（上游一直失敗就停，等使用者自己重新整理）；正在改庫存時先不讀，免得表單被重畫。
+  const PENDING_RELOADS = 4;
+  let pendingReload = null, pendingTries = 0;
+  function showFreshness() {
+    $('portfolioFreshness').textContent = window.HoldingsRows.priceLine(state.holdings);
+    const pending = state.holdings.some(item => item.price_session === 'close_pending');
+    if (!pending) pendingTries = 0;
+    if (!pending || pendingReload !== null || pendingTries >= PENDING_RELOADS) return;
+    const retry = () => {
+      if (editCode !== null) { pendingReload = setTimeout(retry, 15_000); return; }
+      pendingReload = null;
+      pendingTries += 1;
+      reloadHoldings().catch(() => {});
+    };
+    pendingReload = setTimeout(retry, 15_000);
   }
 
   async function loadFriendAiDigest() {
@@ -1105,11 +1124,7 @@
     await loadAiDigest();
     listReady = true;
     renderList();
-    const dates = state.holdings.map(item => item.price_as_of).filter(Boolean).sort();
-    const stale = state.holdings.some(item => item.price_stale);
-    $('portfolioFreshness').textContent = dates.length
-      ? `庫存價格至 ${dates.at(-1)}${stale ? '（部分沿用上次資料）' : ''}`
-      : '尚無庫存價格';
+    showFreshness();
   }).catch(error => {
     listReady = true;   // 這次沒讀到就不畫；之後新增或刪除成功再讀一次時照常畫
     $('portfolioFreshness').textContent = '資料讀取失敗';

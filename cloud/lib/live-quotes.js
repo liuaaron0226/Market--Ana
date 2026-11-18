@@ -339,7 +339,26 @@ export function createLiveQuoteService({ fetchImpl = fetch, now = Date.now,
     }
   }
 
+  // 收盤後到每日更新發布前（約 15:30／16:30），日資料還是前一天；今天的收盤報價要照樣給（本人 11-17）。
+  // 抓到收盤（closeSettled）之後當天不重抓；之前照報價間隔重抓（lastAttempt 在 await 之前記，同時進來的請求不會一起打上游）。
+  async function refreshCloseQuote(code, market, state, nowMs, fugleApiKey, wantCandles) {
+    if (nowMs < state.retryAt) return;
+    const wantQuote = !closeSettled(state, nowMs) && quoteDue(state, nowMs, fugleApiKey ? fugleQuoteIntervalMs : quoteIntervalMs);
+    if (fugleApiKey && (wantQuote || wantCandles)) await fetchFugle(code, market, state, nowMs, fugleApiKey, wantQuote, wantCandles);
+    else if (!fugleApiKey && wantQuote) await fetchMisQuote(code, market, state, nowMs);
+  }
+
   return {
+    // 自選股頁的庫存（本人 11-19）：收盤後只要今天的收盤報價，不抓 K 線，和個股頁共用同一份狀態與判斷。
+    // 盤中、週末、開盤前回 null（庫存照舊用日資料）。pending：還沒拿到收盤價，手上是收盤前最後一筆成交。
+    async closingQuote(code, market, { fugleApiKey = null } = {}) {
+      const nowMs = now();
+      if (!afterCloseToday(nowMs)) return null;
+      const state = stateFor(code, market);
+      await refreshCloseQuote(code, market, state, nowMs, fugleApiKey, false);
+      return state.quote ? { quote: state.quote, pending: !closeSettled(state, nowMs) } : null;
+    },
+
     async snapshot(code, market, { allowFetch = true, fugleApiKey = null } = {}) {
       const nowMs = now();
       const state = stateFor(code, market);
@@ -353,13 +372,8 @@ export function createLiveQuoteService({ fetchImpl = fetch, now = Date.now,
         const wantCandles = Boolean(fugleApiKey) && fugleCandlesDue(state, nowMs);
         if (fugleApiKey && (wantQuote || wantCandles)) await fetchFugle(code, market, state, nowMs, fugleApiKey, wantQuote, wantCandles);
         else if (!fugleApiKey && wantQuote) await fetchMisQuote(code, market, state, nowMs);
-      } else if (afterClose && allowFetch && nowMs >= state.retryAt) {
-        // 收盤後到每日更新發布前（約 15:30／16:30），日資料還是前一天；今天的收盤報價要照樣給（本人 11-17）。
-        // 抓到收盤（closeSettled）之後當天不重抓；之前照報價間隔重抓（lastAttempt 在 await 之前記，同時進來的請求不會一起打上游）。
-        const wantQuote = !closeSettled(state, nowMs) && quoteDue(state, nowMs, interval);
-        const wantCandles = Boolean(fugleApiKey) && fugleCandlesDue(state, nowMs);
-        if (fugleApiKey && (wantQuote || wantCandles)) await fetchFugle(code, market, state, nowMs, fugleApiKey, wantQuote, wantCandles);
-        else if (!fugleApiKey && wantQuote) await fetchMisQuote(code, market, state, nowMs);
+      } else if (afterClose && allowFetch) {
+        await refreshCloseQuote(code, market, state, nowMs, fugleApiKey, Boolean(fugleApiKey) && fugleCandlesDue(state, nowMs));
       } else if (!scheduledOpen && !afterClose && fugleApiKey && allowFetch && nowMs >= state.retryAt
         && (state.lastFugleCandlesAt === 0 || nowMs - state.lastFugleCandlesAt >= fugleClosedCandleIntervalMs)) {
         // 週末、開盤前：分時顯示最近一個交易日（本人 11-18）。只抓 1 分K，報價照舊由日資料負責。
