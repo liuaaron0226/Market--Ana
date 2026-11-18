@@ -511,6 +511,49 @@ class MarketLayersRunTests(MorningTestCase):
         names = {item["key"]: item.get("name") for item in record["missing_inputs"]}
         self.assertEqual(names["ofr_stress"], "OFR 金融壓力指數")   # 網站「缺漏」那一列顯示的名字
 
+    def test_ofr_is_fetched_before_writing_and_cut_at_what_was_published(self):
+        # 本人 2026-11-18 晚「預測時直接抓」：假的 OFR 回應一路到基準日；只用基準日往前第二個平日（含）以前的分數。
+        from test_market_layers import ofr_csv
+        import market_layers
+        calls = []
+
+        def fetch():
+            calls.append(1)
+            return market_layers.parse_ofr(ofr_csv(BASE))
+
+        result = self.run_evening(ofr_fetch=fetch)
+        self.assertEqual((result["outcome"], len(calls)), ("written", 1))
+        layer = fl.read_ledger(self.ledger)["forecasts"][0]["input"]["ofr_stress"]
+        self.assertEqual(layer["status"], "ok")
+        self.assertEqual(layer["observed_at"], market_layers.ofr_cutoff(BASE, "evening", None))
+        self.assertLess(layer["observed_at"], BASE)
+
+    def test_an_ofr_timeout_leaves_that_layer_missing_and_the_forecast_is_still_written(self):
+        def timed_out():
+            raise TimeoutError("timed out")
+
+        result = self.run_evening(ofr_fetch=timed_out)
+        self.assertEqual(result["outcome"], "written")
+        self.assertIn("ofr_stress", result["market_layers_missing"])
+        self.assertEqual(result["market_layers_errors"]["ofr_stress"], "TimeoutError")
+        record = fl.read_ledger(self.ledger)["forecasts"][0]
+        self.assertEqual(record["input"]["ofr_stress"]["status"], "missing")
+        self.assertIn("ofr_stress", {item["key"] for item in record["missing_inputs"]})
+
+    def test_the_command_line_fetches_ofr_unless_told_not_to(self):
+        import market_layers
+        seen = {}
+        real = fr.run_evening
+        fr.run_evening = lambda *args, **kwargs: seen.update(kwargs) or {}
+        try:
+            base = ["--analysis", "a.js", "--ledger", "l", "--method", "m", "--agy-bin", "agy"]
+            fr.main(base)
+            self.assertIs(seen["ofr_fetch"], market_layers.fetch_ofr)
+            fr.main(base + ["--no-ofr-fetch"])
+            self.assertIsNone(seen["ofr_fetch"])
+        finally:
+            fr.run_evening = real
+
     def test_morning_reads_the_same_layers(self):
         self.chips_file()
         result = self.run_morning(data_root=self.tmp / "data", seeds_root=self.tmp / "no-seeds")

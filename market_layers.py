@@ -2,21 +2,22 @@
 
 每一層都由程式算好、附資料日與統計期間和一段說明，Gemini 只讀不算；缺資料時那一層是
 ``{"status": "missing", "reason": …}``，不擋整份預測。資料全部是網站每天已經抓好、存在工作集裡的官方（或已核准）來源，
-這裡不連網：
+除了 OFR 之外這裡不連網：
 
 - ``market_margin``：大盤融資融券（證交所信用交易總表，首頁籌碼卡同一份 chips-data.js）。大盤維持率沒有來源，明寫不給。
 - ``otc_index``：櫃買指數日線近 60 根（櫃買中心，otc_market.sqlite）與近 5／20／60 日和加權指數比強弱。
 - ``sector_share``：各產業占當日成交金額的比重與近 5 日變化（每日更新封存的產業資金流向快照）。
 - ``screens``：資金輪動四象限與籌碼選股排行前五（每日更新封存的選股快照；只放法人排行，分點那幾頁本來就沒有資料）。
-- ``ofr_stress``：OFR 金融壓力指數的信用分項（水位訊號每日存的 OFR 原件；值、近 20 日變化、近三年分位）。
+- ``ofr_stress``：OFR 金融壓力指數的信用分項（值、近 20 日變化、近三年分位）。本人 2026-11-18 晚「預測時直接抓（推薦）」：
+  寫預測之前向 OFR 官方公開 CSV 抓一次（``fetch_ofr``，設逾時；這是本人同意的唯一一個新增對外抓取），抓不到那一層寫缺。
 
 富果、新聞來源、國外同類股不在這裡（授權照舊不進 Gemini）。
 """
 from __future__ import annotations
 
 import json
-import re
-from collections.abc import Mapping, Sequence
+import urllib.request
+from collections.abc import Callable, Mapping, Sequence
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -40,6 +41,12 @@ SCREEN_KINDS = (tuple(f"{who}_net_rank-{days}d-{side}" for who in ("foreign", "t
                 + ("rotation_relative_value-1d-buy",))
 QUADRANT_ORDER = ("leading", "weakening", "improving", "lagging")
 OFR_MAX_AGE_DAYS = 7      # OFR 最後一筆比截止日早超過這麼多天（原件沒更新）就當作缺
+OFR_URL = "https://www.financialresearch.gov/financial-stress-index/data/fsi.csv"   # 和 level_signals.OFR_FSI_URL 同一份
+OFR_TIMEOUT_SECONDS = 30
+# 公布落後：本機 2026-11-10 16:33（UTC，美東週一上午）抓的原件最後一筆是 11-06（週五），週一 11-09 還沒有。
+# 所以只用「寫預測那天（晚間版是基準日、晨間版是開盤日）往前第二個平日（含）以前」的分數；正式排程抓到的本來就只有
+# 已公布的，這條截斷是給重播與補跑用的同一條規則。只觀察過一次，偏保守。
+OFR_LAG_WEEKDAYS = 2
 
 NOTES = {
     "market_margin": "大盤融資融券餘額（上市，證交所信用交易總表）。融資餘額是散戶用槓桿的程度、融券是放空的張數，"
@@ -63,7 +70,8 @@ PARAMETERS: dict[str, Any] = {
     "version": VERSION, "layers": list(LAYER_NAMES), "otc_recent_bars": OTC_RECENT_BARS,
     "versus_days": list(VERSUS_DAYS), "share_compare_days": SHARE_COMPARE_DAYS,
     "margin_compare_days": MARGIN_COMPARE_DAYS, "screen_top": SCREEN_TOP, "screen_kinds": list(SCREEN_KINDS),
-    "ofr": {"series": "OFR FSI Credit", "change_days": 20, "percentile_years": 3, "max_age_days": OFR_MAX_AGE_DAYS},
+    "ofr": {"series": "OFR FSI Credit", "change_days": 20, "percentile_years": 3, "max_age_days": OFR_MAX_AGE_DAYS,
+            "source": "run_time_fetch", "url": OFR_URL, "lag_weekdays": OFR_LAG_WEEKDAYS},
     "notes": NOTES,
 }
 
@@ -249,9 +257,29 @@ def ofr_layer(credit_rows: Sequence[Mapping[str, Any]], cutoff: str) -> dict[str
 
 
 def ofr_cutoff(base_date: str, edition: str, session_date: str | None) -> str:
-    """晚間版只看基準日前一天（含）以前的美國資料；晨間版看開盤日前一天（含）以前。"""
-    anchor = session_date if edition == "morning" and session_date else base_date
-    return (date.fromisoformat(anchor) - timedelta(days=1)).isoformat()
+    """只用寫預測那天往前第二個平日（含）以前的分數：晚間版以基準日算、晨間版以開盤日算（見 OFR_LAG_WEEKDAYS）。"""
+    day = date.fromisoformat(session_date if edition == "morning" and session_date else base_date)
+    steps = 0
+    while steps < OFR_LAG_WEEKDAYS:
+        day -= timedelta(days=1)
+        steps += day.weekday() < 5
+    return day.isoformat()
+
+
+def parse_ofr(content: bytes) -> list[dict[str, Any]]:
+    """OFR 官方 CSV → [{date, credit}]（信用分項，照水位訊號同一個解析；不以總指數冒充）。"""
+    from level_signals import parse_ofr_fsi_csv
+    return parse_ofr_fsi_csv(content, "9999-12-31")
+
+
+def fetch_ofr(*, opener: Callable[..., Any] = urllib.request.urlopen,
+              timeout: float = OFR_TIMEOUT_SECONDS) -> list[dict[str, Any]]:
+    """向 OFR 官方抓一次 FSI 的 CSV（公開資料，不用金鑰；User-Agent 不帶任何個人資料）。逾時或格式不對就丟例外，
+    呼叫端把那一層記成缺。"""
+    request = urllib.request.Request(OFR_URL, headers={"User-Agent": "market-ana-forecast/1.0",
+                                                       "Accept": "text/csv,*/*;q=0.1"})
+    with opener(request, timeout=timeout) as response:
+        return parse_ofr(response.read())
 
 
 # ---- 整合 ----
@@ -285,8 +313,6 @@ def build_layers(sources: Mapping[str, Any], *, base_date: str, index_daily: Seq
 CHIPS_FILE = "chips-data.js"
 OTC_MARKET_DB = "otc-history/otc_market.sqlite"
 SNAPSHOT_DIR = "market-screen-snapshots"
-LEVEL_SIGNALS_DIR = "level-signals"
-OFR_RAW = "ofr-fsi-credit.raw"
 
 
 def _window_json(path: Path) -> Any:
@@ -301,16 +327,12 @@ def _snapshot(root: Path, kind: str, day: str) -> dict[str, Any] | None:
 
 
 def load_sources(data_root: Path | str | None, analysis_path: Path | str | None, *,
-                 base_date: str | None, edition: str = "evening", session_date: str | None = None) -> dict[str, Any]:
-    """排程用：從工作集讀五層要的資料（不連網）。每一樣各自讀，讀不到的記進 errors（只記錯誤種類，不記路徑）。
+                 base_date: str | None, ofr: Callable[[], list[dict[str, Any]]] | None = None) -> dict[str, Any]:
+    """排程用：五層要的資料。每一樣各自讀，讀不到的記進 errors（只記錯誤種類，不記路徑）。
 
-    融資讀 analysis-data.js 旁邊的 chips-data.js。OFR 讀水位訊號（每天早上 07:30）存的原件，只用寫預測那時已經存在的
-    那一份：晚間版是資料夾日期不晚於基準日的最新一份，晨間版（07:20 前後跑）是開盤日前一天（含）以前的。"""
+    前四層從工作集讀（不連網）；融資讀 analysis-data.js 旁邊的 chips-data.js。OFR 由 ``ofr`` 取得（排程給 ``fetch_ofr``，
+    重播給同一次抓回來的那一份）；沒給就是缺。抓回來的整串序列在 ``build_layers`` 依 ``ofr_cutoff`` 截斷。"""
     sources: dict[str, Any] = {"errors": {}}
-    if data_root is None or base_date is None:
-        sources["errors"] = {name: "no_data_root" for name in LAYER_NAMES}
-        return sources
-    root = Path(data_root)
 
     def read(name: str, fn) -> None:
         try:
@@ -338,19 +360,19 @@ def load_sources(data_root: Path | str | None, analysis_path: Path | str | None,
         sources["screens"] = {kind: batch for kind in SCREEN_KINDS
                               if (batch := _snapshot(store, f"screen-{kind}", base_date)) is not None}
 
-    def ofr() -> None:
-        from level_signals import parse_ofr_fsi_csv
-        folder = root / LEVEL_SIGNALS_DIR
-        limit = ((date.fromisoformat(session_date) - timedelta(days=1)).isoformat()
-                 if edition == "morning" and session_date else base_date)
-        days = sorted(path.parent.name for path in folder.glob(f"*/{OFR_RAW}")
-                      if re.fullmatch(r"\d{4}-\d{2}-\d{2}", path.parent.name) and path.parent.name <= limit) \
-            if folder.is_dir() else []
-        if not days:
-            raise FileNotFoundError(OFR_RAW)
-        sources["ofr_credit"] = parse_ofr_fsi_csv((folder / days[-1] / OFR_RAW).read_bytes(), "9999-12-31")
+    def fetched() -> None:
+        if ofr is None:
+            raise LookupError("not_fetched")
+        sources["ofr_credit"] = ofr()
 
-    for name, fn in (("market_margin", chips), ("otc_index", otc), ("screens", snapshots), ("ofr_stress", ofr)):
+    read("ofr_stress", fetched)
+    if sources["errors"].get("ofr_stress") == "LookupError":
+        sources["errors"]["ofr_stress"] = "not_fetched"
+    if data_root is None or base_date is None:
+        sources["errors"].update({name: "no_data_root" for name in LAYER_NAMES if name != "ofr_stress"})
+        return sources
+    root = Path(data_root)
+    for name, fn in (("market_margin", chips), ("otc_index", otc), ("screens", snapshots)):
         read(name, fn)
     if "screens" in sources["errors"]:
         sources["errors"]["sector_share"] = sources["errors"]["screens"]

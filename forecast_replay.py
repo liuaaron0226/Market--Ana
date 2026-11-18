@@ -140,6 +140,22 @@ def plan_replay(analysis: Mapping[str, Any], *, method_text: str, model: str, st
             "model_knowledge": dict(knowledge), "method_spoilers": list(spoilers) if spoilers else None}
 
 
+def _once(fetch: Callable[[], list[dict[str, Any]]]) -> Callable[[], list[dict[str, Any]]]:
+    """同一次重播只抓一次：第一次的結果（或例外）記住，之後每一天都拿同一份。"""
+    kept: dict[str, Any] = {}
+
+    def get() -> list[dict[str, Any]]:
+        if "rows" not in kept and "error" not in kept:
+            try:
+                kept["rows"] = fetch()
+            except Exception as error:  # noqa: BLE001 — 抓失敗的那一次每一天都照樣寫缺
+                kept["error"] = error
+        if "error" in kept:
+            raise kept["error"]
+        return kept["rows"]
+    return get
+
+
 def _frozen(day: str, clock_time: str) -> Callable[[], datetime]:
     moment = datetime.fromisoformat(f"{day}T{clock_time}").replace(tzinfo=fl.TAIPEI)
     return lambda: moment
@@ -181,12 +197,14 @@ def run_replay(
     log_output: Path | str | None = None,
     timeout_seconds: float = 360,
     now: Callable[[], datetime] | None = None,
+    ofr_fetch: Callable[[], list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     """依日期先後重播；這一次最多新寫 ``max_forecasts`` 份，而且同一天（台北）各次加起來不超過 ``DAILY_LIMIT``。
 
     ``fetched_at``：這次重播的資料是什麼時候抓的（記進每一筆，說明事後修正過的數字可能混在裡面）。
     ``now``：真實的時鐘（判斷可重播的時段與今天寫了幾份）；寫進帳本的時鐘照基準日凍結。
     ``log_output`` 要放在重播帳本的 ``runs/`` 底下，下一次才算得出今天已寫幾份。
+    ``ofr_fetch``：這一次重播只抓一次 OFR，每一天照同一條截斷規則用；OFR 若回頭修正舊值，重播看到的是修正後的值。
     """
     clock = now or (lambda: datetime.now(fl.TAIPEI))
     started = clock().astimezone(fl.TAIPEI)
@@ -215,6 +233,7 @@ def run_replay(
     elif budget <= 0:
         log["stop_reason"] = f"今天已寫滿 {DAILY_LIMIT} 份"
     foreign_sources = fr.load_foreign_sources(data_root, seeds_root) if not log["stop_reason"] else {}
+    ofr_once = _once(ofr_fetch) if ofr_fetch is not None and not log["stop_reason"] else None
     sources = oi.archive_sources(overseas_dir, root, write=False) if overseas_dir is not None else None
 
     for day in plan["dates"]:
@@ -235,8 +254,7 @@ def run_replay(
             data = fr.build_day_input(trimmed, method_text, layer, foreign_sources, edition=edition,
                                       session_date=session,
                                       market_sources=market_layers.load_sources(
-                                          data_root, analysis_path, base_date=day, edition=edition,
-                                          session_date=session))
+                                          data_root, analysis_path, base_date=day, ofr=ofr_once))
             if sources is not None:
                 data["sources"] = sources
             frozen = _frozen(session, MORNING_CLOCK) if session else _frozen(day, REPLAY_CLOCK)
@@ -310,7 +328,8 @@ def main(argv: list[str] | None = None) -> int:
     log = run_replay(args.analysis, ledger=args.ledger, method_path=args.method, model_bin=args.agy_bin,
                      model=args.model, start=args.start, end=args.end, fetched_at=args.fetched_at, editions=editions,
                      max_forecasts=args.max_forecasts, overseas_dir=args.overseas_dir, data_root=args.data_root,
-                     sql_output=args.sql_output, log_output=args.log_output)
+                     sql_output=args.sql_output, log_output=args.log_output,
+                     ofr_fetch=market_layers.fetch_ofr)   # 本人 11-18 晚：OFR 寫之前直接抓（重播只抓一次）
     print(json.dumps({key: log[key] for key in ("replayable", "written", "unchanged", "misses", "missing_inputs",
                                                 "stop_reason", "reconciliation")}, ensure_ascii=False))
     return 0

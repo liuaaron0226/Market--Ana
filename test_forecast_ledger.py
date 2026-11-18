@@ -894,6 +894,9 @@ class MarketLayersTests(LedgerTestCase):
         for words in ("融資餘額的增減、使用率", "不能單獨當成看多或看空的理由", "低檔有承接", "消化浮額", "籌碼沉澱",
                       "和指數、成交量、法人方向並列", "寫出矛盾", "不替融資下結論"):
             self.assertIn(words, rules)
+        # 本人 2026-11-18 晚：產業成交比重的分母維持上市＋上櫃，提示寫清楚分母
+        self.assertIn("上市＋上櫃全部產業成交金額合計", rules)
+        self.assertIn("分母不是加權指數的成交金額", rules)
         # 收緊前的版本（I 票乾跑第二輪）不能再出現：改提示＝新的輸入版本
         self.assertNotEqual(fl.input_version("gemini-4-argon"),
                             "base+overseas+foreign_flow+wyckoff_lpsy+market_margin+otc_index+sector_share+screens"

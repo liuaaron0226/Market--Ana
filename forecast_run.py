@@ -354,7 +354,9 @@ def run_evening(
     data_root: Path | str | None = None,
     seeds_root: Path | str = SEEDS_ROOT,
     official_since: str | None | object = fl.OFFICIAL_SINCE_DEFAULT,
+    ofr_fetch: Callable[[], list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
+    """``ofr_fetch``：寫之前抓 OFR 金融壓力（命令列預設 ``market_layers.fetch_ofr``）；沒給或抓失敗那一層寫缺。"""
     if as_of and not dry_run:
         raise ValueError("重播某一天（as_of）只能在乾跑使用，正式帳本不補寫過去的預測")
     official_since = fl.official_since(official_since)
@@ -370,7 +372,7 @@ def run_evening(
     layer = _layer(overseas_dir, edition="evening", base_date=daily[-1]["date"] if daily else None, session_date=None)
     foreign_sources = load_foreign_sources(data_root, seeds_root)
     market_sources = market_layers.load_sources(data_root, analysis_path,
-                                                base_date=daily[-1]["date"] if daily else None)
+                                                base_date=daily[-1]["date"] if daily else None, ofr=ofr_fetch)
     data = _with_archive_names(build_day_input(analysis, method_text, layer, foreign_sources,
                                                market_sources=market_sources), overseas_dir, Path(ledger))
     base_date = data["base_date"]
@@ -433,6 +435,7 @@ def run_morning(
     data_root: Path | str | None = None,
     seeds_root: Path | str = SEEDS_ROOT,
     official_since: str | None | object = fl.OFFICIAL_SINCE_DEFAULT,
+    ofr_fetch: Callable[[], list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     """寫一份晨間版：開盤日 session_date 的早上、開盤前 15 分鐘之前鎖定；基準日是前一個台股交易日。
 
@@ -463,8 +466,7 @@ def run_morning(
     layer = _layer(overseas_dir, edition="morning", base_date=base_date, session_date=session_date)
     # 外資讀數（G 票）：晨間版的那斯達克只看開盤日之前收盤的那一晚（us_before＝開盤日）。
     foreign_sources = load_foreign_sources(data_root, seeds_root)
-    market_sources = market_layers.load_sources(data_root, analysis_path, base_date=base_date, edition="morning",
-                                                session_date=session_date)
+    market_sources = market_layers.load_sources(data_root, analysis_path, base_date=base_date, ofr=ofr_fetch)
     data = _with_archive_names(build_day_input(analysis, method_text, layer, foreign_sources, edition="morning",
                                                session_date=session_date, market_sources=market_sources),
                                overseas_dir, Path(ledger))
@@ -507,10 +509,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--log-output", type=Path)
     parser.add_argument("--data-root", type=Path, default=DATA_ROOT,
                         help="外資層讀的工作集資料夾（上市法人、個股日線、外資台指期部位）")
+    parser.add_argument("--no-ofr-fetch", action="store_true",
+                        help="不抓 OFR 金融壓力（那一層寫缺）；預設寫之前向 OFR 官方抓一次")
     args = parser.parse_args(argv)
+    # 本人 2026-11-18 晚「預測時直接抓（推薦）」：OFR 是唯一一個在預測時才抓的外部公開資料。
     common = dict(ledger=args.ledger, method_path=args.method, model_bin=args.agy_bin, model=args.model,
                   dry_run=args.dry_run, sql_output=args.sql_output, log_output=args.log_output,
-                  overseas_dir=args.overseas_dir, data_root=args.data_root)
+                  overseas_dir=args.overseas_dir, data_root=args.data_root,
+                  ofr_fetch=None if args.no_ofr_fetch else market_layers.fetch_ofr)
     if args.edition == "morning":
         if not args.session_date or args.date:
             parser.error("晨間版要給 --session-date，不接受 --date")

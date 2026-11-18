@@ -173,6 +173,22 @@ class RunTests(ReplayTestCase):
         self.assertEqual(seen["2026-04-02"]["market_margin"]["change_1d_billion"], 1.0)   # 101 − 100
         self.assertEqual(seen["2026-04-03"]["otc_index"]["status"], "missing")
 
+    def test_ofr_is_fetched_once_and_each_day_is_cut_the_same_way(self):
+        import market_layers
+        from test_market_layers import ofr_csv
+        calls = []
+
+        def fetch():
+            calls.append(1)
+            return market_layers.parse_ofr(ofr_csv("2026-11-17", count=400))
+
+        self.run_replay(end="2026-04-03", editions=("evening",), ofr_fetch=fetch)
+        self.assertEqual(len(calls), 1)
+        seen = {item["base_date"]: item["ofr_stress"] for item in self.inputs()}
+        # 04-02（週四）往前兩個平日是 03-31（週二）；04-03（週五）是 04-01（週三）——之後抓到的值一律看不到
+        self.assertEqual(seen["2026-04-02"]["observed_at"], "2026-03-31")
+        self.assertEqual(seen["2026-04-03"]["observed_at"], "2026-04-01")
+
     def test_lessons_only_see_outcomes_that_had_expired_by_the_base_date(self):
         self.run_replay(end="2026-04-08", editions=("evening",))
 

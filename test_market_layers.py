@@ -190,32 +190,68 @@ class OfrLayerTest(unittest.TestCase):
         self.assertEqual(ml.ofr_layer(self.rows(30), "2026-02-06")["status"], "ok")   # 往前 7 天是 01-30，還算
 
 
-class OfrFolderTests(unittest.TestCase):
-    """水位訊號每天早上 07:30 存一份 OFR 原件（資料夾是那天的日期）；只能用寫預測那時已經存在的那一份。"""
+def ofr_csv(last_day, count=60):
+    """假的 OFR 官方 CSV：從 last_day 往回 count 個日曆天，每天一筆，Credit 值等於序號 ÷ 10（最舊 0.0）。"""
+    end = date.fromisoformat(last_day)
+    days = [end - timedelta(days=count - 1 - i) for i in range(count)]
+    lines = ["Date,OFR FSI,Credit,Equity valuation"] + [f"{d.isoformat()},0,{i / 10},0" for i, d in enumerate(days)]
+    return ("\n".join(lines) + "\n").encode("utf-8")
 
-    def setUp(self):
-        import tempfile
-        self._tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self._tmp.name)
-        start = date(2026, 1, 1)
-        for folder, last in (("2026-02-05", 34), ("2026-02-09", 38)):
-            lines = ["Date,OFR FSI,Credit"] + [f"{(start + timedelta(days=i)).isoformat()},0,{i}" for i in range(last)]
-            path = self.root / "level-signals" / folder / "ofr-fsi-credit.raw"
-            path.parent.mkdir(parents=True)
-            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-    def tearDown(self):
-        self._tmp.cleanup()
+class FakeResponse:
+    def __init__(self, body):
+        self.body = body
 
-    def test_evening_reads_the_folder_of_the_base_date_or_earlier(self):
-        sources = ml.load_sources(self.root, None, base_date="2026-02-06")
-        self.assertEqual(sources["ofr_credit"][-1]["date"], "2026-02-03")   # 02-05 那一份的最後一筆（第 34 筆）
+    def read(self):
+        return self.body
 
-    def test_morning_reads_only_folders_before_the_session_day(self):
-        before = ml.load_sources(self.root, None, base_date="2026-02-06", edition="morning", session_date="2026-02-09")
-        self.assertEqual(before["ofr_credit"][-1]["date"], "2026-02-03")
-        after = ml.load_sources(self.root, None, base_date="2026-02-09", edition="morning", session_date="2026-02-10")
-        self.assertEqual(after["ofr_credit"][-1]["date"], "2026-02-07")
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+class OfrFetchTests(unittest.TestCase):
+    """本人 2026-11-18 晚「預測時直接抓（推薦）」：寫預測之前向 OFR 官方抓 FSI，設逾時；抓不到那一層寫缺。"""
+
+    def test_fetch_asks_the_official_csv_with_a_timeout_and_parses_the_credit_series(self):
+        asked = []
+
+        def opener(request, timeout):
+            asked.append((request.full_url, timeout, request.get_header("User-agent")))
+            return FakeResponse(ofr_csv("2026-02-06"))
+
+        rows = ml.fetch_ofr(opener=opener, timeout=12)
+        self.assertEqual(asked[0][:2], ("https://www.financialresearch.gov/financial-stress-index/data/fsi.csv", 12))
+        self.assertNotIn("@", asked[0][2] or "")   # 不帶任何個人資料
+        self.assertEqual(rows[-1], {"date": "2026-02-06", "credit": 5.9})
+
+    def test_the_series_is_cut_two_weekdays_before_the_run_day(self):
+        # 本機 2026-11-10 16:33（UTC）抓的原件最後一筆是 11-06（週五），週一 11-09 還沒公布：
+        # 所以只用「寫預測那天往前第二個平日（含）以前」的分數。晚間版以基準日算、晨間版以開盤日算。
+        sources = ml.load_sources(None, None, base_date="2026-02-06", ofr=lambda: ml.parse_ofr(ofr_csv("2026-02-06")))
+        evening = ml.build_layers(sources, base_date="2026-02-06", index_daily=[], edition="evening")
+        self.assertEqual(evening["ofr_stress"]["observed_at"], "2026-02-04")   # 週五往前兩個平日是週三
+        self.assertEqual(evening["ofr_stress"]["value"], 5.7)                   # 02-04 是第 57 筆（0 起算）
+        morning = ml.build_layers(sources, base_date="2026-02-06", index_daily=[], edition="morning",
+                                  session_date="2026-02-09")
+        self.assertEqual(morning["ofr_stress"]["observed_at"], "2026-02-05")   # 週一開盤日往前兩個平日是上週四
+
+    def test_a_timeout_makes_the_layer_missing_with_its_error_kind(self):
+        def timed_out():
+            raise TimeoutError("timed out")
+
+        sources = ml.load_sources(None, None, base_date="2026-02-06", ofr=timed_out)
+        self.assertEqual(sources["errors"]["ofr_stress"], "TimeoutError")
+        layer = ml.build_layers(sources, base_date="2026-02-06", index_daily=[], edition="evening")["ofr_stress"]
+        self.assertEqual(layer["status"], "missing")
+        self.assertIn("TimeoutError", layer["reason"])
+
+    def test_without_a_fetcher_the_layer_is_missing(self):
+        sources = ml.load_sources(None, None, base_date="2026-02-06")
+        self.assertEqual(ml.build_layers(sources, base_date="2026-02-06", index_daily=[],
+                                         edition="evening")["ofr_stress"]["status"], "missing")
 
 
 class VersionTest(unittest.TestCase):
@@ -229,15 +265,14 @@ class BuildLayersTest(unittest.TestCase):
         self.assertEqual(set(layers), set(ml.LAYER_NAMES))
         self.assertTrue(all(layers[name]["status"] == "missing" for name in ml.LAYER_NAMES))
 
-    def test_evening_ofr_cutoff_is_the_day_before_the_base_date_and_morning_the_day_before_the_session(self):
+    def test_evening_ofr_cutoff_is_two_weekdays_before_the_base_date_and_morning_before_the_session(self):
         start = date(2026, 1, 1)
         rows = [{"date": (start + timedelta(days=i)).isoformat(), "credit": float(i)} for i in range(40)]
         evening = ml.build_layers({"ofr_credit": rows}, base_date="2026-02-05", index_daily=[], edition="evening")
-        self.assertEqual(evening["ofr_stress"]["observed_at"], "2026-02-04")
+        self.assertEqual(evening["ofr_stress"]["observed_at"], "2026-02-03")   # 週四往前兩個平日是週二
         morning = ml.build_layers({"ofr_credit": rows}, base_date="2026-02-05", index_daily=[], edition="morning",
                                   session_date="2026-02-06")
-        self.assertEqual(morning["ofr_stress"]["observed_at"], "2026-02-05")
-
+        self.assertEqual(morning["ofr_stress"]["observed_at"], "2026-02-04")   # 開盤日週五往前兩個平日是週三
 
 if __name__ == "__main__":
     unittest.main()
