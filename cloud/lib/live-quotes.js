@@ -157,6 +157,8 @@ function parseFugleCandles(payload) {
     label: String(row.date).slice(11, 16),
     open: Number(row.open), high: Number(row.high), low: Number(row.low), close: Number(row.close),
     volume: Number.isFinite(Number(row.volume)) ? Math.round(Number(row.volume) * 1000) : null,
+    // 行情商給的「自開盤累計成交均價」（分時的均價線；和券商 App 的「均」同一個數）
+    ...(finitePositive(row.average) !== null ? { average: Number(row.average) } : {}),
   })).filter((row) => row.t && [row.open, row.high, row.low, row.close].every(Number.isFinite));
 }
 

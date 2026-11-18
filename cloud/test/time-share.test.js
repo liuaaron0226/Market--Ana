@@ -108,3 +108,12 @@ test("首頁週期也是分時、60 分、日、週、月；1／5／15 分 K 與
   const js = readFileSync(new URL("web/minimal.js", ROOT), "utf8");
   assert.doesNotMatch(js, /buildIntradayCandles|'m1'|'m5'|'m15'/);
 });
+
+test("均價：行情商的 1 分K 有「自開盤累計成交均價」（average）就用它，沒有才自己算", () => {
+  const { slots } = load();
+  const day = slots([minute("09:00", 100, 50, { average: 100.12 }), minute("09:01", 101, 10, { average: 100.31 }), minute("09:03", 99, 20)]);
+  assert.equal(day.slots[0].avg, 100.12);
+  assert.equal(day.slots[1].avg, 100.31);
+  assert.equal(day.slots[2].avg, 100.31, "沒成交的分鐘沿用");
+  assert.equal(day.slots[3].avg, 99.875, "沒有 average 的那一根退回自己算（累計價×量÷累計量）");
+});

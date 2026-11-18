@@ -105,7 +105,7 @@ test("有 FUGLE_API_KEY 時優先讀 Fugle 報價與當日 1 分K（60 分K 由�
       return new Response(JSON.stringify({
         date: "2026-11-10", symbol: "2330", timeframe: "1",
         data: [
-          { date: "2026-11-10T09:00:00.000+08:00", open: 2240, high: 2250, low: 2235, close: 2245, volume: 5000 },
+          { date: "2026-11-10T09:00:00.000+08:00", open: 2240, high: 2250, low: 2235, close: 2245, volume: 5000, average: 2243.5 },
           { date: "2026-11-10T09:59:00.000+08:00", open: 2245, high: 2280, low: 2244, close: 2270, volume: 4000 },
           { date: "2026-11-10T10:00:00.000+08:00", open: 2270, high: 2272, low: 2260, close: 2265, volume: 3000 },
         ],
@@ -122,6 +122,8 @@ test("有 FUGLE_API_KEY 時優先讀 Fugle 報價與當日 1 分K（60 分K 由�
   assert.equal(first.quote.volume_shares, 14037000);
   assert.deepEqual(first.candles["1"].map(row => [row.label, row.close, row.volume]),
     [["09:00", 2245, 5000000], ["09:59", 2270, 4000000], ["10:00", 2265, 3000000]]);
+  assert.equal(first.candles["1"][0].average, 2243.5, "行情商的累計成交均價照收（分時的均價線用）");
+  assert.equal(first.candles["1"][1].average, undefined);
   // 09:00～09:59 合成一根：開 2240、高 2280、低 2235、收 2270、量 9,000 張
   assert.deepEqual(first.candles["60"].map(row => [row.label, row.open, row.high, row.low, row.close, row.volume]),
     [["09:00", 2240, 2280, 2235, 2270, 9000000], ["10:00", 2270, 2272, 2260, 2265, 3000000]]);

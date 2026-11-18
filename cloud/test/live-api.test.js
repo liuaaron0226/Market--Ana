@@ -104,29 +104,39 @@ test("MIS 在 Cloudflare 機房失敗時明確回雲端無法取得，不冒充 
   assert.equal(body.message, "雲端無法取得即時資料");
 });
 
-// 本人 11-18：分時下面的五檔與內外盤比「大家看到的一樣」——所有核准使用者都拿得到；但只有五檔，報價、分K 照舊只給站主。
-test("五檔 API：站主與核准使用者都拿得到五檔與內外盤，回應裡沒有報價與分K；待審、停權拿不到", async () => {
+// 本人 11-18：分時下面的五檔與內外盤比「大家看到的一樣」；之後再定「分時走勢線開放給所有核准的人」——
+// 分時要的 1 分K 與報價（昨收、開高低、總量、日期）也給所有核准使用者。60 分K 與盤中投影用的整份報價照舊只給站主（/live）。
+const MINUTES = [{ t: "2026-11-10T09:00:00.000+08:00", label: "09:00", open: 2240, high: 2250, low: 2235, close: 2245, volume: 5000000 }];
+const LIVE_QUOTE = { ok: true, code: "2330", market: "tse", price: 2265, previous_close: 2235, change: 30, change_percent: 1.34,
+  open: 2240, high: 2280, low: 2235, volume_shares: 14037000, data_time: "2026-11-10T10:22:00+08:00", data_date: "2026-11-10", upstream_delay_ms: null };
+
+test("分時 API：站主與核准使用者都拿得到 1 分K、分時要的報價、五檔與內外盤；沒有 60 分K；待審、停權拿不到", async () => {
   const book = { source: "fugle", time: "2026-11-10T10:22:00+08:00", bids: [[2265, 12]], asks: [[2270, 3]], flow: { at_ask: 10, at_bid: 5 } };
-  deps.liveQuoteService = { snapshot: async () => ({ ok: true, code: "2330", market: "tse", market_open: true, live: true, quote: { price: 2265 }, candles: { "1": [{ close: 1 }] }, book, retry_after_seconds: 0 }) };
+  deps.liveQuoteService = { snapshot: async () => ({ ok: true, code: "2330", market: "tse", market_open: true, live: true, quote: LIVE_QUOTE,
+    candles: { "1": MINUTES, "60": [{ close: 1 }] }, book, retry_after_seconds: 0 }) };
   await seed("friend@example.com");
   for (const email of [OWNER, "friend@example.com"]) {
-    const response = await req("/api/stocks/2330/book", email);
+    const response = await req("/api/stocks/2330/timeshare", email);
     assert.equal(response.status, 200, email);
     assert.equal(response.headers.get("cache-control"), "private, no-store");
-    assert.deepEqual(await response.json(), { ok: true, code: "2330", market_open: true, book });
+    assert.deepEqual(await response.json(), {
+      ok: true, code: "2330", market_open: true, minutes: MINUTES, book,
+      quote: { previous_close: 2235, open: 2240, high: 2280, low: 2235, volume_shares: 14037000, data_date: "2026-11-10", data_time: "2026-11-10T10:22:00+08:00" },
+    });
   }
   for (const status of ["pending", "disabled"]) {
     await seed(`${status}@example.com`, status);
-    assert.equal((await req("/api/stocks/2330/book", `${status}@example.com`)).status, 403);
+    assert.equal((await req("/api/stocks/2330/timeshare", `${status}@example.com`)).status, 403);
   }
-  assert.equal((await req("/api/stocks/9999/book")).status, 404, "不在涵蓋範圍");
+  assert.equal((await req("/api/stocks/9999/timeshare")).status, 404, "不在涵蓋範圍");
+  assert.equal((await req("/api/stocks/2330/book")).status !== 200, true, "舊的 /book 已併進 /timeshare");
 });
 
-test("五檔 API：還沒有五檔時回 book:null（不是錯誤），有自己的限速", async () => {
+test("分時 API：還沒有資料時回空的（不是錯誤），有自己的限速", async () => {
   deps.liveQuoteService = { snapshot: async () => ({ ok: false, market_open: false, quote: null, candles: {}, book: null, retry_after_seconds: 0 }) };
-  deps.rate = { book: 1 };
-  const first = await req("/api/stocks/2330/book");
+  deps.rate = { timeshare: 1 };
+  const first = await req("/api/stocks/2330/timeshare");
   assert.equal(first.status, 200);
-  assert.deepEqual(await first.json(), { ok: true, code: "2330", market_open: false, book: null });
-  assert.equal((await req("/api/stocks/2330/book")).status, 429);
+  assert.deepEqual(await first.json(), { ok: true, code: "2330", market_open: false, minutes: [], quote: null, book: null });
+  assert.equal((await req("/api/stocks/2330/timeshare")).status, 429);
 });

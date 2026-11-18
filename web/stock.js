@@ -155,8 +155,9 @@
   // 週期（本人 11-18）：分時、60 分、日、週、月。秒 K 與 1／5／15 分 K 拿掉（換成分時）。
   const PERIODS = ['ts', '60m', 'daily', 'weekly', 'monthly'];
   const INTRADAY_PERIODS = { '60m': '60' };
-  // 分時下面的五檔與內外盤比：所有核准使用者都看得到（/book，本人 11-18），只在看分時、頁面看得到時才問
-  let bookFeed = { code: '', timer: null, generation: 0 };
+  // 分時（1 分K、畫分時要的報價、五檔與內外盤比）：所有核准使用者都看得到（/timeshare，本人 11-18），只在看分時、頁面看得到時才問。
+  // data 是最近一次拿到的回應（換股票時清掉）。
+  let tsFeed = { code: '', timer: null, generation: 0, data: null };
   const livePoller = window.Intraday.createPoller({
     onData: applyLive,
     onError: () => updateLiveStatus({ ok: false, environment: 'local', message: '暫時無法取得即時資料', live: false }),
@@ -422,10 +423,10 @@
   // 分時（本人 11-18）：今天（盤後是今天完整的、非交易日是最近一個交易日）每分鐘的價量，來自即時服務的 1 分K。
   // 參考價、開高低、總量：即時報價是同一天的就用它；不然用日線上那一天的 K 棒與前一天收盤。
   function timeShareModel(r) {
-    const minutes = lastLive?.code === r.code || !lastLive?.code ? lastLive?.candles?.['1'] || [] : [];
-    const day = window.TimeShare.slots(minutes);
+    const data = tsFeed.code === r.code ? tsFeed.data : null;
+    const day = window.TimeShare.slots(data?.minutes);
     if (day.last < 0) return null;
-    const quote = lastLive?.quote?.data_date === day.date ? lastLive.quote : null;
+    const quote = data.quote?.data_date === day.date ? data.quote : null;
     const bars = baseResult?.code === r.code ? baseResult.bars || [] : r.bars || [];
     const at = bars.findIndex(bar => bar.date === day.date);
     const bar = at >= 0 ? bars[at] : null;
@@ -442,9 +443,8 @@
     for (const part of panel.querySelectorAll('.ts-head, [data-ts-chart]')) part.hidden = !model;
     $('timeShareEmpty').hidden = Boolean(model);
     if (model) window.TimeShare.render(panel, model);
-    // 拿不到的時候寫明；伺服器給了中文原因（例如站主以外的人拿不到即時走勢）就照寫，英文的技術訊息不上畫面
-    const reason = [lastLive?.message, lastLive?.error].find(text => typeof text === 'string' && /[一-鿿]/.test(text));
-    if (!model) $('timeShareEmpty').textContent = reason ? `分時走勢：${reason}` : '目前拿不到最近一個交易日的分時資料';
+    // 拿不到的時候寫明（還在讀的時候寫讀取中）
+    if (!model) $('timeShareEmpty').textContent = tsFeed.code === r.code && tsFeed.data ? '目前拿不到最近一個交易日的分時資料' : '讀取分時資料';
     $('stockChartContext').textContent = model ? `分時 · ${model.day.date}` : '分時';
   }
 
@@ -1049,41 +1049,43 @@
     loadComparison();
   }
 
-  function stopBook() {
-    if (bookFeed.timer) clearTimeout(bookFeed.timer);
-    bookFeed.timer = null;
-    bookFeed.generation += 1;
+  function stopTimeShare() {
+    if (tsFeed.timer) clearTimeout(tsFeed.timer);
+    tsFeed.timer = null;
+    tsFeed.generation += 1;
   }
 
-  // 五檔：盤中 10 秒問一次，收盤後、非交易時段問一次就停；伺服器一時失敗（5xx）或連不上 15 秒後再試。
-  // 拿到的畫在分時下面（time-share.js renderBook）。
-  async function pollBook(code, generation) {
-    if (generation !== bookFeed.generation) return;
-    bookFeed.timer = null;
+  // 分時：盤中 10 秒問一次，收盤後、非交易時段問一次就停；伺服器一時失敗（5xx）或連不上 15 秒後再試。
+  // 拿到就重畫分時圖與下面的五檔（time-share.js）。
+  async function pollTimeShare(code, generation) {
+    if (generation !== tsFeed.generation) return;
+    tsFeed.timer = null;
     let delay = 15_000;
     try {
-      const response = await fetch(`/api/stocks/${encodeURIComponent(code)}/book`, { cache: 'no-store' });
-      if (generation !== bookFeed.generation) return;
+      const response = await fetch(`/api/stocks/${encodeURIComponent(code)}/timeshare`, { cache: 'no-store' });
+      if (generation !== tsFeed.generation) return;
       if (response.status === 429) delay = (Number(response.headers.get('retry-after')) || 60) * 1000;
       else if (response.ok) {
         const data = await response.json();
-        if (generation !== bookFeed.generation) return;
+        if (generation !== tsFeed.generation) return;
+        tsFeed.data = data;
+        if (chartPeriod === 'ts' && lastResult?.code === code) drawTimeShare(lastResult);
         window.TimeShare.renderBook($('timeShare'), data.book);
         delay = data.market_open ? 10_000 : null;
       } else if (response.status < 500) delay = null;  // 沒有權限、查無這檔：不再問
-    } catch (_) { /* 連不上：稍後再試，五檔維持上一份 */ }
-    if (delay !== null && generation === bookFeed.generation) bookFeed.timer = setTimeout(() => pollBook(code, generation), delay);
+    } catch (_) { /* 連不上：稍後再試，畫面維持上一份 */ }
+    if (delay !== null && generation === tsFeed.generation) tsFeed.timer = setTimeout(() => pollTimeShare(code, generation), delay);
   }
 
-  function syncBookFeed() {
+  function syncTimeShareFeed() {
     const wanted = chartPeriod === 'ts' && lastResult && canUseLive(lastResult) && !document.hidden;
-    const sameCode = bookFeed.code === lastResult?.code;
-    if (wanted && sameCode && bookFeed.timer) return;  // 已經在問了
-    stopBook();
-    if (!sameCode) window.TimeShare.renderBook($('timeShare'), null);
+    const sameCode = tsFeed.code === lastResult?.code;
+    if (wanted && sameCode && tsFeed.timer) return;  // 已經在問了
+    stopTimeShare();
+    if (!sameCode) { tsFeed.data = null; window.TimeShare.renderBook($('timeShare'), null); }
     if (!wanted) return;
-    bookFeed.code = lastResult.code;
-    pollBook(lastResult.code, bookFeed.generation);
+    tsFeed.code = lastResult.code;
+    pollTimeShare(lastResult.code, tsFeed.generation);
   }
 
   // ---------- 畫線 ----------
@@ -1194,7 +1196,7 @@
     baseResult = null;
     lastLive = null;
     olderBars = { code: '', firstDate: '', rows: [] };
-    stopBook();
+    stopTimeShare();
     if (pendingRequest) pendingRequest.abort();
     pendingRequest = new AbortController();
     // 換股票：上一檔的畫線、選取與選到一半的工具都放下（還沒存上去的照樣在背景補存到原本那一檔）；
@@ -1247,7 +1249,7 @@
         window.WatchJudgments.mount({ host: document.querySelector('.bd-chart-bar'), code: data.code,
           onChange: () => { if (lastResult) drawChart(lastResult); }, getDaily: () => (baseResult ? dailyCandles(baseResult) : []) });
       }
-      syncBookFeed();
+      syncTimeShareFeed();
       if (canUseLive(data)) livePoller.start(code, data.market);
       else updateLiveStatus({ ok: true, market_open: false, live: false });
     } catch (error) {
@@ -1332,12 +1334,12 @@
     const selected = $('periodSelect').value;
     chartPeriod = PERIODS.includes(selected) ? selected : 'daily';
     if (lastResult) drawChart(lastResult);
-    syncBookFeed();
+    syncTimeShareFeed();
   });
   window.addEventListener('popstate', () => load(codeFromUrl() || '2330'));
   // 還有畫線沒存上去時瀏覽器會先問要不要離開（drawing-sync.js）：使用者可能留下來，所以這時不停即時更新。
-  window.addEventListener('beforeunload', event => { if (!event.defaultPrevented) { livePoller.stop(); stopBook(); } });
-  document.addEventListener('visibilitychange', syncBookFeed);
+  window.addEventListener('beforeunload', event => { if (!event.defaultPrevented) { livePoller.stop(); stopTimeShare(); } });
+  document.addEventListener('visibilitychange', syncTimeShareFeed);
   // 不設上限（本人 11-17）：天數取常用裡還沒有的，顏色取還沒用過的（ma-lines.js）
   // 首頁改了（別的分頁、或按上一頁回來）：圖跟著換
   window.MaLines.watch(applyMaLines);

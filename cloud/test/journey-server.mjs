@@ -27,7 +27,7 @@ if (process.env.MARKET_ANA_STOCK_ETFS) env.MARKET_ANA_STOCK_ETFS = process.env.M
 // 即時行情與五檔只在換成假資料（JOURNEY_LIVE_FIXTURE）時放寬：不然旅程會真的去問證交所，盤後的收盤報價一進來就把畫面拉回最新一根。
 const fakeLive = Boolean(process.env.JOURNEY_LIVE_FIXTURE);
 const rate = process.argv[3] === "relaxed"
-  ? { market: 10_000, detail: 10_000, userData: 10_000, ...(fakeLive ? { live: 10_000, book: 10_000 } : {}) } : undefined;
+  ? { market: 10_000, detail: 10_000, userData: 10_000, ...(fakeLive ? { live: 10_000, timeshare: 10_000 } : {}) } : undefined;
 // 推播的本機預覽（F 票）：JOURNEY_PUSH=test 用每次啟動新產生的測試推播金鑰（不是正式金鑰）；推播只記在這裡、不真的送出。
 const pushed = [];
 if (process.env.JOURNEY_PUSH === "test") {

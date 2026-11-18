@@ -144,7 +144,7 @@ test("個股頁在分析畫出來之後才背景載入 5 年歷史，接不上�
   assert.match(js, /render\(data, true\);\s*loadHistory\(data, sequence\);/);
   assert.match(js, /fetch\(`\/api\/stocks\/\$\{encodeURIComponent\(result\.code\)\}\/history`/);
   assert.match(js, /window\.KChartMath\.olderBars\(result\.bars, await response\.json\(\)\)/);
-  assert.match(js, /olderBars = \{ code: '', firstDate: '', rows: \[\] \};\s*stopBook\(\);\s*if \(pendingRequest\)/);  // 換股票就丟掉上一檔的歷史、停掉上一檔的五檔
+  assert.match(js, /olderBars = \{ code: '', firstDate: '', rows: \[\] \};\s*stopTimeShare\(\);\s*if \(pendingRequest\)/);  // 換股票就丟掉上一檔的歷史、停掉上一檔的分時
   assert.doesNotMatch(html, /5 ?年|歷史日線|載入更多/);  // 圖本來就能拖曳、縮放、切換日週月，不需要新的按鈕或說明
 });
 

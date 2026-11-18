@@ -19,7 +19,8 @@
         if (!m || !Number.isFinite(close) || close <= 0) return null;
         return { day: m[1], index: Number(m[2]) * 60 + Number(m[3]) - OPEN, close,
           volume: Number.isFinite(Number(row.volume)) && row.volume !== null ? Math.max(0, Number(row.volume)) : 0,
-          high: finite(row.high) ? row.high : close, low: finite(row.low) ? row.low : close };
+          high: finite(row.high) ? row.high : close, low: finite(row.low) ? row.low : close,
+          average: finite(row.average) && row.average > 0 ? row.average : null };
       })
       .filter(Boolean);
     const date = rows.length ? rows.reduce((last, row) => (row.day > last ? row.day : last), rows[0].day) : null;
@@ -27,17 +28,19 @@
     rows.filter(row => row.day === date && row.index >= 0 && row.index < N).forEach(row => byIndex.set(row.index, row));
     const last = byIndex.size ? Math.max(...byIndex.keys()) : -1;
     const out = new Array(N).fill(null);
-    let price = null, pv = 0, vv = 0, high = null, low = null;
+    let price = null, pv = 0, vv = 0, high = null, low = null, given = null;
     for (let i = 0; i <= last; i += 1) {
       const row = byIndex.get(i);
       if (row) {
         price = row.close;
         pv += row.close * row.volume; vv += row.volume;
+        given = row.average;
         if (!high || row.high > high.value) high = { value: row.high, index: i };
         if (!low || row.low < low.value) low = { value: row.low, index: i };
       }
       if (price === null) continue; // 開盤後第一筆之前（例如 09:00 沒成交）：不畫
-      out[i] = { price, volume: row ? row.volume : 0, avg: vv ? pv / vv : price };
+      // 均價：行情商給的累計成交均價優先（沒成交的分鐘沿用上一個）；沒有才用累計（收盤×量）÷累計量近似
+      out[i] = { price, volume: row ? row.volume : 0, avg: given ?? (vv ? pv / vv : price) };
     }
     return { date, slots: out, last, high, low };
   }

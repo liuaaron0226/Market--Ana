@@ -235,9 +235,13 @@ def main() -> int:
                 page = j.stock(friend)
                 choose(page, "ts")
                 page.locator("[data-ts-book]:not([hidden])").wait_for(state="visible", timeout=10_000)
-                empty = page.locator("#timeShareEmpty").inner_text()
-                j.check(f"{prefix}核准使用者：五檔與內外盤比看得到，走勢寫明只限站主", "僅限站主" in empty
-                        and page.locator("[data-ts-flow]").is_visible(), empty)
+                page.locator("#timeShare svg.ts-svg").wait_for(state="visible", timeout=10_000)
+                # 本人 11-18「開放給所有核准的人」：走勢線、均價線、五檔、內外盤比都和站主一樣
+                same = page.evaluate("() => [document.querySelectorAll('#timeShare .ts-line, #timeShare .ts-avg').length, document.getElementById('stockChartContext').textContent]")
+                j.check(f"{prefix}核准使用者：分時走勢、均價線、五檔與內外盤比都看得到", same == [2, f"分時 · {DAY}"]
+                        and page.locator("[data-ts-flow]").is_visible() and not page.locator("#timeShareEmpty").is_visible(), same)
+                live = page.evaluate("async () => (await fetch('/api/stocks/2330/live?market=tse')).status")
+                j.check(f"{prefix}核准使用者：整份即時報價（/live）照舊只給站主", live == 403, live)
                 page.locator(".bd-chart").screenshot(path=str(OUT / f"{prefix}friend-ts.png"))
                 friend.close()
 
