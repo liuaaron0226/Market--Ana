@@ -23,6 +23,8 @@ if (process.env.MARKET_ANA_FORECAST_LEDGER) env.MARKET_ANA_FORECAST_LEDGER = pro
 if (process.env.MARKET_ANA_WATCHLIST_WATCH) env.MARKET_ANA_WATCHLIST_WATCH = process.env.MARKET_ANA_WATCHLIST_WATCH;
 // ETF 上站（12 票）的本機預覽：MARKET_ANA_STOCK_ETFS=owner／all 打開開關；ETF 名錄與分析放在 JOURNEY_SEED_SQL。
 if (process.env.MARKET_ANA_STOCK_ETFS) env.MARKET_ANA_STOCK_ETFS = process.env.MARKET_ANA_STOCK_ETFS;
+// 正式站開著的純顯示功能（例如 market_trend_v1，見 wrangler.jsonc）：大盤切換國外指數的旅程要看短中長期走勢。
+if (process.env.MARKET_ANA_ENABLED_FEATURES) env.MARKET_ANA_ENABLED_FEATURES = process.env.MARKET_ANA_ENABLED_FEATURES;
 // 自動化驗收會在一分鐘內點完全部下鑽；額度可由第三個參數放寬（正式版額度見 gate.js RATE，不受影響）。
 // 即時行情與五檔只在換成假資料（JOURNEY_LIVE_FIXTURE）時放寬：不然旅程會真的去問證交所，盤後的收盤報價一進來就把畫面拉回最新一根。
 const fakeLive = Boolean(process.env.JOURNEY_LIVE_FIXTURE);

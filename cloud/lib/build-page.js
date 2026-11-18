@@ -17,6 +17,8 @@ export const WEB_FILES = [
   "terrain-layout.js", "terrain.js", "desk-tilt.js",
   // 立體重設計（11-15）：短中長期走勢的算票與畫面
   "trend-votes.js", "trend-matrix.js",
+  // 大盤頁切換國外指數（本人 11-19）：點圖卡名稱換指數，國外日線換成 K 線與走勢
+  "market-index.js",
   // 立體重設計（11-15）：收復線／防守線點開之後那張圖的資料整理
   "line-zones.js",
   // 立體重設計（11-15）：庫存總覽一列一檔的算法

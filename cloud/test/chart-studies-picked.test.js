@@ -117,3 +117,21 @@ test("只開放部分指標（基金）：目前看的指標不在名單就換�
   studies.select("foreign");
   assert.equal(studies.active, "foreign");
 });
+
+// 大盤頁切換國外指數（本人 11-19「有量就畫成交量」）：國外指數的量只是股數，副圖寫「成交量」、不寫單位、不標數字；切回台股恢復成交金額。
+test("大盤切到國外指數：量能改成不寫單位的成交量，讀的是 volume；切回台股恢復成交金額（億元）", () => {
+  const { studies, chart, drawn } = studiesWith({ volumeKind: "amount", studies: ["volume", "macd"] }, 60);
+  studies.setVolumeKind("count");
+  assert.equal(studies.volumeChip.textContent, "成交量");
+  assert.equal(studies.volumeChoice.textContent, "成交量");
+  drawn.length = 0;
+  studies.select("volume");
+  assert.deepEqual(picked(studies), [], "不標數字");
+  assert.ok(!drawn.includes("億元") && !drawn.includes("張"), "不寫單位");
+  assert.match(studies.volumeReadout.textContent, /成交量 1,060,000$/);
+  assert.equal(chart.candles[60].volume, 1_060_000);
+  studies.setVolumeKind("amount");
+  assert.equal(studies.volumeChip.textContent, "成交金額");
+  assert.deepEqual(pickedAfter(studies, drawn, "volume"), [{ name: "", text: "3,600" }]);
+  assert.ok(drawn.includes("億元"));
+});

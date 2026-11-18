@@ -13,6 +13,9 @@
   // 讓初值的影響衰減到 0.01 以下，最後一根才會和後端用較長歷史算出的 K9／D9 一致。
   const KD_READY_BARS = 49;
   const RSI_PERIOD = 14;
+  // 量能三種：amount＝成交金額（億元，大盤）、volume＝成交量（股，畫成張，個股）、
+  // count＝成交量只畫高低、不寫單位也不標數字（大盤頁切到國外指數，本人 11-19；讀 K 棒的 volume）
+  const VOLUME_KINDS = ['amount', 'volume', 'count'];
 
   // KD(9,3,3)：RSV＝(收−9日最低)/(9日最高−9日最低)×100，高低相同時 50；K＝⅔前K＋⅓RSV；D＝⅔前D＋⅓K。
   function kdSeries(candles) {
@@ -128,8 +131,8 @@
   class ChartStudies {
     constructor(chart, host, options = {}) {
       if (!chart || !host) throw new TypeError('ChartStudies 需要 chart 與 host。');
-      if (options.volumeKind !== 'amount' && options.volumeKind !== 'volume') {
-        throw new TypeError("ChartStudies options.volumeKind 必須是 'amount' 或 'volume'。");
+      if (!VOLUME_KINDS.includes(options.volumeKind)) {
+        throw new TypeError("ChartStudies options.volumeKind 必須是 'amount'、'volume' 或 'count'。");
       }
 
       this.chart = chart;
@@ -156,6 +159,7 @@
       const volumeTitle = this.volumeKind === 'amount' ? '成交金額' : '成交量';
       const volumePane = this._makePane('volume', volumeTitle);
       this.volumePane = volumePane.pane;
+      this.volumeChip = volumePane.chip;
       this.volumeReadout = volumePane.readout;
       this.volumeCanvas = volumePane.canvas;
 
@@ -199,6 +203,7 @@
         const button = element('button', 'kc-study-choice', choiceLabels[kind]);
         button.type = 'button'; button.dataset.study = kind; button.dataset.menuClose = '';
         button.addEventListener('click', () => this.select(kind));
+        if (kind === 'volume') this.volumeChoice = button;
         this.switcher.append(button);
       }
       // 指標區排最前面：它接在 K 線正下方、和 K 線同一個圖框（本人 11-14）。
@@ -219,6 +224,20 @@
       this.active = kind;
       this.draw();
     }
+
+    // 換量能的種類（大盤頁切到國外指數時是 count，切回台股是 amount）：名稱跟著換，下一次畫就照新的讀。
+    setVolumeKind(kind) {
+      if (!VOLUME_KINDS.includes(kind) || kind === this.volumeKind) return;
+      this.volumeKind = kind;
+      const title = kind === 'amount' ? '成交金額' : '成交量';
+      if (this.volumeChip) this.volumeChip.textContent = title;
+      if (this.volumeChoice) this.volumeChoice.textContent = title;
+      this._tableKey = '';
+      this.draw();
+    }
+
+    // K 棒上量能放在哪一欄：成交金額是 amount，其他是 volume
+    get volumeField() { return this.volumeKind === 'amount' ? 'amount' : 'volume'; }
 
     // 只開放其中幾種指標（基金當成一般個股 03 票：基金只有淨值，沒有量、高低價與法人，只留 MACD、RSI）；null＝全部。
     // 名單外的指標選單鍵收起、選不到；目前看的指標不在名單時換成名單第一個。
@@ -310,7 +329,7 @@
       }
 
       pane.append(header, canvas);
-      return { pane, readout, canvas };
+      return { pane, readout, canvas, chip };
     }
 
     _makeDetails(summaryText) {
@@ -576,7 +595,7 @@
       const top = TITLE_STRIP_PX;
       const bottom = height - 14;
       const plotHeight = Math.max(1, bottom - top);
-      const key = this.volumeKind;
+      const key = this.volumeField;
       let maximum = 0;
 
       for (let index = start; index < end; index += 1) {
@@ -612,11 +631,13 @@
       context.textAlign = 'left';
       context.textBaseline = 'top';
       const axisText = this._axisText(width, geo);
-      const unitLabel = this.volumeKind === 'amount' ? '億元' : '張';
-      axisText(context, unitLabel, top - 18);
-      axisText(context, this.volumeKind === 'volume' ? formatNumber(maximum / 1000, 1) : formatNumber(maximum, 1), top - 5);
-      context.textBaseline = 'bottom';
-      axisText(context, '0', height - 2);
+      if (this.volumeKind !== 'count') {
+        const unitLabel = this.volumeKind === 'amount' ? '億元' : '張';
+        axisText(context, unitLabel, top - 18);
+        axisText(context, this.volumeKind === 'volume' ? formatNumber(maximum / 1000, 1) : formatNumber(maximum, 1), top - 5);
+        context.textBaseline = 'bottom';
+        axisText(context, '0', height - 2);
+      }
 
       if (maximum === 0) {
         const hasFiniteZero = candles.slice(start, end).some(candle => candle && finite(candle[key]) && candle[key] === 0);
@@ -635,6 +656,7 @@
       this._drawCrosshair(context, height, range);
       this._drawPicked('volume', context, width, height, range, value => bottom - value / scale * plotHeight, index => {
         const value = candles[index] && candles[index][key];
+        if (this.volumeKind === 'count') return [];
         return [{ name: '', value, text: formatNumber(this.volumeKind === 'volume' ? value / 1000 : value, 0), bg: token('--dim') }];
       });
     }
@@ -871,7 +893,7 @@
       const candle = selectedIndex >= 0 ? range.candles[selectedIndex] : null;
       const date = labelFor(candle);
       if (this.kdPane || this.rsiPane) this._updateOscillatorReadouts(candle, date, selectedIndex);
-      const value = candle && candle[this.volumeKind];
+      const value = candle && candle[this.volumeField];
       const point = selectedIndex >= 0 && Array.isArray(this.chart.macd) ? this.chart.macd[selectedIndex] : null;
       for (const [kind, parts] of Object.entries(this.institutionalPanes || {})) {
         const net = candle && candle[kind];
@@ -894,6 +916,10 @@
         const valueText = finite(value) ? `${formatNumber(value, 2)} 億元` : '資料不足';
         this.volumeReadout.textContent = `${date}｜成交金額 ${valueText}`;
         this.volumeCanvas.setAttribute('aria-label', `成交金額副圖；日期：${date}；成交金額：${valueText}；單位：億元。`);
+      } else if (this.volumeKind === 'count') {
+        const valueText = finite(value) ? formatNumber(value, 0) : '資料不足';
+        this.volumeReadout.textContent = `${date}｜成交量 ${valueText}`;
+        this.volumeCanvas.setAttribute('aria-label', `成交量副圖；日期：${date}；成交量：${valueText}。`);
       } else {
         const valueText = finite(value) ? `${formatNumber(value / 1000, 3)} 張（${formatNumber(value, 0)} 股）` : '資料不足';
         this.volumeReadout.textContent = `${date}｜成交量 ${valueText}`;
@@ -920,7 +946,7 @@
       const lastMacd = lastIndex >= range.start && Array.isArray(this.chart.macd)
         ? this.chart.macd[lastIndex]
         : null;
-      const volume = last && last[this.volumeKind];
+      const volume = last && last[this.volumeField];
       return [
         this._candlesVersion,
         range.start,
@@ -960,9 +986,10 @@
         const candle = range.candles[index] || {};
         const point = macd[index];
         const ready = point && point.ready === true;
-        const volumeValue = candle[this.volumeKind];
+        const volumeValue = candle[this.volumeField];
         const volumeText = this.volumeKind === 'amount'
           ? (finite(volumeValue) ? formatNumber(volumeValue, 2) : '缺值')
+          : this.volumeKind === 'count' ? (finite(volumeValue) ? formatNumber(volumeValue, 0) : '缺值')
           : (finite(volumeValue)
               ? `${formatNumber(volumeValue / 1000, 3)} 張／${formatNumber(volumeValue, 0)} 股`
               : '缺值');
@@ -1060,5 +1087,8 @@
     });
   };
 
+  // 大盤頁的短中長期走勢（market-index.js）不畫副圖也要算 KD、RSI：同一套算法給它用
+  ChartStudies.kdSeries = kdSeries;
+  ChartStudies.rsiSeries = rsiSeries;
   window.ChartStudies = ChartStudies;
 })();
