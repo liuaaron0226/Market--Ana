@@ -382,26 +382,5 @@
     return { start(code, market) { stop(); activeCode = code; activeMarket = market === '上櫃' || market === 'otc' ? 'otc' : 'tse'; poll(); }, stop };
   }
 
-  // 秒 K：把當天逐筆成交（[毫秒, 價格, 張數, 流水號]，由舊到新）依 seconds 秒一格彙總。
-  // 沒有成交的格子不補 K 棒；成交量換成股（與日 K 相同單位）。
-  function secondCandles(ticks, seconds) {
-    const span = seconds * 1000;
-    const candles = [];
-    let last = null;
-    for (const [ms, price, size] of ticks) {
-      const bucket = Math.floor(ms / span) * span;
-      if (!last || last.bucket !== bucket) {
-        const local = new Date(bucket + 8 * 60 * 60 * 1000).toISOString();  // 台北時間（UTC+8，無日光節約）
-        last = { bucket, t: `${local.slice(0, 19)}+08:00`, label: local.slice(11, 19), open: price, high: price, low: price, close: price, volume: 0 };
-        candles.push(last);
-      }
-      if (price > last.high) last.high = price;
-      if (price < last.low) last.low = price;
-      last.close = price;
-      last.volume += size * 1000;
-    }
-    return candles;
-  }
-
-  window.Intraday = { createPoller, nextPollDelay, projectAnalysis, quoteCaption, liveStatusText, liveUnavailable, secondCandles, limitPrices, limitState, _test: { indicators, priceLevels, projectedConditions } };
+  window.Intraday = { createPoller, nextPollDelay, projectAnalysis, quoteCaption, liveStatusText, liveUnavailable, limitPrices, limitState, _test: { indicators, priceLevels, projectedConditions } };
 })();

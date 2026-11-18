@@ -103,3 +103,69 @@ test("MIS 在 Cloudflare 機房失敗時明確回雲端無法取得，不冒充 
   assert.equal(body.error, "cloud-live-unavailable");
   assert.equal(body.message, "雲端無法取得即時資料");
 });
+
+// 本人 11-18：分時下面的五檔與內外盤比「大家看到的一樣」；之後再定「分時走勢線開放給所有核准的人」——
+// 分時要的 1 分K 與報價（昨收、開高低、總量、日期）也給所有核准使用者。60 分K 與盤中投影用的整份報價照舊只給站主（/live）。
+const MINUTES = [{ t: "2026-11-10T09:00:00.000+08:00", label: "09:00", open: 2240, high: 2250, low: 2235, close: 2245, volume: 5000000 }];
+const LIVE_QUOTE = { ok: true, code: "2330", market: "tse", price: 2265, previous_close: 2235, change: 30, change_percent: 1.34,
+  open: 2240, high: 2280, low: 2235, volume_shares: 14037000, data_time: "2026-11-10T10:22:00+08:00", data_date: "2026-11-10", upstream_delay_ms: null };
+
+test("分時 API：站主與核准使用者都拿得到 1 分K、分時要的報價、五檔與內外盤；沒有 60 分K；待審、停權拿不到", async () => {
+  const book = { source: "fugle", time: "2026-11-10T10:22:00+08:00", bids: [[2265, 12]], asks: [[2270, 3]], flow: { at_ask: 10, at_bid: 5 } };
+  deps.liveQuoteService = { snapshot: async () => ({ ok: true, code: "2330", market: "tse", market_open: true, live: true, quote: LIVE_QUOTE,
+    candles: { "1": MINUTES, "60": [{ close: 1 }] }, book, retry_after_seconds: 0 }) };
+  await seed("friend@example.com");
+  for (const email of [OWNER, "friend@example.com"]) {
+    const response = await req("/api/stocks/2330/timeshare", email);
+    assert.equal(response.status, 200, email);
+    assert.equal(response.headers.get("cache-control"), "private, no-store");
+    assert.deepEqual(await response.json(), {
+      ok: true, code: "2330", market_open: true, minutes: MINUTES, book,
+      quote: { previous_close: 2235, open: 2240, high: 2280, low: 2235, volume_shares: 14037000, data_date: "2026-11-10", data_time: "2026-11-10T10:22:00+08:00" },
+    });
+  }
+  for (const status of ["pending", "disabled"]) {
+    await seed(`${status}@example.com`, status);
+    assert.equal((await req("/api/stocks/2330/timeshare", `${status}@example.com`)).status, 403);
+  }
+  assert.equal((await req("/api/stocks/9999/timeshare")).status, 404, "不在涵蓋範圍");
+  assert.equal((await req("/api/stocks/2330/book")).status !== 200, true, "舊的 /book 已併進 /timeshare");
+});
+
+test("分時 API：還沒有資料時回空的（不是錯誤），有自己的限速", async () => {
+  deps.liveQuoteService = { snapshot: async () => ({ ok: false, market_open: false, quote: null, candles: {}, book: null, retry_after_seconds: 0 }) };
+  deps.rate = { timeshare: 1 };
+  const first = await req("/api/stocks/2330/timeshare");
+  assert.equal(first.status, 200);
+  assert.deepEqual(await first.json(), { ok: true, code: "2330", market_open: false, minutes: [], quote: null, book: null });
+  assert.equal((await req("/api/stocks/2330/timeshare")).status, 429);
+});
+
+// 本人 11-18：60 分 K 要能看歷史（近 6 個月），開放給所有核准的人。歷史存 D1，今天的即時 60 分接在最後。
+test("60 分 API：核准使用者也拿得到近 6 個月的 60 分K＋今天的即時那幾根；富果只在缺資料時問一次", async () => {
+  const upstream = [];
+  env.FUGLE_API_KEY = "k";
+  deps.now = () => Date.parse("2026-11-10T10:30:00+08:00");
+  deps.upstreamFetch = async (url) => {
+    upstream.push(String(url));
+    return new Response(JSON.stringify({ symbol: "2330", timeframe: "60", data: [
+      { date: "2026-11-09T13:00:00.000+08:00", open: 2230, high: 2240, low: 2225, close: 2235, volume: 3000 },
+      { date: "2026-11-09T09:00:00.000+08:00", open: 2210, high: 2250, low: 2200, close: 2240, volume: 9000 },
+    ] }), { status: 200 });
+  };
+  const todayBar = { t: "2026-11-10T09:00:00.000+08:00", label: "09:00", open: 2240, high: 2280, low: 2235, close: 2265, volume: 14_000_000 };
+  deps.liveQuoteService = { snapshot: async () => ({ ok: true, market_open: true, quote: LIVE_QUOTE, candles: { "1": MINUTES, "60": [todayBar] }, book: null }) };
+  await seed("friend@example.com");
+  for (const email of [OWNER, "friend@example.com"]) {
+    const response = await req("/api/stocks/2330/hourly", email);
+    assert.equal(response.status, 200, email);
+    const body = await response.json();
+    assert.deepEqual(body.candles.map((row) => [row.label, row.close]), [["11/09 09:00", 2240], ["11/09 13:00", 2235], ["11/10 09:00", 2265]]);
+    assert.equal(body.market_open, true);
+  }
+  assert.equal(upstream.length, 1, "第二個人看同一檔直接讀 D1");
+  assert.match(upstream[0], /\/historical\/candles\/2330\?from=2026-05-10&to=2026-11-09&timeframe=60$/);
+  await seed("pending@example.com", "pending");
+  assert.equal((await req("/api/stocks/2330/hourly", "pending@example.com")).status, 403);
+  assert.equal((await req("/api/stocks/9999/hourly")).status, 404);
+});

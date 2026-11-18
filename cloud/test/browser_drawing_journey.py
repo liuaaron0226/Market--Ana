@@ -148,6 +148,14 @@ class Journey:
         page.wait_for_function("code => document.getElementById('stockCode').textContent === code", arg=code, timeout=60_000)
         page.locator("#chartHost canvas").scroll_into_view_if_needed()
         page.wait_for_timeout(700)  # 畫線與歷史在分析畫出來之後才讀
+        self.open_tools(page)
+
+    # 本人 11-18：畫線工具一開始收在「分析工具」裡，先點開（動畫約 0.4 秒）
+    def open_tools(self, page) -> None:
+        key = page.locator("#toolsKey")
+        if key.is_visible() and key.get_attribute("aria-expanded") != "true":
+            key.click()
+            page.wait_for_timeout(500)
 
     def lines(self, page) -> list[float]:
         return page.evaluate(LINES_JS)
@@ -162,6 +170,7 @@ class Journey:
     def choose_period(self, page, value: str) -> None:
         page.locator("#periodSelect").select_option(value)
         page.locator("#periodSelect").dispatch_event("change")
+        self.open_tools(page)
         page.wait_for_timeout(250)
 
     def handle(self, page, line_y: float) -> bool:
@@ -266,9 +275,12 @@ def desktop(journey: Journey, browser) -> None:
     page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-04-weekly.png"))
     journey.choose_period(page, "monthly")
     journey.check("月 K：工具列在、線在", tools.is_visible() and len(journey.lines(page)) == 1, journey.lines(page))
-    for period, name in [("5m", "分 K"), ("5s", "秒 K")]:
-        journey.choose_period(page, period)
-        journey.check(f"{name}：工具列與畫線都不顯示", not tools.is_visible() and journey.lines(page) == [], journey.lines(page))
+    journey.choose_period(page, "60m")
+    journey.check("60 分 K：工具列與畫線都不顯示", not tools.is_visible() and journey.lines(page) == [], journey.lines(page))
+    # 本人 11-18：秒 K 換成分時；分時下 K 線整塊讓位，分析工具鍵也不出現
+    journey.choose_period(page, "ts")
+    journey.check("分時：分析工具鍵與 K 線（連同畫線）都不顯示", not tools.is_visible() and not page.locator("#toolsKey").is_visible()
+                  and not page.locator("#chartHost").is_visible())
     journey.choose_period(page, "daily")
     journey.check("切回日 K：工具列與線都恢復", tools.is_visible() and len(journey.lines(page)) == 1, journey.lines(page))
 
@@ -343,8 +355,8 @@ def mobile(journey: Journey, browser) -> None:
     page.screenshot(path=str(OUT / "mobile-02-drawn.png"))
     page.locator(".bd-chart").screenshot(path=str(OUT / "mobile-03-chart.png"))
 
-    journey.choose_period(page, "5m")
-    journey.check("手機：分 K 不顯示工具列與畫線", not tools.is_visible() and journey.lines(page) == [])
+    journey.choose_period(page, "60m")
+    journey.check("手機：60 分 K 不顯示工具列與畫線", not tools.is_visible() and journey.lines(page) == [])
     journey.choose_period(page, "daily")
     page.reload()
     journey.ready(page, "2330")
@@ -498,11 +510,11 @@ def edit_desktop(journey: Journey, browser) -> None:
     page.mouse.click(x3, y3)
     journey.choose_period(page, "weekly")
     journey.check("切到週 K：選取還在", delete.is_visible() and len(journey.lines(page)) == 1 and journey.handle(page, journey.lines(page)[0]))
-    journey.choose_period(page, "5m")
-    journey.check("切到分 K：工具列與刪除都收起", not tools.is_visible() and not delete.is_visible())
+    journey.choose_period(page, "60m")
+    journey.check("切到60 分 K：工具列與刪除都收起", not tools.is_visible() and not delete.is_visible())
     page.keyboard.press("Delete")
     journey.choose_period(page, "daily")
-    journey.check("切回日 K：線還在、沒有被分 K 上的 Delete 刪掉、不會自己恢復選取", len(journey.lines(page)) == 1
+    journey.check("切回日 K：線還在、沒有被60 分 K 上的 Delete 刪掉、不會自己恢復選取", len(journey.lines(page)) == 1
                   and journey.saved(page, "2317") == kept and not delete.is_visible())
 
     kept_id = kept[0]["id"] if kept else "missing-line"
@@ -705,8 +717,8 @@ def two_point_desktop(journey: Journey, browser) -> None:
         journey.check(f"{name}：線還在、選取還在，雲端的錨點沒有被改", ink["count"] > 0 and delete.is_visible()
                       and journey.saved(page, code)[0]["anchors"] == kept, ink)
         page.locator(".bd-chart").screenshot(path=str(OUT / f"desktop-12-trend-{period}.png"))
-    journey.choose_period(page, "5m")
-    journey.check("分 K：工具列與線都不顯示", not tools.is_visible() and journey.ink(page)["count"] == 0)
+    journey.choose_period(page, "60m")
+    journey.check("60 分 K：工具列與線都不顯示", not tools.is_visible() and journey.ink(page)["count"] == 0)
     journey.choose_period(page, "daily")
     back = journey.ink(page)
     journey.check("切回日 K：線回到原本的位置", spans(back, a2, b3), {"ink": back, "was": daily})
@@ -1121,8 +1133,8 @@ def fib_desktop(journey: Journey, browser) -> None:
         journey.check(f"{name}：黃金分割還在、選取還在，雲端的兩個錨點沒有被改", journey.ink(page)["count"] > 0 and delete.is_visible()
                       and journey.saved(page, code)[0]["anchors"] == kept)
         page.locator(".bd-chart").screenshot(path=str(OUT / f"desktop-23-fib-{period}.png"))
-    journey.choose_period(page, "5m")
-    journey.check("分 K：工具列與線都不顯示", not tools.is_visible() and journey.ink(page)["count"] == 0)
+    journey.choose_period(page, "60m")
+    journey.check("60 分 K：工具列與線都不顯示", not tools.is_visible() and journey.ink(page)["count"] == 0)
     journey.choose_period(page, "daily")
     back = fib_levels(page)
     journey.check("切回日 K：七條線回到原本的位置", len(back) == 7 and all(abs(one - other) <= 1.5 for one, other in zip(back, dragged)), {"back": back, "was": dragged})
@@ -1444,8 +1456,8 @@ def text_desktop(journey: Journey, browser) -> None:
         journey.choose_period(page, period)
         journey.check(f"{name}：文字還在，雲端的錨點與內容沒有被改", journey.ink(page)["count"] > 0 and journey.saved(page, code)[0] == kept)
         page.locator(".bd-chart").screenshot(path=str(OUT / f"desktop-30-text-{period}.png"))
-    journey.choose_period(page, "5m")
-    journey.check("分 K：工具列與文字都不顯示", not tools.is_visible() and journey.ink(page)["count"] == 0)
+    journey.choose_period(page, "60m")
+    journey.check("60 分 K：工具列與文字都不顯示", not tools.is_visible() and journey.ink(page)["count"] == 0)
     journey.choose_period(page, "daily")
     back = journey.ink(page)
     journey.check("切回日 K：文字回到原本的位置", back["count"] > 0 and abs(back["minX"] - daily["minX"]) <= 1.5 and abs(back["minY"] - daily["minY"]) <= 1.5, {"back": back, "was": daily})
@@ -1810,9 +1822,9 @@ def save_desktop(journey: Journey, browser) -> None:
     net.mode = "abort"
     y6 = click_line(0.5, 0.9)
     hint.wait_for(state="visible", timeout=5000)
-    journey.choose_period(page, "5m")
+    journey.choose_period(page, "60m")
     box = hint.bounding_box() or {"y": 0, "height": 9999}
-    journey.check("切到分 K：工具列收起，「未儲存」還看得到、不蓋到圖", not page.locator("#drawTools").is_visible() and hint.is_visible()
+    journey.check("切到60 分 K：工具列收起，「未儲存」還看得到、不蓋到圖", not page.locator("#drawTools").is_visible() and hint.is_visible()
                   and box["y"] + box["height"] <= host.bounding_box()["y"] + 0.5, box)
     page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-37-unsaved-intraday.png"))
     journey.choose_period(page, "daily")
@@ -1989,10 +2001,10 @@ def touch_mobile(journey: Journey, browser) -> None:
                   page.evaluate(FITS_JS) and all(size["width"] >= 44 and size["height"] >= 44 for size in sizes)
                   and max(size["x"] + size["width"] for size in sizes) <= box["x"] + width + 0.5
                   and tools.bounding_box()["y"] + tools.bounding_box()["height"] <= box["y"], sizes)
-    journey.choose_period(page, "5m")
+    journey.choose_period(page, "60m")
     hidden_height = canvas.bounding_box()["height"]
     journey.choose_period(page, "daily")
-    journey.check("08 手機：工具列不擠壓圖表高度（日 K 有工具列、分 K 沒有，圖一樣高）", abs(canvas.bounding_box()["height"] - hidden_height) < 0.5,
+    journey.check("08 手機：工具列不擠壓圖表高度（日 K 有工具列、60 分 K 沒有，圖一樣高）", abs(canvas.bounding_box()["height"] - hidden_height) < 0.5,
                   [canvas.bounding_box()["height"], hidden_height])
 
     axis = journey.axis(page)
@@ -2107,7 +2119,8 @@ def touch_mobile(journey: Journey, browser) -> None:
     zoomed = journey.axis(page)
     finger.slide(*px((0.5, 0.3)), 60, 0)
     journey.check("08 手機：趨勢線點了第一下之後，雙指放大、單指平移都照常，而且都不會變成第二點",
-                  zoomed != axis and journey.axis(page) != zoomed and len(journey.saved(page, code)) == count and pressed("trend"))
+                  zoomed != axis and journey.axis(page) != zoomed and len(journey.saved(page, code)) == count and pressed("trend"),
+                  {"縮放": zoomed != axis, "平移": journey.axis(page) != zoomed, "沒多存": len(journey.saved(page, code)) == count, "工具還在": pressed("trend")})
     with page.expect_response(drawing_request("PUT")) as saved:
         finger.tap(*px((0.5, 0.55)))
     trend = next(item for item in journey.saved(page, code) if item["id"] not in before and item["id"] not in {d["id"] for d in items.values()})

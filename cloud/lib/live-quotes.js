@@ -7,6 +7,8 @@ const MIS_QUOTE_INTERVAL_MS = 5_000;
 const MIS_CHART_INTERVAL_MS = 15_000;
 const FUGLE_QUOTE_INTERVAL_MS = 15_000;
 const FUGLE_CANDLE_INTERVAL_MS = 60_000;
+// 週末、開盤前：分時要顯示最近一個交易日，只抓 1 分K（報價照舊由日資料負責），最多 10 分鐘一次。
+const FUGLE_CLOSED_CANDLE_INTERVAL_MS = 10 * 60_000;
 const FRESH_MS = 30_000;
 const MAX_POINTS = 2_000;
 
@@ -43,7 +45,11 @@ function quoteUrl(code, market) {
 
 function fugleUrl(kind, code) {
   const url = new URL(`${FUGLE_BASE}/${kind}/${encodeURIComponent(code)}`, FUGLE_ORIGIN);
-  if (kind === "candles") url.searchParams.set("timeframe", "60");
+  // 分時（本人 11-18）要每分鐘的價與量；60 分K 由 1 分K 合成，不另外再問一次。
+  if (kind === "candles") {
+    url.searchParams.set("timeframe", "1");
+    url.searchParams.set("sort", "asc");
+  }
   return url;
 }
 
@@ -116,14 +122,63 @@ function parseFugleQuote(payload, code, market) {
   };
 }
 
+// 五檔與內外盤（本人 11-18：分時下面，所有核准使用者都看得到）。不放進 quote：報價還會拿去盯價、整理給別的地方用，
+// 五檔只走 /api/stocks/:code/book 給畫面。價、量都是正數才收；量的單位是張。
+const bookSide = (rows) => rows
+  .map(([price, size]) => [finitePositive(price), finitePositive(size)])
+  .filter(([price, size]) => price !== null && size !== null)
+  .slice(0, 5);
+
+function parseFugleBook(payload, time) {
+  const side = (list) => bookSide((Array.isArray(list) ? list : []).map((row) => [row?.price, row?.size]));
+  const atAsk = Number(payload?.total?.tradeVolumeAtAsk), atBid = Number(payload?.total?.tradeVolumeAtBid);
+  return {
+    source: "fugle", time, bids: side(payload?.bids), asks: side(payload?.asks),
+    flow: Number.isFinite(atAsk) && Number.isFinite(atBid) ? { at_ask: atAsk, at_bid: atBid } : null,
+  };
+}
+
+// MIS：a／f 是賣價／賣量、b／g 是買價／買量，底線分隔、尾端多一個底線；「-」是市價或空檔。
+function parseMisBook(payload, code) {
+  const row = Array.isArray(payload?.msgArray) ? payload.msgArray.find((item) => String(item?.c) === code) : null;
+  if (!row) throw new Error("MIS 沒有回傳指定股票");
+  const split = (text) => String(text || "").split("_").filter((part) => part !== "");
+  const side = (prices, sizes) => {
+    const volumes = split(sizes);
+    return bookSide(split(prices).map((price, index) => [price, volumes[index]]));
+  };
+  return { source: "mis", time: taipeiIso(Number(row.tlong)), bids: side(row.b, row.g), asks: side(row.a, row.f), flow: null };
+}
+
 function parseFugleCandles(payload) {
-  if (!Array.isArray(payload?.data)) throw new Error("Fugle 60 分K格式不正確");
+  if (!Array.isArray(payload?.data)) throw new Error("Fugle 1 分K格式不正確");
   return payload.data.map((row) => ({
     t: row.date,
     label: String(row.date).slice(11, 16),
     open: Number(row.open), high: Number(row.high), low: Number(row.low), close: Number(row.close),
     volume: Number.isFinite(Number(row.volume)) ? Math.round(Number(row.volume) * 1000) : null,
+    // 行情商給的「自開盤累計成交均價」（分時的均價線；和券商 App 的「均」同一個數）
+    ...(finitePositive(row.average) !== null ? { average: Number(row.average) } : {}),
   })).filter((row) => row.t && [row.open, row.high, row.low, row.close].every(Number.isFinite));
+}
+
+// 1 分K 合成 60 分K：同一個小時一根（09:00～09:59 是「09:00」，13:00～13:30 是「13:00」），和行情商自己的 60 分K 一樣。
+function hourlyCandles(minutes) {
+  const hours = [];
+  for (const row of minutes) {
+    const hour = String(row.t).slice(0, 13);
+    const last = hours.at(-1);
+    if (!last || last.hour !== hour) {
+      hours.push({ hour, t: `${hour}:00:00.000+08:00`, label: `${hour.slice(11, 13)}:00`,
+        open: row.open, high: row.high, low: row.low, close: row.close, volume: row.volume });
+      continue;
+    }
+    last.high = Math.max(last.high, row.high);
+    last.low = Math.min(last.low, row.low);
+    last.close = row.close;
+    last.volume = last.volume === null || row.volume === null ? null : last.volume + row.volume;
+  }
+  return hours.map(({ hour, ...row }) => row);
 }
 
 function aggregateCandles(points, minutes) {
@@ -156,14 +211,15 @@ function retrySeconds(state, nowMs) {
 
 export function createLiveQuoteService({ fetchImpl = fetch, now = Date.now,
   quoteIntervalMs = MIS_QUOTE_INTERVAL_MS, chartIntervalMs = MIS_CHART_INTERVAL_MS,
-  fugleQuoteIntervalMs = FUGLE_QUOTE_INTERVAL_MS, fugleCandleIntervalMs = FUGLE_CANDLE_INTERVAL_MS } = {}) {
+  fugleQuoteIntervalMs = FUGLE_QUOTE_INTERVAL_MS, fugleCandleIntervalMs = FUGLE_CANDLE_INTERVAL_MS,
+  fugleClosedCandleIntervalMs = FUGLE_CLOSED_CANDLE_INTERVAL_MS } = {}) {
   const states = new Map();
 
   const stateFor = (code, market) => {
     const key = `${market}:${code}`;
     if (!states.has(key)) states.set(key, {
       quote: null, fetchedAt: 0, lastAttempt: 0, lastChartAt: 0, lastFugleCandlesAt: 0,
-      retryAt: 0, failures: 0, error: null, points: [], candles60: [], lastCumulativeVolume: null, provider: null,
+      retryAt: 0, failures: 0, error: null, points: [], minutes: [], book: null, lastCumulativeVolume: null, provider: null,
     });
     return states.get(key);
   };
@@ -210,7 +266,9 @@ export function createLiveQuoteService({ fetchImpl = fetch, now = Date.now,
         error.retryAfter = Number(response.headers.get("retry-after")) || null;
         throw error;
       }
-      rememberQuote(state, parseQuote(await response.json(), code, market), nowMs, chartIntervalMs);
+      const payload = await response.json();
+      rememberQuote(state, parseQuote(payload, code, market), nowMs, chartIntervalMs);
+      state.book = parseMisBook(payload, code);
       state.provider = "mis";
     } catch (error) {
       rememberError(state, error, nowMs, "MIS");
@@ -230,8 +288,20 @@ export function createLiveQuoteService({ fetchImpl = fetch, now = Date.now,
 
   async function fetchFugleCandles(code, state, nowMs, key) {
     state.lastFugleCandlesAt = nowMs;
-    state.candles60 = parseFugleCandles(await fugleRequest(fugleUrl("candles", code), key));
+    state.minutes = parseFugleCandles(await fugleRequest(fugleUrl("candles", code), key));
     state.provider = "fugle";
+  }
+
+  // 富果報價失敗時，五檔改用證交所 MIS（公開）：只換五檔，不動報價、錯誤與退避（那些照富果的狀況）。
+  async function fetchMisBook(code, market, state) {
+    try {
+      const url = quoteUrl(code, market);
+      url.searchParams.set("_", String(now()));
+      const response = await fetchImpl(url.toString(), {
+        headers: { accept: "application/json,text/plain,*/*", referer: `${MIS_ORIGIN}/stock/`, "user-agent": "Market-Ana/1.0" },
+      });
+      if (response.ok) state.book = parseMisBook(await response.json(), code);
+    } catch { /* 五檔是附加的：MIS 也拿不到就維持上一份 */ }
   }
 
   const quoteDue = (state, nowMs, interval) => state.lastAttempt === 0 || nowMs - state.lastAttempt >= interval;
@@ -251,8 +321,16 @@ export function createLiveQuoteService({ fetchImpl = fetch, now = Date.now,
     try {
       if (shouldQuote) {
         state.lastAttempt = nowMs;
-        const payload = await fugleRequest(fugleUrl("quote", code), key);
-        rememberQuote(state, parseFugleQuote(payload, code, market), nowMs, fugleQuoteIntervalMs);
+        let payload;
+        try {
+          payload = await fugleRequest(fugleUrl("quote", code), key);
+        } catch (error) {
+          await fetchMisBook(code, market, state);
+          throw error;
+        }
+        const quote = parseFugleQuote(payload, code, market);
+        rememberQuote(state, quote, nowMs, fugleQuoteIntervalMs);
+        state.book = parseFugleBook(payload, quote.data_time);
         state.provider = "fugle";
       }
       if (shouldCandles) await fetchFugleCandles(code, state, nowMs, key);
@@ -282,14 +360,18 @@ export function createLiveQuoteService({ fetchImpl = fetch, now = Date.now,
         const wantCandles = Boolean(fugleApiKey) && fugleCandlesDue(state, nowMs);
         if (fugleApiKey && (wantQuote || wantCandles)) await fetchFugle(code, market, state, nowMs, fugleApiKey, wantQuote, wantCandles);
         else if (!fugleApiKey && wantQuote) await fetchMisQuote(code, market, state, nowMs);
+      } else if (!scheduledOpen && !afterClose && fugleApiKey && allowFetch && nowMs >= state.retryAt
+        && (state.lastFugleCandlesAt === 0 || nowMs - state.lastFugleCandlesAt >= fugleClosedCandleIntervalMs)) {
+        // 週末、開盤前：分時顯示最近一個交易日（本人 11-18）。只抓 1 分K，報價照舊由日資料負責。
+        try { await fetchFugleCandles(code, state, nowMs, fugleApiKey); } catch (error) { rememberError(state, error, nowMs, "Fugle"); }
       }
       const marketOpen = Boolean(scheduledOpen && state.quote?.data_date === taipeiDate(nowMs));
       const quoteAge = state.quote ? Math.max(0, (nowMs - Date.parse(state.quote.data_time)) / 1000) : null;
       const live = Boolean(marketOpen && quoteAge !== null && quoteAge <= FRESH_MS / 1000 && !state.error);
-      const candles = {
-        "1": aggregateCandles(state.points, 1), "5": aggregateCandles(state.points, 5),
-        "15": aggregateCandles(state.points, 15), "60": state.candles60,
-      };
+      // "1"：分時用的每分鐘價量（有富果是行情商的 1 分K、整天都有；沒有是這裡每 15 秒取樣的點）；"60"：60 分K。
+      const candles = fugleApiKey
+        ? { "1": state.minutes, "60": hourlyCandles(state.minutes) }
+        : { "1": aggregateCandles(state.points, 1), "60": [] };
       const delays = fugleApiKey
         ? { quote: fugleQuoteIntervalMs / 1000, chart: fugleCandleIntervalMs / 1000 }
         : { quote: quoteIntervalMs / 1000, chart: chartIntervalMs / 1000 };
@@ -300,7 +382,7 @@ export function createLiveQuoteService({ fetchImpl = fetch, now = Date.now,
           live: false, close_pending: Boolean(afterClose && !closeSettled(state, nowMs)),
           fetched_at: state.fetchedAt ? taipeiIso(state.fetchedAt) : null,
           delay_seconds: delays, retry_after_seconds: retrySeconds(state, nowMs), error: state.error,
-          quote: state.quote, chart_samples: state.points.length, candles };
+          quote: state.quote, chart_samples: state.points.length, candles, book: state.book };
       }
       return {
         ok: Boolean(state.quote), code, market, provider: state.provider || provider, market_open: marketOpen,
@@ -309,7 +391,7 @@ export function createLiveQuoteService({ fetchImpl = fetch, now = Date.now,
         fetched_at: state.fetchedAt ? taipeiIso(state.fetchedAt) : null,
         quote_age_seconds: quoteAge === null ? null : round(quoteAge, 3),
         delay_seconds: delays, retry_after_seconds: retrySeconds(state, nowMs), error: state.error,
-        quote: state.quote, chart_samples: state.points.length, candles,
+        quote: state.quote, chart_samples: state.points.length, candles, book: state.book,
       };
     },
   };
@@ -339,4 +421,4 @@ export async function probeMis({ fetchImpl = fetch, now = Date.now } = {}) {
 }
 
 export const defaultLiveQuoteService = createLiveQuoteService();
-export const _test = { aggregateCandles, marketWindow, parseQuote, parseFugleQuote, parseFugleCandles, quoteUrl, fugleUrl, taipeiIso };
+export const _test = { aggregateCandles, hourlyCandles, parseFugleBook, parseMisBook, marketWindow, parseQuote, parseFugleQuote, parseFugleCandles, quoteUrl, fugleUrl, taipeiIso };

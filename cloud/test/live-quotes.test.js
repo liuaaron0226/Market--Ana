@@ -88,7 +88,7 @@ test("MIS 429 依 Retry-After 退避，退避期間不再呼叫上游", async ()
   assert.equal(backedOff.retry_after_seconds, 30);
 });
 
-test("有 FUGLE_API_KEY 時優先讀 Fugle 報價與當日 60 分K，且速率遠低於每分鐘 60 次", async () => {
+test("有 FUGLE_API_KEY 時優先讀 Fugle 報價與當日 1 分K（60 分K 由它合成），且速率遠低於每分鐘 60 次", async () => {
   let now = Date.parse("2026-11-10T02:22:05Z");
   const requests = [];
   const service = createLiveQuoteService({
@@ -103,8 +103,12 @@ test("有 FUGLE_API_KEY 時優先讀 Fugle 報價與當日 60 分K，且速率�
         }), { status: 200 });
       }
       return new Response(JSON.stringify({
-        date: "2026-11-10", symbol: "2330", timeframe: "60",
-        data: [{ date: "2026-11-10T09:00:00.000+08:00", open: 2240, high: 2280, low: 2235, close: 2265, volume: 12000 }],
+        date: "2026-11-10", symbol: "2330", timeframe: "1",
+        data: [
+          { date: "2026-11-10T09:00:00.000+08:00", open: 2240, high: 2250, low: 2235, close: 2245, volume: 5000, average: 2243.5 },
+          { date: "2026-11-10T09:59:00.000+08:00", open: 2245, high: 2280, low: 2244, close: 2270, volume: 4000 },
+          { date: "2026-11-10T10:00:00.000+08:00", open: 2270, high: 2272, low: 2260, close: 2265, volume: 3000 },
+        ],
       }), { status: 200 });
     },
   });
@@ -112,20 +116,91 @@ test("有 FUGLE_API_KEY 時優先讀 Fugle 報價與當日 60 分K，且速率�
   const first = await service.snapshot("2330", "tse", { fugleApiKey: "fake-key" });
   assert.equal(requests.length, 2);
   assert.match(requests[0].url, /^https:\/\/api\.fugle\.tw\/marketdata\/v1\.0\/stock\/intraday\/quote\/2330$/);
-  assert.match(requests[1].url, /\/intraday\/candles\/2330\?timeframe=60$/);
+  assert.match(requests[1].url, /\/intraday\/candles\/2330\?timeframe=1&sort=asc$/);
   assert.ok(requests.every(request => request.init.headers["X-API-KEY"] === "fake-key"));
   assert.equal(first.provider, "fugle");
   assert.equal(first.quote.volume_shares, 14037000);
-  assert.equal(first.candles["60"][0].volume, 12000000);
+  assert.deepEqual(first.candles["1"].map(row => [row.label, row.close, row.volume]),
+    [["09:00", 2245, 5000000], ["09:59", 2270, 4000000], ["10:00", 2265, 3000000]]);
+  assert.equal(first.candles["1"][0].average, 2243.5, "行情商的累計成交均價照收（分時的均價線用）");
+  assert.equal(first.candles["1"][1].average, undefined);
+  // 09:00～09:59 合成一根：開 2240、高 2280、低 2235、收 2270、量 9,000 張
+  assert.deepEqual(first.candles["60"].map(row => [row.label, row.open, row.high, row.low, row.close, row.volume]),
+    [["09:00", 2240, 2280, 2235, 2270, 9000000], ["10:00", 2270, 2272, 2260, 2265, 3000000]]);
+  assert.equal(first.candles["60"][0].t, "2026-11-10T09:00:00.000+08:00");
   assert.equal(first.delay_seconds.quote, 15);
   assert.equal(first.delay_seconds.chart, 60);
 
   now += 10_000;
   await service.snapshot("2330", "tse", { fugleApiKey: "fake-key" });
-  assert.equal(requests.length, 2, "15 秒內不重抓報價，60 秒內不重抓 60 分K");
+  assert.equal(requests.length, 2, "15 秒內不重抓報價，60 秒內不重抓分K");
   now += 5_000;
   await service.snapshot("2330", "tse", { fugleApiKey: "fake-key" });
   assert.equal(requests.length, 3, "15 秒只新增一次報價請求");
+});
+
+// 本人 11-18：分時下面的五檔與內外盤比，用富果（數字和券商一致）；沒有富果金鑰或富果失敗時五檔退回證交所 MIS，內外盤比不出現。
+const FUGLE_BOOK_QUOTE = {
+  symbol: "2454", previousClose: 3840, openPrice: 3995, highPrice: 4075, lowPrice: 3775, closePrice: 3940,
+  lastUpdated: Date.parse("2026-11-18T10:15:20+08:00") * 1000,
+  bids: [{ price: 3935, size: 12 }, { price: 3930, size: 35 }, { price: 3925, size: 28 }, { price: 3920, size: 41 }, { price: 3915, size: 19 }],
+  asks: [{ price: 3940, size: 23 }, { price: 3945, size: 18 }, { price: 3950, size: 46 }, { price: 3955, size: 30 }, { price: 3960, size: 22 }],
+  total: { tradeVolume: 15124, tradeVolumeAtBid: 6957, tradeVolumeAtAsk: 8167, time: Date.parse("2026-11-18T10:15:20+08:00") * 1000 },
+};
+const MIS_BOOK_QUOTE = {
+  rtcode: "0000",
+  msgArray: [{ c: "2454", tlong: String(Date.parse("2026-11-18T10:15:25+08:00")), z: "3940.0000", y: "3840.0000", o: "3995.0000", h: "4075.0000", l: "3775.0000", v: "15124",
+    a: "3940.0000_3945.0000_3950.0000_3955.0000_3960.0000_", f: "23_18_46_30_22_",
+    b: "3935.0000_3930.0000_3925.0000_3920.0000_-_", g: "12_35_28_41_0_" }],
+};
+
+test("五檔與內外盤比：有富果時照富果報價的 bids／asks 與 tradeVolumeAtAsk／AtBid", async () => {
+  const service = createLiveQuoteService({
+    now: () => Date.parse("2026-11-18T10:15:30+08:00"),
+    fetchImpl: async url => new Response(JSON.stringify(String(url).includes("/quote/") ? FUGLE_BOOK_QUOTE
+      : { date: "2026-11-18", symbol: "2454", data: [] }), { status: 200 }),
+  });
+  const result = await service.snapshot("2454", "tse", { fugleApiKey: "k" });
+  assert.deepEqual(result.book, {
+    source: "fugle", time: "2026-11-18T10:15:20+08:00",
+    bids: [[3935, 12], [3930, 35], [3925, 28], [3920, 41], [3915, 19]],
+    asks: [[3940, 23], [3945, 18], [3950, 46], [3955, 30], [3960, 22]],
+    flow: { at_ask: 8167, at_bid: 6957 },
+  });
+  assert.equal(result.quote.bids, undefined, "五檔不混進報價（報價會拿去別的地方用）");
+});
+
+test("沒有富果金鑰：五檔用 MIS 的 a/f/b/g（空檔、「-」略過），沒有內外盤比", async () => {
+  const service = createLiveQuoteService({
+    now: () => Date.parse("2026-11-18T10:15:30+08:00"),
+    fetchImpl: async () => new Response(JSON.stringify(MIS_BOOK_QUOTE), { status: 200 }),
+  });
+  const result = await service.snapshot("2454", "tse");
+  assert.deepEqual(result.book, {
+    source: "mis", time: "2026-11-18T10:15:25+08:00",
+    bids: [[3935, 12], [3930, 35], [3925, 28], [3920, 41]],
+    asks: [[3940, 23], [3945, 18], [3950, 46], [3955, 30], [3960, 22]],
+    flow: null,
+  });
+});
+
+test("富果報價失敗：五檔退回 MIS（報價本身照舊記錯誤、退避）", async () => {
+  const requests = [];
+  const service = createLiveQuoteService({
+    now: () => Date.parse("2026-11-18T10:15:30+08:00"),
+    fetchImpl: async url => {
+      requests.push(String(url));
+      if (String(url).includes("mis.twse")) return new Response(JSON.stringify(MIS_BOOK_QUOTE), { status: 200 });
+      return new Response("busy", { status: 503 });
+    },
+  });
+  const result = await service.snapshot("2454", "tse", { fugleApiKey: "k" });
+  assert.equal(result.ok, false);
+  assert.match(result.error, /Fugle HTTP 503/);
+  assert.equal(result.book.source, "mis");
+  assert.equal(result.book.flow, null);
+  assert.equal(result.book.asks[0][0], 3940);
+  assert.equal(requests.filter(url => url.includes("mis.twse")).length, 1);
 });
 
 // 本人 11-17：「我剛剛看股票卻是昨天的」。13:30 收盤到每日更新發布（約 15:30／16:30）之間，
@@ -262,15 +337,28 @@ test("沒有收盤撮合的冷門股（最後成交在盤中）與平日休市�
   }
 });
 
-test("週末與開盤前不打上游（顯示上一個交易日由日資料負責）", async () => {
+test("週末與開盤前不抓報價（顯示上一個交易日由日資料負責）；分時要的 1 分K 每 10 分鐘最多抓一次", async () => {
   for (const at of ["2026-11-21T10:00:00+08:00", "2026-11-17T08:30:00+08:00"]) {
+    let now = Date.parse(at);
     const requests = [];
-    const service = createLiveQuoteService({ now: () => Date.parse(at), fetchImpl: fugleFake(requests) });
+    const service = createLiveQuoteService({ now: () => now, fetchImpl: fugleFake(requests) });
     const result = await service.snapshot("2330", "tse", { fugleApiKey: "fake-key" });
-    assert.equal(requests.length, 0, at);
+    assert.equal(requests.filter(request => request.url.includes("/quote/")).length, 0, at);
+    assert.deepEqual(requests.map(request => request.url.replace(/^.*\/intraday\//, "")), ["candles/2330?timeframe=1&sort=asc"], at);
     assert.equal(result.quote, null, at);
     assert.equal(result.market_phase, "closed", at);
+    assert.equal(result.candles["1"].length, 1, "最近一個交易日的 1 分K");
+    now += 9 * 60_000;
+    await service.snapshot("2330", "tse", { fugleApiKey: "fake-key" });
+    assert.equal(requests.length, 1, at);
+    now += 60_000;
+    await service.snapshot("2330", "tse", { fugleApiKey: "fake-key" });
+    assert.equal(requests.length, 2, at);
   }
+  const misCalls = [];
+  const mis = createLiveQuoteService({ now: () => Date.parse("2026-11-21T10:00:00+08:00"), fetchImpl: async url => { misCalls.push(url); return new Response("{}"); } });
+  await mis.snapshot("2330", "tse");
+  assert.equal(misCalls.length, 0, "沒有富果：週末一律不打上游");
 });
 
 test("沒有 Fugle Key 時才退回 MIS", async () => {

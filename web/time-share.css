@@ -1,0 +1,137 @@
+/* 分時圖、內外盤比、五檔、分析工具收合（本人 2026-11-18，照 design-previews/time-share 樣品）。
+   顏色、陰影全部沿用網站自己的變數（--up、--down、--ink、--slab、--key-shadow…），不另訂。個股頁與首頁共用。 */
+
+/* 收起來的東西真的不佔位（有些元件自己設了 display） */
+.ts-panel[hidden], .ts-panel [hidden], .ts-tools-key[hidden],
+.bd-chart-host[hidden], .bd-chart-legend[hidden], #chartStudies[hidden],
+.chart-stage[hidden], .chart-actions[hidden], .market-trend[hidden] { display: none !important; }
+
+/* 首頁：選了分時，K 線那一塊（圖、指標、短中長期走勢）整塊讓位 */
+.chart-workspace.is-time-share > :is(.chart-stage, #chartStudies, .chart-actions, .market-trend) { display: none !important; }
+.chart-workspace > .ts-panel { margin-top: 6px; }
+
+/* ---------- 分時圖 ---------- */
+.ts-head { display: grid; gap: 2px; margin: 2px 0 8px; }
+.ts-quote, .ts-ohlc { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 7px; min-height: 20px; margin: 0; color: var(--ink); font-size: 12px; }
+.ts-quote i, .ts-ohlc i { margin-right: 2px; color: var(--faint); font: 400 12px var(--sans); font-style: normal; }
+.ts-quote b, .ts-ohlc b { font: 500 12px var(--mono); font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+.ts-quote .ts-q-time { color: var(--dim); font: 500 12px var(--mono); letter-spacing: -.02em; }
+.ts-quote .ts-q-chg { font: 500 12px var(--mono); letter-spacing: -.02em; }
+.ts-q-chg.is-up { color: var(--up); }
+.ts-q-chg.is-down { color: var(--down); }
+.ts-q-chg.is-flat { color: var(--dim); }
+/* 均價線的顏色＝「均」這個字的顏色（和 K 線上方圖例「名稱是線的顏色」同一種寫法） */
+.ts-quote i.ts-q-avg { color: var(--gold); font-weight: 600; }
+.ts-ohlc { color: var(--dim); }
+
+.ts-chart { position: relative; min-height: 120px; touch-action: pan-y; }
+.ts-svg { display: block; overflow: visible; }
+.ts-grid { stroke: var(--hair); stroke-width: 1; }
+.ts-ref { stroke: var(--dim); stroke-width: 1; stroke-dasharray: 3 3; opacity: .7; }
+.ts-fill-up { fill: var(--up); fill-opacity: .08; }
+.ts-fill-dn { fill: var(--down); fill-opacity: .09; }
+.ts-line { fill: none; stroke: var(--ink); stroke-width: 1.5; stroke-linejoin: round; }
+.ts-avg { fill: none; stroke: var(--gold); stroke-width: 1.2; stroke-linejoin: round; }
+.ts-mark text { fill: var(--dim); font: 500 11px var(--mono); paint-order: stroke; stroke: var(--slab); stroke-width: 3px; stroke-linejoin: round; }
+.ts-mark-hi circle { fill: var(--up); }
+.ts-mark-lo circle { fill: var(--down); }
+.ts-chip text { font: 600 11px var(--mono); }
+.ts-chip.is-up rect { fill: color-mix(in srgb, var(--up) 11%, var(--slab)); }
+.ts-chip.is-up text { fill: var(--up); }
+.ts-chip.is-dn rect { fill: color-mix(in srgb, var(--down) 11%, var(--slab)); }
+.ts-chip.is-dn text { fill: var(--down); }
+.ts-chip.is-ref rect { fill: var(--slab); stroke: var(--line); }
+.ts-chip.is-ref text { fill: var(--dim); }
+.ts-pct { font: 500 10.5px var(--mono); opacity: .8; }
+.ts-pct.is-up { fill: var(--up); }
+.ts-pct.is-dn { fill: var(--down); }
+.ts-vol rect { fill: var(--faint); fill-opacity: .42; }
+.ts-vlabel { fill: var(--faint); font: 400 10.5px var(--sans); paint-order: stroke; stroke: var(--slab); stroke-width: 4px; stroke-linejoin: round; }
+.ts-time { fill: var(--faint); font: 400 10.5px var(--mono); }
+.ts-cross line { stroke: var(--ink); stroke-width: 1; stroke-opacity: .35; }
+.ts-cross circle { fill: var(--slab); stroke: var(--ink); stroke-width: 1.5; }
+.ts-empty { margin: 18px 0; color: var(--faint); font: 13px/1.6 var(--sans); }
+
+/* ---------- 內外盤比、五檔（只在個股頁） ---------- */
+.ts-extra { display: grid; gap: 16px; margin-top: 14px; padding: 14px 0 6px; border-top: 1px solid var(--hair); }
+.ts-extra:not(:has(> section:not([hidden]))) { display: none; }
+.ts-sub { display: flex; align-items: baseline; justify-content: space-between; margin: 0 0 8px; color: var(--ink); font: 600 13px var(--sans); }
+.ts-sub small { color: var(--faint); font: 400 12px var(--sans); }
+
+.ts-flow-labels { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; font-size: 12px; color: var(--dim); }
+.ts-flow-labels b { font: 600 13px var(--mono); margin: 0 2px; }
+.ts-flow-labels .is-out b { color: var(--up); }
+.ts-flow-labels .is-in b { color: var(--down); }
+.ts-flow-labels small { color: var(--faint); font: 400 11.5px var(--mono); }
+.ts-flow-bar { display: flex; gap: 3px; height: 6px; }
+.ts-flow-bar i { border-radius: 3px; }
+.ts-flow-bar .is-out { background: color-mix(in srgb, var(--up) 42%, var(--slab)); }
+.ts-flow-bar .is-in { background: color-mix(in srgb, var(--down) 42%, var(--slab)); }
+
+.ts-book-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 6px; }
+.ts-book-cols h4 { display: flex; justify-content: space-between; margin: 0 0 4px; padding: 0 8px; color: var(--faint); font: 400 11.5px var(--sans); }
+.ts-book-cols ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.ts-book-cols li { position: relative; display: flex; justify-content: space-between; align-items: center; height: 28px; padding: 0 8px; font-size: 13px; }
+.ts-book-cols li > span { position: relative; z-index: 1; }
+.ts-book-cols .ts-px { color: var(--ink); font-weight: 500; }
+.ts-book-cols .ts-vol-n { color: var(--dim); }
+/* 量的小橫條：從中間往外長（委買往左、委賣往右） */
+.ts-bar { position: absolute; top: 3px; bottom: 3px; width: calc(var(--w) * 100%); border-radius: 4px; }
+.ts-bid .ts-bar { right: 0; background: color-mix(in srgb, var(--up) 12%, transparent); }
+.ts-ask .ts-bar { left: 0; background: color-mix(in srgb, var(--down) 12%, transparent); }
+.ts-book-cols li.ts-sum { margin-top: 2px; border-top: 1px solid var(--hair); color: var(--faint); font-size: 12px; }
+.ts-book-cols li.ts-sum .ts-vol-n { color: var(--ink); font-weight: 600; }
+/* 第一檔（最接近成交價）字重一點 */
+.ts-bid li:first-child .ts-px, .ts-ask li:first-child .ts-px { font-weight: 700; }
+
+@media (min-width: 861px) {
+  .ts-extra { grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 32px; align-items: start; }
+}
+
+/* ---------- 分析工具：一顆鍵，點了才展開六顆（個股頁） ---------- */
+.ts-bar-keys { display: flex; align-items: center; gap: 8px; }
+.ts-tools-key { display: inline-flex; align-items: center; gap: 6px; padding: 0 12px 0 10px; }
+.ts-tools-key svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; transition: transform 300ms var(--ease-depth); }
+.ts-tools-key[aria-expanded="true"] svg { transform: rotate(-20deg); }
+/* 展開中：鍵變成深色（和選中的畫線工具、選單裡選中那一項同一種「開著」）。
+   選擇器刻意加重：要蓋過 stock.css 裡 body.st :is(… .bd-chart-bar .chart-chip …) 那組 */
+body.st .bd-chart-bar .ts-tools-key.ts-tools-key.ts-tools-key[aria-expanded="true"] { background: var(--ink); color: var(--bg); box-shadow: var(--key-shadow-ink); }
+
+/* 托盤高度從 0 長到一排鍵的高度；收起來時不佔位（body.st 加重：要蓋過 stock.css 的 body.st .bd-draw 上下留白） */
+.ts-tools { display: grid; grid-template-rows: 0fr; min-width: 0; transition: grid-template-rows 220ms var(--ease-depth) 90ms; }
+.ts-tools.is-open { grid-template-rows: 1fr; transition-delay: 0ms; transition-duration: 260ms; }
+body.st .ts-tools > .bd-draw { min-height: 0; overflow: hidden; margin: 0; padding: 2px 4px 0; margin-inline: -4px; }
+body.st .ts-tools.is-open > .bd-draw { padding-bottom: 8px; }
+body.st .ts-tools.is-settled > .bd-draw { overflow: visible; }
+.ts-tools[hidden] { display: none; }
+/* 收好之後（收回的動畫播完）整排看不見、點不到；展開時立刻看得見 */
+body.st .ts-tools > .bd-draw { visibility: hidden; transition: visibility 0s linear 360ms; }
+body.st .ts-tools.is-open > .bd-draw { visibility: visible; transition-delay: 0s; }
+
+/* 六顆鍵依序冒出來（左到右，每顆差 28ms），收起時倒過來（右到左） */
+body.st .bd-chart .ts-tools .bd-draw.bd-draw button {
+  opacity: 0;
+  transform: translateY(-10px) scale(.78);
+  transition:
+    opacity 150ms var(--ease-out) calc((6 - var(--i, 0)) * 20ms),
+    transform 200ms var(--ease-depth) calc((6 - var(--i, 0)) * 20ms),
+    box-shadow var(--t-lift) var(--ease-depth),
+    color 160ms var(--ease-out);
+}
+body.st .bd-chart .ts-tools.is-open .bd-draw.bd-draw button {
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity 180ms var(--ease-out) calc(var(--i, 0) * 28ms + 30ms),
+    transform 260ms var(--ease-depth) calc(var(--i, 0) * 28ms + 30ms),
+    box-shadow var(--t-lift) var(--ease-depth),
+    color 160ms var(--ease-out);
+}
+@media (hover: hover) {
+  body.st .bd-chart .ts-tools.is-settled .bd-draw.bd-draw button:not([aria-pressed="true"]):hover { transform: translateY(var(--key-lift)); }
+}
+body.st .bd-chart .ts-tools.is-settled .bd-draw.bd-draw button:active { transform: translateY(var(--key-thick)); }
+@media (prefers-reduced-motion: reduce) {
+  .ts-tools, .ts-tools.is-open, body.st .ts-tools > .bd-draw, body.st .bd-chart .ts-tools .bd-draw.bd-draw button,
+  body.st .bd-chart .ts-tools.is-open .bd-draw.bd-draw button, .ts-tools-key svg { transition: none; }
+}

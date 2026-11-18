@@ -54,9 +54,11 @@ def verify_page(page, base: str, width: int, shot: Path):
     assert page.locator("#liveStatus").inner_text() == "10:18:00 更新"
     # 價位階梯收在「價位」那一類裡（本人 2026-11-15），收著的時候 inner_text 是空的，改讀文字內容
     assert page.locator("#ladderCurrentLabel").text_content() == "現價"
-    page.select_option("#periodSelect", "1m")
+    # 本人 11-18：1／5／15 分 K 換成分時（今天每分鐘的價量畫成一條線）
+    page.select_option("#periodSelect", "ts")
     page.locator("#periodSelect").dispatch_event("change")
-    page.wait_for_function("document.querySelector('#stockChartContext').textContent.includes('1分K')")
+    page.wait_for_function("document.querySelector('#stockChartContext').textContent === '分時 · 2026-11-10'")
+    assert page.locator("#timeShare svg.ts-svg").is_visible()
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
     page.screenshot(path=str(shot), full_page=False)
     assert not errors, errors

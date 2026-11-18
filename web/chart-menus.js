@@ -13,7 +13,9 @@
 (function () {
   'use strict';
   const menuOf = chip => document.getElementById(chip.getAttribute('aria-controls'));
-  const openChip = () => document.querySelector('.chart-chip[aria-expanded="true"]');
+  // 帶 data-own-toggle 的小鍵（個股頁的「分析工具」）自己管開合，不是浮出選單，這裡不碰
+  const CHIP = '.chart-chip[aria-controls]:not([data-own-toggle])';
+  const openChip = () => document.querySelector('.chart-chip[aria-expanded="true"]:not([data-own-toggle])');
 
   function set(chip, open) {
     const menu = menuOf(chip);
@@ -127,7 +129,7 @@
     if (!event.isPrimary || event.button !== 0) return;
     pressOpened = null;
     if (slide) { removeThumb(); slide = null; }   // 上一次拖曳沒有收到放開（按下去的那一顆拖到一半被重畫掉之類）
-    const chip = event.target.closest('.chart-chip[aria-controls]');
+    const chip = event.target.closest(CHIP);
     if (chip) {
       const menu = menuOf(chip);
       // 打開就是為了打字的選單照舊用點的：游標要在點完之後才進輸入框，手機鍵盤才會出來
@@ -201,7 +203,7 @@
   }, true);
 
   document.addEventListener('click', event => {
-    const chip = event.target.closest('.chart-chip[aria-controls]');
+    const chip = event.target.closest(CHIP);
     const current = openChip();
     if (chip) {
       // 這一下按下去的時候已經打開了，放開跟著來的 click 不要又收回。隔了一陣子才來的 click（例如之後用鍵盤按）不算同一下
