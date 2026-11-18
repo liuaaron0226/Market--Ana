@@ -98,3 +98,40 @@ test("市值一樣大的維持原本的先後", () => {
   const { rows } = loadRead()([item("1111", "甲", 100, 10, 20), item("2222", "乙", 100, 10, 20), item("3333", "丙", 100, 10, 30)]);
   assert.deepEqual(rows.map((row) => row.code), ["3333", "1111", "2222"]);
 });
+
+// ---- 收盤後到日資料發布前（本人 11-19）：價格是哪一天、哪一種，標示和個股頁一致 ----
+function loadRows() {
+  const window = {};
+  vm.runInNewContext(readFileSync(new URL("web/holdings-rows.js", ROOT), "utf8"), { window });
+  return window.HoldingsRows;
+}
+
+test("收盤後用今天的收盤：寫「今日收盤（日資料稍後更新）」，明細寫「今日收盤市值」", () => {
+  const rows = loadRows();
+  const items = SAMPLE.map(entry => ({ ...entry, price_session: "close", price_as_of: "2026-11-10" }));
+  assert.equal(rows.priceLine(items), "庫存價格：今日收盤（日資料稍後更新）");
+  assert.equal(rows.valueLabel(items[0]), "今日收盤市值");
+});
+
+test("收盤價還沒確認：寫「今日最後成交（收盤價更新中）」", () => {
+  const rows = loadRows();
+  const items = [{ ...SAMPLE[0], price_session: "close" }, { ...SAMPLE[1], price_session: "close_pending" }];
+  assert.equal(rows.priceLine(items), "庫存價格：今日最後成交（收盤價更新中）");
+  assert.equal(rows.valueLabel(items[1]), "最後成交市值");
+});
+
+test("有幾檔沒拿到今天的收盤、還是日資料：寫出那幾檔停在哪一天", () => {
+  const rows = loadRows();
+  const items = [{ ...SAMPLE[0], price_session: "close", price_as_of: "2026-11-10" }, { ...SAMPLE[1], price_session: "daily", price_as_of: "2026-11-09" }];
+  assert.equal(rows.priceLine(items), "庫存價格：今日收盤（日資料稍後更新），部分仍是 2026-11-09");
+});
+
+test("盤中、日資料發布後：照舊寫「庫存價格至 日期」", () => {
+  const rows = loadRows();
+  const items = SAMPLE.map(entry => ({ ...entry, price_session: "daily", price_as_of: "2026-11-10" }));
+  assert.equal(rows.priceLine(items), "庫存價格至 2026-11-10");
+  assert.equal(rows.priceLine([{ ...items[0], price_stale: true }]), "庫存價格至 2026-11-10（部分沿用上次資料）");
+  assert.equal(rows.priceLine([]), "尚無庫存價格");
+  assert.equal(rows.valueLabel(items[0]), "市值");
+  assert.equal(rows.valueLabel({ price_stale: true }), "市值（上次收盤）");
+});

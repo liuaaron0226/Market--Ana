@@ -52,5 +52,27 @@
     return { count: list.length, complete, value, cost, pnl, returnPct: pnl === null || !cost ? null : pnl / cost * 100, state: stateOf(pnl), rows: order.map(entry => rowOf(entry.item)) };
   }
 
-  global.HoldingsRows = { read };
+  // 價格是哪一天、哪一種（本人 11-19：收盤後到日資料發布前改用今天的收盤，標示和個股頁一致）。
+  // price_session：'close' 今天的收盤、'close_pending' 收盤價還沒確認（收盤前最後一筆成交）、'daily' 本站日資料。
+  function priceLine(items) {
+    const list = Array.isArray(items) ? items : [];
+    const dates = list.map(item => item.price_as_of).filter(Boolean).sort();
+    const sessions = new Set(list.map(item => item.price_session));
+    if (sessions.has('close') || sessions.has('close_pending')) {
+      const older = list.filter(item => item.price_session === 'daily').map(item => item.price_as_of).filter(Boolean).sort();
+      const head = sessions.has('close_pending') ? '庫存價格：今日最後成交（收盤價更新中）' : '庫存價格：今日收盤（日資料稍後更新）';
+      return older.length ? `${head}，部分仍是 ${older.at(-1)}` : head;
+    }
+    if (!dates.length) return '尚無庫存價格';
+    return `庫存價格至 ${dates.at(-1)}${list.some(item => item.price_stale) ? '（部分沿用上次資料）' : ''}`;
+  }
+
+  // 明細裡「市值」那一格的標題
+  function valueLabel(item) {
+    if (item?.price_session === 'close') return '今日收盤市值';
+    if (item?.price_session === 'close_pending') return '最後成交市值';
+    return item?.price_stale ? '市值（上次收盤）' : '市值';
+  }
+
+  global.HoldingsRows = { read, priceLine, valueLabel };
 })(window);

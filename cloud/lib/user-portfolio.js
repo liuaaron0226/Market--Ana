@@ -307,6 +307,30 @@ async function officialPrices(rows, quoteFetch, now) {
   }
 }
 
+// 收盤後到日資料發布前（本人 11-19）：站主的庫存現價改用今天的收盤——和個股頁同一個即時服務（closingQuote）、
+// 同一套判斷：報價日期比日資料新才用。日資料一發布到今天就不再問；休市日抓到的是前一個交易日，不會比較新。
+// deps.closeQuotes 只有站主才有（即時行情只給站主）。拿不到的那幾檔照舊用日資料。一次最多同時問 4 檔。
+const CLOSE_CONCURRENCY = 4;
+const taipeiDay = (nowMs) => new Date(nowMs + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+async function todayCloses(rows, deps) {
+  const source = deps.closeQuotes;
+  if (!source) return new Map();
+  const today = taipeiDay((deps.now || Date.now)());
+  const queue = rows.filter((row) => row.analysis_as_of && row.analysis_as_of < today);
+  const found = new Map();
+  const worker = async () => {
+    for (let row = queue.shift(); row; row = queue.shift()) {
+      try {
+        const close = await source.service.closingQuote(row.code, row.market === "上櫃" ? "otc" : "tse", { fugleApiKey: source.fugleApiKey });
+        if (close && close.quote.data_date > row.analysis_as_of) found.set(row.code, close);
+      } catch { /* 拿不到就照舊用日資料 */ }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(CLOSE_CONCURRENCY, queue.length) }, worker));
+  return found;
+}
+
 async function listHoldings(db, email, deps) {
   const { results } = await db.prepare(
     "SELECT h.code, h.name, h.market, h.shares, h.average_cost, h.note, h.in_universe, h.source, h.source_ref, " +
@@ -324,6 +348,7 @@ async function listHoldings(db, email, deps) {
   // ETF 開關對這個人關著時，0050 以外的 ETF 不用本站分析的收盤價（和 ETF 上站之前一樣走官方行情）。
   const analysis = new Map(results.filter((item) => !isFund(item)).map((item) => [item.code,
     etfAnalysisHidden(item.code, item.kind, Boolean(deps.includeEtfs)) ? null : closeFromPayload(item.payload)]));
+  const closes = await todayCloses(results.filter((item) => !isFund(item) && analysis.get(item.code) !== null), deps);
   const unresolved = results.filter((item) => !isFund(item) && analysis.get(item.code) === null);
   const official = await officialPrices(unresolved, deps.quoteFetch, deps.now || Date.now);
   for (const [code, quote] of official) {
@@ -333,11 +358,16 @@ async function listHoldings(db, email, deps) {
   }
   const items = results.map((item) => {
     if (isFund(item)) return fundHoldingItem(item, funds.get(item.code));
-    const analysisPrice = analysis.get(item.code);
+    const close = closes.get(item.code);
+    const analysisPrice = close ? close.quote.price : analysis.get(item.code);
     const quote = official.get(item.code);
     const latestPrice = analysisPrice ?? quote?.price ?? (item.last_price === null ? null : Number(item.last_price));
-    const priceAsOf = analysisPrice === null ? (quote?.asOf ?? item.price_as_of) : item.analysis_as_of;
-    const priceSource = analysisPrice === null ? (quote?.source ?? item.price_source) : "本站盤後資料";
+    const priceAsOf = close ? close.quote.data_date
+      : analysisPrice === null ? (quote?.asOf ?? item.price_as_of) : item.analysis_as_of;
+    const priceSource = close ? (close.pending ? "今日最後成交（收盤價更新中）" : "今日收盤（盤後暫用即時報價）")
+      : analysisPrice === null ? (quote?.source ?? item.price_source) : "本站盤後資料";
+    // daily：本站日資料；close／close_pending：今天的收盤（還沒確認時是收盤前最後一筆）；official：證交所行情或上次存下的價。
+    const priceSession = close ? (close.pending ? "close_pending" : "close") : analysisPrice === null ? "official" : "daily";
     const costBasis = rounded(Number(item.shares) * Number(item.average_cost));
     const marketValue = latestPrice === null ? null : rounded(Number(item.shares) * latestPrice);
     const unrealized = marketValue === null ? null : rounded(marketValue - costBasis);
@@ -345,7 +375,7 @@ async function listHoldings(db, email, deps) {
     return {
       code: item.code, name: item.name, market: item.market, shares: Number(item.shares), average_cost: Number(item.average_cost),
       note: item.note, in_universe: Boolean(item.in_universe), source: item.source, source_ref: item.source_ref,
-      latest_price: latestPrice, price_as_of: priceAsOf, price_source: priceSource,
+      latest_price: latestPrice, price_as_of: priceAsOf, price_source: priceSource, price_session: priceSession,
       price_stale: analysisPrice === null && !quote && latestPrice !== null,
       cost_basis: costBasis, market_value: marketValue, unrealized_pnl: unrealized, return_pct: returnPct,
       created_at: item.created_at, updated_at: item.updated_at,
