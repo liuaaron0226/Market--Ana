@@ -957,6 +957,12 @@ class NamesInReasonTests(LedgerTestCase):
             self.assertEqual((record["kind"], record["miss_reason"]), ("miss", "answer_invalid"), text)
             self.assertIn("不得包含數字", record["attempts"][-1]["detail"])
 
+    def test_the_refused_text_is_kept_in_the_attempts(self):
+        # J 票（owner 11-19）：Actions 晨間乾跑兩次被擋，產物裡卻找不到被擋的原文；之後一律記下來
+        answer = answer_a(**{"1": cell("ma5", "prev_low", "above", reason="跌破二十日線就轉弱")})
+        record = self.write(responses=[envelope(answer), envelope(answer)])["record"]
+        self.assertEqual(record["attempts"][-1]["rejected_text"], "跌破二十日線就轉弱")
+
     def test_the_prompt_tells_the_model_the_exception(self):
         rules = "".join(fl._PROMPT_RULES)
         self.assertIn("照抄 candidates 的 name", rules)

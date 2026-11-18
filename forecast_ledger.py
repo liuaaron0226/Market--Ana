@@ -473,6 +473,18 @@ def _validate(structured: Any, model_input: Mapping[str, Any]) -> tuple[dict[str
     return {"regime": structured["regime"], "cells": rendered}, None
 
 
+def _rejected(structured: Any, model_input: Mapping[str, Any]) -> dict[str, str]:
+    """被數字檢查擋下的那一句原文（J 票，owner 11-19：不然之後查不出是哪個字）；找不到就不記。"""
+    names = [level["name"] for level in model_input.get("candidates") or []]
+    method = str(model_input.get("method_text") or "")
+    for item in ((structured or {}).get("cells") or {}).values() if isinstance(structured, dict) else ():
+        for field in ("reason", "invalidation"):
+            text = item.get(field) if isinstance(item, dict) else None
+            if isinstance(text, str) and _text_problem(text, names=names, method_text=method):
+                return {"rejected_text": text[:400]}
+    return {}
+
+
 # ---- 寫一份預測 ----
 
 def _stem(base_date: str, edition: str, method_version: str, version: str) -> str:
@@ -617,7 +629,8 @@ def write_forecast(
         if accepted is not None:
             return finish("forecast", **_with_baselines(accepted, rows, data["trend_labels"]),
                           similar_regimes=model_input["similar_regimes"])
-        record["attempts"].append({"status": "answer_invalid", "detail": problem})
+        record["attempts"].append({"status": "answer_invalid", "detail": problem,
+                                   **_rejected(structured, model_input)})
     return finish("miss", miss_reason="answer_invalid", miss_detail=record["attempts"][-1]["detail"])
 
 

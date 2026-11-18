@@ -662,7 +662,10 @@ def _write(
             return finish("judgment", **accepted, random_pick=_random_pick(bars, index_rows),
                           transition=_transition(accepted["status"], previous),
                           compared_with=previous["judgment_id"] if previous else None)
-        record["attempts"].append({"status": "answer_invalid", "detail": problem})
+        reason = structured.get("reason") if isinstance(structured, dict) else None
+        rejected = ({"rejected_text": reason[:400]} if isinstance(reason, str) and problem and "理由：" in problem
+                    and "數字" in problem else {})
+        record["attempts"].append({"status": "answer_invalid", "detail": problem, **rejected})
     return finish("miss", miss_reason="answer_invalid", miss_detail=record["attempts"][-1]["detail"])
 
 

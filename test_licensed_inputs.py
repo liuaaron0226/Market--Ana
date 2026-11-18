@@ -37,6 +37,14 @@ def quote(day=BASE, at_ask=600, at_bid=400):
             "total": {"tradeVolume": 150, "tradeVolumeAtAsk": at_ask, "tradeVolumeAtBid": at_bid}}
 
 
+class NotesTests(unittest.TestCase):
+    def test_notes_say_how_to_name_times_without_numbers(self):
+        # 理由不得有數字：分時、60 分 K、新聞裡的時刻與數字都不能照抄，時段改用早盤、盤中、尾盤
+        for name in ("stock_intraday", "index_intraday", "headlines"):
+            self.assertIn("不得寫出", li.NOTES[name])
+        self.assertIn("尾盤", li.NOTES["stock_intraday"])
+
+
 class MinutesTests(unittest.TestCase):
     def test_summary_of_the_day_with_the_average_line(self):
         summary = li.intraday_summary(li.minute_rows(candles(ROWS), BASE))
