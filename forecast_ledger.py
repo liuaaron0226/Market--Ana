@@ -25,6 +25,7 @@ from typing import Any
 
 import foreign_flow
 import gemini_models
+import wyckoff_lpsy
 # 鎖定、雜湊、模型呼叫、期限與方法版本和關注帳本共用（ledger_core），這裡只留預測帳本自己的規則。
 from ledger_core import (
     EDITIONS,
@@ -69,8 +70,11 @@ PARAMETERS: dict[str, Any] = {
     # 交給模型的輸入層；某一層「有或沒有」才換輸入版本（教訓層內容隨時間增長不換）。
     # 海外層（D 票）、外資層（G 票，本人 2026-11-15 定案加入外資讀數；讀數與歷史統計由 foreign_flow 算，模型只讀）、
     # 相似盤勢與教訓層（E 票）同時上，輸入版本照五層一起算。
-    "layers": ["base", "overseas", "foreign_flow", "similar", "lessons"],
+    # H 票（本人 2026-11-18「把最後供應點加進事前預測」）：今天加權指數是否處在威科夫最後供應點，由 wyckoff_lpsy
+    # 從同一份日 K 算好，附固定歷史統計；新的一層＝新的輸入版本（共識第 8 點）。
+    "layers": ["base", "overseas", "foreign_flow", "wyckoff_lpsy", "similar", "lessons"],
     "foreign_flow_layer": foreign_flow.VERSION,
+    "wyckoff_lpsy_layer": wyckoff_lpsy.INDEX_VERSION,
     "ma_periods": [5, 10, 20, 60, 120, 240],
     "high_low_windows": [20, 60, 240],
     "gap_lookback_bars": 240,
@@ -139,6 +143,10 @@ _PROMPT_RULES = (
     "外資的買賣解釋當天的漲跌，不代表之後會續漲或續跌：不得把外資賣超、外資續賣的機率（或期貨加空）直接當成之後會跌的理由，"
     "也不得把期貨淨空單的多寡當成看空的理由；不得把不是外資統計講的事（例如均線壓力）說成外資統計的結論。"
     "要和 foreign_flow.notes 與各讀數附的歷史統計一起看。",
+    # H 票：威科夫最後供應點（本人 2026-11-18「把最後供應點加進事前預測」）。
+    "wyckoff_lpsy 是程式算好的「今天加權指數是否處在威科夫最後供應點」（yes／no／undeterminable）與固定的歷史統計，"
+    "只能照讀，不可自己重算或改數字；undeterminable 當作沒有這個讀數。它只是參考條件：歷史只有 14 次、統計上不顯著，"
+    "是避開記號，不是放空訊號，不能單獨用來改變預測方向，也不能單獨當成轉弱或看空的理由；no 也不代表看多。",
     "每一格到期後，程式會把你的落點命中率和「照歷史亂猜」並排比較：照歷史亂猜是不看任何判斷、只看歷史上同樣距離的兩條線"
     "收盤落在各區的比例。兩條線拉得越寬，「兩線之間」在歷史上本來就越常中，所以只為了保險把線拉寬，比不贏照歷史亂猜。",
     f"regime 從固定清單選一個：{'、'.join(REGIMES)}。base_date 照抄 INPUT_JSON 的 base_date。",
@@ -343,6 +351,7 @@ def _model_input(data: Mapping[str, Any], rows: list[dict[str, Any]], edition: s
         "indicators": copy.deepcopy(data.get("indicators")),
         "chips": copy.deepcopy(data.get("chips")),
         "foreign_flow": copy.deepcopy(data.get("foreign_flow")),
+        "wyckoff_lpsy": wyckoff_lpsy.index_layer(rows),
         "data_cutoffs": _cutoffs(data),
         "candidates": candidates,
         "bollinger": _bollinger(rows),

@@ -447,7 +447,7 @@ class RecordMetadataTests(LedgerTestCase):
         self.assertEqual(record["base_date"], "2026-09-30")
         self.assertEqual(record["edition"], "evening")
         self.assertEqual(record["method_version"], "0.2")
-        self.assertRegex(record["input_version"], r"^base\+overseas\+foreign_flow\+similar\+lessons-v1-[0-9a-f]{8}$")
+        self.assertRegex(record["input_version"], r"^base\+overseas\+foreign_flow\+wyckoff_lpsy\+similar\+lessons-v1-[0-9a-f]{8}$")
         self.assertEqual(record["model"], "test-model")
         self.assertRegex(record["input_sha256"], r"^[0-9a-f]{64}$")
         self.assertEqual(record["locked_at"], "2026-09-30T17:00:00+08:00")
@@ -483,7 +483,7 @@ class ModelSeriesTests(LedgerTestCase):
         self.assertEqual(fl.INPUT_VERSION, fl.input_version(fl.MODEL))
         self.assertNotEqual(fl.input_version("gemini-4-argon"), fl.input_version("gemini-3.8-flash"))
         self.assertNotIn(self.FLASH_ERA, {fl.input_version("gemini-4-argon"), fl.input_version("gemini-3.8-flash")})
-        self.assertRegex(fl.input_version("gemini-4-argon"), r"^base\+overseas\+foreign_flow\+similar\+lessons-v1-[0-9a-f]{8}$")
+        self.assertRegex(fl.input_version("gemini-4-argon"), r"^base\+overseas\+foreign_flow\+wyckoff_lpsy\+similar\+lessons-v1-[0-9a-f]{8}$")
 
     def test_a_record_carries_the_input_version_of_the_model_that_wrote_it(self):
         record = self.write(model_name="gemini-4-argon")["record"]
@@ -808,6 +808,36 @@ class SummaryTests(LedgerTestCase):
         fl.reconcile(self.root, through("2026-10-01"))
         fl.reconcile(self.root, through("2026-10-01", changes={"2026-10-01": {"close": 97.0}}))
         self.assertEqual(fl.summarize(self.root, through("2026-10-08"))["conflicts"], 1)
+
+
+class WyckoffLayerTests(LedgerTestCase):
+    """H 票：今天加權指數是否處在最後供應點，由程式從同一份日 K 算好交給模型（本人 2026-11-18 定案）。"""
+
+    def test_the_reading_and_fixed_history_go_into_the_model_input(self):
+        import test_wyckoff_lpsy as lpsy
+        # 前 80 天整理（高 105 低 95）；第 80 天收 90 跌破 95；第 81 天收 92、最高 94、量 70 ÷ 100 ＝ 0.7 → 是
+        series = lpsy.basic_break().add(close=92, high=94, low=91, amount=70)
+        rows = series.index_rows()
+        base = rows[-1]["date"]
+        record = self.write(day_input(rows, base_date=base), now=clock(at(base, 17, 0)))["record"]
+        layer = record["input"]["wyckoff_lpsy"]
+        self.assertEqual(layer["reading"], {"status": "yes", "date": base, "break_date": series.date(80),
+                                            "range_low": 95.0, "volume_ratio": 0.7})
+        self.assertEqual((layer["history"]["count"], layer["history"]["t"]), (14, -1.2))
+        self.assertEqual(record["input"]["parameters"]["wyckoff_lpsy_layer"], layer["version"])
+
+    def test_a_short_history_is_undeterminable_and_the_forecast_is_still_written(self):
+        record = self.write()["record"]  # 固定日 K（a）只有 22 根
+        self.assertEqual(record["kind"], "forecast")
+        self.assertEqual(record["input"]["wyckoff_lpsy"]["reading"],
+                         {"status": "undeterminable", "date": BASE_A, "reason": "history_short"})
+
+    def test_the_layer_is_a_new_input_version_and_the_prompt_says_how_to_use_it(self):
+        self.assertIn("wyckoff_lpsy", fl.PARAMETERS["layers"])
+        self.assertNotEqual(fl.input_version("gemini-4-argon"), "base+overseas+foreign_flow+similar+lessons-v1-1b88159c")
+        rules = "".join(fl._PROMPT_RULES)
+        for words in ("wyckoff_lpsy", "不顯著", "避開記號", "不是放空訊號", "不能單獨"):
+            self.assertIn(words, rules)
 
 
 class PromptRulesTests(LedgerTestCase):
