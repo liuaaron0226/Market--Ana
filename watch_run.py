@@ -177,12 +177,17 @@ class LocalSource:
         以前已經抓到的；國外收盤只用 before（晚間版是基準日、晨間版是開盤日）以前的。抓不到的那一層是空的（缺）。"""
         import licensed_inputs
         self.fugle_errors, self.fugle_status, self.licensed_errors = {}, {}, {}
+        self.headline_counts: dict[str, dict[str, int]] = {}
         out: dict[str, dict[str, Any]] = {code: {"intraday": self._intraday(code, base_date)} for code in codes}
         safe = [code for code in codes if re.fullmatch(r"[0-9A-Za-z]{1,10}", code)]
         industry_news = self._industry_news(safe, cutoff)
         for code in safe:
             if industry_news.get(code):
                 out[code]["news_headlines"] = industry_news[code]
+            # 執行紀錄（乾跑產物）用：逐檔新聞（Yahoo、中央社）幾則、產業新聞網站對到公司／產業各幾則
+            self.headline_counts[code] = {"own": 0,
+                                          "company": sum(item.get("match") == "company" for item in industry_news.get(code) or []),
+                                          "industry": sum(item.get("match") == "industry" for item in industry_news.get(code) or [])}
         if self.query is None or not safe:
             return out
         listed = ",".join(f"'{code}'" for code in safe)
@@ -193,6 +198,7 @@ class LocalSource:
                               f"WHERE code IN ({listed}) AND published_at >= '{since}'")
             for code in safe:
                 own = licensed_inputs.headline_items([row for row in rows if row.get("code") == code], cutoff=cutoff)
+                self.headline_counts[code]["own"] = len(own or [])
                 merged = (own or []) + (industry_news.get(code) or [])
                 out[code]["news_headlines"] = merged or None
         except Exception as error:  # noqa: BLE001 — 查不到只讓新聞那一層缺
@@ -572,6 +578,7 @@ def _run(ledger: Path, edition: str, watchlist: Sequence[Mapping[str, Any]], ind
         log["licensed_errors"] = dict(getattr(source, "licensed_errors", {}) or {})
         log["fugle_errors"] = dict(getattr(source, "fugle_errors", {}) or {})
         log["fugle_status"] = dict(getattr(source, "fugle_status", {}) or {})
+        log["headline_counts"] = dict(getattr(source, "headline_counts", {}) or {})
     if edition == "evening":
         # 先對帳再寫：今天到期的格子先對完；今天這份最早的到期日在明天，寫完不必再對。
         log["reconciliation"] = {key: len(value) for key, value in wl.reconcile(ledger, index_daily, loaded).items()}

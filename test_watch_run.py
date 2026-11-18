@@ -593,6 +593,7 @@ class LicensedSourceTests(unittest.TestCase):
         self.assertEqual(asked, [("udn-industry", "ctee-industry", "cnyes-tw-stock")])
         self.assertEqual([(item["title"], item["match"], item["source"]) for item in found["news_headlines"]],
                          [("半導體設備交期拉長", "industry", "工商時報 產業")])
+        self.assertEqual(source.headline_counts["2330"], {"own": 0, "company": 0, "industry": 1})
 
     def test_without_a_connection_both_layers_are_missing(self):
         found = wr.LocalSource().licensed(["2330"], base_date="2026-11-06", before="2026-11-06",

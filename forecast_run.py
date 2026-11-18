@@ -334,6 +334,8 @@ def _licensed_log(data: Mapping[str, Any]) -> dict[str, Any]:
         layer = data.get(name) or {}
         out[name] = ({"status": "ok", "data_date": layer.get("data_date") or layer.get("cutoff")}
                      if layer.get("status") == "ok" else {"status": "missing", "reason": layer.get("reason")})
+        if name == "news" and layer.get("status") == "ok":   # 產物不含完整輸入：筆數寫在這裡
+            out[name].update(items=len(layer.get("items") or []), us_items=len(layer.get("us_items") or []))
     return out
 
 

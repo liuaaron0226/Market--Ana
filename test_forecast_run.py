@@ -542,6 +542,8 @@ class LicensedRunTests(MorningTestCase):
         self.assertEqual(asked, [("cnbc-markets", "nyt-business", "wsj-markets")])
         self.assertEqual([item["title"] for item in record["input"]["news"]["us_items"]], ["Stocks fall"])
         self.assertEqual(record["input"]["news"]["us_items"][0]["source"], "華爾街日報 市場")
+        # 執行紀錄（乾跑產物）不含完整輸入：新聞的筆數直接寫在 licensed.news
+        self.assertEqual((result["licensed"]["news"]["items"], result["licensed"]["news"]["us_items"]), (0, 1))
         self.assertEqual(result["licensed"]["news"]["status"], "ok")
 
     def test_morning_never_sees_the_session_days_intraday(self):
