@@ -2367,7 +2367,10 @@
 
   function coreEntities(report) {
     const benchmark = { ...report.benchmark, role: '0050 基準', isBenchmark: true };
-    return [benchmark, ...(report.items || []).filter(item => item.status === 'ok' && item.code !== '0050').map(item => ({ ...item, role: item.market || '比較標的' }))];
+    // 基金淨值約晚 3 個營業日，報酬比到它自己的最後淨值日（0050 也截在同一天）；和資料日不同時寫在名稱旁（05 票）
+    const role = item => item.kind === 'fund' && item.history?.to && item.history.to < report.data_date
+      ? `${item.market} · 淨值至 ${item.history.to}` : item.market || '比較標的';
+    return [benchmark, ...(report.items || []).filter(item => item.status === 'ok' && item.code !== '0050').map(item => ({ ...item, role: role(item) }))];
   }
 
   function periodAnchor(end, key) {
@@ -2476,7 +2479,7 @@
       const name = entity.name || '名稱待資料補齊';
       header.append(swatch, el('strong', '', `${entity.code} ${name}`), el('span', '', entity.role));
       const dl = el('dl');
-      const returnLabel = entity.dividends_included ? '含息報酬' : '報酬（配息未完整）';
+      const returnLabel = !entity.dividends_included ? '報酬（配息未完整）' : entity.kind === 'fund' ? '含息報酬（台幣）' : '含息報酬';
       if (!period || period.status !== 'ok') {
         dl.append(el('dt', '', returnLabel), el('dd', '', '歷史不足'), el('dt', '', '最大回撤'), el('dd', '', '—'));
       } else if (entity.isBenchmark) {
@@ -2529,8 +2532,9 @@
   }
 
   function initCore() {
+    // 基金也收（05 票：基金在比較資料包裡和股票同形狀，台幣、含息再投入）
     const picker = window.StockPicker.attach(core.input, { host: core.input.closest('.core-add-menu'), inline: true,
-      accept: window.StockPicker.notFund, onPick: option => addCoreCode(option.code) });
+      onPick: option => addCoreCode(option.code) });
     core.form.addEventListener('submit', async event => {
       event.preventDefault();
       const { option, message } = await picker.choose();

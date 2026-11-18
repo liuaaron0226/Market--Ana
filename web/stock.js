@@ -672,31 +672,40 @@
     return `${item.name} ${item.code} 在可比標的中近 1 年表現最佳，${gap >= 0 ? '領先' : '仍落後'} 0050 ${Math.abs(gap).toFixed(1)} 個百分點${excludedNote}`;
   }
 
-  // 五個期間各一顆鍵要的東西：每一檔 { code, name, note, periods }，periods 照固定的順序，每個期間
-  // { key, label, short 鍵上的短名, kind 'bull' 領先 0050／'bear' 落後／'none' 沒有方向, gap 鍵上寫的差距, facts 點開看的四個數字 [名稱, 文字] }。
+  // 每個期間一顆鍵（股票五個、基金多一個「成立以來」）要的東西：每一檔 { code, name, note, periods }，periods 照固定的順序，每個期間
+  // { key, label, short 鍵上的短名, kind 'bull' 領先 0050／'bear' 落後／'none' 沒有方向, gap 鍵上寫的差距, facts 點開看的數字 [名稱, 文字]（四個，基金多一行匯率影響） }。
   // 配息資料不完整就不宣告領先落後（note 寫原因、gap 寫「不可比」），有完整配息的那一邊照樣給數字；沒有資料的期間寫「資料不足」。
-  const PERIOD_NAMES = { '1m': ['近 1 個月', '近1月'], '3m': ['近 3 個月', '近3月'], '1y': ['近 1 年', '近1年'], '3y': ['近 3 年', '近3年'], '5y': ['近 5 年', '近5年'] };
+  // 基金（05 票）：報酬是台幣含息，名稱寫「基金」；股票的五個期間之後多一顆「成立以來」（本人 11-17 選的期間），
+  // 每個期間多一行「其中匯率影響 x.x 個百分點」（規格第 27 條）。
+  const PERIOD_NAMES = { '1m': ['近 1 個月', '近1月'], '3m': ['近 3 個月', '近3月'], '1y': ['近 1 年', '近1年'], '3y': ['近 3 年', '近3年'], '5y': ['近 5 年', '近5年'], since: ['成立以來', '成立以來'] };
+  const FUND_PERIOD_KEYS = [...COMPARE_PERIODS, 'since'];
+  const fxEffect = value => (Number.isFinite(value) ? `${value > 0 ? '+' : ''}${Number(value).toFixed(1)} 個百分點` : '—');
   function comparisonPeriods(items, benchmark) {
-    const facts = (stock, base, stockFall, baseFall) => [['個股報酬', stock], ['0050 報酬', base], ['個股最大回撤', stockFall], ['0050 最大回撤', baseFall]];
     return items.map(item => {
+      const fund = item.kind === 'fund';
+      const facts = (stock, base, stockFall, baseFall, fx) => [
+        [fund ? '基金報酬（台幣）' : '個股報酬', stock], ['0050 報酬', base], [fund ? '基金最大回撤' : '個股最大回撤', stockFall], ['0050 最大回撤', baseFall],
+        ...(fund ? [['其中匯率影響', fx]] : []),
+      ];
       const found = new Map((item.periods || []).map(period => [period.period, period]));
       const basis = comparisonBasis(item, benchmark);
       const itemComplete = item.dividends_included === true, benchmarkComplete = benchmark?.dividends_included === true;
       return {
         code: item.code, name: item.name || item.code, note: basis.label,
-        periods: COMPARE_PERIODS.map(key => {
+        periods: (fund ? FUND_PERIOD_KEYS : COMPARE_PERIODS).map(key => {
           const period = found.get(key) || { status: 'insufficient_history' };
           const [label, short] = PERIOD_NAMES[key];
           const named = { key, label: period.label || label, short };
-          if (period.status !== 'ok') return { ...named, kind: 'none', gap: '資料不足', facts: facts('—', '—', '—', '—') };
+          if (period.status !== 'ok') return { ...named, kind: 'none', gap: '資料不足', facts: facts('—', '—', '—', '—', '—') };
+          const fx = itemComplete ? fxEffect(period.fx_effect_pct) : '—';
           if (!basis.comparable) {
             return { ...named, kind: 'none', gap: '不可比', facts: facts(
               itemComplete ? comparePercent(period.stock_return_pct) : '—', benchmarkComplete ? comparePercent(period.benchmark_return_pct) : '—',
-              itemComplete ? compareDrawdown(period.stock_max_drawdown_pct) : '—', benchmarkComplete ? compareDrawdown(period.benchmark_max_drawdown_pct) : '—') };
+              itemComplete ? compareDrawdown(period.stock_max_drawdown_pct) : '—', benchmarkComplete ? compareDrawdown(period.benchmark_max_drawdown_pct) : '—', fx) };
           }
           return { ...named, kind: period.excess_pct > 0 ? 'bull' : period.excess_pct < 0 ? 'bear' : 'none', gap: comparePercent(period.excess_pct),
             facts: facts(comparePercent(period.stock_return_pct), comparePercent(period.benchmark_return_pct),
-              compareDrawdown(period.stock_max_drawdown_pct), compareDrawdown(period.benchmark_max_drawdown_pct)) };
+              compareDrawdown(period.stock_max_drawdown_pct), compareDrawdown(period.benchmark_max_drawdown_pct), fx) };
         }),
       };
     });
@@ -704,13 +713,18 @@
 
   window.StockComparison = { basis: comparisonBasis, conclusion: comparisonConclusion, periods: comparisonPeriods };
 
-  // 每一檔一排期間的鍵（.key-strip，可以按住左右滑，由 chart-menus.js 處理），下面是選中那個期間的四個數字
+  // 每一檔一排期間的鍵（.key-strip，可以按住左右滑，由 chart-menus.js 處理），下面是選中那個期間的數字
   const GAP_WORDS = { bull: '領先', bear: '落後' };
+  // 選的期間這一檔沒有（例如「成立以來」只有基金有）：照樣列名稱、數字都是一槓，不拿別的期間的數字頂替
   function comparePeriodFacts(stock) {
-    const period = stock.periods.find(item => item.key === compareState.period) || stock.periods[0];
+    const period = stock.periods.find(item => item.key === compareState.period)
+      || { facts: stock.periods[0].facts.map(([title]) => [title, '—']) };
     return period.facts.map(([title, text]) => {
-      const item = node('div');
-      item.append(node('dt', '', title), node('dd', 'num', text));
+      const fx = title === '其中匯率影響';
+      const item = node('div', fx ? 'cmp-fx' : '');
+      const value = node('dd', 'num', fx ? text.replace(/ 個百分點$/, '') : text);
+      if (fx && text.endsWith(' 個百分點')) value.append(node('small', '', '個百分點'));
+      item.append(node('dt', '', title), value);
       return item;
     });
   }
@@ -743,7 +757,7 @@
   }
   // 換一個期間：鍵與數字就地換，不整塊重畫（按住滑過來放開時，選中的框還在滑向那一顆）
   function pickComparePeriod(key) {
-    if (!COMPARE_PERIODS.includes(key)) return;
+    if (!FUND_PERIOD_KEYS.includes(key)) return;
     compareState.period = key;
     $('comparePeriods').querySelectorAll('.cmp-card').forEach(card => {
       const stock = compareState.stocks.find(item => item.code === card.dataset.code);
@@ -760,7 +774,10 @@
       const name = node('td', '', stock.note ? `${stock.name} ${stock.code}（${stock.note}）` : `${stock.name} ${stock.code}`);
       const head = node('th', '', period.label);
       head.scope = 'row';
-      const [stockReturn, baseReturn, stockFall, baseFall] = period.facts.map(([, text]) => node('td', '', text));
+      // 基金的第五個數字（其中匯率影響）併進報酬那一格念出來，表的欄位和股票一樣
+      const [stockText, baseText, fallText, baseFallText, fxText] = period.facts.map(([, text]) => text);
+      const [stockReturn, baseReturn, stockFall, baseFall] = [fxText && fxText !== '—' ? `${stockText}（其中匯率影響 ${fxText}）` : stockText,
+        baseText, fallText, baseFallText].map(text => node('td', '', text));
       row.append(name, head, stockReturn, baseReturn, node('td', '', period.gap), stockFall, baseFall);
       return row;
     })));
@@ -935,7 +952,10 @@
     const items = compareItems(payload);
     compareState.payload = payload;
     items.forEach(item => compareState.names.set(item.code, item.name || item.code));
-    $('compareDate').textContent = `資料日 ${payload.data_date}`;
+    // 基金淨值約晚 3 個營業日：基金的數字比到它自己的最後一個淨值日，和資料日不同時寫出來（05 票）
+    const fundDates = items.filter(item => item.kind === 'fund' && item.history?.to && item.history.to < payload.data_date)
+      .map(item => `${items.length > 1 ? `${item.name} ` : ''}淨值至 ${item.history.to}`);
+    $('compareDate').textContent = [`資料日 ${payload.data_date}`, ...fundDates].join('，');
     $('compareConclusion').textContent = comparisonConclusion(items, payload.benchmark);
     compareState.stocks = comparisonPeriods(items, payload.benchmark);
     renderCompareTable();
@@ -1003,13 +1023,6 @@
     clearComparisonView();
     $('compareBlock').hidden = false;
     renderCompareChips();
-    // 基金和 0050、其他股票的比較由 05 票接上；在那之前照實說還沒有，不去問股票的比較資料（會被說成查無此股）。
-    if (isFund(result)) {
-      $('compareConclusion').textContent = '';
-      $('compareChart').replaceChildren();
-      setCompareStatus('empty', '這檔基金的比較資料尚未提供。');
-      return;
-    }
     loadComparison();
   }
 
@@ -1232,9 +1245,11 @@
     if (cell) pickComparePeriod(cell.dataset.period);
   });
   // 加入比較與頂列都用全站共用的選股下拉（stock-picker.js，本人 11-17：代號、名稱都能打）。
-  // 比較只收大量股母體內、還沒加入的股票（基金加入比較由 05 票接上）；頂列什麼都收，基金也是進個股頁。
+  // 比較只收大量股母體內、名單 ETF 與基金裡還沒加入的；頂列什麼都收，基金也是進個股頁。
   const comparePicker = window.StockPicker.attach($('compareInput'), {
-    accept: item => item.universe_rank !== null && item.universe_rank !== undefined && !compareState.codes.includes(item.code),
+    // 基金沒有名次，但比較資料包有它（05 票）
+    accept: item => (item.security_type === '基金' || (item.universe_rank !== null && item.universe_rank !== undefined))
+      && !compareState.codes.includes(item.code),
     onPick: option => addComparisonCode(option.code, option.name),
   });
   $('compareForm').addEventListener('submit', async event => {

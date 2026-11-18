@@ -219,9 +219,6 @@
     return { choose, close };
   }
 
-  // 還不收基金的框用的 accept（基金當成一般個股 03 票）：首頁核心持有比較要等 05 票（自選股頁 07 票已經收基金），
-  // 在那之前選到基金只會被說查無此股，所以先不列；05 票做完就拿掉。
-  const notFund = item => item.security_type !== '基金';
-
-  global.StockPicker = { codeOf, isCode, options, decide, fitQuery, attach, notFund };
+  // 首頁核心持有（05 票）與自選股頁（07 票）都收基金了，原本暫擋基金用的 notFund 已拿掉。
+  global.StockPicker = { codeOf, isCode, options, decide, fitQuery, attach };
 })(window);

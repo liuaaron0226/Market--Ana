@@ -265,68 +265,106 @@ def _days(start: str, values: list[float]) -> list[tuple[str, float]]:
     return out
 
 
-class PayloadTest(unittest.TestCase):
-    """對照內容：期間報酬（台幣）、美元報酬、匯率影響、0050、差距、最大回撤、對照圖、配息來源。"""
+class CompareItemTest(unittest.TestCase):
+    """基金當成一般個股 05 票：基金在比較資料包裡是和股票同形狀的一筆（benchmark_compare.Loader.item 的欄位），
+    報酬是台幣、含息再投入；另帶基金專屬的匯率影響、原幣報酬與「成立以來」一列（本人 11-17 選的期間）。"""
+
+    NAVS = [("2023-01-02", 10.0), ("2025-11-14", 15.0), ("2026-08-14", 16.0), ("2026-10-14", 20.0), ("2026-11-13", 18.0)]
 
     def build(self, **overrides):
-        navs = [("2023-01-02", 10.0), ("2025-11-14", 15.0), ("2026-08-14", 16.0), ("2026-10-14", 20.0), ("2026-11-13", 18.0)]
         fx = [("2023-01-02", 30.0), ("2026-10-14", 32.0), ("2026-11-13", 33.0)]
         bench = [("2016-01-04", 1.0), ("2023-01-02", 2.0), ("2025-11-14", 3.0), ("2026-08-14", 3.2), ("2026-10-14", 3.5),
                  ("2026-11-13", 3.6), ("2026-11-14", 3.7)]
-        args = {"navs": navs, "distributions": [], "fx": fx, "benchmark": bench, "benchmark_date": "2026-11-14",
-                "issues": []}
+        args = {"navs": self.NAVS, "distributions": [], "fx": fx, "benchmark": bench, "issues": []}
         args.update(overrides)
-        return fc.fund_payload("BLKTENAU", **args)
+        return fc.compare_item("BLKTENAU", **args)
 
-    def test_end_is_the_latest_day_both_sides_have(self) -> None:
-        p = self.build()
-        self.assertEqual((p["data_date"], p["fund_nav_date"], p["benchmark_date"]), ("2026-11-13", "2026-11-13", "2026-11-14"))
+    def test_same_fields_as_a_stock_item_plus_fund_kind(self) -> None:
+        item = self.build()
+        stock_fields = {"code", "name", "market", "status", "dividends_included", "dividend_source", "listed_date",
+                        "history", "periods", "chart_from", "chart", "benchmark_chart"}
+        self.assertLessEqual(stock_fields, set(item))
+        self.assertEqual((item["code"], item["name"], item["market"], item["status"], item["kind"], item["currency"]),
+                         ("BLKTENAU", "貝萊德世界科技 A10", "境外基金", "ok", "fund", "USD"))
+        self.assertIs(item["dividends_included"], True)
+        self.assertEqual(item["listed_date"], "2022-10-26")
+        self.assertEqual(item["history"], {"from": "2023-01-02", "to": "2026-11-13", "points": 5})
+        self.assertNotIn("schema", item)
 
-    def test_period_rows(self) -> None:
-        rows = {r["period"]: r for r in self.build()["periods"]}
-        self.assertEqual([r["period"] for r in self.build()["periods"]], ["1m", "3m", "1y", "3y", "since"])
-        one_month = rows["1m"]   # 錨點 10-13 → 期初取當天或之前最近一筆：08-14
-        self.assertEqual(one_month["from"], "2026-08-14")
-        # 台幣：16×30 → 18×33；美元：16 → 18；匯率影響＝台幣−美元。
-        self.assertEqual(one_month["fund_return_pct"], round((18 * 33 / (16 * 30) - 1) * 100, 1))
-        self.assertEqual(one_month["fund_usd_return_pct"], 12.5)
-        self.assertEqual(one_month["fx_effect_pct"], round(one_month["fund_return_pct"] - 12.5, 1))
-        self.assertEqual(one_month["benchmark_return_pct"], round((3.6 / 3.2 - 1) * 100, 1))   # 0050 截在 11-13
-        self.assertEqual(one_month["excess_pct"], round(one_month["fund_return_pct"] - one_month["benchmark_return_pct"], 1))
-        since = rows["since"]
-        self.assertEqual((since["label"], since["from"]), ("成立以來", "2023-01-02"))
+    def test_periods_are_the_stock_five_then_since_launch(self) -> None:
+        rows = self.build()["periods"]
+        self.assertEqual([r["period"] for r in rows], ["1m", "3m", "1y", "3y", "5y", "since"])
+        five = rows[4]   # 級別 2022-10-26 成立，近 5 年不夠長：和股票上市太晚同一個原因
+        self.assertEqual(five, {"period": "5y", "label": "近 5 年", "status": "insufficient_history", "reason": "listed_recently"})
+
+    def test_one_month_row_is_twd_with_dividends_and_fx_effect(self) -> None:
+        one_month = {r["period"]: r for r in self.build()["periods"]}["1m"]
+        # 資料日＝雙方都有的最後一天 11-13（0050 有 11-14 也截在 11-13）；錨點 10-13 → 期初取當天或之前最近一筆：08-14
+        self.assertEqual((one_month["status"], one_month["from"], one_month["to"]), ("ok", "2026-08-14", "2026-11-13"))
+        twd = round((18 * 33 / (16 * 30) - 1) * 100, 1)
+        self.assertEqual(one_month["stock_return_pct"], twd)
+        self.assertEqual(one_month["stock_native_return_pct"], 12.5)
+        self.assertEqual(one_month["fx_effect_pct"], round((18 * 33 / (16 * 30) - 18 / 16) * 100, 1))
+        self.assertEqual(one_month["benchmark_return_pct"], round((3.6 / 3.2 - 1) * 100, 1))
+        self.assertEqual(one_month["excess_pct"], round(twd - one_month["benchmark_return_pct"], 1))
+        self.assertEqual(one_month["stock_max_drawdown_pct"], round((18 * 33 / (20 * 32) - 1) * 100, 1))
+        self.assertEqual(one_month["benchmark_max_drawdown_pct"], 0.0)
+
+    def test_since_launch_starts_at_the_first_nav(self) -> None:
+        since = {r["period"]: r for r in self.build()["periods"]}["since"]
+        self.assertEqual((since["label"], since["status"], since["from"], since["to"]),
+                         ("成立以來", "ok", "2023-01-02", "2026-11-13"))
         self.assertEqual(since["benchmark_return_pct"], 80.0)
+        self.assertEqual(since["stock_native_return_pct"], 80.0)
+        self.assertEqual(since["stock_return_pct"], round((18 * 33 / (10 * 30) - 1) * 100, 1))
 
     def test_three_years_needs_history(self) -> None:
         rows = {r["period"]: r for r in self.build(navs=[("2024-01-02", 10.0), ("2026-11-13", 12.0)])["periods"]}
         self.assertEqual(rows["3y"], {"period": "3y", "label": "近 3 年", "status": "insufficient_history",
-                                      "reason": "since_launch"})
+                                      "reason": "history_not_loaded"})
 
-    def test_chart_starts_at_one_for_both(self) -> None:
-        p = self.build()
-        self.assertEqual((p["chart_from"], p["chart"][0][1], p["benchmark_chart"][0][1]), ("2023-01-02", 1.0, 1.0))
-        self.assertEqual(p["chart"][-1][0], "2026-11-13")
-        self.assertEqual(p["benchmark_chart"][-1][0], "2026-11-13")
+    def test_distributions_are_reinvested_in_both_currencies(self) -> None:
+        # 08-14 之後 10-14 除息 2.0（用當天淨值 20 買回 0.1 單位）：期末價值 18×1.1
+        rows = {r["period"]: r for r in self.build(distributions=[{"ex_date": "2026-10-14", "amount": 2.0}])["periods"]}
+        self.assertEqual(rows["1m"]["stock_native_return_pct"], round((18 * 1.1 / 16 - 1) * 100, 1))
 
-    def test_capital_source_summary(self) -> None:
-        dists = [{"ex_date": "2023-01-31", "amount": 0.05, "capital_pct": 100.0, "income_pct": 0.0},
-                 {"ex_date": "2023-10-31", "amount": 0.05, "capital_pct": 78.56, "income_pct": 21.44},
-                 {"ex_date": "2024-01-31", "amount": 0.05, "capital_pct": 0.0, "income_pct": 100.0},
-                 {"ex_date": "2026-10-30", "amount": 0.162, "capital_pct": None, "income_pct": None}]
-        p = self.build(distributions=dists)
-        self.assertEqual(p["distributions"]["by_year"], [
-            {"year": "2023", "count": 2, "known": 2, "all_capital": 1, "some_capital": 2},
-            {"year": "2024", "count": 1, "known": 1, "all_capital": 0, "some_capital": 0},
-            {"year": "2026", "count": 1, "known": 0, "all_capital": 0, "some_capital": 0}])
-        self.assertEqual(p["distributions"]["latest"], {"ex_date": "2026-10-30", "amount": 0.162})
-        self.assertIn("配息可能來自本金", p["capital_note"])
-        self.assertIn("2023 年 2 次配息中 1 次全部來自本金", p["capital_note"])
+    def test_chart_starts_at_one_for_both_and_ends_on_the_common_day(self) -> None:
+        item = self.build()
+        self.assertEqual((item["chart_from"], item["chart"][0][1], item["benchmark_chart"][0][1]), ("2023-01-02", 1.0, 1.0))
+        self.assertEqual((item["chart"][-1][0], item["benchmark_chart"][-1][0]), ("2026-11-13", "2026-11-13"))
 
-    def test_issues_and_notes_pass_through(self) -> None:
-        p = self.build(issues=[{"kind": "stale", "latest": "2026-11-13", "weekdays_behind": 9}])
-        self.assertEqual(p["issues"], [{"kind": "stale", "latest": "2026-11-13", "weekdays_behind": 9}])
-        self.assertEqual(p["schema"], "fund-vs-0050/v1")
-        self.assertTrue(any("不計申購手續費" in note for note in p["notes"]))
+    def test_fx_effect_is_rounded_once(self) -> None:
+        # 台幣 +10.04%、原幣 +9.96%：分別進位後相減是 0.0，實際差 0.08 → 0.1
+        item = self.build(navs=[("2026-10-13", 10.0), ("2026-11-13", 10.996)], fx=[("2026-10-13", 30.0), ("2026-11-13", 30.0 * 11.004 / 10.996)],
+                          benchmark=[("2026-10-13", 1.0), ("2026-11-13", 1.1)])
+        one_month = item["periods"][0]
+        self.assertEqual((one_month["stock_return_pct"], one_month["stock_native_return_pct"]), (10.0, 10.0))
+        self.assertEqual(one_month["fx_effect_pct"], 0.1)
+
+    def test_no_common_day_is_an_error_not_an_empty_item(self) -> None:
+        # 匯率比所有淨值都晚才有、或 0050 全在基金淨值之前：沒有可比的一天，不出半套項目
+        with self.assertRaisesRegex(ValueError, "雙方都有資料"):
+            self.build(fx=[("2027-01-04", 30.0)])
+        with self.assertRaisesRegex(ValueError, "雙方都有資料"):
+            self.build(benchmark=[("2016-01-04", 1.0)])
+
+    def test_fund_issues_pass_through(self) -> None:
+        item = self.build(issues=[{"kind": "stale", "latest": "2026-11-13", "weekdays_behind": 9}])
+        self.assertEqual(item["issues"], [{"kind": "stale", "latest": "2026-11-13", "weekdays_behind": 9}])
+        self.assertEqual(item["nav_date"], "2026-11-13")
+
+    def test_real_seed_native_return_is_the_official_total_return_series(self) -> None:
+        # 原幣含息報酬直接用 total_return_series（上面 2023／2024／2025 對集保公布年報酬的回歸測試同一個算法）；
+        # 匯率固定時台幣報酬＝原幣報酬、匯率影響是 0。
+        import benchmark_compare as bc
+        navs, dists = fc.load_seed("BLKTENAU")
+        series = fc.total_return_series(navs, dists)
+        bench = [(day, 1.0) for day, _ in navs]
+        item = fc.compare_item("BLKTENAU", navs=navs, distributions=dists, fx=[("2022-11-01", 32.0)], benchmark=bench, issues=[])
+        since = {r["period"]: r for r in item["periods"]}["since"]
+        self.assertEqual(since["stock_native_return_pct"], bc._return_pct(series[0][1], series[-1][1]))
+        self.assertEqual(since["stock_return_pct"], since["stock_native_return_pct"])
+        self.assertEqual(since["fx_effect_pct"], 0.0)
 
 
 class WorkflowTest(unittest.TestCase):
@@ -346,13 +384,9 @@ class WorkflowTest(unittest.TestCase):
 
 
 class _FakeLoader:
-    def __init__(self, series, dividends_ok: bool = True):
+    def __init__(self, series):
         self._series = series
-        self.dividends_ok = dividends_ok
         self.asked: list[tuple[str, str]] = []
-
-    def dividends_included(self, market, series, code=None) -> bool:
-        return self.dividends_ok
 
     def series(self, code: str, end: str):
         self.asked.append((code, end))
@@ -360,7 +394,7 @@ class _FakeLoader:
 
 
 class PrecomputeTest(unittest.TestCase):
-    """build_compare_pack 用：每檔基金一份預算好的 JSON 字串；資料不齊就不出那檔，不擋整個資料包。"""
+    """build_compare_pack 用：每檔基金一份預算好的比較項目（JSON 字串，和股票項目同形狀）；資料不齊就不出那檔，不擋整個資料包。"""
 
     def setUp(self) -> None:
         import tempfile
@@ -372,31 +406,50 @@ class PrecomputeTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def test_one_json_text_per_fund(self) -> None:
+    def write_fx(self) -> None:
         import json
         (self.raw / "cbc-usdtwd-2026-11-16.json").write_text(json.dumps({"rows": [["2022-11-30", 31.0], ["2026-11-16", 32.8]]}),
                                                               encoding="utf-8")
+
+    def test_one_compare_item_per_fund(self) -> None:
+        import json
+        self.write_fx()
         funds, problems = fc.precompute(self.loader, "2026-11-10", as_of="2026-11-17", raw_dir=self.raw)
         self.assertEqual((list(funds), problems), (["BLKTENAU"], {}))
-        payload = json.loads(funds["BLKTENAU"])
-        self.assertEqual((payload["schema"], payload["fund"]["code"], payload["data_date"]), ("fund-vs-0050/v1", "BLKTENAU", "2026-11-10"))
+        item = json.loads(funds["BLKTENAU"])
+        self.assertEqual((item["code"], item["kind"], item["status"], item["history"]["to"]), ("BLKTENAU", "fund", "ok", "2026-11-10"))
         self.assertEqual(self.loader.asked, [("0050", "2026-11-10")])
 
-    def test_benchmark_dividends_not_complete_is_flagged(self) -> None:
-        # 個股對照會檢查 0050 的除息表是否完整；基金這邊也一樣，不完整就在頁面上提醒（數字照出）。
+    def test_raw_dir_default_is_read_when_called(self) -> None:
+        # 本機 live_server 不傳 raw_dir；測試換掉 RAW_DIR 時要讀換過的那個。
         import json
-        (self.raw / "cbc-usdtwd-2026-11-16.json").write_text(json.dumps({"rows": [["2022-11-30", 31.0]]}), encoding="utf-8")
-        self.loader.dividends_ok = False
-        funds, _ = fc.precompute(self.loader, "2026-11-10", as_of="2026-11-17", raw_dir=self.raw)
-        self.assertIn({"kind": "benchmark-dividends-incomplete"}, json.loads(funds["BLKTENAU"])["issues"])
+        from unittest import mock
+        self.write_fx()
+        with mock.patch.object(fc, "RAW_DIR", self.raw):
+            funds, _ = fc.precompute(self.loader, "2026-11-10", as_of="2026-11-17")
+        self.assertEqual(json.loads(funds["BLKTENAU"])["code"], "BLKTENAU")
+
+    def test_codes_limits_which_funds(self) -> None:
+        self.write_fx()
+        self.assertEqual(fc.precompute(self.loader, "2026-11-10", as_of="2026-11-17", raw_dir=self.raw, codes=[]), ({}, {}))
 
     def test_taipei_today_is_a_date(self) -> None:
-        import re
         self.assertRegex(fc.taipei_today(), r"^\d{4}-\d{2}-\d{2}$")
 
     def test_no_fx_means_no_fund_and_a_reason(self) -> None:
         funds, problems = fc.precompute(self.loader, "2026-11-10", as_of="2026-11-17", raw_dir=self.raw)
         self.assertEqual((funds, problems), ({}, {"BLKTENAU": "沒有匯率資料"}))
+
+    def test_no_common_day_means_no_fund_and_a_reason(self) -> None:
+        self.write_fx()
+        funds, problems = fc.precompute(_FakeLoader([("2016-01-04", 1.0)]), "2026-11-10", as_of="2026-11-17", raw_dir=self.raw)
+        self.assertEqual(funds, {})
+        self.assertIn("雙方都有資料", problems["BLKTENAU"])
+
+    def test_no_0050_means_no_fund(self) -> None:
+        self.write_fx()
+        funds, problems = fc.precompute(_FakeLoader([]), "2026-11-10", as_of="2026-11-17", raw_dir=self.raw)
+        self.assertEqual((funds, problems), ({}, {"BLKTENAU": "沒有 0050 資料"}))
 
 
 class DailyTest(unittest.TestCase):

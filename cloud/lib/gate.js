@@ -541,8 +541,9 @@ async function handleScreensApi(request, env, path, email, deps) {
 const COMPARE_SCHEMA = "compare-0050-pack/v1";
 const VS_PATH = /^\/api\/stocks\/([^/]+)\/vs-0050$/;
 const COMPARE_PATH = "/api/compare-0050";
-// 基金對照 0050（2026-11-17 本人定案）：/api/funds/<集保基金代碼>/vs-0050，例如 BLKTENAU（貝萊德世界科技 A10）。
-const FUND_PATH = /^\/api\/funds\/([^/]+)\/vs-0050$/;
+// 基金當成一般個股 05 票：基金是資料包 items 裡的一筆（kind "fund"），照基金開關決定這個人看不看得到。
+// 舊的 /api/funds/<代碼>/vs-0050（11-17 基金對照頁）退場，回 404。
+const RETIRED_FUND_PATH = /^\/api\/funds\//;
 const COMPARE_BASIS = "含息總報酬，期初＝1";
 const NOT_FOUND_MESSAGE = "查無此上市或上櫃普通股";
 
@@ -567,23 +568,11 @@ async function consumeMarket(env, email, deps) {
   }
 }
 
-// 基金對照 0050：build 前已預算好整份，原樣回傳；這檔今天資料不齊（或舊資料包沒有 funds）就是 404。代碼格式不對不扣額度。
-async function handleFundCompare(env, email, deps, pack, code, privateError) {
-  if (!CODE_RE.test(code)) return badRequest("基金代碼格式不正確");
-  const limited = await consumeMarket(env, email, deps);
-  if (limited) return limited;
-  const text = Object.hasOwn(pack.funds ?? {}, code) ? pack.funds[code] : null;
-  if (text === null) return privateError(404, { error: "fund-unavailable", message: "這檔基金今天的對照資料還沒準備好" });
-  return rawJson(text);
-}
-
-async function handleCompareApi(request, env, path, email, deps) {
+async function handleCompareApi(request, env, path, email, deps, { isOwner }) {
   if (request.method !== "GET") throw new HttpError(405, "方法不允許");
   const pack = deps.comparePack;
   if (!pack || pack.schema !== COMPARE_SCHEMA) throw new HttpError(503, "資料尚未就緒");
   const privateError = (status, body) => json(status, body, { "cache-control": "private, no-store" });
-  const fund = path.match(FUND_PATH);
-  if (fund) return handleFundCompare(env, email, deps, pack, fund[1], privateError);
   let codes;
   const vs = path.match(VS_PATH);
   if (vs) {
@@ -596,7 +585,11 @@ async function handleCompareApi(request, env, path, email, deps) {
   const limited = await consumeMarket(env, email, deps);
   if (limited) return limited;
   const itemFor = (code) => {
-    if (Object.hasOwn(pack.items, code)) return JSON.parse(pack.items[code]);
+    if (Object.hasOwn(pack.items, code)) {
+      const item = JSON.parse(pack.items[code]);
+      if (item.kind !== "fund" || stockFundsVisible(env, isOwner)) return item;
+      return { code, status: "not-found", message: NOT_FOUND_MESSAGE };
+    }
     if (Object.hasOwn(pack.outside, code)) return { code, status: "outside-universe", ...JSON.parse(pack.outside[code]) };
     return { code, status: "not-found", message: NOT_FOUND_MESSAGE };
   };
@@ -613,7 +606,7 @@ async function handleCompareApi(request, env, path, email, deps) {
     benchmark, items: codes.map(itemFor), notes: pack.notes }));
 }
 
-const isComparePath = (path) => path === COMPARE_PATH || VS_PATH.test(path) || FUND_PATH.test(path);
+const isComparePath = (path) => path === COMPARE_PATH || VS_PATH.test(path);
 
 // U2：每日更新狀態。build 前由 daily_update 產生 status.json，包進 Functions；這裡只原樣回傳。
 // 每頁載入都會讀，所以不扣查詢額度（只有通過登入與核准才看得到）。
@@ -754,7 +747,8 @@ export async function handle(request, env, next, deps = defaultDeps) {
       if (FRIEND_AI_PATH.test(path)) return ownerRefused();
       if (isUserData) return await handleUserDataApi(request, env, path, email, deps, { isOwner: true, policy });
       if (isMarket) return await handleMarketApi(request, env, path, email, deps, { isOwner: true });
-      if (isComparePath(path)) return await handleCompareApi(request, env, path, email, deps);
+      if (isComparePath(path)) return await handleCompareApi(request, env, path, email, deps, { isOwner: true });
+      if (RETIRED_FUND_PATH.test(path)) return fail(404, "找不到");
       if (LIVE_STOCK_PATH.test(path)) return await handleStockLiveApi(request, env, path, email, deps);
       if (TICKS_STOCK_PATH.test(path)) return await handleStockTicksApi(request, env, path, email, deps);
       if (HISTORY_STOCK_PATH.test(path)) return await handleStockHistoryApi(request, env, path, email, deps, { isOwner: true });
@@ -781,7 +775,8 @@ export async function handle(request, env, next, deps = defaultDeps) {
     if (isUserData) return await handleUserDataApi(request, env, path, email, deps, { isOwner: false, policy });
     if (path === "/api/live" || path === "/api/mis-probe") return fail(403, "即時行情僅限站主使用");
     if (isMarket) return await handleMarketApi(request, env, path, email, deps, { isOwner: false });
-    if (isComparePath(path)) return await handleCompareApi(request, env, path, email, deps);
+    if (isComparePath(path)) return await handleCompareApi(request, env, path, email, deps, { isOwner: false });
+    if (RETIRED_FUND_PATH.test(path)) return fail(404, "找不到");
     if (LIVE_STOCK_PATH.test(path) || TICKS_STOCK_PATH.test(path)) return fail(403, "即時行情僅限站主使用");
     if (HISTORY_STOCK_PATH.test(path)) return await handleStockHistoryApi(request, env, path, email, deps, { isOwner: false });
     if (ANNOUNCEMENTS_PATH.test(path)) return await handleAnnouncementsApi(request, env, path, email, deps, { isOwner: false });
