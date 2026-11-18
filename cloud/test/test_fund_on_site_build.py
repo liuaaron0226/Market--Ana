@@ -46,13 +46,23 @@ class FundRowsTests(unittest.TestCase):
         # 只有收盤的 bars（最近 120 筆），最後一筆就是最新淨值；沒有開高低量
         self.assertEqual(len(payload["bars"]), 120)
         self.assertEqual(payload["bars"][-2:], [{"date": "2026-11-13", "close": 17.73}, {"date": "2026-11-16", "close": 17.14}])
-        # 策略與價位：04 票才算，這張回資料不足（不填假數字）
-        self.assertIsNone(payload["strategy"])
-        self.assertEqual((payload["levels"]["status"], payload["levels"]["resistance"], payload["levels"]["support"]),
-                         ("insufficient", [], []))
+        # 策略與價位（04 票）只看淨值算，細節在 test_fund_strategy_levels.py；這裡只驗建置的契約檢查收得下
+        self.assertEqual((payload["strategy"]["strategy_version"], payload["levels"]["status"]), ("fund-nav-close-v1", "available"))
         self.assertEqual(payload["institutional"], [])
         self.assertEqual(payload["notes"]["nav_lag"], "淨值每天一個，約晚 3 個營業日公布")
         build._check_payload("BLKTENAU", payload)
+        self.assertIsNone(build._isolate_strategy("BLKTENAU", payload), "基金策略通過建置檢查，不會被改成 null")
+
+    def test_build_check_rejects_a_broken_fund_strategy_and_fund_strategy_on_a_stock(self) -> None:
+        _, analyses, _ = fund_stock.fund_rows(DATA_DATE, loader=REAL)
+        payload = analyses[0]["payload"]
+        broken = {**payload, "strategy": {**payload["strategy"], "signals": {"close": 17.14}}}
+        with self.assertRaises(ValueError):  # 基金訊號缺月線、季線
+            build._check_payload("BLKTENAU", broken)
+        self.assertIsNotNone(build._isolate_strategy("BLKTENAU", dict(broken)), "壞掉的基金策略在建置時隔離成 null")
+        stock = {**payload, "kind": "common", "market": "上市"}
+        with self.assertRaises(ValueError):  # 股票不能帶基金的只看淨值策略
+            build._check_payload("BLKTENAU", stock)
 
     def test_nav_more_than_six_weekdays_old_is_stale_but_still_analysed(self) -> None:
         rows, analyses, _ = fund_stock.fund_rows("2026-11-27", loader=REAL)
@@ -116,7 +126,8 @@ def staging_db() -> sqlite3.Connection:
 
 def seed_parts() -> tuple[dict, list[dict], list[dict], list[dict]]:
     rows, analyses, _ = fund_stock.fund_rows(DATA_DATE, loader=REAL)
-    payload = {**analyses[0]["payload"], "code": "0050", "kind": "etf", "market": "上市", "as_of": DATA_DATE}
+    # 假的 0050 相容列借基金分析的骨架；只看淨值的策略只屬於基金，0050 這列不帶
+    payload = {**analyses[0]["payload"], "code": "0050", "kind": "etf", "market": "上市", "as_of": DATA_DATE, "strategy": None}
     analyses = analyses + [{"code": "0050", "as_of": DATA_DATE, "payload": payload}]
     manifest = {"version": "liquid-20261118-test-v2", "source_date": "2026-11-08", "source_url": "https://isin.twse.com.tw",
                 "source_sha256": "5" * 64, "built_at": "2026-11-18T12:00:00Z", "catalog_count": 0,
