@@ -39,8 +39,8 @@ export const WEB_FILES = [
   "manifest.webmanifest", "icon-180.png", "icon-192.png", "icon-512.png", "sw.js", "watch-push.js", "watch-push.css",
   // 設定（2026-11-17，本人選樣品 A）：三頁頁首的齒輪浮板（Gemini 用量、到價推播、外觀，帳號管理入口）
   "settings.js", "settings.css",
-  // 基金對照 0050（2026-11-17 本人定案）：自選股頁一列入口（07 票退場）；基金對照頁 11-18 起只轉址到個股頁（03 票）
-  "fund.html", "fund-view.js", "fund-entry.js",
+  // 基金對照 0050（2026-11-17 本人定案）：基金對照頁 11-18 起只轉址到個股頁（03 票）；自選股頁固定的基金列 07 票退場（基金加進自選就是一般的一列）
+  "fund.html", "fund-view.js",
   // 股票輸入框打名稱也能找（2026-11-17 本人）：個股頁頂列與加入比較、自選股新增、首頁核心持有比較共用的選股下拉
   "stock-picker.js", "stock-picker.css",
   // 基金當成一般個股 06 票：基金個股頁的「配息」分類

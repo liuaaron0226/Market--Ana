@@ -94,8 +94,9 @@
                 <button type="submit" id="addWatch">加入自選</button>
                 <button type="button" class="pf-ghost" id="addHolding" aria-expanded="false" aria-controls="addMore">新增庫存</button>
                 <div class="pf-add-more" id="addMore" hidden>
-                  <label>股數<input id="holdingShares" name="shares" type="number" inputmode="numeric" min="1" max="1000000000" step="1"></label>
-                  <label>平均成本<input id="holdingCost" name="average_cost" type="number" inputmode="decimal" min="0.01" max="10000000" step="any"></label>
+                  <!-- 選到基金時兩格換成「單位數」「台幣總成本」（07 票，本人 11-17 定案；portfolio.js setAddKind） -->
+                  <label><span id="holdingSharesLabel">股數</span><input id="holdingShares" name="shares" type="number" inputmode="numeric" min="1" max="1000000000" step="1"></label>
+                  <label><span id="holdingCostLabel">平均成本</span><input id="holdingCost" name="average_cost" type="number" inputmode="decimal" min="0.01" max="10000000" step="any"></label>
                   <label class="pf-wide">備註<input id="holdingNote" name="note" maxlength="200" placeholder="選填，最多 200 字"></label>
                   <button type="button" class="pf-wide" id="saveHolding">儲存庫存</button>
                 </div>
@@ -106,8 +107,6 @@
         </div>
         <p class="pf-form-status pf-list-status" id="listStatus" role="status"></p>
         <ol class="hv-rows" id="holdingRows"></ol>
-        <!-- 基金對照入口（本人 2026-11-17）：固定一列、不是自選的一筆，由 fund-entry.js 畫（只給站主） -->
-        <div class="pf-fund-slot" id="fundEntry"></div>
       </section>
     </main>
   </div>
@@ -117,10 +116,8 @@
   <script src="holdings-rows.js?v=20261117-m53" defer></script>
   <script src="portfolio-list.js?v=20261117-m53" defer></script>
   <script src="swipe-rows.js?v=20261117-m53" defer></script>
-  <script src="stock-picker.js?v=20261118-f3" defer></script>
-  <script src="portfolio.js?v=20261118-f3" defer></script>
-  <script src="fund-view.js?v=20261117-f1" defer></script>
-  <script src="fund-entry.js?v=20261117-f1" defer></script>
+  <script src="stock-picker.js?v=20261118-f7" defer></script>
+  <script src="portfolio.js?v=20261118-f7" defer></script>
   <script src="chart-menus.js?v=20261117-m53" defer></script>
   <script src="desk-tilt.js?v=20261117-m53" defer></script>
   <script src="settings.js?v=20261117-m53" defer></script>
