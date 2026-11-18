@@ -131,3 +131,8 @@ test("缺了哪幾層：I 票第二輪三層（估值、借券與季 EPS、個�
   const record = { missing_layers: ["valuation", "lending_eps", "signals"] };
   assert.equal(logic.missingOf(record), "估值、借券與季 EPS、個股五塊訊號");
 });
+
+test("缺了哪幾層：J 票的富果盤中、新聞標題、國外同類股也寫中文名", () => {
+  const record = { missing_layers: ["intraday", "headlines", "peers"] };
+  assert.equal(logic.missingOf(record), "富果盤中、新聞標題、國外同類股");
+});
