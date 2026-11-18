@@ -523,15 +523,37 @@ def _nomination_problem(structured: Any, code: str) -> str | None:
     return None
 
 
+# 韓股與指數（EODHD）全部關注股合計的上限；和 cloud/lib/watch-peers.js 的 EODHD_PEER_LIMIT、
+# overseas_peers.py 的 EODHD_SYMBOL_LIMIT 是同一個數字，要調整得三處一起改。
+LIMITED_PEER_MARKETS = ("KR", "INDEX")
+LIMITED_PEER_LIMIT = 12
+
+
 def _nomination_sql(record: Mapping[str, Any], owner_email: str, at: str) -> list[str]:
-    """名單是站主的資料（0016）：提名中的每一檔一列、改動紀錄一筆。重發不多一筆，也不動站主已確認或移除的列。"""
+    """名單是站主的資料（0016）：每一檔一列、改動紀錄一筆。重發不多一筆，也不動站主已有（含移除）的列。
+
+    本人 2026-11-18「國外同類股直接預設都幫我加入，不用我再確認，反正我事後都可以加入或移除」：提名直接進名單
+    （confirmed）。韓股與指數照網站加一檔時同一個上限（已確認、關注還開著的，不同代號合計 12）：滿了那一檔才留成
+    「提名・還沒確認」（nominated），站主騰出位置後可以在個股頁確認。"""
     from ledger_core import sql_literal as q
     out = []
+    columns = "INSERT INTO watch_peers (email, code, symbol, name, market, status, reason, added_by, updated_at) "
     for peer in record["listed"]:
         email, code, symbol = q(owner_email), q(record["code"]), q(peer["symbol"])
-        out.append("INSERT INTO watch_peers (email, code, symbol, name, market, status, reason, added_by, updated_at) "
-                   f"VALUES ({email}, {code}, {symbol}, {q(peer['name'])}, {q(peer['market'])}, 'nominated', "
-                   f"{q(peer['reason'])}, 'gemini', {q(at)}) ON CONFLICT (email, code, symbol) DO NOTHING;")
+        values = (email, code, symbol, q(peer["name"]), q(peer["market"]))
+        tail = f"{q(peer['reason'])}, 'gemini', {q(at)}"
+        if peer["market"] in LIMITED_PEER_MARKETS:
+            markets = ", ".join(q(market) for market in LIMITED_PEER_MARKETS)
+            out.append(columns + f"SELECT {', '.join(values)}, 'confirmed', {tail} "
+                       "WHERE (SELECT COUNT(DISTINCT p.symbol) FROM watch_peers p JOIN user_watchlist w "
+                       "ON w.email = p.email AND w.code = p.code "
+                       f"WHERE p.email = {email} AND p.status = 'confirmed' AND w.watching = 1 AND p.market IN ({markets}) "
+                       f"AND p.symbol != {symbol}) < {LIMITED_PEER_LIMIT} "
+                       "ON CONFLICT (email, code, symbol) DO NOTHING;")
+            status = "nominated"   # 上面因為額度滿了沒寫進去，才會落到這一句
+        else:
+            status = "confirmed"
+        out.append(columns + f"VALUES ({', '.join(values)}, '{status}', {tail}) ON CONFLICT (email, code, symbol) DO NOTHING;")
         out.append("INSERT INTO watch_peer_events (email, code, symbol, name, action, at) "
                    f"SELECT {email}, {code}, {symbol}, {q(peer['name'])}, 'nominate', {q(at)} "
                    "WHERE NOT EXISTS (SELECT 1 FROM watch_peer_events "
