@@ -894,6 +894,8 @@ class MarketLayersTests(LedgerTestCase):
         for words in ("融資餘額的增減、使用率", "不能單獨當成看多或看空的理由", "低檔有承接", "消化浮額", "籌碼沉澱",
                       "和指數、成交量、法人方向並列", "寫出矛盾", "不替融資下結論"):
             self.assertIn(words, rules)
+        # 理由不能有中文數字（「三者」會被擋）：乾跑時模型照抄規則裡的「三者」連兩次被擋成漏記，規則改成不帶數字的說法
+        self.assertNotIn("三者", rules)
         # 本人 2026-11-18 晚：產業成交比重的分母維持上市＋上櫃，提示寫清楚分母
         self.assertIn("上市＋上櫃全部產業成交金額合計", rules)
         self.assertIn("分母不是加權指數的成交金額", rules)
