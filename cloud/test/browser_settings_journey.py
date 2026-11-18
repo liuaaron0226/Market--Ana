@@ -42,6 +42,10 @@ def seed_sql() -> str:
                                     model="gemini-3.8-flash")
     sql += gemini_usage.snapshot_sql(buckets, task="forecast-ledger", run_id="2", taken_at=iso(now - timedelta(minutes=9)),
                                      model="gemini-4-argon")
+    # 本人 11-19：籌碼與資金白話（每日更新那支排程）記思考程度、失敗、乾跑（遷移 0029）
+    for run_id, outcome, dry in (("3", "failed", False), ("4", "ok", True)):
+        sql += gemini_usage.snapshot_sql(buckets, task="daily-update", run_id=run_id, taken_at=iso(now - timedelta(minutes=20)),
+                                         model="gemini-4-argon", call={"effort": "medium", "outcome": outcome, "dry_run": dry})
     sql += ("INSERT INTO users (email, nickname, status, applied_at) VALUES "
             f"('{FRIEND}', 'F', 'approved', '2026-11-09T00:00:00Z'), ('new@example.com', 'N', 'pending', '2026-11-17T00:00:00Z');\n")
     return sql
@@ -107,6 +111,8 @@ def owner_page(journey: Journey, browser, name: str, path: str, width: int) -> N
                   meters == [["5 小時", "19%", True], ["本週", "93%", False], ["本週", "99%", False]], meters)
     today = page.eval_on_selector_all("#settingsDialog .st-today li", "ls => ls.map(l => l.innerText.replace(/\\s+/g, ' '))")
     journey.check(f"{tag}：今天各任務用中文名稱與模型", "自選股判斷與提名 Flash 1" in today and "晚間事前預測 Argon 1" in today, today)
+    journey.check(f"{tag}：籌碼與資金白話標思考程度、失敗與乾跑（乾跑不計）",
+                  "籌碼與資金白話 失敗 1・乾跑 1（不計） Argon・思考中 1" in today, today)
     foot = page.locator("#settingsDialog .st-foot a")
     journey.check(f"{tag}：最下面是帳號管理，再下面是登出（換帳號，本人 11-18）",
                   foot.count() == 2 and foot.nth(0).get_attribute("href") == "/admin/"
