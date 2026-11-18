@@ -133,7 +133,8 @@ WORKING_SET: tuple[Item, ...] = (
     # 集保大戶持股：開放資料只有最新一週，歷史靠每週存檔累積（每份約 300KB，留 60 週）。
     Item("data/tdcc-holders/weekly", recent_files=60),
     Item("data/liquid-universe"),
-    Item("data/market-screen-snapshots"),
+    # 選股快照與資金輪動：每日更新發布後放一份進來（daily_update.keep_screen_snapshots），每一種只留最近 30 天。
+    Item("data/market-screen-snapshots", recent_files=30),
     # G4-2W：跨日確認／波段狀態；EODHD／OFR 原件每天重取，VIX／SOX 不進 R2。
     Item("data/level-signals/state.json"),
     # U3：Actions 每次都是新機器。執行紀錄讓同一天後面的 cron 時段看到 already-done（不重做、不重部署），

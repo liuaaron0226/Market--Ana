@@ -593,6 +593,33 @@ def _saved_build_inputs_problem(manifest: dict) -> str | None:
     return None
 
 
+# 2026-11-19 查到：當天的選股快照與資金輪動只寫在 runner 的暫存目錄，工作集的 data/market-screen-snapshots 一直停在
+# 舊的那批，讀它的大盤事前預測（產業成交比重、選股快照兩層）與 AI 解讀天天拿不到當天的。發布之後把那一天的整批
+# 複製一份過去（同樣的資料夾結構；快照封存後不再改，已經有的不覆寫），工作集同步回 R2 時就帶著走。
+SCREEN_SNAPSHOT_KEEP = ROOT / "data/market-screen-snapshots"
+
+
+def keep_screen_snapshots(source: Path, target: Path, data_date: str) -> dict:
+    """把 ``source/<種類>/<資料日>.json`` 複製到 ``target`` 同一個位置。同內容算 unchanged；內容不同不覆寫，列進 conflicts。"""
+    result: dict = {"copied": 0, "unchanged": 0, "conflicts": []}
+    for path in sorted(Path(source).glob(f"*/{data_date}.json")):
+        relative = path.relative_to(source)
+        destination = Path(target) / relative
+        data = path.read_bytes()
+        if destination.exists():
+            if destination.read_bytes() == data:
+                result["unchanged"] += 1
+            else:
+                result["conflicts"].append(relative.as_posix())
+            continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        partial = destination.with_name(destination.name + ".partial")
+        partial.write_bytes(data)
+        os.replace(partial, destination)
+        result["copied"] += 1
+    return result
+
+
 def _redeploy_from_working_set(result: dict, *, dry_run: bool, log_dir: Path, work_root: Path) -> dict:
     """還沒有保存的建置輸入時，用工作集重建上一次發布那天的網頁並只部署程式（本人 2026-11-14「要，現在做」）。
 
@@ -999,10 +1026,14 @@ def real_steps() -> list[Step]:
         out = ctx.work_dir / "market-screen-snapshots"
         # 快照不可覆寫：同一資料日重試時沿用已封存的那批，不用新的發布時間重發（否則會被衝突保護擋下）。
         if (out / "universe" / f"{ctx.data_date}.json").exists():
-            return {"reused": str(out)}
-        return _sh([sys.executable, "market_screens_publish.py", "--as-of", ctx.data_date,
-                    "--published-at", datetime.now(TPE).isoformat(timespec="seconds"),
-                    "--snapshot-root", str(out), "--universe-root", str(ctx.work_dir / "liquid-universe")])
+            result = {"reused": str(out)}
+        else:
+            result = _sh([sys.executable, "market_screens_publish.py", "--as-of", ctx.data_date,
+                          "--published-at", datetime.now(TPE).isoformat(timespec="seconds"),
+                          "--snapshot-root", str(out), "--universe-root", str(ctx.work_dir / "liquid-universe")])
+        if not ctx.dry_run:   # 乾跑不動工作集
+            result["kept_in_working_set"] = keep_screen_snapshots(out, SCREEN_SNAPSHOT_KEEP, ctx.data_date)
+        return result
 
     def build_seed(ctx: RunContext) -> dict:
         out = ctx.work_dir / "seed"
