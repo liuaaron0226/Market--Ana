@@ -61,6 +61,13 @@ test("站主可進站與後台", async () => {
   assert.equal(await (await req("/admin", { email: OWNER })).text(), "static-ok");
 });
 
+test("/api/me 帶登出（換帳號）網址：Access 登入網域的 logout，站主與朋友都有（本人 11-18「沒有登出這個選項」）", async () => {
+  await seed("ok@x.com", "approved");
+  const logout = `${TEAM}/cdn-cgi/access/logout`;
+  assert.deepEqual(await (await req("/api/me", { email: OWNER })).json(), { email: OWNER, status: "approved", owner: true, logout_url: logout });
+  assert.deepEqual(await (await req("/api/me", { email: "ok@x.com" })).json(), { email: "ok@x.com", status: "approved", owner: false, logout_url: logout });
+});
+
 test("已核准者可進站，但進不了後台", async () => {
   await seed("ok@x.com", "approved");
   // 票 06 起整包資料檔不再提供，改用頁面檔驗證可進站。

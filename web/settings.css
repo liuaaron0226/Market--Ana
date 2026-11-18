@@ -114,6 +114,8 @@
 .st-foot { margin-top: 8px; }
 .st-link { display: flex; align-items: center; justify-content: space-between; min-height: 48px; border-top: 1px solid var(--hair); color: var(--ink); text-decoration: none; }
 .st-link-end { display: inline-flex; align-items: center; gap: 6px; color: var(--dim); font-size: 13px; }
+/* 登出（換帳號）：旁邊寫目前登入的信箱，太長就省略 */
+.st-who { max-width: 52vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .st-chev { color: var(--faint); font-size: 16px; }
 .st-link:hover .st-chev { color: var(--ink); }
 

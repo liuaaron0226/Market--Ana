@@ -695,6 +695,10 @@ async function handleMarketApi(request, env, path, email, deps, options = {}) {
   return json(200, { version: pack.version, kind, date, tables }, headers);
 }
 
+// 登出（換帳號）：登出 Access 登入網域，所有應用的登入一起清掉，下次進站要重新收驗證碼（本人 11-18「沒有登出這個選項」）。
+// 只登出本站（本站網址的 /cdn-cgi/access/logout）的話，Access 的登入還在，回來會自動用同一個帳號登入，換不了帳號。
+const logoutUrl = (env) => `${String(env.TEAM_DOMAIN).replace(/\/+$/, "")}/cdn-cgi/access/logout`;
+
 export async function handle(request, env, next, deps = defaultDeps) {
   const { TEAM_DOMAIN, MAIN_AUD, APPLY_AUD, OWNER_EMAIL, DB } = env;
   if (!TEAM_DOMAIN || !MAIN_AUD || !APPLY_AUD || !OWNER_EMAIL || !DB) return fail(503, "服務設定未完成");
@@ -740,7 +744,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
       if (path === "/api/features") return json(200, policy);
       if (path === "/api/live") return await handleIndexLiveApi(request, env, email, deps);
       if (path.startsWith("/api/admin/")) return await handleAdminApi(request, env, path, owner);
-      if (path === "/api/me") return json(200, { email, status: "approved", owner: true });
+      if (path === "/api/me") return json(200, { email, status: "approved", owner: true, logout_url: logoutUrl(env) });
       if (path === GEMINI_USAGE_PATH) return await handleGeminiUsageApi(request, env, deps, { isOwner: true });
       if (path === "/api/holdings/level" && !policy.features.level_advice) return levelDisabled();
       if (FORECAST_PATH.test(path)) return await handleForecastApi(request, env, path, { isOwner: true, policy });
@@ -766,7 +770,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
       return fail(403, "帳號尚未核准或已停用");
     }
     if (isAdmin) return fail(403, "沒有管理權限");
-    if (path === "/api/me") return json(200, { email, status, owner: false });
+    if (path === "/api/me") return json(200, { email, status, owner: false, logout_url: logoutUrl(env) });
     if (path === GEMINI_USAGE_PATH) return await handleGeminiUsageApi(request, env, deps, { isOwner: false });
     if (path === "/api/features") return json(200, policyForViewer(policy, false, env));
     if (path === "/api/holdings/level" && !policy.features.level_advice) return levelDisabled();

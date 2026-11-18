@@ -107,7 +107,10 @@ def owner_page(journey: Journey, browser, name: str, path: str, width: int) -> N
                   meters == [["5 小時", "19%", True], ["本週", "93%", False], ["本週", "99%", False]], meters)
     today = page.eval_on_selector_all("#settingsDialog .st-today li", "ls => ls.map(l => l.innerText.replace(/\\s+/g, ' '))")
     journey.check(f"{tag}：今天各任務用中文名稱與模型", "自選股判斷與提名 Flash 1" in today and "晚間事前預測 Argon 1" in today, today)
-    journey.check(f"{tag}：最下面是帳號管理", page.locator("#settingsDialog .st-foot a").get_attribute("href") == "/admin/")
+    foot = page.locator("#settingsDialog .st-foot a")
+    journey.check(f"{tag}：最下面是帳號管理，再下面是登出（換帳號，本人 11-18）",
+                  foot.count() == 2 and foot.nth(0).get_attribute("href") == "/admin/"
+                  and foot.nth(1).get_attribute("href").endswith("/cdn-cgi/access/logout") and "登出" in foot.nth(1).inner_text())
     page.screenshot(path=str(OUT / f"owner-{name}-{width}-usage.png"))
 
     page.get_by_role("tab", name="通知").click()
@@ -157,8 +160,10 @@ def friend_page(journey: Journey, browser, width: int) -> None:
     page.wait_for_selector("#settingsDialog[open]")
     page.wait_for_timeout(300)
     s = state(page)
-    journey.check(f"{tag}：只有外觀，不顯示籤列，也沒有帳號管理",
-                  s["tabBarHidden"] and page.locator("#settings-look").is_visible() and page.locator("#settingsDialog .st-foot a").count() == 0, s)
+    foot = page.locator("#settingsDialog .st-foot a")
+    journey.check(f"{tag}：只有外觀，不顯示籤列，也沒有帳號管理；最下面只有登出（換帳號，本人 11-18）",
+                  s["tabBarHidden"] and page.locator("#settings-look").is_visible() and foot.count() == 1
+                  and foot.first.get_attribute("href").endswith("/cdn-cgi/access/logout"), s)
     page.screenshot(path=str(OUT / f"friend-home-{width}.png"))
     context.close()
 

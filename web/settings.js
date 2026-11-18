@@ -331,12 +331,26 @@
     if (count) end.append(el('b', 'num', String(count)), ` 人等待核准`);
     end.append(el('span', 'st-chev', '›'));
     a.append(end);
-    foot.replaceChildren(a);
+    foot.prepend(a);
+  }
+
+  // 登出（換帳號）：每個登入的人都有，寫出目前登入的信箱（本人 11-18「沒有登出這個選項」）。
+  // 登出的是 Access 登入網域，回到網站要重新收驗證碼，才能換成別的信箱。
+  function logoutLink(me) {
+    if (!me?.logout_url) return;
+    const a = el('a', 'st-link st-logout', '登出（換帳號）');
+    a.href = me.logout_url;
+    const end = el('span', 'st-link-end');
+    end.append(el('span', 'st-who', me.email || ''), el('span', 'st-chev', '›'));
+    a.append(end);
+    foot.append(a);
   }
 
   async function discover() {
     let me = null;
     try { me = await getJson('/api/me'); } catch (_) { /* 本機版沒有帳號 */ }
+    foot.replaceChildren();
+    logoutLink(me);
     if (me?.owner) {
       access.usage = true;
       // 到價推播跟著自選股關注的開關（和原本自選股頁的鈴鐺同一個判斷）；/api/features 對站主不扣額度
