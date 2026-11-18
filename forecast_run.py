@@ -32,6 +32,7 @@ import foreign_futures
 import gemini_models
 import licensed_inputs
 import market_layers
+import news_feeds
 import market_trend
 import overseas_inputs as oi
 from level_signals import trading_day_status
@@ -292,7 +293,7 @@ REPLAY_LICENSED = {"intraday": {"status": "missing", "reason": "重播：舊日�
 
 
 def licensed_layers(base_date: str | None, *, fugle: Any = None, news_query: Callable[[str], list[dict]] | None = None,
-                    cutoff: str) -> tuple[dict[str, Any], dict[str, str]]:
+                    cutoff: str, feeds: Callable[..., Any] | None = None) -> tuple[dict[str, Any], dict[str, str]]:
     """J 票：寫之前抓加權指數的富果盤中、查大環境新聞（網站資料庫 watch_news 裡對不到個股的那些，code 是空字串）。
     只用寫的那一刻（cutoff）以前已經有的；富果回的不是基準日就整塊缺（晨間版因此不會看到開盤日的盤中）。"""
     errors: dict[str, str] = {}
@@ -300,13 +301,26 @@ def licensed_layers(base_date: str | None, *, fugle: Any = None, news_query: Cal
         return {}, errors
     intraday, fugle_errors = licensed_inputs.fetch_index_intraday(fugle, base_date)
     errors.update({f"intraday.{key}": value for key, value in fugle_errors.items()})
-    headlines: dict[str, Any] = {"status": "missing", "reason": "沒有連到網站資料庫"}
+    # 本人 2026-11-19「另外還要加入美國的前幾大報社」：寫之前直接抓 RSS（news_feeds.MARKET_FEEDS）。
+    us_items = None
+    if feeds is not None:
+        import news_feeds
+        try:
+            rows, feed_errors = feeds(news_feeds.MARKET_FEEDS, now=cutoff)
+            errors.update({f"news.{name}": kind for name, kind in feed_errors.items()})
+            us_items = licensed_inputs.headline_items(rows, cutoff=cutoff, limit=licensed_inputs.US_NEWS_LIMIT)
+        except Exception as error:  # noqa: BLE001
+            errors["news.feeds"] = type(error).__name__
+    headlines: dict[str, Any] = licensed_inputs.headlines_layer(None, cutoff, us_items)
+    if headlines["status"] == "missing":
+        headlines["reason"] = "沒有連到網站資料庫，美國新聞也沒抓到"
     if news_query is not None:
         since = (datetime.fromisoformat(cutoff) - timedelta(days=licensed_inputs.HEADLINE_DAYS + 1)).date().isoformat()
         try:
             rows = news_query("SELECT code, link, source, title, summary, published_at, fetched_at FROM watch_news "
                               f"WHERE code = '' AND published_at >= '{since}'")
-            headlines = licensed_inputs.headlines_layer(licensed_inputs.headline_items(rows, cutoff=cutoff), cutoff)
+            headlines = licensed_inputs.headlines_layer(licensed_inputs.headline_items(rows, cutoff=cutoff), cutoff,
+                                                        us_items)
         except Exception as error:  # noqa: BLE001 — 查不到只讓新聞那一層缺
             errors["news"] = type(error).__name__
             headlines = {"status": "missing", "reason": f"讀不到新聞（{type(error).__name__}）"}
@@ -404,6 +418,7 @@ def run_evening(
     ofr_fetch: Callable[[], list[dict[str, Any]]] | None = None,
     fugle: Any = None,
     news_query: Callable[[str], list[dict]] | None = None,
+    feeds: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
     """``ofr_fetch``：寫之前抓 OFR 金融壓力（命令列預設 ``market_layers.fetch_ofr``）；沒給或抓失敗那一層寫缺。
     ``fugle``、``news_query``：J 票的富果與新聞（命令列預設讀 FUGLE_API_KEY、用 wrangler 唯讀查網站資料庫）。"""
@@ -425,7 +440,7 @@ def run_evening(
                                                 base_date=daily[-1]["date"] if daily else None, ofr=ofr_fetch)
     licensed, licensed_errors = (({**REPLAY_LICENSED}, {}) if as_of else
                                  licensed_layers(daily[-1]["date"] if daily else None, fugle=fugle,
-                                                 news_query=news_query,
+                                                 news_query=news_query, feeds=feeds,
                                                  cutoff=clock().astimezone(fl.TAIPEI).isoformat()))
     data = _with_archive_names(build_day_input(analysis, method_text, layer, foreign_sources,
                                                market_sources=market_sources, licensed=licensed),
@@ -493,6 +508,7 @@ def run_morning(
     ofr_fetch: Callable[[], list[dict[str, Any]]] | None = None,
     fugle: Any = None,
     news_query: Callable[[str], list[dict]] | None = None,
+    feeds: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
     """寫一份晨間版：開盤日 session_date 的早上、開盤前 15 分鐘之前鎖定；基準日是前一個台股交易日。
 
@@ -525,7 +541,7 @@ def run_morning(
     foreign_sources = load_foreign_sources(data_root, seeds_root)
     market_sources = market_layers.load_sources(data_root, analysis_path, base_date=base_date, ofr=ofr_fetch)
     licensed, licensed_errors = (({**REPLAY_LICENSED}, {}) if replay else
-                                 licensed_layers(base_date, fugle=fugle, news_query=news_query,
+                                 licensed_layers(base_date, fugle=fugle, news_query=news_query, feeds=feeds,
                                                  cutoff=clock().astimezone(fl.TAIPEI).isoformat()))
     data = _with_archive_names(build_day_input(analysis, method_text, layer, foreign_sources, edition="morning",
                                                session_date=session_date, market_sources=market_sources,
@@ -589,7 +605,7 @@ def main(argv: list[str] | None = None) -> int:
                   overseas_dir=args.overseas_dir, data_root=args.data_root,
                   ofr_fetch=None if args.no_ofr_fetch else market_layers.fetch_ofr,
                   # J 票：富果（FUGLE_API_KEY）與網站資料庫的新聞（wrangler 唯讀查）；沒有就那一層寫缺。
-                  fugle=licensed_inputs.fugle_from_env(), news_query=_news_query())
+                  fugle=licensed_inputs.fugle_from_env(), news_query=_news_query(), feeds=news_feeds.fetch)
     if args.edition == "morning":
         if not args.session_date or args.date:
             parser.error("晨間版要給 --session-date，不接受 --date")

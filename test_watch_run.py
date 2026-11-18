@@ -579,6 +579,21 @@ class LicensedSourceTests(unittest.TestCase):
         self.assertEqual(found["peers"]["peers"][0]["change_1d_pct"], 10.0)
         self.assertTrue(all("DELETE" not in sql and "INSERT" not in sql for sql in self.asked))   # 只查不寫
 
+    def test_taiwan_industry_feeds_are_matched_to_each_stock(self):
+        # 本人 2026-11-19：加入整理產業消息的網站；依公司名稱、代號與官方產業別對到關注股
+        rows = [{"source": "ctee-industry", "link": "c1", "title": "半導體設備交期拉長", "summary": "",
+                 "published_at": "2026-11-06T05:00:00Z", "fetched_at": "2026-11-06T12:00:00Z"},
+                {"source": "udn-industry", "link": "u1", "title": "航運運價回升", "summary": "",
+                 "published_at": "2026-11-06T05:30:00Z", "fetched_at": "2026-11-06T12:00:00Z"}]
+        asked = []
+        source = wr.LocalSource(feeds=lambda names, *, now: (asked.append(tuple(names)) or rows, {}))
+        source._industries = {"2330": ("台積電", "半導體業")}
+        found = source.licensed(["2330"], base_date="2026-11-06", before="2026-11-06",
+                                cutoff="2026-11-06T20:00:00+08:00")["2330"]
+        self.assertEqual(asked, [("udn-industry", "ctee-industry", "cnyes-tw-stock")])
+        self.assertEqual([(item["title"], item["match"], item["source"]) for item in found["news_headlines"]],
+                         [("半導體設備交期拉長", "industry", "工商時報 產業")])
+
     def test_without_a_connection_both_layers_are_missing(self):
         found = wr.LocalSource().licensed(["2330"], base_date="2026-11-06", before="2026-11-06",
                                           cutoff="2026-11-06T20:00:00+08:00")

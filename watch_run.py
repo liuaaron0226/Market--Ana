@@ -70,11 +70,11 @@ class LocalSource:
     個股頁的計算（``twon_analysis``）固定讀程式旁邊的 ``data/``，所以兩者要是同一個地方。"""
 
     def __init__(self, root: Path | str = ROOT, *, fugle: Any = None, query: Callable[[str], list[dict]] | None = None,
-                 owner_email: str = ""):
+                 owner_email: str = "", feeds: Callable[..., Any] | None = None):
         """``fugle``：富果行情（``licensed_inputs.Fugle``，沒有就是那一層缺）；``query``：網站資料庫的唯讀查詢
         （新聞與國外同類股存在那裡，排程給 ``watch_news._wrangler_query``；沒有就是那兩層缺）。"""
         self.root = Path(root)
-        self.fugle, self.query, self.owner_email = fugle, query, owner_email
+        self.fugle, self.query, self.owner_email, self.feeds = fugle, query, owner_email, feeds
         self.fugle_errors: dict[str, dict[str, str]] = {}
         # 執行紀錄（乾跑時上傳成產物）：每一檔富果那一層有沒有值、是哪一天、缺哪幾部分。
         self.fugle_status: dict[str, dict[str, Any]] = {}
@@ -179,6 +179,10 @@ class LocalSource:
         self.fugle_errors, self.fugle_status, self.licensed_errors = {}, {}, {}
         out: dict[str, dict[str, Any]] = {code: {"intraday": self._intraday(code, base_date)} for code in codes}
         safe = [code for code in codes if re.fullmatch(r"[0-9A-Za-z]{1,10}", code)]
+        industry_news = self._industry_news(safe, cutoff)
+        for code in safe:
+            if industry_news.get(code):
+                out[code]["news_headlines"] = industry_news[code]
         if self.query is None or not safe:
             return out
         listed = ",".join(f"'{code}'" for code in safe)
@@ -188,8 +192,9 @@ class LocalSource:
             rows = self.query("SELECT code, link, source, title, summary, published_at, fetched_at FROM watch_news "
                               f"WHERE code IN ({listed}) AND published_at >= '{since}'")
             for code in safe:
-                out[code]["news_headlines"] = licensed_inputs.headline_items(
-                    [row for row in rows if row.get("code") == code], cutoff=cutoff)
+                own = licensed_inputs.headline_items([row for row in rows if row.get("code") == code], cutoff=cutoff)
+                merged = (own or []) + (industry_news.get(code) or [])
+                out[code]["news_headlines"] = merged or None
         except Exception as error:  # noqa: BLE001 — 查不到只讓新聞那一層缺
             self.licensed_errors["headlines"] = type(error).__name__
         try:
@@ -208,6 +213,34 @@ class LocalSource:
                     before=before, cutoff=cutoff)
         except Exception as error:  # noqa: BLE001 — 查不到只讓同類股那一層缺
             self.licensed_errors["peers"] = type(error).__name__
+        return out
+
+    def _industry_news(self, codes: Sequence[str], cutoff: str) -> dict[str, list[dict[str, Any]]]:
+        """本人 2026-11-19「有幾個網站是專門在整理不同產業的消息」：經濟日報、工商時報、鉅亨網的 RSS（寫之前抓一次），
+        依公司名稱、代號與官方產業別對到每一檔（news_feeds.match_stock），每檔最多 INDUSTRY_NEWS_LIMIT 則。"""
+        import licensed_inputs
+        import news_feeds
+        import watch_inputs
+        if self.feeds is None or not codes:
+            return {}
+        try:
+            rows, errors = self.feeds(news_feeds.INDUSTRY_FEEDS, now=cutoff)
+        except Exception as error:  # noqa: BLE001
+            self.licensed_errors["industry_news"] = type(error).__name__
+            return {}
+        if errors:
+            self.licensed_errors["industry_news"] = dict(errors)
+        if self._industries is None:
+            try:
+                self._industries = watch_inputs.catalog_industries(self.root)
+            except Exception:  # noqa: BLE001 — 名錄讀不到就只靠代號比對
+                self._industries = {}
+        out = {}
+        for code in codes:
+            name, industry = self._industries.get(code) or (None, None)
+            matched = news_feeds.match_stock(rows, code=code, name=name, industry=industry)
+            out[code] = licensed_inputs.headline_items(matched, cutoff=cutoff,
+                                                       limit=licensed_inputs.INDUSTRY_NEWS_LIMIT) or []
         return out
 
     def _sector(self, code: str, base_date: str) -> dict[str, Any] | None:
@@ -953,13 +986,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     import licensed_inputs
+    import news_feeds
     from watch_news import _wrangler_query
     watchlist = json.loads(args.watchlist.read_text(encoding="utf-8"))
     common = dict(watchlist=watchlist, ledger=args.ledger, forecast_ledger=args.forecast_ledger,
                   method_path=args.method, model_bin=args.agy_bin, model=args.model,
                   # J 票：富果金鑰 FUGLE_API_KEY；新聞與國外同類股從網站資料庫唯讀查（和關注清單同一個連線）。
                   source=LocalSource(fugle=licensed_inputs.fugle_from_env(), query=_wrangler_query,
-                                     owner_email=os.environ.get("OWNER_EMAIL", "")),
+                                     owner_email=os.environ.get("OWNER_EMAIL", ""), feeds=news_feeds.fetch),
                   dry_run=args.dry_run, sql_output=args.sql_output, log_output=args.log_output,
                   call_budget=args.call_budget, rewrite_today=args.rewrite_today)
     if args.edition == "morning":

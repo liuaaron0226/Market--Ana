@@ -35,6 +35,8 @@ HEADLINE_LIMIT = 8
 SUMMARY_MAX = 200
 PEER_CHANGE_DAYS = 5
 SOURCE_NAMES = {"yahoo": "Yahoo股市", "cna-finance": "中央社", "cna-intworld": "中央社", "cna-technology": "中央社"}
+INDUSTRY_NEWS_LIMIT = 5        # 自選股：產業新聞網站對到的，另外最多幾則
+US_NEWS_LIMIT = 8              # 大盤：美國那幾家最多幾則
 
 FUGLE_ORIGIN = "https://api.fugle.tw"
 FUGLE_INTRADAY = "/marketdata/v1.0/stock/intraday/"
@@ -58,7 +60,9 @@ NOTES = {
                       "單位不一，所以不給量。"
                       "盤中走勢只描述當天，不能單獨決定方向。"
                       "理由裡不得寫出時刻、張數、百分比、價位或新聞裡的數字（也不要寫「六十分線」「十點」這種中文數字），要講時段就寫早盤、盤中、尾盤，要講 60 分 K 就寫小時線。",
-    "headlines": "新聞標題與摘要（Yahoo股市、中央社），只到寫的那一刻以前已經發布、也已經抓到的；只有標題、摘要與發布時間，"
+    "headlines": "新聞標題與摘要（Yahoo股市、中央社；自選股另有經濟日報、工商時報、鉅亨網的產業新聞，match 是 company"
+                 "（提到這家公司）或 industry（只提到同產業）；大盤另有美國 CNBC、紐約時報、華爾街日報的英文新聞，在 us_items），"
+                 "只到寫的那一刻以前已經發布、也已經抓到的；只有標題、摘要與發布時間，"
                  "沒有全文。新聞是當時的消息與說法，標題常比內容誇張；不得把標題當成事實或價格會怎麼走的依據，"
                  "不能單獨決定方向，也不得寫出摘要裡沒有的內容。"
                  "理由裡不得寫出時刻、張數、百分比、價位或新聞裡的數字（也不要寫「六十分線」「十點」這種中文數字），要講時段就寫早盤、盤中、尾盤，要講 60 分 K 就寫小時線。",
@@ -70,6 +74,7 @@ PARAMETERS: dict[str, Any] = {
     "version": VERSION, "book_levels": BOOK_LEVELS, "bar_minutes": BAR_MINUTES,
     "hourly_history_days": HOURLY_HISTORY_DAYS, "headline_days": HEADLINE_DAYS, "headline_limit": HEADLINE_LIMIT,
     "summary_max": SUMMARY_MAX, "peer_change_days": PEER_CHANGE_DAYS, "notes": NOTES,
+    "industry_news_limit": INDUSTRY_NEWS_LIMIT, "us_news_limit": US_NEWS_LIMIT,
 }
 
 
@@ -331,17 +336,27 @@ def headline_items(rows: Sequence[Mapping[str, Any]], *, cutoff: str, days: int 
             kept.append((published, row))
     kept.sort(key=lambda item: item[0], reverse=True)
     out = [{"id": "h_" + hashlib.sha256(str(row.get("link") or row["title"]).encode("utf-8")).hexdigest()[:10],
-            "source": SOURCE_NAMES.get(row.get("source"), str(row.get("source") or "")),
+            "source": _source_name(row.get("source")),
             "published_at": published.astimezone(TAIPEI).isoformat(),
-            "title": str(row["title"]).strip(), "summary": str(row.get("summary") or "").strip()[:SUMMARY_MAX]}
+            "title": str(row["title"]).strip(), "summary": str(row.get("summary") or "").strip()[:SUMMARY_MAX],
+            **({"match": row["match"]} if row.get("match") else {})}
            for published, row in kept[:limit]]
     return out or None
 
 
-def headlines_layer(items: list[dict[str, Any]] | None, cutoff: str) -> dict[str, Any]:
-    if not items:
+def _source_name(source: Any) -> str:
+    import news_feeds
+    name = str(source or "")
+    return SOURCE_NAMES.get(name) or (news_feeds.FEEDS.get(name) or {}).get("label") or name
+
+
+def headlines_layer(items: list[dict[str, Any]] | None, cutoff: str,
+                    us_items: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """大盤新聞：items 是台灣的大環境新聞（中央社），us_items 是美國那幾家（本人 2026-11-19 加）。兩邊都沒有就缺。"""
+    if not items and not us_items:
         return {"status": "missing", "reason": "寫的那一刻以前沒有抓到新聞"}
-    return {"status": "ok", "cutoff": cutoff, "items": items, "note": NOTES["headlines"]}
+    return {"status": "ok", "cutoff": cutoff, "items": items or [], "us_items": us_items or [],
+            "note": NOTES["headlines"]}
 
 
 # ---- 國外同類股 ----

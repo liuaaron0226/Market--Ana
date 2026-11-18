@@ -527,6 +527,23 @@ class LicensedRunTests(MorningTestCase):
         self.assertEqual(result["licensed"]["intraday"]["status"], "missing")
         self.assertIn("重播", result["licensed"]["news"]["reason"])
 
+    def test_the_us_papers_join_the_market_news(self):
+        # 本人 2026-11-19：加入美國前幾大報社；寫之前直接抓 RSS，只用寫的那一刻以前發布的
+        us = [{"source": "wsj-markets", "link": "w", "title": "Stocks fall", "summary": "",
+               "published_at": f"{BASE}T03:00:00Z", "fetched_at": f"{BASE}T09:40:00Z"}]
+        asked = []
+
+        def feeds(names, *, now):
+            asked.append(tuple(names))
+            return us, {}
+
+        result = self.run_evening(news_query=self.news([]), feeds=feeds)
+        record = fl.read_ledger(self.ledger)["forecasts"][0]
+        self.assertEqual(asked, [("cnbc-markets", "nyt-business", "wsj-markets")])
+        self.assertEqual([item["title"] for item in record["input"]["news"]["us_items"]], ["Stocks fall"])
+        self.assertEqual(record["input"]["news"]["us_items"][0]["source"], "華爾街日報 市場")
+        self.assertEqual(result["licensed"]["news"]["status"], "ok")
+
     def test_morning_never_sees_the_session_days_intraday(self):
         # 晨間版：富果回的是開盤日（例如時鐘之後已經進入新的一天）就整塊缺，不會看到開盤日的盤中
         result = self.run_morning(fugle=self.fake_fugle(SESSION))
