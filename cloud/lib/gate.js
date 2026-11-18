@@ -18,12 +18,14 @@ import { WATCH_PATH, handleWatchApi } from "./watch.js";
 import { GEMINI_USAGE_PATH, handleGeminiUsageApi } from "./gemini-usage.js";
 import { FRIEND_AI_PAGE, FRIEND_AI_PATH, keyStateLookup, deleteFriendKey, friendAiEnabled, handleFriendAiApi, notAvailable, ownerRefused } from "./friend-ai.js";
 import { WATCH_PEERS_PATH, handleWatchPeersApi } from "./watch-peers.js";
+import { INDEX_PATH, indexOf, loadIndex } from "./market-indices.js";
 
 const PENDING_CAP = 30;
 // 票 06 限速（Astra r1 建議值）：市場 API 全部每人每分 30 次；個股明細另限每分 12 次。固定一分鐘窗，邊界最多兩倍突發。
 // ticks：行情商免費方案的日內查詢是每分鐘 60 次，報價與分 K 輪詢約用掉 10 次，逐筆留 40 次。
 // friendAi：朋友保存、同意、刪除 Gemini 金鑰（保存會替他試呼叫一次 Gemini），所以另外限得緊一點；讀狀態不扣這一份。
-const RATE = { market: 30, detail: 12, userData: 60, live: 20, history: 30, ticks: 40, timeshare: 20, hourly: 20, friendAi: 10 };
+const RATE = { market: 30, detail: 12, userData: 60, live: 20, history: 30, ticks: 40, timeshare: 20, hourly: 20, friendAi: 10, indices: 30 };
+// indices：大盤頁切換國外指數（本人 11-19），一次切換讀一次 D1，和 market 同樣留到 30 次。
 // timeshare：分時（1 分K、五檔），盤中每 10 秒一次＝每分鐘 6 次，留到 20 次給重新整理與換股（和 live 同額度）。
 // hourly：60 分K（歷史＋今天），盤中每分鐘一次，同樣留到 20 次。
 // 舊的整包資料檔：雲端已不部署，這裡再擋一次，避免預覽網址或殘留檔被讀到。
@@ -477,6 +479,24 @@ async function handleStockHourlyApi(request, env, path, email, deps, { isOwner }
   return json(200, { ok: true, code, market_open: Boolean(live.market_open), candles: withToday(history, live.candles?.["60"]) }, headers);
 }
 
+// 大盤頁切換的國外指數（本人 11-19：核准的人都看得到）：只讀 D1 裡每日抓好的 EODHD 日線，不在這裡對外抓。
+async function handleIndexApi(request, env, path, email, deps) {
+  if (request.method !== "GET") throw new HttpError(405, "方法不允許");
+  const item = indexOf(path.match(INDEX_PATH)[1]);
+  if (!item) throw new HttpError(404, "找不到這個指數");
+  const headers = { "cache-control": "private, no-store" };
+  try {
+    await consume(env.DB, email, "indices", (deps.now || Date.now)(), { ...RATE, ...deps.rate });
+  } catch (error) {
+    if (error instanceof RateLimited) {
+      return json(429, { error: "rate-limited", message: "切換太頻繁，請稍後再試", retry_after_seconds: error.retryAfter },
+        { ...headers, "retry-after": String(error.retryAfter) });
+    }
+    throw new HttpError(503, "暫時無法處理，請稍後再試");
+  }
+  return json(200, await loadIndex(env.DB, item), headers);
+}
+
 async function handleStockLiveApi(request, env, path, email, deps) {
   if (request.method !== "GET") throw new HttpError(405, "方法不允許");
   const match = path.match(LIVE_STOCK_PATH);
@@ -813,6 +833,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
       if (FORECAST_PATH.test(path)) return await handleForecastApi(request, env, path, { isOwner: true, policy });
       if (FRIEND_AI_PATH.test(path)) return ownerRefused();
       if (isUserData) return await handleUserDataApi(request, env, path, email, deps, { isOwner: true, policy });
+      if (INDEX_PATH.test(path)) return await handleIndexApi(request, env, path, email, deps);
       if (isMarket) return await handleMarketApi(request, env, path, email, deps, { isOwner: true });
       if (isComparePath(path)) return await handleCompareApi(request, env, path, email, deps, { isOwner: true });
       if (RETIRED_FUND_PATH.test(path)) return fail(404, "找不到");
@@ -843,6 +864,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
     if (FRIEND_AI_PATH.test(path)) return await handleFriendAiRequest(request, env, path, email, deps);
     if (isUserData) return await handleUserDataApi(request, env, path, email, deps, { isOwner: false, policy });
     if (path === "/api/live" || path === "/api/mis-probe") return fail(403, "即時行情僅限站主使用");
+    if (INDEX_PATH.test(path)) return await handleIndexApi(request, env, path, email, deps);
     if (isMarket) return await handleMarketApi(request, env, path, email, deps, { isOwner: false });
     if (isComparePath(path)) return await handleCompareApi(request, env, path, email, deps, { isOwner: false });
     if (RETIRED_FUND_PATH.test(path)) return fail(404, "找不到");
