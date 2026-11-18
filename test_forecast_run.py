@@ -484,6 +484,84 @@ class ForeignFlowLayerTests(RunTestCase):
                                                           "dollar_and_twd_vs_foreign", "futures_net_position"])
 
 
+class MarketLayersRunTests(MorningTestCase):
+    """I 票：晚間、晨間版都從工作集讀大盤五層（融資讀 analysis-data.js 旁邊的 chips-data.js）。"""
+
+    def chips_file(self):
+        # 最後 6 天融資餘額 1000、1010、1005、1020、1030、1040.5（億元）
+        balances = [1000.0, 1010.0, 1005.0, 1020.0, 1030.0, 1040.5]
+        margin = [{"date": d, "margin_balance_billion": b, "margin_units": 2_000_000, "short_units": 60_000}
+                  for d, b in zip(DATES[-6:], balances)]
+        (self.tmp / "chips-data.js").write_text(
+            "window.MARKET_CHIPS = " + json.dumps({"margin": margin}) + ";\n", encoding="utf-8")
+
+    def test_evening_layer_is_sealed_and_missing_layers_are_named(self):
+        self.chips_file()
+        result = self.run_evening(data_root=self.tmp / "data", seeds_root=self.tmp / "no-seeds")
+        self.assertEqual(result["outcome"], "written")
+        record = fl.read_ledger(self.ledger)["forecasts"][0]
+        margin = record["input"]["market_margin"]
+        self.assertEqual((margin["status"], margin["data_date"]), ("ok", BASE))
+        self.assertEqual(margin["change_5d_billion"], 40.5)     # 1040.5 − 1000
+        self.assertEqual(record["input"]["otc_index"]["status"], "missing")
+        self.assertEqual(result["market_layers_missing"], ["otc_index", "sector_share", "screens", "ofr_stress"])
+        missing = {item["key"] for item in record["missing_inputs"]}
+        self.assertTrue({"otc_index", "sector_share", "screens", "ofr_stress"} <= missing)
+        self.assertNotIn("market_margin", missing)
+        names = {item["key"]: item.get("name") for item in record["missing_inputs"]}
+        self.assertEqual(names["ofr_stress"], "OFR 金融壓力指數")   # 網站「缺漏」那一列顯示的名字
+
+    def test_ofr_is_fetched_before_writing_and_cut_at_what_was_published(self):
+        # 本人 2026-11-18 晚「預測時直接抓」：假的 OFR 回應一路到基準日；只用基準日往前第二個平日（含）以前的分數。
+        from test_market_layers import ofr_csv
+        import market_layers
+        calls = []
+
+        def fetch():
+            calls.append(1)
+            return market_layers.parse_ofr(ofr_csv(BASE))
+
+        result = self.run_evening(ofr_fetch=fetch)
+        self.assertEqual((result["outcome"], len(calls)), ("written", 1))
+        layer = fl.read_ledger(self.ledger)["forecasts"][0]["input"]["ofr_stress"]
+        self.assertEqual(layer["status"], "ok")
+        self.assertEqual(layer["observed_at"], market_layers.ofr_cutoff(BASE, "evening", None))
+        self.assertLess(layer["observed_at"], BASE)
+
+    def test_an_ofr_timeout_leaves_that_layer_missing_and_the_forecast_is_still_written(self):
+        def timed_out():
+            raise TimeoutError("timed out")
+
+        result = self.run_evening(ofr_fetch=timed_out)
+        self.assertEqual(result["outcome"], "written")
+        self.assertIn("ofr_stress", result["market_layers_missing"])
+        self.assertEqual(result["market_layers_errors"]["ofr_stress"], "TimeoutError")
+        record = fl.read_ledger(self.ledger)["forecasts"][0]
+        self.assertEqual(record["input"]["ofr_stress"]["status"], "missing")
+        self.assertIn("ofr_stress", {item["key"] for item in record["missing_inputs"]})
+
+    def test_the_command_line_fetches_ofr_unless_told_not_to(self):
+        import market_layers
+        seen = {}
+        real = fr.run_evening
+        fr.run_evening = lambda *args, **kwargs: seen.update(kwargs) or {}
+        try:
+            base = ["--analysis", "a.js", "--ledger", "l", "--method", "m", "--agy-bin", "agy"]
+            fr.main(base)
+            self.assertIs(seen["ofr_fetch"], market_layers.fetch_ofr)
+            fr.main(base + ["--no-ofr-fetch"])
+            self.assertIsNone(seen["ofr_fetch"])
+        finally:
+            fr.run_evening = real
+
+    def test_morning_reads_the_same_layers(self):
+        self.chips_file()
+        result = self.run_morning(data_root=self.tmp / "data", seeds_root=self.tmp / "no-seeds")
+        self.assertEqual(result["outcome"], "written")
+        record = fl.read_ledger(self.ledger)["forecasts"][0]
+        self.assertEqual(record["input"]["market_margin"]["data_date"], BASE)
+
+
 class OverseasFeedsForeignFlowTests(MorningTestCase):
     """D 票與 G 票接在一起（owner 2026-11-16 整合）：海外層的那斯達克序列就是外資讀數 1 用的那一份。"""
 

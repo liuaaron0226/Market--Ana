@@ -447,7 +447,7 @@ class RecordMetadataTests(LedgerTestCase):
         self.assertEqual(record["base_date"], "2026-09-30")
         self.assertEqual(record["edition"], "evening")
         self.assertEqual(record["method_version"], "0.2")
-        self.assertRegex(record["input_version"], r"^base\+overseas\+foreign_flow\+wyckoff_lpsy\+similar\+lessons-v1-[0-9a-f]{8}$")
+        self.assertRegex(record["input_version"], r"^base\+overseas\+foreign_flow\+wyckoff_lpsy\+market_margin\+otc_index\+sector_share\+screens\+ofr_stress\+similar\+lessons-v1-[0-9a-f]{8}$")
         self.assertEqual(record["model"], "test-model")
         self.assertRegex(record["input_sha256"], r"^[0-9a-f]{64}$")
         self.assertEqual(record["locked_at"], "2026-09-30T17:00:00+08:00")
@@ -483,7 +483,7 @@ class ModelSeriesTests(LedgerTestCase):
         self.assertEqual(fl.INPUT_VERSION, fl.input_version(fl.MODEL))
         self.assertNotEqual(fl.input_version("gemini-4-argon"), fl.input_version("gemini-3.8-flash"))
         self.assertNotIn(self.FLASH_ERA, {fl.input_version("gemini-4-argon"), fl.input_version("gemini-3.8-flash")})
-        self.assertRegex(fl.input_version("gemini-4-argon"), r"^base\+overseas\+foreign_flow\+wyckoff_lpsy\+similar\+lessons-v1-[0-9a-f]{8}$")
+        self.assertRegex(fl.input_version("gemini-4-argon"), r"^base\+overseas\+foreign_flow\+wyckoff_lpsy\+market_margin\+otc_index\+sector_share\+screens\+ofr_stress\+similar\+lessons-v1-[0-9a-f]{8}$")
 
     def test_a_record_carries_the_input_version_of_the_model_that_wrote_it(self):
         record = self.write(model_name="gemini-4-argon")["record"]
@@ -856,6 +856,53 @@ class PromptRulesTests(LedgerTestCase):
         prompt = seen.read_text(encoding="utf-8")
         self.assertIn("只能引用 INPUT_JSON 裡有的資料", prompt)
         self.assertIn("照歷史亂猜", prompt)
+
+
+class MarketLayersTests(LedgerTestCase):
+    """I 票：大盤融資融券、櫃買指數、產業成交比重、選股快照與資金輪動、OFR 金融壓力（本人 2026-11-18 晚選「大盤＋自選股判斷」）。"""
+
+    def test_given_layers_go_into_the_model_input_and_absent_ones_say_missing(self):
+        data = day_input()
+        data["market_margin"] = {"status": "ok", "data_date": BASE_A, "margin_balance_billion": 5000.0}
+        record = self.write(data)["record"]
+        self.assertEqual(record["kind"], "forecast")
+        model_input = record["input"]
+        self.assertEqual(model_input["market_margin"], {"status": "ok", "data_date": BASE_A,
+                                                        "margin_balance_billion": 5000.0})
+        for name in ("otc_index", "sector_share", "screens", "ofr_stress"):
+            self.assertEqual(model_input[name]["status"], "missing")
+        self.assertEqual(model_input["parameters"]["market_layers"]["version"], "market-layers-v1")
+
+    def test_the_layers_are_a_new_input_version_and_the_prompt_explains_them(self):
+        for name in ("market_margin", "otc_index", "sector_share", "screens", "ofr_stress"):
+            self.assertIn(name, fl.PARAMETERS["layers"])
+        self.assertRegex(fl.input_version("gemini-4-argon"),
+                         r"^base\+overseas\+foreign_flow\+wyckoff_lpsy\+market_margin\+otc_index\+sector_share\+screens"
+                         r"\+ofr_stress\+similar\+lessons-v1-[0-9a-f]{8}$")
+        rules = "".join(fl._PROMPT_RULES)
+        # 融資現在有給了：「沒給的資料（例如融資…）」那一句要改，換成融資的讀法與維持率不給。
+        self.assertNotIn("例如融資", rules)
+        for words in ("market_margin", "maintenance_ratio", "otc_index", "sector_share", "screens", "ofr_stress",
+                      "不能單獨決定方向"):
+            self.assertIn(words, rules)
+
+    def test_the_margin_rule_is_tightened_after_the_dry_run(self):
+        # 本人 2026-11-18 晚看過乾跑（Gemini 把融資減少寫成「低檔有承接」「消化浮額」）後選「要收緊（推薦）」：
+        # 增減、使用率都不能單獨當看多或看空的理由，也不能推論承接、浮額、籌碼沉澱；只能和指數、成交量、法人方向並列，
+        # 三者矛盾時照寫矛盾、不替它下結論。
+        rules = "".join(fl._PROMPT_RULES)
+        for words in ("融資餘額的增減、使用率", "不能單獨當成看多或看空的理由", "低檔有承接", "消化浮額", "籌碼沉澱",
+                      "和指數、成交量、法人方向並列", "寫出矛盾", "不替融資下結論"):
+            self.assertIn(words, rules)
+        # 理由不能有中文數字（「三者」會被擋）：乾跑時模型照抄規則裡的「三者」連兩次被擋成漏記，規則改成不帶數字的說法
+        self.assertNotIn("三者", rules)
+        # 本人 2026-11-18 晚：產業成交比重的分母維持上市＋上櫃，提示寫清楚分母
+        self.assertIn("上市＋上櫃全部產業成交金額合計", rules)
+        self.assertIn("分母不是加權指數的成交金額", rules)
+        # 收緊前的版本（I 票乾跑第二輪）不能再出現：改提示＝新的輸入版本
+        self.assertNotEqual(fl.input_version("gemini-4-argon"),
+                            "base+overseas+foreign_flow+wyckoff_lpsy+market_margin+otc_index+sector_share+screens"
+                            "+ofr_stress+similar+lessons-v1-bd1f8c85")
 
 
 class VerdictStatusTests(LedgerTestCase):

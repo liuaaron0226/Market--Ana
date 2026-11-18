@@ -40,7 +40,9 @@ MORNING_REPLAY_CLOCK = "07:30:00"
 # 這一版打開的輸入層＝「輸入到齊」的那一組：官方資料與由它算出的東西，加上帳本自己整理的教訓層（H 票）。
 # 國外同類股與新聞標題依來源條款不放（Gemini 付費與否由本人決定；改了就換這一組、換輸入版本、重新起算）。
 # wyckoff_lpsy：H 票（本人 2026-11-18 追加）威科夫最後供應點，打開它＝新的輸入版本，和之前的紀錄分開對帳。
-LAYERS = ("technical", "bollinger", "wyckoff_lpsy", "sector", "margin", "environment", "market", "news", "lessons")
+# valuation、lending_eps、signals：I 票第二輪（本人 2026-11-18 晚「大盤＋自選股判斷」）估值、借券與季 EPS、個股五塊訊號。
+LAYERS = ("technical", "bollinger", "wyckoff_lpsy", "sector", "margin", "valuation", "lending_eps", "signals",
+          "environment", "market", "news", "lessons")
 
 
 class Source(Protocol):
@@ -72,6 +74,16 @@ class LocalSource:
         self._capital: dict[str, list[dict[str, Any]]] | None = None
         self._members: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
         self._loaded: dict[tuple[str, str, int], tuple[list[Any], dict[str, Any]]] = {}
+        self._analyses: dict[tuple[str, str], dict[str, Any]] = {}
+        self._fundamentals: Any = None
+
+    def _analysis(self, code: str, base_date: str) -> dict[str, Any]:
+        """個股頁同一套計算的結果；技術層與五塊訊號共用，同一檔同一天只算一次。"""
+        key = (code, base_date)
+        if key not in self._analyses:
+            from twon_analysis import analyze_v2
+            self._analyses[key] = analyze_v2.analyze_v2(code, base_date, capital_actions=self._capital_events())
+        return self._analyses[key]
 
     def _capital_events(self) -> dict[str, list[dict[str, Any]]]:
         if self._capital is None:
@@ -104,7 +116,7 @@ class LocalSource:
         """個股頁同一套計算（還原後的價格）：指標、法人買賣超、集保大戶持股、月營收。
         不放個股頁的訊號與策略（固定規則的買賣點，回測沒贏過大盤，規格要求不換個名字端出來）。"""
         from twon_analysis import analyze_v2
-        result = analyze_v2.analyze_v2(code, base_date, capital_actions=self._capital_events())
+        result = self._analysis(code, base_date)
         if result.get("qa", {}).get("blocking"):
             return None
         revenue = None
@@ -116,6 +128,30 @@ class LocalSource:
                 "institutional": result["institutional"][-CHIP_DAYS:],
                 "big_holders": result["big_holders"][-BIG_HOLDER_WEEKS:], "monthly_revenue": revenue,
                 "source": "臺灣證券交易所／證券櫃檯買賣中心開放資料、集保結算所開放資料（本站計算）"}
+
+    def _signals(self, code: str, base_date: str) -> dict[str, Any] | None:
+        """個股頁五塊資料（I 票第二輪）：和技術層同一份計算，去掉畫圖用的陣列。"""
+        import watch_inputs
+        result = self._analysis(code, base_date)
+        return None if result.get("qa", {}).get("blocking") else watch_inputs.signals_input(result.get("signals"))
+
+    def _lending_eps(self, code: str, base_date: str) -> dict[str, Any] | None:
+        """借券（個股頁同一份原件）與近 4 季每股盈餘（公開資訊觀測站原件，驗過雜湊才讀；整份只讀一次）。"""
+        import fundamentals_history
+        import watch_inputs
+        from twon_analysis import analyze_v2
+        try:
+            market = self._analysis(code, base_date).get("market") or "上市"
+        except Exception:  # noqa: BLE001 — 個股頁計算失敗不擋借券與 EPS：先當上市讀，上櫃那一檔就只少借券
+            market = "上市"
+        credit = analyze_v2.credit_series(code, market, base_date, days=watch_inputs.LENDING_DAYS + 5)
+        quarterly: list[dict[str, Any]] = []
+        folder = self.root / watch_inputs.FUNDAMENTALS_DIR
+        if (folder / "meta.json").is_file():
+            if self._fundamentals is None:
+                self._fundamentals = fundamentals_history.load_history(folder)
+            quarterly = self._fundamentals.as_of(code, base_date)["quarterly"]
+        return watch_inputs.lending_eps_input(credit, quarterly, base_date)
 
     def _sector(self, code: str, base_date: str) -> dict[str, Any] | None:
         import watch_inputs
@@ -139,6 +175,9 @@ class LocalSource:
                           ("wyckoff_lpsy", lambda: self._lpsy(code, base_date)),
                           ("sector", lambda: self._sector(code, base_date)),
                           ("margin", lambda: watch_inputs.margin_input(self.root, code, base_date)),
+                          ("valuation", lambda: watch_inputs.valuation_input(self.root, code, base_date)),
+                          ("lending_eps", lambda: self._lending_eps(code, base_date)),
+                          ("signals", lambda: self._signals(code, base_date)),
                           ("environment", lambda: watch_inputs.environment_input(self.root, base_date,
                                                                                  edition=edition))):
             try:
@@ -147,7 +186,10 @@ class LocalSource:
                 out[key], out.setdefault("errors", {})[key] = None, f"{type(error).__name__}: {error}"
         out["data_cutoffs"] = {"stock": out["stock_daily"][-1]["date"] if out["stock_daily"] else None,
                                "margin": (out.get("margin") or {}).get("data_date"),
-                               "sector": (out.get("sector") or {}).get("data_date")}
+                               "sector": (out.get("sector") or {}).get("data_date"),
+                               "valuation": (out.get("valuation") or {}).get("data_date"),
+                               "lending": ((out.get("lending_eps") or {}).get("lending") or {}).get("data_date"),
+                               "signals": (out.get("signals") or {}).get("data_date")}
         return out
 
     def announcements(self, codes: Sequence[str], until: str) -> dict[str, list[dict[str, Any]]]:
@@ -193,7 +235,8 @@ def stock_input(item: Mapping[str, Any], data: Mapping[str, Any], *, base_date: 
         "stock_daily": data.get("stock_daily") or [], "capital_events": data.get("capital_events") or [],
         "index_daily": index_daily, "method_text": method_text,
         "technical": data.get("technical"), "wyckoff_lpsy": data.get("wyckoff_lpsy"), "sector": data.get("sector"),
-        "margin": data.get("margin"),
+        "margin": data.get("margin"), "valuation": data.get("valuation"), "lending_eps": data.get("lending_eps"),
+        "signals": data.get("signals"),
         "environment": data.get("environment"), "market_forecast": market, "announcements": announcements,
         "data_cutoffs": {**(data.get("data_cutoffs") or {}), "index": index_daily[-1]["date"] if index_daily else None},
     }

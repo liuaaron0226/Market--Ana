@@ -52,8 +52,10 @@ from ledger_core import (
 )
 import bollinger
 import gemini_models
+import watch_inputs
 import wyckoff_lpsy
 from twon_analysis import analyze_v2
+from twon_analysis import signals as stock_signals
 from twon_analysis.indicators import Bar
 from twon_analysis.price_adjustment import adjust_bars, price_factors
 
@@ -68,12 +70,15 @@ HORIZONS = (5, 20)
 # 好讓輸入版本照實寫出多了哪幾樣；規格把前三樣歸在技術層、匯率與美債利率歸在環境層。
 # wyckoff_lpsy 是 H 票（本人 2026-11-18 追加「要，也加進去」）：這一檔今天是否處在威科夫最後供應點，由呼叫端用
 # wyckoff_lpsy（和大盤事前預測共用的判斷）算好，含息還原價要逐日漲跌，所以不是帳本從日 K 自己算。
-LAYERS = ("technical", "bollinger", "wyckoff_lpsy", "sector", "margin", "environment", "market", "news", "peers",
-          "lessons")
+# valuation、lending_eps、signals 是 I 票第二輪（本人 2026-11-18 晚「更多整合所有網站可以獲取的資料」→
+# 「大盤＋自選股判斷」）：估值、借券與季 EPS、個股五塊訊號，由呼叫端（watch_run.LocalSource）從工作集算好。
+LAYERS = ("technical", "bollinger", "wyckoff_lpsy", "sector", "margin", "valuation", "lending_eps", "signals",
+          "environment", "market", "news", "peers", "lessons")
 DEFAULT_LAYERS = ("technical", "market", "news")
 # 每一層在一檔輸入資料裡的欄位。消息層這一版只收官方公告（重大訊息、月營收）。布林通道由帳本從日 K 自己算，沒有欄位。
 # 教訓層沒有欄位：由帳本自己從過去的判斷與對帳整理（只放事實），呼叫端給的內容不用。
 _LAYER_FIELDS = {"technical": "technical", "wyckoff_lpsy": "wyckoff_lpsy", "sector": "sector", "margin": "margin",
+                 "valuation": "valuation", "lending_eps": "lending_eps", "signals": "signals",
                  "environment": "environment", "market": "market_forecast", "news": "announcements"}
 # I 票四層各自的參數與提示規則：只有打開那一層時才算進輸入版本與提示，沒打開時舊版本一個字都不變。
 _LAYER_PARAMETERS: dict[str, dict[str, Any]] = {
@@ -82,6 +87,11 @@ _LAYER_PARAMETERS: dict[str, dict[str, Any]] = {
     "wyckoff_lpsy": {"layer": wyckoff_lpsy.STOCK_VERSION},
     "sector": {"classification": "官方產業別", "changes": ["當天", "近 5 日"]},
     "margin": {"changes": "近 5 日"},
+    # I 票第二輪三層：數字從讀取那一側的常數帶出，改了常數就換輸入版本。
+    "valuation": {"metrics": list(watch_inputs.VALUATION_METRICS), "range_days": watch_inputs.VALUATION_YEAR_DAYS},
+    "lending_eps": {"lending_compare_rows": watch_inputs.LENDING_DAYS, "eps_quarters": watch_inputs.EPS_QUARTERS,
+                    "eps_basis": "年初至今累計換算單季"},
+    "signals": {"blocks": list(stock_signals.BLOCK_NAMES), "dropped": ["heavy_zones.chart"]},
     "environment": {"changes": "近 20 日", "series": ["usdtwd", "ust_2y", "ust_10y"]},
 }
 _LAYER_RULES: dict[str, tuple[str, ...]] = {
@@ -110,6 +120,22 @@ _LAYER_RULES: dict[str, tuple[str, ...]] = {
     ),
     "margin": (
         "margin 是這一檔的融資與融券餘額（張）與近 5 個交易日的變化；data_date 是資料日期。",
+    ),
+    "valuation": (
+        "valuation 是這一檔的本益比（pe）、股價淨值比（pb）、殖利率（dividend_yield_pct）最新一筆，和近一年的最低、最高與"
+        "位置（position_pct：0 是一年最低、100 是一年最高）；value 是 null 代表沒有（例如虧損沒有本益比）。"
+        "估值只描述現在比過去一年貴或便宜：位置低不代表便宜、會漲，位置高也不代表會跌，不能單獨決定 status。",
+    ),
+    "lending_eps": (
+        "lending_eps.lending 是這一檔的借券賣出餘額（張）與往前第 5 筆的變化；借券增加可能是避險或套利，"
+        "不代表一定看空，不得單獨寫成賣壓。lending_eps.eps 是近 4 季的每股盈餘：eps_ytd 是年初至今累計、"
+        "eps_quarter 是換算的單季（null 是算不出來），available_on 是法定公布期限；只能照讀，不得自己推估下一季。",
+    ),
+    "signals": (
+        "signals 是網站個股頁的五塊資料（程式算好）：limit_up_momentum 是最近有多會漲停（分數與級距的歷史比例）、"
+        "versus_market 是近 5／20／60 日和加權指數比的差距（百分點）、ma_alignment 是均線排列、"
+        "margin_maintenance 是融資維持率（估）的範圍（估計值，不是官方數字）、heavy_zones 是爆大量成交區與收盤的相對位置。"
+        "沒有的塊代表算不出來，不得猜。這些都只是描述，不是買賣訊號，不能單獨決定 status。",
     ),
     "environment": (
         "environment 是大環境：新臺幣對美元收盤匯率與美國公債 2 年、10 年殖利率，各自附資料日期與近 20 個交易日的變化；"

@@ -58,6 +58,9 @@ class FakeSource:
             "margin": {"data_date": base_date, "margin_lots": 1000},
             "environment": {"usdtwd": {"date": base_date, "close": 32.1}},
             "wyckoff_lpsy": {"reading": {"status": "no", "date": base_date}},
+            "valuation": {"data_date": base_date, "pe": {"value": 20.0}},
+            "lending_eps": {"lending": {"data_date": base_date, "balance_lots": 10}, "eps": None},
+            "signals": {"data_date": base_date, "blocks": ["ma_alignment"], "ma_alignment": {"summary": "多頭排列"}},
             "data_cutoffs": {"stock": base_date},
         }
 
@@ -145,6 +148,10 @@ class EveningTests(WatchRunTestCase):
         self.assertEqual({key: cell["zone"] for key, cell in market["cells"].items()},
                          {"1": "above", "5": "between", "20": "below"})
         self.assertEqual(judgments[0]["missing_layers"], [])
+        # I 票第二輪三層照原樣交給模型
+        self.assertEqual(judgments[0]["input"]["valuation"]["pe"]["value"], 20.0)
+        self.assertEqual(judgments[0]["input"]["lending_eps"]["lending"]["balance_lots"], 10)
+        self.assertEqual(judgments[0]["input"]["signals"]["ma_alignment"]["summary"], "多頭排列")
         sql = (self.tmp / "watch.sql").read_text(encoding="utf-8")
         self.assertEqual(sql.count("INSERT INTO watch_judgments"), 2)
 
@@ -302,8 +309,8 @@ class OfficialStartTests(WatchRunTestCase):
             (LONG[22], "evening"): "official", (LONG[22], "morning"): "official"})
         # 這一組輸入：官方資料算出的各層＋教訓層（H 票加最後供應點）；國外同類股與新聞標題依條款不放
         self.assertEqual(records[(LONG[22], "evening")]["layers"],
-                         ["technical", "bollinger", "wyckoff_lpsy", "sector", "margin", "environment", "market", "news",
-                          "lessons"])
+                         ["technical", "bollinger", "wyckoff_lpsy", "sector", "margin", "valuation", "lending_eps",
+                          "signals", "environment", "market", "news", "lessons"])
         self.assertEqual(set(records[(LONG[22], "evening")]["withheld_inputs"]), {"peers", "headlines"})
         sql = (self.tmp / f"evening-{LONG[22]}.sql").read_text(encoding="utf-8")
         self.assertIn(f'"official_since":"{LONG[22]}"', sql)
@@ -556,6 +563,18 @@ class LocalSourceLpsyTests(unittest.TestCase):
 
     def test_the_schedule_opens_the_layer(self):
         self.assertIn("wyckoff_lpsy", wr.LAYERS)
+
+    def test_the_schedule_opens_the_three_new_layers(self):
+        for layer in ("valuation", "lending_eps", "signals"):
+            self.assertIn(layer, wr.LAYERS)
+
+    def test_valuation_is_read_from_the_working_set(self):
+        from test_watch_inputs import valuation_db
+        base = self.series.date(81)
+        valuation_db(self.root, [(base, 15.0, 2.0, 3.5)])
+        found = wr.LocalSource(self.root).stock("2330", base, "evening")
+        self.assertEqual(found["valuation"]["pe"]["value"], 15.0)
+        self.assertEqual(found["data_cutoffs"]["valuation"], base)
 
 
 if __name__ == "__main__":

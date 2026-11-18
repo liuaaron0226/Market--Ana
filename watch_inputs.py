@@ -227,3 +227,108 @@ def environment_input(root: Path | str, base_date: str, *, edition: str) -> dict
     if not any(found.values()):
         return None
     return {**found, "missing": [name for name, value in found.items() if value is None]}
+
+
+# ---- I 票（本人 2026-11-18 晚）：估值、借券與季 EPS、個股五塊訊號 ----
+
+VALUATION_DB = "data/valuation-history/valuation.sqlite"
+FUNDAMENTALS_DIR = "data/fundamentals-history"
+VALUATION_METRICS = ("pe", "pb", "dividend_yield_pct")
+VALUATION_YEAR_DAYS = 365
+LENDING_DAYS = 5
+EPS_QUARTERS = 4
+SOURCES.update({
+    "valuation": "臺灣證券交易所 個股日本益比、殖利率及股價淨值比（BWIBBU_d）／證券櫃檯買賣中心 上櫃個股本益比；"
+                 "政府資料開放授權條款第 1 版",
+    "lending": "臺灣證券交易所 信用額度總量管制餘額表（TWT93U）／證券櫃檯買賣中心 借券賣出餘額；政府資料開放授權條款第 1 版",
+    "eps": "公開資訊觀測站 財務報告彙總（綜合損益表，基本每股盈餘；年初至今累計）",
+    "signals": "本站從證交所／櫃買官方行情、法人與融資原件計算（個股頁五塊資料）",
+})
+
+
+def valuation_input(root: Path | str, code: str, base_date: str) -> dict[str, Any] | None:
+    """這一檔截至基準日最近一筆本益比、淨值比、殖利率，和近一年（基準日往前 365 天內有資料的日子）的最低、最高與位置
+    （(現在 − 最低) ÷ (最高 − 最低) × 100；現在是 null（例如虧損沒有本益比）或一年內最高等於最低時沒有位置）。"""
+    import sqlite3
+    from datetime import date, timedelta
+    path = Path(root) / VALUATION_DB
+    if not path.is_file():
+        return None
+    start = (date.fromisoformat(base_date) - timedelta(days=VALUATION_YEAR_DAYS - 1)).isoformat()
+    connection = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+    try:
+        rows = connection.execute(
+            "SELECT date, pe, pb, dividend_yield_pct FROM valuation WHERE code = ? AND date BETWEEN ? AND ? ORDER BY date",
+            (code, start, base_date)).fetchall()
+    finally:
+        connection.close()
+    if not rows:
+        return None
+    out: dict[str, Any] = {"data_date": rows[-1][0], "source": SOURCES["valuation"],
+                           "period": {"from": rows[0][0], "to": rows[-1][0], "days": len(rows)}}
+    for index, metric in enumerate(VALUATION_METRICS, start=1):
+        values = [row[index] for row in rows if row[index] is not None]
+        now = rows[-1][index]
+        low, high = (min(values), max(values)) if values else (None, None)
+        position = None
+        if now is not None and low is not None and high > low:
+            position = round((now - low) / (high - low) * 100, 1)
+        out[metric] = {"value": now, "low_1y": low, "high_1y": high, "position_pct": position}
+    return out
+
+
+def _lots_of(shares: float) -> int:
+    return int(round(shares / 1000))
+
+
+def lending_eps_input(credit: Mapping[str, Any] | None, quarterly: list[Mapping[str, Any]] | None,
+                      base_date: str) -> dict[str, Any] | None:
+    """借券餘額（張）與往前第 5 筆的變化，加上近 4 季的每股盈餘。
+
+    ``credit`` 是個股頁的 ``credit_series``（borrow 單位股，由舊到新）；``quarterly`` 是 ``fundamentals_history``
+    的季資料（eps_twd 是年初至今累計，available_on 是法定公布期限），只用基準日（含）以前可取得的。
+    單季＝本季累計 − 同年上一季累計（第一季就是累計）；上一季沒有就是 null。近 4 季合計只在 4 季單季都有時給。"""
+    borrow = sorted((row for row in (credit or {}).get("borrow") or [] if str(row.get("date") or "") <= base_date
+                     and row.get("balance") is not None), key=lambda row: row["date"])
+    lending = None
+    if borrow:
+        today = borrow[-1]
+        earlier = borrow[-1 - LENDING_DAYS] if len(borrow) > LENDING_DAYS else None
+        lending = {"data_date": today["date"], "balance_lots": _lots_of(today["balance"]),
+                   "change_5d_lots": _lots_of(today["balance"] - earlier["balance"]) if earlier else None,
+                   "compared_with": earlier["date"] if earlier else None}
+    seen = {row["period"]: row for row in quarterly or []
+            if str(row.get("available_on") or "9999") <= base_date and row.get("period")}
+    quarters = []
+    for period in sorted(seen)[-EPS_QUARTERS:]:
+        ytd = seen[period].get("eps_twd")
+        year, quarter = period.split("-Q")
+        single = None
+        if ytd is not None:
+            if quarter == "1":
+                single = ytd
+            elif (previous := seen.get(f"{year}-Q{int(quarter) - 1}")) and previous.get("eps_twd") is not None:
+                single = round(ytd - previous["eps_twd"], 2)
+        quarters.append({"period": period, "eps_ytd": ytd, "eps_quarter": single,
+                         "available_on": seen[period].get("available_on")})
+    eps = None
+    if quarters:
+        singles = [item["eps_quarter"] for item in quarters]
+        eps = {"quarters": quarters, "unit": "元／股",
+               "last_four_sum": round(sum(singles), 2) if len(singles) == EPS_QUARTERS and None not in singles else None}
+    if lending is None and eps is None:
+        return None
+    return {"lending": lending, "eps": eps,
+            "source": {"lending": SOURCES["lending"], "eps": SOURCES["eps"]}}
+
+
+def signals_input(signals: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """個股頁五塊資料（漲停動能、和大盤比、均線排列、融資維持率（估）、爆大量成交區），去掉只給頁面畫小圖用的陣列。"""
+    if not signals or not signals.get("blocks"):
+        return None
+    import copy
+    out = copy.deepcopy(dict(signals))
+    if isinstance(out.get("heavy_zones"), dict):
+        out["heavy_zones"].pop("chart", None)
+    out["source"] = SOURCES["signals"]
+    return out

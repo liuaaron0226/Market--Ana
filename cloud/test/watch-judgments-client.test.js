@@ -126,3 +126,8 @@ test("缺了哪幾層：每一層都寫中文名，不出現英文層名（H 票
   assert.equal(logic.missingOf(record), "威科夫最後供應點、布林通道、同產業、融資融券、匯率與美債利率、大盤預測");
   assert.equal(logic.missingOf({}), "");
 });
+
+test("缺了哪幾層：I 票第二輪三層（估值、借券與季 EPS、個股五塊訊號）也寫中文名", () => {
+  const record = { missing_layers: ["valuation", "lending_eps", "signals"] };
+  assert.equal(logic.missingOf(record), "估值、借券與季 EPS、個股五塊訊號");
+});

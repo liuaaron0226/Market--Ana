@@ -470,5 +470,153 @@ class LpsyLayerTests(WatchLedgerTestCase):
                          "technical+bollinger+sector+margin+environment+market+news+lessons-v1-b68cbcd8")
 
 
+# ---- I 票（11-18 晚）：估值、借券與季 EPS、個股五塊訊號 ----
+
+def valuation_db(root, rows):
+    """rows：[(日期, 本益比, 淨值比, 殖利率)]，代號都是 2330。"""
+    import sqlite3
+
+    import valuation_history
+    path = root / "data/valuation-history/valuation.sqlite"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(path)
+    con.executescript(valuation_history.SCHEMA_SQL)
+    con.executemany("INSERT INTO valuation (market, date, code, name, close, dividend_yield_pct, dividend_year_roc, pe, "
+                    "pb, fin_period_roc, schema) VALUES ('上市', ?, '2330', '台積電', 100, ?, 114, ?, ?, '115/2', 'v8')",
+                    [(day, dy, pe, pb) for day, pe, pb, dy in rows])
+    con.commit()
+    con.close()
+
+
+class ValuationInputTests(InputsTestCase):
+    def test_latest_values_and_where_they_sit_in_the_past_year(self):
+        valuation_db(self.root, [
+            ("2025-09-30", 5.0, 0.5, 9.0),      # 超過一年，不算進區間
+            ("2025-11-03", 10.0, 1.0, None),
+            ("2026-03-02", 20.0, 2.0, None),
+            ("2026-06-01", 15.0, 1.5, None),
+            ("2026-09-01", 12.0, 1.2, None),
+            ("2026-10-30", 18.0, 1.0, None),
+            ("2026-11-02", 30.0, 3.0, None),    # 基準日之後，看不到
+        ])
+        found = wi.valuation_input(self.root, "2330", "2026-10-30")
+        self.assertEqual(found["data_date"], "2026-10-30")
+        self.assertEqual(found["period"], {"from": "2025-11-03", "to": "2026-10-30", "days": 5})
+        # 本益比：最低 10、最高 20，現在 18 → (18 − 10) ÷ (20 − 10) ＝ 80%
+        self.assertEqual(found["pe"], {"value": 18.0, "low_1y": 10.0, "high_1y": 20.0, "position_pct": 80.0})
+        # 淨值比：現在 1.0 就是最低 → 0%
+        self.assertEqual(found["pb"], {"value": 1.0, "low_1y": 1.0, "high_1y": 2.0, "position_pct": 0.0})
+        self.assertEqual(found["dividend_yield_pct"], {"value": None, "low_1y": None, "high_1y": None,
+                                                      "position_pct": None})
+
+    def test_a_loss_making_pe_is_null_and_has_no_position(self):
+        valuation_db(self.root, [("2026-10-29", 10.0, 1.0, 3.0), ("2026-10-30", None, 1.0, 3.0)])
+        found = wi.valuation_input(self.root, "2330", "2026-10-30")
+        self.assertEqual(found["pe"], {"value": None, "low_1y": 10.0, "high_1y": 10.0, "position_pct": None})
+        # 一年內都一樣：最高等於最低，沒有位置可說
+        self.assertIsNone(found["dividend_yield_pct"]["position_pct"])
+
+    def test_no_rows_or_no_database(self):
+        self.assertIsNone(wi.valuation_input(self.root, "2330", "2026-10-30"))
+        valuation_db(self.root, [("2026-10-30", 10.0, 1.0, 3.0)])
+        self.assertIsNone(wi.valuation_input(self.root, "2317", "2026-10-30"))
+
+
+class LendingEpsInputTests(unittest.TestCase):
+    QUARTERS = [{"period": p, "eps_twd": e, "available_on": a} for p, e, a in (
+        ("2025-Q1", 2.0, "2025-05-15"), ("2025-Q2", 4.5, "2025-08-14"), ("2025-Q3", 7.5, "2025-11-14"),
+        ("2025-Q4", 10.0, "2026-03-31"), ("2026-Q1", 3.0, "2026-05-15"), ("2026-Q2", 6.5, "2026-08-14"),
+        ("2026-Q3", 9.9, "2026-11-16"))]   # 第三季法定期限在基準日之後，看不到
+
+    def test_lending_balance_and_five_day_change_in_lots(self):
+        borrow = [{"date": f"2026-10-{d:02d}", "balance": b} for d, b in
+                  ((23, 1_000_000), (26, 1_100_000), (27, 1_200_000), (28, 1_300_000), (29, 1_400_000),
+                   (30, 1_550_400))]
+        found = wi.lending_eps_input({"borrow": borrow}, self.QUARTERS, "2026-10-30")
+        # 1,550,400 股 ＝ 1,550 張；和往前第 5 筆比 1,550,400 − 1,000,000 ＝ 550,400 股 ＝ 550 張
+        self.assertEqual(found["lending"], {"data_date": "2026-10-30", "balance_lots": 1550, "change_5d_lots": 550,
+                                            "compared_with": "2026-10-23"})
+
+    def test_last_four_single_quarter_eps_from_year_to_date_figures(self):
+        found = wi.lending_eps_input({}, self.QUARTERS, "2026-10-30")
+        self.assertIsNone(found["lending"])
+        # 單季＝累計減上一季累計：2025-Q3 7.5 − 4.5 ＝ 3.0；Q4 10 − 7.5 ＝ 2.5；2026-Q1 就是 3.0；Q2 6.5 − 3.0 ＝ 3.5
+        self.assertEqual(found["eps"]["quarters"], [
+            {"period": "2025-Q3", "eps_ytd": 7.5, "eps_quarter": 3.0, "available_on": "2025-11-14"},
+            {"period": "2025-Q4", "eps_ytd": 10.0, "eps_quarter": 2.5, "available_on": "2026-03-31"},
+            {"period": "2026-Q1", "eps_ytd": 3.0, "eps_quarter": 3.0, "available_on": "2026-05-15"},
+            {"period": "2026-Q2", "eps_ytd": 6.5, "eps_quarter": 3.5, "available_on": "2026-08-14"},
+        ])
+        self.assertEqual(found["eps"]["last_four_sum"], 12.0)   # 3.0 + 2.5 + 3.0 + 3.5
+
+    def test_a_quarter_without_the_previous_year_to_date_has_no_single_quarter(self):
+        found = wi.lending_eps_input({}, [q for q in self.QUARTERS if q["period"] != "2025-Q2"], "2026-10-30")
+        first = found["eps"]["quarters"][0]
+        self.assertEqual((first["period"], first["eps_quarter"]), ("2025-Q3", None))
+        self.assertIsNone(found["eps"]["last_four_sum"])
+
+    def test_nothing_at_all_is_none(self):
+        self.assertIsNone(wi.lending_eps_input({}, [], "2026-10-30"))
+
+
+class SignalsInputTests(unittest.TestCase):
+    def test_keeps_the_blocks_and_drops_the_chart_arrays(self):
+        signals = {"data_date": "2026-10-30", "limit_up_momentum": {"score": 72},
+                   "versus_market": {"rows": [{"days": 5, "gap": 1.2}]}, "ma_alignment": None,
+                   "margin_maintenance": {"low_pct": 150, "high_pct": 170, "data_date": "2026-10-29"},
+                   "heavy_zones": {"close": 100, "zones": [{"low": 90, "high": 95}], "chart": {"closes": [1, 2]}},
+                   "blocks": ["limit_up_momentum", "versus_market", "margin_maintenance", "heavy_zones"], "failed": []}
+        found = wi.signals_input(signals)
+        self.assertNotIn("chart", found["heavy_zones"])
+        self.assertEqual(found["heavy_zones"]["zones"], [{"low": 90, "high": 95}])
+        self.assertEqual(found["margin_maintenance"]["low_pct"], 150)
+        self.assertIsNone(found["ma_alignment"])
+        self.assertEqual(found["data_date"], "2026-10-30")
+        self.assertIn("chart", signals["heavy_zones"])   # 不改呼叫端那一份
+
+    def test_no_blocks_is_none(self):
+        self.assertIsNone(wi.signals_input(None))
+        self.assertIsNone(wi.signals_input({"data_date": "2026-10-30", "blocks": [], "failed": []}))
+
+
+WITH_NEW_THREE = ("technical", "valuation", "lending_eps", "signals", "market", "news")
+
+
+def new_three():
+    return {
+        "valuation": {"data_date": BASE, "pe": {"value": 18.0, "low_1y": 10.0, "high_1y": 20.0, "position_pct": 80.0}},
+        "lending_eps": {"lending": None, "eps": {"quarters": [], "last_four_sum": None}},
+        "signals": {"data_date": BASE, "ma_alignment": {"summary": "多頭排列"}, "blocks": ["ma_alignment"]},
+    }
+
+
+class NewThreeLayersTests(WatchLedgerTestCase):
+    def sent(self):
+        prompt = (self.bin / "prompt.txt").read_text(encoding="utf-8")
+        return prompt, json.loads(prompt[prompt.index("{"):prompt.rindex("}") + 1])
+
+    def test_model_sees_each_layer_and_the_prompt_says_how_to_read_it(self):
+        self.write(stock_input(**new_three()), model=recording_model(self.bin, answer()), layers=WITH_NEW_THREE)
+        prompt, sent = self.sent()
+        self.assertEqual(sent["valuation"]["pe"]["position_pct"], 80.0)
+        self.assertEqual(sent["signals"]["ma_alignment"]["summary"], "多頭排列")
+        self.assertIn("lending_eps", sent)
+        for words in ("valuation", "本益比", "不代表便宜", "lending_eps", "借券", "單季", "signals", "融資維持率（估）",
+                      "不是買賣訊號"):
+            self.assertIn(words, prompt)
+
+    def test_missing_layers_are_named_and_the_judgment_is_still_written(self):
+        record = self.write(stock_input(valuation=None, lending_eps=None, signals=None),
+                            layers=WITH_NEW_THREE)["record"]
+        self.assertEqual(record["kind"], "judgment")
+        self.assertEqual(record["missing_layers"], ["valuation", "lending_eps", "signals"])
+
+    def test_the_layers_are_a_new_input_version_and_off_leaves_the_old_version_unchanged(self):
+        self.assertTrue(wl.input_version_of(WITH_NEW_THREE).startswith(
+            "technical+valuation+lending_eps+signals+market+news-v1-"))
+        self.assertEqual(wl.input_version_of(("technical", "bollinger", "sector", "margin", "environment", "market",
+                                              "news", "lessons")),
+                         "technical+bollinger+sector+margin+environment+market+news+lessons-v1-b68cbcd8")
+
 if __name__ == "__main__":
     unittest.main()
