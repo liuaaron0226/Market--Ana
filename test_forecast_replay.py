@@ -185,9 +185,9 @@ class RunTests(ReplayTestCase):
         self.run_replay(end="2026-04-03", editions=("evening",), ofr_fetch=fetch)
         self.assertEqual(len(calls), 1)
         seen = {item["base_date"]: item["ofr_stress"] for item in self.inputs()}
-        # 04-02（週四）往前兩個平日是 03-31（週二）；04-03（週五）是 04-01（週三）——之後抓到的值一律看不到
-        self.assertEqual(seen["2026-04-02"]["observed_at"], "2026-03-31")
-        self.assertEqual(seen["2026-04-03"]["observed_at"], "2026-04-01")
+        # 04-02（週四）往前三個平日是 03-30（週一）；04-03（週五）是 03-31（週二）——之後抓到的值一律看不到
+        self.assertEqual(seen["2026-04-02"]["observed_at"], "2026-03-30")
+        self.assertEqual(seen["2026-04-03"]["observed_at"], "2026-03-31")
 
     def test_lessons_only_see_outcomes_that_had_expired_by_the_base_date(self):
         self.run_replay(end="2026-04-08", editions=("evening",))

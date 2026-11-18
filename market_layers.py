@@ -43,10 +43,11 @@ QUADRANT_ORDER = ("leading", "weakening", "improving", "lagging")
 OFR_MAX_AGE_DAYS = 7      # OFR 最後一筆比截止日早超過這麼多天（原件沒更新）就當作缺
 OFR_URL = "https://www.financialresearch.gov/financial-stress-index/data/fsi.csv"   # 和 level_signals.OFR_FSI_URL 同一份
 OFR_TIMEOUT_SECONDS = 30
-# 公布落後：本機 2026-11-10 16:33（UTC，美東週一上午）抓的原件最後一筆是 11-06（週五），週一 11-09 還沒有。
-# 所以只用「寫預測那天（晚間版是基準日、晨間版是開盤日）往前第二個平日（含）以前」的分數；正式排程抓到的本來就只有
-# 已公布的，這條截斷是給重播與補跑用的同一條規則。只觀察過一次，偏保守。
-OFR_LAG_WEEKDAYS = 2
+# 公布落後（實測兩次）：2026-11-10 16:33 UTC（台北 11-11 凌晨、美東週二上午）抓的原件最後一筆是 11-06（週五）；
+# 2026-11-18 台北晚間（美東週三上午）抓的最後一筆是 11-13（週五），週一、週二都還沒有。所以只用「寫預測那天
+# （晚間版是基準日、晨間版是開盤日）往前第三個平日（含）以前」的分數；兩次實測都剛好對上。正式排程抓到的本來就只有
+# 已公布的，這條截斷是給重播與補跑用的同一條規則。
+OFR_LAG_WEEKDAYS = 3
 
 NOTES = {
     "market_margin": "大盤融資融券餘額（上市，證交所信用交易總表）。融資餘額是散戶用槓桿的程度、融券是放空的張數，"
@@ -257,7 +258,7 @@ def ofr_layer(credit_rows: Sequence[Mapping[str, Any]], cutoff: str) -> dict[str
 
 
 def ofr_cutoff(base_date: str, edition: str, session_date: str | None) -> str:
-    """只用寫預測那天往前第二個平日（含）以前的分數：晚間版以基準日算、晨間版以開盤日算（見 OFR_LAG_WEEKDAYS）。"""
+    """只用寫預測那天往前第三個平日（含）以前的分數：晚間版以基準日算、晨間版以開盤日算（見 OFR_LAG_WEEKDAYS）。"""
     day = date.fromisoformat(session_date if edition == "morning" and session_date else base_date)
     steps = 0
     while steps < OFR_LAG_WEEKDAYS:

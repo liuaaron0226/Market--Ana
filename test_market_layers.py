@@ -227,16 +227,16 @@ class OfrFetchTests(unittest.TestCase):
         self.assertNotIn("@", asked[0][2] or "")   # 不帶任何個人資料
         self.assertEqual(rows[-1], {"date": "2026-02-06", "credit": 5.9})
 
-    def test_the_series_is_cut_two_weekdays_before_the_run_day(self):
-        # 本機 2026-11-10 16:33（UTC）抓的原件最後一筆是 11-06（週五），週一 11-09 還沒公布：
-        # 所以只用「寫預測那天往前第二個平日（含）以前」的分數。晚間版以基準日算、晨間版以開盤日算。
+    def test_the_series_is_cut_three_weekdays_before_the_run_day(self):
+        # 實測：11-18（週三）台北晚間抓到的最後一筆是 11-13（週五），週一、週二還沒公布：
+        # 所以只用「寫預測那天往前第三個平日（含）以前」的分數。晚間版以基準日算、晨間版以開盤日算。
         sources = ml.load_sources(None, None, base_date="2026-02-06", ofr=lambda: ml.parse_ofr(ofr_csv("2026-02-06")))
         evening = ml.build_layers(sources, base_date="2026-02-06", index_daily=[], edition="evening")
-        self.assertEqual(evening["ofr_stress"]["observed_at"], "2026-02-04")   # 週五往前兩個平日是週三
-        self.assertEqual(evening["ofr_stress"]["value"], 5.7)                   # 02-04 是第 57 筆（0 起算）
+        self.assertEqual(evening["ofr_stress"]["observed_at"], "2026-02-03")   # 週五往前三個平日是週二
+        self.assertEqual(evening["ofr_stress"]["value"], 5.6)                   # 02-03 是第 56 筆（0 起算）
         morning = ml.build_layers(sources, base_date="2026-02-06", index_daily=[], edition="morning",
                                   session_date="2026-02-09")
-        self.assertEqual(morning["ofr_stress"]["observed_at"], "2026-02-05")   # 週一開盤日往前兩個平日是上週四
+        self.assertEqual(morning["ofr_stress"]["observed_at"], "2026-02-04")   # 週一開盤日往前三個平日是上週三
 
     def test_a_timeout_makes_the_layer_missing_with_its_error_kind(self):
         def timed_out():
@@ -265,14 +265,14 @@ class BuildLayersTest(unittest.TestCase):
         self.assertEqual(set(layers), set(ml.LAYER_NAMES))
         self.assertTrue(all(layers[name]["status"] == "missing" for name in ml.LAYER_NAMES))
 
-    def test_evening_ofr_cutoff_is_two_weekdays_before_the_base_date_and_morning_before_the_session(self):
+    def test_evening_ofr_cutoff_is_three_weekdays_before_the_base_date_and_morning_before_the_session(self):
         start = date(2026, 1, 1)
         rows = [{"date": (start + timedelta(days=i)).isoformat(), "credit": float(i)} for i in range(40)]
         evening = ml.build_layers({"ofr_credit": rows}, base_date="2026-02-05", index_daily=[], edition="evening")
-        self.assertEqual(evening["ofr_stress"]["observed_at"], "2026-02-03")   # 週四往前兩個平日是週二
+        self.assertEqual(evening["ofr_stress"]["observed_at"], "2026-02-02")   # 週四往前三個平日是週一
         morning = ml.build_layers({"ofr_credit": rows}, base_date="2026-02-05", index_daily=[], edition="morning",
                                   session_date="2026-02-06")
-        self.assertEqual(morning["ofr_stress"]["observed_at"], "2026-02-04")   # 開盤日週五往前兩個平日是週三
+        self.assertEqual(morning["ofr_stress"]["observed_at"], "2026-02-03")   # 開盤日週五往前三個平日是週二
 
 if __name__ == "__main__":
     unittest.main()
