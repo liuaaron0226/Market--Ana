@@ -41,10 +41,11 @@
 """
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 import fund_compare
+import fund_distributions
 from twon_analysis.strategy_v1 import _price_plan as stock_price_plan  # 和股票同一套四個價的取法
 
 ANALYSIS_SCHEMA = "stock-analysis/v2"
@@ -219,8 +220,10 @@ def _strategy_and_levels(navs: Sequence[tuple[str, float]], status: str) -> tupl
     return nav_strategy(navs, levels), levels
 
 
-def fund_analysis(code: str, navs: Sequence[tuple[str, float]], status: str) -> dict[str, Any]:
-    """分析契約 v2 的基金版。``navs`` 已截到資料日、至少 MIN_NAVS 筆；``status`` 是 available 或 stale。"""
+def fund_analysis(code: str, navs: Sequence[tuple[str, float]], status: str, *,
+                  distributions: Sequence[Mapping[str, Any]], as_of: str) -> dict[str, Any]:
+    """分析契約 v2 的基金版。``navs`` 已截到資料日、至少 MIN_NAVS 筆；``status`` 是 available 或 stale。
+    ``distributions`` 是合併好的配息列，``as_of`` 是資料日：除息日在它之後的配息不用（06 票「配息」分類）。"""
     fund = fund_compare.FUNDS[code]
     strategy, levels = _strategy_and_levels(navs, status)
     return {
@@ -235,6 +238,8 @@ def fund_analysis(code: str, navs: Sequence[tuple[str, float]], status: str) -> 
         "levels": levels,
         "institutional": [],
         "bars": [{"date": day, "close": nav} for day, nav in navs[-BARS_IN_ANALYSIS:]],
+        # 基金專屬：個股頁「配息」分類（06 票）；股票的分析沒有這一欄
+        "distributions": fund_distributions.summary(distributions, as_of=as_of, currency=fund["currency"]),
         "notes": {"nav_lag": NAV_LAG_NOTE},
         "labels": {"not_advice": "分析數字是參考，不是買賣指令", "price_basis": f"基金淨值（{fund['currency']}），不含配息"},
     }
@@ -249,13 +254,15 @@ def fund_rows(as_of: str, *, loader: Loader = fund_compare.load_history,
     for code in codes or sorted(fund_compare.FUNDS):
         fund = fund_compare.FUNDS[code]
         try:
-            navs = _navs_upto(loader(code, as_of=as_of), as_of)
+            history = loader(code, as_of=as_of)
+            navs = _navs_upto(history, as_of)
         except (OSError, ValueError, KeyError) as error:
-            navs = []
+            history, navs = {}, []
             failures.append({"code": code, "scope": "fund", "error": type(error).__name__, "message": str(error)[:200]})
         status = _status(navs, as_of)
         if status in ("available", "stale"):
-            analyses.append({"code": code, "as_of": navs[-1][0], "payload": fund_analysis(code, navs, status)})
+            analyses.append({"code": code, "as_of": navs[-1][0], "payload": fund_analysis(
+                code, navs, status, distributions=history["distributions"], as_of=as_of)})
         directory.append({
             "code": code, "name": fund["short_name"], "full_name": fund["name"], "currency": fund["currency"],
             "isin": fund["isin"], "latest_bar_date": navs[-1][0] if navs else None, "available_bars": len(navs),
