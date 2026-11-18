@@ -748,6 +748,11 @@
   const PL = plainStale ? null : (OV.plain || null);
   const NOW = OV.current || null;   // 最新一天各項的前 10 與連續天數（本人 11-07 定案）
   const shortDay = date => (date ? date.slice(5).replace('-', '/') : '');
+  // 外資期貨空單比前一天（本人 11-19「寫出今天加空幾口或者是回補多少口」）：net 是淨部位（負的是空單），越負就是加空
+  const shortChange = (prevNet, net) => {
+    const more = prevNet - net;
+    return more > 0 ? `加空 ${fmt(more, 0)} 口` : more < 0 ? `回補 ${fmt(-more, 0)} 口` : '空單沒變';
+  };
   function spark(values, tone, signedAxis) {
     const clean = values.map(Number).filter(Number.isFinite);
     if (clean.length < 2) return '';
@@ -767,7 +772,7 @@
     let streak = 0; for (let i = F.length - 1; i >= 0 && F[i].net_billion < 0; i -= 1) streak += 1;
     const f20 = F.slice(-20).reduce((s, r) => s + r.net_billion, 0);
     const t5 = F.slice(-5).reduce((s, r) => s + r.trust_billion, 0);
-    const fut = last(U).net_contracts, futWeek = ago(U, 5).net_contracts;
+    const fut = last(U).net_contracts, futWeek = ago(U, 5).net_contracts, futToday = U.length > 1 ? `今天${shortChange(ago(U, 1).net_contracts, fut)}，` : '';
     const futDays = NOW ? NOW.futures_short_growing_days : 0;
     const futStreak = futDays > 0 ? `，連 ${fmt(futDays, 0)} 天${futDays >= NOW.futures_days_available ? '以上' : ''}增加` : fut < futWeek ? '，還在加' : '';
     const mLast = last(M), mPeak = M.reduce((a, b) => (b.margin_balance_billion > a.margin_balance_billion ? b : a));
@@ -777,7 +782,7 @@
     const md = d => d ? `${d.slice(5, 7)}/${d.slice(8, 10)}` : '';
     return [
       { key: 'foreign', name: '外資現貨', value: `${last(F).net_billion < 0 ? '賣' : '買'} ${fmt(Math.abs(last(F).net_billion), 0)} 億`, tone: last(F).net_billion < 0 ? 'down' : 'up', read: last(F).net_billion < 0 ? `連 ${streak} 天賣，一個月 ${fmt(Math.abs(f20) / 10000, 1)} 兆` : '今天轉為買超', chart: spark(F.slice(-20).map(r => r.net_billion), '', true), date: last(F).date, plain: pick('foreign') },
-      { key: 'futures', name: '外資期貨空單', value: `${fmt(Math.abs(fut), 0)} 口`, tone: fut < futWeek ? 'down' : 'up', read: `比一週前${fut < futWeek ? '多' : '少'} ${fmt(Math.abs(fut - futWeek), 0)} 口${futStreak}`, chart: spark(U.slice(-20).map(r => -r.net_contracts), 'var(--down)'), date: last(U).date, plain: pick('foreign') },
+      { key: 'futures', name: '外資期貨空單', value: `${fmt(Math.abs(fut), 0)} 口`, tone: fut < futWeek ? 'down' : 'up', read: `${futToday}比一週前${fut < futWeek ? '多' : '少'} ${fmt(Math.abs(fut - futWeek), 0)} 口${futStreak}`, chart: spark(U.slice(-20).map(r => -r.net_contracts), 'var(--down)'), date: last(U).date, plain: pick('foreign') },
       { key: 'margin', name: '融資餘額', value: `${fmt(mLast.margin_balance_billion, 0)} 億`, tone: 'mid', read: `比 ${md(mPeak.date)} 高點少 ${fmt(mPeak.margin_balance_billion - mLast.margin_balance_billion, 0)} 億`, chart: spark(M.slice(-20).map(r => r.margin_balance_billion), 'var(--gold)'), date: mLast.date, plain: pick('margin') },
       { key: 'short', name: '融券餘額', value: `${fmt(sNow / 10000, 1)} 萬張`, tone: sNow > s20 ? 'down' : 'up', read: `比 20 天前${sNow > s20 ? '多' : '少'} ${fmt(Math.abs(sNow / s20 - 1) * 100, 0)}%`, chart: spark(M.slice(-20).map(r => r.short_units), 'var(--accent)'), date: mLast.date, plain: pick('short') },
       { key: 'trust', name: '投信近一週', value: `${t5 >= 0 ? '買' : '賣'} ${fmt(Math.abs(t5), 0)} 億`, tone: t5 >= 0 ? 'up' : 'down', read: `最新一天${last(F).trust_billion < 0 ? '賣' : '買'} ${fmt(Math.abs(last(F).trust_billion), 0)} 億`, chart: spark(F.slice(-20).map(r => r.trust_billion), '', true), date: last(F).date, plain: pick('trust') },
@@ -807,11 +812,32 @@
     if (!CH) return [];
     if (key === 'foreign') return CH.foreign.slice(-20).map(r => ({ date: r.date, value: r.net_billion, label: `${r.net_billion < 0 ? '賣' : '買'} ${fmt(Math.abs(r.net_billion), 0)} 億` }));
     if (key === 'trust') return CH.foreign.slice(-20).map(r => ({ date: r.date, value: r.trust_billion, label: `${r.trust_billion < 0 ? '賣' : '買'} ${fmt(Math.abs(r.trust_billion), 0)} 億` }));
-    if (key === 'futures') return CH.futures.slice(-20).map((r, i, a) => ({ date: r.date, value: -r.net_contracts, label: `空單 ${fmt(Math.abs(r.net_contracts), 0)} 口`, prev: i ? a[i - 1].net_contracts : null }));
+    // 圖上每一天只寫那天比前一天加空或回補幾口（本人 11-19：「上面已經有寫總勘酖了，所以這裡只需要寫當天的」，總口數在上面）。
+    // 第一天往前再找一天；整份最前面那一天沒有前一天，才退回寫那天的空單口數
+    if (key === 'futures') {
+      const all = CH.futures, from = Math.max(0, all.length - 20);
+      return all.slice(from).map((r, i, a) => {
+        const before = all[from + i - 1];
+        return { date: r.date, value: -r.net_contracts, label: before ? shortChange(before.net_contracts, r.net_contracts) : `空單 ${fmt(Math.abs(r.net_contracts), 0)} 口`, prev: i ? a[i - 1].net_contracts : null };
+      });
+    }
     if (key === 'margin') return CH.margin.slice(-20).map((r, i, a) => ({ date: r.date, value: r.margin_balance_billion, label: `${fmt(r.margin_balance_billion, 0)} 億`, prev: i ? a[i - 1].margin_balance_billion : null }));
     if (key === 'short') return CH.margin.slice(-20).map((r, i, a) => ({ date: r.date, value: r.short_units, label: `${fmt(r.short_units / 10000, 1)} 萬張`, prev: i ? a[i - 1].short_units : null }));
     if (key === 'volume') return A.daily.slice(-20).map(r => ({ date: r.date, value: r.amount / 1e8, label: `${fmt(r.amount / 1e8, 0)} 億` }));
     return [];
+  }
+  // 選到某一天時最上面那一行字（日期＋數字）：畫好之後實際量，超出圖框左邊就改成靠左、超出右邊就改成靠右。
+  // 原本只有靠邊四根改對齊；空單那一行多了「加空／回補幾口」（本人 11-19）變長，中段幾根也會超出、被切掉
+  function fitBarValues(svg) {
+    const width = svg.viewBox.baseVal.width;
+    svg.querySelectorAll('.bar-value').forEach(text => {
+      const shown = text.style.display;
+      text.style.display = 'block';   // 平常收著（選到才出現），收著量不到寬度
+      const box = text.getBBox();
+      text.style.display = shown;
+      if (box.x < 0) { text.setAttribute('text-anchor', 'start'); text.setAttribute('x', '0'); }
+      else if (box.x + box.width > width) { text.setAttribute('text-anchor', 'end'); text.setAttribute('x', String(width)); }
+    });
   }
   function clickableBars(key, selected) {
     const rows = chipSeries(key);
@@ -829,11 +855,15 @@
       const tone = signedAxis ? (r.value >= 0 ? 'var(--up)' : 'var(--down)') : key === 'margin' ? 'var(--gold)' : key === 'futures' ? 'var(--down)' : 'var(--accent)';
       const has = detailDays.has(r.date);
       const on = r.date === selected;
-      // 選到的那一天，日期與數字寫在圖的最上面、對著那一根；靠邊的幾根改成靠左或靠右對齊，字才不會被切掉
+      // 選到的那一天，日期與數字寫在圖的最上面、對著那一根；靠邊的幾根改成靠左或靠右對齊，字才不會被切掉。
+      // 數字用那根長條的顏色、日期是墨色（本人 11-19「你數字可以在明顯一點顏色方面」）
       const edge = i < 4 ? ['start', pad + i * step] : i > rows.length - 5 ? ['end', pad + (i + 1) * step] : ['middle', pad + i * step + step / 2];
-      return `<g class="bar-hit${on ? ' is-on' : ''}" data-day="${esc(r.date)}" tabindex="0" role="button" aria-label="${esc(r.date)} ${esc(r.label)}${has ? '，點看那一天的名單' : ''}"><rect x="${pad + i * step}" y="0" width="${step}" height="${H}" fill="transparent"/><rect x="${pad + i * step + step * .14}" y="${top}" width="${step * .72}" height="${h}" rx="2" fill="${tone}" opacity="${on ? 1 : .72}"/><text class="bar-value" x="${edge[1]}" y="17" text-anchor="${edge[0]}">${esc(shortDay(r.date))} ${esc(r.label)}</text></g>`;
+      return `<g class="bar-hit${on ? ' is-on' : ''}" data-day="${esc(r.date)}" tabindex="0" role="button" aria-label="${esc(r.date)} ${esc(r.label)}${has ? '，點看那一天的名單' : ''}"><rect x="${pad + i * step}" y="0" width="${step}" height="${H}" fill="transparent"/><rect x="${pad + i * step + step * .14}" y="${top}" width="${step * .72}" height="${h}" rx="2" fill="${tone}" opacity="${on ? 1 : .72}"/><text class="bar-value" x="${edge[1]}" y="17" text-anchor="${edge[0]}"><tspan class="bar-day">${esc(shortDay(r.date))}</tspan> <tspan class="bar-num" fill="${tone}">${esc(r.label)}</tspan></text></g>`;
     }).join('');
-    const ticks = [0, Math.floor(rows.length / 2), rows.length - 1].map(i => `<text x="${pad + i * step + step / 2}" y="${H - 6}" text-anchor="middle">${esc(rows[i].date.slice(5).replace('-', '/'))}</text>`).join('');
+    // 底下的三個日期（本人 11-19 第二次說「最右邊的日期會被擋到看不清楚」）：置中對著靠邊那一根會超出圖框、手機字大時被切掉，
+    // 所以第一個靠左對齊第一根的左緣、最後一個靠右對齊最後一根的右緣，中間那個照舊置中
+    const tickAt = i => (i === 0 ? ['start', pad + step * .14] : i === rows.length - 1 ? ['end', pad + i * step + step * .86] : ['middle', pad + i * step + step / 2]);
+    const ticks = [...new Set([0, Math.floor(rows.length / 2), rows.length - 1])].map(i => { const [anchor, x] = tickAt(i); return `<text x="${x}" y="${H - 6}" text-anchor="${anchor}">${esc(rows[i].date.slice(5).replace('-', '/'))}</text>`; }).join('');
     return `<svg class="drill-chart" viewBox="0 0 ${W} ${H}" role="group" aria-label="近 20 個交易日，點任一天看那一天的名單">${signedAxis ? `<line x1="0" x2="${W}" y1="${zero}" y2="${zero}" stroke="var(--line-strong)"/>` : ''}<rect class="bar-thumb" x="0" y="0" width="${step}" height="${H}"/>${bars}${ticks}</svg>`;
   }
   // 籌碼與資金的明細板（本人 2026-11-15 照樣品定案）：今天的數字與一句結論 → 近 20 天的圖 → 注意 → 解讀 → 名單。
@@ -952,6 +982,7 @@
       showChipList(key);
     }));
     const chart = els.panelBody.querySelector('.drill-chart'), bars = [...els.panelBody.querySelectorAll('.bar-hit')];
+    if (chart) fitBarValues(chart);
     const pickDay = bar => {
       panelState.payload.day = bar.dataset.day;
       bars.forEach(other => other.classList.toggle('is-on', other === bar));
@@ -1466,26 +1497,6 @@
         ${item.url ? `<a href="${esc(item.url)}" target="_blank" rel="noreferrer">查看來源</a>` : ''}</article>
       `).join('')}</div>
     ` : '<p class="panel-lede">目前沒有已核實的新聞事件。</p>';
-  }
-
-  function svgBars(values, labels, tone = 'var(--accent)', signedAxis = false) {
-    const clean = values.map(value => Number(value) || 0);
-    const max = Math.max(1, ...clean.map(Math.abs));
-    const width = 344;
-    const height = 154;
-    const baseline = signedAxis ? 74 : 128;
-    const usable = signedAxis ? 54 : 92;
-    const step = (width - 34) / Math.max(1, clean.length);
-    const bars = clean.map((value, index) => {
-      const h = Math.abs(value) / max * usable;
-      const x = 22 + index * step + step * .18;
-      const y = signedAxis ? (value >= 0 ? baseline - h : baseline) : baseline - h;
-      const fill = signedAxis ? (value >= 0 ? 'var(--up)' : 'var(--down)') : tone;
-      return `<rect x="${x}" y="${y}" width="${Math.max(2, step * .62)}" height="${Math.max(1, h)}" rx="2" fill="${fill}" opacity=".78"/>`;
-    }).join('');
-    const labelIndexes = [...new Set([0, Math.floor((clean.length - 1) / 2), clean.length - 1])].filter(index => index >= 0);
-    const text = labelIndexes.map(index => `<text x="${22 + index * step + step * .49}" y="148" text-anchor="middle">${esc(String(labels[index] || '').slice(5))}</text>`).join('');
-    return `<svg viewBox="0 0 ${width} ${height}" role="img"><line class="axis" x1="18" y1="${baseline + .5}" x2="338" y2="${baseline + .5}"/>${bars}${text}</svg>`;
   }
 
   function openPanel(kind, payload, anchor, focusAnchor = anchor) {
