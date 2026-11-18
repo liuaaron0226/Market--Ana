@@ -29,7 +29,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Protocol
 
-from eodhd_cache import ENDPOINT as EODHD_ENDPOINT, FetchError, SharedEodhd
+from eodhd_cache import ENDPOINT as EODHD_ENDPOINT, HISTORY_DAYS as EODHD_HISTORY_DAYS, FetchError, SharedEodhd
 
 ROOT = Path(__file__).resolve().parent
 CLOUD = ROOT / "cloud"
@@ -42,6 +42,10 @@ OVERLAP_DAYS = 7
 # 和 cloud/lib/watch-peers.js 的 EODHD_PEER_LIMIT 是同一個數字，要調整得兩邊一起改。
 EODHD_SYMBOL_LIMIT = 12
 SOURCE_OF = {"US": "massive", "KR": "eodhd", "INDEX": "eodhd"}   # JP：沒有來源
+# 大盤頁切換的國外指數（本人 2026-11-19：道瓊、那斯達克、標普 500、日經 225、韓國綜合）：不管有沒有人關注都抓，
+# 舊資料一直累積（不受 KEEP_DAYS 限制，本人同日定案）。網站那邊的清單在 cloud/lib/market-indices.js，要改得兩邊一起改。
+# 除了道瓊，其他四個和大盤預測的海外層同一份共用快取，不多用額度。
+HOME_INDICES = ("DJI.INDX", "IXIC.INDX", "GSPC.INDX", "N225.INDX", "KS11.INDX")
 SYMBOL_RE = re.compile(r"^[0-9A-Z.]{2,16}$")
 D1_GROUP_BYTES = 2_000_000   # 和 daily_update 相同：多條語句合成約 2MB 一檔
 
@@ -304,9 +308,49 @@ def daily(d1: D1, sources: dict[str, Source | None], *, today: date, now: str,
         else:
             problems[problem] = problems.get(problem, 0) + 1
         statements.append(_status_sql(symbol, source_name, now, problem))
-    statements.append(f"DELETE FROM overseas_quotes WHERE date < {_sql_literal(keep_from.isoformat())};")
+    statements.append(f"DELETE FROM overseas_quotes WHERE date < {_sql_literal(keep_from.isoformat())} "
+                      f"AND symbol NOT IN ({', '.join(_sql_literal(symbol) for symbol in HOME_INDICES)});")
     d1.execute(statements)
     return {"symbols": len(peers), "ok": ok, "problems": problems, "rows": rows}
+
+
+def indices(d1: D1, source: Source | None, *, today: date, now: str) -> dict:
+    """大盤頁的五個國外指數抓一輪寫進雲端資料庫：每一檔各自成敗，額度用完時後面的不再打，抓不到的舊資料保留。
+    第一次取 EODHD 給得到的全部（約 400 天），之後從最後一筆往前一週重抓；不刪舊的。"""
+    latest = {row["symbol"]: row["latest"] for row in d1.query(LATEST_SQL)}
+    statements: list[str] = []
+    problems: dict[str, int] = {}
+    ok = rows = 0
+    exhausted = False
+    for symbol in HOME_INDICES:
+        problem = None
+        bars: list[dict] = []
+        if source is None:
+            problem = "no_key"
+        elif exhausted:
+            problem = "quota"
+        else:
+            last = latest.get(symbol)
+            start = date.fromisoformat(last) - timedelta(days=OVERLAP_DAYS) if last else today - timedelta(days=EODHD_HISTORY_DAYS)
+            try:
+                bars = source.daily(symbol, start, today)
+            except QuotaExceeded:
+                exhausted = True
+                problem = "quota"
+            except SourceError as error:
+                problem = error.problem
+            except (OSError, ValueError):
+                problem = "network"
+        if problem is None:
+            unique = {bar["date"]: bar for bar in bars}
+            statements.extend(_upsert_quote_sql(symbol, "eodhd", bar, now) for _, bar in sorted(unique.items()))
+            ok += 1
+            rows += len(unique)
+        else:
+            problems[problem] = problems.get(problem, 0) + 1
+        statements.append(_status_sql(symbol, "eodhd", now, problem))
+    d1.execute(statements)
+    return {"symbols": len(HOME_INDICES), "ok": ok, "problems": problems, "rows": rows}
 
 
 def purge_sql(source: str) -> list[str]:
@@ -350,8 +394,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     commands = parser.add_subparsers(dest="command", required=True)
     daily_parser = commands.add_parser("daily", help="抓一輪並寫進雲端資料庫")
-    daily_parser.add_argument("--shared-cache", action="store_true",
-                              help="EODHD 走 R2 的共用快取（eodhd-cache/），和大盤預測的海外層同一份")
+    indices_parser = commands.add_parser("indices", help="只抓大盤頁的五個國外指數並寫進雲端資料庫")
+    for sub in (daily_parser, indices_parser):
+        sub.add_argument("--shared-cache", action="store_true",
+                         help="EODHD 走 R2 的共用快取（eodhd-cache/），和大盤預測的海外層同一份")
     purge = commands.add_parser("purge", help="整批刪除某個來源的行情")
     purge.add_argument("--source", required=True, choices=["massive", "eodhd", "all"])
     purge.add_argument("--yes", action="store_true", help="確認要刪除")
@@ -374,6 +420,9 @@ def main(argv: list[str] | None = None) -> int:
         sources["eodhd"] = CachedEodhdSource(shared)
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     today = datetime.now(timezone(timedelta(hours=8))).date()
+    if args.command == "indices":
+        print(json.dumps(indices(d1, sources["eodhd"], today=today, now=now), ensure_ascii=False))
+        return 0
     print(json.dumps(daily(d1, sources, today=today, now=now), ensure_ascii=False))
     return 0
 

@@ -315,6 +315,7 @@ jobs:
           sync=$(python -c "import json,sys; print(json.load(open(sys.argv[1], encoding='utf-8'))['sync_state'])" "${{ runner.temp }}/daily-result.json")
           if [ "$sync" = "True" ]; then
             python overseas_peers.py daily --shared-cache
+            python overseas_peers.py indices --shared-cache   # 大盤頁切換的五個國外指數（本人 11-19）
           else
             echo "本次沒有新發布，不抓國外同類股"
           fi
