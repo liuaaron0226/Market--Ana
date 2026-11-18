@@ -61,6 +61,10 @@ class FakeSource:
             "valuation": {"data_date": base_date, "pe": {"value": 20.0}},
             "lending_eps": {"lending": {"data_date": base_date, "balance_lots": 10}, "eps": None},
             "signals": {"data_date": base_date, "blocks": ["ma_alignment"], "ma_alignment": {"summary": "多頭排列"}},
+            "intraday": {"status": "ok", "data_date": base_date, "summary": {"close": 100}},
+            "news_headlines": [{"id": "h_1", "source": "中央社", "title": "同業擴產", "summary": "",
+                                "published_at": f"{base_date}T15:00:00+08:00"}],
+            "peers": {"peers": [{"symbol": "NVDA", "close": 120.0}], "no_data": []},
             "data_cutoffs": {"stock": base_date},
         }
 
@@ -307,11 +311,12 @@ class OfficialStartTests(WatchRunTestCase):
         self.assertEqual({key: r["run_mode"] for key, r in records.items()}, {
             (BASE, "evening"): "trial", (BASE, "morning"): "trial",
             (LONG[22], "evening"): "official", (LONG[22], "morning"): "official"})
-        # 這一組輸入：官方資料算出的各層＋教訓層（H 票加最後供應點）；國外同類股與新聞標題依條款不放
+        # 這一組輸入：官方資料算出的各層＋教訓層（H 票加最後供應點）；J 票（本人 2026-11-19 00:1x「富果、新聞來源、
+        # 國外同類股都交給 Gemini 做詳細分析」）起富果、新聞標題、國外同類股也交，沒有被條款擋下的項目
         self.assertEqual(records[(LONG[22], "evening")]["layers"],
                          ["technical", "bollinger", "wyckoff_lpsy", "sector", "margin", "valuation", "lending_eps",
-                          "signals", "environment", "market", "news", "lessons"])
-        self.assertEqual(set(records[(LONG[22], "evening")]["withheld_inputs"]), {"peers", "headlines"})
+                          "signals", "intraday", "environment", "market", "news", "headlines", "peers", "lessons"])
+        self.assertEqual(records[(LONG[22], "evening")]["withheld_inputs"], {})
         sql = (self.tmp / f"evening-{LONG[22]}.sql").read_text(encoding="utf-8")
         self.assertIn(f'"official_since":"{LONG[22]}"', sql)
 
@@ -521,6 +526,49 @@ class SourceCheckTests(unittest.TestCase):
             ["ok", "not_found", "quota", "ok", "not_found", "eodhd_limit"])
         self.assertEqual(eodhd.asked, ["005930.KO", "000660.KO"])
         self.assertEqual(wr.source_check({"massive": None, "eodhd": None}, today=BASE)("NVDA.US", "US"), "no_key")
+
+
+class LicensedSourceTests(unittest.TestCase):
+    """J 票：新聞標題與國外同類股從網站資料庫唯讀查；只用寫的那一刻以前已經抓到的。"""
+
+    def query(self, sql):
+        self.asked.append(sql)
+        if "FROM watch_news" in sql:
+            return [{"code": "2330", "link": "https://www.cna.com.tw/a", "source": "cna-finance", "title": "同業擴產",
+                     "summary": "摘要", "published_at": "2026-11-06T06:00:00Z", "fetched_at": "2026-11-06T09:00:00Z"},
+                    {"code": "2330", "link": "https://www.cna.com.tw/b", "source": "cna-finance", "title": "之後才抓到",
+                     "summary": "", "published_at": "2026-11-06T10:00:00Z", "fetched_at": "2026-11-06T13:00:00Z"}]
+        if "FROM watch_peers" in sql:
+            return [{"code": "2330", "symbol": "NVDA", "name": "NVIDIA", "market": "US"}]
+        if "FROM overseas_quotes" in sql:
+            return [{"symbol": "NVDA", "date": "2026-11-04", "close": 100.0, "fetched_at": "2026-11-05T00:00:00Z"},
+                    {"symbol": "NVDA", "date": "2026-11-05", "close": 110.0, "fetched_at": "2026-11-06T00:00:00Z"},
+                    {"symbol": "NVDA", "date": "2026-11-06", "close": 999.0, "fetched_at": "2026-11-06T22:00:00Z"}]
+        return []
+
+    def test_headlines_and_peers_up_to_the_moment_of_writing(self):
+        self.asked = []
+        source = wr.LocalSource(query=self.query, owner_email="owner@example.com")
+        # 晚間版 2026-11-06 20:00（台北）＝ 12:00Z
+        found = source.licensed(["2330"], before="2026-11-06", cutoff="2026-11-06T20:00:00+08:00")["2330"]
+        self.assertEqual([item["title"] for item in found["news_headlines"]], ["同業擴產"])
+        # 美國 11-05 收 110（11-06 那一筆在基準日當天、而且 22:00Z 才抓到，看不到）；1 日 110 ÷ 100 − 1 ＝ 10%
+        self.assertEqual(found["peers"]["peers"][0]["close"], 110.0)
+        self.assertEqual(found["peers"]["peers"][0]["change_1d_pct"], 10.0)
+        self.assertTrue(all("DELETE" not in sql and "INSERT" not in sql for sql in self.asked))   # 只查不寫
+
+    def test_without_a_connection_both_layers_are_missing(self):
+        found = wr.LocalSource().licensed(["2330"], before="2026-11-06", cutoff="2026-11-06T20:00:00+08:00")
+        self.assertEqual(found, {"2330": {}})
+
+    def test_without_a_fugle_key_the_intraday_layer_is_missing(self):
+        source = wr.LocalSource()
+        self.assertIsNone(source._intraday("2330", "2026-11-06"))
+        self.assertEqual(source.fugle_errors["2330"], {"fugle": "no_api_key"})
+
+    def test_the_schedule_opens_the_three_layers(self):
+        for layer in ("intraday", "headlines", "peers"):
+            self.assertIn(layer, wr.LAYERS)
 
 
 class LocalSourceLpsyTests(unittest.TestCase):

@@ -483,37 +483,53 @@ class InputLayerTests(WatchLedgerTestCase):
         self.assertEqual(record["input_version"], wl.input_version_of(wl.DEFAULT_LAYERS, gm.ARGON))
         self.assertEqual(record["input"]["input_version"], record["input_version"])
 
-    def test_news_headlines_and_overseas_peers_keep_their_place_but_never_reach_the_model(self):
-        data = stock_input(news_headlines=[{"id": "h1", "source": "cna", "title": "外電報導同業大漲"}],
-                           peers=[{"symbol": "NVDA", "change_pct": 5.2}], realtime_quote={"price": 987.65})
+    def test_without_the_new_layers_headlines_and_peers_stay_out(self):
+        # 沒打開 headlines、peers 兩層時，呼叫端給了也不放（輸入和打開之前一樣）
+        data = stock_input(news_headlines=[{"id": "h_1", "source": "中央社", "title": "外電報導同業大漲"}],
+                           peers={"peers": [{"symbol": "NVDA", "change_1d_pct": 5.2}]}, realtime_quote={"price": 987.65})
         record = self.write(data, model=recording_model(self.bin, answer()))["record"]
         prompt = (self.bin / "prompt.txt").read_text(encoding="utf-8")
-        for secret in ("外電報導同業大漲", "NVDA", "987.65", "cna"):
-            self.assertNotIn(secret, prompt)
-            self.assertNotIn(secret, json.dumps(record, ensure_ascii=False))
+        for absent in ("外電報導同業大漲", "NVDA", "987.65"):
+            self.assertNotIn(absent, prompt)
         self.assertIsNone(record["input"]["peers"])
-        self.assertEqual(record["input"]["news"]["headlines"], None)
+        self.assertIsNone(record["input"]["news"]["headlines"])
         self.assertIn("公告九月營收", prompt)
-        # 紀錄寫明沒放的原因是條款，和「名單還沒確認」「當天沒抓到」分得開
-        self.assertEqual(record["withheld_inputs"], {"peers": "國外同類股行情依來源條款不放進提示",
-                                                     "headlines": "新聞標題依來源條款不放進提示"})
-        # 條款擋下的不算缺漏
+
+    def test_headlines_and_peers_reach_the_model_when_switched_on(self):
+        # 本人 2026-11-19 00:1x「富果、新聞來源、國外同類股都交給 Gemini 做詳細分析」：推翻 11-15「新聞標題與國外同類股
+        # 依來源條款不放進提示」。打開 headlines、peers 兩層就照實交給模型，紀錄裡不再有被條款擋下的項目。
+        headlines = [{"id": "h_1", "source": "中央社", "published_at": "2026-09-30T16:00:00+08:00",
+                      "title": "外電報導同業大漲", "summary": "摘要"}]
+        peers = {"peers": [{"symbol": "NVDA", "name": "NVIDIA", "date": "2026-09-29", "close": 120.0,
+                            "change_1d_pct": 5.2, "change_5d_pct": 8.0}], "no_data": []}
+        reply = answer(news_refs=["h_1", "a1"])
+        record = self.write(stock_input(news_headlines=headlines, peers=peers), model=recording_model(self.bin, reply),
+                            layers=("technical", "market", "news", "headlines", "peers"))["record"]
+        prompt = (self.bin / "prompt.txt").read_text(encoding="utf-8")
+        for present in ("外電報導同業大漲", "NVDA", "news.headlines"):
+            self.assertIn(present, prompt)
+        self.assertEqual(record["input"]["news"]["headlines"], headlines)
+        self.assertEqual(record["input"]["peers"], peers)
+        self.assertEqual(record["withheld_inputs"], {})
+        self.assertEqual([item["id"] for item in record["reason_news"]], ["h_1", "a1"])   # 新聞也能當引用
         self.assertEqual(record["missing_layers"], [])
+
+    def test_switched_on_but_empty_is_missing_not_blocking(self):
+        record = self.write(stock_input(), layers=("technical", "news", "headlines", "peers", "intraday"))["record"]
+        self.assertEqual(record["kind"], "judgment")
+        self.assertEqual(record["missing_layers"], ["intraday", "headlines", "peers"])
 
     def test_layers_that_may_not_be_sent_cannot_be_switched_on(self):
         with self.assertRaises(ValueError):
-            self.write(layers=("technical", "peers"))
+            self.write(layers=("market", "news"))     # 技術層是必要的
         with self.assertRaises(ValueError):
-            self.write(layers=("technical", "headlines"))
-        with self.assertRaises(ValueError):
-            self.write(layers=("market", "news"))
-        # 消息層這一版只收官方公告：其他來源混進來時拒絕，不送給模型
+            self.write(layers=("technical", "realtime_quote"))
+        # 消息層的官方公告那一格只收官方公告：新聞要走 headlines 那一層
         mixed = stock_input(announcements=[{"id": "h1", "source": "cna", "title": "外電報導"}])
         with self.assertRaises(ValueError):
             self.write(mixed)
         self.assertEqual(calls(self.bin), 0)
         self.assertEqual(wl.read_ledger(self.root)["judgments"], [])
-
 
 def three_stocks():
     return [stock_input(code=code, name=name) for code, name in (("2330", "台積電"), ("2317", "鴻海"), ("2454", "聯發科"))]

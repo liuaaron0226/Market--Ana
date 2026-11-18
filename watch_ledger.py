@@ -52,6 +52,7 @@ from ledger_core import (
 )
 import bollinger
 import gemini_models
+import licensed_inputs
 import watch_inputs
 import wyckoff_lpsy
 from twon_analysis import analyze_v2
@@ -72,13 +73,16 @@ HORIZONS = (5, 20)
 # wyckoff_lpsy（和大盤事前預測共用的判斷）算好，含息還原價要逐日漲跌，所以不是帳本從日 K 自己算。
 # valuation、lending_eps、signals 是 I 票第二輪（本人 2026-11-18 晚「更多整合所有網站可以獲取的資料」→
 # 「大盤＋自選股判斷」）：估值、借券與季 EPS、個股五塊訊號，由呼叫端（watch_run.LocalSource）從工作集算好。
+# J 票（本人 2026-11-19 00:1x「富果、新聞來源、國外同類股都交給 Gemini 做詳細分析」）：intraday（富果分時、均價線、
+# 五檔、內外盤比、60 分 K）、headlines（新聞標題與摘要）、peers（國外同類股）三層，由呼叫端用 licensed_inputs 整理好。
 LAYERS = ("technical", "bollinger", "wyckoff_lpsy", "sector", "margin", "valuation", "lending_eps", "signals",
-          "environment", "market", "news", "peers", "lessons")
+          "intraday", "environment", "market", "news", "headlines", "peers", "lessons")
 DEFAULT_LAYERS = ("technical", "market", "news")
 # 每一層在一檔輸入資料裡的欄位。消息層這一版只收官方公告（重大訊息、月營收）。布林通道由帳本從日 K 自己算，沒有欄位。
 # 教訓層沒有欄位：由帳本自己從過去的判斷與對帳整理（只放事實），呼叫端給的內容不用。
 _LAYER_FIELDS = {"technical": "technical", "wyckoff_lpsy": "wyckoff_lpsy", "sector": "sector", "margin": "margin",
                  "valuation": "valuation", "lending_eps": "lending_eps", "signals": "signals",
+                 "intraday": "intraday", "headlines": "news_headlines", "peers": "peers",
                  "environment": "environment", "market": "market_forecast", "news": "announcements"}
 # I 票四層各自的參數與提示規則：只有打開那一層時才算進輸入版本與提示，沒打開時舊版本一個字都不變。
 _LAYER_PARAMETERS: dict[str, dict[str, Any]] = {
@@ -92,6 +96,11 @@ _LAYER_PARAMETERS: dict[str, dict[str, Any]] = {
     "lending_eps": {"lending_compare_rows": watch_inputs.LENDING_DAYS, "eps_quarters": watch_inputs.EPS_QUARTERS,
                     "eps_basis": "年初至今累計換算單季"},
     "signals": {"blocks": list(stock_signals.BLOCK_NAMES), "dropped": ["heavy_zones.chart"]},
+    # J 票三層：整理方式與說明都在 licensed_inputs.PARAMETERS（說明改一個字也換版本）。
+    "intraday": {"layer": licensed_inputs.VERSION, "parts": ["summary", "bars_10min", "hourly", "book"],
+                 "parameters": licensed_inputs.PARAMETERS},
+    "headlines": {"layer": licensed_inputs.VERSION, "fields": ["id", "source", "published_at", "title", "summary"]},
+    "peers": {"layer": licensed_inputs.VERSION, "changes": ["1 日", "5 日"]},
     "environment": {"changes": "近 20 日", "series": ["usdtwd", "ust_2y", "ust_10y"]},
 }
 _LAYER_RULES: dict[str, tuple[str, ...]] = {
@@ -137,15 +146,26 @@ _LAYER_RULES: dict[str, tuple[str, ...]] = {
         "margin_maintenance 是融資維持率（估）的範圍（估計值，不是官方數字）、heavy_zones 是爆大量成交區與收盤的相對位置。"
         "沒有的塊代表算不出來，不得猜。這些都只是描述，不是買賣訊號，不能單獨決定 status。",
     ),
+    "intraday": (
+        "intraday 是富果的這一檔基準日盤中資料（程式整理好，只能照讀）：" + licensed_inputs.NOTES["stock_intraday"]
+        + "missing 列出的部分是沒抓到的，不得猜。",
+    ),
+    "headlines": (
+        "news.headlines 是這一檔的新聞（前面「沒給的資料」裡的新聞指的是這裡沒有的；這裡有的可以照說明引用）："
+        + licensed_inputs.NOTES["headlines"]
+        + "要引用新聞就把它的 id 放進 news_refs（和官方公告一樣），理由裡不要抄標題。",
+    ),
+    "peers": (
+        "peers 是國外同類股（前面「沒給的資料」裡的海外市場指的是這裡沒有的）：" + licensed_inputs.NOTES["peers"] + "no_data 列出的是沒有資料的代號。",
+    ),
     "environment": (
         "environment 是大環境：新臺幣對美元收盤匯率與美國公債 2 年、10 年殖利率，各自附資料日期與近 20 個交易日的變化；"
         "某一項是 null 就是缺資料，不得猜測。",
     ),
 }
-# 留位置、不放內容的資料：依來源條款不能送進目前用的 Gemini 方案（查證見 ANALYSIS_PLAN.md 2026-11-15）。
-# 每一份判斷的紀錄照實標出來，和「名單還沒確認」「當天沒抓到」（missing_layers）分得開；
-# 提示本身不變（已有規則要模型不把新聞與海外市場當事實），所以不換輸入版本。
-WITHHELD_INPUTS = {"peers": "國外同類股行情依來源條款不放進提示", "headlines": "新聞標題依來源條款不放進提示"}
+# 依來源條款留位置、不放內容的資料。11-15 起國外同類股與新聞標題留在這裡；本人 2026-11-19 00:1x「富果、新聞來源、
+# 國外同類股都交給 Gemini 做詳細分析」推翻那次的限制，所以現在是空的（紀錄照樣帶這個欄位，舊紀錄看得出差別）。
+WITHHELD_INPUTS: dict[str, str] = {}
 OFFICIAL_SOURCES = ("twse", "tpex")
 _ANNOUNCEMENT_FIELDS = ("id", "source", "kind", "published_at", "title", "body")
 _STOCK_KEYS = ("open", "high", "low", "close", "volume")
@@ -375,6 +395,10 @@ def _lessons(root: Path, code: str, base_date: str) -> dict[str, Any]:
     return {"transitions": transitions}
 
 
+# 這幾層在輸入裡有固定的位置（news.headlines、peers），不另外放到最上層。
+_FIXED_PLACES = ("headlines", "peers")
+
+
 def _model_input(data: Mapping[str, Any], edition: str, layers: list[str], raw: list[Bar], bars: list[Bar],
                  events: list[dict[str, Any]], unresolved: list[dict[str, Any]],
                  candidates: list[dict[str, Any]] | None, index_rows: list[dict[str, Any]],
@@ -388,7 +412,7 @@ def _model_input(data: Mapping[str, Any], edition: str, layers: list[str], raw: 
     if "bollinger" in values:
         values["bollinger"] = band
     # I 票的四層只在打開時才出現在輸入裡，沒打開它們的輸入和 I 票之前相同。
-    extras = {layer: values[layer] for layer in layers if layer in _LAYER_PARAMETERS}
+    extras = {layer: values[layer] for layer in layers if layer in _LAYER_PARAMETERS and layer not in _FIXED_PLACES}
     if extras:
         extras = {"layer_parameters": _layer_parameters(layers), **extras}
     return {
@@ -407,9 +431,9 @@ def _model_input(data: Mapping[str, Any], edition: str, layers: list[str], raw: 
         **extras,
         "technical": values.get("technical"),
         "market": values.get("market"),
-        # headlines（新聞標題）與 peers（國外同類股）只留位置：依來源條款不放內容（WITHHELD_INPUTS）。
-        "news": {"announcements": values.get("news"), "headlines": None},
-        "peers": None,
+        # J 票：新聞標題與國外同類股打開時才有內容（沒打開這兩層的輸入和之前相同）。
+        "news": {"announcements": values.get("news"), "headlines": values.get("headlines")},
+        "peers": values.get("peers"),
         "lessons": values.get("lessons"),
         "data_cutoffs": copy.deepcopy(dict(data.get("data_cutoffs") or {})),
         # 算候選關卡與「隨便挑」用的完整日 K：範圍、根數與雜湊一起鎖定，舊資料被更正時重跑會被擋下。
@@ -447,7 +471,8 @@ def _validate(structured: Any, model_input: Mapping[str, Any]) -> tuple[dict[str
         return None, f"理由：{problem}"
     if refs_problem(structured["reason_refs"], by_id):
         return None, "理由引用了不存在的候選編號"
-    news = {item["id"]: item for item in model_input["news"]["announcements"] or []}
+    news = {item["id"]: item for item in [*(model_input["news"]["announcements"] or []),
+                                          *(model_input["news"]["headlines"] or [])]}
     if refs_problem(structured["news_refs"], news):
         return None, "理由引用了輸入裡沒有的消息編號"
     return {
