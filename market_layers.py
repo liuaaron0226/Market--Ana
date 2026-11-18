@@ -210,7 +210,9 @@ def screens_layer(rotation: Mapping[str, Any] | None, screens: Mapping[str, Mapp
             continue
         top = []
         for item in (result.get("items") or [])[:SCREEN_TOP]:
-            row = {"code": item.get("code"), "name": item.get("name"), "security_type": item.get("security_type")}
+            row = {"code": item.get("code"), "name": item.get("name")}
+            if item.get("security_type"):
+                row["security_type"] = item["security_type"]
             if "metric_lots" in item:
                 row["lots"] = None if item["metric_lots"] is None else int(round(item["metric_lots"]))
             if "streak_days" in item:
