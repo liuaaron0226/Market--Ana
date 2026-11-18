@@ -508,6 +508,8 @@ class MarketLayersRunTests(MorningTestCase):
         missing = {item["key"] for item in record["missing_inputs"]}
         self.assertTrue({"otc_index", "sector_share", "screens", "ofr_stress"} <= missing)
         self.assertNotIn("market_margin", missing)
+        names = {item["key"]: item.get("name") for item in record["missing_inputs"]}
+        self.assertEqual(names["ofr_stress"], "OFR 金融壓力指數")   # 網站「缺漏」那一列顯示的名字
 
     def test_morning_reads_the_same_layers(self):
         self.chips_file()

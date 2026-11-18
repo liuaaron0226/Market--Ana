@@ -176,7 +176,7 @@ def build_day_input(analysis: Mapping[str, Any], method_text: str,
                                         session_date=session_date) if base_date else {})
     fields = _overseas_fields(overseas, foreign_record_only=record_only)
     fields["missing_inputs"] = list(fields.get("missing_inputs") or []) + [
-        {"key": name, "status": "missing", "reason": value.get("reason")}
+        {"key": name, "name": market_layers.TITLES[name], "status": "missing", "reason": value.get("reason")}
         for name, value in extra.items() if value.get("status") == "missing"]
     return {
         "base_date": base_date,

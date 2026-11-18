@@ -24,6 +24,9 @@ from typing import Any
 SCHEMA = "market-layers/v1"
 VERSION = "market-layers-v1"
 LAYER_NAMES = ("market_margin", "otc_index", "sector_share", "screens", "ofr_stress")
+# 網站「缺漏」那一列顯示的中文名（missing_inputs 的 name）。
+TITLES = {"market_margin": "大盤融資融券", "otc_index": "櫃買指數", "sector_share": "產業成交比重",
+          "screens": "選股快照與資金輪動", "ofr_stress": "OFR 金融壓力指數"}
 OTC_RECENT_BARS = 60
 VERSUS_DAYS = (5, 20, 60)
 SHARE_COMPARE_DAYS = 5
