@@ -25,6 +25,7 @@ from typing import Any
 
 import foreign_flow
 import gemini_models
+import licensed_inputs
 import market_layers
 import wyckoff_lpsy
 # 鎖定、雜湊、模型呼叫、期限與方法版本和關注帳本共用（ledger_core），這裡只留預測帳本自己的規則。
@@ -43,6 +44,7 @@ from ledger_core import add_months as _add_months
 from ledger_core import compact_json as _json
 from ledger_core import sql_insert as _insert
 from ledger_core import append as _append
+from ledger_core import exists as ledger_exists
 from ledger_core import clean_daily as _clean_daily
 from ledger_core import deadline as _deadline
 from ledger_core import default_now as _default_now
@@ -66,6 +68,8 @@ PULLBACK_REGIME = "多頭中的回檔"
 TREND_LABELS = ("偏多", "偏空", "盤整")
 REQUIRED_INPUTS = ("index", "institutional", "futures")
 
+LICENSED_LAYERS = ("intraday", "news")
+
 # 候選關卡與基準的參數：在第一筆紀錄之前寫定，整組算進輸入版本，改了就是新系列。
 PARAMETERS: dict[str, Any] = {
     # 交給模型的輸入層；某一層「有或沒有」才換輸入版本（教訓層內容隨時間增長不換）。
@@ -75,7 +79,11 @@ PARAMETERS: dict[str, Any] = {
     # 從同一份日 K 算好，附固定歷史統計；新的一層＝新的輸入版本（共識第 8 點）。
     # I 票（本人 2026-11-18 晚「更多整合所有網站可以獲取的資料」→「大盤＋自選股判斷」）：大盤融資融券、櫃買指數、
     # 產業成交比重、選股快照與資金輪動、OFR 金融壓力五層，由 market_layers 從工作集算好；新的層＝新的輸入版本。
-    "layers": ["base", "overseas", "foreign_flow", "wyckoff_lpsy", *market_layers.LAYER_NAMES, "similar", "lessons"],
+    # J 票（本人 2026-11-19 00:1x「富果、新聞來源、國外同類股都交給 Gemini 做詳細分析」）：加權指數的富果分時與
+    # 60 分 K（intraday）、大環境新聞（news）兩層，由 forecast_run 用 licensed_inputs 整理好。
+    "layers": ["base", "overseas", "foreign_flow", "wyckoff_lpsy", *market_layers.LAYER_NAMES, *LICENSED_LAYERS,
+               "similar", "lessons"],
+    "licensed": licensed_inputs.PARAMETERS,
     "foreign_flow_layer": foreign_flow.VERSION,
     "wyckoff_lpsy_layer": wyckoff_lpsy.INDEX_VERSION,
     "market_layers": market_layers.PARAMETERS,
@@ -141,7 +149,7 @@ _PROMPT_RULES = (
     # I 票改了這一句：大盤融資融券、櫃買指數等五層現在有給，「沒給的資料」不再舉融資當例子。
     "理由與看錯條件只能引用 INPUT_JSON 裡有的資料（日 K、指標、法人與期貨、外資讀數、候選關卡、布林位置、overseas、"
     "market_margin、otc_index、sector_share、screens、ofr_stress、方法稿）；"
-    "INPUT_JSON 沒給的資料（例如新聞、overseas.not_provided 列出的項目、status 是 missing 的層、值是 null 的欄位）"
+    "INPUT_JSON 沒給的資料（例如 overseas.not_provided 列出的項目、status 是 missing 的層、值是 null 的欄位）"
     "不得當成事實寫進去。",
     # D 票（2026-11-16）：布林位置與海外層的使用規則。
     "bollinger 只是位置描述：歷史上用布林通道調整持股水位沒有通過及格線，不可單獨當成轉強或轉弱的理由。",
@@ -174,6 +182,10 @@ _PROMPT_RULES = (
     "與近 5 日變化（分母不是加權指數的成交金額，加權只含上市）；screens 是資金輪動四象限與"
     "法人買賣超排行前五，排行裡的個股與 ETF 不得寫成大盤會漲跌的理由；ofr_stress 是美國信用市場壓力，"
     "資料日比台股早，只是背景。",
+    # J 票：富果分時與新聞的讀法（本人 2026-11-19 00:1x 決定交給模型）。
+    "intraday 是程式整理好的加權指數基準日盤中走勢（富果），只能照讀：" + licensed_inputs.NOTES["index_intraday"],
+    "news 是大環境新聞（中央社對不到個股的那些）：" + licensed_inputs.NOTES["headlines"]
+    + "理由裡提到新聞只能寫成「新聞提到…」這種轉述，不能單獨決定方向，也不得抄標題。",
     "每一格到期後，程式會把你的落點命中率和「照歷史亂猜」並排比較：照歷史亂猜是不看任何判斷、只看歷史上同樣距離的兩條線"
     "收盤落在各區的比例。兩條線拉得越寬，「兩線之間」在歷史上本來就越常中，所以只為了保險把線拉寬，比不贏照歷史亂猜。",
     f"regime 從固定清單選一個：{'、'.join(REGIMES)}。base_date 照抄 INPUT_JSON 的 base_date。",
@@ -381,7 +393,7 @@ def _model_input(data: Mapping[str, Any], rows: list[dict[str, Any]], edition: s
         "wyckoff_lpsy": wyckoff_lpsy.index_layer(rows),
         # I 票五層：呼叫端（forecast_run）算好放在 data；沒給的那一層寫缺（例如晚間補記漏記、舊的呼叫端）。
         **{name: copy.deepcopy(data.get(name)) or {"status": "missing", "reason": "這一份沒有這一層的資料"}
-           for name in market_layers.LAYER_NAMES},
+           for name in (*market_layers.LAYER_NAMES, *LICENSED_LAYERS)},
         "data_cutoffs": _cutoffs(data),
         "candidates": candidates,
         "bollinger": _bollinger(rows),
@@ -554,7 +566,7 @@ def write_forecast(
                                _experience_layers(Path(root), base_date, rows, not problems, version), version)
     input_sha = _sha(model_input)
 
-    if path.exists():
+    if ledger_exists(path):
         existing = _read(path)
         return {"outcome": "unchanged" if existing["input_sha256"] == input_sha else "conflict", "record": existing}
 
@@ -642,7 +654,7 @@ def reconcile(root: Path | str, index_daily: Sequence[Mapping[str, Any]]) -> dic
             ref = {"forecast_id": forecast["forecast_id"], "horizon": horizon}
             status, expiry = _expiry(position, rows, forecast["base_date"], horizon)
             if status != "due":
-                if not path.exists():
+                if not ledger_exists(path):
                     extra = {} if status == "pending" else {"expiry_date": expiry["date"] if expiry else None}
                     result[status].append({**ref, **extra})
                 continue
@@ -658,7 +670,7 @@ def reconcile(root: Path | str, index_daily: Sequence[Mapping[str, Any]]) -> dic
             if outcome == "written":
                 result["appended"].append(record)
             elif outcome == "conflict":
-                existing = json.loads(path.read_text(encoding="utf-8"))
+                existing = _read(path)
                 conflict = _seal({
                     "schema": SCHEMA, "kind": "reconciliation_conflict", **ref,
                     "existing_sha256": existing["record_sha256"], "recomputed": record,

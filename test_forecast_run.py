@@ -484,6 +484,46 @@ class ForeignFlowLayerTests(RunTestCase):
                                                           "dollar_and_twd_vs_foreign", "futures_net_position"])
 
 
+class LicensedRunTests(MorningTestCase):
+    """J 票：晚間、晨間版寫之前抓加權指數的富果分時、查大環境新聞；只用寫的那一刻以前已經有的。"""
+
+    def fake_fugle(self, day):
+        class Fake:
+            def candles(self, symbol):
+                assert symbol == "IX0001"
+                return {"date": day, "data": [
+                    {"date": f"{day}T09:00:00.000+08:00", "open": 100, "high": 101, "low": 99, "close": 100},
+                    {"date": f"{day}T13:30:00.000+08:00", "open": 100, "high": 103, "low": 100, "close": 102}]}
+        return Fake()
+
+    def news(self, rows):
+        return lambda sql: rows if "FROM watch_news" in sql and "code = ''" in sql else []
+
+    def test_evening_gets_the_base_dates_intraday_and_earlier_news(self):
+        rows = [{"code": "", "link": "a", "source": "cna-finance", "title": "美股收高", "summary": "",
+                 "published_at": f"{BASE}T05:00:00Z", "fetched_at": f"{BASE}T06:00:00Z"},
+                {"code": "", "link": "b", "source": "cna-finance", "title": "寫完之後才抓到", "summary": "",
+                 "published_at": f"{BASE}T09:00:00Z", "fetched_at": f"{BASE}T10:00:00Z"}]
+        result = self.run_evening(fugle=self.fake_fugle(BASE), news_query=self.news(rows))   # 時鐘 17:40（09:40Z）
+        self.assertEqual(result["outcome"], "written")
+        record = fl.read_ledger(self.ledger)["forecasts"][0]
+        self.assertEqual(record["input"]["intraday"]["summary"]["close"], 102)
+        self.assertEqual([item["title"] for item in record["input"]["news"]["items"]], ["美股收高"])
+
+    def test_morning_never_sees_the_session_days_intraday(self):
+        # 晨間版：富果回的是開盤日（例如時鐘之後已經進入新的一天）就整塊缺，不會看到開盤日的盤中
+        result = self.run_morning(fugle=self.fake_fugle(SESSION))
+        self.assertEqual(result["outcome"], "written")
+        record = fl.read_ledger(self.ledger)["forecasts"][0]
+        self.assertEqual(record["input"]["intraday"]["status"], "missing")
+        self.assertIn("intraday", {item["key"] for item in record["missing_inputs"]})
+
+    def test_without_a_key_or_a_connection_both_are_missing_and_the_forecast_is_written(self):
+        result = self.run_evening()
+        self.assertEqual(result["outcome"], "written")
+        self.assertTrue({"intraday", "news"} <= set(result["licensed_missing"]))
+
+
 class MarketLayersRunTests(MorningTestCase):
     """I 票：晚間、晨間版都從工作集讀大盤五層（融資讀 analysis-data.js 旁邊的 chips-data.js）。"""
 

@@ -25,6 +25,7 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from ledger_core import exists as ledger_exists
 from ledger_core import (
     EDITIONS,
     REFS_LIMIT,
@@ -601,7 +602,7 @@ def _write(
     input_sha = sha(model_input)
     path = _judgment_path(folder, code, base_date, edition)
 
-    if path.exists():
+    if ledger_exists(path):
         existing = read_record(path)
         return {"outcome": "unchanged" if existing["input_sha256"] == input_sha else "conflict", "record": existing}
 
@@ -807,7 +808,7 @@ def reconcile(root: Path | str, index_daily: Sequence[Mapping[str, Any]],
             ref = {"judgment_id": judgment["judgment_id"], "horizon": horizon}
             status, expiry_date, outcome = market.cell(judgment["code"], judgment["base_date"], horizon)
             if status != "due":
-                if not path.exists():
+                if not ledger_exists(path):
                     result[status].append(ref if status == "pending" else {**ref, "expiry_date": expiry_date})
                 continue
             record = seal({
@@ -852,7 +853,7 @@ def start_official(root: Path | str, *, since: str, input_version: str) -> dict[
     folder = Path(root)
     date.fromisoformat(since)  # 起算日格式不對就停下
     path = _official_path(folder, input_version)
-    if not path.exists():
+    if not ledger_exists(path):
         editions: dict[tuple[str, str], set[str]] = {}
         for record in read_ledger(folder)["judgments"]:
             if record["input_version"] == input_version and record["base_date"] < since and record["kind"] == "judgment":

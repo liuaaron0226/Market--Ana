@@ -162,7 +162,7 @@ class SimilarRegimeTests(SimilarRegimeTestCase):
         _, record = self.layer()
         # D 票的海外層、G 票的外資層與 E 票一起合進來，輸入版本照五層一起算（owner 11-16 整合）；H 票再加最後供應點。
         self.assertRegex(record["input_version"],
-                         r"^base\+overseas\+foreign_flow\+wyckoff_lpsy\+market_margin\+otc_index\+sector_share\+screens\+ofr_stress\+similar\+lessons-v1-[0-9a-f]{8}$")
+                         r"^base\+overseas\+foreign_flow\+wyckoff_lpsy\+market_margin\+otc_index\+sector_share\+screens\+ofr_stress\+intraday\+news\+similar\+lessons-v1-[0-9a-f]{8}$")
 
 
 # ---- 教訓層：沿用帳本測試的日 K（a）與之後的 FUTURE ----

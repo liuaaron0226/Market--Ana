@@ -140,6 +140,11 @@ def plan_replay(analysis: Mapping[str, Any], *, method_text: str, model: str, st
             "model_knowledge": dict(knowledge), "method_spoilers": list(spoilers) if spoilers else None}
 
 
+# J 票：舊日期沒有富果盤中與新聞的歷史，重播一律寫缺，不用今天的資料冒充（重播和正式預測因此不完全可比）。
+REPLAY_LICENSED = {"intraday": {"status": "missing", "reason": "重播：舊日期沒有富果盤中的歷史資料"},
+                   "news": {"status": "missing", "reason": "重播：舊日期沒有當時抓到的新聞"}}
+
+
 def _once(fetch: Callable[[], list[dict[str, Any]]]) -> Callable[[], list[dict[str, Any]]]:
     """同一次重播只抓一次：第一次的結果（或例外）記住，之後每一天都拿同一份。"""
     kept: dict[str, Any] = {}
@@ -254,7 +259,8 @@ def run_replay(
             data = fr.build_day_input(trimmed, method_text, layer, foreign_sources, edition=edition,
                                       session_date=session,
                                       market_sources=market_layers.load_sources(
-                                          data_root, analysis_path, base_date=day, ofr=ofr_once))
+                                          data_root, analysis_path, base_date=day, ofr=ofr_once),
+                                      licensed=REPLAY_LICENSED)
             if sources is not None:
                 data["sources"] = sources
             frozen = _frozen(session, MORNING_CLOCK) if session else _frozen(day, REPLAY_CLOCK)

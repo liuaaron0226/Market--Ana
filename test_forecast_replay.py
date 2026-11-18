@@ -189,6 +189,14 @@ class RunTests(ReplayTestCase):
         self.assertEqual(seen["2026-04-02"]["observed_at"], "2026-03-30")
         self.assertEqual(seen["2026-04-03"]["observed_at"], "2026-03-31")
 
+    def test_replays_never_get_intraday_or_news_and_say_why(self):
+        # J 票：舊日期沒有富果盤中與新聞的歷史，重播一律寫缺，不用今天的資料冒充（和正式預測因此不完全可比）
+        self.run_replay(end="2026-04-02", editions=("evening",))
+        for seen in self.inputs():
+            for name in ("intraday", "news"):
+                self.assertEqual(seen[name]["status"], "missing")
+                self.assertIn("重播", seen[name]["reason"])
+
     def test_lessons_only_see_outcomes_that_had_expired_by_the_base_date(self):
         self.run_replay(end="2026-04-08", editions=("evening",))
 

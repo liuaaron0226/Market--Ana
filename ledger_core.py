@@ -66,21 +66,37 @@ def _verify(record: Mapping[str, Any], path: Path) -> None:
         raise LedgerIntegrityError(f"{path} 輸入雜湊不符：存檔的輸入被改動")
 
 
+# 帳本檔名含輸入版本，層名越加越長：Windows 上完整路徑超過 260 字元就開不了檔（雲端排程是 Linux，不受影響）。
+# 長路徑在 Windows 改用延伸長度寫法（\\?\ 開頭的絕對路徑）；其他系統、短路徑原樣不動。
+_WINDOWS_PATH_LIMIT = 240
+
+
+def long_path(path: Path) -> Path:
+    if os.name != "nt" or len(str(path)) < _WINDOWS_PATH_LIMIT and len(str(Path(path).absolute())) < _WINDOWS_PATH_LIMIT:
+        return Path(path)
+    text = str(Path(path).absolute())
+    return Path(text if text.startswith("\\\\?\\") else "\\\\?\\" + text)
+
+
+def exists(path: Path) -> bool:
+    return long_path(Path(path)).exists()
+
+
 def _against_existing(path: Path, record: Mapping[str, Any]) -> str:
-    existing = json.loads(path.read_text(encoding="utf-8"))
+    existing = json.loads(long_path(path).read_text(encoding="utf-8"))
     return "unchanged" if existing.get("record_sha256") == record["record_sha256"] else "conflict"
 
 
 def append(path: Path, record: Mapping[str, Any]) -> str:
     """只新增：檔案不存在才寫；已存在時同內容回 ``unchanged``、不同內容回 ``conflict``，都不覆寫。"""
-    if path.exists():
+    if exists(path):
         return _against_existing(path, record)
     path.parent.mkdir(parents=True, exist_ok=True)
-    partial = path.with_name(f".{path.name}.{os.getpid()}.partial")
+    partial = long_path(path.with_name(f".{path.name}.{os.getpid()}.partial"))
     partial.write_bytes(json.dumps(record, ensure_ascii=False, sort_keys=True, indent=2).encode("utf-8") + b"\n")
     try:
         # os.link 在目標已存在時失敗：兩個寫入者競爭時後者不會蓋掉前者。
-        os.link(partial, path)
+        os.link(partial, long_path(path))
     except FileExistsError:
         return _against_existing(path, record)
     finally:
@@ -89,7 +105,7 @@ def append(path: Path, record: Mapping[str, Any]) -> str:
 
 
 def read_record(path: Path) -> dict[str, Any]:
-    record = json.loads(path.read_text(encoding="utf-8"))
+    record = json.loads(long_path(path).read_text(encoding="utf-8"))
     _verify(record, path)
     return record
 
