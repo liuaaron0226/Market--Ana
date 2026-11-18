@@ -359,7 +359,6 @@
   function renderTotals(summary) {
     $('totalLine').hidden = !summary.count;
     $('totalMarketValue').textContent = summary.complete ? money.format(summary.value) : '—';
-    $('totalMarketValue').classList.toggle('is-metal', summary.complete);   // 有數字才是金屬字
     $('totalCost').textContent = summary.count ? money.format(summary.cost) : '—';
     $('totalWord').textContent = GAIN_WORDS[summary.state];
     $('totalPnl').textContent = summary.pnl === null ? '—' : signedMoney(summary.pnl);

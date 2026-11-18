@@ -152,7 +152,7 @@ with sync_playwright() as p:
     page.goto(BASE + "/portfolio.html", wait_until="networkidle")
     page.wait_for_function("document.getElementById('portfolioFreshness').textContent.trim() !== '讀取中'")
     page.evaluate("window.__again = false; new MutationObserver(() => { if (document.getElementById('holdingRows').classList.contains('is-entering')) window.__again = true; }).observe(document.getElementById('holdingRows'), { attributes: true, attributeFilter: ['class'] })")
-    check("什麼都沒有時寫一句怎麼新增", page.evaluate(STATE)["empty"] == "還沒有自選或庫存。按右邊的「＋」，輸入股票代號。", page.evaluate(STATE)["empty"])
+    check("什麼都沒有時寫一句怎麼新增", page.evaluate(STATE)["empty"] == "還沒有自選或庫存。按右邊的「＋」，輸入股票代號或名稱。", page.evaluate(STATE)["empty"])
     open_holding_form(page)
     page.locator("#addCode").fill("2330")
     page.locator("#holdingShares").fill("1000")
@@ -194,7 +194,7 @@ with sync_playwright() as p:
     check("只有自選：總數那一行不顯示，兩檔照自選的先後各一列", not page.locator("#totalLine").is_visible() and page.evaluate(shown) == ["2330", "9958"]
           and page.locator("#listFilter").inner_text().replace("\n", "") == "全部2庫存0自選2", page.locator("#listFilter").inner_text())
     page.locator("#listFilter [data-filter='holding']").click()
-    check("只有自選時按「庫存」：寫怎麼新增庫存", page.evaluate(hint) == "還沒有庫存。按右邊的「＋」，輸入代號後按「新增庫存」。", page.evaluate(hint))
+    check("只有自選時按「庫存」：寫怎麼新增庫存", page.evaluate(hint) == "還沒有庫存。按右邊的「＋」，輸入代號或名稱後按「新增庫存」。", page.evaluate(hint))
     page.locator("#listFilter [data-filter='all']").click()
     page.locator("#holdingRows .hv-row[data-code='9958'] .hv-open").click()
     outside = page.locator("#holdingRows .hv-row[data-code='9958']")
@@ -205,7 +205,7 @@ with sync_playwright() as p:
     # 只有庫存、沒有自選：按「自選」寫怎麼加入自選
     ctx, page, errors = open_with([holding("2330", "台積電", 1000, 980, 2235)], [])
     page.locator("#listFilter [data-filter='watch']").click()
-    check("只有庫存時按「自選」：寫怎麼加入自選", page.evaluate(hint) == "還沒有自選股。按右邊的「＋」，輸入代號後按「加入自選」。" and page.evaluate(shown) == [], page.evaluate(hint))
+    check("只有庫存時按「自選」：寫怎麼加入自選", page.evaluate(hint) == "還沒有自選股。按右邊的「＋」，輸入代號或名稱後按「加入自選」。" and page.evaluate(shown) == [], page.evaluate(hint))
     ctx.close()
 
     # 進場還在播的時候就按篩選：進場直接到定位，之後不會重播（審查抓到：被藏起來的最後一列等不到結束）
