@@ -1191,8 +1191,8 @@
       }
       baseResult = data;
       render(data, true);
-      syncFavorite(data.code);
       loadHistory(data, sequence);
+      syncFavorite(data.code);
       loadDrawings(data.code, sequence);
       // 自選股關注的判斷（watch-judgments.js）：只有站主、開關打開而且這一檔有判斷時才加小鍵與兩條線。
       if (features.watchlist_watch_v1 && window.WatchJudgments && !isFund(data)) {
