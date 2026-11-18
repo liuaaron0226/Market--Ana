@@ -184,8 +184,12 @@ def _usdtwd(root: Path, as_of: str) -> dict[str, Any] | None:
         if folder.is_dir() else []
     if not days:
         return None
+    return _usdtwd_from((folder / days[-1] / "cbc-usdtwd.raw").read_bytes(), as_of)
+
+
+def _usdtwd_from(content: bytes, as_of: str) -> dict[str, Any] | None:
     try:
-        parsed = parse_cbc_usdtwd((folder / days[-1] / "cbc-usdtwd.raw").read_bytes(), as_of)
+        parsed = parse_cbc_usdtwd(content, as_of)
     except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
         return None
     return {"date": parsed["observed_at"], "close": parsed["close"],
@@ -194,9 +198,13 @@ def _usdtwd(root: Path, as_of: str) -> dict[str, Any] | None:
 
 
 def _treasury(root: Path, base_date: str, edition: str) -> dict[str, Any] | None:
+    return _treasury_from(treasury_yields.load(root), base_date, edition)
+
+
+def _treasury_from(all_rows: list[dict[str, Any]], base_date: str, edition: str) -> dict[str, Any] | None:
     """晚間版只用美國前一個交易日以前的（台灣晚間時美國同一天還沒收盤）；晨間版看得到美國基準日當天收盤。"""
     usable = (lambda day: day < base_date) if edition == "evening" else (lambda day: day <= base_date)
-    rows = [row for row in treasury_yields.load(root) if usable(row["date"])]
+    rows = [row for row in all_rows if usable(row["date"])]
     if not rows:
         return None
     last = rows[-1]
@@ -212,18 +220,66 @@ def _treasury(root: Path, base_date: str, edition: str) -> dict[str, Any] | None
             "source": SOURCES["us_treasury"]}
 
 
-def environment_input(root: Path | str, base_date: str, *, edition: str) -> dict[str, Any] | None:
+def _ledger_originals(forecast_ledger: Path | str | None, base_date: str, edition: str,
+                      cutoff: str | None) -> dict[str, bytes]:
+    """預測帳本裡同一天、同一版的紀錄所列的海外原件（overseas_inputs.archive_sources 放進 sources/ 的那些）：
+    {原件名稱: 內容}。只用寫判斷那一刻（cutoff）以前就已經抓到的（fetched_at ≤ cutoff），帳本裡沒有那個檔就跳過。"""
+    import gzip
+    from datetime import datetime
+    if forecast_ledger is None or cutoff is None:
+        return {}
+    ledger = Path(forecast_ledger)
+    end = datetime.fromisoformat(cutoff)
+    out: dict[str, bytes] = {}
+    for path in sorted((ledger / "forecasts").glob(f"{base_date}__{edition}__*.json")):
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        for entry in record.get("sources") or []:
+            archived, name = str(entry.get("archived_as") or ""), str(entry.get("name") or "")
+            if (entry.get("status") != "ok" or name in out or not re.fullmatch(r"sources/[0-9a-f]{64}\.raw\.gz", archived)
+                    or not (ledger / archived).is_file()):
+                continue
+            try:
+                if datetime.fromisoformat(str(entry.get("fetched_at")).replace("Z", "+00:00")) > end:
+                    continue
+                out[name] = gzip.decompress((ledger / archived).read_bytes())
+            except (OSError, ValueError, EOFError):
+                continue
+    return out
+
+
+def environment_input(root: Path | str, base_date: str, *, edition: str, forecast_ledger: Path | str | None = None,
+                      cutoff: str | None = None) -> dict[str, Any] | None:
     """新臺幣對美元收盤匯率與美債 2 年、10 年殖利率的最新一筆，附資料日期與近 20 個交易日的變化。
 
     匯率取資料日期不晚於基準日的（央行在台灣下午公布）。美債：晚間版（``evening``）只取美國基準日以前的
     交易日，晨間版（``morning``）可以取到美國基準日當天——之後才補進來的資料不會讓晚間版重跑時看到未來。
     匯率變化是百分比（正數是新臺幣貶值）；殖利率變化是百分點、官方留空的值是 None。某一項讀不到就是 None
     並列在 ``missing``；兩項都讀不到回 None（整層缺漏）。
+
+    本機沒有那兩份原件時（關注排程的工作集裡兩樣都沒有，2026-11-19 查到 environment 天天缺），改讀預測帳本裡
+    同一天、同一版那一份預測抓的原件（``forecast_ledger``；只用 ``cutoff`` 以前抓到的）。不另外連網。
     """
     if edition not in ("evening", "morning"):
         raise ValueError("edition 必須是 evening 或 morning")
     root = Path(root)
     found = {"usdtwd": _usdtwd(root, base_date), "us_treasury": _treasury(root, base_date, edition)}
+    if found["usdtwd"] is None or found["us_treasury"] is None:
+        originals = _ledger_originals(forecast_ledger, base_date, edition, cutoff)
+        if found["usdtwd"] is None and "cbc-usdtwd" in originals:
+            found["usdtwd"] = _usdtwd_from(originals["cbc-usdtwd"], base_date)
+        if found["us_treasury"] is None:
+            rows: dict[str, dict[str, Any]] = {}
+            for name, content in originals.items():
+                if name.startswith("treasury-"):
+                    try:
+                        rows.update({row["date"]: row for row in treasury_yields.parse(content)})
+                    except ValueError:
+                        continue
+            if rows:
+                found["us_treasury"] = _treasury_from([rows[day] for day in sorted(rows)], base_date, edition)
     if not any(found.values()):
         return None
     return {**found, "missing": [name for name, value in found.items() if value is None]}
