@@ -1,9 +1,13 @@
 """國外同類股的每日行情抓取（自選股關注 B 票）。用假的網路回應，檢查雲端資料庫裡存下了什麼。"""
 from __future__ import annotations
 
+import io
 import json
+import os
 import sqlite3
 import unittest
+from contextlib import redirect_stdout
+from unittest import mock
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -198,6 +202,108 @@ class PurgeTest(unittest.TestCase):
         self.assertEqual(d1.quotes("005930.KO"), [])
         with self.assertRaises(ValueError):
             op.purge_sql("other")
+
+
+def home_routes(bars: list[tuple[str, float]]) -> dict:
+    return {symbol: eodhd(bars) for symbol in op.HOME_INDICES}
+
+
+def run_indices(d1: FakeD1, http: FakeHttp, *, key: str | None = "ek", today: date = TODAY, now: str = NOW) -> dict:
+    return op.indices(d1, op.EodhdSource(key, http) if key else None, today=today, now=now)
+
+
+class HomeIndicesTest(unittest.TestCase):
+    """大盤頁切換國外指數（本人 11-19）：五個指數不管有沒有人關注都抓、舊資料一直累積。"""
+
+    def test_the_five_indices_are_the_ones_the_owner_picked(self):
+        self.assertEqual(op.HOME_INDICES, ("DJI.INDX", "IXIC.INDX", "GSPC.INDX", "N225.INDX", "KS11.INDX"))
+
+    def test_first_run_stores_everything_eodhd_returns_without_a_one_year_cut(self):
+        d1 = FakeD1()
+        http = FakeHttp(home_routes([("2025-10-01", 10), ("2026-11-13", 20)]))
+        summary = run_indices(d1, http)
+        for symbol in op.HOME_INDICES:
+            self.assertEqual(d1.quotes(symbol), [("2025-10-01", 10.0, "eodhd"), ("2026-11-13", 20.0, "eodhd")], "用還原後的收盤")
+            self.assertEqual(d1.status(symbol), (1, NOW, None))
+        self.assertEqual(len(http.urls), 5)
+        self.assertIn("from=2025-10-12&to=2026-11-16", http.urls[0], "沒有舊資料時取免費方案給得到的約 400 天")
+        self.assertEqual(summary, {"symbols": 5, "ok": 5, "problems": {}, "rows": 10})
+
+    def test_later_runs_refetch_the_last_week_and_keep_older_days(self):
+        d1 = FakeD1()
+        run_indices(d1, FakeHttp(home_routes([("2024-01-02", 1), ("2026-11-12", 2)])), today=date(2026, 11, 13))
+        http = FakeHttp(home_routes([("2026-11-12", 3), ("2026-11-13", 4)]))
+        run_indices(d1, http)
+        self.assertIn("from=2026-11-05&to=2026-11-16", http.urls[0], "從最後一筆往前一週重抓")
+        self.assertEqual([row[:2] for row in d1.quotes("DJI.INDX")], [("2024-01-02", 1.0), ("2026-11-12", 3.0), ("2026-11-13", 4.0)])
+
+    def test_peer_retention_does_not_delete_old_index_days(self):
+        d1 = FakeD1()
+        run_indices(d1, FakeHttp(home_routes([("2024-01-02", 1)])))
+        d1.peer("2330", "NVDA.US", "US")
+        d1.db.execute("INSERT INTO overseas_quotes VALUES ('NVDA.US', '2024-01-02', 1, 1, 1, 1, 1, 'massive', ?)", (NOW,))
+        run(d1, FakeHttp({"NVDA": massive([("2026-11-13", 1)])}))
+        self.assertEqual([row[0] for row in d1.quotes("NVDA.US")], ["2026-11-13"], "同類股照舊只留一年")
+        self.assertEqual([row[0] for row in d1.quotes("KS11.INDX")], ["2024-01-02"], "首頁的五個指數一直累積")
+
+    def test_one_failure_keeps_old_data_and_does_not_block_the_others(self):
+        d1 = FakeD1()
+        run_indices(d1, FakeHttp(home_routes([("2026-11-12", 1)])), now="2026-11-14T08:00:00Z")
+        routes = home_routes([("2026-11-13", 2)])
+        routes["N225.INDX"] = (200, b"<html>")
+        run_indices(d1, FakeHttp(routes))
+        self.assertEqual([row[0] for row in d1.quotes("N225.INDX")], ["2026-11-12"])
+        self.assertEqual(d1.status("N225.INDX"), (0, "2026-11-14T08:00:00Z", "format"))
+        self.assertEqual([row[0] for row in d1.quotes("KS11.INDX")], ["2026-11-12", "2026-11-13"])
+
+    def test_quota_stops_the_remaining_calls(self):
+        d1 = FakeD1()
+        routes = home_routes([("2026-11-13", 2)])
+        routes["IXIC.INDX"] = (402, b"{}")
+        http = FakeHttp(routes)
+        summary = run_indices(d1, http)
+        self.assertEqual(len(http.urls), 2, "額度用完之後不再打")
+        self.assertEqual(summary["problems"], {"quota": 4})
+
+    def test_command_line_runs_only_the_indices(self):
+        d1 = FakeD1()
+        d1.peer("2330", "NVDA.US", "US")
+        out = io.StringIO()
+        with mock.patch.object(op, "WranglerD1", return_value=d1), mock.patch.dict(os.environ, {"EODHD_API_KEY": "", "MASSIVE_API_KEY": "mk"}), \
+                redirect_stdout(out):
+            self.assertEqual(op.main(["indices"]), 0)
+        self.assertEqual(json.loads(out.getvalue())["problems"], {"no_key": 5})
+        self.assertIsNone(d1.status("NVDA.US"), "同類股不在這一輪")
+
+    def test_shared_cache_missing_skips_instead_of_spending_quota(self):
+        """排程一定帶 --shared-cache：R2 設定不齊時不要退回直接打 EODHD（一天三班×5 次會吃掉 20 次額度）。"""
+        d1 = FakeD1()
+        out = io.StringIO()
+        with mock.patch.object(op, "WranglerD1", return_value=d1), mock.patch.object(op.SharedEodhd, "from_env", return_value=None), \
+                mock.patch.object(op, "EodhdSource", side_effect=AssertionError("不該直接打 EODHD")), \
+                mock.patch.dict(os.environ, {"EODHD_API_KEY": "ek"}), redirect_stdout(out):
+            self.assertEqual(op.main(["indices", "--shared-cache"]), 0)
+        self.assertEqual(json.loads(out.getvalue()), {"skipped": "no_shared_cache"})
+        self.assertIsNone(d1.status("DJI.INDX"))
+
+    def test_schedules_write_the_indices_morning_evening_and_after_publishing(self):
+        """本人 11-19「早上就看得到」：晨間版（美股昨晚）、晚間版（日韓今天）只在正式執行時寫；每日更新發布後也寫。"""
+        for name in ("forecast-morning.yml", "forecast-ledger.yml"):
+            text = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+            step = text[text.index("- name: 首頁國外指數寫進網站資料庫"):]
+            step = step[:step.index("\n      - name:")]
+            self.assertIn("if: steps.mode.outputs.dry_run == 'false'", step, name)
+            self.assertIn("continue-on-error: true", step, name)
+            self.assertIn("python overseas_peers.py indices --shared-cache", step, name)
+            self.assertLess(text.index("python overseas_inputs.py fetch"), text.index("首頁國外指數寫進網站資料庫"), "預測抓完快取之後")
+        daily = (ROOT / ".github/workflows/daily-update.yml").read_text(encoding="utf-8")
+        self.assertIn("python overseas_peers.py indices --shared-cache", daily)
+
+    def test_missing_key_marks_all_five_and_writes_no_quotes(self):
+        d1 = FakeD1()
+        summary = run_indices(d1, FakeHttp({}), key=None)
+        self.assertEqual(summary["problems"], {"no_key": 5})
+        self.assertEqual(d1.quotes("DJI.INDX"), [])
 
 
 if __name__ == "__main__":

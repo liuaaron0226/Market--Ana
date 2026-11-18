@@ -181,6 +181,20 @@ jobs:
           if [ -n "$AS_OF" ]; then ref=(--reference-date "$AS_OF"); else ref=(--analysis data/daily-update-state/last-market-pack/analysis-data.js); fi
           python overseas_inputs.py fetch "${ref[@]}" --out "$RUNNER_TEMP/overseas" --shared-cache
 
+      # 大盤頁切換的國外指數（本人 2026-11-19）：剛更新的共用快取順手寫進網站資料庫（overseas_quotes），
+      # 晨間版帶來昨晚的美股、晚間版帶來今天的日韓；道瓊不在預測的海外層裡，是唯一多打的一次。只在正式執行時寫，失敗不擋預測。
+      - name: 首頁國外指數寫進網站資料庫（不擋預測）
+        if: steps.mode.outputs.dry_run == 'false'
+        continue-on-error: true
+        env:
+          EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: market-ana-state
+        run: python overseas_peers.py indices --shared-cache
+
       - name: 下載官方 agy 1.5.3 並核對 SHA-256
         id: agy_download
         continue-on-error: true

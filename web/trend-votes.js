@@ -51,8 +51,9 @@
       versus('MA20', '收盤', m.close, 'MA20', m.ma20, 2, true),
       versus('MA20/60', 'MA20', m.ma20, 'MA60', m.ma60, 2, false),
       against('近 20 日', m.return_20d_pct, 0, '近 20 日：沒有資料', () => `近 20 日 ${signed(m.return_20d_pct, 1)}%`),
-      against('法人', m.institutional_20d_billion, 0, '近 20 日外資加投信合計：沒有資料', side =>
-        `近 20 日外資加投信合計${side < 0 ? '賣超' : side > 0 ? '買超' : ''} ${fmt(Math.abs(m.institutional_20d_billion), 1)} 億`),
+      // 國外指數（本人 11-19 大盤切換）沒有法人：資料裡沒有這一項就不列這一票（台股缺資料是 null，照樣列「沒有資料」）
+      ...('institutional_20d_billion' in m ? [against('法人', m.institutional_20d_billion, 0, '近 20 日外資加投信合計：沒有資料', side =>
+        `近 20 日外資加投信合計${side < 0 ? '賣超' : side > 0 ? '買超' : ''} ${fmt(Math.abs(m.institutional_20d_billion), 1)} 億`)] : []),
     ],
     long: m => [
       versus('MA120', '收盤', m.close, 'MA120', m.ma120, 2, true),

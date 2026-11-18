@@ -960,3 +960,13 @@ body.hm .line-pair .line-trigger:active { transform: none; }
   body.hm .chart-workspace .chart-stage, body.hm #chartStudies { margin-inline: -8px; }
   body.hm .chart-actions:has(.mobile-candle-details[hidden]) { display: none; }
 }
+
+/* ---------- 圖卡左上角的名稱＝切換指數（本人 11-19，樣品 C）：長得和原本的標題一樣，後面一個很淡的小箭頭；選單從名稱下方往右展開 ---------- */
+.hm .index-head { position: relative; min-width: 0; }
+body.hm .chart-toolbar .chart-chip.index-chip,
+body.hm .chart-toolbar .chart-chip.index-chip:is(:hover, :active, [aria-expanded="true"]) {
+  min-height: 0; padding: 0; border: 0; border-radius: 6px; background: transparent; box-shadow: none; transform: none;
+  font: inherit; color: var(--ink); gap: 8px;
+}
+body.hm .chart-toolbar .chart-chip.index-chip::after { opacity: .35; }
+body.hm .chart-toolbar .index-menu { left: 0; right: auto; width: max-content; transform-origin: 10% 0; }

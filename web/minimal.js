@@ -42,6 +42,14 @@
   };
   // 分時（本人 11-18：1／5／15 分 K 換成分時）要即時服務的 1 分K；拿不到時選項停用、退回日K
   const isTimeShare = period => period === 'ts';
+  // 大盤頁切換國外指數（本人 11-19）：currentIndex 是選單上的 key（twii＝台股加權，每次打開都先是它）；
+  // 國外的日線（/api/indices）讀過一次就留著。國外只有日週月、沒有收復／防守線與預測線、沒有法人副圖，也沒有那一天的台股明細可開。
+  let currentIndex = 'twii';
+  let indexTicket = 0;
+  const indexPayloads = new Map();
+  const FOREIGN_STUDIES = ['volume', 'macd', 'kd', 'rsi'];
+  const indexItem = key => window.MarketIndex.LIST.find(item => item.key === key) || null;
+  const foreignIndex = () => (currentIndex === 'twii' ? null : indexItem(currentIndex));
 
   const els = {
     price: $('currentPrice'),
@@ -65,6 +73,9 @@
     timeShare: $('timeShare'),
     chartWorkspace: document.querySelector('.chart-workspace'),
     chartTitle: $('chartTitle'),
+    indexChip: $('indexChip'),
+    indexMenu: $('indexMenu'),
+    linePair: document.querySelector('#chartLegend .line-pair'),
     reset: $('resetView'),
     forming: $('formingBadge'),
     provisional: $('provisionalBadge'),
@@ -96,6 +107,7 @@
     get selectedSample() { return selectedSample; },
     get nextPollDelay() { return nextPollDelay; },
     get trend() { return renderedTrend; },
+    get index() { return currentIndex; },
     get marketSnapshot() { return officialMarketSnapshot; }
   };
   window.MinimalApp = api;
@@ -379,7 +391,6 @@
   function showTimeShare(on) {
     els.timeShare.hidden = !on;
     els.chartWorkspace.classList.toggle('is-time-share', on);
-    els.chartTitle.textContent = on ? '分時' : '主K線';
   }
 
   function candlesFor(period) {
@@ -401,23 +412,11 @@
 
   // 圖上的判斷線：每天算的收復線、防守線，再加預測帳本的轉強線／轉弱線（forecast.js；只有站主有內容時才有）。
   function chartOverlays() {
+    if (foreignIndex()) return [];
     return [...overlays(), ...(window.MarketForecast ? window.MarketForecast.overlays(currentPeriod) : [])];
   }
 
-  // 規則的比法只有一份，在 trend-votes.js
-  const trendSide = (left, right) => window.TrendVotes.sideOf(left, right);
-
-  function trendState(score) {
-    if (score >= 2) return ['bullish', '偏多'];
-    if (score <= -2) return ['bearish', '偏空'];
-    return ['neutral', '盤整'];
-  }
-
-  function trendReturn(values, bars) {
-    if (values.length <= bars || !Number.isFinite(values.at(-1)) || !Number.isFinite(values.at(-bars - 1)) || values.at(-bars - 1) === 0) return null;
-    return (values.at(-1) / values.at(-bars - 1) - 1) * 100;
-  }
-
+  // 走勢規則在 market-index.js（比法在 trend-votes.js）；這裡只算台股的法人合計交給它
   function trendInstitutional(rows, count, cutoff) {
     const values = (rows || []).filter(row => String(row.date || '') <= cutoff).map(row => {
       const foreign = Number(row.foreign && row.foreign.net);
@@ -427,67 +426,30 @@
     return values.length < count ? null : values.slice(-count).reduce((sum, value) => sum + value, 0) / 100_000_000;
   }
 
-  function localMarketTrend(instance) {
+  // 本機（file:）沒有打包好的走勢時自己算：規則在 market-index.js，國外指數也用同一套
+  function localMarketTrend() {
     if (window.MarketData && window.MarketData.source !== 'local') return null;
     const candles = A.daily.map(row => toChartCandle(row, '日'));
-    const closes = candles.map(row => row.close);
-    const ma = Object.fromEntries([5, 10, 20, 60, 120, 240].map(period => [period, window.KChartMath.sma(closes, period)]));
-    const macd = window.KChartMath.macd(closes);
-    const kd = instance.studies && instance.studies.kd || [];
-    const rsi = instance.studies && instance.studies.rsi || [];
     const dataDate = A.meta.cutoff_date || periodDataDate(candles.at(-1));
-    const close = closes.at(-1);
-    const periods = [];
-    const insufficient = (key, label, need) => ({ key, label, state: 'insufficient', conclusion: '資料不足',
-      sentence: `資料不足：需要至少 ${need} 根完整日 K，目前只有 ${candles.length} 根。`, metrics: {}, data_date: dataDate });
+    return window.MarketIndex.trend(candles, { dataDate,
+      institutional5: trendInstitutional(A.institutional, 5, dataDate), institutional20: trendInstitutional(A.institutional, 20, dataDate) });
+  }
 
-    if (candles.length < 49 || !macd.at(-1)?.ready || !kd.at(-1)?.ready || !rsi.at(-1)?.ready) {
-      periods.push(insufficient('short', '短期', 49));
-    } else {
-      const ma5 = ma[5].at(-1), ma10 = ma[10].at(-1), hist = macd.at(-1).hist;
-      const k = kd.at(-1).k, d = kd.at(-1).d, rsi14 = rsi.at(-1).rsi;
-      const amounts = candles.slice(-20).map(row => row.amount).filter(Number.isFinite);
-      const volumeRatio = amounts.length === 20 && amounts.reduce((sum, value) => sum + value, 0) > 0
-        ? candles.at(-1).amount / (amounts.reduce((sum, value) => sum + value, 0) / 20) : null;
-      const inst5 = trendInstitutional(A.institutional, 5, dataDate);
-      const [state, conclusion] = trendState([trendSide(close, ma5), trendSide(ma5, ma10), trendSide(hist, 0), trendSide(k, d), trendSide(rsi14, 50)].reduce((a, b) => a + b, 0));
-      const rsiText = Number.isFinite(rsi14) ? `RSI ${fmt(rsi14, 1)}` : 'RSI 無方向';
-      periods.push({ key: 'short', label: '短期', state, conclusion, data_date: dataDate,
-        sentence: `${conclusion}：收盤 ${fmt(close)} ${trendSide(close, ma5) > 0 ? '高於' : trendSide(close, ma5) < 0 ? '低於' : '等於'} MA5 ${fmt(ma5)}，MACD 柱 ${signed(hist)}，KD ${fmt(k, 1)}／${fmt(d, 1)}，${rsiText}；量比 ${fmt(volumeRatio)} 倍，5 日法人 ${signed(inst5, 1)} 億。`,
-        metrics: { close, ma5, ma10, macd_hist: hist, kd_k: k, kd_d: d, rsi14, volume_ratio_20d: volumeRatio, institutional_5d_billion: inst5 } });
-    }
-
-    if (candles.length < 60 || !Number.isFinite(ma[20].at(-1)) || !Number.isFinite(ma[60].at(-1))) {
-      periods.push(insufficient('medium', '中期', 60));
-    } else {
-      const ma20 = ma[20].at(-1), ma60 = ma[60].at(-1), ret20 = trendReturn(closes, 20);
-      const inst20 = trendInstitutional(A.institutional, 20, dataDate);
-      const [state, conclusion] = trendState([trendSide(close, ma20), trendSide(ma20, ma60), trendSide(ret20, 0), trendSide(inst20, 0)].reduce((a, b) => a + b, 0));
-      periods.push({ key: 'medium', label: '中期', state, conclusion, data_date: dataDate,
-        sentence: `${conclusion}：收盤 ${fmt(close)} ${trendSide(close, ma20) > 0 ? '高於' : trendSide(close, ma20) < 0 ? '低於' : '等於'} MA20 ${fmt(ma20)}，MA20 ${trendSide(ma20, ma60) > 0 ? '高於' : trendSide(ma20, ma60) < 0 ? '低於' : '等於'} MA60 ${fmt(ma60)}，近 20 日 ${signed(ret20, 1)}%；20 日法人 ${signed(inst20, 1)} 億。`,
-        metrics: { close, ma20, ma60, return_20d_pct: ret20, institutional_20d_billion: inst20 } });
-    }
-
-    if (candles.length < 240 || !Number.isFinite(ma[240].at(-1))) {
-      periods.push(insufficient('long', '長期', 240));
-    } else {
-      const ma60 = ma[60].at(-1), ma120 = ma[120].at(-1), ma240 = ma[240].at(-1), ret60 = trendReturn(closes, 60);
-      const [state, conclusion] = trendState([trendSide(close, ma120), trendSide(ma60, ma120), trendSide(ma120, ma240), trendSide(ret60, 0)].reduce((a, b) => a + b, 0));
-      periods.push({ key: 'long', label: '長期', state, conclusion, data_date: dataDate,
-        sentence: `${conclusion}：收盤 ${fmt(close)} ${trendSide(close, ma120) > 0 ? '高於' : trendSide(close, ma120) < 0 ? '低於' : '等於'} MA120 ${fmt(ma120)}，MA60 ${fmt(ma60)}／MA120 ${fmt(ma120)}／MA240 ${fmt(ma240)}，近 60 日 ${signed(ret60, 1)}%。`,
-        metrics: { close, ma60, ma120, ma240, return_60d_pct: ret60 } });
-    }
-    return { schema: 'market-trend/v1', rule_version: 'market-trend-v1', data_date: dataDate, periods };
+  // 國外指數的短中長期走勢：用它自己的日線照同一套規則算（沒有法人那一票）
+  function foreignTrend(index) {
+    const daily = window.MarketIndex.candles(indexPayloads.get(index.key).candles, 'daily');
+    return window.MarketIndex.trend(daily, { dataDate: daily.length ? daily.at(-1).t : null });
   }
 
   function renderMarketTrend(instance) {
     els.trendSection.hidden = !features.market_trend_v1;
     if (!features.market_trend_v1) { renderedTrend = null; return; }
     const packaged = D.actions && D.actions.market_trend || A.market_trend;
-    const trend = packaged && packaged.schema === 'market-trend/v1' ? packaged : localMarketTrend(instance);
+    const index = foreignIndex();
+    const trend = index ? foreignTrend(index) : packaged && packaged.schema === 'market-trend/v1' ? packaged : localMarketTrend();
     renderedTrend = trend;
     if (!els.trendDate || !els.trendRows) return;
-    els.trendDate.textContent = `資料日 ${(trend && trend.data_date) || A.meta.cutoff_date || '—'}`;
+    els.trendDate.textContent = `${index ? `${index.name} · ` : ''}資料日 ${(trend && trend.data_date) || (index ? '—' : A.meta.cutoff_date) || '—'}`;
     // 每一票與最上面那一句由 trend-votes.js 讀好，畫面由 trend-matrix.js 畫；同一份資料重複叫不會重畫
     window.TrendMatrix.render(els.trendSection, trend ? window.TrendVotes.read(trend) : null);
   }
@@ -532,6 +494,8 @@
   }
 
   function loadPeriod(period, reset = true) {
+    const index = foreignIndex();
+    if (index && (isTimeShare(period) || period === 'h60')) period = 'daily';   // 國外只有日週月
     if (isTimeShare(period)) {
       const model = timeShareModel();
       if (!model) return loadPeriod('daily', reset);
@@ -546,7 +510,7 @@
       els.chartSummary.textContent = `加權指數 ${model.day.date} 分時走勢。`;
       return;
     }
-    const candles = candlesFor(period);
+    const candles = index ? window.MarketIndex.candles(indexPayloads.get(index.key).candles, period) : candlesFor(period);
     currentPeriod = period;
     els.period.value = period;
     els.period.dispatchEvent(new Event('periodsync')); // 週期小鍵與選單（period-switch.js）同步
@@ -555,7 +519,7 @@
     els.mobileDetails.hidden = true;
     els.marker.hidden = true;
     const unit = period === 'h60' ? '60分' : period === 'weekly' ? '週' : period === 'monthly' ? '月' : '日';
-    const liveLast = latestLive && period === 'daily';
+    const liveLast = !index && latestLive && period === 'daily';
     const instance = ensureChart();
     instance.opts.liveLast = liveLast;
     instance.showMacd = period !== 'daily' && !isMobile();
@@ -567,11 +531,19 @@
     const count = Math.min(candles.length, isMobile() ? desiredCount : Math.min(desiredCount, touchSafeCount));
     if (reset || !instance.candles.length) instance.setData(candles, { count, overlays: chartOverlays(), unit });
     else instance.update(candles, chartOverlays());
-    if (period === 'daily') renderMarketTrend(instance);
+    if (period === 'daily' && !index) renderMarketTrend(instance);
     const lastCandle = candles[candles.length - 1];
     const provisionalLast = period === 'daily' && !liveLast && lastCandle && lastCandle.provisional === true;
     els.forming.hidden = !liveLast;
     els.provisional.hidden = !provisionalLast;
+    if (index) {
+      const payload = indexPayloads.get(index.key);
+      const lastDay = lastCandle ? String(lastCandle.t).slice(0, 10) : '—';
+      els.chartContext.textContent = `${periodLabels[period]} · 資料截至 ${lastDay}${index.zone === 'us' ? '（美東）' : ''}${payload.fetch && !payload.fetch.ok ? '・最近一次沒更新到' : ''}`;
+      els.chartSummary.textContent = `${index.name}${periodLabels[period]}，共 ${candles.length} 根。`;
+      requestAnimationFrame(updateOverlayControls);
+      return;
+    }
     els.chartContext.textContent = `${periodLabels[period]} · ${liveLast ? '最右一根形成中'
       : provisionalLast ? `最右一根暫用即時收盤，正式日K待更新（目前到 ${A.meta.cutoff_date}）` : `資料截至 ${A.meta.cutoff_date}`}`;
     els.chartSummary.textContent = `${periodLabels[period]}，共 ${candles.length} 根。${linesHidden() ? '' : `圖上有收復線 ${fmt(UPPER)} 與防守線 ${fmt(LOWER)}。`}`;
@@ -602,7 +574,7 @@
     const ph = H - t - b - macdH - gapH;
     const end = chart.view.end;
     const visible = chart.candles.slice(start, end).filter(candle => ['open', 'high', 'low', 'close'].every(key => Number.isFinite(candle[key])));
-    const drawnLines = linesHidden() ? [] : [LOWER, UPPER];
+    const drawnLines = linesHidden() || foreignIndex() ? [] : [LOWER, UPPER];
     let low = Math.min(...visible.map(candle => candle.low), ...drawnLines);
     let high = Math.max(...visible.map(candle => candle.high), ...drawnLines);
     const pad = (high - low) * .07 || 10;
@@ -647,7 +619,7 @@
     if (!g) return;
     const lastIndex = chart.candles.length - 1;
     const currentVisible = chart.view.end === chart.candles.length && lastIndex >= g.start && Number.isFinite(chart.candles[lastIndex].close);
-    els.point.hidden = !currentVisible;
+    els.point.hidden = !currentVisible || Boolean(foreignIndex());
     if (currentVisible) {
       const last = chart.candles[lastIndex];
       // 現價點貼在最後一根 K 棒上（軸上價籤占用右側欄，舊的右欄推算會蓋到價籤）。
@@ -700,6 +672,7 @@
     chart.hover = chart.selection = index;
     chart.draw();
     updateOverlayControls();
+    if (foreignIndex()) return;
     if (!open) {
       if (isMobile()) {
         els.mobileDetails.hidden = false;
@@ -1675,6 +1648,83 @@
   setMarketHeader(fallbackMarketData(), { id: 'closed', label: '休市' }, fallbackMarketDate());
 
   els.period.addEventListener('change', () => loadPeriod(els.period.value, true));
+
+  // ---------- 切換指數（本人 11-19：點圖卡左上角的名稱） ----------
+  function syncIndexMenu() {
+    const item = indexItem(currentIndex);
+    els.indexChip.textContent = item.name;
+    els.indexChip.setAttribute('aria-label', `指數：${item.name}（點了換其他指數）`);
+    els.indexMenu.querySelectorAll('[data-index]').forEach(button => {
+      const on = button.dataset.index === currentIndex;
+      button.setAttribute('aria-checked', String(on));
+      button.tabIndex = on ? 0 : -1;
+    });
+  }
+
+  // 國外：週期選單收起分時與 60 分、收起收復／防守鍵、量能改成不寫單位的成交量（來源沒有量就不給選）、法人副圖不給選
+  function applyIndexMode() {
+    const index = foreignIndex();
+    [...els.period.options].forEach(option => {
+      if (isTimeShare(option.value) || option.value === 'h60') option.hidden = Boolean(index);
+    });
+    if (els.linePair) els.linePair.hidden = Boolean(index);
+    els.mobileDetails.hidden = true;
+    const studies = chart && chart.studies;
+    if (!studies) return;
+    studies.setVolumeKind(index ? 'count' : 'amount');
+    studies.setAvailable(!index ? null
+      : window.MarketIndex.hasVolume(indexPayloads.get(index.key).candles) ? FOREIGN_STUDIES : FOREIGN_STUDIES.slice(1));
+  }
+
+  async function switchIndex(key) {
+    const item = indexItem(key);
+    if (!item || key === currentIndex) return;
+    const ticket = ++indexTicket;
+    if (key !== 'twii' && !indexPayloads.has(key)) {
+      els.chartContext.textContent = `讀取${item.name}…`;
+      let payload = null;
+      try {
+        const response = await fetch(`/api/indices/${encodeURIComponent(key)}`, { cache: 'no-store', headers: { Accept: 'application/json' } });
+        payload = response.ok ? await response.json() : null;
+      } catch (error) {
+        console.warn('[國外指數]', error);
+      }
+      if (ticket !== indexTicket) return;   // 讀的時候又換了別的
+      if (!payload || !Array.isArray(payload.candles) || !payload.candles.length) {
+        loadPeriod(currentPeriod, false);
+        els.chartContext.textContent = `${item.name}暫時沒有資料，請稍後再試`;
+        return;
+      }
+      indexPayloads.set(key, payload);
+    }
+    currentIndex = key;
+    selectedIndex = -1;
+    syncIndexMenu();
+    applyIndexMode();
+    loadPeriod(currentPeriod, true);
+    renderMarketTrend(ensureChart());
+  }
+
+  window.MarketIndex.LIST.forEach(item => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.setAttribute('role', 'radio');
+    button.dataset.index = item.key;
+    button.dataset.menuClose = '';
+    button.textContent = item.short;
+    button.addEventListener('click', () => switchIndex(item.key));
+    els.indexMenu.append(button);
+  });
+  // 左右方向鍵在選項之間移動（和週期選單一樣），Enter／空白鍵才換
+  els.indexMenu.addEventListener('keydown', event => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    const buttons = [...els.indexMenu.querySelectorAll('[data-index]')];
+    const at = buttons.indexOf(document.activeElement);
+    if (at < 0) return;
+    buttons[(at + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length].focus();
+    event.preventDefault();
+  });
+  syncIndexMenu();
   els.reset.addEventListener('click', () => {
     if (!chart) return;
     chart.reset();

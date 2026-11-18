@@ -286,14 +286,15 @@ def main() -> int:
                 page.wait_for_timeout(1500)
                 choose(page, "ts")
                 page.locator("#timeShare svg.ts-svg").wait_for(state="visible", timeout=10_000)
-                j.check(f"{prefix}首頁分時：標題寫「分時」、K 線讓位", page.locator("#chartTitle").inner_text() == "分時"
-                        and not page.locator("#chartStage").is_visible())
+                # 本人 11-19 大盤切換：圖卡標題固定是指數名稱（點了換指數），「分時」寫在副標
+                j.check(f"{prefix}首頁分時：標題是「台股加權」、副標寫分時、K 線讓位", page.locator("#chartTitle").inner_text() == "台股加權"
+                        and page.locator("#chartContext").inner_text().startswith("分時 · ") and not page.locator("#chartStage").is_visible())
                 j.check(f"{prefix}首頁分時：沒有均價線", page.locator("#timeShare .ts-avg").count() == 0)
                 j.check(f"{prefix}首頁不造成橫向捲動", page.evaluate("() => document.documentElement.scrollWidth <= innerWidth"))
                 page.locator(".chart-workspace").screenshot(path=str(OUT / f"{prefix}index-ts.png"))
                 choose(page, "daily")
-                j.check(f"{prefix}首頁切回日 K：標題回「主K線」、K 線回來", page.locator("#chartTitle").inner_text() == "主K線"
-                        and page.locator("#chartStage").is_visible())
+                j.check(f"{prefix}首頁切回日 K：標題照舊「台股加權」、K 線回來", page.locator("#chartTitle").inner_text() == "台股加權"
+                        and page.locator("#chartContext").inner_text().startswith("日K") and page.locator("#chartStage").is_visible())
                 context.close()
             browser.close()
         errors = [text for text in j.console if "favicon" not in text]
