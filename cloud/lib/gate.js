@@ -25,9 +25,9 @@ const PENDING_CAP = 30;
 // ticks：行情商免費方案的日內查詢是每分鐘 60 次，報價與分 K 輪詢約用掉 10 次，逐筆留 40 次。
 // friendAi：朋友保存、同意、刪除 Gemini 金鑰（保存會替他試呼叫一次 Gemini），所以另外限得緊一點；讀狀態不扣這一份。
 const RATE = { market: 30, detail: 12, userData: 60, live: 20, history: 30, ticks: 40, timeshare: 20, hourly: 20, friendAi: 10, indices: 30 };
-// indices：大盤頁切換國外指數（本人 11-19），一次切換讀一次 D1，和 market 同樣留到 30 次。
 // timeshare：分時（1 分K、五檔），盤中每 10 秒一次＝每分鐘 6 次，留到 20 次給重新整理與換股（和 live 同額度）。
 // hourly：60 分K（歷史＋今天），盤中每分鐘一次，同樣留到 20 次。
+// indices：大盤頁切換國外指數（本人 11-19），一次切換讀一次 D1，和 market 同樣留到 30 次。
 // 舊的整包資料檔：雲端已不部署，這裡再擋一次，避免預覽網址或殘留檔被讀到。
 const RETIRED_DATA = new Set(["/analysis-data.js", "/chips-data.js", "/dashboard-data.js", "/detail-data.js", "/plain-data.js"]);
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;

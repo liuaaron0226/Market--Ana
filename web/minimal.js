@@ -48,7 +48,8 @@
   let indexTicket = 0;
   const indexPayloads = new Map();
   const FOREIGN_STUDIES = ['volume', 'macd', 'kd', 'rsi'];
-  const foreignIndex = () => (currentIndex === 'twii' ? null : window.MarketIndex.LIST.find(item => item.key === currentIndex) || null);
+  const indexItem = key => window.MarketIndex.LIST.find(item => item.key === key) || null;
+  const foreignIndex = () => (currentIndex === 'twii' ? null : indexItem(currentIndex));
 
   const els = {
     price: $('currentPrice'),
@@ -445,7 +446,7 @@
     if (!features.market_trend_v1) { renderedTrend = null; return; }
     const packaged = D.actions && D.actions.market_trend || A.market_trend;
     const index = foreignIndex();
-    const trend = index ? foreignTrend(index) : packaged && packaged.schema === 'market-trend/v1' ? packaged : localMarketTrend(instance);
+    const trend = index ? foreignTrend(index) : packaged && packaged.schema === 'market-trend/v1' ? packaged : localMarketTrend();
     renderedTrend = trend;
     if (!els.trendDate || !els.trendRows) return;
     els.trendDate.textContent = `${index ? `${index.name} · ` : ''}資料日 ${(trend && trend.data_date) || (index ? '—' : A.meta.cutoff_date) || '—'}`;
@@ -1650,7 +1651,7 @@
 
   // ---------- 切換指數（本人 11-19：點圖卡左上角的名稱） ----------
   function syncIndexMenu() {
-    const item = window.MarketIndex.LIST.find(entry => entry.key === currentIndex);
+    const item = indexItem(currentIndex);
     els.indexChip.textContent = item.name;
     els.indexChip.setAttribute('aria-label', `指數：${item.name}（點了換其他指數）`);
     els.indexMenu.querySelectorAll('[data-index]').forEach(button => {
@@ -1676,7 +1677,7 @@
   }
 
   async function switchIndex(key) {
-    const item = window.MarketIndex.LIST.find(entry => entry.key === key);
+    const item = indexItem(key);
     if (!item || key === currentIndex) return;
     const ticket = ++indexTicket;
     if (key !== 'twii' && !indexPayloads.has(key)) {

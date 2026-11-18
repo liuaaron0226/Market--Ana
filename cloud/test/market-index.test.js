@@ -72,6 +72,18 @@ test("週K 以週一為一週、月K 以月份為一組：開盤取第一天、�
   ]);
 });
 
+test("週K、月K：來源缺高或低的那一天不會把整週的低點拉成 0", () => {
+  const { MarketIndex } = load();
+  const days = [
+    { date: "2026-11-02", open: 10, high: 12, low: 9, close: 11, volume: 1 },
+    { date: "2026-11-03", open: 11, high: null, low: null, close: 13, volume: 1 },
+    { date: "2026-11-04", open: null, high: 15, low: 10, close: 14, volume: 1 },
+  ];
+  assert.deepEqual(plain(MarketIndex.candles(days, "weekly")).map((bar) => [bar.high, bar.low]), [[15, 9]]);
+  const first = [{ date: "2026-11-03", open: 11, high: null, low: null, close: 13 }, { date: "2026-11-04", open: 13, high: 15, low: 10, close: 14 }];
+  assert.deepEqual(plain(MarketIndex.candles(first, "monthly")).map((bar) => [bar.high, bar.low]), [[15, 10]]);
+});
+
 test("成交量：有任何一天大於 0 才算有量（日經這類全是 0 的不畫）", () => {
   const { MarketIndex } = load();
   assert.equal(MarketIndex.hasVolume([{ volume: 0 }, { volume: null }]), false);

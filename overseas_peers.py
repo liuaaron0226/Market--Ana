@@ -257,6 +257,18 @@ def _status_sql(symbol: str, source: str, now: str, problem: str | None) -> str:
             "problem = excluded.problem;")
 
 
+def _fetch_one(source: Source, symbol: str, start: date, today: date) -> tuple[list[dict], str | None, bool]:
+    """抓一檔日線。回傳（日線, 問題, 額度是否用完）：問題是 None 就是成功；額度用完時同一來源後面的不要再打。"""
+    try:
+        return source.daily(symbol, start, today), None, False
+    except QuotaExceeded:
+        return [], "quota", True
+    except SourceError as error:
+        return [], error.problem, False
+    except (OSError, ValueError):
+        return [], "network", False
+
+
 def daily(d1: D1, sources: dict[str, Source | None], *, today: date, now: str,
           sleep: Callable[[float], None] = time.sleep) -> dict:
     """抓一輪並寫進雲端資料庫。回傳不含金鑰的摘要。"""
@@ -291,15 +303,9 @@ def daily(d1: D1, sources: dict[str, Source | None], *, today: date, now: str,
             called.add(source_name)
             if source_name in budget:
                 budget[source_name] -= 1
-            try:
-                bars = source.daily(symbol, start, today)
-            except QuotaExceeded:
+            bars, problem, out_of_quota = _fetch_one(source, symbol, start, today)
+            if out_of_quota:
                 exhausted.add(source_name)
-                problem = "quota"
-            except SourceError as error:
-                problem = error.problem
-            except (OSError, ValueError):
-                problem = "network"
         if problem is None:
             unique = {bar["date"]: bar for bar in bars if bar["date"] >= keep_from.isoformat()}
             statements.extend(_upsert_quote_sql(symbol, source_name, bar, now) for _, bar in sorted(unique.items()))
@@ -332,15 +338,7 @@ def indices(d1: D1, source: Source | None, *, today: date, now: str) -> dict:
         else:
             last = latest.get(symbol)
             start = date.fromisoformat(last) - timedelta(days=OVERLAP_DAYS) if last else today - timedelta(days=EODHD_HISTORY_DAYS)
-            try:
-                bars = source.daily(symbol, start, today)
-            except QuotaExceeded:
-                exhausted = True
-                problem = "quota"
-            except SourceError as error:
-                problem = error.problem
-            except (OSError, ValueError):
-                problem = "network"
+            bars, problem, exhausted = _fetch_one(source, symbol, start, today)
         if problem is None:
             unique = {bar["date"]: bar for bar in bars}
             statements.extend(_upsert_quote_sql(symbol, "eodhd", bar, now) for _, bar in sorted(unique.items()))
@@ -412,9 +410,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     massive_key = os.environ.get("MASSIVE_API_KEY", "").strip()
     eodhd_key = os.environ.get("EODHD_API_KEY", "").strip()
+    shared = SharedEodhd.from_env(eodhd_key) if args.shared_cache else None
+    if args.command == "indices" and args.shared_cache and shared is None:
+        # 排程（一天三班）一定走共用快取；R2 設定不齊時這一輪不寫，不退回直接打 EODHD（每班 5 次會吃掉每天 20 次的額度）。
+        print(json.dumps({"skipped": "no_shared_cache"}, ensure_ascii=False))
+        return 0
     sources = {"massive": MassiveSource(massive_key) if massive_key else None,
                "eodhd": EodhdSource(eodhd_key) if eodhd_key else None}
-    shared = SharedEodhd.from_env(eodhd_key) if args.shared_cache else None
     if shared is not None:
         # 共用快取：大盤預測已經抓過的不再打；沒有金鑰時照樣讀得到共用的那一份。R2 設定不齊時照原本的做法。
         sources["eodhd"] = CachedEodhdSource(shared)

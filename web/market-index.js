@@ -19,6 +19,8 @@
 
   const finite = value => typeof value === 'number' && Number.isFinite(value);
   const labelOf = date => String(date).slice(5).replace('-', '/');
+  // 來源偶爾缺高或低（null）：只拿有數字的比，不然 Math.min(null, x) 會變成 0
+  const extreme = (pick, a, b) => (finite(a) ? (finite(b) ? pick(a, b) : a) : finite(b) ? b : null);
 
   function weekKey(dateText) {
     const date = new Date(`${dateText}T00:00:00Z`);
@@ -43,7 +45,7 @@
         continue;
       }
       Object.assign(current, { t: row.date, label: labelOf(row.date), close: row.close,
-        high: Math.max(current.high, row.high), low: Math.min(current.low, row.low) });
+        high: extreme(Math.max, current.high, row.high), low: extreme(Math.min, current.low, row.low) });
       if (finite(row.volume)) current.volume = (finite(current.volume) ? current.volume : 0) + row.volume;
     }
     return out;

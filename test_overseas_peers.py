@@ -275,6 +275,17 @@ class HomeIndicesTest(unittest.TestCase):
         self.assertEqual(json.loads(out.getvalue())["problems"], {"no_key": 5})
         self.assertIsNone(d1.status("NVDA.US"), "同類股不在這一輪")
 
+    def test_shared_cache_missing_skips_instead_of_spending_quota(self):
+        """排程一定帶 --shared-cache：R2 設定不齊時不要退回直接打 EODHD（一天三班×5 次會吃掉 20 次額度）。"""
+        d1 = FakeD1()
+        out = io.StringIO()
+        with mock.patch.object(op, "WranglerD1", return_value=d1), mock.patch.object(op.SharedEodhd, "from_env", return_value=None), \
+                mock.patch.object(op, "EodhdSource", side_effect=AssertionError("不該直接打 EODHD")), \
+                mock.patch.dict(os.environ, {"EODHD_API_KEY": "ek"}), redirect_stdout(out):
+            self.assertEqual(op.main(["indices", "--shared-cache"]), 0)
+        self.assertEqual(json.loads(out.getvalue()), {"skipped": "no_shared_cache"})
+        self.assertIsNone(d1.status("DJI.INDX"))
+
     def test_schedules_write_the_indices_morning_evening_and_after_publishing(self):
         """本人 11-19「早上就看得到」：晨間版（美股昨晚）、晚間版（日韓今天）只在正式執行時寫；每日更新發布後也寫。"""
         for name in ("forecast-morning.yml", "forecast-ledger.yml"):
