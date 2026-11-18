@@ -135,3 +135,14 @@ test("盤中、日資料發布後：照舊寫「庫存價格至 日期」", () =
   assert.equal(rows.valueLabel(items[0]), "市值");
   assert.equal(rows.valueLabel({ price_stale: true }), "市值（上次收盤）");
 });
+
+test("今日收盤與其他來源混在一起：停在前一天的證交所行情也寫出日期、沿用舊價的提示不消失；基金淨值日期不算", () => {
+  const rows = loadRows();
+  const items = [
+    { ...SAMPLE[0], price_session: "close", price_as_of: "2026-11-10" },
+    { ...SAMPLE[1], price_session: "official", price_as_of: "2026-11-07", price_stale: true },
+    { ...SAMPLE[2], price_session: "fund", price_as_of: "2026-11-06" },
+  ];
+  assert.equal(rows.priceLine(items), "庫存價格：今日收盤（日資料稍後更新），部分仍是 2026-11-07（部分沿用上次資料）");
+  assert.equal(rows.priceLine([items[0], items[2]]), "庫存價格：今日收盤（日資料稍後更新）");
+});

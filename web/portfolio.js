@@ -991,13 +991,22 @@
     if (listReady) showFreshness();
   }
 
-  // 價格是哪一天、哪一種（holdings-rows.js priceLine）。13:30 剛過、收盤價還沒確認時，15 秒後再讀一次（和個股頁一樣）。
-  let pendingReload = null;
+  // 價格是哪一天、哪一種（holdings-rows.js priceLine）。13:30 剛過、收盤價還沒確認時，15 秒後再讀一次（和個股頁一樣），
+  // 庫存與水位一起讀，兩邊的價才一致。最多再讀 4 次（上游一直失敗就停，等使用者自己重新整理）；正在改庫存時先不讀，免得表單被重畫。
+  const PENDING_RELOADS = 4;
+  let pendingReload = null, pendingTries = 0;
   function showFreshness() {
     $('portfolioFreshness').textContent = window.HoldingsRows.priceLine(state.holdings);
-    if (pendingReload === null && state.holdings.some(item => item.price_session === 'close_pending')) {
-      pendingReload = setTimeout(() => { pendingReload = null; loadHoldings().catch(() => {}); }, 15_000);
-    }
+    const pending = state.holdings.some(item => item.price_session === 'close_pending');
+    if (!pending) pendingTries = 0;
+    if (!pending || pendingReload !== null || pendingTries >= PENDING_RELOADS) return;
+    const retry = () => {
+      if (editCode !== null) { pendingReload = setTimeout(retry, 15_000); return; }
+      pendingReload = null;
+      pendingTries += 1;
+      reloadHoldings().catch(() => {});
+    };
+    pendingReload = setTimeout(retry, 15_000);
   }
 
   async function loadFriendAiDigest() {

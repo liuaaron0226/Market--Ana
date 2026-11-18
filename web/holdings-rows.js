@@ -12,7 +12,9 @@
        整條的寬度平常是有價格的那幾檔的市值合計，所以賺錢的那一條的長度就是它的占比。賠錢的那一條要畫到成本那麼長，
        如果某一檔的成本比全部的市值還大（賠很多而且占比大），整條的寬度就改用那個成本，大家一起等比例縮短，才不會畫出去。
      share：這一檔占全部庫存市值的百分比；complete 才有。
-     item：原本那一筆（名稱、股數、均價、備註……）。 */
+     item：原本那一筆（名稱、股數、均價、備註……）。
+   HoldingsRows.priceLine(items) → 頁首那一行「庫存價格…」：是哪一天、哪一種價（收盤後到日資料發布前是今日收盤）。
+   HoldingsRows.valueLabel(item) → 明細「市值」那一格的標題。 */
 (function (global) {
   'use strict';
 
@@ -53,18 +55,24 @@
   }
 
   // 價格是哪一天、哪一種（本人 11-19：收盤後到日資料發布前改用今天的收盤，標示和個股頁一致）。
-  // price_session：'close' 今天的收盤、'close_pending' 收盤價還沒確認（收盤前最後一筆成交）、'daily' 本站日資料。
+  // price_session（/api/holdings）：'close' 今天的收盤、'close_pending' 收盤價還沒確認（收盤前最後一筆成交）、
+  // 'daily' 本站日資料、'official' 證交所行情或上次存下的價、'fund' 基金淨值×匯率。
+  const CLOSE_SESSIONS = new Set(['close', 'close_pending']);
   function priceLine(items) {
     const list = Array.isArray(items) ? items : [];
-    const dates = list.map(item => item.price_as_of).filter(Boolean).sort();
-    const sessions = new Set(list.map(item => item.price_session));
-    if (sessions.has('close') || sessions.has('close_pending')) {
-      const older = list.filter(item => item.price_session === 'daily').map(item => item.price_as_of).filter(Boolean).sort();
-      const head = sessions.has('close_pending') ? '庫存價格：今日最後成交（收盤價更新中）' : '庫存價格：今日收盤（日資料稍後更新）';
-      return older.length ? `${head}，部分仍是 ${older.at(-1)}` : head;
+    const staleNote = list.some(item => item.price_stale) ? '（部分沿用上次資料）' : '';
+    const today = list.filter(item => CLOSE_SESSIONS.has(item.price_session));
+    if (today.length) {
+      const day = today[0].price_as_of;
+      // 還停在前一天的那幾檔（日資料、證交所行情）寫出日期；基金淨值本來就晚一兩天，不算。
+      const older = list.filter(item => !CLOSE_SESSIONS.has(item.price_session) && item.price_session !== 'fund'
+        && item.price_as_of && item.price_as_of < day).map(item => item.price_as_of).sort();
+      const head = today.some(item => item.price_session === 'close_pending')
+        ? '庫存價格：今日最後成交（收盤價更新中）' : '庫存價格：今日收盤（日資料稍後更新）';
+      return `${head}${older.length ? `，部分仍是 ${older.at(-1)}` : ''}${staleNote}`;
     }
-    if (!dates.length) return '尚無庫存價格';
-    return `庫存價格至 ${dates.at(-1)}${list.some(item => item.price_stale) ? '（部分沿用上次資料）' : ''}`;
+    const dates = list.map(item => item.price_as_of).filter(Boolean).sort();
+    return dates.length ? `庫存價格至 ${dates.at(-1)}${staleNote}` : '尚無庫存價格';
   }
 
   // 明細裡「市值」那一格的標題

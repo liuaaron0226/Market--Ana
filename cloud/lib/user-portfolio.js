@@ -272,9 +272,12 @@ function fundQuoteFromPayload(payload) {
 const misDate = (value) => /^\d{8}$/.test(value || "")
   ? `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}` : null;
 
+const taipeiDay = (nowMs) => new Date(nowMs + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+const quoteMarket = (row) => (row.market === "上櫃" ? "otc" : "tse");
+
 async function officialPrices(rows, quoteFetch, now) {
   if (!rows.length || typeof quoteFetch !== "function") return new Map();
-  const channels = rows.map((row) => `${row.market === "上櫃" ? "otc" : "tse"}_${row.code}.tw`).join("|");
+  const channels = rows.map((row) => `${quoteMarket(row)}_${row.code}.tw`).join("|");
   const url = new URL("https://mis.twse.com.tw/stock/api/getStockInfo.jsp");
   url.searchParams.set("ex_ch", channels);
   url.searchParams.set("json", "1");
@@ -286,7 +289,7 @@ async function officialPrices(rows, quoteFetch, now) {
     if (!fetched.ok) return new Map();
     const payload = await fetched.json();
     const taipei = new Date(now() + 8 * 60 * 60 * 1000);
-    const today = `${taipei.getUTCFullYear()}${String(taipei.getUTCMonth() + 1).padStart(2, "0")}${String(taipei.getUTCDate()).padStart(2, "0")}`;
+    const today = taipeiDay(now()).replaceAll("-", "");
     const minutes = taipei.getUTCHours() * 60 + taipei.getUTCMinutes();
     const weekday = taipei.getUTCDay();
     const marketOpen = weekday >= 1 && weekday <= 5 && minutes >= 9 * 60 && minutes < 13 * 60 + 30;
@@ -309,9 +312,9 @@ async function officialPrices(rows, quoteFetch, now) {
 
 // 收盤後到日資料發布前（本人 11-19）：站主的庫存現價改用今天的收盤——和個股頁同一個即時服務（closingQuote）、
 // 同一套判斷：報價日期比日資料新才用。日資料一發布到今天就不再問；休市日抓到的是前一個交易日，不會比較新。
+// 這裡只收「今天」的報價：頁首寫的是「今日收盤」，前一天的報價就算比日資料新也不拿來冒充（每日更新失敗的極端情況）。
 // deps.closeQuotes 只有站主才有（即時行情只給站主）。拿不到的那幾檔照舊用日資料。一次最多同時問 4 檔。
 const CLOSE_CONCURRENCY = 4;
-const taipeiDay = (nowMs) => new Date(nowMs + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
 async function todayCloses(rows, deps) {
   const source = deps.closeQuotes;
@@ -322,8 +325,8 @@ async function todayCloses(rows, deps) {
   const worker = async () => {
     for (let row = queue.shift(); row; row = queue.shift()) {
       try {
-        const close = await source.service.closingQuote(row.code, row.market === "上櫃" ? "otc" : "tse", { fugleApiKey: source.fugleApiKey });
-        if (close && close.quote.data_date > row.analysis_as_of) found.set(row.code, close);
+        const close = await source.service.closingQuote(row.code, quoteMarket(row), { fugleApiKey: source.fugleApiKey });
+        if (close && close.quote.data_date === today) found.set(row.code, close);
       } catch { /* 拿不到就照舊用日資料 */ }
     }
   };
@@ -348,9 +351,11 @@ async function listHoldings(db, email, deps) {
   // ETF 開關對這個人關著時，0050 以外的 ETF 不用本站分析的收盤價（和 ETF 上站之前一樣走官方行情）。
   const analysis = new Map(results.filter((item) => !isFund(item)).map((item) => [item.code,
     etfAnalysisHidden(item.code, item.kind, Boolean(deps.includeEtfs)) ? null : closeFromPayload(item.payload)]));
-  const closes = await todayCloses(results.filter((item) => !isFund(item) && analysis.get(item.code) !== null), deps);
   const unresolved = results.filter((item) => !isFund(item) && analysis.get(item.code) === null);
-  const official = await officialPrices(unresolved, deps.quoteFetch, deps.now || Date.now);
+  const [closes, official] = await Promise.all([
+    todayCloses(results.filter((item) => !isFund(item) && analysis.get(item.code) !== null), deps),
+    officialPrices(unresolved, deps.quoteFetch, deps.now || Date.now),
+  ]);
   for (const [code, quote] of official) {
     await db.prepare(
       "UPDATE user_holdings SET last_price = ?, price_as_of = ?, price_source = ? WHERE email = ? AND code = ?",
@@ -393,7 +398,7 @@ function fundHoldingItem(item, quote) {
     code: item.code, name: item.name, market: item.market, kind: "fund", shares, average_cost: Number(item.average_cost),
     total_cost_twd: costBasis, note: item.note, in_universe: Boolean(item.in_universe), source: item.source, source_ref: item.source_ref,
     latest_price: quote ? rounded(quote.price, 4) : null, price_as_of: quote?.navDate ?? null,
-    price_source: quote ? "本站淨值×匯率" : null, price_stale: Boolean(quote?.stale),
+    price_source: quote ? "本站淨值×匯率" : null, price_session: "fund", price_stale: Boolean(quote?.stale),
     nav: quote?.nav ?? null, currency: quote?.currency ?? null, nav_date: quote?.navDate ?? null,
     fx_rate: quote?.fxRate ?? null, fx_date: quote?.fxDate ?? null,
     cost_basis: costBasis, market_value: marketValue, unrealized_pnl: unrealized,

@@ -327,3 +327,27 @@ test("收盤報價抓失敗：照舊用日資料，庫存照常列出", async ()
   assert.equal(item.latest_price, 600);
   assert.equal(item.price_session, "daily");
 });
+
+test("上櫃的庫存用 otc 問收盤報價；拿到的報價不是今天的（每日更新失敗、昨天的報價比日資料新）不冒充今日收盤", async () => {
+  await env.DB.prepare("INSERT INTO stock_analysis (version, code, as_of, payload) VALUES (?, ?, ?, ?)")
+    .bind("v1", "6488", "2026-11-07", JSON.stringify({ schema: "stock-analysis/v2", code: "6488", market: "上櫃", quote: { close: 400 } })).run();
+  await env.DB.prepare("INSERT INTO user_holdings (email, code, name, market, shares, average_cost, note, in_universe, source, created_at, updated_at) VALUES (?, '6488', '環球晶', '上櫃', 1000, 350, '', 1, 'manual', ?, ?)")
+    .bind(OWNER, "2026-11-09T00:00:00Z", "2026-11-09T00:00:00Z").run();
+  const asked = [];
+  let quoteDay = "2026-11-10";
+  deps.now = () => Date.parse("2026-11-10T15:00:00+08:00");
+  deps.liveQuoteService = {
+    async closingQuote(code, market) {
+      asked.push(`${market}:${code}`);
+      return { quote: { price: 420, data_date: quoteDay }, pending: false };
+    },
+  };
+  let [item] = await holdingsOf();
+  assert.deepEqual(asked, ["otc:6488"]);
+  assert.equal(item.latest_price, 420);
+  assert.equal(item.price_session, "close");
+  quoteDay = "2026-11-09";
+  [item] = await holdingsOf();
+  assert.equal(item.latest_price, 400);
+  assert.equal(item.price_session, "daily");
+});
