@@ -90,8 +90,29 @@ def index_payload(last: int, market_open: bool) -> dict:
             "data": data, "series": series}
 
 
+def hourly_history() -> list[dict]:
+    """富果歷史 60 分K 的假資料：2026-05-18 到昨天（11-17）每個平日五根，新到舊（和富果一樣），量是張。"""
+    import datetime as dt
+    rnd, price, rows = random.Random(60), 1900.0, []
+    day = dt.date(2026, 5, 18)
+    while day < dt.date(2026, 11, 18):
+        if day.weekday() < 5:
+            for hh in ["09", "10", "11", "12", "13"]:
+                close = round((price + rnd.gauss(1.2, 14)) / 5) * 5
+                rows.append({"date": f"{day.isoformat()}T{hh}:00:00.000+08:00", "open": price, "high": max(price, close) + 5,
+                             "low": min(price, close) - 5, "close": close, "volume": int(2000 + 6000 * rnd.random())})
+                price = close
+        day += dt.timedelta(days=1)
+    shift = PREV - rows[-1]["close"]  # 最後一根收在昨收，接今天的盤中不會跳一大段
+    for row in rows:
+        for key in ("open", "high", "low", "close"):
+            row[key] = round(row[key] + shift, 2)
+    return rows[::-1]
+
+
 def write_fixture(path: Path, last: int, market_open: bool) -> None:
-    path.write_text(json.dumps({"stock": stock_payload(last, market_open), "index": index_payload(last, market_open)}), encoding="utf-8")
+    path.write_text(json.dumps({"stock": stock_payload(last, market_open), "index": index_payload(last, market_open),
+                                "hourly": hourly_history()}), encoding="utf-8")
 
 
 class Journey:
@@ -218,7 +239,13 @@ def main() -> int:
                 stock_time_share(j, page, prefix, after_close=False)
                 j.check(f"{prefix}週期小鍵寫「分時」（不補 K）", page.locator(".hm-period .chart-chip").inner_text() == "分時")
                 choose(page, "60m")
+                page.wait_for_function("() => /60分K · \d{3,} 根/.test(document.getElementById('stockChartContext').textContent)", timeout=10_000)
                 j.check(f"{prefix}60 分：K 線回來、仍不能畫線", page.locator("#chartHost").is_visible() and not page.locator("#toolsKey").is_visible())
+                hourly = page.evaluate("() => { const c = window.StockView.chart().candles; return [c.length, c[0].label, c.at(-1).label, c.at(-1).close]; }")
+                j.check(f"{prefix}60 分：近 6 個月的歷史（5/18 起）接上今天盤中那幾根", hourly[0] > 600 and hourly[1] == "05/18 09:00"
+                        and hourly[2] == "11/18 11:00", hourly)
+                page.locator(".bd-chart").screenshot(path=str(OUT / f"{prefix}stock-60m.png"))
+                page.mouse.move(5, 5)
                 choose(page, "daily")
                 j.check(f"{prefix}切回日 K：分析工具鍵回來（收著）", page.locator("#toolsKey").is_visible()
                         and page.locator("#toolsKey").get_attribute("aria-expanded") == "false")
@@ -240,6 +267,9 @@ def main() -> int:
                 same = page.evaluate("() => [document.querySelectorAll('#timeShare .ts-line, #timeShare .ts-avg').length, document.getElementById('stockChartContext').textContent]")
                 j.check(f"{prefix}核准使用者：分時走勢、均價線、五檔與內外盤比都看得到", same == [2, f"分時 · {DAY}"]
                         and page.locator("[data-ts-flow]").is_visible() and not page.locator("#timeShareEmpty").is_visible(), same)
+                choose(page, "60m")
+                page.wait_for_function("() => /60分K · \d{3,} 根/.test(document.getElementById('stockChartContext').textContent)", timeout=10_000)
+                j.check(f"{prefix}核准使用者：60 分 K 的歷史也看得到", page.locator("#chartHost").is_visible())
                 live = page.evaluate("async () => (await fetch('/api/stocks/2330/live?market=tse')).status")
                 j.check(f"{prefix}核准使用者：整份即時報價（/live）照舊只給站主", live == 403, live)
                 page.locator(".bd-chart").screenshot(path=str(OUT / f"{prefix}friend-ts.png"))

@@ -27,7 +27,7 @@ if (process.env.MARKET_ANA_STOCK_ETFS) env.MARKET_ANA_STOCK_ETFS = process.env.M
 // 即時行情與五檔只在換成假資料（JOURNEY_LIVE_FIXTURE）時放寬：不然旅程會真的去問證交所，盤後的收盤報價一進來就把畫面拉回最新一根。
 const fakeLive = Boolean(process.env.JOURNEY_LIVE_FIXTURE);
 const rate = process.argv[3] === "relaxed"
-  ? { market: 10_000, detail: 10_000, userData: 10_000, ...(fakeLive ? { live: 10_000, timeshare: 10_000 } : {}) } : undefined;
+  ? { market: 10_000, detail: 10_000, userData: 10_000, ...(fakeLive ? { live: 10_000, timeshare: 10_000, hourly: 10_000 } : {}) } : undefined;
 // 推播的本機預覽（F 票）：JOURNEY_PUSH=test 用每次啟動新產生的測試推播金鑰（不是正式金鑰）；推播只記在這裡、不真的送出。
 const pushed = [];
 if (process.env.JOURNEY_PUSH === "test") {
@@ -44,6 +44,13 @@ if (fakeLive) {
   const fixture = async () => JSON.parse(await readFile(process.env.JOURNEY_LIVE_FIXTURE, "utf8"));
   deps.liveQuoteService = { snapshot: async (code) => ({ ...(await fixture()).stock, code }) };
   deps.indexLiveService = { snapshot: async () => (await fixture()).index };
+  // 60 分K 歷史（富果 /historical/candles）：fixture 的 hourly（新到舊，和富果一樣），照 from／to 篩；不連真的富果
+  env.FUGLE_API_KEY = "journey-fixture";
+  deps.upstreamFetch = async (url) => {
+    const params = new URL(url).searchParams;
+    const rows = ((await fixture()).hourly || []).filter((row) => row.date.slice(0, 10) >= params.get("from") && row.date.slice(0, 10) <= params.get("to"));
+    return rows.length ? new Response(JSON.stringify({ symbol: "2330", timeframe: "60", data: rows })) : new Response("{}", { status: 404 });
+  };
 }
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json",
   ".webmanifest": "application/manifest+json", ".png": "image/png" };

@@ -140,3 +140,32 @@ test("分時 API：還沒有資料時回空的（不是錯誤），有自己的�
   assert.deepEqual(await first.json(), { ok: true, code: "2330", market_open: false, minutes: [], quote: null, book: null });
   assert.equal((await req("/api/stocks/2330/timeshare")).status, 429);
 });
+
+// 本人 11-18：60 分 K 要能看歷史（近 6 個月），開放給所有核准的人。歷史存 D1，今天的即時 60 分接在最後。
+test("60 分 API：核准使用者也拿得到近 6 個月的 60 分K＋今天的即時那幾根；富果只在缺資料時問一次", async () => {
+  const upstream = [];
+  env.FUGLE_API_KEY = "k";
+  deps.now = () => Date.parse("2026-11-10T10:30:00+08:00");
+  deps.upstreamFetch = async (url) => {
+    upstream.push(String(url));
+    return new Response(JSON.stringify({ symbol: "2330", timeframe: "60", data: [
+      { date: "2026-11-09T13:00:00.000+08:00", open: 2230, high: 2240, low: 2225, close: 2235, volume: 3000 },
+      { date: "2026-11-09T09:00:00.000+08:00", open: 2210, high: 2250, low: 2200, close: 2240, volume: 9000 },
+    ] }), { status: 200 });
+  };
+  const todayBar = { t: "2026-11-10T09:00:00.000+08:00", label: "09:00", open: 2240, high: 2280, low: 2235, close: 2265, volume: 14_000_000 };
+  deps.liveQuoteService = { snapshot: async () => ({ ok: true, market_open: true, quote: LIVE_QUOTE, candles: { "1": MINUTES, "60": [todayBar] }, book: null }) };
+  await seed("friend@example.com");
+  for (const email of [OWNER, "friend@example.com"]) {
+    const response = await req("/api/stocks/2330/hourly", email);
+    assert.equal(response.status, 200, email);
+    const body = await response.json();
+    assert.deepEqual(body.candles.map((row) => [row.label, row.close]), [["11/09 09:00", 2240], ["11/09 13:00", 2235], ["11/10 09:00", 2265]]);
+    assert.equal(body.market_open, true);
+  }
+  assert.equal(upstream.length, 1, "第二個人看同一檔直接讀 D1");
+  assert.match(upstream[0], /\/historical\/candles\/2330\?from=2026-05-10&to=2026-11-09&timeframe=60$/);
+  await seed("pending@example.com", "pending");
+  assert.equal((await req("/api/stocks/2330/hourly", "pending@example.com")).status, 403);
+  assert.equal((await req("/api/stocks/9999/hourly")).status, 404);
+});
