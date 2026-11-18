@@ -71,6 +71,7 @@ class LocalSource:
         self._industries: dict[str, tuple[str, str]] | None = None
         self._capital: dict[str, list[dict[str, Any]]] | None = None
         self._members: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
+        self._loaded: dict[tuple[str, str, int], tuple[list[Any], dict[str, Any]]] = {}
 
     def _capital_events(self) -> dict[str, list[dict[str, Any]]]:
         if self._capital is None:
@@ -79,9 +80,13 @@ class LocalSource:
         return self._capital
 
     def _load(self, code: str, base_date: str, limit: int) -> tuple[list[Any], dict[str, Any]]:
-        from twon_analysis.data import load_bars
-        return load_bars(code, base_date, db_path=self.root / "data/stock-history/stock-history.sqlite",
-                         otc_db_path=self.root / "data/otc-history/otc_history.sqlite", limit=limit)
+        """行情庫的日 K 與當日資訊；同一檔、同一天、同樣根數只讀一次（日 K 與最後供應點共用）。"""
+        key = (code, base_date, limit)
+        if key not in self._loaded:
+            from twon_analysis.data import load_bars
+            self._loaded[key] = load_bars(code, base_date, db_path=self.root / "data/stock-history/stock-history.sqlite",
+                                          otc_db_path=self.root / "data/otc-history/otc_history.sqlite", limit=limit)
+        return self._loaded[key]
 
     def _bars(self, code: str, base_date: str, limit: int = STOCK_HISTORY_BARS) -> list[dict[str, Any]]:
         bars, _ = self._load(code, base_date, limit)
