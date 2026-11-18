@@ -3,6 +3,7 @@
 // 個股入口回 kind: "fund" 的分析、長日線回淨值序列；基金自己一個三態開關（關、只開站主、開給全部獲准使用者），比照 ETF 上站。
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { handle } from "../lib/gate.js";
 import { releasePolicy, policyForViewer } from "../lib/release-policy.js";
 import { fakeD1, makeIssuer, claims, fetchJwks, TEAM, MAIN_AUD, APPLY_AUD, OWNER } from "./helpers.js";
@@ -196,6 +197,18 @@ test("基金開關是獨立的：打開它只多 stock_funds_v1，不連帶打�
   }
   assert.equal(policyForViewer(releasePolicy({ MARKET_ANA_STOCK_FUNDS: "owner" }), false, { MARKET_ANA_STOCK_FUNDS: "owner" }).features.stock_funds_v1, false);
   assert.equal(policyForViewer(releasePolicy({ MARKET_ANA_STOCK_FUNDS: "all" }), false, { MARKET_ANA_STOCK_FUNDS: "all" }).features.stock_funds_v1, true);
+});
+
+test("正式環境設定（wrangler.jsonc，本人 11-18「核准的人都看得到」）裡基金開給全部獲准使用者，也不連帶打開策略與 AI", () => {
+  const text = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8").replace(/^\s*\/\/.*$/gm, "");
+  const vars = JSON.parse(text).vars;
+  assert.equal(vars.MARKET_ANA_STOCK_FUNDS, "all");
+  const policy = releasePolicy(vars);
+  assert.equal(policyForViewer(policy, true, vars).features.stock_funds_v1, true);
+  assert.equal(policyForViewer(policy, false, vars).features.stock_funds_v1, true);
+  for (const feature of ["strategy_v1", "level_advice", "ai_digest", "ai_stock_advice"]) {
+    assert.equal(policyForViewer(policy, false, vars).features[feature], false, feature);
+  }
 });
 
 // 規格第 8 條：首頁搜尋點了基金，和股票一樣記進「最近搜尋」（市場記「境外基金」）。開關對這個人關著時和名錄外代號一樣查無。
