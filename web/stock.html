@@ -10,18 +10,21 @@
   <meta name="apple-mobile-web-app-title" content="決策鏡">
   <meta name="theme-color" content="#0b0b0e">
   <title>個股分析</title>
-  <link rel="stylesheet" href="minimal.css?v=20261118-z1">
-  <link rel="stylesheet" href="chart-studies.css?v=20261117-m53">
-  <link rel="stylesheet" href="bold.css?v=20261117-m53">
-  <link rel="stylesheet" href="stock.css?v=20261118-f56">
-  <link rel="stylesheet" href="stock-facts.css?v=20261117-m53">
-  <link rel="stylesheet" href="stock-signals.css?v=20261117-m53">
-  <link rel="stylesheet" href="watch-peers.css?v=20261117-m53">
-  <link rel="stylesheet" href="forecast.css?v=20261117-m53">
-  <link rel="stylesheet" href="watch-judgments.css?v=20261117-m53">
-  <link rel="stylesheet" href="watch-push.css?v=20261117-m53">
-  <link rel="stylesheet" href="settings.css?v=20261117-m53">
-  <link rel="stylesheet" href="stock-picker.css?v=20261117-n1">
+  <link rel="stylesheet" href="minimal.css?v=20261118-m54">
+  <link rel="stylesheet" href="chart-studies.css?v=20261118-m54">
+  <link rel="stylesheet" href="bold.css?v=20261118-m54">
+  <link rel="stylesheet" href="chart-legend.css?v=20261118-m54">
+  <link rel="stylesheet" href="swipe-rows.css?v=20261118-m54">
+  <link rel="stylesheet" href="ma-settings.css?v=20261118-m54">
+  <link rel="stylesheet" href="stock.css?v=20261118-m54">
+  <link rel="stylesheet" href="stock-facts.css?v=20261118-m54">
+  <link rel="stylesheet" href="stock-signals.css?v=20261118-m54">
+  <link rel="stylesheet" href="watch-peers.css?v=20261118-m54">
+  <link rel="stylesheet" href="forecast.css?v=20261118-m54">
+  <link rel="stylesheet" href="watch-judgments.css?v=20261118-m54">
+  <link rel="stylesheet" href="watch-push.css?v=20261118-m54">
+  <link rel="stylesheet" href="settings.css?v=20261118-m54">
+  <link rel="stylesheet" href="stock-picker.css?v=20261118-m54">
 </head>
 <body class="bd st">
   <div class="bd-shell" data-desk-tilt>
@@ -109,15 +112,6 @@
                 </optgroup>
               </select>
             </label>
-            <div class="chart-ma">
-              <button type="button" class="chart-chip" id="maChip" aria-expanded="false" aria-controls="maMenu">均線 <span id="maChipValue"></span></button>
-              <div class="chart-menu chart-ma-menu" id="maMenu" hidden>
-                <div class="bd-ma-row">
-                  <div class="bd-ma-controls" id="maControls" aria-label="均線期數"></div>
-                  <button class="bd-ma-add" id="addMa" type="button">新增均線</button>
-                </div>
-              </div>
-            </div>
           </div>
           <div class="bd-draw-row">
           <div class="bd-draw" id="drawTools" role="toolbar" aria-label="畫線工具" hidden>
@@ -145,6 +139,9 @@
           </div>
           <span class="bd-draw-unsaved" id="drawUnsaved" role="status" hidden></span>
           </div>
+          <!-- K 線上方一行（本人 2026-11-17 券商版面，和首頁同一套）：均線、布林、關注線的名稱＋目前數值；
+               點均線名稱打開設定（ma-settings.js，和首頁共用一組）。圖的左右不留價格欄（kchart inlineAxis） -->
+          <div class="bd-chart-legend" id="chartLegend"><span class="legend-names" id="legendNames"></span></div>
           <div class="bd-chart-host sk-chart" id="chartHost"></div>
           <div id="chartStudies"></div>
         </section>
@@ -229,27 +226,31 @@
       <section class="wp" id="watchPeers" aria-label="國外同類股" hidden></section>
     </main>
   </div>
-  <script src="chart-studies.js?v=20261118-f3"></script>
-  <script src="chart-drawings.js?v=20261117-m53"></script>
-  <script src="drawing-sync.js?v=20261117-m53"></script>
-  <script src="kchart.js?v=20261118-f3"></script>
-  <script src="intraday.js?v=20261117-m53"></script>
-  <script src="stock-signals.js?v=20261117-m53"></script>
-  <script src="stock-facts.js?v=20261117-m53"></script>
-  <script src="watch-peers.js?v=20261117-m53"></script>
-  <script src="scroll-lock.js?v=20261117-m53"></script>
-  <script src="no-zoom.js?v=20261118-z1"></script>
-  <script src="watch-judgments.js?v=20261117-m53"></script>
-  <script src="holders-weekly.js?v=20261117-m53"></script>
-  <script src="holders-card.js?v=20261117-m53"></script>
-  <script src="stock-picker.js?v=20261118-f57"></script>
-  <script src="fund-distributions.js?v=20261118-f6"></script>
-  <script src="stock.js?v=20261118-f4567"></script>
-  <script src="period-switch.js?v=20261118-f3"></script>
-  <script src="chart-menus.js?v=20261117-m53"></script>
-  <script src="home-fold.js?v=20261117-m53"></script>
-  <script src="desk-tilt.js?v=20261117-m53"></script>
-  <script src="watch-push.js?v=20261117-m53"></script>
-  <script src="settings.js?v=20261117-m53"></script>
+  <script src="chart-studies.js?v=20261118-m54"></script>
+  <script src="chart-drawings.js?v=20261118-m54"></script>
+  <script src="drawing-sync.js?v=20261118-m54"></script>
+  <script src="kchart.js?v=20261118-m54"></script>
+  <script src="ma-lines.js?v=20261118-m54"></script>
+  <script src="chart-legend.js?v=20261118-m54"></script>
+  <script src="swipe-rows.js?v=20261118-m54"></script>
+  <script src="ma-settings.js?v=20261118-m54"></script>
+  <script src="intraday.js?v=20261118-m54"></script>
+  <script src="stock-signals.js?v=20261118-m54"></script>
+  <script src="stock-facts.js?v=20261118-m54"></script>
+  <script src="watch-peers.js?v=20261118-m54"></script>
+  <script src="scroll-lock.js?v=20261118-m54"></script>
+  <script src="no-zoom.js?v=20261118-m54"></script>
+  <script src="watch-judgments.js?v=20261118-m54"></script>
+  <script src="holders-weekly.js?v=20261118-m54"></script>
+  <script src="holders-card.js?v=20261118-m54"></script>
+  <script src="stock-picker.js?v=20261118-m54"></script>
+  <script src="fund-distributions.js?v=20261118-m54"></script>
+  <script src="stock.js?v=20261118-m54"></script>
+  <script src="period-switch.js?v=20261118-m54"></script>
+  <script src="chart-menus.js?v=20261118-m54"></script>
+  <script src="home-fold.js?v=20261118-m54"></script>
+  <script src="desk-tilt.js?v=20261118-m54"></script>
+  <script src="watch-push.js?v=20261118-m54"></script>
+  <script src="settings.js?v=20261118-m54"></script>
 </body>
 </html>

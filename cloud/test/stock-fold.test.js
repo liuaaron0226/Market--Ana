@@ -36,6 +36,7 @@ function loadComparison() {
     fetch: async () => ({}), innerWidth: 1440, URL, URLSearchParams, AbortController, console,
     setTimeout, clearTimeout, requestAnimationFrame: () => 0,
   };
+  vm.runInNewContext(read("web/ma-lines.js"), context);   // 均線設定（和首頁共用一組）
   vm.runInNewContext(read("web/stock.js"), context);
   return (items, benchmark) => JSON.parse(JSON.stringify(window.StockComparison.periods(items, benchmark)));
 }

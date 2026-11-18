@@ -10,15 +10,18 @@
   <meta name="apple-mobile-web-app-title" content="決策鏡">
   <meta name="theme-color" content="#0b0b0e">
   <title>台股決策鏡</title>
-  <link rel="stylesheet" href="minimal.css?v=20261118-z1">
-  <link rel="stylesheet" href="chart-studies.css?v=20261117-m53">
-  <link rel="stylesheet" href="bold.css?v=20261117-m53">
-  <link rel="stylesheet" href="home.css?v=20261117-n1">
-  <link rel="stylesheet" href="panel.css?v=20261117-m53">
-  <link rel="stylesheet" href="forecast.css?v=20261117-m53">
-  <link rel="stylesheet" href="watch-push.css?v=20261117-m53">
-  <link rel="stylesheet" href="settings.css?v=20261117-m53">
-  <link rel="stylesheet" href="stock-picker.css?v=20261117-n1">
+  <link rel="stylesheet" href="minimal.css?v=20261118-m54">
+  <link rel="stylesheet" href="chart-studies.css?v=20261118-m54">
+  <link rel="stylesheet" href="bold.css?v=20261118-m54">
+  <link rel="stylesheet" href="home.css?v=20261118-m54">
+  <link rel="stylesheet" href="panel.css?v=20261118-m54">
+  <link rel="stylesheet" href="forecast.css?v=20261118-m54">
+  <link rel="stylesheet" href="chart-legend.css?v=20261118-m54">
+  <link rel="stylesheet" href="swipe-rows.css?v=20261118-m54">
+  <link rel="stylesheet" href="ma-settings.css?v=20261118-m54">
+  <link rel="stylesheet" href="watch-push.css?v=20261118-m54">
+  <link rel="stylesheet" href="settings.css?v=20261118-m54">
+  <link rel="stylesheet" href="stock-picker.css?v=20261118-m54">
 </head>
 <body class="bd hm">
   <a class="skip-link" href="#workspace">跳到主圖</a>
@@ -148,14 +151,21 @@
             <span id="provisionalBadge" hidden>最右一根：盤後暫用即時收盤，正式日K待更新</span>
             <span id="estimateBadge" hidden>分鐘點推估，非完整 OHLC</span>
           </div>
+          <!-- 圖上方一行（本人 2026-11-17）：收復線、防守線合成一顆鍵（左右兩半各開各的那一張），後面是各條線的名稱與顏色；
+               名稱後面寫目前的數值與方向；圖的左右不留價格欄（kchart inlineAxis，本人 11-17 參考券商版面）。
+               K 線從這一行下面開始畫（--legend-h 由 minimal.js 量好） -->
+          <div class="chart-legend" id="chartLegend">
+            <span class="line-pair" role="group" aria-label="收復線與防守線">
+              <button class="line-trigger line-upper" id="lineUpper" type="button" aria-label="查看收復線詳情">
+                <span>收復</span><strong class="num" id="upperValue">—</strong>
+              </button>
+              <button class="line-trigger line-lower" id="lineLower" type="button" aria-label="查看防守線詳情">
+                <span>防守</span><strong class="num" id="lowerValue">—</strong><i aria-hidden="true">›</i>
+              </button>
+            </span>
+            <span class="legend-names" id="legendNames"></span>
+          </div>
           <div class="chart-host" id="mainChart"></div>
-
-          <button class="line-trigger line-upper" id="lineUpper" type="button" aria-label="查看收復線詳情">
-            <span>收復線</span><strong class="num" id="upperValue">—</strong><i aria-hidden="true">›</i>
-          </button>
-          <button class="line-trigger line-lower" id="lineLower" type="button" aria-label="查看防守線詳情">
-            <span>防守線</span><strong class="num" id="lowerValue">—</strong><i aria-hidden="true">›</i>
-          </button>
           <button class="current-point" id="currentPoint" type="button" aria-label="查看收復線與防守線" hidden>
             <span class="point-core" aria-hidden="true"></span>
             <span class="point-label">兩條線 <span aria-hidden="true">›</span></span>
@@ -341,24 +351,28 @@
   <script src="plain-data.js"></script>
   <script src="detail-data.js"></script>
   <script src="market-data-local.js"></script>
-  <script src="terrain-layout.js?v=20261117-m53"></script>
-  <script src="terrain.js?v=20261117-m53"></script>
-  <script src="chart-studies.js?v=20261118-f3"></script>
-  <script src="kchart.js?v=20261118-f3"></script>
-  <script src="scroll-lock.js?v=20261117-m53"></script>
-  <script src="no-zoom.js?v=20261118-z1"></script>
-  <script src="forecast.js?v=20261117-m53"></script>
-  <script src="line-zones.js?v=20261117-m53"></script>
-  <script src="trend-votes.js?v=20261117-m53"></script>
-  <script src="trend-matrix.js?v=20261117-m53"></script>
-  <script src="stock-picker.js?v=20261118-f57"></script>
-  <script src="minimal.js?v=20261118-f56"></script>
-  <script src="period-switch.js?v=20261118-f3"></script>
-  <script src="chart-menus.js?v=20261117-m53"></script>
-  <script src="home-motion.js?v=20261117-m53"></script>
-  <script src="home-fold.js?v=20261117-m53"></script>
-  <script src="desk-tilt.js?v=20261117-m53"></script>
-  <script src="watch-push.js?v=20261117-m53"></script>
-  <script src="settings.js?v=20261117-m53"></script>
+  <script src="terrain-layout.js?v=20261118-m54"></script>
+  <script src="terrain.js?v=20261118-m54"></script>
+  <script src="chart-studies.js?v=20261118-m54"></script>
+  <script src="kchart.js?v=20261118-m54"></script>
+  <script src="ma-lines.js?v=20261118-m54"></script>
+  <script src="chart-legend.js?v=20261118-m54"></script>
+  <script src="swipe-rows.js?v=20261118-m54"></script>
+  <script src="ma-settings.js?v=20261118-m54"></script>
+  <script src="scroll-lock.js?v=20261118-m54"></script>
+  <script src="no-zoom.js?v=20261118-m54"></script>
+  <script src="forecast.js?v=20261118-m54"></script>
+  <script src="line-zones.js?v=20261118-m54"></script>
+  <script src="trend-votes.js?v=20261118-m54"></script>
+  <script src="trend-matrix.js?v=20261118-m54"></script>
+  <script src="stock-picker.js?v=20261118-m54"></script>
+  <script src="minimal.js?v=20261118-m54"></script>
+  <script src="period-switch.js?v=20261118-m54"></script>
+  <script src="chart-menus.js?v=20261118-m54"></script>
+  <script src="home-motion.js?v=20261118-m54"></script>
+  <script src="home-fold.js?v=20261118-m54"></script>
+  <script src="desk-tilt.js?v=20261118-m54"></script>
+  <script src="watch-push.js?v=20261118-m54"></script>
+  <script src="settings.js?v=20261118-m54"></script>
 </body>
 </html>

@@ -12,7 +12,7 @@ function makeContext() {
   const drawnText = [];
   const context2d = {
     setTransform() {}, clearRect() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {},
-    fillRect() {}, strokeRect() {}, setLineDash() {}, rect() {}, fill() {},
+    fillRect() {}, strokeRect() {}, setLineDash() {}, rect() {}, fill() {}, save() {}, restore() {}, clip() {},
     measureText(text) { return { width: String(text).length * 7 }; },
     fillText(text) { drawnText.push(String(text)); }
   };
