@@ -729,8 +729,9 @@ def two_point_desktop(journey: Journey, browser) -> None:
     both = journey.ink(page)
     items = journey.saved(page, code)
     rays = [item for item in items if item["kind"] == "ray"]
-    axis_width = 60  # 右側價格軸至少這麼寬（桌機 78 起）
-    journey.check("射線：點兩下成線並儲存，延伸超過第二點、到右緣為止，不畫進價格軸", created.value.status == 201 and len(rays) == 1 and len(items) == 2
+    # 券商版面（本人 11-17「左右不留價格欄」）：右側沒有價格軸了，繪圖區一直到畫布右緣。
+    axis_width = 0
+    journey.check("射線：點兩下成線並儲存，延伸超過第二點、到右緣為止，不超出圖", created.value.status == 201 and len(rays) == 1 and len(items) == 2
                   and both["maxX"] > rb[0] + 200 and both["maxX"] <= width - axis_width and both["count"] > alone["count"],
                   {"ink": both, "second": rb, "canvas": width})
     page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-13-ray-drawn.png"))
@@ -793,8 +794,8 @@ def two_point_mobile(journey: Journey, browser) -> None:
         touch("touchEnd", x, y)
     drawn = journey.ink(page)
     items = journey.saved(page, code)
-    journey.check("手機：放開就畫出射線並儲存，延伸到右緣、不進價格軸，工具回一般模式", created.value.status == 201 and len(items) == 2
-                  and drawn["maxX"] > rb[0] + 100 and drawn["maxX"] <= width - 50 and ray.get_attribute("aria-pressed") == "false", {"ink": drawn, "canvas": width})
+    journey.check("手機：放開就畫出射線並儲存，延伸到右緣、不超出圖，工具回一般模式", created.value.status == 201 and len(items) == 2
+                  and drawn["maxX"] > rb[0] + 100 and drawn["maxX"] <= width and ray.get_attribute("aria-pressed") == "false", {"ink": drawn, "canvas": width})
     page.locator(".bd-chart").screenshot(path=str(OUT / "mobile-08-ray-drawn.png"))
     ray_item = next(item for item in items if item["kind"] == "ray")
 
@@ -952,7 +953,9 @@ def rect_mobile(journey: Journey, browser) -> None:
     page.locator(".bd-chart").screenshot(path=str(OUT / "mobile-11-rect-drawn.png"))
     mine = next(item for item in items if item["id"] not in existing)
 
-    page.touchscreen.tap(*journey.at(page, (a[0] + b[0]) / 2, (a[1] + b[1]) / 2))
+    # 點框內偏下的地方：券商版面的價格範圍只看 K 棒，桌機畫的大框下邊線剛好穿過這個小框的正中間附近，
+    # 點正中間會（正確地）選到那條邊線。
+    page.touchscreen.tap(*journey.at(page, (a[0] + b[0]) / 2, a[1] + (b[1] - a[1]) * 0.7))
     journey.check("手機：手指點框的內部不選取", not delete.is_visible())
     # 點下邊線：立體版手機的圖比較高，這個框的上邊線離桌機畫的那個大框的下邊線不到 10px，點上邊線旁 9px
     # 會（正確地）選到比較近的那個大框；下邊線附近沒有別的線。
@@ -1027,7 +1030,7 @@ def fib_desktop(journey: Journey, browser) -> None:
     delete = page.locator("#drawDelete")
     box = page.locator("#chartHost canvas").bounding_box()
     width, height = box["width"], box["height"]
-    axis_width = 60  # 右側價格軸至少這麼寬（桌機 78 起）
+    axis_width = 0  # 券商版面（本人 11-17）：右側沒有價格軸，繪圖區到畫布右緣
     low, high = (round(width * 0.3), round(height * 0.66)), (round(width * 0.5), round(height * 0.3))  # 由低往高拉
 
     fib.hover()
@@ -1069,7 +1072,7 @@ def fib_desktop(journey: Journey, browser) -> None:
     journey.check("雲端存的是一組黃金分割、兩個錨點照點的順序（第一點較早、較低）", len(items) == 1 and items[0]["kind"] == "fib"
                   and items[0]["anchors"][0]["date"] < items[0]["anchors"][1]["date"]
                   and items[0]["anchors"][0]["price"] < items[0]["anchors"][1]["price"], items)
-    journey.check("橫線延伸到繪圖區右緣為止、不進價格軸；標示在線的左端外側", width - axis_width - 60 < ink["maxX"] <= width - axis_width
+    journey.check("橫線延伸到繪圖區右緣為止、不超出圖；標示在線的左端外側", width - axis_width - 60 < ink["maxX"] <= width - axis_width
                   and ink["minX"] < a[0] - 30, {"ink": ink, "start": a, "canvas": width})
     journey.check("新畫的沒有被選取", not delete.is_visible())
     page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-20-fib-drawn.png"))
@@ -1188,7 +1191,7 @@ def fib_mobile(journey: Journey, browser) -> None:
     journey.check("手機：由高往低拉，第一點（1）較高、第二點（0）較低；1 那條在上、0 那條在下", items[0]["kind"] == "fib"
                   and items[0]["anchors"][0]["price"] > items[0]["anchors"][1]["price"] and abs(levels[0] - a[1]) <= 3
                   and abs(levels[-1] - low[1]) <= 3, {"items": items, "levels": levels, "a": a, "low": low})
-    journey.check("手機：橫線到右緣為止、不進價格軸，標示留在圖內", ink["maxX"] <= width - 40 and ink["minX"] >= 0, {"ink": ink, "canvas": width})
+    journey.check("手機：橫線到右緣為止、不超出圖，標示留在圖內", ink["maxX"] <= width and ink["minX"] >= 0, {"ink": ink, "canvas": width})
     page.locator(".bd-chart").screenshot(path=str(OUT / "mobile-16-fib-drawn.png"))
     mine = items[0]
 
@@ -1588,15 +1591,15 @@ def text_mobile(journey: Journey, browser) -> None:
     text.tap()
     page.touchscreen.tap(*journey.at(page, width - 110, height * 0.25))
     near_edge = editor(page)
-    journey.check("手機：靠右緣點一下，輸入框整個留在圖內（不蓋到價格軸、不超出畫面）", near_edge is not None
-                  and near_edge["right"] <= near_edge["hostRight"] - 40 and near_edge["left"] >= near_edge["hostLeft"], near_edge)
+    journey.check("手機：靠右緣點一下，輸入框整個留在圖內（不超出畫面）", near_edge is not None
+                  and near_edge["right"] <= near_edge["hostRight"] and near_edge["left"] >= near_edge["hostLeft"], near_edge)
     long_text = "跌破季線後連三天收不回，量縮反彈先減碼三分之一"
     page.keyboard.insert_text(long_text)
     before = journey.ink(page)
     with page.expect_response(drawing_request("PUT")) as created:
         page.keyboard.press("Enter")
     ink = journey.ink(page)
-    journey.check("手機：靠右緣的長文字換成兩行以上，整塊留在圖內、不進價格軸", created.value.status == 201 and ink["maxX"] <= width - 40 and ink["minX"] >= 0
+    journey.check("手機：靠右緣的長文字換成兩行以上，整塊留在圖內、不超出圖", created.value.status == 201 and ink["maxX"] <= width and ink["minX"] >= 0
                   and ink["count"] > before["count"], {"ink": ink, "canvas": width})
     page.screenshot(path=str(OUT / "mobile-25-text-wrapped.png"))
 
