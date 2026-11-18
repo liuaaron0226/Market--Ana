@@ -463,7 +463,8 @@ def run_morning(
     layer = _layer(overseas_dir, edition="morning", base_date=base_date, session_date=session_date)
     # 外資讀數（G 票）：晨間版的那斯達克只看開盤日之前收盤的那一晚（us_before＝開盤日）。
     foreign_sources = load_foreign_sources(data_root, seeds_root)
-    market_sources = market_layers.load_sources(data_root, analysis_path, base_date=base_date)
+    market_sources = market_layers.load_sources(data_root, analysis_path, base_date=base_date, edition="morning",
+                                                session_date=session_date)
     data = _with_archive_names(build_day_input(analysis, method_text, layer, foreign_sources, edition="morning",
                                                session_date=session_date, market_sources=market_sources),
                                overseas_dir, Path(ledger))

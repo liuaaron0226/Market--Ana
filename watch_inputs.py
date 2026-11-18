@@ -232,6 +232,7 @@ def environment_input(root: Path | str, base_date: str, *, edition: str) -> dict
 # ---- I 票（本人 2026-11-18 晚）：估值、借券與季 EPS、個股五塊訊號 ----
 
 VALUATION_DB = "data/valuation-history/valuation.sqlite"
+FUNDAMENTALS_DIR = "data/fundamentals-history"
 VALUATION_METRICS = ("pe", "pb", "dividend_yield_pct")
 VALUATION_YEAR_DAYS = 365
 LENDING_DAYS = 5

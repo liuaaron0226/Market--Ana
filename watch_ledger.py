@@ -52,8 +52,10 @@ from ledger_core import (
 )
 import bollinger
 import gemini_models
+import watch_inputs
 import wyckoff_lpsy
 from twon_analysis import analyze_v2
+from twon_analysis import signals as stock_signals
 from twon_analysis.indicators import Bar
 from twon_analysis.price_adjustment import adjust_bars, price_factors
 
@@ -85,9 +87,11 @@ _LAYER_PARAMETERS: dict[str, dict[str, Any]] = {
     "wyckoff_lpsy": {"layer": wyckoff_lpsy.STOCK_VERSION},
     "sector": {"classification": "官方產業別", "changes": ["當天", "近 5 日"]},
     "margin": {"changes": "近 5 日"},
-    "valuation": {"metrics": ["pe", "pb", "dividend_yield_pct"], "range": "近一年（365 天）"},
-    "lending_eps": {"lending_changes": "近 5 筆", "eps_quarters": 4, "eps_basis": "年初至今累計換算單季"},
-    "signals": {"blocks": ["limit_up_momentum", "versus_market", "ma_alignment", "margin_maintenance", "heavy_zones"]},
+    # I 票第二輪三層：數字從讀取那一側的常數帶出，改了常數就換輸入版本。
+    "valuation": {"metrics": list(watch_inputs.VALUATION_METRICS), "range_days": watch_inputs.VALUATION_YEAR_DAYS},
+    "lending_eps": {"lending_compare_rows": watch_inputs.LENDING_DAYS, "eps_quarters": watch_inputs.EPS_QUARTERS,
+                    "eps_basis": "年初至今累計換算單季"},
+    "signals": {"blocks": list(stock_signals.BLOCK_NAMES), "dropped": ["heavy_zones.chart"]},
     "environment": {"changes": "近 20 日", "series": ["usdtwd", "ust_2y", "ust_10y"]},
 }
 _LAYER_RULES: dict[str, tuple[str, ...]] = {

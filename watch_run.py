@@ -140,10 +140,13 @@ class LocalSource:
         import fundamentals_history
         import watch_inputs
         from twon_analysis import analyze_v2
-        market = self._analysis(code, base_date).get("market") or "上市"
+        try:
+            market = self._analysis(code, base_date).get("market") or "上市"
+        except Exception:  # noqa: BLE001 — 個股頁計算失敗不擋借券與 EPS：先當上市讀，上櫃那一檔就只少借券
+            market = "上市"
         credit = analyze_v2.credit_series(code, market, base_date, days=watch_inputs.LENDING_DAYS + 5)
         quarterly: list[dict[str, Any]] = []
-        folder = self.root / "data/fundamentals-history"
+        folder = self.root / watch_inputs.FUNDAMENTALS_DIR
         if (folder / "meta.json").is_file():
             if self._fundamentals is None:
                 self._fundamentals = fundamentals_history.load_history(folder)

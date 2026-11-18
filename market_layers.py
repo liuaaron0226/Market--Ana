@@ -30,18 +30,16 @@ TITLES = {"market_margin": "大盤融資融券", "otc_index": "櫃買指數", "s
 OTC_RECENT_BARS = 60
 VERSUS_DAYS = (5, 20, 60)
 SHARE_COMPARE_DAYS = 5
+MARGIN_COMPARE_DAYS = 5
 SCREEN_TOP = 5
-# 交給模型的排行：外資、投信的當日與近 5 日買超、賣超（各取前五）。分點與人工名單頁本來就沒有資料，不放。
-SCREEN_KINDS = tuple(f"{who}_net_rank-{days}d-{side}" for who in ("foreign", "trust") for days in (1, 5)
-                     for side in ("buy", "sell"))
+# 交給模型的選股快照（各取前五）：外資、投信的當日與近 5 日買超、賣超排行，外資、投信連續買超、賣超，
+# 資金流入族群裡位階低於大盤的個股（另給總檔數）。分點與人工名單頁本來就沒有資料，不放。
+SCREEN_KINDS = (tuple(f"{who}_net_rank-{days}d-{side}" for who in ("foreign", "trust") for days in (1, 5)
+                      for side in ("buy", "sell"))
+                + tuple(f"{who}_streak-1d-{side}" for who in ("foreign", "trust") for side in ("buy", "sell"))
+                + ("rotation_relative_value-1d-buy",))
 QUADRANT_ORDER = ("leading", "weakening", "improving", "lagging")
-
-# 參數與說明整組算進預測帳本的輸入版本（forecast_ledger.PARAMETERS["market_layers"]）。
-PARAMETERS: dict[str, Any] = {
-    "version": VERSION, "layers": list(LAYER_NAMES), "otc_recent_bars": OTC_RECENT_BARS,
-    "versus_days": list(VERSUS_DAYS), "share_compare_days": SHARE_COMPARE_DAYS, "screen_top": SCREEN_TOP,
-    "screen_kinds": list(SCREEN_KINDS), "ofr": {"series": "OFR FSI Credit", "change_days": 20, "percentile_years": 3},
-}
+OFR_MAX_AGE_DAYS = 7      # OFR 最後一筆比截止日早超過這麼多天（原件沒更新）就當作缺
 
 NOTES = {
     "market_margin": "大盤融資融券餘額（上市，證交所信用交易總表）。融資餘額是散戶用槓桿的程度、融券是放空的張數，"
@@ -57,6 +55,15 @@ NOTES = {
     "ofr_stress": "美國財政部金融研究辦公室（OFR）金融壓力指數的信用分項：0 是長期平均，正數代表信用市場壓力高於平均；"
                   "change_20d 是近 20 筆的變化，percentile_3y 是這個變化在近三年的分位（歷史不足時是 null）。"
                   "美國資料，資料日比台股早一到兩天；它是外部環境的背景，不能單獨決定方向。",
+}
+
+# 參數與說明整組算進預測帳本的輸入版本（forecast_ledger.PARAMETERS["market_layers"]）：說明改一個字也換版本。
+PARAMETERS: dict[str, Any] = {
+    "version": VERSION, "layers": list(LAYER_NAMES), "otc_recent_bars": OTC_RECENT_BARS,
+    "versus_days": list(VERSUS_DAYS), "share_compare_days": SHARE_COMPARE_DAYS,
+    "margin_compare_days": MARGIN_COMPARE_DAYS, "screen_top": SCREEN_TOP, "screen_kinds": list(SCREEN_KINDS),
+    "ofr": {"series": "OFR FSI Credit", "change_days": 20, "percentile_years": 3, "max_age_days": OFR_MAX_AGE_DAYS},
+    "notes": NOTES,
 }
 
 
@@ -83,7 +90,7 @@ def margin_layer(rows: Sequence[Mapping[str, Any]], base_date: str) -> dict[str,
         return _missing("沒有大盤融資融券資料")
     today = seen[-1]
     previous = seen[-2] if len(seen) >= 2 else None
-    earlier = seen[-1 - SHARE_COMPARE_DAYS] if len(seen) > SHARE_COMPARE_DAYS else None
+    earlier = seen[-1 - MARGIN_COMPARE_DAYS] if len(seen) > MARGIN_COMPARE_DAYS else None
     balance = float(today["margin_balance_billion"])
     margin_units, short_units = today.get("margin_units"), today.get("short_units")
     return {
@@ -201,12 +208,19 @@ def screens_layer(rotation: Mapping[str, Any] | None, screens: Mapping[str, Mapp
         result = batch.get("result") or {}
         if result.get("state") not in (None, "available"):
             continue
-        ranks.append({"kind": kind, "name": result.get("display_name"),
-                      "top": [{"code": item.get("code"), "name": item.get("name"),
-                               "security_type": item.get("security_type"),
-                               "lots": None if item.get("metric_lots") is None else int(round(item["metric_lots"])),
-                               "change_pct": _round(item.get("change_pct"))}
-                              for item in (result.get("items") or [])[:SCREEN_TOP]]})
+        top = []
+        for item in (result.get("items") or [])[:SCREEN_TOP]:
+            row = {"code": item.get("code"), "name": item.get("name"), "security_type": item.get("security_type")}
+            if "metric_lots" in item:
+                row["lots"] = None if item["metric_lots"] is None else int(round(item["metric_lots"]))
+            if "streak_days" in item:
+                row["streak_days"] = item["streak_days"]
+            if "change_pct" in item:
+                row["change_pct"] = _round(item.get("change_pct"))
+            if "group" in item:
+                row["group"] = item["group"]
+            top.append(row)
+        ranks.append({"kind": kind, "name": result.get("display_name"), "total": result.get("total"), "top": top})
     if rotation_part is None and not ranks:
         return _missing("沒有基準日的選股快照與資金輪動")
     return {"status": "ok", "data_date": base_date, "rotation": rotation_part, "ranks": ranks,
@@ -223,6 +237,8 @@ def ofr_layer(credit_rows: Sequence[Mapping[str, Any]], cutoff: str) -> dict[str
     credit = build_international_features(cutoff, [], [], list(credit_rows))["credit"]
     if not credit:
         return _missing("OFR 金融壓力指數不足 21 筆")
+    if credit["observed_at"] < (date.fromisoformat(cutoff) - timedelta(days=OFR_MAX_AGE_DAYS)).isoformat():
+        return _missing("OFR 金融壓力指數太舊（原件沒有更新）")
     return {"status": "ok", "series": "OFR FSI Credit", "observed_at": credit["observed_at"],
             "value": _round(credit["value"], 3), "change_20d": _round(credit["change_20d"], 3),
             "percentile_3y": _round(credit["percentile"], 3) if credit.get("percentile") is not None else None,
@@ -275,23 +291,18 @@ def _window_json(path: Path) -> Any:
     return json.loads(text[text.find("=") + 1:].strip().removesuffix(";").strip())
 
 
-class _Snapshots:
-    """選股快照資料夾：依資料日取那一批（market_screens_publish 的 <root>/<kind>/<資料日>.json）。"""
-
-    def __init__(self, root: Path):
-        self.root = root
-
-    def batch(self, kind: str, day: str) -> dict[str, Any] | None:
-        path = self.root / kind / f"{day}.json"
-        return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
+def _snapshot(root: Path, kind: str, day: str) -> dict[str, Any] | None:
+    """選股快照：資料日那一批（market_screens_publish 的 <root>/<kind>/<資料日>.json）。"""
+    path = root / kind / f"{day}.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
 
 
 def load_sources(data_root: Path | str | None, analysis_path: Path | str | None, *,
-                 base_date: str | None) -> dict[str, Any]:
+                 base_date: str | None, edition: str = "evening", session_date: str | None = None) -> dict[str, Any]:
     """排程用：從工作集讀五層要的資料（不連網）。每一樣各自讀，讀不到的記進 errors（只記錯誤種類，不記路徑）。
 
-    融資讀 analysis-data.js 旁邊的 chips-data.js；OFR 讀水位訊號存的原件裡資料夾日期不晚於基準日後一天的最新一份
-    （晨間版的開盤日早上）。"""
+    融資讀 analysis-data.js 旁邊的 chips-data.js。OFR 讀水位訊號（每天早上 07:30）存的原件，只用寫預測那時已經存在的
+    那一份：晚間版是資料夾日期不晚於基準日的最新一份，晨間版（07:20 前後跑）是開盤日前一天（含）以前的。"""
     sources: dict[str, Any] = {"errors": {}}
     if data_root is None or base_date is None:
         sources["errors"] = {name: "no_data_root" for name in LAYER_NAMES}
@@ -319,15 +330,16 @@ def load_sources(data_root: Path | str | None, analysis_path: Path | str | None,
         sources["otc_index"] = otc_market_data.index_range(db, start, base_date)
 
     def snapshots() -> None:
-        store = _Snapshots(root / SNAPSHOT_DIR)
-        sources["rotation"] = store.batch("rotation", base_date)
+        store = root / SNAPSHOT_DIR
+        sources["rotation"] = _snapshot(store, "rotation", base_date)
         sources["screens"] = {kind: batch for kind in SCREEN_KINDS
-                              if (batch := store.batch(f"screen-{kind}", base_date)) is not None}
+                              if (batch := _snapshot(store, f"screen-{kind}", base_date)) is not None}
 
     def ofr() -> None:
         from level_signals import parse_ofr_fsi_csv
         folder = root / LEVEL_SIGNALS_DIR
-        limit = (date.fromisoformat(base_date) + timedelta(days=4)).isoformat()   # 週五基準日的晨間版是下週一
+        limit = ((date.fromisoformat(session_date) - timedelta(days=1)).isoformat()
+                 if edition == "morning" and session_date else base_date)
         days = sorted(path.parent.name for path in folder.glob(f"*/{OFR_RAW}")
                       if re.fullmatch(r"\d{4}-\d{2}-\d{2}", path.parent.name) and path.parent.name <= limit) \
             if folder.is_dir() else []

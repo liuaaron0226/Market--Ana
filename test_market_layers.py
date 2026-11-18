@@ -3,6 +3,7 @@
 預期值都是手算的固定數字（算式寫在旁邊）。"""
 import unittest
 from datetime import date, timedelta
+from pathlib import Path
 
 import market_layers as ml
 
@@ -129,9 +130,9 @@ class SectorShareLayerTest(unittest.TestCase):
 
 def screen_batch(kind, data_date, names):
     return {"kind": kind, "data_date": data_date, "result": {
-        "display_name": kind, "state": "available",
+        "display_name": kind, "state": "available", "total": 212,
         "items": [{"code": f"{1000 + i}", "name": name, "security_type": "普通股", "metric_lots": 1000.4 - i,
-                   "change_pct": 1.234, "close": 50.0} for i, name in enumerate(names)]}}
+                   "change_pct": 1.234, "close": 50.0, "streak_days": 13 - i} for i, name in enumerate(names)]}}
 
 
 class ScreensLayerTest(unittest.TestCase):
@@ -147,10 +148,12 @@ class ScreensLayerTest(unittest.TestCase):
         self.assertEqual(layer["rotation"]["recovery_signals"], ["乙業"])
         ranks = {rank["kind"]: rank for rank in layer["ranks"]}
         self.assertEqual(set(ranks), set(ml.SCREEN_KINDS))
+        self.assertEqual(ranks["foreign_streak-1d-buy"]["top"][0]["streak_days"], 13)
+        self.assertEqual(ranks["rotation_relative_value-1d-buy"]["total"], 212)
         top = ranks["foreign_net_rank-1d-buy"]["top"]
         self.assertEqual(len(top), 5)
         self.assertEqual(top[0], {"code": "1000", "name": "一", "security_type": "普通股", "lots": 1000,
-                                  "change_pct": 1.23})
+                                  "streak_days": 13, "change_pct": 1.23})
 
     def test_a_rank_of_another_day_is_left_out(self):
         rotation = rotation_batch(D[5], [(D[5], {"甲業": 1.0}, None)])
@@ -179,6 +182,45 @@ class OfrLayerTest(unittest.TestCase):
 
     def test_too_short_is_missing(self):
         self.assertEqual(ml.ofr_layer(self.rows(10), "2026-12-31")["status"], "missing")
+
+    def test_a_stale_series_is_missing(self):
+        # 最後一筆 2026-01-30；截止日 2026-02-07 往前 7 天是 01-31 → 太舊
+        layer = ml.ofr_layer(self.rows(30), "2026-02-07")
+        self.assertEqual(layer["status"], "missing")
+        self.assertEqual(ml.ofr_layer(self.rows(30), "2026-02-06")["status"], "ok")   # 往前 7 天是 01-30，還算
+
+
+class OfrFolderTests(unittest.TestCase):
+    """水位訊號每天早上 07:30 存一份 OFR 原件（資料夾是那天的日期）；只能用寫預測那時已經存在的那一份。"""
+
+    def setUp(self):
+        import tempfile
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        start = date(2026, 1, 1)
+        for folder, last in (("2026-02-05", 34), ("2026-02-09", 38)):
+            lines = ["Date,OFR FSI,Credit"] + [f"{(start + timedelta(days=i)).isoformat()},0,{i}" for i in range(last)]
+            path = self.root / "level-signals" / folder / "ofr-fsi-credit.raw"
+            path.parent.mkdir(parents=True)
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_evening_reads_the_folder_of_the_base_date_or_earlier(self):
+        sources = ml.load_sources(self.root, None, base_date="2026-02-06")
+        self.assertEqual(sources["ofr_credit"][-1]["date"], "2026-02-03")   # 02-05 那一份的最後一筆（第 34 筆）
+
+    def test_morning_reads_only_folders_before_the_session_day(self):
+        before = ml.load_sources(self.root, None, base_date="2026-02-06", edition="morning", session_date="2026-02-09")
+        self.assertEqual(before["ofr_credit"][-1]["date"], "2026-02-03")
+        after = ml.load_sources(self.root, None, base_date="2026-02-09", edition="morning", session_date="2026-02-10")
+        self.assertEqual(after["ofr_credit"][-1]["date"], "2026-02-07")
+
+
+class VersionTest(unittest.TestCase):
+    def test_the_notes_given_to_the_model_are_part_of_the_versioned_parameters(self):
+        self.assertEqual(ml.PARAMETERS["notes"], ml.NOTES)
 
 
 class BuildLayersTest(unittest.TestCase):
