@@ -119,6 +119,16 @@ class IndexLayerTests(unittest.TestCase):
         self.assertIsNone(layer["summary"]["average"])
         self.assertEqual(len(layer["hourly"]), 3)
 
+    def test_index_gets_earlier_hours_from_the_history_without_volume(self):
+        # 富果文件（2026-11-19 讀）：歷史分 K 支援 IX0001；指數分 K 的量是成交金額，所以不給量
+        rows = [{**row, "volume": None, "average": None} for row in ROWS]
+        history = {"data": [{"date": "2026-11-05T13:00:00.000+08:00", "open": 95, "high": 96, "low": 94, "close": 96,
+                             "volume": 123456789}]}
+        layer = li.index_intraday_layer(candles(rows), BASE, history)
+        self.assertEqual(layer["hourly"][0], {"date": "2026-11-05", "time": "13:00", "open": 95, "high": 96, "low": 94,
+                                              "close": 96})
+        self.assertEqual(len(layer["hourly"]), 4)
+
 
 class HeadlineTests(unittest.TestCase):
     ROWS = [

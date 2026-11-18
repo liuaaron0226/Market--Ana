@@ -54,7 +54,8 @@ NOTES = {
                       "這些都不能單獨決定狀態或方向。"
                       "理由裡不得寫出時刻、張數、百分比、價位或新聞裡的數字（也不要寫「六十分線」「十點」這種中文數字），要講時段就寫早盤、盤中、尾盤，要講 60 分 K 就寫小時線。",
     "index_intraday": "富果的加權指數基準日盤中走勢：summary 是開高低收與最高最低出現的時間，bars_10min 是每 10 分鐘一根，"
-                      "hourly 是基準日的 60 分 K。指數沒有五檔與內外盤；量的單位行情商沒有說明，所以不給量。"
+                      "hourly 是 60 分 K（基準日與之前幾個交易日）。指數沒有五檔與內外盤；指數的量行情商給的是成交金額、"
+                      "單位不一，所以不給量。"
                       "盤中走勢只描述當天，不能單獨決定方向。"
                       "理由裡不得寫出時刻、張數、百分比、價位或新聞裡的數字（也不要寫「六十分線」「十點」這種中文數字），要講時段就寫早盤、盤中、尾盤，要講 60 分 K 就寫小時線。",
     "headlines": "新聞標題與摘要（Yahoo股市、中央社），只到寫的那一刻以前已經發布、也已經抓到的；只有標題、摘要與發布時間，"
@@ -200,7 +201,9 @@ def stock_intraday_layer(candles: Mapping[str, Any] | None, quote: Mapping[str, 
             "note": NOTES["stock_intraday"]}
 
 
-def index_intraday_layer(candles: Mapping[str, Any] | None, base_date: str) -> dict[str, Any]:
+def index_intraday_layer(candles: Mapping[str, Any] | None, base_date: str,
+                         history: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """``history``：富果歷史 60 分 K（2026-11-19 讀文件：支援 IX0001；指數分 K 的量是成交金額，所以不給量）。"""
     rows = minute_rows(candles, base_date)
     if rows is None:
         return {"status": "missing", "reason": "富果沒有基準日的加權指數盤中資料"}
@@ -212,7 +215,8 @@ def index_intraday_layer(candles: Mapping[str, Any] | None, base_date: str) -> d
     summary.pop("volume_lots", None)
     return {"status": "ok", "schema": SCHEMA, "data_date": base_date, "source": "富果 Fugle 行情（加權指數 IX0001 盤中 1 分 K）",
             "summary": summary,
-            "hourly": [{key: value for key, value in bar.items() if key != "volume_lots"} for bar in hourly_from_minutes(rows)],
+            "hourly": [{key: value for key, value in bar.items() if key != "volume_lots"}
+                       for bar in (_hourly_history(history, base_date) or []) + hourly_from_minutes(rows)],
             "note": NOTES["index_intraday"]}
 
 
@@ -295,9 +299,12 @@ def fetch_index_intraday(fugle: Fugle | None, base_date: str) -> tuple[dict[str,
     if fugle is None:
         return {"status": "missing", "reason": "沒有富果金鑰"}, {"fugle": "no_api_key"}
     errors: dict[str, str] = {}
+    start = (datetime.fromisoformat(base_date) - timedelta(days=14)).date().isoformat()
+    previous = (datetime.fromisoformat(base_date) - timedelta(days=1)).date().isoformat()
     candles = _attempt(lambda: fugle.candles(INDEX_SYMBOL), errors, "candles")
+    history = _attempt(lambda: fugle.hourly(INDEX_SYMBOL, start, previous), errors, "hourly")
     try:
-        return index_intraday_layer(candles, base_date), errors
+        return index_intraday_layer(candles, base_date, history), errors
     except Exception as error:  # noqa: BLE001 — 回應格式不是預期：整層缺，不擋預測
         return {"status": "missing", "reason": f"富果回應格式不對（{type(error).__name__}）"}, {**errors,
                                                                                          "parse": type(error).__name__}
