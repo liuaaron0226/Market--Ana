@@ -441,3 +441,59 @@ test('指標區的手勢和主圖一樣：單指左右拖是平移歷史，兩�
   assert.ok(chart.view.count < countBefore, '兩指張開：放大（顯示的根數變少）');
   assert.equal(switched, 0);
 });
+
+// 本人 2026-11-19：「他不是從我的兩指之間去放大感覺是從右邊,放大的中心點不對」。
+// 兩指縮放要以兩指中點為中心：放大或縮小前後，中點底下是同一根 K 棒（誤差一根以內）。
+function candleUnder(chart, x) {
+  const { l, step, start } = chart.geo;
+  return start + Math.floor((x - l) / step);
+}
+function pinchOn(canvas, [a, b], [a2, b2]) {
+  canvas.dispatch('pointerdown', { pointerId: 1, clientX: a, clientY: 100 });
+  canvas.dispatch('pointerdown', { pointerId: 2, clientX: b, clientY: 100 });
+  canvas.dispatch('pointermove', { pointerId: 1, clientX: a2, clientY: 100 });
+  canvas.dispatch('pointermove', { pointerId: 2, clientX: b2, clientY: 100 });
+}
+
+for (const [label, from, to] of [
+  ['左半邊兩指張開（放大）', [60, 100], [20, 140]],
+  ['左半邊兩指合攏（縮小）', [40, 120], [60, 100]],
+  ['右半邊兩指張開（放大）', [260, 300], [220, 340]],
+]) {
+  test(`雙指縮放以兩指中點為中心：${label}，中點底下還是同一根 K 棒`, () => {
+    const { chart, canvas } = createChart({ count: 200 });
+    chart.view.end = 140; chart.clamp(); chart.draw();   // 前後都還有資料，不會被邊界卡住
+    const mid = (from[0] + from[1]) / 2;
+    const before = candleUnder(chart, mid), countBefore = chart.view.count;
+    pinchOn(canvas, from, to);
+    assert.notEqual(chart.view.count, countBefore, '確實縮放了');
+    const after = candleUnder(chart, mid);
+    assert.ok(Math.abs(after - before) <= 1, `中點底下原本是第 ${before} 根，縮放後變成第 ${after} 根`);
+  });
+}
+
+test('單指按著再放第二指變成縮放：也以兩指中點為中心', () => {
+  const { chart, canvas } = createChart({ count: 200 });
+  chart.view.end = 140; chart.clamp(); chart.draw();
+  canvas.dispatch('pointerdown', { pointerId: 1, clientX: 60, clientY: 100 });
+  canvas.dispatch('pointermove', { pointerId: 1, clientX: 62, clientY: 100 });
+  const before = candleUnder(chart, 80);
+  canvas.dispatch('pointerdown', { pointerId: 2, clientX: 98, clientY: 100 });
+  canvas.dispatch('pointermove', { pointerId: 1, clientX: 20, clientY: 100 });
+  canvas.dispatch('pointermove', { pointerId: 2, clientX: 140, clientY: 100 });
+  const after = candleUnder(chart, 80);
+  assert.ok(Math.abs(after - before) <= 1, `中點底下原本是第 ${before} 根，縮放後變成第 ${after} 根`);
+});
+
+test('週K、月K、60分K與基金淨值的線模式，雙指縮放也以兩指中點為中心', () => {
+  for (const [unit, mode] of [['週'], ['月'], ['60分'], ['日', 'line']]) {
+    const { KChart, FakeElement } = makeContext();
+    const chart = new KChart(new FakeElement('div'), { macd: false, minViewCount: 10, height: () => 340 });
+    chart.setData(validCandles(200, unit), { count: 60, unit, ...(mode ? { mode } : {}) });
+    chart.view.end = 140; chart.clamp(); chart.draw();
+    const before = candleUnder(chart, 80);
+    pinchOn(chart.canvas, [60, 100], [20, 140]);
+    const after = candleUnder(chart, 80);
+    assert.ok(Math.abs(after - before) <= 1, `${unit}${mode ? '（線模式）' : ''}：中點底下原本是第 ${before} 根，縮放後變成第 ${after} 根`);
+  }
+});

@@ -296,6 +296,9 @@ test("選了工具時：點一下只定位、不選 K 棒；拖曳仍是平移�
   assert.deepEqual(tools, ["hline"], "工具留著，可以再點一次");
   assert.equal(chart.selection, -1, "選了工具時不選 K 棒");
 
+  // 雙指縮放以兩指中點為中心（11-19），放大後畫面停在中間一段；拉回最新一段（後 40 根高低都是 105／95），
+  // y＝164 才剛好是 100 元。
+  chart.view.end = chart.candles.length; chart.draw();
   tap(150, 164, "touch"); // 手指點一下也一樣定位
   assert.equal(changes.length, 1);
   assert.equal(changes[0].drawing.anchors[0].price, 100);
