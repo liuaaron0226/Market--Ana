@@ -127,8 +127,11 @@ class MorningWorkflowTests(unittest.TestCase):
         self.source = settings_only(MORNING)
 
     def test_runs_on_weekday_mornings_before_the_open_and_by_hand_with_dry_run_by_default(self):
-        # UTC 23:20（週日到週四）＝台北週一到週五 07:20；期限 08:45，留一個多小時給排程延遲。
-        self.assertRegex(self.source, r'schedule:\n\s+- cron: "20 23 \* \* 0-4"')
+        # 2026-11-18 起不用 GitHub schedule（晚了 4～5 小時、過期限記漏記）：由 cron-trigger 在台北週一到週五 07:20
+        # 以 workflow_dispatch dry_run=false 觸發（cron-trigger/worker.test.js 驗觸發時間與參數）。
+        self.assertNotIn("schedule:", self.source)
+        for name in ("date", "trigger_source", "trigger_slot"):
+            self.assertRegex(self.source, rf"\n      {name}:\n")
         self.assertRegex(self.source, r"dry_run:\n(?:\s+.*\n)*?\s+default: true")
         self.assertNotIn("workflow_run:", self.source)
 

@@ -10,9 +10,9 @@
 name: forecast-morning
 
 on:
-  schedule:
-    # 台北週一至週五 07:20；UTC 為前一日 23:20。休市日由程式依證交所休市日曆判斷，不寫。
-    - cron: "20 23 * * 0-4"
+  # 2026-11-18 起不用 GitHub 的 schedule：它晚了 4～5 小時才跑（11-17 13:06、11-18 12:28），晨間版都過期限記成漏記。
+  # 改由 Cloudflare cron-trigger（cron-trigger/worker.js 的 "20 23"）在台北週一至週五 07:20 準時以 workflow_dispatch
+  # 觸發、dry_run=false；正式寫入仍要 MARKET_ANA_FORECAST_MORNING=on 而且是預設分支。休市日由程式依證交所休市日曆判斷。
   workflow_dispatch:
     inputs:
       dry_run:
@@ -22,6 +22,18 @@ on:
         default: true
       as_of:
         description: "乾跑時重播過去某個開盤日 YYYY-MM-DD（時鐘停在那天 07:30；只在乾跑有效）"
+        required: false
+        type: string
+      date:
+        description: "cron-trigger 送的台北開盤日（只做紀錄；開盤日一律取台北今天）"
+        required: false
+        type: string
+      trigger_source:
+        description: "自動排程來源（cloudflare-cron）；手動留空"
+        required: false
+        type: string
+      trigger_slot:
+        description: "原始 UTC cron 時段"
         required: false
         type: string
 
