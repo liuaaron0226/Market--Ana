@@ -373,6 +373,31 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: 白話分析：記進 Gemini 用量（設定頁用；失敗不影響每日更新）
+        # 本人 11-19：白話分析呼叫 Gemini 也要記進設定頁的用量（只有站主看得到）。任務名稱 daily-update，
+        # 設定頁對成「籌碼與資金白話」；模型、思考程度、成功或失敗、是不是乾跑都照白話分析的執行紀錄（--plain-audit）。
+        # 這一班沒呼叫到 Gemini（等資料、已完成、事實表算不出來、agy 沒準備好）就不記；乾跑的每日更新不寫資料庫，整步跳過
+        # （那時就算 plain_daily 選了 on 或 dry、真的呼叫了 Gemini，也不會出現在設定頁，只在執行紀錄裡）。
+        # agy -p /usage 由 CLI 自己回答、不耗額度。遷移 0029 還沒套用時新格式寫不進去，改寫舊格式（沒有思考程度、成功或失敗、乾跑）。
+        if: always() && steps.plain.outputs.mode != 'off' && steps.plain.outputs.mode != '' && steps.day.outputs.dry_run == ''
+        continue-on-error: true
+        env:
+          DAY: ${{ steps.day.outputs.date }}
+          AGY_BIN: ${{ steps.plain_auth.outcome == 'success' && format('{0}/agy/antigravity', runner.temp) || '' }}
+          AGY_HOME: ${{ steps.plain_auth.outcome == 'success' && format('{0}/agy-home', runner.temp) || '' }}
+        run: |
+          if [ -n "$AGY_HOME" ]; then export HOME="$AGY_HOME"; fi
+          python gemini_usage.py --agy-bin "$AGY_BIN" --task daily-update --run-id "$GITHUB_RUN_ID" \
+            --plain-audit "data/daily-update-log/plain-daily/$DAY.json" --sql-output "$RUNNER_TEMP/gemini-usage.sql" \
+            --legacy-sql-output "$RUNNER_TEMP/gemini-usage-legacy.sql"
+          if [ -s "$RUNNER_TEMP/gemini-usage.sql" ]; then
+            cd cloud
+            npx --yes wrangler@4 d1 execute market-ana-accounts --remote --file "$RUNNER_TEMP/gemini-usage.sql" || {
+              echo "::warning::用量寫不進新格式（遷移 0029 可能還沒套用），改寫舊格式"
+              npx --yes wrangler@4 d1 execute market-ana-accounts --remote --file "$RUNNER_TEMP/gemini-usage-legacy.sql"
+            }
+          fi
+
       - name: 保存執行紀錄（包含等待與失敗）
         if: always()
         uses: actions/upload-artifact@v4
@@ -384,4 +409,4 @@ jobs:
 
       - name: 清除 agy 登入檔與執行檔
         if: always()
-        run: rm -rf "$RUNNER_TEMP/agy-home" "$RUNNER_TEMP/agy"
+        run: rm -rf "$RUNNER_TEMP/agy-home" "$RUNNER_TEMP/agy" "$RUNNER_TEMP/gemini-usage.sql" "$RUNNER_TEMP/gemini-usage-legacy.sql"

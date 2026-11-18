@@ -66,6 +66,14 @@
     return m ? m[1][0].toUpperCase() + m[1].slice(1).toLowerCase() : '';
   }
 
+  // 本人 11-19：白話分析多記思考程度、失敗、乾跑（遷移 0029）；其他任務沒記就不顯示。乾跑不算進次數，另外寫。
+  const EFFORTS = { low: '思考低', medium: '思考中', high: '思考高' };
+  const taskModel = (item) => [modelLabel(item.model), EFFORTS[item.effort]].filter(Boolean).join('・');
+  const taskNote = (item) => [
+    Number(item.failed) > 0 ? `失敗 ${Number(item.failed)}` : '',
+    Number(item.dry_runs) > 0 ? `乾跑 ${Number(item.dry_runs)}（不計）` : '',
+  ].filter(Boolean).join('・');
+
   const meter = (label, cell, now) => {
     const percent = Math.round(Number(cell.remaining) * 100);
     return { label, percent, low: percent < LOW, reset: resetText(cell.reset_time, now) };
@@ -79,7 +87,7 @@
     if (flash.length) groups.push({ title: 'Flash', meters: flash });
     if (data?.argon?.weekly?.remaining != null) groups.push({ title: 'Argon', meters: [meter('本週', data.argon.weekly, now)] });
     const today = (data?.today || [])
-      .map(item => ({ label: TASKS[item.task] || item.task, model: modelLabel(item.model), runs: Number(item.runs) || 0 }))
+      .map(item => ({ label: TASKS[item.task] || item.task, model: taskModel(item), runs: Number(item.runs) || 0, note: taskNote(item) }))
       .sort((a, b) => b.runs - a.runs);
     let updated = '';
     const read = data?.read_at ? taipei(data.read_at) : null;
@@ -301,7 +309,9 @@
       const list = el('ul', 'st-today');
       for (const item of view.today) {
         const li = el('li');
-        li.append(el('span', '', item.label), el('span', 'st-model', item.model), el('span', 'num', String(item.runs)));
+        const name = el('span', '', item.label);
+        if (item.note) name.append(' ', el('small', 'st-model', item.note));
+        li.append(name, el('span', 'st-model', item.model), el('span', 'num', String(item.runs)));
         list.append(li);
       }
       pane.append(list);

@@ -504,5 +504,34 @@ class CommandLineTest(unittest.TestCase):
         self.assertEqual(json.loads(audit.read_text(encoding="utf-8"))["candidate"]["source"], "template")
 
 
+class UsageFieldsTest(unittest.TestCase):
+    """記進設定頁 Gemini 用量的欄位（11-19）：呼叫到模型才記；成功＝模型寫的白話通過核對；乾跑另外標。"""
+
+    def audit(self, mode, result):
+        analysis, chips = market()
+        with tempfile.TemporaryDirectory() as tmp:
+            pd.rewrite_pack(analysis, chips, day="2026-11-06", environ={"PLAIN_DAILY_MODE": mode, "PLAIN_MODEL": "gemini-4-argon"},
+                            audit_dir=Path(tmp), ask_model=lambda prompt, schema: result)
+            return json.loads((Path(tmp) / "2026-11-06.json").read_text(encoding="utf-8"))
+
+    def test_success_failure_and_dry(self):
+        self.assertEqual(pd.usage_fields(self.audit("on", ("ok", good_ai(), ""))),
+                         {"model": "gemini-4-argon", "effort": "medium", "outcome": "ok", "dry_run": False})
+        self.assertEqual(pd.usage_fields(self.audit("on", ("model_failed", None, "x")))["outcome"], "failed")
+        self.assertEqual(pd.usage_fields(self.audit("on", ("ok", good_ai(one_line="外資賣超九百億。"), "")))["outcome"], "failed")
+        self.assertEqual(pd.usage_fields(self.audit("dry", ("ok", good_ai(), ""))),
+                         {"model": "gemini-4-argon", "effort": "medium", "outcome": "ok", "dry_run": True})
+
+    def test_not_recorded_when_the_model_was_never_reached(self):
+        self.assertIsNone(pd.usage_fields({"mode": "off"}))
+        self.assertIsNone(pd.usage_fields(self.audit("on", ("agy_unavailable", None, "agy 沒有安裝成功"))))
+        self.assertIsNone(pd.usage_fields({"mode": "on", "source": None, "failure": "facts_failed: ValueError"}))
+        self.assertIsNone(pd.usage_fields(None))
+
+    def test_a_missing_model_is_left_empty_not_guessed(self):
+        audit = {"mode": "on", "source": "ai", "data_dates": {"price_and_foreign": "2026-11-06"}}
+        self.assertEqual(pd.usage_fields(audit), {"model": None, "effort": None, "outcome": "ok", "dry_run": False})
+
+
 if __name__ == "__main__":
     unittest.main()
