@@ -67,6 +67,31 @@ class ForecastStoreTests(unittest.TestCase):
         self.assertEqual(fs.push(target, self.store), {"uploaded": 1, "unchanged": 2})
         self.assertEqual(self.store.get("forecast-ledger/sources/aaa.raw.gz"), b"old original")
 
+    def test_pull_sources_brings_back_only_the_environment_originals_of_recent_records(self):
+        # 2026-11-19：關注排程的匯率與美債改讀預測帳本裡的原件；pull 不帶 sources/，所以另外只取那幾份。
+        import json
+        good = "a" * 64 + ".raw.gz"
+        other = "b" * 64 + ".raw.gz"
+        old = "c" * 64 + ".raw.gz"
+        for name, content in ((good, "fx"), (other, "nasdaq"), (old, "old fx")):
+            write(self.ledger / "sources" / name, content)
+        record = {"base_date": "2026-11-18", "edition": "evening", "sources": [
+            {"name": "cbc-usdtwd", "status": "ok", "archived_as": f"sources/{good}"},
+            {"name": "eodhd-nasdaq", "status": "ok", "archived_as": f"sources/{other}"},
+            {"name": "treasury-202611", "status": "missing"}]}
+        write(self.ledger / "forecasts" / "2026-11-18__evening__m0.4__v.json", json.dumps(record))
+        stale = {"base_date": "2026-11-01", "edition": "evening", "sources": [
+            {"name": "cbc-usdtwd", "status": "ok", "archived_as": f"sources/{old}"}]}
+        write(self.ledger / "forecasts" / "2026-11-01__evening__m0.4__v.json", json.dumps(stale))
+        fs.push(self.ledger, self.store)
+        target = Path(self._tmp.name) / "restored"
+        fs.pull(self.store, target)
+        result = fs.pull_sources(self.store, target, edition="evening", since="2026-11-12")
+        self.assertEqual(result, {"downloaded": 1, "unchanged": 0})
+        self.assertEqual((target / "sources" / good).read_text(encoding="utf-8"), "fx")
+        self.assertFalse((target / "sources" / other).exists())   # 不是匯率或美債
+        self.assertFalse((target / "sources" / old).exists())     # 太舊
+
     def test_pull_refuses_to_replace_a_different_local_file(self):
         fs.push(self.ledger, self.store)
         write(self.ledger / "forecasts" / "2026-11-06__evening__m0.3__base-v1-x.json", '{"a": "local"}\n')

@@ -183,6 +183,16 @@ jobs:
           python forecast_store.py pull --ledger "$FORECAST_LEDGER"
           python forecast_store.py pull --ledger "$LEDGER" --prefix watch-ledger/
 
+      # 2026-11-19：環境層（匯率、美債）讀預測帳本裡的原件；pull 不帶 sources/，這裡只取最近幾份預測列出的那幾個。
+      - name: 取回環境層要的預測原件（唯讀；失敗不擋）
+        continue-on-error: true
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: market-ana-state
+        run: python forecast_store.py pull-sources --ledger "$FORECAST_LEDGER" --edition "$EDITION" --days 7
+
       # 規格「晨間再抓一次消息之後才寫」：官方公告每天只有一份快照，抓到本機就好；存回 R2 是 announcements.yml 的事。
       - name: 再抓一次官方公告（不上傳）
         continue-on-error: true

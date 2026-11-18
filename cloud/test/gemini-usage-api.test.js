@@ -67,8 +67,8 @@ test("今天各任務：台灣時間今天跑了幾次、最近一次用的模�
   await snap("forecast-ledger", "4", "2026-11-17T07:00:00Z", READING);
   const body = await (await get()).json();
   assert.deepEqual(body.today, [
-    { task: "forecast-ledger", runs: 1, model: null },
-    { task: "watch-ledger", runs: 2, model: "gemini-3.8-flash-medium" },
+    { task: "forecast-ledger", runs: 1, model: null, effort: null, failed: 0, dry_runs: 0 },
+    { task: "watch-ledger", runs: 2, model: "gemini-3.8-flash-medium", effort: null, failed: 0, dry_runs: 0 },
   ]);
 });
 
@@ -88,4 +88,34 @@ test("只能讀", async () => {
   const headers = new Headers({ "cf-access-jwt-assertion": await issuer.sign(claims(OWNER)), origin: ORIGIN, "content-type": "application/json" });
   const res = await handle(new Request(ORIGIN + PATH, { method: "POST", headers, body: "{}" }), env, next, deps);
   assert.equal(res.status, 405);
+});
+// 本人 11-19：首頁「籌碼與資金」白話（任務 daily-update）呼叫 Gemini 也記進用量，多記思考程度、成功或失敗、乾跑（遷移 0029）
+const plainRun = (runId, takenAt, outcome, dryRun, effort = "medium") => env.DB
+  .prepare("INSERT INTO gemini_usage_snapshots (task, run_id, taken_at, model, buckets_json, effort, outcome, dry_run) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+  .bind("daily-update", runId, takenAt, "gemini-4-argon", JSON.stringify(READING), effort, outcome, dryRun).run();
+
+test("白話分析：今天的次數不含乾跑，另外給失敗幾次、乾跑幾次與思考程度", async () => {
+  await plainRun("10", "2026-11-17T02:00:00Z", "ok", 0);
+  await plainRun("11", "2026-11-17T03:00:00Z", "failed", 0);
+  await plainRun("12", "2026-11-17T04:00:00Z", "ok", 1);
+  await plainRun("13", "2026-11-16T10:00:00Z", "failed", 0);   // 台灣 11-16 18:00 → 昨天，不算
+  const body = await (await get()).json();
+  assert.deepEqual(body.today, [
+    { task: "daily-update", runs: 2, model: "gemini-4-argon", effort: "medium", failed: 1, dry_runs: 1 },
+  ]);
+});
+
+test("今天只有乾跑：照樣列出來，正式次數是 0", async () => {
+  await plainRun("12", "2026-11-17T04:00:00Z", "ok", 1);
+  const body = await (await get()).json();
+  assert.deepEqual(body.today, [{ task: "daily-update", runs: 0, model: "gemini-4-argon", effort: "medium", failed: 0, dry_runs: 1 }]);
+});
+
+test("遷移 0029 還沒套用到資料庫：照舊列次數與模型，不會讀不到", async () => {
+  const { MIGRATION_FILES } = await import("./helpers.js");
+  env.DB = fakeD1(MIGRATION_FILES.filter((f) => f !== "0029_gemini_usage_outcome.sql"));
+  await snap("watch-ledger", "1", "2026-11-17T08:05:00Z", READING, "gemini-4-argon");
+  const res = await get();
+  assert.equal(res.status, 200);
+  assert.deepEqual((await res.json()).today, [{ task: "watch-ledger", runs: 1, model: "gemini-4-argon", effort: null, failed: 0, dry_runs: 0 }]);
 });

@@ -107,6 +107,63 @@ class PlainDailyWorkflowTest(unittest.TestCase):
         summary = next(s for s in steps() if s.get("name") == "白話分析摘要")
         self.assertIn("audit_error", summary["run"])
 
+    # ---- 記進設定頁 Gemini 用量（本人 11-19）----
+
+    def usage_step(self):
+        found = [s for s in steps() if "gemini_usage.py" in s.get("run", "")]
+        self.assertEqual(len(found), 1, "白話分析記用量剛好一步")
+        return found[0]
+
+    def test_usage_is_recorded_as_the_plain_task_with_facts_from_the_audit(self):
+        s = self.usage_step()
+        self.assertIn("--task daily-update ", s["run"], "設定頁把 daily-update 對成「籌碼與資金白話」")
+        self.assertIn("--plain-audit", s["run"])
+        self.assertNotIn("--model", s["run"], "模型、思考程度照執行紀錄裡實際用的")
+        self.assertIs(s["continue-on-error"], True)
+        for guard in ("always()", "steps.plain.outputs.mode != 'off'", "steps.day.outputs.dry_run == ''"):
+            self.assertIn(guard, s["if"])
+        order = steps()
+        self.assertLess(order.index(step("run")), order.index(s))
+        self.assertLess(order.index(s), len(order) - 1, "在清除登入檔之前（要用 agy 讀剩餘用量）")
+        self.assertIn("gemini-usage.sql", order[-1]["run"])
+
+    def run_usage(self, *, sql, new_fails=False):
+        bash = shutil.which("bash")
+        if not bash:
+            self.skipTest("需要 bash 才能實跑 workflow step（Windows 把 C:/Program Files/Git/bin 加進 PATH）")
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            (folder / "cloud").mkdir()
+            calls = folder / "calls"
+            calls.write_text("", encoding="utf-8")
+            prelude = ('python() { printf "%s" "$FAKE_SQL" > "$RUNNER_TEMP/gemini-usage.sql"; '
+                       'printf "%s" "$FAKE_SQL" > "$RUNNER_TEMP/gemini-usage-legacy.sql"; echo "python $*" >> "$CALLS"; }\n'
+                       'npx() { echo "npx $*" >> "$CALLS"; case "$*" in *gemini-usage.sql*) [ -z "$NEW_FAILS" ];; esac; }\n')
+            script = folder / "step.sh"
+            script.write_text(prelude + self.usage_step()["run"], encoding="utf-8", newline="\n")
+            env = {**os.environ, "RUNNER_TEMP": folder.as_posix(), "CALLS": calls.as_posix(), "FAKE_SQL": sql,
+                   "DAY": "2026-11-18", "AGY_BIN": "", "AGY_HOME": "", "GITHUB_RUN_ID": "77", "NEW_FAILS": "1" if new_fails else ""}
+            done = subprocess.run([bash, script.as_posix()], cwd=folder, env=env, capture_output=True, text=True, encoding="utf-8")
+            return done.returncode, calls.read_text(encoding="utf-8")
+
+    def test_usage_writes_to_the_database_only_when_there_is_something_to_record(self):
+        code, calls = self.run_usage(sql="INSERT INTO gemini_usage_snapshots VALUES (1);")
+        self.assertEqual(code, 0)
+        self.assertIn("--plain-audit data/daily-update-log/plain-daily/2026-11-18.json", calls)
+        self.assertIn("d1 execute market-ana-accounts --remote", calls)
+        npx = [line for line in calls.splitlines() if line.startswith("npx")]
+        self.assertEqual(len(npx), 1, "新格式寫得進去就不寫舊格式")
+        code, calls = self.run_usage(sql="")
+        self.assertEqual(code, 0)
+        self.assertNotIn("npx", calls, "沒呼叫模型的那一班不寫資料庫")
+
+    def test_usage_falls_back_to_the_old_columns_before_0029_is_applied(self):
+        code, calls = self.run_usage(sql="INSERT INTO gemini_usage_snapshots VALUES (1);", new_fails=True)
+        self.assertEqual(code, 0)
+        npx = [line for line in calls.splitlines() if line.startswith("npx")]
+        self.assertEqual(len(npx), 2)
+        self.assertTrue(npx[1].endswith("gemini-usage-legacy.sql"), npx)
+
     def test_login_and_binary_are_wiped_at_the_end(self):
         wipe = [s for s in steps() if "agy-home" in s.get("run", "") and "rm -rf" in s.get("run", "")]
         self.assertTrue(wipe)

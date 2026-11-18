@@ -297,6 +297,58 @@ class EnvironmentInputTests(InputsTestCase):
             "missing": [],
         })
 
+    def forecast_record(self, *, edition="evening", base="2026-11-09", fetched_at="2026-11-09T19:00:00+08:00",
+                        fx_rows=None, treasury_rows=None):
+        """預測帳本裡同一天、同一版的紀錄，sources 列出海外原件（overseas_inputs.archive_sources 的形狀）與壓好的原件。"""
+        import gzip
+        import hashlib
+        ledger = self.root / "forecast-ledger"
+        (ledger / "sources").mkdir(parents=True, exist_ok=True)
+        (ledger / "forecasts").mkdir(parents=True, exist_ok=True)
+        sources = []
+        originals = [("cbc-usdtwd", "cbc", cbc_rows(fx_rows))] if fx_rows else []
+        for month in sorted({day[:7].replace("-", "") for day, _, _ in treasury_rows or []}):
+            originals.append((f"treasury-{month}", "treasury",
+                              treasury_xml([row for row in treasury_rows if row[0][:7].replace("-", "") == month])))
+        for name, kind, content in originals:
+            packed = gzip.compress(content, mtime=0)
+            archived = hashlib.sha256(packed).hexdigest() + ".raw.gz"
+            (ledger / "sources" / archived).write_bytes(packed)
+            sources.append({"name": name, "source": kind, "status": "ok", "fetched_at": fetched_at,
+                            "archived_as": f"sources/{archived}"})
+        record = {"base_date": base, "edition": edition, "kind": "forecast", "sources": sources}
+        (ledger / "forecasts" / f"{base}__{edition}__m0.4__v.json").write_text(json.dumps(record), encoding="utf-8")
+        return ledger
+
+    def test_reads_the_forecast_ledgers_originals_when_the_local_ones_are_absent(self):
+        # 2026-11-19 查到：關注排程讀不到水位訊號的匯率原件與美債保存區（都不在工作集），environment 天天缺。
+        # 大盤預測每天已經抓了同一批原件存在帳本 sources/：讀同一天、同一版那一份（數字和上一個例子一樣）
+        days = weekdays("2026-10-13", 20)
+        us_days = weekdays("2026-10-09", 21)
+        ledger = self.forecast_record(
+            fx_rows=[("2026-10-12", 30.0)] + [(day, 30.6 if day == days[-1] else 30.3) for day in days],
+            treasury_rows=[(day, 4.7 if day == us_days[-1] else 4.5, 5.15 if day == us_days[-1] else 4.9)
+                           for day in us_days])
+        found = wi.environment_input(self.root, "2026-11-09", edition="evening", forecast_ledger=ledger,
+                                     cutoff="2026-11-09T20:30:00+08:00")
+        self.assertEqual(found["usdtwd"]["close"], 30.6)
+        self.assertEqual(found["usdtwd"]["change_20d_pct"], 2.0)
+        self.assertEqual((found["us_treasury"]["date"], found["us_treasury"]["change_20d_10y_pt"]), ("2026-11-06", 0.25))
+        self.assertEqual(found["missing"], [])
+
+    def test_originals_fetched_after_the_moment_of_writing_are_not_used(self):
+        days = weekdays("2026-10-13", 20)
+        ledger = self.forecast_record(fx_rows=[(day, 30.0) for day in ["2026-10-12", *days]],
+                                      fetched_at="2026-11-09T21:00:00+08:00")
+        self.assertIsNone(wi.environment_input(self.root, "2026-11-09", edition="evening", forecast_ledger=ledger,
+                                               cutoff="2026-11-09T20:30:00+08:00"))
+
+    def test_another_edition_or_day_is_not_used(self):
+        days = weekdays("2026-10-13", 20)
+        ledger = self.forecast_record(edition="morning", fx_rows=[(day, 30.0) for day in ["2026-10-12", *days]])
+        self.assertIsNone(wi.environment_input(self.root, "2026-11-09", edition="evening", forecast_ledger=ledger,
+                                               cutoff="2026-11-09T20:30:00+08:00"))
+
     def test_missing_series_are_named_and_do_not_hide_the_others(self):
         self.fx("2026-11-09", [(day, 30.0) for day in weekdays("2026-10-12", 21)])
         found = wi.environment_input(self.root, "2026-11-09", edition="evening")

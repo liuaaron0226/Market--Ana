@@ -167,5 +167,119 @@ class WorkflowWiring(unittest.TestCase):
                 self.assertNotIn("--model", step["run"], "模型名稱只在 gemini_models.py 維護")
 
 
+# 0029：白話分析要記思考程度、成功或失敗、是不是乾跑（本人 11-19「現在就都處理完成」，owner 派工）
+OUTCOME_SQL = TABLE_SQL + (Path(__file__).parent / "cloud" / "migrations" / "0029_gemini_usage_outcome.sql").read_text(encoding="utf-8")
+
+
+def plain_audit(**overrides):
+    """plain_daily.rewrite_pack 寫的執行紀錄（data/daily-update-log/plain-daily/<資料日>.json）裡用得到的欄位。"""
+    audit = {"data_date": "2026-11-18", "mode": "on", "model": "gemini-4-argon", "effort": "medium", "source": "ai",
+             "failure": None, "rejected": [], "data_dates": {"price_and_foreign": "2026-11-18"}}
+    audit.update(overrides)
+    return audit
+
+
+class PlainDailyUsage(unittest.TestCase):
+    """首頁「籌碼與資金」白話：任務名稱 daily-update（設定頁對成「籌碼與資金白話」），模型與思考程度照實際用的，
+    記成功或失敗；乾跑另外標，不算正式次數。"""
+
+    def table(self):
+        db = sqlite3.connect(":memory:")
+        db.executescript(OUTCOME_SQL)
+        return db
+
+    def run_cli(self, audit, *, agy_bin=""):
+        folder = Path(tempfile.mkdtemp())
+        out = folder / "usage.sql"
+        self.legacy = folder / "usage-legacy.sql"
+        args = ["--agy-bin", agy_bin, "--task", "daily-update", "--run-id", "77", "--sql-output", str(out),
+                "--legacy-sql-output", str(self.legacy)]
+        if audit is not None:
+            path = folder / "2026-11-18.json"
+            path.write_text(json.dumps(audit, ensure_ascii=False), encoding="utf-8")
+            args += ["--plain-audit", str(path)]
+        else:
+            args += ["--plain-audit", str(folder / "missing.json")]
+        code = gu.main(args)
+        sql = out.read_text(encoding="utf-8") if out.exists() else ""
+        db = self.table()
+        if sql:
+            db.executescript(sql)
+        row = db.execute("SELECT task, run_id, model, effort, outcome, dry_run FROM gemini_usage_snapshots").fetchone()
+        return code, row
+
+    def test_snapshot_carries_effort_outcome_and_dry_flag(self):
+        db = self.table()
+        db.executescript(gu.snapshot_sql(None, task="daily-update", run_id="1", taken_at="2026-11-18T10:00:00Z",
+                                         model="gemini-4-argon", call={"effort": "medium", "outcome": "failed", "dry_run": True}))
+        self.assertEqual(db.execute("SELECT model, effort, outcome, dry_run FROM gemini_usage_snapshots").fetchone(),
+                         ("gemini-4-argon", "medium", "failed", 1))
+
+    def test_other_tasks_write_the_same_sql_as_before(self):
+        # 其他排程不帶這三欄：遷移 0029 還沒套用時，它們照舊寫得進去
+        sql = gu.snapshot_sql([], task="watch-ledger", run_id="1", taken_at="2026-11-18T10:00:00Z", model="m")
+        for column in ("effort", "outcome", "dry_run"):
+            self.assertNotIn(column, sql)
+        db = sqlite3.connect(":memory:")
+        db.executescript(TABLE_SQL)
+        db.executescript(sql)
+
+    def test_ai_text_published_is_a_success(self):
+        self.assertEqual(self.run_cli(plain_audit()), (0, ("daily-update", "77", "gemini-4-argon", "medium", "ok", 0)))
+
+    def test_model_failure_or_rejected_text_is_a_failure(self):
+        for audit in (plain_audit(source="template", failure="model_timeout"),
+                      plain_audit(source="template", failure="validation_failed", rejected=["one_line：數字"]),
+                      plain_audit(source="template", failure="model_failed")):
+            with self.subTest(failure=audit["failure"]):
+                self.assertEqual(self.run_cli(audit)[1][4:], ("failed", 0))
+
+    def test_dry_mode_is_marked_dry(self):
+        self.assertEqual(self.run_cli(plain_audit(mode="dry"))[1][4:], ("ok", 1))
+
+    def test_nothing_is_written_when_the_model_was_never_reached(self):
+        # 事實表算不出來就不會呼叫模型；這一班沒建大盤包就沒有紀錄檔：兩種都不記，也不讓排程失敗
+        # agy 沒裝好或登入沒還原：根本沒呼叫到 Gemini，也不記（審查：不然「次數」就不是呼叫次數了）
+        for audit in (plain_audit(source=None, failure="facts_failed: ValueError", data_dates=None), None,
+                      {"mode": "off"}, plain_audit(source="template", failure="agy_unavailable")):
+            with self.subTest(audit=str(audit)[:40]):
+                self.assertEqual(self.run_cli(audit), (0, None))
+
+    def test_a_legacy_insert_is_written_for_a_database_without_0029(self):
+        # 遷移 0029 還沒套用時，帶三欄的寫入會失敗；排程改寫這一份舊格式，至少記到任務、模型、日期
+        self.run_cli(plain_audit(source="template", failure="model_timeout"))
+        legacy = self.legacy.read_text(encoding="utf-8")
+        for column in ("effort", "outcome", "dry_run"):
+            self.assertNotIn(column, legacy)
+        db = sqlite3.connect(":memory:")
+        db.executescript(TABLE_SQL)
+        db.executescript(legacy)
+        self.assertEqual(db.execute("SELECT task, run_id, model FROM gemini_usage_snapshots").fetchone(),
+                         ("daily-update", "77", "gemini-4-argon"))
+
+    def test_nothing_recorded_means_both_files_are_empty(self):
+        self.run_cli(None)
+        self.assertEqual(self.legacy.read_text(encoding="utf-8"), "")
+
+    def test_a_broken_plain_module_is_warned_about_not_silently_skipped(self):
+        import io
+        import sys
+        from contextlib import redirect_stdout
+        sys.modules["plain_daily"] = None   # 讓 import 失敗
+        self.addCleanup(sys.modules.pop, "plain_daily", None)
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code, row = self.run_cli(plain_audit())
+        self.assertEqual((code, row), (0, None))
+        self.assertIn("::warning::", buffer.getvalue())
+
+    def test_daily_update_falls_back_to_the_plain_model_setting(self):
+        import sys
+        import types
+        sys.modules["gemini_models"] = types.SimpleNamespace(PLAIN="gemini-4-argon")
+        self.addCleanup(sys.modules.pop, "gemini_models", None)
+        self.assertEqual(gu.model_for_task("daily-update"), "gemini-4-argon")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -243,7 +243,9 @@ def main() -> int:
                 # 本人 11-18：60 分也能畫線（各畫各的，畫線旅程另外驗）
                 j.check(f"{prefix}60 分：K 線回來、「分析工具」出現", page.locator("#chartHost").is_visible() and page.locator("#toolsKey").is_visible())
                 hourly = page.evaluate("() => { const c = window.StockView.chart().candles; return [c.length, c[0].label, c.at(-1).label, c.at(-1).close]; }")
-                j.check(f"{prefix}60 分：近 6 個月的歷史（5/18 起）接上今天盤中那幾根", hourly[0] > 600 and hourly[1] == "05/18 09:00"
+                # 6 個月的起點跟著執行當天的日期走（11-18 跑是 05/18、11-19 跑是 05/19），只鎖「從 5 月開始、09:00 開盤那根」
+                j.check(f"{prefix}60 分：近 6 個月的歷史（5 月起）接上今天盤中那幾根", hourly[0] > 600
+                        and hourly[1].startswith("05/") and hourly[1].endswith(" 09:00")
                         and hourly[2] == "11/18 11:00", hourly)
                 page.locator(".bd-chart").screenshot(path=str(OUT / f"{prefix}stock-60m.png"))
                 page.mouse.move(5, 5)

@@ -454,3 +454,32 @@ test("個股即時：A 的 Fugle 抓取卡住時，同時進來的 B 不等 A �
     await requestA;
   }
 });
+
+// 自選股頁的庫存（本人 11-19）：收盤後只要今天的收盤報價，不抓 K 線；和個股頁共用同一份狀態與 closeSettled。
+test("closingQuote：盤中與週末回 null 不打上游；收盤後只抓報價，收盤前最後一筆標 pending，拿到 13:30 收盤後不再抓", async () => {
+  for (const at of ["2026-11-17T10:00:00+08:00", "2026-11-21T15:00:00+08:00"]) {
+    const requests = [];
+    const service = createLiveQuoteService({ now: () => Date.parse(at), fetchImpl: fugleFake(requests) });
+    assert.equal(await service.closingQuote("2330", "tse", { fugleApiKey: "k" }), null, at);
+    assert.equal(requests.length, 0, at);
+  }
+  let now = Date.parse("2026-11-17T13:30:03+08:00");
+  const requests = [];
+  let quote = { ...FUGLE_CLOSE_QUOTE, closePrice: 2170, lastUpdated: Date.parse("2026-11-17T13:24:58+08:00") * 1000 };
+  const service = createLiveQuoteService({ now: () => now, fetchImpl: async (url, init) => fugleFake(requests, quote)(url, init) });
+  const early = await service.closingQuote("2330", "tse", { fugleApiKey: "k" });
+  assert.equal(early.quote.price, 2170);
+  assert.equal(early.pending, true);
+  quote = FUGLE_CLOSE_QUOTE;
+  now += 15_000;
+  const settled = await service.closingQuote("2330", "tse", { fugleApiKey: "k" });
+  assert.equal(settled.quote.price, 2165);
+  assert.equal(settled.pending, false);
+  now += 10 * 60_000;
+  await service.closingQuote("2330", "tse", { fugleApiKey: "k" });
+  assert.equal(requests.length, 2);
+  assert.ok(requests.every(request => request.url.includes("/quote/")), "不抓 K 線");
+  const page = await service.snapshot("2330", "tse", { fugleApiKey: "k" });
+  assert.equal(page.quote.price, 2165, "個股頁拿到的是同一份");
+  assert.equal(page.close_pending, false);
+});

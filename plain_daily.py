@@ -606,6 +606,18 @@ def rewrite_pack(analysis: Mapping[str, Any], chips: Mapping[str, Any], *, day: 
     return plain, summary
 
 
+def usage_fields(audit: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """記進設定頁 Gemini 用量的欄位（本人 11-19，owner 派工）。讀 rewrite_pack 寫的執行紀錄。
+    只在真的呼叫到 Gemini 時才記：事實表算不出來、agy 沒裝好或登入沒還原（agy_unavailable）都不算一次。
+    成功＝模型寫的白話通過核對（開關 on 時就是這份要發布；每日更新之後的步驟失敗、網站沒換，這裡照樣算成功）；
+    模型沒回來、逾時、核對沒過改用程式套句都算失敗。開關是 dry 時另外標乾跑。模型、思考程度照紀錄，沒寫就留空、不猜。"""
+    if (not isinstance(audit, Mapping) or normalize_mode(audit.get("mode")) == "off" or not audit.get("data_dates")
+            or audit.get("failure") == "agy_unavailable"):
+        return None
+    return {"model": audit.get("model"), "effort": audit.get("effort"),
+            "outcome": "ok" if audit.get("source") == "ai" else "failed", "dry_run": normalize_mode(audit.get("mode")) == "dry"}
+
+
 def write_plain(path: Path, plain: Mapping[str, Any]) -> None:
     path.write_text(PREFIX + json.dumps(plain, ensure_ascii=False, separators=(",", ":")) + ";\n", encoding="utf-8")
 

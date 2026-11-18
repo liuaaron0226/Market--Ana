@@ -32,20 +32,41 @@ export async function geminiUsage(db, now) {
     "SELECT taken_at, buckets_json FROM gemini_usage_snapshots WHERE buckets_json IS NOT NULL ORDER BY taken_at DESC LIMIT 1",
   ).first();
   const last = await db.prepare("SELECT taken_at FROM gemini_usage_snapshots ORDER BY taken_at DESC LIMIT 1").first();
-  // 每個任務今天跑了幾次，以及今天最近一次記下的模型（模型分配會調整，以紀錄為準）
-  const since = taipeiMidnightUtc(now);
-  const { results: today } = await db.prepare(
-    "SELECT task, count(*) AS runs, (SELECT latest.model FROM gemini_usage_snapshots AS latest "
-    + "WHERE latest.task = runs.task AND latest.taken_at >= ? AND latest.model IS NOT NULL ORDER BY latest.taken_at DESC LIMIT 1) AS model "
-    + "FROM gemini_usage_snapshots AS runs WHERE taken_at >= ? GROUP BY task ORDER BY task",
-  ).bind(since, since).all();
+  const today = await todayByTask(db, taipeiMidnightUtc(now));
   return {
     available: true,
     read_at: reading?.taken_at ?? null,
     last_run_at: last?.taken_at ?? null,
     ...groups(reading ? parse(reading.buckets_json) : null),
-    today: today.map(({ task, runs, model }) => ({ task, runs: Number(runs), model: model ?? null })),
+    today: today.map(({ task, runs, model, effort, failed, dry_runs }) => ({
+      task, runs: Number(runs), model: model ?? null, effort: effort ?? null, failed: Number(failed ?? 0), dry_runs: Number(dry_runs ?? 0),
+    })),
   };
+}
+
+const columnMissing = (error) => /no such column/i.test(String(error?.message));
+
+// 今天最近一次記下的某一欄（模型分配會調整，以紀錄為準）
+const latest = (column) => `(SELECT latest.${column} FROM gemini_usage_snapshots AS latest WHERE latest.task = runs.task `
+  + `AND latest.taken_at >= ?1 AND latest.${column} IS NOT NULL ORDER BY latest.taken_at DESC LIMIT 1) AS ${column}`;
+
+// 每個任務今天跑了幾次。遷移 0029（本人 11-19：白話分析多記思考程度、成功或失敗、乾跑）之後：
+// 乾跑不算正式次數、另外數；失敗只數正式的。0029 還沒套用到資料庫時退回只有次數與模型的舊查法，設定頁照常打得開。
+async function todayByTask(db, since) {
+  try {
+    const { results } = await db.prepare(
+      "SELECT task, sum(CASE WHEN dry_run = 0 THEN 1 ELSE 0 END) AS runs, sum(CASE WHEN dry_run = 1 THEN 1 ELSE 0 END) AS dry_runs, "
+      + "sum(CASE WHEN dry_run = 0 AND outcome = 'failed' THEN 1 ELSE 0 END) AS failed, "
+      + `${latest("model")}, ${latest("effort")} FROM gemini_usage_snapshots AS runs WHERE taken_at >= ?1 GROUP BY task ORDER BY task`,
+    ).bind(since).all();
+    return results;
+  } catch (error) {
+    if (!columnMissing(error)) throw error;
+    const { results } = await db.prepare(
+      `SELECT task, count(*) AS runs, ${latest("model")} FROM gemini_usage_snapshots AS runs WHERE taken_at >= ?1 GROUP BY task ORDER BY task`,
+    ).bind(since).all();
+    return results;
+  }
 }
 
 export async function handleGeminiUsageApi(request, env, deps, { isOwner }) {

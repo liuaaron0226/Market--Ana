@@ -5,7 +5,8 @@
 #   平日台北 10:00 的排程只有 MARKET_ANA_REPLAY_SCHEDULE=on 才真的寫（本人 11-17「今天開跑」）。
 # - 真的跑要先回報本人、本人同意後由 owner 從預設分支觸發；每次最多寫 max_forecasts 份，模型一失敗就停
 #   （多半是額度用完），免得把 AI Pro 的每週額度用光害正式的晚間／晨間版漏記。下一次從沒寫的日子接著寫。
-#   同一天各次加起來最多 40 份、只在台北 09:30～15:30 寫（程式擋），避開 07:20 晨間版與收盤後的晚間版。
+#   同一天各次加起來最多「每天份數」（repository variable MARKET_ANA_REPLAY_DAILY_LIMIT，沒設用 forecast_replay.DAILY_LIMIT）、
+#   只在台北 09:30～15:30 寫（程式擋），避開 07:20 晨間版與收盤後的晚間版。
 # - 自動排程的開關是 repository variable MARKET_ANA_REPLAY_SCHEDULE（本人 11-17 同意開跑後由 owner 打開，跑完關掉）；
 #   手動觸發照舊只認預設分支。
 # - 自己的鎖，不用三支既有排程共用的 market-state-write；只讀工作集，不上傳工作集，不碰正式帳本。
@@ -13,7 +14,7 @@
 name: forecast-replay
 
 on:
-  # 本人 2026-11-17「今天開跑」：之後每個交易日台北 10:00 自動跑一次（同一天最多 40 份的上限照舊），
+  # 本人 2026-11-17「今天開跑」：之後每個交易日台北 10:00 自動跑一次（同一天的份數上限照「每天份數」），
   # 只有 repository variable MARKET_ANA_REPLAY_SCHEDULE=on 才真的寫；110 天跑完就把它關掉。
   schedule:
     - cron: "0 2 * * 1-5"
@@ -30,10 +31,10 @@ on:
         type: string
         default: "2026-09-08"
       max_forecasts:
-        description: "這一次最多新寫幾份（早晚各算一份；同一天各次加起來最多 40 份）"
-        required: true
+        description: "這一次最多新寫幾份（早晚各算一份；留空＝每天份數；同一天各次加起來不超過每天份數）"
+        required: false
         type: string
-        default: "40"
+        default: ""
       plan_only:
         description: "只算可以重播的日子與 Gemini 次數，不呼叫模型"
         required: false
@@ -50,6 +51,8 @@ concurrency:
 
 jobs:
   replay:
+    # 開關沒開時排程整個跳過（不還原、不補抓）。11-18 那次排程開關是 off 卻照樣補抓，期交所回錯就整次失敗。
+    if: github.event_name != 'schedule' || vars.MARKET_ANA_REPLAY_SCHEDULE == 'on'
     runs-on: ubuntu-latest
     timeout-minutes: 240
     env:
@@ -76,7 +79,9 @@ jobs:
         env:
           INPUT_START: ${{ inputs.start || '2026-04-01' }}
           INPUT_END: ${{ inputs.end || '2026-09-08' }}
-          INPUT_MAX: ${{ inputs.max_forecasts || '40' }}
+          INPUT_MAX: ${{ inputs.max_forecasts }}
+          # 每天重播幾份（owner 11-19：量完正式工作的 Argon 用量再填）；沒設就用 forecast_replay.DAILY_LIMIT。
+          DAILY_LIMIT: ${{ vars.MARKET_ANA_REPLAY_DAILY_LIMIT }}
           INPUT_PLAN_ONLY: ${{ inputs.plan_only }}
           EVENT_NAME: ${{ github.event_name }}
           REPLAY_SCHEDULE: ${{ vars.MARKET_ANA_REPLAY_SCHEDULE }}
@@ -90,11 +95,13 @@ jobs:
           for value in "$INPUT_START" "$INPUT_END"; do
             python -c 'from state_sync import require_iso_date; import sys; require_iso_date(sys.argv[1], "workflow date")' "$value" || { echo "::error::日期必須是真實的 YYYY-MM-DD"; exit 1; }
           done
-          if ! [[ "$INPUT_MAX" =~ ^[0-9]{1,3}$ ]] || [ "$INPUT_MAX" -lt 1 ]; then echo "::error::max_forecasts 必須是 1 到 999"; exit 1; fi
+          # 兩個都可以留空：每天份數沒設就由程式用 forecast_replay.DAILY_LIMIT；這一次的份數沒填就只受每天份數限制。
+          if [ -n "$DAILY_LIMIT" ] && { ! [[ "$DAILY_LIMIT" =~ ^[0-9]{1,3}$ ]] || [ "$DAILY_LIMIT" -lt 1 ]; }; then echo "::error::MARKET_ANA_REPLAY_DAILY_LIMIT 必須是 1 到 999"; exit 1; fi
+          if [ -n "$INPUT_MAX" ] && { ! [[ "$INPUT_MAX" =~ ^[0-9]{1,3}$ ]] || [ "$INPUT_MAX" -lt 1 ]; }; then echo "::error::max_forecasts 必須是 1 到 999"; exit 1; fi
           plan_only=true
           # 真的跑只能用預設分支的程式；其他情況一律只算天數。
           if [ "$INPUT_PLAN_ONLY" = "false" ] && [ "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH" ]; then plan_only=false; fi
-          # 排程：只有開關打開才真的寫（排程本來就跑預設分支）；開關沒開時只算天數。
+          # 排程：走到這裡一定是開關打開（沒開時整個工作在上面就跳過了），真的寫；排程本來就跑預設分支。
           if [ "$EVENT_NAME" = "schedule" ] && [ "$REPLAY_SCHEDULE" = "on" ]; then plan_only=false; fi
           for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY AGY_LOGIN_BUNDLE; do
             if [ -z "${!name}" ]; then echo "::error::缺少 secret $name"; exit 1; fi
@@ -104,6 +111,7 @@ jobs:
             echo "start=$INPUT_START"
             echo "end=$INPUT_END"
             echo "max_forecasts=$INPUT_MAX"
+            echo "daily_limit=$DAILY_LIMIT"
           } >> "$GITHUB_OUTPUT"
 
       - name: 從 R2 還原每日更新已發布的資料與重播帳本（唯讀）
@@ -130,10 +138,12 @@ jobs:
         env:
           START: ${{ steps.mode.outputs.start }}
           END: ${{ steps.mode.outputs.end }}
+          DAILY_LIMIT: ${{ steps.mode.outputs.daily_limit }}
         run: |
           mkdir -p "$RUNNER_TEMP/forecast-replay"
+          limit=(); if [ -n "$DAILY_LIMIT" ]; then limit=(--daily-limit "$DAILY_LIMIT"); fi
           python forecast_replay.py --plan --analysis data/daily-update-state/last-market-pack/analysis-data.js \
-            --method MARKET_METHOD.md --start "$START" --end "$END" --ledger "$LEDGER" \
+            --method MARKET_METHOD.md --start "$START" --end "$END" --ledger "$LEDGER" "${limit[@]}" \
             | tee "$RUNNER_TEMP/forecast-replay/plan.json"
           { echo "### 歷史重播：可以重播的日子"; echo '```json'; cat "$RUNNER_TEMP/forecast-replay/plan.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
@@ -174,14 +184,18 @@ jobs:
           START: ${{ steps.mode.outputs.start }}
           END: ${{ steps.mode.outputs.end }}
           MAX_FORECASTS: ${{ steps.mode.outputs.max_forecasts }}
+          DAILY_LIMIT: ${{ steps.mode.outputs.daily_limit }}
         run: |
           # 正式的預測缺一項海外資料照樣寫；重播整批都缺就不是同一套輸入，成績不能和正式比，所以不跑。
           if [ ! -f "$RUNNER_TEMP/overseas/manifest.json" ]; then echo "::error::海外原件沒抓到，這次不重播"; exit 1; fi
           python -c 'import json, sys; bad = [s["name"] for s in json.load(open(sys.argv[1], encoding="utf-8"))["sources"] if s["status"] != "ok"]; print("::error::這些海外原件沒抓到，這次不重播：" + "、".join(bad)) if bad else None; sys.exit(1 if bad else 0)' "$RUNNER_TEMP/overseas/manifest.json"
+          limits=()
+          if [ -n "$MAX_FORECASTS" ]; then limits+=(--max-forecasts "$MAX_FORECASTS"); fi
+          if [ -n "$DAILY_LIMIT" ]; then limits+=(--daily-limit "$DAILY_LIMIT"); fi
           python forecast_replay.py --analysis data/daily-update-state/last-market-pack/analysis-data.js \
             --method MARKET_METHOD.md --start "$START" --end "$END" \
             --ledger "$LEDGER" --agy-bin "$RUNNER_TEMP/agy/antigravity" --fetched-at "$(date -Iseconds)" \
-            --max-forecasts "$MAX_FORECASTS" --overseas-dir "$RUNNER_TEMP/overseas" \
+            "${limits[@]}" --overseas-dir "$RUNNER_TEMP/overseas" \
             --sql-output "$RUNNER_TEMP/forecast-replay.sql" --log-output "$LEDGER/runs/$GITHUB_RUN_ID.json"
           cp "$LEDGER/runs/$GITHUB_RUN_ID.json" "$RUNNER_TEMP/forecast-replay/run.json"
 

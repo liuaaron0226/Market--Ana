@@ -9,13 +9,14 @@ export const MIGRATION_FILES = ["0001_init.sql", "0003_api_hits.sql", "0004_list
   "0017_watch_ledger.sql", "0018_etf_securities.sql", "0019_watch_push.sql", "0020_friend_ai_daily.sql",
   "0021_watch_ready_notices.sql", "0022_friend_ai_stock_daily.sql", "0023_forecast_replay.sql",
   "0024_gemini_usage.sql", "0025_fund_codes.sql", "0026_fund_securities.sql", "0027_stock_hourly_candles.sql",
-  "0028_user_drawings_frame.sql"];
+  "0028_user_drawings_frame.sql", "0029_gemini_usage_outcome.sql"];
 export const migrationSql = (f) => readFileSync(new URL(`../migrations/${f}`, import.meta.url), "utf8");
 const MIGRATION = MIGRATION_FILES.map(migrationSql).join("\n");
 
-export function fakeD1() {
+// files：只套其中幾支（例如測「遷移還沒套用到正式資料庫時」的退路）；不給就全部
+export function fakeD1(files = null) {
   const db = new DatabaseSync(":memory:");
-  db.exec(MIGRATION);
+  db.exec(files ? files.map(migrationSql).join("\n") : MIGRATION);
   const metrics = { selectQueries: 0, rowsReturned: 0, logicalRowsRead: 0, fullScanQueries: 0 };
   const measure = (sql, args, rows) => {
     if (!/^\s*(SELECT|WITH)\b/i.test(sql)) return;

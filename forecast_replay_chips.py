@@ -82,7 +82,10 @@ def fetch(out_dir: Path | str, dates: Sequence[str], *, http: Callable[..., byte
         try:
             return http(method, url, data)
         except Exception as error:  # noqa: BLE001 — 任何網路錯誤都停，不重試
-            raise BackfillStopped(f"{url} 請求失敗：{type(error).__name__}") from error
+            # 狀態碼要記下來（11-18 那次只留下 HTTPError，看不出是期交所擋、還是暫時故障）。
+            code = getattr(error, "code", None)
+            raise BackfillStopped(f"{url} 請求失敗：{type(error).__name__}"
+                                  + (f"（HTTP {code}）" if code else "")) from error
 
     for day in dates:
         compact = day.replace("-", "")
@@ -102,11 +105,17 @@ def fetch(out_dir: Path | str, dates: Sequence[str], *, http: Callable[..., byte
         entries.append({"file": target.name, "url": url, "sha256": hashlib.sha256(content).hexdigest(),
                         "fetched_at": now()})
 
-    if dates:
-        start, end = dates[0].replace("-", ""), dates[-1].replace("-", "")
+    # 期貨只補已存原件還沒涵蓋到的日子（資料包每天往後推一天，需要的範圍尾巴就多一天；不整段重抓）。
+    # 只抓已涵蓋的最後一天以後的日子：舊的缺口（期交所那天就是沒有外資那一列）不會把範圍一路拉回去整段重抓；
+    # 那種日子在算天數時會列在「沒有當天的法人或期貨資料」，看得到。
+    covered = {row["date"] for row in load(folder)["futures"]}
+    last = max(covered) if covered else ""
+    missing = [day for day in dates if day not in covered and day > last]
+    if missing:
+        start, end = missing[0].replace("-", ""), missing[-1].replace("-", "")
         target = folder / f"taifex-txf-{start}-{end}.csv"
         if not target.exists():
-            data = {"queryStartDate": dates[0].replace("-", "/"), "queryEndDate": dates[-1].replace("-", "/"),
+            data = {"queryStartDate": missing[0].replace("-", "/"), "queryEndDate": missing[-1].replace("-", "/"),
                     "commodityId": "TXF"}
             content = get("POST", TAIFEX_URL, data)
             try:
@@ -118,6 +127,9 @@ def fetch(out_dir: Path | str, dates: Sequence[str], *, http: Callable[..., byte
             _write_new(target, content)
             entries.append({"file": target.name, "url": TAIFEX_URL, "request": data,
                             "sha256": hashlib.sha256(content).hexdigest(), "fetched_at": now()})
+        else:
+            raise BackfillStopped(f"期交所 {missing[0]}～{missing[-1]} 已經抓過（{target.name}），"
+                                  "原件裡還是沒有這幾天的外資部位；不重抓、不覆寫，請人工確認")
 
     manifest_path = folder / "manifest.json"
     previous = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {"files": []}
