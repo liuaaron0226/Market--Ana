@@ -836,7 +836,8 @@ class WyckoffLayerTests(LedgerTestCase):
         self.assertIn("wyckoff_lpsy", fl.PARAMETERS["layers"])
         self.assertNotEqual(fl.input_version("gemini-4-argon"), "base+overseas+foreign_flow+similar+lessons-v1-1b88159c")
         rules = "".join(fl._PROMPT_RULES)
-        for words in ("wyckoff_lpsy", "不顯著", "避開記號", "不是放空訊號", "不能單獨"):
+        # 本人 2026-11-18 看過乾跑後：只能照寫是／否與歷史次數，不能拿來推論賣壓或方向。
+        for words in ("wyckoff_lpsy", "不顯著", "避開記號", "不是放空訊號", "不能單獨", "只能照寫", "不得拿來推論賣壓"):
             self.assertIn(words, rules)
 
 

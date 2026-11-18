@@ -453,7 +453,7 @@ class LpsyLayerTests(WatchLedgerTestCase):
         self.assertEqual(sent["wyckoff_lpsy"]["reading"]["volume_ratio"], 0.7)
         self.assertEqual((sent["wyckoff_lpsy"]["history"]["count"], sent["wyckoff_lpsy"]["history"]["t"]), (1492, -4.8))
         self.assertEqual(sent["layer_parameters"]["wyckoff_lpsy"], {"layer": layer["version"]})
-        for words in ("wyckoff_lpsy", "避開記號", "不是放空訊號", "不能單獨決定 status"):
+        for words in ("wyckoff_lpsy", "避開記號", "不是放空訊號", "不能單獨決定 status", "只能照寫", "不得拿來推論賣壓"):
             self.assertIn(words, prompt)
 
     def test_a_missing_reading_is_named_and_the_judgment_is_still_written(self):

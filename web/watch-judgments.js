@@ -14,7 +14,11 @@
   const EDITION = { evening: '晚間版', morning: '晨間版' };
   const VIEWS = { judgment: '判斷', score: '成績', history: '回看' };
   const HORIZONS = [5, 20];
-  const LAYER = { technical: '技術面', market: '大盤預測', news: '官方公告', peers: '國外同類股', lessons: '過去對帳' };
+  // 判斷缺了哪幾層時顯示的中文名；帳本新增一層就要在這裡補（H 票 wyckoff_lpsy、I 票四層）。
+  const LAYER = {
+    technical: '技術面', bollinger: '布林通道', wyckoff_lpsy: '威科夫最後供應點', sector: '同產業', margin: '融資融券',
+    environment: '匯率與美債利率', market: '大盤預測', news: '官方公告', peers: '國外同類股', lessons: '過去對帳',
+  };
   const MISS = {
     input_not_ready: '資料沒到齊', deadline_passed: '過了期限', model_failed: '模型失敗', model_timeout: '模型逾時',
     output_garbled: '回答亂碼', answer_invalid: '回答不合格', quota_exhausted: '額度用完',
@@ -439,5 +443,5 @@
     }
   }
 
-  window.WatchJudgments = { loadList, listLine, mount, overlays, onLive, _logic: { listParts, touched, scoreGroups, chipText, lineSpecs } };
+  window.WatchJudgments = { loadList, listLine, mount, overlays, onLive, _logic: { listParts, touched, scoreGroups, chipText, lineSpecs, missingOf } };
 })();
