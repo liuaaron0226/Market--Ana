@@ -186,7 +186,9 @@ _PROMPT_RULES = (
     "wrong_line 的數值一律要低於 trigger_line。candidates 裡找不到符合的價位時，不能選那個 status。",
     "reason（理由）只寫繁體中文質化判斷，不得出現任何阿拉伯／全形／中文數字、日期或價格；"
     "要引用價位就把候選 id 放進 reason_refs，要引用消息就把 news.announcements 裡的 id 放進 news_refs，"
-    "程式會代入名字與數值。",
+    "程式會代入名字與數值。"
+    # 本人 2026-11-18 晚「放寬檢查（推薦）」：和大盤預測同一套白名單（ledger_core.text_problem）。
+    "唯一的例外：照抄 candidates 的 name（例如五日線、前一交易日高點）或方法稿原文裡的用詞（例如兩個頻道、第一頻道）時，名字裡本來就有的數字可以寫，但要一字不差照抄；名字旁邊不得再加任何數字（例如價位、幾成、幾天），也不得寫 candidates 與方法稿裡沒有的線名或自己縮寫的詞。",
     "理由只能引用 INPUT_JSON 裡有的資料；INPUT_JSON 沒給的資料（missing_layers 列出的層、值是 null 的欄位、"
     "新聞、海外市場）不得當成事實寫進去。",
     "每一次從別的狀態變成「可以留意」，程式會在之後第五與第二十個交易日對帳：這一檔的漲跌幅有沒有贏過同期加權指數，"
@@ -439,7 +441,8 @@ def _validate(structured: Any, model_input: Mapping[str, Any]) -> tuple[dict[str
         return None, "觸發線放錯邊：「可以留意」要挑已經站上的，其餘要挑收盤上方的"
     if wrong["value"] >= trigger["value"]:
         return None, "看錯線不在觸發線下方"
-    problem = text_problem(structured["reason"])
+    problem = text_problem(structured["reason"], names=[level["name"] for level in model_input["candidates"] or []],
+                           method_text=str(model_input.get("method_text") or ""))
     if problem:
         return None, f"理由：{problem}"
     if refs_problem(structured["reason_refs"], by_id):

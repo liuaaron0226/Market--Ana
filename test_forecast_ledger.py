@@ -905,6 +905,29 @@ class MarketLayersTests(LedgerTestCase):
                             "+ofr_stress+similar+lessons-v1-bd1f8c85")
 
 
+class NamesInReasonTests(LedgerTestCase):
+    """本人 2026-11-18 晚「放寬檢查（推薦）」：理由照抄候選名字裡的數字放行，其他數字照擋（固定日 K（a）的候選有五日線、
+    十日線、近二十日高點（09/22）……）。"""
+
+    def test_a_reason_copying_a_candidate_name_is_accepted(self):
+        answer = answer_a(**{"1": cell("ma5", "prev_low", "above", reason="站回五日線之上且守住近二十日高點之下的整理區")})
+        record = self.write(responses=[envelope(answer)])["record"]
+        self.assertEqual(record["kind"], "forecast")
+        self.assertEqual(record["attempts"], [])
+
+    def test_a_number_beside_the_name_or_a_line_not_in_the_input_is_refused(self):
+        for number, text in enumerate(("站回五日線之上三成", "跌破二十日線就轉弱")):
+            answer = answer_a(**{"1": cell("ma5", "prev_low", "above", reason=text)})
+            record = self.write(responses=[envelope(answer), envelope(answer)], root=self.tmp / f"ledger-{number}")["record"]
+            self.assertEqual((record["kind"], record["miss_reason"]), ("miss", "answer_invalid"), text)
+            self.assertIn("不得包含數字", record["attempts"][-1]["detail"])
+
+    def test_the_prompt_tells_the_model_the_exception(self):
+        rules = "".join(fl._PROMPT_RULES)
+        self.assertIn("照抄 candidates 的 name", rules)
+        self.assertIn("名字旁邊不得再加任何數字", rules)
+
+
 class VerdictStatusTests(LedgerTestCase):
     def test_groups_say_accumulating_until_each_horizon_has_run_long_enough(self):
         self.write(official_since=BASE_A)
