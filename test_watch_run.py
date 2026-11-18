@@ -523,6 +523,27 @@ class SourceCheckTests(unittest.TestCase):
         self.assertEqual(wr.source_check({"massive": None, "eodhd": None}, today=BASE)("NVDA.US", "US"), "no_key")
 
 
+class LocalSourceEnvironmentTests(unittest.TestCase):
+    def test_the_source_hands_the_forecast_ledger_and_the_moment_of_writing_to_the_environment_layer(self):
+        import watch_inputs
+        seen = {}
+        real = watch_inputs.environment_input
+
+        def spy(root, base_date, **kwargs):
+            seen.update(kwargs)
+            return None
+        watch_inputs.environment_input = spy
+        try:
+            source = wr.LocalSource(forecast_ledger=Path("fl"))
+            source._bars = lambda *args, **kwargs: []          # 其他層讀行情庫：這裡只看環境層拿到什麼
+            source._capital_events = lambda: {}
+            source.cutoff = "2026-11-18T20:30:00+08:00"
+            source.stock("2330", "2026-11-18", "evening")
+        finally:
+            watch_inputs.environment_input = real
+        self.assertEqual(seen, {"edition": "evening", "forecast_ledger": Path("fl"), "cutoff": "2026-11-18T20:30:00+08:00"})
+
+
 class LocalSourceLpsyTests(unittest.TestCase):
     """H 票：關注股的最後供應點讀數從行情庫（實際成交價＋逐日漲跌）算，和大盤共用 wyckoff_lpsy。"""
 

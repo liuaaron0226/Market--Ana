@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path, PurePosixPath
 
@@ -85,20 +86,65 @@ def pull(store, ledger: Path | str, prefix: str = PREFIX) -> dict[str, int]:
     return {"downloaded": downloaded, "unchanged": unchanged}
 
 
+# 關注排程的環境層（匯率、美債）讀預測帳本裡的原件（2026-11-19：工作集裡沒有那兩份，environment 天天缺）。
+ENVIRONMENT_ORIGINALS = ("cbc-usdtwd", "treasury-")
+_ARCHIVED = re.compile(r"sources/[0-9a-f]{64}\.raw\.gz")
+
+
+def pull_sources(store, ledger: Path | str, *, edition: str, since: str, prefix: str = PREFIX) -> dict[str, int]:
+    """只取回最近幾份預測紀錄（基準日 ≥ since、同一版）列出的匯率與美債原件。``pull`` 不帶 sources/，所以另外取。"""
+    ledger = Path(ledger)
+    wanted: set[str] = set()
+    for path in sorted((ledger / "forecasts").glob(f"*__{edition}__*.json")):
+        if path.name[:10] < since:
+            continue
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        for entry in record.get("sources") or []:
+            archived = str(entry.get("archived_as") or "")
+            if (entry.get("status") == "ok" and _ARCHIVED.fullmatch(archived)
+                    and str(entry.get("name") or "").startswith(ENVIRONMENT_ORIGINALS)):
+                wanted.add(archived)
+    downloaded = unchanged = 0
+    for archived in sorted(wanted):
+        target = ledger / archived
+        if target.exists():
+            unchanged += 1
+            continue
+        data = store.get(prefix + archived)
+        if data is None:
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        downloaded += 1
+    return {"downloaded": downloaded, "unchanged": unchanged}
+
+
 def main(argv: list[str] | None = None) -> int:
     from state_sync import DirectoryStore, R2Store
 
     parser = argparse.ArgumentParser(description="預測帳本存回 R2／從 R2 還原（只新增、不覆寫）")
-    parser.add_argument("command", choices=["push", "pull"])
+    parser.add_argument("command", choices=["push", "pull", "pull-sources"])
     parser.add_argument("--ledger", type=Path, required=True)
     parser.add_argument("--store-dir", type=Path, help="以本機目錄模擬 R2（不給就用環境變數連 R2）")
     # 自選股關注的帳本（G 票）用同一套只新增的存法，放在自己的前綴底下。
     parser.add_argument("--prefix", choices=[PREFIX, WATCH_PREFIX, REPLAY_PREFIX], default=PREFIX)
+    parser.add_argument("--edition", choices=["evening", "morning"], help="pull-sources：哪一版的預測紀錄")
+    parser.add_argument("--days", type=int, default=7, help="pull-sources：只看最近幾天的預測紀錄")
     args = parser.parse_args(argv)
     store = DirectoryStore(args.store_dir) if args.store_dir else R2Store.from_env()
     try:
-        result = (push(args.ledger, store, args.prefix) if args.command == "push"
-                  else pull(store, args.ledger, args.prefix))
+        if args.command == "pull-sources":
+            from datetime import date, timedelta
+            if not args.edition:
+                parser.error("pull-sources 要給 --edition")
+            since = (date.today() - timedelta(days=args.days)).isoformat()
+            result = pull_sources(store, args.ledger, edition=args.edition, since=since, prefix=args.prefix)
+        else:
+            result = (push(args.ledger, store, args.prefix) if args.command == "push"
+                      else pull(store, args.ledger, args.prefix))
     except (LedgerStoreConflict, ValueError) as error:
         print(f"::error::{error}", file=sys.stderr)
         return 2

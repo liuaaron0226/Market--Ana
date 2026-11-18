@@ -68,8 +68,12 @@ class LocalSource:
     ``root`` 是放 ``data/`` 的那一層（排程裡是 repo 根目錄，``state_sync restore --target .`` 還原的位置）；
     個股頁的計算（``twon_analysis``）固定讀程式旁邊的 ``data/``，所以兩者要是同一個地方。"""
 
-    def __init__(self, root: Path | str = ROOT):
+    def __init__(self, root: Path | str = ROOT, *, forecast_ledger: Path | str | None = None):
+        """``forecast_ledger``：環境層（匯率、美債）讀不到本機原件時，改讀預測帳本裡同一天、同一版的原件
+        （2026-11-19 查到工作集沒有那兩份）；只用寫判斷那一刻（``cutoff``，由排程在寫之前設好）以前抓到的。"""
         self.root = Path(root)
+        self.forecast_ledger = Path(forecast_ledger) if forecast_ledger else None
+        self.cutoff: str | None = None
         self._industries: dict[str, tuple[str, str]] | None = None
         self._capital: dict[str, list[dict[str, Any]]] | None = None
         self._members: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
@@ -178,8 +182,9 @@ class LocalSource:
                           ("valuation", lambda: watch_inputs.valuation_input(self.root, code, base_date)),
                           ("lending_eps", lambda: self._lending_eps(code, base_date)),
                           ("signals", lambda: self._signals(code, base_date)),
-                          ("environment", lambda: watch_inputs.environment_input(self.root, base_date,
-                                                                                 edition=edition))):
+                          ("environment", lambda: watch_inputs.environment_input(
+                              self.root, base_date, edition=edition, forecast_ledger=self.forecast_ledger,
+                              cutoff=self.cutoff))):
             try:
                 out[key] = read()
             except Exception as error:  # noqa: BLE001 — 一塊讀不到只標缺漏
@@ -449,6 +454,8 @@ def _run(ledger: Path, edition: str, watchlist: Sequence[Mapping[str, Any]], ind
                            "model": model, "started_at": clock().astimezone(TAIPEI).isoformat(), "watched": codes}
     # 帳本裡有轉變日的每一檔（含已經關掉關注的）都要對帳，所以晚間版的行情要讀關注清單與帳本兩邊的代號。
     ledger_codes = sorted({record["code"] for record in wl.read_ledger(ledger)["judgments"]})
+    if hasattr(source, "cutoff"):
+        source.cutoff = clock().astimezone(TAIPEI).isoformat()   # 環境層只用這一刻以前抓到的原件
     loaded, load_errors = _load(source, [*codes, *ledger_codes], base_date, edition)
     if edition == "evening":
         # 先對帳再寫：今天到期的格子先對完；今天這份最早的到期日在明天，寫完不必再對。
@@ -863,7 +870,8 @@ def main(argv: list[str] | None = None) -> int:
 
     watchlist = json.loads(args.watchlist.read_text(encoding="utf-8"))
     common = dict(watchlist=watchlist, ledger=args.ledger, forecast_ledger=args.forecast_ledger,
-                  method_path=args.method, model_bin=args.agy_bin, model=args.model, source=LocalSource(),
+                  method_path=args.method, model_bin=args.agy_bin, model=args.model,
+                  source=LocalSource(forecast_ledger=args.forecast_ledger),
                   dry_run=args.dry_run, sql_output=args.sql_output, log_output=args.log_output,
                   call_budget=args.call_budget)
     if args.edition == "morning":
