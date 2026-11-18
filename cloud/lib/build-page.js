@@ -29,6 +29,8 @@ export const WEB_FILES = [
   "forecast.js", "forecast.css",
   // 浮層打開時把底下的頁面鎖住（11-17，首頁明細板、對話框、預測與關注浮板共用）
   "scroll-lock.js",
+  // 頁面不給縮放（本人 11-18；雙指縮放在 iOS 要靠 JS 擋）
+  "no-zoom.js",
   // 個股頁事實區塊（2026-11-15 規格，A 票）
   "stock-facts.js", "stock-facts.css", "stock-signals.js", "stock-signals.css",
   // 自選股關注 B 票：個股頁「國外同類股」（只有站主的關注股才出現）

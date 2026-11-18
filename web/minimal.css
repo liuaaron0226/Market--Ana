@@ -82,6 +82,8 @@
 
 * { box-sizing: border-box; }
 html { min-width: 320px; background: var(--bg); -webkit-text-size-adjust: 100%; }
+/* 本人 11-18：頁面不給縮放——只留捲動，雙擊不放大（雙指縮放另由 no-zoom.js 擋）。 */
+html { touch-action: pan-x pan-y; }
 body {
   margin: 0;
   min-width: 320px;
