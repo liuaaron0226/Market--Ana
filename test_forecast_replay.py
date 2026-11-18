@@ -78,7 +78,9 @@ class ReplayTestCase(unittest.TestCase):
         return [json.loads(line) for line in self.seen.read_text(encoding="utf-8").splitlines()]
 
     def run_replay(self, payload=None, *, fail=False, model_name="gemini-3.8-flash", **kwargs):
-        options = dict(start="2026-04-01", end="2026-09-08", editions=("evening", "morning"), now=lambda: NOON)
+        # 每天份數照設定（預設值很小，見 forecast_replay.DAILY_LIMIT）；測試要看寫很多天，就明給一個大的設定。
+        options = dict(start="2026-04-01", end="2026-09-08", editions=("evening", "morning"), now=lambda: NOON,
+                       daily_limit=40)
         options.update(kwargs)
         return rp.run_replay(self.analysis_file(payload or analysis(DATES)), ledger=self.ledger,
                              method_path=self.method, model_bin=self.model(fail=fail), model=model_name,
@@ -229,15 +231,25 @@ class RunTests(ReplayTestCase):
                          rp.plan_replay(analysis(DATES), method_text=METHOD_04, model="gemini-3.8-flash",
                                         start="2026-04-01", end="2026-09-08")["dates"])
 
-    def test_no_more_than_forty_forecasts_a_day_across_runs(self):
-        # 本人 2026-11-17「分天跑，每天最多 40 份」：同一天觸發兩次也一樣
-        first = self.run_replay(max_forecasts=30, log_output=self.ledger / "runs" / "1.json")
-        self.assertEqual(first["written"], 30)
-        second = self.run_replay(max_forecasts=30, log_output=self.ledger / "runs" / "2.json")
-        self.assertEqual((second["written"], second["stop_reason"]), (10, "今天已寫滿 40 份"))
-        tomorrow = self.run_replay(max_forecasts=30, now=lambda: datetime.fromisoformat("2026-11-18T12:00:00+08:00"),
+    def test_no_more_than_the_daily_setting_across_runs(self):
+        # 每天幾份是設定（owner 11-19：量完 Argon 用量再填）；同一天觸發兩次也一樣，隔天重新算
+        first = self.run_replay(max_forecasts=4, daily_limit=6, log_output=self.ledger / "runs" / "1.json")
+        self.assertEqual(first["written"], 4)
+        second = self.run_replay(max_forecasts=4, daily_limit=6, log_output=self.ledger / "runs" / "2.json")
+        self.assertEqual((second["written"], second["stop_reason"]), (2, "今天已寫滿 6 份"))
+        tomorrow = self.run_replay(max_forecasts=4, daily_limit=6,
+                                   now=lambda: datetime.fromisoformat("2026-11-18T12:00:00+08:00"),
                                    log_output=self.ledger / "runs" / "3.json")
-        self.assertEqual(tomorrow["written"], 30)
+        self.assertEqual(tomorrow["written"], 4)
+        self.assertEqual(first["daily_limit"], 6)
+
+    def test_without_a_setting_the_recommended_daily_count_applies(self):
+        log = self.run_replay(end="2026-04-03", daily_limit=None)
+        self.assertEqual((log["daily_limit"], log["written"]), (rp.DAILY_LIMIT, rp.DAILY_LIMIT))
+
+    def test_a_daily_setting_below_one_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "每天份數"):
+            self.run_replay(end="2026-04-03", daily_limit=0)
 
     def test_it_only_runs_between_the_morning_and_evening_forecasts(self):
         # 07:20 晨間版、收盤後晚間版的前後都不跑，免得剛好把額度用完害正式的漏記

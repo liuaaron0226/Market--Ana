@@ -102,11 +102,14 @@ def fetch(out_dir: Path | str, dates: Sequence[str], *, http: Callable[..., byte
         entries.append({"file": target.name, "url": url, "sha256": hashlib.sha256(content).hexdigest(),
                         "fetched_at": now()})
 
-    if dates:
-        start, end = dates[0].replace("-", ""), dates[-1].replace("-", "")
+    # 期貨只補已存原件還沒涵蓋到的日子（資料包每天往後推一天，需要的範圍尾巴就多一天；不整段重抓）。
+    covered = {row["date"] for row in load(folder)["futures"]}
+    missing = [day for day in dates if day not in covered]
+    if missing:
+        start, end = missing[0].replace("-", ""), missing[-1].replace("-", "")
         target = folder / f"taifex-txf-{start}-{end}.csv"
         if not target.exists():
-            data = {"queryStartDate": dates[0].replace("-", "/"), "queryEndDate": dates[-1].replace("-", "/"),
+            data = {"queryStartDate": missing[0].replace("-", "/"), "queryEndDate": missing[-1].replace("-", "/"),
                     "commodityId": "TXF"}
             content = get("POST", TAIFEX_URL, data)
             try:

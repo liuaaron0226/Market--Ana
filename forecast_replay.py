@@ -58,9 +58,15 @@ METHOD_SPOILERS = {
     "0.4": ("2026-10-12", "2026-11-13"),
 }
 
-# 本人 2026-11-17 選 A2：基準日上限 09-08（迄日填得再晚也一樣）；分天跑，每天最多 40 份。
+# 本人 2026-11-17 選 A2：基準日上限 09-08（迄日填得再晚也一樣）；分天跑。
 REPLAY_UNTIL = "2026-09-08"
-DAILY_LIMIT = 40
+# 每天份數（同一天各次加起來）：排程用 repository variable MARKET_ANA_REPLAY_DAILY_LIMIT 設定，這裡是沒設時的預設。
+# 11-17 定的 40 份是 Flash 的時候；改 Argon 後（11-17 定案「重播先停、量完再說」）照最保守的估法先填 1：
+#   官方沒公布 Argon 每週上限；唯一的讀數是 11-17 叫一次只回「OK」的 Argon，Argon 每週額度 100%→99%，
+#   保守當成每次呼叫 1%（一週約 100 次）。正式工作一個交易日約 15 次 Argon（晚間 1、晨間 1、每日判斷約 12、
+#   白話 1），一週約 75 次；留兩成餘裕 → 每週還能用 100×0.8−75＝5 次，五個交易日每天 1 份。
+#   正式跑 2～3 天後，用設定頁（D1 gemini_usage_snapshots）實際的「每次掉幾 %」重算，再設 repository variable。
+DAILY_LIMIT = 1
 # 可重播的時段（台北）：07:20 晨間版跑完、開盤之後，到收盤後每日更新與晚間版之前。
 # 其他時段不跑，免得剛好把 AI Pro 的額度用完，害正式的晨間或晚間版漏記。
 WINDOW = (time(9, 30), time(15, 30))
@@ -190,6 +196,7 @@ def run_replay(
     fetched_at: str,
     editions: Sequence[str] = fl.EDITIONS,
     max_forecasts: int | None = None,
+    daily_limit: int | None = None,
     overseas_dir: Path | str | None = None,
     data_root: Path | str | None = None,
     seeds_root: Path | str = fr.SEEDS_ROOT,
@@ -199,7 +206,8 @@ def run_replay(
     now: Callable[[], datetime] | None = None,
     ofr_fetch: Callable[[], list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
-    """依日期先後重播；這一次最多新寫 ``max_forecasts`` 份，而且同一天（台北）各次加起來不超過 ``DAILY_LIMIT``。
+    """依日期先後重播；這一次最多新寫 ``max_forecasts`` 份，而且同一天（台北）各次加起來不超過 ``daily_limit``
+    （每天份數，排程從 repository variable MARKET_ANA_REPLAY_DAILY_LIMIT 帶進來；沒給就用 ``DAILY_LIMIT``）。
 
     ``fetched_at``：這次重播的資料是什麼時候抓的（記進每一筆，說明事後修正過的數字可能混在裡面）。
     ``now``：真實的時鐘（判斷可重播的時段與今天寫了幾份）；寫進帳本的時鐘照基準日凍結。
@@ -220,10 +228,14 @@ def run_replay(
     dates = [row["date"] for row in analysis.get("daily") or []]
     next_session = {day: dates[index + 1] for index, day in enumerate(dates[:-1])}
     today = started.date().isoformat()
-    remaining = DAILY_LIMIT - _written_today(root, today)
+    daily_limit = DAILY_LIMIT if daily_limit is None else daily_limit
+    if daily_limit < 1:
+        raise ValueError(f"每天份數至少要 1，收到 {daily_limit}")
+    remaining = daily_limit - _written_today(root, today)
     budget = remaining if max_forecasts is None else min(max_forecasts, remaining)
     log: dict[str, Any] = {"schema": SCHEMA, "model": model, "start": start, "end": min(end, REPLAY_UNTIL),
                            "editions": list(editions), "run_date": today, "started_at": started.isoformat(),
+                           "daily_limit": daily_limit,
                            "plan": {key: plan[key] for key in ("forecasts", "model_calls", "skipped")},
                            "replayable": len(plan["dates"]), "written": 0, "unchanged": 0, "not_ready": [],
                            "conflicts": [], "misses": [], "missing_inputs": {}, "stop_reason": None}
@@ -231,7 +243,7 @@ def run_replay(
         log["stop_reason"] = (f"不在可重播的時段（台北 {WINDOW[0]:%H:%M}～{WINDOW[1]:%H:%M}），"
                               "避開晨間版與晚間版")
     elif budget <= 0:
-        log["stop_reason"] = f"今天已寫滿 {DAILY_LIMIT} 份"
+        log["stop_reason"] = f"今天已寫滿 {daily_limit} 份"
     foreign_sources = fr.load_foreign_sources(data_root, seeds_root) if not log["stop_reason"] else {}
     ofr_once = _once(ofr_fetch) if ofr_fetch is not None and not log["stop_reason"] else None
     sources = oi.archive_sources(overseas_dir, root, write=False) if overseas_dir is not None else None
@@ -246,7 +258,7 @@ def run_replay(
             if edition == "morning" and session is None:
                 continue
             if log["written"] >= budget:
-                log["stop_reason"] = f"今天已寫滿 {DAILY_LIMIT} 份" if budget == remaining else "到了這次的份數上限"
+                log["stop_reason"] = f"今天已寫滿 {daily_limit} 份" if budget == remaining else "到了這次的份數上限"
                 break
             layer = (oi.build_layer(overseas_dir, edition=edition, base_date=day, session_date=session)
                      if overseas_dir is not None else None)
@@ -305,6 +317,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--agy-bin", type=Path)
     parser.add_argument("--fetched-at", help="這次資料抓取的時間（ISO 8601）")
     parser.add_argument("--max-forecasts", type=int)
+    parser.add_argument("--daily-limit", type=int, help=f"每天份數（同一天各次加起來的上限；沒給用 {DAILY_LIMIT}）")
     parser.add_argument("--edition", action="append", choices=list(fl.EDITIONS))
     parser.add_argument("--overseas-dir", type=Path)
     parser.add_argument("--data-root", type=Path, default=fr.DATA_ROOT)
@@ -318,7 +331,7 @@ def main(argv: list[str] | None = None) -> int:
                            start=args.start, end=args.end, editions=editions)
         summary = {"replayable": len(plan["dates"]), "from": plan["dates"][0] if plan["dates"] else None,
                    "to": plan["dates"][-1] if plan["dates"] else None, "forecasts": plan["forecasts"],
-                   "model_calls": plan["model_calls"], "daily_limit": DAILY_LIMIT,
+                   "model_calls": plan["model_calls"], "daily_limit": args.daily_limit or DAILY_LIMIT,
                    "skipped": {reason: {"days": len(days), "from": days[0], "to": days[-1]}
                                for reason, days in plan["skipped"].items()}}
         print(json.dumps(summary, ensure_ascii=False, indent=2))
@@ -327,7 +340,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("真的重播要給 --ledger、--agy-bin、--fetched-at")
     log = run_replay(args.analysis, ledger=args.ledger, method_path=args.method, model_bin=args.agy_bin,
                      model=args.model, start=args.start, end=args.end, fetched_at=args.fetched_at, editions=editions,
-                     max_forecasts=args.max_forecasts, overseas_dir=args.overseas_dir, data_root=args.data_root,
+                     max_forecasts=args.max_forecasts, daily_limit=args.daily_limit, overseas_dir=args.overseas_dir, data_root=args.data_root,
                      sql_output=args.sql_output, log_output=args.log_output,
                      ofr_fetch=market_layers.fetch_ofr)   # 本人 11-18 晚：OFR 寫之前直接抓（重播只抓一次）
     print(json.dumps({key: log[key] for key in ("replayable", "written", "unchanged", "misses", "missing_inputs",

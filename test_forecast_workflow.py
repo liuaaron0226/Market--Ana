@@ -201,7 +201,23 @@ class ReplayWorkflowTests(unittest.TestCase):
         self.assertIn('[ "$EVENT_NAME" = "schedule" ] && [ "$REPLAY_SCHEDULE" = "on" ]', mode)
         self.assertIn("inputs.start || '2026-04-01'", mode)
         self.assertIn("inputs.end || '2026-09-08'", mode)
-        self.assertIn("inputs.max_forecasts || '40'", mode)
+
+    def test_with_the_switch_off_the_schedule_skips_the_whole_job(self):
+        # 11-18 09:40Z 的排程（44278190346）開關是 off，卻照樣還原、補抓，期交所回錯就整次失敗。
+        # 開關沒開時排程什麼都不做（工作直接跳過），只有手動觸發會走到補抓與算天數。
+        job = re.search(r"\n  replay:\n(.*?)\n    steps:", self.source, re.S)
+        self.assertIsNotNone(job)
+        self.assertIn("if: github.event_name != 'schedule' || vars.MARKET_ANA_REPLAY_SCHEDULE == 'on'", job.group(1))
+
+    def test_how_many_a_day_is_a_setting_not_a_number_in_the_code(self):
+        # owner 11-19：每天重播幾份要能設定（repository variable），量完 Argon 用量再填；沒設時用程式裡的建議值。
+        mode = step(self.source, "決定執行模式並檢查機密")
+        self.assertIn("DAILY_LIMIT: ${{ vars.MARKET_ANA_REPLAY_DAILY_LIMIT }}", mode)
+        self.assertIn("inputs.max_forecasts", mode)
+        run = step(self.source, "重播並對帳")
+        self.assertIn("--daily-limit", run)
+        plan = step(self.source, "算可重播的日子（不呼叫模型）")
+        self.assertIn("--daily-limit", plan)
 
     def test_only_runs_by_hand_and_by_default_only_counts_the_days(self):
         self.assertIn("workflow_dispatch:", self.source)

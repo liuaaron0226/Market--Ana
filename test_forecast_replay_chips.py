@@ -107,6 +107,29 @@ class FetchTests(ChipsTestCase):
         chips.fetch(self.out, needed, http=again, now=lambda: "x", pause=0)
         self.assertEqual(again.requests, [])
 
+    def test_when_the_range_grows_by_a_day_only_that_day_is_fetched(self):
+        # 資料包每天往後推一天，需要補的範圍尾巴就多一天（11-17 抓到 05-21、11-18 要到 05-22）。
+        # 已存的期貨原件涵蓋到的日子不再重抓：只請求新多出來的那一天（11-18 就是整段重抓時期交所回錯）。
+        first = FakeHttp({"https://www.twse.com.tw/fund/BFI82U": bfi82u(-5),
+                          "https://www.taifex.com.tw/": taifex(["2026-03-27", "2026-03-30"])})
+        chips.fetch(self.out, ["2026-03-27", "2026-03-30"], http=first, now=lambda: "x", pause=0)
+        later = FakeHttp({"https://www.twse.com.tw/fund/BFI82U": bfi82u(-5),
+                          "https://www.taifex.com.tw/": taifex(["2026-03-31"])})
+        chips.fetch(self.out, ["2026-03-27", "2026-03-30", "2026-03-31"], http=later, now=lambda: "y", pause=0)
+        self.assertEqual([(method, url.split("?")[0][-6:]) for method, url, _ in later.requests],
+                         [("GET", "BFI82U"), ("POST", "teDown")])
+        self.assertEqual(later.requests[1][2], {"queryStartDate": "2026/03/31", "queryEndDate": "2026/03/31",
+                                                "commodityId": "TXF"})
+        days = [row["date"] for row in chips.load(self.out)["futures"]]
+        self.assertIn("2026-03-31", days)
+        self.assertEqual(len(days), len(set(days)))
+
+    def test_nothing_is_requested_when_saved_originals_already_cover_every_day(self):
+        chips.fetch(self.out, ["2026-03-30", "2026-03-31"], http=self.http(), now=lambda: "x", pause=0)
+        again = FakeHttp({})
+        chips.fetch(self.out, ["2026-03-30"], http=again, now=lambda: "y", pause=0)
+        self.assertEqual(again.requests, [])
+
     def test_a_day_twse_does_not_answer_ok_stops_without_saving_it(self):
         http = FakeHttp({"https://www.twse.com.tw/": json.dumps({"stat": "很抱歉，沒有符合條件的資料!"}).encode(),
                          "https://www.taifex.com.tw/": taifex(["2026-03-31"])})
