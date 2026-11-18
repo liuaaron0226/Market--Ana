@@ -456,7 +456,7 @@ def _validate(structured: Any, model_input: Mapping[str, Any]) -> tuple[dict[str
             return None, f"{key} 日落點不在清單內"
         for text_field, refs_field in (("reason", "reason_refs"), ("invalidation", "invalidation_refs")):
             problem = _text_problem(item[text_field], names=[level["name"] for level in model_input["candidates"]],
-                                    method_text=str(model_input.get("method_text") or ""))
+                                    method_text=_whitelist_corpus(model_input))
             if problem:
                 return None, f"{key} 日 {text_field}：{problem}"
             if refs_problem(item[refs_field], usable):
@@ -474,10 +474,16 @@ def _validate(structured: Any, model_input: Mapping[str, Any]) -> tuple[dict[str
     return {"regime": structured["regime"], "cells": rendered}, None
 
 
+def _whitelist_corpus(model_input: Mapping[str, Any]) -> str:
+    """數字白名單的來源：當份完整提示（規則＋輸入，含方法稿）。owner 11-19 轉本人「放寬檢查」：提示自己用的說法
+    （例如「兩線之間」「前一交易日」）照抄不算數字；量詞組合（三成、五張）另外照擋（ledger_core.text_problem）。"""
+    return "\n".join(_PROMPT_RULES) + "\n" + json.dumps(model_input, ensure_ascii=False)
+
+
 def _rejected(structured: Any, model_input: Mapping[str, Any]) -> dict[str, str]:
     """被數字檢查擋下的那一句原文（J 票，owner 11-19：不然之後查不出是哪個字）；找不到就不記。"""
     names = [level["name"] for level in model_input.get("candidates") or []]
-    method = str(model_input.get("method_text") or "")
+    method = _whitelist_corpus(model_input)
     for item in ((structured or {}).get("cells") or {}).values() if isinstance(structured, dict) else ():
         for field in ("reason", "invalidation"):
             text = item.get(field) if isinstance(item, dict) else None

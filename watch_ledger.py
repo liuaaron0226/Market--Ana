@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import re
 from collections.abc import Callable, Mapping, Sequence
 from datetime import date, datetime
@@ -476,8 +477,10 @@ def _validate(structured: Any, model_input: Mapping[str, Any]) -> tuple[dict[str
         return None, "觸發線放錯邊：「可以留意」要挑已經站上的，其餘要挑收盤上方的"
     if wrong["value"] >= trigger["value"]:
         return None, "看錯線不在觸發線下方"
+    # 數字白名單：當份完整提示（規則＋輸入，含方法稿），和大盤預測同一套（owner 11-19 轉本人「放寬檢查」）。
+    corpus = "\n".join(_prompt_rules(model_input["layers"])) + "\n" + json.dumps(model_input, ensure_ascii=False)
     problem = text_problem(structured["reason"], names=[level["name"] for level in model_input["candidates"] or []],
-                           method_text=str(model_input.get("method_text") or ""))
+                           method_text=corpus)
     if problem:
         return None, f"理由：{problem}"
     if refs_problem(structured["reason_refs"], by_id):

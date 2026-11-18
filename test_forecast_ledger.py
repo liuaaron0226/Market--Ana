@@ -957,6 +957,12 @@ class NamesInReasonTests(LedgerTestCase):
             self.assertEqual((record["kind"], record["miss_reason"]), ("miss", "answer_invalid"), text)
             self.assertIn("不得包含數字", record["attempts"][-1]["detail"])
 
+    def test_words_the_prompt_itself_uses_and_common_words_pass(self):
+        # owner 11-19 轉本人「放寬檢查」：白名單是當份完整提示（「兩線之間」是提示自己的說法）＋常見詞（一起、第一…）
+        answer = answer_a(**{"1": cell("ma5", "prev_low", "above", reason="量價一起看，預期收盤在兩線之間")})
+        record = self.write(responses=[envelope(answer)])["record"]
+        self.assertEqual((record["kind"], record["attempts"]), ("forecast", []))
+
     def test_the_refused_text_is_kept_in_the_attempts(self):
         # J 票（owner 11-19）：Actions 晨間乾跑兩次被擋，產物裡卻找不到被擋的原文；之後一律記下來
         answer = answer_a(**{"1": cell("ma5", "prev_low", "above", reason="跌破二十日線就轉弱")})

@@ -305,15 +305,31 @@ def text_problem(text: Any, *, names: Sequence[str] = (), method_text: str = "")
     if len(text) > TEXT_LIMIT:
         return "文字過長"
     masked = text
-    for form in _name_forms(names):
+    for form in [*_name_forms(names), *COMMON_NUMERAL_WORDS]:
         masked = masked.replace(form, _MASK)
     for at, character in enumerate(masked):
         if not _is_numeral(character):
             continue
+        if _counts_something(masked, at):
+            return "自由文字不得包含數字；價位請用候選編號"
         if character in CHINESE_NUMERAL_CHARS and method_text and _in_method_term(masked, at, method_text):
             continue
         return "自由文字不得包含數字；價位請用候選編號"
     return None
+
+
+# 第二輪（owner 11-19 轉本人「放寬檢查」）：常見、不帶數值的詞放行；數字後面接量詞（三成、五張、十點）一律擋，
+# 即使提示裡原樣有（新聞標題的「年增三成」照抄進理由也不行）。``method_text`` 由呼叫端給當份完整提示（規則＋輸入）。
+COMMON_NUMERAL_WORDS = ("一起", "一致", "一些", "一般", "一路", "一度", "一旦", "一再", "單一", "統一", "第一", "第二")
+_MEASURE_WORDS = frozenset("成張點元塊倍檔根天年月週周次分秒季%％")
+
+
+def _counts_something(text: str, at: int) -> bool:
+    """text[at] 起的這一串數字後面接的是量詞（不是「第…」那種序數）：就是一個數量。"""
+    end = at
+    while end < len(text) and _is_numeral(text[end]):
+        end += 1
+    return end < len(text) and text[end] in _MEASURE_WORDS and not (at > 0 and text[at - 1] == "第")
 
 
 def refs_problem(refs: Any, known: Mapping[str, Any]) -> bool:

@@ -221,6 +221,15 @@ class EveningTests(WatchRunTestCase):
         self.assertEqual(fresh["rewrite_today"], 1)
         self.assertEqual(sorted(path.name for path in self.ledger.rglob("*.json")), before)
 
+    def test_rewriting_after_the_deadline_still_calls_the_model(self):
+        # owner 11-19：Actions 上過了午夜才跑，晚間版的期限（基準日結束）已過，6 檔全是 deadline_passed。
+        # rewrite_today 只在乾跑：時鐘停在期限前一分鐘，模型照樣寫一次（新聞也只看那一刻以前的）。
+        self.earlier_judgment(BASE, code="2330")
+        after_midnight = at(LONG[22], 1, 0)
+        log = self.evening(watchlist=WATCHLIST[:1], dry_run=True, rewrite_today=True, now=after_midnight)
+        self.assertEqual((log["stocks"][0]["outcome"], log["stocks"][0]["kind"]), ("written", "judgment"))
+        self.assertEqual(log["rewrite_clock"], f"{BASE}T23:59:00+08:00")
+
     def test_rewriting_is_only_for_dry_runs(self):
         with self.assertRaises(ValueError):
             self.evening(rewrite_today=True)

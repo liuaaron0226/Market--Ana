@@ -547,7 +547,15 @@ def _run(ledger: Path, edition: str, watchlist: Sequence[Mapping[str, Any]], ind
     market = market_layer(forecast_ledger, base_date, edition)
     # 晨間版看得到開盤日早上（開盤前）才發的公告；排程在寫之前另抓一次當天的官方快照。
     news = source.announcements(codes, session_date or base_date)
+    rewrite_clock = None
     if rewrite_today:
+        # 乾跑看新輸入怎麼被讀：時鐘停在期限前一分鐘（晚間版是基準日 23:59、晨間版是開盤日 08:44），
+        # 過了期限才跑也照樣寫（owner 11-19：Actions 過午夜才跑，晚間版全是 deadline_passed）。新聞與同類股也只看那一刻以前的。
+        from ledger_core import deadline as ledger_deadline
+        latest = ledger_deadline(edition, base_date, session_date) - timedelta(minutes=1)
+        real_clock = clock
+        clock = lambda: min(real_clock(), latest)  # noqa: E731
+        rewrite_clock = latest.isoformat()
         # 只會在乾跑的暫存副本上（run_evening／run_morning 已擋住非乾跑）：拿掉這一天、這一版、關注中的股票已有的判斷，
         # 模型才會真的寫一次（帳本一檔一天一版只有一個檔案，已有正式判斷時照規矩是 unchanged／conflict、不呼叫模型）。
         removed = 0
@@ -559,7 +567,7 @@ def _run(ledger: Path, edition: str, watchlist: Sequence[Mapping[str, Any]], ind
     log: dict[str, Any] = {"schema": SCHEMA, "edition": edition, "dry_run": dry_run, "base_date": base_date,
                            **({"session_date": session_date} if session_date else {}),
                            "model": model, "started_at": clock().astimezone(TAIPEI).isoformat(), "watched": codes,
-                           **({"rewrite_today": removed} if rewrite_today else {})}
+                           **({"rewrite_today": removed, "rewrite_clock": rewrite_clock} if rewrite_today else {})}
     # 帳本裡有轉變日的每一檔（含已經關掉關注的）都要對帳，所以晚間版的行情要讀關注清單與帳本兩邊的代號。
     ledger_codes = sorted({record["code"] for record in wl.read_ledger(ledger)["judgments"]})
     loaded, load_errors = _load(source, [*codes, *ledger_codes], base_date, edition)

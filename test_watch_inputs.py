@@ -588,6 +588,11 @@ class NamesInWatchReasonTests(WatchLedgerTestCase):
         record = self.write(stock_input(), model=recording_model(self.bin, reply))["record"]
         self.assertEqual(record["kind"], "judgment")
 
+    def test_words_the_prompt_itself_uses_pass(self):
+        # 關注的提示裡有「第五與第二十個交易日」：照抄提示的說法放行，同一套白名單
+        record = self.write(stock_input(), model=recording_model(self.bin, answer(reason="一起看第二十個交易日的結果")))["record"]
+        self.assertEqual(record["kind"], "judgment")
+
     def test_the_refused_text_is_kept_in_the_attempts(self):
         record = self.write(stock_input(), model=recording_model(self.bin, answer(reason="跌破一百元就轉弱")))["record"]
         self.assertEqual(record["attempts"][-1]["rejected_text"], "跌破一百元就轉弱")

@@ -55,5 +55,34 @@ class AllowedNamesTests(unittest.TestCase):
         self.assertEqual(text_problem("量" * 161, names=NAMES, method_text=METHOD), "文字過長")
 
 
+# ---- 第二輪（owner 11-19 轉本人「放寬檢查」）：白名單擴大到當份完整提示、常見詞放行、量詞照擋 ----
+
+# 那一天（11/19 晨間）的候選名字與提示裡的一段（「兩線之間」是提示自己的說法）
+DAY_NAMES = ["五日線", "十日線", "月線", "年線", "前一交易日高點", "前一交易日低點", "布林下緣"]
+PROMPT = ("zone 只能是 above、between、below；照歷史亂猜：兩條線拉得越寬，「兩線之間」在歷史上本來就越常中。"
+          "candidates：前一交易日低點、前一交易日高點。新聞：營收年增三成、法人買超五張。" + METHOD)
+
+
+def check_day(text):
+    return text_problem(text, names=DAY_NAMES, method_text=PROMPT)
+
+
+class WiderWhitelistTests(unittest.TestCase):
+    def test_the_refused_sentence_of_the_actions_dry_run_passes(self):
+        # Actions 晨間乾跑 44359597670 第一次被擋的原文（owner 11-19 轉來）：沒有任何價位或數值
+        text = ("依第一頻道位置與量價一起看，基準日早盤開高後盤中回測前一交易日低點，尾盤收紅守在年線之上，但受制於五日線反壓。"
+                "外資連賣、投信轉買與前一交易日融資減少方向分歧，日韓股市收紅，新聞提到輝達財測帶動相關類股走揚僅作背景，"
+                "預期收盤在兩線之間。")
+        self.assertIsNone(check_day(text))
+
+    def test_common_words_with_a_numeral_pass(self):
+        for word in ("一起", "一致", "一些", "一般", "一路", "一度", "一旦", "一再", "單一", "統一", "第一", "第二"):
+            self.assertIsNone(check_day(f"量價{word}轉弱"), word)
+
+    def test_quantities_are_still_refused_even_if_the_prompt_has_them(self):
+        for text in ("營收年增三成", "法人買超五張", "反彈十點", "站上兩線之間 12 點", "跌破二十日線"):
+            self.assertEqual(check_day(text), BLOCKED, text)
+
+
 if __name__ == "__main__":
     unittest.main()
