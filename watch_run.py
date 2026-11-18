@@ -41,8 +41,9 @@ MORNING_REPLAY_CLOCK = "07:30:00"
 # 國外同類股與新聞標題依來源條款不放（Gemini 付費與否由本人決定；改了就換這一組、換輸入版本、重新起算）。
 # wyckoff_lpsy：H 票（本人 2026-11-18 追加）威科夫最後供應點，打開它＝新的輸入版本，和之前的紀錄分開對帳。
 # valuation、lending_eps、signals：I 票第二輪（本人 2026-11-18 晚「大盤＋自選股判斷」）估值、借券與季 EPS、個股五塊訊號。
+# intraday、headlines、peers：J 票（本人 2026-11-19 00:1x「富果、新聞來源、國外同類股都交給 Gemini 做詳細分析」）。
 LAYERS = ("technical", "bollinger", "wyckoff_lpsy", "sector", "margin", "valuation", "lending_eps", "signals",
-          "environment", "market", "news", "lessons")
+          "intraday", "environment", "market", "news", "headlines", "peers", "lessons")
 
 
 class Source(Protocol):
@@ -68,10 +69,19 @@ class LocalSource:
     ``root`` 是放 ``data/`` 的那一層（排程裡是 repo 根目錄，``state_sync restore --target .`` 還原的位置）；
     個股頁的計算（``twon_analysis``）固定讀程式旁邊的 ``data/``，所以兩者要是同一個地方。"""
 
-    def __init__(self, root: Path | str = ROOT, *, forecast_ledger: Path | str | None = None):
-        """``forecast_ledger``：環境層（匯率、美債）讀不到本機原件時，改讀預測帳本裡同一天、同一版的原件
+    def __init__(self, root: Path | str = ROOT, *, fugle: Any = None, query: Callable[[str], list[dict]] | None = None,
+                 owner_email: str = "", feeds: Callable[..., Any] | None = None,
+                 forecast_ledger: Path | str | None = None):
+        """``fugle``：富果行情（``licensed_inputs.Fugle``，沒有就是那一層缺）；``query``：網站資料庫的唯讀查詢
+        （新聞與國外同類股存在那裡，排程給 ``watch_news._wrangler_query``；沒有就是那兩層缺）。
+        ``forecast_ledger``：環境層（匯率、美債）讀不到本機原件時，改讀預測帳本裡同一天、同一版的原件
         （2026-11-19 查到工作集沒有那兩份）；只用寫判斷那一刻（``cutoff``，由排程在寫之前設好）以前抓到的。"""
         self.root = Path(root)
+        self.fugle, self.query, self.owner_email, self.feeds = fugle, query, owner_email, feeds
+        self.fugle_errors: dict[str, dict[str, str]] = {}
+        # 執行紀錄（乾跑時上傳成產物）：每一檔富果那一層有沒有值、是哪一天、缺哪幾部分。
+        self.fugle_status: dict[str, dict[str, Any]] = {}
+        self.licensed_errors: dict[str, str] = {}
         self.forecast_ledger = Path(forecast_ledger) if forecast_ledger else None
         self.cutoff: str | None = None
         self._industries: dict[str, tuple[str, str]] | None = None
@@ -157,6 +167,93 @@ class LocalSource:
             quarterly = self._fundamentals.as_of(code, base_date)["quarterly"]
         return watch_inputs.lending_eps_input(credit, quarterly, base_date)
 
+    def _intraday(self, code: str, base_date: str) -> dict[str, Any] | None:
+        """富果的基準日盤中資料（J 票）；回的不是基準日（舊日期、或已經進入新的一天）就是缺。"""
+        import licensed_inputs
+        layer, errors = licensed_inputs.fetch_stock_intraday(self.fugle, code, base_date)
+        if errors:
+            self.fugle_errors[code] = errors
+        self.fugle_status[code] = ({"status": "ok", "data_date": layer["data_date"], "missing": layer["missing"]}
+                                   if layer.get("status") == "ok" else {"status": "missing", "reason": layer.get("reason")})
+        return layer if layer.get("status") == "ok" else None
+
+    def licensed(self, codes: Sequence[str], *, base_date: str, before: str, cutoff: str) -> dict[str, dict[str, Any]]:
+        """J 票三層：富果盤中（只打關注中的股票）、新聞標題與國外同類股（網站資料庫唯讀查）。只用 cutoff（寫的那一刻）
+        以前已經抓到的；國外收盤只用 before（晚間版是基準日、晨間版是開盤日）以前的。抓不到的那一層是空的（缺）。"""
+        import licensed_inputs
+        self.fugle_errors, self.fugle_status, self.licensed_errors = {}, {}, {}
+        self.headline_counts: dict[str, dict[str, int]] = {}
+        out: dict[str, dict[str, Any]] = {code: {"intraday": self._intraday(code, base_date)} for code in codes}
+        safe = [code for code in codes if re.fullmatch(r"[0-9A-Za-z]{1,10}", code)]
+        industry_news = self._industry_news(safe, cutoff)
+        for code in safe:
+            if industry_news.get(code):
+                out[code]["news_headlines"] = industry_news[code]
+            # 執行紀錄（乾跑產物）用：逐檔新聞（Yahoo、中央社）幾則、產業新聞網站對到公司／產業各幾則
+            self.headline_counts[code] = {"own": 0,
+                                          "company": sum(item.get("match") == "company" for item in industry_news.get(code) or []),
+                                          "industry": sum(item.get("match") == "industry" for item in industry_news.get(code) or [])}
+        if self.query is None or not safe:
+            return out
+        listed = ",".join(f"'{code}'" for code in safe)
+        since = (datetime.fromisoformat(cutoff) - timedelta(days=licensed_inputs.HEADLINE_DAYS + 1)).astimezone(
+            TAIPEI).date().isoformat()
+        try:
+            rows = self.query("SELECT code, link, source, title, summary, published_at, fetched_at FROM watch_news "
+                              f"WHERE code IN ({listed}) AND published_at >= '{since}'")
+            for code in safe:
+                own = licensed_inputs.headline_items([row for row in rows if row.get("code") == code], cutoff=cutoff)
+                self.headline_counts[code]["own"] = len(own or [])
+                merged = (own or []) + (industry_news.get(code) or [])
+                out[code]["news_headlines"] = merged or None
+        except Exception as error:  # noqa: BLE001 — 查不到只讓新聞那一層缺
+            self.licensed_errors["headlines"] = type(error).__name__
+        try:
+            from watch_news import _EMAIL
+            if not _EMAIL.fullmatch(self.owner_email or ""):
+                raise ValueError("owner_email")
+            peers = self.query("SELECT code, symbol, name, market FROM watch_peers "
+                               f"WHERE lower(email) = lower('{self.owner_email}') AND status = 'confirmed' "
+                               f"AND code IN ({listed})")
+            symbols = sorted({row["symbol"] for row in peers if re.fullmatch(r"[0-9A-Za-z.^_-]{1,20}", row["symbol"])})
+            quotes = self.query("SELECT symbol, date, close, fetched_at FROM overseas_quotes WHERE symbol IN ("
+                                + ",".join(f"'{symbol}'" for symbol in symbols) + ")") if symbols else []
+            for code in safe:
+                out[code]["peers"] = licensed_inputs.peers_layer(
+                    [row for row in peers if row.get("code") == code and row["symbol"] in symbols], quotes,
+                    before=before, cutoff=cutoff)
+        except Exception as error:  # noqa: BLE001 — 查不到只讓同類股那一層缺
+            self.licensed_errors["peers"] = type(error).__name__
+        return out
+
+    def _industry_news(self, codes: Sequence[str], cutoff: str) -> dict[str, list[dict[str, Any]]]:
+        """本人 2026-11-19「有幾個網站是專門在整理不同產業的消息」：經濟日報、工商時報、鉅亨網的 RSS（寫之前抓一次），
+        依公司名稱、代號與官方產業別對到每一檔（news_feeds.match_stock），每檔最多 INDUSTRY_NEWS_LIMIT 則。"""
+        import licensed_inputs
+        import news_feeds
+        import watch_inputs
+        if self.feeds is None or not codes:
+            return {}
+        try:
+            rows, errors = self.feeds(news_feeds.INDUSTRY_FEEDS, now=cutoff)
+        except Exception as error:  # noqa: BLE001
+            self.licensed_errors["industry_news"] = type(error).__name__
+            return {}
+        if errors:
+            self.licensed_errors["industry_news"] = dict(errors)
+        if self._industries is None:
+            try:
+                self._industries = watch_inputs.catalog_industries(self.root)
+            except Exception:  # noqa: BLE001 — 名錄讀不到就只靠代號比對
+                self._industries = {}
+        out = {}
+        for code in codes:
+            name, industry = self._industries.get(code) or (None, None)
+            matched = news_feeds.match_stock(rows, code=code, name=name, industry=industry)
+            out[code] = licensed_inputs.headline_items(matched, cutoff=cutoff,
+                                                       limit=licensed_inputs.INDUSTRY_NEWS_LIMIT) or []
+        return out
+
     def _sector(self, code: str, base_date: str) -> dict[str, Any] | None:
         import watch_inputs
         if self._industries is None:
@@ -241,7 +338,8 @@ def stock_input(item: Mapping[str, Any], data: Mapping[str, Any], *, base_date: 
         "index_daily": index_daily, "method_text": method_text,
         "technical": data.get("technical"), "wyckoff_lpsy": data.get("wyckoff_lpsy"), "sector": data.get("sector"),
         "margin": data.get("margin"), "valuation": data.get("valuation"), "lending_eps": data.get("lending_eps"),
-        "signals": data.get("signals"),
+        "signals": data.get("signals"), "intraday": data.get("intraday"),
+        "news_headlines": data.get("news_headlines"), "peers": data.get("peers"),
         "environment": data.get("environment"), "market_forecast": market, "announcements": announcements,
         "data_cutoffs": {**(data.get("data_cutoffs") or {}), "index": index_daily[-1]["date"] if index_daily else None},
     }
@@ -346,6 +444,7 @@ def run_evening(
     log_output: Path | str | None = None,
     call_budget: int = CALL_BUDGET,
     timeout_seconds: float = 360,
+    rewrite_today: bool = False,
 ) -> dict[str, Any]:
     """寫晚間版：先對帳、補記整晚沒跑的漏記，再依打開關注的先後一檔一檔寫。
 
@@ -354,6 +453,8 @@ def run_evening(
     """
     if as_of and not dry_run:
         raise ValueError("重播某一天（as_of）只能在乾跑使用，正式帳本不補寫過去的判斷")
+    if rewrite_today and not dry_run:
+        raise ValueError("rewrite_today 只能在乾跑使用：它會在暫存副本裡拿掉當天已有的判斷")
     clock = _frozen(as_of, REPLAY_CLOCK) if as_of else (now or default_now)
     index_daily = _index_daily(load_analysis(analysis_path))
     if as_of:
@@ -365,7 +466,7 @@ def run_evening(
         target, "evening", watchlist, index_daily, base_date, session_date=None, forecast_ledger=forecast_ledger,
         method_path=method_path, model_bin=model_bin, source=source, model=model, clock=clock, dry_run=dry_run,
         sql_output=None if dry_run else sql_output, log_output=log_output, call_budget=call_budget,
-        timeout_seconds=timeout_seconds))
+        timeout_seconds=timeout_seconds, replay=bool(as_of), rewrite_today=rewrite_today))
 
 
 def run_morning(
@@ -387,6 +488,7 @@ def run_morning(
     log_output: Path | str | None = None,
     call_budget: int = CALL_BUDGET,
     timeout_seconds: float = 360,
+    rewrite_today: bool = False,
 ) -> dict[str, Any]:
     """寫晨間版：開盤日 ``session_date`` 早上、開盤前 15 分鐘之前鎖定；基準日是前一個台股交易日（和大盤預測晨間版同一套）。
 
@@ -396,6 +498,8 @@ def run_morning(
     """
     if replay and not dry_run:
         raise ValueError("重播某個開盤日只能在乾跑使用，正式帳本不補寫過去的判斷")
+    if rewrite_today and not dry_run:
+        raise ValueError("rewrite_today 只能在乾跑使用：它會在暫存副本裡拿掉當天已有的判斷")
     clock = _frozen(session_date, MORNING_REPLAY_CLOCK) if replay else (now or default_now)
     if not trading_day_status(session_date, holidays):
         log = {"schema": SCHEMA, "edition": "morning", "dry_run": dry_run, "session_date": session_date,
@@ -414,7 +518,7 @@ def run_morning(
         target, "morning", watchlist, index_daily, base_date, session_date=session_date,
         forecast_ledger=forecast_ledger, method_path=method_path, model_bin=model_bin, source=source, model=model,
         clock=clock, dry_run=dry_run, sql_output=None if dry_run else sql_output, log_output=log_output,
-        call_budget=call_budget, timeout_seconds=timeout_seconds))
+        call_budget=call_budget, timeout_seconds=timeout_seconds, replay=replay, rewrite_today=rewrite_today))
 
 
 def _in_ledger(ledger: Path | str, dry_run: bool, work: Callable[[Path], dict[str, Any]]) -> dict[str, Any]:
@@ -443,20 +547,54 @@ def _run(ledger: Path, edition: str, watchlist: Sequence[Mapping[str, Any]], ind
          base_date: str, *, session_date: str | None, forecast_ledger: Path | str | None, method_path: Path | str,
          model_bin: Path | str, source: Source, model: str, clock: Callable[[], datetime], dry_run: bool,
          sql_output: Path | str | None, log_output: Path | str | None, call_budget: int,
-         timeout_seconds: float) -> dict[str, Any]:
+         timeout_seconds: float, replay: bool = False, rewrite_today: bool = False) -> dict[str, Any]:
     method_text = Path(method_path).read_text(encoding="utf-8")
     codes = [str(item["code"]) for item in watchlist]
     market = market_layer(forecast_ledger, base_date, edition)
     # 晨間版看得到開盤日早上（開盤前）才發的公告；排程在寫之前另抓一次當天的官方快照。
     news = source.announcements(codes, session_date or base_date)
+    rewrite_clock = None
+    if rewrite_today:
+        # 乾跑看新輸入怎麼被讀：時鐘停在期限前一分鐘（晚間版是基準日 23:59、晨間版是開盤日 08:44），
+        # 過了期限才跑也照樣寫（owner 11-19：Actions 過午夜才跑，晚間版全是 deadline_passed）。新聞與同類股也只看那一刻以前的。
+        from ledger_core import deadline as ledger_deadline
+        latest = ledger_deadline(edition, base_date, session_date) - timedelta(minutes=1)
+        real_clock = clock
+        clock = lambda: min(real_clock(), latest)  # noqa: E731
+        rewrite_clock = latest.isoformat()
+        # 只會在乾跑的暫存副本上（run_evening／run_morning 已擋住非乾跑）：拿掉這一天、這一版、關注中的股票已有的判斷，
+        # 模型才會真的寫一次（帳本一檔一天一版只有一個檔案，已有正式判斷時照規矩是 unchanged／conflict、不呼叫模型）。
+        removed = 0
+        for code in codes:
+            path = ledger / "judgments" / f"{base_date}__{edition}__{code}.json"
+            if path.exists():
+                path.unlink()
+                removed += 1
     log: dict[str, Any] = {"schema": SCHEMA, "edition": edition, "dry_run": dry_run, "base_date": base_date,
                            **({"session_date": session_date} if session_date else {}),
-                           "model": model, "started_at": clock().astimezone(TAIPEI).isoformat(), "watched": codes}
+                           "model": model, "started_at": clock().astimezone(TAIPEI).isoformat(), "watched": codes,
+                           **({"rewrite_today": removed, "rewrite_clock": rewrite_clock} if rewrite_today else {})}
     # 帳本裡有轉變日的每一檔（含已經關掉關注的）都要對帳，所以晚間版的行情要讀關注清單與帳本兩邊的代號。
     ledger_codes = sorted({record["code"] for record in wl.read_ledger(ledger)["judgments"]})
     if hasattr(source, "cutoff"):
         source.cutoff = clock().astimezone(TAIPEI).isoformat()   # 環境層只用這一刻以前抓到的原件
     loaded, load_errors = _load(source, [*codes, *ledger_codes], base_date, edition)
+    # J 票：新聞標題與國外同類股（只用寫的那一刻以前已經有的；國外收盤只用開盤日——晚間版是基準日——以前的）。
+    licensed = getattr(source, "licensed", None)
+    if replay:
+        # 重播（乾跑的舊日期）：沒有富果盤中、新聞與同類股當時的樣子，一律缺，不用今天的資料冒充。
+        for code in codes:
+            loaded.setdefault(code, {}).update(intraday=None, news_headlines=None, peers=None)
+        log["licensed_skipped"] = "重播：舊日期沒有富果盤中、新聞與國外同類股的歷史，三層一律缺"
+    elif licensed is not None:
+        extra = licensed(codes, base_date=base_date, before=session_date or base_date,
+                         cutoff=clock().astimezone(TAIPEI).isoformat())
+        for code in codes:
+            loaded.setdefault(code, {}).update(extra.get(code) or {})
+        log["licensed_errors"] = dict(getattr(source, "licensed_errors", {}) or {})
+        log["fugle_errors"] = dict(getattr(source, "fugle_errors", {}) or {})
+        log["fugle_status"] = dict(getattr(source, "fugle_status", {}) or {})
+        log["headline_counts"] = dict(getattr(source, "headline_counts", {}) or {})
     if edition == "evening":
         # 先對帳再寫：今天到期的格子先對完；今天這份最早的到期日在明天，寫完不必再對。
         log["reconciliation"] = {key: len(value) for key, value in wl.reconcile(ledger, index_daily, loaded).items()}
@@ -804,6 +942,8 @@ def build_parser() -> argparse.ArgumentParser:
     judge.add_argument("--session-date", help="晨間版：開盤日（台北今天）")
     judge.add_argument("--dry-run", action="store_true", help="只在暫存副本上寫，不碰帳本、不輸出資料庫指令檔")
     judge.add_argument("--as-of", help="乾跑時重播：晚間版是已發布的某一天，晨間版是開盤日（須等於 --session-date）")
+    judge.add_argument("--rewrite-today", action="store_true",
+                       help="只在乾跑：暫存副本裡先拿掉當天這一版已有的判斷，讓模型真的寫一次（看新輸入怎麼被讀）")
     judge.add_argument("--call-budget", type=int, default=CALL_BUDGET)
     judge.add_argument("--sql-output", type=Path)
     judge.add_argument("--log-output", type=Path)
@@ -868,12 +1008,19 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"watched": len(rows)}, ensure_ascii=False))
         return 0
 
+    import licensed_inputs
+    import news_feeds
+    from watch_news import _wrangler_query
     watchlist = json.loads(args.watchlist.read_text(encoding="utf-8"))
     common = dict(watchlist=watchlist, ledger=args.ledger, forecast_ledger=args.forecast_ledger,
                   method_path=args.method, model_bin=args.agy_bin, model=args.model,
-                  source=LocalSource(forecast_ledger=args.forecast_ledger),
+                  # J 票：富果金鑰 FUGLE_API_KEY；新聞與國外同類股從網站資料庫唯讀查（和關注清單同一個連線）；
+                  # 環境層讀預測帳本裡的原件（43db220）。
+                  source=LocalSource(fugle=licensed_inputs.fugle_from_env(), query=_wrangler_query,
+                                     owner_email=os.environ.get("OWNER_EMAIL", ""), feeds=news_feeds.fetch,
+                                     forecast_ledger=args.forecast_ledger),
                   dry_run=args.dry_run, sql_output=args.sql_output, log_output=args.log_output,
-                  call_budget=args.call_budget)
+                  call_budget=args.call_budget, rewrite_today=args.rewrite_today)
     if args.edition == "morning":
         if not args.session_date:
             parser.error("晨間版要給 --session-date")

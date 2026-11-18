@@ -33,6 +33,7 @@ import forecast_replay_chips as chips
 import forecast_run as fr
 import forecast_store
 import market_layers
+import order_flow
 import overseas_inputs as oi
 from ledger_core import method_version_of
 
@@ -205,6 +206,7 @@ def run_replay(
     timeout_seconds: float = 360,
     now: Callable[[], datetime] | None = None,
     ofr_fetch: Callable[[], list[dict[str, Any]]] | None = None,
+    order_stats: Any = None,
 ) -> dict[str, Any]:
     """依日期先後重播；這一次最多新寫 ``max_forecasts`` 份，而且同一天（台北）各次加起來不超過 ``daily_limit``
     （每天份數，排程從 repository variable MARKET_ANA_REPLAY_DAILY_LIMIT 帶進來；沒給就用 ``DAILY_LIMIT``）。
@@ -266,7 +268,9 @@ def run_replay(
             data = fr.build_day_input(trimmed, method_text, layer, foreign_sources, edition=edition,
                                       session_date=session,
                                       market_sources=market_layers.load_sources(
-                                          data_root, analysis_path, base_date=day, ofr=ofr_once))
+                                          data_root, analysis_path, base_date=day, ofr=ofr_once),
+                                      licensed={**fr.REPLAY_LICENSED,
+                                                "order_flow": fr.order_flow_layer(order_stats, day, dates)[0]})
             if sources is not None:
                 data["sources"] = sources
             frozen = _frozen(session, MORNING_CLOCK) if session else _frozen(day, REPLAY_CLOCK)
@@ -349,7 +353,8 @@ def main(argv: list[str] | None = None) -> int:
                      model=args.model, start=args.start, end=args.end, fetched_at=args.fetched_at, editions=editions,
                      max_forecasts=args.max_forecasts, daily_limit=args.daily_limit, overseas_dir=args.overseas_dir, data_root=args.data_root,
                      sql_output=args.sql_output, log_output=args.log_output,
-                     ofr_fetch=market_layers.fetch_ofr)   # 本人 11-18 晚：OFR 寫之前直接抓（重播只抓一次）
+                     ofr_fetch=market_layers.fetch_ofr,
+                     order_stats=order_flow.TwseOrderStats())   # 證交所有歷史：重播照樣抓那一天的委買委賣   # 本人 11-18 晚：OFR 寫之前直接抓（重播只抓一次）
     print(json.dumps({key: log[key] for key in ("replayable", "written", "unchanged", "misses", "missing_inputs",
                                                 "stop_reason", "reconciliation")}, ensure_ascii=False))
     return 0

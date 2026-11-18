@@ -61,6 +61,10 @@ class FakeSource:
             "valuation": {"data_date": base_date, "pe": {"value": 20.0}},
             "lending_eps": {"lending": {"data_date": base_date, "balance_lots": 10}, "eps": None},
             "signals": {"data_date": base_date, "blocks": ["ma_alignment"], "ma_alignment": {"summary": "多頭排列"}},
+            "intraday": {"status": "ok", "data_date": base_date, "summary": {"close": 100}},
+            "news_headlines": [{"id": "h_1", "source": "中央社", "title": "同業擴產", "summary": "",
+                                "published_at": f"{base_date}T15:00:00+08:00"}],
+            "peers": {"peers": [{"symbol": "NVDA", "close": 120.0}], "no_data": []},
             "data_cutoffs": {"stock": base_date},
         }
 
@@ -199,6 +203,36 @@ class EveningTests(WatchRunTestCase):
         self.assertEqual((item["trigger_line"]["id"], item["wrong_line"]["id"]),
                          ("swing_high_20260921", "swing_low_20260925"))
         self.assertEqual(item["reason"], "量縮整理等待表態")
+        # J 票：重播舊日期沒有富果盤中、新聞與同類股當時的樣子，三層一律缺（不用今天的資料冒充）
+        self.assertEqual(item["missing_layers"][:1], ["intraday"])
+        self.assertTrue({"intraday", "headlines", "peers"} <= set(item["missing_layers"]))
+        self.assertIn("重播", log["licensed_skipped"])
+
+    def test_a_dry_run_can_rewrite_a_day_that_already_has_judgments_without_touching_the_ledger(self):
+        # J 票（owner 11-19）：Actions 乾跑的那天已經有正式判斷，照帳本規矩 unchanged／conflict、不會呼叫模型；
+        # rewrite_today 只在乾跑的暫存副本裡先拿掉那一天那一版的判斷，模型就會真的寫，真的帳本一個檔案都不動。
+        self.earlier_judgment(BASE, code="2330")
+        before = sorted(path.name for path in self.ledger.rglob("*.json"))
+        model = self.model()
+        plain = self.evening(watchlist=WATCHLIST[:1], dry_run=True, model=model)
+        self.assertNotEqual(plain["stocks"][0]["outcome"], "written")
+        fresh = self.evening(watchlist=WATCHLIST[:1], dry_run=True, rewrite_today=True)
+        self.assertEqual(fresh["stocks"][0]["outcome"], "written")
+        self.assertEqual(fresh["rewrite_today"], 1)
+        self.assertEqual(sorted(path.name for path in self.ledger.rglob("*.json")), before)
+
+    def test_rewriting_after_the_deadline_still_calls_the_model(self):
+        # owner 11-19：Actions 上過了午夜才跑，晚間版的期限（基準日結束）已過，6 檔全是 deadline_passed。
+        # rewrite_today 只在乾跑：時鐘停在期限前一分鐘，模型照樣寫一次（新聞也只看那一刻以前的）。
+        self.earlier_judgment(BASE, code="2330")
+        after_midnight = at(LONG[22], 1, 0)
+        log = self.evening(watchlist=WATCHLIST[:1], dry_run=True, rewrite_today=True, now=after_midnight)
+        self.assertEqual((log["stocks"][0]["outcome"], log["stocks"][0]["kind"]), ("written", "judgment"))
+        self.assertEqual(log["rewrite_clock"], f"{BASE}T23:59:00+08:00")
+
+    def test_rewriting_is_only_for_dry_runs(self):
+        with self.assertRaises(ValueError):
+            self.evening(rewrite_today=True)
 
     def test_a_stock_whose_data_cannot_be_read_waits_without_stopping_the_others(self):
         # 2330 的行情讀不到：期限前不寫（之後可以重跑），2317 照寫。
@@ -307,11 +341,12 @@ class OfficialStartTests(WatchRunTestCase):
         self.assertEqual({key: r["run_mode"] for key, r in records.items()}, {
             (BASE, "evening"): "trial", (BASE, "morning"): "trial",
             (LONG[22], "evening"): "official", (LONG[22], "morning"): "official"})
-        # 這一組輸入：官方資料算出的各層＋教訓層（H 票加最後供應點）；國外同類股與新聞標題依條款不放
+        # 這一組輸入：官方資料算出的各層＋教訓層（H 票加最後供應點）；J 票（本人 2026-11-19 00:1x「富果、新聞來源、
+        # 國外同類股都交給 Gemini 做詳細分析」）起富果、新聞標題、國外同類股也交，沒有被條款擋下的項目
         self.assertEqual(records[(LONG[22], "evening")]["layers"],
                          ["technical", "bollinger", "wyckoff_lpsy", "sector", "margin", "valuation", "lending_eps",
-                          "signals", "environment", "market", "news", "lessons"])
-        self.assertEqual(set(records[(LONG[22], "evening")]["withheld_inputs"]), {"peers", "headlines"})
+                          "signals", "intraday", "environment", "market", "news", "headlines", "peers", "lessons"])
+        self.assertEqual(records[(LONG[22], "evening")]["withheld_inputs"], {})
         sql = (self.tmp / f"evening-{LONG[22]}.sql").read_text(encoding="utf-8")
         self.assertIn(f'"official_since":"{LONG[22]}"', sql)
 
@@ -521,6 +556,86 @@ class SourceCheckTests(unittest.TestCase):
             ["ok", "not_found", "quota", "ok", "not_found", "eodhd_limit"])
         self.assertEqual(eodhd.asked, ["005930.KO", "000660.KO"])
         self.assertEqual(wr.source_check({"massive": None, "eodhd": None}, today=BASE)("NVDA.US", "US"), "no_key")
+
+
+class LicensedSourceTests(unittest.TestCase):
+    """J 票：新聞標題與國外同類股從網站資料庫唯讀查；只用寫的那一刻以前已經抓到的。"""
+
+    def query(self, sql):
+        self.asked.append(sql)
+        if "FROM watch_news" in sql:
+            return [{"code": "2330", "link": "https://www.cna.com.tw/a", "source": "cna-finance", "title": "同業擴產",
+                     "summary": "摘要", "published_at": "2026-11-06T06:00:00Z", "fetched_at": "2026-11-06T09:00:00Z"},
+                    {"code": "2330", "link": "https://www.cna.com.tw/b", "source": "cna-finance", "title": "之後才抓到",
+                     "summary": "", "published_at": "2026-11-06T10:00:00Z", "fetched_at": "2026-11-06T13:00:00Z"}]
+        if "FROM watch_peers" in sql:
+            return [{"code": "2330", "symbol": "NVDA", "name": "NVIDIA", "market": "US"}]
+        if "FROM overseas_quotes" in sql:
+            return [{"symbol": "NVDA", "date": "2026-11-04", "close": 100.0, "fetched_at": "2026-11-05T00:00:00Z"},
+                    {"symbol": "NVDA", "date": "2026-11-05", "close": 110.0, "fetched_at": "2026-11-06T00:00:00Z"},
+                    {"symbol": "NVDA", "date": "2026-11-06", "close": 999.0, "fetched_at": "2026-11-06T22:00:00Z"}]
+        return []
+
+    def test_headlines_and_peers_up_to_the_moment_of_writing(self):
+        self.asked = []
+        source = wr.LocalSource(query=self.query, owner_email="owner@example.com")
+        # 晚間版 2026-11-06 20:00（台北）＝ 12:00Z
+        found = source.licensed(["2330"], base_date="2026-11-06", before="2026-11-06",
+                                cutoff="2026-11-06T20:00:00+08:00")["2330"]
+        self.assertEqual([item["title"] for item in found["news_headlines"]], ["同業擴產"])
+        # 美國 11-05 收 110（11-06 那一筆在基準日當天、而且 22:00Z 才抓到，看不到）；1 日 110 ÷ 100 − 1 ＝ 10%
+        self.assertEqual(found["peers"]["peers"][0]["close"], 110.0)
+        self.assertEqual(found["peers"]["peers"][0]["change_1d_pct"], 10.0)
+        self.assertTrue(all("DELETE" not in sql and "INSERT" not in sql for sql in self.asked))   # 只查不寫
+
+    def test_taiwan_industry_feeds_are_matched_to_each_stock(self):
+        # 本人 2026-11-19：加入整理產業消息的網站；依公司名稱、代號與官方產業別對到關注股
+        rows = [{"source": "ctee-industry", "link": "c1", "title": "半導體設備交期拉長", "summary": "",
+                 "published_at": "2026-11-06T05:00:00Z", "fetched_at": "2026-11-06T12:00:00Z"},
+                {"source": "udn-industry", "link": "u1", "title": "航運運價回升", "summary": "",
+                 "published_at": "2026-11-06T05:30:00Z", "fetched_at": "2026-11-06T12:00:00Z"}]
+        asked = []
+        source = wr.LocalSource(feeds=lambda names, *, now: (asked.append(tuple(names)) or rows, {}))
+        source._industries = {"2330": ("台積電", "半導體業")}
+        found = source.licensed(["2330"], base_date="2026-11-06", before="2026-11-06",
+                                cutoff="2026-11-06T20:00:00+08:00")["2330"]
+        self.assertEqual(asked, [("udn-industry", "ctee-industry", "cnyes-tw-stock")])
+        self.assertEqual([(item["title"], item["match"], item["source"]) for item in found["news_headlines"]],
+                         [("半導體設備交期拉長", "industry", "工商時報 產業")])
+        self.assertEqual(source.headline_counts["2330"], {"own": 0, "company": 0, "industry": 1})
+
+    def test_without_a_connection_both_layers_are_missing(self):
+        found = wr.LocalSource().licensed(["2330"], base_date="2026-11-06", before="2026-11-06",
+                                          cutoff="2026-11-06T20:00:00+08:00")
+        self.assertEqual(found, {"2330": {"intraday": None}})   # 沒有富果金鑰也沒有連線：三層都缺
+
+    def test_without_a_fugle_key_the_intraday_layer_is_missing(self):
+        source = wr.LocalSource()
+        self.assertIsNone(source._intraday("2330", "2026-11-06"))
+        self.assertEqual(source.fugle_errors["2330"], {"fugle": "no_api_key"})
+        self.assertEqual(source.fugle_status["2330"]["status"], "missing")
+
+    def test_the_fugle_status_says_which_day_and_which_parts(self):
+        import test_licensed_inputs as tl
+
+        class Fake:
+            def candles(self, code):
+                return tl.candles(tl.ROWS)
+
+            def quote(self, code):
+                return tl.quote()
+
+            def hourly(self, code, start, end):
+                raise TimeoutError("timed out")
+
+        source = wr.LocalSource(fugle=Fake())
+        self.assertEqual(source._intraday("2330", tl.BASE)["data_date"], tl.BASE)
+        self.assertEqual(source.fugle_status["2330"], {"status": "ok", "data_date": tl.BASE,
+                                                       "missing": ["hourly_history"]})
+
+    def test_the_schedule_opens_the_three_layers(self):
+        for layer in ("intraday", "headlines", "peers"):
+            self.assertIn(layer, wr.LAYERS)
 
 
 class LocalSourceEnvironmentTests(unittest.TestCase):

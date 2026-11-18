@@ -66,21 +66,39 @@ def _verify(record: Mapping[str, Any], path: Path) -> None:
         raise LedgerIntegrityError(f"{path} 輸入雜湊不符：存檔的輸入被改動")
 
 
+# 帳本檔名含輸入版本，層名越加越長：Windows 上完整路徑超過 260 字元就開不了檔（雲端排程是 Linux，不受影響）。
+# 長路徑在 Windows 改用延伸長度寫法（\\?\ 開頭的絕對路徑）；其他系統、短路徑原樣不動。
+_WINDOWS_PATH_LIMIT = 240
+
+
+def long_path(path: Path) -> Path:
+    if os.name != "nt":
+        return Path(path)
+    text = os.path.abspath(str(path))   # 收掉 ..（延伸長度寫法不會幫忙整理路徑）
+    if len(text) < _WINDOWS_PATH_LIMIT:
+        return Path(path)
+    return Path(text if text.startswith("\\\\?\\") else "\\\\?\\" + text)
+
+
+def exists(path: Path) -> bool:
+    return long_path(Path(path)).exists()
+
+
 def _against_existing(path: Path, record: Mapping[str, Any]) -> str:
-    existing = json.loads(path.read_text(encoding="utf-8"))
+    existing = json.loads(long_path(path).read_text(encoding="utf-8"))
     return "unchanged" if existing.get("record_sha256") == record["record_sha256"] else "conflict"
 
 
 def append(path: Path, record: Mapping[str, Any]) -> str:
     """只新增：檔案不存在才寫；已存在時同內容回 ``unchanged``、不同內容回 ``conflict``，都不覆寫。"""
-    if path.exists():
+    if exists(path):
         return _against_existing(path, record)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    partial = path.with_name(f".{path.name}.{os.getpid()}.partial")
+    long_path(path.parent).mkdir(parents=True, exist_ok=True)
+    partial = long_path(path.with_name(f".{path.name}.{os.getpid()}.partial"))
     partial.write_bytes(json.dumps(record, ensure_ascii=False, sort_keys=True, indent=2).encode("utf-8") + b"\n")
     try:
         # os.link 在目標已存在時失敗：兩個寫入者競爭時後者不會蓋掉前者。
-        os.link(partial, path)
+        os.link(partial, long_path(path))
     except FileExistsError:
         return _against_existing(path, record)
     finally:
@@ -89,7 +107,7 @@ def append(path: Path, record: Mapping[str, Any]) -> str:
 
 
 def read_record(path: Path) -> dict[str, Any]:
-    record = json.loads(path.read_text(encoding="utf-8"))
+    record = json.loads(long_path(path).read_text(encoding="utf-8"))
     _verify(record, path)
     return record
 
@@ -287,15 +305,31 @@ def text_problem(text: Any, *, names: Sequence[str] = (), method_text: str = "")
     if len(text) > TEXT_LIMIT:
         return "文字過長"
     masked = text
-    for form in _name_forms(names):
+    for form in [*_name_forms(names), *COMMON_NUMERAL_WORDS]:
         masked = masked.replace(form, _MASK)
     for at, character in enumerate(masked):
         if not _is_numeral(character):
             continue
+        if _counts_something(masked, at):
+            return "自由文字不得包含數字；價位請用候選編號"
         if character in CHINESE_NUMERAL_CHARS and method_text and _in_method_term(masked, at, method_text):
             continue
         return "自由文字不得包含數字；價位請用候選編號"
     return None
+
+
+# 第二輪（owner 11-19 轉本人「放寬檢查」）：常見、不帶數值的詞放行；數字後面接量詞（三成、五張、十點）一律擋，
+# 即使提示裡原樣有（新聞標題的「年增三成」照抄進理由也不行）。``method_text`` 由呼叫端給當份完整提示（規則＋輸入）。
+COMMON_NUMERAL_WORDS = ("一起", "一致", "一些", "一般", "一路", "一度", "一旦", "一再", "單一", "統一", "第一", "第二")
+_MEASURE_WORDS = frozenset("成張點元塊倍檔根天年月週周次分秒季%％")
+
+
+def _counts_something(text: str, at: int) -> bool:
+    """text[at] 起的這一串數字後面接的是量詞（不是「第…」那種序數）：就是一個數量。"""
+    end = at
+    while end < len(text) and _is_numeral(text[end]):
+        end += 1
+    return end < len(text) and text[end] in _MEASURE_WORDS and not (at > 0 and text[at - 1] == "第")
 
 
 def refs_problem(refs: Any, known: Mapping[str, Any]) -> bool:

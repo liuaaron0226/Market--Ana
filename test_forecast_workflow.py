@@ -87,8 +87,10 @@ class ForecastWorkflowTests(unittest.TestCase):
         self.assertIn("--method MARKET_METHOD.md", run)
         self.assertIn("1b4850599cce73a17f94ffb422df3bf9531531b77dbddc40c1a435e0c2c16807", self.source)
         secrets = set(re.findall(r"secrets\.([A-Z0-9_]+)", self.source))
+        # FUGLE_API_KEY：J 票，本人 2026-11-19 00:1x「富果、新聞來源、國外同類股都交給 Gemini 做詳細分析」
         self.assertEqual(secrets, {"CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "R2_ACCESS_KEY_ID",
-                                   "R2_SECRET_ACCESS_KEY", "AGY_LOGIN_BUNDLE", "GITHUB_TOKEN", "EODHD_API_KEY"})
+                                   "R2_SECRET_ACCESS_KEY", "AGY_LOGIN_BUNDLE", "GITHUB_TOKEN", "EODHD_API_KEY",
+                                   "FUGLE_API_KEY"})
 
     def test_fetches_overseas_originals_without_blocking_and_hands_them_to_the_run(self):
         fetch = step(self.source, "抓海外原件（不擋預測）")
@@ -176,8 +178,9 @@ class MorningWorkflowTests(unittest.TestCase):
         self.assertLess(self.source.index("帳本原件存回 R2（只新增）"), self.source.index("發布到網站資料庫"))
         self.assertIn("1b4850599cce73a17f94ffb422df3bf9531531b77dbddc40c1a435e0c2c16807", self.source)
         secrets = set(re.findall(r"secrets\.([A-Z0-9_]+)", self.source))
+        # FUGLE_API_KEY：J 票，本人 2026-11-19 00:1x「富果、新聞來源、國外同類股都交給 Gemini 做詳細分析」
         self.assertEqual(secrets, {"CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "R2_ACCESS_KEY_ID",
-                                   "R2_SECRET_ACCESS_KEY", "AGY_LOGIN_BUNDLE", "EODHD_API_KEY"})
+                                   "R2_SECRET_ACCESS_KEY", "AGY_LOGIN_BUNDLE", "EODHD_API_KEY", "FUGLE_API_KEY"})
 
     def test_always_keeps_a_run_record_and_cleans_up_the_login(self):
         self.assertIn("forecast-morning-${{ github.run_id }}", self.source)

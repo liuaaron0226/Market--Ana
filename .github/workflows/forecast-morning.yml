@@ -168,6 +168,10 @@ jobs:
 
       - name: 寫晨間版預測
         env:
+          # J 票（本人 2026-11-19）：富果加權指數盤中（沒有這個機密就那一層寫缺）、網站資料庫的大環境新聞（唯讀查）。
+          FUGLE_API_KEY: ${{ secrets.FUGLE_API_KEY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           HOME: ${{ runner.temp }}/agy-home
           SESSION_DATE: ${{ steps.mode.outputs.session_date }}
           AS_OF: ${{ steps.mode.outputs.as_of }}

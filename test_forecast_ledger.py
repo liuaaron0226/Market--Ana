@@ -447,7 +447,7 @@ class RecordMetadataTests(LedgerTestCase):
         self.assertEqual(record["base_date"], "2026-09-30")
         self.assertEqual(record["edition"], "evening")
         self.assertEqual(record["method_version"], "0.2")
-        self.assertRegex(record["input_version"], r"^base\+overseas\+foreign_flow\+wyckoff_lpsy\+market_margin\+otc_index\+sector_share\+screens\+ofr_stress\+similar\+lessons-v1-[0-9a-f]{8}$")
+        self.assertRegex(record["input_version"], r"^base\+overseas\+foreign_flow\+wyckoff_lpsy\+market_margin\+otc_index\+sector_share\+screens\+ofr_stress\+intraday\+news\+order_flow\+similar\+lessons-v1-[0-9a-f]{8}$")
         self.assertEqual(record["model"], "test-model")
         self.assertRegex(record["input_sha256"], r"^[0-9a-f]{64}$")
         self.assertEqual(record["locked_at"], "2026-09-30T17:00:00+08:00")
@@ -483,7 +483,7 @@ class ModelSeriesTests(LedgerTestCase):
         self.assertEqual(fl.INPUT_VERSION, fl.input_version(fl.MODEL))
         self.assertNotEqual(fl.input_version("gemini-4-argon"), fl.input_version("gemini-3.8-flash"))
         self.assertNotIn(self.FLASH_ERA, {fl.input_version("gemini-4-argon"), fl.input_version("gemini-3.8-flash")})
-        self.assertRegex(fl.input_version("gemini-4-argon"), r"^base\+overseas\+foreign_flow\+wyckoff_lpsy\+market_margin\+otc_index\+sector_share\+screens\+ofr_stress\+similar\+lessons-v1-[0-9a-f]{8}$")
+        self.assertRegex(fl.input_version("gemini-4-argon"), r"^base\+overseas\+foreign_flow\+wyckoff_lpsy\+market_margin\+otc_index\+sector_share\+screens\+ofr_stress\+intraday\+news\+order_flow\+similar\+lessons-v1-[0-9a-f]{8}$")
 
     def test_a_record_carries_the_input_version_of_the_model_that_wrote_it(self):
         record = self.write(model_name="gemini-4-argon")["record"]
@@ -858,6 +858,41 @@ class PromptRulesTests(LedgerTestCase):
         self.assertIn("照歷史亂猜", prompt)
 
 
+class LicensedLayersTests(LedgerTestCase):
+    """J 票：本人 2026-11-19 00:1x「富果、新聞來源、國外同類股都交給 Gemini 做詳細分析」——加權指數的富果分時與
+    大環境新聞交給模型（推翻 11-15、11-16 富果與新聞不進提示的限制）。"""
+
+    def test_given_layers_reach_the_model_and_absent_ones_say_missing(self):
+        data = day_input()
+        data["news"] = {"status": "ok", "items": [{"id": "h_1", "source": "中央社", "title": "美股收高",
+                                                        "summary": "", "published_at": f"{BASE_A}T18:00:00+08:00"}]}
+        seen = self.tmp / "prompt.txt"
+        script = self.bin / "recording_model.py"
+        payload = json.dumps({"event": "result", "result": envelope(answer_a())}, ensure_ascii=False)
+        script.write_text(
+            "import json,sys\nfrom pathlib import Path\n"
+            "prompt=json.loads(sys.stdin.buffer.readline().decode('utf-8'))['message']['content']\n"
+            f"Path({str(seen)!r}).write_text(prompt, encoding='utf-8')\n"
+            f"sys.stdout.buffer.write({payload.encode('utf-8')!r})\n", encoding="utf-8")
+        record = self.write(data, model=script)["record"]
+        self.assertEqual(record["kind"], "forecast")
+        self.assertEqual(record["input"]["news"]["items"][0]["title"], "美股收高")
+        self.assertIn("美股收高", seen.read_text(encoding="utf-8"))
+        self.assertEqual(record["input"]["intraday"]["status"], "missing")
+
+    def test_the_layers_are_a_new_input_version_and_the_prompt_explains_them(self):
+        self.assertIn("intraday", fl.PARAMETERS["layers"])
+        self.assertIn("news", fl.PARAMETERS["layers"])
+        self.assertNotEqual(fl.input_version("gemini-4-argon"),
+                            "base+overseas+foreign_flow+wyckoff_lpsy+market_margin+otc_index+sector_share+screens"
+                            "+ofr_stress+similar+lessons-v1-74371474")
+        rules = "".join(fl._PROMPT_RULES)
+        for words in ("intraday 是", "news 是", "不能單獨決定方向", "沒有全文", "不得把標題當成事實"):
+            self.assertIn(words, rules)
+        # 「沒給的資料（例如新聞…）」那一句改掉：新聞現在有給
+        self.assertNotIn("例如新聞", rules)
+
+
 class MarketLayersTests(LedgerTestCase):
     """I 票：大盤融資融券、櫃買指數、產業成交比重、選股快照與資金輪動、OFR 金融壓力（本人 2026-11-18 晚選「大盤＋自選股判斷」）。"""
 
@@ -878,7 +913,7 @@ class MarketLayersTests(LedgerTestCase):
             self.assertIn(name, fl.PARAMETERS["layers"])
         self.assertRegex(fl.input_version("gemini-4-argon"),
                          r"^base\+overseas\+foreign_flow\+wyckoff_lpsy\+market_margin\+otc_index\+sector_share\+screens"
-                         r"\+ofr_stress\+similar\+lessons-v1-[0-9a-f]{8}$")
+                         r"\+ofr_stress\+intraday\+news\+order_flow\+similar\+lessons-v1-[0-9a-f]{8}$")
         rules = "".join(fl._PROMPT_RULES)
         # 融資現在有給了：「沒給的資料（例如融資…）」那一句要改，換成融資的讀法與維持率不給。
         self.assertNotIn("例如融資", rules)
@@ -921,6 +956,18 @@ class NamesInReasonTests(LedgerTestCase):
             record = self.write(responses=[envelope(answer), envelope(answer)], root=self.tmp / f"ledger-{number}")["record"]
             self.assertEqual((record["kind"], record["miss_reason"]), ("miss", "answer_invalid"), text)
             self.assertIn("不得包含數字", record["attempts"][-1]["detail"])
+
+    def test_words_the_prompt_itself_uses_and_common_words_pass(self):
+        # owner 11-19 轉本人「放寬檢查」：白名單是當份完整提示（「兩線之間」是提示自己的說法）＋常見詞（一起、第一…）
+        answer = answer_a(**{"1": cell("ma5", "prev_low", "above", reason="量價一起看，預期收盤在兩線之間")})
+        record = self.write(responses=[envelope(answer)])["record"]
+        self.assertEqual((record["kind"], record["attempts"]), ("forecast", []))
+
+    def test_the_refused_text_is_kept_in_the_attempts(self):
+        # J 票（owner 11-19）：Actions 晨間乾跑兩次被擋，產物裡卻找不到被擋的原文；之後一律記下來
+        answer = answer_a(**{"1": cell("ma5", "prev_low", "above", reason="跌破二十日線就轉弱")})
+        record = self.write(responses=[envelope(answer), envelope(answer)])["record"]
+        self.assertEqual(record["attempts"][-1]["rejected_text"], "跌破二十日線就轉弱")
 
     def test_the_prompt_tells_the_model_the_exception(self):
         rules = "".join(fl._PROMPT_RULES)

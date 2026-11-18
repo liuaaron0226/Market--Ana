@@ -484,6 +484,112 @@ class ForeignFlowLayerTests(RunTestCase):
                                                           "dollar_and_twd_vs_foreign", "futures_net_position"])
 
 
+class LicensedRunTests(MorningTestCase):
+    """J 票：晚間、晨間版寫之前抓加權指數的富果分時、查大環境新聞；只用寫的那一刻以前已經有的。"""
+
+    def fake_fugle(self, day):
+        class Fake:
+            def candles(self, symbol):
+                assert symbol == "IX0001"
+                return {"date": day, "data": [
+                    {"date": f"{day}T09:00:00.000+08:00", "open": 100, "high": 101, "low": 99, "close": 100},
+                    {"date": f"{day}T13:30:00.000+08:00", "open": 100, "high": 103, "low": 100, "close": 102}]}
+        return Fake()
+
+    def news(self, rows):
+        return lambda sql: rows if "FROM watch_news" in sql and "code = ''" in sql else []
+
+    def test_evening_gets_the_base_dates_intraday_and_earlier_news(self):
+        rows = [{"code": "", "link": "a", "source": "cna-finance", "title": "美股收高", "summary": "",
+                 "published_at": f"{BASE}T05:00:00Z", "fetched_at": f"{BASE}T06:00:00Z"},
+                {"code": "", "link": "b", "source": "cna-finance", "title": "寫完之後才抓到", "summary": "",
+                 "published_at": f"{BASE}T09:00:00Z", "fetched_at": f"{BASE}T10:00:00Z"}]
+        result = self.run_evening(fugle=self.fake_fugle(BASE), news_query=self.news(rows))   # 時鐘 17:40（09:40Z）
+        self.assertEqual(result["outcome"], "written")
+        record = fl.read_ledger(self.ledger)["forecasts"][0]
+        self.assertEqual(record["input"]["intraday"]["summary"]["close"], 102)
+        # 執行紀錄（乾跑時上傳成產物）看得出富果那一層有值、是哪一天的
+        self.assertEqual(result["licensed"]["intraday"], {"status": "ok", "data_date": BASE})
+        self.assertEqual(result["licensed"]["news"]["status"], "ok")
+        self.assertEqual([item["title"] for item in record["input"]["news"]["items"]], ["美股收高"])
+
+    def test_a_dry_run_replay_of_an_earlier_day_never_fetches_and_says_why(self):
+        # 乾跑重播舊日期：富果與新聞一律缺（不用今天的資料冒充），也不去抓
+        calls = []
+
+        class Counting:
+            def candles(self, symbol):
+                calls.append(symbol)
+                return {}
+
+        result = self.run_evening(dry_run=True, as_of=DATES[-2], fugle=Counting(), news_query=lambda sql: calls.append(sql))
+        self.assertEqual(calls, [])
+        self.assertEqual(result["licensed"]["intraday"]["status"], "missing")
+        self.assertIn("重播", result["licensed"]["news"]["reason"])
+
+    def test_the_us_papers_join_the_market_news(self):
+        # 本人 2026-11-19：加入美國前幾大報社；寫之前直接抓 RSS，只用寫的那一刻以前發布的
+        us = [{"source": "wsj-markets", "link": "w", "title": "Stocks fall", "summary": "",
+               "published_at": f"{BASE}T03:00:00Z", "fetched_at": f"{BASE}T09:40:00Z"}]
+        asked = []
+
+        def feeds(names, *, now):
+            asked.append(tuple(names))
+            return us, {}
+
+        result = self.run_evening(news_query=self.news([]), feeds=feeds)
+        record = fl.read_ledger(self.ledger)["forecasts"][0]
+        self.assertEqual(asked, [("cnbc-markets", "nyt-business", "wsj-markets")])
+        self.assertEqual([item["title"] for item in record["input"]["news"]["us_items"]], ["Stocks fall"])
+        self.assertEqual(record["input"]["news"]["us_items"][0]["source"], "華爾街日報 市場")
+        # 執行紀錄（乾跑產物）不含完整輸入：新聞的筆數直接寫在 licensed.news
+        self.assertEqual((result["licensed"]["news"]["items"], result["licensed"]["news"]["us_items"]), (0, 1))
+        self.assertEqual(result["licensed"]["news"]["status"], "ok")
+
+    def fake_order_stats(self):
+        asked = []
+
+        class Fake:
+            def layer(self, base_date, earlier_dates):
+                asked.append((base_date, tuple(earlier_dates)))
+                return {"status": "ok", "data_date": base_date, "qty_ratio": 1.25}, {}
+        return Fake(), asked
+
+    def test_the_order_flow_layer_uses_the_base_date_and_the_three_days_before_it(self):
+        # 本人 2026-11-19 題 1「要找」：證交所每 5 秒委託成交統計，基準日與前三個交易日
+        stats, asked = self.fake_order_stats()
+        result = self.run_evening(order_stats=stats)
+        record = fl.read_ledger(self.ledger)["forecasts"][0]
+        self.assertEqual(asked, [(BASE, tuple(DATES[-4:-1]))])
+        self.assertEqual(record["input"]["order_flow"]["qty_ratio"], 1.25)
+        self.assertEqual(result["licensed"]["order_flow"], {"status": "ok", "data_date": BASE})
+
+    def test_the_morning_order_flow_never_asks_for_the_session_day(self):
+        stats, asked = self.fake_order_stats()
+        self.run_morning(order_stats=stats)
+        self.assertEqual(asked, [(BASE, tuple(DATES[-4:-1]))])   # 開盤日 SESSION 不在裡面
+
+    def test_a_dry_run_replay_still_uses_the_official_history_of_that_day(self):
+        stats, asked = self.fake_order_stats()
+        result = self.run_evening(dry_run=True, as_of=DATES[-2], order_stats=stats)
+        self.assertEqual(asked, [(DATES[-2], tuple(DATES[-5:-2]))])
+        self.assertEqual(result["licensed"]["order_flow"]["status"], "ok")
+        self.assertEqual(result["licensed"]["intraday"]["status"], "missing")   # 富果沒有歷史，照舊寫缺
+
+    def test_morning_never_sees_the_session_days_intraday(self):
+        # 晨間版：富果回的是開盤日（例如時鐘之後已經進入新的一天）就整塊缺，不會看到開盤日的盤中
+        result = self.run_morning(fugle=self.fake_fugle(SESSION))
+        self.assertEqual(result["outcome"], "written")
+        record = fl.read_ledger(self.ledger)["forecasts"][0]
+        self.assertEqual(record["input"]["intraday"]["status"], "missing")
+        self.assertIn("intraday", {item["key"] for item in record["missing_inputs"]})
+
+    def test_without_a_key_or_a_connection_both_are_missing_and_the_forecast_is_written(self):
+        result = self.run_evening()
+        self.assertEqual(result["outcome"], "written")
+        self.assertTrue({"intraday", "news"} <= set(result["licensed_missing"]))
+
+
 class MarketLayersRunTests(MorningTestCase):
     """I 票：晚間、晨間版都從工作集讀大盤五層（融資讀 analysis-data.js 旁邊的 chips-data.js）。"""
 

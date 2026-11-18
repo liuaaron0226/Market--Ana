@@ -14,10 +14,11 @@
   const EDITION = { evening: '晚間版', morning: '晨間版' };
   const VIEWS = { judgment: '判斷', score: '成績', history: '回看' };
   const HORIZONS = [5, 20];
-  // 判斷缺了哪幾層時顯示的中文名；帳本新增一層就要在這裡補（H 票 wyckoff_lpsy、I 票四層、I 票第二輪三層）。
+  // 判斷缺了哪幾層時顯示的中文名；帳本新增一層就要在這裡補（H 票 wyckoff_lpsy、I 票四層、I 票第二輪三層、J 票兩層）。
   const LAYER = {
     technical: '技術面', bollinger: '布林通道', wyckoff_lpsy: '威科夫最後供應點', sector: '同產業', margin: '融資融券',
     valuation: '估值', lending_eps: '借券與季 EPS', signals: '個股五塊訊號',
+    intraday: '富果盤中', headlines: '新聞標題',
     environment: '匯率與美債利率', market: '大盤預測', news: '官方公告', peers: '國外同類股', lessons: '過去對帳',
   };
   const MISS = {
