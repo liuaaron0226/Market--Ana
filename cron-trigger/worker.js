@@ -24,6 +24,10 @@ export const JOBS = {
   "30 12": { workflow: "daily-update.yml", slot: "30 12 * * 1-5", inputs: { dry_run: "false" } },  // 20:30
   // 公司重大訊息的每日原件（個股頁事實區塊 D 票，本人 2026-11-16）：官方快照只留前一天，所以每天都抓、含週末。
   "0 0": { workflow: "announcements.yml", slot: "0 0 * * *", inputs: {} },                         // 08:00
+  // 晨間版大盤預測（本人 11-18 回報 K 線一直「漏記」）：GitHub 的 schedule 晚了 4～5 小時才跑，都過了 08:45 的期限，
+  // 改由這裡準時觸發。台北週一至週五 07:20＝UTC 前一天 23:20（週日到週四）；送出的日期是台北的開盤日。
+  // 休市日由 forecast_run.py 依證交所休市日曆判斷，不寫。自選股關注的晨間判斷接在它後面（watch-ledger 的 workflow_run）。
+  "20 23": { workflow: "forecast-morning.yml", slot: "20 23 * * 0-4", weekday: "SUN-THU", inputs: { dry_run: "false" } },
 };
 
 // 台北日期（YYYY-MM-DD）：dispatch 一律帶日期，不讓 runner 自己猜。

@@ -371,6 +371,31 @@ class NominationTests(unittest.TestCase):
                                  owner_email="owner@example.com", model_bin=model, model="test-model",
                                  now=clock(at(BASE, 18, 0)), check=self.check, **kwargs)
 
+    def test_nominees_go_straight_into_the_list_unless_korea_and_index_room_is_used_up(self):
+        # 本人 11-18「國外同類股直接預設都幫我加入，不用我再確認」：提名直接成為名單（confirmed）。
+        # 韓股與指數另有全部關注股合計 12 檔的上限（每日額度）：滿了那一檔才留在「提名・還沒確認」。
+        import sqlite3
+        result = self.nominate(fake_model(self.tmp, [envelope(nomination())]))
+        db = sqlite3.connect(":memory:")
+        db.executescript(
+            "CREATE TABLE user_watchlist (email TEXT, code TEXT, watching INTEGER);"
+            "CREATE TABLE watch_peers (email TEXT, code TEXT, symbol TEXT, name TEXT, market TEXT, status TEXT, reason TEXT,"
+            " added_by TEXT, updated_at TEXT, PRIMARY KEY (email, code, symbol));"
+            "CREATE TABLE watch_peer_events (email TEXT, code TEXT, symbol TEXT, name TEXT, action TEXT, at TEXT);"
+            "INSERT INTO user_watchlist VALUES ('owner@example.com', '2330', 1), ('owner@example.com', '3661', 1);")
+        db.executescript(result["sql"])
+        rows = dict(db.execute("SELECT symbol, status FROM watch_peers WHERE code = '2330'").fetchall())
+        self.assertEqual(rows, {"NVDA.US": "confirmed", "INTC.US": "confirmed", "005930.KO": "confirmed"})
+
+        full = sqlite3.connect(":memory:")
+        full.executescript(db.execute("SELECT group_concat(sql, ';') FROM sqlite_master WHERE type = 'table'").fetchone()[0] + ";")
+        full.execute("INSERT INTO user_watchlist VALUES ('owner@example.com', '2330', 1), ('owner@example.com', '3661', 1)")
+        full.executemany("INSERT INTO watch_peers VALUES ('owner@example.com', '3661', ?, 'x', 'KR', 'confirmed', NULL, 'owner', 'x')",
+                         [(f"{n:06d}.KO",) for n in range(12)])
+        full.executescript(result["sql"])
+        rows = dict(full.execute("SELECT symbol, status FROM watch_peers WHERE code = '2330'").fetchall())
+        self.assertEqual(rows, {"NVDA.US": "confirmed", "INTC.US": "confirmed", "005930.KO": "nominated"})
+
     def test_lists_only_nominees_whose_quotes_the_source_can_fetch_and_records_them_as_nominated(self):
         result = self.nominate(fake_model(self.tmp, [envelope(nomination())]))
 
@@ -381,8 +406,8 @@ class NominationTests(unittest.TestCase):
         self.assertEqual({peer["symbol"]: peer["excluded"] for peer in item["excluded"]},
                          {"8035.TSE": "no_source", "ZZZZ.US": "not_found"})
         sql = result["sql"]
-        self.assertEqual(sql.count("INSERT INTO watch_peers"), 3)
-        self.assertIn("'nominated'", sql)
+        self.assertEqual(sql.count("INSERT INTO watch_peers"), 4)  # 韓股那一檔多一句「額度滿了才留提名」
+        self.assertIn("'confirmed'", sql)
         self.assertIn("'gemini'", sql)
         self.assertIn("先進製程的大客戶", sql)
         self.assertEqual(sql.count("INSERT INTO watch_peer_events"), 3)
@@ -431,7 +456,7 @@ class NominationTests(unittest.TestCase):
 
         self.assertEqual(calls(self.tmp), 0)
         self.assertEqual([peer["symbol"] for peer in second["stocks"][0]["listed"]], ["NVDA.US", "INTC.US", "005930.KO"])
-        self.assertEqual(second["sql"].count("INSERT INTO watch_peers"), 3)
+        self.assertEqual(second["sql"].count("INSERT INTO watch_peers"), 4)  # 三檔；韓股那一檔另有額度滿時的提名句
 
     def test_after_three_days_of_failed_checks_the_list_is_locked_with_what_could_be_checked(self):
         self.check = lambda symbol, market: "network" if market == "KR" else ("not_found" if symbol == "ZZZZ.US" else "ok")

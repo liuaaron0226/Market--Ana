@@ -59,12 +59,17 @@ test("大盤法人副圖的刻度也是億元", () => {
   });
   const range = { start: 0, end: 2, geo: { l: 0, pw: 200, step: 100 },
     candles: [{ foreign: -911.88 }, { foreign: 300 }] };
-  ChartStudies.prototype._drawInstitutional.call({ volumeKind: "amount", chart: {}, _drawCrosshair() {}, _drawPicked() {} }, context, 260, 120, range, "foreign");
+  ChartStudies.prototype._drawInstitutional.call({ volumeKind: "amount", chart: {}, _axisText: ChartStudies.prototype._axisText, _drawCrosshair() {}, _drawPicked() {} }, context, 260, 120, range, "foreign");
   assert.deepEqual(texts, ["912億", "0", "−912億"]);
   texts.length = 0;
-  ChartStudies.prototype._drawInstitutional.call({ volumeKind: "volume", chart: {}, _drawCrosshair() {}, _drawPicked() {} }, context, 260, 120,
+  ChartStudies.prototype._drawInstitutional.call({ volumeKind: "volume", chart: {}, _axisText: ChartStudies.prototype._axisText, _drawCrosshair() {}, _drawPicked() {} }, context, 260, 120,
     { ...range, candles: [{ foreign: -5_000_000 }, { foreign: 1_000_000 }] }, "foreign");
   assert.deepEqual(texts, ["5,000張", "0", "−5,000張"]);
+  // 券商版面（主圖 inlineAxis，本人 11-17）：沒有右側欄，刻度寫在圖裡面右邊，數字一樣
+  texts.length = 0;
+  ChartStudies.prototype._drawInstitutional.call({ volumeKind: "amount", chart: {}, _axisText: ChartStudies.prototype._axisText, _drawCrosshair() {}, _drawPicked() {} }, context, 260, 120,
+    { ...range, geo: { ...range.geo, pw: 258, inline: true } }, "foreign");
+  assert.deepEqual(texts, ["912億", "0", "−912億"]);
 });
 
 test("把官方三大法人淨額接到同一天的大盤日 K 上，單位換成億元", () => {

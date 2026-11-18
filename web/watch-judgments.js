@@ -53,12 +53,18 @@
   }
 
   // 圖上的兩條線（tone 是設計變數名）。觸發線一律金色；碰到了只換標籤字並加粗，不換顏色。
+  // 關卡是均線（id 是 ma 加天數，例如 MA20）就回傳天數：日 K 上畫成整條均線（本人 11-17「你應該是給我完整的趨勢線」）
+  const maOf = line => { const m = /^ma(\d+)$/.exec((line && line.id) || ''); return m ? Number(m[1]) : undefined; };
+
+  // short 是圖上方的名稱：均線類寫 MA 加天數（角色寫在後面的小字），其他寫角色；role 是角色（觸發／已到／看錯）
   function lineSpecs(record, reached) {
     if (!record || record.kind !== 'judgment') return [];
+    const trigger = maOf(record.trigger_line), wrong = maOf(record.wrong_line), role = reached ? '已到' : '觸發';
     return [
-      { value: record.trigger_line.value, label: `觸發線 ${record.trigger_line.name}`, short: reached ? '已到' : '觸發',
+      { value: record.trigger_line.value, label: `觸發線 ${record.trigger_line.name}`, short: trigger ? `MA${trigger}` : role, role, ma: trigger,
         tone: '--gold', pos: 'above', ...(reached ? { strong: true } : {}) },
-      { value: record.wrong_line.value, label: `看錯線 ${record.wrong_line.name}`, short: '看錯', tone: '--down', pos: 'below' },
+      { value: record.wrong_line.value, label: `看錯線 ${record.wrong_line.name}`, short: wrong ? `MA${wrong}` : '看錯', role: '看錯', ma: wrong,
+        tone: '--down', pos: 'below' },
     ];
   }
 
@@ -146,7 +152,11 @@
   function overlays(period) {
     if (!['daily', 'weekly', 'monthly'].includes(period)) return [];
     const record = current();
-    return lineSpecs(record, isReached() && record === newest()).map(({ tone, ...line }) => ({ ...line, color: color(tone) }));
+    // 均線是日 K 算的：週 K、月 K 上不畫成整條（那是週線、月線的均線，不是同一條），照舊畫那一個價，
+    // 名稱也退回寫角色（不把一個價格標成 MA20）
+    const daily = period === 'daily';
+    return lineSpecs(record, isReached() && record === newest()).map(({ tone, ma, ...line }) => ({
+      ...line, ...(daily && ma ? { ma } : {}), ...(!daily && ma ? { short: line.role } : {}), color: color(tone) }));
   }
 
   function onLive(payload) {

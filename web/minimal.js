@@ -71,6 +71,8 @@
     upper: $('upperValue'),
     lower: $('lowerValue'),
     lineUpper: $('lineUpper'),
+    chartLegend: $('chartLegend'),
+    legendNames: $('legendNames'),
     lineLower: $('lineLower'),
     point: $('currentPoint'),
     marker: $('selectedCandleMarker'),
@@ -533,6 +535,12 @@
       volumeKind: 'amount',
       leftRail: marketLabelRail,
       overlayLabels: 'tags',
+      // 本人 2026-11-17（附券商 K 線截圖）：左右不留價格欄、K 棒畫滿整個寬度，刻度寫在圖裡；
+      // 名稱、顏色與目前數值寫在圖上方（這一頁的 #legendNames）；放大時上下範圍只看 K 棒；每畫一次（十字線移動）更新數值
+      inlineAxis: true,
+      legend: false,
+      fitCandles: true,
+      onDraw: () => renderLegend(),
       minViewCount: 10,
       onSelect: (index, anchor) => selectCandle(index, anchor, false),
       onClear: () => { selectedIndex = -1; clearedByChart = true; els.marker.hidden = true; els.mobileDetails.hidden = true; },
@@ -544,6 +552,10 @@
       height: () => Math.max(250, (els.chartStage.clientHeight || 360) - (els.chartHost.offsetTop || 0))
     });
     chart.canvas.setAttribute('aria-describedby', 'chartSummary');
+    // 自己設定的均線（本人 11-17：點上方那一行的均線名稱打開設定；不設上限、顏色自己挑；和個股頁共用一組）
+    applyMaLines(window.MaLines.read());
+    maSettings = window.MaSettings.mount({ host: els.chartStage, opener: els.legendNames, onChange: applyMaLines });
+    window.MaLines.watch(applyMaLines);   // 個股頁改了（別的分頁、或按上一頁回來）：圖跟著換
     bindCandleSelection();
     chart.canvas.addEventListener('wheel', () => requestAnimationFrame(enforceCandleHitTarget));
     chart.canvas.addEventListener('pointerup', () => requestAnimationFrame(enforceCandleHitTarget));
@@ -570,8 +582,8 @@
     instance.opts.liveLast = liveLast;
     instance.showMacd = period !== 'daily' && !isMobile();
     const desiredCount = period === 'monthly' ? 60 : period === 'weekly' ? 70 : period === 'h60' ? 80 : isMinutePeriod(period) ? Math.min(candles.length, 120) : 70;
-    // 右側價格欄寬：軸上價籤模式（收盤與預測線）約 78～100px，取已畫過的實際值；第一次畫之前用 100 保守估。
-    const priceRail = instance.geo ? Math.max(64, instance.canvas.clientWidth - instance.geo.l - instance.geo.pw) : 100;
+    // 右側價格欄寬：券商版面（inlineAxis）不留欄，只有 2px
+    const priceRail = instance.opts.inlineAxis ? 2 : instance.geo ? Math.max(64, instance.canvas.clientWidth - instance.geo.l - instance.geo.pw) : 100;
     const plotWidth = Math.max(0, els.chartStage.clientWidth - marketLabelRail() - priceRail);
     const touchSafeCount = Math.max(10, Math.floor(plotWidth / 44));
     const count = Math.min(candles.length, isMobile() ? desiredCount : Math.min(desiredCount, touchSafeCount));
@@ -631,31 +643,31 @@
     element.style.top = `${y}px`;
   }
 
-  // 手機：收復／防守按鈕放到畫布下方操作列（不蓋 K 棒）；桌面維持貼在線旁。
-  function placeLineButtons() {
-    const target = isMobile() ? els.chartActions : els.chartStage;
-    [els.lineUpper, els.lineLower].forEach(button => {
-      if (button.parentElement !== target) target.prepend(button);
-      if (isMobile()) button.style.top = '';
-    });
-    if (els.lineUpper.parentElement === els.chartActions && els.lineUpper.nextElementSibling !== els.lineLower) els.lineUpper.after(els.lineLower);
+  // 均線的天數與顏色交給圖（顏色給 CSS 變數名稱，換深淺色主題時圖自己取新的值）
+  let maSettings = null;
+  function applyMaLines(lines) {
+    if (chart) chart.setMaPeriods(lines.map(line => line.period), lines.map(line => window.MaLines.tokenOf(line.color)));
   }
 
+  // 圖上方那一行：均線、布林、預測的轉強線／轉弱線的名稱（顏色和圖上的線一樣）＋目前的數值與方向
+  // （本人 11-17 券商版面：數值不再掛在圖右側；選了某一天就是那一天的值）。
+  // 收復線、防守線的名稱與數值已經在合成一顆的那顆鍵上，不重複寫。內容一樣就不重畫
+  function renderLegend() {
+    if (!chart) return;
+    window.ChartLegend.render(els.legendNames, chart.legendItems());
+    // K 線從這一行下面開始畫：手機上可能排成兩行，量實際的高度
+    const height = Math.ceil(els.chartLegend.getBoundingClientRect().height);
+    if (els.chartStage.style.getPropertyValue('--legend-h') !== `${height}px`) {
+      els.chartStage.style.setProperty('--legend-h', `${height}px`);
+      requestAnimationFrame(() => chart.draw());
+    }
+  }
+
+
   function updateOverlayControls() {
-    placeLineButtons();
+    renderLegend();
     const g = visibleGeometry();
     if (!g) return;
-    let upperTop = Math.max(48, Math.min(g.H - 50, g.y(UPPER) - 22));
-    let lowerTop = Math.max(48, Math.min(g.H - 50, g.y(LOWER) - 22));
-    if (Math.abs(lowerTop - upperTop) < 54) {
-      const middle = (upperTop + lowerTop) / 2;
-      upperTop = Math.max(48, Math.min(g.H - 104, middle - 27));
-      lowerTop = Math.min(g.H - 50, upperTop + 54);
-    }
-    if (!isMobile()) {
-      els.lineUpper.style.top = `${upperTop}px`;
-      els.lineLower.style.top = `${lowerTop}px`;
-    }
     const lastIndex = chart.candles.length - 1;
     const currentVisible = chart.view.end === chart.candles.length && lastIndex >= g.start && Number.isFinite(chart.candles[lastIndex].close);
     els.point.hidden = !currentVisible;

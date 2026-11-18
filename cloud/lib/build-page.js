@@ -21,14 +21,18 @@ export const WEB_FILES = [
   "holdings-rows.js",
   // 自選與庫存併成一份清單的資料整理（11-16）
   "portfolio-list.js",
-  // 向左滑露出動作的列（11-16，自選與庫存頁的修改、移出、刪除）
-  "swipe-rows.js",
+  // 向左滑露出動作的列（11-16，自選與庫存頁的修改、移出、刪除；11-17 均線設定的刪除也用）
+  "swipe-rows.js", "swipe-rows.css",
+  // 自己設定的均線（11-17「不要有上限」，首頁與個股頁共用一組）與設定的那一小塊
+  "ma-lines.js", "ma-settings.js", "ma-settings.css", "chart-legend.js", "chart-legend.css",
   // 立體重設計（11-15）：大戶持股每週增減的算法與畫面
   "holders-weekly.js", "holders-card.js",
   // 預測帳本（2026-11-15，B 票第 4 片）：只有站主有預測內容時才會在首頁出現
   "forecast.js", "forecast.css",
   // 浮層打開時把底下的頁面鎖住（11-17，首頁明細板、對話框、預測與關注浮板共用）
   "scroll-lock.js",
+  // 頁面不給縮放（本人 11-18；雙指縮放在 iOS 要靠 JS 擋）
+  "no-zoom.js",
   // 個股頁事實區塊（2026-11-15 規格，A 票）
   "stock-facts.js", "stock-facts.css", "stock-signals.js", "stock-signals.css",
   // 自選股關注 B 票：個股頁「國外同類股」（只有站主的關注股才出現）

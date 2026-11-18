@@ -18,7 +18,7 @@ test("wrangler.toml 的每個時段都有對應工作；每日更新用 MON-FRI�
     for (const hour of hours.split(",")) {
       const job = JOBS[`${minute} ${hour}`];
       assert.ok(job, `${cron} 的 ${hour} 點`);
-      assert.equal(weekday, job.workflow === "daily-update.yml" ? "MON-FRI" : "*", cron);
+      assert.equal(weekday, job.weekday ?? (job.workflow === "daily-update.yml" ? "MON-FRI" : "*"), cron);
       covered.push(`${minute} ${hour}`);
     }
   }
@@ -60,6 +60,23 @@ test("重大訊息每天（含週末）台北 8:00 觸發，只送 announcements
   assert.equal(body.inputs.date, "2026-11-15");
   for (const key of Object.keys(body.inputs)) assert.ok(declared.includes(key), `workflow rejects unknown input ${key}`);
   assert.ok(!("dry_run" in body.inputs));
+});
+
+test("晨間預測台北週一至週五 07:20（UTC 前一天 23:20，週日到週四）準時觸發、正式執行、開盤日是台北當天；只送 forecast-morning.yml 宣告過的參數", async () => {
+  // 本人 11-18 回報 K 線一直顯示「漏記」：GitHub 的 schedule 晚了 4～5 小時（11-17 13:06、11-18 12:28 才跑），晨間版都過了 08:45 期限。
+  const { readFileSync } = await import("node:fs");
+  const workflow = readFileSync(new URL("../.github/workflows/forecast-morning.yml", import.meta.url), "utf8").replaceAll("\r\n", "\n");
+  const declared = [...workflow.split("  workflow_dispatch:\n")[1].split("\npermissions:")[0].matchAll(/^      ([a-z_]+):$/gm)].map(m => m[1]);
+  let url, body;
+  const result = await dispatch("20 23 * * SUN-THU", Date.parse("2026-11-17T23:20:00Z"), env, async (u, init) => {
+    url = u; body = JSON.parse(init.body); return { status: 204 };
+  });
+  assert.equal(result.dispatched, "forecast-morning.yml");
+  assert.match(url, /workflows\/forecast-morning\.yml\/dispatches$/);
+  assert.equal(body.inputs.date, "2026-11-18");
+  assert.equal(body.inputs.dry_run, "false");
+  for (const key of Object.keys(body.inputs)) assert.ok(declared.includes(key), `workflow rejects unknown input ${key}`);
+  assert.ok(!/^  schedule:/m.test(workflow), "GitHub 的 schedule 拿掉，只由這裡觸發（遲到的那一次只會記漏記）");
 });
 
 test("Cloudflare 不論怎麼回報星期欄位，都送出 daily_update.py 認得的時段字串", async () => {

@@ -16,7 +16,6 @@
     model_timeout: '模型逾時', output_garbled: '回答亂碼', answer_invalid: '回答不合格',
   };
   const SHORT_SOURCE = { us_sp500: '標普', us_nasdaq: '那斯達克', japan_nikkei: '日經', korea_kospi: '韓國' };
-  const MA = { 5: '五日線', 10: '十日線', 20: '月線', 60: '季線', 120: '半年線', 240: '年線' };
   // 回看一次取最近六十天的預測（API 上限四百天）。
   const HISTORY_DAYS = 60;
   const state = {
@@ -43,10 +42,11 @@
   };
 
   // 價籤只放得下兩三個字：用關卡的短名，全名在明細裡。
+  // 均線寫成 MA 加天數（本人 11-17「五日線不就是ma5?」：和圖上自設均線同一套叫法）
   function shortName(line) {
     const id = line.id || '';
     let m = /^ma(\d+)$/.exec(id);
-    if (m) return MA[m[1]] || `${m[1]}日線`;
+    if (m) return `MA${m[1]}`;
     if ((m = /^(high|low)(\d+)$/.exec(id))) return m[1] === 'high' ? '前高' : '前低';
     if (id === 'prev_high') return '昨高';
     if (id === 'prev_low') return '昨低';
@@ -54,6 +54,12 @@
     if (id.startsWith('dist_up')) return '距離上';
     if (id.startsWith('dist_down')) return '距離下';
     return line.name || '';
+  }
+
+  // 關卡的全名：均線寫成 MA 加天數（本人 11-17「五日線不就是ma5?」），其他照帳本的名稱（例如「前一交易日低點」）
+  function lineName(line) {
+    const m = /^ma(\d+)$/.exec(line.id || '');
+    return m ? `MA${m[1]}` : line.name;
   }
 
   function forecastOf(edition) {
@@ -75,14 +81,20 @@
     return now && then !== now ? `${modelName(then)} 舊版` : '';
   }
 
+  // 關卡是均線（id 是 ma 加期數）就回傳期數：圖上畫成整條均線（本人 11-17「你應該是給我完整的趨勢線不是只給一個價格說這是半年線」）
+  function maPeriod(line) {
+    const m = /^ma(\d+)$/.exec(line.id || '');
+    return m ? Number(m[1]) : undefined;
+  }
+
   function overlays(period) {
     const record = current();
     if (period !== 'daily' || !record) return [];
     const cell = record.cells[state.horizon];
     if (!cell) return [];
     return [
-      { value: cell.strong_line.value, label: `轉強線 ${cell.strong_line.name}`, short: shortName(cell.strong_line), color: color('--up'), pos: 'above' },
-      { value: cell.weak_line.value, label: `轉弱線 ${cell.weak_line.name}`, short: shortName(cell.weak_line), color: color('--down'), pos: 'below' },
+      { value: cell.strong_line.value, label: `轉強線 ${lineName(cell.strong_line)}`, short: shortName(cell.strong_line), color: color('--up'), pos: 'above', ma: maPeriod(cell.strong_line), role: '轉強' },
+      { value: cell.weak_line.value, label: `轉弱線 ${lineName(cell.weak_line)}`, short: shortName(cell.weak_line), color: color('--down'), pos: 'below', ma: maPeriod(cell.weak_line), role: '轉弱' },
     ];
   }
 
@@ -114,8 +126,8 @@
     const cell = record.cells[state.horizon];
     panel.append(facts([
       ['落點', ZONE[cell.zone] || cell.zone],
-      ['轉強線', `${cell.strong_line.name} ${fmt(cell.strong_line.value)}`, 'is-up'],
-      ['轉弱線', `${cell.weak_line.name} ${fmt(cell.weak_line.value)}`, 'is-down'],
+      ['轉強線', `${lineName(cell.strong_line)} ${fmt(cell.strong_line.value)}`, 'is-up'],
+      ['轉弱線', `${lineName(cell.weak_line)} ${fmt(cell.weak_line.value)}`, 'is-down'],
       ['理由', cell.reason],
       ['看錯條件', cell.invalidation],
       ['盤勢', record.regime],
@@ -164,7 +176,7 @@
     } else {
       const weak = record.cells['20'] && record.cells['20'].weak_line;
       section.append(el('p', { class: 'forecast-note' }, weak
-        ? `20 日那一格的轉弱線（${weak.name} ${fmt(weak.value)}）就是「跌破才算趨勢轉壞」的那條線；沒跌破之前是回檔，不是轉壞。`
+        ? `20 日那一格的轉弱線（${lineName(weak)} ${fmt(weak.value)}）就是「跌破才算趨勢轉壞」的那條線；沒跌破之前是回檔，不是轉壞。`
         : '20 日那一格的轉弱線就是「跌破才算趨勢轉壞」的那條線。'));
     }
     if (small) section.append(el('p', { class: 'forecast-note' }, `少於 ${layer.min_episodes} 段，只能參考，不能當成規律。`));

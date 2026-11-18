@@ -1,0 +1,17 @@
+/* 向左滑露出動作（程式在 swipe-rows.js；自選庫存頁的列、均線設定的列都用）：動作是平的色塊，墊在上面那一條下面；那一條滑開才露出來。
+   平常那一條是透明的（列本身的底色與陰影照常），滑動與滑開的時候才鋪上底色（--face）把動作蓋住。
+   各頁自己的底色與「⋯」的位置寫在各頁的樣式（portfolio.css、ma-settings.css） */
+.swipe-clip { position: relative; overflow: hidden; border-radius: inherit; }
+.swipe-face { --face: var(--bg); touch-action: pan-y; -webkit-user-select: none; user-select: none; cursor: default; transition: transform 320ms var(--ease-depth), background-color 0s linear 320ms; }
+.swipe-row:is(.is-dragging, .is-swiped) .swipe-face { background-color: var(--face); transition: transform 320ms var(--ease-depth); }
+.swipe-row.is-dragging .swipe-face { transition: none; }
+.swipe-acts { position: absolute; inset: 0 0 0 auto; display: flex; visibility: hidden; transition: visibility 0s linear 320ms; }
+.swipe-row:is(.is-dragging, .is-swiped) .swipe-acts { visibility: visible; transition: none; }
+.swipe-act { width: 64px; padding: 0 4px; border: 0; border-left: 1px solid var(--hair); background: var(--well); color: var(--ink); font: 500 13px/1.25 var(--sans); cursor: pointer; }
+.swipe-act span { display: block; }
+/* 拿掉、刪除的那一顆是紅色的（本人指定刪除要紅色）。紅色在這個站是漲的顏色，這裡是唯一用在按鈕上的地方 */
+.swipe-act.is-danger { border-left-color: color-mix(in srgb, var(--bg) 35%, transparent); background: var(--up); color: var(--bg); font-weight: 700; }
+.swipe-act:focus-visible { outline: 2px solid var(--gold); outline-offset: -3px; }
+@media (prefers-reduced-motion: reduce) {
+  .swipe-face, .swipe-acts { transition: none; }
+}

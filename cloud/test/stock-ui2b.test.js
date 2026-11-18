@@ -22,7 +22,6 @@ function loadStockWindow() {
   const window = {
     StockPicker: { attach: () => ({ choose: async () => ({}), close() {} }), codeOf: () => null, isCode: (code) => /^[0-9A-Z]{4,12}$/.test(code) },
     Intraday: { createPoller: () => ({ start() {}, stop() {} }), projectAnalysis: value => value },
-    KChartMath: { normalizePeriods: values => [...new Set(values.map(Number).filter(value => value >= 2).map(value => Math.min(240, Math.round(value))))].slice(0, 4) },
     addEventListener() {},
   };
   const context = {
@@ -31,6 +30,7 @@ function loadStockWindow() {
     getComputedStyle: () => ({ getPropertyValue: () => "" }), matchMedia: () => ({ matches: false }),
     fetch: async () => ({}), innerWidth: 1440, URL, URLSearchParams, AbortController, console,
   };
+  vm.runInNewContext(read("web/ma-lines.js"), context);   // 均線設定（和首頁共用一組）
   vm.runInNewContext(read("web/stock.js"), context);
   return window;
 }
@@ -39,13 +39,16 @@ test("個股頁週期有週K與當日60分K，均線預設18／45並可增減", 
   const html = read("web/stock.html");
   assert.match(html, /<option value="60m">60分K<\/option>/);
   assert.match(html, /<option value="weekly">週K<\/option>/);
-  assert.match(html, /id="maControls"/);
-  assert.match(html, /id="addMa"/);
+  // 本人 11-17：均線在 K 線上方那一行點名稱設定（和首頁同一套 ma-settings.js），不再有「均線」小鍵與那一列輸入框
+  assert.match(html, /id="legendNames"/);
+  assert.match(html, /<script src="ma-settings\.js\?/);
+  assert.doesNotMatch(html, /id="maChip"|id="maControls"|id="addMa"/);
 
   const source = read("web/kchart.js");
   const window = {};
   vm.runInNewContext(source, { window, getComputedStyle: () => ({ getPropertyValue: () => "" }), console });
-  assert.deepEqual([...window.KChartMath.normalizePeriods([18, 45, 45, 1, 241])], [18, 45, 240]);
+  // 本人 11-17「不要有上限」：天數超過 240、條數超過四條都照收
+  assert.deepEqual([...window.KChartMath.normalizePeriods([18, 45, 45, 1, 241, 5, 10])], [18, 45, 241, 5, 10]);
 });
 
 test("核心版讓策略與水位 UI 預設隱藏，前端只依 server features 開啟", () => {
@@ -166,11 +169,11 @@ test("個股頁的大戶持股：算法與畫面各一支程式，排在 stock.j
   assert.doesNotMatch(js, /StockHolders/);   // 舊的「一行講完」已經拿掉；每一個數字怎麼算由 holders-weekly.test.js 驗
 });
 
-test("MA設定使用try catch保護localStorage", () => {
+test("MA設定和首頁共用一組（ma-lines.js 讀、ma-settings.js 設定與存；存不了的保護與舊設定接過來在 ma-lines.test.js 驗）", () => {
   const stock = read("web/stock.js");
-  assert.match(stock, /localStorage\.getItem\(['"]stock-ma-periods['"]\)/);
-  assert.match(stock, /localStorage\.setItem\(['"]stock-ma-periods['"]/);
-  assert.match(stock, /try\s*\{[\s\S]*stock-ma-periods[\s\S]*\}\s*catch/);
+  assert.match(stock, /window\.MaLines\.read\(\)/);
+  assert.match(stock, /window\.MaSettings\.mount\(/, "設定用和首頁同一個小塊（它負責存）");
+  assert.doesNotMatch(stock, /MA_LIMIT|stock-ma-periods/, "沒有四條上限、不再自己存一份");
 });
 
 test("盤中瀏覽器策略與 Python 共用完整／部分／有限 fixture 保持一致", () => {

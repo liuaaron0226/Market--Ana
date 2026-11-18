@@ -12,6 +12,8 @@
   --faint: #8d8995;
   --accent: #e8622c;
   --gold: #d9a94b;
+  /* 自設均線的另外四色（ma-lines.js；本人 11-17 顏色自己挑）：紫、青、褐、玫瑰 */
+  --ma-purple: #a98be8; --ma-teal: #3fbfb0; --ma-brown: #c07a42; --ma-rose: #e07aa8;
   --up: #ff6868;
   --down: #2fd09a;
   --compare-0: #3987e5;
@@ -42,6 +44,7 @@
   --faint: #6d6874;
   --accent: #c24a16;
   --gold: #94681a;
+  --ma-purple: #6b4fb8; --ma-teal: #0b877a; --ma-brown: #8f4f1f; --ma-rose: #b8427a;
   --up: #c8262c;
   --down: #0f8058;
   --compare-0: #2a78d6;
@@ -68,6 +71,7 @@
     --faint: #6d6874;
     --accent: #c24a16;
     --gold: #94681a;
+    --ma-purple: #6b4fb8; --ma-teal: #0b877a; --ma-brown: #8f4f1f; --ma-rose: #b8427a;
     --up: #c8262c;
     --down: #0f8058;
     --compare-0: #2a78d6;
@@ -82,6 +86,8 @@
 
 * { box-sizing: border-box; }
 html { min-width: 320px; background: var(--bg); -webkit-text-size-adjust: 100%; }
+/* 本人 11-18：頁面不給縮放——只留捲動，雙擊不放大（雙指縮放另由 no-zoom.js 擋）。 */
+html { touch-action: pan-x pan-y; }
 body {
   margin: 0;
   min-width: 320px;
