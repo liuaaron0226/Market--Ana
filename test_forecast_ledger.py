@@ -886,6 +886,19 @@ class MarketLayersTests(LedgerTestCase):
                       "不能單獨決定方向"):
             self.assertIn(words, rules)
 
+    def test_the_margin_rule_is_tightened_after_the_dry_run(self):
+        # 本人 2026-11-18 晚看過乾跑（Gemini 把融資減少寫成「低檔有承接」「消化浮額」）後選「要收緊（推薦）」：
+        # 增減、使用率都不能單獨當看多或看空的理由，也不能推論承接、浮額、籌碼沉澱；只能和指數、成交量、法人方向並列，
+        # 三者矛盾時照寫矛盾、不替它下結論。
+        rules = "".join(fl._PROMPT_RULES)
+        for words in ("融資餘額的增減、使用率", "不能單獨當成看多或看空的理由", "低檔有承接", "消化浮額", "籌碼沉澱",
+                      "和指數、成交量、法人方向並列", "寫出矛盾", "不替融資下結論"):
+            self.assertIn(words, rules)
+        # 收緊前的版本（I 票乾跑第二輪）不能再出現：改提示＝新的輸入版本
+        self.assertNotEqual(fl.input_version("gemini-4-argon"),
+                            "base+overseas+foreign_flow+wyckoff_lpsy+market_margin+otc_index+sector_share+screens"
+                            "+ofr_stress+similar+lessons-v1-bd1f8c85")
+
 
 class VerdictStatusTests(LedgerTestCase):
     def test_groups_say_accumulating_until_each_horizon_has_run_long_enough(self):
