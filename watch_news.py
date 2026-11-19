@@ -173,7 +173,10 @@ def parse_gnews(content: bytes) -> list[dict]:
             raise FormatChanged("格式不對：連結不是 Google News 的轉址")
         title = re.sub(r"\s+", " ", title)
         title = re.sub(r"\s+-\s+[^-]{1,40}$", "", title).strip()
-        title = re.sub(r"\s*[|｜]\s*[^|｜]{1,6}$", "", title).strip()   # 中央社標題尾巴的「| 證券」分類
+        # 標題尾巴的版面名稱：中央社「| 證券」、經濟日報「| 集中市場 | 證券」、工商與 MoneyDJ「- 日報」「- 證券」「- 新聞」
+        for _ in range(3):
+            title = re.sub(r"\s*[|｜]\s*[^|｜]{1,6}$", "", title).strip()
+            title = re.sub(r"\s*-\s*(?:日報|證券|新聞|產業|科技|財經|國際|期貨|基金|焦點|即時)$", "", title).strip()
         items.append({"title": title, "summary": "", "link": link, "published_at": _utc(_text(node, "pubDate")),
                       "source": outlet[0]})
     return items

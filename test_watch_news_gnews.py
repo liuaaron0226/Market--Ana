@@ -104,6 +104,14 @@ class ParseTest(unittest.TestCase):
         self.assertTrue(rows[0]["link"].startswith("https://news.google.com/rss/articles/"))
         self.assertEqual(rows[0]["published_at"], "2026-11-19T03:00:00Z")
 
+    def test_section_names_left_in_the_title_are_dropped(self):
+        content = grss(gitem("台玻、強茂業績報喜權證熱- 日報 - 工商時報", "https://www.ctee.com.tw", n=1),
+                       gitem("《電零組》美系外資重申金居正向評等- 證券 - 工商時報", "https://www.ctee.com.tw", n=2),
+                       gitem("金居11/16~17參加法說會- 新聞 - MoneyDJ", "https://www.moneydj.com", n=3),
+                       gitem("飆股的故事／台玻兩岸擴產 | 集中市場 | 證券 - 經濟日報", "https://money.udn.com", n=4))
+        self.assertEqual([r["title"] for r in wn.parse_gnews(content)],
+                         ["台玻、強茂業績報喜權證熱", "《電零組》美系外資重申金居正向評等", "金居11/16~17參加法說會", "飆股的故事／台玻兩岸擴產"])
+
     def test_taiwan_finance_outlets_and_their_subdomains(self):
         content = grss(gitem("台玻：展望穩定訂單看好到2027 - 鉅亨網", "https://news.cnyes.com", n=1),
                        gitem("玻纖布夯 台玻9月獲利爆衝 - 工商時報", "https://www.ctee.com.tw", n=2),
