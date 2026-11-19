@@ -160,6 +160,20 @@ jobs:
           R2_BUCKET: market-ana-state
         run: python overseas_peers.py indices --shared-cache
 
+      - name: 讀設定頁的 AI 模型（本人 11-19 晚；讀不到照 gemini_models.py 的預設跑）
+        # 站主在設定頁「AI 模型」選的模型與思考強度（D1 ai_model_settings）；gemini_settings.py 寫進 GITHUB_ENV，
+        # 這一班有沒有讀到記在 ai-model-read.sql，記用量那一步一起寫進 D1（設定頁標「上一班沒讀到你的設定」）。
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          (cd cloud && npx --yes wrangler@4 d1 execute market-ana-accounts --remote --json \
+            --command "SELECT task, model, effort FROM ai_model_settings" > "$RUNNER_TEMP/ai-models.json") \
+            || echo "::warning::讀不到設定頁的 AI 模型設定"
+          python gemini_settings.py --input "$RUNNER_TEMP/ai-models.json" --github-env "$GITHUB_ENV" \
+            --task forecast-morning --run-id "$GITHUB_RUN_ID" --read-sql "$RUNNER_TEMP/ai-model-read.sql"
+
       - name: 下載官方 agy 1.5.3 並核對 SHA-256
         id: agy_download
         continue-on-error: true
@@ -195,7 +209,9 @@ jobs:
           args=(--edition morning --session-date "$SESSION_DATE"
                 --analysis data/daily-update-state/last-market-pack/analysis-data.js --method MARKET_METHOD.md
                 --ledger "$LEDGER" --agy-bin "$RUNNER_TEMP/agy/antigravity"
-                --overseas-dir "$RUNNER_TEMP/overseas")
+                --overseas-dir "$RUNNER_TEMP/overseas"
+                # 前一晚已寫的晚間版用哪一組，晨間就用同一組（本人第 4 題）；那晚沒寫成才用這裡的設定
+                --model "$AI_FORECAST_MODEL" --effort "$AI_FORECAST_EFFORT")
           if [ "$DRY_RUN" = "false" ]; then
             args+=(--sql-output "$RUNNER_TEMP/forecast.sql" --log-output "$LEDGER/runs/$GITHUB_RUN_ID.json")
           else
@@ -257,9 +273,11 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           python gemini_usage.py --agy-bin "$RUNNER_TEMP/agy/antigravity" --task forecast-morning --run-id "$GITHUB_RUN_ID" \
-            --sql-output "$RUNNER_TEMP/gemini-usage.sql"
+            --model "$AI_FORECAST_MODEL" --run-log "$RUNNER_TEMP/forecast-run/run.json" --sql-output "$RUNNER_TEMP/gemini-usage.sql"
           cd cloud && npx --yes wrangler@4 d1 execute market-ana-accounts --remote --file "$RUNNER_TEMP/gemini-usage.sql"
+          npx --yes wrangler@4 d1 execute market-ana-accounts --remote --file "$RUNNER_TEMP/ai-model-read.sql" \
+            || echo "::warning::這一班讀設定的結果寫不進去（遷移 0030 可能還沒套用）"
 
       - name: 清除登入檔與暫存
         if: always()
-        run: rm -rf "$RUNNER_TEMP/agy-home" "$RUNNER_TEMP/agy" "$RUNNER_TEMP/forecast.sql" "$RUNNER_TEMP/overseas" "$RUNNER_TEMP/gemini-usage.sql"
+        run: rm -rf "$RUNNER_TEMP/agy-home" "$RUNNER_TEMP/agy" "$RUNNER_TEMP/forecast.sql" "$RUNNER_TEMP/overseas" "$RUNNER_TEMP/gemini-usage.sql" "$RUNNER_TEMP/ai-models.json" "$RUNNER_TEMP/ai-model-read.sql"

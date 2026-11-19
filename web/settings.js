@@ -99,9 +99,62 @@
     return { groups, today, updated, empty: groups.length ? '' : '下一次 Gemini 排程跑完後就會有數字。' };
   }
 
-  const tabsFor = ({ usage, notify }) => ['usage', 'notify', 'look'].filter(key => key === 'look' || (key === 'usage' ? usage : notify));
+  // ---- AI 模型（本人 11-19 晚：五項任務自己選模型與思考強度；樣品 C：每列寫現值、點開才選）----
+  // key 和 /api/settings/ai-models 的 tasks[].key 一樣（cloud/lib/ai-models.js）。
+  const MODEL_TASKS = {
+    forecast: { name: '大盤預測', sub: '晚間・晨間・重播一起' },
+    watch_judge: { name: '自選股每日判斷', sub: '' },
+    watch_nominate: { name: '提名國外同類股', sub: '' },
+    plain: { name: '籌碼與資金白話', sub: '' },
+    digest: { name: '站主 AI 解讀', sub: '' },
+  };
+  const MODEL_CHOICES = [['gemini-4-argon', 'Argon'], ['gemini-3.8-flash', 'Flash']];
+  const EFFORT_CHOICES = [['low', '低'], ['medium', '中'], ['high', '高']];
+  // 改了會另開一組成績的兩項（本人第 5、6 題：存檔前先問）
+  const SCORED = {
+    forecast: '成績另開一組從頭累積，正式起算要重數連續 5 天。從下一個晚間版開始用。',
+    watch_judge: '成績另開一組從頭累積。下一班開始用。',
+  };
+  const choiceText = (c) => `${modelLabel(c.model)}・${(EFFORT_CHOICES.find(([k]) => k === c.effort) || [])[1] || ''}`;
+  const shortTime = (iso) => { const t = iso ? taipei(iso) : null; return t ? `${pad(t.m)}-${pad(t.day)} ${t.hm}` : ''; };
+  // 草稿裡和現值不同的才算改動
+  const pending = (data, draft) => (data?.tasks || [])
+    .map(task => ({ task, next: draft?.[task.key] }))
+    .filter(({ task, next }) => next && (next.model !== task.model || next.effort !== task.effort));
 
-  global.MarketSettings = { DESKS, readPrefs, resetText, modelLabel, usageView, tabsFor };
+  function modelsView(data, draft) {
+    const changed = new Set(pending(data, draft).map(({ task }) => task.key));
+    const rows = (data?.tasks || []).filter(task => MODEL_TASKS[task.key]).map(task => {
+      const current = changed.has(task.key) ? draft[task.key] : task;
+      return { key: task.key, ...MODEL_TASKS[task.key], model: current.model, effort: current.effort,
+        value: choiceText(current), changed: changed.has(task.key) };
+    });
+    const quota = [['argon', 'Argon 本週剩'], ['flash', 'Flash 本週剩']]
+      .filter(([key]) => data?.quota?.[key] != null)
+      .map(([key, label]) => { const percent = Math.round(Number(data.quota[key]) * 100); return { label, percent, low: percent < LOW }; });
+    const updated = shortTime(data?.updated_at);
+    return {
+      rows, quota, dirty: changed.size > 0,
+      unread: (data?.unread || []).map(item => `${TASKS[item.task] || item.task}上一班（${shortTime(item.read_at)}）沒讀到你的設定，用了預設。`),
+      notReady: data?.ready === false ? '網站資料庫還沒更新，現在顯示的是預設，暫時不能存。' : '',
+      foot: `存檔後下一班排程開始用（大盤預測從下一個晚間版起）。${updated ? `上次修改 ${updated}。` : ''}`,
+    };
+  }
+
+  // 按了一顆鍵之後的選擇。本人 11-19 晚「Flash還是改用高好了」：從別的模型切到 Flash 時思考強度先帶「高」，之後仍可自己改
+  const nextChoice = (base, pick) => {
+    if (pick.model && pick.model !== base.model) return { model: pick.model, effort: pick.model === 'gemini-3.8-flash' ? 'high' : base.effort };
+    return { ...base, ...pick };
+  };
+
+  const confirmNotes = (data, draft) => pending(data, draft)
+    .filter(({ task }) => SCORED[task.key])
+    .map(({ task, next }) => `${MODEL_TASKS[task.key].name}改成 ${choiceText(next)}：${SCORED[task.key]}`);
+
+  const tabsFor = ({ usage, models, notify }) => ['usage', 'models', 'notify', 'look']
+    .filter(key => key === 'look' || ({ usage, models, notify })[key]);
+
+  global.MarketSettings = { DESKS, readPrefs, resetText, modelLabel, usageView, tabsFor, modelsView, confirmNotes, nextChoice };
 
   // ---------- 畫面 ----------
   const doc = global.document;
@@ -135,7 +188,7 @@
     return response.json();
   };
   const ICON_CLOSE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>';
-  const TAB_NAMES = { usage: 'Gemini 用量', notify: '通知', look: '外觀' };
+  const TAB_NAMES = { usage: 'Gemini 用量', models: 'AI 模型', notify: '通知', look: '外觀' };
 
   const dialog = el('dialog', 'st-sheet');
   dialog.id = 'settingsDialog';
@@ -155,7 +208,7 @@
   track.setAttribute('aria-label', '設定分類');
   tabBar.append(track);
   const panes = {};
-  for (const key of ['usage', 'notify', 'look']) {
+  for (const key of ['usage', 'models', 'notify', 'look']) {
     const pane = el('section', `st-pane st-pane-${key}`);
     pane.id = `settings-${key}`;
     pane.setAttribute('role', 'tabpanel');
@@ -164,10 +217,10 @@
     panes[key] = pane;
   }
   const foot = el('div', 'st-foot');
-  dialog.append(head, tabBar, panes.usage, panes.notify, panes.look, foot);
+  dialog.append(head, tabBar, panes.usage, panes.models, panes.notify, panes.look, foot);
   doc.body.append(dialog);
 
-  const access = { usage: false, notify: false };
+  const access = { usage: false, models: false, notify: false };
   let current = 'look';
   let notifyMounted = false;
 
@@ -203,6 +256,7 @@
     current = key;
     renderTabs();
     if (key === 'usage') loadUsage();
+    if (key === 'models') loadModels();
     if (key === 'notify') mountNotify();
   }
   track.addEventListener('click', event => {
@@ -319,6 +373,165 @@
     if (view.updated) pane.append(el('p', 'st-updated num', view.updated));
   }
 
+  // ---- AI 模型 ----
+  // models.data：伺服器上的現值；draft：還沒存的改動；open：展開的那一列；confirming：存檔前的確認；note：存檔結果
+  const models = { data: null, draft: {}, open: '', confirming: false, note: '', saving: false };
+  const MODELS_PATH = '/api/settings/ai-models';
+
+  async function loadModels() {
+    const pane = panes.models;
+    // 有沒存的改動時不重讀，免得切籤回來改動不見
+    if (models.data && models.draft && Object.keys(models.draft).length) { renderModels(); return; }
+    if (!pane.childElementCount) pane.append(el('p', 'st-note', '讀取中…'));
+    try { models.data = await getJson(MODELS_PATH); }
+    catch (_) { pane.replaceChildren(el('p', 'st-note', 'AI 模型設定暫時讀不到，稍後再打開看看。')); return; }
+    models.note = '';
+    renderModels();
+  }
+
+  function segment(label, choices, value, key, field) {
+    const group = el('div', 'st-seg');
+    group.setAttribute('role', 'group');
+    group.setAttribute('aria-label', label);
+    for (const [k, name] of choices) {
+      const button = el('button', '', name);
+      button.type = 'button';
+      button.dataset.mkey = key;
+      button.dataset[field] = k;
+      button.setAttribute('aria-pressed', String(k === value));
+      group.append(button);
+    }
+    return group;
+  }
+
+  function button(text, action, primary = false) {
+    const b = el('button', primary ? 'st-btn st-btn-primary' : 'st-btn', text);
+    b.type = 'button';
+    b.dataset.maction = action;
+    return b;
+  }
+
+  function renderModels() {
+    const pane = panes.models;
+    const view = modelsView(models.data, models.draft);
+    pane.replaceChildren();
+    if (view.quota.length) {
+      const line = el('p', 'st-quota');
+      for (const q of view.quota) {
+        const item = el('span', '', `${q.label} `);
+        if (q.low) item.dataset.low = '';
+        item.append(el('b', 'num', `${q.percent}%`));
+        line.append(item);
+      }
+      pane.append(line);
+    }
+    for (const text of view.unread) pane.append(el('p', 'st-warn', text));
+    if (view.notReady) pane.append(el('p', 'st-warn', view.notReady));
+    for (const row of view.rows) {
+      const open = models.open === row.key;
+      const head = el('button', 'st-mrow');
+      head.type = 'button';
+      head.dataset.mrow = row.key;
+      head.id = `settings-model-${row.key}`;
+      head.setAttribute('aria-expanded', String(open));
+      head.setAttribute('aria-controls', `settings-model-${row.key}-choices`);
+      const name = el('span', 'st-mname', row.name);
+      if (row.sub) name.append(el('small', '', row.sub));
+      const value = el('span', 'st-mval', row.value);
+      if (row.changed) value.dataset.changed = '';
+      value.append(el('span', 'st-chev', '›'));
+      head.append(name, value);
+      const choices = el('div', 'st-mopen');
+      choices.id = `settings-model-${row.key}-choices`;
+      choices.hidden = !open;
+      choices.append(segment(`${row.name}的模型`, MODEL_CHOICES, row.model, row.key, 'model'),
+        segment(`${row.name}的思考強度`, EFFORT_CHOICES, row.effort, row.key, 'effort'));
+      pane.append(head, choices);
+    }
+    if (models.confirming) {
+      const box = el('div', 'st-confirm');
+      box.setAttribute('role', 'alertdialog');
+      box.setAttribute('aria-label', '確認存檔');
+      for (const text of confirmNotes(models.data, models.draft)) box.append(el('p', '', text));
+      const actions = el('div', 'st-actions');
+      actions.append(button('取消', 'cancel'), button('確定改', 'confirm', true));
+      box.append(actions);
+      pane.append(box);
+    } else if (view.dirty) {
+      const actions = el('div', 'st-actions');
+      const save = button(models.saving ? '存檔中…' : '存檔', 'save', true);
+      save.disabled = models.saving || models.data?.ready === false;
+      actions.append(button('還原', 'revert'), save);
+      pane.append(actions);
+    }
+    if (models.note) {
+      const note = el('p', 'st-saved', models.note);
+      note.setAttribute('role', 'status');
+      pane.append(note);
+    }
+    pane.append(el('p', 'st-updated num', view.foot));
+  }
+
+  async function saveModels() {
+    const tasks = Object.fromEntries(pending(models.data, models.draft).map(({ task, next }) => [task.key, next]));
+    models.saving = true;
+    models.confirming = false;
+    renderModels();
+    try {
+      const response = await fetch(MODELS_PATH, {
+        method: 'PUT', credentials: 'same-origin', cache: 'no-store',
+        headers: { 'content-type': 'application/json' }, body: JSON.stringify({ tasks }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || String(response.status));
+      models.data = body;
+      models.draft = {};
+      models.open = '';
+      models.note = '已存檔，下一班排程開始用。';
+    } catch (error) {
+      models.note = `存不了：${error.message}`;
+    }
+    models.saving = false;
+    renderModels();
+    refocus(`#${CSS.escape(panes.models.querySelector('[data-mrow]')?.id || 'none')}`);
+  }
+
+  // 重畫之後把焦點放回剛才按的那一顆
+  const refocus = (selector) => panes.models.querySelector(selector)?.focus();
+
+  panes.models.addEventListener('click', event => {
+    const row = event.target.closest?.('[data-mrow]');
+    if (row) {
+      models.open = models.open === row.dataset.mrow ? '' : row.dataset.mrow;
+      renderModels();
+      refocus(`[data-mrow="${row.dataset.mrow}"]`);
+      return;
+    }
+    const pick = event.target.closest?.('[data-mkey]');
+    if (pick) {
+      const key = pick.dataset.mkey;
+      const task = models.data.tasks.find(t => t.key === key);
+      const base = models.draft[key] || { model: task.model, effort: task.effort };
+      models.draft = { ...models.draft, [key]: nextChoice(base, pick.dataset.model ? { model: pick.dataset.model } : { effort: pick.dataset.effort }) };
+      models.confirming = false;
+      models.note = '';
+      renderModels();
+      refocus(`[data-mkey="${key}"]${pick.dataset.model ? `[data-model="${pick.dataset.model}"]` : `[data-effort="${pick.dataset.effort}"]`}`);
+      return;
+    }
+    const action = event.target.closest?.('[data-maction]')?.dataset.maction;
+    if (action === 'revert') { models.draft = {}; models.note = ''; renderModels(); }
+    if (action === 'cancel') { models.confirming = false; renderModels(); refocus('[data-maction="save"]'); }
+    if (action === 'confirm') saveModels();
+    if (action === 'save') {
+      if (confirmNotes(models.data, models.draft).length) {
+        models.confirming = true;
+        renderModels();
+        refocus('[data-maction="confirm"]');
+      } else saveModels();
+    }
+  });
+
   // ---- 通知（到價推播）----
   async function mountNotify() {
     if (notifyMounted) return;
@@ -363,6 +576,7 @@
     logoutLink(me);
     if (me?.owner) {
       access.usage = true;
+      access.models = true;
       // 到價推播跟著自選股關注的開關（和原本自選股頁的鈴鐺同一個判斷）；/api/features 對站主不扣額度
       try { access.notify = Boolean(global.WatchPush) && Boolean((await getJson('/api/features')).features?.watchlist_watch_v1); }
       catch (_) { access.notify = false; }

@@ -98,9 +98,9 @@ class PlainDailyWorkflowTest(unittest.TestCase):
         self.assertLess(order.index("plain_auth"), order.index("run"))
 
     def test_model_and_effort_are_one_constant_each(self):
-        # 本人 11-17 更正：這張用 Flash、思考程度 medium；要換模型只改這一處
+        # 本人 11-19 晚：模型與思考程度照設定頁「AI 模型」（排程開跑時讀進 AI_PLAIN_*；讀不到時空的，plain_daily 照預設）
         env = step("run")["env"]
-        self.assertEqual((env["PLAIN_MODEL"], env["PLAIN_EFFORT"]), ("gemini-4-argon", "medium"))  # 本人 11-18 晚改 Argon
+        self.assertEqual((env["PLAIN_MODEL"], env["PLAIN_EFFORT"]), ("${{ env.AI_PLAIN_MODEL }}", "${{ env.AI_PLAIN_EFFORT }}"))
         self.assertEqual(DAILY.read_text(encoding="utf-8").count("PLAIN_MODEL:"), 1)
 
     def test_summary_names_both_reasons_when_there_is_no_record(self):
@@ -151,8 +151,9 @@ class PlainDailyWorkflowTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("--plain-audit data/daily-update-log/plain-daily/2026-11-18.json", calls)
         self.assertIn("d1 execute market-ana-accounts --remote", calls)
-        npx = [line for line in calls.splitlines() if line.startswith("npx")]
+        npx = [line for line in calls.splitlines() if line.startswith("npx") and "gemini-usage" in line]
         self.assertEqual(len(npx), 1, "新格式寫得進去就不寫舊格式")
+        self.assertIn("ai-model-read.sql", calls, "這一班讀設定頁 AI 模型的結果一起寫（本人 11-19 晚）")
         code, calls = self.run_usage(sql="")
         self.assertEqual(code, 0)
         self.assertNotIn("npx", calls, "沒呼叫模型的那一班不寫資料庫")
@@ -160,7 +161,7 @@ class PlainDailyWorkflowTest(unittest.TestCase):
     def test_usage_falls_back_to_the_old_columns_before_0029_is_applied(self):
         code, calls = self.run_usage(sql="INSERT INTO gemini_usage_snapshots VALUES (1);", new_fails=True)
         self.assertEqual(code, 0)
-        npx = [line for line in calls.splitlines() if line.startswith("npx")]
+        npx = [line for line in calls.splitlines() if line.startswith("npx") and "gemini-usage" in line]
         self.assertEqual(len(npx), 2)
         self.assertTrue(npx[1].endswith("gemini-usage-legacy.sql"), npx)
 

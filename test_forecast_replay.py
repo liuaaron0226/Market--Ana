@@ -14,6 +14,7 @@ from datetime import datetime
 import forecast_ledger as fl
 import forecast_replay as rp
 import forecast_replay_chips as chips
+import forecast_run as fr
 from test_forecast_replay_chips import FakeHttp, bfi82u, taifex
 from test_forecast_run import analysis, weekdays
 
@@ -310,6 +311,28 @@ class RunTests(ReplayTestCase):
         self.assertNotIn("INSERT INTO forecast_records", text)
         # 最後用全部日 K 對帳：三天的一日、五日、二十日格都已到期
         self.assertEqual(len(fl.read_ledger(self.ledger)["reconciliations"]), 6 * 3)
+
+
+class ReplayEffortTests(ReplayTestCase):
+    """本人 2026-11-19 晚：重播跟正式同一組（設定頁「大盤預測」一列），思考強度也帶到記錄與版本。"""
+
+    def test_replay_records_the_chosen_effort(self):
+        self.run_replay(effort="high", max_forecasts=1)
+        record = fl.read_ledger(self.ledger)["forecasts"][0]
+        self.assertEqual((record["effort"], record["input_version"]),
+                         ("high", fl.input_version("gemini-3.8-flash", "high")))
+
+    def test_command_line_takes_an_effort_and_an_empty_one_means_the_default(self):
+        captured = {}
+        original = rp.run_replay
+        rp.run_replay = lambda analysis_path, **kwargs: captured.update(kwargs) or {key: None for key in (
+            "replayable", "written", "unchanged", "misses", "missing_inputs", "stop_reason", "reconciliation")}
+        try:
+            rp.main(["--analysis", "a", "--method", "m", "--start", "2026-04-01", "--end", "2026-04-02", "--ledger", "l",
+                     "--agy-bin", "b", "--fetched-at", "x", "--model", "", "--effort", ""])
+        finally:
+            rp.run_replay = original
+        self.assertEqual((captured["model"], captured["effort"]), (fr.MODEL_DEFAULT, fr.EFFORT_DEFAULT))
 
 
 if __name__ == "__main__":

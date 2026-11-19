@@ -120,6 +120,19 @@ class CommandLine(unittest.TestCase):
         code, (task, _, buckets, _model) = self.run_with("Error: login expired", exit_code=1)
         self.assertEqual((code, task, buckets), (0, "watch-ledger", None))
 
+    def test_the_run_log_names_the_model_actually_used(self):
+        # 本人 11-19 晚：晨間預測跟前一晚同一組，可能和設定頁現在的值不同；用量照這一班執行紀錄裡實際用的模型
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            log, out = folder / "run.json", folder / "usage.sql"
+            log.write_text(json.dumps({"model": "gemini-4-argon"}), encoding="utf-8")
+            gu.main(["--agy-bin", "", "--task", "forecast-morning", "--run-id", "1", "--model", "gemini-3.8-flash",
+                     "--run-log", str(log), "--sql-output", str(out)])
+            self.assertIn("'gemini-4-argon'", out.read_text(encoding="utf-8"))
+            gu.main(["--agy-bin", "", "--task", "forecast-morning", "--run-id", "1", "--model", "gemini-3.8-flash",
+                     "--run-log", str(folder / "missing.json"), "--sql-output", str(out)])
+            self.assertIn("'gemini-3.8-flash'", out.read_text(encoding="utf-8"))
+
 
 class ModelForTask(unittest.TestCase):
     """排程不另外寫模型名稱：沒給 --model 時照 gemini_models.py（model-routing 那條線的唯一設定處）查這個任務用哪個模型。"""
@@ -164,7 +177,8 @@ class WorkflowWiring(unittest.TestCase):
                 self.assertTrue(step["if"].startswith("always()"))
                 self.assertIn(f"--task {name} ", step["run"])
                 self.assertIn("gemini-usage.sql", steps[cleanup[0]]["run"])
-                self.assertNotIn("--model", step["run"], "模型名稱只在 gemini_models.py 維護")
+                # 本人 11-19 晚：模型照設定頁（排程開跑時讀進 AI_*_MODEL），不在排程檔寫名稱
+                self.assertRegex(step["run"], r'--model "\$AI_[A-Z_]+_MODEL"')
 
 
 # 0029：白話分析要記思考程度、成功或失敗、是不是乾跑（本人 11-19「現在就都處理完成」，owner 派工）

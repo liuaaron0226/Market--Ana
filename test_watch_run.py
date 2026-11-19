@@ -4,6 +4,7 @@
 命令列程式（經真的子程序邊界，和預測帳本、關注帳本的測試同一支），檢查帳本、寫給資料庫的指令檔與執行紀錄。
 """
 import json
+from datetime import timedelta
 import tempfile
 import unittest
 from pathlib import Path
@@ -275,6 +276,67 @@ class MarketLayerModelTests(WatchRunTestCase):
         fl.write_forecast(self.forecasts, day_input(), edition="evening", model="gemini-3.8-flash",
                           model_bin=fake_model(folder, [envelope(answer_a(regime="盤整"))]), now=clock(FORECAST_OK))
         self.assertEqual(wr.market_layer(self.forecasts, day_input()["base_date"], "evening")["regime"], "盤整")
+
+
+class ChosenEffortTests(WatchRunTestCase):
+    """本人 2026-11-19 晚（設定頁 AI 模型）：判斷與提名的思考強度由排程帶進來；空的照預設。"""
+
+    def argv_recording(self, inner):
+        """包住假模型：先把 agy 收到的命令列參數記下來，再照原本的假模型回答。"""
+        log = self.tmp / "argv.jsonl"
+        script = self.tmp / "argv_agy.py"
+        script.write_text(
+            "import json,runpy,sys\n"
+            f"open({str(log)!r},'a',encoding='utf-8').write(json.dumps(sys.argv[1:])+'\\n')\n"
+            f"runpy.run_path({str(inner)!r}, run_name='__main__')\n", encoding="utf-8")
+        return script, log
+
+    def test_by_default_agy_really_receives_the_judge_effort_from_gemini_models(self):
+        # 11-19 發現：WATCH_JUDGE_EFFORT 從沒傳進判斷呼叫，agy 一直收到 medium。這裡看 agy 實際收到的參數，不只看常數。
+        import gemini_models as gm
+        self.write_forecast()
+        script, log = self.argv_recording(self.model())
+        self.evening(model=script)
+        sent = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+        self.assertTrue(sent)
+        self.assertEqual({args[args.index("--effort") + 1] for args in sent}, {gm.WATCH_JUDGE_EFFORT})
+        self.assertEqual(gm.WATCH_JUDGE_EFFORT, "high")
+
+    def test_the_judge_effort_reaches_every_judgment(self):
+        self.write_forecast()
+        self.evening(effort="low")
+        records = wl.read_ledger(self.ledger)["judgments"]
+        self.assertTrue(records)
+        self.assertEqual({record["effort"] for record in records}, {"low"})
+
+    def test_command_line_defaults_and_empty_values(self):
+        import gemini_models as gm
+        base = ["judge", "--analysis", "a", "--watchlist", "w", "--ledger", "l", "--method", "m", "--agy-bin", "b"]
+        self.assertEqual(wr.build_parser().parse_args(base).effort, gm.WATCH_JUDGE_EFFORT)
+        self.assertEqual(wr.build_parser().parse_args(["nominate", "--ledger", "l", "--agy-bin", "b"]).effort,
+                         gm.WATCH_NOMINATE_EFFORT)
+        self.assertEqual(wr.chosen("", "", wr.JUDGE_MODEL, wr.JUDGE_EFFORT), (wr.JUDGE_MODEL, wr.JUDGE_EFFORT))
+        self.assertEqual(wr.chosen("gemini-4-argon", "low", wr.JUDGE_MODEL, wr.JUDGE_EFFORT), ("gemini-4-argon", "low"))
+
+    def test_nomination_uses_the_effort_it_is_given(self):
+        seen = {}
+        original = wr.call_model
+        wr.call_model = lambda *args, **kwargs: (seen.update(kwargs), ("model_failed", None, "x"))[1]
+        try:
+            wr._ask_for_nominees({"code": "2330"}, model_bin="b", model="m", effort="low", timeout_seconds=1, budget=[1])
+        finally:
+            wr.call_model = original
+        self.assertEqual(seen.get("effort"), "low")
+
+    def test_the_market_layer_takes_the_forecast_locked_last_that_day(self):
+        # 設定頁換了大盤預測的模型、同一天重跑：取最晚鎖定那份，不管它是不是程式預設的那組
+        for name, regime, moment in (("gemini-4-argon", "盤整", FORECAST_OK),
+                                     ("gemini-3.8-flash", "多頭中的回檔", FORECAST_OK + timedelta(minutes=5))):
+            folder = self.tmp / f"forecast-bin-{name}"
+            folder.mkdir()
+            fl.write_forecast(self.forecasts, day_input(), edition="evening", model=name,
+                              model_bin=fake_model(folder, [envelope(answer_a(regime=regime))]), now=clock(moment))
+        self.assertEqual(wr.market_layer(self.forecasts, day_input()["base_date"], "evening")["regime"], "多頭中的回檔")
 
 
 class MorningTests(WatchRunTestCase):

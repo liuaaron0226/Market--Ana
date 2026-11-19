@@ -192,6 +192,7 @@ def run_replay(
     method_path: Path | str,
     model_bin: Path | str,
     model: str = fr.MODEL_DEFAULT,
+    effort: str = fr.EFFORT_DEFAULT,
     start: str,
     end: str,
     fetched_at: str,
@@ -235,7 +236,7 @@ def run_replay(
         raise ValueError(f"每天份數至少要 1，收到 {daily_limit}")
     remaining = daily_limit - _written_today(root, today)
     budget = remaining if max_forecasts is None else min(max_forecasts, remaining)
-    log: dict[str, Any] = {"schema": SCHEMA, "model": model, "start": start, "end": min(end, REPLAY_UNTIL),
+    log: dict[str, Any] = {"schema": SCHEMA, "model": model, "effort": effort, "start": start, "end": min(end, REPLAY_UNTIL),
                            "editions": list(editions), "run_date": today, "started_at": started.isoformat(),
                            "daily_limit": daily_limit,
                            "plan": {key: plan[key] for key in ("forecasts", "model_calls", "skipped")},
@@ -274,7 +275,7 @@ def run_replay(
             if sources is not None:
                 data["sources"] = sources
             frozen = _frozen(session, MORNING_CLOCK) if session else _frozen(day, REPLAY_CLOCK)
-            result = fl.write_forecast(root, data, edition=edition, model_bin=model_bin, model=model, now=frozen,
+            result = fl.write_forecast(root, data, edition=edition, model_bin=model_bin, model=model, effort=effort, now=frozen,
                                        session_date=session, timeout_seconds=timeout_seconds, replay=meta)
             outcome = result["outcome"]
             if outcome == "model_failed":
@@ -321,6 +322,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--analysis", type=Path, required=True, help="已發布的 analysis-data.js")
     parser.add_argument("--method", type=Path, required=True)
     parser.add_argument("--model", default=fr.MODEL_DEFAULT)
+    parser.add_argument("--effort", default=fr.EFFORT_DEFAULT, help="思考強度（設定頁「大盤預測」一列，和正式同一組）")
     parser.add_argument("--start", required=True)
     parser.add_argument("--end", required=True)
     parser.add_argument("--plan", action="store_true", help="只算可重播的日子與模型呼叫次數，不呼叫模型")
@@ -335,6 +337,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sql-output", type=Path)
     parser.add_argument("--log-output", type=Path)
     args = parser.parse_args(argv)
+    # 排程讀設定那一步萬一沒寫進環境變數會帶空字串：照預設
+    args.model, args.effort = args.model or fr.MODEL_DEFAULT, args.effort or fr.EFFORT_DEFAULT
     editions = tuple(args.edition or fl.EDITIONS)
     if args.plan:
         analysis = with_backfill(fr.load_analysis(args.analysis), args.ledger)
@@ -350,7 +354,7 @@ def main(argv: list[str] | None = None) -> int:
     if not (args.ledger and args.agy_bin and args.fetched_at):
         parser.error("真的重播要給 --ledger、--agy-bin、--fetched-at")
     log = run_replay(args.analysis, ledger=args.ledger, method_path=args.method, model_bin=args.agy_bin,
-                     model=args.model, start=args.start, end=args.end, fetched_at=args.fetched_at, editions=editions,
+                     model=args.model, effort=args.effort, start=args.start, end=args.end, fetched_at=args.fetched_at, editions=editions,
                      max_forecasts=args.max_forecasts, daily_limit=args.daily_limit, overseas_dir=args.overseas_dir, data_root=args.data_root,
                      sql_output=args.sql_output, log_output=args.log_output,
                      ofr_fetch=market_layers.fetch_ofr,

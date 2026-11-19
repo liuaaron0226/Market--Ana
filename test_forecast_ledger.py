@@ -510,6 +510,40 @@ class ModelSeriesTests(LedgerTestCase):
         ])
 
 
+class EffortSeriesTests(LedgerTestCase):
+    """本人 2026-11-19 晚第 5 題「換思考強度也另開一組」；現在跑的組（思考中）版本號不變。"""
+
+    def test_medium_keeps_todays_version_and_other_efforts_are_new_series(self):
+        argon = fl.input_version("gemini-4-argon")
+        self.assertEqual(fl.input_version("gemini-4-argon", "medium"), argon)
+        versions = {fl.input_version("gemini-4-argon", effort) for effort in ("low", "medium", "high")}
+        self.assertEqual(len(versions), 3)
+
+    def test_the_effort_reaches_the_model_call_and_is_kept_in_the_record(self):
+        seen = []
+        original = fl.call_model
+        fl.call_model = lambda *args, **kwargs: (seen.append(kwargs.get("effort")), original(*args, **kwargs))[1]
+        try:
+            record = self.write(model_name="gemini-4-argon", effort="high")["record"]
+        finally:
+            fl.call_model = original
+        self.assertEqual(seen, ["high"])
+        self.assertEqual((record["effort"], record["input_version"]),
+                         ("high", fl.input_version("gemini-4-argon", "high")))
+
+    def test_same_day_with_another_effort_is_a_separate_record(self):
+        medium = self.write(model_name="gemini-4-argon")
+        high = self.write(model_name="gemini-4-argon", effort="high")
+        self.assertEqual((medium["outcome"], high["outcome"]), ("written", "written"))
+        self.assertEqual(medium["record"]["effort"], "medium")
+
+    def test_choice_of_finds_what_the_evening_used(self):
+        self.write(model_name="gemini-3.8-flash", effort="low")
+        self.assertEqual(fl.choice_of(self.root, BASE_A, "evening"), ("gemini-3.8-flash", "low"))
+        self.assertIsNone(fl.choice_of(self.root, BASE_A, "morning"))
+        self.assertIsNone(fl.choice_of(self.root, DATES_A[-2], "evening"))
+
+
 class LockingTests(LedgerTestCase):
     def forecast_file(self):
         files = list((self.root / "forecasts").glob("*.json"))

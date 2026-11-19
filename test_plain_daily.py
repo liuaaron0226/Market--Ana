@@ -339,7 +339,7 @@ class ProduceTest(unittest.TestCase):
         self.assertEqual(plain["data_dates"]["price_and_foreign"], "2026-11-06")
         self.assertEqual(len(self.calls), 1)
         self.assertEqual(self.calls[0][1], pd.OUTPUT_SCHEMA)
-        self.assertEqual((audit["source"], audit["model"], audit["effort"]), ("ai", "gemini-3.8-flash", "medium"))
+        self.assertEqual((audit["source"], audit["model"], audit["effort"]), ("ai", pd.MODEL_DEFAULT, pd.EFFORT_DEFAULT))
 
     def test_on_with_a_failed_or_bad_answer_falls_back_to_the_template(self):
         for result in (("model_failed", None, "結束碼 1"), ("ok", good_ai(one_line="外資賣超九百億。"), ""), RuntimeError("boom")):

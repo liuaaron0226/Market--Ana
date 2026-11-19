@@ -16,6 +16,7 @@ import { CODE_PATTERN, CODE_RE, isExchangeCode } from "./codes.js";
 import { FORECAST_PATH, handleForecastApi } from "./forecast.js";
 import { WATCH_PATH, handleWatchApi } from "./watch.js";
 import { GEMINI_USAGE_PATH, handleGeminiUsageApi } from "./gemini-usage.js";
+import { AI_MODELS_PATH, handleAiModelsApi } from "./ai-models.js";
 import { FRIEND_AI_PAGE, FRIEND_AI_PATH, keyStateLookup, deleteFriendKey, friendAiEnabled, handleFriendAiApi, notAvailable, ownerRefused } from "./friend-ai.js";
 import { WATCH_PEERS_PATH, handleWatchPeersApi } from "./watch-peers.js";
 import { INDEX_PATH, indexOf, loadIndex } from "./market-indices.js";
@@ -829,6 +830,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
       if (path.startsWith("/api/admin/")) return await handleAdminApi(request, env, path, owner);
       if (path === "/api/me") return json(200, { email, status: "approved", owner: true, logout_url: logoutUrl(env) });
       if (path === GEMINI_USAGE_PATH) return await handleGeminiUsageApi(request, env, deps, { isOwner: true });
+      if (path === AI_MODELS_PATH) return await handleAiModelsApi(request, env, deps, { isOwner: true });
       if (path === "/api/holdings/level" && !policy.features.level_advice) return levelDisabled();
       if (FORECAST_PATH.test(path)) return await handleForecastApi(request, env, path, { isOwner: true, policy });
       if (FRIEND_AI_PATH.test(path)) return ownerRefused();
@@ -858,6 +860,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
     if (isAdmin) return fail(403, "沒有管理權限");
     if (path === "/api/me") return json(200, { email, status, owner: false, logout_url: logoutUrl(env) });
     if (path === GEMINI_USAGE_PATH) return await handleGeminiUsageApi(request, env, deps, { isOwner: false });
+    if (path === AI_MODELS_PATH) return await handleAiModelsApi(request, env, deps, { isOwner: false });
     if (path === "/api/features") return json(200, policyForViewer(policy, false, env));
     if (path === "/api/holdings/level" && !policy.features.level_advice) return levelDisabled();
     if (FORECAST_PATH.test(path)) return await handleForecastApi(request, env, path, { isOwner: false, policy });

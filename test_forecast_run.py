@@ -359,6 +359,76 @@ class MorningRunTests(MorningTestCase):
         self.assertEqual(fl.read_ledger(self.ledger)["reconciliations"], [])
 
 
+class ChosenModelTests(MorningTestCase):
+    """本人 2026-11-19 晚（設定頁 AI 模型）：排程帶站主選的模型與思考強度；晨間版跟前一晚同一組（第 4 題）。"""
+
+    def recording_model(self, structured=None):
+        # 和 RunTestCase.model 一樣回答，另外把 agy 收到的 --model／--effort 記下來
+        script = self.tmp / "agy_args.py"
+        seen = self.tmp / "args.jsonl"
+        envelope = json.dumps({"event": "result", "result": {"status": "SUCCESS", "structured_output": structured or answer()}},
+                              ensure_ascii=False)
+        script.write_text(
+            "import sys,json\nfrom pathlib import Path\n"
+            "sys.stdin.buffer.readline()\n"
+            "a=sys.argv[1:]\n"
+            f"p=Path({str(seen)!r})\n"
+            "p.write_text((p.read_text() if p.exists() else '')+json.dumps([a[a.index('--model')+1],a[a.index('--effort')+1]])+'\\n')\n"
+            f"sys.stdout.buffer.write({envelope.encode('utf-8')!r} + b'\\n')\n", encoding="utf-8")
+        return script, seen
+
+    def morning(self, model_bin, **kwargs):
+        return fr.run_morning(self.analysis_file(analysis()), ledger=self.ledger, method_path=self.method,
+                              model_bin=model_bin, session_date=SESSION, holidays=set(),
+                              now=lambda: at_taipei(SESSION, "07:30:00"), **kwargs)
+
+    def test_evening_sends_the_chosen_effort_and_records_it(self):
+        script, seen = self.recording_model()
+        fr.run_evening(self.analysis_file(analysis()), ledger=self.ledger, method_path=self.method, model_bin=script,
+                       model="gemini-3.8-flash", effort="high",
+                       now=lambda: datetime.fromisoformat(f"{BASE}T17:40:00+08:00"))
+        self.assertEqual(json.loads(seen.read_text().splitlines()[0]), ["gemini-3.8-flash", "high"])
+        record = fl.read_ledger(self.ledger)["forecasts"][0]
+        self.assertEqual((record["model"], record["effort"]), ("gemini-3.8-flash", "high"))
+
+    def test_morning_follows_the_evening_of_the_same_base_date_not_the_new_setting(self):
+        script, seen = self.recording_model()
+        fr.run_evening(self.analysis_file(analysis()), ledger=self.ledger, method_path=self.method, model_bin=script,
+                       model="gemini-4-argon", effort="medium",
+                       now=lambda: datetime.fromisoformat(f"{BASE}T17:40:00+08:00"))
+        # 晚間之後站主改成 Flash 高：晨間版仍用前一晚那組，下一個晚間才換
+        log = self.morning(script, model="gemini-3.8-flash", effort="high")
+        self.assertEqual(json.loads(seen.read_text().splitlines()[-1]), ["gemini-4-argon", "medium"])
+        self.assertEqual((log["model"], log["effort"]), ("gemini-4-argon", "medium"))
+        records = {r["edition"]: r for r in fl.read_ledger(self.ledger)["forecasts"]}
+        self.assertEqual(records["morning"]["input_version"], records["evening"]["input_version"])
+
+    def test_by_default_agy_really_receives_the_forecast_effort_from_gemini_models(self):
+        import gemini_models as gm
+        script, seen = self.recording_model()
+        fr.run_evening(self.analysis_file(analysis()), ledger=self.ledger, method_path=self.method, model_bin=script,
+                       now=lambda: datetime.fromisoformat(f"{BASE}T17:40:00+08:00"))
+        self.assertEqual(json.loads(seen.read_text().splitlines()[0]), [gm.FORECAST, gm.FORECAST_EFFORT])
+
+    def test_morning_without_an_evening_uses_the_setting(self):
+        script, seen = self.recording_model()
+        log = self.morning(script, model="gemini-3.8-flash", effort="low")
+        self.assertEqual(json.loads(seen.read_text().splitlines()[-1]), ["gemini-3.8-flash", "low"])
+        self.assertEqual(log["effort"], "low")
+
+    def test_an_empty_model_or_effort_from_the_schedule_means_the_default(self):
+        # 排程讀設定那一步萬一沒寫進環境變數：--model "" 不能送給 agy
+        captured = {}
+        original = fr.run_evening
+        fr.run_evening = lambda analysis_path, **kwargs: captured.update(kwargs) or {}
+        try:
+            fr.main(["--analysis", "a.js", "--ledger", "l", "--method", "m", "--agy-bin", "b", "--model", "", "--effort", "",
+                     "--no-ofr-fetch"])
+        finally:
+            fr.run_evening = original
+        self.assertEqual((captured["model"], captured["effort"]), (fr.MODEL_DEFAULT, fr.EFFORT_DEFAULT))
+
+
 class OfficialStartTests(MorningTestCase):
     """F 票：正式起算日（本人點頭後設定）之後的基準日記為正式；之前的照舊是試跑。帳本在寫的當下就鎖定，不能事後改。"""
 

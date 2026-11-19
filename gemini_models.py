@@ -31,6 +31,8 @@ WATCH_NOMINATE_EFFORT = "high"
 # 自選股關注每日判斷：每次排程最多 40 次呼叫。11-18 晚改 Argon；11-19 下午 Argon 剩 33%（實測一次呼叫約每週額度 1%，
 # 判斷每天約 12 次是最大宗），本人選「判斷改 Flash（推薦）」、思考高，Argon 留給大盤預測與白話（換模型＝關注帳本新輸入版本）。
 WATCH_JUDGE = FLASH
+# 那時的「思考高」沒有接到判斷呼叫上，agy 實際一直收到 medium（設定頁 AI 模型那一版才接上）。本人 11-19 晚先選
+# 「先維持中」，隨後對 owner 說「Flash還是改用高好了」：用 Flash 的任務一律高，判斷也是高（上線即換一組成績，見交接）。
 WATCH_JUDGE_EFFORT = "high"
 # 朋友解讀：用朋友自己的 Gemini API 金鑰（不是 agy；朋友的金鑰用不到 Argon），Flash、思考高（API 的 thinkingLevel）。
 FRIEND_DIGEST = FLASH
@@ -38,4 +40,11 @@ FRIEND_DIGEST_EFFORT = "high"
 # 首頁「籌碼與資金」白話（daily-update.yml 的 PLAIN_MODEL／PLAIN_EFFORT）與站主 AI 解讀（ai-digest.yml 的 --model）
 # 在排程檔裡寫名稱；這裡記本人選的值，test_gemini_models 核對兩邊一致。
 PLAIN = ARGON
+PLAIN_EFFORT = "medium"
 DIGEST = ARGON
+DIGEST_EFFORT = "medium"
+
+# 本人 2026-11-19 晚：上面五組（預測、判斷、提名、白話、站主解讀）改成站主在設定頁「AI 模型」自己選，排程開跑時讀
+# （gemini_settings.py）；這裡的值是「還沒選過」或「讀不到設定」時用的預設。朋友解讀不在設定頁（朋友自己的金鑰）。
+MODELS = (ARGON, FLASH)
+EFFORTS = ("low", "medium", "high")

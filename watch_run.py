@@ -31,6 +31,15 @@ SCHEMA = "watch-run/v1"
 # 本人 2026-11-17：每日判斷與提名同類股都用 Flash（名稱只在 gemini_models 改；兩者分開設定）。
 JUDGE_MODEL = gemini_models.WATCH_JUDGE
 NOMINATE_MODEL = gemini_models.WATCH_NOMINATE
+# 本人 2026-11-19 晚：模型與思考強度改由設定頁「AI 模型」選，排程經 gemini_settings.py 帶 --model／--effort 進來；
+# 上面與這兩個是還沒選過或讀不到設定時的預設。
+JUDGE_EFFORT = gemini_models.WATCH_JUDGE_EFFORT
+NOMINATE_EFFORT = gemini_models.WATCH_NOMINATE_EFFORT
+
+
+def chosen(model, effort, default_model: str, default_effort: str) -> tuple[str, str]:
+    """排程讀設定那一步萬一沒寫進環境變數會帶空字串：照預設，不把空的名稱送給 agy。"""
+    return model or default_model, effort or default_effort
 ROOT = Path(__file__).resolve().parent
 # 本人 2026-11-16 選「照規格最多」：每次排程最多叫模型 40 次（20 檔各一次，加上不合格時的重試）。
 CALL_BUDGET = 40
@@ -314,14 +323,15 @@ class LocalSource:
 def market_layer(forecast_ledger: Path | str | None, base_date: str, edition: str) -> dict[str, Any] | None:
     """同一基準日、同一版的大盤預測：盤勢類型與三格的落點。沒有那一份或那一份是漏記時是 None（標缺漏）。
 
-    換模型那天同一基準日可能有新舊模型各一份（本人 2026-11-17 預測換 Argon），先取現在這個模型的輸入版本。"""
+    換模型那天同一基準日可能有新舊模型各一份（本人 2026-11-17 預測換 Argon）。本人 2026-11-19 晚起模型由設定頁選，
+    所以取最晚鎖定的那份（就是那一班照設定寫的）；鎖定時間一樣時才取程式預設那組的輸入版本。"""
     if forecast_ledger is None or not Path(forecast_ledger).is_dir():
         return None
     found = [record for record in fl.read_ledger(forecast_ledger)["forecasts"]
              if record["base_date"] == base_date and record["edition"] == edition and record["kind"] == "forecast"]
     if not found:
         return None
-    record = min(found, key=lambda record: record["input_version"] != fl.INPUT_VERSION)
+    record = max(found, key=lambda record: (record.get("locked_at") or "", record["input_version"] == fl.INPUT_VERSION))
     return {"forecast_id": record["forecast_id"], "regime": record["regime"],
             "cells": {key: {"zone": cell["zone"],
                             "strong_line": {k: cell["strong_line"][k] for k in ("name", "value")},
@@ -366,7 +376,8 @@ def _until(rows: Sequence[Mapping[str, Any]] | None, day: str) -> list[dict[str,
 
 def _backfill_misses(ledger: Path | str, watchlist: Sequence[Mapping[str, Any]], loaded: Mapping[str, Mapping[str, Any]],
                      index_daily: list[dict[str, Any]], base_date: str, *, edition: str, method_text: str,
-                     model_bin: Path | str, model: str, clock: Callable[[], datetime]) -> list[dict[str, str]]:
+                     model_bin: Path | str, model: str, clock: Callable[[], datetime],
+                     effort: str = JUDGE_EFFORT) -> list[dict[str, str]]:
     """這一版整個時段沒跑的交易日補記漏記（和大盤預測同一個處理）：每一檔這一版最後一份之後、今天這份之前，
     指數有日 K 卻沒有紀錄的基準日。那些日子都已過期限，帳本不呼叫模型，只鎖一筆漏記並寫下原因。
 
@@ -395,7 +406,7 @@ def _backfill_misses(ledger: Path | str, watchlist: Sequence[Mapping[str, Any]],
                                base_date=day, index_daily=_until(index_daily, day), method_text=method_text,
                                market=None, announcements=None)
             wl.write_judgment(ledger, data, edition=edition, session_date=session, model_bin=model_bin, model=model,
-                              now=clock, layers=LAYERS)
+                              effort=effort, now=clock, layers=LAYERS)
             filled.append({"code": code, "base_date": day})
     return filled
 
@@ -437,6 +448,7 @@ def run_evening(
     model_bin: Path | str,
     source: Source,
     model: str = JUDGE_MODEL,
+    effort: str = JUDGE_EFFORT,
     now: Callable[[], datetime] | None = None,
     dry_run: bool = False,
     as_of: str | None = None,
@@ -464,7 +476,8 @@ def run_evening(
     base_date = index_daily[-1]["date"]
     return _in_ledger(ledger, dry_run, lambda target: _run(
         target, "evening", watchlist, index_daily, base_date, session_date=None, forecast_ledger=forecast_ledger,
-        method_path=method_path, model_bin=model_bin, source=source, model=model, clock=clock, dry_run=dry_run,
+        method_path=method_path, model_bin=model_bin, source=source, model=model, effort=effort, clock=clock,
+        dry_run=dry_run,
         sql_output=None if dry_run else sql_output, log_output=log_output, call_budget=call_budget,
         timeout_seconds=timeout_seconds, replay=bool(as_of), rewrite_today=rewrite_today))
 
@@ -481,6 +494,7 @@ def run_morning(
     session_date: str,
     holidays: set[str],
     model: str = JUDGE_MODEL,
+    effort: str = JUDGE_EFFORT,
     now: Callable[[], datetime] | None = None,
     dry_run: bool = False,
     replay: bool = False,
@@ -517,7 +531,7 @@ def run_morning(
     return _in_ledger(ledger, dry_run, lambda target: _run(
         target, "morning", watchlist, index_daily, base_date, session_date=session_date,
         forecast_ledger=forecast_ledger, method_path=method_path, model_bin=model_bin, source=source, model=model,
-        clock=clock, dry_run=dry_run, sql_output=None if dry_run else sql_output, log_output=log_output,
+        effort=effort, clock=clock, dry_run=dry_run, sql_output=None if dry_run else sql_output, log_output=log_output,
         call_budget=call_budget, timeout_seconds=timeout_seconds, replay=replay, rewrite_today=rewrite_today))
 
 
@@ -532,10 +546,11 @@ def _in_ledger(ledger: Path | str, dry_run: bool, work: Callable[[Path], dict[st
         return work(copy)
 
 
-def _official_since(ledger: Path, edition: str, base_date: str, model: str = JUDGE_MODEL) -> str | None:
+def _official_since(ledger: Path, edition: str, base_date: str, model: str = JUDGE_MODEL,
+                    effort: str = JUDGE_EFFORT) -> str | None:
     """這一組輸入（``LAYERS``，連同這次用的模型）的正式起算日。還沒寫下時，晚間執行看帳本：之前有一天早晚兩版都用這一組跑過，
     就把今天寫成起算日（寫了不改）；今天起的判斷是正式，之前的是試跑。晨間只讀不寫。"""
-    version = wl.input_version_of(LAYERS, model)
+    version = wl.input_version_of(LAYERS, model, effort)
     since = wl.official_starts(ledger).get(version)
     if since is None and edition == "evening":
         started = wl.start_official(ledger, since=base_date, input_version=version)
@@ -546,6 +561,7 @@ def _official_since(ledger: Path, edition: str, base_date: str, model: str = JUD
 def _run(ledger: Path, edition: str, watchlist: Sequence[Mapping[str, Any]], index_daily: list[dict[str, Any]],
          base_date: str, *, session_date: str | None, forecast_ledger: Path | str | None, method_path: Path | str,
          model_bin: Path | str, source: Source, model: str, clock: Callable[[], datetime], dry_run: bool,
+         effort: str = JUDGE_EFFORT,
          sql_output: Path | str | None, log_output: Path | str | None, call_budget: int,
          timeout_seconds: float, replay: bool = False, rewrite_today: bool = False) -> dict[str, Any]:
     method_text = Path(method_path).read_text(encoding="utf-8")
@@ -599,13 +615,14 @@ def _run(ledger: Path, edition: str, watchlist: Sequence[Mapping[str, Any]], ind
         # 先對帳再寫：今天到期的格子先對完；今天這份最早的到期日在明天，寫完不必再對。
         log["reconciliation"] = {key: len(value) for key, value in wl.reconcile(ledger, index_daily, loaded).items()}
     log["backfilled_misses"] = _backfill_misses(ledger, watchlist, loaded, index_daily, base_date, edition=edition,
-                                                method_text=method_text, model_bin=model_bin, model=model, clock=clock)
-    log["official_since"] = _official_since(ledger, edition, base_date, model)
+                                                method_text=method_text, model_bin=model_bin, model=model,
+                                                effort=effort, clock=clock)
+    log["official_since"] = _official_since(ledger, edition, base_date, model, effort)
     stocks = [stock_input(item, loaded[str(item["code"])], base_date=base_date, index_daily=index_daily,
                           method_text=method_text, market=market, announcements=news.get(str(item["code"])))
               for item in watchlist]
     results = wl.write_judgments(ledger, stocks, edition=edition, session_date=session_date, model_bin=model_bin,
-                                 model=model, now=clock, layers=LAYERS, timeout_seconds=timeout_seconds,
+                                 model=model, effort=effort, now=clock, layers=LAYERS, timeout_seconds=timeout_seconds,
                                  call_budget=call_budget, official_since=log["official_since"])
     log["stocks"] = [_summary(result, load_errors.get(result["code"])) for result in results]
     if sql_output:
@@ -768,7 +785,7 @@ def _nomination_sql(record: Mapping[str, Any], owner_email: str, at: str) -> lis
 
 
 def _ask_for_nominees(model_input: Mapping[str, Any], *, model_bin: Path | str, model: str, timeout_seconds: float,
-                      budget: list[int]) -> tuple[dict[str, Any] | None, list[dict[str, str]]]:
+                      budget: list[int], effort: str = NOMINATE_EFFORT) -> tuple[dict[str, Any] | None, list[dict[str, str]]]:
     """問模型一次（不合格同一份輸入重試一次）；budget 是這一批剩下的呼叫次數（會被扣）。"""
     prompt = build_prompt(NOMINATION_RULES, model_input)
     attempts: list[dict[str, str]] = []
@@ -777,7 +794,7 @@ def _ask_for_nominees(model_input: Mapping[str, Any], *, model_bin: Path | str, 
             break
         budget[0] -= 1
         status, structured, detail = call_model(model_bin, prompt, model, timeout_seconds, NOMINATION_OUTPUT,
-                                                effort=gemini_models.WATCH_NOMINATE_EFFORT)
+                                                effort=effort)
         if status != "ok":
             attempts.append({"status": status, "detail": detail})
             break
@@ -816,6 +833,7 @@ def nominate_peers(
     model_bin: Path | str,
     check: Callable[[str, str], str],
     model: str = NOMINATE_MODEL,
+    effort: str = NOMINATE_EFFORT,
     now: Callable[[], datetime] | None = None,
     call_budget: int = NOMINATION_BUDGET,
     timeout_seconds: float = 360,
@@ -851,7 +869,7 @@ def nominate_peers(
             answered = read_record(answer_path)
         else:
             model_input = {"code": code, "name": stock.get("name"), "industry": stock.get("industry")}
-            accepted, attempts = _ask_for_nominees(model_input, model_bin=model_bin, model=model,
+            accepted, attempts = _ask_for_nominees(model_input, model_bin=model_bin, model=model, effort=effort,
                                                    timeout_seconds=timeout_seconds, budget=budget)
             if accepted is None:
                 results.append({"code": code, "outcome": "not_nominated" if attempts else "budget_spent",
@@ -939,6 +957,7 @@ def build_parser() -> argparse.ArgumentParser:
     judge.add_argument("--method", type=Path, required=True, help="方法稿（MARKET_METHOD.md）")
     judge.add_argument("--agy-bin", type=Path, required=True)
     judge.add_argument("--model", default=JUDGE_MODEL)
+    judge.add_argument("--effort", default=JUDGE_EFFORT, help="思考強度 low／medium／high（設定頁 AI 模型）")
     judge.add_argument("--session-date", help="晨間版：開盤日（台北今天）")
     judge.add_argument("--dry-run", action="store_true", help="只在暫存副本上寫，不碰帳本、不輸出資料庫指令檔")
     judge.add_argument("--as-of", help="乾跑時重播：晚間版是已發布的某一天，晨間版是開盤日（須等於 --session-date）")
@@ -951,6 +970,7 @@ def build_parser() -> argparse.ArgumentParser:
     nominate.add_argument("--ledger", type=Path, required=True)
     nominate.add_argument("--agy-bin", type=Path, required=True)
     nominate.add_argument("--model", default=NOMINATE_MODEL)
+    nominate.add_argument("--effort", default=NOMINATE_EFFORT, help="思考強度 low／medium／high（設定頁 AI 模型）")
     nominate.add_argument("--dry-run", action="store_true", help="只在暫存副本上寫、不輸出資料庫指令檔")
     nominate.add_argument("--sql-output", type=Path)
     nominate.add_argument("--log-output", type=Path)
@@ -961,6 +981,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    if args.command in ("judge", "nominate"):
+        defaults = (JUDGE_MODEL, JUDGE_EFFORT) if args.command == "judge" else (NOMINATE_MODEL, NOMINATE_EFFORT)
+        args.model, args.effort = chosen(args.model, args.effort, *defaults)
 
     if args.command == "nominate":
         import overseas_peers as op
@@ -980,7 +1004,7 @@ def main(argv: list[str] | None = None) -> int:
             sources["eodhd"] = op.CachedEodhdSource(shared)
         today = datetime.now(TAIPEI).date().isoformat()
         result = _in_ledger(args.ledger, args.dry_run, lambda target: nominate_peers(
-            target, stocks, owner_email=owner.lower(), model_bin=args.agy_bin, model=args.model,
+            target, stocks, owner_email=owner.lower(), model_bin=args.agy_bin, model=args.model, effort=args.effort,
             check=source_check(sources, today=today)))
         if args.sql_output and not args.dry_run:
             args.sql_output.parent.mkdir(parents=True, exist_ok=True)
@@ -1013,7 +1037,7 @@ def main(argv: list[str] | None = None) -> int:
     from watch_news import _wrangler_query
     watchlist = json.loads(args.watchlist.read_text(encoding="utf-8"))
     common = dict(watchlist=watchlist, ledger=args.ledger, forecast_ledger=args.forecast_ledger,
-                  method_path=args.method, model_bin=args.agy_bin, model=args.model,
+                  method_path=args.method, model_bin=args.agy_bin, model=args.model, effort=args.effort,
                   # J 票：富果金鑰 FUGLE_API_KEY；新聞與國外同類股從網站資料庫唯讀查（和關注清單同一個連線）；
                   # 環境層讀預測帳本裡的原件（43db220）。
                   source=LocalSource(fugle=licensed_inputs.fugle_from_env(), query=_wrangler_query,
