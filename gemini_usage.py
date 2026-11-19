@@ -108,17 +108,28 @@ def read_usage(agy_bin: str, timeout: int = 90) -> list[dict[str, Any]]:
     return parse_usage(done.stdout)
 
 
+def _logged_model(path: str | None) -> str | None:
+    if not path:
+        return None
+    try:
+        model = json.loads(Path(path).read_text(encoding="utf-8")).get("model")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return model if isinstance(model, str) and model else None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--agy-bin", required=True, help="空字串＝agy 沒裝好，只記下這次任務")
     parser.add_argument("--task", required=True)
     parser.add_argument("--run-id", required=True)
-    parser.add_argument("--model", help="這次用的模型；省略時照 gemini_models.py 查這個任務的模型")
+    parser.add_argument("--model", help="這次用的模型（排程照設定頁傳 AI_*_MODEL）；省略或空的時照 gemini_models.py 查這個任務的預設")
+    parser.add_argument("--run-log", help="這一班的執行紀錄（JSON，有 model 欄）；讀得到就照它記實際用的模型（晨間預測跟前一晚同一組）")
     parser.add_argument("--sql-output", required=True)
     parser.add_argument("--plain-audit", help="白話分析的執行紀錄；模型、思考程度、成功或失敗、乾跑照它記")
     parser.add_argument("--legacy-sql-output", help="同一筆的舊格式（沒有 0029 三欄），給還沒套用 0029 的資料庫")
     args = parser.parse_args(argv)
-    model, call = args.model or model_for_task(args.task), None
+    model, call = _logged_model(args.run_log) or args.model or model_for_task(args.task), None
     if args.plain_audit:
         plain = _plain_usage(Path(args.plain_audit))
         if plain is None:

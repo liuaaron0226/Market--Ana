@@ -25,13 +25,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import gemini_models
 from ai_digest import _validate_text as free_text_problem
 from ledger_core import call_model as call_agy
 
 SCHEMA = "market-plain/v2"
-# 本人 11-17 更正：這張用 Flash、思考程度 medium（和其他 agy 呼叫一樣）。workflow 用 PLAIN_MODEL／PLAIN_EFFORT 覆寫。
-MODEL_DEFAULT = "gemini-3.8-flash"
-EFFORT_DEFAULT = "medium"
+# 模型與思考程度由設定頁「AI 模型」選（本人 11-19 晚），workflow 用 PLAIN_MODEL／PLAIN_EFFORT 帶進來；
+# 讀不到設定時是空的，照這兩個預設（gemini_models.PLAIN，本人 11-18 晚選 Argon、思考「中」）。
+MODEL_DEFAULT = gemini_models.PLAIN
+EFFORT_DEFAULT = gemini_models.PLAIN_EFFORT
 MODEL_TIMEOUT_SECONDS = 360
 MODES = ("off", "dry", "on")
 PREFIX = "window.MARKET_PLAIN = "

@@ -15,6 +15,11 @@ import watch_run
 
 ROOT = Path(__file__).parent
 AGY_WORKFLOWS = ("forecast-ledger.yml", "forecast-morning.yml", "forecast-replay.yml", "watch-ledger.yml")
+# 排程檔 → 它用到設定頁的哪幾項（gemini_settings.TASKS）
+SETTINGS_WORKFLOWS = {
+    "forecast-ledger": ("forecast",), "forecast-morning": ("forecast",), "forecast-replay": ("forecast",),
+    "watch-ledger": ("watch_judge", "watch_nominate"), "daily-update": ("plain",), "ai-digest": ("digest",),
+}
 
 
 class TaskModelTests(unittest.TestCase):
@@ -36,14 +41,6 @@ class TaskModelTests(unittest.TestCase):
         self.assertEqual((gm.WATCH_NOMINATE, gm.WATCH_NOMINATE_EFFORT), (gm.FLASH, "high"))
         self.assertEqual((gm.FRIEND_DIGEST, gm.FRIEND_DIGEST_EFFORT), (gm.FLASH, "high"))
         self.assertEqual(gm.FORECAST_EFFORT, "medium")
-
-    def test_workflows_that_name_their_model_use_the_owner_choice(self):
-        # 白話（daily-update.yml 的 PLAIN_MODEL）與站主解讀（ai-digest.yml 的 --model）在排程檔裡寫名稱，要和這裡一致。
-        daily = (ROOT / ".github/workflows/daily-update.yml").read_text(encoding="utf-8")
-        digest = (ROOT / ".github/workflows/ai-digest.yml").read_text(encoding="utf-8")
-        self.assertIn(f"PLAIN_MODEL: {gm.PLAIN}", daily)
-        self.assertIn("PLAIN_EFFORT: medium", daily)
-        self.assertIn(f"--model {gm.DIGEST} ", digest)
 
     def test_nomination_asks_with_its_own_effort_and_friends_send_a_thinking_level(self):
         seen = {}
@@ -68,6 +65,13 @@ class TaskModelTests(unittest.TestCase):
         self.assertEqual(watch_run.JUDGE_MODEL, gm.WATCH_JUDGE)
         self.assertEqual(watch_run.NOMINATE_MODEL, gm.WATCH_NOMINATE)
         self.assertEqual(friend_ai_digest.MODEL, gm.FRIEND_DIGEST)
+        # 設定頁讀不到時的預設（本人 11-19 晚第 3 題）：白話與站主解讀也照這裡
+        import ai_digest
+        import plain_daily
+        self.assertEqual((plain_daily.MODEL_DEFAULT, plain_daily.EFFORT_DEFAULT), (gm.PLAIN, gm.PLAIN_EFFORT))
+        self.assertEqual((ai_digest.MODEL_DEFAULT, ai_digest.EFFORT_DEFAULT), (gm.DIGEST, gm.DIGEST_EFFORT))
+        self.assertEqual((fr.EFFORT_DEFAULT, watch_run.JUDGE_EFFORT, watch_run.NOMINATE_EFFORT),
+                         (gm.FORECAST_EFFORT, gm.WATCH_JUDGE_EFFORT, gm.WATCH_NOMINATE_EFFORT))
 
     def test_command_line_defaults_follow_the_task(self):
         self.assertEqual(watch_run.build_parser().parse_args(["judge", "--analysis", "a", "--watchlist", "w", "--ledger", "l",
@@ -83,13 +87,47 @@ class TaskModelTests(unittest.TestCase):
 
 
 class WorkflowModelTests(unittest.TestCase):
-    def test_schedules_do_not_hard_code_a_model_so_the_task_default_applies(self):
-        for name in AGY_WORKFLOWS:
+    """本人 2026-11-19 晚（設定頁 AI 模型）：每支用 Gemini 的排程開跑時先讀設定，呼叫模型那一步帶設定的模型與思考強度。"""
+
+    def jobs_steps(self, name):
+        import yaml
+        jobs = yaml.safe_load((ROOT / ".github/workflows" / f"{name}.yml").read_text(encoding="utf-8"))["jobs"]
+        return next(job["steps"] for job in jobs.values() if any("gemini_settings.py" in s.get("run", "") for s in job["steps"]))
+
+    def test_schedules_never_write_a_model_name_themselves(self):
+        for name in (*AGY_WORKFLOWS, "daily-update.yml", "ai-digest.yml"):
             source = "\n".join(line for line in (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
                                .splitlines() if not line.lstrip().startswith("#"))
             with self.subTest(workflow=name):
-                self.assertNotRegex(source, r"--model\b")
                 self.assertIsNone(re.search(r"gemini-\d", source))
+
+    def test_each_schedule_reads_the_settings_page_before_calling_gemini(self):
+        for name, tasks in SETTINGS_WORKFLOWS.items():
+            with self.subTest(workflow=name):
+                steps = self.jobs_steps(name)
+                reads = [i for i, s in enumerate(steps) if "gemini_settings.py" in s.get("run", "")]
+                self.assertEqual(len(reads), 1)
+                read = steps[reads[0]]
+                self.assertIs(read["continue-on-error"], True, "讀不到設定照預設跑，不能讓排程失敗")
+                self.assertIn("SELECT task, model, effort FROM ai_model_settings", read["run"])
+                self.assertIn(f"--task {name} ", read["run"])
+                for task in tasks:
+                    model, effort = f"AI_{task.upper()}_MODEL", f"AI_{task.upper()}_EFFORT"
+                    users = [i for i, s in enumerate(steps) if model in s.get("run", "") + str(s.get("env", {}))]
+                    self.assertTrue(users, f"{name} 沒有用到 {model}")
+                    self.assertLess(reads[0], users[0])
+                    step = steps[users[0]]
+                    self.assertIn(effort, step.get("run", "") + str(step.get("env", {})))
+
+    def test_the_usage_step_also_records_whether_the_settings_were_read_and_cleanup_removes_the_files(self):
+        for name in SETTINGS_WORKFLOWS:
+            with self.subTest(workflow=name):
+                steps = self.jobs_steps(name)
+                usage = next(s for s in steps if "gemini_usage.py" in s.get("run", ""))
+                self.assertIn("ai-model-read.sql", usage["run"])
+                cleanup = [s for s in steps if "rm -rf" in s.get("run", "") and "agy-home" in s.get("run", "")]
+                self.assertIn("ai-models.json", cleanup[-1]["run"])
+                self.assertIn("ai-model-read.sql", cleanup[-1]["run"])
 
 
 if __name__ == "__main__":

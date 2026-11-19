@@ -202,6 +202,20 @@ jobs:
             --output "$RUNNER_TEMP/ai-digest-input.json" \
             --sha-file "$RUNNER_TEMP/ai-digest-input.sha256"
 
+      - name: 讀設定頁的 AI 模型（本人 11-19 晚；讀不到照 gemini_models.py 的預設跑）
+        # 站主在設定頁「AI 模型」選的模型與思考強度（D1 ai_model_settings）；gemini_settings.py 寫進 GITHUB_ENV，
+        # 這一班有沒有讀到記在 ai-model-read.sql，記用量那一步一起寫進 D1（設定頁標「上一班沒讀到你的設定」）。
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          (cd cloud && npx --yes wrangler@4 d1 execute market-ana-accounts --remote --json \
+            --command "SELECT task, model, effort FROM ai_model_settings" > "$RUNNER_TEMP/ai-models.json") \
+            || echo "::warning::讀不到設定頁的 AI 模型設定"
+          python gemini_settings.py --input "$RUNNER_TEMP/ai-models.json" --github-env "$GITHUB_ENV" \
+            --task ai-digest --run-id "$GITHUB_RUN_ID" --read-sql "$RUNNER_TEMP/ai-model-read.sql"
+
       - name: 下載官方 agy 1.5.3 並核對 SHA-256
         id: agy_download
         if: steps.mode.outputs.dry_run == 'false'
@@ -239,11 +253,14 @@ jobs:
         env:
           HOME: ${{ runner.temp }}/agy-home
         run: |
-          common="--input $RUNNER_TEMP/ai-digest-input.json --model gemini-4-argon --output $RUNNER_TEMP/ai-digest-result.json --audit $RUNNER_TEMP/ai-digest-audit.json --sql-output $RUNNER_TEMP/ai-digest.sql"
+          # 模型與思考強度照設定頁（讀不到時是空的，ai_digest.py 照預設）
+          common=(--input "$RUNNER_TEMP/ai-digest-input.json" --model "$AI_DIGEST_MODEL" --effort "$AI_DIGEST_EFFORT"
+                  --output "$RUNNER_TEMP/ai-digest-result.json" --audit "$RUNNER_TEMP/ai-digest-audit.json"
+                  --sql-output "$RUNNER_TEMP/ai-digest.sql")
           if [ "${{ steps.agy_download.outcome }}" = "success" ] && [ "${{ steps.agy_auth.outcome }}" = "success" ]; then
-            python ai_digest.py $common --agy-bin "$RUNNER_TEMP/agy/antigravity"
+            python ai_digest.py "${common[@]}" --agy-bin "$RUNNER_TEMP/agy/antigravity"
           else
-            python ai_digest.py $common --mark-failure agy_setup_failed
+            python ai_digest.py "${common[@]}" --mark-failure agy_setup_failed
           fi
 
       - name: 寫入 D1
@@ -277,9 +294,11 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           python gemini_usage.py --agy-bin "$RUNNER_TEMP/agy/antigravity" --task ai-digest --run-id "$GITHUB_RUN_ID" \
-            --sql-output "$RUNNER_TEMP/gemini-usage.sql"
+            --model "$AI_DIGEST_MODEL" --sql-output "$RUNNER_TEMP/gemini-usage.sql"
           cd cloud && npx --yes wrangler@4 d1 execute market-ana-accounts --remote --file "$RUNNER_TEMP/gemini-usage.sql"
+          npx --yes wrangler@4 d1 execute market-ana-accounts --remote --file "$RUNNER_TEMP/ai-model-read.sql" \
+            || echo "::warning::這一班讀設定的結果寫不進去（遷移 0030 可能還沒套用）"
 
       - name: 清除登入檔與暫存輸入
         if: always()
-        run: rm -rf "$RUNNER_TEMP/agy-home" "$RUNNER_TEMP/agy" "$RUNNER_TEMP/owner-portfolio.json" "$RUNNER_TEMP/ai-digest-input.json" "$RUNNER_TEMP/ai-digest-prompt.txt" "$RUNNER_TEMP/ai-digest-schema.json" "$RUNNER_TEMP/ai-digest-result.json" "$RUNNER_TEMP/ai-digest-audit.json" "$RUNNER_TEMP/ai-digest.sql" "$RUNNER_TEMP/gemini-usage.sql"
+        run: rm -rf "$RUNNER_TEMP/agy-home" "$RUNNER_TEMP/agy" "$RUNNER_TEMP/owner-portfolio.json" "$RUNNER_TEMP/ai-digest-input.json" "$RUNNER_TEMP/ai-digest-prompt.txt" "$RUNNER_TEMP/ai-digest-schema.json" "$RUNNER_TEMP/ai-digest-result.json" "$RUNNER_TEMP/ai-digest-audit.json" "$RUNNER_TEMP/ai-digest.sql" "$RUNNER_TEMP/gemini-usage.sql" "$RUNNER_TEMP/ai-models.json" "$RUNNER_TEMP/ai-model-read.sql"
