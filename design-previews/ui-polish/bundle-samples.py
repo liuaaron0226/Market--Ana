@@ -36,7 +36,7 @@ for page in ("motion.html", "dark.html"):
 <style>body{margin:0;min-height:100dvh;display:grid;place-content:center;gap:14px;padding:24px;background:#e9e5dc;font:600 17px "Noto Sans TC","Microsoft JhengHei",system-ui,sans-serif}
 a{display:block;padding:18px 22px;border-radius:18px;background:#fffdf9;color:#1d1b20;text-decoration:none;box-shadow:inset 0 1px 0 #fff,0 4px 0 #d6cfc0,0 14px 20px -6px rgb(60 45 20/16%)}
 small{display:block;margin-top:4px;color:#5b5762;font-weight:400;font-size:13px}</style>
-<a href="motion.html">動效樣品<small>A 接得上、B 資料會動、C 板有重量</small></a>
+<a href="motion.html">動效樣品<small>常駐效果、換頁轉場（三種轉法）、B 資料會動、C 板有重量</small></a>
 <a href="dark.html">暗色桌面配色樣品<small>墨黑（現在）、深藍灰、炭褐、石墨、暮紫</small></a></html>
 """, encoding="utf-8", newline="\n")
 print("out", OUT)

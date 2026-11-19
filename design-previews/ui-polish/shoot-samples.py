@@ -59,24 +59,31 @@ def motion(page, base: str) -> None:
         page.screenshot(path=str(file))
         return Image.open(file).convert("RGB").copy()
 
-    # A：首頁 → 點一檔 → 個股頁；再開浮層
-    page.goto(f"{base}/design-previews/ui-polish/motion.html?d=a")
-    page.wait_for_timeout(600)
-    frames = [grab()]
-    page.evaluate("() => document.querySelector('[data-name=\"大立光\"]').click()")
-    for wait in (120, 110):
-        page.wait_for_timeout(wait)
+    # 換頁轉場：三種轉法各拍一張（首頁 → 點「大立光」→ 個股頁）
+    for turn, title in (("swap", "換頁・換板：舊的板沉下去、新的板落到桌上"), ("push", "換頁・推移：整張桌面往旁邊推"), ("grow", "換頁・展開：名稱長成新頁的標題")):
+        page.goto(f"{base}/design-previews/ui-polish/motion.html?d=a")
+        page.wait_for_timeout(500)
+        page.evaluate(f"() => window.SampleMotion.setTurn('{turn}')")
+        frames = [grab()]
+        page.evaluate("() => document.querySelector('[data-name=\"大立光\"]').click()")
+        for wait in (150, 170, 200):
+            page.wait_for_timeout(wait)
+            frames.append(grab())
+        page.wait_for_timeout(700)
         frames.append(grab())
-    page.wait_for_timeout(600)
-    frames.append(grab())
-    page.evaluate("() => { document.querySelector('[data-back]:not([hidden])'); [...document.querySelectorAll('[data-back]')].find(b => b.offsetParent).click(); }")
-    page.wait_for_timeout(700)
-    page.evaluate("() => document.querySelector('[data-sheet]').click()")
-    page.wait_for_timeout(130)
-    frames.append(grab())
+        sheet(frames, ["首頁", "0.15 秒", "0.35 秒", "0.55 秒", "個股頁"], title, OUT / f"turn-{turn}.png")
+
+    # 常駐效果：盤中（全部開著）隔一秒拍三張，再拍一張收盤（靜止）
+    page.goto(f"{base}/design-previews/ui-polish/motion.html?d=l")
+    page.wait_for_timeout(900)
+    frames = []
+    for _ in range(3):
+        frames.append(grab())
+        page.wait_for_timeout(800)
+    page.evaluate("() => { const key = document.querySelector('#market [data-open=\"\"]'); key.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, clientX: key.getBoundingClientRect().left + 20, clientY: key.getBoundingClientRect().top + 10 })); key.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, clientX: key.getBoundingClientRect().left + 20, clientY: key.getBoundingClientRect().top + 10 })); }")
     page.wait_for_timeout(500)
     frames.append(grab())
-    sheet(frames, ["首頁", "點「大立光」：新頁推進來", "名稱長成標題", "個股頁", "點「明細」：浮層長出來", "浮層"], "A 接得上：換頁與浮層", OUT / "motion-a.png")
+    sheet(frames, ["盤中", "盤中（0.8 秒後）", "盤中（1.6 秒後）", "收盤：全部靜止"], "常駐效果：盤中一直在動，收盤就靜止", OUT / "live.png")
 
     for which, title, waits, labels in (
         ("b", "B 資料會動：數字滾到位、小圖自己畫出來", (150, 250, 350, 900), ["進場 0.15 秒", "0.4 秒", "0.75 秒", "到位", "模擬更新：數字滾動、細線掃過"]),
