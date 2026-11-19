@@ -23,6 +23,7 @@ DEFAULTS = {
     "watch_nominate": {"model": gm.FLASH, "effort": "high"},
     "plain": {"model": gm.ARGON, "effort": "medium"},
     "digest": {"model": gm.ARGON, "effort": "medium"},
+    "news": {"model": gm.FLASH, "effort": "high"},   # 首頁「消息」（本人 11-19「Flash 整批判（推薦）」）
 }
 
 
@@ -64,7 +65,7 @@ class ResolveTests(unittest.TestCase):
         self.assertIn("AI_WATCH_JUDGE_EFFORT=medium", lines)
         self.assertIn(f"AI_FORECAST_MODEL={gm.ARGON}", lines)
         self.assertIn("AI_SETTINGS_SOURCE=saved", lines)
-        self.assertEqual(len(lines), 11)
+        self.assertEqual(len(lines), 2 * len(gs.TASKS) + 1)   # 六項（含首頁消息）各兩行＋來源
 
 
 class CommandLineTests(unittest.TestCase):

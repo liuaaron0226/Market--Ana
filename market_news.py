@@ -1,0 +1,508 @@
+"""首頁「消息」：台股、美股、日韓中的利多／利空，和每個人「我的自選」的新聞（本人 2026-11-19「共識達成」）。
+
+本人原話：「主要是做市場的利多以及利空消息……想知道為什麼今天的股票會大漲或者是會大跌或是不怎麼動」。
+定案（.scratch/market-news/consensus.md）：
+- 交易日三輪（morning 08:00、midday 11:30、close 14:00，台北）；每輪抓一次市場來源 → 站主的模型（預設 Flash 高，
+  設定頁 AI 模型的「news」）一次判完：每則利多／利空／中性、影響大中小、中文標題、一句理由，再寫「今天為什麼這樣走」。
+- 市場來源只用通訊社與國際大報（FEEDS；本人「希望你的消息來源更具考靠性，且可以考慮過外的大型新聞」）。
+  路透沒有公開 RSS，經 Google News 搜尋並只收白名單媒體（watch_news.parse_gnews）。
+- 「我的自選」：新聞在 watch_news（個股新聞，watch_news.py 每輪先抓）；站主的併在同一次呼叫；朋友用自己的金鑰
+  （朋友 AI 解讀那一把）各叫一次；沒有金鑰的朋友網站只顯示標題（這裡不寫他的列）。
+- 模型沒寫成：標題照樣存，標成 unclassified（網站不顯示利多利空與理由），不編內容。
+- 只送標題、RSS 摘要、出處與時間給模型；不送連結、不抓全文。保留 KEEP_DAYS 天（日期鍵看近 1 個月）。
+"""
+from __future__ import annotations
+
+import html
+import json
+import re
+import sys
+import xml.etree.ElementTree as ET
+from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime, timedelta, timezone
+from typing import Any
+from urllib.parse import urlencode
+
+import watch_news as wn
+
+TAIPEI = timezone(timedelta(hours=8))
+SLOTS = ("morning", "midday", "close")
+WINDOW_HOURS = 24          # 只送最近一天發布的
+PER_FEED = 12              # 每個來源最多送幾則（最新的）
+MAX_ITEMS = 100            # 一次最多送幾則給模型
+GROUP_KEEP = 12            # 每一組最多存幾則（依影響大小）
+WATCH_MAX = 30             # 「我的自選」一個人最多送幾則
+KEEP_DAYS = 35
+SUMMARY_MAX = 200
+TITLE_MAX = 120
+REASON_MAX = 80
+RSS_SUMMARY_MAX = 200
+GNEWS_PAUSE_SECONDS = wn.GNEWS_PAUSE_SECONDS
+GROUPS = ("tw", "us", "asia")
+MARKETS = ("", "日", "韓", "中")
+
+
+def _gnews(query: str, sites: Sequence[str]) -> str:
+    site = " OR ".join(f"site:{s}" for s in sites)
+    return f"{wn.GNEWS_URL}?{urlencode({'q': f'({query}) ({site}) when:1d', 'hl': 'en-US', 'gl': 'US', 'ceid': 'US:en'})}"
+
+
+# 本人 11-19 選「照這份清單（推薦）」。group 是預設分組（global＝全球大事，由模型分到影響的市場）。
+FEEDS: list[dict[str, str]] = [
+    {"key": "cna-finance", "label": "中央社", "group": "tw", "market": "", "kind": "rss",
+     "url": "https://feeds.feedburner.com/rsscna/finance"},
+    {"key": "wsj-markets", "label": "華爾街日報", "group": "us", "market": "", "kind": "rss",
+     "url": "https://feeds.content.dowjones.io/public/rss/RSSMarketsMain"},
+    {"key": "bloomberg-markets", "label": "Bloomberg", "group": "us", "market": "", "kind": "rss",
+     "url": "https://feeds.bloomberg.com/markets/news.rss"},
+    {"key": "ft-markets", "label": "金融時報", "group": "us", "market": "", "kind": "rss",
+     "url": "https://www.ft.com/markets?format=rss"},
+    {"key": "nikkei-zh", "label": "日經中文網", "group": "asia", "market": "日", "kind": "rss",
+     "url": "https://money.udn.com/rssfeed/news/1001/5588/120769"},
+    {"key": "yonhap-biz", "label": "韓聯社", "group": "asia", "market": "韓", "kind": "rss",
+     "url": "https://en.yna.co.kr/RSS/biz.xml"},
+    {"key": "koreaherald-biz", "label": "Korea Herald", "group": "asia", "market": "韓", "kind": "rss",
+     "url": "https://www.koreaherald.com/rss/kh_Business"},
+    {"key": "scmp-business", "label": "南華早報", "group": "asia", "market": "中", "kind": "rss",
+     "url": "https://www.scmp.com/rss/92/feed"},
+    {"key": "rthk-finance", "label": "香港電台", "group": "asia", "market": "中", "kind": "rss",
+     "url": "https://rthk.hk/rthk/news/rss/c_expressnews_cfinance.xml"},
+    {"key": "ft-asia", "label": "金融時報", "group": "asia", "market": "", "kind": "rss",
+     "url": "https://www.ft.com/asia-pacific?format=rss"},
+    {"key": "bloomberg-economics", "label": "Bloomberg", "group": "global", "market": "", "kind": "rss",
+     "url": "https://feeds.bloomberg.com/economics/news.rss"},
+    {"key": "bbc-business", "label": "BBC", "group": "global", "market": "", "kind": "rss",
+     "url": "https://feeds.bbci.co.uk/news/business/rss.xml"},
+    # Google News 只收白名單媒體；三次之間要停（watch_news.GNEWS_PAUSE_SECONDS）
+    {"key": "gnews-tw", "label": "路透／Bloomberg", "group": "tw", "market": "", "kind": "gnews",
+     "url": _gnews('"Taiwan stocks" OR "Taiwan shares" OR Taiex', ("reuters.com", "bloomberg.com"))},
+    {"key": "gnews-jp", "label": "路透", "group": "asia", "market": "日", "kind": "gnews",
+     "url": _gnews('"Nikkei share average" OR "Japanese stocks" OR "Tokyo stocks"', ("reuters.com",))},
+    {"key": "gnews-kr", "label": "路透", "group": "asia", "market": "韓", "kind": "gnews",
+     "url": _gnews('KOSPI OR "South Korean stocks" OR "Seoul stocks"', ("reuters.com",))},
+]
+
+# 各市場指數（網站資料庫 overseas_quotes 的最後兩根日線；加權由富果另外給）。
+INDICES = (("SOX.INDX", "費城半導體"), ("IXIC.INDX", "那斯達克"), ("DJI.INDX", "道瓊"), ("N225.INDX", "日經"), ("KS11.INDX", "韓綜"))
+
+_TAGS = re.compile(r"<[^>]+>")
+_CJK = re.compile(r"[぀-ヿ㐀-鿿가-힯]")
+_HAN = re.compile(r"[㐀-鿿]")
+_WIRE_TAGS = re.compile(r"^(?:\((?:LEAD|URGENT|\d+(?:st|nd|rd|th) LD|LD|News Focus|Yonhap Interview)[^)]*\)\s*)+", re.IGNORECASE)
+
+
+def _iso(moment: datetime) -> str:
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _plain(text: str | None, limit: int) -> str:
+    return re.sub(r"\s+", " ", html.unescape(_TAGS.sub(" ", text or ""))).strip()[:limit]
+
+
+def parse_rss(content: bytes) -> list[dict[str, str]]:
+    """一般 RSS 2.0：[{title, summary, link, published_at}]。沒有標題、連結或時間的那一則略過；整份不是 RSS 就丟 FormatChanged。"""
+    channel = wn._rss_channel(content)
+    rows = []
+    for node in channel.findall("item"):
+        title, link = _plain(node.findtext("title"), TITLE_MAX * 2), (node.findtext("link") or "").strip()
+        title = _WIRE_TAGS.sub("", title).strip()   # 韓聯社的 (LEAD)／(URGENT)／(2nd LD)：同一則的更新稿
+        try:
+            published = wn._utc((node.findtext("pubDate") or "").strip())
+        except wn.FormatChanged:
+            continue
+        if title and link.startswith("https://"):
+            rows.append({"title": title, "summary": _plain(node.findtext("description"), RSS_SUMMARY_MAX),
+                         "link": link, "published_at": published})
+    return rows
+
+
+def collect(*, get: Callable, now: str, sleep: Callable[[float], None]) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """每個來源抓一次：失敗只缺那一家（sources 記錯誤種類，回 200 但 0 則記 empty）。Google News 回 429／503 時，
+    這一輪其他 Google 查詢不再打（記 slowed）。回傳最近 WINDOW_HOURS 小時發布的，每家最多 PER_FEED 則，同連結或同標題只留一則。"""
+    oldest = _iso(datetime.strptime(now, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc) - timedelta(hours=WINDOW_HOURS))
+    items: list[dict[str, Any]] = []
+    sources: dict[str, str] = {}
+    seen: set[str] = set()
+    slowed, google_calls = False, 0
+    for feed in FEEDS:
+        if feed["kind"] == "gnews":
+            if slowed:
+                sources[feed["key"]] = "slowed"
+                continue
+            if google_calls:
+                sleep(GNEWS_PAUSE_SECONDS)
+            google_calls += 1
+        try:
+            response = get(feed["url"], None)
+            if response.status != 200:
+                slowed = slowed or (feed["kind"] == "gnews" and response.status in wn.SLOW_DOWN)
+                sources[feed["key"]] = f"HTTP {response.status}"
+                continue
+            rows = wn.parse_gnews(response.content) if feed["kind"] == "gnews" else parse_rss(response.content)
+        except wn.FormatChanged as error:
+            sources[feed["key"]] = f"format: {str(error)[:80]}"
+            continue
+        except Exception as error:  # noqa: BLE001 — 一家壞掉只讓那一家缺
+            sources[feed["key"]] = type(error).__name__
+            continue
+        if not rows:
+            sources[feed["key"]] = "empty"
+            continue
+        sources[feed["key"]] = "ok"
+        fresh = sorted((row for row in rows if row["published_at"] >= oldest), key=lambda row: row["published_at"], reverse=True)
+        for row in fresh[:PER_FEED]:
+            mark = row["title"].lower()
+            if row["link"] in seen or mark in seen:
+                continue
+            seen.update({row["link"], mark})
+            label = feed["label"]
+            if feed["kind"] == "gnews":
+                label = next((name for key, name in wn.GNEWS_OUTLETS.values() if key == row.get("source")), label)
+            items.append({"source_key": feed["key"], "source": label, "group_hint": feed["group"],
+                          "market_hint": feed["market"], "title": row["title"], "summary": row.get("summary") or "",
+                          "link": row["link"], "published_at": row["published_at"]})
+    items = _fair_share(items, MAX_ITEMS)
+    for index, row in enumerate(items, 1):
+        row["id"] = f"n{index}"
+    return items, sources
+
+
+def _fair_share(items: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    """超過 limit 則時，每家輪流各取最新的一則，直到滿（不讓量大的幾家把別家擠掉）；結果新到舊。"""
+    queues: dict[str, list[dict[str, Any]]] = {}
+    for row in sorted(items, key=lambda row: row["published_at"], reverse=True):
+        queues.setdefault(row["source_key"], []).append(row)
+    picked: list[dict[str, Any]] = []
+    while len(picked) < limit and any(queues.values()):
+        for queue in queues.values():
+            if queue and len(picked) < limit:
+                picked.append(queue.pop(0))
+    return sorted(picked, key=lambda row: row["published_at"], reverse=True)
+
+
+def indices(query: Callable[[str], list[dict]], taiex: Callable[[], dict | None]) -> list[dict[str, Any]]:
+    """加權（富果，可能是盤中）＋國外指數最後一根日線對前一根的漲跌（%，兩位小數）。拿不到的不列。"""
+    out = []
+    try:
+        first = taiex()
+        if first:
+            out.append(first)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        rows = query("SELECT symbol, date, close FROM overseas_quotes WHERE symbol IN ("
+                     + ",".join(f"'{symbol}'" for symbol, _ in INDICES) + ") ORDER BY symbol, date")
+    except Exception:  # noqa: BLE001 — 表還沒建（國外指數沒上線）就不列
+        rows = []
+    for symbol, name in INDICES:
+        series = [row for row in rows if row["symbol"] == symbol and row.get("close")]
+        if len(series) >= 2 and series[-2]["close"]:
+            change = round((float(series[-1]["close"]) / float(series[-2]["close"]) - 1) * 100, 2)
+            out.append({"name": name, "change_pct": change, "date": series[-1]["date"]})
+    return out
+
+
+# ---- 模型 ----
+
+_ITEM = {"type": "object", "properties": {
+    "id": {"type": "string"}, "group": {"type": "string", "enum": [*GROUPS, "skip"]},
+    "market": {"type": "string", "enum": list(MARKETS)}, "tone": {"type": "string", "enum": ["up", "down", "flat"]},
+    "impact": {"type": "integer", "enum": [1, 2, 3]}, "title": {"type": "string"}, "reason": {"type": "string"}},
+    "required": ["id", "group", "market", "tone", "impact", "title", "reason"]}
+_WATCH = {"type": "object", "properties": {
+    "id": {"type": "string"}, "tone": {"type": "string", "enum": ["up", "down", "flat"]},
+    "impact": {"type": "integer", "enum": [1, 2, 3]}, "title": {"type": "string"}, "reason": {"type": "string"}},
+    "required": ["id", "tone", "impact", "title", "reason"]}
+OUTPUT_SCHEMA = {"type": "object", "properties": {"summary": {"type": "string"}, "items": {"type": "array", "items": _ITEM},
+                                                  "watch": {"type": "array", "items": _WATCH}},
+                 "required": ["summary", "items", "watch"]}
+WATCH_SCHEMA = {"type": "object", "properties": {"watch": {"type": "array", "items": _WATCH}}, "required": ["watch"]}
+
+SLOT_TEXT = {"morning": "台股開盤前（台北 08:00）", "midday": "台股盤中（台北 11:30）", "close": "台股收盤後（台北 14:00）"}
+
+RULES = """你是台股投資人的新聞助理。讀 INPUT 的新聞標題與摘要，用繁體中文回答，只回 JSON。
+目的：讓使用者知道「今天台股（和各市場）為什麼大漲、大跌或不怎麼動」。
+items：每一則都要回（id 照抄）：
+- group：這則主要影響哪個市場——tw 台股、us 美股、asia 日韓中；group_hint 是來源的預設，global 的要你分；
+  和股市無關（生活、社會、體育、八卦）或看不出影響的填 skip。
+- market：asia 那組填「日」「韓」「中」其中一個（香港算中）；其他組填空字串。
+- tone：對該市場是利多 up、利空 down，或中性 flat（已在預期內、影響不明）。
+- impact：影響大小 3 大、2 中、1 小（會左右整個市場或權值股的才是 3）。
+- title：中文標題；原文是中文就照抄（可去掉多餘的來源字樣），外文就翻成自然的繁體中文，不加原文沒有的事實。
+- reason：一句話（30 字內）說明為什麼是利多或利空、會怎麼影響；只能根據標題與摘要，不要編數字或內容。
+watch：使用者自選股的新聞，同樣回 tone、impact、title、reason（對那一檔股票而言）。
+summary：2～3 句「今天為什麼這樣走」，以台股為主、帶到美股與日韓中；可以引用 indices 給的漲跌幅，
+其他數字只能來自標題或摘要；slot 是開盤前時，講的是昨夜國際市場與今天可能的影響，不要假裝已經開盤。"""
+
+WATCH_RULES = """你是台股投資人的新聞助理。讀 INPUT 的自選股新聞，用繁體中文回答，只回 JSON。
+watch：每一則都要回（id 照抄）：tone 對那一檔股票是利多 up、利空 down 或中性 flat；impact 3 大、2 中、1 小；
+title 中文標題（外文翻成自然的繁體中文，不加原文沒有的事實）；reason 一句話（30 字內），只能根據標題，不要編數字。"""
+
+
+def prompt(slot: str, trade_date: str, items: Sequence[Mapping[str, Any]], watch: Sequence[Mapping[str, Any]],
+           index_rows: Sequence[Mapping[str, Any]]) -> str:
+    payload = {"slot": slot, "slot_text": SLOT_TEXT[slot], "trade_date": trade_date, "indices": list(index_rows),
+               "items": [{key: row[key] for key in ("id", "group_hint", "source", "title", "summary", "published_at")}
+                         for row in items],
+               "watch": [{key: row[key] for key in ("id", "code", "name", "source", "title", "published_at")} for row in watch]}
+    return RULES + "\nINPUT:" + json.dumps(payload, ensure_ascii=False)
+
+
+def watch_prompt(watch: Sequence[Mapping[str, Any]]) -> str:
+    payload = {"watch": [{key: row[key] for key in ("id", "code", "name", "source", "title", "published_at")} for row in watch]}
+    return WATCH_RULES + "\nINPUT:" + json.dumps(payload, ensure_ascii=False)
+
+
+def _text(value: Any, limit: int) -> str | None:
+    if not isinstance(value, str):
+        return None
+    value = re.sub(r"\s+", " ", value).strip()
+    return value[:limit] if value else None
+
+
+def _mark(entry: Any) -> dict[str, Any] | None:
+    """一則的共同欄位檢查：tone、impact、title、reason；不合格回 None。"""
+    if not isinstance(entry, Mapping):
+        return None
+    tone, impact = entry.get("tone"), entry.get("impact")
+    title, reason = _text(entry.get("title"), TITLE_MAX), _text(entry.get("reason"), REASON_MAX)
+    if tone not in ("up", "down", "flat") or impact not in (1, 2, 3) or isinstance(impact, bool) or not title or not reason:
+        return None
+    return {"tone": tone, "impact": impact, "title": title, "reason": reason}
+
+
+def _translated(original: str) -> int:
+    return 0 if _HAN.search(original or "") else 1
+
+
+def validate_items(output: Any, items: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """模型回的 items → 要存的列：id 要是送出去的、欄位要合格、skip 的不存；每組依影響大小留 GROUP_KEEP 則。"""
+    by_id = {row["id"]: row for row in items}
+    out, used = [], set()
+    for entry in (output or {}).get("items") or [] if isinstance(output, Mapping) else []:
+        mark = _mark(entry)
+        source = by_id.get(entry.get("id")) if isinstance(entry, Mapping) else None
+        if not mark or not source or entry["id"] in used or entry.get("group") not in GROUPS:
+            continue
+        used.add(entry["id"])
+        market = entry.get("market") if entry.get("group") == "asia" and entry.get("market") in MARKETS else ""
+        out.append({**mark, "id": entry["id"], "group": entry["group"], "market": market or source["market_hint"] or "",
+                    "translated": _translated(source["title"]), "source": source["source"], "link": source["link"],
+                    "published_at": source["published_at"]})
+    return _keep_per_group(out)
+
+
+def _keep_per_group(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    kept = []
+    for group in GROUPS:
+        newest = sorted((row for row in rows if row["group"] == group), key=lambda row: row["published_at"], reverse=True)
+        ranked = sorted(newest, key=lambda row: -row["impact"])   # 影響大的在前；一樣大時新的在前
+        kept += ranked[:GROUP_KEEP]
+    return kept
+
+
+def unclassified_items(items: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """模型沒寫成：標題照原文存、分在來源的預設組（全球大事放美股），不標利多利空、沒有理由。"""
+    rows = [{"id": row["id"], "group": "us" if row["group_hint"] == "global" else row["group_hint"],
+             "market": row["market_hint"] or "", "tone": "flat", "impact": 1, "title": row["title"][:TITLE_MAX],
+             "reason": "", "translated": 0, "source": row["source"], "link": row["link"],
+             "published_at": row["published_at"]} for row in items]
+    return _keep_per_group(rows)
+
+
+def validate_watch(output: Any, watch: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    by_id = {row["id"]: row for row in watch}
+    out, used = [], set()
+    for entry in (output or {}).get("watch") or [] if isinstance(output, Mapping) else []:
+        mark = _mark(entry)
+        source = by_id.get(entry.get("id")) if isinstance(entry, Mapping) else None
+        if not mark or not source or entry["id"] in used:
+            continue
+        used.add(entry["id"])
+        out.append({**mark, "code": source["code"], "link": source["link"], "translated": _translated(source["title"])})
+    return out
+
+
+# ---- 資料庫 ----
+
+def _q(value: Any) -> str:
+    return wn._q(value)
+
+
+def watch_rows(query: Callable[[str], list[dict]], email: str, now: str) -> list[dict[str, Any]]:
+    """這個人自選股最近 WINDOW_HOURS 小時的個股新聞（watch_news；中央社對不到個股的 '' 不算）。"""
+    if not wn._EMAIL.fullmatch(email or ""):
+        return []
+    since = _iso(datetime.strptime(now, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc) - timedelta(hours=WINDOW_HOURS))
+    rows = query("SELECT n.code, w.name, n.link, n.source, n.title, n.published_at FROM watch_news n "
+                 "JOIN user_watchlist w ON w.code = n.code AND lower(w.email) = lower(" + _q(email) + ") "
+                 f"WHERE n.code <> '' AND n.published_at >= {_q(since)} AND n.published_at <= {_q(now)} "
+                 "ORDER BY n.published_at DESC, n.link")
+    out = []
+    for index, row in enumerate(rows[:WATCH_MAX], 1):
+        out.append({"id": f"w{index}", "code": row["code"], "name": row["name"], "link": row["link"],
+                    "source": wn.SOURCE_LABELS.get(row["source"], row["source"]), "title": row["title"],
+                    "published_at": row["published_at"]})
+    return out
+
+
+def run_sql(run: Mapping[str, Any], items: Sequence[Mapping[str, Any]], user_rows: Mapping[str, Sequence[Mapping[str, Any]]],
+            *, now: str) -> str:
+    """同一輪重跑就整份換掉；超過 KEEP_DAYS 天的輪次連同它的新聞與自選標記一起清掉。"""
+    run_id = run["run_id"]
+    cutoff = (datetime.strptime(now, "%Y-%m-%dT%H:%M:%SZ") - timedelta(days=KEEP_DAYS)).strftime("%Y-%m-%d")
+    lines = [f"DELETE FROM market_news_items WHERE run_id = {_q(run_id)};",
+             f"DELETE FROM market_news_user_items WHERE run_id = {_q(run_id)};",
+             f"DELETE FROM market_news_runs WHERE run_id = {_q(run_id)};",
+             "INSERT INTO market_news_runs (run_id, trade_date, slot, created_at, status, summary, indices, sources, model) VALUES ("
+             + ", ".join(_q(run[key]) for key in ("run_id", "trade_date", "slot", "created_at", "status", "summary"))
+             + f", {_q(json.dumps(run['indices'], ensure_ascii=False))}, {_q(json.dumps(run['sources'], ensure_ascii=False))}, "
+             + f"{_q(run.get('model'))});"]
+    for row in items:
+        lines.append("INSERT INTO market_news_items (run_id, item_id, grp, market, tone, impact, title, translated, reason, "
+                     "source, link, published_at) VALUES ("
+                     + ", ".join([_q(run_id), _q(row["id"]), _q(row["group"]), _q(row["market"]), _q(row["tone"]),
+                                  str(int(row["impact"])), _q(row["title"]), str(int(row["translated"])), _q(row["reason"]),
+                                  _q(row["source"]), _q(row["link"]), _q(row["published_at"])]) + ");")
+    for email, rows in user_rows.items():
+        for row in rows:
+            lines.append("INSERT OR REPLACE INTO market_news_user_items (email, run_id, code, link, tone, impact, title, "
+                         "translated, reason) VALUES ("
+                         + ", ".join([_q(email), _q(run_id), _q(row["code"]), _q(row["link"]), _q(row["tone"]),
+                                      str(int(row["impact"])), _q(row["title"]), str(int(row["translated"])),
+                                      _q(row["reason"])]) + ");")
+    old = f"SELECT run_id FROM market_news_runs WHERE trade_date < {_q(cutoff)}"
+    lines += [f"DELETE FROM market_news_items WHERE run_id IN ({old});",
+              f"DELETE FROM market_news_user_items WHERE run_id IN ({old});",
+              f"DELETE FROM market_news_runs WHERE trade_date < {_q(cutoff)};"]
+    return "\n".join(lines) + "\n"
+
+
+Asker = Callable[[str, Mapping[str, Any]], tuple[str, Any, str]]
+FriendAsker = Callable[[Mapping[str, Any], str, Mapping[str, Any]], tuple[str, Any, str]]
+
+
+def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dict]], execute: Callable[[str], None],
+        get: Callable, sleep: Callable[[float], None], ask_owner: Asker, owner_email: str,
+        friend_keys: Sequence[Mapping[str, Any]], ask_friend: FriendAsker, taiex: Callable[[], dict | None],
+        model: str | None = None, dry_run: bool = False) -> dict[str, Any]:
+    """一輪：抓市場來源 → 站主的模型一次（市場＋站主自選）→ 每位有金鑰的朋友一次（只有他的自選）→ 一份 SQL 寫回。"""
+    if slot not in SLOTS:
+        raise ValueError(f"slot 只能是 {SLOTS}")
+    if not wn._EMAIL.fullmatch(owner_email or ""):
+        raise ValueError("站主 email 格式不對")
+    items, sources = collect(get=get, now=now, sleep=sleep)
+    index_rows = indices(query, taiex)
+    owner_watch = watch_rows(query, owner_email, now)
+    status, output, note = ask_owner(prompt(slot, trade_date, items, owner_watch, index_rows), OUTPUT_SCHEMA)
+    summary = _text(output.get("summary"), SUMMARY_MAX) if status == "ok" and isinstance(output, Mapping) else None
+    if status == "ok" and summary:
+        stored, run_status = validate_items(output, items), "ok"
+        user_rows = {owner_email: validate_watch(output, owner_watch)}
+    else:
+        stored, run_status, summary, user_rows = unclassified_items(items), "unclassified", None, {}
+    friends: dict[str, str] = {}
+    for key_row in friend_keys:
+        email = str(key_row.get("email") or "")
+        if not wn._EMAIL.fullmatch(email) or email.lower() == owner_email.lower():
+            continue
+        watch = watch_rows(query, email, now)
+        if not watch:
+            friends[email] = "no_news"
+            continue
+        try:
+            friend_status, friend_output, _ = ask_friend(key_row, watch_prompt(watch), WATCH_SCHEMA)
+        except Exception as error:  # noqa: BLE001 — 一位朋友失敗不影響別人
+            friend_status, friend_output = type(error).__name__, None
+        friends[email] = friend_status
+        if friend_status == "ok":
+            user_rows[email] = validate_watch(friend_output, watch)
+    run_row = {"run_id": f"{trade_date}-{slot}", "trade_date": trade_date, "slot": slot, "created_at": now,
+               "status": run_status, "summary": summary, "indices": index_rows, "sources": sources, "model": model}
+    script = run_sql(run_row, stored, user_rows, now=now)
+    if not dry_run:
+        execute(script)
+    return {"status": "ok", "run_id": run_row["run_id"], "run_status": run_status, "items": len(stored),
+            "sent": len(items), "model": status, **({"model_note": note[:200]} if status != "ok" and note else {}),
+            "owner_watch": len(user_rows.get(owner_email, [])), "friends": friends, "sources": sources,
+            "dry_run": dry_run}
+
+
+# ---- 排程用的接線（market-news.yml） ----
+
+def _taiex_from_fugle() -> dict | None:
+    import licensed_inputs
+    fugle = licensed_inputs.fugle_from_env()
+    if fugle is None:
+        return None
+    quote = fugle.quote(licensed_inputs.INDEX_SYMBOL)
+    change = quote.get("changePercent")
+    return {"name": "加權", "change_pct": round(float(change), 2), "date": quote.get("date")} if change is not None else None
+
+
+def _owner_asker(agy_bin: str | None, home: str | None, model: str, effort: str) -> Asker:
+    import os
+    from pathlib import Path
+
+    import ledger_core
+    import plain_daily
+
+    def ask(text: str, schema: Mapping[str, Any]) -> tuple[str, Any, str]:
+        if not agy_bin or not Path(agy_bin).exists():
+            return "agy_unavailable", None, "agy 沒有安裝成功"
+        return ledger_core.call_model(agy_bin, text, model, 300, schema, env=plain_daily.agy_environment(os.environ, home),
+                                      effort=effort)
+    return ask
+
+
+def _friend_asker(model: str) -> FriendAsker:
+    import friend_ai_digest as fad
+
+    def ask(key_row: Mapping[str, Any], text: str, schema: Mapping[str, Any]) -> tuple[str, Any, str]:
+        try:
+            key = fad.node_decrypt(dict(key_row))
+        except Exception:  # noqa: BLE001
+            return "key_decrypt_failed", None, ""
+        try:
+            output, _usage = fad.call_gemini(text, model, api_key=key, post=fad.http_post, schema=dict(schema))
+            return "ok", output, ""
+        except fad.ModelCallFailed as error:
+            return str(error.args[0] if error.args else "gemini_failed"), None, ""
+    return ask
+
+
+def main(argv: Sequence[str]) -> int:
+    import argparse
+    import os
+    import time
+
+    import gemini_models
+    parser = argparse.ArgumentParser(description="首頁消息：一輪")
+    parser.add_argument("command", choices=["run"])
+    parser.add_argument("--slot", required=True, choices=SLOTS)
+    parser.add_argument("--date", help="台北交易日；不給用今天")
+    parser.add_argument("--friend-keys", help="wrangler --json 讀出的朋友金鑰（friend-ai-schedule.mjs keys-sql）")
+    parser.add_argument("--agy-bin")
+    parser.add_argument("--agy-home")
+    parser.add_argument("--dry-run", action="store_true", help="照樣抓、照樣叫模型，但不寫網站資料庫")
+    args = parser.parse_args(argv)
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    trade_date = args.date or datetime.now(TAIPEI).date().isoformat()
+    model = os.environ.get("AI_NEWS_MODEL") or gemini_models.NEWS
+    effort = os.environ.get("AI_NEWS_EFFORT") or gemini_models.NEWS_EFFORT
+    keys = []
+    if args.friend_keys and os.path.exists(args.friend_keys):
+        import friend_ai_digest
+        from pathlib import Path
+        keys = friend_ai_digest.read_keys(Path(args.friend_keys))
+    report = run(args.slot, trade_date=trade_date, now=now, query=wn._wrangler_query, execute=wn._wrangler_execute,
+                 get=wn._http_get, sleep=time.sleep, ask_owner=_owner_asker(args.agy_bin, args.agy_home, model, effort),
+                 owner_email=os.environ.get("OWNER_EMAIL", ""), friend_keys=keys,
+                 ask_friend=_friend_asker(gemini_models.FRIEND_DIGEST), taiex=_taiex_from_fugle, model=model,
+                 dry_run=args.dry_run)
+    print(json.dumps({**report, "effort": effort}, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

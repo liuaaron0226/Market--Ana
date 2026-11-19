@@ -1,0 +1,219 @@
+# 首頁「消息」（本人 2026-11-19「共識達成」，.scratch/market-news/consensus.md）：交易日三輪抓市場新聞與個股新聞，
+# 站主的模型（設定頁 AI 模型「首頁消息」，預設 Flash 高）一次標利多／利空、翻中文、寫「今天為什麼這樣走」；
+# 有 Gemini 金鑰的朋友，他自選股的新聞用他自己的金鑰各判一次。結果寫進網站資料庫（market_news_*、watch_news）。
+# 觸發：
+# - 盤前 08:00：公司重大訊息（announcements，cron-trigger 每天台北 08:00）跑完接著跑；週末不跑。
+# - 午盤 11:30、收盤後 14:00：cron-trigger（worker.js 的 "30 3"、"0 6"）以 workflow_dispatch 觸發、帶 slot。
+# 正式寫入要 repository variable MARKET_ANA_MARKET_NEWS_SCHEDULE=on 而且是預設分支；其他一律乾跑：
+# 照樣抓、照樣叫站主的模型（記用量），但不寫網站資料庫、不叫朋友的金鑰。網站顯示另有 MARKET_ANA_MARKET_NEWS 開關。
+name: market-news
+
+on:
+  workflow_run:
+    workflows: [announcements]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      slot:
+        description: "哪一輪：morning 盤前／midday 午盤／close 收盤後"
+        required: true
+        type: choice
+        options: [morning, midday, close]
+        default: close
+      dry_run:
+        description: "乾跑：照樣抓、叫站主的模型，但不寫網站資料庫"
+        required: false
+        type: boolean
+        default: true
+      date:
+        description: "cron-trigger 送的台北日期（只做紀錄；一律取台北今天）"
+        required: false
+        type: string
+      trigger_source:
+        description: "自動排程來源（cloudflare-cron）；手動留空"
+        required: false
+        type: string
+      trigger_slot:
+        description: "原始 UTC cron 時段"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run != false && format('market-news-dry-{0}', github.run_id) || 'market-news' }}
+  cancel-in-progress: false
+
+jobs:
+  authorize:
+    runs-on: ubuntu-latest
+    outputs:
+      allowed: ${{ steps.auth.outputs.allowed }}
+      dry_run: ${{ steps.auth.outputs.dry_run }}
+      slot: ${{ steps.auth.outputs.slot }}
+    steps:
+      - name: Fail-closed 核准執行模式
+        id: auth
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SWITCH: ${{ vars.MARKET_ANA_MARKET_NEWS_SCHEDULE }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          INPUT_SLOT: ${{ inputs.slot }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          on_main=false
+          if [ "$SWITCH" = "on" ] && [ "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH" ]; then on_main=true; fi
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            dry_run=true
+            if [ "$INPUT_DRY_RUN" = "false" ] && [ "$on_main" = "true" ]; then dry_run=false; fi
+            echo "allowed=true" >> "$GITHUB_OUTPUT"; echo "dry_run=$dry_run" >> "$GITHUB_OUTPUT"
+            echo "slot=$INPUT_SLOT" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # 接在公司重大訊息後面的盤前那一輪：台北週六、週日不跑；開關沒開就什麼都不做。
+          weekday=$(TZ=Asia/Taipei date +%u)
+          if [ "$on_main" = "true" ] && [ "$weekday" -le 5 ]; then
+            echo "allowed=true" >> "$GITHUB_OUTPUT"; echo "dry_run=false" >> "$GITHUB_OUTPUT"; echo "slot=morning" >> "$GITHUB_OUTPUT"
+          else
+            echo "allowed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::MARKET_ANA_MARKET_NEWS_SCHEDULE 不是 on 或今天是週末，盤前那一輪不執行"
+          fi
+
+  news:
+    needs: authorize
+    if: needs.authorize.outputs.allowed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TZ: Asia/Taipei
+      PYTHONIOENCODING: utf-8
+      DRY_RUN: ${{ needs.authorize.outputs.dry_run }}
+      SLOT: ${{ needs.authorize.outputs.slot }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: 安裝相依
+        run: python -m pip install -r requirements-daily.txt
+
+      - name: 檢查機密
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          AGY_LOGIN_BUNDLE: ${{ secrets.AGY_LOGIN_BUNDLE }}
+          OWNER_EMAIL: ${{ vars.OWNER_EMAIL }}
+        run: |
+          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID AGY_LOGIN_BUNDLE OWNER_EMAIL; do
+            if [ -z "${!name}" ]; then echo "::error::缺少 $name"; exit 1; fi
+          done
+
+      - name: 讀設定頁的 AI 模型（讀不到照 gemini_models.py 的預設跑）
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          (cd cloud && npx --yes wrangler@4 d1 execute market-ana-accounts --remote --json \
+            --command "SELECT task, model, effort FROM ai_model_settings" > "$RUNNER_TEMP/ai-models.json") \
+            || echo "::warning::讀不到設定頁的 AI 模型設定"
+          python gemini_settings.py --input "$RUNNER_TEMP/ai-models.json" --github-env "$GITHUB_ENV" \
+            --task market-news --run-id "$GITHUB_RUN_ID" --read-sql "$RUNNER_TEMP/ai-model-read.sql"
+
+      - name: 下載官方 agy 1.5.3 並核對 SHA-256
+        id: agy_download
+        continue-on-error: true
+        run: |
+          mkdir -p "$RUNNER_TEMP/agy" && cd "$RUNNER_TEMP/agy"
+          curl -fsSL -o agy.tgz https://github.com/google-antigravity/antigravity-cli/releases/download/1.5.3/agy_cli_linux_x64.tar.gz
+          echo "1b4850599cce73a17f94ffb422df3bf9531531b77dbddc40c1a435e0c2c16807  agy.tgz" | sha256sum -c
+          tar xzf agy.tgz
+          ./antigravity --version
+
+      - name: 還原登入檔到隔離 HOME
+        id: agy_auth
+        if: steps.agy_download.outcome == 'success'
+        continue-on-error: true
+        env:
+          AGY_LOGIN_BUNDLE: ${{ secrets.AGY_LOGIN_BUNDLE }}
+        run: |
+          home="$RUNNER_TEMP/agy-home"; mkdir -p "$home"; chmod 700 "$home"
+          printf '%s' "$AGY_LOGIN_BUNDLE" | tr -d ' \r\n' | base64 -d | tar xzf - -C "$home"
+
+      # 「我的自選」要用最新的個股新聞：先抓一次（股票池前 50、每個人的自選與最近搜尋；Google News 大媒體＋中央社）。
+      # 乾跑不寫網站資料庫，所以跳過（模型讀的是資料庫裡現有的個股新聞）。
+      - name: 個股新聞：抓 Google News 大媒體與中央社，寫進 D1
+        if: env.DRY_RUN == 'false'
+        continue-on-error: true
+        env:
+          OWNER_EMAIL: ${{ vars.OWNER_EMAIL }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: python watch_news.py daily --d1
+
+      - name: 讀可用的朋友金鑰（密文；朋友 AI 解讀開著才讀）
+        if: env.DRY_RUN == 'false' && vars.MARKET_ANA_FRIEND_AI == 'on'
+        continue-on-error: true
+        working-directory: cloud
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npx --yes wrangler@4 d1 execute market-ana-accounts --remote --json \
+            --command "$(node friend-ai-schedule.mjs keys-sql)" > "$RUNNER_TEMP/friend-keys.json"
+
+      - name: 一輪首頁消息
+        id: news
+        env:
+          OWNER_EMAIL: ${{ vars.OWNER_EMAIL }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          FUGLE_API_KEY: ${{ secrets.FUGLE_API_KEY }}
+          FRIEND_AI_MASTER_KEY: ${{ secrets.FRIEND_AI_MASTER_KEY }}
+          AI_NEWS_MODEL: ${{ env.AI_NEWS_MODEL }}
+          AI_NEWS_EFFORT: ${{ env.AI_NEWS_EFFORT }}
+        run: |
+          args=(run --slot "$SLOT" --agy-bin "$RUNNER_TEMP/agy/antigravity" --agy-home "$RUNNER_TEMP/agy-home")
+          if [ "$DRY_RUN" = "false" ]; then
+            args+=(--friend-keys "$RUNNER_TEMP/friend-keys.json")
+          else
+            args+=(--dry-run)
+          fi
+          mkdir -p "$RUNNER_TEMP/market-news"
+          python market_news.py "${args[@]}" | tee "$RUNNER_TEMP/market-news/run.json"
+
+      - name: 記進 Gemini 用量（設定頁用；失敗不影響這一輪）
+        if: always() && steps.agy_auth.outcome == 'success'
+        continue-on-error: true
+        run: |
+          export HOME="$RUNNER_TEMP/agy-home"
+          python gemini_usage.py --agy-bin "$RUNNER_TEMP/agy/antigravity" --task market-news --run-id "$GITHUB_RUN_ID" \
+            --sql-output "$RUNNER_TEMP/gemini-usage.sql"
+          if [ -s "$RUNNER_TEMP/gemini-usage.sql" ]; then
+            cd cloud
+            npx --yes wrangler@4 d1 execute market-ana-accounts --remote --file "$RUNNER_TEMP/gemini-usage.sql"
+            npx --yes wrangler@4 d1 execute market-ana-accounts --remote --file "$RUNNER_TEMP/ai-model-read.sql" \
+              || echo "::warning::這一班讀設定的結果寫不進去"
+          fi
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: 執行摘要
+        if: always()
+        run: |
+          {
+            echo "### 首頁消息 $SLOT（${{ env.DRY_RUN == 'false' && '正式' || '乾跑，未寫入' }}）"
+            if [ -f "$RUNNER_TEMP/market-news/run.json" ]; then echo '```json'; cat "$RUNNER_TEMP/market-news/run.json"; echo '```'; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 清除 agy 登入檔、朋友金鑰密文與暫存
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/agy-home" "$RUNNER_TEMP/agy" "$RUNNER_TEMP/friend-keys.json" "$RUNNER_TEMP/gemini-usage.sql" "$RUNNER_TEMP/ai-models.json" "$RUNNER_TEMP/ai-model-read.sql"

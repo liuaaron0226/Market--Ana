@@ -29,6 +29,7 @@ TASKS = {
     "watch_nominate": ("WATCH_NOMINATE", "WATCH_NOMINATE_EFFORT"),
     "plain": ("PLAIN", "PLAIN_EFFORT"),                    # 首頁「籌碼與資金」白話
     "digest": ("DIGEST", "DIGEST_EFFORT"),                 # 站主 AI 解讀
+    "news": ("NEWS", "NEWS_EFFORT"),                       # 首頁「消息」（本人 11-19，market-news.yml）
 }
 
 
