@@ -12,7 +12,7 @@ import watch_news as wn
 ROOT = Path(__file__).resolve().parent
 MIGRATIONS = ROOT / "cloud/migrations"
 SCHEMA = "".join((MIGRATIONS / name).read_text(encoding="utf-8")
-                 for name in ("0005_user_portfolio.sql", "0011_watchlist_watch.sql", "0015_watch_news.sql", "0031_market_news.sql"))
+                 for name in ("0005_user_portfolio.sql", "0011_watchlist_watch.sql", "0015_watch_news.sql", "0031_market_news.sql", "0032_stock_news_marks.sql"))
 NOW = "2026-11-19T06:05:00Z"          # 台北 14:05，收盤後那一輪
 OWNER = "owner@example.com"
 FRIEND = "friend@example.com"

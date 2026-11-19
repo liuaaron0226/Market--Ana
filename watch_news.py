@@ -1,5 +1,10 @@
 """個股新聞標題：寫進雲端資料庫 watch_news（表名沿用自選股關注 C 票）。
 
+⚑ 2026-11-20 第二輪（本人「我的自選股不可能都沒新聞…影響股票漲跌比較多的消息還是來自官方或者是政府的政策
+還有合作關係跟財報」；題目「個股新聞要加回鉅亨網、經濟日報、工商時報、MoneyDJ 嗎？」答「加回（推薦）」）：
+個股搜尋改一檔一次、加回台灣財經媒體四家、第一次進名單回補 30 天、濾掉自動稿、重大訊息也排進來。
+下面 11-19 的說明裡「只收大媒體」「十檔合一次」已被這一段取代。
+
 範圍（本人 2026-11-19「股票池中有進入到量大前50名或者是我有搜尋過或者是加入自選的你都要」）：
 股票池前一交易日成交金額前 50（stock_news_pool，每日更新寫）∪ 每位使用者的自選 ∪ 每位使用者最近 10 筆搜尋；
 太多時先自選、再前 50、再搜尋（MAX_STOCKS）。抓取隨首頁消息一天三輪（market_news.py）與每日更新。
@@ -44,23 +49,43 @@ USER_AGENT = "Mozilla/5.0 (compatible; market-ana personal watchlist)"
 # ---- Google News 大媒體（本人 2026-11-19） ----
 GNEWS_URL = "https://news.google.com/rss/search"
 GNEWS_LINK_HOST = "news.google.com"
-GNEWS_OUTLETS = {   # 媒體網址的主機（去掉 www.）→ 存進 source 的鍵與畫面上的名稱
+GNEWS_OUTLETS = {   # 媒體網址的主機（去掉 www.；子網域也算）→ 存進 source 的鍵與畫面上的名稱
     "reuters.com": ("gnews-reuters", "路透"), "bloomberg.com": ("gnews-bloomberg", "Bloomberg"),
     "cna.com.tw": ("gnews-cna", "中央通訊社"), "focustaiwan.tw": ("gnews-cna", "中央通訊社"),
     "ft.com": ("gnews-ft", "金融時報"), "wsj.com": ("gnews-wsj", "華爾街日報"), "asia.nikkei.com": ("gnews-nikkei", "日經"),
+    # 本人 2026-11-20「加回（推薦）」：大媒體不寫中型股（站主自選 8 檔有 7 檔 0 則），個股新聞加回台灣財經媒體四家。
+    # 只用在個股新聞；首頁市場三組不用（market_news.FEEDS）。
+    "cnyes.com": ("gnews-cnyes", "鉅亨網"), "money.udn.com": ("gnews-udn", "經濟日報"),
+    "ctee.com.tw": ("gnews-ctee", "工商時報"), "moneydj.com": ("gnews-moneydj", "MoneyDJ"),
 }
 GNEWS_EN_SITES = ("reuters.com", "bloomberg.com", "ft.com", "wsj.com", "asia.nikkei.com")
-GNEWS_ZH_SITES = ("cna.com.tw",)
-GNEWS_WINDOW = "2d"          # Google 的 when:；用 OR 時不完全有效，所以自己再用 GNEWS_KEEP_DAYS 過濾一次
+GNEWS_ZH_SITES = ("cna.com.tw", "cnyes.com", "money.udn.com", "ctee.com.tw", "moneydj.com")
+# 個股搜尋一檔一次：「"公司名" (代號 OR 股 OR 營收 OR 法說 OR 財報)」。十檔合一次時大公司把小公司擠掉、
+# 兩個字的公司名撞到普通詞（「創意」風箏），2026-11-20 改。
+STOCK_QUALIFIERS = ("股", "營收", "法說", "財報")
+GNEWS_WINDOW = "2d"          # 平常每輪往回看幾天（Google 的 when:；自己再用發布時間過濾一次）
 GNEWS_KEEP_DAYS = 3
-BATCH = 10                   # 幾檔合成一次搜尋
-GNEWS_PAUSE_SECONDS = 6.0    # 實測連續約 7 次就回 429：每次之間停一下
-MAX_STOCKS = 150             # 一輪最多抓幾檔（先自選、再前 50、再搜尋）
+BACKFILL_WINDOW = "30d"      # 一檔第一次進名單：回補 30 天（本人「你應該要去看前陣子有什麼相關消息」）
+BACKFILL_DAYS = 30
+PER_QUERY_KEEP = 40          # 一次搜尋一檔最多留幾則（最新的）
+BATCH = 10                   # 英文簡稱幾檔合成一次搜尋
+POOL_BATCH = 5               # 股票池前 50（不在任何人自選或搜尋裡的）幾檔合一次
+MAX_QUERIES = 28             # 一輪最多幾次 Google News 搜尋（每次間隔 GNEWS_PAUSE_SECONDS；剩下的下一輪接著抓）
+GNEWS_PAUSE_SECONDS = 7.0    # 實測連續約 7 次就回 429：每次之間停一下
+MAX_STOCKS = 150             # 名單最多幾檔（先自選、再搜尋、再前 50）
 SHORT_NAME_EN = 3            # 英文簡稱這麼短（VIS、GWC、UMC）時大小寫要一樣才算點名
-STOCK_NEWS_PARAMETERS = {"method": "google-news-whitelist-v1", "outlets": sorted({key for key, _ in GNEWS_OUTLETS.values()}),
-                         "zh_sites": list(GNEWS_ZH_SITES), "en_sites": list(GNEWS_EN_SITES), "window": GNEWS_WINDOW,
-                         "keep_days": GNEWS_KEEP_DAYS, "title_must_name_company": True, "cna_feeds": sorted(CNA_FEEDS)}
-SOURCE_LABELS = {**{key: label for key, label in GNEWS_OUTLETS.values()}, **{source: "中央通訊社" for source in CNA_FEEDS}}
+# 自動稿（漲跌停快報、機構預估彙整）不是新聞，不存。
+NOISE_TITLE = re.compile(r"盤中速報|鉅亨速報|Factset\s*最新調查|股價(?:殺至|拉至|觸及|打入|亮燈)?(?:跌停|漲停)，")
+MOPS_LINK = "https://mops.twse.com.tw/mops/#/web/t05st01"   # 公開資訊觀測站 重大訊息查詢
+# 關注股每日判斷（J 系列）讀的個股新聞：維持 11-19 那一組來源與參數，輸入版本不變；
+# 要不要讓判斷也讀台灣財經媒體與重大訊息，另外問本人。這個常數寫死，不跟著 GNEWS_OUTLETS 變。
+STOCK_NEWS_PARAMETERS = {"method": "google-news-whitelist-v1",
+                         "outlets": ["gnews-bloomberg", "gnews-cna", "gnews-ft", "gnews-nikkei", "gnews-reuters", "gnews-wsj"],
+                         "zh_sites": ["cna.com.tw"], "en_sites": list(GNEWS_EN_SITES), "window": "2d",
+                         "keep_days": 3, "title_must_name_company": True, "cna_feeds": sorted(CNA_FEEDS)}
+JUDGMENT_SOURCES = ("yahoo", *sorted(CNA_FEEDS), *STOCK_NEWS_PARAMETERS["outlets"])
+SOURCE_LABELS = {**{key: label for key, label in GNEWS_OUTLETS.values()}, **{source: "中央通訊社" for source in CNA_FEEDS},
+                 "mops": "公開資訊觀測站"}
 _EMAIL = re.compile(r"[^@\s'\"\\;]+@[^@\s'\"\\;]+")
 
 
@@ -130,7 +155,7 @@ def _rss_channel(content: bytes):
 def _outlet(url: str) -> tuple[str, str] | None:
     host = (urlsplit(url or "").hostname or "").lower()
     host = host[4:] if host.startswith("www.") else host
-    return GNEWS_OUTLETS.get(host)
+    return next((outlet for site, outlet in GNEWS_OUTLETS.items() if host == site or host.endswith("." + site)), None)
 
 
 def parse_gnews(content: bytes) -> list[dict]:
@@ -173,28 +198,62 @@ def match_gnews(rows: list[dict], stocks: list[dict]) -> list[dict]:
     return [{**row, "code": stock["code"]} for row in rows for stock in stocks if _names_company(row["title"], stock)]
 
 
-def _gnews_url(terms: list[str], sites: tuple[str, ...], lang: str) -> str:
+def search_name(stock: dict) -> str:
+    """搜尋與比對用的公司名：去掉「-KY」「-DR」「*」這類尾巴（世芯-KY → 世芯）。"""
+    return re.sub(r"(?:-KY|-DR|\*)+$", "", str(stock.get("name") or "").strip())
+
+
+def is_noise(title: str) -> bool:
+    return NOISE_TITLE.search(title or "") is not None
+
+
+def _gnews_url(query: str, lang: str) -> str:
     from urllib.parse import urlencode
-    names = " OR ".join(terms)
-    site = " OR ".join(f"site:{s}" for s in sites)
-    query = f"({names}) ({site}) when:{GNEWS_WINDOW}" if len(sites) > 1 else f"({names}) site:{sites[0]} when:{GNEWS_WINDOW}"
     locale = {"zh": {"hl": "zh-TW", "gl": "TW", "ceid": "TW:zh-Hant"}, "en": {"hl": "en-US", "gl": "US", "ceid": "US:en"}}[lang]
     return f"{GNEWS_URL}?{urlencode({'q': query, **locale})}"
 
 
-def gnews_queries(stocks: list[dict], *, batch: int = BATCH) -> list[dict]:
-    """中文簡稱一批一次（只搜中央社）、英文簡稱一批一次（搜其他大媒體）；先全部中文、再全部英文。"""
-    out = []
-    zh = [stock for stock in stocks if len(str(stock.get("name") or "")) >= 2]
-    for start in range(0, len(zh), batch):
-        group = zh[start:start + batch]
-        out.append({"lang": "zh", "stocks": group, "url": _gnews_url([s["name"] for s in group], GNEWS_ZH_SITES, "zh")})
-    en = [stock for stock in stocks if _name_en(stock)]
-    for start in range(0, len(en), batch):
-        group = en[start:start + batch]
-        out.append({"lang": "en", "stocks": group,
-                    "url": _gnews_url([f'"{_name_en(s)}"' for s in group], GNEWS_EN_SITES, "en")})
-    return out
+def _sites(sites: tuple[str, ...]) -> str:
+    return "(" + " OR ".join(f"site:{site}" for site in sites) + ")"
+
+
+def stock_query(stock: dict, window: str) -> str:
+    """一檔的中文搜尋字串：公司名加引號，再加「代號或股、營收、法說、財報」其中之一。"""
+    qualifiers = " OR ".join((stock["code"], *STOCK_QUALIFIERS))
+    return f'"{search_name(stock)}" ({qualifiers}) {_sites(GNEWS_ZH_SITES)} when:{window}'
+
+
+def gnews_plan(stocks: list[dict], state: dict[tuple[str, str], dict] | None = None, *, budget: int = MAX_QUERIES) -> list[dict]:
+    """這一輪要發哪些搜尋（最多 budget 次）。
+    - 自選與搜尋過的（tier 不是 pool）：一檔一次。還沒回補過的排最前面、往回 30 天；其餘照上次抓的時間，最久沒抓的先。
+    - 股票池前 50 裡其他的：POOL_BATCH 檔合一次，只看近幾天。
+    - 有英文簡稱的：BATCH 檔合一次搜英文大媒體。
+    state：watch_news_fetches 的 {(source, code): 列}，用來知道誰回補過、誰最久沒抓。"""
+    state = state or {}
+    named = [stock for stock in stocks if len(search_name(stock)) >= 2]
+    own = [stock for stock in named if stock.get("tier") != "pool"]
+    done = lambda stock: bool((state.get(("gnews-backfill", stock["code"])) or {}).get("last_success_at"))  # noqa: E731
+    last = lambda stock: (state.get(("gnews", stock["code"])) or {}).get("last_attempt_at") or ""  # noqa: E731
+    own.sort(key=lambda stock: (done(stock), last(stock)))
+    plan = []
+    for stock in own:
+        backfill = not done(stock)
+        window = BACKFILL_WINDOW if backfill else GNEWS_WINDOW
+        plan.append({"lang": "zh", "stocks": [stock], "backfill": backfill,
+                     "keep_days": BACKFILL_DAYS if backfill else GNEWS_KEEP_DAYS, "url": _gnews_url(stock_query(stock, window), "zh")})
+    pool = sorted((stock for stock in named if stock.get("tier") == "pool"), key=last)
+    for start in range(0, len(pool), POOL_BATCH):
+        group = pool[start:start + POOL_BATCH]
+        names = " OR ".join(f'"{search_name(stock)}"' for stock in group)
+        plan.append({"lang": "zh", "stocks": group, "backfill": False, "keep_days": GNEWS_KEEP_DAYS,
+                     "url": _gnews_url(f"({names}) ({' OR '.join(STOCK_QUALIFIERS)}) {_sites(GNEWS_ZH_SITES)} when:{GNEWS_WINDOW}", "zh")})
+    english = [stock for stock in stocks if _name_en(stock)]
+    for start in range(0, len(english), BATCH):
+        group = english[start:start + BATCH]
+        names = " OR ".join(f'"{_name_en(stock)}"' for stock in group)
+        plan.append({"lang": "en", "stocks": group, "backfill": False, "keep_days": GNEWS_KEEP_DAYS,
+                     "url": _gnews_url(f"({names}) {_sites(GNEWS_EN_SITES)} when:{GNEWS_WINDOW}", "en")})
+    return plan[:budget]
 
 
 def _http_get(url: str, params=None):
@@ -219,44 +278,57 @@ def _fetch(get: Callable, url: str, source: str) -> tuple[list[dict] | None, str
 
 
 def _mentions(text: str, stock: dict) -> bool:
-    name = (stock.get("name") or "").strip()
+    name = search_name(stock)
     return (len(name) >= 2 and name in text) or re.search(rf"(?<!\d){re.escape(stock['code'])}(?!\d)", text) is not None
 
 
 def gather(stocks: list[dict], *, get: Callable, now: str, sleep: Callable[[float], None],
-           market_wide_unless: set[str] | None = None) -> dict:
-    """抓 Google News 大媒體（約 BATCH 檔一次）與中央社（三個分類各一次）。回傳要寫的新聞與每個來源這一次的結果。
-    Google News 的結果按股票記（source 'gnews'）：那一檔的任何一次搜尋失敗就記那個錯。
+           market_wide_unless: set[str] | None = None, state: dict[tuple[str, str], dict] | None = None,
+           budget: int = MAX_QUERIES) -> dict:
+    """照 gnews_plan 發 Google News 搜尋，再抓中央社三個分類。回傳要寫的新聞與每個來源這一次的結果。
+    Google News 的結果按股票記（source 'gnews'）：有試過的才記，那一檔的任何一次搜尋失敗就記那個錯；
+    回補成功另記一列（source 'gnews-backfill'）。來源回 429／503 就停掉這一輪剩下的搜尋（那幾檔記「這一輪沒抓」）。
     中央社：對到名單上的哪幾檔就存給哪幾檔；另外，沒對到 market_wide_unless（站主關注中的股票）的那幾則存成大環境消息
-    （code ''，大盤預測讀這裡）——名單變大（前 50、每個人的自選）不影響大盤預測讀到的範圍。沒給就是「誰都沒對到才算」。"""
+    （code ''，大盤預測讀這裡）——名單變大不影響大盤預測讀到的範圍。沒給就是「誰都沒對到才算」。"""
     news: list[dict] = []
     fetches: list[dict] = []
 
     def record(source, code, error):
         fetches.append({"source": source, "code": code, "error": error})
 
-    oldest = (datetime.strptime(now, "%Y-%m-%dT%H:%M:%SZ") - timedelta(days=GNEWS_KEEP_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    errors: dict[str, str | None] = {stock["code"]: None for stock in stocks}
+    moment = datetime.strptime(now, "%Y-%m-%dT%H:%M:%SZ")
+    errors: dict[str, str | None] = {}
+    backfilled: list[str] = []
     slowed = False
     seen: set[tuple[str, str]] = set()
-    for index, query in enumerate(gnews_queries(stocks)):
+    for index, query in enumerate(gnews_plan(stocks, state, budget=budget)):
+        codes = [stock["code"] for stock in query["stocks"]]
         if slowed:
-            for stock in query["stocks"]:
-                errors[stock["code"]] = errors[stock["code"]] or "來源要求放慢，這一輪沒抓"
+            for code in codes:
+                errors[code] = errors.get(code) or "來源要求放慢，這一輪沒抓"
             continue
         if index:
             sleep(GNEWS_PAUSE_SECONDS)
         items, error, slowed = _fetch(get, query["url"], "gnews")
+        for code in codes:
+            errors[code] = errors.get(code) or error
         if items is None:
-            for stock in query["stocks"]:
-                errors[stock["code"]] = errors[stock["code"]] or error
             continue
-        for row in match_gnews([item for item in items if item["published_at"] >= oldest], query["stocks"]):
-            if (row["code"], row["link"]) not in seen:
-                seen.add((row["code"], row["link"]))
-                news.append(row)
+        oldest = (moment - timedelta(days=query["keep_days"])).strftime("%Y-%m-%dT%H:%M:%SZ")
+        fresh = [item for item in items if item["published_at"] >= oldest and not is_noise(item["title"])]
+        kept: dict[str, int] = {}
+        for row in sorted(match_gnews(fresh, query["stocks"]), key=lambda row: row["published_at"], reverse=True):
+            if (row["code"], row["link"]) in seen or kept.get(row["code"], 0) >= PER_QUERY_KEEP:
+                continue
+            seen.add((row["code"], row["link"]))
+            kept[row["code"]] = kept.get(row["code"], 0) + 1
+            news.append(row)
+        if query["backfill"]:
+            backfilled += codes
     for code, error in errors.items():
         record("gnews", code, error)
+    for code in backfilled:
+        record("gnews-backfill", code, None)
 
     for source, url in CNA_FEEDS.items():
         items, error, _ = _fetch(get, url, source)
@@ -269,17 +341,43 @@ def gather(stocks: list[dict], *, get: Callable, now: str, sleep: Callable[[floa
     return {"news": news, "fetches": fetches, "fetched_at": now}
 
 
+def announcement_rows(payloads: list[dict]) -> list[dict]:
+    """公開資訊觀測站重大訊息（網站資料庫 stock_announcements 的 payload）→ 個股新聞的列（source 'mops'）。
+    標題是主旨、前言是說明的開頭；連結是重大訊息查詢頁（後面帶代號與時間，只為了讓每則不重複）。"""
+    rows = []
+    for payload in payloads:
+        try:
+            items = json.loads(payload["payload"]).get("items") or []
+        except (KeyError, TypeError, ValueError):
+            continue
+        for item in items:
+            try:
+                local = datetime.strptime(f"{item['date']} {item.get('time') or '00:00:00'}", "%Y-%m-%d %H:%M:%S")
+                code, subject = str(item["code"]), re.sub(r"\s+", " ", str(item["subject"])).strip()
+            except (KeyError, TypeError, ValueError):
+                continue
+            if not subject:
+                continue
+            published = (local - timedelta(hours=8)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            rows.append({"code": code, "source": "mops", "title": subject[:200],
+                         "summary": re.sub(r"\s+", " ", str(item.get("body") or ""))[:SUMMARY_MAX],
+                         "link": f"{MOPS_LINK}?co={code}&t={local.strftime('%Y%m%d%H%M%S')}", "published_at": published})
+    return rows
+
+
 def select_stocks(watch: list[dict], pool: list[dict], searches: list[dict], names_en: dict[str, str], *,
                   cap: int = MAX_STOCKS) -> list[dict]:
-    """抓取名單：自選 → 股票池前 50 → 搜尋，同一檔只留第一次；超過 cap 的捨去。附上英文簡稱（沒有就 None）。"""
+    """抓取名單：自選 → 搜尋 → 股票池前 50，同一檔只留第一次（tier 記它是從哪一份來的）；超過 cap 的捨去。
+    附上英文簡稱（沒有就 None）。"""
     out, seen = [], set()
-    for row in [*watch, *pool, *searches]:
-        code = str(row.get("code") or "")
-        if not code or code in seen:
-            continue
-        seen.add(code)
-        out.append({"code": code, "name": row.get("name") or "", "market": row.get("market") or "",
-                    "name_en": names_en.get(code) or None})
+    for tier, rows in (("watch", watch), ("search", searches), ("pool", pool)):
+        for row in rows:
+            code = str(row.get("code") or "")
+            if not code or code in seen:
+                continue
+            seen.add(code)
+            out.append({"code": code, "name": row.get("name") or "", "market": row.get("market") or "",
+                        "name_en": names_en.get(code) or None, "tier": tier})
     return out[:cap]
 
 
@@ -362,7 +460,18 @@ def daily(owner_email: str, *, query: Callable[[str], list[dict]], execute: Call
     stocks = select_stocks(watch, pool, searches, names)
     watching = {row["code"] for row in query("SELECT code FROM user_watchlist "
                                               f"WHERE lower(email) = lower({_q(owner_email)}) AND watching = 1")}
-    result = gather(stocks, get=get, now=now, sleep=sleep, market_wide_unless=watching)
+    state = {(row["source"], row["code"]): row for row in query(
+        "SELECT source, code, last_attempt_at, last_success_at FROM watch_news_fetches WHERE source IN ('gnews', 'gnews-backfill')")}
+    result = gather(stocks, get=get, now=now, sleep=sleep, market_wide_unless=watching, state=state)
+    # 重大訊息（公開資訊觀測站）：名單上的股票，網站資料庫目前那一版裡有的都放進個股新聞。表還沒建就略過。
+    try:
+        listed = ",".join(_q(stock["code"]) for stock in stocks)
+        payloads = query("SELECT a.code, a.payload FROM stock_data_state s JOIN stock_announcements a ON a.version = s.active_version "
+                         f"WHERE s.key = 'current' AND a.code IN ({listed})") if stocks else []
+        result["news"] += announcement_rows(payloads)
+        result["fetches"].append({"source": "mops", "code": "", "error": None})
+    except Exception as error:  # noqa: BLE001 — 重大訊息讀不到只少這一類
+        result["fetches"].append({"source": "mops", "code": "", "error": f"{type(error).__name__}"[:200]})
     execute(sql(result))
     after = int(query("SELECT COUNT(*) AS n FROM watch_news WHERE fetched_at = " + _q(now))[0]["n"])
     sources = {f"{f['source']}:{f['code']}" if f["code"] else f["source"]:

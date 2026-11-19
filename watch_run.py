@@ -208,8 +208,12 @@ class LocalSource:
         since = (datetime.fromisoformat(cutoff) - timedelta(days=licensed_inputs.HEADLINE_DAYS + 1)).astimezone(
             TAIPEI).date().isoformat()
         try:
+            # 判斷只讀 11-19 那一組來源（watch_news.JUDGMENT_SOURCES）：11-20 加回的台灣財經媒體與重大訊息先不讀，
+            # 輸入版本不變；要不要讓判斷也讀，另外問本人。
+            import watch_news
+            sources = ",".join(f"'{source}'" for source in watch_news.JUDGMENT_SOURCES)
             rows = self.query("SELECT code, link, source, title, summary, published_at, fetched_at FROM watch_news "
-                              f"WHERE code IN ({listed}) AND published_at >= '{since}'")
+                              f"WHERE code IN ({listed}) AND published_at >= '{since}' AND source IN ({sources})")
             for code in safe:
                 own = licensed_inputs.headline_items([row for row in rows if row.get("code") == code], cutoff=cutoff)
                 self.headline_counts[code]["own"] = len(own or [])
