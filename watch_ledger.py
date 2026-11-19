@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from ledger_core import exists as ledger_exists
+from ledger_core import answer_snapshot, input_names, known_fields
 from ledger_core import (
     EDITIONS,
     REFS_LIMIT,
@@ -475,7 +476,11 @@ def _line(level: Mapping[str, Any]) -> dict[str, Any]:
 
 def _validate(structured: Any, model_input: Mapping[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
     """合格就回傳要鎖進判斷的欄位；不合格回傳原因。兩條線的規則見規格〈兩條線的規則〉。"""
-    if not isinstance(structured, dict) or set(structured) != set(OUTPUT_SCHEMA["required"]):
+    # 多寫的欄位丟掉；引用清單沒寫當成空的；照抄的基準日、代號沒寫就補上（寫了但不符照擋）。
+    structured = known_fields(structured, OUTPUT_SCHEMA["required"],
+                              {"reason_refs": [], "news_refs": [],
+                               "base_date": model_input["base_date"], "code": model_input["code"]})
+    if structured is None:
         return None, "回答缺欄位或含未允許欄位"
     if structured["base_date"] != model_input["base_date"] or structured["code"] != model_input["code"]:
         return None, "回答的基準日或代號不符"
@@ -492,7 +497,7 @@ def _validate(structured: Any, model_input: Mapping[str, Any]) -> tuple[dict[str
         return None, "看錯線不在觸發線下方"
     # 數字白名單：當份完整提示（規則＋輸入，含方法稿），和大盤預測同一套（owner 11-19 轉本人「放寬檢查」）。
     corpus = "\n".join(_prompt_rules(model_input["layers"])) + "\n" + json.dumps(model_input, ensure_ascii=False)
-    problem = text_problem(structured["reason"], names=[level["name"] for level in model_input["candidates"] or []],
+    problem = text_problem(structured["reason"], names=input_names(model_input),
                            method_text=corpus)
     if problem:
         return None, f"理由：{problem}"
@@ -682,7 +687,8 @@ def _write(
         reason = structured.get("reason") if isinstance(structured, dict) else None
         rejected = ({"rejected_text": reason[:400]} if isinstance(reason, str) and problem and "理由：" in problem
                     and "數字" in problem else {})
-        record["attempts"].append({"status": "answer_invalid", "detail": problem, **rejected})
+        record["attempts"].append({"status": "answer_invalid", "detail": problem, **rejected,
+                                   **answer_snapshot(structured)})
     return finish("miss", miss_reason="answer_invalid", miss_detail=record["attempts"][-1]["detail"])
 
 

@@ -53,6 +53,9 @@ from ledger_core import label_date as _label_date
 from ledger_core import read_record as _read
 from ledger_core import seal as _seal
 from ledger_core import sha as _sha
+from ledger_core import answer_snapshot as _answer_snapshot
+from ledger_core import input_names as _input_names
+from ledger_core import known_fields as _known_fields
 from ledger_core import text_problem as _text_problem
 from overseas_inputs import PARAMETERS as _OVERSEAS_PARAMETERS
 
@@ -452,22 +455,24 @@ def _line(level: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _validate(structured: Any, model_input: Mapping[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
-    if not isinstance(structured, dict) or set(structured) != {"base_date", "regime", "cells"}:
+    # 多寫的欄位丟掉、缺必填的才算無效（2026-11-19，和關注同一套）；照抄的基準日沒寫就補上。
+    structured = _known_fields(structured, OUTPUT_SCHEMA["required"], {"base_date": model_input["base_date"]})
+    if structured is None:
         return None, "回答缺欄位或含未允許欄位"
     if structured["base_date"] != model_input["base_date"]:
         return None, "回答的基準日不符"
     if structured["regime"] not in REGIMES:
         return None, "盤勢類型不在清單內"
-    cells = structured["cells"]
-    if not isinstance(cells, dict) or set(cells) != {str(h) for h in HORIZONS}:
-        return None, "三格不齊或多出格子"
+    cells = _known_fields(structured["cells"], [str(h) for h in HORIZONS])
+    if cells is None:
+        return None, "三格不齊"
     by_id = {level["id"]: level for level in model_input["candidates"]}
     rendered: dict[str, Any] = {}
     for horizon in HORIZONS:
         key = str(horizon)
-        item = cells[key]
+        item = _known_fields(cells[key], _CELL_SCHEMA["required"], {"reason_refs": [], "invalidation_refs": []})
         usable = {level_id: level for level_id, level in by_id.items() if _usable(level, horizon)}
-        if not isinstance(item, dict) or set(item) != set(_CELL_SCHEMA["required"]):
+        if item is None:
             return None, f"{key} 日格式不正確"
         for field, side in (("strong_line", "above"), ("weak_line", "below")):
             level = by_id.get(item[field])
@@ -478,7 +483,7 @@ def _validate(structured: Any, model_input: Mapping[str, Any]) -> tuple[dict[str
         if item["zone"] not in ZONES:
             return None, f"{key} 日落點不在清單內"
         for text_field, refs_field in (("reason", "reason_refs"), ("invalidation", "invalidation_refs")):
-            problem = _text_problem(item[text_field], names=[level["name"] for level in model_input["candidates"]],
+            problem = _text_problem(item[text_field], names=_input_names(model_input),
                                     method_text=_whitelist_corpus(model_input))
             if problem:
                 return None, f"{key} 日 {text_field}：{problem}"
@@ -505,7 +510,7 @@ def _whitelist_corpus(model_input: Mapping[str, Any]) -> str:
 
 def _rejected(structured: Any, model_input: Mapping[str, Any]) -> dict[str, str]:
     """被數字檢查擋下的那一句原文（J 票，owner 11-19：不然之後查不出是哪個字）；找不到就不記。"""
-    names = [level["name"] for level in model_input.get("candidates") or []]
+    names = _input_names(model_input)
     method = _whitelist_corpus(model_input)
     for item in ((structured or {}).get("cells") or {}).values() if isinstance(structured, dict) else ():
         for field in ("reason", "invalidation"):
@@ -675,7 +680,7 @@ def write_forecast(
             return finish("forecast", **_with_baselines(accepted, rows, data["trend_labels"]),
                           similar_regimes=model_input["similar_regimes"])
         record["attempts"].append({"status": "answer_invalid", "detail": problem,
-                                   **_rejected(structured, model_input)})
+                                   **_rejected(structured, model_input), **_answer_snapshot(structured)})
     return finish("miss", miss_reason="answer_invalid", miss_detail=record["attempts"][-1]["detail"])
 
 

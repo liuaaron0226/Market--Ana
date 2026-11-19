@@ -974,6 +974,26 @@ class MarketLayersTests(LedgerTestCase):
                             "+ofr_stress+similar+lessons-v1-bd1f8c85")
 
 
+class AnswerShapeTests(LedgerTestCase):
+    """2026-11-19：模型多寫未知欄位就整份作廢太嚴（關注那邊兩檔因此漏記）；大盤同一套：多的丟掉，缺必填的才算無效。"""
+
+    def test_extra_fields_are_dropped(self):
+        answer = answer_a()
+        answer["confidence"] = "高"
+        answer["cells"]["1"]["note"] = "多寫的"
+        record = self.write(responses=[envelope(answer)])["record"]
+        self.assertEqual((record["kind"], record["attempts"]), ("forecast", []))
+        self.assertNotIn("note", record["cells"]["1"])
+
+    def test_a_missing_required_field_is_still_invalid_and_the_answer_is_kept(self):
+        answer = answer_a()
+        del answer["regime"]
+        record = self.write(responses=[envelope(answer), envelope(answer)])["record"]
+        self.assertEqual((record["kind"], record["miss_reason"]), ("miss", "answer_invalid"))
+        self.assertEqual(record["attempts"][-1]["answer_keys"], ["base_date", "cells"])
+        self.assertIn("rejected_answer", record["attempts"][-1])
+
+
 class NamesInReasonTests(LedgerTestCase):
     """本人 2026-11-18 晚「放寬檢查（推薦）」：理由照抄候選名字裡的數字放行，其他數字照擋（固定日 K（a）的候選有五日線、
     十日線、近二十日高點（09/22）……）。"""
