@@ -41,7 +41,10 @@ RSS_SUMMARY_MAX = 200
 GNEWS_PAUSE_SECONDS = wn.GNEWS_PAUSE_SECONDS
 # agy 等模型的上限：一輪幾十則加思考高，300 秒不夠（2026-11-19 本機實測 60 則逾時）；其他任務照舊 300 秒。
 MODEL_TIMEOUT_SECONDS = 600
-BATCH_ITEMS = 20           # 市場新聞每批幾則（一批一次呼叫）
+BATCH_ITEMS = 12           # 市場新聞每批幾則（一批一次呼叫；20 則在 Actions 三批壞兩批，2026-11-19）
+CALL_ATTEMPTS = 2          # 一次呼叫沒拿到結果就再試一次
+FRIEND_BATCH = 8           # 朋友的自選每批幾則（朋友的金鑰走 API，一次太多會等到逾時）
+FRIEND_NEWS_EFFORT = "low"  # 朋友那份的思考程度：高會超過 300 秒（2026-11-19 GeminiTimeout），先求有結果
 SUMMARY_TOP = 20           # 總結那一次給幾則（影響大的先）
 PARALLEL_CALLS = 3         # 同時幾個呼叫
 # 朋友的金鑰走 Gemini API：思考高時一次可能超過朋友解讀用的 120 秒（2026-11-19 正式跑 gemini_unavailable）
@@ -248,11 +251,14 @@ _ITEM = {"type": "object", "properties": {
     "impact": {"type": "string", "enum": list(WIRE_IMPACTS)}, "title": {"type": "string"}, "reason": {"type": "string"}},
     "required": ["id", "group", "market", "tone", "impact", "title", "reason"]}
 _WATCH = {"type": "object", "properties": {
-    "id": {"type": "string"}, "tone": {"type": "string", "enum": ["up", "down", "flat"]},
+    "id": {"type": "string"}, "relevant": {"type": "string", "enum": ["yes", "no"]}, "tone": {"type": "string", "enum": ["up", "down", "flat"]},
     "impact": {"type": "string", "enum": list(WIRE_IMPACTS)}, "title": {"type": "string"}, "reason": {"type": "string"}},
-    "required": ["id", "tone", "impact", "title", "reason"]}
+    "required": ["id", "relevant", "tone", "impact", "title", "reason"]}
 ITEMS_SCHEMA = {"type": "object", "properties": {"items": {"type": "array", "items": _ITEM}}, "required": ["items"]}
-SUMMARY_SCHEMA = {"type": "object", "properties": {"summary": {"type": "string"}}, "required": ["summary"]}
+# 欄位不叫 summary：agy 的結構化輸出裡，模型會把 summary 當成「交代自己做了什麼」（2026-11-19 實測兩次）。
+SUMMARY_SCHEMA = {"type": "object", "properties": {"market_commentary": {
+    "type": "string", "description": "給投資人看的盤勢解說本文，2～3 句，例如「台股今天下跌，主要是外資賣超……」"}},
+    "required": ["market_commentary"]}
 WATCH_SCHEMA = {"type": "object", "properties": {"watch": {"type": "array", "items": _WATCH}}, "required": ["watch"]}
 
 SLOT_TEXT = {"morning": "台股開盤前（台北 08:00）", "midday": "台股盤中（台北 11:30）", "close": "台股收盤後（台北 14:00）"}
@@ -262,21 +268,36 @@ SLOT_TEXT = {"morning": "台股開盤前（台北 08:00）", "midday": "台股�
 ITEM_RULES = """你是台股投資人的新聞助理。讀 INPUT 的新聞標題與摘要，用繁體中文回答，只回 JSON。
 items：每一則都要回（id 照抄）：
 - group：這則主要影響哪個市場——tw 台股、us 美股、asia 日韓中；group_hint 是來源的預設，global 的要你分；
-  和股市無關（生活、社會、體育、八卦）或看不出影響的填 skip。
+  明顯和經濟、產業、公司、股市都無關（生活、社會、體育、八卦、純政治儀式）的才填 skip；
+  有關但看不出影響方向的照樣分組，tone 填 flat、impact 填 "1"。
 - market：asia 那組填「日」「韓」「中」其中一個（香港算中）；其他組填 none。
 - tone：對該市場是利多 up、利空 down，或中性 flat（已在預期內、影響不明）。
 - impact：影響大小 "3" 大、"2" 中、"1" 小（會左右整個市場或權值股的才是 "3"）。
 - title：中文標題；原文是中文就照抄（可去掉多餘的來源字樣），外文就翻成自然的繁體中文，不加原文沒有的事實。
-- reason：一句話（30 字內）說明為什麼是利多或利空、會怎麼影響；只能根據標題與摘要，不要編數字或內容。"""
+- reason：一句話（30 字內）說明為什麼是利多或利空、會怎麼影響；只能根據標題與摘要，不要編數字或內容。
+不要使用任何工具、不要上網查，只根據 INPUT 直接回答。"""
 
-SUMMARY_RULES = """你是台股投資人的新聞助理。用繁體中文回答，只回 JSON。
-summary：2～3 句「今天為什麼這樣走」，以台股為主、帶到美股與日韓中，根據 INPUT 的指數漲跌與已判讀的新聞
-（tone up 利多、down 利空；impact 越大越重要）；可以引用 indices 的漲跌幅，其他數字只能來自新聞標題或理由；
-slot 是開盤前時，講的是昨夜國際市場與今天可能的影響，不要假裝已經開盤。"""
+SUMMARY_RULES = """你是財經記者，替台股投資人寫一段盤勢解說，繁體中文。
+market_commentary：2～3 句，回答「今天為什麼這樣走」——以台股為主、帶到美股與日韓中，根據 INPUT 的指數漲跌與新聞
+（tone up 利多、down 利空；impact 越大越重要）。可以引用 indices 的漲跌幅，其他數字只能來自新聞標題或理由。
+slot 是開盤前時，講的是昨夜國際市場與今天可能的影響，不要假裝已經開盤。
+這個欄位的內容就是那段解說本身，第一個字就開始講市場（例如「台股今天下跌，主要是……」）；
+不要描述你完成了什麼、不要提到指令、JSON、摘要或規則。不要使用任何工具、不要上網查。"""
+
+_NOT_SUMMARY = re.compile(r"JSON|json|指令|已成功|已完成|已依照|以下是|規則|摘要如下|產生.{0,6}摘要")
+
+
+def is_summary(text: str | None) -> bool:
+    """是不是在講市場：模型有時回「已成功依照指令產生摘要…」這種交代工作的話（2026-11-19 實測），那不算。"""
+    return bool(text) and not _NOT_SUMMARY.search(text)
 
 WATCH_RULES = """你是台股投資人的新聞助理。讀 INPUT 的自選股新聞，用繁體中文回答，只回 JSON。
-watch：每一則都要回（id 照抄）：tone 對那一檔股票是利多 up、利空 down 或中性 flat；impact "3" 大、"2" 中、"1" 小；
-title 中文標題（外文翻成自然的繁體中文，不加原文沒有的事實）；reason 一句話（30 字內），只能根據標題，不要編數字。"""
+watch：每一則都要回（id 照抄）：
+- relevant：這則新聞和 name 那家公司的營運、股價、產業有沒有關係——有填 yes；只是剛好出現公司名稱或字眼
+  （活動贊助、地名、路跑、節慶、同名的普通詞）填 no。
+- tone 對那一檔股票是利多 up、利空 down 或中性 flat；impact "3" 大、"2" 中、"1" 小；
+- title 中文標題（外文翻成自然的繁體中文，不加原文沒有的事實）；reason 一句話（30 字內），只能根據標題，不要編數字。
+不要使用任何工具、不要上網查，只根據 INPUT 直接回答。"""
 
 
 def items_prompt(items: Sequence[Mapping[str, Any]]) -> str:
@@ -388,7 +409,8 @@ def unclassified_items(items: Sequence[Mapping[str, Any]]) -> list[dict[str, Any
     return _keep_per_group(rows)
 
 
-def validate_watch(output: Any, watch: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+def validate_watch(output: Any, watch: Sequence[Mapping[str, Any]], counts: dict[str, int] | None = None) -> list[dict[str, Any]]:
+    """自選新聞的判讀；模型說和那家公司無關（relevant no）的不留，counts 給了就記無關幾則。"""
     by_id = {row["id"]: row for row in watch}
     out, used = [], set()
     for entry in (output or {}).get("watch") or [] if isinstance(output, Mapping) else []:
@@ -397,8 +419,21 @@ def validate_watch(output: Any, watch: Sequence[Mapping[str, Any]]) -> list[dict
         if not mark or not source or entry["id"] in used:
             continue
         used.add(entry["id"])
+        if entry.get("relevant") == "no":
+            if counts is not None:
+                counts["unrelated"] = counts.get("unrelated", 0) + 1
+            continue
         out.append({**mark, "code": source["code"], "link": source["link"], "translated": _translated(source["title"])})
     return out
+
+
+def unwrap_text(value: Any) -> Any:
+    """模型把整段 JSON 塞進文字欄位（{"summary": "…"}）時，取裡面那段字。"""
+    if isinstance(value, str) and value.lstrip().startswith("{"):
+        inner = json_from_text(value)
+        if isinstance(inner, Mapping):
+            return next((text for text in inner.values() if isinstance(text, str) and text.strip()), value)
+    return value
 
 
 # ---- 資料庫 ----
@@ -419,6 +454,9 @@ def watch_rows(query: Callable[[str], list[dict]], email: str, now: str, since: 
     for row in rows:
         key = (row["code"], re.sub(r"\s+", "", row["title"]))   # 同一則從中央社 RSS 與 Google News 各來一次：只送一次
         if key in seen or len(out) >= WATCH_MAX:
+            continue
+        # 中央社整批對到的（cna-*）有些只在前言提到公司（贊助、地名）：標題沒點名就不算（2026-11-19 風箏節、馬拉松）
+        if str(row["source"]).startswith("cna-") and not wn._mentions(row["title"], {"code": row["code"], "name": row["name"]}):
             continue
         seen.add(key)
         out.append({"id": f"w{len(out) + 1}", "code": row["code"], "name": row["name"], "link": row["link"],
@@ -483,12 +521,18 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
         jobs.append(("watch", watch_prompt(owner_watch), WATCH_SCHEMA))
     calls: dict[str, dict[str, Any]] = {}
 
+    attempts: dict[str, int] = {}
+
     def call(job):
         name, text, schema = job
-        try:
-            status, output, note = ask_owner(text, schema)
-        except Exception as error:  # noqa: BLE001 — 一批出錯只影響那一批
-            status, output, note = type(error).__name__, None, str(error)[:200]
+        for attempt in range(1, CALL_ATTEMPTS + 1):
+            attempts[name] = attempt
+            try:
+                status, output, note = ask_owner(text, schema)
+            except Exception as error:  # noqa: BLE001 — 一批出錯只影響那一批
+                status, output, note = type(error).__name__, None, str(error)[:200]
+            if status == "ok":
+                break
         return name, status, coerce_output(output), note
 
     with ThreadPoolExecutor(max_workers=PARALLEL_CALLS) as pool:
@@ -498,9 +542,10 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
     unmarked: list[Mapping[str, Any]] = []
     owner_marks: list[dict[str, Any]] = []
     for (name, status, output, note), batch in zip(results, [*batches, owner_watch]):
-        record = {"status": status, **({"note": str(note)[:300]} if note and status != "ok" else {})}
+        record = {"status": status, "attempts": attempts.get(name, 1),
+                  **({"note": str(note)[:400]} if note and status != "ok" else {})}
         if name == "watch":
-            owner_marks = validate_watch(output, owner_watch) if status == "ok" else []
+            owner_marks = validate_watch(output, owner_watch, record) if status == "ok" else []
             record["kept"] = len(owner_marks)
         else:
             kept = validate_items(output, batch, rejected) if status == "ok" else []
@@ -511,9 +556,15 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
         calls[name] = record
     summary = None
     if classified:
-        status, output, note = call(("summary", summary_prompt(slot, trade_date, classified, index_rows), SUMMARY_SCHEMA))[1:]
-        summary = _text(output.get("summary"), SUMMARY_MAX) if status == "ok" and isinstance(output, Mapping) else None
-        calls["summary"] = {"status": status, **({"note": str(note)[:300]} if note and status != "ok" else {})}
+        for attempt in (1, 2):   # 回成交代工作的話就再問一次；還是不行就不放總結
+            status, output, note = call(("summary", summary_prompt(slot, trade_date, classified, index_rows), SUMMARY_SCHEMA))[1:]
+            summary = (_text(unwrap_text(output.get("market_commentary") or output.get("summary")), SUMMARY_MAX)
+                       if status == "ok" and isinstance(output, Mapping) else None)
+            if status != "ok" or is_summary(summary):
+                break
+            status, note, summary = "not_a_summary", summary, None
+        calls["summary"] = {"status": status, "attempts": attempt,
+                            **({"note": str(note)[:300]} if note and status != "ok" else {})}
     # 有判讀就套上；整批沒判讀成的那幾則照原標題存（不標利多利空、沒有理由）；一則都沒有才當「只有標題」。
     if classified:
         stored = _keep_per_group(classified + unclassified_items(unmarked))
@@ -533,14 +584,24 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
         if not watch:
             friends[email] = "no_news"
             continue
-        try:
-            friend_status, friend_output, friend_note = ask_friend(key_row, watch_prompt(watch), WATCH_SCHEMA)
-        except Exception as error:  # noqa: BLE001 — 一位朋友失敗不影響別人
-            friend_status, friend_output, friend_note = type(error).__name__, None, ""
-        friends[email] = friend_status if friend_status == "ok" or not friend_note else f"{friend_status} {friend_note}"
-        friend_output = coerce_output(friend_output)
-        if friend_status == "ok":
-            user_rows[email] = validate_watch(friend_output, watch)
+        marks: list[dict[str, Any]] = []
+        failures: list[str] = []
+        pieces = [watch[start:start + FRIEND_BATCH] for start in range(0, len(watch), FRIEND_BATCH)]
+        for piece in pieces:
+            try:
+                friend_status, friend_output, friend_note = ask_friend(key_row, watch_prompt(piece), WATCH_SCHEMA)
+            except Exception as error:  # noqa: BLE001 — 一位朋友失敗不影響別人
+                friend_status, friend_output, friend_note = type(error).__name__, None, ""
+            if friend_status == "ok":
+                marks += validate_watch(coerce_output(friend_output), piece)
+            else:
+                failures.append(f"{friend_status} {friend_note}".strip())
+                if friend_status in ("quota", "key_invalid", "key_revoked", "key_decrypt_failed", "region"):
+                    break   # 金鑰或額度的問題：剩下的不用再試
+        done = len(pieces) - len(failures)
+        friends[email] = "ok" if not failures else f"{done}/{len(pieces)} {failures[0]}"
+        if marks or not failures:
+            user_rows[email] = marks
     run_row = {"run_id": f"{trade_date}-{slot}", "trade_date": trade_date, "slot": slot, "created_at": now,
                "status": run_status, "summary": summary, "indices": index_rows,
                "sources": {"feeds": sources, "missed_groups": missed_groups(sources)}, "model": model}
@@ -586,22 +647,27 @@ def json_from_text(text: str) -> Any:
 
 
 def interpret_envelope(envelope: Mapping[str, Any] | None) -> tuple[str, Any, str]:
-    """agy 的 result 事件 → (狀態, 輸出, 說明)。SUCCESS 但 structured_output 是空的：先試文字回覆裡的 JSON；
-    還是沒有就回 no_structured_output，說明裡寫事件有哪些欄位與文字前 300 字（2026-11-19 Actions 的 agy 1.5.3）。"""
+    """agy 的 result 事件 → (狀態, 輸出, 說明)。
+    新版有 structured_output；Actions 的 1.5.3 沒有這一欄，答案在 response（文字，可能包在 ```json 裡）。
+    都拿不到就回 no_structured_output，說明寫 response 前 300 字、被擋下的動作與回合數（2026-11-19 run 44531113573）。"""
     if not envelope or envelope.get("status") != "SUCCESS":
         return "model_failed", None, str((envelope or {}).get("error") or "沒有 result 事件")[:300]
     structured = envelope.get("structured_output")
     if isinstance(structured, Mapping):
         return "ok", structured, ""
-    if isinstance(structured, str) and json_from_text(structured) is not None:
-        return "ok", json_from_text(structured), "structured_output 是字串"
-    texts = [value for key, value in envelope.items() if isinstance(value, str) and key not in ("status", "type", "event")]
-    for text in texts:
-        parsed = json_from_text(text)
+    for key in ("structured_output", "response", "result", "text", "output"):
+        value = envelope.get(key)
+        if isinstance(value, Mapping) and key != "structured_output":
+            return "ok", value, f"答案在 {key}"
+        parsed = json_from_text(value) if isinstance(value, str) else None
         if parsed is not None:
-            return "ok", parsed, "從文字回覆解出 JSON"
-    preview = next((text for text in texts if text.strip()), "")
-    return "no_structured_output", None, f"keys={sorted(envelope)} text={preview[:300]!r}"
+            return "ok", parsed, f"從 {key} 解出 JSON"
+    response = next((envelope[key] for key in ("response", "result", "text", "output")
+                     if isinstance(envelope.get(key), str) and envelope[key].strip()), "")
+    denied = envelope.get("denied_actions")
+    return "no_structured_output", None, (
+        f"response={response[:300]!r} denied_actions={json.dumps(denied, ensure_ascii=False, default=str)[:120]} "
+        f"num_turns={envelope.get('num_turns')} keys={sorted(envelope)}")
 
 
 def _owner_asker(agy_bin: str | None, home: str | None, model: str, effort: str) -> Asker:
@@ -634,7 +700,15 @@ def _owner_asker(agy_bin: str | None, home: str | None, model: str, effort: str)
     return ask
 
 
+def friend_body(text: str, schema: Mapping[str, Any]) -> dict[str, Any]:
+    return {"contents": [{"role": "user", "parts": [{"text": text}]}],
+            "generationConfig": {"responseMimeType": "application/json", "responseJsonSchema": dict(schema),
+                                 "thinkingConfig": {"thinkingLevel": FRIEND_NEWS_EFFORT}}}
+
+
 def _friend_asker(model: str) -> FriendAsker:
+    import time
+
     import friend_ai_digest as fad
 
     def ask(key_row: Mapping[str, Any], text: str, schema: Mapping[str, Any]) -> tuple[str, Any, str]:
@@ -644,11 +718,15 @@ def _friend_asker(model: str) -> FriendAsker:
             return "key_decrypt_failed", None, ""
         post = lambda url, body, api_key: fad.http_post(url, body, api_key, timeout=FRIEND_TIMEOUT_SECONDS)  # noqa: E731
         try:
-            output, _usage = fad.call_gemini(text, model, api_key=key, post=post, schema=dict(schema))
-            return "ok", output, ""
+            reply = fad._post_with_retry(post, fad.GEMINI_URL.format(model=model), friend_body(text, schema), key, sleep=time.sleep)
+            parts = reply["candidates"][0]["content"]["parts"]
+            joined = "".join(part.get("text", "") for part in parts if isinstance(part, dict) and not part.get("thought"))
+            return "ok", json.loads(joined), ""
         except fad.ModelCallFailed as error:
             detail = getattr(error, "detail", None)
             return getattr(error, "code", "gemini_failed"), None, json.dumps(detail, ensure_ascii=False)[:200] if detail else ""
+        except (KeyError, IndexError, TypeError, json.JSONDecodeError):
+            return "gemini_failed", None, "no_structured_output"
     return ask
 
 

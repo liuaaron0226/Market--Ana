@@ -86,6 +86,19 @@ test("我的自選：朋友只看到自己的自選；沒有判讀時只有標�
     source: "路透", title: "MediaTek wins orders" }]);
 });
 
+test("我的自選：模型判成無關的不顯示；中央社只在前言提到公司的不算（本人 11-19 回報風箏節、馬拉松）", async () => {
+  const add = (code, link, source, title) => env.DB.prepare(
+    "INSERT INTO watch_news (code, link, source, title, summary, published_at, fetched_at) VALUES (?, ?, ?, ?, '', '2026-11-19T04:00:00Z', '2026-11-19T04:00:00Z')",
+  ).bind(code, link, source, title).run();
+  await add("2330", "https://news.google.com/kite", "gnews-cna", "台積電盃風箏節登場");          // 有判讀的人：這則沒有標記＝模型判無關
+  await add("2454", "https://www.cna.com.tw/run", "cna-finance", "新北鐵道馬拉松開跑");           // 標題沒點名聯發科
+  await add("2454", "https://www.cna.com.tw/ok", "cna-finance", "聯發科法說會登場");
+  const owner = await (await req("/api/market-news")).json();
+  assert.deepEqual(owner.mine.items.map((row) => row.title), ["台積電 ADR 下跌"]);
+  const friend = await (await req("/api/market-news", { email: FRIEND })).json();
+  assert.deepEqual(friend.mine.items.map((row) => row.title).sort(), ["MediaTek wins orders", "聯發科法說會登場"]);
+});
+
 test("模型沒寫成的那一輪：只有標題，不帶利多利空與理由", async () => {
   await env.DB.prepare("UPDATE market_news_runs SET status = 'unclassified', summary = NULL WHERE run_id = '2026-11-19-close'").run();
   const body = await (await req("/api/market-news")).json();

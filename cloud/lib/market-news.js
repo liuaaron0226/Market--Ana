@@ -56,7 +56,9 @@ async function mine(db, email, run) {
   const marks = new Map((await db.prepare(
     "SELECT code, link, tone, impact, title, translated, reason FROM market_news_user_items WHERE lower(email) = lower(?) AND run_id = ?",
   ).bind(email, run.run_id).all()).results.map((row) => [`${row.code}|${row.link}`, row]));
-  const items = rows.map((row) => {
+  // 中央社整批對到的（cna-*）有些只在前言提到公司：標題沒點名就不算。這個人有判讀時，沒有標記的＝模型判成和公司無關，不顯示。
+  const named = (row) => !row.source.startsWith("cna-") || (row.name && row.title.includes(row.name)) || row.title.includes(row.code);
+  const items = rows.filter((row) => named(row) && (marks.size === 0 || marks.has(`${row.code}|${row.link}`))).map((row) => {
     const mark = marks.get(`${row.code}|${row.link}`);
     return {
       code: row.code, name: row.name, link: row.link, published_at: row.published_at,
