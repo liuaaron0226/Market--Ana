@@ -216,7 +216,8 @@ class HomeIndicesTest(unittest.TestCase):
     """大盤頁切換國外指數（本人 11-19）：五個指數不管有沒有人關注都抓、舊資料一直累積。"""
 
     def test_the_five_indices_are_the_ones_the_owner_picked(self):
-        self.assertEqual(op.HOME_INDICES, ("DJI.INDX", "IXIC.INDX", "GSPC.INDX", "N225.INDX", "KS11.INDX"))
+        # 本人 11-19 下午「大盤我發現你少加了費半」：費城半導體放在標普後面。
+        self.assertEqual(op.HOME_INDICES, ("DJI.INDX", "IXIC.INDX", "GSPC.INDX", "SOX.INDX", "N225.INDX", "KS11.INDX"))
 
     def test_first_run_stores_everything_eodhd_returns_without_a_one_year_cut(self):
         d1 = FakeD1()

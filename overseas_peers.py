@@ -46,7 +46,7 @@ SOURCE_OF = {"US": "massive", "KR": "eodhd", "INDEX": "eodhd"}   # JP：沒有�
 # 大盤頁切換的國外指數（本人 2026-11-19：道瓊、那斯達克、標普 500、日經 225、韓國綜合）：不管有沒有人關注都抓，
 # 舊資料一直累積（不受 KEEP_DAYS 限制，本人同日定案）。網站那邊的清單在 cloud/lib/market-indices.js，要改得兩邊一起改。
 # 除了道瓊，其他四個和大盤預測的海外層同一份共用快取，不多用額度。
-HOME_INDICES = ("DJI.INDX", "IXIC.INDX", "GSPC.INDX", "N225.INDX", "KS11.INDX")
+HOME_INDICES = ("DJI.INDX", "IXIC.INDX", "GSPC.INDX", "SOX.INDX", "N225.INDX", "KS11.INDX")  # 費半：本人 11-19 下午補
 SYMBOL_RE = re.compile(r"^[0-9A-Z.]{2,16}$")
 D1_GROUP_BYTES = 2_000_000   # 和 daily_update 相同：多條語句合成約 2MB 一檔
 

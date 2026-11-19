@@ -38,11 +38,12 @@ const putStatus = (symbol, ok, problem = null, succeeded = "2026-11-18T23:20:00Z
   "INSERT INTO overseas_fetch_status (symbol, source, attempted_at, ok, succeeded_at, problem) VALUES (?, 'eodhd', ?, ?, ?, ?)",
 ).bind(symbol, "2026-11-18T23:20:00Z", ok ? 1 : 0, succeeded, problem).run();
 
-test("五個指數就是本人點的那五個，和每日抓取（overseas_peers.py）同一份清單", async () => {
+test("國外指數就是本人點的那幾個（11-19 下午加費半），和每日抓取（overseas_peers.py）同一份清單", async () => {
   assert.deepEqual(MARKET_INDICES.map((item) => [item.key, item.symbol, item.name, item.zone]), [
     ["dji", "DJI.INDX", "道瓊工業", "us"],
     ["ixic", "IXIC.INDX", "那斯達克綜合", "us"],
     ["gspc", "GSPC.INDX", "標普 500", "us"],
+    ["sox", "SOX.INDX", "費城半導體", "us"],
     ["n225", "N225.INDX", "日經 225", "asia"],
     ["ks11", "KS11.INDX", "韓國綜合", "asia"],
   ]);

@@ -13,6 +13,7 @@
     { key: 'dji', short: '道瓊', name: '道瓊工業', zone: 'us' },
     { key: 'ixic', short: '那指', name: '那斯達克綜合', zone: 'us' },
     { key: 'gspc', short: '標普', name: '標普 500', zone: 'us' },
+    { key: 'sox', short: '費半', name: '費城半導體', zone: 'us' },
     { key: 'n225', short: '日經', name: '日經 225', zone: 'asia' },
     { key: 'ks11', short: '韓綜', name: '韓國綜合', zone: 'asia' }
   ];

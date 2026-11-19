@@ -28,7 +28,8 @@ OUT = ROOT / ".tmp/market-index-journey"
 OWNER, FRIEND = "owner@example.com", "friend@example.com"
 LAST = date(2026, 11, 18)
 # （代號, 起點, 量）：日經的量是 0（EODHD 的日經沒有量），韓綜最近一次沒抓到
-SPECS = [("DJI.INDX", 46800, 3.2e8), ("IXIC.INDX", 22900, 8e9), ("GSPC.INDX", 6750, 4e9), ("N225.INDX", 49500, 0), ("KS11.INDX", 4050, 5e8)]
+SPECS = [("DJI.INDX", 46800, 3.2e8), ("IXIC.INDX", 22900, 8e9), ("GSPC.INDX", 6750, 4e9), ("SOX.INDX", 7200, 0),
+         ("N225.INDX", 49500, 0), ("KS11.INDX", 4050, 5e8)]
 
 
 def seed_sql() -> str:
@@ -112,7 +113,7 @@ def run(j: Journey, browser, prefix: str, email: str, options: dict) -> None:
     page.locator("#indexMenu").wait_for(state="visible", timeout=5_000)
     page.wait_for_timeout(450)
     names = page.locator("#indexMenu button").all_inner_texts()
-    j.check(f"{prefix}點標題浮出六個指數", names == ["台股", "道瓊", "那指", "標普", "日經", "韓綜"], names)
+    j.check(f"{prefix}點標題浮出七個指數（11-19 下午加費半）", names == ["台股", "道瓊", "那指", "標普", "費半", "日經", "韓綜"], names)
     j.check(f"{prefix}選單不超出畫面", page.locator("#indexMenu").bounding_box()["x"] + page.locator("#indexMenu").bounding_box()["width"]
             <= options["viewport"]["width"])
     page.locator(".chart-workspace").screenshot(path=str(OUT / f"{prefix}1-menu.png"))

@@ -34,13 +34,14 @@ function rows(count, { from = "2025-09-01", start = 100, step = 1, volume = 1000
   return out;
 }
 
-test("選單是台股加權在最前面，接著五個國外指數；名稱和伺服器那一份一樣", () => {
+test("選單是台股加權在最前面，接著六個國外指數（11-19 下午加費半）；名稱和伺服器那一份一樣", () => {
   const { MarketIndex } = load();
   assert.deepEqual(plain(MarketIndex.LIST.map((item) => [item.key, item.short, item.name])), [
     ["twii", "台股", "台股加權"],
     ["dji", "道瓊", "道瓊工業"],
     ["ixic", "那指", "那斯達克綜合"],
     ["gspc", "標普", "標普 500"],
+    ["sox", "費半", "費城半導體"],
     ["n225", "日經", "日經 225"],
     ["ks11", "韓綜", "韓國綜合"],
   ]);

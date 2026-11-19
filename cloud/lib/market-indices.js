@@ -7,6 +7,7 @@ export const MARKET_INDICES = [
   { key: "dji", symbol: "DJI.INDX", name: "道瓊工業", zone: "us" },
   { key: "ixic", symbol: "IXIC.INDX", name: "那斯達克綜合", zone: "us" },
   { key: "gspc", symbol: "GSPC.INDX", name: "標普 500", zone: "us" },
+  { key: "sox", symbol: "SOX.INDX", name: "費城半導體", zone: "us" }, // 本人 11-19 下午「大盤我發現你少加了費半」
   { key: "n225", symbol: "N225.INDX", name: "日經 225", zone: "asia" },
   { key: "ks11", symbol: "KS11.INDX", name: "韓國綜合", zone: "asia" },
 ];
