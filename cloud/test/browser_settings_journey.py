@@ -46,6 +46,9 @@ def seed_sql() -> str:
     for run_id, outcome, dry in (("3", "failed", False), ("4", "ok", True)):
         sql += gemini_usage.snapshot_sql(buckets, task="daily-update", run_id=run_id, taken_at=iso(now - timedelta(minutes=20)),
                                          model="gemini-4-argon", call={"effort": "medium", "outcome": outcome, "dry_run": dry})
+    # 本人 11-19 晚（設定頁 AI 模型）：晨間預測那一班沒讀到設定，設定頁要標出來
+    sql += ("INSERT INTO ai_model_reads (task, run_id, read_at, source) VALUES "
+            f"('forecast-morning', '5', '{iso(now - timedelta(minutes=30))}', 'unreadable');\n")
     sql += ("INSERT INTO users (email, nickname, status, applied_at) VALUES "
             f"('{FRIEND}', 'F', 'approved', '2026-11-09T00:00:00Z'), ('new@example.com', 'N', 'pending', '2026-11-17T00:00:00Z');\n")
     return sql
@@ -103,8 +106,8 @@ def owner_page(journey: Journey, browser, name: str, path: str, width: int) -> N
     gear.click()
     page.wait_for_selector("#settingsDialog .st-meter")
     s = state(page)
-    journey.check(f"{tag}：打開浮板、三顆籤、先看用量、底下的頁面鎖住",
-                  s["open"] and [t[0] for t in s["tabs"]] == ["Gemini 用量", "通知", "外觀"] and s["tabs"][0][1] == "true"
+    journey.check(f"{tag}：打開浮板、四顆籤（多了 AI 模型）、先看用量、底下的頁面鎖住",
+                  s["open"] and [t[0] for t in s["tabs"]] == ["Gemini 用量", "AI 模型", "通知", "外觀"] and s["tabs"][0][1] == "true"
                   and s["locked"] and s["expanded"] == "true", s)
     meters = page.eval_on_selector_all("#settingsDialog .st-meter", "ms => ms.map(m => [m.querySelector('.st-meter-name').textContent, m.querySelector('.st-meter-val').textContent, m.hasAttribute('data-low')])")
     journey.check(f"{tag}：Flash 兩條（5 小時偏低標金色）、Argon 一條",
@@ -159,6 +162,65 @@ def owner_page(journey: Journey, browser, name: str, path: str, width: int) -> N
     context.close()
 
 
+def models_rows(page) -> list[str]:
+    return page.eval_on_selector_all("#settings-models .st-mrow", "rs => rs.map(r => r.innerText.replace(/\\s+/g, ' ').replace(' ›', ''))")
+
+
+def owner_models(journey: Journey, browser, width: int, first: bool) -> None:
+    """設定頁「AI 模型」（本人 11-19 晚，樣品 C）：每列寫現值、點開才選；改到大盤預測或每日判斷存檔前先問。
+    first：第一次走（還沒存過）；第二次（另一個寬度）看上一次存的值重新整理後還在。"""
+    tag = f"站主 AI 模型 {width}"
+    context, page = journey.page(browser, OWNER, width, PAGES["home"])
+    page.locator("[data-settings-open]").click()
+    page.wait_for_selector("#settingsDialog[open]")
+    page.get_by_role("tab", name="AI 模型").click()
+    page.wait_for_selector("#settings-models .st-mrow")
+    quota = page.locator("#settings-models .st-quota").inner_text().replace("\n", " ")
+    journey.check(f"{tag}：頂端一行 Argon、Flash 本週剩多少", "Argon 本週剩 99%" in quota and "Flash 本週剩 93%" in quota, quota)
+    warn = page.locator("#settings-models .st-warn").all_inner_texts()
+    journey.check(f"{tag}：晨間預測上一班沒讀到設定有標出來", any("晨間事前預測上一班" in w and "沒讀到你的設定" in w for w in warn), warn)
+    rows = models_rows(page)
+    if not first:
+        journey.check(f"{tag}：上次存的值重新整理後還在（大盤預測 Flash・中、白話 Argon・低）",
+                      rows[0].endswith("Flash・中") and rows[3].endswith("Argon・低"), rows)
+        page.screenshot(path=str(OUT / f"owner-models-{width}.png"))
+        context.close()
+        return
+    journey.check(f"{tag}：五列都是預設值", [r.split(" ")[-1] for r in rows] == ["Argon・中", "Flash・高", "Flash・高", "Argon・中", "Argon・中"]
+                  and rows[0].startswith("大盤預測 晚間・晨間・重播一起"), rows)
+    journey.check(f"{tag}：還沒改不出現存檔鍵", page.locator("[data-maction]").count() == 0)
+    page.screenshot(path=str(OUT / f"owner-models-{width}-start.png"))
+
+    page.locator("[data-mrow='forecast']").click()
+    journey.check(f"{tag}：點大盤預測那一列展開兩組鍵",
+                  page.locator("#settings-model-forecast-choices").is_visible()
+                  and page.locator("[data-mrow='forecast']").get_attribute("aria-expanded") == "true")
+    page.locator("[data-mkey='forecast'][data-model='gemini-3.8-flash']").click()
+    journey.check(f"{tag}：選 Flash 那一列換成新值、出現還原與存檔、焦點留在 Flash",
+                  models_rows(page)[0].endswith("Flash・中") and page.locator("[data-maction='save']").is_visible()
+                  and page.evaluate("() => document.activeElement?.dataset.model") == "gemini-3.8-flash")
+    page.locator("[data-maction='save']").click()
+    confirm = page.locator("#settings-models .st-confirm").inner_text()
+    journey.check(f"{tag}：存檔前先問（成績另開一組、正式起算重數）", "大盤預測改成 Flash・中" in confirm and "連續 5 天" in confirm, confirm)
+    page.screenshot(path=str(OUT / f"owner-models-{width}-confirm.png"))
+    page.locator("[data-maction='cancel']").click()
+    journey.check(f"{tag}：取消回到還沒存的樣子", page.locator(".st-confirm").count() == 0 and page.locator("[data-maction='save']").is_visible())
+    page.locator("[data-maction='save']").click()
+    page.locator("[data-maction='confirm']").click()
+    page.wait_for_selector("#settings-models .st-saved")
+    journey.check(f"{tag}：確定改之後存好", "已存檔" in page.locator(".st-saved").inner_text()
+                  and page.locator("[data-maction]").count() == 0 and models_rows(page)[0].endswith("Flash・中"))
+
+    page.locator("[data-mrow='plain']").click()
+    page.locator("[data-mkey='plain'][data-effort='low']").click()
+    page.locator("[data-maction='save']").click()
+    page.wait_for_function("() => document.querySelector('#settings-models .st-saved')?.textContent.includes('已存檔')"
+                           " && !document.querySelector('[data-maction]')")
+    journey.check(f"{tag}：白話改思考低，不用確認直接存", page.locator(".st-confirm").count() == 0 and models_rows(page)[3].endswith("Argon・低"))
+    page.screenshot(path=str(OUT / f"owner-models-{width}-saved.png"))
+    context.close()
+
+
 def friend_page(journey: Journey, browser, width: int) -> None:
     tag = f"朋友 home {width}"
     context, page = journey.page(browser, FRIEND, width, PAGES["home"])
@@ -198,6 +260,7 @@ def main() -> int:
             for width in (390, 1440):
                 for name, path in PAGES.items():
                     owner_page(journey, browser, name, path, width)
+                owner_models(journey, browser, width, first=width == 390)
                 friend_page(journey, browser, width)
             browser.close()
     finally:

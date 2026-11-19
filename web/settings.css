@@ -104,6 +104,41 @@
 .st-model { color: var(--faint); font-size: 12px; }
 .st-updated { margin: 0; padding-top: 10px; color: var(--faint); font-size: 12px; }
 
+/* ---------- AI 模型（本人 11-19 晚選樣品 C：每列寫現值、點開才選；改了才出現還原／存檔）---------- */
+/* 站主有四顆籤：手機上字不折行 */
+.st-tab { white-space: nowrap; padding: 0 6px; }
+.st-quota { margin: 10px 0 4px; display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--dim); font-size: 13px; }
+.st-quota b { color: var(--ink); font: 600 14px var(--mono); }
+.st-quota [data-low] b { color: var(--gold); }
+.st-warn { margin: 8px 0 0; padding: 8px 12px; border-left: 2px solid var(--gold); background: var(--panel2); color: var(--ink); font-size: 13px; line-height: 1.6; }
+.st-mrow {
+  width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 52px; padding: 6px 0;
+  border: 0; border-top: 1px solid var(--hair); background: none; color: var(--ink); font: 15px var(--sans); text-align: left; cursor: pointer;
+}
+.st-quota + .st-mrow, .st-warn + .st-mrow { margin-top: 6px; }
+.st-mname small { display: block; color: var(--faint); font-size: 12px; }
+.st-mval { display: inline-flex; align-items: center; gap: 6px; flex: none; color: var(--dim); font-size: 14px; }
+.st-mval[data-changed] { color: var(--ink); font-weight: 600; }
+.st-mval .st-chev { transition: transform 200ms var(--ease-out); }
+.st-mrow[aria-expanded="true"] .st-chev { transform: rotate(90deg); }
+.st-mopen { display: flex; gap: 8px; padding: 0 0 12px; }
+.st-mopen[hidden] { display: none; }
+.st-mopen .st-seg:last-child { flex: 1; }
+.st-mopen .st-seg:last-child button { flex: 1; min-width: 0; }
+.st-mopen .st-seg button { min-width: 62px; padding: 0 10px; }
+.st-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 0 4px; }
+.st-btn {
+  min-height: 40px; padding: 0 16px; border: 0; border-radius: var(--r-key); background: var(--key); color: var(--ink);
+  box-shadow: var(--key-shadow); font: 500 14px var(--sans); cursor: pointer;
+}
+.st-btn-primary { background: var(--ink); color: var(--panel); }
+.st-btn:disabled { opacity: .55; cursor: default; }
+@media (pointer: coarse) { .st-btn { min-height: 44px; } }
+.st-confirm { margin: 10px 0 2px; padding: 12px 14px; border-radius: var(--r-key); background: var(--well); box-shadow: var(--well-shadow); font-size: 14px; line-height: 1.6; }
+.st-confirm p { margin: 0 0 8px; }
+.st-confirm .st-actions { padding: 0; }
+.st-saved { margin: 8px 0 0; color: var(--ink); font-size: 13px; }
+
 /* ---------- 通知：到價推播的畫面由 watch-push.js 畫（樣式在 watch-push.css），這裡補上勾選框（原本借自選股頁的樣式） ---------- */
 .st-pane-notify .wp-toggle { min-height: 44px; display: inline-flex; align-items: center; gap: 8px; color: var(--dim); font-size: 14px; cursor: pointer; }
 .st-pane-notify .wp-toggle input { width: 20px; height: 20px; margin: 0; accent-color: var(--accent); cursor: pointer; }
