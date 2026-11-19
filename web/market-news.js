@@ -80,7 +80,8 @@
     els.status.hidden = items.length > 0 && !missed;
     els.status.textContent = carried ? `這一輪沒抓到，先列 ${monthDay(carried)} ${clock(carried)} 那一輪的`
       : missed ? '這一輪沒抓到'
-        : key === 'mine' ? '你的自選股這一天沒有新聞' : '這一組這一輪沒有消息';
+        : key === 'mine' ? (current?.mine?.judged ? '這一輪沒有和你自選股直接相關的新聞' : '你的自選股這一天沒有新聞')
+          : '這一組這一輪沒有消息';
   }
 
   function renderSegments() {
