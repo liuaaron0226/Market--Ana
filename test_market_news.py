@@ -93,8 +93,8 @@ def model_reply(prompt_items, watch):
         items.append({"id": row["id"], "group": group, "market": "韓" if "Korea" in row["title"] else "",
                       "tone": tone, "impact": 3 if tone == "down" else 2, "title": "中文：" + row["title"][:20], "reason": "一句理由"})
     return {"summary": "台股今天下跌，主要是外資賣超。", "items": items,
-            "watch": [{"id": row["id"], "tone": "down", "impact": 2, "title": "自選：" + row["title"], "reason": "跟著走弱"}
-                      for row in watch]}
+            "watch": [{"id": row["id"], "relevant": "no" if "馬拉松" in row["title"] else "yes", "tone": "down", "impact": 2,
+                       "title": "自選：" + row["title"], "reason": "跟著走弱"} for row in watch]}
 
 
 def kind_of(schema):
@@ -320,8 +320,8 @@ class RunTests(unittest.TestCase):
         def friend_ask(key_row, prompt, schema):
             seen.append((key_row["email"], prompt))
             payload = json.loads(prompt[prompt.index("INPUT:") + 6:])
-            return "ok", {"watch": [{"id": row["id"], "tone": "up", "impact": 1, "title": "朋友：" + row["title"], "reason": "x"}
-                                    for row in payload["watch"]]}, ""
+            return "ok", {"watch": [{"id": row["id"], "relevant": "yes", "tone": "up", "impact": 1,
+                                     "title": "朋友：" + row["title"], "reason": "x"} for row in payload["watch"]]}, ""
         run(d1, friend_keys=[{"email": FRIEND, "alg": "AES-256-GCM"}], friend_ask=friend_ask)
         self.assertEqual([email for email, _ in seen], [FRIEND])
         self.assertNotIn("TSMC", seen[0][1], "朋友的提示只有他自己的自選")
@@ -332,7 +332,7 @@ class RunTests(unittest.TestCase):
         d1 = D1()
         report, _, _ = run(d1, friend_keys=[{"email": FRIEND}],
                            friend_ask=lambda key_row, prompt, schema: ("quota", None, "429"))
-        self.assertEqual(report["friends"], {FRIEND: "quota 429"})
+        self.assertEqual(report["friends"], {FRIEND: "0/1 quota 429"})
         self.assertEqual(d1.query("SELECT email FROM market_news_user_items"), [{"email": OWNER}])
 
     def test_rerunning_a_slot_replaces_it_and_old_runs_are_removed(self):
@@ -388,6 +388,94 @@ class SchemaTests(unittest.TestCase):
         self.assertEqual((rows["n2"]["impact"], rows["n2"]["market"]), (3, ""))
 
 
+class Round4Tests(unittest.TestCase):
+    """2026-11-19 正式跑 run 44531113573 的四個問題。"""
+
+    def test_the_answer_in_the_response_field_is_used(self):
+        # Actions 的 agy 1.5.3：result 事件沒有 structured_output，欄位是 response 等八個
+        envelope = {"conversation_id": "dae859cf-1", "denied_actions": [], "duration_seconds": 80, "json_schema": {"type": "object"},
+                    "num_turns": 1, "response": '```json\n{"items": [{"id": "n1"}]}\n```', "status": "SUCCESS", "usage": {}}
+        status, output, _ = mn.interpret_envelope(envelope)
+        self.assertEqual((status, output), ("ok", {"items": [{"id": "n1"}]}))
+
+    def test_an_unusable_response_is_previewed_not_the_conversation_id(self):
+        envelope = {"conversation_id": "dae859cf-1", "denied_actions": [{"tool": "web_search"}], "num_turns": 3,
+                    "response": "我先查一下最新消息", "status": "SUCCESS", "usage": {}}
+        status, _, note = mn.interpret_envelope(envelope)
+        self.assertEqual(status, "no_structured_output")
+        self.assertIn("我先查一下", note)
+        self.assertIn("web_search", note)
+        self.assertNotIn("dae859cf", note)
+
+    def test_a_failed_call_is_tried_once_more(self):
+        class FailsOnce(FakeAsk):
+            failed = False
+
+            def __call__(self, prompt, schema):
+                if kind_of(schema) == "items" and not self.failed:
+                    self.failed = True
+                    self.kinds.append("items")
+                    return "no_structured_output", None, "response=''"
+                return super().__call__(prompt, schema)
+        d1 = D1()
+        report, _, ask = run(d1, ask=FailsOnce())
+        self.assertEqual(ask.kinds.count("items"), 2)
+        self.assertEqual(report["diagnosis"]["calls"]["items1"], {"status": "ok", "attempts": 2, "returned": 4, "kept": 4})
+
+    def test_a_commentary_that_is_itself_json_is_unwrapped(self):
+        class Wrapped(FakeAsk):
+            def __call__(self, prompt, schema):
+                status, output, note = super().__call__(prompt, schema)
+                if "market_commentary" in output:
+                    output["market_commentary"] = '{"summary": "受美國新出口管制影響，台股下跌。"}'
+                return status, output, note
+        d1 = D1()
+        run(d1, ask=Wrapped())
+        self.assertEqual(d1.query("SELECT summary FROM market_news_runs")[0]["summary"], "受美國新出口管制影響，台股下跌。")
+
+    def test_watch_news_the_model_calls_unrelated_is_not_kept(self):
+        d1 = D1()
+        d1.db.execute("INSERT INTO watch_news (code, link, source, title, summary, published_at, fetched_at) VALUES "
+                      "('2330', 'https://news.google.com/rss/articles/R1', 'gnews-cna', '台積電盃馬拉松開跑', '', '2026-11-19T03:00:00Z', '2026-11-19T06:00:00Z')")
+        report, _, _ = run(d1)
+        self.assertEqual([r["title"] for r in d1.query("SELECT title FROM market_news_user_items")], ["自選：TSMC ADR falls 4%"])
+        self.assertEqual(report["diagnosis"]["calls"]["watch"]["unrelated"], 1)
+
+    def test_cna_rows_matched_only_by_their_lead_are_not_watch_news(self):
+        d1 = D1()
+        d1.db.execute("INSERT INTO watch_news (code, link, source, title, summary, published_at, fetched_at) VALUES "
+                      "('2330', 'https://www.cna.com.tw/k', 'cna-finance', '新竹市國際風箏節登場', '台積電贊助', '2026-11-19T03:00:00Z', '2026-11-19T06:00:00Z')")
+        self.assertEqual([row["title"] for row in mn.watch_rows(d1.query, OWNER, NOW)], ["TSMC ADR falls 4%"])
+
+    def test_friends_are_asked_in_small_batches_with_light_thinking(self):
+        d1 = D1()
+        for n in range(12):
+            d1.db.execute("INSERT INTO watch_news (code, link, source, title, summary, published_at, fetched_at) VALUES "
+                          "('2454', ?, 'gnews-reuters', ?, '', '2026-11-19T02:00:00Z', '2026-11-19T06:00:00Z')",
+                          (f"https://news.google.com/rss/articles/F{n}", f"MediaTek story {n}"))
+        sizes = []
+
+        def friend_ask(key_row, prompt, schema):
+            payload = json.loads(prompt[prompt.index("INPUT:") + 6:])
+            sizes.append(len(payload["watch"]))
+            if len(sizes) == 1:
+                return "gemini_unavailable", None, '{"error": "GeminiTimeout"}'
+            return "ok", {"watch": [{"id": row["id"], "relevant": "yes", "tone": "up", "impact": "1", "title": "朋友", "reason": "x"}
+                                    for row in payload["watch"]]}, ""
+        report, _, _ = run(d1, friend_keys=[{"email": FRIEND}], friend_ask=friend_ask)
+        self.assertEqual(sizes, [mn.FRIEND_BATCH, 13 - mn.FRIEND_BATCH])
+        self.assertIn("1/2", report["friends"][FRIEND])
+        self.assertEqual(len(d1.query(f"SELECT 1 FROM market_news_user_items WHERE email = '{FRIEND}'")), 13 - mn.FRIEND_BATCH)
+        body = mn.friend_body("x", mn.WATCH_SCHEMA)
+        self.assertEqual(body["generationConfig"]["thinkingConfig"]["thinkingLevel"], mn.FRIEND_NEWS_EFFORT)
+        self.assertEqual(mn.FRIEND_NEWS_EFFORT, "low")
+
+    def test_only_clearly_unrelated_news_is_skipped(self):
+        self.assertIn("看不出影響", mn.ITEM_RULES)
+        self.assertIn("flat", mn.ITEM_RULES.split("看不出影響")[1][:40], "看不出影響的標中性，不是丟掉")
+        self.assertIn("不要使用任何工具", mn.ITEM_RULES)
+
+
 class EnvelopeTests(unittest.TestCase):
     """agy 的 result 事件：Actions 的 1.5.3 回 SUCCESS 但 structured_output 是 None（2026-11-19 run 44527174969）。"""
 
@@ -398,7 +486,7 @@ class EnvelopeTests(unittest.TestCase):
         envelope = {"status": "SUCCESS", "structured_output": None, "result": '好的：\n```json\n{"summary": "台股下跌"}\n```'}
         status, output, note = mn.interpret_envelope(envelope)
         self.assertEqual((status, output), ("ok", {"summary": "台股下跌"}))
-        self.assertIn("文字", note)
+        self.assertIn("解出", note)
 
     def test_nothing_usable_names_the_fields_and_the_start_of_the_text(self):
         status, output, note = mn.interpret_envelope({"status": "SUCCESS", "structured_output": None, "result": "抱歉，我無法"})
@@ -458,13 +546,13 @@ class FriendErrorTests(unittest.TestCase):
     def test_the_friend_error_detail_comes_back(self):
         # 2026-11-19 正式跑：朋友那份只寫 gemini_unavailable——細節在例外的 .detail，不在 args。
         import friend_ai_digest as fad
-        saved = fad.node_decrypt, fad.call_gemini
+        saved = fad.node_decrypt, fad._post_with_retry
         def boom(*args, **kwargs):
             raise fad.ModelCallFailed("gemini_unavailable", None, {"error": "GeminiTimeout", "attempts": 1})
         try:
-            fad.node_decrypt, fad.call_gemini = (lambda row: "k"), boom
+            fad.node_decrypt, fad._post_with_retry = (lambda row: "k"), boom
             status, output, note = mn._friend_asker("gemini-3.8-flash")({"email": FRIEND}, "x", mn.WATCH_SCHEMA)
         finally:
-            fad.node_decrypt, fad.call_gemini = saved
+            fad.node_decrypt, fad._post_with_retry = saved
         self.assertEqual((status, output), ("gemini_unavailable", None))
         self.assertIn("GeminiTimeout", note)
