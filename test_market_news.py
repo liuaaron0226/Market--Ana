@@ -221,6 +221,32 @@ class RunTests(unittest.TestCase):
         self.assertNotIn("編的", titles)
         self.assertEqual(len(titles), 2, "送出四則（台股兩、美股一、韓一；超過一天的不送），壞掉的兩則不存")
 
+    def test_marks_are_applied_even_without_a_summary_and_from_a_json_string(self):
+        # 2026-11-19 正式跑（agy 1.5.3）：model ok 卻整輪「只有標題」——總結沒有就整輪不套，現在改成有判讀就套。
+        class NoSummary(FakeAsk):
+            def __call__(self, prompt, schema):
+                status, output, note = super().__call__(prompt, schema)
+                output["summary"] = ""
+                return status, json.dumps(output, ensure_ascii=False), note
+        d1 = D1()
+        report, _, _ = run(d1, ask=NoSummary())
+        self.assertEqual(report["run_status"], "ok")
+        self.assertEqual(report["diagnosis"]["output_type"], "dict")
+        self.assertEqual(report["diagnosis"]["summary_chars"], 0)
+        run_row = d1.query("SELECT status, summary FROM market_news_runs")[0]
+        self.assertEqual((run_row["status"], run_row["summary"]), ("ok", None))
+        self.assertTrue(d1.query("SELECT tone FROM market_news_items WHERE tone <> 'flat'"))
+
+    def test_rejected_items_are_counted_by_reason(self):
+        class Bad(FakeAsk):
+            def __call__(self, prompt, schema):
+                status, output, note = super().__call__(prompt, schema)
+                output["items"][0]["id"] = "n999"
+                output["items"][1]["impact"] = None
+                return status, output, note
+        report, _, _ = run(D1(), ask=Bad())
+        self.assertEqual(report["diagnosis"]["rejected"], {"unknown_id": 1, "bad_fields:impact": 1})
+
     def test_when_the_model_fails_titles_are_kept_without_marks(self):
         d1 = D1()
         report, _, _ = run(d1, ask=FakeAsk(status="model_failed"))
@@ -251,7 +277,7 @@ class RunTests(unittest.TestCase):
         d1 = D1()
         report, _, _ = run(d1, friend_keys=[{"email": FRIEND}],
                            friend_ask=lambda key_row, prompt, schema: ("quota", None, "429"))
-        self.assertEqual(report["friends"], {FRIEND: "quota"})
+        self.assertEqual(report["friends"], {FRIEND: "quota 429"})
         self.assertEqual(d1.query("SELECT email FROM market_news_user_items"), [{"email": OWNER}])
 
     def test_rerunning_a_slot_replaces_it_and_old_runs_are_removed(self):

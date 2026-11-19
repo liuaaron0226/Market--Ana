@@ -41,6 +41,8 @@ RSS_SUMMARY_MAX = 200
 GNEWS_PAUSE_SECONDS = wn.GNEWS_PAUSE_SECONDS
 # agy 等模型的上限：一輪幾十則加思考高，300 秒不夠（2026-11-19 本機實測 60 則逾時）；其他任務照舊 300 秒。
 MODEL_TIMEOUT_SECONDS = 600
+# 朋友的金鑰走 Gemini API：思考高時一次可能超過朋友解讀用的 120 秒（2026-11-19 正式跑 gemini_unavailable）
+FRIEND_TIMEOUT_SECONDS = 300
 GROUPS = ("tw", "us", "asia")
 MARKETS = ("", "日", "韓", "中")
 # 送給模型的結構描述（agy 轉成 Gemini function declaration）：enum 只能是非空字串（2026-11-19 乾跑 INVALID_ARGUMENT），
@@ -309,14 +311,45 @@ def _translated(original: str) -> int:
     return 0 if _HAN.search(original or "") else 1
 
 
-def validate_items(output: Any, items: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    """模型回的 items → 要存的列：id 要是送出去的、欄位要合格、skip 的不存；每組依影響大小留 GROUP_KEEP 則。"""
+def coerce_output(output: Any) -> Any:
+    """agy 版本不同時 structured_output 可能是 JSON 字串（2026-11-19 Actions 的 1.5.3 回了東西卻沒套上）：字串就解開。"""
+    if isinstance(output, str):
+        try:
+            return json.loads(output)
+        except json.JSONDecodeError:
+            return output
+    return output
+
+
+def validate_items(output: Any, items: Sequence[Mapping[str, Any]],
+                   rejected: dict[str, int] | None = None) -> list[dict[str, Any]]:
+    """模型回的 items → 要存的列：id 要是送出去的、欄位要合格、skip 的不存；每組依影響大小留 GROUP_KEEP 則。
+    rejected 給了就記每一種被擋的原因各幾則（執行紀錄用）。"""
     by_id = {row["id"]: row for row in items}
     out, used = [], set()
+    drop = (lambda reason: rejected.__setitem__(reason, rejected.get(reason, 0) + 1)) if rejected is not None else (lambda _r: None)
     for entry in (output or {}).get("items") or [] if isinstance(output, Mapping) else []:
         mark = _mark(entry)
         source = by_id.get(entry.get("id")) if isinstance(entry, Mapping) else None
-        if not mark or not source or entry["id"] in used or entry.get("group") not in GROUPS:
+        if not isinstance(entry, Mapping):
+            drop("not_object")
+            continue
+        if entry.get("group") == "skip":
+            drop("skip")
+            continue
+        if not source:
+            drop("unknown_id")
+            continue
+        if entry["id"] in used:
+            drop("duplicate_id")
+            continue
+        if entry.get("group") not in GROUPS:
+            drop("bad_group")
+            continue
+        if not mark:
+            missing = ",".join(sorted(key for key in ("tone", "impact", "title", "reason")
+                                      if key not in entry or entry.get(key) in (None, "")))
+            drop(f"bad_fields:{missing}" if missing else "bad_values")
             continue
         used.add(entry["id"])
         market = entry.get("market") if entry.get("group") == "asia" and entry.get("market") in MARKETS[1:] else ""
@@ -433,12 +466,20 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
     index_rows = indices(query, taiex)
     owner_watch = watch_rows(query, owner_email, now, since)
     status, output, note = ask_owner(prompt(slot, trade_date, items, owner_watch, index_rows), OUTPUT_SCHEMA)
+    output = coerce_output(output)
     summary = _text(output.get("summary"), SUMMARY_MAX) if status == "ok" and isinstance(output, Mapping) else None
-    if status == "ok" and summary:
-        stored, run_status = validate_items(output, items), "ok"
+    rejected: dict[str, int] = {}
+    classified = validate_items(output, items, rejected) if status == "ok" else []
+    # 有判讀就套上（總結沒寫成也一樣，網站只是少那一段）；一則都沒判讀成才當「只有標題」。
+    if classified:
+        stored, run_status = classified, "ok"
         user_rows = {owner_email: validate_watch(output, owner_watch)}
     else:
         stored, run_status, summary, user_rows = unclassified_items(items), "unclassified", None, {}
+    diagnosis = {"output_type": type(output).__name__,
+                 "output_keys": sorted(output)[:10] if isinstance(output, Mapping) else None,
+                 "items_returned": len(output.get("items") or []) if isinstance(output, Mapping) else 0,
+                 "items_kept": len(classified), "rejected": rejected, "summary_chars": len(summary or "")}
     friends: dict[str, str] = {}
     for key_row in friend_keys:
         email = str(key_row.get("email") or "")
@@ -449,10 +490,11 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
             friends[email] = "no_news"
             continue
         try:
-            friend_status, friend_output, _ = ask_friend(key_row, watch_prompt(watch), WATCH_SCHEMA)
+            friend_status, friend_output, friend_note = ask_friend(key_row, watch_prompt(watch), WATCH_SCHEMA)
         except Exception as error:  # noqa: BLE001 — 一位朋友失敗不影響別人
-            friend_status, friend_output = type(error).__name__, None
-        friends[email] = friend_status
+            friend_status, friend_output, friend_note = type(error).__name__, None, ""
+        friends[email] = friend_status if friend_status == "ok" or not friend_note else f"{friend_status} {friend_note}"
+        friend_output = coerce_output(friend_output)
         if friend_status == "ok":
             user_rows[email] = validate_watch(friend_output, watch)
     run_row = {"run_id": f"{trade_date}-{slot}", "trade_date": trade_date, "slot": slot, "created_at": now,
@@ -464,6 +506,7 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
     return {"status": "ok", "run_id": run_row["run_id"], "run_status": run_status, "items": len(stored),
             "sent": len(items), "model": status, **({"model_note": note[:200]} if status != "ok" and note else {}),
             "owner_watch_sent": len(owner_watch), "owner_watch": len(user_rows.get(owner_email, [])),
+            "diagnosis": diagnosis,
             "friends": friends, "sources": sources,
             "dry_run": dry_run}
 
@@ -504,11 +547,14 @@ def _friend_asker(model: str) -> FriendAsker:
             key = fad.node_decrypt(dict(key_row))
         except Exception:  # noqa: BLE001
             return "key_decrypt_failed", None, ""
+        post = lambda url, body, api_key: fad.http_post(url, body, api_key, timeout=FRIEND_TIMEOUT_SECONDS)  # noqa: E731
         try:
-            output, _usage = fad.call_gemini(text, model, api_key=key, post=fad.http_post, schema=dict(schema))
+            output, _usage = fad.call_gemini(text, model, api_key=key, post=post, schema=dict(schema))
             return "ok", output, ""
         except fad.ModelCallFailed as error:
-            return str(error.args[0] if error.args else "gemini_failed"), None, ""
+            code = str(error.args[0] if error.args else "gemini_failed")
+            detail = error.args[2] if len(error.args) > 2 else None
+            return code, None, json.dumps(detail, ensure_ascii=False)[:200] if detail else ""
     return ask
 
 
