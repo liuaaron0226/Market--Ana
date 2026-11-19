@@ -73,8 +73,14 @@
     for (const b of els.seg.querySelectorAll('button')) b.setAttribute('aria-selected', String(b.dataset.group === key));
     const items = itemsOf(key);
     els.list.replaceChildren(...items.map(item => itemNode(item, { stockTag: key === 'mine' })));
-    els.status.hidden = items.length > 0;
-    els.status.textContent = key === 'mine' ? '你的自選股這一天沒有新聞' : '這一組這一輪沒有消息';
+    // 這一組的來源這一輪全部沒抓到：寫出來；有上一輪的就列上一輪的（/api/market-news 的 run.missed、run.carried）
+    const run = current?.run;
+    const missed = key !== 'mine' && Array.isArray(run?.missed) && run.missed.includes(key);
+    const carried = missed && run.carried?.[key];
+    els.status.hidden = items.length > 0 && !missed;
+    els.status.textContent = carried ? `這一輪沒抓到，先列 ${monthDay(carried)} ${clock(carried)} 那一輪的`
+      : missed ? '這一輪沒抓到'
+        : key === 'mine' ? '你的自選股這一天沒有新聞' : '這一組這一輪沒有消息';
   }
 
   function renderSegments() {

@@ -108,6 +108,19 @@ test("開關：owner 只給站主；朋友看到的功能清單是關的；off �
   assert.equal(releasePolicy(env).features.market_news_v1, false);
 });
 
+test("個股頁新聞標題：超過 90 天的不給；好幾天沒有成功抓到也算沒抓到", async () => {
+  await env.DB.prepare("INSERT INTO watch_news (code, link, source, title, summary, published_at, fetched_at) VALUES ('2330', ?, 'gnews-cna', ?, '', ?, ?)")
+    .bind("https://news.google.com/old", "舊聞", "2026-08-21T06:29:59Z", "2026-08-21T06:30:00Z").run();
+  await env.DB.prepare("INSERT INTO watch_news (code, link, source, title, summary, published_at, fetched_at) VALUES ('2330', ?, 'gnews-cna', ?, '', ?, ?)")
+    .bind("https://news.google.com/edge", "剛好 90 天", "2026-08-21T06:30:00Z", "2026-08-21T06:30:00Z").run();
+  await env.DB.prepare("INSERT INTO watch_news_fetches (source, code, last_attempt_at, last_success_at, last_error) VALUES ('gnews', '2330', ?, ?, NULL)")
+    .bind("2026-11-15T06:29:59Z", "2026-11-15T06:29:59Z").run();
+  const body = await (await req("/api/stocks/2330/headlines")).json();
+  assert.ok(body.items.some((row) => row.title === "剛好 90 天"));
+  assert.ok(!body.items.some((row) => row.title === "舊聞"));
+  assert.deepEqual(body.sources.map((row) => [row.source, row.ok]), [["gnews", false]]);
+});
+
 test("個股頁新聞標題：不用開關注，朋友也看得到；出處寫媒體名；沒抓到的來源列出來", async () => {
   await env.DB.prepare("INSERT INTO watch_news_fetches (source, code, last_attempt_at, last_success_at, last_error) VALUES ('gnews', '2330', ?, NULL, 'HTTP 429')")
     .bind("2026-11-19T06:00:00Z").run();
@@ -117,6 +130,16 @@ test("個股頁新聞標題：不用開關注，朋友也看得到；出處寫�
   assert.equal(body.available, true);
   assert.deepEqual(body.items.map((row) => [row.title, row.publisher]), [["TSMC ADR falls", "路透"], ["TSMC old story", "路透"]]);
   assert.deepEqual(body.sources.map((row) => [row.source, row.ok]), [["gnews", false], ["cna-finance", true]]);
+});
+
+test("一組的來源這一輪全部沒抓到：標出來，列上一輪的那一組", async () => {
+  await env.DB.prepare("UPDATE market_news_runs SET sources = ? WHERE run_id = '2026-11-19-close'")
+    .bind(JSON.stringify({ feeds: {}, missed_groups: ["us", "tw"] })).run();
+  const body = await (await req("/api/market-news")).json();
+  assert.deepEqual(body.run.missed, ["us", "tw"]);
+  assert.deepEqual(body.groups.us.map((row) => row.title), ["昨天的美股"], "美股這一輪沒有：列 11-18 收盤後那一輪的");
+  assert.deepEqual(body.run.carried, { us: "2026-11-18T06:05:00Z" });
+  assert.equal(body.groups.tw.length, 2, "台股這一輪還有（例如路透那一則）就不換");
 });
 
 test("資料表還沒建（0031 未套）時是空的，不是錯誤", async () => {

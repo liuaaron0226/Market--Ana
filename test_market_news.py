@@ -167,7 +167,7 @@ class FetchTests(unittest.TestCase):
 
     def test_the_source_list_is_the_one_the_owner_approved(self):
         labels = {feed["label"] for feed in mn.FEEDS}
-        for label in ("中央社", "路透", "華爾街日報", "Bloomberg", "金融時報", "日經中文網", "韓聯社", "Korea Herald",
+        for label in ("中央通訊社", "路透", "華爾街日報", "Bloomberg", "金融時報", "日經中文網", "韓聯社", "Korea Herald",
                       "南華早報", "香港電台", "BBC"):
             self.assertTrue(any(label in name for name in labels), label)
         self.assertFalse(any("經濟日報 產業" in name or "鉅亨" in name or "工商" in name for name in labels))
@@ -186,7 +186,7 @@ class RunTests(unittest.TestCase):
         self.assertEqual(indices[0], {"name": "加權", "change_pct": -1.82, "date": "2026-11-19"})
         self.assertIn({"name": "費城半導體", "change_pct": -3.1, "date": "2026-11-18"}, indices)
         items = d1.query("SELECT grp, tone, impact, title, source, translated FROM market_news_items ORDER BY impact DESC, title")
-        self.assertIn(("tw", "down", 3, "中文：外資賣超台股逾 600 億元", "中央社", 0), [tuple(r.values()) for r in items])
+        self.assertIn(("tw", "down", 3, "中文：外資賣超台股逾 600 億元", "中央通訊社", 0), [tuple(r.values()) for r in items])
         self.assertIn(("asia", "up", 2, "中文：Korea exports rise 9", "韓聯社", 1), [tuple(r.values()) for r in items])
         mine = d1.query("SELECT email, code, tone, title FROM market_news_user_items")
         self.assertEqual(mine, [{"email": OWNER, "code": "2330", "tone": "down", "title": "自選：TSMC ADR falls 4%"}])
@@ -267,10 +267,41 @@ class RunTests(unittest.TestCase):
         self.assertTrue(any(title.startswith("中文：外資 'O'Neil';") for title in titles), titles)
 
 
+class WindowTests(unittest.TestCase):
+    def test_monday_morning_reaches_back_to_the_last_run_but_not_forever(self):
+        d1 = D1()
+        d1.db.execute("INSERT INTO market_news_runs (run_id, trade_date, slot, created_at, status) "
+                      "VALUES ('2026-11-13-close', '2026-11-13', 'close', '2026-11-13T06:05:00Z', 'ok')")
+        self.assertEqual(mn.window_start(d1.query, "2026-11-16T00:05:00Z"), "2026-11-13T06:05:00Z", "週一盤前：從週五收盤後那一輪起")
+        self.assertEqual(mn.window_start(d1.query, "2026-11-13T07:00:00Z"), "2026-11-12T07:00:00Z", "同一天：至少一整天")
+        self.assertEqual(mn.window_start(d1.query, "2026-11-30T00:05:00Z"), "2026-11-26T00:05:00Z", "太久沒跑：最多四天")
+
+    def test_a_group_whose_sources_all_failed_is_marked_missed(self):
+        sources = {feed["key"]: "ok" for feed in mn.FEEDS}
+        for feed in mn.FEEDS:
+            if feed["group"] == "us":
+                sources[feed["key"]] = "HTTP 500"
+        self.assertEqual(mn.missed_groups(sources), ["us"])
+        d1 = D1()
+        run(d1, overrides={key: Response(status=500) for key in ("wsj-markets", "bloomberg-markets", "ft-markets")})
+        stored = json.loads(d1.query("SELECT sources FROM market_news_runs")[0]["sources"])
+        self.assertEqual(stored["missed_groups"], ["us"])
+
+    def test_trading_days_follow_the_official_holiday_calendar(self):
+        holidays = {"2026-10-09"}
+        self.assertTrue(mn.is_trading_day("2026-11-19", holidays))
+        self.assertFalse(mn.is_trading_day("2026-10-09", holidays), "國慶日補假")
+        self.assertFalse(mn.is_trading_day("2026-11-21", holidays), "週六")
+
+
 class VersionTests(unittest.TestCase):
-    def test_licensed_inputs_name_the_same_stock_news_outlets(self):
+    def test_watch_judgments_change_version_but_the_market_forecast_does_not(self):
+        import forecast_ledger
         import licensed_inputs
-        self.assertEqual(licensed_inputs.PARAMETERS["stock_headlines"]["outlets"], wn.STOCK_NEWS_PARAMETERS["outlets"])
+        import watch_ledger
+        self.assertNotIn("stock_headlines", licensed_inputs.PARAMETERS, "大盤預測不讀個股新聞，版本不動")
+        self.assertNotIn("stock_headlines", json.dumps(forecast_ledger.PARAMETERS, ensure_ascii=False, default=str))
+        self.assertEqual(watch_ledger._LAYER_PARAMETERS["headlines"]["stock_headlines"], wn.STOCK_NEWS_PARAMETERS)
         for key, _label in wn.GNEWS_OUTLETS.values():
             self.assertIn(key, licensed_inputs.SOURCE_NAMES)
 

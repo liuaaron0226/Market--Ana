@@ -40,7 +40,7 @@ const missingTable = (error) => /no such table/i.test(String(error?.message));
 const parse = (text, fallback) => { try { return JSON.parse(text); } catch { return fallback; } };
 
 async function pickRun(db, date) {
-  const sql = "SELECT run_id, trade_date, slot, created_at, status, summary, indices FROM market_news_runs " +
+  const sql = "SELECT run_id, trade_date, slot, created_at, status, summary, indices, sources FROM market_news_runs " +
     (date ? "WHERE trade_date = ? " : "") + "ORDER BY trade_date DESC, created_at DESC LIMIT 1";
   return (date ? db.prepare(sql).bind(date) : db.prepare(sql)).first();
 }
@@ -50,11 +50,11 @@ async function mine(db, email, run) {
   const start = isoSeconds(Date.parse(end) - WINDOW_MS);
   const rows = (await db.prepare(
     "SELECT n.code, w.name, n.link, n.source, n.title, n.published_at FROM watch_news n " +
-      "JOIN user_watchlist w ON w.code = n.code AND w.email = ? " +
+      "JOIN user_watchlist w ON w.code = n.code AND lower(w.email) = lower(?) " +
       "WHERE n.code <> '' AND n.published_at >= ? AND n.published_at <= ? ORDER BY n.published_at DESC, n.link LIMIT ?",
   ).bind(email, start, end, MINE_MAX).all()).results;
   const marks = new Map((await db.prepare(
-    "SELECT code, link, tone, impact, title, translated, reason FROM market_news_user_items WHERE email = ? AND run_id = ?",
+    "SELECT code, link, tone, impact, title, translated, reason FROM market_news_user_items WHERE lower(email) = lower(?) AND run_id = ?",
   ).bind(email, run.run_id).all()).results.map((row) => [`${row.code}|${row.link}`, row]));
   const items = rows.map((row) => {
     const mark = marks.get(`${row.code}|${row.link}`);
@@ -79,23 +79,40 @@ export async function handleMarketNewsApi(request, env, email, { isOwner }) {
   try {
     const run = await pickRun(env.DB, date);
     const dates = (await env.DB.prepare(
-      "SELECT trade_date, max(created_at) AS updated_at FROM market_news_runs GROUP BY trade_date ORDER BY trade_date DESC LIMIT ?",
+      "SELECT DISTINCT trade_date FROM market_news_runs ORDER BY trade_date DESC LIMIT ?",
     ).bind(DATES_MAX).all()).results.map((row) => row.trade_date);
     if (!run) return json(200, { available: true, run: null, dates, groups: { tw: [], us: [], asia: [] }, mine: { marked: false, items: [] } });
     const rows = (await env.DB.prepare(
       "SELECT item_id, grp, market, tone, impact, title, translated, reason, source, link, published_at FROM market_news_items " +
         "WHERE run_id = ? ORDER BY impact DESC, published_at DESC",
     ).bind(run.run_id).all()).results;
-    const classified = run.status === "ok";
-    const groups = Object.fromEntries(GROUPS.map((group) => [group, rows.filter((row) => row.grp === group).map((row) => ({
+    const shape = (classified) => (row) => ({
       title: row.title, source: row.source, link: row.link, published_at: row.published_at, market: row.market || "",
       translated: Boolean(row.translated),
       ...(classified ? { tone: row.tone, impact: row.impact, reason: row.reason } : {}),
-    }))]));
+    });
+    const groups = Object.fromEntries(GROUPS.map((group) => [group, rows.filter((row) => row.grp === group).map(shape(run.status === "ok"))]));
+    // 一組的來源這一輪全部沒抓到：標出來，列上一輪的（consensus 技術選擇 h）。
+    const missed = (parse(run.sources, {})?.missed_groups || []).filter((group) => GROUPS.includes(group));
+    const carried = {};
+    for (const group of missed) {
+      if (groups[group].length) continue;
+      const earlier = await env.DB.prepare(
+        "SELECT r.created_at, r.status FROM market_news_runs r WHERE r.created_at < ? AND EXISTS " +
+          "(SELECT 1 FROM market_news_items i WHERE i.run_id = r.run_id AND i.grp = ?) ORDER BY r.created_at DESC LIMIT 1",
+      ).bind(run.created_at, group).first();
+      if (!earlier) continue;
+      const previous = (await env.DB.prepare(
+        "SELECT i.* FROM market_news_items i JOIN market_news_runs r ON r.run_id = i.run_id " +
+          "WHERE r.created_at = ? AND i.grp = ? ORDER BY i.impact DESC, i.published_at DESC",
+      ).bind(earlier.created_at, group).all()).results;
+      groups[group] = previous.map(shape(earlier.status === "ok"));
+      carried[group] = earlier.created_at;
+    }
     return json(200, {
       available: true, dates,
-      run: { trade_date: run.trade_date, slot: run.slot, created_at: run.created_at, classified, summary: run.summary,
-        indices: parse(run.indices, []) },
+      run: { trade_date: run.trade_date, slot: run.slot, created_at: run.created_at, classified: run.status === "ok",
+        summary: run.summary, indices: parse(run.indices, []), missed, carried },
       groups, mine: await mine(env.DB, email, run),
     });
   } catch (error) {

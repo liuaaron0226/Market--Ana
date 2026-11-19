@@ -71,13 +71,15 @@ jobs:
             echo "slot=$INPUT_SLOT" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # 接在公司重大訊息後面的盤前那一輪：台北週六、週日不跑；開關沒開就什麼都不做。
+          # 接在公司重大訊息後面的盤前那一輪：台北週六、週日不跑；手動重跑公告（台北 07:30～10:00 以外）不跟著跑；
+          # 開關沒開就什麼都不做。休市日由 market_news.py --skip-closed 依證交所休市日曆判斷。
           weekday=$(TZ=Asia/Taipei date +%u)
-          if [ "$on_main" = "true" ] && [ "$weekday" -le 5 ]; then
+          minute=$(( 10#$(TZ=Asia/Taipei date +%H) * 60 + 10#$(TZ=Asia/Taipei date +%M) ))
+          if [ "$on_main" = "true" ] && [ "$weekday" -le 5 ] && [ "$minute" -ge 450 ] && [ "$minute" -le 600 ]; then
             echo "allowed=true" >> "$GITHUB_OUTPUT"; echo "dry_run=false" >> "$GITHUB_OUTPUT"; echo "slot=morning" >> "$GITHUB_OUTPUT"
           else
             echo "allowed=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::MARKET_ANA_MARKET_NEWS_SCHEDULE 不是 on 或今天是週末，盤前那一輪不執行"
+            echo "::notice::MARKET_ANA_MARKET_NEWS_SCHEDULE 不是 on、今天是週末，或不在台北早上，盤前那一輪不執行"
           fi
 
   news:
@@ -180,7 +182,7 @@ jobs:
           AI_NEWS_MODEL: ${{ env.AI_NEWS_MODEL }}
           AI_NEWS_EFFORT: ${{ env.AI_NEWS_EFFORT }}
         run: |
-          args=(run --slot "$SLOT" --agy-bin "$RUNNER_TEMP/agy/antigravity" --agy-home "$RUNNER_TEMP/agy-home")
+          args=(run --slot "$SLOT" --skip-closed --agy-bin "$RUNNER_TEMP/agy/antigravity" --agy-home "$RUNNER_TEMP/agy-home")
           if [ "$DRY_RUN" = "false" ]; then
             args+=(--friend-keys "$RUNNER_TEMP/friend-keys.json")
           else

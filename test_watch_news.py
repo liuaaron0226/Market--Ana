@@ -87,8 +87,9 @@ class FakeD1:
             self.db.executescript(MIGRATION)
             self.db.executescript(NEWS_POOL)
             self.db.execute("INSERT INTO stock_news_names VALUES ('2330', 'TSMC', '2026-11-15T00:00:00Z')")
+        # 站主的這兩檔關注開著（和 11-16 起一樣）：大環境消息只排除對到關注中的
         add = ("INSERT INTO user_watchlist (email, code, name, market, in_universe, created_at, updated_at, watching) "
-               "VALUES (?, ?, ?, ?, 1, '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z', 0)")
+               "VALUES (?, ?, ?, ?, 1, '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z', 1)")
         for stock in watched:
             self.db.execute(add, (owner, stock["code"], stock["name"], stock["market"]))
         if migrated:
@@ -185,6 +186,16 @@ class DailyTests(unittest.TestCase):
         for name in ("台積電", "環球晶", "鴻海", "聯發科", "大立光", '"TSMC"'):
             self.assertIn(name, names)
         self.assertEqual(report["stocks"], 5)
+
+    def test_market_wide_news_for_the_forecast_only_skips_the_owners_watched_stocks(self):
+        # 大盤預測讀 code '' 的大環境消息：名單變大（前 50、每個人的自選）不能讓它變少——只有對到站主關注中的才不算大環境。
+        d1 = FakeD1()
+        d1.db.execute("UPDATE user_watchlist SET watching = 0 WHERE code = '2330'")
+        run(d1, normal_web())
+        wide = {row["title"] for row in d1.news("")}
+        self.assertIn("台積電擴產", wide, "2330 只在自選、沒開關注：仍是大環境消息，也存給 2330")
+        self.assertIn("台積電擴產", [row["title"] for row in d1.news("2330")])
+        self.assertNotIn("6488 擴大矽晶圓產能", wide, "對到關注中的 6488：只存給 6488")
 
     def test_cna_is_matched_by_name_or_code_and_the_rest_is_market_wide(self):
         d1 = FakeD1()

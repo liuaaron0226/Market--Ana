@@ -56,6 +56,7 @@ import bollinger
 import gemini_models
 import licensed_inputs
 import watch_inputs
+import watch_news
 import wyckoff_lpsy
 from twon_analysis import analyze_v2
 from twon_analysis import signals as stock_signals
@@ -102,7 +103,10 @@ _LAYER_PARAMETERS: dict[str, dict[str, Any]] = {
     "intraday": {"layer": licensed_inputs.VERSION, "parts": ["summary", "bars_10min", "hourly", "book"],
                  "parameters": licensed_inputs.PARAMETERS},
     "headlines": {"layer": licensed_inputs.VERSION, "fields": ["id", "source", "published_at", "title", "summary"],
-                  "parameters": licensed_inputs.PARAMETERS},
+                  "parameters": licensed_inputs.PARAMETERS,
+                  # 本人 2026-11-19：個股新聞改 Google News 只收大媒體（Yahoo 逐檔停用），關注判斷的輸入版本跟著換。
+                  # 大盤預測不讀個股新聞（只讀中央社的大環境消息與美國 RSS），所以它的版本不動。
+                  "stock_headlines": watch_news.STOCK_NEWS_PARAMETERS},
     "peers": {"layer": licensed_inputs.VERSION, "changes": ["1 日", "5 日"], "parameters": licensed_inputs.PARAMETERS},
     "environment": {"changes": "近 20 日", "series": ["usdtwd", "ust_2y", "ust_10y"]},
 }

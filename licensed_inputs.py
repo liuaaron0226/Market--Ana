@@ -24,6 +24,8 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import watch_news
+
 SCHEMA = "licensed-inputs/v1"
 VERSION = "licensed-inputs-v1"
 TAIPEI = timezone(timedelta(hours=8))
@@ -35,9 +37,8 @@ HEADLINE_LIMIT = 8
 SUMMARY_MAX = 200
 PEER_CHANGE_DAYS = 5
 SOURCE_NAMES = {"yahoo": "Yahoo股市", "cna-finance": "中央社", "cna-intworld": "中央社", "cna-technology": "中央社",
-                # 本人 2026-11-19：個股新聞改 Google News 只收大媒體（watch_news.GNEWS_OUTLETS），預測與判斷「一起換」
-                "gnews-reuters": "路透", "gnews-bloomberg": "Bloomberg", "gnews-cna": "中央社", "gnews-ft": "金融時報",
-                "gnews-wsj": "華爾街日報", "gnews-nikkei": "日經"}
+                # 本人 2026-11-19：個股新聞改 Google News 只收大媒體，預測與判斷「一起換」（名稱跟 watch_news 同一份）
+                **{key: label for key, label in watch_news.GNEWS_OUTLETS.values()}}
 INDUSTRY_NEWS_LIMIT = 5        # 自選股：產業新聞網站對到的，另外最多幾則
 US_NEWS_LIMIT = 8              # 大盤：美國那幾家最多幾則
 
@@ -78,10 +79,6 @@ PARAMETERS: dict[str, Any] = {
     "hourly_history_days": HOURLY_HISTORY_DAYS, "headline_days": HEADLINE_DAYS, "headline_limit": HEADLINE_LIMIT,
     "summary_max": SUMMARY_MAX, "peer_change_days": PEER_CHANGE_DAYS, "notes": NOTES,
     "industry_news_limit": INDUSTRY_NEWS_LIMIT, "us_news_limit": US_NEWS_LIMIT,
-    # 個股新聞的來源換了（Yahoo 逐檔 → Google News 大媒體），輸入版本跟著換（本人 11-19「一起換」）。
-    "stock_headlines": {"method": "google-news-whitelist-v1", "outlets": ["gnews-bloomberg", "gnews-cna", "gnews-ft",
-                                                                       "gnews-nikkei", "gnews-reuters", "gnews-wsj"],
-                        "title_must_name_company": True},
 }
 
 

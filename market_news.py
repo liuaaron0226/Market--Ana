@@ -28,6 +28,7 @@ import watch_news as wn
 TAIPEI = timezone(timedelta(hours=8))
 SLOTS = ("morning", "midday", "close")
 WINDOW_HOURS = 24          # 只送最近一天發布的
+MAX_WINDOW_HOURS = 96      # 週一盤前、連假後：從上一輪開始，最多往回四天
 PER_FEED = 12              # 每個來源最多送幾則（最新的）
 MAX_ITEMS = 100            # 一次最多送幾則給模型
 GROUP_KEEP = 12            # 每一組最多存幾則（依影響大小）
@@ -49,7 +50,7 @@ def _gnews(query: str, sites: Sequence[str]) -> str:
 
 # 本人 11-19 選「照這份清單（推薦）」。group 是預設分組（global＝全球大事，由模型分到影響的市場）。
 FEEDS: list[dict[str, str]] = [
-    {"key": "cna-finance", "label": "中央社", "group": "tw", "market": "", "kind": "rss",
+    {"key": "cna-finance", "label": "中央通訊社", "group": "tw", "market": "", "kind": "rss",
      "url": "https://feeds.feedburner.com/rsscna/finance"},
     {"key": "wsj-markets", "label": "華爾街日報", "group": "us", "market": "", "kind": "rss",
      "url": "https://feeds.content.dowjones.io/public/rss/RSSMarketsMain"},
@@ -116,10 +117,26 @@ def parse_rss(content: bytes) -> list[dict[str, str]]:
     return rows
 
 
-def collect(*, get: Callable, now: str, sleep: Callable[[float], None]) -> tuple[list[dict[str, Any]], dict[str, str]]:
+def window_start(query: Callable[[str], list[dict]], now: str) -> str:
+    """送多久以前的新聞：至少 WINDOW_HOURS 小時；上一輪更早（週一盤前、連假後）就從上一輪開始，最多 MAX_WINDOW_HOURS。"""
+    moment = datetime.strptime(now, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    start, floor = moment - timedelta(hours=WINDOW_HOURS), moment - timedelta(hours=MAX_WINDOW_HOURS)
+    try:
+        rows = query(f"SELECT max(created_at) AS last FROM market_news_runs WHERE created_at < {_q(now)}")
+        last = rows[0]["last"] if rows else None
+        if last:
+            previous = datetime.strptime(last, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+            start = max(min(start, previous), floor)
+    except Exception:  # noqa: BLE001 — 表還沒建：照 24 小時
+        pass
+    return _iso(start)
+
+
+def collect(*, get: Callable, now: str, sleep: Callable[[float], None],
+            since: str | None = None) -> tuple[list[dict[str, Any]], dict[str, str]]:
     """每個來源抓一次：失敗只缺那一家（sources 記錯誤種類，回 200 但 0 則記 empty）。Google News 回 429／503 時，
     這一輪其他 Google 查詢不再打（記 slowed）。回傳最近 WINDOW_HOURS 小時發布的，每家最多 PER_FEED 則，同連結或同標題只留一則。"""
-    oldest = _iso(datetime.strptime(now, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc) - timedelta(hours=WINDOW_HOURS))
+    oldest = since or _iso(datetime.strptime(now, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc) - timedelta(hours=WINDOW_HOURS))
     items: list[dict[str, Any]] = []
     sources: dict[str, str] = {}
     seen: set[str] = set()
@@ -178,6 +195,16 @@ def _fair_share(items: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]
             if queue and len(picked) < limit:
                 picked.append(queue.pop(0))
     return sorted(picked, key=lambda row: row["published_at"], reverse=True)
+
+
+def missed_groups(sources: Mapping[str, str]) -> list[str]:
+    """哪幾組的來源這一輪全部沒抓到（全球大事那兩家不算任何一組）。網站對這幾組標「這一輪沒抓到」並列上一輪的。"""
+    out = []
+    for group in GROUPS:
+        keys = [feed["key"] for feed in FEEDS if feed["group"] == group]
+        if keys and all(sources.get(key) != "ok" for key in keys):
+            out.append(group)
+    return out
 
 
 def indices(query: Callable[[str], list[dict]], taiex: Callable[[], dict | None]) -> list[dict[str, Any]]:
@@ -325,15 +352,14 @@ def validate_watch(output: Any, watch: Sequence[Mapping[str, Any]]) -> list[dict
 
 # ---- 資料庫 ----
 
-def _q(value: Any) -> str:
-    return wn._q(value)
+_q = wn._q   # 和個股新聞同一個 SQL 字面值跳脫
 
 
-def watch_rows(query: Callable[[str], list[dict]], email: str, now: str) -> list[dict[str, Any]]:
-    """這個人自選股最近 WINDOW_HOURS 小時的個股新聞（watch_news；中央社對不到個股的 '' 不算）。"""
+def watch_rows(query: Callable[[str], list[dict]], email: str, now: str, since: str | None = None) -> list[dict[str, Any]]:
+    """這個人自選股從 since（預設 WINDOW_HOURS 小時前）到 now 的個股新聞（watch_news；中央社對不到個股的 '' 不算）。"""
     if not wn._EMAIL.fullmatch(email or ""):
         return []
-    since = _iso(datetime.strptime(now, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc) - timedelta(hours=WINDOW_HOURS))
+    since = since or _iso(datetime.strptime(now, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc) - timedelta(hours=WINDOW_HOURS))
     rows = query("SELECT n.code, w.name, n.link, n.source, n.title, n.published_at FROM watch_news n "
                  "JOIN user_watchlist w ON w.code = n.code AND lower(w.email) = lower(" + _q(email) + ") "
                  f"WHERE n.code <> '' AND n.published_at >= {_q(since)} AND n.published_at <= {_q(now)} "
@@ -391,9 +417,10 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
         raise ValueError(f"slot 只能是 {SLOTS}")
     if not wn._EMAIL.fullmatch(owner_email or ""):
         raise ValueError("站主 email 格式不對")
-    items, sources = collect(get=get, now=now, sleep=sleep)
+    since = window_start(query, now)
+    items, sources = collect(get=get, now=now, sleep=sleep, since=since)
     index_rows = indices(query, taiex)
-    owner_watch = watch_rows(query, owner_email, now)
+    owner_watch = watch_rows(query, owner_email, now, since)
     status, output, note = ask_owner(prompt(slot, trade_date, items, owner_watch, index_rows), OUTPUT_SCHEMA)
     summary = _text(output.get("summary"), SUMMARY_MAX) if status == "ok" and isinstance(output, Mapping) else None
     if status == "ok" and summary:
@@ -406,7 +433,7 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
         email = str(key_row.get("email") or "")
         if not wn._EMAIL.fullmatch(email) or email.lower() == owner_email.lower():
             continue
-        watch = watch_rows(query, email, now)
+        watch = watch_rows(query, email, now, since)
         if not watch:
             friends[email] = "no_news"
             continue
@@ -418,7 +445,8 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
         if friend_status == "ok":
             user_rows[email] = validate_watch(friend_output, watch)
     run_row = {"run_id": f"{trade_date}-{slot}", "trade_date": trade_date, "slot": slot, "created_at": now,
-               "status": run_status, "summary": summary, "indices": index_rows, "sources": sources, "model": model}
+               "status": run_status, "summary": summary, "indices": index_rows,
+               "sources": {"feeds": sources, "missed_groups": missed_groups(sources)}, "model": model}
     script = run_sql(run_row, stored, user_rows, now=now)
     if not dry_run:
         execute(script)
@@ -471,6 +499,16 @@ def _friend_asker(model: str) -> FriendAsker:
     return ask
 
 
+def is_trading_day(day: str, holidays: set[str] | None = None) -> bool:
+    """週一到週五、而且不在證交所休市日曆裡（颱風假這種臨時休市不在日曆裡，那天照跑）。"""
+    if datetime.fromisoformat(day).weekday() >= 5:
+        return False
+    if holidays is None:
+        from level_signals import ensure_holiday_calendar   # 證交所官方休市日曆（專案帶種子、工作集有快取）
+        holidays = ensure_holiday_calendar(day)
+    return day not in holidays
+
+
 def main(argv: Sequence[str]) -> int:
     import argparse
     import os
@@ -485,9 +523,13 @@ def main(argv: Sequence[str]) -> int:
     parser.add_argument("--agy-bin")
     parser.add_argument("--agy-home")
     parser.add_argument("--dry-run", action="store_true", help="照樣抓、照樣叫模型，但不寫網站資料庫")
+    parser.add_argument("--skip-closed", action="store_true", help="台股休市日（證交所休市日曆、週末）不跑")
     args = parser.parse_args(argv)
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     trade_date = args.date or datetime.now(TAIPEI).date().isoformat()
+    if args.skip_closed and not is_trading_day(trade_date):
+        print(json.dumps({"status": "skipped", "reason": "台股休市", "trade_date": trade_date}, ensure_ascii=False))
+        return 0
     model = os.environ.get("AI_NEWS_MODEL") or gemini_models.NEWS
     effort = os.environ.get("AI_NEWS_EFFORT") or gemini_models.NEWS_EFFORT
     keys = []

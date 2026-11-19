@@ -46,7 +46,7 @@ GNEWS_URL = "https://news.google.com/rss/search"
 GNEWS_LINK_HOST = "news.google.com"
 GNEWS_OUTLETS = {   # 媒體網址的主機（去掉 www.）→ 存進 source 的鍵與畫面上的名稱
     "reuters.com": ("gnews-reuters", "路透"), "bloomberg.com": ("gnews-bloomberg", "Bloomberg"),
-    "cna.com.tw": ("gnews-cna", "中央社"), "focustaiwan.tw": ("gnews-cna", "中央社"),
+    "cna.com.tw": ("gnews-cna", "中央通訊社"), "focustaiwan.tw": ("gnews-cna", "中央通訊社"),
     "ft.com": ("gnews-ft", "金融時報"), "wsj.com": ("gnews-wsj", "華爾街日報"), "asia.nikkei.com": ("gnews-nikkei", "日經"),
 }
 GNEWS_EN_SITES = ("reuters.com", "bloomberg.com", "ft.com", "wsj.com", "asia.nikkei.com")
@@ -60,7 +60,7 @@ SHORT_NAME_EN = 3            # 英文簡稱這麼短（VIS、GWC、UMC）時大�
 STOCK_NEWS_PARAMETERS = {"method": "google-news-whitelist-v1", "outlets": sorted({key for key, _ in GNEWS_OUTLETS.values()}),
                          "zh_sites": list(GNEWS_ZH_SITES), "en_sites": list(GNEWS_EN_SITES), "window": GNEWS_WINDOW,
                          "keep_days": GNEWS_KEEP_DAYS, "title_must_name_company": True, "cna_feeds": sorted(CNA_FEEDS)}
-SOURCE_LABELS = {**{key: label for key, label in GNEWS_OUTLETS.values()}, **{source: "中央社" for source in CNA_FEEDS}}
+SOURCE_LABELS = {**{key: label for key, label in GNEWS_OUTLETS.values()}, **{source: "中央通訊社" for source in CNA_FEEDS}}
 _EMAIL = re.compile(r"[^@\s'\"\\;]+@[^@\s'\"\\;]+")
 
 
@@ -223,9 +223,12 @@ def _mentions(text: str, stock: dict) -> bool:
     return (len(name) >= 2 and name in text) or re.search(rf"(?<!\d){re.escape(stock['code'])}(?!\d)", text) is not None
 
 
-def gather(stocks: list[dict], *, get: Callable, now: str, sleep: Callable[[float], None]) -> dict:
+def gather(stocks: list[dict], *, get: Callable, now: str, sleep: Callable[[float], None],
+           market_wide_unless: set[str] | None = None) -> dict:
     """抓 Google News 大媒體（約 BATCH 檔一次）與中央社（三個分類各一次）。回傳要寫的新聞與每個來源這一次的結果。
-    Google News 的結果按股票記（source 'gnews'）：那一檔的任何一次搜尋失敗就記那個錯。"""
+    Google News 的結果按股票記（source 'gnews'）：那一檔的任何一次搜尋失敗就記那個錯。
+    中央社：對到名單上的哪幾檔就存給哪幾檔；另外，沒對到 market_wide_unless（站主關注中的股票）的那幾則存成大環境消息
+    （code ''，大盤預測讀這裡）——名單變大（前 50、每個人的自選）不影響大盤預測讀到的範圍。沒給就是「誰都沒對到才算」。"""
     news: list[dict] = []
     fetches: list[dict] = []
 
@@ -260,8 +263,9 @@ def gather(stocks: list[dict], *, get: Callable, now: str, sleep: Callable[[floa
         record(source, "", error)
         for item in items or []:
             text = f"{item['title']} {item['summary']}"
-            codes = [stock["code"] for stock in stocks if _mentions(text, stock)] or [""]
-            news += [{**item, "source": source, "code": code} for code in codes]
+            codes = [stock["code"] for stock in stocks if _mentions(text, stock)]
+            wide = not codes if market_wide_unless is None else not any(code in market_wide_unless for code in codes)
+            news += [{**item, "source": source, "code": code} for code in codes + ([""] if wide else [])]
     return {"news": news, "fetches": fetches, "fetched_at": now}
 
 
@@ -356,7 +360,9 @@ def daily(owner_email: str, *, query: Callable[[str], list[dict]], execute: Call
     names = ({row["code"]: row["name_en"] for row in query("SELECT code, name_en FROM stock_news_names")}
              if "stock_news_names" in present else {})
     stocks = select_stocks(watch, pool, searches, names)
-    result = gather(stocks, get=get, now=now, sleep=sleep)
+    watching = {row["code"] for row in query("SELECT code FROM user_watchlist "
+                                              f"WHERE lower(email) = lower({_q(owner_email)}) AND watching = 1")}
+    result = gather(stocks, get=get, now=now, sleep=sleep, market_wide_unless=watching)
     execute(sql(result))
     after = int(query("SELECT COUNT(*) AS n FROM watch_news WHERE fetched_at = " + _q(now))[0]["n"])
     sources = {f"{f['source']}:{f['code']}" if f["code"] else f["source"]:

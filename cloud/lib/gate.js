@@ -10,7 +10,7 @@ import { defaultLiveQuoteService } from "./live-quotes.js";
 import { fetchTickPage } from "./live-ticks.js";
 import { loadHourly, withToday } from "./hourly-candles.js";
 import { defaultIndexLiveService } from "./index-live.js";
-import { analysisHidden, policyForViewer, releasePolicy, stockEtfsVisible, stockFactsVisible, stockFundsVisible, stockSignalsVisible } from "./release-policy.js";
+import { analysisHidden, marketNewsVisible, policyForViewer, releasePolicy, stockEtfsVisible, stockFactsVisible, stockFundsVisible, stockSignalsVisible } from "./release-policy.js";
 import { isOwnerEmail } from "./owner.js";
 import { CODE_PATTERN, CODE_RE, isExchangeCode } from "./codes.js";
 import { FORECAST_PATH, handleForecastApi } from "./forecast.js";
@@ -329,6 +329,7 @@ const ANNOUNCEMENTS_PATH = new RegExp(`^/api/stocks/(${CODE_PATTERN})/announceme
 const HEADLINES_PATH = new RegExp(`^/api/stocks/(${CODE_PATTERN})/headlines$`);
 
 async function handleNewsRequest(request, env, path, email, deps, { isOwner }) {
+  if (!marketNewsVisible(env, isOwner)) return json(200, { available: false }, { "cache-control": "private, no-store" });
   try {
     await consume(env.DB, email, "market", (deps.now || Date.now)(), deps.rate);
   } catch (e) {
