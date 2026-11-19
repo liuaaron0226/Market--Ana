@@ -51,6 +51,8 @@ export const WEB_FILES = [
   "fund.html", "fund-view.js",
   // 股票輸入框打名稱也能找（2026-11-17 本人）：個股頁頂列與加入比較、自選股新增、首頁核心持有比較共用的選股下拉
   "stock-picker.js", "stock-picker.css",
+  // 首頁「消息」（本人 2026-11-19）
+  "market-news.js", "market-news.css",
   // 基金當成一般個股 06 票：基金個股頁的「配息」分類
   "fund-distributions.js",
 ];

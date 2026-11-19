@@ -186,7 +186,8 @@ def owner_models(journey: Journey, browser, width: int, first: bool) -> None:
         page.screenshot(path=str(OUT / f"owner-models-{width}.png"))
         context.close()
         return
-    journey.check(f"{tag}：五列都是預設值", [r.split(" ")[-1] for r in rows] == ["Argon・中", "Flash・高", "Flash・高", "Argon・中", "Argon・中"]
+    journey.check(f"{tag}：六列都是預設值（含首頁消息，本人 11-19）",
+                  [r.split(" ")[-1] for r in rows] == ["Argon・中", "Flash・高", "Flash・高", "Argon・中", "Argon・中", "Flash・高"]
                   and rows[0].startswith("大盤預測 晚間・晨間・重播一起"), rows)
     journey.check(f"{tag}：還沒改不出現存檔鍵", page.locator("[data-maction]").count() == 0)
     page.screenshot(path=str(OUT / f"owner-models-{width}-start.png"))

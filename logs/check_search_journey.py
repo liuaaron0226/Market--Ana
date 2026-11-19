@@ -44,7 +44,7 @@ def goto_home(page: Page, base_url: str, search: bool = True) -> None:
 
 
 def open_cat(page: Page, cat: str) -> None:
-    """首頁的籌碼與資金、籌碼選股、產業資金流向、長期核心持有預設是收著的；點分類鍵展開（已開著就不動）。"""
+    """首頁的籌碼與資金、籌碼選股、產業資金流向、消息預設是收著的；點分類鍵展開（已開著就不動）。"""
     button = page.locator(f"#homeCats button[data-cat='{cat}']")
     if button.get_attribute("aria-expanded") != "true":
         button.click()
@@ -386,35 +386,8 @@ def click_and_wait(page: Page, locator) -> str:
     return wait_block(page, "chipScreens")
 
 
-def etf_compare_ui_fixture() -> dict[str, object]:
-    """首頁互動用凍結 fixture；真 ETF 原件／股利契約另由 test_compare_etf.py 與 pack build 驗。"""
-    periods = [("1m", "近 1 個月", 1), ("3m", "近 3 個月", 3), ("1y", "近 1 年", 12),
-               ("3y", "近 3 年", 36), ("5y", "近 5 年", 60)]
-    benchmark_periods = [{"period": key, "label": label, "status": "ok", "from": "2021-11-05",
-                          "to": "2026-11-06", "return_pct": float(months), "max_drawdown_pct": -12.0}
-                         for key, label, months in periods]
-    item_periods = lambda scale: [{"period": key, "label": label, "status": "ok", "from": "2021-11-05",
-                                   "to": "2026-11-06", "stock_return_pct": months * scale,
-                                   "stock_max_drawdown_pct": -15.0, "benchmark_return_pct": float(months),
-                                   "benchmark_max_drawdown_pct": -12.0, "excess_pct": months * scale - months}
-                                  for key, label, months in periods]
-    return {
-        "schema": "compare-0050/v1", "data_date": "2026-11-06", "basis": "含息總報酬，期初＝1", "max_codes": 5,
-        "notes": [],
-        "benchmark": {"code": "0050", "name": "元大台灣50", "dividends_included": True,
-                      "periods": benchmark_periods, "chart": [["2021-11-05", 1.0], ["2026-11-06", 1.6]]},
-        "items": [
-            {"code": "2330", "name": "台積電", "market": "上市", "status": "ok", "dividends_included": True,
-             "periods": item_periods(1.5), "chart": [["2021-11-05", 1.0], ["2026-11-06", 2.0]]},
-            {"code": "00919", "name": "群益台灣精選高息", "market": "上市", "status": "ok",
-             "dividends_included": False, "dividend_source": "TWSE TWT49U", "periods": item_periods(1.2),
-             "chart": [["2022-10-20", 1.0], ["2026-11-06", 1.35]]},
-        ],
-    }
-
-
 def check_home_screens_journey(page: Page, base_url: str, server, width: int) -> dict[str, object]:
-    """首頁三區塊：籌碼選股（可算／定義未公開／無合法來源）、產業資金流向、長期核心持有；名單可點入個股頁。"""
+    """首頁區塊：籌碼選股（可算／定義未公開／無合法來源）、產業資金流向（長期核心持有 11-19 換成消息）；名單可點入個股頁。"""
     result: dict[str, object] = {}
     server.screen_root = SCREEN_ROOTS["real"]
     goto_home(page, base_url, search=False)
@@ -463,30 +436,11 @@ def check_home_screens_journey(page: Page, base_url: str, server, width: int) ->
     assert "今日成交額" in page.locator("#rotationTerrain .terrain-detail").inner_text()
     page.keyboard.press("Escape")
 
-    open_cat(page, "core")
-    assert wait_block(page, "coreHoldings") == "ok"
-    cards = page.locator("#coreCards .core-card").all_inner_texts()
-    assert "0050" in cards[0] and "基準" in cards[0], cards
-    assert "2330" in cards[1], cards
-    assert page.locator('#coreSelection button[data-code="2330"]').count() == 1
-    assert page.locator("#coreChart path[data-code]").count() == 2
-    if width == 1440:
-        fixture = etf_compare_ui_fixture()
-        page.route(
-            "**/api/compare-0050?*",
-            lambda route: route.fulfill(status=200, content_type="application/json; charset=utf-8",
-                                        body=json.dumps(fixture, ensure_ascii=False)),
-        )
-        page.locator("#coreCompareInput").fill("00919")
-        page.locator("#coreCompareForm button[type=submit]").click()
-        page.wait_for_function(
-            "document.querySelector('#coreHoldings').dataset.state === 'ok' && "
-            "document.querySelector('#coreSelection [data-code=\"00919\"]')"
-        )
-        etf_cards = page.locator("#coreCards .core-card").all_inner_texts()
-        assert any("00919" in text and "配息未完整" in text for text in etf_cards), etf_cards
-        assert page.locator("#coreChart path[data-code]").count() == 3
-        result["etf_compare_00919"] = True
+    # 本人 2026-11-19：「長期核心持有」換成「消息」（和個股功能重複）。本機伺服器沒有開 market_news_v1，消息鍵不出現。
+    assert page.locator("#coreHoldings").count() == 0
+    assert page.locator("#homeCats button", has_text="長期核心持有").count() == 0
+    assert page.locator("#newsCatButton").is_hidden()
+    result["core_holdings_retired"] = True
     page.mouse.move(0, 0)
     page.screenshot(path=str(SCREEN_DIR / f"home-screens-{width}.png"), full_page=True)
 
