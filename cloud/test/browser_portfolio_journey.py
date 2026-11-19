@@ -35,6 +35,10 @@ with tempfile.TemporaryDirectory() as temp:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     base = f"http://127.0.0.1:{server.server_port}"
+    # 本機伺服器第一次搜尋要載入整份名錄，機器忙的時候會超過一分鐘（11-20 量到 63 秒，第二次 0.4 秒）；
+    # 先暖一次，後面瀏覽器那一步的 60 秒等待才量得到搜尋本身。
+    import urllib.request
+    urllib.request.urlopen(base + "/api/stocks/search?q=2330&limit=8", timeout=300).read()
     report: dict[str, object] = {"base": base, "checks": [], "errors": []}
     try:
         with sync_playwright() as playwright:
