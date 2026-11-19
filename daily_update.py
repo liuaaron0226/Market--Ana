@@ -599,24 +599,34 @@ def _saved_build_inputs_problem(manifest: dict) -> str | None:
 SCREEN_SNAPSHOT_KEEP = ROOT / "data/market-screen-snapshots"
 
 
+# 同一天查到的同一類：當天的股票池快照（liquid_universe.py 的輸出）也只寫在暫存目錄。朋友 AI 解讀與站主 AI 解讀的排程
+# 第一步就讀 data/liquid-universe/<資料日>.json，所以 11-16 開啟以來每一班都在那裡 FileNotFoundError，一份解讀都沒產生；
+# 個股新聞名單（watch_news.build_pool）拿到的也一直是工作集裡最舊的那一份。
+UNIVERSE_SNAPSHOT_KEEP = ROOT / "data/liquid-universe"
+
+
+def _keep_file(path: Path, destination: Path) -> str:
+    """同內容算 unchanged；內容不同不覆寫（快照封存後不再改），回 conflict。"""
+    data = path.read_bytes()
+    if destination.exists():
+        return "unchanged" if destination.read_bytes() == data else "conflict"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    partial = destination.with_name(destination.name + ".partial")
+    partial.write_bytes(data)
+    os.replace(partial, destination)
+    return "copied"
+
+
 def keep_screen_snapshots(source: Path, target: Path, data_date: str) -> dict:
     """把 ``source/<種類>/<資料日>.json`` 複製到 ``target`` 同一個位置。同內容算 unchanged；內容不同不覆寫，列進 conflicts。"""
     result: dict = {"copied": 0, "unchanged": 0, "conflicts": []}
     for path in sorted(Path(source).glob(f"*/{data_date}.json")):
         relative = path.relative_to(source)
-        destination = Path(target) / relative
-        data = path.read_bytes()
-        if destination.exists():
-            if destination.read_bytes() == data:
-                result["unchanged"] += 1
-            else:
-                result["conflicts"].append(relative.as_posix())
-            continue
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        partial = destination.with_name(destination.name + ".partial")
-        partial.write_bytes(data)
-        os.replace(partial, destination)
-        result["copied"] += 1
+        outcome = _keep_file(path, Path(target) / relative)
+        if outcome == "conflict":
+            result["conflicts"].append(relative.as_posix())
+        else:
+            result[outcome] += 1
     return result
 
 
@@ -1020,7 +1030,11 @@ def real_steps() -> list[Step]:
 
     def build_universe(ctx: RunContext) -> dict:
         out = ctx.work_dir / "liquid-universe"
-        return _sh([sys.executable, "liquid_universe.py", "--as-of", ctx.data_date, "--snapshot-root", str(out)])
+        result = _sh([sys.executable, "liquid_universe.py", "--as-of", ctx.data_date, "--snapshot-root", str(out)])
+        if not ctx.dry_run:   # 乾跑不動工作集
+            name = f"{ctx.data_date}.json"
+            result["kept_in_working_set"] = _keep_file(out / name, UNIVERSE_SNAPSHOT_KEEP / name)
+        return result
 
     def publish_snapshots(ctx: RunContext) -> dict:
         out = ctx.work_dir / "market-screen-snapshots"

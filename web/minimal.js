@@ -2482,6 +2482,10 @@
     if (payload.notice?.text) {
       if (reason) { reason.textContent = payload.notice.text; reason.hidden = false; }
       if (setup) setup.hidden = false;
+    } else if (payload.pending) {
+      // 金鑰可用、但還沒有他的任何一份（剛設定，或排程還沒跑到）：說清楚會在什麼時候出現，不只寫「未產生」。
+      conclusion.textContent = '還沒有產生';
+      if (reason) { reason.textContent = '收盤後的排程會用你的金鑰產生，產生後顯示在這裡'; reason.hidden = false; }
     }
   }
 

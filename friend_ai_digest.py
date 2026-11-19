@@ -5,6 +5,9 @@
 不補猜、不沿用舊內容，也不改用站主的 agy。一位朋友失敗不影響其他人。
 04 票：Gemini 的錯誤分四類——額度用完（當天未產生，隔天照常）、金鑰無效或被撤銷（當天未產生，金鑰暫停到朋友換新的）、
 暫時錯誤（當次有限次重試）、其他（當天未產生）。
+2026-11-19：主要模型太忙（503）、逾時或不收請求時，同一次排程退到備援模型（gemini_models.FRIEND_DIGEST_FALLBACK）；
+兩個都暫時連不上才標「未產生」，當天稍後的班次只替還沒有結果的朋友補跑（cloud/friend-ai-schedule.mjs 的 pendingKeysSql）。
+每一次呼叫的模型、秒數、HTTP 狀態印在排程輸出（try_lines，不含 email 與訊息原文）。
 解開後的金鑰只留在記憶體，不寫檔、不印進記錄或稽核。
 
 03 票：有自選股或庫存的朋友，提示再加上「他自己」的持股（``ai_digest_inputs.with_friend_portfolio``，欄位和站主那條線
@@ -42,6 +45,15 @@ GEMINI_TIMEOUT_SECONDS = 120
 # 等滿 120 秒的逾時不重試：十位朋友各重試一輪逾時，就會超過 job 的 60 分鐘。
 GEMINI_ATTEMPTS = 3
 RETRY_DELAYS_SECONDS = (10, 30)
+# 主要模型太忙、逾時或不收這個請求時，同一次排程退到備援模型再試（2026-11-19：gemini-3.8-flash 連續回 503）。
+# 最壞情況一位朋友約 5 分鐘（主要 10＋30 秒等待加一次 120 秒逾時，備援 10 秒等待加一次 120 秒逾時），十位仍在 60 分鐘內。
+FALLBACK_MODEL = gemini_models.FRIEND_DIGEST_FALLBACK
+FALLBACK_ATTEMPTS = 2
+# 這幾類換模型也沒用（額度與金鑰是跟著金鑰走的）：不試備援。
+NO_FALLBACK_FAILURES = frozenset({"quota", "key_invalid", "key_revoked", "region"})
+# 兩個模型都暫時連不上：當天稍後的班次（每日更新的下一個時段）只替還沒有結果的朋友補跑。
+# 排程挑人的查詢在 cloud/friend-ai-schedule.mjs（RETRY_LATER_CODES），兩邊要一致。
+RETRY_LATER_CODES = frozenset({"gemini_unavailable"})
 # 這幾類代表金鑰本身不能用：暫停這把金鑰，排程之後跳過，等朋友換一把試呼叫成功的（lib/friend-ai.js saveKey 改回 active）。
 PAUSING_FAILURES = frozenset({"key_invalid", "key_revoked"})
 # 寫進 friend_gemini_keys.last_failure_reason：設定頁與後台會原樣顯示，所以存中文說明；分類碼另外存在 friend_ai_daily.error_code。
@@ -50,7 +62,7 @@ FAILURE_TEXT = {
     "key_revoked": "金鑰被撤銷或停用：Google 拒絕這把金鑰，請到 Gemini 設定換一把",
     "quota": "今天的免費額度用完了，明天會照常再試",
     "region": "Google 在你所在的地區不提供免費額度",
-    "gemini_unavailable": "暫時連不到 Google，今天的解讀沒有產生，下一個交易日會再試",
+    "gemini_unavailable": "Google 的模型現在太忙或暫時連不上，解讀還沒產生；稍後的班次會再試，今天沒有下一班就等下一個交易日",
     "gemini_rejected": "Google 沒有接受今天的請求，解讀沒有產生，下一個交易日會再試",
     "key_decrypt_failed": "網站讀不到你的金鑰，請到 Gemini 設定重新貼一次",
     "validation_failed": "今天的解讀沒有通過數字與代號檢查，所以沒有顯示",
@@ -137,41 +149,74 @@ def classify_http_error(error: GeminiHttpError) -> str:
     return "gemini_rejected"
 
 
-def _post_with_retry(post: Callable, url: str, body: dict[str, Any], api_key: str, *, sleep: Callable[[float], None]) -> dict[str, Any]:
-    """只有暫時錯誤（5xx、408、連線中斷）重試；額度、金鑰、其他錯誤與逾時都只呼叫一次。"""
-    for attempt in range(1, GEMINI_ATTEMPTS + 1):
+def _post_with_retry(post: Callable, url: str, body: dict[str, Any], api_key: str, *, sleep: Callable[[float], None],
+                     attempts: int = GEMINI_ATTEMPTS,
+                     note: Callable[[str, float], None] = lambda outcome, seconds: None) -> dict[str, Any]:
+    """只有暫時錯誤（5xx、408、連線中斷）重試；額度、金鑰、其他錯誤與逾時都只呼叫一次。
+    每一次呼叫的結果與花的秒數交給 ``note``（只有 HTTP 狀態與 Google 的 status，不含訊息原文）。"""
+    for attempt in range(1, attempts + 1):
+        started = time.monotonic()
+        took = lambda: round(time.monotonic() - started, 1)  # noqa: E731
         try:
-            return post(url, body, api_key)
+            reply = post(url, body, api_key)
+            note("ok", took())
+            return reply
         except GeminiHttpError as error:
+            note(f"HTTP {error.status} {error.error_status or ''}".strip(), took())
             code = classify_http_error(error)
-            if code != "gemini_unavailable" or attempt == GEMINI_ATTEMPTS:
+            if code != "gemini_unavailable" or attempt == attempts:
                 raise ModelCallFailed(code, None, {"http_status": error.status, "attempts": attempt}) from None
         except GeminiTimeout as error:
+            note("timeout", took())
             raise ModelCallFailed("gemini_unavailable", None, {"error": type(error).__name__, "attempts": attempt}) from None
         except OSError as error:
-            if attempt == GEMINI_ATTEMPTS:
+            note(type(error).__name__, took())
+            if attempt == attempts:
                 raise ModelCallFailed("gemini_unavailable", None, {"error": type(error).__name__, "attempts": attempt}) from None
         sleep(RETRY_DELAYS_SECONDS[min(attempt, len(RETRY_DELAYS_SECONDS)) - 1])
     raise AssertionError("unreachable")
 
 
+def _request_body(prompt: str, schema: dict[str, Any], effort: str | None) -> dict[str, Any]:
+    config: dict[str, Any] = {"responseMimeType": "application/json", "responseJsonSchema": schema}
+    if effort:
+        config["thinkingConfig"] = {"thinkingLevel": effort}
+    return {"contents": [{"role": "user", "parts": [{"text": prompt}]}], "generationConfig": config}
+
+
 def call_gemini(prompt: str, model: str, *, api_key: str, post: Callable, url_template: str = GEMINI_URL,
-                schema: dict[str, Any] = FRIEND_SCHEMA,
-                sleep: Callable[[float], None] = time.sleep) -> tuple[Any, dict[str, int | None]]:
-    body = {
-        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-        # 思考程度：本人 11-18 晚選「高」（gemini_models.FRIEND_DIGEST_EFFORT）。
-        "generationConfig": {"responseMimeType": "application/json", "responseJsonSchema": schema,
-                             "thinkingConfig": {"thinkingLevel": gemini_models.FRIEND_DIGEST_EFFORT}},
-    }
-    reply = _post_with_retry(post, url_template.format(model=model), body, api_key, sleep=sleep)
-    usage = _usage(reply)
-    try:
-        parts = reply["candidates"][0]["content"]["parts"]
-        text = "".join(part.get("text", "") for part in parts if isinstance(part, dict) and not part.get("thought"))
-        return json.loads(text), usage
-    except (KeyError, IndexError, TypeError, json.JSONDecodeError):
-        raise ModelCallFailed("gemini_failed", usage, {"error": "no_structured_output"}) from None
+                schema: dict[str, Any] = FRIEND_SCHEMA, sleep: Callable[[float], None] = time.sleep,
+                fallback_model: str | None = FALLBACK_MODEL,
+                tries: list[dict[str, Any]] | None = None) -> tuple[Any, dict[str, int | None]]:
+    """先用 ``model``（思考程度照本人定案的「高」，gemini_models.FRIEND_DIGEST_EFFORT）；太忙、逾時或不收這個請求時
+    退到 ``fallback_model``（不帶思考程度）。每一次呼叫記進 ``tries``：模型、秒數、結果；最後一筆 ok 的就是實際產生的模型。"""
+    tries = [] if tries is None else tries
+    plans = [(model, gemini_models.FRIEND_DIGEST_EFFORT, GEMINI_ATTEMPTS)]
+    if fallback_model and fallback_model != model:
+        plans.append((fallback_model, None, FALLBACK_ATTEMPTS))
+    failure: ModelCallFailed | None = None
+    for name, effort, attempts in plans:
+        note = lambda outcome, seconds, name=name: tries.append({"model": name, "seconds": seconds, "outcome": outcome})  # noqa: E731
+        try:
+            reply = _post_with_retry(post, url_template.format(model=name), _request_body(prompt, schema, effort), api_key,
+                                     sleep=sleep, attempts=attempts, note=note)
+        except ModelCallFailed as error:
+            # 回報第一個模型的原因（備援只是多試一次）；備援查到額度或金鑰問題時那才是真正的原因。
+            if failure is None or error.code in NO_FALLBACK_FAILURES:
+                failure = error
+            if error.code in NO_FALLBACK_FAILURES:
+                break
+            continue
+        usage = _usage(reply)
+        try:
+            parts = reply["candidates"][0]["content"]["parts"]
+            text = "".join(part.get("text", "") for part in parts if isinstance(part, dict) and not part.get("thought"))
+            return json.loads(text), usage
+        except (KeyError, IndexError, TypeError, json.JSONDecodeError):
+            tries[-1]["outcome"] = "no_structured_output"
+            failure = failure or ModelCallFailed("gemini_failed", usage, {"error": "no_structured_output"})
+    assert failure is not None
+    raise ModelCallFailed(failure.code, failure.usage, {**failure.detail, "attempts": len(tries)}) from None
 
 
 def _friend_failure_rows(payload: dict[str, Any], model: str, usage: dict[str, int | None], error_code: str) -> list[dict[str, Any]]:
@@ -229,21 +274,23 @@ def _friend_validated_rows(payload, structured, model, usage):
 
 def _digest_one(payload: dict[str, Any], api_key: str, *, post: Callable, model: str, url_template: str,
                 sleep: Callable[[float], None]) -> dict[str, Any]:
-    if _holds_stocks(payload):
-        # 有持股：提示、輸出格式、驗證都和站主那條線同一套，只是輸入是他自己的持股。
-        return digest_with_model(
-            payload, prompt=build_prompt(payload), model=model, crash_code="gemini_failed",
-            call_model=lambda prompt, chosen: call_gemini(prompt, chosen, api_key=api_key, post=post,
-                                                          url_template=url_template, schema=HOLDER_SCHEMA, sleep=sleep),
-            validate=_holder_validated_rows, failure_rows=_holder_failure_rows,
-        )
+    tries: list[dict[str, Any]] = []
+    # 產生成功時記實際回答的那個模型（可能是備援）；沒產生就記主要模型。
+    used = lambda: next((item["model"] for item in reversed(tries) if item["outcome"] == "ok"), model)  # noqa: E731
+    holder = _holds_stocks(payload)
+    # 有持股：提示、輸出格式、驗證都和站主那條線同一套，只是輸入是他自己的持股。
+    validate = _holder_validated_rows if holder else _friend_validated_rows
     result = digest_with_model(
-        payload, prompt=build_friend_prompt(payload), model=model, crash_code="gemini_failed",
+        payload, prompt=build_prompt(payload) if holder else build_friend_prompt(payload), model=model,
+        crash_code="gemini_failed",
         call_model=lambda prompt, chosen: call_gemini(prompt, chosen, api_key=api_key, post=post, url_template=url_template,
-                                                      sleep=sleep),
-        validate=_friend_validated_rows, failure_rows=_friend_failure_rows,
+                                                      schema=HOLDER_SCHEMA if holder else FRIEND_SCHEMA, sleep=sleep,
+                                                      tries=tries),
+        validate=lambda mine, structured, _requested, usage: validate(mine, structured, used(), usage),
+        failure_rows=_holder_failure_rows if holder else _friend_failure_rows,
     )
-    return {**result, "rows": [*result["rows"], _no_holdings_row(payload, model)]}
+    result = {**result, "audit": {**result["audit"], "tries": tries}}
+    return result if holder else {**result, "rows": [*result["rows"], _no_holdings_row(payload, used())]}
 
 
 def _failed(payload: dict[str, Any], model: str, code: str, error: Exception) -> dict[str, Any]:
@@ -426,12 +473,23 @@ def read_keys(path: Path) -> list[dict[str, Any]]:
     return [row for row in rows if isinstance(row, dict) and row.get("email")]
 
 
+def try_lines(result: dict[str, Any]) -> list[str]:
+    """每一次呼叫一行，給排程的執行紀錄：第幾位朋友（不放 email）、模型、秒數、結果。"""
+    return [f"friend-{index:02d} {item['model']} {item['seconds']}s {item['outcome']}"
+            for index, entry in enumerate(result["audit"], start=1) for item in entry.get("tries") or []]
+
+
 def _summary(result: dict[str, Any]) -> dict[str, Any]:
     counts: dict[str, int] = {}
     for outcome in result["keys"].values():
         label = outcome["outcome"] if outcome["outcome"] == "success" else outcome["reason"]
         counts[label] = counts.get(label, 0) + 1
-    return {"friends": len(result["keys"]), "outcomes": counts}
+    tries: dict[str, int] = {}
+    for entry in result["audit"]:
+        for item in entry.get("tries") or []:
+            label = f"{item['model']} {item['outcome']}"
+            tries[label] = tries.get(label, 0) + 1
+    return {"friends": len(result["keys"]), "outcomes": counts, "tries": tries}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -500,6 +558,8 @@ def main(argv: list[str] | None = None) -> int:
     audit = {"data_date": args.date, "input_sha256": payload["input_sha256"], "model": args.model,
              **_summary(result), "friends_detail": result["audit"]}
     args.audit.write_text(json.dumps(audit, ensure_ascii=False, indent=2), encoding="utf-8")
+    for line in try_lines(result):
+        print(line)
     print(json.dumps({"data_date": args.date, "model": args.model, **_summary(result)}, ensure_ascii=False))
     return 0
 

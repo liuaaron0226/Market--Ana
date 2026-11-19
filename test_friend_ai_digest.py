@@ -14,7 +14,7 @@ from unittest import mock
 
 import ai_digest
 from friend_ai_digest import (
-    GEMINI_ATTEMPTS, FAILURE_TEXT, GeminiHttpError, GeminiTimeout, build_friend_prompt, friend_sql, main as friend_main,
+    FALLBACK_ATTEMPTS, GEMINI_ATTEMPTS, FAILURE_TEXT, GeminiHttpError, GeminiTimeout, build_friend_prompt, friend_sql, main as friend_main,
     run_friends, workflow_policy,
 )
 
@@ -155,21 +155,23 @@ class FriendDigestTests(unittest.TestCase):
         self.assertEqual(len(self.slept), 2, "每次重試前先等一下")
 
     def test_transient_error_that_keeps_failing_gives_up_and_is_unproduced(self):
-        replies = [GeminiHttpError(503) for _ in range(GEMINI_ATTEMPTS + 2)]
+        replies = [GeminiHttpError(503) for _ in range(GEMINI_ATTEMPTS + FALLBACK_ATTEMPTS + 2)]
         result = self.run_with({"KEY-amy": replies}, keys=KEYS[:1])
-        self.assertEqual(len(self.gemini.calls), GEMINI_ATTEMPTS)
+        # 主要模型試完有限次，再退到備援模型試有限次（2026-11-19，細節在 test_friend_ai_pipeline.BusyGoogleTests）。
+        self.assertEqual(len(self.gemini.calls), GEMINI_ATTEMPTS + FALLBACK_ATTEMPTS)
         self.assertGreaterEqual(GEMINI_ATTEMPTS, 2)
         self.assertLessEqual(GEMINI_ATTEMPTS, 3, "有限次：十位朋友也要在排程時限內跑完")
         amy = rows_by(result, "amy@example.com")
         self.assertEqual({(row["status"], row["error_code"]) for row in amy.values()}, {("unproduced", "gemini_unavailable")})
-        self.assertEqual(result["audit"][0]["attempts"], GEMINI_ATTEMPTS)
+        self.assertEqual(result["audit"][0]["attempts"], GEMINI_ATTEMPTS + FALLBACK_ATTEMPTS)
 
     def test_quota_key_failures_other_errors_and_timeouts_are_not_retried(self):
-        for failure in (GeminiHttpError(429, "RESOURCE_EXHAUSTED"), GeminiHttpError(403, "PERMISSION_DENIED"),
-                        GeminiHttpError(401), GeminiHttpError(404), GeminiTimeout("TimeoutError")):
+        # 額度與金鑰問題只呼叫一次；其他錯誤與逾時不在同一個模型上重試、也不等，直接換備援模型一次。
+        for failure, calls in ((GeminiHttpError(429, "RESOURCE_EXHAUSTED"), 1), (GeminiHttpError(403, "PERMISSION_DENIED"), 1),
+                               (GeminiHttpError(401), 1), (GeminiHttpError(404), 2), (GeminiTimeout("TimeoutError"), 2)):
             with self.subTest(failure=failure):
                 self.run_with({"KEY-amy": [failure, gemini_reply(valid_structured())]}, keys=KEYS[:1])
-                self.assertEqual(len(self.gemini.calls), 1)
+                self.assertEqual(len(self.gemini.calls), calls)
                 self.assertEqual(self.slept, [])
 
     def test_failure_never_falls_back_to_owner_agy(self):

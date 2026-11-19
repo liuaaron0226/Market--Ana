@@ -22,7 +22,7 @@ export const STUDIO_URL = "https://aistudio.google.com/app/apikey";
 // 試呼叫用的模型：官方的 latest 別名，模型換代時不必改程式。
 export const TRIAL_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent";
 // 排程（02 票）挑金鑰用的查詢：已核准、金鑰有效、同意是現行版本（參數＝CONSENT_VERSION）。
-const USABLE_FRIENDS =
+export const USABLE_FRIENDS =
   "FROM friend_gemini_keys k JOIN users u ON u.email = k.email " +
   "WHERE u.status = 'approved' AND k.status = 'active' AND k.consent_version = ?";
 export const USABLE_FRIEND_KEYS_SQL = `SELECT k.email, k.ciphertext, k.iv, k.alg, k.master_key_id ${USABLE_FRIENDS} ORDER BY k.email`;
@@ -244,6 +244,8 @@ async function friendDigest(db, email) {
   return {
     available: true, configured: true, consented: true, data_date: latest,
     market, flow, notice: noticeOf(key, sections),
+    // 金鑰可用、但最新那一天還沒有他的任何一列（剛設定、排程還沒跑到或壞在半路）：首頁寫「還沒有產生」而不是只有「未產生」。
+    pending: key.status === "active" && rows.length === 0,
   };
 }
 

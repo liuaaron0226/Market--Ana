@@ -55,7 +55,9 @@ class TaskModelTests(unittest.TestCase):
         self.assertEqual(seen.get("effort"), "high")
         captured = {}
         def post(url, body, api_key):
-            captured.update(body)
+            # 只看主要模型那一次：連不上之後會退到備援模型（gm.FRIEND_DIGEST_FALLBACK），那一次不帶思考程度。
+            if f"/{gm.FRIEND_DIGEST}:" in url:
+                captured.update(body)
             raise OSError("stop")
         with self.assertRaises(Exception):
             friend_ai_digest.call_gemini("p", gm.FRIEND_DIGEST, api_key="k", post=post, sleep=lambda s: None)
