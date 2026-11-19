@@ -191,6 +191,12 @@ class RunTests(unittest.TestCase):
         mine = d1.query("SELECT email, code, tone, title FROM market_news_user_items")
         self.assertEqual(mine, [{"email": OWNER, "code": "2330", "tone": "down", "title": "自選：TSMC ADR falls 4%"}])
 
+    def test_the_same_story_from_two_sources_is_sent_once(self):
+        d1 = D1()
+        d1.db.execute("INSERT INTO watch_news (code, link, source, title, summary, published_at, fetched_at) VALUES "
+                      "('2330', 'https://www.cna.com.tw/x', 'cna-finance', 'TSMC ADR falls 4%', '', '2026-11-19T02:05:00Z', '2026-11-19T06:00:00Z')")
+        self.assertEqual([row["title"] for row in mn.watch_rows(d1.query, OWNER, NOW)], ["TSMC ADR falls 4%"])
+
     def test_prompt_has_items_indices_and_only_the_owners_watchlist(self):
         d1 = D1()
         _, _, ask = run(d1)
@@ -265,6 +271,40 @@ class RunTests(unittest.TestCase):
         run(d1, overrides={"cna-finance": Response(content=rss(item("外資 'O'Neil'; DROP TABLE x; --", "https://www.cna.com.tw/a")))})
         titles = [r["title"] for r in d1.query("SELECT title FROM market_news_items")]
         self.assertTrue(any(title.startswith("中文：外資 'O'Neil';") for title in titles), titles)
+
+
+def _walk(node, path="$"):
+    if isinstance(node, dict):
+        yield path, node
+        for key, value in node.items():
+            yield from _walk(value, f"{path}.{key}")
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            yield from _walk(value, f"{path}[{index}]")
+
+
+class SchemaTests(unittest.TestCase):
+    """2026-11-19 乾跑（run 44509863326）：Gemini 拒收「impact 的 enum 是整數」「market 的 enum 有空字串」→ INVALID_ARGUMENT。
+    agy 把結構描述轉成 function declaration：enum 只能是非空字串。"""
+
+    def test_every_enum_is_a_list_of_non_empty_strings(self):
+        for name, schema in (("OUTPUT_SCHEMA", mn.OUTPUT_SCHEMA), ("WATCH_SCHEMA", mn.WATCH_SCHEMA)):
+            for path, node in _walk(schema):
+                if "enum" in node:
+                    with self.subTest(schema=name, path=path):
+                        self.assertEqual(node.get("type"), "string")
+                        self.assertTrue(all(isinstance(v, str) and v for v in node["enum"]), node["enum"])
+
+    def test_impact_and_market_in_the_wire_format_are_read_back(self):
+        items = [{"id": "n1", "title": "Korea exports rise", "source": "韓聯社", "link": "https://x", "published_at": "2026-11-19T01:00:00Z",
+                  "market_hint": "韓", "group_hint": "asia"},
+                 {"id": "n2", "title": "台股下跌", "source": "中央通訊社", "link": "https://y", "published_at": "2026-11-19T02:00:00Z",
+                  "market_hint": "", "group_hint": "tw"}]
+        output = {"items": [{"id": "n1", "group": "asia", "market": "韓", "tone": "up", "impact": "2", "title": "韓國出口成長", "reason": "x"},
+                            {"id": "n2", "group": "tw", "market": "none", "tone": "down", "impact": "3", "title": "台股下跌", "reason": "y"}]}
+        rows = {row["id"]: row for row in mn.validate_items(output, items)}
+        self.assertEqual((rows["n1"]["impact"], rows["n1"]["market"]), (2, "韓"))
+        self.assertEqual((rows["n2"]["impact"], rows["n2"]["market"]), (3, ""))
 
 
 class WindowTests(unittest.TestCase):

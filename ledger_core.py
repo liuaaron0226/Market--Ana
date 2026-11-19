@@ -195,14 +195,15 @@ def build_prompt(rules: Sequence[str], model_input: Mapping[str, Any]) -> str:
                       json.dumps(model_input, ensure_ascii=False, sort_keys=True, separators=(",", ":"))])
 
 
-def _model_command(model_bin: Path | str, model: str, output_schema: Mapping[str, Any], effort: str = "medium") -> list[str]:
+def _model_command(model_bin: Path | str, model: str, output_schema: Mapping[str, Any], effort: str = "medium",
+                   print_timeout: int = 300) -> list[str]:
     """agy 的串流模式：提示從 stdin 送（Windows 單一指令列約 32K 字元的上限擋不住方法稿全文），結果讀最後的 result 事件。"""
     path = Path(model_bin)
     prefix = [sys.executable, str(path)] if path.suffix.lower() == ".py" else [str(path)]
     return [*prefix, "-p=", "--input-format", "stream-json", "--output-format", "stream-json",
             "--model", model, "--effort", effort,
             "--json-schema", json.dumps(output_schema, ensure_ascii=False, separators=(",", ":")),
-            "--print-timeout", "300s", "--sandbox"]
+            "--print-timeout", f"{int(print_timeout)}s", "--sandbox"]
 
 
 def _stream_input(prompt: str) -> bytes:
@@ -229,11 +230,11 @@ def _failure(returncode: int, stderr: bytes) -> str:
 
 def call_model(model_bin: Path | str, prompt: str, model: str, timeout: float,
                output_schema: Mapping[str, Any], *, env: Mapping[str, str] | None = None,
-               effort: str = "medium") -> tuple[str, Any, str]:
+               effort: str = "medium", print_timeout: int = 300) -> tuple[str, Any, str]:
     """回傳 (狀態, structured_output, 說明)；狀態是 ok／model_failed／model_timeout／output_garbled。
     env 給了就只用在 agy 這個子行程（例如登入檔放在隔離 HOME，不改呼叫端整個步驟的 HOME）；effort 是思考程度，預設照舊 medium。"""
     try:
-        completed = subprocess.run(_model_command(model_bin, model, output_schema, effort), input=_stream_input(prompt),
+        completed = subprocess.run(_model_command(model_bin, model, output_schema, effort, print_timeout), input=_stream_input(prompt),
                                    capture_output=True, timeout=timeout, check=False,
                                    env=dict(env) if env is not None else None)
     except subprocess.TimeoutExpired:
