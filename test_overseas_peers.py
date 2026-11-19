@@ -215,7 +215,7 @@ def run_indices(d1: FakeD1, http: FakeHttp, *, key: str | None = "ek", today: da
 class HomeIndicesTest(unittest.TestCase):
     """大盤頁切換國外指數（本人 11-19）：五個指數不管有沒有人關注都抓、舊資料一直累積。"""
 
-    def test_the_five_indices_are_the_ones_the_owner_picked(self):
+    def test_the_six_indices_are_the_ones_the_owner_picked(self):
         # 本人 11-19 下午「大盤我發現你少加了費半」：費城半導體放在標普後面。
         self.assertEqual(op.HOME_INDICES, ("DJI.INDX", "IXIC.INDX", "GSPC.INDX", "SOX.INDX", "N225.INDX", "KS11.INDX"))
 
@@ -226,9 +226,9 @@ class HomeIndicesTest(unittest.TestCase):
         for symbol in op.HOME_INDICES:
             self.assertEqual(d1.quotes(symbol), [("2025-10-01", 10.0, "eodhd"), ("2026-11-13", 20.0, "eodhd")], "用還原後的收盤")
             self.assertEqual(d1.status(symbol), (1, NOW, None))
-        self.assertEqual(len(http.urls), 5)
+        self.assertEqual(len(http.urls), 6)
         self.assertIn("from=2025-10-12&to=2026-11-16", http.urls[0], "沒有舊資料時取免費方案給得到的約 400 天")
-        self.assertEqual(summary, {"symbols": 5, "ok": 5, "problems": {}, "rows": 10})
+        self.assertEqual(summary, {"symbols": 6, "ok": 6, "problems": {}, "rows": 12})
 
     def test_later_runs_refetch_the_last_week_and_keep_older_days(self):
         d1 = FakeD1()
@@ -264,7 +264,7 @@ class HomeIndicesTest(unittest.TestCase):
         http = FakeHttp(routes)
         summary = run_indices(d1, http)
         self.assertEqual(len(http.urls), 2, "額度用完之後不再打")
-        self.assertEqual(summary["problems"], {"quota": 4})
+        self.assertEqual(summary["problems"], {"quota": 5})  # 那指本身＋後面的標普、費半、日經、韓綜
 
     def test_command_line_runs_only_the_indices(self):
         d1 = FakeD1()
@@ -273,7 +273,7 @@ class HomeIndicesTest(unittest.TestCase):
         with mock.patch.object(op, "WranglerD1", return_value=d1), mock.patch.dict(os.environ, {"EODHD_API_KEY": "", "MASSIVE_API_KEY": "mk"}), \
                 redirect_stdout(out):
             self.assertEqual(op.main(["indices"]), 0)
-        self.assertEqual(json.loads(out.getvalue())["problems"], {"no_key": 5})
+        self.assertEqual(json.loads(out.getvalue())["problems"], {"no_key": 6})
         self.assertIsNone(d1.status("NVDA.US"), "同類股不在這一輪")
 
     def test_shared_cache_missing_skips_instead_of_spending_quota(self):
@@ -300,10 +300,10 @@ class HomeIndicesTest(unittest.TestCase):
         daily = (ROOT / ".github/workflows/daily-update.yml").read_text(encoding="utf-8")
         self.assertIn("python overseas_peers.py indices --shared-cache", daily)
 
-    def test_missing_key_marks_all_five_and_writes_no_quotes(self):
+    def test_missing_key_marks_all_six_and_writes_no_quotes(self):
         d1 = FakeD1()
         summary = run_indices(d1, FakeHttp({}), key=None)
-        self.assertEqual(summary["problems"], {"no_key": 5})
+        self.assertEqual(summary["problems"], {"no_key": 6})
         self.assertEqual(d1.quotes("DJI.INDX"), [])
 
 
