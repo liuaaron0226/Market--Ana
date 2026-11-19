@@ -19,7 +19,7 @@ def wrangler(rows):
 
 DEFAULTS = {
     "forecast": {"model": gm.ARGON, "effort": "medium"},
-    "watch_judge": {"model": gm.FLASH, "effort": "medium"},  # 本人 11-19 晚「先維持中」：照實際在跑的值
+    "watch_judge": {"model": gm.FLASH, "effort": "high"},  # 本人 11-19 晚「Flash還是改用高好了」：用 Flash 的任務預設高
     "watch_nominate": {"model": gm.FLASH, "effort": "high"},
     "plain": {"model": gm.ARGON, "effort": "medium"},
     "digest": {"model": gm.ARGON, "effort": "medium"},

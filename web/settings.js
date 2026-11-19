@@ -141,6 +141,12 @@
     };
   }
 
+  // 按了一顆鍵之後的選擇。本人 11-19 晚「Flash還是改用高好了」：從別的模型切到 Flash 時思考強度先帶「高」，之後仍可自己改
+  const nextChoice = (base, pick) => {
+    if (pick.model && pick.model !== base.model) return { model: pick.model, effort: pick.model === 'gemini-3.8-flash' ? 'high' : base.effort };
+    return { ...base, ...pick };
+  };
+
   const confirmNotes = (data, draft) => pending(data, draft)
     .filter(({ task }) => SCORED[task.key])
     .map(({ task, next }) => `${MODEL_TASKS[task.key].name}改成 ${choiceText(next)}：${SCORED[task.key]}`);
@@ -148,7 +154,7 @@
   const tabsFor = ({ usage, models, notify }) => ['usage', 'models', 'notify', 'look']
     .filter(key => key === 'look' || ({ usage, models, notify })[key]);
 
-  global.MarketSettings = { DESKS, readPrefs, resetText, modelLabel, usageView, tabsFor, modelsView, confirmNotes };
+  global.MarketSettings = { DESKS, readPrefs, resetText, modelLabel, usageView, tabsFor, modelsView, confirmNotes, nextChoice };
 
   // ---------- 畫面 ----------
   const doc = global.document;
@@ -506,7 +512,7 @@
       const key = pick.dataset.mkey;
       const task = models.data.tasks.find(t => t.key === key);
       const base = models.draft[key] || { model: task.model, effort: task.effort };
-      models.draft = { ...models.draft, [key]: { ...base, ...(pick.dataset.model ? { model: pick.dataset.model } : { effort: pick.dataset.effort }) } };
+      models.draft = { ...models.draft, [key]: nextChoice(base, pick.dataset.model ? { model: pick.dataset.model } : { effort: pick.dataset.effort }) };
       models.confirming = false;
       models.note = '';
       renderModels();

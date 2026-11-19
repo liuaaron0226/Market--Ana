@@ -403,6 +403,13 @@ class ChosenModelTests(MorningTestCase):
         records = {r["edition"]: r for r in fl.read_ledger(self.ledger)["forecasts"]}
         self.assertEqual(records["morning"]["input_version"], records["evening"]["input_version"])
 
+    def test_by_default_agy_really_receives_the_forecast_effort_from_gemini_models(self):
+        import gemini_models as gm
+        script, seen = self.recording_model()
+        fr.run_evening(self.analysis_file(analysis()), ledger=self.ledger, method_path=self.method, model_bin=script,
+                       now=lambda: datetime.fromisoformat(f"{BASE}T17:40:00+08:00"))
+        self.assertEqual(json.loads(seen.read_text().splitlines()[0]), [gm.FORECAST, gm.FORECAST_EFFORT])
+
     def test_morning_without_an_evening_uses_the_setting(self):
         script, seen = self.recording_model()
         log = self.morning(script, model="gemini-3.8-flash", effort="low")

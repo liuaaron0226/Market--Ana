@@ -10,7 +10,7 @@ const window = {};
 vm.runInNewContext(source, { window, Date, Intl, Math, Number, String, JSON });
 const plain = (fn) => (...args) => JSON.parse(JSON.stringify(fn(...args)));
 const S = { modelsView: plain(window.MarketSettings.modelsView), confirmNotes: plain(window.MarketSettings.confirmNotes),
-  tabsFor: plain(window.MarketSettings.tabsFor) };
+  tabsFor: plain(window.MarketSettings.tabsFor), nextChoice: plain(window.MarketSettings.nextChoice) };
 
 const ARGON = "gemini-4-argon", FLASH = "gemini-3.8-flash";
 const DATA = {
@@ -74,6 +74,14 @@ test("最近一班沒讀到設定的排程列出來", () => {
 test("資料庫還沒更新時說明存不了", () => {
   assert.equal(S.modelsView({ ...DATA, ready: false }, {}).notReady, "網站資料庫還沒更新，現在顯示的是預設，暫時不能存。");
   assert.equal(S.modelsView(DATA, {}).notReady, "");
+});
+
+test("切到 Flash 時思考強度自動帶「高」（本人 11-19 晚：用 Flash 的任務一律高），之後仍可自己改", () => {
+  assert.deepEqual(S.nextChoice({ model: ARGON, effort: "medium" }, { model: FLASH }), { model: FLASH, effort: "high" });
+  assert.deepEqual(S.nextChoice({ model: FLASH, effort: "high" }, { effort: "low" }), { model: FLASH, effort: "low" });
+  // 切回 Argon 不動強度；已經是 Flash 再按一次 Flash 也不動
+  assert.deepEqual(S.nextChoice({ model: FLASH, effort: "low" }, { model: ARGON }), { model: ARGON, effort: "low" });
+  assert.deepEqual(S.nextChoice({ model: FLASH, effort: "low" }, { model: FLASH }), { model: FLASH, effort: "low" });
 });
 
 test("只有改到大盤預測或每日判斷，存檔前才先問", () => {

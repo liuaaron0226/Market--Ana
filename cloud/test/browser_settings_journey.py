@@ -181,12 +181,12 @@ def owner_models(journey: Journey, browser, width: int, first: bool) -> None:
     journey.check(f"{tag}：晨間預測上一班沒讀到設定有標出來", any("晨間事前預測上一班" in w and "沒讀到你的設定" in w for w in warn), warn)
     rows = models_rows(page)
     if not first:
-        journey.check(f"{tag}：上次存的值重新整理後還在（大盤預測 Flash・中、白話 Argon・低）",
-                      rows[0].endswith("Flash・中") and rows[3].endswith("Argon・低"), rows)
+        journey.check(f"{tag}：上次存的值重新整理後還在（大盤預測 Flash・高、白話 Argon・低）",
+                      rows[0].endswith("Flash・高") and rows[3].endswith("Argon・低"), rows)
         page.screenshot(path=str(OUT / f"owner-models-{width}.png"))
         context.close()
         return
-    journey.check(f"{tag}：五列都是預設值", [r.split(" ")[-1] for r in rows] == ["Argon・中", "Flash・中", "Flash・高", "Argon・中", "Argon・中"]
+    journey.check(f"{tag}：五列都是預設值", [r.split(" ")[-1] for r in rows] == ["Argon・中", "Flash・高", "Flash・高", "Argon・中", "Argon・中"]
                   and rows[0].startswith("大盤預測 晚間・晨間・重播一起"), rows)
     journey.check(f"{tag}：還沒改不出現存檔鍵", page.locator("[data-maction]").count() == 0)
     page.screenshot(path=str(OUT / f"owner-models-{width}-start.png"))
@@ -196,12 +196,12 @@ def owner_models(journey: Journey, browser, width: int, first: bool) -> None:
                   page.locator("#settings-model-forecast-choices").is_visible()
                   and page.locator("[data-mrow='forecast']").get_attribute("aria-expanded") == "true")
     page.locator("[data-mkey='forecast'][data-model='gemini-3.8-flash']").click()
-    journey.check(f"{tag}：選 Flash 那一列換成新值、出現還原與存檔、焦點留在 Flash",
-                  models_rows(page)[0].endswith("Flash・中") and page.locator("[data-maction='save']").is_visible()
+    journey.check(f"{tag}：選 Flash 那一列換成新值（強度自動帶高）、出現還原與存檔、焦點留在 Flash",
+                  models_rows(page)[0].endswith("Flash・高") and page.locator("[data-maction='save']").is_visible()
                   and page.evaluate("() => document.activeElement?.dataset.model") == "gemini-3.8-flash")
     page.locator("[data-maction='save']").click()
     confirm = page.locator("#settings-models .st-confirm").inner_text()
-    journey.check(f"{tag}：存檔前先問（成績另開一組、正式起算重數）", "大盤預測改成 Flash・中" in confirm and "連續 5 天" in confirm, confirm)
+    journey.check(f"{tag}：存檔前先問（成績另開一組、正式起算重數）", "大盤預測改成 Flash・高" in confirm and "連續 5 天" in confirm, confirm)
     page.screenshot(path=str(OUT / f"owner-models-{width}-confirm.png"))
     page.locator("[data-maction='cancel']").click()
     journey.check(f"{tag}：取消回到還沒存的樣子", page.locator(".st-confirm").count() == 0 and page.locator("[data-maction='save']").is_visible())
@@ -209,7 +209,7 @@ def owner_models(journey: Journey, browser, width: int, first: bool) -> None:
     page.locator("[data-maction='confirm']").click()
     page.wait_for_selector("#settings-models .st-saved")
     journey.check(f"{tag}：確定改之後存好", "已存檔" in page.locator(".st-saved").inner_text()
-                  and page.locator("[data-maction]").count() == 0 and models_rows(page)[0].endswith("Flash・中"))
+                  and page.locator("[data-maction]").count() == 0 and models_rows(page)[0].endswith("Flash・高"))
 
     page.locator("[data-mrow='plain']").click()
     page.locator("[data-mkey='plain'][data-effort='low']").click()

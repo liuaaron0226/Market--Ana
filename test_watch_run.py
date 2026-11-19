@@ -281,6 +281,27 @@ class MarketLayerModelTests(WatchRunTestCase):
 class ChosenEffortTests(WatchRunTestCase):
     """本人 2026-11-19 晚（設定頁 AI 模型）：判斷與提名的思考強度由排程帶進來；空的照預設。"""
 
+    def argv_recording(self, inner):
+        """包住假模型：先把 agy 收到的命令列參數記下來，再照原本的假模型回答。"""
+        log = self.tmp / "argv.jsonl"
+        script = self.tmp / "argv_agy.py"
+        script.write_text(
+            "import json,runpy,sys\n"
+            f"open({str(log)!r},'a',encoding='utf-8').write(json.dumps(sys.argv[1:])+'\\n')\n"
+            f"runpy.run_path({str(inner)!r}, run_name='__main__')\n", encoding="utf-8")
+        return script, log
+
+    def test_by_default_agy_really_receives_the_judge_effort_from_gemini_models(self):
+        # 11-19 發現：WATCH_JUDGE_EFFORT 從沒傳進判斷呼叫，agy 一直收到 medium。這裡看 agy 實際收到的參數，不只看常數。
+        import gemini_models as gm
+        self.write_forecast()
+        script, log = self.argv_recording(self.model())
+        self.evening(model=script)
+        sent = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+        self.assertTrue(sent)
+        self.assertEqual({args[args.index("--effort") + 1] for args in sent}, {gm.WATCH_JUDGE_EFFORT})
+        self.assertEqual(gm.WATCH_JUDGE_EFFORT, "high")
+
     def test_the_judge_effort_reaches_every_judgment(self):
         self.write_forecast()
         self.evening(effort="low")

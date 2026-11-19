@@ -13,7 +13,7 @@ export const EFFORTS = ["low", "medium", "high"];
 // 還沒選過或排程讀不到時用的預設，和 gemini_models.py 同一組（test_gemini_settings 對帳）。順序就是設定頁的順序。
 export const DEFAULTS = {
   forecast: { model: "gemini-4-argon", effort: "medium" },
-  watch_judge: { model: "gemini-3.8-flash", effort: "medium" },
+  watch_judge: { model: "gemini-3.8-flash", effort: "high" },
   watch_nominate: { model: "gemini-3.8-flash", effort: "high" },
   plain: { model: "gemini-4-argon", effort: "medium" },
   digest: { model: "gemini-4-argon", effort: "medium" },
