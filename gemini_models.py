@@ -28,9 +28,10 @@ FORECAST_EFFORT = "medium"
 # 自選股關注：替關注股提名國外同類股（每檔只問一次）。Flash、思考高。
 WATCH_NOMINATE = FLASH
 WATCH_NOMINATE_EFFORT = "high"
-# 自選股關注每日判斷：每次排程最多 40 次呼叫。11-18 晚改 Argon（換模型＝關注帳本新輸入版本）。
-WATCH_JUDGE = ARGON
-WATCH_JUDGE_EFFORT = "medium"
+# 自選股關注每日判斷：每次排程最多 40 次呼叫。11-18 晚改 Argon；11-19 下午 Argon 剩 33%（實測一次呼叫約每週額度 1%，
+# 判斷每天約 12 次是最大宗），本人選「判斷改 Flash（推薦）」、思考高，Argon 留給大盤預測與白話（換模型＝關注帳本新輸入版本）。
+WATCH_JUDGE = FLASH
+WATCH_JUDGE_EFFORT = "high"
 # 朋友解讀：用朋友自己的 Gemini API 金鑰（不是 agy；朋友的金鑰用不到 Argon），Flash、思考高（API 的 thinkingLevel）。
 FRIEND_DIGEST = FLASH
 FRIEND_DIGEST_EFFORT = "high"
