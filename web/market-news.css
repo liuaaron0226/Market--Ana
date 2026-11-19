@@ -51,6 +51,8 @@ body.hm #marketNews .news-tone.tone-up::before { background: var(--up); }
 body.hm #marketNews .news-tone.tone-down { color: var(--down); }
 body.hm #marketNews .news-tone.tone-down::before { background: var(--down); }
 body.hm #marketNews .news-tag { color: var(--faint); }
+/* 類別小標：細框、不上色（紅綠只留給利多利空） */
+body.hm #marketNews .news-kind { padding: 0 6px; border: 1px solid var(--hair); border-radius: 6px; color: var(--dim); font-size: 11.5px; line-height: 18px; }
 body.hm #marketNews .news-title { display: block; font: 600 15.5px/1.5 var(--sans); color: var(--ink); text-decoration: none; text-wrap: pretty; }
 @media (hover: hover) { body.hm #marketNews .news-title:hover { text-decoration: underline; text-underline-offset: 3px; } }
 body.hm #marketNews .news-title::after { content: " ↗"; font-weight: 400; color: var(--faint); font-size: 12px; }

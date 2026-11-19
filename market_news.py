@@ -214,7 +214,7 @@ def collect(*, get: Callable, now: str, sleep: Callable[[float], None],
             continue
         sources[feed["key"]] = "ok"
         floor = date_only_oldest if feed.get("date_only") else oldest
-        fresh = sorted((row for row in rows if row["published_at"] >= floor), key=lambda row: row["published_at"], reverse=True)
+        fresh = sorted((row for row in rows if floor <= row["published_at"] <= now), key=lambda row: row["published_at"], reverse=True)
         for row in fresh[:PER_FEED]:
             mark = row["title"].lower()
             if row["link"] in seen or mark in seen:

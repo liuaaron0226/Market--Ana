@@ -14,6 +14,9 @@
   };
   const GROUPS = [['tw', '台股'], ['us', '美股'], ['asia', '日韓中'], ['mine', '我的自選']];
   const TONE = { up: '利多', down: '利空', flat: '中性' };
+  // 類別小標（本人 11-20：政策、財報、合作關係最會動股價）。市場新聞的 other、總經以外都標；個股新聞六類都標。
+  const MARKET_KIND = { policy: '政策', earnings: '財報', deal: '合作訂單', flows: '法人', macro: '總經' };
+  const STOCK_KIND = { earnings: '財報營收', guidance: '法說', deal: '訂單合作', policy: '政策', rating: '法人評等', incident: '異常事件' };
   const IMPACT = { 3: '大', 2: '中', 1: '小' };
   const SLOT = { morning: '盤前', midday: '午盤', close: '收盤後' };
   const TAIPEI = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei', month: '2-digit', day: '2-digit',
@@ -38,6 +41,8 @@
     const li = el('li', 'news-item');
     const head = el('div', 'news-item-head');
     if (item.tone) head.append(el('span', `news-tone tone-${item.tone}`, TONE[item.tone]));
+    const kind = (stockTag ? STOCK_KIND : MARKET_KIND)[item.kind];
+    if (kind) head.append(el('span', 'news-kind', kind));
     if (item.market) head.append(el('span', 'news-tag', item.market));
     if (stockTag && item.code) head.append(el('span', 'news-tag', `${item.code} ${item.name || ''}`.trim()));
     const link = el('a', 'news-title', item.title);
@@ -80,7 +85,7 @@
     els.status.hidden = items.length > 0 && !missed;
     els.status.textContent = carried ? `這一輪沒抓到，先列 ${monthDay(carried)} ${clock(carried)} 那一輪的`
       : missed ? '這一輪沒抓到'
-        : key === 'mine' ? (current?.mine?.judged ? '這一輪沒有和你自選股直接相關的新聞' : '你的自選股這一天沒有新聞')
+        : key === 'mine' ? (current?.mine?.judged ? '近 30 天沒有和你自選股直接相關的重要消息' : '你的自選股這幾天沒有新聞')
           : '這一組這一輪沒有消息';
   }
 
