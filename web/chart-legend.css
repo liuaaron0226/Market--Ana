@@ -17,3 +17,5 @@ button.legend-name:focus-visible { outline: 2px solid var(--gold); outline-offse
 .legend-tag { padding: 0 4px; border-radius: var(--r-tag); background: var(--tag); color: var(--bg); font: 600 10px/16px var(--sans); font-style: normal; }
 /* 判斷線（預測的轉強線／轉弱線、關注的觸發線／看錯線）：名稱前面一小段和圖上一樣顏色的線 */
 .legend-name.is-line::before { content: ""; display: inline-block; width: 10px; height: 2px; margin: 0 4px 3px 0; vertical-align: middle; background: var(--tone); }
+/* 手機：均線名稱的點擊區補到 40px 上下（本人 2026-11-20 全站盤點；原本只有 29px）。往上多補、往下少補——下面一行是收復／防守兩顆鍵與 K 線。 */
+@media (pointer: coarse) { button.legend-name::before { inset: -14px -6px -9px; } }
