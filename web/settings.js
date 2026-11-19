@@ -467,11 +467,7 @@
   }
 
   async function saveModels() {
-    const tasks = {};
-    for (const task of models.data.tasks) {
-      const next = models.draft[task.key];
-      if (next && (next.model !== task.model || next.effort !== task.effort)) tasks[task.key] = next;
-    }
+    const tasks = Object.fromEntries(pending(models.data, models.draft).map(({ task, next }) => [task.key, next]));
     models.saving = true;
     models.confirming = false;
     renderModels();

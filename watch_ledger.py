@@ -255,11 +255,11 @@ _MODEL_IN_VERSION = (gemini_models.ARGON,)
 
 # 本人 2026-11-19 晚（設定頁 AI 模型第 5 題）「換思考強度也另開一組」。11-19 以前判斷實際都以 medium 呼叫
 # （gemini_models.WATCH_JUDGE_EFFORT 當時沒有接到判斷上），所以 medium 不算進雜湊、版本號照舊，其他強度另成一組。
-DEFAULT_EFFORT = "medium"
+UNVERSIONED_EFFORT = "medium"
 
 
 def input_version_of(layers: Sequence[str] = DEFAULT_LAYERS, model: str | None = None,
-                     effort: str = DEFAULT_EFFORT) -> str:
+                     effort: str = UNVERSIONED_EFFORT) -> str:
     """輸入版本：打開的層、參數、回答格式、提示規則、模型、思考強度任何一項改了就是新系列，和舊系列分開對帳。
 
     某一層當天沒有資料不換版本（那一份判斷另外標 ``missing_layers``）；版本只看排程打開了哪幾層。
@@ -270,7 +270,7 @@ def input_version_of(layers: Sequence[str] = DEFAULT_LAYERS, model: str | None =
                              "prompt_rules": _prompt_rules(enabled)}
     if model in _MODEL_IN_VERSION:
         basis["model"] = model
-    if effort != DEFAULT_EFFORT:
+    if effort != UNVERSIONED_EFFORT:
         basis["effort"] = effort
     layer_parameters = _layer_parameters(enabled)
     if layer_parameters:
@@ -423,7 +423,7 @@ def _model_input(data: Mapping[str, Any], edition: str, layers: list[str], raw: 
                  events: list[dict[str, Any]], unresolved: list[dict[str, Any]],
                  candidates: list[dict[str, Any]] | None, index_rows: list[dict[str, Any]],
                  band: dict[str, Any] | None, lessons: dict[str, Any] | None, model: str | None = None,
-                 effort: str = DEFAULT_EFFORT) -> dict[str, Any]:
+                 effort: str = UNVERSIONED_EFFORT) -> dict[str, Any]:
     values = {layer: copy.deepcopy(data.get(_LAYER_FIELDS[layer])) if layer in _LAYER_FIELDS else None
               for layer in layers}
     if "lessons" in values:
@@ -594,7 +594,7 @@ def _write(
     edition: str,
     model_bin: Path | str,
     model: str,
-    effort: str = DEFAULT_EFFORT,
+    effort: str = UNVERSIONED_EFFORT,
     now: Callable[[], datetime] | None,
     official_since: str | None,
     session_date: str | None,
@@ -689,7 +689,7 @@ def write_judgment(
     edition: str,
     model_bin: Path | str,
     model: str,
-    effort: str = DEFAULT_EFFORT,
+    effort: str = UNVERSIONED_EFFORT,
     now: Callable[[], datetime] | None = None,
     official_since: str | None = None,
     session_date: str | None = None,
@@ -722,7 +722,7 @@ def write_judgments(
     edition: str,
     model_bin: Path | str,
     model: str,
-    effort: str = DEFAULT_EFFORT,
+    effort: str = UNVERSIONED_EFFORT,
     now: Callable[[], datetime] | None = None,
     official_since: str | None = None,
     session_date: str | None = None,

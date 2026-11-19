@@ -36,7 +36,8 @@ class TaskModelTests(unittest.TestCase):
         # 本人 11-18 晚（ANALYSIS_PLAN〈各 AI 任務的模型與思考程度〉）：每日判斷、白話、站主解讀改 Argon，三項思考「中」；
         # 提名同類股、朋友解讀留 Flash，思考「高」。
         # 本人 11-19 下午 Argon 剩 33%（一次呼叫約每週 1%），題目「自選股每日判斷先改回 Flash（思考高）」選「判斷改 Flash（推薦）」。
-        self.assertEqual((gm.WATCH_JUDGE, gm.WATCH_JUDGE_EFFORT), (gm.FLASH, "high"))
+        # 本人 11-19 晚：判斷實際一直用 medium 呼叫（WATCH_JUDGE_EFFORT 當時沒接上），題目「這次上線要怎麼處理」選「先維持中（推薦）」
+        self.assertEqual((gm.WATCH_JUDGE, gm.WATCH_JUDGE_EFFORT), (gm.FLASH, "medium"))
         self.assertEqual((gm.PLAIN, gm.DIGEST), (gm.ARGON, gm.ARGON))
         self.assertEqual((gm.WATCH_NOMINATE, gm.WATCH_NOMINATE_EFFORT), (gm.FLASH, "high"))
         self.assertEqual((gm.FRIEND_DIGEST, gm.FRIEND_DIGEST_EFFORT), (gm.FLASH, "high"))

@@ -36,7 +36,7 @@ test("還沒選過：五項都是預設值（和 gemini_models.py 一樣），�
   assert.equal(body.ready, true);
   assert.deepEqual(body.tasks.map((t) => [t.key, t.model, t.effort, t.saved]), [
     ["forecast", ARGON, "medium", false],
-    ["watch_judge", FLASH, "high", false],
+    ["watch_judge", FLASH, "medium", false],
     ["watch_nominate", FLASH, "high", false],
     ["plain", ARGON, "medium", false],
     ["digest", ARGON, "medium", false],

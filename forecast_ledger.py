@@ -203,17 +203,17 @@ _PROMPT_RULES = (
     "看錯條件與實際落點。寫之前先看這些，避免同一種錯一犯再犯；lessons 是空的代表還沒有對完帳的紀錄。",
 )
 # 思考強度沒寫的紀錄（11-19 以前）都是 medium；版本雜湊只在不是 medium 時把它算進去，現在這一組的版本號不變。
-DEFAULT_EFFORT = "medium"
+UNVERSIONED_EFFORT = "medium"
 
 
-def input_version(model: str, effort: str = DEFAULT_EFFORT) -> str:
+def input_version(model: str, effort: str = UNVERSIONED_EFFORT) -> str:
     """輸入版本：參數、回答格式、提示規則、模型、思考強度任何一項改了就是新系列，和舊系列分開對帳（教訓層也只讀同一系列）。
 
     本人 2026-11-17「預測也換 Argon」：換模型＝新的輸入版本；換模型前 Flash 寫的試跑與重播是
     ``base+overseas+foreign_flow+similar+lessons-v1-1fbcaa45``（那時模型還沒算進來）。
     本人 2026-11-19 晚（設定頁 AI 模型第 5 題）「換思考強度也另開一組」：medium 以外的強度另算進雜湊。"""
     basis = {"parameters": PARAMETERS, "output_schema": OUTPUT_SCHEMA, "prompt_rules": _PROMPT_RULES, "model": model}
-    if effort != DEFAULT_EFFORT:
+    if effort != UNVERSIONED_EFFORT:
         basis["effort"] = effort
     return "+".join(PARAMETERS["layers"]) + "-v1-" + hashlib.sha256(json.dumps(
         basis, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:8]
@@ -228,7 +228,7 @@ def choice_of(root: Path | str, base_date: str, edition: str) -> tuple[str, str]
     if not found:
         return None
     latest = max(found, key=lambda record: record.get("locked_at") or "")
-    return latest["model"], latest.get("effort") or DEFAULT_EFFORT
+    return latest["model"], latest.get("effort") or UNVERSIONED_EFFORT
 
 
 INPUT_VERSION = input_version(MODEL)
@@ -586,7 +586,7 @@ def write_forecast(
     edition: str,
     model_bin: Path | str,
     model: str,
-    effort: str = DEFAULT_EFFORT,
+    effort: str = UNVERSIONED_EFFORT,
     now: Callable[[], datetime] | None = None,
     official_since: str | None = None,
     session_date: str | None = None,
