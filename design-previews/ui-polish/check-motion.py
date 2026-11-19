@@ -5,6 +5,7 @@
   2. 把數值改成別的（等於盤中更新）：只多出細線（漲紅跌綠的記號）與一道光，1 秒多後光拿掉
   3. 滾動的那一層和真正的字對得齊（同一個位置、同一個寬度，差 1.5px 以內）
   4. 系統設定「減少動態」：不滾、不加細線、不加光
+  5. 換頁（換板）：等換頁時這一頁的板沉下去，新的一頁的板落好；被攔下的點擊不播；返回也落好
 用法（工作目錄根目錄，先 node cloud/build.mjs）：python design-previews/ui-polish/check-motion.py [截圖資料夾]
 """
 from __future__ import annotations
@@ -104,7 +105,7 @@ def main() -> int:
                     else:
                         check(f"{label}：更新時數字滾動、細線是漲的記號、板上有一道光", mid["odo"] and mid["tick"] and mid["tone"] == "up" and mid["sheen"] == 1, mid)
                         check(f"{label}：滾動的那一層和真正的字對齊", mid["dx"] is not None and mid["dx"] <= 1.5 and mid["dw"] <= 1.5, mid)
-                        page.wait_for_timeout(1500)
+                        page.wait_for_function("() => !document.querySelector('.fx-odo') && !document.querySelector('.fx-sheen')", timeout=6000)
                         after = page.evaluate("id => ({ odo: document.querySelectorAll('.fx-odo').length, sheen: document.querySelectorAll('.fx-sheen').length, rolling: document.getElementById(id).classList.contains('fx-rolling') })", element_id)
                         check(f"{label}：更新的動態播完收乾淨", after == {"odo": 0, "sheen": 0, "rolling": False}, after)
                         changed = bump(page, element_id, 0.98)
@@ -113,6 +114,43 @@ def main() -> int:
                         check(f"{label}：數值變小時細線是跌的記號", tone == "down", tone)
                     check(f"{label}：沒有頁面錯誤", not errors, errors)
                     page.close()
+                # 換頁（換板）：點連結後這一頁的板沉下去、新的一頁的板落好；被攔下的點擊不播；返回也一樣
+                page = context.new_page()
+                errors = []
+                page.on("pageerror", lambda error, bucket=errors: bucket.append(str(error)))
+                label = "換頁（減少動態）" if reduced else "換頁"
+                page.goto(base + "/")
+                shoot.ready_home(page)
+                page.wait_for_timeout(900)
+                # 先讓這一次點擊「不真的換頁」（在動效的處理之後才攔下），看得到這一頁的板沉下去；沒換成頁，1.6 秒後要自己放回來
+                page.evaluate("() => { addEventListener('click', event => event.preventDefault(), { once: true }); document.getElementById('portfolioEntry').click(); }")
+                page.wait_for_timeout(420)
+                sunk = page.evaluate("() => ({ opacity: Number(getComputedStyle(document.querySelector('.market-header')).opacity), noted: sessionStorage.getItem('fx-nav') })")
+                page.wait_for_timeout(1500)
+                back_up = page.evaluate("() => Number(getComputedStyle(document.querySelector('.market-header')).opacity)")
+                if reduced:
+                    check(f"{label}：點了換頁的連結，板不動", sunk["opacity"] == 1, sunk)
+                else:
+                    check(f"{label}：點了換頁的連結，這一頁的板沉下去、變淡，並記下方向", sunk["opacity"] < .6 and sunk["noted"] == "forward", sunk)
+                    check(f"{label}：沒有真的換頁時，板自己放回來", back_up == 1, back_up)
+                page.evaluate("() => { setTimeout(() => document.getElementById('portfolioEntry').click(), 30); }")
+                page.wait_for_url("**/portfolio.html")
+                shoot.ready_portfolio(page)
+                page.wait_for_timeout(1300)
+                landed = page.evaluate("() => ({ opacity: [...document.querySelectorAll('.pf-card:not([hidden])')].map(card => getComputedStyle(card).opacity), noted: sessionStorage.getItem('fx-nav') })")
+                check(f"{label}：新的一頁的板落好、方向的記號清掉", all(value == "1" for value in landed["opacity"]) and landed["noted"] is None, landed)
+                page.evaluate("() => { addEventListener('click', event => event.preventDefault(), { capture: true, once: true }); document.querySelector('.pf-back').click(); }")
+                page.wait_for_timeout(300)
+                held = page.evaluate("() => ({ url: location.pathname, opacity: getComputedStyle(document.querySelector('.pf-card')).opacity, noted: sessionStorage.getItem('fx-nav') })")
+                check(f"{label}：被攔下的點擊不播、不記方向", held == {"url": "/portfolio.html", "opacity": "1", "noted": None}, held)
+                page.evaluate("() => document.querySelector('.pf-back').click()")
+                page.wait_for_url(lambda url: "portfolio" not in url)
+                shoot.ready_home(page)
+                page.wait_for_timeout(1300)
+                home = page.evaluate("() => [...document.querySelectorAll('.market-header, .chart-workspace')].map(board => getComputedStyle(board).opacity)")
+                check(f"{label}：返回首頁後板都落好", home == ["1", "1"], home)
+                check(f"{label}：沒有頁面錯誤", not errors, errors)
+                page.close()
                 context.close()
             browser.close()
     finally:
