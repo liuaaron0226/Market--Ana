@@ -99,6 +99,17 @@ test("我的自選：模型判成無關的不顯示；中央社只在前言提�
   assert.deepEqual(friend.mine.items.map((row) => row.title).sort(), ["MediaTek wins orders", "聯發科法說會登場"]);
 });
 
+test("我的自選：這一輪判讀過、全部無關時一則都不列，並告訴畫面判讀過（本人 11-19）", async () => {
+  await env.DB.prepare("DELETE FROM market_news_user_items").run();
+  await env.DB.prepare("UPDATE market_news_runs SET sources = ? WHERE run_id = '2026-11-19-close'")
+    .bind(JSON.stringify({ feeds: {}, missed_groups: [], judged_users: ["Owner@Example.com"] })).run();
+  const owner = await (await req("/api/market-news")).json();
+  assert.deepEqual(owner.mine, { marked: false, judged: true, items: [] });
+  const friend = await (await req("/api/market-news", { email: FRIEND })).json();
+  assert.equal(friend.mine.judged, false);
+  assert.deepEqual(friend.mine.items.map((row) => row.title), ["MediaTek wins orders"], "沒判讀過的人照舊看標題");
+});
+
 test("模型沒寫成的那一輪：只有標題，不帶利多利空與理由", async () => {
   await env.DB.prepare("UPDATE market_news_runs SET status = 'unclassified', summary = NULL WHERE run_id = '2026-11-19-close'").run();
   const body = await (await req("/api/market-news")).json();

@@ -56,9 +56,14 @@ async function mine(db, email, run) {
   const marks = new Map((await db.prepare(
     "SELECT code, link, tone, impact, title, translated, reason FROM market_news_user_items WHERE lower(email) = lower(?) AND run_id = ?",
   ).bind(email, run.run_id).all()).results.map((row) => [`${row.code}|${row.link}`, row]));
-  // 中央社整批對到的（cna-*）有些只在前言提到公司：標題沒點名就不算。這個人有判讀時，沒有標記的＝模型判成和公司無關，不顯示。
+  // 中央社整批對到的（cna-*）有些只在前言提到公司：標題沒點名就不算。
+  // 這一輪這個人的自選有判讀過（run.sources.judged_users；舊的輪次沒有這一欄時，有標記就算）：沒有標記的＝模型判成
+  // 和公司無關，不顯示——就算一則都不剩（本人 11-19：三則都無關卻還列出標題）。
+  const judgedUsers = parse(run.sources, {})?.judged_users;
+  const judged = Array.isArray(judgedUsers) ? judgedUsers.some((who) => String(who).toLowerCase() === email.toLowerCase())
+    : marks.size > 0;
   const named = (row) => !row.source.startsWith("cna-") || (row.name && row.title.includes(row.name)) || row.title.includes(row.code);
-  const items = rows.filter((row) => named(row) && (marks.size === 0 || marks.has(`${row.code}|${row.link}`))).map((row) => {
+  const items = rows.filter((row) => named(row) && (!judged || marks.has(`${row.code}|${row.link}`))).map((row) => {
     const mark = marks.get(`${row.code}|${row.link}`);
     return {
       code: row.code, name: row.name, link: row.link, published_at: row.published_at,
@@ -69,7 +74,7 @@ async function mine(db, email, run) {
   });
   // 有判讀的依影響大小排在前面（一樣大時新的在前）；沒有判讀的照時間。
   items.sort((a, b) => (b.impact || 0) - (a.impact || 0) || b.published_at.localeCompare(a.published_at));
-  return { marked: marks.size > 0, items };
+  return { marked: marks.size > 0, judged, items };
 }
 
 export async function handleMarketNewsApi(request, env, email, { isOwner }) {
@@ -83,7 +88,7 @@ export async function handleMarketNewsApi(request, env, email, { isOwner }) {
     const dates = (await env.DB.prepare(
       "SELECT DISTINCT trade_date FROM market_news_runs ORDER BY trade_date DESC LIMIT ?",
     ).bind(DATES_MAX).all()).results.map((row) => row.trade_date);
-    if (!run) return json(200, { available: true, run: null, dates, groups: { tw: [], us: [], asia: [] }, mine: { marked: false, items: [] } });
+    if (!run) return json(200, { available: true, run: null, dates, groups: { tw: [], us: [], asia: [] }, mine: { marked: false, judged: false, items: [] } });
     const rows = (await env.DB.prepare(
       "SELECT item_id, grp, market, tone, impact, title, translated, reason, source, link, published_at FROM market_news_items " +
         "WHERE run_id = ? ORDER BY impact DESC, published_at DESC",

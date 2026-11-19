@@ -34,7 +34,7 @@ MAX_ITEMS = 60             # 一次最多送幾則給模型（100 則加思考�
 GROUP_KEEP = 12            # 每一組最多存幾則（依影響大小）
 WATCH_MAX = 30             # 「我的自選」一個人最多送幾則
 KEEP_DAYS = 35
-SUMMARY_MAX = 200
+SUMMARY_MAX = 320          # 總結最多幾個字；超過就退到最後一個句號（不留半句）
 TITLE_MAX = 120
 REASON_MAX = 80
 RSS_SUMMARY_MAX = 200
@@ -48,7 +48,7 @@ FRIEND_NEWS_EFFORT = "low"  # 朋友那份的思考程度：高會超過 300 秒
 SUMMARY_TOP = 20           # 總結那一次給幾則（影響大的先）
 PARALLEL_CALLS = 3         # 同時幾個呼叫
 # 朋友的金鑰走 Gemini API：思考高時一次可能超過朋友解讀用的 120 秒（2026-11-19 正式跑 gemini_unavailable）
-FRIEND_TIMEOUT_SECONDS = 300
+FRIEND_TIMEOUT_SECONDS = 120
 GROUPS = ("tw", "us", "asia")
 MARKETS = ("", "日", "韓", "中")
 # 送給模型的結構描述（agy 轉成 Gemini function declaration）：enum 只能是非空字串（2026-11-19 乾跑 INVALID_ARGUMENT），
@@ -278,7 +278,7 @@ items：每一則都要回（id 照抄）：
 不要使用任何工具、不要上網查，只根據 INPUT 直接回答。"""
 
 SUMMARY_RULES = """你是財經記者，替台股投資人寫一段盤勢解說，繁體中文。
-market_commentary：2～3 句，回答「今天為什麼這樣走」——以台股為主、帶到美股與日韓中，根據 INPUT 的指數漲跌與新聞
+market_commentary：2～3 句、合計 150 字以內、最後以句號結尾，回答「今天為什麼這樣走」——以台股為主、帶到美股與日韓中，根據 INPUT 的指數漲跌與新聞
 （tone up 利多、down 利空；impact 越大越重要）。可以引用 indices 的漲跌幅，其他數字只能來自新聞標題或理由。
 slot 是開盤前時，講的是昨夜國際市場與今天可能的影響，不要假裝已經開盤。
 這個欄位的內容就是那段解說本身，第一個字就開始講市場（例如「台股今天下跌，主要是……」）；
@@ -427,6 +427,15 @@ def validate_watch(output: Any, watch: Sequence[Mapping[str, Any]], counts: dict
     return out
 
 
+def whole_sentences(text: str | None, limit: int) -> str | None:
+    """超過 limit 就退到 limit 以內最後一個句號（。！？）；一個句號都沒有才硬切。"""
+    if not text or len(text) <= limit:
+        return text
+    head = text[:limit]
+    end = max(head.rfind(mark) for mark in "。！？")
+    return head[:end + 1] if end >= 0 else head
+
+
 def unwrap_text(value: Any) -> Any:
     """模型把整段 JSON 塞進文字欄位（{"summary": "…"}）時，取裡面那段字。"""
     if isinstance(value, str) and value.lstrip().startswith("{"):
@@ -554,12 +563,14 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
             if not kept:
                 unmarked += batch
         calls[name] = record
+    # 這一輪誰的自選有判讀過（就算全部被判成無關、一則都不留）：網站據此不顯示沒有標記的那幾則。
+    judged = [owner_email] if calls.get("watch", {}).get("status") == "ok" else []
     summary = None
     if classified:
         for attempt in (1, 2):   # 回成交代工作的話就再問一次；還是不行就不放總結
             status, output, note = call(("summary", summary_prompt(slot, trade_date, classified, index_rows), SUMMARY_SCHEMA))[1:]
-            summary = (_text(unwrap_text(output.get("market_commentary") or output.get("summary")), SUMMARY_MAX)
-                       if status == "ok" and isinstance(output, Mapping) else None)
+            summary = (whole_sentences(_text(unwrap_text(output.get("market_commentary") or output.get("summary")), 2000),
+                                       SUMMARY_MAX) if status == "ok" and isinstance(output, Mapping) else None)
             if status != "ok" or is_summary(summary):
                 break
             status, note, summary = "not_a_summary", summary, None
@@ -571,7 +582,7 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
         run_status = "ok"
         user_rows = {owner_email: owner_marks}
     else:
-        stored, run_status, summary, user_rows = unclassified_items(items), "unclassified", None, {}
+        stored, run_status, summary, user_rows, judged = unclassified_items(items), "unclassified", None, {}, []
     status = "ok" if classified else next((r["status"] for r in calls.values() if r["status"] != "ok"), "no_items")
     note = ""
     diagnosis = {"calls": calls, "items_kept": len(classified), "rejected": rejected, "summary_chars": len(summary or "")}
@@ -586,6 +597,7 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
             continue
         marks: list[dict[str, Any]] = []
         failures: list[str] = []
+        notes: list[str] = []
         pieces = [watch[start:start + FRIEND_BATCH] for start in range(0, len(watch), FRIEND_BATCH)]
         for piece in pieces:
             try:
@@ -594,17 +606,22 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
                 friend_status, friend_output, friend_note = type(error).__name__, None, ""
             if friend_status == "ok":
                 marks += validate_watch(coerce_output(friend_output), piece)
+                if friend_note:
+                    notes.append(friend_note)
             else:
                 failures.append(f"{friend_status} {friend_note}".strip())
                 if friend_status in ("quota", "key_invalid", "key_revoked", "key_decrypt_failed", "region"):
                     break   # 金鑰或額度的問題：剩下的不用再試
         done = len(pieces) - len(failures)
-        friends[email] = "ok" if not failures else f"{done}/{len(pieces)} {failures[0]}"
+        friends[email] = (" ".join(["ok", *notes]) if not failures else f"{done}/{len(pieces)} {failures[0]}")[:300]
         if marks or not failures:
             user_rows[email] = marks
+        if not failures:
+            judged.append(email)
     run_row = {"run_id": f"{trade_date}-{slot}", "trade_date": trade_date, "slot": slot, "created_at": now,
                "status": run_status, "summary": summary, "indices": index_rows,
-               "sources": {"feeds": sources, "missed_groups": missed_groups(sources)}, "model": model}
+               "sources": {"feeds": sources, "missed_groups": missed_groups(sources), "judged_users": judged},
+               "model": model}
     script = run_sql(run_row, stored, user_rows, now=now)
     if not dry_run:
         execute(script)
@@ -707,6 +724,9 @@ def friend_body(text: str, schema: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _friend_asker(model: str) -> FriendAsker:
+    """朋友的金鑰走 Gemini API。2026-11-19 正式跑三次都等到逾時（思考高 120／300 秒、思考低 300 秒），原因還不知道，
+    所以：帶結構描述問一次（FRIEND_TIMEOUT_SECONDS）；逾時、伺服器錯誤、被拒或回不出 JSON，就不帶結構描述、
+    不指定思考程度再問一次（JSON 從文字裡解）。兩次各花幾秒、結果是什麼都寫進說明。金鑰或額度的問題不重試。"""
     import time
 
     import friend_ai_digest as fad
@@ -716,17 +736,39 @@ def _friend_asker(model: str) -> FriendAsker:
             key = fad.node_decrypt(dict(key_row))
         except Exception:  # noqa: BLE001
             return "key_decrypt_failed", None, ""
-        post = lambda url, body, api_key: fad.http_post(url, body, api_key, timeout=FRIEND_TIMEOUT_SECONDS)  # noqa: E731
-        try:
-            reply = fad._post_with_retry(post, fad.GEMINI_URL.format(model=model), friend_body(text, schema), key, sleep=time.sleep)
-            parts = reply["candidates"][0]["content"]["parts"]
-            joined = "".join(part.get("text", "") for part in parts if isinstance(part, dict) and not part.get("thought"))
-            return "ok", json.loads(joined), ""
-        except fad.ModelCallFailed as error:
-            detail = getattr(error, "detail", None)
-            return getattr(error, "code", "gemini_failed"), None, json.dumps(detail, ensure_ascii=False)[:200] if detail else ""
-        except (KeyError, IndexError, TypeError, json.JSONDecodeError):
-            return "gemini_failed", None, "no_structured_output"
+        url = fad.GEMINI_URL.format(model=model)
+        plain = {"contents": [{"role": "user", "parts": [{"text": text}]}],
+                 "generationConfig": {"responseMimeType": "application/json"}}
+        trail: list[str] = []
+        status = "gemini_failed"
+        for mode, body in (("schema", friend_body(text, schema)), ("plain", plain)):
+            started = time.monotonic()
+            took = lambda: f"{mode} {round(time.monotonic() - started)}s"  # noqa: E731
+            try:
+                reply = fad.http_post(url, body, key, timeout=FRIEND_TIMEOUT_SECONDS)
+                parts = reply["candidates"][0]["content"]["parts"]
+                joined = "".join(part.get("text", "") for part in parts if isinstance(part, dict) and not part.get("thought"))
+                output = json_from_text(joined)
+                if output is not None:
+                    trail.append(f"{took()} ok")
+                    return "ok", output, "; ".join(trail)
+                status = "gemini_failed"
+                trail.append(f"{took()} no_json")
+            except fad.GeminiHttpError as error:
+                status = fad.classify_http_error(error)
+                trail.append(f"{took()} HTTP {error.status}")
+                if status in ("quota", "key_invalid", "key_revoked", "region"):
+                    break
+            except fad.GeminiTimeout:
+                status = "gemini_unavailable"
+                trail.append(f"{took()} timeout")
+            except OSError as error:
+                status = "gemini_unavailable"
+                trail.append(f"{took()} {type(error).__name__}")
+            except (KeyError, IndexError, TypeError):
+                status = "gemini_failed"
+                trail.append(f"{took()} bad_reply")
+        return status, None, "; ".join(trail)
     return ask
 
 

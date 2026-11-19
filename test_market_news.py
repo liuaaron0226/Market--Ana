@@ -465,6 +465,7 @@ class Round4Tests(unittest.TestCase):
         report, _, _ = run(d1, friend_keys=[{"email": FRIEND}], friend_ask=friend_ask)
         self.assertEqual(sizes, [mn.FRIEND_BATCH, 13 - mn.FRIEND_BATCH])
         self.assertIn("1/2", report["friends"][FRIEND])
+        self.assertNotIn(FRIEND, json.loads(d1.query("SELECT sources FROM market_news_runs")[0]["sources"])["judged_users"])
         self.assertEqual(len(d1.query(f"SELECT 1 FROM market_news_user_items WHERE email = '{FRIEND}'")), 13 - mn.FRIEND_BATCH)
         body = mn.friend_body("x", mn.WATCH_SCHEMA)
         self.assertEqual(body["generationConfig"]["thinkingConfig"]["thinkingLevel"], mn.FRIEND_NEWS_EFFORT)
@@ -474,6 +475,101 @@ class Round4Tests(unittest.TestCase):
         self.assertIn("看不出影響", mn.ITEM_RULES)
         self.assertIn("flat", mn.ITEM_RULES.split("看不出影響")[1][:40], "看不出影響的標中性，不是丟掉")
         self.assertIn("不要使用任何工具", mn.ITEM_RULES)
+
+
+class Round5Tests(unittest.TestCase):
+    """2026-11-19 正式跑 run 44535530232 之後的三個小問題。"""
+
+    def test_a_long_commentary_ends_at_a_full_stop(self):
+        text = "台股今天下跌，主要是外資賣超。" * 30
+        cut_text = mn.whole_sentences(text, mn.SUMMARY_MAX)
+        self.assertLessEqual(len(cut_text), mn.SUMMARY_MAX)
+        self.assertTrue(cut_text.endswith("。"))
+        self.assertEqual(mn.whole_sentences("短短一句。", 300), "短短一句。")
+        self.assertGreaterEqual(mn.SUMMARY_MAX, 300)
+
+        class Long(FakeAsk):
+            def __call__(self, prompt, schema):
+                status, output, note = super().__call__(prompt, schema)
+                if "market_commentary" in output:
+                    output["market_commentary"] = "台股今天下跌，主要是外資賣超與輝達調" * 40
+                return status, output, note
+        d1 = D1()
+        run(d1, ask=Long())
+        self.assertTrue(d1.query("SELECT summary FROM market_news_runs")[0]["summary"].endswith("，主要是外資賣超與輝達調") is False)
+
+    def test_who_was_judged_is_recorded_even_when_nothing_related_is_left(self):
+        d1 = D1()
+        d1.db.execute("UPDATE watch_news SET title = '台積電盃馬拉松開跑' WHERE code = '2330'")
+        report, _, _ = run(d1)
+        self.assertEqual(report["owner_watch"], 0)
+        stored = json.loads(d1.query("SELECT sources FROM market_news_runs")[0]["sources"])
+        self.assertEqual(stored["judged_users"], [OWNER])
+
+    def test_a_friend_whose_batches_all_worked_is_judged_and_a_failed_one_is_not(self):
+        def ok(key_row, prompt, schema):
+            payload = json.loads(prompt[prompt.index("INPUT:") + 6:])
+            return "ok", {"watch": [{"id": row["id"], "relevant": "no", "tone": "flat", "impact": "1", "title": "x", "reason": "x"}
+                                    for row in payload["watch"]]}, "schema 3s"
+        d1 = D1()
+        report, _, _ = run(d1, friend_keys=[{"email": FRIEND}], friend_ask=ok)
+        self.assertEqual(json.loads(d1.query("SELECT sources FROM market_news_runs")[0]["sources"])["judged_users"], [OWNER, FRIEND])
+        self.assertEqual(report["friends"][FRIEND], "ok schema 3s")
+        d2 = D1()
+        run(d2, friend_keys=[{"email": FRIEND}], friend_ask=lambda *a: ("gemini_unavailable", None, "schema 120s timeout"))
+        self.assertEqual(json.loads(d2.query("SELECT sources FROM market_news_runs")[0]["sources"])["judged_users"], [OWNER])
+
+
+class FriendCallTests(unittest.TestCase):
+    """朋友的金鑰走 API：逾時就換「不帶結構描述、不指定思考」再試一次，兩次各花幾秒都記下來。"""
+
+    def setUp(self):
+        import friend_ai_digest as fad
+        self.fad = fad
+        self.saved = fad.node_decrypt, fad.http_post
+        fad.node_decrypt = lambda row: "k"
+
+    def tearDown(self):
+        self.fad.node_decrypt, self.fad.http_post = self.saved
+
+    def reply(self, text):
+        return {"candidates": [{"content": {"parts": [{"text": text}]}}]}
+
+    def test_timeout_then_plain_mode_succeeds_and_both_are_timed(self):
+        bodies = []
+
+        def post(url, body, api_key, timeout=None):
+            bodies.append((body, timeout))
+            if len(bodies) == 1:
+                raise self.fad.GeminiTimeout("TimeoutError")
+            return self.reply('```json\n{"watch": []}\n```')
+        self.fad.http_post = post
+        status, output, note = mn._friend_asker("gemini-3.8-flash")({"email": FRIEND}, "x", mn.WATCH_SCHEMA)
+        self.assertEqual((status, output), ("ok", {"watch": []}))
+        self.assertIn("responseJsonSchema", bodies[0][0]["generationConfig"])
+        self.assertNotIn("responseJsonSchema", bodies[1][0]["generationConfig"])
+        self.assertNotIn("thinkingConfig", bodies[1][0]["generationConfig"])
+        self.assertEqual(bodies[0][1], mn.FRIEND_TIMEOUT_SECONDS)
+        self.assertRegex(note, r"schema \d+s timeout; plain \d+s ok")
+
+    def test_both_time_out(self):
+        def post(url, body, api_key, timeout=None):
+            raise self.fad.GeminiTimeout("TimeoutError")
+        self.fad.http_post = post
+        status, output, note = mn._friend_asker("gemini-3.8-flash")({"email": FRIEND}, "x", mn.WATCH_SCHEMA)
+        self.assertEqual((status, output), ("gemini_unavailable", None))
+        self.assertRegex(note, r"schema \d+s timeout; plain \d+s timeout")
+
+    def test_a_key_problem_is_not_retried(self):
+        calls = []
+
+        def post(url, body, api_key, timeout=None):
+            calls.append(1)
+            raise self.fad.GeminiHttpError(403)
+        self.fad.http_post = post
+        status, _, note = mn._friend_asker("gemini-3.8-flash")({"email": FRIEND}, "x", mn.WATCH_SCHEMA)
+        self.assertEqual((status, len(calls)), ("key_revoked", 1))
+        self.assertIn("HTTP 403", note)
 
 
 class EnvelopeTests(unittest.TestCase):
@@ -542,17 +638,3 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class FriendErrorTests(unittest.TestCase):
-    def test_the_friend_error_detail_comes_back(self):
-        # 2026-11-19 正式跑：朋友那份只寫 gemini_unavailable——細節在例外的 .detail，不在 args。
-        import friend_ai_digest as fad
-        saved = fad.node_decrypt, fad._post_with_retry
-        def boom(*args, **kwargs):
-            raise fad.ModelCallFailed("gemini_unavailable", None, {"error": "GeminiTimeout", "attempts": 1})
-        try:
-            fad.node_decrypt, fad._post_with_retry = (lambda row: "k"), boom
-            status, output, note = mn._friend_asker("gemini-3.8-flash")({"email": FRIEND}, "x", mn.WATCH_SCHEMA)
-        finally:
-            fad.node_decrypt, fad._post_with_retry = saved
-        self.assertEqual((status, output), ("gemini_unavailable", None))
-        self.assertIn("GeminiTimeout", note)
