@@ -265,10 +265,25 @@ async function serveStatic(pathname) {
   if (!extname(p)) p += "/index.html";
   try {
     const body = await readFile(new URL("." + p, dist));
-    return new Response(body, { headers: { "content-type": TYPES[extname(p)] || "application/octet-stream" } });
+    return new Response(body, { headers: { ...pagesHeaders(), "content-type": TYPES[extname(p)] || "application/octet-stream" } });
   } catch {
     return new Response("not found", { status: 404 });
   }
+}
+
+// 正式站的靜態檔會帶 cloud/dist/_headers 的標頭（Cloudflare Pages 套在靜態檔上，Functions 的回應不套）。
+// 這裡照樣套上「/*」那一段，快取行為才和正式站一樣（量換頁速度用，見 design-previews/ui-polish/measure-nav.py）。
+function pagesHeaders() {
+  const file = new URL("_headers", dist);
+  if (!existsSync(file)) return {};
+  const found = {};
+  let inAll = false;
+  for (const line of readFileSync(file, "utf8").split(/\r?\n/)) {
+    if (!/^\s/.test(line)) { inAll = line.trim() === "/*"; continue; }
+    const at = line.indexOf(":");
+    if (inAll && at > 0) found[line.slice(0, at).trim().toLowerCase()] = line.slice(at + 1).trim();
+  }
+  return found;
 }
 
 const server = createServer(async (req, res) => {

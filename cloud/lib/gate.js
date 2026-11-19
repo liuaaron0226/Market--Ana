@@ -799,6 +799,34 @@ async function handleMarketApi(request, env, path, email, deps, options = {}) {
 // 只登出本站（本站網址的 /cdn-cgi/access/logout）的話，Access 的登入還在，回來會自動用同一個帳號登入，換不了帳號。
 const logoutUrl = (env) => `${String(env.TEAM_DOMAIN).replace(/\/+$/, "")}/cdn-cgi/access/logout`;
 
+// 換頁速度（本人 2026-11-20「從主要切換到自選股會卡頓」；正式站實測每換一頁要重抓 21～41 個 css／js）：
+// 靜態檔預設一律不快取（_headers 的 no-store）。只有「網址帶的版本就是這個檔內容的雜湊」的 css／js 例外——
+// 內容不會再變，讓瀏覽器自己留一年、下次換頁不用再問。雜湊由 build.mjs 蓋在頁面上（build-page.js 的 stampAssets），
+// 這裡再算一次回應內容確認對得上才開：網址寫錯、部署交接時新舊檔對不上，都照舊不快取。
+// 只留在使用者自己的瀏覽器（private）；頁面本身與所有 API 照舊 no-store，停權後一樣進不來。
+const HASHED_ASSET_CACHE = "private, max-age=31536000, immutable";
+// 另一個每次換頁都多跑一趟的：Pages 會把 /portfolio.html 轉址到 /portfolio（正式站實測 55～77 毫秒，手機網路更久）。
+// 這個轉址是固定的，讓瀏覽器記一天；轉過去的頁面照樣要過閘門。
+const PAGE_REDIRECT_CACHE = "private, max-age=86400";
+async function cacheHashedAsset(request, response) {
+  if (request.method !== "GET") return response;
+  const url = new URL(request.url);
+  if ((response.status === 308 || response.status === 301) && url.pathname.endsWith(".html")) {
+    const redirect = new Response(null, response);
+    redirect.headers.set("cache-control", PAGE_REDIRECT_CACHE);
+    return redirect;
+  }
+  if (response.status !== 200) return response;
+  const version = url.searchParams.get("v") || "";
+  if (!/\.(?:css|js)$/.test(url.pathname) || !/^[0-9a-f]{12}$/.test(version)) return response;
+  const body = await response.arrayBuffer();
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", body));
+  const hash = [...digest.slice(0, 6)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  const copy = new Response(body, response);
+  if (hash === version) copy.headers.set("cache-control", HASHED_ASSET_CACHE);
+  return copy;
+}
+
 export async function handle(request, env, next, deps = defaultDeps) {
   const { TEAM_DOMAIN, MAIN_AUD, APPLY_AUD, OWNER_EMAIL, DB } = env;
   if (!TEAM_DOMAIN || !MAIN_AUD || !APPLY_AUD || !OWNER_EMAIL || !DB) return fail(503, "服務設定未完成");
@@ -829,7 +857,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
   try {
     if (isApply) {
       if (path.startsWith("/apply/api/")) return await handleApplyApi(request, env, path, email, isOwner);
-      return await next();
+      return await cacheHashedAsset(request, await next());
     }
 
     const isAdmin = path === "/admin" || path.startsWith("/admin/") || path.startsWith("/api/admin/");
@@ -866,7 +894,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
       if (isScreens) return await handleScreensApi(request, env, path, email, deps);
       if (path === DATA_STATUS_PATH) return handleDataStatusApi(request, deps);
       if (RETIRED_DATA.has(path)) return fail(404, "找不到");
-      return await next();
+      return await cacheHashedAsset(request, await next());
     }
 
     const status = await statusOf(DB, email);
@@ -898,7 +926,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
     if (isScreens) return await handleScreensApi(request, env, path, email, deps);
     if (path === DATA_STATUS_PATH) return handleDataStatusApi(request, deps);
     if (RETIRED_DATA.has(path)) return fail(404, "找不到");
-    return await next();
+    return await cacheHashedAsset(request, await next());
   } catch (e) {
     if (e instanceof HttpError || e instanceof UserPortfolioError) return fail(e.status, e.message);
     return fail(503, "暫時無法處理，請稍後再試");

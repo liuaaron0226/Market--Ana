@@ -9,7 +9,7 @@ import { screensModuleText, validateScreensPack } from "./lib/build-screens.js";
 import { dataStatusModuleText, validateDataStatus } from "./lib/build-status.js";
 import { compareModuleText, validateComparePack } from "./lib/build-compare.js";
 
-import { cloudPage, WEB_FILES, RETIRED } from "./lib/build-page.js";
+import { cloudPage, stampAssets, WEB_FILES, RETIRED } from "./lib/build-page.js";
 
 const root = new URL("./", import.meta.url);
 const web = new URL("../web/", import.meta.url);
@@ -130,7 +130,14 @@ for (const f of listed) {
   if (/window\.MARKET_[A-Z]+\s*=|C:[\\/]Users|by_date|"daily"\s*:\s*\[/.test(text)) throw new Error(`${f} 疑似含資料或本機路徑`);
 }
 
-const sums = listed.sort().map((f) => `${createHash("sha256").update(readFileSync(new URL(f, dist))).digest("hex").slice(0, 12)}  ${f}`);
+// 每一頁引用的 css／js 改帶內容雜湊（stampAssets）：瀏覽器可以長期留著，內容一變網址就變。先算檔案雜湊、再改頁面。
+const hashOf = (f) => createHash("sha256").update(readFileSync(new URL(f, dist))).digest("hex").slice(0, 12);
+const assetHashes = new Map(listed.filter((f) => /\.(css|js)$/.test(f)).map((f) => [f, hashOf(f)]));
+for (const f of listed.filter((name) => name.endsWith(".html"))) {
+  writeFileSync(new URL(f, dist), stampAssets(readFileSync(new URL(f, dist), "utf8"), f, (file) => assetHashes.get(file) ?? null));
+}
+
+const sums = listed.sort().map((f) => `${hashOf(f)}  ${f}`);
 console.log(sums.join("\n"));
 console.log(`stock pack ${stockPack.as_of}（${Object.keys(stockPack.results).length} 檔，${ANALYSIS_SCHEMA}）`);
 console.log(`screens pack ${screensInfo.dataDate}（${screensInfo.screens} 組結果，${screensInfo.membership} 檔名單代號，${(Buffer.byteLength(JSON.stringify(screensPack)) / 1024) | 0} KB）`);

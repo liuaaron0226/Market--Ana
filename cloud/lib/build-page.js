@@ -76,3 +76,15 @@ export function cloudPage(html, retired = RETIRED) {
   page = page.replace(open, `<script src="/market-data-cloud.js"></script>\n  ${open}`);
   return page;
 }
+
+// 換頁速度（本人 2026-11-20「從主要切換到自選股會卡頓」）：頁面引用的 css／js 一律改帶「內容雜湊」當版本（?v=12 碼）。
+// 檔案內容一變雜湊就變，瀏覽器才可以放心把舊的留著不重抓（閘門只對雜湊對得上的回應開快取，見 gate.js 的 cacheHashedAsset）。
+// 原本手動換的版本標籤（?v=20261120-desk71 之類）在本機照舊有用；上雲時由這裡蓋掉，忘了換標籤也不會讓人拿到舊檔。
+// page 是這一頁在 dist 裡的路徑（例如 "admin/index.html"），hashOf(路徑) 回那個檔的雜湊，不是 dist 裡的檔就回 null（外部網址、資料連結原樣不動）。
+export function stampAssets(html, page, hashOf) {
+  const dir = page.includes("/") ? page.slice(0, page.lastIndexOf("/") + 1) : "";
+  return html.replace(/\b(href|src)="([^"?#:]+\.(?:css|js))(?:\?[^"#]*)?"/g, (whole, attribute, file) => {
+    const hash = hashOf(file.startsWith("/") ? file.slice(1) : dir + file);
+    return hash ? `${attribute}="${file}?v=${hash}"` : whole;
+  });
+}
