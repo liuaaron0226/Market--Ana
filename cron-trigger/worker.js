@@ -22,6 +22,10 @@ export const JOBS = {
   "30 8": { workflow: "daily-update.yml", slot: "30 8 * * 1-5", inputs: { dry_run: "false" } },    // 16:30
   "0 10": { workflow: "daily-update.yml", slot: "0 10 * * 1-5", inputs: { dry_run: "false" } },    // 18:00
   "30 12": { workflow: "daily-update.yml", slot: "30 12 * * 1-5", inputs: { dry_run: "false" } },  // 20:30
+  // 首頁「消息」（本人 2026-11-19）：午盤 11:30、收盤後 14:00。正式寫入仍要 MARKET_ANA_MARKET_NEWS_SCHEDULE=on。
+  // 盤前 08:00 那一輪由 market-news.yml 接在公司重大訊息後面跑，不在這裡。
+  "30 3": { workflow: "market-news.yml", slot: "30 3 * * 1-5", weekday: "MON-FRI", inputs: { slot: "midday", dry_run: "false" } }, // 11:30
+  "0 6": { workflow: "market-news.yml", slot: "0 6 * * 1-5", weekday: "MON-FRI", inputs: { slot: "close", dry_run: "false" } },   // 14:00
   // 公司重大訊息的每日原件（個股頁事實區塊 D 票，本人 2026-11-16）：官方快照只留前一天，所以每天都抓、含週末。
   "0 0": { workflow: "announcements.yml", slot: "0 0 * * *", inputs: {} },                         // 08:00
   // 晨間版大盤預測（本人 11-18 回報 K 線一直「漏記」）：GitHub 的 schedule 晚了 4～5 小時才跑，都過了 08:45 的期限，

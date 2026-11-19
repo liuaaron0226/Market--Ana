@@ -253,9 +253,10 @@ jobs:
         run: |
           if [ -n "$DRY_RUN" ]; then python announcements.py daily --r2 --no-upload; else python announcements.py daily --r2; fi
 
-      - name: 關注股的新聞標題：抓 Yahoo股市與中央社，寫進 D1
-        # 自選股關注 C 票：只抓站主正在關注的股票（Yahoo 每檔一次）與中央社三個分類，標題、前言、連結直接寫進 D1 的 watch_news
-        # （不跟個股資料版本走），超過 90 天的同時清掉。資料表還沒建立（0015 未套）就什麼都不抓。
+      - name: 個股新聞標題：抓 Google News 大媒體與中央社，寫進 D1
+        # 本人 2026-11-19：名單＝股票池前 50（上一班寫的 stock_news_pool）＋每個人的自選＋每個人最近 10 筆搜尋；
+        # 來源改 Google News 只收大媒體（路透、Bloomberg、中央社、金融時報、華爾街日報、日經），Yahoo 逐檔停用。
+        # 首頁消息（market-news.yml）每輪也會先抓一次；這裡照舊每天一次，標題直接寫進 D1 的 watch_news，超過 90 天的同時清掉。
         # 失敗不擋發布：個股頁的新聞那一塊會標「今天沒抓到」。試跑不寫 D1，所以整步跳過。
         if: steps.day.outputs.dry_run == ''
         continue-on-error: true
@@ -334,6 +335,18 @@ jobs:
           else
             echo "本次沒有新發布，不抓國外同類股"
           fi
+
+      - name: 個股新聞名單：股票池前一交易日成交金額前 50 與英文簡稱（只在發布成功時）
+        # 本人 2026-11-19「股票池中有進入到量大前50名」：剛發布的股票池快照＋行情庫最新一天的成交金額 → stock_news_pool；
+        # 證交所／櫃買公開資料的英文簡稱 → stock_news_names（Google News 用英文名搜大媒體）。0031 還沒套時寫不進去，不擋發布。
+        if: success() && steps.day.outputs.dry_run == ''
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          sync=$(python -c "import json,sys; print(json.load(open(sys.argv[1], encoding='utf-8'))['sync_state'])" "${{ runner.temp }}/daily-result.json")
+          if [ "$sync" = "True" ]; then python watch_news.py pool --d1; else echo "本次沒有新發布，名單維持上一版"; fi
 
       - name: 建立本次發布證據
         id: publication_evidence
