@@ -106,8 +106,7 @@
     };
   }
 
-  function candidates(bars, values) {
-    const close = bars.at(-1).close;
+  function candidates(bars, values, close = bars.at(-1).close) {
     const output = [];
     const add = (kind, value, label, date = null) => {
       if (finite(value) && Number(value) > 0) output.push({ kind, value: pyRound(Number(value), 2), label, date });
@@ -213,13 +212,14 @@
       sources: group.map(({ kind, label, value, date }) => ({ kind, label, value, date })) };
   }
 
-  function priceLevels(bars, values) {
+  // price：拿來分上下的價格。沒給就用最後一根收盤（盤後）；盤中給現價，候選價位仍只用 bars（昨天收盤為止）算。
+  function priceLevels(bars, values, price = null) {
     const empty = { aggregation_tolerance_pct: null, observable_range_pct: null, resistance: [], support: [], resistance_all: [], support_all: [], no_resistance_above: false, limit_up_reference: null };
     if (!values.atr_pct) return empty;
-    const close = bars.at(-1).close;
+    const close = finite(price) ? Number(price) : bars.at(-1).close;
     const tolerance = pyRound(Math.min(3, Math.max(1, .6 * values.atr_pct)), 2);
     const observable = pyRound(Math.min(20, Math.max(8, 4 * values.atr_pct)), 2);
-    const factors = candidates(bars, values);
+    const factors = candidates(bars, values, close);
     const above = factors.filter(item => SHARED.has(item.kind) && item.value > close * 1.001).sort((a, b) => a.value - b.value);
     const resistanceGroups = [];
     for (const item of above) {
@@ -297,7 +297,12 @@
       change_sign: quote.change > 0 ? '+' : quote.change < 0 ? '-' : '' };
     result.bars = bars;
     result.indicators = values;
-    result.levels = priceLevels(bars, values);
+    // 本人 11-19「固定住」：盤中壓力／支撐的數字用前一交易日收盤那組（不含今天這根），整天不變，只依現價分上下。
+    // 收盤後到日資料發布前，今天這根已經收定，照舊用含今天的整組算（和發布後一致）。
+    const settled = (base.bars || []).filter(item => item.date < bar.date);
+    result.levels = live.market_open && settled.length
+      ? priceLevels(settled, indicators(settled, base.indicators), quote.price)
+      : priceLevels(bars, values);
     result.conditions = projectedConditions(base.conditions, values, bars);
     result.reference = { ...(result.reference || {}), low20_intraday: { ...(result.reference?.low20_intraday || {}), value: values.low20_intraday } };
     // closed：收盤後的報價；final：伺服器確認是收盤價（close_pending 時還只是收盤前最後一筆成交）。

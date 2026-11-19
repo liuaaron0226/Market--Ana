@@ -41,15 +41,37 @@ test("盤中現價以 Python 同一套規則重算指標、價位、主要訊號
       low20_close: 2135, prior_high20: 2575, low20_intraday: 2020, k9: 39.26, d9: 26.6,
       macd_dif: -62.027, macd_dea: -43.016, macd_hist: -19.01 },
   );
-  assert.equal(projected.levels.resistance[0].tick, 2295);
-  assert.equal(projected.levels.resistance[1].tick, 2405);
-  assert.equal(projected.levels.support[0].tick, 2240);
-  assert.equal(projected.levels.support[1].tick, 2195);
+  // 價位（壓力／支撐）盤中固定用昨天收盤那組，見下一個測試；這裡只確認上下位置照現價分。
+  assert.ok(projected.levels.resistance.every((item) => item.level > 2265));
+  assert.ok(projected.levels.support.every((item) => item.level < 2265));
   assert.equal(projected.conditions.confirmed.ma_trend.state, "triggered");
   assert.equal(projected.conditions.confirmed.kd_bullish.state, "triggered");
   assert.equal(projected.conditions.confirmed.volume_confirmed.state, "confirming");
   assert.equal(projected.conditions.confirmed.revenue_decline.state, base.conditions.confirmed.revenue_decline.state);
   assert.equal(projected.reference.low20_intraday.value, 2020);
+});
+
+// 本人 11-19「為什麼壓力支撐會一直變動」→ 選「固定住」：盤中價位數字一律用前一交易日收盤算的那組，
+// 整天不變，只依現價決定在上（壓力）或下（支撐）。
+const levelValues = (levels) => [...levels.resistance_all, ...levels.support_all]
+  .flatMap((group) => group.sources.map((source) => `${source.kind}:${source.value}`)).sort();
+
+test("盤中價位用昨天收盤那組：均線價位是昨天的值，不跟著現價跳", () => {
+  const I = loadIntraday();
+  const yesterday = I._test.indicators(base.bars, base.indicators);
+  const projected = I.projectAnalysis(base, live);
+  const sources = [...projected.levels.resistance_all, ...projected.levels.support_all].flatMap((group) => group.sources);
+  const ma5 = sources.find((source) => source.kind === "ma5");
+  assert.ok(ma5, "MA5 應該在價位候選裡");
+  assert.equal(ma5.value, yesterday.ma5);
+  assert.notEqual(ma5.value, projected.indicators.ma5);
+});
+
+test("盤中現價小幅變動，價位候選的數字完全不變", () => {
+  const I = loadIntraday();
+  const moved = structuredClone(live);
+  moved.quote = { ...moved.quote, price: 2266, high: 2280, low: 2255 };
+  assert.deepEqual(levelValues(I.projectAnalysis(base, moved).levels), levelValues(I.projectAnalysis(base, live).levels));
 });
 
 test("MIS 暫缺 OHLC 或成交量時保留盤後分析，不把 null 當成 0", () => {
