@@ -37,6 +37,8 @@ export const WEB_FILES = [
   "scroll-lock.js",
   // 手機鍵盤彈出時，浮層與搜尋結果縮到鍵盤上緣以上（本人 11-20：搜尋最下面幾檔被鍵盤擋住）
   "keyboard-inset.js",
+  // 動效（本人 11-20 選「B 資料會動」＋「C 板有重量」）：數字逐位滾動、板落桌、更新時光掃過
+  "motion-fx.js", "motion-fx.css",
   // 頁面不給縮放（本人 11-18；雙指縮放在 iOS 要靠 JS 擋）
   "no-zoom.js",
   // 個股頁事實區塊（2026-11-15 規格，A 票）

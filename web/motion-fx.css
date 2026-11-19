@@ -1,0 +1,75 @@
+/* 動效的樣式（motion-fx.js；本人 2026-11-20 選「B 資料會動」＋「C 板有重量」）。三個頁面共用。
+   只動 transform／opacity／虛線位移；顏色、圓角只用 minimal.css、bold.css 的變數。紅綠只出現在數字底下那條細線。
+   系統設定「減少動態」時這裡整段不生效（最下面）。 */
+
+/* ---------- B1. 逐位滾動的數字：真正的字變透明，上面疊一層數字欄（只在滾的時候存在） ---------- */
+.fx-num { position: relative; }
+.fx-rolling { color: transparent !important; }
+.fx-odo {
+  position: absolute; top: 0; left: 0; height: var(--fx-lh); display: inline-flex; overflow: hidden;
+  color: var(--fx-ink); line-height: var(--fx-lh); white-space: pre; pointer-events: none;
+}
+.fx-odo i { display: block; font-style: normal; height: var(--fx-lh); }
+.fx-odo i[data-c]::before { content: attr(data-c); }
+/* 數字欄：0～9 直排，用 content 畫（不是真的文字，不會跑進 textContent） */
+.fx-odo .fx-col::before { content: "0\A 1\A 2\A 3\A 4\A 5\A 6\A 7\A 8\A 9"; display: block; white-space: pre; }
+
+/* ---------- B2. 數值改變：數字底下一條細線掃過 ---------- */
+.fx-tick::after {
+  content: ""; position: absolute; left: 0; bottom: -.1em; width: 34%; height: 2px; border-radius: 1px;
+  background: var(--fx-tone, var(--dim)); pointer-events: none;
+  animation: fx-tick 900ms cubic-bezier(.3, 0, .2, 1) both;
+}
+.fx-tick[data-fx-tone="up"] { --fx-tone: var(--up); }
+.fx-tick[data-fx-tone="down"] { --fx-tone: var(--down); }
+@keyframes fx-tick {
+  0% { transform: translateX(0); opacity: 0; }
+  15%, 80% { opacity: 1; }
+  100% { transform: translateX(194%); opacity: 0; }
+}
+
+/* ---------- C2. 資料更新：一道淡淡的光掃過那塊板 ---------- */
+.fx-sheen-host { position: relative; }
+.fx-sheen { position: absolute; inset: 0; z-index: 1; border-radius: inherit; overflow: hidden; pointer-events: none; }
+.fx-sheen::before {
+  content: ""; position: absolute; top: -20%; bottom: -20%; left: 0; width: 46%;
+  background: linear-gradient(100deg, transparent, color-mix(in srgb, var(--gold) 15%, transparent) 45%, transparent);
+  transform: translateX(-130%) skewX(-12deg);
+  animation: fx-sheen 900ms cubic-bezier(.3, 0, .2, 1) both;
+}
+@keyframes fx-sheen { to { transform: translateX(260%) skewX(-12deg); } }
+
+@media (prefers-reduced-motion: no-preference) {
+  /* ---------- B3. 籌碼卡：展開那一類時，卡片依序浮起、小圖自己畫出來、柱子從基準線長出來 ---------- */
+  [data-cat-panel][data-open] .chip-card { animation: fx-rise 520ms var(--ease-depth) both; }
+  [data-cat-panel][data-open] .chip-card:nth-child(2) { animation-delay: 60ms; }
+  [data-cat-panel][data-open] .chip-card:nth-child(3) { animation-delay: 120ms; }
+  [data-cat-panel][data-open] .chip-card:nth-child(4) { animation-delay: 180ms; }
+  [data-cat-panel][data-open] .chip-card:nth-child(5) { animation-delay: 240ms; }
+  [data-cat-panel][data-open] .chip-card:nth-child(n+6) { animation-delay: 300ms; }
+  @keyframes fx-rise { from { opacity: 0; transform: translateY(10px); } }
+  /* 走勢線：虛線長度取得比線本身長，位移從整段藏起來走到 0，看起來就是從左畫到右 */
+  [data-cat-panel][data-open] .chip-card .spark polyline {
+    stroke-dasharray: 460; stroke-dashoffset: 460; animation: fx-draw 1200ms cubic-bezier(.3, 0, .2, 1) 260ms both;
+  }
+  @keyframes fx-draw { to { stroke-dashoffset: 0; } }
+  [data-cat-panel][data-open] .chip-card .spark circle { animation: fx-dot 320ms ease-out 1100ms both; }
+  @keyframes fx-dot { from { opacity: 0; } }
+  /* 柱子：買超（往上的）從下緣長、賣超（往下的）從上緣長，都是從基準線出發 */
+  [data-cat-panel][data-open] .chip-card .spark rect { transform-box: fill-box; transform-origin: 50% 100%; animation: fx-grow 520ms var(--ease-depth) 200ms both; }
+  [data-cat-panel][data-open] .chip-card .spark rect[fill="var(--down)"] { transform-origin: 50% 0; }
+  [data-cat-panel][data-open] .chip-card .spark rect:nth-of-type(n+6) { animation-delay: 260ms; }
+  [data-cat-panel][data-open] .chip-card .spark rect:nth-of-type(n+11) { animation-delay: 320ms; }
+  [data-cat-panel][data-open] .chip-card .spark rect:nth-of-type(n+16) { animation-delay: 380ms; }
+  @keyframes fx-grow { from { transform: scaleY(0); } }
+
+  /* ---------- B3. 隔日三區分布：捲到才由左往右展開（motion-fx.js 加 .fx-in） ---------- */
+  .distribution-bar.fx-in > button { transform-origin: left center; animation: fx-spread 620ms var(--ease-depth) both; }
+  .distribution-bar.fx-in > button:nth-child(2) { animation-delay: 110ms; }
+  .distribution-bar.fx-in > button:nth-child(3) { animation-delay: 220ms; }
+  @keyframes fx-spread { from { opacity: 0; transform: scaleX(.2); } }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fx-tick::after, .fx-sheen { display: none; }
+}
