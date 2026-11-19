@@ -287,7 +287,13 @@
         }
         // 拖線途中放上第二指：線回原位，改成雙指縮放。
         if (pts.size === 2 && drag?.kind === 'drawing') { this.drawings.drop(false); this.draw(); }
-        if (pts.size === 2) { const xs = [...pts.values()].map(point => point.x); drag = { kind: 'pinch', pinch: Math.max(20, Math.abs(xs[0] - xs[1])), count: this.view.count, end: this.view.end, hadPinch: true }; }
+        // 兩指縮放以兩指中點為中心（本人 11-19：原本固定右端，感覺是從右邊放大）：
+        // 按下時記住中點底下是第幾根（含小數），之後每次移動都讓那一根留在兩指中點底下。
+        if (pts.size === 2 && this.geo) {
+          const xs = [...pts.values()].map(point => point.x), g = this.geo;
+          const anchor = g.start + ((xs[0] + xs[1]) / 2 - rect.left - g.l) / g.step;
+          drag = { kind: 'pinch', pinch: Math.max(20, Math.abs(xs[0] - xs[1])), count: this.view.count, anchor, hadPinch: true };
+        }
         // 兩點畫線點了第一下之後：手指一按下去，預覽線就跟到手指的位置（手機沒有游標可以先移過去）。
         if (c === this.canvas && this.drawings && this.drawings.trackPointer(e.clientX - rect.left, e.clientY - rect.top)) this.draw();
         c.style.cursor = 'grabbing';
@@ -301,7 +307,11 @@
         if (c === this.canvas && this.drawings) this.drawings.trackPointer(x, e.clientY - rect.top); // 預覽線跟著游標或手指
         if (drag?.kind === 'pinch' && pts.size === 2) {
           const xs = [...pts.values()].map(point => point.x); const d = Math.max(20, Math.abs(xs[0] - xs[1]));
-          this.busy = true; this.view.count = drag.count * drag.pinch / d; this.view.end = drag.end; this.clamp(); this.draw(); this.emit(); return;
+          const ratio = ((xs[0] + xs[1]) / 2 - rect.left - g.l) / g.pw;
+          this.busy = true; this.view.count = drag.count * drag.pinch / d; this.clamp();
+          // 錨點那一根要落在中點：start＋count×ratio＝anchor，所以 end＝anchor＋count×(1−ratio)。
+          this.view.end = Math.round(drag.anchor + this.view.count * (1 - ratio)); this.clamp();
+          this.draw(); this.emit(); return;
         }
         if (drag?.kind === 'single' && pts.size === 1) {
           const dx = e.clientX - drag.x, slop = drag.touch ? TAP_SLOP.touch : TAP_SLOP.mouse;
