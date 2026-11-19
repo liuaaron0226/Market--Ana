@@ -139,6 +139,22 @@ def main() -> int:
                 page.evaluate("() => window.__setKeyboard(0, 0)")
                 page.evaluate("() => document.getElementById('stockSearchDialog').close()")
                 settle(page)
+            # 手指在清單上一滑：鍵盤收起來（輸入框失焦），面板留著；在輸入框上滑不算
+            page.tap("#searchToggle")
+            page.wait_for_selector("#stockSearchDialog[open]")
+            page.focus("#stockSearchInput")
+            swipe = """selector => {
+              const el = document.querySelector(selector), box = el.getBoundingClientRect();
+              const touch = new Touch({ identifier: 1, target: el, clientX: box.left + 20, clientY: box.top + 10 });
+              el.dispatchEvent(new TouchEvent('touchmove', { bubbles: true, touches: [touch], targetTouches: [touch], changedTouches: [touch] }));
+              return { focused: document.activeElement && document.activeElement.id, open: document.getElementById('stockSearchDialog').open };
+            }"""
+            on_input = page.evaluate(swipe, "#stockSearchInput")
+            check("首頁搜尋：手指在輸入框上滑，鍵盤不收", on_input == {"focused": "stockSearchInput", "open": True}, on_input)
+            on_list = page.evaluate(swipe, "#stockSearchSuggestions, #stockSearchResults")
+            check("首頁搜尋：手指在清單上一滑，鍵盤收起來、面板留著", on_list["focused"] != "stockSearchInput" and on_list["open"], on_list)
+            page.evaluate("() => document.getElementById('stockSearchDialog').close()")
+            settle(page)
             check("首頁：關掉搜尋之後頁面照常可以捲", page.evaluate("() => { window.scrollTo(0, 400); return window.scrollY; }") > 300)
 
             page.route("**/api/stocks/search?*", lambda route: route.fulfill(json={"source_date": "2026-11-09", "items": SIX, "next_cursor": None}))
