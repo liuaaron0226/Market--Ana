@@ -29,6 +29,7 @@
     'forecast-ledger': '晚間事前預測',
     'forecast-morning': '晨間事前預測',
     'forecast-replay': '歷史重播',
+    'market-news': '首頁消息',
   };
   const TAIPEI = 8 * 3600_000;
   const WEEKDAYS = '日一二三四五六';
@@ -107,6 +108,7 @@
     watch_nominate: { name: '提名國外同類股', sub: '' },
     plain: { name: '籌碼與資金白話', sub: '' },
     digest: { name: '站主 AI 解讀', sub: '' },
+    news: { name: '首頁消息', sub: '盤前・午盤・收盤後' },
   };
   const MODEL_CHOICES = [['gemini-4-argon', 'Argon'], ['gemini-3.8-flash', 'Flash']];
   const EFFORT_CHOICES = [['low', '低'], ['medium', '中'], ['high', '高']];

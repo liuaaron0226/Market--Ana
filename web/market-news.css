@@ -1,0 +1,67 @@
+/* 首頁「消息」（本人 2026-11-19，排法 A；樣品 design-previews/market-news/）。外面的板沿用 .market-screens .screen-block，
+   這裡只排裡面：總結、指數、一排市場鍵（和上面分類鍵同一種槽與鍵，小一號）、一則一則的新聞。紅綠只在細記號與漲跌幅上。 */
+body.hm #marketNews .news-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; position: relative; }
+body.hm #marketNews .news-head .screen-meta { margin-top: 2px; }
+body.hm #marketNews .news-date-menu { right: 0; left: auto; width: min(320px, calc(100vw - 48px)); }
+body.hm #marketNews .news-dates { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
+body.hm #marketNews .news-dates button {
+  height: 34px; border: 0; border-radius: var(--r-key); background: transparent; color: var(--dim);
+  font: 500 13px var(--mono); cursor: pointer;
+}
+body.hm #marketNews .news-dates button[aria-pressed="true"] { background: var(--key); color: var(--ink); font-weight: 700; box-shadow: var(--key-shadow); }
+
+/* 總結：一段文字＋一排指數，數字不加底框 */
+body.hm #marketNews .news-summary { margin-top: 14px; padding-bottom: 18px; border-bottom: 1px solid var(--hair); }
+body.hm #marketNews .news-summary-label { font-size: 12px; color: var(--faint); }
+body.hm #marketNews .news-summary-text { margin-top: 6px; font: 500 17px/1.7 var(--serif); color: var(--ink); text-wrap: pretty; }
+body.hm #marketNews .news-indices { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 12px; font-size: 12.5px; color: var(--dim); }
+body.hm #marketNews .news-index { display: inline-flex; gap: 6px; align-items: baseline; white-space: nowrap; }
+body.hm #marketNews .news-index b { font: 600 13px var(--mono); color: var(--dim); }
+body.hm #marketNews .news-index b.is-up { color: var(--up); }
+body.hm #marketNews .news-index b.is-down { color: var(--down); }
+
+/* 一排市場鍵 */
+body.hm #marketNews .news-seg {
+  display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); margin-top: 16px;
+  padding: var(--track-pad); gap: var(--track-gap); border-radius: var(--r-track); background: var(--well); box-shadow: var(--well-shadow);
+}
+body.hm #marketNews .news-seg[hidden] { display: none; }
+body.hm #marketNews .news-seg button {
+  height: 38px; border: 0; border-radius: var(--r-key); background: transparent; color: var(--dim); font: 500 14px var(--sans);
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer;
+  transition: color 200ms var(--ease-out);
+}
+body.hm #marketNews .news-seg button small { font-size: 11px; color: var(--faint); }
+body.hm #marketNews .news-seg button[aria-selected="true"] { background: var(--key); color: var(--ink); font-weight: 700; box-shadow: var(--key-shadow); }
+@media (max-width: 420px) {
+  body.hm #marketNews .news-seg button { font-size: 13px; }
+  body.hm #marketNews .news-seg button small { display: none; }
+}
+body.hm #marketNews .screen-status { margin-top: 14px; }
+
+/* 一則：細記號（利多／利空）＋標題（連結）＋一句理由＋出處、時間、影響 */
+body.hm #marketNews .news-list { list-style: none; margin: 4px 0 0; padding: 0; }
+body.hm #marketNews .news-item { padding: 14px 0; border-top: 1px solid var(--hair); }
+body.hm #marketNews .news-item:first-child { border-top: 0; }
+body.hm #marketNews .news-item-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 12px; margin-bottom: 4px; }
+body.hm #marketNews .news-tone { display: inline-flex; align-items: center; gap: 5px; font-weight: 700; color: var(--dim); }
+body.hm #marketNews .news-tone::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+body.hm #marketNews .news-tone.tone-up { color: var(--up); }
+body.hm #marketNews .news-tone.tone-up::before { background: var(--up); }
+body.hm #marketNews .news-tone.tone-down { color: var(--down); }
+body.hm #marketNews .news-tone.tone-down::before { background: var(--down); }
+body.hm #marketNews .news-tag { color: var(--faint); }
+body.hm #marketNews .news-title { display: block; font: 600 15.5px/1.5 var(--sans); color: var(--ink); text-decoration: none; text-wrap: pretty; }
+@media (hover: hover) { body.hm #marketNews .news-title:hover { text-decoration: underline; text-underline-offset: 3px; } }
+body.hm #marketNews .news-title::after { content: " ↗"; font-weight: 400; color: var(--faint); font-size: 12px; }
+body.hm #marketNews .news-reason { margin-top: 4px; font-size: 13.5px; line-height: 1.6; color: var(--dim); }
+body.hm #marketNews .news-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 6px; font-size: 12px; color: var(--faint); }
+body.hm #marketNews .news-impact { display: inline-flex; align-items: center; gap: 6px; }
+body.hm #marketNews .news-bars { display: inline-flex; gap: 2px; align-items: flex-end; height: 10px; }
+body.hm #marketNews .news-bars b { width: 3px; border-radius: 1px; background: color-mix(in srgb, var(--ink) 14%, transparent); }
+body.hm #marketNews .news-bars b:nth-child(1) { height: 4px; }
+body.hm #marketNews .news-bars b:nth-child(2) { height: 7px; }
+body.hm #marketNews .news-bars b:nth-child(3) { height: 10px; }
+body.hm #marketNews .news-bars[data-level="1"] b:nth-child(1),
+body.hm #marketNews .news-bars[data-level="2"] b:nth-child(-n + 2),
+body.hm #marketNews .news-bars[data-level="3"] b { background: var(--dim); }

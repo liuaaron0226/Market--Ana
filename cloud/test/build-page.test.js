@@ -8,7 +8,7 @@ import { cloudPage, WEB_FILES, RETIRED } from "../lib/build-page.js";
 const REAL = readFileSync(new URL("../../web/minimal.html", import.meta.url), "utf8");
 
 test("白名單含設計改版以來新增的資產", () => {
-  for (const f of ["bold.css", "home.css", "panel.css", "motion.js", "home-motion.js", "period-switch.js", "portfolio.html", "portfolio.css", "portfolio.js", "portfolio-list.js", "swipe-rows.js", "swipe-rows.css", "ma-lines.js", "ma-settings.js", "ma-settings.css", "chart-legend.js", "chart-legend.css", "holdings-rows.js", "home-fold.js", "chart-menus.js", "terrain-layout.js", "terrain.js"]) {
+  for (const f of ["bold.css", "home.css", "panel.css", "motion.js", "home-motion.js", "period-switch.js", "portfolio.html", "portfolio.css", "portfolio.js", "portfolio-list.js", "swipe-rows.js", "swipe-rows.css", "ma-lines.js", "ma-settings.js", "ma-settings.css", "chart-legend.js", "chart-legend.css", "holdings-rows.js", "home-fold.js", "chart-menus.js", "terrain-layout.js", "terrain.js", "market-news.js", "market-news.css"]) {
     assert.ok(WEB_FILES.includes(f), f);
   }
 });

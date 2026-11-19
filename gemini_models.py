@@ -43,6 +43,10 @@ PLAIN = ARGON
 PLAIN_EFFORT = "medium"
 DIGEST = ARGON
 DIGEST_EFFORT = "medium"
+# 首頁「消息」（本人 2026-11-19「Flash 整批判（推薦）」）：交易日三輪、每輪一次，把各市場新聞標成利多／利空、翻成中文、
+# 寫「今天為什麼這樣走」；站主的「我的自選」併在同一次。設定頁 AI 模型多這一項（market-news.yml 讀）。
+NEWS = FLASH
+NEWS_EFFORT = "high"
 
 # 本人 2026-11-19 晚：上面五組（預測、判斷、提名、白話、站主解讀）改成站主在設定頁「AI 模型」自己選，排程開跑時讀
 # （gemini_settings.py）；這裡的值是「還沒選過」或「讀不到設定」時用的預設。朋友解讀不在設定頁（朋友自己的金鑰）。

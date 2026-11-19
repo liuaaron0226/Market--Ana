@@ -27,7 +27,7 @@ async function call(method = "GET", body = undefined, { email = OWNER, origin = 
 
 const byKey = (body) => Object.fromEntries(body.tasks.map((t) => [t.key, t]));
 
-test("還沒選過：五項都是預設值（和 gemini_models.py 一樣），依設定頁的順序", async () => {
+test("還沒選過：六項（含首頁消息）都是預設值（和 gemini_models.py 一樣），依設定頁的順序", async () => {
   const res = await call();
   assert.equal(res.status, 200);
   assert.equal(res.headers.get("cache-control"), "private, no-store");
@@ -40,6 +40,7 @@ test("還沒選過：五項都是預設值（和 gemini_models.py 一樣），�
     ["watch_nominate", FLASH, "high", false],
     ["plain", ARGON, "medium", false],
     ["digest", ARGON, "medium", false],
+    ["news", FLASH, "high", false],
   ]);
   assert.equal(body.updated_at, null);
 });

@@ -30,6 +30,7 @@ from typing import Any, Iterable
 TASK_MODELS = {
     "forecast-ledger": "FORECAST", "forecast-morning": "FORECAST", "forecast-replay": "FORECAST",
     "watch-ledger": "WATCH_JUDGE", "ai-digest": "DIGEST", "daily-update": "PLAIN",
+    "market-news": "NEWS",   # 首頁「消息」（本人 11-19）
 }
 
 

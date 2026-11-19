@@ -17,6 +17,7 @@ export const DEFAULTS = {
   watch_nominate: { model: "gemini-3.8-flash", effort: "high" },
   plain: { model: "gemini-4-argon", effort: "medium" },
   digest: { model: "gemini-4-argon", effort: "medium" },
+  news: { model: "gemini-3.8-flash", effort: "high" },
 };
 
 const tableMissing = (error) => /no such table/i.test(String(error?.message));

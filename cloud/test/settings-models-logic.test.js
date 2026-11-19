@@ -21,6 +21,7 @@ const DATA = {
     { key: "watch_nominate", model: FLASH, effort: "high", saved: false },
     { key: "plain", model: ARGON, effort: "medium", saved: false },
     { key: "digest", model: ARGON, effort: "medium", saved: false },
+    { key: "news", model: FLASH, effort: "high", saved: false },
   ],
   quota: { argon: 0.18, flash: 0.7149 },
   unread: [],
@@ -39,6 +40,7 @@ test("每列寫任務名稱與現值；大盤預測註明晚間、晨間、重�
     ["watch_nominate", "提名國外同類股", "Flash・高"],
     ["plain", "籌碼與資金白話", "Argon・中"],
     ["digest", "站主 AI 解讀", "Argon・中"],
+    ["news", "首頁消息", "Flash・高"],
   ]);
   assert.equal(view.rows[0].sub, "晚間・晨間・重播一起");
   assert.equal(view.dirty, false);

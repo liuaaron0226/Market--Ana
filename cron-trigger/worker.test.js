@@ -154,3 +154,20 @@ test("未知 cron 不觸發", async () => {
   assert.equal(called, false);
   assert.deepEqual(result, { skipped: "* * * * *" });
 });
+
+test("首頁消息（本人 11-19）：台北 11:30、14:00 觸發 market-news.yml，帶這一輪是午盤還是收盤後", async () => {
+  for (const [cron, utc, slot] of [["30 3,7,8,12 * * MON-FRI", "03:30", "midday"], ["0 6,10 * * MON-FRI", "06:00", "close"]]) {
+    let url, body;
+    const result = await dispatch(cron, Date.parse(`2026-11-19T${utc}:00Z`), env, async (u, init) => {
+      url = u; body = JSON.parse(init.body); return { status: 204 };
+    });
+    assert.equal(result.dispatched, "market-news.yml");
+    assert.match(url, /market-news\.yml\/dispatches$/);
+    assert.equal(body.inputs.slot, slot);
+    assert.equal(body.inputs.dry_run, "false");
+    assert.equal(body.inputs.date, "2026-11-19");
+  }
+  let daily;
+  await dispatch("0 6,10 * * MON-FRI", Date.parse("2026-11-19T10:00:00Z"), env, async (u) => { daily = u; return { status: 204 }; });
+  assert.match(daily, /daily-update\.yml/, "同一行的 18:00 照舊是每日更新");
+});

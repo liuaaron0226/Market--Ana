@@ -14,11 +14,12 @@ import gemini_models as gm
 import watch_run
 
 ROOT = Path(__file__).parent
-AGY_WORKFLOWS = ("forecast-ledger.yml", "forecast-morning.yml", "forecast-replay.yml", "watch-ledger.yml")
+AGY_WORKFLOWS = ("forecast-ledger.yml", "forecast-morning.yml", "forecast-replay.yml", "watch-ledger.yml", "market-news.yml")
 # 排程檔 → 它用到設定頁的哪幾項（gemini_settings.TASKS）
 SETTINGS_WORKFLOWS = {
     "forecast-ledger": ("forecast",), "forecast-morning": ("forecast",), "forecast-replay": ("forecast",),
     "watch-ledger": ("watch_judge", "watch_nominate"), "daily-update": ("plain",), "ai-digest": ("digest",),
+    "market-news": ("news",),
 }
 
 
