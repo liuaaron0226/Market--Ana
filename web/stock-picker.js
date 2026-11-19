@@ -16,6 +16,8 @@
   const MIN_LENGTH = 2;
   const LIMIT = 6;
   const QUERY_BYTES = 48;   // /api/stocks/search 的上限（gate.js handleStockSearch）
+  const KEYBOARD_MIN = 120; // 畫面下方被蓋住超過這麼高才算鍵盤開著（和 keyboard-inset.js 同一個數字）
+  const KEYBOARD_GAP = 8;   // 下拉和鍵盤上緣、輸入框和畫面上緣之間留多少
   let serial = 0;
 
   // 打的字開頭是 4～6 碼代號（後面可以接空白和名稱）就拿那個代號；其他（名稱、基金代碼）回 null。
@@ -134,6 +136,7 @@
       }
       list.hidden = false;
       keepInside();
+      fitAboveKeyboard();
       input.setAttribute('aria-expanded', String(choices.length > 0));
       input.removeAttribute('aria-activedescendant');
     }
@@ -146,6 +149,27 @@
       const over = box.right - (document.documentElement.clientWidth - 16);
       if (over > 0) list.style.left = `${Math.max(16 - host.getBoundingClientRect().left, -over)}px`;
     }
+
+    // 手機鍵盤開著時，下拉最下面幾列不能被鍵盤擋住（本人 11-20）。iPhone 的鍵盤不會讓頁面變矮，只有 visualViewport 變矮：
+    // 下拉超出看得到的範圍時，先把頁面往上捲（輸入框最多捲到畫面最上面），還是放不下的話，浮起的下拉縮矮、裡面自己捲。
+    // 頁面捲得動是因為鍵盤開著時頁尾多留了一段空白（minimal.css、keyboard-inset.js）。沒有鍵盤時什麼都不做。
+    function fitAboveKeyboard() {
+      list.style.maxHeight = '';
+      const viewport = global.visualViewport;
+      if (list.hidden || !viewport) return;
+      const top = viewport.offsetTop, bottom = top + viewport.height;
+      if (global.innerHeight - bottom < KEYBOARD_MIN) return;
+      let box = list.getBoundingClientRect();
+      const over = box.bottom - (bottom - KEYBOARD_GAP);
+      const room = input.getBoundingClientRect().top - top - KEYBOARD_GAP;
+      if (over > 0 && room > 0) {
+        global.scrollBy({ top: Math.min(over, room), behavior: 'instant' });
+        box = list.getBoundingClientRect();
+      }
+      if (!settings.inline) list.style.maxHeight = `${Math.max(96, Math.floor(bottom - KEYBOARD_GAP - box.top))}px`;
+    }
+    // 鍵盤彈出、收起、高度改變（keyboard-inset.js 排好樣式之後發的事件）：下拉開著就重算一次
+    global.addEventListener('keyboardinset', () => { if (!list.hidden) fitAboveKeyboard(); });
 
     async function search(term) {
       if (state.abort) state.abort.abort();

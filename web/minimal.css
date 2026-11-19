@@ -98,6 +98,10 @@ body {
   font: 14px/1.5 var(--sans);
 }
 button, select { font: inherit; color: inherit; }
+/* 手機鍵盤開著時（keyboard-inset.js）頁尾多留一段空白：輸入框在頁面最下面時（個股頁的加入比較），
+   也能把它捲到畫面最上面，框下面的搜尋結果才露得出鍵盤上緣以上（本人 11-20）。
+   高度＝鍵盤的高度＋看得到的範圍再少 120px（最後 120px 的內容留在畫面上）。鍵盤收起來就沒有這一段。 */
+html[data-keyboard] body::after { content: ""; display: block; height: calc(var(--kb-inset, 0px) + var(--vv-height, 0px) - 120px); }
 button { cursor: pointer; touch-action: manipulation; }
 h1, h2, h3, h4, p, dl, dd, figure, ul { margin: 0; }
 ul { padding: 0; }

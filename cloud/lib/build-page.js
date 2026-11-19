@@ -35,6 +35,8 @@ export const WEB_FILES = [
   "forecast.js", "forecast.css",
   // 浮層打開時把底下的頁面鎖住（11-17，首頁明細板、對話框、預測與關注浮板共用）
   "scroll-lock.js",
+  // 手機鍵盤彈出時，浮層與搜尋結果縮到鍵盤上緣以上（本人 11-20：搜尋最下面幾檔被鍵盤擋住）
+  "keyboard-inset.js",
   // 頁面不給縮放（本人 11-18；雙指縮放在 iOS 要靠 JS 擋）
   "no-zoom.js",
   // 個股頁事實區塊（2026-11-15 規格，A 票）
