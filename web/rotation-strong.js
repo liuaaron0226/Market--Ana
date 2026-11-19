@@ -1,5 +1,5 @@
 /* 首頁「產業資金流向」下面的各產業強勢股（本人 2026-11-20 定案，排法 A：一排資金狀態鍵，一次看一種）。
-   資料來自產業資金流向 API 的 strong_stocks（sector_rotation.strong_stocks）：每個產業近 3 個交易日漲最多的前 3 檔。
+   資料來自產業資金流向 API 的 strong_stocks（sector_rotation.strong_stocks）：每個產業近幾個交易日漲最多的前幾檔（天數、檔數跟著資料帶來的數字走）。
    plan／caption 只算要畫什麼，不碰畫面（cloud/test/rotation-strong.test.js）；render／detail 才動畫面。樣式在 home.css〈各產業強勢股〉。
 
    用法：RotationStrong.render(host, { bubbles, quadrants, strong })；RotationStrong.detail(strong, 產業名稱) 給地形的點樓明細用。 */
@@ -12,7 +12,7 @@
   /* 每個資金狀態要畫什麼：cards＝有強勢股的產業（照產業資金流向原本的順序），quiet＝沒有上漲股的產業名稱，count＝這個狀態的產業數。 */
   function plan(bubbles, groups) {
     return ORDER.map(quadrant => {
-      const industries = bubbles.filter(bubble => bubble.quadrant === quadrant);
+      const industries = bubbles.filter(bubble => bubble && bubble.quadrant === quadrant);
       const stocksOf = bubble => groups[bubble.name] || [];
       return {
         quadrant,
@@ -35,12 +35,14 @@
     if (text !== undefined) node.textContent = text;
     return node;
   };
-  const signed = value => (Number.isFinite(value) ? `${value > 0 ? '+' : ''}${value.toFixed(1)}%` : '—');
-  // 產業名稱的寫法和資金地形的名稱牌一樣（去掉結尾的「業」「工業」）
-  const shortName = name => String(name).replace(/工?業$/, '');
+  // 數字的寫法和首頁表格、資金地形的明細（minimal.js、terrain.js 的 signed）一樣；沒有數字（今天不比價）寫「—」
+  const number = (value, digits) => value.toLocaleString('zh-TW', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  const signedPct = value => (Number.isFinite(value) ? `${value > 0 ? '+' : ''}${number(value, 1)}%` : '—');
+  // 產業名稱的寫法和資金地形的名稱牌同一個（去掉結尾的「業」「工業」）
+  const shortName = name => global.Terrain.shortName(name);
   const NONE_TEXT = days => `近 ${days} 日沒有上漲的股票`;
 
-  // 一檔一列：上漲小記號、名稱、代號、漲停記號、今日漲跌、近 3 日漲幅；整列點了進個股頁
+  // 一檔一列：上漲小記號、名稱、代號、漲停記號、今日漲跌、近幾日漲幅；整列點了進個股頁
   function stockRow(stock) {
     const link = el('a', 'strong-row');
     link.href = `stock.html?code=${encodeURIComponent(stock.code)}`;
@@ -48,8 +50,8 @@
     const name = el('span', 'strong-name');
     name.append(el('b', '', stock.name), el('small', '', stock.code));
     if (stock.limit_up) name.append(el('i', 'strong-limit', '漲停'));
-    link.append(name, el('span', `strong-today num${stock.today_pct < 0 ? ' is-down' : ''}`, signed(stock.today_pct)),
-      el('strong', 'num', signed(stock.gain_pct)));
+    link.append(name, el('span', `strong-today num${stock.today_pct < 0 ? ' is-down' : ''}`, signedPct(stock.today_pct)),
+      el('strong', 'num', signedPct(stock.gain_pct)));
     return link;
   }
 
@@ -91,15 +93,19 @@
     seg.setAttribute('role', 'tablist');
     seg.setAttribute('aria-label', '資金狀態');
     const panel = el('div', 'strong-panel');
+    panel.id = 'rotationStrongPanel';
     panel.setAttribute('role', 'tabpanel');
     const show = state => {
       seg.querySelectorAll('button').forEach(button => button.setAttribute('aria-selected', String(button.dataset.quadrant === state.quadrant)));
+      panel.setAttribute('aria-labelledby', `rotationStrongTab-${state.quadrant}`);
       panel.replaceChildren(statePanel(state, days));
     };
     states.forEach(state => {
       const button = el('button', '', (quadrants[state.quadrant] && quadrants[state.quadrant].label) || state.quadrant);
       button.type = 'button';
+      button.id = `rotationStrongTab-${state.quadrant}`;
       button.setAttribute('role', 'tab');
+      button.setAttribute('aria-controls', panel.id);
       button.dataset.quadrant = state.quadrant;
       button.append(el('small', '', String(state.count)));
       button.addEventListener('click', () => show(state));

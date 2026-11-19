@@ -15,11 +15,28 @@ from playwright.sync_api import sync_playwright
 import shoot
 
 OUT = Path(__file__).resolve().parents[1] / "rotation-strong" / "shots"
-results: list[tuple[bool, str]] = []
+results: list[tuple[str, bool, str]] = []
 
 
-def check(ok: bool, label: str) -> None:
-    results.append((bool(ok), label))
+def check(name: str, ok: bool, detail: object = "") -> None:
+    results.append((name, bool(ok), str(detail)))
+    print(("  ok  " if ok else "  FAIL ") + name + (f"｜{detail}" if detail != "" and not ok else ""))
+
+
+# 名單裡被擠掉的東西：名稱被截、代號或漲停記號跑出名稱那一格、產業名稱折行或被截
+SQUEEZED = """() => {
+  const out = [];
+  for (const row of document.querySelectorAll('#rotationStrong .strong-row')) {
+    const cell = row.querySelector('.strong-name'), name = cell.querySelector('b');
+    const edge = cell.getBoundingClientRect().right + 0.5;
+    if (name.scrollWidth > name.clientWidth) out.push(name.textContent);
+    for (const part of cell.querySelectorAll('small, i')) if (part.getBoundingClientRect().right > edge) out.push(`${name.textContent} ${part.textContent}`);
+  }
+  for (const title of document.querySelectorAll('#rotationStrong .strong-card h5')) {
+    if (title.scrollWidth > title.clientWidth || title.getBoundingClientRect().height > 26) out.push(title.textContent);
+  }
+  return out;
+}"""
 
 
 def open_rotation(page, base: str) -> None:
@@ -44,47 +61,30 @@ def run(browser, base: str, size: str, width: int, height: int, scheme: str) -> 
     page.locator("#rotationBlock").screenshot(path=str(OUT / f"live-{size}-{scheme}.png"))
 
     tabs = strong.locator(".strong-seg button")
-    check(tabs.count() == 4, f"{tag}：四個資金狀態鍵")
-    check(tabs.nth(0).get_attribute("aria-selected") == "true", f"{tag}：一進來停在第一個（資金領先）")
+    check(f"{tag}：四個資金狀態鍵", tabs.count() == 4)
+    check(f"{tag}：一進來停在第一個（資金領先）", tabs.nth(0).get_attribute("aria-selected") == "true")
     cards = strong.locator(".strong-card")
-    check(cards.count() >= 1 and all(cards.nth(i).locator(".strong-row").count() in (1, 2, 3) for i in range(cards.count())),
-          f"{tag}：每張卡 1～3 檔")
+    check(f"{tag}：每張卡 1～3 檔",
+          cards.count() >= 1 and all(cards.nth(i).locator(".strong-row").count() in (1, 2, 3) for i in range(cards.count())))
     first = cards.first.locator(".strong-row").first
-    check(first.get_attribute("href").startswith("stock.html?code="), f"{tag}：每一列連到個股頁")
+    check(f"{tag}：每一列連到個股頁", first.get_attribute("href").startswith("stock.html?code="))
     overflow = page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
-    check(overflow == 0, f"{tag}：頁面沒有橫向捲動（多出 {overflow}px）")
+    check(f"{tag}：頁面沒有橫向捲動（多出 {overflow}px）", overflow == 0)
     box = strong.bounding_box()
-    check(box["x"] >= 0 and box["x"] + box["width"] <= width, f"{tag}：整段在畫面寬度內")
-    # 每一列：名稱沒有被截掉、代號與漲停記號整個在名稱那一格裡、產業名稱沒有折行或被截
-    squeezed = page.evaluate("""() => {
-      const out = [];
-      for (const row of document.querySelectorAll('#rotationStrong .strong-row')) {
-        const cell = row.querySelector('.strong-name'), name = cell.querySelector('b');
-        const edge = cell.getBoundingClientRect().right + 0.5;
-        if (name.scrollWidth > name.clientWidth) out.push(name.textContent);
-        for (const part of cell.querySelectorAll('small, i')) if (part.getBoundingClientRect().right > edge) out.push(`${name.textContent} ${part.textContent}`);
-      }
-      for (const title of document.querySelectorAll('#rotationStrong .strong-card h5')) {
-        if (title.scrollWidth > title.clientWidth || title.getBoundingClientRect().height > 26) out.push(title.textContent);
-      }
-      return out;
-    }""")
-    check(not squeezed, f"{tag}：名稱、代號、漲停記號與產業名稱都沒有被擠掉 {squeezed}")
-
-    for index in range(1, 4):
+    check(f"{tag}：整段在畫面寬度內", box["x"] >= 0 and box["x"] + box["width"] <= width)
+    for index in range(4):
         tabs.nth(index).click()
-        clipped = page.evaluate("""() => [...document.querySelectorAll('#rotationStrong .strong-row')].flatMap(row => {
-          const cell = row.querySelector('.strong-name'), name = cell.querySelector('b'), edge = cell.getBoundingClientRect().right + 0.5;
-          return name.scrollWidth > name.clientWidth || [...cell.querySelectorAll('small, i')].some(p => p.getBoundingClientRect().right > edge) ? [name.textContent] : [];
-        })""")
-        check(not clipped, f"{tag}：第 {index + 1} 個資金狀態的每一列也沒有被擠掉 {clipped}")
+        squeezed = page.evaluate(SQUEEZED)
+        check(f"{tag}：第 {index + 1} 個資金狀態的名稱、代號、漲停記號與產業名稱都沒有被擠掉", not squeezed, squeezed)
     tabs.nth(0).click()
     # 換到最後一個資金狀態：內容跟著換，鍵的選取狀態也跟著換
     before = strong.locator(".strong-panel").inner_text()
     tabs.nth(3).click()
-    check(tabs.nth(3).get_attribute("aria-selected") == "true" and tabs.nth(0).get_attribute("aria-selected") == "false",
-          f"{tag}：點另一個鍵就換過去")
-    check(strong.locator(".strong-panel").inner_text() != before, f"{tag}：換鍵之後名單內容不同")
+    check(f"{tag}：點另一個鍵就換過去",
+          tabs.nth(3).get_attribute("aria-selected") == "true" and tabs.nth(0).get_attribute("aria-selected") == "false")
+    check(f"{tag}：名單那一塊標明是哪一個鍵的內容",
+          strong.locator(".strong-panel").get_attribute("aria-labelledby") == tabs.nth(3).get_attribute("id"))
+    check(f"{tag}：換鍵之後名單內容不同", strong.locator(".strong-panel").inner_text() != before)
     tabs.nth(0).click()
 
     # 點樓：明細裡也有這個產業的強勢股，而且點得到
@@ -96,12 +96,12 @@ def run(browser, base: str, size: str, width: int, height: int, scheme: str) -> 
     name = tower.get_attribute("data-name")
     expected = page.evaluate("""async name => (await (await fetch('/api/rotation')).json()).strong_stocks.groups[name].map(s => s.code)""", name)
     shown = [href.split("code=")[1] for href in detail.locator(".strong-row").evaluate_all("rows => rows.map(r => r.getAttribute('href'))")]
-    check(shown == expected, f"{tag}：點樓明細列出 {name} 的強勢股 {shown}")
+    check(f"{tag}：點樓明細列出 {name} 的強勢股 {shown}", shown == expected)
     if expected:
         detail.locator(".strong-row").first.scroll_into_view_if_needed()
         detail.locator(".strong-row").first.click()
         page.wait_for_url("**/stock.html?code=*")
-        check(f"code={expected[0]}" in page.url, f"{tag}：點明細裡的股票進到個股頁 {page.url.split('/')[-1]}")
+        check(f"{tag}：點明細裡的股票進到個股頁 {page.url.split('/')[-1]}", f"code={expected[0]}" in page.url)
         open_rotation(page, base)
 
     # 名單裡的一列點了也進個股頁
@@ -110,7 +110,7 @@ def run(browser, base: str, size: str, width: int, height: int, scheme: str) -> 
     row.scroll_into_view_if_needed()
     row.click()
     page.wait_for_url("**/stock.html?code=*")
-    check(f"code={code}" in page.url, f"{tag}：點名單裡的股票進到個股頁")
+    check(f"{tag}：點名單裡的股票進到個股頁", f"code={code}" in page.url)
 
     # 舊的發布結果沒有強勢股：整段不出現，地形與點樓明細照舊
     def without_strong(route):
@@ -120,11 +120,11 @@ def run(browser, base: str, size: str, width: int, height: int, scheme: str) -> 
         route.fulfill(response=response, body=json.dumps(body, ensure_ascii=False))
     page.route("**/api/rotation", without_strong)
     open_rotation(page, base)
-    check(not page.locator("#rotationStrong").is_visible(), f"{tag}：沒有強勢股資料時整段不顯示")
+    check(f"{tag}：沒有強勢股資料時整段不顯示", not page.locator("#rotationStrong").is_visible())
     page.locator("#rotationTerrain .terrain-tower[data-rank='0']").focus()
     page.keyboard.press("Enter")
     page.locator("#rotationTerrain .terrain-detail h4").wait_for()
-    check(page.locator("#rotationTerrain .terrain-detail .strong-detail").count() == 0, f"{tag}：沒有資料時點樓明細照舊")
+    check(f"{tag}：沒有資料時點樓明細照舊", page.locator("#rotationTerrain .terrain-detail .strong-detail").count() == 0)
     context.close()
 
 
@@ -141,10 +141,8 @@ def main() -> None:
     finally:
         proc.kill()
         proc.wait()
-    for ok, label in results:
-        print("通過" if ok else "失敗", label)
-    failed = [label for ok, label in results if not ok]
-    print(f"{len(results) - len(failed)}／{len(results)} 通過")
+    failed = [name for name, ok, _ in results if not ok]
+    print(f"{len(results) - len(failed)}／{len(results)} 項通過")
     if failed:
         raise SystemExit(1)
 

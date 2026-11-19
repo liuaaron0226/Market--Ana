@@ -59,6 +59,11 @@ test("資金狀態算不出來的產業不放進任何一種", () => {
   assert.deepEqual(result.map((state) => state.count), [1, 0, 0, 0]);
 });
 
+test("產業清單裡混進空的一筆也照常排（和資金地形的版面計算一樣不挑）", () => {
+  const result = plan([null, industry("半導體業", "leading")], {});
+  assert.deepEqual(result.map((state) => state.count), [1, 0, 0, 0]);
+});
+
 test("說明文字照這一批帶來的規則數字寫", () => {
   assert.equal(caption({ window_days: 3, limit: 3, min_avg_turnover: 50_000_000 }),
     "近 3 日漲最多的前 3 檔・平均每天成交 5,000 萬元以上");

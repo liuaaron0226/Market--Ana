@@ -330,5 +330,5 @@
     cleanups.set(host, () => { observers.forEach(observer => observer.disconnect()); global.clearTimeout(settle); stopGlide(); });
   }
 
-  global.Terrain = { render };
+  global.Terrain = { render, shortName };
 })(window);

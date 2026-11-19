@@ -402,7 +402,7 @@ def local_inputs(as_of: str, universe_root: Path | None = None) -> dict[str, Any
     groups = sr.official_industry_groups(official)
     dates, turnover = sr.load_turnover([c for c, _, _ in official], as_of, sr.TIMELINE_DAYS + sr.WINDOW_LONG - 1)
     rotation = sr.compute_timeline(groups, turnover, dates)
-    strong = sr.strong_stocks(groups, sr.load_quotes([c for c, _, _ in official], dates), dates)
+    strong = sr.strong_stocks(groups, sr.load_quotes([c for c, _, _ in official], dates[-sr.STRONG_WINDOW:]), dates)
     names: dict[str, str] = {}
     with closing(sqlite3.connect(f"file:{STOCK_HISTORY_DB.as_posix()}?mode=ro", uri=True)) as connection:
         for code, name in connection.execute(

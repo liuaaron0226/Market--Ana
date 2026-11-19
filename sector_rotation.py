@@ -39,7 +39,7 @@ TIMELINE_DAYS = 20        # DIGEST〈當前日期與「20 個交易日」〉
 STRONG_WINDOW = 3         # 近幾個交易日的累計漲幅
 STRONG_LIMIT = 3          # 每個產業最多列幾檔
 STRONG_MIN_AVG_TURNOVER = 50_000_000   # 這幾天平均每天成交金額（元）至少要這麼多
-LIMIT_UP_RETURN = 0.095   # 當日漲幅達 9.5% 算漲停（和個股訊號 limit_up_momentum 同一個門檻）
+LIMIT_UP_PCT = 9.5        # 當日漲幅（%）達這個數算漲停，和個股訊號 limit_up_momentum 的 limit_up_threshold 同一個門檻
 STRONG_RULE = "strong-3d-gain-1"
 
 QUADRANT_ORDER = ("leading", "weakening", "improving", "lagging")
@@ -303,38 +303,46 @@ def rotation_inflow_codes(snapshot: Mapping[str, Any], groups: Mapping[str, Sequ
 
 # ---- 各產業強勢股（本站自訂，不是 REA；本人 2026-11-20 定案） ----
 
-def _day_return(quote: Mapping[str, Any]) -> float:
-    """當日相對前一日參考價的漲跌幅（比率）＝漲跌 ÷（收盤 − 漲跌），和個股訊號（limit_up_momentum）同一個算式。
+def _day_return(quote: Mapping[str, Any]) -> float | None:
+    """當日相對前一日參考價的漲跌幅（比率）＝漲跌 ÷（收盤 − 漲跌），算式同 twon_analysis.data._day_return。
 
-    官方沒有公布漲跌的日子（除權息等不比價，漲跌是空的）當 0，也和那邊相同：不把息值算成下跌。"""
+    官方沒有公布漲跌的日子（除權息等不比價，行情庫的漲跌是空的）回 None。"""
     close, change = quote["close"], quote["change"]
-    if change is None:
-        return 0.0
-    return change / (close - change)
+    return None if change is None else change / (close - change)
 
 
-def _strong_candidate(code: str, days: Sequence[Mapping[str, Any] | None]) -> tuple[float, int, str, dict[str, Any]] | None:
-    """一檔成分股這幾天的排名資料 (−漲幅, −成交金額合計, 代號, 輸出列)；不合格回 None。"""
+def _strong_candidate(code: str, days: Sequence[Mapping[str, Any] | None]) -> tuple[tuple, dict[str, Any]] | None:
+    """一檔成分股這幾天的 (排序鍵, 輸出列)；不合格回 None。排序鍵＝(−漲幅, −成交金額合計, 代號)。"""
     # 這幾天要天天有成交：剛上市天數不足、停牌、整天沒成交、缺成交金額的都不列
     if any(day is None or day["suspended"] or day["close"] is None or day["turnover"] is None for day in days):
+        return None
+    # 前一日參考價（收盤 − 漲跌）不是正數時算不出漲跌幅
+    if any(day["change"] is not None and day["close"] - day["change"] <= 0 for day in days):
         return None
     turnover = sum(day["turnover"] for day in days)
     if turnover < STRONG_MIN_AVG_TURNOVER * len(days):
         return None
     returns = [_day_return(day) for day in days]
-    gain = round((math.prod(1 + value for value in returns) - 1) * 100, 2)
+    # 不比價的日子當 0（不把息值算成下跌，和個股訊號 limit_up_momentum 相同）。
+    # 漲幅取到小數一位，和畫面寫的一樣：畫面上是 +0.0% 的不算有漲，同一個數字的照成交金額排。
+    gain = round((math.prod(1 + (value or 0.0) for value in returns) - 1) * 100, 1)
     if gain <= 0:
         return None
-    return (-gain, -turnover, code, {
+    today = returns[-1]
+    return (-gain, -turnover, code), {
         "code": code, "name": days[-1]["name"], "gain_pct": gain,
-        "today_pct": round(returns[-1] * 100, 2), "limit_up": returns[-1] >= LIMIT_UP_RETURN})
+        # 今天不比價就沒有今日漲跌可寫（不拿 0 冒充平盤）
+        "today_pct": None if today is None else round(today * 100, 1),
+        # 先取到小數兩位再比：6.00 → 6.57 這種剛好 9.5% 的，浮點數算出來會是 0.0949999…
+        "limit_up": today is not None and round(today * 100, 2) >= LIMIT_UP_PCT}
 
 
 def strong_stocks(groups: Mapping[str, Sequence[str]], quotes: Mapping[str, Mapping[str, Mapping[str, Any]]],
                   dates: Sequence[str]) -> dict[str, Any]:
-    """每個產業近 3 個交易日累計漲幅最大的成分股（最多 3 檔，只列有漲的；一檔都沒有的產業是空清單）。
+    """每個產業近幾個交易日累計漲幅最大的成分股（只列有漲的；一檔都沒有的產業是空清單）。
+    天數、檔數、成交金額門檻見檔頭的 STRONG_* 常數，結果裡也帶著同一組數字給畫面寫說明。
 
-    ``quotes``：{代號: {日期: {name, close, change, turnover, suspended}}}；``dates`` 由舊到新，取最後 3 天。
+    ``quotes``：{代號: {日期: {name, close, change, turnover, suspended}}}；``dates`` 由舊到新，取最後 STRONG_WINDOW 天。
     漲幅用每天的官方漲跌連乘，不拿兩天的收盤直接相除（除權息、分割那天才不會被算成大跌）。
     """
     window = list(dates)[-STRONG_WINDOW:]
@@ -344,8 +352,8 @@ def strong_stocks(groups: Mapping[str, Sequence[str]], quotes: Mapping[str, Mapp
     for name in sorted(groups):
         found = [_strong_candidate(code, [quotes.get(code, {}).get(day) for day in window]) for code in groups[name]]
         # 漲幅大的在前；同漲幅時成交金額大的在前，再同就照代號，結果才固定
-        ranked = sorted((item for item in found if item is not None), key=lambda item: item[:3])
-        result[name] = [row for *_, row in ranked[:STRONG_LIMIT]]
+        ranked = sorted((item for item in found if item is not None), key=lambda item: item[0])
+        result[name] = [row for _, row in ranked[:STRONG_LIMIT]]
     return {"rule_version": STRONG_RULE, "date": window[-1], "window_days": STRONG_WINDOW, "limit": STRONG_LIMIT,
             "min_avg_turnover": STRONG_MIN_AVG_TURNOVER, "groups": result}
 
@@ -396,9 +404,9 @@ def load_turnover(codes: Iterable[str], as_of: str, count: int,
 
 def load_quotes(codes: Iterable[str], dates: Sequence[str],
                 listed_db: Path = LISTED_DB, otc_db: Path = OTC_DB) -> dict[str, dict[str, dict[str, Any]]]:
-    """強勢股要的行情：{代號: {日期: {name, close, change, turnover, suspended}}}，只讀 ``dates`` 的最後 3 天；mode=ro。"""
+    """強勢股要的行情：{代號: {日期: {name, close, change, turnover, suspended}}}，只讀 ``dates`` 列出的那幾天；mode=ro。"""
     wanted = set(codes)
-    window = list(dates)[-STRONG_WINDOW:]
+    window = list(dates)
     quotes: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
     for db in (listed_db, otc_db):
         connection = sqlite3.connect(f"file:{Path(db).resolve().as_posix()}?mode=ro", uri=True)

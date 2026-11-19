@@ -33,8 +33,8 @@ class StrongStocksTest(unittest.TestCase):
         result = sr.strong_stocks({"甲業": ["1002", "1001"]}, quotes, DATES)
         self.assertEqual(result["date"], "2026-11-09")
         self.assertEqual(result["groups"]["甲業"], [
-            {"code": "1001", "name": "甲一", "gain_pct": 17.81, "today_pct": 10.0, "limit_up": True},
-            {"code": "1002", "name": "甲二", "gain_pct": 3.02, "today_pct": 2.0, "limit_up": False},
+            {"code": "1001", "name": "甲一", "gain_pct": 17.8, "today_pct": 10.0, "limit_up": True},
+            {"code": "1002", "name": "甲二", "gain_pct": 3.0, "today_pct": 2.0, "limit_up": False},
         ])
 
     def test_needs_fifty_million_average_daily_turnover_over_the_three_days(self):
@@ -55,12 +55,14 @@ class StrongStocksTest(unittest.TestCase):
             "3001": _days((101, 1, money), (99.99, -1.01, money), (99.99, 0, money), name="小跌"),
             # 三天都平盤：累計 0% → 不列
             "3002": _days((50, 0, money), (50, 0, money), (50, 0, money), name="沒動"),
-            # −2%、+1%、+2%：0.98×1.01×1.02＝1.009596 → +0.96%，今天也漲 → 列
+            # −2%、+1%、+2%：0.98×1.01×1.02＝1.009596 → +0.96%，畫面寫到小數一位是 +1.0% → 列
             "3003": _days((98, -2, money), (98.98, 0.98, money), (100.9596, 1.9796, money), name="回升"),
+            # 只有第一天 +0.04%（2500 → 2501）：畫面上會是 +0.0%，等於沒漲 → 不列
+            "3004": _days((2501, 1, money), (2501, 0, money), (2501, 0, money), name="幾乎沒動"),
         }
-        result = sr.strong_stocks({"丙業": ["3001", "3002", "3003"], "丁業": ["3001"]}, quotes, DATES)
+        result = sr.strong_stocks({"丙業": ["3001", "3002", "3003", "3004"], "丁業": ["3001"]}, quotes, DATES)
         self.assertEqual(result["groups"]["丙業"],
-                         [{"code": "3003", "name": "回升", "gain_pct": 0.96, "today_pct": 2.0, "limit_up": False}])
+                         [{"code": "3003", "name": "回升", "gain_pct": 1.0, "today_pct": 2.0, "limit_up": False}])
         self.assertEqual(result["groups"]["丁業"], [])   # 整個產業都沒漲：留一個空清單，畫面才知道要寫「沒有上漲的股票」
 
     def test_keeps_three_per_industry_and_breaks_ties_by_turnover(self):
@@ -85,12 +87,14 @@ class StrongStocksTest(unittest.TestCase):
         quotes = {
             # 前一日 200 → 219：19 ÷ 200＝剛好 9.5%
             "5001": _days((200, 0, money), (200, 0, money), (219, 19, money), name="剛好漲停"),
-            # 前一日 200 → 218.98：18.98 ÷ 200＝9.49%
-            "5002": _days((200, 0, money), (200, 0, money), (218.98, 18.98, money), name="差一檔"),
+            # 前一日 200 → 218.92：18.92 ÷ 200＝9.46%（畫面取到小數一位也是 +9.5%，但還沒到漲停）
+            "5002": _days((200, 0, money), (200, 0, money), (218.92, 18.92, money), name="差一點"),
+            # 前一日 6.00 → 6.57：0.57 ÷ 6＝9.5%，電腦的小數算出來是 0.0949999…，不能因此漏標
+            "5003": _days((6, 0, money), (6, 0, money), (6.57, 0.57, money), name="低價漲停"),
         }
-        result = sr.strong_stocks({"己業": ["5001", "5002"]}, quotes, DATES)
-        self.assertEqual([(row["code"], row["today_pct"], row["limit_up"]) for row in result["groups"]["己業"]],
-                         [("5001", 9.5, True), ("5002", 9.49, False)])
+        result = sr.strong_stocks({"己業": ["5001", "5002", "5003"]}, quotes, DATES)
+        self.assertEqual({row["code"]: (row["today_pct"], row["limit_up"]) for row in result["groups"]["己業"]},
+                         {"5001": (9.5, True), "5002": (9.5, False), "5003": (9.5, True)})
 
     def test_skips_members_without_three_full_trading_days(self):
         money = 8000 * WAN
@@ -102,8 +106,9 @@ class StrongStocksTest(unittest.TestCase):
             "6004": _days(up[0], (None, None, 0), up[2], name="中間沒成交"),
             "6005": _days(up[0], up[1], (103.0301, 1.0201, None), name="沒有成交金額"),
             # "6006"：名錄裡有、行情庫裡完全沒有
+            "6007": _days(up[0], (5, 5, money), up[2], name="沒有參考價"),   # 收盤 5、漲跌 5：前一日參考價是 0，算不出漲跌幅
         }
-        result = sr.strong_stocks({"庚業": ["6001", "6002", "6003", "6004", "6005", "6006"]}, quotes, DATES)
+        result = sr.strong_stocks({"庚業": ["6001", "6002", "6003", "6004", "6005", "6006", "6007"]}, quotes, DATES)
         self.assertEqual([row["code"] for row in result["groups"]["庚業"]], ["6001"])
 
     def test_a_day_without_an_official_change_counts_as_flat(self):
@@ -113,7 +118,16 @@ class StrongStocksTest(unittest.TestCase):
         result = sr.strong_stocks({"辛業": ["7001"]}, quotes, DATES)
         # 1.01 × 1 × 1.02＝1.0302
         self.assertEqual(result["groups"]["辛業"],
-                         [{"code": "7001", "name": "除息", "gain_pct": 3.02, "today_pct": 2.0, "limit_up": False}])
+                         [{"code": "7001", "name": "除息", "gain_pct": 3.0, "today_pct": 2.0, "limit_up": False}])
+
+    def test_today_without_an_official_change_shows_no_today_figure(self):
+        money = 8000 * WAN
+        # 今天就是不比價的那一天：今日漲跌沒有數字可寫（不拿 0 冒充平盤），前兩天的漲幅照算
+        quotes = {"7002": _days((102, 2, money), (104.04, 2.04, money), (99, None, money), name="今天除息")}
+        result = sr.strong_stocks({"辛業": ["7002"]}, quotes, DATES)
+        # 1.02 × 1.02 × 1＝1.0404
+        self.assertEqual(result["groups"]["辛業"],
+                         [{"code": "7002", "name": "今天除息", "gain_pct": 4.0, "today_pct": None, "limit_up": False}])
 
     def test_uses_the_last_three_of_the_given_trading_days(self):
         money = 8000 * WAN
@@ -151,13 +165,15 @@ class LoadQuotesTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             listed = self._db(Path(folder), "listed.sqlite", [
                 ("2026-11-04", "2330", "台積電", 900.0, 5.0, 100, 0),       # 不在要的日期裡
+                ("2026-11-06", "2330", "台積電", 905.0, -5.0, 250, 0),      # 夾在中間、但沒有要這一天
                 ("2026-11-05", "2330", "台積電", 910.0, 10.0, 200, 0),
                 ("2026-11-09", "2330", "台積電", 905.0, None, 300, 0),      # 不比價的日子：漲跌是空的
                 ("2026-11-09", "9999", "不要的", 10.0, 1.0, 400, 0),
             ])
             otc = self._db(Path(folder), "otc.sqlite", [("2026-11-06", "6488", "環球晶", 400.0, -4.0, 500, 1)])
-            quotes = sr.load_quotes(["2330", "6488"], DATES, listed_db=listed, otc_db=otc)
-        self.assertEqual(quotes, {
+            quotes = sr.load_quotes(["2330", "6488"], ["2026-11-05", "2026-11-09"], listed_db=listed, otc_db=otc)
+            both_days = sr.load_quotes(["6488"], ["2026-11-06"], listed_db=listed, otc_db=otc)
+        self.assertEqual({**quotes, **both_days}, {
             "2330": {"2026-11-05": {"name": "台積電", "close": 910.0, "change": 10.0, "turnover": 200, "suspended": 0},
                      "2026-11-09": {"name": "台積電", "close": 905.0, "change": None, "turnover": 300, "suspended": 0}},
             "6488": {"2026-11-06": {"name": "環球晶", "close": 400.0, "change": -4.0, "turnover": 500, "suspended": 1}},
