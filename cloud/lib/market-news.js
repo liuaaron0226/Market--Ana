@@ -9,8 +9,14 @@
 import { marketNewsVisible } from "./release-policy.js";
 
 const DAY_MS = 86_400_000;
-const WINDOW_MS = DAY_MS;          // 「我的自選」：那一輪之前一天內發布的（和 market_news.py 的 WINDOW_HOURS 一致）
-const MINE_MAX = 30;
+// 「我的自選」（本人 2026-11-20：自選股不可能都沒新聞，要看前陣子有什麼）：近 30 天、判讀過和公司有關的。
+const STOCK_WINDOW_MS = 30 * DAY_MS;     // 和 market_news.py 的 STOCK_DAYS、watch_news.py 的回補天數一致
+const MINOR_AFTER_MS = 7 * DAY_MS;       // 影響小的只列近 7 天
+const UNMARKED_MS = 2 * DAY_MS;          // 還沒判讀的只列近 2 天的標題
+const MINE_MAX = 40;
+// 本人選的六類；other（其他）不列。
+const STOCK_KINDS = ["earnings", "guidance", "deal", "policy", "rating", "incident"];
+const MARKET_KINDS = ["policy", "earnings", "deal", "flows", "macro", "other"];   // 同樣影響時的先後
 const DATES_MAX = 25;              // 日期鍵：近一個月約 20 個交易日
 const HEADLINE_KEEP_DAYS = 90;     // 和 watch_news.py 的 KEEP_DAYS 一致
 const HEADLINE_MAX = 100;
@@ -23,6 +29,8 @@ export const PUBLISHERS = {
   "gnews-reuters": "路透", "gnews-bloomberg": "Bloomberg", "gnews-cna": "中央通訊社", "gnews-ft": "金融時報",
   "gnews-wsj": "華爾街日報", "gnews-nikkei": "日經", yahoo: "Yahoo股市",
   "cna-finance": "中央通訊社", "cna-intworld": "中央通訊社", "cna-technology": "中央通訊社",
+  "gnews-cnyes": "鉅亨網", "gnews-udn": "經濟日報", "gnews-ctee": "工商時報", "gnews-moneydj": "MoneyDJ",
+  mops: "公開資訊觀測站",
 };
 // 沒抓到時那一行的名字：Google News 是這一檔自己那份（code＝代號），中央社三個分類是整批的（code＝''）。
 const HEADLINE_SOURCES = [
@@ -47,34 +55,42 @@ async function pickRun(db, date) {
 
 async function mine(db, email, run) {
   const end = run.created_at;
-  const start = isoSeconds(Date.parse(end) - WINDOW_MS);
-  const rows = (await db.prepare(
-    "SELECT n.code, w.name, n.link, n.source, n.title, n.published_at FROM watch_news n " +
-      "JOIN user_watchlist w ON w.code = n.code AND lower(w.email) = lower(?) " +
-      "WHERE n.code <> '' AND n.published_at >= ? AND n.published_at <= ? ORDER BY n.published_at DESC, n.link LIMIT ?",
-  ).bind(email, start, end, MINE_MAX).all()).results;
-  const marks = new Map((await db.prepare(
-    "SELECT code, link, tone, impact, title, translated, reason FROM market_news_user_items WHERE lower(email) = lower(?) AND run_id = ?",
-  ).bind(email, run.run_id).all()).results.map((row) => [`${row.code}|${row.link}`, row]));
+  const endMs = Date.parse(end);
+  const select = (withMarks) => db.prepare(
+    "SELECT n.code, w.name, n.link, n.source, n.title, n.published_at" +
+      (withMarks ? ", m.relevant, m.kind, m.tone, m.impact, m.title AS mark_title, m.translated, m.reason" : "") +
+      " FROM watch_news n JOIN user_watchlist w ON w.code = n.code AND lower(w.email) = lower(?) " +
+      (withMarks ? "LEFT JOIN stock_news_marks m ON m.code = n.code AND m.link = n.link " : "") +
+      "WHERE n.code <> '' AND n.published_at >= ? AND n.published_at <= ? ORDER BY n.published_at DESC, n.link LIMIT 600",
+  ).bind(email, isoSeconds(endMs - STOCK_WINDOW_MS), end).all();
+  let rows;
+  try {
+    rows = (await select(true)).results;
+  } catch (error) {
+    if (!missingTable(error)) throw error;
+    rows = (await select(false)).results;   // 0032 還沒套：沒有判讀，只列標題
+  }
   // 中央社整批對到的（cna-*）有些只在前言提到公司：標題沒點名就不算。
-  // 這一輪這個人的自選有判讀過（run.sources.judged_users；舊的輪次沒有這一欄時，有標記就算）：沒有標記的＝模型判成
-  // 和公司無關，不顯示——就算一則都不剩（本人 11-19：三則都無關卻還列出標題）。
-  const judgedUsers = parse(run.sources, {})?.judged_users;
-  const judged = Array.isArray(judgedUsers) ? judgedUsers.some((who) => String(who).toLowerCase() === email.toLowerCase())
-    : marks.size > 0;
-  const named = (row) => !row.source.startsWith("cna-") || (row.name && row.title.includes(row.name)) || row.title.includes(row.code);
-  const items = rows.filter((row) => named(row) && (!judged || marks.has(`${row.code}|${row.link}`))).map((row) => {
-    const mark = marks.get(`${row.code}|${row.link}`);
-    return {
-      code: row.code, name: row.name, link: row.link, published_at: row.published_at,
-      source: PUBLISHERS[row.source] || row.source,
-      ...(mark ? { tone: mark.tone, impact: mark.impact, title: mark.title, translated: Boolean(mark.translated), reason: mark.reason }
-        : { title: row.title }),
-    };
-  });
-  // 有判讀的依影響大小排在前面（一樣大時新的在前）；沒有判讀的照時間。
-  items.sort((a, b) => (b.impact || 0) - (a.impact || 0) || b.published_at.localeCompare(a.published_at));
-  return { marked: marks.size > 0, judged, items };
+  const named = (row) => !row.source.startsWith("cna-") || (row.name && row.title.includes(row.name.replace(/-KY$/, ""))) || row.title.includes(row.code);
+  const judged = rows.some((row) => row.relevant !== undefined && row.relevant !== null);
+  const seen = new Set();
+  const items = [];
+  for (const row of rows) {
+    const age = endMs - Date.parse(row.published_at);
+    const base = { code: row.code, name: row.name, link: row.link, published_at: row.published_at, source: PUBLISHERS[row.source] || row.source };
+    if (row.relevant === 1) {
+      // 判讀過、和公司有關：只列本人選的六類；影響小的舊聞不列。
+      if (!STOCK_KINDS.includes(row.kind) || (row.impact === 1 && age > MINOR_AFTER_MS)) continue;
+      items.push({ ...base, kind: row.kind, tone: row.tone, impact: row.impact, title: row.mark_title, translated: Boolean(row.translated), reason: row.reason });
+    } else if (row.relevant === undefined || row.relevant === null) {
+      // 還沒判讀（沒有金鑰的朋友、剛抓到的）：近兩天的標題照列，同一個標題只列一次。
+      const key = `${row.code}|${row.title.replace(/\s+/g, "")}`;
+      if (age > UNMARKED_MS || !named(row) || seen.has(key)) continue;
+      seen.add(key);
+      items.push({ ...base, title: row.title });
+    }
+  }
+  return { marked: items.some((item) => item.tone), judged, items: items.slice(0, MINE_MAX) };
 }
 
 export async function handleMarketNewsApi(request, env, email, { isOwner }) {
@@ -90,14 +106,17 @@ export async function handleMarketNewsApi(request, env, email, { isOwner }) {
     ).bind(DATES_MAX).all()).results.map((row) => row.trade_date);
     if (!run) return json(200, { available: true, run: null, dates, groups: { tw: [], us: [], asia: [] }, mine: { marked: false, judged: false, items: [] } });
     const rows = (await env.DB.prepare(
-      "SELECT item_id, grp, market, tone, impact, title, translated, reason, source, link, published_at FROM market_news_items " +
-        "WHERE run_id = ? ORDER BY impact DESC, published_at DESC",
+      "SELECT * FROM market_news_items WHERE run_id = ? ORDER BY impact DESC, published_at DESC",
     ).bind(run.run_id).all()).results;
+    // 同樣影響時照類別（政策＞財報＞合作訂單＞法人＞總經＞其他），再照時間。kind 欄 0032 才有，沒有就當其他。
+    const kindRank = (row) => { const at = MARKET_KINDS.indexOf(row.kind); return at < 0 ? MARKET_KINDS.length : at; };
+    const byWeight = (a, b) => b.impact - a.impact || kindRank(a) - kindRank(b) || b.published_at.localeCompare(a.published_at);
+    rows.sort(byWeight);
     const shape = (classified) => (row) => ({
       title: row.title, source: row.source, link: row.link, published_at: row.published_at, market: row.market || "",
       translated: Boolean(row.translated),
       // 那一批沒判讀成的（理由是空的）只給標題，不標利多利空
-      ...(classified && row.reason ? { tone: row.tone, impact: row.impact, reason: row.reason } : {}),
+      ...(classified && row.reason ? { tone: row.tone, impact: row.impact, reason: row.reason, ...(row.kind ? { kind: row.kind } : {}) } : {}),
     });
     const groups = Object.fromEntries(GROUPS.map((group) => [group, rows.filter((row) => row.grp === group).map(shape(run.status === "ok"))]));
     // 一組的來源這一輪全部沒抓到：標出來，列上一輪的（consensus 技術選擇 h）。
@@ -113,7 +132,7 @@ export async function handleMarketNewsApi(request, env, email, { isOwner }) {
       const previous = (await env.DB.prepare(
         "SELECT i.* FROM market_news_items i JOIN market_news_runs r ON r.run_id = i.run_id " +
           "WHERE r.created_at = ? AND i.grp = ? ORDER BY i.impact DESC, i.published_at DESC",
-      ).bind(earlier.created_at, group).all()).results;
+      ).bind(earlier.created_at, group).all()).results.sort(byWeight);
       groups[group] = previous.map(shape(earlier.status === "ok"));
       carried[group] = earlier.created_at;
     }

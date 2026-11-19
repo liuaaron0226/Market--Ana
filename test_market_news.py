@@ -12,7 +12,7 @@ import watch_news as wn
 ROOT = Path(__file__).resolve().parent
 MIGRATIONS = ROOT / "cloud/migrations"
 SCHEMA = "".join((MIGRATIONS / name).read_text(encoding="utf-8")
-                 for name in ("0005_user_portfolio.sql", "0011_watchlist_watch.sql", "0015_watch_news.sql", "0031_market_news.sql"))
+                 for name in ("0005_user_portfolio.sql", "0011_watchlist_watch.sql", "0015_watch_news.sql", "0031_market_news.sql", "0032_stock_news_marks.sql"))
 NOW = "2026-11-19T06:05:00Z"          # 台北 14:05，收盤後那一輪
 OWNER = "owner@example.com"
 FRIEND = "friend@example.com"
@@ -91,9 +91,10 @@ def model_reply(prompt_items, watch):
         tone = "down" if "外資" in row["title"] or "Taiwan" in row["title"] else "up" if "Korea" in row["title"] else "flat"
         group = {"tw": "tw", "us": "us", "asia": "asia", "global": "us"}[row["group_hint"]]
         items.append({"id": row["id"], "group": group, "market": "韓" if "Korea" in row["title"] else "",
-                      "tone": tone, "impact": 3 if tone == "down" else 2, "title": "中文：" + row["title"][:20], "reason": "一句理由"})
+                      "kind": "flows" if "外資" in row["title"] else "policy" if "限空" in row["title"] else "other", "tone": tone, "impact": 3 if tone == "down" else 2, "title": "中文：" + row["title"][:20], "reason": "一句理由"})
     return {"summary": "台股今天下跌，主要是外資賣超。", "items": items,
-            "watch": [{"id": row["id"], "relevant": "no" if "馬拉松" in row["title"] else "yes", "tone": "down", "impact": 2,
+            "watch": [{"id": row["id"], "relevant": "no" if "馬拉松" in row["title"] else "yes",
+                       "kind": "earnings" if "營收" in row["title"] else "rating", "tone": "down", "impact": 2,
                        "title": "自選：" + row["title"], "reason": "跟著走弱"} for row in watch]}
 
 
@@ -155,20 +156,59 @@ class FetchTests(unittest.TestCase):
         items, _ = mn.collect(get=get, now=NOW, sleep=lambda s: None)
         self.assertEqual([row["title"] for row in items if row["source_key"] == "yonhap-biz"], ["Seoul shares end higher"])
 
-    def test_a_busy_source_cannot_crowd_out_the_others(self):
-        many = rss(*(item(f"Bloomberg story {n}", f"https://www.bloomberg.com/{n}", when=f"Thu, 19 Nov 2026 05:{n:02d}:00 GMT")
-                     for n in range(40)))
-        get, _ = web({key: Response(content=many) for key in ("bloomberg-markets",)})
+    def test_selection_is_by_importance_not_by_time(self):
+        # 2026-11-19：中央社 19:03「金管會提3理由擴大限空」被「每家只取最新 6 則」丟掉。現在照重要性選。
+        old_but_big = item("金管會提3理由擴大限空 1028檔股票禁平盤下放空", "https://www.cna.com.tw/news/afe/limit.aspx",
+                           when="Wed, 18 Nov 2026 11:03:00 GMT")
+        filler = [item(f"某公司歡慶週年活動 {n}", f"https://www.cna.com.tw/news/afe/f{n}.aspx", when=f"Thu, 19 Nov 2026 05:{n:02d}:00 GMT")
+                  for n in range(25)]
+        get, _ = web({"cna-finance": Response(content=rss(*filler, old_but_big))})
         original = mn.MAX_ITEMS
         try:
             mn.MAX_ITEMS = 6
             items, _ = mn.collect(get=get, now=NOW, sleep=lambda s: None)
         finally:
             mn.MAX_ITEMS = original
+        titles = [row["title"] for row in items]
         self.assertEqual(len(items), 6)
-        self.assertIn("Korea exports rise 9 pct", [row["title"] for row in items])
-        self.assertIn("外資賣超台股逾 600 億元", [row["title"] for row in items])
+        self.assertIn("金管會提3理由擴大限空 1028檔股票禁平盤下放空", titles)
+        self.assertEqual(titles[0], "金管會提3理由擴大限空 1028檔股票禁平盤下放空", "台股組排最前面、組內分數高的先")
+        self.assertIn("Korea exports rise 9 pct", titles, "各組都有名額")
 
+    def test_policy_earnings_and_deals_outrank_routine_company_news(self):
+        score = lambda title, key="cna-finance": mn.priority({"title": title, "summary": "", "source_key": key})  # noqa: E731
+        self.assertGreater(score("金管會加碼限空"), score("台積電第3季財報優於預期"))
+        self.assertGreater(score("台積電第3季財報優於預期"), score("某公司歡慶 30 週年"))
+        self.assertGreater(score("Fed signals rate cut", "bloomberg-markets"), score("A profile of a founder", "bloomberg-markets"))
+        self.assertGreater(score("金管會新聞稿", "fsc-news"), score("金管會新聞稿", "cna-finance"))
+
+    def test_the_regulator_search_is_part_of_the_source_list_and_fsc_waits_for_the_owner(self):
+        regulators = next(feed for feed in mn.FEEDS if feed["key"] == "gnews-regulators")
+        self.assertIn("hl=zh-TW", regulators["url"])
+        for word in ("%E9%87%91%E7%AE%A1%E6%9C%83", "cna.com.tw"):   # 金管會
+            self.assertIn(word, regulators["url"])
+        # 本人 2026-11-20「要加（推薦）」：金管會新聞稿 RSS
+        fsc = next(feed for feed in mn.FEEDS if feed["key"] == "fsc-news")
+        self.assertTrue(fsc["url"].startswith("https://www.fsc.gov.tw/RSS/Messages"))
+
+    def test_fsc_press_releases_only_carry_a_date_and_their_links_are_unescaped(self):
+        fsc_item = ("<item><title><![CDATA[金管會宣布當日收盤價跌幅達3.5%以上，次一交易日不得低於前一交易日收盤價放空]]></title>"
+                    "<pubDate>Wed, 18 Nov 2026 00:00:00 GMT</pubDate>"
+                    "<link><![CDATA[https://www.fsc.gov.tw/ch/home.jsp?id=96&amp;dataserno=202611180003]]></link>"
+                    "<description><![CDATA[<div>為維持證券市場之秩序</div>]]></description></item>")
+        get, _ = web({"fsc-news": Response(content=rss(fsc_item))})
+        items, sources = mn.collect(get=get, now=NOW, sleep=lambda s: None)
+        row = next(row for row in items if row["source_key"] == "fsc-news")
+        self.assertEqual(sources["fsc-news"], "ok")
+        self.assertEqual(row["link"], "https://www.fsc.gov.tw/ch/home.jsp?id=96&dataserno=202611180003")
+        self.assertEqual((row["source"], row["group_hint"]), ("金管會", "tw"))
+        self.assertEqual(items[0]["source_key"], "fsc-news", "官方的政策公告排最前面；前一天公布的（只有日期）也在兩天的範圍內")
+
+    def test_fsc_failing_does_not_stop_the_round(self):
+        get, _ = web({"fsc-news": Response(status=500)})
+        items, sources = mn.collect(get=get, now=NOW, sleep=lambda s: None)
+        self.assertEqual(sources["fsc-news"], "HTTP 500")
+        self.assertTrue(items)
     def test_google_slow_down_skips_the_other_google_queries(self):
         get, calls = web({"gnews-tw": Response(status=429)})
         _, sources = mn.collect(get=get, now=NOW, sleep=lambda s: None)
@@ -189,7 +229,7 @@ class RunTests(unittest.TestCase):
     def test_one_round_writes_the_run_items_and_owner_watchlist(self):
         d1 = D1()
         report, _, ask = run(d1)
-        self.assertEqual(sorted(ask.kinds), ["items", "summary", "watch"], "四則一批＋自選一次＋總結一次")
+        self.assertEqual(sorted(ask.kinds), ["items", "summary", "watch"], "四則一批＋自選一批＋總結一次")
         self.assertEqual(report["status"], "ok")
         run_row = d1.query("SELECT * FROM market_news_runs")[0]
         self.assertEqual((run_row["run_id"], run_row["slot"], run_row["status"]), ("2026-11-19-close", "close", "ok"))
@@ -197,18 +237,35 @@ class RunTests(unittest.TestCase):
         indices = json.loads(run_row["indices"])
         self.assertEqual(indices[0], {"name": "加權", "change_pct": -1.82, "date": "2026-11-19"})
         self.assertIn({"name": "費城半導體", "change_pct": -3.1, "date": "2026-11-18"}, indices)
-        items = d1.query("SELECT grp, tone, impact, title, source, translated FROM market_news_items ORDER BY impact DESC, title")
-        self.assertIn(("tw", "down", 3, "中文：外資賣超台股逾 600 億元", "中央通訊社", 0), [tuple(r.values()) for r in items])
-        self.assertIn(("asia", "up", 2, "中文：Korea exports rise 9", "韓聯社", 1), [tuple(r.values()) for r in items])
-        mine = d1.query("SELECT email, code, tone, title FROM market_news_user_items")
-        self.assertEqual(mine, [{"email": OWNER, "code": "2330", "tone": "down", "title": "自選：TSMC ADR falls 4%"}])
+        items = [tuple(r.values()) for r in d1.query("SELECT grp, kind, tone, impact, title, source, translated FROM market_news_items")]
+        self.assertIn(("tw", "flows", "down", 3, "中文：外資賣超台股逾 600 億元", "中央通訊社", 0), items)
+        self.assertIn(("asia", "other", "up", 2, "中文：Korea exports rise 9", "韓聯社", 1), items)
+        marks = d1.query("SELECT code, relevant, kind, tone, title, judged_by FROM stock_news_marks")
+        self.assertEqual(marks, [{"code": "2330", "relevant": 1, "kind": "rating", "tone": "down",
+                                  "title": "自選：TSMC ADR falls 4%", "judged_by": "owner"}])
+        self.assertEqual((report["owner_watch_sent"], report["owner_watch"]), (1, 1))
 
+    def test_stock_news_is_judged_once_and_only_new_rows_go_to_the_model(self):
+        d1 = D1()
+        run(d1)
+        _, _, again = run(d1)
+        self.assertNotIn("watch", again.kinds, "判過的不再送")
+        d1.db.execute("INSERT INTO watch_news (code, link, source, title, summary, published_at, fetched_at) VALUES "
+                      "('2330', 'https://news.google.com/rss/articles/N2', 'gnews-cnyes', '台積電10月營收創高', '', '2026-11-01T02:00:00Z', '2026-11-19T06:00:00Z')")
+        _, _, third = run(d1)
+        payload = json.loads(third.prompts[third.kinds.index("watch")].split("INPUT:")[1])
+        self.assertEqual([row["title"] for row in payload["watch"]], ["台積電10月營收創高"], "18 天前的也判（回補 30 天）")
+        self.assertEqual(d1.query("SELECT kind FROM stock_news_marks WHERE link LIKE '%N2'"), [{"kind": "earnings"}])
     def test_the_same_story_from_two_sources_is_sent_once(self):
         d1 = D1()
         d1.db.execute("INSERT INTO watch_news (code, link, source, title, summary, published_at, fetched_at) VALUES "
-                      "('2330', 'https://www.cna.com.tw/x', 'cna-finance', 'TSMC ADR falls 4%', '', '2026-11-19T02:05:00Z', '2026-11-19T06:00:00Z')")
-        self.assertEqual([row["title"] for row in mn.watch_rows(d1.query, OWNER, NOW)], ["TSMC ADR falls 4%"])
-
+                      "('2330', 'https://news.google.com/rss/articles/T0', 'gnews-cna', 'TSMC ADR falls 4%', '', '2026-11-19T02:05:00Z', '2026-11-19T06:00:00Z')")
+        rows = mn.pending_stock_rows(d1.query, {"2330": "台積電"}, NOW, limit=10)
+        self.assertEqual([row["title"] for row in rows], ["TSMC ADR falls 4%"])
+        self.assertEqual(len(rows[0]["links"]), 2)
+        run(d1)
+        marks = d1.query("SELECT relevant FROM stock_news_marks WHERE code = '2330' ORDER BY relevant DESC")
+        self.assertEqual(marks, [{"relevant": 1}, {"relevant": 0}], "第二個連結記成不顯示，下一輪不再送")
     def test_prompts_carry_items_watchlist_and_a_summary_of_marked_news(self):
         d1 = D1()
         _, _, ask = run(d1)
@@ -320,21 +377,27 @@ class RunTests(unittest.TestCase):
         def friend_ask(key_row, prompt, schema):
             seen.append((key_row["email"], prompt))
             payload = json.loads(prompt[prompt.index("INPUT:") + 6:])
-            return "ok", {"watch": [{"id": row["id"], "relevant": "yes", "tone": "up", "impact": 1,
+            return "ok", {"watch": [{"id": row["id"], "relevant": "yes", "kind": "deal", "tone": "up", "impact": 1,
                                      "title": "朋友：" + row["title"], "reason": "x"} for row in payload["watch"]]}, ""
         run(d1, friend_keys=[{"email": FRIEND, "alg": "AES-256-GCM"}], friend_ask=friend_ask)
         self.assertEqual([email for email, _ in seen], [FRIEND])
-        self.assertNotIn("TSMC", seen[0][1], "朋友的提示只有他自己的自選")
-        rows = d1.query("SELECT email, code, tone FROM market_news_user_items ORDER BY email")
-        self.assertEqual(rows, [{"email": FRIEND, "code": "2454", "tone": "up"}, {"email": OWNER, "code": "2330", "tone": "down"}])
+        self.assertNotIn("TSMC", seen[0][1], "朋友的金鑰只判他自選裡還沒人判過的")
+        rows = d1.query("SELECT code, tone, judged_by FROM stock_news_marks ORDER BY code")
+        self.assertEqual(rows, [{"code": "2330", "tone": "down", "judged_by": "owner"}, {"code": "2454", "tone": "up", "judged_by": "friend"}])
 
+    def test_a_friend_does_not_pay_for_news_the_owner_already_judged(self):
+        d1 = D1()
+        d1.db.execute("INSERT INTO user_watchlist (email, code, name, market, in_universe, created_at, updated_at, watching) "
+                      "VALUES (?, '2330', '台積電', '上市', 1, '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z', 0)", (FRIEND,))
+        d1.db.execute("DELETE FROM watch_news WHERE code = '2454'")
+        report, _, _ = run(d1, friend_keys=[{"email": FRIEND}])   # friend_ask 預設會丟錯：不該被叫到
+        self.assertEqual(report["friends"], {FRIEND: "nothing_new"})
     def test_a_friend_key_failure_only_skips_that_friend(self):
         d1 = D1()
         report, _, _ = run(d1, friend_keys=[{"email": FRIEND}],
                            friend_ask=lambda key_row, prompt, schema: ("quota", None, "429"))
         self.assertEqual(report["friends"], {FRIEND: "0/1 quota 429"})
-        self.assertEqual(d1.query("SELECT email FROM market_news_user_items"), [{"email": OWNER}])
-
+        self.assertEqual(d1.query("SELECT code, judged_by FROM stock_news_marks"), [{"code": "2330", "judged_by": "owner"}])
     def test_rerunning_a_slot_replaces_it_and_old_runs_are_removed(self):
         d1 = D1()
         run(d1)
@@ -433,20 +496,21 @@ class Round4Tests(unittest.TestCase):
         run(d1, ask=Wrapped())
         self.assertEqual(d1.query("SELECT summary FROM market_news_runs")[0]["summary"], "受美國新出口管制影響，台股下跌。")
 
-    def test_watch_news_the_model_calls_unrelated_is_not_kept(self):
+    def test_watch_news_the_model_calls_unrelated_is_stored_as_unrelated(self):
         d1 = D1()
         d1.db.execute("INSERT INTO watch_news (code, link, source, title, summary, published_at, fetched_at) VALUES "
                       "('2330', 'https://news.google.com/rss/articles/R1', 'gnews-cna', '台積電盃馬拉松開跑', '', '2026-11-19T03:00:00Z', '2026-11-19T06:00:00Z')")
         report, _, _ = run(d1)
-        self.assertEqual([r["title"] for r in d1.query("SELECT title FROM market_news_user_items")], ["自選：TSMC ADR falls 4%"])
-        self.assertEqual(report["diagnosis"]["calls"]["watch"]["unrelated"], 1)
-
+        rows = d1.query("SELECT title, relevant FROM stock_news_marks ORDER BY relevant DESC")
+        self.assertEqual(rows, [{"title": "自選：TSMC ADR falls 4%", "relevant": 1}, {"title": "台積電盃馬拉松開跑", "relevant": 0}])
+        self.assertEqual((report["owner_watch"], report["owner_watch_unrelated"]), (1, 1))
+        self.assertEqual(report["diagnosis"]["calls"]["watch1"]["unrelated"], 1)
     def test_cna_rows_matched_only_by_their_lead_are_not_watch_news(self):
         d1 = D1()
         d1.db.execute("INSERT INTO watch_news (code, link, source, title, summary, published_at, fetched_at) VALUES "
                       "('2330', 'https://www.cna.com.tw/k', 'cna-finance', '新竹市國際風箏節登場', '台積電贊助', '2026-11-19T03:00:00Z', '2026-11-19T06:00:00Z')")
-        self.assertEqual([row["title"] for row in mn.watch_rows(d1.query, OWNER, NOW)], ["TSMC ADR falls 4%"])
-
+        self.assertEqual([row["title"] for row in mn.pending_stock_rows(d1.query, {"2330": "台積電"}, NOW, limit=10)],
+                         ["TSMC ADR falls 4%"])
     def test_friends_are_asked_in_small_batches_with_light_thinking(self):
         d1 = D1()
         for n in range(12):
@@ -460,16 +524,28 @@ class Round4Tests(unittest.TestCase):
             sizes.append(len(payload["watch"]))
             if len(sizes) == 1:
                 return "gemini_unavailable", None, '{"error": "GeminiTimeout"}'
-            return "ok", {"watch": [{"id": row["id"], "relevant": "yes", "tone": "up", "impact": "1", "title": "朋友", "reason": "x"}
-                                    for row in payload["watch"]]}, ""
+            return "ok", {"watch": [{"id": row["id"], "relevant": "yes", "kind": "other", "tone": "up", "impact": "1",
+                                     "title": "朋友", "reason": "x"} for row in payload["watch"]]}, ""
         report, _, _ = run(d1, friend_keys=[{"email": FRIEND}], friend_ask=friend_ask)
         self.assertEqual(sizes, [mn.FRIEND_BATCH, 13 - mn.FRIEND_BATCH])
         self.assertIn("1/2", report["friends"][FRIEND])
-        self.assertNotIn(FRIEND, json.loads(d1.query("SELECT sources FROM market_news_runs")[0]["sources"])["judged_users"])
-        self.assertEqual(len(d1.query(f"SELECT 1 FROM market_news_user_items WHERE email = '{FRIEND}'")), 13 - mn.FRIEND_BATCH)
+        self.assertEqual(len(d1.query("SELECT 1 FROM stock_news_marks WHERE judged_by = 'friend'")), 13 - mn.FRIEND_BATCH)
         body = mn.friend_body("x", mn.WATCH_SCHEMA)
         self.assertEqual(body["generationConfig"]["thinkingConfig"]["thinkingLevel"], mn.FRIEND_NEWS_EFFORT)
         self.assertEqual(mn.FRIEND_NEWS_EFFORT, "low")
+    def test_rules_use_taiwan_market_words_and_name_the_key_events(self):
+        for rules in (mn.ITEM_RULES, mn.WATCH_RULES, mn.SUMMARY_RULES):
+            for word in ("限空令", "融券", "法說會", "三大法人"):
+                self.assertIn(word, rules)
+        self.assertIn("點名", mn.SUMMARY_RULES)
+        self.assertIn("同一件事", mn.ITEM_RULES)
+        self.assertIn("中央通訊社", mn.ITEM_RULES)
+
+    def test_groups_are_ordered_by_impact_then_kind(self):
+        rows = [{"group": "tw", "impact": 2, "kind": "other", "published_at": "2026-11-19T05:00:00Z", "title": "a"},
+                {"group": "tw", "impact": 2, "kind": "policy", "published_at": "2026-11-19T01:00:00Z", "title": "b"},
+                {"group": "tw", "impact": 3, "kind": "other", "published_at": "2026-11-19T00:00:00Z", "title": "c"}]
+        self.assertEqual([row["title"] for row in mn._keep_per_group(rows)], ["c", "b", "a"])
 
     def test_only_clearly_unrelated_news_is_skipped(self):
         self.assertIn("看不出影響", mn.ITEM_RULES)
@@ -498,26 +574,6 @@ class Round5Tests(unittest.TestCase):
         run(d1, ask=Long())
         self.assertTrue(d1.query("SELECT summary FROM market_news_runs")[0]["summary"].endswith("，主要是外資賣超與輝達調") is False)
 
-    def test_who_was_judged_is_recorded_even_when_nothing_related_is_left(self):
-        d1 = D1()
-        d1.db.execute("UPDATE watch_news SET title = '台積電盃馬拉松開跑' WHERE code = '2330'")
-        report, _, _ = run(d1)
-        self.assertEqual(report["owner_watch"], 0)
-        stored = json.loads(d1.query("SELECT sources FROM market_news_runs")[0]["sources"])
-        self.assertEqual(stored["judged_users"], [OWNER])
-
-    def test_a_friend_whose_batches_all_worked_is_judged_and_a_failed_one_is_not(self):
-        def ok(key_row, prompt, schema):
-            payload = json.loads(prompt[prompt.index("INPUT:") + 6:])
-            return "ok", {"watch": [{"id": row["id"], "relevant": "no", "tone": "flat", "impact": "1", "title": "x", "reason": "x"}
-                                    for row in payload["watch"]]}, "schema 3s"
-        d1 = D1()
-        report, _, _ = run(d1, friend_keys=[{"email": FRIEND}], friend_ask=ok)
-        self.assertEqual(json.loads(d1.query("SELECT sources FROM market_news_runs")[0]["sources"])["judged_users"], [OWNER, FRIEND])
-        self.assertEqual(report["friends"][FRIEND], "ok schema 3s")
-        d2 = D1()
-        run(d2, friend_keys=[{"email": FRIEND}], friend_ask=lambda *a: ("gemini_unavailable", None, "schema 120s timeout"))
-        self.assertEqual(json.loads(d2.query("SELECT sources FROM market_news_runs")[0]["sources"])["judged_users"], [OWNER])
 
 
 class FriendCallTests(unittest.TestCase):

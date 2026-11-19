@@ -86,7 +86,7 @@ jobs:
     needs: authorize
     if: needs.authorize.outputs.allowed == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45   # 第一次回補個股新聞時搜尋與判讀都比較多
     env:
       TZ: Asia/Taipei
       PYTHONIOENCODING: utf-8

@@ -41,9 +41,16 @@ beforeEach(async () => {
   await news("2330", "https://news.google.com/a", "TSMC ADR falls", "2026-11-19T02:00:00Z");
   await news("2330", "https://news.google.com/b", "TSMC old story", "2026-11-10T02:00:00Z");
   await news("2454", "https://news.google.com/c", "MediaTek wins orders", "2026-11-19T03:00:00Z");
-  await env.DB.prepare("INSERT INTO market_news_user_items (email, run_id, code, link, tone, impact, title, translated, reason) VALUES (?, ?, ?, ?, 'down', 2, ?, 1, ?)")
-    .bind(OWNER, "2026-11-19-close", "2330", "https://news.google.com/a", "台積電 ADR 下跌", "跟著費半走弱").run();
+  await mark("2330", "https://news.google.com/a", { kind: "rating", tone: "down", impact: 2, title: "台積電 ADR 下跌", translated: 1, reason: "跟著費半走弱" });
 });
+
+async function mark(code, link, { relevant = 1, kind = "earnings", tone = "up", impact = 2, title = "標題", translated = 0, reason = "理由" } = {}) {
+  await env.DB.prepare("INSERT INTO stock_news_marks (code, link, relevant, kind, tone, impact, title, translated, reason, judged_by, judged_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'owner', '2026-11-19T06:05:00Z')")
+    .bind(code, link, relevant, kind, tone, impact, title, translated, reason).run();
+}
+const addNews = (code, link, source, title, published = "2026-11-19T04:00:00Z") => env.DB.prepare(
+  "INSERT INTO watch_news (code, link, source, title, summary, published_at, fetched_at) VALUES (?, ?, ?, ?, '', ?, ?)",
+).bind(code, link, source, title, published, published).run();
 
 async function req(path, { email = OWNER } = {}) {
   const headers = new Headers();
@@ -71,43 +78,59 @@ test("指定日期：那一天最後一輪", async () => {
   assert.equal((await req("/api/market-news?date=11-18")).status, 400);
 });
 
-test("我的自選：站主看自己的自選、帶判讀；一天以前的不列", async () => {
+test("我的自選：近 30 天、判讀過和公司有關的，帶類別與利多利空；新到舊", async () => {
+  await addNews("2330", "https://news.google.com/rev", "gnews-cnyes", "台積電10月營收創高", "2026-11-01T02:00:00Z");
+  await mark("2330", "https://news.google.com/rev", { kind: "earnings", tone: "up", impact: 3, title: "台積電10月營收創高", reason: "營收創高" });
   const body = await (await req("/api/market-news")).json();
-  assert.equal(body.mine.marked, true);
-  assert.deepEqual(body.mine.items, [{ code: "2330", name: "台積電", link: "https://news.google.com/a", published_at: "2026-11-19T02:00:00Z",
-    source: "路透", tone: "down", impact: 2, title: "台積電 ADR 下跌", translated: true, reason: "跟著費半走弱" }]);
+  assert.equal(body.mine.judged, true);
+  assert.deepEqual(body.mine.items, [
+    { code: "2330", name: "台積電", link: "https://news.google.com/a", published_at: "2026-11-19T02:00:00Z", source: "路透",
+      kind: "rating", tone: "down", impact: 2, title: "台積電 ADR 下跌", translated: true, reason: "跟著費半走弱" },
+    { code: "2330", name: "台積電", link: "https://news.google.com/rev", published_at: "2026-11-01T02:00:00Z", source: "鉅亨網",
+      kind: "earnings", tone: "up", impact: 3, title: "台積電10月營收創高", translated: false, reason: "營收創高" },
+  ]);
 });
 
-test("我的自選：朋友只看到自己的自選；沒有判讀時只有標題", async () => {
+test("我的自選：無關的、其他類的、影響小的舊聞不列；還沒判讀的只列近兩天的標題", async () => {
+  await addNews("2330", "https://news.google.com/kite", "gnews-cna", "台積電盃風箏節登場");
+  await mark("2330", "https://news.google.com/kite", { relevant: 0, kind: "other", tone: "flat", impact: 1, title: "台積電盃風箏節登場" });
+  await addNews("2330", "https://news.google.com/other", "gnews-cnyes", "台積電參加徵才活動");
+  await mark("2330", "https://news.google.com/other", { kind: "other", title: "台積電參加徵才活動" });
+  await addNews("2330", "https://news.google.com/minor", "gnews-cnyes", "台積電小消息", "2026-11-05T02:00:00Z");
+  await mark("2330", "https://news.google.com/minor", { kind: "deal", impact: 1, title: "台積電小消息" });
+  await addNews("2330", "https://news.google.com/new", "gnews-cnyes", "台積電剛出的新聞", "2026-11-19T06:00:00Z");
+  await addNews("2330", "https://news.google.com/stale", "gnews-cnyes", "台積電沒判的舊聞", "2026-11-12T02:00:00Z");
+  const body = await (await req("/api/market-news")).json();
+  assert.deepEqual(body.mine.items.map((row) => row.title), ["台積電剛出的新聞", "台積電 ADR 下跌"]);
+  assert.equal(body.mine.items[0].tone, undefined, "還沒判讀的只有標題");
+});
+
+test("我的自選：朋友只看到自己的自選；還沒人判讀時只有標題", async () => {
   const body = await (await req("/api/market-news", { email: FRIEND })).json();
   assert.equal(body.run.summary, "台股今天下跌，主因外資賣超。", "市場那份大家共用");
-  assert.equal(body.mine.marked, false);
-  assert.deepEqual(body.mine.items, [{ code: "2454", name: "聯發科", link: "https://news.google.com/c", published_at: "2026-11-19T03:00:00Z",
-    source: "路透", title: "MediaTek wins orders" }]);
+  assert.deepEqual(body.mine, { marked: false, judged: false, items: [{ code: "2454", name: "聯發科", link: "https://news.google.com/c",
+    published_at: "2026-11-19T03:00:00Z", source: "路透", title: "MediaTek wins orders" }] });
 });
 
-test("我的自選：模型判成無關的不顯示；中央社只在前言提到公司的不算（本人 11-19 回報風箏節、馬拉松）", async () => {
-  const add = (code, link, source, title) => env.DB.prepare(
-    "INSERT INTO watch_news (code, link, source, title, summary, published_at, fetched_at) VALUES (?, ?, ?, ?, '', '2026-11-19T04:00:00Z', '2026-11-19T04:00:00Z')",
-  ).bind(code, link, source, title).run();
-  await add("2330", "https://news.google.com/kite", "gnews-cna", "台積電盃風箏節登場");          // 有判讀的人：這則沒有標記＝模型判無關
-  await add("2454", "https://www.cna.com.tw/run", "cna-finance", "新北鐵道馬拉松開跑");           // 標題沒點名聯發科
-  await add("2454", "https://www.cna.com.tw/ok", "cna-finance", "聯發科法說會登場");
-  const owner = await (await req("/api/market-news")).json();
-  assert.deepEqual(owner.mine.items.map((row) => row.title), ["台積電 ADR 下跌"]);
+test("我的自選：中央社只在前言提到公司的不算；判讀是大家共用的（朋友看得到站主判過的）", async () => {
+  await addNews("2454", "https://www.cna.com.tw/run", "cna-finance", "新北鐵道馬拉松開跑");
+  await addNews("2454", "https://www.cna.com.tw/ok", "cna-finance", "聯發科法說會登場");
+  await mark("2454", "https://www.cna.com.tw/ok", { kind: "guidance", title: "聯發科法說會登場" });
   const friend = await (await req("/api/market-news", { email: FRIEND })).json();
-  assert.deepEqual(friend.mine.items.map((row) => row.title).sort(), ["MediaTek wins orders", "聯發科法說會登場"]);
+  assert.deepEqual(friend.mine.items.map((row) => [row.title, row.kind]), [["聯發科法說會登場", "guidance"], ["MediaTek wins orders", undefined]]);
 });
 
-test("我的自選：這一輪判讀過、全部無關時一則都不列，並告訴畫面判讀過（本人 11-19）", async () => {
-  await env.DB.prepare("DELETE FROM market_news_user_items").run();
-  await env.DB.prepare("UPDATE market_news_runs SET sources = ? WHERE run_id = '2026-11-19-close'")
-    .bind(JSON.stringify({ feeds: {}, missed_groups: [], judged_users: ["Owner@Example.com"] })).run();
+test("我的自選：判讀過、全部無關時一則都不列，並告訴畫面判讀過（本人 11-19）", async () => {
+  await env.DB.prepare("UPDATE stock_news_marks SET relevant = 0").run();
   const owner = await (await req("/api/market-news")).json();
   assert.deepEqual(owner.mine, { marked: false, judged: true, items: [] });
-  const friend = await (await req("/api/market-news", { email: FRIEND })).json();
-  assert.equal(friend.mine.judged, false);
-  assert.deepEqual(friend.mine.items.map((row) => row.title), ["MediaTek wins orders"], "沒判讀過的人照舊看標題");
+});
+
+test("三組：同樣影響時政策排在財報、其他前面，帶類別", async () => {
+  await env.DB.prepare("UPDATE market_news_items SET impact = 2, kind = 'other' WHERE run_id = '2026-11-19-close' AND item_id = 'n2'").run();
+  await env.DB.prepare("UPDATE market_news_items SET kind = 'policy' WHERE run_id = '2026-11-19-close' AND item_id = 'n1'").run();
+  const body = await (await req("/api/market-news")).json();
+  assert.deepEqual(body.groups.tw.map((row) => [row.title, row.kind]), [["台股跌破月線", "policy"], ["外資賣超逾 600 億", "other"]]);
 });
 
 test("模型沒寫成的那一輪：只有標題，不帶利多利空與理由", async () => {

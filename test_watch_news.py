@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parent
 MIGRATIONS = ROOT / "cloud/migrations"
 WATCHLIST = "".join((MIGRATIONS / name).read_text(encoding="utf-8") for name in ("0005_user_portfolio.sql", "0011_watchlist_watch.sql"))
 MIGRATION = (MIGRATIONS / "0015_watch_news.sql").read_text(encoding="utf-8")
-NEWS_POOL = (MIGRATIONS / "0031_market_news.sql").read_text(encoding="utf-8")
+NEWS_POOL = "".join((MIGRATIONS / name).read_text(encoding="utf-8") for name in ("0031_market_news.sql", "0032_stock_news_marks.sql"))
 NOW = "2026-11-16T09:00:00Z"
 
 
@@ -258,11 +258,35 @@ class DailyTests(unittest.TestCase):
         web = normal_web()
         web[("gnews", "zh")] = Response(status=503)
         run(d1, web, now="2026-11-17T09:00:00Z")
-        row = d1.fetches()[("gnews", "6488")]
+        fetches = d1.fetches()
+        failed = [code for code in ("2330", "6488") if fetches[("gnews", code)]["last_error"] == "HTTP 503"]
+        self.assertEqual(len(failed), 1, "第一檔回 503，另一檔記這一輪沒抓")
+        row = fetches[("gnews", failed[0])]
         self.assertEqual((row["last_attempt_at"], row["last_success_at"]), ("2026-11-17T09:00:00Z", NOW))
-        self.assertEqual(row["last_error"], "HTTP 503")
         run(d1, normal_web(), now="2026-11-18T09:00:00Z")
-        self.assertIsNone(d1.fetches()[("gnews", "6488")]["last_error"])
+        self.assertIsNone(d1.fetches()[("gnews", failed[0])]["last_error"])
+
+    def test_first_run_backfills_and_later_runs_only_look_back_two_days(self):
+        d1 = FakeD1()
+        _, first = run(d1, normal_web())
+        self.assertIn("when:30d", queried_names(first))
+        self.assertEqual(d1.fetches()[("gnews-backfill", "2330")]["last_success_at"], NOW)
+        _, second = run(d1, normal_web(), now="2026-11-16T21:00:00Z")
+        zh = " ".join(parse_qs(urlsplit(url).query)["q"][0] for url in second if is_gnews(url) and "hl=zh-TW" in url)
+        self.assertNotIn("when:30d", zh)
+        self.assertIn("when:2d", zh)
+
+    def test_official_announcements_on_the_site_are_added_as_stock_news(self):
+        import json
+        d1 = FakeD1()
+        d1.db.executescript("CREATE TABLE stock_data_state (key TEXT PRIMARY KEY, active_version TEXT);"
+                            "CREATE TABLE stock_announcements (version TEXT, code TEXT, payload TEXT);"
+                            "INSERT INTO stock_data_state VALUES ('current', 'v1');")
+        d1.db.execute("INSERT INTO stock_announcements VALUES ('v1', '2330', ?)", (json.dumps({"items": [
+            {"code": "2330", "date": "2026-11-16", "time": "15:30:00", "subject": "公告本公司董事會決議", "body": "說明"}]}),))
+        run(d1, normal_web())
+        self.assertIn(("mops", "公告本公司董事會決議"), [(row["source"], row["title"]) for row in d1.news("2330")])
+        self.assertIsNone(d1.fetches()[("mops", "")]["last_error"])
 
     def test_when_google_asks_to_slow_down_the_rest_are_not_requested(self):
         d1 = FakeD1()
