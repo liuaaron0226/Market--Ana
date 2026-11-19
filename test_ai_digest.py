@@ -276,5 +276,37 @@ class AiDigestTests(unittest.TestCase):
         return script
 
 
+class ChosenEffortTests(unittest.TestCase):
+    """本人 2026-11-19 晚（設定頁 AI 模型）：站主 AI 解讀的模型與思考強度由排程帶進來；空的照預設。"""
+
+    def test_the_effort_reaches_agy(self):
+        import ai_digest
+        command = ai_digest._agy_command("agy", "p", "gemini-4-argon", "high")
+        self.assertEqual(command[command.index("--effort") + 1], "high")
+        self.assertEqual(command[command.index("--model") + 1], "gemini-4-argon")
+
+    def test_command_line_effort_and_empty_values_mean_the_default(self):
+        import ai_digest
+        import gemini_models as gm
+        seen = {}
+        original = ai_digest.run_digest
+        ai_digest.run_digest = lambda payload, **kwargs: seen.update(kwargs) or {
+            "rows": [], "usage": {}, "audit": {"failure": None, "rejected": []}}
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                folder = Path(tmp)
+                (folder / "in.json").write_text(json.dumps({"data_date": "2026-11-10"}), encoding="utf-8")
+                for model, effort, expected in (("", "", (gm.DIGEST, gm.DIGEST_EFFORT)),
+                                                ("gemini-3.8-flash", "low", ("gemini-3.8-flash", "low"))):
+                    digest_main(["--input", str(folder / "in.json"), "--agy-bin", "agy", "--model", model,
+                                 "--effort", effort, "--output", str(folder / "out.json"),
+                                 "--audit", str(folder / "audit.json")])
+                    self.assertEqual((seen["model"], seen["effort"]), expected)
+                    audit = json.loads((folder / "audit.json").read_text(encoding="utf-8"))
+                    self.assertEqual((audit["model"], audit["effort"]), expected)
+        finally:
+            ai_digest.run_digest = original
+
+
 if __name__ == "__main__":
     unittest.main()

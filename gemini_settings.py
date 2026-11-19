@@ -2,13 +2,13 @@
 
 本人逐題定案（共用筆記 model-settings-decisions.md，待寫進 ANALYSIS_PLAN）：
 - 存在網站資料庫（D1 ``ai_model_settings``，遷移 0030），每支排程開跑第一步用 wrangler 讀一次；
-- 讀不到就用 gemini_models.py 的預設照跑，另外留一筆 ``ai_model_fallbacks`` 讓設定頁標「上一班沒讀到你的設定」；
-  還沒選過（表是空的）不算讀不到；
+- 讀不到就用 gemini_models.py 的預設照跑。每一班都在 ``ai_model_reads`` 記一筆讀取結果（saved／unset／unreadable），
+  設定頁看每支排程最近那一筆，是 unreadable 才標「上一班沒讀到你的設定」；還沒選過（表是空的）不算讀不到；
 - 大盤預測的晨間版跟前一晚同一組（forecast_run 自己照帳本處理），這裡只給「現在存的值」。
 
 用法（排程裡，wrangler 讀完之後）：
   python gemini_settings.py --input "$RUNNER_TEMP/ai-models.json" --github-env "$GITHUB_ENV" \
-      --task forecast-ledger --run-id "$GITHUB_RUN_ID" --fallback-sql "$RUNNER_TEMP/ai-model-fallback.sql"
+      --task forecast-ledger --run-id "$GITHUB_RUN_ID" --read-sql "$RUNNER_TEMP/ai-model-read.sql"
 寫進 GITHUB_ENV：每個任務 ``AI_<任務>_MODEL``、``AI_<任務>_EFFORT``，以及 ``AI_SETTINGS_SOURCE``（saved／unset／unreadable）。
 一律以 0 結束：讀設定只是挑模型，不能讓原本的排程失敗。
 """
@@ -74,9 +74,10 @@ def _literal(value: str) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
-def fallback_sql(task: str, run_id: str, at: str) -> str:
-    return (f"INSERT INTO ai_model_fallbacks (task, run_id, at) VALUES ({_literal(task)}, {_literal(run_id)}, {_literal(at)}) "
-            "ON CONFLICT (task, run_id) DO NOTHING;\n")
+def read_sql(task: str, run_id: str, at: str, source: str) -> str:
+    return ("INSERT INTO ai_model_reads (task, run_id, read_at, source) "
+            f"VALUES ({_literal(task)}, {_literal(run_id)}, {_literal(at)}, {_literal(source)}) "
+            "ON CONFLICT (task, run_id) DO UPDATE SET read_at = excluded.read_at, source = excluded.source;\n")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -85,7 +86,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--github-env", required=True)
     parser.add_argument("--task", required=True, help="排程檔名（記「沒讀到」時用）")
     parser.add_argument("--run-id", required=True)
-    parser.add_argument("--fallback-sql", required=True, help="讀不到時寫一筆 ai_model_fallbacks；讀到時是空檔")
+    parser.add_argument("--read-sql", required=True, help="這一班的讀取結果（ai_model_reads 一筆），排程記用量時一起寫")
     args = parser.parse_args(argv)
     try:
         text = Path(args.input).read_text(encoding="utf-8", errors="replace")
@@ -94,11 +95,10 @@ def main(argv: list[str] | None = None) -> int:
     resolved = resolve(text)
     with open(args.github_env, "a", encoding="utf-8", newline="\n") as handle:
         handle.write("".join(line + "\n" for line in env_lines(resolved)))
-    note = ""
     if resolved["source"] == "unreadable":
-        note = fallback_sql(args.task, args.run_id, datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
         print("::warning::讀不到設定頁的 AI 模型設定，這一班用 gemini_models.py 的預設")
-    Path(args.fallback_sql).write_text(note, encoding="utf-8", newline="\n")
+    at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    Path(args.read_sql).write_text(read_sql(args.task, args.run_id, at, resolved["source"]), encoding="utf-8", newline="\n")
     for task, choice in resolved["tasks"].items():
         print(f"{task}: {choice['model']} {choice['effort']}（{'設定頁' if choice['from'] == 'saved' else '預設'}）")
     return 0

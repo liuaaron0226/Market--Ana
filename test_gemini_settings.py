@@ -73,7 +73,7 @@ class CommandLineTests(unittest.TestCase):
             folder = Path(tmp)
             env, sql = folder / "env", folder / "fallback.sql"
             env.write_text("EARLIER=1\n", encoding="utf-8")
-            args = ["--github-env", str(env), "--task", "forecast-ledger", "--run-id", "42", "--fallback-sql", str(sql)]
+            args = ["--github-env", str(env), "--task", "forecast-ledger", "--run-id", "42", "--read-sql", str(sql)]
             if text is not None:
                 (folder / "in.json").write_text(text, encoding="utf-8")
                 args += ["--input", str(folder / "in.json")]
@@ -82,18 +82,27 @@ class CommandLineTests(unittest.TestCase):
             self.assertEqual(gs.main(args), 0)
             return env.read_text(encoding="utf-8"), sql.read_text(encoding="utf-8")
 
-    def test_appends_to_github_env_and_leaves_no_fallback_note_when_read(self):
+    def test_appends_to_github_env_and_records_that_this_run_read_the_settings(self):
         env, sql = self.run_main(wrangler([{"task": "forecast", "model": gm.FLASH, "effort": "high"}]))
         self.assertTrue(env.startswith("EARLIER=1\n"))
         self.assertIn(f"AI_FORECAST_MODEL={gm.FLASH}\n", env)
-        self.assertEqual(sql, "")
+        self.assertIn("INSERT INTO ai_model_reads", sql)
+        self.assertIn("'saved'", sql)
 
-    def test_unreadable_settings_leave_a_note_for_the_settings_page(self):
+    def test_unreadable_settings_are_recorded_for_the_settings_page(self):
+        # 本人第 3 題：設定頁標「上一班沒讀到你的設定」——每班都記一筆讀取結果，設定頁看每支排程最近那一筆
         env, sql = self.run_main(None)
         self.assertIn("AI_SETTINGS_SOURCE=unreadable\n", env)
-        self.assertIn("INSERT INTO ai_model_fallbacks", sql)
         self.assertIn("'forecast-ledger'", sql)
         self.assertIn("'42'", sql)
+        self.assertIn("'unreadable'", sql)
+
+    def test_the_settings_page_shows_the_same_defaults(self):
+        # 設定頁（cloud/lib/ai-models.js）顯示的預設要和這裡一致，兩邊各寫一份由這個測試對帳
+        source = (Path(__file__).parent / "cloud/lib/ai-models.js").read_text(encoding="utf-8")
+        for task, choice in DEFAULTS.items():
+            with self.subTest(task=task):
+                self.assertRegex(source, rf'{task}: {{ model: "{choice["model"]}", effort: "{choice["effort"]}" }}')
 
 
 if __name__ == "__main__":

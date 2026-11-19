@@ -16,6 +16,8 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
+import gemini_models
+
 OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
@@ -67,7 +69,9 @@ OUTPUT_SCHEMA: dict[str, Any] = {
     },
 }
 
-MODEL_DEFAULT = "gemini-3.8-flash"
+# 本人 2026-11-19 晚：站主 AI 解讀的模型與思考強度由設定頁「AI 模型」選，排程帶 --model／--effort 進來；這兩個是預設。
+MODEL_DEFAULT = gemini_models.DIGEST
+EFFORT_DEFAULT = gemini_models.DIGEST_EFFORT
 BANNED_TEXT = ("Gemini", "Antigravity", "模型", "提示詞", "參考站", "參考網站", "原站", "會員", "反推", "吻合率", "方法")
 CHINESE_NUMERAL_CHARS = frozenset("零〇一二三四五六七八九十百千萬万億亿兆兩两壹貳貮參参肆伍陸陆柒捌玖拾佰仟")
 
@@ -192,11 +196,11 @@ def _parse_envelope(text: str) -> dict[str, Any]:
     raise ValueError("agy 沒有輸出 JSON envelope")
 
 
-def _agy_command(agy_bin: Path | str, prompt: str, model: str) -> list[str]:
+def _agy_command(agy_bin: Path | str, prompt: str, model: str, effort: str = EFFORT_DEFAULT) -> list[str]:
     path = Path(agy_bin)
     prefix = [sys.executable, str(path)] if path.suffix.lower() == ".py" else [str(path)]
     return [
-        *prefix, "-p", prompt, "--model", model, "--effort", "medium", "--output-format", "json",
+        *prefix, "-p", prompt, "--model", model, "--effort", effort, "--output-format", "json",
         "--json-schema", json.dumps(OUTPUT_SCHEMA, ensure_ascii=False, separators=(",", ":")),
         "--print-timeout", "300s", "--sandbox",
     ]
@@ -461,12 +465,13 @@ class ModelCallFailed(Exception):
         self.detail = detail or {}
 
 
-def call_agy(prompt: str, model: str, *, agy_bin: Path | str) -> tuple[Any, dict[str, int | None]]:
+def call_agy(prompt: str, model: str, *, agy_bin: Path | str,
+             effort: str = EFFORT_DEFAULT) -> tuple[Any, dict[str, int | None]]:
     """站主那條線：用官方 agy -p 取 structured_output。失敗一律丟 ModelCallFailed("agy_failed")。"""
     envelope: dict[str, Any] = {}
     try:
         completed = subprocess.run(
-            _agy_command(agy_bin, prompt, model), input="", text=True, encoding="utf-8",
+            _agy_command(agy_bin, prompt, model, effort), input="", text=True, encoding="utf-8",
             capture_output=True, timeout=360, check=False,
         )
         # 輸出不是 UTF-8 時 stdout 會是 None；當成沒有 envelope，走 agy_failed。
@@ -502,10 +507,11 @@ def digest_with_model(payload: dict[str, Any], *, prompt: str, call_model, model
     return {"rows": rows, "usage": usage, "audit": {"failure": None, "rejected": rejected}}
 
 
-def run_digest(payload: dict[str, Any], *, agy_bin: Path | str, model: str = MODEL_DEFAULT) -> dict[str, Any]:
+def run_digest(payload: dict[str, Any], *, agy_bin: Path | str, model: str = MODEL_DEFAULT,
+               effort: str = EFFORT_DEFAULT) -> dict[str, Any]:
     return digest_with_model(
         payload, prompt=build_prompt(payload), model=model, crash_code="agy_failed",
-        call_model=lambda prompt, chosen: call_agy(prompt, chosen, agy_bin=agy_bin),
+        call_model=lambda prompt, chosen: call_agy(prompt, chosen, agy_bin=agy_bin, effort=effort),
     )
 
 
@@ -541,6 +547,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--agy-bin", type=Path)
     parser.add_argument("--model", default=MODEL_DEFAULT)
+    parser.add_argument("--effort", default=EFFORT_DEFAULT, help="思考強度 low／medium／high（設定頁 AI 模型）")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--audit", type=Path, required=True)
     parser.add_argument("--sql-output", type=Path)
@@ -549,6 +556,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--mark-failure", help="不呼叫 agy，直接把當日三類標成未產生（例如 agy_setup_failed）")
     args = parser.parse_args(argv)
+    # 排程讀設定那一步萬一沒寫進環境變數會帶空字串：照預設，不把空的名稱送給 agy
+    args.model, args.effort = args.model or MODEL_DEFAULT, args.effort or EFFORT_DEFAULT
 
     payload = json.loads(args.input.read_text(encoding="utf-8"))
     if args.prompt_output:
@@ -565,9 +574,10 @@ def main(argv: list[str] | None = None) -> int:
     else:
         if args.agy_bin is None:
             parser.error("非 dry-run 必須提供 --agy-bin")
-        result = run_digest(payload, agy_bin=args.agy_bin, model=args.model)
+        result = run_digest(payload, agy_bin=args.agy_bin, model=args.model, effort=args.effort)
     args.output.write_text(json.dumps({"rows": result["rows"], "usage": result["usage"]}, ensure_ascii=False, indent=2), encoding="utf-8")
-    audit = {"data_date": payload.get("data_date"), "input_sha256": payload.get("input_sha256"), "model": args.model, **result["audit"]}
+    audit = {"data_date": payload.get("data_date"), "input_sha256": payload.get("input_sha256"), "model": args.model,
+             "effort": args.effort, **result["audit"]}
     args.audit.write_text(json.dumps(audit, ensure_ascii=False, indent=2), encoding="utf-8")
     if args.sql_output and result["rows"]:
         args.sql_output.write_text(d1_sql(result["rows"]), encoding="utf-8")
