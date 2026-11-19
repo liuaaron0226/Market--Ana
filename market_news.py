@@ -29,8 +29,8 @@ TAIPEI = timezone(timedelta(hours=8))
 SLOTS = ("morning", "midday", "close")
 WINDOW_HOURS = 24          # 只送最近一天發布的
 MAX_WINDOW_HOURS = 96      # 週一盤前、連假後：從上一輪開始，最多往回四天
-PER_FEED = 12              # 每個來源最多送幾則（最新的）
-MAX_ITEMS = 100            # 一次最多送幾則給模型
+PER_FEED = 6               # 每個來源最多送幾則（最新的）
+MAX_ITEMS = 60             # 一次最多送幾則給模型（100 則加思考高超過 agy 的 300 秒，2026-11-19 實測）
 GROUP_KEEP = 12            # 每一組最多存幾則（依影響大小）
 WATCH_MAX = 30             # 「我的自選」一個人最多送幾則
 KEEP_DAYS = 35
@@ -39,8 +39,14 @@ TITLE_MAX = 120
 REASON_MAX = 80
 RSS_SUMMARY_MAX = 200
 GNEWS_PAUSE_SECONDS = wn.GNEWS_PAUSE_SECONDS
+# agy 等模型的上限：一輪幾十則加思考高，300 秒不夠（2026-11-19 本機實測 60 則逾時）；其他任務照舊 300 秒。
+MODEL_TIMEOUT_SECONDS = 600
 GROUPS = ("tw", "us", "asia")
 MARKETS = ("", "日", "韓", "中")
+# 送給模型的結構描述（agy 轉成 Gemini function declaration）：enum 只能是非空字串（2026-11-19 乾跑 INVALID_ARGUMENT），
+# 所以影響大小寫成 "1"～"3"、沒有市場寫 "none"，讀回來再換成數字與空字串。
+WIRE_IMPACTS = ("1", "2", "3")
+WIRE_MARKETS = ("none", "日", "韓", "中")
 
 
 def _gnews(query: str, sites: Sequence[str]) -> str:
@@ -233,12 +239,12 @@ def indices(query: Callable[[str], list[dict]], taiex: Callable[[], dict | None]
 
 _ITEM = {"type": "object", "properties": {
     "id": {"type": "string"}, "group": {"type": "string", "enum": [*GROUPS, "skip"]},
-    "market": {"type": "string", "enum": list(MARKETS)}, "tone": {"type": "string", "enum": ["up", "down", "flat"]},
-    "impact": {"type": "integer", "enum": [1, 2, 3]}, "title": {"type": "string"}, "reason": {"type": "string"}},
+    "market": {"type": "string", "enum": list(WIRE_MARKETS)}, "tone": {"type": "string", "enum": ["up", "down", "flat"]},
+    "impact": {"type": "string", "enum": list(WIRE_IMPACTS)}, "title": {"type": "string"}, "reason": {"type": "string"}},
     "required": ["id", "group", "market", "tone", "impact", "title", "reason"]}
 _WATCH = {"type": "object", "properties": {
     "id": {"type": "string"}, "tone": {"type": "string", "enum": ["up", "down", "flat"]},
-    "impact": {"type": "integer", "enum": [1, 2, 3]}, "title": {"type": "string"}, "reason": {"type": "string"}},
+    "impact": {"type": "string", "enum": list(WIRE_IMPACTS)}, "title": {"type": "string"}, "reason": {"type": "string"}},
     "required": ["id", "tone", "impact", "title", "reason"]}
 OUTPUT_SCHEMA = {"type": "object", "properties": {"summary": {"type": "string"}, "items": {"type": "array", "items": _ITEM},
                                                   "watch": {"type": "array", "items": _WATCH}},
@@ -252,9 +258,9 @@ RULES = """你是台股投資人的新聞助理。讀 INPUT 的新聞標題與�
 items：每一則都要回（id 照抄）：
 - group：這則主要影響哪個市場——tw 台股、us 美股、asia 日韓中；group_hint 是來源的預設，global 的要你分；
   和股市無關（生活、社會、體育、八卦）或看不出影響的填 skip。
-- market：asia 那組填「日」「韓」「中」其中一個（香港算中）；其他組填空字串。
+- market：asia 那組填「日」「韓」「中」其中一個（香港算中）；其他組填 none。
 - tone：對該市場是利多 up、利空 down，或中性 flat（已在預期內、影響不明）。
-- impact：影響大小 3 大、2 中、1 小（會左右整個市場或權值股的才是 3）。
+- impact：影響大小 "3" 大、"2" 中、"1" 小（會左右整個市場或權值股的才是 "3"）。
 - title：中文標題；原文是中文就照抄（可去掉多餘的來源字樣），外文就翻成自然的繁體中文，不加原文沒有的事實。
 - reason：一句話（30 字內）說明為什麼是利多或利空、會怎麼影響；只能根據標題與摘要，不要編數字或內容。
 watch：使用者自選股的新聞，同樣回 tone、impact、title、reason（對那一檔股票而言）。
@@ -262,7 +268,7 @@ summary：2～3 句「今天為什麼這樣走」，以台股為主、帶到美�
 其他數字只能來自標題或摘要；slot 是開盤前時，講的是昨夜國際市場與今天可能的影響，不要假裝已經開盤。"""
 
 WATCH_RULES = """你是台股投資人的新聞助理。讀 INPUT 的自選股新聞，用繁體中文回答，只回 JSON。
-watch：每一則都要回（id 照抄）：tone 對那一檔股票是利多 up、利空 down 或中性 flat；impact 3 大、2 中、1 小；
+watch：每一則都要回（id 照抄）：tone 對那一檔股票是利多 up、利空 down 或中性 flat；impact "3" 大、"2" 中、"1" 小；
 title 中文標題（外文翻成自然的繁體中文，不加原文沒有的事實）；reason 一句話（30 字內），只能根據標題，不要編數字。"""
 
 
@@ -293,6 +299,7 @@ def _mark(entry: Any) -> dict[str, Any] | None:
         return None
     tone, impact = entry.get("tone"), entry.get("impact")
     title, reason = _text(entry.get("title"), TITLE_MAX), _text(entry.get("reason"), REASON_MAX)
+    impact = int(impact) if impact in WIRE_IMPACTS else impact   # 結構描述送的是 "1"～"3"
     if tone not in ("up", "down", "flat") or impact not in (1, 2, 3) or isinstance(impact, bool) or not title or not reason:
         return None
     return {"tone": tone, "impact": impact, "title": title, "reason": reason}
@@ -312,7 +319,7 @@ def validate_items(output: Any, items: Sequence[Mapping[str, Any]]) -> list[dict
         if not mark or not source or entry["id"] in used or entry.get("group") not in GROUPS:
             continue
         used.add(entry["id"])
-        market = entry.get("market") if entry.get("group") == "asia" and entry.get("market") in MARKETS else ""
+        market = entry.get("market") if entry.get("group") == "asia" and entry.get("market") in MARKETS[1:] else ""
         out.append({**mark, "id": entry["id"], "group": entry["group"], "market": market or source["market_hint"] or "",
                     "translated": _translated(source["title"]), "source": source["source"], "link": source["link"],
                     "published_at": source["published_at"]})
@@ -364,9 +371,13 @@ def watch_rows(query: Callable[[str], list[dict]], email: str, now: str, since: 
                  "JOIN user_watchlist w ON w.code = n.code AND lower(w.email) = lower(" + _q(email) + ") "
                  f"WHERE n.code <> '' AND n.published_at >= {_q(since)} AND n.published_at <= {_q(now)} "
                  "ORDER BY n.published_at DESC, n.link")
-    out = []
-    for index, row in enumerate(rows[:WATCH_MAX], 1):
-        out.append({"id": f"w{index}", "code": row["code"], "name": row["name"], "link": row["link"],
+    out, seen = [], set()
+    for row in rows:
+        key = (row["code"], re.sub(r"\s+", "", row["title"]))   # 同一則從中央社 RSS 與 Google News 各來一次：只送一次
+        if key in seen or len(out) >= WATCH_MAX:
+            continue
+        seen.add(key)
+        out.append({"id": f"w{len(out) + 1}", "code": row["code"], "name": row["name"], "link": row["link"],
                     "source": wn.SOURCE_LABELS.get(row["source"], row["source"]), "title": row["title"],
                     "published_at": row["published_at"]})
     return out
@@ -452,7 +463,8 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
         execute(script)
     return {"status": "ok", "run_id": run_row["run_id"], "run_status": run_status, "items": len(stored),
             "sent": len(items), "model": status, **({"model_note": note[:200]} if status != "ok" and note else {}),
-            "owner_watch": len(user_rows.get(owner_email, [])), "friends": friends, "sources": sources,
+            "owner_watch_sent": len(owner_watch), "owner_watch": len(user_rows.get(owner_email, [])),
+            "friends": friends, "sources": sources,
             "dry_run": dry_run}
 
 
@@ -478,8 +490,9 @@ def _owner_asker(agy_bin: str | None, home: str | None, model: str, effort: str)
     def ask(text: str, schema: Mapping[str, Any]) -> tuple[str, Any, str]:
         if not agy_bin or not Path(agy_bin).exists():
             return "agy_unavailable", None, "agy 沒有安裝成功"
-        return ledger_core.call_model(agy_bin, text, model, 300, schema, env=plain_daily.agy_environment(os.environ, home),
-                                      effort=effort)
+        return ledger_core.call_model(agy_bin, text, model, MODEL_TIMEOUT_SECONDS + 60, schema,
+                                      env=plain_daily.agy_environment(os.environ, home), effort=effort,
+                                      print_timeout=MODEL_TIMEOUT_SECONDS)
     return ask
 
 
