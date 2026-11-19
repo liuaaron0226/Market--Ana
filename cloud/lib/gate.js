@@ -20,6 +20,7 @@ import { AI_MODELS_PATH, handleAiModelsApi } from "./ai-models.js";
 import { FRIEND_AI_PAGE, FRIEND_AI_PATH, keyStateLookup, deleteFriendKey, friendAiEnabled, handleFriendAiApi, notAvailable, ownerRefused } from "./friend-ai.js";
 import { WATCH_PEERS_PATH, handleWatchPeersApi } from "./watch-peers.js";
 import { INDEX_PATH, indexOf, loadIndex } from "./market-indices.js";
+import { MARKET_NEWS_PATH, handleMarketNewsApi, handleStockHeadlinesApi } from "./market-news.js";
 
 const PENDING_CAP = 30;
 // 票 06 限速（Astra r1 建議值）：市場 API 全部每人每分 30 次；個股明細另限每分 12 次。固定一分鐘窗，邊界最多兩倍突發。
@@ -323,6 +324,20 @@ async function handleStockApi(request, env, path, email, deps, options = {}) {
 // 個股頁事實區塊 D 票：這一檔近 90 天的重大訊息（跟著目前上線的個股資料版本走，每檔一列）。
 // 給誰看照事實區塊的開關；看不到的人拿到「沒有內容」。資料表還沒建立（0013 未套）或沒有這一檔就是空清單。
 const ANNOUNCEMENTS_PATH = new RegExp(`^/api/stocks/(${CODE_PATTERN})/announcements$`);
+
+// 首頁「消息」與個股頁的新聞標題（本人 2026-11-19）：開關 MARKET_ANA_MARKET_NEWS，和查行情共用同一個限流。
+const HEADLINES_PATH = new RegExp(`^/api/stocks/(${CODE_PATTERN})/headlines$`);
+
+async function handleNewsRequest(request, env, path, email, deps, { isOwner }) {
+  try {
+    await consume(env.DB, email, "market", (deps.now || Date.now)(), deps.rate);
+  } catch (e) {
+    if (e instanceof RateLimited) return json(429, { error: "rate-limited", message: "查詢太頻繁，請稍後再試" }, { "retry-after": String(e.retryAfter) });
+    throw new HttpError(503, "暫時無法處理，請稍後再試");
+  }
+  if (MARKET_NEWS_PATH.test(path)) return handleMarketNewsApi(request, env, email, { isOwner });
+  return handleStockHeadlinesApi(request, env, path.match(HEADLINES_PATH)[1], { isOwner }, (deps.now || Date.now)());
+}
 
 async function handleAnnouncementsApi(request, env, path, email, deps, { isOwner }) {
   if (request.method !== "GET") throw new HttpError(405, "方法不允許");
@@ -845,6 +860,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
       if (TICKS_STOCK_PATH.test(path)) return await handleStockTicksApi(request, env, path, email, deps);
       if (HISTORY_STOCK_PATH.test(path)) return await handleStockHistoryApi(request, env, path, email, deps, { isOwner: true });
       if (ANNOUNCEMENTS_PATH.test(path)) return await handleAnnouncementsApi(request, env, path, email, deps, { isOwner: true });
+      if (MARKET_NEWS_PATH.test(path) || HEADLINES_PATH.test(path)) return await handleNewsRequest(request, env, path, email, deps, { isOwner: true });
       if (isStock) return await handleStockApi(request, env, path, email, deps, { isOwner: true });
       if (isScreens) return await handleScreensApi(request, env, path, email, deps);
       if (path === DATA_STATUS_PATH) return handleDataStatusApi(request, deps);
@@ -876,6 +892,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
     if (LIVE_STOCK_PATH.test(path) || TICKS_STOCK_PATH.test(path)) return fail(403, "即時行情僅限站主使用");
     if (HISTORY_STOCK_PATH.test(path)) return await handleStockHistoryApi(request, env, path, email, deps, { isOwner: false });
     if (ANNOUNCEMENTS_PATH.test(path)) return await handleAnnouncementsApi(request, env, path, email, deps, { isOwner: false });
+    if (MARKET_NEWS_PATH.test(path) || HEADLINES_PATH.test(path)) return await handleNewsRequest(request, env, path, email, deps, { isOwner: false });
     if (isStock) return await handleStockApi(request, env, path, email, deps, { isOwner: false });
     if (isScreens) return await handleScreensApi(request, env, path, email, deps);
     if (path === DATA_STATUS_PATH) return handleDataStatusApi(request, deps);

@@ -102,6 +102,15 @@ export function friendAiEnabled(env) {
   return env?.MARKET_ANA_FRIEND_AI === "on";
 }
 
+// 首頁「消息」與個股頁新聞標題（本人 2026-11-19）：三種狀態的開關，先只開站主、本人 iPhone 看過再開給朋友。
+function marketNewsMode(env) {
+  return threeStateMode(env?.MARKET_ANA_MARKET_NEWS);
+}
+
+export function marketNewsVisible(env, isOwner) {
+  return modeAllowsViewer(marketNewsMode(env), isOwner);
+}
+
 // env 沒給時，事實區塊與五塊對其他人一律是關（寧可少給，不可多給）。
 export function policyForViewer(policy, isOwner, env = {}) {
   if (isOwner) return policy;
@@ -111,6 +120,7 @@ export function policyForViewer(policy, isOwner, env = {}) {
   features.stock_signals_v1 = stockSignalsVisible(env, false);
   features.stock_etfs_v1 = stockEtfsVisible(env, false);
   features.stock_funds_v1 = stockFundsVisible(env, false);
+  features.market_news_v1 = marketNewsVisible(env, false);
   return { ...policy, features };
 }
 
@@ -148,6 +158,8 @@ export function releasePolicy(env = {}) {
       stock_etfs_v1: stockEtfsMode(env) !== "off",
       // 基金上站：同上，這裡是站主看到的值。
       stock_funds_v1: stockFundsMode(env) !== "off",
+      // 首頁「消息」：同上，這裡是站主看到的值。
+      market_news_v1: marketNewsMode(env) !== "off",
     },
   };
 }
