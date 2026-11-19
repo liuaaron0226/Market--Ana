@@ -89,7 +89,8 @@ export async function handleMarketNewsApi(request, env, email, { isOwner }) {
     const shape = (classified) => (row) => ({
       title: row.title, source: row.source, link: row.link, published_at: row.published_at, market: row.market || "",
       translated: Boolean(row.translated),
-      ...(classified ? { tone: row.tone, impact: row.impact, reason: row.reason } : {}),
+      // 那一批沒判讀成的（理由是空的）只給標題，不標利多利空
+      ...(classified && row.reason ? { tone: row.tone, impact: row.impact, reason: row.reason } : {}),
     });
     const groups = Object.fromEntries(GROUPS.map((group) => [group, rows.filter((row) => row.grp === group).map(shape(run.status === "ok"))]));
     // 一組的來源這一輪全部沒抓到：標出來，列上一輪的（consensus 技術選擇 h）。

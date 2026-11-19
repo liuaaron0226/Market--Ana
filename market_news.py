@@ -41,6 +41,9 @@ RSS_SUMMARY_MAX = 200
 GNEWS_PAUSE_SECONDS = wn.GNEWS_PAUSE_SECONDS
 # agy 等模型的上限：一輪幾十則加思考高，300 秒不夠（2026-11-19 本機實測 60 則逾時）；其他任務照舊 300 秒。
 MODEL_TIMEOUT_SECONDS = 600
+BATCH_ITEMS = 20           # 市場新聞每批幾則（一批一次呼叫）
+SUMMARY_TOP = 20           # 總結那一次給幾則（影響大的先）
+PARALLEL_CALLS = 3         # 同時幾個呼叫
 # 朋友的金鑰走 Gemini API：思考高時一次可能超過朋友解讀用的 120 秒（2026-11-19 正式跑 gemini_unavailable）
 FRIEND_TIMEOUT_SECONDS = 300
 GROUPS = ("tw", "us", "asia")
@@ -248,15 +251,15 @@ _WATCH = {"type": "object", "properties": {
     "id": {"type": "string"}, "tone": {"type": "string", "enum": ["up", "down", "flat"]},
     "impact": {"type": "string", "enum": list(WIRE_IMPACTS)}, "title": {"type": "string"}, "reason": {"type": "string"}},
     "required": ["id", "tone", "impact", "title", "reason"]}
-OUTPUT_SCHEMA = {"type": "object", "properties": {"summary": {"type": "string"}, "items": {"type": "array", "items": _ITEM},
-                                                  "watch": {"type": "array", "items": _WATCH}},
-                 "required": ["summary", "items", "watch"]}
+ITEMS_SCHEMA = {"type": "object", "properties": {"items": {"type": "array", "items": _ITEM}}, "required": ["items"]}
+SUMMARY_SCHEMA = {"type": "object", "properties": {"summary": {"type": "string"}}, "required": ["summary"]}
 WATCH_SCHEMA = {"type": "object", "properties": {"watch": {"type": "array", "items": _WATCH}}, "required": ["watch"]}
 
 SLOT_TEXT = {"morning": "台股開盤前（台北 08:00）", "midday": "台股盤中（台北 11:30）", "close": "台股收盤後（台北 14:00）"}
 
-RULES = """你是台股投資人的新聞助理。讀 INPUT 的新聞標題與摘要，用繁體中文回答，只回 JSON。
-目的：讓使用者知道「今天台股（和各市場）為什麼大漲、大跌或不怎麼動」。
+# 2026-11-19 Actions（agy 1.5.3）：60 則一次送，回 SUCCESS 卻沒有結構化輸出。改成分批（每批 BATCH_ITEMS 則）、
+# 自選一次、總結另外一次短呼叫；任何一批失敗只影響那一批。
+ITEM_RULES = """你是台股投資人的新聞助理。讀 INPUT 的新聞標題與摘要，用繁體中文回答，只回 JSON。
 items：每一則都要回（id 照抄）：
 - group：這則主要影響哪個市場——tw 台股、us 美股、asia 日韓中；group_hint 是來源的預設，global 的要你分；
   和股市無關（生活、社會、體育、八卦）或看不出影響的填 skip。
@@ -264,23 +267,31 @@ items：每一則都要回（id 照抄）：
 - tone：對該市場是利多 up、利空 down，或中性 flat（已在預期內、影響不明）。
 - impact：影響大小 "3" 大、"2" 中、"1" 小（會左右整個市場或權值股的才是 "3"）。
 - title：中文標題；原文是中文就照抄（可去掉多餘的來源字樣），外文就翻成自然的繁體中文，不加原文沒有的事實。
-- reason：一句話（30 字內）說明為什麼是利多或利空、會怎麼影響；只能根據標題與摘要，不要編數字或內容。
-watch：使用者自選股的新聞，同樣回 tone、impact、title、reason（對那一檔股票而言）。
-summary：2～3 句「今天為什麼這樣走」，以台股為主、帶到美股與日韓中；可以引用 indices 給的漲跌幅，
-其他數字只能來自標題或摘要；slot 是開盤前時，講的是昨夜國際市場與今天可能的影響，不要假裝已經開盤。"""
+- reason：一句話（30 字內）說明為什麼是利多或利空、會怎麼影響；只能根據標題與摘要，不要編數字或內容。"""
+
+SUMMARY_RULES = """你是台股投資人的新聞助理。用繁體中文回答，只回 JSON。
+summary：2～3 句「今天為什麼這樣走」，以台股為主、帶到美股與日韓中，根據 INPUT 的指數漲跌與已判讀的新聞
+（tone up 利多、down 利空；impact 越大越重要）；可以引用 indices 的漲跌幅，其他數字只能來自新聞標題或理由；
+slot 是開盤前時，講的是昨夜國際市場與今天可能的影響，不要假裝已經開盤。"""
 
 WATCH_RULES = """你是台股投資人的新聞助理。讀 INPUT 的自選股新聞，用繁體中文回答，只回 JSON。
 watch：每一則都要回（id 照抄）：tone 對那一檔股票是利多 up、利空 down 或中性 flat；impact "3" 大、"2" 中、"1" 小；
 title 中文標題（外文翻成自然的繁體中文，不加原文沒有的事實）；reason 一句話（30 字內），只能根據標題，不要編數字。"""
 
 
-def prompt(slot: str, trade_date: str, items: Sequence[Mapping[str, Any]], watch: Sequence[Mapping[str, Any]],
-           index_rows: Sequence[Mapping[str, Any]]) -> str:
+def items_prompt(items: Sequence[Mapping[str, Any]]) -> str:
+    payload = {"items": [{key: row[key] for key in ("id", "group_hint", "source", "title", "summary", "published_at")}
+                         for row in items]}
+    return ITEM_RULES + "\nINPUT:" + json.dumps(payload, ensure_ascii=False)
+
+
+def summary_prompt(slot: str, trade_date: str, rows: Sequence[Mapping[str, Any]], index_rows: Sequence[Mapping[str, Any]]) -> str:
+    """rows：已判讀的（group、tone、impact、title、reason）；沒有判讀成的時候給原標題。"""
+    picked = sorted(rows, key=lambda row: -int(row.get("impact") or 1))[:SUMMARY_TOP]
     payload = {"slot": slot, "slot_text": SLOT_TEXT[slot], "trade_date": trade_date, "indices": list(index_rows),
-               "items": [{key: row[key] for key in ("id", "group_hint", "source", "title", "summary", "published_at")}
-                         for row in items],
-               "watch": [{key: row[key] for key in ("id", "code", "name", "source", "title", "published_at")} for row in watch]}
-    return RULES + "\nINPUT:" + json.dumps(payload, ensure_ascii=False)
+               "news": [{key: row.get(key) for key in ("group", "tone", "impact", "title", "reason") if row.get(key) not in (None, "")}
+                        for row in picked]}
+    return SUMMARY_RULES + "\nINPUT:" + json.dumps(payload, ensure_ascii=False)
 
 
 def watch_prompt(watch: Sequence[Mapping[str, Any]]) -> str:
@@ -465,21 +476,54 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
     items, sources = collect(get=get, now=now, sleep=sleep, since=since)
     index_rows = indices(query, taiex)
     owner_watch = watch_rows(query, owner_email, now, since)
-    status, output, note = ask_owner(prompt(slot, trade_date, items, owner_watch, index_rows), OUTPUT_SCHEMA)
-    output = coerce_output(output)
-    summary = _text(output.get("summary"), SUMMARY_MAX) if status == "ok" and isinstance(output, Mapping) else None
+    from concurrent.futures import ThreadPoolExecutor
+    batches = [items[start:start + BATCH_ITEMS] for start in range(0, len(items), BATCH_ITEMS)]
+    jobs = [(f"items{index + 1}", items_prompt(batch), ITEMS_SCHEMA) for index, batch in enumerate(batches)]
+    if owner_watch:
+        jobs.append(("watch", watch_prompt(owner_watch), WATCH_SCHEMA))
+    calls: dict[str, dict[str, Any]] = {}
+
+    def call(job):
+        name, text, schema = job
+        try:
+            status, output, note = ask_owner(text, schema)
+        except Exception as error:  # noqa: BLE001 — 一批出錯只影響那一批
+            status, output, note = type(error).__name__, None, str(error)[:200]
+        return name, status, coerce_output(output), note
+
+    with ThreadPoolExecutor(max_workers=PARALLEL_CALLS) as pool:
+        results = list(pool.map(call, jobs))
     rejected: dict[str, int] = {}
-    classified = validate_items(output, items, rejected) if status == "ok" else []
-    # 有判讀就套上（總結沒寫成也一樣，網站只是少那一段）；一則都沒判讀成才當「只有標題」。
+    classified: list[dict[str, Any]] = []
+    unmarked: list[Mapping[str, Any]] = []
+    owner_marks: list[dict[str, Any]] = []
+    for (name, status, output, note), batch in zip(results, [*batches, owner_watch]):
+        record = {"status": status, **({"note": str(note)[:300]} if note and status != "ok" else {})}
+        if name == "watch":
+            owner_marks = validate_watch(output, owner_watch) if status == "ok" else []
+            record["kept"] = len(owner_marks)
+        else:
+            kept = validate_items(output, batch, rejected) if status == "ok" else []
+            record.update(returned=len(output.get("items") or []) if isinstance(output, Mapping) else 0, kept=len(kept))
+            classified += kept
+            if not kept:
+                unmarked += batch
+        calls[name] = record
+    summary = None
     if classified:
-        stored, run_status = classified, "ok"
-        user_rows = {owner_email: validate_watch(output, owner_watch)}
+        status, output, note = call(("summary", summary_prompt(slot, trade_date, classified, index_rows), SUMMARY_SCHEMA))[1:]
+        summary = _text(output.get("summary"), SUMMARY_MAX) if status == "ok" and isinstance(output, Mapping) else None
+        calls["summary"] = {"status": status, **({"note": str(note)[:300]} if note and status != "ok" else {})}
+    # 有判讀就套上；整批沒判讀成的那幾則照原標題存（不標利多利空、沒有理由）；一則都沒有才當「只有標題」。
+    if classified:
+        stored = _keep_per_group(classified + unclassified_items(unmarked))
+        run_status = "ok"
+        user_rows = {owner_email: owner_marks}
     else:
         stored, run_status, summary, user_rows = unclassified_items(items), "unclassified", None, {}
-    diagnosis = {"output_type": type(output).__name__,
-                 "output_keys": sorted(output)[:10] if isinstance(output, Mapping) else None,
-                 "items_returned": len(output.get("items") or []) if isinstance(output, Mapping) else 0,
-                 "items_kept": len(classified), "rejected": rejected, "summary_chars": len(summary or "")}
+    status = "ok" if classified else next((r["status"] for r in calls.values() if r["status"] != "ok"), "no_items")
+    note = ""
+    diagnosis = {"calls": calls, "items_kept": len(classified), "rejected": rejected, "summary_chars": len(summary or "")}
     friends: dict[str, str] = {}
     for key_row in friend_keys:
         email = str(key_row.get("email") or "")
@@ -523,8 +567,46 @@ def _taiex_from_fugle() -> dict | None:
     return {"name": "加權", "change_pct": round(float(change), 2), "date": quote.get("date")} if change is not None else None
 
 
+_FENCE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
+
+
+def json_from_text(text: str) -> Any:
+    """文字回覆裡的 JSON：整段、```json 包著的、或第一個 { 到最後一個 } 之間；都不是就 None。"""
+    candidates = [text, *(match.group(1) for match in _FENCE.finditer(text or ""))]
+    if text and "{" in text and "}" in text:
+        candidates.append(text[text.index("{"):text.rindex("}") + 1])
+    for candidate in candidates:
+        try:
+            value = json.loads(candidate)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if isinstance(value, Mapping):
+            return value
+    return None
+
+
+def interpret_envelope(envelope: Mapping[str, Any] | None) -> tuple[str, Any, str]:
+    """agy 的 result 事件 → (狀態, 輸出, 說明)。SUCCESS 但 structured_output 是空的：先試文字回覆裡的 JSON；
+    還是沒有就回 no_structured_output，說明裡寫事件有哪些欄位與文字前 300 字（2026-11-19 Actions 的 agy 1.5.3）。"""
+    if not envelope or envelope.get("status") != "SUCCESS":
+        return "model_failed", None, str((envelope or {}).get("error") or "沒有 result 事件")[:300]
+    structured = envelope.get("structured_output")
+    if isinstance(structured, Mapping):
+        return "ok", structured, ""
+    if isinstance(structured, str) and json_from_text(structured) is not None:
+        return "ok", json_from_text(structured), "structured_output 是字串"
+    texts = [value for key, value in envelope.items() if isinstance(value, str) and key not in ("status", "type", "event")]
+    for text in texts:
+        parsed = json_from_text(text)
+        if parsed is not None:
+            return "ok", parsed, "從文字回覆解出 JSON"
+    preview = next((text for text in texts if text.strip()), "")
+    return "no_structured_output", None, f"keys={sorted(envelope)} text={preview[:300]!r}"
+
+
 def _owner_asker(agy_bin: str | None, home: str | None, model: str, effort: str) -> Asker:
     import os
+    import subprocess
     from pathlib import Path
 
     import ledger_core
@@ -533,9 +615,22 @@ def _owner_asker(agy_bin: str | None, home: str | None, model: str, effort: str)
     def ask(text: str, schema: Mapping[str, Any]) -> tuple[str, Any, str]:
         if not agy_bin or not Path(agy_bin).exists():
             return "agy_unavailable", None, "agy 沒有安裝成功"
-        return ledger_core.call_model(agy_bin, text, model, MODEL_TIMEOUT_SECONDS + 60, schema,
-                                      env=plain_daily.agy_environment(os.environ, home), effort=effort,
-                                      print_timeout=MODEL_TIMEOUT_SECONDS)
+        try:
+            completed = subprocess.run(
+                ledger_core._model_command(agy_bin, model, schema, effort, MODEL_TIMEOUT_SECONDS),
+                input=ledger_core._stream_input(text), capture_output=True, timeout=MODEL_TIMEOUT_SECONDS + 60, check=False,
+                env=plain_daily.agy_environment(os.environ, home))
+        except subprocess.TimeoutExpired:
+            return "model_timeout", None, f"超過 {MODEL_TIMEOUT_SECONDS + 60} 秒沒有回應"
+        except OSError as error:
+            return "model_failed", None, f"{type(error).__name__}: {error}"
+        try:
+            envelope = ledger_core._result_event(completed.stdout)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            envelope = None
+        if completed.returncode != 0 and (envelope is None or envelope.get("status") != "SUCCESS"):
+            return "model_failed", None, ledger_core._failure(completed.returncode, completed.stderr)
+        return interpret_envelope(envelope)
     return ask
 
 
@@ -552,9 +647,8 @@ def _friend_asker(model: str) -> FriendAsker:
             output, _usage = fad.call_gemini(text, model, api_key=key, post=post, schema=dict(schema))
             return "ok", output, ""
         except fad.ModelCallFailed as error:
-            code = str(error.args[0] if error.args else "gemini_failed")
-            detail = error.args[2] if len(error.args) > 2 else None
-            return code, None, json.dumps(detail, ensure_ascii=False)[:200] if detail else ""
+            detail = getattr(error, "detail", None)
+            return getattr(error, "code", "gemini_failed"), None, json.dumps(detail, ensure_ascii=False)[:200] if detail else ""
     return ask
 
 

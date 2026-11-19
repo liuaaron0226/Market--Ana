@@ -97,16 +97,27 @@ def model_reply(prompt_items, watch):
                       for row in watch]}
 
 
+def kind_of(schema):
+    return next(key for key in ("items", "watch", "summary") if key in schema["properties"])
+
+
 class FakeAsk:
+    """假的 Flash：依結構描述回市場新聞一批、自選或總結（一輪分好幾次叫）。"""
+
     def __init__(self, status="ok"):
-        self.status, self.prompts = status, []
+        self.status, self.prompts, self.kinds = status, [], []
 
     def __call__(self, prompt, schema):
         self.prompts.append(prompt)
+        self.kinds.append(kind_of(schema))
         payload = json.loads(prompt[prompt.index("INPUT:") + len("INPUT:"):])
         if self.status != "ok":
             return self.status, None, "壞了"
-        return "ok", model_reply(payload["items"], payload["watch"]), ""
+        kind = kind_of(schema)
+        if kind == "summary":
+            return "ok", {"summary": "台股今天下跌，主要是外資賣超。"}, ""
+        reply = model_reply(payload.get("items", []), payload.get("watch", []))
+        return "ok", {kind: reply[kind]}, ""
 
 
 def run(d1, *, ask=None, friend_keys=(), friend_ask=None, overrides=None, now=NOW, slot="close"):
@@ -174,10 +185,10 @@ class FetchTests(unittest.TestCase):
 
 
 class RunTests(unittest.TestCase):
-    def test_one_flash_call_writes_the_run_items_and_owner_watchlist(self):
+    def test_one_round_writes_the_run_items_and_owner_watchlist(self):
         d1 = D1()
         report, _, ask = run(d1)
-        self.assertEqual(len(ask.prompts), 1, "一輪只叫一次")
+        self.assertEqual(sorted(ask.kinds), ["items", "summary", "watch"], "四則一批＋自選一次＋總結一次")
         self.assertEqual(report["status"], "ok")
         run_row = d1.query("SELECT * FROM market_news_runs")[0]
         self.assertEqual((run_row["run_id"], run_row["slot"], run_row["status"]), ("2026-11-19-close", "close", "ok"))
@@ -197,13 +208,36 @@ class RunTests(unittest.TestCase):
                       "('2330', 'https://www.cna.com.tw/x', 'cna-finance', 'TSMC ADR falls 4%', '', '2026-11-19T02:05:00Z', '2026-11-19T06:00:00Z')")
         self.assertEqual([row["title"] for row in mn.watch_rows(d1.query, OWNER, NOW)], ["TSMC ADR falls 4%"])
 
-    def test_prompt_has_items_indices_and_only_the_owners_watchlist(self):
+    def test_prompts_carry_items_watchlist_and_a_summary_of_marked_news(self):
         d1 = D1()
         _, _, ask = run(d1)
-        payload = json.loads(ask.prompts[0][ask.prompts[0].index("INPUT:") + 6:])
-        self.assertEqual(payload["slot"], "close")
-        self.assertEqual([row["code"] for row in payload["watch"]], ["2330"])
-        self.assertTrue(all("link" not in row for row in payload["items"]), "連結不給模型")
+        payloads = {kind: json.loads(text[text.index("INPUT:") + 6:]) for kind, text in zip(ask.kinds, ask.prompts)}
+        self.assertTrue(all("link" not in row for row in payloads["items"]["items"]), "連結不給模型")
+        self.assertEqual([row["code"] for row in payloads["watch"]["watch"]], ["2330"])
+        self.assertEqual(payloads["summary"]["slot"], "close")
+        self.assertEqual(payloads["summary"]["indices"][0]["name"], "加權")
+        self.assertTrue(all("tone" in row for row in payloads["summary"]["news"]), "總結拿的是判讀過的")
+
+    def test_a_failed_batch_only_loses_its_own_marks(self):
+        class FirstBatchFails(FakeAsk):
+            def __call__(self, prompt, schema):
+                if kind_of(schema) == "items" and '"id": "n1"' in prompt:
+                    self.kinds.append("items")
+                    return "no_structured_output", None, "keys=['status'] text=''"
+                return super().__call__(prompt, schema)
+        original = mn.BATCH_ITEMS
+        try:
+            mn.BATCH_ITEMS = 2
+            d1 = D1()
+            report, _, _ = run(d1, ask=FirstBatchFails())
+        finally:
+            mn.BATCH_ITEMS = original
+        self.assertEqual(report["run_status"], "ok")
+        self.assertEqual(report["diagnosis"]["calls"]["items1"]["status"], "no_structured_output")
+        self.assertEqual(report["diagnosis"]["calls"]["items2"]["kept"], 2)
+        rows = d1.query("SELECT title, reason FROM market_news_items")
+        self.assertEqual(len(rows), 4, "第一批的兩則照原標題存")
+        self.assertEqual(sum(row["reason"] == "" for row in rows), 2)
 
     def test_unknown_ids_bad_values_and_skipped_items_are_dropped(self):
         d1 = D1()
@@ -211,27 +245,29 @@ class RunTests(unittest.TestCase):
         class Bad(FakeAsk):
             def __call__(self, prompt, schema):
                 status, output, note = super().__call__(prompt, schema)
-                output["items"][0]["tone"] = "maybe"
-                output["items"][1]["group"] = "skip"
-                output["items"].append({"id": "n999", "group": "tw", "market": "", "tone": "up", "impact": 1,
-                                        "title": "編的", "reason": "編的"})
+                if "items" in output:
+                    output["items"][0]["tone"] = "maybe"
+                    output["items"][1]["group"] = "skip"
+                    output["items"].append({"id": "n999", "group": "tw", "market": "", "tone": "up", "impact": 1,
+                                            "title": "編的", "reason": "編的"})
                 return status, output, note
-        run(d1, ask=Bad())
+        report, _, _ = run(d1, ask=Bad())
         titles = [row["title"] for row in d1.query("SELECT title FROM market_news_items")]
         self.assertNotIn("編的", titles)
         self.assertEqual(len(titles), 2, "送出四則（台股兩、美股一、韓一；超過一天的不送），壞掉的兩則不存")
+        self.assertEqual(report["diagnosis"]["rejected"], {"bad_values": 1, "skip": 1, "unknown_id": 1})
 
     def test_marks_are_applied_even_without_a_summary_and_from_a_json_string(self):
         # 2026-11-19 正式跑（agy 1.5.3）：model ok 卻整輪「只有標題」——總結沒有就整輪不套，現在改成有判讀就套。
         class NoSummary(FakeAsk):
             def __call__(self, prompt, schema):
                 status, output, note = super().__call__(prompt, schema)
-                output["summary"] = ""
+                if "summary" in output:
+                    output["summary"] = ""
                 return status, json.dumps(output, ensure_ascii=False), note
         d1 = D1()
         report, _, _ = run(d1, ask=NoSummary())
         self.assertEqual(report["run_status"], "ok")
-        self.assertEqual(report["diagnosis"]["output_type"], "dict")
         self.assertEqual(report["diagnosis"]["summary_chars"], 0)
         run_row = d1.query("SELECT status, summary FROM market_news_runs")[0]
         self.assertEqual((run_row["status"], run_row["summary"]), ("ok", None))
@@ -241,8 +277,9 @@ class RunTests(unittest.TestCase):
         class Bad(FakeAsk):
             def __call__(self, prompt, schema):
                 status, output, note = super().__call__(prompt, schema)
-                output["items"][0]["id"] = "n999"
-                output["items"][1]["impact"] = None
+                if "items" in output:
+                    output["items"][0]["id"] = "n999"
+                    output["items"][1]["impact"] = None
                 return status, output, note
         report, _, _ = run(D1(), ask=Bad())
         self.assertEqual(report["diagnosis"]["rejected"], {"unknown_id": 1, "bad_fields:impact": 1})
@@ -314,7 +351,7 @@ class SchemaTests(unittest.TestCase):
     agy 把結構描述轉成 function declaration：enum 只能是非空字串。"""
 
     def test_every_enum_is_a_list_of_non_empty_strings(self):
-        for name, schema in (("OUTPUT_SCHEMA", mn.OUTPUT_SCHEMA), ("WATCH_SCHEMA", mn.WATCH_SCHEMA)):
+        for name, schema in (("ITEMS_SCHEMA", mn.ITEMS_SCHEMA), ("WATCH_SCHEMA", mn.WATCH_SCHEMA), ("SUMMARY_SCHEMA", mn.SUMMARY_SCHEMA)):
             for path, node in _walk(schema):
                 if "enum" in node:
                     with self.subTest(schema=name, path=path):
@@ -331,6 +368,29 @@ class SchemaTests(unittest.TestCase):
         rows = {row["id"]: row for row in mn.validate_items(output, items)}
         self.assertEqual((rows["n1"]["impact"], rows["n1"]["market"]), (2, "韓"))
         self.assertEqual((rows["n2"]["impact"], rows["n2"]["market"]), (3, ""))
+
+
+class EnvelopeTests(unittest.TestCase):
+    """agy 的 result 事件：Actions 的 1.5.3 回 SUCCESS 但 structured_output 是 None（2026-11-19 run 44527174969）。"""
+
+    def test_structured_output_is_used_when_present(self):
+        self.assertEqual(mn.interpret_envelope({"status": "SUCCESS", "structured_output": {"items": []}}), ("ok", {"items": []}, ""))
+
+    def test_json_in_the_text_reply_is_used_when_structured_output_is_missing(self):
+        envelope = {"status": "SUCCESS", "structured_output": None, "result": '好的：\n```json\n{"summary": "台股下跌"}\n```'}
+        status, output, note = mn.interpret_envelope(envelope)
+        self.assertEqual((status, output), ("ok", {"summary": "台股下跌"}))
+        self.assertIn("文字", note)
+
+    def test_nothing_usable_names_the_fields_and_the_start_of_the_text(self):
+        status, output, note = mn.interpret_envelope({"status": "SUCCESS", "structured_output": None, "result": "抱歉，我無法"})
+        self.assertEqual((status, output), ("no_structured_output", None))
+        self.assertIn("result", note)
+        self.assertIn("抱歉", note)
+
+    def test_failure_is_not_ok(self):
+        self.assertEqual(mn.interpret_envelope({"status": "ERROR", "error": "quota"})[0], "model_failed")
+        self.assertEqual(mn.interpret_envelope(None)[0], "model_failed")
 
 
 class WindowTests(unittest.TestCase):
@@ -374,3 +434,19 @@ class VersionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FriendErrorTests(unittest.TestCase):
+    def test_the_friend_error_detail_comes_back(self):
+        # 2026-11-19 正式跑：朋友那份只寫 gemini_unavailable——細節在例外的 .detail，不在 args。
+        import friend_ai_digest as fad
+        saved = fad.node_decrypt, fad.call_gemini
+        def boom(*args, **kwargs):
+            raise fad.ModelCallFailed("gemini_unavailable", None, {"error": "GeminiTimeout", "attempts": 1})
+        try:
+            fad.node_decrypt, fad.call_gemini = (lambda row: "k"), boom
+            status, output, note = mn._friend_asker("gemini-3.8-flash")({"email": FRIEND}, "x", mn.WATCH_SCHEMA)
+        finally:
+            fad.node_decrypt, fad.call_gemini = saved
+        self.assertEqual((status, output), ("gemini_unavailable", None))
+        self.assertIn("GeminiTimeout", note)
