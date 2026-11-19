@@ -98,7 +98,8 @@ def model_reply(prompt_items, watch):
 
 
 def kind_of(schema):
-    return next(key for key in ("items", "watch", "summary") if key in schema["properties"])
+    return next(kind for key, kind in (("items", "items"), ("watch", "watch"), ("market_commentary", "summary"))
+                if key in schema["properties"])
 
 
 class FakeAsk:
@@ -115,7 +116,7 @@ class FakeAsk:
             return self.status, None, "壞了"
         kind = kind_of(schema)
         if kind == "summary":
-            return "ok", {"summary": "台股今天下跌，主要是外資賣超。"}, ""
+            return "ok", {"market_commentary": "台股今天下跌，主要是外資賣超。"}, ""
         reply = model_reply(payload.get("items", []), payload.get("watch", []))
         return "ok", {kind: reply[kind]}, ""
 
@@ -262,8 +263,8 @@ class RunTests(unittest.TestCase):
         class NoSummary(FakeAsk):
             def __call__(self, prompt, schema):
                 status, output, note = super().__call__(prompt, schema)
-                if "summary" in output:
-                    output["summary"] = ""
+                if "market_commentary" in output:
+                    output["market_commentary"] = ""
                 return status, json.dumps(output, ensure_ascii=False), note
         d1 = D1()
         report, _, _ = run(d1, ask=NoSummary())
@@ -272,6 +273,23 @@ class RunTests(unittest.TestCase):
         run_row = d1.query("SELECT status, summary FROM market_news_runs")[0]
         self.assertEqual((run_row["status"], run_row["summary"]), ("ok", None))
         self.assertTrue(d1.query("SELECT tone FROM market_news_items WHERE tone <> 'flat'"))
+
+    def test_a_summary_that_talks_about_the_task_instead_of_the_market_is_dropped(self):
+        # 2026-11-19 本機真 Flash：總結回成「已成功依照指令產生台股收盤新聞摘要 JSON…」——這不是總結，問第二次；還是這樣就不放。
+        class Meta(FakeAsk):
+            def __call__(self, prompt, schema):
+                status, output, note = super().__call__(prompt, schema)
+                if "market_commentary" in output:
+                    output["market_commentary"] = "已成功依照指令產生台股收盤新聞摘要 JSON，並嚴格遵循字數規則。"
+                return status, output, note
+        d1 = D1()
+        report, _, ask = run(d1, ask=Meta())
+        self.assertEqual(ask.kinds.count("summary"), 2, "問第二次")
+        self.assertEqual(report["run_status"], "ok")
+        self.assertIsNone(d1.query("SELECT summary FROM market_news_runs")[0]["summary"])
+        self.assertEqual(report["diagnosis"]["calls"]["summary"]["status"], "not_a_summary")
+        self.assertTrue(mn.is_summary("台股今天下跌，主要是外資賣超。"))
+        self.assertFalse(mn.is_summary("以下是摘要：台股下跌"))
 
     def test_rejected_items_are_counted_by_reason(self):
         class Bad(FakeAsk):

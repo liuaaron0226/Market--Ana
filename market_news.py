@@ -252,7 +252,10 @@ _WATCH = {"type": "object", "properties": {
     "impact": {"type": "string", "enum": list(WIRE_IMPACTS)}, "title": {"type": "string"}, "reason": {"type": "string"}},
     "required": ["id", "tone", "impact", "title", "reason"]}
 ITEMS_SCHEMA = {"type": "object", "properties": {"items": {"type": "array", "items": _ITEM}}, "required": ["items"]}
-SUMMARY_SCHEMA = {"type": "object", "properties": {"summary": {"type": "string"}}, "required": ["summary"]}
+# 欄位不叫 summary：agy 的結構化輸出裡，模型會把 summary 當成「交代自己做了什麼」（2026-11-19 實測兩次）。
+SUMMARY_SCHEMA = {"type": "object", "properties": {"market_commentary": {
+    "type": "string", "description": "給投資人看的盤勢解說本文，2～3 句，例如「台股今天下跌，主要是外資賣超……」"}},
+    "required": ["market_commentary"]}
 WATCH_SCHEMA = {"type": "object", "properties": {"watch": {"type": "array", "items": _WATCH}}, "required": ["watch"]}
 
 SLOT_TEXT = {"morning": "台股開盤前（台北 08:00）", "midday": "台股盤中（台北 11:30）", "close": "台股收盤後（台北 14:00）"}
@@ -269,10 +272,19 @@ items：每一則都要回（id 照抄）：
 - title：中文標題；原文是中文就照抄（可去掉多餘的來源字樣），外文就翻成自然的繁體中文，不加原文沒有的事實。
 - reason：一句話（30 字內）說明為什麼是利多或利空、會怎麼影響；只能根據標題與摘要，不要編數字或內容。"""
 
-SUMMARY_RULES = """你是台股投資人的新聞助理。用繁體中文回答，只回 JSON。
-summary：2～3 句「今天為什麼這樣走」，以台股為主、帶到美股與日韓中，根據 INPUT 的指數漲跌與已判讀的新聞
-（tone up 利多、down 利空；impact 越大越重要）；可以引用 indices 的漲跌幅，其他數字只能來自新聞標題或理由；
-slot 是開盤前時，講的是昨夜國際市場與今天可能的影響，不要假裝已經開盤。"""
+SUMMARY_RULES = """你是財經記者，替台股投資人寫一段盤勢解說，繁體中文。
+market_commentary：2～3 句，回答「今天為什麼這樣走」——以台股為主、帶到美股與日韓中，根據 INPUT 的指數漲跌與新聞
+（tone up 利多、down 利空；impact 越大越重要）。可以引用 indices 的漲跌幅，其他數字只能來自新聞標題或理由。
+slot 是開盤前時，講的是昨夜國際市場與今天可能的影響，不要假裝已經開盤。
+這個欄位的內容就是那段解說本身，第一個字就開始講市場（例如「台股今天下跌，主要是……」）；
+不要描述你完成了什麼、不要提到指令、JSON、摘要或規則。"""
+
+_NOT_SUMMARY = re.compile(r"JSON|json|指令|已成功|已完成|已依照|以下是|規則|摘要如下|產生.{0,6}摘要")
+
+
+def is_summary(text: str | None) -> bool:
+    """是不是在講市場：模型有時回「已成功依照指令產生摘要…」這種交代工作的話（2026-11-19 實測），那不算。"""
+    return bool(text) and not _NOT_SUMMARY.search(text)
 
 WATCH_RULES = """你是台股投資人的新聞助理。讀 INPUT 的自選股新聞，用繁體中文回答，只回 JSON。
 watch：每一則都要回（id 照抄）：tone 對那一檔股票是利多 up、利空 down 或中性 flat；impact "3" 大、"2" 中、"1" 小；
@@ -511,9 +523,15 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
         calls[name] = record
     summary = None
     if classified:
-        status, output, note = call(("summary", summary_prompt(slot, trade_date, classified, index_rows), SUMMARY_SCHEMA))[1:]
-        summary = _text(output.get("summary"), SUMMARY_MAX) if status == "ok" and isinstance(output, Mapping) else None
-        calls["summary"] = {"status": status, **({"note": str(note)[:300]} if note and status != "ok" else {})}
+        for attempt in (1, 2):   # 回成交代工作的話就再問一次；還是不行就不放總結
+            status, output, note = call(("summary", summary_prompt(slot, trade_date, classified, index_rows), SUMMARY_SCHEMA))[1:]
+            summary = (_text(output.get("market_commentary") or output.get("summary"), SUMMARY_MAX)
+                       if status == "ok" and isinstance(output, Mapping) else None)
+            if status != "ok" or is_summary(summary):
+                break
+            status, note, summary = "not_a_summary", summary, None
+        calls["summary"] = {"status": status, "attempts": attempt,
+                            **({"note": str(note)[:300]} if note and status != "ok" else {})}
     # 有判讀就套上；整批沒判讀成的那幾則照原標題存（不標利多利空、沒有理由）；一則都沒有才當「只有標題」。
     if classified:
         stored = _keep_per_group(classified + unclassified_items(unmarked))
