@@ -86,3 +86,23 @@ class WiderWhitelistTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FormalNumeralTests(unittest.TestCase):
+    """2026-11-20 07:20 正式晨間（run 44419887586）第一次被擋：理由裡的「僅作參考」——「參」是大寫的「三」。
+    大寫數字字（參、陸、零、拾、伍…）在一般文章裡幾乎都不是數字（參考、大陸、零組件、收拾、隊伍），只有前後接著
+    別的數字或量詞時才是（零點五、參成、陸佰）。"""
+
+    def test_the_refused_sentence_of_the_official_morning_passes(self):
+        text = ("採用第二頻道長週期定風險框架並對照第一頻道量價確認：指數位於季線與月線之下、年線之上，布林處於下緣到中線，"
+                "中期偏空而長期盤整。歷史相似盤勢為高檔轉弱僅作參考；美國信用壓力低於平均、美元走強，上檔受月線與季線壓制、"
+                "下檔有年線與布林下緣緩衝，預期收在月線與布林下緣區間內。")
+        self.assertIsNone(text_problem(text, names=["月線", "季線", "年線", "布林下緣"], method_text=METHOD))
+
+    def test_ordinary_words_with_a_formal_numeral_pass(self):
+        for text in ("僅作參考", "參照前段走勢", "大陸需求轉弱", "陸續出貨", "零組件拉貨", "零售疲弱", "收拾失土", "萬一跌破"):
+            self.assertIsNone(text_problem(text, names=NAMES, method_text=METHOD), text)
+
+    def test_formal_numerals_next_to_numbers_or_measure_words_are_still_refused(self):
+        for text in ("零點五", "參成", "陸佰張", "跌了拾點", "二〇二六年"):
+            self.assertEqual(text_problem(text, names=NAMES, method_text=METHOD), BLOCKED, text)
