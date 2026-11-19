@@ -183,11 +183,15 @@ def _rotation_for_screens(timeline: Mapping[str, Any], groups: Mapping[str, Sequ
 def publish(root: Path, *, data_date: str, published_at: str, sources: Iterable[fs.MarketSource],
             universe: Iterable[fs.Security], rotation: Mapping[str, Any] | None,
             groups: Mapping[str, Sequence[str]], input_fingerprints: Mapping[str, str],
-            liquid_universe: Mapping[str, Any] | None = None, bias: Mapping[str, Any] | None = None) -> dict[str, Any]:
+            liquid_universe: Mapping[str, Any] | None = None, bias: Mapping[str, Any] | None = None,
+            strong_stocks: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """``universe`` 是普通股候選；有 ``liquid_universe`` 時，排行母體改為大量股名單（含名單內 ETF），
-    並先封存該名單。``bias`` 給相對低位階頁（族群＝``groups``）。資金流向的族群成交額不受母體影響。"""
+    並先封存該名單。``bias`` 給相對低位階頁（族群＝``groups``）。資金流向的族群成交額不受母體影響。
+    ``strong_stocks``（sector_rotation.strong_stocks 的結果）跟產業資金流向封存在同一批。"""
     if not input_fingerprints:
         raise ValueError("缺少輸入資料指紋，無法重現本批結果")
+    if strong_stocks is not None and strong_stocks.get("date") != data_date:
+        raise ValueError("各產業強勢股的資料日與發布資料日不一致")
     _check_publish_time(data_date, published_at)
     sources, universe = list(sources), list(universe)
     batches = []
@@ -206,6 +210,8 @@ def publish(root: Path, *, data_date: str, published_at: str, sources: Iterable[
                                    input_fingerprints=input_fingerprints, variant=variant))
     if rotation is not None:
         rotation_result = {**rotation, "groups": {name: list(codes) for name, codes in groups.items()}}
+        if strong_stocks is not None:
+            rotation_result["strong_stocks"] = strong_stocks
         batches.append(build_batch(ROTATION_KIND, data_date, rotation_result, published_at=published_at,
                                    input_fingerprints=input_fingerprints))
     # 先全部封存成功再寫，任何一份衝突就整批停（已寫入的同批檔案內容相同，不受影響）。
@@ -396,6 +402,7 @@ def local_inputs(as_of: str, universe_root: Path | None = None) -> dict[str, Any
     groups = sr.official_industry_groups(official)
     dates, turnover = sr.load_turnover([c for c, _, _ in official], as_of, sr.TIMELINE_DAYS + sr.WINDOW_LONG - 1)
     rotation = sr.compute_timeline(groups, turnover, dates)
+    strong = sr.strong_stocks(groups, sr.load_quotes([c for c, _, _ in official], dates), dates)
     names: dict[str, str] = {}
     with closing(sqlite3.connect(f"file:{STOCK_HISTORY_DB.as_posix()}?mode=ro", uri=True)) as connection:
         for code, name in connection.execute(
@@ -415,7 +422,7 @@ def local_inputs(as_of: str, universe_root: Path | None = None) -> dict[str, Any
     etfs = sources_lu.etfs
     return {"sources": [_WithEtfQuotes(ListedSqliteSource(), etfs), _WithEtfQuotes(fs.OtcSqliteSource(), etfs)],
             "universe": universe, "rotation": rotation, "groups": groups, "input_fingerprints": fingerprints,
-            "liquid_universe": liquid, "bias": bias}
+            "liquid_universe": liquid, "bias": bias, "strong_stocks": strong}
 
 
 def main() -> int:

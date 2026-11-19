@@ -410,6 +410,8 @@ def rotation_latest(root: Path) -> dict[str, Any]:
         "latest": {key: latest.get(key) for key in
                    ("date", "bubbles", "quadrant_counts", "summary", "efficiency_ranking", "recovery_signals",
                     "unavailable_groups")},
+        # 各產業強勢股（sector_rotation.strong_stocks）和這一天的產業資金流向封存在同一批；舊批次沒有就是 None
+        "strong_stocks": result.get("strong_stocks"),
         "snapshot_sha256": batch["snapshot_sha256"],
     }
 

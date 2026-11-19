@@ -35,6 +35,13 @@ WINDOW_LONG = 20
 WINDOW_SHORT = 5
 TIMELINE_DAYS = 20        # DIGEST〈當前日期與「20 個交易日」〉
 
+# 各產業強勢股（本人 2026-11-20 定案；本站自訂，不是 REA 公式）
+STRONG_WINDOW = 3         # 近幾個交易日的累計漲幅
+STRONG_LIMIT = 3          # 每個產業最多列幾檔
+STRONG_MIN_AVG_TURNOVER = 50_000_000   # 這幾天平均每天成交金額（元）至少要這麼多
+LIMIT_UP_RETURN = 0.095   # 當日漲幅達 9.5% 算漲停（和個股訊號 limit_up_momentum 同一個門檻）
+STRONG_RULE = "strong-3d-gain-1"
+
 QUADRANT_ORDER = ("leading", "weakening", "improving", "lagging")
 # 象限條件與排序：FINDINGS §1〈四個象限〉【前端原碼】。對外名稱、說明與色票本站自訂，不沿用原站用語。
 QUADRANT_STYLE = {
@@ -294,6 +301,55 @@ def rotation_inflow_codes(snapshot: Mapping[str, Any], groups: Mapping[str, Sequ
     return codes
 
 
+# ---- 各產業強勢股（本站自訂，不是 REA；本人 2026-11-20 定案） ----
+
+def _day_return(quote: Mapping[str, Any]) -> float:
+    """當日相對前一日參考價的漲跌幅（比率）＝漲跌 ÷（收盤 − 漲跌），和個股訊號（limit_up_momentum）同一個算式。
+
+    官方沒有公布漲跌的日子（除權息等不比價，漲跌是空的）當 0，也和那邊相同：不把息值算成下跌。"""
+    close, change = quote["close"], quote["change"]
+    if change is None:
+        return 0.0
+    return change / (close - change)
+
+
+def _strong_candidate(code: str, days: Sequence[Mapping[str, Any] | None]) -> tuple[float, int, str, dict[str, Any]] | None:
+    """一檔成分股這幾天的排名資料 (−漲幅, −成交金額合計, 代號, 輸出列)；不合格回 None。"""
+    # 這幾天要天天有成交：剛上市天數不足、停牌、整天沒成交、缺成交金額的都不列
+    if any(day is None or day["suspended"] or day["close"] is None or day["turnover"] is None for day in days):
+        return None
+    turnover = sum(day["turnover"] for day in days)
+    if turnover < STRONG_MIN_AVG_TURNOVER * len(days):
+        return None
+    returns = [_day_return(day) for day in days]
+    gain = round((math.prod(1 + value for value in returns) - 1) * 100, 2)
+    if gain <= 0:
+        return None
+    return (-gain, -turnover, code, {
+        "code": code, "name": days[-1]["name"], "gain_pct": gain,
+        "today_pct": round(returns[-1] * 100, 2), "limit_up": returns[-1] >= LIMIT_UP_RETURN})
+
+
+def strong_stocks(groups: Mapping[str, Sequence[str]], quotes: Mapping[str, Mapping[str, Mapping[str, Any]]],
+                  dates: Sequence[str]) -> dict[str, Any]:
+    """每個產業近 3 個交易日累計漲幅最大的成分股（最多 3 檔，只列有漲的；一檔都沒有的產業是空清單）。
+
+    ``quotes``：{代號: {日期: {name, close, change, turnover, suspended}}}；``dates`` 由舊到新，取最後 3 天。
+    漲幅用每天的官方漲跌連乘，不拿兩天的收盤直接相除（除權息、分割那天才不會被算成大跌）。
+    """
+    window = list(dates)[-STRONG_WINDOW:]
+    if len(window) < STRONG_WINDOW:
+        raise ValueError(f"強勢股需要 {STRONG_WINDOW} 個交易日")
+    result: dict[str, list[dict[str, Any]]] = {}
+    for name in sorted(groups):
+        found = [_strong_candidate(code, [quotes.get(code, {}).get(day) for day in window]) for code in groups[name]]
+        # 漲幅大的在前；同漲幅時成交金額大的在前，再同就照代號，結果才固定
+        ranked = sorted((item for item in found if item is not None), key=lambda item: item[:3])
+        result[name] = [row for *_, row in ranked[:STRONG_LIMIT]]
+    return {"rule_version": STRONG_RULE, "date": window[-1], "window_days": STRONG_WINDOW, "limit": STRONG_LIMIT,
+            "min_avg_turnover": STRONG_MIN_AVG_TURNOVER, "groups": result}
+
+
 # ---- 本機資料（唯讀） ----
 
 def load_official_universe() -> list[tuple[str, str, str]]:
@@ -336,6 +392,26 @@ def load_turnover(codes: Iterable[str], as_of: str, count: int,
     finally:
         connection.close()
     return dates, dict(turnover)
+
+
+def load_quotes(codes: Iterable[str], dates: Sequence[str],
+                listed_db: Path = LISTED_DB, otc_db: Path = OTC_DB) -> dict[str, dict[str, dict[str, Any]]]:
+    """強勢股要的行情：{代號: {日期: {name, close, change, turnover, suspended}}}，只讀 ``dates`` 的最後 3 天；mode=ro。"""
+    wanted = set(codes)
+    window = list(dates)[-STRONG_WINDOW:]
+    quotes: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
+    for db in (listed_db, otc_db):
+        connection = sqlite3.connect(f"file:{Path(db).resolve().as_posix()}?mode=ro", uri=True)
+        try:
+            for day, code, name, close, change, turnover, suspended in connection.execute(
+                    "SELECT date, code, name, close, change, turnover, suspended FROM daily "
+                    f"WHERE date IN ({','.join('?' * len(window))})", window):
+                if code in wanted:
+                    quotes[code][day] = {"name": name, "close": close, "change": change,
+                                         "turnover": turnover, "suspended": suspended}
+        finally:
+            connection.close()
+    return dict(quotes)
 
 
 def main() -> int:
