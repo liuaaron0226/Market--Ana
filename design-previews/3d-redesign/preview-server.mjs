@@ -56,7 +56,10 @@ const env = {
   // 個股頁事實區塊與五塊新功能：正式站目前都是「只開站主」（cloud/wrangler.jsonc），預覽預設以站主登入，所以照樣看得到。
   // 樣本資料見下面 signals-preview.json；沒有那個檔時這兩塊就不出現（和資料包沒有這兩塊時一樣）。
   MARKET_ANA_STOCK_FACTS: "owner", MARKET_ANA_STOCK_SIGNALS: "owner",
+  // 首頁「消息」（本人 2026-11-19，取代長期核心持有）：正式站先只開站主。樣本是假新聞，只為了看版面。
+  MARKET_ANA_MARKET_NEWS: "owner",
 };
+db._raw.exec(readFileSync(new URL("design-previews/3d-redesign/market-news-sample.sql", root), "utf8"));
 // --owner-extras：主線兩個只給站主的功能也打開——預測帳本（正式站已對站主試跑）與自選股關注——
 // 並放一筆樣本預測，才看得到它們在這個版面裡的樣子。線的數值取自樣本的日 K（五日線、月線、近二十日高低點），
 // 區間與理由是預覽用的假內容，不是真的預測。沒給這個選項時和原本完全一樣（旅程檢查與截圖巡檢都不給）。

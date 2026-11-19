@@ -360,7 +360,7 @@ def joined_chart(page: Page, tag: str, host: str, names: list[str], under_study:
         check(f"{tag}：指標區下面直接是收復線／防守線，中間沒有一排切換鍵", then == "ok", then)
 
 
-CATS = dict(zip(shoot.HOME_CATS, ("籌碼與資金", "籌碼選股", "產業資金流向", "長期核心持有")))
+CATS = dict(zip(shoot.HOME_CATS, ("籌碼與資金", "籌碼選股", "產業資金流向", "消息")))
 open_cat = shoot.open_cat
 # 四類各自的內容區塊目前看不看得到（收起來的不算，Tab 也走不到）。
 CATS_VISIBLE = """() => Object.fromEntries([...document.querySelectorAll('[data-cat-panel]')].map(e => {
@@ -454,7 +454,7 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
         open_cat(page, "chips")
         open_cat(page, "screens")
         shown = page.evaluate(CATS_VISIBLE)
-        check(f"{tag}：點分類鍵展開那一類、收起別類", shown == {"chips": False, "screens": True, "rotation": False, "core": False}, shown)
+        check(f"{tag}：點分類鍵展開那一類、收起別類", shown == {"chips": False, "screens": True, "rotation": False, "news": False}, shown)
         page.locator("#homeCats button[data-cat='screens']").click()
         page.wait_for_function("document.querySelector(\"#homeCats button[data-cat='screens']\").getAttribute('aria-expanded') === 'false'")
         shown = page.evaluate(CATS_VISIBLE)
@@ -848,7 +848,7 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
         """分類鍵在畫面上方時換到比較矮的一類，整頁不能跳（本人 11-15 回報「整頁跳一下」）：頁面變短時捲動位置不可以被拉回去。"""
         bar_top = "Math.round(document.getElementById('homeCats').getBoundingClientRect().top)"
         moved = {}
-        for first, second in (("screens", "rotation"), ("core", "chips")):
+        for first, second in (("screens", "rotation"), ("news", "chips")):
             open_cat(page, first)
             page.wait_for_timeout(500)
             page.evaluate("() => scrollBy(0, document.getElementById('homeCats').getBoundingClientRect().top - 120)")
@@ -1165,24 +1165,21 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
         check(f"{tag}：按 Esc 收回排行表格的面板", not page.evaluate("document.getElementById('rotationDialog').open"))
     step(f"{tag}：產業資金流向", rotation)
 
-    def core() -> None:
-        open_cat(page, "core")
-        fits = page.evaluate(CHART_FITS, "#coreChart")
-        check(f"{tag}：長期核心持有的走勢圖照容器寬度畫", fits == "ok", fits)
-        check(f"{tag}：長期核心持有有卡片", page.locator("#coreCards > *").count() >= 2)
-        period = page.locator(".core-picks .chart-select .chart-chip")
-        check(f"{tag}：長期核心持有平常看不到輸入框與下拉選單，只有「＋ 加入」與寫著期間的小鍵",
-              page.evaluate(VISIBLE_COUNT, "#coreCompareInput, #corePeriodSelect, #corePeriodSelectMenu [data-value]") == 0
-              and page.locator("#coreAddChip").is_visible() and period.inner_text().strip() == "近5年", period.inner_text())
-        period.click()
-        page.locator("#corePeriodSelectMenu [data-value='1y']").click()
-        page.wait_for_timeout(400)
-        check(f"{tag}：比較期間可切換、走勢圖還在", page.locator("#coreChart svg, #coreChart canvas").count() >= 1 and period.inner_text().strip() == "近1年", period.inner_text())
-        page.locator("#coreAddChip").click()
-        check(f"{tag}：點「＋ 加入」浮出輸入框，游標直接在裡面", page.evaluate("document.activeElement.id") == "coreCompareInput")
+    def news() -> None:   # 本人 2026-11-19：長期核心持有換成消息（排法 A）
+        open_cat(page, "news")
+        check(f"{tag}：消息有總結與指數", page.locator("#marketNewsSummary .news-summary-text").is_visible()
+              and page.locator("#marketNewsSummary .news-index").count() >= 2)
+        check(f"{tag}：消息先看台股、依影響大小排",
+              page.locator("#marketNewsGroups [aria-selected='true']").inner_text().startswith("台股")
+              and page.locator("#marketNewsList .news-item").count() >= 2)
+        page.locator("#marketNewsGroups button", has_text="美股").click()
+        check(f"{tag}：點美股換成美股那一組", page.locator("#marketNewsList .news-item").count() >= 1
+              and page.locator("#marketNewsGroups [aria-selected='true']").inner_text().startswith("美股"))
+        page.locator("#marketNewsDateChip").click()
+        check(f"{tag}：日期鍵浮出近一個月的日期", page.locator("#marketNewsDates button").count() >= 2)
         page.keyboard.press("Escape")
-        check(f"{tag}：按 Esc 收回加入的輸入框", page.evaluate(VISIBLE_COUNT, "#coreCompareInput") == 0)
-    step(f"{tag}：長期核心持有", core)
+        check(f"{tag}：按 Esc 收回日期", page.locator("#marketNewsDateMenu").is_hidden())
+    step(f"{tag}：消息", news)
 
     def theme() -> None:
         page.locator("#themeToggle").click()

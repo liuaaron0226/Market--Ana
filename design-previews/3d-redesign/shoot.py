@@ -57,7 +57,7 @@ def start_server(*extra: str) -> tuple[subprocess.Popen, str]:
 def ready_home(page: Page) -> None:
     page.wait_for_function("window.MinimalApp && window.MinimalApp.ready")
     page.wait_for_selector("#mainChart canvas")
-    for block in ("chipScreens", "rotationBlock", "coreHoldings"):
+    for block in ("chipScreens", "rotationBlock", "marketNews"):   # 本人 11-19：長期核心持有換成消息
         page.wait_for_function(f"document.getElementById('{block}').dataset.state !== 'loading'")
 
 
@@ -106,7 +106,7 @@ def open_price_panel(page: Page) -> None:
 
 
 # 首頁的四類預設是收著的（A 包第 4 片）；要看某一類的內容得先點它的分類鍵。
-HOME_CATS = ("chips", "screens", "rotation", "core")
+HOME_CATS = ("chips", "screens", "rotation", "news")   # 本人 11-19：長期核心持有換成消息
 
 
 def open_cat(page: Page, cat: str) -> None:

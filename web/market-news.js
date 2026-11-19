@@ -154,7 +154,7 @@
       if (!response.ok) throw new Error(String(response.status));
       const body = await response.json();
       if (ticket !== loading) return;
-      if (!body.available) { button.hidden = true; return; }
+      if (!body.available) { button.hidden = true; block.dataset.state = 'off'; return; }
       render(body);
     } catch (_) {
       if (ticket !== loading) return;
@@ -165,12 +165,14 @@
   }
 
   async function init() {
-    if (location.protocol === 'file:') return;
+    // 開關關著（或讀不到開關）：分頁不出現，這一塊標成 off（不要一直停在「讀取中」）。
+    const off = () => { block.dataset.state = 'off'; };
+    if (location.protocol === 'file:') return off();
     try {
       const response = await fetch('/api/features', { cache: 'no-store', headers: { Accept: 'application/json' } });
       const policy = response.ok ? await response.json() : null;
-      if (!policy?.features?.market_news_v1) return;   // 開關關著：分頁不出現
-    } catch (_) { return; }
+      if (!policy?.features?.market_news_v1) return off();
+    } catch (_) { return off(); }
     button.hidden = false;
     load(null);
   }
