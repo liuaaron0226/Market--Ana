@@ -10,19 +10,20 @@
   <meta name="apple-mobile-web-app-title" content="決策鏡">
   <meta name="theme-color" content="#0b0b0e">
   <title>台股決策鏡</title>
-  <link rel="stylesheet" href="minimal.css?v=20261119-desk68">
-  <link rel="stylesheet" href="chart-studies.css?v=20261119-desk68">
-  <link rel="stylesheet" href="bold.css?v=20261119-desk68">
-  <link rel="stylesheet" href="home.css?v=20261119-desk68">
-  <link rel="stylesheet" href="panel.css?v=20261119-desk68">
-  <link rel="stylesheet" href="forecast.css?v=20261119-desk68">
-  <link rel="stylesheet" href="chart-legend.css?v=20261119-desk68">
-  <link rel="stylesheet" href="time-share.css?v=20261119-desk68">
-  <link rel="stylesheet" href="swipe-rows.css?v=20261119-desk68">
-  <link rel="stylesheet" href="ma-settings.css?v=20261119-desk68">
-  <link rel="stylesheet" href="watch-push.css?v=20261119-desk68">
-  <link rel="stylesheet" href="settings.css?v=20261119-desk68">
-  <link rel="stylesheet" href="stock-picker.css?v=20261119-desk68">
+  <link rel="stylesheet" href="minimal.css?v=20261119-desk69">
+  <link rel="stylesheet" href="chart-studies.css?v=20261119-desk69">
+  <link rel="stylesheet" href="bold.css?v=20261119-desk69">
+  <link rel="stylesheet" href="home.css?v=20261119-desk69">
+  <link rel="stylesheet" href="panel.css?v=20261119-desk69">
+  <link rel="stylesheet" href="forecast.css?v=20261119-desk69">
+  <link rel="stylesheet" href="chart-legend.css?v=20261119-desk69">
+  <link rel="stylesheet" href="time-share.css?v=20261119-desk69">
+  <link rel="stylesheet" href="swipe-rows.css?v=20261119-desk69">
+  <link rel="stylesheet" href="ma-settings.css?v=20261119-desk69">
+  <link rel="stylesheet" href="watch-push.css?v=20261119-desk69">
+  <link rel="stylesheet" href="settings.css?v=20261119-desk69">
+  <link rel="stylesheet" href="stock-picker.css?v=20261119-desk69">
+  <link rel="stylesheet" href="market-news.css?v=20261119-desk69">
 </head>
 <body class="bd hm">
   <a class="skip-link" href="#workspace">跳到主圖</a>
@@ -206,7 +207,8 @@
         <button type="button" data-cat="chips" aria-expanded="false" aria-controls="chipsSection">籌碼與資金</button>
         <button type="button" data-cat="screens" aria-expanded="false" aria-controls="chipScreens">籌碼選股</button>
         <button type="button" data-cat="rotation" aria-expanded="false" aria-controls="rotationBlock">產業資金流向</button>
-        <button type="button" data-cat="core" aria-expanded="false" aria-controls="coreHoldings">長期核心持有</button>
+        <!-- 本人 2026-11-19：「長期核心持有」和個股功能重複，換成「消息」；開關 market_news_v1 打開才出現（market-news.js） -->
+        <button type="button" data-cat="news" aria-expanded="false" aria-controls="marketNews" id="newsCatButton" hidden>消息</button>
       </div>
       <section class="chips" id="chipsSection" data-cat-panel="chips" aria-labelledby="chipsTitle">
         <h2 id="chipsTitle" class="hm-section-title sr-only">籌碼與資金</h2>
@@ -278,37 +280,22 @@
             </div>
           </section>
 
-          <section class="screen-block" id="coreHoldings" data-cat-panel="core" data-state="loading" aria-labelledby="coreHoldingsTitle">
-            <div class="screen-head">
-              <h3 id="coreHoldingsTitle">長期核心持有</h3>
-              <p class="screen-meta" id="coreHoldingsMeta">讀取中…</p>
-            </div>
-            <form class="core-compare-form" id="coreCompareForm">
-              <!-- 已加入的標的、「＋ 加入」、比較期間排成一列；輸入框與期間的選項點了才浮出來（本人 11-15） -->
-              <div class="core-picks">
-                <div class="core-selection" id="coreSelection" aria-label="已加入的比較標的"></div>
-                <button type="button" class="chart-chip is-plain" id="coreAddChip" aria-expanded="false" aria-controls="coreAddMenu">＋ 加入</button>
-                <div class="chart-menu core-add-menu" id="coreAddMenu" data-menu-focus hidden>
-                  <label class="sr-only" for="coreCompareInput">加入個股或 ETF</label>
-                  <div class="core-compare-entry">
-                    <input id="coreCompareInput" name="code" autocomplete="off" maxlength="24" placeholder="代號或名稱">
-                    <button type="submit">加入比較</button>
-                  </div>
-                </div>
-                <label class="core-period" for="corePeriodSelect"><span class="sr-only">比較期間</span>
-                  <select id="corePeriodSelect" data-chip-menu="比較期間">
-                    <option value="1m">近 1 個月</option>
-                    <option value="3m">近 3 個月</option>
-                    <option value="1y">近 1 年</option>
-                    <option value="3y">近 3 年</option>
-                    <option value="5y" selected>近 5 年</option>
-                  </select>
-                </label>
+          <!-- 首頁「消息」（本人 2026-11-19，排法 A）：總結＋指數，下面一組一組看；日期鍵看近一個月。內容由 market-news.js 填。 -->
+          <section class="screen-block news-block" id="marketNews" data-cat-panel="news" data-state="loading" aria-labelledby="marketNewsTitle">
+            <div class="screen-head news-head">
+              <div>
+                <h3 id="marketNewsTitle">消息</h3>
+                <p class="screen-meta" id="marketNewsMeta"></p>
               </div>
-              <p class="core-status" id="coreStatus" role="status" hidden></p>
-            </form>
-            <div class="core-cards" id="coreCards"></div>
-            <div class="core-chart" id="coreChart"></div>
+              <button type="button" class="chart-chip" id="marketNewsDateChip" aria-expanded="false" aria-controls="marketNewsDateMenu" data-mirror="日期" hidden></button>
+              <div class="chart-menu news-date-menu" id="marketNewsDateMenu" data-menu-autoclose hidden>
+                <div class="news-dates" id="marketNewsDates" role="group" aria-label="日期"></div>
+              </div>
+            </div>
+            <div class="news-summary" id="marketNewsSummary" hidden></div>
+            <div class="news-seg" id="marketNewsGroups" role="tablist" aria-label="市場" hidden></div>
+            <p class="screen-status" id="marketNewsStatus" role="status">讀取中…</p>
+            <ol class="news-list" id="marketNewsList" aria-label="消息"></ol>
           </section>
         </div>
       </section>
@@ -359,30 +346,31 @@
   <script src="plain-data.js"></script>
   <script src="detail-data.js"></script>
   <script src="market-data-local.js"></script>
-  <script src="terrain-layout.js?v=20261119-desk68"></script>
-  <script src="terrain.js?v=20261119-desk68"></script>
-  <script src="chart-studies.js?v=20261119-desk68"></script>
-  <script src="kchart.js?v=20261119-desk68"></script>
-  <script src="time-share.js?v=20261119-desk68"></script>
-  <script src="ma-lines.js?v=20261119-desk68"></script>
-  <script src="chart-legend.js?v=20261119-desk68"></script>
-  <script src="swipe-rows.js?v=20261119-desk68"></script>
-  <script src="ma-settings.js?v=20261119-desk68"></script>
-  <script src="scroll-lock.js?v=20261119-desk68"></script>
-  <script src="no-zoom.js?v=20261119-desk68"></script>
-  <script src="forecast.js?v=20261119-desk68"></script>
-  <script src="line-zones.js?v=20261119-desk68"></script>
-  <script src="trend-votes.js?v=20261119-desk68"></script>
-  <script src="trend-matrix.js?v=20261119-desk68"></script>
-  <script src="market-index.js?v=20261119-desk68"></script>
-  <script src="stock-picker.js?v=20261119-desk68"></script>
-  <script src="minimal.js?v=20261119-desk68"></script>
-  <script src="period-switch.js?v=20261119-desk68"></script>
-  <script src="chart-menus.js?v=20261119-desk68"></script>
-  <script src="home-motion.js?v=20261119-desk68"></script>
-  <script src="home-fold.js?v=20261119-desk68"></script>
-  <script src="desk-tilt.js?v=20261119-desk68"></script>
-  <script src="watch-push.js?v=20261119-desk68"></script>
-  <script src="settings.js?v=20261119-desk68"></script>
+  <script src="terrain-layout.js?v=20261119-desk69"></script>
+  <script src="terrain.js?v=20261119-desk69"></script>
+  <script src="chart-studies.js?v=20261119-desk69"></script>
+  <script src="kchart.js?v=20261119-desk69"></script>
+  <script src="time-share.js?v=20261119-desk69"></script>
+  <script src="ma-lines.js?v=20261119-desk69"></script>
+  <script src="chart-legend.js?v=20261119-desk69"></script>
+  <script src="swipe-rows.js?v=20261119-desk69"></script>
+  <script src="ma-settings.js?v=20261119-desk69"></script>
+  <script src="scroll-lock.js?v=20261119-desk69"></script>
+  <script src="no-zoom.js?v=20261119-desk69"></script>
+  <script src="forecast.js?v=20261119-desk69"></script>
+  <script src="line-zones.js?v=20261119-desk69"></script>
+  <script src="trend-votes.js?v=20261119-desk69"></script>
+  <script src="trend-matrix.js?v=20261119-desk69"></script>
+  <script src="market-index.js?v=20261119-desk69"></script>
+  <script src="stock-picker.js?v=20261119-desk69"></script>
+  <script src="minimal.js?v=20261119-desk69"></script>
+  <script src="market-news.js?v=20261119-desk69"></script>
+  <script src="period-switch.js?v=20261119-desk69"></script>
+  <script src="chart-menus.js?v=20261119-desk69"></script>
+  <script src="home-motion.js?v=20261119-desk69"></script>
+  <script src="home-fold.js?v=20261119-desk69"></script>
+  <script src="desk-tilt.js?v=20261119-desk69"></script>
+  <script src="watch-push.js?v=20261119-desk69"></script>
+  <script src="settings.js?v=20261119-desk69"></script>
 </body>
 </html>

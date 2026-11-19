@@ -371,7 +371,7 @@
   }
   const fillNews = (list, items) => fillList(list, items, newsItem);
 
-  // ---------- 關注股的新聞標題（自選股關注 C 票：只給站主、只有正在關注的那幾檔） ----------
+  // ---------- 新聞標題（本人 2026-11-19 起：大媒體＋中央社，不限關注；開關 market_news_v1 打開的人才有） ----------
   // 發布時間是 UTC，畫面一律換成台北時間；「今天」也以台北的日期為準。
   const TAIPEI = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
@@ -395,7 +395,7 @@
   // 沒抓到的來源各一行：今天試過但失敗是「今天沒抓到」，好幾天沒有新的成功是「MM-DD 之後沒抓到」。
   // 這幾天一則都沒有、而且至少有一個來源抓到了，才說「這幾天沒有消息」。
   function fillHeadlines(host, body) {
-    if (!body?.available || !body.watching) return;
+    if (!body?.available) return;
     const items = Array.isArray(body.items) ? body.items : [];
     const sources = Array.isArray(body.sources) ? body.sources : [];
     const today = taipei(Date.now()).day;
@@ -416,7 +416,7 @@
 
   async function headlines(code) {
     if (!headlineCache.has(code)) {
-      headlineCache.set(code, fetch(`/api/watch/${encodeURIComponent(code)}/news`, { cache: 'no-store' })
+      headlineCache.set(code, fetch(`/api/stocks/${encodeURIComponent(code)}/headlines`, { cache: 'no-store' })
         .then(response => { if (!response.ok) throw new Error(String(response.status)); return response.json(); })
         .catch(() => { headlineCache.delete(code); return null; }));
     }
@@ -440,7 +440,7 @@
     const list = el('div', 'sf-news');
     // 讀到之前只有產業別；讀不到或這幾天沒有公告也只有產業別（不放說明文字）。
     newsItems(code).then(items => { if (list.isConnected) fillNews(list, items); });
-    // 新聞標題接在公告後面；不是站主或這一檔沒有關注時什麼都不出現。
+    // 新聞標題接在公告後面；開關沒開給這個人時什麼都不出現。
     const press = el('div', 'sf-press');
     headlines(code).then(body => { if (press.isConnected) fillHeadlines(press, body); });
     return [industry, list, press];
