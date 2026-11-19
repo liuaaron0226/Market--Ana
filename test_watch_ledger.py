@@ -277,7 +277,6 @@ class AnswerValidationTests(WatchLedgerTestCase):
             "引用輸入裡沒有的消息編號": answer(news_refs=["a9"]),
             "基準日不符": answer(base_date="2026-09-29"),
             "代號不符": answer(code="2317"),
-            "多出欄位": {**answer(), "target_price": "很高"},
             "少了欄位": {key: value for key, value in answer().items() if key != "wrong_line"},
         }
         for name, bad in cases.items():
@@ -285,6 +284,29 @@ class AnswerValidationTests(WatchLedgerTestCase):
                 self.reset_calls()
                 result = self.write(responses=[envelope(bad)], root=self.root / name)
                 self.assert_miss(result, "answer_invalid", 2)
+
+    def test_extra_fields_are_dropped_and_missing_reference_lists_are_empty(self):
+        # 2026-11-19 晚間正式（run 44505435261，Flash 高）：6 檔裡 5 檔至少一次「回答缺欄位或含未允許欄位」、兩檔兩次
+        # 都被擋成漏記。多寫的未知欄位丟掉，不整份作廢；沒寫的引用清單當成空的；照抄的基準日、代號沒寫就補上。
+        extra = {**answer(), "confidence": "高", "target_price": "很高"}
+        no_lists = {key: value for key, value in answer().items() if key not in ("reason_refs", "news_refs")}
+        no_echo = {key: value for key, value in answer().items() if key not in ("base_date", "code")}
+        for name, reply in (("多出欄位", extra), ("沒寫引用清單", no_lists), ("沒寫照抄欄位", no_echo)):
+            with self.subTest(name):
+                self.reset_calls()
+                record = self.write(responses=[envelope(reply)], root=self.root / name)["record"]
+                self.assertEqual((record["kind"], record["attempts"]), ("judgment", []))
+                self.assertNotIn("confidence", record)
+                self.assertNotIn("target_price", record)
+                self.assertEqual(calls(self.bin), 1)
+
+    def test_a_refused_answer_is_kept_in_the_attempts(self):
+        # 之後查得到模型實際回了什麼：欄位名稱與原文（截短）
+        bad = {key: value for key, value in answer().items() if key != "wrong_line"}
+        record = self.write(responses=[envelope(bad)])["record"]
+        attempt = record["attempts"][-1]
+        self.assertEqual(attempt["answer_keys"], sorted(bad))
+        self.assertIn("量縮整理等待表態", attempt["rejected_answer"])
 
     def test_news_can_only_be_cited_when_the_layer_has_it(self):
         self.reset_calls()

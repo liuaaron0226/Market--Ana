@@ -106,3 +106,35 @@ class FormalNumeralTests(unittest.TestCase):
     def test_formal_numerals_next_to_numbers_or_measure_words_are_still_refused(self):
         for text in ("零點五", "參成", "陸佰張", "跌了拾點", "二〇二六年"):
             self.assertEqual(text_problem(text, names=NAMES, method_text=METHOD), BLOCKED, text)
+
+
+# ---- 2026-11-19 晚間正式預測（run 44504695955）兩次都被擋的原文 ----
+REFUSED_1119 = (
+    "中期偏空、長期盤整，指數跌破季線與年線。本格採第二頻道月線空頭背離之風險框架，反彈遇壓宜調節；第一頻道小時線正背離反彈說法列反對證據。"
+    "近期美元強台幣貶伴隨外資賣超，美國信用壓力仍低但微升，新聞提到外資上修台灣經濟預估與中東能源威脅。"
+    "上有月線反壓，下測缺口下緣（04/15）支撐，估落於兩線間。",
+    "長線盤整而中線偏空，指數處於高檔轉弱且跌破季線與月線。依第二頻道月線背離風險背景與第一頻道看量價確認原則，"
+    "美元走強台幣走貶伴隨外資累賣，產業熱度降溫且集中半導體業。上方月線與季線反壓重，未打底前難直接翻多，"
+    "但下方缺口下緣（04/15）具支撐且歷史相似期多有反彈，估落於兩線間。",
+)
+PROMPT_1119 = "zone 只能是 above、between、below；「兩線之間」在歷史上本來就越常中。" + METHOD
+
+
+class Refused1119Tests(unittest.TestCase):
+    def test_a_name_written_without_its_prefix_passes(self):
+        # owner 推測候選名是「未回補向上缺口下緣（04/15）」，模型省掉前綴：名字的尾段（含結尾括號日期）放行
+        names = ["月線", "季線", "年線", "未回補向上缺口下緣（04/15）"]
+        for text in REFUSED_1119:
+            self.assertIsNone(text_problem(text, names=names, method_text=PROMPT_1119), text[-30:])
+
+    def test_a_name_that_only_appears_elsewhere_in_the_input_passes(self):
+        # 名字不在當天的候選裡、而是在教訓層（過去選過的線）：整份輸入裡的 name 都算名字
+        import forecast_ledger as fl
+        model_input = {"candidates": [{"id": "ma20", "name": "月線"}],
+                       "lessons": {"recent_misses": [{"weak_line": {"id": "gap20260415_lower", "name": "缺口下緣（04/15）"}}]}}
+        self.assertEqual(sorted(fl._input_names(model_input)), ["月線", "缺口下緣（04/15）"])
+
+    def test_numbers_beside_a_short_tail_are_still_refused(self):
+        names = ["未回補向上缺口下緣（04/15）"]
+        for text in ("下緣（04/15）支撐", "缺口下緣 04/15", "缺口下緣（04/16）"):
+            self.assertEqual(text_problem(text, names=names, method_text=PROMPT_1119), BLOCKED, text)

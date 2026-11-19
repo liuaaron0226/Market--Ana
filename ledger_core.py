@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import calendar
+import copy
 import hashlib
 import json
 import math
@@ -269,8 +270,13 @@ def _is_han(character: str) -> bool:
     return "一" <= character <= "鿿" or character in CHINESE_NUMERAL_CHARS
 
 
+# 2026-11-19 晚間正式預測兩次被擋：模型把「未回補向上缺口下緣（04/15）」這種名字省掉前綴寫成「缺口下緣（04/15）」。
+# 帶結尾括號（日期）的名字，括號前至少這麼多字的尾段也算名字；太短的（「下緣（04/15）」）不算。
+_NAME_TAIL_MIN = 4
+
+
 def _name_forms(names: Sequence[str]) -> list[str]:
-    """候選名字的整個名字，加上去掉結尾括號（日期）的那一段；長的先比，才不會把長名字拆開。"""
+    """候選名字的整個名字、去掉結尾括號（日期）的那一段，以及帶著結尾括號的尾段；長的先比，才不會把長名字拆開。"""
     forms = set()
     for name in names:
         name = str(name or "").strip()
@@ -279,7 +285,54 @@ def _name_forms(names: Sequence[str]) -> list[str]:
             short = re.sub(r"[（(][^（）()]*[）)]$", "", name).strip()
             if len(short) >= 2:
                 forms.add(short)
+            if short != name:
+                for start in range(1, len(short) - _NAME_TAIL_MIN + 1):
+                    forms.add(name[start:])
     return sorted(forms, key=len, reverse=True)
+
+
+# 被擋下的回答原樣記進 attempts 的最大字數（2026-11-19 關注晚間兩檔漏記，只留下「缺欄位或含未允許欄位」查不出是哪個）。
+_ANSWER_SNAPSHOT_MAX = 2000
+
+
+def known_fields(answer: Any, required: Sequence[str], defaults: Mapping[str, Any] | None = None) -> dict[str, Any] | None:
+    """模型回答整理成只有已知欄位：多寫的未知欄位丟掉（不整份作廢）；``defaults`` 裡的欄位沒寫就補上；
+    其餘必填欄位缺一個就回 None（真的缺東西才算無效）。2026-11-19 owner：Flash 高常多寫或少寫欄位。"""
+    if not isinstance(answer, Mapping):
+        return None
+    defaults = defaults or {}
+    kept: dict[str, Any] = {}
+    for key in required:
+        if key in answer:
+            kept[key] = answer[key]
+        elif key in defaults:
+            kept[key] = copy.deepcopy(defaults[key])
+        else:
+            return None
+    return kept
+
+
+def answer_snapshot(answer: Any) -> dict[str, Any]:
+    """被擋下的回答：欄位名稱與原文（截短），記進 attempts，之後查得到模型實際回了什麼。"""
+    keys = sorted(str(key) for key in answer) if isinstance(answer, Mapping) else []
+    text = json.dumps(answer, ensure_ascii=False, default=str)
+    return {"answer_keys": keys, "rejected_answer": text[:_ANSWER_SNAPSHOT_MAX]}
+
+
+def input_names(value: Any) -> list[str]:
+    """整份輸入裡所有 ``name`` 欄位的字（候選關卡、教訓層裡過去選過的線、同類股、海外各項……）：理由照抄這些名字裡的
+    數字放行（2026-11-19：模型寫了教訓層裡的「缺口下緣（04/15）」，它當天不在候選裡，日期數字就被擋）。"""
+    found: list[str] = []
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, Mapping):
+            if isinstance(item.get("name"), str):
+                found.append(item["name"])
+            stack.extend(item.values())
+        elif isinstance(item, (list, tuple)):
+            stack.extend(item)
+    return sorted(set(found))
 
 
 def _in_method_term(text: str, at: int, method_text: str) -> bool:
@@ -324,7 +377,7 @@ def text_problem(text: Any, *, names: Sequence[str] = (), method_text: str = "")
 # 第二輪（owner 11-19 轉本人「放寬檢查」）：常見、不帶數值的詞放行；數字後面接量詞（三成、五張、十點）一律擋，
 # 即使提示裡原樣有（新聞標題的「年增三成」照抄進理由也不行）。``method_text`` 由呼叫端給當份完整提示（規則＋輸入）。
 COMMON_NUMERAL_WORDS = ("一起", "一致", "一些", "一般", "一路", "一度", "一旦", "一再", "單一", "統一", "第一", "第二",
-                        "萬一")
+                        "萬一", "兩線", "兩條線")
 _MEASURE_WORDS = frozenset("成張點元塊倍檔根天年月週周次分秒季%％")
 # 2026-11-20 正式晨間被擋的「僅作參考」：大寫數字字（參、陸、零、拾、伍…）在一般文章裡幾乎都不是數字（參考、大陸、
 # 零組件、收拾、隊伍），只有前後接著別的數字（零點五的「點」是量詞、陸佰、二〇二六）或量詞（參成）時才當數字擋。
