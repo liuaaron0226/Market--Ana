@@ -312,6 +312,8 @@ def text_problem(text: Any, *, names: Sequence[str] = (), method_text: str = "")
             continue
         if _counts_something(masked, at):
             return "自由文字不得包含數字；價位請用候選編號"
+        if character in _FORMAL_NUMERALS and not _next_to_numeral(masked, at):
+            continue   # 參考、大陸、零組件、收拾、隊伍：單獨出現的大寫數字字不是數字
         if character in CHINESE_NUMERAL_CHARS and method_text and _in_method_term(masked, at, method_text):
             continue
         return "自由文字不得包含數字；價位請用候選編號"
@@ -320,8 +322,16 @@ def text_problem(text: Any, *, names: Sequence[str] = (), method_text: str = "")
 
 # 第二輪（owner 11-19 轉本人「放寬檢查」）：常見、不帶數值的詞放行；數字後面接量詞（三成、五張、十點）一律擋，
 # 即使提示裡原樣有（新聞標題的「年增三成」照抄進理由也不行）。``method_text`` 由呼叫端給當份完整提示（規則＋輸入）。
-COMMON_NUMERAL_WORDS = ("一起", "一致", "一些", "一般", "一路", "一度", "一旦", "一再", "單一", "統一", "第一", "第二")
+COMMON_NUMERAL_WORDS = ("一起", "一致", "一些", "一般", "一路", "一度", "一旦", "一再", "單一", "統一", "第一", "第二",
+                        "萬一")
 _MEASURE_WORDS = frozenset("成張點元塊倍檔根天年月週周次分秒季%％")
+# 2026-11-20 正式晨間被擋的「僅作參考」：大寫數字字（參、陸、零、拾、伍…）在一般文章裡幾乎都不是數字（參考、大陸、
+# 零組件、收拾、隊伍），只有前後接著別的數字（零點五的「點」是量詞、陸佰、二〇二六）或量詞（參成）時才當數字擋。
+_FORMAL_NUMERALS = frozenset("壹貳貮參参肆伍陸陆柒捌玖拾佰仟零〇")
+
+
+def _next_to_numeral(text: str, at: int) -> bool:
+    return any(0 <= near < len(text) and _is_numeral(text[near]) for near in (at - 1, at + 1))
 
 
 def _counts_something(text: str, at: int) -> bool:
