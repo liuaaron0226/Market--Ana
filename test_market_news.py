@@ -521,55 +521,77 @@ class Round5Tests(unittest.TestCase):
 
 
 class FriendCallTests(unittest.TestCase):
-    """朋友的金鑰走 API：逾時就換「不帶結構描述、不指定思考」再試一次，兩次各花幾秒都記下來。"""
+    """朋友的金鑰走 Gemini API。2026-11-19 正式跑：gemini-3.8-flash 一秒內回 503（帶不帶結構描述都一樣）；
+    這把金鑰唯一成功過的呼叫是存金鑰時的試呼叫（gemini-flash-latest）。所以 5xx／逾時就退到那個模型再試。"""
 
     def setUp(self):
         import friend_ai_digest as fad
         self.fad = fad
-        self.saved = fad.node_decrypt, fad.http_post
+        self.saved = fad.node_decrypt, mn._friend_post
         fad.node_decrypt = lambda row: "k"
+        self.calls = []
 
     def tearDown(self):
-        self.fad.node_decrypt, self.fad.http_post = self.saved
+        self.fad.node_decrypt, mn._friend_post = self.saved
 
     def reply(self, text):
         return {"candidates": [{"content": {"parts": [{"text": text}]}}]}
 
-    def test_timeout_then_plain_mode_succeeds_and_both_are_timed(self):
-        bodies = []
+    def ask(self):
+        return mn._friend_asker("gemini-3.8-flash")({"email": FRIEND}, "x", mn.WATCH_SCHEMA)
 
-        def post(url, body, api_key, timeout=None):
-            bodies.append((body, timeout))
-            if len(bodies) == 1:
-                raise self.fad.GeminiTimeout("TimeoutError")
-            return self.reply('```json\n{"watch": []}\n```')
-        self.fad.http_post = post
-        status, output, note = mn._friend_asker("gemini-3.8-flash")({"email": FRIEND}, "x", mn.WATCH_SCHEMA)
+    def test_the_fallback_model_is_the_one_the_key_was_tried_with(self):
+        source = (ROOT / "cloud/lib/friend-ai.js").read_text(encoding="utf-8")
+        self.assertIn(f"/models/{mn.FRIEND_FALLBACK_MODEL}:generateContent", source)
+
+    def test_503_falls_back_to_the_trial_model_and_says_which(self):
+        def post(url, body, key, timeout):
+            self.calls.append((url, body))
+            if "gemini-3.8-flash" in url:
+                raise mn.FriendHttpError(503, "UNAVAILABLE", (), "The model is overloaded. Please try again later.")
+            return self.reply('{"watch": []}')
+        mn._friend_post = post
+        status, output, note = self.ask()
         self.assertEqual((status, output), ("ok", {"watch": []}))
-        self.assertIn("responseJsonSchema", bodies[0][0]["generationConfig"])
-        self.assertNotIn("responseJsonSchema", bodies[1][0]["generationConfig"])
-        self.assertNotIn("thinkingConfig", bodies[1][0]["generationConfig"])
-        self.assertEqual(bodies[0][1], mn.FRIEND_TIMEOUT_SECONDS)
-        self.assertRegex(note, r"schema \d+s timeout; plain \d+s ok")
+        self.assertEqual(len(self.calls), 2)
+        self.assertIn(mn.FRIEND_FALLBACK_MODEL, self.calls[1][0])
+        self.assertNotIn("thinkingConfig", self.calls[1][1]["generationConfig"], "備援模型不指定思考程度")
+        self.assertIn("HTTP 503 UNAVAILABLE", note)
+        self.assertIn("The model is overloaded", note)
+        self.assertRegex(note, rf"{mn.FRIEND_FALLBACK_MODEL} schema \d+s ok")
 
-    def test_both_time_out(self):
-        def post(url, body, api_key, timeout=None):
-            raise self.fad.GeminiTimeout("TimeoutError")
-        self.fad.http_post = post
-        status, output, note = mn._friend_asker("gemini-3.8-flash")({"email": FRIEND}, "x", mn.WATCH_SCHEMA)
-        self.assertEqual((status, output), ("gemini_unavailable", None))
-        self.assertRegex(note, r"schema \d+s timeout; plain \d+s timeout")
+    def test_everything_failing_reports_each_try_with_the_error_text(self):
+        def post(url, body, key, timeout):
+            self.calls.append(url)
+            if len(self.calls) == 1:
+                raise self.fad.GeminiTimeout("TimeoutError")
+            raise mn.FriendHttpError(503, "UNAVAILABLE", (), "x" * 500)
+        mn._friend_post = post
+        status, output, note = self.ask()
+        self.assertEqual((status, output, len(self.calls)), ("gemini_unavailable", None, 3))
+        self.assertIn("timeout", note)
+        self.assertIn("plain", note, "最後一次不帶結構描述")
+        self.assertLess(len(note), 900)
 
     def test_a_key_problem_is_not_retried(self):
-        calls = []
-
-        def post(url, body, api_key, timeout=None):
-            calls.append(1)
-            raise self.fad.GeminiHttpError(403)
-        self.fad.http_post = post
-        status, _, note = mn._friend_asker("gemini-3.8-flash")({"email": FRIEND}, "x", mn.WATCH_SCHEMA)
-        self.assertEqual((status, len(calls)), ("key_revoked", 1))
+        def post(url, body, key, timeout):
+            self.calls.append(url)
+            raise mn.FriendHttpError(403, "PERMISSION_DENIED", (), "API key was reported as leaked")
+        mn._friend_post = post
+        status, _, note = self.ask()
+        self.assertEqual((status, len(self.calls)), ("key_revoked", 1))
         self.assertIn("HTTP 403", note)
+
+    def test_a_model_this_key_cannot_use_also_falls_back(self):
+        def post(url, body, key, timeout):
+            self.calls.append(url)
+            if "gemini-3.8-flash" in url:
+                raise mn.FriendHttpError(404, "NOT_FOUND", (), "models/gemini-3.8-flash is not found")
+            return self.reply('```json\n{"watch": []}\n```')
+        mn._friend_post = post
+        status, _, note = self.ask()
+        self.assertEqual((status, len(self.calls)), ("ok", 2))
+        self.assertIn("HTTP 404", note)
 
 
 class EnvelopeTests(unittest.TestCase):

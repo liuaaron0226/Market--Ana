@@ -44,6 +44,10 @@ MODEL_TIMEOUT_SECONDS = 600
 BATCH_ITEMS = 12           # 市場新聞每批幾則（一批一次呼叫；20 則在 Actions 三批壞兩批，2026-11-19）
 CALL_ATTEMPTS = 2          # 一次呼叫沒拿到結果就再試一次
 FRIEND_BATCH = 8           # 朋友的自選每批幾則（朋友的金鑰走 API，一次太多會等到逾時）
+# 這把金鑰唯一確定能用的模型：朋友存金鑰時的試呼叫（cloud/lib/friend-ai.js 的 TRIAL_URL）。主要模型回 5xx、
+# 逾時或說模型不能用時退到它（2026-11-19：gemini-3.8-flash 一秒內回 503；朋友解讀也還沒有任何成功紀錄）。
+FRIEND_FALLBACK_MODEL = "gemini-flash-latest"
+FRIEND_ERROR_TEXT_MAX = 200
 FRIEND_NEWS_EFFORT = "low"  # 朋友那份的思考程度：高會超過 300 秒（2026-11-19 GeminiTimeout），先求有結果
 SUMMARY_TOP = 20           # 總結那一次給幾則（影響大的先）
 PARALLEL_CALLS = 3         # 同時幾個呼叫
@@ -613,7 +617,7 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
                 if friend_status in ("quota", "key_invalid", "key_revoked", "key_decrypt_failed", "region"):
                     break   # 金鑰或額度的問題：剩下的不用再試
         done = len(pieces) - len(failures)
-        friends[email] = (" ".join(["ok", *notes]) if not failures else f"{done}/{len(pieces)} {failures[0]}")[:300]
+        friends[email] = (" ".join(["ok", *notes]) if not failures else f"{done}/{len(pieces)} {failures[0]}")[:900]
         if marks or not failures:
             user_rows[email] = marks
         if not failures:
@@ -723,10 +727,53 @@ def friend_body(text: str, schema: Mapping[str, Any]) -> dict[str, Any]:
                                  "thinkingConfig": {"thinkingLevel": FRIEND_NEWS_EFFORT}}}
 
 
+class FriendHttpError(Exception):
+    """Gemini API 回的錯誤：HTTP 狀態、Google 的 status、reasons 與訊息前 FRIEND_ERROR_TEXT_MAX 字（不含金鑰）。"""
+
+    def __init__(self, status: int, error_status: str | None = None, reasons: tuple[str, ...] = (), message: str = ""):
+        super().__init__(f"HTTP {status}")
+        self.status, self.error_status, self.reasons = status, error_status, reasons
+        self.message = re.sub(r"\s+", " ", message or "")[:FRIEND_ERROR_TEXT_MAX]
+
+
+def _friend_post(url: str, body: Mapping[str, Any], api_key: str, timeout: float) -> dict[str, Any]:
+    """和 friend_ai_digest.http_post 同一種送法（金鑰只放標頭、不跟轉址），差別是把錯誤訊息的開頭也帶出來。"""
+    import http.client
+    import urllib.error
+    import urllib.request
+
+    import friend_ai_digest as fad
+    request = urllib.request.Request(url, data=json.dumps(body, ensure_ascii=False).encode("utf-8"), method="POST",
+                                     headers={"content-type": "application/json", "x-goog-api-key": api_key})
+    try:
+        with fad._OPENER.open(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        raw = ""
+        try:
+            raw = error.read().decode("utf-8", errors="replace")
+            detail = json.loads(raw).get("error") or {}
+        except (ValueError, AttributeError, OSError, http.client.HTTPException):
+            detail = {}
+        message = str(detail.get("message") or raw)
+        reasons = tuple(str(item.get("reason")) for item in detail.get("details") or [] if isinstance(item, dict))
+        if "api key" in message.lower():
+            reasons = (*reasons, "API_KEY_INVALID")
+        raise FriendHttpError(error.code, detail.get("status"), reasons, message.replace(api_key, "***")) from None
+    except TimeoutError:
+        raise fad.GeminiTimeout("TimeoutError") from None
+    except urllib.error.URLError as error:
+        if isinstance(error.reason, TimeoutError):
+            raise fad.GeminiTimeout("TimeoutError") from None
+        raise OSError(type(error).__name__) from None
+    except (ValueError, http.client.HTTPException) as error:
+        raise OSError(type(error).__name__) from None
+
+
 def _friend_asker(model: str) -> FriendAsker:
-    """朋友的金鑰走 Gemini API。2026-11-19 正式跑三次都等到逾時（思考高 120／300 秒、思考低 300 秒），原因還不知道，
-    所以：帶結構描述問一次（FRIEND_TIMEOUT_SECONDS）；逾時、伺服器錯誤、被拒或回不出 JSON，就不帶結構描述、
-    不指定思考程度再問一次（JSON 從文字裡解）。兩次各花幾秒、結果是什麼都寫進說明。金鑰或額度的問題不重試。"""
+    """朋友的金鑰走 Gemini API。依序試：主要模型帶結構描述 → 備援模型（FRIEND_FALLBACK_MODEL）帶結構描述 →
+    備援模型不帶結構描述（JSON 從文字裡解）。備援模型不指定思考程度。金鑰或額度的問題不再往下試。
+    每一次用哪個模型、花幾秒、結果與錯誤訊息開頭都寫進說明。"""
     import time
 
     import friend_ai_digest as fad
@@ -736,38 +783,41 @@ def _friend_asker(model: str) -> FriendAsker:
             key = fad.node_decrypt(dict(key_row))
         except Exception:  # noqa: BLE001
             return "key_decrypt_failed", None, ""
-        url = fad.GEMINI_URL.format(model=model)
+        with_schema = {"contents": [{"role": "user", "parts": [{"text": text}]}],
+                       "generationConfig": {"responseMimeType": "application/json", "responseJsonSchema": dict(schema)}}
         plain = {"contents": [{"role": "user", "parts": [{"text": text}]}],
                  "generationConfig": {"responseMimeType": "application/json"}}
+        tries = ((model, "schema", friend_body(text, schema)), (FRIEND_FALLBACK_MODEL, "schema", with_schema),
+                 (FRIEND_FALLBACK_MODEL, "plain", plain))
         trail: list[str] = []
         status = "gemini_failed"
-        for mode, body in (("schema", friend_body(text, schema)), ("plain", plain)):
+        for name, mode, body in tries:
             started = time.monotonic()
-            took = lambda: f"{mode} {round(time.monotonic() - started)}s"  # noqa: E731
+            label = lambda: f"{name} {mode} {round(time.monotonic() - started)}s"  # noqa: E731
             try:
-                reply = fad.http_post(url, body, key, timeout=FRIEND_TIMEOUT_SECONDS)
+                reply = _friend_post(fad.GEMINI_URL.format(model=name), body, key, FRIEND_TIMEOUT_SECONDS)
                 parts = reply["candidates"][0]["content"]["parts"]
                 joined = "".join(part.get("text", "") for part in parts if isinstance(part, dict) and not part.get("thought"))
                 output = json_from_text(joined)
                 if output is not None:
-                    trail.append(f"{took()} ok")
+                    trail.append(f"{label()} ok")
                     return "ok", output, "; ".join(trail)
                 status = "gemini_failed"
-                trail.append(f"{took()} no_json")
-            except fad.GeminiHttpError as error:
-                status = fad.classify_http_error(error)
-                trail.append(f"{took()} HTTP {error.status}")
+                trail.append(f"{label()} no_json")
+            except FriendHttpError as error:
+                status = fad.classify_http_error(fad.GeminiHttpError(error.status, error.error_status, error.reasons))
+                trail.append(f"{label()} HTTP {error.status} {error.error_status or ''} {error.message!r}".replace("  ", " "))
                 if status in ("quota", "key_invalid", "key_revoked", "region"):
                     break
             except fad.GeminiTimeout:
                 status = "gemini_unavailable"
-                trail.append(f"{took()} timeout")
+                trail.append(f"{label()} timeout")
             except OSError as error:
                 status = "gemini_unavailable"
-                trail.append(f"{took()} {type(error).__name__}")
+                trail.append(f"{label()} {type(error).__name__}")
             except (KeyError, IndexError, TypeError):
                 status = "gemini_failed"
-                trail.append(f"{took()} bad_reply")
+                trail.append(f"{label()} bad_reply")
         return status, None, "; ".join(trail)
     return ask
 
