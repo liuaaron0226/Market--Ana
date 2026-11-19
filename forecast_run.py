@@ -41,6 +41,8 @@ from level_signals import trading_day_status
 SCHEMA = "forecast-run/v1"
 # 本人 2026-11-17：大盤預測交給 Argon（模型名稱只在 gemini_models 改；本人已訂閱的 Google AI Pro，不新增付費服務）。
 MODEL_DEFAULT = gemini_models.FORECAST
+# 本人 2026-11-19 晚：模型與思考強度由設定頁「AI 模型」選，排程經 gemini_settings.py 帶 --model／--effort 進來；這兩個是預設。
+EFFORT_DEFAULT = gemini_models.FORECAST_EFFORT
 # 重播乾跑的時鐘：那一天收盤、每日更新發布之後。
 REPLAY_CLOCK = "17:30:00"
 # 重播晨間版乾跑的時鐘：開盤日早上、期限（08:45）之前。
@@ -254,7 +256,7 @@ def trim_to_day(analysis: Mapping[str, Any], day: str) -> dict[str, Any]:
 
 def _backfill_misses(analysis: Mapping[str, Any], method_text: str, ledger: Path, base_date: str, *,
                      model_bin: Path | str, model: str, clock: Callable[[], datetime],
-                     edition: str = "evening", foreign_sources: Mapping[str, Any] | None = None,
+                     effort: str = EFFORT_DEFAULT, edition: str = "evening", foreign_sources: Mapping[str, Any] | None = None,
                      official_since: str | None = None) -> list[str]:
     """帳本這一版最後一份之後、今天這一份之前，有日 K 卻沒有任何紀錄的基準日（整個時段沒跑）補記漏記。
 
@@ -262,7 +264,7 @@ def _backfill_misses(analysis: Mapping[str, Any], method_text: str, ledger: Path
     晨間版的開盤日是日 K 裡基準日的下一根，所以基準日要有下一根才補。晚間版只由晚間的執行補、晨間版只由晨間的
     執行補：兩支排程各自寫各自的檔案，不會同時寫到同一筆。
     """
-    version = fl.input_version(model)  # 換模型＝新系列：舊模型的紀錄不算這一版的起點
+    version = fl.input_version(model, effort)  # 換模型或思考強度＝新系列：舊系列的紀錄不算這一版的起點
     earlier = [record["base_date"] for record in fl.read_ledger(ledger)["forecasts"]
                if record["edition"] == edition and record["input_version"] == version]
     if not earlier:
@@ -280,7 +282,7 @@ def _backfill_misses(analysis: Mapping[str, Any], method_text: str, ledger: Path
             session = dates[index + 1]
         fl.write_forecast(ledger, build_day_input(trim_to_day(analysis, day), method_text, None, foreign_sources,
                                           edition=edition, session_date=session), edition=edition,
-                          model_bin=model_bin, model=model, now=clock, session_date=session,
+                          model_bin=model_bin, model=model, effort=effort, now=clock, session_date=session,
                           official_since=official_since)
         days.append(day)
     return days
@@ -420,6 +422,7 @@ def run_evening(
     method_path: Path | str,
     model_bin: Path | str,
     model: str = MODEL_DEFAULT,
+    effort: str = EFFORT_DEFAULT,
     now: Callable[[], datetime] | None = None,
     date: str | None = None,
     dry_run: bool = False,
@@ -468,6 +471,7 @@ def run_evening(
     base_date = data["base_date"]
     log: dict[str, Any] = {
         "schema": SCHEMA, "edition": "evening", "dry_run": dry_run, "base_date": base_date, "model": model,
+        "effort": effort,
         "started_at": clock().astimezone(fl.TAIPEI).isoformat(), "backfilled_misses": [],
         "foreign_flow_missing": (data.get("foreign_flow") or {}).get("missing"),
         "foreign_flow_errors": foreign_sources.get("errors"),
@@ -483,9 +487,9 @@ def run_evening(
             # 今天這份最早的到期日在明天，寫完之後不必再對一次。
             log["reconciliation"] = {key: len(value) for key, value in fl.reconcile(ledger, data["index_daily"]).items()}
             log["backfilled_misses"] = _backfill_misses(analysis, method_text, Path(ledger), base_date,
-                                                        model_bin=model_bin, model=model, clock=clock,
+                                                        model_bin=model_bin, model=model, effort=effort, clock=clock,
                                                         foreign_sources=foreign_sources, official_since=official_since)
-        result = _write(ledger, data, dry_run=dry_run, edition="evening", model_bin=model_bin, model=model,
+        result = _write(ledger, data, dry_run=dry_run, edition="evening", model_bin=model_bin, model=model, effort=effort,
                         now=clock, timeout_seconds=timeout_seconds, official_since=official_since)
         _log_result(log, result, overseas_dir=overseas_dir, ledger=Path(ledger), dry_run=dry_run)
 
@@ -515,6 +519,7 @@ def run_morning(
     session_date: str,
     holidays: set[str],
     model: str = MODEL_DEFAULT,
+    effort: str = EFFORT_DEFAULT,
     now: Callable[[], datetime] | None = None,
     dry_run: bool = False,
     sql_output: Path | str | None = None,
@@ -546,6 +551,7 @@ def run_morning(
         clock = lambda: frozen  # noqa: E731
     log: dict[str, Any] = {
         "schema": SCHEMA, "edition": "morning", "dry_run": dry_run, "session_date": session_date, "model": model,
+        "effort": effort,
         "started_at": clock().astimezone(fl.TAIPEI).isoformat(), "backfilled_misses": [],
     }
     if not trading_day_status(session_date, holidays):
@@ -553,6 +559,12 @@ def run_morning(
         return _finish_log(log, clock, log_output)
 
     base_date = previous_trading_day(session_date, holidays)
+    # 本人 2026-11-19 晚第 4 題：晨間版跟前一晚（同一基準日的晚間版）同一組模型與思考強度，一對不拆開；
+    # 那晚沒寫成（漏跑）才用現在的設定。
+    evening = fl.choice_of(ledger, base_date, "evening") if Path(ledger).is_dir() else None
+    if evening:
+        model, effort = evening
+        log.update(model=model, effort=effort, choice="evening")
     analysis = load_analysis(analysis_path)
     # 開盤日之後才發布的資料（例如當天傍晚重跑）不能讓晨間版看到。
     analysis = {**analysis, **{key: _until(analysis.get(key), base_date) for key in ("daily", "institutional", "futures")}}
@@ -579,7 +591,7 @@ def run_morning(
 
     if not dry_run:
         log["backfilled_misses"] = _backfill_misses(analysis, method_text, Path(ledger), base_date, model_bin=model_bin,
-                                                    model=model, clock=clock, edition="morning",
+                                                    model=model, effort=effort, clock=clock, edition="morning",
                                                     foreign_sources=foreign_sources, official_since=official_since)
     if data["base_date"] != base_date:
         # 日 K 停在更早的日子：基準日的資料還沒發布，或那天臨時休市（颱風假不在休市日曆裡）。交易日以日 K 實際
@@ -587,7 +599,7 @@ def run_morning(
         log.update(outcome="not_ready", detail=f"日 K 還沒有基準日 {base_date}（資料沒發布或臨時休市）")
         return _finish_log(log, clock, log_output)
     result = _write(ledger, data, dry_run=dry_run, edition="morning", session_date=session_date, model_bin=model_bin,
-                    model=model, now=clock, timeout_seconds=timeout_seconds, official_since=official_since)
+                    model=model, effort=effort, now=clock, timeout_seconds=timeout_seconds, official_since=official_since)
     _log_result(log, result, overseas_dir=overseas_dir, ledger=Path(ledger), dry_run=dry_run)
     if not dry_run and sql_output:
         _write_sql(ledger, data["index_daily"], clock, sql_output, official_since)
@@ -611,6 +623,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--method", type=Path, required=True, help="方法稿（MARKET_METHOD.md）")
     parser.add_argument("--agy-bin", type=Path, required=True)
     parser.add_argument("--model", default=MODEL_DEFAULT)
+    parser.add_argument("--effort", default=EFFORT_DEFAULT, help="思考強度 low／medium／high（設定頁 AI 模型）")
     parser.add_argument("--date", help="晚間版：要求的資料日；必須等於已發布資料的最後一天")
     parser.add_argument("--session-date", help="晨間版：開盤日（台北今天）")
     parser.add_argument("--dry-run", action="store_true", help="只在暫存副本上寫，不碰帳本、不輸出資料庫指令檔")
@@ -624,7 +637,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="不抓 OFR 金融壓力（那一層寫缺）；預設寫之前向 OFR 官方抓一次")
     args = parser.parse_args(argv)
     # 本人 2026-11-18 晚「預測時直接抓（推薦）」：OFR 是唯一一個在預測時才抓的外部公開資料。
-    common = dict(ledger=args.ledger, method_path=args.method, model_bin=args.agy_bin, model=args.model,
+    # 排程讀設定那一步萬一沒寫進環境變數會帶空字串：照預設，不把空的名稱送給 agy
+    common = dict(ledger=args.ledger, method_path=args.method, model_bin=args.agy_bin,
+                  model=args.model or MODEL_DEFAULT, effort=args.effort or EFFORT_DEFAULT,
                   dry_run=args.dry_run, sql_output=args.sql_output, log_output=args.log_output,
                   overseas_dir=args.overseas_dir, data_root=args.data_root,
                   ofr_fetch=None if args.no_ofr_fetch else market_layers.fetch_ofr,

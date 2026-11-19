@@ -202,14 +202,33 @@ _PROMPT_RULES = (
     "lessons 是程式整理的過去對帳事實：各期間猜中與沒中的次數，以及最近幾次沒中的那一格當時選的落點、兩條線、盤勢、"
     "看錯條件與實際落點。寫之前先看這些，避免同一種錯一犯再犯；lessons 是空的代表還沒有對完帳的紀錄。",
 )
-def input_version(model: str) -> str:
-    """輸入版本：參數、回答格式、提示規則、模型任何一項改了就是新系列，和舊系列分開對帳（教訓層也只讀同一系列）。
+# 思考強度沒寫的紀錄（11-19 以前）都是 medium；版本雜湊只在不是 medium 時把它算進去，現在這一組的版本號不變。
+DEFAULT_EFFORT = "medium"
+
+
+def input_version(model: str, effort: str = DEFAULT_EFFORT) -> str:
+    """輸入版本：參數、回答格式、提示規則、模型、思考強度任何一項改了就是新系列，和舊系列分開對帳（教訓層也只讀同一系列）。
 
     本人 2026-11-17「預測也換 Argon」：換模型＝新的輸入版本；換模型前 Flash 寫的試跑與重播是
-    ``base+overseas+foreign_flow+similar+lessons-v1-1fbcaa45``（那時模型還沒算進來）。"""
+    ``base+overseas+foreign_flow+similar+lessons-v1-1fbcaa45``（那時模型還沒算進來）。
+    本人 2026-11-19 晚（設定頁 AI 模型第 5 題）「換思考強度也另開一組」：medium 以外的強度另算進雜湊。"""
+    basis = {"parameters": PARAMETERS, "output_schema": OUTPUT_SCHEMA, "prompt_rules": _PROMPT_RULES, "model": model}
+    if effort != DEFAULT_EFFORT:
+        basis["effort"] = effort
     return "+".join(PARAMETERS["layers"]) + "-v1-" + hashlib.sha256(json.dumps(
-        {"parameters": PARAMETERS, "output_schema": OUTPUT_SCHEMA, "prompt_rules": _PROMPT_RULES, "model": model},
-        ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:8]
+        basis, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:8]
+
+
+def choice_of(root: Path | str, base_date: str, edition: str) -> tuple[str, str] | None:
+    """帳本裡這個基準日、這一版已寫的那份用的 (模型, 思考強度)；同一天有幾份時取最晚鎖定的。沒有就是 None。
+
+    本人 2026-11-19 晚第 4 題「預測等下一個晚間」：晨間版跟前一晚同一組，換設定不會把一對拆開。"""
+    found = [record for record in read_ledger(root)["forecasts"]
+             if record["base_date"] == base_date and record["edition"] == edition and record.get("model")]
+    if not found:
+        return None
+    latest = max(found, key=lambda record: record.get("locked_at") or "")
+    return latest["model"], latest.get("effort") or DEFAULT_EFFORT
 
 
 INPUT_VERSION = input_version(MODEL)
@@ -567,6 +586,7 @@ def write_forecast(
     edition: str,
     model_bin: Path | str,
     model: str,
+    effort: str = DEFAULT_EFFORT,
     now: Callable[[], datetime] | None = None,
     official_since: str | None = None,
     session_date: str | None = None,
@@ -591,7 +611,7 @@ def write_forecast(
     clock = now or _default_now
     base_date = str(data.get("base_date"))
     method_version = method_version_of(str(data.get("method_text") or ""))
-    version = input_version(model)
+    version = input_version(model, effort)
     path = _forecast_path(Path(root), base_date, edition, method_version, version)
     deadline = _deadline(edition, base_date, session_date)
 
@@ -611,7 +631,7 @@ def write_forecast(
         "forecast_id": f"{'replay|' if replay else ''}{base_date}|{edition}|{method_version}|{version}",
         "base_date": base_date, "edition": edition,
         "method_version": method_version, "input_version": version,
-        "model": model,
+        "model": model, "effort": effort,
         "run_mode": "replay" if replay else "official" if official_since and base_date >= official_since else "trial",
         "data_cutoffs": _cutoffs(data),
         **{key: copy.deepcopy(data[key]) for key in _RECORD_ONLY if key in data},
@@ -643,7 +663,8 @@ def write_forecast(
 
     prompt = build_prompt(_PROMPT_RULES, model_input)
     for _ in range(2):
-        status, structured, detail = call_model(model_bin, prompt, model, timeout_seconds, OUTPUT_SCHEMA)
+        status, structured, detail = call_model(model_bin, prompt, model, timeout_seconds, OUTPUT_SCHEMA,
+                                                effort=effort)
         if status != "ok":
             if replay:
                 return {"outcome": "model_failed", "record": None, "detail": f"{status}：{detail}"}

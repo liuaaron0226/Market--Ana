@@ -38,4 +38,11 @@ FRIEND_DIGEST_EFFORT = "high"
 # 首頁「籌碼與資金」白話（daily-update.yml 的 PLAIN_MODEL／PLAIN_EFFORT）與站主 AI 解讀（ai-digest.yml 的 --model）
 # 在排程檔裡寫名稱；這裡記本人選的值，test_gemini_models 核對兩邊一致。
 PLAIN = ARGON
+PLAIN_EFFORT = "medium"
 DIGEST = ARGON
+DIGEST_EFFORT = "medium"
+
+# 本人 2026-11-19 晚：上面五組（預測、判斷、提名、白話、站主解讀）改成站主在設定頁「AI 模型」自己選，排程開跑時讀
+# （gemini_settings.py）；這裡的值是「還沒選過」或「讀不到設定」時用的預設。朋友解讀不在設定頁（朋友自己的金鑰）。
+MODELS = (ARGON, FLASH)
+EFFORTS = ("low", "medium", "high")

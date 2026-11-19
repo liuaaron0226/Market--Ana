@@ -483,6 +483,28 @@ class InputLayerTests(WatchLedgerTestCase):
         self.assertEqual(record["input_version"], wl.input_version_of(wl.DEFAULT_LAYERS, gm.ARGON))
         self.assertEqual(record["input"]["input_version"], record["input_version"])
 
+    def test_another_effort_is_another_series_and_medium_keeps_todays_version(self):
+        # 本人 2026-11-19 晚（設定頁 AI 模型第 5 題）「換思考強度也另開一組」。11-19 以前判斷實際都用 medium 呼叫，
+        # 所以 medium 的版本號和現在一樣，其他強度另成一組。
+        import gemini_models as gm
+        layers = ("technical", "market", "news")
+        self.assertEqual(wl.input_version_of(layers, gm.FLASH, "medium"), wl.input_version_of(layers))
+        self.assertEqual(len({wl.input_version_of(layers, gm.FLASH, e) for e in ("low", "medium", "high")}), 3)
+        self.assertNotEqual(wl.input_version_of(layers, gm.ARGON, "high"), wl.input_version_of(layers, gm.ARGON))
+
+    def test_the_effort_reaches_the_model_call_and_the_record(self):
+        seen = []
+        original = wl.call_model
+        wl.call_model = lambda *args, **kwargs: (seen.append(kwargs.get("effort")), original(*args, **kwargs))[1]
+        try:
+            record = self.write(effort="high")["record"]
+        finally:
+            wl.call_model = original
+        self.assertEqual(seen, ["high"])
+        self.assertEqual(record["effort"], "high")
+        self.assertEqual(record["input_version"], wl.input_version_of(wl.DEFAULT_LAYERS, "test-model", "high"))
+        self.assertEqual(record["input"]["input_version"], record["input_version"])
+
     def test_without_the_new_layers_headlines_and_peers_stay_out(self):
         # 沒打開 headlines、peers 兩層時，呼叫端給了也不放（輸入和打開之前一樣）
         data = stock_input(news_headlines=[{"id": "h_1", "source": "中央社", "title": "外電報導同業大漲"}],

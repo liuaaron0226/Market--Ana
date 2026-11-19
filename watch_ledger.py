@@ -253,8 +253,14 @@ def _prompt_rules(enabled: Sequence[str]) -> tuple[str, ...]:
 _MODEL_IN_VERSION = (gemini_models.ARGON,)
 
 
-def input_version_of(layers: Sequence[str] = DEFAULT_LAYERS, model: str | None = None) -> str:
-    """輸入版本：打開的層、參數、回答格式、提示規則、模型任何一項改了就是新系列，和舊系列分開對帳。
+# 本人 2026-11-19 晚（設定頁 AI 模型第 5 題）「換思考強度也另開一組」。11-19 以前判斷實際都以 medium 呼叫
+# （gemini_models.WATCH_JUDGE_EFFORT 當時沒有接到判斷上），所以 medium 不算進雜湊、版本號照舊，其他強度另成一組。
+DEFAULT_EFFORT = "medium"
+
+
+def input_version_of(layers: Sequence[str] = DEFAULT_LAYERS, model: str | None = None,
+                     effort: str = DEFAULT_EFFORT) -> str:
+    """輸入版本：打開的層、參數、回答格式、提示規則、模型、思考強度任何一項改了就是新系列，和舊系列分開對帳。
 
     某一層當天沒有資料不換版本（那一份判斷另外標 ``missing_layers``）；版本只看排程打開了哪幾層。
     I 票的四層只在打開時才加進雜湊，所以沒打開它們的版本和 I 票之前相同。
@@ -264,6 +270,8 @@ def input_version_of(layers: Sequence[str] = DEFAULT_LAYERS, model: str | None =
                              "prompt_rules": _prompt_rules(enabled)}
     if model in _MODEL_IN_VERSION:
         basis["model"] = model
+    if effort != DEFAULT_EFFORT:
+        basis["effort"] = effort
     layer_parameters = _layer_parameters(enabled)
     if layer_parameters:
         basis["layer_parameters"] = layer_parameters
@@ -414,7 +422,8 @@ _FIXED_PLACES = ("headlines", "peers")
 def _model_input(data: Mapping[str, Any], edition: str, layers: list[str], raw: list[Bar], bars: list[Bar],
                  events: list[dict[str, Any]], unresolved: list[dict[str, Any]],
                  candidates: list[dict[str, Any]] | None, index_rows: list[dict[str, Any]],
-                 band: dict[str, Any] | None, lessons: dict[str, Any] | None, model: str | None = None) -> dict[str, Any]:
+                 band: dict[str, Any] | None, lessons: dict[str, Any] | None, model: str | None = None,
+                 effort: str = DEFAULT_EFFORT) -> dict[str, Any]:
     values = {layer: copy.deepcopy(data.get(_LAYER_FIELDS[layer])) if layer in _LAYER_FIELDS else None
               for layer in layers}
     if "lessons" in values:
@@ -429,7 +438,7 @@ def _model_input(data: Mapping[str, Any], edition: str, layers: list[str], raw: 
         extras = {"layer_parameters": _layer_parameters(layers), **extras}
     return {
         "schema": "watch-input/v1",
-        "input_version": input_version_of(layers, model),
+        "input_version": input_version_of(layers, model, effort),
         "parameters": copy.deepcopy(PARAMETERS),
         "code": data.get("code"), "name": data.get("name"),
         "base_date": data.get("base_date"), "edition": edition,
@@ -585,6 +594,7 @@ def _write(
     edition: str,
     model_bin: Path | str,
     model: str,
+    effort: str = DEFAULT_EFFORT,
     now: Callable[[], datetime] | None,
     official_since: str | None,
     session_date: str | None,
@@ -598,7 +608,7 @@ def _write(
     enabled = _enabled_layers(layers)
     code, base_date = str(data.get("code")), str(data.get("base_date"))
     method_version = method_version_of(str(data.get("method_text") or ""))
-    input_version = input_version_of(enabled, model)
+    input_version = input_version_of(enabled, model, effort)
     due = deadline(edition, base_date, session_date)
     raw = _raw_bars(data.get("stock_daily"))
     events = _capital_events(data.get("capital_events"))
@@ -611,7 +621,7 @@ def _write(
         key=lambda level: (-level["value"], level["id"]))
     lessons = _lessons(folder, code, base_date) if "lessons" in enabled else None
     model_input = _model_input(data, edition, enabled, raw, bars, events, unresolved, candidates, index_rows, band,
-                               lessons, model)
+                               lessons, model, effort)
     input_sha = sha(model_input)
     path = _judgment_path(folder, code, base_date, edition)
 
@@ -622,7 +632,7 @@ def _write(
     record: dict[str, Any] = {
         "schema": SCHEMA, "judgment_id": f"{code}|{base_date}|{edition}|{method_version}|{input_version}",
         "code": code, "name": data.get("name"), "base_date": base_date, "edition": edition,
-        "method_version": method_version, "input_version": input_version, "model": model,
+        "method_version": method_version, "input_version": input_version, "model": model, "effort": effort,
         "run_mode": "official" if official_since and base_date >= official_since else "trial",
         "layers": enabled, "missing_layers": list(model_input["missing_layers"]),
         "withheld_inputs": dict(WITHHELD_INPUTS),
@@ -655,7 +665,7 @@ def _write(
         refusal = gate.refusal()
         if refusal:
             return finish("miss", miss_reason="quota_exhausted", miss_detail=refusal)
-        status, structured, detail = call_model(model_bin, prompt, model, timeout_seconds, OUTPUT_SCHEMA)
+        status, structured, detail = call_model(model_bin, prompt, model, timeout_seconds, OUTPUT_SCHEMA, effort=effort)
         gate.spent(status, detail)
         if status != "ok":
             record["attempts"].append({"status": status, "detail": detail})
@@ -679,6 +689,7 @@ def write_judgment(
     edition: str,
     model_bin: Path | str,
     model: str,
+    effort: str = DEFAULT_EFFORT,
     now: Callable[[], datetime] | None = None,
     official_since: str | None = None,
     session_date: str | None = None,
@@ -699,7 +710,7 @@ def write_judgment(
     其他任何失敗（模型失敗、逾時、亂碼、重試後仍不合格、額度用完）都寫成一筆鎖定的漏記。
     正式或試跑由 ``official_since`` 決定（基準日在正式起算日當天或之後才是正式）；起算日由呼叫端在輸入到齊時寫定。
     """
-    return _write(root, data, _CallGate(), edition=edition, model_bin=model_bin, model=model, now=now,
+    return _write(root, data, _CallGate(), edition=edition, model_bin=model_bin, model=model, effort=effort, now=now,
                   official_since=official_since, session_date=session_date, layers=layers,
                   timeout_seconds=timeout_seconds)
 
@@ -711,6 +722,7 @@ def write_judgments(
     edition: str,
     model_bin: Path | str,
     model: str,
+    effort: str = DEFAULT_EFFORT,
     now: Callable[[], datetime] | None = None,
     official_since: str | None = None,
     session_date: str | None = None,
@@ -729,7 +741,7 @@ def write_judgments(
     results = []
     for data in stocks:
         try:
-            result = _write(root, data, gate, edition=edition, model_bin=model_bin, model=model, now=now,
+            result = _write(root, data, gate, edition=edition, model_bin=model_bin, model=model, effort=effort, now=now,
                             official_since=official_since, session_date=session_date, layers=layers,
                             timeout_seconds=timeout_seconds)
         except ValueError as error:
