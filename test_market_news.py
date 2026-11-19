@@ -187,7 +187,28 @@ class FetchTests(unittest.TestCase):
         self.assertIn("hl=zh-TW", regulators["url"])
         for word in ("%E9%87%91%E7%AE%A1%E6%9C%83", "cna.com.tw"):   # 金管會
             self.assertIn(word, regulators["url"])
-        self.assertNotIn("fsc-news", [feed["key"] for feed in mn.FEEDS], "金管會 RSS 是新的對外抓取，本人同意前不接")
+        # 本人 2026-11-20「要加（推薦）」：金管會新聞稿 RSS
+        fsc = next(feed for feed in mn.FEEDS if feed["key"] == "fsc-news")
+        self.assertTrue(fsc["url"].startswith("https://www.fsc.gov.tw/RSS/Messages"))
+
+    def test_fsc_press_releases_only_carry_a_date_and_their_links_are_unescaped(self):
+        fsc_item = ("<item><title><![CDATA[金管會宣布當日收盤價跌幅達3.5%以上，次一交易日不得低於前一交易日收盤價放空]]></title>"
+                    "<pubDate>Wed, 18 Nov 2026 00:00:00 GMT</pubDate>"
+                    "<link><![CDATA[https://www.fsc.gov.tw/ch/home.jsp?id=96&amp;dataserno=202611180003]]></link>"
+                    "<description><![CDATA[<div>為維持證券市場之秩序</div>]]></description></item>")
+        get, _ = web({"fsc-news": Response(content=rss(fsc_item))})
+        items, sources = mn.collect(get=get, now=NOW, sleep=lambda s: None)
+        row = next(row for row in items if row["source_key"] == "fsc-news")
+        self.assertEqual(sources["fsc-news"], "ok")
+        self.assertEqual(row["link"], "https://www.fsc.gov.tw/ch/home.jsp?id=96&dataserno=202611180003")
+        self.assertEqual((row["source"], row["group_hint"]), ("金管會", "tw"))
+        self.assertEqual(items[0]["source_key"], "fsc-news", "官方的政策公告排最前面；前一天公布的（只有日期）也在兩天的範圍內")
+
+    def test_fsc_failing_does_not_stop_the_round(self):
+        get, _ = web({"fsc-news": Response(status=500)})
+        items, sources = mn.collect(get=get, now=NOW, sleep=lambda s: None)
+        self.assertEqual(sources["fsc-news"], "HTTP 500")
+        self.assertTrue(items)
     def test_google_slow_down_skips_the_other_google_queries(self):
         get, calls = web({"gnews-tw": Response(status=429)})
         _, sources = mn.collect(get=get, now=NOW, sleep=lambda s: None)

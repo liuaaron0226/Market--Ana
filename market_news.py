@@ -110,9 +110,11 @@ FEEDS: list[dict[str, str]] = [
     {"key": "gnews-regulators", "label": "中央通訊社", "group": "tw", "market": "", "kind": "gnews",
      "url": _gnews("金管會 OR 證交所 OR 櫃買中心 OR 央行 OR 財政部 OR 經濟部 OR 國發會 OR 限空令 OR 融券 OR 關稅", ("cna.com.tw",), "zh")},
 ]
-# 金管會新聞稿 RSS（官方；只有日期沒有時刻）。新增對外抓取要本人同意——owner 在問；同意後把它加進 FEEDS。
+# 金管會新聞稿 RSS（官方；只有日期沒有時刻）。本人 2026-11-20：題目「要新增『金管會新聞稿』這個官方來源嗎？」答「要加（推薦）」。
+# 和其他來源一樣：一輪抓一次、設逾時、失敗不重試，抓不到那一輪就不用它。
 FSC_FEED = {"key": "fsc-news", "label": "金管會", "group": "tw", "market": "", "kind": "rss", "date_only": "1",
             "url": "https://www.fsc.gov.tw/RSS/Messages?serno=201202290009&language=chinese"}
+FEEDS.insert(0, FSC_FEED)
 # 來源的份量（選材用）：官方 ＞ 主管機關報導 ＞ 中央通訊社 ＞ 其他。
 FEED_WEIGHT = {"fsc-news": 6, "gnews-regulators": 4, "cna-finance": 3, "gnews-tw": 2}
 # 標題或摘要出現這幾類字眼就加分（每類只加一次）。本人：政策、財報、合作關係最會動股價；一般企業動態與活動稿往後排。
@@ -150,7 +152,7 @@ def parse_rss(content: bytes) -> list[dict[str, str]]:
     channel = wn._rss_channel(content)
     rows = []
     for node in channel.findall("item"):
-        title, link = _plain(node.findtext("title"), TITLE_MAX * 2), (node.findtext("link") or "").strip()
+        title, link = _plain(node.findtext("title"), TITLE_MAX * 2), html.unescape((node.findtext("link") or "").strip())
         title = _WIRE_TAGS.sub("", title).strip()   # 韓聯社的 (LEAD)／(URGENT)／(2nd LD)：同一則的更新稿
         try:
             published = wn._utc((node.findtext("pubDate") or "").strip())
