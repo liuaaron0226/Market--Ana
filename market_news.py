@@ -29,10 +29,15 @@ TAIPEI = timezone(timedelta(hours=8))
 SLOTS = ("morning", "midday", "close")
 WINDOW_HOURS = 24          # 只送最近一天發布的
 MAX_WINDOW_HOURS = 96      # 週一盤前、連假後：從上一輪開始，最多往回四天
-PER_FEED = 6               # 每個來源最多送幾則（最新的）
+PER_FEED = 30              # 每個來源先收幾則當候選（最新的）；送誰由 priority 決定，不是照時間
+# 一輪送模型的名額怎麼分給各組（合計 MAX_ITEMS）；每組內照重要性取，不夠的名額讓給分數高的其他組。
+QUOTA = {"tw": 26, "us": 14, "asia": 14, "global": 6}
+DATE_ONLY_HOURS = 48       # 只給日期、沒有時刻的來源（金管會）：往回看兩天，不然當天晚上發的會被當成昨天的
 MAX_ITEMS = 60             # 一次最多送幾則給模型（100 則加思考高超過 agy 的 300 秒，2026-11-19 實測）
 GROUP_KEEP = 12            # 每一組最多存幾則（依影響大小）
-WATCH_MAX = 30             # 「我的自選」一個人最多送幾則
+STOCK_DAYS = 30            # 個股新聞往回判讀幾天（和回補的天數一樣）
+OWNER_STOCK_MAX = 96       # 站主的自選一輪最多判幾則（第一次回補時多，之後只有新的）
+FRIEND_STOCK_MAX = 24      # 朋友的自選一輪最多用他的金鑰判幾則
 KEEP_DAYS = 35
 SUMMARY_MAX = 320          # 總結最多幾個字；超過就退到最後一個句號（不留半句）
 TITLE_MAX = 120
@@ -61,9 +66,10 @@ WIRE_IMPACTS = ("1", "2", "3")
 WIRE_MARKETS = ("none", "日", "韓", "中")
 
 
-def _gnews(query: str, sites: Sequence[str]) -> str:
+def _gnews(query: str, sites: Sequence[str], lang: str = "en") -> str:
     site = " OR ".join(f"site:{s}" for s in sites)
-    return f"{wn.GNEWS_URL}?{urlencode({'q': f'({query}) ({site}) when:1d', 'hl': 'en-US', 'gl': 'US', 'ceid': 'US:en'})}"
+    locale = {"en": {"hl": "en-US", "gl": "US", "ceid": "US:en"}, "zh": {"hl": "zh-TW", "gl": "TW", "ceid": "TW:zh-Hant"}}[lang]
+    return f"{wn.GNEWS_URL}?{urlencode({'q': f'({query}) ({site}) when:1d', **locale})}"
 
 
 # 本人 11-19 選「照這份清單（推薦）」。group 是預設分組（global＝全球大事，由模型分到影響的市場）。
@@ -99,7 +105,28 @@ FEEDS: list[dict[str, str]] = [
      "url": _gnews('"Nikkei share average" OR "Japanese stocks" OR "Tokyo stocks"', ("reuters.com",))},
     {"key": "gnews-kr", "label": "路透", "group": "asia", "market": "韓", "kind": "gnews",
      "url": _gnews('KOSPI OR "South Korean stocks" OR "Seoul stocks"', ("reuters.com",))},
+    # 本人 2026-11-20「影響股票漲跌比較多的消息還是來自官方或者是政府的政策…明明就有出限空令2.0你都沒有寫出來」：
+    # 主管機關與政策的報導另外搜一次（只收中央通訊社），不靠財經 RSS 最新那幾則剛好有沒有。
+    {"key": "gnews-regulators", "label": "中央通訊社", "group": "tw", "market": "", "kind": "gnews",
+     "url": _gnews("金管會 OR 證交所 OR 櫃買中心 OR 央行 OR 財政部 OR 經濟部 OR 國發會 OR 限空令 OR 融券 OR 關稅", ("cna.com.tw",), "zh")},
 ]
+# 金管會新聞稿 RSS（官方；只有日期沒有時刻）。新增對外抓取要本人同意——owner 在問；同意後把它加進 FEEDS。
+FSC_FEED = {"key": "fsc-news", "label": "金管會", "group": "tw", "market": "", "kind": "rss", "date_only": "1",
+            "url": "https://www.fsc.gov.tw/RSS/Messages?serno=201202290009&language=chinese"}
+# 來源的份量（選材用）：官方 ＞ 主管機關報導 ＞ 中央通訊社 ＞ 其他。
+FEED_WEIGHT = {"fsc-news": 6, "gnews-regulators": 4, "cna-finance": 3, "gnews-tw": 2}
+# 標題或摘要出現這幾類字眼就加分（每類只加一次）。本人：政策、財報、合作關係最會動股價；一般企業動態與活動稿往後排。
+PRIORITY_WORDS = (
+    ("policy", 6, r"金管會|證交所|櫃買|央行|財政部|經濟部|國發會|行政院|限空|放空|融券|借券|當沖|處置股|關稅|出口管制|制裁|升息|降息|利率決議"
+                  r"|Fed\b|FOMC|Federal Reserve|tariff|export control|sanction|rate (?:cut|hike)|central bank|regulator|short[- ]sell"),
+    ("earnings", 4, r"財報|營收|獲利|EPS|財測|法說|毛利率|earnings|revenue|profit|guidance|outlook|quarterly results"),
+    ("deal", 3, r"訂單|合作|併購|收購|入股|擴產|投資案|IPO|掛牌|acquisi|merger|takeover|\bdeal\b|partnership|stake"),
+    ("flows", 3, r"外資|投信|三大法人|買超|賣超|foreign investors|outflow|inflow"),
+    ("market", 2, r"台股|加權指數|美股|道瓊|那斯達克|費半|標普|日經|KOSPI|恒生|上證|stocks|shares|Nasdaq|S&P 500|Wall Street"),
+)
+_PRIORITY = tuple((name, weight, re.compile(pattern, re.IGNORECASE)) for name, weight, pattern in PRIORITY_WORDS)
+MARKET_KINDS = ("policy", "earnings", "deal", "flows", "macro", "other")   # 顯示的先後也是這個順序
+STOCK_KINDS = ("earnings", "guidance", "deal", "policy", "rating", "incident", "other")
 
 # 各市場指數（網站資料庫 overseas_quotes 的最後兩根日線；加權由富果另外給）。
 INDICES = (("SOX.INDX", "費城半導體"), ("IXIC.INDX", "那斯達克"), ("DJI.INDX", "道瓊"), ("N225.INDX", "日經"), ("KS11.INDX", "韓綜"))
@@ -154,7 +181,9 @@ def collect(*, get: Callable, now: str, sleep: Callable[[float], None],
             since: str | None = None) -> tuple[list[dict[str, Any]], dict[str, str]]:
     """每個來源抓一次：失敗只缺那一家（sources 記錯誤種類，回 200 但 0 則記 empty）。Google News 回 429／503 時，
     這一輪其他 Google 查詢不再打（記 slowed）。回傳最近 WINDOW_HOURS 小時發布的，每家最多 PER_FEED 則，同連結或同標題只留一則。"""
-    oldest = since or _iso(datetime.strptime(now, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc) - timedelta(hours=WINDOW_HOURS))
+    moment = datetime.strptime(now, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    oldest = since or _iso(moment - timedelta(hours=WINDOW_HOURS))
+    date_only_oldest = min(oldest, _iso(moment - timedelta(hours=DATE_ONLY_HOURS)))
     items: list[dict[str, Any]] = []
     sources: dict[str, str] = {}
     seen: set[str] = set()
@@ -184,7 +213,8 @@ def collect(*, get: Callable, now: str, sleep: Callable[[float], None],
             sources[feed["key"]] = "empty"
             continue
         sources[feed["key"]] = "ok"
-        fresh = sorted((row for row in rows if row["published_at"] >= oldest), key=lambda row: row["published_at"], reverse=True)
+        floor = date_only_oldest if feed.get("date_only") else oldest
+        fresh = sorted((row for row in rows if row["published_at"] >= floor), key=lambda row: row["published_at"], reverse=True)
         for row in fresh[:PER_FEED]:
             mark = row["title"].lower()
             if row["link"] in seen or mark in seen:
@@ -196,23 +226,31 @@ def collect(*, get: Callable, now: str, sleep: Callable[[float], None],
             items.append({"source_key": feed["key"], "source": label, "group_hint": feed["group"],
                           "market_hint": feed["market"], "title": row["title"], "summary": row.get("summary") or "",
                           "link": row["link"], "published_at": row["published_at"]})
-    items = _fair_share(items, MAX_ITEMS)
+    items = select_by_importance(items, MAX_ITEMS)
     for index, row in enumerate(items, 1):
         row["id"] = f"n{index}"
     return items, sources
 
 
-def _fair_share(items: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
-    """超過 limit 則時，每家輪流各取最新的一則，直到滿（不讓量大的幾家把別家擠掉）；結果新到舊。"""
-    queues: dict[str, list[dict[str, Any]]] = {}
-    for row in sorted(items, key=lambda row: row["published_at"], reverse=True):
-        queues.setdefault(row["source_key"], []).append(row)
+def priority(row: Mapping[str, Any]) -> int:
+    """選材的分數：來源的份量＋標題與摘要裡出現的類別字眼（政策 6、財報 4、合作訂單 3、法人 3、盤勢 2；每類一次）。"""
+    text = f"{row.get('title', '')} {row.get('summary', '')}"
+    return FEED_WEIGHT.get(row.get("source_key"), 1) + sum(weight for _name, weight, pattern in _PRIORITY if pattern.search(text))
+
+
+def select_by_importance(items: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    """照重要性取 limit 則：每組先照分數取自己的名額（QUOTA），剩下的名額給其餘裡分數最高的；同分時新的先。
+    回傳照「台股、美股、日韓中、全球」排，組內分數高的在前——同一組的會進同一批，模型才看得出哪幾則是同一件事。"""
+    ordered = sorted(sorted(items, key=lambda row: row["published_at"], reverse=True), key=priority, reverse=True)
     picked: list[dict[str, Any]] = []
-    while len(picked) < limit and any(queues.values()):
-        for queue in queues.values():
-            if queue and len(picked) < limit:
-                picked.append(queue.pop(0))
-    return sorted(picked, key=lambda row: row["published_at"], reverse=True)
+    total = sum(QUOTA.values())
+    for group, quota in QUOTA.items():
+        picked += [row for row in ordered if row["group_hint"] == group][:max(1, round(quota * limit / total))]
+    chosen = {id(row) for row in picked}
+    picked += [row for row in ordered if id(row) not in chosen][:max(0, limit - len(picked))]
+    picked = picked[:limit]
+    order = {group: index for index, group in enumerate(QUOTA)}
+    return sorted(picked, key=lambda row: (order.get(row["group_hint"], 9), -priority(row)))
 
 
 def missed_groups(sources: Mapping[str, str]) -> list[str]:
@@ -252,12 +290,14 @@ def indices(query: Callable[[str], list[dict]], taiex: Callable[[], dict | None]
 _ITEM = {"type": "object", "properties": {
     "id": {"type": "string"}, "group": {"type": "string", "enum": [*GROUPS, "skip"]},
     "market": {"type": "string", "enum": list(WIRE_MARKETS)}, "tone": {"type": "string", "enum": ["up", "down", "flat"]},
+    "kind": {"type": "string", "enum": list(MARKET_KINDS)},
     "impact": {"type": "string", "enum": list(WIRE_IMPACTS)}, "title": {"type": "string"}, "reason": {"type": "string"}},
-    "required": ["id", "group", "market", "tone", "impact", "title", "reason"]}
+    "required": ["id", "group", "market", "kind", "tone", "impact", "title", "reason"]}
 _WATCH = {"type": "object", "properties": {
-    "id": {"type": "string"}, "relevant": {"type": "string", "enum": ["yes", "no"]}, "tone": {"type": "string", "enum": ["up", "down", "flat"]},
+    "id": {"type": "string"}, "relevant": {"type": "string", "enum": ["yes", "no"]},
+    "kind": {"type": "string", "enum": list(STOCK_KINDS)}, "tone": {"type": "string", "enum": ["up", "down", "flat"]},
     "impact": {"type": "string", "enum": list(WIRE_IMPACTS)}, "title": {"type": "string"}, "reason": {"type": "string"}},
-    "required": ["id", "relevant", "tone", "impact", "title", "reason"]}
+    "required": ["id", "relevant", "kind", "tone", "impact", "title", "reason"]}
 ITEMS_SCHEMA = {"type": "object", "properties": {"items": {"type": "array", "items": _ITEM}}, "required": ["items"]}
 # 欄位不叫 summary：agy 的結構化輸出裡，模型會把 summary 當成「交代自己做了什麼」（2026-11-19 實測兩次）。
 SUMMARY_SCHEMA = {"type": "object", "properties": {"market_commentary": {
@@ -269,24 +309,40 @@ SLOT_TEXT = {"morning": "台股開盤前（台北 08:00）", "midday": "台股�
 
 # 2026-11-19 Actions（agy 1.5.3）：60 則一次送，回 SUCCESS 卻沒有結構化輸出。改成分批（每批 BATCH_ITEMS 則）、
 # 自選一次、總結另外一次短呼叫；任何一批失敗只影響那一批。
+# 台灣市場的說法（本人 11-20：明明有限空令卻寫成「收緊放空限制」，認不出來）。三種提示共用。
+GLOSSARY = """用台灣股市投資人習慣的說法寫，不要直譯：限空令（限制放空、平盤下不得放空）、融資、融券、借券賣出、當沖、
+處置股、注意股、法說會、財測、營收、毛利率、EPS、三大法人、外資、投信、自營商、買超、賣超、漲停、跌停、
+加權指數、櫃買指數、權值股、除權息、庫藏股、現金增資、違約交割、金管會、證交所、櫃買中心、央行、聯準會（Fed）、
+降息、升息、關稅、出口管制。公司與機構用台灣的譯名（輝達、台積電、聯發科、超微、博通、美光、三星、SK 海力士）。"""
+
 ITEM_RULES = """你是台股投資人的新聞助理。讀 INPUT 的新聞標題與摘要，用繁體中文回答，只回 JSON。
 items：每一則都要回（id 照抄）：
-- group：這則主要影響哪個市場——tw 台股、us 美股、asia 日韓中；group_hint 是來源的預設，global 的要你分；
-  明顯和經濟、產業、公司、股市都無關（生活、社會、體育、八卦、純政治儀式）的才填 skip；
+- group：這則主要影響哪個市場——tw 台股、us 美股、asia 日韓中；group_hint 是來源的預設，global 的要你分。
+  明顯和經濟、產業、公司、股市都無關（生活、社會、體育、八卦、純政治儀式、活動與週年宣傳稿）的填 skip；
   有關但看不出影響方向的照樣分組，tone 填 flat、impact 填 "1"。
+  同一件事有好幾則時只留一則，其他填 skip：優先留官方（金管會）或台灣媒體（中央通訊社）的那一則。
 - market：asia 那組填「日」「韓」「中」其中一個（香港算中）；其他組填 none。
+- kind：policy 政府與主管機關的政策法規（金管會、證交所、央行、財政部、關稅、出口管制、利率決議）；
+  earnings 財報、營收、財測、法說；deal 重大訂單、合作、併購、擴產；flows 法人與資金動向（外資、投信買賣超）；
+  macro 總體經濟數據與景氣；other 其他企業動態。
 - tone：對該市場是利多 up、利空 down，或中性 flat（已在預期內、影響不明）。
-- impact：影響大小 "3" 大、"2" 中、"1" 小（會左右整個市場或權值股的才是 "3"）。
+- impact：影響大小 "3" 大、"2" 中、"1" 小。政策、財報財測、重大合作訂單、法人大幅買賣超，而且會左右整個市場或權值股的
+  才是 "3"；一般企業動態、例行統計、活動稿最多 "1"。
 - title：中文標題；原文是中文就照抄（可去掉多餘的來源字樣），外文就翻成自然的繁體中文，不加原文沒有的事實。
 - reason：一句話（30 字內）說明為什麼是利多或利空、會怎麼影響；只能根據標題與摘要，不要編數字或內容。
+""" + GLOSSARY + """
 不要使用任何工具、不要上網查，只根據 INPUT 直接回答。"""
 
 SUMMARY_RULES = """你是財經記者，替台股投資人寫一段盤勢解說，繁體中文。
-market_commentary：2～3 句、合計 150 字以內、最後以句號結尾，回答「今天為什麼這樣走」——以台股為主、帶到美股與日韓中，根據 INPUT 的指數漲跌與新聞
-（tone up 利多、down 利空；impact 越大越重要）。可以引用 indices 的漲跌幅，其他數字只能來自新聞標題或理由。
+market_commentary：2～3 句、合計 150 字以內、最後以句號結尾，回答「今天為什麼這樣走」——以台股為主、帶到美股與日韓中，
+根據 INPUT 的指數漲跌與新聞（kind policy 政策、earnings 財報、deal 合作訂單、flows 法人；tone up 利多、down 利空；impact 越大越重要）。
+一定要點名當天最關鍵的一兩件事，用新聞裡的名稱講（例如「金管會祭出限空令」「美國擴大晶片出口管制」「外資賣超逾 600 億」），
+不能只講指數漲跌幾趴。可以引用 indices 的漲跌幅，其他數字只能來自新聞標題或理由。
 slot 是開盤前時，講的是昨夜國際市場與今天可能的影響，不要假裝已經開盤。
 這個欄位的內容就是那段解說本身，第一個字就開始講市場（例如「台股今天下跌，主要是……」）；
-不要描述你完成了什麼、不要提到指令、JSON、摘要或規則。不要使用任何工具、不要上網查。"""
+不要描述你完成了什麼、不要提到指令、JSON、摘要或規則。
+""" + GLOSSARY + """
+不要使用任何工具、不要上網查。"""
 
 _NOT_SUMMARY = re.compile(r"JSON|json|指令|已成功|已完成|已依照|以下是|規則|摘要如下|產生.{0,6}摘要")
 
@@ -295,12 +351,16 @@ def is_summary(text: str | None) -> bool:
     """是不是在講市場：模型有時回「已成功依照指令產生摘要…」這種交代工作的話（2026-11-19 實測），那不算。"""
     return bool(text) and not _NOT_SUMMARY.search(text)
 
-WATCH_RULES = """你是台股投資人的新聞助理。讀 INPUT 的自選股新聞，用繁體中文回答，只回 JSON。
+WATCH_RULES = """你是台股投資人的新聞助理。讀 INPUT 的個股新聞與重大訊息，用繁體中文回答，只回 JSON。
 watch：每一則都要回（id 照抄）：
-- relevant：這則新聞和 name 那家公司的營運、股價、產業有沒有關係——有填 yes；只是剛好出現公司名稱或字眼
-  （活動贊助、地名、路跑、節慶、同名的普通詞）填 no。
+- relevant：這則和 name 那家公司的營運、股價、產業有沒有關係——有填 yes；只是剛好出現公司名稱或字眼
+  （活動贊助、地名、路跑、節慶、同名的普通詞），或只是大盤新聞裡順帶提到一次，填 no。
+- kind：earnings 財報與月營收、獲利；guidance 法說會、財測、展望；deal 訂單、合作、客戶、併購、擴產；
+  policy 政策法規對這家公司的影響；rating 法人與外資的評等、目標價、買賣超；
+  incident 異常事件（違約交割、注意股、處置股、停工、事故、訴訟、重大人事）；other 其他。
 - tone 對那一檔股票是利多 up、利空 down 或中性 flat；impact "3" 大、"2" 中、"1" 小；
-- title 中文標題（外文翻成自然的繁體中文，不加原文沒有的事實）；reason 一句話（30 字內），只能根據標題，不要編數字。
+- title 中文標題（外文翻成自然的繁體中文，不加原文沒有的事實）；reason 一句話（30 字內），只能根據標題與摘要，不要編數字。
+""" + GLOSSARY + """
 不要使用任何工具、不要上網查，只根據 INPUT 直接回答。"""
 
 
@@ -312,15 +372,16 @@ def items_prompt(items: Sequence[Mapping[str, Any]]) -> str:
 
 def summary_prompt(slot: str, trade_date: str, rows: Sequence[Mapping[str, Any]], index_rows: Sequence[Mapping[str, Any]]) -> str:
     """rows：已判讀的（group、tone、impact、title、reason）；沒有判讀成的時候給原標題。"""
-    picked = sorted(rows, key=lambda row: -int(row.get("impact") or 1))[:SUMMARY_TOP]
+    picked = sorted(rows, key=lambda row: (-int(row.get("impact") or 1), _kind_rank(row.get("kind"))))[:SUMMARY_TOP]
     payload = {"slot": slot, "slot_text": SLOT_TEXT[slot], "trade_date": trade_date, "indices": list(index_rows),
-               "news": [{key: row.get(key) for key in ("group", "tone", "impact", "title", "reason") if row.get(key) not in (None, "")}
+               "news": [{key: row.get(key) for key in ("group", "kind", "tone", "impact", "title", "reason") if row.get(key) not in (None, "")}
                         for row in picked]}
     return SUMMARY_RULES + "\nINPUT:" + json.dumps(payload, ensure_ascii=False)
 
 
 def watch_prompt(watch: Sequence[Mapping[str, Any]]) -> str:
-    payload = {"watch": [{key: row[key] for key in ("id", "code", "name", "source", "title", "published_at")} for row in watch]}
+    payload = {"watch": [{key: row[key] for key in ("id", "code", "name", "source", "title", "summary", "published_at")
+                          if row.get(key) not in (None, "")} for row in watch]}
     return WATCH_RULES + "\nINPUT:" + json.dumps(payload, ensure_ascii=False)
 
 
@@ -389,17 +450,24 @@ def validate_items(output: Any, items: Sequence[Mapping[str, Any]],
             continue
         used.add(entry["id"])
         market = entry.get("market") if entry.get("group") == "asia" and entry.get("market") in MARKETS[1:] else ""
-        out.append({**mark, "id": entry["id"], "group": entry["group"], "market": market or source["market_hint"] or "",
+        kind = entry.get("kind") if entry.get("kind") in MARKET_KINDS else "other"
+        out.append({**mark, "id": entry["id"], "group": entry["group"], "kind": kind,
+                    "market": market or source["market_hint"] or "",
                     "translated": _translated(source["title"]), "source": source["source"], "link": source["link"],
                     "published_at": source["published_at"]})
     return _keep_per_group(out)
 
 
+def _kind_rank(kind: Any) -> int:
+    return MARKET_KINDS.index(kind) if kind in MARKET_KINDS else len(MARKET_KINDS)
+
+
 def _keep_per_group(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """每組留 GROUP_KEEP 則：影響大的在前；一樣大時照類別（政策＞財報＞合作訂單＞法人＞總經＞其他）；再一樣時新的在前。"""
     kept = []
     for group in GROUPS:
         newest = sorted((row for row in rows if row["group"] == group), key=lambda row: row["published_at"], reverse=True)
-        ranked = sorted(newest, key=lambda row: -row["impact"])   # 影響大的在前；一樣大時新的在前
+        ranked = sorted(newest, key=lambda row: (-row["impact"], _kind_rank(row.get("kind"))))
         kept += ranked[:GROUP_KEEP]
     return kept
 
@@ -407,27 +475,39 @@ def _keep_per_group(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def unclassified_items(items: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """模型沒寫成：標題照原文存、分在來源的預設組（全球大事放美股），不標利多利空、沒有理由。"""
     rows = [{"id": row["id"], "group": "us" if row["group_hint"] == "global" else row["group_hint"],
-             "market": row["market_hint"] or "", "tone": "flat", "impact": 1, "title": row["title"][:TITLE_MAX],
+             "market": row["market_hint"] or "", "kind": None, "tone": "flat", "impact": 1, "title": row["title"][:TITLE_MAX],
              "reason": "", "translated": 0, "source": row["source"], "link": row["link"],
              "published_at": row["published_at"]} for row in items]
     return _keep_per_group(rows)
 
 
 def validate_watch(output: Any, watch: Sequence[Mapping[str, Any]], counts: dict[str, int] | None = None) -> list[dict[str, Any]]:
-    """自選新聞的判讀；模型說和那家公司無關（relevant no）的不留，counts 給了就記無關幾則。"""
+    """個股新聞的判讀 → 要存進 stock_news_marks 的列（每則一列，判成無關的也存、relevant 0，之後不再重判）。
+    同一則從不同來源進來的（row 的 links）都記同一個結果；第二個以後記成無關，畫面才不會重複。
+    counts 給了就記有關、無關各幾則。"""
     by_id = {row["id"]: row for row in watch}
     out, used = [], set()
     for entry in (output or {}).get("watch") or [] if isinstance(output, Mapping) else []:
-        mark = _mark(entry)
         source = by_id.get(entry.get("id")) if isinstance(entry, Mapping) else None
-        if not mark or not source or entry["id"] in used:
+        if not source or entry["id"] in used:
+            continue
+        unrelated = entry.get("relevant") == "no"
+        mark = _mark(entry)
+        if not mark and not unrelated:
             continue
         used.add(entry["id"])
-        if entry.get("relevant") == "no":
-            if counts is not None:
-                counts["unrelated"] = counts.get("unrelated", 0) + 1
-            continue
-        out.append({**mark, "code": source["code"], "link": source["link"], "translated": _translated(source["title"])})
+        base = {"code": source["code"], "translated": _translated(source["title"])}
+        if unrelated:
+            base.update(relevant=0, kind="other", tone="flat", impact=1, title=source["title"][:TITLE_MAX],
+                        reason=(_text(entry.get("reason"), REASON_MAX) or "和公司無關"), translated=0)
+        else:
+            base.update(mark, relevant=1, kind=entry.get("kind") if entry.get("kind") in STOCK_KINDS else "other")
+        if counts is not None:
+            key = "unrelated" if unrelated else "related"
+            counts[key] = counts.get(key, 0) + 1
+        links = source.get("links") or [source["link"]]
+        out.append({**base, "link": links[0]})
+        out += [{**base, "link": link, "relevant": 0, "reason": "同一則"} for link in links[1:]]
     return out
 
 
@@ -454,59 +534,86 @@ def unwrap_text(value: Any) -> Any:
 _q = wn._q   # 和個股新聞同一個 SQL 字面值跳脫
 
 
-def watch_rows(query: Callable[[str], list[dict]], email: str, now: str, since: str | None = None) -> list[dict[str, Any]]:
-    """這個人自選股從 since（預設 WINDOW_HOURS 小時前）到 now 的個股新聞（watch_news；中央社對不到個股的 '' 不算）。"""
+def watchlist(query: Callable[[str], list[dict]], email: str) -> dict[str, str]:
+    """這個人的自選：{代號: 名稱}。"""
     if not wn._EMAIL.fullmatch(email or ""):
+        return {}
+    return {row["code"]: row["name"] for row in query(
+        "SELECT code, max(name) AS name FROM user_watchlist WHERE lower(email) = lower(" + _q(email) + ") GROUP BY code")}
+
+
+def pending_stock_rows(query: Callable[[str], list[dict]], names: Mapping[str, str], now: str, *, limit: int,
+                       skip: set[tuple[str, str]] | None = None) -> list[dict[str, Any]]:
+    """這幾檔近 STOCK_DAYS 天、還沒人判讀過的個股新聞（watch_news 裡沒有對應的 stock_news_marks），新到舊、最多 limit 則。
+    中央社整批對到的（cna-*）要標題點名公司才算（只在前言提到的是贊助、地名那一類）；
+    同一檔同一個標題從不同來源進來的併成一則（links 記全部連結）。skip：這一輪已經有人判的。"""
+    codes = [code for code in names if re.fullmatch(r"[0-9A-Za-z]{1,12}", code)]
+    if not codes:
         return []
-    since = since or _iso(datetime.strptime(now, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc) - timedelta(hours=WINDOW_HOURS))
-    rows = query("SELECT n.code, w.name, n.link, n.source, n.title, n.published_at FROM watch_news n "
-                 "JOIN user_watchlist w ON w.code = n.code AND lower(w.email) = lower(" + _q(email) + ") "
-                 f"WHERE n.code <> '' AND n.published_at >= {_q(since)} AND n.published_at <= {_q(now)} "
-                 "ORDER BY n.published_at DESC, n.link")
-    out, seen = [], set()
+    since = _iso(datetime.strptime(now, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc) - timedelta(days=STOCK_DAYS))
+    rows = query("SELECT n.code, n.link, n.source, n.title, n.summary, n.published_at FROM watch_news n "
+                 "LEFT JOIN stock_news_marks m ON m.code = n.code AND m.link = n.link "
+                 f"WHERE n.code IN ({','.join(_q(code) for code in codes)}) AND m.code IS NULL "
+                 f"AND n.published_at >= {_q(since)} AND n.published_at <= {_q(now)} ORDER BY n.published_at DESC, n.link")
+    merged: dict[tuple[str, str], dict[str, Any]] = {}
     for row in rows:
-        key = (row["code"], re.sub(r"\s+", "", row["title"]))   # 同一則從中央社 RSS 與 Google News 各來一次：只送一次
-        if key in seen or len(out) >= WATCH_MAX:
+        if skip and (row["code"], row["link"]) in skip:
             continue
-        # 中央社整批對到的（cna-*）有些只在前言提到公司（贊助、地名）：標題沒點名就不算（2026-11-19 風箏節、馬拉松）
-        if str(row["source"]).startswith("cna-") and not wn._mentions(row["title"], {"code": row["code"], "name": row["name"]}):
+        stock = {"code": row["code"], "name": names[row["code"]]}
+        if str(row["source"]).startswith("cna-") and not wn._mentions(row["title"], stock):
             continue
-        seen.add(key)
-        out.append({"id": f"w{len(out) + 1}", "code": row["code"], "name": row["name"], "link": row["link"],
-                    "source": wn.SOURCE_LABELS.get(row["source"], row["source"]), "title": row["title"],
-                    "published_at": row["published_at"]})
+        if wn.is_noise(row["title"]):
+            continue
+        key = (row["code"], re.sub(r"\s+", "", row["title"]))
+        if key in merged:
+            merged[key]["links"].append(row["link"])
+            continue
+        if len(merged) >= limit:
+            continue
+        merged[key] = {"code": row["code"], "name": names[row["code"]], "link": row["link"], "links": [row["link"]],
+                       "source": wn.SOURCE_LABELS.get(row["source"], row["source"]), "title": row["title"],
+                       "summary": (row.get("summary") or "")[:120] if row["source"] == "mops" else "",
+                       "published_at": row["published_at"]}
+    out = list(merged.values())
+    for index, row in enumerate(out, 1):
+        row["id"] = f"w{index}"
     return out
 
 
-def run_sql(run: Mapping[str, Any], items: Sequence[Mapping[str, Any]], user_rows: Mapping[str, Sequence[Mapping[str, Any]]],
+def marks_sql(marks: Sequence[Mapping[str, Any]], *, judged_by: str, now: str) -> list[str]:
+    return ["INSERT OR REPLACE INTO stock_news_marks (code, link, relevant, kind, tone, impact, title, translated, reason, "
+            "judged_by, judged_at) VALUES ("
+            + ", ".join([_q(row["code"]), _q(row["link"]), str(int(row["relevant"])), _q(row["kind"]), _q(row["tone"]),
+                         str(int(row["impact"])), _q(row["title"]), str(int(row["translated"])), _q(row["reason"]),
+                         _q(judged_by), _q(now)]) + ");" for row in marks]
+
+
+def run_sql(run: Mapping[str, Any], items: Sequence[Mapping[str, Any]], marks: Mapping[str, Sequence[Mapping[str, Any]]],
             *, now: str) -> str:
-    """同一輪重跑就整份換掉；超過 KEEP_DAYS 天的輪次連同它的新聞與自選標記一起清掉。"""
+    """同一輪重跑就整份換掉；個股新聞的判讀（marks：{'owner'／'friend': 列}）每則一列、判過不重判；
+    超過 KEEP_DAYS 天的輪次清掉，對不到個股新聞（已過 90 天被清掉）的判讀也清掉。"""
     run_id = run["run_id"]
     cutoff = (datetime.strptime(now, "%Y-%m-%dT%H:%M:%SZ") - timedelta(days=KEEP_DAYS)).strftime("%Y-%m-%d")
     lines = [f"DELETE FROM market_news_items WHERE run_id = {_q(run_id)};",
-             f"DELETE FROM market_news_user_items WHERE run_id = {_q(run_id)};",
              f"DELETE FROM market_news_runs WHERE run_id = {_q(run_id)};",
              "INSERT INTO market_news_runs (run_id, trade_date, slot, created_at, status, summary, indices, sources, model) VALUES ("
              + ", ".join(_q(run[key]) for key in ("run_id", "trade_date", "slot", "created_at", "status", "summary"))
              + f", {_q(json.dumps(run['indices'], ensure_ascii=False))}, {_q(json.dumps(run['sources'], ensure_ascii=False))}, "
              + f"{_q(run.get('model'))});"]
     for row in items:
-        lines.append("INSERT INTO market_news_items (run_id, item_id, grp, market, tone, impact, title, translated, reason, "
+        lines.append("INSERT INTO market_news_items (run_id, item_id, grp, market, kind, tone, impact, title, translated, reason, "
                      "source, link, published_at) VALUES ("
-                     + ", ".join([_q(run_id), _q(row["id"]), _q(row["group"]), _q(row["market"]), _q(row["tone"]),
+                     + ", ".join([_q(run_id), _q(row["id"]), _q(row["group"]), _q(row["market"]), _q(row.get("kind")), _q(row["tone"]),
                                   str(int(row["impact"])), _q(row["title"]), str(int(row["translated"])), _q(row["reason"]),
                                   _q(row["source"]), _q(row["link"]), _q(row["published_at"])]) + ");")
-    for email, rows in user_rows.items():
-        for row in rows:
-            lines.append("INSERT OR REPLACE INTO market_news_user_items (email, run_id, code, link, tone, impact, title, "
-                         "translated, reason) VALUES ("
-                         + ", ".join([_q(email), _q(run_id), _q(row["code"]), _q(row["link"]), _q(row["tone"]),
-                                      str(int(row["impact"])), _q(row["title"]), str(int(row["translated"])),
-                                      _q(row["reason"])]) + ");")
+    for judged_by, rows in marks.items():
+        lines += marks_sql(rows, judged_by=judged_by, now=now)
     old = f"SELECT run_id FROM market_news_runs WHERE trade_date < {_q(cutoff)}"
     lines += [f"DELETE FROM market_news_items WHERE run_id IN ({old});",
               f"DELETE FROM market_news_user_items WHERE run_id IN ({old});",
-              f"DELETE FROM market_news_runs WHERE trade_date < {_q(cutoff)};"]
+              f"DELETE FROM market_news_runs WHERE trade_date < {_q(cutoff)};",
+              "DELETE FROM stock_news_marks WHERE NOT EXISTS (SELECT 1 FROM watch_news n "
+              "WHERE n.code = stock_news_marks.code AND n.link = stock_news_marks.link);"]
     return "\n".join(lines) + "\n"
 
 
@@ -518,7 +625,8 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
         get: Callable, sleep: Callable[[float], None], ask_owner: Asker, owner_email: str,
         friend_keys: Sequence[Mapping[str, Any]], ask_friend: FriendAsker, taiex: Callable[[], dict | None],
         model: str | None = None, dry_run: bool = False) -> dict[str, Any]:
-    """一輪：抓市場來源 → 站主的模型一次（市場＋站主自選）→ 每位有金鑰的朋友一次（只有他的自選）→ 一份 SQL 寫回。"""
+    """一輪：抓市場來源、照重要性選材 → 站主的模型分批判讀（市場新聞＋站主自選裡還沒判過的個股新聞）→ 寫總結 →
+    每位有金鑰的朋友判他自選裡還沒人判過的 → 一份 SQL 寫回。"""
     if slot not in SLOTS:
         raise ValueError(f"slot 只能是 {SLOTS}")
     if not wn._EMAIL.fullmatch(owner_email or ""):
@@ -526,12 +634,13 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
     since = window_start(query, now)
     items, sources = collect(get=get, now=now, sleep=sleep, since=since)
     index_rows = indices(query, taiex)
-    owner_watch = watch_rows(query, owner_email, now, since)
+    owner_names = watchlist(query, owner_email)
+    owner_watch = pending_stock_rows(query, owner_names, now, limit=OWNER_STOCK_MAX)
     from concurrent.futures import ThreadPoolExecutor
     batches = [items[start:start + BATCH_ITEMS] for start in range(0, len(items), BATCH_ITEMS)]
+    stock_batches = [owner_watch[start:start + BATCH_ITEMS] for start in range(0, len(owner_watch), BATCH_ITEMS)]
     jobs = [(f"items{index + 1}", items_prompt(batch), ITEMS_SCHEMA) for index, batch in enumerate(batches)]
-    if owner_watch:
-        jobs.append(("watch", watch_prompt(owner_watch), WATCH_SCHEMA))
+    jobs += [(f"watch{index + 1}", watch_prompt(batch), WATCH_SCHEMA) for index, batch in enumerate(stock_batches)]
     calls: dict[str, dict[str, Any]] = {}
 
     attempts: dict[str, int] = {}
@@ -554,12 +663,13 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
     classified: list[dict[str, Any]] = []
     unmarked: list[Mapping[str, Any]] = []
     owner_marks: list[dict[str, Any]] = []
-    for (name, status, output, note), batch in zip(results, [*batches, owner_watch]):
+    for (name, status, output, note), batch in zip(results, [*batches, *stock_batches]):
         record = {"status": status, "attempts": attempts.get(name, 1),
                   **({"note": str(note)[:400]} if note and status != "ok" else {})}
-        if name == "watch":
-            owner_marks = validate_watch(output, owner_watch, record) if status == "ok" else []
-            record["kept"] = len(owner_marks)
+        if name.startswith("watch"):
+            if status == "ok":
+                owner_marks += validate_watch(output, batch, record)
+            record["sent"] = len(batch)
         else:
             kept = validate_items(output, batch, rejected) if status == "ok" else []
             record.update(returned=len(output.get("items") or []) if isinstance(output, Mapping) else 0, kept=len(kept))
@@ -567,8 +677,6 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
             if not kept:
                 unmarked += batch
         calls[name] = record
-    # 這一輪誰的自選有判讀過（就算全部被判成無關、一則都不留）：網站據此不顯示沒有標記的那幾則。
-    judged = [owner_email] if calls.get("watch", {}).get("status") == "ok" else []
     summary = None
     if classified:
         for attempt in (1, 2):   # 回成交代工作的話就再問一次；還是不行就不放總結
@@ -584,9 +692,9 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
     if classified:
         stored = _keep_per_group(classified + unclassified_items(unmarked))
         run_status = "ok"
-        user_rows = {owner_email: owner_marks}
     else:
-        stored, run_status, summary, user_rows, judged = unclassified_items(items), "unclassified", None, {}, []
+        stored, run_status, summary = unclassified_items(items), "unclassified", None
+    marks: dict[str, list[dict[str, Any]]] = {"owner": owner_marks, "friend": []}
     status = "ok" if classified else next((r["status"] for r in calls.values() if r["status"] != "ok"), "no_items")
     note = ""
     diagnosis = {"calls": calls, "items_kept": len(classified), "rejected": rejected, "summary_chars": len(summary or "")}
@@ -595,11 +703,12 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
         email = str(key_row.get("email") or "")
         if not wn._EMAIL.fullmatch(email) or email.lower() == owner_email.lower():
             continue
-        watch = watch_rows(query, email, now, since)
+        # 朋友自選裡還沒人判過的（站主這一輪剛判的不算）：用朋友自己的金鑰，判完大家共用。
+        done_now = {(row["code"], row["link"]) for rows in marks.values() for row in rows}
+        watch = pending_stock_rows(query, watchlist(query, email), now, limit=FRIEND_STOCK_MAX, skip=done_now)
         if not watch:
-            friends[email] = "no_news"
+            friends[email] = "nothing_new"
             continue
-        marks: list[dict[str, Any]] = []
         failures: list[str] = []
         notes: list[str] = []
         pieces = [watch[start:start + FRIEND_BATCH] for start in range(0, len(watch), FRIEND_BATCH)]
@@ -609,7 +718,7 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
             except Exception as error:  # noqa: BLE001 — 一位朋友失敗不影響別人
                 friend_status, friend_output, friend_note = type(error).__name__, None, ""
             if friend_status == "ok":
-                marks += validate_watch(coerce_output(friend_output), piece)
+                marks["friend"] += validate_watch(coerce_output(friend_output), piece)
                 if friend_note:
                     notes.append(friend_note)
             else:
@@ -618,20 +727,17 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
                     break   # 金鑰或額度的問題：剩下的不用再試
         done = len(pieces) - len(failures)
         friends[email] = (" ".join(["ok", *notes]) if not failures else f"{done}/{len(pieces)} {failures[0]}")[:900]
-        if marks or not failures:
-            user_rows[email] = marks
-        if not failures:
-            judged.append(email)
     run_row = {"run_id": f"{trade_date}-{slot}", "trade_date": trade_date, "slot": slot, "created_at": now,
                "status": run_status, "summary": summary, "indices": index_rows,
-               "sources": {"feeds": sources, "missed_groups": missed_groups(sources), "judged_users": judged},
-               "model": model}
-    script = run_sql(run_row, stored, user_rows, now=now)
+               "sources": {"feeds": sources, "missed_groups": missed_groups(sources)}, "model": model}
+    script = run_sql(run_row, stored, marks, now=now)
     if not dry_run:
         execute(script)
     return {"status": "ok", "run_id": run_row["run_id"], "run_status": run_status, "items": len(stored),
             "sent": len(items), "model": status, **({"model_note": note[:200]} if status != "ok" and note else {}),
-            "owner_watch_sent": len(owner_watch), "owner_watch": len(user_rows.get(owner_email, [])),
+            "owner_watch_sent": len(owner_watch),
+            "owner_watch": sum(1 for row in owner_marks if row["relevant"]),
+            "owner_watch_unrelated": sum(1 for row in owner_marks if not row["relevant"]),
             "diagnosis": diagnosis,
             "friends": friends, "sources": sources,
             "dry_run": dry_run}
