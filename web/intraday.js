@@ -106,7 +106,8 @@
     };
   }
 
-  function candidates(bars, values, close = bars.at(-1).close) {
+  function candidates(bars, values) {
+    const close = bars.at(-1).close;
     const output = [];
     const add = (kind, value, label, date = null) => {
       if (finite(value) && Number(value) > 0) output.push({ kind, value: pyRound(Number(value), 2), label, date });
@@ -212,14 +213,13 @@
       sources: group.map(({ kind, label, value, date }) => ({ kind, label, value, date })) };
   }
 
-  // price：拿來分上下的價格。沒給就用最後一根收盤（盤後）；盤中給現價，候選價位仍只用 bars（昨天收盤為止）算。
-  function priceLevels(bars, values, price = null) {
+  function priceLevels(bars, values) {
     const empty = { aggregation_tolerance_pct: null, observable_range_pct: null, resistance: [], support: [], resistance_all: [], support_all: [], no_resistance_above: false, limit_up_reference: null };
     if (!values.atr_pct) return empty;
-    const close = finite(price) ? Number(price) : bars.at(-1).close;
+    const close = bars.at(-1).close;
     const tolerance = pyRound(Math.min(3, Math.max(1, .6 * values.atr_pct)), 2);
     const observable = pyRound(Math.min(20, Math.max(8, 4 * values.atr_pct)), 2);
-    const factors = candidates(bars, values, close);
+    const factors = candidates(bars, values);
     const above = factors.filter(item => SHARED.has(item.kind) && item.value > close * 1.001).sort((a, b) => a.value - b.value);
     const resistanceGroups = [];
     for (const item of above) {
@@ -249,6 +249,26 @@
       resistance: [first, second].filter(Boolean), support: supportAll.filter(item => item.tier !== 'far').slice(0, 2),
       resistance_all: resistanceAll, support_all: supportAll, no_resistance_above: above.length === 0,
       limit_up_reference: above.length ? null : { value: tickFloor(close * 1.10), label: '明日漲停參考價', note: '上方無歷史結構，依 10% 漲跌幅推算；非結構價位' } };
+  }
+
+  // 盤中只把昨天收盤那組價位（盤後分析算好的整組）依現價分上下（本人 11-19「固定住」）：價位數字、分組都不重算，
+  // 只重算離現價多遠，再照 priceLevels 同一套規則挑壓力一、二與支撐一、二。
+  function sideLevels(fixed, price) {
+    const pool = [...(fixed?.resistance_all || []), ...(fixed?.support_all || [])];
+    if (!pool.length || !finite(price)) return fixed;
+    const tolerance = fixed.aggregation_tolerance_pct, observable = fixed.observable_range_pct;
+    const from = group => {
+      const distance = pyRound((group.level - price) / price * 100, 2);
+      return { ...group, distance_pct: distance, tier: tier(distance) };
+    };
+    const above = pool.filter(group => group.level > price * 1.001).map(from).sort((a, b) => a.level - b.level);
+    const below = pool.filter(group => group.level < price * .999).map(from).sort((a, b) => b.level - a.level);
+    const usable = above.filter(group => group.distance_pct <= observable && group.signal_count >= 2);
+    const first = usable[0] || null;
+    const second = first ? usable.slice(1).find(group => (group.level - first.level) / first.level * 100 >= 2 * tolerance) || null : null;
+    return { ...fixed, resistance: [first, second].filter(Boolean), support: below.filter(group => group.tier !== 'far').slice(0, 2),
+      resistance_all: above, support_all: below, no_resistance_above: above.length === 0,
+      limit_up_reference: above.length ? null : { value: tickFloor(price * 1.10), label: '明日漲停參考價', note: '上方無歷史結構，依 10% 漲跌幅推算；非結構價位' } };
   }
 
   function setCondition(group, key, value) {
@@ -297,11 +317,10 @@
       change_sign: quote.change > 0 ? '+' : quote.change < 0 ? '-' : '' };
     result.bars = bars;
     result.indicators = values;
-    // 本人 11-19「固定住」：盤中壓力／支撐的數字用前一交易日收盤那組（不含今天這根），整天不變，只依現價分上下。
+    // 本人 11-19「固定住」：盤中壓力／支撐的數字用前一交易日收盤那組（盤後分析的 base.levels），整天不變，只依現價分上下。
     // 收盤後到日資料發布前，今天這根已經收定，照舊用含今天的整組算（和發布後一致）。
-    const settled = (base.bars || []).filter(item => item.date < bar.date);
-    result.levels = live.market_open && settled.length
-      ? priceLevels(settled, indicators(settled, base.indicators), quote.price)
+    result.levels = live.market_open && base.as_of < bar.date && base.levels?.resistance_all
+      ? sideLevels(base.levels, quote.price)
       : priceLevels(bars, values);
     result.conditions = projectedConditions(base.conditions, values, bars);
     result.reference = { ...(result.reference || {}), low20_intraday: { ...(result.reference?.low20_intraday || {}), value: values.low20_intraday } };
@@ -387,5 +406,5 @@
     return { start(code, market) { stop(); activeCode = code; activeMarket = market === '上櫃' || market === 'otc' ? 'otc' : 'tse'; poll(); }, stop };
   }
 
-  window.Intraday = { createPoller, nextPollDelay, projectAnalysis, quoteCaption, liveStatusText, liveUnavailable, limitPrices, limitState, _test: { indicators, priceLevels, projectedConditions } };
+  window.Intraday = { createPoller, nextPollDelay, projectAnalysis, quoteCaption, liveStatusText, liveUnavailable, limitPrices, limitState, _test: { indicators, priceLevels, sideLevels, projectedConditions } };
 })();

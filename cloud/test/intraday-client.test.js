@@ -53,25 +53,28 @@ test("盤中現價以 Python 同一套規則重算指標、價位、主要訊號
 
 // 本人 11-19「為什麼壓力支撐會一直變動」→ 選「固定住」：盤中價位數字一律用前一交易日收盤算的那組，
 // 整天不變，只依現價決定在上（壓力）或下（支撐）。
-const levelValues = (levels) => [...levels.resistance_all, ...levels.support_all]
-  .flatMap((group) => group.sources.map((source) => `${source.kind}:${source.value}`)).sort();
+const levelSet = (levels) => [...levels.resistance_all, ...levels.support_all].map((group) => group.level).sort((a, b) => a - b);
+const atPrice = (price) => {
+  const moved = structuredClone(live);
+  moved.quote = { ...moved.quote, price, high: Math.max(price, 2280), low: Math.min(price, 2255) };
+  return loadIntraday().projectAnalysis(base, moved).levels;
+};
 
-test("盤中價位用昨天收盤那組：均線價位是昨天的值，不跟著現價跳", () => {
-  const I = loadIntraday();
-  const yesterday = I._test.indicators(base.bars, base.indicators);
-  const projected = I.projectAnalysis(base, live);
-  const sources = [...projected.levels.resistance_all, ...projected.levels.support_all].flatMap((group) => group.sources);
-  const ma5 = sources.find((source) => source.kind === "ma5");
-  assert.ok(ma5, "MA5 應該在價位候選裡");
-  assert.equal(ma5.value, yesterday.ma5);
-  assert.notEqual(ma5.value, projected.indicators.ma5);
+test("盤中價位就是昨天收盤那組（盤後分析的價位），數字不重算", () => {
+  const away = (level) => Math.abs(level - 2265) > 2265 * 0.001;
+  assert.deepEqual(levelSet(atPrice(2265)), levelSet(base.levels).filter(away));
 });
 
-test("盤中現價小幅變動，價位候選的數字完全不變", () => {
-  const I = loadIntraday();
-  const moved = structuredClone(live);
-  moved.quote = { ...moved.quote, price: 2266, high: 2280, low: 2255 };
-  assert.deepEqual(levelValues(I.projectAnalysis(base, moved).levels), levelValues(I.projectAnalysis(base, live).levels));
+test("盤中現價移動、甚至穿過某個價位，整組數字都不變，只換上下", () => {
+  const pool = levelSet(base.levels);
+  const crossed = pool.find((level) => level > 2265 * 1.002);
+  assert.ok(crossed, "現價上方要有價位才能測穿越");
+  const before = atPrice(2265), after = atPrice(Math.ceil(crossed * 1.002));
+  const all = (levels) => levelSet(levels).filter((level) => Math.abs(level - 2265) > 2265 * 0.001 && Math.abs(level - Math.ceil(crossed * 1.002)) > crossed * 0.002);
+  assert.deepEqual(all(after), all(before));
+  assert.ok(before.resistance_all.some((group) => group.level === crossed));
+  assert.ok(after.support_all.some((group) => group.level === crossed));
+  assert.ok(after.resistance.every((item) => item.level > crossed) && after.support.every((item) => item.level < Math.ceil(crossed * 1.002)));
 });
 
 test("MIS 暫缺 OHLC 或成交量時保留盤後分析，不把 null 當成 0", () => {
