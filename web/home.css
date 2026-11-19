@@ -733,6 +733,72 @@ body.hm .terrain-detail dd { margin: 0; text-align: right; color: var(--ink); }
   body.hm .terrain.has-selection .terrain-detail { display: block; }
 }
 
+/* ================= 各產業強勢股（本人 2026-11-20，排法 A） =================
+   地形下面一排資金狀態鍵，一次看一種；每個產業一塊板，最多 3 檔。結構由 rotation-strong.js 產生。
+   紅綠只出現在細記號上（上漲小三角、漲停框、今日下跌小三角），數字都是墨色。 */
+body.hm .rotation-strong { margin-top: 20px; }
+body.hm .strong-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; }
+body.hm .strong-head h4 { margin: 0; font: 600 16px/1.3 var(--serif); color: var(--ink); }
+body.hm .strong-head p { margin: 0; color: var(--faint); font-size: 12px; }
+
+/* 資金狀態鍵：和「消息」的市場鍵同一種樣子 */
+body.hm .strong-seg { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; margin-top: 12px; padding: 3px; border-radius: var(--r-key); background: var(--panel2); }
+body.hm .strong-seg button {
+  min-height: 36px; padding: 0 4px; border: 0; border-radius: calc(var(--r-key) - 2px); background: transparent;
+  color: var(--dim); font: 500 13px var(--sans); white-space: nowrap; cursor: pointer;
+}
+body.hm .strong-seg button small { margin-left: 4px; font-size: 11px; color: var(--faint); }
+body.hm .strong-seg button[aria-selected="true"] { background: var(--key); color: var(--ink); font-weight: 700; box-shadow: var(--key-shadow); }
+body.hm .strong-seg button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+/* 一個產業一塊板 */
+body.hm .strong-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; margin-top: 12px; }
+body.hm .strong-card {
+  padding: 12px 14px 8px; border-radius: var(--r-slab);
+  background: linear-gradient(to bottom, var(--float), var(--key)); box-shadow: var(--key-shadow);
+  animation: strong-rise 520ms var(--ease-depth) both; animation-delay: calc(var(--i) * 45ms);
+}
+@keyframes strong-rise { from { opacity: 0; transform: translateY(14px) scale(.97); } }
+@media (prefers-reduced-motion: reduce) { body.hm .strong-card { animation: none; } }
+body.hm .strong-card[data-quadrant="leading"] { --q: var(--q-leading); }
+body.hm .strong-card[data-quadrant="weakening"] { --q: var(--q-weakening); }
+body.hm .strong-card[data-quadrant="improving"] { --q: var(--q-improving); }
+body.hm .strong-card[data-quadrant="lagging"] { --q: var(--q-lagging); }
+body.hm .strong-card header { display: grid; grid-template-columns: minmax(0, 1fr) 58px 62px; align-items: baseline; gap: 0 8px; padding-bottom: 6px; }
+body.hm .strong-card h5 { display: flex; align-items: center; gap: 8px; min-width: 0; margin: 0; font: 600 15px/1.3 var(--serif); color: var(--ink); white-space: nowrap; }
+body.hm .strong-card h5::before { content: ""; flex: none; width: 8px; height: 8px; border-radius: var(--r-tag); background: var(--q); }
+body.hm .strong-col { color: var(--faint); font-size: 11px; text-align: right; }
+
+/* 一檔一列：整列是進個股頁的連結 */
+body.hm .strong-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) 58px 62px; align-items: center; gap: 0 8px;
+  min-height: 40px; border-top: 1px solid var(--hair); color: var(--ink); text-decoration: none;
+}
+body.hm .strong-row:active { transform: translateY(1px); }
+body.hm .strong-row:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+body.hm .strong-name { display: flex; align-items: center; gap: 6px; min-width: 0; font: 500 14px var(--sans); white-space: nowrap; }
+body.hm .strong-name b { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+/* 上漲的細記號：用邊框畫出來的小三角 */
+body.hm .strong-name::before { content: ""; flex: none; border: 4px solid transparent; border-top: 0; border-bottom: 7px solid var(--up); }
+body.hm .strong-name small { flex: none; color: var(--faint); font: 400 12px var(--mono); }
+body.hm .strong-limit { flex: none; padding: 0 5px; border: 1px solid var(--up); border-radius: var(--r-tag); color: var(--ink); font: 500 10.5px/16px var(--sans); font-style: normal; }
+body.hm .strong-today { color: var(--dim); font-size: 12.5px; text-align: right; }
+body.hm .strong-today.is-down::before { content: ""; display: inline-block; margin-right: 4px; border: 3.5px solid transparent; border-bottom: 0; border-top: 6px solid var(--down); vertical-align: 1px; }
+body.hm .strong-row strong { font: 700 14.5px var(--mono); text-align: right; }
+body.hm .strong-none { margin: 12px 0 0; color: var(--faint); font-size: 12.5px; line-height: 1.6; }
+
+/* 點樓明細裡的強勢股：明細出現時裡面的連結要點得到 */
+body.hm .terrain.has-selection .terrain-detail { pointer-events: auto; }
+body.hm .strong-detail { margin-top: 12px; }
+body.hm .strong-detail-title { margin: 0 0 2px; color: var(--dim); font-size: 12px; }
+body.hm .strong-detail .strong-none { margin-top: 6px; }
+
+@media (max-width: 860px) {
+  body.hm .strong-grid { grid-template-columns: 1fr; gap: 10px; }
+  body.hm .strong-seg button { font-size: 12.5px; }
+  body.hm .strong-seg button small { display: none; }
+}
+
 /* ================= 看盤桌：K 線區的小鍵（立體重設計 A 包第 7 片，2026-11-15） =================
    週期收成標題列的一枚鍵；「回到最新」只在圖被拖離最新一天時浮在圖的角落。
    兩者凸起、浮起、沉入的樣子併在上面「鍵」那一組；小鍵與選單的共用樣式在 chart-studies.css。 */

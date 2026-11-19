@@ -2344,7 +2344,7 @@
   // 首屏是資金地形（terrain.js）；資金效率排行、低基期回溫訊號與表格在點開的面板裡（本人 2026-11-14 定案）。
   const rot = {
     block: $('rotationBlock'), meta: $('rotationMeta'), status: $('rotationStatus'), body: $('rotationBody'),
-    terrain: $('rotationTerrain'), efficiency: $('rotationEfficiency'),
+    terrain: $('rotationTerrain'), strong: $('rotationStrong'), efficiency: $('rotationEfficiency'),
     recovery: $('rotationRecovery'), table: $('rotationTable'),
   };
 
@@ -2360,7 +2360,11 @@
     rot.meta.textContent = `資料日 ${latest.date}`;
     const stale = payload.status === 'stale' ? `已過期（最新行情 ${payload.latest_market_data_date}），僅供查看舊結果。` : '';
     rot.status.textContent = `${stale}${latest.summary ? latest.summary.text : ''}`;
-    window.Terrain.render(rot.terrain, { bubbles: latest.bubbles, quadrants: payload.quadrants });
+    // 各產業強勢股：地形下面一份名單，點樓的明細裡也列那個產業的（這一批沒有就兩邊都不出現）
+    const strong = payload.strong_stocks || null;
+    window.Terrain.render(rot.terrain, { bubbles: latest.bubbles, quadrants: payload.quadrants,
+      detailExtra: name => window.RotationStrong.detail(strong, name) });
+    window.RotationStrong.render(rot.strong, { bubbles: latest.bubbles, quadrants: payload.quadrants, strong });
     rot.efficiency.replaceChildren(...(latest.efficiency_ranking || []).map(r => {
       const li = el('li', '', `${r.name} `);
       li.append(el('small', '', fmtNum(r.score, 1)));
