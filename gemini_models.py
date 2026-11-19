@@ -37,6 +37,10 @@ WATCH_JUDGE_EFFORT = "high"
 # 朋友解讀：用朋友自己的 Gemini API 金鑰（不是 agy；朋友的金鑰用不到 Argon），Flash、思考高（API 的 thinkingLevel）。
 FRIEND_DIGEST = FLASH
 FRIEND_DIGEST_EFFORT = "high"
+# 主要模型回 503（太忙）或逾時時退到官方的 latest 別名（2026-11-19：同一把朋友金鑰打 gemini-3.8-flash 連續 503）。
+# 和存金鑰時的試呼叫（cloud/lib/friend-ai.js 的 TRIAL_URL）、首頁消息的朋友呼叫（market_news.FRIEND_FALLBACK_MODEL）
+# 同一個名稱。別名指到哪一代由 Google 決定、不一定收 thinkingLevel，所以備援那次不帶思考程度。
+FRIEND_DIGEST_FALLBACK = "gemini-flash-latest"
 # 首頁「籌碼與資金」白話（daily-update.yml 的 PLAIN_MODEL／PLAIN_EFFORT）與站主 AI 解讀（ai-digest.yml 的 --model）
 # 在排程檔裡寫名稱；這裡記本人選的值，test_gemini_models 核對兩邊一致。
 PLAIN = ARGON

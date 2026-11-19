@@ -62,7 +62,10 @@ def authorize_publication(
     expected_repository: str,
     expected_branch: str,
     conclusion: str,
+    allow_already_done: bool = False,
 ) -> dict[str, Any]:
+    """只有真的發布那一班放行。``allow_already_done``（只有朋友解讀排程帶）另外放行「這一天先前已經發布成功」的
+    後面時段（每日更新回 already-done），讓它替還沒有結果的朋友補跑；只重新部署程式、等資料、休市、乾跑都不放行。"""
     denied = {"allowed": False, "reason": "invalid-evidence", "data_date": "", "head_sha": ""}
     if not isinstance(evidence, dict) or evidence.get("schema") != SCHEMA or evidence.get("workflow") != "daily-update":
         return denied
@@ -80,6 +83,8 @@ def authorize_publication(
     data_date = str(evidence.get("data_date") or "")
     if not SHA_RE.fullmatch(head_sha) or not DATE_RE.fullmatch(data_date):
         return denied
+    if allow_already_done and evidence.get("dry_run") is False and evidence.get("status") == "already-done":
+        return {"allowed": True, "reason": "already-published", "data_date": data_date, "head_sha": head_sha}
     if evidence.get("dry_run") is not False or evidence.get("status") != "success" or evidence.get("sync_state") is not True or evidence.get("published") is not True:
         return {**denied, "reason": "upstream-not-published"}
     return {"allowed": True, "reason": "published", "data_date": data_date, "head_sha": head_sha}
@@ -115,6 +120,8 @@ def main(argv: list[str] | None = None) -> int:
     authorize.add_argument("--expected-branch", required=True)
     authorize.add_argument("--conclusion", required=True)
     authorize.add_argument("--github-output", type=Path, required=True)
+    authorize.add_argument("--allow-already-done", action="store_true",
+                           help="朋友解讀排程用：這一天先前已發布成功的後面時段也放行（reason=already-published）")
     args = parser.parse_args(argv)
 
     if args.command == "create-evidence":
@@ -142,6 +149,7 @@ def main(argv: list[str] | None = None) -> int:
         expected_repository=args.expected_repository,
         expected_branch=args.expected_branch,
         conclusion=args.conclusion,
+        allow_already_done=args.allow_already_done,
     )
     _write_outputs(args.github_output, decision)
     print(json.dumps({"allowed": decision["allowed"], "reason": decision["reason"]}, ensure_ascii=False))

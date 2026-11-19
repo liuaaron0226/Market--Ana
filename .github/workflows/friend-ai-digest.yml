@@ -2,6 +2,8 @@
 # 以及根據他自己的自選股與庫存寫的個股判斷。
 # 邊界：只從 R2 restore、不 upload；站主那條線（ai-digest.yml、agy）完全不碰；提示只放證交所、櫃買的官方開放資料與朋友自己的持股。
 # 自己的開關：GitHub variable MARKET_ANA_FRIEND_AI（只認 on），不掛在 MARKET_ANA_STRATEGIES_ENABLED 底下。
+# 什麼時候跑（2026-11-19）：每日更新真的發布那一班，替所有可用金鑰的朋友產生；同一天後面的時段（每日更新回 already-done）
+# 只替還沒有結果的朋友補跑（排程壞在半路、被取消、Google 太忙）。只重新部署程式、等資料、休市的班次不跑（upstream-not-published）。
 name: friend-ai-digest
 
 on:
@@ -40,6 +42,8 @@ jobs:
       dry_run: ${{ steps.auth.outputs.dry_run }}
       requested_date: ${{ steps.auth.outputs.data_date }}
       head_sha: ${{ steps.auth.outputs.head_sha }}
+      # published＝發布那一班；already-published＝同一天後面的時段（只補跑）；手動觸發是空的。
+      reason: ${{ steps.auth.outputs.reason }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -101,6 +105,7 @@ jobs:
               --expected-repository "$EXPECTED_REPOSITORY" \
               --expected-branch "$EXPECTED_BRANCH" \
               --conclusion "$UPSTREAM_CONCLUSION" \
+              --allow-already-done \
               --github-output "$GITHUB_OUTPUT"
             echo "dry_run=false" >> "$GITHUB_OUTPUT"
           fi
@@ -157,7 +162,30 @@ jobs:
           echo "dry_run=$dry_run" >> "$GITHUB_OUTPUT"
           echo "requested_date=$INPUT_DATE" >> "$GITHUB_OUTPUT"
 
+      - name: 從 D1 讀取可用的朋友金鑰（密文）
+        # 排在還原資料之前：沒有人要產生（沒有朋友設定金鑰，或補跑時大家都已經有結果）就不還原、不重建、不呼叫 Gemini。
+        id: keys
+        if: success() && steps.mode.outputs.dry_run == 'false'
+        working-directory: cloud
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          AUTH_REASON: ${{ needs.authorize.outputs.reason }}
+          INPUT_DATE: ${{ steps.mode.outputs.requested_date }}
+        run: |
+          # 後面時段的補跑（這一天先前已經發布）：只挑那一天還沒有結果、或上次是暫時連不到 Google 的朋友。發布那一班照舊全部。
+          if [ "$AUTH_REASON" = "already-published" ]; then
+            query="$(node friend-ai-schedule.mjs keys-sql --pending "$INPUT_DATE")"
+          else
+            query="$(node friend-ai-schedule.mjs keys-sql)"
+          fi
+          npx --yes wrangler@4 d1 execute market-ana-accounts --remote --json --command "$query" > "$RUNNER_TEMP/friend-keys.json"
+          count="$(cd .. && python -c 'import sys, friend_ai_digest as f; print(len(f.read_keys(sys.argv[1])))' "$RUNNER_TEMP/friend-keys.json")"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "這一班要產生解讀的朋友：$count 位"
+
       - name: 從 R2 還原需要的資料（唯讀）
+        if: steps.keys.outputs.count != '0'
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -166,6 +194,7 @@ jobs:
         run: python state_sync.py restore --target .
 
       - name: 決定資料日並重建 0050 對照資料包
+        if: steps.keys.outputs.count != '0'
         run: |
           if [ -n "${{ steps.mode.outputs.requested_date }}" ]; then
             day="${{ steps.mode.outputs.requested_date }}"
@@ -173,7 +202,11 @@ jobs:
             day="$(python ai_digest_inputs.py --print-latest-date --stock-pack cloud/.stock-pack.json --screens-root data/market-screen-snapshots)"
           fi
           # 03 票個股判斷的輸入：和站主那條線（ai-digest.yml）同一個做法。
-          python cloud/build_compare_pack.py --universe "data/liquid-universe/$day.json" --out cloud/.compare-pack.json
+          # 當天的股票池快照由每日更新發布時放進工作集（daily_update.UNIVERSE_SNAPSHOT_KEEP）。2026-11-19 以前發布的那幾天
+          # 工作集裡沒有這一份（那時只寫在暫存目錄，這個排程每一班都壞在這裡）：改用選股快照一起封存的同一份名單。
+          universe="data/liquid-universe/$day.json"
+          [ -f "$universe" ] || universe="data/market-screen-snapshots/universe/$day.json"
+          python cloud/build_compare_pack.py --universe "$universe" --out cloud/.compare-pack.json
           echo "DATA_DATE=$day" >> "$GITHUB_ENV"
 
       - name: 只整理輸入、檢查格式（dry-run）
@@ -185,18 +218,8 @@ jobs:
             --sql-dir "$RUNNER_TEMP/friend-ai-sql" --audit "$RUNNER_TEMP/friend-ai-audit.json" \
             --prompt-output "$RUNNER_TEMP/friend-ai-input-prompt.txt"
 
-      - name: 從 D1 讀取可用的朋友金鑰（密文）
-        if: success() && steps.mode.outputs.dry_run == 'false'
-        working-directory: cloud
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          npx --yes wrangler@4 d1 execute market-ana-accounts --remote --json \
-            --command "$(node friend-ai-schedule.mjs keys-sql)" > "$RUNNER_TEMP/friend-keys.json"
-
       - name: 從 D1 讀取這些朋友各自的自選股與庫存（03 票）
-        if: success() && steps.mode.outputs.dry_run == 'false'
+        if: success() && steps.mode.outputs.dry_run == 'false' && steps.keys.outputs.count != '0'
         working-directory: cloud
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -207,7 +230,8 @@ jobs:
             --command "$(node friend-ai-schedule.mjs portfolios-sql)" > "$RUNNER_TEMP/friend-portfolios.json"
 
       - name: 逐位朋友呼叫 Gemini 並驗證
-        if: success() && steps.mode.outputs.dry_run == 'false'
+        # 每一次呼叫（第幾位朋友、模型、秒數、HTTP 狀態）會印在這一步的輸出；主要模型太忙或逾時會退到備援模型。
+        if: success() && steps.mode.outputs.dry_run == 'false' && steps.keys.outputs.count != '0'
         env:
           FRIEND_AI_MASTER_KEY: ${{ secrets.FRIEND_AI_MASTER_KEY }}
         run: |
@@ -219,7 +243,7 @@ jobs:
             --sql-dir "$RUNNER_TEMP/friend-ai-sql" --audit "$RUNNER_TEMP/friend-ai-audit.json"
 
       - name: 寫入 D1
-        if: success() && steps.mode.outputs.dry_run == 'false'
+        if: success() && steps.mode.outputs.dry_run == 'false' && steps.keys.outputs.count != '0'
         working-directory: cloud
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -235,14 +259,32 @@ jobs:
           done
           if [ "$failed" -gt 0 ]; then echo "::error::$failed 位朋友的結果沒寫進資料庫"; exit 1; fi
 
+      - name: 排程中途失敗：替還沒有結果的朋友寫下原因
+        # 壞在產生結果之前（還原資料、重建資料包…）或寫入失敗時，朋友當天沒有任何一列，頁面只會寫「未產生」。
+        # 這裡把原因寫進他的金鑰狀態（頁面會顯示）；已經有當天結果的朋友不動。稍後的班次補跑成功就清掉。
+        if: failure() && steps.mode.outputs.dry_run == 'false'
+        continue-on-error: true
+        working-directory: cloud
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          INPUT_DATE: ${{ steps.mode.outputs.requested_date }}
+        run: |
+          npx --yes wrangler@4 d1 execute market-ana-accounts --remote \
+            --command "$(node friend-ai-schedule.mjs failed-run-sql "${DATA_DATE:-$INPUT_DATE}")" > /dev/null
+
       - name: 執行摘要（只有人數與結果分類，不含 email、金鑰、解讀內容）
         if: always()
+        env:
+          AUTH_REASON: ${{ needs.authorize.outputs.reason }}
+          KEY_COUNT: ${{ steps.keys.outputs.count }}
         run: |
           {
             echo "### 朋友 AI 解讀 ${DATA_DATE:-未決定}"
             echo "- dry-run：${{ steps.mode.outputs.dry_run }}"
+            echo "- 觸發：${AUTH_REASON:-手動}；這一班要產生的朋友：${KEY_COUNT:-（乾跑不讀金鑰）} 位"
             if [ -f "$RUNNER_TEMP/friend-ai-audit.json" ]; then
-              python -c 'import json,sys; a=json.load(open(sys.argv[1],encoding="utf-8")); print("- 結果：" + json.dumps({k: a.get(k) for k in ("input_sha256","friends","outcomes","availability")}, ensure_ascii=False))' "$RUNNER_TEMP/friend-ai-audit.json"
+              python -c 'import json,sys; a=json.load(open(sys.argv[1],encoding="utf-8")); print("- 結果：" + json.dumps({k: a.get(k) for k in ("input_sha256","friends","outcomes","tries","availability")}, ensure_ascii=False))' "$RUNNER_TEMP/friend-ai-audit.json"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
