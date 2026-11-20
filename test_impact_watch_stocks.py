@@ -231,6 +231,7 @@ class StockDailyCheckTests(unittest.TestCase):
     def test_a_stock_removed_from_both_lists_is_closed_quietly(self):
         self.db.db.execute("INSERT INTO impact_watch_facts VALUES ('2330', '2026-11-18', ?, ?)", (json.dumps(self.before), NOW))
         self.db.db.execute("INSERT INTO impact_watch_facts VALUES ('market', '2026-11-18', '{}', ?)", (NOW,))
+        self.db.db.execute(WATCH, (OWNER, "2317", "鴻海"))     # 名單上還有別檔（整份空的會被當成站主設錯，不收）
         self.db.db.execute("DELETE FROM user_watchlist WHERE code = '2330'")
         report = self.db.stock_check({"2330": stock([*RISING[1:], 600], end="2026-11-19")}, day="2026-11-19")
         self.assertEqual(len(report["removed"]), 3)
@@ -260,6 +261,27 @@ class StockDailyCheckTests(unittest.TestCase):
         self.assertEqual(self.db.facts()["market"]["data_date"], "2026-11-18", "大盤那一段照樣寫進去")
         bad = iw.check(tiw_analysis(), now=NOW, query=self.db.query, execute=self.db.execute, holidays=HOLIDAYS, owner_email="not-an-email")
         self.assertEqual(bad["stocks"], {"error": "ValueError"})
+
+    def test_a_holdings_read_that_fails_does_not_close_the_stocks_that_are_only_held(self):
+        self.db.db.execute("DELETE FROM user_watchlist WHERE code = '2330'")
+        self.db.db.execute(HOLD, (OWNER, "2330", "台積電"))
+
+        def query(sql):
+            if "user_holdings" in sql:
+                raise RuntimeError("wrangler 逾時")
+            return self.db.query(sql)
+        with self.assertRaises(RuntimeError):
+            iw.check_stocks(day="2026-11-19", now=NOW, owner_email=OWNER, query=query, execute=self.db.execute, load=lambda n, d: {},
+                            holidays=HOLIDAYS)
+        self.assertEqual({row["status"] for row in self.db.items()}, {"watching"})
+
+    def test_empty_lists_look_like_a_wrong_owner_and_close_nothing(self):
+        self.db.db.execute("INSERT INTO impact_watch_facts VALUES ('2330', '2026-11-18', '{}', ?)", (NOW,))
+        report = iw.check_stocks(day="2026-11-19", now=NOW, owner_email="someone-else@example.com", query=self.db.query,
+                                 execute=self.db.execute, load=lambda n, d: {}, holidays=HOLIDAYS)
+        self.assertEqual(report["stocks"], 0)
+        self.assertEqual({row["status"] for row in self.db.items()}, {"watching"})
+        self.assertIn("2330", self.db.facts())
 
     def test_the_daily_job_judges_stocks_after_the_market_and_skips_them_without_an_owner(self):
         self.db.create([market_pick("below_ma20")])

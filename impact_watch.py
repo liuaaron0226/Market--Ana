@@ -526,21 +526,23 @@ def stock_check_sql(items: Sequence[Mapping[str, Any]], facts_by_code: Mapping[s
             lines.append("INSERT OR REPLACE INTO impact_watch_facts (subject, data_date, payload, updated_at) SELECT "
                          f"{_q(code)}, {_q(facts['date'])}, {_q(json.dumps(facts, ensure_ascii=False))}, {_q(now)} WHERE NOT EXISTS "
                          f"(SELECT 1 FROM impact_watch_facts WHERE subject = {_q(code)} AND data_date > {_q(facts['date'])});")
-    keep = ", ".join(_q(code) for code in [MARKET, *owned])
-    lines.append(f"DELETE FROM impact_watch_facts WHERE subject NOT IN ({keep});")
+    still_listed = ", ".join(_q(code) for code in [MARKET, *owned])
+    lines.append(f"DELETE FROM impact_watch_facts WHERE subject NOT IN ({still_listed});")
     return "\n".join(lines) + "\n", report
 
 
 def owner_codes(query: Callable[[str], list[dict]], email: str) -> dict[str, str]:
-    """站主現在的自選＋庫存：{代號: 名稱}。讀不到自選就丟例外（整段個股檢查跳過，不能因此把盯項全收掉）；
-    讀不到庫存只用自選。"""
+    """站主現在的自選＋庫存：{代號: 名稱}。任何一邊讀不到就丟例外（整段個股檢查跳過）：少讀一邊會把只在那一邊的股票
+    當成「已經移除」，盯項就被收掉了。只有庫存那張表根本不存在時才只用自選。"""
     if not _EMAIL.fullmatch(email or ""):
         raise ValueError("站主 email 格式不對")
     who = f"lower(email) = lower({_q(email)})"
     names = {row["code"]: row["name"] for row in query(f"SELECT code, max(name) AS name FROM user_watchlist WHERE {who} GROUP BY code")}
     try:
         held = query(f"SELECT code, max(name) AS name FROM user_holdings WHERE {who} GROUP BY code")
-    except Exception:  # noqa: BLE001
+    except Exception as error:  # noqa: BLE001
+        if "no such table" not in str(error).lower():
+            raise
         held = []
     return {**{row["code"]: row["name"] for row in held}, **names}
 
@@ -569,7 +571,10 @@ def check_stocks(*, day: str, now: str, owner_email: str, query: Callable[[str],
                  dry_run: bool = False, holidays: set[str] | None = None) -> dict[str, Any]:
     """每日檢查裡站主個股的那一段（接在大盤之後）：讀站主現在的自選＋庫存 → 整理每一檔當天的數字 → 判每一筆個股盯項。"""
     names = owner_codes(query, owner_email)
-    facts = dict((load or load_stock_facts)(names, day)) if names else {}
+    if not names:
+        # 一檔都沒有：多半是 OWNER_EMAIL 設錯而不是站主真的清空了。不收任何盯項、不刪數字，留給到期日處理。
+        return {"stocks": 0, "skipped": "站主的自選與庫存是空的"}
+    facts = dict((load or load_stock_facts)(names, day))
     items = query("SELECT id, subject, kind, condition_key, params, expires_on, status FROM impact_watch_items "
                   f"WHERE status = 'watching' AND subject <> {_q(MARKET)}")
     script, report = stock_check_sql(items, facts, list(names), day=day, now=now, holidays=holidays)
