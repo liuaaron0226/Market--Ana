@@ -1016,8 +1016,10 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
                "indices": index_rows,
                "sources": {"feeds": sources, "missed_groups": missed_groups(sources)}, "model": model}
     script = run_sql(run_row, stored, marks, now=now, point_columns=point_columns)
-    # 挑到的條件寫成盯項：影響力夠的消息與總結才建；去重、上限與到期日在 impact_watch
+    # 挑到的條件寫成盯項：影響力夠的消息與總結才建；去重、上限與到期日在 impact_watch。
+    # 和消息分開寫：盯項寫不成不能賠掉這一班的消息。
     diagnosis["watch"] = {"offered": len(watchable), "unknown_ids": unknown_picks}
+    watch_script = ""
     if watchable:
         picks = [{**pick, "impact": row["impact"], "prepare": row.get("prepare"), "source_ref": f"{run_row['run_id']}#{row['id']}"}
                  for row in stored if row["impact"] >= WATCH_MIN_IMPACT for pick in row.get("track") or []]
@@ -1026,12 +1028,17 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
         try:
             watch_script, watch_report = impact_watch.creation_sql(picks, impact_watch.active_items(query, trade_date),
                                                                    trade_date=trade_date, now=now)
-            script += watch_script
             diagnosis["watch"].update(watch_report)
-        except Exception as error:  # noqa: BLE001 — 盯項寫不成不能賠掉這一班的消息
+        except Exception as error:  # noqa: BLE001
+            watch_script = ""
             diagnosis["watch"]["error"] = type(error).__name__
     if not dry_run:
         execute(script)
+        if watch_script:
+            try:
+                execute(watch_script)
+            except Exception as error:  # noqa: BLE001
+                diagnosis["watch"]["error"] = f"write: {type(error).__name__}"
     return {"status": "ok", "run_id": run_row["run_id"], "run_status": run_status, "items": len(stored),
             "sent": len(items), "model": status, **({"model_note": note[:200]} if status != "ok" and note else {}),
             "owner_watch_sent": len(owner_watch),

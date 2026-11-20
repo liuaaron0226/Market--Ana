@@ -34,7 +34,7 @@ MA_NAMES = {20: "月線", 60: "季線", 240: "年線"}
 LEVEL_DAYS = 20
 STREAK_TARGET = 3               # 連續買賣超至少盯到幾天
 STREAK_AHEAD = 2                # 已經連續好幾天時，往後再盯幾天
-FULL_NOTE = "名額讓給影響更大的"
+FULL_NOTE = "名額讓給影響更大或更新的"
 
 _q = lambda value: "NULL" if value is None else "'" + str(value).replace("'", "''") + "'"  # noqa: E731
 
@@ -126,14 +126,14 @@ def offered(query: Callable[[str], list[dict]], trade_date: str, holidays: set[s
     try:
         rows = query(f"SELECT data_date, payload FROM impact_watch_facts WHERE subject = {_q(MARKET)}")
         facts = json.loads(rows[0]["payload"]) if rows else None
-    except Exception:  # noqa: BLE001 — 表還沒建或內容壞了：不出清單
+        if not isinstance(facts, Mapping) or not facts.get("date"):
+            return []
+        holidays = td.known_holidays(trade_date) if holidays is None else holidays
+        if td.trading_days_between(facts["date"], trade_date, holidays) > FACTS_FRESH_TRADING_DAYS:
+            return []
+        return candidates(facts)
+    except Exception:  # noqa: BLE001 — 表還沒建或內容壞了（缺欄位、日期格式不對）：不出清單，不能賠掉這一班的消息
         return []
-    if not isinstance(facts, Mapping) or not facts.get("date"):
-        return []
-    holidays = td.known_holidays(trade_date) if holidays is None else holidays
-    if td.trading_days_between(facts["date"], trade_date, holidays) > FACTS_FRESH_TRADING_DAYS:
-        return []
-    return candidates(facts)
 
 
 # ---- 每日判斷 ----
@@ -186,13 +186,17 @@ def check_sql(items: Sequence[Mapping[str, Any]], facts: Mapping[str, Any], *, n
     day = facts["date"]
     holidays = td.known_holidays(day) if holidays is None else holidays
     lines: list[str] = []
-    report: dict[str, Any] = {"data_date": day, "checked": 0, "met": [], "failed": [], "expired": [], "watching": 0}
+    report: dict[str, Any] = {"data_date": day, "checked": 0, "met": [], "failed": [], "expired": [], "watching": 0, "errors": []}
     for item in items:
         if item.get("status") != "watching" or item.get("kind") != "numeric" or item.get("subject") != MARKET:
             continue
         report["checked"] += 1
-        parsed = {**item, "params": json.loads(item["params"]) if isinstance(item.get("params"), str) else item.get("params") or {}}
-        status, note = evaluate(parsed, facts)
+        try:
+            parsed = {**item, "params": json.loads(item["params"]) if isinstance(item.get("params"), str) else item.get("params") or {}}
+            status, note = evaluate(parsed, facts)
+        except Exception as error:  # noqa: BLE001 — 一筆的參數壞了只跳過那一筆（照樣會到期），其餘照判
+            report["errors"].append({"id": item["id"], "error": type(error).__name__})
+            status, note = "watching", None
         where = f"WHERE id = {_q(item['id'])} AND status = 'watching';"
         if status in ("met", "failed"):
             keep = td.add_trading_days(day, KEEP_RESULT_TRADING_DAYS, holidays)
@@ -206,8 +210,10 @@ def check_sql(items: Sequence[Mapping[str, Any]], facts: Mapping[str, Any], *, n
             left = td.trading_days_between(day, item["expires_on"], holidays)
             lines.append(f"UPDATE impact_watch_items SET days_left = {left} {where}")
             report["watching"] += 1
-    lines.append("INSERT OR REPLACE INTO impact_watch_facts (subject, data_date, payload, updated_at) VALUES ("
-                 f"{_q(MARKET)}, {_q(day)}, {_q(json.dumps(facts, ensure_ascii=False))}, {_q(now)});")
+    # 重跑舊的一天不把已經存下的新數字蓋回去
+    lines.append("INSERT OR REPLACE INTO impact_watch_facts (subject, data_date, payload, updated_at) SELECT "
+                 f"{_q(MARKET)}, {_q(day)}, {_q(json.dumps(facts, ensure_ascii=False))}, {_q(now)} WHERE NOT EXISTS "
+                 f"(SELECT 1 FROM impact_watch_facts WHERE subject = {_q(MARKET)} AND data_date > {_q(day)});")
     cutoff = (date.fromisoformat(day) - timedelta(days=KEEP_DAYS)).isoformat()
     lines.append(f"DELETE FROM impact_watch_items WHERE status <> 'watching' AND result_date < {_q(cutoff)};")
     return "\n".join(lines) + "\n", report
@@ -216,9 +222,10 @@ def check_sql(items: Sequence[Mapping[str, Any]], facts: Mapping[str, Any], *, n
 # ---- 建立 ----
 
 def active_items(query: Callable[[str], list[dict]], trade_date: str) -> list[dict[str, Any]]:
-    """還算數的盯項：盯著的，和有結果、首頁還留著的。"""
+    """還算數的盯項：盯著的，和有結果、首頁還留著的；另外帶上今天建過的（不論狀態，建立時用來避開同一個識別碼）。"""
     return query("SELECT id, subject, condition_key, impact, created_date, status FROM impact_watch_items "
-                 f"WHERE status = 'watching' OR (status IN ('met', 'failed') AND show_until >= {_q(trade_date)})")
+                 f"WHERE status = 'watching' OR (status IN ('met', 'failed') AND show_until >= {_q(trade_date)}) "
+                 f"OR created_date = {_q(trade_date)}")
 
 
 def creation_sql(picks: Sequence[Mapping[str, Any]], active: Sequence[Mapping[str, Any]], *, trade_date: str, now: str,
@@ -226,15 +233,16 @@ def creation_sql(picks: Sequence[Mapping[str, Any]], active: Sequence[Mapping[st
     """模型挑到的條件 → 新盯項的 SQL 與報告。
     picks：[{condition_key, label, params, note, impact, prepare, source_ref}]（對象都是大盤）。
     - 同一個條件這一班被挑好幾次：留影響力最高的那一次；
-    - 已經在盯、或剛有結果首頁還留著的條件：不再建；
+    - 已經在盯、或剛有結果首頁還留著的條件：不再建；今天建過又收掉的（讓位、當天就有結果）今天也不再建；
     - 盯著的合計超過 MAX_WATCHING：依影響力高到低、一樣高時新的先，排在後面的收掉（舊的）或不建（新的）。"""
     holidays = td.known_holidays(trade_date) if holidays is None else holidays
     best: dict[str, Mapping[str, Any]] = {}
     for pick in picks:
         if pick["condition_key"] not in best or int(pick["impact"]) > int(best[pick["condition_key"]]["impact"]):
             best[pick["condition_key"]] = pick
-    taken = {(row["subject"], row["condition_key"]) for row in active}
-    fresh = [pick for key, pick in best.items() if (MARKET, key) not in taken]
+    taken = {(row["subject"], row["condition_key"]) for row in active if row["status"] in ("watching", "met", "failed")}
+    made_today = {row["id"] for row in active}
+    fresh = [pick for key, pick in best.items() if (MARKET, key) not in taken and f"{MARKET}:{key}:{trade_date}" not in made_today]
     watching = [row for row in active if row["status"] == "watching"]
     ranked = sorted([*({"new": pick, "impact": int(pick["impact"]), "created_date": trade_date} for pick in fresh),
                      *({"old": row, "impact": int(row["impact"]), "created_date": row["created_date"]} for row in watching)],
@@ -255,7 +263,7 @@ def creation_sql(picks: Sequence[Mapping[str, Any]], active: Sequence[Mapping[st
                   json.dumps(list(pick["prepare"]), ensure_ascii=False) if pick.get("prepare") else None,
                   trade_date, expires, EXPIRE_TRADING_DAYS, "watching", "all", now]
         # 同一班重跑、或另一支排程剛建了同一個條件：不重複建（條件編號同時只有一筆盯著的）
-        lines.append("INSERT INTO impact_watch_items (id, source_block, source_date, source_ref, subject, kind, condition_key, params, "
+        lines.append("INSERT OR IGNORE INTO impact_watch_items (id, source_block, source_date, source_ref, subject, kind, condition_key, params, "
                      "label, note, impact, prepare, created_date, expires_on, days_left, status, visibility, created_at) SELECT "
                      + ", ".join(str(value) if isinstance(value, int) else _q(value) for value in values)
                      + f" WHERE NOT EXISTS (SELECT 1 FROM impact_watch_items WHERE subject = {_q(MARKET)} AND condition_key = "

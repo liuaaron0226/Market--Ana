@@ -242,7 +242,35 @@ class StoreTests(unittest.TestCase):
         self.assertTrue(report["closed_for_room"][0].endswith(":2026-11-16"), report)
 
 
+    def test_a_condition_closed_for_room_today_is_not_rebuilt_the_same_day(self):
+        db = Db()
+        db.create([pick("below_ma20", impact=2)])
+        db.execute("UPDATE impact_watch_items SET status = 'expired', result_date = '2026-11-19'")   # 同一天稍後讓位被收掉
+        report = db.create([pick("below_ma20", impact=3), pick("above_high")])
+        self.assertEqual(report["created"], ["market:above_high:2026-11-19"], "同一個識別碼不再寫一次")
+        self.assertEqual([(row["condition_key"], row["status"]) for row in db.items()], [("above_high", "watching"), ("below_ma20", "expired")])
+        self.assertEqual(db.create([pick("below_ma20")], trade_date="2026-11-20")["created"], ["market:below_ma20:2026-11-20"], "隔天可以再盯")
+
+
 class DailyCheckTests(unittest.TestCase):
+    def test_one_broken_row_does_not_stop_the_others(self):
+        db = Db()
+        db.create([pick("below_ma20"), pick("below_low")])
+        db.execute("UPDATE impact_watch_items SET params = '{}' WHERE condition_key = 'below_low'")   # 少了價位
+        report = db.check(facts([*RISING, 39500], end="2026-11-19"))
+        rows = {row["condition_key"]: row["status"] for row in db.items()}
+        self.assertEqual(rows, {"below_ma20": "met", "below_low": "watching"})
+        self.assertEqual(report["errors"], [{"id": "market:below_low:2026-11-19", "error": "KeyError"}])
+        self.assertEqual(db.query("SELECT data_date FROM impact_watch_facts")[0]["data_date"], "2026-11-19", "當天的數字照樣存")
+
+    def test_rerunning_an_older_day_does_not_overwrite_newer_numbers(self):
+        db = Db()
+        db.check(facts([*RISING, 39900], end="2026-11-19"))
+        db.check(facts())                                                  # 重跑 11-18
+        self.assertEqual(db.query("SELECT data_date FROM impact_watch_facts")[0]["data_date"], "2026-11-19")
+        db.check(facts([*RISING, 39900, 39950], end="2026-11-20"))
+        self.assertEqual(db.query("SELECT data_date FROM impact_watch_facts")[0]["data_date"], "2026-11-20")
+
     def test_results_are_written_with_numbers_and_stay_three_more_trading_days(self):
         db = Db()
         db.create([pick("below_ma20"), pick("foreign_sell_streak"), pick("below_ma60")])
@@ -420,6 +448,27 @@ class NewsRunTests(unittest.TestCase):
             self.assertEqual(report["run_status"], "ok")
             self.assertEqual(len(d1.query("SELECT 1 FROM market_news_items")), 4)
         self.assertEqual(NewsD1(None).watch_items(), [])
+
+    def test_a_failed_watch_write_does_not_lose_the_news(self):
+        d1 = NewsD1(facts())
+        original = d1.execute
+
+        def execute(script):
+            if "impact_watch_items" in script:
+                raise RuntimeError("D1 壞了")
+            original(script)
+        d1.execute = execute
+        ask = with_track(lambda kind, entry: [{"id": "below_ma20", "why": "月線"}] if kind == "summary" else [])
+        report, _, _ = tmn.run(d1, ask=ask)
+        self.assertEqual(report["diagnosis"]["watch"]["error"], "write: RuntimeError")
+        self.assertEqual(len(d1.query("SELECT 1 FROM market_news_items")), 4, "消息照樣寫進去")
+        self.assertEqual(d1.watch_items(), [])
+
+    def test_broken_stored_numbers_offer_nothing(self):
+        d1 = NewsD1(None)
+        d1.db.execute("INSERT INTO impact_watch_facts VALUES ('market', 'x', ?, ?)", (json.dumps({"date": "not-a-date", "close": 1}), NOW))
+        report, _, _ = tmn.run(d1, ask=with_track(lambda kind, entry: [{"id": "below_ma20", "why": "月線"}]))
+        self.assertEqual((report["run_status"], report["diagnosis"]["watch"]["offered"]), ("ok", 0))
 
     def test_a_dry_run_reports_what_it_would_build_without_writing(self):
         d1 = NewsD1(facts())
