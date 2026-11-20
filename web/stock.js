@@ -564,7 +564,10 @@
       if (!data || host.dataset.code !== code || !Array.isArray(data.memberships) || data.memberships.length === 0) return;
       const section = reasonEl('section', 'sk-card sk-reason sk-membership');
       const head = reasonEl('div', 'sk-reason-head');
-      head.append(reasonEl('h2', '', '出現在籌碼選股名單'), reasonEl('span', 'sk-reason-meta', `資料日 ${data.data_date}`));
+      head.append(reasonEl('h2', '', '出現在籌碼選股名單'));
+      // 資料日只在比這一檔的分析日舊時顯示（本人 2026-11-20 選「過期才顯示」）
+      const analysisDay = baseResult?.code === code ? baseResult.as_of : null;
+      if (data.data_date && analysisDay && data.data_date < analysisDay) head.append(reasonEl('span', 'sk-reason-meta', `資料日 ${data.data_date}`));
       section.append(head);
       const ul = reasonEl('ul', 'sk-reason-invalid');
       membershipLines(data.memberships).forEach(text => ul.append(reasonEl('li', '', text)));
@@ -952,7 +955,10 @@
     // 基金淨值約晚 3 個營業日：基金的數字比到它自己的最後一個淨值日，和資料日不同時寫出來（05 票）
     const fundDates = items.filter(item => item.kind === 'fund' && item.history?.to && item.history.to < payload.data_date)
       .map(item => `${items.length > 1 ? `${item.name} ` : ''}淨值至 ${item.history.to}`);
-    $('compareDate').textContent = [`資料日 ${payload.data_date}`, ...fundDates].join('，');
+    // 資料日只在比這一檔的分析日舊時顯示（本人 2026-11-20 選「過期才顯示」）；基金淨值日不同的說明照舊
+    const compareStale = payload.data_date && baseResult?.as_of && payload.data_date < baseResult.as_of;
+    $('compareDate').textContent = [compareStale ? `資料日 ${payload.data_date}` : '', ...fundDates].filter(Boolean).join('，');
+    $('compareDate').hidden = !$('compareDate').textContent;
     $('compareConclusion').textContent = comparisonConclusion(items, payload.benchmark);
     compareState.stocks = comparisonPeriods(items, payload.benchmark);
     renderCompareTable();

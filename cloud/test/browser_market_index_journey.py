@@ -127,8 +127,9 @@ def run(j: Journey, browser, prefix: str, email: str, options: dict) -> None:
     j.check(f"{prefix}道瓊：週期只剩日週月", dji["periods"] == ["日", "週", "月"], dji["periods"])
     j.check(f"{prefix}道瓊：收復／防守鍵收起、圖上沒有判斷線", not dji["linePair"] and dji["overlays"] in (0, None), [dji["linePair"], dji["overlays"]])
     j.check(f"{prefix}道瓊：量能寫「成交量」、沒有法人副圖", dji["studies"] == ["成交量", "MACD", "KD", "RSI"], dji["studies"])
-    j.check(f"{prefix}道瓊：短中長期走勢用道瓊算、沒有法人", dji["trend"] is not None and "道瓊工業 · 資料日 2026-11-18" in dji["trend"]
-            and "法人" not in dji["trend"], (dji["trend"] or "")[:160])
+    # 資料日只在過期時顯示（本人 2026-11-20 選「過期才顯示」）：這份指數資料有更新到，走勢那一塊不寫資料日
+    j.check(f"{prefix}道瓊：短中長期走勢用道瓊算、沒有法人、不寫資料日", dji["trend"] is not None and dji["trend"] != start["trend"]
+            and "資料日" not in dji["trend"] and "法人" not in dji["trend"], (dji["trend"] or "")[:160])
     j.check(f"{prefix}道瓊：不造成橫向捲動", dji["noScroll"])
     page.locator(".chart-workspace").screenshot(path=str(OUT / f"{prefix}2-dji.png"))
     if prefix.startswith("desktop"):

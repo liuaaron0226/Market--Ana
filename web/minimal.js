@@ -449,7 +449,12 @@
     const trend = index ? foreignTrend(index) : packaged && packaged.schema === 'market-trend/v1' ? packaged : localMarketTrend();
     renderedTrend = trend;
     if (!els.trendDate || !els.trendRows) return;
-    els.trendDate.textContent = `${index ? `${index.name} · ` : ''}資料日 ${(trend && trend.data_date) || (index ? '—' : A.meta.cutoff_date) || '—'}`;
+    // 資料日只在過期時顯示（本人 2026-11-20 選「過期才顯示」）：台股是比行情資料日舊；國外指數是最近一次沒更新到。
+    const trendDay = trend && trend.data_date;
+    const indexFetch = index && indexPayloads.get(index.key).fetch;
+    const trendStale = index ? Boolean(indexFetch && !indexFetch.ok) : Boolean(trendDay && A.meta.cutoff_date && trendDay < A.meta.cutoff_date);
+    els.trendDate.textContent = trendStale && trendDay ? `資料日 ${trendDay}` : '';
+    els.trendDate.hidden = !els.trendDate.textContent;
     // 每一票與最上面那一句由 trend-votes.js 讀好，畫面由 trend-matrix.js 畫；同一份資料重複叫不會重畫
     window.TrendMatrix.render(els.trendSection, trend ? window.TrendVotes.read(trend) : null);
   }
@@ -539,7 +544,9 @@
     if (index) {
       const payload = indexPayloads.get(index.key);
       const lastDay = lastCandle ? String(lastCandle.t).slice(0, 10) : '—';
-      chartNote(`${periodLabels[period]} · 資料截至 ${lastDay}${index.zone === 'us' ? '（美東）' : ''}${payload.fetch && !payload.fetch.ok ? '・最近一次沒更新到' : ''}`);
+      // 最近一次沒更新到（資料過期）時要讓人看到，其餘時候不顯示
+      const indexStale = Boolean(payload.fetch && !payload.fetch.ok);
+      chartNote(`${periodLabels[period]} · 資料截至 ${lastDay}${index.zone === 'us' ? '（美東）' : ''}${indexStale ? '・最近一次沒更新到' : ''}`, indexStale);
       els.chartSummary.textContent = `${index.name}${periodLabels[period]}，共 ${candles.length} 根。`;
       requestAnimationFrame(updateOverlayControls);
       return;
@@ -2318,7 +2325,12 @@
       setChipState('error', '籌碼選股暫時無法讀取，請稍後再試。');
       return;
     }
-    chip.meta.textContent = view.catalog.data_date ? `資料日 ${view.catalog.data_date}` : '尚無已發布結果';
+    // 資料日只在過期（比最新行情舊）時顯示（本人 2026-11-20 選「過期才顯示」）
+    const catalog = view.catalog;
+    const screensStale = catalog.status === 'stale'
+      || Boolean(catalog.data_date && catalog.latest_market_data_date && catalog.data_date < catalog.latest_market_data_date);
+    chip.meta.textContent = !catalog.data_date ? '尚無已發布結果' : screensStale ? `資料日 ${catalog.data_date}` : '';
+    chip.meta.hidden = !chip.meta.textContent;
     // 九頁都列在第一枚小鍵的選單裡（本人 11-15 改成收進選單）：可算的排前面，沒有名單的（定義未公開、無合法資料來源）集中在後面一組。
     const listable = tab => ['rank', 'streak', 'relative_value'].includes(tab.kind);
     const ordered = [...view.catalog.tabs.filter(listable), ...view.catalog.tabs.filter(tab => !listable(tab))];
@@ -2365,7 +2377,9 @@
     }
     const latest = payload.latest;
     rot.block.dataset.state = payload.status;
-    rot.meta.textContent = `資料日 ${latest.date}`;
+    // 資料日只在過期時顯示（本人 2026-11-20 選「過期才顯示」）
+    rot.meta.textContent = payload.status === 'stale' ? `資料日 ${latest.date}` : '';
+    rot.meta.hidden = !rot.meta.textContent;
     const stale = payload.status === 'stale' ? `已過期（最新行情 ${payload.latest_market_data_date}），僅供查看舊結果。` : '';
     rot.status.textContent = `${stale}${latest.summary ? latest.summary.text : ''}`;
     // 各產業強勢股：地形下面一份名單，點樓的明細裡也列那個產業的（這一批沒有就兩邊都不出現）
@@ -2436,9 +2450,15 @@
     return item;
   };
 
+  // 資料日只在過期（比首頁的行情資料日舊）時顯示（本人 2026-11-20 選「過期才顯示」）；沒有日期時不寫「待更新」這種字。
+  const staleDate = dataDate => {
+    const latest = document.getElementById('analysisDate')?.title || '';
+    return dataDate && latest && dataDate < latest ? `資料日 ${dataDate}` : '';
+  };
+
   function showUnproduced(dataDate = null) {
     card.dataset.state = 'unproduced';
-    date.textContent = dataDate ? `資料日 ${dataDate}` : '資料日待更新';
+    date.textContent = staleDate(dataDate);
     conclusion.textContent = '今日未產生';
     preview.replaceChildren();
     marketPoints.replaceChildren();
@@ -2452,7 +2472,7 @@
     if (!market && !flow) { showUnproduced(payload.data_date); return; }
 
     card.dataset.state = 'generated';
-    date.textContent = payload.data_date ? `資料日 ${payload.data_date}` : '資料日待更新';
+    date.textContent = staleDate(payload.data_date);
     conclusion.textContent = market?.conclusion || '大盤解讀今日未產生';
     const signals = Array.isArray(flow?.signals) ? flow.signals : [];
     preview.replaceChildren(...signals.slice(0, 2).map(item => listItem(item.text)));

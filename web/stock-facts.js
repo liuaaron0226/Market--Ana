@@ -202,9 +202,12 @@
     const dates = [...new Set(rows.map(row => row.data_date))];
     const borrow = rows.find(row => row.name === '借券');
     const main = rows.find(row => row.name !== '借券') || rows[0];
-    // 這一塊固定標資料日（票面要求；融資融券多半比法人晚一天）。
+    // 和這一檔的資料日不同才標（融資融券多半比法人晚一天，那時照樣標）；同一天就不重複寫（本人 2026-11-20 選「過期才顯示」）。
     const text = dates.length > 1 && borrow ? `資料日 ${main.data_date}（借券 ${borrow.data_date}）` : `資料日 ${dates[0]}`;
-    return [el('p', 'sf-date num', text), table];
+    // 那一行留在頁面裡只是藏起來：融資維持率那張卡（stock-signals.js marginBoard）靠它判斷同一天不重複標。
+    const line = el('p', 'sf-date num', text);
+    line.hidden = dates.every(day => day === facts.data_date);
+    return [line, table];
   }
 
   // ---------- 月營收圖（本人 2026-11-17：「營收長條圖 x 軸我不知道是什麼，看不懂圖」） ----------
