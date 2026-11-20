@@ -578,6 +578,43 @@ class ImpactTests(unittest.TestCase):
         self.assertEqual(d1.query("SELECT summary FROM market_news_runs")[0]["summary"], "台股今天下跌，主要是外資賣超。")
         self.assertNotIn("effect", d1.scripts[-1])
 
+    def test_a_condition_about_others_selling_is_fine_in_prepare(self):
+        self.assertIsNone(mn.text_problem("prepare", "如果外資持續賣出，就先檢查權值股佔多少"))
+        self.assertIsNotNone(mn.text_problem("prepare", "如果外資持續賣出，就跟著賣出"))
+
+    def test_fields_everyone_sees_never_talk_about_the_readers_own_stocks(self):
+        # 站主的自選與庫存只有站主能看；模型拿到 my_stocks 後可能在大家都看得到的欄位寫「你的台積電」
+        for field in ("effect", "conditions", "prepare", "reason", "market_commentary"):
+            self.assertIsNotNone(mn.text_problem(field, "如果你的台積電跌破月線，就先檢查比重"), field)
+        self.assertIsNone(mn.text_problem("owner_effect", "你的台積電是外資賣超的重心"))
+        self.assertIsNone(mn.text_problem("effect", "台積電被外資賣最多，記憶體庫存去化也變慢"), "點名公司、講庫存去化不算")
+
+        def change(kind, output, _n):
+            for row in output.get("items", [])[:1]:
+                row["effect"] = "你手上的台積電會先被賣"
+            if kind == "summary":
+                output["conditions"] = ["你的自選股是否跌破月線", "外資是否連續賣超"]
+        d1 = D1()
+        report, _, _ = run(d1, ask=Reply(change))
+        self.assertFalse(d1.query("SELECT 1 FROM market_news_items WHERE effect LIKE '%你%'"))
+        self.assertEqual(d1.query("SELECT conditions FROM market_news_runs")[0]["conditions"], '["外資是否連續賣超"]')
+        self.assertEqual(report["diagnosis"]["points"]["text_rejected"], {"effect": 1, "conditions": 1})
+        for rules in (mn.ITEM_RULES, mn.SUMMARY_RULES):
+            self.assertIn("其他欄位是所有人都看得到的", rules)
+
+    def test_a_rewrite_that_loses_items_does_not_replace_the_first_answer(self):
+        def change(kind, output, n):
+            if kind == "items" and n == 1:
+                output["items"][0]["prepare"] = ["如果跌破月線就賣出"]
+            if kind == "items" and n == 2:
+                del output["items"][1:]          # 重寫時只回了一則
+        d1 = D1()
+        report, _, ask = run(d1, ask=Reply(change))
+        self.assertEqual(ask.kinds.count("items"), 2)
+        self.assertEqual(report["diagnosis"]["calls"]["items1"]["kept"], 4, "用第一次的回答，只丟那一句")
+        self.assertEqual(d1.query("SELECT count(*) AS n FROM market_news_items WHERE reason <> ''")[0]["n"], 4)
+        self.assertEqual(d1.query("SELECT count(*) AS n FROM market_news_items WHERE prepare IS NOT NULL")[0]["n"], 3)
+
     def test_rules_ask_for_the_four_parts_and_forbid_trade_orders(self):
         for rules in (mn.ITEM_RULES, mn.WATCH_RULES, mn.SUMMARY_RULES):
             for word in ("effect", "conditions", "prepare", "如果…就…", "都不能寫買賣指令或個人化投資建議"):

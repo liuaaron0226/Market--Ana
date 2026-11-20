@@ -333,6 +333,7 @@ GLOSSARY = """用台灣股市投資人習慣的說法寫，不要直譯：限空
 # 新寫法的三段（本人 2026-11-20：「不要只說明事件，要講影響＋該做的準備」）。三種提示共用同一條界線：不寫買賣指令。
 NO_ORDERS = """effect、conditions、prepare 都不能寫買賣指令或個人化投資建議：不要出現「建議買進」「可以加碼」「應該減碼」
 「逢低布局」「停損出場」這類叫人下單的話；prepare 只寫情境與要先確認、檢查、想好的事。
+這幾段裡的數字只能來自 INPUT，不要編。
 """
 _POINT_LISTS = """- conditions：接下來要看的條件，0～2 個，每個一句（30 字內），寫「看什麼有沒有發生」
   （例如「外資是否連續賣超」「金管會是否公布正式名單」）；沒有值得看的就給空陣列。
@@ -341,6 +342,7 @@ _POINT_LISTS = """- conditions：接下來要看的條件，0～2 個，每個�
 """
 _OWNER_POINT = """- owner_effect：INPUT 的 my_stocks 是讀者自己的自選股與庫存。會直接影響其中哪幾檔時，寫一句點名
   （用 my_stocks 裡的名稱）並說怎麼影響；沒有直接關係就不要寫這個欄位，不要硬湊。
+  其他欄位是所有人都看得到的：不要寫「你的」「你手上」，也不要因為某一檔在 my_stocks 裡才提它。
 """
 ITEM_POINTS = """- effect：一句（60 字內）講影響——影響到誰（哪個市場、哪個族群或哪幾檔權值股）、多大，為什麼是利多或利空。
 """ + _OWNER_POINT + _POINT_LISTS + """- impact 是 "1" 的消息可以只寫 effect，conditions 與 prepare 給空陣列。
@@ -441,6 +443,8 @@ _ACTIONS = r"買進|買入|賣出|加碼|減碼|進場|出場|承接|布局|佈�
 _ADVICE = re.compile(rf"(?:建議|不妨|應該|可以).{{0,3}}(?:{_ACTIONS})")
 _ORDER_WORDS = re.compile(_ACTIONS)
 _CONDITIONAL = re.compile(r"如果|若|一旦|萬一|要是")
+# 站主的自選與庫存只有站主自己能看：大家都看得到的欄位裡不能對著讀者講「你的股票」（那一句只能在 owner_effect）。
+_READER = re.compile(r"你|您|自選|讀者|my_stocks")
 POINT_FIELDS = ("effect", "owner_effect", "conditions", "prepare")
 POINT_LABELS = {"market_commentary": "總結", "reason": "發生什麼", "effect": "影響", "owner_effect": "對讀者股票的影響",
                 "conditions": "要看的條件", "prepare": "準備"}
@@ -448,9 +452,14 @@ Problem = tuple[str, str, str]   # (欄位, 退回的原因, 被退回的那一�
 
 
 def text_problem(field: str, text: str) -> str | None:
-    """模型寫的一句話能不能上站：不能有買賣指令；prepare 還要是「如果…就…」的情境。"""
-    if _ADVICE.search(text) or (field == "prepare" and _ORDER_WORDS.search(text)):
+    """模型寫的一句話能不能上站：不能有買賣指令；prepare 還要是「如果…就…」的情境；
+    owner_effect 以外的欄位（大家都看得到）不能對著讀者講他自己的股票。"""
+    # prepare 的「如果外資持續賣出」是在講條件；只有「就」後面要讀者做的事不能是買賣
+    todo = text.split("就", 1)[-1] if field == "prepare" else ""
+    if _ADVICE.search(text) or _ORDER_WORDS.search(todo):
         return "不能寫買賣指令或投資建議"
+    if field != "owner_effect" and _READER.search(text):
+        return "這一段所有人都看得到，不能提到讀者自己的股票（只能寫在 owner_effect）"
     if field == "prepare" and not _CONDITIONAL.search(text):
         return "準備要用「如果…就…」寫"
     return None
@@ -476,7 +485,7 @@ def points(entry: Mapping[str, Any], problems: list[Problem] | None = None,
     out: dict[str, Any] = {}
 
     def passed(field: str, value: Any, limit: int) -> str | None:
-        text = _text(value, limit)
+        text = whole_sentences(_text(value, 2000), limit)   # 太長就退到最後一個句號，不留半句
         reason = text_problem(field, text) if text else None
         if reason and problems is not None:
             problems.append((field, reason, text))
@@ -610,6 +619,11 @@ def validate_watch(output: Any, watch: Sequence[Mapping[str, Any]], counts: dict
         mark = _mark(entry)
         if not mark and not unrelated:
             continue
+        advice = text_problem("reason", mark["reason"]) if mark and not unrelated else None
+        if advice:   # 這一則先不記：下一輪會再判一次
+            if problems is not None:
+                problems.append(("reason", advice, mark["reason"]))
+            continue
         used.add(entry["id"])
         base = {"code": source["code"], "translated": _translated(source["title"])}
         if unrelated:
@@ -740,7 +754,8 @@ def _point_columns(row: Mapping[str, Any], fields: Sequence[str]) -> tuple[str, 
 
 
 def marks_sql(marks: Sequence[Mapping[str, Any]], *, judged_by: str, now: str, point_columns: bool = True) -> list[str]:
-    extra = [_point_columns(row, ("effect", "conditions", "prepare") if point_columns else ()) for row in marks]
+    fields = tuple(field for field in POINT_FIELDS if field != "owner_effect") if point_columns else ()   # 判讀是大家共用的
+    extra = [_point_columns(row, fields) for row in marks]
     return ["INSERT OR REPLACE INTO stock_news_marks (code, link, relevant, kind, tone, impact, title, translated, reason, "
             f"judged_by, judged_at{names}) VALUES ("
             + ", ".join([_q(row["code"]), _q(row["link"]), str(int(row["relevant"])), _q(row["kind"]), _q(row["tone"]),
@@ -807,11 +822,11 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
     stock_batches = [owner_watch[start:start + BATCH_ITEMS] for start in range(0, len(owner_watch), BATCH_ITEMS)]
 
     def problems_of(validate, *args, **kwargs):
-        """這一批回答裡被文字檢查退回的句子（買賣指令、準備不是「如果…就…」）。"""
+        """這一批回答裡被文字檢查退回的句子（買賣指令、準備不是「如果…就…」），和留得下來的有幾則。"""
         def check(output):
             found: list[Problem] = []
-            validate(output, *args, **kwargs, problems=found)
-            return found
+            kept = validate(output, *args, **kwargs, problems=found)
+            return found, len(kept) if isinstance(kept, list) else int(bool(kept))
         return check
 
     jobs = [(f"items{index + 1}", items_prompt(batch, my_stocks), ITEMS_SCHEMA, problems_of(validate_items, batch, my_stocks=my_stocks))
@@ -825,9 +840,10 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
 
     def call(job):
         """一次呼叫沒拿到結果就再試一次；拿到了但有句子被文字檢查退回，也再問一次並把退回的原因告訴它。
-        兩種合計 CALL_ATTEMPTS 次；最後一次還有被退回的句子，就只丟那幾句（validate_* 會處理）。"""
+        兩種合計 CALL_ATTEMPTS 次；最後一次還有被退回的句子，就只丟那幾句（validate_* 會處理）。
+        重問的回答留得下來的比前一次少（少回幾則、整份壞掉）就用前一次的：一句不合格不該賠掉整批。"""
         name, text, schema, check = job
-        suffix, usable = "", None
+        suffix, usable, usable_size = "", None, -1
         for attempt in range(1, CALL_ATTEMPTS + 1):
             attempts[name] = attempt
             try:
@@ -836,13 +852,14 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
                 status, output, note = type(error).__name__, None, str(error)[:200]
             if status != "ok":
                 continue
-            usable = (status, output, note)
-            found = check(coerce_output(output))
+            found, size = check(coerce_output(output))
+            if size >= usable_size:
+                usable, usable_size = (status, output, note), size
             if not found or attempt == CALL_ATTEMPTS:
                 break
             suffix = retry_note(found[0])
             text_retries[name] = f"{found[0][0]}：{found[0][1]}"
-        if status != "ok" and usable:   # 重問那一次壞了：用前一次的回答（被退回的句子照樣只丟那幾句）
+        if usable:   # 重問那一次壞了或變差：用前一次的回答（被退回的句子照樣只丟那幾句）
             status, output, note = usable
         return name, status, coerce_output(output), note
 
@@ -884,7 +901,7 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
         summary = validate_summary(output, my_stocks, found) if status == "ok" else None
         count_text(found)
         if status == "ok" and not summary and found and found[0][0] == "market_commentary":
-            status, note = "not_a_summary", found[0][2]
+            status, note = ("not_a_summary" if not is_summary(found[0][2]) else "summary_rejected"), found[0][2]
         calls["summary"] = {"status": status, "attempts": attempts.get("summary", 1),
                             **({"note": str(note)[:300]} if note and status != "ok" else {}),
                             **({"text_retry": text_retries["summary"]} if "summary" in text_retries else {})}
@@ -897,7 +914,9 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
     marks: dict[str, list[dict[str, Any]]] = {"owner": owner_marks, "friend": []}
     status = "ok" if classified else next((r["status"] for r in calls.values() if r["status"] != "ok"), "no_items")
     note = ""
-    with_points = lambda rows, field: sum(1 for row in rows if row.get(field))  # noqa: E731
+    def with_points(rows, field):
+        return sum(1 for row in rows if row.get(field))
+
     diagnosis = {"calls": calls, "items_kept": len(classified), "rejected": rejected,
                  "summary_chars": len((summary or {}).get("summary") or ""),
                  # 新寫法寫成幾則（上線後對帳用）：有影響、有條件、有準備、有點名站主股票的各幾則；被文字檢查丟掉的句子各幾句
@@ -925,7 +944,9 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
             except Exception as error:  # noqa: BLE001 — 一位朋友失敗不影響別人
                 friend_status, friend_output, friend_note = type(error).__name__, None, ""
             if friend_status == "ok":
-                marks["friend"] += validate_watch(coerce_output(friend_output), piece)
+                found = []   # 朋友的金鑰不重問（額度是朋友的）：被退回的句子只丟掉、照樣計數
+                marks["friend"] += validate_watch(coerce_output(friend_output), piece, None, found)
+                count_text(found)
                 if friend_note:
                     notes.append(friend_note)
             else:

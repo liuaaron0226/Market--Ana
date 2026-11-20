@@ -45,7 +45,8 @@ const json = (status, body) => new Response(JSON.stringify(body), {
 });
 const isoSeconds = (ms) => new Date(ms).toISOString().slice(0, 19) + "Z";
 const missingTable = (error) => /no such table/i.test(String(error?.message));
-const missingColumn = (error) => /no such column/i.test(String(error?.message));
+// 0033 還沒套時缺的就是這幾欄；別的欄名寫錯照樣丟錯，不要靜靜降級
+const missingPointColumn = (error) => /no such column: m\.(effect|conditions|prepare)/i.test(String(error?.message));
 const parse = (text, fallback) => { try { return JSON.parse(text); } catch { return fallback; } };
 
 // 新寫法的三段（本人 2026-11-20「影響＋該做的準備」；0033）：影響、要看的條件、準備。沒有的欄位不回，畫面就照舊。
@@ -90,7 +91,7 @@ async function mine(db, email, run) {
       rows = (await select(marks)).results;
       break;
     } catch (error) {
-      if (!marks || !(missingColumn(error) || missingTable(error))) throw error;
+      if (!(marks === 2 && missingPointColumn(error)) && !(marks > 0 && missingTable(error))) throw error;
     }
   }
   // 中央社整批對到的（cna-*）有些只在前言提到公司：標題沒點名就不算。
@@ -106,7 +107,7 @@ async function mine(db, email, run) {
       if (!STOCK_KINDS.includes(row.kind) || (row.impact === 1 && age > MINOR_AFTER_MS)) continue;
       // 個股判讀是大家共用的（沒有點名站主的那一句），所以這裡不分站主與朋友
       items.push({ ...base, kind: row.kind, tone: row.tone, impact: row.impact, title: row.mark_title, translated: Boolean(row.translated), reason: row.reason,
-        ...points({ ...row, owner_effect: null }, false) });
+        ...points(row, false) });
     } else if (row.relevant === undefined || row.relevant === null) {
       // 還沒判讀（沒有金鑰的朋友、剛抓到的）：近兩天的標題照列，同一個標題只列一次。
       const key = `${row.code}|${row.title.replace(/\s+/g, "")}`;
