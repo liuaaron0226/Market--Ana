@@ -370,6 +370,72 @@ jobs:
             echo "本次沒有新發布，盯項不重查"
           fi
 
+      # 消息型盯項每日檢查（本人 2026-11-20，.scratch/impact-watch 票 05）：條件是「某件事有沒有被報導出來」的那幾筆，
+      # 把建立（或上次判過）之後才抓到、對得上關鍵詞的新聞交給 Flash（思考高，沿用首頁消息的模型設定）判成立／否定／還沒。
+      # 接在數字型的檢查後面、推播前面，當晚有結果當晚就推播。沒有對得上的新聞就不呼叫模型；有的話所有盯項合成一次呼叫
+      # （沒成功再試一次），所以一天最多 2 次。agy 與登入檔沿用白話分析那幾步準備好的；白話分析關著時在這裡自己準備
+      # （那時設定頁的 AI 模型沒有讀，AI_NEWS_* 是空的，照 gemini_models.py 的預設：Flash、思考高）。
+      # 任何一步失敗都不擋發布：那一天當成「還沒」，下一個交易日再判。
+      - name: 消息型盯項：準備 agy（白話分析沒準備時才下載、還原登入檔）
+        id: impact_news_auth
+        if: success() && steps.day.outputs.dry_run == ''
+        continue-on-error: true
+        env:
+          AGY_LOGIN_BUNDLE: ${{ secrets.AGY_LOGIN_BUNDLE }}
+        run: |
+          sync=$(python -c "import json,sys; print(json.load(open(sys.argv[1], encoding='utf-8'))['sync_state'])" "${{ runner.temp }}/daily-result.json")
+          if [ "$sync" != "True" ] && [ "${{ inputs.redeploy }}" != "true" ]; then echo "本次沒有新發布，不用準備"; exit 0; fi
+          if [ ! -x "$RUNNER_TEMP/agy/antigravity" ]; then
+            mkdir -p "$RUNNER_TEMP/agy" && cd "$RUNNER_TEMP/agy"
+            curl -fsSL -o agy.tgz https://github.com/google-antigravity/antigravity-cli/releases/download/1.5.3/agy_cli_linux_x64.tar.gz
+            echo "1b4850599cce73a17f94ffb422df3bf9531531b77dbddc40c1a435e0c2c16807  agy.tgz" | sha256sum -c
+            tar xzf agy.tgz
+            ./antigravity --version
+          fi
+          if [ -z "$(ls -A "$RUNNER_TEMP/agy-home" 2>/dev/null)" ]; then
+            if [ -z "$AGY_LOGIN_BUNDLE" ]; then echo "::warning::缺少 secret AGY_LOGIN_BUNDLE，消息型盯項今天不判"; exit 1; fi
+            home="$RUNNER_TEMP/agy-home"; mkdir -p "$home"; chmod 700 "$home"
+            printf '%s' "$AGY_LOGIN_BUNDLE" | tr -d ' \r\n' | base64 -d | tar xzf - -C "$home"
+          fi
+
+      - name: 消息型盯項每日檢查：新抓到、對得上關鍵詞的新聞交給 Flash 判斷（只在發布成功時）
+        if: success() && steps.day.outputs.dry_run == ''
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          AI_NEWS_MODEL: ${{ env.AI_NEWS_MODEL }}
+          AI_NEWS_EFFORT: ${{ env.AI_NEWS_EFFORT }}
+          DAY: ${{ steps.day.outputs.date }}
+        run: |
+          sync=$(python -c "import json,sys; print(json.load(open(sys.argv[1], encoding='utf-8'))['sync_state'])" "${{ runner.temp }}/daily-result.json")
+          if [ "$sync" = "True" ] || [ "${{ inputs.redeploy }}" = "true" ]; then
+            set -o pipefail
+            python impact_watch_news.py check --analysis data/daily-update-state/last-market-pack/analysis-data.js \
+              --agy-bin "$RUNNER_TEMP/agy/antigravity" --agy-home "$RUNNER_TEMP/agy-home" \
+              --report "data/daily-update-log/impact-watch-news/$DAY.json" | tee "$RUNNER_TEMP/impact-watch-news.json"
+          else
+            echo "本次沒有新發布，消息型盯項不重查"
+          fi
+
+      # 設定頁的 Gemini 用量：這一次實際呼叫幾次（報告的 model_calls）就記幾筆，任務名稱 impact-watch（設定頁「盯項讀新聞」），
+      # 模型名稱照報告裡記的那一個。
+      # 沒有呼叫就不記。agy -p /usage 由 CLI 自己回答、不耗額度。
+      - name: 消息型盯項：記進 Gemini 用量（設定頁用；失敗不影響每日更新）
+        if: success() && steps.day.outputs.dry_run == ''
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          export HOME="$RUNNER_TEMP/agy-home"
+          python impact_watch_news.py usage --report "$RUNNER_TEMP/impact-watch-news.json" --run-id "$GITHUB_RUN_ID" \
+            --agy-bin "$RUNNER_TEMP/agy/antigravity" --sql-output "$RUNNER_TEMP/impact-watch-usage.sql"
+          if [ -s "$RUNNER_TEMP/impact-watch-usage.sql" ]; then
+            cd cloud
+            npx --yes wrangler@4 d1 execute market-ana-accounts --remote --file "$RUNNER_TEMP/impact-watch-usage.sql"
+          fi
+
       # 盯項有結果時推播到站主的裝置（本人 2026-11-20，.scratch/impact-watch 票 04）：接在每日檢查後面，每個盯項只送一次
       # （先在 push_sent_at 認領再送；沒有任何裝置收到的下次再試），到期收掉的不送，朋友不送。金鑰沿用關注推播放在
       # GitHub 的那一組。沒有金鑰或沒有裝置時印 waiting，不擋後面的步驟。沒有新發布的那幾次也跑：上次沒送成的在這裡補送
@@ -477,4 +543,4 @@ jobs:
 
       - name: 清除 agy 登入檔與執行檔
         if: always()
-        run: rm -rf "$RUNNER_TEMP/agy-home" "$RUNNER_TEMP/agy" "$RUNNER_TEMP/gemini-usage.sql" "$RUNNER_TEMP/gemini-usage-legacy.sql" "$RUNNER_TEMP/ai-models.json" "$RUNNER_TEMP/ai-model-read.sql"
+        run: rm -rf "$RUNNER_TEMP/agy-home" "$RUNNER_TEMP/agy" "$RUNNER_TEMP/gemini-usage.sql" "$RUNNER_TEMP/gemini-usage-legacy.sql" "$RUNNER_TEMP/ai-models.json" "$RUNNER_TEMP/ai-model-read.sql" "$RUNNER_TEMP/impact-watch-usage.sql"

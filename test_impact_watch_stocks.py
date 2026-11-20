@@ -428,6 +428,25 @@ class StockNewsRunTests(unittest.TestCase):
                          ("外資連續賣超達 4 天", 3, "2026-11-19-close#summary", None), "那一句像買賣指令：只丟那一句，盯項照建")
         self.assertEqual(report["diagnosis"]["points"]["text_rejected"], {"track": 1})
 
+    def test_one_shift_builds_market_stock_and_news_type_items_together(self):
+        """票 05 併進來之後：同一班裡大盤的數字型、等消息的（kind='news'）、站主個股的三種一起建，各自的可見範圍不變。"""
+        d1 = StockNewsD1()
+
+        def change(kind, output, _asked):
+            if kind == "summary":
+                output.update(track=[{"id": "below_ma20", "why": "月線"}], my_track=[{"code": "2330", "id": "below_ma60", "why": WHY}],
+                              wait={"what": "金管會公布正式名單", "keywords": ["金管會", "正式名單"]})
+            elif kind == "watch":
+                for entry in output["watch"]:
+                    entry["track"] = [{"id": "below_ma20", "why": WHY}]
+        report, _, _ = tmn.run(d1, ask=tmn.Reply(change))
+        rows = {(row["subject"], row["kind"], row["condition_key"] if row["kind"] == "numeric" else "wait"): row["visibility"]
+                for row in d1.watch_items()}
+        self.assertEqual(rows, {("market", "numeric", "below_ma20"): "all", ("market", "news", "wait"): "all",
+                                ("2330", "numeric", "below_ma60"): "owner", ("2330", "numeric", "below_ma20"): "owner"})
+        self.assertEqual(report["diagnosis"]["watch"]["news"], {"written": 1, "same_event": 0})
+        self.assertNotIn(WHY, d1.everything_shared())
+
     def test_minor_or_unrelated_stock_news_starts_nothing(self):
         d1 = StockNewsD1()
 

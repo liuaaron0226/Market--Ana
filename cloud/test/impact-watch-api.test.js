@@ -54,6 +54,25 @@ test("首頁直白分析挑的條件：出處寫「直白分析」（票 07）",
   assert.deepEqual(body.items.find((item) => item.id === "above_ma20").source, { block: "直白分析", date: "2026-11-18" });
 });
 
+test("消息型（票 05）：類型標 news；有結果時帶依據的那一則新聞，還在盯的與數字型都不帶", async () => {
+  const proof = { title: "美國公布晶片出口管制清單", link: "https://example.com/list", source: "路透" };
+  await add(env.DB, "news:waiting", { kind: "news", label: "央行公布理監事會議結果", params: JSON.stringify({ keywords: ["央行", "理監事"], since: "2026-11-18T06:05:00Z" }) });
+  await add(env.DB, "news:met", { kind: "news", label: "美方公布正式的出口管制清單", status: "met", result_date: "2026-11-20",
+    result_note: "成立：美國商務部公布清單，納入多家晶片廠。", show_until: "2026-11-25", days_left: null,
+    params: JSON.stringify({ keywords: ["出口管制", "清單"], since: "2026-11-18T06:05:00Z", evidence: proof }) });
+  await add(env.DB, "news:odd", { kind: "news", label: "連結不是網址的", status: "failed", result_date: "2026-11-20", result_note: "否定：取消了。",
+    show_until: "2026-11-25", days_left: null, params: JSON.stringify({ evidence: { title: "x", link: "javascript:alert(1)" } }) });
+  for (const email of [OWNER, FRIEND]) {
+    const items = Object.fromEntries((await (await req("/api/impact-watch", { email })).json()).items.map((item) => [item.id, item]));
+    assert.equal(items["news:waiting"].kind, "news");
+    assert.equal(items["news:waiting"].result, undefined);
+    assert.deepEqual(items["news:met"].result, { date: "2026-11-20", note: "成立：美國商務部公布清單，納入多家晶片廠。", evidence: proof });
+    assert.deepEqual(items["news:odd"].result, { date: "2026-11-20", note: "否定：取消了。" }, "連結不是 http(s) 的不回");
+    assert.equal(items.foreign_sell_streak.result.evidence, undefined, "數字型沒有依據的新聞");
+    assert.ok(Object.values(items).every((item) => !("params" in item) && !("keywords" in item)), "參數不送到瀏覽器");
+  }
+});
+
 test("盯著的與剛有結果的都回：有結果的在前，盯著的依影響力、再依新舊", async () => {
   const r = await req();
   assert.equal(r.status, 200);

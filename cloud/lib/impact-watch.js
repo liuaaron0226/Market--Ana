@@ -4,6 +4,8 @@
 // - /api/impact-watch：盯著的，和有結果、首頁還留著的（結果日後第 3 個交易日以前）。
 //   對象是大盤的所有獲准使用者都看得到；對象是股票的（站主的自選股與庫存，票 06）只回給站主——
 //   看 visibility 也看對象，排程就算把個股盯項標錯成所有人可見，這裡也不會回給別人。
+// - 消息型（kind='news'，票 05）：由模型讀後續新聞判斷，有結果時多回依據的那一則新聞（標題、連結、來源；
+//   impact_watch_news.py 存在 params.evidence）。
 
 import { impactWatchVisible } from "./release-policy.js";
 
@@ -36,15 +38,26 @@ function stockName(params) {
   } catch { return ""; }
 }
 
+// 消息型有結果時依據的那一則新聞；連結只收 http(s)（這一欄是排程寫的，仍然不直接信）
+function evidence(row) {
+  if (row.kind !== "news") return null;
+  try {
+    const found = JSON.parse(row.params)?.evidence;
+    if (!found || typeof found.title !== "string" || !found.title.trim() || !/^https?:\/\//i.test(String(found.link || ""))) return null;
+    return { title: found.title, link: found.link, ...(typeof found.source === "string" && found.source ? { source: found.source } : {}) };
+  } catch { return null; }
+}
+
 function shape(row) {
   const resolved = RESOLVED.includes(row.status);
   const name = row.subject === MARKET ? "" : stockName(row.params);
+  const basis = resolved ? evidence(row) : null;
   return {
     id: row.id, subject: row.subject, ...(name ? { subject_name: name } : {}), kind: row.kind, label: row.label, impact: row.impact, status: row.status,
     ...(row.note ? { note: row.note } : {}),
     prepare: sentences(row.prepare),
     source: { block: BLOCKS[row.source_block] || "", date: row.source_date },
-    ...(resolved ? { result: { date: row.result_date, note: row.result_note || "" } }
+    ...(resolved ? { result: { date: row.result_date, note: row.result_note || "", ...(basis ? { evidence: basis } : {}) } }
       : Number.isInteger(row.days_left) ? { days_left: row.days_left } : {}),
   };
 }

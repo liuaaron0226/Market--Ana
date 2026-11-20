@@ -25,6 +25,7 @@ from urllib.parse import urlencode
 
 import impact_text
 import impact_watch
+import impact_watch_news
 import watch_news as wn
 
 TAIPEI = timezone(timedelta(hours=8))
@@ -314,7 +315,7 @@ _ITEM = {"type": "object", "properties": {
     "kind": {"type": "string", "enum": list(MARKET_KINDS)},
     "impact": {"type": "string", "enum": list(WIRE_IMPACTS)}, "title": {"type": "string"}, "reason": {"type": "string"},
     "effect": {"type": "string"}, "owner_effect": {"type": "string"}, "conditions": _POINTS, "prepare": _POINTS,
-    "track": _PICKS, "my_track": _STOCK_PICKS},
+    "track": _PICKS, "my_track": _STOCK_PICKS, "wait": impact_watch_news.WAIT_SCHEMA},
     "required": ["id", "group", "market", "kind", "tone", "impact", "title", "reason", "effect"]}
 _WATCH = {"type": "object", "properties": {
     "id": {"type": "string"}, "relevant": {"type": "string", "enum": ["yes", "no"]},
@@ -331,7 +332,8 @@ SUMMARY_SCHEMA = {"type": "object", "properties": {
     "conditions": {**_POINTS, "description": "接下來要看的條件，0～2 個"},
     "prepare": {**_POINTS, "description": "先做好的準備，0～2 句「如果…就…」"},
     "track": {**_PICKS, "description": "從 INPUT 的 watchable 用 id 挑要系統替讀者盯的條件，0～2 個"},
-    "my_track": {**_STOCK_PICKS, "description": "從 INPUT 的 my_watchable 替 owner_effect 點名的股票挑條件；沒有就不寫"}},
+    "my_track": {**_STOCK_PICKS, "description": "從 INPUT 的 my_watchable 替 owner_effect 點名的股票挑條件；沒有就不寫"},
+    "wait": {**impact_watch_news.WAIT_SCHEMA, "description": "在等什麼事被報導出來（一句＋關鍵詞）；沒有就不寫"}},
     "required": ["market_commentary", "effect"]}
 WATCH_SCHEMA = {"type": "object", "properties": {"watch": {"type": "array", "items": _WATCH}}, "required": ["watch"]}
 
@@ -364,13 +366,13 @@ _WATCH_PICKS = """- track：INPUT 的 watchable 是系統可以每天替讀者�
   只能挑 watchable 裡有的 id；沒有相關的就給空陣列，不要硬挑。INPUT 沒有 watchable 就不要寫這個欄位。
 """
 ITEM_POINTS = """- effect：一句（60 字內）講影響——影響到誰（哪個市場、哪個族群或哪幾檔權值股）、多大，為什麼是利多或利空。
-""" + _OWNER_POINT + _POINT_LISTS + _WATCH_PICKS + """- impact 是 "1" 的消息可以只寫 effect，conditions、prepare 與 track 給空陣列。
+""" + _OWNER_POINT + _POINT_LISTS + _WATCH_PICKS + impact_watch_news.WAIT_RULE + """- impact 是 "1" 的消息可以只寫 effect，conditions、prepare 與 track 給空陣列。
 """ + NO_ORDERS
 WATCH_POINTS = """- effect：一句（60 字內）講這則對這檔股票的影響——影響營運或股價的哪一塊、多大；relevant 是 no 的不用寫。
 """ + _POINT_LISTS + """- impact 是 "1" 或 relevant 是 no 的可以只寫 effect，conditions 與 prepare 給空陣列。
 """ + NO_ORDERS
 SUMMARY_POINTS = """effect：1～2 句（80 字內），這樣走影響到誰、多大（哪些族群、哪幾檔權值股受影響最多）。
-""" + _OWNER_POINT + _POINT_LISTS + _WATCH_PICKS + NO_ORDERS
+""" + _OWNER_POINT + _POINT_LISTS + _WATCH_PICKS + impact_watch_news.WAIT_RULE + NO_ORDERS
 
 ITEM_RULES = """你是台股投資人的新聞助理。讀 INPUT 的新聞標題與摘要，用繁體中文回答，只回 JSON。
 items：每一則都要回（id 照抄）：
@@ -498,7 +500,7 @@ def _text(value: Any, limit: int) -> str | None:
 _READER = re.compile(r"你|您|自選|讀者|my_stocks")
 POINT_FIELDS = ("effect", "owner_effect", "conditions", "prepare")
 POINT_LABELS = {"market_commentary": "總結", "reason": "發生什麼", "effect": "影響", "owner_effect": "對讀者股票的影響",
-                "conditions": "要看的條件", "prepare": "準備", "track": "要盯的條件的說明"}
+                "conditions": "要看的條件", "prepare": "準備", "track": "要盯的條件的說明", "wait": "在等的消息"}
 Problem = tuple[str, str, str]   # (欄位, 退回的原因, 被退回的那一句)
 
 
@@ -612,6 +614,12 @@ def stock_picks(value: Any, offers: Mapping[str, Mapping[str, Any]] | None, *, c
     return out[:WATCH_PICKS_MAX]
 
 
+def news_wait(entry: Mapping[str, Any], problems: list[Problem] | None = None) -> dict[str, Any]:
+    """模型寫的「在等什麼被報導」（消息型盯項，票 05）→ {"wait": pick}；沒寫或不合格就是空的。"""
+    waiting = impact_watch_news.news_pick(entry, problems, lambda text: text_problem("conditions", text))
+    return {"wait": waiting} if waiting else {}
+
+
 def _mark(entry: Any) -> dict[str, Any] | None:
     """一則的共同欄位檢查：tone、impact、title、reason；不合格回 None。"""
     if not isinstance(entry, Mapping):
@@ -684,6 +692,7 @@ def validate_items(output: Any, items: Sequence[Mapping[str, Any]],
         written = points(entry, problems, my_stocks)
         mine = stock_picks(entry.get("my_track"), stock_offers, named=written.get("owner_effect"), problems=problems, unknown=unknown)
         out.append({**mark, **written, **({"track": picked} if picked else {}), **({"my_track": mine} if mine else {}),
+                    **news_wait(entry, problems),
                     "id": entry["id"], "group": entry["group"], "kind": kind,
                     "market": market or source["market_hint"] or "",
                     "translated": _translated(source["title"]), "source": source["source"], "link": source["link"],
@@ -776,7 +785,8 @@ def validate_summary(output: Any, my_stocks: Mapping[str, str] | None = None,
     picked = watch_picks(output, watchable, problems, unknown)
     written = points(output, problems, my_stocks)
     mine = stock_picks(output.get("my_track"), stock_offers, named=written.get("owner_effect"), problems=problems, unknown=unknown)
-    return {"summary": text, **written, **({"track": picked} if picked else {}), **({"my_track": mine} if mine else {})}
+    return {"summary": text, **written, **({"track": picked} if picked else {}), **({"my_track": mine} if mine else {}),
+            **news_wait(output, problems)}
 
 
 def whole_sentences(text: str | None, limit: int) -> str | None:
@@ -1097,21 +1107,33 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
     diagnosis["watch"] = {"offered": len(watchable), "unknown_ids": unknown_picks,
                           **({"stocks_offered": len(stock_offers)} if stock_offers else {})}
     watch_script = ""
-    if watchable or stock_offers:
-        picks = [{**pick, "impact": row["impact"], "prepare": row.get("prepare"), "source_ref": f"{run_row['run_id']}#{row['id']}"}
-                 for row in stored if row["impact"] >= WATCH_MIN_IMPACT for pick in row.get("track") or []]
-        picks += [{**pick, "impact": SUMMARY_WATCH_IMPACT, "prepare": (summary or {}).get("prepare"),
-                   "source_ref": f"{run_row['run_id']}#summary"} for pick in (summary or {}).get("track") or []]
-        # 站主個股的（票 06）：市場消息與總結點名那一檔時挑的、站主自選的個股新聞挑的。對象是股票代號，
-        # creation_sql 會把它們標成只給站主看；和大盤的一起排上限。
-        picks += [{**pick, "impact": row["impact"], "prepare": row.get("prepare"), "source_ref": f"{run_row['run_id']}#{row['id']}"}
-                  for row in stored if row["impact"] >= WATCH_MIN_IMPACT for pick in row.get("my_track") or []]
-        picks += [{**pick, "impact": SUMMARY_WATCH_IMPACT, "prepare": (summary or {}).get("prepare"),
-                   "source_ref": f"{run_row['run_id']}#summary"} for pick in (summary or {}).get("my_track") or []]
+    major = [row for row in stored if row["impact"] >= WATCH_MIN_IMPACT]
+
+    def sourced(field: str) -> list[dict[str, Any]]:
+        """消息與總結裡的 field（track：一串數字型條件；wait：一個消息型條件）→ 帶上影響力、原本寫的準備與出處。"""
+        found = [(pick, row["impact"], row.get("prepare"), row["id"]) for row in major
+                 for pick in ([row[field]] if isinstance(row.get(field), Mapping) else row.get(field) or [])]
+        value = (summary or {}).get(field)
+        found += [(pick, SUMMARY_WATCH_IMPACT, (summary or {}).get("prepare"), "summary")
+                  for pick in ([value] if isinstance(value, Mapping) else value or [])]
+        return [{**pick, "impact": impact, "prepare": prepare, "source_ref": f"{run_row['run_id']}#{ref}"}
+                for pick, impact, prepare, ref in found]
+
+    picks = sourced("track") if watchable else []
+    # 站主個股的（票 06）：市場消息與總結點名那一檔時挑的、站主自選的個股新聞挑的。對象是股票代號，
+    # creation_sql 會把它們標成只給站主看；和大盤的、消息型的一起排上限。
+    if stock_offers:
+        picks += sourced("my_track")
         picks += [{**pick, "source_ref": f"{run_row['run_id']}#stock:{pick['subject']}"}
                   for pick in owner_stock_picks if pick["impact"] >= WATCH_MIN_IMPACT]
+    waits = sourced("wait")   # 消息型（票 05）：不靠每日檢查存下的數字，沒有數字型清單的那一班也可以寫
+    if watchable or stock_offers or waits:
         try:
-            watch_script, watch_report = impact_watch.creation_sql(picks, impact_watch.active_items(query, trade_date),
+            if waits:
+                # 和已經在盯的是不是同一件事（關鍵詞相同或高度重疊）在 impact_watch_news；上限與到期日和數字型一起算
+                waits, same = impact_watch_news.fresh(waits, impact_watch_news.existing(query, trade_date), now=now)
+                diagnosis["watch"]["news"] = {"written": len(waits) + same, "same_event": same}
+            watch_script, watch_report = impact_watch.creation_sql([*picks, *waits], impact_watch.active_items(query, trade_date),
                                                                    trade_date=trade_date, now=now)
             diagnosis["watch"].update(watch_report)
         except Exception as error:  # noqa: BLE001

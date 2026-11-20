@@ -4,6 +4,7 @@
    點一項看準備與出處，有結果的直接攤開結果與原本寫的準備。沒有盯項或開關 impact_watch_v1 關著時整塊不出現。
    個股盯項（票 06，只有站主拿得到）：清單裡對象寫股票名稱與代號、點了進個股頁；個股頁（#stockWatch）只列那一檔的，
    用同一種列，沒有就不出現——stock.js 每次換股票呼叫 ImpactWatch.show(代號)。
+   「AI 讀新聞」的（票 05）點開有一句提醒；有結果時附它依據的那一則新聞（標題連到原文）。
    資料：/api/impact-watch。 */
 (() => {
   'use strict';
@@ -72,6 +73,17 @@
     if (meta.childNodes.length) head.append(meta);
     const body = el('div', 'iw-body');
     if (item.note) body.append(el('p', '', item.note));
+    const basis = done(item) ? item.result.evidence : null;
+    if (basis && typeof basis.title === 'string' && /^https?:\/\//i.test(basis.link || '')) {
+      const link = el('a', '', basis.title);
+      link.href = basis.link;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      const proof = el('p', 'iw-proof');
+      proof.append(el('b', '', '依據的新聞'), link);
+      if (basis.source) proof.append(el('span', '', basis.source));
+      body.append(proof);
+    }
     const prepare = strings(item.prepare);
     if (prepare.length) {
       const prep = el('p', 'iw-prep');
