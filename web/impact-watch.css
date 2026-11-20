@@ -40,12 +40,23 @@ body.hm dialog.iw-dialog { width: min(520px, calc(100vw - 32px)); }
 .iw-body b { display: block; color: var(--faint); font-weight: 400; font-size: 12px; }
 .iw-body .iw-prep { color: var(--ink); }
 .iw-body .iw-prep span { display: block; }
+/* 對象是個股：名稱與代號，點了進個股頁（票 06）；顏色跟旁邊的字一樣，只多一條底線 */
+.iw-stock { color: var(--dim); text-decoration: underline; text-decoration-color: var(--hair); text-underline-offset: 3px; }
+.iw-stock:hover, .iw-stock:focus-visible { color: var(--ink); }
 /* 有結果的那一項：金色圓點＋結果一句 */
 .iw-item.is-done .iw-left { display: inline-flex; align-items: center; gap: 6px; color: var(--gold); font: 700 12.5px var(--sans); }
 .iw-result { grid-column: 1 / -1; font-size: 13.5px; line-height: 1.6; color: var(--ink); }
 
+/* ---------- 個股頁：這一檔的盯項，接在報價下面同一塊板裡（票 06）；沒有時整塊不出現 ---------- */
+.st-watch { border-top: 1px solid var(--hair); }
+.st-watch[hidden] { display: none; }
+.st-watch .iw-item summary { padding: 11px 0; }
+.st-watch .iw-cond { font-size: 14.5px; }
+.st-watch .iw-cond .iw-kind { display: inline-block; margin-right: 8px; font-weight: 400; vertical-align: 1px; }
+
 /* ---------- 動效（關鍵影格都是 motion-fx.css 現成的） ---------- */
 @media (prefers-reduced-motion: no-preference) {
+  .st-watch > .iw-item { animation: fx-rise 420ms var(--ease-depth) both; animation-delay: calc(var(--i, 0) * 45ms); }
   /* 清單一項一項升上來；點開的內容淡入 */
   dialog[open] .iw-list > .iw-item { animation: fx-rise 420ms var(--ease-depth) both; animation-delay: calc(var(--i, 0) * 45ms); }
   .iw-item[open] > .iw-body { animation: fx-fade 260ms var(--ease-out) both; }

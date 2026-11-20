@@ -305,19 +305,22 @@ def indices(query: Callable[[str], list[dict]], taiex: Callable[[], dict | None]
 _POINTS = {"type": "array", "items": {"type": "string"}}
 _PICKS = {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "string"}, "why": {"type": "string"}},
                                      "required": ["id"]}}
+# 站主自己的股票要盯的條件（票 06）：市場消息與總結用 code＋id 挑；個股新聞那一則本來就是某一檔，只寫 id（_PICKS）
+_STOCK_PICKS = {"type": "array", "items": {"type": "object", "properties": {
+    "code": {"type": "string"}, "id": {"type": "string"}, "why": {"type": "string"}}, "required": ["code", "id"]}}
 _ITEM = {"type": "object", "properties": {
     "id": {"type": "string"}, "group": {"type": "string", "enum": [*GROUPS, "skip"]},
     "market": {"type": "string", "enum": list(WIRE_MARKETS)}, "tone": {"type": "string", "enum": ["up", "down", "flat"]},
     "kind": {"type": "string", "enum": list(MARKET_KINDS)},
     "impact": {"type": "string", "enum": list(WIRE_IMPACTS)}, "title": {"type": "string"}, "reason": {"type": "string"},
     "effect": {"type": "string"}, "owner_effect": {"type": "string"}, "conditions": _POINTS, "prepare": _POINTS,
-    "track": _PICKS},
+    "track": _PICKS, "my_track": _STOCK_PICKS},
     "required": ["id", "group", "market", "kind", "tone", "impact", "title", "reason", "effect"]}
 _WATCH = {"type": "object", "properties": {
     "id": {"type": "string"}, "relevant": {"type": "string", "enum": ["yes", "no"]},
     "kind": {"type": "string", "enum": list(STOCK_KINDS)}, "tone": {"type": "string", "enum": ["up", "down", "flat"]},
     "impact": {"type": "string", "enum": list(WIRE_IMPACTS)}, "title": {"type": "string"}, "reason": {"type": "string"},
-    "effect": {"type": "string"}, "conditions": _POINTS, "prepare": _POINTS},
+    "effect": {"type": "string"}, "conditions": _POINTS, "prepare": _POINTS, "track": _PICKS},
     "required": ["id", "relevant", "kind", "tone", "impact", "title", "reason"]}
 ITEMS_SCHEMA = {"type": "object", "properties": {"items": {"type": "array", "items": _ITEM}}, "required": ["items"]}
 # 欄位不叫 summary：agy 的結構化輸出裡，模型會把 summary 當成「交代自己做了什麼」（2026-11-19 實測兩次）。
@@ -327,7 +330,8 @@ SUMMARY_SCHEMA = {"type": "object", "properties": {
     "owner_effect": {"type": "string", "description": "點名 my_stocks 裡受影響的股票；沒有就不寫"},
     "conditions": {**_POINTS, "description": "接下來要看的條件，0～2 個"},
     "prepare": {**_POINTS, "description": "先做好的準備，0～2 句「如果…就…」"},
-    "track": {**_PICKS, "description": "從 INPUT 的 watchable 用 id 挑要系統替讀者盯的條件，0～2 個"}},
+    "track": {**_PICKS, "description": "從 INPUT 的 watchable 用 id 挑要系統替讀者盯的條件，0～2 個"},
+    "my_track": {**_STOCK_PICKS, "description": "從 INPUT 的 my_watchable 替 owner_effect 點名的股票挑條件；沒有就不寫"}},
     "required": ["market_commentary", "effect"]}
 WATCH_SCHEMA = {"type": "object", "properties": {"watch": {"type": "array", "items": _WATCH}}, "required": ["watch"]}
 
@@ -417,6 +421,25 @@ watch：每一則都要回（id 照抄）：
 不要使用任何工具、不要上網查，只根據 INPUT 直接回答。"""
 
 
+MY_TRACK_RULES = """
+另外，INPUT 的 my_watchable 是系統可以每天替讀者自己的股票盯的條件（code、name；now 是這一檔的現況；conditions 是可以挑的 id 與 name）。
+- my_track：只有 owner_effect 點名了其中某一檔，而且這件事接下來對它的影響和某個條件最有關時才挑，0～2 個：
+  code、id 照抄，why 用一句話（30 字內）說為什麼要盯它。只能挑那一檔 conditions 裡有的 id；沒有相關的就不要寫這個欄位，不要硬挑。
+  why 不能寫買賣指令。"""
+STOCK_TRACK_RULES = """
+另外，INPUT 的 stock_watchable 是系統可以每天替這幾檔股票盯的條件（code；now 是那一檔的現況；conditions 是可以挑的 id 與 name）。
+- track：relevant 是 yes、impact 不是 "1"，而且這則新聞接下來怎麼發展和那一檔（這一則的 code）的某個條件最有關時才挑，0～2 個：
+  id 照抄、why 用一句話（30 字內）說為什麼要盯它。只能挑那一檔 conditions 裡有的 id；沒有相關的就給空陣列，不要硬挑。
+  why 不能寫買賣指令。其他欄位照原本的規定寫，不要因為有這份清單而改變。"""
+
+
+def _stock_watchable(offers: Mapping[str, Mapping[str, Any]] | None, codes: Sequence[str] | None = None) -> list[dict[str, Any]]:
+    """給模型看的站主個股清單：每一檔的現況與可以挑的條件（只有 id 與名稱；參數留在程式這邊）。codes 給了就只帶那幾檔。"""
+    return [{"code": code, "name": offer["name"], "now": offer["now"],
+             "conditions": [{"id": row["id"], "name": row["name"]} for row in offer["conditions"]]}
+            for code, offer in (offers or {}).items() if codes is None or code in codes]
+
+
 def _my_stocks(names: Mapping[str, str] | None) -> list[dict[str, str]]:
     return [{"code": code, "name": name} for code, name in list((names or {}).items())[:MY_STOCKS_MAX]]
 
@@ -427,30 +450,39 @@ def _watchable(watchable: Sequence[Mapping[str, Any]] | None) -> dict[str, Any]:
 
 
 def items_prompt(items: Sequence[Mapping[str, Any]], my_stocks: Mapping[str, str] | None = None,
-                 watchable: Sequence[Mapping[str, Any]] | None = None) -> str:
+                 watchable: Sequence[Mapping[str, Any]] | None = None,
+                 stock_offers: Mapping[str, Mapping[str, Any]] | None = None) -> str:
     """my_stocks：站主的自選＋庫存 {代號: 名稱}，給模型點名用（owner_effect）；沒有就不帶。
-    watchable：可盯條件清單（impact_watch.offered），模型用編號挑；沒有就不帶。"""
+    watchable：可盯條件清單（impact_watch.offered），模型用編號挑；沒有就不帶。
+    stock_offers：站主每一檔的可盯條件（impact_watch.stock_offered）；沒有就不帶，提示也不提。"""
+    mine = _stock_watchable(stock_offers)
     payload = {"items": [{key: row[key] for key in ("id", "group_hint", "source", "title", "summary", "published_at")}
-                         for row in items], **({"my_stocks": _my_stocks(my_stocks)} if my_stocks else {}), **_watchable(watchable)}
-    return ITEM_RULES + "\nINPUT:" + json.dumps(payload, ensure_ascii=False)
+                         for row in items], **({"my_stocks": _my_stocks(my_stocks)} if my_stocks else {}), **_watchable(watchable),
+               **({"my_watchable": mine} if mine else {})}
+    return ITEM_RULES + (MY_TRACK_RULES if mine else "") + "\nINPUT:" + json.dumps(payload, ensure_ascii=False)
 
 
 def summary_prompt(slot: str, trade_date: str, rows: Sequence[Mapping[str, Any]], index_rows: Sequence[Mapping[str, Any]],
                    my_stocks: Mapping[str, str] | None = None,
-                   watchable: Sequence[Mapping[str, Any]] | None = None) -> str:
+                   watchable: Sequence[Mapping[str, Any]] | None = None,
+                   stock_offers: Mapping[str, Mapping[str, Any]] | None = None) -> str:
     """rows：已判讀的（group、tone、impact、title、reason、effect）；沒有判讀成的時候給原標題。"""
+    mine = _stock_watchable(stock_offers)
     picked = sorted(rows, key=lambda row: (-int(row.get("impact") or 1), _kind_rank(row.get("kind"))))[:SUMMARY_TOP]
     payload = {"slot": slot, "slot_text": SLOT_TEXT[slot], "trade_date": trade_date, "indices": list(index_rows),
                "news": [{key: row.get(key) for key in ("group", "kind", "tone", "impact", "title", "reason", "effect")
                          if row.get(key) not in (None, "")} for row in picked],
-               **({"my_stocks": _my_stocks(my_stocks)} if my_stocks else {}), **_watchable(watchable)}
-    return SUMMARY_RULES + "\nINPUT:" + json.dumps(payload, ensure_ascii=False)
+               **({"my_stocks": _my_stocks(my_stocks)} if my_stocks else {}), **_watchable(watchable),
+               **({"my_watchable": mine} if mine else {})}
+    return SUMMARY_RULES + (MY_TRACK_RULES if mine else "") + "\nINPUT:" + json.dumps(payload, ensure_ascii=False)
 
 
-def watch_prompt(watch: Sequence[Mapping[str, Any]]) -> str:
+def watch_prompt(watch: Sequence[Mapping[str, Any]], stock_offers: Mapping[str, Mapping[str, Any]] | None = None) -> str:
+    """stock_offers：只在站主自己的那幾次呼叫裡給（朋友的金鑰那條路不給）；只帶這一批新聞講到的那幾檔。"""
+    mine = _stock_watchable(stock_offers, [row["code"] for row in watch])
     payload = {"watch": [{key: row[key] for key in ("id", "code", "name", "source", "title", "summary", "published_at")
-                          if row.get(key) not in (None, "")} for row in watch]}
-    return WATCH_RULES + "\nINPUT:" + json.dumps(payload, ensure_ascii=False)
+                          if row.get(key) not in (None, "")} for row in watch], **({"stock_watchable": mine} if mine else {})}
+    return WATCH_RULES + (STOCK_TRACK_RULES if mine else "") + "\nINPUT:" + json.dumps(payload, ensure_ascii=False)
 
 
 def _text(value: Any, limit: int) -> str | None:
@@ -549,6 +581,36 @@ def watch_picks(entry: Mapping[str, Any], watchable: Sequence[Mapping[str, Any]]
     return out[:WATCH_PICKS_MAX]
 
 
+def stock_picks(value: Any, offers: Mapping[str, Mapping[str, Any]] | None, *, code: str | None = None, named: str | None = None,
+                problems: list[Problem] | None = None, unknown: list[str] | None = None) -> list[dict[str, Any]]:
+    """模型替站主的股票挑的條件 → [{subject, condition_key, label, params, note}]（票 06）。
+    code 給了：這一則本來就是那一檔的新聞（個股判讀），pick 只帶 id。沒給：pick 自己帶 code（市場消息與總結），
+    而且那一檔要真的在 named（存得下來的 owner_effect 那一句）裡被點到，沒點到的不收。
+    編號要是那一檔清單裡有的，沒有的那一個丟掉（記進 unknown）；同一檔同一個編號只收一次；最多 WATCH_PICKS_MAX 個。
+    這些只會寫成只給站主看的盯項，不進任何大家共用的欄位。"""
+    out: list[dict[str, Any]] = []
+    for pick in value if offers and isinstance(value, (list, tuple)) else []:
+        subject = code or (pick.get("code") if isinstance(pick, Mapping) else None)
+        key = pick.get("id") if isinstance(pick, Mapping) else None
+        offer = offers.get(subject) if isinstance(subject, str) else None
+        row = next((row for row in offer["conditions"] if row["id"] == key), None) if offer else None
+        if not row:
+            if unknown is not None:
+                unknown.append(f"{subject}:{key}"[:40])
+            continue
+        if code is None and not _mentions_stock(named or "", {subject: offer["name"]}):
+            continue
+        if any(done["subject"] == subject and done["condition_key"] == key for done in out):
+            continue
+        note = whole_sentences(_text(pick.get("why"), 2000), WATCH_WHY_MAX)
+        reason = text_problem("owner_effect", note) if note else None   # 只給站主看的一句：只查買賣指令
+        if reason and problems is not None:
+            problems.append(("track", reason, note))
+        out.append({"subject": subject, "condition_key": key, "label": row["name"], "params": row["params"],
+                    "note": None if reason else note})
+    return out[:WATCH_PICKS_MAX]
+
+
 def _mark(entry: Any) -> dict[str, Any] | None:
     """一則的共同欄位檢查：tone、impact、title、reason；不合格回 None。"""
     if not isinstance(entry, Mapping):
@@ -578,7 +640,8 @@ def coerce_output(output: Any) -> Any:
 def validate_items(output: Any, items: Sequence[Mapping[str, Any]],
                    rejected: dict[str, int] | None = None, *, my_stocks: Mapping[str, str] | None = None,
                    problems: list[Problem] | None = None, watchable: Sequence[Mapping[str, Any]] | None = None,
-                   unknown: list[str] | None = None) -> list[dict[str, Any]]:
+                   unknown: list[str] | None = None,
+                   stock_offers: Mapping[str, Mapping[str, Any]] | None = None) -> list[dict[str, Any]]:
     """模型回的 items → 要存的列：id 要是送出去的、欄位要合格、skip 的不存；每組依影響大小留 GROUP_KEEP 則。
     rejected 給了就記每一種被擋的原因各幾則（執行紀錄用）；problems 給了就記被文字檢查退回的句子（重問用）。"""
     by_id = {row["id"]: row for row in items}
@@ -617,7 +680,9 @@ def validate_items(output: Any, items: Sequence[Mapping[str, Any]],
         market = entry.get("market") if entry.get("group") == "asia" and entry.get("market") in MARKETS[1:] else ""
         kind = entry.get("kind") if entry.get("kind") in MARKET_KINDS else "other"
         picked = watch_picks(entry, watchable, problems, unknown)
-        out.append({**mark, **points(entry, problems, my_stocks), **({"track": picked} if picked else {}),
+        written = points(entry, problems, my_stocks)
+        mine = stock_picks(entry.get("my_track"), stock_offers, named=written.get("owner_effect"), problems=problems, unknown=unknown)
+        out.append({**mark, **written, **({"track": picked} if picked else {}), **({"my_track": mine} if mine else {}),
                     "id": entry["id"], "group": entry["group"], "kind": kind,
                     "market": market or source["market_hint"] or "",
                     "translated": _translated(source["title"]), "source": source["source"], "link": source["link"],
@@ -649,10 +714,13 @@ def unclassified_items(items: Sequence[Mapping[str, Any]]) -> list[dict[str, Any
 
 
 def validate_watch(output: Any, watch: Sequence[Mapping[str, Any]], counts: dict[str, int] | None = None,
-                   problems: list[Problem] | None = None) -> list[dict[str, Any]]:
+                   problems: list[Problem] | None = None, *, stock_offers: Mapping[str, Mapping[str, Any]] | None = None,
+                   picked: list[dict[str, Any]] | None = None, unknown: list[str] | None = None) -> list[dict[str, Any]]:
     """個股新聞的判讀 → 要存進 stock_news_marks 的列（每則一列，判成無關的也存、relevant 0，之後不再重判）。
     同一則從不同來源進來的（row 的 links）都記同一個結果；第二個以後記成無關，畫面才不會重複。
-    counts 給了就記有關、無關各幾則。"""
+    counts 給了就記有關、無關各幾則。
+    stock_offers（只有站主自己的呼叫才給）：模型替那一檔挑的條件另外收進 picked（帶那一則的影響力與準備），
+    不放進回傳的列——判讀是大家共用的，站主要盯什麼不能跟著寫進去。"""
     by_id = {row["id"]: row for row in watch}
     out, used = [], set()
     for entry in (output or {}).get("watch") or [] if isinstance(output, Mapping) else []:
@@ -676,6 +744,9 @@ def validate_watch(output: Any, watch: Sequence[Mapping[str, Any]], counts: dict
         else:
             base.update(mark, relevant=1, kind=entry.get("kind") if entry.get("kind") in STOCK_KINDS else "other")
             base.update(points(entry, problems))
+            mine = stock_picks(entry.get("track"), stock_offers, code=source["code"], problems=problems, unknown=unknown)
+            if picked is not None:
+                picked += [{**pick, "impact": base["impact"], "prepare": base.get("prepare")} for pick in mine]
         if counts is not None:
             key = "unrelated" if unrelated else "related"
             counts[key] = counts.get(key, 0) + 1
@@ -688,7 +759,8 @@ def validate_watch(output: Any, watch: Sequence[Mapping[str, Any]], counts: dict
 
 def validate_summary(output: Any, my_stocks: Mapping[str, str] | None = None,
                      problems: list[Problem] | None = None, watchable: Sequence[Mapping[str, Any]] | None = None,
-                     unknown: list[str] | None = None) -> dict[str, Any] | None:
+                     unknown: list[str] | None = None,
+                     stock_offers: Mapping[str, Mapping[str, Any]] | None = None) -> dict[str, Any] | None:
     """總結的四段：{summary（發生什麼）, effect, owner_effect, conditions, prepare}；發生什麼那一段不成立就整份不放。"""
     if not isinstance(output, Mapping):
         return None
@@ -701,7 +773,9 @@ def validate_summary(output: Any, my_stocks: Mapping[str, str] | None = None,
             problems.append(("market_commentary", reason, text))
         return None
     picked = watch_picks(output, watchable, problems, unknown)
-    return {"summary": text, **points(output, problems, my_stocks), **({"track": picked} if picked else {})}
+    written = points(output, problems, my_stocks)
+    mine = stock_picks(output.get("my_track"), stock_offers, named=written.get("owner_effect"), problems=problems, unknown=unknown)
+    return {"summary": text, **written, **({"track": picked} if picked else {}), **({"my_track": mine} if mine else {})}
 
 
 def whole_sentences(text: str | None, limit: int) -> str | None:
@@ -865,6 +939,9 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
     point_columns = has_point_columns(query)
     # 盯項（票 03）：這一班可以交給模型挑的大盤條件；0034 還沒套、還沒有每日檢查的數字時是空的，這一班就不建盯項
     watchable = impact_watch.offered(query, trade_date)
+    # 站主自選股與庫存的盯項（票 06）：每一檔可以挑的條件；只進站主自己的呼叫，挑到的只寫成只給站主看的盯項
+    stock_offers = impact_watch.stock_offered(query, trade_date, my_stocks)
+    owner_stock_picks: list[dict[str, Any]] = []
     unknown_picks: list[str] = []
     from concurrent.futures import ThreadPoolExecutor
     batches = [items[start:start + BATCH_ITEMS] for start in range(0, len(items), BATCH_ITEMS)]
@@ -878,10 +955,11 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
             return found, len(kept) if isinstance(kept, list) else int(bool(kept))
         return check
 
-    jobs = [(f"items{index + 1}", items_prompt(batch, my_stocks, watchable), ITEMS_SCHEMA,
-             problems_of(validate_items, batch, my_stocks=my_stocks, watchable=watchable))
+    jobs = [(f"items{index + 1}", items_prompt(batch, my_stocks, watchable, stock_offers), ITEMS_SCHEMA,
+             problems_of(validate_items, batch, my_stocks=my_stocks, watchable=watchable, stock_offers=stock_offers))
             for index, batch in enumerate(batches)]
-    jobs += [(f"watch{index + 1}", watch_prompt(batch), WATCH_SCHEMA, problems_of(validate_watch, batch))
+    jobs += [(f"watch{index + 1}", watch_prompt(batch, stock_offers), WATCH_SCHEMA,
+              problems_of(validate_watch, batch, stock_offers=stock_offers))
              for index, batch in enumerate(stock_batches)]
     calls: dict[str, dict[str, Any]] = {}
 
@@ -932,11 +1010,12 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
         found: list[Problem] = []
         if name.startswith("watch"):
             if status == "ok":
-                owner_marks += validate_watch(output, batch, record, found)
+                owner_marks += validate_watch(output, batch, record, found, stock_offers=stock_offers,
+                                              picked=owner_stock_picks, unknown=unknown_picks)
             record["sent"] = len(batch)
         else:
             kept = validate_items(output, batch, rejected, my_stocks=my_stocks, problems=found, watchable=watchable,
-                                  unknown=unknown_picks) if status == "ok" else []
+                                  unknown=unknown_picks, stock_offers=stock_offers) if status == "ok" else []
             record.update(returned=len(output.get("items") or []) if isinstance(output, Mapping) else 0, kept=len(kept))
             classified += kept
             if not kept:
@@ -946,10 +1025,11 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
     summary: dict[str, Any] | None = None
     if classified:
         # 回成交代工作的話、或寫了買賣指令：再問一次並告訴它原因；還是不行就不放總結（其餘段落被退回的只丟那一句）
-        status, output, note = call(("summary", summary_prompt(slot, trade_date, classified, index_rows, my_stocks, watchable),
-                                     SUMMARY_SCHEMA, problems_of(validate_summary, my_stocks, watchable=watchable)))[1:]
+        status, output, note = call(("summary", summary_prompt(slot, trade_date, classified, index_rows, my_stocks, watchable, stock_offers),
+                                     SUMMARY_SCHEMA,
+                                     problems_of(validate_summary, my_stocks, watchable=watchable, stock_offers=stock_offers)))[1:]
         found = []
-        summary = validate_summary(output, my_stocks, found, watchable, unknown_picks) if status == "ok" else None
+        summary = validate_summary(output, my_stocks, found, watchable, unknown_picks, stock_offers) if status == "ok" else None
         count_text(found)
         if status == "ok" and not summary and found and found[0][0] == "market_commentary":
             status, note = ("not_a_summary" if not is_summary(found[0][2]) else "summary_rejected"), found[0][2]
@@ -1013,13 +1093,22 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
     script = run_sql(run_row, stored, marks, now=now, point_columns=point_columns)
     # 挑到的條件寫成盯項：影響力夠的消息與總結才建；去重、上限與到期日在 impact_watch。
     # 和消息分開寫：盯項寫不成不能賠掉這一班的消息。
-    diagnosis["watch"] = {"offered": len(watchable), "unknown_ids": unknown_picks}
+    diagnosis["watch"] = {"offered": len(watchable), "unknown_ids": unknown_picks,
+                          **({"stocks_offered": len(stock_offers)} if stock_offers else {})}
     watch_script = ""
-    if watchable:
+    if watchable or stock_offers:
         picks = [{**pick, "impact": row["impact"], "prepare": row.get("prepare"), "source_ref": f"{run_row['run_id']}#{row['id']}"}
                  for row in stored if row["impact"] >= WATCH_MIN_IMPACT for pick in row.get("track") or []]
         picks += [{**pick, "impact": SUMMARY_WATCH_IMPACT, "prepare": (summary or {}).get("prepare"),
                    "source_ref": f"{run_row['run_id']}#summary"} for pick in (summary or {}).get("track") or []]
+        # 站主個股的（票 06）：市場消息與總結點名那一檔時挑的、站主自選的個股新聞挑的。對象是股票代號，
+        # creation_sql 會把它們標成只給站主看；和大盤的一起排上限。
+        picks += [{**pick, "impact": row["impact"], "prepare": row.get("prepare"), "source_ref": f"{run_row['run_id']}#{row['id']}"}
+                  for row in stored if row["impact"] >= WATCH_MIN_IMPACT for pick in row.get("my_track") or []]
+        picks += [{**pick, "impact": SUMMARY_WATCH_IMPACT, "prepare": (summary or {}).get("prepare"),
+                   "source_ref": f"{run_row['run_id']}#summary"} for pick in (summary or {}).get("my_track") or []]
+        picks += [{**pick, "source_ref": f"{run_row['run_id']}#stock:{pick['subject']}"}
+                  for pick in owner_stock_picks if pick["impact"] >= WATCH_MIN_IMPACT]
         try:
             watch_script, watch_report = impact_watch.creation_sql(picks, impact_watch.active_items(query, trade_date),
                                                                    trade_date=trade_date, now=now)

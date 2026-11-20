@@ -165,6 +165,37 @@ test("掃描清單不是空轉：同一份清單換成已核准的人拿得到�
   }
 });
 
+// ---- 站主自選股與庫存的盯項（票 06）：整站掃一遍，站主以外的人從哪一個入口都拿不到 ----
+test("站主個股的盯項與當天數字：已核准的朋友和還沒核准的人掃過每一支 API、每一頁，都看不到；站主自己看得到", async () => {
+  Object.assign(env, ALL_ON);
+  await seedOutsiders();
+  await seed("ok@x.com", "approved");
+  const MARK = "OWNER-STOCK-WATCH";
+  const item = (id, over) => env.DB.prepare(
+    "INSERT INTO impact_watch_items (id, source_block, source_date, source_ref, subject, kind, condition_key, params, label, note, impact, prepare, " +
+      "created_date, expires_on, days_left, status, result_date, result_note, show_until, visibility, created_at) " +
+      "VALUES (?, 'market_news', '2026-11-18', ?, '6789', 'numeric', ?, ?, ?, ?, 3, ?, '2026-11-18', '2099-12-16', ?, ?, ?, ?, ?, 'owner', '2026-11-18T06:05:00Z')",
+  ).bind(id, `${MARK}-ref`, id, JSON.stringify({ name: `${MARK}-name`, ma: 20 }), `${MARK}-label`, `${MARK}-note`, JSON.stringify([`${MARK}-prepare`]),
+    over.days_left ?? null, over.status, over.result_date ?? null, over.result_note ?? null, over.show_until ?? null).run();
+  await item("6789:below_ma20:2026-11-18", { status: "watching", days_left: 18 });
+  await item("6789:above_high:2026-11-18", { status: "met", result_date: "2026-11-19", result_note: `${MARK}-result`, show_until: "2099-12-31" });
+  await env.DB.prepare("INSERT INTO impact_watch_facts (subject, data_date, payload, updated_at) VALUES ('6789', '2026-11-19', ?, '2026-11-19T10:00:00Z')")
+    .bind(JSON.stringify({ name: `${MARK}-facts`, close: 100 })).run();
+  tripwires();
+  const paths = [...API_PATHS, "/api/impact-watch?code=6789", "/api/impact-watch?subject=6789", "/api/stocks/6789/analysis", "/api/stocks/6789/facts",
+    "/api/stocks/6789/headlines", "/api/watch-peers/6789", ...PAGE_PATHS, "/stock.html?code=6789"];
+  for (const email of [...OUTSIDERS, "ok@x.com"]) {
+    for (const path of paths) {
+      let text = "";
+      try { text = await (await req(path, { email })).text(); } catch { /* 往外抓資料的被擋下來：沒有回應就沒有外流 */ }
+      assert.ok(!text.includes(MARK), `${email} ${path}`);
+    }
+  }
+  const own = await (await req("/api/impact-watch", { email: OWNER })).text();
+  for (const part of ["label", "note", "prepare", "result", "name"]) assert.ok(own.includes(`${MARK}-${part}`), `站主看得到 ${part}`);
+  assert.ok(!own.includes(`${MARK}-facts`) && !own.includes(`${MARK}-ref`), "當天的數字與出處編號是排程用的，連站主的回應也不帶");
+});
+
 // ---- 一個入口的整段流程 ----
 test("一個入口：陌生人登入主站 → 轉到申請頁 → 送出申請 → 等待中什麼都拿不到 → 站主核准後同一個登入直接進站", async () => {
   const who = { email: "new@x.com" };            // 主站的登入（aud = MAIN_AUD），沒有另外登入申請頁
