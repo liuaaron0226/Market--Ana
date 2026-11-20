@@ -54,6 +54,15 @@ export function fakeD1(files = null) {
   return { prepare: (sql) => stmt(sql), _raw: db, metrics, resetMetrics };
 }
 
+// 只准查核准名單（閘門對每個非站主請求都會查的那一句）的資料庫：其他任何查詢都丟錯。
+// 用來驗「某個開關關著時，除了確認這個人能不能進站以外，不碰任何資料表」。
+export function rosterOnly(db, message = "開關關著不能讀其他資料表") {
+  return { prepare: (sql) => {
+    if (sql !== "SELECT status FROM users WHERE email = ?") throw new Error(`${message}：${sql}`);
+    return db.prepare(sql);
+  } };
+}
+
 const b64url = (buf) => Buffer.from(buf).toString("base64url");
 
 export async function makeIssuer(kid = "test-kid") {

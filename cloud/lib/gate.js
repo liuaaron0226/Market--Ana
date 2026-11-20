@@ -1,5 +1,7 @@
 // 票 05 後端閘門：每個請求（含靜態檔）都經過這裡。
-// 第一道門是 Cloudflare Access（擋未核准者），這裡是第二道：驗 Access JWT、查 D1 即時狀態、站主後台。
+// 一個入口（本人 2026-11-20，取代 11-07 的「兩道門」）：Cloudflare Access 只確認「這個信箱是本人的」（Email 驗證碼），
+// 誰能進站由這裡決定——驗 Access JWT、每個請求查 D1 的即時狀態、站主後台。還沒核准的人只走得到申請頁（/apply）。
+// Access 還沒改之前（主站只發驗證碼給已核准的人、申請頁另有一個 Access 應用）這裡的行為一樣，只是前面多一層。
 // 任何設定缺漏或資料庫錯誤一律拒絕。
 import { verifyAccessJwt } from "./jwt.js";
 import { detailFor } from "./market-data.js";
@@ -21,6 +23,7 @@ import { FRIEND_AI_PAGE, FRIEND_AI_PATH, keyStateLookup, deleteFriendKey, friend
 import { WATCH_PEERS_PATH, handleWatchPeersApi } from "./watch-peers.js";
 import { INDEX_PATH, indexOf, loadIndex } from "./market-indices.js";
 import { MARKET_NEWS_PATH, handleMarketNewsApi, handleStockHeadlinesApi } from "./market-news.js";
+import { pushConfigured, sendOne } from "./web-push.js";
 
 const PENDING_CAP = 30;
 // 票 06 限速（Astra r1 建議值）：市場 API 全部每人每分 30 次；個股明細另限每分 12 次。固定一分鐘窗，邊界最多兩倍突發。
@@ -34,6 +37,8 @@ const RATE = { market: 30, detail: 12, userData: 60, live: 20, history: 30, tick
 const RETIRED_DATA = new Set(["/analysis-data.js", "/chips-data.js", "/dashboard-data.js", "/detail-data.js", "/plain-data.js"]);
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const NICK_MAX = 40;
+// 申請頁自己的檔案。/apply/ 底下其他路徑一律 404：Pages 找不到檔案時會回主站首頁的 HTML，還沒核准的人不該拿到。
+const APPLY_FILES = new Set(["/apply", "/apply/", "/apply/index.html", "/apply/apply.js", "/apply/account.css"]);
 const ACTIONS = {
   approve: { from: ["pending", "rejected", "disabled"], to: "approved" },
   reject: { from: ["pending"], to: "rejected" },
@@ -97,27 +102,66 @@ async function statusOf(db, email) {
   return row ? row.status : "none";
 }
 
-async function handleApplyApi(request, env, path, email, isOwner) {
-  if (path === "/apply/api/me" && request.method === "GET") {
-    if (isOwner) return json(200, { email, status: "approved", owner: true });
-    return json(200, { email, status: await statusOf(env.DB, email), owner: false });
+// 有人送出申請時通知站主（本人 11-20）：送到站主登記過推播的每一台裝置。
+// 內容固定，不放申請人填的字或信箱：主站改成人人可登入之後陌生人也走得到這一步，不能讓他把任意文字送到站主的鎖定畫面。
+// 同一個 tag，好幾筆申請只留一則。送不出去（金鑰沒設定、資料表還沒建立、推播服務失敗）只是沒有通知，申請照樣成立。
+const APPLY_NOTICE = { title: "有人申請使用網站", body: "到帳號管理核准或拒絕", url: "/admin/", tag: "account-apply" };
+// 申請人的「送出」要等通知送完才回應，所以每台裝置同時送、最多等這麼久；推播服務卡住時先回應，不讓申請跟著卡。
+const APPLY_NOTICE_TIMEOUT_MS = 4000;
+
+async function notifyOwnerOfApplication(env, deps) {
+  if (!deps.pushFetch || !pushConfigured(env)) return;
+  const limit = deps.pushTimeoutMs || APPLY_NOTICE_TIMEOUT_MS;
+  let timer;
+  try {
+    const { results } = await env.DB
+      .prepare("SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE email = ? ORDER BY created_at")
+      .bind(String(env.OWNER_EMAIL).toLowerCase())
+      .all();
+    const vapidCache = new Map();
+    const fetchImpl = (url, init) => deps.pushFetch(url, { ...init, signal: AbortSignal.timeout(limit) });
+    const sends = results.map((device) =>
+      sendOne(env.DB, device, APPLY_NOTICE, env, { fetchImpl, now: deps.now || Date.now, vapidCache }).catch(() => null));
+    await Promise.race([Promise.all(sends), new Promise((resolve) => { timer = setTimeout(resolve, limit); })]);
+  } catch (error) {
+    // 沒有通知而已：站主在設定齒輪上還是看得到等待人數。留一行紀錄方便查（不含申請人的資料）。
+    console.warn("apply notice not sent:", String(error?.message || error));
+  } finally {
+    clearTimeout(timer);
   }
+}
+
+// 申請頁的兩支 API。主站的 Access 改成人人可登入之後（本人 11-20「一個入口」），任何收得到驗證碼的人都走得到這裡，
+// 所以這裡只回這個人自己的信箱與狀態，只做「建立一筆等待中的申請」這一件事。
+async function handleApplyApi(request, env, path, email, isOwner, deps) {
+  // logout_url：申請頁的「換一個信箱登入」（和 /api/me 給設定浮板的是同一個）。
+  const me = (status) => json(200, { email, status, owner: isOwner, logout_url: logoutUrl(env) });
+  if (path === "/apply/api/me" && request.method === "GET") return me(isOwner ? "approved" : await statusOf(env.DB, email));
   if (path === "/apply/api/apply") {
     if (request.method !== "POST") throw new HttpError(405, "方法不允許");
     const body = await readJson(request);
-    if (isOwner) return json(200, { email, status: "approved", owner: true });
-    const nickname = typeof body.nickname === "string" ? body.nickname.trim() : "";
+    if (isOwner) return me("approved");
+    // 控制字元、零寬與文字方向字元先拿掉：不讓人送出看不見或反著顯示的稱呼給站主。
+    const nickname = typeof body?.nickname === "string" ? body.nickname.replace(/[\p{Cc}\p{Cf}]/gu, "").trim() : "";
     if (!nickname || nickname.length > NICK_MAX) throw new HttpError(400, `暱稱必填，最多 ${NICK_MAX} 字`);
     const existing = await statusOf(env.DB, email);
-    if (existing !== "none") return json(200, { email, status: existing, owner: false });
-    const pending = await env.DB.prepare("SELECT COUNT(*) AS n FROM users WHERE status = 'pending'").first();
-    if (pending.n >= PENDING_CAP) throw new HttpError(429, "目前申請人數已滿，請稍後再試");
-    await env.DB
-      .prepare("INSERT INTO users (email, nickname, status, applied_at) VALUES (?, ?, 'pending', ?)")
-      .bind(email, nickname, nowIso())
+    if (existing !== "none") return me(existing);
+    // 名額檢查和寫入是同一句：同時進來好幾筆也不會超過上限；同一個人同時送兩次，後到的那一次不寫入。
+    const created = await env.DB
+      .prepare(
+        "INSERT INTO users (email, nickname, status, applied_at) SELECT ?, ?, 'pending', ? " +
+          "WHERE (SELECT COUNT(*) FROM users WHERE status = 'pending') < ? ON CONFLICT (email) DO NOTHING",
+      )
+      .bind(email, nickname, nowIso(), PENDING_CAP)
       .run();
+    if (!created.meta.changes) {
+      const now = await statusOf(env.DB, email);
+      if (now !== "none") return me(now);
+      throw new HttpError(429, "目前申請人數已滿，請稍後再試");
+    }
     await audit(env.DB, email, "apply", email, nickname);
-    return json(200, { email, status: "pending", owner: false });
+    await notifyOwnerOfApplication(env, deps);
+    return me("pending");
   }
   throw new HttpError(404, "找不到");
 }
@@ -829,7 +873,8 @@ async function cacheHashedAsset(request, response) {
 
 export async function handle(request, env, next, deps = defaultDeps) {
   const { TEAM_DOMAIN, MAIN_AUD, APPLY_AUD, OWNER_EMAIL, DB } = env;
-  if (!TEAM_DOMAIN || !MAIN_AUD || !APPLY_AUD || !OWNER_EMAIL || !DB) return fail(503, "服務設定未完成");
+  // APPLY_AUD（申請頁自己的 Access 應用）是選填：一個入口之後那個應用會移除，設定拿掉時 /apply 只認主站的憑證。
+  if (!TEAM_DOMAIN || !MAIN_AUD || !OWNER_EMAIL || !DB) return fail(503, "服務設定未完成");
 
   const path = new URL(request.url).pathname;
   const isApply = path === "/apply" || path.startsWith("/apply/");
@@ -837,7 +882,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
   try {
     claims = await verifyAccessJwt(request.headers.get("cf-access-jwt-assertion"), {
       teamDomain: TEAM_DOMAIN,
-      audiences: isApply ? [APPLY_AUD, MAIN_AUD] : [MAIN_AUD],
+      audiences: isApply && APPLY_AUD ? [APPLY_AUD, MAIN_AUD] : [MAIN_AUD],
       fetchImpl: deps.fetchImpl,
     });
   } catch {
@@ -848,15 +893,19 @@ export async function handle(request, env, next, deps = defaultDeps) {
   const owner = OWNER_EMAIL.toLowerCase();
   const isOwner = isOwnerEmail(env, email);
 
-  // 朋友 AI 的開關關著：入口在讀資料庫之前就回「沒有內容」，設定頁和不存在一樣。
-  if (!friendAiEnabled(env)) {
+  // 朋友 AI 的開關關著：入口回「沒有內容」，設定頁和不存在一樣。只對進得了站的人（站主、已核准）這樣回；
+  // 還沒核准的人照一般規則（API 403、頁面轉去申請頁），所以放在核准檢查之後。
+  const friendAiClosed = () => {
+    if (friendAiEnabled(env)) return null;
     if (FRIEND_AI_PATH.test(path)) return notAvailable();
     if (FRIEND_AI_PAGE.test(path)) return fail(404, "找不到");
-  }
+    return null;
+  };
 
   try {
     if (isApply) {
-      if (path.startsWith("/apply/api/")) return await handleApplyApi(request, env, path, email, isOwner);
+      if (path.startsWith("/apply/api/")) return await handleApplyApi(request, env, path, email, isOwner, deps);
+      if (!APPLY_FILES.has(path)) return fail(404, "找不到");
       return await cacheHashedAsset(request, await next());
     }
 
@@ -869,6 +918,8 @@ export async function handle(request, env, next, deps = defaultDeps) {
     // 只給站主的功能，其他人拿到的功能清單裡一律是關的（和 /api/features 同一個規則）。
     const levelDisabled = () => json(403, { error: "feature-disabled", message: "未驗證的水位建議尚未啟用", features: policyForViewer(policy, isOwner, env).features });
     if (isOwner) {
+      const closed = friendAiClosed();
+      if (closed) return closed;
       if (path === "/api/features") return json(200, policy);
       if (path === "/api/live") return await handleIndexLiveApi(request, env, email, deps);
       if (path.startsWith("/api/admin/")) return await handleAdminApi(request, env, path, owner);
@@ -902,6 +953,8 @@ export async function handle(request, env, next, deps = defaultDeps) {
       if (isPagePath(path)) return new Response(null, { status: 302, headers: { location: "/apply/", "cache-control": "no-store" } });
       return fail(403, "帳號尚未核准或已停用");
     }
+    const closed = friendAiClosed();
+    if (closed) return closed;
     if (isAdmin) return fail(403, "沒有管理權限");
     if (path === "/api/me") return json(200, { email, status, owner: false, logout_url: logoutUrl(env) });
     if (path === GEMINI_USAGE_PATH) return await handleGeminiUsageApi(request, env, deps, { isOwner: false });

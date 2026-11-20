@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { handle } from "../lib/gate.js";
 import { CONSENT_VERSION } from "../lib/friend-ai.js";
 import { portfoliosSql } from "../friend-ai-schedule.mjs";
-import { fakeD1, makeIssuer, claims, fetchJwks, TEAM, MAIN_AUD, APPLY_AUD, OWNER } from "./helpers.js";
+import { fakeD1, makeIssuer, claims, fetchJwks, rosterOnly, TEAM, MAIN_AUD, APPLY_AUD, OWNER } from "./helpers.js";
 
 const ORIGIN = "https://market-ana.pages.dev";
 const AMY = "amy@example.com";
@@ -128,9 +128,10 @@ test("資料表還沒建立（migration 未套）：當成還沒有任何一天�
   assert.deepEqual((await res.json()).stocks, { status: "unproduced", items: [], reason: null });
 });
 
-test("開關關著時入口在讀資料庫前就回沒有內容", async () => {
+// 一個入口（本人 11-20）之後先確認這個人已核准（查名單），才回「沒有內容」；朋友 AI 自己的資料表還是不碰。
+test("開關關著時入口不碰朋友 AI 的資料表就回沒有內容", async () => {
   env.MARKET_ANA_FRIEND_AI = undefined;
-  env.DB = { prepare() { throw new Error("開關關著不能讀資料庫"); } };
+  env.DB = rosterOnly(env.DB);
   assert.deepEqual(await (await read(AMY)).json(), { available: false });
 });
 
