@@ -3,7 +3,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { handle } from "../lib/gate.js";
 import { releasePolicy, policyForViewer } from "../lib/release-policy.js";
-import { fakeD1, makeIssuer, claims, fetchJwks, TEAM, MAIN_AUD, APPLY_AUD, OWNER } from "./helpers.js";
+import { fakeD1, makeIssuer, claims, fetchJwks, TEAM, MAIN_AUD, APPLY_AUD, OWNER, MIGRATION_FILES } from "./helpers.js";
 
 const ORIGIN = "https://market-ana.pages.dev";
 const NOW = Date.parse("2026-11-19T06:30:00Z");
@@ -187,6 +187,81 @@ test("一組的來源這一輪全部沒抓到：標出來，列上一輪的那�
   assert.deepEqual(body.groups.us.map((row) => row.title), ["昨天的美股"], "美股這一輪沒有：列 11-18 收盤後那一輪的");
   assert.deepEqual(body.run.carried, { us: "2026-11-18T06:05:00Z" });
   assert.equal(body.groups.tw.length, 2, "台股這一輪還有（例如路透那一則）就不換");
+});
+
+// ---- 新寫法：影響＋要看的條件＋準備（本人 2026-11-20；.scratch/impact-watch/spec.md 票 01） ----
+
+const POINTS = { effect: "半導體權值股跌最多", owner_effect: "台積電是外資賣超的重心",
+  conditions: JSON.stringify(["外資是否連續賣超"]), prepare: JSON.stringify(["如果外資連續賣超，就先檢查權值股佔多少"]) };
+async function writePoints() {
+  await env.DB.prepare("UPDATE market_news_items SET effect = ?, owner_effect = ?, conditions = ?, prepare = ? WHERE run_id = '2026-11-19-close' AND item_id = 'n2'")
+    .bind(POINTS.effect, POINTS.owner_effect, POINTS.conditions, POINTS.prepare).run();
+  await env.DB.prepare("UPDATE market_news_runs SET effect = ?, owner_effect = ?, conditions = ?, prepare = ? WHERE run_id = '2026-11-19-close'")
+    .bind("電子權值股受影響最大。", "台積電跟著大盤走弱。", JSON.stringify(["費半是否止跌", "外資是否回補"]), JSON.stringify(["如果加權跌破月線，就先檢查持股比重"])).run();
+  await env.DB.prepare("UPDATE stock_news_marks SET effect = ?, conditions = ?, prepare = ? WHERE code = '2330'")
+    .bind("短線股價承壓", JSON.stringify(["費半是否止跌"]), JSON.stringify(["如果費半續跌，就先想好能承受的跌幅"])).run();
+}
+
+test("新寫法：每則與總結帶影響、要看的條件、準備；站主另外拿到點名他股票的那一句", async () => {
+  await writePoints();
+  const body = await (await req("/api/market-news")).json();
+  assert.deepEqual(body.groups.tw[0], { title: "外資賣超逾 600 億", source: "中央社", link: "https://example.com/n2",
+    published_at: "2026-11-19T05:00:00Z", market: "", translated: false, tone: "down", impact: 3, reason: "一句理由",
+    effect: "半導體權值股跌最多", owner_effect: "台積電是外資賣超的重心", conditions: ["外資是否連續賣超"],
+    prepare: ["如果外資連續賣超，就先檢查權值股佔多少"] });
+  assert.equal(body.run.summary, "台股今天下跌，主因外資賣超。");
+  assert.equal(body.run.effect, "電子權值股受影響最大。");
+  assert.equal(body.run.owner_effect, "台積電跟著大盤走弱。");
+  assert.deepEqual(body.run.conditions, ["費半是否止跌", "外資是否回補"]);
+  assert.deepEqual(body.run.prepare, ["如果加權跌破月線，就先檢查持股比重"]);
+  assert.deepEqual(body.mine.items[0], { code: "2330", name: "台積電", link: "https://news.google.com/a", published_at: "2026-11-19T02:00:00Z",
+    source: "路透", kind: "rating", tone: "down", impact: 2, title: "台積電 ADR 下跌", translated: true, reason: "跟著費半走弱",
+    effect: "短線股價承壓", conditions: ["費半是否止跌"], prepare: ["如果費半續跌，就先想好能承受的跌幅"] });
+});
+
+test("新寫法：朋友拿得到影響、條件、準備，拿不到點名站主自選股／庫存的那一句", async () => {
+  await writePoints();
+  const response = await req("/api/market-news", { email: FRIEND });
+  const text = await response.text();
+  const body = JSON.parse(text);
+  assert.equal(body.groups.tw[0].effect, "半導體權值股跌最多");
+  assert.deepEqual(body.groups.tw[0].conditions, ["外資是否連續賣超"]);
+  assert.equal(body.run.effect, "電子權值股受影響最大。");
+  assert.deepEqual(body.run.prepare, ["如果加權跌破月線，就先檢查持股比重"]);
+  assert.ok(!text.includes("owner_effect"), "整份回應都沒有這個欄位");
+  assert.ok(!text.includes("台積電是外資賣超的重心") && !text.includes("台積電跟著大盤走弱"));
+});
+
+test("新寫法：沒有新欄位的舊消息照舊；壞掉或空的條件不回", async () => {
+  await env.DB.prepare("UPDATE market_news_items SET conditions = 'not json', prepare = '[]', effect = '' WHERE run_id = '2026-11-19-close' AND item_id = 'n2'").run();
+  const body = await (await req("/api/market-news")).json();
+  assert.deepEqual(Object.keys(body.groups.tw[0]).sort(), ["impact", "link", "market", "published_at", "reason", "source", "title", "tone", "translated"]);
+  assert.deepEqual(Object.keys(body.run).sort(), ["carried", "classified", "created_at", "indices", "missed", "slot", "summary", "trade_date"]);
+});
+
+test("新寫法：模型沒寫成的那一輪不帶新的三段", async () => {
+  await writePoints();
+  await env.DB.prepare("UPDATE market_news_runs SET status = 'unclassified', summary = NULL WHERE run_id = '2026-11-19-close'").run();
+  const body = await (await req("/api/market-news")).json();
+  assert.equal(body.groups.tw[0].effect, undefined);
+  assert.equal(body.run.effect, undefined);
+});
+
+test("0033 還沒套（沒有新欄位）時照舊回消息與自選的判讀", async () => {
+  const files = MIGRATION_FILES.filter((name) => name !== "0033_news_impact.sql");
+  const old = fakeD1(files);
+  const dump = async (table) => (await env.DB.prepare(`SELECT * FROM ${table}`).all()).results;
+  for (const table of ["users", "user_watchlist", "market_news_runs", "market_news_items", "watch_news", "stock_news_marks"]) {
+    for (const row of await dump(table)) {
+      const keys = Object.keys(row).filter((key) => !["effect", "owner_effect", "conditions", "prepare"].includes(key));
+      await old.prepare(`INSERT INTO ${table} (${keys.join(", ")}) VALUES (${keys.map(() => "?").join(", ")})`).bind(...keys.map((key) => row[key])).run();
+    }
+  }
+  env.DB = old;
+  const body = await (await req("/api/market-news")).json();
+  assert.deepEqual(body.groups.tw.map((row) => row.title), ["外資賣超逾 600 億", "台股跌破月線"]);
+  assert.equal(body.run.summary, "台股今天下跌，主因外資賣超。");
+  assert.equal(body.mine.items[0].reason, "跟著費半走弱", "自選的判讀還在（不是退到只有標題）");
 });
 
 test("資料表還沒建（0031 未套）時是空的，不是錯誤", async () => {

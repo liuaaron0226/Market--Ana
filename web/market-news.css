@@ -57,6 +57,15 @@ body.hm #marketNews .news-title { display: block; font: 600 15.5px/1.5 var(--san
 @media (hover: hover) { body.hm #marketNews .news-title:hover { text-decoration: underline; text-underline-offset: 3px; } }
 body.hm #marketNews .news-title::after { content: " ↗"; font-weight: 400; color: var(--faint); font-size: 12px; }
 body.hm #marketNews .news-reason { margin-top: 4px; font-size: 13.5px; line-height: 1.6; color: var(--dim); }
+/* 新寫法的三段（影響／要看／準備）：左邊兩個字的小標、右邊內文；總結與每一則共用。點名站主股票的那一句加粗。 */
+body.hm #marketNews .news-points { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: 6px 12px; margin: 8px 0 0; }
+body.hm #marketNews .news-points dt { font-size: 12px; color: var(--faint); white-space: nowrap; }
+body.hm #marketNews .news-points dd { margin: 0; font-size: 13.5px; line-height: 1.6; color: var(--ink); text-wrap: pretty; }
+body.hm #marketNews .news-points dd p { margin: 0; }
+body.hm #marketNews .news-points dd p + p { margin-top: 2px; }
+body.hm #marketNews .news-points .news-mine { font-weight: 600; }
+body.hm #marketNews .news-summary .news-points { margin-top: 12px; gap: 8px 14px; }
+body.hm #marketNews .news-summary .news-points dd { font-size: 14.5px; line-height: 1.7; }
 body.hm #marketNews .news-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 6px; font-size: 12px; color: var(--faint); }
 body.hm #marketNews .news-impact { display: inline-flex; align-items: center; gap: 6px; }
 body.hm #marketNews .news-bars { display: inline-flex; gap: 2px; align-items: flex-end; height: 10px; }

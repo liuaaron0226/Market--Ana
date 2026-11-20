@@ -45,10 +45,30 @@ const json = (status, body) => new Response(JSON.stringify(body), {
 });
 const isoSeconds = (ms) => new Date(ms).toISOString().slice(0, 19) + "Z";
 const missingTable = (error) => /no such table/i.test(String(error?.message));
+// 0033 還沒套時缺的就是這幾欄；別的欄名寫錯照樣丟錯，不要靜靜降級
+const missingPointColumn = (error) => /no such column: m\.(effect|conditions|prepare)/i.test(String(error?.message));
 const parse = (text, fallback) => { try { return JSON.parse(text); } catch { return fallback; } };
 
+// 新寫法的三段（本人 2026-11-20「影響＋該做的準備」；0033）：影響、要看的條件、準備。沒有的欄位不回，畫面就照舊。
+// 點名站主自選股／庫存的那一句（owner_effect）只回給站主。
+const POINTS_MAX = 2;
+const sentences = (text) => {
+  const list = parse(text, null);
+  return Array.isArray(list) ? list.filter((item) => typeof item === "string" && item.trim()).slice(0, POINTS_MAX) : [];
+};
+function points(row, isOwner) {
+  const out = {};
+  if (row.effect) out.effect = row.effect;
+  if (isOwner && row.owner_effect) out.owner_effect = row.owner_effect;
+  for (const field of ["conditions", "prepare"]) {
+    const list = sentences(row[field]);
+    if (list.length) out[field] = list;
+  }
+  return out;
+}
+
 async function pickRun(db, date) {
-  const sql = "SELECT run_id, trade_date, slot, created_at, status, summary, indices, sources FROM market_news_runs " +
+  const sql = "SELECT * FROM market_news_runs " +
     (date ? "WHERE trade_date = ? " : "") + "ORDER BY trade_date DESC, created_at DESC LIMIT 1";
   return (date ? db.prepare(sql).bind(date) : db.prepare(sql)).first();
 }
@@ -56,19 +76,23 @@ async function pickRun(db, date) {
 async function mine(db, email, run) {
   const end = run.created_at;
   const endMs = Date.parse(end);
-  const select = (withMarks) => db.prepare(
+  // marks：2＝判讀＋新三段（0033）、1＝只有判讀（0033 還沒套）、0＝沒有判讀（0032 還沒套，只列標題）
+  const select = (marks) => db.prepare(
     "SELECT n.code, w.name, n.link, n.source, n.title, n.published_at" +
-      (withMarks ? ", m.relevant, m.kind, m.tone, m.impact, m.title AS mark_title, m.translated, m.reason" : "") +
+      (marks ? ", m.relevant, m.kind, m.tone, m.impact, m.title AS mark_title, m.translated, m.reason" : "") +
+      (marks === 2 ? ", m.effect, m.conditions, m.prepare" : "") +
       " FROM watch_news n JOIN user_watchlist w ON w.code = n.code AND lower(w.email) = lower(?) " +
-      (withMarks ? "LEFT JOIN stock_news_marks m ON m.code = n.code AND m.link = n.link " : "") +
+      (marks ? "LEFT JOIN stock_news_marks m ON m.code = n.code AND m.link = n.link " : "") +
       "WHERE n.code <> '' AND n.published_at >= ? AND n.published_at <= ? ORDER BY n.published_at DESC, n.link LIMIT 600",
   ).bind(email, isoSeconds(endMs - STOCK_WINDOW_MS), end).all();
   let rows;
-  try {
-    rows = (await select(true)).results;
-  } catch (error) {
-    if (!missingTable(error)) throw error;
-    rows = (await select(false)).results;   // 0032 還沒套：沒有判讀，只列標題
+  for (const marks of [2, 1, 0]) {
+    try {
+      rows = (await select(marks)).results;
+      break;
+    } catch (error) {
+      if (!(marks === 2 && missingPointColumn(error)) && !(marks > 0 && missingTable(error))) throw error;
+    }
   }
   // 中央社整批對到的（cna-*）有些只在前言提到公司：標題沒點名就不算。
   const named = (row) => !row.source.startsWith("cna-") || (row.name && row.title.includes(row.name.replace(/-KY$/, ""))) || row.title.includes(row.code);
@@ -81,7 +105,9 @@ async function mine(db, email, run) {
     if (row.relevant === 1) {
       // 判讀過、和公司有關：只列本人選的六類；影響小的舊聞不列。
       if (!STOCK_KINDS.includes(row.kind) || (row.impact === 1 && age > MINOR_AFTER_MS)) continue;
-      items.push({ ...base, kind: row.kind, tone: row.tone, impact: row.impact, title: row.mark_title, translated: Boolean(row.translated), reason: row.reason });
+      // 個股判讀是大家共用的（沒有點名站主的那一句），所以這裡不分站主與朋友
+      items.push({ ...base, kind: row.kind, tone: row.tone, impact: row.impact, title: row.mark_title, translated: Boolean(row.translated), reason: row.reason,
+        ...points(row, false) });
     } else if (row.relevant === undefined || row.relevant === null) {
       // 還沒判讀（沒有金鑰的朋友、剛抓到的）：近兩天的標題照列，同一個標題只列一次。
       const key = `${row.code}|${row.title.replace(/\s+/g, "")}`;
@@ -116,7 +142,8 @@ export async function handleMarketNewsApi(request, env, email, { isOwner }) {
       title: row.title, source: row.source, link: row.link, published_at: row.published_at, market: row.market || "",
       translated: Boolean(row.translated),
       // 那一批沒判讀成的（理由是空的）只給標題，不標利多利空
-      ...(classified && row.reason ? { tone: row.tone, impact: row.impact, reason: row.reason, ...(row.kind ? { kind: row.kind } : {}) } : {}),
+      ...(classified && row.reason ? { tone: row.tone, impact: row.impact, reason: row.reason, ...(row.kind ? { kind: row.kind } : {}),
+        ...points(row, isOwner) } : {}),
     });
     const groups = Object.fromEntries(GROUPS.map((group) => [group, rows.filter((row) => row.grp === group).map(shape(run.status === "ok"))]));
     // 一組的來源這一輪全部沒抓到：標出來，列上一輪的（consensus 技術選擇 h）。
@@ -139,7 +166,8 @@ export async function handleMarketNewsApi(request, env, email, { isOwner }) {
     return json(200, {
       available: true, dates,
       run: { trade_date: run.trade_date, slot: run.slot, created_at: run.created_at, classified: run.status === "ok",
-        summary: run.summary, indices: parse(run.indices, []), missed, carried },
+        summary: run.summary, ...(run.status === "ok" && run.summary ? points(run, isOwner) : {}),
+        indices: parse(run.indices, []), missed, carried },
       groups, mine: await mine(env.DB, email, run),
     });
   } catch (error) {
