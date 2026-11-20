@@ -178,6 +178,11 @@ def tools_journey(j: Journey, page, prefix: str) -> None:
 
 
 def stock_time_share(j: Journey, page, prefix: str, after_close: bool) -> None:
+    # 報價數字看得到（本人 2026-11-20 回報「個股頁目前的價位數字不見了」）：第一次即時更新會把報價那一格換成複本，
+    # 複本不能停在「數字滾動中（字透明）」卻沒有滾動的那一層。等滾完再量。
+    page.wait_for_timeout(1500)
+    price = page.evaluate("() => { const e = document.getElementById('close'); return [e.textContent, getComputedStyle(e).color, !!e.querySelector('.fx-odo')]; }")
+    j.check(f"{prefix}報價數字看得到（字不是透明，或正在滾動）", price[0].strip() not in ("", "—") and (price[1] != "rgba(0, 0, 0, 0)" or price[2]), price)
     choose(page, "ts")
     page.locator("#timeShare svg.ts-svg").wait_for(state="visible", timeout=10_000)
     page.locator("[data-ts-book]:not([hidden])").wait_for(state="visible", timeout=10_000)

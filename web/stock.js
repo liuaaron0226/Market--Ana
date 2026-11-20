@@ -304,6 +304,8 @@
           const stable = current.cloneNode(true);
           stable.dataset.liveStatic = '1';
           current.replaceWith(stable);
+          // 複本連「數字滾動中（字透明）」的狀態一起帶過來，要交給 motion-fx.js 接手，不然價格會一直看不到（本人 11-20 回報）
+          window.MotionFx?.adopt?.(current, stable);
         }
       });
     }

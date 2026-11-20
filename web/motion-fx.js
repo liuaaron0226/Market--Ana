@@ -21,7 +21,7 @@
    常駐（本人 11-20「可以長住的效果」，七項都要）：樣式都在 motion-fx.css；這裡只負責放上需要的元素——
      頁首那塊板上緣的金色細光（.fx-rim）、桌面的光（<html class="fx-desk">）、小圖最新一筆的暈與線上的光（dress 加的）。
 
-   對外：window.MotionFx = { land(elements, { back }), roll(element), sheen(element), dress(root) }；減少動態時 land／roll／sheen 是空的，
+   對外：window.MotionFx = { land(elements, { back }), roll(element), sheen(element), dress(root), adopt(from, to) }；減少動態時 land／roll／sheen／adopt 是空的，
    dress 照做（漸層是靜態的細節，不是動態）。 */
 (function () {
   'use strict';
@@ -81,7 +81,7 @@
   const whenReady = run => { if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run); else run(); };
   whenReady(watchSparks);
 
-  if (still || !Element.prototype.animate) { window.MotionFx = { land: noop, roll: noop, sheen: noop, dress }; return; }
+  if (still || !Element.prototype.animate) { window.MotionFx = { land: noop, roll: noop, sheen: noop, dress, adopt: noop }; return; }
 
   // ---------- 換頁：這一頁是怎麼來的 ----------
   const NAV_KEY = 'fx-nav';
@@ -188,6 +188,18 @@
     roll(element);
   }
 
+  // 頁面把數字那一格換成另一個元素時，新的那一格接手（個股頁第一次盤中更新會把報價換成複本，見 stock.js）。
+  // 複本是連狀態一起複製的：可能帶著「滾動中」的透明字與滾到一半的那一層，卻沒有人替它收尾——
+  // 本人 2026-11-20 回報「個股頁目前的價位數字不見了」就是這樣。先清乾淨、記住目前顯示的字，之後有變才滾。
+  function adopt(from, to) {
+    if (!to) return;
+    to.querySelector(':scope > .fx-odo')?.remove();
+    to.classList.remove('fx-rolling', 'fx-tick');
+    if (!from || !shown.has(from)) return;   // 原本那一格沒有在滾數字（價位階梯那幾格），新的也不用
+    shown.set(to, shown.get(from));
+    watch(to);
+  }
+
   // ---------- 換頁：這一頁的板沉下去 ----------
   const PAGE = /(?:^|\/)(?:minimal|portfolio|stock|index)(?:\.html)?$|\/$/;
   let leaving = [];
@@ -216,7 +228,7 @@
   // 從瀏覽器的整頁快取回來：沉下去的板放回原位
   window.addEventListener('pageshow', event => { if (event.persisted) stay(); });
 
-  window.MotionFx = { land, roll, sheen, dress };
+  window.MotionFx = { land, roll, sheen, dress, adopt };
 
   const start = () => {
     ['currentPrice', 'close', 'totalMarketValue'].forEach(id => watch(document.getElementById(id)));
