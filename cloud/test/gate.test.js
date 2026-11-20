@@ -101,7 +101,7 @@ test("申請頁只接受申請頁或主站的 Access 憑證", async () => {
 test("申請：建立申請中紀錄，重複申請不改狀態，站主不用申請", async () => {
   const tok = await issuer.sign(claims("new@x.com", { aud: [APPLY_AUD] }));
   let r = await req("/apply/api/me", { token: tok });
-  assert.deepEqual(await r.json(), { email: "new@x.com", status: "none", owner: false });
+  assert.deepEqual(await r.json(), { email: "new@x.com", status: "none", owner: false, logout_url: `${TEAM}/cdn-cgi/access/logout` });
   r = await req("/apply/api/apply", { token: tok, method: "POST", body: { nickname: "小明" } });
   assert.equal(r.status, 200);
   assert.equal((await r.json()).status, "pending");
@@ -110,7 +110,7 @@ test("申請：建立申請中紀錄，重複申請不改狀態，站主不用�
   assert.equal((await r.json()).status, "disabled");
   const ownerTok = await issuer.sign(claims(OWNER, { aud: [APPLY_AUD] }));
   r = await req("/apply/api/me", { token: ownerTok });
-  assert.deepEqual(await r.json(), { email: OWNER, status: "approved", owner: true });
+  assert.deepEqual(await r.json(), { email: OWNER, status: "approved", owner: true, logout_url: `${TEAM}/cdn-cgi/access/logout` });
 });
 
 test("申請：暱稱必填且限長，跨站請求被擋", async () => {

@@ -14,6 +14,10 @@ const port = Number(process.argv[2] || 8899);
 const dist = new URL("../dist/", import.meta.url);
 const issuer = await makeIssuer();
 const env = { DB: fakeD1(), TEAM_DOMAIN: TEAM, MAIN_AUD, APPLY_AUD, OWNER_EMAIL: OWNER };
+// 一個入口（本人 2026-11-20）：JOURNEY_ACCESS=single 模擬「申請頁那個 Access 應用已經移除」——整站只發主站的憑證，
+// 設定裡也沒有 APPLY_AUD。沒設時照舊是兩個應用（/apply 發申請頁的憑證，其他路徑發主站的）。
+const singleAccess = process.env.JOURNEY_ACCESS === "single";
+if (singleAccess) delete env.APPLY_AUD;
 // 預測帳本的本機預覽（B 票）：JOURNEY_SEED_SQL 指向 forecast_ledger.d1_sql 產生的指令檔，
 // MARKET_ANA_FORECAST_LEDGER=owner 打開開關。兩者都沒設時與原本相同。
 if (process.env.JOURNEY_SEED_SQL) env.DB._raw.exec(await readFile(process.env.JOURNEY_SEED_SQL, "utf8"));
@@ -40,6 +44,13 @@ if (process.env.JOURNEY_PUSH === "test") {
   const { makeVapid } = await import("./push-helpers.js");
   const vapid = await makeVapid();
   Object.assign(env, { VAPID_PUBLIC_KEY: vapid.publicKey, VAPID_PRIVATE_KEY: vapid.privateKey });
+  // JOURNEY_OWNER_DEVICE=1：站主已經有一台登記推播的裝置（申請通知的旅程用；內建瀏覽器登記不了推播）。
+  if (process.env.JOURNEY_OWNER_DEVICE) {
+    const { makeDevice } = await import("./push-helpers.js");
+    const { subscription } = await makeDevice("https://push.example.test/owner-device");
+    env.DB._raw.prepare("INSERT INTO push_subscriptions (endpoint, email, p256dh, auth, label, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(subscription.endpoint, OWNER, subscription.keys.p256dh, subscription.keys.auth, "journey", new Date().toISOString());
+  }
 }
 const pushFetch = async (url) => { pushed.push(String(url)); console.log(`push → ${new URL(url).host}`); return new Response(null, { status: 201 }); };
 const deps = { fetchImpl: fetchJwks(issuer.jwks), now: () => Date.now(), marketPack, stockPack, screensPack, comparePack, rate,
@@ -85,7 +96,7 @@ createServer(async (req, res) => {
   if (who) {
     const email = decodeURIComponent(who);
     const isApply = url.pathname === "/apply" || url.pathname.startsWith("/apply/");
-    headers.set("cf-access-jwt-assertion", await issuer.sign(claims(email, { aud: [isApply ? APPLY_AUD : MAIN_AUD] })));
+    headers.set("cf-access-jwt-assertion", await issuer.sign(claims(email, { aud: [isApply && !singleAccess ? APPLY_AUD : MAIN_AUD] })));
   }
   const request = new Request(url, { method: req.method, headers, body: chunks.length ? Buffer.concat(chunks) : undefined });
   const resp = await handle(request, env, () => serveStatic(url.pathname), deps);

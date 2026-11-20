@@ -1,6 +1,10 @@
 // Cloudflare Access External Evaluation：登入時 Access 送來簽章 JWT（含 identity 與 nonce），
 // 這裡查 D1，站主或已核准者回 success:true。回覆用本 Worker 的私鑰簽章，公鑰放在 /keys。
 // 任何錯誤都回 success:false（簽章後）或 403，不放行。
+//
+// 現況（2026-11-20「一個入口」）：主站的 Access 政策改成人人可登入之後，Access 不會再呼叫這支程式；核准與否完全由
+// cloud/lib/gate.js 每個請求查 D1 決定。這支程式先留著部署，只是回復用的備品（把政策改回 External Evaluation 就會再用到）。
+// 確定不回復之後再拆：刪掉 Worker market-ana-eval、本資料夾、test/evaluate.test.js 與 migrations/0002 的 eval_keys 表。
 
 const KEY_ROW = "eval_signing_key";
 const enc = new TextEncoder();
