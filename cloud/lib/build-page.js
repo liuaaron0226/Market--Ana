@@ -59,6 +59,8 @@ export const WEB_FILES = [
   "stock-picker.js", "stock-picker.css",
   // 首頁「消息」（本人 2026-11-19）
   "market-news.js", "market-news.css",
+  // 盯項：首頁頁首「在盯 N 件」與浮起的清單（本人 2026-11-20，樣品 A）
+  "impact-watch.js", "impact-watch.css",
   // 基金當成一般個股 06 票：基金個股頁的「配息」分類
   "fund-distributions.js",
 ];

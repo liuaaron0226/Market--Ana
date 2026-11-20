@@ -348,6 +348,23 @@ jobs:
           sync=$(python -c "import json,sys; print(json.load(open(sys.argv[1], encoding='utf-8'))['sync_state'])" "${{ runner.temp }}/daily-result.json")
           if [ "$sync" = "True" ]; then python watch_news.py pool --d1; else echo "本次沒有新發布，名單維持上一版"; fi
 
+      - name: 盯項每日檢查：用剛發布的大盤資料判斷成立／否定／到期（只在發布成功時）
+        # 本人 2026-11-20「接下來要看的條件由系統盯」（.scratch/impact-watch 票 03）：盯著的每一筆由程式判一次，結果寫回
+        # impact_watch_items；當天的數字存進 impact_watch_facts，下一班首頁消息用它產生可盯條件清單。不叫任何模型。
+        # 0034 還沒套時讀不到表，印 skipped，不擋發布。
+        if: success() && steps.day.outputs.dry_run == ''
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          sync=$(python -c "import json,sys; print(json.load(open(sys.argv[1], encoding='utf-8'))['sync_state'])" "${{ runner.temp }}/daily-result.json")
+          if [ "$sync" = "True" ]; then
+            python impact_watch.py check --analysis data/daily-update-state/last-market-pack/analysis-data.js
+          else
+            echo "本次沒有新發布，盯項不重查"
+          fi
+
       - name: 建立本次發布證據
         id: publication_evidence
         if: success() && steps.run.outcome == 'success'
