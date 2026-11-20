@@ -440,6 +440,11 @@ class PlainTests(unittest.TestCase):
         self.assertEqual((report["status"], report["plain"]), ("ok", {"error": "RuntimeError"}))
         self.assertEqual(self.db.query("SELECT data_date FROM impact_watch_facts"), [{"data_date": "2026-11-18"}])
 
+    def test_a_plain_file_with_broken_contents_does_not_stop_the_check(self):
+        report = self.run_check(self.plain(track=[{"id": ["不是字串"]}, {"id": "above_ma20", "note": 5}], prepare="不是清單"))
+        self.assertEqual(report["status"], "ok")
+        self.assertEqual([row["note"] for row in self.db.items()], [None])
+
     def test_the_command_reads_the_plain_file_next_to_the_market_data(self):
         import tempfile
         from unittest import mock

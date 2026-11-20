@@ -317,21 +317,21 @@ def check(analysis: Mapping[str, Any], *, now: str, query: Callable[[str], list[
     script, report = check_sql(items, facts, now=now, holidays=holidays)
     if not dry_run:
         execute(script)
-    picks = plain_picks(plain, facts)
-    if picks:
-        # 和每日判斷分開寫：白話分析的條件建不成，不能賠掉今天的判斷結果
-        try:
+    # 和每日判斷分開：白話分析的檔讀壞了、條件建不成，都不能賠掉今天的判斷結果
+    try:
+        picks = plain_picks(plain, facts)
+        if picks:
             creation, created = creation_sql(picks, active_items(query, facts["date"]), trade_date=facts["date"], now=now,
                                              holidays=holidays, source=SOURCE_PLAIN)
             if creation and not dry_run:
                 execute(creation)
             report["plain"] = created
-        except Exception as error:  # noqa: BLE001
-            report["plain"] = {"error": type(error).__name__}
+    except Exception as error:  # noqa: BLE001
+        report["plain"] = {"error": type(error).__name__}
     return {"status": "ok", **report, "dry_run": dry_run}
 
 
-def read_assignment(path: Any) -> Any:
+def read_assignment(path: "Path") -> Any:
     """讀資料包裡的一個檔（window.X = {...};）。"""
     text = path.read_text(encoding="utf-8").strip()
     return json.loads(text[text.index("=") + 1:].strip().removesuffix(";").strip())

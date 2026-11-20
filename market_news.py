@@ -460,8 +460,7 @@ def _text(value: Any, limit: int) -> str | None:
     return value[:limit] if value else None
 
 
-# 買賣指令（本人：「準備」不要寫成「現在買進／賣出」的指令）。新聞本身常寫「外資賣出」「投信逢低布局」，那是在講事情，
-# 所以一般欄位只擋對著讀者說的話；prepare 是寫給讀者的，動作字眼一律擋。
+# 買賣指令的界線（本人：「準備」不要寫成「現在買進／賣出」的指令）在 impact_text.py，和首頁白話分析共用。
 # 站主的自選與庫存只有站主自己能看：大家都看得到的欄位裡不能對著讀者講「你的股票」（那一句只能在 owner_effect）。
 _READER = re.compile(r"你|您|自選|讀者|my_stocks")
 POINT_FIELDS = ("effect", "owner_effect", "conditions", "prepare")

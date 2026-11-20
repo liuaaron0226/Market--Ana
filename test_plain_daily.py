@@ -419,6 +419,12 @@ class NewWritingTest(unittest.TestCase):
         self.assertNotIn("note", plain["points"][0])
         self.assertEqual(len(plain["prepare"]), pd.PREPARE_MAX)
 
+    def test_a_bad_sentence_does_not_use_up_the_room_of_a_good_one(self):
+        good = "如果收盤跌破{day_low}，就先檢查手上持股的支撐在哪裡。"
+        plain = self.check(good_ai(prepare=["如果外資轉買，就進場加碼。", good, "如果外資轉買，就先確認期貨。"]))
+        self.assertEqual(len(plain["prepare"]), 2)
+        self.assertEqual(len(self.dropped), 1)
+
     def test_a_buy_or_sell_instruction_only_loses_that_sentence(self):
         output = good_ai(effect="外資賣壓重，建議先減碼權值股。",
                          prepare=["如果外資轉買，就進場加碼。", "如果收盤跌破{day_low}，就先檢查手上持股的支撐在哪裡。"])
@@ -460,7 +466,7 @@ class NewWritingTest(unittest.TestCase):
         self.assertIn("WATCHABLE:", prompt)
         self.assertIn('"id":"foreign_turn_buy"', prompt)
         self.assertNotIn("params", prompt, "參數不給模型")
-        self.assertIn("不能寫買賣指令或個人化投資建議", prompt)
+        self.assertIn("整份都不能寫買賣指令或個人化投資建議", prompt)
         self.assertIn("如果…就…", prompt)
         without = pd.build_prompt(self.bundle)
         self.assertNotIn("WATCHABLE:", without)
@@ -548,6 +554,18 @@ class ProduceTest(unittest.TestCase):
         self.assertIn("prepare", audit["filled"])
         self.assertEqual(len(audit["dropped"]), 1)
         self.assertNotIn("加碼", json.dumps(plain, ensure_ascii=False))
+
+    def test_rejected_then_no_answer_is_recorded_as_a_failed_check(self):
+        bad = good_ai(one_line="外資賣超九百億。")
+        plain, audit = pd.produce(self.analysis, self.chips, mode="on", ask_model=self.asker(("ok", bad, ""), ("model_timeout", None, "超過")))
+        self.assertEqual((plain["source"], plain["fallback_reason"], audit["failure"]), ("template", "核對沒過", "validation_failed"))
+        self.assertIn("model_timeout", audit["retry_failed"])
+
+    def test_a_second_answer_that_loses_the_picked_conditions_does_not_replace_the_first(self):
+        first = good_ai(prepare=["如果外資轉買，就進場加碼。", "如果收盤跌破{day_low}，就先檢查手上持股的支撐在哪裡。"])
+        second = good_ai(prepare=["如果外資轉買，就進場加碼。"], track=[])
+        plain, _ = pd.produce(self.analysis, self.chips, mode="on", ask_model=self.asker(("ok", first, ""), ("ok", second, "")))
+        self.assertEqual(len(plain["track"]), 2)
 
     def test_a_worse_second_answer_keeps_the_first(self):
         pushy = good_ai(prepare=["如果外資轉買，就進場加碼。", "如果收盤跌破{day_low}，就先檢查手上持股的支撐在哪裡。"])

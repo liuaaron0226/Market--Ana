@@ -407,8 +407,10 @@ def validate(output: Any, bundle: Mapping[str, Any], *, watchable: Sequence[Mapp
     def soft(value: Any, section: str, limit: int, *, form: str, most: int = 1, **check: Any) -> list[str]:
         """寬鬆欄位的一段：一句或一串都收，最多 most 句；不合格的只丟那一句。"""
         items = [value] if isinstance(value, str) else value if isinstance(value, list) else []
-        kept = []
-        for item in [item for item in items if item not in (None, "")][:most]:
+        kept: list[str] = []
+        for item in items:
+            if item in (None, "") or len(kept) >= most:   # 多寫的不看
+                continue
             problem = _text_problem(item, section, bundle, limit, **check)
             if problem:
                 dropped.append(problem + (f"（被退回的那一句：「{item[:60]}」）" if isinstance(item, str) else ""))
@@ -603,14 +605,14 @@ def build_prompt(bundle: Mapping[str, Any], watchable: Sequence[Mapping[str, Any
         f"只有這些含「一」的詞可以用：{'、'.join(YI_WORDS)}；其他像「一天」「一個月」「兩邊」都不可以，請改寫（例如「逐日增加」「近期」「現貨和期貨」）。",
         f"points 剛好六點，key 各一次：{topics}。",
         "title 是一句短判斷，不要寫主角也不要冒號（程式會自動加上「外資：」這類前綴）。lines 一到四句短句，只講發生什麼。",
-        "每一點另外寫 effect：這個數字代表什麼影響（影響到誰、多大），一句；prepare：一句「如果…就…」，寫這個數字接下來怎麼變時要先確認、檢查或想好的事，沒有就給空字串。這兩段同樣只能用該點主題的代號。",
+        "每一點另外寫 effect：這個數字代表什麼影響（影響到誰、多大），一句；prepare：一句「如果…就…」，寫這個數字接下來怎麼變時要先確認、檢查或想好的事；想不到就給空字串，程式會補上基本的那一句。這兩段同樣只能用該點主題的代號。",
         "one_line 是一句話結論。最外層的 effect 是一句話講整體影響：今天這樣的籌碼影響到誰（指數、權值股、中小型股、用融資的人等）、多大。最外層的 prepare 是先做好的準備，一到兩句，每句用「如果…就…」寫。",
-        "effect、prepare 與 track 的 why 都不能寫買賣指令或個人化投資建議：不要出現「建議買進」「可以加碼」「應該減碼」「逢低布局」「停損出場」這類叫人下單的話；prepare 只寫情境與要先確認、檢查、想好的事。",
+        "整份都不能寫買賣指令或個人化投資建議，effect、prepare 與 track 的 why 尤其要注意：不要出現「建議買進」「可以加碼」「應該減碼」「逢低布局」「停損出場」這類叫人下單的話；prepare 只寫情境與要先確認、檢查、想好的事。",
         ("track：WATCHABLE 是系統可以每天替讀者盯的大盤條件（id、name；now 是現況）。接下來最該擔心、或出現了會比較安心的，"
          f"挑零到{'兩' if TRACK_MAX == 2 else TRACK_MAX}個：id 照抄、why 用一句話說為什麼要盯它（同樣不得有數字，要提數字就寫 {{代號}}）。"
          "只能挑 WATCHABLE 裡有的 id；沒有相關的就給空陣列，不要硬挑。") if watchable else "不要寫 track 這個欄位。",
         "方向不可以和 FACTS 相反（例如外資賣超時不可寫外資買進、融資減少時不可寫融資增加）。分不出原因的事不要說死，例如外資是看壞還是避險、融資減少是被追繳還是停損。",
-        "不寫保證，不寫模型、提示詞、方法、參考站、會員、反推等字樣。繁體中文、白話、短句。",
+        "不寫投資建議或保證，不寫模型、提示詞、方法、參考站、會員、反推等字樣。繁體中文、白話、短句。",
         f"data_date 填 {bundle['data_dates']['price_and_foreign']}。",
     ]
     listed = ["WATCHABLE:", json.dumps([{key: row[key] for key in ("id", "name", "now")} for row in watchable],
@@ -693,12 +695,15 @@ def produce(analysis: Mapping[str, Any], chips: Mapping[str, Any], *, mode: str,
         except Exception as error:  # noqa: BLE001
             status, structured, detail = "model_failed", None, f"{type(error).__name__}: {str(error)[:200]}"
         if status != "ok":
+            if attempt > 1:
+                audit["retry_failed"] = f"{status}: {str(detail)[:200]}"
             break   # 模型沒回來不重試（額度與時間）；重問那一次沒回來就用前一次的
         dropped: list[str] = []
         unknown: list[str] = []
         body, problems = validate(structured, bundle, watchable=watchable, dropped=dropped, unknown=unknown)
-        # 重問的回答要比前一次好才換：一句不合格不該賠掉整份
-        if body is not None and (usable is None or len(dropped) <= len(usable[1])):
+        # 重問的回答不比前一次差才換（被丟的句子沒有變多、挑到的條件沒有變少）：一句不合格不該賠掉整份
+        if body is not None and (usable is None or (len(dropped) <= len(usable[1])
+                                                    and len(body.get("track") or []) >= len(usable[0].get("track") or []))):
             usable = (body, dropped, unknown)
         if usable is None:
             audit["rejected"] = problems
@@ -715,7 +720,7 @@ def produce(analysis: Mapping[str, Any], chips: Mapping[str, Any], *, mode: str,
                       "watch": {"offered": len(watchable), "picked": [row["id"] for row in body.get("track") or []],
                                 "unknown_ids": unknown}})
         candidate = _stamp_plain(body, bundle, source="ai", model=model, fallback_reason=None, clock=clock)
-    elif status == "ok":
+    elif status == "ok" or audit["rejected"]:   # 第一次被核對退回、重問那一次沒回來：原因還是核對沒過
         audit["failure"] = "validation_failed"
     else:
         audit["failure"] = status
