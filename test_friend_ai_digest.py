@@ -295,8 +295,10 @@ class FriendSqlTests(unittest.TestCase):
         gemini = FakeGemini({"KEY-amy": gemini_reply(valid_structured()), "KEY-bob": GeminiHttpError(429, "RESOURCE_EXHAUSTED")})
         result = run_friends(friend_payload(), KEYS, decrypt=fake_decrypt, post=gemini, now=lambda: "2026-11-10T10:00:00+00:00")
         scripts = friend_sql(result)
-        self.assertEqual(len(scripts), 2)  # 每位朋友一份、各自一個交易：一份寫失敗不擋其他人
-        self.assertTrue(all(script.startswith("BEGIN;") and script.rstrip().endswith("COMMIT;") for script in scripts))
+        self.assertEqual(len(scripts), 2)  # 每位朋友一份（一個檔一個交易）：一份寫失敗不擋其他人
+        for script in scripts:   # 部署工具自己包交易；D1 遇到 BEGIN 會整份拒絕（2026-11-20 兩班都因此沒寫進去）
+            self.assertNotRegex(script, r"(?im)^\s*(BEGIN|COMMIT)\s*;")
+            self.assertTrue(script.strip())
         self.assertNotIn("bob@example.com", scripts[0])
         self.assertNotIn("amy@example.com", scripts[1])
         for _ in range(2):  # 同一天重跑：覆蓋，不重複

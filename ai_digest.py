@@ -524,7 +524,8 @@ def _sql_literal(value: Any) -> str:
 
 
 def d1_sql(rows: list[dict[str, Any]]) -> str:
-    statements = ["BEGIN;"]
+    # 不寫 BEGIN／COMMIT：wrangler 執行檔案時自己包成一個交易，D1 遇到 BEGIN 會整份拒絕（2026-11-20 朋友那一份因此寫不進去）。
+    statements = []
     for row in rows:
         values = [
             row["data_date"], row["digest_type"], row["subject"],
@@ -538,7 +539,6 @@ def d1_sql(rows: list[dict[str, Any]]) -> str:
             "content_json=excluded.content_json,input_sha256=excluded.input_sha256,model=excluded.model,input_tokens=excluded.input_tokens,"
             "output_tokens=excluded.output_tokens,total_tokens=excluded.total_tokens,status=excluded.status,error_code=excluded.error_code,updated_at=excluded.updated_at;"
         )
-    statements.append("COMMIT;")
     return "\n".join(statements) + "\n"
 
 

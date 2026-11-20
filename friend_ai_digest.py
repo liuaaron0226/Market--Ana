@@ -340,13 +340,14 @@ def run_friends(payload: dict[str, Any], keys: list[dict[str, Any]], *, decrypt:
 
 
 def friend_sql(result: dict[str, Any]) -> list[str]:
-    """每位朋友一份 SQL（各自 BEGIN／COMMIT）：寫進 friend_ai_daily 當天的成功或未產生，並更新他金鑰的
+    """每位朋友一份 SQL（不寫 BEGIN／COMMIT：wrangler 執行檔案時自己包成一個交易，D1 遇到 BEGIN 會整份拒絕——
+    2026-11-20 兩班都因此「1 位朋友的結果沒寫進資料庫」，連當天沒產生的原因也沒記到）：寫進 friend_ai_daily 當天的成功或未產生，並更新他金鑰的
     最後成功時間／最近失敗原因（中文說明）；金鑰無效或被撤銷時暫停這把金鑰。排程逐份寫入，一位寫失敗不擋其他人。
     更新金鑰那一列時比對這次用的 iv：排程跑到一半朋友換了新金鑰，舊金鑰的結果不會蓋到新金鑰上。"""
     scripts: list[str] = []
     for email, outcome in result["keys"].items():
         rows = [row for row in result["rows"] if row["email"] == email]
-        statements = ["BEGIN;"]
+        statements = []
         for row in rows:
             if row["digest_type"] == "stock":
                 statements.append(_stock_sql(email, row))
@@ -373,7 +374,6 @@ def friend_sql(result: dict[str, Any]) -> list[str]:
             text = _sql_literal(FAILURE_TEXT.get(outcome["reason"], FAILURE_TEXT["internal_error"]))
             pause = ",status='paused'" if outcome["reason"] in PAUSING_FAILURES else ""
             statements.append(f"UPDATE friend_gemini_keys SET last_failure_reason={text}{pause},updated_at={at} WHERE {same_key};")
-        statements.append("COMMIT;")
         scripts.append("\n".join(statements) + "\n")
     return scripts
 
