@@ -266,6 +266,14 @@ def deep_link(j: Journey, browser, base: str, prefix: str, options: dict) -> Non
     page.wait_for_timeout(300)
     j.check(f"{prefix}網址帶 #impact-watch：關得掉、頁面沒有被鎖住",
             not page.evaluate(STATE)["open"] and page.evaluate("() => getComputedStyle(document.body).position !== 'fixed'"))
+    # 這一頁已經開著時點推播（票 04）：瀏覽器只改錨點、不重新載入
+    page.evaluate("() => { history.replaceState(null, '', location.pathname); location.hash = '#impact-watch'; }")
+    try:
+        page.wait_for_function("() => document.getElementById('impactWatchDialog').open", timeout=5_000)
+        reopened = True
+    except Exception:  # noqa: BLE001
+        reopened = False
+    j.check(f"{prefix}頁面開著時錨點變成 #impact-watch：也打開清單", reopened)
     context.close()
 
 

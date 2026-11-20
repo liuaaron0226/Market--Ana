@@ -367,6 +367,21 @@ jobs:
             echo "本次沒有新發布，盯項不重查"
           fi
 
+      # 盯項有結果時推播到站主的裝置（本人 2026-11-20，.scratch/impact-watch 票 04）：接在每日檢查後面，每個盯項只送一次
+      # （先在 push_sent_at 認領再送；沒有任何裝置收到的下次再試），到期收掉的不送，朋友不送。金鑰沿用關注推播放在
+      # GitHub 的那一組。沒有金鑰或沒有裝置時印 waiting，不擋後面的步驟。沒有新發布的那幾次也跑：上次沒送成的在這裡補送
+      # （前面的步驟失敗時不跑，等下一次成功的排程）。
+      - name: 盯項有結果時推播（只送站主）
+        if: success() && steps.day.outputs.dry_run == ''
+        continue-on-error: true
+        env:
+          OWNER_EMAIL: ${{ vars.OWNER_EMAIL }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+        run: node cloud/impact-watch-push.mjs
+
       - name: 建立本次發布證據
         id: publication_evidence
         if: success() && steps.run.outcome == 'success'

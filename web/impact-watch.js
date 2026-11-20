@@ -116,7 +116,12 @@
     } catch (_) { return; }
     await load();
     // 網址帶 #impact-watch（之後的推播點進來）：直接打開清單。開合在 home-fold.js，所以照點一下那顆鍵的路走
-    if (location.hash === '#impact-watch' && !key.hidden) key.click();
+    const openFromHash = () => {
+      if (location.hash === '#impact-watch' && !key.hidden && !document.getElementById('impactWatchDialog')?.open) key.click();
+    };
+    openFromHash();
+    // 這一頁已經開著時點推播（票 04）：瀏覽器只改錨點、不重新載入，也要打開清單
+    window.addEventListener('hashchange', openFromHash);
     // 網站常開著放在手機主畫面：回到這一頁時重讀，盤後有結果才看得到
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible' && Date.now() - loadedAt > REFRESH_MS) load();
