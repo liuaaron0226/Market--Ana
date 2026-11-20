@@ -32,6 +32,7 @@ OUT = ROOT / ".tmp/impact-watch-journey"
 OWNER, FRIEND = "owner@example.com", "friend@example.com"
 TODAY = datetime.now(timezone(timedelta(hours=8))).date()
 RESULT_NOTE = "成立：外資連續賣超 9 天，11/19 賣超 912 億。"
+FAILED_NOTE = "否定：11/19 外資買超 52 億，連續賣超沒有延續到 9 天。"
 PREPARE = "如果外資連續賣超，就先檢查手上權值股佔多少"
 WATCHING = [
     # (條件編號, 人話名稱, 模型的說明, 影響力, 剩幾個交易日)
@@ -64,6 +65,8 @@ def seed_sql(scenario: str) -> str:
     out.append(item_sql("stock_2330", "台積電收盤站上月線", None, 1, 6, visibility="owner", subject="2330"))
     if scenario == "result":
         out.append(item_sql("foreign_sell_streak", "外資連續賣超達 9 天", "賣超延續才是真的轉弱", 3, None, status="met", result_note=RESULT_NOTE))
+    if scenario == "failed":
+        out.append(item_sql("foreign_sell_streak", "外資連續賣超達 9 天", None, 3, None, status="failed", result_note=FAILED_NOTE))
     return "\n".join(out)
 
 
@@ -231,6 +234,41 @@ def result(j: Journey, browser, base: str, prefix: str, options: dict, mobile: b
     context.close()
 
 
+def missed(j: Journey, browser, base: str, prefix: str, options: dict) -> None:
+    """條件被否定：頁首那一行要講明「落空」，不能只寫條件（會被當成發生了）。"""
+    context, page, _ = j.home(browser, base, OWNER, options)
+    now = page.evaluate(STATE)
+    j.check(f"{prefix}否定：頁首寫「落空：」＋那件事，照樣金色圓點", now["shown"] and now["dot"] and now["text"].startswith("落空：外資連續賣超達 9 天")
+            and now["sameRow"] and now["insideHeader"] and now["noScroll"], now)
+    j.check(f"{prefix}否定：報讀文字講落空", now["label"] == "你在等的事：外資連續賣超達 9 天落空，還盯 4 件", now["label"])
+    page.locator(".market-header").screenshot(path=str(OUT / f"{prefix}10-failed-header.png"))
+    page.locator("#impactWatchKey").click()
+    page.wait_for_timeout(700)
+    first = page.evaluate(STATE)["items"][0]
+    j.check(f"{prefix}否定：清單那一項標「落空」、攤開結果", first["left"] == "落空" and first["open"] and first["result"] == FAILED_NOTE, first)
+    page.screenshot(path=str(OUT / f"{prefix}10-failed-open.png"))
+    context.close()
+
+
+def deep_link(j: Journey, browser, base: str, prefix: str, options: dict) -> None:
+    """網址帶 #impact-watch：進首頁就打開清單（之後的推播點進來用）。"""
+    context = browser.new_context(**options)
+    context.add_cookies([{"name": "test_as", "value": OWNER, "url": base}])
+    page = context.new_page()
+    page.goto(f"{base}/minimal.html#impact-watch")
+    try:
+        page.wait_for_function("() => document.getElementById('impactWatchDialog').open", timeout=30_000)
+        opened = True
+    except Exception:  # noqa: BLE001
+        opened = False
+    j.check(f"{prefix}網址帶 #impact-watch：直接打開清單", opened and len(page.evaluate(STATE)["items"]) == 5)
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(300)
+    j.check(f"{prefix}網址帶 #impact-watch：關得掉、頁面沒有被鎖住",
+            not page.evaluate(STATE)["open"] and page.evaluate("() => getComputedStyle(document.body).position !== 'fixed'"))
+    context.close()
+
+
 def absent(j: Journey, browser, base: str, prefix: str, options: dict, name: str, label: str, email: str = OWNER, asks: bool = True) -> None:
     context, page, asked = j.home(browser, base, email, options)
     now = page.evaluate(STATE)
@@ -249,14 +287,17 @@ def main() -> int:
              ("mobile-390-", {"viewport": {"width": 390, "height": 844}, "device_scale_factor": 2, "is_mobile": True, "has_touch": True}, True)]
     with sync_playwright() as p:
         browser = p.chromium.launch()
-        for scenario, mode in (("watch", "all"), ("result", "all"), ("none", "all"), ("off", None), ("owner", "owner")):
-            server, base = serve(scenario if scenario in ("result", "none") else "watch", mode)
+        for scenario, mode in (("watch", "all"), ("result", "all"), ("failed", "all"), ("none", "all"), ("off", None), ("owner", "owner")):
+            server, base = serve(scenario if scenario in ("result", "failed", "none") else "watch", mode)
             try:
                 for prefix, options, mobile in sizes:
                     if scenario == "watch":
                         watching(j, browser, base, prefix, options, mobile)
                     elif scenario == "result":
                         result(j, browser, base, prefix, options, mobile)
+                        deep_link(j, browser, base, prefix, options)
+                    elif scenario == "failed":
+                        missed(j, browser, base, prefix, options)
                     elif scenario == "none":
                         absent(j, browser, base, prefix, options, "none", "沒有盯項")
                     elif scenario == "off":

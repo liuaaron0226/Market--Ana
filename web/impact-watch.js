@@ -23,6 +23,10 @@
   const monthDay = date => (/^\d{4}-\d{2}-\d{2}$/.test(date || '') ? `${Number(date.slice(5, 7))}/${Number(date.slice(8, 10))}` : '');
   const done = item => Boolean(item.result);
   const short = label => label.replace(/（.*?）/g, '');   // 那一行放不下價位，點開看得到
+  // 條件被否定（確定不會發生）時要講明：只寫條件會被當成「發生了」
+  const missed = item => item.status === 'failed';
+  const outcome = item => (missed(item) ? '落空' : '有結果');
+  const headline = item => `${missed(item) ? '落空：' : ''}${short(item.label)}`;
 
   // 清單裡的一項：條件＋剩幾個交易日（或「有結果」與結果）＋對象與類型；點了看說明、準備與出處。有結果的直接攤開。
   function row(item, index) {
@@ -33,7 +37,7 @@
     head.append(el('span', 'iw-cond', item.label));
     if (done(item)) {
       const mark = el('span', 'iw-left');
-      mark.append(el('i', 'iw-dot'), '有結果');
+      mark.append(el('i', 'iw-dot'), outcome(item));
       head.append(mark);
       if (item.result.note) head.append(el('span', 'iw-result', item.result.note));
     } else if (Number.isInteger(item.days_left)) {
@@ -65,7 +69,7 @@
     const box = el('span', 'iw-line');
     const count = el('span', 'iw-count');
     if (results.length) {
-      box.append(el('i', 'iw-dot'), el('span', 'iw-text', short(results[0].label)));
+      box.append(el('i', 'iw-dot'), el('span', 'iw-text', headline(results[0])));
       if (watching) count.append('還盯 ', el('b', '', String(watching)), ' 件');
     } else {
       count.append('在盯 ', el('b', '', String(watching)), ' 件');
@@ -76,7 +80,7 @@
     box.append(arrow);
     key.classList.toggle('is-news', results.length > 0);
     key.setAttribute('aria-label', results.length
-      ? `你在等的事：${short(results[0].label)}有結果${watching ? `，還盯 ${watching} 件` : ''}`
+      ? `你在等的事：${short(results[0].label)}${outcome(results[0])}${watching ? `，還盯 ${watching} 件` : ''}`
       : `你在等的事：在盯 ${watching} 件`);
     return box;
   }
@@ -111,6 +115,8 @@
       if (!policy?.features?.impact_watch_v1) return;
     } catch (_) { return; }
     await load();
+    // 網址帶 #impact-watch（之後的推播點進來）：直接打開清單。開合在 home-fold.js，所以照點一下那顆鍵的路走
+    if (location.hash === '#impact-watch' && !key.hidden) key.click();
     // 網站常開著放在手機主畫面：回到這一頁時重讀，盤後有結果才看得到
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible' && Date.now() - loadedAt > REFRESH_MS) load();
