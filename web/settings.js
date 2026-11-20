@@ -2,16 +2,18 @@
    首頁、個股頁、自選股頁的頁首都有同一顆齒輪（[data-settings-open]），點了浮出同一塊板：
    - Gemini 用量（只有站主）：/api/settings/gemini-usage，每次打開重讀
    - 通知（只有站主）：到價推播，畫面由 watch-push.js 的 WatchPush.mount 畫（第一次切到這一籤才畫，免得每頁都去註冊推播）
-   - 外觀（所有人）：淺色／深色、桌面背景（只換首頁與個股頁的桌面底色）
+   - 外觀（所有人）：淺色／深色、桌面背景（淺色：只換首頁與個股頁的桌面底色；深色：板、桌面、細線一起換，本人 2026-11-20）
    板子最下面一列：站主是「帳號管理」（有人等待核准時齒輪上也標人數），朋友是「Gemini 設定」（朋友 AI 開著時）。
    只有一顆籤時（一般使用者）不顯示籤列。浮層開著時底下的頁面鎖住（scroll-lock.js）。
 
-   主題與背景存在這台瀏覽器（market-theme、market-desk），換主題時發出 market:theme 事件，各頁自己重畫圖。 */
+   主題與背景存在這台瀏覽器（market-theme、market-desk；深色的背景另外存 market-desk-dark，淺色深色各記各的），
+   換主題或換深色背景時發出 market:theme 事件，各頁自己重畫圖。<html data-desk> 寫的是「現在這個主題」選的那一種。 */
 (function (global) {
   'use strict';
 
   const THEME_KEY = 'market-theme';
   const DESK_KEY = 'market-desk';
+  const DARK_DESK_KEY = 'market-desk-dark';
   // 第一個是現在的米白（bold.css 的 --desk）。色值只在 settings.css（--desk-<key>），色票也照那裡畫
   const DESKS = [
     { key: '', name: '米白' },
@@ -19,6 +21,15 @@
     { key: 'paper', name: '紙白' },
     { key: 'mist', name: '霧灰' },
     { key: 'sage', name: '淡青' },
+  ];
+  // 深色的桌面（本人 2026-11-20：「暗色系桌面選擇只有一個請你多增加其他種暗色系配色，且不會影響我看K線圖」，從樣品選了三種）。
+  // 第一個是原本的深色。換的是桌面、板、鍵的底與細線；字色、紅綠、均線的顏色都不動，K 線上的顏色和原本完全一樣。
+  // 色值只在 settings.css；每一種底色上 K 線各種顏色的對比度量過（design-previews/ui-polish/dark-contrast.py）。
+  const DARK_DESKS = [
+    { key: '', name: '墨黑' },
+    { key: 'slate', name: '深藍灰' },
+    { key: 'umber', name: '炭褐' },
+    { key: 'graphite', name: '石墨' },
   ];
   // 任務的 key 是排程檔名（.github/workflows/<key>.yml，gemini_usage.py --task）。
   // 自選股那支排程同時跑每日判斷與提名同類股；籌碼與資金白話是在每日更新那支排程裡寫的。
@@ -36,14 +47,16 @@
   const LOW = 20;   // 剩不到兩成標成偏低（金色）
 
   function readPrefs(storage) {
-    let theme = null, desk = '';
+    let theme = null, desk = '', darkDesk = '';
     try {
       const t = storage.getItem(THEME_KEY);
       if (t === 'light' || t === 'dark') theme = t;
       const d = storage.getItem(DESK_KEY);
       if (DESKS.some(item => item.key === d)) desk = d;
+      const dd = storage.getItem(DARK_DESK_KEY);
+      if (DARK_DESKS.some(item => item.key === dd)) darkDesk = dd;
     } catch (_) { /* 私密視窗可能讀不到 */ }
-    return { theme, desk };
+    return { theme, desk, darkDesk };
   }
 
   const pad = (n) => String(n).padStart(2, '0');
@@ -156,19 +169,22 @@
   const tabsFor = ({ usage, models, notify }) => ['usage', 'models', 'notify', 'look']
     .filter(key => key === 'look' || ({ usage, models, notify })[key]);
 
-  global.MarketSettings = { DESKS, readPrefs, resetText, modelLabel, usageView, tabsFor, modelsView, confirmNotes, nextChoice };
+  global.MarketSettings = { DESKS, DARK_DESKS, readPrefs, resetText, modelLabel, usageView, tabsFor, modelsView, confirmNotes, nextChoice };
 
   // ---------- 畫面 ----------
   const doc = global.document;
   if (!doc) return;
   const root = doc.documentElement;
 
+  const isDark = () => getComputedStyle(root).colorScheme.includes('dark');
   function applyPrefs() {
     let storage = null;
     try { storage = global.localStorage; } catch (_) { /* 私密視窗 */ }
-    const prefs = storage ? readPrefs(storage) : { theme: null, desk: '' };
+    const prefs = storage ? readPrefs(storage) : { theme: null, desk: '', darkDesk: '' };
     if (prefs.theme) root.dataset.theme = prefs.theme;
-    if (prefs.desk) root.dataset.desk = prefs.desk; else delete root.dataset.desk;
+    // 現在是深色就套深色選的那一種，淺色套淺色選的
+    const desk = isDark() ? prefs.darkDesk : prefs.desk;
+    if (desk) root.dataset.desk = desk; else delete root.dataset.desk;
   }
   applyPrefs();
   // 按「上一頁」整頁還原時，可能在別頁改過背景（主題由各頁自己的 pageshow 處理）
@@ -279,7 +295,7 @@
   function renderLook() {
     const pane = panes.look;
     pane.replaceChildren();
-    const dark = getComputedStyle(root).colorScheme.includes('dark');
+    const dark = isDark();
     const themeRow = el('div', 'st-row');
     const group = el('div', 'st-seg');
     group.setAttribute('role', 'group');
@@ -293,15 +309,15 @@
     }
     themeRow.append(el('span', 'st-label', '主題'), group);
     pane.append(themeRow);
-    if (dark) return;   // 桌面背景只有淺色主題才有
+    // 淺色、深色各有一組桌面背景，各記各的
     const deskRow = el('div', 'st-row st-row-stack');
     const label = el('span', 'st-label', '桌面背景');
-    label.append(el('small', '', '只換首頁與個股頁的桌面底色'));
-    const swatches = el('div', 'st-swatches');
+    label.append(el('small', '', dark ? '桌面與板一起換，K 線的顏色不變' : '只換首頁與個股頁的桌面底色'));
+    const swatches = el('div', `st-swatches${dark ? ' is-dark' : ''}`);
     swatches.setAttribute('role', 'group');
     swatches.setAttribute('aria-label', '桌面背景');
     const chosen = root.dataset.desk || '';
-    for (const desk of DESKS) {
+    for (const desk of dark ? DARK_DESKS : DESKS) {
       const button = el('button', 'st-swatch');
       button.type = 'button';
       button.dataset.deskSet = desk.key;
@@ -317,6 +333,7 @@
     if (theme) {
       root.dataset.theme = theme.dataset.themeSet;
       save(THEME_KEY, root.dataset.theme);
+      applyPrefs();   // 桌面背景換成這個主題選的那一種
       doc.dispatchEvent(new CustomEvent('market:theme', { detail: { theme: root.dataset.theme } }));
       renderLook();
       panes.look.querySelector(`[data-theme-set="${root.dataset.theme}"]`)?.focus();
@@ -324,9 +341,12 @@
     }
     const desk = event.target.closest?.('[data-desk-set]');
     if (desk) {
+      const dark = isDark();
       if (desk.dataset.deskSet) root.dataset.desk = desk.dataset.deskSet; else delete root.dataset.desk;
-      save(DESK_KEY, desk.dataset.deskSet);
+      save(dark ? DARK_DESK_KEY : DESK_KEY, desk.dataset.deskSet);
       for (const b of panes.look.querySelectorAll('[data-desk-set]')) b.setAttribute('aria-pressed', String(b === desk));
+      // 深色的背景連板的底色一起換：K 線上的字與底要照新的顏色重畫（和換主題同一個事件）
+      if (dark) doc.dispatchEvent(new CustomEvent('market:theme', { detail: { theme: 'dark' } }));
     }
   });
 

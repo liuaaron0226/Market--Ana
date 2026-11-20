@@ -2,7 +2,8 @@
 
 底色＝畫 K 線的那塊板（--panel）。半透明的東西（布林通道的線 55%、量柱 45%）先和底色混好再算。
 門檻：線條與 K 棒 ≥ 3:1（WCAG 1.4.11 非文字），字 ≥ 4.5:1。布林通道現在的深色本來就刻意畫得淡，列出來對照。
-用法：python design-previews/ui-polish/dark-contrast.py [--md]   （有不過門檻的結束碼 1）
+量的是網站真正在用的（web/settings.css）；加 --samples 改量樣品檔 dark-desks.css。
+用法：python design-previews/ui-polish/dark-contrast.py [--md] [--samples]   （有不過門檻的結束碼 1）
 """
 from __future__ import annotations
 
@@ -44,11 +45,18 @@ def contrast(fg: str, bg: str, alpha: float = 1) -> float:
 
 
 def palettes() -> list[dict]:
-    css = (HERE / "dark-desks.css").read_text(encoding="utf-8")
+    """量的是網站真正在用的那幾種（web/settings.css 的深色桌面背景）；加 --samples 改量樣品檔（dark-desks.css，含沒被選上的）。"""
+    source = HERE / "dark-desks.css" if "--samples" in sys.argv else HERE.parents[1] / "web" / "settings.css"
+    css = source.read_text(encoding="utf-8")
+    variables = dict(re.findall(r"(--[\w-]+):\s*(#[0-9a-fA-F]{6})", css))
     found = [CURRENT]
-    for key, body in re.findall(r'data-desk="(\w+)"\]\s*\{([^}]*)\}', css):
-        values = dict(re.findall(r"--([\w-]+):\s*(#[0-9a-fA-F]{6})", body))
+    for key, body in re.findall(r'\[data-theme="dark"\]\[data-desk="(\w+)"\]\s*\{([^}]*)\}', css):
+        values = {}
+        for name, value in re.findall(r"--([\w-]+):\s*(#[0-9a-fA-F]{6}|var\(--[\w-]+\))", body):
+            values[name] = variables[value[4:-1]] if value.startswith("var(") else value
         found.append({"name": NAMES.get(key, key), "panel": values["panel"], "bg": values["bg"], "desk": values["desk"]})
+    if len(found) < 2:
+        raise SystemExit(f"no dark desks found in {source}")
     return found
 
 

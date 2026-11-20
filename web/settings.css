@@ -2,7 +2,7 @@
    和到價推播原本的浮層同一套：第 2 層的板（--float／--float-shadow），桌機浮在右上角齒輪下方、手機從下緣升起。
    陰影、圓角只用 bold.css 的變數。 */
 
-/* ---------- 桌面背景的選擇：只換首頁與個股頁的桌面兩個顏色（自選股頁沒有桌面底色，不受影響）；只有淺色主題換 ----------
+/* ---------- 桌面背景的選擇（淺色）：只換首頁與個股頁的桌面兩個顏色（自選股頁沒有桌面底色，不受影響）；深色的在下面另一段 ----------
    色值只寫在這裡：--desk-<key> 是桌面、--desk-<key>-hi 是左上角那片光；設定浮板的色票也讀同一組。米白照 bold.css 的淺色 --desk。 */
 :root {
   --desk-beige: #e9e5dc; --desk-sand: #e6ddcc; --desk-paper: #efebe3; --desk-mist: #e4e3df; --desk-sage: #e1e3da;
@@ -12,6 +12,28 @@
 :root[data-theme="light"][data-desk="paper"]:has(> :is(body.hm, body.st)) { --desk: var(--desk-paper); --desk-hi: var(--desk-paper-hi); }
 :root[data-theme="light"][data-desk="mist"]:has(> :is(body.hm, body.st))  { --desk: var(--desk-mist); --desk-hi: var(--desk-mist-hi); }
 :root[data-theme="light"][data-desk="sage"]:has(> :is(body.hm, body.st))  { --desk: var(--desk-sage); --desk-hi: var(--desk-sage-hi); }
+
+/* ---------- 深色的桌面背景（本人 2026-11-20 從樣品選：深藍灰、炭褐、石墨；原本的深色叫墨黑）----------
+   深色時高低靠明度差，所以桌面、板、鍵的底與細線要一起換（三個頁面都換），不像淺色只換桌面。
+   字色、紅綠、均線、金色、橘色都不動：K 線上的顏色和墨黑完全一樣，只有底下那塊板的底色不同。
+   每一種底色上紅 K、綠 K、九種均線色、布林通道、量柱、價籤的對比度量過（design-previews/ui-polish/dark-contrast.py）：
+   線與 K 棒最低 4.5（門檻 3）、字最低 4.6（門檻 4.5）。要加新的一種，先加進那支腳本量過再放進來。 */
+:root {
+  --desk-ink: #070709; --desk-slate: #090d13; --desk-umber: #0c0a08; --desk-graphite: #141518;
+  --slab-ink: #15151b; --slab-slate: #151c26; --slab-umber: #1b1814; --slab-graphite: #222327;
+}
+:root[data-theme="dark"][data-desk="slate"] {
+  --desk: var(--desk-slate); --desk-hi: #101722; --bg: #0d1219; --bg2: #121923;
+  --panel: var(--slab-slate); --panel2: #1a222e; --panel3: #202a37; --line: #2a3443; --line-strong: #445062; --edge: #070a0f;
+}
+:root[data-theme="dark"][data-desk="umber"] {
+  --desk: var(--desk-umber); --desk-hi: #15120e; --bg: #100e0b; --bg2: #171410;
+  --panel: var(--slab-umber); --panel2: #211d18; --panel3: #28241d; --line: #332e25; --line-strong: #4e473b; --edge: #090806;
+}
+:root[data-theme="dark"][data-desk="graphite"] {
+  --desk: var(--desk-graphite); --desk-hi: #1c1d21; --bg: #18191c; --bg2: #1e1f23;
+  --panel: var(--slab-graphite); --panel2: #282a2e; --panel3: #2f3136; --line: #3a3c42; --line-strong: #565961; --edge: #0f1012;
+}
 
 /* ---------- 頁首的齒輪：借各頁原本主題鍵的外觀；等待核准的人數標在右上角 ---------- */
 [data-settings-open] { position: relative; }
@@ -84,6 +106,16 @@
 .st-swatch[data-desk-set="paper"] i { background: var(--desk-paper); }
 .st-swatch[data-desk-set="mist"] i { background: var(--desk-mist); }
 .st-swatch[data-desk-set="sage"] i { background: var(--desk-sage); }
+/* 深色那一組：四種，色票上那一小塊板用各自的板色（不是現在這個主題的板色） */
+.st-swatches.is-dark { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.st-swatches.is-dark .st-swatch i { background: var(--desk-ink); box-shadow: inset 0 0 0 1px var(--line-strong); }
+.st-swatches.is-dark .st-swatch i::after { background: var(--slab-ink); box-shadow: inset 0 1px 0 var(--rim); }
+.st-swatches.is-dark .st-swatch[data-desk-set="slate"] i { background: var(--desk-slate); }
+.st-swatches.is-dark .st-swatch[data-desk-set="slate"] i::after { background: var(--slab-slate); }
+.st-swatches.is-dark .st-swatch[data-desk-set="umber"] i { background: var(--desk-umber); }
+.st-swatches.is-dark .st-swatch[data-desk-set="umber"] i::after { background: var(--slab-umber); }
+.st-swatches.is-dark .st-swatch[data-desk-set="graphite"] i { background: var(--desk-graphite); }
+.st-swatches.is-dark .st-swatch[data-desk-set="graphite"] i::after { background: var(--slab-graphite); }
 .st-swatch[aria-pressed="true"] { color: var(--ink); font-weight: 600; }
 .st-swatch[aria-pressed="true"] i { outline: 2px solid var(--ink); outline-offset: 2px; }
 
