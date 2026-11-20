@@ -12,7 +12,7 @@ import { defaultLiveQuoteService } from "./live-quotes.js";
 import { fetchTickPage } from "./live-ticks.js";
 import { loadHourly, withToday } from "./hourly-candles.js";
 import { defaultIndexLiveService } from "./index-live.js";
-import { analysisHidden, marketNewsVisible, policyForViewer, releasePolicy, stockEtfsVisible, stockFactsVisible, stockFundsVisible, stockSignalsVisible } from "./release-policy.js";
+import { analysisHidden, impactWatchVisible, marketNewsVisible, policyForViewer, releasePolicy, stockEtfsVisible, stockFactsVisible, stockFundsVisible, stockSignalsVisible } from "./release-policy.js";
 import { isOwnerEmail } from "./owner.js";
 import { CODE_PATTERN, CODE_RE, isExchangeCode } from "./codes.js";
 import { FORECAST_PATH, handleForecastApi } from "./forecast.js";
@@ -23,6 +23,7 @@ import { FRIEND_AI_PAGE, FRIEND_AI_PATH, keyStateLookup, deleteFriendKey, friend
 import { WATCH_PEERS_PATH, handleWatchPeersApi } from "./watch-peers.js";
 import { INDEX_PATH, indexOf, loadIndex } from "./market-indices.js";
 import { MARKET_NEWS_PATH, handleMarketNewsApi, handleStockHeadlinesApi } from "./market-news.js";
+import { IMPACT_WATCH_PATH, handleImpactWatchApi } from "./impact-watch.js";
 import { pushConfigured, sendOne } from "./web-push.js";
 
 const PENDING_CAP = 30;
@@ -382,6 +383,18 @@ async function handleNewsRequest(request, env, path, email, deps, { isOwner }) {
   }
   if (MARKET_NEWS_PATH.test(path)) return handleMarketNewsApi(request, env, email, { isOwner });
   return handleStockHeadlinesApi(request, env, path.match(HEADLINES_PATH)[1], { isOwner }, (deps.now || Date.now)());
+}
+
+// 盯項（本人 2026-11-20，票 03）：開關 MARKET_ANA_IMPACT_WATCH；關著時不碰資料表，和查行情共用同一個限流。
+async function handleImpactWatchRequest(request, env, email, deps, { isOwner }) {
+  if (!impactWatchVisible(env, isOwner)) return json(200, { available: false }, { "cache-control": "private, no-store" });
+  try {
+    await consume(env.DB, email, "market", (deps.now || Date.now)(), deps.rate);
+  } catch (e) {
+    if (e instanceof RateLimited) return json(429, { error: "rate-limited", message: "查詢太頻繁，請稍後再試" }, { "retry-after": String(e.retryAfter) });
+    throw new HttpError(503, "暫時無法處理，請稍後再試");
+  }
+  return handleImpactWatchApi(request, env, { isOwner }, (deps.now || Date.now)());
 }
 
 async function handleAnnouncementsApi(request, env, path, email, deps, { isOwner }) {
@@ -941,6 +954,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
       if (HISTORY_STOCK_PATH.test(path)) return await handleStockHistoryApi(request, env, path, email, deps, { isOwner: true });
       if (ANNOUNCEMENTS_PATH.test(path)) return await handleAnnouncementsApi(request, env, path, email, deps, { isOwner: true });
       if (MARKET_NEWS_PATH.test(path) || HEADLINES_PATH.test(path)) return await handleNewsRequest(request, env, path, email, deps, { isOwner: true });
+      if (IMPACT_WATCH_PATH.test(path)) return await handleImpactWatchRequest(request, env, email, deps, { isOwner: true });
       if (isStock) return await handleStockApi(request, env, path, email, deps, { isOwner: true });
       if (isScreens) return await handleScreensApi(request, env, path, email, deps);
       if (path === DATA_STATUS_PATH) return handleDataStatusApi(request, deps);
@@ -975,6 +989,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
     if (HISTORY_STOCK_PATH.test(path)) return await handleStockHistoryApi(request, env, path, email, deps, { isOwner: false });
     if (ANNOUNCEMENTS_PATH.test(path)) return await handleAnnouncementsApi(request, env, path, email, deps, { isOwner: false });
     if (MARKET_NEWS_PATH.test(path) || HEADLINES_PATH.test(path)) return await handleNewsRequest(request, env, path, email, deps, { isOwner: false });
+    if (IMPACT_WATCH_PATH.test(path)) return await handleImpactWatchRequest(request, env, email, deps, { isOwner: false });
     if (isStock) return await handleStockApi(request, env, path, email, deps, { isOwner: false });
     if (isScreens) return await handleScreensApi(request, env, path, email, deps);
     if (path === DATA_STATUS_PATH) return handleDataStatusApi(request, deps);

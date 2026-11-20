@@ -24,6 +24,7 @@
   <link rel="stylesheet" href="settings.css?v=20261120-desk74">
   <link rel="stylesheet" href="stock-picker.css?v=20261120-desk74">
   <link rel="stylesheet" href="market-news.css?v=20261120-desk74">
+  <link rel="stylesheet" href="impact-watch.css?v=20261120-desk74">
   <link rel="stylesheet" href="motion-fx.css?v=20261120-desk74">
 </head>
 <body class="bd hm">
@@ -60,6 +61,8 @@
           <span class="sr-only">劇本 <b class="num" id="scenarioDate">—</b></span>
         </div>
         <span id="zoneLabel" class="sr-only">—</span>
+        <!-- 盯項（本人 2026-11-20 選樣品 A）：和行情狀態同一行，平常「在盯 N 件」，有結果時金色圓點＋那件事；沒有盯項或開關關著時不出現（impact-watch.js） -->
+        <button class="iw-a" id="impactWatchKey" type="button" aria-haspopup="dialog" aria-controls="impactWatchDialog" hidden></button>
       </div>
 
       <div class="header-tools">
@@ -117,6 +120,17 @@
       <p class="stock-search-status" id="stockSearchStatus" role="status" hidden></p>
       <ul class="stock-search-results" id="stockSearchResults" aria-label="股票搜尋結果"></ul>
       <button class="stock-search-more" id="stockSearchMore" type="button" hidden>載入更多</button>
+    </dialog>
+
+    <!-- 盯項的清單：網站現成的浮起面板（開合在 home-fold.js），內容由 impact-watch.js 填 -->
+    <dialog class="float-dialog iw-dialog" id="impactWatchDialog" aria-labelledby="impactWatchTitle">
+      <header class="float-dialog-head">
+        <h2 id="impactWatchTitle">你在等的事</h2>
+        <button class="panel-close" type="button" data-dialog-close aria-label="關閉">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </button>
+      </header>
+      <div class="iw-list" id="impactWatchList"></div>
     </dialog>
 
     <p class="service-note" id="serviceNote" role="status" hidden></p>
@@ -371,6 +385,7 @@
   <script src="stock-picker.js?v=20261120-desk74"></script>
   <script src="minimal.js?v=20261120-desk74"></script>
   <script src="market-news.js?v=20261120-desk74"></script>
+  <script src="impact-watch.js?v=20261120-desk74"></script>
   <script src="period-switch.js?v=20261120-desk74"></script>
   <script src="chart-menus.js?v=20261120-desk74"></script>
   <script src="motion-fx.js?v=20261120-desk74"></script>

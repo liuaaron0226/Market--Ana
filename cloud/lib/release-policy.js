@@ -111,6 +111,16 @@ export function marketNewsVisible(env, isOwner) {
   return modeAllowsViewer(marketNewsMode(env), isOwner);
 }
 
+// 盯項：首頁頁首「在盯 N 件」（本人 2026-11-20，.scratch/impact-watch 票 03）：自己一個三種狀態的開關，和消息的開關不連動。
+// 先只開站主，本人看過再開給朋友（朋友只看得到對象是大盤的盯項）。
+function impactWatchMode(env) {
+  return threeStateMode(env?.MARKET_ANA_IMPACT_WATCH);
+}
+
+export function impactWatchVisible(env, isOwner) {
+  return modeAllowsViewer(impactWatchMode(env), isOwner);
+}
+
 // env 沒給時，事實區塊與五塊對其他人一律是關（寧可少給，不可多給）。
 export function policyForViewer(policy, isOwner, env = {}) {
   if (isOwner) return policy;
@@ -121,6 +131,7 @@ export function policyForViewer(policy, isOwner, env = {}) {
   features.stock_etfs_v1 = stockEtfsVisible(env, false);
   features.stock_funds_v1 = stockFundsVisible(env, false);
   features.market_news_v1 = marketNewsVisible(env, false);
+  features.impact_watch_v1 = impactWatchVisible(env, false);
   return { ...policy, features };
 }
 
@@ -160,6 +171,8 @@ export function releasePolicy(env = {}) {
       stock_funds_v1: stockFundsMode(env) !== "off",
       // 首頁「消息」：同上，這裡是站主看到的值。
       market_news_v1: marketNewsMode(env) !== "off",
+      // 盯項：同上，這裡是站主看到的值。
+      impact_watch_v1: impactWatchMode(env) !== "off",
     },
   };
 }
