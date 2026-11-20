@@ -104,6 +104,21 @@ class PublishTest(unittest.TestCase):
         self.assertEqual(rotation["result"]["groups"], GROUPS)
         self.assertEqual(report["counts"]["written"], len(msp.publish_plan()) + 1)
 
+    def test_strong_stocks_are_sealed_with_the_rotation_batch(self) -> None:
+        strong = {"date": "2026-11-06", "groups": {"半導體業": [{"code": "6488", "name": "環球晶", "gain_pct": 3.0}]}}
+        self.publish(strong_stocks=strong)
+        rotation = msp.read_batch(self.root, "rotation", "2026-11-06")
+        self.assertEqual(rotation["result"]["strong_stocks"], strong)
+        self.assertEqual(rotation["result"]["snapshots"], ROTATION["snapshots"])   # 產業資金流向本身不受影響
+
+    def test_strong_stocks_of_another_day_are_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            self.publish(strong_stocks={"date": "2026-11-05", "groups": {}})
+
+    def test_rotation_batch_without_strong_stocks_keeps_old_shape(self) -> None:
+        self.publish()
+        self.assertNotIn("strong_stocks", msp.read_batch(self.root, "rotation", "2026-11-06")["result"])
+
     def test_rotation_star_comes_from_rotation_snapshot(self) -> None:
         self.publish()
         batch = msp.read_batch(self.root, "screen-foreign_net_rank-1d-buy", "2026-11-06")

@@ -144,6 +144,16 @@ class ScreensEndpointTest(unittest.TestCase):
         self.assertEqual(payload["latest"]["date"], "2026-11-06")
         self.assertEqual(payload["group_definition"]["kind"], "official_industry")
         self.assertNotIn("snapshots", payload)  # 只回最新一天，時間軸留給後續切片
+        self.assertIsNone(payload["strong_stocks"])  # 這一批發布時還沒有強勢股：畫面那一段不顯示
+
+    def test_rotation_endpoint_carries_strong_stocks_of_the_same_batch(self) -> None:
+        strong = {"date": "2026-11-06", "window_days": 3, "limit": 3, "min_avg_turnover": 50_000_000,
+                  "groups": {"半導體業": [{"code": "6488", "name": "環球晶", "gain_pct": 3.02, "today_pct": 2.0,
+                                        "limit_up": False}], "水泥工業": []}}
+        msp.publish(self.root, data_date="2026-11-06", published_at="2026-11-06T10:00:00Z", **inputs(),
+                    strong_stocks=strong)
+        _, _, payload = get(f"{self.base}/api/rotation")
+        self.assertEqual(payload["strong_stocks"], strong)
 
     def test_stock_membership(self) -> None:
         self.publish()

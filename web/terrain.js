@@ -2,8 +2,9 @@
    每個產業一棟樓，樓高＝今日成交額；四個街區＝四個資金狀態。瀏覽器原生 CSS 3D，沒有用任何套件。
    樓高、佔地、排在第幾格全部來自 terrain-layout.js，這裡只把「格」換成像素，不另外算一套。
 
-   用法：Terrain.render(host, { bubbles, quadrants })
+   用法：Terrain.render(host, { bubbles, quadrants, detailExtra })
    - bubbles：產業資金流向 API 的 latest.bubbles；quadrants：同一份 API 的四個資金狀態（取 label）。
+   - detailExtra（可省略）：給產業名稱，回傳要接在點樓明細最下面的節點（沒有就回 null）；首頁用它列那個產業的強勢股。
    - 會清掉 host 原本的內容重畫（上一次留下的觀察器會先收掉）。樣式在 home.css〈資金地形〉。 */
 (function (global) {
   'use strict';
@@ -167,7 +168,7 @@
   }
 
   /* 選一棟樓：凸顯它、其他變淡，明細出現。回傳 { toggle, clear }：toggle 再點同一棟就取消，clear 一律取消。 */
-  function selection(host, city, detail, byName, labelOf, follow) {
+  function selection(host, city, detail, byName, labelOf, follow, detailExtra) {
     let selected = null;
     const select = node => {
       if (selected) { selected.classList.remove('is-selected'); selected.setAttribute('aria-pressed', 'false'); }
@@ -185,7 +186,8 @@
       [['今日成交額', `${number(bubble.amount_today, 1)} 億元`], ['檔數', number(bubble.member_count, 0)],
         ['成交額相對平均', `${signed(bubble.relative_pct, 0)}%`], ['近 5 日加速度', `${signed(bubble.y, 1)} 億元/日`]]
         .forEach(([term, value]) => { list.append(el('dt', '', term), el('dd', 'num', value)); });
-      detail.replaceChildren(state, el('h4', '', selected.dataset.name), list);
+      const extra = detailExtra ? detailExtra(selected.dataset.name) : null;
+      detail.replaceChildren(state, el('h4', '', selected.dataset.name), list, ...(extra ? [extra] : []));
       // 手機上明細排在街區下方，可能在畫面外：捲到看得見（桌機的明細浮在地形角落，不用捲）
       if (getComputedStyle(detail).position === 'static') detail.scrollIntoView({ block: 'nearest' });
     };
@@ -324,9 +326,9 @@
       observers.push(seen);
     } else grow();
 
-    const stopGlide = bindControls(stage, city, towers, selection(host, city, detail, byName, labelOf, follow), degrees => { view = degrees; fit(); });
+    const stopGlide = bindControls(stage, city, towers, selection(host, city, detail, byName, labelOf, follow, payload && payload.detailExtra), degrees => { view = degrees; fit(); });
     cleanups.set(host, () => { observers.forEach(observer => observer.disconnect()); global.clearTimeout(settle); stopGlide(); });
   }
 
-  global.Terrain = { render };
+  global.Terrain = { render, shortName };
 })(window);
