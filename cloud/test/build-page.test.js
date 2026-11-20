@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { cloudPage, WEB_FILES, RETIRED } from "../lib/build-page.js";
+import { cloudPage, WEB_FILES, RETIRED, stampAssets } from "../lib/build-page.js";
 
 const REAL = readFileSync(new URL("../../web/minimal.html", import.meta.url), "utf8");
 
@@ -53,4 +53,28 @@ test("目前 web/minimal.html 能轉成雲端頁：退役檔全移除、雲端�
   const out = cloudPage(REAL, RETIRED);
   for (const f of RETIRED) assert.doesNotMatch(out, new RegExp(`src="${f.replace(".", "\\.")}`), f);
   assert.ok(out.indexOf("/market-data-cloud.js") < out.search(/<script src="kchart\.js/));
+});
+
+// 換頁速度（2026-11-20）：頁面引用的 css／js 上雲時改帶內容雜湊
+test("stampAssets：站內的 css／js 換成內容雜湊，手動版本標籤被蓋掉", () => {
+  const hashes = { "minimal.css": "aaaaaaaaaaaa", "kchart.js": "bbbbbbbbbbbb", "market-data-cloud.js": "cccccccccccc", "admin/account.css": "dddddddddddd", "admin/admin.js": "eeeeeeeeeeee" };
+  const hashOf = (file) => hashes[file] ?? null;
+  const page = stampAssets([
+    '<link rel="stylesheet" href="minimal.css?v=20261120-desk71">',
+    '<script src="kchart.js?v=20261120-desk71" defer></script>',
+    '<script src="/market-data-cloud.js"></script>',
+  ].join("\n"), "minimal.html", hashOf);
+  assert.match(page, /href="minimal\.css\?v=aaaaaaaaaaaa"/);
+  assert.match(page, /src="kchart\.js\?v=bbbbbbbbbbbb" defer/);
+  assert.match(page, /src="\/market-data-cloud\.js\?v=cccccccccccc"/);
+  assert.doesNotMatch(page, /desk71/);
+  // 子資料夾裡的頁面：相對路徑照那一頁所在的資料夾找
+  const admin = stampAssets('<link rel="stylesheet" href="account.css"><script src="/admin/admin.js"></script>', "admin/index.html", hashOf);
+  assert.match(admin, /href="account\.css\?v=dddddddddddd"/);
+  assert.match(admin, /src="\/admin\/admin\.js\?v=eeeeeeeeeeee"/);
+});
+
+test("stampAssets：不是 dist 裡的檔（外部網址、找不到的檔）原樣不動", () => {
+  const html = '<link href="https://fonts.googleapis.com/css2?family=X" rel="stylesheet"><script src="missing.js?v=1"></script><a href="portfolio.html">x</a>';
+  assert.equal(stampAssets(html, "minimal.html", () => null), html);
 });

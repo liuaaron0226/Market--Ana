@@ -7,6 +7,7 @@
       任何帶 aria-haspopup="dialog" 與 aria-controls 的按鈕都會打開它指到的面板；面板裡帶 data-dialog-close 的按鈕會關掉它。
       目前有兩個：搜尋（右上角的放大鏡）與產業資金流向的排行、回溫訊號、表格（標題列的「排行與表格」）。
       面板開著的時候底下的頁面鎖住不捲（scroll-lock.js，本人 11-17）。
+      手機鍵盤開著時面板縮到鍵盤上緣以上（keyboard-inset.js、home.css）；手指一滑清單鍵盤就收起來、面板留著（本人 11-20）。
    搜尋與各區塊本身的邏輯仍在 minimal.js，這裡不碰。 */
 (function () {
   'use strict';
@@ -74,6 +75,15 @@
       const box = dialog.getBoundingClientRect();
       return event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom;
     };
+    // 手機：手指在面板裡一滑（捲清單），鍵盤就自己收起來，面板留著（本人 2026-11-20：想在搜尋裡看最近查過的股票，
+    // 鍵盤擋住下面幾檔；iPhone 的搜尋鍵盤沒有「收起來」的鍵，只能點面板外面，那樣面板也跟著關掉）。
+    // 手指放在輸入框上滑（移游標、選字）不算；點一下清單裡的一檔不會觸發 touchmove，照常進個股頁。
+    dialog.addEventListener('touchmove', event => {
+      const focused = document.activeElement;
+      if (!focused || !dialog.contains(focused) || !focused.matches('input, textarea')) return;
+      if (event.target.closest('input, textarea')) return;
+      focused.blur();
+    }, { passive: true });
     let pressedOutside = false;
     dialog.addEventListener('pointerdown', event => { pressedOutside = isOutside(event); });
     dialog.addEventListener('click', event => {

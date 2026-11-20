@@ -52,6 +52,7 @@
     } catch (_) { /* feature gate 讀取失敗時維持 default-off */ }
     $('levelPanel').hidden = !features.level_advice;
   }
+  const featuresReady = loadReleaseFeatures();   // 一進頁面就發；要看功能清單的資料都等這一個（讀不到時當作功能都關著，不會丟錯）
 
   // 主題在設定浮板裡切換（settings.js，本人 11-17 選樣品 A）；這一頁沒有要跟著重畫的圖
   function readSavedTheme() {
@@ -962,16 +963,17 @@
 
   async function loadWatch() {
     let watch = null;
+    await featuresReady;
     if (features.watchlist_watch_v1) {
       try {
-        const payload = await api('/api/watch');
+        // 關注名單與每一檔最新一份判斷（watch-judgments.js；E 票）一起讀，不排隊。判斷讀不到時是 null，清單照原樣。
+        const [payload, judgments] = await Promise.all([api('/api/watch'), window.WatchJudgments ? window.WatchJudgments.loadList() : null]);
         if (payload?.available) {
           watch = {
             count: payload.count, limit: payload.limit,
             codes: new Set((payload.items || []).map(item => item.code)),
             unwatchable: new Set(payload.unwatchable || []),
-            // 每一檔最新一份判斷（watch-judgments.js；E 票）。讀不到時是 null，清單照原樣。
-            judgments: window.WatchJudgments ? await window.WatchJudgments.loadList() : null,
+            judgments,
           };
         }
       } catch (_) { /* 讀不到關注時，自選股照常顯示，只是沒有開關 */ }
@@ -1118,10 +1120,16 @@
     } finally { button.disabled = false; }
   });
 
-  loadReleaseFeatures().then(async () => {
-    await Promise.all([loadWatchlist(), loadHoldings(), ...(features.level_advice ? [loadLevel()] : [])]);
-    // 到價推播（F 票）在頁首齒輪的設定浮板裡（settings.js，本人 11-17 選樣品 A）
-    await loadAiDigest();
+  // 進頁面要讀的資料同時發出去，不一支等一支（本人 2026-11-20「從主要切換到自選股會卡頓」：
+  // 正式站實測原本排四層——功能清單 → 自選／庫存／關注 → 關注判斷 → AI 整理，清單要等最後一支回來才畫）。
+  // 自選與庫存不用等功能清單；要看功能清單才知道讀不讀的（關注、水位、AI 整理）等它回來就一起發。
+  // 清單仍然等全部到齊才畫第一次（進場只播一次，見 listReady）。
+  // 到價推播（F 票）在頁首齒輪的設定浮板裡（settings.js，本人 11-17 選樣品 A）
+  Promise.all([
+    loadWatchlist(), loadHoldings(),
+    featuresReady.then(() => (features.level_advice ? loadLevel() : null)),
+    featuresReady.then(loadAiDigest),
+  ]).then(() => {
     listReady = true;
     renderList();
     showFreshness();

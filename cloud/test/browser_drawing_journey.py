@@ -2019,13 +2019,14 @@ def touch_mobile(journey: Journey, browser) -> None:
     for tool in TOUCH_TOOLS:
         button = tools.locator(f"button[data-tool={tool['kind']}]")
         button.dispatch_event("pointerdown", {"pointerType": "touch", "pointerId": 9, "bubbles": True})
+        # 名稱是淡入的：剛好在淡入結束那一瞬間讀，偶爾會讀到 0.9999（11-20 加了常駐動效後每一格的時間點略有不同），所以看「幾乎全顯」
         page.wait_for_timeout(600)
         tip = page.evaluate("""kind => { const b = document.querySelector(`#drawTools button[data-tool=${kind}]`), after = getComputedStyle(b, '::after');
           return { content: after.content, opacity: after.opacity, select: getComputedStyle(b).userSelect, selected: String(getSelection()) }; }""", tool["kind"])
         button.dispatch_event("pointerup", {"pointerType": "touch", "pointerId": 9, "bubbles": True})
         button.dispatch_event("click", {"bubbles": True})
         journey.check(f"08 手機：長按「{tool['name']}」顯示名稱、不能選取文字、放開不會選到工具",
-                      tip["content"] == f'"{tool["name"]}"' and tip["opacity"] == "1" and tip["select"] == "none" and tip["selected"] == ""
+                      tip["content"] == f'"{tool["name"]}"' and float(tip["opacity"]) > .99 and tip["select"] == "none" and tip["selected"] == ""
                       and not pressed(tool["kind"]), tip)
     page.screenshot(path=str(OUT / "mobile-40-touch-toolbar.png"))
     journey.check("08 手機：圖表畫布不能被選取（長按不跳選取）", page.evaluate("() => getComputedStyle(document.querySelector('#chartHost canvas')).userSelect") == "none")

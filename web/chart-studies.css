@@ -69,6 +69,10 @@
 .kc-studies .kc-study-title .chart-chip::before {
   inset: -2px -8px -8px -4px;
 }
+/* 手機：往下再補到 40px 上下（本人 2026-11-20 全站盤點；原本只有 28px）。下面是這個指標自己的圖的左上角，沒有別的鍵。 */
+@media (pointer: coarse) {
+  .kc-studies .kc-study-title .chart-chip::before { inset: -3px -10px -19px -4px; }
+}
 
 .kc-studies .kc-study-menu {
   top: 26px;

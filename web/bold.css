@@ -459,3 +459,18 @@ body.bd #content [data-cat-panel][data-open] { animation: cat-rise 380ms var(--e
 @media (prefers-reduced-motion: reduce) {
   :is(body.hm, body.bd) .key-strip .slide-thumb.is-settling { transition: none; }
 }
+
+/* ---------- 手機上的點擊區補到 44px 左右（本人 2026-11-20 全站盤點：小字的鍵手指不好點） ----------
+   外觀完全不變，只用一塊看不見的 ::before 把「手指點得到的範圍」上下撐大；滑鼠不受影響。
+   盤點表與量法在 design-previews/ui-polish/audit.py（量的是點得到的範圍，不是元素的框）。
+   這一段只收「本身沒有 ::before」的鍵；K 線上方均線名稱、指標名稱小鍵各自的檔案裡已經有補，數字在那裡調。 */
+@media (pointer: coarse) {
+  :is(.state-trigger, .panel-back, .chip-more, .screen-more, .rotation-open, .stock-suggest-link, .chip-seg button,
+      .forecast-seg button, #holdingRows .pf-horizon .cell, .drill-table .stock-link, .chip-table .stock-link) { position: relative; }
+  :is(.state-trigger, .panel-back, .chip-more, .screen-more, .rotation-open, .stock-suggest-link, .chip-seg button,
+      .forecast-seg button, #holdingRows .pf-horizon .cell)::before {
+    content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 44px; translate: 0 -50%;
+  }
+  /* 表格裡的股票連結：一列一檔，上下各補一點，不蓋到隔壁那一列太多 */
+  :is(.drill-table, .chip-table) .stock-link::before { content: ""; position: absolute; inset: -9px -6px; }
+}

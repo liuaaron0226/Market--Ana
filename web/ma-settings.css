@@ -36,3 +36,5 @@
 .ma-add { width: 100%; min-height: 44px; margin-top: 6px; border: 1px dashed var(--line-strong); border-radius: 9px; background: transparent; color: var(--ink); font: 500 14px var(--sans); cursor: pointer; }
 @media (hover: hover) { .ma-add:hover, .ma-pop-close:hover { background: var(--panel2); } }
 @media (prefers-reduced-motion: reduce) { .ma-pop { animation: none; } }
+/* 手機：天數框加高到 44px（本人 2026-11-20 全站盤點；輸入框不能用 ::before 補點擊區） */
+@media (pointer: coarse) { .ma-list input { height: 44px; } }

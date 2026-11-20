@@ -12,7 +12,7 @@ function load() {
   // vm 裡做出來的物件原型和這邊不同，比對前轉成一般的值
   const plain = (fn) => (...args) => JSON.parse(JSON.stringify(fn(...args)));
   const S = window.MarketSettings;
-  return { ...S, DESKS: JSON.parse(JSON.stringify(S.DESKS)), readPrefs: plain(S.readPrefs), usageView: plain(S.usageView), tabsFor: plain(S.tabsFor) };
+  return { ...S, DESKS: JSON.parse(JSON.stringify(S.DESKS)), DARK_DESKS: JSON.parse(JSON.stringify(S.DARK_DESKS)), readPrefs: plain(S.readPrefs), usageView: plain(S.usageView), tabsFor: plain(S.tabsFor) };
 }
 const S = load();
 const store = (values) => ({ getItem: (key) => values[key] ?? null });
@@ -31,11 +31,20 @@ const USAGE = {
 };
 
 test("偏好：主題只認淺色、深色；背景只認列出來的那幾種，其他都當成預設", () => {
-  assert.deepEqual(S.readPrefs(store({ "market-theme": "dark", "market-desk": "sand" })), { theme: "dark", desk: "sand" });
-  assert.deepEqual(S.readPrefs(store({ "market-theme": "blue", "market-desk": "neon" })), { theme: null, desk: "" });
-  assert.deepEqual(S.readPrefs(store({})), { theme: null, desk: "" });
+  assert.deepEqual(S.readPrefs(store({ "market-theme": "dark", "market-desk": "sand" })), { theme: "dark", desk: "sand", darkDesk: "" });
+  assert.deepEqual(S.readPrefs(store({ "market-theme": "blue", "market-desk": "neon" })), { theme: null, desk: "", darkDesk: "" });
+  assert.deepEqual(S.readPrefs(store({})), { theme: null, desk: "", darkDesk: "" });
   const broken = { getItem() { throw new Error("私密視窗"); } };
-  assert.deepEqual(S.readPrefs(broken), { theme: null, desk: "" });
+  assert.deepEqual(S.readPrefs(broken), { theme: null, desk: "", darkDesk: "" });
+});
+
+// 本人 2026-11-20：深色多三種桌面背景；淺色、深色各記各的
+test("偏好：深色的背景另外記，只認深色那一組；淺色的名字不能拿來當深色的", () => {
+  assert.deepEqual(S.readPrefs(store({ "market-theme": "dark", "market-desk": "sand", "market-desk-dark": "slate" })), { theme: "dark", desk: "sand", darkDesk: "slate" });
+  assert.equal(S.readPrefs(store({ "market-desk-dark": "sand" })).darkDesk, "");
+  assert.equal(S.readPrefs(store({ "market-desk": "slate" })).desk, "");
+  assert.deepEqual(S.DARK_DESKS.map((d) => d.name), ["墨黑", "深藍灰", "炭褐", "石墨"]);
+  assert.equal(S.DARK_DESKS[0].key, "");
 });
 
 test("背景的選項：米白（現在的）排第一，其餘都是淺色看盤桌", () => {

@@ -1,0 +1,160 @@
+/* 動效的樣式（motion-fx.js；本人 2026-11-20 選「B 資料會動」＋「C 板有重量」，並要「可以長住的效果」）。三個頁面共用。
+   只動 transform／opacity／虛線位移；顏色、圓角只用 minimal.css、bold.css 的變數。
+   系統設定「減少動態」時這裡整段不生效。K 線圖本身不加任何東西。
+
+   分三種：
+     更新時播一次   數字逐位滾動、細線掃過、一道光掃過板
+     進場播一次     籌碼卡依序浮起、小圖照時間順序畫出來；隔日三區分布展開
+     常駐           即時的資料（行情圓點、報價下的細線）只在盤中動；最新一筆的標記、橫條與板邊的光、桌面的光慢慢地一直在 */
+
+/* ================= 更新時播一次 ================= */
+/* 逐位滾動的數字：真正的字變透明，上面疊一層數字欄（只在滾的時候存在） */
+.fx-num { position: relative; }
+.fx-rolling { color: transparent !important; }
+.fx-odo {
+  position: absolute; top: 0; left: 0; height: var(--fx-lh); display: inline-flex; overflow: hidden;
+  color: var(--fx-ink); line-height: var(--fx-lh); white-space: pre; pointer-events: none;
+}
+.fx-odo i { display: block; font-style: normal; height: var(--fx-lh); }
+.fx-odo i[data-c]::before { content: attr(data-c); }
+/* 數字欄：0～9 直排，用 content 畫（不是真的文字，不會跑進 textContent） */
+.fx-odo .fx-col::before { content: "0\A 1\A 2\A 3\A 4\A 5\A 6\A 7\A 8\A 9"; display: block; white-space: pre; }
+
+/* 數值改變：數字底下一條細線掃過（漲紅跌綠只用在這條細線） */
+.fx-tick::after {
+  content: ""; position: absolute; left: 0; bottom: -.1em; width: 34%; height: 2px; border-radius: 1px;
+  background: var(--fx-tone, var(--dim)); pointer-events: none;
+  animation: fx-tick 900ms cubic-bezier(.3, 0, .2, 1) both;
+}
+.fx-tick[data-fx-tone="up"] { --fx-tone: var(--up); }
+.fx-tick[data-fx-tone="down"] { --fx-tone: var(--down); }
+@keyframes fx-tick {
+  0% { transform: translateX(0); opacity: 0; }
+  15%, 80% { opacity: 1; }
+  100% { transform: translateX(194%); opacity: 0; }
+}
+
+/* 資料更新：一道淡淡的光掃過那塊板 */
+.fx-host { position: relative; }
+.fx-sheen { position: absolute; inset: 0; z-index: 1; border-radius: inherit; overflow: hidden; pointer-events: none; }
+.fx-sheen::before {
+  content: ""; position: absolute; top: -20%; bottom: -20%; left: 0; width: 46%;
+  background: linear-gradient(100deg, transparent, color-mix(in srgb, var(--gold) 15%, transparent) 45%, transparent);
+  transform: translateX(-130%) skewX(-12deg);
+  animation: fx-sheen 900ms cubic-bezier(.3, 0, .2, 1) both;
+}
+@keyframes fx-sheen { to { transform: translateX(260%) skewX(-12deg); } }
+
+/* ================= 小圖的細節（motion-fx.js 的 dress 加的；沒有動態時也在） =================
+   走勢線下面一層由線的顏色淡到透明的漸層；最新一筆的圓點外面一圈暈（平常看不到，常駐效果才用）。 */
+.spark .fx-area { stroke: none; pointer-events: none; }
+.spark .fx-halo { fill: none; stroke-width: 1.5; opacity: 0; pointer-events: none; }
+.spark .fx-comet { fill: none; stroke-width: 5; stroke-linecap: round; opacity: 0; pointer-events: none; }
+
+@media (prefers-reduced-motion: no-preference) {
+  /* ================= 進場播一次：籌碼卡（展開那一類時） =================
+     卡片由上往下依序浮起；走勢線照時間順序從左畫到右（照線的實際長度，等速），畫到最新一筆時圓點才點上去、漸層才浮出來；
+     柱子一根接一根從基準線長出來（買超往上長、賣超往下長）。 */
+  [data-cat-panel][data-open] .chip-card { animation: fx-rise 520ms var(--ease-depth) both; animation-delay: calc(var(--fx-card, 0) * 70ms); }
+  @keyframes fx-rise { from { opacity: 0; transform: translateY(10px); } }
+  [data-cat-panel][data-open] .chip-card .spark polyline:not(.fx-comet) {
+    stroke-dasharray: var(--fx-len, 460px); stroke-dashoffset: var(--fx-len, 460px);
+    animation: fx-draw 1000ms cubic-bezier(.45, 0, .2, 1) both; animation-delay: calc(var(--fx-card, 0) * 70ms + 220ms);
+  }
+  @keyframes fx-draw { to { stroke-dashoffset: 0; } }
+  [data-cat-panel][data-open] .chip-card .spark .fx-area { animation: fx-fade 520ms ease-out both; animation-delay: calc(var(--fx-card, 0) * 70ms + 900ms); }
+  [data-cat-panel][data-open] .chip-card .spark circle:not(.fx-halo) {
+    transform-box: fill-box; transform-origin: center;
+    animation: fx-pop 420ms var(--ease-depth) both; animation-delay: calc(var(--fx-card, 0) * 70ms + 1120ms);
+  }
+  @keyframes fx-fade { from { opacity: 0; } }
+  @keyframes fx-pop { from { opacity: 0; transform: scale(0); } }
+  [data-cat-panel][data-open] .chip-card .spark rect {
+    transform-box: fill-box; transform-origin: 50% 100%;
+    animation: fx-grow 480ms var(--ease-depth) both; animation-delay: calc(var(--fx-card, 0) * 70ms + var(--fx-i, 0) * 24ms + 200ms);
+  }
+  [data-cat-panel][data-open] .chip-card .spark rect[fill="var(--down)"] { transform-origin: 50% 0; }
+  @keyframes fx-grow { from { transform: scaleY(0); } }
+
+  /* 隔日三區分布：捲到才由左往右展開（motion-fx.js 加 .fx-in） */
+  .distribution-bar.fx-in > button { transform-origin: left center; animation: fx-spread 620ms var(--ease-depth) both; }
+  .distribution-bar.fx-in > button:nth-child(2) { animation-delay: 110ms; }
+  .distribution-bar.fx-in > button:nth-child(3) { animation-delay: 220ms; }
+  @keyframes fx-spread { from { opacity: 0; transform: scaleX(.2); } }
+
+  /* ================= 常駐：即時的資料，只在盤中動 ================= */
+  /* 行情圓點：一圈一圈往外淡出（首頁的行情狀態是「盤中」時） */
+  .state-trigger[data-state="live"] .state-dot { position: relative; }
+  .state-trigger[data-state="live"] .state-dot::after {
+    content: ""; position: absolute; inset: -1px; border-radius: 50%; border: 1.5px solid var(--accent);
+    animation: fx-ring 2.2s cubic-bezier(.2, .6, .3, 1) infinite;
+  }
+  @keyframes fx-ring { from { transform: scale(1); opacity: .75; } to { transform: scale(3.4); opacity: 0; } }
+  /* 個股頁的 LIVE 徽章：慢慢地明暗 */
+  .bd-live-badge:not([hidden]) { animation: fx-breath 1.6s ease-in-out infinite alternate; }
+  @keyframes fx-breath { from { opacity: .45; } to { opacity: 1; } }
+  /* 報價下的細線：一段光由左往右流（顏色是今天的漲跌：漲紅跌綠；平盤用次要字色） */
+  .market-header:has(.state-trigger[data-state="live"]) .price-value,
+  .bd-price:has(.bd-live-badge:not([hidden])) #close { position: relative; }
+  .market-header:has(.state-trigger[data-state="live"]) .price-value::before,
+  .bd-price:has(.bd-live-badge:not([hidden])) #close::before {
+    content: ""; position: absolute; left: 0; right: 0; bottom: -.1em; height: 2px; border-radius: 1px; pointer-events: none;
+    background: linear-gradient(90deg, transparent 35%, var(--fx-live, var(--dim)) 50%, transparent 65%) 100% 0 / 300% 100% no-repeat, var(--hair);
+    animation: fx-live-line 2.6s linear infinite;
+  }
+  .market-header:has(.price-change.is-up) .price-value, .bd-price:has(#chg.up) #close { --fx-live: var(--up); }
+  .market-header:has(.price-change.is-down) .price-value, .bd-price:has(#chg.down) #close { --fx-live: var(--down); }
+  @keyframes fx-live-line { to { background-position: 0 0, 0 0; } }
+
+  /* ================= 常駐：慢慢地一直在 ================= */
+  /* 籌碼卡的走勢線：最新一筆的圓點外面一圈暈慢慢散開；一小段光每 6 秒沿著線走一次（每張卡錯開） */
+  .chip-card .spark .fx-halo { transform-box: fill-box; transform-origin: center; animation: fx-halo 2.6s ease-out infinite; animation-delay: calc(var(--fx-card, 0) * .4s + 1.6s); }
+  @keyframes fx-halo { 0% { transform: scale(1); opacity: .55; } 70%, 100% { transform: scale(3.4); opacity: 0; } }
+  .chip-card .spark .fx-comet {
+    stroke-dasharray: calc(var(--fx-len, 460px) * .09) var(--fx-len, 460px); stroke-dashoffset: calc(var(--fx-len, 460px) * .09);
+    animation: fx-comet 6s cubic-bezier(.45, 0, .55, 1) infinite; animation-delay: calc(var(--fx-card, 0) * .9s + 2s);
+  }
+  @keyframes fx-comet {
+    0% { stroke-dashoffset: calc(var(--fx-len, 460px) * .09); opacity: 0; }
+    6% { opacity: .34; }
+    34% { opacity: .34; }
+    40%, 100% { stroke-dashoffset: calc(var(--fx-len, 460px) * -1); opacity: 0; }
+  }
+  /* 籌碼卡的柱子：最新一根慢慢地明暗（和進場的「長出來」一起掛，兩個動的是不同的屬性） */
+  [data-cat-panel][data-open] .chip-card .spark rect.fx-last {
+    animation: fx-grow 480ms var(--ease-depth) both, fx-breath 1.8s ease-in-out infinite alternate;
+    animation-delay: calc(var(--fx-card, 0) * 70ms + var(--fx-i, 0) * 24ms + 200ms), 1.4s;
+  }
+  /* 持股橫條：賺（或賠）的那一段上面，一道光每 5 秒由左往右過一次（每一檔錯開） */
+  .hv-bar :is(.gain, .lack) { overflow: hidden; }
+  .hv-bar :is(.gain, .lack)::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: linear-gradient(90deg, transparent, rgb(255 255 255 / 42%), transparent);
+    transform: translateX(-110%); animation: fx-bar 5.2s cubic-bezier(.4, 0, .2, 1) infinite; animation-delay: calc(var(--at, 0ms) * 3 + 1.8s);
+  }
+  @keyframes fx-bar { 0% { transform: translateX(-110%); } 32%, 100% { transform: translateX(110%); } }
+  /* 板邊的金色細光：沿著板的上緣慢慢走（motion-fx.js 在頁首那塊板裡加 .fx-rim） */
+  .fx-rim { position: absolute; top: 0; left: var(--r-slab); right: var(--r-slab); height: 2px; overflow: hidden; pointer-events: none; }
+  .fx-rim::before {
+    content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 38%;
+    background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--gold) 72%, transparent), transparent);
+    transform: translateX(-110%); animation: fx-rim 7s cubic-bezier(.4, 0, .2, 1) infinite; animation-delay: 1.2s;
+  }
+  @keyframes fx-rim { 0% { transform: translateX(-110%); } 50%, 100% { transform: translateX(290%); } }
+  /* 桌面的光慢慢移動（首頁、個股頁）：原本畫在 body 底上的那片光改畫在一層固定的底上，才能只動位置、不重畫整頁 */
+  html.fx-desk :is(body.hm, body.st) { background: none; }
+  html.fx-desk::before {
+    content: ""; position: fixed; inset: -30%; z-index: -1; pointer-events: none;
+    background: radial-gradient(closest-side at 34% 32%, var(--desk-hi), transparent 72%);
+    animation: fx-desk 24s ease-in-out infinite alternate;
+  }
+  @keyframes fx-desk { from { transform: translate(-8%, -6%); } to { transform: translate(20%, 12%); } }
+}
+
+/* 換頁（換板）：板沉下去、落下來都是 motion-fx.js 做的，這裡沒有樣式。
+   試過瀏覽器的跨頁過場（@view-transition { navigation: auto }）讓舊畫面淡出：無頭 Chromium 實測新的一頁的動畫時間軸會停在 0、
+   板一直是透明的（design-previews/ui-polish/check-motion.py 抓到），所以不用。 */
+
+@media (prefers-reduced-motion: reduce) {
+  .fx-tick::after, .fx-sheen, .fx-rim { display: none; }
+}

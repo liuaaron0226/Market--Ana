@@ -352,3 +352,53 @@ test("錯誤回應不洩漏內部訊息", async () => {
   const r = await handle(new Request("https://market-ana.pages.dev/api/admin/users", { headers: { "cf-access-jwt-assertion": tok } }), broken, next, deps);
   assert.doesNotMatch(await r.text(), /SECRET-STACK/);
 });
+
+// 換頁速度（2026-11-20）：只有版本就是內容雜湊的 css／js 才讓瀏覽器留著
+test("靜態檔快取：版本等於內容雜湊的 css／js 才開，其他照舊 no-store", async () => {
+  const body = "body{color:red}";
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(body)));
+  const hash = [...digest.slice(0, 6)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  const asset = async () => new Response(body, { status: 200, headers: { "content-type": "text/css; charset=utf-8", "cache-control": "no-store" } });
+  const get = async (path, method = "GET") => {
+    const headers = new Headers({ "cf-access-jwt-assertion": await issuer.sign(claims(OWNER)) });
+    return handle(new Request("https://market-ana.pages.dev" + path, { method, headers }), env, asset, deps);
+  };
+  const hit = await get(`/minimal.css?v=${hash}`);
+  assert.equal(hit.headers.get("cache-control"), "private, max-age=31536000, immutable");
+  assert.equal(await hit.text(), body);
+  assert.equal(hit.headers.get("content-type"), "text/css; charset=utf-8");
+  // 手動版本標籤、雜湊對不上、沒帶版本、頁面本身：都不快取
+  for (const path of ["/minimal.css?v=20261120-desk71", "/minimal.css?v=000000000000", "/minimal.css", `/minimal.html?v=${hash}`, `/?v=${hash}`]) {
+    const miss = await get(path);
+    assert.equal(miss.headers.get("cache-control"), "no-store", path);
+    assert.equal(await miss.text(), body, path);
+  }
+  assert.equal((await get(`/minimal.css?v=${hash}`, "HEAD")).headers.get("cache-control"), "no-store");
+});
+
+test("靜態檔快取：找不到的檔與未核准的人不會拿到可快取的回應", async () => {
+  const missing = async () => new Response("not found", { status: 404, headers: { "cache-control": "no-store" } });
+  const headers = new Headers({ "cf-access-jwt-assertion": await issuer.sign(claims(OWNER)) });
+  const r = await handle(new Request("https://market-ana.pages.dev/gone.js?v=0123456789ab", { headers }), env, missing, deps);
+  assert.equal(r.status, 404);
+  assert.equal(r.headers.get("cache-control"), "no-store");
+  await seed("wait@x.com", "pending");
+  const pending = await req("/minimal.css?v=0123456789ab", { email: "wait@x.com" });
+  assert.equal(pending.status, 403);
+  assert.doesNotMatch(pending.headers.get("cache-control") || "", /max-age/);
+});
+
+test("頁面的 .html 轉址讓瀏覽器記一天；轉過去的頁面與其他轉址照舊不快取", async () => {
+  const redirect = (status) => async () => new Response(null, { status, headers: { location: "/portfolio", "cache-control": "no-store" } });
+  const get = async (path, status) => {
+    const headers = new Headers({ "cf-access-jwt-assertion": await issuer.sign(claims(OWNER)) });
+    return handle(new Request("https://market-ana.pages.dev" + path, { headers }), env, redirect(status), deps);
+  };
+  const moved = await get("/portfolio.html", 308);
+  assert.equal(moved.status, 308);
+  assert.equal(moved.headers.get("location"), "/portfolio");
+  assert.equal(moved.headers.get("cache-control"), "private, max-age=86400");
+  assert.equal((await get("/stock.html?code=2330", 308)).headers.get("cache-control"), "private, max-age=86400");
+  assert.equal((await get("/portfolio.html", 302)).headers.get("cache-control"), "no-store");
+  assert.equal((await get("/somewhere", 308)).headers.get("cache-control"), "no-store");
+});

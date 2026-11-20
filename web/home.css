@@ -567,11 +567,14 @@ body.hm .market-screens .screen-block:first-child { margin-top: 20px; }
 /* 收起來的一類怎麼藏、展開時怎麼浮出來：在 bold.css「分類鍵」那一段，和個股頁共用。 */
 
 /* ---------- 浮起的面板（原生 dialog）：第 2 層的浮板，搜尋與產業資金流向的排行表格共用 ----------
-   出現在畫面上方（手機鍵盤彈出時內容不會被擋）。開關在 home-fold.js。 */
+   出現在畫面上方。開關在 home-fold.js。
+   手機鍵盤彈出時（本人 11-20：搜尋最下面幾檔被鍵盤擋住）：iPhone 的 100dvh 不會因為鍵盤變矮，
+   面板要照 keyboard-inset.js 寫的「看得到的範圍」（--vv-top、--vv-height）縮到鍵盤上緣以上，裡面照常捲得到最後一列。
+   沒有鍵盤時這兩個變數不存在，照後備值（整個畫面）算，和原本一樣。 */
 body.hm dialog.float-dialog:not([open]) { display: none; }
 body.hm dialog.float-dialog {
-  width: min(640px, calc(100vw - 32px)); max-height: calc(100dvh - 10dvh - 16px);
-  margin: 10dvh auto auto; padding: 20px 24px 24px;
+  width: min(640px, calc(100vw - 32px)); max-height: calc(var(--vv-height, 100dvh) - 10dvh - 16px);
+  margin: calc(var(--vv-top, 0px) + 10dvh) auto auto; padding: 20px 24px 24px;
   border: 0; border-radius: var(--r-float); background: var(--float); box-shadow: var(--float-shadow);
   color: var(--ink); overflow: auto; overscroll-behavior: contain;
   animation: float-rise 380ms var(--ease-depth);
@@ -601,7 +604,7 @@ body.hm dialog.hm-search :is(.stock-search-suggestions, .stock-search-status, .s
   body.hm .price-summary { grid-area: price; }
   body.hm .chips { padding-top: 12px; }
   body.hm .market-screens .screen-block[data-open] { margin-top: 12px; }
-  body.hm dialog.float-dialog { max-height: calc(100dvh - 28px); margin-top: 12px; padding: 16px; }
+  body.hm dialog.float-dialog { max-height: calc(var(--vv-height, 100dvh) - 28px); margin-top: calc(var(--vv-top, 0px) + 12px); padding: 16px; }
   body.hm .float-dialog-head { top: -16px; margin: -16px -16px 4px; padding: 16px 16px 10px; }
 }
 /* 320 寬：三顆 44px 的圖示鍵旁邊放不下帶圖示的標題，拿掉標題前的小圖示 */

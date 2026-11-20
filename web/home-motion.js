@@ -1,7 +1,7 @@
 /* unslop 首頁範例：動態效果（2026-11-09），跟個股頁 motion.js 同一套規則
-   1. 載入：報價→主K線依序淡入上移 8px（一次）
+   1. 載入：報價→主K線兩塊板依序落到桌上（一次；11-20 起，原本是淡入上移 8px）
    2. 往下捲：直白分析進入畫面時才淡入（一次）。籌碼與選股看板 11-14 起收在分類鍵後面，展開的動態在 home.css
-   3. 指數數字從前一個值滾到新值（盤中更新時看得出變化）
+   3. 指數數字一位一位滾到新值（盤中更新時看得出變化）：11-20 起由 motion-fx.js 做，這裡不再做
    4. 切換指標時，新的指標區從切換的方向滑進來
    系統設定「減少動態」時全部跳過。方法 unslop by @heydamir, CC BY 4.0 */
 (function () {
@@ -10,11 +10,8 @@
   const EASE = 'cubic-bezier(.2, .8, .2, 1)';
   const rise = [{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }];
 
-  // 1. 進場
-  ['.market-header', '.chart-workspace'].forEach((sel, i) => {
-    const el = document.querySelector(sel);
-    el && el.animate(rise, { duration: 420, delay: i * 80, easing: EASE, fill: 'backwards' });
-  });
+  // 1. 進場：兩塊板依序落到桌上（本人 11-20 選「C 板有重量」；motion-fx.js 的 MotionFx.land）
+  window.MotionFx.land(['.market-header', '.chart-workspace'].map(sel => document.querySelector(sel)));
 
   // 2. 捲動到才出現
   const io = new IntersectionObserver(entries => {
@@ -27,29 +24,6 @@
   const readCard = document.querySelector('.read-card');
   // 一開始就在畫面內的不再重播
   if (readCard && readCard.getBoundingClientRect().top >= innerHeight) io.observe(readCard);
-
-  // 3. 指數數字滾動
-  const price = document.getElementById('currentPrice');
-  let shown = null;
-  const parse = t => { const n = Number(String(t).replace(/,/g, '')); return Number.isFinite(n) ? n : null; };
-  if (price) new MutationObserver(() => {
-    if (price.dataset.tweening) return;
-    const target = parse(price.textContent);
-    if (target === null) return;
-    const from = shown === null ? target * .995 : shown;
-    shown = target;
-    if (from === target) return;
-    const digits = (price.textContent.split('.')[1] || '').length;
-    const start = performance.now();
-    price.dataset.tweening = '1';
-    const fmt = v => v.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits });
-    const step = now => {
-      const t = Math.min(1, (now - start) / 600), k = 1 - Math.pow(1 - t, 3);
-      price.textContent = fmt(from + (target - from) * k);
-      if (t < 1) requestAnimationFrame(step); else { price.textContent = fmt(target); delete price.dataset.tweening; }
-    };
-    requestAnimationFrame(step);
-  }).observe(price, { childList: true, characterData: true, subtree: true });
 
   // 4. 切換指標時，新的指標區從切換的方向滑進來（與個股頁相同）。切換鍵收進指標名稱的選單，不再有滑動底塊。
   const host = document.getElementById('chartStudies');
