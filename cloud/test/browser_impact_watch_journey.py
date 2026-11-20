@@ -6,6 +6,8 @@
 - 有結果：金色圓點＋等到的那件事變粗；清單第一項直接攤開結果（帶數字）與原本寫的準備；
 - 沒有盯項、或開關關著：整塊不出現，頁首高度和圖表位置與有盯項時一樣（不多佔高度）；
 - 開關只開站主時朋友看不到；開給全部時朋友看得到大盤的盯項、看不到只給站主的；
+- 消息型（票 05）：清單裡小標是「AI 讀新聞」，點開有「由 AI 讀後續的新聞判斷，可能漏看或看錯。」；
+  有結果的附依據的新聞（標題連到原文、另開分頁）；
 - 手機 390 與桌機 1440 都不橫向捲動；淺色與深色各拍一張。
 
 用真正的 gate.handle＋cloud/dist＋記憶體資料庫（cloud/test/journey-server.mjs），盯項是這裡種的假資料，
@@ -34,6 +36,10 @@ TODAY = datetime.now(timezone(timedelta(hours=8))).date()
 RESULT_NOTE = "成立：外資連續賣超 9 天，11/19 賣超 912 億。"
 FAILED_NOTE = "否定：11/19 外資買超 52 億，連續賣超沒有延續到 9 天。"
 PREPARE = "如果外資連續賣超，就先檢查手上權值股佔多少"
+AI_NOTE = "由 AI 讀後續的新聞判斷，可能漏看或看錯。"
+NEWS_WAITING, NEWS_MET = "台積電法說會給出明年展望", "美方公布正式的出口管制清單"
+NEWS_NOTE = "成立：美國商務部公布清單，納入多家晶片廠。"
+NEWS_PROOF = {"title": "美國公布晶片出口管制清單，輝達在列", "link": "https://example.com/list", "source": "路透"}
 WATCHING = [
     # (條件編號, 人話名稱, 模型的說明, 影響力, 剩幾個交易日)
     ("below_ma240", "加權指數收盤跌破年線", "年線是長線多空的分界，跌破代表修正還沒結束", 3, 18),
@@ -46,9 +52,11 @@ def q(value) -> str:
     return "NULL" if value is None else str(value) if isinstance(value, int) else "'" + str(value).replace("'", "''") + "'"
 
 
-def item_sql(key, label, note, impact, left, *, status="watching", result_note=None, visibility="all", subject="market", prepare=PREPARE) -> str:
+def item_sql(key, label, note, impact, left, *, status="watching", result_note=None, visibility="all", subject="market", prepare=PREPARE,
+             kind="numeric", params=None) -> str:
     done = status in ("met", "failed")
-    values = [f"{subject}:{key}:2026-11-18", "market_news", "2026-11-18", "2026-11-18-close#n1", subject, "numeric", key, "{}", label, note,
+    values = [f"{subject}:{key}:2026-11-18", "market_news", "2026-11-18", "2026-11-18-close#n1", subject, kind, key,
+              json.dumps(params or {}, ensure_ascii=False), label, note,
               impact, json.dumps([prepare], ensure_ascii=False) if prepare else None, "2026-11-18", "2026-12-16", None if done else left, status,
               TODAY.isoformat() if done else None, result_note, (TODAY + timedelta(days=5)).isoformat() if done else None, visibility,
               "2026-11-18T06:05:00Z"]
@@ -65,6 +73,12 @@ def seed_sql(scenario: str) -> str:
     out.append(item_sql("stock_2330", "台積電收盤站上月線", None, 1, 6, visibility="owner", subject="2330"))
     if scenario == "result":
         out.append(item_sql("foreign_sell_streak", "外資連續賣超達 9 天", "賣超延續才是真的轉弱", 3, None, status="met", result_note=RESULT_NOTE))
+    if scenario == "news":
+        out.append(item_sql("news:aaa", NEWS_WAITING, None, 2, 12, kind="news", params={"keywords": ["台積電", "法說會"], "since": "2026-11-18T06:05:00Z"},
+                            prepare="如果展望下修，就先檢查半導體佔持股多少"))
+        out.append(item_sql("news:bbb", NEWS_MET, None, 3, None, kind="news", status="met", result_note=NEWS_NOTE,
+                            params={"keywords": ["出口管制", "清單"], "since": "2026-11-18T06:05:00Z", "evidence": NEWS_PROOF},
+                            prepare="如果清單比預期嚴，就先檢查半導體佔持股多少"))
     if scenario == "failed":
         out.append(item_sql("foreign_sell_streak", "外資連續賣超達 9 天", None, 3, None, status="failed", result_note=FAILED_NOTE))
     return "\n".join(out)
@@ -92,6 +106,7 @@ STATE = """() => {
       meta: [...node.querySelectorAll('.iw-meta span')].map(span => span.textContent), open: node.open,
       done: node.classList.contains('is-done'), result: node.querySelector('.iw-result')?.textContent || null,
       body: node.open ? [...node.querySelectorAll('.iw-body p')].map(p => p.innerText.replace(/\\s+/g, ' ').trim()) : null,
+      links: [...node.querySelectorAll('.iw-body a')].map(a => ({ text: a.textContent, href: a.getAttribute('href'), target: a.target, rel: a.rel })),
     })),
     dialogInside: !dialog.open || (dialog.getBoundingClientRect().left >= 0 && dialog.getBoundingClientRect().right <= innerWidth),
     noScroll: document.documentElement.scrollWidth <= innerWidth,
@@ -250,6 +265,37 @@ def missed(j: Journey, browser, base: str, prefix: str, options: dict) -> None:
     context.close()
 
 
+def news_type(j: Journey, browser, base: str, prefix: str, options: dict) -> None:
+    """消息型：小標「AI 讀新聞」、點開有那句提醒；有結果的附依據的新聞。"""
+    context, page, _ = j.home(browser, base, OWNER, options)
+    now = page.evaluate(STATE)
+    j.check(f"{prefix}消息型有結果：頁首照樣金色圓點＋等到的那件事", now["shown"] and now["dot"] and now["text"].startswith(NEWS_MET)
+            and now["sameRow"] and now["insideHeader"] and now["noScroll"], now)
+    page.locator("#impactWatchKey").click()
+    page.wait_for_timeout(700)
+    opened = page.evaluate(STATE)
+    items = {item["cond"]: item for item in opened["items"]}
+    met, waiting = items[NEWS_MET], items[NEWS_WAITING]
+    j.check(f"{prefix}消息型：小標是「AI 讀新聞」，數字型照舊是「數字」", met["meta"] == ["大盤", "AI 讀新聞"] and waiting["meta"] == ["大盤", "AI 讀新聞"]
+            and items["加權指數收盤跌破年線"]["meta"] == ["大盤", "數字"], [met["meta"], waiting["meta"]])
+    j.check(f"{prefix}消息型有結果：攤開結果與依據的新聞、原本寫的準備、提醒、出處", met["open"] and met["result"] == NEWS_NOTE and met["body"] == [
+        f"依據的新聞 {NEWS_PROOF['title']}路透", "原本寫的準備 如果清單比預期嚴，就先檢查半導體佔持股多少", AI_NOTE, "出自 11/18 消息"], met["body"])
+    j.check(f"{prefix}依據的新聞連到原文、另開分頁", met["links"] == [{"text": NEWS_PROOF["title"], "href": NEWS_PROOF["link"], "target": "_blank",
+                                                                 "rel": "noopener noreferrer"}], met["links"])
+    j.check(f"{prefix}清單不超出畫面", opened["dialogInside"] and opened["noScroll"])
+    page.screenshot(path=str(OUT / f"{prefix}11-news-result-open.png"))
+    page.locator("#impactWatchList .iw-item", has_text=NEWS_WAITING).locator("summary").click()
+    page.wait_for_timeout(400)
+    body = {item["cond"]: item for item in page.evaluate(STATE)["items"]}[NEWS_WAITING]
+    j.check(f"{prefix}消息型還在盯：點開有準備、那句提醒與出處，沒有連結", body["body"] == [
+        "先做好的準備 如果展望下修，就先檢查半導體佔持股多少", AI_NOTE, "出自 11/18 消息"] and body["links"] == [] and body["left"] == "剩 12 日", body)
+    page.screenshot(path=str(OUT / f"{prefix}12-news-waiting-open.png"))
+    page.evaluate("() => { document.documentElement.dataset.theme = 'dark'; }")
+    page.wait_for_timeout(300)
+    page.screenshot(path=str(OUT / f"{prefix}13-news-open-dark.png"))
+    context.close()
+
+
 def deep_link(j: Journey, browser, base: str, prefix: str, options: dict) -> None:
     """網址帶 #impact-watch：進首頁就打開清單（之後的推播點進來用）。"""
     context = browser.new_context(**options)
@@ -295,8 +341,9 @@ def main() -> int:
              ("mobile-390-", {"viewport": {"width": 390, "height": 844}, "device_scale_factor": 2, "is_mobile": True, "has_touch": True}, True)]
     with sync_playwright() as p:
         browser = p.chromium.launch()
-        for scenario, mode in (("watch", "all"), ("result", "all"), ("failed", "all"), ("none", "all"), ("off", None), ("owner", "owner")):
-            server, base = serve(scenario if scenario in ("result", "failed", "none") else "watch", mode)
+        for scenario, mode in (("watch", "all"), ("result", "all"), ("failed", "all"), ("news", "all"), ("none", "all"), ("off", None),
+                               ("owner", "owner")):
+            server, base = serve(scenario if scenario in ("result", "failed", "news", "none") else "watch", mode)
             try:
                 for prefix, options, mobile in sizes:
                     if scenario == "watch":
@@ -306,6 +353,8 @@ def main() -> int:
                         deep_link(j, browser, base, prefix, options)
                     elif scenario == "failed":
                         missed(j, browser, base, prefix, options)
+                    elif scenario == "news":
+                        news_type(j, browser, base, prefix, options)
                     elif scenario == "none":
                         absent(j, browser, base, prefix, options, "none", "沒有盯項")
                     elif scenario == "off":

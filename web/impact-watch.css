@@ -40,6 +40,10 @@ body.hm dialog.iw-dialog { width: min(520px, calc(100vw - 32px)); }
 .iw-body b { display: block; color: var(--faint); font-weight: 400; font-size: 12px; }
 .iw-body .iw-prep { color: var(--ink); }
 .iw-body .iw-prep span { display: block; }
+/* 消息型有結果時依據的那一則新聞：標題連到原文，來源接在後面（和「消息」的來源字同一個淡色） */
+.iw-body .iw-proof a { color: var(--ink); text-decoration: underline; text-decoration-color: var(--hair); text-underline-offset: 3px; }
+.iw-body .iw-proof a:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; border-radius: var(--r-tag); }
+.iw-body .iw-proof span { margin-left: 8px; font-size: 12px; color: var(--faint); white-space: nowrap; }
 /* 有結果的那一項：金色圓點＋結果一句 */
 .iw-item.is-done .iw-left { display: inline-flex; align-items: center; gap: 6px; color: var(--gold); font: 700 12.5px var(--sans); }
 .iw-result { grid-column: 1 / -1; font-size: 13.5px; line-height: 1.6; color: var(--ink); }

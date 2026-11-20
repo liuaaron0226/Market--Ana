@@ -3,6 +3,8 @@
 // 開關 MARKET_ANA_IMPACT_WATCH（off／owner／all）：先只開站主，本人看過再開給朋友。
 // - /api/impact-watch：盯著的，和有結果、首頁還留著的（結果日後第 3 個交易日以前）。
 //   對象是大盤的所有獲准使用者都看得到；標成只給站主的（之後的個股盯項）只回給站主。
+// - 消息型（kind='news'，票 05）：由模型讀後續新聞判斷，有結果時多回依據的那一則新聞（標題、連結、來源；
+//   impact_watch_news.py 存在 params.evidence）。
 
 import { impactWatchVisible } from "./release-policy.js";
 
@@ -26,14 +28,25 @@ function sentences(text) {
   } catch { return []; }
 }
 
+// 消息型有結果時依據的那一則新聞；連結只收 http(s)（這一欄是排程寫的，仍然不直接信）
+function evidence(row) {
+  if (row.kind !== "news") return null;
+  try {
+    const found = JSON.parse(row.params)?.evidence;
+    if (!found || typeof found.title !== "string" || !found.title.trim() || !/^https?:\/\//i.test(String(found.link || ""))) return null;
+    return { title: found.title, link: found.link, ...(typeof found.source === "string" && found.source ? { source: found.source } : {}) };
+  } catch { return null; }
+}
+
 function shape(row) {
   const resolved = RESOLVED.includes(row.status);
+  const basis = resolved ? evidence(row) : null;
   return {
     id: row.id, subject: row.subject, kind: row.kind, label: row.label, impact: row.impact, status: row.status,
     ...(row.note ? { note: row.note } : {}),
     prepare: sentences(row.prepare),
     source: { block: BLOCKS[row.source_block] || "", date: row.source_date },
-    ...(resolved ? { result: { date: row.result_date, note: row.result_note || "" } }
+    ...(resolved ? { result: { date: row.result_date, note: row.result_note || "", ...(basis ? { evidence: basis } : {}) } }
       : Number.isInteger(row.days_left) ? { days_left: row.days_left } : {}),
   };
 }
@@ -43,7 +56,7 @@ export async function handleImpactWatchApi(request, env, { isOwner }, now = Date
   if (request.method !== "GET") return json(405, { error: "方法不允許" });
   try {
     const rows = (await env.DB.prepare(
-      "SELECT id, source_block, source_date, subject, kind, label, note, impact, prepare, created_date, days_left, status, " +
+      "SELECT id, source_block, source_date, subject, kind, params, label, note, impact, prepare, created_date, days_left, status, " +
         "result_date, result_note FROM impact_watch_items " +
         "WHERE (status = 'watching' OR (status IN ('met', 'failed') AND show_until >= ?)) AND (visibility = 'all' OR ? = 1)",
     ).bind(taipeiDate(now), isOwner ? 1 : 0).all()).results;
