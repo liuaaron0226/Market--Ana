@@ -156,8 +156,10 @@ def overlay_case(page: Page, finger: Finger, tag: str, *, start_y: int, open_js:
     y1 = page.evaluate("window.scrollY")
     check(f"{tag}：關掉之後回到原本的捲動位置", y1 == y0 and page.evaluate(PAGE_TOP) == top0, [y0, y1])
     # 滑在頁面左邊的留白：畫面中間常常剛好是 K 線圖，圖本身會接走手指（拖曳、畫線），不代表頁面不能捲。
-    # 已經捲到頁尾附近就往回拉，否則往上推；兩種都要真的捲動 100px 以上。
-    dy = -300 if y1 >= 200 else 300
+    # 下面還有 200px 以上可以捲就往上推，否則（已經在頁尾附近）往回拉；兩種都要真的捲動 100px 以上。
+    # 看的是「還剩多少可以捲」而不是目前捲到哪：頁面變短（例如拿掉一行小字）時，捲得不深也可能已經貼近頁尾。
+    room = page.evaluate("document.documentElement.scrollHeight - window.innerHeight - window.scrollY")
+    dy = 300 if room >= 200 else -300
     finger.swipe(4, page.viewport_size["height"] / 2, dy)
     y2 = page.evaluate("window.scrollY")
     check(f"{tag}：關掉之後頁面照常可以捲", (y2 - y1) * dy > 100 * abs(dy), [y1, y2])

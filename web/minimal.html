@@ -128,7 +128,8 @@
           <div class="index-head">
             <h2 id="chartTitle"><button type="button" class="chart-chip index-chip" id="indexChip" aria-expanded="false" aria-controls="indexMenu" aria-haspopup="true">台股加權</button></h2>
             <div class="chart-menu chart-period-menu index-menu" id="indexMenu" role="radiogroup" aria-label="指數" hidden></div>
-            <p id="chartContext">日K · 盤後資料</p>
+            <!-- 本人 2026-11-20：「日K · 最右一根形成中／資料截至…」是廢話，畫面上不顯示（週期看右邊的週期鍵）；只有讀取中與讀不到資料時才露出來（minimal.js chartNote） -->
+            <p id="chartContext" class="sr-only">日K · 盤後資料</p>
           </div>
           <div class="chart-controls" aria-label="K線控制">
             <label class="period-control" for="periodSelect">

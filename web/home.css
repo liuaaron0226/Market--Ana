@@ -357,6 +357,8 @@
 /* 本人 11-18（截圖）：圖上方的收復／防守鍵與底下那行「最右一根：盤後暫用即時收盤」都拿掉。
    兩條線照樣畫在 K 線上，詳情從報價（點價格）打開；圖上方一行只留均線名稱。盤後暫用的說明仍在圖下方的日K標題那一行。 */
 body.hm .line-pair, .hm #provisionalBadge { display: none !important; }
+/* 本人 11-20：「最右一根：形成中」也是廢話，一起拿掉 */
+.hm #formingBadge { display: none !important; }
 /* 圖表說明文字太長時換行，不截斷 */
 .hm .chart-toolbar > div:first-child { min-width: 0; }
 .hm .chart-toolbar p { white-space: normal; max-width: 40em; }

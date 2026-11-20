@@ -506,7 +506,7 @@
       window.TimeShare.render(els.timeShare, model);
       els.forming.hidden = true;
       els.provisional.hidden = true;
-      els.chartContext.textContent = `分時 · ${model.day.date}`;
+      chartNote(`分時 · ${model.day.date}`);
       els.chartSummary.textContent = `加權指數 ${model.day.date} 分時走勢。`;
       return;
     }
@@ -539,13 +539,13 @@
     if (index) {
       const payload = indexPayloads.get(index.key);
       const lastDay = lastCandle ? String(lastCandle.t).slice(0, 10) : '—';
-      els.chartContext.textContent = `${periodLabels[period]} · 資料截至 ${lastDay}${index.zone === 'us' ? '（美東）' : ''}${payload.fetch && !payload.fetch.ok ? '・最近一次沒更新到' : ''}`;
+      chartNote(`${periodLabels[period]} · 資料截至 ${lastDay}${index.zone === 'us' ? '（美東）' : ''}${payload.fetch && !payload.fetch.ok ? '・最近一次沒更新到' : ''}`);
       els.chartSummary.textContent = `${index.name}${periodLabels[period]}，共 ${candles.length} 根。`;
       requestAnimationFrame(updateOverlayControls);
       return;
     }
-    els.chartContext.textContent = `${periodLabels[period]} · ${liveLast ? '最右一根形成中'
-      : provisionalLast ? `最右一根暫用即時收盤，正式日K待更新（目前到 ${A.meta.cutoff_date}）` : `資料截至 ${A.meta.cutoff_date}`}`;
+    chartNote(`${periodLabels[period]} · ${liveLast ? '最右一根形成中'
+      : provisionalLast ? `最右一根暫用即時收盤，正式日K待更新（目前到 ${A.meta.cutoff_date}）` : `資料截至 ${A.meta.cutoff_date}`}`);
     els.chartSummary.textContent = `${periodLabels[period]}，共 ${candles.length} 根。${linesHidden() ? '' : `圖上有收復線 ${fmt(UPPER)} 與防守線 ${fmt(LOWER)}。`}`;
     requestAnimationFrame(updateOverlayControls);
   }
@@ -1676,12 +1676,19 @@
       : window.MarketIndex.hasVolume(indexPayloads.get(index.key).candles) ? FOREIGN_STUDIES : FOREIGN_STUDIES.slice(1));
   }
 
+  // 圖卡標題下那一行小字（本人 2026-11-20「日K、最右形成中都是廢話」）：平常只留給螢幕閱讀器，
+  // 畫面上只在需要人知道的時候露出來（讀取國外指數中、讀不到資料）。
+  function chartNote(text, visible = false) {
+    els.chartContext.textContent = text;
+    els.chartContext.classList.toggle('sr-only', !visible);
+  }
+
   async function switchIndex(key) {
     const item = indexItem(key);
     if (!item || key === currentIndex) return;
     const ticket = ++indexTicket;
     if (key !== 'twii' && !indexPayloads.has(key)) {
-      els.chartContext.textContent = `讀取${item.name}…`;
+      chartNote(`讀取${item.name}…`, true);
       let payload = null;
       try {
         const response = await fetch(`/api/indices/${encodeURIComponent(key)}`, { cache: 'no-store', headers: { Accept: 'application/json' } });
@@ -1692,7 +1699,7 @@
       if (ticket !== indexTicket) return;   // 讀的時候又換了別的
       if (!payload || !Array.isArray(payload.candles) || !payload.candles.length) {
         loadPeriod(currentPeriod, false);
-        els.chartContext.textContent = `${item.name}暫時沒有資料，請稍後再試`;
+        chartNote(`${item.name}暫時沒有資料，請稍後再試`, true);
         return;
       }
       indexPayloads.set(key, payload);
@@ -2254,8 +2261,9 @@
     if (payload.missing_count) extra.push(`${fmtNum(payload.missing_count)} 檔當期缺法人資料，未列入（不當成 0）`);
     const stale = payload.status === 'stale' ? `已過期（最新行情 ${payload.latest_market_data_date}），僅供查看舊結果。` : '';
     const shown = payload.items.length ? `共 ${payload.items.length} 檔` : '沒有符合條件的個股';
+    // 資料日已經寫在這一塊的標題旁（chipScreensMeta），這一行不再重複（本人 2026-11-20：重複的小字拿掉）
     return [payload.status === 'stale' ? 'stale' : (payload.state === 'partial' ? 'partial' : 'ok'),
-      `${stale}${dated} · ${shown}${extra.length ? `；${extra.join('；')}` : ''}。`];
+      `${stale}${shown}${extra.length ? `；${extra.join('；')}` : ''}。`];
   }
 
   async function load() {
