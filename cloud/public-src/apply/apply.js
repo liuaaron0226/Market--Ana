@@ -11,9 +11,12 @@
   const POLL_MS = 30_000;
   // 剛自動進站過又被送回這一頁（照理不會發生）：改成顯示按鈕，不再自己跳，避免來回轉。
   const ENTER_KEY = "apply-entered-at";
-  const ENTER_GUARD_MS = 15_000;
+  const ENTER_GUARD_MS = 60_000;
+  // 背景查詢連續失敗這麼多次（例如登入過期）就不再假裝還在等，改顯示「再試一次」。
+  const POLL_FAIL_LIMIT = 3;
   let timer = 0;
   let waiting = false;
+  let pollFails = 0;
 
   async function api(path, opts) {
     const r = await fetch(path, { credentials: "same-origin", cache: "no-store", headers: { "content-type": "application/json" }, ...opts });
@@ -58,13 +61,16 @@
     });
   }
 
-  function recentlyEntered() {
-    try { return Date.now() - Number(sessionStorage.getItem(ENTER_KEY) || 0) < ENTER_GUARD_MS; } catch { return false; }
-  }
-
+  // 自己進站：先記下時間再跳。記不下來（瀏覽器不給存）或剛跳過一次，就不自己跳，回 false 讓畫面給「進入網站」按鈕。
   function enterSite() {
-    try { sessionStorage.setItem(ENTER_KEY, String(Date.now())); } catch {}
+    try {
+      if (Date.now() - Number(sessionStorage.getItem(ENTER_KEY) || 0) < ENTER_GUARD_MS) return false;
+      sessionStorage.setItem(ENTER_KEY, String(Date.now()));
+    } catch {
+      return false;
+    }
     location.replace("/");
+    return true;
   }
 
   function render(me) {
@@ -73,7 +79,7 @@
     if (me.status === "none") return renderForm(me);
     if (me.status === "approved") {
       // 已核准的朋友不用停在這一頁：直接進站。站主留在這裡（有管理申請的入口）。
-      if (!me.owner && !recentlyEntered()) return enterSite();
+      if (!me.owner && enterSite()) return;
       view.innerHTML = `
         <span class="state approved">已核准</span>
         <h1 style="margin-top:12px">${me.owner ? "你是站主" : "已經可以進站了"}</h1>
@@ -95,27 +101,40 @@
     if (waiting) timer = setTimeout(poll, POLL_MS);
   }
 
-  // 背景查一次：查不到（斷線、登入過期）就維持畫面，下一輪再查；不把等待中的畫面換成錯誤。
+  function renderError(err) {
+    clearTimeout(timer);
+    waiting = false;
+    view.innerHTML = `<h1>暫時無法讀取</h1><p class="lead">${esc(err.message)}</p>
+      <div class="row"><button class="ghost" id="again" type="button">再試一次</button></div>`;
+    document.getElementById("again").addEventListener("click", load);
+  }
+
+  // 背景查一次。還在等待中就不重畫（畫面是 aria-live，重畫會讓報讀軟體每 30 秒重唸一次、鍵盤焦點也會掉）。
+  // 偶爾查不到（斷線）維持畫面、下一輪再查；連續查不到才換成「再試一次」。
   async function poll() {
     clearTimeout(timer);
     if (!waiting) return;
     if (document.hidden) return;                 // 回到前景時 visibilitychange 會再叫一次
+    let me;
     try {
-      render(await api("/apply/api/me"));
-    } catch {
+      me = await api("/apply/api/me");
+    } catch (err) {
+      pollFails += 1;
+      if (pollFails >= POLL_FAIL_LIMIT) return renderError(err);
       timer = setTimeout(poll, POLL_MS);
+      return;
     }
+    pollFails = 0;
+    if (me.status === "pending") timer = setTimeout(poll, POLL_MS);
+    else render(me);
   }
 
   async function load() {
+    pollFails = 0;
     try {
       render(await api("/apply/api/me"));
     } catch (err) {
-      clearTimeout(timer);
-      waiting = false;
-      view.innerHTML = `<h1>暫時無法讀取</h1><p class="lead">${esc(err.message)}</p>
-        <div class="row"><button class="ghost" id="again" type="button">再試一次</button></div>`;
-      document.getElementById("again").addEventListener("click", load);
+      renderError(err);
     }
   }
 

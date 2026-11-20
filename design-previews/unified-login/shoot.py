@@ -1,4 +1,4 @@
-"""Screenshot the unified-login sample (three phone screens side by side)."""
+"""把一個入口的申請畫面樣品（sample.html，三個手機畫面並排）截成一張圖。用法：python shoot.py [輸出路徑]"""
 import pathlib
 import sys
 

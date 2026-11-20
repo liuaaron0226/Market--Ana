@@ -106,20 +106,28 @@ async function statusOf(db, email) {
 // 內容固定，不放申請人填的字或信箱：主站改成人人可登入之後陌生人也走得到這一步，不能讓他把任意文字送到站主的鎖定畫面。
 // 同一個 tag，好幾筆申請只留一則。送不出去（金鑰沒設定、資料表還沒建立、推播服務失敗）只是沒有通知，申請照樣成立。
 const APPLY_NOTICE = { title: "有人申請使用網站", body: "到帳號管理核准或拒絕", url: "/admin/", tag: "account-apply" };
+// 申請人的「送出」要等通知送完才回應，所以每台裝置同時送、最多等這麼久；推播服務卡住時先回應，不讓申請跟著卡。
+const APPLY_NOTICE_TIMEOUT_MS = 4000;
 
 async function notifyOwnerOfApplication(env, deps) {
   if (!deps.pushFetch || !pushConfigured(env)) return;
+  const limit = deps.pushTimeoutMs || APPLY_NOTICE_TIMEOUT_MS;
+  let timer;
   try {
     const { results } = await env.DB
       .prepare("SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE email = ? ORDER BY created_at")
       .bind(String(env.OWNER_EMAIL).toLowerCase())
       .all();
     const vapidCache = new Map();
-    for (const device of results) {
-      await sendOne(env.DB, device, APPLY_NOTICE, env, { fetchImpl: deps.pushFetch, now: deps.now || Date.now, vapidCache });
-    }
-  } catch {
-    // 沒有通知而已：站主在設定齒輪上還是看得到等待人數。
+    const fetchImpl = (url, init) => deps.pushFetch(url, { ...init, signal: AbortSignal.timeout(limit) });
+    const sends = results.map((device) =>
+      sendOne(env.DB, device, APPLY_NOTICE, env, { fetchImpl, now: deps.now || Date.now, vapidCache }).catch(() => null));
+    await Promise.race([Promise.all(sends), new Promise((resolve) => { timer = setTimeout(resolve, limit); })]);
+  } catch (error) {
+    // 沒有通知而已：站主在設定齒輪上還是看得到等待人數。留一行紀錄方便查（不含申請人的資料）。
+    console.warn("apply notice not sent:", String(error?.message || error));
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -133,16 +141,24 @@ async function handleApplyApi(request, env, path, email, isOwner, deps) {
     if (request.method !== "POST") throw new HttpError(405, "方法不允許");
     const body = await readJson(request);
     if (isOwner) return me("approved");
-    const nickname = typeof body.nickname === "string" ? body.nickname.trim() : "";
+    // 控制字元、零寬與文字方向字元先拿掉：不讓人送出看不見或反著顯示的稱呼給站主。
+    const nickname = typeof body?.nickname === "string" ? body.nickname.replace(/[\p{Cc}\p{Cf}]/gu, "").trim() : "";
     if (!nickname || nickname.length > NICK_MAX) throw new HttpError(400, `暱稱必填，最多 ${NICK_MAX} 字`);
     const existing = await statusOf(env.DB, email);
     if (existing !== "none") return me(existing);
-    const pending = await env.DB.prepare("SELECT COUNT(*) AS n FROM users WHERE status = 'pending'").first();
-    if (pending.n >= PENDING_CAP) throw new HttpError(429, "目前申請人數已滿，請稍後再試");
-    await env.DB
-      .prepare("INSERT INTO users (email, nickname, status, applied_at) VALUES (?, ?, 'pending', ?)")
-      .bind(email, nickname, nowIso())
+    // 名額檢查和寫入是同一句：同時進來好幾筆也不會超過上限；同一個人同時送兩次，後到的那一次不寫入。
+    const created = await env.DB
+      .prepare(
+        "INSERT INTO users (email, nickname, status, applied_at) SELECT ?, ?, 'pending', ? " +
+          "WHERE (SELECT COUNT(*) FROM users WHERE status = 'pending') < ? ON CONFLICT (email) DO NOTHING",
+      )
+      .bind(email, nickname, nowIso(), PENDING_CAP)
       .run();
+    if (!created.meta.changes) {
+      const now = await statusOf(env.DB, email);
+      if (now !== "none") return me(now);
+      throw new HttpError(429, "目前申請人數已滿，請稍後再試");
+    }
     await audit(env.DB, email, "apply", email, nickname);
     await notifyOwnerOfApplication(env, deps);
     return me("pending");
@@ -849,11 +865,14 @@ export async function handle(request, env, next, deps = defaultDeps) {
   const owner = OWNER_EMAIL.toLowerCase();
   const isOwner = isOwnerEmail(env, email);
 
-  // 朋友 AI 的開關關著：入口在讀資料庫之前就回「沒有內容」，設定頁和不存在一樣。
-  if (!friendAiEnabled(env)) {
+  // 朋友 AI 的開關關著：入口回「沒有內容」，設定頁和不存在一樣。只對進得了站的人（站主、已核准）這樣回；
+  // 還沒核准的人照一般規則（API 403、頁面轉去申請頁），所以放在核准檢查之後。
+  const friendAiClosed = () => {
+    if (friendAiEnabled(env)) return null;
     if (FRIEND_AI_PATH.test(path)) return notAvailable();
     if (FRIEND_AI_PAGE.test(path)) return fail(404, "找不到");
-  }
+    return null;
+  };
 
   try {
     if (isApply) {
@@ -871,6 +890,8 @@ export async function handle(request, env, next, deps = defaultDeps) {
     // 只給站主的功能，其他人拿到的功能清單裡一律是關的（和 /api/features 同一個規則）。
     const levelDisabled = () => json(403, { error: "feature-disabled", message: "未驗證的水位建議尚未啟用", features: policyForViewer(policy, isOwner, env).features });
     if (isOwner) {
+      const closed = friendAiClosed();
+      if (closed) return closed;
       if (path === "/api/features") return json(200, policy);
       if (path === "/api/live") return await handleIndexLiveApi(request, env, email, deps);
       if (path.startsWith("/api/admin/")) return await handleAdminApi(request, env, path, owner);
@@ -904,6 +925,8 @@ export async function handle(request, env, next, deps = defaultDeps) {
       if (isPagePath(path)) return new Response(null, { status: 302, headers: { location: "/apply/", "cache-control": "no-store" } });
       return fail(403, "帳號尚未核准或已停用");
     }
+    const closed = friendAiClosed();
+    if (closed) return closed;
     if (isAdmin) return fail(403, "沒有管理權限");
     if (path === "/api/me") return json(200, { email, status, owner: false, logout_url: logoutUrl(env) });
     if (path === GEMINI_USAGE_PATH) return await handleGeminiUsageApi(request, env, deps, { isOwner: false });

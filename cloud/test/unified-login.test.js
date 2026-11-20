@@ -297,10 +297,127 @@ test("通知送不出去不影響申請：推播服務失敗、連線丟錯、�
   await apply("b@x.com");
   delete deps.pushFetch;                       // 正式環境一定有；沒有也不能壞
   await apply("b2@x.com");
+  const { publicKey, privateKey } = { publicKey: env.VAPID_PUBLIC_KEY, privateKey: env.VAPID_PRIVATE_KEY };
+  const calls = [];
+  deps.pushFetch = async (url) => { calls.push(String(url)); return new Response(null, { status: 201 }); };
   delete env.VAPID_PRIVATE_KEY;
-  deps.pushFetch = async () => { throw new Error("不該被叫到"); };
   await apply("c@x.com");
-  env.VAPID_PRIVATE_KEY = "x";
+  assert.deepEqual(calls, [], "金鑰沒設定：不送");
+  Object.assign(env, { VAPID_PUBLIC_KEY: publicKey, VAPID_PRIVATE_KEY: privateKey });
+  await apply("c2@x.com");
+  assert.equal(calls.length, 1, "金鑰放回去就會送（上面那一段不是因為別的原因才沒送）");
   env.DB._raw.exec("DROP TABLE push_subscriptions");
   await apply("d2@x.com");
+  assert.equal(calls.length, 1, "資料表還沒建立：不送，也不壞");
+});
+
+test("推播服務卡住時申請不會跟著卡：每台裝置同時送，等到上限就先回應", async () => {
+  const { add } = await withPush();
+  for (let i = 0; i < 5; i++) await add(OWNER, `https://web.push.apple.com/owner-${i}`);
+  let started = 0;
+  deps.pushFetch = (url, init) => new Promise((resolve, reject) => {
+    started += 1;
+    init.signal?.addEventListener("abort", () => reject(new Error("aborted")));   // 永遠不回應，只等被取消
+  });
+  deps.pushTimeoutMs = 80;
+  const began = Date.now();
+  const r = await req("/apply/api/apply", { email: "new@x.com", method: "POST", body: { nickname: "小明" } });
+  const took = Date.now() - began;
+  assert.equal((await r.json()).status, "pending");
+  assert.equal(started, 5, "五台同時開始送，不是一台等一台");
+  assert.ok(took < 1500, `回應花了 ${took} 毫秒`);
+});
+
+// ---- 名額與重複申請：同時送出也守得住 ----
+// beforeInsert：在「寫入申請」那一句執行之前插隊（模擬另一個同時進來的請求先寫了）
+function raceBeforeInsert(beforeInsert) {
+  const real = env.DB;
+  let done = false;
+  env.DB = { ...real, prepare: (sql) => {
+    if (!done && /^\s*INSERT INTO users/i.test(sql)) { done = true; beforeInsert(real._raw); }
+    return real.prepare(sql);
+  } };
+  return real;
+}
+
+test("最後一個名額被同時進來的另一筆申請拿走：這一筆回 429，不會變成第 31 筆", async () => {
+  for (let i = 0; i < 29; i++) await seed(`p${i}@x.com`, "pending");
+  const db = raceBeforeInsert((raw) => raw.prepare("INSERT INTO users (email, nickname, status, applied_at) VALUES ('racer@x.com', 'r', 'pending', 't')").run());
+  const r = await req("/apply/api/apply", { email: "late@x.com", method: "POST", body: { nickname: "late" } });
+  assert.equal(r.status, 429);
+  assert.equal(db._raw.prepare("SELECT COUNT(*) AS n FROM users WHERE status = 'pending'").get().n, 30);
+  assert.equal(db._raw.prepare("SELECT COUNT(*) AS n FROM users WHERE email = 'late@x.com'").get().n, 0);
+  assert.equal(db._raw.prepare("SELECT COUNT(*) AS n FROM audit WHERE target = 'late@x.com'").get().n, 0);
+});
+
+test("同一個人同時送兩次：第二次不會出錯，也不會多一筆或多一則通知", async () => {
+  const { pushes, add } = await withPush();
+  await add(OWNER, "https://web.push.apple.com/owner-phone");
+  const db = raceBeforeInsert((raw) => raw.prepare("INSERT INTO users (email, nickname, status, applied_at) VALUES ('twice@x.com', '先到的', 'pending', 't')").run());
+  const r = await req("/apply/api/apply", { email: "twice@x.com", method: "POST", body: { nickname: "後到的" } });
+  assert.equal(r.status, 200);
+  assert.equal((await r.json()).status, "pending");
+  assert.deepEqual({ ...db._raw.prepare("SELECT nickname, status FROM users WHERE email = 'twice@x.com'").get() }, { nickname: "先到的", status: "pending" });
+  assert.equal(db._raw.prepare("SELECT COUNT(*) AS n FROM audit WHERE target = 'twice@x.com'").get().n, 0, "紀錄由先到的那一筆寫");
+  assert.deepEqual(pushes.sent, [], "通知由先到的那一筆送");
+});
+
+// ---- 開關關著時也一樣擋（正式站目前開著，這是防以後關掉時漏掉）----
+test("所有開關都沒設定時，還沒核准的人一樣：API 全部 403、頁面全部轉去申請頁（朋友 AI 的入口也不例外）", async () => {
+  await seedOutsiders();
+  const hit = tripwires();
+  const before = tableCounts();
+  for (const email of OUTSIDERS) {
+    for (const path of API_PATHS) {
+      for (const method of ["GET", "POST", "DELETE"]) {
+        const r = await req(path, { email, method, body: method === "GET" ? undefined : { key: "k" } });
+        assert.equal(r.status, 403, `${email} ${method} ${path}`);
+        assert.deepEqual(await r.json(), BLOCKED, `${email} ${method} ${path}`);
+      }
+    }
+    for (const path of PAGE_PATHS) {
+      const r = await req(path, { email });
+      assert.equal(r.status, 302, `${email} ${path}`);
+      assert.equal(r.headers.get("location"), "/apply/", `${email} ${path}`);
+    }
+  }
+  assert.deepEqual(served, []);
+  assert.deepEqual(hit, []);
+  assert.deepEqual(tableCounts(), before);
+});
+
+test("朋友 AI 的開關關著：已核准的朋友和站主照舊看到「沒有這個功能」（入口和不存在一樣）", async () => {
+  await seed("ok@x.com", "approved");
+  for (const email of ["ok@x.com", OWNER]) {
+    const api = await req("/api/friend-ai", { email });
+    assert.equal(api.status, 200, email);
+    assert.deepEqual(await api.json(), { available: false }, email);
+    assert.equal((await req("/gemini/", { email })).status, 404, email);
+  }
+});
+
+// ---- 安全審查補的三條 ----
+test("信箱裡有非 ASCII 字元的憑證一律不收：有些字轉小寫後會變成一般英文字母，不能讓它冒充名單上的人或站主", async () => {
+  await seed("ok@x.com", "approved");
+  env.OWNER_EMAIL = "kowner@example.com";
+  // U+212A（克耳文符號）轉小寫是 k
+  for (const email of ["oK@x.com", "Kowner@example.com", "ok@x.com​", "ok＠x.com@x.com", "o k@x.com"]) {
+    for (const path of ["/", "/api/me", "/api/admin/users", "/apply/api/me"]) assert.equal((await req(path, { email })).status, 401, `${JSON.stringify(email)} ${path}`);
+  }
+  assert.equal((await req("/api/me", { email: "ok@x.com" })).status, 200);
+  assert.equal((await req("/api/admin/users", { email: "KOwner@Example.com" })).status, 200, "一般的大小寫不同照舊視為同一人");
+});
+
+test("暱稱裡的控制字元、零寬與文字方向字元會被拿掉；拿掉之後是空的就不收", async () => {
+  const send = (email, nickname) => req("/apply/api/apply", { email, method: "POST", body: { nickname } });
+  assert.equal((await send("a@x.com", "​​ ‮")).status, 400);
+  assert.equal((await send("a@x.com", "小‮明​\u0007 Chen\n")).status, 200);
+  assert.equal((await env.DB.prepare("SELECT nickname FROM users WHERE email = 'a@x.com'").first()).nickname, "小明 Chen");
+});
+
+test("申請的內容不是物件（null、陣列、字串、數字）回 400，不是 503", async () => {
+  for (const body of [null, [], "x", 3]) {
+    const r = await req("/apply/api/apply", { email: "a@x.com", method: "POST", body });
+    assert.equal(r.status, 400, JSON.stringify(body));
+  }
 });

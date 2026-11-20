@@ -7,7 +7,7 @@ import { handle } from "../lib/gate.js";
 import { releasePolicy } from "../lib/release-policy.js";
 import { CONSENT_VERSION, FRIEND_KEY_LIMIT, USABLE_FRIEND_KEYS_SQL, AAD_PREFIX } from "../lib/friend-ai.js";
 import { decryptFriendKey, usableKeysSql } from "../friend-ai-schedule.mjs";
-import { fakeD1, makeIssuer, claims, fetchJwks, TEAM, MAIN_AUD, APPLY_AUD, OWNER } from "./helpers.js";
+import { fakeD1, makeIssuer, claims, fetchJwks, rosterOnly, TEAM, MAIN_AUD, APPLY_AUD, OWNER } from "./helpers.js";
 
 const ORIGIN = "https://market-ana.pages.dev";
 const FRIEND = "friend@example.com";
@@ -391,12 +391,14 @@ test("後台每位使用者只多一份 Gemini 狀態，沒有密文也沒有解
   }
 });
 
-test("開關關著：入口在讀資料庫之前就回沒有內容，設定頁不存在，後台和現在一樣", async () => {
+// 一個入口（本人 11-20）之後先確認這個人已核准（查名單），才回「沒有內容」；朋友 AI 自己的資料表還是不碰。
+test("開關關著：入口不碰朋友 AI 的資料表就回沒有內容，設定頁不存在，後台和現在一樣", async () => {
   await save();
   env = { ...env, MARKET_ANA_FRIEND_AI: undefined };
   const realDb = env.DB;
   let touched = 0;
-  env.DB = { prepare: () => { touched += 1; throw new Error("不該讀資料庫"); } };
+  const roster = rosterOnly(realDb);
+  env.DB = { prepare: (sql) => { try { return roster.prepare(sql); } catch (error) { touched += 1; throw error; } } };
   for (const [path, method] of [["/api/friend-ai", "GET"], ["/api/friend-ai/key", "POST"], ["/api/friend-ai/consent", "POST"], ["/api/friend-ai/key", "DELETE"]]) {
     const res = await req(path, { method, body: { key: FAKE_KEY_2, consent: CONSENT } });
     assert.equal(res.status, 200, `${method} ${path}`);
@@ -508,10 +510,10 @@ test("同意版本換掉了：要重新同意，不給內容", async () => {
   assert.deepEqual(body, { available: true, configured: true, consented: false });
 });
 
-test("站主讀朋友的解讀入口被拒；開關關著時入口在讀資料庫前就回沒有內容", async () => {
+test("站主讀朋友的解讀入口被拒；開關關著時入口不碰朋友 AI 的資料表就回沒有內容", async () => {
   assert.equal((await req("/api/friend-ai/digest", { email: OWNER })).status, 403);
   env.MARKET_ANA_FRIEND_AI = undefined;
-  env.DB = { prepare() { throw new Error("開關關著不能讀資料庫"); } };
+  env.DB = rosterOnly(env.DB);
   assert.deepEqual(await (await req("/api/friend-ai/digest")).json(), { available: false });
 });
 

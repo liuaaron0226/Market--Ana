@@ -63,6 +63,13 @@ class Server:
     def pushes(self) -> int:
         return sum(1 for line in self.lines if line.startswith("push "))
 
+    def wait_pushes(self, count: int, seconds: float = 5.0) -> int:
+        """等伺服器記下的推播數到達 count（stdout 由另一條執行緒讀，不能看一次就算）。"""
+        deadline = time.time() + seconds
+        while self.pushes() < count and time.time() < deadline:
+            time.sleep(0.05)
+        return self.pushes()
+
     def stop(self) -> None:
         self.proc.terminate()
 
@@ -148,6 +155,8 @@ def newcomer_flow(journey: Journey, browser, server: Server, mode: str, width: i
     tag = f"{mode} {width}"
     email = f"new-{mode}-{width}@example.com"
     context, page = journey.context(browser, base, email, width)
+    status_reads: list[str] = []          # 這一頁查了幾次自己的狀態（開頁一次，之後每輪自動查一次）
+    page.on("request", lambda request: status_reads.append(request.url) if request.url.endswith("/apply/api/me") else None)
     page.clock.install()
     page.goto(base + "/", wait_until="load")
     wait_card(page, "申請使用")
@@ -173,15 +182,24 @@ def newcomer_flow(journey: Journey, browser, server: Server, mode: str, width: i
     wait_card(page, "申請已送出，等待站主核准")
     c = card(page)
     journey.check(f"{tag}：送出後是等待核准，寫明核准後這一頁會自己進站", c["tag"] == "等待核准" and "自己進站" in c["lead"] and bool(c["logout"]), c)
-    page.wait_for_timeout(300)
-    journey.check(f"{tag}：站主的裝置收到一則申請通知", server.pushes() == pushes + 1, [pushes, server.pushes()])
+    got = server.wait_pushes(pushes + 1)
+    journey.check(f"{tag}：站主的裝置收到一則申請通知", got == pushes + 1, [pushes, got])
     page.screenshot(path=str(OUT / f"{mode}-{width}-2-pending.png"))
     outsider_gets_nothing(journey, page, f"{tag} 等待中")
 
-    # 還沒核准：過了一輪自動查詢，畫面還是等待中
+    # 還沒核准：過了一輪自動查詢（真的有去查），畫面還是等待中，而且沒有重畫（報讀軟體不會每 30 秒重唸、焦點不會掉）
+    page.evaluate("() => { document.querySelector('#view h1').dataset.kept = '1'; document.getElementById('again').focus(); }")
+    reads = len(status_reads)
     page.clock.run_for(31_000)
-    page.wait_for_timeout(300)
-    journey.check(f"{tag}：還沒核准時自動查過一輪仍是等待中", card(page)["tag"] == "等待核准" and page.url == base + "/apply/")
+    for _ in range(100):
+        if len(status_reads) > reads:
+            break
+        page.wait_for_timeout(50)
+    page.wait_for_timeout(200)
+    kept = page.evaluate("() => [document.querySelector('#view h1').dataset.kept || '', document.activeElement?.id || '']")
+    journey.check(f"{tag}：還沒核准時自動查了一輪、仍是等待中、畫面沒有重畫",
+                  len(status_reads) == reads + 1 and kept == ["1", "again"] and card(page)["tag"] == "等待核准" and page.url == base + "/apply/",
+                  [reads, len(status_reads), kept])
 
     owner_decides(journey, browser, base, email, "approve", width, shot=f"{mode}-{width}-3-admin.png" if width == 390 else None)
     # 不重新登入、不按任何東西：下一輪自動查詢就進站
@@ -198,7 +216,7 @@ def newcomer_flow(journey: Journey, browser, server: Server, mode: str, width: i
     wait_card(page, "已經可以進站了")
     journey.check(f"{tag}：剛進站又回到申請頁時不會來回跳，給「進入網站」按鈕", card(page)["buttons"] == ["進入網站"] and page.url == base + "/apply/")
     # 過一陣子，已核准的人再打開舊的申請連結：不停在申請頁，直接進站
-    page.clock.run_for(20_000)
+    page.clock.run_for(61_000)
     page.goto(base + "/apply/", wait_until="commit")
     page.wait_for_url(base + "/")
     page.wait_for_selector(SITE_READY)

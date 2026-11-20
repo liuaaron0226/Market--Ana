@@ -55,5 +55,8 @@ export async function verifyAccessJwt(token, { teamDomain, audiences, fetchImpl 
   if (typeof claims.exp !== "number" || claims.exp < now - SKEW_S) throw new Error("expired");
   if (typeof claims.nbf === "number" && claims.nbf > now + SKEW_S) throw new Error("not yet valid");
   if (typeof claims.email !== "string" || !claims.email.includes("@")) throw new Error("no email");
+  // 只收可見的 ASCII 信箱：有些非 ASCII 字元轉小寫後會變成一般英文字母（U+212A → k），
+  // 而名單與站主都是用轉小寫後的信箱比對，不能讓這種位址冒充別人。
+  if (!/^[\x21-\x7e]+$/.test(claims.email)) throw new Error("non-ascii email");
   return { ...claims, aud };
 }
