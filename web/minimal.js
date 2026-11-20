@@ -948,12 +948,15 @@
   function renderChipPanel(key) {
     const card = chipCards().find(item => item.key === key);
     if (!card) return '';
-    const watch = PL ? PL.worry.filter(w => (key === 'futures' || key === 'foreign') && w.includes('外資')) : [];
+    // 舊版資料（沒有影響／準備）才有「要擔心」；新版改成下面那一塊，跟外資有關的條件放在外資的兩張卡
+    const aboutForeign = list => (Array.isArray(list) ? list : []).filter(text => (key === 'futures' || key === 'foreign') && String(text).includes('外資'));
+    const watch = PL ? aboutForeign(PL.worry) : [];
+    const points = PL ? impactPoints({ effect: card.plain.effect, conditions: aboutForeign(PL.conditions), prepare: card.plain.prepare }) : '';
     const lines = card.plain.lines, sides = SIDE_LABELS[key];
     return `<div class="chip-top${card.tone === 'mid' ? '' : ` tone-${card.tone}`}"><strong class="chip-value num">${esc(card.value)}</strong><span>${esc(card.read)}</span></div>
       <div class="chip-big">${clickableBars(key, chipDay(key))}</div>
       ${watch.length ? `<p class="chip-watch"><i>注意</i><span>${watch.map(esc).join(' ')}</span></p>` : ''}
-      ${lines.length ? `<div class="chip-points more-wrap"><ul>${lines.map((line, i) => `<li${i >= POINT_ROWS ? ' class="is-extra"' : ''}>${esc(line)}</li>`).join('')}</ul>${lines.length > POINT_ROWS ? moreButton(`還有 ${lines.length - POINT_ROWS} 點 ›`) : ''}${plainFootnote(PL) ? `<p class="read-date plain-note">${esc(plainFootnote(PL))}</p>` : ''}</div>` : ''}
+      ${lines.length ? `<div class="chip-points more-wrap"><ul>${lines.map((line, i) => `<li${i >= POINT_ROWS ? ' class="is-extra"' : ''}>${esc(line)}</li>`).join('')}</ul>${lines.length > POINT_ROWS ? moreButton(`還有 ${lines.length - POINT_ROWS} 點 ›`) : ''}${points}${plainFootnote(PL) ? `<p class="read-date plain-note">${esc(plainFootnote(PL))}</p>` : ''}</div>` : ''}
       <div class="chip-list-head"><h4 id="chipListTitle"></h4>${sides ? segmented('side', sides.map((label, i) => [i, label]), chipSide()) : ''}</div>
       <div id="chipList"></div>`;
   }
@@ -1050,9 +1053,20 @@
       .map(([key, label]) => `${label} ${day(pl.data_dates[key])}`);
     return [late.length ? `較舊的資料：${late.join('、')}` : '', pl.source === 'template' ? '依當天數字自動整理' : ''].filter(Boolean).join('・');
   }
+  // 影響／要看／準備（本人 2026-11-20「不要只說明事件，要講影響＋該做的準備」）：和首頁消息同一種排法
+  // （market-news.js 的 pointsNode、market-news.css 的 .news-points：左邊兩個字小標、右邊內文）。沒有內容的那一段不出現。
+  function impactPoints(data) {
+    const strings = value => (Array.isArray(value) ? value : [value]).filter(text => typeof text === 'string' && text.trim());
+    const rows = [['影響', strings(data.effect)], ['要看', strings(data.conditions)], ['準備', strings(data.prepare)]].filter(([, lines]) => lines.length);
+    return rows.length ? `<dl class="news-points">${rows.map(([label, lines]) => `<dt>${label}</dt><dd>${lines.map(text => `<p>${esc(text)}</p>`).join('')}</dd>`).join('')}</dl>` : '';
+  }
+  // 點開的全文：結論 → 整體的影響／要看／準備 → 六點各自發生什麼與影響、準備。
+  // 舊版資料（market-plain/v2 以前，只有「要擔心／什麼時候比較安心」）照舊顯示那兩段。
   function renderPlainPanel() {
     if (!PL) return '';
-    return `<p class="read-line big">${esc(PL.one_line)}</p>${PL.points.map(p => `<section class="plain-group"><h4>${esc(p.title)}</h4><ul>${p.lines.map(l => `<li>${esc(l)}</li>`).join('')}</ul></section>`).join('')}<section class="plain-group plain-watch"><h4>要擔心</h4><ul>${PL.worry.map(l => `<li>${esc(l)}</li>`).join('')}</ul></section><section class="plain-group"><h4>什麼時候比較安心</h4><ul>${PL.relief.map(l => `<li>${esc(l)}</li>`).join('')}</ul></section>${plainFootnote(PL) ? `<p class="read-date plain-note">${esc(plainFootnote(PL))}</p>` : ''}`;
+    const list = lines => `<ul>${lines.map(l => `<li>${esc(l)}</li>`).join('')}</ul>`;
+    const old = (title, lines, extra) => (Array.isArray(lines) && lines.length ? `<section class="plain-group${extra}"><h4>${title}</h4>${list(lines)}</section>` : '');
+    return `<p class="read-line big">${esc(PL.one_line)}</p>${impactPoints(PL)}${PL.points.map(p => `<section class="plain-group"><h4>${esc(p.title)}</h4>${list(p.lines)}${impactPoints(p)}</section>`).join('')}${old('要擔心', PL.worry, ' plain-watch')}${old('什麼時候比較安心', PL.relief, '')}${plainFootnote(PL) ? `<p class="read-date plain-note">${esc(plainFootnote(PL))}</p>` : ''}`;
   }
 
   function renderCandlePanel(index) {

@@ -168,3 +168,22 @@ test("每天重寫的白話分析：帶出來源與期貨資料日，模型名�
   // 人寫的舊版沒有 source：不補一個假的
   assert.ok(!("source" in buildMarketPack(raw()).overview.plain));
 });
+
+test("白話分析的新寫法：影響、要看的條件、準備帶到畫面，交給系統盯的編號不外送（本人 11-20，票 07）", () => {
+  const r = raw();
+  r.plain = { schema: "market-plain/v3", id: "20260310-plain-ai", source: "ai", one_line: "一句",
+    points: [{ key: "foreign", title: "外資：偏空", lines: ["a"], effect: "權值股先受影響", prepare: ["如果外資轉買，就先確認期貨"], note: "多的" }],
+    effect: "指數容易受壓", conditions: ["外資由賣超轉為買超：回頭買才算解除"], prepare: ["如果跌破低點，就先檢查持股"],
+    track: [{ id: "foreign_turn_buy", note: "回頭買才算解除" }], data_dates: { price_and_foreign: "2026-03-10" } };
+  const { plain } = buildMarketPack(r).overview;
+  assert.equal(plain.effect, "指數容易受壓");
+  assert.deepEqual(plain.conditions, ["外資由賣超轉為買超：回頭買才算解除"]);
+  assert.deepEqual(plain.prepare, ["如果跌破低點，就先檢查持股"]);
+  assert.deepEqual(plain.points[0], { key: "foreign", title: "外資：偏空", lines: ["a"], effect: "權值股先受影響", prepare: ["如果外資轉買，就先確認期貨"] });
+  for (const key of ["track", "worry", "relief", "schema"]) assert.ok(!(key in plain), key);
+  // 舊資料：沒有新欄位就不補空的，畫面照舊只顯示擔心與安心
+  const old = buildMarketPack(raw()).overview.plain;
+  assert.deepEqual([old.worry, old.relief], [["w"], ["r"]]);
+  for (const key of ["effect", "conditions", "prepare"]) assert.ok(!(key in old), key);
+  assert.deepEqual(Object.keys(old.points[0]), ["key", "title", "lines"]);
+});

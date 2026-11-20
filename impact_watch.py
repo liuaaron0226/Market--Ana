@@ -10,6 +10,9 @@
   EXPIRE_TRADING_DAYS 個交易日還沒結果就安靜收掉；有結果的在首頁多留 KEEP_RESULT_TRADING_DAYS 個交易日。
 - ``python impact_watch.py check``：每日更新發布成功之後跑（daily-update.yml），順手把當天的數字存進網站資料庫
   （impact_watch_facts），下一班消息用它產生清單。
+- ``plain_picks``（票 07）：首頁白話分析（plain_daily.py）也從同一份清單用編號挑條件，寫在剛發布的 plain-data.js 的
+  ``track``；每日檢查判完之後把它們建成盯項（來源 SOURCE_PLAIN）。和消息建的走同一個 ``creation_sql``，所以自動去重、
+  同一個上限。模型沒寫成、改用程式套句（source=template）的那一天不建。
 
 資料表在 cloud/migrations/0034_impact_watch.sql；網站只讀（cloud/lib/impact-watch.js）。這裡不叫任何模型。
 """
@@ -30,6 +33,9 @@ FACTS_FRESH_TRADING_DAYS = 2    # 數字比消息那一天舊超過幾個交易�
 KEEP_DAYS = 120                 # 收掉的盯項留多久（之後對帳用）
 MARKET = "market"
 SOURCE_NEWS = "market_news"
+SOURCE_PLAIN = "plain_daily"    # 首頁白話分析挑的條件
+PLAIN_IMPACT = 2                # 白話分析挑的條件算影響力「中」：不把消息裡影響大的擠掉
+PLAIN_FILE = "plain-data.js"    # 和 --analysis 同一個資料夾裡的白話分析
 MA_NAMES = {20: "月線", 60: "季線", 240: "年線"}
 LEVEL_DAYS = 20
 STREAK_TARGET = 3               # 連續買賣超至少盯到幾天
@@ -229,8 +235,8 @@ def active_items(query: Callable[[str], list[dict]], trade_date: str) -> list[di
 
 
 def creation_sql(picks: Sequence[Mapping[str, Any]], active: Sequence[Mapping[str, Any]], *, trade_date: str, now: str,
-                 holidays: set[str] | None = None) -> tuple[str, dict[str, Any]]:
-    """模型挑到的條件 → 新盯項的 SQL 與報告。
+                 holidays: set[str] | None = None, source: str = SOURCE_NEWS) -> tuple[str, dict[str, Any]]:
+    """模型挑到的條件 → 新盯項的 SQL 與報告。source：哪一塊 AI 文字挑的（消息或白話分析）。
     picks：[{condition_key, label, params, note, impact, prepare, source_ref}]（對象都是大盤）。
     - 同一個條件這一班被挑好幾次：留影響力最高的那一次；
     - 已經在盯、或剛有結果首頁還留著的條件：不再建；今天建過又收掉的（讓位、當天就有結果）今天也不再建；
@@ -258,7 +264,7 @@ def creation_sql(picks: Sequence[Mapping[str, Any]], active: Sequence[Mapping[st
             continue
         item_id = f"{MARKET}:{pick['condition_key']}:{trade_date}"
         created.append(item_id)
-        values = [item_id, SOURCE_NEWS, trade_date, pick.get("source_ref"), MARKET, "numeric", pick["condition_key"],
+        values = [item_id, source, trade_date, pick.get("source_ref"), MARKET, "numeric", pick["condition_key"],
                   json.dumps(pick.get("params") or {}, ensure_ascii=False), pick["label"], pick.get("note"), int(pick["impact"]),
                   json.dumps(list(pick["prepare"]), ensure_ascii=False) if pick.get("prepare") else None,
                   trade_date, expires, EXPIRE_TRADING_DAYS, "watching", "all", now]
@@ -274,11 +280,33 @@ def creation_sql(picks: Sequence[Mapping[str, Any]], active: Sequence[Mapping[st
     return ("\n".join(lines) + "\n" if lines else ""), report
 
 
+# ---- 首頁白話分析挑的條件（票 07） ----
+
+def plain_picks(plain: Any, facts: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """剛發布的白話分析挑了哪些條件 → creation_sql 吃的 picks。
+    只收模型寫的（source=ai）、而且和這次檢查同一個資料日的那一份；條件的名稱與參數一律用這裡依當天數字重算的清單，
+    檔案裡只認編號與模型附的那一句（檔案不是這支程式寫的，不拿它的參數）。"""
+    if (not isinstance(plain, Mapping) or plain.get("source") != "ai" or not isinstance(plain.get("data_dates"), Mapping)
+            or plain["data_dates"].get("price_and_foreign") != facts["date"] or not isinstance(plain.get("track"), list)):
+        return []
+    offered = {row["id"]: row for row in candidates(facts)}
+    prepare = [line for line in plain.get("prepare") or [] if isinstance(line, str)] if isinstance(plain.get("prepare"), list) else []
+    picks = []
+    for pick in plain["track"]:
+        row = offered.get(pick.get("id")) if isinstance(pick, Mapping) and isinstance(pick.get("id"), str) else None
+        if row:
+            picks.append({"condition_key": row["id"], "label": row["name"], "params": row["params"],
+                          "note": pick["note"] if isinstance(pick.get("note"), str) else None, "impact": PLAIN_IMPACT,
+                          "prepare": prepare, "source_ref": str(plain.get("id") or "")[:80] or None})
+    return picks
+
+
 # ---- 每日檢查（daily-update.yml） ----
 
 def check(analysis: Mapping[str, Any], *, now: str, query: Callable[[str], list[dict]], execute: Callable[[str], None],
-          dry_run: bool = False, holidays: set[str] | None = None) -> dict[str, Any]:
-    """每日更新發布之後跑一次：用剛發布的大盤資料判斷每一筆盯著的盯項，寫回結果與當天的數字。"""
+          dry_run: bool = False, holidays: set[str] | None = None, plain: Any = None) -> dict[str, Any]:
+    """每日更新發布之後跑一次：用剛發布的大盤資料判斷每一筆盯著的盯項，寫回結果與當天的數字。
+    plain：同一次發布的白話分析；它挑的條件在判完之後建成盯項（今天才建的從下一個交易日開始判）。"""
     facts = market_facts(analysis.get("daily") or [], analysis.get("institutional") or [])
     if not facts:
         return {"status": "skipped", "reason": "大盤日 K 不足"}
@@ -289,7 +317,24 @@ def check(analysis: Mapping[str, Any], *, now: str, query: Callable[[str], list[
     script, report = check_sql(items, facts, now=now, holidays=holidays)
     if not dry_run:
         execute(script)
+    # 和每日判斷分開：白話分析的檔讀壞了、條件建不成，都不能賠掉今天的判斷結果
+    try:
+        picks = plain_picks(plain, facts)
+        if picks:
+            creation, created = creation_sql(picks, active_items(query, facts["date"]), trade_date=facts["date"], now=now,
+                                             holidays=holidays, source=SOURCE_PLAIN)
+            if creation and not dry_run:
+                execute(creation)
+            report["plain"] = created
+    except Exception as error:  # noqa: BLE001
+        report["plain"] = {"error": type(error).__name__}
     return {"status": "ok", **report, "dry_run": dry_run}
+
+
+def read_assignment(path: "Path") -> Any:
+    """讀資料包裡的一個檔（window.X = {...};）。"""
+    text = path.read_text(encoding="utf-8").strip()
+    return json.loads(text[text.index("=") + 1:].strip().removesuffix(";").strip())
 
 
 def main(argv: Sequence[str]) -> int:
@@ -302,12 +347,16 @@ def main(argv: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(description="盯項：每日檢查")
     parser.add_argument("command", choices=["check"])
     parser.add_argument("--analysis", required=True, help="每日更新發布的大盤資料檔（analysis-data.js）")
+    parser.add_argument("--plain", help=f"同一次發布的白話分析（沒給就讀 --analysis 旁邊的 {PLAIN_FILE}）")
     parser.add_argument("--dry-run", action="store_true", help="照樣讀、照樣判斷，但不寫網站資料庫")
     args = parser.parse_args(argv)
-    text = Path(args.analysis).read_text(encoding="utf-8").strip()   # window.MARKET_ANALYSIS = {...};
-    analysis = json.loads(text[text.index("=") + 1:].strip().removesuffix(";").strip())
+    analysis = read_assignment(Path(args.analysis))
+    try:   # 白話分析讀不到（沒有這個檔、內容壞了）：照樣做每日判斷，只是不建它的條件
+        plain = read_assignment(Path(args.plain) if args.plain else Path(args.analysis).with_name(PLAIN_FILE))
+    except (OSError, ValueError):
+        plain = None
     report = check(analysis, now=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                   query=wn._wrangler_query, execute=wn._wrangler_execute, dry_run=args.dry_run)
+                   query=wn._wrangler_query, execute=wn._wrangler_execute, dry_run=args.dry_run, plain=plain)
     print(json.dumps(report, ensure_ascii=False))
     return 0
 

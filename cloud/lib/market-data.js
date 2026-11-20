@@ -71,9 +71,11 @@ const chipsView = (c) => ({
 });
 
 // source：本人 11-17 起每天重寫，ai＝Gemini 寫、數字由程式核對；template＝模型沒寫成時程式依數字套句；人寫的舊版沒有這欄。
+// 11-20（market-plain/v3）：worry／relief 換成 effect（影響）、conditions（要看的條件）、prepare（準備），六點各自也有
+// effect／prepare；舊資料沒有新欄位就照舊只有 worry／relief。track（交給系統盯的條件編號）是排程用的，不外送。
 const plainView = (p) => ({
-  ...pick(p, ["one_line", "worry", "relief", "source"]),
-  points: pickAll(p.points, ["key", "title", "lines"]),
+  ...pick(p, ["one_line", "worry", "relief", "source", "effect", "conditions", "prepare"]),
+  points: pickAll(p.points, ["key", "title", "lines", "effect", "prepare"]),
   data_dates: pick(p.data_dates, ["price_and_foreign", "foreign", "futures", "margin"]),
 });
 

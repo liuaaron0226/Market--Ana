@@ -10,7 +10,7 @@ export const IMPACT_WATCH_PATH = /^\/api\/impact-watch$/;
 
 const TAIPEI_OFFSET_MS = 8 * 3_600_000;
 const POINTS_MAX = 2;
-const BLOCKS = { market_news: "消息" };   // 出自哪一塊 AI 文字
+const BLOCKS = { market_news: "消息", plain_daily: "直白分析" };   // 出自哪一塊 AI 文字
 const RESOLVED = ["met", "failed"];
 
 const json = (status, body) => new Response(JSON.stringify(body), {

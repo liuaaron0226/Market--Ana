@@ -23,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlencode
 
+import impact_text
 import impact_watch
 import watch_news as wn
 
@@ -459,12 +460,7 @@ def _text(value: Any, limit: int) -> str | None:
     return value[:limit] if value else None
 
 
-# 買賣指令（本人：「準備」不要寫成「現在買進／賣出」的指令）。新聞本身常寫「外資賣出」「投信逢低布局」，那是在講事情，
-# 所以一般欄位只擋對著讀者說的話；prepare 是寫給讀者的，動作字眼一律擋。
-_ACTIONS = r"買進|買入|賣出|加碼|減碼|進場|出場|承接|布局|佈局|出脫|停損|停利|獲利了結|抄底|追價|追高|殺低|建倉|平倉"
-_ADVICE = re.compile(rf"(?:建議|不妨|應該|可以).{{0,3}}(?:{_ACTIONS})")
-_ORDER_WORDS = re.compile(_ACTIONS)
-_CONDITIONAL = re.compile(r"如果|若|一旦|萬一|要是")
+# 買賣指令的界線（本人：「準備」不要寫成「現在買進／賣出」的指令）在 impact_text.py，和首頁白話分析共用。
 # 站主的自選與庫存只有站主自己能看：大家都看得到的欄位裡不能對著讀者講「你的股票」（那一句只能在 owner_effect）。
 _READER = re.compile(r"你|您|自選|讀者|my_stocks")
 POINT_FIELDS = ("effect", "owner_effect", "conditions", "prepare")
@@ -476,14 +472,13 @@ Problem = tuple[str, str, str]   # (欄位, 退回的原因, 被退回的那一�
 def text_problem(field: str, text: str) -> str | None:
     """模型寫的一句話能不能上站：不能有買賣指令；prepare 還要是「如果…就…」的情境；
     owner_effect 以外的欄位（大家都看得到）不能對著讀者講他自己的股票。"""
-    # prepare 的「如果外資持續賣出」是在講條件；只有「就」後面要讀者做的事不能是買賣
-    todo = text.split("就", 1)[-1] if field == "prepare" else ""
-    if _ADVICE.search(text) or _ORDER_WORDS.search(todo):
-        return "不能寫買賣指令或投資建議"
+    reason = impact_text.order_problem(text, prepare=field == "prepare")
+    if reason == impact_text.NO_ORDERS:
+        return reason
     if field != "owner_effect" and _READER.search(text):
         return "這一段所有人都看得到，不能提到讀者自己的股票（只能寫在 owner_effect）"
-    if field == "prepare" and not _CONDITIONAL.search(text):
-        return "準備要用「如果…就…」寫"
+    if reason:
+        return reason
     return None
 
 

@@ -9,9 +9,15 @@
 2. Gemini（官方 agy＋本人 AI Pro 訂閱）照同一張事實表寫白話：自由文字**不得有任何數字、日期、代號**，
    要提數字就寫 ``{事實代號}``，程式核對代號存在、屬於該段的主題、方向沒有寫反，再換成事實短句。
    這是 ai_digest.py「自由文字不得含數字、事實由程式依 refs 補上」的同一套做法，換成句中代入，讀起來才像人話。
-3. 模型失敗、逾時、或任何一項核對不過：整份改用 ``template_raw`` 的程式套句（同一個核對器也要通過），
-   畫面標「依當天數字自動整理」，不冒充 AI；一天只呼叫一次模型、不重試。
-4. 開關 MARKET_ANA_PLAIN_DAILY（repository variable，獨立於策略總開關）：
+3. 模型失敗、逾時：整份改用 ``template_raw`` 的程式套句（同一個核對器也要通過），畫面標「依當天數字自動整理」，不冒充 AI。
+   回答被核對退回：把原因接在提示後面再問一次（最多 CALL_ATTEMPTS 次）；結論或六點還是不過才整份改用程式套句。
+4. 新寫法（本人 2026-11-20「不要只說明事件，要講影響＋該做的準備」，.scratch/impact-watch 票 07，取代「要擔心／什麼時候比較安心」）：
+   整份與每一點都多「影響」（effect）與「準備」（prepare，只寫「如果…就…」的情境，不寫買賣指令）。
+   「要看的條件」不讓模型自由寫：程式用同一份大盤資料產生可盯條件清單（impact_watch.candidates），模型用編號挑（track），
+   挑到的寫在 ``track``，畫面的 ``conditions`` 由程式排（條件名稱＋模型的一句說明）。每日更新發布後，盯項每日檢查
+   （impact_watch.py check）讀這份檔，把 ``track`` 建成盯項。程式套句不挑條件、不產生盯項。
+   這幾個欄位寬鬆：少寫的用程式套句那一份補上、多寫的不看、被文字檢查退回的只丟那一句——不讓整份作廢。
+5. 開關 MARKET_ANA_PLAIN_DAILY（repository variable，獨立於策略總開關）：
    off（預設，含沒設、拼錯）＝不呼叫模型，沿用人寫那份；dry＝呼叫模型並核對，結果只進執行紀錄，網站照舊；
    on＝發布當天重寫的那份。模型與思考程度由 workflow 一處常數（PLAIN_MODEL、PLAIN_EFFORT）決定。
 """
@@ -20,16 +26,18 @@ from __future__ import annotations
 import json
 import os
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import gemini_models
+import impact_text
+import impact_watch
 from ai_digest import _validate_text as free_text_problem
 from ledger_core import call_model as call_agy
 
-SCHEMA = "market-plain/v2"
+SCHEMA = "market-plain/v3"   # v3（票 07）：worry／relief 換成 effect／conditions／prepare／track，每一點多 effect／prepare
 # 模型與思考程度由設定頁「AI 模型」選（本人 11-19 晚），workflow 用 PLAIN_MODEL／PLAIN_EFFORT 帶進來；
 # 讀不到設定時是空的，照這兩個預設（gemini_models.PLAIN，本人 11-18 晚選 Argon、思考「中」）。
 MODEL_DEFAULT = gemini_models.PLAIN
@@ -54,31 +62,43 @@ SECTION_TOPICS = {
 YI_WORDS = ("進一步", "一直", "一些", "一樣", "一起", "一般", "一定", "一旦", "一致", "一度", "一路", "同一", "唯一",
             "單一", "一邊", "一面", "一時", "一再")
 PLACEHOLDER = re.compile(r"\{([a-z0-9_]+)\}")
-LIMITS = {"one_line": 80, "title": 24, "line": 90, "item": 80}
+LIMITS = {"one_line": 80, "title": 24, "line": 90, "effect": 100, "prepare": 90, "why": 60}
+CORE_FIELDS = ("data_date", "one_line", "points")   # 少了或不合格就整份不用；其餘欄位寬鬆
+POINT_CORE = ("key", "title", "lines")
+PREPARE_MAX = 2            # 整份的準備最多幾句（每一點最多一句）
+TRACK_MAX = 2              # 最多挑幾個條件交給系統盯
+CALL_ATTEMPTS = 2          # 回答被核對退回時，帶著原因再問一次
+RETRY_REASONS = 3          # 重問時最多列幾個原因
 # 交給 agy 子行程的環境變數不帶任何金鑰（每日更新那一步的環境裡有 Cloudflare、R2 的金鑰）。
 SECRET_ENV_PARTS = ("TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "KEY", "R2_", "CLOUDFLARE", "AGY_LOGIN", "PRIVATE")
 
+_LINE = {"type": "string", "maxLength": LIMITS["line"]}
 OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
-    "additionalProperties": False,
-    "required": ["data_date", "one_line", "points", "worry", "relief"],
+    "required": [*CORE_FIELDS, "effect", "prepare"],
     "properties": {
         "data_date": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
         "one_line": {"type": "string", "minLength": 1, "maxLength": LIMITS["one_line"]},
         "points": {
             "type": "array", "minItems": 6, "maxItems": 6,
             "items": {
-                "type": "object", "additionalProperties": False, "required": ["key", "title", "lines"],
+                "type": "object", "required": [*POINT_CORE, "effect"],
                 "properties": {
                     "key": {"type": "string", "enum": list(POINT_KEYS)},
                     "title": {"type": "string", "minLength": 1, "maxLength": LIMITS["title"]},
                     "lines": {"type": "array", "minItems": 1, "maxItems": 4,
                               "items": {"type": "string", "minLength": 1, "maxLength": LIMITS["line"]}},
+                    "effect": {**_LINE, "description": "這一點的數字代表什麼影響，一句"},
+                    "prepare": {**_LINE, "description": "一句「如果…就…」；沒有就給空字串"},
                 },
             },
         },
-        "worry": {"type": "array", "minItems": 1, "maxItems": 3, "items": {"type": "string", "minLength": 1, "maxLength": LIMITS["item"]}},
-        "relief": {"type": "array", "minItems": 1, "maxItems": 3, "items": {"type": "string", "minLength": 1, "maxLength": LIMITS["item"]}},
+        "effect": {"type": "string", "maxLength": LIMITS["effect"], "description": "今天的籌碼影響到誰、多大，一句"},
+        "prepare": {"type": "array", "maxItems": PREPARE_MAX, "description": "先做好的準備，每句用「如果…就…」",
+                    "items": {"type": "string", "maxLength": LIMITS["prepare"]}},
+        "track": {"type": "array", "maxItems": TRACK_MAX, "description": "從 WATCHABLE 用 id 挑要系統替讀者盯的條件",
+                  "items": {"type": "object", "required": ["id"],
+                            "properties": {"id": {"type": "string"}, "why": {"type": "string", "maxLength": LIMITS["why"]}}}},
     },
 }
 
@@ -285,7 +305,7 @@ def build_facts(analysis: Mapping[str, Any], chips: Mapping[str, Any]) -> dict[s
 # ---- 2. 核對 ----
 
 def _contradictions(signals: Mapping[str, Any]) -> list[tuple[set[str], tuple[str, ...]]]:
-    """（套用的段落, 不可出現的字）：描述「今天」的結論與六點不可以把方向寫反；擔心、安心是假設條件，不查。"""
+    """（套用的段落, 不可出現的字）：描述「今天」的結論與六點不可以把方向寫反；影響、準備、條件的說明常寫假設的情況，不查。"""
     checks: list[tuple[set[str], tuple[str, ...]]] = []
     everywhere = {"one_line", *POINT_KEYS}
     if signals["foreign"] < 0:
@@ -313,12 +333,15 @@ def _contradictions(signals: Mapping[str, Any]) -> list[tuple[set[str], tuple[st
     return checks
 
 
-def _text_problem(text: Any, section: str, bundle: Mapping[str, Any], limit: int) -> str | None:
+def _text_problem(text: Any, section: str, bundle: Mapping[str, Any], limit: int, *, topic_key: str | None = None,
+                  prepare: bool = False) -> str | None:
+    """section 是寫進原因的段落名稱。topic_key：這一段只能代入哪一點主題的事實（六點各自的影響、準備）；
+    prepare：這一句是「準備」，要是「如果…就…」而且「就」後面不能是買賣。"""
     if not isinstance(text, str) or not text.strip():
         return f"{section}：文字為空"
     if len(text) > limit:
         return f"{section}：文字太長"
-    topics = SECTION_TOPICS.get(section)
+    topics = SECTION_TOPICS.get(topic_key or section)
     for key in PLACEHOLDER.findall(text):
         fact = bundle["facts"].get(key)
         if fact is None:
@@ -332,6 +355,7 @@ def _text_problem(text: Any, section: str, bundle: Mapping[str, Any], limit: int
     for word in YI_WORDS:
         bare = bare.replace(word, "")
     reason = free_text_problem(bare) if bare.strip() else None   # 空白、禁止字樣、數字：和 ai_digest 同一個檢查
+    reason = reason or impact_text.order_problem(prose, prepare=prepare)   # 買賣指令：和首頁消息同一條界線
     if reason:
         return f"{section}：{reason}"
     for sections, terms in _contradictions(bundle["signals"]):
@@ -346,9 +370,13 @@ def _render(text: str, bundle: Mapping[str, Any], *, form: str) -> str:
     return PLACEHOLDER.sub(lambda match: bundle["facts"][match.group(1)][form], text).strip()
 
 
-def validate(output: Any, bundle: Mapping[str, Any]) -> tuple[dict[str, Any] | None, list[str]]:
-    """全部通過才回傳可發布的內容（數字已代入）；任何一處不過就整份不用（回傳 None 與原因）。"""
-    if not isinstance(output, dict) or set(output) != set(OUTPUT_SCHEMA["required"]):
+def validate(output: Any, bundle: Mapping[str, Any], *, watchable: Sequence[Mapping[str, Any]] = (),
+             dropped: list[str] | None = None, unknown: list[str] | None = None) -> tuple[dict[str, Any] | None, list[str]]:
+    """結論與六點全部通過才回傳可發布的內容（數字已代入）；其中任何一處不過就整份不用（回傳 None 與原因）。
+    新寫法的欄位（影響、準備、要盯的條件）寬鬆：少寫的就沒有、多寫的不看、被文字檢查退回的只丟那一句（原因記進 dropped）。
+    watchable：這一天的可盯條件清單；track 只收清單裡有的編號（沒有的記進 unknown）。"""
+    dropped = [] if dropped is None else dropped
+    if not isinstance(output, dict) or any(key not in output for key in CORE_FIELDS):
         return None, ["最外層欄位不對"]
     problems: list[str | None] = []
     if output.get("data_date") != bundle["data_dates"]["price_and_foreign"]:
@@ -360,7 +388,7 @@ def validate(output: Any, bundle: Mapping[str, Any]) -> tuple[dict[str, Any] | N
     problems.append(_text_problem(output.get("one_line"), "one_line", bundle, LIMITS["one_line"]))
     for point in points:
         key = point["key"]
-        if set(point) != {"key", "title", "lines"}:
+        if any(field not in point for field in POINT_CORE):
             problems.append(f"{key}：欄位不對")
             continue
         title = point.get("title")
@@ -372,23 +400,55 @@ def validate(output: Any, bundle: Mapping[str, Any]) -> tuple[dict[str, Any] | N
             problems.append(f"{key}：lines 要一到四句")
             continue
         problems.extend(_text_problem(line, key, bundle, LIMITS["line"]) for line in lines)
-    for section in ("worry", "relief"):
-        items = output.get(section)
-        if not isinstance(items, list) or not 1 <= len(items) <= 3:
-            problems.append(f"{section}：要一到三項")
-            continue
-        problems.extend(_text_problem(item, section, bundle, LIMITS["item"]) for item in items)
     found = [problem for problem in problems if problem]
     if found:
         return None, found
+
+    def soft(value: Any, section: str, limit: int, *, form: str, most: int = 1, **check: Any) -> list[str]:
+        """寬鬆欄位的一段：一句或一串都收，最多 most 句；不合格的只丟那一句。"""
+        items = [value] if isinstance(value, str) else value if isinstance(value, list) else []
+        kept: list[str] = []
+        for item in items:
+            if item in (None, "") or len(kept) >= most:   # 多寫的不看
+                continue
+            problem = _text_problem(item, section, bundle, limit, **check)
+            if problem:
+                dropped.append(problem + (f"（被退回的那一句：「{item[:60]}」）" if isinstance(item, str) else ""))
+            else:
+                kept.append(_render(item, bundle, form=form))
+        return kept
+
     by_key = {point["key"]: point for point in points}
-    return {
-        "one_line": _render(output["one_line"], bundle, form="text"),
-        "points": [{"key": key, "title": f"{SUBJECTS[key]}：{_render(by_key[key]['title'], bundle, form='short')}",
-                    "lines": [_render(line, bundle, form="short") for line in by_key[key]["lines"]]} for key in POINT_KEYS],
-        "worry": [_render(item, bundle, form="text") for item in output["worry"]],
-        "relief": [_render(item, bundle, form="text") for item in output["relief"]],
-    }, []
+    body: dict[str, Any] = {"one_line": _render(output["one_line"], bundle, form="text"), "points": []}
+    for key in POINT_KEYS:
+        point = by_key[key]
+        entry: dict[str, Any] = {"key": key, "title": f"{SUBJECTS[key]}：{_render(point['title'], bundle, form='short')}",
+                                 "lines": [_render(line, bundle, form="short") for line in point["lines"]]}
+        effect = soft(point.get("effect"), f"{key}.effect", LIMITS["line"], form="short", topic_key=key)
+        prepare = soft(point.get("prepare"), f"{key}.prepare", LIMITS["line"], form="short", topic_key=key, prepare=True)
+        entry.update({**({"effect": effect[0]} if effect else {}), **({"prepare": prepare} if prepare else {})})
+        body["points"].append(entry)
+    effect = soft(output.get("effect"), "effect", LIMITS["effect"], form="text")
+    prepare = soft(output.get("prepare"), "prepare", LIMITS["prepare"], form="text", most=PREPARE_MAX, prepare=True)
+    body.update({**({"effect": effect[0]} if effect else {}), **({"prepare": prepare} if prepare else {})})
+    # 要盯的條件：編號要在清單裡，名稱（帶數字）由程式寫；模型只附一句說明，那一句不合格就只丟那一句、條件照盯
+    by_id = {row["id"]: row for row in watchable}
+    picks: list[dict[str, Any]] = []
+    track = output.get("track")
+    for pick in track if isinstance(track, list) else []:
+        condition = pick.get("id") if isinstance(pick, Mapping) else pick
+        if not isinstance(condition, str) or condition not in by_id:
+            if unknown is not None and by_id:
+                unknown.append(str(condition)[:40])
+            continue
+        if len(picks) >= TRACK_MAX or any(row["id"] == condition for row in picks):
+            continue
+        why = soft(pick.get("why"), "track", LIMITS["why"], form="text") if isinstance(pick, Mapping) else []
+        picks.append({"id": condition, "name": by_id[condition]["name"], "note": why[0] if why else None})
+    if picks:
+        body["conditions"] = [row["name"] + (f"：{row['note']}" if row["note"] else "") for row in picks]
+        body["track"] = [{"id": row["id"], "note": row["note"]} for row in picks]
+    return body, []
 
 
 # ---- 3. 程式套句（模型失敗時用；也走同一個核對器） ----
@@ -418,9 +478,13 @@ def template_raw(bundle: Mapping[str, Any]) -> dict[str, Any]:
     foreign_lines = ["，".join(f"{{{key}}}" for key in ("foreign_streak", "foreign_today", "foreign_20d") if has(key)) + "。",
                      "，".join(f"{{{key}}}" for key in ("futures_net", "futures_week", "futures_streak") if has(key)) + "。"]
     if selling and futures_bear:
-        foreign_lines.append("現貨和期貨同時偏空，賣壓主要來自外資；是看壞還是避險，光看數字分不出來。")
+        foreign_effect = "現貨和期貨同時偏空，賣壓主要來自外資；是看壞還是避險，光看數字分不出來。"
     elif selling or futures_bear:
-        foreign_lines.append("現貨和期貨的方向不同，外資的態度還不明確。")
+        foreign_effect = "現貨和期貨的方向不同，外資的態度還不明確，權值股容易跟著來回。"
+    else:
+        foreign_effect = "外資站在買方，權值股比較有支撐。" if buying else "外資沒有明顯方向，對大盤的影響有限。"
+    turn = "買超" if selling else "賣超" if buying else "明顯買超或賣超"
+    foreign_prepare = f"如果外資現貨{'轉為' if selling or buying else '開始'}{turn}，就先確認期貨部位有沒有跟著轉向。"
 
     cover = signals.get("trust_cover")
     if signals["trust_5d"] > 0:
@@ -429,51 +493,74 @@ def template_raw(bundle: Mapping[str, Any]) -> dict[str, Any]:
         trust_title = "也在賣" if signals["foreign_5d"] < 0 else "在賣"
     else:
         trust_title = "幾乎沒動作"
+    if signals["trust_5d"] > 0:
+        trust_effect = ("投信站在買方，中小型股比較有支撐。" if cover is None
+                        else "投信的買盤抵不過外資的賣壓，只能減緩跌勢。" if cover < 1 else "投信的買盤接得住外資的賣壓。")
+        trust_prepare = "如果投信轉為賣超，就先留意中小型股的賣壓。"
+    elif signals["trust_5d"] < 0:
+        trust_effect, trust_prepare = "投信也站在賣方，少了撐盤的力量。", "如果投信轉為買超，就先確認外資有沒有同步回頭。"
+    else:
+        trust_effect, trust_prepare = "投信沒有明顯動作，對大盤的影響有限。", "如果投信開始明顯買超或賣超，就先確認外資的方向。"
     trust_lines = ["{trust_5d}，{trust_today}。"] + (["{trust_vs_foreign}。"] if has("trust_vs_foreign") else [])
 
     margin_lines = ["{margin_balance}，{margin_change}" + lag + "。", "{margin_peak}。"]
     margin_lines += ["{margin_rank}。"] if has("margin_rank") else []
-    margin_lines += {-1: ["槓桿變低，之後的賣壓會減輕；但也代表有資金離場。"],
-                     1: ["借錢買股的人變多，行情轉弱時賣壓會比較重。"]}.get(signals["margin"], [])
+    margin_effect = {-1: "槓桿變低，之後的賣壓會減輕；但也代表有資金離場。",
+                     1: "借錢買股的人變多，行情轉弱時賣壓會比較重。"}.get(signals["margin"], "槓桿沒有明顯變化，對行情的影響有限。")
+    margin_prepare = {-1: "如果融資餘額繼續減少，就先檢查手上有沒有用融資買的股票。",
+                      1: "如果融資餘額繼續增加，就先想好行情轉弱時怎麼應對。"}.get(signals["margin"], "如果融資餘額開始明顯增減，就先確認指數的方向。")
 
     short_lines = ["{short_units}，{short_change}" + lag + "。"] + (["{short_vs_20d}。"] if has("short_vs_20d") else [])
-    short_lines += {-1: ["放空的人買回，融券減少；剩下的空單之後也要買回。"],
-                    1: ["放空的人變多，之後買回時會變成買盤。"]}.get(signals["short"], [])
+    short_effect = {-1: "放空的人買回，融券減少；剩下的空單之後也要買回。",
+                    1: "放空的人變多，之後買回時會變成買盤。"}.get(signals["short"], "放空的部位沒有明顯變化，對行情的影響有限。")
+    short_prepare = {-1: "如果融券餘額繼續減少，就先留意回補的買盤還剩多少。",
+                     1: "如果融券餘額繼續增加，就先留意之後回補帶來的買盤。"}.get(signals["short"], "如果融券餘額開始明顯增減，就先確認指數的方向。")
 
     position_title = ("短線偏弱" if below20 and below60 else "短線偏強" if below20 is False and below60 is False else "短線多空拉鋸")
     if "below_ma240" in signals:
         position_title += "，已在年線之下" if signals["below_ma240"] else "，還在年線之上"
     sides = "、".join(f"{{ma{n}_side}}" for n in (20, 60, 240) if has(f"ma{n}_side"))
     position_lines = ["今天{close}，{index_change}，{close_in_range}。", "指數{change_20d}。"] + ([f"收盤{sides}。"] if sides else [])
+    position_effect = ("指數在均線之下，反彈時容易遇到賣壓。" if below20 and below60
+                       else "指數在均線之上，回檔時比較有支撐。" if below20 is False and below60 is False
+                       else "指數夾在均線之間，方向還沒有表態。")
+    position_prepare = ((["如果收盤站回{ma20_line}，就先確認外資現貨有沒有同步轉買。"] if below20
+                         else ["如果收盤跌破{ma20_line}，就先檢查手上持股的支撐在哪裡。"]) if has("ma20_line") else [])
 
     ratio = signals.get("amount_ratio")
+    volume_effect, volume_prepare = "", []
     if ratio is None:
         volume_title, volume_lines = "今天沒有成交金額資料", ["成交金額還沒公布。"]
     else:
         volume_title = "量比平常大" if ratio >= 1.2 else "量比平常小" if ratio <= 0.8 else "量和平常差不多"
-        volume_lines = ["{amount}，{amount_ratio}。"] + (["量大代表換手劇烈，要看接下來幾天能不能延續。"] if ratio >= 1.2 else [])
+        volume_lines = ["{amount}，{amount_ratio}。"]
+        volume_effect = ("量大代表換手劇烈，要看接下來幾天能不能延續。" if ratio >= 1.2
+                         else "量縮代表觀望的人多，行情不容易走遠。" if ratio <= 0.8 else "量能沒有特別變化，看不出資金態度轉變。")
+        volume_prepare = ["如果量能繼續放大而指數不漲，就先留意賣壓是不是變重。" if ratio >= 1.2
+                          else "如果量能持續萎縮，就先想好行情突然變動時怎麼應對。" if ratio <= 0.8
+                          else "如果量能明顯放大，就先確認指數是漲還是跌。"]
 
-    worry = (["外資期貨空單還在增加。"] if futures_bear else [])
-    if selling:
-        worry.append("{foreign_streak}，賣壓還沒停。" if signals["foreign_streak"] >= 2 else "外資現貨還在賣。")
-    worry.append("收盤跌破{day_low}，短線可能再走弱。")
-    relief = (["收盤站回 {ma20_line}。"] if below20 and has("ma20_line") else [])
-    relief.append("外資現貨轉為買超，或期貨空單開始減少。" if selling or futures_bear else "外資現貨持續買超、期貨空單沒有增加。")
+    # 整份的影響與準備（取代原本的「要擔心／什麼時候比較安心」）。套句不挑要盯的條件：那要模型判斷哪一個最有關。
+    effect = ("賣壓還沒解除，指數與權值股短線容易繼續受壓。" if len(weak) >= 2
+              else "買方佔上風，指數與權值股短線比較有支撐。" if len(strong) >= 2 else "多空力量拉鋸，指數短線容易來回震盪。")
+    prepare = ["如果收盤跌破{day_low}，就先檢查手上持股的支撐在哪裡。", foreign_prepare]
 
     return {
         "data_date": bundle["data_dates"]["price_and_foreign"],
         "one_line": one_line,
         "points": [
-            {"key": "foreign", "title": "現貨和期貨都偏空" if selling and futures_bear else f"{spot_word}，{futures_word}", "lines": foreign_lines},
-            {"key": "trust", "title": trust_title, "lines": trust_lines},
+            {"key": "foreign", "title": "現貨和期貨都偏空" if selling and futures_bear else f"{spot_word}，{futures_word}", "lines": foreign_lines,
+             "effect": foreign_effect, "prepare": [foreign_prepare]},
+            {"key": "trust", "title": trust_title, "lines": trust_lines, "effect": trust_effect, "prepare": [trust_prepare]},
             {"key": "margin", "title": {-1: "散戶借錢買股的錢在減少", 1: "散戶借錢買股的錢在增加"}.get(signals["margin"], "借錢買股的錢變化不大"),
-             "lines": margin_lines},
-            {"key": "short", "title": {-1: "空單在回補", 1: "空單在增加"}.get(signals["short"], "空單變化不大"), "lines": short_lines},
-            {"key": "position", "title": position_title, "lines": position_lines},
-            {"key": "volume", "title": volume_title, "lines": volume_lines},
+             "lines": margin_lines, "effect": margin_effect, "prepare": [margin_prepare]},
+            {"key": "short", "title": {-1: "空單在回補", 1: "空單在增加"}.get(signals["short"], "空單變化不大"), "lines": short_lines,
+             "effect": short_effect, "prepare": [short_prepare]},
+            {"key": "position", "title": position_title, "lines": position_lines, "effect": position_effect, "prepare": position_prepare},
+            {"key": "volume", "title": volume_title, "lines": volume_lines, "effect": volume_effect, "prepare": volume_prepare},
         ],
-        "worry": worry[:3],
-        "relief": relief[:3],
+        "effect": effect,
+        "prepare": prepare,
     }
 
 
@@ -490,31 +577,69 @@ def _stamp_plain(body: Mapping[str, Any], bundle: Mapping[str, Any], *, source: 
 
 def template_plain(bundle: Mapping[str, Any], *, fallback_reason: str | None = None,
                    clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)) -> dict[str, Any]:
-    body, problems = validate(template_raw(bundle), bundle)
-    if body is None:  # 程式套句自己沒過核對＝程式錯，丟出去讓呼叫端沿用舊版並記下
-        raise RuntimeError("程式套句沒通過核對：" + "；".join(problems))
+    dropped: list[str] = []
+    body, problems = validate(template_raw(bundle), bundle, dropped=dropped)
+    if body is None or dropped:  # 程式套句自己沒過核對＝程式錯，丟出去讓呼叫端沿用舊版並記下
+        raise RuntimeError("程式套句沒通過核對：" + "；".join(problems + dropped))
     return _stamp_plain(body, bundle, source="template", model=None, fallback_reason=fallback_reason, clock=clock)
 
 
 # ---- 4. 模型 ----
 
-def build_prompt(bundle: Mapping[str, Any]) -> str:
-    facts = {key: {"topic": fact["topic"], "在六點裡代入成": fact["short"], "在結論擔心安心代入成": fact["text"]}
+def watchable_conditions(analysis: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """這一天可以交給系統盯的大盤條件（[{id, name, now, params}]）：和盯項每日檢查用同一份資料、同一個算法，
+    所以這裡挑到的編號，發布後的檢查一定認得。算不出來就是空的（那一天照樣有白話分析，只是不挑條件）。"""
+    try:
+        return impact_watch.candidates(impact_watch.market_facts(analysis.get("daily") or [], analysis.get("institutional") or []))
+    except Exception:  # noqa: BLE001 — 清單出不來不能賠掉白話分析
+        return []
+
+
+def build_prompt(bundle: Mapping[str, Any], watchable: Sequence[Mapping[str, Any]] = ()) -> str:
+    facts = {key: {"topic": fact["topic"], "在六點裡代入成": fact["short"], "在其他段落代入成": fact["text"]}
              for key, fact in bundle["facts"].items()}
     topics = "；".join(f"{key}（{SUBJECTS[key]}）只能用 topic 為 {'、'.join(SECTION_TOPICS[key])} 的代號" for key in POINT_KEYS)
     rules = [
         "你是台股盤後籌碼整理員，替一般投資人寫首頁「籌碼與資金」的白話分析。只能根據 FACTS，不可連網、不可使用工具，不可加入 FACTS 沒有的事實（美股、新聞、個股、傳聞都不要寫）。",
-        "所有文字一律不得出現阿拉伯數字、全形數字、中文數字（一、兩、十、百、千、萬、億、兆等）、日期、股票代號或百分比。要提到數字或日期時寫 {代號}；程式會換成核對過的句子（六點裡換成「在六點裡代入成」那一句，結論、擔心、安心換成「在結論擔心安心代入成」那一句）。只能用 FACTS 裡有的代號，換進去後要讀得通順，不要在代號前後重複寫主角。",
+        "所有文字一律不得出現阿拉伯數字、全形數字、中文數字（一、兩、十、百、千、萬、億、兆等）、日期、股票代號或百分比。要提到數字或日期時寫 {代號}；程式會換成核對過的句子（六點裡換成「在六點裡代入成」那一句，其他段落換成「在其他段落代入成」那一句）。只能用 FACTS 裡有的代號，換進去後要讀得通順，不要在代號前後重複寫主角。",
         f"只有這些含「一」的詞可以用：{'、'.join(YI_WORDS)}；其他像「一天」「一個月」「兩邊」都不可以，請改寫（例如「逐日增加」「近期」「現貨和期貨」）。",
         f"points 剛好六點，key 各一次：{topics}。",
-        "title 是一句短判斷，不要寫主角也不要冒號（程式會自動加上「外資：」這類前綴）。lines 一到四句短句。",
-        "one_line 是一句話結論。worry 是之後要擔心的情況、relief 是什麼情況下比較安心，各一到三項；跟外資有關的擔心要寫出「外資」二字。",
+        "title 是一句短判斷，不要寫主角也不要冒號（程式會自動加上「外資：」這類前綴）。lines 一到四句短句，只講發生什麼。",
+        "每一點另外寫 effect：這個數字代表什麼影響（影響到誰、多大），一句；prepare：一句「如果…就…」，寫這個數字接下來怎麼變時要先確認、檢查或想好的事；想不到就給空字串，程式會補上基本的那一句。這兩段同樣只能用該點主題的代號。",
+        "one_line 是一句話結論。最外層的 effect 是一句話講整體影響：今天這樣的籌碼影響到誰（指數、權值股、中小型股、用融資的人等）、多大。最外層的 prepare 是先做好的準備，一到兩句，每句用「如果…就…」寫。",
+        "整份都不能寫買賣指令或個人化投資建議，effect、prepare 與 track 的 why 尤其要注意：不要出現「建議買進」「可以加碼」「應該減碼」「逢低布局」「停損出場」這類叫人下單的話；prepare 只寫情境與要先確認、檢查、想好的事。",
+        ("track：WATCHABLE 是系統可以每天替讀者盯的大盤條件（id、name；now 是現況）。接下來最該擔心、或出現了會比較安心的，"
+         f"挑零到{'兩' if TRACK_MAX == 2 else TRACK_MAX}個：id 照抄、why 用一句話說為什麼要盯它（同樣不得有數字，要提數字就寫 {{代號}}）。"
+         "只能挑 WATCHABLE 裡有的 id；沒有相關的就給空陣列，不要硬挑。") if watchable else "不要寫 track 這個欄位。",
         "方向不可以和 FACTS 相反（例如外資賣超時不可寫外資買進、融資減少時不可寫融資增加）。分不出原因的事不要說死，例如外資是看壞還是避險、融資減少是被追繳還是停損。",
         "不寫投資建議或保證，不寫模型、提示詞、方法、參考站、會員、反推等字樣。繁體中文、白話、短句。",
         f"data_date 填 {bundle['data_dates']['price_and_foreign']}。",
     ]
-    return "\n".join([*rules, "DATA_DATES:", json.dumps(bundle["data_dates"], ensure_ascii=False),
+    listed = ["WATCHABLE:", json.dumps([{key: row[key] for key in ("id", "name", "now")} for row in watchable],
+                                       ensure_ascii=False, separators=(",", ":"))] if watchable else []
+    return "\n".join([*rules, "DATA_DATES:", json.dumps(bundle["data_dates"], ensure_ascii=False), *listed,
                       "FACTS:", json.dumps(facts, ensure_ascii=False, sort_keys=True, separators=(",", ":"))])
+
+
+def retry_note(reasons: Sequence[str]) -> str:
+    """回答被核對退回後重問時接在提示後面（和首頁消息 market_news.retry_note 同一個做法：不告訴模型錯在哪，它多半再錯一次）。"""
+    return ("\n\n【上一次的回答被退回，請整份重寫】原因：" + "；".join(reasons[:RETRY_REASONS]) + "。"
+            "重寫時自由文字不要出現任何數字（改寫 {代號}），不要出現買進、賣出、加碼、減碼、停損這類叫人下單的話或投資建議；"
+            "prepare 每一句用「如果…就…」寫要先確認、檢查或想好的事。欄位與格式照原本的規定，不要多也不要少。")
+
+
+def _fill(body: dict[str, Any], base: Mapping[str, Any]) -> list[str]:
+    """模型少寫、或被文字檢查丟掉的影響與準備，用程式套句那一份補上（畫面每一段都有東西）。回傳補了哪幾段。"""
+    filled = []
+    for field in ("effect", "prepare"):
+        if not body.get(field) and base.get(field):
+            body[field] = base[field]
+            filled.append(field)
+        for point, fallback in zip(body["points"], base["points"]):
+            if not point.get(field) and fallback.get(field):
+                point[field] = fallback[field]
+                filled.append(f"{point['key']}.{field}")
+    return filled
 
 
 ModelAsker = Callable[[str, Mapping[str, Any]], tuple[str, Any, str]]
@@ -559,23 +684,49 @@ def produce(analysis: Mapping[str, Any], chips: Mapping[str, Any], *, mode: str,
         audit["failure"] = f"template_failed: {str(error)[:300]}"
         return None, audit
     audit["data_dates"] = bundle["data_dates"]
-    try:
-        status, structured, detail = ask_model(build_prompt(bundle), OUTPUT_SCHEMA)
-    except Exception as error:  # noqa: BLE001
-        status, structured, detail = "model_failed", None, f"{type(error).__name__}: {str(error)[:200]}"
+    watchable = watchable_conditions(analysis)
+    prompt, suffix = build_prompt(bundle, watchable), ""
+    status, detail = "model_failed", ""
+    usable: tuple[dict[str, Any], list[str], list[str]] | None = None   # 目前最好的一份回答：(內容, 被丟掉的句子, 清單外的編號)
+    for attempt in range(1, CALL_ATTEMPTS + 1):
+        audit["attempts"] = attempt
+        try:
+            status, structured, detail = ask_model(prompt + suffix, OUTPUT_SCHEMA)
+        except Exception as error:  # noqa: BLE001
+            status, structured, detail = "model_failed", None, f"{type(error).__name__}: {str(error)[:200]}"
+        if status != "ok":
+            if attempt > 1:
+                audit["retry_failed"] = f"{status}: {str(detail)[:200]}"
+            break   # 模型沒回來不重試（額度與時間）；重問那一次沒回來就用前一次的
+        dropped: list[str] = []
+        unknown: list[str] = []
+        body, problems = validate(structured, bundle, watchable=watchable, dropped=dropped, unknown=unknown)
+        # 重問的回答不比前一次差才換（被丟的句子沒有變多、挑到的條件沒有變少）：一句不合格不該賠掉整份
+        if body is not None and (usable is None or (len(dropped) <= len(usable[1])
+                                                    and len(body.get("track") or []) >= len(usable[0].get("track") or []))):
+            usable = (body, dropped, unknown)
+        if usable is None:
+            audit["rejected"] = problems
+        if not problems and not dropped:
+            break
+        if attempt < CALL_ATTEMPTS:
+            suffix = retry_note(problems or dropped)
+            audit["retry"] = (problems or dropped)[:RETRY_REASONS]
     candidate = None
-    if status == "ok":
-        body, problems = validate(structured, bundle)
-        audit["rejected"] = problems
-        if body is not None:
-            candidate = _stamp_plain(body, bundle, source="ai", model=model, fallback_reason=None, clock=clock)
-        else:
-            audit["failure"] = "validation_failed"
+    if usable is not None:
+        body, dropped, unknown = usable
+        filled = _fill(body, template)
+        audit.update({"rejected": [], "dropped": dropped, "filled": filled,
+                      "watch": {"offered": len(watchable), "picked": [row["id"] for row in body.get("track") or []],
+                                "unknown_ids": unknown}})
+        candidate = _stamp_plain(body, bundle, source="ai", model=model, fallback_reason=None, clock=clock)
+    elif status == "ok" or audit["rejected"]:   # 第一次被核對退回、重問那一次沒回來：原因還是核對沒過
+        audit["failure"] = "validation_failed"
     else:
         audit["failure"] = status
         audit["detail"] = str(detail)[:300]
     if candidate is None:
-        candidate = {**template, "fallback_reason": "模型沒有回來" if status != "ok" else "核對沒過"}
+        candidate = {**template, "fallback_reason": "核對沒過" if audit["failure"] == "validation_failed" else "模型沒有回來"}
     audit["source"] = candidate["source"]
     if mode == "dry":
         audit["candidate"] = candidate
@@ -598,7 +749,9 @@ def rewrite_pack(analysis: Mapping[str, Any], chips: Mapping[str, Any], *, day: 
                                model=model, effort=effort)
     plain, audit = produce(analysis, chips, mode=mode, ask_model=ask_model, model=model, effort=effort)
     summary = {"mode": mode, "model": model, "effort": effort, "source": audit.get("source"), "failure": audit.get("failure"),
-               "rejected": len(audit.get("rejected") or []), "published": plain is not None}
+               "rejected": len(audit.get("rejected") or []), "attempts": audit.get("attempts", 0),
+               "dropped": len(audit.get("dropped") or []), "watch_picked": (audit.get("watch") or {}).get("picked") or [],
+               "published": plain is not None}
     try:
         audit_dir.mkdir(parents=True, exist_ok=True)
         (audit_dir / f"{day}.json").write_text(json.dumps({"data_date": day, **audit, "published": plain},
@@ -612,6 +765,7 @@ def usage_fields(audit: Mapping[str, Any] | None) -> dict[str, Any] | None:
     """記進設定頁 Gemini 用量的欄位（本人 11-19，owner 派工）。讀 rewrite_pack 寫的執行紀錄。
     只在真的呼叫到 Gemini 時才記：事實表算不出來、agy 沒裝好或登入沒還原（agy_unavailable）都不算一次。
     成功＝模型寫的白話通過核對（開關 on 時就是這份要發布；每日更新之後的步驟失敗、網站沒換，這裡照樣算成功）；
+    被核對退回後重問的那一次不另外記（一天還是一筆，執行紀錄的 attempts 寫實際問了幾次）；
     模型沒回來、逾時、核對沒過改用程式套句都算失敗。開關是 dry 時另外標乾跑。模型、思考程度照紀錄，沒寫就留空、不猜。"""
     if (not isinstance(audit, Mapping) or normalize_mode(audit.get("mode")) == "off" or not audit.get("data_dates")
             or audit.get("failure") == "agy_unavailable"):

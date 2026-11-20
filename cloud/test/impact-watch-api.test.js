@@ -48,6 +48,12 @@ async function req(path = "/api/impact-watch", { email = OWNER, method = "GET" }
 }
 const labels = (body) => body.items.map((item) => item.label);
 
+test("首頁直白分析挑的條件：出處寫「直白分析」（票 07）", async () => {
+  await add(env.DB, "above_ma20", { source_block: "plain_daily", source_ref: "20261118-plain-ai", label: "加權指數收盤站回月線", impact: 2 });
+  const body = await (await req()).json();
+  assert.deepEqual(body.items.find((item) => item.id === "above_ma20").source, { block: "直白分析", date: "2026-11-18" });
+});
+
 test("盯著的與剛有結果的都回：有結果的在前，盯著的依影響力、再依新舊", async () => {
   const r = await req();
   assert.equal(r.status, 200);
