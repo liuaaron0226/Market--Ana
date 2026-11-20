@@ -352,11 +352,14 @@ jobs:
         # 本人 2026-11-20「接下來要看的條件由系統盯」（.scratch/impact-watch 票 03）：盯著的每一筆由程式判一次，結果寫回
         # impact_watch_items；當天的數字存進 impact_watch_facts，下一班首頁消息用它產生可盯條件清單。不叫任何模型。
         # 0034 還沒套時讀不到表，印 skipped，不擋發布。
+        # 票 06：有 OWNER_EMAIL 時接著判站主自選股與庫存的盯項（只讀這台機器上剛更新的行情庫，和個股頁同一套分析），
+        # 每一檔當天的數字也存進 impact_watch_facts；個股那一段出錯只記在輸出的 stocks.error，不影響大盤的結果。
         if: success() && steps.day.outputs.dry_run == ''
         continue-on-error: true
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          OWNER_EMAIL: ${{ vars.OWNER_EMAIL }}
         run: |
           sync=$(python -c "import json,sys; print(json.load(open(sys.argv[1], encoding='utf-8'))['sync_state'])" "${{ runner.temp }}/daily-result.json")
           # 手動重新部署（redeploy）時也查一次：剛上線那天不用等到下一個交易日的發布才有當天的數字（owner 11-20）。

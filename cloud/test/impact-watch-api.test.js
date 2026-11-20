@@ -160,3 +160,44 @@ test("沒有盯項：空清單", async () => {
   await env.DB.prepare("DELETE FROM impact_watch_items").run();
   assert.deepEqual(await (await req()).json(), { available: true, items: [] });
 });
+
+// ---- 站主自選股與庫存的盯項（票 06）：只有站主拿得到 ----
+const STOCK = {
+  subject: "2454", visibility: "owner", label: "收盤跌破季線", note: "OWNER-NOTE 法說後賣壓還沒消化",
+  params: JSON.stringify({ name: "聯發科", ma: 60, as_of: "2026-11-18" }), prepare: JSON.stringify(["如果跌破季線，就先確認 OWNER-PREPARE"]),
+};
+
+test("個股盯項：站主拿得到，帶股票名稱；條件的參數不往外送", async () => {
+  await add(env.DB, "stock_watch", STOCK);
+  await add(env.DB, "stock_done", { ...STOCK, subject: "3008", params: JSON.stringify({ name: "大立光", level: 2500 }), label: "收盤站上壓力（2,500）",
+    status: "met", result_date: "2026-11-20", result_note: "成立：11/20 收 2,530，站上壓力 2,500。", show_until: "2026-11-25", days_left: null });
+  const body = await (await req()).json();
+  const watching = body.items.find((item) => item.id === "stock_watch");
+  assert.deepEqual(watching, {
+    id: "stock_watch", subject: "2454", subject_name: "聯發科", kind: "numeric", label: "收盤跌破季線", impact: 2, status: "watching",
+    note: STOCK.note, prepare: ["如果跌破季線，就先確認 OWNER-PREPARE"], source: { block: "消息", date: "2026-11-18" }, days_left: 18,
+  });
+  assert.equal(body.items[0].id, "stock_done", "有結果的排最前面");
+  assert.equal(body.items[0].subject_name, "大立光");
+  assert.ok(!JSON.stringify(body).includes("as_of") && !("params" in watching));
+  assert.equal(body.items.find((item) => item.id === "stock_2330").subject_name, undefined, "舊資料沒記名稱：只有代號");
+});
+
+test("個股盯項：朋友、還沒核准的人、沒登入的人拿不到任何一筆，也拿不到相關的文字", async () => {
+  await add(env.DB, "stock_watch", STOCK);
+  await add(env.DB, "stock_done", { ...STOCK, subject: "3008", params: JSON.stringify({ name: "大立光" }), status: "failed", result_date: "2026-11-20",
+    result_note: "否定：OWNER-RESULT", show_until: "2026-11-25", days_left: null });
+  // 就算排程寫錯、把個股盯項標成所有人可見，也不回給站主以外的人
+  await add(env.DB, "stock_mislabelled", { ...STOCK, subject: "2317", visibility: "all", params: JSON.stringify({ name: "鴻海" }) });
+  for (const email of [FRIEND, PENDING, null]) {
+    for (const path of ["/api/impact-watch", "/api/impact-watch?code=2454", "/api/impact-watch?subject=2454"]) {
+      const text = await (await req(path, { email })).text();
+      for (const secret of ["2454", "3008", "2317", "聯發科", "大立光", "鴻海", "OWNER-", "季線"]) {
+        assert.ok(!text.includes(secret), `${email} ${path} 不該出現 ${secret}`);
+      }
+    }
+  }
+  const friend = await (await req("/api/impact-watch", { email: FRIEND })).json();
+  assert.equal(friend.items.length, 4, "朋友照舊只有大盤的");
+  assert.equal((await (await req()).json()).items.length, 8, "站主全部拿得到");
+});

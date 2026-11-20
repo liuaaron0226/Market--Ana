@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from datetime import date, timedelta
@@ -41,7 +42,14 @@ LEVEL_DAYS = 20
 STREAK_TARGET = 3               # 連續買賣超至少盯到幾天
 STREAK_AHEAD = 2                # 已經連續好幾天時，往後再盯幾天
 FULL_NOTE = "名額讓給影響更大或更新的"
+OWNER_ONLY = "owner"            # 個股盯項的可見範圍：只有站主（票 06）
+STOCK_MA_NAMES = {20: "月線", 60: "季線"}   # 個股只盯月線與季線
+FLOW_WHO = {"foreign": "外資", "trust": "投信"}
+LOT = 1000                      # 個股法人買賣超的單位：股 → 張
+REMOVED_NOTE = "已不在自選與庫存"
 
+_CODE = re.compile(r"[0-9A-Za-z]{1,12}", re.ASCII)      # 股票代號（和 market_news.pending_stock_rows 同一個範圍）
+_EMAIL = re.compile(r"[^@\s'\"\\;]+@[^@\s'\"\\;]+")       # 和 watch_news._EMAIL 同一個（email 會進 SQL 字面值）
 _q = lambda value: "NULL" if value is None else "'" + str(value).replace("'", "''") + "'"  # noqa: E731
 
 
@@ -237,19 +245,22 @@ def active_items(query: Callable[[str], list[dict]], trade_date: str) -> list[di
 def creation_sql(picks: Sequence[Mapping[str, Any]], active: Sequence[Mapping[str, Any]], *, trade_date: str, now: str,
                  holidays: set[str] | None = None, source: str = SOURCE_NEWS) -> tuple[str, dict[str, Any]]:
     """模型挑到的條件 → 新盯項的 SQL 與報告。source：哪一塊 AI 文字挑的（消息或白話分析）。
-    picks：[{condition_key, label, params, note, impact, prepare, source_ref}]（對象都是大盤）；kind 沒給是數字型，
-    消息型（impact_watch_news.py，票 05）帶 kind="news"，和數字型算同一個上限。
+    picks：[{condition_key, label, params, note, impact, prepare, source_ref}]；對象預設是大盤，站主個股的另外帶
+    subject＝股票代號（票 06）。個股盯項一律只給站主看（visibility 由這裡依對象決定，不看 pick 怎麼寫）。
+    kind 沒給是數字型；消息型（impact_watch_news.py，票 05）帶 kind="news"，和數字型算同一個上限。
     - 同一個條件這一班被挑好幾次：留影響力最高的那一次；
     - 已經在盯、或剛有結果首頁還留著的條件：不再建；今天建過又收掉的（讓位、當天就有結果）今天也不再建；
     - 盯著的合計超過 MAX_WATCHING：依影響力高到低、一樣高時新的先，排在後面的收掉（舊的）或不建（新的）。"""
     holidays = td.known_holidays(trade_date) if holidays is None else holidays
-    best: dict[str, Mapping[str, Any]] = {}
+    best: dict[tuple[str, str], Mapping[str, Any]] = {}
     for pick in picks:
-        if pick["condition_key"] not in best or int(pick["impact"]) > int(best[pick["condition_key"]]["impact"]):
-            best[pick["condition_key"]] = pick
+        slot = (str(pick.get("subject") or MARKET), pick["condition_key"])
+        if slot not in best or int(pick["impact"]) > int(best[slot]["impact"]):
+            best[slot] = pick
     taken = {(row["subject"], row["condition_key"]) for row in active if row["status"] in ("watching", "met", "failed")}
     made_today = {row["id"] for row in active}
-    fresh = [pick for key, pick in best.items() if (MARKET, key) not in taken and f"{MARKET}:{key}:{trade_date}" not in made_today]
+    fresh = [{**pick, "subject": subject} for (subject, key), pick in best.items()
+             if (subject, key) not in taken and f"{subject}:{key}:{trade_date}" not in made_today]
     watching = [row for row in active if row["status"] == "watching"]
     ranked = sorted([*({"new": pick, "impact": int(pick["impact"]), "created_date": trade_date} for pick in fresh),
                      *({"old": row, "impact": int(row["impact"]), "created_date": row["created_date"]} for row in watching)],
@@ -263,22 +274,314 @@ def creation_sql(picks: Sequence[Mapping[str, Any]], active: Sequence[Mapping[st
         pick = entry.get("new")
         if not pick:
             continue
-        item_id = f"{MARKET}:{pick['condition_key']}:{trade_date}"
+        subject = pick["subject"]
+        item_id = f"{subject}:{pick['condition_key']}:{trade_date}"
         created.append(item_id)
-        values = [item_id, source, trade_date, pick.get("source_ref"), MARKET, pick.get("kind") or "numeric", pick["condition_key"],
+        values = [item_id, source, trade_date, pick.get("source_ref"), subject, pick.get("kind") or "numeric", pick["condition_key"],
                   json.dumps(pick.get("params") or {}, ensure_ascii=False), pick["label"], pick.get("note"), int(pick["impact"]),
                   json.dumps(list(pick["prepare"]), ensure_ascii=False) if pick.get("prepare") else None,
-                  trade_date, expires, EXPIRE_TRADING_DAYS, "watching", "all", now]
+                  trade_date, expires, EXPIRE_TRADING_DAYS, "watching", "all" if subject == MARKET else OWNER_ONLY, now]
         # 同一班重跑、或另一支排程剛建了同一個條件：不重複建（條件編號同時只有一筆盯著的）
         lines.append("INSERT OR IGNORE INTO impact_watch_items (id, source_block, source_date, source_ref, subject, kind, condition_key, params, "
                      "label, note, impact, prepare, created_date, expires_on, days_left, status, visibility, created_at) SELECT "
                      + ", ".join(str(value) if isinstance(value, int) else _q(value) for value in values)
-                     + f" WHERE NOT EXISTS (SELECT 1 FROM impact_watch_items WHERE subject = {_q(MARKET)} AND condition_key = "
+                     + f" WHERE NOT EXISTS (SELECT 1 FROM impact_watch_items WHERE subject = {_q(subject)} AND condition_key = "
                      f"{_q(pick['condition_key'])} AND (status = 'watching' OR (status IN ('met', 'failed') AND show_until >= {_q(trade_date)})));")
     report = {"picked": len(best), "created": created, "already_watching": len(best) - len(fresh),
               "over_limit": len([entry for entry in over if "new" in entry]),
               "closed_for_room": [entry["old"]["id"] for entry in over if "old" in entry]}
     return ("\n".join(lines) + "\n" if lines else ""), report
+
+
+# ---- 站主自選股與庫存的盯項（票 06）：只有站主看得到 ----
+# 一條路：每日檢查用個股頁同一套分析（twon_analysis.analyze_v2，只讀本機行情庫）整理站主每一檔當天的數字，存進
+# impact_watch_facts（subject＝股票代號）；消息排程讀它產生每一檔的可盯條件清單（stock_offered），模型只在站主自己的
+# 那幾次呼叫裡用編號挑（market_news.stock_picks）；挑到的經 creation_sql 寫成 subject＝代號、visibility='owner' 的盯項，
+# 和大盤的合計同一個上限；隔天起由 stock_check_sql 判。這些數字與盯項網站只回給站主（cloud/lib/impact-watch.js）。
+
+def _price(value: float) -> str:
+    """股價：千分位，最多兩位小數，不留尾巴的 0。"""
+    text = f"{float(value):,.2f}"
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+def _lots(value: float) -> str:
+    return f"{abs(value):,.0f} 張"
+
+
+def _flow(rows: Sequence[Mapping[str, Any]], key: str, dates: Sequence[str]) -> dict[str, Any] | None:
+    """某一種法人最近一天的買賣超（張）與連續天數。dates：日 K 的日期（舊到新）；中間缺一天或那天是 0 就算斷了。"""
+    by_day = {row["date"]: float(row[key]) / LOT for row in rows if row.get("date") and row.get(key) is not None}
+    known = [day for day in dates if day in by_day]
+    if not known:
+        return None
+    latest = known[-1]
+    net = by_day[latest]
+    side = "buy" if net > 0 else "sell" if net < 0 else "flat"
+    days = 0
+    for day in reversed(dates[:dates.index(latest) + 1]):
+        value = by_day.get(day)
+        if value is not None and ((side == "buy" and value > 0) or (side == "sell" and value < 0)):
+            days += 1
+        else:
+            break
+    return {"date": latest, "net": round(net, 1), "side": side, "days": days}
+
+
+def stock_facts(code: str, name: str, analysis: Mapping[str, Any]) -> dict[str, Any] | None:
+    """一檔股票當天的數字，取自個股頁同一份分析結果（analyze_v2）：收盤、月線季線、近 20 日高低、最近的壓力與支撐、
+    外資與投信的買賣超（張）與連續天數。分析不成立（查不到、日 K 不足）或日 K 不到 LEVEL_DAYS 根就回 None。"""
+    bars = [bar for bar in analysis.get("bars") or [] if bar.get("date") and bar.get("close")]
+    if (analysis.get("qa") or {}).get("blocking") or len(bars) < LEVEL_DAYS:
+        return None
+    close = float(bars[-1]["close"])
+    recent, dates = bars[-LEVEL_DAYS:], [bar["date"] for bar in bars]
+    indicators, levels = analysis.get("indicators") or {}, analysis.get("levels") or {}
+
+    def nearest(side: str, above: bool) -> float | None:
+        ticks = [float(row["tick"]) for row in levels.get(side) or [] if isinstance(row, Mapping) and row.get("tick")]
+        ticks = [tick for tick in ticks if (tick > close if above else tick < close)]
+        return (min(ticks) if above else max(ticks)) if ticks else None
+
+    facts: dict[str, Any] = {
+        "code": code, "name": name or str(analysis.get("name") or code), "date": bars[-1]["date"], "close": round(close, 2),
+        "ma": {str(days): round(float(indicators[f"ma{days}"]), 2) for days in STOCK_MA_NAMES if indicators.get(f"ma{days}")},
+        "high": round(max(float(bar.get("high") or bar["close"]) for bar in recent), 2),
+        "low": round(min(float(bar.get("low") or bar["close"]) for bar in recent), 2),
+        "resistance": nearest("resistance", True), "support": nearest("support", False),
+    }
+    flows = {who: flow for who in FLOW_WHO if (flow := _flow(analysis.get("institutional") or [], who, dates))}
+    if flows:
+        facts["flows"] = flows
+    return facts
+
+
+def stock_candidates(facts: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    """這一檔可以盯的條件：[{id, name, now, params}]。名稱不含股票名稱（畫面與推播另外帶對象）；
+    params 記股票名稱（網站顯示用）與依據的那一天。只列現在還沒發生的。"""
+    if not facts:
+        return []
+    close, as_of, name = float(facts["close"]), facts["date"], str(facts.get("name") or facts.get("code") or "")
+    base = {"name": name, "as_of": as_of}
+    out: list[dict[str, Any]] = []
+    for days, label in STOCK_MA_NAMES.items():
+        line = (facts.get("ma") or {}).get(str(days))
+        if line is None:
+            continue
+        below = close < float(line)
+        out.append({"id": f"{'above' if below else 'below'}_ma{days}", "name": f"收盤{'站回' if below else '跌破'}{label}",
+                    "now": f"收盤 {_price(close)}，在{label} {_price(float(line))} 之{'下' if below else '上'}",
+                    "params": {**base, "ma": days}})
+    high, low = float(facts["high"]), float(facts["low"])
+    out.append({"id": "above_high", "name": f"收盤突破近 {LEVEL_DAYS} 日高點（{_price(high)}）", "now": f"收盤 {_price(close)}",
+                "params": {**base, "level": high}})
+    out.append({"id": "below_low", "name": f"收盤跌破近 {LEVEL_DAYS} 日低點（{_price(low)}）", "now": f"收盤 {_price(close)}",
+                "params": {**base, "level": low}})
+    # 最近的壓力與支撐（個股頁價位表的第一階）；和近 20 日高低點同一個價位時不重複列
+    resistance, support = facts.get("resistance"), facts.get("support")
+    if resistance and float(resistance) != high:
+        out.append({"id": "above_resist", "name": f"收盤站上壓力（{_price(resistance)}）", "now": f"收盤 {_price(close)}",
+                    "params": {**base, "level": float(resistance)}})
+    if support and float(support) != low:
+        out.append({"id": "below_support", "name": f"收盤跌破支撐（{_price(support)}）", "now": f"收盤 {_price(close)}",
+                    "params": {**base, "level": float(support)}})
+    for who, title in FLOW_WHO.items():
+        flow = (facts.get("flows") or {}).get(who)
+        if not flow or flow.get("side") not in _SIDE_TEXT:
+            continue
+        side, other = flow["side"], "sell" if flow["side"] == "buy" else "buy"
+        target = max(STREAK_TARGET, int(flow["days"]) + STREAK_AHEAD)
+        now = f"{title}已連續{_SIDE_TEXT[side]} {flow['days']} 天，最近一天{_SIDE_TEXT[side]} {_lots(flow['net'])}"
+        out.append({"id": f"{who}_{side}_streak", "name": f"{title}連續{_SIDE_TEXT[side]}達 {target} 天", "now": now,
+                    "params": {"name": name, "days": target, "flow_as_of": flow["date"]}})
+        out.append({"id": f"{who}_turn_{other}", "name": f"{title}由{_SIDE_TEXT[side]}轉為{_SIDE_TEXT[other]}", "now": now,
+                    "params": {"name": name, "flow_as_of": flow["date"]}})
+    return out
+
+
+def stock_now(facts: Mapping[str, Any]) -> str:
+    """給模型看的這一檔現況，一行。"""
+    parts = [f"收盤 {_price(facts['close'])}"]
+    parts += [f"{label} {_price(line)}" for days, label in STOCK_MA_NAMES.items()
+              if (line := (facts.get("ma") or {}).get(str(days))) is not None]
+    for who, title in FLOW_WHO.items():
+        flow = (facts.get("flows") or {}).get(who)
+        if flow and flow.get("side") in _SIDE_TEXT:
+            parts.append(f"{title}連續{_SIDE_TEXT[flow['side']]} {flow['days']} 天")
+    return "；".join(parts)
+
+
+def stock_offered(query: Callable[[str], list[dict]], trade_date: str, names: Mapping[str, str],
+                  holidays: set[str] | None = None) -> dict[str, dict[str, Any]]:
+    """消息排程這一班、站主每一檔可以交給模型挑的清單：{代號: {name, now, conditions}}。
+    只讀站主現在自選＋庫存裡的代號；沒有每日檢查存下的數字、數字太舊、表還沒建都回空的（那一班照樣有消息）。"""
+    codes = [code for code in names if _CODE.fullmatch(str(code))]
+    if not codes:
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    try:
+        rows = query(f"SELECT subject, payload FROM impact_watch_facts WHERE subject IN ({', '.join(_q(code) for code in codes)})")
+        holidays = td.known_holidays(trade_date) if holidays is None else holidays
+    except Exception:  # noqa: BLE001 — 和 offered 一樣：讀不到就不出清單
+        return {}
+    for row in rows:
+        try:
+            name = names.get(row["subject"]) or row["subject"]
+            facts = {**json.loads(row["payload"]), "name": name}
+            if td.trading_days_between(facts["date"], trade_date, holidays) > FACTS_FRESH_TRADING_DAYS:
+                continue
+            conditions = stock_candidates(facts)
+            if conditions:
+                out[row["subject"]] = {"name": name, "now": stock_now(facts), "conditions": conditions}
+        except Exception:  # noqa: BLE001 — 一檔的數字壞了只少那一檔
+            continue
+    return out
+
+
+_LEVEL_WORDS = {"above_high": f"突破近 {LEVEL_DAYS} 日高點", "below_low": f"跌破近 {LEVEL_DAYS} 日低點",
+                "above_resist": "站上壓力", "below_support": "跌破支撐"}
+
+
+def evaluate_stock(item: Mapping[str, Any], facts: Mapping[str, Any]) -> tuple[str, str | None]:
+    """個股的一筆數字型盯項今天的狀態，規則和大盤的 evaluate 一樣：只看建立之後才出現的資料；均線用當天的值、
+    價位用建立時定下的那一個；否定只有連續買賣超中途斷掉。說明帶實際數字（股價、張數）。"""
+    key, params = str(item.get("condition_key") or ""), item.get("params") or {}
+    close, day = float(facts["close"]), facts["date"]
+    when = _month_day(day)
+    if key.startswith(("above_", "below_")):
+        if day <= str(params.get("as_of") or ""):
+            return "watching", None
+        above = key.startswith("above_")
+        if "ma" in params:
+            line, label = (facts.get("ma") or {}).get(str(params["ma"])), STOCK_MA_NAMES.get(int(params["ma"]), "均線")
+            if line is None:
+                return "watching", None
+            if (close >= float(line)) if above else (close < float(line)):
+                return "met", f"成立：{when} 收 {_price(close)}，{'站回' if above else '跌破'}{label}（{_price(float(line))}）。"
+            return "watching", None
+        level = float(params["level"])
+        if key in _LEVEL_WORDS and ((close > level) if above else (close < level)):
+            return "met", f"成立：{when} 收 {_price(close)}，{_LEVEL_WORDS[key]} {_price(level)}。"
+        return "watching", None
+    who = key.split("_", 1)[0]
+    flow = (facts.get("flows") or {}).get(who)
+    if who not in FLOW_WHO or not flow or flow["date"] <= str(params.get("flow_as_of") or ""):
+        return "watching", None
+    title, when, side = FLOW_WHO[who], _month_day(flow["date"]), flow.get("side")
+    today = "買賣超持平" if side not in _SIDE_TEXT else f"{_SIDE_TEXT[side]} {_lots(flow['net'])}"
+    for wanted in _SIDE_TEXT:
+        if key == f"{who}_{wanted}_streak":
+            target = int(params["days"])
+            if side == wanted and int(flow["days"]) >= target:
+                return "met", f"成立：{title}連續{_SIDE_TEXT[wanted]} {flow['days']} 天，{when} {today}。"
+            if side != wanted:
+                return "failed", f"否定：{when} {title}{today}，連續{_SIDE_TEXT[wanted]}沒有延續到 {target} 天。"
+            return "watching", None
+        if key == f"{who}_turn_{wanted}":
+            return ("met", f"成立：{when} {title}轉為{today}。") if side == wanted else ("watching", None)
+    return "watching", None
+
+
+def stock_check_sql(items: Sequence[Mapping[str, Any]], facts_by_code: Mapping[str, Mapping[str, Any]], owned: Sequence[str],
+                    *, day: str, now: str, holidays: set[str] | None = None) -> tuple[str, dict[str, Any]]:
+    """站主個股的盯項每天判一次 → SQL 與報告。day：這次檢查的大盤資料日（到期與剩幾天照它算）。
+    - 股票已經不在站主的自選與庫存：還在盯的安靜收掉（狀態 expired，不會推播、首頁不留）；
+    - 其餘和大盤一樣：成立、否定記結果與首頁留到哪一天；到期日當天還沒結果就收掉；否則更新剩幾個交易日
+      （那一檔今天沒有數字也照樣倒數、照樣到期）。
+    順手存下每一檔當天的數字、清掉已經不在名單上的股票的數字。"""
+    holidays = td.known_holidays(day) if holidays is None else holidays
+    owned = [code for code in owned if _CODE.fullmatch(str(code))]
+    lines: list[str] = []
+    report: dict[str, Any] = {"checked": 0, "met": [], "failed": [], "expired": [], "removed": [], "watching": 0, "errors": [],
+                              "facts": len(facts_by_code)}
+    for item in items:
+        if item.get("status") != "watching" or item.get("kind") != "numeric" or item.get("subject") == MARKET:
+            continue
+        report["checked"] += 1
+        where = f"WHERE id = {_q(item['id'])} AND status = 'watching';"
+        if item["subject"] not in owned:
+            lines.append(f"UPDATE impact_watch_items SET status = 'expired', result_date = {_q(day)}, result_note = {_q(REMOVED_NOTE)}, "
+                         f"days_left = NULL {where}")
+            report["removed"].append(item["id"])
+            continue
+        status, note, facts = "watching", None, facts_by_code.get(item["subject"])
+        if facts:
+            try:
+                parsed = {**item, "params": json.loads(item["params"]) if isinstance(item.get("params"), str) else item.get("params") or {}}
+                status, note = evaluate_stock(parsed, facts)
+            except Exception as error:  # noqa: BLE001 — 一筆壞了只跳過那一筆（照樣會到期）
+                report["errors"].append({"id": item["id"], "error": type(error).__name__})
+        if status in ("met", "failed"):
+            keep = td.add_trading_days(day, KEEP_RESULT_TRADING_DAYS, holidays)
+            lines.append(f"UPDATE impact_watch_items SET status = {_q(status)}, result_date = {_q(day)}, result_note = {_q(note)}, "
+                         f"show_until = {_q(keep)}, days_left = NULL {where}")
+            report[status].append({"id": item["id"], "note": note})
+        elif day >= item["expires_on"]:
+            lines.append(f"UPDATE impact_watch_items SET status = 'expired', result_date = {_q(day)}, days_left = NULL {where}")
+            report["expired"].append(item["id"])
+        else:
+            lines.append(f"UPDATE impact_watch_items SET days_left = {td.trading_days_between(day, item['expires_on'], holidays)} {where}")
+            report["watching"] += 1
+    for code, facts in facts_by_code.items():
+        if code in owned:   # 重跑舊的一天不把已經存下的新數字蓋回去
+            lines.append("INSERT OR REPLACE INTO impact_watch_facts (subject, data_date, payload, updated_at) SELECT "
+                         f"{_q(code)}, {_q(facts['date'])}, {_q(json.dumps(facts, ensure_ascii=False))}, {_q(now)} WHERE NOT EXISTS "
+                         f"(SELECT 1 FROM impact_watch_facts WHERE subject = {_q(code)} AND data_date > {_q(facts['date'])});")
+    still_listed = ", ".join(_q(code) for code in [MARKET, *owned])
+    lines.append(f"DELETE FROM impact_watch_facts WHERE subject NOT IN ({still_listed});")
+    return "\n".join(lines) + "\n", report
+
+
+def owner_codes(query: Callable[[str], list[dict]], email: str) -> dict[str, str]:
+    """站主現在的自選＋庫存：{代號: 名稱}。任何一邊讀不到就丟例外（整段個股檢查跳過）：少讀一邊會把只在那一邊的股票
+    當成「已經移除」，盯項就被收掉了。只有庫存那張表根本不存在時才只用自選。"""
+    if not _EMAIL.fullmatch(email or ""):
+        raise ValueError("站主 email 格式不對")
+    who = f"lower(email) = lower({_q(email)})"
+    names = {row["code"]: row["name"] for row in query(f"SELECT code, max(name) AS name FROM user_watchlist WHERE {who} GROUP BY code")}
+    try:
+        held = query(f"SELECT code, max(name) AS name FROM user_holdings WHERE {who} GROUP BY code")
+    except Exception as error:  # noqa: BLE001
+        if "no such table" not in str(error).lower():
+            raise
+        held = []
+    return {**{row["code"]: row["name"] for row in held}, **names}
+
+
+def load_stock_facts(names: Mapping[str, str], as_of: str) -> dict[str, dict[str, Any]]:
+    """站主每一檔當天的數字：用個股頁同一套分析（只讀本機行情庫，不連網路）。查不到、資料不足、或那一檔算壞了都只少那一檔
+    （基金、槓桿與債券 ETF 沒有日 K，本來就不會有）。"""
+    from twon_analysis import analyze_v2
+    from twon_analysis.price_adjustment import default_capital_events
+    capital = default_capital_events()
+    out: dict[str, dict[str, Any]] = {}
+    for code, name in names.items():
+        if not _CODE.fullmatch(str(code)):
+            continue
+        try:
+            facts = stock_facts(code, name, analyze_v2.analyze_v2(code, as_of, capital_actions=capital))
+        except Exception:  # noqa: BLE001
+            facts = None
+        if facts:
+            out[code] = facts
+    return out
+
+
+def check_stocks(*, day: str, now: str, owner_email: str, query: Callable[[str], list[dict]], execute: Callable[[str], None],
+                 load: Callable[[Mapping[str, str], str], Mapping[str, Mapping[str, Any]]] | None = None,
+                 dry_run: bool = False, holidays: set[str] | None = None) -> dict[str, Any]:
+    """每日檢查裡站主個股的那一段（接在大盤之後）：讀站主現在的自選＋庫存 → 整理每一檔當天的數字 → 判每一筆個股盯項。"""
+    names = owner_codes(query, owner_email)
+    if not names:
+        # 一檔都沒有：多半是 OWNER_EMAIL 設錯而不是站主真的清空了。不收任何盯項、不刪數字，留給到期日處理。
+        return {"stocks": 0, "skipped": "站主的自選與庫存是空的"}
+    facts = dict((load or load_stock_facts)(names, day))
+    items = query("SELECT id, subject, kind, condition_key, params, expires_on, status FROM impact_watch_items "
+                  f"WHERE status = 'watching' AND subject <> {_q(MARKET)}")
+    script, report = stock_check_sql(items, facts, list(names), day=day, now=now, holidays=holidays)
+    if not dry_run:
+        execute(script)
+    return {**report, "stocks": len(names)}
 
 
 # ---- 首頁白話分析挑的條件（票 07） ----
@@ -305,9 +608,11 @@ def plain_picks(plain: Any, facts: Mapping[str, Any]) -> list[dict[str, Any]]:
 # ---- 每日檢查（daily-update.yml） ----
 
 def check(analysis: Mapping[str, Any], *, now: str, query: Callable[[str], list[dict]], execute: Callable[[str], None],
-          dry_run: bool = False, holidays: set[str] | None = None, plain: Any = None) -> dict[str, Any]:
+          dry_run: bool = False, holidays: set[str] | None = None, plain: Any = None, owner_email: str | None = None,
+          load_stocks: Callable[[Mapping[str, str], str], Mapping[str, Mapping[str, Any]]] | None = None) -> dict[str, Any]:
     """每日更新發布之後跑一次：用剛發布的大盤資料判斷每一筆盯著的盯項，寫回結果與當天的數字。
-    plain：同一次發布的白話分析；它挑的條件在判完之後建成盯項（今天才建的從下一個交易日開始判）。"""
+    plain：同一次發布的白話分析；它挑的條件在判完之後建成盯項（今天才建的從下一個交易日開始判）。
+    owner_email：給了就接著判站主個股的盯項（票 06）；沒給就只做大盤的。"""
     facts = market_facts(analysis.get("daily") or [], analysis.get("institutional") or [])
     if not facts:
         return {"status": "skipped", "reason": "大盤日 K 不足"}
@@ -318,6 +623,13 @@ def check(analysis: Mapping[str, Any], *, now: str, query: Callable[[str], list[
     script, report = check_sql(items, facts, now=now, holidays=holidays)
     if not dry_run:
         execute(script)
+    # 站主個股的盯項：和大盤的分開寫，個股這一段出錯（讀不到自選、行情庫壞了）不能賠掉大盤的結果
+    if owner_email:
+        try:
+            report["stocks"] = check_stocks(day=facts["date"], now=now, owner_email=owner_email, query=query, execute=execute,
+                                            load=load_stocks, dry_run=dry_run, holidays=holidays)
+        except Exception as error:  # noqa: BLE001
+            report["stocks"] = {"error": type(error).__name__}
     # 和每日判斷分開：白話分析的檔讀壞了、條件建不成，都不能賠掉今天的判斷結果
     try:
         picks = plain_picks(plain, facts)
@@ -340,6 +652,7 @@ def read_assignment(path: "Path") -> Any:
 
 def main(argv: Sequence[str]) -> int:
     import argparse
+    import os
     from datetime import datetime, timezone
 
     from pathlib import Path
@@ -349,6 +662,8 @@ def main(argv: Sequence[str]) -> int:
     parser.add_argument("command", choices=["check"])
     parser.add_argument("--analysis", required=True, help="每日更新發布的大盤資料檔（analysis-data.js）")
     parser.add_argument("--plain", help=f"同一次發布的白話分析（沒給就讀 --analysis 旁邊的 {PLAIN_FILE}）")
+    parser.add_argument("--owner-email", default=os.environ.get("OWNER_EMAIL") or None,
+                        help="站主的 email（預設讀環境變數 OWNER_EMAIL）：給了才判站主自選股與庫存的盯項")
     parser.add_argument("--dry-run", action="store_true", help="照樣讀、照樣判斷，但不寫網站資料庫")
     args = parser.parse_args(argv)
     analysis = read_assignment(Path(args.analysis))
@@ -357,7 +672,8 @@ def main(argv: Sequence[str]) -> int:
     except (OSError, ValueError):
         plain = None
     report = check(analysis, now=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                   query=wn._wrangler_query, execute=wn._wrangler_execute, dry_run=args.dry_run, plain=plain)
+                   query=wn._wrangler_query, execute=wn._wrangler_execute, dry_run=args.dry_run, plain=plain,
+                   owner_email=args.owner_email)
     print(json.dumps(report, ensure_ascii=False))
     return 0
 
