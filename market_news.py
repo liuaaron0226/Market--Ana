@@ -42,6 +42,12 @@ KEEP_DAYS = 35
 SUMMARY_MAX = 320          # 總結最多幾個字；超過就退到最後一個句號（不留半句）
 TITLE_MAX = 120
 REASON_MAX = 80
+# 新寫法（本人 2026-11-20「講影響＋該做的準備」，.scratch/impact-watch/spec.md）：每則與總結多三段。
+EFFECT_MAX = 120           # 影響：影響到誰、多大
+CONDITION_MAX = 60         # 接下來要看的條件（一個）
+PREPARE_MAX = 90           # 先做好的準備（一句「如果…就…」）
+POINTS_MAX = 2             # 條件、準備各最多幾個；多寫的不存（不整份作廢）
+MY_STOCKS_MAX = 60         # 給模型看的站主自選＋庫存最多幾檔
 RSS_SUMMARY_MAX = 200
 GNEWS_PAUSE_SECONDS = wn.GNEWS_PAUSE_SECONDS
 # agy 等模型的上限：一輪幾十則加思考高，300 秒不夠（2026-11-19 本機實測 60 則逾時）；其他任務照舊 300 秒。
@@ -289,22 +295,29 @@ def indices(query: Callable[[str], list[dict]], taiex: Callable[[], dict | None]
 
 # ---- 模型 ----
 
+_POINTS = {"type": "array", "items": {"type": "string"}}
 _ITEM = {"type": "object", "properties": {
     "id": {"type": "string"}, "group": {"type": "string", "enum": [*GROUPS, "skip"]},
     "market": {"type": "string", "enum": list(WIRE_MARKETS)}, "tone": {"type": "string", "enum": ["up", "down", "flat"]},
     "kind": {"type": "string", "enum": list(MARKET_KINDS)},
-    "impact": {"type": "string", "enum": list(WIRE_IMPACTS)}, "title": {"type": "string"}, "reason": {"type": "string"}},
-    "required": ["id", "group", "market", "kind", "tone", "impact", "title", "reason"]}
+    "impact": {"type": "string", "enum": list(WIRE_IMPACTS)}, "title": {"type": "string"}, "reason": {"type": "string"},
+    "effect": {"type": "string"}, "owner_effect": {"type": "string"}, "conditions": _POINTS, "prepare": _POINTS},
+    "required": ["id", "group", "market", "kind", "tone", "impact", "title", "reason", "effect"]}
 _WATCH = {"type": "object", "properties": {
     "id": {"type": "string"}, "relevant": {"type": "string", "enum": ["yes", "no"]},
     "kind": {"type": "string", "enum": list(STOCK_KINDS)}, "tone": {"type": "string", "enum": ["up", "down", "flat"]},
-    "impact": {"type": "string", "enum": list(WIRE_IMPACTS)}, "title": {"type": "string"}, "reason": {"type": "string"}},
+    "impact": {"type": "string", "enum": list(WIRE_IMPACTS)}, "title": {"type": "string"}, "reason": {"type": "string"},
+    "effect": {"type": "string"}, "conditions": _POINTS, "prepare": _POINTS},
     "required": ["id", "relevant", "kind", "tone", "impact", "title", "reason"]}
 ITEMS_SCHEMA = {"type": "object", "properties": {"items": {"type": "array", "items": _ITEM}}, "required": ["items"]}
 # 欄位不叫 summary：agy 的結構化輸出裡，模型會把 summary 當成「交代自己做了什麼」（2026-11-19 實測兩次）。
-SUMMARY_SCHEMA = {"type": "object", "properties": {"market_commentary": {
-    "type": "string", "description": "給投資人看的盤勢解說本文，2～3 句，例如「台股今天下跌，主要是外資賣超……」"}},
-    "required": ["market_commentary"]}
+SUMMARY_SCHEMA = {"type": "object", "properties": {
+    "market_commentary": {"type": "string", "description": "給投資人看的盤勢解說本文，1～2 句，例如「台股今天下跌，主要是外資賣超……」"},
+    "effect": {"type": "string", "description": "這樣走影響到誰、多大"},
+    "owner_effect": {"type": "string", "description": "點名 my_stocks 裡受影響的股票；沒有就不寫"},
+    "conditions": {**_POINTS, "description": "接下來要看的條件，0～2 個"},
+    "prepare": {**_POINTS, "description": "先做好的準備，0～2 句「如果…就…」"}},
+    "required": ["market_commentary", "effect"]}
 WATCH_SCHEMA = {"type": "object", "properties": {"watch": {"type": "array", "items": _WATCH}}, "required": ["watch"]}
 
 SLOT_TEXT = {"morning": "台股開盤前（台北 08:00）", "midday": "台股盤中（台北 11:30）", "close": "台股收盤後（台北 14:00）"}
@@ -316,6 +329,27 @@ GLOSSARY = """用台灣股市投資人習慣的說法寫，不要直譯：限空
 處置股、注意股、法說會、財測、營收、毛利率、EPS、三大法人、外資、投信、自營商、買超、賣超、漲停、跌停、
 加權指數、櫃買指數、權值股、除權息、庫藏股、現金增資、違約交割、金管會、證交所、櫃買中心、央行、聯準會（Fed）、
 降息、升息、關稅、出口管制。公司與機構用台灣的譯名（輝達、台積電、聯發科、超微、博通、美光、三星、SK 海力士）。"""
+
+# 新寫法的三段（本人 2026-11-20：「不要只說明事件，要講影響＋該做的準備」）。三種提示共用同一條界線：不寫買賣指令。
+NO_ORDERS = """effect、conditions、prepare 都不能寫買賣指令或個人化投資建議：不要出現「建議買進」「可以加碼」「應該減碼」
+「逢低布局」「停損出場」這類叫人下單的話；prepare 只寫情境與要先確認、檢查、想好的事。
+"""
+_POINT_LISTS = """- conditions：接下來要看的條件，0～2 個，每個一句（30 字內），寫「看什麼有沒有發生」
+  （例如「外資是否連續賣超」「金管會是否公布正式名單」）；沒有值得看的就給空陣列。
+- prepare：先做好的準備，0～2 句（每句 40 字內），每句用「如果…就…」寫
+  （例如「如果外資連續賣超，就先檢查手上權值股佔多少」）；沒有就給空陣列。
+"""
+_OWNER_POINT = """- owner_effect：INPUT 的 my_stocks 是讀者自己的自選股與庫存。會直接影響其中哪幾檔時，寫一句點名
+  （用 my_stocks 裡的名稱）並說怎麼影響；沒有直接關係就不要寫這個欄位，不要硬湊。
+"""
+ITEM_POINTS = """- effect：一句（60 字內）講影響——影響到誰（哪個市場、哪個族群或哪幾檔權值股）、多大，為什麼是利多或利空。
+""" + _OWNER_POINT + _POINT_LISTS + """- impact 是 "1" 的消息可以只寫 effect，conditions 與 prepare 給空陣列。
+""" + NO_ORDERS
+WATCH_POINTS = """- effect：一句（60 字內）講這則對這檔股票的影響——影響營運或股價的哪一塊、多大；relevant 是 no 的不用寫。
+""" + _POINT_LISTS + """- impact 是 "1" 或 relevant 是 no 的可以只寫 effect，conditions 與 prepare 給空陣列。
+""" + NO_ORDERS
+SUMMARY_POINTS = """effect：1～2 句（80 字內），這樣走影響到誰、多大（哪些族群、哪幾檔權值股受影響最多）。
+""" + _OWNER_POINT + _POINT_LISTS + NO_ORDERS
 
 ITEM_RULES = """你是台股投資人的新聞助理。讀 INPUT 的新聞標題與摘要，用繁體中文回答，只回 JSON。
 items：每一則都要回（id 照抄）：
@@ -331,19 +365,19 @@ items：每一則都要回（id 照抄）：
 - impact：影響大小 "3" 大、"2" 中、"1" 小。政策、財報財測、重大合作訂單、法人大幅買賣超，而且會左右整個市場或權值股的
   才是 "3"；一般企業動態、例行統計、活動稿最多 "1"。
 - title：中文標題；原文是中文就照抄（可去掉多餘的來源字樣），外文就翻成自然的繁體中文，不加原文沒有的事實。
-- reason：一句話（30 字內）說明為什麼是利多或利空、會怎麼影響；只能根據標題與摘要，不要編數字或內容。
-""" + GLOSSARY + """
+- reason：一句話（30 字內）講發生了什麼事；只能根據標題與摘要，不要編數字或內容。
+""" + ITEM_POINTS + GLOSSARY + """
 不要使用任何工具、不要上網查，只根據 INPUT 直接回答。"""
 
 SUMMARY_RULES = """你是財經記者，替台股投資人寫一段盤勢解說，繁體中文。
-market_commentary：2～3 句、合計 150 字以內、最後以句號結尾，回答「今天為什麼這樣走」——以台股為主、帶到美股與日韓中，
+market_commentary：1～2 句、合計 100 字以內、最後以句號結尾，回答「今天為什麼這樣走」——以台股為主、帶到美股與日韓中，
 根據 INPUT 的指數漲跌與新聞（kind policy 政策、earnings 財報、deal 合作訂單、flows 法人；tone up 利多、down 利空；impact 越大越重要）。
 一定要點名當天最關鍵的一兩件事，用新聞裡的名稱講（例如「金管會祭出限空令」「美國擴大晶片出口管制」「外資賣超逾 600 億」），
 不能只講指數漲跌幾趴。可以引用 indices 的漲跌幅，其他數字只能來自新聞標題或理由。
 slot 是開盤前時，講的是昨夜國際市場與今天可能的影響，不要假裝已經開盤。
 這個欄位的內容就是那段解說本身，第一個字就開始講市場（例如「台股今天下跌，主要是……」）；
 不要描述你完成了什麼、不要提到指令、JSON、摘要或規則。
-""" + GLOSSARY + """
+""" + SUMMARY_POINTS + GLOSSARY + """
 不要使用任何工具、不要上網查。"""
 
 _NOT_SUMMARY = re.compile(r"JSON|json|指令|已成功|已完成|已依照|以下是|規則|摘要如下|產生.{0,6}摘要")
@@ -361,23 +395,30 @@ watch：每一則都要回（id 照抄）：
   policy 政策法規對這家公司的影響；rating 法人與外資的評等、目標價、買賣超；
   incident 異常事件（違約交割、注意股、處置股、停工、事故、訴訟、重大人事）；other 其他。
 - tone 對那一檔股票是利多 up、利空 down 或中性 flat；impact "3" 大、"2" 中、"1" 小；
-- title 中文標題（外文翻成自然的繁體中文，不加原文沒有的事實）；reason 一句話（30 字內），只能根據標題與摘要，不要編數字。
-""" + GLOSSARY + """
+- title 中文標題（外文翻成自然的繁體中文，不加原文沒有的事實）；reason 一句話（30 字內）講發生了什麼事，只能根據標題與摘要，不要編數字。
+""" + WATCH_POINTS + GLOSSARY + """
 不要使用任何工具、不要上網查，只根據 INPUT 直接回答。"""
 
 
-def items_prompt(items: Sequence[Mapping[str, Any]]) -> str:
+def _my_stocks(names: Mapping[str, str] | None) -> list[dict[str, str]]:
+    return [{"code": code, "name": name} for code, name in list((names or {}).items())[:MY_STOCKS_MAX]]
+
+
+def items_prompt(items: Sequence[Mapping[str, Any]], my_stocks: Mapping[str, str] | None = None) -> str:
+    """my_stocks：站主的自選＋庫存 {代號: 名稱}，給模型點名用（owner_effect）；沒有就不帶。"""
     payload = {"items": [{key: row[key] for key in ("id", "group_hint", "source", "title", "summary", "published_at")}
-                         for row in items]}
+                         for row in items], **({"my_stocks": _my_stocks(my_stocks)} if my_stocks else {})}
     return ITEM_RULES + "\nINPUT:" + json.dumps(payload, ensure_ascii=False)
 
 
-def summary_prompt(slot: str, trade_date: str, rows: Sequence[Mapping[str, Any]], index_rows: Sequence[Mapping[str, Any]]) -> str:
-    """rows：已判讀的（group、tone、impact、title、reason）；沒有判讀成的時候給原標題。"""
+def summary_prompt(slot: str, trade_date: str, rows: Sequence[Mapping[str, Any]], index_rows: Sequence[Mapping[str, Any]],
+                   my_stocks: Mapping[str, str] | None = None) -> str:
+    """rows：已判讀的（group、tone、impact、title、reason、effect）；沒有判讀成的時候給原標題。"""
     picked = sorted(rows, key=lambda row: (-int(row.get("impact") or 1), _kind_rank(row.get("kind"))))[:SUMMARY_TOP]
     payload = {"slot": slot, "slot_text": SLOT_TEXT[slot], "trade_date": trade_date, "indices": list(index_rows),
-               "news": [{key: row.get(key) for key in ("group", "kind", "tone", "impact", "title", "reason") if row.get(key) not in (None, "")}
-                        for row in picked]}
+               "news": [{key: row.get(key) for key in ("group", "kind", "tone", "impact", "title", "reason", "effect")
+                         if row.get(key) not in (None, "")} for row in picked],
+               **({"my_stocks": _my_stocks(my_stocks)} if my_stocks else {})}
     return SUMMARY_RULES + "\nINPUT:" + json.dumps(payload, ensure_ascii=False)
 
 
@@ -392,6 +433,70 @@ def _text(value: Any, limit: int) -> str | None:
         return None
     value = re.sub(r"\s+", " ", value).strip()
     return value[:limit] if value else None
+
+
+# 買賣指令（本人：「準備」不要寫成「現在買進／賣出」的指令）。新聞本身常寫「外資賣出」「投信逢低布局」，那是在講事情，
+# 所以一般欄位只擋對著讀者說的話；prepare 是寫給讀者的，動作字眼一律擋。
+_ACTIONS = r"買進|買入|賣出|加碼|減碼|進場|出場|承接|布局|佈局|出脫|停損|停利|獲利了結|抄底|追價|追高|殺低|建倉|平倉"
+_ADVICE = re.compile(rf"(?:建議|不妨|應該|可以).{{0,3}}(?:{_ACTIONS})")
+_ORDER_WORDS = re.compile(_ACTIONS)
+_CONDITIONAL = re.compile(r"如果|若|一旦|萬一|要是")
+POINT_FIELDS = ("effect", "owner_effect", "conditions", "prepare")
+POINT_LABELS = {"market_commentary": "總結", "reason": "發生什麼", "effect": "影響", "owner_effect": "對讀者股票的影響",
+                "conditions": "要看的條件", "prepare": "準備"}
+Problem = tuple[str, str, str]   # (欄位, 退回的原因, 被退回的那一句)
+
+
+def text_problem(field: str, text: str) -> str | None:
+    """模型寫的一句話能不能上站：不能有買賣指令；prepare 還要是「如果…就…」的情境。"""
+    if _ADVICE.search(text) or (field == "prepare" and _ORDER_WORDS.search(text)):
+        return "不能寫買賣指令或投資建議"
+    if field == "prepare" and not _CONDITIONAL.search(text):
+        return "準備要用「如果…就…」寫"
+    return None
+
+
+def retry_note(problem: Problem) -> str:
+    """被文字檢查退回後重問時接在提示後面（和 ledger_core.retry_note 同一個做法：不告訴模型錯在哪，它多半再錯一次）。"""
+    field, reason, text = problem
+    return ("\n\n【上一次的回答被退回，請整份重寫】"
+            f"原因：{reason}。被退回的那一句（{POINT_LABELS.get(field, field)}）：「{text}」。"
+            "重寫時不要出現買進、賣出、加碼、減碼、停損這類叫人下單的話或投資建議；prepare 每一句用「如果…就…」"
+            "寫要先確認、檢查或想好的事。欄位與格式照原本的規定，不要多也不要少。")
+
+
+def _mentions_stock(text: str, my_stocks: Mapping[str, str]) -> bool:
+    return any(code in text or re.sub(r"-KY$", "", name) in text for code, name in my_stocks.items() if name)
+
+
+def points(entry: Mapping[str, Any], problems: list[Problem] | None = None,
+           my_stocks: Mapping[str, str] | None = None) -> dict[str, Any]:
+    """新寫法的三段：影響、要看的條件、準備（＋點名站主股票的那一句）。少寫的就沒有、多寫的只取前 POINTS_MAX 個、
+    被文字檢查退回的只丟那一句並記進 problems——哪一種都不讓整則作廢。回傳只有合格的欄位。"""
+    out: dict[str, Any] = {}
+
+    def passed(field: str, value: Any, limit: int) -> str | None:
+        text = _text(value, limit)
+        reason = text_problem(field, text) if text else None
+        if reason and problems is not None:
+            problems.append((field, reason, text))
+        return None if reason else text
+
+    effect = passed("effect", entry.get("effect"), EFFECT_MAX)
+    if effect:
+        out["effect"] = effect
+    if my_stocks:
+        named = _text(entry.get("owner_effect"), EFFECT_MAX)
+        # 沒點到任何一檔的不存：這一段只給站主看，要真的在講他的股票
+        if named and _mentions_stock(named, my_stocks) and passed("owner_effect", named, EFFECT_MAX):
+            out["owner_effect"] = named
+    for field, limit in (("conditions", CONDITION_MAX), ("prepare", PREPARE_MAX)):
+        value = entry.get(field)
+        value = [value] if isinstance(value, str) else value if isinstance(value, (list, tuple)) else []
+        kept = [text for text in (passed(field, item, limit) for item in value) if text][:POINTS_MAX]
+        if kept:
+            out[field] = kept
+    return out
 
 
 def _mark(entry: Any) -> dict[str, Any] | None:
@@ -421,9 +526,10 @@ def coerce_output(output: Any) -> Any:
 
 
 def validate_items(output: Any, items: Sequence[Mapping[str, Any]],
-                   rejected: dict[str, int] | None = None) -> list[dict[str, Any]]:
+                   rejected: dict[str, int] | None = None, *, my_stocks: Mapping[str, str] | None = None,
+                   problems: list[Problem] | None = None) -> list[dict[str, Any]]:
     """模型回的 items → 要存的列：id 要是送出去的、欄位要合格、skip 的不存；每組依影響大小留 GROUP_KEEP 則。
-    rejected 給了就記每一種被擋的原因各幾則（執行紀錄用）。"""
+    rejected 給了就記每一種被擋的原因各幾則（執行紀錄用）；problems 給了就記被文字檢查退回的句子（重問用）。"""
     by_id = {row["id"]: row for row in items}
     out, used = [], set()
     drop = (lambda reason: rejected.__setitem__(reason, rejected.get(reason, 0) + 1)) if rejected is not None else (lambda _r: None)
@@ -450,10 +556,16 @@ def validate_items(output: Any, items: Sequence[Mapping[str, Any]],
                                       if key not in entry or entry.get(key) in (None, "")))
             drop(f"bad_fields:{missing}" if missing else "bad_values")
             continue
+        advice = text_problem("reason", mark["reason"])
+        if advice:
+            if problems is not None:
+                problems.append(("reason", advice, mark["reason"]))
+            drop("trade_advice")
+            continue
         used.add(entry["id"])
         market = entry.get("market") if entry.get("group") == "asia" and entry.get("market") in MARKETS[1:] else ""
         kind = entry.get("kind") if entry.get("kind") in MARKET_KINDS else "other"
-        out.append({**mark, "id": entry["id"], "group": entry["group"], "kind": kind,
+        out.append({**mark, **points(entry, problems, my_stocks), "id": entry["id"], "group": entry["group"], "kind": kind,
                     "market": market or source["market_hint"] or "",
                     "translated": _translated(source["title"]), "source": source["source"], "link": source["link"],
                     "published_at": source["published_at"]})
@@ -483,7 +595,8 @@ def unclassified_items(items: Sequence[Mapping[str, Any]]) -> list[dict[str, Any
     return _keep_per_group(rows)
 
 
-def validate_watch(output: Any, watch: Sequence[Mapping[str, Any]], counts: dict[str, int] | None = None) -> list[dict[str, Any]]:
+def validate_watch(output: Any, watch: Sequence[Mapping[str, Any]], counts: dict[str, int] | None = None,
+                   problems: list[Problem] | None = None) -> list[dict[str, Any]]:
     """個股新聞的判讀 → 要存進 stock_news_marks 的列（每則一列，判成無關的也存、relevant 0，之後不再重判）。
     同一則從不同來源進來的（row 的 links）都記同一個結果；第二個以後記成無關，畫面才不會重複。
     counts 給了就記有關、無關各幾則。"""
@@ -504,13 +617,31 @@ def validate_watch(output: Any, watch: Sequence[Mapping[str, Any]], counts: dict
                         reason=(_text(entry.get("reason"), REASON_MAX) or "和公司無關"), translated=0)
         else:
             base.update(mark, relevant=1, kind=entry.get("kind") if entry.get("kind") in STOCK_KINDS else "other")
+            base.update(points(entry, problems))
         if counts is not None:
             key = "unrelated" if unrelated else "related"
             counts[key] = counts.get(key, 0) + 1
         links = source.get("links") or [source["link"]]
         out.append({**base, "link": links[0]})
-        out += [{**base, "link": link, "relevant": 0, "reason": "同一則"} for link in links[1:]]
+        out += [{**{key: value for key, value in base.items() if key not in POINT_FIELDS}, "link": link, "relevant": 0,
+                 "reason": "同一則"} for link in links[1:]]
     return out
+
+
+def validate_summary(output: Any, my_stocks: Mapping[str, str] | None = None,
+                     problems: list[Problem] | None = None) -> dict[str, Any] | None:
+    """總結的四段：{summary（發生什麼）, effect, owner_effect, conditions, prepare}；發生什麼那一段不成立就整份不放。"""
+    if not isinstance(output, Mapping):
+        return None
+    text = whole_sentences(_text(unwrap_text(output.get("market_commentary") or output.get("summary")), 2000), SUMMARY_MAX)
+    if not text:
+        return None
+    reason = text_problem("market_commentary", text) if is_summary(text) else "這不是盤勢解說，是在交代自己做了什麼"
+    if reason:
+        if problems is not None:
+            problems.append(("market_commentary", reason, text))
+        return None
+    return {"summary": text, **points(output, problems, my_stocks)}
 
 
 def whole_sentences(text: str | None, limit: int) -> str | None:
@@ -542,6 +673,16 @@ def watchlist(query: Callable[[str], list[dict]], email: str) -> dict[str, str]:
         return {}
     return {row["code"]: row["name"] for row in query(
         "SELECT code, max(name) AS name FROM user_watchlist WHERE lower(email) = lower(" + _q(email) + ") GROUP BY code")}
+
+
+def owner_stocks(query: Callable[[str], list[dict]], email: str) -> dict[str, str]:
+    """站主的自選＋庫存：{代號: 名稱}。消息牽涉到這幾檔時請模型點名（owner_effect，只回給站主）。"""
+    names = watchlist(query, email)
+    try:
+        held = query("SELECT code, max(name) AS name FROM user_holdings WHERE lower(email) = lower(" + _q(email) + ") GROUP BY code")
+    except Exception:  # noqa: BLE001 — 讀不到庫存就只用自選
+        held = []
+    return {**{row["code"]: row["name"] for row in held}, **names}
 
 
 def pending_stock_rows(query: Callable[[str], list[dict]], names: Mapping[str, str], now: str, *, limit: int,
@@ -582,34 +723,55 @@ def pending_stock_rows(query: Callable[[str], list[dict]], names: Mapping[str, s
     return out
 
 
-def marks_sql(marks: Sequence[Mapping[str, Any]], *, judged_by: str, now: str) -> list[str]:
+def has_point_columns(query: Callable[[str], list[dict]]) -> bool:
+    """0033（影響、條件、準備那幾欄）套了沒：沒套就照舊格式寫，這一輪照樣有消息，只是沒有新的三段。"""
+    try:
+        rows = query("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'market_news_items'")
+    except Exception:  # noqa: BLE001 — 查不到就當沒套
+        return False
+    return bool(rows) and bool(re.search(r"\bowner_effect\b", str(rows[0].get("sql") or "")))
+
+
+def _point_columns(row: Mapping[str, Any], fields: Sequence[str]) -> tuple[str, str]:
+    """新三段的欄名與值：條件與準備存成 JSON 陣列，沒有的存 NULL。"""
+    values = [(json.dumps(row[field], ensure_ascii=False) if field in ("conditions", "prepare") else row[field])
+              if row.get(field) else None for field in fields]
+    return "".join(f", {field}" for field in fields), "".join(f", {_q(value)}" for value in values)
+
+
+def marks_sql(marks: Sequence[Mapping[str, Any]], *, judged_by: str, now: str, point_columns: bool = True) -> list[str]:
+    extra = [_point_columns(row, ("effect", "conditions", "prepare") if point_columns else ()) for row in marks]
     return ["INSERT OR REPLACE INTO stock_news_marks (code, link, relevant, kind, tone, impact, title, translated, reason, "
-            "judged_by, judged_at) VALUES ("
+            f"judged_by, judged_at{names}) VALUES ("
             + ", ".join([_q(row["code"]), _q(row["link"]), str(int(row["relevant"])), _q(row["kind"]), _q(row["tone"]),
                          str(int(row["impact"])), _q(row["title"]), str(int(row["translated"])), _q(row["reason"]),
-                         _q(judged_by), _q(now)]) + ");" for row in marks]
+                         _q(judged_by), _q(now)]) + values + ");" for row, (names, values) in zip(marks, extra)]
 
 
 def run_sql(run: Mapping[str, Any], items: Sequence[Mapping[str, Any]], marks: Mapping[str, Sequence[Mapping[str, Any]]],
-            *, now: str) -> str:
+            *, now: str, point_columns: bool = True) -> str:
     """同一輪重跑就整份換掉；個股新聞的判讀（marks：{'owner'／'friend': 列}）每則一列、判過不重判；
-    超過 KEEP_DAYS 天的輪次清掉，對不到個股新聞（已過 90 天被清掉）的判讀也清掉。"""
+    超過 KEEP_DAYS 天的輪次清掉，對不到個股新聞（已過 90 天被清掉）的判讀也清掉。
+    point_columns False（0033 還沒套）：不寫影響、條件、準備那幾欄。"""
     run_id = run["run_id"]
     cutoff = (datetime.strptime(now, "%Y-%m-%dT%H:%M:%SZ") - timedelta(days=KEEP_DAYS)).strftime("%Y-%m-%d")
+    fields = POINT_FIELDS if point_columns else ()
+    names, values = _point_columns(run, fields)
     lines = [f"DELETE FROM market_news_items WHERE run_id = {_q(run_id)};",
              f"DELETE FROM market_news_runs WHERE run_id = {_q(run_id)};",
-             "INSERT INTO market_news_runs (run_id, trade_date, slot, created_at, status, summary, indices, sources, model) VALUES ("
+             f"INSERT INTO market_news_runs (run_id, trade_date, slot, created_at, status, summary, indices, sources, model{names}) VALUES ("
              + ", ".join(_q(run[key]) for key in ("run_id", "trade_date", "slot", "created_at", "status", "summary"))
              + f", {_q(json.dumps(run['indices'], ensure_ascii=False))}, {_q(json.dumps(run['sources'], ensure_ascii=False))}, "
-             + f"{_q(run.get('model'))});"]
+             + f"{_q(run.get('model'))}{values});"]
     for row in items:
+        names, values = _point_columns(row, fields)
         lines.append("INSERT INTO market_news_items (run_id, item_id, grp, market, kind, tone, impact, title, translated, reason, "
-                     "source, link, published_at) VALUES ("
+                     f"source, link, published_at{names}) VALUES ("
                      + ", ".join([_q(run_id), _q(row["id"]), _q(row["group"]), _q(row["market"]), _q(row.get("kind")), _q(row["tone"]),
                                   str(int(row["impact"])), _q(row["title"]), str(int(row["translated"])), _q(row["reason"]),
-                                  _q(row["source"]), _q(row["link"]), _q(row["published_at"])]) + ");")
+                                  _q(row["source"]), _q(row["link"]), _q(row["published_at"])]) + values + ");")
     for judged_by, rows in marks.items():
-        lines += marks_sql(rows, judged_by=judged_by, now=now)
+        lines += marks_sql(rows, judged_by=judged_by, now=now, point_columns=point_columns)
     old = f"SELECT run_id FROM market_news_runs WHERE trade_date < {_q(cutoff)}"
     lines += [f"DELETE FROM market_news_items WHERE run_id IN ({old});",
               f"DELETE FROM market_news_user_items WHERE run_id IN ({old});",
@@ -638,58 +800,94 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
     index_rows = indices(query, taiex)
     owner_names = watchlist(query, owner_email)
     owner_watch = pending_stock_rows(query, owner_names, now, limit=OWNER_STOCK_MAX)
+    my_stocks = owner_stocks(query, owner_email)
+    point_columns = has_point_columns(query)
     from concurrent.futures import ThreadPoolExecutor
     batches = [items[start:start + BATCH_ITEMS] for start in range(0, len(items), BATCH_ITEMS)]
     stock_batches = [owner_watch[start:start + BATCH_ITEMS] for start in range(0, len(owner_watch), BATCH_ITEMS)]
-    jobs = [(f"items{index + 1}", items_prompt(batch), ITEMS_SCHEMA) for index, batch in enumerate(batches)]
-    jobs += [(f"watch{index + 1}", watch_prompt(batch), WATCH_SCHEMA) for index, batch in enumerate(stock_batches)]
+
+    def problems_of(validate, *args, **kwargs):
+        """這一批回答裡被文字檢查退回的句子（買賣指令、準備不是「如果…就…」）。"""
+        def check(output):
+            found: list[Problem] = []
+            validate(output, *args, **kwargs, problems=found)
+            return found
+        return check
+
+    jobs = [(f"items{index + 1}", items_prompt(batch, my_stocks), ITEMS_SCHEMA, problems_of(validate_items, batch, my_stocks=my_stocks))
+            for index, batch in enumerate(batches)]
+    jobs += [(f"watch{index + 1}", watch_prompt(batch), WATCH_SCHEMA, problems_of(validate_watch, batch))
+             for index, batch in enumerate(stock_batches)]
     calls: dict[str, dict[str, Any]] = {}
 
     attempts: dict[str, int] = {}
+    text_retries: dict[str, str] = {}
 
     def call(job):
-        name, text, schema = job
+        """一次呼叫沒拿到結果就再試一次；拿到了但有句子被文字檢查退回，也再問一次並把退回的原因告訴它。
+        兩種合計 CALL_ATTEMPTS 次；最後一次還有被退回的句子，就只丟那幾句（validate_* 會處理）。"""
+        name, text, schema, check = job
+        suffix, usable = "", None
         for attempt in range(1, CALL_ATTEMPTS + 1):
             attempts[name] = attempt
             try:
-                status, output, note = ask_owner(text, schema)
+                status, output, note = ask_owner(text + suffix, schema)
             except Exception as error:  # noqa: BLE001 — 一批出錯只影響那一批
                 status, output, note = type(error).__name__, None, str(error)[:200]
-            if status == "ok":
+            if status != "ok":
+                continue
+            usable = (status, output, note)
+            found = check(coerce_output(output))
+            if not found or attempt == CALL_ATTEMPTS:
                 break
+            suffix = retry_note(found[0])
+            text_retries[name] = f"{found[0][0]}：{found[0][1]}"
+        if status != "ok" and usable:   # 重問那一次壞了：用前一次的回答（被退回的句子照樣只丟那幾句）
+            status, output, note = usable
         return name, status, coerce_output(output), note
 
     with ThreadPoolExecutor(max_workers=PARALLEL_CALLS) as pool:
         results = list(pool.map(call, jobs))
     rejected: dict[str, int] = {}
+    text_rejected: dict[str, int] = {}
     classified: list[dict[str, Any]] = []
     unmarked: list[Mapping[str, Any]] = []
     owner_marks: list[dict[str, Any]] = []
+
+    def count_text(found: Sequence[Problem]) -> None:
+        for field, _reason, _text_ in found:
+            text_rejected[field] = text_rejected.get(field, 0) + 1
+
     for (name, status, output, note), batch in zip(results, [*batches, *stock_batches]):
         record = {"status": status, "attempts": attempts.get(name, 1),
-                  **({"note": str(note)[:400]} if note and status != "ok" else {})}
+                  **({"note": str(note)[:400]} if note and status != "ok" else {}),
+                  **({"text_retry": text_retries[name]} if name in text_retries else {})}
+        found: list[Problem] = []
         if name.startswith("watch"):
             if status == "ok":
-                owner_marks += validate_watch(output, batch, record)
+                owner_marks += validate_watch(output, batch, record, found)
             record["sent"] = len(batch)
         else:
-            kept = validate_items(output, batch, rejected) if status == "ok" else []
+            kept = validate_items(output, batch, rejected, my_stocks=my_stocks, problems=found) if status == "ok" else []
             record.update(returned=len(output.get("items") or []) if isinstance(output, Mapping) else 0, kept=len(kept))
             classified += kept
             if not kept:
                 unmarked += batch
+        count_text(found)
         calls[name] = record
-    summary = None
+    summary: dict[str, Any] | None = None
     if classified:
-        for attempt in (1, 2):   # 回成交代工作的話就再問一次；還是不行就不放總結
-            status, output, note = call(("summary", summary_prompt(slot, trade_date, classified, index_rows), SUMMARY_SCHEMA))[1:]
-            summary = (whole_sentences(_text(unwrap_text(output.get("market_commentary") or output.get("summary")), 2000),
-                                       SUMMARY_MAX) if status == "ok" and isinstance(output, Mapping) else None)
-            if status != "ok" or is_summary(summary):
-                break
-            status, note, summary = "not_a_summary", summary, None
-        calls["summary"] = {"status": status, "attempts": attempt,
-                            **({"note": str(note)[:300]} if note and status != "ok" else {})}
+        # 回成交代工作的話、或寫了買賣指令：再問一次並告訴它原因；還是不行就不放總結（其餘段落被退回的只丟那一句）
+        status, output, note = call(("summary", summary_prompt(slot, trade_date, classified, index_rows, my_stocks), SUMMARY_SCHEMA,
+                                     problems_of(validate_summary, my_stocks)))[1:]
+        found = []
+        summary = validate_summary(output, my_stocks, found) if status == "ok" else None
+        count_text(found)
+        if status == "ok" and not summary and found and found[0][0] == "market_commentary":
+            status, note = "not_a_summary", found[0][2]
+        calls["summary"] = {"status": status, "attempts": attempts.get("summary", 1),
+                            **({"note": str(note)[:300]} if note and status != "ok" else {}),
+                            **({"text_retry": text_retries["summary"]} if "summary" in text_retries else {})}
     # 有判讀就套上；整批沒判讀成的那幾則照原標題存（不標利多利空、沒有理由）；一則都沒有才當「只有標題」。
     if classified:
         stored = _keep_per_group(classified + unclassified_items(unmarked))
@@ -699,7 +897,14 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
     marks: dict[str, list[dict[str, Any]]] = {"owner": owner_marks, "friend": []}
     status = "ok" if classified else next((r["status"] for r in calls.values() if r["status"] != "ok"), "no_items")
     note = ""
-    diagnosis = {"calls": calls, "items_kept": len(classified), "rejected": rejected, "summary_chars": len(summary or "")}
+    with_points = lambda rows, field: sum(1 for row in rows if row.get(field))  # noqa: E731
+    diagnosis = {"calls": calls, "items_kept": len(classified), "rejected": rejected,
+                 "summary_chars": len((summary or {}).get("summary") or ""),
+                 # 新寫法寫成幾則（上線後對帳用）：有影響、有條件、有準備、有點名站主股票的各幾則；被文字檢查丟掉的句子各幾句
+                 "points": {"columns": point_columns,
+                            **{field: with_points(stored, field) + with_points(owner_marks, field) for field in POINT_FIELDS},
+                            "summary": sorted(key for key in (summary or {}) if key in POINT_FIELDS),
+                            "text_rejected": text_rejected}}
     friends: dict[str, str] = {}
     for key_row in friend_keys:
         email = str(key_row.get("email") or "")
@@ -730,9 +935,10 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
         done = len(pieces) - len(failures)
         friends[email] = (" ".join(["ok", *notes]) if not failures else f"{done}/{len(pieces)} {failures[0]}")[:900]
     run_row = {"run_id": f"{trade_date}-{slot}", "trade_date": trade_date, "slot": slot, "created_at": now,
-               "status": run_status, "summary": summary, "indices": index_rows,
+               "status": run_status, **{field: None for field in POINT_FIELDS}, **(summary or {"summary": None}),
+               "indices": index_rows,
                "sources": {"feeds": sources, "missed_groups": missed_groups(sources)}, "model": model}
-    script = run_sql(run_row, stored, marks, now=now)
+    script = run_sql(run_row, stored, marks, now=now, point_columns=point_columns)
     if not dry_run:
         execute(script)
     return {"status": "ok", "run_id": run_row["run_id"], "run_status": run_status, "items": len(stored),

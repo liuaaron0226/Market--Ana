@@ -11,8 +11,9 @@ import watch_news as wn
 
 ROOT = Path(__file__).resolve().parent
 MIGRATIONS = ROOT / "cloud/migrations"
-SCHEMA = "".join((MIGRATIONS / name).read_text(encoding="utf-8")
-                 for name in ("0005_user_portfolio.sql", "0011_watchlist_watch.sql", "0015_watch_news.sql", "0031_market_news.sql", "0032_stock_news_marks.sql"))
+OLD_SCHEMA = "".join((MIGRATIONS / name).read_text(encoding="utf-8")
+                     for name in ("0005_user_portfolio.sql", "0011_watchlist_watch.sql", "0015_watch_news.sql", "0031_market_news.sql", "0032_stock_news_marks.sql"))
+SCHEMA = OLD_SCHEMA + (MIGRATIONS / "0033_news_impact.sql").read_text(encoding="utf-8")
 NOW = "2026-11-19T06:05:00Z"          # 台北 14:05，收盤後那一輪
 OWNER = "owner@example.com"
 FRIEND = "friend@example.com"
@@ -58,10 +59,10 @@ def web(overrides=None):
 
 
 class D1:
-    def __init__(self):
+    def __init__(self, schema=SCHEMA):
         self.db = sqlite3.connect(":memory:")
         self.db.row_factory = sqlite3.Row
-        self.db.executescript(SCHEMA)
+        self.db.executescript(schema)
         self.db.execute("CREATE TABLE overseas_quotes (symbol TEXT, date TEXT, open REAL, high REAL, low REAL, close REAL, volume REAL)")
         for symbol, closes in (("SOX.INDX", (100.0, 96.9)), ("N225.INDX", (200.0, 197.7))):
             for day, close in zip(("2026-11-17", "2026-11-18"), closes):
@@ -91,11 +92,14 @@ def model_reply(prompt_items, watch):
         tone = "down" if "外資" in row["title"] or "Taiwan" in row["title"] else "up" if "Korea" in row["title"] else "flat"
         group = {"tw": "tw", "us": "us", "asia": "asia", "global": "us"}[row["group_hint"]]
         items.append({"id": row["id"], "group": group, "market": "韓" if "Korea" in row["title"] else "",
-                      "kind": "flows" if "外資" in row["title"] else "policy" if "限空" in row["title"] else "other", "tone": tone, "impact": 3 if tone == "down" else 2, "title": "中文：" + row["title"][:20], "reason": "一句理由"})
+                      "kind": "flows" if "外資" in row["title"] else "policy" if "限空" in row["title"] else "other", "tone": tone, "impact": 3 if tone == "down" else 2, "title": "中文：" + row["title"][:20], "reason": "一句理由",
+                      "effect": "權值股壓低指數", "owner_effect": "台積電是外資賣超的重心" if "外資" in row["title"] else "",
+                      "conditions": ["外資是否連續賣超"], "prepare": ["如果外資連續賣超，就先檢查權值股佔多少"]})
     return {"summary": "台股今天下跌，主要是外資賣超。", "items": items,
             "watch": [{"id": row["id"], "relevant": "no" if "馬拉松" in row["title"] else "yes",
                        "kind": "earnings" if "營收" in row["title"] else "rating", "tone": "down", "impact": 2,
-                       "title": "自選：" + row["title"], "reason": "跟著走弱"} for row in watch]}
+                       "title": "自選：" + row["title"], "reason": "跟著走弱", "effect": "短線股價承壓",
+                       "conditions": ["費半是否止跌"], "prepare": ["如果費半續跌，就先想好能承受的跌幅"]} for row in watch]}
 
 
 def kind_of(schema):
@@ -112,12 +116,15 @@ class FakeAsk:
     def __call__(self, prompt, schema):
         self.prompts.append(prompt)
         self.kinds.append(kind_of(schema))
-        payload = json.loads(prompt[prompt.index("INPUT:") + len("INPUT:"):])
+        # 重問時提示後面接著退回的原因，所以只讀 INPUT: 後面那一個 JSON
+        payload, _ = json.JSONDecoder().raw_decode(prompt[prompt.index("INPUT:") + len("INPUT:"):])
         if self.status != "ok":
             return self.status, None, "壞了"
         kind = kind_of(schema)
         if kind == "summary":
-            return "ok", {"market_commentary": "台股今天下跌，主要是外資賣超。"}, ""
+            return "ok", {"market_commentary": "台股今天下跌，主要是外資賣超。", "effect": "半導體權值股跌最多。",
+                          "owner_effect": "台積電跟著大盤走弱。", "conditions": ["外資是否連續賣超"],
+                          "prepare": ["如果加權跌破月線，就先檢查持股比重"]}, ""
         reply = model_reply(payload.get("items", []), payload.get("watch", []))
         return "ok", {kind: reply[kind]}, ""
 
@@ -415,6 +422,170 @@ class RunTests(unittest.TestCase):
         run(d1, overrides={"cna-finance": Response(content=rss(item("外資 'O'Neil'; DROP TABLE x; --", "https://www.cna.com.tw/a")))})
         titles = [r["title"] for r in d1.query("SELECT title FROM market_news_items")]
         self.assertTrue(any(title.startswith("中文：外資 'O'Neil';") for title in titles), titles)
+
+
+class Reply(FakeAsk):
+    """假的 Flash，回答先經過 change(kind, output, 第幾次問這一種) 改寫。"""
+
+    def __init__(self, change):
+        super().__init__()
+        self.change, self.asked = change, {}
+
+    def __call__(self, prompt, schema):
+        status, output, note = super().__call__(prompt, schema)
+        kind = kind_of(schema)
+        self.asked[kind] = self.asked.get(kind, 0) + 1
+        self.change(kind, output, self.asked[kind])
+        return status, output, note
+
+
+class ImpactTests(unittest.TestCase):
+    """本人 2026-11-20：消息要講「影響＋要看的條件＋準備」（.scratch/impact-watch/spec.md、票 01）。"""
+
+    def test_every_item_and_the_summary_are_stored_in_four_parts(self):
+        d1 = D1()
+        report, _, _ = run(d1)
+        row = d1.query("SELECT reason, effect, owner_effect, conditions, prepare FROM market_news_items WHERE title LIKE '%外資%'")[0]
+        self.assertEqual(row, {"reason": "一句理由", "effect": "權值股壓低指數", "owner_effect": "台積電是外資賣超的重心",
+                               "conditions": '["外資是否連續賣超"]', "prepare": '["如果外資連續賣超，就先檢查權值股佔多少"]'})
+        self.assertEqual(len(d1.query("SELECT 1 FROM market_news_items WHERE effect IS NOT NULL AND conditions IS NOT NULL AND prepare IS NOT NULL")), 4)
+        run_row = d1.query("SELECT summary, effect, owner_effect, conditions, prepare FROM market_news_runs")[0]
+        self.assertEqual(run_row, {"summary": "台股今天下跌，主要是外資賣超。", "effect": "半導體權值股跌最多。",
+                                   "owner_effect": "台積電跟著大盤走弱。", "conditions": '["外資是否連續賣超"]',
+                                   "prepare": '["如果加權跌破月線，就先檢查持股比重"]'})
+        mark = d1.query("SELECT effect, conditions, prepare FROM stock_news_marks")[0]
+        self.assertEqual(mark, {"effect": "短線股價承壓", "conditions": '["費半是否止跌"]', "prepare": '["如果費半續跌，就先想好能承受的跌幅"]'})
+        self.assertEqual(report["diagnosis"]["points"], {"columns": True, "effect": 5, "owner_effect": 1, "conditions": 5, "prepare": 5,
+                                                         "summary": ["conditions", "effect", "owner_effect", "prepare"], "text_rejected": {}})
+
+    def test_the_model_is_told_which_stocks_are_the_owners_watchlist_and_holdings(self):
+        d1 = D1()
+        d1.db.execute("INSERT INTO user_holdings (email, code, name, market, shares, average_cost, in_universe, created_at, updated_at) "
+                      "VALUES (?, '2317', '鴻海', '上市', 1000, 200, 1, '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')", (OWNER,))
+        _, _, ask = run(d1)
+        payloads = {kind: json.loads(text[text.index("INPUT:") + 6:]) for kind, text in zip(ask.kinds, ask.prompts)}
+        mine = [{"code": "2317", "name": "鴻海"}, {"code": "2330", "name": "台積電"}]
+        self.assertEqual(payloads["items"]["my_stocks"], mine)
+        self.assertEqual(payloads["summary"]["my_stocks"], mine)
+        self.assertNotIn("聯發科", json.dumps(payloads, ensure_ascii=False), "朋友的自選不給")
+        self.assertNotIn("my_stocks", payloads["watch"], "個股判讀是大家共用的，不帶站主的股票")
+
+    def test_a_line_that_names_none_of_the_owners_stocks_is_not_kept_as_theirs(self):
+        def change(kind, output, _n):
+            for row in output.get("items", []):
+                row["owner_effect"] = "電子股普遍受影響"
+        d1 = D1()
+        run(d1, ask=Reply(change))
+        self.assertEqual(d1.query("SELECT count(*) AS n FROM market_news_items WHERE owner_effect IS NOT NULL")[0]["n"], 0)
+
+    def test_missing_extra_and_overlong_fields_do_not_void_the_item(self):
+        def change(kind, output, _n):
+            rows = output.get("items", [])
+            if rows:
+                for key in ("effect", "owner_effect", "conditions", "prepare"):
+                    rows[0].pop(key)                      # 少寫：照舊格式存
+                rows[1]["confidence"] = "high"             # 多寫不認得的欄位
+                rows[1]["conditions"] = ["甲是否發生", "乙是否發生", "丙是否發生"]   # 多寫一個
+                rows[2]["conditions"] = "外資是否回補"      # 該給陣列卻給一句
+                rows[2]["prepare"] = None
+        d1 = D1()
+        report, _, _ = run(d1, ask=Reply(change))
+        rows = d1.query("SELECT effect, conditions, prepare FROM market_news_items ORDER BY item_id")
+        self.assertEqual(len(rows), 4, "四則都在")
+        self.assertEqual(rows[0], {"effect": None, "conditions": None, "prepare": None})
+        self.assertEqual(json.loads(rows[1]["conditions"]), ["甲是否發生", "乙是否發生"])
+        self.assertEqual((rows[2]["conditions"], rows[2]["prepare"]), ('["外資是否回補"]', None))
+        self.assertEqual(report["diagnosis"]["rejected"], {})
+
+    def test_a_trade_order_is_sent_back_with_the_reason_and_the_sentence(self):
+        def change(kind, output, n):
+            if kind == "items" and n == 1:
+                output["items"][0]["prepare"] = ["如果跌破月線，就先減碼台積電"]
+        d1 = D1()
+        ask = Reply(change)
+        report, _, _ = run(d1, ask=ask)
+        again = [text for kind, text in zip(ask.kinds, ask.prompts) if kind == "items"]
+        self.assertEqual(len(again), 2, "被退回就重問一次")
+        self.assertNotIn("上一次的回答被退回", again[0])
+        for part in ("上一次的回答被退回", "不能寫買賣指令或投資建議", "如果跌破月線，就先減碼台積電", "準備"):
+            self.assertIn(part, again[1])
+        self.assertTrue(again[1].startswith(again[0]), "規則與輸入不變，只是接上退回的原因")
+        self.assertEqual(report["diagnosis"]["calls"]["items1"]["text_retry"], "prepare：不能寫買賣指令或投資建議")
+        self.assertEqual(report["diagnosis"]["points"]["text_rejected"], {}, "第二次寫對了")
+        self.assertFalse(d1.query("SELECT 1 FROM market_news_items WHERE prepare LIKE '%減碼%'"))
+        self.assertEqual(d1.query("SELECT count(*) AS n FROM market_news_items WHERE prepare IS NOT NULL")[0]["n"], 4)
+
+    def test_a_sentence_rejected_twice_is_dropped_but_the_item_stays(self):
+        def change(kind, output, _n):
+            for row in output.get("items", [])[:1]:
+                row["prepare"] = ["先把持股比重看一遍", "如果外資回補，就留意權值股"]   # 第一句不是「如果…就…」
+                row["effect"] = "建議逢低買進權值股"
+            for row in output.get("watch", []):
+                row["prepare"] = ["如果續跌就停損出場"]
+        d1 = D1()
+        report, _, _ = run(d1, ask=Reply(change))
+        row = d1.query("SELECT title, effect, prepare FROM market_news_items ORDER BY item_id LIMIT 1")[0]
+        self.assertEqual((row["effect"], row["prepare"]), (None, '["如果外資回補，就留意權值股"]'))
+        self.assertEqual(len(d1.query("SELECT 1 FROM market_news_items")), 4)
+        self.assertEqual(d1.query("SELECT effect, prepare FROM stock_news_marks")[0], {"effect": "短線股價承壓", "prepare": None})
+        self.assertEqual(report["diagnosis"]["points"]["text_rejected"], {"effect": 1, "prepare": 2})
+        self.assertEqual(report["diagnosis"]["calls"]["watch1"]["attempts"], 2)
+
+    def test_news_wording_about_others_trading_is_not_a_trade_order(self):
+        for text in ("外資賣出台積電逾百億", "投信逢低布局權值股", "晶片股遭獲利了結", "降息不宜過快，外資賣出美債"):
+            self.assertIsNone(mn.text_problem("effect", text), text)
+        for text in ("建議買進", "可以逢低布局", "應該先減碼", "不妨加碼"):
+            self.assertIsNotNone(mn.text_problem("effect", text), text)
+        self.assertIsNotNone(mn.text_problem("prepare", "如果跌破月線就賣出"))
+        self.assertEqual(mn.text_problem("prepare", "先檢查持股"), "準備要用「如果…就…」寫")
+        self.assertIsNone(mn.text_problem("prepare", "如果外資連續賣超，就先檢查權值股佔多少"))
+
+    def test_a_summary_with_a_trade_order_is_asked_again_and_the_reply_is_used(self):
+        def change(kind, output, n):
+            if kind == "summary" and n == 1:
+                output["market_commentary"] = "台股下跌，建議逢低買進。"
+        d1 = D1()
+        ask = Reply(change)
+        report, _, _ = run(d1, ask=ask)
+        self.assertEqual(ask.kinds.count("summary"), 2)
+        self.assertIn("被退回的那一句（總結）：「台股下跌，建議逢低買進。」", ask.prompts[-1])
+        self.assertEqual(d1.query("SELECT summary FROM market_news_runs")[0]["summary"], "台股今天下跌，主要是外資賣超。")
+        self.assertEqual(report["diagnosis"]["calls"]["summary"]["status"], "ok")
+
+    def test_when_the_retry_itself_fails_the_first_answer_is_used(self):
+        class SecondFails(Reply):
+            def __call__(self, prompt, schema):
+                if kind_of(schema) == "items" and "上一次的回答被退回" in prompt:
+                    self.kinds.append("items")
+                    return "model_timeout", None, "逾時"
+                return super().__call__(prompt, schema)
+
+        def change(kind, output, _n):
+            for row in output.get("items", [])[:1]:
+                row["prepare"] = ["如果跌破月線就賣出"]
+        d1 = D1()
+        report, _, _ = run(d1, ask=SecondFails(change))
+        self.assertEqual(report["diagnosis"]["calls"]["items1"]["status"], "ok")
+        self.assertEqual(d1.query("SELECT count(*) AS n FROM market_news_items WHERE effect IS NOT NULL")[0]["n"], 4)
+        self.assertEqual(d1.query("SELECT count(*) AS n FROM market_news_items WHERE prepare IS NOT NULL")[0]["n"], 3)
+
+    def test_before_the_migration_the_round_is_written_the_old_way(self):
+        d1 = D1(OLD_SCHEMA)
+        report, _, _ = run(d1)
+        self.assertEqual(report["run_status"], "ok")
+        self.assertFalse(report["diagnosis"]["points"]["columns"])
+        self.assertEqual(len(d1.query("SELECT 1 FROM market_news_items")), 4)
+        self.assertEqual(d1.query("SELECT summary FROM market_news_runs")[0]["summary"], "台股今天下跌，主要是外資賣超。")
+        self.assertNotIn("effect", d1.scripts[-1])
+
+    def test_rules_ask_for_the_four_parts_and_forbid_trade_orders(self):
+        for rules in (mn.ITEM_RULES, mn.WATCH_RULES, mn.SUMMARY_RULES):
+            for word in ("effect", "conditions", "prepare", "如果…就…", "都不能寫買賣指令或個人化投資建議"):
+                self.assertIn(word, rules)
+        for rules in (mn.ITEM_RULES, mn.SUMMARY_RULES):
+            self.assertIn("my_stocks", rules)
+        self.assertNotIn("owner_effect", mn.WATCH_RULES)
+        self.assertIn('impact 是 "1" 的消息可以只寫 effect', mn.ITEM_RULES)
 
 
 def _walk(node, path="$"):
