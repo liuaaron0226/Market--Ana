@@ -1,6 +1,7 @@
 /* 首頁「消息」（本人 2026-11-19「共識達成」，排法 A：.scratch/market-news/consensus.md、樣品 design-previews/market-news/）。
    取代「長期核心持有」。最上面「今天為什麼這樣走」與各市場指數；下面一排「台股｜美股｜日韓中｜我的自選」一次看一組，
-   組內依影響大小排；每則：利多（紅）／利空（綠）小記號、中文標題（點了開原文、新分頁）、一句理由、出處、時間、影響。
+   組內依影響大小排；每則：利多（紅）／利空（綠）小記號、中文標題（點了開原文、新分頁）、一句發生什麼、
+   影響／要看／準備三段（2026-11-20 起的新寫法，有才畫）、出處、時間、影響大小。
    右上日期鍵看近一個月。開關 market_news_v1 關著時整個分頁不出現（其他三顆鍵平分）。資料：/api/market-news。 */
 (() => {
   'use strict';
@@ -37,6 +38,25 @@
   };
   const pct = v => `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toFixed(2)}%`;
 
+  // 新寫法（本人 2026-11-20「講影響＋該做的準備」）：影響、要看的條件、準備，一段一行。沒有的那一段不畫；
+  // 三段都沒有（舊消息、影響最小的）回 null，畫面就和以前一樣。點名站主股票的那一句只有站主的資料裡有。
+  function pointsNode(data) {
+    const strings = list => (Array.isArray(list) ? list.filter(text => typeof text === 'string' && text.trim()) : []);
+    const rows = [
+      ['影響', [data.effect, data.owner_effect].filter(Boolean), data.owner_effect],
+      ['要看', strings(data.conditions)],
+      ['準備', strings(data.prepare)],
+    ].filter(([, lines]) => lines.length);
+    if (!rows.length) return null;
+    const dl = el('dl', 'news-points');
+    for (const [label, lines, mine] of rows) {
+      const dd = el('dd');
+      dd.append(...lines.map(text => el('p', text === mine ? 'news-mine' : '', text)));
+      dl.append(el('dt', '', label), dd);
+    }
+    return dl;
+  }
+
   function itemNode(item, { stockTag = false } = {}) {
     const li = el('li', 'news-item');
     const head = el('div', 'news-item-head');
@@ -64,6 +84,8 @@
     if (head.childElementCount) li.append(head);
     li.append(link);
     if (item.reason) li.append(el('p', 'news-reason', item.reason));
+    const points = pointsNode(item);
+    if (points) li.append(points);
     li.append(meta);
     return li;
   }
@@ -108,6 +130,8 @@
     if (!run) return;
     if (run.classified && run.summary) {
       els.summary.append(el('p', 'news-summary-label', '今天為什麼這樣走'), el('p', 'news-summary-text', run.summary));
+      const points = pointsNode(run);
+      if (points) els.summary.append(points);
     }
     if (Array.isArray(run.indices) && run.indices.length) {
       const row = el('div', 'news-indices');
