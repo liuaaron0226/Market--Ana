@@ -359,7 +359,9 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           sync=$(python -c "import json,sys; print(json.load(open(sys.argv[1], encoding='utf-8'))['sync_state'])" "${{ runner.temp }}/daily-result.json")
-          if [ "$sync" = "True" ]; then
+          # 手動重新部署（redeploy）時也查一次：剛上線那天不用等到下一個交易日的發布才有當天的數字（owner 11-20）。
+          # 重查同一天不會改掉已經有的結果，數字也只會被同一天或更新的蓋過。
+          if [ "$sync" = "True" ] || [ "${{ inputs.redeploy }}" = "true" ]; then
             python impact_watch.py check --analysis data/daily-update-state/last-market-pack/analysis-data.js
           else
             echo "本次沒有新發布，盯項不重查"
