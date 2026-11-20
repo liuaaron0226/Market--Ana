@@ -106,6 +106,7 @@ def fake_model(folder: Path, responses, *, exit_code=0, sleep=0, raw=None, stder
         "message=json.loads(sys.stdin.buffer.readline().decode('utf-8'))\n"
         "assert message['event']=='user' and message['message']['content']\n"
         f"state=Path({str(state)!r})\n"
+        "with (state.parent/'prompts.jsonl').open('a',encoding='utf-8') as seen: seen.write(json.dumps(message['message']['content'],ensure_ascii=False)+'\\n')\n"
         "calls=len(state.read_text().splitlines()) if state.exists() else 0\n"
         "state.write_text('x\\n'*(calls+1))\n"
         f"time.sleep({sleep})\n"
@@ -1022,6 +1023,33 @@ class NamesInReasonTests(LedgerTestCase):
         answer = answer_a(**{"1": cell("ma5", "prev_low", "above", reason="跌破二十日線就轉弱")})
         record = self.write(responses=[envelope(answer), envelope(answer)])["record"]
         self.assertEqual(record["attempts"][-1]["rejected_text"], "跌破二十日線就轉弱")
+
+    def test_ordinary_words_with_a_lone_chinese_numeral_pass(self):
+        # 2026-11-20 正式晚間連兩晚被擋的原文（沒有任何數值）：兩個頻道、前一日、第二隻腳
+        text = "依兩個頻道急跌不猜底的看法，前一日融資與指數同降，第二隻腳還沒出現"
+        answer = answer_a(**{"1": cell("ma5", "prev_low", "above", reason=text)})
+        record = self.write(responses=[envelope(answer)])["record"]
+        self.assertEqual((record["kind"], record["attempts"]), ("forecast", []))
+
+    def test_quantities_and_dates_are_still_refused(self):
+        for number, text in enumerate(("量能放大兩倍", "缺口下緣（04/08）有撐", "跌破三萬八就轉弱", "三天內收復")):
+            answer = answer_a(**{"1": cell("ma5", "prev_low", "above", reason=text)})
+            record = self.write(responses=[envelope(answer), envelope(answer)], root=self.tmp / f"still-{number}")["record"]
+            self.assertEqual((record["kind"], record["miss_reason"]), ("miss", "answer_invalid"), text)
+
+    def test_the_second_ask_tells_the_model_what_was_refused(self):
+        # 本人 2026-11-20「要，重問一次」：重問時附上退回的原因與那一句原文；第二次寫對就算數
+        bad = answer_a(**{"1": cell("ma5", "prev_low", "above", reason="缺口下緣（04/08）有撐")})
+        record = self.write(responses=[envelope(bad), envelope(answer_a())])["record"]
+        self.assertEqual(record["kind"], "forecast")
+        self.assertEqual([attempt["status"] for attempt in record["attempts"]], ["answer_invalid"])
+        prompts = [json.loads(line) for line in (self.bin / "prompts.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(len(prompts), 2)
+        self.assertNotIn("上一次的回答被退回", prompts[0])
+        self.assertTrue(prompts[1].startswith(prompts[0]))
+        self.assertIn("上一次的回答被退回", prompts[1])
+        self.assertIn("缺口下緣（04/08）有撐", prompts[1])
+        self.assertIn("不得包含數字", prompts[1])
 
     def test_the_prompt_tells_the_model_the_exception(self):
         rules = "".join(fl._PROMPT_RULES)

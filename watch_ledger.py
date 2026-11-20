@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from ledger_core import exists as ledger_exists
-from ledger_core import answer_snapshot, input_names, known_fields
+from ledger_core import answer_snapshot, input_names, known_fields, retry_note
 from ledger_core import (
     EDITIONS,
     REFS_LIMIT,
@@ -670,11 +670,12 @@ def _write(
     # 先讀這一檔的系列（順便核對雜湊）：原件被改動時在呼叫模型之前就停下。
     previous = _previous_judgment(folder, code, edition, base_date)
     prompt = build_prompt(_prompt_rules(enabled), model_input)
+    ask = prompt
     for _ in range(2):
         refusal = gate.refusal()
         if refusal:
             return finish("miss", miss_reason="quota_exhausted", miss_detail=refusal)
-        status, structured, detail = call_model(model_bin, prompt, model, timeout_seconds, OUTPUT_SCHEMA, effort=effort)
+        status, structured, detail = call_model(model_bin, ask, model, timeout_seconds, OUTPUT_SCHEMA, effort=effort)
         gate.spent(status, detail)
         if status != "ok":
             record["attempts"].append({"status": status, "detail": detail})
@@ -689,6 +690,8 @@ def _write(
                     and "數字" in problem else {})
         record["attempts"].append({"status": "answer_invalid", "detail": problem, **rejected,
                                    **answer_snapshot(structured)})
+        # 重問時把退回的原因告訴模型（本人 2026-11-20；和大盤預測同一個做法）
+        ask = prompt + retry_note(problem, rejected.get("rejected_text"))
     return finish("miss", miss_reason="answer_invalid", miss_detail=record["attempts"][-1]["detail"])
 
 

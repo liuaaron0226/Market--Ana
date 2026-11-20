@@ -368,6 +368,13 @@ def text_problem(text: Any, *, names: Sequence[str] = (), method_text: str = "")
             return "自由文字不得包含數字；價位請用候選編號"
         if character in _FORMAL_NUMERALS and not _next_to_numeral(masked, at):
             continue   # 參考、大陸、零組件、收拾、隊伍：單獨出現的大寫數字字不是數字
+        if (character in CHINESE_NUMERAL_CHARS and not _next_to_numeral(masked, at)
+                and not any(0 <= near < len(masked) and masked[near] == _MASK for near in (at - 1, at + 1))
+                and not _LINE_NAME_TAIL.match(masked, at + 1)):
+            # 2026-11-20 正式晚間連兩晚被擋，原文沒有任何數值：「兩個頻道」「前一日」「第二隻腳」。
+            # 單獨一個中文數字、後面不是量詞（量詞在上面已經擋了），不是數值，放行。連著兩個以上的（二十、五千）照舊往下查；
+            # 緊貼著名字的（「二」＋十日線＝輸入裡沒有的二十日線）、自己就是線名開頭的（五日線、十週均）也照舊往下查。
+            continue
         if character in CHINESE_NUMERAL_CHARS and method_text and _in_method_term(masked, at, method_text):
             continue
         return "自由文字不得包含數字；價位請用候選編號"
@@ -382,6 +389,8 @@ _MEASURE_WORDS = frozenset("成張點元塊倍檔根天年月週周次分秒季%
 # 2026-11-20 正式晨間被擋的「僅作參考」：大寫數字字（參、陸、零、拾、伍…）在一般文章裡幾乎都不是數字（參考、大陸、
 # 零組件、收拾、隊伍），只有前後接著別的數字（零點五的「點」是量詞、陸佰、二〇二六）或量詞（參成）時才當數字擋。
 _FORMAL_NUMERALS = frozenset("壹貳貮參参肆伍陸陆柒捌玖拾佰仟零〇")
+# 數字後面接這些就是在叫一條線或一個區間的名字（五日線、十週均、三日高點）：不在輸入裡的照擋。
+_LINE_NAME_TAIL = re.compile(r"[日週周月季年][線均高低Kk]")
 
 
 def _next_to_numeral(text: str, at: int) -> bool:
@@ -394,6 +403,16 @@ def _counts_something(text: str, at: int) -> bool:
     while end < len(text) and _is_numeral(text[end]):
         end += 1
     return end < len(text) and text[end] in _MEASURE_WORDS and not (at > 0 and text[at - 1] == "第")
+
+
+def retry_note(problem: str | None, rejected_text: str | None = None) -> str:
+    """回答被退回後重問時接在提示後面的一段（本人 2026-11-20「要，重問一次」）：原本重問用的是同一份提示，模型不知道
+    錯在哪，多半再錯一次。規則本身不變，只是把退回的原因與那一句原文告訴它。"""
+    quoted = f"被退回的那一句：「{rejected_text}」。" if rejected_text else ""
+    return ("\n\n【上一次的回答被退回，請整份重寫】"
+            f"原因：{problem or '格式不符'}。{quoted}"
+            "重寫時自由文字裡不要出現阿拉伯數字、日期（例如 04/08）或帶量詞的數量（例如三成、五百點）；"
+            "要指某一條線或某一個價位，只用輸入裡的編號或原樣照抄它的名字。欄位與格式照原本的規定，不要多也不要少。")
 
 
 def refs_problem(refs: Any, known: Mapping[str, Any]) -> bool:

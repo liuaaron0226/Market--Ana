@@ -57,6 +57,7 @@ from ledger_core import answer_snapshot as _answer_snapshot
 from ledger_core import input_names as _input_names
 from ledger_core import known_fields as _known_fields
 from ledger_core import text_problem as _text_problem
+from ledger_core import retry_note as _retry_note
 from overseas_inputs import PARAMETERS as _OVERSEAS_PARAMETERS
 
 # 過去的經驗（E 票）：相似盤勢層與教訓層，自成一個模組。
@@ -667,8 +668,9 @@ def write_forecast(
         return finish("miss", miss_reason="deadline_passed", miss_detail="開始寫之前已過期限")
 
     prompt = build_prompt(_PROMPT_RULES, model_input)
+    ask = prompt
     for _ in range(2):
-        status, structured, detail = call_model(model_bin, prompt, model, timeout_seconds, OUTPUT_SCHEMA,
+        status, structured, detail = call_model(model_bin, ask, model, timeout_seconds, OUTPUT_SCHEMA,
                                                 effort=effort)
         if status != "ok":
             if replay:
@@ -681,6 +683,8 @@ def write_forecast(
                           similar_regimes=model_input["similar_regimes"])
         record["attempts"].append({"status": "answer_invalid", "detail": problem,
                                    **_rejected(structured, model_input), **_answer_snapshot(structured)})
+        # 重問時把退回的原因與那一句原文告訴模型（本人 2026-11-20；原本用同一份提示重問，連兩晚兩次都錯）
+        ask = prompt + _retry_note(problem, record["attempts"][-1].get("rejected_text"))
     return finish("miss", miss_reason="answer_invalid", miss_detail=record["attempts"][-1]["detail"])
 
 

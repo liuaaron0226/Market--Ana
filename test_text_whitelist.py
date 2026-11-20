@@ -26,9 +26,14 @@ class AllowedNamesTests(unittest.TestCase):
                 "依方法稿兩個頻道對反彈需檢查均線壓力與量價配合的原則，未站回十日線前先看弱勢整理，預期收在十日線與近期低點之間。")
         self.assertIsNone(check(text))
 
-    def test_the_word_the_model_made_up_is_still_refused(self):
-        # 原文寫「兩頻道」：方法稿裡沒有這個詞（方法稿是「兩個頻道」），不算名稱
-        self.assertEqual(check("依方法稿兩頻道對反彈需檢查均線壓力"), BLOCKED)
+    def test_a_lone_numeral_in_an_ordinary_word_passes_but_a_quantity_does_not(self):
+        # 2026-11-20 改（本人「要，重問一次」那一輪）：正式晚間連兩晚被擋的原文沒有任何數值（兩個頻道、前一日、第二隻腳）。
+        # 單獨一個中文數字、後面不是量詞、不貼著名字、不是線名開頭 → 不是數值，放行；原本「兩頻道」這種方法稿沒有的寫法會擋。
+        self.assertIsNone(check("依方法稿兩頻道對反彈需檢查均線壓力"))
+        self.assertIsNone(check("前一日融資與指數同降，第二隻腳還沒出現"))
+        self.assertEqual(check("量能放大兩倍"), BLOCKED)                # 量詞
+        self.assertEqual(check("跌破三萬八"), BLOCKED)                  # 連著兩個以上的數字
+        self.assertEqual(check("站上三日高點"), BLOCKED)                # 輸入裡沒有的線名
 
     def test_whole_candidate_names_with_their_dates_and_the_short_form(self):
         self.assertIsNone(check("守在近二十日低點（11/06）之上"))      # 整個名字照抄，括號裡的日期也算名字的一部分
