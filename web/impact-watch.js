@@ -2,6 +2,7 @@
    收在頁首那張板裡、和行情狀態同一行，不多佔高度：平常寫「在盯 N 件 ›」；有結果時金色圓點＋等到的那件事（變粗）。
    點了用網站現成的浮起面板列清單（開合在 home-fold.js）：每項有條件、對象、「數字」或「AI 讀新聞」、剩幾個交易日；
    點一項看準備與出處，有結果的直接攤開結果與原本寫的準備。沒有盯項或開關 impact_watch_v1 關著時整塊不出現。
+   「AI 讀新聞」的（票 05）點開有一句提醒；有結果時附它依據的那一則新聞（標題連到原文）。
    資料：/api/impact-watch。 */
 (() => {
   'use strict';
@@ -49,6 +50,17 @@
     head.append(meta);
     const body = el('div', 'iw-body');
     if (item.note) body.append(el('p', '', item.note));
+    const basis = done(item) ? item.result.evidence : null;
+    if (basis && typeof basis.title === 'string' && /^https?:\/\//i.test(basis.link || '')) {
+      const link = el('a', '', basis.title);
+      link.href = basis.link;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      const proof = el('p', 'iw-proof');
+      proof.append(el('b', '', '依據的新聞'), link);
+      if (basis.source) proof.append(el('span', '', basis.source));
+      body.append(proof);
+    }
     const prepare = strings(item.prepare);
     if (prepare.length) {
       const prep = el('p', 'iw-prep');

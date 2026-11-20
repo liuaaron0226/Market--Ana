@@ -237,7 +237,8 @@ def active_items(query: Callable[[str], list[dict]], trade_date: str) -> list[di
 def creation_sql(picks: Sequence[Mapping[str, Any]], active: Sequence[Mapping[str, Any]], *, trade_date: str, now: str,
                  holidays: set[str] | None = None, source: str = SOURCE_NEWS) -> tuple[str, dict[str, Any]]:
     """模型挑到的條件 → 新盯項的 SQL 與報告。source：哪一塊 AI 文字挑的（消息或白話分析）。
-    picks：[{condition_key, label, params, note, impact, prepare, source_ref}]（對象都是大盤）。
+    picks：[{condition_key, label, params, note, impact, prepare, source_ref}]（對象都是大盤）；kind 沒給是數字型，
+    消息型（impact_watch_news.py，票 05）帶 kind="news"，和數字型算同一個上限。
     - 同一個條件這一班被挑好幾次：留影響力最高的那一次；
     - 已經在盯、或剛有結果首頁還留著的條件：不再建；今天建過又收掉的（讓位、當天就有結果）今天也不再建；
     - 盯著的合計超過 MAX_WATCHING：依影響力高到低、一樣高時新的先，排在後面的收掉（舊的）或不建（新的）。"""
@@ -264,7 +265,7 @@ def creation_sql(picks: Sequence[Mapping[str, Any]], active: Sequence[Mapping[st
             continue
         item_id = f"{MARKET}:{pick['condition_key']}:{trade_date}"
         created.append(item_id)
-        values = [item_id, source, trade_date, pick.get("source_ref"), MARKET, "numeric", pick["condition_key"],
+        values = [item_id, source, trade_date, pick.get("source_ref"), MARKET, pick.get("kind") or "numeric", pick["condition_key"],
                   json.dumps(pick.get("params") or {}, ensure_ascii=False), pick["label"], pick.get("note"), int(pick["impact"]),
                   json.dumps(list(pick["prepare"]), ensure_ascii=False) if pick.get("prepare") else None,
                   trade_date, expires, EXPIRE_TRADING_DAYS, "watching", "all", now]

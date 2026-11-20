@@ -41,6 +41,7 @@
     'forecast-morning': '晨間事前預測',
     'forecast-replay': '歷史重播',
     'market-news': '首頁消息',
+    'impact-watch': '盯項讀新聞',   // 消息型盯項每日檢查（daily-update.yml 裡的一步，不是獨立的排程檔）
   };
   const TAIPEI = 8 * 3600_000;
   const WEEKDAYS = '日一二三四五六';

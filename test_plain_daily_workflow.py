@@ -85,7 +85,8 @@ class PlainDailyWorkflowTest(unittest.TestCase):
 
     def test_the_login_bundle_only_reaches_the_restore_step(self):
         holders = [s.get("id") or s.get("name") for s in steps() if "AGY_LOGIN_BUNDLE" in str(s.get("env", {}))]
-        self.assertEqual(holders, ["plain_auth"])
+        # impact_news_auth：消息型盯項每日檢查（票 05）在白話分析關著、沒人還原登入檔時自己還原的那一步
+        self.assertEqual(holders, ["plain_auth", "impact_news_auth"])
         self.assertNotIn("AGY_LOGIN_BUNDLE", str(doc()["jobs"]["update"].get("env", {})))
 
     def test_the_daily_run_gets_the_mode_and_an_agy_only_when_login_worked(self):
