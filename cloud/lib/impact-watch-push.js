@@ -31,8 +31,16 @@ function prepareLines(text) {
   } catch { return []; }
 }
 
+function stockName(params) {
+  try {
+    const name = JSON.parse(params)?.name;
+    return typeof name === "string" ? name.trim().slice(0, 40) : "";
+  } catch { return ""; }
+}
+
 export function impactWatchNotice(row) {
-  const what = row.subject === "market" ? row.label : `${row.subject} ${row.label}`;
+  // 對象是個股（票 06）：標題帶股票名稱與代號；名稱記在條件的參數裡，舊資料沒記就只帶代號
+  const what = row.subject === "market" ? row.label : `${[stockName(row.params), row.subject].filter(Boolean).join(" ")} ${row.label}`;
   const prepare = prepareLines(row.prepare);
   const lines = [
     String(row.result_note || "").replace(/^(成立|否定|落空)[：:]\s*/, ""),   // 標題已經講了結果，內文留帶數字的那一句
@@ -57,7 +65,7 @@ export async function runImpactWatchPush(env, { now = Date.now, pushFetch = fetc
   let rows;
   try {
     rows = (await db.prepare(
-      "SELECT id, subject, kind, label, prepare, status, result_note FROM impact_watch_items " +
+      "SELECT id, subject, kind, params, label, prepare, status, result_note FROM impact_watch_items " +
       "WHERE status IN ('met', 'failed') AND push_sent_at IS NULL AND show_until >= ? ORDER BY result_date, impact DESC, id",
     ).bind(taipeiDate(nowMs)).all()).results;
   } catch (error) {

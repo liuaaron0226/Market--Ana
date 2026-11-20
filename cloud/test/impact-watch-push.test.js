@@ -78,13 +78,15 @@ test("還在盯的、到期安靜收掉的、首頁已經不留的舊結果都�
   assert.equal(await sentAt("expired"), null);
 });
 
-test("朋友的裝置收不到；只給站主看的個股盯項也只送站主，標題帶代號", async () => {
+test("朋友的裝置收不到；只給站主看的個股盯項也只送站主，標題帶名稱與代號", async () => {
   await device(LAPTOP, FRIEND);
   await add("market_one", { label: "加權指數收盤跌破月線" });
   await add("stock_2330", { subject: "2330", label: "收盤站上月線", visibility: "owner", result_note: "成立：11/19 收 1,005，站上月線（998）。" });
-  assert.equal((await run()).notified, 2);
-  assert.deepEqual(pushes.sent.map((sent) => sent.endpoint), [PHONE, PHONE]);
-  assert.deepEqual(pushes.sent.map((sent) => phone.decrypt(sent.body).title).sort(), ["成立：2330 收盤站上月線", "成立：加權指數收盤跌破月線"]);
+  await add("stock_2454", { subject: "2454", label: "收盤跌破季線", visibility: "owner", params: JSON.stringify({ name: "聯發科", ma: 60 }),
+    result_note: "成立：11/19 收 3,700，跌破季線（3,720）。" });
+  assert.equal((await run()).notified, 3);
+  assert.deepEqual(pushes.sent.map((sent) => sent.endpoint), [PHONE, PHONE, PHONE]);
+  assert.deepEqual(pushes.sent.map((sent) => phone.decrypt(sent.body).title).sort(), ["成立：2330 收盤站上月線", "成立：加權指數收盤跌破月線", "成立：聯發科 2454 收盤跌破季線"]);
 });
 
 test("消息型的盯項在內文標明是 AI 讀新聞判斷", async () => {

@@ -434,10 +434,11 @@ STOCK_TRACK_RULES = """
 
 
 def _stock_watchable(offers: Mapping[str, Mapping[str, Any]] | None, codes: Sequence[str] | None = None) -> list[dict[str, Any]]:
-    """給模型看的站主個股清單：每一檔的現況與可以挑的條件（只有 id 與名稱；參數留在程式這邊）。codes 給了就只帶那幾檔。"""
+    """給模型看的站主個股清單：每一檔的現況與可以挑的條件（只有 id 與名稱；參數留在程式這邊）。codes 給了就只帶那幾檔。
+    最多 MY_STOCKS_MAX 檔（和 my_stocks 同一個上限）。"""
     return [{"code": code, "name": offer["name"], "now": offer["now"],
              "conditions": [{"id": row["id"], "name": row["name"]} for row in offer["conditions"]]}
-            for code, offer in (offers or {}).items() if codes is None or code in codes]
+            for code, offer in (offers or {}).items() if codes is None or code in codes][:MY_STOCKS_MAX]
 
 
 def _my_stocks(names: Mapping[str, str] | None) -> list[dict[str, str]]:

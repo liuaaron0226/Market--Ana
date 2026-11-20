@@ -179,6 +179,9 @@ test("站主個股的盯項與當天數字：已核准的朋友和還沒核准�
     over.days_left ?? null, over.status, over.result_date ?? null, over.result_note ?? null, over.show_until ?? null).run();
   await item("6789:below_ma20:2026-11-18", { status: "watching", days_left: 18 });
   await item("6789:above_high:2026-11-18", { status: "met", result_date: "2026-11-19", result_note: `${MARK}-result`, show_until: "2099-12-31" });
+  // 排程就算把其中一筆標錯成所有人可見，站主以外的人照樣拿不到
+  await item("6789:below_low:2026-11-18", { status: "watching", days_left: 18 });
+  await env.DB.prepare("UPDATE impact_watch_items SET visibility = 'all' WHERE id = '6789:below_low:2026-11-18'").run();
   await env.DB.prepare("INSERT INTO impact_watch_facts (subject, data_date, payload, updated_at) VALUES ('6789', '2026-11-19', ?, '2026-11-19T10:00:00Z')")
     .bind(JSON.stringify({ name: `${MARK}-facts`, close: 100 })).run();
   tripwires();
