@@ -105,6 +105,12 @@ with tempfile.TemporaryDirectory() as temp:
             assert "2330 台積電" in page.locator(".stock-suggest-group").nth(0).inner_text()
             page.screenshot(path=str(OUT / "search-suggestions-desktop.png"), full_page=False)
             report["checks"].append("search-order:recent-short-long")
+            # 鍵盤收起來（輸入框失去焦點）搜尋紀錄要還在（本人 2026-11-20：手機上一滑鍵盤收起、紀錄就不見了）
+            page.evaluate("document.getElementById('stockSearchInput').blur()")
+            page.wait_for_timeout(400)
+            assert page.locator("#stockSearchSuggestions").is_visible(), "輸入框失去焦點後搜尋紀錄不見了"
+            assert "2330 台積電" in page.locator(".stock-suggest-group").nth(0).inner_text()
+            report["checks"].append("search-suggestions:stay-after-blur")
 
             page.route("**/api/screens**", lambda route: route.abort())
             page.goto(base + "/minimal.html", wait_until="networkidle")

@@ -909,7 +909,10 @@
     const list = chipList(key), day = chipDay(key), token = ++drillToken;
     const target = () => els.panelBody.querySelector('#chipList'), title = els.panelBody.querySelector('#chipListTitle');
     if (!list || !title || !target()) return;
-    const name = shown => `${esc(shown)} <small class="num">${esc(shortDay(day))}</small>`;
+    // 日期只在看的不是最新那一天（在圖上點了別天）時才寫（本人 2026-11-20：重複的小字不要）
+    const series = chipSeries(key), today = nowDay(key);
+    const usual = today && series.some(row => row.date === today) ? today : series.length ? series[series.length - 1].date : '';
+    const name = shown => `${esc(shown)}${day && day !== usual ? ` <small class="num">${esc(shortDay(day))}</small>` : ''}`;
     title.innerHTML = name(list[0]);
     const fill = html => {
       if (token !== drillToken || !target()) return;
@@ -950,7 +953,7 @@
     return `<div class="chip-top${card.tone === 'mid' ? '' : ` tone-${card.tone}`}"><strong class="chip-value num">${esc(card.value)}</strong><span>${esc(card.read)}</span></div>
       <div class="chip-big">${clickableBars(key, chipDay(key))}</div>
       ${watch.length ? `<p class="chip-watch"><i>注意</i><span>${watch.map(esc).join(' ')}</span></p>` : ''}
-      ${lines.length ? `<div class="chip-points more-wrap"><ul>${lines.map((line, i) => `<li${i >= POINT_ROWS ? ' class="is-extra"' : ''}>${esc(line)}</li>`).join('')}</ul>${lines.length > POINT_ROWS ? moreButton(`還有 ${lines.length - POINT_ROWS} 點 ›`) : ''}<p class="read-date plain-note">${esc(plainFootnote(PL))}</p></div>` : ''}
+      ${lines.length ? `<div class="chip-points more-wrap"><ul>${lines.map((line, i) => `<li${i >= POINT_ROWS ? ' class="is-extra"' : ''}>${esc(line)}</li>`).join('')}</ul>${lines.length > POINT_ROWS ? moreButton(`還有 ${lines.length - POINT_ROWS} 點 ›`) : ''}${plainFootnote(PL) ? `<p class="read-date plain-note">${esc(plainFootnote(PL))}</p>` : ''}</div>` : ''}
       <div class="chip-list-head"><h4 id="chipListTitle"></h4>${sides ? segmented('side', sides.map((label, i) => [i, label]), chipSide()) : ''}</div>
       <div id="chipList"></div>`;
   }
@@ -1035,22 +1038,21 @@
     chart.addEventListener('pointercancel', event => finish(event, true));
     return () => performance.now() - releasedAt < BAR_STRAY_CLICK_MS;
   }
-  // 白話分析的小字：照實標資料日與來源（本人 11-17 起每天重寫；ai＝Gemini 寫、數字由程式核對，template＝程式依數字套句）。
+  // 白話分析的小字：只在有需要人知道的事時才寫（本人 2026-11-20「小字的壞習慣」「過期才顯示」；11-17 原本每次都標資料日與來源）。
+  //   1. 外資、期貨、融資融券哪一份比加權指數那天舊（晚公布），標它自己的日子；都同一天就不寫日期。
+  //   2. 模型沒寫成、改由程式套句（template）時說一聲；AI 正常寫成的不另外說明。
   function plainFootnote(pl) {
     if (!pl || !pl.data_dates) return '';
     const day = value => String(value || '').slice(5).replace('-', '/');
     const price = pl.data_dates.price_and_foreign;
-    // 資料日以加權指數那天為準；外資、期貨、融資融券哪一份比它晚公布，就另外標它自己的日子
     const late = [['foreign', '外資'], ['futures', '期貨'], ['margin', '融資融券']]
       .filter(([key]) => pl.data_dates[key] && pl.data_dates[key] < price)
       .map(([key, label]) => `${label} ${day(pl.data_dates[key])}`);
-    const dates = `資料 ${day(price)}${late.length ? `（${late.join('、')}）` : ''}`;
-    const from = pl.source === 'ai' ? 'AI 整理，數字已由程式核對' : pl.source === 'template' ? '依當天數字自動整理' : '';
-    return from ? `${dates}・${from}` : dates;
+    return [late.length ? `較舊的資料：${late.join('、')}` : '', pl.source === 'template' ? '依當天數字自動整理' : ''].filter(Boolean).join('・');
   }
   function renderPlainPanel() {
     if (!PL) return '';
-    return `<p class="read-line big">${esc(PL.one_line)}</p>${PL.points.map(p => `<section class="plain-group"><h4>${esc(p.title)}</h4><ul>${p.lines.map(l => `<li>${esc(l)}</li>`).join('')}</ul></section>`).join('')}<section class="plain-group plain-watch"><h4>要擔心</h4><ul>${PL.worry.map(l => `<li>${esc(l)}</li>`).join('')}</ul></section><section class="plain-group"><h4>什麼時候比較安心</h4><ul>${PL.relief.map(l => `<li>${esc(l)}</li>`).join('')}</ul></section><p class="read-date plain-note">${esc(plainFootnote(PL))}</p>`;
+    return `<p class="read-line big">${esc(PL.one_line)}</p>${PL.points.map(p => `<section class="plain-group"><h4>${esc(p.title)}</h4><ul>${p.lines.map(l => `<li>${esc(l)}</li>`).join('')}</ul></section>`).join('')}<section class="plain-group plain-watch"><h4>要擔心</h4><ul>${PL.worry.map(l => `<li>${esc(l)}</li>`).join('')}</ul></section><section class="plain-group"><h4>什麼時候比較安心</h4><ul>${PL.relief.map(l => `<li>${esc(l)}</li>`).join('')}</ul></section>${plainFootnote(PL) ? `<p class="read-date plain-note">${esc(plainFootnote(PL))}</p>` : ''}`;
   }
 
   function renderCandlePanel(index) {
@@ -1346,7 +1348,9 @@
     els.panelNav.hidden = true;
     if (!els.panelBody.dataset.moreBound) { els.panelBody.dataset.moreBound = '1'; }
     els.panelNav.querySelectorAll('button').forEach(button => button.removeAttribute('aria-current'));
-    els.panelPath.textContent = panelTrail.length ? `${panelTrail.at(-1).title} / 細部` : '細部';
+    // 標題上面那行小字只在「從另一張明細點進來」時寫上一層的名字；單獨一層時不寫「細部」（本人 2026-11-20：廢話小字）
+    els.panelPath.textContent = panelTrail.length ? panelTrail.at(-1).title : '';
+    els.panelPath.hidden = !els.panelPath.textContent;
     els.panelTitle.textContent = panelTitleFor(panelState.kind, panelState.payload);
     if (panelState.kind === 'candle') els.panelBody.innerHTML = renderCandlePanel(panelState.payload.index);
     else if (panelState.kind === 'line') {
@@ -1372,7 +1376,8 @@
     panelState.layer = 2;
     panelState.subkind = kind;
     updatePanelBack();
-    els.panelPath.textContent = `${panelTitleFor(panelState.kind, panelState.payload)} / 深入`;
+    els.panelPath.textContent = panelTitleFor(panelState.kind, panelState.payload);
+    els.panelPath.hidden = false;
     els.panelNav.querySelectorAll('button').forEach(button => button.toggleAttribute('aria-current', button.dataset.layer === kind));
     if (kind === 'method') renderMethodLayer();
     else if (kind === 'sources') renderSourcesLayer();
@@ -2114,9 +2119,9 @@
   input.addEventListener('keydown', event => {
     if (event.key === 'Escape') { suggestions.hidden = true; input.blur(); }
   });
-  input.addEventListener('blur', () => window.setTimeout(() => {
-    if (!suggestions.contains(document.activeElement)) suggestions.hidden = true;
-  }, 120));
+  // 搜尋紀錄與建議不跟著鍵盤走（本人 2026-11-20：手指一滑鍵盤收起來，紀錄就不見了）：
+  // 輸入框失去焦點不再把它藏起來；只有開始打字、按 Esc 才收。面板一打開就載入，不必先點輸入框叫出鍵盤。
+  document.getElementById('searchToggle')?.addEventListener('click', () => { if (!input.value.trim()) loadSuggestions(); });
   form.addEventListener('submit', event => {
     event.preventDefault();
     window.clearTimeout(debounceTimer);

@@ -20,18 +20,19 @@ function extract(name) {
 const plainFootnote = new Function(`${extract("plainFootnote")}; return plainFootnote;`)();
 const ai = { source: "ai", data_dates: { price_and_foreign: "2026-11-17", margin: "2026-11-17" } };
 
-test("AI 寫的：標資料日，並說明數字已核對", () => {
-  assert.equal(plainFootnote(ai), "資料 11/17・AI 整理，數字已由程式核對");
+// 本人 2026-11-20 改：小字只在有需要人知道的事時才寫（資料都同一天、AI 正常寫成，就不寫）。
+test("AI 寫的、資料都同一天：不寫小字", () => {
+  assert.equal(plainFootnote(ai), "");
 });
 
-test("融資融券晚一天公布：另外標它自己的日期", () => {
+test("融資融券晚一天公布：只標比較舊的那一份", () => {
   assert.equal(plainFootnote({ ...ai, data_dates: { price_and_foreign: "2026-11-17", margin: "2026-11-14" } }),
-    "資料 11/17（融資融券 11/14）・AI 整理，數字已由程式核對");
+    "較舊的資料：融資融券 11/14");
 });
 
 test("外資或期貨晚一天：各自標出來，順序固定", () => {
   const dates = { price_and_foreign: "2026-11-17", foreign: "2026-11-14", futures: "2026-11-14", margin: "2026-11-14" };
-  assert.equal(plainFootnote({ ...ai, data_dates: dates }), "資料 11/17（外資 11/14、期貨 11/14、融資融券 11/14）・AI 整理，數字已由程式核對");
+  assert.equal(plainFootnote({ ...ai, data_dates: dates }), "較舊的資料：外資 11/14、期貨 11/14、融資融券 11/14");
 });
 
 test("首頁卡片的資料日那一行也用同一行小字", () => {
@@ -40,12 +41,12 @@ test("首頁卡片的資料日那一行也用同一行小字", () => {
 
 test("模型沒寫成、改用程式套句：不冒充 AI", () => {
   const note = plainFootnote({ ...ai, source: "template" });
-  assert.equal(note, "資料 11/17・依當天數字自動整理");
+  assert.equal(note, "依當天數字自動整理");
   assert.doesNotMatch(note, /AI/);
 });
 
-test("人寫的舊版沒有來源欄：只標資料日", () => {
-  assert.equal(plainFootnote({ data_dates: ai.data_dates }), "資料 11/17");
+test("人寫的舊版沒有來源欄、資料同一天：不寫小字", () => {
+  assert.equal(plainFootnote({ data_dates: ai.data_dates }), "");
   assert.equal(plainFootnote(null), "");
 });
 
