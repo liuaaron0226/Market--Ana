@@ -353,6 +353,111 @@ def with_track(picks_for):
     return tmn.Reply(change)
 
 
+class PlainTests(unittest.TestCase):
+    """票 07：首頁白話分析挑的條件，在每日檢查之後建成盯項；和消息建的去重。"""
+
+    def setUp(self):
+        self.db = Db()
+        self.facts = facts(FALLING, nets=(120, -80, -60))
+
+    def analysis(self):
+        return {"daily": daily(FALLING), "institutional": flows((120, -80, -60))}
+
+    def plain(self, track=({"id": "foreign_turn_buy", "note": "外資回頭買，賣壓才算解除。"}, {"id": "above_ma20", "note": None}), **over):
+        return {"schema": "market-plain/v3", "id": "20261118-plain-ai", "source": "ai", "data_dates": {"price_and_foreign": "2026-11-18"},
+                "prepare": ["如果外資現貨轉為買超，就先確認期貨空單有沒有跟著減少。"], "track": list(track), **over}
+
+    def run_check(self, plain, **kwargs):
+        return iw.check(self.analysis(), now=NOW, query=self.db.query, execute=self.db.execute, holidays=HOLIDAYS, plain=plain, **kwargs)
+
+    def test_what_the_plain_analysis_picked_becomes_items_from_that_source(self):
+        report = self.run_check(self.plain())
+        rows = {row["condition_key"]: row for row in self.db.items()}
+        self.assertEqual(sorted(rows), ["above_ma20", "foreign_turn_buy"])
+        turn = rows["foreign_turn_buy"]
+        self.assertEqual((turn["source_block"], turn["source_date"], turn["source_ref"], turn["subject"], turn["kind"], turn["status"],
+                          turn["visibility"], turn["impact"]),
+                         ("plain_daily", "2026-11-18", "20261118-plain-ai", "market", "numeric", "watching", "all", iw.PLAIN_IMPACT))
+        self.assertEqual((turn["label"], turn["note"]), ("外資由賣超轉為買超", "外資回頭買，賣壓才算解除。"))
+        self.assertEqual(json.loads(turn["prepare"]), ["如果外資現貨轉為買超，就先確認期貨空單有沒有跟著減少。"])
+        self.assertEqual(turn["expires_on"], td.add_trading_days("2026-11-18", iw.EXPIRE_TRADING_DAYS, HOLIDAYS))
+        self.assertEqual(sorted(report["plain"]["created"]), ["market:above_ma20:2026-11-18", "market:foreign_turn_buy:2026-11-18"])
+
+    def test_a_condition_the_news_already_watches_is_not_built_again(self):
+        self.db.create([pick("foreign_turn_buy", self.facts)], trade_date="2026-11-18")
+        report = self.run_check(self.plain())
+        rows = self.db.items("condition_key = 'foreign_turn_buy'")
+        self.assertEqual([row["source_block"] for row in rows], ["market_news"])
+        self.assertEqual((report["plain"]["already_watching"], report["plain"]["created"]), (1, ["market:above_ma20:2026-11-18"]))
+
+    def test_running_the_check_again_the_same_day_changes_nothing(self):
+        self.run_check(self.plain())
+        before = self.db.items()
+        report = self.run_check(self.plain())
+        self.assertEqual(self.db.items(), before)
+        self.assertEqual(report["plain"]["created"], [])
+
+    def test_the_program_text_or_another_days_analysis_builds_nothing(self):
+        for plain in (self.plain(source="template"), self.plain(data_dates={"price_and_foreign": "2026-11-17"}),
+                      {key: value for key, value in self.plain().items() if key != "source"}, None, "壞掉", self.plain(track="壞掉")):
+            with self.subTest(plain=str(plain)[:50]):
+                report = self.run_check(plain)
+                self.assertEqual(self.db.items(), [])
+                self.assertNotIn("plain", report)
+
+    def test_ids_and_numbers_come_from_todays_list_not_from_the_file(self):
+        report = self.run_check(self.plain(track=[{"id": "below_ma20", "note": "今天的清單沒有這個（指數已經在月線之下）"},
+                                                   {"id": "above_high", "note": "x", "params": {"level": 1}, "name": "亂寫的名稱"}, "above_ma20", 7]))
+        rows = self.db.items()
+        self.assertEqual([row["condition_key"] for row in rows], ["above_high"])
+        self.assertEqual(json.loads(rows[0]["params"])["level"], self.facts["high"])
+        self.assertNotIn("亂寫", rows[0]["label"])
+        self.assertEqual(report["plain"]["created"], ["market:above_high:2026-11-18"])
+
+    def test_todays_new_items_are_judged_from_the_next_trading_day(self):
+        self.run_check(self.plain())
+        self.assertEqual([row["status"] for row in self.db.items()], ["watching", "watching"])
+        later = {"daily": daily(FALLING + [50000], end="2026-11-19"), "institutional": flows((120, -80, -60, 300), end="2026-11-19")}
+        report = iw.check(later, now=NOW, query=self.db.query, execute=self.db.execute, holidays=HOLIDAYS)
+        self.assertEqual(sorted(row["id"] for row in report["met"]), ["market:above_ma20:2026-11-18", "market:foreign_turn_buy:2026-11-18"])
+
+    def test_a_dry_run_reports_without_writing(self):
+        report = self.run_check(self.plain(), dry_run=True)
+        self.assertEqual(self.db.items(), [])
+        self.assertEqual(len(report["plain"]["created"]), 2)
+
+    def test_a_failed_write_keeps_the_days_results(self):
+        self.db.create([pick("above_ma20", self.facts)], trade_date="2026-11-17")
+        calls = []
+
+        def execute(script):
+            calls.append(script)
+            if len(calls) > 1:
+                raise RuntimeError("D1 寫不進去")
+            self.db.execute(script)
+
+        report = iw.check(self.analysis(), now=NOW, query=self.db.query, execute=execute, holidays=HOLIDAYS, plain=self.plain())
+        self.assertEqual((report["status"], report["plain"]), ("ok", {"error": "RuntimeError"}))
+        self.assertEqual(self.db.query("SELECT data_date FROM impact_watch_facts"), [{"data_date": "2026-11-18"}])
+
+    def test_the_command_reads_the_plain_file_next_to_the_market_data(self):
+        import tempfile
+        from unittest import mock
+
+        import watch_news as wn
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            (folder / "analysis-data.js").write_text("window.MARKET_ANALYSIS = " + json.dumps(self.analysis()) + ";\n", encoding="utf-8")
+            with mock.patch.object(wn, "_wrangler_query", self.db.query), mock.patch.object(wn, "_wrangler_execute", self.db.execute), \
+                    mock.patch("builtins.print"):
+                self.assertEqual(iw.main(["check", "--analysis", str(folder / "analysis-data.js")]), 0, "沒有白話分析檔也照樣檢查")
+                self.assertEqual(self.db.items(), [])
+                (folder / "plain-data.js").write_text("window.MARKET_PLAIN = " + json.dumps(self.plain(), ensure_ascii=False) + ";\n",
+                                                      encoding="utf-8")
+                self.assertEqual(iw.main(["check", "--analysis", str(folder / "analysis-data.js")]), 0)
+        self.assertEqual(sorted(row["condition_key"] for row in self.db.items()), ["above_ma20", "foreign_turn_buy"])
+
+
 class NewsD1(tmn.D1):
     def __init__(self, day_facts=None, schema=tmn.SCHEMA + SCHEMA_0034):
         super().__init__(schema)

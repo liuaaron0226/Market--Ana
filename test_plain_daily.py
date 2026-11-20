@@ -47,7 +47,9 @@ def market(*, foreign_today=-911.88, foreign_prev=-1024.61, trust_today=266.58, 
               for i, d in enumerate(recent)]
     margin[-2].update({"margin_balance_billion": margin_prev, "short_units": short_prev})
     margin[-1].update({"margin_balance_billion": margin_now, "short_units": short_now})
-    analysis = {"meta": {"cutoff_date": "2026-11-06"}, "daily": daily}
+    # 三大法人（元）：盯項的可盯條件清單用它算外資連續買賣超
+    institutional = [{"date": row["date"], "foreign": {"net": row["net_billion"] * 100_000_000}} for row in foreign]
+    analysis = {"meta": {"cutoff_date": "2026-11-06"}, "daily": daily, "institutional": institutional}
     chips = {"analysis_cutoff": "2026-11-06", "margin_latest_date": recent[-1],
              "foreign": foreign, "futures": futures, "margin": margin}
     return analysis, chips
@@ -66,10 +68,14 @@ def numbers_in(text: str) -> list[str]:
 
 
 def all_text(plain) -> list[str]:
-    texts = [plain["one_line"], *plain["worry"], *plain["relief"]]
+    texts = [plain["one_line"], plain.get("effect", ""), *plain.get("prepare", [])]
     for point in plain["points"]:
-        texts += [point["title"], *point["lines"]]
+        texts += [point["title"], *point["lines"], point.get("effect", ""), *point.get("prepare", [])]
     return texts
+
+
+def watchable():
+    return pd.watchable_conditions(market()[0])
 
 
 def good_ai(**overrides):
@@ -78,15 +84,22 @@ def good_ai(**overrides):
         "data_date": "2026-11-06",
         "one_line": "短線還是偏空；{foreign_streak}，期貨空單也在加。",
         "points": [
-            {"key": "foreign", "title": "現貨和期貨都在偏空", "lines": ["{foreign_streak}，{foreign_today}。", "{futures_net}，{futures_week}。"]},
-            {"key": "trust", "title": "有在買但抵不過", "lines": ["{trust_5d}，{trust_vs_foreign}。"]},
-            {"key": "margin", "title": "借錢買股的錢大減", "lines": ["{margin_balance}，{margin_change}。"]},
-            {"key": "short", "title": "大跌當天空單回補", "lines": ["{short_units}，{short_change}。"]},
-            {"key": "position", "title": "短線很弱", "lines": ["今天{close}，{index_change}。"]},
-            {"key": "volume", "title": "換手很劇烈", "lines": ["{amount}，{amount_ratio}，{close_in_range}。"]},
+            {"key": "foreign", "title": "現貨和期貨都在偏空", "lines": ["{foreign_streak}，{foreign_today}。", "{futures_net}，{futures_week}。"],
+             "effect": "賣壓主要來自外資，權值股最先受影響。", "prepare": "如果{foreign_streak}還沒停，就先確認期貨空單有沒有跟著加。"},
+            {"key": "trust", "title": "有在買但抵不過", "lines": ["{trust_5d}，{trust_vs_foreign}。"],
+             "effect": "投信的買盤只能減緩跌勢。", "prepare": ""},
+            {"key": "margin", "title": "借錢買股的錢大減", "lines": ["{margin_balance}，{margin_change}。"],
+             "effect": "槓桿變低，之後的賣壓會減輕。", "prepare": "如果融資繼續減少，就先檢查手上有沒有用融資買的股票。"},
+            {"key": "short", "title": "大跌當天空單回補", "lines": ["{short_units}，{short_change}。"],
+             "effect": "放空的人先買回，短線少了回補的買盤。", "prepare": ""},
+            {"key": "position", "title": "短線很弱", "lines": ["今天{close}，{index_change}。"],
+             "effect": "指數在均線之下，反彈容易遇到賣壓。", "prepare": "如果收盤站回{ma20_line}，就先確認外資有沒有同步轉買。"},
+            {"key": "volume", "title": "換手很劇烈", "lines": ["{amount}，{amount_ratio}，{close_in_range}。"],
+             "effect": "量大代表換手劇烈，方向還要再看。", "prepare": ""},
         ],
-        "worry": ["外資期貨空單還在增加。", "收盤跌破{day_low}，長下影就失效。"],
-        "relief": ["外資現貨轉為買超，或期貨空單開始減少。"],
+        "effect": "外資賣壓還沒解除，指數與權值股短線容易繼續受壓。",
+        "prepare": ["如果收盤跌破{day_low}，就先檢查手上持股的支撐在哪裡。", "如果外資現貨轉為買超，就先確認期貨空單有沒有跟著減少。"],
+        "track": [{"id": "foreign_turn_buy", "why": "外資回頭買，賣壓才算解除。"}, {"id": "below_low", "why": "跌破就代表長下影失效。"}],
     }
     output.update(overrides)
     return output
@@ -201,8 +214,38 @@ class TemplateTest(unittest.TestCase):
                     self.assertEqual(subject, pd.SUBJECTS[point["key"]])
                     self.assertTrue(judgement)
                     self.assertTrue(point["lines"])
-                self.assertTrue(plain["one_line"] and plain["worry"] and plain["relief"])
+                self.assertTrue(plain["one_line"])
                 self.assertEqual(plain["source"], "template")
+
+    def test_the_program_text_still_says_the_effect_and_what_to_prepare(self):
+        # 票 07：模型沒寫成時畫面照樣有「影響」與「準備」；準備只寫「如果…就…」
+        for name, kwargs in self.SCENARIOS.items():
+            with self.subTest(name):
+                plain = pd.template_plain(pd.build_facts(*market(**kwargs)))
+                self.assertTrue(plain["effect"])
+                self.assertTrue(1 <= len(plain["prepare"]) <= pd.PREPARE_MAX)
+                for point in plain["points"]:
+                    self.assertTrue(point["effect"], point["key"])
+                    self.assertEqual(len(point["prepare"]), 1, point["key"])
+                for line in [*plain["prepare"], *(line for point in plain["points"] for line in point["prepare"])]:
+                    self.assertRegex(line, r"^如果.+，就.+。$")
+
+    def test_the_program_text_never_picks_conditions_to_watch(self):
+        for name, kwargs in self.SCENARIOS.items():
+            with self.subTest(name):
+                plain = pd.template_plain(pd.build_facts(*market(**kwargs)))
+                self.assertNotIn("track", plain)
+                self.assertNotIn("conditions", plain)
+                self.assertNotIn("worry", plain)
+                self.assertNotIn("relief", plain)
+
+    def test_a_point_without_its_number_has_no_empty_effect(self):
+        analysis, chips = market()
+        for row in analysis["daily"]:
+            row.pop("amount")
+        volume = pd.template_plain(pd.build_facts(analysis, chips))["points"][-1]
+        self.assertNotIn("effect", volume)
+        self.assertNotIn("prepare", volume)
 
     def test_every_number_in_the_template_comes_from_a_fact(self):
         for name, kwargs in self.SCENARIOS.items():
@@ -225,26 +268,30 @@ class TemplateTest(unittest.TestCase):
         self.assertEqual(bundle["signals"]["trust_5d"], 0)
         self.assertEqual(pd.template_plain(bundle)["points"][1]["title"], "投信：幾乎沒動作")
 
-    def test_foreign_worry_says_foreign_so_the_chip_panel_can_find_it(self):
-        plain = pd.template_plain(pd.build_facts(*market()))
-        self.assertTrue(any("外資" in item for item in plain["worry"]))
+    def test_the_schema_version_changed_with_the_fields(self):
+        self.assertEqual(pd.template_plain(pd.build_facts(*market()))["schema"], "market-plain/v3")
 
 
 class ValidateTest(unittest.TestCase):
     def setUp(self):
         self.bundle = pd.build_facts(*market())
 
-    def check(self, output):
-        return pd.validate(output, self.bundle)
+    def check(self, output, **kwargs):
+        return pd.validate(output, self.bundle, watchable=watchable(), **kwargs)
 
     def test_a_good_answer_is_rendered_with_checked_numbers(self):
-        plain, problems = self.check(good_ai())
-        self.assertEqual(problems, [])
+        dropped = []
+        plain, problems = self.check(good_ai(), dropped=dropped)
+        self.assertEqual((problems, dropped), ([], []))
         foreign = plain["points"][0]
         self.assertEqual(foreign["title"], "外資：現貨和期貨都在偏空")
         self.assertEqual(foreign["lines"][0], "現貨連 60 天賣超，現貨今天賣超 912 億。")
         self.assertEqual(plain["one_line"], "短線還是偏空；外資現貨連 60 天賣超，期貨空單也在加。")
-        self.assertEqual(plain["worry"][1], "收盤跌破今天盤中最低 37,837 點，長下影就失效。")
+        self.assertEqual(plain["effect"], "外資賣壓還沒解除，指數與權值股短線容易繼續受壓。")
+        self.assertEqual(plain["prepare"][0], "如果收盤跌破今天盤中最低 37,837 點，就先檢查手上持股的支撐在哪裡。")
+        self.assertEqual(foreign["effect"], "賣壓主要來自外資，權值股最先受影響。")
+        self.assertEqual(foreign["prepare"], ["如果現貨連 60 天賣超還沒停，就先確認期貨空單有沒有跟著加。"])
+        self.assertNotIn("prepare", plain["points"][1], "空字串＝這一點沒有準備")
         self.assertFalse(re.search(r"\{[a-z0-9_]+\}", json.dumps(plain, ensure_ascii=False)))
 
     def test_points_come_back_in_the_page_order(self):
@@ -288,10 +335,12 @@ class ValidateTest(unittest.TestCase):
         output["points"][1]["key"] = "foreign"
         self.assertIn("六", self.rejected(output))
         self.assertIn("資料日", self.rejected(good_ai(data_date="2026-11-05")))
-        self.assertIn("欄位", self.rejected({**good_ai(), "extra": 1}))
         output = good_ai()
         output["points"][0]["title"] = "外資：偏空"
         self.assertIn("冒號", self.rejected(output))
+        output = good_ai()
+        del output["one_line"]
+        self.assertIn("欄位", self.rejected(output))
 
     def test_banned_words_and_contradictions_are_rejected(self):
         self.assertIn("禁止", self.rejected(good_ai(one_line="模型認為短線偏空。")))
@@ -302,9 +351,120 @@ class ValidateTest(unittest.TestCase):
         output["points"][3]["lines"] = ["融券增加，放空的人變多。"]
         self.assertIn("矛盾", self.rejected(output))
 
-    def test_conditions_in_worry_and_relief_may_name_the_opposite_direction(self):
-        plain, problems = self.check(good_ai(relief=["外資轉買，或期貨空單減少。"]))
+    def test_what_to_prepare_may_name_the_opposite_direction(self):
+        dropped = []
+        plain, problems = self.check(good_ai(prepare=["如果外資轉買、期貨空單減少，就先確認成交量有沒有跟上。"]), dropped=dropped)
+        self.assertEqual((problems, dropped), ([], []))
+
+
+class NewWritingTest(unittest.TestCase):
+    """票 07：影響／要看的條件／準備。這幾段寬鬆——少寫、多寫、寫壞一句都不讓整份作廢。"""
+
+    def setUp(self):
+        self.bundle = pd.build_facts(*market())
+        self.dropped, self.unknown = [], []
+
+    def check(self, output):
+        plain, problems = pd.validate(output, self.bundle, watchable=watchable(), dropped=self.dropped, unknown=self.unknown)
         self.assertEqual(problems, [])
+        return plain
+
+    def test_picked_conditions_are_named_by_the_program_with_the_models_reason(self):
+        plain = self.check(good_ai())
+        self.assertEqual(plain["conditions"], ["外資由賣超轉為買超：外資回頭買，賣壓才算解除。",
+                                               "加權指數收盤跌破近 20 日低點（37,837）：跌破就代表長下影失效。"])
+        self.assertEqual(plain["track"], [{"id": "foreign_turn_buy", "note": "外資回頭買，賣壓才算解除。"},
+                                          {"id": "below_low", "note": "跌破就代表長下影失效。"}])
+
+    def test_the_list_offered_is_the_one_the_daily_check_builds(self):
+        import impact_watch
+        analysis, _ = market()
+        offered = impact_watch.candidates(impact_watch.market_facts(analysis["daily"], analysis["institutional"]))
+        self.assertEqual(watchable(), offered)
+        self.assertIn("foreign_sell_streak", [row["id"] for row in offered])
+
+    def test_an_id_that_is_not_on_the_list_is_dropped_and_the_rest_kept(self):
+        plain = self.check(good_ai(track=[{"id": "tsmc_above_1000", "why": "自己編的"}, {"id": "below_low"}, "above_ma20"]))
+        self.assertEqual([row["id"] for row in plain["track"]], ["below_low", "above_ma20"])
+        self.assertEqual(plain["conditions"][0], "加權指數收盤跌破近 20 日低點（37,837）", "沒附說明就只寫條件")
+        self.assertEqual(self.unknown, ["tsmc_above_1000"])
+
+    def test_at_most_two_conditions_and_never_the_same_one_twice(self):
+        plain = self.check(good_ai(track=[{"id": "below_low"}, {"id": "below_low"}, {"id": "above_ma20"}, {"id": "above_ma60"}]))
+        self.assertEqual([row["id"] for row in plain["track"]], ["below_low", "above_ma20"])
+
+    def test_no_list_means_no_conditions(self):
+        plain, problems = pd.validate(good_ai(), self.bundle)
+        self.assertEqual(problems, [])
+        self.assertNotIn("track", plain)
+        self.assertNotIn("conditions", plain)
+
+    def test_missing_new_fields_do_not_void_the_answer(self):
+        output = good_ai()
+        for field in ("effect", "prepare", "track"):
+            del output[field]
+        for point in output["points"]:
+            del point["effect"], point["prepare"]
+        plain = self.check(output)
+        self.assertEqual(plain["one_line"], "短線還是偏空；外資現貨連 60 天賣超，期貨空單也在加。")
+        self.assertEqual(sorted(plain), ["one_line", "points"])
+        self.assertEqual(self.dropped, [])
+
+    def test_extra_fields_are_ignored(self):
+        output = {**good_ai(), "extra": 1, "worry": ["舊欄位"], "prepare": ["如果外資轉買，就先確認期貨。"] * 5}
+        output["points"][0]["note"] = "多寫的"
+        plain = self.check(output)
+        self.assertNotIn("extra", plain)
+        self.assertNotIn("worry", plain)
+        self.assertNotIn("note", plain["points"][0])
+        self.assertEqual(len(plain["prepare"]), pd.PREPARE_MAX)
+
+    def test_a_buy_or_sell_instruction_only_loses_that_sentence(self):
+        output = good_ai(effect="外資賣壓重，建議先減碼權值股。",
+                         prepare=["如果外資轉買，就進場加碼。", "如果收盤跌破{day_low}，就先檢查手上持股的支撐在哪裡。"])
+        output["points"][2]["prepare"] = "如果融資繼續減少，就停損出場。"
+        plain = self.check(output)
+        self.assertNotIn("effect", plain)
+        self.assertEqual(plain["prepare"], ["如果收盤跌破今天盤中最低 37,837 點，就先檢查手上持股的支撐在哪裡。"])
+        self.assertNotIn("prepare", plain["points"][2])
+        self.assertEqual(plain["points"][2]["effect"], "槓桿變低，之後的賣壓會減輕。", "同一點的其他句子留著")
+        self.assertEqual(len(self.dropped), 3)
+        self.assertTrue(all("買賣指令" in reason for reason in self.dropped))
+        self.assertIn("建議先減碼權值股", self.dropped[-2], "原因帶著被退回的那一句，重問時告訴模型")
+
+    def test_describing_what_others_sold_is_not_an_instruction(self):
+        plain = self.check(good_ai(effect="外資賣出權值股，指數短線容易受壓。", prepare=["如果外資持續賣出，就先檢查手上權值股佔多少。"]))
+        self.assertEqual(plain["effect"], "外資賣出權值股，指數短線容易受壓。")
+        self.assertEqual(self.dropped, [])
+
+    def test_prepare_has_to_be_an_if_then_and_numbers_are_still_checked(self):
+        plain = self.check(good_ai(prepare=["先檢查手上持股。", "如果跌破 37,837 點，就先檢查持股。"]))
+        self.assertNotIn("prepare", plain)
+        self.assertIn("如果…就…", self.dropped[0])
+        self.assertIn("數字", self.dropped[1])
+
+    def test_a_points_effect_can_only_use_its_own_numbers(self):
+        output = good_ai()
+        output["points"][1]["effect"] = "投信{foreign_today}。"
+        plain = self.check(output)
+        self.assertNotIn("effect", plain["points"][1])
+        self.assertIn("不屬於", self.dropped[0])
+
+    def test_a_bad_reason_is_dropped_but_the_condition_is_still_watched(self):
+        plain = self.check(good_ai(track=[{"id": "below_low", "why": "跌破就建議停損出場。"}]))
+        self.assertEqual(plain["track"], [{"id": "below_low", "note": None}])
+        self.assertEqual(len(self.dropped), 1)
+
+    def test_the_prompt_lists_the_conditions_and_forbids_orders(self):
+        prompt = pd.build_prompt(self.bundle, watchable())
+        self.assertIn("WATCHABLE:", prompt)
+        self.assertIn('"id":"foreign_turn_buy"', prompt)
+        self.assertNotIn("params", prompt, "參數不給模型")
+        self.assertIn("不能寫買賣指令或個人化投資建議", prompt)
+        self.assertIn("如果…就…", prompt)
+        without = pd.build_prompt(self.bundle)
+        self.assertNotIn("WATCHABLE:", without)
+        self.assertIn("不要寫 track", without)
 
 
 class ProduceTest(unittest.TestCase):
@@ -340,17 +500,83 @@ class ProduceTest(unittest.TestCase):
         self.assertEqual(len(self.calls), 1)
         self.assertEqual(self.calls[0][1], pd.OUTPUT_SCHEMA)
         self.assertEqual((audit["source"], audit["model"], audit["effort"]), ("ai", pd.MODEL_DEFAULT, pd.EFFORT_DEFAULT))
+        self.assertEqual((plain["schema"], audit["attempts"], audit["dropped"], audit["filled"]),
+                         ("market-plain/v3", 1, [], ["trust.prepare", "short.prepare", "volume.prepare"]))
+        self.assertEqual(audit["watch"], {"offered": 7, "picked": ["foreign_turn_buy", "below_low"], "unknown_ids": []})
+        self.assertIn("WATCHABLE:", self.calls[0][0])
+        self.assertTrue(plain["conditions"] and plain["track"] and plain["effect"] and plain["prepare"])
 
-    def test_on_with_a_failed_or_bad_answer_falls_back_to_the_template(self):
-        for result in (("model_failed", None, "結束碼 1"), ("ok", good_ai(one_line="外資賣超九百億。"), ""), RuntimeError("boom")):
+    def test_a_model_that_never_answers_is_not_asked_again(self):
+        for result in (("model_failed", None, "結束碼 1"), RuntimeError("boom")):
             with self.subTest(result=str(result)[:40]):
                 self.calls = []
                 plain, audit = pd.produce(self.analysis, self.chips, mode="on", ask_model=self.asker(result))
                 self.assertEqual(plain["source"], "template")
                 self.assertIsNone(plain["model"])
-                self.assertTrue(plain["fallback_reason"])
+                self.assertEqual(plain["fallback_reason"], "模型沒有回來")
                 self.assertEqual(audit["source"], "template")
-                self.assertEqual(len(self.calls), 1, "失敗不重試，一天只用一次額度")
+                self.assertEqual(len(self.calls), 1, "模型沒回來不重試")
+                self.assertNotIn("track", plain, "程式套句不產生盯項")
+
+    def test_a_rejected_answer_is_asked_again_with_the_reason(self):
+        bad = good_ai(one_line="外資賣超九百億。")
+        plain, audit = pd.produce(self.analysis, self.chips, mode="on", ask_model=self.asker(("ok", bad, ""), ("ok", good_ai(), "")))
+        self.assertEqual(plain["source"], "ai")
+        self.assertEqual((len(self.calls), audit["attempts"]), (2, 2))
+        self.assertIn("【上一次的回答被退回，請整份重寫】", self.calls[1][0])
+        self.assertIn("one_line：自由文字不得包含數字", self.calls[1][0])
+        self.assertTrue(self.calls[1][0].startswith(self.calls[0][0]), "重問是原本的提示加上原因")
+        self.assertEqual(audit["rejected"], [])
+        self.assertIn("數字", audit["retry"][0])
+
+    def test_rejected_twice_falls_back_to_the_program_text(self):
+        bad = good_ai(one_line="外資賣超九百億。")
+        plain, audit = pd.produce(self.analysis, self.chips, mode="on", ask_model=self.asker(("ok", bad, "")))
+        self.assertEqual((plain["source"], plain["fallback_reason"], audit["failure"]), ("template", "核對沒過", "validation_failed"))
+        self.assertEqual(len(self.calls), pd.CALL_ATTEMPTS)
+        self.assertTrue(audit["rejected"])
+        self.assertTrue(plain["effect"] and plain["prepare"])
+
+    def test_an_order_in_the_new_fields_is_asked_again_then_only_that_sentence_is_dropped(self):
+        pushy = good_ai(prepare=["如果外資轉買，就進場加碼。"])
+        plain, audit = pd.produce(self.analysis, self.chips, mode="on", ask_model=self.asker(("ok", pushy, "")))
+        self.assertEqual(plain["source"], "ai", "一句不合格不賠掉整份")
+        self.assertEqual(len(self.calls), 2)
+        self.assertIn("買賣指令", self.calls[1][0])
+        self.assertIn("就進場加碼", self.calls[1][0])
+        self.assertEqual(plain["prepare"], pd.template_plain(pd.build_facts(self.analysis, self.chips))["prepare"], "丟掉後用程式那一份補上")
+        self.assertIn("prepare", audit["filled"])
+        self.assertEqual(len(audit["dropped"]), 1)
+        self.assertNotIn("加碼", json.dumps(plain, ensure_ascii=False))
+
+    def test_a_worse_second_answer_keeps_the_first(self):
+        pushy = good_ai(prepare=["如果外資轉買，就進場加碼。", "如果收盤跌破{day_low}，就先檢查手上持股的支撐在哪裡。"])
+        for second in (("ok", good_ai(one_line="外資賣超九百億。"), ""), ("model_timeout", None, "超過")):
+            with self.subTest(second=second[0] + str(second[2])):
+                self.calls = []
+                plain, audit = pd.produce(self.analysis, self.chips, mode="on", ask_model=self.asker(("ok", pushy, ""), second))
+                self.assertEqual((plain["source"], audit["failure"]), ("ai", None))
+                self.assertEqual(plain["prepare"], ["如果收盤跌破今天盤中最低 37,837 點，就先檢查手上持股的支撐在哪裡。"])
+
+    def test_a_model_that_writes_only_the_old_fields_gets_the_program_effect_and_prepare(self):
+        old = good_ai(worry=["外資期貨空單還在增加。"], relief=["外資現貨轉為買超。"])
+        for field in ("effect", "prepare", "track"):
+            del old[field]
+        for point in old["points"]:
+            del point["effect"], point["prepare"]
+        plain, audit = pd.produce(self.analysis, self.chips, mode="on", ask_model=self.asker(("ok", old, "")))
+        template = pd.template_plain(pd.build_facts(self.analysis, self.chips))
+        self.assertEqual((plain["source"], len(self.calls)), ("ai", 1))
+        self.assertEqual((plain["effect"], plain["prepare"]), (template["effect"], template["prepare"]))
+        self.assertEqual([point["effect"] for point in plain["points"]], [point["effect"] for point in template["points"]])
+        self.assertNotIn("worry", plain)
+        self.assertNotIn("track", plain)
+
+    def test_without_market_history_for_the_list_the_analysis_still_runs(self):
+        analysis = {**self.analysis, "daily": [{**row, "date": row["date"]} for row in self.analysis["daily"]], "institutional": "壞掉"}
+        plain, audit = pd.produce(analysis, self.chips, mode="on", ask_model=self.asker(("ok", good_ai(), "")))
+        self.assertEqual(plain["source"], "ai")
+        self.assertNotIn("foreign_turn_buy", json.dumps(plain.get("track", []), ensure_ascii=False))
 
     def test_dry_run_calls_the_model_but_publishes_nothing(self):
         plain, audit = pd.produce(self.analysis, self.chips, mode="dry", ask_model=self.asker(("ok", good_ai(), "")))
@@ -519,6 +745,8 @@ class UsageFieldsTest(unittest.TestCase):
                          {"model": "gemini-4-argon", "effort": "medium", "outcome": "ok", "dry_run": False})
         self.assertEqual(pd.usage_fields(self.audit("on", ("model_failed", None, "x")))["outcome"], "failed")
         self.assertEqual(pd.usage_fields(self.audit("on", ("ok", good_ai(one_line="外資賣超九百億。"), "")))["outcome"], "failed")
+        self.assertEqual(pd.usage_fields(self.audit("on", ("ok", good_ai(prepare=["如果外資轉買，就進場加碼。"]), "")))["outcome"], "ok",
+                         "只丟掉一句、整份照樣是模型寫的")
         self.assertEqual(pd.usage_fields(self.audit("dry", ("ok", good_ai(), ""))),
                          {"model": "gemini-4-argon", "effort": "medium", "outcome": "ok", "dry_run": True})
 
