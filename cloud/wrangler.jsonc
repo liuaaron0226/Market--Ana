@@ -40,7 +40,7 @@
     "MARKET_ANA_MARKET_BRIEF": "owner",
     // 主力分點：個股頁「比較」右邊的「主力分點」副圖（本人 2026-11-24，.scratch/broker-branches 票 01）。只有 "off"／"owner"，沒有開給朋友的值。
     // 打開要先問本人、而且正式資料庫要先套 0036 並回補過至少一檔：改成 "owner"。
-    "MARKET_ANA_BROKER_BRANCHES": "off",
+    "MARKET_ANA_BROKER_BRANCHES": "owner",
     // 海外大盤的分時：大盤頁切到國外指數後可以選「分時」，切換清單多一項那斯達克期貨（本人 2026-11-24，.scratch/index-intraday 票 01）。
     // 資料是使用者打開時向 Yahoo Finance 公開入口要的 5 分鐘線，不用套資料表。打開要先問本人：先改 "owner"（只開站主），本人看過再改 "all"。
     "MARKET_ANA_INDEX_INTRADAY": "owner",

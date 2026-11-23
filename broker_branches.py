@@ -52,6 +52,7 @@ PAGE_BUDGET = 400            # 一輪最多幾頁（用完就乾淨地停，下�
 SLOW_DOWN = {429, 503}       # 來源要求放慢：整輪停
 MAX_CONSECUTIVE_FAILURES = 3
 YEARS = 3                    # 回補幾年
+MAX_CANDIDATES = 40          # 一檔最多留幾個候選分點（各段期間買賣超絕對值加總最大的）
 WINDOW_MONTHS = 3            # 回補時每一段多長（每段取前 15 大買超＋前 15 大賣超）
 MAX_DETAIL_PAGES = 16        # 一個分點的整段明細最多分幾次抓
 START_TOLERANCE_DAYS = 7     # 回來最早的日期在起日後幾天內就算抓到頭了（起日可能是假日）
@@ -344,6 +345,7 @@ def backfill(codes: Sequence[str], state: Mapping[str, Any], *, fetcher: Fetcher
 
         def work(entry=entry, code=code, done=done) -> None:
             candidates: dict[str, dict[str, str]] = {}
+            weight: dict[str, float] = {}
             through = None
             for index, (window_start, window_end) in enumerate(windows):
                 summary = fetcher.page(summary_url(code, window_start, window_end),
@@ -351,6 +353,12 @@ def backfill(codes: Sequence[str], state: Mapping[str, Any], *, fetcher: Fetcher
                 through = through or summary["date"]
                 for row in summary["rows"]:
                     candidates.setdefault(row["id"], {"id": row["id"], "bhid": row["bhid"], "name": row["name"]})
+                    weight[row["id"]] = weight.get(row["id"], 0.0) + abs(float(row["net"]))
+            # 候選分點設上限：各段期間買賣超絕對值加總最大的那幾個。第一次實跑（11-24）一檔有 140 個候選、寫了 84,000 列，
+            # 接近 D1 免費方案一天 10 萬列的寫入上限，頁面也要讀那麼多列；主力看的本來就是量最大的那些。
+            # 已經有列的分點（上一輪寫過的）一律留著，續跑才接得上。
+            keep = set(sorted(weight, key=lambda key: (-weight[key], key))[:MAX_CANDIDATES]) | (done & set(candidates))
+            candidates = {key: value for key, value in candidates.items() if key in keep}
             entry["branches"] = candidates
             entry["candidates"] = len(candidates)
             entry["skipped_done"] = len(done & set(candidates))
