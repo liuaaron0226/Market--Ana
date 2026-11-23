@@ -59,20 +59,26 @@ test("照 K 棒排好：沒有 K 棒的日子（假日、比第一根還早）�
   assert.equal(a.count[10], 4);
 });
 
-test("整段：照合計買賣超的絕對值取前五名；合計是 0 張的不算", () => {
-  assert.equal(TOP, 5);
-  assert.deepEqual(names(topBranches(rows, 0, 10)), ["丁-1000", "甲250", "乙-240", "庚230", "己90"]);
+test("一段最多列十個分點（本人 2026-11-24：「選的分點有點少可以再多一點」）", () => {
+  assert.equal(TOP, 10);
+  const many = indexBranches(Array.from({ length: 14 }, (_, b) => ({ id: `M${b}`, name: `多${b}`, d: [20261110], n: [b + 1] })), [20261110]);
+  assert.equal(topBranches(many, 0, 1).length, 10);
+  assert.deepEqual(Array.from(topBranches(many, 0, 1), (item) => item.total).slice(0, 3), [14, 13, 12]);
+});
+
+test("整段：照合計買賣超的絕對值排；合計是 0 張的不算", () => {
+  assert.deepEqual(names(topBranches(rows, 0, 10, 5)), ["丁-1000", "甲250", "乙-240", "庚230", "己90"]);
 });
 
 test("換一段，名單與各自的合計跟著換", () => {
-  assert.deepEqual(names(topBranches(rows, 0, 5)), ["甲300", "乙-300", "庚-70", "己60", "戊5"], "前五根：丙合計 0、丁沒有資料，都不在");
-  assert.deepEqual(names(topBranches(rows, 5, 10)), ["丁-1000", "庚300", "乙60", "甲-50", "戊40"], "後五根");
+  assert.deepEqual(names(topBranches(rows, 0, 5, 5)), ["甲300", "乙-300", "庚-70", "己60", "戊5"], "前五根：丙合計 0、丁沒有資料，都不在");
+  assert.deepEqual(names(topBranches(rows, 5, 10, 5)), ["丁-1000", "庚300", "乙60", "甲-50", "戊40"], "後五根");
   assert.deepEqual(names(topBranches(rows, 3, 5)), [], "11-12、11-13 只有丙，合計 0");
   assert.deepEqual(names(topBranches(rows, 3, 4)), ["丙10"]);
 });
 
 test("合計：名單上那幾個分點有資料的加起來；都沒有資料的那一天不畫；每天加起來等於名單的合計", () => {
-  const top = topBranches(rows, 0, 5), picked = pick(top, null);
+  const top = topBranches(rows, 0, 5, 5), picked = pick(top, null);
   assert.equal(picked.selected, null);
   assert.equal(picked.rows.length, 5);
   const values = bars(picked.rows, 0, 5);
@@ -92,7 +98,7 @@ test("只看一個分點：畫的就是它自己，每天加起來等於它那�
 test("選的分點不在這一段的名單裡了：回到合計", () => {
   const before = pick(topBranches(rows, 5, 10), "D");
   assert.equal(before.selected, "D");
-  const after = pick(topBranches(rows, 0, 5), "D");   // 往前拖到前五根：丁沒有資料
+  const after = pick(topBranches(rows, 0, 5, 5), "D");   // 往前拖到前五根：丁沒有資料
   assert.equal(after.selected, null);
   assert.equal(after.rows.length, 5);
   assert.equal(pick([], "D").selected, null);
@@ -110,10 +116,10 @@ test("四十個分點、七百五十天：排一次就好，之後每換一段�
   const brute = (row, start, end) => { let sum = 0; for (let i = start; i < end; i += 1) if (!Number.isNaN(row.net[i])) sum += row.net[i]; return sum; };
   for (const [start, end] of [[0, 1250], [400, 600], [1190, 1250], [0, 500]]) {
     const top = topBranches(indexed, start, end);
-    assert.ok(top.length <= 5);
+    assert.ok(top.length <= TOP);
     for (const item of top) assert.equal(item.total, brute(item.row, start, end), `${item.row.id} ${start}-${end}`);
-    const totals = indexed.map((row) => Math.abs(brute(row, start, end))).filter((value) => Math.round(value) !== 0).sort((a, b) => b - a).slice(0, 5);
-    assert.deepEqual(Array.from(top, (item) => Math.abs(item.total)), totals, `${start}-${end} 的前五名`);
+    const totals = indexed.map((row) => Math.abs(brute(row, start, end))).filter((value) => Math.round(value) !== 0).sort((a, b) => b - a).slice(0, TOP);
+    assert.deepEqual(Array.from(top, (item) => Math.abs(item.total)), totals, `${start}-${end} 的前十名`);
   }
   assert.equal(topBranches(indexed, 0, 500).length, 0, "還沒有分點資料的那一段");
 });

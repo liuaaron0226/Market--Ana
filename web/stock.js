@@ -476,7 +476,7 @@
       // 券商版面（本人 11-17「首頁與個股頁都套」）：左右不留價格欄、名稱與數值寫在圖上方一行、放大時只看 K 棒的範圍
       chart = new window.KChart($('chartHost'), { macd: false, studyHost: $('chartStudies'), studies: ['volume', 'macd', 'kd', 'rsi', 'foreign', 'trust', 'dealer'], maPeriods: maPeriodsOf(), maColors: maTokensOf(), selectionRoots: [$('chartHost').parentElement], volumeKind: 'volume', overlayLabels: 'tags', height: chartHeight,
         inlineAxis: true, legend: false, fitCandles: true, onDraw: () => window.ChartLegend.render($('legendNames'), chart.legendItems()),
-        drawings: drawingSync && { onChange: drawingSync.record, onTool: showActiveTool, onSelect: showDrawingSelection } });
+        drawings: drawingSync && { onChange: recordDrawing, onTool: showActiveTool, onSelect: showDrawingSelection, alertDefault: alertsPossible } });
       // 點上方那一行的均線名稱打開設定（和首頁同一套、共用一組）
       window.MaSettings.mount({ host: $('chartLegend'), opener: $('legendNames'), onChange: applyMaLines });
     }
@@ -1114,11 +1114,37 @@
 
   function showActiveTool(tool) {
     drawToolButtons().forEach(button => button.setAttribute('aria-pressed', String(button.dataset.tool === tool)));
+    if (tool) showAlertNote(false);   // 要畫新的了：上一條的說明收掉
+  }
+
+  // 到價提醒（本人 11-24）：只有站主、關注開關開著、不是基金（基金沒有盤中報價）時才能提醒；
+  // 比價與通知在雲端每分鐘盯價的排程（cloud/lib/watch-tick.js），這裡只管線上的開關。
+  const alertsPossible = () => Boolean(features.watchlist_watch_v1) && Boolean(lastResult) && !isFund(lastResult);
+  // 這裡不能提醒時在工具列那一行說一聲（線照樣畫得出來，只是不會通知）
+  function showAlertNote(show) {
+    $('drawNote').hidden = !show;
+    $('drawNote').textContent = show ? '無法到價提醒' : '';
+  }
+  // 畫線有變動：存檔。到價提醒的線另外帶現價（伺服器用它判斷價格在線的哪一邊）與股名（通知的標題）。
+  function recordDrawing(change) {
+    const drawing = change.drawing;
+    if (drawing.kind === 'alert' && change.type !== 'remove') {
+      const last = chart && chart.candles.length ? chart.candles[chart.candles.length - 1].close : null;
+      change = { ...change, drawing: { ...drawing, ...(Number.isFinite(last) && last > 0 ? { ref: last } : {}), name: lastResult?.name || '' } };
+      if (change.type === 'add') showAlertNote(!drawing.alert);
+      if (!$('drawAlert').hidden) $('drawAlert').setAttribute('aria-pressed', String(Boolean(drawing.alert)));
+    }
+    drawingSync.record(change);
   }
 
   // 選取了一條線，工具列才出現刪除；工具收著時一起展開，刪除才按得到。
+  // 選的是到價提醒的線：多一顆提醒的開關（這裡不能提醒就不出現，改在那一行說明）。
   function showDrawingSelection(drawing) {
     $('drawDelete').hidden = !drawing;
+    const alertLine = Boolean(drawing) && drawing.kind === 'alert';
+    $('drawAlert').hidden = !(alertLine && alertsPossible());
+    $('drawAlert').setAttribute('aria-pressed', String(alertLine && Boolean(drawing.alert)));
+    showAlertNote(alertLine && !alertsPossible());
     if (drawing && $('toolsKey').getAttribute('aria-expanded') !== 'true' && !$('toolsKey').hidden) setToolsOpen(true);
   }
 
@@ -1195,6 +1221,7 @@
         if (held) { held = false; return; }
         if (!chart) return;
         if (button.dataset.tool) chart.setTool(button.getAttribute('aria-pressed') === 'true' ? null : button.dataset.tool);
+        else if (button.id === 'drawAlert') chart.setSelectedAlert(button.getAttribute('aria-pressed') !== 'true');
         else if (button.id === 'drawDelete' && chart.deleteSelectedDrawing()) {
           chart.canvas.focus({ preventScroll: true }); // 刪除鈕跟著收起：焦點交還圖表，鍵盤操作不中斷
         }

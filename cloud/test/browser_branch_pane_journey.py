@@ -35,10 +35,13 @@ NEW = [("9268", "凱基-台北"), ("9800", "元大-台北"), ("9658", "富邦-�
 SMALL = [("1040", "臺銀"), ("7000", "兆豐-忠孝")]
 
 STATE = """() => {
-  const chart = window.StockView.chart(), pane = document.querySelector('.kc-study-pane-branch'), seg = document.querySelector('.bp-chips .chip-seg');
-  const chips = [...document.querySelectorAll('.bp-chips .chip-seg button')].map(b => ({ id: b.dataset.branch, name: b.children[0].textContent,
-    num: Number(b.children[1].textContent.replace('−', '-').replace('+', '').replaceAll(',', '')), on: b.getAttribute('aria-checked') === 'true' }));
-  return { snap: window.BranchPane.snapshot(), chips, segHidden: !seg || seg.hidden, paneVisible: Boolean(pane) && !pane.hidden && pane.getClientRects().length > 0,
+  const chart = window.StockView.chart(), pane = document.querySelector('.kc-study-pane-branch'), seg = document.querySelector('.kc-study-pane-branch .bp-chip');
+  const num = text => Number(text.replace('−', '-').replace('+', '').replaceAll(',', ''));
+  const chips = [...document.querySelectorAll('#branchMenu button[data-branch]')].map(b => ({ id: b.dataset.branch, name: b.children[0].textContent,
+    num: num(b.children[1].textContent), on: b.getAttribute('aria-checked') === 'true' }));
+  const head = seg && !seg.hidden ? { name: seg.children[0]?.textContent, num: num(seg.children[1]?.textContent || '0'), box: seg.getBoundingClientRect().toJSON(),
+    paneTop: pane.getBoundingClientRect().top } : null;
+  return { snap: window.BranchPane.snapshot(), chips, head, segHidden: !seg || seg.hidden, paneVisible: Boolean(pane) && !pane.hidden && pane.getClientRects().length > 0,
     start: chart.view.end - chart.view.count, count: chart.view.count, n: chart.candles.length,
     hoverDate: Number.isInteger(chart.hover) && chart.hover >= 0 ? chart.candles[chart.hover]?.t : null };
 }"""
@@ -62,7 +65,7 @@ ALIGN = """() => {
   const geo = chart.geo, at = new Map(chart.candles.map((candle, index) => [candle.t, index]));
   const offsets = snap.bars.map(bar => (box.left + bar.x) - (main.left + geo.l + geo.step * (at.get(bar.date) - Math.round(geo.start) + .5)));
   const big = snap.bars.reduce((a, b) => (Math.abs(b.value) > Math.abs(a.value) ? b : a));
-  const scale = canvas.width / box.width, middle = (8 + box.height - 12) / 2;
+  const scale = canvas.width / box.width, middle = snap.middle;
   const read = y => [...canvas.getContext('2d').getImageData(Math.round(big.x * scale), Math.round(y * scale), 1, 1).data];
   return { worst: Math.max(...offsets.map(Math.abs)), bars: snap.bars.length, big, on: read(big.value > 0 ? middle - 8 : middle + 8),
     off: read(big.value > 0 ? middle + 8 : middle - 8) };
@@ -211,7 +214,7 @@ def shot(page, name: str) -> None:
 
 def owner_journey(j: Journey, browser, prefix: str, options: dict, dates: list[str]) -> None:
     touch = bool(options.get("has_touch"))
-    old_ids, new_ids = {b for b, _ in OLD}, {b for b, _ in NEW}
+    old_ids, new_ids, small_ids = {b for b, _ in OLD}, {b for b, _ in NEW}, {b for b, _ in SMALL}
     context = j.context(browser, OWNER, **options)
     page = j.stock(context, CODE)
     toggle, compare = page.locator("#branchToggle"), page.locator('#stockCats [aria-controls="comparePanel"]')
@@ -230,13 +233,19 @@ def owner_journey(j: Journey, browser, prefix: str, options: dict, dates: list[s
             and abs(layout["pane"]["w"] - layout["main"]["w"]) <= 1, layout)
     j.check(f"{prefix}資料量夠拖（最新一段看不到最舊的 {EDGE} 根）", state["count"] <= state["n"] - EDGE and state["n"] == len(dates), state)
     snap, chips = state["snap"], state["chips"]
-    j.check(f"{prefix}最新一段：第一顆是「合計」（選著），後面是這一段的五個分點", [c["name"] for c in chips[:1]] == ["合計"] and chips[0]["on"]
-            and len(chips) == 6 and {c["id"] for c in chips[1:]} == new_ids and [c["id"] for c in chips[1:]] == [t["id"] for t in snap["top"]], chips)
+    head = state["head"]
+    j.check(f"{prefix}切換方式和成交量那格一樣：副圖左上角一個小鍵（不另佔一排），寫「主力合計」與合計張數",
+            head is not None and head["name"] == "主力合計" and head["num"] == chips[0]["num"] and head["box"]["height"] <= 24
+            and head["box"]["top"] - head["paneTop"] < 8, head)
+    j.check(f"{prefix}選單收著；裡面第一個是「主力合計」（選著），後面是這一段的分點（大的五個＋小的兩個，最多十個）",
+            not page.locator("#branchMenu").is_visible() and [c["name"] for c in chips[:1]] == ["主力合計"] and chips[0]["on"]
+            and len(chips) == 8 and {c["id"] for c in chips[1:]} == new_ids | small_ids and [c["id"] for c in chips[1:]] == [t["id"] for t in snap["top"]], chips)
     j.check(f"{prefix}合計那一顆的數字＝五個分點的數字相加＝每天柱子相加", chips[0]["num"] == sum(c["num"] for c in chips[1:]) == sum(b["value"] for b in snap["bars"])
             and chips[0]["num"] != 0, [chips, sum(b["value"] for b in snap["bars"])])
     j.check(f"{prefix}名單照買賣超的絕對值由大到小", [abs(c["num"]) for c in chips[1:]] == sorted((abs(c["num"]) for c in chips[1:]), reverse=True), chips)
     align = page.evaluate(ALIGN)
-    j.check(f"{prefix}每根柱子的位置對得上同一天的 K 棒", align["worst"] <= 0.5 and align["bars"] == EDGE, align)
+    # 名單最多十個：每天都有買賣的兩個小分點也在裡面，所以合計每一根 K 棒都有柱子
+    j.check(f"{prefix}每根柱子的位置對得上同一天的 K 棒（合計每天都有）", align["worst"] <= 0.5 and align["bars"] == state["count"], [align, state["count"]])
     red = align["on"][0] > align["on"][1] + 40 if align["big"]["value"] > 0 else align["on"][1] > align["on"][0] + 40
     j.check(f"{prefix}畫布上那一天真的有柱子：買超紅、賣超綠，零線另一邊是空的", red and align["on"][3] > 200 and align["off"][3] < 40, align)
     j.check(f"{prefix}開著副圖不造成橫向捲動", layout["fits"])
@@ -260,7 +269,7 @@ def owner_journey(j: Journey, browser, prefix: str, options: dict, dates: list[s
     back = drag_to(page, context, surface, 1, touch)
     snap, chips = back["snap"], back["chips"]
     j.check(f"{prefix}拖回最前面：這一段從第一根 K 棒開始", back["start"] == 0 and snap["first"] == dates[0], [back["start"], snap["first"], dates[0]])
-    j.check(f"{prefix}名單換成那一段的分點，鍵上的字跟著換", {t["id"] for t in snap["top"]} == old_ids and [c["id"] for c in chips[1:]] == [t["id"] for t in snap["top"]]
+    j.check(f"{prefix}名單換成那一段的分點，鍵上的字跟著換", {t["id"] for t in snap["top"]} == old_ids | small_ids and [c["id"] for c in chips[1:]] == [t["id"] for t in snap["top"]]
             and [c["num"] for c in chips[1:]] == [t["total"] for t in snap["top"]] and chips[0]["on"], chips)
     j.check(f"{prefix}柱子也換成那一段的：合計＝每天柱子相加", chips[0]["num"] == sum(b["value"] for b in snap["bars"]) and snap["bars"][0]["date"] == dates[0], chips[0])
     align = page.evaluate(ALIGN)
@@ -268,16 +277,21 @@ def owner_journey(j: Journey, browser, prefix: str, options: dict, dates: list[s
     shot(page, f"{prefix}2-back.png")
 
     target = chips[3]
-    press(page, page.locator(f'.bp-chips button[data-branch="{target["id"]}"]'), touch)
+    press(page, page.locator(".kc-study-pane-branch .bp-chip"), touch)
+    j.check(f"{prefix}點左上角的小鍵：浮出分點選單", page.locator("#branchMenu").is_visible())
+    press(page, page.locator(f'#branchMenu button[data-branch="{target["id"]}"]'), touch)
     single = page.evaluate(STATE)
     values = [b["value"] for b in single["snap"]["bars"]]
-    j.check(f"{prefix}點一個分點：只畫它，每天柱子相加＝那顆鍵上的數字", single["snap"]["selected"] == target["id"] and sum(values) == target["num"]
-            and [c["id"] for c in single["chips"] if c["on"]] == [target["id"]] and len(values) == EDGE, [target, sum(values), len(values)])
+    j.check(f"{prefix}選一個分點：選單收回、只畫它，每天柱子相加＝它的數字，小鍵改寫成它的名字",
+            single["snap"]["selected"] == target["id"] and sum(values) == target["num"] and not page.locator("#branchMenu").is_visible()
+            and [c["id"] for c in single["chips"] if c["on"]] == [target["id"]] and len(values) == EDGE
+            and single["head"]["name"] == target["name"] and single["head"]["num"] == target["num"], [target, sum(values), len(values), single["head"]])
     shot(page, f"{prefix}3-single.png")
 
     latest = drag_to(page, context, surface, -1, touch)
-    j.check(f"{prefix}拖回最新：選的分點不在名單裡了，回到「合計」", latest["snap"]["selected"] is None and [c["name"] for c in latest["chips"] if c["on"]] == ["合計"]
-            and {t["id"] for t in latest["snap"]["top"]} == new_ids and latest["snap"]["last"] == dates[-1], latest["chips"])
+    j.check(f"{prefix}拖回最新：選的分點不在名單裡了，回到「主力合計」", latest["snap"]["selected"] is None and [c["name"] for c in latest["chips"] if c["on"]] == ["主力合計"]
+            and latest["head"]["name"] == "主力合計"
+            and {t["id"] for t in latest["snap"]["top"]} == new_ids | small_ids and latest["snap"]["last"] == dates[-1], latest["chips"])
 
     # 同一排只有一顆凸起：主力分點開著時再展開「比較」，凸起的是「比較」，主力分點變平但仍然開著
     press(page, compare, touch)
@@ -304,7 +318,7 @@ def owner_journey(j: Journey, browser, prefix: str, options: dict, dates: list[s
     toggle.wait_for(state="visible", timeout=10_000)
     press(page, toggle, touch)
     empty = page.evaluate(STATE)
-    j.check(f"{prefix}這段期間沒有資料：副圖在、沒有名稱那一排（畫布上寫一句話）", empty["paneVisible"] and empty["segHidden"]
+    j.check(f"{prefix}這段期間沒有資料：副圖在、沒有切換鍵（畫布上寫一句話）", empty["paneVisible"] and empty["segHidden"]
             and empty["snap"] is not None and empty["snap"]["top"] == [] and empty["snap"]["bars"] == [], empty)
     shot(page, f"{prefix}5-empty.png")
     page.close()

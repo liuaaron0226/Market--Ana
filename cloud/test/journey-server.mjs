@@ -88,7 +88,8 @@ deps.intradayCache = null;
 deps.intradayFetch = async (url) => {
   const symbol = decodeURIComponent(new URL(url).pathname.split("/").pop());
   const fixture = process.env.JOURNEY_INTRADAY_FIXTURE ? JSON.parse(await readFile(process.env.JOURNEY_INTRADAY_FIXTURE, "utf8")) : {};
-  const entry = fixture[symbol];
+  // 同一個代號的日線可以另外給（"TWD=X@1d"）；沒有就用那個代號的那一份
+  const entry = fixture[`${symbol}@${new URL(url).searchParams.get("interval")}`] ?? fixture[symbol];
   if (!entry || entry.status) return new Response("{}", { status: entry?.status || 503 });
   return new Response(JSON.stringify(entry), { headers: { "content-type": "application/json" } });
 };

@@ -207,7 +207,25 @@
     // 那一行留在頁面裡只是藏起來：融資維持率那張卡（stock-signals.js marginBoard）靠它判斷同一天不重複標。
     const line = el('p', 'sf-date num', text);
     line.hidden = dates.every(day => day === facts.data_date);
-    return [line, table];
+    return [line, table, marginUseRow(facts.credit)];
+  }
+
+  // 融資使用率（本人 2026-11-24）：融資餘額 ÷ 融資限額，資料包算好的 credit.margin_utilisation { value, data_date, series }。
+  // 這裡只排版：最新一天的百分比（一位小數）＋和上面三列同一種走勢小圖。沒有值（舊資料包、沒有限額）就回 null，畫面不出現那一行；
+  // 走勢不到兩天就只給數字，不畫圖。
+  function marginUse(credit) {
+    const use = credit?.margin_utilisation;
+    if (!use || typeof use.value !== 'number' || !Number.isFinite(use.value) || use.value < 0) return null;
+    const series = (Array.isArray(use.series) ? use.series : []).map(v => (typeof v === 'number' && Number.isFinite(v) ? v : null));
+    return { text: `${use.value.toFixed(1)}%`, series: series.filter(has).length >= 2 ? series : null };
+  }
+  function marginUseRow(credit) {
+    const model = marginUse(credit);
+    if (!model) return null;
+    const row = el('div', 'sf-use');
+    row.append(el('span', 'sf-use-name', '融資使用率'), el('b', 'num', model.text));
+    if (model.series) row.append(sparkline(model.series));
+    return row;
   }
 
   // ---------- 月營收圖（本人 2026-11-17：「營收長條圖 x 軸我不知道是什麼，看不懂圖」） ----------
@@ -523,5 +541,5 @@
     }
   }
 
-  window.StockFacts = { render, _logic: { revenueChart } };
+  window.StockFacts = { render, _logic: { revenueChart, marginUse } };
 })();

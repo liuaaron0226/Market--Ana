@@ -566,7 +566,19 @@ def _otc_credit_file(path: Path) -> dict:
     number = lambda text: int(str(text).replace(',', '').strip() or 0)  # noqa: E731
     if '資餘額' in fields:
         margin_at, short_at = fields.index('資餘額'), fields.index('券餘額')
-        out.update({str(row[0]).strip(): {'margin': number(row[margin_at]), 'short': number(row[short_at])} for row in table['data']})
+        # 融資使用率（本人 2026-11-24）：櫃買原件有「資限額」（張）與官方算好的「資使用率(%)」；沒有限額的就不帶這兩項。
+        limit_at = fields.index('資限額') if '資限額' in fields else None
+        use_at = fields.index('資使用率(%)') if '資使用率(%)' in fields else None
+
+        def usage(row) -> dict:
+            # 這兩欄讀不成數字就當沒有，不能讓整份原件（餘額）跟著讀不了
+            limit = (_safe(lambda: number(row[limit_at])) or 0) if limit_at is not None else 0
+            if limit <= 0:
+                return {}
+            official = _safe(lambda: float(str(row[use_at]).replace(',', '').strip())) if use_at is not None else None
+            return {'limit': limit, **({'use_pct': official} if official is not None else {})}
+        out.update({str(row[0]).strip(): {'margin': number(row[margin_at]), 'short': number(row[short_at]), **usage(row)}
+                    for row in table['data']})
     else:
         # 借券是「當日還券」之後的那個「當日餘額」（前面那個是融券的）
         balance_at = fields.index('當日餘額', fields.index('當日還券'))
@@ -605,7 +617,9 @@ def credit_series(code: str, market: str, as_of: str, days: int = 25) -> dict:
     # 融資融券：近期明細與長期保存區合起來看（同一份原件），和融資維持率（估）同一個資料日。
     margin_days = [d for d in chips.margin_days() if d <= as_of][-days:]
     borrow_days = recent(chips.FUND / 'twt93u', 'twt93u')
-    margin = [{'date': d, 'margin': row['margin'], 'short': row['short']}
+    # limit：融資限額（張），算融資使用率用；原件沒有或是 0 的那天不帶。
+    margin = [{'date': d, 'margin': row['margin'], 'short': row['short'],
+               **({'limit': row['margin_limit']} if (row.get('margin_limit') or 0) > 0 else {})}
               for d, row in zip(margin_days, chips.margin(code, margin_days)) if row]
     borrow = [{'date': d, 'balance': row['balance']} for d, row in zip(borrow_days, chips.borrow(code, borrow_days)) if row]
     return {'margin': margin, 'borrow': borrow}

@@ -609,6 +609,62 @@ class StockFactsCreditTests(_FactsFixture, unittest.TestCase):
         self.assertIsNone(facts['credit'])
         self.assertNotIn('credit', facts['blocks'])
 
+    # ---- 融資使用率（本人 2026-11-24）：融資餘額 ÷ 融資限額，一位小數；最新一天的值＋和「融資」那一列同一段日子的走勢 ----
+
+    def with_limit(self, days, limit=1000, skip=()):
+        credit = self.credit(days, [])
+        for row in credit['margin']:
+            if row['date'] not in skip:
+                row['limit'] = limit
+        return credit
+
+    def test_margin_utilisation_latest_value_and_series_follow_the_margin_row(self):
+        # 餘額 100、101…107 張，限額 1,000 張 → 10.0%、10.1%…10.7%；走勢和「融資」那一列一樣是 8 天。
+        credit = self.analyze(change=0.5, close=100.5, credit=self.with_limit(self.days[-9:-1]))['facts']['credit']
+        self.assertEqual(credit['margin_utilisation'], {
+            'value': 10.7, 'data_date': self.days[-2], 'series': [10.0, 10.1, 10.2, 10.3, 10.4, 10.5, 10.6, 10.7]})
+        self.assertEqual(len(credit['margin_utilisation']['series']), len(credit['rows'][0]['series']))
+
+    def test_series_keeps_three_decimals_so_a_large_cap_line_is_not_flat(self):
+        # 台積電那種：餘額 34,213 → 34,716 張、限額 6,483,092 張，一位小數整段都是 0.5%，線會是平的；
+        # 走勢留三位小數（0.528 → 0.535）只拿來畫線，頁面上寫的數字仍是一位小數。
+        days = self.days[-3:-1]
+        credit = {'margin': [{'date': days[0], 'margin': 34_213, 'short': 1, 'limit': 6_483_092},
+                             {'date': days[1], 'margin': 34_716, 'short': 1, 'limit': 6_483_092}], 'borrow': []}
+        use = self.analyze(change=0.5, close=100.5, credit=credit)['facts']['credit']['margin_utilisation']
+        self.assertEqual(use, {'value': 0.5, 'data_date': days[1], 'series': [0.528, 0.535]})
+
+    def test_a_day_without_a_limit_is_a_gap_not_zero(self):
+        days = self.days[-9:-1]
+        use = self.analyze(change=0.5, close=100.5, credit=self.with_limit(days, skip={days[2]}))['facts']['credit']['margin_utilisation']
+        self.assertEqual(use['series'], [10.0, 10.1, None, 10.3, 10.4, 10.5, 10.6, 10.7])
+
+    def test_no_limit_on_the_latest_day_or_at_all_means_no_utilisation(self):
+        # 最新一天沒有限額、整段都沒有限額（舊原件）、限額是 0：都不給這一項（不能寫成 0%），融資券三列照常。
+        days = self.days[-9:-1]
+        for credit in (self.with_limit(days, skip={days[-1]}), self.credit(days, []), self.with_limit(days, limit=0)):
+            block = self.analyze(change=0.5, close=100.5, credit=credit)['facts']['credit']
+            self.assertNotIn('margin_utilisation', block)
+            self.assertEqual(block['rows'][0]['balance'], 107)
+
+    def test_margin_use_pct_rounds_half_up_and_never_divides_by_zero(self):
+        from twon_analysis.facts import margin_use_pct
+        self.assertEqual(margin_use_pct(324, 1000), 32.4)
+        self.assertEqual(margin_use_pct(1245, 10000), 12.5)      # 12.45 → 12.5（四捨五入，不是銀行家捨入）
+        self.assertEqual(margin_use_pct(0, 1000), 0.0)           # 真的沒有融資：0.0%
+        for limit in (0, None, -5):
+            self.assertIsNone(margin_use_pct(324, limit))
+        self.assertIsNone(margin_use_pct(None, 1000))
+
+    def test_official_tpex_rate_agrees_with_the_computed_one_and_wins_when_it_does_not(self):
+        from twon_analysis.facts import margin_use_pct
+        # 環球晶 2026-11-09 的櫃買原件：資餘額 10,143 張、資限額 132,028 張、官方資使用率 7.68% → 算出來 7.6825%，兩邊對得上，寫 7.7%。
+        self.assertAlmostEqual(10_143 / 132_028 * 100, 7.68, delta=0.01)
+        self.assertEqual(margin_use_pct(10_143, 132_028, 7.68), 7.7)
+        self.assertEqual(margin_use_pct(10_143, 132_028, 7.68), margin_use_pct(10_143, 132_028))
+        self.assertEqual(margin_use_pct(10_143, 132_028, 9.31), 9.3)   # 對不上：以官方的為準
+        self.assertEqual(margin_use_pct(10_143, None, 7.68), 7.7)      # 只有官方的使用率、沒有限額
+
 
 class StockFactsFundamentalsTests(_FactsFixture, unittest.TestCase):
     """基本面（C 票）：本益比、淨值比、殖利率；最新月營收的月增年增；近 13 個月營收年增。重點補上第三句。"""
@@ -800,6 +856,55 @@ class StockFactsReaderTests(unittest.TestCase):
             'margin': [{'date': '2026-11-10', 'margin': 9612, 'short': 202}, {'date': '2026-11-11', 'margin': 9021, 'short': 198}],
             'borrow': [{'date': '2026-11-10', 'balance': 12_577_000}, {'date': '2026-11-11', 'balance': 12_089_000}],
         })
+
+    def test_listed_credit_series_carries_the_margin_limit(self):
+        # 融資使用率（本人 2026-11-24）：證交所 MI_MARGN 融資那一組的「次一營業日限額」（張）跟著餘額一起讀出來；
+        # 台積電 2026-11-06 的原件是餘額 35,072、限額 6,483,092。限額是 0 的那天不帶（不能拿來除）。
+        from twon_analysis import analyze_v2 as module, chips
+        with tempfile.TemporaryDirectory() as tmp:
+            detail, fund = Path(tmp) / 'detail', Path(tmp) / 'fund'
+            for folder in (detail / 'margin', fund / 'twt93u'):
+                folder.mkdir(parents=True)
+            fields = ['代號', '名稱', '買進', '賣出', '現金償還', '前日餘額', '今日餘額', '次一營業日限額',
+                      '買進', '賣出', '現券償還', '前日餘額', '今日餘額', '次一營業日限額', '資券互抵', '註記']
+            for day, margin, limit in (('20261105', '34,596', '0'), ('20261106', '35,072', '6,483,092')):
+                row = ['2330', '台積電', '3,201', '2,682', '43', '34,596', margin, limit, '21', '49', '0', '47', '75', '6,483,092', '35', ' ']
+                (detail / 'margin' / f'margin-{day}.json').write_text(json.dumps(
+                    {'data': {'tables': [{'fields': fields, 'data': [row]}]}}), encoding='utf-8')
+            with unittest.mock.patch.object(chips, 'DETAIL', detail), unittest.mock.patch.object(chips, 'KEPT_ROOT', Path(tmp) / 'kept'), \
+                    unittest.mock.patch.object(chips, 'FUND', fund):
+                chips._margin.cache_clear()
+                try:
+                    series = module.credit_series('2330', '上市', '2026-11-06')
+                finally:
+                    chips._margin.cache_clear()
+        self.assertEqual(series['margin'], [{'date': '2026-11-05', 'margin': 34596, 'short': 75},
+                                            {'date': '2026-11-06', 'margin': 35072, 'short': 75, 'limit': 6_483_092}])
+        from twon_analysis.facts import margin_use_pct
+        self.assertEqual(margin_use_pct(35072, 6_483_092), 0.5)
+
+    def test_otc_credit_series_carries_the_limit_and_the_official_rate(self):
+        # 櫃買原件自己有「資使用率(%)」與「資限額」：兩個都帶出來；官方的數字和餘額 ÷ 限額要對得上（差不到 0.01）。
+        # 沒有限額（0）的那一檔不帶；官方使用率是空的就只帶限額。
+        from twon_analysis import analyze_v2 as module
+        fields = ['代號', '名稱', '前資餘額(張)', '資買', '資賣', '現償', '資餘額', '資屬證金', '資使用率(%)', '資限額',
+                  '前券餘額(張)', '券賣', '券買', '券償', '券餘額', '券屬證金', '券使用率(%)', '券限額', '資券相抵(張)', '備註']
+        rows = [['6488', '環球晶', '10,285', '286', '362', '66', '10,143', '239', '7.68', '132,028', '317', '53', '141', '0', '229', '0', '0.17', '132,028', '9', ''],
+                ['7777', '沒限額', '0', '0', '0', '0', '50', '0', '0.00', '0', '0', '0', '0', '0', '3', '0', '0.00', '0', '0', ''],
+                ['8888', '缺官方', '0', '0', '0', '0', '50', '0', '', '1,000', '0', '0', '0', '0', '3', '0', '', '1,000', '0', '']]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'otc-credit/margin').mkdir(parents=True)
+            (root / 'otc-credit/margin/20261109.json').write_text(json.dumps(
+                {'data': {'stat': 'ok', 'tables': [{'fields': fields, 'data': rows}]}}), encoding='utf-8')
+            with unittest.mock.patch.object(module, 'DEFAULT_DB', root / 'stock-history' / 'h.sqlite'), \
+                    unittest.mock.patch.dict(module._OTC_CREDIT_CACHE, clear=True):
+                got = {code: module.credit_series(code, '上櫃', '2026-11-09')['margin'] for code in ('6488', '7777', '8888')}
+        self.assertEqual(got['6488'], [{'date': '2026-11-09', 'margin': 10143, 'short': 229, 'limit': 132_028, 'use_pct': 7.68}])
+        self.assertEqual(got['7777'], [{'date': '2026-11-09', 'margin': 50, 'short': 3}])
+        self.assertEqual(got['8888'], [{'date': '2026-11-09', 'margin': 50, 'short': 3, 'limit': 1000}])
+        row = got['6488'][0]
+        self.assertAlmostEqual(row['margin'] / row['limit'] * 100, row['use_pct'], delta=0.01)
 
 
 BROKEN = '這一天的個股融資原件讀不了'

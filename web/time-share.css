@@ -48,8 +48,11 @@
 .ts-vol rect { fill: var(--faint); fill-opacity: .42; }
 .ts-vlabel { fill: var(--faint); font: 400 10.5px var(--sans); paint-order: stroke; stroke: var(--slab); stroke-width: 4px; stroke-linejoin: round; }
 .ts-time { fill: var(--faint); font: 400 10.5px var(--mono); }
-.ts-cross line { stroke: var(--ink); stroke-width: 1; stroke-opacity: .35; }
+/* 十字線：直線對著那一分鐘、橫線跟著游標／手指的高度（本人 11-24），都是虛線；右邊的價位籤和 K 線圖的日期籤同一種（墨色底） */
+.ts-cross line { stroke: var(--ink); stroke-width: 1; stroke-opacity: .35; stroke-dasharray: 3 3; }
 .ts-cross circle { fill: var(--slab); stroke: var(--ink); stroke-width: 1.5; }
+.ts-cross-tag rect { fill: var(--ink); }
+.ts-cross-tag text { fill: var(--bg); font: 500 11.5px var(--mono); }
 .ts-empty { margin: 18px 0; color: var(--faint); font: 13px/1.6 var(--sans); }
 
 /* ---------- 內外盤比、五檔（只在個股頁） ---------- */

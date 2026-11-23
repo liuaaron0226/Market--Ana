@@ -58,7 +58,7 @@ const body = async (path, options) => (await req(path, options)).json();
 test("七個：六個和大盤頁的國外指數同一組 key 與名稱，再加只有分時的那斯達克期貨；來源網址的 ^ 與 = 有編碼", () => {
   assert.deepEqual(INTRADAY_INDICES.slice(0, 6).map((item) => [item.key, item.name]), MARKET_INDICES.map((item) => [item.key, item.name]));
   assert.deepEqual(INTRADAY_INDICES.map((item) => [item.key, item.symbol]), [["dji", "^DJI"], ["ixic", "^IXIC"], ["gspc", "^GSPC"], ["sox", "^SOX"],
-    ["n225", "^N225"], ["ks11", "^KS11"], ["nq_fut", "NQ=F"]]);
+    ["n225", "^N225"], ["ks11", "^KS11"], ["nq_fut", "NQ=F"], ["usdtwd", "TWD=X"]]);   // 美元／台幣另見 index-usdtwd.test.js
   assert.equal(sourceUrl("^N225"), "https://query1.finance.yahoo.com/v8/finance/chart/%5EN225?interval=5m&range=1d");
   assert.equal(sourceUrl("NQ=F"), "https://query1.finance.yahoo.com/v8/finance/chart/NQ%3DF?interval=5m&range=1d");
 });

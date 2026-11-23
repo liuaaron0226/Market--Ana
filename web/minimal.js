@@ -55,7 +55,14 @@
   const INTRADAY_REFRESH_MS = 60_000;
   const intradayOn = () => Boolean(features.index_intraday_v1) && location.protocol !== 'file:';
   const intradayPayloads = new Map();
-  const intradayModel = key => (intradayPayloads.has(key) ? window.TimeShare.sessionModel(intradayPayloads.get(key)) : null);
+  // 美元／台幣（本人 2026-11-24，item.fx）：和期貨一樣要這個開關開著才列出來；日線由伺服器向來源要，拿不到時只留分時。
+  const intradayModel = key => {
+    const model = intradayPayloads.has(key) ? window.TimeShare.sessionModel(intradayPayloads.get(key)) : null;
+    const item = model && indexItem(key);
+    return item && item.fx ? Object.assign(model, window.MarketIndex.fxModel(item)) : model;
+  };
+  const needsIntraday = item => Boolean(item && (item.intradayOnly || item.fx));
+  const noDaily = item => Boolean(item && (item.intradayOnly || (item.fx && !indexPayloads.has(item.key))));
   let intradayTimer = 0;
   let intradayKey = '';
   let twIntraday = false;   // 台股即時服務現在有沒有分時可看（國外指數的分時不看它）
@@ -523,6 +530,8 @@
     if (!features.market_trend_v1) { renderedTrend = null; return; }
     const packaged = D.actions && D.actions.market_trend || A.market_trend;
     const index = foreignIndex();
+    // 匯率不套「偏多／偏空」那一套（數字變大是台幣貶值，寫偏多會讓人看反）：整塊收起來
+    if (index && index.fx) { els.trendSection.hidden = true; renderedTrend = null; return; }
     const trend = index ? foreignTrend(index) : packaged && packaged.schema === 'market-trend/v1' ? packaged : localMarketTrend();
     renderedTrend = trend;
     if (!els.trendDate || !els.trendRows) return;
@@ -579,9 +588,10 @@
     const index = foreignIndex();
     if (index && period === 'h60') period = 'daily';   // 國外沒有 60 分
     // 國外的分時（開關開著才有）；那斯達克期貨只有分時。拿不到分時的退回日K
-    if (index && (isTimeShare(period) || index.intradayOnly)) {
+    if (index && (isTimeShare(period) || noDaily(index))) {
       const model = intradayOn() ? intradayModel(index.key) : null;
       if (model) return showForeignTimeShare(index, model);
+      if (noDaily(index)) return;   // 沒有日線可退：畫面留著原樣
       period = 'daily';
     }
     stopIntraday();
@@ -1824,13 +1834,13 @@
     [...els.period.options].forEach(option => {
       if (isTimeShare(option.value)) option.hidden = Boolean(index) && !intradayOn();
       else if (option.value === 'h60') option.hidden = Boolean(index);
-      else option.hidden = Boolean(index && index.intradayOnly);
+      else option.hidden = noDaily(index);
     });
     setIntradayOptions(twIntraday);
     if (els.linePair) els.linePair.hidden = Boolean(index);
     els.mobileDetails.hidden = true;
     const studies = chart && chart.studies;
-    if (!studies || (index && index.intradayOnly)) return;
+    if (!studies || noDaily(index)) return;
     studies.setVolumeKind(index ? 'count' : 'amount');
     studies.setAvailable(!index ? null
       : window.MarketIndex.hasVolume(indexPayloads.get(index.key).candles) ? FOREIGN_STUDIES : FOREIGN_STUDIES.slice(1));
@@ -1845,7 +1855,7 @@
 
   async function switchIndex(key) {
     const item = indexItem(key);
-    if (!item || key === currentIndex || (item.intradayOnly && !intradayOn())) return;
+    if (!item || key === currentIndex || (needsIntraday(item) && !intradayOn())) return;
     const ticket = ++indexTicket;
     if (key !== 'twii' && !item.intradayOnly && !indexPayloads.has(key)) {
       chartNote(`讀取${item.name}…`, true);
@@ -1857,20 +1867,20 @@
         console.warn('[國外指數]', error);
       }
       if (ticket !== indexTicket) return;   // 讀的時候又換了別的
-      if (!payload || !Array.isArray(payload.candles) || !payload.candles.length) {
+      if (payload && Array.isArray(payload.candles) && payload.candles.length) indexPayloads.set(key, payload);
+      else if (!item.fx) {   // 匯率的日線拿不到：這一次只留分時（下面），不當成沒有資料
         loadPeriod(currentPeriod, false);
         chartNote(`${item.name}暫時沒有資料，請稍後再試`, true);
         return;
       }
-      indexPayloads.set(key, payload);
     }
-    // 要直接進分時的（那斯達克期貨、或原本就在看分時）：先把分時讀進來。期貨讀不到就留在原本的指數。
-    const wantIntraday = key !== 'twii' && intradayOn() && (item.intradayOnly || isTimeShare(currentPeriod));
+    // 要直接進分時的（那斯達克期貨、匯率、或原本就在看分時）：先把分時讀進來。只有分時的讀不到就留在原本的指數。
+    const wantIntraday = key !== 'twii' && intradayOn() && (needsIntraday(item) || isTimeShare(currentPeriod));
     if (wantIntraday) {
       chartNote(`讀取${item.name}…`, true);
       await fetchIntraday(key);
       if (ticket !== indexTicket) return;
-      if (item.intradayOnly && !intradayModel(key)) {
+      if (noDaily(item) && !intradayModel(key)) {
         loadPeriod(currentPeriod, false);
         chartNote(`${item.name}暫時沒有資料，請稍後再試`, true);
         return;
@@ -1880,13 +1890,13 @@
     selectedIndex = -1;
     syncIndexMenu();
     applyIndexMode();
-    loadPeriod(currentPeriod, true);
+    loadPeriod(item.fx ? 'ts' : currentPeriod, true);   // 匯率要看的是現在的價：選了先是分時
     if (wantIntraday && !isTimeShare(currentPeriod)) chartNote(`${item.name}分時暫時拿不到資料，請稍後再試`, true);
-    if (!item.intradayOnly) renderMarketTrend(ensureChart());
+    if (item.fx || !noDaily(item)) renderMarketTrend(ensureChart());
   }
 
   window.MarketIndex.LIST.forEach(item => {
-    if (item.intradayOnly && !intradayOn()) return;
+    if (needsIntraday(item) && !intradayOn()) return;
     const button = document.createElement('button');
     button.type = 'button';
     button.setAttribute('role', 'radio');

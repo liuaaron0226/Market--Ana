@@ -21,6 +21,14 @@ def _int(text) -> int:
     return int(str(text).replace(',', '').strip() or 0)
 
 
+def _limit(text) -> int:
+    """限額欄：讀不成數字就當沒有（0），不能因為這一欄讓整天的融資融券都讀不了。"""
+    try:
+        return _int(text)
+    except ValueError:
+        return 0
+
+
 @lru_cache(maxsize=64)
 def _t86(day: str) -> dict:
     path = DETAIL / 't86' / f't86-{day.replace("-", "")}.json'
@@ -49,9 +57,12 @@ def _margin(day: str) -> dict:
     data = json.loads(path.read_text(encoding='utf-8'))['data']
     table = next(t for t in data['tables'] if t.get('fields') and t['fields'][0] == '代號')
     out = {}
+    # margin_limit：融資那一組的限額（原件欄名「次一營業日限額」，第一個帶「限額」的欄；融資使用率＝今日餘額 ÷ 限額；本人 2026-11-24）。
+    limit_at = next((i for i, name in enumerate(table['fields']) if '限額' in str(name)), 7)
     for row in table['data']:
         # 欄位：融資 買進 賣出 現金償還 前日餘額 今日餘額 限額｜融券 買進 賣出 現券償還 前日餘額 今日餘額 限額｜資券互抵 註記（單位：張）
-        out[row[0].strip()] = {'margin_prev': _int(row[5]), 'margin': _int(row[6]), 'short_prev': _int(row[11]), 'short': _int(row[12])}
+        out[row[0].strip()] = {'margin_prev': _int(row[5]), 'margin': _int(row[6]), 'short_prev': _int(row[11]), 'short': _int(row[12]),
+                               'margin_limit': _limit(row[limit_at]) if len(row) > limit_at else 0}
     return out
 
 

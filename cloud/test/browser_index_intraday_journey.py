@@ -81,7 +81,27 @@ def fixtures(now: datetime) -> tuple[dict, dict]:
         # 期貨：紐約 00:00 起一整天，17:00～17:55 每日休息
         "NQ=F": chart("America/New_York", ny_off, wave(ny_midnight, 288, 25300, 0.9, lambda i: 204 <= i < 216), 25250, (ny_midnight, ny_midnight + 86340)),
     }
-    dates = {"seoul_old": (datetime.fromtimestamp(seoul_old, timezone.utc) + timedelta(hours=9)).strftime("%Y-%m-%d")}
+    # 美元／台幣（本人 2026-11-24）：倫敦 00:00 起一整天的 5 分鐘線（小數四位，伺服器取到三位）；日線另外給（"TWD=X@1d"，最近 260 個平日）
+    london = local_midnight(now, 0)
+    fx_bars = [[london + i * STEP, round(32.4 + 0.06 * math.sin(i / 23 + 1.3) + 0.0001 * i, 4)] for i in range(288)]
+    data["TWD=X"] = chart("Europe/London", 0, fx_bars, 32.3801, (london, london + 86340))
+    days, stamp = [], london
+    while len(days) < 260:
+        if datetime.fromtimestamp(stamp, timezone.utc).weekday() < 5:
+            days.append(stamp)
+        stamp -= 86400
+    days.reverse()
+    closes = [round(31.2 + 1.2 * i / 259 + 0.15 * math.sin(i / 11), 4) for i in range(260)]
+    opens = [closes[0] - 0.02] + closes[:-1]
+    data["TWD=X@1d"] = {"chart": {"result": [{
+        "meta": {"exchangeTimezoneName": "Europe/London", "gmtoffset": 0,
+                 "currentTradingPeriod": {"regular": {"start": london, "end": london + 86340, "gmtoffset": 0, "timezone": "X"}}},
+        "timestamp": days,
+        "indicators": {"quote": [{"open": opens, "close": closes, "high": [max(o, c) + 0.0312 for o, c in zip(opens, closes)],
+                                  "low": [min(o, c) - 0.0288 for o, c in zip(opens, closes)], "volume": [0 for _ in days]}]}}], "error": None}}
+    dates = {"seoul_old": (datetime.fromtimestamp(seoul_old, timezone.utc) + timedelta(hours=9)).strftime("%Y-%m-%d"),
+             "fx_word": "貶值" if fx_bars[-1][1] > 32.3805 else "升值",
+             "fx_daily_last": datetime.fromtimestamp(days[-1], timezone.utc).strftime("%Y-%m-%d")}
     return data, dates
 
 
@@ -151,6 +171,10 @@ STATE = """() => {
     ohlc: panel.querySelector('[data-ts-ohlc]').textContent.replace(/\\s+/g, ''),
     label: panel.querySelector('svg') ? panel.querySelector('svg').getAttribute('aria-label') : null,
     svgWidth: panel.querySelector('svg') ? panel.querySelector('svg').getBoundingClientRect().width : 0,
+    marks: [...panel.querySelectorAll('.ts-mark text')].map(t => t.textContent),
+    studies: [...document.querySelectorAll('#studyMenu [data-study]')].filter(b => !b.hidden).map(b => b.textContent),
+    candles: window.MinimalApp.chart ? window.MinimalApp.chart.candles.length : 0,
+    trendShown: !document.getElementById('marketTrend').hidden,
     noScroll: document.documentElement.scrollWidth <= innerWidth,
   };
 }"""
@@ -165,7 +189,7 @@ def owner_run(j: Journey, browser, prefix: str, options: dict, dates: dict) -> N
     context, page = j.home(browser, OWNER, **options)
     width = options["viewport"]["width"]
     start = page.evaluate(STATE)
-    j.check(f"{prefix}切換清單多一項那斯達克期貨", start["names"] == ["台股", "道瓊", "那指", "標普", "費半", "日經", "韓綜", "那指期"], start["names"])
+    j.check(f"{prefix}切換清單多那斯達克期貨與美元／台幣", start["names"] == ["台股", "道瓊", "那指", "標普", "費半", "日經", "韓綜", "那指期", "美元／台幣"], start["names"])
     page.locator("#indexChip").click()
     page.locator("#indexMenu").wait_for(state="visible", timeout=5_000)
     page.wait_for_timeout(450)
@@ -245,6 +269,8 @@ def owner_run(j: Journey, browser, prefix: str, options: dict, dates: dict) -> N
     if width <= 500:
         page.screenshot(path=str(OUT / f"{prefix}3-futures-page.png"), full_page=False)
 
+    fx_run(j, page, prefix, width, dates, start)
+
     pick(page, "標普")
     gspc = page.evaluate(STATE)
     j.check(f"{prefix}從期貨換到標普：日週月回來；來源沒資料時退回日 K", gspc["periods"] == ["分時", "日", "週", "月"] and gspc["period"] == "daily" and gspc["stage"],
@@ -264,6 +290,63 @@ def owner_run(j: Journey, browser, prefix: str, options: dict, dates: dict) -> N
     context.close()
 
 
+THREE = r"\d{2}\.\d{3}"
+
+
+def fx_run(j: Journey, page, prefix: str, width: int, dates: dict, start: dict) -> None:
+    """美元／台幣（本人 2026-11-24）：選了先是分時（小數三位、寫台幣升值／貶值），可以換日K（沒有量）。進來時在期貨的分時。"""
+    import re
+    pick(page, "美元／台幣")
+    fx = page.evaluate(STATE)
+    j.check(f"{prefix}美元／台幣：選了直接是分時，週期有分時、日、週、月", fx["title"] == "美元／台幣" and fx["index"] == "usdtwd" and fx["period"] == "ts"
+            and fx["panel"] and not fx["stage"] and fx["periods"] == ["分時", "日", "週", "月"], [fx["title"], fx["period"], fx["periods"]])
+    j.check(f"{prefix}美元／台幣分時：價位都是小數三位（基準 32.380、上下緣、最高最低）", "32.380" in fx["chips"] and len(fx["chips"]) == 3
+            and all(re.fullmatch(THREE, text) for text in fx["chips"] + fx["marks"]) and len(fx["marks"]) == 2, [fx["chips"], fx["marks"]])
+    j.check(f"{prefix}美元／台幣分時：上方一行是 時間、匯率（三位）、台幣升值或貶值幾元（三位）與幅度",
+            re.fullmatch(rf"\d\d:\d\d匯率{THREE}台幣{dates['fx_word']}\d\.\d{{3}}元\(\d\.\d\d%\)", fx["quote"]) is not None, [fx["quote"], dates["fx_word"]])
+    j.check(f"{prefix}美元／台幣分時：開高低也是三位", re.fullmatch(rf"開{THREE}高{THREE}低{THREE}", fx["ohlc"]) is not None, fx["ohlc"])
+    j.check(f"{prefix}美元／台幣分時：連續一段線、不畫量、時間軸是台北時間、標題下不多寫字", fx["lines"] == 1 and fx["volume"] == 0
+            and len(fx["times"]) >= 3 and all(len(t) == 5 for t in fx["times"]) and not fx["noteShown"] and fx["label"] == "美元／台幣分時走勢",
+            [fx["lines"], fx["volume"], fx["times"], fx["note"]])
+    j.check(f"{prefix}美元／台幣：不套短中長期走勢（偏多偏空會讓人看反）、頁首報價維持台股", not fx["trendShown"] and fx["price"] == start["price"],
+            [fx["trendShown"], fx["price"]])
+    j.check(f"{prefix}美元／台幣分時：不造成橫向捲動、圖不超出畫面、排了更新", fx["noScroll"] and 0 < fx["svgWidth"] <= width and fx["polling"] is True,
+            [fx["noScroll"], fx["svgWidth"], fx["polling"]])
+    page.locator(".chart-workspace").screenshot(path=str(OUT / f"{prefix}4-usdtwd-intraday.png"))
+
+    choose_period(page, "daily")
+    daily = page.evaluate(STATE)
+    j.check(f"{prefix}美元／台幣日K：K 線圖取代分時，一年的日線（260 根），不再每分鐘更新", daily["period"] == "daily" and daily["stage"] and not daily["panel"]
+            and daily["candles"] == 260 and daily["polling"] is False, [daily["period"], daily["stage"], daily["candles"], daily["polling"]])
+    j.check(f"{prefix}美元／台幣日K：沒有量，副圖只有 MACD、KD、RSI", daily["studies"] == ["MACD", "KD", "RSI"], daily["studies"])
+    j.check(f"{prefix}美元／台幣日K：資料到來源最新那一天、標題下不多寫字", daily["note"] == f"日K · 資料截至 {dates['fx_daily_last']}" and not daily["noteShown"],
+            [daily["note"], daily["noteShown"]])
+    j.check(f"{prefix}美元／台幣日K：不造成橫向捲動、走勢那一塊照樣收著", daily["noScroll"] and not daily["trendShown"], [daily["noScroll"], daily["trendShown"]])
+    page.locator(".chart-workspace").screenshot(path=str(OUT / f"{prefix}5-usdtwd-daily.png"))
+    choose_period(page, "weekly")
+    weekly = page.evaluate(STATE)
+    j.check(f"{prefix}美元／台幣週K：由日線合出來", weekly["period"] == "weekly" and 50 <= weekly["candles"] <= 54, [weekly["period"], weekly["candles"]])
+    choose_period(page, "ts")
+    again = page.evaluate(STATE)
+    j.check(f"{prefix}美元／台幣：換回分時", again["period"] == "ts" and again["panel"] and again["polling"] is True, [again["period"], again["polling"]])
+
+
+def fx_daily_missing_run(j: Journey, browser, prefix: str, options: dict) -> None:
+    """日線向來源要不到、也沒有上一份（伺服器回 candles 是空的）：只留分時，不出錯。"""
+    context, page = j.home(browser, OWNER, **options)
+    page.route("**/api/indices/usdtwd", lambda route: route.fulfill(status=200, content_type="application/json",
+               body=json.dumps({"ok": True, "available": False, "key": "usdtwd", "symbol": "TWD=X", "name": "美元／台幣", "zone": None, "candles": [], "fetch": None})))
+    pick(page, "美元／台幣")
+    fx = page.evaluate(STATE)
+    j.check(f"{prefix}美元／台幣日線拿不到：照樣進分時，週期只有分時，不出錯", fx["index"] == "usdtwd" and fx["period"] == "ts" and fx["panel"]
+            and fx["periods"] == ["分時"] and not fx["noteShown"], [fx["index"], fx["period"], fx["periods"], fx["note"]])
+    pick(page, "台股")
+    back = page.evaluate(STATE)
+    j.check(f"{prefix}美元／台幣日線拿不到：切回台股一切照舊", back["title"] == "台股加權" and back["trendShown"] and back["periods"][:2] == ["分時", "60分"],
+            [back["title"], back["trendShown"], back["periods"]])
+    context.close()
+
+
 def friend_run(j: Journey, browser, prefix: str, options: dict) -> None:
     context, page = j.home(browser, FRIEND, **options)
     start = page.evaluate(STATE)
@@ -273,6 +356,9 @@ def friend_run(j: Journey, browser, prefix: str, options: dict) -> None:
     j.check(f"{prefix}朋友：日經照舊只有日週月", nikkei["periods"] == ["日", "週", "月"] and nikkei["period"] == "daily", nikkei["periods"])
     body = page.evaluate("() => fetch('/api/indices/n225/intraday').then(r => r.json())")
     j.check(f"{prefix}朋友：直接問入口也拿不到", body == {"available": False}, body)
+    fx = page.evaluate("() => Promise.all([fetch('/api/indices/usdtwd').then(r => r.status), fetch('/api/indices/nope').then(r => r.status),"
+                       " fetch('/api/indices/usdtwd/intraday').then(r => r.json())])")
+    j.check(f"{prefix}朋友：美元／台幣的日線和不認得的 key 一樣查無、分時拿不到", fx[0] == 404 and fx[1] == 404 and fx[2] == {"available": False}, fx)
     j.check(f"{prefix}朋友：不造成橫向捲動", nikkei["noScroll"])
     context.close()
 
@@ -308,6 +394,7 @@ def main() -> int:
             for prefix, options in [("desktop-", {"viewport": {"width": 1440, "height": 900}}),
                                     ("mobile-", {"viewport": {"width": 390, "height": 844}, "device_scale_factor": 2, "is_mobile": True, "has_touch": True})]:
                 owner_run(j, browser, prefix, options, dates)
+                fx_daily_missing_run(j, browser, prefix, options)
                 friend_run(j, browser, f"{prefix}friend-", options)
             browser.close()
         errors = [text for text in j.console if "favicon" not in text]

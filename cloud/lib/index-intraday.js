@@ -12,6 +12,9 @@ export const INTRADAY_INDICES = [
   { key: "n225", symbol: "^N225", name: "日經 225" },
   { key: "ks11", symbol: "^KS11", name: "韓國綜合" },
   { key: "nq_fut", symbol: "NQ=F", name: "那斯達克期貨", futures: true },
+  // 美元兌台幣（本人 2026-11-24：「加入台幣對美金的即時匯率在大盤頁」）：平日幾乎 24 小時在走，時間軸照期貨那一套；
+  // 價取到小數三位；資料表沒有它的日線，日線整份向來源要（upstreamDaily，見 loadUpstreamIndex）。
+  { key: "usdtwd", symbol: "TWD=X", name: "美元／台幣", continuous: true, digits: 3, upstreamDaily: true },
 ];
 
 export const INDEX_INTRADAY_PATH = /^\/api\/indices\/([^/]+)\/intraday$/;
@@ -33,6 +36,8 @@ export const sourceUrl = (symbol) =>
 const finite = (value) => typeof value === "number" && Number.isFinite(value);
 const positive = (value) => finite(value) && value > 0;
 const round2 = (value) => Math.round(value * 100) / 100;
+// 取到小數幾位（指數兩位；匯率三位）
+const rounder = (digits = 2) => (digits === 2 ? round2 : (value) => Math.round(value * 10 ** digits) / 10 ** digits);
 
 // 交易所當地的日期：來源給的時差（秒）優先；沒有才用時區名稱算；都不行就照 UTC。
 function localDate(epoch, meta) {
@@ -68,16 +73,17 @@ export function transformChart(json, item, nowSec = Math.floor(Date.now() / 1000
   const stamps = result && Array.isArray(result.timestamp) ? result.timestamp : null;
   const closes = result?.indicators?.quote?.[0]?.close;
   if (!meta || !stamps || !Array.isArray(closes)) return null;
+  const round = rounder(item.digits);
   const points = [];
   stamps.forEach((stamp, i) => {
-    if (Number.isInteger(stamp) && stamp > 0 && positive(closes[i])) points.push([stamp, round2(closes[i])]);
+    if (Number.isInteger(stamp) && stamp > 0 && positive(closes[i])) points.push([stamp, round(closes[i])]);
   });
   points.sort((a, b) => a[0] - b[0]);
   if (!points.length) return null;
   const first = points[0][0], asOf = points.at(-1)[0];
   const previous = [meta.chartPreviousClose, meta.previousClose].find(positive);
   let session = sessionOf(meta, first, asOf);
-  if (item.futures) {
+  if (item.futures || item.continuous) {
     const running = nowSec - asOf < 15 * 60;
     session = { start: first, end: running ? Math.max(asOf, first + DAY - INTERVAL_SECONDS) : asOf };
   }
@@ -89,8 +95,8 @@ export function transformChart(json, item, nowSec = Math.floor(Date.now() / 1000
     date: localDate(first, meta),
     interval: INTERVAL_SECONDS,
     // 來源沒給前一日收盤：退回第一根的價（漲跌變成「和開盤比」，總比畫不出來好）
-    previous_close: round2(previous ?? points[0][1]),
-    last: round2(positive(meta.regularMarketPrice) ? meta.regularMarketPrice : points.at(-1)[1]),
+    previous_close: round(previous ?? points[0][1]),
+    last: round(positive(meta.regularMarketPrice) ? meta.regularMarketPrice : points.at(-1)[1]),
     points,
     session,
     as_of: asOf,
@@ -98,13 +104,50 @@ export function transformChart(json, item, nowSec = Math.floor(Date.now() / 1000
   };
 }
 
-async function fetchSource(item, fetchImpl, nowMs) {
-  const response = await fetchImpl(sourceUrl(item.symbol), {
+// ---------- 最近一個月的日線（本人 2026-11-24：「分時看得到，K 線圖卻是很舊的」） ----------
+// 大盤頁國外指數的日線由每天晚上的排程寫進資料表，會比分時慢一到數天：看得到分時的人，日線也向同一個來源補到最新。
+export const DAILY_FRESH_MS = 5 * 60_000;   // 同一個指數的日線多久內不再問來源
+
+export const dailySourceUrl = (symbol) =>
+  `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1mo`;
+
+// 來源的 JSON → { available, bars: [{ date（交易所當地）, open, high, low, close, volume, provisional? }]（由舊到新，一天一根） }。
+// 開高低收有任何一個沒有價的那一天不給；量沒有或是 0 就給 null。格式不對、沒有任何一根就回 null（當成來源失敗）。
+// provisional：最後一根是「現在這個交易時段」那一天、而且問的當下還沒收盤（之後再問到收盤後的才會拿掉）。
+export function transformDaily(json, nowSec = Math.floor(Date.now() / 1000), digits = 2) {
+  const round = rounder(digits);
+  const chart = json && typeof json === "object" ? json.chart : null;
+  if (!chart || chart.error) return null;
+  const result = Array.isArray(chart.result) ? chart.result[0] : null;
+  const meta = result && typeof result.meta === "object" && result.meta ? result.meta : null;
+  const stamps = result && Array.isArray(result.timestamp) ? result.timestamp : null;
+  const quote = result?.indicators?.quote?.[0];
+  if (!meta || !stamps || !quote || !["open", "high", "low", "close"].every((field) => Array.isArray(quote[field]))) return null;
+  const byDate = new Map();   // 來源偶爾同一天給兩根（開盤時間一根、最新一根）：留時間晚的
+  stamps.map((stamp, i) => [stamp, i]).filter(([stamp]) => Number.isInteger(stamp) && stamp > 0).sort((a, b) => a[0] - b[0]).forEach(([stamp, i]) => {
+    const [open, high, low, close] = ["open", "high", "low", "close"].map((field) => quote[field][i]);
+    if (![open, high, low, close].every(positive)) return;
+    const volume = Array.isArray(quote.volume) && positive(quote.volume[i]) ? quote.volume[i] : null;
+    const date = localDate(stamp, meta);
+    byDate.set(date, { date, open: round(open), high: round(high), low: round(low), close: round(close), volume });
+  });
+  const bars = [...byDate.values()].sort((a, b) => (a.date < b.date ? -1 : 1));
+  if (!bars.length) return null;
+  const regular = meta.currentTradingPeriod?.regular;
+  if (regular && finite(regular.start) && finite(regular.end) && regular.end > nowSec && bars.at(-1).date === localDate(regular.start, meta)) {
+    bars.at(-1).provisional = true;
+  }
+  return { available: true, bars };
+}
+
+// 向來源要一份並轉換；回錯、被擋就是 null（格式不對由 transform 回 null）。
+async function fetchSource(url, fetchImpl, transform) {
+  const response = await fetchImpl(url, {
     headers: { "user-agent": USER_AGENT, accept: "application/json" },
     signal: AbortSignal.timeout(TIMEOUT_MS),
   });
   if (!response || response.status !== 200) return null;
-  return transformChart(await response.json(), item, Math.floor(nowMs / 1000));
+  return transform(await response.json());
 }
 
 // ---------- 快取 ----------
@@ -145,35 +188,70 @@ async function writeEntry(key, entry, cache) {
 
 const platformCache = () => (typeof caches !== "undefined" && caches && caches.default ? caches.default : null);
 
-// 回給畫面的那一份。deps：fetchImpl（向來源要資料）、now（毫秒）、cache（有 match／put 的平台快取；沒給用 caches.default，沒有就只用記憶體）。
-export async function loadIntraday(item, { fetchImpl = fetch, now = Date.now, cache = platformCache() } = {}) {
-  const nowMs = now();
-  const entry = await readEntry(item.key, cache);
+// 分時與日線共用的那一套：freshMs 內直接回快取；過了就問來源（同時進來的只問一次、剛失敗過 30 秒內不再撞）；
+// 問不到回最近一次成功的那一份（24 小時內，stale:true）；連那一份都沒有回 null。produce(nowMs) 回要存的那一份或 null。
+async function loadCached(key, freshMs, produce, nowMs, cache) {
+  const entry = await readEntry(key, cache);
   const age = entry ? nowMs - entry.saved_at : Infinity;
-  if (age >= 0 && age < FRESH_MS) return entry.body;
-  const fallback = () => (age >= 0 && age <= KEEP_MS ? { ...entry.body, stale: true } : { available: false, key: item.key, name: item.name });
-  const failed = failedAt.get(item.key);
+  if (age >= 0 && age < freshMs) return { body: entry.body, stale: false };
+  const fallback = () => (age >= 0 && age <= KEEP_MS ? { body: entry.body, stale: true } : null);
+  const failed = failedAt.get(key);
   if (finite(failed) && nowMs - failed >= 0 && nowMs - failed < RETRY_MS) return fallback();
-  let pending = inflight.get(item.key);
+  let pending = inflight.get(key);
   if (!pending) {
     pending = (async () => {
       try {
-        return await fetchSource(item, fetchImpl, nowMs);
+        return await produce(nowMs);
       } catch {
         return null;
       }
     })();
-    inflight.set(item.key, pending);
-    pending.finally(() => inflight.delete(item.key));
+    inflight.set(key, pending);
+    pending.finally(() => inflight.delete(key));
   }
   const body = await pending;
   if (!body) {
-    failedAt.set(item.key, nowMs);
+    failedAt.set(key, nowMs);
     return fallback();
   }
-  failedAt.delete(item.key);
-  await writeEntry(item.key, { saved_at: nowMs, body }, cache);
-  return body;
+  failedAt.delete(key);
+  await writeEntry(key, { saved_at: nowMs, body }, cache);
+  return { body, stale: false };
+}
+
+// 回給畫面的那一份。deps：fetchImpl（向來源要資料）、now（毫秒）、cache（有 match／put 的平台快取；沒給用 caches.default，沒有就只用記憶體）。
+export async function loadIntraday(item, { fetchImpl = fetch, now = Date.now, cache = platformCache() } = {}) {
+  const hit = await loadCached(item.key, FRESH_MS,
+    (nowMs) => fetchSource(sourceUrl(item.symbol), fetchImpl, (json) => transformChart(json, item, Math.floor(nowMs / 1000))), now(), cache);
+  if (!hit) return { available: false, key: item.key, name: item.name };
+  return hit.stale ? { ...hit.body, stale: true } : hit.body;
+}
+
+// 最近一個月的日線（由舊到新）；來源拿不到、也沒有 24 小時內的上一份就回 null。快取 5 分鐘，和分時各存各的。
+export async function loadRecentDaily(item, { fetchImpl = fetch, now = Date.now, cache = platformCache() } = {}) {
+  const hit = await loadCached(`daily-${item.key}`, DAILY_FRESH_MS,
+    (nowMs) => fetchSource(dailySourceUrl(item.symbol), fetchImpl, (json) => transformDaily(json, Math.floor(nowMs / 1000))), now(), cache);
+  return hit ? hit.body.bars : null;
+}
+
+// ---------- 整份日線都向來源要的（美元／台幣；本人 2026-11-24） ----------
+// 資料表沒有它：GET /api/indices/<key> 的日線是來源最近一年的日線（快取 5 分鐘，和分時、最近一個月那一份各存各的）。
+// 回的形狀和資料表那幾個指數一樣（market-indices.js 的 loadIndex）：來源拿不到時 24 小時內用上一份（fetch.ok=false，畫面會寫「最近一次沒更新到」）；
+// 連上一份都沒有：candles 是空的、available:false（畫面只留分時），不是錯誤。
+export const yearDailySourceUrl = (symbol) =>
+  `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1y`;
+
+export const upstreamDailyOf = (key) => {
+  const item = BY_KEY.get(key);
+  return item && item.upstreamDaily ? item : null;
+};
+
+export async function loadUpstreamIndex(item, { fetchImpl = fetch, now = Date.now, cache = platformCache() } = {}) {
+  const hit = await loadCached(`daily1y-${item.key}`, DAILY_FRESH_MS,
+    (nowMs) => fetchSource(yearDailySourceUrl(item.symbol), fetchImpl, (json) => transformDaily(json, Math.floor(nowMs / 1000), item.digits)), now(), cache);
+  const base = { ok: true, key: item.key, symbol: item.symbol, name: item.name, zone: null };
+  if (!hit) return { ...base, available: false, candles: [], fetch: null };
+  return { ...base, candles: hit.body.bars, fetch: hit.stale ? { ok: false, succeeded_at: null, problem: "來源暫時拿不到" } : null };
 }
 
 export const intradayUnavailable = () => ({ available: false });

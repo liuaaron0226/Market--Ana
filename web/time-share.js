@@ -148,7 +148,8 @@
     return e;
   };
   // 個股價：不加千分位、最多兩位小數（和券商 App 一樣）；大盤：千分位、兩位小數
-  const priceText = (model, v, fixed = false) => (model.kind === 'index' ? comma(v, 2)
+  // 匯率（model.digits，例如 3）：照那個小數位
+  const priceText = (model, v, fixed = false) => (model.kind === 'index' ? comma(v, model.digits ?? 2)
     : fixed ? Number(v).toFixed(2) : String(Math.round(v * 100) / 100));
 
   // model：{ kind:'stock'|'index', day: slots() 的結果, ref, top, bottom }；onIndex(i) 手指／滑鼠移到哪一分鐘
@@ -238,9 +239,10 @@
 
     // 每分鐘的量（中性灰）。開盤、收盤兩根集合競價常常特別大，最高刻度不算它們、柱子頂到上緣為止。
     const vTop = priceH + gap;
+    let vMax = 1;
     if (hasVolume) {
       const middle = drawn.filter(i => i > 0 && i < N - 1).map(i => day.slots[i].volume);
-      const vMax = Math.max(1, ...(middle.length ? middle : drawn.map(i => day.slots[i].volume))) * 1.05;
+      vMax = Math.max(1, ...(middle.length ? middle : drawn.map(i => day.slots[i].volume))) * 1.05;
       const bw = Math.max(1, (W - padR) / N * 0.62);
       const bars = svgEl('g', { class: 'ts-vol' });
       drawn.forEach(i => {
@@ -260,14 +262,37 @@
       const cross = svgEl('g', { class: 'ts-cross', visibility: 'hidden' });
       const cl = svgEl('line', { y1: 0, y2: vTop + volH });
       const cd = svgEl('circle', { r: 3.2 });
-      cross.append(cl, cd);
+      // 橫線（本人 11-24「除了垂直虛線，也要有水平虛線」）：跟著游標／手指的高度（不貼價格線），右邊標那個高度的價位；
+      // 移到量的那一塊時標那個高度的量（個股，張；大盤的成交金額單位不定，只畫線）。兩塊之間的空隙與時間軸上不畫。
+      const ch = svgEl('line', { x1: 0, x2: W - padR, class: 'ts-cross-h' });
+      const tag = svgEl('g', { class: 'ts-cross-tag' });
+      const tagBox = svgEl('rect', { height: 18, rx: 4 }), tagText = svgEl('text', { 'text-anchor': 'end' });
+      tag.append(tagBox, tagText);
+      cross.append(cl, ch, cd, tag);
       svg.append(cross);
+      const level = py => {
+        const inPrice = py >= 0 && py <= priceH, inVolume = hasVolume && py >= vTop && py <= vTop + volH;
+        const label = inPrice ? priceText(model, top - py / priceH * (top - bottom), true)
+          : inVolume && !isIndex ? lots((vTop + volH - py) / volH * vMax) : '';
+        ch.setAttribute('visibility', inPrice || inVolume ? 'inherit' : 'hidden');
+        tag.setAttribute('visibility', label ? 'inherit' : 'hidden');
+        if (!inPrice && !inVolume) return;
+        const lineY = Math.round(py) + 0.5;
+        ch.setAttribute('y1', lineY); ch.setAttribute('y2', lineY);
+        if (!label) return;
+        const w = label.length * 6.7 + 10, paneTop = inPrice ? 0 : vTop, paneBottom = inPrice ? priceH : vTop + volH;
+        const boxTop = Math.max(paneTop, Math.min(paneBottom - 18, py - 9));
+        tagBox.setAttribute('x', W - padR - w); tagBox.setAttribute('y', boxTop); tagBox.setAttribute('width', w);
+        tagText.setAttribute('x', W - padR - 5); tagText.setAttribute('y', boxTop + 12.6);
+        tagText.textContent = label;
+      };
       const at = ev => {
         const box = svg.getBoundingClientRect();
         const want = Math.round((ev.clientX - box.left) / (W - padR) * (count - 1));
         const i = drawn.reduce((best, k) => (Math.abs(k - want) < Math.abs(best - want) ? k : best), drawn[0]);
         cl.setAttribute('x1', x(i)); cl.setAttribute('x2', x(i));
         cd.setAttribute('cx', x(i)); cd.setAttribute('cy', y(day.slots[i].price));
+        level((ev.clientY - box.top) * (box.height ? H / box.height : 1));
         cross.setAttribute('visibility', 'visible');
         onIndex(i);
       };
@@ -291,8 +316,10 @@
       span.append(el('i', labelClass || '', label), el('b', 'num', value));
       return span;
     };
-    host.append(el('span', 'ts-q-time num', (model.clock || clock)(i)), pair(isIndex ? '指數' : '價', priceText(model, s.price, true)),
-      el('span', `num ts-q-chg is-${dir}`, `${diff > 0 ? '▲' : diff < 0 ? '▼' : ''}${isIndex ? comma(Math.abs(diff), 2) : Math.abs(diff).toFixed(2)}(${Math.abs(pct).toFixed(2)}%)`));
+    // model.quoteLabel／changeText（匯率，market-index.js 的 fxModel）：名稱與漲跌那一段換成它給的寫法，顏色照數字的漲跌
+    host.append(el('span', 'ts-q-time num', (model.clock || clock)(i)), pair(model.quoteLabel || (isIndex ? '指數' : '價'), priceText(model, s.price, true)),
+      el('span', `num ts-q-chg is-${dir}`, model.changeText ? model.changeText(diff, pct)
+        : `${diff > 0 ? '▲' : diff < 0 ? '▼' : ''}${isIndex ? comma(Math.abs(diff), 2) : Math.abs(diff).toFixed(2)}(${Math.abs(pct).toFixed(2)}%)`));
     if (!isIndex) host.append(pair('均', s.avg.toFixed(2), 'ts-q-avg'), pair('量', lots(s.volume)));
   }
 
@@ -303,7 +330,7 @@
     const pair = (label, value) => {
       if (!finite(value)) return;
       const span = el('span');
-      span.append(el('i', '', label), el('b', 'num', model.kind === 'index' ? comma(value, 2) : priceText(model, value)));
+      span.append(el('i', '', label), el('b', 'num', priceText(model, value)));
       host.append(span);
     };
     pair('開', open); pair('高', high); pair('低', low);

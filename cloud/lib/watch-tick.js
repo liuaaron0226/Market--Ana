@@ -59,6 +59,35 @@ async function saveRun(db, nowIso, checkedCodes, detail) {
   ).bind(...rows.flat()).run();
 }
 
+// ---------- 到價提醒（本人 2026-11-24：分析工具的水平價位線帶提醒；資料表 0038） ----------
+// 站主畫的、提醒開著的價位線，和上面的觸發線用同一份報價比：一檔股票一分鐘只查一次報價。
+// 沒有在盯觸發線的股票（沒關注、已觸價、或根本不在自選股）要另外多查報價：每分鐘最多多查這幾檔，最久沒查的先查。
+export const ALERT_EXTRA_STOCKS = 10;
+
+// 成交價在線的哪一邊：up＝還在線下面（漲到線就算到）、down＝還在線上面（跌到線就算到）、null＝剛好在線上
+export const sideOf = (price, line) => (price < line ? "up" : price > line ? "down" : null);
+// 成交價到線了沒有。side 是提醒打開時價格在線的哪一邊；不知道（null）的話只有剛好等於才算，不然先不通知。
+export function alertReached(side, price, line) {
+  if (!Number.isFinite(price) || !Number.isFinite(line)) return false;
+  return side === "up" ? price >= line : side === "down" ? price <= line : price === line;
+}
+
+// 站主每一條開著提醒的價位線（一檔可以有好幾條）。資料表還沒套 0038 時當作沒有，不影響觸發線。
+async function alertLines(db, email) {
+  try {
+    const { results } = await db.prepare(
+      "SELECT d.code, d.id, d.price1, d.alert_side, d.alert_name, w.name, w.market, s.checked_at " +
+      "FROM user_drawings d LEFT JOIN user_watchlist w ON w.email = d.email AND w.code = d.code " +
+      "LEFT JOIN watch_tick_state s ON s.key = 'code:' || d.code " +
+      "WHERE d.email = ? AND d.alert = 1 ORDER BY d.code, d.id",
+    ).bind(email).all();
+    return results;
+  } catch (error) {
+    if (/no such column/i.test(String(error?.message))) return [];
+    throw error;
+  }
+}
+
 export async function runWatchTick(env, { now = Date.now, quoteFetch = fetch, pushFetch = fetch } = {}) {
   const nowMs = now();
   if (!releasePolicy(env).features.watchlist_watch_v1) return { skipped: "off" };
@@ -71,9 +100,10 @@ export async function runWatchTick(env, { now = Date.now, quoteFetch = fetch, pu
     await saveRun(db, nowIso, [], { status: "error", error: "排程程式缺少站主或報價金鑰設定" });
     return { skipped: "unconfigured" };
   }
-  let left = Math.min(50, Math.max(10, Number(env.WATCH_TICK_SUBREQUESTS) || DEFAULT_SUBREQUESTS)) - 4;   // 讀最新基準日、讀候選、讀裝置、寫狀態
+  let left = Math.min(50, Math.max(10, Number(env.WATCH_TICK_SUBREQUESTS) || DEFAULT_SUBREQUESTS)) - 5;   // 讀最新基準日、讀候選、讀提醒、讀裝置、寫狀態
   const budget = Math.min(DEFAULT_QUOTE_BUDGET, Math.max(1, Number(env.WATCH_TICK_BUDGET) || DEFAULT_QUOTE_BUDGET));
   const queue = await candidates(db, email, today);
+  const lines = await alertLines(db, email);
   const { results: devices } = await db.prepare("SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE email = ? ORDER BY created_at")
     .bind(email).all();
   // 一次觸價要用掉：記一筆＋每台裝置的送出與結果。先留給它，報價才不會把通知擠掉。
@@ -83,7 +113,24 @@ export async function runWatchTick(env, { now = Date.now, quoteFetch = fetch, pu
   let stale = 0, fresh = 0;
   const detail = { status: "ok", watched: queue.length, checked: 0, touched: 0, errors: 0, rate_limited: false, closed_today: false };
 
-  for (const row of queue) {
+  // 這一分鐘要查報價的股票：盯觸發線的那幾檔，加上只有提醒的（最多 ALERT_EXTRA_STOCKS 檔）；合起來最久沒查的先查。
+  const linesByCode = new Map();
+  for (const line of lines) linesByCode.set(line.code, [...(linesByCode.get(line.code) || []), line]);
+  const queued = new Set(queue.map((row) => row.code));
+  const byAge = (a, b) => (a.checked_at || "").localeCompare(b.checked_at || "") || a.code.localeCompare(b.code);
+  const extras = [...linesByCode.values()].filter((group) => !queued.has(group[0].code))
+    .map((group) => ({ code: group[0].code, market: group[0].market || "", checked_at: group[0].checked_at, alertOnly: true }))
+    .sort(byAge);
+  const work = extras.length ? [...queue, ...extras.slice(0, ALERT_EXTRA_STOCKS)].sort(byAge) : queue;
+  if (lines.length) Object.assign(detail, { alerts: lines.length, alert_fired: 0, alert_deferred: Math.max(0, extras.length - ALERT_EXTRA_STOCKS) });
+  const send = async (payload) => {
+    for (const device of devices) {
+      left -= 2;
+      await sendOne(db, device, payload, env, { fetchImpl: pushFetch, now: () => nowMs, vapidCache });
+    }
+  };
+
+  for (const row of work) {
     if (checked.length >= budget || left < 1 + touchCost) break;
     left -= 1;
     let quote;
@@ -103,8 +150,37 @@ export async function runWatchTick(env, { now = Date.now, quoteFetch = fetch, pu
       continue;
     }
     fresh += 1;
+    // 到價提醒：這一檔每一條開著的價位線各比一次。先把提醒關掉（同一條只會成功一次）再送，兩次執行重疊也不會重複通知。
+    for (const line of linesByCode.get(row.code) || []) {
+      const value = Number(line.price1), side = line.alert_side;
+      if (!alertReached(side, quote.price, value)) {
+        // 畫的時候不知道現價：第一次看到報價時記下價格在線的哪一邊，之後穿過去才通知。
+        if (!side && left > touchCost) {
+          left -= 1;
+          await db.prepare("UPDATE user_drawings SET alert_side = ? WHERE email = ? AND code = ? AND id = ? AND alert = 1 AND alert_side IS NULL")
+            .bind(sideOf(quote.price, value), email, line.code, line.id).run();
+        }
+        continue;
+      }
+      if (left < touchCost) break;   // 這一分鐘的額度不夠通知：提醒留著，下一分鐘再比
+      left -= 1;
+      const claimed = await db.prepare(
+        "UPDATE user_drawings SET alert = 0, alert_fired_at = ?, alert_fired_price = ? WHERE email = ? AND code = ? AND id = ? AND alert = 1",
+      ).bind(nowIso, quote.price, email, line.code, line.id).run();
+      if (!claimed.meta.changes) continue;
+      detail.alert_fired += 1;
+      if (!pushConfigured(env)) continue;
+      const name = line.name || line.alert_name || line.code;
+      await send({
+        title: `${name} 到價 ${fmt(value)}`,
+        body: `成交 ${fmt(quote.price)}，${side === "up" ? "向上觸及" : side === "down" ? "向下觸及" : "觸及"} ${fmt(value)}`,
+        url: `/stock.html?code=${encodeURIComponent(line.code)}`, tag: `alert-${line.code}-${line.id}`,
+      });
+    }
+    if (row.alertOnly) continue;
     const value = Number(row.line.value);
     if (!(quote.price >= value)) continue;
+    if (left < touchCost) continue;   // 額度被這一檔的到價提醒用掉了：觸發線下一分鐘再比
     // 先記觸價（同一份判斷只會成功一次），再送；這樣兩次執行重疊時也不會重複通知。
     left -= 1;
     const claimed = await db.prepare(
@@ -114,19 +190,15 @@ export async function runWatchTick(env, { now = Date.now, quoteFetch = fetch, pu
     if (!claimed.meta.changes) continue;
     detail.touched += 1;
     if (!pushConfigured(env)) continue;
-    const payload = {
+    await send({
       title: `${row.code} ${row.name} 已到觸發線`,
       body: `觸發線 ${fmt(value)}，成交 ${fmt(quote.price)}`,   // 規格：只有代號、名稱、事件與價位
       url: `/stock.html?code=${encodeURIComponent(row.code)}`, tag: `watch-${row.code}`,
-    };
-    for (const device of devices) {
-      left -= 2;
-      await sendOne(db, device, payload, env, { fetchImpl: pushFetch, now: () => nowMs, vapidCache });
-    }
+    });
   }
   detail.closed_today = fresh === 0 && stale > 0;
   detail.checked = checked.length;
-  detail.pending = Math.max(0, queue.length - checked.length);
+  detail.pending = Math.max(0, work.length - checked.length);
   await saveRun(db, nowIso, checked, detail);
   return detail;
 }

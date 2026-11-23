@@ -3,11 +3,13 @@
 import contextlib
 import io
 import json
+import re
 import sqlite3
 import tempfile
 import unittest
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 from urllib.parse import parse_qs, urlsplit
 
 import broker_branches as bb
@@ -125,7 +127,7 @@ class Case(unittest.TestCase):
 
     def state_file(self, purpose):
         """照排程的做法：用腳本自己印的查詢讀資料庫，存成 wrangler --json 的樣子。"""
-        cursor = self.db.execute(bb.state_sql(purpose))
+        cursor = self.db.execute(bb.state_sql(purpose, today=TODAY))
         names = [column[0] for column in cursor.description]
         return self.write(f"state-{purpose}.json", [dict(zip(names, row)) for row in cursor.fetchall()])
 
@@ -377,7 +379,7 @@ class BackfillTest(Case):
         self.assertEqual(shown["stocks"]["statuses"], {"done": 1})
 
 
-class DailyTest(Case):
+class Seeded(Case):
     def seed(self, *, last_attempt="2026-11-23T02:00:00Z", through="2026-11-20"):
         self.db.executemany("INSERT INTO broker_branches VALUES (?, ?, ?, 'x')",
                             [("1040", "1040", "臺銀"), (SUB, "9200", "凱基-站前"), ("9999", "9999", "舊主力")])
@@ -385,6 +387,24 @@ class DailyTest(Case):
                             [("1040", "2026-11-20", 9, 1, 8), (SUB, "2026-10-01", 2, 1, 1), ("9999", "2025-12-01", 7, 1, 6)])
         self.db.execute("INSERT INTO broker_branch_stocks VALUES ('2330', '2023-11-25', ?, ?, NULL)", (through, last_attempt))
         self.db.execute("INSERT INTO broker_branch_stocks VALUES ('2454', NULL, NULL, ?, 'backfill-in-progress')", (last_attempt,))
+
+    def seed_many(self, extra, *, code="2330"):
+        """一檔已回補的股票，有 MAX_CANDIDATES + extra 個分點：前 extra 個量很小（各 5 列、每天 1 張），其餘各 2 列、量大。"""
+        small = [f"{1000 + index}" for index in range(max(extra, 0))]
+        big = [f"{1000 + index}" for index in range(max(extra, 0), bb.MAX_CANDIDATES + extra)]
+        self.db.executemany("INSERT OR IGNORE INTO broker_branches VALUES (?, ?, ?, 'x')", [(b, b, f"分點{b}") for b in small + big])
+        self.db.executemany("INSERT INTO broker_branch_days VALUES (?, ?, ?, 1, 0, 1)",
+                            [(code, b, f"2026-01-{day:02d}") for b in small for day in range(5, 10)])
+        self.db.executemany("INSERT INTO broker_branch_days VALUES (?, ?, ?, 500, 0, 500)",
+                            [(code, b, day) for b in big for day in ("2026-01-05", "2026-01-06")])
+        self.db.execute("INSERT INTO broker_branch_stocks VALUES (?, '2023-11-25', '2026-11-20', '2026-11-23T02:00:00Z', NULL)", (code,))
+        return small, big
+
+    def count(self, table, where="1 = 1"):
+        return self.db.execute(f"SELECT COUNT(*) FROM {table} WHERE {where}").fetchone()[0]
+
+
+class DailyTest(Seeded):
 
     def web(self):
         def detail(code, branch, bhid, preset, span):
@@ -485,23 +505,234 @@ class QueryTest(Case):
         self.assertEqual([row[0] for row in self.db.execute(query)], ["2330", "2454", "2603"])
         self.assertNotIn("friend", query)
 
-    def test_state_sql_is_one_read_only_query_per_purpose(self):
+    def test_state_sql_is_one_read_only_query_that_never_scans_every_row(self):
         self.db.executemany("INSERT INTO broker_branch_stocks VALUES (?, ?, NULL, NULL, NULL)", [("2330", "2023-11-25"), ("2454", None)])
         self.db.execute("INSERT INTO broker_branches VALUES ('1040', '1040', '臺銀', 'x')")
-        self.db.executemany("INSERT INTO broker_branch_days VALUES (?, '1040', ?, 1, 0, 1)",
-                            [("2330", "2026-11-20"), ("2330", "2026-11-23"), ("2454", "2026-11-23")])
-        for purpose, code in (("daily", "2330"), ("backfill", "2454")):
+        self.db.executemany("INSERT INTO broker_branch_days VALUES (?, ?, ?, 1, 0, 1)",
+                            [("2330", "1040", "2025-03-03"), ("2330", "1040", "2026-11-20"), ("2330", "1040", "2026-11-23"),
+                             ("2330", "8888", "2026-09-01"), ("2454", "1040", "2026-11-23")])
+        queries = set()
+        for purpose in ("daily", "backfill", "scheduled", "trim"):
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
-                bb.main(["state-sql", "--for", purpose])
-            query = out.getvalue().strip()
-            self.assertTrue(query.upper().startswith("SELECT") and query.count(";") == 1)
-            state = bb.read_state(self.state_file(purpose))
-            self.assertEqual(set(state["stocks"]), {"2330", "2454"})
-            self.assertEqual(list(state["branches"]), [code])
-            self.assertEqual(state["branches"][code]["1040"]["bhid"], "1040")
-        self.assertEqual(bb.read_state(self.state_file("daily"))["branches"]["2330"]["1040"],
-                         {"bhid": "1040", "first": "2026-11-20", "last": "2026-11-23"})
+                bb.main(["state-sql", "--for", purpose], now=NOW)
+            queries.add(out.getvalue().strip())
+        self.assertEqual(queries, {bb.state_sql(today=TODAY)}, "每一種模式都用同一句")
+        query = queries.pop()
+        self.assertTrue(query.upper().startswith("WITH RECURSIVE") and query.count(";") == 1)
+        for word in ("INSERT", "UPDATE ", "DELETE", "DROP"):
+            self.assertNotIn(word, query.upper())
+        for needed in ("max(d.date)", "min(d.branch_id)", "group_concat(d.date)", "count(*)"):
+            self.assertIn(needed, query)
+        plan = [row[-1] for row in self.db.execute("EXPLAIN QUERY PLAN " + query)]
+        touching = [line for line in plan if re.search(r"\b(d|broker_branch_days)\b", line)]
+        self.assertTrue(touching)
+        for line in touching:
+            self.assertTrue(line.startswith("SEARCH"), f"每日買賣超那張表只能用索引查，不能整張掃：{line}")
+        state = bb.read_state(self.state_file("daily"))
+        self.assertEqual(set(state["stocks"]), {"2330", "2454"})
+        self.assertEqual({code: sorted(found) for code, found in state["branches"].items()}, {"2330": ["1040", "8888"], "2454": ["1040"]})
+        self.assertEqual(state["branches"]["2330"]["1040"],
+                         {"bhid": "1040", "last": "2026-11-23", "recent": frozenset({"2026-11-20", "2026-11-23"})})
+        self.assertEqual(state["branches"]["2330"]["8888"], {"bhid": None, "last": "2026-09-01", "recent": frozenset()},
+                         "45 天以前的日子不讀回來")
+        self.assertIsNone(state["stocks"]["2330"]["excess_rows"], "候選分點沒超過上限的股票不算要刪幾列")
+
+
+class ScheduledTest(Seeded):
+    """每天排程那一輪（票 02）：整理 → 每日更新 → 還沒回補的盡量回補，共用頁數與列數的額度。"""
+
+    def web(self, *, top=((*TAIBANK, 500, 100),), window=None):
+        def detail(code, branch, bhid, preset, span):
+            if span is None:
+                return detail_page([(date(2026, 11, 19), 6, 1), (date(2026, 11, 23), 7, 7)])
+            return detail_page([(START, 5, 0), (date(2026, 6, 1), 10, 30), (date(2026, 11, 23), 100, 20)])
+
+        web = backfill_web(detail=detail)
+        web.latest = lambda code: summary_page(list(top))
+        if window:
+            fallback = web.window
+            web.window = lambda code, start, end: window(code) or fallback(code, start, end)
+        return web
+
+    def scheduled(self, *codes, web=None, extra=()):
+        web = web or self.web()
+        shown = self.run_cli("scheduled", "--stocks", self.stocks_file(*codes), "--state", self.state_file("scheduled"),
+                             "--years", "1", *extra, web=web)
+        return web, shown
+
+    def test_one_run_updates_the_backfilled_stocks_then_backfills_the_waiting_ones(self):
+        self.seed()
+        web, shown = self.scheduled("2330", "2454", "2603")
+        self.assertEqual(web.kinds(), ["summary"] + (["summary"] * 4 + ["detail"] * 3) * 2)
+        self.assertTrue(web.calls[0].endswith("/zco_2330.djhtm"), "先做每日更新")
+        self.assertIn("a=2454&", web.calls[1], "做到一半的那一檔先接著回補")
+        self.assertIn("a=2603&", web.calls[8])
+        self.assertEqual(self.days("1040")[-1], ("2026-11-23", 500.0, 100.0, 400.0))
+        for code in ("2454", "2603"):
+            self.assertEqual(self.stock(code)["backfilled_from"], "2025-11-25")
+            self.assertEqual(self.count("broker_branch_days", f"code = '{code}'"), 9)
+        self.assertEqual((shown["status"], shown["mode"], shown["pages"], shown["budget"], shown["rows"], shown["row_budget"]),
+                         ("ok", "scheduled", 15, 400, 19, 60000))
+        self.assertEqual((shown["owner_stocks"], shown["backfilled"], shown["waiting_backfill"], shown["stopped"], shown["errors"]),
+                         (3, 3, 0, None, {}))
+        self.assertEqual(shown["trim"], {"stocks": 0, "rows": 0, "pending": 0})
+        self.assertEqual(shown["daily"]["stocks"], {"count": 1, "statuses": {"done": 1}, "errors": {}})
+        self.assertEqual((shown["backfill"]["stocks"]["statuses"], shown["backfill"]["pages"]), ({"done": 2}, 14))
+        self.assertEqual(len(self.stdout.strip().splitlines()), 1)
+        for private in ("2330", "2454", "2603", "1040", "8888", "臺銀", "國泰"):
+            self.assertNotIn(private, self.stdout)
+        report = self.report()
+        self.assertEqual([part["mode"] for part in report["parts"]], ["daily", "backfill"])
+        self.assertEqual([stock["code"] for stock in report["parts"][1]["stocks"]], ["2454", "2603"])
+
+    def test_the_page_budget_is_shared_and_the_rest_waits_for_the_next_run(self):
+        self.seed()
+        web, shown = self.scheduled("2330", "2454", "2603", extra=("--budget", "3"))
+        self.assertEqual(web.kinds(), ["summary"] * 3)
+        self.assertEqual((shown["pages"], shown["stopped"], shown["waiting_backfill"], shown["errors"]),
+                         (3, "page-budget", 2, {"backfill-in-progress": 1}))
+        self.assertEqual(self.stock()["updated_through"], "2026-11-23", "每日更新那一段照寫")
+        self.assertIsNone(self.stock("2603"))
+
+    def test_one_failing_stock_is_counted_by_kind_and_the_others_go_on(self):
+        self.seed()
+        web = self.web(window=lambda code: Response(status=500) if code == "2454" else None)
+        _, shown = self.scheduled("2330", "2454", "2603", web=web)
+        self.assertEqual((shown["errors"], shown["waiting_backfill"], shown["backfilled"], shown["stopped"]), ({"HTTP 500": 1}, 1, 2, None))
+        self.assertEqual(shown["backfill"]["stocks"]["statuses"], {"failed": 1, "done": 1})
+        self.assertEqual(self.stock("2454")["last_error"], "HTTP 500")
+        self.assertEqual(self.stock("2603")["last_error"], None)
+
+    def test_no_new_stock_is_started_when_its_estimate_would_pass_the_row_budget(self):
+        budget = str(bb.ROWS_PER_STOCK_ESTIMATE + 5)
+        web, shown = self.scheduled("2454", "2603", extra=("--row-budget", budget))
+        self.assertTrue(all("=2454&" in url for url in web.calls), "第一檔寫了 9 列，剩下的額度不夠估計的一檔")
+        self.assertEqual((shown["stopped"], shown["rows"], shown["backfilled"], shown["waiting_backfill"]), ("row-budget", 9, 1, 1))
+        self.assertEqual(shown["backfill"]["stocks"], {"count": 1, "statuses": {"done": 1}, "errors": {}})
+        self.assertIsNone(self.stock("2603"), "沒開始的那一檔什麼都不記")
+        web, shown = self.scheduled("2454", "2603", extra=("--row-budget", budget))
+        self.assertTrue(web.calls[0].endswith("/zco_2454.djhtm"), "昨天回補完的那一檔今天開始每日更新")
+        self.assertTrue(len(web.calls) == 8 and all("=2603&" in url for url in web.calls[1:]), "隔天接著回補下一檔")
+        self.assertEqual((shown["stopped"], shown["waiting_backfill"], shown["daily"]["rows"]), (None, 0, 0))
+
+    def test_a_stock_that_runs_out_of_rows_midway_stops_at_a_branch_and_continues_next_run(self):
+        with mock.patch.object(bb, "ROWS_PER_STOCK_ESTIMATE", 5):
+            web, shown = self.scheduled("2454", extra=("--row-budget", "6"))
+            self.assertEqual(web.kinds(), ["summary"] * 4 + ["detail"] * 2)
+            self.assertEqual((shown["stopped"], shown["rows"], shown["errors"]), ("row-budget", 6, {"backfill-in-progress": 1}))
+            self.assertEqual(self.stock("2454")["backfilled_from"], None)
+            web, shown = self.scheduled("2454", extra=("--row-budget", "8"))
+            self.assertEqual(web.kinds(), ["summary"] * 4 + ["detail"])
+            self.assertEqual(self.stock("2454")["backfilled_from"], "2025-11-25")
+            self.assertEqual(self.count("broker_branch_days", "code = '2454'"), 9)
+
+    def test_the_weekly_refresh_writes_only_new_days_and_the_latest_stored_day(self):
+        self.db.execute("INSERT INTO broker_branches VALUES ('1040', '1040', '臺銀', 'x')")
+        self.db.executemany("INSERT INTO broker_branch_days VALUES ('2330', '1040', ?, ?, 0, ?)",
+                            [("2024-05-02", 3, 3), ("2026-11-17", 99, 99), ("2026-11-20", 88, 88)])
+        self.db.execute("INSERT INTO broker_branch_stocks VALUES ('2330', '2023-11-25', '2026-11-20', '2026-11-20T02:00:00Z', NULL)")
+
+        def detail(code, branch, bhid, preset, span):   # 最近 20 日：17 日與 20 日已經有，18、19、23 日是新的
+            return detail_page([(date(2026, 11, day), 6, 1) for day in (17, 18, 19, 20, 23)])
+
+        web = Web(latest=lambda code: summary_page([(*TAIBANK, 500, 100)]), detail=detail)
+        shown = self.run_cli("scheduled", "--stocks", self.stocks_file("2330"), "--state", self.state_file("scheduled"), web=web)
+        self.assertEqual(web.kinds(), ["summary", "detail"], "本週第一次：近期有動作的分點補最近 20 日")
+        written = [line for line in self.sql.splitlines() if line.startswith("INSERT OR REPLACE INTO broker_branch_days")]
+        self.assertEqual(len(written), 1)
+        self.assertNotIn("2026-11-17", written[0], "已經有的日子不重寫")
+        self.assertNotIn("2024-05-02", written[0], "三年的舊資料不重寫")
+        self.assertEqual(self.days("1040"), [("2024-05-02", 3.0, 0.0, 3.0), ("2026-11-17", 99.0, 0.0, 99.0),
+                                             ("2026-11-18", 6.0, 1.0, 5.0), ("2026-11-19", 6.0, 1.0, 5.0),
+                                             ("2026-11-20", 6.0, 1.0, 5.0), ("2026-11-23", 6.0, 1.0, 5.0)],
+                         "漏掉的日子補上；最新的那一天（之前可能是前 15 大那一頁的數字）再寫一次")
+        self.assertEqual((shown["rows"], shown["daily"]["unchanged_rows"]), (4, 1))
+
+        web = Web(latest=lambda code: summary_page([(*TAIBANK, 500, 100)]), detail=detail)
+        shown = self.run_cli("scheduled", "--stocks", self.stocks_file("2330"), "--state", self.state_file("scheduled"), web=web)
+        self.assertEqual((web.kinds(), shown["rows"]), (["summary"], 0), "同一天再跑一次：來源沒有新的一天，一列都不寫")
+        self.assertNotIn("INSERT OR REPLACE INTO broker_branch_days", self.sql)
+        self.assertEqual(self.days("1040")[-1], ("2026-11-23", 6.0, 1.0, 5.0), "明細頁的數字不被前 15 大那一頁蓋回去")
+
+    def test_a_missed_trading_day_is_refreshed_without_waiting_for_next_week(self):
+        self.seed(through="2026-11-19")   # 這週跑過了，但 11-20（週五）那天沒抓到，今天的頁面是 11-23
+        web, _ = self.scheduled("2330")
+        self.assertEqual(sum("&C=1&ver=V3" in url for url in web.calls), 2)
+
+    def test_at_the_cap_new_branches_from_the_days_top_list_are_ignored_and_counted(self):
+        top = (("1005", "1005", "分點1005", 500, 100), (DUNNAN[0], DUNNAN[1], DUNNAN[2], 400, 20), (*ZHANQIAN, 300, 10))
+        self.seed_many(0)
+        web, shown = self.scheduled("2330", web=self.web(top=top))
+        self.assertEqual(len(web.calls), 2, "只有本來就是候選的那個（很久沒動作）補 60 日；沒加入的不抓")
+        self.assertIn("b=1005&C=3", web.calls[1])
+        self.assertEqual((shown["daily"]["ignored_candidates"], shown["daily"]["new_candidates"]), (2, 1))
+        self.assertEqual(self.count("broker_branches"), bb.MAX_CANDIDATES, "沒加入的不存名稱")
+        self.assertEqual((self.days("8888"), self.days(SUB)), ([], []))
+        self.assertEqual(self.days("1005")[-1][0], "2026-11-23")
+        for private in ("1005", "8888", "國泰", "凱基"):
+            self.assertNotIn(private, self.stdout)
+
+    def test_below_the_cap_new_branches_join_until_it_is_full(self):
+        top = (("1005", "1005", "分點1005", 500, 100), (DUNNAN[0], DUNNAN[1], DUNNAN[2], 400, 20), (*ZHANQIAN, 300, 10))
+        self.seed_many(-1)
+        _, shown = self.scheduled("2330", web=self.web(top=top))
+        self.assertEqual((shown["daily"]["ignored_candidates"], shown["daily"]["new_candidates"]), (1, 2))
+        self.assertEqual(len(self.days("8888")), 2)
+        self.assertEqual(self.days(SUB), [])
+        self.assertEqual(self.count("broker_branches"), bb.MAX_CANDIDATES)
+
+    def test_trim_deletes_only_the_branches_outside_the_top_ones_within_the_row_budget_and_resumes(self):
+        small, big = self.seed_many(3)
+        self.db.execute("INSERT INTO broker_branch_days VALUES ('2454', '1000', '2026-01-05', 1, 0, 1)")   # 別檔的同一個分點不動
+        self.db.execute("INSERT INTO broker_branch_stocks VALUES ('2454', NULL, NULL, NULL, 'backfill-in-progress')")
+        self.assertEqual(bb.read_state(self.state_file("trim"))["stocks"]["2330"]["excess_rows"], 15)
+
+        shown = self.run_cli("trim", "--state", self.state_file("trim"), "--row-budget", "10")
+        self.assertEqual(shown, {"status": "ok", "mode": "trim", "trim": {"stocks": 1, "rows": 10, "pending": 1},
+                                 "rows": 10, "row_budget": 10})
+        statements = self.sql.splitlines()
+        self.assertEqual(len(statements), 2)
+        self.assertTrue(statements[0].startswith("DELETE FROM broker_branch_days WHERE rowid IN ("))
+        self.assertIn("sum(abs(net)) DESC", statements[0])
+        self.assertTrue(statements[0].endswith("LIMIT 10);"))
+        self.assertEqual(self.count("broker_branch_days", "code = '2330' AND buy = 1"), 5)
+        self.assertEqual(self.count("broker_branch_days", "code = '2330' AND buy = 500"), 2 * bb.MAX_CANDIDATES, "排名內的一列都不刪")
+        self.assertNotIn("2330", self.stdout)
+
+        shown = self.run_cli("trim", "--state", self.state_file("trim"), "--row-budget", "10")
+        self.assertEqual(shown["trim"], {"stocks": 1, "rows": 5, "pending": 0})
+        self.assertEqual(self.count("broker_branch_days", "code = '2330' AND buy = 1"), 0)
+        self.assertEqual(self.count("broker_branch_days", "code = '2330'"), 2 * bb.MAX_CANDIDATES)
+        self.assertEqual(self.count("broker_branch_days", "code = '2454'"), 1)
+        self.assertEqual(sorted(row[0] for row in self.db.execute("SELECT branch_id FROM broker_branches")), sorted(["1000", *big]),
+                         "沒有任何列的分點名稱也刪掉；別檔還在用的留著")
+
+        shown = self.run_cli("trim", "--state", self.state_file("trim"))
+        self.assertEqual((shown["trim"], self.sql), ({"stocks": 0, "rows": 0, "pending": 0}, ""))
+
+    def test_the_scheduled_run_trims_first_and_the_deletes_use_the_shared_row_budget(self):
+        self.seed_many(3)
+        budget = str(bb.ROWS_PER_STOCK_ESTIMATE + 10)
+        web, shown = self.scheduled("2330", "2454", extra=("--row-budget", budget))
+        self.assertEqual(web.calls, [], "刪掉的 15 列加 3 個名稱算進額度：剩下的不夠開始回補；等整理的那一檔這一輪不更新")
+        self.assertTrue(self.sql.startswith("DELETE FROM broker_branch_days"))
+        self.assertEqual((shown["trim"], shown["rows"], shown["waiting_trim"], shown["stopped"], shown["waiting_backfill"]),
+                         ({"stocks": 1, "rows": 15, "pending": 0}, 18, 1, "row-budget", 1))
+        self.assertEqual((self.count("broker_branches"), self.count("broker_branch_days")), (bb.MAX_CANDIDATES, 2 * bb.MAX_CANDIDATES))
+
+        web, shown = self.scheduled("2330", "2454")
+        self.assertTrue(web.calls[0].endswith("/zco_2330.djhtm"), "整理完的隔天恢復每日更新")
+        self.assertEqual((shown["trim"]["stocks"], shown["waiting_trim"], shown["backfilled"], shown["waiting_backfill"]), (0, 0, 2, 0))
+        self.assertNotIn("DELETE", self.sql)
+
+    def test_trim_keeps_room_for_the_daily_update_of_the_other_stocks(self):
+        self.seed_many(3)
+        self.seed_many(0, code="2603")
+        shown = self.run_cli("scheduled", "--stocks", self.stocks_file("2330", "2603"), "--state", self.state_file("scheduled"),
+                             "--row-budget", str(bb.DAILY_ROW_RESERVE + 4), web=self.web(top=(("1005", "1005", "分點1005", 500, 100),)))
+        self.assertEqual(shown["trim"], {"stocks": 1, "rows": 4, "pending": 1}, "替另一檔的每日更新留了額度")
+        self.assertEqual(shown["daily"]["stocks"]["statuses"], {"done": 1})
 
 
 if __name__ == "__main__":

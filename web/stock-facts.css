@@ -67,6 +67,13 @@
 .bd .sf-spark-cell { width: 68px; }
 .bd .sf-spark { display: block; width: 64px; height: 20px; margin-left: auto; }
 .bd .sf-spark polyline { fill: none; stroke: var(--ink); stroke-width: 1.2; vector-effect: non-scaling-stroke; }
+/* 融資使用率（本人 2026-11-24）：接在融資券表格下面的一列，樣子同表格的一列——名稱在左，數字與走勢小圖靠右（小圖和上面那一欄對齊） */
+.bd .sf-use { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--hair); font-size: 14px; }
+.bd .sf-use-name { margin-right: auto; font-weight: 600; white-space: nowrap; }
+.bd .sf-use b { font: 400 14px var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bd .sf-use .sf-spark { flex: none; margin-left: 0; }
+@media (min-width: 861px) { .bd .sf-use { gap: 4px; font-size: 13px; } .bd .sf-use b { font-size: 11.5px; letter-spacing: -.02em; } }
+@media (max-width: 860px) { .bd .sf-use { gap: 8px; font-size: 13px; } .bd .sf-use b { font-size: 13px; } }
 .bd .sf-sub { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-top: 14px; font-size: 13px; }
 .bd .sf-sub b { font: 500 13px var(--mono); white-space: nowrap; }
 /* 月營收圖（本人 11-17 看不懂原本的年增直條）：上方一行讀數、每月一根長條、橫軸隔 3 個月標月份。

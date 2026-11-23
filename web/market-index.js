@@ -17,7 +17,10 @@
     { key: 'n225', short: '日經', name: '日經 225', zone: 'asia' },
     { key: 'ks11', short: '韓綜', name: '韓國綜合', zone: 'asia' },
     // 只有分時、沒有日線（本人 2026-11-24）：海外大盤分時的開關對這個人開著時選單才列出來（minimal.js）
-    { key: 'nq_fut', short: '那指期', name: '那斯達克期貨', zone: 'us', intradayOnly: true }
+    { key: 'nq_fut', short: '那指期', name: '那斯達克期貨', zone: 'us', intradayOnly: true },
+    // 美元兌台幣（本人 2026-11-24「加入台幣對美金的即時匯率」）：同一個開關開著才列出來；選了先看分時，日週月由伺服器向來源要。
+    // 價寫到小數三位、沒有量。數字變大＝一美元換到更多台幣＝台幣貶值（fxChange）。
+    { key: 'usdtwd', short: '美元／台幣', name: '美元／台幣', fx: true, digits: 3 }
   ];
 
   const finite = value => typeof value === 'number' && Number.isFinite(value);
@@ -55,6 +58,20 @@
   }
 
   const hasVolume = rows => (rows || []).some(row => row && finite(row.volume) && row.volume > 0);
+
+  // ---------- 匯率（美元／台幣）的寫法 ----------
+  // 價：固定小數位（預設三位，32.4 寫成 32.400），不加千分位。
+  const fxPrice = (value, digits = 3) => (finite(value) ? value.toFixed(digits) : '—');
+  // 漲跌那一段：數字變大是台幣貶值、變小是台幣升值；金額寫「元」、和價同樣的小數位，後面是幅度。diff＝現在−前一日收盤。
+  function fxChange(diff, pct, digits = 3) {
+    if (!finite(diff)) return '';
+    const amount = Math.abs(diff).toFixed(digits);
+    const percent = finite(pct) ? `(${Math.abs(pct).toFixed(2)}%)` : '';
+    if (Number(amount) === 0) return `台幣持平${percent}`;
+    return `台幣${diff > 0 ? '貶值' : '升值'} ${amount} 元${percent}`;
+  }
+  // 分時圖（time-share.js）畫匯率時要多帶的：小數位、上方那一行的名稱與漲跌寫法
+  const fxModel = item => ({ digits: item.digits, quoteLabel: '匯率', changeText: (diff, pct) => fxChange(diff, pct, item.digits) });
 
   // ---------- 短中長期走勢（原本在 minimal.js 的 localMarketTrend，規則不變） ----------
   const fmt = (value, digits = 2) => Number.isFinite(Number(value))
@@ -142,5 +159,5 @@
     return { schema: 'market-trend/v1', rule_version: 'market-trend-v1', data_date: date, periods };
   }
 
-  global.MarketIndex = { LIST, candles, hasVolume, trend };
+  global.MarketIndex = { LIST, candles, hasVolume, trend, fxPrice, fxChange, fxModel };
 })(window);

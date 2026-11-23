@@ -6,7 +6,13 @@
    每個錨點存「交易日日期＋價格」，畫的時候才依圖表目前的可見範圍換算成像素，
    所以平移、縮放、切換週期、歷史接到前面、即時重畫都不需要改資料。
    60 分 K（本人 11-18：各畫各的）：錨點的日期記到那一根開始的時分（「YYYY-MM-DDTHH:MM」），只在 60 分出現；
-   日／週／月共用只有日期的那一套，60 分看不到它們。 */
+   日／週／月共用只有日期的那一套，60 分看不到它們。
+   2026-11-24 加四種（本人：分析工具不太實用，另外加）：
+   量測（measure，兩個錨點：漲跌、漲跌幅、幾根、幾天；漲用 --up、跌用 --down）、
+   平行通道（channel，三個錨點：前兩個是趨勢線，第三個只記寬度——日期同第一個錨點、價位＝第一個錨點＋寬度；點三下）、
+   到價提醒的水平價位線（alert，一個錨點，另帶 alert 開或關；比價與通知在雲端每分鐘盯價的排程）、
+   區間成交量分布（vprofile，兩個錨點只看日期：把那一段每根 K 棒的量照高低價平均分到 24 個價位格，最大的一格是 POC）。
+   量測與區間成交量分布也可以按住拖過去一次畫完（KChart 在按下時問 canDragCreate、拖動時叫 beginAt）。 */
 (function () {
   'use strict';
   const UNITS = new Set(['日', '週', '月', '60分']);   // 能畫線的週期
@@ -38,7 +44,12 @@
   const newId = () => (window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID()
     : `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`);
   const copy = drawing => ({ id: drawing.id, kind: drawing.kind, anchors: drawing.anchors.map(({ date, price }) => ({ date, price })),
-    ...(drawing.kind === 'text' ? { text: drawing.text } : {}) });
+    ...(drawing.kind === 'text' ? { text: drawing.text } : {}), ...(drawing.kind === 'alert' ? { alert: Boolean(drawing.alert) } : {}) });
+  const DRAG_TOOLS = new Set(['measure', 'vprofile']);   // 按住拖過去就畫完的工具（點兩下也可以）
+  const PROFILE_BINS = 24;                     // 區間成交量分布分成幾個價位格
+  const PROFILE_MIN_W = 56;                    // 最長的那一格至少畫這麼寬（選的區間很窄時也看得出分布）
+  const PROFILE_SHARE = .6;                    // 最長的那一格佔選取區間寬度的幾成
+  const MINUS = '−';
   const sameAnchors = (a, b) => a.length === b.length && a.every((anchor, i) => anchor.date === b[i].date && anchor.price === b[i].price);
 
   // g 是圖表目前的版面（KChart 的 geo）：繪圖區 l、t、pw、ph 與價格座標 lo～hi。
@@ -399,6 +410,216 @@
     },
   };
 
+  // ---------- 量測 ----------
+  const daysBetween = (a, b) => Math.round(Math.abs(Date.parse(`${b.slice(0, 10)}T00:00:00Z`) - Date.parse(`${a.slice(0, 10)}T00:00:00Z`)) / 86400000);
+  // 從 a 量到 b：漲跌（點）、漲跌幅（%，以 a 的價位為基準）、隔幾根（目前週期的 K 棒）、隔幾天（日曆天）。
+  // fromIndex、toIndex 是兩個錨點各在圖上第幾根。
+  function measureStats(a, b, fromIndex, toIndex) {
+    const change = cents(b.price - a.price);
+    return { change, pct: change / a.price * 100, bars: Math.abs(toIndex - fromIndex), days: daysBetween(a.date, b.date) };
+  }
+  const signed = (value, text) => `${value > 0 ? '+' : value < 0 ? MINUS : ''}${text}`;
+  // 量測的標示：第一行漲跌與漲跌幅，第二行根數與天數。
+  const measureLines = ({ change, pct, bars, days }) => [
+    `${signed(change, priceText(Math.abs(change)))}  ${signed(change, Math.abs(pct).toFixed(2))}%`, `${bars} 根 · ${days} 天`];
+  // 兩個錨點是起點與終點（照點的順序存：方向就是量的方向）。兩點圍出的框淡淡填色、對角一條線、終點旁邊標數字；
+  // 終點比起點高用漲的顏色、低用跌的顏色。只有點線才選取，選取之後框裡也能拖。
+  const measure = {
+    ...twoPoint(1),
+    liveLabels: true,   // 還在拉的時候就標出數字
+    tone: drawing => (drawing.anchors[1].price >= drawing.anchors[0].price ? '--up' : '--down'),
+    locate(drawing, g, chart) {
+      const [from, to] = drawing.anchors, a = pointOf(from, g, chart), b = pointOf(to, g, chart);
+      if (!a || !b) return null;
+      const x0 = Math.min(a[0], b[0]), x1 = Math.max(a[0], b[0]), y0 = Math.min(a[1], b[1]), y1 = Math.max(a[1], b[1]);
+      const left = Math.max(x0, g.l), right = Math.min(x1, g.l + g.pw), top = Math.max(y0, g.t), bottom = Math.min(y1, g.t + g.ph);
+      if (left > right || top > bottom) return null;
+      const seg = Math.hypot(b[0] - a[0], b[1] - a[1]) < 1 ? (inPlot(a, g) ? [[a[0] - 2, a[1]], [a[0] + 2, a[1]]] : null) : clipToPlot(a, b, g, 1);
+      return { a, b, seg, box: [left, top, right - left, bottom - top],
+        stats: measureStats(from, to, indexOfDate(chart, from.date), indexOfDate(chart, to.date)) };
+    },
+    paths: at => (at.seg ? [at.seg] : []),
+    fill: at => at.box,
+    // 兩行數字貼在終點外側（往上量的放上面、往下量的放下面），整塊收在繪圖區內。
+    labels(drawing, at, g, widthOf) {
+      const lines = measureLines(at.stats), w = Math.max(...lines.map(widthOf)), h = LABEL_H * lines.length;
+      const [left, top] = fitInPlot(at.b[0] - w / 2, at.b[1] <= at.a[1] ? at.b[1] - h - 8 : at.b[1] + 8, w, h, g);
+      // 數字常常壓在 K 棒上：底色不透明，才讀得清楚
+      return lines.map((text, row) => ({ text, x: left, cy: top + LABEL_H * (row + .5), w, solid: true }));
+    },
+    distance: (at, x, y) => (at.seg ? distanceToSegment(x, y, at.seg[0], at.seg[1]) : Infinity),
+    contains(at, x, y) {
+      const [left, top, width, height] = at.box;
+      return Boolean(at.seg) && x >= left && x <= left + width && y >= top && y <= top + height;
+    },
+  };
+
+  // ---------- 平行通道 ----------
+  // 第三下點在 p：通道的寬度＝p 的價位減掉趨勢線（a→b）在 p 那一根的價位。回傳第三個錨點要記的價位（a 的價位＋寬度）。
+  // 位置以「第幾根」算（fromIndex、toIndex、atIndex）；a、b 在同一根（直的線）時寬度就是 p 和 a 的價差。
+  function channelThird(a, b, p, fromIndex, toIndex, atIndex) {
+    const base = toIndex === fromIndex ? a.price : a.price + (b.price - a.price) * (atIndex - fromIndex) / (toIndex - fromIndex);
+    return cents(a.price + p.price - base);
+  }
+  const line2 = twoPoint(1);
+  // 前兩個錨點是趨勢線的兩端（和趨勢線一樣畫到第二點為止），第三個錨點只記寬度：平行線＝趨勢線上下平移（第三個的價位−第一個的價位）。
+  // 兩條線之間淡淡填色、中間一條細虛線。把手：趨勢線兩端各一個（拖了平行線跟著走、寬度不變），平行線中點一個（只改寬度）。
+  const channel = {
+    ...line2,
+    anchors: 3,
+    // 點完第三下：三個點整理成要存的三個錨點；寬度太小（畫面上看不出兩條線）或價位出界回 null，等下一下。
+    complete([a, b, p], g, chart) {
+      const indexes = [a, b, p].map(anchor => indexOfDate(chart, anchor.date));
+      if (indexes.includes(null)) return null;
+      const price = channelThird(a, b, p, ...indexes);
+      if (!(price > 0 && price <= MAX_PRICE) || Math.abs(yRaw(price, g) - yRaw(a.price, g)) < MIN_SPAN_PX) return null;
+      return [a, b, { date: a.date, price }];
+    },
+    locate(drawing, g, chart) {
+      const a = pointOf(drawing.anchors[0], g, chart), b = pointOf(drawing.anchors[1], g, chart);
+      if (!a || !b) return null;
+      const dy = yRaw(drawing.anchors[2].price, g) - a[1];
+      const a2 = [a[0], a[1] + dy], b2 = [b[0], b[1] + dy];
+      // 兩端在這個週期落在同一點：和線一樣畫成一小段橫線。
+      const flat = Math.hypot(b[0] - a[0], b[1] - a[1]) < 1;
+      const clip = (from, to) => (flat ? (inPlot(from, g) ? [[from[0] - 2, from[1]], [from[0] + 2, from[1]]] : null) : clipToPlot(from, to, g, 1));
+      const base = clip(a, b), side = clip(a2, b2);
+      if (!base && !side) return null;
+      return { a, b, a2, b2, dy, base, side, mid: Math.abs(dy) < 1 ? null : clip([a[0], a[1] + dy / 2], [b[0], b[1] + dy / 2]) };
+    },
+    paths: at => [at.base, at.side].filter(Boolean),
+    guide: at => at.mid,
+    area: at => [at.a, at.b, at.b2, at.a2],
+    distance: (at, x, y) => Math.min(Infinity, ...[at.base, at.side].filter(Boolean).map(([from, to]) => distanceToSegment(x, y, from, to))),
+    // 已選取之後，兩條線之間也能拖動整個通道。
+    contains(at, x, y) {
+      const span = at.b[0] - at.a[0];
+      if (Math.abs(span) < 1 || x < Math.min(at.a[0], at.b[0]) || x > Math.max(at.a[0], at.b[0])) return false;
+      const base = at.a[1] + (x - at.a[0]) / span * (at.b[1] - at.a[1]);
+      return y >= Math.min(base, base + at.dy) && y <= Math.max(base, base + at.dy);
+    },
+    handles: (at, g) => [[...at.a, 0], [...at.b, 1], [(at.a2[0] + at.b2[0]) / 2, (at.a2[1] + at.b2[1]) / 2, 2]].filter(point => inPlot(point, g)),
+    reshaped(anchors, grip, dx, dy, g, chart) {
+      if (grip === 2) {
+        const price = cents(anchors[2].price - dy / g.ph * (g.hi - g.lo));
+        if (!(price > 0 && price <= MAX_PRICE) || Math.abs(yRaw(price, g) - yRaw(anchors[0].price, g)) < MIN_SPAN_PX) return null;
+        return [anchors[0], anchors[1], { date: anchors[0].date, price }];
+      }
+      const next = line2.reshaped.call(this, anchors.slice(0, 2), grip, dx, dy, g, chart);
+      const price = next && cents(next[0].price + anchors[2].price - anchors[0].price);
+      return next && price > 0 && price <= MAX_PRICE ? [...next, { date: next[0].date, price }] : null;
+    },
+  };
+
+  // ---------- 區間成交量分布 ----------
+  // 把一段 K 棒的量分到 bins 個等寬的價位格：每一根的量照它的高低價範圍平均攤開（落在哪幾格就照重疊的比例分），
+  // 高低同價的整根算進那個價位所在的那一格。量讀 volume（個股，股）沒有就讀 amount（大盤，成交金額）；只有收盤的（基金淨值）當作高低同價。
+  // 回傳 { low, high, size（一格多寬）, volumes（由低到高每一格的量）, poc（量最大的那一格）, pocPrice（那一格的中間價）, total }；
+  // 這一段沒有任何量回 null。
+  function volumeProfile(candles, bins = PROFILE_BINS) {
+    const rows = [];
+    for (const candle of candles || []) {
+      if (!candle) continue;
+      const volume = Number.isFinite(candle.volume) ? candle.volume : candle.amount;
+      const high = Number.isFinite(candle.high) ? candle.high : candle.close, low = Number.isFinite(candle.low) ? candle.low : candle.close;
+      if (Number.isFinite(volume) && volume > 0 && Number.isFinite(high) && Number.isFinite(low) && high >= low) rows.push({ high, low, volume });
+    }
+    if (!rows.length) return null;
+    let low = Infinity, high = -Infinity, total = 0;
+    for (const row of rows) { low = Math.min(low, row.low); high = Math.max(high, row.high); total += row.volume; }
+    const count = high > low ? bins : 1, size = (high - low) / count;
+    const volumes = new Array(count).fill(0);
+    const binOf = price => Math.min(count - 1, Math.max(0, Math.floor((price - low) / size)));
+    for (const row of rows) {
+      if (count === 1) { volumes[0] += row.volume; continue; }
+      if (row.high === row.low) { volumes[binOf(row.low)] += row.volume; continue; }
+      for (let i = binOf(row.low), last = binOf(row.high); i <= last; i++) {
+        const overlap = Math.min(row.high, low + (i + 1) * size) - Math.max(row.low, low + i * size);
+        if (overlap > 0) volumes[i] += row.volume * overlap / (row.high - row.low);
+      }
+    }
+    let poc = 0;
+    volumes.forEach((volume, i) => { if (volume > volumes[poc]) poc = i; });
+    return { low, high, size, volumes, poc, pocPrice: count === 1 ? low : low + (poc + .5) * size, total };
+  }
+  // 兩個錨點只看日期（選了哪一段）；價位只是點的位置，不影響畫出來的東西。
+  // 那一段的左右各一條直線，量的橫條從左邊那條往右長（最長的一格佔區間寬度的六成，至少 PROFILE_MIN_W），
+  // 量最大的那一格（POC）顏色深一點、拉一條橫線到區間右緣並標價位。把手在兩條直線的中間，各自只改那一端的日期。
+  const profile = {
+    ...line2,
+    normalize: ([a, b]) => (a.date <= b.date ? [a, b] : [b, a]),
+    locate(drawing, g, chart) {
+      const indexes = drawing.anchors.map(anchor => indexOfDate(chart, anchor.date));
+      const last = chart.candles.length - 1;
+      if (indexes.includes(null) || last < 0) return null;
+      const from = Math.min(last, ...indexes), to = Math.min(last, Math.max(...indexes));
+      const x0 = g.l + g.step * (from - g.start), x1 = g.l + g.step * (to - g.start + 1);
+      const left = Math.max(x0, g.l), right = Math.min(x1, g.l + g.pw);
+      if (left >= right) return null;
+      const data = volumeProfile(chart.candles.slice(from, to + 1));
+      const hasRows = Boolean(data) && data.volumes[data.poc] > 0;
+      // 上下範圍：那一段的最高到最低；整段都在畫面外（縮放後）就用整個繪圖區的高度，直線還看得到、選得到。
+      let top = hasRows ? Math.max(g.t, yRaw(data.high, g)) : g.t, bottom = hasRows ? Math.min(g.t + g.ph, yRaw(data.low, g)) : g.t + g.ph;
+      if (top >= bottom) { top = g.t; bottom = g.t + g.ph; }
+      const reach = Math.max(PROFILE_MIN_W, (x1 - x0) * PROFILE_SHARE), max = hasRows ? data.volumes[data.poc] : 1;
+      const rows = !hasRows ? [] : data.volumes.map((volume, i) => {
+        const yHigh = yRaw(data.low + (i + 1) * data.size, g), yLow = yRaw(data.low + i * data.size, g);
+        return { rect: [x0, yHigh + .5, volume / max * reach, Math.max(2, yLow - yHigh - 1)], alpha: i === data.poc ? .5 : .22 };
+      }).filter(row => row.rect[2] > 0);
+      const pocY = hasRows ? yOf(data.pocPrice, g) : null;
+      const edges = [x0, x1].filter(x => x >= g.l - .5 && x <= g.l + g.pw + .5).map(x => [[Math.round(x) + .5, top], [Math.round(x) + .5, bottom]]);
+      const centre = index => g.l + g.step * (Math.min(last, index) - g.start + .5);
+      return { left, right, top, bottom, rows, edges, grips: indexes.map(centre),
+        poc: pocY === null ? null : { y: Math.round(pocY) + .5, price: data.pocPrice } };
+    },
+    paths: at => [...at.edges, ...(at.poc ? [[[at.left, at.poc.y], [at.right, at.poc.y]]] : [])],
+    blocks: at => at.rows,
+    labels(drawing, at, g, widthOf) {
+      if (!at.poc) return [];
+      const text = `POC ${priceText(Math.round(at.poc.price * 100) / 100)}`, w = widthOf(text);
+      const [left, top] = fitInPlot(at.right - w - 2, labelAbove(at.poc.y, g) - LABEL_H / 2, w, LABEL_H, g);
+      return [{ text, x: left, cy: top + LABEL_H / 2 }];
+    },
+    distance: (at, x, y) => Math.min(Infinity, ...at.edges.map(([from, to]) => distanceToSegment(x, y, from, to)),
+      ...(at.poc ? [distanceToSegment(x, y, [at.left, at.poc.y], [at.right, at.poc.y])] : [])),
+    contains: (at, x, y) => x >= at.left && x <= at.right && y >= at.top && y <= at.bottom,
+    handles: (at, g) => at.grips.map((x, index) => [x, (at.top + at.bottom) / 2, index]).filter(point => inPlot(point, g)),
+    // 只拖一端：那一端換到手指所在的那一根（價位不動）；拖到和另一端同一根不成立。
+    reshaped(anchors, index, dx, dy, g, chart) {
+      const from = pointOf(anchors[index], g, chart);
+      if (!from) return null;
+      const x = clamp(from[0] + dx, g.l, g.l + g.pw - .01);
+      const candle = chart.candles[Math.min(chart.view.end - 1, g.start + Math.floor((x - g.l) / g.step))];
+      const date = candle ? dateOf(candle) : '';
+      if (!DATE_RE.test(date) || indexOfDate(chart, date) === indexOfDate(chart, anchors[1 - index].date)) return null;
+      if (indexOfDate(chart, date) === indexOfDate(chart, anchors[index].date)) return null;
+      return anchors.map((anchor, i) => (i === index ? { date, price: anchor.price } : anchor));
+    },
+  };
+
+  // ---------- 水平線、到價提醒的水平價位線 ----------
+  const hline = {
+    anchors: 1,
+    locate(drawing, g) { const y = yOf(drawing.anchors[0].price, g); return y === null ? null : { y }; },
+    path: (at, g) => [[g.l, Math.round(at.y) + .5], [g.l + g.pw, Math.round(at.y) + .5]],
+    // 價位標在線的左端上方（太靠頂就改放下方）。
+    labels: (drawing, at, g) => [{ text: priceText(drawing.anchors[0].price), x: g.l + 2, cy: labelAbove(at.y, g) }],
+    distance: (at, x, y) => Math.abs(y - at.y),
+    handles: (at, g) => [[g.l + g.pw / 2, Math.round(at.y) + .5]],
+    // 只有價位跟著走；拖出繪圖區時停在邊緣。
+    dragged(anchors, dx, dy, g) {
+      const price = priceInView(anchors[0].price - dy / g.ph * (g.hi - g.lo), g);
+      return [{ date: anchors[0].date, price: price === null ? anchors[0].price : price }];
+    },
+  };
+  // 到價提醒：和水平線同一套位置與拖動，另帶 alert（提醒開著沒有）。開著的畫實線、標示前面寫「到價」；
+  // 關著的（已經通知過，或這裡不能提醒）畫虛線、只標價位。
+  const alertLine = {
+    ...hline,
+    dash: (drawing, dash) => (drawing.alert || dash.length ? dash : [6, 4]),
+    labels: (drawing, at, g) => [{ text: `${drawing.alert ? '到價 ' : ''}${priceText(drawing.anchors[0].price)}`, x: g.l + 2, cy: labelAbove(at.y, g) }],
+  };
+
   // 各種畫線的形狀。選取、命中判定、拖動、刪除的機制是共用的，依種類不同的幾何放在這裡；之後的工具在這裡加一項。
   //   anchors   錨點個數（兩個的：點兩下才畫完）
   //   locate    目前畫面上的位置；不在畫面內回 null（不畫，也點不到）
@@ -416,39 +637,38 @@
   //   reshaped  只有某個把手被拖了 (dx, dy) 像素之後的新錨點（有可單獨拖的把手才需要）
   //   tooSmall  兩個錨點在目前畫面上是不是近到不成形（兩點定位的預設是看兩點的直線距離）；畫第二下與拖把手時都用它
   //   dragged、reshaped 回 null 表示這一步不成立，線留在上一個位置。
+  //   2026-11-24 加的：
+  //   complete  三個錨點的（平行通道）點完第三下時，把三個點整理成要存的錨點；不成立回 null
+  //   tone      這一條用哪個顏色（CSS 變數名稱；沒有就是畫線色）——量測的漲跌
+  //   dash      主線的虛實（沒有就是實線）——關著提醒的價位線
+  //   area      要填底色的多邊形各點（斜的範圍；沒有就不填）
+  //   blocks    要填色的一塊一塊 [{ rect: [x, y, 寬, 高], alpha }]（成交量分布的橫條；只畫在繪圖區內）
+  //   liveLabels 還在拉的預覽也標出 labels
   const SHAPES = {
     trend: twoPoint(1),
     ray: twoPoint(Infinity),
     rect: rectangle,
     fib: fibonacci,
     text: note,
-    hline: {
-      anchors: 1,
-      locate(drawing, g) { const y = yOf(drawing.anchors[0].price, g); return y === null ? null : { y }; },
-      path: (at, g) => [[g.l, Math.round(at.y) + .5], [g.l + g.pw, Math.round(at.y) + .5]],
-      // 價位標在線的左端上方（太靠頂就改放下方）。
-      labels: (drawing, at, g) => [{ text: priceText(drawing.anchors[0].price), x: g.l + 2, cy: labelAbove(at.y, g) }],
-      distance: (at, x, y) => Math.abs(y - at.y),
-      handles: (at, g) => [[g.l + g.pw / 2, Math.round(at.y) + .5]],
-      // 只有價位跟著走；拖出繪圖區時停在邊緣。
-      dragged(anchors, dx, dy, g) {
-        const price = priceInView(anchors[0].price - dy / g.ph * (g.hi - g.lo), g);
-        return [{ date: anchors[0].date, price: price === null ? anchors[0].price : price }];
-      },
-    },
+    hline,
+    measure,
+    channel,
+    alert: alertLine,
+    vprofile: profile,
   };
   const valid = drawing => Boolean(drawing) && typeof drawing.id === 'string' && Object.hasOwn(SHAPES, drawing.kind)
     && Array.isArray(drawing.anchors) && drawing.anchors.length === SHAPES[drawing.kind].anchors
     && drawing.anchors.every(anchor => anchor && DATE_RE.test(anchor.date) && Number.isFinite(anchor.price) && anchor.price > 0)
     && (drawing.kind !== 'text' || (typeof drawing.text === 'string' && NOTE_VISIBLE_RE.test(drawing.text)))   // 文字標註要有看得見的內容
-    // 兩個錨點完全相同的線在任何週期、任何縮放下都只是一個點：看不見也選不到，不收。
-    && !(drawing.anchors.length === 2 && drawing.anchors[0].date === drawing.anchors[1].date && drawing.anchors[0].price === drawing.anchors[1].price);
+    // 兩個錨點完全相同的線在任何週期、任何縮放下都只是一個點：看不見也選不到，不收（平行通道看前兩個）。
+    && !(drawing.anchors.length >= 2 && drawing.anchors[0].date === drawing.anchors[1].date && drawing.anchors[0].price === drawing.anchors[1].price);
 
   class ChartDrawings {
     constructor(chart, opts) {
       this.chart = chart; this.opts = opts || {};
       this.items = []; this.tool = null;
       this.pending = null;      // 兩點工具點了第一下、還沒點第二下時的起點錨點
+      this.pending2 = null;     // 三點工具（平行通道）點了第二下、還沒點第三下時的第二個錨點
       this.pointer = null;      // 游標或手指最後在主圖上的位置（預覽線的另一端）
       this.selectedId = null;   // 選取記的是識別碼：重畫、換週期、重新載入同一組線都不會選錯條
       this.move = null;         // 正在拖動的那一條：{ drawing, anchors（拖動前）, x, y（起點）, started, grip（只拖哪個把手；null＝整條）, slop（移多遠才算拖） }
@@ -464,7 +684,7 @@
     setTool(kind) {
       const next = this.enabled && Object.hasOwn(SHAPES, kind) ? kind : null;
       if (next === this.tool) return;
-      this.tool = next; this.pending = null;   // 換工具或放下工具：點到一半的那條不留
+      this.tool = next; this.pending = this.pending2 = null;   // 換工具或放下工具：點到一半的那條不留
       this.closeEditor(false);                 // 寫到一半的文字也不留
       if (next) this.select(null);   // 要畫新的線：放下原本選取的那一條
       this.chart.canvas.style.cursor = this.idleCursor();
@@ -540,11 +760,18 @@
       if (this.tool === 'text') { this.openEditor(null, anchor, pointerType); return true; }
       // 兩點定位：第一下只記起點，第二下才畫出來；第二下和起點落在同一位置時不算，等下一下。
       // 起點在目前的圖上已經算不出位置（資料換成不含那一天的範圍）：這一下重新當第一下。
-      if (this.pending && !pointOf(this.pending, this.chart.geo, this.chart)) this.pending = null;
-      if (SHAPES[this.tool].anchors === 2 && !this.pending) { this.pending = anchor; return true; }
-      if (this.pending && this.tooClose(this.pending, anchor)) return true;
-      const shape = SHAPES[this.tool], anchors = this.pending ? [this.pending, anchor] : [anchor];
+      if (this.pending && !pointOf(this.pending, this.chart.geo, this.chart)) this.pending = this.pending2 = null;
+      const shape = SHAPES[this.tool];
+      if (shape.anchors >= 2 && !this.pending) { this.pending = anchor; return true; }
+      if (this.pending && !this.pending2 && this.tooClose(this.pending, anchor)) return true;
+      // 三點定位（平行通道）：第二下定出趨勢線，第三下定寬度；寬度不成立（太窄）就等下一下。
+      if (shape.anchors === 3 && !this.pending2) { this.pending2 = anchor; return true; }
+      const anchors = shape.anchors === 3 ? shape.complete([this.pending, this.pending2, anchor], this.chart.geo, this.chart)
+        : this.pending ? [this.pending, anchor] : [anchor];
+      if (!anchors) return true;
       const drawing = { id: newId(), kind: this.tool, anchors: shape.normalize ? shape.normalize(anchors) : anchors };
+      // 到價提醒的價位線：畫的時候提醒開不開由頁面決定（這一檔能不能提醒）。
+      if (this.tool === 'alert') drawing.alert = Boolean(this.opts.alertDefault && this.opts.alertDefault());
       this.items.push(drawing);
       this.setTool(null);
       if (this.opts.onChange) this.opts.onChange({ type: 'add', drawing: copy(drawing) });
@@ -657,13 +884,41 @@
     trackPointer(x, y) { this.pointer = { x, y }; return Boolean(this.pending); }
     // 兩個錨點在目前畫面上是不是近到不成形（線：連不成看得到的線；矩形：沒有寬或沒有高；黃金分割：沒有價差）。
     tooClose(a, b) { return SHAPES[this.tool].tooSmall(a, b, this.chart.geo, this.chart); }
-    // 點了第一下之後的預覽：從起點到游標所在的那一根與價位（就是第二下點下去會畫出來的樣子）。
-    preview() {
+    // 量測、區間成交量分布可以按住拖過去一次畫完：按下的位置能不能當起點（選了這種工具、還沒點第一下、落在繪圖區內）。
+    canDragCreate(x, y) { return this.enabled && DRAG_TOOLS.has(this.tool) && !this.pending && Boolean(this.anchorAt(x, y)); }
+    // 拖動開始：按下的位置當第一下。回傳有沒有成立。
+    beginAt(x, y) {
+      const anchor = this.canDragCreate(x, y) ? this.anchorAt(x, y) : null;
+      if (anchor) this.pending = anchor;
+      return Boolean(anchor);
+    }
+    // 拖到一半手勢被取消：起點不留（工具還在）。
+    cancelPending() { this.pending = this.pending2 = null; }
+    // 選取的那一條到價提醒打開或關掉。選取的不是提醒線、或它不在畫面上時不做事。回傳有沒有改。
+    setAlert(on) {
+      const drawing = this.selected;
+      if (!drawing || drawing.kind !== 'alert' || !this.shown(drawing) || Boolean(drawing.alert) === Boolean(on)) return false;
+      drawing.alert = Boolean(on);
+      if (this.opts.onChange) this.opts.onChange({ type: 'update', drawing: copy(drawing) });
+      return true;
+    }
+    // 點到一半的預覽長什麼樣：起點到游標所在的那一根與價位（就是下一下點下去會畫出來的樣子）；沒有就回 null。
+    ghost() {
       const g = this.chart.geo;
       if (!this.pending || !this.pointer || !this.inView(g)) return null;
-      const anchor = this.anchorAt(this.pointer.x, this.pointer.y);
-      if (!anchor || this.tooClose(this.pending, anchor)) return null;
-      return SHAPES[this.tool].locate({ anchors: [this.pending, anchor] }, g, this.chart);
+      const anchor = this.anchorAt(this.pointer.x, this.pointer.y), shape = SHAPES[this.tool];
+      if (!anchor) return null;
+      // 平行通道：點了第二下之後預覽整個通道；之前只有那條趨勢線（寬度先當作零）。
+      if (this.pending2) {
+        const anchors = shape.complete([this.pending, this.pending2, anchor], g, this.chart);
+        return anchors && { kind: this.tool, anchors };
+      }
+      if (this.tooClose(this.pending, anchor)) return null;
+      return { kind: this.tool, anchors: shape.anchors === 3 ? [this.pending, anchor, { ...this.pending }] : [this.pending, anchor] };
+    }
+    preview() {
+      const ghost = this.ghost();
+      return ghost ? SHAPES[this.tool].locate(ghost, this.chart.geo, this.chart) : null;
     }
     reach(pointerType) { return pointerType === 'mouse' ? HIT_PX.mouse : HIT_PX.touch; }
     inView(g) { return Boolean(this.enabled && g && g.hi > g.lo); }
@@ -696,27 +951,36 @@
       const shown = this.visible();
       // 選取的線移出畫面（平移、縮放後價位不在可見範圍）就解除選取：看不到的線不該還能被刪。
       if (this.selectedId !== null && !shown.some(({ drawing }) => drawing.id === this.selectedId)) this.select(null);
-      const preview = this.preview();
+      const ghost = this.ghost(), preview = ghost && SHAPES[this.tool].locate(ghost, g, this.chart);
       if (!shown.length && !preview) return;
       const stroke = paths => {
         x.beginPath();
         paths.forEach(points => points.forEach(([px, py], index) => { if (index) x.lineTo(px, py); else x.moveTo(px, py); }));
         x.stroke();
       };
+      const ink = css('--draw', DRAW_FALLBACK);
+      // 斜的範圍（平行通道）與一塊一塊的橫條（成交量分布）可能超出繪圖區：只畫在繪圖區裡。
+      const inside = fill => { x.save(); x.beginPath(); x.rect(g.l, g.t, g.pw, g.ph); x.clip(); fill(); x.restore(); };
       // 先填底色（很淡，疊在後面畫的布林通道、K 棒、均線底下），再畫輔助線（虛線、比主線細一點、淡一半），最後描線。
       // width、dash 是主線的粗細與虛實，opacity 是整個的濃淡。
-      const paint = (kind, at, width, opacity, dash) => {
-        const shape = SHAPES[kind], guide = shape.guide && shape.guide(at);
+      const paint = (drawing, at, width, opacity, dash) => {
+        const shape = SHAPES[drawing.kind], guide = shape.guide && shape.guide(at);
+        x.strokeStyle = x.fillStyle = shape.tone ? css(shape.tone(drawing), ink) : ink;
         if (shape.fill) { x.globalAlpha = opacity * .1; x.fillRect(...shape.fill(at, g)); }
+        if (shape.area) inside(() => {
+          x.globalAlpha = opacity * .1; x.beginPath();
+          shape.area(at).forEach(([px, py], index) => { if (index) x.lineTo(px, py); else x.moveTo(px, py); });
+          x.closePath(); x.fill();
+        });
+        if (shape.blocks) inside(() => shape.blocks(at).forEach(({ rect, alpha }) => { x.globalAlpha = opacity * alpha; x.fillRect(...rect); }));
         if (guide) { x.globalAlpha = opacity * .5; x.lineWidth = width - .4; x.setLineDash([3, 3]); stroke([guide]); }
-        x.globalAlpha = opacity; x.lineWidth = width; x.setLineDash(dash);
+        x.globalAlpha = opacity; x.lineWidth = width; x.setLineDash(shape.dash ? shape.dash(drawing, dash) : dash);
         stroke(shape.paths ? shape.paths(at, g) : [shape.path(at, g)]);
       };
       x.save();
-      x.strokeStyle = x.fillStyle = css('--draw', DRAW_FALLBACK);
-      shown.forEach(({ drawing, at }) => paint(drawing.kind, at, drawing.id === this.selectedId ? 2.2 : 1.4, this.opacityOf(drawing), []));
+      shown.forEach(({ drawing, at }) => paint(drawing, at, drawing.id === this.selectedId ? 2.2 : 1.4, this.opacityOf(drawing), []));
       // 預覽：虛線、淡一點，和已經畫好的分得開。
-      if (preview) paint(this.tool, preview, 1.4, .85, [5, 4]);
+      if (preview) paint(ghost, preview, 1.4, .85, [5, 4]);
       x.restore();
     }
     // 最後才畫、壓在 K 棒與現價虛線上面的部分：線旁的標示與選取把手。
@@ -725,23 +989,29 @@
       // 正在改的那一則文字先不畫：輸入框就疊在它的位置上。
       const shown = this.visible().filter(({ drawing }) => !this.editing || drawing !== this.editing.drawing);
       // 兩點工具點了第一下：起點先標一個記號（手機上沒有游標，要看得出第一下有點到）。
-      const first = this.pending && this.inView(g) ? pointOf(this.pending, g, this.chart) : null;
-      const marks = first && inPlot(first, g) ? [first] : [];
-      if (!shown.length && !marks.length) return;
+      const marks = (this.inView(g) ? [this.pending, this.pending2] : []).map(anchor => anchor && pointOf(anchor, g, this.chart))
+        .filter(point => point && inPlot(point, g));
+      // 還在拉的量測：數字跟著手走（畫好之前就看得到量了多少）。
+      const ghost = this.tool && SHAPES[this.tool].liveLabels ? this.ghost() : null;
+      const live = ghost && SHAPES[this.tool].locate(ghost, g, this.chart);
+      if (!shown.length && !marks.length && !live) return;
       x.save();
       x.textBaseline = 'middle'; x.textAlign = 'left';
       const color = css('--draw', DRAW_FALLBACK), paper = css('--bg', '#f3f1ec');
       // 線旁的標示（價位、比例）與文字標註：墊一塊底色讓字壓在 K 棒上也讀得到。位置由各種畫線自己決定。
       const widthOf = text => x.measureText(text).width + 8;
-      shown.forEach(({ drawing, at }) => {
+      const label = (drawing, at, opacity) => {
         const shape = SHAPES[drawing.kind];
         if (!shape.labels) return;
         x.font = shape.font || LABEL_FONT;
-        shape.labels(drawing, at, g, widthOf).forEach(({ text, x: left, cy, w = widthOf(text), h = LABEL_H }) => {
-          x.globalAlpha = .86; x.fillStyle = paper; x.fillRect(left, cy - h / 2, w, h);
-          x.globalAlpha = this.opacityOf(drawing); x.fillStyle = color; x.fillText(text, left + 4, cy + .5);
+        const tone = shape.tone ? css(shape.tone(drawing), color) : color;
+        shape.labels(drawing, at, g, widthOf).forEach(({ text, x: left, cy, w = widthOf(text), h = LABEL_H, solid = false }) => {
+          x.globalAlpha = solid ? 1 : .86; x.fillStyle = paper; x.fillRect(left, cy - h / 2, w, h);
+          x.globalAlpha = opacity; x.fillStyle = tone; x.fillText(text, left + 4, cy + .5);
         });
-      });
+      };
+      shown.forEach(({ drawing, at }) => label(drawing, at, this.opacityOf(drawing)));
+      if (live) label(ghost, live, .85);
       // 選取把手與起點記號：底色實心、畫線色描邊的小圓。文字標註是在整塊外面描一圈。
       const picked = shown.find(({ drawing }) => drawing.id === this.selectedId);
       const pickedShape = picked && SHAPES[picked.drawing.kind];
@@ -758,4 +1028,6 @@
     }
   }
   window.ChartDrawings = ChartDrawings;
+  // 純計算（cloud/test/kchart-drawings.test.js 直接測）
+  window.ChartDrawingMath = { measureStats, measureLines, channelThird, volumeProfile };
 })();

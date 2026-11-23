@@ -578,18 +578,59 @@
 
     // 選取那一天的數值標在右側 Y 軸的位置（本人 11-15：「選哪一天就顯示哪一天」）。原本的刻度不動，數值籤蓋到刻度時疊在上面。
     // values 是這一種指標那一天要標的數值 { name, value, text, bg }；y 把數值換成畫布上的高度。只畫目前顯示的那一種。
-    _drawPicked(kind, context, width, height, range, y, values) {
+    // 十字線的橫線（本人 11-24）：游標或手指在這個副圖裡才有（位置記在主圖的 chart.cross）。
+    // top～bottom 是這個副圖畫數值的範圍，textAt(y) 把高度換成這個副圖的數值文字（空字串＝只畫線不標數字）。
+    // 回傳 { y, text, w（數值籤的寬度） }；不在這個副圖裡回 null。
+    _cross(context, range, top, bottom, textAt) {
+      const cross = this.chart.cross, hover = this.chart.hover;
+      if (!cross || !context.canvas || cross.canvas !== context.canvas || !(cross.y >= top && cross.y <= bottom)) return null;
+      if (!Number.isInteger(hover) || hover < range.start || hover >= range.end) return null;
+      const text = textAt(cross.y);
+      context.save();
+      context.font = `500 11.5px ${token('--mono') || 'monospace'}`;
+      const w = text ? context.measureText(text).width + 12 : 0;
+      context.restore();
+      return { y: cross.y, text, w };
+    }
+
+    // 畫出橫線與它的數值籤（樣式和主圖的價位籤、日期籤一樣）；最後才畫，壓在那一天的數值籤上面也讀得到。
+    _drawCross(context, width, height, range, cross) {
+      if (!cross) return;
+      const { l, pw, inline } = range.geo, y = Math.round(cross.y) + 0.5;
+      context.save();
+      context.strokeStyle = token('--faint');
+      context.lineWidth = 1;
+      context.setLineDash([3, 3]);
+      context.beginPath();
+      context.moveTo(l, y);
+      context.lineTo(l + pw, y);
+      context.stroke();
+      context.restore();
+      if (cross.text) {
+        const left = inline ? l + pw - cross.w - 2 : l + pw + 4, tagWidth = inline ? cross.w : width - (l + pw + 4) - 2;
+        const slot = Math.max(TAG_HEIGHT_PX / 2 + 1, Math.min(height - TAG_HEIGHT_PX / 2 - 1, cross.y));
+        window.KChartTags.draw(context, left, tagWidth, TAG_HEIGHT_PX, [{ name: '', text: cross.text, slot, bg: token('--ink'), fg: token('--bg') }]);
+      }
+      // 驗收用：橫線的高度與標出來的數值。
+      this.debugCross = { y, text: cross.text };
+    }
+
+    // level：{ top, bottom, textAt }——十字線橫線在這個副圖的範圍與數值（見 _cross）；那一天的數值籤畫完再畫橫線。
+    _drawPicked(kind, context, width, height, range, y, values, level = null) {
       const hover = this.chart.hover;
       if (kind !== this.active || !Number.isInteger(hover) || hover < range.start || hover >= range.end) return;
+      const cross = level ? this._cross(context, range, level.top, level.bottom, level.textAt) : null;
       // 券商版面（geo.inline）沒有右側欄：寫在圖裡面、十字線的另一邊，和主圖的開高低收同一邊
       const { l, pw, step } = range.geo, cx = l + step * (hover - range.start + 0.5);
       const tagWidth = range.geo.inline ? 84 : width - (l + pw + 4) - 2;
-      const left = range.geo.inline ? (cx > l + pw / 2 ? l + 4 : l + pw - tagWidth - 4) : l + pw + 4;
+      // 那一邊剛好是右邊、又有橫線的數值籤時，往左讓出數值籤的寬度
+      const left = range.geo.inline ? (cx > l + pw / 2 ? l + 4 : l + pw - tagWidth - 4 - (cross && cross.w ? cross.w + 2 : 0)) : l + pw + 4;
       const tags = window.KChartTags, paper = token('--bg');
       const items = values(hover).filter(item => finite(item.value)).map(item => ({ ...item, y: y(item.value), fg: paper }));
       tags.draw(context, left, tagWidth, TAG_HEIGHT_PX, tags.place(items, TAG_HEIGHT_PX / 2 + 1, height - TAG_HEIGHT_PX / 2 - 1, TAG_HEIGHT_PX + 2), true);
       // 驗收用：這一天實際標出來的數值。
       this.debugPicked = items.map(({ name, text: value }) => ({ name, text: value }));
+      this._drawCross(context, width, height, range, cross);
     }
 
     _drawVolume(context, width, height, range) {
@@ -656,11 +697,16 @@
       }
 
       this._drawCrosshair(context, height, range);
+      // 橫線的數值：那個高度是多少量（個股是張、大盤是億元；只畫高低的國外指數不標數字）
+      const level = { top, bottom, textAt: at => {
+        const value = (bottom - at) / plotHeight * scale;
+        return this.volumeKind === 'count' || maximum <= 0 ? '' : formatNumber(this.volumeKind === 'volume' ? value / 1000 : value, this.volumeKind === 'volume' ? 0 : 1);
+      } };
       this._drawPicked('volume', context, width, height, range, value => bottom - value / scale * plotHeight, index => {
         const value = candles[index] && candles[index][key];
         if (this.volumeKind === 'count') return [];
         return [{ name: '', value, text: formatNumber(this.volumeKind === 'volume' ? value / 1000 : value, 0), bg: token('--dim') }];
-      });
+      }, level);
     }
 
     _drawInstitutional(context, width, height, range, kind) {
@@ -695,11 +741,16 @@
       axisText(context, '0', middle);
       axisText(context, `−${institutionalText(amplitude, this.volumeKind, true)}`, bottom - 3);
       this._drawCrosshair(context, height, range);
+      const level = { top, bottom, textAt: at => {
+        const value = (middle - at) / ((bottom - top) / 2) * amplitude;
+        const size = this.volumeKind === 'amount' ? formatNumber(Math.abs(value), 1) : formatNumber(Math.abs(value) / 1000, 0);
+        return value > 0 ? `+${size}` : value < 0 ? `−${size}` : size;
+      } };
       this._drawPicked(kind, context, width, height, range, y, index => {
         const value = range.candles[index] && range.candles[index][kind];
         const lots = formatNumber(Math.abs(value) / 1000, 0);
         return [{ name: '', value, text: value > 0 ? `+${lots}` : value < 0 ? `−${lots}` : lots, bg: value >= 0 ? token('--up') : token('--down') }];
-      });
+      }, level);
     }
 
     _drawMacdLine(context, range, y, field, color, dash) {
@@ -796,6 +847,10 @@
       }
 
       this._drawCrosshair(context, height, range);
+      const level = { top, bottom, textAt: at => {
+        const value = (middle - at) / halfHeight * amplitude;
+        return !hasReady ? '' : `${value < 0 ? '−' : ''}${formatNumber(Math.abs(value), 2)}`;
+      } };
       this._drawPicked('macd', context, width, height, range, y, index => {
         const point = macd[index];
         if (!point || point.ready !== true) return [];
@@ -804,7 +859,7 @@
           { name: 'DEA', value: point.dea, text: formatNumber(point.dea, 1), bg: token('--study-dea') },
           { name: '柱', value: point.hist, text: `${point.hist < 0 ? '−' : '+'}${formatNumber(Math.abs(point.hist), 1)}`, bg: point.hist >= 0 ? token('--up') : token('--down') }
         ];
-      });
+      }, level);
     }
 
     // KD／RSI 共用：固定 0～100 縱軸，畫參考虛線與一到兩條指標線；暖機中的點不畫成 0。
@@ -860,7 +915,7 @@
         if (!point || point.ready !== true) return [];
         // 只有一條線的指標（RSI）不寫短名，指標名稱已經在左上角
         return lines.map(([field, color]) => ({ name: lines.length > 1 ? field.toUpperCase() : '', value: point[field], text: formatNumber(point[field], 1), bg: color }));
-      });
+      }, { top, bottom, textAt: at => formatNumber((bottom - at) / (bottom - top) * 100, 1) });
     }
 
     _ensureOscillators(candles) {
@@ -1023,6 +1078,7 @@
     draw() {
       const daily = this.chart.unit === '日';
       this.debugPicked = [];
+      this.debugCross = null;
       this.notice.hidden = daily;
       // 線模式（基金淨值）沒有 K 棒，提示改說「日線」
       this.notice.textContent = this.chart.line ? '日線副圖：切回日線查看' : '日線副圖：切回日K查看';

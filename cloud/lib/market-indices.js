@@ -19,6 +19,15 @@ const BY_KEY = new Map(MARKET_INDICES.map((item) => [item.key, item]));
 
 export const indexOf = (key) => BY_KEY.get(key) || null;
 
+// 資料表的日線後面接上來源比較新的那幾天（本人 2026-11-24：分時已經到今天，K 線卻停在幾天前）。
+// 資料表有的每一天都照原樣（同一天不拿來源的蓋）；只接日期比資料表最後一天新的；資料表是空的就不接。
+// recent：index-intraday.js 的 loadRecentDaily 給的（由舊到新；還沒收盤的那一根帶 provisional:true）。
+export function appendRecentDaily(candles, recent) {
+  if (!candles.length || !Array.isArray(recent)) return candles;
+  const last = candles[candles.length - 1].date;
+  return [...candles, ...recent.filter((bar) => bar.date > last)];
+}
+
 // 一個指數的全部日線（由舊到新）與最後一次抓取的結果（還沒抓過是 null）。
 export async function loadIndex(db, item) {
   const candles = (await db.prepare(

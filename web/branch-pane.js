@@ -8,9 +8,12 @@
 (function () {
   'use strict';
 
-  const TOP = 5;               // 這一段取買賣超（絕對值）最大的幾個分點
-  const CHIP_DELAY_MS = 120;   // 拖曳時名稱那一排晚一點再換，柱子每一格都照畫
+  // 這一段取買賣超（絕對值）最大的幾個分點。本人 2026-11-24 看過台玻：「選的分點有點少可以再多一點」→ 5 改 10。
+  const TOP = 10;
+  const CHIP_DELAY_MS = 120;   // 拖曳時選單內容晚一點再換，柱子每一格都照畫
   const TAG_HEIGHT_PX = 18;
+  const TITLE_STRIP_PX = 20;   // 上緣留給左上角的切換鍵（和 chart-studies.js 的指標區同一個高度）
+  const MENU_ID = 'branchMenu';
   const EMPTY_TEXT = '這段期間沒有分點資料';
 
   // ---------- 算的部分 ----------
@@ -55,11 +58,11 @@
   }
 
   // 這一段（第 start 根到第 end 根之前）的主力分點：合計買賣超絕對值最大的前幾個；這一段沒有資料或合計是 0 的不算
-  function topBranches(rows, start, end) {
+  function topBranches(rows, start, end, limit = TOP) {
     return rows.map(row => ({ row, total: row.sum[end] - row.sum[start], days: row.count[end] - row.count[start] }))
       .filter(item => item.days > 0 && Math.round(item.total) !== 0)
       .sort((a, b) => Math.abs(b.total) - Math.abs(a.total))
-      .slice(0, TOP);
+      .slice(0, limit);
   }
 
   // 要畫哪幾個分點：選了某一個而且它還在這一段的名單裡就只畫它；不在了就回到合計（selected 變回 null）
@@ -96,7 +99,7 @@
   const signed = value => (Math.round(value) > 0 ? `+${lots(value)}` : Math.round(value) < 0 ? `−${lots(value)}` : '0');
 
   const state = { code: '', history: null, chart: null, on: false, selected: null, rows: null, rowsKey: null };
-  let pane = null, strip = null, seg = null, canvas = null, chipTimer = 0, chipKey = '', pendingTop = [];
+  let pane = null, chip = null, menu = null, canvas = null, chipTimer = 0, chipKey = '', pendingTop = [];
   let last = null;   // 最後畫的那一次：snapshot() 用
   const toggle = () => document.getElementById('branchToggle');
 
@@ -110,27 +113,30 @@
     return state.rows;
   }
 
-  // 名稱那一排：第一顆「合計」，後面是這一段的主力分點與各自這一段的買賣超（張）
+  // 切換的方式和成交量那格一樣（本人 2026-11-24「選擇分點的方式有點太佔空間，你可以設計跟成交量那個副圖所採用的方式」）：
+  // 副圖左上角一個小鍵，寫目前看的是誰與這一段的買賣超；點了浮出選單，第一個「主力合計」，下面是這一段的主力分點。
+  function choice(id, name, total) {
+    const button = document.createElement('button');
+    button.type = 'button'; button.className = 'kc-study-choice';
+    button.setAttribute('role', 'radio'); button.dataset.branch = id; button.dataset.menuClose = '';
+    button.setAttribute('aria-checked', String((state.selected || '') === id));
+    const label = document.createElement('span'); label.textContent = name;
+    const net = document.createElement('span'); net.className = 'num'; net.textContent = signed(total);
+    button.append(label, net);
+    return button;
+  }
   function renderChips() {
     const top = pendingTop;
     const key = `${state.selected || ''}|${top.map(item => `${item.row.id}:${Math.round(item.total)}`).join(',')}`;
     if (key === chipKey) return;
     chipKey = key;
-    seg.hidden = !top.length;
-    const chip = (id, name, total) => {
-      const button = document.createElement('button');
-      button.type = 'button'; button.setAttribute('role', 'radio'); button.dataset.branch = id;
-      button.setAttribute('aria-checked', String((state.selected || '') === id));
-      const label = document.createElement('span'); label.textContent = name;
-      const net = document.createElement('span'); net.className = 'num'; net.textContent = signed(total);
-      button.append(label, net);
-      return button;
-    };
-    seg.replaceChildren(
-      chip('', '合計', top.reduce((sum, item) => sum + item.total, 0)),
-      ...top.map(item => chip(item.row.id, item.row.name, item.total)));
-    // 放不下時左右滑：把從鍵上開始的橫向手勢還給瀏覽器（和首頁盤勢解讀的類別鍵同一個做法）
-    strip.classList.toggle('is-overflow', strip.scrollWidth > strip.clientWidth + 1);
+    chip.hidden = !top.length;
+    const sum = top.reduce((total, item) => total + item.total, 0);
+    const current = top.find(item => item.row.id === state.selected);
+    const label = document.createElement('span'); label.textContent = current ? current.row.name : '主力合計';
+    const net = document.createElement('span'); net.className = 'num'; net.textContent = signed(current ? current.total : sum);
+    chip.replaceChildren(label, net);
+    menu.replaceChildren(choice('', '主力合計', sum), ...top.map(item => choice(item.row.id, item.row.name, item.total)));
   }
   function scheduleChips(top, now) {
     pendingTop = top;
@@ -143,18 +149,23 @@
     pane = document.createElement('section');
     pane.className = 'kc-study-pane kc-study-pane-branch';
     pane.setAttribute('aria-label', '主力分點買賣超');
-    strip = document.createElement('div'); strip.className = 'bp-chips';
-    seg = document.createElement('div'); seg.className = 'chip-seg';
-    seg.setAttribute('role', 'radiogroup'); seg.setAttribute('aria-label', '分點');
-    strip.append(seg);
+    // 左上角的切換鍵（樣式、開合都和指標區的「成交量」鍵相同：chart-studies.css、chart-menus.js）
+    const header = document.createElement('header'); header.className = 'kc-study-head';
+    const title = document.createElement('h3'); title.className = 'kc-study-title';
+    chip = document.createElement('button'); chip.type = 'button'; chip.className = 'chart-chip bp-chip';
+    chip.setAttribute('aria-expanded', 'false'); chip.setAttribute('aria-controls', MENU_ID);
+    title.append(chip); header.append(title);
+    menu = document.createElement('div'); menu.className = 'kc-study-menu chart-menu bp-menu';
+    menu.id = MENU_ID; menu.hidden = true;
+    menu.setAttribute('role', 'group'); menu.setAttribute('aria-label', '切換分點');
     canvas = document.createElement('canvas');
     canvas.className = 'kc-study-canvas'; canvas.tabIndex = 0;
     canvas.setAttribute('role', 'img'); canvas.setAttribute('aria-label', '主力分點每日買賣超，單位：張。');
     canvas.style.touchAction = 'pan-y';
-    pane.append(strip, canvas);
+    pane.append(header, canvas, menu);
     studies.root.insertBefore(pane, studies.switcher);
     chart.bindCanvas(canvas);   // 和主圖同一組手勢：拖曳平移、捏合縮放、點一下選那一天
-    seg.addEventListener('click', event => {
+    menu.addEventListener('click', event => {
       const button = event.target.closest('button[data-branch]');
       if (!button) return;
       state.selected = button.dataset.branch || null;
@@ -192,8 +203,9 @@
     let amplitude = 0;
     for (let index = start; index < end; index += 1) { const value = valueAt(shown, index); if (value !== null) amplitude = Math.max(amplitude, Math.abs(value)); }
     amplitude = amplitude || 1;
-    const top0 = 8, bottom = height - 12, middle = (top0 + bottom) / 2;
+    const top0 = TITLE_STRIP_PX, bottom = height - 8, middle = (top0 + bottom) / 2;
     const y = value => middle - value / amplitude * (bottom - top0) / 2;
+    last.middle = middle;
     const barWidth = Math.max(1, Math.min(14, geo.step * .64));
     const up = token('--up'), down = token('--down');
     context.save();
@@ -237,6 +249,7 @@
       if (value !== null) bars.push({ date: last.candles[index].t, value: Math.round(value), x: last.left + last.step * (index - last.start + .5) });
     }
     return { first: last.candles[last.start].t, last: last.candles[last.end - 1].t, selected: last.selected, picked: last.picked || null,
+      middle: last.middle,
       top: last.top.map(item => ({ id: item.row.id, name: item.row.name, total: Math.round(item.total) })), bars };
   }
 
@@ -246,6 +259,7 @@
     if (button) button.setAttribute('aria-pressed', String(on));
     if (on && !pane && state.chart) mount(state.chart);
     chipKey = '';
+    if (!on && menu && !menu.hidden) { menu.hidden = true; chip.setAttribute('aria-expanded', 'false'); }
     if (pane && state.chart) state.chart.draw();
   }
 

@@ -157,7 +157,8 @@ def tools_journey(j: Journey, page, prefix: str) -> None:
     page.locator(".bd-chart").screenshot(path=str(OUT / f"{prefix}tools-2-opening.png"))
     page.wait_for_timeout(500)
     opened = [float(b.evaluate("b => getComputedStyle(b).opacity")) for b in page.locator("#drawTools button[data-tool]").all()]
-    j.check(f"{prefix}點了展開：aria-expanded=true、六顆都出來、鍵變深色", key.get_attribute("aria-expanded") == "true" and opened == [1.0] * 6
+    # 本人 11-24 加到十顆（量測、平行通道、到價提醒、區間成交量分布）
+    j.check(f"{prefix}點了展開：aria-expanded=true、十顆都出來、鍵變深色", key.get_attribute("aria-expanded") == "true" and opened == [1.0] * 10
             and tray.bounding_box()["height"] > 40, opened)
     page.locator(".bd-chart").screenshot(path=str(OUT / f"{prefix}tools-3-expanded.png"))
     trend.click()
@@ -175,6 +176,59 @@ def tools_journey(j: Journey, page, prefix: str) -> None:
     page.keyboard.press("Space")
     page.wait_for_timeout(500)
     j.check(f"{prefix}鍵盤空白鍵收回", key.get_attribute("aria-expanded") == "false")
+
+
+# 分時圖十字線的狀態：直線、橫線、右邊的價位籤看不看得到，兩條線是不是虛線，橫線的高度與籤上的字。
+CROSS_JS = """() => { const svg = document.querySelector('#timeShare svg.ts-svg'), g = svg.querySelector('.ts-cross');
+  const v = g.querySelector('line:not(.ts-cross-h)'), h = g.querySelector('.ts-cross-h'), tag = g.querySelector('.ts-cross-tag');
+  const shown = e => getComputedStyle(e).visibility === 'visible';
+  const box = svg.getBoundingClientRect(), rect = tag.querySelector('rect').getBoundingClientRect();
+  return { on: shown(g), v: shown(v), h: shown(h), tag: shown(tag), dash: [getComputedStyle(v).strokeDasharray, getComputedStyle(h).strokeDasharray],
+    hy: Number(h.getAttribute('y1')), text: tag.querySelector('text').textContent, gap: box.right - rect.right, top: rect.top - box.top, height: box.height }; }"""
+NUMBER = __import__("re").compile(r"^[\d,]+(\.\d+)?$")
+
+
+def hold(cdp, page, x: float, y: float, end: bool = False) -> None:
+    """手指按在 (x, y) 不放（Playwright 的觸控只有「點一下」，放開十字線就收掉了）；end＝放開。按下與放開要走同一個 CDP 連線。"""
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd" if end else "touchStart", "touchPoints": [] if end else [{"x": round(x), "y": round(y), "id": 0}]})
+    page.wait_for_timeout(120)
+
+
+# 本人 2026-11-24「除了垂直虛線，也要有水平虛線」：游標／手指在價格那一塊時，橫線跟著它的高度、右邊標那個高度的價位；
+# 個股移到量的那一塊標那個高度的量（大盤沒有量的數字，只畫線）。volume：這張圖有沒有量的那一塊；lots：量的那一塊標不標數字。
+def cross_check(j: Journey, context, page, prefix: str, name: str, volume: bool, lots: bool) -> None:
+    touch = prefix == "mobile-"
+    svg = page.locator("#timeShare svg.ts-svg")
+    svg.scroll_into_view_if_needed()
+    box = svg.bounding_box()
+    cdp = context.new_cdp_session(page) if touch else None
+
+    def at(dy: float) -> dict:
+        x, y = box["x"] + box["width"] * 0.3, box["y"] + dy
+        if touch:
+            hold(cdp, page, x, y)
+        else:
+            page.mouse.move(x, y)
+            page.wait_for_timeout(80)
+        state = page.evaluate(CROSS_JS)
+        if touch:
+            hold(cdp, page, x, y, end=True)
+        return state
+
+    price = at(70)
+    j.check(f"{prefix}{name}分時十字線：直線之外多一條橫的虛線，在游標／手指的高度，右邊標那個高度的價位",
+            price["on"] and price["v"] and price["h"] and price["tag"] and price["dash"] == ["3px, 3px", "3px, 3px"] and abs(price["hy"] - 70) <= 1.5
+            and bool(NUMBER.match(price["text"])) and -0.5 <= price["gap"] <= 3 and abs(price["top"] + 9 - 70) <= 1.5, price)
+    page.locator("#timeShare").screenshot(path=str(OUT / f"{prefix}{'index' if name == '大盤' else 'stock'}-ts-crosshair.png"))
+    other = at(120)
+    j.check(f"{prefix}{name}分時十字線：換個高度，橫線與價位跟著變", abs(other["hy"] - 120) <= 1.5 and other["text"] != price["text"], other)
+    if volume:
+        below = at(box["height"] - 20 - 20)   # 量的那一塊（時間軸上面 20px 處）
+        j.check(f"{prefix}{name}分時十字線：移到量的那一塊，橫線畫在那裡{'並標那個高度的量' if lots else '（成交金額單位不定，不標數字）'}",
+                below["h"] and (below["tag"] and bool(NUMBER.match(below["text"])) if lots else not below["tag"]), below)
+    gone = page.evaluate(CROSS_JS) if touch else (page.mouse.move(5, 5), page.wait_for_timeout(80), page.evaluate(CROSS_JS))[2]
+    j.check(f"{prefix}{name}分時十字線：游標／手指離開就收掉", not gone["on"], gone)
+    j.check(f"{prefix}{name}分時十字線：不造成橫向捲動", page.evaluate("() => document.documentElement.scrollWidth <= innerWidth"))
 
 
 def stock_time_share(j: Journey, page, prefix: str, after_close: bool) -> None:
@@ -243,6 +297,7 @@ def main() -> int:
                 page.locator("#periodMenu button", has_text="分時").click() if page.locator("#periodMenu").is_visible() else None
                 stock_time_share(j, page, prefix, after_close=False)
                 j.check(f"{prefix}週期小鍵寫「分時」（不補 K）", page.locator(".hm-period .chart-chip").inner_text() == "分時")
+                cross_check(j, context, page, prefix, "個股", volume=True, lots=True)
                 choose(page, "60m")
                 page.wait_for_function("() => /60分K · \d{3,} 根/.test(document.getElementById('stockChartContext').textContent)", timeout=10_000)
                 # 本人 11-18：60 分也能畫線（各畫各的，畫線旅程另外驗）
@@ -297,7 +352,25 @@ def main() -> int:
                 j.check(f"{prefix}首頁分時：沒有均價線", page.locator("#timeShare .ts-avg").count() == 0)
                 j.check(f"{prefix}首頁不造成橫向捲動", page.evaluate("() => document.documentElement.scrollWidth <= innerWidth"))
                 page.locator(".chart-workspace").screenshot(path=str(OUT / f"{prefix}index-ts.png"))
+                cross_check(j, context, page, prefix, "大盤", volume=True, lots=False)
                 choose(page, "daily")
+                # 首頁大盤的 K 線十字線也有橫的虛線（本人 11-24；個股頁的在畫線旅程驗）：那一列左右相鄰像素的顏色變化比上面幾像素多很多
+                canvas = page.locator("#mainChart canvas").first
+                canvas.scroll_into_view_if_needed()
+                cbox = canvas.bounding_box()
+                kx, ky = cbox["x"] + cbox["width"] * 0.4, cbox["y"] + cbox["height"] * 0.35
+                if prefix == "mobile-":
+                    page.touchscreen.tap(kx, ky)
+                else:
+                    page.mouse.move(kx, ky)
+                page.wait_for_timeout(200)
+                rows = page.evaluate("""y => { const canvas = document.querySelector('#mainChart canvas'), scale = canvas.height / canvas.getBoundingClientRect().height;
+                  const row = at => { const d = canvas.getContext('2d').getImageData(0, Math.floor(at * scale), canvas.width, 1).data; let n = 0;
+                    for (let i = 4; i < d.length; i += 4) if (Math.abs(d[i] - d[i - 4]) + Math.abs(d[i + 1] - d[i - 3]) + Math.abs(d[i + 2] - d[i - 2]) > 20) n++; return n; };
+                  return [row(Math.round(y) + 0.5), row(Math.round(y) - 5)]; }""", cbox["height"] * 0.35)
+                j.check(f"{prefix}首頁日 K 十字線：游標／手指的高度多一條橫的虛線", rows[0] - rows[1] >= 30, rows)
+                page.locator(".chart-workspace").screenshot(path=str(OUT / f"{prefix}index-k-crosshair.png"))
+                page.mouse.move(5, 5)
                 j.check(f"{prefix}首頁切回日 K：標題照舊「台股加權」、K 線回來", page.locator("#chartTitle").inner_text() == "台股加權"
                         and page.locator("#chartContext").inner_text().startswith("日K") and page.locator("#chartStage").is_visible())
                 context.close()

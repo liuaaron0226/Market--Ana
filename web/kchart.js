@@ -1,6 +1,8 @@
 /* 可拖曳／縮放的K線圖（原生Canvas，無外部套件）。
    互動：滑鼠拖曳或單指左右平移；滾輪、雙指捏合或＋／−按鈕縮放；鍵盤左右鍵平移、+/- 縮放；點擊或移動顯示十字線（再點一次同一根取消），
    並把那一天的開高低收標在右側價格欄、日期標在時間軸（本人 11-15；不再有浮窗）。
+   十字線另有一條水平虛線（本人 11-24）：跟著游標／手指的高度（不貼收盤），右邊標那個高度的價位；游標在副圖裡時畫在那個副圖上
+   （this.cross 記在哪一塊畫布、多高；副圖由 chart-studies.js 讀它來畫）。
    有畫線時：點線選取、拖已選取的線移動（拖端點把手只動那一端）、Delete 刪除、Esc 取消選取或放下工具；
    文字標註再點一下（或 Enter）打開輸入框修改內容。
    資料：candles=[{t,label,open,high,low,close,amount}] 由舊到新。overlays 可放判斷線；
@@ -151,7 +153,7 @@
       this.compute(candles);
       const count = Math.min(candles.length, opts.count || this.view.count || 60);
       this.view = { end: candles.length, count };
-      this.hover = -1; this.selection = -1;
+      this.hover = -1; this.selection = -1; this.cross = null;
       this.overlays = opts.overlays || [];
       if (this.drawings) this.drawings.dataChanged();
       this.draw(); this.emit();
@@ -169,6 +171,12 @@
       return removed;
     }
     cancelDrawing() { if (this.drawings) { this.drawings.cancel(); this.draw(); } }
+    // 選取的那一條到價提醒打開或關掉（選取的不是提醒線就不做事），回傳有沒有改。
+    setSelectedAlert(on) {
+      const changed = Boolean(this.drawings && this.drawings.setAlert(on));
+      if (changed) this.draw();
+      return changed;
+    }
     compute(candles) {
       this.candles = candles; this.shownLength = candles.length;
       const closes = candles.map(c => this.priced(c) ? c.close : null);
@@ -266,7 +274,7 @@
     reset() { this.view.end = this.candles.length; this.view.count = Math.min(this.candles.length, 60); this.draw(); this.emit(); }
     emit() { if (this.opts.onView) { const s = this.view.end - this.view.count; this.opts.onView(this.candles[s], this.candles[this.view.end - 1], this.view.end === this.candles.length); } }
     clearSelection() {
-      this.hover = -1; this.selection = -1;
+      this.hover = -1; this.selection = -1; this.cross = null;
       if (this.opts.onClear) this.opts.onClear();
       this.draw();
     }
@@ -280,10 +288,14 @@
         c.setPointerCapture(e.pointerId); pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
         const rect = c.getBoundingClientRect();
         if (pts.size === 1) {
+          const px = e.clientX - rect.left, py = e.clientY - rect.top;
           // 起點落在已選取的畫線上：這次拖曳是移動那條線，圖表不平移。
-          drag = c === this.canvas && this.drawings && this.drawings.grab(e.clientX - rect.left, e.clientY - rect.top, e.pointerType)
+          drag = c === this.canvas && this.drawings && this.drawings.grab(px, py, e.pointerType)
             ? { kind: 'drawing', moved: false, hadPinch: false }
-            : { kind: 'single', x: e.clientX, y: e.clientY, end: this.view.end, moved: false, wandered: false, touch: this.fingerSlop(e.pointerType), hadPinch: false };
+            // 選了量測或區間成交量分布、還沒點第一下：按住拖過去就是從這裡量到放開的地方，圖表不平移（沒拖就放開仍是點第一下）。
+            : c === this.canvas && this.drawings && this.drawings.canDragCreate(px, py)
+              ? { kind: 'create', x: px, y: py, started: false, moved: false, wandered: false, hadPinch: false, slop: e.pointerType === 'mouse' ? TAP_SLOP.mouse : TAP_SLOP.touch }
+              : { kind: 'single', x: e.clientX, y: e.clientY, end: this.view.end, moved: false, wandered: false, touch: this.fingerSlop(e.pointerType), hadPinch: false };
         }
         // 拖線途中放上第二指：線回原位，改成雙指縮放。
         if (pts.size === 2 && drag?.kind === 'drawing') { this.drawings.drop(false); this.draw(); }
@@ -304,6 +316,12 @@
         const rect = c.getBoundingClientRect(); const x = e.clientX - rect.left;
         // moved 一旦成立就不收回：拖到一半線被換掉或按了 Esc，放開時也不會被當成一次點擊。
         if (drag?.kind === 'drawing') { drag.moved = this.drawings.dragTo(x, e.clientY - rect.top) || drag.moved; this.draw(); return; }
+        // 按住拖著畫（量測、區間成交量分布）：超過「點一下」的門檻才算開始，起點是按下的位置，預覽跟著手走。
+        if (drag?.kind === 'create' && pts.size === 1) {
+          const y = e.clientY - rect.top;
+          if (!drag.moved && Math.hypot(x - drag.x, y - drag.y) > drag.slop) { drag.moved = drag.wandered = true; drag.started = this.drawings.beginAt(drag.x, drag.y); }
+          this.drawings.trackPointer(x, y); this.draw(); return;
+        }
         if (c === this.canvas && this.drawings) this.drawings.trackPointer(x, e.clientY - rect.top); // 預覽線跟著游標或手指
         if (drag?.kind === 'pinch' && pts.size === 2) {
           const xs = [...pts.values()].map(point => point.x); const d = Math.max(20, Math.abs(xs[0] - xs[1]));
@@ -323,17 +341,30 @@
           if (drag.panning || !drag.touch) { this.view.end = Math.round(drag.end - dx / g.step); this.clamp(); if (drag.moved) this.busy = true; }
         }
         this.hover = x >= g.l && x <= g.l + g.pw ? g.start + Math.floor((x - g.l) / g.step) : -1;
+        // 十字線的橫線（本人 11-24）：跟著游標或手指的高度走（不貼收盤），記下是在哪一塊畫布上——主圖或某個副圖。
+        this.cross = this.hover >= 0 ? { canvas: c, y: e.clientY - rect.top } : null;
         if (!drag && c === this.canvas && this.drawings) c.style.cursor = this.drawings.cursorAt(x, e.clientY - rect.top);
         this.draw(); if (drag && drag.moved) this.emit();
       });
       const up = e => {
         // 放開正在拖的畫線：正常放開就定在新位置，手勢被系統取消則回原位。
         if (drag?.kind === 'drawing') { this.drawings.drop(e.type === 'pointerup'); this.draw(); }
+        // 按住拖著畫的放開：放開的位置就是第二下（太近不成形就留著起點，再點一下也能畫完）；手勢被取消則起點不留。
+        if (drag?.kind === 'create' && drag.started) {
+          const rect = c.getBoundingClientRect();
+          if (e.type === 'pointerup') this.drawings.tap(e.clientX - rect.left, e.clientY - rect.top, e.pointerType, false);
+          else this.drawings.cancelPending();
+          if (e.pointerType !== 'mouse') { this.hover = this.selection; this.cross = null; }
+          this.draw();
+        }
         // 按在已選取的線上但沒有拖就放開，也是一次點擊（附近有更近的線時會改選那一條）。
-        if (e.type === 'pointerup' && (drag?.kind === 'single' || drag?.kind === 'drawing') && !drag.moved && !drag.hadPinch && this.geo) {
+        if (e.type === 'pointerup' && (drag?.kind === 'single' || drag?.kind === 'drawing' || drag?.kind === 'create') && !drag.moved && !drag.hadPinch && this.geo) {
           const g = this.geo, rect = c.getBoundingClientRect(), px = e.clientX - rect.left;
           // 主圖上的這一下先給畫線：選了工具就定位，沒選工具而點到線就選取那條線；都不是才選 K 棒。
-          if (!(c === this.canvas && this.drawings && this.drawings.tap(px, e.clientY - rect.top, e.pointerType, Boolean(drag.wandered)))) {
+          const drew = c === this.canvas && this.drawings && this.drawings.tap(px, e.clientY - rect.top, e.pointerType, Boolean(drag.wandered));
+          // 手指這一下是給畫線的（定位、選線）：十字線不留在手指晃過的那一根，回到原本選的那一天（沒有選就收掉）
+          if (drew && e.pointerType !== 'mouse') { this.hover = this.selection; this.cross = null; }
+          if (!drew) {
             const picked = px >= g.l && px <= g.l + g.pw
               ? Math.min(this.view.end - 1, g.start + Math.floor((px - g.l) / g.step)) : -1;
             // 再點一次同一根就取消選取（本人 11-15：畫面上不再有「取消選取」鍵）；點到圖區以外（例如右側數值欄）也是取消。
@@ -341,13 +372,14 @@
             if (picked < 0 || picked === this.selection) this.clearSelection();
             else {
               this.hover = this.selection = picked;
+              this.cross = { canvas: c, y: e.clientY - rect.top };   // 橫線留在點的那個高度
               if (c !== this.canvas && this.opts.onSelect) this.opts.onSelect(picked, c);
             }
           }
           this.draw();
-        } else if (e.pointerType !== 'mouse' && drag?.kind === 'single' && drag.moved && this.hover !== this.selection) {
-          // 觸控拖完：十字線與右側數值回到選取的那一天（沒有選取就收掉），不要停在手指經過的那一天
-          this.hover = this.selection;
+        } else if (e.pointerType !== 'mouse' && drag?.kind === 'single' && drag.moved && (this.hover !== this.selection || this.cross)) {
+          // 觸控拖完：十字線與右側數值回到選取的那一天（沒有選取就收掉），不要停在手指經過的那一天；橫線跟著手指，手指離開就收
+          this.hover = this.selection; this.cross = null;
           this.draw();
         }
         pts.delete(e.pointerId);
@@ -360,7 +392,7 @@
         }
       };
       c.addEventListener('pointerup', up); c.addEventListener('pointercancel', up);
-      c.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse' && !drag) { this.hover = this.selection; this.draw(); } });
+      c.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse' && !drag) { this.hover = this.selection; this.cross = null; this.draw(); } });
       c.addEventListener('wheel', e => {
         const g = geo(); if (!g) return; e.preventDefault();
         const rect = c.getBoundingClientRect(); const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left - g.l) / g.pw));
@@ -754,7 +786,7 @@
         }
       }
       // 十字線；選取那一天的開高低收標在右側價格欄，日期標在時間軸上、十字線的正下方。
-      this.debugBoxes.picked = null;
+      this.debugBoxes.picked = null; this.debugBoxes.cross = null;
       if (this.hover >= start && this.hover < end) {
         const i = this.hover, c = this.candles[i], cx = l + step * (i - start + .5);
         x.strokeStyle = dim; x.setLineDash([3, 3]); x.beginPath(); x.moveTo(cx, t); x.lineTo(cx, H - 4); x.stroke(); x.setLineDash([]);
@@ -762,14 +794,29 @@
         const prices = this.line ? (this.priced(c) ? [{ name: this.closeLabel, text: fmtTag(c.close), y: y(c.close), bg: ink, fg: paper, edge: ink }] : [])
           : hasPrice(c) ? [['開', c.open], ['高', c.high], ['低', c.low], ['收', c.close]].map(([name, value]) => (
             { name, text: fmtTag(value), y: y(value), bg: name === '收' ? tone : paper, fg: name === '收' ? paper : ink, edge: tone })) : [];
+        // 十字線的橫線（本人 11-24「除了垂直虛線，也要有水平虛線」）：跟著游標／手指的高度（不貼收盤），
+        // 右邊標那個高度的價位，樣式和時間軸上的日期籤一樣。游標在副圖裡時由 chart-studies.js 畫在那個副圖上。
+        const crossY = this.cross && this.cross.canvas === this.canvas && this.cross.y >= t && this.cross.y <= t + ph ? this.cross.y : null;
+        const crossValue = crossY === null ? null : hi - (crossY - t) / ph * (hi - lo);
+        const crossText = crossY === null ? '' : crossValue >= 10000 ? fmt(crossValue, 0) : crossValue >= 1000 ? fmt(crossValue, 1) : fmt(crossValue, 2);
+        x.font = TAG_VALUE_FONT;
+        const crossW = crossY === null ? 0 : inline ? x.measureText(crossText).width + 12 : tagW;
         const pickW = inline ? 84 : numbersOnly ? Math.max(tagW, 84) : tagW;   // 只寫數字的窄欄：開高低收往左借位置，名稱照寫
-        const pickX = inline ? (cx > l + pw / 2 ? l + 4 : l + pw - pickW - 4) : tagX + tagW - pickW;   // 圖裡面：十字線的另一邊
+        // 圖裡面：十字線的另一邊；那一邊剛好是右邊、又有橫線的價位籤時，往左讓出價位籤的寬度，兩者不重疊
+        const pickX = inline ? (cx > l + pw / 2 ? l + 4 : l + pw - pickW - 4 - (crossW ? crossW + 2 : 0)) : tagX + tagW - pickW;
         drawTags(x, pickX, pickW, tagH, placeTags(prices, t + tagH / 2, t + ph - tagH / 2, tagGap));
         x.font = TAG_VALUE_FONT;
         const dateWidth = x.measureText(c.label).width + 12;
         drawTags(x, Math.max(l, Math.min(l + pw - dateWidth, cx - dateWidth / 2)), dateWidth, tagH, [{ name: '', text: c.label, slot: t + ph + b / 2 + 1, bg: ink, fg: paper }]);
         // 驗收用：這一天實際標出來的日期與四個價位。
         this.debugBoxes.picked = { date: c.label, tags: prices.map(({ name, text: value }) => ({ name, text: value })) };
+        if (crossY !== null) {
+          const lineY = Math.round(crossY) + .5, crossX = inline ? l + pw - crossW - 2 : tagX;
+          x.strokeStyle = dim; x.lineWidth = 1; x.setLineDash([3, 3]); x.beginPath(); x.moveTo(l, lineY); x.lineTo(l + pw, lineY); x.stroke(); x.setLineDash([]);
+          drawTags(x, crossX, crossW, tagH, [{ name: '', text: crossText, slot: Math.max(t + tagH / 2, Math.min(t + ph - tagH / 2, crossY)), bg: ink, fg: paper }]);
+          // 驗收用：橫線的高度與標出來的價位。
+          this.debugBoxes.cross = { y: lineY, value: crossValue, text: crossText, box: [crossX, crossW] };
+        }
       }
       if (this.studies) this.studies.draw();
       if (this.opts.onDraw) this.opts.onDraw();

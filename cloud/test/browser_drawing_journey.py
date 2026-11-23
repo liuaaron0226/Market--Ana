@@ -620,7 +620,8 @@ def two_point_desktop(journey: Journey, browser) -> None:
     mid = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
 
     order = page.evaluate("() => [...document.querySelectorAll('#drawTools button[data-tool]')].map(button => button.dataset.tool + ':' + button.getAttribute('aria-label') + ':' + button.textContent.trim())")
-    journey.check("工具列依序是趨勢線、水平線、射線、矩形、黃金分割、文字標註，只有圖示、各有可讀名稱", order == ["trend:趨勢線:", "hline:水平線:", "ray:射線:", "rect:矩形:", "fib:黃金分割:", "text:文字標註:"], order)
+    # 本人 11-24 另加四種，排在原本六種後面（順序見 new_tools_*）
+    journey.check("工具列依序是趨勢線、水平線、射線、矩形、黃金分割、文字標註，只有圖示、各有可讀名稱", order[:6] == ["trend:趨勢線:", "hline:水平線:", "ray:射線:", "rect:矩形:", "fib:黃金分割:", "text:文字標註:"], order)
     for button, name in [(trend, "趨勢線"), (ray, "射線")]:
         button.hover()
         page.wait_for_timeout(700)
@@ -1007,7 +1008,7 @@ def rect_mobile(journey: Journey, browser) -> None:
     context.close()
 
 FIB_RATIOS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1]
-TOOL_COUNT = 6  # 工具列目前有幾顆畫線工具（不含刪除）
+TOOL_COUNT = 10  # 工具列目前有幾顆畫線工具（不含到價提醒的開關與刪除）；本人 11-24 加四種，放不下時整排左右捲
 
 
 def fib_levels(page) -> list[float]:
@@ -1301,7 +1302,7 @@ def text_desktop(journey: Journey, browser) -> None:
     axis_width = 60
 
     order = page.evaluate("() => [...document.querySelectorAll('#drawTools button[data-tool]')].map(button => button.dataset.tool + ':' + button.getAttribute('aria-label') + ':' + button.textContent.trim())")
-    journey.check("工具列第六顆是文字標註，只有圖示、有可讀名稱", order[-1] == "text:文字標註:" and len(order) == TOOL_COUNT, order)
+    journey.check("工具列第六顆是文字標註，只有圖示、有可讀名稱", order[5] == "text:文字標註:" and len(order) == TOOL_COUNT, order)
     text.hover()
     page.wait_for_timeout(700)
     tip = text.evaluate("button => { const style = getComputedStyle(button, '::after'); return style.content + '|' + style.opacity; }")
@@ -2170,15 +2171,18 @@ def touch_narrow(journey: Journey, browser) -> None:
     buttons = tools.locator("button:visible")
 
     # 大小用 offsetWidth／offsetHeight：剛按過的那一顆還在「按下去」的縮小動畫裡，外框會小一點。
+    # 本人 11-24 加到十顆：放不下的在工具列自己的捲動區裡左右捲（不換行、不變窄），所以「在圖表寬度內」看的是
+    # 畫面上露出來的範圍——捲動區的右緣，加上固定在右邊的刪除鈕。
     def layout() -> dict:
-        boxes = [buttons.nth(index).bounding_box() for index in range(buttons.count())]
         sizes = page.evaluate("() => [...document.querySelectorAll('#drawTools button')].filter(b => !b.hidden).map(b => [b.offsetWidth, b.offsetHeight])")
-        return {"fits": page.evaluate(FITS_JS), "right": max(b["x"] + b["width"] for b in boxes), "widths": [w for w, _ in sizes],
+        right = page.evaluate("""() => Math.max(document.getElementById('drawScroll').getBoundingClientRect().right,
+          ...[...document.querySelectorAll('#drawTools > button')].filter(b => !b.hidden).map(b => b.getBoundingClientRect().right))""")
+        return {"fits": page.evaluate(FITS_JS), "right": right, "widths": [w for w, _ in sizes],
                 "heights": [h for _, h in sizes], "chart": {**host.bounding_box(), "top": page.evaluate("() => document.getElementById('chartHost').getBoundingClientRect().top + scrollY")}}
 
     first = layout()
-    journey.check("08 320 寬：六顆都在圖表寬度內、不造成橫向捲動、高 44、寬至少 30", first["fits"] and first["right"] <= first["chart"]["x"] + first["chart"]["width"] + 0.5
-                  and len(first["widths"]) == 6 and min(first["widths"]) >= 30 and min(first["heights"]) >= 44, first)
+    journey.check("08 320 寬：十顆排成一列（放不下的左右捲）、露出來的都在圖表寬度內、不造成橫向捲動、每顆 44×44", first["fits"] and first["right"] <= first["chart"]["x"] + first["chart"]["width"] + 4.5
+                  and len(first["widths"]) == TOOL_COUNT and min(first["widths"]) >= 44 and min(first["heights"]) >= 44 and buttons.count() == TOOL_COUNT, first)
     x, y, line_y = journey.point(page, 0.3, 0.3)
     tools.locator("button[data-tool=hline]").tap()
     with page.expect_response(drawing_request("PUT")):
@@ -2186,8 +2190,9 @@ def touch_narrow(journey: Journey, browser) -> None:
     page.touchscreen.tap(*journey.canvas_xy(page, 0.5, line_y))
     page.wait_for_timeout(150)
     second = layout()
-    journey.check("08 320 寬：選了線多出刪除鈕：七顆仍都在圖表寬度內、不橫向捲動、寬至少 30，圖不移動", second["fits"] and len(second["widths"]) == 7
-                  and second["right"] <= second["chart"]["x"] + second["chart"]["width"] + 0.5 and min(second["widths"]) >= 30
+    journey.check("08 320 寬：選了線多出刪除鈕（固定在右邊、不跟著捲）：仍在圖表寬度內、不橫向捲動、每顆 44 寬，圖不移動", second["fits"] and len(second["widths"]) == TOOL_COUNT + 1
+                  and second["right"] <= second["chart"]["x"] + second["chart"]["width"] + 4.5 and min(second["widths"]) >= 44
+                  and page.locator("#drawDelete").bounding_box()["x"] + 44 <= 320
                   and abs(second["chart"]["top"] - first["chart"]["top"]) < 0.5 and abs(second["chart"]["height"] - first["chart"]["height"]) < 0.5, second)
     page.screenshot(path=str(OUT / "mobile-46-touch-320-selected.png"))
     for kind in ("trend", "hline", "ray", "rect", "fib", "text"):
@@ -2283,6 +2288,407 @@ def hourly_mobile(journey: Journey, browser) -> None:
     hourly(journey, browser, touch=True)
 
 
+# ---------- 本人 2026-11-24：十字線的橫線；量測、平行通道、到價提醒、區間成交量分布 ----------
+SHOTS = ROOT / ".scratch/chart-tools"   # 交接用的 390 寬截圖（十字線、四種新工具各一張）
+NEW_TOOLS = [("measure", "量測"), ("channel", "平行通道"), ("alert", "到價提醒"), ("vprofile", "區間成交量分布")]
+WIDE = {"width": 1440, "height": 900}
+CROSS_JS = """() => { const chart = window.StockView.chart(), s = chart.studies;
+  return { cross: chart.debugBoxes.cross, picked: chart.debugBoxes.picked, study: s ? s.debugCross : null, pickedStudy: s ? s.debugPicked : [],
+    width: chart.canvas.clientWidth, hover: chart.hover, selection: chart.selection }; }"""
+# 畫布上某一列左右相鄰像素顏色變了幾次：虛線那一列會比上面幾像素的那一列多很多（實線的格線與 K 棒只會多幾次）。
+DASH_ROW_JS = """([selector, y]) => { const canvas = document.querySelector(selector); const scale = canvas.height / canvas.getBoundingClientRect().height;
+  const row = at => { const d = canvas.getContext('2d').getImageData(0, Math.floor(at * scale), canvas.width, 1).data; let n = 0;
+    for (let i = 4; i < d.length; i += 4) if (Math.abs(d[i] - d[i - 4]) + Math.abs(d[i + 1] - d[i - 3]) + Math.abs(d[i + 2] - d[i - 2]) > 20) n++; return n; };
+  return [row(y), row(y - 5)]; }"""
+VISIBLE_JS = "() => window.StockView.chart().drawings.visible().map(item => item.drawing.kind)"
+# 要選取某一種新工具畫的那一條時點哪裡（畫布座標）：量測與平行通道點線的中點、成交量分布點左邊那條邊線、價位線點線上。
+PICK_JS = """kind => { const chart = window.StockView.chart(), found = chart.drawings.visible().find(item => item.drawing.kind === kind);
+  if (!found) return null;
+  const at = found.at;
+  if (kind === 'vprofile') return [at.edges[0][0][0], (at.top + at.bottom) / 2 + 24];
+  if (kind === 'alert') return [chart.canvas.clientWidth * 0.4, at.y];
+  return [(at.a[0] + at.b[0]) / 2, (at.a[1] + at.b[1]) / 2]; }"""
+NUMBER_RE = __import__("re").compile(r"^[\d,]+(\.\d+)?$")
+
+
+def open_dom(journey: Journey, context, code: str):
+    """打開個股頁：不等外部資源（字型一律擋掉），頁面的程式讀完就開始。"""
+    page = context.new_page()
+    page.route("**/*", lambda route: route.abort() if "fonts.g" in route.request.url else route.fallback())
+    page.on("console", lambda message: journey.console.append(message.text)
+            if message.type == "error" and "Failed to load resource" not in message.text else None)
+    page.on("response", lambda response: journey.failed.append(f"{response.status} {response.request.method} {response.url.replace(journey.base, '')}")
+            if response.status >= 400 else None)
+    page.on("pageerror", lambda error: journey.console.append(f"pageerror: {error}"))
+    page.goto(f"{journey.base}/stock.html?code={code}", wait_until="domcontentloaded")
+    journey.ready(page, code)
+    return page
+
+
+def reload_dom(journey: Journey, page, code: str) -> None:
+    page.reload(wait_until="domcontentloaded")
+    journey.ready(page, code)
+
+
+def clear_drawings(journey: Journey, page, code: str) -> None:
+    """前面的段落可能在這一檔留了線：全部刪掉再開始，選取時才不會點到別條。"""
+    page.evaluate("""async code => { const items = (await (await fetch(`/api/drawings/${code}`, { cache: 'no-store' })).json()).items;
+      for (const item of items) await fetch(`/api/drawings/${code}/${item.id}`, { method: 'DELETE' }); }""", code)
+    reload_dom(journey, page, code)
+
+
+def mouse_drag(page, start: tuple[float, float], end: tuple[float, float]) -> None:
+    page.mouse.move(*start)
+    page.mouse.down()
+    page.mouse.move(*end, steps=8)
+    page.wait_for_timeout(60)
+    page.mouse.up()
+    page.wait_for_timeout(120)
+
+
+def cross(journey: Journey, browser, touch: bool) -> None:
+    name = "手機 390" if touch else "桌機 1440"
+    print(f"十字線的橫線（{name}）")
+    code = "2330"
+    options = {"viewport": PHONE, "device_scale_factor": 2, "is_mobile": True, "has_touch": True} if touch else {"viewport": WIDE}
+    context = journey.context(browser, OWNER, **options)
+    page = open_dom(journey, context, code)
+    canvas = page.locator("#chartHost canvas")
+    state = lambda: page.evaluate(CROSS_JS)   # noqa: E731
+    journey.check(f"十字線（{name}）：起點沒有十字線", state()["cross"] is None and state()["picked"] is None)
+
+    def labelled(now: dict, canvas_y: float, slack: float = 1.5) -> bool:
+        line = now["cross"]
+        return bool(line) and abs(line["y"] - canvas_y) <= slack and bool(NUMBER_RE.match(line["text"])) \
+            and line["box"][0] >= now["width"] / 2 and line["box"][0] + line["box"][1] <= now["width"] + 0.5
+
+    if not touch:
+        for period, label in [("daily", "日"), ("weekly", "週"), ("monthly", "月")]:
+            if period != "daily":
+                journey.choose_period(page, period)
+            x, y, canvas_y = journey.point(page, 0.4, 0.35)
+            page.mouse.move(x, y)
+            page.wait_for_timeout(80)
+            now = state()
+            dashes = page.evaluate(DASH_ROW_JS, ["#chartHost canvas", now["cross"]["y"] if now["cross"] else canvas_y])
+            journey.check(f"十字線（{name}・{label}K）：垂直線之外多一條水平虛線，在游標的高度，右邊標價位",
+                          labelled(now, canvas_y) and now["picked"] is not None and dashes[0] - dashes[1] >= 30, {"state": now, "dashes": dashes})
+            if period == "daily":
+                page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-50-crosshair.png"))
+                first_text, first_date = now["cross"]["text"], now["picked"]["date"]
+                x2, y2, canvas_y2 = journey.point(page, 0.4, 0.5)
+                page.mouse.move(x2, y2)
+                page.wait_for_timeout(80)
+                moved = state()
+                journey.check(f"十字線（{name}）：游標上下移，水平線跟著走（不貼收盤）、價位跟著變，同一天的開高低收照樣標",
+                              labelled(moved, canvas_y2) and moved["cross"]["text"] != first_text and moved["picked"]["date"] == first_date
+                              and [tag["name"] for tag in moved["picked"]["tags"]] == ["開", "高", "低", "收"], moved)
+                # 副圖（成交量）：水平線改畫在副圖上、標那個高度的量；主圖的水平線收掉
+                study = page.locator("#chartStudies canvas.kc-study-canvas:visible").first
+                box = study.bounding_box()
+                page.mouse.move(box["x"] + box["width"] * 0.4, box["y"] + box["height"] * 0.6)
+                page.wait_for_timeout(80)
+                sub = state()
+                study_dashes = page.evaluate(DASH_ROW_JS, ["#chartStudies canvas.kc-study-canvas:not([hidden])", sub["study"]["y"] if sub["study"] else 0]) \
+                    if page.locator("#chartStudies section:not([hidden]) canvas.kc-study-canvas").count() else [0, 0]
+                journey.check(f"十字線（{name}）：游標在成交量副圖裡，水平線畫在副圖上並標那個高度的量，主圖只剩垂直線",
+                              sub["cross"] is None and bool(sub["study"]) and abs(sub["study"]["y"] - box["height"] * 0.6) <= 1.5
+                              and bool(NUMBER_RE.match(sub["study"]["text"])) and len(sub["pickedStudy"]) == 1, {"state": sub, "dashes": study_dashes})
+                page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-51-crosshair-study.png"))
+        page.mouse.move(5, 5)
+        page.wait_for_timeout(80)
+        journey.check(f"十字線（{name}）：游標離開圖表就收掉", state()["cross"] is None and state()["picked"] is None)
+        # 畫線工具不受影響：選了水平線工具照樣點一下就畫好，游標移動時十字線還在
+        journey.choose_period(page, "daily")
+        before = {item["id"] for item in journey.saved(page, code)}
+        canvas_y = journey.draw(page, 0.5, 0.22)
+        drawn = [item for item in journey.saved(page, code) if item["id"] not in before]
+        journey.check(f"十字線（{name}）：畫線照常（水平線畫在點的價位）", len(drawn) == 1 and near(journey.lines(page), canvas_y), journey.lines(page))
+        page.mouse.click(*journey.canvas_xy(page, 0.5, canvas_y))
+        with page.expect_response(drawing_request("DELETE")):
+            page.locator("#drawDelete").click()
+    else:
+        SHOTS.mkdir(parents=True, exist_ok=True)
+        finger = Finger(context, page)
+        box = canvas.bounding_box()
+        x, y = box["x"] + box["width"] * 0.4, box["y"] + box["height"] * 0.35
+        finger.tap(x, y, wobble=(2, 1))
+        now = state()
+        dashes = page.evaluate(DASH_ROW_JS, ["#chartHost canvas", now["cross"]["y"] if now["cross"] else 0])
+        journey.check(f"十字線（{name}）：手指點一下選了那一天，垂直線之外多一條水平虛線留在點的高度，右邊標價位",
+                      labelled(now, box["height"] * 0.35 + 1, 2) and now["selection"] >= 0 and journey.shows_bar(page) and dashes[0] - dashes[1] >= 30,
+                      {"state": now, "dashes": dashes})
+        page.locator(".bd-chart").screenshot(path=str(SHOTS / "390-crosshair-k.png"))
+        page.screenshot(path=str(OUT / "mobile-50-crosshair.png"))
+        # 按住拖：兩條線跟著手指；放開後水平線收掉、垂直線回到選的那一天
+        finger.send("touchStart", [(x + 40, y + 20)])
+        for step in range(1, 5):
+            finger.send("touchMove", [(x + 40 + 15 * step, y + 20 + 10 * step)])
+            page.wait_for_timeout(16)
+        held = state()
+        journey.check(f"十字線（{name}）：手指按住拖，水平線跟著手指的高度", labelled(held, box["height"] * 0.35 + 60, 2) and held["hover"] != held["selection"], held)
+        page.wait_for_timeout(250)
+        finger.send("touchEnd", [])
+        page.wait_for_timeout(150)
+        after = state()
+        journey.check(f"十字線（{name}）：放開後水平線收掉，十字線回到選的那一天", after["cross"] is None and after["hover"] == after["selection"] >= 0, after)
+        axis = journey.axis(page)
+        finger.pinch(x, y, 60, 160)
+        journey.check(f"十字線（{name}）：雙指縮放照常", journey.axis(page) != axis)
+        journey.check(f"十字線（{name}）：不造成橫向捲動", page.evaluate(FITS_JS))
+    context.close()
+
+
+def cross_desktop(journey: Journey, browser) -> None:
+    cross(journey, browser, touch=False)
+
+
+def cross_mobile(journey: Journey, browser) -> None:
+    cross(journey, browser, touch=True)
+
+
+def new_tools(journey: Journey, browser, touch: bool) -> None:
+    name = "手機 390" if touch else "桌機 1440"
+    print(f"新的四種分析工具（{name}）：畫、存、重新整理後還在、刪除")
+    code = "2882" if touch else "2303"
+    options = {"viewport": PHONE, "device_scale_factor": 2, "is_mobile": True, "has_touch": True} if touch else {"viewport": WIDE}
+    context = journey.context(browser, OWNER, **options)
+    page = open_dom(journey, context, code)
+    clear_drawings(journey, page, code)
+    finger = Finger(context, page) if touch else None
+    tools, delete, canvas = page.locator("#drawTools"), page.locator("#drawDelete"), page.locator("#chartHost canvas")
+    size = 44 if touch else 36   # 手指用的按鈕至少 44×44；滑鼠用的沿用站上的 36×36
+    if touch:
+        SHOTS.mkdir(parents=True, exist_ok=True)
+
+    def xy(fx: float, fy: float) -> tuple[float, float]:
+        box = canvas.bounding_box()
+        return box["x"] + box["width"] * fx, box["y"] + box["height"] * fy
+
+    def press(kind: str) -> None:
+        button = tools.locator(f"button[data-tool={kind}]")
+        (button.tap() if touch else button.click())
+        page.wait_for_timeout(150)
+
+    def click(point: tuple[float, float]) -> None:
+        (finger.tap(*point, wobble=(1, 1)) if touch else page.mouse.click(*point))
+        page.wait_for_timeout(100)
+
+    def drag(start: tuple[float, float], end: tuple[float, float]) -> None:
+        (finger.slide(start[0], start[1], end[0] - start[0], end[1] - start[1]) if touch else mouse_drag(page, start, end))
+
+    def pressed(kind: str) -> bool:
+        return tools.locator(f"button[data-tool={kind}]").get_attribute("aria-pressed") == "true"
+
+    def remove(kind: str, label: str) -> None:
+        click(journey.at(page, *page.evaluate(PICK_JS, kind)))
+        shown = delete.is_visible()
+        box = delete.bounding_box() if shown else {"x": 9999, "width": 0, "height": 0}
+        with page.expect_response(drawing_request("DELETE")) as removed:
+            (delete.tap() if touch else delete.click())
+        journey.check(f"新工具（{name}）：點{label}選得到，刪除鈕固定在工具列右邊（看得到、夠大），按了就刪掉",
+                      shown and removed.value.status == 204 and box["width"] >= size and box["height"] >= size
+                      and box["x"] + box["width"] <= page.viewport_size["width"] and all(item["kind"] != kind for item in journey.saved(page, code)), box)
+
+    # ---- 工具列 ----
+    order = page.evaluate("() => [...document.querySelectorAll('#drawTools button[data-tool]')].map(button => button.dataset.tool + ':' + button.getAttribute('aria-label') + ':' + button.textContent.trim())")
+    journey.check(f"新工具（{name}）：工具列十顆，新的四種排在原本六種後面，只有圖示、各有可讀名稱",
+                  len(order) == TOOL_COUNT and order[6:] == [f"{kind}:{label}:" for kind, label in NEW_TOOLS], order)
+    bar = page.evaluate("""() => { const scroll = document.getElementById('drawScroll'), box = scroll.getBoundingClientRect();
+      const buttons = [...scroll.querySelectorAll('button')];
+      return { scrollWidth: scroll.scrollWidth, clientWidth: scroll.clientWidth, rows: new Set(buttons.map(b => Math.round(b.getBoundingClientRect().top))).size,
+        sizes: buttons.map(b => [b.offsetWidth, b.offsetHeight]), left: box.left, right: box.right, overflowX: getComputedStyle(scroll).overflowX }; }""")
+    big = all(w >= size and h >= size for w, h in bar["sizes"])
+    if touch:
+        journey.check(f"新工具（{name}）：十顆排成一列不換行、每顆至少 44×44；放不下的在工具列裡左右捲，整頁不橫向捲動",
+                      big and bar["rows"] == 1 and bar["scrollWidth"] > bar["clientWidth"] and bar["overflowX"] == "auto"
+                      and bar["right"] <= 390 + 0.5 and page.evaluate(FITS_JS), bar)
+        box = tools.bounding_box()
+        seventh = tools.locator("button[data-tool=measure]").bounding_box()
+        finger.slide(seventh["x"] + seventh["width"] / 2, seventh["y"] + seventh["height"] / 2, -200, 0)   # 手指按在工具上往左滑
+        page.wait_for_timeout(300)
+        scrolled = page.evaluate("""() => { const scroll = document.getElementById('drawScroll'), last = scroll.querySelector('button:last-child').getBoundingClientRect();
+          return { left: scroll.scrollLeft, lastRight: last.right, edge: scroll.getBoundingClientRect().right, pressed: scroll.querySelectorAll('[aria-pressed=true]').length }; }""")
+        journey.check(f"新工具（{name}）：手指左右滑工具列就捲過去（最後一顆露出來），滑的那一下不會選到工具、整頁不動",
+                      scrolled["left"] > 60 and scrolled["lastRight"] <= scrolled["edge"] + 0.5 and scrolled["pressed"] == 0 and page.evaluate(FITS_JS), scrolled)
+        page.locator(".bd-chart").screenshot(path=str(SHOTS / "390-toolbar-scrolled.png"))
+        chart_top = canvas.bounding_box()["y"]
+        journey.check(f"新工具（{name}）：工具列在圖的上方、不擠壓圖表", box["y"] + box["height"] <= chart_top + 0.5, {"tools": box, "chart": chart_top})
+    else:
+        journey.check(f"新工具（{name}）：十顆排成一列不換行、和原本一樣大（滑鼠用的 36×36），桌機放得下、不用捲",
+                      big and bar["rows"] == 1 and bar["scrollWidth"] <= bar["clientWidth"] and page.evaluate(FITS_JS), bar)
+        measure = tools.locator("button[data-tool=vprofile]")
+        measure.hover()
+        page.wait_for_timeout(700)
+        tip = page.evaluate("""() => { const b = document.querySelector('#drawTools button[data-tool=vprofile]'), after = getComputedStyle(b, '::after');
+          return { content: after.content, opacity: after.opacity, scrollable: document.getElementById('drawScroll').scrollWidth > document.getElementById('drawScroll').clientWidth }; }""")
+        journey.check(f"新工具（{name}）：滑鼠停在工具上顯示名稱，名稱不會把工具列撐成可以捲", tip["content"] == '"區間成交量分布"'
+                      and float(tip["opacity"]) > .99 and not tip["scrollable"], tip)
+        page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-52-new-toolbar.png"))
+        page.mouse.move(5, 5)
+
+    # ---- 量測：按住拖過去 ----
+    press("measure")
+    with page.expect_response(drawing_request("PUT")) as saved:
+        drag(xy(0.30, 0.62), xy(0.50, 0.36))
+    item = next((one for one in journey.saved(page, code) if one["kind"] == "measure"), None)
+    stats = page.evaluate("""() => { const found = window.StockView.chart().drawings.visible().find(item => item.drawing.kind === 'measure');
+      return found ? { stats: found.at.stats, lines: window.ChartDrawingMath.measureLines(found.at.stats) } : null; }""")
+    lines_ok = bool(stats) and bool(__import__("re").match(r"^\+[\d,.]+  \+\d+\.\d{2}%$", stats["lines"][0])) and bool(__import__("re").match(r"^\d+ 根 · \d+ 天$", stats["lines"][1]))
+    journey.check(f"新工具（{name}）：量測——按住拖過去放開就量好並儲存（圖表不平移），工具回一般模式；標出漲跌、漲跌幅、根數、天數",
+                  saved.value.status == 201 and bool(item) and len(item["anchors"]) == 2 and item["anchors"][0]["date"] < item["anchors"][1]["date"]
+                  and item["anchors"][1]["price"] > item["anchors"][0]["price"] and not pressed("measure") and lines_ok
+                  and stats["stats"]["bars"] >= 2 and stats["stats"]["days"] >= stats["stats"]["bars"] and stats["stats"]["change"] > 0, {"item": item, "stats": stats})
+    page.locator(".bd-chart").screenshot(path=str((SHOTS / "390-measure.png") if touch else (OUT / "desktop-53-measure.png")))
+    reload_dom(journey, page, code)
+    journey.check(f"新工具（{name}）：量測重新整理後還在", page.evaluate(VISIBLE_JS) == ["measure"] and journey.saved(page, code) == [item], page.evaluate(VISIBLE_JS))
+    remove("measure", "量測的對角線")
+
+    # ---- 平行通道：點三下 ----
+    press("channel")
+    click(xy(0.12, 0.70))
+    click(xy(0.32, 0.55))
+    journey.check(f"新工具（{name}）：平行通道點了兩下還沒畫完（還要一下定寬度），工具還在", journey.saved(page, code) == [] and pressed("channel"))
+    with page.expect_response(drawing_request("PUT")) as saved:
+        click(xy(0.22, 0.82))
+    item = next((one for one in journey.saved(page, code) if one["kind"] == "channel"), None)
+    ink = journey.ink(page)
+    journey.check(f"新工具（{name}）：平行通道第三下畫好並儲存：三個錨點，第三個記在第一個那一天、價位比趨勢線低（平行線在下面）",
+                  saved.value.status == 201 and bool(item) and len(item["anchors"]) == 3 and item["anchors"][2]["date"] == item["anchors"][0]["date"]
+                  and item["anchors"][2]["price"] < item["anchors"][0]["price"] and item["anchors"][1]["price"] > item["anchors"][0]["price"]
+                  and not pressed("channel") and ink["count"] > 0, {"item": item, "ink": ink})
+    page.locator(".bd-chart").screenshot(path=str((SHOTS / "390-channel.png") if touch else (OUT / "desktop-54-channel.png")))
+    reload_dom(journey, page, code)
+    journey.check(f"新工具（{name}）：平行通道重新整理後還在", page.evaluate(VISIBLE_JS) == ["channel"] and journey.saved(page, code) == [item], page.evaluate(VISIBLE_JS))
+    remove("channel", "通道的趨勢線")
+
+    # ---- 區間成交量分布：按住拖過一段日期 ----
+    press("vprofile")
+    with page.expect_response(drawing_request("PUT")) as saved:
+        drag(xy(0.50, 0.45), xy(0.80, 0.60))
+    item = next((one for one in journey.saved(page, code) if one["kind"] == "vprofile"), None)
+    profile = page.evaluate("""() => { const found = window.StockView.chart().drawings.visible().find(item => item.drawing.kind === 'vprofile');
+      return found ? { rows: found.at.rows.length, poc: found.at.poc, strong: found.at.rows.filter(row => row.alpha > .4).length,
+        widest: Math.max(...found.at.rows.map(row => row.rect[2])), left: found.at.left, right: found.at.right,
+        pick: [found.at.edges[0][0][0], (found.at.top + found.at.bottom) / 2 + 24] } : null; }""")
+    journey.check(f"新工具（{name}）：區間成交量分布——拖過一段日期就畫出各價位的量並儲存；量最大的一格（POC）另外標示",
+                  saved.value.status == 201 and bool(item) and len(item["anchors"]) == 2 and item["anchors"][0]["date"] < item["anchors"][1]["date"]
+                  and bool(profile) and 2 <= profile["rows"] <= 24 and profile["strong"] == 1 and bool(profile["poc"])
+                  and profile["widest"] >= 56 and not pressed("vprofile") and journey.ink(page)["count"] > 0, {"item": item, "profile": profile})
+    page.locator(".bd-chart").screenshot(path=str((SHOTS / "390-vprofile.png") if touch else (OUT / "desktop-55-vprofile.png")))
+    reload_dom(journey, page, code)
+    journey.check(f"新工具（{name}）：區間成交量分布重新整理後還在", page.evaluate(VISIBLE_JS) == ["vprofile"] and journey.saved(page, code) == [item], page.evaluate(VISIBLE_JS))
+    remove("vprofile", "分布的邊線")
+
+    # ---- 到價提醒的價位線：這個預覽沒有開關注（和其他核准使用者一樣）——線畫得出來、提醒是關的，工具列那一行說明 ----
+    press("alert")
+    with page.expect_response(drawing_request("PUT")) as saved:
+        click(xy(0.60, 0.20))
+    item = next((one for one in journey.saved(page, code) if one["kind"] == "alert"), None)
+    note = page.locator("#drawNote")
+    journey.check(f"新工具（{name}）：到價提醒——這裡不能提醒時線照樣畫好並儲存、提醒是關的，工具列那一行寫「無法到價提醒」，沒有提醒的開關",
+                  saved.value.status == 201 and bool(item) and item["alert"] is False and note.is_visible() and note.inner_text().strip() == "無法到價提醒"
+                  and not page.locator("#drawAlert").is_visible() and page.evaluate(FITS_JS), item)
+    reload_dom(journey, page, code)
+    journey.check(f"新工具（{name}）：到價提醒的線重新整理後還在；沒選它的時候那一行不寫字", page.evaluate(VISIBLE_JS) == ["alert"] and not note.is_visible())
+    remove("alert", "價位線")
+    journey.check(f"新工具（{name}）：四種都刪掉了", journey.saved(page, code) == [] and not note.is_visible())
+    context.close()
+
+
+def new_tools_desktop(journey: Journey, browser) -> None:
+    new_tools(journey, browser, touch=False)
+
+
+def new_tools_mobile(journey: Journey, browser) -> None:
+    new_tools(journey, browser, touch=True)
+
+
+def start_server(extra: dict[str, str]) -> tuple[subprocess.Popen, str]:
+    """另外起一個旅程伺服器（例如打開關注開關的）。回傳行程與網址。"""
+    port = free_port()
+    server = subprocess.Popen(["node", str(ROOT / "cloud/test/journey-server.mjs"), str(port), "relaxed"], cwd=ROOT / "cloud",
+                              env={**__import__("os").environ, **extra})
+    base = f"http://127.0.0.1:{port}"
+    for _ in range(100):
+        try:
+            urlopen(base + "/", timeout=1)
+        except OSError as error:
+            if getattr(error, "code", None):
+                break
+            time.sleep(0.2)
+        else:
+            break
+    return server, base
+
+
+# 到價提醒開著的那一面：站主、關注開關開著（另起一個伺服器）。比價與推播在排程（cloud/test/drawing-alerts.test.js），這裡驗線上的開關與存檔。
+def new_alert(journey: Journey, browser) -> None:
+    print("到價提醒（站主、關注開關開著；手機 390）：預設開著、開關、重新整理後還在")
+    server, base = start_server({"MARKET_ANA_WATCHLIST_WATCH": "owner"})
+    side = Journey(base)
+    side.checks, side.console, side.failed = journey.checks, journey.console, []
+    code = "2330"
+    try:
+        context = side.context(browser, OWNER, viewport=PHONE, device_scale_factor=2, is_mobile=True, has_touch=True)
+        page = open_dom(side, context, code)
+        finger = Finger(context, page)
+        tools, delete, toggle, note = page.locator("#drawTools"), page.locator("#drawDelete"), page.locator("#drawAlert"), page.locator("#drawNote")
+        canvas = page.locator("#chartHost canvas")
+        box = canvas.bounding_box()
+        point = lambda fx, fy: (box["x"] + box["width"] * fx, box["y"] + box["height"] * fy)   # noqa: E731
+        saved_alert = lambda: next((one for one in side.saved(page, code) if one["kind"] == "alert"), None)   # noqa: E731
+
+        tools.locator("button[data-tool=alert]").tap()
+        page.wait_for_timeout(150)
+        box = canvas.bounding_box()
+        with page.expect_response(drawing_request("PUT")) as saved:
+            finger.tap(*point(0.55, 0.18), wobble=(1, 1))
+        sent = saved.value.request.post_data_json
+        item = saved_alert()
+        journey.check("到價提醒：站主畫的價位線提醒預設開著；存的時候帶現價與股名（伺服器用來判斷方向與寫通知標題）",
+                      saved.value.status == 201 and bool(item) and item["alert"] is True and item["fired_at"] is None and sent.get("alert") is True
+                      and isinstance(sent.get("ref"), (int, float)) and sent["ref"] > 0 and sent.get("name") == page.locator("#stockName").inner_text().strip()
+                      and not note.is_visible(), {"sent": sent, "item": item})
+        finger.tap(*point(0.30, 0.18), wobble=(1, 1))
+        page.wait_for_timeout(200)
+        sizes = [toggle.bounding_box(), delete.bounding_box()] if toggle.is_visible() and delete.is_visible() else []
+        journey.check("到價提醒：選了那條線，工具列右邊出現提醒的開關（開著）與刪除，都看得到、至少 44×44，整頁不橫向捲動",
+                      len(sizes) == 2 and toggle.get_attribute("aria-pressed") == "true" and all(s["width"] >= 44 and s["height"] >= 44 and s["x"] + s["width"] <= 390 for s in sizes)
+                      and page.evaluate(FITS_JS), sizes)
+        SHOTS.mkdir(parents=True, exist_ok=True)
+        page.locator(".bd-chart").screenshot(path=str(SHOTS / "390-alert.png"))
+        with page.expect_response(drawing_request("PUT")) as saved:
+            toggle.tap()
+        journey.check("到價提醒：按開關關掉——線還在、存成關的", saved.value.status == 200 and saved_alert()["alert"] is False
+                      and toggle.get_attribute("aria-pressed") == "false" and page.evaluate(VISIBLE_JS).count("alert") == 1)
+        with page.expect_response(drawing_request("PUT")) as saved:
+            toggle.tap()
+        journey.check("到價提醒：再按一下又打開", saved.value.status == 200 and saved_alert()["alert"] is True and toggle.get_attribute("aria-pressed") == "true")
+        reload_dom(side, page, code)
+        box = canvas.bounding_box()
+        journey.check("到價提醒：重新整理後線與開著的提醒都還在", saved_alert() == {**item, "updated_at": saved_alert()["updated_at"]} and page.evaluate(VISIBLE_JS).count("alert") == 1)
+        finger.tap(*point(0.30, 0.18), wobble=(1, 1))
+        page.wait_for_timeout(200)
+        shown = toggle.is_visible() and toggle.get_attribute("aria-pressed") == "true"
+        with page.expect_response(drawing_request("DELETE")) as removed:
+            delete.tap()
+        journey.check("到價提醒：重新整理後選取仍顯示開著；刪得掉", shown and removed.value.status == 204 and saved_alert() is None and not toggle.is_visible())
+        # 一般水平線沒有提醒的開關
+        with page.expect_response(drawing_request("PUT")):
+            tools.locator("button[data-tool=hline]").tap()
+            finger.tap(*point(0.55, 0.30), wobble=(1, 1))
+        finger.tap(*point(0.30, 0.30), wobble=(1, 1))
+        page.wait_for_timeout(200)
+        journey.check("到價提醒：一般的水平線選了只有刪除，沒有提醒的開關", delete.is_visible() and not toggle.is_visible())
+        with page.expect_response(drawing_request("DELETE")):
+            delete.tap()
+        context.close()
+        journey.failed.extend(line for line in side.failed if "/api/drawings" in line)
+    finally:
+        server.terminate()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", help="已經開著的旅程伺服器；省略時自己起一個")
@@ -2311,7 +2717,8 @@ def main() -> int:
     try:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch()
-            for step in (desktop, mobile, edit_desktop, edit_mobile, two_point_desktop, two_point_mobile, rect_desktop, rect_mobile, fib_desktop, fib_mobile, text_desktop, text_mobile, save_desktop, save_mobile, touch_mobile, touch_narrow, hourly_desktop, hourly_mobile):
+            for step in (desktop, mobile, edit_desktop, edit_mobile, two_point_desktop, two_point_mobile, rect_desktop, rect_mobile, fib_desktop, fib_mobile, text_desktop, text_mobile, save_desktop, save_mobile, touch_mobile, touch_narrow, hourly_desktop, hourly_mobile,
+                         cross_desktop, cross_mobile, new_tools_desktop, new_tools_mobile, new_alert):
                 if not args.only or step.__name__.startswith(tuple(args.only.split(","))):
                     step(journey, browser)
             browser.close()

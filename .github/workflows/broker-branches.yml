@@ -1,11 +1,18 @@
 # 主力分點（本人 2026-11-24「共識達成」，.scratch/broker-branches 票 01）：抓券商公開的主力進出頁，
 # 把分點每日買賣超寫進網站資料庫（broker_branches、broker_branch_days、broker_branch_stocks）。
-# 目前只有手動觸發：
+# 每天的排程（票 02）：接在每日更新（daily-update）後面。要同時有「那一班真的發布了新的一天」的證據
+# （daily-publication artifact；只重新部署程式、等資料、休市、乾跑、同一天後面的時段都不算）與
+# repository variable MARKET_ANA_BROKER_BRANCHES_SCHEDULE 剛好是 on，才抓、才寫。Cloudflare 的 cron 已經滿了，不另外加時段。
+# 排程那一輪（mode=scheduled）依序做、共用一個頁數上限與一個寫入列數上限（D1 免費方案一天 10 萬列，刪除也算）：
+#   整理（候選分點超過上限的股票刪掉排名以外的）→ 已回補的每一檔更新到最近交易日 → 還沒回補的盡量回補。
+# 手動觸發：
 # - mode=backfill、code 有填：只回補那一檔（近三年）。
 # - mode=backfill、code 空白：站主的自選股與庫存裡還沒回補的，最多 limit 檔（做到一半的先接著做）。
 # - mode=daily：已回補的每一檔更新到最近交易日。
-# 寫不寫資料庫：手動而且 dry_run 取消勾選就寫（排程開關沒開也可以手動回補一檔）；之後接排程時，
-# 排程觸發的要 repository variable MARKET_ANA_BROKER_BRANCHES_SCHEDULE 剛好是 on 才寫。其他一律乾跑：照樣抓、不寫。
+# - mode=scheduled：和每天排程一樣的那一輪。
+# - mode=trim：只做整理（不連來源）。
+# 寫不寫資料庫：手動而且 dry_run 取消勾選就寫（排程開關沒開也可以手動回補一檔）；排程觸發的一定寫
+# （開關沒開或沒有發布證據時整個不跑）。手動乾跑：照樣抓、不寫。
 # 倉庫公開：站主關注哪些股票不能出現在這裡的輸出。
 # - 輸入的代號一開始就遮住（::add-mask::），而且只從事件檔讀，不放進任何步驟的 env 或 ${{ }}（步驟開頭會把 env 印出來）。
 # - broker_branches.py 印到標準輸出的是遮過的報告（檔數、頁數、失敗原因的種類、日期範圍）；
@@ -13,13 +20,17 @@
 name: broker-branches
 
 on:
+  workflow_run:
+    workflows: [daily-update]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       mode:
-        description: "backfill 回補（近三年）／daily 每日更新"
+        description: "backfill 回補（近三年）／daily 每日更新／scheduled 和每天排程一樣的那一輪／trim 只整理超過上限的候選分點"
         required: true
         type: choice
-        options: [backfill, daily]
+        options: [backfill, daily, scheduled, trim]
         default: backfill
       code:
         description: "只回補這一檔（只在 backfill 用；空白＝站主的自選股與庫存裡還沒回補的）"
@@ -38,20 +49,74 @@ on:
 
 permissions:
   contents: read
+  actions: read   # 下載每日更新那一班的發布證據
 
 concurrency:
   group: broker-branches   # 對來源一次只跑一輪（乾跑也算）
   cancel-in-progress: false
 
 jobs:
+  # 排程觸發：開關沒開、每日更新沒成功就整個不跑（連執行機都不開）；再核對那一班真的發布了新的一天。
+  # 這個工作不碰輸入的代號（事件檔裡的 inputs.code 在下一個工作的第一步才讀、馬上遮住）。
+  authorize:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && vars.MARKET_ANA_BROKER_BRANCHES_SCHEDULE == 'on')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      allowed: ${{ steps.auth.outputs.allowed }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 下載觸發 run 的正式發布證據
+        if: github.event_name == 'workflow_run'
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: daily-publication-${{ github.event.workflow_run.id }}
+          path: ${{ runner.temp }}/publication
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fail-closed 核准執行
+        id: auth
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SWITCH: ${{ vars.MARKET_ANA_BROKER_BRANCHES_SCHEDULE }}
+          EXPECTED_RUN_ID: ${{ github.event.workflow_run.id }}
+          EXPECTED_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          EXPECTED_REPOSITORY: ${{ github.repository }}
+          EXPECTED_BRANCH: ${{ github.event.repository.default_branch }}
+          UPSTREAM_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "allowed=true" >> "$GITHUB_OUTPUT"
+          elif [ "$SWITCH" != "on" ]; then
+            echo "allowed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::MARKET_ANA_BROKER_BRANCHES_SCHEDULE 不是 on，主力分點不執行"
+          else
+            # 沒有 --allow-already-done：同一天後面的時段（already-done）不放行，一個資料日只抓一輪。
+            python ai_digest_trigger.py authorize \
+              --evidence "$RUNNER_TEMP/publication/daily-publication.json" \
+              --expected-run-id "$EXPECTED_RUN_ID" \
+              --expected-head-sha "$EXPECTED_HEAD_SHA" \
+              --expected-repository "$EXPECTED_REPOSITORY" \
+              --expected-branch "$EXPECTED_BRANCH" \
+              --conclusion "$UPSTREAM_CONCLUSION" \
+              --github-output "$GITHUB_OUTPUT"
+          fi
+
   branches:
+    needs: authorize
+    if: needs.authorize.outputs.allowed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 50   # 一輪最多 400 頁、每頁間隔 3 秒
     env:
       TZ: Asia/Taipei
       PYTHONIOENCODING: utf-8
-      MODE: ${{ inputs.mode || 'daily' }}
+      MODE: ${{ inputs.mode || 'scheduled' }}
       LIMIT: ${{ inputs.limit || '2' }}
+      # 一輪最多寫幾列（刪除也算）。預設 60000；要調整就設 repository variable（只收數字，其他一律用預設）。
+      ROW_BUDGET: ${{ vars.MARKET_ANA_BROKER_BRANCHES_ROW_BUDGET }}
     steps:
       - name: 遮住輸入的代號、決定這一輪寫不寫資料庫
         id: plan
@@ -70,8 +135,11 @@ jobs:
           elif [ "$SWITCH" = "on" ]; then
             write=true
           fi
+          rows=60000
+          if [[ "$ROW_BUDGET" =~ ^[0-9]{1,6}$ ]]; then rows="$ROW_BUDGET"; fi
           echo "single=$single" >> "$GITHUB_OUTPUT"
           echo "write=$write" >> "$GITHUB_OUTPUT"
+          echo "rows=$rows" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v4
 
@@ -97,7 +165,7 @@ jobs:
           done
 
       - name: 讀站主的自選股與庫存（D1，唯讀）
-        if: steps.plan.outputs.single != 'true'
+        if: steps.plan.outputs.single != 'true' && env.MODE != 'trim'
         env:
           OWNER_EMAIL: ${{ secrets.OWNER_EMAIL }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -122,14 +190,15 @@ jobs:
         id: fetch
         env:
           SINGLE: ${{ steps.plan.outputs.single }}
+          ROWS: ${{ steps.plan.outputs.rows }}
         run: |
           set -o pipefail
           args=("$MODE" --state "$RUNNER_TEMP/broker-branches-state.json" --sql-output "$RUNNER_TEMP/broker-branches.sql"
-                --report "$RUNNER_TEMP/broker-branches-report.json")
+                --report "$RUNNER_TEMP/broker-branches-report.json" --row-budget "$ROWS")
           if [ "$SINGLE" = "true" ]; then
             # 代號只從事件檔讀（已經遮住），不經過 env、不印出來
             args+=(--code "$(jq -r '.inputs.code // ""' "$GITHUB_EVENT_PATH")")
-          else
+          elif [ "$MODE" != "trim" ]; then
             args+=(--stocks "$RUNNER_TEMP/broker-branches-stocks.json")
             if [ "$MODE" = "backfill" ]; then args+=(--owner-stocks --limit "$LIMIT"); fi
           fi
@@ -161,7 +230,16 @@ jobs:
         run: |
           {
             if [ "$WRITE" = "true" ]; then echo "### 主力分點 $MODE（正式）"; else echo "### 主力分點 $MODE（乾跑，未寫入）"; fi
-            if [ -f "$RUNNER_TEMP/broker-branches.json" ]; then echo '```json'; cat "$RUNNER_TEMP/broker-branches.json"; echo '```'; fi
+            if [ -f "$RUNNER_TEMP/broker-branches.json" ]; then
+              # 只有數量與失敗原因的種類（HTTP 狀態碼、例外的類別名稱、format-changed、backfill-in-progress）；沒有代號、沒有分點。
+              jq -r '
+                "- 站主的自選股與庫存：\(.owner_stocks // "-") 檔；等回補：\(.waiting_backfill // "-") 檔；等整理：\(.waiting_trim // 0) 檔",
+                "- 頁數：\(.pages // 0)／\(.budget // "-")；寫入列數：\(.rows // 0)／\(.row_budget // "-")；提前停下的原因：\(.stopped // "無")",
+                ((.errors // .stocks.errors // {}) | to_entries
+                  | if length == 0 then "- 失敗或沒做完：0 檔" else (.[] | "- \(.key)：\(.value) 檔") end)
+              ' "$RUNNER_TEMP/broker-branches.json" || echo "- 摘要讀不出來"
+              echo '```json'; cat "$RUNNER_TEMP/broker-branches.json"; echo '```'
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: 清除暫存（名單、SQL、完整報告）

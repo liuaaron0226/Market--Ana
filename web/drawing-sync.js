@@ -58,7 +58,8 @@
     // 連不上、太久沒回應會丟出例外。
     async function send(entry) {
       const url = `/api/drawings/${encodeURIComponent(entry.code)}/${encodeURIComponent(entry.id)}`;
-      const { kind, anchors, text } = entry.drawing || {};   // text 只有文字標註才有
+      // text 只有文字標註才有；alert（提醒開或關）、ref（現價）、name（股名）只有到價提醒的線才有
+      const { kind, anchors, text, alert, ref, name } = entry.drawing || {};
       const abort = new AbortController();
       let giveUp = null;
       const timeout = new Promise((resolve, reject) => {
@@ -68,7 +69,7 @@
         const response = await Promise.race([timeout, request(url, {
           // keepalive：送到一半頁面被關掉或切走（手機上不會先問），這一筆也照樣送完。
           method: entry.drawing ? 'PUT' : 'DELETE', cache: 'no-store', keepalive: true, signal: abort.signal,
-          ...(entry.drawing ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind, anchors, text }) } : {}),
+          ...(entry.drawing ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind, anchors, text, alert, ref, name }) } : {}),
         })]);
         if (response.ok) return { saved: true };
         if (refused(response.status)) return { refused: true };

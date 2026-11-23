@@ -3242,3 +3242,304 @@ test("沒有畫線層的圖（首頁大盤）手勢照舊：手指移 5px 就算
   assert.equal(chart.view.end, 79, "5px 進位成一根，跟著手指走");
   assert.equal(chart.selection, -1, "移過 3px 就不是點一下");
 });
+
+// ---------- 2026-11-24：十字線的橫線；量測、平行通道、到價提醒、區間成交量分布 ----------
+// 座標沿用上面那張圖：繪圖區左 4、上 10、寬 322、高 308；後 40 根價格座標 94.3～105.7，每根 8.05px。
+// x=150 → 第 58 根（02-28）、x=190 → 第 63 根（03-05）、x=230 → 第 68 根（03-10）；y=164 → 100、y=87 → 102.85、y=241 → 97.15。
+const near = (actual, expected, message) => assert.ok(Math.abs(actual - expected) < 1e-6, `${message || ""} ${actual} ≠ ${expected}`);
+const nearPoints = (actual, expected, message) => {
+  assert.equal(actual.length, expected.length, message);
+  actual.forEach((point, i) => { near(point[0], expected[i][0], message); near(point[1], expected[i][1], message); });
+};
+const DASHED = stroke => stroke.dash.length === 2 && stroke.dash[0] === 3 && stroke.dash[1] === 3 && stroke.color === "--faint";
+// 圖表模組在另一個執行環境裡跑：它回傳的陣列要先轉成這邊的，才能和這邊寫的預期值比
+const plain = value => JSON.parse(JSON.stringify(value));
+
+test("十字線：游標移到圖上除了那一天的垂直虛線，還有一條跟著游標高度的水平虛線，右邊標那個高度的價位；游標離開就收掉", () => {
+  const { chart, strokes, reset } = createChart();
+  reset();
+  chart.canvas.dispatch("pointermove", { clientX: 150, clientY: 87 });
+  const cross = strokes.filter(DASHED).map(stroke => stroke.points);
+  nearPoints(cross[0], [[152.925, 10], [152.925, 336]], "垂直線在第 58 根的正中央");
+  assert.deepEqual(cross[1], [[4, 87.5], [326, 87.5]], "水平線橫跨繪圖區、在游標的高度（不貼收盤的 100）");
+  assert.equal(chart.debugBoxes.cross.text, "102.85");
+  assert.equal(chart.debugBoxes.picked.date, "2026-02-28");
+
+  chart.canvas.dispatch("pointermove", { clientX: 150, clientY: 330 });   // 時間軸上：不在價格區，只剩垂直線
+  assert.equal(chart.debugBoxes.cross, null);
+  reset();
+  chart.canvas.dispatch("pointerleave", { pointerType: "mouse" });
+  assert.deepEqual(strokes.filter(DASHED), []);
+});
+
+test("十字線：點一下選了某一天，水平線留在點的高度；手指拖著平移時跟著手指，放開後收掉、垂直線回到選的那一天", () => {
+  const view = createChart();
+  const { chart } = view;
+  fingerTap(view, [150, 164]);
+  assert.equal(chart.selection, 58);
+  assert.deepEqual([chart.debugBoxes.cross.y, chart.debugBoxes.cross.text], [164.5, "100.00"]);
+  chart.canvas.dispatch("pointerdown", { pointerType: "touch", clientX: 200, clientY: 100 });
+  chart.canvas.dispatch("pointermove", { pointerType: "touch", clientX: 230, clientY: 120 });
+  assert.equal(chart.debugBoxes.cross.y, 120.5, "拖的時候跟著手指");
+  chart.canvas.dispatch("pointerup", { pointerType: "touch", clientX: 230, clientY: 120 });
+  assert.equal(chart.debugBoxes.cross, null);
+  assert.equal(chart.hover, chart.selection);
+});
+
+test("量測的數字：漲跌、漲跌幅（以起點為基準）、隔幾根、隔幾天", () => {
+  const { window } = createChart();
+  const { measureStats, measureLines } = window.ChartDrawingMath;
+  const up = measureStats({ date: "2026-02-10", price: 100 }, { date: "2026-02-28", price: 102.85 }, 40, 58);
+  near(up.change, 2.85); near(up.pct, 2.85);
+  assert.deepEqual([up.bars, up.days], [18, 18]);
+  assert.deepEqual(plain(measureLines(up)), ["+2.85  +2.85%", "18 根 · 18 天"]);
+  // 往回量、往下量：根數與天數都是正的，漲跌帶負號；週 K 上隔 3 根是 21 天
+  const down = measureStats({ date: "2026-03-20", price: 250 }, { date: "2026-02-27", price: 237.5 }, 12, 9);
+  assert.deepEqual([down.change, down.pct, down.bars, down.days], [-12.5, -5, 3, 21]);
+  assert.deepEqual(plain(measureLines(down)), ["−12.5  −5.00%", "3 根 · 21 天"]);
+  const flat = measureStats({ date: "2026-03-02T09:00", price: 50 }, { date: "2026-03-02T13:00", price: 50 }, 5, 9);
+  assert.deepEqual(plain(measureLines(flat)), ["0  0.00%", "4 根 · 0 天"], "60 分 K 同一天：天數是 0");
+});
+
+test("量測：點兩下就量好——框淡淡填色、對角一條線、終點旁邊標數字，往上量用漲的顏色、往下量用跌的顏色", () => {
+  const { chart, changes, tools, tap, strokes, texts, fills, reset } = createChart();
+  chart.setTool("measure");
+  tap(150, 164);
+  assert.deepEqual(changes, [], "第一下只是起點");
+  tap(230, 87);
+  assert.deepEqual(changes.map(change => [change.type, change.drawing.kind, change.drawing.anchors]),
+    [["add", "measure", [{ date: "2026-02-28", price: 100 }, { date: "2026-03-10", price: 102.85 }]]]);
+  assert.deepEqual(tools, ["measure", null]);
+  reset(); chart.draw();
+  nearPoints(strokes.find(stroke => stroke.color === "--up").points, [[152.925, 164], [233.425, 87]]);
+  assert.deepEqual(texts.filter(text => text.color === "--up").map(text => text.text), ["+2.85  +2.85%", "10 根 · 10 天"]);
+  const box = fills.find(fill => fill.color === "--up").rect;
+  nearPoints([[box[0], box[1]], [box[2], box[3]]], [[152.925, 87], [80.5, 77]], "框是兩點圍出來的範圍");
+
+  chart.setTool("measure");
+  tap(230, 164); tap(150, 241);   // 往左下量：100 → 97.15
+  reset(); chart.draw();
+  assert.deepEqual(texts.filter(text => text.color === "--down").map(text => text.text), ["−2.85  −2.85%", "10 根 · 10 天"]);
+});
+
+test("量測：按住拖過去放開也是一次量好，圖表不平移；拖的時候數字跟著手走；沒拖就放開是點第一下", () => {
+  const { chart, changes, tools, drag, tap, texts, reset } = createChart();
+  chart.setTool("measure");
+  reset();
+  drag([150, 164], [230, 87], { release: null });
+  assert.deepEqual(changes, [], "還沒放開");
+  assert.deepEqual(texts.filter(text => text.color === "--up").map(text => text.text), ["+2.85  +2.85%", "10 根 · 10 天"], "還在拉就看得到數字");
+  chart.canvas.dispatch("pointerup", { clientX: 230, clientY: 87 });
+  assert.deepEqual(changes.map(change => change.drawing.anchors), [[{ date: "2026-02-28", price: 100 }, { date: "2026-03-10", price: 102.85 }]]);
+  assert.equal(chart.view.end, 80, "圖表沒有跟著平移");
+  assert.deepEqual(tools, ["measure", null]);
+
+  chart.setTool("measure");
+  tap(150, 164);
+  assert.equal(changes.length, 1, "點一下只是起點");
+  drag([200, 120], [230, 120]);
+  assert.equal(changes.length, 1, "有起點之後按住拖是平移圖表，不是第二下");
+  assert.notEqual(chart.view.end, 80);
+
+  // 手勢被系統取消：起點不留
+  const other = createChart();
+  other.chart.setTool("measure");
+  other.drag([150, 164], [230, 87], { release: "pointercancel" });
+  other.tap(230, 87);
+  assert.deepEqual(other.changes, [], "取消之後那一下重新當第一下");
+});
+
+test("沒選量測這類工具時按住拖照舊是平移（趨勢線也是）", () => {
+  const { chart, changes, drag } = createChart();
+  chart.setTool("trend");
+  drag([230, 164], [150, 164]);
+  assert.deepEqual(changes, []);
+  assert.equal(chart.view.end, 80, "已經在最右邊，往左拖不動");
+  drag([150, 164], [230, 164]);
+  assert.equal(chart.view.end, 70);
+});
+
+test("平行通道的寬度：第三下的價位減掉趨勢線在那一根的價位", () => {
+  const { window } = createChart();
+  const { channelThird } = window.ChartDrawingMath;
+  assert.equal(channelThird({ price: 100 }, { price: 110 }, { price: 108 }, 0, 10, 5), 103, "趨勢線在第 5 根是 105：寬 +3");
+  assert.equal(channelThird({ price: 100 }, { price: 110 }, { price: 96 }, 0, 10, 20), 76, "點在第二點之後：照延長線算，120 → 寬 −24");
+  assert.equal(channelThird({ price: 100 }, { price: 110 }, { price: 97.5 }, 4, 4, 9), 97.5, "兩端同一根（直的線）：寬度就是和起點的價差");
+});
+
+test("平行通道：點三下——趨勢線的兩端、再點一下定寬度；兩條線平行、一樣長，中間淡淡填色", () => {
+  const { chart, changes, tools, tap, drawnLines } = createChart();
+  chart.setTool("channel");
+  tap(150, 164); tap(230, 126);   // 100 → 101.4066…（y=126 → 105.7 − 116/308×11.4 = 101.41）
+  assert.deepEqual(changes, [], "兩下還沒畫完");
+  assert.deepEqual(tools, ["channel"]);
+  tap(190, 222);   // 第 63 根、97.85；趨勢線在那一根是 100 + 1.41×5/10 = 100.705 → 寬 −2.855 → 97.15（取到分：97.14 或 97.15）
+  assert.equal(changes.length, 1);
+  const { kind, anchors } = changes[0].drawing;
+  assert.equal(kind, "channel");
+  assert.deepEqual(anchors.slice(0, 2), [{ date: "2026-02-28", price: 100 }, { date: "2026-03-10", price: 101.41 }]);
+  assert.equal(anchors[2].date, "2026-02-28", "第三個錨點記在第一個那一天");
+  assert.ok(Math.abs(anchors[2].price - (100 + 97.85 - (100 + 1.41 * 0.5))) <= 0.0051, `寬度（取到分）${anchors[2].price}`);
+  assert.deepEqual(tools, ["channel", null]);
+
+  const lines = drawnLines();
+  assert.deepEqual(lines.map(points => points.length), [2, 4], "先畫中間的細虛線，再一筆畫趨勢線與平行線");
+  const base = lines[1].slice(0, 2), side = lines[1].slice(2);
+  near(base[0][0], 152.925); near(base[1][0], 233.425);
+  near(side[0][0], base[0][0], "平行線的兩端在同樣的兩根"); near(side[1][0], base[1][0]);
+  near(side[0][1] - base[0][1], side[1][1] - base[1][1], "兩端上下差一樣多：兩條線平行");
+  assert.ok(side[0][1] - base[0][1] > 70, "平行線在下面");
+});
+
+test("平行通道：第三下太靠近趨勢線（看不出兩條線）不算，等下一下；Esc 整個不畫", () => {
+  const { chart, changes, tools, tap, key } = createChart();
+  chart.setTool("channel");
+  tap(150, 164); tap(230, 164);
+  tap(190, 166);
+  assert.deepEqual(changes, []);
+  assert.deepEqual(tools, ["channel"], "工具還在");
+  tap(190, 87);
+  assert.deepEqual(changes[0].drawing.anchors, [{ date: "2026-02-28", price: 100 }, { date: "2026-03-10", price: 100 }, { date: "2026-02-28", price: 102.85 }]);
+
+  chart.setTool("channel");
+  tap(150, 241); tap(230, 241);
+  key("Escape");
+  tap(190, 200);
+  assert.equal(changes.length, 1, "取消之後再點不會接著畫");
+});
+
+const CHANNEL = () => ({ id: "saved-chan-01", kind: "channel", text: "",
+  anchors: [{ date: "2026-02-28", price: 100 }, { date: "2026-03-10", price: 100 }, { date: "2026-02-28", price: 102.85 }] });
+
+test("平行通道：選取後拖整個（三個錨點一起走）、拖趨勢線的一端（寬度不變）、拖平行線上的把手（只改寬度）", () => {
+  const { chart, changes, tap, drag, drawnHandles } = createChart();
+  chart.setDrawings([CHANNEL()]);
+  tap(190, 164);   // 點趨勢線選取
+  nearPoints(drawnHandles(), [[152.925, 164], [233.425, 164], [193.175, 87]], "兩端各一個把手，平行線中點一個");
+
+  drag([190, 164], [190, 187]);   // 整個往下 23px ≈ −0.85
+  assert.deepEqual(changes.at(-1).drawing.anchors, [{ date: "2026-02-28", price: 99.15 }, { date: "2026-03-10", price: 99.15 }, { date: "2026-02-28", price: 102 }]);
+
+  drag([193, 110], [193, 87]);    // 平行線的把手（現在在 y=110）往上 23px：寬度 2.85 → 3.7
+  assert.deepEqual(changes.at(-1).drawing.anchors, [{ date: "2026-02-28", price: 99.15 }, { date: "2026-03-10", price: 99.15 }, { date: "2026-02-28", price: 102.85 }]);
+
+  drag([233, 187], [233, 164]);   // 趨勢線右端往上 23px：只有那一端變、寬度還是 3.7
+  const after = changes.at(-1).drawing.anchors;
+  assert.deepEqual(after.slice(0, 2), [{ date: "2026-02-28", price: 99.15 }, { date: "2026-03-10", price: 100 }]);
+  assert.deepEqual(after[2], { date: "2026-02-28", price: 102.85 });
+  assert.equal(changes.length, 3);
+});
+
+test("到價提醒的價位線：點一下畫在那個價位；頁面說這一檔能提醒就開著（標示前面寫「到價」、實線），不能就關著（只標價位、虛線）", () => {
+  const { chart, changes, tools, tap, strokes, drawnLabels, reset } = createChart();
+  chart.drawings.opts.alertDefault = () => true;
+  chart.setTool("alert");
+  tap(150, 87);
+  assert.deepEqual(changes, [{ type: "add", drawing: { id: changes[0].drawing.id, kind: "alert", anchors: [{ date: "2026-02-28", price: 102.85 }], alert: true } }]);
+  assert.deepEqual(tools, ["alert", null]);
+  assert.deepEqual(drawnLabels(), ["到價 102.85"]);
+  const lineOf = () => { reset(); chart.draw(); return strokes.find(stroke => stroke.color === DRAW && stroke.points.length === 2); };
+  assert.deepEqual(plain([lineOf().points, lineOf().dash]), [[[4, 87.5], [326, 87.5]], []]);
+
+  chart.drawings.opts.alertDefault = () => false;
+  chart.setTool("alert");
+  tap(150, 241);
+  assert.equal(changes[1].drawing.alert, false);
+  assert.deepEqual(drawnLabels(), ["到價 102.85", "97.15"]);
+});
+
+test("到價提醒的開關：選取那條線才能開關，每次開關都通知儲存；選的不是提醒線不做事；拖到新價位提醒照舊", () => {
+  const { chart, changes, tap, drag, strokes, drawnLabels, reset } = createChart();
+  chart.setDrawings([{ id: "saved-alert-1", kind: "alert", anchors: [{ date: "2026-02-28", price: 100 }], alert: true, fired_at: null, text: "" },
+    saved(102.85, "saved-line-02")]);
+  assert.equal(chart.setSelectedAlert(false), false, "沒有選取");
+  tap(150, 87);
+  assert.equal(chart.setSelectedAlert(true), false, "選的是一般水平線");
+  tap(150, 164);
+  assert.equal(chart.setSelectedAlert(true), false, "已經開著");
+  assert.equal(chart.setSelectedAlert(false), true);
+  assert.deepEqual(changes, [{ type: "update", drawing: { id: "saved-alert-1", kind: "alert", anchors: [{ date: "2026-02-28", price: 100 }], alert: false } }]);
+  assert.deepEqual(drawnLabels(), ["100", "102.85"]);
+  reset(); chart.draw();
+  assert.deepEqual(plain(strokes.find(stroke => stroke.color === DRAW && stroke.points.length === 2 && stroke.points[0][1] === 164.5).dash), [6, 4], "關著的畫虛線");
+  assert.equal(chart.setSelectedAlert(true), true);
+  drag([150, 164], [150, 187]);
+  assert.deepEqual(changes.at(-1), { type: "update", drawing: { id: "saved-alert-1", kind: "alert", anchors: [{ date: "2026-02-28", price: 99.15 }], alert: true } });
+  // 伺服器通知過之後讀回來是關的：照關的畫
+  chart.setDrawings([{ id: "saved-alert-1", kind: "alert", anchors: [{ date: "2026-02-28", price: 100 }], alert: false, fired_at: "2026-11-24T02:00:00.000Z", text: "" }]);
+  assert.deepEqual(drawnLabels(), ["100"]);
+});
+
+test("成交量分布的分格：每根的量照高低價範圍平均攤到各個價位格，量最大的一格是 POC", () => {
+  const { window } = createChart();
+  const { volumeProfile } = window.ChartDrawingMath;
+  const one = volumeProfile([{ high: 110, low: 100, volume: 1000 }], 10);
+  assert.deepEqual([one.low, one.high, one.size, one.total], [100, 110, 1, 1000]);
+  one.volumes.forEach(volume => near(volume, 100, "一根橫跨十格：每格十分之一"));
+  assert.equal(one.poc, 0, "一樣多時取最低的那一格");
+
+  // 第二根只在 104～106：那兩格各多 500
+  const two = volumeProfile([{ high: 110, low: 100, volume: 1000 }, { high: 106, low: 104, volume: 1000 }], 10);
+  two.volumes.forEach((volume, i) => near(volume, i === 4 || i === 5 ? 600 : 100));
+  assert.equal(two.poc, 4);
+  near(two.pocPrice, 104.5, "POC 標那一格的中間價");
+  near(two.volumes.reduce((sum, volume) => sum + volume, 0), 2000, "分完的總和就是原本的總量");
+
+  // 高低同價（一價到底）整根算進那個價位的那一格；不跨格的一根只進一格；橫跨半格的照比例
+  const mixed = volumeProfile([{ high: 110, low: 100, volume: 10 }, { high: 107, low: 107, volume: 300 }, { high: 102.5, low: 101.5, volume: 80 }], 10);
+  near(mixed.volumes[7], 301); near(mixed.volumes[1], 41); near(mixed.volumes[2], 41);
+  assert.equal(mixed.poc, 7);
+
+  // 沒有量、量是零或缺高低價的不算；大盤讀成交金額；只有收盤的（基金淨值）當作高低同價；整段同一個價只有一格
+  assert.equal(volumeProfile([{ high: 110, low: 100, volume: 0 }, { high: 110, low: 100 }, null, { close: 100 }]), null);
+  assert.equal(volumeProfile([{ high: 110, low: 100, amount: 3000 }, { high: 105, low: 100, amount: 1000 }], 2).poc, 0);
+  const flat = volumeProfile([{ close: 12.5, volume: 10 }, { close: 12.5, volume: 30 }]);
+  assert.deepEqual(plain([flat.volumes, flat.poc, flat.pocPrice]), [[40], 0, 12.5]);
+  assert.equal(volumeProfile(Array.from({ length: 30 }, (_, i) => ({ high: 101 + i, low: 100 + i, volume: 100 }))).volumes.length, 24, "預設 24 格");
+});
+
+test("區間成交量分布：按住拖過一段日期就畫出來——每個價位格一條橫條、從區間左緣往右長，POC 另標價位；左右各一條邊線", () => {
+  const { chart, changes, tools, drag, drawnFills, drawnLabels, drawnLines } = createChart();
+  chart.setTool("vprofile");
+  drag([230, 120], [150, 200]);   // 由右往左拖：存的時候日期早的在前
+  assert.equal(changes.length, 1);
+  assert.deepEqual([changes[0].drawing.kind, changes[0].drawing.anchors.map(anchor => anchor.date)], ["vprofile", ["2026-02-28", "2026-03-10"]]);
+  assert.deepEqual(tools, ["vprofile", null]);
+
+  // 第 58～68 根每根高 105、低 95、量一樣：24 格一樣多，都畫滿寬（區間 11 根×8.05＝88.55px 的六成不到 56，用 56）
+  const bars = drawnFills();
+  assert.equal(bars.length, 24);
+  bars.forEach(([x, , width]) => { near(x, 148.9); near(width, 56); });
+  const tops = bars.map(([, y]) => y);
+  assert.deepEqual([...tops].sort((a, b) => b - a), tops, "由低價往高價排（畫面上由下往上）");
+  assert.deepEqual(drawnLabels(), ["POC 95.21"], "一樣多時 POC 是最低那一格：95～95.42 的中間");
+  const [edges] = drawnLines();
+  assert.equal(edges.length, 6, "一筆畫完：兩條邊線加 POC 的橫線，各兩個點");
+  near(edges[0][0], 149.5); near(edges[2][0], 237.5);
+  near(edges[4][0], 148.9, "POC 的橫線從區間左緣"); near(edges[5][0], 237.45, "到右緣");
+});
+
+test("區間成交量分布：選取後拖一端只改那一端的日期，拖到和另一端同一根不成立；整個拖動兩端一起走", () => {
+  const { chart, changes, tap, drag } = createChart();
+  chart.setDrawings([{ id: "saved-prof-01", kind: "vprofile", text: "", anchors: [{ date: "2026-02-28", price: 100 }, { date: "2026-03-10", price: 100 }] }]);
+  tap(149, 120);   // 點左邊那條邊線選取
+  drag([153, 164], [121, 164]);   // 左端的把手（在兩條邊線的中間高度）往左 32px：第 58 → 54 根
+  assert.deepEqual(changes.at(-1).drawing.anchors, [{ date: "2026-02-24", price: 100 }, { date: "2026-03-10", price: 100 }]);
+  drag([233, 164], [121, 164]);   // 右端拖到和左端同一根：不成立
+  assert.equal(changes.length, 1);
+  drag([180, 200], [196, 200]);   // 區間裡面按住拖：整個往右兩根
+  assert.deepEqual(changes.at(-1).drawing.anchors.map(anchor => anchor.date), ["2026-02-26", "2026-03-12"]);
+});
+
+test("新的四種和原本的一樣：載入已存的畫得出來、Delete 刪得掉、格式不對的略過", () => {
+  const { chart, changes, tap, key, drawnLines } = createChart();
+  chart.setDrawings([CHANNEL(),
+    { id: "saved-meas-01", kind: "measure", text: "", anchors: [{ date: "2026-02-28", price: 97.15 }, { date: "2026-03-10", price: 96 }] },
+    { id: "bad-channel-1", kind: "channel", text: "", anchors: [{ date: "2026-02-28", price: 100 }, { date: "2026-03-10", price: 100 }] },
+    { id: "bad-measure-1", kind: "measure", text: "", anchors: [{ date: "2026-02-28", price: 100 }, { date: "2026-02-28", price: 100 }] }]);
+  assert.deepEqual(drawnLines().map(points => points.length), [2, 4], "只有通道（量測用的是跌的顏色，不算在畫線色裡；格式不對的兩條不畫）");
+  tap(190, 87);   // 點平行線選取通道
+  key("Delete");
+  assert.deepEqual(changes, [{ type: "remove", drawing: { id: "saved-chan-01", kind: "channel", anchors: CHANNEL().anchors } }]);
+  assert.deepEqual(drawnLines(), []);
+});

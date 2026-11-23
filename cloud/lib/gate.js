@@ -21,8 +21,8 @@ import { GEMINI_USAGE_PATH, handleGeminiUsageApi } from "./gemini-usage.js";
 import { AI_MODELS_PATH, handleAiModelsApi } from "./ai-models.js";
 import { FRIEND_AI_PAGE, FRIEND_AI_PATH, keyStateLookup, deleteFriendKey, friendAiEnabled, handleFriendAiApi, notAvailable, ownerRefused } from "./friend-ai.js";
 import { WATCH_PEERS_PATH, handleWatchPeersApi } from "./watch-peers.js";
-import { INDEX_PATH, indexOf, loadIndex } from "./market-indices.js";
-import { INDEX_INTRADAY_PATH, intradayIndexOf, intradayUnavailable, loadIntraday } from "./index-intraday.js";
+import { INDEX_PATH, appendRecentDaily, indexOf, loadIndex } from "./market-indices.js";
+import { INDEX_INTRADAY_PATH, intradayIndexOf, intradayUnavailable, loadIntraday, loadRecentDaily, loadUpstreamIndex, upstreamDailyOf } from "./index-intraday.js";
 import { MARKET_NEWS_PATH, handleMarketNewsApi, handleStockHeadlinesApi } from "./market-news.js";
 import { IMPACT_WATCH_PATH, handleImpactWatchApi } from "./impact-watch.js";
 import { MARKET_BRIEF_PATH, handleMarketBriefApi } from "./market-brief.js";
@@ -586,10 +586,14 @@ async function handleStockHourlyApi(request, env, path, email, deps, { isOwner }
 }
 
 // 大盤頁切換的國外指數（本人 11-19：核准的人都看得到）：只讀 D1 裡每日抓好的 EODHD 日線，不在這裡對外抓。
-async function handleIndexApi(request, env, path, email, deps) {
+// 看得到海外分時的人（MARKET_ANA_INDEX_INTRADAY）：日線後面向分時的同一個來源補上比資料表新的那幾天（本人 2026-11-24）；
+// 來源拿不到就照資料表的回，不因為補不到而失敗。開關對這個人沒開時和原來一模一樣，也不問來源。
+async function handleIndexApi(request, env, path, email, deps, { isOwner }) {
   if (request.method !== "GET") throw new HttpError(405, "方法不允許");
   const item = indexOf(path.match(INDEX_PATH)[1]);
-  if (!item) throw new HttpError(404, "找不到這個指數");
+  // 美元／台幣（本人 2026-11-24）：資料表沒有，日線整份向來源要；只給看得到海外分時的人，其他人和不認得的 key 一樣是 404、不問來源
+  const upstream = item || !indexIntradayVisible(env, isOwner) ? null : upstreamDailyOf(path.match(INDEX_PATH)[1]);
+  if (!item && !upstream) throw new HttpError(404, "找不到這個指數");
   const headers = { "cache-control": "private, no-store" };
   try {
     await consume(env.DB, email, "indices", (deps.now || Date.now)(), { ...RATE, ...deps.rate });
@@ -600,7 +604,21 @@ async function handleIndexApi(request, env, path, email, deps) {
     }
     throw new HttpError(503, "暫時無法處理，請稍後再試");
   }
-  return json(200, await loadIndex(env.DB, item), headers);
+  if (upstream) return json(200, await loadUpstreamIndex(upstream, intradaySourceOptions(deps)), headers);
+  const payload = await loadIndex(env.DB, item);
+  if (payload.candles.length && indexIntradayVisible(env, isOwner)) {
+    try {
+      payload.candles = appendRecentDaily(payload.candles, await loadRecentDaily(intradayIndexOf(item.key), intradaySourceOptions(deps)));
+    } catch { /* 補不到：照資料表的回 */ }
+  }
+  return json(200, payload, headers);
+}
+
+function intradaySourceOptions(deps) {
+  const options = { now: deps.now || Date.now };
+  if (deps.intradayFetch) options.fetchImpl = deps.intradayFetch;
+  if (deps.intradayCache !== undefined) options.cache = deps.intradayCache;
+  return options;
 }
 
 // 海外大盤的分時（本人 2026-11-24，.scratch/index-intraday 票 01）：開關 MARKET_ANA_INDEX_INTRADAY（off／owner／all）。
@@ -620,10 +638,7 @@ async function handleIndexIntradayApi(request, env, path, email, deps, { isOwner
     }
     throw new HttpError(503, "暫時無法處理，請稍後再試");
   }
-  const options = { now: deps.now || Date.now };
-  if (deps.intradayFetch) options.fetchImpl = deps.intradayFetch;
-  if (deps.intradayCache !== undefined) options.cache = deps.intradayCache;
-  return json(200, await loadIntraday(item, options), headers);
+  return json(200, await loadIntraday(item, intradaySourceOptions(deps)), headers);
 }
 
 async function handleStockLiveApi(request, env, path, email, deps) {
@@ -842,7 +857,9 @@ async function handleUserDataApi(request, env, path, email, deps, access) {
     throw new HttpError(503, "暫時無法處理，請稍後再試");
   }
   const drawing = path.match(DRAWINGS_PATH);
-  if (drawing) return handleUserDrawings(request, env, { code: drawing[1], id: drawing[2] }, email, deps);
+  // 到價提醒（本人 11-24）只開給站主，而且關注開關要開著（比價與通知走同一支每分鐘盯價的排程）
+  if (drawing) return handleUserDrawings(request, env, { code: drawing[1], id: drawing[2] }, email,
+    { ...deps, alertsAllowed: Boolean(access?.isOwner && access?.policy?.features?.watchlist_watch_v1) });
   if (WATCH_PATH.test(path)) return handleWatchApi(request, env, path, email, deps, access);
   if (WATCH_PEERS_PATH.test(path)) return handleWatchPeersApi(request, env, path, email, deps, access);
   // ETF 上站：加自選／持股時，名單內 ETF 算不算在分析範圍內，看 ETF 開關對這個人開不開。
@@ -998,7 +1015,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
       if (FORECAST_PATH.test(path)) return await handleForecastApi(request, env, path, { isOwner: true, policy });
       if (FRIEND_AI_PATH.test(path)) return ownerRefused();
       if (isUserData) return await handleUserDataApi(request, env, path, email, deps, { isOwner: true, policy });
-      if (INDEX_PATH.test(path)) return await handleIndexApi(request, env, path, email, deps);
+      if (INDEX_PATH.test(path)) return await handleIndexApi(request, env, path, email, deps, { isOwner: true });
       if (INDEX_INTRADAY_PATH.test(path)) return await handleIndexIntradayApi(request, env, path, email, deps, { isOwner: true });
       if (isMarket) return await handleMarketApi(request, env, path, email, deps, { isOwner: true });
       if (isComparePath(path)) return await handleCompareApi(request, env, path, email, deps, { isOwner: true });
@@ -1037,7 +1054,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
     if (FRIEND_AI_PATH.test(path)) return await handleFriendAiRequest(request, env, path, email, deps);
     if (isUserData) return await handleUserDataApi(request, env, path, email, deps, { isOwner: false, policy });
     if (path === "/api/live" || path === "/api/mis-probe") return fail(403, "即時行情僅限站主使用");
-    if (INDEX_PATH.test(path)) return await handleIndexApi(request, env, path, email, deps);
+    if (INDEX_PATH.test(path)) return await handleIndexApi(request, env, path, email, deps, { isOwner: false });
     if (INDEX_INTRADAY_PATH.test(path)) return await handleIndexIntradayApi(request, env, path, email, deps, { isOwner: false });
     if (isMarket) return await handleMarketApi(request, env, path, email, deps, { isOwner: false });
     if (isComparePath(path)) return await handleCompareApi(request, env, path, email, deps, { isOwner: false });

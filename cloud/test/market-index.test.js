@@ -45,8 +45,9 @@ test("選單是台股加權在最前面，接著六個國外指數（11-19 下�
     ["n225", "日經", "日經 225"],
     ["ks11", "韓綜", "韓國綜合"],
     ["nq_fut", "那指期", "那斯達克期貨"],   // 只有分時（本人 2026-11-24），海外分時的開關開著才列出來
+    ["usdtwd", "美元／台幣", "美元／台幣"],   // 匯率（本人 2026-11-24），同一個開關；日線由伺服器向來源要（index-usdtwd.test.js）
   ]);
-  assert.deepEqual(plain(MarketIndex.LIST.slice(1).filter((item) => !item.intradayOnly).map((item) => [item.key, item.name, item.zone])),
+  assert.deepEqual(plain(MarketIndex.LIST.slice(1).filter((item) => !item.intradayOnly && !item.fx).map((item) => [item.key, item.name, item.zone])),
     MARKET_INDICES.map((item) => [item.key, item.name, item.zone]));
   assert.deepEqual(plain(MarketIndex.LIST.filter((item) => item.intradayOnly).map((item) => item.key)), ["nq_fut"]);
 });
@@ -55,6 +56,21 @@ test("日K：日期、月/日標籤、開高低收量照原樣", () => {
   const { MarketIndex } = load();
   const daily = MarketIndex.candles([{ date: "2026-11-18", open: 1, high: 3, low: 0.5, close: 2, volume: 9 }], "daily");
   assert.deepEqual(plain(daily), [{ t: "2026-11-18", label: "11/18", open: 1, high: 3, low: 0.5, close: 2, volume: 9 }]);
+});
+
+test("日K：伺服器補上的那幾天（量是 null、盤中那一根多帶 provisional）照樣畫，多的欄位不帶進圖裡；週K 也接得上", () => {
+  const { MarketIndex } = load();
+  const days = [
+    { date: "2026-11-20", open: 10, high: 12, low: 9, close: 11, volume: 5 },
+    { date: "2026-11-23", open: 11, high: 14, low: 10, close: 13, volume: null },
+    { date: "2026-11-24", open: 13, high: 15, low: 12, close: 14, volume: null, provisional: true },
+  ];
+  assert.deepEqual(plain(MarketIndex.candles(days, "daily")).slice(1), [
+    { t: "2026-11-23", label: "11/23", open: 11, high: 14, low: 10, close: 13, volume: null },
+    { t: "2026-11-24", label: "11/24", open: 13, high: 15, low: 12, close: 14, volume: null },
+  ]);
+  assert.deepEqual(plain(MarketIndex.candles(days, "weekly")).map((bar) => [bar.t, bar.open, bar.close, bar.volume]),
+    [["2026-11-20", 10, 11, 5], ["2026-11-24", 11, 14, null]]);
 });
 
 test("週K 以週一為一週、月K 以月份為一組：開盤取第一天、收盤取最後一天、高低取極值、量相加", () => {

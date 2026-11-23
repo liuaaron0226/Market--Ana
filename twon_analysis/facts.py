@@ -132,6 +132,38 @@ def _credit_row(name: str, series: list[dict], key: str, trading_days: list[str]
             'series': [lots(v) for v in window[first:]], 'data_date': latest}
 
 
+def margin_use_pct(balance, limit, official=None, places: int = 1) -> float | None:
+    """融資使用率（%，預設一位小數）＝融資餘額 ÷ 融資限額 × 100（本人 2026-11-24）。沒有限額（缺或 0）就不給，不當成 0%。
+
+    official：櫃買原件自己算好的「資使用率(%)」（兩位小數）。它和算出來的對得上（差不到 0.01）時用算出來的那個
+    （同一個數字，只是不把已經捨入過的兩位小數再捨入一次）；對不上時以官方的為準。"""
+    computed = balance / limit * 100 if balance is not None and limit and limit > 0 else None
+    if official is not None and (computed is None or abs(computed - official) > 0.01):
+        return _round(official, places)
+    return _round(computed, places) if computed is not None else None
+
+
+SERIES_PLACES = 3   # 走勢多留兩位小數只為了畫線：大型股的使用率不到 1%，一位小數會整條變成平的
+
+
+def _margin_utilisation(margin: list[dict], trading_days: list[str]) -> dict | None:
+    """融資使用率：最新一天的值（一位小數，頁面上寫的那個數字）與資料日，加上和「融資」那一列同一段日子的走勢
+    （三位小數，只拿來畫線；缺限額的那天是 None）。最新一天算不出來（沒有限額）就整項不給。"""
+    if not margin or margin[-1].get('margin') is None:
+        return None
+    last = margin[-1]
+    value = margin_use_pct(last.get('margin'), last.get('limit'), last.get('use_pct'))
+    if value is None:
+        return None
+    rates = [{'date': row['date'], 'use': margin_use_pct(row.get('margin'), row.get('limit'), row.get('use_pct'), SERIES_PLACES)}
+             for row in margin]
+    latest, _, values = _aligned(rates, 'use', trading_days)
+    _, _, balances = _aligned(margin, 'margin', trading_days)
+    window, shown = values[-20:], balances[-20:]
+    first = next((i for i, v in enumerate(shown) if v is not None), len(shown))   # 和「融資」那一列的走勢同一天起
+    return {'value': value, 'data_date': latest, 'series': window[first:]}
+
+
 def _credit_block(credit: dict, trading_days: list[str]) -> dict | None:
     margin, borrow = credit.get('margin') or [], credit.get('borrow') or []
     rows = [row for row in (
@@ -139,7 +171,11 @@ def _credit_block(credit: dict, trading_days: list[str]) -> dict | None:
         _credit_row('融券', margin, 'short', trading_days, to_lots=False),
         _credit_row('借券', borrow, 'balance', trading_days, to_lots=True),   # 借券原件是股
     ) if row]
-    return {'rows': rows} if rows else None
+    if not rows:
+        return None
+    use = _margin_utilisation(margin, trading_days)
+    # 有值才帶這一項：舊資料包、沒有限額的股票都沒有這個鍵，頁面就不出現那一行。
+    return {'rows': rows, **({'margin_utilisation': use} if use else {})}
 
 
 def _previous_month(period: str, months: int = 1) -> str:
