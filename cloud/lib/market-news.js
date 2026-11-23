@@ -7,6 +7,7 @@
 // - /api/stocks/<代號>/headlines：個股頁「消息」的新聞標題（不再限關注開著的股票）。
 
 import { marketNewsVisible } from "./release-policy.js";
+import { titleNamesCompany } from "./news-relevance.js";
 
 const DAY_MS = 86_400_000;
 // 「我的自選」（本人 2026-11-20：自選股不可能都沒新聞，要看前陣子有什麼）：近 30 天、判讀過和公司有關的。
@@ -94,8 +95,19 @@ async function mine(db, email, run) {
       if (!(marks === 2 && missingPointColumn(error)) && !(marks > 0 && missingTable(error))) throw error;
     }
   }
-  // 中央社整批對到的（cna-*）有些只在前言提到公司：標題沒點名就不算。
-  const named = (row) => !row.source.startsWith("cna-") || (row.name && row.title.includes(row.name.replace(/-KY$/, ""))) || row.title.includes(row.code);
+  // 還沒判讀的：標題要真的點名這家公司才列（news-relevance.js；簡稱是一般用語的還要有股市用語）。
+  // 中央社整批對到的有些只在前言提到公司、Google News 搜到的有些只是用到同樣的字，兩種都擋。
+  const english = new Map();
+  try {
+    const codes = [...new Set(rows.map((row) => row.code))].slice(0, 90);
+    if (codes.length) {
+      const found = await db.prepare(`SELECT code, name_en FROM stock_news_names WHERE code IN (${codes.map(() => "?").join(",")})`).bind(...codes).all();
+      for (const row of found.results) english.set(row.code, row.name_en || "");
+    }
+  } catch (error) {
+    if (!missingTable(error)) throw error;
+  }
+  const named = (row) => titleNamesCompany(row.title, row.name, row.code, english.get(row.code) || "");
   const judged = rows.some((row) => row.relevant !== undefined && row.relevant !== null);
   const seen = new Set();
   const items = [];
@@ -177,17 +189,60 @@ export async function handleMarketNewsApi(request, env, email, { isOwner }) {
   }
 }
 
+// 個股頁「消息」列的標題：AI 判成和公司無關的不列；還沒判讀的，標題要真的點名這家公司才列
+// （本人 2026-11-23：創意的消息混進只是用到「創意」兩個字的新聞——原本這裡是存了什麼就列什麼）。
+// 同一個標題（不同媒體轉載、同一則被抓到兩次）只列一次。判讀表還沒建時只靠標題判斷。
+async function headlineRows(db, code, since) {
+  const select = (marks) => db.prepare(
+    "SELECT n.source, n.title, n.summary, n.link, n.published_at" + (marks ? ", m.relevant" : "") + " FROM watch_news n " +
+      (marks ? "LEFT JOIN stock_news_marks m ON m.code = n.code AND m.link = n.link " : "") +
+      "WHERE n.code = ? AND n.published_at >= ? ORDER BY n.published_at DESC, n.link LIMIT 400",
+  ).bind(code, since).all();
+  let rows;
+  try {
+    rows = (await select(true)).results;
+  } catch (error) {
+    if (!missingTable(error)) throw error;
+    rows = (await select(false)).results;
+  }
+  let name = "";
+  for (const sql of ["SELECT name FROM stock_news_pool WHERE code = ? LIMIT 1", "SELECT name FROM user_watchlist WHERE code = ? LIMIT 1"]) {
+    if (name) break;
+    try {
+      name = (await db.prepare(sql).bind(code).first())?.name || "";
+    } catch (error) {
+      if (!missingTable(error)) throw error;
+    }
+  }
+  let nameEn = "";
+  try {
+    nameEn = (await db.prepare("SELECT name_en FROM stock_news_names WHERE code = ? LIMIT 1").bind(code).first())?.name_en || "";
+  } catch (error) {
+    if (!missingTable(error)) throw error;
+  }
+  const seen = new Set();
+  const kept = [];
+  for (const row of rows) {
+    if (row.relevant === 0) continue;
+    // 沒有公司名稱可比對時（名單上查不到這一檔）不擋，維持原本的行為
+    if (row.relevant !== 1 && name && !titleNamesCompany(row.title, name, code, nameEn)) continue;
+    const key = row.title.replace(/\s+/g, "");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    kept.push(row);
+    if (kept.length >= HEADLINE_MAX) break;
+  }
+  return kept;
+}
+
 export async function handleStockHeadlinesApi(request, env, code, { isOwner }, now = Date.now()) {
   if (!marketNewsVisible(env, isOwner)) return json(200, { available: false });
   if (request.method !== "GET") return json(405, { error: "方法不允許" });
   let items = [];
   let sources = [];
   try {
-    const stored = await env.DB.prepare(
-      "SELECT source, title, summary, link, published_at FROM watch_news WHERE code = ? AND published_at >= ? " +
-        "ORDER BY published_at DESC, link LIMIT ?",
-    ).bind(code, isoSeconds(now - HEADLINE_KEEP_DAYS * DAY_MS), HEADLINE_MAX).all();
-    items = stored.results.map((item) => ({ source: item.source, publisher: PUBLISHERS[item.source] || item.source,
+    const stored = await headlineRows(env.DB, code, isoSeconds(now - HEADLINE_KEEP_DAYS * DAY_MS));
+    items = stored.map((item) => ({ source: item.source, publisher: PUBLISHERS[item.source] || item.source,
       title: item.title, summary: item.summary, link: item.link, published_at: item.published_at }));
     const fetches = await env.DB.prepare(
       "SELECT source, last_attempt_at, last_success_at, last_error FROM watch_news_fetches " +

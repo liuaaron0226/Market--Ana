@@ -157,15 +157,48 @@ test("開關：owner 只給站主；朋友看到的功能清單是關的；off �
 
 test("個股頁新聞標題：超過 90 天的不給；好幾天沒有成功抓到也算沒抓到", async () => {
   await env.DB.prepare("INSERT INTO watch_news (code, link, source, title, summary, published_at, fetched_at) VALUES ('2330', ?, 'gnews-cna', ?, '', ?, ?)")
-    .bind("https://news.google.com/old", "舊聞", "2026-08-21T06:29:59Z", "2026-08-21T06:30:00Z").run();
+    .bind("https://news.google.com/old", "台積電舊聞", "2026-08-21T06:29:59Z", "2026-08-21T06:30:00Z").run();
   await env.DB.prepare("INSERT INTO watch_news (code, link, source, title, summary, published_at, fetched_at) VALUES ('2330', ?, 'gnews-cna', ?, '', ?, ?)")
-    .bind("https://news.google.com/edge", "剛好 90 天", "2026-08-21T06:30:00Z", "2026-08-21T06:30:00Z").run();
+    .bind("https://news.google.com/edge", "台積電剛好 90 天", "2026-08-21T06:30:00Z", "2026-08-21T06:30:00Z").run();
   await env.DB.prepare("INSERT INTO watch_news_fetches (source, code, last_attempt_at, last_success_at, last_error) VALUES ('gnews', '2330', ?, ?, NULL)")
     .bind("2026-11-15T06:29:59Z", "2026-11-15T06:29:59Z").run();
   const body = await (await req("/api/stocks/2330/headlines")).json();
-  assert.ok(body.items.some((row) => row.title === "剛好 90 天"));
-  assert.ok(!body.items.some((row) => row.title === "舊聞"));
+  assert.ok(body.items.some((row) => row.title === "台積電剛好 90 天"));
+  assert.ok(!body.items.some((row) => row.title === "台積電舊聞"));
   assert.deepEqual(body.sources.map((row) => [row.source, row.ok]), [["gnews", false]]);
+});
+
+// 本人 2026-11-23：「新聞選了一個完全沒有跟創意這檔股票相關的新聞，只是他有用到創意這個字」「這不是第一次」。
+// 標題都是當天正式站 watch_news（code 3443）裡的原文。
+test("個股頁新聞標題：只是用到和公司簡稱一樣的字的不列；AI 判成無關的不列；同一個標題只列一次", async () => {
+  await env.DB.prepare("INSERT INTO user_watchlist (email, code, name, market, horizon, in_universe, created_at, updated_at, watching) VALUES (?, '3443', '創意', '上市', 'none', 1, ?, ?, 0)")
+    .bind(OWNER, "2026-11-10T00:00:00Z", "2026-11-10T00:00:00Z").run();
+  const add = (link, title) => env.DB.prepare(
+    "INSERT INTO watch_news (code, link, source, title, summary, published_at, fetched_at) VALUES ('3443', ?, 'gnews-udn', ?, '', '2026-11-19T02:00:00Z', '2026-11-19T02:00:00Z')",
+  ).bind(`https://news.google.com/${link}`, title).run();
+  await add("g1", "侯友宜新莊合體王珮宇車掃 盛讚年輕努力有創意僅缺知名度");
+  await add("g2", "「美國月在楓康」登場！蘋果馬鈴薯限量搶購 五星主廚秀創意蔬果料理");
+  await add("g3", "證交所：愛普、創意、景碩、金像電違約交割 總金額1.78億");
+  await add("g4", "證交所：愛普、創意、景碩、金像電違約交割 總金額1.78億");
+  await add("g5", "創意今年業績將倍增 法人預估超過680億元");
+  await add("g6", "創意攜手夥伴辦理校園徵才");
+  await mark("3443", "https://news.google.com/g5", { relevant: 0, kind: "earnings", tone: "up", impact: 2, title: "創意今年業績將倍增", reason: "重複的舊聞" });
+  await mark("3443", "https://news.google.com/g6", { relevant: 1, kind: "other", tone: "flat", impact: 1, title: "創意辦理校園徵才", reason: "公司活動" });
+  const titles = (await (await req("/api/stocks/3443/headlines")).json()).items.map((row) => row.title);
+  assert.deepEqual(titles.sort(), ["創意攜手夥伴辦理校園徵才", "證交所：愛普、創意、景碩、金像電違約交割 總金額1.78億"].sort());
+});
+
+test("首頁消息的自選股：還沒判讀的標題只是用到和公司簡稱一樣的字就不列", async () => {
+  await env.DB.prepare("INSERT INTO user_watchlist (email, code, name, market, horizon, in_universe, created_at, updated_at, watching) VALUES (?, '3443', '創意', '上市', 'none', 1, ?, ?, 0)")
+    .bind(OWNER, "2026-11-10T00:00:00Z", "2026-11-10T00:00:00Z").run();
+  const add = (link, title) => env.DB.prepare(
+    "INSERT INTO watch_news (code, link, source, title, summary, published_at, fetched_at) VALUES ('3443', ?, 'gnews-udn', ?, '', '2026-11-19T02:00:00Z', '2026-11-19T02:00:00Z')",
+  ).bind(`https://news.google.com/${link}`, title).run();
+  await add("h1", "新北鐵道馬拉松接力賽開放報名追火車創意接棒");
+  await add("h2", "股后之爭再變天！創意一度跌停、川湖強彈逆襲 誰能坐穩？");
+  const body = await (await req("/api/market-news")).json();
+  const titles = body.mine.items.filter((row) => row.code === "3443").map((row) => row.title);
+  assert.deepEqual(titles, ["股后之爭再變天！創意一度跌停、川湖強彈逆襲 誰能坐穩？"]);
 });
 
 test("個股頁新聞標題：不用開關注，朋友也看得到；出處寫媒體名；沒抓到的來源列出來", async () => {

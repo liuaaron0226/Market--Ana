@@ -280,9 +280,27 @@ def _fetch(get: Callable, url: str, source: str) -> tuple[list[dict] | None, str
         return None, f"{type(error).__name__}: {error}"[:200], False
 
 
+# 公司簡稱只有兩個字時常常同時是一般用語（創意、世界、統一、國產、大同…）：光是標題裡出現那兩個字不算點名公司，
+# 同一段文字還要有股市／公司營運的用語才算（本人 2026-11-23：創意的消息混進「有創意」「創意料理」這種完全無關的新聞）。
+# 三個字以上的簡稱照舊；標題有股票代號的一律算。這份用語表和 cloud/lib/news-relevance.js 的要一致。
+MARKET_CONTEXT = (
+    "股", "證交所", "櫃買", "金管會", "上市", "上櫃", "興櫃", "營收", "財報", "財測", "法說", "獲利", "業績", "毛利", "EPS", "本益比", "市值",
+    "法人", "外資", "投信", "自營", "漲停", "跌停", "違約交割", "處置", "目標價", "評等", "訂單", "出貨", "擴產", "產能", "併購", "增資", "減資",
+    "除息", "除權", "配息", "股利", "庫藏", "董事會", "董事長", "總經理", "半導體", "晶片", "晶圓", "ASIC", "IC設計", "ETF", "供應鏈",
+)
+SHORT_NAME = 2
+
+
 def _mentions(text: str, stock: dict) -> bool:
     name = search_name(stock)
-    return (len(name) >= 2 and name in text) or re.search(rf"(?<!\d){re.escape(stock['code'])}(?!\d)", text) is not None
+    if re.search(rf"(?<!\d){re.escape(stock['code'])}(?!\d)", text) is not None:
+        return True
+    if len(name) < 2 or name not in text:
+        return False
+    if len(name) > SHORT_NAME:
+        return True
+    rest = text.replace(name, " ")   # 公司名本身帶的字不算（例如簡稱裡就有「股」）
+    return any(word in rest for word in MARKET_CONTEXT)
 
 
 def gather(stocks: list[dict], *, get: Callable, now: str, sleep: Callable[[float], None],

@@ -320,5 +320,42 @@ class DailyTests(unittest.TestCase):
         self.assertEqual(d1.news("6488")[0]["title"], "環球晶 'O'Neil'; DROP TABLE watch_news; --")
 
 
+class CommonWordNameTests(unittest.TestCase):
+    """本人 2026-11-23：「新聞選了一個完全沒有跟創意這檔股票相關的新聞，只是他有用到創意這個字」。
+    下面的標題都是當天正式站存進 watch_news（code 3443）的原文。"""
+    STOCK = {"code": "3443", "name": "創意"}
+    ABOUT = [
+        "證交所：愛普、創意、景碩、金像電違約交割 總金額1.78億",
+        "股后之爭再變天！創意一度跌停、川湖強彈逆襲 誰能坐穩？",
+        "ASIC指標股不同調創意跌停失去股后寶座、世芯-KY、聯發科攜手漲停",
+        "創意 今年業績將倍增(經濟日報，無內文)",
+        "《半導體》ASIC遭血洗 創意連5日觸跌停、跌掉逾3000元",
+        "創意今年業績將倍增 法人預估超過680億元",
+    ]
+    NOT_ABOUT = [
+        "長庚大學校運會暨親子日熱鬧登場 千人路跑、19隊創意啦啦舞展現青春活力",
+        "侯友宜新莊合體王珮宇車掃 盛讚年輕努力有創意僅缺知名度",
+        "本校USR以賽代訓培育永續人才 青年學子發揮創意回應在地需求",
+        "臺北客家義民嘉年華熱鬧登場客語展演美食創意展現客家魅力- 商情",
+        "「美國月在楓康」登場！蘋果馬鈴薯限量搶購 五星主廚秀創意蔬果料理",
+        "鼓勵孩子畫出無限夢想TOYOTA 2027全球夢想車創意繪畫大賽徵件開跑- 商情",
+        "風城創意閃耀國際 2026新竹市國際風箏節奪美國繆思創意獎最高榮譽鉑金獎",
+        "新北鐵道馬拉松接力賽開放報名追火車創意接棒",
+    ]
+
+    def test_common_word_name_needs_market_context(self):
+        for title in self.ABOUT:
+            self.assertTrue(wn._names_company(title, self.STOCK), title)
+        for title in self.NOT_ABOUT:
+            self.assertFalse(wn._names_company(title, self.STOCK), title)
+
+    def test_code_in_title_is_enough(self):
+        self.assertTrue(wn._names_company("創意（3443）發表新平台", self.STOCK))
+
+    def test_distinctive_names_do_not_need_context(self):
+        self.assertTrue(wn._names_company("台積電攜手夥伴發表新平台", {"code": "2330", "name": "台積電"}))
+        self.assertTrue(wn._names_company("聯發科發表新平台", {"code": "2454", "name": "聯發科"}))
+
+
 if __name__ == "__main__":
     unittest.main()
