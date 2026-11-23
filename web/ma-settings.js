@@ -36,6 +36,7 @@
     let lines = MaLines.read();
     let picking = -1;   // 哪一列的顏色正在挑
     let opener = null;  // 打開它的那一顆（收起來時焦點還給它）
+    let sheet = false;  // 這一次是不是用手機的貼底浮板開的
 
     function commit(next, redraw) {
       lines = MaLines.write(next);
@@ -145,6 +146,13 @@
         picking = -1;
         render();
         opener = document.activeElement;
+        // 手機：圖的外框比這一塊矮（會被切掉、手指滑到的是底下的 K 線），改成貼在畫面底部的浮板，底下的頁面鎖住
+        sheet = global.matchMedia('(max-width: 720px)').matches;
+        if (sheet) {
+          document.body.append(pop);
+          pop.classList.add('ma-pop-sheet');
+          if (global.ScrollLock) global.ScrollLock.lock(pop);
+        }
         pop.hidden = false;
         pop.focus({ preventScroll: true });
         document.addEventListener('pointerdown', outside);
@@ -158,6 +166,12 @@
         document.removeEventListener('keydown', escape);
         // 焦點在這一塊裡面（鍵盤操作）才還給打開它的那一顆；點外面收起來的，焦點留在點到的地方
         if (pop.contains(document.activeElement) && opener && opener.isConnected) opener.focus({ preventScroll: true });
+        if (sheet) {
+          sheet = false;
+          pop.classList.remove('ma-pop-sheet');
+          host.append(pop);
+          if (global.ScrollLock) global.ScrollLock.unlock(pop);
+        }
       },
       get isOpen() { return !pop.hidden; },
     };
