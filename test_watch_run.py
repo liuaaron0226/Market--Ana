@@ -650,6 +650,29 @@ class LicensedSourceTests(unittest.TestCase):
         self.assertEqual(found["peers"]["peers"][0]["change_1d_pct"], 10.0)
         self.assertTrue(all("DELETE" not in sql and "INSERT" not in sql for sql in self.asked))   # 只查不寫
 
+    def test_headlines_that_only_share_a_word_with_the_company_name_are_not_read(self):
+        # 本人 2026-11-24：「關注判斷的 AI 要不要也過新聞篩選，要」。標題是 11-23 正式站 watch_news（3443 創意）的原文。
+        import watch_news
+        source_name = watch_news.JUDGMENT_SOURCES[0]
+        news = lambda link, title, summary="": {  # noqa: E731
+            "code": "3443", "link": link, "source": source_name, "title": title, "summary": summary,
+            "published_at": "2026-11-06T06:00:00Z", "fetched_at": "2026-11-06T09:00:00Z"}
+
+        def query(sql):
+            if "FROM watch_news" in sql:
+                return [news("a", "侯友宜新莊合體王珮宇車掃 盛讚年輕努力有創意僅缺知名度"),
+                        news("b", "《半導體》ASIC遭血洗 創意連5日觸跌停、跌掉逾3000元"),
+                        news("c", "創意今年業績將倍增 法人預估超過680億元")]
+            if "FROM user_watchlist" in sql:
+                return [{"code": "3443", "name": "創意"}]
+            if "FROM stock_news_marks" in sql:
+                return [{"code": "3443", "link": "c"}]   # 判讀過、判成無關（例如重複的舊聞）
+            return []
+
+        source = wr.LocalSource(query=query, owner_email="owner@example.com")
+        found = source.licensed(["3443"], base_date="2026-11-06", before="2026-11-06", cutoff="2026-11-06T20:00:00+08:00")["3443"]
+        self.assertEqual([item["title"] for item in found["news_headlines"]], ["《半導體》ASIC遭血洗 創意連5日觸跌停、跌掉逾3000元"])
+
     def test_taiwan_industry_feeds_are_matched_to_each_stock(self):
         # 本人 2026-11-19：加入整理產業消息的網站；依公司名稱、代號與官方產業別對到關注股
         rows = [{"source": "ctee-industry", "link": "c1", "title": "半導體設備交期拉長", "summary": "",

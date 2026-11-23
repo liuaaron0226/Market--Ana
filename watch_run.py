@@ -186,6 +186,40 @@ class LocalSource:
                                    if layer.get("status") == "ok" else {"status": "missing", "reason": layer.get("reason")})
         return layer if layer.get("status") == "ok" else None
 
+    def _about_company(self, rows: list[dict], listed: str) -> list[dict]:
+        """判斷只讀真的在講這家公司的新聞（本人 2026-11-24「關注判斷的 AI 要不要也過新聞篩選，要」）：
+        判讀過、判成無關的（stock_news_marks.relevant = 0）不讀；其餘的標題要點名這家公司（和個股頁、抓取端同一條規則
+        watch_news._names_company：簡稱只有兩個字的還要有股市用語）。查不到公司名稱的那一檔不擋；這一步查不到就照原樣讀。"""
+        import watch_news
+        try:
+            names: dict[str, dict] = {}
+            for table in ("user_watchlist", "stock_news_pool"):
+                for row in self.query(f"SELECT code, name FROM {table} WHERE code IN ({listed})"):
+                    names.setdefault(row["code"], {"code": row["code"], "name": row.get("name") or ""})
+            try:
+                for row in self.query(f"SELECT code, name_en FROM stock_news_names WHERE code IN ({listed})"):
+                    if row["code"] in names:
+                        names[row["code"]]["name_en"] = row.get("name_en") or ""
+            except Exception:  # noqa: BLE001 — 英文簡稱那張表還沒建：只用中文簡稱比
+                pass
+            unrelated = {(row["code"], row["link"]) for row in self.query(
+                f"SELECT code, link FROM stock_news_marks WHERE code IN ({listed}) AND relevant = 0")}
+        except Exception:  # noqa: BLE001
+            return rows
+        kept = []
+        for row in rows:
+            stock = names.get(row.get("code"))
+            if (row.get("code"), row.get("link")) in unrelated:
+                continue
+            # 中央社整批對公司時看的是標題＋前言（watch_news.gather），這裡照同樣的範圍比；搜尋來的只看標題
+            text = str(row.get("title") or "")
+            if str(row.get("source") or "").startswith("cna-"):
+                text = f"{text} {row.get('summary') or ''}"
+            if stock and stock.get("name") and not watch_news._names_company(text, stock):
+                continue
+            kept.append(row)
+        return kept
+
     def licensed(self, codes: Sequence[str], *, base_date: str, before: str, cutoff: str) -> dict[str, dict[str, Any]]:
         """J 票三層：富果盤中（只打關注中的股票）、新聞標題與國外同類股（網站資料庫唯讀查）。只用 cutoff（寫的那一刻）
         以前已經抓到的；國外收盤只用 before（晚間版是基準日、晨間版是開盤日）以前的。抓不到的那一層是空的（缺）。"""
@@ -214,6 +248,7 @@ class LocalSource:
             sources = ",".join(f"'{source}'" for source in watch_news.JUDGMENT_SOURCES)
             rows = self.query("SELECT code, link, source, title, summary, published_at, fetched_at FROM watch_news "
                               f"WHERE code IN ({listed}) AND published_at >= '{since}' AND source IN ({sources})")
+            rows = self._about_company(rows, listed)
             for code in safe:
                 own = licensed_inputs.headline_items([row for row in rows if row.get("code") == code], cutoff=cutoff)
                 self.headline_counts[code]["own"] = len(own or [])
