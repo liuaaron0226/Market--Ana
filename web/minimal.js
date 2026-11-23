@@ -728,6 +728,7 @@
   const PL = plainStale ? null : (OV.plain || null);
   // 盤勢解讀改版的最新一班（market-brief.js；/api/market-brief）。有它的時候首頁那張卡與點開的面板用它，籌碼卡的說明照舊用 PL。
   let BRIEF = null;
+  let BRIEF_WATCH = [];   // 站主自己的追蹤事項（/api/impact-watch）：有項目時面板最後多一顆「追蹤事項」
   const NOW = OV.current || null;   // 最新一天各項的前 10 與連續天數（本人 11-07 定案）
   const shortDay = date => (date ? date.slice(5).replace('-', '/') : '');
   // 外資期貨空單比前一天（本人 11-19「寫出今天加空幾口或者是回補多少口」）：net 是淨部位（負的是空單），越負就是加空
@@ -797,7 +798,10 @@
         $('readList').innerHTML = '';
         $('readDate').textContent = '';
         $('readCard').hidden = false;   // 這一份自己帶資料日，不看原本解讀過期了沒
-        if (panelState.kind === 'plain' && panelState.layer === 1 && els.panel.getAttribute('aria-hidden') === 'false') renderLayerOne();
+        const redraw = () => { if (panelState.kind === 'plain' && panelState.layer === 1 && els.panel.getAttribute('aria-hidden') === 'false') renderLayerOne(); };
+        redraw();
+        // 追蹤事項那一類（票 05）不在那一份裡：站主自己的追蹤事項有項目時，面板最後多一顆鍵
+        if (features.impact_watch_v1) window.MarketBrief.loadWatch().then(items => { BRIEF_WATCH = items; if (items.length) redraw(); });
       });
     } else showPlain();
     $('readCard').addEventListener('click', () => openPanel('plain', {}, $('readCard')));
@@ -1395,8 +1399,8 @@
     else if (panelState.kind === 'distribution') els.panelBody.innerHTML = renderDistributionPanel(panelState.payload.outcome);
     else if (panelState.kind === 'plain' && BRIEF) {
       // 類別鍵＋一類的內容；停在哪一類記在 payload，重畫時留在原地
-      els.panelBody.innerHTML = window.MarketBrief.panelHtml(BRIEF, OV, impactPoints, panelState.payload.cat);
-      window.MarketBrief.bind(els.panelBody, BRIEF, OV, impactPoints, key => { panelState.payload.cat = key; });
+      els.panelBody.innerHTML = window.MarketBrief.panelHtml(BRIEF, OV, impactPoints, panelState.payload.cat, BRIEF_WATCH);
+      window.MarketBrief.bind(els.panelBody, BRIEF, OV, impactPoints, key => { panelState.payload.cat = key; }, BRIEF_WATCH);
     }
     else if (panelState.kind === 'plain') els.panelBody.innerHTML = renderPlainPanel();
     else if (panelState.kind === 'chip') { els.panelBody.innerHTML = renderChipPanel(panelState.payload.key); bindChipPanel(panelState.payload.key); }

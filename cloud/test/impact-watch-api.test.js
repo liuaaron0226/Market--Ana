@@ -161,6 +161,66 @@ test("沒有盯項：空清單", async () => {
   assert.deepEqual(await (await req()).json(), { available: true, items: [] });
 });
 
+// ---- 價位型的數字欄位（盤勢解讀的追蹤事項畫刻度用，.scratch/market-brief 票 05）----
+async function facts(db, subject, payload) {
+  await db.prepare("INSERT INTO impact_watch_facts (subject, data_date, payload, updated_at) VALUES (?, ?, ?, ?)")
+    .bind(subject, payload.date, JSON.stringify(payload), "2026-11-20T07:00:00Z").run();
+}
+async function levelItems(db) {
+  await db.prepare("DELETE FROM impact_watch_items").run();
+  await facts(db, "market", { date: "2026-11-20", close: 47036.5, ma: { 20: 47800.12, 60: 46000 }, high: 49967, low: 44920 });
+  await facts(db, "2454", { code: "2454", name: "聯發科", date: "2026-11-19", close: 3685, ma: { 20: 3500 }, high: 3700, low: 3200 });
+  await add(db, "m_high", { condition_key: "above_high", label: "加權指數收盤突破近 20 日高點（49,967）", params: JSON.stringify({ level: 49967, as_of: "2026-11-18" }) });
+  await add(db, "m_ma", { condition_key: "below_ma20", label: "加權指數收盤跌破月線", params: JSON.stringify({ ma: 20, as_of: "2026-11-18" }) });
+  await add(db, "m_ma_done", { condition_key: "above_ma60", label: "加權指數收盤站回季線", params: JSON.stringify({ ma: 60, as_of: "2026-11-17" }), status: "met",
+    result_date: "2026-11-19", result_note: "成立：11/19 收 46,500，站回季線（45,990）。", show_until: "2026-11-24", days_left: null });
+  await add(db, "m_flow", { condition_key: "foreign_turn_buy", label: "外資由賣超轉為買超", params: JSON.stringify({ flow_as_of: "2026-11-18" }) });
+  await add(db, "m_bad", { condition_key: "below_low", label: "參數壞掉的", params: JSON.stringify({ level: "44920" }) });
+  await add(db, "m_news", { kind: "news", condition_key: "above_news", label: "央行公布理監事會議結果", params: JSON.stringify({ level: 5, keywords: ["央行"] }) });
+  const owner = { visibility: "owner", prepare: JSON.stringify(["如果跌回壓力之下，就把這一天當成單日事件"]) };
+  await add(db, "s_resist", { ...owner, subject: "2454", condition_key: "above_resist", label: "收盤站上壓力（3,430）", params: JSON.stringify({ name: "聯發科", level: 3430, as_of: "2026-11-18" }),
+    status: "met", result_date: "2026-11-19", result_note: "成立：11/19 收 3,685，站上壓力 3,430。", show_until: "2026-11-24", days_left: null });
+  await add(db, "s_support", { ...owner, subject: "3008", condition_key: "below_support", label: "收盤跌破支撐（2,400）", params: JSON.stringify({ name: "大立光", level: 2400, as_of: "2026-11-18" }) });
+}
+const numeric = (item) => Object.fromEntries(["level", "direction", "last_close", "last_date"].filter((name) => name in item).map((name) => [name, item[name]]));
+
+test("價位型多回價位、方向、最新收盤與日期：站主連個股的都有；消息型、沒有價位的、有結果的均線都沒有", async () => {
+  await levelItems(env.DB);
+  const body = await (await req()).json();
+  const items = Object.fromEntries(body.items.map((item) => [item.id, item]));
+  assert.equal(body.items.length, 8);
+  assert.deepEqual(numeric(items.m_high), { level: 49967, direction: "above", last_close: 47036.5, last_date: "2026-11-20" });
+  assert.deepEqual(numeric(items.m_ma), { level: 47800.12, direction: "below", last_close: 47036.5, last_date: "2026-11-20" }, "還在盯的均線：用存下的當天均線");
+  assert.deepEqual(numeric(items.s_resist), { level: 3430, direction: "above", last_close: 3685, last_date: "2026-11-19" }, "個股用那一檔自己存下的收盤");
+  assert.equal(items.s_resist.subject_name, "聯發科");
+  assert.deepEqual(numeric(items.s_support), { level: 2400, direction: "below" }, "那一檔還沒有存下的收盤：只有價位與方向");
+  for (const id of ["m_ma_done", "m_flow", "m_bad", "m_news"]) assert.deepEqual(numeric(items[id]), {}, id);
+  assert.ok(body.items.every((item) => !("params" in item) && !("facts" in item) && !("ma" in item) && !("condition_key" in item)), "參數與存下的數字不往外送");
+  assert.ok(!JSON.stringify(body).includes("as_of") && !JSON.stringify(body).includes("46000"));
+});
+
+test("價位型的數字欄位：朋友只拿到大盤的，個股的項目與數字一筆都沒有", async () => {
+  await levelItems(env.DB);
+  const r = await req("/api/impact-watch", { email: FRIEND });
+  const text = await r.text(), body = JSON.parse(text);
+  assert.deepEqual(body.items.map((item) => item.id).sort(), ["m_bad", "m_flow", "m_high", "m_ma", "m_ma_done", "m_news"]);
+  const items = Object.fromEntries(body.items.map((item) => [item.id, item]));
+  assert.deepEqual(numeric(items.m_high), { level: 49967, direction: "above", last_close: 47036.5, last_date: "2026-11-20" });
+  assert.deepEqual(numeric(items.m_ma), { level: 47800.12, direction: "below", last_close: 47036.5, last_date: "2026-11-20" });
+  assert.deepEqual(numeric(items.m_news), {});
+  for (const secret of ["2454", "3008", "聯發科", "大立光", "3430", "3685", "2400", "壓力", "支撐"]) assert.ok(!text.includes(secret), `不該出現 ${secret}`);
+});
+
+test("價位型的數字欄位：每日檢查還沒存過數字時只有價位與方向；存的那一份壞掉也不出錯", async () => {
+  await levelItems(env.DB);
+  await env.DB.prepare("UPDATE impact_watch_facts SET payload = ? WHERE subject = 'market'").bind(JSON.stringify({ date: "11/20", close: "47036" })).run();
+  const items = Object.fromEntries((await (await req()).json()).items.map((item) => [item.id, item]));
+  assert.deepEqual(numeric(items.m_high), { level: 49967, direction: "above" });
+  assert.deepEqual(numeric(items.m_ma), {}, "沒有當天的均線就沒有價位");
+  await env.DB.prepare("DELETE FROM impact_watch_facts").run();
+  assert.deepEqual(numeric((await (await req()).json()).items.find((item) => item.id === "s_resist")), { level: 3430, direction: "above" });
+});
+
 // ---- 站主自選股與庫存的盯項（票 06）：只有站主拿得到 ----
 const STOCK = {
   subject: "2454", visibility: "owner", label: "收盤跌破季線", note: "OWNER-NOTE 法說後賣壓還沒消化",

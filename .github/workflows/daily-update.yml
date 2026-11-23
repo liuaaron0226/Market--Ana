@@ -464,6 +464,22 @@ jobs:
       # 三步都不擋發布：寫不成時網站沿用上一班（沒有任何一班就是原本的解讀面板）。
       # 倉庫公開之後這裡的輸出誰都看得到：印的是遮過的報告（狀態、來源、問了幾次、類別、模型），模型寫的句子與被退回的
       # 原文只在 data/daily-update-log/market-brief/ 的那一份（不進 artifact、不進步驟摘要）。
+      # 票 03／04：國際股市（overseas_quotes 最後兩根日線，前面「國外指數」那一步剛抓過）與當天最後一班首頁消息
+      # 先從 D1 讀成一個檔交給產生器（查詢由 market_brief.py inputs-sql 印，只讀大家共用的欄位）；讀不到時那兩類各只有一句。
+      - name: 盤勢解讀：讀國際股市與當天消息（D1，唯讀）
+        if: success() && steps.day.outputs.dry_run == '' && vars.MARKET_ANA_MARKET_BRIEF_SCHEDULE == 'on'
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          sync=$(python -c "import json,sys; print(json.load(open(sys.argv[1], encoding='utf-8'))['sync_state'])" "${{ runner.temp }}/daily-result.json")
+          if [ "$sync" != "True" ]; then echo "本次沒有新發布，盤勢解讀不重寫"; exit 0; fi
+          query="$(python market_brief.py inputs-sql --slot evening --analysis data/daily-update-state/last-market-pack/analysis-data.js)"
+          (cd cloud && npx --yes wrangler@4 d1 execute market-ana-accounts --remote --json \
+            --command "$query" > "$RUNNER_TEMP/market-brief-inputs.json") \
+            || echo "::warning::讀不到國際股市與當天消息，盤勢解讀那兩類這一班各只有一句"
+
       - name: 盤勢解讀：產生晚間這一班（只在發布成功時）
         id: market_brief
         if: success() && steps.day.outputs.dry_run == '' && vars.MARKET_ANA_MARKET_BRIEF_SCHEDULE == 'on'
@@ -476,6 +492,7 @@ jobs:
           # 模型與思考程度：market_brief.py 自己讀環境裡的 AI_PLAIN_*（讀設定頁那一步寫進 GITHUB_ENV 的），這裡不另外帶
           set -o pipefail
           python market_brief.py run --slot evening --analysis data/daily-update-state/last-market-pack/analysis-data.js \
+            --inputs "$RUNNER_TEMP/market-brief-inputs.json" \
             --agy-bin "$RUNNER_TEMP/agy/antigravity" --agy-home "$RUNNER_TEMP/agy-home" \
             --sql-output "$RUNNER_TEMP/market-brief.sql" \
             --report "data/daily-update-log/market-brief/$DAY.json" | tee "$RUNNER_TEMP/market-brief.json"
@@ -607,4 +624,4 @@ jobs:
 
       - name: 清除 agy 登入檔與執行檔
         if: always()
-        run: rm -rf "$RUNNER_TEMP/agy-home" "$RUNNER_TEMP/agy" "$RUNNER_TEMP/gemini-usage.sql" "$RUNNER_TEMP/gemini-usage-legacy.sql" "$RUNNER_TEMP/ai-models.json" "$RUNNER_TEMP/ai-model-read.sql" "$RUNNER_TEMP/impact-watch-usage.sql" "$RUNNER_TEMP/market-brief.sql" "$RUNNER_TEMP/market-brief-usage.sql" "$RUNNER_TEMP/market-brief.json"
+        run: rm -rf "$RUNNER_TEMP/agy-home" "$RUNNER_TEMP/agy" "$RUNNER_TEMP/gemini-usage.sql" "$RUNNER_TEMP/gemini-usage-legacy.sql" "$RUNNER_TEMP/ai-models.json" "$RUNNER_TEMP/ai-model-read.sql" "$RUNNER_TEMP/impact-watch-usage.sql" "$RUNNER_TEMP/market-brief.sql" "$RUNNER_TEMP/market-brief-usage.sql" "$RUNNER_TEMP/market-brief.json" "$RUNNER_TEMP/market-brief-inputs.json"

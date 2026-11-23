@@ -114,6 +114,24 @@ class StateSyncTest(unittest.TestCase):
             self.assertEqual(hashlib.sha256((self.restore / name).read_bytes()).hexdigest(),
                              hashlib.sha256((self.local / name).read_bytes()).hexdigest())
 
+    def test_restore_only_takes_the_named_paths_and_refuses_unknown_ones(self) -> None:
+        store = ss.DirectoryStore(self.bucket)
+        ss.upload(self.local, store, self.items, data_date="2026-11-06")
+        restored = ss.restore(self.restore, store, only=("data/liquid-universe",))
+        self.assertEqual([entry["path"] for entry in restored["objects"]], ["data/liquid-universe"])
+        self.assertTrue((self.restore / "data/liquid-universe/2026-11-06.json").is_file())
+        self.assertFalse((self.restore / "data/stock-history").exists(), "沒點名的不下載")
+        with self.assertRaises(ss.StateIntegrityError):
+            ss.restore(self.restore, store, only=("data/liquid-universe", "data/no-such-item"))
+        # 命令列：--only 只能配 restore，可重複
+        import contextlib
+        import io
+        again = Path(self.tmp.name) / "again"
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            code = ss.main(["restore", "--store-dir", str(self.bucket), "--target", str(again), "--only", "data/liquid-universe"])
+        self.assertEqual((code, json.loads(out.getvalue())["objects"]), (0, 1))
+        self.assertEqual(sorted(path.name for path in (again / "data").iterdir()), ["liquid-universe"])
+
     def test_tree_recent_files_keeps_only_latest_n(self) -> None:
         store = ss.DirectoryStore(self.bucket)
         ss.upload(self.local, store, self.items, data_date="2026-11-06")

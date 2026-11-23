@@ -6,7 +6,10 @@
   籌碼面的圖只畫到那一類的資料日；每一類下面是影響／觀察／因應；沒有買賣指令字眼、沒有多餘的小字；
   類別鍵高度至少 40、不折成兩排；籌碼卡點開的明細照舊；
 - 同一個開關下朋友看到的和改版前一樣（不問那一支 API）；
-- 開給全部、五類都有：手機上那一排放不下就左右滑、不折行；沒有新東西的那一類只有一句；朋友看不到追蹤事項；
+- 開給全部、那一份四類都有、站主另有追蹤事項（票 03–05）：站主五顆鍵、朋友四顆；手機上那一排放不下就左右滑、不折行，
+  按到的那一顆會捲進來；國際股市是各市場漲跌幅的橫條圖（由大到小、台股最後一列）；市場消息只有文字；
+  追蹤事項一項一段（價位刻度＋因應），最多 5 項，朋友看不到那一顆、也看不到個股；
+- 國際股市還沒更新、這一班沒有消息：那兩類只有一句；站主沒有追蹤事項就沒有那一顆；
 - 沒有任何一班、或開關關著：卡片與面板和改版前一樣；
 - 手機 390 與桌機 1440 都不橫向捲動、沒有程式錯誤。
 
@@ -37,6 +40,10 @@ ONE_LINE = "指數反彈，但外資仍站在賣方、期貨空單還在高檔�
 SAY = {"overseas": "美股費半反彈，亞股同步收紅", "news": "這一班沒有影響大盤的新消息", "chips": "指數漲，外資卻沒有跟著回補",
        "tech": "反彈了，但還在 20 日均線之下", "tracking": "追蹤的價位條件有一項成立"}
 NAMES = {"overseas": "國際股市", "news": "市場消息", "chips": "籌碼面", "tech": "技術面", "tracking": "追蹤事項"}
+SAY["news"] = "半導體報價消息帶動權值股"
+QUIET_OVERSEAS, QUIET_NEWS = "國際股市資料尚未更新", "本時段無影響大盤的新消息"
+MARKETS = [("dji", "道瓊", -0.4), ("ixic", "那斯達克", 1.4), ("spx", "標普 500", 0.8), ("sox", "費城半導體", 3.1), ("n225", "日經 225", 1.2), ("kospi", "韓國綜合", -1.9)]
+OVERSEAS_TEXTS = ["各市場漲跌幅（%）", "費城半導體", "+3.1", "那斯達克", "+1.4", "日經 225", "+1.2", "標普 500", "+0.8", "道瓊", "-0.4", "韓國綜合", "-1.9", "加權指數", "+2.2"]
 
 
 def data_source() -> Path:
@@ -104,9 +111,13 @@ def cat(key: str, date: str, quiet: bool = False) -> dict:
 
 def brief(exp: dict, scenario: str) -> dict:
     cats = [cat("chips", exp["chips_date"]), cat("tech", exp["tech_date"]), {"key": "sectors", "say": "之後才有的類別", "data_date": exp["tech_date"]}]
-    if scenario == "five":
-        cats = [cat("tracking", exp["tech_date"]), cat("tech", exp["tech_date"]), cat("news", exp["tech_date"], quiet=True),
-                cat("chips", exp["chips_date"]), cat("overseas", exp["tech_date"])]
+    if scenario == "five":   # 那一份裡的四類都有內容；裡面叫 tracking 的不算（追蹤事項不經過那一份）
+        overseas = {**cat("overseas", exp["tech_date"]), "home": {"name": "加權指數", "change_pct": 2.2, "date": exp["tech_date"]},
+                    "markets": [{"key": key, "name": name, "change_pct": pct, "date": exp["chips_date"]} for key, name, pct in MARKETS]}
+        cats = [cat("tracking", exp["tech_date"]), cat("tech", exp["tech_date"]), cat("news", exp["tech_date"]), cat("chips", exp["chips_date"]), overseas]
+    if scenario == "quiet":   # 國際股市還沒更新、這一班沒有消息：那兩類只有一句
+        cats = [{**cat("overseas", exp["tech_date"], quiet=True), "say": QUIET_OVERSEAS}, {**cat("news", exp["tech_date"], quiet=True), "say": QUIET_NEWS},
+                cat("chips", exp["chips_date"]), cat("tech", exp["tech_date"])]
     return {"schema": "market-brief/v1", "trade_date": exp["tech_date"], "slot": "evening", "generated_at": f"{exp['tech_date']}T18:31:00+08:00",
             "source": "ai", "one_line": ONE_LINE, "lead": "tech", "cats": cats, "later_field": {"ignored": True}}
 
@@ -115,10 +126,44 @@ def q(value) -> str:
     return "NULL" if value is None else "'" + str(value).replace("'", "''") + "'"
 
 
+# 站主的追蹤事項（票 05）：(id, 對象, 類型, 條件編號, 參數, 條件, 影響力, 狀態, 因應)。大盤的所有人可見，個股的只有站主。
+WATCH_ITEMS = [
+    ("s_resist", "2454", "numeric", "above_resist", {"name": "聯發科", "level": 3430, "as_of": "2026-11-18"}, "收盤站上壓力（3,430）", 2, "met", "如果跌回壓力之下，就把這一天當成單日事件。"),
+    ("m_high", "market", "numeric", "above_high", {"level": 49967, "as_of": "2026-11-18"}, "加權指數收盤突破近 20 日高點（49,967）", 3, "watching", "如果突破，就先確認成交量有沒有跟上。"),
+    ("m_low", "market", "numeric", "below_low", {"level": 44920, "as_of": "2026-11-18"}, "加權指數收盤跌破近 20 日低點（44,920）", 2, "watching", "如果跌破，就先檢查手上權值股的比重。"),
+    ("m_news", "market", "news", "news:cbc", {"keywords": ["央行"]}, "央行公布理監事會議結果", 3, "watching", "如果升息，就先確認金融股的反應。"),
+    ("m_flow", "market", "numeric", "foreign_turn_buy", {"flow_as_of": "2026-11-18"}, "外資由賣超轉為買超", 2, "watching", None),
+    ("m_extra", "market", "numeric", "foreign_sell_streak", {"days": 9, "flow_as_of": "2026-11-18"}, "外資連續賣超達 9 天", 1, "watching", None),
+]
+# 畫面上該有的順序：有結果的在前，其餘照離價位的遠近、畫不出刻度的排後面；最多 5 項（第 6 項不出現）
+TRACK_HEADS = ["聯發科 收盤站上壓力：成立", "加權指數收盤跌破近 20 日低點", "加權指數收盤突破近 20 日高點", "央行公布理監事會議結果", "外資由賣超轉為買超"]
+TRACK_LEVELS = [["3,430", "收 3,685", "高於 7.4%"], ["44,920", "收 47,036", "高於 4.7%"], ["49,967", "收 47,036", "低於 5.9%"]]
+
+
+def watch_sql(exp: dict) -> list[str]:
+    out = []
+    for subject, close in (("market", 47036), ("2454", 3685)):
+        facts = {"date": exp["tech_date"], "close": close, "ma": {"20": close}}
+        out.append("INSERT INTO impact_watch_facts (subject, data_date, payload, updated_at) VALUES ("
+                   + ", ".join(q(value) for value in (subject, exp["tech_date"], json.dumps(facts), "2026-11-20T07:00:00Z")) + ");")
+    for ident, subject, kind, key, params, label, impact, status, prepare in WATCH_ITEMS:
+        met = status == "met"
+        row = (ident, "market_news", "2026-11-18", subject, kind, key, json.dumps(params, ensure_ascii=False), label, impact,
+               json.dumps([prepare], ensure_ascii=False) if prepare else None, "2026-11-18", "2099-01-01", None if met else 12, status,
+               exp["tech_date"] if met else None, "成立：收 3,685，站上壓力 3,430。" if met else None, "2099-01-01" if met else None,
+               "all" if subject == "market" else "owner", "2026-11-18T06:05:00Z")
+        out.append("INSERT INTO impact_watch_items (id, source_block, source_date, subject, kind, condition_key, params, label, impact, prepare, created_date, "
+                   "expires_on, days_left, status, result_date, result_note, show_until, visibility, created_at) VALUES ("
+                   + ", ".join(str(value) if isinstance(value, int) else q(value) for value in row) + ");")
+    return out
+
+
 def seed_sql(exp: dict, scenario: str) -> str:
     out = [f"INSERT INTO users (email, nickname, status, applied_at) VALUES ('{FRIEND}', '朋友', 'approved', '2026-11-09T00:00:00Z');"]
     if scenario == "none":
         return "\n".join(out)
+    if scenario == "five":
+        out += watch_sql(exp)
     older = {**brief(exp, scenario), "one_line": "前一班的結論，不該出現"}
     rows = [("2000-01-03", "evening", older), (exp["tech_date"], "morning", older), (exp["tech_date"], "evening", brief(exp, scenario))]
     out += ["INSERT INTO market_brief_runs (trade_date, slot, generated_at, source, model, payload) VALUES ("
@@ -134,7 +179,8 @@ def build(source: Path) -> None:
         raise SystemExit(f"cloud/build.mjs 失敗：\n{done.stdout[-600:]}\n{done.stderr[-600:]}")
 
 
-def serve(exp: dict, scenario: str, mode: str | None):
+def serve(exp: dict, scenario: str, mode: str | None, watch: str | None = None):
+    """mode：盤勢解讀的開關；watch：追蹤事項（盯項）的開關。"""
     seed = OUT / f"seed-{scenario}.sql"
     seed.write_text(seed_sql(exp, scenario), encoding="utf-8")
     with socket.socket() as s:
@@ -144,6 +190,8 @@ def serve(exp: dict, scenario: str, mode: str | None):
     env["JOURNEY_SEED_SQL"] = str(seed)
     if mode:
         env["MARKET_ANA_MARKET_BRIEF"] = mode
+    if watch:
+        env["MARKET_ANA_IMPACT_WATCH"] = watch
     server = subprocess.Popen(["node", str(ROOT / "cloud/test/journey-server.mjs"), str(port), "relaxed"], cwd=ROOT / "cloud", env=env)
     base = f"http://127.0.0.1:{port}"
     for _ in range(100):
@@ -184,8 +232,21 @@ PANEL = """() => {
     checkedInView: boxes.filter((box, i) => buttons[i].getAttribute('aria-checked') === 'true')
       .every(box => box.left >= strip.getBoundingClientRect().left - 1 && box.right <= strip.getBoundingClientRect().right + 1),
     say: tab && tab.querySelector('.plain-tab-say') ? text(tab.querySelector('.plain-tab-say')) : null,
+    heads: tab ? [...tab.querySelectorAll('.plain-tab-say')].map(text) : [], tracks: tab ? tab.querySelectorAll('.plain-track').length : 0,
+    allLabels: tab ? [...tab.querySelectorAll('.news-points dt')].map(text) : [], allLines: tab ? [...tab.querySelectorAll('.news-points dd p')].map(text) : [],
+    stripLeft: strip ? Math.round(strip.scrollLeft) : 0,
     charts: tab ? [...tab.querySelectorAll('svg.plain-chart')].map(svg => ({ name: svg.dataset.chart, role: svg.getAttribute('role'), label: svg.getAttribute('aria-label'),
       texts: [...svg.querySelectorAll('text')].map(node => node.textContent), marks: svg.querySelectorAll('rect, path, circle').length,
+      // 圖上的字有沒有互相疊到、有沒有蓋到橫條（橫條圖與刻度圖才看）
+      clash: (() => {
+        const hit = (a, b) => a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5;
+        const words = [...svg.querySelectorAll('text')].map(node => node.getBoundingClientRect());
+        const blocks = [...svg.querySelectorAll('rect')].map(node => node.getBoundingClientRect());
+        return words.some((box, i) => words.slice(i + 1).some(other => hit(box, other)) || blocks.some(block => hit(box, block)));
+      })(),
+      bars: [...svg.querySelectorAll('rect')].map(node => ({ fill: node.getAttribute('fill'), opacity: node.getAttribute('opacity') })),
+      bold: [...svg.querySelectorAll('text')].filter(node => Number(getComputedStyle(node).fontWeight) >= 600).map(node => node.textContent),
+      dots: [...svg.querySelectorAll('circle')].map(node => node.getAttribute('fill')),
       width: Math.round(svg.getBoundingClientRect().width), height: Math.round(svg.getBoundingClientRect().height),
       inside: svg.getBoundingClientRect().left >= bodyBox.left - 1 && svg.getBoundingClientRect().right <= bodyBox.right + 1,
       legend: svg.querySelectorAll('title, desc, .legend').length })) : [],
@@ -352,17 +413,91 @@ def five(j: Journey, browser, base: str, exp: dict, prefix: str, options: dict, 
             and panel["stripInside"] and (panel["stripScrolls"] or not mobile), panel)
     if mobile:
         j.shot(page, f"{prefix}4-five-keys.png")
-    panel = j.pick(page, "追蹤事項")
-    j.check(f"{tag}最後一顆也按得到、按了看得到整顆；還沒有圖的類別只有一句判斷與三段", panel["checked"] == ["追蹤事項"] and panel["checkedInView"]
-            and panel["say"] == SAY["tracking"] and not panel["charts"] and panel["labels"] == ["影響", "觀察", "因應"] and panel["noScroll"], panel)
+    if not mobile:
+        # 放得下時照舊是「按住滑到要的再放開」：從選到的那一顆按住，滑到「籌碼面」放開
+        start, end = (page.locator("#panelBody .plain-tabs button", has_text=name).bounding_box() for name in ("技術面", "籌碼面"))
+        page.mouse.move(start["x"] + start["width"] / 2, start["y"] + start["height"] / 2)
+        page.mouse.down()
+        page.mouse.move(end["x"] + end["width"] / 2, end["y"] + end["height"] / 2, steps=8)
+        thumb = page.locator("#panelBody .plain-tabs .slide-thumb").count()
+        page.mouse.up()
+        page.wait_for_timeout(500)
+        slid = page.evaluate(PANEL)
+        j.check(f"{tag}按住滑到另一顆再放開：選中的框跟著走、放開就換成那一類", thumb == 1 and slid["checked"] == ["籌碼面"] and slid["say"] == SAY["chips"], (thumb, slid["checked"]))
+
+    # 國際股市（票 03）
+    panel = j.pick(page, "國際股市")
+    bars = chart(panel, "overseas")
+    j.check(f"{tag}國際股市：第一顆也按得到、看得到整顆；一句判斷＋一張橫條圖＋影響／觀察／因應", panel["checked"] == ["國際股市"] and panel["checkedInView"]
+            and panel["say"] == SAY["overseas"] and len(panel["charts"]) == 1 and bool(bars) and panel["labels"] == ["影響", "觀察", "因應"], panel)
+    j.check(f"{tag}橫條圖：各市場由大到小、台股在最後一列，數字帶正負號", bool(bars) and bars["texts"] == OVERSEAS_TEXTS, bars)
+    j.check(f"{tag}橫條圖：紅漲綠跌，台股那一列實心、名稱粗體，其餘淡色", bool(bars)
+            and [bar["fill"] for bar in bars["bars"]] == ["var(--up)"] * 4 + ["var(--down)"] * 2 + ["var(--up)"]
+            and [bar["opacity"] for bar in bars["bars"]] == ["0.55"] * 6 + ["1"] and "加權指數" in bars["bold"] and "費城半導體" not in bars["bold"], bars)
+    j.check(f"{tag}橫條圖：有報讀文字（列出每個市場的數字）、沒有圖例、字不疊在一起也不蓋到橫條、不超出面板", bool(bars) and bars["role"] == "img"
+            and "費城半導體 +3.1%" in bars["label"] and bars["label"].endswith("加權指數 +2.2%") and bars["legend"] == 0 and not bars["clash"] and bars["inside"], bars)
+    clean(j, tag + "國際股市", panel)
+    if mobile:
+        j.shot(page, f"{prefix}5-overseas.png")
+
+    # 市場消息（票 04）
     panel = j.pick(page, "市場消息")
-    j.check(f"{tag}這一班沒有新東西的那一類：只有一句，沒有圖也沒有三段", panel["say"] == SAY["news"] and not panel["charts"] and not panel["labels"]
-            and panel["text"].replace(" ", "") == f"{ONE_LINE}{''.join(panel['keys'])}{SAY['news']}", panel["text"])
+    j.check(f"{tag}市場消息：只有文字——一句判斷＋影響／觀察／因應，沒有圖", panel["checked"] == ["市場消息"] and panel["say"] == SAY["news"] and not panel["charts"]
+            and panel["labels"] == ["影響", "觀察", "因應"] and len(panel["lines"]) == 3
+            and panel["text"].replace(" ", "") == (ONE_LINE + "".join(panel["keys"]) + SAY["news"]
+                                                   + "".join(label + line for label, line in zip(panel["labels"], panel["lines"]))).replace(" ", ""), panel["text"])
+    clean(j, tag + "市場消息", panel)
+    if mobile:
+        j.shot(page, f"{prefix}6-news.png")
+
+    # 追蹤事項（票 05）：不在那一份裡，用站主自己的追蹤事項畫
+    panel = j.pick(page, "追蹤事項")
+    levels = [item for item in panel["charts"] if item["name"] == "level"]
+    j.check(f"{tag}追蹤事項：最後一顆也按得到、按了看得到整顆", panel["checked"] == ["追蹤事項"] and panel["checkedInView"] and panel["noScroll"]
+            and (panel["stripLeft"] > 0 or not mobile), panel["stripLeft"])
+    j.check(f"{tag}追蹤事項：一項一段，有結果的在前、其餘照離價位的遠近，最多 5 項", panel["heads"] == TRACK_HEADS and panel["tracks"] == 5
+            and "外資連續賣超" not in panel["text"] and SAY["tracking"] not in panel["text"], panel["heads"])
+    j.check(f"{tag}追蹤事項：價位型的畫刻度（價位、收盤、差幾 %），消息型與沒有價位的不畫", len(panel["charts"]) == 3
+            and [item["texts"] for item in levels] == TRACK_LEVELS, [item["texts"] for item in panel["charts"]])
+    j.check(f"{tag}刻度：條件達到的才上色；有報讀文字、沒有圖例、字不疊在一起、不超出面板", len(levels) == 3
+            and [item["dots"] for item in levels] == [["var(--up)"], ["var(--ink)"], ["var(--ink)"]]
+            and levels[0]["label"].endswith("已達條件") and levels[1]["label"].endswith("未達條件")
+            and all(item["role"] == "img" and item["legend"] == 0 and not item["clash"] and item["inside"] for item in levels), levels)
+    j.check(f"{tag}追蹤事項：每一項下面只有「因應」", panel["allLabels"] == ["因應"] * 4 and all(line.startswith("如果") and "就" in line for line in panel["allLines"]),
+            (panel["allLabels"], panel["allLines"]))
+    clean(j, tag + "追蹤事項", panel)
+    if mobile:
+        j.shot(page, f"{prefix}7-tracking.png")
+    panel = j.pick(page, "國際股市")
+    j.check(f"{tag}從最後一顆按回第一顆：一樣看得到整顆", panel["checked"] == ["國際股市"] and panel["checkedInView"])
+    j.close(page)
+    panel = j.open_card(page)
+    j.check(f"{tag}關掉再打開：回到影響最大的那一類，不會停在追蹤事項", panel["checked"] == ["技術面"] and panel["checkedInView"] and len(panel["keys"]) == 5)
     context.close()
 
     context, page, _ = j.home(browser, base, FRIEND, options, ONE_LINE)
     panel = j.open_card(page)
-    j.check(f"{tag}開給全部時朋友也看得到，但沒有追蹤事項", panel["keys"] == ["國際股市", "市場消息", "籌碼面", "技術面"] and SAY["tracking"] not in panel["text"], panel["keys"])
+    j.check(f"{tag}朋友（兩個開關都開給全部）：四顆鍵，沒有追蹤事項", panel["keys"] == ["國際股市", "市場消息", "籌碼面", "技術面"] and panel["oneRow"]
+            and panel["noScroll"] and SAY["tracking"] not in panel["text"], panel["keys"])
+    shown = "".join(j.pick(page, name)["text"] for name in panel["keys"])
+    j.check(f"{tag}朋友每一類都看得到內容，但看不到站主的追蹤事項與個股", "聯發科" not in shown and "收盤站上壓力" not in shown and "近 20 日低點" not in shown
+            and all(SAY[key] in shown for key in ("overseas", "news", "chips", "tech")), shown[:200])
+    context.close()
+
+
+def quiet(j: Journey, browser, base: str, exp: dict, prefix: str, options: dict, mobile: bool) -> None:
+    """國際股市還沒更新、這一班沒有消息，站主也沒有追蹤事項：那兩類只有一句，沒有「追蹤事項」那一顆。"""
+    tag = f"{prefix}沒有新東西的類別："
+    context, page, _ = j.home(browser, base, OWNER, options, ONE_LINE)
+    panel = j.open_card(page)
+    j.check(f"{tag}四顆鍵都在（沒有追蹤事項就沒有那一顆）", panel["keys"] == ["國際股市", "市場消息", "籌碼面", "技術面"] and panel["checked"] == ["技術面"]
+            and panel["oneRow"] and panel["noScroll"], panel["keys"])
+    for name, say in (("國際股市", QUIET_OVERSEAS), ("市場消息", QUIET_NEWS)):
+        panel = j.pick(page, name)
+        j.check(f"{tag}{name}只有一句，沒有圖也沒有三段", panel["say"] == say and not panel["charts"] and not panel["labels"]
+                and panel["text"].replace(" ", "") == f"{ONE_LINE}{''.join(panel['keys'])}{say}".replace(" ", "") and panel["noScroll"], panel["text"])
+    if mobile:
+        j.shot(page, f"{prefix}8-quiet.png")
     context.close()
 
 
@@ -383,10 +518,16 @@ def main() -> int:
                 unchanged(j, browser, base, exp, f"{prefix}只開站主時的朋友：", FRIEND, options, may_ask=False)
         finally:
             server.terminate()
-        server, base = serve(exp, "five", "all")
+        server, base = serve(exp, "five", "all", watch="all")
         try:
             for prefix, options, mobile in sizes:
                 five(j, browser, base, exp, prefix, options, mobile)
+        finally:
+            server.terminate()
+        server, base = serve(exp, "quiet", "all", watch="all")
+        try:
+            for prefix, options, mobile in sizes:
+                quiet(j, browser, base, exp, prefix, options, mobile)
         finally:
             server.terminate()
         server, base = serve(exp, "none", "owner")

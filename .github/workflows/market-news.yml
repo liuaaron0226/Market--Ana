@@ -210,6 +210,85 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
+      # 盤勢解讀白天三班（本人 2026-11-23「共識達成」，.scratch/market-brief 票 06）：接在這一班消息成功寫進資料庫之後，
+      # 用最近一次大盤資料包的籌碼與位置（白天是前一交易日）＋國際股市六個指數＋這一班消息，寫一份分類別的解讀，
+      # 存進 D1 market_brief_runs（時段 morning／midday／close；18:00 那一班在 daily-update.yml）。
+      # 排程開關是 repository variable MARKET_ANA_MARKET_BRIEF_SCHEDULE（要剛好是 on）；乾跑不跑；消息那一步失敗、
+      # 或台股休市（消息印 skipped）也不跑，網站留上一班。五步都 continue-on-error：寫不成不影響這一輪消息。
+      # 大盤資料包從 R2 的工作集唯讀取回（只取 last-market-pack 一項）；這支排程不上傳、不同步任何狀態。
+      # 模型與思考程度沿用設定頁「AI 模型」的白話分析那一項（前面讀設定那一步寫進環境的 AI_PLAIN_*）。
+      # 倉庫公開：這幾步印的只有遮過的報告（狀態、時段、來源、類別、模型），模型寫的句子只在 --report 那一份
+      # （跟著這台機器一起消失，不進 artifact、不進步驟摘要）。
+      - name: 盤勢解讀：取回最近一次大盤資料包（R2，唯讀）
+        id: brief_pack
+        if: success() && env.DRY_RUN == 'false' && vars.MARKET_ANA_MARKET_BRIEF_SCHEDULE == 'on'
+        continue-on-error: true
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: market-ana-state
+        run: |
+          ran=$(python -c "import json,sys; print(json.loads(open(sys.argv[1], encoding='utf-8').read().strip().splitlines()[-1]).get('status'))" "$RUNNER_TEMP/market-news/run.json")
+          if [ "$ran" != "ok" ]; then echo "這一班消息沒有寫進資料庫（休市或沒跑成），盤勢解讀不跑"; exit 0; fi
+          python state_sync.py restore --target . --only data/daily-update-state/last-market-pack
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: 盤勢解讀：讀國際股市與這一班消息（D1，唯讀）
+        if: success() && env.DRY_RUN == 'false' && vars.MARKET_ANA_MARKET_BRIEF_SCHEDULE == 'on' && steps.brief_pack.outputs.ready == 'true'
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          query="$(python market_brief.py inputs-sql --slot "$SLOT")"
+          (cd cloud && npx --yes wrangler@4 d1 execute market-ana-accounts --remote --json \
+            --command "$query" > "$RUNNER_TEMP/market-brief-inputs.json") \
+            || echo "::warning::讀不到國際股市與這一班消息，盤勢解讀那兩類這一班各只有一句"
+
+      - name: 盤勢解讀：產生這一班（接在消息成功之後）
+        id: market_brief
+        if: success() && env.DRY_RUN == 'false' && vars.MARKET_ANA_MARKET_BRIEF_SCHEDULE == 'on' && steps.brief_pack.outputs.ready == 'true'
+        continue-on-error: true
+        run: |
+          # 模型與思考程度：market_brief.py 自己讀環境裡的 AI_PLAIN_*，這裡不另外帶
+          set -o pipefail
+          python market_brief.py run --slot "$SLOT" --analysis data/daily-update-state/last-market-pack/analysis-data.js \
+            --inputs "$RUNNER_TEMP/market-brief-inputs.json" \
+            --agy-bin "$RUNNER_TEMP/agy/antigravity" --agy-home "$RUNNER_TEMP/agy-home" \
+            --sql-output "$RUNNER_TEMP/market-brief.sql" \
+            --report "data/daily-update-log/market-brief/$(date +%F)-$SLOT.json" | tee "$RUNNER_TEMP/market-brief.json"
+
+      - name: 盤勢解讀：寫進 D1（失敗不影響這一輪消息）
+        if: success() && env.DRY_RUN == 'false' && vars.MARKET_ANA_MARKET_BRIEF_SCHEDULE == 'on' && steps.brief_pack.outputs.ready == 'true'
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -s "$RUNNER_TEMP/market-brief.sql" ]; then
+            cd cloud
+            npx --yes wrangler@4 d1 execute market-ana-accounts --remote --file "$RUNNER_TEMP/market-brief.sql"
+          else
+            echo "這一班沒有要寫的盤勢解讀"
+          fi
+
+      # 設定頁的 Gemini 用量：這一班有呼叫到模型就記一筆（任務名稱 market-brief；一天最多四筆：白天三班＋18:00）。
+      - name: 盤勢解讀：記進 Gemini 用量（設定頁用；失敗不影響這一輪消息）
+        if: success() && env.DRY_RUN == 'false' && vars.MARKET_ANA_MARKET_BRIEF_SCHEDULE == 'on' && steps.brief_pack.outputs.ready == 'true'
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          export HOME="$RUNNER_TEMP/agy-home"
+          python market_brief.py usage --report "$RUNNER_TEMP/market-brief.json" --run-id "$GITHUB_RUN_ID" \
+            --agy-bin "$RUNNER_TEMP/agy/antigravity" --sql-output "$RUNNER_TEMP/market-brief-usage.sql"
+          if [ -s "$RUNNER_TEMP/market-brief-usage.sql" ]; then
+            cd cloud
+            npx --yes wrangler@4 d1 execute market-ana-accounts --remote --file "$RUNNER_TEMP/market-brief-usage.sql"
+          fi
+
       - name: 執行摘要
         if: always()
         run: |
@@ -220,4 +299,4 @@ jobs:
 
       - name: 清除 agy 登入檔、朋友金鑰密文與暫存
         if: always()
-        run: rm -rf "$RUNNER_TEMP/agy-home" "$RUNNER_TEMP/agy" "$RUNNER_TEMP/friend-keys.json" "$RUNNER_TEMP/gemini-usage.sql" "$RUNNER_TEMP/ai-models.json" "$RUNNER_TEMP/ai-model-read.sql"
+        run: rm -rf "$RUNNER_TEMP/agy-home" "$RUNNER_TEMP/agy" "$RUNNER_TEMP/friend-keys.json" "$RUNNER_TEMP/gemini-usage.sql" "$RUNNER_TEMP/ai-models.json" "$RUNNER_TEMP/ai-model-read.sql" "$RUNNER_TEMP/market-brief-inputs.json" "$RUNNER_TEMP/market-brief.sql" "$RUNNER_TEMP/market-brief-usage.sql" "$RUNNER_TEMP/market-brief.json" data/daily-update-log/market-brief data/daily-update-state/last-market-pack

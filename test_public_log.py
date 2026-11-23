@@ -111,9 +111,23 @@ class PublicLogTests(unittest.TestCase):
                               "gnews-backfill:2330": {"status": "ok"}, "cna": {"status": "ok"}, "mops": {"status": "ok"}}}
         public = pl.watch_news_daily(report)
         self.assert_nothing_private(public)
-        self.assertEqual(public["sources"], {"gnews": {"ok": 1, "error": 1}, "gnews-backfill": {"ok": 1, "error": 0},
+        self.assertEqual(public["sources"], {"gnews": {"ok": 1, "error": 1, "reasons": {"HTTP 429": 1}},
+                                             "gnews-backfill": {"ok": 1, "error": 0},
                                              "cna": {"ok": 1, "error": 0}, "mops": {"ok": 1, "error": 0}})
         self.assertEqual(pl.watch_news_daily({"status": "not-migrated"}), {"status": "not-migrated"})
+
+    def test_stock_news_failures_say_why_without_the_search_or_the_news(self):
+        url = "https://news.google.com/rss/search?q=%22台積電%22+(2330+OR+股)"
+        reasons = ["HTTP 503", "來源要求放慢，這一輪沒抓", "來源要求放慢，這一輪沒抓",
+                   f"ConnectionError: HTTPSConnectionPool(host='news.google.com'): Max retries exceeded with url: {url}",
+                   "格式不對：不是 XML（syntax error: line 1）", "發布時間看不懂：'台積電 2330'", "台積電 2330 怪訊息", None]
+        report = {"status": "ok", "stocks": 8, "stored": 0,
+                  "sources": {f"gnews:{2330 + n}": {"status": "error", **({"reason": reason} if reason else {})}
+                              for n, reason in enumerate(reasons)}}
+        public = pl.watch_news_daily(report)
+        self.assert_nothing_private(public, "台積電", "news.google.com/rss/search", "syntax error")
+        self.assertEqual(public["sources"], {"gnews": {"ok": 0, "error": 8, "reasons": {
+            "HTTP 503": 1, "skipped-after-slow-down": 2, "ConnectionError": 1, "format-changed": 2, "other": 2}}})
 
     def test_the_full_report_goes_to_the_private_file(self):
         with tempfile.TemporaryDirectory() as folder:

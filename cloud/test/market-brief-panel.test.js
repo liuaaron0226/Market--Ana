@@ -31,6 +31,22 @@ const brief = (over = {}) => ({ schema: "market-brief/v1", one_line: "一句結�
 const keys = (html) => [...html.matchAll(/<button type="button" role="radio" data-cat="([^"]+)" aria-checked="(true|false)">([^<]+)<\/button>/g)].map((m) => [m[1], m[3], m[2] === "true"]);
 const texts = (svg) => [...svg.matchAll(/<text[^>]*>([^<]*)<\/text>/g)].map((m) => m[1]);
 const aria = (svg) => /aria-label="([^"]*)"/.exec(svg)[1];
+// 追蹤事項（/api/impact-watch 的項目；票 05）
+const MET = { id: "a", subject: "2454", subject_name: "聯發科", kind: "numeric", label: "收盤站上壓力（3,430）", impact: 2, status: "met",
+  prepare: ["如果跌回 3,430 之下，就把這一天當成單日事件"], level: 3430, direction: "above", last_close: 3685, last_date: "2026-11-20",
+  source: { block: "消息", date: "2026-11-18" }, result: { date: "2026-11-20", note: "成立：11/20 收 3,685，站上壓力 3,430。" } };
+const WATCHING = { id: "b", subject: "market", kind: "numeric", label: "加權指數收盤跌破近 20 日低點（44,920）", impact: 3, status: "watching",
+  prepare: ["如果跌破，就先檢查持股比重"], level: 44920, direction: "below", last_close: 47036, last_date: "2026-11-20",
+  source: { block: "消息", date: "2026-11-18" }, days_left: 12 };
+const NEWS = { id: "c", subject: "market", kind: "news", label: "央行公布理監事會議結果", impact: 2, status: "watching", prepare: [], source: { block: "消息", date: "2026-11-18" }, days_left: 9 };
+const heads = (html) => [...html.matchAll(/<h4 class="plain-tab-say">([^<]*)<\/h4>/g)].map((m) => m[1]);
+const tracking = (watch) => MB.categories(brief(), watch).at(-1).cat;
+const bars = (svg) => [...svg.matchAll(/<rect x="([\d.]+)" y="\d+" width="([\d.]+)" height="15" rx="3" fill="var\(--(up|down|dim)\)" opacity="([\d.]+)"\/>/g)]
+  .map((m) => ({ x: Number(m[1]), width: Number(m[2]), tone: m[3], opacity: Number(m[4]) }));
+const axisX = (svg) => Number(/<line x1="([\d.]+)" x2="[\d.]+" y1="20" y2="\d+" class="axis"\/>/.exec(svg)[1]);
+const MARKETS = [{ key: "dji", name: "道瓊", change_pct: -1.2, date: "2026-11-20" }, { key: "sox", name: "費城半導體", change_pct: 3.1, date: "2026-11-20" },
+  { key: "n225", name: "日經 225", change_pct: 0.84, date: "2026-11-23" }];
+const HOME = { name: "加權指數", change_pct: 2.2, date: "2026-11-23" };
 
 test("面板：一句結論 → 一排類別鍵（名稱與順序固定）→ 停在這一班影響最大的那一類", () => {
   const html = MB.panelHtml(brief({ cats: [cat("tech"), cat("chips")] }), OV, impactPoints);
@@ -40,10 +56,14 @@ test("面板：一句結論 → 一排類別鍵（名稱與順序固定）→ �
   assert.doesNotMatch(html, /data-chart="foreign"/, "一次只有一類");
 });
 
-test("類別鍵：五類的名稱與先後；這一班沒有的不出現、不認得的略過", () => {
+test("類別鍵：五類的名稱與先後；這一班沒有的不出現、不認得的略過；追蹤事項不看那一份、只看站主自己的追蹤事項", () => {
   const all = brief({ lead: "news", cats: ["tracking", "tech", "sectors", "chips", "news", "overseas"].map((key) => cat(key)) });
-  assert.deepEqual(keys(MB.panelHtml(all, OV, impactPoints)),
-    [["overseas", "國際股市", false], ["news", "市場消息", true], ["chips", "籌碼面", false], ["tech", "技術面", false], ["tracking", "追蹤事項", false]]);
+  const four = [["overseas", "國際股市", false], ["news", "市場消息", true], ["chips", "籌碼面", false], ["tech", "技術面", false]];
+  assert.deepEqual(keys(MB.panelHtml(all, OV, impactPoints)), four, "那一份裡叫 tracking 的不算");
+  assert.deepEqual(keys(MB.panelHtml(all, OV, impactPoints, undefined, [WATCHING])), [...four, ["tracking", "追蹤事項", false]]);
+  for (const none of [undefined, null, [], [null, { label: "" }, "x"]]) assert.deepEqual(keys(MB.panelHtml(all, OV, impactPoints, undefined, none)), four, "沒有項目就沒有那一顆");
+  assert.deepEqual(keys(MB.panelHtml(brief({ lead: "tracking" }), OV, impactPoints, undefined, [WATCHING])).map((key) => key[2]), [true, false, false], "lead 不會指到追蹤事項");
+  assert.deepEqual(keys(MB.panelHtml(brief(), OV, impactPoints, "tracking", [WATCHING])).map((key) => key[2]), [false, false, true], "重畫時留在追蹤事項");
   assert.deepEqual(keys(MB.panelHtml(brief({ cats: [cat("sectors"), cat("tech"), null, { key: "chips" }] }), OV, impactPoints)), [["tech", "技術面", true]]);
 });
 
@@ -163,12 +183,131 @@ test("加權指數：只畫到資料日；不滿 21 天算不出均線就不畫"
   assert.notEqual(MB.indexLine(daily.slice(0, 21), LAST), "");
 });
 
+// ---- 國際股市（票 03）----
+test("各市場漲跌幅：有漲有跌時軸在中間，由大到小，台股最後一列、實心粗體；數字帶正負號、一位小數", () => {
+  const svg = MB.overseasBars(MARKETS, HOME);
+  assert.match(svg, /^<svg class="plain-chart" data-chart="overseas" viewBox="0 0 340 126" role="img" aria-label="/);
+  assert.deepEqual(texts(svg), ["各市場漲跌幅（%）", "費城半導體", "+3.1", "日經 225", "+0.8", "道瓊", "-1.2", "加權指數", "+2.2"]);
+  assert.equal(aria(svg), "各市場漲跌幅：費城半導體 +3.1%、日經 225 +0.8%、道瓊 -1.2%、加權指數 +2.2%");
+  assert.equal(axisX(svg), 201);
+  const drawn = bars(svg);
+  assert.deepEqual(drawn.map((bar) => [bar.tone, bar.opacity]), [["up", 0.55], ["up", 0.55], ["down", 0.55], ["up", 1]], "紅漲綠跌；台股那一列不透明");
+  assert.deepEqual([drawn[0].x, drawn[0].width], [201, 91], "最大的那一根填滿半邊");
+  assert.ok(Math.abs(drawn[2].x + drawn[2].width - 201) < 0.11 && drawn[2].x >= 110, "下跌的往左");
+  assert.match(svg, /class="t-name">費城半導體</);
+  assert.match(svg, /class="t-strong">加權指數</);
+  assert.match(svg, /class="t-strong t-up">\+3\.1</);
+  assert.match(svg, /class="t-strong t-down">-1\.2</);
+  assert.doesNotMatch(svg, /<title|legend/, "不放圖例");
+});
+
+test("各市場漲跌幅：全部上漲軸靠左、全部下跌軸靠右，長條都在名稱與數字之間；持平的不上色", () => {
+  const up = MB.overseasBars(MARKETS.map((row) => ({ ...row, change_pct: Math.abs(row.change_pct) })), HOME);
+  assert.equal(axisX(up), 110);
+  assert.deepEqual(bars(up).map((bar) => bar.x), [110, 110, 110, 110]);
+  assert.equal(Math.max(...bars(up).map((bar) => bar.width)), 182);
+  const down = MB.overseasBars(MARKETS.map((row) => ({ ...row, change_pct: -Math.abs(row.change_pct) })), { ...HOME, change_pct: -0.04 });
+  assert.equal(axisX(down), 292);
+  assert.deepEqual(texts(down), ["各市場漲跌幅（%）", "日經 225", "-0.8", "道瓊", "-1.2", "費城半導體", "-3.1", "加權指數", "0.0"]);
+  assert.ok(bars(down).slice(0, 3).every((bar) => bar.x >= 109.9 && Math.abs(bar.x + bar.width - 292) < 0.11), "下跌的從軸往左，不蓋到名稱");
+  assert.equal(bars(down).at(-1).tone, "dim");
+  assert.match(down, /class="t-strong">0\.0</);
+  const flat = MB.overseasBars([{ name: "道瓊", change_pct: 0 }], null);
+  assert.deepEqual(texts(flat).slice(1), ["道瓊", "0.0"]);
+});
+
+test("各市場漲跌幅：沒有海外市場的數字就不畫；台股那一列拿不到就不放；壞掉的項目略過", () => {
+  for (const markets of [undefined, null, [], "x", [null, { name: "道瓊" }, { name: "", change_pct: 1 }, { name: "日經 225", change_pct: "abc" }]]) {
+    assert.equal(MB.overseasBars(markets, HOME), "");
+  }
+  assert.deepEqual(texts(MB.overseasBars(MARKETS, undefined)).slice(1), ["費城半導體", "+3.1", "日經 225", "+0.8", "道瓊", "-1.2"]);
+  assert.deepEqual(texts(MB.overseasBars([null, ...MARKETS.slice(0, 1)], { name: "加權指數" })).slice(1), ["道瓊", "-1.2"]);
+  assert.match(MB.overseasBars([{ name: "<b>x</b>", change_pct: 1 }], null), /&lt;b&gt;x&lt;\/b&gt;/);
+});
+
+test("國際股市那一類：一句判斷 → 橫條圖 → 影響／觀察／因應；沒有 markets 不畫；沒有新東西只有一句", () => {
+  const full = cat("overseas", { markets: MARKETS, home: HOME });
+  const html = MB.categoryHtml(full, OV, impactPoints);
+  assert.match(html, /^<h4 class="plain-tab-say">overseas：一句判斷<\/h4><div class="plain-group"><div class="plain-charts"><svg class="plain-chart" data-chart="overseas".*<\/svg><\/div><dl class="news-points"><dt>影響<\/dt>/);
+  assert.equal((html.match(/<svg /g) || []).length, 1);
+  assert.equal(MB.categoryHtml(cat("overseas", { home: HOME }), OV, impactPoints), `<h4 class="plain-tab-say">overseas：一句判斷</h4><div class="plain-group">${impactPoints(cat("overseas"))}</div>`);
+  assert.equal(MB.categoryHtml({ key: "overseas", say: "國際股市資料尚未更新", quiet: true, markets: MARKETS }, OV, impactPoints),
+    '<h4 class="plain-tab-say is-quiet">國際股市資料尚未更新</h4>');
+});
+
+// ---- 市場消息（票 04）----
+test("市場消息那一類：只有文字（一句判斷＋影響／觀察／因應），沒有圖、來源與時間；沒有新東西只有一句", () => {
+  const news = cat("news", { markets: MARKETS, home: HOME, items: [{ title: "標題", link: "https://example.com" }], generated_at: "2026-11-23T14:00:00+08:00" });
+  const html = MB.categoryHtml(news, OV, impactPoints);
+  assert.equal(html, `<h4 class="plain-tab-say">news：一句判斷</h4><div class="plain-group">${impactPoints(news)}</div>`);
+  assert.doesNotMatch(html, /<svg|<a |<time|<small|example\.com|2026-11-23/);
+  assert.equal(MB.categoryHtml({ key: "news", say: "本時段無影響大盤的新消息", quiet: true, effect: "不該出現" }, OV, impactPoints),
+    '<h4 class="plain-tab-say is-quiet">本時段無影響大盤的新消息</h4>');
+});
+
+// ---- 追蹤事項（票 05）----
+test("價位刻度：價位一根刻度線、收盤一個圓點，下面標高於／低於幾 %；條件達到了才上色", () => {
+  const met = MB.levelTrack(MET);
+  assert.match(met, /^<svg class="plain-chart" data-chart="level" viewBox="0 0 340 66" role="img" aria-label="/);
+  assert.deepEqual(texts(met), ["3,430", "收 3,685", "高於 7.4%"]);
+  assert.equal(aria(met), "價位 3,430，11/20 收 3,685，收盤高於價位 7.4%，已達條件");
+  assert.match(met, /class="track"\/>.*class="track-hot is-up"\/>.*class="tick"\/><circle cx="[\d.]+" cy="38" r="6" fill="var\(--up\)"\/>/);
+  assert.match(met, /class="t-strong t-up">高於 7\.4%</);
+  const tick = Number(/<line x1="([\d.]+)" x2="[\d.]+" y1="28" y2="48" class="tick"/.exec(met)[1]), dot = Number(/<circle cx="([\d.]+)"/.exec(met)[1]);
+  assert.ok(tick > 60 && dot < 280 && dot - tick > 100, `${tick} ${dot}`);
+  const waiting = MB.levelTrack(WATCHING);
+  assert.deepEqual(texts(waiting), ["44,920", "收 47,036", "高於 4.7%"]);
+  assert.equal(aria(waiting), "價位 44,920，11/20 收 47,036，收盤高於價位 4.7%，未達條件");
+  assert.match(waiting, /class="track-hot"\/>/);
+  assert.match(waiting, /fill="var\(--ink\)"/);
+  assert.match(waiting, /class="t-strong">高於 4\.7%</);
+  const broke = MB.levelTrack({ ...WATCHING, last_close: 44100 });
+  assert.match(broke, /class="track-hot is-down"/);
+  assert.match(broke, /class="t-strong t-down">低於 1\.8%</);
+  assert.match(aria(broke), /收盤低於價位 1\.8%，已達條件$/);
+});
+
+test("價位刻度：兩個數字很近時上面兩段字左右讓開；小數照實寫；數字欄位不齊就不畫", () => {
+  const near = MB.levelTrack({ ...MET, level: 100, last_close: 100.5 });
+  assert.deepEqual(texts(near), ["100", "收 100.5", "高於 0.5%"]);
+  const [level, close] = [...near.matchAll(/<text x="([\d.]+)" y="20" text-anchor="(\w+)"/g)].map((m) => [Number(m[1]), m[2]]);
+  assert.deepEqual([level[1], close[1]], ["end", "start"]);
+  assert.ok(close[0] - level[0] >= 8, `${level[0]} ${close[0]}`);
+  assert.deepEqual(texts(MB.levelTrack({ ...MET, last_close: 3430 })).slice(2), ["持平"]);
+  for (const broken of [NEWS, null, {}, { ...MET, level: undefined }, { ...MET, level: "3430" }, { ...MET, last_close: undefined }, { ...MET, last_close: 0 },
+    { ...MET, direction: "up" }, { ...MET, last_date: undefined }]) assert.equal(MB.levelTrack(broken), "");
+});
+
+test("追蹤事項那一類：一項一段——對象＋條件一行、刻度、因應；沒有數字欄位的不畫刻度、條件照原文", () => {
+  const html = MB.categoryHtml(tracking([MET, WATCHING, NEWS]), OV, impactPoints);
+  assert.deepEqual(heads(html), ["聯發科 收盤站上壓力：成立", "加權指數收盤跌破近 20 日低點", "央行公布理監事會議結果"]);
+  assert.ok(html.startsWith('<section class="plain-track"><h4 class="plain-tab-say">聯發科 收盤站上壓力：成立</h4><div class="plain-group"><div class="plain-charts"><svg class="plain-chart" data-chart="level"'));
+  assert.match(html, /<\/svg><\/div><dl class="news-points"><dt>因應<\/dt><dd><p>如果跌回 3,430 之下，就把這一天當成單日事件<\/p><\/dd><\/dl><\/div><\/section><section class="plain-track">/);
+  assert.ok(html.endsWith('<section class="plain-track"><h4 class="plain-tab-say">央行公布理監事會議結果</h4></section>'), "消息型：沒有刻度、沒有因應就只有那一行");
+  assert.equal((html.match(/data-chart="level"/g) || []).length, 2);
+  assert.doesNotMatch(html, /<dt>影響|<dt>觀察|<small|出自|剩 \d+ 日|AI/, "沒有多餘的小字");
+  const plain = MB.categoryHtml(tracking([{ ...WATCHING, last_close: undefined }, { ...MET, status: "failed", level: undefined, subject_name: undefined }]), OV, impactPoints);
+  assert.deepEqual(heads(plain), ["2454 收盤站上壓力（3,430）：未成立", "加權指數收盤跌破近 20 日低點（44,920）"], "沒有刻度時價位留在那一行；沒記名稱的寫代號");
+  assert.doesNotMatch(plain, /plain-chart/);
+  assert.doesNotMatch(MB.categoryHtml(tracking([{ ...NEWS, label: "<img src=x>" }]), OV, impactPoints), /<img/);
+});
+
+test("追蹤事項那一類：有結果的在前，其餘照離價位的遠近、畫不出刻度的排後面；最多 5 項", () => {
+  const watching = (id, gap) => ({ ...WATCHING, id, label: id, ...(gap === null ? { level: undefined } : { level: 100, last_close: 100 + gap }) });
+  const list = [watching("far", 10), NEWS, watching("near", 1), { ...MET, id: "r1", label: "r1", subject: "market" }, watching("none", null), watching("mid", 5),
+    { ...NEWS, id: "r2", label: "r2", status: "failed", result: { date: "2026-11-19", note: "" } }];
+  assert.deepEqual(heads(MB.categoryHtml(tracking(list), OV, impactPoints)), ["r1：成立", "r2：未成立", "near", "mid", "far"]);
+  assert.deepEqual(heads(MB.categoryHtml(tracking(list.slice(0, 3)), OV, impactPoints)), ["near", "far", NEWS.label]);
+});
+
 test("首頁那張卡與面板的接法：有這一份就只放一句結論、清單清空；沒有就照舊", () => {
   const source = readFileSync(new URL("../../web/minimal.js", import.meta.url), "utf8");
   assert.match(source, /if \(features\.market_brief_v1 && window\.MarketBrief\) \{/);
   assert.match(source, /if \(!brief\) \{ showPlain\(\); return; \}/);
   assert.match(source, /\$\('readList'\)\.innerHTML = '';/);
   assert.match(source, /else if \(panelState\.kind === 'plain'\) els\.panelBody\.innerHTML = renderPlainPanel\(\);/);
+  assert.match(source, /if \(features\.impact_watch_v1\) window\.MarketBrief\.loadWatch\(\)/, "追蹤事項開著才去拿站主的追蹤事項");
+  assert.match(source, /panelHtml\(BRIEF, OV, impactPoints, panelState\.payload\.cat, BRIEF_WATCH\)/);
   const page = readFileSync(new URL("../../web/minimal.html", import.meta.url), "utf8");
   assert.ok(page.indexOf('<script src="market-brief.js') > 0 && page.indexOf('<script src="market-brief.js') < page.indexOf('<script src="minimal.js'), "先載入 market-brief.js");
   assert.match(page, /<link rel="stylesheet" href="market-brief\.css/);

@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -160,17 +161,38 @@ def watch_nominate(candidates: Any, stocks: Any) -> dict[str, Any]:
 
 
 def watch_news_daily(report: Mapping[str, Any]) -> dict[str, Any]:
-    """watch_news.daily 的報告 → 來源原本一檔一格（gnews:代號），合成每個來源成功、失敗各幾檔。"""
+    """watch_news.daily 的報告 → 來源原本一檔一格（gnews:代號），合成每個來源成功、失敗各幾檔。
+    失敗的另外按原因的種類數（reasons）：沒有這個就看不出是被擋、格式變了還是連不上。"""
     out = dict(report)
     sources = report.get("sources")
     if isinstance(sources, Mapping):
-        merged: dict[str, dict[str, int]] = {}
+        merged: dict[str, dict[str, Any]] = {}
         for name, result in sources.items():
             status = result.get("status") if isinstance(result, Mapping) else None
             bucket = merged.setdefault(str(name).split(":", 1)[0], {"ok": 0, "error": 0})
-            bucket["ok" if status == "ok" else "error"] += 1
+            if status == "ok":
+                bucket["ok"] += 1
+                continue
+            bucket["error"] += 1
+            kind = _reason_kind(result.get("reason") if isinstance(result, Mapping) else None)
+            reasons = bucket.setdefault("reasons", {})
+            reasons[kind] = reasons.get(kind, 0) + 1
         out["sources"] = merged
     return out
+
+
+def _reason_kind(reason: Any) -> str:
+    """失敗原因 → 可以公開的種類。原文可能帶搜尋網址（裡面有股票名稱）或新聞內容，所以只留
+    HTTP 狀態碼、例外的類別名稱，或固定的幾個字。"""
+    text = str(reason or "").strip()
+    if re.fullmatch(r"HTTP \d{3}", text):
+        return text
+    if text.startswith("來源要求放慢"):
+        return "skipped-after-slow-down"
+    if text.startswith(("格式不對", "發布時間")):
+        return "format-changed"
+    name = re.match(r"[A-Za-z_][A-Za-z0-9_]*(?=:|$)", text)
+    return name.group(0)[:40] if name else "other"
 
 
 def write_private(path: Any, report: Any) -> bool:

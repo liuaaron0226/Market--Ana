@@ -8,6 +8,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import re
 import sqlite3
 import tempfile
 import unittest
@@ -23,6 +24,15 @@ ROOT = Path(__file__).resolve().parent
 MIGRATION = ROOT / "cloud/migrations/0035_market_brief.sql"
 NOW = datetime(2026, 11, 6, 10, 31, tzinfo=timezone.utc)   # 台北 18:31
 DAY = "2026-11-06"
+MONDAY = "2026-11-09"          # 資料包（週五 11-06）之後的第一個交易日：白天的班用前一交易日的籌碼
+ORDER = ["overseas", "news", "chips", "tech"]
+MIGRATIONS = ROOT / "cloud/migrations"
+
+
+def all_lines(payload):
+    """payload 裡所有會顯示的句子。"""
+    return [payload["one_line"]] + [line for cat in payload["cats"]
+                                    for line in (cat["say"], cat.get("effect", ""), *cat.get("conditions", []), *cat.get("prepare", []))]
 
 
 def good(**overrides):
@@ -63,7 +73,9 @@ class Model:
         return (answer, None, "模型說了一句不該公開的話") if isinstance(answer, str) else ("ok", answer, "")
 
 
-class Cli(unittest.TestCase):
+class Base(unittest.TestCase):
+    """命令列入口的共用工具：暫存資料夾裡放一份資料包，跑 run、把 SQL 套進 0035 的表。"""
+
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
@@ -99,6 +111,8 @@ class Cli(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         return json.loads(rows[0]["payload"])
 
+
+class Cli(Base):
     # ---- 合格的回答 ----
 
     def test_a_valid_answer_becomes_the_payload_of_the_contract(self):
@@ -111,22 +125,25 @@ class Cli(unittest.TestCase):
                          {"schema": "market-brief/v1", "trade_date": DAY, "slot": "evening",
                           "generated_at": "2026-11-06T18:31:00+08:00", "source": "ai", "lead": "tech"})
         self.assertEqual(sorted(payload), ["cats", "generated_at", "lead", "one_line", "schema", "slot", "source", "trade_date"])
-        self.assertEqual([cat["key"] for cat in payload["cats"]], ["chips", "tech"])
-        for cat in payload["cats"]:
+        self.assertEqual([cat["key"] for cat in payload["cats"]], ORDER)
+        for cat in payload["cats"][2:]:
             self.assertEqual(sorted(cat), ["conditions", "data_date", "effect", "key", "prepare", "quiet", "say"])
             self.assertEqual((cat["data_date"], cat["quiet"]), (DAY, False))
+        # 沒有 --inputs：國際股市、市場消息各只有一句
+        self.assertEqual(payload["cats"][:2], [{"key": "overseas", "say": "國際股市資料尚未更新", "quiet": True},
+                                               {"key": "news", "say": "本時段無影響大盤的新消息", "quiet": True}])
         self.assertEqual((printed["status"], printed["source"], printed["attempts"], printed["categories"]),
-                         ("ok", "ai", 1, ["chips", "tech"]))
+                         ("ok", "ai", 1, ORDER))
+        self.assertEqual(printed["quiet"], {"overseas": True, "news": True, "chips": False, "tech": False})
 
     def test_numbers_come_from_the_facts_not_from_the_model(self):
         payload = self.payload(self.run_cli(Model(good()))[2])
-        chips, tech = payload["cats"]
+        chips, tech = payload["cats"][2:]
         self.assertEqual(payload["one_line"], "籌碼面與技術面同步偏空，外資現貨連 60 天賣超。")
         self.assertEqual(chips["say"], "外資現貨與期貨部位同步偏空：外資現貨今天賣超 912 億，外資台指期淨空單比一週前增加 4,279 口。")
         self.assertEqual(tech["say"], "指數跌破短期均線：加權指數在 20 日均線之下。")
         self.assertRegex(tech["conditions"][0], r"^收盤是否站回 20 日均線（約 [\d,]+ 點）$")
-        texts = [payload["one_line"]] + [line for cat in payload["cats"]
-                                         for line in (cat["say"], cat["effect"], *cat["conditions"], *cat["prepare"])]
+        texts = all_lines(payload)
         self.assertFalse([line for line in texts if "{" in line or "}" in line], "代號都換成了事實")
 
     def test_the_model_only_sees_the_facts_of_this_shift(self):
@@ -138,7 +155,7 @@ class Cli(unittest.TestCase):
 
     def test_more_than_two_conditions_are_cut_and_missing_ones_are_filled(self):
         many = with_cat("chips", conditions=["外資現貨是否轉為買超", "投信是否持續買超", "融資餘額是否止穩"], prepare=[])
-        chips = self.payload(self.run_cli(Model(many))[2])["cats"][0]
+        chips = self.payload(self.run_cli(Model(many))[2])["cats"][2]
         self.assertEqual(chips["conditions"], ["外資現貨是否轉為買超", "投信是否持續買超"])
         self.assertTrue(chips["prepare"], "模型沒寫的因應用程式套句補上")
         self.assertTrue(all("如果" in line and "就" in line for line in chips["prepare"]))
@@ -174,10 +191,10 @@ class Cli(unittest.TestCase):
         payload = json.loads(row["payload"])
         self.assertEqual(payload["source"], "template")
         self.assertEqual(payload["one_line"], "盤勢偏空：籌碼面偏空、技術面偏弱。")
-        chips, tech = payload["cats"]
+        chips, tech = payload["cats"][2:]
         self.assertEqual(chips["say"], "籌碼面偏空：外資現貨連 60 天賣超，外資台指期淨空單 99,930 口。")
         self.assertEqual(tech["say"], "技術面偏弱：加權指數在 20 日均線之下。")
-        for cat in payload["cats"]:
+        for cat in payload["cats"][2:]:
             self.assertTrue(cat["effect"])
             self.assertTrue(1 <= len(cat["conditions"]) <= 2 and 1 <= len(cat["prepare"]) <= 2)
             self.assertTrue(all("如果" in line and "就" in line for line in cat["prepare"]))
@@ -293,10 +310,10 @@ class Cli(unittest.TestCase):
                 printed, _, sql, _ = self.run_cli(Model(good()), slot=slot)
                 payload = self.payload(sql)
                 self.assertEqual((printed["status"], payload["slot"], payload["trade_date"]), ("ok", slot, DAY))
-                self.assertEqual([cat["key"] for cat in payload["cats"]], ["chips", "tech"])
+                self.assertEqual([cat["key"] for cat in payload["cats"]], ORDER)
         printed, _, sql, _ = self.run_cli(Model(good()), "--date", "2026-11-09", slot="morning")
         payload = self.payload(sql)
-        self.assertEqual((payload["trade_date"], payload["cats"][0]["data_date"]), ("2026-11-09", DAY), "白天的班用前一交易日的籌碼")
+        self.assertEqual((payload["trade_date"], payload["cats"][2]["data_date"]), ("2026-11-09", DAY), "白天的班用前一交易日的籌碼")
 
     # ---- 公開的輸出 ----
 
@@ -305,10 +322,10 @@ class Cli(unittest.TestCase):
         printed, private, _, out = self.run_cli(Model(bad, good()))
         for secret in ("賣壓沉重", "首當其衝", "同步偏空", "均線反壓", "one_line", "payload"):
             self.assertNotIn(secret, out)
-        self.assertEqual(sorted(printed), ["attempts", "categories", "data_dates", "dry_run", "effort", "failure", "lead", "model",
-                                           "model_called", "rejected", "slot", "source", "status", "trade_date"])
+        self.assertEqual(sorted(printed), ["attempts", "categories", "data_dates", "dry_run", "effort", "failure", "inputs", "lead",
+                                           "model", "model_called", "quiet", "rejected", "slot", "source", "status", "trade_date"])
         self.assertEqual((printed["model"], printed["effort"]), (mb.MODEL_DEFAULT, mb.EFFORT_DEFAULT))
-        self.assertEqual(private["payload"]["cats"][0]["effect"], "賣壓主要來自外資，權值股首當其衝。")
+        self.assertEqual(private["payload"]["cats"][2]["effect"], "賣壓主要來自外資，權值股首當其衝。")
         self.assertNotIn("sql", private)
 
     def test_the_model_and_effort_follow_the_settings_page(self):
@@ -344,6 +361,361 @@ class Cli(unittest.TestCase):
             with self.subTest(text=text):
                 (self.folder / "printed.json").unlink(missing_ok=True)
                 self.assertEqual(self.usage(text), "")
+
+
+# ---- 票 03／04／06：國際股市、市場消息、白天三班 ----
+
+OVERSEAS_CAT = {"key": "overseas", "say": "國際股市多數收高，費半領漲：{ov_sox}。", "effect": "半導體權值股開盤具支撐。",
+                "conditions": ["美股科技股是否延續漲勢"],
+                "prepare": ["如果美股科技股轉弱，就先確認台股半導體權值股是否同步回落。"]}
+NEWS_CAT = {"key": "news", "say": "消息面偏多：金管會祭出限空令。", "effect": "融券放空受限，權值股賣壓減輕。",
+            "conditions": ["金管會是否公布正式名單"], "prepare": ["如果限空令範圍擴大，就先確認融券部位的影響。"]}
+OWNER_ONLY = "站主的鴻海庫存首當其衝"    # owner_effect 與站主自選的內容：不能進查詢結果、提示或 payload
+
+
+def full(*, overseas=None, news=None, **overrides):
+    """四類都寫的回答；overseas／news 給 False 就不寫那一類（那一類這一班只有一句時）。"""
+    answer = good(**overrides)
+    extra = [dict(OVERSEAS_CAT, **(overseas or {})) if overseas is not False else None,
+             dict(NEWS_CAT, **(news or {})) if news is not False else None]
+    answer["cats"] = [cat for cat in extra if cat] + answer["cats"]
+    return answer
+
+
+def d1_schema():
+    """查詢要讀的四張表（加上不該讀的那一張），照遷移檔原文建。"""
+    def table(file, name):
+        return re.search(rf"CREATE TABLE {name} \(.*?\n\);", (MIGRATIONS / file).read_text(encoding="utf-8"), re.S).group(0)
+    alters = [line for file in ("0032_stock_news_marks.sql", "0033_news_impact.sql")
+              for line in re.findall(r"ALTER TABLE market_news_(?:runs|items) ADD COLUMN [^;]+;", (MIGRATIONS / file).read_text(encoding="utf-8"))]
+    return "\n".join([table("0016_watch_peers.sql", "overseas_quotes"), table("0016_watch_peers.sql", "overseas_fetch_status"),
+                      *(table("0031_market_news.sql", name) for name in ("market_news_runs", "market_news_items", "market_news_user_items")),
+                      *alters])
+
+
+SYMBOLS = {"dji": "DJI.INDX", "ixic": "IXIC.INDX", "gspc": "GSPC.INDX", "sox": "SOX.INDX", "n225": "N225.INDX", "ks11": "KS11.INDX"}
+MOVES = {"dji": 0.5, "ixic": 1.2, "gspc": 0.8, "sox": 3.1, "n225": -0.4, "ks11": 0.2}   # 最後一根對前一根（%）
+
+
+def bars(last, previous, *, only=None, moves=MOVES):
+    """每個指數兩根日線：previous 收 1000、last 照 moves 漲跌。only 給了就只有那幾個。"""
+    return [(SYMBOLS[key], day, close) for key, move in moves.items() if only is None or key in only
+            for day, close in ((previous, 1000.0), (last, 1000.0 * (1 + move / 100)))]
+
+
+LIMIT_NEWS = {"id": "n1", "grp": "tw", "kind": "policy", "tone": "up", "impact": 3, "title": "金管會祭出限空令",
+              "reason": "限制平盤下放空", "effect": "融券放空受限，權值股賣壓減輕。"}
+FLOW_NEWS = {"id": "n2", "grp": "tw", "kind": "flows", "tone": "down", "impact": 2, "title": "外資賣超逾 600 億",
+             "reason": "外資連續賣超", "effect": "權值股承壓。"}
+SMALL_NEWS = {"id": "n3", "grp": "us", "kind": "other", "tone": "flat", "impact": 1, "title": "某公司舉辦週年活動",
+              "reason": "例行活動", "effect": "影響有限。"}
+
+
+def news_run(day, slot, *, status="ok", taiex=None, items=(LIMIT_NEWS, FLOW_NEWS, SMALL_NEWS),
+             summary="美股收高帶動台股開高，金管會祭出限空令。"):
+    indices = [{"name": "費城半導體", "change_pct": 3.1, "date": "2026-11-06"}]
+    if taiex:
+        indices.insert(0, {"name": "加權", "change_pct": taiex[0], "date": taiex[1]})
+    return {"run_id": f"{day}-{slot}", "trade_date": day, "slot": slot, "status": status, "summary": summary if status == "ok" else None,
+            "effect": "限空令減輕權值股賣壓。" if status == "ok" else None, "indices": indices, "items": list(items)}
+
+
+class Categories(Base):
+    def d1(self, trade_date, *, quotes=(), status=(), runs=()):
+        """把列放進和 D1 同結構的表，跑 inputs_sql 那一句，存成 wrangler --json 的樣子；回傳檔案路徑。"""
+        db = sqlite3.connect(":memory:")
+        db.executescript(d1_schema())
+        db.executemany("INSERT INTO overseas_quotes (symbol, date, close, source, fetched_at) VALUES (?, ?, ?, 'eodhd', 'x')", quotes)
+        db.executemany("INSERT INTO overseas_fetch_status (symbol, source, attempted_at, ok, succeeded_at) VALUES (?, 'eodhd', 'x', ?, ?)", status)
+        for run in runs:
+            db.execute("INSERT INTO market_news_runs (run_id, trade_date, slot, created_at, status, summary, indices, effect, owner_effect) "
+                       "VALUES (?, ?, ?, 'x', ?, ?, ?, ?, ?)",
+                       (run["run_id"], run["trade_date"], run["slot"], run["status"], run["summary"],
+                        json.dumps(run["indices"], ensure_ascii=False), run["effect"], OWNER_ONLY))
+            for item in run["items"]:
+                db.execute("INSERT INTO market_news_items (run_id, item_id, grp, market, kind, tone, impact, title, reason, source, link, "
+                           "published_at, effect, owner_effect) VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, '中央通訊社', 'https://example.test/' || ?, "
+                           "'2026-11-09T00:00:00Z', ?, ?)",
+                           (run["run_id"], item["id"], item["grp"], item["kind"], item["tone"], item["impact"], item["title"],
+                            item["reason"], item["id"], item["effect"], OWNER_ONLY))
+            db.execute("INSERT INTO market_news_user_items (email, run_id, code, link, tone, impact, title, reason) "
+                       "VALUES ('owner@example.test', ?, '2317', 'https://example.test/own', 'down', 3, ?, ?)",
+                       (run["run_id"], OWNER_ONLY, OWNER_ONLY))
+        rows = [{"row_type": kind, "data": data} for kind, data in db.execute(mb.inputs_sql(trade_date))]
+        path = self.folder / "inputs.json"
+        path.write_text("wrangler 的提示文字\n" + json.dumps([{"results": rows, "success": True, "meta": {}}], ensure_ascii=False), encoding="utf-8")
+        return path
+
+    def brief(self, model, trade_date=MONDAY, slot="morning", **tables):
+        """回傳（payload, 印出來的報告, 不公開的報告, 整段 stdout）。"""
+        printed, private, sql, out = self.run_cli(model, "--date", trade_date, "--inputs", str(self.d1(trade_date, **tables)), slot=slot)
+        return self.payload(sql), printed, private, out
+
+    def cat(self, payload, key):
+        return next(cat for cat in payload["cats"] if cat["key"] == key)
+
+    # ---- 國際股市（票 03） ----
+
+    def test_overseas_changes_are_computed_by_the_program_with_their_own_dates(self):
+        model = Model(full(news=False))
+        payload, printed, _, _ = self.brief(model, quotes=bars(DAY, "2026-11-05"))   # 週一盤前：最近一個海外交易日是上週五
+        overseas = self.cat(payload, "overseas")
+        self.assertEqual(overseas["markets"], [
+            {"key": "dji", "name": "道瓊", "change_pct": 0.5, "date": DAY}, {"key": "ixic", "name": "那斯達克", "change_pct": 1.2, "date": DAY},
+            {"key": "gspc", "name": "標普 500", "change_pct": 0.8, "date": DAY}, {"key": "sox", "name": "費城半導體", "change_pct": 3.1, "date": DAY},
+            {"key": "n225", "name": "日經 225", "change_pct": -0.4, "date": DAY}, {"key": "ks11", "name": "韓國綜合", "change_pct": 0.2, "date": DAY}])
+        self.assertEqual((overseas["data_date"], overseas["quiet"], payload["source"]), (DAY, False, "ai"))
+        self.assertEqual(overseas["say"], "國際股市多數收高，費半領漲：費城半導體上漲 3.1%（11/06）。")
+        self.assertNotIn("home", overseas, "盤前沒有台股的即時漲跌，那一班消息也沒帶")
+        self.assertEqual((printed["inputs"]["markets"], printed["quiet"]["overseas"]), (list(SYMBOLS), False))
+        self.assertIn("ov_sox", model.prompts[0])
+        self.assertIn("標普 500 上漲 0.8%（11/06）", model.prompts[0])
+
+    def test_the_model_cannot_write_overseas_numbers_or_reverse_the_direction(self):
+        up = {key: abs(move) for key, move in MOVES.items()}
+        for answer, word in ((full(news=False, overseas={"say": "費城半導體大漲 3.1%。"}), "數字"),
+                             (full(news=False, overseas={"say": "美股收低：{ov_sox}。"}), "方向矛盾"),
+                             (full(news=False, overseas={"say": "國際股市收高：{foreign_today}。"}), "不屬於這一類")):
+            with self.subTest(word):
+                _, _, private, _ = self.brief(Model(answer, answer), quotes=bars(DAY, "2026-11-05", moves=up))
+                self.assertIn(word, private["rejected"][0]["problems"][0]["reason"])
+
+    def test_an_index_whose_fetch_was_missed_is_left_out(self):
+        # 週二盤前：美股週一的那一根沒抓到（最後一次成功是週一台北 18:30，美股還沒收），日韓有週一的
+        quotes = bars(DAY, "2026-11-05", only=("dji", "ixic", "gspc", "sox")) + bars(MONDAY, DAY, only=("n225", "ks11"))
+        status = [(symbol, 1, "2026-11-09T10:30:00Z") for symbol in SYMBOLS.values()]
+        payload, printed, _, _ = self.brief(Model("model_timeout"), "2026-11-10", quotes=quotes, status=status)
+        overseas = self.cat(payload, "overseas")
+        self.assertEqual([row["key"] for row in overseas["markets"]], ["n225", "ks11"])
+        self.assertEqual((overseas["data_date"], overseas["quiet"], payload["source"]), (MONDAY, False, "template"))
+        self.assertEqual(overseas["say"], "國際股市漲跌互見：韓國綜合上漲 0.2%（11/09），日經 225 下跌 0.4%（11/09）。")
+
+    def test_a_market_holiday_keeps_the_last_session_when_the_fetch_was_made_after_it(self):
+        # 週五盤前，美股週四感恩節休市：最後一根是週三，但週五台北 07:00 抓過、成功 → 是休市不是沒抓到
+        quotes = bars("2026-11-25", "2026-11-24", only=("dji", "ixic", "gspc", "sox")) + bars("2026-11-26", "2026-11-25", only=("n225", "ks11"))
+        fetched = [(symbol, 1, "2026-11-26T23:00:00Z") for symbol in SYMBOLS.values()]
+        payload, _, _, _ = self.brief(Model("model_timeout"), "2026-11-27", quotes=quotes, status=fetched)
+        self.assertEqual({row["key"]: row["date"] for row in self.cat(payload, "overseas")["markets"]},
+                         {"dji": "2026-11-25", "ixic": "2026-11-25", "gspc": "2026-11-25", "sox": "2026-11-25",
+                          "n225": "2026-11-26", "ks11": "2026-11-26"})
+        failed = [(symbol, 0, "2026-11-25T23:00:00Z") for symbol in SYMBOLS.values()]
+        payload, _, _, _ = self.brief(Model("model_timeout"), "2026-11-27", quotes=quotes, status=failed)
+        self.assertEqual([row["key"] for row in self.cat(payload, "overseas")["markets"]], ["n225", "ks11"], "最後一次沒抓成：不當成休市")
+
+    def test_when_every_index_is_stale_the_category_is_one_sentence_and_the_model_is_not_asked_about_it(self):
+        model = Model(good())
+        for tables in ({"quotes": bars("2026-11-03", "2026-11-02")},                    # 都停在上週二
+                       {"quotes": [row for row in bars(DAY, "2026-11-05") if row[1] == DAY]},   # 各只有一根，算不出漲跌
+                       {}):                                                             # 表是空的
+            with self.subTest(tables=tables):
+                payload, printed, _, _ = self.brief(model, **tables)
+                self.assertEqual(self.cat(payload, "overseas"), {"key": "overseas", "say": "國際股市資料尚未更新", "quiet": True})
+                self.assertEqual((payload["source"], printed["quiet"]["overseas"], printed["inputs"]["markets"]), ("ai", True, []))
+                self.assertNotIn("overseas（國際股市）", model.prompts[-1])
+                self.assertNotIn("ov_", model.prompts[-1])
+
+    def test_the_evening_shift_adds_the_home_index_from_the_pack(self):
+        payload, _, _, _ = self.brief(Model(full(news=False, overseas={"say": "國際股市多數收高，台股逆勢走弱：{ov_sox}，{ov_home}。"})),
+                                      DAY, "evening", quotes=bars("2026-11-05", "2026-11-04"))
+        overseas = self.cat(payload, "overseas")
+        self.assertEqual(overseas["home"], {"name": "加權指數", "change_pct": -4.5, "date": DAY})
+        self.assertEqual(overseas["say"], "國際股市多數收高，台股逆勢走弱：費城半導體上漲 3.1%（11/05），加權指數 11/06 下跌 4.5%。")
+        self.assertNotIn("intraday", self.cat(payload, "tech"))
+
+    def test_the_six_indices_are_the_ones_the_site_fetches(self):
+        import overseas_peers
+        self.assertEqual({symbol for _, symbol, _, _ in mb.OVERSEAS}, set(overseas_peers.HOME_INDICES))
+        self.assertEqual({key: symbol for key, symbol, _, _ in mb.OVERSEAS}, SYMBOLS)
+
+    # ---- 市場消息（票 04） ----
+
+    def test_news_comes_from_the_latest_run_of_the_day_with_shared_fields_only(self):
+        model = Model(full(overseas=False))
+        path = self.d1(MONDAY, runs=[news_run(MONDAY, "morning"), news_run("2026-11-06", "close")])
+        self.assertNotIn(OWNER_ONLY, path.read_text(encoding="utf-8"), "查詢不讀 owner_effect 與任何人的自選")
+        printed, _, sql, out = self.run_cli(model, "--date", MONDAY, "--inputs", str(path), slot="morning")
+        payload = self.payload(sql)
+        news = self.cat(payload, "news")
+        self.assertEqual(news, {**NEWS_CAT, "data_date": MONDAY, "quiet": False})
+        self.assertEqual((payload["source"], printed["inputs"]["news_run"], printed["inputs"]["news_items"]), ("ai", "morning", 2))
+        prompt = model.prompts[0]
+        for needed in ("NEWS:", "金管會祭出限空令", "外資賣超逾 600 億", "美股收高帶動台股開高", "news（市場消息）"):
+            self.assertIn(needed, prompt)
+        for secret in (OWNER_ONLY, "owner_effect", "owner@example.test", "某公司舉辦週年活動", "example.test"):
+            self.assertNotIn(secret, prompt)
+        self.assertNotIn("金管會", out, "印出來的報告沒有模型寫的句子")
+
+    def test_owner_only_fields_never_reach_the_prompt_even_if_the_input_file_has_them(self):
+        path = self.d1(MONDAY, runs=[news_run(MONDAY, "morning")])
+        raw = path.read_text(encoding="utf-8")
+        payload = json.loads(raw[raw.index("["):])
+        for row in payload[0]["results"]:
+            data = json.loads(row["data"])
+            data.update({"owner_effect": OWNER_ONLY, "my_track": [{"code": "站主的代號"}], "email": "owner@example.test"})
+            row["data"] = json.dumps(data, ensure_ascii=False)
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        model = Model(full(overseas=False))
+        printed, private, _, out = self.run_cli(model, "--date", MONDAY, "--inputs", str(path), slot="morning")
+        self.assertEqual(printed["source"], "ai")
+        for text in (model.prompts[0], out, json.dumps(private, ensure_ascii=False)):
+            for secret in (OWNER_ONLY, "站主的代號", "my_track", "owner@example.test"):
+                self.assertNotIn(secret, text)
+
+    def test_news_numbers_and_names_must_come_from_the_supplied_news(self):
+        runs = [news_run(MONDAY, "morning")]
+        for say, word in (("外資賣超逾 900 億，消息面偏空。", "數字"), ("輝達 NVIDIA 財報亮眼，消息面偏多。", "NVIDIA"),
+                          ("你的持股受限空令影響。", "讀者"), ("消息面偏多，建議買進權值股。", "買賣指令"),
+                          ("消息面偏多：{foreign_today}。", "不用代號")):
+            with self.subTest(say):
+                answer = full(overseas=False, news={"say": say})
+                _, printed, private, _ = self.brief(Model(answer, answer), runs=runs)
+                self.assertEqual(printed["source"], "template")
+                self.assertIn(word, private["rejected"][0]["problems"][0]["reason"])
+        payload, printed, _, _ = self.brief(Model(full(overseas=False, news={"say": "外資賣超逾 600 億，金管會祭出限空令。"})), runs=runs)
+        self.assertEqual((printed["source"], self.cat(payload, "news")["say"]), ("ai", "外資賣超逾 600 億，金管會祭出限空令。"))
+
+    def test_without_impactful_news_the_category_is_one_sentence(self):
+        quiet = {"key": "news", "say": "本時段無影響大盤的新消息", "quiet": True}
+        for runs in ([], [news_run(MONDAY, "morning", items=[SMALL_NEWS])], [news_run(MONDAY, "morning", status="unclassified")],
+                     [news_run("2026-11-06", "close")],        # 別天的
+                     [news_run(MONDAY, "close")]):             # 這一班之後的
+            with self.subTest(runs=[run["run_id"] + run["status"] for run in runs]):
+                model = Model(good())
+                payload, printed, _, _ = self.brief(model, runs=runs)
+                self.assertEqual(self.cat(payload, "news"), quiet)
+                self.assertEqual((payload["source"], printed["quiet"]["news"]), ("ai", True))
+                self.assertNotIn("NEWS:", model.prompts[0])
+
+    def test_each_shift_reads_the_latest_run_not_after_it(self):
+        runs = [news_run(MONDAY, "morning", summary="盤前：美股收高。"), news_run(MONDAY, "midday", summary="盤中：台股走高。"),
+                news_run(MONDAY, "close", summary="收盤：台股收高。")]
+        for slot, expected in (("morning", "盤前"), ("midday", "盤中"), ("close", "收盤"), ("evening", "收盤")):
+            with self.subTest(slot):
+                model = Model("model_timeout")
+                payload, printed, _, _ = self.brief(model, MONDAY, slot, runs=runs)
+                self.assertIn(f'"summary":"{expected}', model.prompts[0])
+                self.assertEqual(printed["inputs"]["news_run"], "close" if slot == "evening" else slot)
+                self.assertTrue(self.cat(payload, "news")["say"].startswith(expected), "套句用那一班自己的總結（所有人看得到的那一句）")
+
+    # ---- 白天三班（票 06） ----
+
+    def test_daytime_sentences_cannot_call_the_previous_session_today(self):
+        for answer in (with_cat("chips", say="今天外資現貨續賣：{foreign_today}。"), with_cat("chips", effect="今日賣壓主要來自外資。"),
+                       with_cat("tech", conditions=["本日收盤是否站回 {ma20_line}"]),
+                       good(one_line="今天籌碼面偏空，{foreign_streak}。")):
+            with self.subTest(answer=answer):
+                _, printed, private, _ = self.brief(Model(answer, answer))
+                self.assertEqual(printed["source"], "template")
+                self.assertIn("不能寫「今天」", private["rejected"][0]["problems"][0]["reason"])
+        dated = with_cat("chips", say="{price_date} 外資現貨續賣：{foreign_today}。")
+        dated["one_line"] = "今天盤前留意國際股市，籌碼面仍偏空。"      # 沒引用籌碼數字的結論可以講今天
+        payload, printed, _, _ = self.brief(Model(dated))
+        self.assertEqual((printed["source"], payload["trade_date"], payload["slot"]), ("ai", MONDAY, "morning"))
+        chips = self.cat(payload, "chips")
+        self.assertEqual((chips["say"], chips["data_date"]), ("11/06 外資現貨續賣：外資現貨 11/06 賣超 912 億。", DAY))
+        self.assertEqual(self.cat(payload, "tech")["data_date"], DAY)
+
+    def test_the_prompt_tells_the_model_to_write_the_date_only_when_the_pack_is_older(self):
+        model = Model(good())
+        self.brief(model)
+        for needed in ("不可寫「今天」「今日」「本日」", "{price_date}", "11/06", "外資現貨 11/06 賣超 912 億"):
+            self.assertIn(needed, model.prompts[0])
+        self.assertNotIn("外資現貨今天", model.prompts[0])
+        evening = Model(good())
+        self.run_cli(evening)
+        self.assertNotIn("不可寫「今天」", evening.prompts[0])
+        self.assertIn("外資現貨今天賣超 912 億", evening.prompts[0])
+        payload = self.payload(self.run_cli(Model(with_cat("chips", say="今天外資現貨續賣：{foreign_today}。")))[2])
+        self.assertEqual(payload["source"], "ai", "18:00 那一班的籌碼就是今天的")
+
+    def test_the_midday_shift_carries_the_live_index_from_the_news_run(self):
+        runs = [news_run(MONDAY, "midday", taiex=(2.04, MONDAY))]
+        answer = full(overseas={"say": "國際股市多數收高，台股同步走高：{ov_sox}，{ov_home}。"})
+        answer = {**answer, "cats": [dict(cat, say="指數盤中反彈，仍在短期均線之下：{intraday}，{ma20_side}。") if cat["key"] == "tech" else cat
+                                     for cat in answer["cats"]]}
+        payload, printed, _, _ = self.brief(Model(answer), MONDAY, "midday", quotes=bars(DAY, "2026-11-05"), runs=runs)
+        self.assertEqual(printed["source"], "ai")
+        tech, overseas = self.cat(payload, "tech"), self.cat(payload, "overseas")
+        self.assertEqual(tech["intraday"], {"change_pct": 2.0, "date": MONDAY})
+        self.assertEqual(tech["say"], "指數盤中反彈，仍在短期均線之下：加權指數 11/09 盤中上漲 2.0%，加權指數在 20 日均線之下。")
+        self.assertEqual(overseas["home"], {"name": "加權指數", "change_pct": 2.0, "date": MONDAY})
+        borrowed = {**answer, "cats": [dict(cat, say="籌碼面偏空：{intraday}。") if cat["key"] == "chips" else cat for cat in answer["cats"]]}
+        _, _, private, _ = self.brief(Model(borrowed, borrowed), MONDAY, "midday", quotes=bars(DAY, "2026-11-05"), runs=runs)
+        self.assertIn("不屬於這一類", private["rejected"][0]["problems"][0]["reason"])
+
+    def test_before_the_open_the_home_index_is_the_previous_close_and_tech_has_no_intraday(self):
+        for taiex, home in (((-4.51, DAY), {"name": "加權指數", "change_pct": -4.5, "date": DAY}), ((0.0, MONDAY), None),
+                            ((1.0, "2026-11-04"), None), ((1.0, "不是日期"), None)):
+            with self.subTest(taiex=taiex):
+                payload, _, _, _ = self.brief(Model("model_timeout"), quotes=bars(DAY, "2026-11-05"),
+                                              runs=[news_run(MONDAY, "morning", taiex=taiex)])
+                self.assertEqual(self.cat(payload, "overseas").get("home"), home)
+                self.assertNotIn("intraday", self.cat(payload, "tech"))
+
+    def test_the_template_is_valid_for_every_shift(self):
+        for slot, day in (("morning", MONDAY), ("midday", MONDAY), ("close", MONDAY), ("evening", DAY)):
+            for tables in ({}, {"quotes": bars(DAY if slot != "evening" else "2026-11-05", "2026-11-04"),
+                                "runs": [news_run(day, "morning", taiex=(1.5, day))]}):
+                with self.subTest(slot=slot, inputs=bool(tables)):
+                    payload, printed, _, _ = self.brief(Model("model_timeout"), day, slot, **tables)
+                    self.assertEqual((printed["status"], payload["source"], payload["slot"], payload["trade_date"]), ("ok", "template", slot, day))
+                    self.assertEqual([cat["key"] for cat in payload["cats"]], ORDER)
+                    active = [cat for cat in payload["cats"] if not cat["quiet"]]
+                    self.assertEqual(len(active), 4 if tables else 2)
+                    self.assertIn(payload["lead"], [cat["key"] for cat in active])
+                    for cat in payload["cats"]:
+                        if cat["quiet"]:
+                            self.assertEqual(sorted(cat), ["key", "quiet", "say"])
+                            continue
+                        # 票 02 的前端讀的欄位都在
+                        self.assertLessEqual({"key", "say", "effect", "conditions", "prepare", "data_date", "quiet"}, set(cat))
+                        self.assertTrue(cat["say"] and cat["effect"])
+                        self.assertTrue(1 <= len(cat["conditions"]) <= 2 and 1 <= len(cat["prepare"]) <= 2)
+                        self.assertTrue(all("如果" in line and "就" in line for line in cat["prepare"]))
+                    lines = all_lines(payload)
+                    self.assertFalse([line for line in lines if "{" in line or "}" in line])
+                    self.assertFalse([line for line in lines if re.search("買進|賣出|加碼|減碼|停損", line)])
+                    if slot != "evening":
+                        dated = [line for cat in payload["cats"] if cat["key"] in ("chips", "tech") for line in all_lines({"one_line": "", "cats": [cat]})]
+                        self.assertFalse([line for line in dated if re.search("今天|今日|本日", line)])
+                        self.assertIn("（11/06）", self.cat(payload, "chips")["say"])
+
+    def test_an_unreadable_input_file_only_silences_the_two_categories(self):
+        path = self.folder / "inputs.json"
+        for text in ("wrangler 沒有回東西", '[{"results": [{"row_type": "quote", "data": "不是 JSON"}, 7]}]', None):
+            with self.subTest(text=text):
+                path.unlink(missing_ok=True)
+                if text is not None:
+                    path.write_text(text, encoding="utf-8")
+                printed, _, sql, _ = self.run_cli(Model(good()), "--date", MONDAY, "--inputs", str(path), slot="close")
+                payload = self.payload(sql)
+                self.assertEqual((printed["status"], payload["source"]), ("ok", "ai"))
+                self.assertEqual([cat["quiet"] for cat in payload["cats"]], [True, True, False, False])
+
+    # ---- 查詢 ----
+
+    def inputs_sql(self, *args, now=NOW):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            code = mb.main(["inputs-sql", *args], now=now)
+        self.assertEqual(code, 0)
+        return out.getvalue().strip()
+
+    def test_the_query_is_one_statement_over_shared_tables_only(self):
+        sql = self.inputs_sql("--slot", "morning", "--date", MONDAY)
+        self.assertEqual(sql, mb.inputs_sql(MONDAY).strip())
+        self.assertEqual((sql.count(";"), sql.count("\n")), (1, 0), "一句、一行：wrangler --command 直接吃")
+        self.assertNotRegex(sql, r"owner_effect|market_news_user_items|watchlist|email|INSERT|UPDATE|DELETE")
+        self.assertIn("'2026-11-09'", sql)
+        for symbol in SYMBOLS.values():
+            self.assertIn(f"'{symbol}'", sql)
+
+    def test_the_query_uses_the_same_trade_date_as_the_run(self):
+        pack = str(self.folder / "analysis-data.js")
+        self.assertIn(f"trade_date = '{DAY}'", self.inputs_sql("--slot", "evening", "--analysis", pack))
+        self.assertIn("trade_date = '2026-11-07'", self.inputs_sql("--slot", "midday", now=datetime(2026, 11, 6, 17, 0, tzinfo=timezone.utc)))
+        self.assertEqual(self.inputs_sql("--slot", "evening", "--analysis", str(self.folder / "no-such.js")), "", "讀不到資料包：不印、照樣結束 0")
+        self.assertEqual(self.inputs_sql("--slot", "close", "--date", "2026-13-40"), "")
 
 
 class Migration(unittest.TestCase):

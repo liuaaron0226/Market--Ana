@@ -1,15 +1,18 @@
 /* 盤勢解讀改版（本人 2026-11-23「共識達成」；樣品 design-previews/plain-top3/ 的 ?l=b；.scratch/market-brief 票 02）。
    首頁「盤勢解讀」那張卡點開之後：一句結論 → 一排類別鍵（網站現成的 .chip-seg，一次只看一類）→ 那一類的一句判斷、圖、影響／觀察／因應。
    類別的名稱與順序在這裡定（國際股市 → 市場消息 → 籌碼面 → 技術面 → 追蹤事項）；那一班有哪幾類就出現哪幾顆鍵，不認得的類別略過。
-   圖的數字不由模型寫：用首頁已經有的序列畫（外資每日買賣超、外資期貨淨部位、加權指數日線），只畫到那一類的資料日為止；
-   數字直接標在圖上、不放圖例，紅漲綠跌照網站的 --up／--down。需要的序列不夠就不畫。
-   開合、卡片上的那一句與沒有資料時退回原本的解讀都在 minimal.js；這裡只有讀資料與組畫面。資料：/api/market-brief。 */
+   圖的數字不由模型寫：籌碼面、技術面用首頁已經有的序列畫（外資每日買賣超、外資期貨淨部位、加權指數日線），只畫到那一類的資料日為止；
+   國際股市用產生器算好放在那一類裡的漲跌幅（票 03）；市場消息只有文字（票 04）。
+   數字直接標在圖上、不放圖例，紅漲綠跌照網站的 --up／--down。需要的數字不夠就不畫。
+   追蹤事項（票 05）不在那一份裡：站主的 /api/impact-watch 有項目時，這裡在最後多一顆鍵，內容直接用那些項目畫（價位刻度＋因應）。
+   開合、卡片上的那一句與沒有資料時退回原本的解讀都在 minimal.js；這裡只有讀資料與組畫面。資料：/api/market-brief、/api/impact-watch。 */
 (() => {
   'use strict';
   const CATEGORIES = [['overseas', '國際股市'], ['news', '市場消息'], ['chips', '籌碼面'], ['tech', '技術面'], ['tracking', '追蹤事項']];
   const W = 340;                 // 圖的座標寬（實際寬度跟著面板縮放）
   const FOREIGN_DAYS = 20, FUTURES_DAYS = 20, WEEK = 5;
   const INDEX_DAYS = 40, MA = 20;
+  const TRACKING = 'tracking', TRACK_MAX = 5;
 
   const esc = text => String(text ?? '').replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
   const filled = value => typeof value === 'string' && value.trim() !== '';
@@ -115,39 +118,127 @@
       + `<text x="${W - 2}" y="${(closeY + shift).toFixed(1)}" text-anchor="end" class="t-strong">收 ${num(last)}</text>`, label);
   }
 
-  // 那一類的圖：籌碼面兩張、技術面一張；其他類別（之後的票）與沒有新東西的那一類不畫
+  // 各市場漲跌幅（票 03）：橫條，由大到小，台股放最後一列、顏色加深。三欄：名稱、從中軸出發的長條（跌往左、漲往右）、帶正負號的數字。
+  // 數字由產生器算好放在那一類裡（markets、home）。長條的比例跟著資料：最大的那一根填滿可用的寬度；
+  // 全部上漲時軸靠左、全部下跌時軸靠右、有漲有跌時軸在中間。沒有海外市場的數字就不畫。
+  function overseasBars(markets, home) {
+    const usable = row => row && typeof row === 'object' && filled(row.name) && row.change_pct !== null && row.change_pct !== ''
+      && Number.isFinite(Number(row.change_pct));
+    const tenth = row => ({ name: row.name.trim(), pct: Math.round(Number(row.change_pct) * 10) / 10 + 0 });
+    const list = (Array.isArray(markets) ? markets : []).filter(usable).map(tenth).sort((a, b) => b.pct - a.pct);
+    if (!list.length) return '';
+    const rows = usable(home) ? [...list, { ...tenth(home), home: true }] : list;
+    const most = Math.max(0, ...rows.map(row => row.pct)), least = Math.min(0, ...rows.map(row => row.pct));
+    const left = 110, right = W - 48, mixed = least < 0 && most > 0;
+    const axis = mixed ? (left + right) / 2 : least < 0 ? right : left;
+    const scale = (mixed ? (right - left) / 2 : right - left) / (Math.max(most, -least) || 1);
+    const rowH = 26, height = 22 + rows.length * rowH;
+    const signed = pct => `${pct > 0 ? '+' : ''}${pct.toFixed(1)}`;
+    const body = rows.map((row, i) => {
+      const y = 24 + i * rowH, width = Math.max(1.5, Math.abs(row.pct) * scale);
+      const tone = row.pct < 0 ? 'down' : row.pct > 0 ? 'up' : '';
+      return `<text x="4" y="${y + 14}" class="${row.home ? 't-strong' : 't-name'}">${esc(row.name)}</text>`
+        + `<rect x="${(row.pct < 0 ? axis - width : axis).toFixed(1)}" y="${y + 3}" width="${width.toFixed(1)}" height="15" rx="3" fill="var(--${tone || 'dim'})" opacity="${row.home ? 1 : 0.55}"/>`
+        + `<text x="${W - 2}" y="${y + 14}" text-anchor="end" class="t-strong${tone ? ` t-${tone}` : ''}">${signed(row.pct)}</text>`;
+    }).join('');
+    const label = `各市場漲跌幅：${rows.map(row => `${row.name} ${signed(row.pct)}%`).join('、')}`;
+    return svg('overseas', height, `<text x="4" y="12" class="t-title">各市場漲跌幅（%）</text>`
+      + `<line x1="${axis.toFixed(1)}" x2="${axis.toFixed(1)}" y1="20" y2="${height - 2}" class="axis"/>${body}`, label);
+  }
+
+  // 追蹤的價位（票 05）：一條刻度，價位那裡一根刻度線（標價位）、最新收盤一個圓點（標「收 N」）、下面標收盤高於／低於價位幾 %。
+  // 條件已經達到（要站上的收在上面、要跌破的收在下面）才上色：站上用漲的顏色、跌破用跌的顏色；還沒達到用墨色。
+  // 範圍跟著兩個數字算；兩個數字很近時，上面兩段字左右讓開。四個數字欄位不齊（消息型、沒有價位的）就不畫。
+  const price = value => value.toLocaleString('en-US', { maximumFractionDigits: Math.abs(value) >= 1000 ? 0 : 2 });
+  function levelTrack(item) {
+    const level = item?.level, close = item?.last_close;
+    if (![level, close].every(value => typeof value === 'number' && Number.isFinite(value) && value > 0)
+      || !['above', 'below'].includes(item.direction) || !/^\d{4}-\d{2}-\d{2}/.test(item.last_date || '')) return '';
+    const above = item.direction === 'above', met = above ? close > level : close < level;
+    const tone = met ? (above ? 'up' : 'down') : '';
+    const pad = Math.max(Math.abs(close - level) * 0.6, level * 0.02);
+    const lo = Math.min(level, close) - pad, hi = Math.max(level, close) + pad;
+    const x = value => 10 + (value - lo) / (hi - lo) * (W - 20), xl = x(level), xc = x(close), middle = (xl + xc) / 2;
+    const levelText = price(level), closeText = `收 ${price(close)}`, wl = textWidth(levelText), wc = textWidth(closeText);
+    let levelAnchor = 'middle', closeAnchor = 'middle', lx = clamp(xl, wl / 2, W - wl / 2), cx = clamp(xc, wc / 2, W - wc / 2);
+    if (Math.abs(xl - xc) < (wl + wc) / 2 + 8) {
+      const levelFirst = level <= close;
+      levelAnchor = levelFirst ? 'end' : 'start';
+      closeAnchor = levelFirst ? 'start' : 'end';
+      lx = middle + (levelFirst ? -4 : 4);
+      cx = middle + (levelFirst ? 4 : -4);
+    }
+    const gap = Math.abs(close / level - 1) * 100;
+    const gapText = close === level ? '持平' : `${close > level ? '高於' : '低於'} ${gap.toFixed(1)}%`;
+    const label = `價位 ${levelText}，${monthDay(item.last_date)} ${closeText}，`
+      + `${close === level ? '收盤與價位持平' : `收盤${close > level ? '高於' : '低於'}價位 ${gap.toFixed(1)}%`}，${met ? '已達條件' : '未達條件'}`;
+    return svg('level', 66, `<line x1="10" x2="${W - 10}" y1="38" y2="38" class="track"/>`
+      + `<line x1="${xl.toFixed(1)}" x2="${xc.toFixed(1)}" y1="38" y2="38" class="track-hot${tone ? ` is-${tone}` : ''}"/>`
+      + `<line x1="${xl.toFixed(1)}" x2="${xl.toFixed(1)}" y1="28" y2="48" class="tick"/>`
+      + `<circle cx="${xc.toFixed(1)}" cy="38" r="6" fill="var(--${tone || 'ink'})"/>`
+      + `<text x="${lx.toFixed(1)}" y="20" text-anchor="${levelAnchor}" class="t-dim">${levelText}</text>`
+      + `<text x="${cx.toFixed(1)}" y="20" text-anchor="${closeAnchor}" class="t-strong">${closeText}</text>`
+      + `<text x="${clamp(middle, 34, W - 34).toFixed(1)}" y="60" text-anchor="middle" class="t-strong${tone ? ` t-${tone}` : ''}">${gapText}</text>`, label);
+  }
+
+  // 追蹤事項那一類要列的項目（票 05）：有結果的在前，其餘照離價位的遠近（近的先；畫不出刻度的排後面），最多 5 項
+  function tracked(watch) {
+    const list = (Array.isArray(watch) ? watch : []).filter(item => item && typeof item === 'object' && filled(item.label));
+    const far = item => (levelTrack(item) ? Math.abs(item.last_close / item.level - 1) : Infinity);
+    const open = list.filter(item => !item.result).map((item, at) => [item, far(item), at])
+      .sort((a, b) => (a[1] === b[1] ? 0 : a[1] - b[1]) || a[2] - b[2]).map(entry => entry[0]);
+    return [...list.filter(item => item.result), ...open].slice(0, TRACK_MAX);
+  }
+
+  // 追蹤事項的一項：對象＋條件一行（個股帶名稱；有結果的寫成立／未成立）→ 刻度 → 因應。有刻度時價位標在圖上，那一行就不重複寫
+  function trackedHtml(item, impactPoints) {
+    const chart = levelTrack(item), stock = item.subject !== 'market';
+    const name = stock ? ((filled(item.subject_name) && item.subject_name.trim()) || String(item.subject ?? '')) : '';
+    const state = item.status === 'met' ? '：成立' : item.status === 'failed' ? '：未成立' : '';
+    const title = `${name ? `${name} ` : ''}${chart ? item.label.replace(/（.*?）/g, '') : item.label}${state}`;
+    const lines = (Array.isArray(item.prepare) ? item.prepare : []).filter(filled);
+    const inner = `${chart ? `<div class="plain-charts">${chart}</div>` : ''}${lines.length ? impactPoints({ prepare: lines }) : ''}`;
+    return `<section class="plain-track"><h4 class="plain-tab-say">${esc(title)}</h4>${inner ? `<div class="plain-group">${inner}</div>` : ''}</section>`;
+  }
+
+  // 那一類的圖：國際股市一張、籌碼面兩張、技術面一張；市場消息與沒有新東西的那一類不畫
   function charts(cat, overview) {
     const date = filled(cat.data_date) ? cat.data_date : '';
     const drawn = (cat.key === 'chips' ? [foreignBars(overview?.chips?.foreign, date), futuresLine(overview?.chips?.futures, date)]
-      : cat.key === 'tech' ? [indexLine(overview?.analysis?.daily, date)] : []).filter(Boolean);
+      : cat.key === 'tech' ? [indexLine(overview?.analysis?.daily, date)]
+      : cat.key === 'overseas' ? [overseasBars(cat.markets, cat.home)] : []).filter(Boolean);
     return drawn.length ? `<div class="plain-charts">${drawn.join('')}</div>` : '';
   }
 
-  // 這一班有的類別，照固定的順序；不認得的 key 略過
-  function categories(brief) {
-    const list = Array.isArray(brief?.cats) ? brief.cats.filter(cat => cat && filled(cat.key) && filled(cat.say)) : [];
-    return CATEGORIES.map(([key, name]) => ({ name, cat: list.find(cat => cat.key === key) })).filter(item => item.cat);
+  // 這一班有的類別，照固定的順序；不認得的 key 略過。
+  // 追蹤事項不在那一份裡（個股的只有站主能看）：watch 是站主自己的追蹤事項，有項目才在最後多一顆鍵；那一份裡叫 tracking 的不算。
+  function categories(brief, watch) {
+    const list = Array.isArray(brief?.cats) ? brief.cats.filter(cat => cat && filled(cat.key) && filled(cat.say) && cat.key !== TRACKING) : [];
+    const items = tracked(watch);
+    return CATEGORIES.map(([key, name]) => ({ name, cat: key === TRACKING ? (items.length ? { key, items } : undefined) : list.find(cat => cat.key === key) }))
+      .filter(item => item.cat);
   }
 
-  // 一類的內容：一句判斷 → 圖 → 影響／觀察／因應。這一班沒有新東西（quiet）的只有那一句。
+  // 一類的內容：一句判斷 → 圖 → 影響／觀察／因應。這一班沒有新東西（quiet）的只有那一句。追蹤事項是一項一段。
   function categoryHtml(cat, overview, impactPoints) {
+    if (cat.key === TRACKING && Array.isArray(cat.items)) return cat.items.map(item => trackedHtml(item, impactPoints)).join('');
     if (cat.quiet === true) return `<h4 class="plain-tab-say is-quiet">${esc(cat.say)}</h4>`;
     return `<h4 class="plain-tab-say">${esc(cat.say)}</h4><div class="plain-group">${charts(cat, overview)}${impactPoints(cat)}</div>`;
   }
 
-  // current：面板現在停在哪一類（重畫時留在原地）；沒有就停在這一班影響最大的那一類，再沒有就第一類
-  function panelHtml(brief, overview, impactPoints, current) {
-    const list = categories(brief), head = `<p class="read-line big">${esc(brief.one_line)}</p>`;
+  // current：面板現在停在哪一類（重畫時留在原地）；沒有就停在這一班影響最大的那一類，再沒有就第一類。watch：站主的追蹤事項
+  function panelHtml(brief, overview, impactPoints, current, watch) {
+    const list = categories(brief, watch), head = `<p class="read-line big">${esc(brief.one_line)}</p>`;
     if (!list.length) return head;
-    const active = list.find(item => item.cat.key === current) || list.find(item => item.cat.key === brief.lead) || list[0];
+    const active = list.find(item => item.cat.key === current) || list.find(item => item.cat.key === brief.lead && item.cat.key !== TRACKING) || list[0];
     return `${head}<div class="plain-tabs"><div class="chip-seg" role="radiogroup" aria-label="類別">${list.map(item => `<button type="button" role="radio" data-cat="${esc(item.cat.key)}" aria-checked="${item === active}">${esc(item.name)}</button>`).join('')}</div></div>`
       + `<div id="plainTab">${categoryHtml(active.cat, overview, impactPoints)}</div>`;
   }
 
-  function bind(body, brief, overview, impactPoints, onPick) {
+  function bind(body, brief, overview, impactPoints, onPick, watch) {
     const strip = body.querySelector('.plain-tabs'), tab = body.querySelector('#plainTab');
     if (!strip || !tab) return;
-    const list = categories(brief), buttons = [...strip.querySelectorAll('button[data-cat]')];
+    const list = categories(brief, watch), buttons = [...strip.querySelectorAll('button[data-cat]')];
     // 類別鍵放不下、要左右滑的時候才把橫向的手勢還給瀏覽器（平常那一排是「按住滑到要的再放開」，見 chart-menus.js）
     // 面板畫好的時候還沒顯示、量不到寬度，所以跟著那一排的大小重量（打開、轉向、改視窗大小）
     // 放不下時先把選到的那一顆捲進來（影響最大的那一類可能排在後面），只在第一次量到時做
@@ -184,5 +275,19 @@
     } catch (_) { return null; }
   }
 
-  window.MarketBrief = { load, panelHtml, bind, categories, categoryHtml, foreignBars, futuresLine, indexLine };
+  // 站主自己的追蹤事項（票 05）：只有站主才有「追蹤事項」那一顆鍵，所以先確認是站主，再用盯項那支 API 的項目。
+  // 不是站主、功能關著、讀不到都回空清單（那一顆鍵就不出現）。
+  async function loadWatch() {
+    if (location.protocol === 'file:') return [];
+    const get = async url => {
+      const response = await fetch(url, { cache: 'no-store', headers: { Accept: 'application/json' } });
+      return response.ok ? response.json() : null;
+    };
+    try {
+      const [me, body] = await Promise.all([get('/api/me'), get('/api/impact-watch')]);
+      return me?.owner === true && body?.available && Array.isArray(body.items) ? tracked(body.items) : [];
+    } catch (_) { return []; }
+  }
+
+  window.MarketBrief = { load, loadWatch, panelHtml, bind, categories, categoryHtml, foreignBars, futuresLine, indexLine, overseasBars, levelTrack };
 })();

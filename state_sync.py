@@ -498,13 +498,21 @@ def collect_garbage(store) -> dict:
     return {"deleted": len(garbage), "kept": len(keys) - len(garbage)}
 
 
-def restore(target: Path, store, *, previous: bool = False) -> dict:
-    """下載並驗 SHA；全部通過才換到 target。任何物件缺漏或不符，target 不動。previous＝還原上一個資料日。"""
+def restore(target: Path, store, *, previous: bool = False, only: tuple[str, ...] | None = None) -> dict:
+    """下載並驗 SHA；全部通過才換到 target。任何物件缺漏或不符，target 不動。previous＝還原上一個資料日。
+    only：只還原這幾個工作集路徑（唯讀的排程只要其中一兩項時用，例如盤勢解讀白天的班只要 last-market-pack）；
+    其中任何一個不在 manifest 裡或沒有內容就拒絕。回傳的 manifest 只留還原的那幾個物件。"""
     manifest_key = PREVIOUS_MANIFEST if previous else MANIFEST
     raw = store.get(manifest_key)
     if raw is None:
         raise StateIntegrityError(f"找不到 {manifest_key}")
     manifest = _decode_manifest(raw)
+    if only is not None:
+        wanted = [entry for entry in manifest["objects"] if entry["path"] in only and not entry.get("missing")]
+        absent = sorted(set(only) - {entry["path"] for entry in wanted})
+        if absent:
+            raise StateIntegrityError(f"工作集裡沒有：{'、'.join(absent)}")
+        manifest = {**manifest, "objects": wanted}
     target.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=target) as scratch_dir:
         scratch = Path(scratch_dir)
@@ -570,7 +578,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--target", type=Path, default=ROOT, help="restore 目標根目錄")
     parser.add_argument("--confirm", action="store_true", help="init 真的上傳（否則只報錯提示）")
     parser.add_argument("--previous", action="store_true", help="restore 改還原上一個資料日（manifest.previous.json）")
+    parser.add_argument("--only", action="append", metavar="PATH",
+                        help="restore 只還原這個工作集路徑（可重複；例如 data/daily-update-state/last-market-pack）")
     args = parser.parse_args(argv)
+    if args.only and args.command != "restore":
+        parser.error("--only 只能用在 restore")
     if args.command == "plan":
         with tempfile.TemporaryDirectory() as scratch:
             sizes = []
@@ -602,7 +614,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "upload":
         manifest = upload(ROOT, store, data_date=args.data_date, cursor_domain=args.cursor_domain)
     else:
-        manifest = restore(args.target, store, previous=args.previous)
+        manifest = restore(args.target, store, previous=args.previous, only=tuple(args.only) if args.only else None)
     report = {"data_date": manifest["data_date"], "cursors": manifest.get("cursors"), "objects": len(manifest["objects"])}
     if args.command == "upload":
         try:  # 上傳已經成功；清不成只記一筆，下次上傳再清
