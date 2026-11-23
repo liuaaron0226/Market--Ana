@@ -37,7 +37,7 @@
     "MARKET_ANA_IMPACT_WATCH": "owner",
     // 盤勢解讀改版（本人 2026-11-23，.scratch/market-brief 票 02）：類別鍵＋圖。關著時首頁照舊顯示原本的解讀。
     // 打開要先問本人、而且正式資料庫要先套 0035：先改 "owner"（只開站主），本人看過再改 "all"。
-    "MARKET_ANA_MARKET_BRIEF": "off",
+    "MARKET_ANA_MARKET_BRIEF": "owner",
     // 本人 2026-11-16 20:2x「現在打開」：朋友 AI（已核准的朋友自己設定 Gemini 金鑰、每天用自己的金鑰產生大盤與籌碼解讀）。
     // 只認 "on"；主金鑰放在 Pages 與 GitHub 的機密設定，不寫在這裡。關閉＝拿掉這一行再部署（GitHub variable 也一起關）。
     "MARKET_ANA_FRIEND_AI": "on"
