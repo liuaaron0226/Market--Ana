@@ -261,7 +261,7 @@ jobs:
         if: steps.day.outputs.dry_run == ''
         continue-on-error: true
         env:
-          OWNER_EMAIL: ${{ vars.OWNER_EMAIL }}
+          OWNER_EMAIL: ${{ secrets.OWNER_EMAIL }}
         run: python watch_news.py daily --d1
 
       - name: 基金對照 0050：抓集保開放資料淨值、配息與央行匯率，存回 R2
@@ -359,13 +359,17 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          OWNER_EMAIL: ${{ vars.OWNER_EMAIL }}
+          OWNER_EMAIL: ${{ secrets.OWNER_EMAIL }}
+          DAY: ${{ steps.day.outputs.date }}
         run: |
           sync=$(python -c "import json,sys; print(json.load(open(sys.argv[1], encoding='utf-8'))['sync_state'])" "${{ runner.temp }}/daily-result.json")
           # 手動重新部署（redeploy）時也查一次：剛上線那天不用等到下一個交易日的發布才有當天的數字（owner 11-20）。
           # 重查同一天不會改掉已經有的結果，數字也只會被同一天或更新的蓋過。
+          # 倉庫公開之後這裡的輸出誰都看得到：印的是遮過的那一份（站主個股那一段只有數量，public_log.py），
+          # 完整的報告寫在 --private-report 的檔（不進 artifact）。
           if [ "$sync" = "True" ] || [ "${{ inputs.redeploy }}" = "true" ]; then
-            python impact_watch.py check --analysis data/daily-update-state/last-market-pack/analysis-data.js
+            python impact_watch.py check --analysis data/daily-update-state/last-market-pack/analysis-data.js \
+              --private-report "data/daily-update-log/impact-watch/$DAY.json"
           else
             echo "本次沒有新發布，盯項不重查"
           fi
@@ -444,7 +448,7 @@ jobs:
         if: success() && steps.day.outputs.dry_run == ''
         continue-on-error: true
         env:
-          OWNER_EMAIL: ${{ vars.OWNER_EMAIL }}
+          OWNER_EMAIL: ${{ secrets.OWNER_EMAIL }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
@@ -498,8 +502,9 @@ jobs:
           {
             echo "### 首頁白話分析（模式 $MODE）"
             if [ -f "$file" ]; then
-              python -c 'import json,sys; a=json.load(open(sys.argv[1],encoding="utf-8")); c=a.get("published") or a.get("candidate") or {}; print("- 來源：", a.get("source"), "；失敗原因：", a.get("failure"), "；核對沒過：", len(a.get("rejected") or []), "處"); [print("  -", r) for r in (a.get("rejected") or [])[:5]]; print("- 一句話：", c.get("one_line"))' "$file"
-              echo "（全文與核對紀錄在執行紀錄 artifact 的 plain-daily/$DAY.json）"
+              # 倉庫公開之後步驟摘要誰都看得到：模型寫的字（一句話、被退回的句子）不放，只放來源、原因與幾處。
+              python -c 'import json,sys; a=json.load(open(sys.argv[1],encoding="utf-8")); c=a.get("published") or a.get("candidate") or {}; print("- 來源：", a.get("source"), "；失敗原因：", a.get("failure"), "；核對沒過：", len(a.get("rejected") or []), "處；一句話：", len(c.get("one_line") or ""), "字")' "$file"
+              echo "（全文與核對紀錄在 data/daily-update-log/plain-daily/$DAY.json，發布成功時跟著工作集存到 R2；不放 artifact）"
             else
               echo "沒有白話分析紀錄檔：這一班沒建大盤資料包（等待、已完成或失敗在前面的步驟），或紀錄寫入失敗（看每日更新輸出裡 plain_daily 的 audit_error）"
             fi
@@ -532,12 +537,15 @@ jobs:
               || echo "::warning::這一班讀設定的結果寫不進去（遷移 0030 可能還沒套用）"
           fi
 
+      # 倉庫公開之後 artifact 誰都下載得到：只放最上層的那幾個檔（每日更新自己的執行紀錄 <資料日>.json、status.json、
+      # 休市日曆，都是大盤與排程的狀態）。子資料夾（plain-daily/ 白話分析的模型回答、impact-watch/ 與 impact-watch-news/
+      # 站主個股的盯項報告）不放。等待與失敗的那幾班不會同步工作集，這幾個最上層的檔只留在這裡。
       - name: 保存執行紀錄（包含等待與失敗）
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: daily-update-log-${{ steps.day.outputs.date }}
-          path: data/daily-update-log/
+          path: data/daily-update-log/*.json
           retention-days: 30
           if-no-files-found: ignore
 

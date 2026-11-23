@@ -665,6 +665,7 @@ def main(argv: Sequence[str]) -> int:
     parser.add_argument("--owner-email", default=os.environ.get("OWNER_EMAIL") or None,
                         help="站主的 email（預設讀環境變數 OWNER_EMAIL）：給了才判站主自選股與庫存的盯項")
     parser.add_argument("--dry-run", action="store_true", help="照樣讀、照樣判斷，但不寫網站資料庫")
+    parser.add_argument("--private-report", help="完整的報告另外寫到這個檔（不公開的地方）；印出來的那一份是遮過的")
     args = parser.parse_args(argv)
     analysis = read_assignment(Path(args.analysis))
     try:   # 白話分析讀不到（沒有這個檔、內容壞了）：照樣做每日判斷，只是不建它的條件
@@ -674,7 +675,10 @@ def main(argv: Sequence[str]) -> int:
     report = check(analysis, now=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                    query=wn._wrangler_query, execute=wn._wrangler_execute, dry_run=args.dry_run, plain=plain,
                    owner_email=args.owner_email)
-    print(json.dumps(report, ensure_ascii=False))
+    # 倉庫公開之後排程的輸出誰都看得到：站主個股那一段只印數量，完整的只寫進 --private-report。
+    import public_log
+    public_log.write_private(args.private_report, report)
+    print(json.dumps(public_log.impact_watch(report), ensure_ascii=False))
     return 0
 
 

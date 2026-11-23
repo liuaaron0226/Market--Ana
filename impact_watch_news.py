@@ -403,7 +403,10 @@ def main(argv: Sequence[str]) -> int:
             Path(args.report).write_text(text + "\n", encoding="utf-8")
         except OSError:
             pass
-    print(text)
+    # 倉庫公開之後排程的輸出誰都看得到：印的是遮過的（模型寫的理由只留字數、不是大盤的盯項只留數量），
+    # 完整的那一份只在 --report 的檔裡。下一步記用量讀的 model_calls、dry_run、model 兩份都有。
+    import public_log
+    print(json.dumps(public_log.impact_watch_news(report), ensure_ascii=False))
     return 0
 
 

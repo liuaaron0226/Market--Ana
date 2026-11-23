@@ -1366,6 +1366,7 @@ def main(argv: Sequence[str]) -> int:
     parser.add_argument("--agy-home")
     parser.add_argument("--dry-run", action="store_true", help="照樣抓、照樣叫模型，但不寫網站資料庫")
     parser.add_argument("--skip-closed", action="store_true", help="台股休市日（證交所休市日曆、週末）不跑")
+    parser.add_argument("--private-report", help="完整的報告另外寫到這個檔（不公開的地方）；印出來的那一份是遮過的")
     args = parser.parse_args(argv)
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     trade_date = args.date or datetime.now(TAIPEI).date().isoformat()
@@ -1384,7 +1385,12 @@ def main(argv: Sequence[str]) -> int:
                  owner_email=os.environ.get("OWNER_EMAIL", ""), friend_keys=keys,
                  ask_friend=_friend_asker(gemini_models.FRIEND_DIGEST), taiex=_taiex_from_fugle, model=model,
                  dry_run=args.dry_run)
-    print(json.dumps({**report, "effort": effort}, ensure_ascii=False))
+    # 倉庫公開之後排程的輸出誰都看得到：印的是遮過的（朋友的 email、站主個股的盯項、模型回的字都不印），
+    # 完整的只寫進 --private-report。
+    import public_log
+    full = {**report, "effort": effort}
+    public_log.write_private(args.private_report, full)
+    print(json.dumps(public_log.market_news(full), ensure_ascii=False))
     return 0
 
 

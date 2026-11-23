@@ -1018,8 +1018,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.log_output:
             args.log_output.parent.mkdir(parents=True, exist_ok=True)
             args.log_output.write_text(json.dumps(log, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        print(json.dumps({"candidates": log["candidates"],
-                          "outcomes": {item["code"]: item["outcome"] for item in result["stocks"]}}, ensure_ascii=False))
+        # 倉庫公開之後排程的輸出誰都看得到：只印幾檔候選、每一種結果各幾檔；逐檔的在 --log-output 的檔裡
+        import public_log
+        print(json.dumps(public_log.watch_nominate(log["candidates"], result["stocks"]), ensure_ascii=False))
         return 0
     if args.command == "authorize":
         verdict = authorize(args.evidence, args.edition)
@@ -1063,7 +1064,9 @@ def main(argv: list[str] | None = None) -> int:
                                              "reconciliation", "backfilled_misses", "official_since")}
     summary["stocks"] = [{key: item.get(key) for key in ("code", "outcome", "kind", "status", "miss_reason")}
                          for item in log.get("stocks", [])]
-    print(json.dumps(summary, ensure_ascii=False))
+    # 倉庫公開之後排程的輸出誰都看得到：逐檔的代號與判斷不印，只印各幾檔；完整的在 --log-output 的檔裡
+    import public_log
+    print(json.dumps(public_log.watch_judge(summary), ensure_ascii=False))
     return 0
 
 

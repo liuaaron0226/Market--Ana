@@ -50,24 +50,17 @@ design-previews/unslop-20261109/web/
 design-previews/unslop-20261109/sweep/
 design-previews/unslop-20261109/shots/
 
-# 研究與會員相關文件（引用會員回應原文；結論已寫進契約與票檔）
-.scratch/chart-screening-workbench/member-rules-audit.md
-.scratch/chart-screening-workbench/reverse-engineering-round*.md
-.scratch/chart-screening-workbench/reference-rules-external-research.md
-.scratch/chart-screening-workbench/open-member-chrome.ps1
-# 協調紀錄：逐條記本人原話 UUID 與會員研究過程，屬工作日誌，不入庫（定案已寫進 ANALYSIS_PLAN／契約／票檔）
-.scratch/chart-screening-workbench/parallel-lanes-*.md
-.scratch/chart-screening-workbench/reference-sites-audit.md
-# 主來源定案與接手狀態：含本人原話與 session UUID，只留本機（協調窗 11-09 決定）
+# 專案 2026-11-23 起公開（本人決定，為了 GitHub Actions 的執行時數）。以下只留本機、不入庫：
+# 內部工作檔（規格、票、試跑紀錄、截圖；裡面有站主關注哪些股票）
+.scratch/
+# 主來源定案與接手狀態：含本人原話與 session UUID
 /ANALYSIS_PLAN.md
 /STATUS.md
-.scratch/chart-screening-workbench/logs/lane-R1-slice1.md
-.scratch/chart-screening-workbench/logs/prelaunch-review.md
-.scratch/unslop-audit-20261109/shots-web/
-.scratch/unslop-audit-20261109/sweep-web/
-.scratch/unslop-audit-20261109/baseline-web-20261109/
-.scratch/unslop-audit-20261109/*.log
-.scratch/virtual-portfolio-cloud/*.png
+# 設計樣品：只有工具程式（.py／.mjs）入庫，樣品頁、截圖與資料副本留本機
+design-previews/**
+!design-previews/**/
+!design-previews/**/*.py
+!design-previews/**/*.mjs
 
 # 本機 Claude Code 權限設定（個人用，不入庫）
 .claude/settings.local.json

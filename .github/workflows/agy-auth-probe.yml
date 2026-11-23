@@ -38,16 +38,25 @@ jobs:
           if [ -z "$AGY_LOGIN_BUNDLE" ]; then echo "::error::缺少 secret AGY_LOGIN_BUNDLE"; exit 1; fi
           home="$RUNNER_TEMP/agy-home"; mkdir -p "$home"; chmod 700 "$home"
           printf '%s' "$AGY_LOGIN_BUNDLE" | tr -d ' \r\n' | base64 -d | tar xzf - -C "$home"
-          echo "還原的檔案（只列路徑與大小）："; find "$home" -type f -printf '%s\t%P\n'
+          # 倉庫公開之後這裡的輸出誰都看得到：登入檔的路徑、帳號的模型清單、額度的內容、模型的回答都不印，只印成功與否和數量。
+          echo "還原的檔案：$(find "$home" -type f | wc -l) 個"
 
-      - name: 列出這個帳號可用的模型（不呼叫模型）
-        run: HOME="$RUNNER_TEMP/agy-home" "$RUNNER_TEMP/agy/antigravity" models || echo "::warning::這一版 agy 沒有 models 子指令"
+      - name: 列出這個帳號可用的模型（不呼叫模型；只印幾行、有沒有這次要用的模型）
+        env:
+          MODEL: ${{ inputs.model || 'gemini-3.8-flash-low' }}
+        run: |
+          if HOME="$RUNNER_TEMP/agy-home" "$RUNNER_TEMP/agy/antigravity" models > "$RUNNER_TEMP/models.txt" 2>/dev/null; then
+            echo "models：成功，$(grep -c . "$RUNNER_TEMP/models.txt" || true) 行"
+            if grep -qF -- "$MODEL" "$RUNNER_TEMP/models.txt"; then echo "清單裡有 $MODEL"; else echo "::warning::清單裡沒有 $MODEL"; fi
+          else
+            echo "::warning::這一版 agy 沒有 models 子指令（或執行失敗）"
+          fi
 
       - name: 額度（呼叫前）
         run: |
           HOME="$RUNNER_TEMP/agy-home" "$RUNNER_TEMP/agy/antigravity" -p /usage --output-format json --print-timeout 60s \
             < /dev/null > "$RUNNER_TEMP/usage.json" 2>/dev/null || true
-          python3 -c "import json,sys; t=open(sys.argv[1]).read(); d=json.loads(t[t.find('{'):]) if '{' in t else {}; print('num_turns:', d.get('num_turns'), '| total_tokens:', (d.get('usage') or {}).get('total_tokens')); print(d.get('response',''))" "$RUNNER_TEMP/usage.json"
+          python3 -c "import json,sys; t=open(sys.argv[1]).read(); d=json.loads(t[t.find('{'):]) if '{' in t else {}; print('num_turns:', d.get('num_turns'), '| total_tokens:', (d.get('usage') or {}).get('total_tokens'), '| response 字數:', len(d.get('response') or ''))" "$RUNNER_TEMP/usage.json"
 
       - name: 跑一次最小的 agy -p
         env:
@@ -62,19 +71,19 @@ jobs:
           i = t.find("{")
           d = json.loads(t[i:]) if i >= 0 else {}
           print("status:", d.get("status"), "| finished_reason:", d.get("finished_reason"))
-          print("response 開頭:", (d.get("response") or "")[:40].replace("\n", " "))
+          print("response 字數:", len(d.get("response") or ""))
           if d.get("status") != "SUCCESS":
               raise SystemExit("agy -p 沒有成功")
           PY
-          echo "stderr 末段（不含憑證）："; tail -c 400 err.txt | grep -v -i -E 'token|secret|bearer' || true
+          echo "stderr：$(wc -c < err.txt) bytes（內容不印）"
 
       - name: 額度（呼叫後）
         if: always()
         run: |
           HOME="$RUNNER_TEMP/agy-home" "$RUNNER_TEMP/agy/antigravity" -p /usage --output-format json --print-timeout 60s \
             < /dev/null > "$RUNNER_TEMP/usage.json" 2>/dev/null || true
-          python3 -c "import json,sys; t=open(sys.argv[1]).read(); d=json.loads(t[t.find('{'):]) if '{' in t else {}; print('num_turns:', d.get('num_turns'), '| total_tokens:', (d.get('usage') or {}).get('total_tokens')); print(d.get('response',''))" "$RUNNER_TEMP/usage.json"
+          python3 -c "import json,sys; t=open(sys.argv[1]).read(); d=json.loads(t[t.find('{'):]) if '{' in t else {}; print('num_turns:', d.get('num_turns'), '| total_tokens:', (d.get('usage') or {}).get('total_tokens'), '| response 字數:', len(d.get('response') or ''))" "$RUNNER_TEMP/usage.json"
 
       - name: 清除登入檔
         if: always()
-        run: rm -rf "$RUNNER_TEMP/agy-home" "$RUNNER_TEMP/out.json" "$RUNNER_TEMP/err.txt" "$RUNNER_TEMP/usage.json"
+        run: rm -rf "$RUNNER_TEMP/agy-home" "$RUNNER_TEMP/out.json" "$RUNNER_TEMP/err.txt" "$RUNNER_TEMP/usage.json" "$RUNNER_TEMP/models.txt"

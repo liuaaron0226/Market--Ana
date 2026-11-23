@@ -453,7 +453,14 @@ class WiringTests(unittest.TestCase):
         report, logged = self.run_main(db, Judge(said("met")))
         self.assertEqual((report["data_date"], report["model_calls"], report["model"], report["effort"]),
                          (NEXT_DAY, 1, "gemini-3.8-flash", "high"))
-        self.assertEqual(logged, report, "同一份報告留在執行紀錄")
+        # 倉庫公開之後：印出來的是遮過的那一份（模型寫的理由只留字數），完整的留在執行紀錄
+        import public_log
+        self.assertEqual(report, public_log.impact_watch_news(logged))
+        self.assertEqual(logged["met"][0]["id"], item_id)
+        self.assertTrue(logged["met"][0]["note"].startswith("成立"), "完整的報告（含模型寫的理由）留在執行紀錄")
+        self.assertEqual([entry["id"] for entry in report["met"]["market"]], [item_id])
+        self.assertNotIn("note", report["met"]["market"][0])
+        self.assertEqual(report["met"]["stocks"], 0)
         self.assertEqual(db.item(item_id)["status"], "met")
 
     def test_each_model_call_is_one_usage_row_and_no_call_is_none(self):

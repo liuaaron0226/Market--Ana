@@ -91,7 +91,7 @@ class WatchWorkflowTests(unittest.TestCase):
         self.assertIn("node cloud/watch-ready-notices.mjs", push)
         self.assertIn("if: success() && steps.mode.outputs.dry_run == 'false'", push)
         for name in ("VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}", "VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}",
-                     "CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}", "OWNER_EMAIL: ${{ vars.OWNER_EMAIL }}"):
+                     "CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}", "OWNER_EMAIL: ${{ secrets.OWNER_EMAIL }}"):
             self.assertIn(name, push)
         self.assertLess(self.source.index("- name: 發布到網站資料庫"), self.source.index("- name: 送「可以留意」推播"))
         self.assertLess(self.source.index("- name: 送「可以留意」推播"),

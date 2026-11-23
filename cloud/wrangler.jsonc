@@ -10,7 +10,8 @@
     "TEAM_DOMAIN": "https://feb--2.cloudflareaccess.com",
     "MAIN_AUD": "432702e4180ff19534dfc612126e65d7bc3242197b79fe85abb007eb521b302b",
     "APPLY_AUD": "f8d3288f2326f9ad1c4cc8908d0a0b321b2f0ceb014273ce631513144a3ecacd",
-    "OWNER_EMAIL": "owner@example.com",
+    // OWNER_EMAIL（站主的信箱）不寫在這個檔：專案公開後任何人都看得到。改放 Pages 的機密設定
+    // （wrangler pages secret put OWNER_EMAIL --project-name market-ana；正式與預覽各一份）。沒有它整站回 503。
     // 本人 2026-11-14：「短中長期走勢」保留顯示；「個股操作策略」同日回測後決定先關掉（扣成本後賠錢，見 ANALYSIS_PLAN 頂部）。
     // AI 解讀、現金水位仍由 MARKET_ANA_STRATEGIES_ENABLED 控制（未設＝關）。
     "MARKET_ANA_ENABLED_FEATURES": "market_trend_v1",

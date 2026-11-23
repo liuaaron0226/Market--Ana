@@ -286,7 +286,7 @@ def main() -> int:
                 context = j.context(browser, OWNER, **options)
                 page = context.new_page()
                 page.on("pageerror", lambda e: j.console.append(f"pageerror: {e}"))
-                page.goto(f"{base}/minimal.html")
+                page.goto(f"{base}/minimal.html", wait_until="domcontentloaded")   # 不等外部字型（卡住時 load 不會來）
                 page.locator("#mainChart canvas").wait_for(state="visible", timeout=60_000)
                 page.wait_for_timeout(1500)
                 choose(page, "ts")

@@ -130,7 +130,9 @@ class Journey:
         page.on("pageerror", lambda e: self.console.append(f"pageerror: {e}"))
         asked = []
         page.on("request", lambda r: asked.append(r.url) if "/api/impact-watch" in r.url else None)
-        page.goto(f"{base}/minimal.html")
+        # 不等整頁 load：外部字型（Noto Serif TC）下載卡住時 load 永遠不來（2026-11-23 本機連外不順，三次都逾時）；
+        # 下面本來就等報價出現。
+        page.goto(f"{base}/minimal.html", wait_until="domcontentloaded")
         page.locator("#currentPrice").wait_for(state="visible", timeout=60_000)
         page.wait_for_function("() => document.getElementById('currentPrice').textContent.trim() !== '—'", timeout=60_000)
         page.wait_for_timeout(1500)   # 開關與盯項各一次請求
@@ -301,7 +303,7 @@ def deep_link(j: Journey, browser, base: str, prefix: str, options: dict) -> Non
     context = browser.new_context(**options)
     context.add_cookies([{"name": "test_as", "value": OWNER, "url": base}])
     page = context.new_page()
-    page.goto(f"{base}/minimal.html#impact-watch")
+    page.goto(f"{base}/minimal.html#impact-watch", wait_until="domcontentloaded")
     try:
         page.wait_for_function("() => document.getElementById('impactWatchDialog').open", timeout=30_000)
         opened = True

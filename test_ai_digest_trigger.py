@@ -86,7 +86,11 @@ class AiDigestTriggerTests(unittest.TestCase):
         self.assertNotIn("if: always() && steps.mode.outputs.dry_run == 'false'", digest)
         self.assertGreaterEqual(digest.count("if: success() && steps.mode.outputs.dry_run == 'false'"), 2)
         self.assertNotIn("liuaaron0226", digest)
-        self.assertIn("vars.OWNER_EMAIL", digest)
+        # 倉庫公開之後：站主的 email 放 secret（variable 會原樣印在輸出裡），逐檔的結果不進步驟摘要
+        self.assertIn("secrets.OWNER_EMAIL", digest)
+        self.assertNotIn("vars.OWNER_EMAIL", digest)
+        self.assertNotIn('cat "$RUNNER_TEMP/ai-digest-result.json"', digest)
+        self.assertNotIn('cat "$RUNNER_TEMP/ai-digest-audit.json"', digest)
         for source in (daily, level, digest):
             self.assertIn("group: market-state-write", source)
             self.assertIn("cancel-in-progress: false", source)

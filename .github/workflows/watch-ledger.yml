@@ -149,7 +149,7 @@ jobs:
         env:
           AUTH_DRY_RUN: ${{ needs.authorize.outputs.dry_run }}
           INPUT_AS_OF: ${{ inputs.as_of }}
-          OWNER_EMAIL: ${{ vars.OWNER_EMAIL }}
+          OWNER_EMAIL: ${{ secrets.OWNER_EMAIL }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -206,7 +206,7 @@ jobs:
       - name: 讀站主的關注清單
         working-directory: ${{ github.workspace }}
         env:
-          OWNER_EMAIL: ${{ vars.OWNER_EMAIL }}
+          OWNER_EMAIL: ${{ secrets.OWNER_EMAIL }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: python watch_run.py watchlist --out "$RUNNER_TEMP/watchlist.json"
@@ -252,7 +252,7 @@ jobs:
           FUGLE_API_KEY: ${{ secrets.FUGLE_API_KEY }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          OWNER_EMAIL: ${{ vars.OWNER_EMAIL }}
+          OWNER_EMAIL: ${{ secrets.OWNER_EMAIL }}
           HOME: ${{ runner.temp }}/agy-home
           SESSION_DATE: ${{ steps.mode.outputs.session_date }}
           AS_OF: ${{ steps.mode.outputs.as_of }}
@@ -307,7 +307,7 @@ jobs:
         if: success() && steps.mode.outputs.dry_run == 'false'
         continue-on-error: true
         env:
-          OWNER_EMAIL: ${{ vars.OWNER_EMAIL }}
+          OWNER_EMAIL: ${{ secrets.OWNER_EMAIL }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
@@ -323,7 +323,7 @@ jobs:
         continue-on-error: true
         env:
           HOME: ${{ runner.temp }}/agy-home
-          OWNER_EMAIL: ${{ vars.OWNER_EMAIL }}
+          OWNER_EMAIL: ${{ secrets.OWNER_EMAIL }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
@@ -332,8 +332,9 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET: market-ana-state
         run: |
+          # 提名的紀錄（有站主關注股的代號）放進帳本的 runs/，跟著下一步存回 R2；倉庫公開之後不再放 artifact。
           python watch_run.py nominate --ledger "$LEDGER" --agy-bin "$RUNNER_TEMP/agy/antigravity" \
-            --model "$AI_WATCH_NOMINATE_MODEL" --effort "$AI_WATCH_NOMINATE_EFFORT" --log-output "$RUNNER_TEMP/watch-run/nominate.json" --sql-output "$RUNNER_TEMP/nominate.sql" --shared-cache
+            --model "$AI_WATCH_NOMINATE_MODEL" --effort "$AI_WATCH_NOMINATE_EFFORT" --log-output "$LEDGER/runs/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-nominate.json" --sql-output "$RUNNER_TEMP/nominate.sql" --shared-cache
 
       - name: 提名存回 R2（只新增）
         if: always() && steps.nominate.outcome != 'skipped' && steps.restore.outcome == 'success'
@@ -364,17 +365,13 @@ jobs:
         run: |
           {
             echo "### 關注股判斷（$EDITION，${{ steps.mode.outputs.dry_run == 'false' && '正式寫入' || '乾跑或未寫入' }}）"
-            if [ -f "$RUNNER_TEMP/watch-run/run.json" ]; then echo '```json'; cat "$RUNNER_TEMP/watch-run/run.json"; echo '```'; fi
+            # 倉庫公開之後步驟摘要與 artifact 誰都看得到：逐檔的代號與判斷（站主的關注清單）不放，只放各幾檔。
+            # 正式執行的完整紀錄在帳本的 runs/（跟著帳本存回 R2 的 watch-ledger/runs/）；乾跑的完整紀錄不保存。
+            if [ -f "$RUNNER_TEMP/watch-run/run.json" ]; then
+              python -c 'import json,sys,public_log; log=json.load(open(sys.argv[1],encoding="utf-8")); keys=("edition","base_date","session_date","dry_run","outcome","reconciliation","backfilled_misses","official_since","stocks"); print(json.dumps(public_log.watch_judge({k: log.get(k) for k in keys}), ensure_ascii=False, indent=2))' "$RUNNER_TEMP/watch-run/run.json" > "$RUNNER_TEMP/watch-run/summary.json" \
+                && { echo '```json'; cat "$RUNNER_TEMP/watch-run/summary.json"; echo '```'; } || echo "執行紀錄讀不了"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: 保存執行紀錄
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: watch-run-${{ github.run_id }}
-          path: ${{ runner.temp }}/watch-run/
-          retention-days: 90
-          if-no-files-found: warn
 
       - name: 記下 Gemini 剩餘用量（設定頁用；失敗不影響這支排程）
         # agy -p /usage 由 CLI 自己回答、不耗額度；讀不到也記下這次跑過（gemini_usage.py）。只有站主在設定頁看得到。
@@ -393,4 +390,4 @@ jobs:
 
       - name: 清除登入檔與暫存
         if: always()
-        run: rm -rf "$RUNNER_TEMP/agy-home" "$RUNNER_TEMP/agy" "$RUNNER_TEMP/watch.sql" "$RUNNER_TEMP/nominate.sql" "$RUNNER_TEMP/watchlist.json" "$RUNNER_TEMP/gemini-usage.sql" "$RUNNER_TEMP/ai-models.json" "$RUNNER_TEMP/ai-model-read.sql"
+        run: rm -rf "$RUNNER_TEMP/agy-home" "$RUNNER_TEMP/agy" "$RUNNER_TEMP/watch.sql" "$RUNNER_TEMP/nominate.sql" "$RUNNER_TEMP/watchlist.json" "$RUNNER_TEMP/watch-run" "$RUNNER_TEMP/gemini-usage.sql" "$RUNNER_TEMP/ai-models.json" "$RUNNER_TEMP/ai-model-read.sql"

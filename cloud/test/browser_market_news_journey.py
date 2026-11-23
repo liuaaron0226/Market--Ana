@@ -126,7 +126,7 @@ class Journey:
         page.on("pageerror", lambda e: self.console.append(f"pageerror: {e}"))
         self.bodies = []
         page.on("response", lambda r: self.bodies.append(r.text()) if "/api/market-news" in r.url and r.status == 200 else None)
-        page.goto(f"{self.base}/minimal.html")
+        page.goto(f"{self.base}/minimal.html", wait_until="domcontentloaded")   # 不等外部字型（卡住時 load 不會來）
         page.locator("#newsCatButton").wait_for(state="visible", timeout=60_000)
         page.locator("#newsCatButton").click()
         page.wait_for_function("() => document.getElementById('marketNews').dataset.state === 'ready'", timeout=20_000)

@@ -555,8 +555,11 @@ def _wrangler_execute(script: str) -> None:
 if __name__ == "__main__":
     import os
     if sys.argv[1:] == ["daily", "--d1"]:
-        print(json.dumps(daily(os.environ.get("OWNER_EMAIL", ""), query=_wrangler_query, execute=_wrangler_execute),
-                         ensure_ascii=False))
+        # 倉庫公開之後排程的輸出誰都看得到：來源不逐檔印（gnews:代號 看得出誰的自選有哪幾檔），只印各來源成功、失敗幾檔；
+        # 逐檔的結果本來就寫在資料庫的 watch_news_fetches。
+        import public_log
+        print(json.dumps(public_log.watch_news_daily(
+            daily(os.environ.get("OWNER_EMAIL", ""), query=_wrangler_query, execute=_wrangler_execute)), ensure_ascii=False))
     elif sys.argv[1:] == ["pool", "--d1"]:
         # 每日更新發布後：寫前 50 與英文簡稱（0031 還沒套時 wrangler 會失敗，排程那一步 continue-on-error）
         from pathlib import Path

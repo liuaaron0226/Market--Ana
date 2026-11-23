@@ -170,7 +170,7 @@ class Journey:
         page = context.new_page()
         page.on("console", lambda m: self.console.append(m.text) if m.type == "error" and "Failed to load resource" not in m.text else None)
         page.on("pageerror", lambda e: self.console.append(f"pageerror: {e}"))
-        page.goto(f"{base}/minimal.html")
+        page.goto(f"{base}/minimal.html", wait_until="domcontentloaded")   # 不等外部字型（卡住時 load 不會來）
         page.locator("#currentPrice").wait_for(state="visible", timeout=60_000)
         page.wait_for_function("() => document.getElementById('readLine').textContent.trim() !== ''", timeout=60_000)
         page.wait_for_timeout(800)

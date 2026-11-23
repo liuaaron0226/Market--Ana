@@ -106,7 +106,8 @@ jobs:
     env:
       TZ: Asia/Taipei
       PYTHONIOENCODING: utf-8
-      OWNER_EMAIL: ${{ vars.OWNER_EMAIL }}
+      # 倉庫公開之後 variable 會原樣印在每一步的環境變數裡；站主的 email 改放 secret（輸出裡會被遮掉）
+      OWNER_EMAIL: ${{ secrets.OWNER_EMAIL }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -140,7 +141,7 @@ jobs:
             python -c 'from state_sync import require_iso_date; import sys; require_iso_date(sys.argv[1], "workflow date")' "$INPUT_DATE" || { echo "::error::date 必須是真實的 YYYY-MM-DD"; exit 1; }
           fi
           if [ -z "$OWNER_EMAIL" ] || ! printf '%s' "$OWNER_EMAIL" | grep -Eq "^[^@[:space:]']+@[^@[:space:]']+$"; then
-            echo "::error::缺少或無效的 GitHub variable OWNER_EMAIL"; exit 1
+            echo "::error::缺少或無效的 secret OWNER_EMAIL"; exit 1
           fi
           dry_run=true
           if [ "$AUTH_DRY_RUN" = "false" ]; then dry_run=false; fi
@@ -280,8 +281,14 @@ jobs:
             echo "### 每日 AI 解讀 ${DATA_DATE:-未決定}"
             if [ -f "$RUNNER_TEMP/ai-digest-input.sha256" ]; then echo "- 輸入 SHA：$(cat "$RUNNER_TEMP/ai-digest-input.sha256")"; fi
             echo "- dry-run：${{ steps.mode.outputs.dry_run }}"
-            if [ -f "$RUNNER_TEMP/ai-digest-result.json" ]; then echo '```json'; cat "$RUNNER_TEMP/ai-digest-result.json"; echo '```'; fi
-            if [ -f "$RUNNER_TEMP/ai-digest-audit.json" ]; then echo '```json'; cat "$RUNNER_TEMP/ai-digest-audit.json"; echo '```'; fi
+            # 倉庫公開之後步驟摘要誰都看得到：逐檔的判斷（站主的自選股與庫存）不放，只放每一類、每一種狀態各幾筆。
+            # 完整的結果在網站資料庫（寫入 D1 那一步）。
+            if [ -f "$RUNNER_TEMP/ai-digest-result.json" ]; then
+              python -c 'import collections,json,sys; rows=json.load(open(sys.argv[1],encoding="utf-8")).get("rows") or []; c=collections.Counter(str(r.get("digest_type"))+" "+str(r.get("status")) for r in rows if isinstance(r,dict)); print("- 結果：共", len(rows), "筆"); [print("  -", k, "：", n, "筆") for k, n in sorted(c.items())]' "$RUNNER_TEMP/ai-digest-result.json" || echo "- 結果檔讀不了"
+            fi
+            if [ -f "$RUNNER_TEMP/ai-digest-audit.json" ]; then
+              python -c 'import json,sys; a=json.load(open(sys.argv[1],encoding="utf-8")); print("- 模型：", a.get("model"), a.get("effort"), "；失敗原因：", a.get("failure"), "；核對沒過：", len(a.get("rejected") or []), "處")' "$RUNNER_TEMP/ai-digest-audit.json" || echo "- 核對紀錄讀不了"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: 記下 Gemini 剩餘用量（設定頁用；失敗不影響這支排程）
