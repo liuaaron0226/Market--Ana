@@ -19,7 +19,8 @@
   const MARKET_KIND = { policy: '政策', earnings: '財報', deal: '合作訂單', flows: '法人', macro: '總經' };
   const STOCK_KIND = { earnings: '財報營收', guidance: '法說', deal: '訂單合作', policy: '政策', rating: '法人評等', incident: '異常事件' };
   const IMPACT = { 3: '大', 2: '中', 1: '小' };
-  const SLOT = { morning: '盤前', midday: '午盤', close: '收盤後' };
+  // 一天六班（台北）：美股收盤 06:30、盤前 08:00、午盤 11:30、收盤後 14:00、盤後 18:30、美股開盤 23:00
+  const SLOT = { us_close: '美股收盤', morning: '盤前', midday: '午盤', close: '收盤後', evening: '盤後', us_open: '美股開盤' };
   const TAIPEI = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
   const parts = iso => Object.fromEntries(TAIPEI.formatToParts(new Date(iso)).map(p => [p.type, p.value]));
@@ -168,7 +169,7 @@
     if (!run) {
       els.list.replaceChildren();
       els.status.hidden = false;
-      els.status.textContent = '還沒有消息（交易日 08:00、11:30、14:00 更新）';
+      els.status.textContent = '尚無消息';
       return;
     }
     renderSegments();
@@ -205,6 +206,15 @@
     } catch (_) { return off(); }
     button.hidden = false;
     load(null);
+    // 網址帶 #market-news（重大消息的推播點進來）：直接切到「消息」。切換在首頁那排分類鍵，所以照點一下那顆鍵的路走；
+    // 這一頁已經開著時點推播，瀏覽器只改錨點、不重新載入，也要切過去並重讀最新一班。
+    const openFromHash = (reload) => {
+      if (location.hash !== '#market-news' || button.hidden) return;
+      if (button.getAttribute('aria-expanded') !== 'true') button.click();
+      if (reload) load(null);
+    };
+    openFromHash(false);
+    window.addEventListener('hashchange', () => openFromHash(true));
   }
 
   init();

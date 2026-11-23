@@ -149,6 +149,8 @@
       this._oscRef = null;
       this.kd = [];
       this.rsi = [];
+      // 另外加在指標區下面的副圖（主力分點，branch-pane.js）：每畫一次跟著畫，{ draw(daily) }
+      this.extras = [];
 
       this.root = element('section', 'kc-studies');
       this.root.setAttribute('aria-label', '日線副圖');
@@ -1037,6 +1039,7 @@
       if (this.kdPane) this.kdPane.hidden = !daily || this.active !== 'kd';
       if (this.rsiPane) this.rsiPane.hidden = !daily || this.active !== 'rsi';
       for (const [kind, parts] of Object.entries(this.institutionalPanes || {})) parts.pane.hidden = !daily || this.active !== kind;
+      for (const extra of this.extras) extra.draw(daily);
       if (!daily) return;
 
       const width = this._mainWidth();

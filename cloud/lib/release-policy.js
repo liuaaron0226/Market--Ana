@@ -31,7 +31,8 @@ function individuallyEnabled(raw) {
 // 頁面就不會去問那個入口，和功能上線前完全一樣。
 // （預測帳本也只給站主，但它的旗標上線時就對所有人可見、頁面也依賴它，這裡不改它的行為。）
 // 站主的 AI 解讀（agy 產生）也不給朋友看：朋友用自己的金鑰產生自己那份（開放給朋友 02 票，DECISIONS 第 5 題）。
-const HIDDEN_FROM_OTHERS = ["watchlist_watch_v1", "ai_digest"];
+// 主力分點（broker_branches_v1）也只給站主：朋友看到的一律是關，個股頁就不會出現那顆鍵、也不會去問。
+const HIDDEN_FROM_OTHERS = ["watchlist_watch_v1", "ai_digest", "broker_branches_v1"];
 
 // 三種狀態的開關：只認一字不差的 "owner"（只開站主）與 "all"（開給全部獲准使用者），其他寫法一律是關。
 function threeStateMode(raw) {
@@ -131,6 +132,22 @@ export function marketBriefVisible(env, isOwner) {
   return modeAllowsViewer(marketBriefMode(env), isOwner);
 }
 
+// 主力分點副圖（本人 2026-11-24，.scratch/broker-branches 票 01）：只有兩種狀態，只認一字不差的 "owner"（只開站主），
+// 其他寫法（含 "all"）一律是關——分點資料只抓站主的自選股與庫存，沒有開給朋友的設定。
+export function brokerBranchesVisible(env, isOwner) {
+  return env?.MARKET_ANA_BROKER_BRANCHES === "owner" && Boolean(isOwner);
+}
+
+// 海外大盤的分時（本人 2026-11-24，.scratch/index-intraday 票 01）：自己一個三種狀態的開關，和其他開關都不連動。
+// 關著時大盤頁的國外指數照舊只有日週月、切換清單沒有那斯達克期貨，入口也不會去問來源；先只開站主。
+function indexIntradayMode(env) {
+  return threeStateMode(env?.MARKET_ANA_INDEX_INTRADAY);
+}
+
+export function indexIntradayVisible(env, isOwner) {
+  return modeAllowsViewer(indexIntradayMode(env), isOwner);
+}
+
 // env 沒給時，事實區塊與五塊對其他人一律是關（寧可少給，不可多給）。
 export function policyForViewer(policy, isOwner, env = {}) {
   if (isOwner) return policy;
@@ -143,6 +160,7 @@ export function policyForViewer(policy, isOwner, env = {}) {
   features.market_news_v1 = marketNewsVisible(env, false);
   features.impact_watch_v1 = impactWatchVisible(env, false);
   features.market_brief_v1 = marketBriefVisible(env, false);
+  features.index_intraday_v1 = indexIntradayVisible(env, false);
   return { ...policy, features };
 }
 
@@ -186,6 +204,10 @@ export function releasePolicy(env = {}) {
       impact_watch_v1: impactWatchMode(env) !== "off",
       // 盤勢解讀改版：同上，這裡是站主看到的值。
       market_brief_v1: marketBriefMode(env) !== "off",
+      // 主力分點：這裡是站主看到的值；其他人看到的一律是關（HIDDEN_FROM_OTHERS）。
+      broker_branches_v1: brokerBranchesVisible(env, true),
+      // 海外大盤的分時：這裡是站主看到的值；其他人看到的值由 policyForViewer 依狀態決定。
+      index_intraday_v1: indexIntradayMode(env) !== "off",
     },
   };
 }

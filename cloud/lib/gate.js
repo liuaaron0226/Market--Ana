@@ -12,7 +12,7 @@ import { defaultLiveQuoteService } from "./live-quotes.js";
 import { fetchTickPage } from "./live-ticks.js";
 import { loadHourly, withToday } from "./hourly-candles.js";
 import { defaultIndexLiveService } from "./index-live.js";
-import { analysisHidden, impactWatchVisible, marketBriefVisible, marketNewsVisible, policyForViewer, releasePolicy, stockEtfsVisible, stockFactsVisible, stockFundsVisible, stockSignalsVisible } from "./release-policy.js";
+import { analysisHidden, brokerBranchesVisible, impactWatchVisible, indexIntradayVisible, marketBriefVisible, marketNewsVisible, policyForViewer, releasePolicy, stockEtfsVisible, stockFactsVisible, stockFundsVisible, stockSignalsVisible } from "./release-policy.js";
 import { isOwnerEmail } from "./owner.js";
 import { CODE_PATTERN, CODE_RE, isExchangeCode } from "./codes.js";
 import { FORECAST_PATH, handleForecastApi } from "./forecast.js";
@@ -22,16 +22,20 @@ import { AI_MODELS_PATH, handleAiModelsApi } from "./ai-models.js";
 import { FRIEND_AI_PAGE, FRIEND_AI_PATH, keyStateLookup, deleteFriendKey, friendAiEnabled, handleFriendAiApi, notAvailable, ownerRefused } from "./friend-ai.js";
 import { WATCH_PEERS_PATH, handleWatchPeersApi } from "./watch-peers.js";
 import { INDEX_PATH, indexOf, loadIndex } from "./market-indices.js";
+import { INDEX_INTRADAY_PATH, intradayIndexOf, intradayUnavailable, loadIntraday } from "./index-intraday.js";
 import { MARKET_NEWS_PATH, handleMarketNewsApi, handleStockHeadlinesApi } from "./market-news.js";
 import { IMPACT_WATCH_PATH, handleImpactWatchApi } from "./impact-watch.js";
 import { MARKET_BRIEF_PATH, handleMarketBriefApi } from "./market-brief.js";
+import { branchHistoryUnavailable, handleBranchHistoryApi } from "./broker-branches.js";
 import { pushConfigured, sendOne } from "./web-push.js";
 
 const PENDING_CAP = 30;
 // 票 06 限速（Astra r1 建議值）：市場 API 全部每人每分 30 次；個股明細另限每分 12 次。固定一分鐘窗，邊界最多兩倍突發。
 // ticks：行情商免費方案的日內查詢是每分鐘 60 次，報價與分 K 輪詢約用掉 10 次，逐筆留 40 次。
 // friendAi：朋友保存、同意、刪除 Gemini 金鑰（保存會替他試呼叫一次 Gemini），所以另外限得緊一點；讀狀態不扣這一份。
-const RATE = { market: 30, detail: 12, userData: 60, live: 20, history: 30, ticks: 40, timeshare: 20, hourly: 20, friendAi: 10, indices: 30 };
+const RATE = { market: 30, detail: 12, userData: 60, live: 20, history: 30, ticks: 40, timeshare: 20, hourly: 20, friendAi: 10, indices: 30, branches: 20, indexIntraday: 20 };
+// indexIntraday：海外大盤的分時，開著時每分鐘更新一次，留到 20 次給切換指數與重新整理。
+// branches：主力分點的分點歷史，每進一檔個股頁問一次（一次要讀這一檔全部的分點日資料），留到每分鐘 20 次給換股。
 // timeshare：分時（1 分K、五檔），盤中每 10 秒一次＝每分鐘 6 次，留到 20 次給重新整理與換股（和 live 同額度）。
 // hourly：60 分K（歷史＋今天），盤中每分鐘一次，同樣留到 20 次。
 // indices：大盤頁切換國外指數（本人 11-19），一次切換讀一次 D1，和 market 同樣留到 30 次。
@@ -410,6 +414,21 @@ async function handleMarketBriefRequest(request, env, email, deps, { isOwner }) 
   return handleMarketBriefApi(request, env, { isOwner });
 }
 
+// 主力分點（本人 2026-11-24，.scratch/broker-branches 票 01）：開關 MARKET_ANA_BROKER_BRANCHES（off／owner），只有站主拿得到。
+// 開關關著、不是站主：回「沒有」而且不碰任何資料表（連限流那張也不碰）。自己一份限流（branches）。
+const BRANCH_HISTORY_PATH = new RegExp(`^/api/stocks/(${CODE_PATTERN})/branch-history$`);
+
+async function handleBranchHistoryRequest(request, env, path, email, deps, { isOwner }) {
+  if (!brokerBranchesVisible(env, isOwner)) return branchHistoryUnavailable();
+  try {
+    await consume(env.DB, email, "branches", (deps.now || Date.now)(), { ...RATE, ...deps.rate });
+  } catch (e) {
+    if (e instanceof RateLimited) return json(429, { error: "rate-limited", message: "查詢太頻繁，請稍後再試" }, { "retry-after": String(e.retryAfter) });
+    throw new HttpError(503, "暫時無法處理，請稍後再試");
+  }
+  return handleBranchHistoryApi(request, env, path.match(BRANCH_HISTORY_PATH)[1], { isOwner }, { pageRows: deps.branchPageRows });
+}
+
 async function handleAnnouncementsApi(request, env, path, email, deps, { isOwner }) {
   if (request.method !== "GET") throw new HttpError(405, "方法不允許");
   const headers = { "cache-control": "private, no-store" };
@@ -582,6 +601,29 @@ async function handleIndexApi(request, env, path, email, deps) {
     throw new HttpError(503, "暫時無法處理，請稍後再試");
   }
   return json(200, await loadIndex(env.DB, item), headers);
+}
+
+// 海外大盤的分時（本人 2026-11-24，.scratch/index-intraday 票 01）：開關 MARKET_ANA_INDEX_INTRADAY（off／owner／all）。
+// 開關關著、對這個人沒開：回「沒有」，不碰資料表也不問來源。向來源要資料與快取在 index-intraday.js；自己一份限流（indexIntraday）。
+async function handleIndexIntradayApi(request, env, path, email, deps, { isOwner }) {
+  if (request.method !== "GET") throw new HttpError(405, "方法不允許");
+  const headers = { "cache-control": "private, no-store" };
+  if (!indexIntradayVisible(env, isOwner)) return json(200, intradayUnavailable(), headers);
+  const item = intradayIndexOf(path.match(INDEX_INTRADAY_PATH)[1]);
+  if (!item) throw new HttpError(404, "找不到這個指數");
+  try {
+    await consume(env.DB, email, "indexIntraday", (deps.now || Date.now)(), { ...RATE, ...deps.rate });
+  } catch (error) {
+    if (error instanceof RateLimited) {
+      return json(429, { error: "rate-limited", message: "查詢太頻繁，請稍後再試", retry_after_seconds: error.retryAfter },
+        { ...headers, "retry-after": String(error.retryAfter) });
+    }
+    throw new HttpError(503, "暫時無法處理，請稍後再試");
+  }
+  const options = { now: deps.now || Date.now };
+  if (deps.intradayFetch) options.fetchImpl = deps.intradayFetch;
+  if (deps.intradayCache !== undefined) options.cache = deps.intradayCache;
+  return json(200, await loadIntraday(item, options), headers);
 }
 
 async function handleStockLiveApi(request, env, path, email, deps) {
@@ -957,6 +999,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
       if (FRIEND_AI_PATH.test(path)) return ownerRefused();
       if (isUserData) return await handleUserDataApi(request, env, path, email, deps, { isOwner: true, policy });
       if (INDEX_PATH.test(path)) return await handleIndexApi(request, env, path, email, deps);
+      if (INDEX_INTRADAY_PATH.test(path)) return await handleIndexIntradayApi(request, env, path, email, deps, { isOwner: true });
       if (isMarket) return await handleMarketApi(request, env, path, email, deps, { isOwner: true });
       if (isComparePath(path)) return await handleCompareApi(request, env, path, email, deps, { isOwner: true });
       if (RETIRED_FUND_PATH.test(path)) return fail(404, "找不到");
@@ -969,6 +1012,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
       if (MARKET_NEWS_PATH.test(path) || HEADLINES_PATH.test(path)) return await handleNewsRequest(request, env, path, email, deps, { isOwner: true });
       if (IMPACT_WATCH_PATH.test(path)) return await handleImpactWatchRequest(request, env, email, deps, { isOwner: true });
       if (MARKET_BRIEF_PATH.test(path)) return await handleMarketBriefRequest(request, env, email, deps, { isOwner: true });
+      if (BRANCH_HISTORY_PATH.test(path)) return await handleBranchHistoryRequest(request, env, path, email, deps, { isOwner: true });
       if (isStock) return await handleStockApi(request, env, path, email, deps, { isOwner: true });
       if (isScreens) return await handleScreensApi(request, env, path, email, deps);
       if (path === DATA_STATUS_PATH) return handleDataStatusApi(request, deps);
@@ -994,6 +1038,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
     if (isUserData) return await handleUserDataApi(request, env, path, email, deps, { isOwner: false, policy });
     if (path === "/api/live" || path === "/api/mis-probe") return fail(403, "即時行情僅限站主使用");
     if (INDEX_PATH.test(path)) return await handleIndexApi(request, env, path, email, deps);
+    if (INDEX_INTRADAY_PATH.test(path)) return await handleIndexIntradayApi(request, env, path, email, deps, { isOwner: false });
     if (isMarket) return await handleMarketApi(request, env, path, email, deps, { isOwner: false });
     if (isComparePath(path)) return await handleCompareApi(request, env, path, email, deps, { isOwner: false });
     if (RETIRED_FUND_PATH.test(path)) return fail(404, "找不到");
@@ -1005,6 +1050,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
     if (MARKET_NEWS_PATH.test(path) || HEADLINES_PATH.test(path)) return await handleNewsRequest(request, env, path, email, deps, { isOwner: false });
     if (IMPACT_WATCH_PATH.test(path)) return await handleImpactWatchRequest(request, env, email, deps, { isOwner: false });
     if (MARKET_BRIEF_PATH.test(path)) return await handleMarketBriefRequest(request, env, email, deps, { isOwner: false });
+    if (BRANCH_HISTORY_PATH.test(path)) return await handleBranchHistoryRequest(request, env, path, email, deps, { isOwner: false });
     if (isStock) return await handleStockApi(request, env, path, email, deps, { isOwner: false });
     if (isScreens) return await handleScreensApi(request, env, path, email, deps);
     if (path === DATA_STATUS_PATH) return handleDataStatusApi(request, deps);

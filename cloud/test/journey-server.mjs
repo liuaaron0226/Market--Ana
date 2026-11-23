@@ -18,6 +18,9 @@ const env = { DB: fakeD1(), TEAM_DOMAIN: TEAM, MAIN_AUD, APPLY_AUD, OWNER_EMAIL:
 // 設定裡也沒有 APPLY_AUD。沒設時照舊是兩個應用（/apply 發申請頁的憑證，其他路徑發主站的）。
 const singleAccess = process.env.JOURNEY_ACCESS === "single";
 if (singleAccess) delete env.APPLY_AUD;
+// 主力分點（本人 2026-11-24，.scratch/broker-branches 票 01）的本機預覽：MARKET_ANA_BROKER_BRANCHES=owner 打開開關；
+// 三張表由 0036 建（helpers.js 的清單），分點與每日買賣超放在 JOURNEY_SEED_SQL。
+if (process.env.MARKET_ANA_BROKER_BRANCHES) env.MARKET_ANA_BROKER_BRANCHES = process.env.MARKET_ANA_BROKER_BRANCHES;
 // 預測帳本的本機預覽（B 票）：JOURNEY_SEED_SQL 指向 forecast_ledger.d1_sql 產生的指令檔，
 // MARKET_ANA_FORECAST_LEDGER=owner 打開開關。兩者都沒設時與原本相同。
 if (process.env.JOURNEY_SEED_SQL) env.DB._raw.exec(await readFile(process.env.JOURNEY_SEED_SQL, "utf8"));
@@ -37,6 +40,9 @@ if (process.env.MARKET_ANA_IMPACT_WATCH) env.MARKET_ANA_IMPACT_WATCH = process.e
 if (process.env.MARKET_ANA_MARKET_BRIEF) env.MARKET_ANA_MARKET_BRIEF = process.env.MARKET_ANA_MARKET_BRIEF;
 // 個股頁事實區塊（「消息」那一塊放新聞標題）：MARKET_ANA_STOCK_FACTS=owner／all。
 if (process.env.MARKET_ANA_STOCK_FACTS) env.MARKET_ANA_STOCK_FACTS = process.env.MARKET_ANA_STOCK_FACTS;
+// 海外大盤的分時（本人 2026-11-24，.scratch/index-intraday 票 01）的本機預覽：MARKET_ANA_INDEX_INTRADAY=owner／all 打開開關；
+// 來源的回應換成 JOURNEY_INTRADAY_FIXTURE（見下面），旅程不連真的來源。
+if (process.env.MARKET_ANA_INDEX_INTRADAY) env.MARKET_ANA_INDEX_INTRADAY = process.env.MARKET_ANA_INDEX_INTRADAY;
 // 自動化驗收會在一分鐘內點完全部下鑽；額度可由第三個參數放寬（正式版額度見 gate.js RATE，不受影響）。
 // 即時行情與五檔只在換成假資料（JOURNEY_LIVE_FIXTURE）時放寬：不然旅程會真的去問證交所，盤後的收盤報價一進來就把畫面拉回最新一根。
 const fakeLive = Boolean(process.env.JOURNEY_LIVE_FIXTURE);
@@ -76,6 +82,17 @@ if (fakeLive) {
     return rows.length ? new Response(JSON.stringify({ symbol: "2330", timeframe: "60", data: rows })) : new Response("{}", { status: 404 });
   };
 }
+// 海外大盤的分時：來源一律不連。JOURNEY_INTRADAY_FIXTURE 指向一個 JSON（{ "^N225": 來源會回的那一份, "^DJI": { "status": 429 }, … }），
+// 每次請求重讀；沒設、或沒有那個代號時當成來源回 503。快取只用這個行程的記憶體。
+deps.intradayCache = null;
+deps.intradayFetch = async (url) => {
+  const symbol = decodeURIComponent(new URL(url).pathname.split("/").pop());
+  const fixture = process.env.JOURNEY_INTRADAY_FIXTURE ? JSON.parse(await readFile(process.env.JOURNEY_INTRADAY_FIXTURE, "utf8")) : {};
+  const entry = fixture[symbol];
+  if (!entry || entry.status) return new Response("{}", { status: entry?.status || 503 });
+  return new Response(JSON.stringify(entry), { headers: { "content-type": "application/json" } });
+};
+if (rate) rate.indexIntraday = 10_000;
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json",
   ".webmanifest": "application/manifest+json", ".png": "image/png" };
 

@@ -12,7 +12,7 @@ const REPO = "liuaaron0226/Market--Ana";
 export const WATCH_CRON = "* 1-5 * * MON-FRI";
 
 // UTC「分 時」→ 要觸發的 workflow 與參數（台北時間＝UTC+8）。
-// Workers 免費方案整個帳號最多 5 個時段，所以 wrangler.toml 把同一分的每日更新合成一行（30 7,8,12），
+// Workers 免費方案整個帳號最多 5 個時段，所以 wrangler.toml 把同一分的合成一行（30 3,7,8,10,12,22 與 0 6,10,15），
 // 實際是哪一個小時由觸發時間決定，觸發時間和合併前完全相同。
 // 星期欄位不放進鍵：Cloudflare 的星期是 1＝週日…7＝週六（和 GitHub／一般 cron 的 1＝週一不同），
 // wrangler.toml 一律寫 MON-FRI；原本寫 1-5 實際是週日到週四，11-13（週五）整天沒觸發。
@@ -26,6 +26,12 @@ export const JOBS = {
   // 盤前 08:00 那一輪由 market-news.yml 接在公司重大訊息後面跑，不在這裡。
   "30 3": { workflow: "market-news.yml", slot: "30 3 * * 1-5", weekday: "MON-FRI", inputs: { slot: "midday", dry_run: "false" } }, // 11:30
   "0 6": { workflow: "market-news.yml", slot: "0 6 * * 1-5", weekday: "MON-FRI", inputs: { slot: "close", dry_run: "false" } },   // 14:00
+  // 首頁「消息」加開三班（本人 2026-11-24，.scratch/market-news-night 票 01）：盤後 18:30、美股開盤 23:00 是台北週一到週五；
+  // 美股收盤 06:30 是台北週二到週六＝UTC 前一天 22:30 的週一到週五（送出的日期是台北當天）。不另佔時段：併進「30 …」「0 …」那兩行。
+  // 美股那兩班不看台股休市（market_news.py 的 --skip-closed 對它們不作用）；盤後那一班台股休市不跑。
+  "30 10": { workflow: "market-news.yml", slot: "30 10 * * 1-5", weekday: "MON-FRI", inputs: { slot: "evening", dry_run: "false" } },  // 18:30
+  "0 15": { workflow: "market-news.yml", slot: "0 15 * * 1-5", weekday: "MON-FRI", inputs: { slot: "us_open", dry_run: "false" } },    // 23:00
+  "30 22": { workflow: "market-news.yml", slot: "30 22 * * 1-5", weekday: "MON-FRI", inputs: { slot: "us_close", dry_run: "false" } }, // 隔天 06:30
   // 公司重大訊息的每日原件（個股頁事實區塊 D 票，本人 2026-11-16）：官方快照只留前一天，所以每天都抓、含週末。
   "0 0": { workflow: "announcements.yml", slot: "0 0 * * *", inputs: {} },                         // 08:00
   // 晨間版大盤預測（本人 11-18 回報 K 線一直「漏記」）：GitHub 的 schedule 晚了 4～5 小時才跑，都過了 08:45 的期限，

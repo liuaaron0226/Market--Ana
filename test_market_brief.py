@@ -387,9 +387,11 @@ def d1_schema():
     def table(file, name):
         return re.search(rf"CREATE TABLE {name} \(.*?\n\);", (MIGRATIONS / file).read_text(encoding="utf-8"), re.S).group(0)
     alters = [line for file in ("0032_stock_news_marks.sql", "0033_news_impact.sql")
-              for line in re.findall(r"ALTER TABLE market_news_(?:runs|items) ADD COLUMN [^;]+;", (MIGRATIONS / file).read_text(encoding="utf-8"))]
-    return "\n".join([table("0016_watch_peers.sql", "overseas_quotes"), table("0016_watch_peers.sql", "overseas_fetch_status"),
-                      *(table("0031_market_news.sql", name) for name in ("market_news_runs", "market_news_items", "market_news_user_items")),
+              for line in re.findall(r"ALTER TABLE market_news_items ADD COLUMN [^;]+;", (MIGRATIONS / file).read_text(encoding="utf-8"))]
+    # market_news_runs 用 0037 重建後的樣子（一天六班、含 0033 的欄位）
+    runs = table("0037_market_news_push.sql", "market_news_runs_v2").replace("market_news_runs_v2", "market_news_runs")
+    return "\n".join([table("0016_watch_peers.sql", "overseas_quotes"), table("0016_watch_peers.sql", "overseas_fetch_status"), runs,
+                      *(table("0031_market_news.sql", name) for name in ("market_news_items", "market_news_user_items")),
                       *alters])
 
 
@@ -596,6 +598,31 @@ class Categories(Base):
                 self.assertIn(f'"summary":"{expected}', model.prompts[0])
                 self.assertEqual(printed["inputs"]["news_run"], "close" if slot == "evening" else slot)
                 self.assertTrue(self.cat(payload, "news")["say"].startswith(expected), "套句用那一班自己的總結（所有人看得到的那一句）")
+
+    def test_the_three_added_news_slots_do_not_change_what_each_shift_reads(self):
+        # 首頁消息加開 06:30、18:30、23:00 三班（本人 2026-11-24）：盤勢解讀仍是四班；18:00 那一班讀到收盤後為止，
+        # 之後才有的盤後、美股開盤兩班不讀（20:30 重跑時也一樣）；清晨那一班排在盤前之前。
+        self.assertEqual(sorted(mb.NEWS_SLOT_ORDER, key=mb.NEWS_SLOT_ORDER.get), ["us_close", "morning", "midday", "close", "evening", "us_open"])
+        self.assertEqual(mb.SLOTS, ("morning", "midday", "close", "evening"), "盤勢解讀自己的班次不變")
+        runs = [news_run(MONDAY, "us_close", summary="清晨：美股收高。"), news_run(MONDAY, "morning", summary="盤前：美股收高。"),
+                news_run(MONDAY, "midday", summary="盤中：台股走高。"), news_run(MONDAY, "close", summary="收盤：台股收高。"),
+                news_run(MONDAY, "evening", summary="盤後：外資期貨翻多。"), news_run(MONDAY, "us_open", summary="美股開盤：費半開高。")]
+        for slot, expected, run_slot in (("morning", "盤前", "morning"), ("midday", "盤中", "midday"), ("close", "收盤", "close"),
+                                         ("evening", "收盤", "close")):
+            with self.subTest(slot):
+                model = Model("model_timeout")
+                _, printed, _, _ = self.brief(model, MONDAY, slot, runs=runs)
+                self.assertIn(f'"summary":"{expected}', model.prompts[0])
+                self.assertEqual(printed["inputs"]["news_run"], run_slot)
+                for later in ("盤後：", "美股開盤："):
+                    self.assertNotIn(later, model.prompts[0])
+        model = Model("model_timeout")
+        _, printed, _, _ = self.brief(model, MONDAY, "morning", runs=[runs[0], runs[4]])
+        self.assertEqual(printed["inputs"]["news_run"], "us_close", "盤前那一班還沒寫成時，讀當天清晨那一班")
+        sql = mb.inputs_sql(MONDAY)
+        self.assertIn("slot IN ('us_close', 'morning', 'midday', 'close')", sql)
+        for later in ("'evening'", "'us_open'"):
+            self.assertNotIn(later, sql)
 
     # ---- 白天三班（票 06） ----
 

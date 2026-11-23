@@ -74,7 +74,11 @@ HOLIDAY_GAP_DAYS = 4           # 那個市場自己休市時，最多沿用到�
 NEWS_MIN_IMPACT = 2            # 影響力到這個才算「影響大盤的消息」（market_news.WATCH_MIN_IMPACT 同一條線）
 NEWS_TOP = 6                   # 給模型看幾則（影響大的先）
 NEWS_ITEM_FIELDS = ("group", "kind", "tone", "impact", "title", "reason", "effect")   # 所有人看得到的欄位；沒有 owner_effect
-NEWS_SLOT_ORDER = {"morning": 0, "midday": 1, "close": 2}
+# 首頁消息一天六班的先後（market_news.SLOTS；本人 2026-11-24 加開 06:30、18:30、23:00 三班）。盤勢解讀仍是一天四班，
+# 不跟加開的三班跑；每一班讀「不晚於自己」的最近一班消息：18:00 那一班（evening）讀到 14:00 收盤後為止，
+# 18:30 之後才有的盤後、美股開盤兩班不算（18:00 那一班在 20:30 重跑時也一樣，結果才不會隨重跑的時間變）。
+NEWS_SLOT_ORDER = {"us_close": 0, "morning": 1, "midday": 2, "close": 3, "evening": 4, "us_open": 5}
+NEWS_LIMIT = {"morning": "morning", "midday": "midday", "close": "close", "evening": "close"}   # 這一班 → 最晚讀到哪一班消息
 QUIET_SAY = {"overseas": "國際股市資料尚未更新", "news": "本時段無影響大盤的新消息"}
 TODAY_WORDS = re.compile("今天|今日|本日")
 _ISO_DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -223,16 +227,20 @@ def inputs_sql(trade_date: str) -> str:
     symbols = ", ".join(q(symbol) for _, symbol, _, _ in OVERSEAS)
     since = (date.fromisoformat(trade_date) - timedelta(days=QUOTE_DAYS)).isoformat()
     day = q(trade_date)
+    # 只讀盤勢解讀用得到的那幾班消息（到收盤後為止）：18:30 之後加開的兩班不讀，才不會佔掉下面那 120 則的名額
+    last = max(NEWS_SLOT_ORDER[slot] for slot in NEWS_LIMIT.values())
+    slots = ", ".join(q(slot) for slot, order in NEWS_SLOT_ORDER.items() if order <= last)
     return " UNION ALL ".join([
         "SELECT 'quote' AS row_type, json_object('symbol', symbol, 'date', date, 'close', close) AS data FROM overseas_quotes "
         f"WHERE symbol IN ({symbols}) AND date >= {q(since)} AND date <= {day}",
         "SELECT 'status', json_object('symbol', symbol, 'ok', ok, 'succeeded_at', succeeded_at) FROM overseas_fetch_status "
         f"WHERE symbol IN ({symbols})",
         "SELECT 'run', json_object('run_id', run_id, 'trade_date', trade_date, 'slot', slot, 'status', status, 'summary', summary, "
-        f"'effect', effect, 'indices', indices) FROM market_news_runs WHERE trade_date = {day}",
+        f"'effect', effect, 'indices', indices) FROM market_news_runs WHERE trade_date = {day} AND slot IN ({slots})",
         "SELECT 'item', data FROM (SELECT json_object('run_id', run_id, 'group', grp, 'kind', kind, 'tone', tone, 'impact', impact, "
         f"'title', title, 'reason', reason, 'effect', effect) AS data FROM market_news_items WHERE impact >= {NEWS_MIN_IMPACT} "
-        f"AND run_id IN (SELECT run_id FROM market_news_runs WHERE trade_date = {day}) ORDER BY impact DESC, published_at DESC LIMIT 90)",
+        f"AND run_id IN (SELECT run_id FROM market_news_runs WHERE trade_date = {day} AND slot IN ({slots})) "
+        "ORDER BY impact DESC, published_at DESC LIMIT 120)",
     ]) + ";"
 
 
@@ -316,8 +324,8 @@ def overseas_markets(inputs: Mapping[str, Any] | None, trade_date: str) -> list[
 
 
 def _news_run(inputs: Mapping[str, Any] | None, slot: str, trade_date: str) -> dict[str, Any] | None:
-    """同一交易日、不晚於這一班的最近一班首頁消息（evening：當天最後一班）。"""
-    limit = NEWS_SLOT_ORDER.get(slot, max(NEWS_SLOT_ORDER.values()))
+    """同一交易日、不晚於這一班的最近一班首頁消息（evening：到收盤後那一班為止；見 NEWS_LIMIT）。"""
+    limit = NEWS_SLOT_ORDER[NEWS_LIMIT[slot]]
     runs = [row for row in (inputs or {}).get("run") or []
             if row.get("trade_date") == trade_date and NEWS_SLOT_ORDER.get(row.get("slot"), 99) <= limit]
     return max(runs, key=lambda row: NEWS_SLOT_ORDER[row["slot"]]) if runs else None

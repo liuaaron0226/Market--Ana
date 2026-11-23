@@ -4,8 +4,12 @@
 # 觸發：
 # - 盤前 08:00：公司重大訊息（announcements，cron-trigger 每天台北 08:00）跑完接著跑；週末不跑。
 # - 午盤 11:30、收盤後 14:00：cron-trigger（worker.js 的 "30 3"、"0 6"）以 workflow_dispatch 觸發、帶 slot。
+# - 加開三班（本人 2026-11-24，.scratch/market-news-night 票 01）：盤後 18:30（evening）、美股開盤 23:00（us_open）、
+#   美股收盤 06:30（us_close，台北週二到週六），也由 cron-trigger 觸發（"30 10"、"0 15"、"30 22"）。這三班 Google News 搜尋量壓低
+#   （11-23 被 429 限流過）、盤勢解讀不跟著跑；美股那兩班不看台股休市。要先套資料庫的 0037，沒套時這三班安靜跳過。
 # 正式寫入要 repository variable MARKET_ANA_MARKET_NEWS_SCHEDULE=on 而且是預設分支；其他一律乾跑：
 # 照樣抓、照樣叫站主的模型（記用量），但不寫網站資料庫、不叫朋友的金鑰。網站顯示另有 MARKET_ANA_MARKET_NEWS 開關。
+# 重大消息推播（影響大的那幾則送到站主的裝置）另有開關：repository variable MARKET_ANA_MARKET_NEWS_PUSH 要剛好是 on。
 name: market-news
 
 on:
@@ -15,10 +19,10 @@ on:
   workflow_dispatch:
     inputs:
       slot:
-        description: "哪一輪：morning 盤前／midday 午盤／close 收盤後"
+        description: "哪一輪：us_close 美股收盤 06:30／morning 盤前／midday 午盤／close 收盤後／evening 盤後 18:30／us_open 美股開盤 23:00"
         required: true
         type: choice
-        options: [morning, midday, close]
+        options: [us_close, morning, midday, close, evening, us_open]
         default: close
       dry_run:
         description: "乾跑：照樣抓、叫站主的模型，但不寫網站資料庫"
@@ -158,7 +162,13 @@ jobs:
           OWNER_EMAIL: ${{ secrets.OWNER_EMAIL }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: python watch_news.py daily --d1
+        run: |
+          # 加開的三班（盤後、美股開盤、美股收盤）搜尋量壓到白天的三分之一（watch_news.NIGHT_MAX_QUERIES）：11-23 被 Google News 限流過。
+          # 被限流（429／503）時這一步只是少抓，中央社與重大訊息照常；這一步失敗也不擋後面的消息。
+          case "$SLOT" in
+            evening|us_open|us_close) python watch_news.py daily --d1 --night ;;
+            *) python watch_news.py daily --d1 ;;
+          esac
 
       - name: 讀可用的朋友金鑰（密文；朋友 AI 解讀開著才讀）
         if: env.DRY_RUN == 'false' && vars.MARKET_ANA_FRIEND_AI == 'on'
@@ -193,6 +203,25 @@ jobs:
           # 站主個股的盯項、模型回的字都不印）。這支排程沒有存回 R2 的資料夾，所以完整的報告不另外保存（--private-report 沒給）。
           python market_news.py "${args[@]}" | tee "$RUNNER_TEMP/market-news/run.json"
 
+      # 重大消息推播（本人 2026-11-24，.scratch/market-news-night 票 01）：這一班寫進資料庫之後，把判成影響大（impact 3）的消息
+      # 送到站主的裝置（六班都送）。同一則只送一次、跨班也不重複，一班最多三則（cloud/lib/market-news-push.js；要資料庫的 0037）。
+      # 開關是 repository variable MARKET_ANA_MARKET_NEWS_PUSH（要剛好是 on）；乾跑、消息那一步失敗、休市或跳過都不送。
+      # 金鑰沿用關注與追蹤事項推播放在 GitHub 的那一組。送不成不影響這一班（continue-on-error，指令本身也一律以 0 結束）。
+      # 倉庫公開：這一步印的只有數字（送了幾則、幾則重複），不印標題、裝置網址或信箱。
+      - name: 重大消息推播（只送站主；失敗不影響這一輪）
+        if: success() && env.DRY_RUN == 'false' && vars.MARKET_ANA_MARKET_NEWS_PUSH == 'on'
+        continue-on-error: true
+        env:
+          OWNER_EMAIL: ${{ secrets.OWNER_EMAIL }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+        run: |
+          run_id=$(python -c "import json,sys; r=json.loads(open(sys.argv[1], encoding='utf-8').read().strip().splitlines()[-1]); print(r.get('run_id') if r.get('status') == 'ok' else '')" "$RUNNER_TEMP/market-news/run.json" || true)
+          if [ -z "$run_id" ]; then echo "這一班消息沒有寫進資料庫（休市或沒跑成），不推播"; exit 0; fi
+          MARKET_NEWS_RUN_ID="$run_id" node cloud/market-news-push.mjs || echo "::warning::重大消息推播沒有送成"
+
       - name: 記進 Gemini 用量（設定頁用；失敗不影響這一輪）
         if: always() && steps.agy_auth.outcome == 'success'
         continue-on-error: true
@@ -217,11 +246,13 @@ jobs:
       # 或台股休市（消息印 skipped）也不跑，網站留上一班。五步都 continue-on-error：寫不成不影響這一輪消息。
       # 大盤資料包從 R2 的工作集唯讀取回（只取 last-market-pack 一項）；這支排程不上傳、不同步任何狀態。
       # 模型與思考程度沿用設定頁「AI 模型」的白話分析那一項（前面讀設定那一步寫進環境的 AI_PLAIN_*）。
+      # 只跟原本三班（morning／midday／close）：加開的盤後、美股開盤、美股收盤三班不跑盤勢解讀（維持一天四次）——
+      # 取資料包那一步多一個時段條件，它不跑、ready 就不會是 true，後面四步跟著不跑。
       # 倉庫公開：這幾步印的只有遮過的報告（狀態、時段、來源、類別、模型），模型寫的句子只在 --report 那一份
       # （跟著這台機器一起消失，不進 artifact、不進步驟摘要）。
       - name: 盤勢解讀：取回最近一次大盤資料包（R2，唯讀）
         id: brief_pack
-        if: success() && env.DRY_RUN == 'false' && vars.MARKET_ANA_MARKET_BRIEF_SCHEDULE == 'on'
+        if: success() && env.DRY_RUN == 'false' && vars.MARKET_ANA_MARKET_BRIEF_SCHEDULE == 'on' && (env.SLOT == 'morning' || env.SLOT == 'midday' || env.SLOT == 'close')
         continue-on-error: true
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

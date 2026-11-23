@@ -15,7 +15,9 @@
     { key: 'gspc', short: '標普', name: '標普 500', zone: 'us' },
     { key: 'sox', short: '費半', name: '費城半導體', zone: 'us' },
     { key: 'n225', short: '日經', name: '日經 225', zone: 'asia' },
-    { key: 'ks11', short: '韓綜', name: '韓國綜合', zone: 'asia' }
+    { key: 'ks11', short: '韓綜', name: '韓國綜合', zone: 'asia' },
+    // 只有分時、沒有日線（本人 2026-11-24）：海外大盤分時的開關對這個人開著時選單才列出來（minimal.js）
+    { key: 'nq_fut', short: '那指期', name: '那斯達克期貨', zone: 'us', intradayOnly: true }
   ];
 
   const finite = value => typeof value === 'number' && Number.isFinite(value);

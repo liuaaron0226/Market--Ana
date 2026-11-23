@@ -71,6 +71,9 @@ PER_QUERY_KEEP = 40          # 一次搜尋一檔最多留幾則（最新的）
 BATCH = 10                   # 英文簡稱幾檔合成一次搜尋
 POOL_BATCH = 5               # 股票池前 50（不在任何人自選或搜尋裡的）幾檔合一次
 MAX_QUERIES = 28             # 一輪最多幾次 Google News 搜尋（每次間隔 GNEWS_PAUSE_SECONDS；剩下的下一輪接著抓）
+# 首頁消息晚間與清晨那三班（盤後 18:30、美股開盤 23:00、美股收盤 06:30；本人 2026-11-24 加開）：搜尋量壓到白天的三分之一。
+# 11-23 一天跑太多輪，Google News 對排程的機器回 429；一天從三班變六班，總搜尋量只多一倍左右、不是兩倍。
+NIGHT_MAX_QUERIES = 9
 GNEWS_PAUSE_SECONDS = 7.0    # 實測連續約 7 次就回 429：每次之間停一下
 MAX_STOCKS = 150             # 名單最多幾檔（先自選、再搜尋、再前 50）
 SHORT_NAME_EN = 3            # 英文簡稱這麼短（VIS、GWC、UMC）時大小寫要一樣才算點名
@@ -280,15 +283,21 @@ def _fetch(get: Callable, url: str, source: str) -> tuple[list[dict] | None, str
         return None, f"{type(error).__name__}: {error}"[:200], False
 
 
-# 公司簡稱只有兩個字時常常同時是一般用語（創意、世界、統一、國產、大同…）：光是標題裡出現那兩個字不算點名公司，
+# 公司簡稱同時是一般用語時（創意、世界、統一、國產、大同…，名單在下面的 COMMON_WORD_NAMES）：光是標題裡出現那幾個字不算點名公司，
 # 同一段文字還要有股市／公司營運的用語才算（本人 2026-11-23：創意的消息混進「有創意」「創意料理」這種完全無關的新聞）。
-# 三個字以上的簡稱照舊；標題有股票代號的一律算。這份用語表和 cloud/lib/news-relevance.js 的要一致。
+# 其他簡稱照舊；標題有股票代號的一律算。這份用語表與名單和 cloud/lib/news-relevance.js 的要一致。
 MARKET_CONTEXT = (
     "股", "證交所", "櫃買", "金管會", "上市", "上櫃", "興櫃", "營收", "財報", "財測", "法說", "獲利", "業績", "毛利", "EPS", "本益比", "市值",
     "法人", "外資", "投信", "自營", "漲停", "跌停", "違約交割", "處置", "目標價", "評等", "訂單", "出貨", "擴產", "產能", "併購", "增資", "減資",
     "除息", "除權", "配息", "股利", "庫藏", "董事會", "董事長", "總經理", "半導體", "晶片", "晶圓", "ASIC", "IC設計", "ETF", "供應鏈",
 )
-SHORT_NAME = 2
+# 哪些簡稱同時是一般用語：只有這些要多看前後文。原本是「兩個字的都要」，結果把「大摩看好世芯拿下第三家客戶」這種
+# 明明在講公司的標題也擋掉（世芯、鴻海、聯電不是一般用語）——11-24 改成列名單；之後遇到新的再加進來。
+COMMON_WORD_NAMES = frozenset((
+    "創意", "世界", "統一", "國產", "大同", "中華", "遠東", "精英", "新光", "聯合", "智慧", "全新", "陽明", "全家", "高鐵", "信義",
+    "互動", "精華", "大眾", "文化", "時報", "寶島", "美食", "安心", "開發", "和平", "太陽", "亞洲", "國際", "第一", "中興", "光明",
+    "華南", "台灣", "力量", "上海", "東方", "南方", "新興", "大成", "玉山", "長榮", "中央", "三星", "大地", "生活", "未來", "現代",
+))
 
 
 def _mentions(text: str, stock: dict) -> bool:
@@ -297,7 +306,7 @@ def _mentions(text: str, stock: dict) -> bool:
         return True
     if len(name) < 2 or name not in text:
         return False
-    if len(name) > SHORT_NAME:
+    if name not in COMMON_WORD_NAMES:
         return True
     rest = text.replace(name, " ")   # 公司名本身帶的字不算（例如簡稱裡就有「股」）
     return any(word in rest for word in MARKET_CONTEXT)
@@ -457,8 +466,10 @@ def sql(result: dict, *, keep_days: int = KEEP_DAYS) -> str:
 
 
 def daily(owner_email: str, *, query: Callable[[str], list[dict]], execute: Callable[[str], None],
-          get: Callable | None = None, now: str | None = None, sleep: Callable[[float], None] | None = None) -> dict:
+          get: Callable | None = None, now: str | None = None, sleep: Callable[[float], None] | None = None,
+          budget: int = MAX_QUERIES) -> dict:
     """讀抓取名單（每個人的自選 → 股票池前 50 → 每個人最近的搜尋）→ 抓 → 一次寫回。
+    budget：這一輪最多幾次 Google News 搜尋（晚間與清晨那三班給 NIGHT_MAX_QUERIES；沒輪到的下一輪接著抓）。
     watch_news 還沒建立就什麼都不抓；0031 還沒套時只抓自選與搜尋（沒有前 50、沒有英文簡稱）。
     owner_email 只用來先確認排程設定沒填錯（名單不再只限站主）。"""
     if not _EMAIL.fullmatch(owner_email or ""):
@@ -483,7 +494,7 @@ def daily(owner_email: str, *, query: Callable[[str], list[dict]], execute: Call
                                               f"WHERE lower(email) = lower({_q(owner_email)}) AND watching = 1")}
     state = {(row["source"], row["code"]): row for row in query(
         "SELECT source, code, last_attempt_at, last_success_at FROM watch_news_fetches WHERE source IN ('gnews', 'gnews-backfill')")}
-    result = gather(stocks, get=get, now=now, sleep=sleep, market_wide_unless=watching, state=state)
+    result = gather(stocks, get=get, now=now, sleep=sleep, market_wide_unless=watching, state=state, budget=budget)
     # 重大訊息（公開資訊觀測站）：名單上的股票，網站資料庫目前那一版裡有的都放進個股新聞。表還沒建就略過。
     try:
         listed = ",".join(_q(stock["code"]) for stock in stocks)
@@ -572,12 +583,13 @@ def _wrangler_execute(script: str) -> None:
 
 if __name__ == "__main__":
     import os
-    if sys.argv[1:] == ["daily", "--d1"]:
+    if sys.argv[1:] in (["daily", "--d1"], ["daily", "--d1", "--night"]):
         # 倉庫公開之後排程的輸出誰都看得到：來源不逐檔印（gnews:代號 看得出誰的自選有哪幾檔），只印各來源成功、失敗幾檔；
-        # 逐檔的結果本來就寫在資料庫的 watch_news_fetches。
+        # 逐檔的結果本來就寫在資料庫的 watch_news_fetches。--night：晚間與清晨那三班，搜尋量壓到 NIGHT_MAX_QUERIES。
         import public_log
         print(json.dumps(public_log.watch_news_daily(
-            daily(os.environ.get("OWNER_EMAIL", ""), query=_wrangler_query, execute=_wrangler_execute)), ensure_ascii=False))
+            daily(os.environ.get("OWNER_EMAIL", ""), query=_wrangler_query, execute=_wrangler_execute,
+                  budget=NIGHT_MAX_QUERIES if "--night" in sys.argv else MAX_QUERIES)), ensure_ascii=False))
     elif sys.argv[1:] == ["pool", "--d1"]:
         # 每日更新發布後：寫前 50 與英文簡稱（0031 還沒套時 wrangler 會失敗，排程那一步 continue-on-error）
         from pathlib import Path
@@ -591,5 +603,5 @@ if __name__ == "__main__":
                         sleep=time.sleep)
         print(json.dumps({"fetches": result["fetches"], "news": result["news"]}, ensure_ascii=False, indent=1))
     else:
-        print("用法：python watch_news.py daily --d1 ｜ pool --d1 ｜ probe 代號:名稱:市場:英文簡稱 ...", file=sys.stderr)
+        print("用法：python watch_news.py daily --d1 [--night] ｜ pool --d1 ｜ probe 代號:名稱:市場:英文簡稱 ...", file=sys.stderr)
         sys.exit(2)

@@ -117,7 +117,7 @@ class FakeD1:
         return {(row["source"], row["code"]): row for row in self.query("SELECT * FROM watch_news_fetches")}
 
 
-def run(d1, web, now=NOW, owner="owner@example.com"):
+def run(d1, web, now=NOW, owner="owner@example.com", budget=wn.MAX_QUERIES):
     calls = []
 
     def get(url, headers=None):
@@ -126,7 +126,7 @@ def run(d1, web, now=NOW, owner="owner@example.com"):
         if isinstance(response, Exception):
             raise response
         return response
-    report = wn.daily(owner, query=d1.query, execute=d1.execute, get=get, now=now, sleep=lambda seconds: None)
+    report = wn.daily(owner, query=d1.query, execute=d1.execute, get=get, now=now, sleep=lambda seconds: None, budget=budget)
     return report, calls
 
 
@@ -295,6 +295,28 @@ class DailyTests(unittest.TestCase):
         _, calls = run(d1, web)
         self.assertEqual(sum(is_gnews(url) for url in calls), 1, "來源要求放慢時，這一輪不再打它")
         self.assertEqual(d1.fetches()[("gnews", "2330")]["last_error"], "HTTP 429")
+        self.assertEqual(len(d1.news("")), 2, "中央社照常")
+
+    def test_the_night_budget_limits_google_searches_and_the_rest_wait_for_the_next_round(self):
+        # 首頁消息加開的三班（本人 2026-11-24）：搜尋量壓低，沒輪到的那幾檔不記錯誤、下一輪接著抓；中央社照常
+        d1 = FakeD1()
+        report, calls = run(d1, normal_web(), budget=1)
+        self.assertEqual(sum(is_gnews(url) for url in calls), 1)
+        self.assertEqual(sorted(url for url in calls if not is_gnews(url)), sorted(CNA.values()))
+        self.assertEqual(report["status"], "ok")
+        tried = [code for code in ("2330", "6488") if ("gnews", code) in d1.fetches()]
+        self.assertEqual(len(tried), 1, "沒輪到的那一檔這一輪不記")
+        _, later = run(d1, normal_web(), now="2026-11-16T15:00:00Z", budget=1)
+        other = next(code for code in ("2330", "6488") if code not in tried)
+        self.assertIn(("gnews", other), d1.fetches(), "下一輪先抓上次沒輪到的")
+        self.assertLessEqual(wn.NIGHT_MAX_QUERIES * 3, wn.MAX_QUERIES)
+
+    def test_a_rate_limited_night_round_still_stores_the_other_sources(self):
+        d1 = FakeD1()
+        web = normal_web()
+        web[("gnews", "zh")] = Response(status=429)
+        report, calls = run(d1, web, budget=wn.NIGHT_MAX_QUERIES)
+        self.assertEqual((report["status"], sum(is_gnews(url) for url in calls)), ("ok", 1))
         self.assertEqual(len(d1.news("")), 2, "中央社照常")
 
     def test_nothing_to_do_without_stocks_but_market_wide_news_is_kept(self):

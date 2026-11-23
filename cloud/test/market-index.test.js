@@ -44,9 +44,11 @@ test("選單是台股加權在最前面，接著六個國外指數（11-19 下�
     ["sox", "費半", "費城半導體"],
     ["n225", "日經", "日經 225"],
     ["ks11", "韓綜", "韓國綜合"],
+    ["nq_fut", "那指期", "那斯達克期貨"],   // 只有分時（本人 2026-11-24），海外分時的開關開著才列出來
   ]);
-  assert.deepEqual(plain(MarketIndex.LIST.slice(1).map((item) => [item.key, item.name, item.zone])),
+  assert.deepEqual(plain(MarketIndex.LIST.slice(1).filter((item) => !item.intradayOnly).map((item) => [item.key, item.name, item.zone])),
     MARKET_INDICES.map((item) => [item.key, item.name, item.zone]));
+  assert.deepEqual(plain(MarketIndex.LIST.filter((item) => item.intradayOnly).map((item) => item.key)), ["nq_fut"]);
 });
 
 test("日K：日期、月/日標籤、開高低收量照原樣", () => {

@@ -196,7 +196,7 @@ class CheckDb(tiw.NewsD1):
         self.runs += 1
         run_id = f"run{self.runs}"
         self.db.execute("INSERT INTO market_news_runs (run_id, trade_date, slot, created_at, status) VALUES (?, ?, ?, ?, 'ok')",
-                        (run_id, fetched_at[:10], mn.SLOTS[self.runs % 3], fetched_at))
+                        (run_id, fetched_at[:10], ("morning", "midday", "close")[self.runs % 3], fetched_at))
         for index, row in enumerate(rows):
             title, link, reason = (*row, "一句理由")[:3]
             self.db.execute("INSERT INTO market_news_items (run_id, item_id, grp, market, kind, tone, impact, title, translated, reason, "

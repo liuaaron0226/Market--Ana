@@ -171,3 +171,47 @@ test("首頁消息（本人 11-19）：台北 11:30、14:00 觸發 market-news.y
   await dispatch("0 6,10 * * MON-FRI", Date.parse("2026-11-19T10:00:00Z"), env, async (u) => { daily = u; return { status: 204 }; });
   assert.match(daily, /daily-update\.yml/, "同一行的 18:00 照舊是每日更新");
 });
+
+const CRONS = async () => {
+  const { readFileSync } = await import("node:fs");
+  const toml = readFileSync(new URL("./wrangler.toml", import.meta.url), "utf8");
+  return [...toml.match(/crons = \[(.*)\]/)[1].matchAll(/"([^"]+)"/g)].map(m => m[1]);
+};
+
+test("首頁消息加開三班（本人 11-24）：台北 18:30、23:00、隔天 06:30 觸發 market-news.yml，帶時段名稱與台北日期；只送宣告過的參數與選項", async () => {
+  const { readFileSync } = await import("node:fs");
+  const workflow = readFileSync(new URL("../.github/workflows/market-news.yml", import.meta.url), "utf8").replaceAll("\r\n", "\n");
+  const inputs = workflow.split("  workflow_dispatch:\n")[1].split("\npermissions:")[0];
+  const declared = [...inputs.matchAll(/^      ([a-z_]+):$/gm)].map(m => m[1]);
+  const options = inputs.match(/options: \[([^\]]+)\]/)[1].split(",").map(s => s.trim());
+  const crons = await CRONS();
+  const half = crons.find(c => c.startsWith("30 ")), hour = crons.find(c => c.startsWith("0 6"));
+  // 週一（11-23）UTC：10:30＝台北週一 18:30、15:00＝台北週一 23:00、22:30＝台北週二 06:30
+  for (const [cron, utc, slot, date] of [[half, "10:30", "evening", "2026-11-23"], [hour, "15:00", "us_open", "2026-11-23"],
+                                          [half, "22:30", "us_close", "2026-11-24"]]) {
+    let url, body;
+    const result = await dispatch(cron, Date.parse(`2026-11-23T${utc}:00Z`), env, async (u, init) => {
+      url = u; body = JSON.parse(init.body); return { status: 204 };
+    });
+    assert.equal(result.dispatched, "market-news.yml", slot);
+    assert.match(url, /market-news\.yml\/dispatches$/);
+    assert.deepEqual([body.inputs.slot, body.inputs.dry_run, body.inputs.date, body.inputs.trigger_source], [slot, "false", date, "cloudflare-cron"]);
+    for (const key of Object.keys(body.inputs)) assert.ok(declared.includes(key), `workflow rejects unknown input ${key}`);
+    assert.ok(options.includes(slot), `workflow 的 slot 選項要有 ${slot}（沒有的話 GitHub 回 422）`);
+  }
+  // 週五（11-27）UTC 22:30＝台北週六 06:30：美股週五收盤那一班照跑
+  let saturday;
+  await dispatch(half, Date.parse("2026-11-27T22:30:00Z"), env, async (_u, init) => { saturday = JSON.parse(init.body); return { status: 204 }; });
+  assert.deepEqual([saturday.inputs.slot, saturday.inputs.date], ["us_close", "2026-11-28"]);
+});
+
+test("加開三班不多佔時段：仍是 5 個；星期一律 MON-FRI（UTC 週一到週五的 22:30＝台北週二到週六 06:30）；原本的時間一個都沒少", async () => {
+  const crons = await CRONS();
+  assert.equal(crons.length, 5);
+  assert.deepEqual(crons.filter(c => /^(30|0) \d+,/.test(c)), ["30 3,7,8,10,12,22 * * MON-FRI", "0 6,10,15 * * MON-FRI"]);
+  const news = Object.entries(JOBS).filter(([, job]) => job.workflow === "market-news.yml");
+  assert.deepEqual(news.map(([key, job]) => [key, job.inputs.slot, job.weekday]).sort(), [
+    ["0 15", "us_open", "MON-FRI"], ["0 6", "close", "MON-FRI"], ["30 10", "evening", "MON-FRI"],
+    ["30 22", "us_close", "MON-FRI"], ["30 3", "midday", "MON-FRI"]]);
+  for (const key of ["30 7", "30 8", "0 10", "30 12", "0 0", "20 23"]) assert.ok(JOBS[key], key);
+});

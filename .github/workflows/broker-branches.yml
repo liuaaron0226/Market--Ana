@@ -1,0 +1,169 @@
+# 主力分點（本人 2026-11-24「共識達成」，.scratch/broker-branches 票 01）：抓券商公開的主力進出頁，
+# 把分點每日買賣超寫進網站資料庫（broker_branches、broker_branch_days、broker_branch_stocks）。
+# 目前只有手動觸發：
+# - mode=backfill、code 有填：只回補那一檔（近三年）。
+# - mode=backfill、code 空白：站主的自選股與庫存裡還沒回補的，最多 limit 檔（做到一半的先接著做）。
+# - mode=daily：已回補的每一檔更新到最近交易日。
+# 寫不寫資料庫：手動而且 dry_run 取消勾選就寫（排程開關沒開也可以手動回補一檔）；之後接排程時，
+# 排程觸發的要 repository variable MARKET_ANA_BROKER_BRANCHES_SCHEDULE 剛好是 on 才寫。其他一律乾跑：照樣抓、不寫。
+# 倉庫公開：站主關注哪些股票不能出現在這裡的輸出。
+# - 輸入的代號一開始就遮住（::add-mask::），而且只從事件檔讀，不放進任何步驟的 env 或 ${{ }}（步驟開頭會把 env 印出來）。
+# - broker_branches.py 印到標準輸出的是遮過的報告（檔數、頁數、失敗原因的種類、日期範圍）；
+#   有代號與分點的完整報告、SQL、從資料庫讀出來的名單都只在這台機器的暫存資料夾，不印、不進 artifact、不進步驟摘要。
+name: broker-branches
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "backfill 回補（近三年）／daily 每日更新"
+        required: true
+        type: choice
+        options: [backfill, daily]
+        default: backfill
+      code:
+        description: "只回補這一檔（只在 backfill 用；空白＝站主的自選股與庫存裡還沒回補的）"
+        required: false
+        type: string
+      limit:
+        description: "backfill 而且沒填代號時，這一輪最多回補幾檔"
+        required: false
+        type: string
+        default: "2"
+      dry_run:
+        description: "乾跑：照樣抓，但不寫網站資料庫"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: broker-branches   # 對來源一次只跑一輪（乾跑也算）
+  cancel-in-progress: false
+
+jobs:
+  branches:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50   # 一輪最多 400 頁、每頁間隔 3 秒
+    env:
+      TZ: Asia/Taipei
+      PYTHONIOENCODING: utf-8
+      MODE: ${{ inputs.mode || 'daily' }}
+      LIMIT: ${{ inputs.limit || '2' }}
+    steps:
+      - name: 遮住輸入的代號、決定這一輪寫不寫資料庫
+        id: plan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SWITCH: ${{ vars.MARKET_ANA_BROKER_BRANCHES_SCHEDULE }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          code="$(jq -r '.inputs.code // ""' "$GITHUB_EVENT_PATH")"
+          if [ -n "$code" ]; then echo "::add-mask::$code"; fi
+          single=false
+          if [ -n "$code" ] && [ "$MODE" = "backfill" ]; then single=true; fi
+          write=false
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            if [ "$INPUT_DRY_RUN" = "false" ]; then write=true; fi
+          elif [ "$SWITCH" = "on" ]; then
+            write=true
+          fi
+          echo "single=$single" >> "$GITHUB_OUTPUT"
+          echo "write=$write" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: 安裝相依
+        run: python -m pip install -r requirements-daily.txt
+
+      - name: 檢查機密
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          OWNER_EMAIL: ${{ secrets.OWNER_EMAIL }}
+        run: |
+          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID OWNER_EMAIL; do
+            if [ -z "${!name}" ]; then echo "::error::缺少 $name"; exit 1; fi
+          done
+
+      - name: 讀站主的自選股與庫存（D1，唯讀）
+        if: steps.plan.outputs.single != 'true'
+        env:
+          OWNER_EMAIL: ${{ secrets.OWNER_EMAIL }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          query="$(python broker_branches.py stocks-sql)"
+          (cd cloud && npx --yes wrangler@4 d1 execute market-ana-accounts --remote --json \
+            --command "$query" > "$RUNNER_TEMP/broker-branches-stocks.json" 2> /dev/null) \
+            || echo "::warning::讀不到站主的自選股與庫存，這一輪不抓"
+
+      - name: 讀回補狀態（D1，唯讀）
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          query="$(python broker_branches.py state-sql --for "$MODE")"
+          (cd cloud && npx --yes wrangler@4 d1 execute market-ana-accounts --remote --json \
+            --command "$query" > "$RUNNER_TEMP/broker-branches-state.json" 2> /dev/null) \
+            || echo "::warning::讀不到回補狀態（0036 還沒套用？）"
+
+      - name: 抓分點
+        id: fetch
+        env:
+          SINGLE: ${{ steps.plan.outputs.single }}
+        run: |
+          set -o pipefail
+          args=("$MODE" --state "$RUNNER_TEMP/broker-branches-state.json" --sql-output "$RUNNER_TEMP/broker-branches.sql"
+                --report "$RUNNER_TEMP/broker-branches-report.json")
+          if [ "$SINGLE" = "true" ]; then
+            # 代號只從事件檔讀（已經遮住），不經過 env、不印出來
+            args+=(--code "$(jq -r '.inputs.code // ""' "$GITHUB_EVENT_PATH")")
+          else
+            args+=(--stocks "$RUNNER_TEMP/broker-branches-stocks.json")
+            if [ "$MODE" = "backfill" ]; then args+=(--owner-stocks --limit "$LIMIT"); fi
+          fi
+          python broker_branches.py "${args[@]}" | tee "$RUNNER_TEMP/broker-branches.json"
+
+      - name: 寫進 D1
+        if: steps.plan.outputs.write == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -s "$RUNNER_TEMP/broker-branches.sql" ]; then
+            cd cloud
+            # wrangler 的輸出（出錯時可能帶著 SQL 片段，裡面有代號）不印，只留錯誤代碼
+            if ! npx --yes wrangler@4 d1 execute market-ana-accounts --remote --file "$RUNNER_TEMP/broker-branches.sql" \
+                > "$RUNNER_TEMP/broker-branches-wrangler.log" 2>&1; then
+              grep -oE 'code: [0-9]+' "$RUNNER_TEMP/broker-branches-wrangler.log" | sort -u | head -n 5 || true
+              echo "::error::分點資料寫不進 D1"
+              exit 1
+            fi
+          else
+            echo "這一輪沒有要寫的分點資料"
+          fi
+
+      - name: 執行摘要
+        if: always()
+        env:
+          WRITE: ${{ steps.plan.outputs.write }}
+        run: |
+          {
+            if [ "$WRITE" = "true" ]; then echo "### 主力分點 $MODE（正式）"; else echo "### 主力分點 $MODE（乾跑，未寫入）"; fi
+            if [ -f "$RUNNER_TEMP/broker-branches.json" ]; then echo '```json'; cat "$RUNNER_TEMP/broker-branches.json"; echo '```'; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 清除暫存（名單、SQL、完整報告）
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/broker-branches-stocks.json" "$RUNNER_TEMP/broker-branches-state.json" "$RUNNER_TEMP/broker-branches.sql" "$RUNNER_TEMP/broker-branches-report.json" "$RUNNER_TEMP/broker-branches.json" "$RUNNER_TEMP/broker-branches-wrangler.log"

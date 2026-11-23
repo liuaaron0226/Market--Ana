@@ -519,6 +519,23 @@ body.st .bd-stage { margin-top: 12px; padding: 2px 32px 10px; }
 body.st .bd-chart-bar { margin-bottom: 4px; }
 body.st .bd-draw { padding-bottom: 0; margin-bottom: 4px; }
 body.st .hm-cats { margin-top: 14px; }
+/* ---------- 主力分點副圖（branch-pane.js）：名稱一排鍵（.chip-seg，槽與凸起的鍵和分類鍵同一套）在上、柱狀圖在下 ---------- */
+.kc-studies .kc-study-pane-branch { display: grid; gap: 6px; }
+.bp-chips { min-height: 36px; margin: 0 -2px; padding: 2px; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
+.bp-chips::-webkit-scrollbar { display: none; }
+.bp-chips .chip-seg { flex-wrap: nowrap; padding: var(--track-pad); gap: var(--track-gap); border: 0; border-radius: var(--r-track); background: var(--well); box-shadow: var(--well-shadow); }
+.bp-chips .chip-seg[hidden] { display: none; }
+.bp-chips .chip-seg button { flex: none; display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 0 10px; border-radius: var(--r-key); font: 500 12.5px/1 var(--sans); white-space: nowrap; }
+.bp-chips .chip-seg button .num { font: 500 12px/1 var(--mono); font-variant-numeric: tabular-nums; }
+.bp-chips .chip-seg button[aria-checked="true"] { background: var(--key); color: var(--ink); font-weight: 700; box-shadow: var(--key-shadow); }
+.bp-chips .chip-seg button::before { content: ""; position: absolute; inset: -6px 0; }
+body.bd .bp-chips.is-overflow .chip-seg button { touch-action: pan-x pan-y; }
+/* 「主力分點」開著、同一排又展開了一類：凸起的鍵只留給展開的那一類（一排只有一顆凸起），
+   「主力分點」改成平的、字照樣是深色粗體，底下一小段線表示開著。沒有展開任何一類時它自己是凸起的鍵。 */
+body.bd .hm-cats:has(button[aria-expanded="true"]) #branchToggle[aria-pressed="true"] { background: transparent; box-shadow: none; }
+body.bd .hm-cats:has(button[aria-expanded="true"]) #branchToggle[aria-pressed="true"]::after {
+  content: ""; position: absolute; left: 50%; bottom: 7px; width: 18px; height: 2px; margin-left: -9px; border-radius: 1px; background: var(--ink);
+}
 body.st .bd-shell { padding-bottom: 40px; }
 body.st .sf-blocks { margin-top: 18px; padding-top: 14px; }
 @media (max-width: 860px) {

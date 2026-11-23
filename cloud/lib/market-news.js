@@ -68,6 +68,9 @@ function points(row, isOwner) {
   return out;
 }
 
+// 一天六班（本人 2026-11-24 加開三班；market_news.SLOTS）：us_close 06:30 → morning 08:00 → midday 11:30 → close 14:00 →
+// evening 18:30 → us_open 23:00，台北時間。06:30 那一班的 trade_date 是台北當天，所以「那一天最新的一班」照寫入時間
+// （created_at）取就對：清晨那一班最早寫、不會蓋過當天後面的班次；23:00 那一班晚到跨了午夜，trade_date 仍是前一天。
 async function pickRun(db, date) {
   const sql = "SELECT * FROM market_news_runs " +
     (date ? "WHERE trade_date = ? " : "") + "ORDER BY trade_date DESC, created_at DESC LIMIT 1";

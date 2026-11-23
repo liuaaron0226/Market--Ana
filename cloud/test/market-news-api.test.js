@@ -78,6 +78,52 @@ test("指定日期：那一天最後一輪", async () => {
   assert.equal((await req("/api/market-news?date=11-18")).status, 400);
 });
 
+// 本人 2026-11-24 加開三班：us_close 06:30、evening 18:30、us_open 23:00（台北）。06:30 那一班算當天的、排在盤前之前。
+test("一天六班：首頁是最新寫進去的那一班；指定日期是那一天最後一班；清晨那一班算當天的", async () => {
+  const add = (date, slot, created) => env.DB.prepare(
+    "INSERT INTO market_news_runs (run_id, trade_date, slot, created_at, status, summary, indices, sources, model) VALUES (?, ?, ?, ?, 'ok', ?, '[]', '{}', 'm')",
+  ).bind(`${date}-${slot}`, date, slot, created, `${date} ${slot}`).run();
+  const latest = async (query = "") => (await (await req(`/api/market-news${query}`)).json()).run;
+  await add("2026-11-19", "us_close", "2026-11-18T22:35:00Z");   // 台北 11-19 06:35：比當天盤前早
+  assert.equal((await latest()).slot, "close", "清晨那一班不會蓋過同一天後面的班次");
+  await add("2026-11-19", "midday", "2026-11-19T03:35:00Z");
+  await add("2026-11-19", "evening", "2026-11-19T10:35:00Z");
+  assert.deepEqual([(await latest()).slot, (await latest()).summary], ["evening", "2026-11-19 evening"]);
+  await add("2026-11-19", "us_open", "2026-11-19T16:20:00Z");    // 排程晚到、過了台北午夜才寫：仍是 11-19 的最後一班
+  assert.equal((await latest()).slot, "us_open");
+  assert.equal((await latest("?date=2026-11-19")).slot, "us_open");
+  await add("2026-11-20", "us_close", "2026-11-19T22:35:00Z");
+  assert.deepEqual([(await latest()).trade_date, (await latest()).slot], ["2026-11-20", "us_close"]);
+  assert.equal((await latest("?date=2026-11-19")).slot, "us_open", "前一天停在它自己的最後一班");
+  await add("2026-11-20", "morning", "2026-11-20T00:05:00Z");
+  assert.equal((await latest()).slot, "morning");
+  const body = await (await req("/api/market-news")).json();
+  assert.deepEqual(body.dates.slice(0, 3), ["2026-11-20", "2026-11-19", "2026-11-18"]);
+});
+
+test("時段只收這六個（0037）", async () => {
+  await assert.rejects(env.DB.prepare(
+    "INSERT INTO market_news_runs (run_id, trade_date, slot, created_at, status) VALUES ('2026-11-19-night', '2026-11-19', 'night', '2026-11-19T12:00:00Z', 'ok')",
+  ).run(), /CHECK/);
+});
+
+test("0037 重建 market_news_runs：原本的列（含 0033 的欄位）原樣搬過去，之後收得下新的三班", async () => {
+  const { readFileSync } = await import("node:fs");
+  const last = "0037_market_news_push.sql";
+  const db = fakeD1(MIGRATION_FILES.slice(0, MIGRATION_FILES.indexOf(last)));
+  const insert = (slot) => db.prepare(
+    "INSERT INTO market_news_runs (run_id, trade_date, slot, created_at, status, summary, indices, sources, model, effect, owner_effect, conditions, prepare) " +
+    "VALUES (?, '2026-11-19', ?, '2026-11-19T06:05:00Z', 'ok', '總結', '[]', '{}', 'm', '影響', '點名', '[\"條件\"]', '[\"準備\"]')",
+  ).bind(`2026-11-19-${slot}`, slot).run();
+  await insert("close");
+  await assert.rejects(insert("us_open"), /CHECK/, "還沒套之前不收新的時段");
+  const before = { ...(await db.prepare("SELECT * FROM market_news_runs").first()) };
+  db._raw.exec(readFileSync(new URL(`../migrations/${last}`, import.meta.url), "utf8"));
+  assert.deepEqual({ ...(await db.prepare("SELECT * FROM market_news_runs").first()) }, before);
+  for (const slot of ["us_close", "evening", "us_open"]) await insert(slot);
+  await assert.rejects(insert("close"), /UNIQUE/, "同一天同一班仍然只有一列");
+});
+
 test("我的自選：近 30 天、判讀過和公司有關的，帶類別與利多利空；新到舊", async () => {
   await addNews("2330", "https://news.google.com/rev", "gnews-cnyes", "台積電10月營收創高", "2026-11-01T02:00:00Z");
   await mark("2330", "https://news.google.com/rev", { kind: "earnings", tone: "up", impact: 3, title: "台積電10月營收創高", reason: "營收創高" });
@@ -281,7 +327,8 @@ test("新寫法：模型沒寫成的那一輪不帶新的三段", async () => {
 });
 
 test("0033 還沒套（沒有新欄位）時照舊回消息與自選的判讀", async () => {
-  const files = MIGRATION_FILES.filter((name) => name !== "0033_news_impact.sql");
+  // 0037（加開三班、重建 market_news_runs）要先有 0033 的欄位，所以一起不套
+  const files = MIGRATION_FILES.filter((name) => name !== "0033_news_impact.sql" && name !== "0037_market_news_push.sql");
   const old = fakeD1(files);
   const dump = async (table) => (await env.DB.prepare(`SELECT * FROM ${table}`).all()).results;
   for (const table of ["users", "user_watchlist", "market_news_runs", "market_news_items", "watch_news", "stock_news_marks"]) {

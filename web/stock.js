@@ -1268,6 +1268,8 @@
       syncFavorite(data.code);
       loadDrawings(data.code, sequence);
       window.ImpactWatch?.show(data.code);   // 這一檔的盯項（impact-watch.js）：沒有就不出現
+      // 主力分點副圖（branch-pane.js）：功能開著（只有站主）而且這一檔有分點資料才露出「主力分點」鍵；基金沒有分點
+      window.BranchPane?.show(data.code, chart, Boolean(features.broker_branches_v1) && !isFund(data));
       // 自選股關注的判斷（watch-judgments.js）：只有站主、開關打開而且這一檔有判斷時才加小鍵與兩條線。
       if (features.watchlist_watch_v1 && window.WatchJudgments && !isFund(data)) {
         window.WatchJudgments.mount({ host: document.querySelector('.bd-chart-bar'), code: data.code,

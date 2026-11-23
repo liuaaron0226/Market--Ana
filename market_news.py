@@ -2,7 +2,8 @@
 
 本人原話：「主要是做市場的利多以及利空消息……想知道為什麼今天的股票會大漲或者是會大跌或是不怎麼動」。
 定案（.scratch/market-news/consensus.md）：
-- 交易日三輪（morning 08:00、midday 11:30、close 14:00，台北）；每輪抓一次市場來源 → 站主的模型（預設 Flash 高，
+- 交易日三輪（morning 08:00、midday 11:30、close 14:00，台北）；本人 2026-11-24 加開三班（evening 18:30、us_open 23:00、
+  us_close 06:30；見 SLOTS）。每輪抓一次市場來源 → 站主的模型（預設 Flash 高，
   設定頁 AI 模型的「news」）一次判完：每則利多／利空／中性、影響大中小、中文標題、一句理由，再寫「今天為什麼這樣走」。
 - 市場來源只用通訊社與國際大報（FEEDS；本人「希望你的消息來源更具考靠性，且可以考慮過外的大型新聞」）。
   路透沒有公開 RSS，經 Google News 搜尋並只收白名單媒體（watch_news.parse_gnews）。
@@ -29,7 +30,17 @@ import impact_watch_news
 import watch_news as wn
 
 TAIPEI = timezone(timedelta(hours=8))
-SLOTS = ("morning", "midday", "close")
+# 一天六班，照台北當天的先後排（本人 2026-11-24 加開晚間與清晨三班，.scratch/market-news-night 票 01）：
+# us_close 美股收盤 06:30 → morning 盤前 08:00 → midday 午盤 11:30 → close 收盤後 14:00 → evening 盤後 18:30 → us_open 美股開盤 23:00。
+# 06:30 那一班算當天的（排在盤前之前）。這個順序和 market_brief.NEWS_SLOT_ORDER、web/market-news.js 的時段標籤要一致；
+# 網站的「最新一班」照 created_at（cloud/lib/market-news.js 的 pickRun）。
+SLOTS = ("us_close", "morning", "midday", "close", "evening", "us_open")
+SLOT_ORDER = {slot: index for index, slot in enumerate(SLOTS)}
+DAY_SLOTS = ("morning", "midday", "close")            # 原本的三班
+NIGHT_SLOTS = ("evening", "us_open", "us_close")      # 加開的三班：Google News 搜尋量壓低、盤勢解讀不跟著跑
+US_SESSION_SLOTS = ("us_open", "us_close")            # 跟美股時段走：台股休市照跑（美股休市那天就是比較安靜的一班）
+# 加開的三班只留這兩個 Google News 搜尋（台股、主管機關與政策）；日、韓那兩個白天三班已經搜過，晚上靠各家自己的 RSS。
+NIGHT_GNEWS_FEEDS = ("gnews-tw", "gnews-regulators")
 WINDOW_HOURS = 24          # 只送最近一天發布的
 MAX_WINDOW_HOURS = 96      # 週一盤前、連假後：從上一輪開始，最多往回四天
 PER_FEED = 30              # 每個來源先收幾則當候選（最新的）；送誰由 priority 決定，不是照時間
@@ -194,9 +205,10 @@ def window_start(query: Callable[[str], list[dict]], now: str) -> str:
 
 
 def collect(*, get: Callable, now: str, sleep: Callable[[float], None],
-            since: str | None = None) -> tuple[list[dict[str, Any]], dict[str, str]]:
+            since: str | None = None, gnews_feeds: Sequence[str] | None = None) -> tuple[list[dict[str, Any]], dict[str, str]]:
     """每個來源抓一次：失敗只缺那一家（sources 記錯誤種類，回 200 但 0 則記 empty）。Google News 回 429／503 時，
-    這一輪其他 Google 查詢不再打（記 slowed）。回傳最近 WINDOW_HOURS 小時發布的，每家最多 PER_FEED 則，同連結或同標題只留一則。"""
+    這一輪其他 Google 查詢不再打（記 slowed）。回傳最近 WINDOW_HOURS 小時發布的，每家最多 PER_FEED 則，同連結或同標題只留一則。
+    gnews_feeds：這一班只打哪幾個 Google News 搜尋（加開的三班壓低搜尋量）；其餘的不打、記 skipped。沒給就是全部。"""
     moment = datetime.strptime(now, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
     oldest = since or _iso(moment - timedelta(hours=WINDOW_HOURS))
     date_only_oldest = min(oldest, _iso(moment - timedelta(hours=DATE_ONLY_HOURS)))
@@ -206,6 +218,9 @@ def collect(*, get: Callable, now: str, sleep: Callable[[float], None],
     slowed, google_calls = False, 0
     for feed in FEEDS:
         if feed["kind"] == "gnews":
+            if gnews_feeds is not None and feed["key"] not in gnews_feeds:
+                sources[feed["key"]] = "skipped"
+                continue
             if slowed:
                 sources[feed["key"]] = "slowed"
                 continue
@@ -337,7 +352,10 @@ SUMMARY_SCHEMA = {"type": "object", "properties": {
     "required": ["market_commentary", "effect"]}
 WATCH_SCHEMA = {"type": "object", "properties": {"watch": {"type": "array", "items": _WATCH}}, "required": ["watch"]}
 
-SLOT_TEXT = {"morning": "台股開盤前（台北 08:00）", "midday": "台股盤中（台北 11:30）", "close": "台股收盤後（台北 14:00）"}
+SLOT_TEXT = {"morning": "台股開盤前（台北 08:00）", "midday": "台股盤中（台北 11:30）", "close": "台股收盤後（台北 14:00）",
+             "evening": "台股盤後（台北 18:30，今天已收盤）", "us_open": "美股開盤後（台北 23:00，台股已收盤）",
+             "us_close": "美股收盤後（台北 06:30，台股尚未開盤）"}
+assert set(SLOT_TEXT) == set(SLOTS)
 
 # 2026-11-19 Actions（agy 1.5.3）：60 則一次送，回 SUCCESS 卻沒有結構化輸出。改成分批（每批 BATCH_ITEMS 則）、
 # 自選一次、總結另外一次短呼叫；任何一批失敗只影響那一批。
@@ -398,6 +416,8 @@ market_commentary：1～2 句、合計 100 字以內、最後以句號結尾，�
 一定要點名當天最關鍵的一兩件事，用新聞裡的名稱講（例如「金管會祭出限空令」「美國擴大晶片出口管制」「外資賣超逾 600 億」），
 不能只講指數漲跌幾趴。可以引用 indices 的漲跌幅，其他數字只能來自新聞標題或理由。
 slot 是開盤前時，講的是昨夜國際市場與今天可能的影響，不要假裝已經開盤。
+slot_text 寫台股已收盤或尚未開盤時（盤後、美股開盤後、美股收盤後），講收盤後才出來的消息與美股、國際市場的變化，
+以及對下一個台股交易日可能的影響；不要把它寫成台股正在交易，也不要重講白天已經講過的盤勢。
 這個欄位的內容就是那段解說本身，第一個字就開始講市場（例如「台股今天下跌，主要是……」）；
 不要描述你完成了什麼、不要提到指令、JSON、摘要或規則。
 """ + SUMMARY_POINTS + GLOSSARY + """
@@ -941,8 +961,12 @@ def run(slot: str, *, trade_date: str, now: str, query: Callable[[str], list[dic
         raise ValueError(f"slot 只能是 {SLOTS}")
     if not wn._EMAIL.fullmatch(owner_email or ""):
         raise ValueError("站主 email 格式不對")
+    if not dry_run and not slot_storable(query, slot):
+        # 0037 還沒套到網站資料庫：這一班寫不進去（舊的 CHECK 只認原本三班）。不抓、不叫模型，安靜跳過。
+        return {"status": "skipped", "reason": "資料庫還沒套 0037（不認得這個時段）", "trade_date": trade_date, "slot": slot}
     since = window_start(query, now)
-    items, sources = collect(get=get, now=now, sleep=sleep, since=since)
+    items, sources = collect(get=get, now=now, sleep=sleep, since=since,
+                             gnews_feeds=NIGHT_GNEWS_FEEDS if slot in NIGHT_SLOTS else None)
     index_rows = indices(query, taiex)
     owner_names = watchlist(query, owner_email)
     owner_watch = pending_stock_rows(query, owner_names, now, limit=OWNER_STOCK_MAX)
@@ -1351,6 +1375,34 @@ def is_trading_day(day: str, holidays: set[str] | None = None) -> bool:
     return day not in holidays
 
 
+def slot_storable(query: Callable[[str], list[dict]], slot: str) -> bool:
+    """網站資料庫的 market_news_runs 收不收這個時段：原本三班一定收；加開的三班要 0037 套了才收
+    （0031 的 CHECK 只認原本三班）。讀不到表的定義就當成收（寫不進去時那一步自己會報錯）。"""
+    if slot in DAY_SLOTS:
+        return True
+    try:
+        rows = query("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'market_news_runs'")
+    except Exception:  # noqa: BLE001
+        return True
+    text = str((rows[0].get("sql") if rows else "") or "")
+    return not text or f"'{slot}'" in text or not re.search(r"slot\s+IN\s*\(", text, re.IGNORECASE)
+
+
+def trade_date_for(slot: str, moment: datetime) -> str:
+    """這一班算哪一天（台北日期）。美股開盤那一班（23:00）排程晚到、過了午夜才開始跑時，仍算前一天的最後一班，
+    不然會變成隔天的 us_open、排到隔天所有班次的後面。其他班次不會跨日，就是台北今天。"""
+    local = moment.astimezone(TAIPEI)
+    if slot == "us_open" and local.hour < 12:
+        local -= timedelta(days=1)
+    return local.date().isoformat()
+
+
+def closed_for(slot: str, trade_date: str, holidays: set[str] | None = None) -> bool:
+    """--skip-closed 時這一班要不要跳過：跟台股走的四班（盤前、午盤、收盤後、盤後）台股休市就不跑；
+    跟美股時段走的兩班不看台股休市日曆（哪幾天跑由排程的星期決定：23:00 週一到週五、06:30 週二到週六）。"""
+    return slot not in US_SESSION_SLOTS and not is_trading_day(trade_date, holidays)
+
+
 def main(argv: Sequence[str]) -> int:
     import argparse
     import os
@@ -1365,12 +1417,13 @@ def main(argv: Sequence[str]) -> int:
     parser.add_argument("--agy-bin")
     parser.add_argument("--agy-home")
     parser.add_argument("--dry-run", action="store_true", help="照樣抓、照樣叫模型，但不寫網站資料庫")
-    parser.add_argument("--skip-closed", action="store_true", help="台股休市日（證交所休市日曆、週末）不跑")
+    parser.add_argument("--skip-closed", action="store_true",
+                        help="台股休市日（證交所休市日曆、週末）不跑；美股開盤、美股收盤那兩班不看台股休市")
     parser.add_argument("--private-report", help="完整的報告另外寫到這個檔（不公開的地方）；印出來的那一份是遮過的")
     args = parser.parse_args(argv)
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    trade_date = args.date or datetime.now(TAIPEI).date().isoformat()
-    if args.skip_closed and not is_trading_day(trade_date):
+    trade_date = args.date or trade_date_for(args.slot, datetime.now(TAIPEI))
+    if args.skip_closed and closed_for(args.slot, trade_date):
         print(json.dumps({"status": "skipped", "reason": "台股休市", "trade_date": trade_date}, ensure_ascii=False))
         return 0
     model = os.environ.get("AI_NEWS_MODEL") or gemini_models.NEWS

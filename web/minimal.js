@@ -50,6 +50,15 @@
   const FOREIGN_STUDIES = ['volume', 'macd', 'kd', 'rsi'];
   const indexItem = key => window.MarketIndex.LIST.find(item => item.key === key) || null;
   const foreignIndex = () => (currentIndex === 'twii' ? null : indexItem(currentIndex));
+  // 海外大盤的分時（本人 2026-11-24，功能 index_intraday_v1）：開著時國外指數的週期多一個「分時」、選單多一項只有分時的那斯達克期貨。
+  // 5 分鐘線由 /api/indices/<key>/intraday 給（伺服器向來源要、快取一分鐘）；開著分時時每分鐘更新一次，頁面在背景時不更新。
+  const INTRADAY_REFRESH_MS = 60_000;
+  const intradayOn = () => Boolean(features.index_intraday_v1) && location.protocol !== 'file:';
+  const intradayPayloads = new Map();
+  const intradayModel = key => (intradayPayloads.has(key) ? window.TimeShare.sessionModel(intradayPayloads.get(key)) : null);
+  let intradayTimer = 0;
+  let intradayKey = '';
+  let twIntraday = false;   // 台股即時服務現在有沒有分時可看（國外指數的分時不看它）
 
   const els = {
     price: $('currentPrice'),
@@ -108,6 +117,8 @@
     get nextPollDelay() { return nextPollDelay; },
     get trend() { return renderedTrend; },
     get index() { return currentIndex; },
+    get period() { return currentPeriod; },
+    get intradayPolling() { return Boolean(intradayTimer); },
     get marketSnapshot() { return officialMarketSnapshot; }
   };
   window.MinimalApp = api;
@@ -307,13 +318,79 @@
     els.service.textContent = message;
     setMarketHeader(fallbackMarketData(), { id: 'closed', label: '即時服務未啟動' }, fallbackMarketDate());
     setIntradayOptions(false);
-    loadPeriod(isTimeShare(currentPeriod) ? 'daily' : currentPeriod, true);
+    loadPeriod(periodWithoutLive(), true);
   }
 
+  // 台股的分時要即時服務；國外指數的分時另有來源，不跟著停用
   function setIntradayOptions(enabled) {
+    twIntraday = enabled;
     [...els.period.options].forEach(option => {
-      if (isTimeShare(option.value)) option.disabled = !enabled;
+      if (isTimeShare(option.value)) option.disabled = !enabled && !foreignIndex();
     });
+  }
+
+  // 台股即時服務連不上時：台股的分時退回日K；正在看國外指數就照原樣
+  const periodWithoutLive = () => (isTimeShare(currentPeriod) && !foreignIndex() ? 'daily' : currentPeriod);
+
+  // ---------- 海外大盤的分時 ----------
+  // 讀一次；拿不到就留著上一份（伺服器自己也會回最近一次成功的那一份）
+  async function fetchIntraday(key) {
+    try {
+      const response = await fetch(`/api/indices/${encodeURIComponent(key)}/intraday`, { cache: 'no-store', headers: { Accept: 'application/json' } });
+      const payload = response.ok ? await response.json() : null;
+      if (payload && payload.available === true && window.TimeShare.sessionModel(payload)) {
+        intradayPayloads.set(key, payload);
+        return true;
+      }
+    } catch (error) {
+      console.warn('[海外分時]', error);
+    }
+    return false;
+  }
+
+  function stopIntraday() {
+    window.clearTimeout(intradayTimer);
+    intradayTimer = 0;
+  }
+
+  // 正在看國外指數的分時、頁面在前景：一分鐘後再讀一次。已經排了同一個指數的就不重排（台股行情每幾秒會重畫一次，不能把它一直往後推）
+  function scheduleIntraday() {
+    const index = foreignIndex();
+    if (!index || !isTimeShare(currentPeriod) || !intradayOn() || document.hidden) return stopIntraday();
+    if (intradayTimer && intradayKey === index.key) return;
+    stopIntraday();
+    intradayKey = index.key;
+    intradayTimer = window.setTimeout(() => { intradayTimer = 0; refreshIntraday(); }, INTRADAY_REFRESH_MS);
+  }
+
+  async function refreshIntraday() {
+    const index = foreignIndex();
+    if (!index || !isTimeShare(currentPeriod) || !intradayOn() || document.hidden) return;
+    await fetchIntraday(index.key);
+    if (currentIndex === index.key && isTimeShare(currentPeriod)) loadPeriod('ts', false);
+  }
+
+  // 畫面沿用加權指數分時那一套（time-share.js）：基準是該市場前一日收盤，時間軸是台北時間，沒有量。
+  // 圖卡標題下那一行只在不尋常時露出來：來源給的不是那個交易所今天的資料（休市、假日）、或最近一次沒更新到。
+  function showForeignTimeShare(index, model) {
+    const payload = intradayPayloads.get(index.key);
+    currentPeriod = 'ts';
+    els.period.value = 'ts';
+    els.period.dispatchEvent(new Event('periodsync'));
+    selectedIndex = -1;
+    els.mobileDetails.hidden = true;
+    els.marker.hidden = true;
+    els.forming.hidden = true;
+    els.provisional.hidden = true;
+    showTimeShare(true);
+    window.TimeShare.render(els.timeShare, model);
+    const day = model.day.date;
+    const notes = [];
+    if (day && model.today && day !== model.today) notes.push(`最近交易日 ${day}${index.zone === 'us' ? '（美東）' : ''}`);
+    if (payload.stale) notes.push('最近一次沒更新到');
+    chartNote(notes.length ? notes.join('・') : `分時 · ${day}`, notes.length > 0);
+    els.chartSummary.textContent = `${index.name} ${day} 分時走勢，時間是台北時間。`;
+    scheduleIntraday();
   }
 
   function toChartCandle(row, unit) {
@@ -500,7 +577,14 @@
 
   function loadPeriod(period, reset = true) {
     const index = foreignIndex();
-    if (index && (isTimeShare(period) || period === 'h60')) period = 'daily';   // 國外只有日週月
+    if (index && period === 'h60') period = 'daily';   // 國外沒有 60 分
+    // 國外的分時（開關開著才有）；那斯達克期貨只有分時。拿不到分時的退回日K
+    if (index && (isTimeShare(period) || index.intradayOnly)) {
+      const model = intradayOn() ? intradayModel(index.key) : null;
+      if (model) return showForeignTimeShare(index, model);
+      period = 'daily';
+    }
+    stopIntraday();
     if (isTimeShare(period)) {
       const model = timeShareModel();
       if (!model) return loadPeriod('daily', reset);
@@ -559,8 +643,11 @@
 
   function enforceCandleHitTarget() {
     if (!chart || !chart.candles.length || isMobile()) return;
-    // 下限跟 minViewCount 一致（10 根）：右側軸上價籤欄較寬時，15 根在 820px 會不足 44px。
-    const maxCount = Math.max(10, Math.floor(Math.max(0, chart.geo.pw) / 44));
+    // 桌機每根 K 棒至少留這麼寬。原本是 44px（每根都當成一顆按鈕的大小），結果 1000px 寬的圖最多只能看 22 根、
+    // 怎麼縮都縮不小（本人 2026-11-24「為什麼我現在看大盤k線圖不能縮小」）。十字線本來就會吸到最近的一根，
+    // 不需要每根 44px；改成 6px，1000px 可以看到約 160 根。
+    const MIN_CANDLE_PX = 6;
+    const maxCount = Math.max(10, Math.floor(Math.max(0, chart.geo.pw) / MIN_CANDLE_PX));
     if (chart.view.count <= maxCount) return;
     chart.view.count = Math.min(chart.candles.length, maxCount);
     chart.clamp();
@@ -1611,7 +1698,7 @@
       els.service.textContent = '即時行情暫時無法更新，目前顯示盤後資料。';
       setMarketHeader(fallbackMarketData(), { id: 'delay', label: '延遲' }, fallbackMarketDate());
       setIntradayOptions(false);
-      loadPeriod(isTimeShare(currentPeriod) ? 'daily' : currentPeriod, false);
+      loadPeriod(periodWithoutLive(), false);
       return;
     }
     const fetched = new Date(payload.fetched_at).getTime();
@@ -1678,7 +1765,7 @@
         || (error.name === 'AbortError' ? '即時行情連線逾時，目前顯示盤後資料。' : '即時行情連線中斷，目前顯示盤後資料。');
       setMarketHeader(fallbackMarketData(), { id: 'delay', label: '延遲' }, fallbackMarketDate());
       setIntradayOptions(false);
-      loadPeriod(isTimeShare(currentPeriod) ? 'daily' : currentPeriod, false);
+      loadPeriod(periodWithoutLive(), false);
       schedulePoll(15000);
     } finally {
       window.clearTimeout(timeout);
@@ -1698,7 +1785,25 @@
   $('readCard').hidden = plainStale;
   setMarketHeader(fallbackMarketData(), { id: 'closed', label: '休市' }, fallbackMarketDate());
 
-  els.period.addEventListener('change', () => loadPeriod(els.period.value, true));
+  // 國外指數選「分時」：還沒有那一份就先讀，讀不到退回日K並說一聲
+  async function changePeriod(period) {
+    const index = foreignIndex();
+    if (index && isTimeShare(period) && intradayOn() && !intradayModel(index.key)) {
+      const ticket = indexTicket;
+      chartNote(`讀取${index.name}分時…`, true);
+      await fetchIntraday(index.key);
+      if (ticket !== indexTicket || foreignIndex() !== index) return;   // 讀的時候又換了別的
+      loadPeriod('ts', true);
+      if (!isTimeShare(currentPeriod)) chartNote(`${index.name}分時暫時拿不到資料，請稍後再試`, true);
+      return;
+    }
+    loadPeriod(period, true);
+  }
+  els.period.addEventListener('change', () => changePeriod(els.period.value));
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) stopIntraday();
+    else refreshIntraday();
+  });
 
   // ---------- 切換指數（本人 11-19：點圖卡左上角的名稱） ----------
   function syncIndexMenu() {
@@ -1712,16 +1817,20 @@
     });
   }
 
-  // 國外：週期選單收起分時與 60 分、收起收復／防守鍵、量能改成不寫單位的成交量（來源沒有量就不給選）、法人副圖不給選
+  // 國外：週期選單收起 60 分（分時要海外分時的開關開著才留）、收起收復／防守鍵、量能改成不寫單位的成交量（來源沒有量就不給選）、法人副圖不給選。
+  // 那斯達克期貨只有分時：日週月也收起來。
   function applyIndexMode() {
     const index = foreignIndex();
     [...els.period.options].forEach(option => {
-      if (isTimeShare(option.value) || option.value === 'h60') option.hidden = Boolean(index);
+      if (isTimeShare(option.value)) option.hidden = Boolean(index) && !intradayOn();
+      else if (option.value === 'h60') option.hidden = Boolean(index);
+      else option.hidden = Boolean(index && index.intradayOnly);
     });
+    setIntradayOptions(twIntraday);
     if (els.linePair) els.linePair.hidden = Boolean(index);
     els.mobileDetails.hidden = true;
     const studies = chart && chart.studies;
-    if (!studies) return;
+    if (!studies || (index && index.intradayOnly)) return;
     studies.setVolumeKind(index ? 'count' : 'amount');
     studies.setAvailable(!index ? null
       : window.MarketIndex.hasVolume(indexPayloads.get(index.key).candles) ? FOREIGN_STUDIES : FOREIGN_STUDIES.slice(1));
@@ -1736,9 +1845,9 @@
 
   async function switchIndex(key) {
     const item = indexItem(key);
-    if (!item || key === currentIndex) return;
+    if (!item || key === currentIndex || (item.intradayOnly && !intradayOn())) return;
     const ticket = ++indexTicket;
-    if (key !== 'twii' && !indexPayloads.has(key)) {
+    if (key !== 'twii' && !item.intradayOnly && !indexPayloads.has(key)) {
       chartNote(`讀取${item.name}…`, true);
       let payload = null;
       try {
@@ -1755,15 +1864,29 @@
       }
       indexPayloads.set(key, payload);
     }
+    // 要直接進分時的（那斯達克期貨、或原本就在看分時）：先把分時讀進來。期貨讀不到就留在原本的指數。
+    const wantIntraday = key !== 'twii' && intradayOn() && (item.intradayOnly || isTimeShare(currentPeriod));
+    if (wantIntraday) {
+      chartNote(`讀取${item.name}…`, true);
+      await fetchIntraday(key);
+      if (ticket !== indexTicket) return;
+      if (item.intradayOnly && !intradayModel(key)) {
+        loadPeriod(currentPeriod, false);
+        chartNote(`${item.name}暫時沒有資料，請稍後再試`, true);
+        return;
+      }
+    }
     currentIndex = key;
     selectedIndex = -1;
     syncIndexMenu();
     applyIndexMode();
     loadPeriod(currentPeriod, true);
-    renderMarketTrend(ensureChart());
+    if (wantIntraday && !isTimeShare(currentPeriod)) chartNote(`${item.name}分時暫時拿不到資料，請稍後再試`, true);
+    if (!item.intradayOnly) renderMarketTrend(ensureChart());
   }
 
   window.MarketIndex.LIST.forEach(item => {
+    if (item.intradayOnly && !intradayOn()) return;
     const button = document.createElement('button');
     button.type = 'button';
     button.setAttribute('role', 'radio');

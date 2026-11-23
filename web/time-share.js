@@ -72,7 +72,65 @@
     }));
   }
 
+  // ---------- 海外大盤的分時（本人 2026-11-24）：/api/indices/<key>/intraday 的 5 分鐘線 ----------
+  // 時間一律換成台北時間（UTC+8，沒有日光節約）
+  const taipeiClock = epoch => new Date((epoch + 8 * 3600) * 1000).toISOString().slice(11, 16);
+  // 某個時區「現在」的日期（YYYY-MM-DD）；時區名稱不認得就回 null
+  function zoneDate(ms, timezone) {
+    if (typeof timezone !== 'string' || !timezone) return null;
+    try {
+      return new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(ms));
+    } catch (_) { return null; }
+  }
+  // 時間軸要寫的字：開盤、收盤，中間挑整點（台北時間），間隔看這一段有多長；太靠近頭尾的不寫
+  function sessionTicks(start, end, step) {
+    const n = Math.floor((end - start) / step) + 1;
+    const ticks = [[0, taipeiClock(start), 'start']];
+    const hours = (end - start) / 3600;
+    const every = (hours <= 4 ? 1 : hours <= 9 ? 2 : hours <= 16 ? 4 : 6) * 3600;
+    const margin = Math.max(2700, (end - start) * 0.14);
+    for (let t = Math.ceil(start / 3600) * 3600; t < end; t += 3600) {
+      if ((t + 8 * 3600) % every || t - start < margin || end - t < margin) continue;
+      ticks.push([(t - start) / step, taipeiClock(t), 'middle']);
+    }
+    ticks.push([n - 1, taipeiClock(start + (n - 1) * step), 'end']);
+    return ticks;
+  }
+  // 回應 → 分時圖要的 model（kind:'index'）。沒有量、沒有均價；缺的那幾格留白（不沿用上一個價），
+  // 連續缺超過 15 分鐘（日經午休、期貨每日休息）線就斷開。拿不到、沒有前一日收盤時回 null。
+  function sessionModel(payload, nowMs = Date.now()) {
+    const ref = Number(payload?.previous_close);
+    const step = finite(payload?.interval) && payload.interval > 0 ? payload.interval : 300;
+    const points = (Array.isArray(payload?.points) ? payload.points : [])
+      .filter(p => Array.isArray(p) && finite(p[0]) && finite(p[1]) && p[1] > 0).sort((a, b) => a[0] - b[0]);
+    if (!payload || payload.available !== true || !points.length || !(ref > 0)) return null;
+    const first = points[0][0], newest = points[points.length - 1][0];
+    const start = finite(payload.session?.start) && payload.session.start <= first ? payload.session.start : first;
+    const end = finite(payload.session?.end) && payload.session.end >= newest ? payload.session.end : newest;
+    const n = Math.max(2, Math.floor((end - start) / step) + 1);
+    const out = new Array(n).fill(null);
+    let last = -1, high = null, low = null;
+    points.forEach(([t, price]) => {
+      const i = Math.min(n - 1, Math.floor((t - start) / step));
+      out[i] = { price, volume: 0, avg: price };
+      last = Math.max(last, i);
+    });
+    out.forEach((s, i) => {
+      if (!s) return;
+      if (!high || s.price > high.value) high = { value: s.price, index: i };
+      if (!low || s.price < low.value) low = { value: s.price, index: i };
+    });
+    return { kind: 'index', day: { date: payload.date || null, slots: out, last, high, low }, ref,
+      ...range({ kind: 'index', ref, high: high.value, low: low.value }),
+      open: points[0][1], high: high.value, low: low.value,
+      n, gap: Math.round(900 / step), noVolume: true, ticks: sessionTicks(start, end, step),
+      clock: i => taipeiClock(start + i * step), label: `${payload.name || '指數'}分時走勢`,
+      // 這份資料是不是那個交易所「今天」的（休市、假日時來源給的是最近一個交易日）
+      today: zoneDate(nowMs, payload.timezone) };
+  }
+
   // ---------- 畫面 ----------
+  const TW_TICKS = [[0, '09:00', 'start'], [60, '10:00', 'middle'], [120, '11:00', 'middle'], [180, '12:00', 'middle'], [270, '13:30', 'end']];
   const clock = i => { const m = OPEN + i; return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`; };
   const comma = (x, d = 0) => Number(x).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
   const lots = shares => comma(Math.round(shares / 1000));
@@ -94,26 +152,34 @@
     : fixed ? Number(v).toFixed(2) : String(Math.round(v * 100) / 100));
 
   // model：{ kind:'stock'|'index', day: slots() 的結果, ref, top, bottom }；onIndex(i) 手指／滑鼠移到哪一分鐘
+  // 海外大盤（sessionModel）另帶：n（格數）、gap（連續缺幾格以上就斷線）、noVolume（不畫量）、ticks（時間軸的字）、clock、label
   function renderChart(host, model, onIndex) {
     const { day, ref, top, bottom } = model;
     const isIndex = model.kind === 'index';
+    const count = model.n || N, hasVolume = !model.noVolume;
     const W = Math.max(280, host.clientWidth);
-    const priceH = W > 600 ? 300 : 214, gap = 10, volH = W > 600 ? 72 : 54, axisH = 20;
+    const priceH = W > 600 ? 300 : 214, gap = hasVolume ? 10 : 0, volH = !hasVolume ? 0 : W > 600 ? 72 : 54, axisH = 20;
     const H = priceH + gap + volH + axisH, padR = 2;
-    const x = i => i / (N - 1) * (W - padR);
+    const x = i => i / (count - 1) * (W - padR);
     const y = v => (top - v) / (top - bottom) * priceH;
     const refY = y(ref);
     const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, width: W, height: H, class: 'ts-svg', role: 'img',
-      'aria-label': isIndex ? '加權指數分時走勢' : '分時走勢' });
+      'aria-label': model.label || (isIndex ? '加權指數分時走勢' : '分時走勢') });
     [0, 0.25, 0.75, 1].forEach(t => {
       const yy = Math.round(t * priceH) + 0.5;
       svg.append(svgEl('line', { x1: 0, x2: W, y1: yy, y2: yy, class: 'ts-grid' }));
     });
     const drawn = day.slots.map((s, i) => (s ? i : -1)).filter(i => i >= 0);
-    const pts = drawn.map(i => `${x(i).toFixed(2)},${y(day.slots[i].price).toFixed(2)}`);
+    const pt = i => `${x(i).toFixed(2)},${y(day.slots[i].price).toFixed(2)}`;
+    // 一段一段連續的線：台股的格子沒有洞（沒成交沿用上一個價），永遠只有一段；海外大盤午休那一段不連
+    const runs = [];
+    drawn.forEach((i, k) => {
+      if (!k || i - drawn[k - 1] > (model.gap || Infinity)) runs.push([]);
+      runs.at(-1).push(i);
+    });
     if (drawn.length) {
       // 價格線與參考價之間的淡填色：上紅、下綠
-      const area = `M${x(drawn[0]).toFixed(2)},${refY.toFixed(2)} L${pts.join(' L')} L${x(drawn.at(-1)).toFixed(2)},${refY.toFixed(2)} Z`;
+      const area = runs.map(run => `M${x(run[0]).toFixed(2)},${refY.toFixed(2)} L${run.map(pt).join(' L')} L${x(run.at(-1)).toFixed(2)},${refY.toFixed(2)} Z`).join(' ');
       const uid = Math.random().toString(36).slice(2, 7);
       const defs = svgEl('defs');
       const clipUp = svgEl('clipPath', { id: `tsu-${uid}` });
@@ -127,7 +193,7 @@
     }
     svg.append(svgEl('line', { x1: 0, x2: W, y1: refY, y2: refY, class: 'ts-ref' }));
     if (!isIndex && drawn.length) svg.append(svgEl('polyline', { points: drawn.map(i => `${x(i).toFixed(2)},${y(day.slots[i].avg).toFixed(2)}`).join(' '), class: 'ts-avg' }));
-    if (drawn.length) svg.append(svgEl('polyline', { points: pts.join(' '), class: 'ts-line' }));
+    runs.forEach(run => svg.append(svgEl('polyline', { points: run.map(pt).join(' '), class: 'ts-line' })));
 
     const taken = []; // 已經佔用的方塊，最高最低的價位不要壓到
     const chip = (val, cls, anchor) => {
@@ -161,6 +227,7 @@
       // 貼著價格籤（點就在籤旁邊）的話，往籤的右邊讓；離得遠的籤不拿來當退路，免得價位跑離那一點
       taken.filter(t => px - t[2] < 40 && px >= t[0]).forEach(t => { tries.push([t[2] + 6, py], [t[2] + 6, py - v * 6], [t[2] + 6, cy]); });
       const pick = tries.find(([lx, ly]) => !hits([lx, ly - th / 2, lx + tw, ly + th / 2])) || tries[0];
+      pick[0] = Math.max(0, Math.min(pick[0], W - tw));   // 找不到空位時至少不超出圖的左右邊（最高點在最後一根時）
       const g = svgEl('g', { class: `ts-mark ts-mark-${kind}` });
       g.append(svgEl('circle', { cx: px, cy: py, r: 2.6 }), svgEl('text', { x: pick[0], y: pick[1] + 3.8 }, label));
       svg.append(g);
@@ -171,21 +238,22 @@
 
     // 每分鐘的量（中性灰）。開盤、收盤兩根集合競價常常特別大，最高刻度不算它們、柱子頂到上緣為止。
     const vTop = priceH + gap;
-    const middle = drawn.filter(i => i > 0 && i < N - 1).map(i => day.slots[i].volume);
-    const vMax = Math.max(1, ...(middle.length ? middle : drawn.map(i => day.slots[i].volume))) * 1.05;
-    const bw = Math.max(1, (W - padR) / N * 0.62);
-    const bars = svgEl('g', { class: 'ts-vol' });
-    drawn.forEach(i => {
-      const v = day.slots[i].volume;
-      if (!v) return;
-      const h = Math.max(1, Math.min(1, v / vMax) * volH);
-      bars.append(svgEl('rect', { x: (x(i) - bw / 2).toFixed(2), y: (vTop + volH - h).toFixed(2), width: bw.toFixed(2), height: h.toFixed(2) }));
-    });
-    svg.append(bars,
-      svgEl('line', { x1: 0, x2: W, y1: vTop + volH + 0.5, y2: vTop + volH + 0.5, class: 'ts-grid' }),
-      svgEl('text', { x: 0, y: vTop + 9, class: 'ts-vlabel' }, isIndex ? '成交金額' : '量（張）'));
-    [[0, '09:00', 'start'], [60, '10:00', 'middle'], [120, '11:00', 'middle'], [180, '12:00', 'middle'], [270, '13:30', 'end']]
-      .forEach(([i, t, a]) => svg.append(svgEl('text', { x: x(i), y: H - 5, 'text-anchor': a, class: 'ts-time' }, t)));
+    if (hasVolume) {
+      const middle = drawn.filter(i => i > 0 && i < N - 1).map(i => day.slots[i].volume);
+      const vMax = Math.max(1, ...(middle.length ? middle : drawn.map(i => day.slots[i].volume))) * 1.05;
+      const bw = Math.max(1, (W - padR) / N * 0.62);
+      const bars = svgEl('g', { class: 'ts-vol' });
+      drawn.forEach(i => {
+        const v = day.slots[i].volume;
+        if (!v) return;
+        const h = Math.max(1, Math.min(1, v / vMax) * volH);
+        bars.append(svgEl('rect', { x: (x(i) - bw / 2).toFixed(2), y: (vTop + volH - h).toFixed(2), width: bw.toFixed(2), height: h.toFixed(2) }));
+      });
+      svg.append(bars,
+        svgEl('line', { x1: 0, x2: W, y1: vTop + volH + 0.5, y2: vTop + volH + 0.5, class: 'ts-grid' }),
+        svgEl('text', { x: 0, y: vTop + 9, class: 'ts-vlabel' }, isIndex ? '成交金額' : '量（張）'));
+    }
+    (model.ticks || TW_TICKS).forEach(([i, t, a]) => svg.append(svgEl('text', { x: x(i), y: H - 5, 'text-anchor': a, class: 'ts-time' }, t)));
 
     // 手指／滑鼠移到哪一分鐘，上方那一行就換成那一分鐘（只到最後一筆為止）
     if (drawn.length) {
@@ -196,7 +264,7 @@
       svg.append(cross);
       const at = ev => {
         const box = svg.getBoundingClientRect();
-        const want = Math.round((ev.clientX - box.left) / (W - padR) * (N - 1));
+        const want = Math.round((ev.clientX - box.left) / (W - padR) * (count - 1));
         const i = drawn.reduce((best, k) => (Math.abs(k - want) < Math.abs(best - want) ? k : best), drawn[0]);
         cl.setAttribute('x1', x(i)); cl.setAttribute('x2', x(i));
         cd.setAttribute('cx', x(i)); cd.setAttribute('cy', y(day.slots[i].price));
@@ -223,7 +291,7 @@
       span.append(el('i', labelClass || '', label), el('b', 'num', value));
       return span;
     };
-    host.append(el('span', 'ts-q-time num', clock(i)), pair(isIndex ? '指數' : '價', priceText(model, s.price, true)),
+    host.append(el('span', 'ts-q-time num', (model.clock || clock)(i)), pair(isIndex ? '指數' : '價', priceText(model, s.price, true)),
       el('span', `num ts-q-chg is-${dir}`, `${diff > 0 ? '▲' : diff < 0 ? '▼' : ''}${isIndex ? comma(Math.abs(diff), 2) : Math.abs(diff).toFixed(2)}(${Math.abs(pct).toFixed(2)}%)`));
     if (!isIndex) host.append(pair('均', s.avg.toFixed(2), 'ts-q-avg'), pair('量', lots(s.volume)));
   }
@@ -307,5 +375,5 @@
     bookBox.querySelector('[data-book-ask]').replaceChildren(...asks.map(([p, v]) => row(p, v, 'ask')), total(asks, 'ask'));
   }
 
-  window.TimeShare = { N, slots, range, flow, indexMinutes, render, renderBook };
+  window.TimeShare = { N, slots, range, flow, indexMinutes, sessionModel, sessionTicks, zoneDate, render, renderBook };
 })();

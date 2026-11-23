@@ -908,6 +908,100 @@ class WindowTests(unittest.TestCase):
         self.assertFalse(mn.is_trading_day("2026-11-21", holidays), "週六")
 
 
+NIGHT_SCHEMA = SCHEMA + (MIGRATIONS / "0037_market_news_push.sql").read_text(encoding="utf-8")
+GOOGLE = {feed["key"]: feed["url"] for feed in mn.FEEDS if feed["kind"] == "gnews"}
+
+
+class NightSlotTests(unittest.TestCase):
+    """加開三班（本人 2026-11-24，.scratch/market-news-night 票 01）：盤後 18:30、美股開盤 23:00、美股收盤 06:30。"""
+
+    def test_the_six_slots_are_in_the_order_of_the_taipei_day(self):
+        self.assertEqual(mn.SLOTS, ("us_close", "morning", "midday", "close", "evening", "us_open"))
+        self.assertEqual(set(mn.SLOT_TEXT), set(mn.SLOTS))
+        self.assertEqual(sorted(mn.DAY_SLOTS + mn.NIGHT_SLOTS), sorted(mn.SLOTS))
+        import market_brief
+        self.assertEqual(market_brief.NEWS_SLOT_ORDER, mn.SLOT_ORDER, "盤勢解讀讀消息時用同一個先後")
+        web_js = (ROOT / "web/market-news.js").read_text(encoding="utf-8")
+        for slot, label in (("us_close", "美股收盤"), ("evening", "盤後"), ("us_open", "美股開盤"), ("morning", "盤前")):
+            self.assertIn(f"{slot}: '{label}'", web_js)
+
+    def test_each_new_slot_writes_its_own_run_with_items_and_stock_marks(self):
+        for slot in mn.NIGHT_SLOTS:
+            with self.subTest(slot):
+                d1 = D1(NIGHT_SCHEMA)
+                report, _, ask = run(d1, slot=slot)
+                self.assertEqual((report["status"], report["run_id"], report["run_status"]), ("ok", f"2026-11-19-{slot}", "ok"))
+                row = d1.query("SELECT slot, status, summary FROM market_news_runs")[0]
+                self.assertEqual((row["slot"], row["status"]), (slot, "ok"))
+                self.assertTrue(row["summary"])
+                self.assertTrue(d1.query("SELECT 1 FROM market_news_items WHERE impact = 3"))
+                self.assertEqual(len(d1.query("SELECT 1 FROM stock_news_marks WHERE code = '2330'")), 1, "站主自選的個股判讀照樣跑")
+                summary = next(json.JSONDecoder().raw_decode(p[p.index("INPUT:") + 6:])[0] for p, kind in zip(ask.prompts, ask.kinds) if kind == "summary")
+                self.assertEqual((summary["slot"], summary["slot_text"]), (slot, mn.SLOT_TEXT[slot]))
+
+    def test_all_six_slots_of_a_day_can_be_stored_side_by_side(self):
+        d1 = D1(NIGHT_SCHEMA)
+        for slot in mn.SLOTS:
+            run(d1, slot=slot)
+        self.assertEqual(sorted(row["slot"] for row in d1.query("SELECT slot FROM market_news_runs")), sorted(mn.SLOTS))
+
+    def test_the_new_slots_send_fewer_google_news_searches(self):
+        for slot in mn.SLOTS:
+            with self.subTest(slot):
+                report, calls, _ = run(D1(NIGHT_SCHEMA), slot=slot)
+                asked = {key for key, url in GOOGLE.items() if url in calls}
+                if slot in mn.NIGHT_SLOTS:
+                    self.assertEqual(asked, {"gnews-tw", "gnews-regulators"})
+                    self.assertEqual({report["sources"][key] for key in set(GOOGLE) - asked}, {"skipped"})
+                else:
+                    self.assertEqual(asked, set(GOOGLE), "白天三班照舊四個都搜")
+        self.assertLessEqual(wn.NIGHT_MAX_QUERIES * 3, wn.MAX_QUERIES, "個股新聞晚間的搜尋量不超過白天的三分之一")
+
+    def test_when_google_news_rate_limits_a_night_run_it_still_finishes_with_the_other_sources(self):
+        d1 = D1(NIGHT_SCHEMA)
+        report, calls, _ = run(d1, slot="us_open", overrides={"gnews-tw": Response(status=429)})
+        self.assertEqual((report["status"], report["run_status"]), ("ok", "ok"))
+        self.assertEqual((report["sources"]["gnews-tw"], report["sources"]["gnews-regulators"]), ("HTTP 429", "slowed"))
+        self.assertEqual(sum(url in calls for url in GOOGLE.values()), 1, "被限流之後這一班不再打 Google News")
+        titles = [row["title"] for row in d1.query("SELECT title FROM market_news_items")]
+        self.assertTrue(any("外資" in title for title in titles), "中央通訊社的照樣整理")
+        stored = json.loads(d1.query("SELECT sources FROM market_news_runs")[0]["sources"])
+        self.assertEqual(stored["missed_groups"], [])
+
+    def test_before_migration_0037_a_new_slot_is_skipped_quietly_and_the_old_slots_still_run(self):
+        d1 = D1()
+        report, calls, ask = run(d1, slot="us_close")
+        self.assertEqual((report["status"], report["slot"]), ("skipped", "us_close"))
+        self.assertEqual((calls, ask.prompts, d1.scripts), ([], [], []), "不抓、不叫模型、不寫")
+        self.assertEqual(run(d1, slot="close")[0]["status"], "ok")
+        self.assertFalse(mn.slot_storable(d1.query, "evening"))
+        self.assertTrue(mn.slot_storable(D1(NIGHT_SCHEMA).query, "evening"))
+        self.assertTrue(mn.slot_storable(lambda sql: (_ for _ in ()).throw(RuntimeError("讀不到")), "evening"))
+
+    def test_a_late_us_open_run_still_belongs_to_the_evening_it_was_scheduled_for(self):
+        from datetime import datetime
+        at = lambda text: datetime.fromisoformat(text).replace(tzinfo=mn.TAIPEI)  # noqa: E731
+        self.assertEqual(mn.trade_date_for("us_open", at("2026-11-24T23:04:00")), "2026-11-24")
+        self.assertEqual(mn.trade_date_for("us_open", at("2026-11-25T00:40:00")), "2026-11-24", "排程晚到、過了午夜")
+        self.assertEqual(mn.trade_date_for("us_close", at("2026-11-25T06:34:00")), "2026-11-25", "清晨那一班算當天的")
+        self.assertEqual(mn.trade_date_for("morning", at("2026-11-25T08:02:00")), "2026-11-25")
+
+    def test_us_session_slots_ignore_the_taiwan_holiday_calendar(self):
+        holidays = {"2026-10-09"}
+        for slot in ("morning", "midday", "close", "evening"):
+            self.assertTrue(mn.closed_for(slot, "2026-10-09", holidays), slot)
+            self.assertTrue(mn.closed_for(slot, "2026-11-28", holidays), f"{slot} 週六")
+            self.assertFalse(mn.closed_for(slot, "2026-11-19", holidays), slot)
+        for slot in ("us_open", "us_close"):
+            self.assertFalse(mn.closed_for(slot, "2026-10-09", holidays), f"{slot}：台股休市照跑")
+            self.assertFalse(mn.closed_for(slot, "2026-11-28", holidays), f"{slot}：週六清晨是美股週五的收盤")
+
+    def test_the_summary_rules_tell_the_model_the_taiwan_market_is_closed_at_night(self):
+        self.assertIn("不要把它寫成台股正在交易", mn.SUMMARY_RULES)
+        for slot in mn.NIGHT_SLOTS:
+            self.assertRegex(mn.SLOT_TEXT[slot], "已收盤|尚未開盤")
+
+
 class VersionTests(unittest.TestCase):
     def test_watch_judgments_change_version_but_the_market_forecast_does_not(self):
         import forecast_ledger
