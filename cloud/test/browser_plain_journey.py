@@ -220,7 +220,7 @@ def walk(j: Journey, browser, base: str, scenario: str, plain: dict, prefix: str
     j.check(f"{tag}全文不橫向捲動{'、沒有買賣指令字眼' if new else ''}", panel["noScroll"] and not (new and any(word in panel["text"] for word in ORDER_WORDS)))
     if new:
         top = panel["top"]
-        labels = ["影響", "要看", "準備"] if scenario == "ai" else ["影響", "準備"]
+        labels = ["影響", "觀察", "因應"] if scenario == "ai" else ["影響", "因應"]
         j.check(f"{tag}結論下面就是整體的{'／'.join(labels)}", bool(top) and panel["topAfterLine"] and top["labels"] == labels, top)
         j.check(f"{tag}內容就是資料寫的那幾句", bool(top) and top["lines"] == [[plain["effect"]], *([plain["conditions"]] if scenario == "ai" else []), plain["prepare"]],
                 top and top["lines"])
@@ -233,14 +233,15 @@ def walk(j: Journey, browser, base: str, scenario: str, plain: dict, prefix: str
                 [(group["points"]["lines"] if group["points"] else None) for group in groups]
                 == [[[point["effect"]], *([point["prepare"]] if point.get("prepare") else [])] for point in plain["points"]])
         j.check(f"{tag}準備都是「如果…就…」", all(line.startswith("如果") and "就" in line for line in plain["prepare"]), plain["prepare"])
-        j.check(f"{tag}不再有「要擔心／什麼時候比較安心」", "要擔心" not in panel["text"] and "比較安心" not in panel["text"] and len(panel["groups"]) == 6)
+        j.check(f"{tag}不再有舊版的「風險／轉強條件」那兩段", "要擔心" not in panel["text"] and "比較安心" not in panel["text"]
+                and "轉強條件" not in panel["text"] and len(panel["groups"]) == 6)
         if scenario == "ai":
             j.check(f"{tag}AI 正常寫成：沒有小字", panel["note"] is None or "自動整理" not in panel["note"], panel["note"])
         else:
-            j.check(f"{tag}沒有「要看」的空段落，小字說明是自動整理", "要看" not in top["labels"] and "依當天數字自動整理" in (panel["note"] or ""), panel["note"])
+            j.check(f"{tag}沒有「觀察」的空段落，小字說明是自動整理", "觀察" not in top["labels"] and "依當天數字自動整理" in (panel["note"] or ""), panel["note"])
     else:
-        j.check(f"{tag}全文照舊：要擔心／什麼時候比較安心都在，沒有新的那一塊", panel["top"] is None and all(group["points"] is None for group in panel["groups"])
-                and [group["title"] for group in panel["groups"]][6:] == ["要擔心", "什麼時候比較安心"]
+        j.check(f"{tag}全文照舊：風險／轉強條件（舊資料的 worry／relief）都在，沒有新的那一塊", panel["top"] is None and all(group["points"] is None for group in panel["groups"])
+                and [group["title"] for group in panel["groups"]][6:] == ["風險", "轉強條件"]
                 and panel["groups"][6]["lines"] == plain["worry"] and panel["groups"][7]["lines"] == plain["relief"], panel["groups"][6:])
     j.close(page)
 
@@ -253,7 +254,7 @@ def walk(j: Journey, browser, base: str, scenario: str, plain: dict, prefix: str
         j.check(f"{tag}籌碼卡 {key}：發生什麼的句子照舊在", chip["chipLines"] == point["lines"] and chip["noScroll"], chip["chipLines"])
         if new:
             conditions = [text for text in plain.get("conditions") or [] if about_foreign and "外資" in text]
-            expected_labels = ["影響", *(["要看"] if conditions else []), *(["準備"] if point.get("prepare") else [])]
+            expected_labels = ["影響", *(["觀察"] if conditions else []), *(["因應"] if point.get("prepare") else [])]
             expected_lines = [[point["effect"]], *([conditions] if conditions else []), *([point["prepare"]] if point.get("prepare") else [])]
             block = chip["chip"]
             j.check(f"{tag}籌碼卡 {key}：這張卡的{'／'.join(expected_labels)}", bool(block) and block["labels"] == expected_labels

@@ -98,25 +98,25 @@ test("模型簡稱", () => {
   assert.equal(S.modelLabel(null), "");
 });
 
-test("任務名稱：籌碼與資金白話（每日更新那支排程）與首頁每日解讀分開", () => {
+test("任務名稱：盤勢解讀（每日更新那支排程）與首頁每日解讀分開", () => {
   const view = S.usageView({ ...USAGE, today: [{ task: "daily-update", runs: 1, model: "gemini-3.8-flash" }, { task: "ai-digest", runs: 1, model: null }] }, NOW);
-  assert.deepEqual(view.today.map((t) => t.label), ["籌碼與資金白話", "首頁每日解讀"]);
+  assert.deepEqual(view.today.map((t) => t.label), ["盤勢解讀", "首頁每日解讀"]);
 });
 
-test("籌碼與資金白話（本人 11-19）：模型後面標思考程度，失敗與乾跑另外寫，乾跑不算進次數", () => {
+test("盤勢解讀（本人 11-19）：模型後面標思考程度，失敗與試跑另外寫，試跑不算進次數", () => {
   const view = S.usageView({ ...USAGE, today: [
     { task: "daily-update", runs: 2, model: "gemini-4-argon", effort: "medium", failed: 1, dry_runs: 1 },
     { task: "watch-ledger", runs: 3, model: "gemini-3.8-flash", effort: null, failed: 0, dry_runs: 0 },
   ] }, NOW);
   assert.deepEqual(view.today, [
     { label: "自選股判斷與提名", model: "Flash", runs: 3, note: "" },
-    { label: "籌碼與資金白話", model: "Argon・思考中", runs: 2, note: "失敗 1・乾跑 1（不計）" },
+    { label: "盤勢解讀", model: "Argon・思考中", runs: 2, note: "失敗 1・試跑 1（不計）" },
   ]);
 });
 
-test("今天只有乾跑：次數是 0，標乾跑", () => {
+test("今天只有試跑：次數是 0，標試跑", () => {
   const view = S.usageView({ ...USAGE, today: [{ task: "daily-update", runs: 0, model: "gemini-4-argon", effort: "high", failed: 0, dry_runs: 2 }] }, NOW);
-  assert.deepEqual(view.today, [{ label: "籌碼與資金白話", model: "Argon・思考高", runs: 0, note: "乾跑 2（不計）" }]);
+  assert.deepEqual(view.today, [{ label: "盤勢解讀", model: "Argon・思考高", runs: 0, note: "試跑 2（不計）" }]);
 });
 
 test("籤：站主看到用量、通知、外觀三顆；推播不能用時少通知；一般使用者只剩外觀、不顯示籤列", () => {

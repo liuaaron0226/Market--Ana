@@ -510,7 +510,7 @@ async function currentLevel(db, email, deps) {
       amount_twd: within ? 0 : amount,
       action: within ? "none" : action,
       within_tolerance: within,
-      message: within ? "不用動" : action === "increase" ? "可用現金提高股票水位" : action === "decrease" ? "由本人決定減碼哪些持股" : "不用動",
+      message: within ? "無需調整" : action === "increase" ? "可用現金提高股票水位" : action === "decrease" ? "由本人決定減碼哪些持股" : "無需調整",
       estimated_commission_twd: within ? 0 : Math.round(amount * COMMISSION_RATE),
       estimated_tax_twd: !within && action === "decrease" ? Math.round(amount * SELL_TAX_RATE) : 0,
       fee_note: "手續費以 0.1425% 估算；賣出證交稅以普通股 0.3% 保守估算，ETF 實際稅率可能較低",

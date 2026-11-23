@@ -40,7 +40,7 @@ test("清單一行：狀態、觸發價、過去幾次對幾次；可以留意�
 
 test("清單一行：漏記與沒有判斷看得出來；帳本是空的時候什麼都不加", () => {
   assert.deepEqual(plain(logic.listParts({ code: "2317", kind: "miss", status: null, trigger_line: null, record: { reconciled: 2, wins: 1 } }, "2026-10-02")),
-    { tone: "miss", status: "漏記", record: { reconciled: 2, wins: 1 } });
+    { tone: "miss", status: "缺漏", record: { reconciled: 2, wins: 1 } });
   assert.deepEqual(plain(logic.listParts(undefined, "2026-10-02")), { tone: "none", status: "還沒有判斷" });
   assert.equal(logic.listParts(undefined, null), null);
 });
@@ -94,11 +94,11 @@ test("到了觸發線只換字：小鍵寫已到與價位，觸發線標「已�
   assert.equal(logic.chipText(near, false), "判斷 接近");
   assert.equal(logic.chipText(near, true), "判斷 已到 122");
   assert.equal(logic.chipText(judgment("可以留意"), false), "判斷 可以留意");
-  assert.equal(logic.chipText({ kind: "miss" }, false), "判斷 漏記");
+  assert.equal(logic.chipText({ kind: "miss" }, false), "判斷 缺漏");
   assert.equal(logic.chipText(null, false), "判斷");
   const touched = plain(logic.lineSpecs(near, true));
-  assert.deepEqual(touched.map((l) => [l.short, l.tone, Boolean(l.strong)]), [["已到", "--gold", true], ["看錯", "--down", false]]);
-  assert.deepEqual(plain(logic.lineSpecs(near, false)).map((l) => [l.short, l.tone, Boolean(l.strong)]), [["觸發", "--gold", false], ["看錯", "--down", false]]);
+  assert.deepEqual(touched.map((l) => [l.short, l.tone, Boolean(l.strong)]), [["已到", "--gold", true], ["誤判", "--down", false]]);
+  assert.deepEqual(plain(logic.lineSpecs(near, false)).map((l) => [l.short, l.tone, Boolean(l.strong)]), [["觸發", "--gold", false], ["誤判", "--down", false]]);
   assert.equal(plain(logic.lineSpecs(judgment("可以留意"), false))[0].tone, "--gold");
   assert.deepEqual(plain(logic.lineSpecs({ kind: "miss" }, false)), []);
 });
@@ -111,7 +111,7 @@ test("觸發線／看錯線是均線時帶天數與角色；不是均線的不�
   assert.equal(specs[0].ma, 20);
   assert.equal(specs[0].role, "觸發");
   assert.equal(specs[1].ma, undefined, "前波低點不是均線");
-  assert.equal(specs[1].role, "看錯");
+  assert.equal(specs[1].role, "誤判");
 });
 
 test("週 K、月 K：均線是日 K 算的，不畫成整條，名稱也不寫 MA20（寫角色），免得把一個價格說成均線", () => {

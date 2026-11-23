@@ -405,14 +405,14 @@
     const parts = sources.filter(source => !source.ok).map(source => {
       const triedToday = taipei(source.last_attempt_at).day === today;
       const since = source.last_success_at ? `${taipei(source.last_success_at).text.slice(0, 5)} 之後` : '';
-      return el('p', 'sf-miss', `${source.label} ${triedToday || !since ? '今天' : since}沒抓到`);
+      return el('p', 'sf-miss', `${source.label} ${triedToday || !since ? '今日' : since}無資料`);
     });
     if (items.length) {
       const list = el('div', 'sf-headlines');
       fillList(list, items, headlineItem);
       parts.push(list);
     } else if (sources.some(source => source.ok)) {
-      parts.push(el('p', 'sf-quiet', '這幾天沒有消息'));
+      parts.push(el('p', 'sf-quiet', '近日無消息'));
     }
     host.replaceChildren(...parts);
   }

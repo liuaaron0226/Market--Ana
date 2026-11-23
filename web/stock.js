@@ -1152,7 +1152,7 @@
   function showUnsavedDrawings({ unsaved, failed, ids }) {
     const hint = $('drawUnsaved');
     hint.hidden = !(unsaved || failed);
-    hint.textContent = unsaved ? '未儲存' : failed ? '沒存成' : '';
+    hint.textContent = unsaved ? '未儲存' : failed ? '儲存失敗' : '';
     if (chart) chart.setUnsavedDrawings(ids);
   }
 

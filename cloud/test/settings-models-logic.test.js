@@ -38,8 +38,8 @@ test("每列寫任務名稱與現值；大盤預測註明晚間、晨間、重�
     ["forecast", "大盤預測", "Argon・中"],
     ["watch_judge", "自選股每日判斷", "Flash・高"],
     ["watch_nominate", "提名國外同類股", "Flash・高"],
-    ["plain", "籌碼與資金白話", "Argon・中"],
-    ["digest", "站主 AI 解讀", "Argon・中"],
+    ["plain", "盤勢解讀", "Argon・中"],
+    ["digest", "今日 AI 解讀", "Argon・中"],
     ["news", "首頁消息", "Flash・高"],
   ]);
   assert.equal(view.rows[0].sub, "晚間・晨間・重播一起");
@@ -64,13 +64,13 @@ test("改了還沒存：那一列換成新值、標有改動", () => {
 });
 
 test("說明列：生效時間與上次修改時間（台灣時間）", () => {
-  assert.equal(S.modelsView(DATA, {}).foot, "存檔後下一班排程開始用（大盤預測從下一個晚間版起）。上次修改 11-19 15:20。");
-  assert.equal(S.modelsView({ ...DATA, updated_at: null }, {}).foot, "存檔後下一班排程開始用（大盤預測從下一個晚間版起）。");
+  assert.equal(S.modelsView(DATA, {}).foot, "存檔後下一時段排程開始用（大盤預測從下一個晚間版起）。上次修改 11-19 15:20。");
+  assert.equal(S.modelsView({ ...DATA, updated_at: null }, {}).foot, "存檔後下一時段排程開始用（大盤預測從下一個晚間版起）。");
 });
 
 test("最近一班沒讀到設定的排程列出來", () => {
   const view = S.modelsView({ ...DATA, unread: [{ task: "forecast-ledger", read_at: "2026-11-19T13:05:00Z" }] }, {});
-  assert.deepEqual(view.unread, ["晚間事前預測上一班（11-19 21:05）沒讀到你的設定，用了預設。"]);
+  assert.deepEqual(view.unread, ["晚間事前預測上一時段（11-19 21:05）沒讀到你的設定，用了預設。"]);
 });
 
 test("資料庫還沒更新時說明存不了", () => {
@@ -92,7 +92,7 @@ test("只有改到大盤預測或每日判斷，存檔前才先問", () => {
     "大盤預測改成 Flash・中：成績另開一組從頭累積，正式起算要重數連續 5 天。從下一個晚間版開始用。",
   ]);
   assert.deepEqual(S.confirmNotes(DATA, { watch_judge: { model: FLASH, effort: "low" }, digest: { model: FLASH, effort: "low" } }), [
-    "自選股每日判斷改成 Flash・低：成績另開一組從頭累積。下一班開始用。",
+    "自選股每日判斷改成 Flash・低：成績另開一組從頭累積。下一時段開始用。",
   ]);
   // 改了又改回來不算
   assert.deepEqual(S.confirmNotes(DATA, { forecast: { model: ARGON, effort: "medium" } }), []);

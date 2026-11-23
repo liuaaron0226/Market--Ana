@@ -266,7 +266,7 @@ class TemplateTest(unittest.TestCase):
     def test_flat_trust_week_is_not_called_selling(self):
         bundle = pd.build_facts(*market(trust_today=-400.0))   # 近 5 日 100×4−400＝0
         self.assertEqual(bundle["signals"]["trust_5d"], 0)
-        self.assertEqual(pd.template_plain(bundle)["points"][1]["title"], "投信：幾乎沒動作")
+        self.assertEqual(pd.template_plain(bundle)["points"][1]["title"], "投信：買賣超不明顯")
 
     def test_the_schema_version_changed_with_the_fields(self):
         self.assertEqual(pd.template_plain(pd.build_facts(*market()))["schema"], "market-plain/v3")

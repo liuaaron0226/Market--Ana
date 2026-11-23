@@ -153,7 +153,7 @@ def run(j: Journey, browser, prefix: str, email: str, options: dict) -> None:
     now = page.evaluate(STATE)
     j.check(f"{prefix}打開消息：最新一輪、有總結", now["meta"].startswith("11-20") and (now["summary"] or "").startswith("台股今天下跌"), now["meta"])
     labels = [label for label, _ in now["summaryPoints"] or []]
-    j.check(f"{prefix}總結有影響、要看、準備三段", labels == ["影響", "要看", "準備"], labels)
+    j.check(f"{prefix}總結有影響、觀察、因應三段", labels == ["影響", "觀察", "因應"], labels)
     j.check(f"{prefix}總結的條件與準備各兩句、準備是「如果…就…」",
             bool(now["summaryPoints"]) and len(now["summaryPoints"][1][1]) == 2 and all(t.startswith("如果") and "就" in t for t in now["summaryPoints"][2][1]),
             now["summaryPoints"])
@@ -161,7 +161,7 @@ def run(j: Journey, browser, prefix: str, email: str, options: dict) -> None:
     first = next((item for item in now["items"] if item["title"].startswith("外資單日賣超")), {"title": "", "reason": None, "points": None, "mine": []})
     minor = now["items"][-1]
     j.check(f"{prefix}外資那一則：標題、發生什麼、三段", first["title"].startswith("外資單日賣超") and first["reason"] == "外資大賣半導體權值股。"
-            and [label for label, _ in first["points"] or []] == ["影響", "要看", "準備"], first)
+            and [label for label, _ in first["points"] or []] == ["影響", "觀察", "因應"], first)
     j.check(f"{prefix}影響最小的那一則只有影響一段", minor["title"].startswith("某公司") and [label for label, _ in minor["points"] or []] == ["影響"], minor)
     if owner:
         j.check(f"{prefix}站主：點名自選股的那一句在影響那一段裡", first["mine"] == [MINE_ITEM] and MINE_SUMMARY in now["summaryPoints"][0][1], first["mine"])
@@ -170,7 +170,7 @@ def run(j: Journey, browser, prefix: str, email: str, options: dict) -> None:
                 and not any(item["mine"] for item in now["items"]))
         j.check(f"{prefix}朋友：回應裡也沒有（不是只藏起來）", bool(j.bodies) and all("owner_effect" not in body and "外資賣超的重心" not in body
                                                                       and "都在被賣的權值股裡" not in body for body in j.bodies), len(j.bodies))
-        j.check(f"{prefix}朋友：影響、要看、準備照樣看得到", [label for label, _ in first["points"] or []] == ["影響", "要看", "準備"]
+        j.check(f"{prefix}朋友：影響、要看、準備照樣看得到", [label for label, _ in first["points"] or []] == ["影響", "觀察", "因應"]
                 and len(first["points"][0][1]) == 1, first["points"])
     j.check(f"{prefix}沒有空白段落、不橫向捲動、三段不超出板", now["empty"] == 0 and now["noScroll"] and now["inside"], [now["empty"], now["noScroll"], now["inside"]])
     j.check(f"{prefix}不出現買賣指令字眼", not any(word in now["text"] for word in ("買進", "賣出", "加碼", "減碼", "停損")))
@@ -179,15 +179,15 @@ def run(j: Journey, browser, prefix: str, email: str, options: dict) -> None:
 
     group(page, "美股")
     us = page.evaluate(STATE)
-    j.check(f"{prefix}美股那一組也是新寫法", len(us["items"]) == 1 and [label for label, _ in us["items"][0]["points"] or []] == ["影響", "要看", "準備"], us["items"])
-    group(page, "日韓中")
+    j.check(f"{prefix}美股那一組也是新寫法", len(us["items"]) == 1 and [label for label, _ in us["items"][0]["points"] or []] == ["影響", "觀察", "因應"], us["items"])
+    group(page, "亞洲股市")
     asia = page.evaluate(STATE)
-    j.check(f"{prefix}沒寫準備的那一則只畫影響與要看", [label for label, _ in asia["items"][0]["points"] or []] == ["影響", "要看"], asia["items"])
-    group(page, "我的自選")
+    j.check(f"{prefix}沒寫準備的那一則只畫影響與觀察", [label for label, _ in asia["items"][0]["points"] or []] == ["影響", "觀察"], asia["items"])
+    group(page, "自選股")
     mine = page.evaluate(STATE)
     titles = [item["title"] for item in mine["items"]]
     marked = next((item for item in mine["items"] if item["title"].startswith("台積電 ADR")), None)
-    j.check(f"{prefix}我的自選：判讀有三段", bool(marked) and [label for label, _ in marked["points"] or []] == ["影響", "要看", "準備"], titles)
+    j.check(f"{prefix}我的自選：判讀有三段", bool(marked) and [label for label, _ in marked["points"] or []] == ["影響", "觀察", "因應"], titles)
     if owner:
         old = next((item for item in mine["items"] if item["title"] == "聯發科法說會登場"), None)
         j.check(f"{prefix}我的自選：沒有新欄位的舊判讀照舊（標題＋一句）", bool(old) and old["points"] is None and old["reason"] == "法說會釋出展望。", old)

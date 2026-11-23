@@ -48,10 +48,10 @@ async function req(path = "/api/impact-watch", { email = OWNER, method = "GET" }
 }
 const labels = (body) => body.items.map((item) => item.label);
 
-test("首頁直白分析挑的條件：出處寫「直白分析」（票 07）", async () => {
+test("首頁盤勢解讀挑的條件：出處寫「盤勢解讀」（票 07）", async () => {
   await add(env.DB, "above_ma20", { source_block: "plain_daily", source_ref: "20261118-plain-ai", label: "加權指數收盤站回月線", impact: 2 });
   const body = await (await req()).json();
-  assert.deepEqual(body.items.find((item) => item.id === "above_ma20").source, { block: "直白分析", date: "2026-11-18" });
+  assert.deepEqual(body.items.find((item) => item.id === "above_ma20").source, { block: "盤勢解讀", date: "2026-11-18" });
 });
 
 test("消息型（票 05）：類型標 news；有結果時帶依據的那一則新聞，還在盯的與數字型都不帶", async () => {

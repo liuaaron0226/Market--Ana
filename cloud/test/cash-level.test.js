@@ -114,7 +114,7 @@ test("差距不到五個百分點顯示不用動", async () => {
   const body = await (await req("/api/holdings/level")).json();
   assert.equal(body.current.level, 78);
   assert.equal(body.adjustment.within_tolerance, true);
-  assert.equal(body.adjustment.message, "不用動");
+  assert.equal(body.adjustment.message, "無需調整");
 });
 
 test("差距恰好五個百分點也在容忍帶內", async () => {
@@ -125,7 +125,7 @@ test("差距恰好五個百分點也在容忍帶內", async () => {
   assert.equal(body.current.level, 75);
   assert.equal(body.adjustment.percentage_points, 5);
   assert.equal(body.adjustment.within_tolerance, true);
-  assert.equal(body.adjustment.message, "不用動");
+  assert.equal(body.adjustment.message, "無需調整");
 });
 
 test("庫存缺價時不把可估部分冒充完整水位", async () => {

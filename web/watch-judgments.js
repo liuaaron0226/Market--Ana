@@ -12,7 +12,7 @@
   const WATCHED = new Set(['還沒到', '接近']); // 盤中只盯這兩種；「可以留意」在判斷當下就標著了
   const TONE = { 可以留意: 'ready', 接近: 'near', 還沒到: 'far' };
   const EDITION = { evening: '晚間版', morning: '晨間版' };
-  const VIEWS = { judgment: '判斷', score: '成績', history: '回看' };
+  const VIEWS = { judgment: '判斷', score: '成績', history: '回顧' };
   const HORIZONS = [5, 20];
   // 判斷缺了哪幾層時顯示的中文名；帳本新增一層就要在這裡補（H 票 wyckoff_lpsy、I 票四層、I 票第二輪三層、J 票兩層）。
   const LAYER = {
@@ -23,7 +23,7 @@
   };
   const MISS = {
     input_not_ready: '資料沒到齊', deadline_passed: '過了期限', model_failed: '模型失敗', model_timeout: '模型逾時',
-    output_garbled: '回答亂碼', answer_invalid: '回答不合格', quota_exhausted: '額度用完',
+    output_garbled: '回應格式錯誤', answer_invalid: '回答不合格', quota_exhausted: '額度用完',
   };
   // 回看一次列幾份；按「更早」再多列這麼多。
   const HISTORY_PAGE = 20;
@@ -34,7 +34,7 @@
   function listParts(entry, ledgerDate) {
     if (!ledgerDate) return null; // 帳本還是空的：什麼都不加
     if (!entry) return { tone: 'none', status: '還沒有判斷' };
-    if (entry.kind !== 'judgment') return { tone: 'miss', status: '漏記', record: entry.record };
+    if (entry.kind !== 'judgment') return { tone: 'miss', status: '缺漏', record: entry.record };
     return {
       tone: TONE[entry.status] || 'far', status: entry.status,
       verb: entry.status === '可以留意' ? '已站上' : '站上', trigger: entry.trigger_line.value, record: entry.record,
@@ -54,7 +54,7 @@
   // 個股頁小鍵上的字。reached：盤中已碰到觸發線。
   function chipText(record, reached) {
     if (!record) return '判斷';
-    if (record.kind !== 'judgment') return '判斷 漏記';
+    if (record.kind !== 'judgment') return '判斷 缺漏';
     return reached ? `判斷 已到 ${fmt(record.trigger_line.value)}` : `判斷 ${record.status}`;
   }
 
@@ -69,7 +69,7 @@
     return [
       { value: record.trigger_line.value, label: `觸發線 ${record.trigger_line.name}`, short: trigger ? `MA${trigger}` : role, role, ma: trigger,
         tone: '--gold', pos: 'above', ...(reached ? { strong: true } : {}) },
-      { value: record.wrong_line.value, label: `看錯線 ${record.wrong_line.name}`, short: wrong ? `MA${wrong}` : '看錯', role: '看錯', ma: wrong,
+      { value: record.wrong_line.value, label: `價位誤判 ${record.wrong_line.name}`, short: wrong ? `MA${wrong}` : '誤判', role: '誤判', ma: wrong,
         tone: '--down', pos: 'below' },
     ];
   }
@@ -199,14 +199,14 @@
       return;
     }
     if (record.kind !== 'judgment') {
-      panel.append(facts([['判斷', `漏記：${MISS[record.miss_reason] || '沒有寫成'}`], ['紀錄', recordLabel(record)]]));
+      panel.append(facts([['判斷', `缺漏：${MISS[record.miss_reason] || '沒有寫成'}`], ['紀錄', recordLabel(record)]]));
       return;
     }
     const reached = isReached() && record === newest();
     panel.append(facts([
       ['狀態', reached ? `${record.status} · 盤中已到觸發線` : record.status, 'is-strong'],
       ['觸發線', `${record.trigger_line.name} ${fmt(record.trigger_line.value)}`],
-      ['看錯線', `${record.wrong_line.name} ${fmt(record.wrong_line.value)}`, 'is-down'],
+      ['價位誤判', `${record.wrong_line.name} ${fmt(record.wrong_line.value)}`, 'is-down'],
       ['理由', record.reason],
       ['公告', (record.reason_news || []).map(item => item.title).join('；')],
       ['紀錄', recordLabel(record)],
@@ -242,12 +242,12 @@
       const head = el('header', { class: 'forecast-score-head' });
       head.append(el('strong', {}, `${group.horizon}日`), el('span', { class: 'forecast-tag' }, group.stage),
         el('span', { class: 'forecast-count num' }, `${group.reconciled} 次`));
-      block.append(head, bar('贏大盤', group.win_rate, 'is-hit'), bar('隨便挑', group.random_rate, 'is-base'));
+      block.append(head, bar('贏大盤', group.win_rate, 'is-hit'), bar('隨機基準', group.random_rate, 'is-base'));
       panel.append(block);
     }
     // 還沒到期、無法判定都以轉變日計：二十日那一格還沒有結果的轉變日（五日還沒到期的一定也在裡面）。
     const longest = all[all.length - 1];
-    const open = [`漏記 ${longest.misses} 次`, `還沒到期 ${longest.pending} 次`];
+    const open = [`缺漏 ${longest.misses} 次`, `還沒到期 ${longest.pending} 次`];
     if (longest.undeterminable) open.push(`無法判定 ${longest.undeterminable} 次`);
     panel.append(el('p', { class: 'forecast-note' }, `全部關注股 · ${open.join(' · ')}`));
     const twenty = stock && stock.find(g => g.horizon === 20);
@@ -263,7 +263,7 @@
     // 這一格還沒有對帳結果：可能是還沒到期，也可能是資料缺漏無法判定（合計數字在成績頁）；都不算看錯。
     if (!outcome) return '還沒有結果';
     const sign = (v) => `${v >= 0 ? '+' : ''}${(v * 100).toFixed(1)}%`;
-    return `${mmdd(outcome.expiry_date)} ${sign(outcome.stock_return)}，大盤 ${sign(outcome.index_return)}，${outcome.beat_index ? '贏大盤' : '沒贏'}`;
+    return `${mmdd(outcome.expiry_date)} ${sign(outcome.stock_return)}，大盤 ${sign(outcome.index_return)}，${outcome.beat_index ? '贏大盤' : '未勝出'}`;
   }
 
   function historyView(panel) {
@@ -285,7 +285,7 @@
     const pairs = [
       ['狀態', `${picked.status}（${mmdd(picked.base_date)} ${EDITION[picked.edition]}）`, 'is-strong'],
       ['觸發線', `${picked.trigger_line.name} ${fmt(picked.trigger_line.value)}`],
-      ['看錯線', `${picked.wrong_line.name} ${fmt(picked.wrong_line.value)}`, 'is-down'],
+      ['價位誤判', `${picked.wrong_line.name} ${fmt(picked.wrong_line.value)}`, 'is-down'],
       ['理由', picked.reason],
     ];
     if (picked.transition) {

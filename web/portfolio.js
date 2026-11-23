@@ -209,7 +209,7 @@
     }
     $('levelDate').textContent = `資料日 ${advice.data_date}`;
     $('recommendedLevel').textContent = advice.recommended_level === null ? '—' : `${number.format(advice.recommended_level)}%`;
-    $('levelStatus').textContent = advice.warning || (advice.missing_signals?.length ? `少看 ${advice.missing_signals.length} 項資料` : '資料已到齊');
+    $('levelStatus').textContent = advice.warning || (advice.missing_signals?.length ? `缺 ${advice.missing_signals.length} 項資料` : '資料已到齊');
     $('levelStatus').dataset.state = advice.warning || advice.missing_signals?.length ? 'warning' : 'ok';
     if (!adjustment) {
       $('levelGap').textContent = '—';
@@ -222,9 +222,9 @@
     } else {
       const gap = adjustment.percentage_points;
       $('levelGap').textContent = `${gap > 0 ? '+' : ''}${number.format(gap)} 個百分點`;
-      $('levelAmount').textContent = adjustment.within_tolerance ? '不用動' : money.format(adjustment.amount_twd);
+      $('levelAmount').textContent = adjustment.within_tolerance ? '無需調整' : money.format(adjustment.amount_twd);
       $('levelConclusion').textContent = adjustment.within_tolerance
-        ? '目前水位在 5 個百分點容忍帶內，今天不用動。'
+        ? '目前水位在 5 個百分點容忍帶內，今日無需調整。'
         : gap > 0
           ? `目前股票水位偏低，可用現金增加約 ${money.format(adjustment.amount_twd)}。`
           : `目前股票水位偏高，由您決定減碼哪些持股，金額約 ${money.format(adjustment.amount_twd)}。`;
@@ -272,7 +272,7 @@
       if (!wave.vix_retreated) missing.push('VIX 從近 10 日高點回落至少 20%');
       if (!wave.stable_three_days) missing.push(`台股連續 3 日不破底（目前 ${wave.no_new_low_days || 0} 日）`);
       waveText = `本波從 ${number.format(wave.reference_high)} 點計，跌幅 ${number.format((wave.drawdown || 0) * 100)}%，已用第 ${(wave.used_tranches || []).join('、') || '零'} 批。` +
-        (next <= 3 ? `第 ${next} 批${missing.length ? `還差：${missing.join('、')}` : '條件已到齊'}。` : '三批已用完，本波沒有後手。');
+        (next <= 3 ? `第 ${next} 批${missing.length ? `尚差：${missing.join('、')}` : '條件已到齊'}。` : '三批已用完，本波沒有後手。');
     }
     progress.textContent = `${direction}${confirmation.required ? `：${confirmation.days}/${confirmation.required} 個交易日` : ''}。${waveText}` +
       `${advice.lock?.remaining_days ? ` 加碼後降級限制還有 ${advice.lock.remaining_days} 個交易日。` : ''}`;
@@ -298,7 +298,7 @@
   // 算法在 holdings-rows.js（總數、排序、橫條的兩段、每一檔與全部的賺賠）；這裡只畫，不另外算。只呈現現況，不說要調整哪一檔。
   const STILL = window.matchMedia('(prefers-reduced-motion: reduce)');
   const HOLDING_FIRST = 150, HOLDING_GAP = 300, HOLDING_PUSH = 3;   // 進場：第一檔什麼時候開始、一檔比一檔晚多少（毫秒）、被頂或壓一下的幅度（px）
-  const GAIN_WORDS = { bull: '賺', bear: '賠', flat: '打平', none: '損益' };
+  const GAIN_WORDS = { bull: '獲利', bear: '虧損', flat: '持平', none: '損益' };
   const GAIN_TONES = { bull: 'up', bear: 'down' };
   const signedMoney = value => `${value > 0 ? '+' : value < 0 ? '−' : ''}${money.format(Math.abs(value))}`;
   const signedPercent = value => `${value > 0 ? '+' : value < 0 ? '−' : ''}${number.format(Math.abs(value))}%`;

@@ -712,13 +712,13 @@
 
   function plainBlock(meaning, watch) {
     const list = items => `<ul>${items.filter(Boolean).map(item => `<li>${item}</li>`).join('')}</ul>`;
-    return `<div class="plain">${meaning.filter(Boolean).length ? `<section class="plain-group"><h4>這代表</h4>${list(meaning)}</section>` : ''}${watch && watch.filter(Boolean).length ? `<section class="plain-group plain-watch"><h4>要注意</h4>${list(watch)}</section>` : ''}</div>`;
+    return `<div class="plain">${meaning.filter(Boolean).length ? `<section class="plain-group"><h4>解讀</h4>${list(meaning)}</section>` : ''}${watch && watch.filter(Boolean).length ? `<section class="plain-group plain-watch"><h4>風險提示</h4>${list(watch)}</section>` : ''}</div>`;
   }
 
   // 面板裡點了才展開的一列
   const fold = (summary, html) => `<details class="more-detail"><summary>${summary}</summary>${html}</details>`;
   function moreDetail(html) {
-    return fold('看詳細數字', `${html}<p class="deep-links">更深入：<button type="button" data-deep="method">方法</button><button type="button" data-deep="sources">來源</button><button type="button" data-deep="samples">換一組比較樣本</button><button type="button" data-deep="table">資料表</button><button type="button" data-deep="news">新聞</button></p>`);
+    return fold('詳細數據', `${html}<p class="deep-links">延伸資料：<button type="button" data-deep="method">方法</button><button type="button" data-deep="sources">來源</button><button type="button" data-deep="samples">回測樣本切換</button><button type="button" data-deep="table">資料表</button><button type="button" data-deep="news">新聞</button></p>`);
   }
 
 
@@ -1057,7 +1057,7 @@
   // （market-news.js 的 pointsNode、market-news.css 的 .news-points：左邊兩個字小標、右邊內文）。沒有內容的那一段不出現。
   function impactPoints(data) {
     const strings = value => (Array.isArray(value) ? value : [value]).filter(text => typeof text === 'string' && text.trim());
-    const rows = [['影響', strings(data.effect)], ['要看', strings(data.conditions)], ['準備', strings(data.prepare)]].filter(([, lines]) => lines.length);
+    const rows = [['影響', strings(data.effect)], ['觀察', strings(data.conditions)], ['因應', strings(data.prepare)]].filter(([, lines]) => lines.length);
     return rows.length ? `<dl class="news-points">${rows.map(([label, lines]) => `<dt>${label}</dt><dd>${lines.map(text => `<p>${esc(text)}</p>`).join('')}</dd>`).join('')}</dl>` : '';
   }
   // 點開的全文：結論 → 整體的影響／要看／準備 → 六點各自發生什麼與影響、準備。
@@ -1066,7 +1066,7 @@
     if (!PL) return '';
     const list = lines => `<ul>${lines.map(l => `<li>${esc(l)}</li>`).join('')}</ul>`;
     const old = (title, lines, extra) => (Array.isArray(lines) && lines.length ? `<section class="plain-group${extra}"><h4>${title}</h4>${list(lines)}</section>` : '');
-    return `<p class="read-line big">${esc(PL.one_line)}</p>${impactPoints(PL)}${PL.points.map(p => `<section class="plain-group"><h4>${esc(p.title)}</h4>${list(p.lines)}${impactPoints(p)}</section>`).join('')}${old('要擔心', PL.worry, ' plain-watch')}${old('什麼時候比較安心', PL.relief, '')}${plainFootnote(PL) ? `<p class="read-date plain-note">${esc(plainFootnote(PL))}</p>` : ''}`;
+    return `<p class="read-line big">${esc(PL.one_line)}</p>${impactPoints(PL)}${PL.points.map(p => `<section class="plain-group"><h4>${esc(p.title)}</h4>${list(p.lines)}${impactPoints(p)}</section>`).join('')}${old('風險', PL.worry, ' plain-watch')}${old('轉強條件', PL.relief, '')}${plainFootnote(PL) ? `<p class="read-date plain-note">${esc(plainFootnote(PL))}</p>` : ''}`;
   }
 
   function renderCandlePanel(index) {
@@ -1093,7 +1093,7 @@
       gapDown ? '一開盤就<b>跳空</b>跌到前一根最低點以下，代表開盤前就有很大的賣壓。' : '',
       lowerShadow >= 0.35 ? `下影線很長：盤中曾跌到 ${fmt(candle.low, 0)}，後來<b>被買回來</b>，代表低點有人承接。` : '',
       upperShadow >= 0.35 ? `上影線很長：盤中曾漲到 ${fmt(candle.high, 0)}，後來<b>被賣下去</b>，代表高點有賣壓。` : '',
-      Number.isFinite(volumeRatio) ? (volumeRatio >= 1.3 ? `成交金額是平常的 ${fmt(volumeRatio, 1)} 倍，<b>交易很熱</b>，這根的意義比較重。` : volumeRatio <= 0.75 ? '成交金額比平常少，這根的意義比較輕。' : '成交金額和平常差不多。') : '',
+      Number.isFinite(volumeRatio) ? (volumeRatio >= 1.3 ? `成交金額是平常的 ${fmt(volumeRatio, 1)} 倍，<b>交投熱絡</b>，這根的意義比較重。` : volumeRatio <= 0.75 ? '成交金額比平常少，這根的意義比較輕。' : '成交金額和平常差不多。') : '',
       Number.isFinite(foreign) ? (foreign < 0 ? `外資賣超 ${fmt(Math.abs(foreign), 0)} 億。` : `外資買超 ${fmt(foreign, 0)} 億。`) : '',
     ];
     const watch = [
@@ -1162,9 +1162,9 @@
         <figcaption>過去很像的${figure.count === null ? '日子' : ` ${fmt(figure.count, 0)} 次`}，隔天收在哪裡（不是明天的機率）</figcaption>
         <ol class="zone-rows">${figure.rows.map(row).join('')}</ol>
       </figure>
-      ${scenarioHidden ? fold('要注意', `<div class="plain"><section class="plain-group plain-watch"><ul>${watch.filter(Boolean).map(item => `<li>${item}</li>`).join('')}</ul></section></div>`) : fold('怎麼應對', `<dl class="action-list">
-        <div><dt>手上沒股票</dt><dd id="actionFlat">${esc(action.flat || '尚未取得')}</dd></div>
-        <div><dt>已經持有</dt><dd id="actionHolding">${esc(action.holding || '尚未取得')}</dd></div>
+      ${scenarioHidden ? fold('風險提示',`<div class="plain"><section class="plain-group plain-watch"><ul>${watch.filter(Boolean).map(item => `<li>${item}</li>`).join('')}</ul></section></div>`) : fold('因應策略', `<dl class="action-list">
+        <div><dt>空手觀望</dt><dd id="actionFlat">${esc(action.flat || '尚未取得')}</dd></div>
+        <div><dt>持有部位</dt><dd id="actionHolding">${esc(action.holding || '尚未取得')}</dd></div>
       </dl>${plainBlock([], watch)}`)}
       ${moreDetail(`<p class="panel-lede">${source}</p>${scenarioHidden ? '' : `<dl class="action-list"><div><dt>觸發條件</dt><dd>${esc(scenario.trigger || '尚未取得')}</dd></div><div><dt>解讀</dt><dd>${esc(scenario.interpretation || '尚未取得')}</dd></div></dl><p class="panel-callout" style="--tone:${upper ? 'var(--gold)' : 'var(--down)'}">${esc(ACTIONS.basis || '一般情境應對，不是自動下單指示。')}</p>`}`)}
     `;
@@ -1276,7 +1276,7 @@
     ];
     const watch = [
       '這是<b>過去的比例，不是明天的機率</b>。',
-      total < 50 ? `次數不多（${fmt(total, 0)} 次），參考就好。` : '',
+      total < 50 ? `次數不多（${fmt(total, 0)} 次），僅供參考。` : '',
       outcome === 'between' && CLOSE - LOWER >= 1000 ? `兩條線相差很大，「留在中間」也可能再跌 ${fmt(Math.floor((CLOSE - LOWER) / 1000) * 1000, 0)} 點以上。` : '',
     ];
     return `
@@ -1309,7 +1309,7 @@
     if (kind === 'candle') return chart.candles[payload.index].label;
     if (kind === 'line') return payload.line === 'upper' ? '收復線' : '防守線';
     if (kind === 'distribution') return `${outcomeLabels[payload.outcome]}的歷史結果`;
-    if (kind === 'plain') return '直白分析';
+    if (kind === 'plain') return '盤勢解讀';
     if (kind === 'chip') { const c = chipCards().find(item => item.key === payload.key); return c ? c.name : '籌碼'; }
     return '詳情';
   }
@@ -1896,7 +1896,7 @@
     const title = document.createElement('strong');
     title.textContent = `${item.code} ${item.name || ''}`.trim();
     const meta = document.createElement('small');
-    meta.textContent = [item.market, item.horizon === 'short' ? '本人標記短期' : item.horizon === 'long' ? '本人標記長期' : ''].filter(Boolean).join(' · ');
+    meta.textContent = [item.market, item.horizon === 'short' ? '自訂短期' : item.horizon === 'long' ? '自訂長期' : ''].filter(Boolean).join(' · ');
     link.append(title, meta);
     link.addEventListener('click', event => recordAndOpen(event, item.code, link.href));
     row.append(link);
@@ -1998,10 +1998,10 @@
       const shortItems = uniqueStocks(ownShort, systemShort);
       const longItems = uniqueStocks(ownLong, core.holdings || []);
       const shortNotice = watchlistFailed && shortSystemFailed ? '短期分類暫時無法讀取'
-        : watchlistFailed ? '本人標記的短期分類暫時無法讀取'
+        : watchlistFailed ? '自訂短期分類暫時無法讀取'
           : shortSystemFailed ? '系統短期名單暫時無法讀取' : '';
       const longNotice = watchlistFailed && coreFailed ? '長期分類暫時無法讀取'
-        : watchlistFailed ? '本人標記的長期分類暫時無法讀取'
+        : watchlistFailed ? '自訂長期分類暫時無法讀取'
           : coreFailed ? '系統長期名單暫時無法讀取' : '';
       suggestions.replaceChildren(
         suggestionGroup('最近搜尋', history.items || [], {

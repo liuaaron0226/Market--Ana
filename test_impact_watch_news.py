@@ -499,7 +499,7 @@ class WiringTests(unittest.TestCase):
 
     def test_the_usage_page_knows_the_task(self):
         self.assertEqual(gemini_usage.model_for_task(iwn.TASK), "gemini-3.8-flash")
-        self.assertIn(f"'{iwn.TASK}': '盯項讀新聞'", (ROOT / "web/settings.js").read_text(encoding="utf-8"))
+        self.assertIn(f"'{iwn.TASK}': '追蹤事項新聞判讀'", (ROOT / "web/settings.js").read_text(encoding="utf-8"))
 
     def test_the_daily_update_runs_it_after_the_numeric_check_and_before_the_push(self):
         text = (ROOT / ".github/workflows/daily-update.yml").read_text(encoding="utf-8")

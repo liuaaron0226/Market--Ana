@@ -16,8 +16,8 @@ const TAIPEI_OFFSET_MS = 8 * 3_600_000;
 const PREPARE_MAX = 2;      // 和首頁清單一樣最多兩句
 const TITLE_MAX = 120;
 const BODY_MAX = 600;      // 推播內容加密後一筆上限 4096 bytes，中文一個字 3 bytes
-const HEADLINE = { met: "成立", failed: "落空" };   // 否定要講明「落空」，不然會被當成發生了（票 03 補充）
-const AI_READ = "（AI 讀新聞判斷，可能有誤）";       // 消息型盯項（之後的票）：不是程式比數字判的
+const HEADLINE = { met: "成立", failed: "未成立" };   // 否定要講明「未成立」，不然會被當成發生了（票 03 補充）
+const AI_READ = "（AI 新聞判讀，可能有誤）";       // 消息型盯項（之後的票）：不是程式比數字判的
 
 const missingTable = (error) => /no such table/i.test(String(error?.message));
 const taipeiDate = (ms) => new Date(ms + TAIPEI_OFFSET_MS).toISOString().slice(0, 10);
@@ -43,8 +43,8 @@ export function impactWatchNotice(row) {
   const what = row.subject === "market" ? row.label : `${[stockName(row.params), row.subject].filter(Boolean).join(" ")} ${row.label}`;
   const prepare = prepareLines(row.prepare);
   const lines = [
-    String(row.result_note || "").replace(/^(成立|否定|落空)[：:]\s*/, ""),   // 標題已經講了結果，內文留帶數字的那一句
-    prepare.length ? `準備：${prepare.join("；")}` : "",
+    String(row.result_note || "").replace(/^(成立|否定|落空|未成立)[：:]\s*/, ""),   // 標題已經講了結果，內文留帶數字的那一句
+    prepare.length ? `因應：${prepare.join("；")}` : "",
   ].filter(Boolean);
   const text = [...lines.join("\n")].slice(0, BODY_MAX).join("");   // 以字為單位截，不切壞一個字
   return {

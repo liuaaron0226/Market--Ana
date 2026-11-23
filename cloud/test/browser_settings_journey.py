@@ -114,8 +114,8 @@ def owner_page(journey: Journey, browser, name: str, path: str, width: int) -> N
                   meters == [["5 小時", "19%", True], ["本週", "93%", False], ["本週", "99%", False]], meters)
     today = page.eval_on_selector_all("#settingsDialog .st-today li", "ls => ls.map(l => l.innerText.replace(/\\s+/g, ' '))")
     journey.check(f"{tag}：今天各任務用中文名稱與模型", "自選股判斷與提名 Flash 1" in today and "晚間事前預測 Argon 1" in today, today)
-    journey.check(f"{tag}：籌碼與資金白話標思考程度、失敗與乾跑（乾跑不計）",
-                  "籌碼與資金白話 失敗 1・乾跑 1（不計） Argon・思考中 1" in today, today)
+    journey.check(f"{tag}：盤勢解讀標思考程度、失敗與試跑（試跑不計）",
+                  "盤勢解讀 失敗 1・試跑 1（不計） Argon・思考中 1" in today, today)
     foot = page.locator("#settingsDialog .st-foot a")
     journey.check(f"{tag}：最下面是帳號管理，再下面是登出（換帳號，本人 11-18）",
                   foot.count() == 2 and foot.nth(0).get_attribute("href") == "/admin/"
@@ -189,7 +189,7 @@ def owner_models(journey: Journey, browser, width: int, first: bool) -> None:
     quota = page.locator("#settings-models .st-quota").inner_text().replace("\n", " ")
     journey.check(f"{tag}：頂端一行 Argon、Flash 本週剩多少", "Argon 本週剩 99%" in quota and "Flash 本週剩 93%" in quota, quota)
     warn = page.locator("#settings-models .st-warn").all_inner_texts()
-    journey.check(f"{tag}：晨間預測上一班沒讀到設定有標出來", any("晨間事前預測上一班" in w and "沒讀到你的設定" in w for w in warn), warn)
+    journey.check(f"{tag}：晨間預測上一時段沒讀到設定有標出來", any("晨間事前預測上一時段" in w and "沒讀到你的設定" in w for w in warn), warn)
     rows = models_rows(page)
     if not first:
         journey.check(f"{tag}：上次存的值重新整理後還在（大盤預測 Flash・高、白話 Argon・低）",
@@ -220,7 +220,7 @@ def owner_models(journey: Journey, browser, width: int, first: bool) -> None:
     page.locator("[data-maction='save']").click()
     page.locator("[data-maction='confirm']").click()
     page.wait_for_selector("#settings-models .st-saved")
-    journey.check(f"{tag}：確定改之後存好", "已存檔" in page.locator(".st-saved").inner_text()
+    journey.check(f"{tag}：確認變更之後存好", "已存檔" in page.locator(".st-saved").inner_text()
                   and page.locator("[data-maction]").count() == 0 and models_rows(page)[0].endswith("Flash・高"))
 
     page.locator("[data-mrow='plain']").click()

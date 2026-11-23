@@ -121,7 +121,7 @@ def owner(j, browser, base: str, prefix: str, options: dict, mobile: bool) -> No
     now = page.evaluate(base_journey.STATE)
     j.check(f"{prefix}首頁那一行：有結果的個股盯項前面帶股票名稱", now["shown"] and now["dot"] and now["text"].startswith("台積電 外資連續賣超達 4 天")
             and now["sameRow"] and now["insideHeader"] and now["noScroll"], now)
-    j.check(f"{prefix}首頁那一行：報讀文字帶股票名稱", now["label"] == "你在等的事：台積電 外資連續賣超達 4 天有結果，還盯 5 件", now["label"])
+    j.check(f"{prefix}首頁那一行：報讀文字帶股票名稱", now["label"] == "追蹤事項：台積電 外資連續賣超達 4 天有結果，尚餘 5 項", now["label"])
     page.locator(".market-header").screenshot(path=str(OUT / f"{prefix}1-home-header.png"))
     page.locator("#impactWatchKey").click()
     page.wait_for_timeout(700)
@@ -144,26 +144,26 @@ def owner(j, browser, base: str, prefix: str, options: dict, mobile: bool) -> No
     page.locator("#content").wait_for(state="visible", timeout=60_000)
     page.wait_for_timeout(1500)
     there = page.evaluate(STOCK)
-    j.check(f"{prefix}點股票名稱：進到那一檔的個股頁，看到它的盯項", there["shown"] and [row["cond"] for row in there["rows"]] == ["在盯收盤站上壓力（3,785）"],
+    j.check(f"{prefix}點股票名稱：進到那一檔的個股頁，看到它的盯項", there["shown"] and [row["cond"] for row in there["rows"]] == ["追蹤中收盤站上壓力（3,785）"],
             there)
 
     open_stock(page, base, "2330")
     now = page.evaluate(STOCK)
     conds = [(row["cond"], row["left"], row["open"]) for row in now["rows"]]
-    j.check(f"{prefix}個股頁：只列這一檔的兩筆，有結果的在前；都先收著", now["shown"] and conds == [("外資連續賣超達 4 天", "有結果", False), ("在盯收盤跌破月線", "剩 14 日", False)], conds)
+    j.check(f"{prefix}個股頁：只列這一檔的兩筆，有結果的在前；都先收著", now["shown"] and conds == [("外資連續賣超達 4 天", "有結果", False), ("追蹤中收盤跌破月線", "剩 14 日", False)], conds)
     j.check(f"{prefix}個股頁：有結果的收著也看得到帶數字的那一句", now["rows"][0]["result"] == RESULT, now["rows"][0])
     j.metrics[prefix + "stock-height"] = now["height"]
-    j.check(f"{prefix}個股頁：在盯的前面一個「在盯」小標，不重複寫對象", now["rows"][1]["tag"] == "在盯" and not now["rows"][1]["meta"], now["rows"][1])
+    j.check(f"{prefix}個股頁：追蹤中的前面一個「追蹤中」小標，不重複寫對象", now["rows"][1]["tag"] == "追蹤中" and not now["rows"][1]["meta"], now["rows"][1])
     j.check(f"{prefix}個股頁：接在報價下面、不超出板、不橫向捲動", now["belowQuote"] and now["insideBoard"] and now["noScroll"], now)
     j.check(f"{prefix}個股頁：不出現買賣指令字眼", not any(word in page.locator("#stockWatch").inner_text() for word in ("買進", "賣出", "加碼", "減碼", "停損")))
     page.screenshot(path=str(OUT / f"{prefix}4-stock.png"))
     page.locator("#stockWatch .iw-item summary").nth(0).click()
     page.locator("#stockWatch .iw-item summary").nth(1).click()
     page.wait_for_timeout(400)
-    j.check(f"{prefix}個股頁：點開有結果的那一筆看原本寫的準備與出處",
-            page.evaluate(STOCK)["rows"][0]["body"] == [f"原本寫的準備 {PREPARE}", "出自 11/18 消息"])
+    j.check(f"{prefix}個股頁：點開有結果的那一筆看原訂因應與出處",
+            page.evaluate(STOCK)["rows"][0]["body"] == [f"原訂因應 {PREPARE}", "出自 11/18 消息"])
     body = page.evaluate(STOCK)["rows"][1]["body"]
-    j.check(f"{prefix}個股頁：點開在盯的那一筆看說明、準備、出處", body == [NOTE, f"先做好的準備 {PREPARE}", "出自 11/18 消息"], body)
+    j.check(f"{prefix}個股頁：點開在盯的那一筆看說明、準備、出處", body == [NOTE, f"因應準備 {PREPARE}", "出自 11/18 消息"], body)
     page.locator(".st-top").screenshot(path=str(OUT / f"{prefix}5-stock-open.png"))
     page.evaluate("() => { document.documentElement.dataset.theme = 'dark'; }")
     page.wait_for_timeout(300)
@@ -184,7 +184,7 @@ def owner(j, browser, base: str, prefix: str, options: dict, mobile: bool) -> No
 def friend(j, browser, base: str, prefix: str, options: dict) -> None:
     context, page, _ = j.home(browser, base, FRIEND, options)
     now = page.evaluate(base_journey.STATE)
-    j.check(f"{prefix}朋友（開給全部）：首頁只有大盤的三件", now["shown"] and now["text"] == "在盯 3 件 ›", now["text"])
+    j.check(f"{prefix}朋友（開給全部）：首頁只有大盤的三件", now["shown"] and now["text"] == "追蹤 3 項 ›", now["text"])
     page.locator("#impactWatchKey").click()
     page.wait_for_timeout(600)
     html = page.content()

@@ -10,10 +10,10 @@
   const HORIZONS = ['1', '5', '20'];
   const ZONE = { above: '線上', between: '兩線之間', below: '線下' };
   const EDITION = { evening: '晚間版', morning: '晨間版' };
-  const VIEWS = { forecast: '預測', summary: '對帳', history: '回看' };
+  const VIEWS = { forecast: '預測', summary: '對帳', history: '回顧' };
   const MISS = {
     input_not_ready: '資料沒到齊', deadline_passed: '過了期限', model_failed: '模型失敗',
-    model_timeout: '模型逾時', output_garbled: '回答亂碼', answer_invalid: '回答不合格',
+    model_timeout: '模型逾時', output_garbled: '回應格式錯誤', answer_invalid: '回答不合格',
   };
   const SHORT_SOURCE = { us_sp500: '標普', us_nasdaq: '那斯達克', japan_nikkei: '日經', korea_kospi: '韓國' };
   // 回看一次取最近六十天的預測（API 上限四百天）。
@@ -118,7 +118,7 @@
     const chosen = state.latest.editions[state.edition];
     if (!record) {
       panel.append(facts([
-        [EDITION[state.edition] || '預測', `漏記：${MISS[chosen?.miss_reason] || '沒有寫成'}`],
+        [EDITION[state.edition] || '預測', `缺漏：${MISS[chosen?.miss_reason] || '沒有寫成'}`],
         ['基準日', mmdd(state.latest.base_date)],
       ]));
       return;
@@ -129,7 +129,7 @@
       ['轉強線', `${lineName(cell.strong_line)} ${fmt(cell.strong_line.value)}`, 'is-up'],
       ['轉弱線', `${lineName(cell.weak_line)} ${fmt(cell.weak_line.value)}`, 'is-down'],
       ['理由', cell.reason],
-      ['看錯條件', cell.invalidation],
+      ['條件誤判', cell.invalidation],
       ['盤勢', record.regime],
       ['紀錄', `${record.run_mode === 'official' ? '正式' : '試跑'} · ${EDITION[record.edition]} · 基準日 ${mmdd(record.base_date)}${record.model ? ` · ${modelName(record.model)}` : ''}`],
       ...cutoffRows(record),
@@ -316,10 +316,10 @@
       const tag = mode === 'replay' ? '參考' : (group.judgement && group.judgement.conclusion) || group.verdict;
       head.append(el('strong', {}, `${horizon}日`), el('span', { class: 'forecast-tag' }, tag),
         el('span', { class: 'forecast-count num' }, `${group.reconciled} 筆`));
-      block.append(head, bar('猜中', group.hit_rate, 'is-hit'), bar('照歷史亂猜', group.baseline_rate, 'is-base'),
+      block.append(head, bar('命中', group.hit_rate, 'is-hit'), bar('歷史機率基準', group.baseline_rate, 'is-base'),
         bar('固定規則', group.fixed_rule_rate, 'is-rule'));
       if (group.pullback && group.pullback.reconciled) {
-        block.append(el('p', { class: 'forecast-note' }, `說是回檔 ${group.pullback.reconciled} 筆：猜中 ${pct(group.pullback.hit_rate)}`));
+        block.append(el('p', { class: 'forecast-note' }, `說是回檔 ${group.pullback.reconciled} 筆：命中 ${pct(group.pullback.hit_rate)}`));
       }
       panel.append(block);
     }
@@ -328,7 +328,7 @@
     const unknown = undeterminable ? ` · 無法判定 ${undeterminable} 格` : '';
     const tail = mode === 'replay' ? ' · 用模型知識截止日之後的過去日子重寫，不計入正式結論' : '';
     panel.append(el('p', { class: 'forecast-note' },
-      `${MODE[mode] || mode} · 漏記 ${groups[0].misses} 次 · 還沒到期 ${groups.reduce((n, g) => n + g.pending, 0)} 格${unknown}${tail}`));
+      `${MODE[mode] || mode} · 缺漏 ${groups[0].misses} 次 · 還沒到期 ${groups.reduce((n, g) => n + g.pending, 0)} 格${unknown}${tail}`));
   }
 
   // ---- 回看頁 ----
@@ -362,7 +362,7 @@
       ['預測', `${ZONE[cell.zone]}（${mmdd(picked.base_date)} ${EDITION[picked.edition]}）`],
       ...(legacy ? [['版本', `${legacy}（參考）`]] : []),
       ['實際', outcome ? `${mmdd(outcome.expiry_date)} 收 ${fmt(outcome.expiry_close)}，${ZONE[outcome.actual_zone]}` : '還沒到期'],
-      ['結果', outcome ? (outcome.actual_zone === cell.zone ? '猜中' : '沒中') : '—', outcome ? (outcome.actual_zone === cell.zone ? 'is-up' : 'is-down') : ''],
+      ['結果', outcome ? (outcome.actual_zone === cell.zone ? '命中' : '未命中') : '—', outcome ? (outcome.actual_zone === cell.zone ? 'is-up' : 'is-down') : ''],
     ]));
   }
 
@@ -461,7 +461,7 @@
 
   function render() {
     const { chip, panel } = state;
-    chip.textContent = current() ? `預測 ${state.horizon}日` : '預測 漏記';
+    chip.textContent = current() ? `預測 ${state.horizon}日` : '預測 缺漏';
     if (!panel.hidden) renderPanel(panel);
   }
 

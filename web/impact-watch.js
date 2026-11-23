@@ -13,7 +13,7 @@
   const stockBox = document.getElementById('stockWatch');   // 個股頁才有
   const home = Boolean(key && list);
   if (!home && !stockBox) return;
-  const KIND = { numeric: '數字', news: 'AI 讀新聞' };
+  const KIND = { numeric: '數字', news: 'AI 新聞判讀' };
   const AI_NOTE = '由 AI 讀後續的新聞判斷，可能漏看或看錯。';
   const REFRESH_MS = 5 * 60_000;   // 回到這一頁時，隔這麼久才重讀一次
   let loadedAt = 0;
@@ -32,12 +32,12 @@
   const short = label => label.replace(/（.*?）/g, '');   // 那一行放不下價位，點開看得到
   // 條件被否定（確定不會發生）時要講明：只寫條件會被當成「發生了」
   const missed = item => item.status === 'failed';
-  const outcome = item => (missed(item) ? '落空' : '有結果');
+  const outcome = item => (missed(item) ? '未成立' : '有結果');
   // 對象是個股時，那一行與報讀文字前面帶股票名稱（條件本身不含名稱）
   const isStock = item => item.subject !== 'market';
   const stockTitle = item => (typeof item.subject_name === 'string' && item.subject_name.trim()) || item.subject;
   const named = item => `${isStock(item) ? `${stockTitle(item)} ` : ''}${short(item.label)}`;
-  const headline = item => `${missed(item) ? '落空：' : ''}${named(item)}`;
+  const headline = item => `${missed(item) ? '未成立：' : ''}${named(item)}`;
 
   // 清單裡的一項：條件＋剩幾個交易日（或「有結果」與結果）＋對象與類型；點了看說明、準備與出處。有結果的直接攤開。
   // 對象：大盤，或股票名稱＋代號（點了進個股頁）
@@ -57,7 +57,7 @@
     node.open = done(item) && !onStockPage;   // 個股頁先收著（結果那一句在標題列，收著也看得到），少佔版面
     const head = el('summary');
     const cond = el('span', 'iw-cond', item.label);
-    if (onStockPage && !done(item)) cond.prepend(el('span', 'iw-kind', '在盯'));
+    if (onStockPage && !done(item)) cond.prepend(el('span', 'iw-kind', '追蹤中'));
     head.append(cond);
     if (done(item)) {
       const mark = el('span', 'iw-left');
@@ -87,7 +87,7 @@
     const prepare = strings(item.prepare);
     if (prepare.length) {
       const prep = el('p', 'iw-prep');
-      prep.append(el('b', '', done(item) ? '原本寫的準備' : '先做好的準備'), ...prepare.map(text => el('span', '', text)));
+      prep.append(el('b', '', done(item) ? '原訂因應' : '因應準備'), ...prepare.map(text => el('span', '', text)));
       body.append(prep);
     }
     if (item.kind === 'news') body.append(el('p', '', AI_NOTE));
@@ -105,9 +105,9 @@
     const count = el('span', 'iw-count');
     if (results.length) {
       box.append(el('i', 'iw-dot'), el('span', 'iw-text', headline(results[0])));
-      if (watching) count.append('還盯 ', el('b', '', String(watching)), ' 件');
+      if (watching) count.append('尚餘 ', el('b', '', String(watching)), ' 項');
     } else {
-      count.append('在盯 ', el('b', '', String(watching)), ' 件');
+      count.append('追蹤 ', el('b', '', String(watching)), ' 項');
     }
     if (count.childNodes.length) box.append(count);
     const arrow = el('span', 'iw-arrow', '›');
@@ -115,8 +115,8 @@
     box.append(arrow);
     key.classList.toggle('is-news', results.length > 0);
     key.setAttribute('aria-label', results.length
-      ? `你在等的事：${named(results[0])}${outcome(results[0])}${watching ? `，還盯 ${watching} 件` : ''}`
-      : `你在等的事：在盯 ${watching} 件`);
+      ? `追蹤事項：${named(results[0])}${outcome(results[0])}${watching ? `，尚餘 ${watching} 項` : ''}`
+      : `追蹤事項：追蹤 ${watching} 項`);
     return box;
   }
 

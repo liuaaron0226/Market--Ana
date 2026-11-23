@@ -35,13 +35,13 @@
   // 自選股那支排程同時跑每日判斷與提名同類股；籌碼與資金白話是在每日更新那支排程裡寫的。
   const TASKS = {
     'watch-ledger': '自選股判斷與提名',
-    'daily-update': '籌碼與資金白話',
+    'daily-update': '盤勢解讀',
     'ai-digest': '首頁每日解讀',
     'forecast-ledger': '晚間事前預測',
     'forecast-morning': '晨間事前預測',
     'forecast-replay': '歷史重播',
     'market-news': '首頁消息',
-    'impact-watch': '盯項讀新聞',   // 消息型盯項每日檢查（daily-update.yml 裡的一步，不是獨立的排程檔）
+    'impact-watch': '追蹤事項新聞判讀',  // 消息型盯項每日檢查（daily-update.yml 裡的一步，不是獨立的排程檔）
   };
   const TAIPEI = 8 * 3600_000;
   const WEEKDAYS = '日一二三四五六';
@@ -86,7 +86,7 @@
   const taskModel = (item) => [modelLabel(item.model), EFFORTS[item.effort]].filter(Boolean).join('・');
   const taskNote = (item) => [
     Number(item.failed) > 0 ? `失敗 ${Number(item.failed)}` : '',
-    Number(item.dry_runs) > 0 ? `乾跑 ${Number(item.dry_runs)}（不計）` : '',
+    Number(item.dry_runs) > 0 ? `試跑 ${Number(item.dry_runs)}（不計）` : '',
   ].filter(Boolean).join('・');
 
   const meter = (label, cell, now) => {
@@ -120,8 +120,8 @@
     forecast: { name: '大盤預測', sub: '晚間・晨間・重播一起' },
     watch_judge: { name: '自選股每日判斷', sub: '' },
     watch_nominate: { name: '提名國外同類股', sub: '' },
-    plain: { name: '籌碼與資金白話', sub: '' },
-    digest: { name: '站主 AI 解讀', sub: '' },
+    plain: { name: '盤勢解讀', sub: '' },
+    digest: { name: '今日 AI 解讀', sub: '' },
     news: { name: '首頁消息', sub: '盤前・午盤・收盤後' },
   };
   const MODEL_CHOICES = [['gemini-4-argon', 'Argon'], ['gemini-3.8-flash', 'Flash']];
@@ -129,7 +129,7 @@
   // 改了會另開一組成績的兩項（本人第 5、6 題：存檔前先問）
   const SCORED = {
     forecast: '成績另開一組從頭累積，正式起算要重數連續 5 天。從下一個晚間版開始用。',
-    watch_judge: '成績另開一組從頭累積。下一班開始用。',
+    watch_judge: '成績另開一組從頭累積。下一時段開始用。',
   };
   const choiceText = (c) => `${modelLabel(c.model)}・${(EFFORT_CHOICES.find(([k]) => k === c.effort) || [])[1] || ''}`;
   const shortTime = (iso) => { const t = iso ? taipei(iso) : null; return t ? `${pad(t.m)}-${pad(t.day)} ${t.hm}` : ''; };
@@ -151,9 +151,9 @@
     const updated = shortTime(data?.updated_at);
     return {
       rows, quota, dirty: changed.size > 0,
-      unread: (data?.unread || []).map(item => `${TASKS[item.task] || item.task}上一班（${shortTime(item.read_at)}）沒讀到你的設定，用了預設。`),
+      unread: (data?.unread || []).map(item => `${TASKS[item.task] || item.task}上一時段（${shortTime(item.read_at)}）沒讀到你的設定，用了預設。`),
       notReady: data?.ready === false ? '網站資料庫還沒更新，現在顯示的是預設，暫時不能存。' : '',
-      foot: `存檔後下一班排程開始用（大盤預測從下一個晚間版起）。${updated ? `上次修改 ${updated}。` : ''}`,
+      foot: `存檔後下一時段排程開始用（大盤預測從下一個晚間版起）。${updated ? `上次修改 ${updated}。` : ''}`,
     };
   }
 
@@ -357,7 +357,7 @@
     if (!pane.childElementCount) pane.append(el('p', 'st-note', '讀取中…'));
     let view;
     try { view = usageView(await getJson('/api/settings/gemini-usage'), Date.now()); }
-    catch (_) { pane.replaceChildren(el('p', 'st-note', '用量暫時讀不到，稍後再打開看看。')); return; }
+    catch (_) { pane.replaceChildren(el('p', 'st-note', '用量暫時讀不到，請稍後再試。')); return; }
     pane.replaceChildren();
     if (view.empty) pane.append(el('p', 'st-note', view.empty));
     for (const group of view.groups) {
@@ -382,7 +382,7 @@
       }
     }
     if (view.today.length) {
-      pane.append(el('p', 'st-group', '今天跑了幾次'));
+      pane.append(el('p', 'st-group', '今日執行次數'));
       const list = el('ul', 'st-today');
       for (const item of view.today) {
         const li = el('li');
@@ -407,7 +407,7 @@
     if (models.data && models.draft && Object.keys(models.draft).length) { renderModels(); return; }
     if (!pane.childElementCount) pane.append(el('p', 'st-note', '讀取中…'));
     try { models.data = await getJson(MODELS_PATH); }
-    catch (_) { pane.replaceChildren(el('p', 'st-note', 'AI 模型設定暫時讀不到，稍後再打開看看。')); return; }
+    catch (_) { pane.replaceChildren(el('p', 'st-note', 'AI 模型設定暫時讀不到，請稍後再試。')); return; }
     models.note = '';
     renderModels();
   }
@@ -477,7 +477,7 @@
       box.setAttribute('aria-label', '確認存檔');
       for (const text of confirmNotes(models.data, models.draft)) box.append(el('p', '', text));
       const actions = el('div', 'st-actions');
-      actions.append(button('取消', 'cancel'), button('確定改', 'confirm', true));
+      actions.append(button('取消', 'cancel'), button('確認變更', 'confirm', true));
       box.append(actions);
       pane.append(box);
     } else if (view.dirty) {
@@ -510,9 +510,9 @@
       models.data = body;
       models.draft = {};
       models.open = '';
-      models.note = '已存檔，下一班排程開始用。';
+      models.note = '已存檔，下一時段排程開始用。';
     } catch (error) {
-      models.note = `存不了：${error.message}`;
+      models.note = `無法儲存：${error.message}`;
     }
     models.saving = false;
     renderModels();
@@ -566,7 +566,7 @@
     try { ok = await global.WatchPush.mount(pane); }
     catch (_) { notifyMounted = false; }   // 讀不到：下次切回這一籤再試
     pane.hidden = current !== 'notify';   // mount 會把容器打開，照目前選的籤
-    if (!ok) pane.replaceChildren(el('p', 'st-note', notifyMounted ? '到價推播目前沒有開放。' : '推播設定暫時讀不到，稍後再切回這一籤看看。'));
+    if (!ok) pane.replaceChildren(el('p', 'st-note', notifyMounted ? '到價推播目前沒有開放。' : '推播設定暫時讀不到，請稍後再試。'));
   }
 
   // ---- 最下面一列：帳號管理（站主）或 Gemini 設定（朋友）----

@@ -51,7 +51,7 @@ test("條件成立：站主的裝置收到一則，寫明哪件事、帶數字�
   assert.equal(pushes.sent.length, 1);
   assert.deepEqual(phone.decrypt(pushes.sent[0].body), {
     title: "成立：加權指數收盤跌破月線",
-    body: "11/19 收 39,900，跌破月線（39,995）。\n準備：如果成立，就先檢查持股比重；如果隔天站回，就當成假跌破",
+    body: "11/19 收 39,900，跌破月線（39,995）。\n因應：如果成立，就先檢查持股比重；如果隔天站回，就當成假跌破",
     url: "/minimal.html#impact-watch", tag: "impact-watch-below_ma20",
   });
   assert.equal(await sentAt("below_ma20"), "2026-11-19T12:40:00.000Z");
@@ -59,12 +59,12 @@ test("條件成立：站主的裝置收到一則，寫明哪件事、帶數字�
   assert.equal(pushes.sent.length, 1, "同一個盯項只送一次");
 });
 
-test("條件被否定：標題講明「落空」；沒有寫準備的只有結果那一句", async () => {
+test("條件被否定：標題講明「未成立」；沒有寫準備的只有結果那一句", async () => {
   await add("foreign_sell_streak", { status: "failed", label: "外資連續賣超達 9 天", prepare: null,
     result_note: "否定：11/19 外資買超 52 億，連續賣超沒有延續到 9 天。" });
   await run();
   assert.deepEqual(phone.decrypt(pushes.sent[0].body), {
-    title: "落空：外資連續賣超達 9 天", body: "11/19 外資買超 52 億，連續賣超沒有延續到 9 天。",
+    title: "未成立：外資連續賣超達 9 天", body: "11/19 外資買超 52 億，連續賣超沒有延續到 9 天。",
     url: "/minimal.html#impact-watch", tag: "impact-watch-foreign_sell_streak",
   });
 });
@@ -89,11 +89,11 @@ test("朋友的裝置收不到；只給站主看的個股盯項也只送站主�
   assert.deepEqual(pushes.sent.map((sent) => phone.decrypt(sent.body).title).sort(), ["成立：2330 收盤站上月線", "成立：加權指數收盤跌破月線", "成立：聯發科 2454 收盤跌破季線"]);
 });
 
-test("消息型的盯項在內文標明是 AI 讀新聞判斷", async () => {
+test("消息型的盯項在內文標明是 AI 新聞判讀", async () => {
   await add("news_list", { kind: "news", label: "正式清單公布", result_note: "成立：11/19 有報導指出清單已公布。" });
   await run();
   assert.equal(phone.decrypt(pushes.sent[0].body).body,
-    "11/19 有報導指出清單已公布。\n準備：如果成立，就先檢查持股比重\n（AI 讀新聞判斷，可能有誤）");
+    "11/19 有報導指出清單已公布。\n因應：如果成立，就先檢查持股比重\n（AI 新聞判讀，可能有誤）");
 });
 
 test("推播服務暫時不通：這一則不算送出，下次排程再試；通了之後只送一次", async () => {
@@ -118,11 +118,11 @@ test("某一台的訂閱資料壞掉（加密時出錯）：其他裝置照樣�
   assert.equal(await sentAt("above_high"), null);
 });
 
-test("內文太長會截短，但消息型「AI 讀新聞判斷」那一句一定留著", async () => {
+test("內文太長會截短，但消息型「AI 新聞判讀」那一句一定留著", async () => {
   await add("news_long", { kind: "news", result_note: `成立：${"很長的說明".repeat(200)}` });
   await run();
   const { body } = phone.decrypt(pushes.sent[0].body);
-  assert.ok(body.endsWith("\n（AI 讀新聞判斷，可能有誤）"));
+  assert.ok(body.endsWith("\n（AI 新聞判讀，可能有誤）"));
   assert.ok(body.length < 640);
 });
 

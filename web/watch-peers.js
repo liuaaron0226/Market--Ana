@@ -9,7 +9,7 @@
   // 狀態標籤：正常（ok）不標。過期時寫出那個來源這次為什麼沒抓到（各來源各自失敗、各自標示）。
   const TAG = { stale: '過期', no_source: '沒有來源', pending: '等每日更新' };
   const PROBLEM = { quota: '額度用完', no_key: '沒有金鑰', auth: '金鑰無效', not_found: '查無代號', over_limit: '超過上限',
-    format: '今天沒抓到', network: '今天沒抓到' };
+    format: '今日無資料', network: '今日無資料' };
   const SWIPE_PX = 48;
   const state = { code: '', token: 0 };
 
@@ -117,7 +117,7 @@
   // G 票第 16 片：每日排程請 Gemini 提名的幾檔，站主逐檔勾選後按一次「確認」——勾的進名單、沒勾的取消。
   function nominations(payload, code, message) {
     const box = el('form', 'wp-nominate');
-    box.append(el('h3', '', '提名・還沒確認'));
+    box.append(el('h3', '', '候選・待確認'));
     const list = el('ul', 'wp-nominees');
     const picks = [];
     for (const item of payload.nominations) {

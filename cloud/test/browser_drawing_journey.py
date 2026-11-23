@@ -1802,13 +1802,13 @@ def save_desktop(journey: Journey, browser) -> None:
     hint.wait_for(state="hidden", timeout=6000)
     journey.check("伺服器暫時出錯（503）：線留著，兩秒後自動再試、存上去", near(solid_lines(page), y4) and len(journey.saved(page, code)) == 4)
 
-    # ---- 被拒絕：不重試，說「沒存成」 ----
+    # ---- 被拒絕：不重試，說「儲存失敗」 ----
     net.mode = "409"
     y5 = click_line(0.55, 0.18)
-    page.wait_for_function("() => document.getElementById('drawUnsaved').textContent === '沒存成'", timeout=5000)
+    page.wait_for_function("() => document.getElementById('drawUnsaved').textContent === '儲存失敗'", timeout=5000)
     refused = len(net.sent)
     page.wait_for_timeout(4500)
-    journey.check("被拒絕（409）：提示是「沒存成」，那一條留在畫面上、畫得比較淡，不會一直重試",
+    journey.check("被拒絕（409）：提示是「儲存失敗」，那一條留在畫面上、畫得比較淡，不會一直重試",
                   hint.is_visible() and len(net.sent) == refused and near(journey.lines(page), y5) and not near(solid_lines(page), y5),
                   {"sent": len(net.sent) - refused, "faint": journey.lines(page)})
     page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-36-refused.png"))

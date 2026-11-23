@@ -167,9 +167,9 @@ def watching(j: Journey, browser, base: str, prefix: str, options: dict, mobile:
     context, page, _ = j.home(browser, base, OWNER, options)
     now = page.evaluate(STATE)
     j.metrics[prefix + "watch"] = (now["headerHeight"], now["chartTop"])
-    j.check(f"{prefix}在盯：頁首同一行寫「在盯 4 件」", now["shown"] and now["text"] == "在盯 4 件 ›" and now["sameRow"] and now["insideHeader"], now)
+    j.check(f"{prefix}在盯：頁首同一行寫「追蹤 4 項」", now["shown"] and now["text"] == "追蹤 4 項 ›" and now["sameRow"] and now["insideHeader"], now)
     j.check(f"{prefix}在盯：沒有金色圓點、不變粗", not now["news"] and not now["dot"], now)
-    j.check(f"{prefix}在盯：報讀文字講得出件數", now["label"] == "你在等的事：在盯 4 件", now["label"])
+    j.check(f"{prefix}在盯：報讀文字講得出件數", now["label"] == "追蹤事項：追蹤 4 項", now["label"])
     j.check(f"{prefix}在盯：不橫向捲動", now["noScroll"])
     page.locator(".market-header").screenshot(path=str(OUT / f"{prefix}1-watch-header.png"))
     page.screenshot(path=str(OUT / f"{prefix}1-watch.png"))
@@ -188,7 +188,7 @@ def watching(j: Journey, browser, base: str, prefix: str, options: dict, mobile:
     page.locator("#impactWatchList .iw-item summary").first.click()
     page.wait_for_timeout(400)
     body = page.evaluate(STATE)["items"][0]["body"]
-    j.check(f"{prefix}點一項：說明、先做好的準備、出處", body == ["年線是長線多空的分界，跌破代表修正還沒結束", f"先做好的準備 {PREPARE}", "出自 11/18 消息"], body)
+    j.check(f"{prefix}點一項：說明、因應準備、出處", body == ["年線是長線多空的分界，跌破代表修正還沒結束", f"因應準備 {PREPARE}", "出自 11/18 消息"], body)
     page.screenshot(path=str(OUT / f"{prefix}3-watch-item.png"))
 
     page.locator("#impactWatchDialog [data-dialog-close]").click()
@@ -215,7 +215,7 @@ def watching(j: Journey, browser, base: str, prefix: str, options: dict, mobile:
 
     context, page, _ = j.home(browser, base, FRIEND, options)
     friend = page.evaluate(STATE)
-    j.check(f"{prefix}朋友（開給全部）：看得到大盤的三件，沒有只給站主的那一件", friend["shown"] and friend["text"] == "在盯 3 件 ›"
+    j.check(f"{prefix}朋友（開給全部）：看得到大盤的三件，沒有只給站主的那一件", friend["shown"] and friend["text"] == "追蹤 3 項 ›"
             and "台積電" not in page.locator("#impactWatchDialog").inner_html(), friend["text"])
     context.close()
 
@@ -226,8 +226,8 @@ def result(j: Journey, browser, base: str, prefix: str, options: dict, mobile: b
     j.metrics[prefix + "result"] = (now["headerHeight"], now["chartTop"])
     j.check(f"{prefix}有結果：金色圓點＋等到的那件事變粗", now["shown"] and now["news"] and now["dot"] and now["text"].startswith("外資連續賣超達 9 天")
             and int(now["bold"] or 0) >= 600 and now["sameRow"] and now["insideHeader"], now)
-    j.check(f"{prefix}有結果：{'手機不寫還盯幾件' if mobile else '後面寫還盯 4 件'}", now["countShown"] != mobile and (mobile or "還盯 4 件" in now["text"]), now["text"])
-    j.check(f"{prefix}有結果：報讀文字", now["label"] == "你在等的事：外資連續賣超達 9 天有結果，還盯 4 件", now["label"])
+    j.check(f"{prefix}有結果：{'手機不寫尚餘幾項' if mobile else '後面寫尚餘 4 項'}", now["countShown"] != mobile and (mobile or "尚餘 4 項" in now["text"]), now["text"])
+    j.check(f"{prefix}有結果：報讀文字", now["label"] == "追蹤事項：外資連續賣超達 9 天有結果，尚餘 4 項", now["label"])
     j.check(f"{prefix}有結果：不橫向捲動", now["noScroll"])
     page.locator(".market-header").screenshot(path=str(OUT / f"{prefix}5-result-header.png"))
     page.screenshot(path=str(OUT / f"{prefix}5-result.png"))
@@ -237,7 +237,7 @@ def result(j: Journey, browser, base: str, prefix: str, options: dict, mobile: b
     first = opened["items"][0]
     j.check(f"{prefix}有結果的排第一、直接攤開：結果帶數字", first["cond"] == "外資連續賣超達 9 天" and first["done"] and first["open"]
             and first["left"] == "有結果" and first["result"] == RESULT_NOTE, first)
-    j.check(f"{prefix}攤開的是原本寫的準備與出處", first["body"] == ["賣超延續才是真的轉弱", f"原本寫的準備 {PREPARE}", "出自 11/18 消息"], first["body"])
+    j.check(f"{prefix}攤開的是原訂因應與出處", first["body"] == ["賣超延續才是真的轉弱", f"原訂因應 {PREPARE}", "出自 11/18 消息"], first["body"])
     j.check(f"{prefix}其餘還在盯的照舊收著", len(opened["items"]) == 5 and not any(item["open"] for item in opened["items"][1:]))
     j.check(f"{prefix}清單不超出畫面", opened["dialogInside"] and opened["noScroll"])
     j.check(f"{prefix}不出現買賣指令字眼", not any(word in page.locator("#impactWatchDialog").inner_text() for word in ("買進", "賣出", "加碼", "減碼", "停損")))
@@ -252,23 +252,23 @@ def result(j: Journey, browser, base: str, prefix: str, options: dict, mobile: b
 
 
 def missed(j: Journey, browser, base: str, prefix: str, options: dict) -> None:
-    """條件被否定：頁首那一行要講明「落空」，不能只寫條件（會被當成發生了）。"""
+    """條件被否定：頁首那一行要講明「未成立」，不能只寫條件（會被當成發生了）。"""
     context, page, _ = j.home(browser, base, OWNER, options)
     now = page.evaluate(STATE)
-    j.check(f"{prefix}否定：頁首寫「落空：」＋那件事，照樣金色圓點", now["shown"] and now["dot"] and now["text"].startswith("落空：外資連續賣超達 9 天")
+    j.check(f"{prefix}否定：頁首寫「未成立：」＋那件事，照樣金色圓點", now["shown"] and now["dot"] and now["text"].startswith("未成立：外資連續賣超達 9 天")
             and now["sameRow"] and now["insideHeader"] and now["noScroll"], now)
-    j.check(f"{prefix}否定：報讀文字講落空", now["label"] == "你在等的事：外資連續賣超達 9 天落空，還盯 4 件", now["label"])
+    j.check(f"{prefix}否定：報讀文字講未成立", now["label"] == "追蹤事項：外資連續賣超達 9 天未成立，尚餘 4 項", now["label"])
     page.locator(".market-header").screenshot(path=str(OUT / f"{prefix}10-failed-header.png"))
     page.locator("#impactWatchKey").click()
     page.wait_for_timeout(700)
     first = page.evaluate(STATE)["items"][0]
-    j.check(f"{prefix}否定：清單那一項標「落空」、攤開結果", first["left"] == "落空" and first["open"] and first["result"] == FAILED_NOTE, first)
+    j.check(f"{prefix}否定：清單那一項標「未成立」、攤開結果", first["left"] == "未成立" and first["open"] and first["result"] == FAILED_NOTE, first)
     page.screenshot(path=str(OUT / f"{prefix}10-failed-open.png"))
     context.close()
 
 
 def news_type(j: Journey, browser, base: str, prefix: str, options: dict) -> None:
-    """消息型：小標「AI 讀新聞」、點開有那句提醒；有結果的附依據的新聞。"""
+    """消息型：小標「AI 新聞判讀」、點開有那句提醒；有結果的附依據的新聞。"""
     context, page, _ = j.home(browser, base, OWNER, options)
     now = page.evaluate(STATE)
     j.check(f"{prefix}消息型有結果：頁首照樣金色圓點＋等到的那件事", now["shown"] and now["dot"] and now["text"].startswith(NEWS_MET)
@@ -278,10 +278,10 @@ def news_type(j: Journey, browser, base: str, prefix: str, options: dict) -> Non
     opened = page.evaluate(STATE)
     items = {item["cond"]: item for item in opened["items"]}
     met, waiting = items[NEWS_MET], items[NEWS_WAITING]
-    j.check(f"{prefix}消息型：小標是「AI 讀新聞」，數字型照舊是「數字」", met["meta"] == ["大盤", "AI 讀新聞"] and waiting["meta"] == ["大盤", "AI 讀新聞"]
+    j.check(f"{prefix}消息型：小標是「AI 新聞判讀」，數字型照舊是「數字」", met["meta"] == ["大盤", "AI 新聞判讀"] and waiting["meta"] == ["大盤", "AI 新聞判讀"]
             and items["加權指數收盤跌破年線"]["meta"] == ["大盤", "數字"], [met["meta"], waiting["meta"]])
-    j.check(f"{prefix}消息型有結果：攤開結果與依據的新聞、原本寫的準備、提醒、出處", met["open"] and met["result"] == NEWS_NOTE and met["body"] == [
-        f"依據的新聞 {NEWS_PROOF['title']}路透", "原本寫的準備 如果清單比預期嚴，就先檢查半導體佔持股多少", AI_NOTE, "出自 11/18 消息"], met["body"])
+    j.check(f"{prefix}消息型有結果：攤開結果與依據的新聞、原訂因應、提醒、出處", met["open"] and met["result"] == NEWS_NOTE and met["body"] == [
+        f"依據的新聞 {NEWS_PROOF['title']}路透", "原訂因應 如果清單比預期嚴，就先檢查半導體佔持股多少", AI_NOTE, "出自 11/18 消息"], met["body"])
     j.check(f"{prefix}依據的新聞連到原文、另開分頁", met["links"] == [{"text": NEWS_PROOF["title"], "href": NEWS_PROOF["link"], "target": "_blank",
                                                                  "rel": "noopener noreferrer"}], met["links"])
     j.check(f"{prefix}清單不超出畫面", opened["dialogInside"] and opened["noScroll"])
@@ -290,7 +290,7 @@ def news_type(j: Journey, browser, base: str, prefix: str, options: dict) -> Non
     page.wait_for_timeout(400)
     body = {item["cond"]: item for item in page.evaluate(STATE)["items"]}[NEWS_WAITING]
     j.check(f"{prefix}消息型還在盯：點開有準備、那句提醒與出處，沒有連結", body["body"] == [
-        "先做好的準備 如果展望下修，就先檢查半導體佔持股多少", AI_NOTE, "出自 11/18 消息"] and body["links"] == [] and body["left"] == "剩 12 日", body)
+        "因應準備 如果展望下修，就先檢查半導體佔持股多少", AI_NOTE, "出自 11/18 消息"] and body["links"] == [] and body["left"] == "剩 12 日", body)
     page.screenshot(path=str(OUT / f"{prefix}12-news-waiting-open.png"))
     page.evaluate("() => { document.documentElement.dataset.theme = 'dark'; }")
     page.wait_for_timeout(300)
@@ -364,7 +364,7 @@ def main() -> int:
                     else:
                         absent(j, browser, base, prefix, options, "friend", "開關只開站主時的朋友", email=FRIEND, asks=False)
                         context, page, _ = j.home(browser, base, OWNER, options)
-                        j.check(f"{prefix}開關只開站主：站主看得到", page.evaluate(STATE)["text"] == "在盯 4 件 ›")
+                        j.check(f"{prefix}開關只開站主：站主看得到", page.evaluate(STATE)["text"] == "追蹤 4 項 ›")
                         context.close()
             finally:
                 server.terminate()

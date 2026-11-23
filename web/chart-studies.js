@@ -264,7 +264,7 @@
     }
 
     _makeKdDetails() {
-      const parts = this._makeDetails('KD怎麼看');
+      const parts = this._makeDetails('KD 判讀');
       const list = element('ol', 'kc-study-explainer');
       addExplanationItem(list, '意義',
         'KD 看收盤價落在最近 9 天高低區間的哪個位置：越接近 100 代表收在區間高處，越接近 0 代表收在低處。用來觀察短線強弱與轉折，不是買賣保證。');
@@ -282,7 +282,7 @@
     }
 
     _makeRsiDetails() {
-      const parts = this._makeDetails('RSI怎麼看');
+      const parts = this._makeDetails('RSI 判讀');
       const list = element('ol', 'kc-study-explainer');
       addExplanationItem(list, '意義',
         'RSI 比較最近 14 天上漲幅度和下跌幅度的大小：上漲占比越大數值越高。用來看買盤力道是否過熱或過冷，不是價格預測。');
@@ -342,7 +342,7 @@
 
     _makeVolumeDetails() {
       const isAmount = this.volumeKind === 'amount';
-      const parts = this._makeDetails(isAmount ? '成交金額怎麼看' : '成交量怎麼看');
+      const parts = this._makeDetails(isAmount ? '成交金額判讀' : '成交量判讀');
       const list = element('ol', 'kc-study-explainer');
 
       addExplanationItem(
@@ -396,7 +396,7 @@
     }
 
     _makeMacdDetails() {
-      const parts = this._makeDetails('MACD怎麼看');
+      const parts = this._makeDetails('MACD 判讀');
       const list = element('ol', 'kc-study-explainer');
 
       addExplanationItem(

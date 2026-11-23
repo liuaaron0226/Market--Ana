@@ -48,7 +48,7 @@ PREFIX = "window.MARKET_PLAIN = "
 
 # 首頁六個重點的順序就是畫面順序（直白分析卡顯示前四個，詳情顯示全部）；標題由程式加上「主角：」。
 POINT_KEYS = ("foreign", "trust", "margin", "short", "position", "volume")
-SUBJECTS = {"foreign": "外資", "trust": "投信", "margin": "融資", "short": "融券", "position": "位置", "volume": "成交量"}
+SUBJECTS = {"foreign": "外資", "trust": "投信", "margin": "融資", "short": "融券", "position": "技術面", "volume": "成交量"}
 # 每一點只能代入自己主題的事實（另加日期）；結論、擔心、安心三段可以用全部，但代入的是自帶主角的完整句。
 SECTION_TOPICS = {
     "foreign": ("foreign", "futures", "date"),
@@ -488,11 +488,12 @@ def template_raw(bundle: Mapping[str, Any]) -> dict[str, Any]:
 
     cover = signals.get("trust_cover")
     if signals["trust_5d"] > 0:
-        trust_title = "和外資一起買" if cover is None else "有在買，但抵不過外資賣" if cover < 1 else "買得比外資賣得多"
+        # 「外資近期賣超」不寫成「外資賣超」：近五日外資賣、但今天轉買的日子，「外資賣超」會被方向核對退回
+        trust_title = "與外資同步買超" if cover is None else "買超，但不及外資近期賣超" if cover < 1 else "買超大於外資近期賣超"
     elif signals["trust_5d"] < 0:
-        trust_title = "也在賣" if signals["foreign_5d"] < 0 else "在賣"
+        trust_title = "同步賣超" if signals["foreign_5d"] < 0 else "賣超"
     else:
-        trust_title = "幾乎沒動作"
+        trust_title = "買賣超不明顯"
     if signals["trust_5d"] > 0:
         trust_effect = ("投信站在買方，中小型股比較有支撐。" if cover is None
                         else "投信的買盤抵不過外資的賣壓，只能減緩跌勢。" if cover < 1 else "投信的買盤接得住外資的賣壓。")
@@ -532,7 +533,7 @@ def template_raw(bundle: Mapping[str, Any]) -> dict[str, Any]:
     if ratio is None:
         volume_title, volume_lines = "今天沒有成交金額資料", ["成交金額還沒公布。"]
     else:
-        volume_title = "量比平常大" if ratio >= 1.2 else "量比平常小" if ratio <= 0.8 else "量和平常差不多"
+        volume_title = "成交量高於均量" if ratio >= 1.2 else "成交量低於均量" if ratio <= 0.8 else "成交量與均量相當"
         volume_lines = ["{amount}，{amount_ratio}。"]
         volume_effect = ("量大代表換手劇烈，要看接下來幾天能不能延續。" if ratio >= 1.2
                          else "量縮代表觀望的人多，行情不容易走遠。" if ratio <= 0.8 else "量能沒有特別變化，看不出資金態度轉變。")
@@ -552,7 +553,7 @@ def template_raw(bundle: Mapping[str, Any]) -> dict[str, Any]:
             {"key": "foreign", "title": "現貨和期貨都偏空" if selling and futures_bear else f"{spot_word}，{futures_word}", "lines": foreign_lines,
              "effect": foreign_effect, "prepare": [foreign_prepare]},
             {"key": "trust", "title": trust_title, "lines": trust_lines, "effect": trust_effect, "prepare": [trust_prepare]},
-            {"key": "margin", "title": {-1: "散戶借錢買股的錢在減少", 1: "散戶借錢買股的錢在增加"}.get(signals["margin"], "借錢買股的錢變化不大"),
+            {"key": "margin", "title": {-1: "餘額減少", 1: "餘額增加"}.get(signals["margin"], "餘額持平"),
              "lines": margin_lines, "effect": margin_effect, "prepare": [margin_prepare]},
             {"key": "short", "title": {-1: "空單在回補", 1: "空單在增加"}.get(signals["short"], "空單變化不大"), "lines": short_lines,
              "effect": short_effect, "prepare": [short_prepare]},

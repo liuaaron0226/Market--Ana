@@ -46,7 +46,7 @@
           said: `近 ${row.days} 日${word ? `${word}大盤 ${Math.abs(row.gap).toFixed(1)} 個百分點` : '和大盤一樣'}` };
       });
     if (!rows.length) return null;
-    return { kind: 'versus_market', name: '和大盤比', rows, label: `和大盤比：${rows.map(row => row.said).join('，')}` };
+    return { kind: 'versus_market', name: '相對大盤', rows, label: `相對大盤：${rows.map(row => row.said).join('，')}` };
   }
 
   // 均線排列：四盞燈固定順序；右上那一句照資料，頁面不自己組字
