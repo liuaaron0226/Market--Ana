@@ -31,7 +31,8 @@ TASK_MODELS = {
     "forecast-ledger": "FORECAST", "forecast-morning": "FORECAST", "forecast-replay": "FORECAST",
     "watch-ledger": "WATCH_JUDGE", "ai-digest": "DIGEST", "daily-update": "PLAIN",
     "market-news": "NEWS",   # 首頁「消息」（本人 11-19）
-    "impact-watch": "NEWS",  # 消息型盯項每日讀新聞判斷（impact_watch_news.py，票 05）：一次呼叫記一筆，沿用首頁消息的模型
+    "market-brief": "PLAIN",  # 盤勢解讀（market_brief.py，market-brief 票 02）：沿用設定頁籌碼解讀那一項的模型
+    "impact-watch": "NEWS",  #消息型盯項每日讀新聞判斷（impact_watch_news.py，票 05）：一次呼叫記一筆，沿用首頁消息的模型
 }
 
 

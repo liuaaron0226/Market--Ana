@@ -114,8 +114,8 @@ def owner_page(journey: Journey, browser, name: str, path: str, width: int) -> N
                   meters == [["5 小時", "19%", True], ["本週", "93%", False], ["本週", "99%", False]], meters)
     today = page.eval_on_selector_all("#settingsDialog .st-today li", "ls => ls.map(l => l.innerText.replace(/\\s+/g, ' '))")
     journey.check(f"{tag}：今天各任務用中文名稱與模型", "自選股判斷與提名 Flash 1" in today and "晚間事前預測 Argon 1" in today, today)
-    journey.check(f"{tag}：盤勢解讀標思考程度、失敗與試跑（試跑不計）",
-                  "盤勢解讀 失敗 1・試跑 1（不計） Argon・思考中 1" in today, today)
+    journey.check(f"{tag}：籌碼卡解讀標思考程度、失敗與試跑（試跑不計）",
+                  "籌碼卡解讀 失敗 1・試跑 1（不計） Argon・思考中 1" in today, today)
     foot = page.locator("#settingsDialog .st-foot a")
     journey.check(f"{tag}：最下面是帳號管理，再下面是登出（換帳號，本人 11-18）",
                   foot.count() == 2 and foot.nth(0).get_attribute("href") == "/admin/"

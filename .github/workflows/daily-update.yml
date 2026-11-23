@@ -455,6 +455,62 @@ jobs:
           VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
         run: node cloud/impact-watch-push.mjs
 
+      # 盤勢解讀 18:00 那一班（本人 2026-11-23「共識達成」，.scratch/market-brief 票 02）：大盤資料包發布成功之後，用剛發布的
+      # 籌碼與指數位置寫一份分類別的解讀（籌碼面、技術面），存進 D1 market_brief_runs（遷移 0035），站台的 /api/market-brief 讀它。
+      # 排程開關是 repository variable MARKET_ANA_MARKET_BRIEF_SCHEDULE（要剛好是 on 才跑；沒設、其他值都不跑）。
+      # 只在這一次真的有新發布時跑：乾跑、只重新部署程式（redeploy）、等待與已完成的那幾班都不跑。
+      # agy 與登入檔沿用前面準備好的（白話分析那幾步，或消息型盯項的準備那一步）；都沒準備好就用程式依數字套句（來源 template）。
+      # 模型與思考程度沿用設定頁「AI 模型」的白話分析那一項（AI_PLAIN_*；這一班沒讀設定時是空的，照 gemini_models.py 的預設）。
+      # 三步都不擋發布：寫不成時網站沿用上一班（沒有任何一班就是原本的解讀面板）。
+      # 倉庫公開之後這裡的輸出誰都看得到：印的是遮過的報告（狀態、來源、問了幾次、類別、模型），模型寫的句子與被退回的
+      # 原文只在 data/daily-update-log/market-brief/ 的那一份（不進 artifact、不進步驟摘要）。
+      - name: 盤勢解讀：產生晚間這一班（只在發布成功時）
+        id: market_brief
+        if: success() && steps.day.outputs.dry_run == '' && vars.MARKET_ANA_MARKET_BRIEF_SCHEDULE == 'on'
+        continue-on-error: true
+        env:
+          DAY: ${{ steps.day.outputs.date }}
+        run: |
+          sync=$(python -c "import json,sys; print(json.load(open(sys.argv[1], encoding='utf-8'))['sync_state'])" "${{ runner.temp }}/daily-result.json")
+          if [ "$sync" != "True" ]; then echo "本次沒有新發布，盤勢解讀不重寫"; exit 0; fi
+          # 模型與思考程度：market_brief.py 自己讀環境裡的 AI_PLAIN_*（讀設定頁那一步寫進 GITHUB_ENV 的），這裡不另外帶
+          set -o pipefail
+          python market_brief.py run --slot evening --analysis data/daily-update-state/last-market-pack/analysis-data.js \
+            --agy-bin "$RUNNER_TEMP/agy/antigravity" --agy-home "$RUNNER_TEMP/agy-home" \
+            --sql-output "$RUNNER_TEMP/market-brief.sql" \
+            --report "data/daily-update-log/market-brief/$DAY.json" | tee "$RUNNER_TEMP/market-brief.json"
+
+      - name: 盤勢解讀：寫進 D1（失敗不影響每日更新）
+        if: success() && steps.day.outputs.dry_run == '' && vars.MARKET_ANA_MARKET_BRIEF_SCHEDULE == 'on'
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -s "$RUNNER_TEMP/market-brief.sql" ]; then
+            cd cloud
+            npx --yes wrangler@4 d1 execute market-ana-accounts --remote --file "$RUNNER_TEMP/market-brief.sql"
+          else
+            echo "這一班沒有要寫的盤勢解讀"
+          fi
+
+      # 設定頁的 Gemini 用量：這一班有呼叫到模型就記一筆（任務名稱 market-brief；重問那一次不另外記），模型、思考程度、
+      # 成功或失敗照上一步印的報告。沒呼叫到模型（沒有新發布、agy 沒準備好）就不記。agy -p /usage 由 CLI 自己回答、不耗額度。
+      - name: 盤勢解讀：記進 Gemini 用量（設定頁用；失敗不影響每日更新）
+        if: success() && steps.day.outputs.dry_run == '' && vars.MARKET_ANA_MARKET_BRIEF_SCHEDULE == 'on'
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          export HOME="$RUNNER_TEMP/agy-home"
+          python market_brief.py usage --report "$RUNNER_TEMP/market-brief.json" --run-id "$GITHUB_RUN_ID" \
+            --agy-bin "$RUNNER_TEMP/agy/antigravity" --sql-output "$RUNNER_TEMP/market-brief-usage.sql"
+          if [ -s "$RUNNER_TEMP/market-brief-usage.sql" ]; then
+            cd cloud
+            npx --yes wrangler@4 d1 execute market-ana-accounts --remote --file "$RUNNER_TEMP/market-brief-usage.sql"
+          fi
+
       - name: 建立本次發布證據
         id: publication_evidence
         if: success() && steps.run.outcome == 'success'
@@ -551,4 +607,4 @@ jobs:
 
       - name: 清除 agy 登入檔與執行檔
         if: always()
-        run: rm -rf "$RUNNER_TEMP/agy-home" "$RUNNER_TEMP/agy" "$RUNNER_TEMP/gemini-usage.sql" "$RUNNER_TEMP/gemini-usage-legacy.sql" "$RUNNER_TEMP/ai-models.json" "$RUNNER_TEMP/ai-model-read.sql" "$RUNNER_TEMP/impact-watch-usage.sql"
+        run: rm -rf "$RUNNER_TEMP/agy-home" "$RUNNER_TEMP/agy" "$RUNNER_TEMP/gemini-usage.sql" "$RUNNER_TEMP/gemini-usage-legacy.sql" "$RUNNER_TEMP/ai-models.json" "$RUNNER_TEMP/ai-model-read.sql" "$RUNNER_TEMP/impact-watch-usage.sql" "$RUNNER_TEMP/market-brief.sql" "$RUNNER_TEMP/market-brief-usage.sql" "$RUNNER_TEMP/market-brief.json"

@@ -61,6 +61,8 @@ export const WEB_FILES = [
   "market-news.js", "market-news.css",
   // 盯項：首頁頁首「在盯 N 件」與浮起的清單（本人 2026-11-20，樣品 A）
   "impact-watch.js", "impact-watch.css",
+  // 盤勢解讀改版（本人 2026-11-23）：類別鍵＋圖
+  "market-brief.js", "market-brief.css",
   // 基金當成一般個股 06 票：基金個股頁的「配息」分類
   "fund-distributions.js",
 ];

@@ -726,6 +726,8 @@
   const CH = OV.chips || null;
   // 過期（比行情資料日舊）就整份不用：籌碼卡詳情也不拿舊的解讀配新數字（本人 11-14「過期就隱藏」）。
   const PL = plainStale ? null : (OV.plain || null);
+  // 盤勢解讀改版的最新一班（market-brief.js；/api/market-brief）。有它的時候首頁那張卡與點開的面板用它，籌碼卡的說明照舊用 PL。
+  let BRIEF = null;
   const NOW = OV.current || null;   // 最新一天各項的前 10 與連續天數（本人 11-07 定案）
   const shortDay = date => (date ? date.slice(5).replace('-', '/') : '');
   // 外資期貨空單比前一天（本人 11-19「寫出今天加空幾口或者是回補多少口」）：net 是淨部位（負的是空單），越負就是加空
@@ -775,7 +777,8 @@
     const cards = chipCards();
     grid.innerHTML = cards.map(card => `<button type="button" class="chip-card tone-${card.tone}" data-chip="${card.key}"><span class="chip-name">${esc(card.name)}<i aria-hidden="true">›</i></span><strong class="chip-value num">${esc(card.value)}</strong><span class="chip-read">${esc(card.read)}</span>${card.chart}<span class="chip-date num">資料 ${esc(card.date.slice(5).replace('-', '/'))}</span></button>`).join('');
     grid.querySelectorAll('[data-chip]').forEach(button => button.addEventListener('click', () => openPanel('chip', { key: button.dataset.chip }, button)));
-    if (PL) {
+    const showPlain = () => {
+      if (!PL) return;
       $('readLine').textContent = PL.one_line;
       // 每點只留「主角＋一句判斷」；數字細節點開詳情看。標題沒有「主角：」時整句當判斷。
       $('readList').innerHTML = PL.points.slice(0, 4).map(p => {
@@ -783,7 +786,20 @@
         return rest.length ? `<li><b>${esc(who)}</b><span>${esc(rest.join('：'))}</span></li>` : `<li><b>${esc(p.title)}</b><span>${esc(p.lines[0] || '')}</span></li>`;
       }).join('');
       $('readDate').textContent = plainFootnote(PL);
-    }
+    };
+    // 盤勢解讀改版（本人 2026-11-23）：開關對這個人開著就先問最新一班，有就只放它的一句結論（點開是類別鍵＋圖）；
+    // 沒有（還沒跑、讀不到）才放原本的解讀。等回應的這一下卡片先空著，不先放舊的一句再換掉。
+    if (features.market_brief_v1 && window.MarketBrief) {
+      window.MarketBrief.load().then(brief => {
+        if (!brief) { showPlain(); return; }
+        BRIEF = brief;
+        $('readLine').textContent = brief.one_line;
+        $('readList').innerHTML = '';
+        $('readDate').textContent = '';
+        $('readCard').hidden = false;   // 這一份自己帶資料日，不看原本解讀過期了沒
+        if (panelState.kind === 'plain' && panelState.layer === 1 && els.panel.getAttribute('aria-hidden') === 'false') renderLayerOne();
+      });
+    } else showPlain();
     $('readCard').addEventListener('click', () => openPanel('plain', {}, $('readCard')));
   }
   const DT = OV.detailIndex || null;
@@ -1377,6 +1393,11 @@
       }));
     }
     else if (panelState.kind === 'distribution') els.panelBody.innerHTML = renderDistributionPanel(panelState.payload.outcome);
+    else if (panelState.kind === 'plain' && BRIEF) {
+      // 類別鍵＋一類的內容；停在哪一類記在 payload，重畫時留在原地
+      els.panelBody.innerHTML = window.MarketBrief.panelHtml(BRIEF, OV, impactPoints, panelState.payload.cat);
+      window.MarketBrief.bind(els.panelBody, BRIEF, OV, impactPoints, key => { panelState.payload.cat = key; });
+    }
     else if (panelState.kind === 'plain') els.panelBody.innerHTML = renderPlainPanel();
     else if (panelState.kind === 'chip') { els.panelBody.innerHTML = renderChipPanel(panelState.payload.key); bindChipPanel(panelState.payload.key); }
     els.panelBody.querySelectorAll('[data-deep]').forEach(button => button.addEventListener('click', () => renderLayerTwo(button.dataset.deep)));

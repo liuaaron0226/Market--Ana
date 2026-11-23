@@ -1,0 +1,33 @@
+/* 盤勢解讀改版（本人 2026-11-23 選樣品 design-previews/plain-top3/ 的 ?l=b）：類別鍵一排、一次只看一類、每類有圖。
+   其餘都是網站現成的（.read-line.big、.chip-seg、.plain-group、.news-points）。內容由 market-brief.js 組、minimal.js 開合。 */
+
+/* 類別鍵一排：放不下時左右滑，不折成兩排 */
+.plain-tabs { margin: 18px -4px 14px; padding: 2px 4px; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
+.plain-tabs::-webkit-scrollbar { display: none; }
+.plain-tabs .chip-seg { flex-wrap: nowrap; }
+.plain-tabs .chip-seg button { flex: none; white-space: nowrap; min-height: 40px; }
+/* 要左右滑的時候，從鍵上開始的橫向手勢交給捲動（平常是按住滑到要的那一顆） */
+:is(body.hm, body.bd) .plain-tabs.is-overflow .chip-seg button { touch-action: pan-x pan-y; }
+
+/* 選到的那一類：一句判斷 */
+.plain-tab-say { margin: 0 0 10px; font: 600 17px/1.45 var(--sans); color: var(--ink); text-wrap: pretty; }
+.plain-tab-say.is-quiet { font-weight: 400; font-size: 15px; color: var(--dim); }
+
+/* 圖：數字直接標在圖上，不放圖例 */
+.plain-charts { display: grid; gap: 14px; margin: 4px 0 14px; }
+.plain-chart { display: block; width: 100%; height: auto; overflow: visible; font-family: var(--sans); }
+.plain-chart .t-title { font-size: 11.5px; fill: var(--dim); }
+.plain-chart .t-dim { font-size: 11px; fill: var(--dim); font-variant-numeric: tabular-nums; }
+.plain-chart .t-strong { font-size: 12.5px; font-weight: 600; fill: var(--ink); font-variant-numeric: tabular-nums; }
+.plain-chart .t-up { fill: var(--up); }
+.plain-chart .t-down { fill: var(--down); }
+.plain-chart .axis { stroke: var(--line-strong); stroke-width: 1; }
+.plain-chart .bracket { fill: none; stroke: var(--dim); stroke-width: 1; }
+.plain-chart :is(.line-down, .line-up, .line-ink) { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.plain-chart .line-down { stroke: var(--down); }
+.plain-chart .line-up { stroke: var(--up); }
+.plain-chart .line-ink { stroke: var(--ink); }
+.plain-chart .line-ma { fill: none; stroke: var(--gold, var(--dim)); stroke-width: 1.6; stroke-dasharray: 4 3; }
+.plain-chart .gap { stroke-width: 1.4; stroke-dasharray: 2 2; }
+.plain-chart .gap.is-up { stroke: var(--up); }
+.plain-chart .gap.is-down { stroke: var(--down); }

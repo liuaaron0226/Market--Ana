@@ -33,6 +33,8 @@ if (process.env.MARKET_ANA_ENABLED_FEATURES) env.MARKET_ANA_ENABLED_FEATURES = p
 if (process.env.MARKET_ANA_MARKET_NEWS) env.MARKET_ANA_MARKET_NEWS = process.env.MARKET_ANA_MARKET_NEWS;
 // 盯項（本人 2026-11-20，票 03）的本機預覽：MARKET_ANA_IMPACT_WATCH=owner／all 打開開關；盯項放在 JOURNEY_SEED_SQL。
 if (process.env.MARKET_ANA_IMPACT_WATCH) env.MARKET_ANA_IMPACT_WATCH = process.env.MARKET_ANA_IMPACT_WATCH;
+// 盤勢解讀改版（本人 2026-11-23，票 02）的本機預覽：MARKET_ANA_MARKET_BRIEF=owner／all 打開開關；那一班的內容放在 JOURNEY_SEED_SQL。
+if (process.env.MARKET_ANA_MARKET_BRIEF) env.MARKET_ANA_MARKET_BRIEF = process.env.MARKET_ANA_MARKET_BRIEF;
 // 個股頁事實區塊（「消息」那一塊放新聞標題）：MARKET_ANA_STOCK_FACTS=owner／all。
 if (process.env.MARKET_ANA_STOCK_FACTS) env.MARKET_ANA_STOCK_FACTS = process.env.MARKET_ANA_STOCK_FACTS;
 // 自動化驗收會在一分鐘內點完全部下鑽；額度可由第三個參數放寬（正式版額度見 gate.js RATE，不受影響）。

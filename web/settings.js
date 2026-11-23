@@ -35,7 +35,8 @@
   // 自選股那支排程同時跑每日判斷與提名同類股；籌碼與資金白話是在每日更新那支排程裡寫的。
   const TASKS = {
     'watch-ledger': '自選股判斷與提名',
-    'daily-update': '盤勢解讀',
+    'daily-update': '籌碼卡解讀',   // 大盤資料包裡那一份（籌碼卡點開的說明）
+    'market-brief': '盤勢解讀',     // 分類＋圖的那一份（market_brief.py）
     'ai-digest': '首頁每日解讀',
     'forecast-ledger': '晚間事前預測',
     'forecast-morning': '晨間事前預測',

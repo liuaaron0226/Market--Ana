@@ -121,6 +121,16 @@ export function impactWatchVisible(env, isOwner) {
   return modeAllowsViewer(impactWatchMode(env), isOwner);
 }
 
+// 盤勢解讀改版（本人 2026-11-23，.scratch/market-brief 票 02）：自己一個三種狀態的開關，和消息、盯項的開關不連動。
+// 關著時首頁照舊顯示原本的解讀；先只開站主，本人看過再開給朋友。
+function marketBriefMode(env) {
+  return threeStateMode(env?.MARKET_ANA_MARKET_BRIEF);
+}
+
+export function marketBriefVisible(env, isOwner) {
+  return modeAllowsViewer(marketBriefMode(env), isOwner);
+}
+
 // env 沒給時，事實區塊與五塊對其他人一律是關（寧可少給，不可多給）。
 export function policyForViewer(policy, isOwner, env = {}) {
   if (isOwner) return policy;
@@ -132,6 +142,7 @@ export function policyForViewer(policy, isOwner, env = {}) {
   features.stock_funds_v1 = stockFundsVisible(env, false);
   features.market_news_v1 = marketNewsVisible(env, false);
   features.impact_watch_v1 = impactWatchVisible(env, false);
+  features.market_brief_v1 = marketBriefVisible(env, false);
   return { ...policy, features };
 }
 
@@ -173,6 +184,8 @@ export function releasePolicy(env = {}) {
       market_news_v1: marketNewsMode(env) !== "off",
       // 盯項：同上，這裡是站主看到的值。
       impact_watch_v1: impactWatchMode(env) !== "off",
+      // 盤勢解讀改版：同上，這裡是站主看到的值。
+      market_brief_v1: marketBriefMode(env) !== "off",
     },
   };
 }

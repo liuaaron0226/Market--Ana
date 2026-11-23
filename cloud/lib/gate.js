@@ -12,7 +12,7 @@ import { defaultLiveQuoteService } from "./live-quotes.js";
 import { fetchTickPage } from "./live-ticks.js";
 import { loadHourly, withToday } from "./hourly-candles.js";
 import { defaultIndexLiveService } from "./index-live.js";
-import { analysisHidden, impactWatchVisible, marketNewsVisible, policyForViewer, releasePolicy, stockEtfsVisible, stockFactsVisible, stockFundsVisible, stockSignalsVisible } from "./release-policy.js";
+import { analysisHidden, impactWatchVisible, marketBriefVisible, marketNewsVisible, policyForViewer, releasePolicy, stockEtfsVisible, stockFactsVisible, stockFundsVisible, stockSignalsVisible } from "./release-policy.js";
 import { isOwnerEmail } from "./owner.js";
 import { CODE_PATTERN, CODE_RE, isExchangeCode } from "./codes.js";
 import { FORECAST_PATH, handleForecastApi } from "./forecast.js";
@@ -24,6 +24,7 @@ import { WATCH_PEERS_PATH, handleWatchPeersApi } from "./watch-peers.js";
 import { INDEX_PATH, indexOf, loadIndex } from "./market-indices.js";
 import { MARKET_NEWS_PATH, handleMarketNewsApi, handleStockHeadlinesApi } from "./market-news.js";
 import { IMPACT_WATCH_PATH, handleImpactWatchApi } from "./impact-watch.js";
+import { MARKET_BRIEF_PATH, handleMarketBriefApi } from "./market-brief.js";
 import { pushConfigured, sendOne } from "./web-push.js";
 
 const PENDING_CAP = 30;
@@ -395,6 +396,18 @@ async function handleImpactWatchRequest(request, env, email, deps, { isOwner }) 
     throw new HttpError(503, "暫時無法處理，請稍後再試");
   }
   return handleImpactWatchApi(request, env, { isOwner }, (deps.now || Date.now)());
+}
+
+// 盤勢解讀改版（本人 2026-11-23，票 02）：開關 MARKET_ANA_MARKET_BRIEF；關著時不碰資料表，和查行情共用同一個限流。
+async function handleMarketBriefRequest(request, env, email, deps, { isOwner }) {
+  if (!marketBriefVisible(env, isOwner)) return json(200, { brief: null }, { "cache-control": "private, no-store" });
+  try {
+    await consume(env.DB, email, "market", (deps.now || Date.now)(), deps.rate);
+  } catch (e) {
+    if (e instanceof RateLimited) return json(429, { error: "rate-limited", message: "查詢太頻繁，請稍後再試" }, { "retry-after": String(e.retryAfter) });
+    throw new HttpError(503, "暫時無法處理，請稍後再試");
+  }
+  return handleMarketBriefApi(request, env, { isOwner });
 }
 
 async function handleAnnouncementsApi(request, env, path, email, deps, { isOwner }) {
@@ -955,6 +968,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
       if (ANNOUNCEMENTS_PATH.test(path)) return await handleAnnouncementsApi(request, env, path, email, deps, { isOwner: true });
       if (MARKET_NEWS_PATH.test(path) || HEADLINES_PATH.test(path)) return await handleNewsRequest(request, env, path, email, deps, { isOwner: true });
       if (IMPACT_WATCH_PATH.test(path)) return await handleImpactWatchRequest(request, env, email, deps, { isOwner: true });
+      if (MARKET_BRIEF_PATH.test(path)) return await handleMarketBriefRequest(request, env, email, deps, { isOwner: true });
       if (isStock) return await handleStockApi(request, env, path, email, deps, { isOwner: true });
       if (isScreens) return await handleScreensApi(request, env, path, email, deps);
       if (path === DATA_STATUS_PATH) return handleDataStatusApi(request, deps);
@@ -990,6 +1004,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
     if (ANNOUNCEMENTS_PATH.test(path)) return await handleAnnouncementsApi(request, env, path, email, deps, { isOwner: false });
     if (MARKET_NEWS_PATH.test(path) || HEADLINES_PATH.test(path)) return await handleNewsRequest(request, env, path, email, deps, { isOwner: false });
     if (IMPACT_WATCH_PATH.test(path)) return await handleImpactWatchRequest(request, env, email, deps, { isOwner: false });
+    if (MARKET_BRIEF_PATH.test(path)) return await handleMarketBriefRequest(request, env, email, deps, { isOwner: false });
     if (isStock) return await handleStockApi(request, env, path, email, deps, { isOwner: false });
     if (isScreens) return await handleScreensApi(request, env, path, email, deps);
     if (path === DATA_STATUS_PATH) return handleDataStatusApi(request, deps);
