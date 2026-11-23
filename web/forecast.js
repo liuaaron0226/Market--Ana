@@ -313,7 +313,10 @@
       const block = el('section', { class: 'forecast-score' });
       const head = el('header', { class: 'forecast-score-head' });
       // 正式滿規定時間才換成判定結果（明顯比亂猜準／沒有明顯差別／明顯比亂猜差／漏記太多）；重播只標「參考」。
-      const tag = mode === 'replay' ? '參考' : (group.judgement && group.judgement.conclusion) || group.verdict;
+      // 帳本裡的判定字是在第一筆正式紀錄之前寫定的，不改帳本；只在畫面上換成專業用語（本人 2026-11-23）。
+      const WORDING = { 明顯比亂猜準: '顯著優於基準', 明顯比亂猜差: '顯著劣於基準', 沒有明顯差別: '無顯著差異', 漏記太多: '缺漏過多' };
+      const raw = mode === 'replay' ? '參考' : (group.judgement && group.judgement.conclusion) || group.verdict;
+      const tag = WORDING[raw] || raw;
       head.append(el('strong', {}, `${horizon}日`), el('span', { class: 'forecast-tag' }, tag),
         el('span', { class: 'forecast-count num' }, `${group.reconciled} 筆`));
       block.append(head, bar('命中', group.hit_rate, 'is-hit'), bar('歷史機率基準', group.baseline_rate, 'is-base'),
