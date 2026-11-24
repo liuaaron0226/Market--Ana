@@ -1057,7 +1057,8 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
 
         # 旋轉（本人 11-15：原本的手勢很難操作）：手指放在地形上拖就是轉，斜著拖也算；可以一直轉，不會卡在某個角度。
         stage = page.locator("#rotationTerrain .terrain-stage").bounding_box()
-        angle = "parseFloat(getComputedStyle(document.querySelector('#rotationTerrain .terrain-city')).getPropertyValue('--rz'))"
+        # 11-24 起旋轉直接寫在街區的 transform 上（不再用 --rz），目前的角度記在 data-angle
+        angle = "parseFloat(document.querySelector('#rotationTerrain .terrain-city').dataset.angle)"
         low, reach = stage["y"] + stage["height"] - 12, stage["width"] - 24
 
         def turn(dx: float, dy: float = 0) -> float:
@@ -1079,7 +1080,8 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
         check(f"{tag}：旋轉夠靈敏（拖 80px 轉超過 40 度）", abs(level - start) >= 40, [start, level])
         slanted = turn(40, -70)
         touch_action = page.evaluate("getComputedStyle(document.querySelector('#rotationTerrain .terrain-stage')).touchAction")
-        check(f"{tag}：斜著拖（偏上下）也算旋轉，不會被當成捲頁面", slanted != level and touch_action == "none", [level, slanted, touch_action])
+        # 11-24：手指上下滑改成捲頁面（touch-action: pan-y）；滑鼠不會捲頁面，斜著拖照樣轉。手指的部分在 cloud/test/browser_terrain_journey.py
+        check(f"{tag}：滑鼠斜著拖（偏上下）也算旋轉；手指上下滑交給瀏覽器捲頁面", slanted != level and touch_action == "pan-y", [level, slanted, touch_action])
         far = turn(-600)
         check(f"{tag}：可以一直轉，轉過半圈也不會卡住", abs(far - start) > 180, [start, far])
         back = turn((start - far) / ((level - start) / 80))
@@ -1115,8 +1117,9 @@ def home(page: Page, base: str, tag: str, mobile: bool) -> None:
             box = page.locator("#rotationTerrain .terrain-detail").bounding_box()
             view = page.viewport_size
             check(f"{tag}：手機上明細排在街區下方、不蓋住街區", box["y"] >= stage["y"] + stage["height"] - 1, [stage, box])
-            check(f"{tag}：手機上明細完全在可見範圍內", box["x"] >= 0 and box["x"] + box["width"] <= view["width"] + 1
-                  and box["y"] >= 0 and box["y"] + box["height"] <= view["height"] + 1, [view, box])
+            # 11-24：點樓不再捲頁面（原本每次捲到明細整個看得見，畫面會跳）；明細只要露出來、左右不超出就好
+            check(f"{tag}：手機上明細露在畫面裡、左右不超出", box["x"] >= 0 and box["x"] + box["width"] <= view["width"] + 1
+                  and box["y"] < view["height"], [view, box])
         top = shoot.roof_of(page, "largest")  # 手機選取後頁面可能捲過，樓的位置要重量
         page.mouse.click(top["x"], top["y"])
         check(f"{tag}：再點同一棟樓取消選取",

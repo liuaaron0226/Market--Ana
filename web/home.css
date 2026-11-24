@@ -642,16 +642,19 @@ body.hm .terrain-stage {
   /* 高度跟著寬度走：手機 300、平板約 500、桌機 600；街區會依這個框自動縮放 */
   /* 再用視窗高度封頂：手機橫放時不能比畫面還高，不然整個畫面都是地形、沒有地方可以捲頁面 */
   position: relative; height: min(clamp(300px, 62vw, 600px), 72svh);
-  /* 手指放在地形上拖就是旋轉，不分方向（本人 11-15）；要捲頁面，手指放在地形以外 */
-  touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none;
+  /* 手指在地形上左右拖是旋轉；上下滑照常捲頁面（瀏覽器接手，terrain.js 只處理偏左右的）。滑鼠往哪拖都轉 */
+  touch-action: pan-y; cursor: grab; user-select: none; -webkit-user-select: none;
   overflow: hidden; /* 立體的面轉出去的部分不能撐出橫向捲動 */
 }
 body.hm .terrain-stage.is-dragging { cursor: grabbing; }
-/* 透視、視角（--rx、--rz）、縮放（--s）、位置與長出來的時間（--grow-ms、--stagger-ms）都由 terrain.js 設定 */
+/* 拖著轉的那幾秒，桌面那片慢慢飄的光先停住（一秒只飄幾像素，看不出來）：它每一格都要整片重新合成，
+   和兩百多個立體的面疊在一起，手機上轉起來會掉格（11-24 實測：停住後拖曳由約 37 升到約 53 格／秒）。放手就接著飄。 */
+html.fx-desk:has(body.hm .terrain-stage.is-dragging)::before { animation-play-state: paused; }
+/* 位置、縮放、傾斜與旋轉一起寫在 transform 上（terrain.js 的 placeCity；轉的時候只改這一個元素），
+   長出來的時間（--grow-ms、--stagger-ms）也由 terrain.js 設定；街區名稱的 --s 寫在名稱自己身上 */
 body.hm .terrain-city {
   --s: 1;
-  position: absolute; left: 50%; top: 50%; width: 0; height: 0; transform-style: preserve-3d;
-  transform: scale3d(var(--s), var(--s), var(--s)) rotateX(var(--rx)) rotateZ(var(--rz));
+  position: absolute; left: 0; top: 0; width: 0; height: 0; transform-style: preserve-3d;
 }
 body.hm .terrain-city * { position: absolute; transform-style: preserve-3d; }
 

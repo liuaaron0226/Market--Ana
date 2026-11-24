@@ -19,7 +19,8 @@
      不用瀏覽器的跨頁過場（@view-transition）：實測新的一頁的動畫會卡住，見 motion-fx.css 最下面的說明。
 
    常駐（本人 11-20「可以長住的效果」，七項都要）：樣式都在 motion-fx.css；這裡只負責放上需要的元素——
-     頁首那塊板上緣的金色細光（.fx-rim）、桌面的光（<html class="fx-desk">）、小圖最新一筆的暈與線上的光（dress 加的）。
+     頁首那塊板上緣的金色細光（.fx-rim）、桌面的光（<html class="fx-desk">）、小圖最新一筆的暈與線上的光（dress 加的）、報價下流光的細線（.fx-live）。
+     另外看著每一個常駐的效果在不在畫面上：看不到就加 .fx-off 讓它停（11-24 效能修正；見 motion-fx.css「常駐」上面的說明）。
 
    對外：window.MotionFx = { land(elements, { back }), roll(element), sheen(element), dress(root), adopt(from, to) }；減少動態時 land／roll／sheen／adopt 是空的，
    dress 照做（漸層是靜態的細節，不是動態）。 */
@@ -181,12 +182,41 @@
     sheen(element);
   }
 
+  // 報價下面那條會流光的細線（樣式在 motion-fx.css 的 .fx-live；只在盤中顯示）。頁面每次改數字（textContent）會把它一起清掉，再補回來。
+  const LIVE_LINE = new Set(['currentPrice', 'close']);
+  function liveLine(element) {
+    if (!LIVE_LINE.has(element.id) || element.querySelector(':scope > .fx-live')) return;
+    const line = document.createElement('i');
+    line.className = 'fx-live';
+    line.setAttribute('aria-hidden', 'true');
+    element.append(line);
+    looking();
+  }
+
   function watch(element) {
     if (!element) return;
     // 自己加上去、拿掉的那一層不算變化（它沒有真的文字，roll 開頭比對文字就會跳過）
-    new MutationObserver(() => roll(element)).observe(element, { childList: true, characterData: true, subtree: true });
+    new MutationObserver(() => { roll(element); liveLine(element); }).observe(element, { childList: true, characterData: true, subtree: true });
     roll(element);
+    liveLine(element);
   }
+
+  // ---------- 常駐的效果只在看得到的時候動 ----------
+  // 每一個一直在動的東西（樣式在 motion-fx.css「常駐」兩段）：捲出畫面、在收起來的面板裡（高度是 0）時加 .fx-off，樣式就讓它停下來。
+  // 只看自己的範圍有沒有真的露出一點（intersectionRatio > 0）：收起來的面板裡、剛好貼著邊的不算。
+  // 頁面會一直換內容（籌碼卡、盯項、持股橫條都是畫完才出現），所以內容有變動時隔一下再找一次新的。
+  const LOOPING = '.state-trigger, .iw-dot, .bd-live-badge, .fx-live, .chip-card, .hv-bar, .fx-rim';
+  const sight = 'IntersectionObserver' in window ? new IntersectionObserver(entries => {
+    entries.forEach(entry => entry.target.classList.toggle('fx-off', !(entry.isIntersecting && entry.intersectionRatio > 0)));
+  }, { rootMargin: '48px 0px', threshold: [0, 0.01] }) : null;
+  const seen = new Set();
+  let lookSoon = 0;
+  function look() {
+    lookSoon = 0;
+    seen.forEach(node => { if (!node.isConnected) { sight.unobserve(node); seen.delete(node); } });
+    document.querySelectorAll(LOOPING).forEach(node => { if (!seen.has(node)) { seen.add(node); sight.observe(node); } });
+  }
+  function looking() { if (sight && !lookSoon) lookSoon = setTimeout(look, 250); }
 
   // 頁面把數字那一格換成另一個元素時，新的那一格接手（個股頁第一次盤中更新會把報價換成複本，見 stock.js）。
   // 複本是連狀態一起複製的：可能帶著「滾動中」的透明字與滾到一半的那一層，卻沒有人替它收尾——
@@ -244,6 +274,11 @@
       head.append(rim);
     }
     if (document.body.matches('.hm, .st')) document.documentElement.classList.add('fx-desk');
+    // 常駐的效果：現在畫面上有的先看，之後頁面有新內容再找（桌面的光是固定在畫面上的底，一直看得到，不用看）
+    if (sight) {
+      look();
+      new MutationObserver(looking).observe(document.body, { childList: true, subtree: true });
+    }
     // 個股頁：內容出現時（進頁面、查到資料）報價那塊板與 K 線那塊板落桌；同一頁換股不重播
     const content = document.body.classList.contains('st') && document.getElementById('content');
     if (content) {
