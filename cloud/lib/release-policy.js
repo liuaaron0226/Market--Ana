@@ -138,6 +138,16 @@ export function brokerBranchesVisible(env, isOwner) {
   return env?.MARKET_ANA_BROKER_BRANCHES === "owner" && Boolean(isOwner);
 }
 
+// AI 產業鏈資金版圖（本人 2026-11-24「完全實裝進去我的網站」，.scratch/ai-chain-map 票 01）：自己一個三種狀態的開關，
+// 和其他開關都不連動（本人 11-24 晚「全部都開」：上線時開給全部獲准使用者）。關著時那一頁與資料入口和不存在一樣。
+function chainMapMode(env) {
+  return threeStateMode(env?.MARKET_ANA_CHAIN_MAP);
+}
+
+export function chainMapVisible(env, isOwner) {
+  return modeAllowsViewer(chainMapMode(env), isOwner);
+}
+
 // 海外大盤的分時（本人 2026-11-24，.scratch/index-intraday 票 01）：自己一個三種狀態的開關，和其他開關都不連動。
 // 關著時大盤頁的國外指數照舊只有日週月、切換清單沒有那斯達克期貨，入口也不會去問來源；先只開站主。
 function indexIntradayMode(env) {
@@ -161,6 +171,7 @@ export function policyForViewer(policy, isOwner, env = {}) {
   features.impact_watch_v1 = impactWatchVisible(env, false);
   features.market_brief_v1 = marketBriefVisible(env, false);
   features.index_intraday_v1 = indexIntradayVisible(env, false);
+  features.chain_map_v1 = chainMapVisible(env, false);
   return { ...policy, features };
 }
 
@@ -206,6 +217,8 @@ export function releasePolicy(env = {}) {
       market_brief_v1: marketBriefMode(env) !== "off",
       // 主力分點：這裡是站主看到的值；其他人看到的一律是關（HIDDEN_FROM_OTHERS）。
       broker_branches_v1: brokerBranchesVisible(env, true),
+      // AI 產業鏈資金版圖：這裡是站主看到的值；其他人看到的值由 policyForViewer 依狀態決定。
+      chain_map_v1: chainMapMode(env) !== "off",
       // 海外大盤的分時：這裡是站主看到的值；其他人看到的值由 policyForViewer 依狀態決定。
       index_intraday_v1: indexIntradayMode(env) !== "off",
     },

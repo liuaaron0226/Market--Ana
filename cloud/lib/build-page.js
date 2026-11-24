@@ -69,6 +69,8 @@ export const WEB_FILES = [
   "market-brief.js", "market-brief.css",
   // 基金當成一般個股 06 票：基金個股頁的「配息」分類
   "fund-distributions.js",
+  // AI 產業鏈資金版圖（本人 2026-11-24，.scratch/ai-chain-map 票 01）：獨立一頁（開關 MARKET_ANA_CHAIN_MAP off／owner／all；關著時閘門擋這三個檔）
+  "chain-map.html", "chain-map.css", "chain-map.js",
 ];
 export const RETIRED = ["analysis-data.js", "chips-data.js", "dashboard-data.js", "detail-data.js", "plain-data.js", "market-data-local.js"];
 
