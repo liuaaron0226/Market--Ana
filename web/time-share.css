@@ -91,50 +91,12 @@
   .ts-extra { grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 32px; align-items: start; }
 }
 
-/* ---------- 分析工具：一顆鍵，點了才展開六顆（個股頁） ---------- */
+/* ---------- 分析工具：一顆鍵，點了浮出選單（draw-tools-ui.js，個股頁與首頁） ---------- */
 .ts-bar-keys { display: flex; align-items: center; gap: 8px; }
 .ts-tools-key { display: inline-flex; align-items: center; gap: 6px; padding: 0 12px 0 10px; }
 .ts-tools-key svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; transition: transform 300ms var(--ease-depth); }
 .ts-tools-key[aria-expanded="true"] svg { transform: rotate(-20deg); }
-/* 展開中：鍵變成深色（和選中的畫線工具、選單裡選中那一項同一種「開著」）。
+/* 選單開著：鍵變成深色（和選單裡選中那一項同一種「開著」）。
    選擇器刻意加重：要蓋過 stock.css 裡 body.st :is(… .bd-chart-bar .chart-chip …) 那組 */
 body.st .bd-chart-bar .ts-tools-key.ts-tools-key.ts-tools-key[aria-expanded="true"] { background: var(--ink); color: var(--bg); box-shadow: var(--key-shadow-ink); }
 
-/* 托盤高度從 0 長到一排鍵的高度；收起來時不佔位（body.st 加重：要蓋過 stock.css 的 body.st .bd-draw 上下留白） */
-.ts-tools { display: grid; grid-template-rows: 0fr; min-width: 0; transition: grid-template-rows 220ms var(--ease-depth) 90ms; }
-.ts-tools.is-open { grid-template-rows: 1fr; transition-delay: 0ms; transition-duration: 260ms; }
-body.st .ts-tools > .bd-draw { min-height: 0; overflow: hidden; margin: 0; padding: 2px 4px 0; margin-inline: -4px; }
-body.st .ts-tools.is-open > .bd-draw { padding-bottom: 8px; }
-body.st .ts-tools.is-settled > .bd-draw { overflow: visible; }
-.ts-tools[hidden] { display: none; }
-/* 收好之後（收回的動畫播完）整排看不見、點不到；展開時立刻看得見 */
-body.st .ts-tools > .bd-draw { visibility: hidden; transition: visibility 0s linear 360ms; }
-body.st .ts-tools.is-open > .bd-draw { visibility: visible; transition-delay: 0s; }
-
-/* 六顆鍵依序冒出來（左到右，每顆差 28ms），收起時倒過來（右到左） */
-body.st .bd-chart .ts-tools .bd-draw.bd-draw button {
-  opacity: 0;
-  transform: translateY(-10px) scale(.78);
-  transition:
-    opacity 150ms var(--ease-out) calc((6 - var(--i, 0)) * 20ms),
-    transform 200ms var(--ease-depth) calc((6 - var(--i, 0)) * 20ms),
-    box-shadow var(--t-lift) var(--ease-depth),
-    color 160ms var(--ease-out);
-}
-body.st .bd-chart .ts-tools.is-open .bd-draw.bd-draw button {
-  opacity: 1;
-  transform: none;
-  transition:
-    opacity 180ms var(--ease-out) calc(var(--i, 0) * 28ms + 30ms),
-    transform 260ms var(--ease-depth) calc(var(--i, 0) * 28ms + 30ms),
-    box-shadow var(--t-lift) var(--ease-depth),
-    color 160ms var(--ease-out);
-}
-@media (hover: hover) {
-  body.st .bd-chart .ts-tools.is-settled .bd-draw.bd-draw button:not([aria-pressed="true"]):hover { transform: translateY(var(--key-lift)); }
-}
-body.st .bd-chart .ts-tools.is-settled .bd-draw.bd-draw button:active { transform: translateY(var(--key-thick)); }
-@media (prefers-reduced-motion: reduce) {
-  .ts-tools, .ts-tools.is-open, body.st .ts-tools > .bd-draw, body.st .bd-chart .ts-tools .bd-draw.bd-draw button,
-  body.st .bd-chart .ts-tools.is-open .bd-draw.bd-draw button, .ts-tools-key svg { transition: none; }
-}

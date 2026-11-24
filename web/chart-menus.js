@@ -13,7 +13,7 @@
 (function () {
   'use strict';
   const menuOf = chip => document.getElementById(chip.getAttribute('aria-controls'));
-  // 帶 data-own-toggle 的小鍵（個股頁的「分析工具」）自己管開合，不是浮出選單，這裡不碰
+  // 帶 data-own-toggle 的小鍵自己管開合，不是浮出選單，這裡不碰（目前沒有；「分析工具」11-24 起也是浮出選單，由這裡管）
   const CHIP = '.chart-chip[aria-controls]:not([data-own-toggle])';
   const openChip = () => document.querySelector('.chart-chip[aria-expanded="true"]:not([data-own-toggle])');
 

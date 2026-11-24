@@ -174,6 +174,42 @@
     && String(plainSource.data_dates.price_and_foreign || '') < A.meta.cutoff_date);
 
   let chart = null;
+
+  // ---------- 畫線（本人 2026-11-24「大盤也需要分析工具」，和個股頁同一套：draw-tools-ui.js、chart-drawings.js、drawing-sync.js） ----------
+  // 每個指數各畫各的，存在同一個 /api/drawings/<代號>：代號是「IDX」加指數的鍵（台股加權＝IDXTWII、那指期＝IDXNQFUT），
+  // 合乎全站代號的規則（4～12 碼大寫英數），不會和個股撞名。大盤沒有到價提醒：盯價排程只問台股個股（cloud/lib/watch-tick.js）。
+  const drawingCode = key => `IDX${String(key).toUpperCase().replace(/[^0-9A-Z]/g, '')}`;
+  const homeDrawingSync = window.DrawingSync ? window.DrawingSync.create({
+    onStatus: ({ unsaved, failed, ids }) => {
+      const hint = document.getElementById('drawUnsaved');
+      if (hint) { hint.hidden = !(unsaved || failed); hint.textContent = unsaved ? '未儲存' : failed ? '儲存失敗' : ''; }
+      if (chart) chart.setUnsavedDrawings(ids);
+    },
+  }) : null;
+  const homeTools = homeDrawingSync && window.DrawTools ? window.DrawTools.mount({
+    bar: document.querySelector('.chart-toolbar'), keys: document.querySelector('.chart-controls'),
+    before: document.querySelector('.chart-controls .period-control'), chart: () => chart,
+    kinds: window.DrawTools.TOOLS.map(tool => tool.kind).filter(kind => kind !== 'alert'), escape: true,
+  }) : null;
+  let drawingKey = '';      // 目前圖上是哪一個指數的畫線（代號）
+  let drawingTicket = 0;
+  // 換了指數（或第一次畫 K 線）：先放上這個指數還沒存上去的，再讀雲端那一份；讀不到就當作沒有畫線
+  async function syncDrawings() {
+    if (!homeDrawingSync || !chart) return;
+    const code = drawingCode(currentIndex);
+    if (code === drawingKey) return;
+    drawingKey = code;
+    const ticket = ++drawingTicket;
+    chart.setTool(null);
+    chart.setDrawings(homeDrawingSync.open(code));
+    try {
+      const response = await fetch(`/api/drawings/${encodeURIComponent(code)}`, { cache: 'no-store' });
+      const data = response.ok ? await response.json() : null;
+      if (ticket !== drawingTicket || !Array.isArray(data?.items)) return;
+      chart.setDrawings(homeDrawingSync.merge(data.items));
+    } catch (_) { /* 畫線是附加的：失敗就維持沒有畫線 */ }
+  }
+
   let currentPeriod = 'daily';
   let latestPayload = null;
   let latestLive = false;
@@ -475,6 +511,8 @@
   function showTimeShare(on) {
     els.timeShare.hidden = !on;
     els.chartWorkspace.classList.toggle('is-time-share', on);
+    // 分時不能畫線：分析工具不出現（K 線那邊選到一半的工具由 chart-drawings.js 換資料時放下）
+    if (homeTools) homeTools.allow(!on);
   }
 
   function candlesFor(period) {
@@ -572,7 +610,10 @@
         requestAnimationFrame(updateOverlayControls);
       },
       // 扣掉畫布上方保留給圖例的高度（chart-host 的 top）
-      height: () => Math.max(250, (els.chartStage.clientHeight || 360) - (els.chartHost.offsetTop || 0))
+      height: () => Math.max(250, (els.chartStage.clientHeight || 360) - (els.chartHost.offsetTop || 0)),
+      // 畫線（和個股頁同一套）：變動交給 drawing-sync.js 存到這個指數的代號底下
+      drawings: homeTools && { onChange: change => homeDrawingSync.record(change), onTool: tool => homeTools.tool(tool),
+        onSelect: drawing => homeTools.select(drawing), alertDefault: () => false }
     });
     chart.canvas.setAttribute('aria-describedby', 'chartSummary');
     // 自己設定的均線（本人 11-17：點上方那一行的均線名稱打開設定；不設上限、顏色自己挑；和個股頁共用一組）
@@ -632,6 +673,7 @@
     const count = Math.min(candles.length, isMobile() ? desiredCount : Math.min(desiredCount, touchSafeCount));
     if (reset || !instance.candles.length) instance.setData(candles, { count, overlays: chartOverlays(), unit });
     else instance.update(candles, chartOverlays());
+    syncDrawings();   // 這個指數的畫線（換了指數才重讀）
     if (period === 'daily' && !index) renderMarketTrend(instance);
     const lastCandle = candles[candles.length - 1];
     const provisionalLast = period === 'daily' && !liveLast && lastCandle && lastCandle.provisional === true;
@@ -754,6 +796,8 @@
       const distance = Math.hypot(event.clientX - start.x, event.clientY - start.y);
       start = null;
       if (distance >= 6) return;
+      // 這一下給畫線用掉了（選工具後定位、點到線選取、拖線）：不選 K 棒（kchart.js 在這之前先處理同一下）
+      if (chart.drawingTap) return;
       const g = visibleGeometry();
       if (!g) return;
       const rect = chart.canvas.getBoundingClientRect();

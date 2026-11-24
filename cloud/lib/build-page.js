@@ -6,6 +6,8 @@ export const WEB_FILES = [
   "stock.html", "stock.css", "stock.js", "intraday.js",
   // 主力分點副圖（本人 2026-11-24，.scratch/broker-branches 票 01）
   "branch-pane.js",
+  // 分析工具的鍵與選單（本人 2026-11-24 選樣品 A，個股頁與大盤共用）
+  "draw-tools-ui.js", "draw-tools-ui.css",
   // 分時圖、五檔、分析工具收合（本人 11-18）
   "time-share.js", "time-share.css",
   // claude-60 設計改版（11-09）新增的資產

@@ -130,112 +130,6 @@
 /* ---------- 週期：跟首頁同一套小鍵加選單（原生 select 保留為唯一真值、視覺隱藏） ---------- */
 .bd .hm-period-native { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
-/* ---------- 畫線工具列：只有圖示；名稱在滑鼠停留、鍵盤聚焦或手機長按時出現 ----------
-   --draw 是畫線用色，沿用既有色票的藍紫（--core-b）：與漲跌的紅綠、均線的橘金灰、支撐壓力的金綠都分得開。 */
-:root { --draw: var(--core-b); }
-/* 窄螢幕（iPhone 開「顯示縮放」是 320 寬）放不下七顆 44px 時，按鈕一起變窄（高度不變，至少 30px），
-   不讓工具列超出圖表右緣或造成橫向捲動；放得下就維持 44px。未儲存的提示先讓位（只剩圓點），按鈕才變窄。 */
-.bd-draw-row { display: flex; align-items: center; }
-.bd-draw { display: flex; flex: 0 1 auto; min-width: 0; gap: 4px; margin: 0 0 6px; }
-.bd-draw[hidden], .bd-draw button[hidden] { display: none; }
-.bd-draw button {
-  position: relative; width: var(--btn-h); height: var(--btn-h); display: grid; place-items: center; padding: 0;
-  border: 1px solid var(--hair); border-radius: var(--btn-r); background: transparent; color: var(--dim); cursor: pointer;
-  touch-action: manipulation; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; flex: 0 1 auto; min-width: 30px;
-  transition: background-color 160ms var(--ease-out), color 160ms var(--ease-out), transform 120ms var(--ease-out);
-}
-.bd-draw svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; pointer-events: none; }
-.bd-draw button:active { transform: var(--press); }
-/* 刪除只在選取了一條線時出現，與畫線工具隔開一點；多一顆按鈕不改變工具列高度，圖表不會跳動。 */
-.bd-draw .bd-draw-delete { margin-left: 8px; }
-.bd-draw button[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--bg); }
-.bd-draw button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.bd-draw button::after {
-  content: attr(data-tip); position: absolute; left: 0; top: calc(100% + 6px); z-index: 3; padding: 4px 8px; border-radius: 6px;
-  background: var(--ink); color: var(--bg); font: 500 12px/1.4 var(--sans); white-space: nowrap;
-  opacity: 0; pointer-events: none; transition: opacity 120ms var(--ease-out);
-}
-/* 最右邊那兩顆的提示往左長：靠左對齊時在 320 寬的手機上會超出畫面 1px，整頁出現橫向捲動 */
-.bd-draw button[data-tool="text"]::after, .bd-draw .bd-draw-delete::after { left: auto; right: 0; }
-.bd-draw button:focus-visible::after, .bd-draw button.is-tip::after { opacity: 1; }
-@media (hover: hover) {
-  .bd-draw button:not([aria-pressed="true"]):hover { background: var(--panel2); color: var(--ink); }
-  .bd-draw button:hover::after { opacity: 1; transition-delay: 320ms; }
-}
-@media (prefers-reduced-motion: reduce) { .bd-draw button, .bd-draw button::after { transition: none; } }
-/* 十顆工具排成一列（本人 11-24 加量測、平行通道、到價提醒、區間成交量分布）：放不下就整排左右捲，不換行、
-   每顆維持 44px 不變窄；捲軸不顯示。到價提醒的開關與刪除不在捲動區裡，選了線就固定在右邊。
-   名稱提示（::after）在按鈕下方，捲動容器會把超出去的裁掉，所以容器往下多留 34px、再用負邊界收回來：不佔版面；
-   多出來的這一段不擋下面那一行的點擊（容器本身不收指標事件，按鈕照常收）。 */
-.bd-draw-row > .ts-tools { flex: 1 1 0; }
-.bd-draw-scroll {
-  display: flex; flex: 0 1 auto; min-width: 0; gap: 4px; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none;
-  padding: 4px 4px 34px; margin: -4px -4px -34px; pointer-events: none;
-}
-.bd-draw-scroll::-webkit-scrollbar { display: none; }
-.bd-draw-scroll > button { flex: none; pointer-events: auto; }
-/* 最右邊三顆的提示往左長：不然提示會把捲動區撐寬 */
-.bd-draw-scroll > button:nth-last-child(-n+3)::after { left: auto; right: 0; }
-.bd-draw > .bd-draw-alert, .bd-draw > .bd-draw-delete { flex: none; }
-.bd-draw .bd-draw-alert { margin-left: 8px; }
-.bd-draw .bd-draw-alert::after { left: auto; right: 0; }
-.bd-draw .bd-draw-alert:not([hidden]) + .bd-draw-delete { margin-left: 0; }
-/* 到價提醒在這裡不能用時的一句話（和「未儲存」同一行、同一種字） */
-.bd-draw-note { flex: none; margin: 0 0 6px auto; padding-left: 8px; color: var(--dim); font: 500 12px var(--sans); white-space: nowrap; }
-.bd-draw-note[hidden] { display: none; }
-.bd-draw-note:not([hidden]) + .bd-draw-unsaved { margin-left: 0; }
-/* 還有畫線沒存上去時的提示：和工具列同一行、靠右的一個小圓點加三個字，不蓋到圖。
-   它不在工具列裡面：秒 K、分 K 把工具列收起時，還沒存上去的提示照樣看得到。
-   它比工具列先讓位（手機上按鈕盡量維持 44px）；窄螢幕上選了線、多出刪除鈕時放不下三個字，只留圓點
-   （不認得 :has 的舊瀏覽器是把放不下的字裁掉）。 */
-.bd-draw-unsaved {
-  display: inline-flex; align-items: center; gap: 6px; flex: 0 1000 auto; min-width: 14px; overflow: hidden;
-  margin: 0 0 6px auto; padding-left: 8px; color: var(--dim); font: 500 12px var(--sans); white-space: nowrap;
-}
-.bd-draw-unsaved[hidden] { display: none; }
-.bd-draw-unsaved::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--draw); }
-@media (max-width: 480px) { .bd-draw-row:has(.bd-draw-delete:not([hidden])) .bd-draw-unsaved { gap: 0; font-size: 0; } }
-
-/* 手機長按圖表（按住線準備拖、按住看 K 棒）不跳出系統的選取放大鏡或「儲存影像」選單。只加在畫布上：
-   加在圖表容器上的話，iOS 上容器裡的文字標註輸入框會打不了字。 */
-.bd-chart-host > canvas { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
-
-/* ---------- 文字標註的輸入框：疊在圖上、對在要寫的位置（位置由 chart-drawings.js 算） ----------
-   一個輸入框加一顆取消；外框用畫線色，外圈的淡色環沿用站上聚焦狀態的作法。
-   手機上字級 16px：小於 16 的輸入框在 iOS 聚焦時整頁會被放大，寫完畫面就回不到原位。 */
-.kc-note {
-  position: absolute; z-index: 8; display: flex; width: min(240px, calc(100% - 16px)); height: 32px; margin: 0;
-  border: 1px solid var(--draw); border-radius: var(--btn-r); background: var(--panel);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--draw) 18%, transparent);
-}
-.kc-note-input {
-  flex: 1; min-width: 0; padding: 0 2px 0 8px; border: 0; border-radius: var(--btn-r);
-  background: transparent; color: var(--ink); font: 500 13px var(--sans);
-}
-/* 聚焦的樣子由外框與淡色環表示，輸入框自己不再加全站那一圈聚焦外框（會變成兩層框）。 */
-.bd .kc-note-input, .bd .kc-note-input:focus-visible { outline: none; }
-.kc-note-cancel {
-  position: relative; flex: none; width: 32px; padding: 0; border: 0; border-radius: var(--btn-r);
-  background: transparent; color: var(--dim); cursor: pointer; touch-action: manipulation; outline: none;
-}
-.kc-note-cancel::before, .kc-note-cancel::after {
-  content: ""; position: absolute; left: 50%; top: 50%; width: 12px; height: 1.6px; margin: -.8px 0 0 -6px;
-  border-radius: 1px; background: currentColor; transform: rotate(45deg);
-}
-.kc-note-cancel::after { transform: rotate(-45deg); }
-.kc-note-limit {
-  /* 放在輸入框上方：手機鍵盤彈出時，鍵盤上方只保證輸入框露出來，放下面會被鍵盤遮住。 */
-  position: absolute; left: 0; bottom: calc(100% + 6px); padding: 4px 8px; border-radius: 6px;
-  background: var(--ink); color: var(--bg); font: 500 12px/1.4 var(--sans); white-space: nowrap;
-}
-.kc-note-limit[hidden] { display: none; }
-@media (hover: hover) { .kc-note-cancel:hover { color: var(--ink); } }
-@media (pointer: coarse) {
-  .kc-note { height: 44px; }
-  .kc-note-input { font-size: 16px; }
-  .kc-note-cancel { width: 44px; }
-}
-
 /* 操作策略：首屏只露出一句結論，價位與理由在原生 details 內。 */
 .bd-strategy { margin: 8px 0 28px; padding: 22px 0 0; border-top: 2px solid var(--ink); }
 .bd-strategy h2 { max-width: 880px; margin: 0; font: 600 24px/1.45 var(--serif); color: var(--ink); }
@@ -497,27 +391,17 @@ body.st .lad-now .lad-name { background: transparent; color: var(--bg); padding-
 body.st .lad-now b { color: var(--bg); }
 /* 列與列之間的距離照舊由 stock.js 照「離收盤幾 %」設（--gap），遠近一眼可比 */
 
-/* ---------- 板上的鍵：畫線工具、週期、均線、頂列 ---------- */
-body.st :is(.bd-back, .bd-theme, .bd-draw button, .bd-chart-bar .chart-chip, .bd-period select) {
+/* ---------- 板上的鍵：分析工具（draw-tools-ui.css）、週期、均線、頂列 ---------- */
+body.st :is(.bd-back, .bd-theme, .bd-chart-bar .chart-chip, .bd-period select) {
   border: 0; border-radius: var(--r-key); background: var(--key); box-shadow: var(--key-shadow);
   transition: transform var(--t-lift) var(--ease-depth), box-shadow var(--t-lift) var(--ease-depth), color 160ms var(--ease-out);
 }
-body.st .bd-draw { gap: 6px; padding-bottom: 4px; }
-/* 手機（390 寬時工具列那一行是 334px）：六顆工具＋刪除七顆都要 44px（308px），連「未儲存」只剩的圓點（10px）也要放得下：
-   鍵距 2px、刪除前多隔 4px（共 324px），圓點 10px，剛好 334px。
-   不管有沒有選線都用同一個鍵距：選了線、刪除鈕出現時，前面六顆不會跟著移位。 */
-@media (max-width: 480px) {
-  body.st .bd-draw { gap: 2px; }
-  body.st .bd-draw .bd-draw-delete { margin-left: 4px; }
-  body.st .bd-draw-row:has(.bd-draw-delete:not([hidden])) .bd-draw-unsaved { min-width: 10px; padding-left: 4px; }
-}
-body.st .bd-draw button[aria-pressed="true"] { background: var(--ink); color: var(--bg); box-shadow: var(--key-shadow-ink); }
 @media (hover: hover) {
-  body.st :is(.bd-back, .bd-theme, .bd-draw button:not([aria-pressed="true"]), .bd-chart-bar .chart-chip, .bd-period select):hover {
+  body.st :is(.bd-back, .bd-theme, .bd-chart-bar .chart-chip, .bd-period select):hover {
     background: var(--key); color: var(--ink); transform: translateY(var(--key-lift)); box-shadow: var(--key-shadow-hover);
   }
 }
-body.st :is(.bd-back, .bd-theme, .bd-draw button, .bd-chart-bar .chart-chip, .bd-period select):active {
+body.st :is(.bd-back, .bd-theme, .bd-chart-bar .chart-chip, .bd-period select):active {
   transform: translateY(var(--key-thick)); box-shadow: var(--key-shadow-press); transition-duration: var(--t-press);
 }
 
@@ -538,7 +422,6 @@ body.st .st-top .bd-quote { padding-bottom: 14px; }
 body.st .st-top .sf-cell { padding-top: 10px; padding-bottom: 10px; }
 body.st .bd-stage { margin-top: 12px; padding: 2px 32px 10px; }
 body.st .bd-chart-bar { margin-bottom: 4px; }
-body.st .bd-draw { padding-bottom: 0; margin-bottom: 4px; }
 body.st .hm-cats { margin-top: 14px; }
 /* ---------- 主力分點副圖（branch-pane.js）：名稱一排鍵（.chip-seg，槽與凸起的鍵和分類鍵同一套）在上、柱狀圖在下 ---------- */
 /* 主力分點副圖的切換：和成交量那格一樣，左上角一個小鍵＋浮出的選單（本人 2026-11-24）。
