@@ -392,6 +392,27 @@ def home_entry(j: Journey, browser, base: str) -> None:
     context.close()
 
 
+def fixed_light_journey(j: Journey, browser, base: str) -> None:
+    for prefix, options in (("phone-", PHONE), ("desktop-", DESKTOP)):
+        for saved in ("dark", "light"):
+            context = j.context(browser, base, OWNER, {**options, "color_scheme": "dark"})
+            context.add_init_script(f"localStorage.setItem('market-theme', '{saved}')")
+            page = j.page(context, base)
+            colors = page.evaluate("""() => ({
+                theme: document.documentElement.dataset.theme,
+                us: getComputedStyle(document.documentElement).getPropertyValue('--us').trim(),
+                saved: localStorage.getItem('market-theme')
+            })""")
+            j.check(f"{prefix}網站選 {saved}、系統深色：資金版圖固定樣品淺色，不改網站偏好",
+                    colors == {"theme": "light", "us": "#4f5fd6", "saved": saved}, colors)
+            page.screenshot(path=str(OUT / f"{prefix}fixed-light-{saved}.png"))
+            page.goto(f"{base}/minimal.html", wait_until="domcontentloaded")
+            page.wait_for_function("() => document.getElementById('homeCats')")
+            j.check(f"{prefix}離開資金版圖：首頁仍用原本的 {saved} 主題",
+                    page.locator("html").get_attribute("data-theme") == saved)
+            context.close()
+
+
 def empty_journey(j: Journey, browser) -> None:
     server, base = start_server(None)
     try:
@@ -495,6 +516,7 @@ def main() -> int:
                 owner_journey(j, browser, base, prefix, options, skipped)
             friend_and_gate(j, browser, base)
             home_entry(j, browser, base)
+            fixed_light_journey(j, browser, base)
             empty_journey(j, browser)
             if os.environ.get("CHAIN_MAP_SAMPLE_DIR"):
                 parity(j, browser, Path(os.environ["CHAIN_MAP_SAMPLE_DIR"]))

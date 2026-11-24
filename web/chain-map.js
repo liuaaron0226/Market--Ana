@@ -3,10 +3,9 @@
 // - 資料改成向 /api/chain-map 要（樣品是內嵌），拿到才 boot；還沒有資料或讀不到就在畫面那一格寫一句話。
 // - 同一家公司的主要環節從產業鏈定義的 primary 讀（樣品放在資金數字的 owner，內容相同）。
 // - 層與環節的簡稱從定義的 short 讀（樣品寫死在程式裡，內容相同）：定義之後可以改，程式不認任何固定的 id。
-// - 外觀照本站存的選擇（market-theme），和其他頁一樣；測試用的 window.ChainMap.snapshot() 只讀狀態。
+// - 本頁固定淺色，不改其他頁已儲存的主題；測試用的 window.ChainMap.snapshot() 只讀狀態。
 (function () {
 'use strict';
-try { const saved = localStorage.getItem('market-theme'); if (saved === 'light' || saved === 'dark') document.documentElement.dataset.theme = saved; } catch (_) { /* 私密視窗 */ }
 function boot(CHAIN, FLOWS) {
 
 /* ---------- 小工具 ---------- */
