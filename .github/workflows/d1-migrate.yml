@@ -1,0 +1,151 @@
+# 網站資料庫（D1 market-ana-accounts）的資料表變更（cloud/migrations）：2026-11-24 起由本人在 GitHub 按「Run workflow」，
+# 不再靠助手在本機打指令。只有手動觸發，沒有排程。重按沒有副作用。
+#
+# 正式資料庫的記帳表 d1_migrations 記到 0032；0033～0038 是手動用 Cloudflare API 套的、沒記帳（資料表都在）。
+# 直接 `wrangler d1 migrations apply` 會重跑 0033～0038，所以每一輪先核對（d1_migrate.py plan）：
+# - 乾跑（預設）：用白話說明正式執行會做什麼；什麼都不寫。
+# - 正式（取消勾選 dry_run）：一次做完兩件事——
+#   1. 補記帳：還沒記帳、但東西（資料表、欄位、索引、觸發器）逐項核對過確實已經在資料庫裡的，只在記帳表補記一筆，
+#      絕不執行它們的 SQL（寫入前再檢查一次補記帳檔只寫記帳表）。
+#   2. 套用：真正還沒套的，交給 wrangler 依序套用。
+#   記帳和資料庫對不上（只套一半、順序對不上、已記帳的東西不見了、無法核對）就拒絕，什麼都不寫，印出哪裡不一致。
+# - 勾「只補記帳」：只做第 1 件。
+# D1 回「今天寫入額度用完」時，摘要寫白話（台北早上 8 點後再按一次），不印一大段錯誤。
+# 正式執行只能從 main 跑。讀資料庫只讀 sqlite_master（結構）與記帳表，沒有使用者資料。
+name: d1-migrate
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "乾跑：只核對、用白話說明正式執行會做什麼，不寫資料庫（取消勾選才真的做）"
+        required: false
+        type: boolean
+        default: true
+      reconcile_only:
+        description: "只補記帳：只替已經在資料庫裡的變更補記帳，不套用新的變更（平常不用勾）"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: d1-migrate   # 一次只跑一輪
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: 決定這一輪做什麼
+        id: plan
+        env:
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          INPUT_RECONCILE_ONLY: ${{ inputs.reconcile_only }}
+          REF: ${{ github.ref }}
+        run: |
+          real=false
+          if [ "$INPUT_DRY_RUN" = "false" ]; then
+            if [ "$REF" != "refs/heads/main" ]; then
+              echo "::error::正式執行只能從 main 跑（現在是 $REF）"
+              exit 1
+            fi
+            real=true
+          fi
+          only=false
+          if [ "$INPUT_RECONCILE_ONLY" = "true" ]; then only=true; fi
+          echo "real=$real" >> "$GITHUB_OUTPUT"
+          echo "only=$only" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: 檢查機密
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID; do
+            if [ -z "${!name}" ]; then
+              echo "### ⚠ GitHub 的機密設定少了 $name（Settings → Secrets and variables → Actions）" >> "$GITHUB_STEP_SUMMARY"
+              echo "::error::缺少 $name"; exit 1
+            fi
+          done
+
+      - name: 讀資料庫現況（唯讀）
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          query="$(python d1_migrate.py state-sql)"
+          if ! (cd cloud && npx --yes wrangler@4 d1 execute market-ana-accounts --remote --json --command "$query" \
+              > "$RUNNER_TEMP/d1-state.json" 2> "$RUNNER_TEMP/d1-state.err"); then
+            cat "$RUNNER_TEMP/d1-state.err" "$RUNNER_TEMP/d1-state.json" > "$RUNNER_TEMP/d1-state.log" 2> /dev/null || true
+            python d1_migrate.py explain-error "$RUNNER_TEMP/d1-state.log" --summary "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: 核對記帳與資料庫、決定要做什麼
+        id: check
+        env:
+          REAL: ${{ steps.plan.outputs.real }}
+          ONLY: ${{ steps.plan.outputs.only }}
+        run: |
+          args=(check --state "$RUNNER_TEMP/d1-state.json" --sql-output "$RUNNER_TEMP/d1-reconcile.sql"
+                --github-output "$GITHUB_OUTPUT" --summary "$GITHUB_STEP_SUMMARY")
+          if [ "$REAL" = "true" ]; then args+=(--real); fi
+          if [ "$ONLY" = "true" ]; then args+=(--reconcile-only); fi
+          python d1_migrate.py "${args[@]}"
+
+      - name: 補記帳（只寫記帳表，不執行變更的 SQL）
+        if: steps.plan.outputs.real == 'true' && steps.check.outputs.reconcile == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          python d1_migrate.py assert-bookkeeping-only "$RUNNER_TEMP/d1-reconcile.sql"
+          cat "$RUNNER_TEMP/d1-reconcile.sql"
+          if ! (cd cloud && npx --yes wrangler@4 d1 execute market-ana-accounts --remote --file "$RUNNER_TEMP/d1-reconcile.sql" \
+              > "$RUNNER_TEMP/d1-reconcile.log" 2>&1); then
+            python d1_migrate.py explain-error "$RUNNER_TEMP/d1-reconcile.log" --summary "$GITHUB_STEP_SUMMARY"
+          fi
+          cat "$RUNNER_TEMP/d1-reconcile.log"
+          echo "- 補記帳完成" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 套用新的變更
+        if: steps.plan.outputs.real == 'true' && steps.check.outputs.apply == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if ! (cd cloud && npx --yes wrangler@4 d1 migrations apply market-ana-accounts --remote \
+              > "$RUNNER_TEMP/d1-apply.log" 2>&1); then
+            cat "$RUNNER_TEMP/d1-apply.log"
+            python d1_migrate.py explain-error "$RUNNER_TEMP/d1-apply.log" --summary "$GITHUB_STEP_SUMMARY"
+          fi
+          cat "$RUNNER_TEMP/d1-apply.log"
+          echo "- 套用完成" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 寫入之後再核對一次
+        if: steps.plan.outputs.real == 'true' && (steps.check.outputs.reconcile == 'true' || steps.check.outputs.apply == 'true')
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          EXPECT: ${{ steps.check.outputs.expect }}
+        run: |
+          query="$(python d1_migrate.py state-sql)"
+          if ! (cd cloud && npx --yes wrangler@4 d1 execute market-ana-accounts --remote --json --command "$query" \
+              > "$RUNNER_TEMP/d1-state-after.json" 2> "$RUNNER_TEMP/d1-state-after.err"); then
+            python d1_migrate.py explain-error "$RUNNER_TEMP/d1-state-after.err" --summary "$GITHUB_STEP_SUMMARY"
+          fi
+          python d1_migrate.py verify --state "$RUNNER_TEMP/d1-state-after.json" --expect "$EXPECT"
+          echo "- 寫入之後核對通過：資料庫已是最新" >> "$GITHUB_STEP_SUMMARY"

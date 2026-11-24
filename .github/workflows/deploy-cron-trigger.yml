@@ -1,0 +1,96 @@
+# 部署 Cloudflare 排程程式（cron-trigger/：準時觸發每日更新、消息、晨間預測，以及交易時段每分鐘盯價）。
+# 2026-11-24 起由本人在 GitHub 按「Run workflow」，不再靠助手在本機打 `wrangler deploy`。只有手動觸發，沒有排程。
+# - 乾跑（預設）：跑排程程式自己的測試＋試打包（wrangler deploy --dry-run），不上傳。
+# - 正式（取消勾選 dry_run）：同樣先測試、試打包，通過才部署；印出部署後的版本編號與排程時段。只能從 main 跑。
+# 排程程式的機密設定（GITHUB_DISPATCH_TOKEN、FUGLE_API_KEY、VAPID 金鑰、OWNER_EMAIL）已經放在 Cloudflare，
+# 部署不會動到它們，這裡也不讀、不印。需要的 Cloudflare 權杖權限：Account › Workers Scripts › Edit。
+name: deploy-cron-trigger
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "乾跑：只跑測試、試打包，不部署（取消勾選才真的部署）"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-cron-trigger
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: 決定這一輪部不部署
+        id: plan
+        env:
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          REF: ${{ github.ref }}
+        run: |
+          real=false
+          if [ "$INPUT_DRY_RUN" = "false" ]; then
+            if [ "$REF" != "refs/heads/main" ]; then
+              echo "::error::正式部署只能從 main 跑（現在是 $REF）"
+              exit 1
+            fi
+            real=true
+          fi
+          echo "real=$real" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: 排程程式的測試
+        run: node --test cron-trigger/*.test.js
+
+      - name: 試打包（不上傳）
+        working-directory: cron-trigger
+        run: npx --yes wrangler@4 deploy --dry-run --outdir "$RUNNER_TEMP/cron-trigger-dist"
+
+      - name: 檢查機密
+        if: steps.plan.outputs.real == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID; do
+            if [ -z "${!name}" ]; then echo "::error::缺少 $name"; exit 1; fi
+          done
+
+      - name: 部署
+        if: steps.plan.outputs.real == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        working-directory: cron-trigger
+        run: |
+          set -o pipefail
+          npx --yes wrangler@4 deploy 2>&1 | tee "$RUNNER_TEMP/deploy.log"
+          version="$(grep -oE 'Current Version ID: [0-9a-f-]+' "$RUNNER_TEMP/deploy.log" | tail -n 1)"
+          if [ -z "$version" ]; then
+            echo "::error::部署的輸出裡找不到版本編號（Current Version ID），請看上面的訊息"
+            exit 1
+          fi
+          {
+            echo "### 排程程式已部署"
+            echo "- $version"
+            echo "- 排程時段（UTC）："
+            grep -E '^\s*schedule: ' "$RUNNER_TEMP/deploy.log" | sed -E 's/^\s*/  - /' || echo "  - （輸出裡沒列出，請到 Cloudflare 的 Worker 頁面 Settings → Triggers 看）"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 乾跑摘要
+        if: steps.plan.outputs.real != 'true'
+        run: |
+          {
+            echo "### 排程程式乾跑：測試與試打包都通過，沒有部署"
+            echo "要真的部署：再按一次 Run workflow，取消勾選 dry_run。"
+          } >> "$GITHUB_STEP_SUMMARY"
