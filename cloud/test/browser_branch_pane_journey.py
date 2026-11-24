@@ -300,7 +300,10 @@ def owner_journey(j: Journey, browser, prefix: str, options: dict, dates: list[s
         scrolled = page.evaluate("() => ({ top: document.getElementById('branchMenu').scrollTop, open: !document.getElementById('branchMenu').hidden })")
         j.check(f"{prefix}手指在分點選單裡往上滑：選單捲下去、沒有選到東西、選單還開著",
                 before_scroll > 0 and scrolled["top"] > 0 and scrolled["open"] and page.evaluate(STATE)["snap"]["selected"] is None, [before_scroll, scrolled])
+        # 手指甩過之後選單還在慣性捲動：這時點下去只會停住捲動、不會選（手機原生行為），等它停了再點
+        page.wait_for_timeout(1500)
         page.evaluate("() => { document.getElementById('branchMenu').scrollTop = 0; }")
+        page.wait_for_timeout(300)
     press(page, page.locator(f'#branchMenu button[data-branch="{target["id"]}"]'), touch)
     single = page.evaluate(STATE)
     values = [b["value"] for b in single["snap"]["bars"]]
