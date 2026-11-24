@@ -143,6 +143,39 @@ def main() -> None:
             diff_box = ImageChops.difference(shots["site"], shots["sample-before"]).getbbox() if same_size else "尺寸不同"
             expect("改版前和網站原本逐點相同（首頁整頁，籌碼與資金展開）", same_size and diff_box is None, {"sizes": [shots["site"].size, shots["sample-before"].size], "diff": diff_box})
 
+        # ---- 2b. 個股頁、自選股與庫存：選中的框停在被選中的那一顆上（只在「已經內建動態層」的網址跑） ----
+        if BUILT_IN:
+            FRAME = """sel => { const bar = document.querySelector(sel), cs = getComputedStyle(bar, '::before');
+              const key = bar.querySelector(':scope > button[aria-expanded="true"]') || bar.querySelector(':scope > button:is([aria-pressed="true"], [aria-selected="true"])');
+              if (!key) return { key: null, opacity: cs.opacity };
+              return { key: key.textContent.trim().replace(/\s+/g, ''), on: Math.abs(new DOMMatrixReadOnly(cs.transform).m41 - key.offsetLeft) < 1.5 && Math.abs(parseFloat(cs.width) - key.offsetWidth) < 1.5, opacity: cs.opacity }; }"""
+            for path, ready, steps in (
+                ("/portfolio.html", "() => document.getElementById('portfolioFreshness').textContent.trim() !== '讀取中'",
+                 [("#listFilter", None, "自選頁一進來：框在「全部」上"), ("#listFilter", "#listFilter button:nth-of-type(2)", "自選頁點「庫存」：框滑到「庫存」上")]),
+                ("/stock.html?code=2330", "() => !document.getElementById('content').hidden && !!document.querySelector('#chartHost canvas')",
+                 [("#stockCats", "#stockCats button:nth-of-type(2)", "個股頁點「籌碼」：框在「籌碼」上"), ("#stockFactsBlocks .sf-tabs", "#stockFactsBlocks .sf-tab:nth-of-type(2)", "個股頁事實分頁點第二個：框滑過去"),
+                  ("#stockCats", "#stockCats button:nth-of-type(2)", "個股頁再點「籌碼」收回：框淡掉")]),
+            ):
+                context = browser.new_context(color_scheme="light", locale="zh-TW", timezone_id="Asia/Taipei", **PHONE)
+                page = context.new_page()
+                errors = []
+                page.on("pageerror", lambda exc, errors=errors: errors.append(str(exc)))
+                page.route("**/fonts.googleapis.com/**", lambda route: route.abort())
+                page.route("**/fonts.gstatic.com/**", lambda route: route.abort())
+                page.goto(BUILT_IN + path, wait_until="domcontentloaded")
+                page.wait_for_function(ready, timeout=30_000)
+                page.wait_for_timeout(2200)
+                for bar, tap, name in steps:
+                    if tap:
+                        page.locator(tap).first.scroll_into_view_if_needed()
+                        page.locator(tap).first.click()
+                        page.wait_for_timeout(800)
+                    got = page.evaluate(FRAME, bar)
+                    ok = got["key"] is None and got["opacity"] == "0" if "淡掉" in name else bool(got.get("on")) and got["opacity"] == "1"
+                    expect(name, ok, got)
+                expect(f"{path.split('?')[0]} 沒有程式錯誤", not errors, errors)
+                context.close()
+
         # ---- 3. 電腦寬度 ----
         context, page, errors = open_home(browser, SAMPLE, DESK)
         page.locator("#priceSummary").click()

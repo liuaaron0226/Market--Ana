@@ -1,4 +1,4 @@
-/* 看盤桌的動態層（2026-11-24 全站動態與元件設計升級，第一片：首頁）。樣式在 desk-motion.css。
+/* 看盤桌的動態層（2026-11-24 全站動態與元件設計升級；首頁、個股頁、自選股與庫存三頁共用）。樣式在 desk-motion.css。
    不改其他任何一支程式：只在旁邊看著頁面的狀態（哪一顆被選中、哪個面板開著）補上動態，所以拿掉這兩個檔，頁面就回到原本的樣子。
    1. 選中的框：每一排「選一個」的鍵有一個框（那一排的 ::before），選中哪一顆就滑到哪一顆。
    2. 分類區塊：關、換類時先讓舊的照方向退場（140 毫秒），再放行原本的點擊（home-fold.js 的開合照常跑）。
@@ -19,10 +19,12 @@
   // （一開始寫成「頁面有任何變動就全部重量一次」，量到操作時主執行緒多忙了三成，改掉）。
   const GROUPS = '.hm-cats, .chip-seg, .st-track, .sf-tabs';
   const PICKED = ':scope > button:is([aria-expanded="true"], [aria-pressed="true"], [aria-selected="true"], [aria-checked="true"])';
+  // 同一排可能同時有「展開的一類」與「開著的開關」（個股頁那一排的主力分點）：凸起的只有一顆，展開的那一類優先
+  const pickedOf = group => group.querySelector(':scope > button[aria-expanded="true"]') || group.querySelector(PICKED);
   const known = new WeakSet(), spot = new WeakMap();   // spot：每一排的框現在放在哪裡
-  const sized = 'ResizeObserver' in window ? new ResizeObserver(entries => { if (state.on) entries.forEach(entry => place(entry.target, entry.target.querySelector(PICKED), false)); }) : null;
+  const sized = 'ResizeObserver' in window ? new ResizeObserver(entries => { if (state.on) entries.forEach(entry => place(entry.target, pickedOf(entry.target), false)); }) : null;
   // 按住拖完放手（網站原本那個跟手的框收掉）時，這一個直接到位
-  const slid = new MutationObserver(list => { if (state.on) list.forEach(({ target }) => { if (!target.classList.contains('is-sliding')) place(target, target.querySelector(PICKED), false); }); });
+  const slid = new MutationObserver(list => { if (state.on) list.forEach(({ target }) => { if (!target.classList.contains('is-sliding')) place(target, pickedOf(target), false); }); });
 
   // 把框放到 key 上；key 是空的＝沒有選中的，框淡掉。animate＝滑過去，否則直接到位。
   // 框是那一排的 ::before，這裡只寫四個位置變數與兩個標記在那一排自己身上，不往裡面塞元素。
@@ -45,11 +47,11 @@
     known.add(group);
     sized?.observe(group);
     slid.observe(group, { attributes: true, attributeFilter: ['class'] });
-    if (state.on) place(group, group.querySelector(PICKED), false);
+    if (state.on) place(group, pickedOf(group), false);
   }
   function syncAll(animate) {
     if (!state.on) return;
-    document.querySelectorAll(GROUPS).forEach(group => { adopt(group); if (!group.classList.contains('is-sliding')) place(group, group.querySelector(PICKED), animate); });
+    document.querySelectorAll(GROUPS).forEach(group => { adopt(group); if (!group.classList.contains('is-sliding')) place(group, pickedOf(group), animate); });
   }
   new MutationObserver(list => {
     for (const item of list) {
@@ -57,7 +59,7 @@
         const group = item.target.parentElement;
         if (!group || !group.matches(GROUPS)) continue;
         adopt(group);
-        if (state.on && !group.classList.contains('is-sliding')) place(group, group.querySelector(PICKED), true);
+        if (state.on && !group.classList.contains('is-sliding')) place(group, pickedOf(group), true);
         continue;
       }
       for (const node of item.addedNodes) {

@@ -1,10 +1,10 @@
-/* 看盤桌的動態層（2026-11-24 全站動態與元件設計升級，第一片：首頁）。程式在 desk-motion.js。
+/* 看盤桌的動態層（2026-11-24 全站動態與元件設計升級；首頁、個股頁、自選股與庫存三頁共用）。程式在 desk-motion.js。
    疊在各頁既有的樣式上，只補「動的那一下」與按下去的回饋，不改版面、內容與顏色；陰影、圓角、顏色全部引用 bold.css 的變數。
    <html> 上的類別由 desk-motion.js 加（程式沒跑起來時這份樣式完全不作用，頁面和原本一樣）：
    .upg        基本盤：選中的框點了會滑、開與關成對、按下去都有回饋、換分類時內容照方向換。
    .upg-ss     瀏覽器支援「關的時候也有過場」（見第 3 段）。
    .upg-sheet  手機的明細板、設定是可以往下拖的底部板。
-   .upg-tabs   「選中」統一成槽裡一顆白色凸鍵（選單裡選中的項目；個股頁事實分頁，等個股頁接上這一層才看得到）。
+   .upg-tabs   「選中」統一成槽裡一顆白色凸鍵（選單裡選中的項目、個股頁事實分頁）。
    .upg-kfade  K 線換週期、換指數時新圖由淡到實。
    動的只有位置、縮放與透明度；沒有任何常駐的動畫。維護說明與各頁待辦在 DESIGN_UPGRADE.md。 */
 
@@ -147,6 +147,7 @@ html.upg-tabs .chart-menu button { position: relative; z-index: 1; }
 html.upg-tabs body.st .sf-tabs { padding: var(--track-pad); gap: var(--track-gap); border-radius: var(--r-track); background: var(--well); box-shadow: var(--well-shadow); }
 html.upg-tabs body.st .sf-tab { border-color: transparent; }
 html.upg-tabs body.st .sf-tab[aria-pressed="true"] { border-color: transparent; font-weight: 700; }
+html.upg-tabs body.st .sf-tab:active { transform: none; }
 
 /* ============ 試做 ③：K 線換資料時，新的那張圖淡進來 ============
    原本做的是「留一份舊圖蓋在上面再淡掉」，量到每換一次要多花幾十毫秒複製整張圖、格數掉到 40 以下，不合效能底線，

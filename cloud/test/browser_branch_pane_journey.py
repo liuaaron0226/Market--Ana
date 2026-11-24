@@ -49,7 +49,10 @@ STATE = """() => {
 LAYOUT = """() => {
   const chart = window.StockView.chart();
   const box = e => { const b = e.getBoundingClientRect(); return { x: b.left, y: b.top + scrollY, w: b.width, h: b.height }; };
-  const shadow = e => getComputedStyle(e).boxShadow;
+  // 凸起的樣子：鍵自己的陰影，或是那一排的框（web/desk-motion.css，那一排的 ::before）正停在這顆鍵上
+  const framed = e => { const cs = getComputedStyle(e.parentElement, '::before'); if (cs.content === 'none' || cs.opacity !== '1') return false;
+    return Math.abs(new DOMMatrixReadOnly(cs.transform).m41 - e.offsetLeft) < 1.5 && Math.abs(parseFloat(cs.width) - e.offsetWidth) < 1.5; };
+  const shadow = e => (framed(e) ? 'frame' : getComputedStyle(e).boxShadow);
   const compare = document.querySelector('#stockCats [aria-controls="comparePanel"]'), toggle = document.getElementById('branchToggle');
   const pane = document.querySelector('.kc-study-pane-branch canvas');
   return { main: box(chart.canvas), volume: box(chart.studies.volumeCanvas), pane: pane && !pane.closest('[hidden]') ? box(pane) : null,
@@ -321,11 +324,13 @@ def owner_journey(j: Journey, browser, prefix: str, options: dict, dates: list[s
 
     # 同一排只有一顆凸起：主力分點開著時再展開「比較」，凸起的是「比較」，主力分點變平但仍然開著
     press(page, compare, touch)
+    page.wait_for_timeout(700)   # 框滑到位要 0.35 秒（收回還會先等內容退場 0.14 秒）
     both = page.evaluate(LAYOUT)
     j.check(f"{prefix}主力分點開著時展開「比較」：只有「比較」凸起，副圖還在", both["compareShadow"] != "none" and both["toggleShadow"] == "none"
             and both["pressed"] == "true" and both["pane"] is not None, both)
     page.locator("#stockCats").screenshot(path=str(OUT / f"{prefix}4-row-with-compare.png"))
     press(page, compare, touch)
+    page.wait_for_timeout(700)
     alone = page.evaluate(LAYOUT)
     j.check(f"{prefix}收回「比較」：主力分點自己是凸起的鍵", alone["compareShadow"] == "none" and alone["toggleShadow"] != "none", alone)
 

@@ -334,12 +334,14 @@ def desktop(journey: Journey, browser) -> None:
     journey.check("選單每一項至少 44px 高、名稱沒被切掉、整個在畫面寬度內", menu_fits(layout, TOOL_COUNT), layout)
     page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-00-tools-menu.png"))
     page.keyboard.press("Escape")
+    menu.wait_for(state="hidden", timeout=2_000)   # 選單收起有 0.2 秒的退場（web/desk-motion.css 第 3 段），等它退完再看
     journey.check("按 Esc 收起選單、什麼都沒選", menu.is_hidden() and tools.get_attribute("aria-expanded") == "false" and item.get_attribute("aria-pressed") == "false")
     tools.focus()
     page.keyboard.press("Enter")
     opened = menu.is_visible()
     item.focus()
     page.keyboard.press("Enter")
+    menu.wait_for(state="hidden", timeout=2_000)
     journey.check("鍵盤：在「分析工具」按 Enter 打開選單、在一項上按 Enter 選中；選單收起、焦點回到鍵上，鍵上改寫「水平線」（深色）、旁邊出現離開鈕",
                   opened and tool.get_attribute("aria-pressed") == "true" and menu.is_hidden()
                   and page.evaluate("() => document.activeElement === document.getElementById('toolsKey')")

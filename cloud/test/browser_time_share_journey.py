@@ -295,6 +295,7 @@ def main() -> int:
                 j.check(f"{prefix}週期小鍵寫「日K」", page.locator(".hm-period .chart-chip").inner_text() == "日K")
                 page.locator(".bd-chart").screenshot(path=str(OUT / f"{prefix}period-menu.png"))
                 page.keyboard.press("Escape")
+                page.wait_for_timeout(350)   # 選單收起有 0.2 秒的退場（web/desk-motion.css 第 3 段）：等它退完再看還在不在
                 page.locator("#periodMenu button", has_text="分時").click() if page.locator("#periodMenu").is_visible() else None
                 stock_time_share(j, page, prefix, after_close=False)
                 j.check(f"{prefix}週期小鍵寫「分時」（不補 K）", page.locator(".hm-period .chart-chip").inner_text() == "分時")
