@@ -1110,17 +1110,18 @@
   const syncFeeds = () => { timeShareFeed.sync(); hourlyFeed.sync(); };
 
   // ---------- 畫線 ----------
-  const drawToolButtons = () => [...$('drawTools').querySelectorAll('button[data-tool]')];
+  // 「分析工具」的鍵、選單、刪除與提醒的開關（本人 11-24 選樣品 A）由 draw-tools-ui.js 畫，和大盤共用；這裡只把個股頁的狀態告訴它。
+  let toolsUI = null;
 
   function showActiveTool(tool) {
-    drawToolButtons().forEach(button => button.setAttribute('aria-pressed', String(button.dataset.tool === tool)));
     if (tool) showAlertNote(false);   // 要畫新的了：上一條的說明收掉
+    if (toolsUI) toolsUI.tool(tool);
   }
 
   // 到價提醒（本人 11-24）：只有站主、關注開關開著、不是基金（基金沒有盤中報價）時才能提醒；
   // 比價與通知在雲端每分鐘盯價的排程（cloud/lib/watch-tick.js），這裡只管線上的開關。
   const alertsPossible = () => Boolean(features.watchlist_watch_v1) && Boolean(lastResult) && !isFund(lastResult);
-  // 這裡不能提醒時在工具列那一行說一聲（線照樣畫得出來，只是不會通知）
+  // 這裡不能提醒時在圖下方那一行說一聲（線照樣畫得出來，只是不會通知）
   function showAlertNote(show) {
     $('drawNote').hidden = !show;
     $('drawNote').textContent = show ? '無法到價提醒' : '';
@@ -1132,47 +1133,26 @@
       const last = chart && chart.candles.length ? chart.candles[chart.candles.length - 1].close : null;
       change = { ...change, drawing: { ...drawing, ...(Number.isFinite(last) && last > 0 ? { ref: last } : {}), name: lastResult?.name || '' } };
       if (change.type === 'add') showAlertNote(!drawing.alert);
-      if (!$('drawAlert').hidden) $('drawAlert').setAttribute('aria-pressed', String(Boolean(drawing.alert)));
+      if (toolsUI) toolsUI.alert(drawing);
     }
     drawingSync.record(change);
   }
 
-  // 選取了一條線，工具列才出現刪除；工具收著時一起展開，刪除才按得到。
-  // 選的是到價提醒的線：多一顆提醒的開關（這裡不能提醒就不出現，改在那一行說明）。
+  // 選取了一條線：同一行出現刪除；選的是到價提醒的線，多一顆提醒的開關（這裡不能提醒就不出現，改在圖下方那一行說明）。
   function showDrawingSelection(drawing) {
-    $('drawDelete').hidden = !drawing;
     const alertLine = Boolean(drawing) && drawing.kind === 'alert';
-    $('drawAlert').hidden = !(alertLine && alertsPossible());
-    $('drawAlert').setAttribute('aria-pressed', String(alertLine && Boolean(drawing.alert)));
     showAlertNote(alertLine && !alertsPossible());
-    if (drawing && $('toolsKey').getAttribute('aria-expanded') !== 'true' && !$('toolsKey').hidden) setToolsOpen(true);
-  }
-
-  // 「分析工具」（本人 11-18）：畫線工具一開始收著，點了由左到右依序落下（time-share.css）、再點倒著收回。
-  // 收起來時，畫到一半、選取中的照 Esc 同一套放下（chart.cancelDrawing）。
-  function setToolsOpen(open) {
-    const key = $('toolsKey'), tray = $('toolsTray');
-    if ((key.getAttribute('aria-expanded') === 'true') === open) return;
-    key.setAttribute('aria-expanded', String(open));
-    tray.classList.remove('is-settled');
-    tray.classList.toggle('is-open', open);
-    tray.inert = !open;
-    if (!open && chart) chart.cancelDrawing();
-    // 動畫不播（prefers-reduced-motion）或沒有轉場時，直接算播完
-    if (open && matchMedia('(prefers-reduced-motion: reduce)').matches) tray.classList.add('is-settled');
+    if (toolsUI) toolsUI.select(drawing);
   }
 
   // 畫線在 60 分、日、週、月 K（本人 11-18：60 分也能畫，各畫各的——60 分的錨點記到時分、只在 60 分出現，見 chart-drawings.js）。
-  // 分時不能畫：鍵不出現、工具收起來。
+  // 分時不能畫：鍵不出現（畫到一半、選取中的由 chart-drawings.js 換週期時放下）。
   const DRAWABLE_PERIODS = ['60m', 'daily', 'weekly', 'monthly'];
   function syncTools(r) {
-    const allowed = Boolean(drawingSync) && DRAWABLE_PERIODS.includes(chartPeriod) && Boolean(r);
-    if (!allowed) setToolsOpen(false);
-    $('toolsKey').hidden = !allowed;
-    $('toolsTray').hidden = !allowed;  // 不能畫的週期：工具整排不在（「未儲存」提示在托盤外面，照樣看得到）
+    if (toolsUI) toolsUI.allow(Boolean(drawingSync) && DRAWABLE_PERIODS.includes(chartPeriod) && Boolean(r));
   }
 
-  // 有變動還沒存上去（存檔失敗、等著補存）時工具列那一行的右邊出現提示（秒 K、分 K 工具列收起時也在），
+  // 有變動還沒存上去（存檔失敗、等著補存）時圖下方那一行的右邊出現提示（分時把工具收起時也在），
   // 那幾條線畫得比較淡；都補存上去就消失。
   // 只剩被拒絕、不會再試的（超過上限等）時改說「沒存成」。
   function showUnsavedDrawings({ unsaved, failed, ids }) {
@@ -1193,41 +1173,18 @@
     } catch (_) { /* 畫線是附加的：失敗就維持沒有畫線 */ }
   }
 
-  // 工具列只有圖示：名稱在滑鼠停留與鍵盤聚焦時由樣式顯示，手機則是長按；長按只看名稱，不切換工具、也不刪除。
   function bindDrawTools() {
-    $('toolsKey').addEventListener('click', () => setToolsOpen($('toolsKey').getAttribute('aria-expanded') !== 'true'));
-    $('toolsTray').addEventListener('transitionend', event => {
-      if (event.target === $('toolsTray') && $('toolsTray').classList.contains('is-open')) $('toolsTray').classList.add('is-settled');
-    });
-    $('drawTools').querySelectorAll('button').forEach((button, index) => button.style.setProperty('--i', index));
+    if (drawingSync && window.DrawTools) {
+      toolsUI = window.DrawTools.mount({ bar: document.querySelector('.bd-chart-bar'), keys: document.querySelector('.ts-bar-keys'),
+        before: document.querySelector('.ts-bar-keys .bd-period'), chart: () => chart,
+        alertable: drawing => drawing.kind === 'alert' && alertsPossible() });
+    }
     // Esc 不管焦點在哪都有效（剛點完工具時焦點在按鈕上，有些瀏覽器則根本不給按鈕焦點）：放下工具、取消選取。
     document.addEventListener('keydown', event => {
       if (event.key === 'Escape' && chart) chart.cancelDrawing();
     });
-    $('drawTools').querySelectorAll('button').forEach(button => {
-      let timer = null, held = false;
-      const release = () => { clearTimeout(timer); button.classList.remove('is-tip'); };
-      button.addEventListener('pointerdown', event => {
-        held = false;
-        if (event.pointerType === 'mouse') return;
-        timer = setTimeout(() => { held = true; button.classList.add('is-tip'); }, 450);
-      });
-      ['pointerup', 'pointercancel', 'pointerleave'].forEach(type => button.addEventListener(type, release));
-      button.addEventListener('contextmenu', event => event.preventDefault());
-      // 按工具列不搬走焦點：文字標註寫到一半時再按一次文字工具是「不寫了」，按垃圾桶是刪掉那一則——
-      // 焦點要是先被按鈕拿走，輸入框會當成「確定」把寫到一半的存下去。鍵盤（Tab、Enter、空白鍵）不受影響。
-      button.addEventListener('mousedown', event => event.preventDefault());
-      button.addEventListener('click', () => {
-        if (held) { held = false; return; }
-        if (!chart) return;
-        if (button.dataset.tool) chart.setTool(button.getAttribute('aria-pressed') === 'true' ? null : button.dataset.tool);
-        else if (button.id === 'drawAlert') chart.setSelectedAlert(button.getAttribute('aria-pressed') !== 'true');
-        else if (button.id === 'drawDelete' && chart.deleteSelectedDrawing()) {
-          chart.canvas.focus({ preventScroll: true }); // 刪除鈕跟著收起：焦點交還圖表，鍵盤操作不中斷
-        }
-      });
-    });
   }
+
 
   async function loadHistory(result, sequence) {
     try {

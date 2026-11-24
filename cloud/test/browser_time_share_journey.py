@@ -145,37 +145,37 @@ def choose(page, value: str) -> None:
 
 
 def tools_journey(j: Journey, page, prefix: str) -> None:
-    key, tray, trend = page.locator("#toolsKey"), page.locator("#toolsTray"), page.locator("#drawTools button[data-tool=trend]")
-    j.check(f"{prefix}日 K：只有「分析工具」鍵，工具收著", key.is_visible() and key.get_attribute("aria-expanded") == "false"
-            and tray.bounding_box()["height"] <= 3 and float(trend.evaluate("b => getComputedStyle(b).opacity")) == 0)
+    # 本人 11-24 選樣品 A：沒有工具列，「分析工具」一枚小鍵，點了浮出分三組的選單（draw-tools-ui.js）
+    key, menu, trend = page.locator("#toolsKey"), page.locator("#drawTools"), page.locator("#drawTools button[data-tool=trend]")
+    j.check(f"{prefix}日 K：只有「分析工具」鍵，選單收著", key.is_visible() and key.get_attribute("aria-expanded") == "false"
+            and not menu.is_visible())
     keys = page.locator(".ts-bar-keys").bounding_box()
     period = page.locator(".hm-period .chart-chip").bounding_box()
     j.check(f"{prefix}分析工具鍵在週期鍵左邊", key.bounding_box()["x"] < period["x"], [key.bounding_box(), period, keys])
     page.locator(".bd-chart").screenshot(path=str(OUT / f"{prefix}tools-1-collapsed.png"))
     key.click()
-    page.wait_for_timeout(110)
-    page.locator(".bd-chart").screenshot(path=str(OUT / f"{prefix}tools-2-opening.png"))
-    page.wait_for_timeout(500)
-    opened = [float(b.evaluate("b => getComputedStyle(b).opacity")) for b in page.locator("#drawTools button[data-tool]").all()]
-    # 本人 11-24 加到十顆（量測、平行通道、到價提醒、區間成交量分布）
-    j.check(f"{prefix}點了展開：aria-expanded=true、十顆都出來、鍵變深色", key.get_attribute("aria-expanded") == "true" and opened == [1.0] * 10
-            and tray.bounding_box()["height"] > 40, opened)
-    page.locator(".bd-chart").screenshot(path=str(OUT / f"{prefix}tools-3-expanded.png"))
+    page.wait_for_timeout(450)
+    names = page.evaluate("() => [...document.querySelectorAll('#drawTools button[data-tool]')].map(b => b.textContent.trim())")
+    # 本人 11-24 加到十種（量測、平行通道、到價提醒、區間成交量分布），分線條、區間、標記三組
+    j.check(f"{prefix}點了浮出選單：aria-expanded=true、十種工具都有名稱、分三組", key.get_attribute("aria-expanded") == "true" and menu.is_visible()
+            and len(names) == 10 and all(names) and page.locator("#drawTools .dt-group").count() == 3, names)
+    page.locator(".bd-chart").screenshot(path=str(OUT / f"{prefix}tools-2-menu.png"))
     trend.click()
-    j.check(f"{prefix}展開後工具照常可選", trend.get_attribute("aria-pressed") == "true")
-    key.click()
-    page.wait_for_timeout(120)
-    page.locator(".bd-chart").screenshot(path=str(OUT / f"{prefix}tools-4-closing.png"))
-    page.wait_for_timeout(500)
-    j.check(f"{prefix}再點收回：選到一半的工具放下、托盤不可操作", key.get_attribute("aria-expanded") == "false"
-            and trend.get_attribute("aria-pressed") == "false" and tray.evaluate("t => t.inert") and tray.bounding_box()["height"] <= 3)
+    page.wait_for_timeout(200)
+    j.check(f"{prefix}選了趨勢線：選單收起、鍵寫著「趨勢線」、旁邊出現離開鍵", trend.get_attribute("aria-pressed") == "true"
+            and not menu.is_visible() and "趨勢線" in key.inner_text() and page.locator("#toolsExit").is_visible())
+    page.locator(".bd-chart").screenshot(path=str(OUT / f"{prefix}tools-3-drawing.png"))
+    page.locator("#toolsExit").click()
+    page.wait_for_timeout(200)
+    j.check(f"{prefix}按離開：工具放下、鍵回到「分析工具」", trend.get_attribute("aria-pressed") == "false"
+            and "分析工具" in key.inner_text() and not page.locator("#toolsExit").is_visible())
     key.focus()
     page.keyboard.press("Enter")
     page.wait_for_timeout(500)
-    j.check(f"{prefix}鍵盤 Enter 也能展開", key.get_attribute("aria-expanded") == "true")
-    page.keyboard.press("Space")
-    page.wait_for_timeout(500)
-    j.check(f"{prefix}鍵盤空白鍵收回", key.get_attribute("aria-expanded") == "false")
+    j.check(f"{prefix}鍵盤 Enter 也能打開選單", key.get_attribute("aria-expanded") == "true" and menu.is_visible())
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(300)
+    j.check(f"{prefix}Esc 收回選單", key.get_attribute("aria-expanded") == "false" and not menu.is_visible())
 
 
 # 分時圖十字線的狀態：直線、橫線、右邊的價位籤看不看得到，兩條線是不是虛線，橫線的高度與籤上的字。

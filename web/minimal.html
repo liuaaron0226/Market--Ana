@@ -27,6 +27,7 @@
   <link rel="stylesheet" href="impact-watch.css?v=20261120-desk74">
   <link rel="stylesheet" href="market-brief.css?v=20261120-desk74">
   <link rel="stylesheet" href="motion-fx.css?v=20261120-desk74">
+  <link rel="stylesheet" href="draw-tools-ui.css?v=20261124-tools1">
 </head>
 <body class="bd hm">
   <a class="skip-link" href="#workspace">跳到主圖</a>
@@ -147,6 +148,9 @@
             <p id="chartContext" class="sr-only">日K · 盤後資料</p>
           </div>
           <div class="chart-controls" aria-label="K線控制">
+            <!-- 分析工具（本人 11-24「大盤也要分析工具」）：鍵與選單由 draw-tools-ui.js 放在週期鍵左邊，和個股頁同一套；
+                 大盤沒有到價提醒（盯價排程只問台股個股）。左邊的提示只在有畫線還沒存上去時出現 -->
+            <span class="bd-draw-unsaved" id="drawUnsaved" role="status" hidden></span>
             <label class="period-control" for="periodSelect">
               <span class="sr-only">週期</span>
               <select id="periodSelect">
@@ -369,7 +373,10 @@
   <script src="terrain.js?v=20261120-desk74"></script>
   <script src="rotation-strong.js?v=20261120-desk74"></script>
   <script src="chart-studies.js?v=20261120-desk74"></script>
+  <script src="chart-drawings.js?v=20261120-desk74"></script>
+  <script src="drawing-sync.js?v=20261120-desk74"></script>
   <script src="kchart.js?v=20261120-desk74"></script>
+  <script src="draw-tools-ui.js?v=20261124-tools1"></script>
   <script src="time-share.js?v=20261120-desk74"></script>
   <script src="ma-lines.js?v=20261120-desk74"></script>
   <script src="chart-legend.js?v=20261120-desk74"></script>

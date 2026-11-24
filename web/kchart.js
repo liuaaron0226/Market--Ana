@@ -347,6 +347,8 @@
         this.draw(); if (drag && drag.moved) this.emit();
       });
       const up = e => {
+        // 這一下是不是給畫線用掉了（拖線、拖著畫、定位、選線）：首頁自己另外在放開時選 K 棒，看這個旗子就不會跟著選（minimal.js）
+        this.drawingTap = c === this.canvas && (drag?.kind === 'drawing' || (drag?.kind === 'create' && drag.started));
         // 放開正在拖的畫線：正常放開就定在新位置，手勢被系統取消則回原位。
         if (drag?.kind === 'drawing') { this.drawings.drop(e.type === 'pointerup'); this.draw(); }
         // 按住拖著畫的放開：放開的位置就是第二下（太近不成形就留著起點，再點一下也能畫完）；手勢被取消則起點不留。
@@ -364,6 +366,7 @@
           const drew = c === this.canvas && this.drawings && this.drawings.tap(px, e.clientY - rect.top, e.pointerType, Boolean(drag.wandered));
           // 手指這一下是給畫線的（定位、選線）：十字線不留在手指晃過的那一根，回到原本選的那一天（沒有選就收掉）
           if (drew && e.pointerType !== 'mouse') { this.hover = this.selection; this.cross = null; }
+          if (drew) this.drawingTap = true;
           if (!drew) {
             const picked = px >= g.l && px <= g.l + g.pw
               ? Math.min(this.view.end - 1, g.start + Math.floor((px - g.l) / g.step)) : -1;
