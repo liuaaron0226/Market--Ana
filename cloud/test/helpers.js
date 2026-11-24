@@ -11,7 +11,8 @@ export const MIGRATION_FILES = ["0001_init.sql", "0003_api_hits.sql", "0004_list
   "0024_gemini_usage.sql", "0025_fund_codes.sql", "0026_fund_securities.sql", "0027_stock_hourly_candles.sql",
   "0028_user_drawings_frame.sql", "0029_gemini_usage_outcome.sql", "0030_ai_model_settings.sql",
   "0031_market_news.sql", "0032_stock_news_marks.sql", "0033_news_impact.sql", "0034_impact_watch.sql",
-  "0035_market_brief.sql", "0036_broker_branches.sql", "0037_market_news_push.sql", "0038_user_drawings_tools.sql"];
+  "0035_market_brief.sql", "0036_broker_branches.sql", "0037_market_news_push.sql", "0038_user_drawings_tools.sql",
+  "0040_data_health.sql"];
 export const migrationSql = (f) => readFileSync(new URL(`../migrations/${f}`, import.meta.url), "utf8");
 const MIGRATION = MIGRATION_FILES.map(migrationSql).join("\n");
 
