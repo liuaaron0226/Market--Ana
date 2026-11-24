@@ -71,7 +71,7 @@ const ALL_ON = {
   FUGLE_API_KEY: "server-only-key",
 };
 const API_PATHS = [
-  "/api/me", "/api/features", "/api/settings/gemini-usage", "/api/settings/ai-models", "/api/holdings/level",
+  "/api/me", "/api/features", "/api/settings/gemini-usage", "/api/settings/ai-models", "/api/settings/data-health", "/api/holdings/level",
   "/api/forecast/latest", "/api/forecast/summary", "/api/forecast/history", "/api/forecast/replay",
   "/api/friend-ai", "/api/friend-ai/key", "/api/friend-ai/consent", "/api/friend-ai/digest", "/api/friend-ai/stocks",
   "/api/watchlist", "/api/watchlist/2330", "/api/holdings", "/api/holdings/2330", "/api/search-history", "/api/search-history/2330",

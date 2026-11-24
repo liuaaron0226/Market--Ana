@@ -158,6 +158,12 @@ export function indexIntradayVisible(env, isOwner) {
   return modeAllowsViewer(indexIntradayMode(env), isOwner);
 }
 
+// 資料更新狀態（2026-11-24，cloud/lib/data-health.js）：設定頁那一籤與推播提醒，都只給站主。
+// 三種狀態的寫法照舊（"owner"／"all"），兩種都只開站主；其他寫法一律是關。功能清單不放這一項，設定頁直接問入口。
+export function dataHealthVisible(env, isOwner) {
+  return threeStateMode(env?.MARKET_ANA_DATA_HEALTH) !== "off" && Boolean(isOwner);
+}
+
 // env 沒給時，事實區塊與五塊對其他人一律是關（寧可少給，不可多給）。
 export function policyForViewer(policy, isOwner, env = {}) {
   if (isOwner) return policy;

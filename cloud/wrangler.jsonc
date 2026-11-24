@@ -48,6 +48,10 @@
     // 關著時那一頁與 /api/chain-map 和不存在一樣。打開前正式資料庫要先套 0039、寫進至少一列 chain_map_flows（chain_map_bootstrap.py）。
     // 本人 2026-11-24 晚授權上線（只開站主）。資料表還沒有資料時，那一頁顯示「尚未就緒」。
     "MARKET_ANA_CHAIN_MAP": "owner",
+    // 資料更新狀態：設定頁「資料更新」那一籤（2026-11-24，cloud/lib/data-health.js）。只給站主；"owner" 或 "all" 都只開站主。
+    // 推播提醒在 cron-trigger，有自己的同名開關（cron-trigger/wrangler.toml），要等正式資料庫套了 0040 才會送。
+    // 本人 2026-11-24 晚授權上線：設定頁那一籤不需要 0040（每次打開即時判斷）。
+    "MARKET_ANA_DATA_HEALTH": "owner",
     // 本人 2026-11-16 20:2x「現在打開」：朋友 AI（已核准的朋友自己設定 Gemini 金鑰、每天用自己的金鑰產生大盤與籌碼解讀）。
     // 只認 "on"；主金鑰放在 Pages 與 GitHub 的機密設定，不寫在這裡。關閉＝拿掉這一行再部署（GitHub variable 也一起關）。
     "MARKET_ANA_FRIEND_AI": "on"

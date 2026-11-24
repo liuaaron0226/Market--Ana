@@ -3,6 +3,7 @@
 // 每日更新只做觸發，不碰網站資料；GitHub token 只需要本 repo 的 Actions: write。
 // 2026-11-16 起另外負責自選股關注的每分鐘雲端盯價（WATCH_CRON），那一段才綁網站的資料庫與報價、推播金鑰。
 import { runWatchTick } from "../cloud/lib/watch-tick.js";
+import { runDataHealthAlert } from "../cloud/lib/data-health-alert.js";
 
 const REPO = "liuaaron0226/Market--Ana";
 
@@ -72,9 +73,20 @@ export async function dispatch(cron, scheduledTime, env, fetcher = fetch) {
   return { dispatched: job.workflow, date: body.inputs.date };
 }
 
-export function runScheduled(cron, scheduledTime, env, { fetcher = fetch, watchTick = runWatchTick } = {}) {
+// 資料更新狀態的推播提醒（2026-11-24）：搭在每一個觸發 GitHub 的時段上跑（免費方案 5 個時段都用完了，不另開），
+// 和觸發互不影響——GitHub 回錯、權杖過期時照樣檢查，所以 GitHub 那邊整個停擺也會提醒。每分鐘盯價那一段不跑。
+export async function runScheduled(cron, scheduledTime, env, { fetcher = fetch, watchTick = runWatchTick, healthAlert = runDataHealthAlert } = {}) {
   if (String(cron).trim() === WATCH_CRON) return watchTick(env, { now: () => scheduledTime });
-  return dispatch(cron, scheduledTime, env, fetcher);
+  const [sent, health] = await Promise.allSettled([
+    dispatch(cron, scheduledTime, env, fetcher),
+    healthAlert(env, { now: () => scheduledTime }),
+  ]);
+  const healthResult = health.status === "fulfilled" ? health.value : { error: String(health.reason?.message || health.reason) };
+  if (sent.status === "rejected") {
+    console.log(JSON.stringify({ health: healthResult }));
+    throw sent.reason;
+  }
+  return { ...sent.value, health: healthResult };
 }
 
 export default {

@@ -47,6 +47,44 @@ test("每分鐘的時段交給雲端盯價，不觸發 GitHub；「可以留意�
   assert.deepEqual(result, { checked: 0 });
 });
 
+test("資料更新狀態的提醒搭在每一個觸發 GitHub 的時段上跑（每分鐘盯價那一段不跑），時間用排程的時間", async () => {
+  const at = Date.parse("2026-11-24T15:00:00Z");   // 台北 23:00（首頁消息美股開盤那一班）
+  let checked = null;
+  const result = await runScheduled("0 6,10,15 * * MON-FRI", at, env, {
+    fetcher: async () => ({ status: 204 }),
+    healthAlert: async (alertEnv, deps) => { checked = { alertEnv, at: deps.now() }; return { problems: 0, notified: 0, recovered: 0 }; },
+  });
+  assert.deepEqual(checked, { alertEnv: env, at });
+  assert.deepEqual(result, { dispatched: "market-news.yml", date: "2026-11-24", health: { problems: 0, notified: 0, recovered: 0 } });
+  let watchChecked = false;
+  await runScheduled(WATCH_CRON, Date.parse("2026-11-24T02:00:00Z"), env, {
+    watchTick: async () => ({ checked: 0 }), healthAlert: async () => { watchChecked = true; return {}; },
+  });
+  assert.equal(watchChecked, false);
+});
+
+test("GitHub 觸發失敗（權杖過期、GitHub 停擺）時照樣檢查資料更新狀態，觸發的錯誤照樣丟出來", async () => {
+  let checked = false;
+  await assert.rejects(runScheduled("30 3,7,8,10,12,22 * * MON-FRI", Date.parse("2026-11-24T12:30:00Z"), env, {
+    fetcher: async () => ({ status: 401 }),
+    healthAlert: async () => { checked = true; return { problems: 1, notified: 1, recovered: 0 }; },
+  }), /401/);
+  assert.equal(checked, true);
+  // 提醒本身出錯不影響觸發
+  const result = await runScheduled("0 0 * * *", Date.parse("2026-11-28T00:00:00Z"), env, {
+    fetcher: async () => ({ status: 204 }), healthAlert: async () => { throw new Error("資料庫查詢失敗"); },
+  });
+  assert.deepEqual(result, { dispatched: "announcements.yml", date: "2026-11-28", health: { error: "資料庫查詢失敗" } });
+});
+
+test("提醒的開關預設關著（wrangler.toml）；沒有開關時提醒什麼都不做", async () => {
+  const { readFileSync } = await import("node:fs");
+  const toml = readFileSync(new URL("./wrangler.toml", import.meta.url), "utf8");
+  assert.match(toml, /^MARKET_ANA_DATA_HEALTH = "off"$/m);
+  const result = await runScheduled("0 0 * * *", Date.parse("2026-11-28T00:00:00Z"), env, { fetcher: async () => ({ status: 204 }) });
+  assert.deepEqual(result.health, { skipped: "off" });
+});
+
 test("重大訊息每天（含週末）台北 8:00 觸發，只送 announcements.yml 宣告過的參數", async () => {
   const { readFileSync } = await import("node:fs");
   const workflow = readFileSync(new URL("../.github/workflows/announcements.yml", import.meta.url), "utf8").replaceAll("\r\n", "\n");   // Windows 取出的檔是 CRLF

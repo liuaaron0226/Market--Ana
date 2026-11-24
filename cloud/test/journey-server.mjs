@@ -47,6 +47,8 @@ if (process.env.MARKET_ANA_INDEX_INTRADAY) env.MARKET_ANA_INDEX_INTRADAY = proce
 // AI 產業鏈資金版圖（.scratch/ai-chain-map 票 01）的本機預覽：MARKET_ANA_CHAIN_MAP=owner 打開開關；
 // 每月資金數字那一列（chain_map_flows，0039）放在 JOURNEY_SEED_SQL（chain_map_bootstrap.py 產生的那種 SQL）。
 if (process.env.MARKET_ANA_CHAIN_MAP) env.MARKET_ANA_CHAIN_MAP = process.env.MARKET_ANA_CHAIN_MAP;
+// 資料更新狀態（2026-11-24）的本機預覽：MARKET_ANA_DATA_HEALTH=owner 打開設定頁那一籤；各份資料的紀錄放在 JOURNEY_SEED_SQL。
+if (process.env.MARKET_ANA_DATA_HEALTH) env.MARKET_ANA_DATA_HEALTH = process.env.MARKET_ANA_DATA_HEALTH;
 // 自動化驗收會在一分鐘內點完全部下鑽；額度可由第三個參數放寬（正式版額度見 gate.js RATE，不受影響）。
 // 即時行情與五檔只在換成假資料（JOURNEY_LIVE_FIXTURE）時放寬：不然旅程會真的去問證交所，盤後的收盤報價一進來就把畫面拉回最新一根。
 const fakeLive = Boolean(process.env.JOURNEY_LIVE_FIXTURE);
@@ -67,7 +69,9 @@ if (process.env.JOURNEY_PUSH === "test") {
   }
 }
 const pushFetch = async (url) => { pushed.push(String(url)); console.log(`push → ${new URL(url).host}`); return new Response(null, { status: 201 }); };
-const deps = { fetchImpl: fetchJwks(issuer.jwks), now: () => Date.now(), marketPack, stockPack, screensPack, comparePack, chainMap, rate,
+// JOURNEY_NOW（ISO）：把伺服器的「現在」固定在某一刻（資料更新狀態的旅程要固定在交易日晚上）；沒設＝真的現在。
+const fixedNow = process.env.JOURNEY_NOW ? Date.parse(process.env.JOURNEY_NOW) : null;
+const deps = { fetchImpl: fetchJwks(issuer.jwks), now: () => fixedNow ?? Date.now(), marketPack, stockPack, screensPack, comparePack, chainMap, rate,
   pushFetch };
 // 分時旅程（本人 11-18）：JOURNEY_LIVE_FIXTURE 指向一個 JSON（{ stock: 個股即時回應, index: 大盤即時回應 }），每次請求重讀，
 // 旅程中途改檔就能換成盤中／盤後。沒設時照舊連真的即時服務。

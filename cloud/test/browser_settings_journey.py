@@ -248,6 +248,120 @@ def friend_page(journey: Journey, browser, width: int) -> None:
     context.close()
 
 
+def wait_for(base: str) -> None:
+    for _ in range(100):
+        try:
+            urlopen(base + "/", timeout=1)
+        except OSError as error:
+            if getattr(error, "code", None):
+                return
+            time.sleep(0.2)
+        else:
+            return
+
+
+# ---------- 資料更新狀態（2026-11-24）：伺服器的「現在」固定在週二 11-24 22:00（台北），三種樣子各起一次伺服器 ----------
+HEALTH_NOW = "2026-11-24T22:00:00+08:00"
+HEALTH_OUT = ROOT / "design-previews/data-health"
+SHA = "a" * 64
+
+
+def health_seed(scenario: str) -> str:
+    """ok：全部正常；late：每日行情 11-24 那一班過了 21:30 還沒更新；degraded：盤勢解讀改用程式套句。"""
+    day = "2026-11-23" if scenario == "late" else "2026-11-24"
+    updated = "2026-11-23T10:12:00Z" if scenario == "late" else "2026-11-24T10:12:00Z"
+    brief_source = "template" if scenario == "degraded" else "ai"
+    return f"""
+INSERT INTO users (email, nickname, status, applied_at) VALUES ('{FRIEND}', 'F', 'approved', '2026-11-09T00:00:00Z');
+INSERT INTO stock_data_versions (version, source_date, source_url, source_sha256, built_at, catalog_count, analysis_count)
+  VALUES ('v1', '{day}', 'x', '{SHA}', '{updated}', 1, 1);
+INSERT INTO stock_data_state (key, active_version, updated_at) VALUES ('current', 'v1', '{updated}');
+INSERT INTO fund_securities (version, code, name, full_name, currency, latest_bar_date, available_bars, analysis_status) VALUES
+  ('v1', 'BLKTENAU', 'n', 'n', 'USD', '2026-11-21', 10, 'available'), ('v1', 'GLIACU', 'n', 'n', 'USD', '2026-11-21', 10, 'available');
+INSERT INTO gemini_usage_snapshots (task, run_id, taken_at, outcome, dry_run) VALUES ('daily-update', '9', '{updated[:11]}10:05:00Z', 'ok', 0);
+INSERT INTO market_news_runs (run_id, trade_date, slot, created_at, status) VALUES ('2026-11-24-close', '2026-11-24', 'close', '2026-11-24T06:08:00Z', 'ok');
+INSERT INTO market_brief_runs (trade_date, slot, generated_at, source, payload) VALUES ('2026-11-24', 'close', '2026-11-24T06:20:00Z', 'ai', '{{}}'),
+  ('2026-11-24', 'evening', '2026-11-24T10:40:00Z', '{brief_source}', '{{}}');
+INSERT INTO forecast_records (forecast_id, base_date, edition, method_version, input_version, run_mode, kind, record_json, record_sha256, published_at)
+  VALUES ('f1', '2026-11-24', 'evening', 'm', 'i', 'official', 'forecast', '{{}}', '{SHA}', '2026-11-24T10:35:00Z');
+INSERT INTO watch_judgments (judgment_id, code, base_date, edition, method_version, input_version, run_mode, kind, status, record_json, record_sha256, published_at)
+  VALUES ('j1', '2330', '2026-11-24', 'evening', 'm', 'i', 'official', 'judgment', '還沒到', '{{}}', '{SHA}', '2026-11-24T10:50:00Z');
+INSERT INTO impact_watch_facts (subject, data_date, payload, updated_at) VALUES ('market', '{day}', '{{}}', '{updated}');
+INSERT INTO broker_branch_stocks (code, updated_through, last_attempt_at) VALUES ('2330', '{day}', '2026-11-24T11:20:00Z');
+INSERT INTO watch_news_fetches (source, code, last_attempt_at, last_success_at) VALUES ('google', '2330', '2026-11-24T10:10:00Z', '2026-11-24T10:10:00Z');
+INSERT INTO overseas_fetch_status (symbol, source, attempted_at, ok, succeeded_at) VALUES ('NVDA', 'massive', '2026-11-24T10:15:00Z', 1, '2026-11-24T10:15:00Z');
+"""
+
+
+def health_rows(page) -> list[list[str]]:
+    return page.eval_on_selector_all("#settings-health li", "ls => ls.map(l => [l.dataset.health, l.dataset.state,"
+                                     " l.querySelector('.st-htime').textContent, l.querySelector('.st-hstate').textContent,"
+                                     " l.querySelector('.st-hname small')?.textContent || ''])")
+
+
+def health_journey(browser_type) -> list[dict]:
+    """設定頁「資料更新」那一籤：三種樣子、手機 390×844 與桌機 1280×800，截圖放 design-previews/data-health/。"""
+    HEALTH_OUT.mkdir(parents=True, exist_ok=True)
+    checks: list[dict] = []
+    expected = {"ok": None, "late": ("daily", "late", "延遲", "應於 11-24 21:30 前更新"),
+                "degraded": ("market_brief", "degraded", "部分異常", "改用程式套句")}
+    for scenario, problem in expected.items():
+        seed = Path(tempfile.mkdtemp()) / "health.sql"
+        seed.write_text(health_seed(scenario), encoding="utf-8")
+        port = free_port()
+        env = {**os.environ, "JOURNEY_SEED_SQL": str(seed), "MARKET_ANA_DATA_HEALTH": "owner", "JOURNEY_NOW": HEALTH_NOW}
+        server = subprocess.Popen(["node", str(ROOT / "cloud/test/journey-server.mjs"), str(port), "relaxed"], cwd=ROOT / "cloud", env=env)
+        base = f"http://127.0.0.1:{port}"
+        wait_for(base)
+        journey = Journey(base)
+        try:
+            browser = browser_type.launch()
+            for width, height in ((390, 844), (1280, 800)):
+                tag = f"資料更新 {scenario} {width}"
+                mobile = width < 700
+                context = browser.new_context(viewport={"width": width, "height": height}, is_mobile=mobile, has_touch=mobile, color_scheme="light")
+                context.route(lambda url: not url.startswith(base), lambda route: route.abort())
+                context.add_cookies([{"name": "test_as", "value": quote(OWNER), "url": base}])
+                page = context.new_page()
+                page.on("pageerror", lambda error: journey.errors.append(str(error)))
+                page.goto(base + "/minimal.html#data-health", wait_until="load")
+                page.wait_for_selector("#settings-health li", timeout=10_000)
+                tabs = page.locator("#settingsDialog [role=tab]").all_inner_texts()
+                journey.check(f"{tag}：推播帶的 #data-health 直接打開「資料更新」那一籤（排在 Gemini 用量後面）",
+                              tabs[:3] == ["Gemini 用量", "資料更新", "AI 模型"] and tabs[-1] == "外觀"
+                              and page.locator("#settings-tab-health").get_attribute("aria-selected") == "true", tabs)
+                rows = health_rows(page)
+                keys = [row[0] for row in rows]
+                journey.check(f"{tag}：一份資料一列（沒有紀錄的不列）", keys == ["daily", "plain", "market_news", "market_brief", "forecast", "watch",
+                                                                   "impact_watch", "broker_branches", "headlines", "overseas", "fund_nav"], keys)
+                bad = [row for row in rows if row[1] != "ok"]
+                if problem is None:
+                    journey.check(f"{tag}：全部正常，沒有說明小字", not bad and all(row[3] == "正常" and row[4] == "" for row in rows), bad)
+                else:
+                    journey.check(f"{tag}：只有那一列有問題，寫出狀態與怎麼了", [row[0:2] + row[3:] for row in bad] == [list(problem[0:2]) + list(problem[2:])], bad)
+                daily = next(row for row in rows if row[0] == "daily")
+                journey.check(f"{tag}：每日行情的最後更新時間（台北）", daily[2].endswith("18:12"), daily)
+                fund = next(row for row in rows if row[0] == "fund_nav")
+                journey.check(f"{tag}：基金淨值只有淨值日", fund[2] == "11-21", fund)
+                overflow = page.evaluate("() => document.querySelector('#settingsDialog').scrollWidth > document.querySelector('#settingsDialog').clientWidth")
+                journey.check(f"{tag}：浮板沒有左右捲動", not overflow)
+                page.screenshot(path=str(HEALTH_OUT / f"{scenario}-{width}x{height}.png"))
+                context.close()
+            # 朋友：沒有這一籤，入口也拿不到
+            context = browser.new_context(viewport={"width": 390, "height": 844})
+            context.add_cookies([{"name": "test_as", "value": quote(FRIEND), "url": base}])
+            page = context.new_page()
+            body = page.goto(base + "/api/settings/data-health").json()
+            journey.check(f"資料更新 {scenario}：朋友拿不到", body == {"available": False}, body)
+            context.close()
+            browser.close()
+        finally:
+            server.terminate()
+        journey.check(f"資料更新 {scenario}：頁面程式沒有丟出錯誤", not journey.errors, journey.errors[:3])
+        checks.extend(journey.checks)
+    return checks
+
+
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     seed = Path(tempfile.mkdtemp()) / "seed.sql"
@@ -256,15 +370,14 @@ def main() -> int:
     env = {**os.environ, "JOURNEY_SEED_SQL": str(seed), "MARKET_ANA_WATCHLIST_WATCH": "owner", "JOURNEY_PUSH": "test"}
     server = subprocess.Popen(["node", str(ROOT / "cloud/test/journey-server.mjs"), str(port), "relaxed"], cwd=ROOT / "cloud", env=env)
     base = f"http://127.0.0.1:{port}"
-    for _ in range(100):
-        try:
-            urlopen(base + "/", timeout=1)
-        except OSError as error:
-            if getattr(error, "code", None):
-                break
-            time.sleep(0.2)
-        else:
-            break
+    wait_for(base)
+    if os.environ.get("JOURNEY_ONLY") == "health":   # 只跑資料更新那一段
+        server.terminate()
+        with sync_playwright() as playwright:
+            checks = health_journey(playwright.chromium)
+        failed = [c for c in checks if not c["ok"]]
+        print(f"{len(checks) - len(failed)}/{len(checks)} 項通過；截圖在 {HEALTH_OUT}")
+        return 1 if failed else 0
     journey = Journey(base)
     try:
         with sync_playwright() as playwright:
@@ -277,6 +390,8 @@ def main() -> int:
             browser.close()
     finally:
         server.terminate()
+    with sync_playwright() as playwright:
+        journey.checks.extend(health_journey(playwright.chromium))
     journey.check("頁面程式沒有丟出錯誤", not journey.errors, journey.errors[:5])
     failed = [c for c in journey.checks if not c["ok"]]
     (OUT / "report.json").write_text(json.dumps({"checks": journey.checks}, ensure_ascii=False, indent=2), encoding="utf-8")
