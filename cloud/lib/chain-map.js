@@ -113,10 +113,15 @@ async function r2Flows(bucket) {
 export async function handleChainMapApi(request, env, baseline, { isOwner }) {
   if (!chainMapVisible(env, isOwner)) return chainMapUnavailable();
   if (request.method !== "GET") return json(405, { error: "方法不允許" });
-  const [fromD1, fromR2] = [await d1Flows(env.DB), await r2Flows(env.STATE)];
+  // D1 讀取出錯（不是缺表）時，R2 有資料就照樣給 R2 那一份；兩邊都沒有才把 D1 的錯丟出去（2026-11-24 第二意見審查）。
+  let d1Error = null;
+  const fromD1 = await d1Flows(env.DB).catch((error) => { d1Error = error; return null; });
+  const fromR2 = await r2Flows(env.STATE);
   const picked = fromD1 && fromR2 ? (stamp(fromR2.built_at) > stamp(fromD1.built_at) ? fromR2 : fromD1) : (fromD1 || fromR2);
+  if (!picked && d1Error) throw d1Error;
   if (!picked) return chainMapUnavailable();
-  const current = await currentDefinition(env.DB, baseline);
+  // 定義同理：D1 讀取出錯就用入庫的基準版。
+  const current = await currentDefinition(env.DB, baseline).catch(() => (baseline ? { chain: baseline, definition: { version: "file", source: "file" } } : null));
   if (!current) return chainMapUnavailable();
   return json(200, { available: true, definition: current.definition, chain: current.chain,
     flows: { source: picked.source, version: picked.version, as_of: picked.as_of, built_at: picked.built_at, ...picked.flows } });
