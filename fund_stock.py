@@ -70,6 +70,7 @@ VOLATILITY_DAYS = 14
 STRUCTURAL_KINDS = frozenset({"high_20", "low_20", "high_60", "low_60", "high_240", "low_240",
                               "swing_high", "swing_low", "ma60", "ma120", "ma240"})
 FAR_PCT = 20.0
+DATA_ISSUE_KINDS = frozenset({"gap", "nav-conflict", "dist-conflict"})   # 分析帶出去的資料提醒（fund_compare.load_history）
 Loader = Callable[..., dict[str, Any]]
 
 
@@ -259,10 +260,12 @@ def twd_quote(payload: dict[str, Any] | None) -> dict[str, Any] | None:
 
 def fund_analysis(code: str, navs: Sequence[tuple[str, float]], status: str,
                   fx: dict[str, Any] | None = None, *,
-                  distributions: Sequence[Mapping[str, Any]] = (), as_of: str | None = None) -> dict[str, Any]:
+                  distributions: Sequence[Mapping[str, Any]] = (), as_of: str | None = None,
+                  issues: Sequence[Mapping[str, Any]] = ()) -> dict[str, Any]:
     """分析契約 v2 的基金版。``navs`` 已截到資料日、至少 MIN_NAVS 筆；``status`` 是 available 或 stale；
     ``fx`` 是 ``latest_fx`` 的結果（庫存換台幣用），沒有就是 None。
-    ``distributions`` 是合併好的配息列，``as_of`` 是資料日：除息日在它之後的配息不用（06 票「配息」分類）。"""
+    ``distributions`` 是合併好的配息列，``as_of`` 是資料日：除息日在它之後的配息不用（06 票「配息」分類）。
+    ``issues`` 是 load_history 的提醒：缺日與衝突原樣放進 ``data_issues``（哪幾天、哪個數字），給提醒推播用；沒有就是空的。"""
     as_of = as_of or navs[-1][0]
     fund = fund_compare.FUNDS[code]
     strategy, levels = _strategy_and_levels(navs, status)
@@ -282,6 +285,9 @@ def fund_analysis(code: str, navs: Sequence[tuple[str, float]], status: str,
         # 基金專屬：個股頁「配息」分類（06 票）；股票的分析沒有這一欄
         "distributions": fund_distributions.summary(distributions, as_of=as_of, currency=fund["currency"]),
         "notes": {"nav_lag": NAV_LAG_NOTE},
+        # 淨值缺口（集保開放資料只留 4 個淨值日，漏抓太久就補不回來，見 seeds/funds/README.md）與兩份官方檔數字不同；
+        # 不補假數字，只照實列出。過期另看 analysis_status。
+        "data_issues": [dict(i) for i in issues if i.get("kind") in DATA_ISSUE_KINDS],
         "labels": {"not_advice": "分析數字是參考，不是買賣指令", "price_basis": f"基金淨值（{fund['currency']}），不含配息"},
     }
 
@@ -305,7 +311,8 @@ def fund_rows(as_of: str, *, loader: Loader = fund_compare.load_history,
         status = _status(navs, as_of)
         if status in ("available", "stale"):
             analyses.append({"code": code, "as_of": navs[-1][0], "payload": fund_analysis(
-                code, navs, status, fx, distributions=history["distributions"], as_of=as_of)})
+                code, navs, status, fx, distributions=history["distributions"], as_of=as_of,
+                issues=history.get("issues") or ())})
         directory.append({
             "code": code, "name": fund["short_name"], "full_name": fund["name"], "currency": fund["currency"],
             "isin": fund["isin"], "latest_bar_date": navs[-1][0] if navs else None, "available_bars": len(navs),

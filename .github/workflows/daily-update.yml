@@ -268,19 +268,20 @@ jobs:
         # 本人 11-17 定案：貝萊德世界科技 A10 和 0050 比（含息再投入、換台幣）；之後 fund_compare.FUNDS 每一檔都照同一套抓。抽取檔另存 R2 的 funds/raw/（不在工作集）：
         # 集保開放資料的淨值只留約 4 個交易日，台股休市、沒有發布的日子也要照樣累積，所以不跟工作集「發布成功才同步」。
         # 每個來源一天最多抓一次；缺日、資料衝突、太久沒新淨值都寫進執行摘要並讓這一步顯示失敗（不擋發布）。
-        # 漏抓超過約 3 個營業日會留下缺口，要到集保「基金資訊觀測站」網頁補（見 seeds/funds/BLKTENAU/backfill-manifest.json 的做法）。
+        # 另一個抓取點在 announcements.yml 的 fund-nav job（每天 08:00、含週末連假）：兩邊共用 R2 上的當天記號，先成功的那個抓，另一個不重抓。
+        # 兩邊都連續 4 個營業日沒抓成功才會留下缺口；缺口要照 seeds/funds/README.md 從集保「基金資訊觀測站」網頁補。
         continue-on-error: true
         env:
           DRY_RUN: ${{ steps.day.outputs.dry_run }}
         run: |
           status=0
           if [ -n "$DRY_RUN" ]; then
-            python fund_compare.py daily --r2 --no-upload > "$RUNNER_TEMP/fund-daily.json" || status=$?
+            python fund_compare.py daily --r2 --no-upload --summary "$GITHUB_STEP_SUMMARY" > "$RUNNER_TEMP/fund-daily.json" || status=$?
           else
-            python fund_compare.py daily --r2 > "$RUNNER_TEMP/fund-daily.json" || status=$?
+            python fund_compare.py daily --r2 --summary "$GITHUB_STEP_SUMMARY" > "$RUNNER_TEMP/fund-daily.json" || status=$?
           fi
           cat "$RUNNER_TEMP/fund-daily.json"
-          { echo "### 基金對照資料（結束碼 $status）"; echo '```json'; cat "$RUNNER_TEMP/fund-daily.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          { echo "#### 基金對照資料原始結果（結束碼 $status）"; echo '```json'; cat "$RUNNER_TEMP/fund-daily.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
 
       - name: 每日更新
