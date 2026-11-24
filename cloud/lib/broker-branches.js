@@ -1,6 +1,7 @@
 // 主力分點（本人 2026-11-24「共識達成」，.scratch/broker-branches/spec.md、contract.md；票 01）。
 // 資料由排程寫：broker_branches.py 回補與每日更新（broker_branches／broker_branch_days／broker_branch_stocks，0036）。這裡只讀。
-// 開關 MARKET_ANA_BROKER_BRANCHES（off／owner）：只有站主拿得到，沒有開給朋友的設定。
+// 開關 MARKET_ANA_BROKER_BRANCHES：原本 off／owner；本人 2026-11-24「全部功能都開放」後改成 off／owner／all（見 release-policy.js）。
+// all 時其他獲准使用者也讀得到有資料的股票；但資料目前只抓站主的自選股與庫存，所以正式設定先留 owner。
 // - /api/stocks/<代號>/branch-history：這一檔存著的每個分點、每一天的買賣超（張），緊湊格式——
 //   每個分點兩條一樣長的陣列：d 是日期整數（YYYYMMDD，舊到新）、n 是同一位置那一天的買賣超。
 //   沒有資料、資料表還沒建立 → { available: false }（個股頁就不出現「主力分點」鍵）。

@@ -48,6 +48,45 @@ test("只有站主從個股 live API 取得即時資料，核准非站主與停�
   }
 });
 
+// 本人 2026-11-24 晚「全部都開」：MARKET_ANA_LIVE_QUOTES 是 "all" 時獲准使用者也拿得到個股即時與首頁大盤即時；
+// 待審、停權照樣擋；只認一字不差的 "all"
+test("開關是 all：獲准的朋友拿得到個股即時與首頁大盤即時（同一個即時服務），待審與停權照樣拿不到", async () => {
+  env.MARKET_ANA_LIVE_QUOTES = "all";
+  deps.indexLiveService = { snapshot: async () => ({ ok: true, data: { price: 23000 }, retry_after_seconds: 0 }) };
+  for (const status of ["approved", "pending", "disabled"]) await seed(`${status}@example.com`, status);
+  const live = await req("/api/stocks/2330/live", "approved@example.com");
+  assert.equal(live.status, 200);
+  assert.equal((await live.json()).quote.price, 2265);
+  const index = await req("/api/live", "approved@example.com");
+  assert.equal(index.status, 200);
+  assert.equal((await index.json()).data.price, 23000);
+  assert.equal((await req("/api/mis-probe", "approved@example.com")).status, 403, "診斷端點照舊只給站主");
+  for (const email of ["pending@example.com", "disabled@example.com"]) {
+    assert.equal((await req("/api/stocks/2330/live", email)).status, 403, email);
+    assert.equal((await req("/api/live", email)).status, 403, email);
+  }
+  for (const value of [undefined, "owner", "ALL", "on", "true"]) {
+    env.MARKET_ANA_LIVE_QUOTES = value;
+    assert.equal((await req("/api/stocks/2330/live", "approved@example.com")).status, 403, String(value));
+    assert.equal((await req("/api/live", "approved@example.com")).status, 403, String(value));
+  }
+});
+
+test("開關是一字不差的 owner：連分時、五檔、60 分K 都收回只給站主（一個值就把富果的東西全部收回）；沒設時分時照舊大家都有", async () => {
+  await seed("approved@example.com");
+  const paths = ["/api/stocks/2330/timeshare", "/api/stocks/2330/hourly", "/api/stocks/2330/live", "/api/live"];
+  deps.indexLiveService = { snapshot: async () => ({ ok: true, data: { price: 1 }, retry_after_seconds: 0 }) };
+  deps.upstreamFetch = async () => new Response(JSON.stringify({ data: [] }), { status: 200 });
+  env.MARKET_ANA_LIVE_QUOTES = "owner";
+  for (const path of paths) {
+    assert.equal((await req(path, "approved@example.com")).status, 403, path);
+    assert.equal((await req(path)).status, 200, `站主 ${path}`);
+  }
+  delete env.MARKET_ANA_LIVE_QUOTES;
+  assert.equal((await req("/api/stocks/2330/timeshare", "approved@example.com")).status, 200, "沒設：分時照 11-18 的決定開著");
+  assert.equal((await req("/api/stocks/2330/live", "approved@example.com")).status, 403, "沒設：即時報價照舊只給站主");
+});
+
 test("MIS 診斷端點只給站主：核准非站主、待審、停權都不得經它取得即時價", async () => {
   let reached = 0;
   const probeNext = async () => { reached += 1; return new Response("probe-ok"); };
