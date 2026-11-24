@@ -49,8 +49,10 @@
   // strict 的框遇到好幾檔又沒有完全相同的，回 choose 要本人挑。
   function decide(term, choices, { strict = false } = {}) {
     if (!choices.length) return { message: `查無「${term}」，請改打代號或從清單選擇。` };
+    // 基金站上代碼不含連字號（集保 AGIF-FVM → 站上 AGIFFVM），照集保寫法打也算完全相同
     const upper = term.toUpperCase();
-    const exact = choices.find(option => option.code === upper) || choices.find(option => option.name === term);
+    const exact = choices.find(option => option.code === upper || option.code === upper.replace(/-/g, ''))
+      || choices.find(option => option.name === term);
     if (exact) return { option: exact };
     if (strict && choices.length > 1) return { choose: true, message: `有好幾檔符合「${term}」，請從下面選一檔。` };
     return { option: choices[0] };

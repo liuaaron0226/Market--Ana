@@ -399,11 +399,16 @@ class PrecomputeTest(unittest.TestCase):
     def setUp(self) -> None:
         import tempfile
         from pathlib import Path
+        from unittest import mock
         self.tmp = tempfile.TemporaryDirectory()
         self.raw = Path(self.tmp.name)
         self.loader = _FakeLoader([("2022-11-30", 1.0), ("2026-11-09", 3.0), ("2026-11-10", 3.1)])
+        # 這一組的預期值取自貝萊德的回補原件；名錄裡其他基金見 MoreFundsTest
+        self.only = mock.patch.dict(fc.FUNDS, {"BLKTENAU": fc.FUNDS["BLKTENAU"]}, clear=True)
+        self.only.start()
 
     def tearDown(self) -> None:
+        self.only.stop()
         self.tmp.cleanup()
 
     def write_fx(self) -> None:
@@ -458,14 +463,19 @@ class DailyTest(unittest.TestCase):
     def setUp(self) -> None:
         import tempfile
         from pathlib import Path
+        from unittest import mock
         import state_sync
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.store = state_sync.DirectoryStore(self.root / "r2")
         self.raw = self.root / "raw"
         self.calls: list[str] = []
+        # 這一組只看一檔（貝萊德）；名錄多檔的抓取見 MoreFundsDailyTest
+        self.only = mock.patch.dict(fc.FUNDS, {"BLKTENAU": fc.FUNDS["BLKTENAU"]}, clear=True)
+        self.only.start()
 
     def tearDown(self) -> None:
+        self.only.stop()
         self.tmp.cleanup()
 
     def get_for(self, nav: bytes, dist: bytes, cbc: bytes):
@@ -481,7 +491,7 @@ class DailyTest(unittest.TestCase):
         nav = _opendata_nav(("2026-11-09", "17.530000"), ("2026-11-12", "18.020000"))
         result = self.run_daily(self.get_for(nav, _opendata_dist(("2026-10-30", "0.162000000", "N/A")),
                                              _cbc(("2026-11-16", "32.8"), ("2022-10-31", "32.0"))))
-        self.assertEqual(result["sources"]["nav"]["status"], "saved")
+        self.assertEqual(result["sources"]["nav-BLKTENAU"]["status"], "saved")
         saved = sorted(p.name for p in self.raw.iterdir() if not p.name.startswith("fetched-"))
         self.assertEqual(saved, ["BLKTENAU-dist-2026-11-16.json", "BLKTENAU-nav-2026-11-12.json", "cbc-usdtwd-2026-11-16.json"])
         import hashlib
@@ -501,7 +511,7 @@ class DailyTest(unittest.TestCase):
         self.calls.clear()
         result = self.run_daily(get, now="2026-11-17T15:00:00+08:00")
         self.assertEqual(self.calls, [])
-        self.assertEqual(result["sources"]["nav"]["status"], "already-fetched-today")
+        self.assertEqual(result["sources"]["nav-BLKTENAU"]["status"], "already-fetched-today")
 
     def test_unchanged_file_next_day_still_counts_as_fetched_that_day(self) -> None:
         # 配息檔一個月才換一次、休市日匯率也不變：檔名相同不重寫，但當天抓過要留記號，同一天後面幾個時段不再抓。
@@ -509,10 +519,10 @@ class DailyTest(unittest.TestCase):
                            _cbc(("2026-11-16", "32.8")))
         self.run_daily(get, now="2026-11-17T09:00:00+08:00")
         second = self.run_daily(get, now="2026-11-18T09:00:00+08:00")
-        self.assertEqual(second["sources"]["dist"]["status"], "unchanged")
+        self.assertEqual(second["sources"]["dist-BLKTENAU"]["status"], "unchanged")
         self.calls.clear()
         third = self.run_daily(get, now="2026-11-18T15:00:00+08:00")
-        self.assertEqual((self.calls, third["sources"]["dist"]["status"]), ([], "already-fetched-today"))
+        self.assertEqual((self.calls, third["sources"]["dist-BLKTENAU"]["status"]), ([], "already-fetched-today"))
         self.assertIn("funds/raw/fetched-2026-11-18-dist-BLKTENAU.json", self.store.keys("funds/raw/"))
 
     def test_failed_fetch_leaves_no_mark_so_a_later_slot_retries(self) -> None:
@@ -521,7 +531,7 @@ class DailyTest(unittest.TestCase):
         self.run_daily(broken)
         get = self.get_for(_opendata_nav(("2026-11-12", "18.02")), _opendata_dist(("2026-10-30", "0.162", "N/A")),
                            _cbc(("2026-11-16", "32.8")))
-        self.assertEqual(self.run_daily(get, now="2026-11-17T15:00:00+08:00")["sources"]["nav"]["status"], "saved")
+        self.assertEqual(self.run_daily(get, now="2026-11-17T15:00:00+08:00")["sources"]["nav-BLKTENAU"]["status"], "saved")
 
     def test_restores_files_from_r2_before_fetching(self) -> None:
         self.store.put("funds/raw/BLKTENAU-nav-2026-11-05.json", b'{"old": true}')
@@ -534,13 +544,207 @@ class DailyTest(unittest.TestCase):
                 raise OSError("timeout")
             return {fc.DIST_URL: _opendata_dist(), fc.CBC_URL: _cbc(("2026-11-16", "32.8"))}[url]
         result = self.run_daily(get)
-        self.assertEqual(result["sources"]["nav"], {"status": "failed", "error": "OSError: timeout"})
+        self.assertEqual(result["sources"]["nav-BLKTENAU"], {"status": "failed", "error": "OSError: timeout"})
         self.assertEqual(result["sources"]["fx"]["status"], "saved")
 
     def test_missing_fund_rows_is_a_failure_not_an_empty_file(self) -> None:
         result = self.run_daily(self.get_for(_opendata_nav(), _opendata_dist(), _cbc(("2026-11-16", "32.8"))))
-        self.assertEqual(result["sources"]["nav"]["status"], "failed")
+        self.assertEqual(result["sources"]["nav-BLKTENAU"]["status"], "failed")
         self.assertFalse(any(p.name.startswith("BLKTENAU-nav") for p in self.raw.iterdir()))
+
+
+# ---- 名錄多檔基金（2026-11-24 加安聯收益成長 AM 穩定月收、摩根多重收益 A股穩定月配）----
+# 站上代碼要符合 CODE_PATTERN（4～12 碼大寫英數），集保代碼可能帶連字號：AGIF-FVM → 站上 AGIFFVM，FUNDS 記 tdcc_code。
+
+def _tdcc_nav(*rows: tuple[str, str, str]) -> bytes:
+    """開放資料 3-4 的整份檔（全部基金）：(集保代碼, 日期, 淨值)，第一欄帶 BOM，外加一檔不相干的。"""
+    import json
+    return json.dumps([{"﻿基金代碼": c, "日期": d.replace("-", ""), "基金淨值(金額)": v, "計價幣別": "USD"} for c, d, v in rows] +
+                      [{"﻿基金代碼": "OTHER", "日期": "20261110", "基金淨值(金額)": "1.0"}], ensure_ascii=False).encode()
+
+
+def _tdcc_dist(*rows: tuple[str, str, str, str]) -> bytes:
+    """開放資料 3-5 的整份檔：(集保代碼, 除息日, 發放日, 每單位配息)。"""
+    import json
+    return json.dumps([{"基金代碼": c, "﻿資料日期": "20261120", "配息基準日": ex.replace("-", ""), "除息日": ex.replace("-", ""),
+                        "配息發放日": pay.replace("-", ""), "單位數": amount, "可分配淨利益/配息": "N/A", "本金/配息": "N/A"}
+                       for c, ex, pay, amount in rows], ensure_ascii=False).encode()
+
+
+def _write_seed(folder, code: str, nav_csv: bytes, dist_pages: list[bytes]) -> None:
+    """和 seeds/funds/BLKTENAU 同格式的回補原件（清單逐檔記 SHA-256）。"""
+    import hashlib
+    import json
+    folder.mkdir(parents=True)
+    files = [{"file": "nav-backfill.csv", "kind": "nav", "sha256": hashlib.sha256(nav_csv).hexdigest()}]
+    (folder / "nav-backfill.csv").write_bytes(nav_csv)
+    for index, page in enumerate(dist_pages, 1):
+        name = f"distributions-backfill-p{index}.json"
+        (folder / name).write_bytes(page)
+        files.append({"file": name, "kind": "distributions", "sha256": hashlib.sha256(page).hexdigest()})
+    (folder / "backfill-manifest.json").write_text(json.dumps({"schema": "fund-backfill/v1", "fund_code": code,
+                                                               "files": files}, ensure_ascii=False), encoding="utf-8")
+
+
+class MoreFundsTest(unittest.TestCase):
+    def setUp(self) -> None:
+        import tempfile
+        from pathlib import Path
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.raw, self.seeds = self.root / "raw", self.root / "seeds"
+        self.raw.mkdir()
+        self.seeds.mkdir()
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_site_codes_fit_the_site_code_rule_and_tdcc_codes_are_kept(self) -> None:
+        import stock_codes
+        self.assertEqual(sorted(fc.FUNDS), ["AGIFFVM", "BLKTENAU", "GLIACU"])
+        for code, fund in fc.FUNDS.items():
+            self.assertRegex(code, rf"^{stock_codes.CODE_PATTERN}$", code)
+            self.assertEqual(fund["code"], code)
+            self.assertRegex(fund["class_launch"], r"^\d{4}-\d{2}-\d{2}$", code)
+            self.assertEqual(fund["currency"], "USD")
+        self.assertEqual({code: fc.tdcc_code(code) for code in fc.FUNDS},
+                         {"AGIFFVM": "AGIF-FVM", "BLKTENAU": "BLKTENAU", "GLIACU": "GLIACU"})
+        self.assertEqual((fc.FUNDS["AGIFFVM"]["isin"], fc.FUNDS["GLIACU"]["isin"]), ("LU0820561818", "LU2347655073"))
+
+    def test_open_data_rows_are_picked_by_the_tdcc_code_with_hyphen(self) -> None:
+        import json
+        rows = json.loads(_tdcc_nav(("AGIF-FVM", "2026-11-18", "6.39"), ("AGIFFVM", "2026-11-18", "9.99"),
+                                    ("GLIACU", "2026-11-18", "75.20")).decode())
+        self.assertEqual(fc.parse_opendata_nav(rows, "AGIF-FVM"), [("2026-11-18", 6.39)])
+        self.assertEqual(fc.parse_opendata_nav(rows, "GLIACU"), [("2026-11-18", 75.2)])
+
+    def test_pay_date_na_is_none_in_backfill_and_open_data(self) -> None:
+        # 安聯回補原件前 7 筆（基準日 2021/11/12～2022/05/13）的發放日、頻率、比例都是 N/A，除息日與金額有
+        import json
+        page = ('{"total":1,"list":[{"asiBaseDate":"2021/11/12","asiEnterDate":"2021/11/15","asiDate":"N/A",'
+                '"asiAmt":"0.035","asiFreq":"N/A","asiRatio1":"N/A","asiRatio2":"N/A"}],"pageNum":1}')
+        self.assertEqual(fc.parse_backfill_distributions([page]), [
+            {"ex_date": "2021-11-15", "record_date": "2021-11-12", "pay_date": None, "amount": 0.035,
+             "income_pct": None, "capital_pct": None}])
+        rows = json.loads(_tdcc_dist(("AGIF-FVM", "2026-11-14", "N/A", "0.035")).decode())
+        self.assertEqual([(d["ex_date"], d["pay_date"]) for d in fc.parse_opendata_distributions(rows, "AGIF-FVM")],
+                         [("2026-11-14", None)])
+        with self.assertRaises(ValueError):   # 除息日是含息再投入的依據，沒有就不收
+            fc.parse_backfill_distributions([page.replace('"asiEnterDate":"2021/11/15"', '"asiEnterDate":"N/A"')])
+
+    def test_pay_date_none_flows_into_the_distribution_summary(self) -> None:
+        import fund_distributions
+        summary = fund_distributions.summary([{"ex_date": "2021-11-15", "record_date": "2021-11-12", "pay_date": None,
+                                               "amount": 0.035, "income_pct": None, "capital_pct": None}],
+                                             as_of="2026-11-20", currency="USD")
+        self.assertEqual((summary["count"], summary["latest"]["pay_date"], summary["years"][0]["source"]), (1, None, "來源未公布"))
+
+    def test_no_seed_folder_is_an_empty_seed_not_an_error(self) -> None:
+        self.assertEqual(fc.load_seed("GLIACU", seed_dir=self.seeds), ([], []))
+
+    def test_fund_without_seed_builds_from_daily_extracts_and_says_the_seed_is_missing(self) -> None:
+        fc._extract_nav("AGIFFVM", _tdcc_nav(("AGIF-FVM", "2026-11-17", "6.38"), ("AGIF-FVM", "2026-11-18", "6.39"),
+                                             ("BLKTENAU", "2026-11-18", "17.20")), "2026-11-20T09:00:00+08:00", self.raw)
+        fc._extract_dist("AGIFFVM", _tdcc_dist(("AGIF-FVM", "2026-11-14", "N/A", "0.035")), "2026-11-20T09:00:00+08:00", self.raw)
+        (self.raw / "cbc-usdtwd-2026-11-18.json").write_text('{"rows": [["2026-11-18", 32.5]]}', encoding="utf-8")
+        h = fc.load_history("AGIFFVM", raw_dir=self.raw, seed_dir=self.seeds, as_of="2026-11-20")
+        self.assertEqual(h["navs"], [("2026-11-17", 6.38), ("2026-11-18", 6.39)])
+        self.assertEqual([(d["ex_date"], d["pay_date"], d["amount"]) for d in h["distributions"]], [("2026-11-14", None, 0.035)])
+        self.assertEqual(h["issues"], [{"kind": "seed-missing", "code": "AGIFFVM"}])
+        empty = fc.load_history("GLIACU", raw_dir=self.raw, seed_dir=self.seeds, as_of="2026-11-20")
+        self.assertEqual((empty["navs"], empty["issues"]), ([], [{"kind": "seed-missing", "code": "GLIACU"}]))
+
+    def test_seed_is_found_by_site_code_and_daily_rows_extend_it(self) -> None:
+        page = ('{"total":1,"list":[{"asiBaseDate":"2026/10/30","asiEnterDate":"2026/11/02","asiDate":"2026/11/10",'
+                '"asiAmt":"0.036","asiFreq":"每月","asiRatio1":"40.00%","asiRatio2":"60.00%"}],"pageNum":1}').encode()
+        _write_seed(self.seeds / "AGIFFVM", "AGIFFVM", b"2026-11-13,6.30\n2026-11-16,6.35\n", [page])
+        fc._extract_nav("AGIFFVM", _tdcc_nav(("AGIF-FVM", "2026-11-17", "6.38")), "2026-11-20T09:00:00+08:00", self.raw)
+        (self.raw / "cbc-usdtwd-2026-11-18.json").write_text('{"rows": [["2026-11-18", 32.5]]}', encoding="utf-8")
+        h = fc.load_history("AGIFFVM", raw_dir=self.raw, seed_dir=self.seeds, as_of="2026-11-20")
+        self.assertEqual(h["navs"], [("2026-11-13", 6.3), ("2026-11-16", 6.35), ("2026-11-17", 6.38)])
+        self.assertEqual((h["distributions"][0]["ex_date"], h["distributions"][0]["capital_pct"]), ("2026-11-02", 60.0))
+        self.assertEqual(h["issues"], [])
+
+    def test_precompute_reports_a_fund_without_any_nav_instead_of_crashing(self) -> None:
+        import json
+        fc._extract_nav("GLIACU", _tdcc_nav(*[("GLIACU", day, "75.2") for day in ("2026-11-09", "2026-11-10")]),
+                        "2026-11-12T09:00:00+08:00", self.raw)
+        (self.raw / "cbc-usdtwd-2026-11-16.json").write_text(json.dumps({"rows": [["2022-11-30", 31.0], ["2026-11-16", 32.8]]}),
+                                                              encoding="utf-8")
+        loader = _FakeLoader([("2022-11-30", 1.0), ("2026-11-09", 3.0), ("2026-11-10", 3.1)])
+        funds, problems = fc.precompute(loader, "2026-11-10", as_of="2026-11-12", raw_dir=self.raw, seed_dir=self.seeds,
+                                        codes=["AGIFFVM", "GLIACU"])
+        self.assertEqual(list(funds), ["GLIACU"])
+        item = json.loads(funds["GLIACU"])
+        self.assertEqual((item["code"], item["name"], item["kind"], item["listed_date"], item["history"]["points"]),
+                         ("GLIACU", "摩根多重收益 A股穩定月配", "fund", "2021-07-02", 2))
+        self.assertEqual({r["period"]: r["status"] for r in item["periods"]}["1y"], "insufficient_history")
+        self.assertIn({"kind": "seed-missing", "code": "GLIACU"}, item["issues"])
+        self.assertIn("雙方都有資料", problems["AGIFFVM"])
+
+
+class MoreFundsDailyTest(unittest.TestCase):
+    """每日抓取：名錄每一檔各自存檔、各自一筆回報；整份 3-4、3-5 一次執行只下載一次。"""
+
+    def setUp(self) -> None:
+        import tempfile
+        from pathlib import Path
+        self.tmp = tempfile.TemporaryDirectory()
+        self.raw = Path(self.tmp.name) / "raw"
+        self.calls: list[str] = []
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def get(self, url: str) -> bytes:
+        self.calls.append(url)
+        return {
+            fc.NAV_URL: _tdcc_nav(("BLKTENAU", "2026-11-18", "17.20"), ("AGIF-FVM", "2026-11-17", "6.38"),
+                                  ("AGIF-FVM", "2026-11-18", "6.39"), ("GLIACU", "2026-11-18", "75.20")),
+            fc.DIST_URL: _tdcc_dist(("BLKTENAU", "2026-10-30", "2026-11-06", "0.162"), ("AGIF-FVM", "2026-11-14", "N/A", "0.035"),
+                                    ("GLIACU", "2026-11-03", "2026-11-12", "0.40")),
+            fc.CBC_URL: _cbc(("2026-11-18", "32.5")),
+        }[url]
+
+    def test_every_fund_is_saved_under_its_site_code_with_only_its_own_rows(self) -> None:
+        import json
+        result = fc.daily(store=None, get=self.get, now="2026-11-20T09:00:00+08:00", raw_dir=self.raw)
+        self.assertEqual(sorted(self.calls), sorted([fc.NAV_URL, fc.DIST_URL, fc.CBC_URL]), "同一個網址只下載一次")
+        self.assertEqual({key: value["status"] for key, value in result["sources"].items()},
+                         {"nav-AGIFFVM": "saved", "dist-AGIFFVM": "saved", "nav-BLKTENAU": "saved", "dist-BLKTENAU": "saved",
+                          "nav-GLIACU": "saved", "dist-GLIACU": "saved", "fx": "saved"})
+        saved = sorted(p.name for p in self.raw.iterdir() if not p.name.startswith("fetched-"))
+        self.assertEqual(saved, ["AGIFFVM-dist-2026-11-20.json", "AGIFFVM-nav-2026-11-18.json", "BLKTENAU-dist-2026-11-20.json",
+                                 "BLKTENAU-nav-2026-11-18.json", "GLIACU-dist-2026-11-20.json", "GLIACU-nav-2026-11-18.json",
+                                 "cbc-usdtwd-2026-11-18.json"])
+        body = json.loads((self.raw / "AGIFFVM-nav-2026-11-18.json").read_text(encoding="utf-8"))
+        self.assertEqual((body["code"], body["tdcc_code"], body["window"], len(body["rows"])),
+                         ("AGIFFVM", "AGIF-FVM", ["2026-11-17", "2026-11-18"], 2))
+        self.calls.clear()
+        again = fc.daily(store=None, get=self.get, now="2026-11-20T15:00:00+08:00", raw_dir=self.raw)
+        self.assertEqual((self.calls, again["sources"]["nav-GLIACU"]["status"]), ([], "already-fetched-today"))
+
+    def test_one_fund_missing_from_open_data_fails_alone(self) -> None:
+        def get(url: str) -> bytes:
+            if url == fc.NAV_URL:
+                return _tdcc_nav(("BLKTENAU", "2026-11-18", "17.20"))
+            return self.get(url)
+        result = fc.daily(store=None, get=get, now="2026-11-20T09:00:00+08:00", raw_dir=self.raw)
+        self.assertEqual(result["sources"]["nav-BLKTENAU"]["status"], "saved")
+        self.assertEqual(result["sources"]["nav-AGIFFVM"], {"status": "failed", "error": "ValueError: 開放資料 3-4 沒有 AGIF-FVM 的淨值"})
+        self.assertEqual(result["sources"]["nav-GLIACU"]["status"], "failed")
+        self.assertFalse((self.raw / "fetched-2026-11-20-nav-AGIFFVM.json").exists(), "失敗的不留記號，下一個時段再抓")
+
+    def test_a_failed_download_is_tried_once_per_run_and_reported_for_every_fund(self) -> None:
+        def get(url: str) -> bytes:
+            self.calls.append(url)
+            if url == fc.NAV_URL:
+                raise OSError("timeout")
+            return self.get(url)
+        result = fc.daily(store=None, get=get, now="2026-11-20T09:00:00+08:00", raw_dir=self.raw)
+        self.assertEqual(self.calls.count(fc.NAV_URL), 1)
+        self.assertEqual({result["sources"][f"nav-{code}"]["error"] for code in fc.FUNDS}, {"OSError: timeout"})
+        self.assertEqual(result["sources"]["dist-GLIACU"]["status"], "saved")
 
 
 if __name__ == "__main__":

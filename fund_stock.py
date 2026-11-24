@@ -320,13 +320,14 @@ def _squash(text: str) -> str:
 
 def search_items(term: str, *, as_of: str, loader: Loader = fund_compare.load_history,
                  source_date: str | None = None) -> list[dict[str, Any]]:
-    """本機 live_server 的搜尋：和雲端 gate 的 SQL 同一組規則——代碼不分大小寫完全相同，或名稱／全名去掉空白後含打的字。
-    回傳和雲端搜尋 items 同形狀的列（類別「基金」、市場「境外基金」、沒有名次）。"""
+    """本機 live_server 的搜尋：和雲端 gate 的 SQL 同一組規則——代碼不分大小寫完全相同（去掉連字號，集保 AGIF-FVM 找得到站上 AGIFFVM），
+    或名稱／全名去掉空白後含打的字。回傳和雲端搜尋 items 同形狀的列（類別「基金」、市場「境外基金」、沒有名次）。"""
     needle = _squash(term)
     if not needle:
         return []
+    code_needle = needle.replace("-", "")
     codes = [code for code, fund in sorted(fund_compare.FUNDS.items())
-             if code == needle or needle in _squash(fund["short_name"]) or needle in _squash(fund["name"])]
+             if code == code_needle or needle in _squash(fund["short_name"]) or needle in _squash(fund["name"])]
     if not codes:
         return []
     rows, _, _ = fund_rows(as_of, loader=loader, codes=codes)

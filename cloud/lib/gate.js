@@ -263,6 +263,7 @@ async function handleStockSearch(request, env, email, deps, { isOwner } = {}) {
   // ETF 上站（12 票）：ETF 開關對這個人是開的時候，再把 ETF 名錄（etf_securities）一起搜，類別記成 ETF。
   // 基金上站（基金當成一般個股 03 票）：基金開關對這個人是開的時候，再把基金名錄（fund_securities）一起搜，
   // 類別「基金」、市場「境外基金」，沒有名次。基金名稱有空白（「貝萊德世界科技 A10」），比對時兩邊都去掉空白、代碼不分大小寫。
+  // 站上基金代碼不含連字號（集保 AGIF-FVM → 站上 AGIFFVM，fund_compare.FUNDS 的 tdcc_code），照集保寫法打也找得到。
   const tail = "latest_bar_date, available_bars, analysis_status, universe_rank, universe_rule";
   const match = "WHERE version = ? AND (code = ? OR name LIKE ? ESCAPE '\\')";
   const order = "ORDER BY CASE WHEN code = ? THEN 0 WHEN name = ? THEN 1 ELSE 2 END, code LIMIT ? OFFSET ?";
@@ -275,7 +276,7 @@ async function handleStockSearch(request, env, email, deps, { isOwner } = {}) {
       sql: `SELECT code, name, market, 'ETF' AS security_type, ${tail} FROM etf_securities ${match}` });
   }
   if (stockFundsVisible(env, isOwner)) {
-    parts.push({ table: "fund_securities", args: [active.version, query.toUpperCase(), squashed, squashed],
+    parts.push({ table: "fund_securities", args: [active.version, query.toUpperCase().replace(/-/g, ""), squashed, squashed],
       sql: "SELECT code, name, '境外基金' AS market, '基金' AS security_type, latest_bar_date, available_bars, analysis_status, " +
         "NULL AS universe_rank, NULL AS universe_rule FROM fund_securities WHERE version = ? AND (code = ? OR " +
         "REPLACE(name, ' ', '') LIKE ? ESCAPE '\\' OR REPLACE(full_name, ' ', '') LIKE ? ESCAPE '\\')" });

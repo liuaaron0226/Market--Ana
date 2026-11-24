@@ -197,3 +197,36 @@ test("基金開關對這個人關著：不能新增自選或庫存；之前存�
   assert.equal((await req("/api/holdings", OWNER, { method: "POST", body: { code: FUND.code, shares: 1, total_cost_twd: 700 } })).status, 201);
   assert.equal((await fundHolding(OWNER)).market_value, 686.4);
 });
+
+// 名錄多檔基金（2026-11-24 加安聯收益成長 AGIFFVM、摩根多重收益 GLIACU）：每一檔都和第一檔一樣能進自選與庫存。
+// 站上代碼不含連字號（集保 AGIF-FVM → 站上 AGIFFVM）；還沒有回補歷史、淨值不足 20 筆的那檔名錄記 insufficient、沒有分析，
+// 照樣能加，只是沒有價格（和淨值缺的時候同一個規則）。
+test("名錄裡的第二、三檔基金：自選與庫存照第一檔的規則；沒有分析的那檔沒有價格、不問證交所", async () => {
+  const more = [
+    { code: "AGIFFVM", name: "安聯收益成長 AM 穩定月收", full_name: "安聯收益成長基金-AM穩定月收類股(美元)", isin: "LU0820561818", bars: 1209, status: "available" },
+    { code: "GLIACU", name: "摩根多重收益 A股穩定月配", full_name: "摩根投資基金 - 多重收益基金 - JPM多重收益(美元對沖) - A股(穩定月配)", isin: "LU2347655073", bars: 3, status: "insufficient" },
+  ];
+  for (const fund of more) {
+    await run("INSERT INTO fund_securities (version, code, name, full_name, currency, isin, latest_bar_date, available_bars, analysis_status) " +
+      "VALUES (?, ?, ?, ?, 'USD', ?, '2026-11-12', ?, ?)", VERSION, fund.code, fund.name, fund.full_name, fund.isin, fund.bars, fund.status);
+  }
+  await run("INSERT INTO stock_analysis (version, code, as_of, payload) VALUES (?, 'AGIFFVM', '2026-11-12', ?)", VERSION,
+    JSON.stringify(fundAnalysis({ code: "AGIFFVM", name: more[0].name, full_name: more[0].full_name,
+      quote: { close: 6.4, previous_close: 6.41, change: -0.01, chg_pct: -0.16, change_sign: "-", nav_date: "2026-11-12", currency: "USD" } })));
+  for (const fund of more) {
+    const created = await json(await req("/api/watchlist", FRIEND, { method: "POST", body: { code: fund.code.toLowerCase() } }));
+    assert.equal(created.status, 201, fund.code);
+    assert.deepEqual([created.body.code, created.body.name, created.body.market], [fund.code, fund.name, "境外基金"], fund.code);
+    assert.equal((await req("/api/holdings", FRIEND, { method: "POST", body: { code: fund.code, shares: 100, total_cost_twd: 20000 } })).status, 201, fund.code);
+  }
+  assert.deepEqual((await json(await req("/api/watchlist", FRIEND))).body.items.map((item) => item.code).sort(), ["AGIFFVM", "GLIACU"]);
+  const holdings = Object.fromEntries((await json(await req("/api/holdings", FRIEND))).body.items.map((item) => [item.code, item]));
+  // 6.4 美元 × 32.5 ＝ 每單位 208 元；100 單位 ＝ 20,800 元；成本 20,000 → 賺 800（4%）
+  assert.deepEqual([holdings.AGIFFVM.kind, holdings.AGIFFVM.latest_price, holdings.AGIFFVM.market_value, holdings.AGIFFVM.return_pct],
+    ["fund", 208, 20800, 4]);
+  assert.deepEqual([holdings.GLIACU.kind, holdings.GLIACU.latest_price, holdings.GLIACU.market_value, holdings.GLIACU.total_cost_twd],
+    ["fund", null, null, 20000]);
+  assert.equal((await req("/api/watchlist", FRIEND, { method: "POST", body: { code: "AGIF-FVM" } })).status, 400,
+    "連字號不是站上代碼；搜尋把 AGIF-FVM 對到 AGIFFVM，加入時送的是站上代碼");
+  assert.deepEqual(quoteCalls, [], "基金代碼不拿去問證交所即時行情");
+});

@@ -88,8 +88,15 @@ def parse_nav_csv(text: str) -> list[tuple[str, float]]:
     return rows
 
 
+def _iso_or_none(text: Any) -> str | None:
+    """配息基準日、發放日：集保較早的配息列有的寫 N/A（例如安聯收益成長 2021-11～2022-05 的發放日），照實記成沒有。"""
+    clean = "" if text is None else str(text).strip()
+    return None if clean in ("", "N/A", "-") else _iso(clean)
+
+
 def _distribution(ex: Any, record: Any, pay: Any, amount: Any, income: Any, capital: Any) -> dict[str, Any]:
-    return {"ex_date": _iso(ex), "record_date": _iso(record), "pay_date": _iso(pay), "amount": float(amount),
+    """除息日與每單位金額一定要有（含息再投入靠它們）；基準日、發放日、來源比例沒公布就是 None。"""
+    return {"ex_date": _iso(ex), "record_date": _iso_or_none(record), "pay_date": _iso_or_none(pay), "amount": float(amount),
             "income_pct": _pct(income), "capital_pct": _pct(capital)}
 
 
@@ -103,14 +110,22 @@ def parse_backfill_distributions(pages: Iterable[str]) -> list[dict[str, Any]]:
     return sorted(out, key=lambda d: d["ex_date"])
 
 
+def tdcc_code(code: str) -> str:
+    """站上代碼 → 集保基金代碼（開放資料「基金代碼」欄、基金資訊觀測站網址的 key）。
+
+    站上代碼要符合 stock_codes.CODE_PATTERN（4～12 碼大寫英數，路由、使用者資料、D1 主鍵都靠它），
+    集保代碼可能帶連字號（安聯 AGIF-FVM），所以 FUNDS 另記 ``tdcc_code``；沒記的就是同一個。"""
+    return FUNDS.get(code, {}).get("tdcc_code", code)
+
+
 def parse_opendata_nav(rows: Iterable[Mapping[str, Any]], code: str) -> list[tuple[str, float]]:
-    """集保開放資料 3-4（境外基金淨值）裡這檔的列。"""
+    """集保開放資料 3-4（境外基金淨值）裡這檔的列；``code`` 是集保基金代碼。"""
     return sorted((_iso(_field(r, "日期")), float(_field(r, "基金淨值(金額)")))
                   for r in rows if _field(r, "基金代碼") == code)
 
 
 def parse_opendata_distributions(rows: Iterable[Mapping[str, Any]], code: str) -> list[dict[str, Any]]:
-    """集保開放資料 3-5（境外基金配息資訊）裡這檔的列；「單位數」是每單位配息金額（原幣）。"""
+    """集保開放資料 3-5（境外基金配息資訊）裡這檔的列；``code`` 是集保基金代碼；「單位數」是每單位配息金額（原幣）。"""
     out = [_distribution(_field(r, "除息日"), _field(r, "配息基準日"), _field(r, "配息發放日"), _field(r, "單位數"),
                          _field(r, "可分配淨利益/配息"), _field(r, "本金/配息"))
            for r in rows if _field(r, "基金代碼") == code]
@@ -122,8 +137,12 @@ def _sha256(data: bytes) -> str:
 
 
 def load_seed(code: str, *, seed_dir: Path = SEED_DIR) -> tuple[list[tuple[str, float]], list[dict[str, Any]]]:
-    """瀏覽器回補的原件：逐檔核對清單上的 SHA-256，對不上就停（不拿被改過的檔算）。"""
+    """瀏覽器回補的原件（資料夾用站上代碼 ``seeds/funds/<代碼>/``）：逐檔核對清單上的 SHA-256，對不上就停（不拿被改過的檔算）。
+
+    還沒有回補清單的基金（剛加進 FUNDS、原件還沒讀）回兩個空的：只用每日抽取檔，load_history 另記 seed-missing。"""
     folder = seed_dir / code
+    if not (folder / "backfill-manifest.json").exists():
+        return [], []
     manifest = json.loads((folder / "backfill-manifest.json").read_text(encoding="utf-8"))
     nav_files: list[list[tuple[str, float]]] = []
     pages: list[str] = []
@@ -213,9 +232,23 @@ RAW_DIR = ROOT / "data/funds/raw"
 R2_PREFIX = "funds/raw/"
 TAIPEI = timezone(timedelta(hours=8))
 FX_FROM = "2022-11-01"   # 集保淨值從 2022-12-01 起；匯率留到那之前一點就夠
+# 鍵與 code 是站上代碼（stock_codes.CODE_PATTERN）；tdcc_code 是集保基金代碼（開放資料篩選、基金資訊觀測站網址用）。
+# 回補原件放 seeds/funds/<站上代碼>/；還沒有原件的基金照樣建置，只用每日抽取檔（資料不足時名錄記 insufficient）。
 FUNDS: dict[str, dict[str, str]] = {
-    "BLKTENAU": {"code": "BLKTENAU", "isin": "LU2533723974", "currency": "USD", "class_launch": "2022-10-26",
+    "BLKTENAU": {"code": "BLKTENAU", "tdcc_code": "BLKTENAU", "isin": "LU2533723974", "currency": "USD",
+                 "class_launch": "2022-10-26",
                  "name": "貝萊德世界科技基金 A10美元(總報酬穩定配息)", "short_name": "貝萊德世界科技 A10"},
+    # 級別成立日 2012-10-16：安聯投信 tw.allianzgi.com 基金頁「自成立日(2012/10/16)以來」（2026-11-24 查）；
+    # 自由財經 ec.ltn.com.tw/fund_detail/foreign/TLZ64 同列成立日期 2012/10/16。
+    "AGIFFVM": {"code": "AGIFFVM", "tdcc_code": "AGIF-FVM", "isin": "LU0820561818", "currency": "USD",
+                "class_launch": "2012-10-16",
+                "name": "安聯收益成長基金-AM穩定月收類股(美元)", "short_name": "安聯收益成長 AM 穩定月收"},
+    # TODO 待核實 class_launch：2021-07-02 取自 Yahoo 奇摩基金 tw.stock.yahoo.com/fund/summary/F00001CI86:FO（晨星資料，非一手）；
+    # 摩根投信與集保基金資訊觀測站頁面（JS 動態載入）2026-11-24 都沒讀到級別成立日，回補原件到手時請核對。
+    "GLIACU": {"code": "GLIACU", "tdcc_code": "GLIACU", "isin": "LU2347655073", "currency": "USD",
+               "class_launch": "2021-07-02",
+               "name": "摩根投資基金 - 多重收益基金 - JPM多重收益(美元對沖) - A股(穩定月配)",
+               "short_name": "摩根多重收益 A股穩定月配"},
 }
 
 
@@ -249,29 +282,32 @@ def _save(raw_dir: Path, name: str, payload: dict[str, Any]) -> str:
 
 
 def _extract_nav(code: str, content: bytes, fetched_at: str, raw_dir: Path) -> dict[str, Any]:
+    """抽取檔以站上代碼命名（<代碼>-nav-<日期>.json），列照集保原樣保留（基金代碼欄是集保代碼）。"""
+    source = tdcc_code(code)
     records = json.loads(content.decode("utf-8-sig"))
-    mine = [r for r in records if _field(r, "基金代碼") == code]
+    mine = [r for r in records if _field(r, "基金代碼") == source]
     if not mine:
-        raise ValueError(f"開放資料 3-4 沒有 {code} 的淨值")
-    days = [d for d, _ in parse_opendata_nav(mine, code)]
+        raise ValueError(f"開放資料 3-4 沒有 {source} 的淨值")
+    days = [d for d, _ in parse_opendata_nav(mine, source)]
     status = _save(raw_dir, f"{code}-nav-{days[-1]}.json", {
         "schema": "fund-extract/v1", "source": "集保結算所開放資料 3-4 境外基金淨值", "url": NAV_URL, "license": LICENSE,
         "fetched_at": fetched_at, "file_sha256": _sha256(content), "file_bytes": len(content), "file_rows": len(records),
-        "code": code, "window": [days[0], days[-1]], "rows": mine})
+        "code": code, "tdcc_code": source, "window": [days[0], days[-1]], "rows": mine})
     return {"status": status, "window": [days[0], days[-1]]}
 
 
 def _extract_dist(code: str, content: bytes, fetched_at: str, raw_dir: Path) -> dict[str, Any]:
+    source = tdcc_code(code)
     records = json.loads(content.decode("utf-8-sig"))
-    mine = [r for r in records if _field(r, "基金代碼") == code]
+    mine = [r for r in records if _field(r, "基金代碼") == source]
     if not mine:
-        raise ValueError(f"開放資料 3-5 沒有 {code} 的配息")
-    parsed = parse_opendata_distributions(mine, code)
+        raise ValueError(f"開放資料 3-5 沒有 {source} 的配息")
+    parsed = parse_opendata_distributions(mine, source)
     data_day = max(_iso(_field(r, "資料日期")) for r in mine)
     status = _save(raw_dir, f"{code}-dist-{data_day}.json", {
         "schema": "fund-extract/v1", "source": "集保結算所開放資料 3-5 境外基金配息資訊", "url": DIST_URL, "license": LICENSE,
         "fetched_at": fetched_at, "file_sha256": _sha256(content), "file_bytes": len(content), "file_rows": len(records),
-        "code": code, "data_date": data_day, "rows": mine})
+        "code": code, "tdcc_code": source, "data_date": data_day, "rows": mine})
     return {"status": status, "latest_ex_date": parsed[-1]["ex_date"]}
 
 
@@ -314,32 +350,43 @@ def sync_up(store, raw_dir: Path = RAW_DIR) -> int:
 
 def daily(*, store, get: Callable[[str], bytes] | None = None, now: str | None = None,
           raw_dir: Path = RAW_DIR, upload: bool = True) -> dict[str, Any]:
-    """補齊 R2 已有的抽取檔 → 每個來源一天最多抓一次 → 只留這檔的列存檔 → 上傳新的。
+    """補齊 R2 已有的抽取檔 → 每檔基金的每個來源一天最多抓一次 → 只留那檔的列存檔 → 上傳新的。
 
     開放資料淨值只留約 4 個交易日：每個平日都跑，漏一次下一次仍涵蓋得到；漏太久由缺日檢查報出來。
-    一個來源失敗不擋其他來源，也不擋每日更新（工作流程裡這一步 continue-on-error）。"""
+    一個來源失敗不擋其他來源，也不擋每日更新（工作流程裡這一步 continue-on-error）。
+    回報的 sources 以當天記號的名字為鍵（nav-<代碼>、dist-<代碼>、fx），每檔各自一筆；
+    同一個網址（3-4、3-5 是整份全部基金）一次執行只下載一次，幾檔基金共用。"""
     get = get or _http_get
     now = now or datetime.now(TAIPEI).isoformat(timespec="seconds")
     today = now[:10]
     downloaded = sync_down(store, raw_dir) if store is not None else 0
     raw_dir.mkdir(parents=True, exist_ok=True)
     sources: dict[str, Any] = {}
-    jobs: list[tuple[str, str, str, Callable[[bytes], dict[str, Any]]]] = []
+    jobs: list[tuple[str, str, Callable[[bytes], dict[str, Any]]]] = []
     for code in FUNDS:
-        jobs.append(("nav", f"nav-{code}", NAV_URL, lambda c, code=code: _extract_nav(code, c, now, raw_dir)))
-        jobs.append(("dist", f"dist-{code}", DIST_URL, lambda c, code=code: _extract_dist(code, c, now, raw_dir)))
-    jobs.append(("fx", "fx", CBC_URL, lambda c: _extract_fx(c, now, raw_dir)))
-    for key, mark, url, extract in jobs:
+        jobs.append((f"nav-{code}", NAV_URL, lambda c, code=code: _extract_nav(code, c, now, raw_dir)))
+        jobs.append((f"dist-{code}", DIST_URL, lambda c, code=code: _extract_dist(code, c, now, raw_dir)))
+    jobs.append(("fx", CBC_URL, lambda c: _extract_fx(c, now, raw_dir)))
+    fetched: dict[str, bytes | Exception] = {}
+    for mark, url, extract in jobs:
         mark_path = raw_dir / _mark_name(today, mark)
         if mark_path.exists():
-            sources[key] = {"status": "already-fetched-today"}
+            sources[mark] = {"status": "already-fetched-today"}
             continue
+        if url not in fetched:
+            try:
+                fetched[url] = get(url)
+            except Exception as error:  # noqa: BLE001 —— 下載失敗也只記下來；同一個網址這次不再重試
+                fetched[url] = error
         try:
-            sources[key] = extract(get(url))
+            content = fetched[url]
+            if isinstance(content, Exception):
+                raise content
+            sources[mark] = extract(content)
         except Exception as error:  # noqa: BLE001 —— 任何一個來源壞掉都只記下來
-            sources[key] = {"status": "failed", "error": f"{type(error).__name__}: {error}"}
+            sources[mark] = {"status": "failed", "error": f"{type(error).__name__}: {error}"}
             continue
-        mark_path.write_bytes(_extract_bytes({"fetched_at": now, "url": url, **sources[key]}))
+        mark_path.write_bytes(_extract_bytes({"fetched_at": now, "url": url, **sources[mark]}))
     uploaded = sync_up(store, raw_dir) if (store is not None and upload) else 0
     return {"now": now, "downloaded": downloaded, "sources": sources, "uploaded": uploaded}
 
@@ -351,21 +398,27 @@ def _read(path: Path) -> dict[str, Any]:
 
 
 def load_history(code: str, *, raw_dir: Path = RAW_DIR, seed_dir: Path = SEED_DIR, as_of: str) -> dict[str, Any]:
-    """回補原件（先）＋每日抽取檔（依檔名＝日期由舊到新）→ 淨值、配息、匯率與提醒（衝突、缺日、過期）。"""
+    """回補原件（先）＋每日抽取檔（依檔名＝日期由舊到新）→ 淨值、配息、匯率與提醒（衝突、缺日、過期、沒有回補原件）。
+
+    檔名用站上代碼；抽取檔裡的列照集保原樣，用集保代碼（tdcc_code）篩。"""
+    source = tdcc_code(code)
     seed_navs, seed_dists = load_seed(code, seed_dir=seed_dir)
     nav_sources, dist_sources = [seed_navs], [seed_dists]
     windows = [(seed_navs[0][0], seed_navs[-1][0])] if seed_navs else []
     for path in sorted(raw_dir.glob(f"{code}-nav-*.json")) if raw_dir.exists() else []:
         body = _read(path)
-        nav_sources.append(parse_opendata_nav(body["rows"], code))
+        nav_sources.append(parse_opendata_nav(body["rows"], source))
         windows.append(tuple(body["window"]))
     for path in sorted(raw_dir.glob(f"{code}-dist-*.json")) if raw_dir.exists() else []:
-        dist_sources.append(parse_opendata_distributions(_read(path)["rows"], code))
+        dist_sources.append(parse_opendata_distributions(_read(path)["rows"], source))
     navs, nav_issues = merge_navs(nav_sources)
     dists, dist_issues = merge_distributions(dist_sources)
     fx_files = sorted(raw_dir.glob("cbc-usdtwd-*.json")) if raw_dir.exists() else []
     fx = [(str(d), float(v)) for d, v in _read(fx_files[-1])["rows"]] if fx_files else []
     issues = [*nav_issues, *dist_issues, *find_gaps([d for d, _ in navs], windows=windows)]
+    if not seed_navs:
+        # 還沒從集保網頁回補歷史：只有每日抽取檔累積的幾天，報酬與策略照資料不足處理
+        issues.insert(0, {"kind": "seed-missing", "code": code})
     stale = staleness(navs[-1][0], as_of=as_of) if navs else None
     if stale:
         issues.append(stale)

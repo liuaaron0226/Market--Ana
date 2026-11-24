@@ -83,6 +83,25 @@ test("搜尋：貝萊德、世界科技、A10、a10、BLKTENAU、blktenau、世�
   }
 });
 
+// 名錄多檔基金（2026-11-24）：站上代碼不含連字號（集保 AGIF-FVM → 站上 AGIFFVM），照集保寫法打也找得到；
+// 還沒有回補歷史的那檔（insufficient、沒有分析）照樣搜得到，analysis_available 是 false。
+test("搜尋：名錄裡的第二、三檔基金用代碼（含集保的連字號寫法）或名稱都找得到", async () => {
+  env.MARKET_ANA_STOCK_FUNDS = "all";
+  await run("INSERT INTO fund_securities (version, code, name, full_name, currency, isin, latest_bar_date, available_bars, analysis_status) " +
+    "VALUES (?, 'AGIFFVM', '安聯收益成長 AM 穩定月收', '安聯收益成長基金-AM穩定月收類股(美元)', 'USD', 'LU0820561818', '2026-11-20', 1209, 'available')", VERSION);
+  await run("INSERT INTO fund_securities (version, code, name, full_name, currency, isin, latest_bar_date, available_bars, analysis_status) " +
+    "VALUES (?, 'GLIACU', '摩根多重收益 A股穩定月配', '摩根投資基金 - 多重收益基金 - JPM多重收益(美元對沖) - A股(穩定月配)', 'USD', 'LU2347655073', '2026-11-20', 3, 'insufficient')", VERSION);
+  for (const [q, code] of [["AGIF-FVM", "AGIFFVM"], ["agif-fvm", "AGIFFVM"], ["AGIFFVM", "AGIFFVM"], ["安聯收益成長", "AGIFFVM"],
+    ["AM穩定月收", "AGIFFVM"], ["GLIACU", "GLIACU"], ["gliacu", "GLIACU"], ["摩根多重收益", "GLIACU"], ["JPM多重收益(美元對沖)", "GLIACU"]]) {
+    const body = await search(FRIEND, q);
+    assert.deepEqual(body.items.map((item) => [item.code, item.security_type, item.market]), [[code, "基金", "境外基金"]], q);
+  }
+  const [pending] = (await search(FRIEND, "GLIACU")).items;
+  assert.deepEqual([pending.analysis_status, pending.analysis_available, pending.available_bars], ["insufficient", false, 3]);
+  assert.deepEqual((await search(FRIEND, "AGIF-")).items, [], "代碼要完全相同，打一半不算");
+  assert.deepEqual((await search(FRIEND, "貝萊德")).items.map((item) => item.code), [FUND.code], "第一檔照舊");
+});
+
 test("搜尋：開關三種狀態 × 站主與其他獲准使用者；關的人搜不到基金，普通股照舊", async () => {
   for (const [value, open] of SWITCH_CASES) {
     setSwitch(value);
