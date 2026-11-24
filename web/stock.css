@@ -546,7 +546,7 @@ body.st .hm-cats { margin-top: 14px; }
 .kc-studies .kc-study-pane-branch .bp-chip[hidden] { display: none; }
 .kc-studies .kc-study-pane-branch .bp-chip span + span { margin-left: 6px; }
 .kc-studies .kc-study-pane-branch .bp-chip .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
-.kc-studies .bp-menu { z-index: 5; min-width: 196px; max-height: 300px; overflow-y: auto; overscroll-behavior: contain; }
+.kc-studies .bp-menu { z-index: 5; min-width: 196px; max-height: 300px; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 .kc-studies .bp-menu .kc-study-choice { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
 .kc-studies .bp-menu .kc-study-choice .num { font: 500 13px/1 var(--mono); font-variant-numeric: tabular-nums; }
 /* 「主力分點」開著、同一排又展開了一類：凸起的鍵只留給展開的那一類（一排只有一顆凸起），

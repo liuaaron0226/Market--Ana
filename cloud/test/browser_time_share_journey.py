@@ -184,7 +184,8 @@ CROSS_JS = """() => { const svg = document.querySelector('#timeShare svg.ts-svg'
   const shown = e => getComputedStyle(e).visibility === 'visible';
   const box = svg.getBoundingClientRect(), rect = tag.querySelector('rect').getBoundingClientRect();
   return { on: shown(g), v: shown(v), h: shown(h), tag: shown(tag), dash: [getComputedStyle(v).strokeDasharray, getComputedStyle(h).strokeDasharray],
-    hy: Number(h.getAttribute('y1')), text: tag.querySelector('text').textContent, gap: box.right - rect.right, top: rect.top - box.top, height: box.height }; }"""
+    hy: Number(h.getAttribute('y1')), cy: Number(g.querySelector('circle').getAttribute('cy')),
+    text: tag.querySelector('text').textContent, gap: box.right - rect.right, top: rect.top - box.top, height: box.height }; }"""
 NUMBER = __import__("re").compile(r"^[\d,]+(\.\d+)?$")
 
 
@@ -194,8 +195,9 @@ def hold(cdp, page, x: float, y: float, end: bool = False) -> None:
     page.wait_for_timeout(120)
 
 
-# 本人 2026-11-24「除了垂直虛線，也要有水平虛線」：游標／手指在價格那一塊時，橫線跟著它的高度、右邊標那個高度的價位；
-# 個股移到量的那一塊標那個高度的量（大盤沒有量的數字，只畫線）。volume：這張圖有沒有量的那一塊；lots：量的那一塊標不標數字。
+# 本人 2026-11-24「除了垂直虛線，也要有水平虛線」，同日更正「水平虛線是要直接對準我點到那天的收盤價」：
+# 分時的橫線對準選到那一分鐘的價格（價格線上那個點的高度），和游標／手指的高度無關；右邊標那個價位。
+# volume：這張圖有沒有量的那一塊（手指移到量那一塊，橫線照樣在那一分鐘的價格）；lots 保留給舊呼叫。
 def cross_check(j: Journey, context, page, prefix: str, name: str, volume: bool, lots: bool) -> None:
     touch = prefix == "mobile-"
     svg = page.locator("#timeShare svg.ts-svg")
@@ -216,16 +218,15 @@ def cross_check(j: Journey, context, page, prefix: str, name: str, volume: bool,
         return state
 
     price = at(70)
-    j.check(f"{prefix}{name}分時十字線：直線之外多一條橫的虛線，在游標／手指的高度，右邊標那個高度的價位",
-            price["on"] and price["v"] and price["h"] and price["tag"] and price["dash"] == ["3px, 3px", "3px, 3px"] and abs(price["hy"] - 70) <= 1.5
-            and bool(NUMBER.match(price["text"])) and -0.5 <= price["gap"] <= 3 and abs(price["top"] + 9 - 70) <= 1.5, price)
+    j.check(f"{prefix}{name}分時十字線：直線之外多一條橫的虛線，對準那一分鐘的價格（價格線上的點），右邊標那個價位",
+            price["on"] and price["v"] and price["h"] and price["tag"] and price["dash"] == ["3px, 3px", "3px, 3px"] and abs(price["hy"] - price["cy"]) <= 1
+            and bool(NUMBER.match(price["text"])) and -0.5 <= price["gap"] <= 3, price)
     page.locator("#timeShare").screenshot(path=str(OUT / f"{prefix}{'index' if name == '大盤' else 'stock'}-ts-crosshair.png"))
     other = at(120)
-    j.check(f"{prefix}{name}分時十字線：換個高度，橫線與價位跟著變", abs(other["hy"] - 120) <= 1.5 and other["text"] != price["text"], other)
+    j.check(f"{prefix}{name}分時十字線：同一分鐘換個高度，橫線與價位都不動（不跟著游標）", other["hy"] == price["hy"] and other["text"] == price["text"], other)
     if volume:
         below = at(box["height"] - 20 - 20)   # 量的那一塊（時間軸上面 20px 處）
-        j.check(f"{prefix}{name}分時十字線：移到量的那一塊，橫線畫在那裡{'並標那個高度的量' if lots else '（成交金額單位不定，不標數字）'}",
-                below["h"] and (below["tag"] and bool(NUMBER.match(below["text"])) if lots else not below["tag"]), below)
+        j.check(f"{prefix}{name}分時十字線：手指移到量的那一塊，橫線仍對準那一分鐘的價格", below["h"] and below["hy"] == price["hy"], below)
     gone = page.evaluate(CROSS_JS) if touch else (page.mouse.move(5, 5), page.wait_for_timeout(80), page.evaluate(CROSS_JS))[2]
     j.check(f"{prefix}{name}分時十字線：游標／手指離開就收掉", not gone["on"], gone)
     j.check(f"{prefix}{name}分時十字線：不造成橫向捲動", page.evaluate("() => document.documentElement.scrollWidth <= innerWidth"))
@@ -364,11 +365,16 @@ def main() -> int:
                 else:
                     page.mouse.move(kx, ky)
                 page.wait_for_timeout(200)
-                rows = page.evaluate("""y => { const canvas = document.querySelector('#mainChart canvas'), scale = canvas.height / canvas.getBoundingClientRect().height;
+                # 本人 11-24 更正：橫線對準選到那一天的收盤（不是游標的高度）。讀圖表實際畫的高度，再看那一列是不是虛線
+                rows = page.evaluate("""() => { const chart = window.HomeView.chart(), cross = chart.debugBoxes.cross, picked = chart.debugBoxes.picked;
+                  if (!cross) return { cross: null };
+                  const canvas = chart.canvas, scale = canvas.height / canvas.getBoundingClientRect().height;
                   const row = at => { const d = canvas.getContext('2d').getImageData(0, Math.floor(at * scale), canvas.width, 1).data; let n = 0;
                     for (let i = 4; i < d.length; i += 4) if (Math.abs(d[i] - d[i - 4]) + Math.abs(d[i + 1] - d[i - 3]) + Math.abs(d[i + 2] - d[i - 2]) > 20) n++; return n; };
-                  return [row(Math.round(y) + 0.5), row(Math.round(y) - 5)]; }""", cbox["height"] * 0.35)
-                j.check(f"{prefix}首頁日 K 十字線：游標／手指的高度多一條橫的虛線", rows[0] - rows[1] >= 30, rows)
+                  const close = (picked && picked.tags.find(tag => tag.name === '收') || {}).text;
+                  return { cross, close, rows: [row(cross.y), row(cross.y - 5)] }; }""")
+                j.check(f"{prefix}首頁日 K 十字線：多一條橫的虛線，對準那一天的收盤", bool(rows.get("cross")) and rows["cross"]["text"] == rows["close"]
+                        and rows["rows"][0] - rows["rows"][1] >= 30, rows)
                 page.locator(".chart-workspace").screenshot(path=str(OUT / f"{prefix}index-k-crosshair.png"))
                 page.mouse.move(5, 5)
                 j.check(f"{prefix}首頁切回日 K：標題照舊「台股加權」、K 線回來", page.locator("#chartTitle").inner_text() == "台股加權"

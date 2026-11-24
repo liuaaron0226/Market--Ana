@@ -3255,35 +3255,54 @@ const DASHED = stroke => stroke.dash.length === 2 && stroke.dash[0] === 3 && str
 // 圖表模組在另一個執行環境裡跑：它回傳的陣列要先轉成這邊的，才能和這邊寫的預期值比
 const plain = value => JSON.parse(JSON.stringify(value));
 
-test("十字線：游標移到圖上除了那一天的垂直虛線，還有一條跟著游標高度的水平虛線，右邊標那個高度的價位；游標離開就收掉", () => {
+// 本人 11-24 更正：「十字線水平虛線是要直接對準我點到那天的收盤價」——不跟著游標／手指的高度。
+test("十字線：游標移到哪一天，水平虛線就對準那一天的收盤（游標高度不管），收盤價已由「收」標出；游標離開就收掉", () => {
   const { chart, strokes, reset } = createChart();
   reset();
-  chart.canvas.dispatch("pointermove", { clientX: 150, clientY: 87 });
+  chart.canvas.dispatch("pointermove", { clientX: 150, clientY: 87 });   // 游標在 102.85 的高度
   const cross = strokes.filter(DASHED).map(stroke => stroke.points);
   nearPoints(cross[0], [[152.925, 10], [152.925, 336]], "垂直線在第 58 根的正中央");
-  assert.deepEqual(cross[1], [[4, 87.5], [326, 87.5]], "水平線橫跨繪圖區、在游標的高度（不貼收盤的 100）");
-  assert.equal(chart.debugBoxes.cross.text, "102.85");
+  assert.deepEqual(cross[1], [[4, 164.5], [326, 164.5]], "水平線對準那一天的收盤 100，不在游標的高度");
+  assert.deepEqual([chart.debugBoxes.cross.value, chart.debugBoxes.cross.text], [100, "100"]);
   assert.equal(chart.debugBoxes.picked.date, "2026-02-28");
 
-  chart.canvas.dispatch("pointermove", { clientX: 150, clientY: 330 });   // 時間軸上：不在價格區，只剩垂直線
-  assert.equal(chart.debugBoxes.cross, null);
+  chart.canvas.dispatch("pointermove", { clientX: 150, clientY: 330 });   // 游標在時間軸上：同一天，橫線照樣在收盤
+  assert.equal(chart.debugBoxes.cross.y, 164.5);
   reset();
   chart.canvas.dispatch("pointerleave", { pointerType: "mouse" });
   assert.deepEqual(strokes.filter(DASHED), []);
 });
 
-test("十字線：點一下選了某一天，水平線留在點的高度；手指拖著平移時跟著手指，放開後收掉、垂直線回到選的那一天", () => {
+test("十字線：手指點一下選了某一天，水平線在那一天的收盤；拖著平移放開後，垂直線回到選的那一天、水平線回到它的收盤", () => {
   const view = createChart();
   const { chart } = view;
-  fingerTap(view, [150, 164]);
+  fingerTap(view, [150, 87]);
   assert.equal(chart.selection, 58);
-  assert.deepEqual([chart.debugBoxes.cross.y, chart.debugBoxes.cross.text], [164.5, "100.00"]);
+  assert.deepEqual([chart.debugBoxes.cross.y, chart.debugBoxes.cross.text], [164.5, "100"], "點在 102.85 的高度，橫線仍在收盤 100");
   chart.canvas.dispatch("pointerdown", { pointerType: "touch", clientX: 200, clientY: 100 });
   chart.canvas.dispatch("pointermove", { pointerType: "touch", clientX: 230, clientY: 120 });
-  assert.equal(chart.debugBoxes.cross.y, 120.5, "拖的時候跟著手指");
   chart.canvas.dispatch("pointerup", { pointerType: "touch", clientX: 230, clientY: 120 });
-  assert.equal(chart.debugBoxes.cross, null);
   assert.equal(chart.hover, chart.selection);
+  if (chart.debugBoxes.cross) assert.equal(chart.debugBoxes.cross.value, chart.candles[chart.hover].close);
+});
+
+// 本人 11-24「一字鎖的股票我是看不出來的，你自己去看台玻今天的k線圖」（台玻 11-24 開高低收都是 63.9，鎖漲停）。
+test("一字鎖：開高低收同一價的 K 棒畫成 3px 高的實心橫條；顏色和前一根收盤比（鎖漲停紅、鎖跌停綠）", () => {
+  const { chart, fills, reset } = createChart();
+  const candles = dailyCandles();
+  candles[78] = { ...candles[78], open: 98, high: 98, low: 98, close: 98 };     // 前一根收 100：鎖跌停
+  candles[79] = { ...candles[79], open: 101, high: 101, low: 101, close: 101 };  // 前一根收 98：鎖漲停
+  chart.setData(candles, { count: 40, unit: "日" });
+  reset(); chart.draw();
+  const bodies = fills.filter(fill => fill.color === "--up" || fill.color === "--down");
+  const last = bodies[bodies.length - 1], before = bodies[bodies.length - 2];
+  assert.equal(last.color, "--up", "鎖漲停是紅（漲）");
+  assert.equal(before.color, "--down", "鎖跌停是綠（跌）：開盤＝收盤，看前一根收盤");
+  near(last.rect[3], 3, "一字的本體是 3px 高");
+  near(before.rect[3], 3);
+  assert.equal(last.alpha, 1, "實心");
+  chart.hover = 79; reset(); chart.draw();
+  assert.equal(chart.debugBoxes.picked.tags.find(tag => tag.name === "收").text.length > 0, true);
 });
 
 test("量測的數字：漲跌、漲跌幅（以起點為基準）、隔幾根、隔幾天", () => {

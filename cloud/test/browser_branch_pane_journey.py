@@ -279,6 +279,28 @@ def owner_journey(j: Journey, browser, prefix: str, options: dict, dates: list[s
     target = chips[3]
     press(page, page.locator(".kc-study-pane-branch .bp-chip"), touch)
     j.check(f"{prefix}點左上角的小鍵：浮出分點選單", page.locator("#branchMenu").is_visible())
+    # 選單整塊看得到：上緣與下緣都不被圖卡切掉（這一格在圖卡最下面，往下開會被切掉，所以要往上開）
+    edges = page.evaluate("""() => { const m = document.getElementById('branchMenu'), r = m.getBoundingClientRect();
+      const inside = y => { const n = document.elementFromPoint(r.left + r.width / 2, y); return Boolean(n && m.contains(n)); };
+      return { side: m.dataset.side, top: inside(r.top + 6), bottom: inside(r.bottom - 6), h: Math.round(r.height) }; }""")
+    j.check(f"{prefix}分點選單的上緣、下緣都看得到（沒被圖卡切掉）", edges["top"] and edges["bottom"] and edges["h"] >= 120, edges)
+    if touch:
+        # 本人 11-24「主力合計我沒辦法往下滑選擇更下面的分點」：手指在選單裡往上滑是捲選單，不是選、選單也不收
+        menu_box = page.locator("#branchMenu").bounding_box()
+        before_scroll = page.evaluate("() => document.getElementById('branchMenu').scrollHeight - document.getElementById('branchMenu').clientHeight")
+        cdp = context.new_cdp_session(page)
+        mx, top_y, bottom_y = menu_box["x"] + menu_box["width"] / 2, menu_box["y"] + 30, menu_box["y"] + menu_box["height"] - 20
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": round(mx), "y": round(bottom_y)}]})
+        for step in range(1, 11):
+            cdp.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": round(mx), "y": round(bottom_y - (bottom_y - top_y) * step / 10)}]})
+            page.wait_for_timeout(16)
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+        cdp.detach()
+        page.wait_for_timeout(400)
+        scrolled = page.evaluate("() => ({ top: document.getElementById('branchMenu').scrollTop, open: !document.getElementById('branchMenu').hidden })")
+        j.check(f"{prefix}手指在分點選單裡往上滑：選單捲下去、沒有選到東西、選單還開著",
+                before_scroll > 0 and scrolled["top"] > 0 and scrolled["open"] and page.evaluate(STATE)["snap"]["selected"] is None, [before_scroll, scrolled])
+        page.evaluate("() => { document.getElementById('branchMenu').scrollTop = 0; }")
     press(page, page.locator(f'#branchMenu button[data-branch="{target["id"]}"]'), touch)
     single = page.evaluate(STATE)
     values = [b["value"] for b in single["snap"]["bars"]]

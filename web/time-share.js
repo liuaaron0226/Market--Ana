@@ -262,8 +262,8 @@
       const cross = svgEl('g', { class: 'ts-cross', visibility: 'hidden' });
       const cl = svgEl('line', { y1: 0, y2: vTop + volH });
       const cd = svgEl('circle', { r: 3.2 });
-      // 橫線（本人 11-24「除了垂直虛線，也要有水平虛線」）：跟著游標／手指的高度（不貼價格線），右邊標那個高度的價位；
-      // 移到量的那一塊時標那個高度的量（個股，張；大盤的成交金額單位不定，只畫線）。兩塊之間的空隙與時間軸上不畫。
+      // 橫線（本人 11-24「除了垂直虛線，也要有水平虛線」）：對準選到那一分鐘的價格（同日更正：原本跟著游標高度），
+      // 右邊標那個價位。level(py) 仍能標量的那一塊（個股，張），目前只在價格那一塊用。
       const ch = svgEl('line', { x1: 0, x2: W - padR, class: 'ts-cross-h' });
       const tag = svgEl('g', { class: 'ts-cross-tag' });
       const tagBox = svgEl('rect', { height: 18, rx: 4 }), tagText = svgEl('text', { 'text-anchor': 'end' });
@@ -292,7 +292,8 @@
         const i = drawn.reduce((best, k) => (Math.abs(k - want) < Math.abs(best - want) ? k : best), drawn[0]);
         cl.setAttribute('x1', x(i)); cl.setAttribute('x2', x(i));
         cd.setAttribute('cx', x(i)); cd.setAttribute('cy', y(day.slots[i].price));
-        level((ev.clientY - box.top) * (box.height ? H / box.height : 1));
+        // 橫線對準那一分鐘的價格（本人 11-24「水平虛線是要直接對準我點到那天的收盤價」：分時就是那一分鐘的成交價）
+        level(y(day.slots[i].price));
         cross.setAttribute('visibility', 'visible');
         onIndex(i);
       };

@@ -545,6 +545,8 @@
     window.TrendMatrix.render(els.trendSection, trend ? window.TrendVotes.read(trend) : null);
   }
 
+  // 驗收用（和個股頁的 window.StockView.chart 同一個做法）：旅程測試讀十字線實際畫在哪
+  window.HomeView = { chart: () => chart };
   function ensureChart() {
     if (chart) return chart;
     chart = new window.KChart(els.chartHost, {

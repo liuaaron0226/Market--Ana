@@ -1,8 +1,8 @@
 /* 可拖曳／縮放的K線圖（原生Canvas，無外部套件）。
    互動：滑鼠拖曳或單指左右平移；滾輪、雙指捏合或＋／−按鈕縮放；鍵盤左右鍵平移、+/- 縮放；點擊或移動顯示十字線（再點一次同一根取消），
    並把那一天的開高低收標在右側價格欄、日期標在時間軸（本人 11-15；不再有浮窗）。
-   十字線另有一條水平虛線（本人 11-24）：跟著游標／手指的高度（不貼收盤），右邊標那個高度的價位；游標在副圖裡時畫在那個副圖上
-   （this.cross 記在哪一塊畫布、多高；副圖由 chart-studies.js 讀它來畫）。
+   十字線另有一條水平虛線（本人 11-24）：對準選到那一天的收盤價（本人同日更正：原本跟著游標高度，改成直接對準收盤）；
+   游標在副圖裡時，那個副圖也畫一條對準那一天數值的橫線（this.cross 記游標在哪一塊畫布；副圖由 chart-studies.js 讀它）。
    有畫線時：點線選取、拖已選取的線移動（拖端點把手只動那一端）、Delete 刪除、Esc 取消選取或放下工具；
    文字標註再點一下（或 Enter）打開輸入框修改內容。
    資料：candles=[{t,label,open,high,low,close,amount}] 由舊到新。overlays 可放判斷線；
@@ -659,9 +659,18 @@
       // K棒
       const bw = Math.max(1, Math.min(14, step * .66));
       // 每根蠟燭本體的位置只算一次：落影、亮邊、本體都用同一份，影子不會和本體對不上。
-      const bodies = this.line ? [] : vis.map((c, i) => hasPrice(c) && {
-        c, cx: l + step * (i + .5), top: y(Math.max(c.open, c.close)), h: Math.max(1, Math.abs(y(c.open) - y(c.close))),
-        live: Boolean(this.opts.liveLast) && start + i === n - 1,
+      // 一字鎖（開高低收同一價，本人 2026-11-24「一字鎖的股票我是看不出來的」，台玻當天鎖漲停 63.9）：
+      // 原本本體只有 1px、沒有影線，盤中那一根又是半透明，幾乎看不到。一字的本體改成 3px 高的實心橫條。
+      // 顏色：開盤＝收盤時看不出漲跌，改用和前一根收盤比（鎖漲停是紅、鎖跌停是綠）；其他 K 棒照舊用開盤比。
+      const LOCK_PX = 3;
+      const bodies = this.line ? [] : vis.map((c, i) => {
+        if (!hasPrice(c)) return false;
+        const prev = this.candles[start + i - 1];
+        const rise = c.close !== c.open ? c.close > c.open : !(prev && hasPrice(prev) && c.close < prev.close);
+        const locked = c.high === c.low;
+        const h = locked ? LOCK_PX : Math.max(1, Math.abs(y(c.open) - y(c.close)));
+        return { c, cx: l + step * (i + .5), top: locked ? y(c.close) - LOCK_PX / 2 : y(Math.max(c.open, c.close)), h, rise, locked,
+          live: Boolean(this.opts.liveLast) && start + i === n - 1 };
       });
       // 浮雕落影（立體重設計 C 包）：本體底下先畫一塊往右下偏的影子，蠟燭本身照舊畫在上面，位置、寬度、顏色不變。
       // 顏色由主題的 --candle-shadow 給（沒有就不畫）；深色的底上影子看不出來，主題另給 --candle-rim 時，
@@ -680,10 +689,14 @@
       }
       for (const body of bodies) {
         if (!body) continue;
-        const { c, cx, top, h } = body, col = c.close >= c.open ? up : dn;
+        const { c, cx, top, h } = body, col = body.rise ? up : dn;
         x.strokeStyle = col; x.fillStyle = col; x.lineWidth = 1;
         x.beginPath(); x.moveTo(cx, y(c.high)); x.lineTo(cx, y(c.low)); x.stroke();
-        if (body.live) {
+        if (body.live && body.locked) {
+          // 盤中一字：實心橫條，外框照盤中那一根的樣子（半透明的 3px 會看不到）
+          x.fillRect(cx - bw / 2, top, bw, h);
+          x.lineWidth = 1.4; x.strokeRect(cx - bw / 2 - 1.5, top - 1.5, bw + 3, h + 3);
+        } else if (body.live) {
           x.globalAlpha = .45; x.fillRect(cx - bw / 2, top, bw, h); x.globalAlpha = 1;
           x.lineWidth = 1.4; x.strokeRect(cx - bw / 2 - 1.5, top - 1.5, bw + 3, h + 3);
         } else x.fillRect(cx - bw / 2, top, bw, h);
@@ -790,17 +803,18 @@
       if (this.hover >= start && this.hover < end) {
         const i = this.hover, c = this.candles[i], cx = l + step * (i - start + .5);
         x.strokeStyle = dim; x.setLineDash([3, 3]); x.beginPath(); x.moveTo(cx, t); x.lineTo(cx, H - 4); x.stroke(); x.setLineDash([]);
-        const paper = css('--bg'), tone = c.close >= c.open ? up : dn;
+        const before = this.candles[i - 1];   // 開盤＝收盤（一字、十字）時和前一根收盤比，和 K 棒同一個顏色規則
+        const rising = c.close !== c.open ? c.close > c.open : !(before && hasPrice(before) && c.close < before.close);
+        const paper = css('--bg'), tone = rising ? up : dn;
         const prices = this.line ? (this.priced(c) ? [{ name: this.closeLabel, text: fmtTag(c.close), y: y(c.close), bg: ink, fg: paper, edge: ink }] : [])
           : hasPrice(c) ? [['開', c.open], ['高', c.high], ['低', c.low], ['收', c.close]].map(([name, value]) => (
             { name, text: fmtTag(value), y: y(value), bg: name === '收' ? tone : paper, fg: name === '收' ? paper : ink, edge: tone })) : [];
-        // 十字線的橫線（本人 11-24「除了垂直虛線，也要有水平虛線」）：跟著游標／手指的高度（不貼收盤），
-        // 右邊標那個高度的價位，樣式和時間軸上的日期籤一樣。游標在副圖裡時由 chart-studies.js 畫在那個副圖上。
-        const crossY = this.cross && this.cross.canvas === this.canvas && this.cross.y >= t && this.cross.y <= t + ph ? this.cross.y : null;
-        const crossValue = crossY === null ? null : hi - (crossY - t) / ph * (hi - lo);
-        const crossText = crossY === null ? '' : crossValue >= 10000 ? fmt(crossValue, 0) : crossValue >= 1000 ? fmt(crossValue, 1) : fmt(crossValue, 2);
-        x.font = TAG_VALUE_FONT;
-        const crossW = crossY === null ? 0 : inline ? x.measureText(crossText).width + 12 : tagW;
+        // 十字線的橫線：對準選到那一天的收盤價（本人 11-24「十字線水平虛線是要直接對準我點到那天的收盤價」；
+        // 原本跟著游標／手指的高度）。那個價位已經由開高低收裡的「收」標出來，橫線不另外再標一個價位籤。
+        // 副圖裡的橫線由 chart-studies.js 對準那一天那個指標的數值。
+        const closeY = (this.line ? this.priced(c) : hasPrice(c)) ? y(c.close) : null;
+        const crossY = closeY !== null && closeY >= t && closeY <= t + ph ? closeY : null;
+        const crossW = 0;
         const pickW = inline ? 84 : numbersOnly ? Math.max(tagW, 84) : tagW;   // 只寫數字的窄欄：開高低收往左借位置，名稱照寫
         // 圖裡面：十字線的另一邊；那一邊剛好是右邊、又有橫線的價位籤時，往左讓出價位籤的寬度，兩者不重疊
         const pickX = inline ? (cx > l + pw / 2 ? l + 4 : l + pw - pickW - 4 - (crossW ? crossW + 2 : 0)) : tagX + tagW - pickW;
@@ -811,11 +825,10 @@
         // 驗收用：這一天實際標出來的日期與四個價位。
         this.debugBoxes.picked = { date: c.label, tags: prices.map(({ name, text: value }) => ({ name, text: value })) };
         if (crossY !== null) {
-          const lineY = Math.round(crossY) + .5, crossX = inline ? l + pw - crossW - 2 : tagX;
+          const lineY = Math.round(crossY) + .5;
           x.strokeStyle = dim; x.lineWidth = 1; x.setLineDash([3, 3]); x.beginPath(); x.moveTo(l, lineY); x.lineTo(l + pw, lineY); x.stroke(); x.setLineDash([]);
-          drawTags(x, crossX, crossW, tagH, [{ name: '', text: crossText, slot: Math.max(t + tagH / 2, Math.min(t + ph - tagH / 2, crossY)), bg: ink, fg: paper }]);
-          // 驗收用：橫線的高度與標出來的價位。
-          this.debugBoxes.cross = { y: lineY, value: crossValue, text: crossText, box: [crossX, crossW] };
+          // 驗收用：橫線的高度與它對準的價位（那一天的收盤）。
+          this.debugBoxes.cross = { y: lineY, value: c.close, text: fmtTag(c.close) };
         }
       }
       if (this.studies) this.studies.draw();

@@ -145,6 +145,8 @@
     }
     const button = event.target.closest('button');
     const group = button && button.closest(GROUPS);
+    // 要捲的選單（data-menu-scroll）：手指在選單裡上下拖是捲動，交給瀏覽器；點一下照常選（本人 2026-11-24）
+    if (group && event.pointerType !== 'mouse' && group.matches('.chart-menu[data-menu-scroll]')) return;
     if (group && usable(button)) slide = begin(event, group, button, null);
   });
 

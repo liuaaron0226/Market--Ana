@@ -416,6 +416,12 @@
   -webkit-touch-callout: none;
 }
 
+/* 項目多、要在選單裡捲的選單（data-menu-scroll，例如主力分點）：手指上下拖是捲選單，點一下才選（本人 2026-11-24
+   「主力合計我沒辦法往下滑選擇更下面的分點」）。按住滑到要的那一項的手勢在這種選單裡不用（chart-menus.js）。 */
+.chart-menu[data-menu-scroll] button {
+  touch-action: pan-y;
+}
+
 /* 沒有「選一個」的選單（均線設定板）：按住滑到另一顆按鈕，那一顆亮一圈框 */
 .chart-menu button.is-slide-hot:not(:disabled, [aria-checked="true"], [aria-pressed="true"], [aria-selected="true"]) {
   background: var(--well);

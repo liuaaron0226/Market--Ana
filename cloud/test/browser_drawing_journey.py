@@ -2357,10 +2357,11 @@ def cross(journey: Journey, browser, touch: bool) -> None:
     state = lambda: page.evaluate(CROSS_JS)   # noqa: E731
     journey.check(f"十字線（{name}）：起點沒有十字線", state()["cross"] is None and state()["picked"] is None)
 
-    def labelled(now: dict, canvas_y: float, slack: float = 1.5) -> bool:
-        line = now["cross"]
-        return bool(line) and abs(line["y"] - canvas_y) <= slack and bool(NUMBER_RE.match(line["text"])) \
-            and line["box"][0] >= now["width"] / 2 and line["box"][0] + line["box"][1] <= now["width"] + 0.5
+    # 本人 11-24 更正：水平虛線「直接對準我點到那天的收盤價」——橫線的價位就是那一天「收」的價位，和游標高度無關
+    def snapped(now: dict) -> bool:
+        line, picked = now["cross"], now["picked"]
+        close = next((tag["text"] for tag in (picked or {}).get("tags", []) if tag["name"] == "收"), None)
+        return bool(line) and close is not None and line["text"] == close and bool(NUMBER_RE.match(line["text"]))
 
     if not touch:
         for period, label in [("daily", "日"), ("weekly", "週"), ("monthly", "月")]:
@@ -2371,19 +2372,19 @@ def cross(journey: Journey, browser, touch: bool) -> None:
             page.wait_for_timeout(80)
             now = state()
             dashes = page.evaluate(DASH_ROW_JS, ["#chartHost canvas", now["cross"]["y"] if now["cross"] else canvas_y])
-            journey.check(f"十字線（{name}・{label}K）：垂直線之外多一條水平虛線，在游標的高度，右邊標價位",
-                          labelled(now, canvas_y) and now["picked"] is not None and dashes[0] - dashes[1] >= 30, {"state": now, "dashes": dashes})
+            journey.check(f"十字線（{name}・{label}K）：垂直線之外多一條水平虛線，對準那一天的收盤",
+                          snapped(now) and dashes[0] - dashes[1] >= 30, {"state": now, "dashes": dashes})
             if period == "daily":
                 page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-50-crosshair.png"))
-                first_text, first_date = now["cross"]["text"], now["picked"]["date"]
+                first_y, first_date = now["cross"]["y"], now["picked"]["date"]
                 x2, y2, canvas_y2 = journey.point(page, 0.4, 0.5)
                 page.mouse.move(x2, y2)
                 page.wait_for_timeout(80)
                 moved = state()
-                journey.check(f"十字線（{name}）：游標上下移，水平線跟著走（不貼收盤）、價位跟著變，同一天的開高低收照樣標",
-                              labelled(moved, canvas_y2) and moved["cross"]["text"] != first_text and moved["picked"]["date"] == first_date
+                journey.check(f"十字線（{name}）：同一天游標上下移，水平線不跟著動（還是那一天的收盤），開高低收照樣標",
+                              snapped(moved) and moved["cross"]["y"] == first_y and moved["picked"]["date"] == first_date
                               and [tag["name"] for tag in moved["picked"]["tags"]] == ["開", "高", "低", "收"], moved)
-                # 副圖（成交量）：水平線改畫在副圖上、標那個高度的量；主圖的水平線收掉
+                # 副圖（成交量）：游標移到副圖裡，副圖也畫一條橫線、對準那一天的量（不標另一個數字）；主圖的橫線照樣在收盤
                 study = page.locator("#chartStudies canvas.kc-study-canvas:visible").first
                 box = study.bounding_box()
                 page.mouse.move(box["x"] + box["width"] * 0.4, box["y"] + box["height"] * 0.6)
@@ -2391,9 +2392,9 @@ def cross(journey: Journey, browser, touch: bool) -> None:
                 sub = state()
                 study_dashes = page.evaluate(DASH_ROW_JS, ["#chartStudies canvas.kc-study-canvas:not([hidden])", sub["study"]["y"] if sub["study"] else 0]) \
                     if page.locator("#chartStudies section:not([hidden]) canvas.kc-study-canvas").count() else [0, 0]
-                journey.check(f"十字線（{name}）：游標在成交量副圖裡，水平線畫在副圖上並標那個高度的量，主圖只剩垂直線",
-                              sub["cross"] is None and bool(sub["study"]) and abs(sub["study"]["y"] - box["height"] * 0.6) <= 1.5
-                              and bool(NUMBER_RE.match(sub["study"]["text"])) and len(sub["pickedStudy"]) == 1, {"state": sub, "dashes": study_dashes})
+                journey.check(f"十字線（{name}）：游標在成交量副圖裡，副圖的橫線對準那一天的量、不跟著游標；主圖的橫線仍在收盤",
+                              snapped(sub) and bool(sub["study"]) and sub["study"]["text"] == "" and abs(sub["study"]["y"] - box["height"] * 0.6) > 1.5
+                              and len(sub["pickedStudy"]) == 1, {"state": sub, "dashes": study_dashes})
                 page.locator(".bd-chart").screenshot(path=str(OUT / "desktop-51-crosshair-study.png"))
         page.mouse.move(5, 5)
         page.wait_for_timeout(80)
@@ -2415,23 +2416,23 @@ def cross(journey: Journey, browser, touch: bool) -> None:
         finger.tap(x, y, wobble=(2, 1))
         now = state()
         dashes = page.evaluate(DASH_ROW_JS, ["#chartHost canvas", now["cross"]["y"] if now["cross"] else 0])
-        journey.check(f"十字線（{name}）：手指點一下選了那一天，垂直線之外多一條水平虛線留在點的高度，右邊標價位",
-                      labelled(now, box["height"] * 0.35 + 1, 2) and now["selection"] >= 0 and journey.shows_bar(page) and dashes[0] - dashes[1] >= 30,
+        journey.check(f"十字線（{name}）：手指點一下選了那一天，垂直線之外多一條水平虛線對準那一天的收盤",
+                      snapped(now) and now["selection"] >= 0 and journey.shows_bar(page) and dashes[0] - dashes[1] >= 30,
                       {"state": now, "dashes": dashes})
         page.locator(".bd-chart").screenshot(path=str(SHOTS / "390-crosshair-k.png"))
         page.screenshot(path=str(OUT / "mobile-50-crosshair.png"))
-        # 按住拖：兩條線跟著手指；放開後水平線收掉、垂直線回到選的那一天
+        # 按住拖：垂直線跟著手指到別天，水平線對準那一天的收盤；放開後回到選的那一天、它的收盤
         finger.send("touchStart", [(x + 40, y + 20)])
         for step in range(1, 5):
             finger.send("touchMove", [(x + 40 + 15 * step, y + 20 + 10 * step)])
             page.wait_for_timeout(16)
         held = state()
-        journey.check(f"十字線（{name}）：手指按住拖，水平線跟著手指的高度", labelled(held, box["height"] * 0.35 + 60, 2) and held["hover"] != held["selection"], held)
+        journey.check(f"十字線（{name}）：手指按住拖到別天，水平線對準那一天的收盤（不是手指的高度）", snapped(held) and held["hover"] != held["selection"], held)
         page.wait_for_timeout(250)
         finger.send("touchEnd", [])
         page.wait_for_timeout(150)
         after = state()
-        journey.check(f"十字線（{name}）：放開後水平線收掉，十字線回到選的那一天", after["cross"] is None and after["hover"] == after["selection"] >= 0, after)
+        journey.check(f"十字線（{name}）：放開後十字線回到選的那一天，水平線在它的收盤", after["hover"] == after["selection"] >= 0 and snapped(after), after)
         axis = journey.axis(page)
         finger.pinch(x, y, 60, 160)
         journey.check(f"十字線（{name}）：雙指縮放照常", journey.axis(page) != axis)

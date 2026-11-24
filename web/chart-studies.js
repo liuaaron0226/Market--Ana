@@ -619,7 +619,11 @@
     _drawPicked(kind, context, width, height, range, y, values, level = null) {
       const hover = this.chart.hover;
       if (kind !== this.active || !Number.isInteger(hover) || hover < range.start || hover >= range.end) return;
-      const cross = level ? this._cross(context, range, level.top, level.bottom, level.textAt) : null;
+      // 橫線對準那一天這個指標的數值（本人 11-24：十字線的橫線要對準點到那一天，不跟著手指的高度）。
+      // 游標／手指在這個副圖裡才畫；數值已經由右邊的數值籤標出來，橫線不另外標。
+      const pointer = level ? this._cross(context, range, level.top, level.bottom, () => '') : null;
+      const first = pointer ? values(hover).find(item => finite(item.value)) : null;
+      const cross = first ? { y: y(first.value), text: '', w: 0 } : null;
       // 券商版面（geo.inline）沒有右側欄：寫在圖裡面、十字線的另一邊，和主圖的開高低收同一邊
       const { l, pw, step } = range.geo, cx = l + step * (hover - range.start + 0.5);
       const tagWidth = range.geo.inline ? 84 : width - (l + pw + 4) - 2;

@@ -125,6 +125,33 @@
     button.append(label, net);
     return button;
   }
+  // 選單往哪邊開（本人 11-24「主力合計我沒辦法往下滑選擇更下面的分點」）：這一格在圖卡的最下面，往下開會被圖卡的下緣切掉，
+  // 下面幾個分點根本看不到、也捲不到。打開時量一下小鍵上下各有多少空間（圖卡與畫面都算），下面放不下就往上開，
+  // 選單的高度最多用到那一邊的空間，放不下的在選單裡捲。
+  const MENU_MAX_PX = 300, MENU_GAP_PX = 8;
+  function clipBox(node) {
+    let box = { top: 0, bottom: window.innerHeight };
+    for (let at = node.parentElement; at && at !== document.body; at = at.parentElement) {
+      const style = getComputedStyle(at);
+      if (/(hidden|clip|auto|scroll)/.test(style.overflowY + style.overflow)) {
+        const rect = at.getBoundingClientRect();
+        box = { top: Math.max(box.top, rect.top), bottom: Math.min(box.bottom, rect.bottom) };
+      }
+    }
+    return box;
+  }
+  function placeMenu() {
+    if (menu.hidden) return;
+    menu.style.top = ''; menu.style.bottom = ''; menu.style.maxHeight = '';
+    const chipRect = chip.getBoundingClientRect(), paneRect = pane.getBoundingClientRect(), room = clipBox(pane);
+    const below = room.bottom - chipRect.bottom - MENU_GAP_PX, above = chipRect.top - room.top - MENU_GAP_PX;
+    const natural = Math.min(MENU_MAX_PX, menu.scrollHeight);
+    const up = below < natural && above > below;
+    if (up) { menu.style.top = 'auto'; menu.style.bottom = `${Math.round(paneRect.bottom - chipRect.top + 4)}px`; }
+    menu.style.maxHeight = `${Math.max(120, Math.floor(Math.min(MENU_MAX_PX, up ? above : below)))}px`;
+    menu.dataset.side = up ? 'up' : 'down';
+  }
+
   function renderChips() {
     const top = pendingTop;
     const key = `${state.selected || ''}|${top.map(item => `${item.row.id}:${Math.round(item.total)}`).join(',')}`;
@@ -157,6 +184,9 @@
     title.append(chip); header.append(title);
     menu = document.createElement('div'); menu.className = 'kc-study-menu chart-menu bp-menu';
     menu.id = MENU_ID; menu.hidden = true;
+    menu.dataset.menuScroll = '';   // 最多十一列，手機上要能在選單裡上下捲（chart-menus.js）
+    // 開合由 chart-menus.js 管（改 hidden）：每次打開時決定往上還是往下開
+    new MutationObserver(placeMenu).observe(menu, { attributes: true, attributeFilter: ['hidden'] });
     menu.setAttribute('role', 'group'); menu.setAttribute('aria-label', '切換分點');
     canvas = document.createElement('canvas');
     canvas.className = 'kc-study-canvas'; canvas.tabIndex = 0;
