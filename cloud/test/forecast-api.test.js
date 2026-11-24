@@ -4,7 +4,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { handle } from "../lib/gate.js";
-import { releasePolicy, strategyWorkflowPolicy } from "../lib/release-policy.js";
+import { policyForViewer, releasePolicy, strategyWorkflowPolicy } from "../lib/release-policy.js";
 import { fakeD1, makeIssuer, claims, fetchJwks, TEAM, MAIN_AUD, APPLY_AUD, OWNER } from "./helpers.js";
 
 let issuer, env, deps;
@@ -180,6 +180,33 @@ test("歷史清單的日期輸入有驗證", async () => {
   assert.equal((await req("/api/forecast/history?from=2025-10-01&to=2026-10-01")).status, 200);
 });
 
+// 本人 2026-11-24「全部功能都開放」：開關是 "all" 時其他獲准使用者讀得到同一本帳，而且只能讀
+test("開關是 all：其他獲准使用者四個入口都拿到和站主一模一樣的內容；寫入一律 405；還沒核准的人照樣擋", async () => {
+  env = { ...env, MARKET_ANA_FORECAST_LEDGER: "all" };
+  for (const path of ["/api/forecast/latest", "/api/forecast/summary", "/api/forecast/history?from=2026-09-01&to=2026-10-01", "/api/forecast/replay"]) {
+    const friend = await req(path, { email: "a@example.com" });
+    assert.equal(friend.status, 200, path);
+    const text = await friend.text();
+    assert.equal(JSON.parse(text).available, true, path);
+    assert.equal(text, await (await req(path)).text(), `${path} 和站主同一份`);
+    assert.ok(!text.includes(OWNER), path);
+  }
+  for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
+    assert.equal((await req("/api/forecast/latest", { email: "a@example.com", method })).status, 405, method);
+  }
+  assert.equal((await req("/api/forecast/latest", { email: "pending@example.com" })).status, 403);
+  assert.equal((await req("/api/forecast/latest", { email: null })).status, 401);
+});
+
+test("功能清單：站主看開關有沒有開；朋友只有 all 才是開的", () => {
+  for (const [value, owner, friend] of [[undefined, false, false], ["off", false, false], ["owner", true, false], ["all", true, true], ["ALL", false, false]]) {
+    const policy = releasePolicy({ MARKET_ANA_FORECAST_LEDGER: value });
+    assert.equal(policy.features.forecast_ledger_v1, owner, `站主 ${value}`);
+    assert.equal(policyForViewer(policy, false, { MARKET_ANA_FORECAST_LEDGER: value }).features.forecast_ledger_v1, friend, `朋友 ${value}`);
+  }
+  assert.equal(policyForViewer(releasePolicy({ MARKET_ANA_FORECAST_LEDGER: "all" }), false).features.forecast_ledger_v1, false, "env 沒給時對朋友是關");
+});
+
 test("其他獲准的使用者得到「沒有內容」而不是錯誤，三個入口都一樣", async () => {
   for (const path of ["/api/forecast/latest", "/api/forecast/summary", "/api/forecast/history?from=2026-09-01&to=2026-10-01", "/api/forecast/replay"]) {
     const response = await req(path, { email: "a@example.com" });
@@ -195,7 +222,7 @@ test("未登入被擋、未獲准被擋", async () => {
 });
 
 test("功能開關關著時站主也讀不到", async () => {
-  for (const value of [undefined, "", "1", "true", "TRUE", "public", "all", " owner "]) {
+  for (const value of [undefined, "", "off", "1", "true", "TRUE", "public", "ALL", " owner "]) {
     env = { ...env, MARKET_ANA_FORECAST_LEDGER: value };
     for (const path of ["/api/forecast/latest", "/api/forecast/summary", "/api/forecast/history?from=2026-09-01&to=2026-10-01", "/api/forecast/replay"]) {
       assert.deepEqual(await body(path), { available: false }, `${value} ${path}`);
@@ -209,13 +236,14 @@ test("只接受讀取", async () => {
   }
 });
 
-test("正式環境設定（本人 11-15）：預測帳本只對站主打開，其他策略、AI 與總開關維持原狀", async () => {
+test("正式環境設定（本人 11-15 只開站主；11-24「全部功能都開放」改開給全部）：預測帳本開著，其他策略、AI 與總開關維持原狀", async () => {
   const { readFileSync } = await import("node:fs");
   const text = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8").replace(/^\s*\/\/.*$/gm, "");
   const vars = JSON.parse(text).vars;
-  assert.equal(vars.MARKET_ANA_FORECAST_LEDGER, "owner");
+  assert.equal(vars.MARKET_ANA_FORECAST_LEDGER, "all");
   const policy = releasePolicy(vars);
   assert.equal(policy.features.forecast_ledger_v1, true);
+  assert.equal(policyForViewer(policy, false, vars).features.forecast_ledger_v1, true, "朋友也是開的");
   assert.equal(policy.strategies_enabled, false);
   for (const feature of ["strategy_v1", "level_advice", "ai_digest", "ai_stock_advice"]) {
     assert.equal(policy.features[feature], false, feature);

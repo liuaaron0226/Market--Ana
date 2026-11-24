@@ -29,10 +29,9 @@ function individuallyEnabled(raw) {
 
 // 只給站主、而且不讓其他人知道存在的功能：其他人看到的功能清單裡這幾項一律是關的，
 // 頁面就不會去問那個入口，和功能上線前完全一樣。
-// （預測帳本也只給站主，但它的旗標上線時就對所有人可見、頁面也依賴它，這裡不改它的行為。）
 // 站主的 AI 解讀（agy 產生）也不給朋友看：朋友用自己的金鑰產生自己那份（開放給朋友 02 票，DECISIONS 第 5 題）。
-// 主力分點（broker_branches_v1）也只給站主：朋友看到的一律是關，個股頁就不會出現那顆鍵、也不會去問。
-const HIDDEN_FROM_OTHERS = ["watchlist_watch_v1", "ai_digest", "broker_branches_v1"];
+// （預測帳本與主力分點原本也在這裡；本人 2026-11-24「全部功能都開放」之後改成三種狀態，其他人看到的值由 policyForViewer 依開關決定。）
+const HIDDEN_FROM_OTHERS = ["watchlist_watch_v1", "ai_digest"];
 
 // 三種狀態的開關：只認一字不差的 "owner"（只開站主）與 "all"（開給全部獲准使用者），其他寫法一律是關。
 function threeStateMode(raw) {
@@ -132,10 +131,26 @@ export function marketBriefVisible(env, isOwner) {
   return modeAllowsViewer(marketBriefMode(env), isOwner);
 }
 
-// 主力分點副圖（本人 2026-11-24，.scratch/broker-branches 票 01）：只有兩種狀態，只認一字不差的 "owner"（只開站主），
-// 其他寫法（含 "all"）一律是關——分點資料只抓站主的自選股與庫存，沒有開給朋友的設定。
+// 主力分點副圖（本人 2026-11-24，.scratch/broker-branches 票 01）：原本只有 off／owner。
+// 本人 2026-11-24 晚「全部功能都開放」→ 改成三種狀態（off／owner／all）：all 時其他獲准使用者也看得到「已經有資料的股票」的分點。
+// 注意：分點資料目前只抓站主的自選股與庫存，「哪幾檔有資料」本身就等於站主的自選與庫存名單；
+// 所以正式設定（wrangler.jsonc）先留在 "owner"，要等本人決定抓取範圍（例如加一組公開名單）之後才改 "all"。
+function brokerBranchesMode(env) {
+  return threeStateMode(env?.MARKET_ANA_BROKER_BRANCHES);
+}
+
 export function brokerBranchesVisible(env, isOwner) {
-  return env?.MARKET_ANA_BROKER_BRANCHES === "owner" && Boolean(isOwner);
+  return modeAllowsViewer(brokerBranchesMode(env), isOwner);
+}
+
+// 預測帳本（2026-11-15 規格）：原本只認 "owner"。本人 2026-11-24「全部功能都開放」→ 改成三種狀態（off／owner／all）：
+// all 時其他獲准使用者讀得到同一本帳（大盤的事前預測、對帳、回看、重播）；帳本只由排程寫，網站這邊沒有任何寫入的入口。
+function forecastLedgerMode(env) {
+  return threeStateMode(env?.MARKET_ANA_FORECAST_LEDGER);
+}
+
+export function forecastLedgerVisible(env, isOwner) {
+  return modeAllowsViewer(forecastLedgerMode(env), isOwner);
 }
 
 // AI 產業鏈資金版圖（本人 2026-11-24「完全實裝進去我的網站」，.scratch/ai-chain-map 票 01）：自己一個三種狀態的開關，
@@ -164,6 +179,21 @@ export function dataHealthVisible(env, isOwner) {
   return threeStateMode(env?.MARKET_ANA_DATA_HEALTH) !== "off" && Boolean(isOwner);
 }
 
+// 富果（Fugle）即時行情：個股頁的即時報價與盤中投影（/api/stocks/<代號>/live）、當天逐筆（/ticks）、
+// 首頁大盤的即時（/api/live）、庫存收盤後用今天的收盤。原本「行情商條款不得轉給第三方」只給站主。
+// 本人 2026-11-24 晚聽過「條款限本人私用、金鑰可能被停」之後仍決定「全部都開」：開關 MARKET_ANA_LIVE_QUOTES，
+// 只認一字不差的 "all"（開給全部獲准使用者）；其他寫法與沒設＝只給站主（和原本一樣）。站主自己永遠看得到。
+export function liveQuotesVisible(env, isOwner) {
+  return Boolean(isOwner) || env?.MARKET_ANA_LIVE_QUOTES === "all";
+}
+
+// 同一個開關也管分時（1 分K、五檔，/timeshare）與 60 分K（/hourly）：這兩項本人 11-18 就開給所有核准的人，
+// 所以沒設（或其他寫法）時照舊開著；只有一字不差的 "owner" 才把所有富果資料收回只給站主——
+// 行情商來函時改一個值、重新部署一次，富果的東西就全部只剩站主看得到。
+export function liveChartsVisible(env, isOwner) {
+  return Boolean(isOwner) || env?.MARKET_ANA_LIVE_QUOTES !== "owner";
+}
+
 // env 沒給時，事實區塊與五塊對其他人一律是關（寧可少給，不可多給）。
 export function policyForViewer(policy, isOwner, env = {}) {
   if (isOwner) return policy;
@@ -178,6 +208,8 @@ export function policyForViewer(policy, isOwner, env = {}) {
   features.market_brief_v1 = marketBriefVisible(env, false);
   features.index_intraday_v1 = indexIntradayVisible(env, false);
   features.chain_map_v1 = chainMapVisible(env, false);
+  features.forecast_ledger_v1 = forecastLedgerVisible(env, false);
+  features.broker_branches_v1 = brokerBranchesVisible(env, false);
   return { ...policy, features };
 }
 
@@ -203,8 +235,8 @@ export function releasePolicy(env = {}) {
       ai_digest: strategiesEnabled,
       ai_stock_advice: strategiesEnabled,
       // 預測帳本（2026-11-15 規格）：獨立的開關，不掛在策略總開關或單獨開啟名單底下。
-      // 只認一字不差的 "owner"：打開後也只有站主讀得到；讓其他使用者看到的設定不在本規格內。
-      forecast_ledger_v1: env?.MARKET_ANA_FORECAST_LEDGER === "owner",
+      // 三種狀態（本人 2026-11-24 起）：這裡是站主看到的值；其他人看到的值由 policyForViewer 依狀態決定。
+      forecast_ledger_v1: forecastLedgerMode(env) !== "off",
       // 自選股關注（2026-11-15 規格）：同樣是獨立的開關、只認一字不差的 "owner"，不和預測帳本綁在一起。
       watchlist_watch_v1: env?.MARKET_ANA_WATCHLIST_WATCH === "owner",
       // 個股頁事實區塊：這裡是站主看到的值；其他人看到的值由 policyForViewer 依狀態決定。
@@ -221,8 +253,8 @@ export function releasePolicy(env = {}) {
       impact_watch_v1: impactWatchMode(env) !== "off",
       // 盤勢解讀改版：同上，這裡是站主看到的值。
       market_brief_v1: marketBriefMode(env) !== "off",
-      // 主力分點：這裡是站主看到的值；其他人看到的一律是關（HIDDEN_FROM_OTHERS）。
-      broker_branches_v1: brokerBranchesVisible(env, true),
+      // 主力分點：這裡是站主看到的值；其他人看到的值由 policyForViewer 依狀態決定。
+      broker_branches_v1: brokerBranchesMode(env) !== "off",
       // AI 產業鏈資金版圖：這裡是站主看到的值；其他人看到的值由 policyForViewer 依狀態決定。
       chain_map_v1: chainMapMode(env) !== "off",
       // 海外大盤的分時：這裡是站主看到的值；其他人看到的值由 policyForViewer 依狀態決定。

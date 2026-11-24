@@ -65,9 +65,11 @@ test("申請頁底下只放行申請頁自己的檔案：其他路徑回 404，�
 // 開關全開（正式站目前開著的，再加上還沒開的），確認不是靠開關關著才擋得住。
 const ALL_ON = {
   MARKET_ANA_STRATEGIES_ENABLED: "true", MARKET_ANA_ENABLED_FEATURES: "strategy_v1,market_trend_v1,level_advice,ai_digest,ai_stock_advice",
-  MARKET_ANA_FORECAST_LEDGER: "owner", MARKET_ANA_STOCK_FACTS: "all", MARKET_ANA_WATCHLIST_WATCH: "owner", MARKET_ANA_STOCK_SIGNALS: "all",
+  MARKET_ANA_FORECAST_LEDGER: "all", MARKET_ANA_STOCK_FACTS: "all", MARKET_ANA_WATCHLIST_WATCH: "owner", MARKET_ANA_STOCK_SIGNALS: "all",
   MARKET_ANA_STOCK_ETFS: "all", MARKET_ANA_STOCK_FUNDS: "all", MARKET_ANA_MARKET_NEWS: "all", MARKET_ANA_IMPACT_WATCH: "all", MARKET_ANA_FRIEND_AI: "on",
-  MARKET_ANA_CHAIN_MAP: "owner",
+  // 本人 2026-11-24「全部功能都開放」之後開給全部的開關
+  MARKET_ANA_MARKET_BRIEF: "all", MARKET_ANA_INDEX_INTRADAY: "all", MARKET_ANA_LIVE_QUOTES: "all", MARKET_ANA_BROKER_BRANCHES: "all",
+  MARKET_ANA_CHAIN_MAP: "all",
   FUGLE_API_KEY: "server-only-key",
 };
 const API_PATHS = [
@@ -80,7 +82,8 @@ const API_PATHS = [
   "/api/market/overview", "/api/market/detail?kind=margin&date=2026-11-09", "/api/compare-0050", "/api/stocks/2330/vs-0050", "/api/funds/x",
   "/api/stocks/2330/analysis", "/api/stocks/2330/timeshare", "/api/stocks/2330/hourly", "/api/stocks/2330/live", "/api/stocks/2330/ticks",
   "/api/stocks/2330/history", "/api/stocks/2330/announcements", "/api/stocks/2330/headlines", "/api/stocks/2330/facts", "/api/stocks/search?q=2330",
-  "/api/market-news", "/api/impact-watch", "/api/chain-map", "/api/screens", "/api/screens/membership", "/api/rotation", "/api/core-holdings", "/api/data-status",
+  "/api/market-news", "/api/impact-watch", "/api/chain-map", "/api/market-brief", "/api/indices/n225/intraday", "/api/indices/usdtwd",
+  "/api/stocks/2330/branch-history", "/api/screens", "/api/screens/membership", "/api/rotation", "/api/core-holdings", "/api/data-status",
   "/api/admin/users", "/api/admin/users/p%40x.com/approve", "/api/admin/users/nobody%40x.com/approve", "/api/unknown", "/api/",
   "/analysis-data.js", "/chips-data.js", "/dashboard-data.js", "/detail-data.js", "/plain-data.js",
 ];
