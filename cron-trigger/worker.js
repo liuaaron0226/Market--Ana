@@ -75,18 +75,17 @@ export async function dispatch(cron, scheduledTime, env, fetcher = fetch) {
 
 // 資料更新狀態的推播提醒（2026-11-24）：搭在每一個觸發 GitHub 的時段上跑（免費方案 5 個時段都用完了，不另開），
 // 和觸發互不影響——GitHub 回錯、權杖過期時照樣檢查，所以 GitHub 那邊整個停擺也會提醒。每分鐘盯價那一段不跑。
+// 兩邊都跑完才看結果：任何一邊失敗（含資料庫寫不進去）都記成錯誤並丟出去，讓這次排程在 Cloudflare 上標成失敗，不當成功收掉。
 export async function runScheduled(cron, scheduledTime, env, { fetcher = fetch, watchTick = runWatchTick, healthAlert = runDataHealthAlert } = {}) {
   if (String(cron).trim() === WATCH_CRON) return watchTick(env, { now: () => scheduledTime });
   const [sent, health] = await Promise.allSettled([
     dispatch(cron, scheduledTime, env, fetcher),
     healthAlert(env, { now: () => scheduledTime }),
   ]);
-  const healthResult = health.status === "fulfilled" ? health.value : { error: String(health.reason?.message || health.reason) };
-  if (sent.status === "rejected") {
-    console.log(JSON.stringify({ health: healthResult }));
-    throw sent.reason;
-  }
-  return { ...sent.value, health: healthResult };
+  if (health.status === "rejected") console.error(JSON.stringify({ health_error: String(health.reason?.message || health.reason) }));
+  if (sent.status === "rejected") throw sent.reason;
+  if (health.status === "rejected") throw health.reason;
+  return { ...sent.value, health: health.value };
 }
 
 export default {

@@ -7,7 +7,7 @@
 // - 每天（台北）最多送 DAILY_PUSH_CAP 則；超過的留到隔天（那時問題還在才送，已經恢復的就不補）。
 // - 「出問題」那一則沒送出去就恢復了：安靜收掉，不送「已恢復」。
 import { dataHealthVisible } from "./release-policy.js";
-import { pushConfigured, sendOne } from "./web-push.js";
+import { pushConfigured, sendOne, sendPush } from "./web-push.js";
 import { PROBLEM_STATES, dataHealth, shortTaipei, taipeiDay } from "./data-health.js";
 
 export const DAILY_PUSH_CAP = 4;
@@ -45,7 +45,45 @@ export function healthNotice(kind, items) {
 
 const startOfTaipeiDayIso = (nowMs) => new Date(Date.parse(`${taipeiDay(nowMs)}T00:00:00+08:00`)).toISOString();
 
-export async function runDataHealthAlert(env, { now = Date.now, pushFetch = fetch } = {}) {
+// ---------- 資料庫寫不進去（2026-11-24：本人不買付費方案，D1 免費每天 10 萬列寫入是永久的上限） ----------
+// 這時候不能靠資料庫記「送過了」，改用兩道限制：
+//   1. 只在幾個固定的時段送（UTC 03:30、07:30、12:30、22:30＝台北 11:30、15:30、20:30、隔天 06:30）；
+//   2. 同一個執行環境（Worker isolate）記在記憶體裡，同一個 UTC 日（額度在 UTC 0 點＝台北 8 點重算）只送一次。
+// isolate 每次都換新的最壞情況：一天 4 則。
+export const WRITE_NOTICE_SLOTS = new Set(["03:30", "07:30", "12:30", "22:30"]);
+const WRITE_CHECK_KEY = "_write_check";
+const writeMemory = { day: null };
+const quotaExceeded = (error) => /row write limit|exceeded .*(limit|quota)|too many (rows )?writ/i.test(String(error?.message));
+
+export function writeFailureMessage(error) {
+  return quotaExceeded(error)
+    ? { title: "資料庫寫入額度用完", body: "資料庫今天的寫入額度用完，台北早上 8 點恢復；這段時間新增自選、畫線與排程寫入都會失敗。" }
+    : { title: "資料庫無法寫入", body: "資料庫寫入失敗，提醒與排程寫入暫停；請到 Cloudflare 的 D1 頁面查看狀態。" };
+}
+
+async function writeFailureNotice(env, db, email, error, { nowMs, pushFetch, memory }) {
+  const utc = new Date(nowMs).toISOString();
+  const day = utc.slice(0, 10);
+  if (!WRITE_NOTICE_SLOTS.has(utc.slice(11, 16))) return "not_slot";
+  if (memory.day === day) return "already_sent";
+  if (!pushConfigured(env)) return "no_push";
+  const { results: devices } = await db.prepare("SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE email = ? ORDER BY created_at")
+    .bind(email).all();
+  const payload = { ...writeFailureMessage(error), url: URL_PATH, tag: "data-health-write" };
+  const vapidCache = new Map();
+  let delivered = false;
+  for (const device of devices) {
+    // 不用 sendOne：它會寫回裝置的送出時間，這時候寫不進去
+    const sent = await sendPush({ endpoint: device.endpoint, keys: { p256dh: device.p256dh, auth: device.auth } }, payload, env,
+      { fetchImpl: pushFetch, now: () => nowMs, vapidCache }).catch(() => ({ ok: false }));
+    if (sent.ok) delivered = true;
+  }
+  if (!delivered) return devices.length ? "not_delivered" : "no_devices";
+  memory.day = day;
+  return "sent";
+}
+
+export async function runDataHealthAlert(env, { now = Date.now, pushFetch = fetch, memory = writeMemory } = {}) {
   if (!dataHealthVisible(env, true)) return { skipped: "off" };
   const email = String(env.OWNER_EMAIL || "").toLowerCase();
   if (!email || !env.DB) return { skipped: "unconfigured" };
@@ -63,6 +101,19 @@ export async function runDataHealthAlert(env, { now = Date.now, pushFetch = fetc
     if (missingTable(error)) return { skipped: "no_table", problems: problems.length };   // 0040 還沒套
     throw error;
   }
+
+  // 最優先：資料庫還寫得進去嗎（免費方案每天 10 萬列寫入，用完時讀照常、寫全部失敗）。每一輪寫一列試試看；
+  // 寫不進去就不碰下面的認領（一定也會失敗），改用不寫資料庫的方式通知一次，然後丟出錯誤讓排程標成失敗。
+  try {
+    await db.prepare("INSERT INTO data_health_alerts (key, state, opened_at, closed_at) VALUES (?, 'degraded', ?, ?) "
+      + "ON CONFLICT (key) DO UPDATE SET opened_at = excluded.opened_at, closed_at = excluded.closed_at").bind(WRITE_CHECK_KEY, nowIso, nowIso).run();
+  } catch (error) {
+    const notice = await writeFailureNotice(env, db, email, error, { nowMs, pushFetch, memory });
+    const failure = new Error(`資料庫寫不進去（${String(error?.message || error).slice(0, 160)}）；通知：${notice}`);
+    failure.writeFailed = true;
+    throw failure;
+  }
+  rows.delete(WRITE_CHECK_KEY);
 
   // 新出的問題開一筆（恢復過的那一列重新開）
   for (const item of problems) {

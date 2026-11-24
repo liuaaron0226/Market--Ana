@@ -1,108 +1,148 @@
-# 交接：進行中的工作
+# 交接：現況與待辦
 
-寫給接手的 AI（Codex 或 Gemini／Antigravity）。每一項都是獨立的工作線。開工前先讀 [for-ai-maintainers.md](for-ai-maintainers.md) 的規矩；**推上 main、部署、套正式資料庫、改開關、開給其他人，每一步都先問站主**。
+寫給接手的 AI。**接下來幾天由 Codex 維護，之後只剩站主本人與 Gemini（Antigravity）。** 所以：做不完的事要留下能讓站主或 Gemini 照做的步驟，不要留下只有你自己看得懂的半成品。
 
-「分支」與「狀態」兩欄由交接人最後填寫；分支要用 `git branch -a` 確認還在。
+開工前先讀 [for-ai-maintainers.md](for-ai-maintainers.md) 的規矩。**推上 main、部署、套正式資料庫、改開關、開給其他人，每一步都先問站主。** 常駐要求：整個網站要能自己獨立運轉——不留下要人在某台電腦上手動跑的步驟；網站的 AI 只用 Gemini。
 
-站主的常駐要求（2026-11-24）：「整個網站都要可以自己獨立運轉」。所有工作線的驗收條件都包含：**不留下要人在某台電腦上手動跑的步驟**；網站的 AI 只用 Gemini。
-
-**交接時唯一待執行的正式動作**：2026-11-25 台北 08:00 後，站主按 `d1-migrate`（先乾跑、再正式）——補記帳 0033～0038、套用 0039、0040。見 [owner-todo.md](owner-todo.md) 第 1 項。
+標 ＿＿＿＿ 的地方由交接人最後填寫或更正。
 
 ---
 
-## (a) 返回回到原來的清單
+## A. 網站現在是什麼狀態（2026-11-24 深夜，台北）
 
-- **是什麼**：從首頁的清單（籌碼排行、成交金額、選股清單、資金地形點樓後的強勢股、自選股、庫存、搜尋、國外同類股…）點進個股頁，按返回要回到**剛才那個清單、同一個浮板、同一個排行、同一個捲動位置**；直接開網址進個股頁時才回大盤。頁面上的返回鍵與手機的「上一頁」手勢都一樣。
-- **站主原話**：「我從籌碼成交金額點進去看某檔股票但我要返回看其他交金額大的股票他會直接回到主要大盤，不是回到我剛剛點進去股票頁面前的成交金額那頁」。站主說這是「舉例」：要修的是這一整類入口。
-- **已知原因**：個股頁的返回鍵是寫死的連結（`web/stock.html` 的 `<a class="bd-back" href="minimal.html">`），一定是重新打開首頁；首頁的浮板狀態（`web/minimal.js` 的 `openPanel()`／`closePanel()`）沒有寫進網址、歷史紀錄或 `sessionStorage`。
-- **分支**：＿＿＿＿
-- **狀態**：＿＿＿＿
-- **還缺什麼**：＿＿＿＿；iPhone 實測（首頁有即時行情輪詢，iPhone 會不會整頁還原沒驗過）。
-- **怎麼驗收**：每個入口各點一次進個股、按返回鍵與手機上一頁各一次，回到原位置；直接開個股網址按返回回大盤。瀏覽器旅程測試要涵蓋。
-- **要站主同意的**：返回鍵上的字要不要從「大盤」改掉（看得到的變更，要帶樣張問）；上線。
+### 進行中的事故：D1 寫入額度用完
 
-## (b) 資金版圖（AI 產業鏈）
+- 正式資料庫 D1 撞到免費方案「每天 10 萬列寫入」上限，**台北 11-25 08:00（UTC 00:00）重置**。起因：同一天做了 `republish`，又做了主力分點整理（trim）。
+- **讀取正常，所有寫入都失敗。** 每一個 API 請求都會先在 `api_hits` 寫一列（`cloud/lib/gate.js` 的限流 `consume()`），所以今晚大部分資料 API 回 503「暫時無法處理」。
+- 修補：限流在 D1 寫入失敗時改用記憶體限流。commit：＿＿＿＿（假設已上線；交接人更正）。
+- **到 08:00 前**：使用者存不了自選股、庫存、畫線；23:00、06:30 兩班消息與 07:20 晨間預測**寫不進去**。之後能不能補發**沒有驗證過**；不補的話首頁消息停在 18:30 那一班，晨間預測是空的（記漏記）。
+- 站主決定**不買付費方案**（之後可能再考慮）。
+- 實測：限流本身今天只寫了約 1,600 列（819 次請求、2 位使用者），不是主因；大戶是 `republish`／每日發布與主力分點的回補、整理。今晚已把 repository variable `MARKET_ANA_BROKER_BRANCHES_ROW_BUDGET` 降到 `12000` 暫時止血。
 
-決策與公司名單：[chain-map-companies.md](chain-map-companies.md)。
+### 已在正式站（main）
 
-- **是什麼**：獨立一頁 `/chain-map`，12 層 → 環節 → 個股逐層展開，看 2021-01 起每個月資金在 AI 產業鏈哪裡（台股成交金額占比、台股法人買賣超、美股成交金額占比）。**視覺與互動照站主驗收過的樣品 v4 原封不動。**
-- **站主原話**：「做得非常好，這個全部設計風格元件等等都非常好請完全實裝進去我的網站」；「AI 產業鏈資金版圖 我希望他之後會每天自動更新且不需要你的幫助」。
-- **已上線（main）**：頁面 `web/chain-map.*`、`cloud/lib/chain-map*.js`；名單 `seeds/ai-chain-map.json`；資料表 `cloud/migrations/0039_chain_map.sql`（**正式庫還沒套**，套之前頁面顯示「尚未就緒」）；開關 `MARKET_ANA_CHAIN_MAP`（站主決定 `all`，核對 `cloud/wrangler.jsonc`）。
-- **每日更新（已接上）**：`daily-update` 的「AI 產業鏈資金版圖：每月資金資料」一步，跑 `chain_map_flows.py build --d1 --r2`；開關 repository variable `MARKET_ANA_CHAIN_MAP_SCHEDULE=on`。美股用 Massive 全市場單日行情（每次最多 20 次呼叫，停擺後從最舊缺日往後補）；歷史起始資料在 R2 `market-ana-state/chain-map/bootstrap/stock_flows-2026-10.json`。各種狀態與重建方法寫在 `chain_map_flows.py` 檔頭。**驗收**：0039 套用後，隔一個交易日最新月份的數字有變。
+保活第一版（`workflow-keepalive`）、本手冊、法人歷史回補 workflow（第一批今晚在跑；寫 R2 不寫 D1）、資金版圖頁 `/chain-map`（沒資料前顯示「尚未就緒」）、設定頁「資料更新」那一籤、基金淨值第二個抓取點、維運按鈕（`d1-migrate`、`deploy-cron-trigger`）、資金版圖每日建置那一步、六項功能開給所有核准的人（盯項、盤勢解讀、海外分時、預測對帳、富果即時行情、資金版圖；見 [flags-and-schedules.md](flags-and-schedules.md)）。
 
-| 子項 | 狀態 |
-|---|---|
-| 法人歷史 2021-01～2025-10 | 站主已同意正式執行；`institutional-backfill` 第一批 2026-11-24 晚已開始，每按一次接著補，約共 2 次（[data-gaps.md](data-gaps.md)）。限制：雲端股價只留約 1,270 個交易日，所以法人×收盤價在 2021-01～約 2021-08 補完後仍是空的 |
-| 名單維護 | 已定案「Gemini 提名、站主同意」，**沒做**。現在的切換點：在 D1 `chain_map_definitions` 加一列 `source='owner'` 的新定義，排程就改用它。要做：Gemini 每季提名、站主在網站上按同意、連續幾天抓不到資料的那檔頁面標出來；提名與同意的畫面要先帶樣張問站主 |
-| 首頁入口 | **未定**（現在要自己打網址） |
-| 點公司連到個股頁 | **未定**；若要連，就屬於 (a) 的同一類入口 |
-| 當月未過完的顯示 | **未定**。資料裡已有 `partial` 欄位，頁面目前不讀 |
+### 已在本機合併、**還沒推送**
 
-- **要站主同意的**：三個未定題；名單提名畫面的樣張。
+分支 `release/core-v1`，只在站主電腦上，commit `26c0a72`、`2f89373`：
 
-## (c) 部署排程器、套資料庫變更：已做成網頁按鈕
+- **返回回到原清單**：自己的旅程測試 163/163；合併後既有的 `browser_market_index_journey.py` 在最後一個手機步驟失敗，原因調查中。
+- **資金版圖從 R2 讀資料**：`chain-map/current/flows.json` 已上傳到 bucket `market-ana-state`；Pages 多一個 R2 綁定 `STATE`。
 
-- **已上線**：`d1-migrate`（`d1_migrate.py`）、`deploy-cron-trigger`。站主操作見 [ops-buttons.md](ops-buttons.md)。
-- **背景**：正式 D1 的記帳表 `d1_migrations` 只記到 0032，0033～0038 是直接執行過的。`d1-migrate` 先逐項核對再只補記帳、**絕不重跑**，然後套真正沒套的；不一致就拒絕。**補帳完成前不得執行 `wrangler d1 migrations apply`**，也不要手寫 SQL 補帳——一律用這個按鈕。
-- **待觀察**：`d1-migrate` 第一次正式執行（2026-11-25 08:00 後）；`deploy-cron-trigger` 正式部署需要 `CLOUDFLARE_API_TOKEN` 有 Account › Workers Scripts › Edit，**沒驗證過**。
-- **還沒有按鈕的**：`market-ana-eval`（`cloud/eval-worker/`）的部署；換推播金鑰（`cron-trigger/set-push-keys.mjs` 要本機登入 `gh`、`wrangler`）。
+今晚是否推送：＿＿＿＿
 
-## (d) 60 天無活動的保活：已上線
+### 在分支上、還沒合併
 
-- `workflow-keepalive`（`workflow_keepalive.py`）接在 `announcements`、`market-news` 後面，把被 GitHub 60 天規則停用的 workflow 重新啟用；不碰網站。2026-11-24 晚在 GitHub 上乾跑與正式都驗過（三支有排程的 workflow 重新啟用成功）。
-- **還在定稿**：加每月心跳提交、自己的每週排程、必要 workflow 沒啟用就失敗。最終做法：＿＿＿＿
-- **待觀察**：2026-11-25 08:00 `announcements` 跑完後，它要自己出現一筆綠勾。
-
-## (e) 失敗與過期通知、設定頁「資料更新」、金鑰到期提醒
-
-- **已上線**：設定（齒輪）→「資料更新」那一籤（開關 `MARKET_ANA_DATA_HEALTH=owner`，規則表在 `cloud/lib/data-health.js` 的 `RULES`）；異常／恢復推播由排程器送（`cron-trigger/wrangler.toml` 同名開關 `owner`，排程器 2026-11-24 晚已部署），**要等 0040 套用後才會送**。說明：[data-health.md](data-health.md)。
-- **沒做**：金鑰到期提醒；每一步的 workflow 結果記錄（現在「綠勾但某一步失敗」只靠資料新舊與降級判斷）。
-- **要站主同意的**：新的提醒畫面或推播內容。
-
-## (f) 基金淨值缺口
-
-- **已上線**：第二個每日抓取點（`announcements` 的 `fund-nav` 工作，每天 08:00 含週末）；執行摘要用白話寫缺口；手動補的步驟在 [`seeds/funds/README.md`](../../seeds/funds/README.md)。
-- **沒有自動補**：找不到允許的歷史來源（站主 2026-11-17 定案：不打集保網站背後的資料介面、不解驗證碼）。若之後找到合法來源，新增抓取要先問站主。
-
-## (g) 候選水位規則的紙上追蹤：**已決定停止**
-
-- 候選規則 `cash-level-v3-candidate` 的紙上追蹤原本是 Claude 桌面 App 的排程任務 `market-ana-level-paper-track`（每個交易日 18:30）在這台電腦跑。和雲端的 `level-daily.yml`（產品規則 `cash-level-v2.1`）不是同一件事。
-- **決定**：停止，沒有搬上雲端。已有紀錄留在這台電腦 `C:\Users\User\Desktop\Market--Ana\.scratch\strategy-validation-20261111\level-redesign\paper-log.jsonl`（不在 git 裡）。
-- 站主要把那個排程任務關掉（[owner-todo.md](owner-todo.md) 第 3 項）。不需要分支。
-
-## (h) 全站動態與元件設計升級
-
-- **是什麼**：站主要求把原網站的動態效果與元件設計提升到資金版圖樣品的水準。
-- 設計文件位置：＿＿＿＿（合併後填這一行）
-- 既有的站主定案（版面、內容、文案、手勢、不放補充說明小字…）不因升級而作廢，要動到先問站主；每一頁都先給改版前後對照，站主同意才套。
-
-## (i) `GLIACU` 的級別成立日（`class_launch`）
-
-- `fund_compare.py` 的 `FUNDS["GLIACU"]["class_launch"]` 現在是 `2021-07-02`，只來自 Yahoo 奇摩基金（晨星資料，非一手），程式裡標了 `TODO 待核實`。
-- **還缺**：找一手來源（基金公開說明書、集保頁面）核對；不同就改值並記出處。影響個股頁「成立以來」那一列的起點。
-
-## (k) 只存在這台電腦、或只有原維護者工具才能用的東西
-
-接手前要知道：下面這些**不在 git 裡**或**依賴已不存在的工具**，換電腦就沒有。
-
-| 東西 | 在哪 | 影響 |
+| 內容 | 分支 | 狀態 |
 |---|---|---|
-| 本機資料 `data/` | 站主電腦 `C:\Users\User\Desktop\Market--Ana\data\` | 雲端只有 R2 工作集；累積型原件（大戶持股週檔、期貨原件）壞了只能靠它重建；部分測試要它 |
-| `.scratch/`、`.tmp/` | 同一個資料夾 | 舊規格、票、交接草稿、Gemini 登入檔腳本原件（腳本已抄進 [credentials.md](credentials.md)）、紙上追蹤紀錄 `paper-log.jsonl` 與 `paper_track.py` |
-| `STATUS.md`、`ANALYSIS_PLAN.md` | 同一個資料夾，刻意不進 git | 進度沿革與站主歷次定案的原文；手冊已改寫進必要的部分 |
-| `analysis.py` 的舊直播分析流程 | 約 164～175、294 行 | 依賴原維護者的影片工具，現在不能用；網站不靠它 |
-| 指向不存在文件的註解 | `cloud/import_d1_seed.py` 第 3 行、`.github/workflows/agy-auth-probe.yml` 第 5 行 | 指到 `.scratch/` 裡的文件，照程式本身理解即可 |
-| 寫死本機路徑的測試與工具 | `logs/check_*.py` 多支、`logs/fetch_analysis_data.py`、`test_daily_update.py`、`cloud/market_pack_daily.py` | 在別台電腦會失敗，見 [for-ai-maintainers.md](for-ai-maintainers.md) |
+| 保活強化＋`tests.yml`＋`0041_ops_runs.sql` | ＿＿＿＿（維運線的工作樹分支） | 要站主同意「每月自動提交一次心跳到 main」才合併 |
+| `d1-migrate` 修正：只套一半、可重跑的遷移 | ＿＿＿＿ | 預定今晚合併 |
+| 資料更新狀態（data-health）的修正 | ＿＿＿＿ | 預定今晚合併 |
+| 首頁設計升級 | `claude/site-design-upgrade-5ed2b5`，commit `dec6515` | 站主在設計那邊同意了；這邊還沒合併 |
 
-站主已列入待辦：把整個專案資料夾備份到外接硬碟或雲端硬碟（[owner-todo.md](owner-todo.md)）。
+---
 
-## (j) 全部功能開放給其他獲准使用者
+## B. 明早 8 點後第一件事：`d1-migrate`
 
-- **站主原話（2026-11-24）**：「另外我要你把我所擁有的全部功能都開放給我本人以外都可以一起使用」；之後確認清單「全部都開」。
-- **已開（`all`，核對 `cloud/wrangler.jsonc`）**：盯項 `MARKET_ANA_IMPACT_WATCH`、盤勢解讀 `MARKET_ANA_MARKET_BRIEF`、海外分時 `MARKET_ANA_INDEX_INTRADAY`、預測對帳 `MARKET_ANA_FORECAST_LEDGER`（改成三態，其他人唯讀）、富果即時行情 `MARKET_ANA_LIVE_QUOTES`（新；條款限本人私用，站主知道風險仍決定開）、資金版圖 `MARKET_ANA_CHAIN_MAP`。分時、五檔、內外盤比、60 分 K 早在 2026-11-18 就已開給所有核准的人。
-- **仍只給站主**：
-  - 主力分點 `MARKET_ANA_BROKER_BRANCHES`：程式已是三態，但「哪幾檔有分點」等於洩漏站主名單，要先決定抓取範圍；站主說「我希望我股票池的股票都有」，意思待問清楚。
-  - 自選股關注 `MARKET_ANA_WATCHLIST_WATCH`：朋友版沒做（每人各自判斷、朋友自己的 Gemini 金鑰、每人推播、行情商額度）。
-  - 管理頁、設定頁、站主私人資料。
-- 行情商來函時怎麼關：[flags-and-schedules.md](flags-and-schedules.md)〈行情商來函或帳號被停時怎麼關〉。
-- **分支／狀態**：＿＿＿＿
+站主版步驟在 [owner-todo.md](owner-todo.md) 第 1 項。給 AI 的重點：
+
+1. Actions → `d1-migrate` → Run workflow，全部預設（乾跑）。摘要應該寫：
+   - 補記帳 0033～0038（只補記帳表，不重跑）；
+   - 套用 **0039**——它是**只建了一半**：今晚手動套用時被寫入額度切斷，只有 `chain_map_definitions` 那張表存在。重跑是安全的，每一句都是 `IF NOT EXISTS`；
+   - 套用 0040（0041 若已合併也一起）。
+2. 再跑一次，取消勾選 `dry_run`。
+3. 成功＝綠勾、摘要寫「資料庫已是最新」；再按一次乾跑會說沒有要做的事。
+4. 之後：下一次 `daily-update` 正式發布（台北 18:00）寫出第一份完整的資金版圖資料；排程器開始送「資料更新異常」推播。若 R2 備援已部署，資金版圖頁在那之前就有資料。
+5. **補帳完成前不得執行 `wrangler d1 migrations apply`。**
+
+---
+
+## C. Codex 幾天內做得完的（依優先順序）
+
+每一項：分支／commit、做到哪、還缺、怎麼驗收、要不要站主同意。
+
+### C1. 08:00 之後的驗收
+- **做到哪**：等時間到。
+- **要驗**：`d1-migrate`（B）；資金版圖頁有資料（D1 或 R2）；資料更新推播會送；08:00 `announcements` 跑完後 `workflow-keepalive` 自己出現一筆綠勾。
+- **同意**：`d1-migrate` 正式執行由站主按。
+
+### C2. 限流不要每個請求都寫 D1
+- **還缺**：`cloud/lib/gate.js` 的 `consume()` 改成先用記憶體、或分批／抽樣寫；資料更新狀態多一項「今天 D1 寫入用量」（規則表在 `cloud/lib/data-health.js` 的 `RULES`）。
+- **驗收**：JS 測試＋實際請求後 `api_hits` 寫入量下降；設定頁看得到用量。
+- **同意**：上線要問（設定頁多一列是看得到的變更）。
+
+### C3. 主力分點的批次預算要算「寫入次數」，不是列數
+- **背景**：D1 的寫入額度算的是列寫入×（1＋索引數）＋刪除，還要扣掉當天其他工作的用量。相關：`broker_branches.py` 約 69、120、691 行；遷移 0036 有複合主鍵索引；`broker-branches.yml` 預設一次兩檔。
+- **站主決定**：分點資料要涵蓋整個網站股票池（約 350 檔）。一檔約 2.5 萬列，等於 1,700 萬～2,600 萬次寫入，免費額度要一年以上。**預算沒解決前不要擴大抓取範圍**；範圍還沒變成公開的股票池前，`MARKET_ANA_BROKER_BRANCHES` 維持 `owner`（「哪幾檔有資料」會洩漏站主名單）。
+- **驗收**：批次跑完當天 D1 寫入量在預算內。
+- **同意**：擴大範圍、改開關。
+
+### C4. 保活強化合併
+- **分支**：見 A 表。
+- **還缺**：站主同意每月心跳提交 → 合併 → 在 GitHub 驗證（第一次正式執行會建立 `ops/heartbeat.txt`）→ `tests.yml` 在 Linux 跑一次，必要時刪減模組清單。
+- **同意**：要（自動提交到 main）。
+
+### C5. `market-news.yml` 約 194～204 行
+- 管線沒有 `pipefail`，D1 寫入失敗會被藏起來。狀態：＿＿＿＿（今晚可能先修）。
+
+### C6. 審查發現、還沒修的
+- 每日發布會重送沒變的列；額度檢查沒算索引、刪除與其他工作（`cloud/import_d1_seed.py` 約 256、265、524 行；`watch_news.py` 約 521 行每次重寫全部英文簡稱）。
+- 遇到額度錯誤的處理不一致：`daily_update.py` 約 1128 行吞掉清理失敗；`import_d1_seed.py` 約 454 行對額度錯誤重試三次；資金版圖建置在美股抓取前被 D1 拒絕時的訊息。
+- `d1_migrate.py` 約 425～455 行補帳核對索引與觸發器時只比名稱。
+
+### C7. 返回回到原清單
+- **是什麼**：從首頁任何清單（籌碼排行、成交金額、選股清單、資金地形的強勢股、自選股、庫存、搜尋、國外同類股…）點進個股頁，返回時回到同一個清單、同一個浮板與排行、同一個捲動位置；直接開網址進個股頁才回大盤。返回鍵與手機上一頁一樣。站主 2026-11-24 指定要修整類入口，不只一處。
+- **分支**：`release/core-v1`（`26c0a72`），未推送。
+- **還缺**：查清 `browser_market_index_journey.py` 最後一個手機步驟的失敗；部署；站主 iPhone 實測。
+- **待站主決定**：要不要放寬 `Cache-Control: no-store`，讓瀏覽器的整頁快取能用（安全上的取捨寫在 `cloud/lib/gate.js` 約 936 行）；返回鍵上的字要不要改（看得到的變更，帶樣張問）。
+
+### C8. 設計升級
+- **分支**：`claude/site-design-upgrade-5ed2b5`，首頁那一片 `dec6515`。
+- **還缺**：站主確認後合併首頁片；個股頁、庫存、設定各片之後從設計分支一片一片來。設計的動畫層讓「關閉／切換類別」的點擊延遲 140 ms，旅程測試要跟著等（見那個分支的 `DESIGN_UPGRADE.md`）。
+- **規矩**：站主既有的介面定案不因升級作廢；每一片都先給改版前後對照，站主同意才套。
+- **同意**：每一片都要。
+
+### C9. 補發事故中遺失的消息與晨間預測
+- 先查 R2 裡有沒有那幾班的原件，再決定能不能補發。沒驗證前不要承諾站主。
+
+### C10. 法人歷史回補
+- 站主照 [owner-todo.md](owner-todo.md) 第 2 項繼續按，到摘要寫補完（約共 2 次正式執行）。
+- 之後要決定股價保留天數：雲端只留約 1,270 個交易日，所以 2021-01～約 2021-08 的「法人×收盤價」補完仍是空的。
+
+### C11. 資金版圖的未定事項
+- 首頁入口、點公司連到個股頁（用返回回原清單那個模組）、當月未過完的顯示（資料裡已有 `partial` 欄位，頁面不讀）——都要問站主。
+- 名單維護「Gemini 提名、站主同意」：已定案、沒做。現況與手動改法見 [chain-map-companies.md](chain-map-companies.md)。
+- 已知名單修正：`PSTG` → `P`（Everpure，程式已處理代號）、`MOD` 改名 Modexus Solutions。
+
+### C12. 自選股關注的朋友版
+- 沒做：要每人各自的判斷、朋友自己的 Gemini 金鑰、每人推播、行情商額度。`MARKET_ANA_WATCHLIST_WATCH` 維持 `owner`。
+
+### C13. 設定頁旅程測試用隨機埠
+- 曾抽到瀏覽器禁用的埠（2049，`ERR_UNSAFE_PORT`）；要排除不安全的埠。
+
+### 小項（有空就做）
+- `GLIACU` 的級別成立日：`fund_compare.py` 的 `FUNDS["GLIACU"]["class_launch"]` 是 `2021-07-02`，只來自 Yahoo 奇摩基金（非一手），標了 `TODO 待核實`。找基金公開說明書或集保頁面核對。
+
+---
+
+## D. 幾天內做不完、之後只能靠站主或 Gemini 的
+
+| 事項 | 為什麼做不完 | 之後怎麼辦 |
+|---|---|---|
+| 主力分點回補整個股票池 | 免費寫入額度要一年以上（C3） | 先解預算；範圍不擴大 |
+| 金鑰到期提醒與到期日清單 | 到期日只能站主到各家網頁看 | 站主照 [owner-todo.md](owner-todo.md) 第 4 項填 |
+| 基金淨值缺口自動補 | 找不到允許的歷史來源（站主定案：不打集保背後的資料介面、不解驗證碼） | 手動補：[`seeds/funds/README.md`](../../seeds/funds/README.md) |
+| Gemini 登入檔過期時重做 | 要 WSL＋瀏覽器 | [credentials.md](credentials.md)〈重做 Gemini 登入檔〉 |
+| 需要這台電腦 `data/` 或 `.scratch/` 的事 | 不在 git 裡 | 筆記與精簡版 `.scratch` 已備份在站主 Google 雲端硬碟資料夾「Market-Ana 備份 2026-11-24」；**`data/`（9 GB）與 `.tmp/`（7 GB）沒有備份** |
+| 候選水位規則的紙上追蹤 | 已決定停止，沒有搬上雲端 | 站主關掉 Claude 桌面 App 的排程任務 `market-ana-level-paper-track`；舊紀錄 `paper-log.jsonl` 在 `.scratch/strategy-validation-20261111/level-redesign/`（不在 git） |
+
+### 只存在這台電腦、或依賴原維護者工具的東西
+
+| 東西 | 影響 |
+|---|---|
+| `data/`、`.scratch/`、`.tmp/`、`STATUS.md`、`ANALYSIS_PLAN.md` | 不在 git。`data/` 是累積型原件（大戶持股週檔、期貨原件）唯一的重建來源 |
+| `analysis.py` 約 164～175、294 行的舊直播分析流程 | 依賴原維護者的影片工具，現在不能用；網站不靠它 |
+| `cloud/import_d1_seed.py` 第 3 行、`agy-auth-probe.yml` 第 5 行的註解 | 指到 `.scratch/` 裡不存在的文件；照程式本身理解 |
+| `logs/check_*.py`、`logs/fetch_analysis_data.py`、`test_daily_update.py`、`cloud/market_pack_daily.py` | 寫死本機路徑，別台電腦會失敗（[for-ai-maintainers.md](for-ai-maintainers.md)） |
+| `cloud/eval-worker/` 的部署、換推播金鑰（`cron-trigger/set-push-keys.mjs`） | 還沒有網頁按鈕，要本機登入 `wrangler`／`gh` |

@@ -102,7 +102,7 @@ test("參數錯誤不消耗額度；方法不是 GET 回 405", async () => {
   assert.equal(r.status, 405);
 });
 
-test("資料包缺漏或格式不符回 503，不回半套資料；限速計數壞掉也回 503", async () => {
+test("資料包缺漏或格式不符回 503，不回半套資料；限速計數壞掉改用記憶體計數照常回（2026-11-24 事故）", async () => {
   deps.screensPack = undefined;
   for (const path of ENDPOINTS) assert.equal((await req(path)).status, 503, path);
   deps.screensPack = { ...PACK, schema: "old" };
@@ -110,7 +110,7 @@ test("資料包缺漏或格式不符回 503，不回半套資料；限速計數�
   deps.screensPack = PACK;
   const real = env.DB;
   env.DB = { prepare: (sql) => (/api_hits/.test(sql) ? (() => { throw new Error("d1 down"); })() : real.prepare(sql)) };
-  assert.equal((await req("/api/core-holdings")).status, 503);
+  assert.equal((await req("/api/core-holdings")).status, 200);
 });
 
 test("未發布前照本機回未就緒；資料包缺某一組合（不一致的包）回 503 而不是猜", async () => {

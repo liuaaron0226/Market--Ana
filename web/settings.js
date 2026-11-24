@@ -169,7 +169,7 @@
     .map(({ task, next }) => `${MODEL_TASKS[task.key].name}改成 ${choiceText(next)}：${SCORED[task.key]}`);
 
   // ---- 資料更新（2026-11-24：每一份資料最後更新的時間與狀態；/api/settings/data-health，判斷在 cloud/lib/data-health.js）----
-  const HEALTH_STATES = { ok: '正常', late: '延遲', failed: '停止更新', degraded: '部分異常' };
+  const HEALTH_STATES = { ok: '正常', late: '延遲', failed: '停止更新', degraded: '部分異常', error: '無法檢查' };
   function healthTime(value, now) {
     const text = String(value || '');
     if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text.slice(5);   // 只有資料日（基金淨值、主力分點…）
