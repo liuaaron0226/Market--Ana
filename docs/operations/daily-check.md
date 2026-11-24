@@ -1,0 +1,59 @@
+# 每天兩分鐘檢查（手機就能做）
+
+建議時間：**平日晚上 19:00 以後**（18:00 那一班每日更新通常在 18:30 前後跑完）。
+
+## 第一步：看網站（1 分鐘）
+
+打開 `https://market-ana.pages.dev`（要登入）。
+
+| 看哪裡 | 正常 | 不正常 |
+|---|---|---|
+| 首頁大盤圖卡、籌碼卡 | 最後一根是今天（交易日）；**圖卡標題下沒有小字** | 圖卡標題下出現「最近一次沒更新到」或「資料截至 某日」→ 那一塊過期了 |
+| 首頁「盤勢解讀」／籌碼白話 | 有一句結論，沒有附註 | 附註寫「依當天數字自動整理」→ 那一班 Gemini 沒寫成，改用程式套句（資料沒問題，AI 那段退化了） |
+| 首頁「消息」 | 有今天的幾班 | 某一組寫「本時段無資料」→ 那一班來源沒抓到 |
+| 個股頁新聞／公告區 | 有新聞 | 寫「今天沒抓到」或「MM-DD 之後沒抓到」→ 該來源這天失敗（常見原因：Google News 限流） |
+| 預測對帳頁 | 今天有晚間版、早上有晨間版 | 記成「漏記」→ 那一份沒寫成（多半是 Gemini 登入或額度問題） |
+| 設定（齒輪）→ AI 模型／用量 | 用量有今天的紀錄 | 出現「上一時段（時間）沒讀到你的設定，用了預設」→ 那一班讀資料庫失敗，用了預設模型；偶發一次不用處理 |
+
+只要「依當天數字自動整理」或「漏記」**連續兩天**出現，幾乎一定是 Gemini 登入檔失效 → 看 [credentials.md](credentials.md)〈AGY_LOGIN_BUNDLE〉。
+
+## 第二步：看 GitHub（1 分鐘）
+
+1. 手機瀏覽器打開 `https://github.com/liuaaron0226/Market--Ana/actions`（要登入 GitHub）。
+2. 左邊（手機在上方「All workflows」選單）依序點這幾支，看最上面一筆：
+
+| workflow 名稱 | 今天應該看到 |
+|---|---|
+| `daily-update` | 今天 15:30～20:30 有四筆左右；**至少一筆綠勾**，其他可能是灰色（等待／已完成）或綠勾 |
+| `forecast-ledger` | 晚上一筆綠勾 |
+| `forecast-morning` | 早上 07:20 左右一筆綠勾 |
+| `watch-ledger` | 早晚各一筆綠勾 |
+| `market-news` | 白天、晚上各班綠勾 |
+| `broker-branches` | 每日更新後一筆綠勾 |
+
+3. 顏色的意思：綠勾＝成功；紅叉＝失敗；灰色斜線＝被跳過（正常，例如休市或條件不成立）；黃點＝正在跑。
+
+## 「綠勾但其實有問題」怎麼看
+
+很多步驟設成「失敗不擋發布」，所以 run 是綠的，但裡面某一步失敗了：
+
+1. 點進那一筆 run → 點 `update`（或該工作名稱）。
+2. 步驟清單裡有**紅叉、但整體仍是綠勾**的那幾步，就是「部分失敗」。常見的：
+   - 「基金對照 0050…」紅叉 → 基金淨值有缺口或來源失敗，看 [data-gaps.md](data-gaps.md)。
+   - 「白話分析：還原登入檔…」或「消息型盯項：準備 agy」紅叉 → Gemini 登入檔問題，看 [credentials.md](credentials.md)。
+   - 「個股新聞標題…」紅叉 → 新聞來源限流，隔天通常自己好。
+3. run 頁面最下方的 **Summary**（摘要）有每日更新的結果 JSON：`"status": "success"`＋`"published": true` 才代表今天真的發布了新資料；`"status": "waiting"` 代表官方資料還沒出來、等下一班。
+
+## 什麼時候要動手
+
+| 看到 | 做什麼 |
+|---|---|
+| `daily-update` 今天四班都沒有綠勾，或 20:30 那班紅叉 | [rerun-and-redeploy.md](rerun-and-redeploy.md)〈重跑失敗的 run〉 |
+| 今天一筆 run 都沒有（連灰色都沒有） | 觸發器沒在動：可能是 `GITHUB_DISPATCH_TOKEN` 過期（[credentials.md](credentials.md)），或 GitHub 因 60 天沒活動停用了排程（Actions 頁會有黃色提示，按「Enable workflow」） |
+| 紅叉訊息寫 Cloudflare token 無效 | [credentials.md](credentials.md)〈CLOUDFLARE_API_TOKEN〉 |
+| 紅叉訊息寫「The job was not started because … spending limit」 | GitHub Actions 免費時數用完（倉庫是公開的，正常不會發生；若倉庫又被改回私人就會） |
+
+## 目前沒有的（待補，見 handover.md (e)）
+
+- 網站上還沒有「資料更新狀態」頁；`/api/data-status` 這個入口存在，但沒有任何頁面在讀。
+- 失敗時不會推播到手機；目前只有 GitHub 預設的失敗通知信（要在 GitHub → Settings → Notifications → Actions 確認有打開，**待確認**）。
