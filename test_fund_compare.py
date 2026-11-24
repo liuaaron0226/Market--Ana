@@ -140,6 +140,96 @@ class SeedMergeTest(unittest.TestCase):
         self.assertEqual((len(navs), navs[0][0], navs[-1]), (992, "2022-12-01", ("2026-11-17", 17.2)))
 
 
+class ManualGapFillTest(unittest.TestCase):
+    """人工補缺口（seeds/funds/README.md 的步驟）：清單多一筆 kind nav 的檔；只蓋住它自己看過的那幾天，
+    漏補的日子照樣報缺；和已有數字不同時記衝突、留原本的；SHA-256 對不上就停。"""
+
+    def setUp(self) -> None:
+        import json
+        import tempfile
+        from pathlib import Path
+        self.tmp = tempfile.TemporaryDirectory()
+        self.seeds = Path(self.tmp.name) / "seeds"
+        self.raw = Path(self.tmp.name) / "raw"
+        self.raw.mkdir()
+        dst = self.seeds / "BLKTENAU"
+        dst.mkdir(parents=True)
+        for path in (fc.SEED_DIR / "BLKTENAU").iterdir():
+            (dst / path.name).write_bytes(path.read_bytes())
+        self.folder = dst
+        # 回補到 11-16；之後的開放資料抽取檔只有 11-23～11-26 → 11-17～11-20 沒人看過
+        (self.raw / "BLKTENAU-nav-2026-11-26.json").write_text(json.dumps({"window": ["2026-11-23", "2026-11-26"], "rows": [
+            {"基金代碼": "BLKTENAU", "日期": d, "基金淨值(金額)": "17.5"} for d in ("20261123", "20261124", "20261125", "20261126")]},
+            ensure_ascii=False), encoding="utf-8")
+        (self.raw / "cbc-usdtwd-2026-11-26.json").write_text(json.dumps({"rows": [["2026-11-26", 32.8]]}), encoding="utf-8")
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def add(self, name: str, data: bytes, **extra) -> None:
+        import hashlib
+        import json
+        (self.folder / name).write_bytes(data)
+        path = self.folder / "backfill-manifest.json"
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        manifest["files"].append({"file": name, "kind": "nav", "sha256": hashlib.sha256(data).hexdigest(), **extra})
+        path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+    def issues(self) -> list:
+        return fc.load_history("BLKTENAU", raw_dir=self.raw, seed_dir=self.seeds, as_of="2026-11-27")["issues"]
+
+    def test_before_the_fix_the_gap_is_named(self) -> None:
+        self.assertEqual(self.issues(), [{"kind": "gap", "from": "2026-11-17", "to": "2026-11-20", "weekdays": 4}])
+
+    def test_filled_days_close_the_gap(self) -> None:
+        self.add("nav-backfill-2.csv", b"2026-11-17,16.950000\n2026-11-18,17.010000\n2026-11-19,17.100000\n2026-11-20,17.200000\n")
+        history = fc.load_history("BLKTENAU", raw_dir=self.raw, seed_dir=self.seeds, as_of="2026-11-27")
+        self.assertEqual(history["issues"], [])
+        self.assertIn(("2026-11-18", 17.01), history["navs"])
+
+    def test_a_partial_fill_still_reports_the_days_left(self) -> None:
+        # 只補了 11-17、11-18：11-19、11-20 不能因為「整份回補檔的區間」被當成休市
+        self.add("nav-backfill-2.csv", b"2026-11-17,16.95\n2026-11-18,17.01\n")
+        self.assertEqual(self.issues(), [{"kind": "gap", "from": "2026-11-19", "to": "2026-11-20", "weekdays": 2}])
+
+    def test_first_last_says_which_days_were_looked_at(self) -> None:
+        # 網頁 11-17～11-20 只有三天有淨值（11-19 基金休市）：清單寫 first／last，那天就不算缺
+        self.add("nav-backfill-2.csv", b"2026-11-17,16.95\n2026-11-18,17.01\n2026-11-20,17.2\n", first="2026-11-17", last="2026-11-20")
+        self.assertEqual(self.issues(), [])
+
+    def test_a_different_number_for_a_known_day_is_a_conflict_not_an_overwrite(self) -> None:
+        self.add("nav-backfill-2.csv", b"2026-11-16,99.0\n2026-11-17,16.95\n2026-11-18,17.01\n2026-11-19,17.1\n2026-11-20,17.2\n")
+        history = fc.load_history("BLKTENAU", raw_dir=self.raw, seed_dir=self.seeds, as_of="2026-11-27")
+        self.assertIn(("2026-11-16", 17.14), history["navs"])
+        self.assertEqual(history["issues"], [{"kind": "nav-conflict", "date": "2026-11-16", "kept": 17.14, "other": 99.0}])
+
+    def test_wrong_sha_stops(self) -> None:
+        self.add("nav-backfill-2.csv", b"2026-11-17,16.95\n")
+        (self.folder / "nav-backfill-2.csv").write_bytes(b"2026-11-17,16.96\n")
+        with self.assertRaisesRegex(ValueError, "SHA-256"):
+            self.issues()
+
+    def test_uppercase_sha_from_get_filehash_is_accepted(self) -> None:
+        import hashlib
+        import json
+        data = b"2026-11-17,16.95\n2026-11-18,17.01\n2026-11-19,17.1\n2026-11-20,17.2\n"
+        self.add("nav-backfill-2.csv", data)
+        path = self.folder / "backfill-manifest.json"
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        manifest["files"][-1]["sha256"] = hashlib.sha256(data).hexdigest().upper()
+        path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+        self.assertEqual(self.issues(), [])
+
+    def test_notepad_bom_and_windows_line_endings_are_read(self) -> None:
+        self.add("nav-backfill-2.csv", "﻿2026-11-17,16.95\r\n2026-11-18,17.01\r\n2026-11-19,17.1\r\n2026-11-20,17.2\r\n".encode("utf-8"))
+        self.assertEqual(self.issues(), [])
+
+    def test_a_row_outside_first_last_stops(self) -> None:
+        self.add("nav-backfill-2.csv", b"2026-11-17,16.95\n2026-11-24,17.5\n", first="2026-11-17", last="2026-11-20")
+        with self.assertRaisesRegex(ValueError, "first～last"):
+            self.issues()
+
+
 class GapTest(unittest.TestCase):
     """缺日檢查：官方檔涵蓋的區間內沒有淨值＝基金休市（正常）；沒有任何一份官方檔涵蓋到的平日才算缺。"""
 
@@ -380,7 +470,39 @@ class WorkflowTest(unittest.TestCase):
         step = steps[fund]
         self.assertIs(step.get("continue-on-error"), True)
         self.assertIn("python fund_compare.py daily --r2 --no-upload", step["run"])   # 試跑不寫 R2
-        self.assertIn("python fund_compare.py daily --r2 >", step["run"])
+        self.assertIn('python fund_compare.py daily --r2 --summary "$GITHUB_STEP_SUMMARY" >', step["run"])
+
+    def test_second_fetch_point_runs_every_day_apart_from_announcements(self) -> None:
+        # 第二個抓取點（2026-11-24）：announcements 每天 08:00（含週末連假）由 cron-trigger 觸發；
+        # 基金是另一個 job，公告失敗不擋它、它失敗也不擋公告；只用標準函式庫，所以沒有安裝套件那一步可以壞。
+        from pathlib import Path
+        import yaml
+        root = Path(fc.__file__).parent
+        doc = yaml.safe_load((root / ".github/workflows/announcements.yml").read_text(encoding="utf-8"))
+        job = doc["jobs"]["fund-nav"]
+        self.assertNotIn("needs", job)
+        self.assertEqual(job["env"]["R2_BUCKET"], "market-ana-state")
+        run = job["steps"][-1]["run"]
+        self.assertIn('python fund_compare.py daily --r2 --summary "$GITHUB_STEP_SUMMARY"', run)
+        self.assertNotIn("--no-upload", run)
+        self.assertFalse(any("pip install" in s.get("run", "") for s in job["steps"]))
+        worker = (root / "cron-trigger/worker.js").read_text(encoding="utf-8")
+        self.assertIn('"0 0": { workflow: "announcements.yml", slot: "0 0 * * *"', worker)
+        self.assertIn('"0 0 * * *"', (root / "cron-trigger/wrangler.toml").read_text(encoding="utf-8"))
+
+    def test_fund_fetch_needs_only_the_standard_library(self) -> None:
+        # fund-nav job 不裝套件：fund_compare、state_sync、level_signals（匯率解析）要只靠標準函式庫就能 import。
+        import subprocess
+        import sys
+        from pathlib import Path
+        code = ("import sys, importlib.abc\n"
+                "class Block(importlib.abc.MetaPathFinder):\n"
+                "    def find_spec(self, name, path, target=None):\n"
+                "        if name.split('.')[0] in ('requests', 'yaml', 'boto3', 'numpy', 'pandas'): raise ImportError(name)\n"
+                "sys.meta_path.insert(0, Block())\n"
+                "import fund_compare, state_sync, level_signals\n")
+        done = subprocess.run([sys.executable, "-c", code], cwd=Path(fc.__file__).parent, capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stderr)
 
 
 class _FakeLoader:
@@ -551,6 +673,130 @@ class DailyTest(unittest.TestCase):
         result = self.run_daily(self.get_for(_opendata_nav(), _opendata_dist(), _cbc(("2026-11-16", "32.8"))))
         self.assertEqual(result["sources"]["nav-BLKTENAU"]["status"], "failed")
         self.assertFalse(any(p.name.startswith("BLKTENAU-nav") for p in self.raw.iterdir()))
+
+
+class TwoFetchPointsTest(unittest.TestCase):
+    """兩個抓取點（announcements 每天 08:00、每日更新平日四個時段）是不同的 runner，只共用 R2：
+    當天記號跟著 R2 走，先成功的抓、另一個不重抓；先失敗的不留記號，另一個同一天會再試。"""
+
+    def setUp(self) -> None:
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+        import state_sync
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.store = state_sync.DirectoryStore(self.root / "r2")
+        self.calls: list[str] = []
+        self.only = mock.patch.dict(fc.FUNDS, {"BLKTENAU": fc.FUNDS["BLKTENAU"]}, clear=True)
+        self.only.start()
+        self.runner = 0
+
+    def tearDown(self) -> None:
+        self.only.stop()
+        self.tmp.cleanup()
+
+    def good(self, url: str) -> bytes:
+        self.calls.append(url)
+        return {fc.NAV_URL: _opendata_nav(("2026-11-16", "17.14"), ("2026-11-19", "17.01")),
+                fc.DIST_URL: _opendata_dist(("2026-10-30", "0.162", "N/A")), fc.CBC_URL: _cbc(("2026-11-20", "32.8"))}[url]
+
+    def fresh_runner(self, get, now: str, store=None) -> dict:
+        """每次都是新的 runner：空的本機資料夾，只有 R2 是共用的。"""
+        self.runner += 1
+        return fc.daily(store=store or self.store, get=get, now=now, raw_dir=self.root / f"runner-{self.runner}")
+
+    def test_second_point_the_same_day_does_not_fetch_or_save_again(self) -> None:
+        self.fresh_runner(self.good, "2026-11-21T08:00:00+08:00")   # 週六 08:00 announcements
+        before = sorted(self.store.keys("funds/raw/"))
+        self.calls.clear()
+        result = self.fresh_runner(self.good, "2026-11-21T15:30:00+08:00")
+        self.assertEqual(self.calls, [])
+        self.assertEqual({s["status"] for s in result["sources"].values()}, {"already-fetched-today"})
+        self.assertEqual((sorted(self.store.keys("funds/raw/")), result["uploaded"]), (before, 0))
+
+    def test_runs_on_weekends_and_taiwan_holidays(self) -> None:
+        # 沒有平日限制：週六、週日照樣抓（台股休市不影響；有沒有新淨值由集保決定）
+        for now in ("2026-11-21T08:00:00+08:00", "2026-11-22T08:00:00+08:00"):
+            result = self.fresh_runner(self.good, now)
+            self.assertNotIn("failed", {s["status"] for s in result["sources"].values()})
+        self.assertIn("funds/raw/fetched-2026-11-22-nav-BLKTENAU.json", self.store.keys("funds/raw/"))
+
+    def test_first_point_fails_then_the_other_point_retries_the_same_day(self) -> None:
+        def broken(url: str) -> bytes:
+            raise OSError("集保逾時")
+        first = self.fresh_runner(broken, "2026-11-23T08:00:00+08:00")
+        self.assertEqual(first["sources"]["nav-BLKTENAU"]["status"], "failed")
+        self.assertFalse([k for k in self.store.keys("funds/raw/") if "/fetched-" in k])
+        second = self.fresh_runner(self.good, "2026-11-23T15:30:00+08:00")
+        self.assertEqual(second["sources"]["nav-BLKTENAU"]["status"], "saved")
+        self.assertIn(fc.NAV_URL, self.calls)
+
+    def test_a_mark_is_never_uploaded_without_its_extract(self) -> None:
+        # 上傳到一半斷掉：抽取檔先上傳、記號最後；沒傳上去的抽取檔不會被「今天抓過了」擋住。
+        class Flaky:
+            def __init__(self, inner):
+                self.inner = inner
+
+            def keys(self, prefix):
+                return self.inner.keys(prefix)
+
+            def get(self, key):
+                return self.inner.get(key)
+
+            def put(self, key, data):
+                if key.endswith("-nav-2026-11-19.json"):
+                    raise OSError("R2 斷線")
+                self.inner.put(key, data)
+        with self.assertRaises(OSError):
+            self.fresh_runner(self.good, "2026-11-23T08:00:00+08:00", store=Flaky(self.store))
+        self.assertNotIn("funds/raw/fetched-2026-11-23-nav-BLKTENAU.json", self.store.keys("funds/raw/"))
+        self.calls.clear()
+        retry = self.fresh_runner(self.good, "2026-11-23T15:30:00+08:00")
+        self.assertEqual(retry["sources"]["nav-BLKTENAU"]["status"], "saved")
+        self.assertIn("funds/raw/BLKTENAU-nav-2026-11-19.json", self.store.keys("funds/raw/"))
+
+
+class GapSummaryTest(unittest.TestCase):
+    """缺口要說清楚哪一檔、哪幾天、怎麼補（執行摘要）；不補假淨值。"""
+
+    def test_gap_names_the_fund_the_days_and_the_manual(self) -> None:
+        line = fc.describe_issue("GLIACU", {"kind": "gap", "from": "2026-11-17", "to": "2026-11-18", "weekdays": 2})
+        self.assertIn("GLIACU（摩根多重收益 A股穩定月配）", line)
+        self.assertIn("2026-11-17～2026-11-18（2 個平日", line)
+        self.assertIn(fc.MANUAL_FIX, line)
+
+    def test_summary_lists_failed_sources_and_every_issue(self) -> None:
+        report = {"sources": {"nav-AGIFFVM": {"status": "failed", "error": "OSError: timeout"},
+                              "fx": {"status": "saved"}},
+                  "checks": {"AGIFFVM": [{"kind": "stale", "latest": "2026-11-10", "weekdays_behind": 9}], "GLIACU": []}}
+        text = fc.summary_markdown(report)
+        self.assertIn("抓取失敗 nav-AGIFFVM：OSError: timeout", text)
+        self.assertIn("AGIFFVM（安聯收益成長 AM 穩定月收） 最新淨值停在 2026-11-10，已落後 9 個平日", text)
+        self.assertNotIn("正常", text)
+
+    def test_summary_says_ok_when_nothing_is_wrong(self) -> None:
+        self.assertIn("正常", fc.summary_markdown({"sources": {"fx": {"status": "saved"}}, "checks": {"GLIACU": []}}))
+
+    def test_manual_exists(self) -> None:
+        from pathlib import Path
+        self.assertTrue((Path(fc.__file__).parent / fc.MANUAL_FIX).exists())
+
+    def test_check_command_appends_the_summary(self) -> None:
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = Path(tmp) / "summary.md"
+            summary.write_text("前面別的步驟\n", encoding="utf-8")
+            gap = [{"kind": "gap", "from": "2026-11-17", "to": "2026-11-18", "weekdays": 2}]
+            with mock.patch.object(fc, "load_history", return_value={"issues": gap}), \
+                    mock.patch("sys.stdout"):
+                code = fc.main(["check", "--as-of", "2026-11-24", "--summary", str(summary)])
+            text = summary.read_text(encoding="utf-8")
+        self.assertEqual(code, 1)
+        self.assertTrue(text.startswith("前面別的步驟\n### 基金淨值"))
+        self.assertIn("缺淨值 2026-11-17～2026-11-18", text)
 
 
 # ---- 名錄多檔基金（2026-11-24 加安聯收益成長 AM 穩定月收、摩根多重收益 A股穩定月配）----

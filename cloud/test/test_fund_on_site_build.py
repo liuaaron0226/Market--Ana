@@ -54,6 +54,23 @@ class FundRowsTests(unittest.TestCase):
         build._check_payload("BLKTENAU", payload)
         self.assertIsNone(build._isolate_strategy("BLKTENAU", payload), "基金策略通過建置檢查，不會被改成 null")
 
+    def test_gaps_and_conflicts_are_in_the_analysis_not_filled_in(self) -> None:
+        # 2026-11-24：缺口只能人工補（seeds/funds/README.md），分析照實帶出哪幾天缺、哪個數字對不上，給提醒推播用；
+        # 過期另看 analysis_status，seed-missing／fx-missing 不在這裡。
+        gap = {"kind": "gap", "from": "2026-11-17", "to": "2026-11-18", "weekdays": 2}
+        conflict = {"kind": "nav-conflict", "date": "2026-11-13", "kept": 17.73, "other": 17.8}
+
+        def loader(code: str, *, as_of: str) -> dict:
+            history = REAL(code, as_of=as_of)
+            return {**history, "issues": [gap, conflict, {"kind": "fx-missing"}]}
+        _, analyses, _ = fund_stock.fund_rows(DATA_DATE, loader=loader, codes=ONE)
+        payload = analyses[0]["payload"]
+        self.assertEqual(payload["data_issues"], [gap, conflict])
+        self.assertEqual(payload["bars"][-1], {"date": "2026-11-16", "close": 17.14})   # 沒有替缺的日子補數字
+        build._check_payload("BLKTENAU", payload)
+        _, clean, _ = fund_stock.fund_rows(DATA_DATE, loader=REAL, codes=ONE)
+        self.assertEqual(clean[0]["payload"]["data_issues"], [])
+
     def test_build_check_rejects_a_broken_fund_strategy_and_fund_strategy_on_a_stock(self) -> None:
         _, analyses, _ = fund_stock.fund_rows(DATA_DATE, loader=REAL, codes=ONE)
         payload = analyses[0]["payload"]

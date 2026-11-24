@@ -44,3 +44,30 @@ jobs:
         run: python -m pip install requests
       - name: 補齊原件、抓當日快照、存回 R2
         run: python announcements.py daily --r2
+
+  # 基金淨值的第二個抓取點（2026-11-24，本人「自動多回補幾天、自己補齊」）：集保開放資料 3-4 只留最近 4 個淨值日，
+  # 原本只有每日更新（週一到週五、在「驗證 Cloudflare token」之後）會抓，那支壞掉或停跑 4 個營業日就留下缺口。
+  # 這裡每天（含週末連假）台北 8:00 再抓一次，和公告分開一個 job：公告失敗不擋基金、基金失敗也不擋公告與接著跑的首頁消息。
+  # 「每個來源一天最多抓一次」照舊：R2 上有當天記號（fetched-<日期>-<來源>.json）就不抓；抓失敗不留記號，每日更新的時段會再試。
+  # 只用標準函式庫，不必裝套件。缺日、資料衝突、太久沒新淨值會讓這個 job 顯示失敗，並把哪一檔、哪幾天寫進執行摘要。
+  fund-nav:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TZ: Asia/Taipei
+      PYTHONIOENCODING: utf-8
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: market-ana-state
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: 基金淨值、配息、匯率：補齊 R2 已有的抽取檔、當天還沒抓到就抓、存回 R2
+        run: |
+          status=0
+          python fund_compare.py daily --r2 --summary "$GITHUB_STEP_SUMMARY" > "$RUNNER_TEMP/fund-daily.json" || status=$?
+          cat "$RUNNER_TEMP/fund-daily.json"
+          exit "$status"
