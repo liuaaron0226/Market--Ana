@@ -28,6 +28,7 @@ from playwright.sync_api import Page, sync_playwright
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 OUT = ROOT / ".scratch" / "site-design-upgrade"
+TAG = ""   # --tag：輸出檔名前面加一段（例如 after-），量樣品時才不會蓋掉改版前的那一份
 SIZES = {
     "1280": dict(viewport={"width": 1280, "height": 820}, device_scale_factor=1),
     "390": dict(viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True, has_touch=True,
@@ -199,13 +200,13 @@ def motions() -> list[dict]:
     cat = lambda c: f"#homeCats button[data-cat='{c}']"
     return [
         dict(name="home-enter", page="home", fresh=True, note="進頁面：板落桌、數字滾動"),
-        dict(name="home-cat-chips", page="home", click=cat("chips"), then_js=again(cat("chips")), note="首頁分類鍵：展開籌碼與資金，再點收回"),
+        dict(name="home-cat-chips", page="home", click=cat("chips"), then_click=cat("chips"), note="首頁分類鍵：展開籌碼與資金，再點收回"),
         dict(name="home-cat-switch", page="home", prep_click=cat("chips"), click=cat("screens"), note="首頁分類鍵：從一類換到另一類"),
         dict(name="home-cat-rotation", page="home", click=cat("rotation"), note="展開產業資金流向（地形長出來）", frames=(0, 120, 300, 600, 1000, 1600)),
         dict(name="home-cat-news", page="home", click=cat("news"), note="展開消息"),
         dict(name="home-chip-card", page="home", prep_click=cat("chips"), click="#chipGrid .chip-card", then_js=CLOSE, note="點一張籌碼卡：明細板浮出，再關掉"),
         dict(name="home-price-panel", page="home", click="#priceSummary", then_js=CLOSE, note="點報價：收復線／防守線面板浮出，再關掉"),
-        dict(name="home-trend-row", page="home", click="#marketTrendRows .trend-top", then_js=again("#marketTrendRows .trend-top"), note="短中長期走勢：展開一期，再收回"),
+        dict(name="home-trend-row", page="home", click="#marketTrendRows .trend-top", then_click="#marketTrendRows .trend-top", note="短中長期走勢：展開一期，再收回"),
         dict(name="home-search", page="home", click="#searchToggle", then_js=CLOSE, note="打開搜尋，再關掉"),
         dict(name="home-settings", page="home", click="#settingsOpen", then_js=CLOSE, note="打開設定，再關掉"),
         dict(name="home-index-menu", page="home", click="#indexChip", then_js=CLOSE, note="指數切換選單，再關掉"),
@@ -213,10 +214,10 @@ def motions() -> list[dict]:
         dict(name="home-tools-menu", page="home", click="#toolsKey", then_js=CLOSE, note="分析工具選單，再關掉"),
         dict(name="home-study-menu", page="home", click="#chartStudies .chart-chip", then_js=CLOSE, note="指標選單，再關掉"),
         dict(name="home-ma-settings", page="home", click="#legendNames .legend-name", then_js=CLOSE, note="點均線名稱：均線設定，再關掉"),
-        dict(name="home-forecast", page="home", click=".forecast-chip", then_js=again(".forecast-chip"), note="預測鍵，再點一次"),
+        dict(name="home-forecast", page="home", click=".forecast-chip", then_click=".forecast-chip", note="預測鍵，再點一次"),
         dict(name="home-scroll", page="home", js="window.scrollTo({ top: 900, behavior: 'smooth' })", note="往下捲", frames=(0, 150, 300, 500, 800)),
         dict(name="stock-enter", page="stock", fresh=True, note="進個股頁"),
-        dict(name="stock-cat-1", page="stock", click="#stockCats button:nth-of-type(1)", then_js=again("#stockCats button:nth-of-type(1)"), note="個股頁分類鍵：價位，再點收回"),
+        dict(name="stock-cat-1", page="stock", click="#stockCats button:nth-of-type(1)", then_click="#stockCats button:nth-of-type(1)", note="個股頁分類鍵：價位，再點收回"),
         dict(name="stock-cat-2", page="stock", click="#stockCats button:nth-of-type(2)", note="個股頁分類鍵：籌碼"),
         dict(name="stock-cat-3", page="stock", click="#stockCats button:nth-of-type(3)", note="個股頁分類鍵：比較"),
         dict(name="stock-cat-switch", page="stock", prep_click="#stockCats button:nth-of-type(1)", click="#stockCats button:nth-of-type(2)", note="個股頁分類鍵：價位換到籌碼"),
@@ -229,8 +230,8 @@ def motions() -> list[dict]:
         dict(name="stock-back", page="stock", click=".bd-back", note="返回：這一頁的板沉下去", frames=(0, 60, 120, 200)),
         dict(name="portfolio-enter", page="portfolio", fresh=True, note="進自選股與庫存"),
         dict(name="portfolio-filter", page="portfolio", click="#listFilter button:nth-of-type(2)", note="自選與庫存：篩選鍵（清單換內容）"),
-        dict(name="portfolio-row", page="portfolio", click="#holdingRows .hv-open", then_js=again("#holdingRows .hv-open"), note="點一檔展開明細，再收回"),
-        dict(name="portfolio-add", page="portfolio", click="#addToggle", then_js=again("#addToggle"), note="新增自選或庫存，再收回"),
+        dict(name="portfolio-row", page="portfolio", click="#holdingRows .hv-open", then_click="#holdingRows .hv-open", note="點一檔展開明細，再收回"),
+        dict(name="portfolio-add", page="portfolio", click="#addToggle", then_click="#addToggle", note="新增自選或庫存，再收回"),
         dict(name="portfolio-settings", page="portfolio", click="#settingsOpen", then_js=CLOSE, note="自選與庫存打開設定，再關掉"),
     ]
 
@@ -261,13 +262,14 @@ def burst(page, frames_dir: Path, name: str, start: float, times) -> list[dict]:
 def run_motion(browser, base: str, only: str | None) -> None:
     frames_dir = OUT / "frames"
     frames_dir.mkdir(parents=True, exist_ok=True)
-    target_file = OUT / ("motion.json" if not only else f"motion-{only}.json")
+    suffix = "-" + TAG.rstrip("-") if TAG else ""
+    target_file = OUT / (f"motion{suffix}.json" if not only else f"motion-{TAG}{only}.json")
     report: dict[str, object] = {}
     for item in motions():
         if only and only not in item["name"]:
             continue
         for size in SIZES:
-            name = f"{item['name']}-{size}"
+            name = f"{TAG}{item['name']}-{size}"
             path, ready = PAGES[item["page"]]
             context, page = new_context(browser, size)
             entry: dict[str, object] = {"note": item["note"]}
@@ -327,11 +329,18 @@ def run_motion(browser, base: str, only: str | None) -> None:
                     now = page.evaluate(ANIMS_JS)
                     entry["animations"] = summarize([a for a in now if (a["kind"], a["what"], a["who"]) not in before])
                     entry["frames"] = burst(page, frames_dir, name, start, item.get("frames", (0, 80, 160, 260, 400, 700)))
-                    if item.get("then_js"):
+                    if item.get("then_js") or item.get("then_click"):
                         # 第二段：通常是「關掉剛剛打開的東西」，量關的時候有沒有動畫
                         page.wait_for_timeout(500)
                         before = {(a["kind"], a["what"], a["who"]) for a in page.evaluate(ANIMS_JS)}
-                        page.evaluate(item["then_js"])
+                        if item.get("then_click"):
+                            # 再點同一顆（收回）：用真的滑鼠點，和使用者的點擊一樣
+                            box = page.locator(item["then_click"]).first.bounding_box()
+                            page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+                            page.mouse.down()
+                            page.mouse.up()
+                        else:
+                            page.evaluate(item["then_js"])
                         start = time.perf_counter()
                         page.wait_for_timeout(40)
                         entry["close_animations"] = summarize([a for a in page.evaluate(ANIMS_JS) if (a["kind"], a["what"], a["who"]) not in before])
@@ -433,7 +442,10 @@ def main() -> None:
     parser.add_argument("mode", choices=("pages", "motion", "press"))
     parser.add_argument("--base", default="http://127.0.0.1:5310")
     parser.add_argument("--only")
+    parser.add_argument("--tag", default="")
     args = parser.parse_args()
+    global TAG
+    TAG = args.tag
     OUT.mkdir(parents=True, exist_ok=True)
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)

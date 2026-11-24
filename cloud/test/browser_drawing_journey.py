@@ -2843,6 +2843,7 @@ def home_chart(journey: Journey, browser, touch: bool) -> None:
         page.screenshot(path=str(OUT / f"home-{'mobile' if touch else 'desktop'}-1-menu.png"))
         hline = journey.tool(page, "hline")
         (hline.tap() if touch else hline.click())
+        menu.wait_for(state="hidden", timeout=2_000)   # 首頁的選單收起有 0.2 秒的退場（web/desk-motion.css 第 3 段），等它退完再看
         journey.check(f"大盤（{name}）：選水平線：選單收起，鍵上寫「水平線」、旁邊出現離開鈕", menu.is_hidden() and hline.get_attribute("aria-pressed") == "true"
                       and key.inner_text().strip() == "水平線" and page.locator("#toolsExit").is_visible())
 
