@@ -21,11 +21,13 @@
 
 ## 2. `deploy-cron-trigger`：部署排程器（Worker）
 
-**什麼時候用**：`cron-trigger/` 的程式改了（排程時段、盯價、資料更新提醒），推上 `main` 之後。**推上 main 不會自動部署排程器**，一定要按這個。
+**什麼時候用**：`cron-trigger/` 底下任何檔改了，或它打包進去的 `cloud/lib/data-health*.js`（還有 `cloud/lib/watch-tick.js` 等它引用的檔）改了，推上 `main` 之後。**推上 main 不會自動部署排程器**，一定要按這個。
+
+目前線上版本：2026-11-24 深夜從 commit `64d9960` 部署，Version ID `2d5d8c62-eefb-47f3-bb34-6f2c17996d5f`。
 
 1. Run workflow，`dry_run` 勾著：跑排程器自己的測試＋試打包，不上傳。
 2. 綠了再按一次，取消勾選 `dry_run`：同樣先測試、通過才部署；Summary 印出新的版本編號與排程時段。
-3. 好的結果：綠勾、有版本編號。下一個排程時段（例如整點那一班）Actions 有新 run 出現。
+3. 好的結果：綠勾，摘要裡有 **Version ID**（沒有 Version ID 就不算部署成功）。下一個排程時段（例如整點那一班）Actions 有新 run 出現。
 
 注意：
 - 正式部署需要 GitHub secret `CLOUDFLARE_API_TOKEN` 有 **Account › Workers Scripts › Edit** 權限。**交接時還沒驗證過有沒有**；第一次正式部署若紅叉、訊息是權限不足（403、Authentication error），到 Cloudflare → My Profile → API Tokens 把那把權杖加上這個權限（或建一把新的換掉 secret），見 [credentials.md](credentials.md)。
