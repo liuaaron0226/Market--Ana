@@ -23,7 +23,7 @@
 
 **什麼時候用**：`cron-trigger/` 底下任何檔改了，或它打包進去的 `cloud/lib/data-health*.js`（還有 `cloud/lib/watch-tick.js` 等它引用的檔）改了，推上 `main` 之後。**推上 main 不會自動部署排程器**，一定要按這個。
 
-目前線上版本：2026-11-24 深夜從 commit `64d9960` 部署，Version ID `2d5d8c62-eefb-47f3-bb34-6f2c17996d5f`。
+目前線上版本：2026-11-24 深夜保活強化合併後重新部署；**現在的 Version ID 看 Cloudflare → Workers & Pages → `market-ana-cron-trigger` → Deployments**。上一版是 `2d5d8c62-eefb-47f3-bb34-6f2c17996d5f`（從 `64d9960` 部署）。
 
 1. Run workflow，`dry_run` 勾著：跑排程器自己的測試＋試打包，不上傳。
 2. 綠了再按一次，取消勾選 `dry_run`：同樣先測試、通過才部署；Summary 印出新的版本編號與排程時段。
@@ -41,10 +41,12 @@
 
 **背景**：公開倉庫連續 60 天沒有活動，GitHub 會停用有排程的 workflow；停用後連排程器送來的觸發也會被拒，網站就停更。
 
-**平常不用管**：它自動接在每天 08:00 的 `announcements` 與每一班 `market-news` 後面跑，把被停用的重新啟用（站主自己手動停用的不碰）。
+**平常不用管**：它會在這些時候自動跑，把被停用的重新啟用（站主自己手動停用的不碰）：
+- 每天 08:00 的 `announcements` 與每一班 `market-news` 之後；
+- 自己的每週排程（週一 03:17 UTC＝台北週一 11:17）。
 
-確認它有在跑：Actions → `workflow-keepalive`，每天早上 08:00 之後應該有一筆綠勾。
+另外大約每 25 天會自動提交一個「心跳」commit 到 `main`，只改 `ops/heartbeat.txt`（站主 2026-11-24 同意），讓倉庫不會被算成 60 天沒活動。三支必要的排程（`daily-update`、`forecast-replay`、`level-daily`）沒在啟用狀態時，它會**紅叉**。詳細以 `.github/workflows/workflow-keepalive.yml` 檔頭為準。
+
+確認它有在跑：Actions → `workflow-keepalive`，每天早上 08:00 之後應該有一筆綠勾；正式執行的摘要會寫「照常呼叫啟用：成功」。正式資料庫套了 0041 之後，設定頁「資料更新」也會有一列「排程保活」。
 
 手動跑：Run workflow，`dry_run` 勾著＝只列出每支排程目前的狀態；取消勾選＝真的去啟用。
-
-**交接時還在定稿**：預定再加上每月一次的「心跳」提交、自己的每週排程，以及「必要的 workflow 沒在啟用狀態就紅叉」。定稿後以 `.github/workflows/workflow-keepalive.yml` 檔頭為準。

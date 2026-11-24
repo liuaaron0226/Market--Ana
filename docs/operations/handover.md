@@ -31,16 +31,11 @@
   - 資料更新狀態：每日行情改從版本名讀資料日；正式站 11 項都是正常；D1 寫不進去時排程器照樣在允許的時段送推播（一天最多 4 則），那一班排程會明確失敗；規則的 SQL 用真的遷移檔測過；基金缺口也納入。
   - `d1-migrate`：能補完「只套一半、每句都是 IF NOT EXISTS」的遷移。
   - `market-news.yml`：加了 `set -o pipefail`，D1 寫入失敗不再被藏起來。
-  - 排程器（cron-trigger）：2026-11-24 深夜從 `64d9960` 用站主電腦的 wrangler 部署，`Current Version ID: 2d5d8c62-eefb-47f3-bb34-6f2c17996d5f`，排程時段不變（5 個）。之後 `cron-trigger/` 或它打包進去的 `cloud/lib/data-health*.js` 有改，都要按 `deploy-cron-trigger`（[ops-buttons.md](ops-buttons.md)）。
-- **返回回到原清單**：2026-11-24 深夜已併入 main（見 `git log` 的 “Back returns…”），部署中。合併後測試：JS 1365、返回旅程 163/163、`market_index` 75/75、`time_share` 103/103。之前 `market_index` 的那次失敗重跑 4 次都沒重現，判斷是記憶體不足的電腦同時開好幾個無頭瀏覽器造成的。
-- GitHub 上的 `main` 與 `release/core-v1` 內容相同，站主電腦上沒有未推送的提交。
-
-### 在分支上、還沒合併
-
-| 內容 | 分支 | 狀態 |
-|---|---|---|
-| 保活強化＋`tests.yml`＋`cloud/migrations/0041_ops_runs.sql`＋資料更新規則「排程保活」 | `keepalive-hardening`（在 GitHub，`bc8ce26`，當晚正在跟上 main；用分支最新的 commit） | 要站主同意「每月自動提交一次心跳到 main」才合併（C4） |
-| 設計升級：首頁、個股頁、庫存三頁 | `claude/site-design-upgrade-5ed2b5`（在 GitHub；用分支最新的 commit，撰寫時是 `500ba7c`） | 站主在 iPhone 試過最後的預覽、在設計那邊同意了；這邊當晚在做合併測試，結果見 C8 |
+  - 排程器（cron-trigger）：2026-11-24 深夜從 `64d9960` 部署（Version ID `2d5d8c62-eefb-47f3-bb34-6f2c17996d5f`），保活強化合併後又重新部署一次；**現在的 Version ID 看 Cloudflare → Workers & Pages → `market-ana-cron-trigger` → Deployments**（`2d5d8c62-…` 是上一版）。排程時段不變（5 個）。之後 `cron-trigger/` 或它打包進去的 `cloud/lib/data-health*.js` 有改，都要按 `deploy-cron-trigger`（[ops-buttons.md](ops-buttons.md)）。
+- **返回回到原清單**：2026-11-24 深夜已併入 main（見 `git log` 的 “Back returns…”）並**已部署**（redeploy run 45410562195 成功）。正式站用站主帳號核對：個股頁有載入 `NavReturn`、返回鍵帶 `data-nav-back`、API 都 200。**正式站沒有實際點過返回流程，也沒有 iPhone 實測。** 合併後測試：JS 1365、返回旅程 163/163、`market_index` 75/75、`time_share` 103/103。
+- **保活強化**：已併入 main（merge commit `19b6a65`；站主同意每月自動提交一次心跳）。GitHub 上乾跑、正式都綠：三支必要的 workflow（`daily-update`、`forecast-replay`、`level-daily`）和保活自己都回「照常呼叫啟用：成功」，並推了第一個心跳 commit `1f2f0fb`（只動 `ops/heartbeat.txt`），下一次心跳在 25 天後。`tests.yml` 第一次在 GitHub（Linux）跑綠：排程器 19、JS 1353、Python 2216（run 45414352113）。`cloud/migrations/0041_ops_runs.sql` 已在 main，明天 `d1-migrate` 會一起套。
+- **設計升級（首頁、個股頁、庫存）**：2026-11-24 深夜已併入 main 並部署（見 `git log` 的 “Merge site design upgrade”）。詳見 C8。
+- GitHub 上的 `main` 與 `release/core-v1` 內容相同；站主電腦上沒有未推送的工作；**沒有未合併的分支**（設計與保活的分支還留在 GitHub，但都已合併）。
 
 ---
 
@@ -48,13 +43,15 @@
 
 站主版步驟在 [owner-todo.md](owner-todo.md) 第 1 項。給 AI 的重點：
 
-1. Actions → `d1-migrate` → Run workflow，全部預設（乾跑）。摘要應該寫（2026-11-24 深夜修補後的乾跑 run 45408272724 已經是綠勾，摘要正是「1. 補記帳 6 支：0033～0038 … 2. 套用 0039_chain_map.sql：0039 只建了一部分…可以安全重跑 … 3. 套用 0040_data_health.sql」）：
+1. Actions → `d1-migrate` → Run workflow，全部預設（乾跑）。摘要應該列**四步**：
    - 補記帳 0033～0038（只補記帳表，不重跑）；
-   - 套用 **0039**——它是**只建了一半**：11-24 晚手動套用時被寫入額度切斷，只有 `chain_map_definitions` 那張表存在。重跑是安全的，每一句都是 `IF NOT EXISTS`；
-   - 套用 0040（0041 若已合併也一起）。
+   - 補完 **0039**——它**只建了一半**：11-24 晚手動套用時被寫入額度切斷，只有 `chain_map_definitions` 那張表存在。重跑是安全的，每一句都是 `IF NOT EXISTS`；
+   - 套用 0040（資料更新提醒）；
+   - 套用 0041（`0041_ops_runs.sql`，保活紀錄）。
+   （2026-11-24 深夜的乾跑 run 45408272724 是綠勾、列了前三步——當時 0041 還沒進 main。）
 2. 再跑一次，取消勾選 `dry_run`。
 3. 成功＝綠勾、摘要寫「資料庫已是最新」；再按一次乾跑會說沒有要做的事。
-4. 之後：資金版圖頁現在已經從 R2 讀到資料（樣品那一版，到 2026-10）；下一次 `daily-update` 正式發布（台北 18:00）會寫出第一份 D1 的完整資料。
+4. 之後：資金版圖頁現在已經從 R2 讀到資料（樣品那一版，到 2026-10）；下一次 `daily-update` 正式發布（台北 18:00）會寫出第一份 D1 的完整資料。0041 套用後，設定頁「資料更新」那一籤多一列「排程保活」。
 5. **0040 沒套之前，資料更新提醒一則都不會送**——連「寫入額度用完」那則也不會：`cloud/lib/data-health-alert.js` 約 99～115 行在檢查寫入之前就因為沒有 `data_health_alerts` 表回 skipped／no_table。所以按 `d1-migrate` 也就是打開提醒的那一步。08:00 後第一個時段可能收到「資料已恢復」之類的通知，是正常的。程式修正見 C14。
 6. **補帳完成前不得執行 `wrangler d1 migrations apply`。**
 
@@ -66,11 +63,12 @@
 
 ### C1. 08:00 之後的驗收
 - **做到哪**：等時間到。
-- **要驗**：`d1-migrate`（B）；網站寫入恢復（存一檔自選股試試）；資金版圖頁在 18:00 發布後改讀 D1（`/api/chain-map` 的 `source` 不再是 `r2`）；資料更新推播會送；08:00 `announcements` 跑完後 `workflow-keepalive` 自己出現一筆綠勾。
+- **要驗**：`d1-migrate`（B，四步）；設定頁出現「排程保活」；網站寫入恢復（存一檔自選股試試）；正式站實際點一次「從清單進個股再返回」；資金版圖頁在 18:00 發布後改讀 D1（`/api/chain-map` 的 `source` 不再是 `r2`）；資料更新推播會送；08:00 `announcements` 跑完後 `workflow-keepalive` 自己出現一筆綠勾。
 - **同意**：`d1-migrate` 正式執行由站主按。
 
 ### C2. 限流不要每個請求都寫 D1
 - **還缺**：`cloud/lib/gate.js` 的 `consume()` 改成先用記憶體、或分批／抽樣寫；資料更新狀態多一項「今天 D1 寫入用量」（規則表在 `cloud/lib/data-health.js` 的 `RULES`）。
+- **注意**：本機旅程測試伺服器放寬的 `rate` 物件少了幾個 bucket，限流的 INSERT 綁不上參數（`Provided value cannot be bound to SQLite parameter 4`），修補之後會**默默**退成記憶體限流。正式站所有 bucket 都有定義所以沒影響，但這表示設定錯的 bucket 不再大聲失敗；重做限流時要讓「缺 bucket」明確報錯。
 - **驗收**：JS 測試＋實際請求後 `api_hits` 寫入量下降；設定頁看得到用量。
 - **同意**：上線要問（設定頁多一列是看得到的變更）。
 
@@ -81,10 +79,10 @@
 - **驗收**：批次跑完當天 D1 寫入量在預算內。
 - **同意**：擴大範圍、改開關。
 
-### C4. 保活強化合併
-- **分支**：`keepalive-hardening`（GitHub，`bc8ce26` 起，用最新 commit）。內容：保活強化、`tests.yml`、`cloud/migrations/0041_ops_runs.sql`、資料更新規則「排程保活」。
-- **還缺**：站主同意每月心跳提交 → 合併 → 按 `d1-migrate` 套 0041 → 在 GitHub 驗證（第一次正式執行會建立 `ops/heartbeat.txt`）→ `tests.yml` 在 Linux 跑一次，必要時刪減模組清單。
-- **同意**：要（自動提交到 main）。
+### C4. 保活強化：觀察
+- **狀態**：已併入 main（`19b6a65`），驗證見 A。
+- **還要看**：每週自動那一班（週一 03:17 UTC＝台北週一 11:17）；08:00 `announcements` 之後那一班；25 天後第二個心跳 commit；`d1-migrate` 套 0041 後設定頁的「排程保活」。
+- **同意**：不需要（站主已同意每月心跳）。
 
 ### C5. ~~`market-news.yml` 管線沒有 `pipefail`~~（已完成，`64d9960`）
 
@@ -95,19 +93,21 @@
 
 ### C7. 返回回到原清單
 - **是什麼**：從首頁任何清單（籌碼排行、成交金額、選股清單、資金地形的強勢股、自選股、庫存、搜尋、國外同類股…）點進個股頁，返回時回到同一個清單、同一個浮板與排行、同一個捲動位置；直接開網址進個股頁才回大盤。返回鍵與手機上一頁一樣。站主 2026-11-24 指定要修整類入口，不只一處。
-- **狀態**：2026-11-24 深夜已併入 main（見 `git log` 的 “Back returns…”），部署中；測試見 A。
-- **還缺**：確認部署成功（正式站從清單點進個股再返回）；站主 iPhone 實測。
+- **狀態**：2026-11-24 深夜已併入 main 並部署（redeploy run 45410562195）；測試與正式站核對見 A。
+- **還缺**：正式站實際點一次返回流程（還沒人點過）；站主 iPhone 實測。
 - **設計線量測到的後續**：個股頁自己的狀態（展開的類別、選中的事實分頁）離開再回來不會還原；首頁「籌碼選股」清單那個入口沒有量測。
 - **待站主決定**：要不要放寬 `Cache-Control: no-store`，讓瀏覽器的整頁快取能用（安全上的取捨寫在 `cloud/lib/gate.js` 約 936 行）；返回鍵上的字要不要改（看得到的變更，帶樣張問）。
 
 ### C8. 設計升級（首頁、個股頁、庫存）
-- **分支**：`claude/site-design-upgrade-5ed2b5`，用最新 commit（撰寫時 `500ba7c`）。三頁已接好。
-- **合併清單、通過標準、真機檢查與退回做法**：那個分支根目錄 `DESIGN_UPGRADE.md` 第 10 節，照它做。
-- **狀態**：站主在 iPhone 試過最後的本機預覽並同意。這個倉庫當晚在做合併測試——先看 `git log` 有沒有併進 main：已併入就做「部署後驗收」；沒有就照第 10 節合併。
-- **合併時注意**：那個分支也改了 `docs/operations/handover.md` 兩處，衝突時留比較新的文字。
-- **部署前必須通過**（在有 `data/` 的檢出跑）：portfolio、price levels、margin use，加上返回回原清單、settings、drawing、time-share 的旅程。設計的動畫層讓「關閉／切換類別」的手指點擊延遲 140 ms，旅程要跟著等。
-- **規矩**：站主既有的介面定案不因升級作廢；之後的設定頁等其他頁也是一頁一頁、先給前後對照、站主同意才套。
-- **同意**：部署上線前再跟站主確認一次。
+- **狀態**：2026-11-24 深夜已併入 main 並部署（見 `git log` 的 “Merge site design upgrade”；站主確認過）。合併後在有 `data/` 的檢出測試：JS 1365；旅程 返回 163/163、time-share 103/103、drawing 420/420、settings 160/160、market index 75/75、margin use 25/25、chain map 45/45、portfolio 結束碼 0。
+- **還缺**：站主在**正式站用 iPhone** 實看，第一項：選中的類別鍵要有白色浮起框。設定、申請、管理、Gemini 這幾頁還沒接上設計層。完整清單、通過標準、真機檢查在倉庫根目錄 `DESIGN_UPGRADE.md` 第 10 節。
+- **退回做法**：拿掉 `web/minimal.html`、`web/stock.html`、`web/portfolio.html` 各兩行引用，和 `cloud/lib/build-page.js` 裡那兩個檔名，然後 redeploy。
+- 設計的動畫層讓「關閉／切換類別」的手指點擊延遲 140 ms，旅程測試要跟著等。
+- **規矩**：站主既有的介面定案不因升級作廢；其他頁之後也是一頁一頁、先給前後對照、站主同意才套。
+- **同意**：其他頁每一頁都要。
+
+### C8b. 既有的旅程失敗（和今晚的改動無關）
+- `cloud/test/browser_level_journey.py` 結束碼 1，卡在 `waiting for get_by_text("目前股票水位偏低")`。有沒有設計層都一樣失敗。原因沒查。
 
 ### C9. 補發事故中遺失的消息與晨間預測
 - 先查 R2 裡有沒有那幾班的原件，再決定能不能補發。沒驗證前不要承諾站主。
@@ -129,7 +129,7 @@
 
 ### C14. 額度用完時會出錯的小地方（當晚沒修，除非另有說明）
 - **資料更新提醒在沒有表時直接跳過**：`cloud/lib/data-health-alert.js` 約 99～115 行，`no_table` 時應該丟錯，或先做寫入測試再判斷有沒有表，否則 0040 沒套時連「寫入額度用完」都不會通知。
-- **資金版圖 D1 讀取錯誤變 503**：`cloud/lib/chain-map.js` 約 58～65、88～93 行，D1 讀取出錯（不是缺表）時直接 503，即使 R2 有資料。當晚可能已修——先查：`d1Flows` 有沒有包 try/catch。
+- ~~資金版圖 D1 讀取錯誤變 503~~（已修，2026-11-24 深夜：`cloud/lib/chain-map.js` 的 D1 讀取錯誤不再蓋掉 R2 的資料，名單讀不到時退回基準版）。
 - **資金版圖寫 R2 失敗沒聲音**：`chain_map_flows.py` 約 645～670 行只有警告或完全沒提示。
 - **60 分 K 快取寫入失敗被吞掉**：`cloud/lib/hourly-candles.js` 約 64～78 行；額度用完時每次請求都重新向富果要歷史資料。
 - **排程器自己的失敗沒有通知**：只在 Cloudflare 後台 Logs 看得到。
