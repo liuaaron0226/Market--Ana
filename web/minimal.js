@@ -1983,6 +1983,33 @@
   els.panelBack.addEventListener('click', returnPanel);
   els.panelNav.querySelectorAll('[data-layer]').forEach(button => button.addEventListener('click', () => renderLayerTwo(button.dataset.layer)));
 
+  // 返回原處（nav-return.js，本人 2026-11-24「從籌碼成交金額點進個股，返回要回到成交金額那一頁」）：
+  // 籌碼與資金的明細板（名單裡的股票連到個股頁）開著離開的話，按返回回來時照原本那一項、那一天、那一邊打開，
+  // 名單展開到一樣多、板子裡捲回原處。其他種明細板沒有連到別頁的東西，不記。
+  window.NavReturn?.remember('panel', {
+    layer: 'overlay',
+    save: () => {
+      if (els.panel.getAttribute('aria-hidden') !== 'false' || panelState.kind !== 'chip' || panelState.layer !== 1) return null;
+      const payload = panelState.payload || {};
+      return { key: payload.key, side: Number(payload.side) || 0, day: payload.day || '', top: Math.round(els.panelBody.scrollTop),
+        more: [...els.panelBody.querySelectorAll('.more-wrap')].map(wrap => wrap.classList.contains('is-all')) };
+    },
+    restore: async saved => {
+      const card = CHIP_LISTS[saved.key] ? $('chipGrid').querySelector(`[data-chip="${CSS.escape(String(saved.key))}"]`) : null;
+      if (!card) return;
+      const payload = { key: saved.key };
+      if (saved.side) payload.side = Number(saved.side);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(saved.day || '')) payload.day = saved.day;
+      openPanel('chip', payload, card);
+      const list = () => els.panelBody.querySelector('#chipList');
+      await window.NavReturn.until(() => list()?.firstElementChild && !list().classList.contains('is-loading') && !list().querySelector('[data-loading]'));
+      els.panelBody.querySelectorAll('.more-wrap').forEach((wrap, index) => {
+        if (saved.more?.[index] && !wrap.classList.contains('is-all')) wrap.querySelector('[data-more]')?.click();
+      });
+      els.panelBody.scrollTop = saved.top || 0;
+    },
+  });
+
   document.addEventListener('keydown', event => {
     if (event.key === 'Escape') closePanel();
     trapFocus(event);
@@ -2012,6 +2039,9 @@
     readSavedTheme();
     chart && chart.draw();
     requestAnimationFrame(updateOverlayControls);
+    // 清單、面板都還是原樣（返回原處，nav-return.js）；行情在離開的那段時間沒有更新，馬上再問一次
+    window.clearTimeout(pollTimer);
+    if (!document.hidden) pollLive();
   });
 
   // 主題在設定浮板裡切換（settings.js，本人 11-17 選樣品 A），切換後發 market:theme：圖用新的顏色重畫
@@ -2355,6 +2385,30 @@
   more.addEventListener('click', () => {
     if (nextCursor !== null && activeQuery) search(activeQuery, nextCursor);
   });
+
+  // 返回原處（nav-return.js，本人 2026-11-24）：在搜尋面板點了一檔、從個股頁按返回回來時，面板照原本的字與結果打開、捲回原處
+  const dialog = document.getElementById('stockSearchDialog');
+  const toggle = document.getElementById('searchToggle');
+  if (dialog && toggle) {
+    window.NavReturn?.remember('search', {
+      layer: 'overlay',
+      save: () => (dialog.open ? { q: input.value.trim(), count: results.children.length, top: Math.round(dialog.scrollTop) } : null),
+      restore: async saved => {
+        const query = String(saved.q || '').slice(0, 24);
+        input.value = query;
+        toggle.click();   // 和點放大鏡同一條路（home-fold.js 鎖住底下的頁面再打開；字是空的就載入最近搜尋）
+        if (!dialog.open) return;
+        if (query) {
+          await search(query);
+          // 原本按過「載入更多」：載到一樣多
+          for (let page = 0; page < 10 && results.children.length < (saved.count || 0) && nextCursor !== null; page += 1) await search(activeQuery, nextCursor);
+        } else {
+          await window.NavReturn.until(() => !suggestions.hidden && suggestions.querySelector('.stock-suggest-group'));
+        }
+        dialog.scrollTop = saved.top || 0;
+      },
+    });
+  }
 })();
 
 // G3：首頁兩區塊（籌碼選股／產業資金流向），只讀已封存的發布結果（第三塊「消息」在 market-news.js）。
@@ -2530,15 +2584,31 @@
     }
   }
 
-  function selectTab(key) {
+  function selectTab(key, expanded = false) {
     view.key = key;
-    view.expanded = false;
+    view.expanded = expanded;
     const tab = view.catalog.tabs.find(t => t.key === key);
     if (tab.kind !== 'rank') view.days = 1;
     chip.tabs.querySelectorAll('[role="tab"]').forEach(button => button.setAttribute('aria-selected', String(button.dataset.key === key)));
     chip.panel.setAttribute('aria-labelledby', `chipTab-${key}`);
-    load();
+    return load();
   }
+
+  // 返回原處（nav-return.js，本人 2026-11-24）：從名單點進個股、按返回回來時，照原本的排行、天數、買賣超、只看流入、展開到幾名再讀一次
+  let catalogDone = null;
+  const catalogReady = new Promise(resolve => { catalogDone = resolve; });
+  window.NavReturn?.remember('screens', {
+    save: () => (view.catalog && view.key ? { key: view.key, days: view.days, side: view.side, inflow: view.inflow, expanded: view.expanded } : null),
+    restore: async saved => {
+      await catalogReady;
+      const tab = view.catalog && view.catalog.tabs.find(item => item.key === saved.key);
+      if (!tab) return;
+      view.side = saved.side === 'sell' ? 'sell' : 'buy';
+      view.inflow = Boolean(saved.inflow && tab.inflow_filter);
+      view.days = tab.kind === 'rank' && (tab.day_options || []).includes(saved.days) ? saved.days : 1;
+      await selectTab(tab.key, Boolean(saved.expanded));
+    },
+  });
 
   async function initChips() {
     try {
@@ -2546,6 +2616,8 @@
     } catch (error) {
       chip.meta.textContent = '';
       setChipState('error', '籌碼選股暫時無法讀取，請稍後再試。');
+      view.catalog = null;
+      catalogDone();
       return;
     }
     // 資料日只在過期（比最新行情舊）時顯示（本人 2026-11-20 選「過期才顯示」）
@@ -2581,6 +2653,7 @@
     chip.inflow.addEventListener('change', () => { view.inflow = chip.inflow.checked; view.expanded = false; load(); });
     chip.more.addEventListener('click', () => { view.expanded = true; load(); });
     selectTab(view.catalog.tabs[0].key);
+    catalogDone();
   }
 
   // ---- 產業資金流向 ----
@@ -2637,6 +2710,8 @@
     rot.body.hidden = false;
   }
 
+  let rotationDone = null;
+  const rotationReady = new Promise(resolve => { rotationDone = resolve; });
   async function initRotation() {
     try {
       renderRotation(await getJson('/api/rotation'));
@@ -2646,7 +2721,25 @@
       rot.block.dataset.state = 'error';
       rot.status.textContent = '產業資金流向暫時無法讀取，請稍後再試。';
     }
+    rotationDone();
   }
+
+  // 返回原處（nav-return.js，本人 2026-11-24）：從資金地形點樓的明細、或下面的各產業強勢股點進個股，按返回回來時
+  // 同一棟樓選著（明細裡的強勢股還在）、強勢股停在同一個資金狀態
+  window.NavReturn?.remember('rotation', {
+    save: () => {
+      const tower = rot.terrain.querySelector('.terrain-tower.is-selected');
+      const tab = rot.strong.querySelector('[role="tab"][aria-selected="true"]');
+      return tower || tab ? { tower: tower ? tower.dataset.name : '', quadrant: tab ? tab.dataset.quadrant : '' } : null;
+    },
+    restore: async saved => {
+      await rotationReady;
+      if (rot.body.hidden) return;
+      const tab = [...rot.strong.querySelectorAll('[role="tab"]')].find(button => button.dataset.quadrant === saved.quadrant);
+      if (tab && tab.getAttribute('aria-selected') !== 'true') tab.click();
+      if (saved.tower) window.Terrain.select(rot.terrain, saved.tower);
+    },
+  });
 
   // 本人 2026-11-19：「長期核心持有」換成「消息」（market-news.js），比較圖整塊拿掉。
   initChips();

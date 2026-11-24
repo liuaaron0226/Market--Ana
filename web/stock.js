@@ -208,7 +208,8 @@
     const url = new URL(location.href);
     url.searchParams.set('code', code);
     url.searchParams.delete('preset');
-    if (url.href !== location.href) history.pushState(null, '', url);
+    // 頁內換股票也是一筆歷史紀錄：返回鍵／上一頁先一檔一檔退回去，最後回到原本點進來的清單（nav-return.js）
+    if (url.href !== location.href) window.NavReturn.push(url);
   }
 
   function node(tag, className, text) {
