@@ -20,8 +20,11 @@
   const MAX_SCALE = 1.3, EDGE = 14, TAG_ROOM = 30;
   // 長出來的動畫：每棟樓長多久、一棟接一棟隔多久（毫秒）。樣式從這裡拿，不另外寫一份。
   const GROW_MS = 900, STAGGER_MS = 26;
-  // 位移小於這個距離算點選，不算拖曳；手指點不準時，取這個距離內最近的一棟。
-  const TAP_SLOP = 6, NEAR_PICK = 28;
+  // 位移小於這個距離算點選，不算拖曳（手指會抖，觸控放寬）；滑鼠沒點中時，取這個距離內最近的一棟。
+  // 手機上樓頂只有十幾像素：手指點下去，樓頂中心落在 HIT_HALF 見方（44×44）裡的樓都算點中，取最近的一棟。
+  const TAP_SLOP = 6, TAP_SLOP_TOUCH = 12, NEAR_PICK = 28, HIT_HALF = 22;
+  // 選中的樓往上浮的高度（home.css 的 --raise），名稱牌要跟著算
+  const RAISE = 12;
   // 名稱牌：桌機標成交額前六大，手機只留前三大（其餘用樣式藏起來）。
   const TAGGED = 6, TAGGED_NARROW = 3;
   // 名稱牌的下緣比樓頂高出自己高度的幾成（原本樣式的 translate(-50%, -120%)）；互相讓開時上下留的空隙（像素）。
@@ -44,11 +47,12 @@
   const cleanups = new WeakMap();
 
   /* 建出街區、樓與名稱牌。回傳的 corners 是每個角落在街區上的位置與高度（縮放前、還沒轉），
-     fitCity 用它算整片街區轉到某個角度時，投影到畫面上佔多大。 */
+     frameAt 用它算整片街區轉到某個角度時，投影到畫面上佔多大；shapes 是每棟樓的中心、半邊長與樓高，
+     名稱牌與點選用同一套投影算樓頂在畫面上的位置，不必向瀏覽器讀版面。 */
   function buildCity(plan, labelOf) {
     const city = el('div', 'terrain-city');
     const tagLayer = el('div', 'terrain-tags');
-    const towers = [], tags = [], corners = [];
+    const towers = [], tags = [], corners = [], shapes = [], labels = [];
     const coverBox = (left, top, width, depth, height) => {
       [[left, top], [left + width, top], [left, top + depth], [left + width, top + depth]].forEach(([x, y]) => corners.push({ x, y, height }));
     };
@@ -63,6 +67,7 @@
       const label = el('div', 'terrain-ground-label', labelOf(block.quadrant));
       label.style.cssText = `${block.side.x > 0 ? 'right' : 'left'}:${MARGIN}px;${block.side.y > 0 ? 'bottom' : 'top'}:${MARGIN + 16}px`;
       ground.append(label);
+      labels.push(label);
       city.append(ground);
 
       block.towers.forEach(tower => {
@@ -85,59 +90,25 @@
           const tag = el('b', `terrain-tag${tower.rank >= TAGGED_NARROW ? ' minor' : ''}`, shortName(tower.name));
           tag.setAttribute('aria-hidden', 'true');
           tagLayer.append(tag);
-          tags.push({ tag, roof: node.querySelector('.top'), rank: tower.rank });
+          tags.push({ tag, roof: node.querySelector('.top'), rank: tower.rank, index: towers.length });
         }
+        // 頂面往外多畫了半個像素（home.css 的 inset: -.5px）
+        shapes.push({ x, y, half: side / 2 + 0.5, tall });
         city.append(node);
         towers.push(node);
       });
     });
     // 名稱牌照成交額名次排（疊到時名次後面的讓開）；街區是一區一區建的，這裡重排一次。
     tags.sort((a, b) => a.rank - b.rank);
-    return { city, tagLayer, towers, tags, corners };
+    return { city, tagLayer, towers, tags, corners, shapes, labels };
   }
 
-  /* 名稱牌對到樓頂在畫面上的位置。樓在長高、升起或街區在轉的時候位置一直變，
-     follow() 會每一格畫面重對一次，直到位置不再變為止（最多 4 秒），不必知道動畫有多長。 */
-  function tagFollower(stage, tags) {
-    let running = 0, still = 0, deadline = 0, last = '';
-    const place = () => {
-      const frame = stage.getBoundingClientRect();
-      // 名稱牌放在樓頂正上方。兩個疊到時名次後面的往上讓開一格；一格不夠或會高過框頂，這一刻先淡出（轉開了就回來）。
-      // tags 已照名次排；手機用樣式藏起來的寬是 0，不參與。
-      const boxes = tags.map(({ tag, roof }) => {
-        const box = roof.getBoundingClientRect(), width = tag.offsetWidth, height = tag.offsetHeight;
-        return { left: box.left + box.width / 2 - frame.left - width / 2, top: box.top - frame.top - height * TAG_LIFT, width, height };
-      });
-      const tops = global.TerrainLayout.stackTags(boxes, { gap: TAG_GAP, ceiling: 0 });
-      const spots = tags.map(({ tag }, index) => {
-        const crowded = tops[index] === null;
-        const spot = `translate(${boxes[index].left.toFixed(1)}px, ${(crowded ? boxes[index].top : tops[index]).toFixed(1)}px)`;
-        tag.style.transform = spot;
-        tag.classList.toggle('is-crowded', crowded);
-        return crowded ? `${spot}~` : spot;
-      }).join('|');
-      still = spots === last ? still + 1 : 0;
-      last = spots;
-    };
-    return function follow() {
-      still = 0;
-      deadline = performance.now() + 4000;
-      if (running) return;
-      const step = now => {
-        place();
-        running = still < 12 && now < deadline ? requestAnimationFrame(step) : 0;
-      };
-      running = requestAnimationFrame(step);
-    };
-  }
-
-  /* 依可用的寬與高等比縮放並置中：整片街區連同名稱牌都留在框內。
+  /* 取景：照轉到的角度（degrees），整片街區連同名稱牌放大到剛好放進框（width × height）裡並置中。
+     街區可以轉一整圈，每個角度佔的範圍不一樣，所以每個角度各算一次（純計算，不讀也不寫版面，一次不到 0.1 毫秒）；
+     用整圈最小的縮放固定下來的話，停著的時候街區會比現在小一圈，所以不那樣做。
      透視會把靠近觀看者的部分放大、往消失點的反方向推，所以縮放與位置互相影響，來回修正幾次就收斂。 */
-  // 照目前轉到的角度（degrees）取景：整片街區放大到剛好放進框裡並置中。街區可以轉一整圈，每個角度佔的範圍不一樣，
-  // 所以轉的時候跟著重算，不是用一個固定的大小。
-  function fitCity(stage, city, corners, degrees) {
-    const width = stage.clientWidth, height = stage.clientHeight;
-    if (!width || !corners.length) return;
+  function frameAt(width, height, corners, degrees) {
+    if (!width || !corners.length) return null;
     const vanishX = width * VANISH_X, vanishY = height * VANISH_Y, tilt = radians(TILT), turn = radians(degrees);
     // 每個角落轉到這個視角之後的位置（x 向右、y 向下、z 朝向觀看者）
     const turned = corners.map(({ x, y, height: tall }) => {
@@ -162,9 +133,90 @@
       centerX += width / 2 - (after.left + after.right) / 2;
       centerY += (height + TAG_ROOM) / 2 - (after.top + after.bottom) / 2;
     }
-    city.style.setProperty('--s', scale.toFixed(3));
-    city.style.left = `${centerX.toFixed(1)}px`;
-    city.style.top = `${centerY.toFixed(1)}px`;
+    // 寫進樣式的是四捨五入過的值；投影也用同一組，名稱牌才會和畫面上的樓對齊
+    return { degrees, vanishX, vanishY, scale: Number(scale.toFixed(3)), centerX: Number(centerX.toFixed(1)), centerY: Number(centerY.toFixed(1)),
+      cos: Math.cos(turn), sin: Math.sin(turn), tiltCos: Math.cos(tilt), tiltSin: Math.sin(tilt) };
+  }
+
+  // 街區上一點（x、y，離地 z）在框裡的位置：和瀏覽器畫 transform 的算法相同（縮放→傾斜→旋轉，再加透視）
+  function project(view, x, y, z) {
+    const turnedY = x * view.sin + y * view.cos;
+    const px = x * view.cos - y * view.sin, py = turnedY * view.tiltCos - z * view.tiltSin, pz = turnedY * view.tiltSin + z * view.tiltCos;
+    const near = PERSPECTIVE / (PERSPECTIVE - view.scale * pz);
+    return { x: view.vanishX + (view.centerX + view.scale * px - view.vanishX) * near, y: view.vanishY + (view.centerY + view.scale * py - view.vanishY) * near };
+  }
+
+  // 樓頂（四個角）投影到框裡的外框
+  function roofBox(view, shape, z) {
+    const box = { left: Infinity, right: -Infinity, top: Infinity, bottom: -Infinity };
+    [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(([sx, sy]) => {
+      const point = project(view, shape.x + sx * shape.half, shape.y + sy * shape.half, z);
+      box.left = Math.min(box.left, point.x); box.right = Math.max(box.right, point.x);
+      box.top = Math.min(box.top, point.y); box.bottom = Math.max(box.bottom, point.y);
+    });
+    return box;
+  }
+
+  /* 把取景寫到街區上：只寫這一個元素的 transform（位置、縮放、傾斜、旋轉一次寫完）。
+     不改會繼承的自訂屬性，裡面兩百多個面不用重算樣式；也不改 left／top，不用重排版面。 */
+  function placeCity(city, view) {
+    city.style.transform = `translate3d(${view.centerX}px, ${view.centerY}px, 0) scale3d(${view.scale}, ${view.scale}, ${view.scale}) rotateX(${TILT}deg) rotateZ(${view.degrees}deg)`;
+    city.dataset.angle = view.degrees.toFixed(1);
+  }
+
+  /* 名稱牌對到樓頂在畫面上的位置。
+     - 轉的時候：place(view) 用同一套投影算，不向瀏覽器讀版面（每一步只寫名稱牌自己的 transform）。
+     - 樓在長高、選中的樓升起時（有轉場，位置一格一格在變）：follow() 每一格畫面向瀏覽器量一次樓頂，
+       直到位置不再變為止（最多 4 秒），不必知道動畫有多長。 */
+  function tagFollower(stage, tags, shapes, towers) {
+    let running = 0, still = 0, deadline = 0, last = '', sizes = null;
+    // 名稱牌的寬高只在量版面的時候順便記下來（字不會變）；手機用樣式藏起來的寬是 0，不參與。
+    const measure = () => { sizes = tags.map(({ tag }) => [tag.offsetWidth, tag.offsetHeight]); };
+    // 名稱牌放在樓頂正上方。兩個疊到時名次後面的往上讓開一格；一格不夠或會高過框頂，這一刻先淡出（轉開了就回來）。
+    // tags 已照名次排。
+    const lay = boxes => {
+      const tops = global.TerrainLayout.stackTags(boxes, { gap: TAG_GAP, ceiling: 0 });
+      return tags.map(({ tag }, index) => {
+        const crowded = tops[index] === null;
+        const spot = `translate(${boxes[index].left.toFixed(1)}px, ${(crowded ? boxes[index].top : tops[index]).toFixed(1)}px)`;
+        tag.style.transform = spot;
+        tag.classList.toggle('is-crowded', crowded);
+        return crowded ? `${spot}~` : spot;
+      }).join('|');
+    };
+    const measured = () => {
+      const frame = stage.getBoundingClientRect();
+      measure();
+      const spots = lay(tags.map(({ roof }, index) => {
+        const box = roof.getBoundingClientRect(), [width, height] = sizes[index];
+        return { left: box.left + box.width / 2 - frame.left - width / 2, top: box.top - frame.top - height * TAG_LIFT, width, height };
+      }));
+      still = spots === last ? still + 1 : 0;
+      last = spots;
+    };
+    const halt = () => { if (running) { cancelAnimationFrame(running); running = 0; } };
+    return {
+      place(view) {
+        halt();
+        if (!sizes) measure();
+        lay(tags.map(({ index }, order) => {
+          const shape = shapes[index], [width, height] = sizes[order];
+          const box = roofBox(view, shape, shape.tall + (towers[index].classList.contains('is-selected') ? RAISE : 0));
+          return { left: (box.left + box.right) / 2 - width / 2, top: box.top - height * TAG_LIFT, width, height };
+        }));
+      },
+      follow() {
+        still = 0;
+        deadline = performance.now() + 4000;
+        if (running) return;
+        const step = now => {
+          measured();
+          running = still < 12 && now < deadline ? requestAnimationFrame(step) : 0;
+        };
+        running = requestAnimationFrame(step);
+      },
+      halt,
+    };
   }
 
   /* 選一棟樓：凸顯它、其他變淡，明細出現。回傳 { toggle, clear }：toggle 再點同一棟就取消，clear 一律取消。 */
@@ -173,7 +225,7 @@
     const select = node => {
       if (selected) { selected.classList.remove('is-selected'); selected.setAttribute('aria-pressed', 'false'); }
       selected = node || null;
-      follow();
+      follow();   // 選中的樓升起、其他的變淡都有轉場：名稱牌跟著樓頂走
       city.classList.toggle('has-selection', Boolean(selected));
       host.classList.toggle('has-selection', Boolean(selected));
       if (!selected) { detail.replaceChildren(); return; }
@@ -188,30 +240,44 @@
         .forEach(([term, value]) => { list.append(el('dt', '', term), el('dd', 'num', value)); });
       const extra = detailExtra ? detailExtra(selected.dataset.name) : null;
       detail.replaceChildren(state, el('h4', '', selected.dataset.name), list, ...(extra ? [extra] : []));
-      // 手機上明細排在街區下方，可能在畫面外：捲到看得見（桌機的明細浮在地形角落，不用捲）
-      if (getComputedStyle(detail).position === 'static') detail.scrollIntoView({ block: 'nearest' });
+      // 手機上明細排在街區下方。點樓不捲頁面（原本每次捲到明細整個看得見，點一下畫面就跳）；
+      // 只有明細整個落在畫面下緣以外、完全看不到時，才輕輕捲到剛好露出（桌機的明細浮在地形角落，不用捲）。
+      if (getComputedStyle(detail).position === 'static' && detail.getBoundingClientRect().top >= global.innerHeight) {
+        const calm = Boolean(global.matchMedia && global.matchMedia('(prefers-reduced-motion: reduce)').matches);
+        detail.scrollIntoView({ block: 'nearest', behavior: calm ? 'auto' : 'smooth' });
+      }
     };
     return { toggle: node => select(node && node !== selected ? node : null), clear: () => { if (selected) select(null); } };
   }
 
-  /* 指標與鍵盤：在地形上拖就是旋轉（不分方向），位移很小才算點選；Enter／空白鍵選取，Esc 取消。回傳一個收尾函式（停掉還在滑的慣性）。 */
-  // onTurn(degrees)：轉到新的角度時通知外面重新取景、把名稱牌移到樓頂上
-  function bindControls(stage, city, towers, picker, onTurn) {
-    // 手機上樓很小：沒點中時，取畫面上最近的一棟
-    const nearest = event => {
-      let best = null, bestDistance = NEAR_PICK;
+  /* 指標與鍵盤：在地形上左右拖是旋轉，位移很小才算點選；Enter／空白鍵選取，Esc 取消。回傳一個收尾函式（停掉還在滑的慣性）。
+     手指上下滑是捲頁面（home.css 的 touch-action: pan-y 交給瀏覽器捲），只有一開始偏左右的才轉；滑鼠不會捲頁面，往哪拖都轉。
+     onTurn(degrees)：轉到新的角度時通知外面重新取景、把名稱牌移到樓頂上；onRest()：停下來（放手不滑、慣性滑完）時通知。
+     whereIs(node)：那棟樓的樓頂中心在畫面上的位置（用取景的投影算）。 */
+  function bindControls(stage, city, towers, picker, onTurn, onRest, whereIs) {
+    // 沒點中樓頂時，取畫面上最近的一棟。手指（touch）：樓頂中心落在手指周圍 HIT_HALF 見方（44×44）內的都算，
+    // 而且比點到的側面優先（手機上樓頂只有十幾像素，手指常落在前面那棟的側面上）；滑鼠照舊，點到哪棟就是哪棟。
+    const nearest = (x, y, touch) => {
+      let best = null, bestDistance = touch ? Infinity : NEAR_PICK;
       towers.forEach(node => {
-        const box = node.querySelector('.top').getBoundingClientRect();
-        const distance = Math.hypot(event.clientX - (box.left + box.width / 2), event.clientY - (box.top + box.height / 2));
+        const centre = whereIs(node);
+        if (!centre) return;
+        const dx = x - centre.x, dy = y - centre.y, distance = Math.hypot(dx, dy);
+        if (touch && (Math.abs(dx) > HIT_HALF || Math.abs(dy) > HIT_HALF)) return;
         if (distance < bestDistance) { bestDistance = distance; best = node; }
       });
       return best;
+    };
+    const pick = event => {
+      const touch = event.pointerType === 'touch';
+      const hit = event.target.closest('.terrain-tower');
+      if (hit && event.target.classList.contains('top')) return hit;   // 正好點在樓頂上
+      return touch ? nearest(event.clientX, event.clientY, true) || hit : hit || nearest(event.clientX, event.clientY, false);
     };
     let angle = ANGLE_START, drag = null, glide = 0;
     const calm = Boolean(global.matchMedia && global.matchMedia('(prefers-reduced-motion: reduce)').matches);
     const turnTo = degrees => {
       angle = degrees;
-      city.style.setProperty('--rz', `${angle}deg`);
       // 轉到背面時，寫在地上的街區名稱跟著倒過來，字才不會是顛倒的
       city.classList.toggle('is-turned', Math.cos(radians(angle - ANGLE_START)) < 0);
       onTurn(angle);
@@ -224,7 +290,7 @@
         const elapsed = now - last;
         last = now;
         speed *= Math.pow(GLIDE_KEEP, elapsed / 16);
-        if (Math.abs(speed) < GLIDE_STOP) { glide = 0; return; }
+        if (Math.abs(speed) < GLIDE_STOP) { glide = 0; onRest(); return; }
         turnTo(angle + speed * elapsed);
         glide = global.requestAnimationFrame(step);
       };
@@ -236,8 +302,9 @@
       const gliding = glide !== 0;
       global.cancelAnimationFrame(glide);
       glide = 0;
+      if (gliding) onRest();
       drag = { id: event.pointerId, x: event.clientX, y: event.clientY, angle, turning: false, at: event.timeStamp, lastX: event.clientX, speed: 0,
-        tower: gliding ? null : event.target.closest('.terrain-tower') || nearest(event), halted: gliding };
+        touch: event.pointerType === 'touch', tower: gliding ? null : pick(event), halted: gliding };
     });
     stage.addEventListener('pointermove', event => {
       if (!drag || event.pointerId !== drag.id) return;
@@ -245,8 +312,9 @@
       if (event.pointerType === 'mouse' && event.buttons === 0) { stop(); return; }
       const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
       if (!drag.turning) {
-        // 動得比點選多了就是在轉：不管方向，斜著拖、偏上下也算（頁面要捲動，手指放在地形以外）
-        if (Math.hypot(dx, dy) < TAP_SLOP) return;
+        // 手指抖一點還算點選；動得比這多了才決定：偏上下的是捲頁面（交給瀏覽器，這裡放掉），偏左右的才是轉
+        if (Math.hypot(dx, dy) < (drag.touch ? TAP_SLOP_TOUCH : TAP_SLOP)) return;
+        if (drag.touch && Math.abs(dy) > Math.abs(dx)) { stop(); return; }
         drag.turning = true;
         stage.classList.add('is-dragging');
         // 確定是在轉了才把指標抓住，轉到街區外面放開也收得到
@@ -262,9 +330,10 @@
       if (!drag.turning) { if (!drag.halted) picker.toggle(drag.tower); }
       // 手指停住一下才放開就不滑；開了「減少動態效果」也不滑
       else if (!calm && event.timeStamp - drag.at < 80 && Math.abs(drag.speed) >= GLIDE_STOP) coast(drag.speed);
+      else onRest();
       stop();
     });
-    stage.addEventListener('pointercancel', stop);
+    stage.addEventListener('pointercancel', () => { if (drag && drag.turning) onRest(); stop(); });
     stage.addEventListener('pointerleave', () => { if (drag && !drag.turning) stop(); });
     city.addEventListener('keydown', event => {
       const node = event.target.closest('.terrain-tower');
@@ -286,22 +355,34 @@
     host.classList.add('terrain');
     host.classList.remove('has-selection');
 
-    const { city, tagLayer, towers, tags, corners } = buildCity(global.TerrainLayout.layout(bubbles), labelOf);
+    const { city, tagLayer, towers, tags, corners, shapes, labels } = buildCity(global.TerrainLayout.layout(bubbles), labelOf);
     const stage = el('div', 'terrain-stage');
     const detail = el('div', 'terrain-detail');
     detail.setAttribute('aria-live', 'polite');
     stage.style.perspective = `${PERSPECTIVE}px`;
     stage.style.perspectiveOrigin = `${VANISH_X * 100}% ${VANISH_Y * 100}%`;
-    city.style.setProperty('--rx', `${TILT}deg`);
-    city.style.setProperty('--rz', `${ANGLE_START}deg`);
     city.style.setProperty('--grow-ms', `${GROW_MS}ms`);
     city.style.setProperty('--stagger-ms', `${STAGGER_MS}ms`);
     stage.append(city, tagLayer);
     host.append(stage, detail);
 
-    const follow = tagFollower(stage, tags);
-    let view = ANGLE_START;
-    const fit = () => { fitCity(stage, city, corners, view); follow(); };
+    const label = tagFollower(stage, tags, shapes, towers);
+    // 框的大小只在第一次與框改變大小時量（ResizeObserver）；轉的時候不再向瀏覽器讀版面。
+    let width = 0, height = 0, angle = ANGLE_START, view = null;
+    const aim = () => {
+      view = frameAt(width, height, corners, angle);
+      if (view) placeCity(city, view);
+      return view;
+    };
+    // 停下來時：街區名稱的字級跟著縮放（只寫那四個名稱自己，不經由街區往下繼承）
+    const rest = () => { if (view) labels.forEach(node => node.style.setProperty('--s', String(view.scale))); };
+    const fit = () => {
+      width = stage.clientWidth;
+      height = stage.clientHeight;
+      if (!aim()) return;
+      rest();
+      label.follow();
+    };
     const observers = [];
     if (typeof ResizeObserver === 'function') {
       const resized = new ResizeObserver(fit);
@@ -315,7 +396,7 @@
     const grow = () => {
       city.classList.add('is-grown');
       stage.classList.add('is-grown');
-      follow();
+      label.follow();
       settle = global.setTimeout(() => city.classList.add('is-settled'), GROW_MS + STAGGER_MS * towers.length + 100);
     };
     if (typeof IntersectionObserver === 'function') {
@@ -326,7 +407,25 @@
       observers.push(seen);
     } else grow();
 
-    const stopGlide = bindControls(stage, city, towers, selection(host, city, detail, byName, labelOf, follow, payload && payload.detailExtra), degrees => { view = degrees; fit(); });
+    const settled = () => city.classList.contains('is-settled');
+    const turned = degrees => {
+      angle = degrees;
+      if (!aim()) return;
+      // 樓長好之後名稱牌用投影算；還在長高時樓頂一直在動，照舊每一格向瀏覽器量
+      if (settled()) label.place(view); else label.follow();
+    };
+    // 樓頂中心在畫面上的位置（點選用）：樓長好之後用投影算；還在長高時直接量
+    const whereIs = node => {
+      if (!view || !settled()) {
+        const box = node.querySelector('.top').getBoundingClientRect();
+        return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+      }
+      const shape = shapes[towers.indexOf(node)], frame = stage.getBoundingClientRect();
+      const centre = project(view, shape.x, shape.y, shape.tall + (node.classList.contains('is-selected') ? RAISE : 0));
+      return { x: frame.left + centre.x, y: frame.top + centre.y };
+    };
+    const picker = selection(host, city, detail, byName, labelOf, label.follow, payload && payload.detailExtra);
+    const stopGlide = bindControls(stage, city, towers, picker, turned, rest, whereIs);
     cleanups.set(host, () => { observers.forEach(observer => observer.disconnect()); global.clearTimeout(settle); stopGlide(); });
   }
 
