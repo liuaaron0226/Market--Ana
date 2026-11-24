@@ -97,6 +97,21 @@ def main() -> None:
         page.evaluate("() => document.querySelector('#detailPanel .panel-close').click()")
         page.wait_for_timeout(500)
 
+        # 選中的框：展開一類之後，那一排的 ::before 要和被選中的那顆鍵一樣大、而且看得到
+        page.locator("#homeCats button[data-cat='news']").scroll_into_view_if_needed()
+        page.locator("#homeCats button[data-cat='news']").click()
+        page.wait_for_timeout(900)
+        frame = page.evaluate("""() => { const bar = document.querySelector('#homeCats'), key = bar.querySelector('button[aria-expanded="true"]'), cs = getComputedStyle(bar, '::before');
+          return { frame: [Math.round(parseFloat(cs.width)), Math.round(parseFloat(cs.height))], key: [key.offsetWidth, key.offsetHeight], opacity: cs.opacity, shadow: cs.boxShadow !== 'none' }; }""")
+        expect("選中的框畫得出來：和被選中的那顆鍵一樣大、不透明、有鍵的陰影", frame["frame"] == frame["key"] and frame["frame"][0] > 40 and frame["opacity"] == "1" and frame["shadow"], frame)
+        page.screenshot(path=str(OUT / "frame-selected.png"))
+        page.locator("#homeCats button[data-cat='news']").click()
+        page.wait_for_timeout(700)
+        gone = page.evaluate("() => getComputedStyle(document.querySelector('#homeCats'), '::before').opacity")
+        expect("收回之後框淡掉", gone == "0", gone)
+        page.evaluate("() => scrollTo(0, 0)")
+        page.wait_for_timeout(300)
+
         page.locator("#settingsOpen").click()
         page.wait_for_timeout(700)
         sheet = page.evaluate(RECT, "#settingsDialog")

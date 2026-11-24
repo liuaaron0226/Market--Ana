@@ -15,10 +15,12 @@
 @property --upg-ox { syntax: "<length>"; inherits: false; initial-value: 0px; }
 @property --upg-oy { syntax: "<length>"; inherits: false; initial-value: -8px; }
 @property --upg-drag { syntax: "<length>"; inherits: false; initial-value: 0px; }
-@property --upg-tx { syntax: "<length>"; inherits: false; initial-value: 0px; }
-@property --upg-ty { syntax: "<length>"; inherits: false; initial-value: 0px; }
-@property --upg-tw { syntax: "<length>"; inherits: false; initial-value: 0px; }
-@property --upg-th { syntax: "<length>"; inherits: false; initial-value: 0px; }
+/* 選中的框的位置與大小：寫在那一排上、由那一排的 ::before 來用，所以這四個「要」往下傳（偽元素是從它所屬的元素繼承的；
+   登記成不往下傳的話框會拿到 0、畫不出來）。那一排裡面只有幾顆鍵，往下傳的代價很小。 */
+@property --upg-tx { syntax: "<length>"; inherits: true; initial-value: 0px; }
+@property --upg-ty { syntax: "<length>"; inherits: true; initial-value: 0px; }
+@property --upg-tw { syntax: "<length>"; inherits: true; initial-value: 0px; }
+@property --upg-th { syntax: "<length>"; inherits: true; initial-value: 0px; }
 @property --upg-ts { syntax: "<number>"; inherits: false; initial-value: 0.9; }
 :root { --u-move: 350ms; --u-in: 320ms; --u-out: 200ms; --u-fade: 180ms; --u-press: 80ms; --u-exit: cubic-bezier(.4, 0, 1, 1); }
 
