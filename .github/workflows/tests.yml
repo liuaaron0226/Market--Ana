@@ -1,0 +1,61 @@
+# 測試（2026-11-24）：推上 main 或手動按時，在乾淨的 checkout（沒有 data/）跑確定會過的那幾組測試。
+# 只看結果，不擋部署、也不觸發部署：網站部署由每日更新（daily-update）自己做，沒有任何 workflow 接在這一支後面。
+# 不讀任何機密設定。跑哪些、為什麼沒跑哪些：
+# - Python：.github/ci/python-tests.txt 列的模組（裡面寫了沒放進來的模組和原因）。MARKET_ANA_SKIP_STEP_RUNS=1：
+#   「實跑 workflow 的 shell 步驟」那幾項跳過（開發機上一直跳過、沒在 Linux 驗過），和開發機的結果一致。
+# - 網站程式（cloud/test/*.test.js、kchart-gestures.test.cjs）：全部，只有 intraday-client.test.js 不跑——
+#   它讀 cloud/.stock-pack.json，那是每日更新用 data/ 建出來的資料包，倉庫裡沒有。
+# - 排程程式（cron-trigger/*.test.js）：全部。
+# - cloud/test 底下的 Python 測試（test_*.py、browser_*.py）不跑：要瀏覽器或 data/，也不能用 discover。
+# 紅色＝有東西壞了，但網站照常運作；把那一頁的網址給工程師或另一個 AI 看。
+name: tests
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TZ: Asia/Taipei              # 測試是在台北時間的機器上寫的
+      PYTHONIOENCODING: utf-8
+      MARKET_ANA_SKIP_STEP_RUNS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: 安裝相依
+        run: python -m pip install -r requirements-daily.txt pyyaml
+      - name: Python 測試（.github/ci/python-tests.txt）
+        run: |
+          modules="$(grep -v '^\s*#' .github/ci/python-tests.txt | grep -v '^\s*$' | tr '\n' ' ')"
+          python -X utf8 -m unittest $modules
+
+  javascript:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TZ: Asia/Taipei
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: 排程程式（cron-trigger）
+        run: node --test cron-trigger/*.test.js
+      - name: 網站程式（cloud/test，intraday-client.test.js 除外）
+        working-directory: cloud
+        run: |
+          files="$(ls test/*.test.js | grep -v '^test/intraday-client\.test\.js$' | tr '\n' ' ')"
+          node --test --no-warnings $files test/kchart-gestures.test.cjs

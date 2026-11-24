@@ -125,6 +125,37 @@ test("讀資料庫：主力分點、國外行情部分抓取失敗；預測最�
   assert.equal(facts.fund_nav.data_date, "2026-11-19");
 });
 
+// ---------- 排程保活（workflow-keepalive 寫 0041 ops_runs）----------
+test("判斷：排程保活 8 天內成功過＝正常；超過＝延遲；超過 16 天＝停止；從沒成功＝停止", () => {
+  const keep = (fact, now = TUE_2200) => only(evaluateHealth({ keepalive: fact }, now), "keepalive");
+  assert.equal(keep({ last_ok_at: "2026-11-17T03:20:00Z", attempt_at: "2026-11-24T00:05:00Z" }).state, "ok");
+  const late = keep({ last_ok_at: "2026-11-14T03:20:00Z", attempt_at: "2026-11-24T00:05:00Z" });
+  assert.deepEqual([late.state, late.since, late.detail], ["late", "2026-11-22T03:20:00.000Z", "已 10 天沒成功"]);
+  assert.equal(keep({ last_ok_at: "2026-11-01T03:20:00Z", attempt_at: "2026-11-24T00:05:00Z" }).state, "failed");
+  const never = keep({ last_ok_at: null, attempt_at: "2026-11-24T00:05:00Z" });
+  assert.deepEqual([never.state, never.since, never.detail], ["failed", "2026-11-24T00:05:00.000Z", "一直沒成功過"]);
+  assert.equal(keep({ last_ok_at: "2026-11-14T03:20:00Z" }, at("2026-12-25T23:00:00")).state, "failed", "休市日照樣算（GitHub 不看台股）");
+});
+
+test("讀資料庫：排程保活讀 ops_runs；0041 還沒套就不出現", async () => {
+  const db = fakeD1();
+  assert.equal((await readHealthFacts(db)).keepalive, undefined, "表是空的不出現");
+  await db.prepare("INSERT INTO ops_runs (job, last_ok_at, last_attempt_at, detail) VALUES ('workflow-keepalive', '2026-11-24T00:05:00Z', '2026-11-24T00:05:00Z', 'keepalive=success')").run();
+  assert.deepEqual((await readHealthFacts(db)).keepalive, { last_ok_at: "2026-11-24T00:05:00Z", attempt_at: "2026-11-24T00:05:00Z" });
+  const old = fakeD1(MIGRATION_FILES.filter((f) => f !== "0041_ops_runs.sql"));
+  assert.equal((await readHealthFacts(old)).keepalive, undefined);
+});
+
+test("讀資料庫：保活寫進來的那一句（workflow_keepalive.py record-sql 的格式）重跑只更新、失敗不蓋掉上次成功", async () => {
+  const db = fakeD1();
+  const upsert = (ok, stamp) => db._raw.exec("INSERT INTO ops_runs (job, last_ok_at, last_attempt_at, detail) VALUES ('workflow-keepalive', "
+    + `${ok ? `'${stamp}'` : "NULL"}, '${stamp}', 'x') ON CONFLICT (job) DO UPDATE SET last_attempt_at = excluded.last_attempt_at, `
+    + "last_ok_at = COALESCE(excluded.last_ok_at, ops_runs.last_ok_at), detail = excluded.detail;");
+  upsert(true, "2026-11-20T00:05:00Z");
+  upsert(false, "2026-11-24T00:05:00Z");
+  assert.deepEqual((await readHealthFacts(db)).keepalive, { last_ok_at: "2026-11-20T00:05:00Z", attempt_at: "2026-11-24T00:05:00Z" });
+});
+
 // ---------- 設定頁入口 ----------
 const ORIGIN = "https://market-ana.pages.dev";
 let issuer, env, deps;

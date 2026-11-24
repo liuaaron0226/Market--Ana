@@ -95,6 +95,8 @@ class ParserTest(unittest.TestCase):
                 before = dm.migration_status(mig, state_of(database(NAMES[:i], NAMES[:i])))[0] if i else dm.NOT_APPLIED
                 after, lines = dm.migration_status(mig, state_of(database(NAMES[:i + 1], NAMES[:i])))
                 self.assertEqual((before, after), (dm.NOT_APPLIED, dm.APPLIED), "\n".join(lines))
+                if i:
+                    self.assertEqual(dm.conflicts(mig, state_of(database(NAMES[:i], NAMES[:i]))), [], "正常的套用前不能誤判成同名衝突")
 
     def test_rebuilds_are_told_apart_by_their_new_definition(self):
         checks = {(c.kind, c.name): c for c in dm.expected_checks([m for m in MIGRATIONS if m.name.startswith("0037")])}
@@ -176,6 +178,77 @@ class ProductionTodayTest(unittest.TestCase):
         report = dm.plan(WITH_NEW, state_of(production()), real=True, reconcile_only=True)
         self.assertEqual((report.ok, report.reconcile, report.apply), (True, HAND, []))
         self.assertIn("只補記帳", text(report))
+
+
+CHAIN = "0039_chain_map.sql"
+
+
+@unittest.skipUnless(CHAIN in FILES, "0039 還沒合併進來")
+class PartialIdempotentTest(unittest.TestCase):
+    """正式資料庫 2026-11-24 晚：手動套 0039 時被當天寫入額度中斷，只建了一部分。0039 每一句都是 IF NOT EXISTS，可以安全重跑。"""
+
+    def partial(self, picks):
+        db = production()
+        statements = dm.split_statements(FILES[CHAIN])
+        for i in picks:
+            db.execute(statements[i])
+        return db
+
+    def test_0039_is_idempotent_and_0037_is_not(self):
+        by_name = {m.name: m for m in MIGRATIONS}
+        self.assertTrue(by_name[CHAIN].idempotent())
+        self.assertFalse(by_name["0037_market_news_push.sql"].idempotent())
+        self.assertFalse(by_name["0034_impact_watch.sql"].idempotent(), "沒有 IF NOT EXISTS 的 CREATE 不算")
+
+    def test_each_partial_0039_is_explained_completed_in_one_press_and_then_up_to_date(self):
+        statements = dm.split_statements(FILES[CHAIN])
+        self.assertEqual([dm.parse_statement(s).op for s in statements], ["create_table", "create_index", "create_table", "create_index"])
+        for picks, label in (([0], "只有第一張表"), ([0, 1], "第一張表＋它的索引"), ([0, 2], "兩張表、沒有索引")):
+            with self.subTest(label):
+                db = self.partial(picks)
+                mig = next(m for m in MIGRATIONS if m.name == CHAIN)
+                self.assertEqual(dm.migration_status(mig, state_of(db))[0], dm.PARTIAL)
+                dry = dm.plan(WITH_NEW, state_of(db), real=False)
+                self.assertTrue(dry.ok, text(dry))
+                self.assertIn("0039 只建了一部分（上次被當天寫入額度中斷）；這一支可以安全重跑，會把缺的補上", text(dry))
+                real = dm.plan(WITH_NEW, state_of(db), real=True)
+                self.assertEqual((real.ok, real.reconcile, real.apply), (True, HAND, LATER))
+                db.executescript(dm.reconcile_sql(real.reconcile))
+                wrangler_apply(db, real.apply)            # IF NOT EXISTS：已經在的跳過、缺的補上
+                self.assertEqual(dm.verify_after(real.reconcile + real.apply, state_of(db)), [], "寫入後再核對通過")
+                self.assertEqual(dm.migration_status(mig, state_of(db))[0], dm.APPLIED)
+                again = dm.plan(WITH_NEW, state_of(db), real=True)
+                self.assertEqual((again.ok, again.action), (True, "none"))
+                self.assertIn("資料庫已經是最新的", text(again))
+
+    def test_a_partial_0039_whose_existing_table_differs_from_the_file_is_refused(self):
+        db = production()
+        db.execute("CREATE TABLE chain_map_flows (version TEXT PRIMARY KEY)")   # 名字一樣、欄位不一樣：IF NOT EXISTS 會跳過、留下錯的
+        report = dm.plan(WITH_NEW, state_of(db), real=True)
+        self.assertEqual((report.ok, report.apply), (False, []))
+        self.assertIn("已經有同名的資料表 chain_map_flows，但和變更檔不一樣", text(report))
+        db = self.partial([0])                                                   # 第一張表對、第二張表名字一樣但不對
+        db.execute("CREATE TABLE chain_map_flows (version TEXT PRIMARY KEY)")
+        report = dm.plan(WITH_NEW, state_of(db), real=True)
+        self.assertEqual((report.ok, report.apply), (False, []))
+        self.assertIn("資料表 chain_map_flows：少了欄位", text(report))
+
+    def test_a_partial_non_idempotent_migration_still_refuses(self):
+        db = database(upto("0033"), upto("0032"))   # 0034（沒有 IF NOT EXISTS）只建了第一張表
+        first = dm.split_statements(FILES["0034_impact_watch.sql"])[0]
+        db.execute(first)
+        report = dm.plan(WITH_NEW, state_of(db), real=True)
+        self.assertFalse(report.ok)
+        self.assertIn("0034_impact_watch.sql 不是每一句都是 CREATE … IF NOT EXISTS", text(report))
+
+    def test_a_partial_0039_with_a_later_migration_already_applied_is_refused(self):
+        if "0040_data_health.sql" not in FILES:
+            self.skipTest("沒有 0040")
+        db = self.partial([0])
+        db.executescript(FILES["0040_data_health.sql"])
+        report = dm.plan(WITH_NEW, state_of(db), real=True)
+        self.assertFalse(report.ok)
+        self.assertIn("順序對不上", text(report))
 
 
 class OtherStatesTest(unittest.TestCase):

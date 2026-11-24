@@ -34,6 +34,7 @@
 | 現金水位 | 交易日 09:30 前（開關有開才會出現） | level-daily | — | level-daily |
 | 今日 AI 解讀 | 交易日 22:30 前（開關有開才會出現） | ai-digest | 解讀未完成（Gemini） | ai-digest |
 | 資金版圖 | 交易日 22:30 前（有這張表才會出現） | 資金版圖的排程 | — | — |
+| 排程保活 | 最近 8 天內至少成功一次（超過 16 天＝停止；資料庫套過 0041 才會出現） | Actions 左邊的 workflow-keepalive：紅色就點進去看摘要。寫「必要的卻被手動停用」＝到那一支按「Enable workflow」；寫「啟用失敗（HTTP 403）」或「心跳 commit 推不上 main」＝GitHub 的權限設定被改過（Settings → Actions → General → Workflow permissions 要允許寫入，main 不能擋 github-actions 推送）。整頁都沒有新的執行＝保活本身被停用，按「Enable workflow」再手動跑一次 | — | workflow-keepalive |
 
 ## 全部同時延遲
 
