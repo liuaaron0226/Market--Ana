@@ -155,8 +155,21 @@
 
 歸納：兩種返回的結果不一樣（返回鍵一律回到那一頁的最上面、什麼都沒開；上一頁會保留捲動位置）；不管哪一種，「哪一類開著、哪塊板開著、選了哪個篩選與分頁」都不會還原；從自選股與庫存進個股頁，返回鍵會把人帶到首頁。
 
+上面這張表是「返回回到原處」（`web/nav-return.js`）併進來之前的樣子，留著當對照。那條線併進來、三頁也接上動態層之後，同一天深夜重量的結果：
 
-這一項不是動態層能解決的：要在離開前把狀態（哪一類開著、哪塊板開著、捲到哪）記下來，回來時還原，改的是各頁自己的程式。另有一條工作線在處理，這裡只記現況與檢查方法。
+| 從哪裡離開 | 用頁面上的返回鍵回來 | 用瀏覽器的上一頁回來 |
+|---|---|---|
+| 首頁，「籌碼與資金」展開、明細板開著 → 個股頁 | 回到首頁，分類、明細板、捲動位置都還在 | 同左 |
+| 首頁，搜尋開著 → 個股頁 | 回到首頁，搜尋還開著 | 同左 |
+| 首頁，「消息」展開 → 自選股與庫存 | 回到首頁，「消息」還開著 | 同左 |
+| 自選股與庫存，篩選選「庫存」、展開一列 → 個股頁 | 回到自選股與庫存，篩選與展開的那一列都還在 | 同左 |
+| 個股頁，「籌碼」展開、事實分頁選「法人」→ 大盤 | （這個方向沒有返回鍵）| 回到個股頁；但「籌碼」收起來了、事實分頁變回「重點」**（還沒解決）** |
+| 首頁「籌碼選股」清單 → 個股頁 | 沒量到：檢查腳本找不到清單裡的股票連結，`continuity_check.py` 第一個情境的選擇器要改 | 同左 |
+
+還沒解決的只剩個股頁自己的狀態（哪一類開著、選了哪個事實分頁）在離開再回來時不會還原，以及一個沒量到的入口。
+
+
+這一項不是動態層能解決的：要在離開前把狀態（哪一類開著、哪塊板開著、捲到哪）記下來，回來時還原，改的是各頁自己的程式（`web/nav-return.js`）。動態層只攔手指直接點的點擊，還原狀態時程式送出的點擊不會被延後。
 
 ## 8. 怎麼驗收
 
@@ -194,3 +207,115 @@
 - 正式站：看的是本機預覽與樣本資料；盤中數字跳動時的畫面沒有觸發到。
 - 深色：樣式全部引用同一組變數，理論上跟著換，但沒有逐項看過。
 - iOS 17.4 以下：浮層關的過場不會出現（照原本的樣子），沒有實機確認過降級後的畫面。
+
+## 10. 給接手者的待辦（照順序做）
+
+寫這一節的時間是 2026-11-24 深夜。分支 `claude/site-design-upgrade-5ed2b5` 上三頁都已經接好、推上 GitHub，**還沒合併進 `release/core-v1` 與 `main`，正式站還沒有這些改動**。
+
+### A. 合併
+
+```bash
+git fetch origin
+git checkout release/core-v1
+git merge origin/claude/site-design-upgrade-5ed2b5
+```
+
+這個分支相對 `release/core-v1` 動到的既有檔只有這些，衝突時照下面的原則留：
+
+| 檔案 | 這個分支加了什麼 |
+|---|---|
+| `web/minimal.html`、`web/stock.html`、`web/portfolio.html` | 各 4 行：最後一個樣式 `<link>` 之後一行註解加一行 `desk-motion.css`；`</body>` 之前一行註解加一行 `desk-motion.js`（自選頁那一行帶 `defer`）。這兩行要留在最後。 |
+| `cloud/lib/build-page.js` | `WEB_FILES` 多 `"desk-motion.css", "desk-motion.js"` 與一行註解。少了這兩個檔名，打包會把它們漏掉。 |
+| `cloud/test/browser_drawing_journey.py`（三處）、`cloud/test/browser_time_share_journey.py`（一處）| 點完、按完 Esc 之後多一行等選單退場。 |
+| `cloud/test/browser_branch_pane_journey.py` | 判斷「哪一顆鍵凸起」時也認那一排的框；兩處點完多等 0.7 秒。 |
+
+新增的檔：`web/desk-motion.css`、`web/desk-motion.js`、這份文件、`design-previews/site-design-upgrade/` 底下的工具。
+
+### B. 合併後要跑的檢查
+
+在有行情資料（`data/`）的主要工作目錄跑，瀏覽器的檢查一次只跑一條：
+
+```bash
+node cloud/build.mjs
+cd cloud && node --test --no-warnings "test/**/*.test.js" && cd ..
+python cloud/test/browser_back_return_journey.py
+python cloud/test/browser_settings_journey.py
+python cloud/test/browser_drawing_journey.py
+python cloud/test/browser_time_share_journey.py
+python cloud/test/browser_branch_pane_journey.py
+python cloud/test/browser_impact_stock_journey.py
+python cloud/test/browser_portfolio_journey.py
+python cloud/test/browser_level_journey.py
+python cloud/test/browser_margin_use_journey.py
+python cloud/test/browser_market_index_journey.py
+python cloud/test/browser_terrain_journey.py
+python cloud/test/browser_market_news_journey.py
+python cloud/test/browser_market_brief_journey.py
+python cloud/test/browser_plain_journey.py
+python cloud/test/browser_index_intraday_journey.py
+python cloud/test/browser_impact_watch_journey.py
+```
+
+再開本機預覽跑動態層自己的檢查：
+
+```bash
+node design-previews/3d-redesign/preview-server.mjs --port 5310 --owner-extras
+python design-previews/site-design-upgrade/sample_check.py http://127.0.0.1:5310
+```
+
+其中 `browser_portfolio_journey.py`、`browser_level_journey.py`、`browser_margin_use_journey.py` 三條在寫這份文件的工作目錄跑不了（沒有 `data/`），**三頁接上之後還沒有人跑過**，是第一優先要補的。
+
+### C. 通過的標準
+
+- 自動測試全過；旅程檢查除了 F 列的已知差異之外全過；`sample_check.py` 印出「全部通過」。
+- 效能底線（站主定的）：**放著不動時不能比接上之前更忙；操作中的動畫每秒不低於 50 格；常駐的光效保留。** 量的方式是模擬慢手機（CPU 降速 4 倍）。參考數字：接上之前首頁放著不動主執行緒約每秒 158–190 毫秒、個股頁約 160–166 毫秒（2026-11-24 另一次量測）；單次量測有 ±15% 的起伏。接上之前就不到 50 格的情境（設定開關 46–51、K 線換週期 44–50）以「不比接上之前低」為準。
+- 要重量時用 `design-previews/site-design-upgrade/perf_compare.py`：它比較兩個網址（檔案開頭的 `SITES`），「接上之前」那一個要另外用拿掉三頁引用的版本打包起一個預覽。
+
+### D. 上線後在正式站用真的 iPhone 看（還沒有任何人在真機看過）
+
+1. **選中的白色凸鍵有沒有出現**：首頁點「籌碼與資金」、個股頁點「籌碼」與事實分頁、自選頁點「庫存」，被選中的那一顆底下要有一顆白色凸起的鍵，換一顆時它會滑過去。這個曾經壞過一次（只剩粗體字），所以排第一。
+2. **點擊有沒有變鈍**：關掉或換分類的點擊會延後 0.14 秒才生效。請連點分類鍵來回切、快速連點同一顆鍵關掉再打開、從個股頁按返回，看會不會覺得慢半拍或點了沒反應。覺得鈍就把 `web/desk-motion.js` 第 2 段兩個 `setTimeout(pass, …)` 的 140 與 70 調小，或把那一段整個拿掉（只會少掉「關的時候內容退場」）。
+3. 首頁點一張籌碼卡：明細板從下面升起；按住最上面那一列往下拖一小段放手會彈回，往下一甩會關掉。
+4. 右上齒輪：設定也可以往下拖關掉。鍵盤開著時（設定裡有輸入框的分頁）板有沒有被擋住。
+5. 選單（指數名稱、分析工具、週期）：開和關都有過場，選中的是白色凸鍵。
+6. 換週期：新的圖由淡到實，沒有閃一下白。
+7. 深色模式下 1–5 各看一眼。
+
+### E. 怎麼退回
+
+- 只退某一頁：拿掉那一頁的兩行引用（`desk-motion.css` 的 `<link>` 與 `desk-motion.js` 的 `<script>`），那一頁就回到原本的樣子，其他頁不受影響。
+- 只關某一樣：`web/desk-motion.js` 最後 `root.classList.add('upg', 'upg-sheet', 'upg-tabs', 'upg-kfade')` 拿掉對應的類別（底部板＝`upg-sheet`、白色凸鍵統一＝`upg-tabs`、K 線淡入＝`upg-kfade`）。
+- 全部退回：三頁的引用都拿掉，並把 `cloud/lib/build-page.js` 的兩個檔名拿掉。旅程檢查多的那幾行等待留著沒有壞處。
+
+### F. 已知差異（不是動態層造成的，遇到不要當成壞掉）
+
+- **盯項的旅程 82/83**：沒過的是「電腦寬度頁首高度四種狀態要一樣」（差 5px）。沒有動態層的版本在同一台電腦上也一樣沒過，而且差的那一種狀態每次不同，是網路字型載入時機造成的。
+- **畫線的旅程偶發 419/420**：沒過的是個股頁「出現『未儲存』…圖的位置沒有被推動」（圖的上緣差 11px）。個股頁還沒接動態層時出現過兩次，接上之後連跑兩次是 420/420。
+- **設定的旅程會隨機挑埠**，抽到瀏覽器不允許的埠（遇過 2049）會中斷，訊息是 `ERR_UNSAFE_PORT`，重跑就過。
+- **分時的旅程**曾經卡在「截圖時等字型」逾時，重跑就過。
+- 無頭瀏覽器對著有網路字型的頁面截圖很慢（中文字型切成很多小包、用到才抓）。`design-previews/site-design-upgrade/` 的工具都把字型請求擋掉了，所以它們的截圖標題是系統字。
+
+### G. 還沒做的（依優先順序）
+
+1. 補跑 B 列那三條在這裡跑不了的旅程檢查。
+2. 上線，照 D 在真機驗收。
+3. 個股頁自己的狀態（哪一類開著、選了哪個事實分頁）離開再回來不會還原（第 7 節）。改 `web/nav-return.js` 與 `web/stock.js`。
+4. 自選頁篩選換內容時讓留下來的列滑到新位置：在 `web/portfolio.js` 重畫清單之前記下每一列的位置，重畫之後對每一列呼叫 `element.animate`，從「舊位置與新位置的差距」的 `translateY` 動到 `none`，320 毫秒、曲線 `cubic-bezier(.16, 1, .3, 1)`；新出現的列淡入 260 毫秒。
+5. 星號加入／移出自選的過場（`web/stock.js`、`web/stock.css` 的 `.st-fav`）。
+6. 手機的均線設定板關掉時的過場：`web/ma-settings.js` 關的時候先等 200 毫秒再把板搬回原位（現在是立刻搬，過場被打斷）。
+7. 申請、管理、Gemini 設定三頁（`cloud/public-src/` 底下的 `apply`、`admin`、`gemini` 三個資料夾，共用 `cloud/public-src/account.css`）：管理頁的三個分頁改成槽裡的鍵；三頁加上進場。這三頁不載入 `web/bold.css`，要先確認變數都有。每一頁先給站主看樣張再上。
+8. 首頁手機寬度「預測」鍵蓋到指數名稱（第 6 節最後一段）。
+9. `continuity_check.py` 第一個情境（首頁籌碼選股清單）的選擇器。
+
+### H. 樣張與原始數據在哪
+
+都沒有進倉庫（`.scratch/` 不入版控），只在做這件事的那台電腦上，這個資料夾：
+
+`C:/Users/User/Desktop/Market--Ana/.claude/worktrees/site-design-upgrade-5ed2b5/.scratch/site-design-upgrade/`
+
+- `AUDIT.md`：接上之前的逐頁盤點表。
+- `compare/ba-1-cats.png`、`ba-3-menu.png`、`ba-7-desktop-cats.png`（首頁）、`ba-4-stock-cats.png`、`ba-5-stock-tabs.png`（個股頁）、`ba-6-portfolio.png`（自選頁）：站主看過的前後對照圖。
+- `check/sheet-strip.png`：手機底部板四個狀態。
+- `sheets/`、`frames/`、`shots/`：每個互動的連續畫面與整頁截圖；`motion*.json`、`press.json`、`perf.json`、`continuity.json`：量到的原始數據。
+
+站主對這件事的決定（先做哪一頁、三個試做項目都留、效能底線、各頁先後、三頁都接）記在專案的定案紀錄 `ANALYSIS_PLAN.md`，那個檔也不在倉庫裡。
