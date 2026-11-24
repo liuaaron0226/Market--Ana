@@ -44,6 +44,9 @@ RAW_DIR = DATA_DIR / "chain-map/raw"
 CHAIN_PATH = ROOT / "seeds/ai-chain-map.json"   # 入庫的基準版（網站同一份）
 R2_PREFIX = "chain-map/raw/"
 BOOTSTRAP_PREFIX = "chain-map/bootstrap/"   # 樣品原檔（stock_flows-<月>.json），取檔名最後的那一份
+# 網站讀的另一份（2026-11-24 晚 D1 寫入額度用完時加的 R2 備援）：每次建置先寫它、再寫 D1；網站取 built_at 較晚的那一份。
+CURRENT_KEY = "chain-map/current/flows.json"
+CURRENT_SCHEMA = "chain-map-flows-r2/v1"
 TABLE = "chain_map_flows"
 DEFINITIONS = "chain_map_definitions"
 KEEP_ROWS = 14   # 排程寫的列留幾列（每天一列）
@@ -140,11 +143,11 @@ def load_definition(d1, seed_path: Path = CHAIN_PATH) -> tuple[dict[str, Any], s
     return json.loads(seed_path.read_text(encoding="utf-8")), "file"
 
 
-def load_latest(d1) -> dict[str, Any] | None:
-    """排程最近寫的那一列的 payload（樣品那一列不算）；沒有就是 None。表還沒建 → MissingTable。"""
-    rows = d1.query(f"SELECT payload FROM {TABLE} WHERE version NOT LIKE 'bootstrap-%' "
+def load_latest(d1) -> tuple[dict[str, Any] | None, str | None]:
+    """排程最近寫的那一列的（payload, built_at）（樣品那一列不算）；沒有就是 (None, None)。表還沒建 → MissingTable。"""
+    rows = d1.query(f"SELECT payload, built_at FROM {TABLE} WHERE version NOT LIKE 'bootstrap-%' "
                     "ORDER BY built_at DESC, version DESC LIMIT 1")
-    return json.loads(rows[0]["payload"]) if rows else None
+    return (json.loads(rows[0]["payload"]), str(rows[0].get("built_at") or "")) if rows else (None, None)
 
 
 def normalize_bootstrap(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -165,6 +168,23 @@ def load_bootstrap(store) -> tuple[dict[str, Any] | None, str | None]:
         return None, None
     data = store.get(keys[-1])
     return (normalize_bootstrap(json.loads(data.decode("utf-8"))) if data else None), keys[-1]
+
+
+def current_object(payload: Mapping[str, Any], *, version: str, as_of: str, built_at: str) -> dict[str, Any]:
+    """R2 chain-map/current/flows.json 的內容（網站在 D1 沒有、或這份較新時讀它；見 cloud/lib/chain-map.js）。"""
+    return {"schema": CURRENT_SCHEMA, "version": version, "as_of": as_of, "built_at": built_at, "payload": dict(payload)}
+
+
+def load_current(store) -> tuple[dict[str, Any] | None, str | None]:
+    """R2 上一次寫的 current（payload, built_at）；沒有、讀不懂 → (None, None)。"""
+    try:
+        data = store.get(CURRENT_KEY)
+        wrapper = json.loads(data.decode("utf-8")) if data else None
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None, None
+    if not isinstance(wrapper, dict) or wrapper.get("schema") != CURRENT_SCHEMA or not isinstance(wrapper.get("payload"), dict):
+        return None, None
+    return wrapper["payload"], str(wrapper.get("built_at") or "")
 
 
 def write_flows(d1, payload_text: str, *, version: str, as_of: str, built_at: str, keep: int = KEEP_ROWS) -> None:
@@ -556,15 +576,27 @@ def build(*, d1=None, chain: Mapping[str, Any] | None = None, bootstrap: Mapping
         raise MissingBootstrap(f"R2 {BOOTSTRAP_PREFIX} 找不到樣品資料，組不出歷史月份")
     boot = normalize_bootstrap(bootstrap)
     table_missing = False
-    latest = None
+    latest = latest_at = None
     if d1 is not None:
         try:
-            latest = load_latest(d1)
+            latest, latest_at = load_latest(d1)
         except MissingTable:
             table_missing = True   # 照樣補美股日檔、組出資料，只是不寫
+    current, current_at = load_current(store) if store is not None else (None, None)
     start = f"{next_month(boot['months'][-1])}-01"    # 美股從樣品之後的那個月起用 Massive
-    base = validate_bootstrap(latest) if latest is not None else boot
-    summary["base"] = "latest" if latest is not None else "bootstrap"
+    summary["base"] = "bootstrap"
+    base = boot
+    # 底：D1 排程列與 R2 current 取 built_at 較晚的那一份（D1 寫不進去的那幾天靠 R2 留住算過的月份）
+    for candidate, at, name in sorted(((latest, latest_at or "", "latest"), (current, current_at or "", "r2_current")),
+                                      key=lambda item: item[1], reverse=True):
+        if candidate is None:
+            continue
+        try:
+            base = validate_bootstrap(candidate)
+        except ChainMapError:
+            continue
+        summary["base"] = name
+        break
     tw_codes, us_codes = definition(chain)
     if store is not None:
         summary["r2_downloaded"] = sync_down(store, raw_dir)
@@ -600,22 +632,42 @@ def build(*, d1=None, chain: Mapping[str, Any] | None = None, bootstrap: Mapping
     if not dry_run:
         if output:
             output.write_text(text, encoding="utf-8")
-        if d1 is not None and table_missing:
-            summary["status"] = MissingTable.status
-        elif d1 is not None:
-            version = now_utc.astimezone(TAIPEI).date().isoformat()
+        version = now_utc.astimezone(TAIPEI).date().isoformat()
+        built_at = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+        # 先寫 R2（網站的備援），再寫 D1：D1 寫不進去（額度用完、表還沒建）時網站照樣有今天的資料
+        r2_ok = False
+        if store is not None:
+            body = json.dumps(current_object(payload, version=version, as_of=months[-1], built_at=built_at),
+                              ensure_ascii=False, separators=(",", ":")).encode("utf-8")
             try:
-                write_flows(d1, text, version=version, as_of=months[-1], built_at=now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"))
+                store.put(CURRENT_KEY, body)
+                r2_ok = True
+            except OSError:
+                summary["r2_current_error"] = True   # 只記有沒有失敗：錯誤內容可能帶網址，執行紀錄是公開的
+            summary["r2_current"] = r2_ok
+        d1_status = None
+        if d1 is not None and table_missing:
+            d1_status = MissingTable.status
+        elif d1 is not None:
+            try:
+                write_flows(d1, text, version=version, as_of=months[-1], built_at=built_at)
                 summary["version"] = version
             except (MissingTable, D1WriteLimit) as error:
-                summary["status"] = error.status
+                d1_status = error.status
+        if d1_status:
+            summary["d1_status"] = d1_status
+            if not r2_ok:
+                summary["status"] = d1_status
+            elif summary["status"] in ("ok", "catching_up"):
+                summary["status"] = d1_status + "_r2"   # 只寫進 R2：網站讀得到，算警告不算失敗
     elif table_missing:
         summary["status"] = MissingTable.status
     return summary
 
 
 def exit_code(summary: Mapping[str, Any]) -> int:
-    return 0 if summary.get("status") in ("ok", "catching_up", "skipped_no_table") else 1
+    return 0 if summary.get("status") in ("ok", "catching_up", "skipped_no_table", "skipped_no_table_r2",
+                                          "d1_write_limit_r2") else 1
 
 
 MESSAGES = {
@@ -623,6 +675,8 @@ MESSAGES = {
     "catching_up": "已更新：{first_month}～{last_month}；美股還有 {us_days_left} 天待補，下一班接著補",
     "skipped_no_table": "資料表還沒建立：到 Actions 按 d1-migrate",
     "d1_write_limit": "D1 今天的免費寫入額度已用完，這一班沒寫進去；美股日檔已存進 R2，明天的排程會照常補上",
+    "d1_write_limit_r2": "D1 今天的免費寫入額度已用完，這一班只寫進 R2；網站照樣讀得到 {first_month}～{last_month}，明天的排程會照常寫回 D1",
+    "skipped_no_table_r2": "D1 資料表還沒建立，這一班只寫進 R2；網站照樣讀得到 {first_month}～{last_month}。之後到 Actions 按 d1-migrate",
     "no_bootstrap": "R2 chain-map/bootstrap/ 找不到樣品資料，組不出歷史月份",
     "no_key": "沒有 MASSIVE_API_KEY，美股這一班沒有補",
     "fetch_failed": "Massive 回應異常（{us_error}），已存的日檔保留，下一班重試；資料照已有的日子建好",

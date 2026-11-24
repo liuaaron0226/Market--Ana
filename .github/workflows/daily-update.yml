@@ -344,7 +344,8 @@ jobs:
         # 乾跑：照樣讀 R2、呼叫 Massive，但不上傳 R2、不寫 D1，只印一行遮過的摘要（數量與月份範圍）。
         # 名單：D1 chain_map_definitions 最新一份，沒有就用 seeds/ai-chain-map.json。歷史：R2 chain-map/bootstrap/ 最新的樣品原檔
         # ＋D1 chain_map_flows 上一次排程寫的那一列；寫回一列（Cloudflare API 的 D1 /query 綁定參數，不用 SQL 檔：payload 超過單句 100 KB）。
-        # 0039 還沒套用：步驟摘要寫「資料表還沒建立：到 Actions 按 d1-migrate」，不算失敗；D1 當天寫入額度用完：紅色，日檔照樣留在 R2。
+        # 每次先把同一份寫到 R2 chain-map/current/flows.json（網站的備援，2026-11-24 晚加），再寫 D1：
+        # 0039 還沒套用、D1 當天寫入額度用完，只要 R2 那份寫成功就只是警告（網站讀 R2）；R2 也沒寫成才紅色。
         # Massive 資料限站主私用：payload 不寫檔、不印；只印一行狀態（數量與月份）與一行白話摘要。失敗只讓這一步顯示紅色，不擋發布。
         if: success() && vars.MARKET_ANA_CHAIN_MAP_SCHEDULE == 'on'
         continue-on-error: true
