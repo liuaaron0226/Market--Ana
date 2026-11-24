@@ -32,7 +32,7 @@
   - `d1-migrate`：能補完「只套一半、每句都是 IF NOT EXISTS」的遷移。
   - `market-news.yml`：加了 `set -o pipefail`，D1 寫入失敗不再被藏起來。
   - 排程器（cron-trigger）：2026-11-24 深夜從 `64d9960` 部署（Version ID `2d5d8c62-eefb-47f3-bb34-6f2c17996d5f`），保活強化合併後又重新部署一次；**現在的 Version ID 看 Cloudflare → Workers & Pages → `market-ana-cron-trigger` → Deployments**（`2d5d8c62-…` 是上一版）。排程時段不變（5 個）。之後 `cron-trigger/` 或它打包進去的 `cloud/lib/data-health*.js` 有改，都要按 `deploy-cron-trigger`（[ops-buttons.md](ops-buttons.md)）。
-- **返回回到原清單**：2026-11-24 深夜已併入 main（見 `git log` 的 “Back returns…”）並**已部署**（redeploy run 45410562195 成功）。正式站用站主帳號核對：個股頁有載入 `NavReturn`、返回鍵帶 `data-nav-back`、API 都 200。**正式站沒有實際點過返回流程，也沒有 iPhone 實測。** 合併後測試：JS 1365、返回旅程 163/163、`market_index` 75/75、`time_share` 103/103。
+- **返回回到原清單**：2026-11-24 深夜已併入 main（見 `git log` 的 “Back returns…”）並**已部署**（redeploy run 45410562195 成功）。正式站用站主帳號核對：個股頁有載入 `NavReturn`、返回鍵帶 `data-nav-back`、API 都 200。**桌機 Chrome 在正式站點過可用；站主 iPhone 實測不行（滑動返回不會回原清單），這一項還沒完成，見 C7。** 合併後測試：JS 1365、返回旅程 163/163、`market_index` 75/75、`time_share` 103/103。
 - **保活強化**：已併入 main（merge commit `19b6a65`；站主同意每月自動提交一次心跳）。GitHub 上乾跑、正式都綠：三支必要的 workflow（`daily-update`、`forecast-replay`、`level-daily`）和保活自己都回「照常呼叫啟用：成功」，並推了第一個心跳 commit `1f2f0fb`（只動 `ops/heartbeat.txt`），下一次心跳在 25 天後。`tests.yml` 第一次在 GitHub（Linux）跑綠：排程器 19、JS 1353、Python 2216（run 45414352113）。`cloud/migrations/0041_ops_runs.sql` 已在 main，明天 `d1-migrate` 會一起套。
 - **設計升級（首頁、個股頁、庫存）**：2026-11-24 深夜已併入 main 並部署（見 `git log` 的 “Merge site design upgrade”）。詳見 C8。
 - GitHub 上的 `main` 與 `release/core-v1` 內容相同；站主電腦上沒有未推送的工作；**沒有未合併的分支**（設計與保活的分支還留在 GitHub，但都已合併）。
@@ -93,8 +93,9 @@
 
 ### C7. 返回回到原清單
 - **是什麼**：從首頁任何清單（籌碼排行、成交金額、選股清單、資金地形的強勢股、自選股、庫存、搜尋、國外同類股…）點進個股頁，返回時回到同一個清單、同一個浮板與排行、同一個捲動位置；直接開網址進個股頁才回大盤。返回鍵與手機上一頁一樣。站主 2026-11-24 指定要修整類入口，不只一處。
-- **狀態**：2026-11-24 深夜已併入 main 並部署（redeploy run 45410562195）；測試與正式站核對見 A。
-- **還缺**：正式站實際點一次返回流程（還沒人點過）；站主 iPhone 實測。
+- **狀態：還沒完成。** 2026-11-24 深夜第一版已併入 main 並部署（redeploy run 45410562195），桌機 Chrome 在正式站可用；**站主當晚用 iPhone 實測不行**：左緣滑動返回後首頁回到一般大盤、最上方，沒有類別、沒有浮板、沒有捲動位置，多個入口都一樣，等 5 秒不碰螢幕也一樣。
+- **推測原因（沒有 iPhone 可驗）**：第一版只在瀏覽器回報 `back_forward` 時還原，iOS Safari 這個值不可靠；從整頁快取回來（`pageshow` 的 `persisted`）那條路什麼都不做；一碰螢幕就取消還原；等版面穩定才開浮板。
+- **還缺**：第二版（不靠導覽類型、改看這筆歷史紀錄有沒有帶我們的編號與存檔）上線後請站主在 iPhone 再試；站主說可以之前都算沒修好。
 - **設計線量測到的後續**：個股頁自己的狀態（展開的類別、選中的事實分頁）離開再回來不會還原；首頁「籌碼選股」清單那個入口沒有量測。
 - **待站主決定**：要不要放寬 `Cache-Control: no-store`，讓瀏覽器的整頁快取能用（安全上的取捨寫在 `cloud/lib/gate.js` 約 936 行）；返回鍵上的字要不要改（看得到的變更，帶樣張問）。
 
