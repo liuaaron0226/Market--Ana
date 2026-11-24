@@ -88,10 +88,11 @@
   // （新的 API 說 reload，或舊的 performance.navigation.type 是 1；舊的說 2＝上一頁／下一頁，就算新的說 reload 也還原）。
   // 另外：剛剛離開的就是這同一筆（重新整理；或在同一個網址上再打開一次，Chrome 會沿用同一筆紀錄、state 也留著）也不還原——
   // 這一條只靠我們自己在 pagehide 記的「最後離開的是哪一筆」，不靠瀏覽器回報。
-  function decide({ hadId, hasSnap, navType, legacyType, leftSame }) {
-    if (!hadId || !hasSnap || leftSame) return false;
-    if (legacyType === 2 || navType === 'back_forward') return true;
-    return !(navType === 'reload' || legacyType === 1);
+  // 2026-11-25 凌晨第三版：連「瀏覽器說這是重新整理」也不信了（iPhone 回到 no-store 的頁面是重新向伺服器要，
+  // 有可能被回報成 reload）。重新整理只靠我們自己記的「剛剛離開的就是這同一筆」（leftSame）來認。
+  // 代價：離開超過幾秒才重新載入同一筆（例如分頁被系統回收後重開）會照存下的樣子還原——那是回到原本在看的地方，可以接受。
+  function decide({ hadId, hasSnap, leftSame }) {
+    return Boolean(hadId && hasSnap && !leftSame);
   }
 
   const doc = global.document;
@@ -103,9 +104,9 @@
   // 這一筆歷史紀錄的編號（存樣子用）；從本站點進來的再記來源
   const hadId = Boolean(stateObject().navId);
   const left = read(LEFT);
-  // 只看最近 3 秒：重新整理、同網址再開都是離開後馬上載入；去了沒有這一支的頁面（帳號管理、外站）再回來，中間通常更久。
+  // 只看最近 5 秒：重新整理、同網址再開都是離開後馬上載入；去了沒有這一支的頁面（帳號管理、外站）再回來，中間通常更久。
   // 寧可偶爾在重新整理後多還原一次，也不要把「上一頁回來」誤判成重新整理而不還原
-  const leftSame = Boolean(hadId && left && left.id === stateObject().navId && Date.now() - left.at >= 0 && Date.now() - left.at < 3_000);
+  const leftSame = Boolean(hadId && left && left.id === stateObject().navId && Date.now() - left.at >= 0 && Date.now() - left.at < 5_000);
   const from = arrival(read(PENDING), global.location.href, Date.now(), navType);
   write(PENDING, null);
   if (!hadId) mark({ navId: newId() });
@@ -113,7 +114,7 @@
   const entryId = () => stateObject().navId || '';
   const snapOf = id => (id ? (read(SNAPS) || {})[id] || null : null);
   const restoreOnLoad = decide({ hadId, hasSnap: Boolean(snapOf(entryId())), navType, legacyType, leftSame });
-  // 診斷（手邊沒有 iPhone 可驗）：每次載入、每次整頁快取回來記一筆「還原了沒、依據是什麼」，只留最近 8 筆，
+  // 診斷（手邊沒有 iPhone 可驗）：每次載入、每次整頁快取回來、每一輪還原做完各記一筆「還原了沒、依據是什麼、捲到哪」，只留最近 12 筆，
   // 只有判斷用的幾個值，沒有任何個人資料。在同一個分頁把網址結尾加上 #navdebug 再載入，這幾筆會印在畫面下方。
   const LOG = 'nav-return:log';
   function note(fields) {
@@ -121,7 +122,7 @@
       const log = read(LOG);
       const rows = Array.isArray(log) ? log : [];
       rows.push({ at: new Date().toISOString().slice(11, 19), page: global.location.pathname, ...fields });
-      write(LOG, rows.slice(-8));
+      write(LOG, rows.slice(-12));
     } catch (_) { /* 診斷失敗不影響功能 */ }
   }
   note({ how: 'load', hadId, hasSnap: Boolean(snapOf(entryId())), navType, legacyType, leftSame, restore: restoreOnLoad });
@@ -162,6 +163,7 @@
     return chosen ? { id: chosen.id, top: Math.round(docTop(chosen) - pageY()) } : null;
   }
 
+  let clickSavedAt = 0;   // 上一次因為點站內連結而存樣子的時間
   function save() {
     const id = entryId();
     if (!id) return;
@@ -188,9 +190,12 @@
     if (url.pathname === global.location.pathname && url.search === global.location.search) return;   // 頁內錨點
     write(PENDING, { from: global.location.href, to: url.href, at: Date.now() });
     save();
+    clickSavedAt = Date.now();
   }, true);
+  // 剛點連結時存的那一份算數：pagehide 當下浮層的釘住已經放開（scroll-lock.js），在 iPhone 上這時量到的整頁位置不一定可靠，
+  // 不拿它蓋掉點連結那一刻存的。不是點連結離開的（上一頁、下一頁、手勢）才在這裡存
   global.addEventListener('pagehide', () => {
-    save();
+    if (Date.now() - clickSavedAt > 3000) save();
     write(LEFT, { id: entryId(), at: Date.now() });
   });
 
@@ -301,6 +306,12 @@
     }
     if (active === round) active = null;
     watch(false);
+    // 診斷：這一輪做到哪（要捲到哪、實際在哪、有沒有被打斷、哪幾段沒等到）；一秒後再量一次，看有沒有別的東西又把頁面捲走
+    const target = scrollTarget(snap, id => doc.getElementById(id));
+    const report = when => note({ how: when, parts: names.join(','), target, y: Math.round(pageY()), winY: Math.round(global.scrollY || 0),
+      height: pageHeight(), anchor: (snap.anchor && snap.anchor.id) || '', cancelled, late: [...round.waiting].join(','), ms: Date.now() - begin });
+    report('applied');
+    global.setTimeout(() => report('after1s'), 1000);
   }
   // 頁面重新載入回來：每一段都照存下的樣子做
   async function restore() {

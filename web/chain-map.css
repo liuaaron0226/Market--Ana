@@ -267,5 +267,18 @@ body.cm {
   background: radial-gradient(120% 70% at 50% 0%, var(--desk-hi), var(--desk) 62%) fixed, var(--desk);
 }
 .cm .top h1 { color: inherit; }
+/* 返回鍵（樣品沒有；這一頁原本沒有任何回首頁的路）：和個股頁同一顆 .bd-back（bold.css），外觀是這一頁的鍵（.key 的厚度、按下去會沉）。
+   頂列多一欄放它，其他格的位置不變。 */
+.cm .top { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "back title search" "seg seg seg"; }
+.cm .top.searching { grid-template-areas: "back search search" "seg seg seg"; }
+.cm .top .bd-back {
+  grid-area: back; height: 44px; border: 0; border-radius: var(--r-key); background: var(--key); box-shadow: var(--key-shadow);
+  white-space: nowrap; transition: transform var(--t-press) linear, box-shadow var(--t-press) linear, color 160ms var(--ease-out);
+}
+.cm .top .bd-back:hover { background: var(--key); }
+.cm .top .bd-back:active { transform: translateY(var(--key-thick)); box-shadow: var(--key-shadow-press); }
+@media (min-width: 960px) {
+  .cm .top { grid-template-columns: auto auto minmax(0, 1fr) auto; grid-template-areas: "back title seg search"; }
+}
 /* 還沒有資料、讀不到：在畫面那一格寫一句話（樣品沒有這個狀態） */
 .cm-empty { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; text-align: center; color: var(--dim); font-size: 14px; }

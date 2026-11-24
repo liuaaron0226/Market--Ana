@@ -74,7 +74,8 @@ def free_port() -> int:
 
 def start_server(seed: str | None) -> tuple[subprocess.Popen, str]:
     port = free_port()
-    env = {**os.environ, "MARKET_ANA_CHAIN_MAP": "owner"}
+    # 首頁「消息」照正式站開著：分類鍵那一排才和正式站一樣是四顆加入口那一顆（home_entry 量的就是這一排）
+    env = {**os.environ, "MARKET_ANA_CHAIN_MAP": "owner", "MARKET_ANA_MARKET_NEWS": "all"}
     if seed:
         path = OUT / f"seed-{port}.sql"
         path.write_text(seed, encoding="utf-8")
@@ -274,6 +275,123 @@ def friend_and_gate(j: Journey, browser, base: str) -> None:
     context.close()
 
 
+# ---------- 首頁的入口與那一頁的返回鍵（本人 2026-11-24 選 A：分類鍵那一排的最後一顆「AI 產業鏈 ›」） ----------
+ROW = """() => {
+  const row = document.getElementById('homeCats');
+  const keys = [...row.querySelectorAll(':scope > :is(button, a)')].filter(k => getComputedStyle(k).display !== 'none');
+  const r1 = n => Math.round(n * 10) / 10;
+  return { keys: keys.map(k => { const b = k.getBoundingClientRect(); return { tag: k.tagName, cat: k.dataset.cat || '', text: k.textContent.trim(),
+      left: r1(b.left), right: r1(b.right), w: r1(b.width), h: k.offsetHeight, clipped: k.scrollWidth > k.clientWidth + 1 || k.scrollHeight > k.clientHeight + 1 }; }),
+    entry: getComputedStyle(document.getElementById('chainMapEntry')).display, open: keys.filter(k => k.getAttribute('aria-expanded') === 'true').map(k => k.dataset.cat),
+    rowOverflow: row.scrollWidth - row.clientWidth, pageOverflow: document.documentElement.scrollWidth - innerWidth };
+}"""
+
+
+def home_page(j: Journey, context, base: str):
+    page = context.new_page()
+    page.on("console", lambda m: j.console.append(m.text) if m.type == "error" and "Failed to load resource" not in m.text
+            and "ERR_FAILED" not in m.text else None)
+    page.on("pageerror", lambda e: j.console.append(f"pageerror: {e}"))
+    page.goto(f"{base}/minimal.html", wait_until="domcontentloaded")
+    page.locator("#mainChart canvas").wait_for(state="visible", timeout=60_000)
+    page.wait_for_timeout(1500)   # 功能清單讀完、入口該出現的已經出現
+    return page
+
+
+def tidy(row: dict) -> bool:
+    """那一排：每一顆都沒有被切掉、彼此不重疊、一樣高，沒有撐出橫向捲動。"""
+    keys = row["keys"]
+    apart = all(a["right"] <= b["left"] + 0.5 for a, b in zip(keys, keys[1:]))
+    return apart and not any(k["clipped"] for k in keys) and len({k["h"] for k in keys}) == 1 and row["rowOverflow"] <= 0 and row["pageOverflow"] <= 0
+
+
+def to_chain_map(page) -> None:
+    page.wait_for_url("**/chain-map.html", timeout=20_000)
+    page.wait_for_function(SNAP, timeout=30_000)
+    page.wait_for_timeout(900)
+
+
+def home_entry(j: Journey, browser, base: str) -> None:
+    # 手機：入口在那一排的最後、五種寬度都排得下；點了到那一頁；返回鍵回到首頁原本的位置
+    context = j.context(browser, base, OWNER, PHONE)
+    page = home_page(j, context, base)
+    row = page.evaluate(ROW)
+    last = row["keys"][-1]
+    j.check("首頁入口（站主，開關開著）：分類鍵那一排最後一顆是連結「AI 產業鏈 ›」", last["tag"] == "A" and last["text"] == "AI 產業鏈 ›"
+            and all(k["tag"] == "BUTTON" for k in row["keys"][:-1]), row["keys"])
+    for width in (390, 360, 320, 430):
+        page.set_viewport_size({"width": width, "height": 720})
+        page.wait_for_timeout(300)
+        row = page.evaluate(ROW)
+        j.check(f"首頁入口：寬 {width} 時那一排每一顆都完整、不重疊、一樣高，沒有橫向捲動", tidy(row), row)
+    page.set_viewport_size(PHONE["viewport"])
+    page.evaluate("() => document.getElementById('homeCats').scrollIntoView({ block: 'center' })")
+    page.wait_for_timeout(400)
+    page.screenshot(path=str(OUT / "phone-home-entry.png"))
+    before = page.evaluate("() => Math.round(scrollY)")
+    page.locator("#chainMapEntry").tap()
+    to_chain_map(page)
+    back = page.locator(".bd-back")
+    j.check("手機點入口：到資金版圖頁，頂列有返回鍵「‹ 大盤」，標題沒被擠掉、沒有橫向捲動", back.is_visible() and "".join(back.inner_text().split()) == "‹大盤"
+            and page.evaluate("() => { const h = document.querySelector('.top h1'); return h.scrollWidth <= h.clientWidth + 1; }") and no_hscroll(page), back.inner_text())
+    page.screenshot(path=str(OUT / "phone-chain-map-back-key.png"))
+    back.tap()
+    page.wait_for_url("**/minimal.html", timeout=20_000)
+    page.locator("#mainChart canvas").wait_for(state="visible", timeout=60_000)
+    page.wait_for_timeout(1500)
+    after = page.evaluate("() => Math.round(scrollY)")
+    j.check("手機按返回鍵：回到首頁原本的位置，入口還在", abs(after - before) <= 40 and page.locator("#chainMapEntry").is_visible(), [before, after])
+    # 直接打開那一頁（書籤、網址列）：返回鍵照連結去大盤
+    page.goto(f"{base}/chain-map.html", wait_until="domcontentloaded")
+    page.wait_for_function(SNAP, timeout=30_000)
+    page.locator(".bd-back").tap()
+    page.wait_for_url("**/minimal.html", timeout=20_000)
+    j.check("直接打開那一頁時：返回鍵去大盤首頁", page.url.endswith("/minimal.html"), page.url)
+    context.close()
+
+    # 電腦：按住別顆拖到入口上放開不會換頁（選到的是最靠近的那一類）；Tab 走得到、Enter 換頁，不會被分類鍵的退場動畫吃掉
+    context = j.context(browser, base, OWNER, DESKTOP)
+    page = home_page(j, context, base)
+    page.evaluate("() => document.getElementById('homeCats').scrollIntoView({ block: 'center' })")
+    page.wait_for_timeout(300)
+    row = page.evaluate(ROW)
+    first, last_button, link = page.locator("#homeCats button").first.bounding_box(), row["keys"][-2], page.locator("#chainMapEntry").bounding_box()
+    y = first["y"] + first["height"] / 2
+    page.mouse.move(first["x"] + first["width"] / 2, y)
+    page.mouse.down()
+    for step in range(1, 13):
+        page.mouse.move(first["x"] + first["width"] / 2 + (link["x"] + link["width"] / 2 - first["x"] - first["width"] / 2) * step / 12, y)
+        page.wait_for_timeout(16)
+    hot = page.evaluate("() => document.getElementById('chainMapEntry').classList.contains('is-slide-hot')")
+    page.mouse.up()
+    page.wait_for_timeout(700)
+    row = page.evaluate(ROW)
+    j.check("電腦按住分類鍵拖到入口上放開：不換頁、入口沒被當成選項，選到的是最靠近的那一類", page.url.endswith("/minimal.html") and not hot
+            and row["open"] == [last_button["cat"]], [page.url, hot, row["open"]])
+    page.locator(f'#homeCats button[data-cat="{last_button["cat"]}"]').focus()
+    page.keyboard.press("Tab")
+    focused = page.evaluate("() => document.activeElement.id")
+    page.keyboard.press("Enter")
+    to_chain_map(page)
+    j.check("鍵盤：Tab 從最後一顆分類鍵走到入口，Enter 換到資金版圖頁（有一類開著時也一樣）", focused == "chainMapEntry" and page.locator(".bd-back").is_visible(), focused)
+    page.locator(".bd-back").click()
+    page.wait_for_url("**/minimal.html", timeout=20_000)
+    j.check("電腦按返回鍵：回到首頁", page.url.endswith("/minimal.html"), page.url)
+    context.close()
+
+    # 朋友（開關只開站主）：入口真的不在（不是看不到而已），那一排和原本一樣平分
+    context = j.context(browser, base, FRIEND, PHONE)
+    page = home_page(j, context, base)
+    row = page.evaluate(ROW)
+    widths = [k["w"] for k in row["keys"]]
+    j.check("首頁入口（朋友，開關對他關著）：入口不佔位置（display: none），那一排只有分類鍵、等寬、沒有空一格", row["entry"] == "none"
+            and all(k["tag"] == "BUTTON" for k in row["keys"]) and max(widths) - min(widths) <= 1 and tidy(row), row)
+    page.evaluate("() => document.getElementById('homeCats').scrollIntoView({ block: 'center' })")
+    page.wait_for_timeout(300)
+    page.screenshot(path=str(OUT / "phone-home-entry-off.png"))
+    context.close()
+
+
 def empty_journey(j: Journey, browser) -> None:
     server, base = start_server(None)
     try:
@@ -376,6 +494,7 @@ def main() -> int:
             for prefix, options in (("phone-", PHONE), ("desktop-", DESKTOP)):
                 owner_journey(j, browser, base, prefix, options, skipped)
             friend_and_gate(j, browser, base)
+            home_entry(j, browser, base)
             empty_journey(j, browser)
             if os.environ.get("CHAIN_MAP_SAMPLE_DIR"):
                 parity(j, browser, Path(os.environ["CHAIN_MAP_SAMPLE_DIR"]))

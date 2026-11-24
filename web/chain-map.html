@@ -19,6 +19,8 @@
 <body class="bd cm">
   <div class="app">
     <header class="top" id="top">
+      <!-- 返回鍵：和個股頁同一顆（nav-return.js）。從首頁點進來的走上一頁、回到原本的位置；直接打開的照連結去大盤 -->
+      <a class="bd-back" href="minimal.html" data-nav-back><span aria-hidden="true">‹</span> 大盤</a>
       <h1>AI 產業鏈資金版圖</h1>
       <div class="seg" id="seg" role="tablist" aria-label="指標">
         <i class="thumb" aria-hidden="true"></i>
@@ -70,6 +72,7 @@
     </main>
   </div>
   <div class="sheet" id="sheet" data-state="hidden"><div id="sheetIn"></div></div>
+  <script src="nav-return.js?v=20261124-back1"></script>
   <script src="chain-map.js?v=20261124-chain1" defer></script>
 </body>
 </html>

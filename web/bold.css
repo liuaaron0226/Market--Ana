@@ -383,13 +383,15 @@ html:has(> :is(body.hm, body.st)) { background: var(--desk); }
   padding: var(--track-pad); gap: var(--track-gap);
   border-radius: var(--r-track); background: var(--well); box-shadow: var(--well-shadow);
 }
-:is(body.hm, body.bd) .hm-cats button {
+:is(body.hm, body.bd) .hm-cats :is(button, a) {
   height: 48px; padding: 0 4px; border: 0; border-radius: var(--r-key);
   background: transparent; color: var(--dim); font: 500 15px var(--sans);
   transition: color 200ms var(--ease-out);
 }
+/* 那一排裡換頁的那一顆（<a>，首頁的 AI 產業鏈）：和旁邊的鍵同一個樣子，點了去另一頁，所以不會凸起 */
+:is(body.hm, body.bd) .hm-cats a { display: flex; align-items: center; justify-content: center; gap: 4px; text-decoration: none; }
 @media (hover: hover) {
-  :is(body.hm, body.bd) .hm-cats button:hover { color: var(--ink); }
+  :is(body.hm, body.bd) .hm-cats :is(button, a):hover { color: var(--ink); }
 }
 /* 展開一類（aria-expanded，首頁與個股頁）或選一個（aria-pressed，自選與庫存頁的篩選）：選中的那一顆是凸起的鍵 */
 :is(body.hm, body.bd) .hm-cats button:is([aria-expanded="true"], [aria-pressed="true"]) {
@@ -397,10 +399,16 @@ html:has(> :is(body.hm, body.st)) { background: var(--desk); }
 }
 @media (max-width: 860px) {
   :is(body.hm, body.bd) .hm-cats { margin-top: 12px; }
-  :is(body.hm, body.bd) .hm-cats button { height: 44px; padding: 0 2px; font-size: 13px; }
+  :is(body.hm, body.bd) .hm-cats :is(button, a) { height: 44px; padding: 0 2px; font-size: 13px; }
 }
 @media (max-width: 359px) {
-  :is(body.hm, body.bd) .hm-cats button { font-size: 12px; line-height: 1.25; text-wrap: balance; }
+  :is(body.hm, body.bd) .hm-cats :is(button, a) { font-size: 12px; line-height: 1.25; text-wrap: balance; }
+}
+/* 首頁多了換頁那一顆之後是五顆：手機的寬度平分成五欄放不下「產業資金流向」（會折成兩行）。
+   所以那一顆出現時，手機上每顆的寬度照自己的字數、剩下的寬度五顆平分，五顆都維持一行；那一顆沒出現（開關關著）時照舊平分。
+   再窄到連這樣都放不下時，字在自己那一顆裡折行（不強制一行），不會擠出那一排或疊到隔壁。 */
+@media (max-width: 520px) {
+  :is(body.hm, body.bd) .hm-cats:has(> a:not([hidden])) { grid-auto-columns: auto; }
 }
 /* 收起來的一類（沒有 data-open）：不佔版面、看不到、Tab 走不到，但保留原本的寬度。
    不用 display: none，是因為裡面的圖是照容器寬度畫的，量到 0 會畫錯。
@@ -422,7 +430,7 @@ body.bd #content [data-cat-panel][data-open] { animation: cat-rise 380ms var(--e
 /* 成排的鍵，選中的框跟著手指走（立體重設計 A 包第 14 片）：分類鍵與首頁明細板的買超／賣超。
    按住左右拖，選中的那個框（.slide-thumb，程式在 chart-menus.js）跟著手指移動，放開時靠近哪一顆就選哪一顆。上下拖仍然捲動頁面。 */
 :is(body.hm, body.bd) :is(.hm-cats, .chip-seg) { position: relative; }
-:is(body.hm, body.bd) :is(.hm-cats, .chip-seg) button { position: relative; z-index: 1; touch-action: pan-y; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+:is(body.hm, body.bd) :is(.hm-cats, .chip-seg) :is(button, a) { position: relative; z-index: 1; touch-action: pan-y; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 :is(body.hm, body.bd) :is(.hm-cats, .chip-seg) .slide-thumb {
   position: absolute; z-index: 0; left: 0; top: 0; pointer-events: none;
   border-radius: var(--r-key); background: var(--key); box-shadow: var(--key-shadow);

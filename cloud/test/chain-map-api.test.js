@@ -7,6 +7,7 @@ import { handle } from "../lib/gate.js";
 import { releasePolicy, policyForViewer } from "../lib/release-policy.js";
 import { chainForPage, chainMapModuleText } from "../lib/chain-map-definition.js";
 import { flowsShape, R2_FLOWS_KEY, R2_FLOWS_SCHEMA } from "../lib/chain-map.js";
+import { stampAssets } from "../lib/build-page.js";
 import { fakeD1, rosterOnly, makeIssuer, claims, fetchJwks, TEAM, MAIN_AUD, APPLY_AUD, OWNER, MIGRATION_FILES } from "./helpers.js";
 
 const ORIGIN = "https://market-ana.pages.dev";
@@ -303,6 +304,29 @@ test("定義的核對：只送畫面用到的欄位；主要環節對不到環�
   assert.throws(() => chainForPage({ ...DEFINITION, nodes: [{ ...DEFINITION.nodes[0], tw: [["1111"]] }] }));
   assert.throws(() => chainForPage({ ...DEFINITION, us: undefined }));
   assert.match(chainMapModuleText(DEFINITION), /^\/\/ build\.mjs .*\nexport default \{/);
+});
+
+// 首頁的入口（本人 2026-11-24 選 A：分類鍵那一排的最後一顆）與那一頁的返回鍵。畫面與來回在 browser_chain_map_journey.py。
+test("首頁的入口：分類鍵那一排最後一顆是連結、預設藏著，開關開著才露出來；那一頁有返回鍵並載入 nav-return.js", () => {
+  const read = (file) => readFileSync(new URL(`../../web/${file}`, import.meta.url), "utf8");
+  const row = /<div class="hm-cats" id="homeCats"[^>]*>([\s\S]*?)<\/div>/.exec(read("minimal.html"))[1].replace(/<!--[\s\S]*?-->/g, "");
+  const keys = [...row.matchAll(/<(button|a)\b[^>]*>/g)].map((m) => m[0]);
+  // 連結不是 button、沒有 aria-controls：開合（home-fold.js）、滑動選取（chart-menus.js）、選中的框（desk-motion.js）都只認 button
+  assert.equal(keys.at(-1), '<a id="chainMapEntry" href="chain-map.html" hidden>');
+  assert.ok(keys.slice(0, -1).every((key) => key.startsWith("<button ") && key.includes("aria-controls=")), "其他幾顆都是展開區塊的鍵");
+  assert.match(row, /<a id="chainMapEntry"[^>]*>AI 產業鏈 <span aria-hidden="true">›<\/span><\/a>/);
+  assert.match(read("minimal.js"), /chainMapEntry\.hidden = !features\.chain_map_v1;/);
+  // 藏著的時候真的不見：全站的 [hidden] 規則帶 !important，蓋得過那一排給連結的 display: flex
+  assert.match(read("minimal.css"), /\[hidden\] \{ display: none !important; \}/);
+  // 手機上照字數分寬只在那一顆露出來時才套；藏著時那一排和原本一樣平分
+  assert.match(read("bold.css"), /\.hm-cats:has\(> a:not\(\[hidden\]\)\) \{ grid-auto-columns: auto; \}/);
+
+  const page = read("chain-map.html");
+  assert.match(page, /<a class="bd-back" href="minimal\.html" data-nav-back><span aria-hidden="true">‹<\/span> 大盤<\/a>\s*<h1>/);
+  assert.match(page, /<script src="nav-return\.js\?v=[^"]+"><\/script>\s*<script src="chain-map\.js\?v=[^"]+" defer><\/script>/);
+  // 上雲時和其他頁一樣換成內容雜湊（build.mjs 對 dist 裡每一頁跑 stampAssets）
+  const stamped = stampAssets(page, "chain-map.html", (file) => (file === "nav-return.js" ? "0123456789ab" : null));
+  assert.ok(stamped.includes('<script src="nav-return.js?v=0123456789ab"></script>'));
 });
 
 test("入庫的基準版 seeds/ai-chain-map.json：格式對、主要環節都指到那家公司真的出現的環節、每個環節的公司都有名稱", () => {

@@ -232,6 +232,8 @@
         <button type="button" data-cat="rotation" aria-expanded="false" aria-controls="rotationBlock">產業資金流向</button>
         <!-- 本人 2026-11-19：「長期核心持有」和個股功能重複，換成「消息」；開關 market_news_v1 打開才出現（market-news.js） -->
         <button type="button" data-cat="news" aria-expanded="false" aria-controls="marketNews" id="newsCatButton" hidden>消息</button>
+        <!-- AI 產業鏈資金版圖（獨立一頁，chain-map.html）：這一顆是連結，點了換頁、不展開區塊；開關 chain_map_v1 開著才出現（minimal.js） -->
+        <a id="chainMapEntry" href="chain-map.html" hidden>AI 產業鏈 <span aria-hidden="true">›</span></a>
       </div>
       <section class="chips" id="chipsSection" data-cat-panel="chips" aria-labelledby="chipsTitle">
         <h2 id="chipsTitle" class="hm-section-title sr-only">籌碼與資金</h2>

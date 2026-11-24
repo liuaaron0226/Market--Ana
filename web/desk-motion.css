@@ -38,15 +38,15 @@ html.upg :is(.hm-cats, .chip-seg, .st-track, html.upg-tabs .sf-tabs)::before {
 html.upg :is(.hm-cats, .chip-seg, .st-track, html.upg-tabs .sf-tabs)[data-upg-on="1"]::before { opacity: 1; --upg-ts: 1; }
 html.upg :is(.hm-cats, .chip-seg, .st-track, html.upg-tabs .sf-tabs)[data-upg-still]::before { transition: none; }
 /* 凸起的樣子交給框來畫：選中的那一顆自己攤平，只留字的深淺 */
-html.upg :is(.hm-cats, .chip-seg, .st-track, html.upg-tabs .sf-tabs) > button { position: relative; z-index: 1; transition: color var(--u-fade) var(--ease-out), translate var(--u-press) linear, background-color var(--u-press) linear; }
+html.upg :is(.hm-cats, .chip-seg, .st-track, html.upg-tabs .sf-tabs) > :is(button, a) { position: relative; z-index: 1; transition: color var(--u-fade) var(--ease-out), translate var(--u-press) linear, background-color var(--u-press) linear; }
 html.upg :is(.hm-cats, .chip-seg, .st-track, html.upg-tabs .sf-tabs) > button:is([aria-expanded="true"], [aria-pressed="true"], [aria-selected="true"], [aria-checked="true"]) {
   background: transparent !important; box-shadow: none !important; color: var(--ink);
 }
 /* 按住拖的時候是網站原本那個跟手的框在畫，這一個先讓開 */
 html.upg :is(.hm-cats, .chip-seg, .st-track, html.upg-tabs .sf-tabs).is-sliding::before { opacity: 0; transition: none; }
 /* 按下去：沒選中的那顆槽底暗一點、字沉 1px；選中的那顆是框沉下去 */
-html.upg :is(.hm-cats, .chip-seg, .st-track, html.upg-tabs .sf-tabs) > button:active { translate: 0 1px; }
-html.upg :is(.hm-cats, .chip-seg, .st-track, html.upg-tabs .sf-tabs) > button:not([aria-expanded="true"], [aria-pressed="true"], [aria-selected="true"], [aria-checked="true"]):active {
+html.upg :is(.hm-cats, .chip-seg, .st-track, html.upg-tabs .sf-tabs) > :is(button, a):active { translate: 0 1px; }
+html.upg :is(.hm-cats, .chip-seg, .st-track, html.upg-tabs .sf-tabs) > :is(button, a):not([aria-expanded="true"], [aria-pressed="true"], [aria-selected="true"], [aria-checked="true"]):active {
   background: color-mix(in srgb, var(--ink) 7%, transparent);
 }
 html.upg :is(.hm-cats, .chip-seg, .st-track, html.upg-tabs .sf-tabs):has(> button:is([aria-expanded="true"], [aria-pressed="true"], [aria-selected="true"], [aria-checked="true"]):active)::before {

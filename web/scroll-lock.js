@@ -49,8 +49,19 @@
 
   // 浮層開著時點了連結換頁：離開前先放開、捲回原位，瀏覽器記下的捲動位置才不會是 0（按上一頁回來不會跳到頁首）。
   // 從瀏覽器的整頁快取回來時浮層還開著，再鎖回去。
-  window.addEventListener('pagehide', () => { if (saved) release(); });
-  window.addEventListener('pageshow', event => { if (event.persisted && holders.size && !saved) pin(); });
+  // 再鎖回去時用離開前的位置：iPhone 在 pageshow 當下量到的捲動位置可能還是 0（它自己的捲動還原在之後才做），
+  // 照那個釘住的話整頁會停在最上面。
+  let leftAt = null;
+  window.addEventListener('pagehide', () => {
+    leftAt = saved ? saved.y : null;
+    if (saved) release();
+  });
+  window.addEventListener('pageshow', event => {
+    if (!(event.persisted && holders.size && !saved)) return;
+    pin();
+    if (leftAt !== null && Math.abs(saved.y - leftAt) > 1) window.ScrollLock.pageTo(leftAt);
+    leftAt = null;
+  });
 
   window.ScrollLock = {
     // 整頁原本捲到哪：釘住時 window.scrollY 是 0，要用鎖住當下記的位置（nav-return.js 存「離開前的樣子」用）

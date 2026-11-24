@@ -22,6 +22,9 @@
       if (payload?.schema === 'market-ana-features/v1' && payload.features) features = payload.features;
     } catch (_) { /* feature gate 讀取失敗時維持 default-off */ }
   }
+  // AI 產業鏈資金版圖的入口：開關對這個人開著才出現（關著時那一頁對他是 404，不留一顆點了找不到的鍵）
+  const chainMapEntry = document.getElementById('chainMapEntry');
+  if (chainMapEntry) chainMapEntry.hidden = !features.chain_map_v1;
   const root = document.documentElement;
   const $ = id => document.getElementById(id);
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;

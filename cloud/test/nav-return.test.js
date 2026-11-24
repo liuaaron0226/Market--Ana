@@ -175,15 +175,16 @@ test("首頁點進個股、按返回鍵：走瀏覽器的上一頁；回到首�
   }
 });
 
-test("要不要還原：這一筆帶著編號＋存過樣子＋不是重新整理才還原，不看 navigation type 是不是 back_forward", () => {
+test("要不要還原：這一筆帶著編號＋存過樣子＋不是剛剛才離開的同一筆，完全不看瀏覽器回報的 navigation type", () => {
   const { decide } = openPage(HOME, { storage: tabStorage() }).win.NavReturn.model;
   const yes = (o) => decide({ hadId: true, hasSnap: true, navType: "navigate", legacyType: null, ...o });
   assert.equal(yes({}), true, "回報成 navigate 也還原");
   assert.equal(yes({ navType: "back_forward" }), true);
   assert.equal(yes({ navType: "prerender" }), true);
-  assert.equal(yes({ navType: "reload" }), false, "重新整理不還原");
-  assert.equal(yes({ navType: "navigate", legacyType: 1 }), false, "舊 API 說重新整理");
-  assert.equal(yes({ navType: "reload", legacyType: 2 }), true, "舊 API 說上一頁／下一頁就算");
+  // iPhone 回到 no-store 的頁面是重新向伺服器要，可能被回報成 reload：照樣還原；真的重新整理靠 leftSame 認
+  assert.equal(yes({ navType: "reload" }), true, "瀏覽器說 reload 但不是剛離開的同一筆：還原");
+  assert.equal(yes({ navType: "navigate", legacyType: 1 }), true);
+  assert.equal(yes({ navType: "reload", leftSame: true }), false, "真的重新整理");
   assert.equal(yes({ hadId: false }), false, "新進來的一頁沒有 state");
   assert.equal(yes({ hasSnap: false }), false, "沒存過樣子");
   assert.equal(yes({ leftSame: true }), false, "剛剛離開的就是這一筆（重新整理、同網址再開）");
@@ -230,6 +231,14 @@ test("一般打開首頁（新的一筆）或重新整理：就算有存過的�
     await page.win.NavReturn.done();
     assert.deepEqual(restored, [], label);
   }
+  // 去過別頁之後回來，瀏覽器卻回報成 reload（iPhone 回到 no-store 的頁面）：照樣還原
+  leftElsewhere(storage);
+  const restored = [];
+  const back = openPage(HOME, { storage, navType: "reload", state, legacy: 1 });
+  back.win.NavReturn.remember("cat", { save: () => null, restore: (v) => restored.push(v) });
+  await tick();
+  await back.win.NavReturn.done();
+  assert.deepEqual(restored, ["chipsSection"]);
 });
 
 test("整頁快取回來（pageshow persisted）：和存下的樣子不一樣才補那一段；一樣就不動", async () => {
@@ -326,11 +335,12 @@ async function midway(act) {
   leftElsewhere(storage);
   const opened = [], scrolled = [];
   const page = openPage(HOME, { storage, navType: "back_forward", state });
-  // 分類那一段的資料 80 毫秒後才到；版面在那之後長高一次
-  page.win.NavReturn.remember("cat", { save: () => null, restore: () => tick(80).then(() => { page.win.document.documentElement.scrollHeight = 3400; }) });
+  // 分類那一段的資料 400 毫秒後才到；版面在那之後長高一次（留夠長：整套測試同時跑時計時器會慢，20 毫秒那一下不能晚過它）
+  page.win.NavReturn.remember("cat", { save: () => null, restore: () => tick(400).then(() => { page.win.document.documentElement.scrollHeight = 3400; }) });
   page.win.NavReturn.remember("panel", { save: () => null, restore: (v) => opened.push(v.key) });
   page.win.scrollTo = (options) => { scrolled.push(options.top); page.win.scrollY = options.top; };
-  await tick(20);
+  // 等第一次捲動真的發生才動作（不用固定的毫秒數：整套測試同時跑時計時器會晚，動作可能搶在第一次捲動之前）
+  for (let i = 0; i < 400 && scrolled.length < 1; i += 1) await tick(5);
   act(page);
   await page.win.NavReturn.done();
   return { opened, scrolled, still: page.win.NavReturn.still() };
