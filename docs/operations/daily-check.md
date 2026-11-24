@@ -15,7 +15,9 @@
 | 預測對帳頁 | 今天有晚間版、早上有晨間版 | 記成「漏記」→ 那一份沒寫成（多半是 Gemini 登入或額度問題） |
 | 設定（齒輪）→ AI 模型／用量 | 用量有今天的紀錄 | 出現「上一時段（時間）沒讀到你的設定，用了預設」→ 那一班讀資料庫失敗，用了預設模型；偶發一次不用處理 |
 
-只要「依當天數字自動整理」或「漏記」**連續兩天**出現，幾乎一定是 Gemini 登入檔失效 → 看 [credentials.md](credentials.md)〈AGY_LOGIN_BUNDLE〉。
+「依當天數字自動整理」或「漏記」**連續兩天**出現時，原因可能是 Gemini 登入檔失效，也可能只是模型沒回來、逾時、額度用完或寫的內容沒通過核對。先分辨：Actions → `agy-auth-probe` → Run workflow（預設值）。
+- 紅叉 → 登入檔失效，照 [credentials.md](credentials.md)〈重做 Gemini 登入檔〉。
+- 綠勾 → 登入沒問題，多半是額度或模型暫時的問題；過一兩天還是這樣就交給 AI 查 `daily-update` 執行摘要「首頁白話分析」那段的失敗原因。
 
 ## 第二步：看 GitHub（1 分鐘）
 
@@ -49,11 +51,23 @@
 | 看到 | 做什麼 |
 |---|---|
 | `daily-update` 今天四班都沒有綠勾，或 20:30 那班紅叉 | [rerun-and-redeploy.md](rerun-and-redeploy.md)〈重跑失敗的 run〉 |
-| 今天一筆 run 都沒有（連灰色都沒有） | 觸發器沒在動：可能是 `GITHUB_DISPATCH_TOKEN` 過期（[credentials.md](credentials.md)），或 GitHub 因 60 天沒活動停用了排程（Actions 頁會有黃色提示，按「Enable workflow」） |
+| 今天一筆 run 都沒有（連灰色都沒有） | 觸發器沒在動：可能是 `GITHUB_DISPATCH_TOKEN` 過期（[credentials.md](credentials.md)），或排程被 GitHub 停用（Actions 頁會有黃色提示，按「Enable workflow」；平常由 `workflow-keepalive` 自動處理，見 [ops-buttons.md](ops-buttons.md)） |
 | 紅叉訊息寫 Cloudflare token 無效 | [credentials.md](credentials.md)〈CLOUDFLARE_API_TOKEN〉 |
+| 紅叉訊息寫 `exceeded D1's free tier daily row write limit` | 下面〈D1 寫入額度用完〉 |
 | 紅叉訊息寫「The job was not started because … spending limit」 | GitHub Actions 免費時數用完（倉庫是公開的，正常不會發生；若倉庫又被改回私人就會） |
 
-## 目前沒有的（待補，見 handover.md (e)）
+## D1 寫入額度用完（2026-11-24 晚發生過）
 
-- 網站上還沒有「資料更新狀態」頁；`/api/data-status` 這個入口存在，但沒有任何頁面在讀。
-- 失敗時不會推播到手機；目前只有 GitHub 預設的失敗通知信（要在 GitHub → Settings → Notifications → Actions 確認有打開，**待確認**）。
+正式資料庫（D1）是 Cloudflare 免費方案，**每天最多寫 10 萬列**（刪除也算），**台北早上 08:00 重置**（UTC 00:00）。
+
+- **看到什麼**：run 紅叉，訊息含 `exceeded D1's free tier daily row write limit`；或 `d1-migrate` 摘要寫「今天寫入額度用完」；網站上存自選股、庫存、畫線失敗。
+- **用完時**：所有寫入都失敗到 08:00——使用者存不了東西；有寫入的排程（消息各班、07:20 晨間預測）什麼都沒記到，晨間預測記成漏記。
+- **怎麼辦**：沒有辦法提早恢復。**等台北 08:00 之後**，把失敗的 run 重跑（[rerun-and-redeploy.md](rerun-and-redeploy.md) A）。晨間預測過了 08:45 補不回來。
+- **怎麼避免**：平常日**不要做 `republish`**（重新發布會整套重寫一次），除非真的必要；主力分點的整理、回補、大量回補一天只做一種。付費的 Workers 方案可以解除這個上限，但站主目前的原則是不用付費方案。
+
+## 出事時怎麼知道
+
+- 設定（齒輪）→「資料更新」：每份資料的最後更新時間與狀態（目前只有站主看得到）。說明見 [data-health.md](data-health.md)。
+- 手機推播「資料更新異常／已恢復」：由排程器送；**要等正式資料庫套了 0040 才會開始送**（見 [owner-todo.md](owner-todo.md) 第一項）。
+- GitHub 預設的失敗通知信（GitHub → Settings → Notifications → Actions，確認有打開）。
+- 還沒有的：金鑰到期提醒。

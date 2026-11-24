@@ -9,7 +9,8 @@
 - 每日更新、重新部署都用 `main` 分支的程式建置網站。所以**任何推上 `main` 的改動，會在下一次每日發布（平日約 18:00）或下一次手動 redeploy 時出現在正式站**。
 - 只改 Python（資料處理、AI 排程）的改動不需要部署，下一次那支 workflow 跑的時候就生效。
 - 改 `cloud/wrangler.jsonc`（功能開關）一定要部署（redeploy 或下一次發布）才生效。
-- 改 `cron-trigger/`（Worker 觸發器）**不會**因為推上 main 而生效，要另外部署 Worker（目前還要電腦，見 [handover.md](handover.md) (c)）。
+- 改 `cron-trigger/`（Worker 排程器）**不會**因為推上 main 而生效，要另外按 `deploy-cron-trigger`（[ops-buttons.md](ops-buttons.md)）。
+- 新增資料庫變更（`cloud/migrations/`）要另外按 `d1-migrate`（[ops-buttons.md](ops-buttons.md)）。
 - 還在改、還沒給站主看過的東西，放別的分支，不要推 `main`。
 
 ## A. 重跑失敗的 run
@@ -21,7 +22,9 @@
 3. 好的結果：重跑那一筆變綠勾。
 4. 還是紅：點進紅叉的步驟看訊息。訊息寫 token、金鑰、401、403 → [credentials.md](credentials.md)；其他看不懂的 → 交給 AI（[for-ai-maintainers.md](for-ai-maintainers.md)）。
 
-注意：`daily-update` 同一資料日已經成功過，重跑會回 `already-done`（不會重做），這是正常的。要用新程式重算同一天 → 看 C。
+注意：
+- **Re-run 沒有乾跑**：排程觸發的 run（事件是 `schedule` 或排程器送的）重跑時一律是正式執行，日期也會照當下重新判斷。想先試、或要指定某一天，不要用 Re-run，改用 **Run workflow** 手動跑、`date` 填那一天、先勾 `dry_run`。
+- `daily-update` 同一資料日已經成功過，重跑會回 `already-done`（不會重做），這是正常的。要用新程式重算同一天 → 看 C。
 
 ## B. 只重新部署程式（redeploy）
 
@@ -37,13 +40,16 @@
 5. 再跑一次，這次 `dry_run` **取消勾選**、`redeploy` 勾。
 6. 好的結果：綠勾；Summary 的 JSON 有 `"status": "success"`、`"redeployed": true`。打開網站看改動出現。
 
-它**會**做：用最後一次正式發布時保存的建置輸入，配上 `main` 現在的程式，重建並部署網站；部署後自動檢查；另外會重查一次「盯項」（數字型與消息型，消息型會用到 Gemini）。
-它**不會**做：不重抓資料、不重算、不寫資料庫的行情、不同步工作集、**不觸發**晚上的 AI 排程（預測、判斷、AI 解讀、主力分點都不會跑）。`date` 欄位會被忽略。
+它**會**做：用最後一次正式發布時保存的建置輸入，配上 `main` 現在的程式，重建並部署網站；部署後自動檢查。
+**它不是單純的部署**——正式跑（`dry_run` 取消）時，同一支 workflow 裡這些步驟照樣會跑、會寫 R2／D1、可能推播：公司重大訊息原件、個股新聞標題（Google News，可能被限流）、基金淨值、盯項檢查（數字型與消息型，消息型會用到 Gemini）與盯項推播。
+它**不會**做：不重算行情、不切換資料版本、不同步工作集、**不觸發**晚上的 AI 排程（預測、判斷、AI 解讀、主力分點都不會跑）。`date` 欄位會被忽略。乾跑（`dry_run` 勾著）時上面那些步驟只抓不寫。
 失敗時：Summary 的 `failed_step` 寫 `check_active` → 線上資料版本和保存的輸入對不上（例如中途有人重新發布過）；等下一次正式發布即可，或交給 AI 查。
 
 ## C. 同一天用新程式重新發布（republish）
 
 適用：今天已經發布了，但修了算法或資料處理的程式，要今天的資料用新程式重算再發布一次。
+
+> ⚠️ **平常日不要做，除非真的必要。** 重新發布會把整天的資料再寫一次資料庫，2026-11-24 晚就是 republish 加上主力分點整理，把 D1 免費方案「每天 10 萬列」的寫入額度用完，之後所有寫入失敗到隔天 08:00（[daily-check.md](daily-check.md)〈D1 寫入額度用完〉）。能等明天正常發布就等。
 
 1. Actions → `daily-update` → **Run workflow**，分支 `main`。
 2. 填：
@@ -60,11 +66,34 @@
 
 它**不會**做：不能重新發布比線上舊的日子（會在 `republish_check` 失敗）。
 
-## D. 補抓 ETF 行情原件（etf_raw_days）
+## D. 退回上一版（發布後網站壞了）
+
+網站有兩樣東西要分開看：**資料版本**（D1 裡的 active／previous）和**網頁部署**（Cloudflare Pages 的每一次部署）。
+
+**自動的部分**：每日更新在切換資料版本之後，部署或部署後檢查失敗，會自動把 D1 的資料版本切回上一版。**網頁部署不會自動退回**（`daily_update.py` 的 `remote_rollback` 只切 D1）。
+
+**看目前是哪一版**：Cloudflare → Storage & Databases → D1 → `market-ana-accounts` → Console，執行
+`SELECT active_version, previous_version FROM stock_data_state;`
+（版本名像 `liquid-20261124-…-v2`，中間是資料日；結尾 `-r年月日時分` 的是 republish 出來的。）
+
+**退回網頁部署**（手機或電腦都可以）：
+1. Cloudflare → Workers & Pages → `market-ana` → **Deployments**。
+2. 找到上一個正常的 Production 部署 → 右邊「…」→ **Rollback to this deployment**（選單名稱以畫面為準）。
+3. 確認：重新整理網站，壞掉的地方回到原樣。
+
+**資料版本也要退時**（例如新資料算錯）：在同一個 D1 Console 執行
+`UPDATE stock_data_state SET active_version = previous_version, previous_version = active_version, updated_at = datetime('now') WHERE key = 'current';`
+（就是 `cloud/import_d1_seed.py rollback` 做的事：兩個版本互換，不刪任何東西；再執行一次就換回來。）這是正式資料庫的寫入，先問站主；寫入額度用完時會失敗。
+
+**和 R2 建置輸入的關係**：R2 工作集保存的是「最後一次發布」的建置輸入。資料版本退回之後，`redeploy` 會拒絕（`check_active`：線上版本和保存的輸入對不上），這是保護，不是壞掉。修好程式後，等下一次正式發布（或對線上那一天 republish）就會恢復一致。
+
+**確認**：首頁資料日、`SELECT active_version …` 的結果、Pages Deployments 最上面那一筆，三者對得上。
+
+## E. 補抓 ETF 行情原件（etf_raw_days）
 
 見 [data-gaps.md](data-gaps.md)。
 
-## E. 其他 workflow 的手動觸發（都預設乾跑）
+## F. 其他 workflow 的手動觸發（都預設乾跑）
 
 | workflow | 輸入 | 用途 |
 |---|---|---|
@@ -78,4 +107,6 @@
 | `forecast-replay` | `start`、`end`、`max_forecasts`、`plan_only` | 歷史重播（`plan_only` 勾著只算次數不呼叫模型） |
 | `agy-auth-probe` | `model` | 檢查 Gemini 登入檔還能不能用（只呼叫一次模型） |
 | `eodhd-probe` | `symbols` | 檢查 EODHD 金鑰（每個代號用掉 1 次額度） |
-| `announcements` | （不用填） | 補抓公司重大訊息原件，重跑沒有副作用 |
+| `announcements` | （不用填） | 補抓公司重大訊息原件與基金淨值（`fund-nav`），重跑沒有副作用 |
+| `d1-migrate`、`deploy-cron-trigger`、`workflow-keepalive` | `dry_run` 等 | 見 [ops-buttons.md](ops-buttons.md) |
+| `institutional-backfill` | `dry_run`、`days`、`start` | 法人歷史回補，見 [data-gaps.md](data-gaps.md) |

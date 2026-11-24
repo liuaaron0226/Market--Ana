@@ -1,5 +1,16 @@
 # Market--Ana
 
+這個倉庫是**台股分析網站** `market-ana.pages.dev` 的全部程式：Cloudflare Pages（網站）＋D1（資料庫）＋R2（檔案），根目錄的 Python 資料管線，`.github/workflows/` 的 GitHub Actions 排程，`cron-trigger/` 的 Cloudflare Worker 排程器。網站裡的 AI 只用 Gemini。
+
+- 營運手冊（站主與接手維護者都從這裡開始）：[`docs/operations/README.md`](docs/operations/README.md)
+- 給 AI 維護者（Codex、Gemini／Antigravity）：[`AGENTS.md`](AGENTS.md) → [`docs/operations/for-ai-maintainers.md`](docs/operations/for-ai-maintainers.md)
+
+倉庫是公開的：不要提交信箱、持股、金鑰。
+
+## 舊說明（直播分析工具）
+
+以下是這個倉庫最早的用途（YouTube 直播證據分析）的說明，留作紀錄；其中連到的 `STATUS.md`、`ANALYSIS_PLAN.md` 不在 git 裡，`analysis.py` 的部分流程依賴已不再使用的工具。
+
 公開頻道 `https://www.youtube.com/@jinjason999` 的直播證據分析。先交有來源的紀錄，再做網頁判讀工具；不自動交易、不發布內容。
 
 ## 先看結果
