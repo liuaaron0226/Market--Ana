@@ -68,6 +68,6 @@
 ## 出事時怎麼知道
 
 - 設定（齒輪）→「資料更新」：每份資料的最後更新時間與狀態（目前只有站主看得到）。說明見 [data-health.md](data-health.md)。
-- 手機推播「資料更新異常／已恢復」：由排程器送；**要等正式資料庫套了 0040 才會開始送**（見 [owner-todo.md](owner-todo.md) 第一項）。
+- 手機推播「資料更新異常／已恢復」：由排程器送，一天最多 4 則，說明見 [data-health.md](data-health.md)。正式資料庫套了 0040 之後才會正常記錄（見 [owner-todo.md](owner-todo.md) 第一項）。2026-11-25 08:00 寫入額度重置後，第一個時段可能收到「資料已恢復」之類的通知，是正常的。
 - GitHub 預設的失敗通知信（GitHub → Settings → Notifications → Actions，確認有打開）。
 - 還沒有的：金鑰到期提醒。
