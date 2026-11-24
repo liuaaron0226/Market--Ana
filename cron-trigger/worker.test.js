@@ -77,10 +77,10 @@ test("GitHub 觸發失敗（權杖過期、GitHub 停擺）時照樣檢查資料
   assert.deepEqual(result, { dispatched: "announcements.yml", date: "2026-11-28", health: { error: "資料庫查詢失敗" } });
 });
 
-test("提醒的開關預設關著（wrangler.toml）；沒有開關時提醒什麼都不做", async () => {
+test("提醒的開關在 wrangler.toml（本人 2026-11-24 晚授權打開，只開站主）；沒有開關時提醒什麼都不做", async () => {
   const { readFileSync } = await import("node:fs");
   const toml = readFileSync(new URL("./wrangler.toml", import.meta.url), "utf8");
-  assert.match(toml, /^MARKET_ANA_DATA_HEALTH = "off"$/m);
+  assert.match(toml, /^MARKET_ANA_DATA_HEALTH = "owner"$/m);
   const result = await runScheduled("0 0 * * *", Date.parse("2026-11-28T00:00:00Z"), env, { fetcher: async () => ({ status: 204 }) });
   assert.deepEqual(result.health, { skipped: "off" });
 });
