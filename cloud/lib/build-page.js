@@ -19,6 +19,8 @@ export const WEB_FILES = [
   "chart-menus.js",
   // 立體重設計 B 包（11-14）：資金地形的版面計算與畫面
   "terrain-layout.js", "terrain.js", "desk-tilt.js",
+  // 看盤桌的動態層（2026-11-24 全站動態與元件設計升級；先接首頁，見 DESIGN_UPGRADE.md）
+  "desk-motion.css", "desk-motion.js",
   // 產業資金流向下面的各產業強勢股（本人 2026-11-20）
   "rotation-strong.js",
   // 立體重設計（11-15）：短中長期走勢的算票與畫面

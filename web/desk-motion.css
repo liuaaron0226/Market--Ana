@@ -1,0 +1,158 @@
+/* 看盤桌的動態層（2026-11-24 全站動態與元件設計升級，第一片：首頁）。程式在 desk-motion.js。
+   疊在各頁既有的樣式上，只補「動的那一下」與按下去的回饋，不改版面、內容與顏色；陰影、圓角、顏色全部引用 bold.css 的變數。
+   <html> 上的類別由 desk-motion.js 加（程式沒跑起來時這份樣式完全不作用，頁面和原本一樣）：
+   .upg        基本盤：選中的框點了會滑、開與關成對、按下去都有回饋、換分類時內容照方向換。
+   .upg-ss     瀏覽器支援「關的時候也有過場」（見第 3 段）。
+   .upg-sheet  手機的明細板、設定是可以往下拖的底部板。
+   .upg-tabs   「選中」統一成槽裡一顆白色凸鍵（選單裡選中的項目；個股頁事實分頁，等個股頁接上這一層才看得到）。
+   .upg-kfade  K 線換週期、換指數時新圖由淡到實。
+   動的只有位置、縮放與透明度；沒有任何常駐的動畫。維護說明與各頁待辦在 DESIGN_UPGRADE.md。 */
+
+/* 這幾個是程式寫在單一元素上的位移。登記成「不往下傳」：沒登記的自訂變數會傳給裡面每一個元素，
+   每改一次整塊都要重算樣式（量到換分類時算樣式的時間多了一倍、拖底部板時每動一下都重算）。 */
+@property --upg-dx { syntax: "<length>"; inherits: false; initial-value: 0px; }
+@property --upg-dy { syntax: "<length>"; inherits: false; initial-value: -10px; }
+@property --upg-ox { syntax: "<length>"; inherits: false; initial-value: 0px; }
+@property --upg-oy { syntax: "<length>"; inherits: false; initial-value: -8px; }
+@property --upg-drag { syntax: "<length>"; inherits: false; initial-value: 0px; }
+@property --upg-tx { syntax: "<length>"; inherits: false; initial-value: 0px; }
+@property --upg-ty { syntax: "<length>"; inherits: false; initial-value: 0px; }
+@property --upg-tw { syntax: "<length>"; inherits: false; initial-value: 0px; }
+@property --upg-th { syntax: "<length>"; inherits: false; initial-value: 0px; }
+@property --upg-ts { syntax: "<number>"; inherits: false; initial-value: 0.9; }
+:root { --u-move: 350ms; --u-in: 320ms; --u-out: 200ms; --u-fade: 180ms; --u-press: 80ms; --u-exit: cubic-bezier(.4, 0, 1, 1); }
+
+/* ============ 1. 選中的框：點了會滑過去 ============
+   框是那一排自己的 ::before 畫的，位置由程式寫在那一排的四個變數上（--upg-tx／ty／tw／th）。
+   不往那一排裡面塞元素：有的程式會數那一排有幾個子元素（設定的籤就是），多一個會被當成籤變了而整排重畫。 */
+html.upg :is(.hm-cats, .chip-seg, .st-track, html.upg-tabs .sf-tabs) { position: relative; }
+html.upg :is(.hm-cats, .chip-seg, .st-track, html.upg-tabs .sf-tabs)::before {
+  content: ""; position: absolute; left: 0; top: 0; z-index: 0; width: var(--upg-tw, 0px); height: var(--upg-th, 0px); pointer-events: none;
+  border-radius: var(--r-key); background: var(--key); box-shadow: var(--key-shadow);
+  transform: translate(var(--upg-tx, 0px), var(--upg-ty, 0px)) scale(var(--upg-ts, .9)); opacity: 0;
+  /* 只動位置、縮放與透明度。寬高不做過場（每一排的鍵都等寬；真的不等寬時大小直接換、位置照滑），免得每一格都重排版面 */
+  transition: transform var(--u-move) var(--ease-depth), opacity var(--u-fade) var(--ease-out), translate var(--u-press) linear, box-shadow var(--u-press) linear;
+}
+html.upg :is(.hm-cats, .chip-seg, .st-track, html.upg-tabs .sf-tabs)[data-upg-on="1"]::before { opacity: 1; --upg-ts: 1; }
+html.upg :is(.hm-cats, .chip-seg, .st-track, html.upg-tabs .sf-tabs)[data-upg-still]::before { transition: none; }
+/* 凸起的樣子交給框來畫：選中的那一顆自己攤平，只留字的深淺 */
+html.upg :is(.hm-cats, .chip-seg, .st-track, html.upg-tabs .sf-tabs) > button { position: relative; z-index: 1; transition: color var(--u-fade) var(--ease-out), translate var(--u-press) linear, background-color var(--u-press) linear; }
+html.upg :is(.hm-cats, .chip-seg, .st-track, html.upg-tabs .sf-tabs) > button:is([aria-expanded="true"], [aria-pressed="true"], [aria-selected="true"], [aria-checked="true"]) {
+  background: transparent !important; box-shadow: none !important; color: var(--ink);
+}
+/* 按住拖的時候是網站原本那個跟手的框在畫，這一個先讓開 */
+html.upg :is(.hm-cats, .chip-seg, .st-track, html.upg-tabs .sf-tabs).is-sliding::before { opacity: 0; transition: none; }
+/* 按下去：沒選中的那顆槽底暗一點、字沉 1px；選中的那顆是框沉下去 */
+html.upg :is(.hm-cats, .chip-seg, .st-track, html.upg-tabs .sf-tabs) > button:active { translate: 0 1px; }
+html.upg :is(.hm-cats, .chip-seg, .st-track, html.upg-tabs .sf-tabs) > button:not([aria-expanded="true"], [aria-pressed="true"], [aria-selected="true"], [aria-checked="true"]):active {
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+}
+html.upg :is(.hm-cats, .chip-seg, .st-track, html.upg-tabs .sf-tabs):has(> button:is([aria-expanded="true"], [aria-pressed="true"], [aria-selected="true"], [aria-checked="true"]):active)::before {
+  translate: 0 calc(var(--key-thick) - 1px); box-shadow: var(--key-shadow-press);
+}
+
+/* ============ 2. 展開在頁面裡的區塊：照方向進、照方向退，關也有動畫 ============ */
+html.upg :is(body.hm .workspace, body.bd #content) [data-cat-panel][data-open] { animation: upg-cat-in var(--u-in) var(--ease-depth) both; }
+html.upg :is(body.hm .workspace, body.bd #content) [data-cat-panel][data-open].upg-out { animation: upg-cat-out 150ms var(--u-exit) both; pointer-events: none; }
+@keyframes upg-cat-in { from { opacity: 0; transform: translate(var(--upg-dx, 0px), var(--upg-dy, -10px)); } }
+@keyframes upg-cat-out { to { opacity: 0; transform: translate(var(--upg-ox, 0px), var(--upg-oy, -8px)); } }
+
+/* ============ 3. 浮在上層的東西：同一組時間，關的時候走回去 ============
+   這一段靠兩個比較新的瀏覽器功能（@starting-style、transition-behavior: allow-discrete；iPhone 要 iOS 17.5 以上）。
+   程式確認支援才在 <html> 加 .upg-ss；不支援的瀏覽器這一段不作用，照網站原本的進場動畫、關是瞬間。 */
+/* 選單、預測、均線設定：用 hidden 開關的浮層。display 跟著過場走，所以收起來時還看得到它退回去 */
+html.upg-ss :is(.chart-menu, .forecast-pop, .ma-pop:not(.ma-pop-sheet)) {
+  animation: none;
+  transition: opacity var(--u-fade) var(--ease-out), transform var(--u-in) var(--ease-depth), display var(--u-out) allow-discrete;
+}
+html.upg-ss :is(.chart-menu, .forecast-pop, .ma-pop:not(.ma-pop-sheet))[hidden] {
+  opacity: 0; transform: translateY(-6px) scale(.96); pointer-events: none;
+  transition: opacity 140ms var(--ease-out), transform var(--u-out) var(--u-exit), display var(--u-out) allow-discrete;
+}
+@starting-style {
+  html.upg-ss :is(.chart-menu, .forecast-pop, .ma-pop:not(.ma-pop-sheet)):not([hidden]) { opacity: 0; transform: translateY(-6px) scale(.96); }
+}
+/* 手機上貼底的均線設定板：從下面升起、退回下面 */
+html.upg-ss .ma-pop.ma-pop-sheet { animation: none; transition: opacity var(--u-fade) var(--ease-out), transform var(--u-in) var(--ease-depth), display var(--u-out) allow-discrete; }
+html.upg-ss .ma-pop.ma-pop-sheet[hidden] { opacity: 0; transform: translateY(24px); transition: opacity 140ms var(--ease-out), transform var(--u-out) var(--u-exit), display var(--u-out) allow-discrete; }
+@starting-style { html.upg-ss .ma-pop.ma-pop-sheet:not([hidden]) { opacity: 0; transform: translateY(24px); } }
+
+/* 搜尋、排行表格、設定：原生的 dialog。關的時候淡出下沉，後面的遮罩一起淡掉 */
+html.upg-ss dialog:is(.float-dialog, .st-sheet) {
+  animation: none;
+  transition: opacity var(--u-fade) var(--ease-out), transform var(--u-in) var(--ease-depth), overlay var(--u-out) allow-discrete, display var(--u-out) allow-discrete;
+}
+html.upg-ss dialog:is(.float-dialog, .st-sheet):not([open]) {
+  opacity: 0; transform: translateY(14px) scale(.97);
+  transition: opacity 140ms var(--ease-out), transform var(--u-out) var(--u-exit), overlay var(--u-out) allow-discrete, display var(--u-out) allow-discrete;
+}
+@starting-style { html.upg-ss dialog[open]:is(.float-dialog, .st-sheet) { opacity: 0; transform: translateY(14px) scale(.97); } }
+html.upg-ss dialog:is(.float-dialog, .st-sheet)::backdrop { transition: opacity var(--u-fade) linear, overlay var(--u-out) allow-discrete, display var(--u-out) allow-discrete; }
+html.upg-ss dialog:is(.float-dialog, .st-sheet):not([open])::backdrop { opacity: 0; }
+@starting-style { html.upg-ss dialog[open]:is(.float-dialog, .st-sheet)::backdrop { opacity: 0; } }
+@media (max-width: 640px) {
+  /* 手機的設定本來就是底部的板：從下面升起，關的時候退回下面（原本是瞬間消失） */
+  html.upg-ss dialog.st-sheet { transform: translateY(var(--upg-drag, 0px)); }
+  html.upg-ss dialog.st-sheet:not([open]) { opacity: 1; transform: translateY(104%); }
+  @starting-style { html.upg-ss dialog.st-sheet[open] { opacity: 1; transform: translateY(104%); } }
+}
+/* 明細板原本開關就成對，只把時間換成同一組 */
+html.upg body.hm .detail-panel { transition: opacity 140ms var(--ease-out), transform var(--u-out) var(--u-exit), visibility 0s linear var(--u-out); }
+html.upg body.hm .detail-panel.is-open { transition: opacity var(--u-fade) var(--ease-out), transform var(--u-in) var(--ease-depth), visibility 0s; }
+html.upg .panel-backdrop { transition: opacity var(--u-fade) linear; }
+
+/* ============ 4. 按下去的回饋：原本沒有的補上 ============ */
+/* 浮在板上的卡與鍵：沉下去、陰影變薄（和圖示鍵同一種） */
+html.upg body.hm .chip-card { transition: transform var(--u-move) var(--ease-depth), box-shadow var(--u-move) var(--ease-depth), background-color var(--u-fade) var(--ease-out); }
+html.upg body.hm .chip-card:active { transform: translateY(calc(var(--key-thick) - 1px)); box-shadow: var(--key-shadow-press); transition-duration: var(--u-press); }
+/* 板上的列（短中長期走勢、清單）：按住時整列凹下去變成槽 */
+html.upg :is(body.hm, body.bd) .depth-row:not([data-state="bull"]) { transition: background-color var(--u-press) linear, box-shadow var(--u-press) linear, transform var(--u-press) linear; }
+html.upg :is(body.hm, body.bd) .depth-row:not([data-state="bull"]):has(> button:active) { background: var(--row-down, var(--well)); box-shadow: var(--well-shadow); }
+html.upg body.hm :is(.stock-search-result a, .news-item, .screen-row):active { background: var(--well); }
+/* 字樣的小鍵（指數名稱、均線名稱、指標名稱、預測）：沉 1px、淡一點 */
+html.upg :is(.forecast-chip, .legend-name, .chart-chip.index-chip, .kc-studies .chart-chip, .state-trigger) { transition: translate var(--u-press) linear, opacity var(--u-press) linear, border-color var(--u-fade) var(--ease-out); }
+html.upg :is(.forecast-chip, .legend-name, .chart-chip.index-chip, .kc-studies .chart-chip, .state-trigger):active { translate: 0 1px; opacity: .62; }
+
+/* ============ 試做 ①：手機上可以拖的底部板（明細板、設定） ============ */
+@media (max-width: 640px) {
+  /* 位置用 !important：minimal.css 把手機上的明細板釘在畫面正中央（left: 50% !important 那一組），不這樣蓋不過 */
+  html.upg-sheet body.hm .detail-panel {
+    left: 0 !important; right: 0 !important; top: auto !important; bottom: 0 !important; width: 100% !important; max-width: none !important; max-height: 88dvh !important;
+    border-radius: var(--r-float) var(--r-float) 0 0; opacity: 1; transform: translateY(105%) !important;
+    transition: transform var(--u-out) var(--u-exit), visibility 0s linear var(--u-out);
+  }
+  html.upg-sheet body.hm .detail-panel.is-open { transform: translateY(var(--upg-drag, 0px)) !important; transition: transform var(--u-move) var(--ease-depth), visibility 0s; }
+  html.upg-sheet body.hm .detail-panel.upg-dragging, html.upg-sheet dialog.st-sheet.upg-dragging { transition: none; }
+  html.upg-sheet .panel-backdrop.upg-dragging { transition: none; }
+  /* 把手：標題列上緣一條短橫；整條標題列都可以拖 */
+  html.upg-sheet body.hm .detail-panel .panel-header, html.upg-sheet dialog.st-sheet .st-head { position: relative; touch-action: none; }
+  html.upg-sheet body.hm .detail-panel .panel-header { padding-top: 18px; }
+  html.upg-sheet dialog.st-sheet { padding-top: 22px; }
+  html.upg-sheet body.hm .detail-panel .panel-header::before, html.upg-sheet dialog.st-sheet .st-head::before {
+    content: ""; position: absolute; left: 50%; top: 7px; width: 36px; height: 4px; margin-left: -18px; border-radius: 2px; background: var(--line-strong);
+  }
+  html.upg-sheet dialog.st-sheet .st-head::before { top: -14px; }
+}
+
+/* ============ 試做 ②：「選中」統一成槽裡一顆白色凸鍵 ============ */
+/* 選單：整塊浮起來的是一條槽，選中的那一項是嵌在裡面的凸鍵（原本是黑色實心） */
+html.upg-tabs .chart-menu:is([role="radiogroup"], .kc-study-menu, .screen-tab-menu, .news-date-menu, #screenDaysMenu, #screenSideMenu) { background: var(--well); }
+html.upg-tabs .chart-menu button:is([aria-checked="true"], [aria-pressed="true"]) { background: var(--key); color: var(--ink); box-shadow: var(--key-shadow); }
+html.upg-tabs .chart-menu button:is([role="radio"], .kc-study-choice):hover:not(:disabled, [aria-checked="true"], [aria-pressed="true"]) { background: color-mix(in srgb, var(--ink) 6%, transparent); }
+html.upg-tabs .chart-menu .slide-thumb { mix-blend-mode: normal; background: var(--key); box-shadow: var(--key-shadow); z-index: 0; }
+html.upg-tabs .chart-menu button { position: relative; z-index: 1; }
+/* 個股頁事實區塊的分頁：一條槽，選中的是白色凸鍵（原本是黑色實心） */
+html.upg-tabs body.st .sf-tabs { padding: var(--track-pad); gap: var(--track-gap); border-radius: var(--r-track); background: var(--well); box-shadow: var(--well-shadow); }
+html.upg-tabs body.st .sf-tab { border-color: transparent; }
+html.upg-tabs body.st .sf-tab[aria-pressed="true"] { border-color: transparent; font-weight: 700; }
+
+/* ============ 試做 ③：K 線換資料時，新的那張圖淡進來 ============
+   原本做的是「留一份舊圖蓋在上面再淡掉」，量到每換一次要多花幾十毫秒複製整張圖、格數掉到 40 以下，不合效能底線，
+   改成只讓新圖由淡到實：只動透明度，不複製、不重畫。 */
+html.upg-kfade :is(#mainChart, #chartHost, #chartStudies) canvas { transition: opacity 260ms var(--ease-out); }
+html.upg-kfade :is(#mainChart, #chartHost, #chartStudies) canvas.upg-dip { opacity: .3; transition: none; }
+
+/* 系統設「減少動態」：這一層的過場全部縮到幾乎沒有 */
+@media (prefers-reduced-motion: reduce) {
+  html.upg :is(.hm-cats, .chip-seg, .st-track, .sf-tabs, .chart-menu, .forecast-pop, .ma-pop, dialog, dialog::backdrop, .detail-panel, .chip-card, .depth-row, [data-cat-panel]) { transition-duration: 1ms !important; animation-duration: 1ms !important; }
+}
