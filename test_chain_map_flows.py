@@ -417,9 +417,45 @@ class BuildTest(unittest.TestCase):
         old = b'{"schema": "chain-map-us-day/v1", "date": "2026-10-30", "tickers": {}, "holiday": true}'
         store = FakeStore({cm.R2_PREFIX + "us-2026-10-30.json": old})
         summary = self.env.build(utc("2026-11-03T12:30:00"), FakeMassive(self.days), store=store)
-        self.assertEqual(store.puts, [cm.R2_PREFIX + "us-2026-11-02.json"])
+        self.assertEqual(store.puts, [cm.R2_PREFIX + "us-2026-11-02.json", cm.CURRENT_KEY])
         self.assertEqual((summary["r2_downloaded"], summary["r2_uploaded"], summary["version"]), (1, 1, "2026-11-03"))
         self.assertEqual(len(self.env.d1.rows()), 1)
+        current = json.loads(store.objects[cm.CURRENT_KEY].decode("utf-8"))
+        self.assertEqual({k: current[k] for k in ("schema", "version", "as_of", "built_at")},
+                         {"schema": "chain-map-flows-r2/v1", "version": "2026-11-03", "as_of": "2026-10",
+                          "built_at": "2026-11-03T12:30:00Z"})
+        self.assertEqual(current["payload"], self.env.payload(), "R2 與 D1 是同一份 payload")
+
+    def test_the_r2_current_is_written_before_d1(self):
+        self.env.put_boot(bootstrap())
+        order = []
+        store = FakeStore()
+        put = store.put
+        store.put = lambda key, data: (order.append(("r2", key)), put(key, data))
+        query = self.env.d1.query
+
+        def logged(sql, params=()):
+            if not sql.lstrip().upper().startswith("SELECT"):
+                order.append(("d1", sql.split()[0]))
+            return query(sql, params)
+        self.env.d1.query = logged
+        self.env.build(utc("2026-11-03T12:30:00"), FakeMassive(self.days), store=store)
+        self.assertEqual(order[1:3], [("r2", cm.CURRENT_KEY), ("d1", "INSERT")])
+
+    def test_the_next_build_uses_the_fresher_of_d1_and_r2_current_as_base(self):
+        self.env.put_boot(bootstrap())
+        newer = {**bootstrap(), "notes": ["R2 那份"]}
+        newer["tw"]["2330"]["t"] = [7.0, 7.0, 7.0]
+        store = FakeStore({cm.CURRENT_KEY: json.dumps(cm.current_object(newer, version="2026-11-02", as_of="2026-10",
+                                                                         built_at="2026-11-02T12:30:00Z")).encode()})
+        summary = self.env.build(utc("2026-11-03T12:30:00"), FakeMassive(self.days), store=store, dry_run=True)
+        self.assertEqual(summary["base"], "r2_current", "D1 沒有排程列 → 用 R2 那份")
+        self.env.d1.query("INSERT INTO chain_map_flows VALUES ('2026-11-03', '2026-10', ?1, '2026-11-03T12:30:00Z')",
+                          [json.dumps(bootstrap())])
+        summary = self.env.build(utc("2026-11-04T12:30:00"), FakeMassive(self.days), store=store, dry_run=True)
+        self.assertEqual(summary["base"], "latest", "D1 那列較新 → 用 D1")
+        store.objects[cm.CURRENT_KEY] = b"{"
+        self.assertEqual(cm.load_current(store), (None, None), "R2 那份壞了 → 當成沒有")
 
     def test_no_bootstrap_is_a_clear_failure(self):
         with self.assertRaises(cm.MissingBootstrap):
@@ -430,12 +466,16 @@ class BuildTest(unittest.TestCase):
         self.env.d1 = FakeD1(tables=False)
         store = FakeStore()
         summary = self.env.build(utc("2026-11-03T12:30:00"), FakeMassive(self.days), store=store)
-        self.assertEqual(summary["status"], "skipped_no_table")
-        self.assertEqual(store.puts, [cm.R2_PREFIX + "us-2026-11-02.json"])
+        self.assertEqual(summary["status"], "skipped_no_table_r2")
+        self.assertEqual(store.puts, [cm.R2_PREFIX + "us-2026-11-02.json", cm.CURRENT_KEY])
         self.assertEqual(cm.exit_code(summary), 0)
+        self.assertIn("只寫進 R2；網站照樣讀得到 2026-08～2026-10", cm.plain_message(summary))
+        # 沒有 R2（沒給 --r2）：和以前一樣，只說表還沒建
+        summary = self.env.build(utc("2026-11-03T12:30:00"), FakeMassive(self.days))
+        self.assertEqual((summary["status"], cm.exit_code(summary)), ("skipped_no_table", 0))
         self.assertEqual(cm.plain_message(summary), "資料表還沒建立：到 Actions 按 d1-migrate")
 
-    def test_the_d1_daily_write_limit_fails_plainly_and_keeps_the_r2_days(self):
+    def test_the_d1_daily_write_limit_after_r2_success_is_only_a_warning(self):
         self.env.put_boot(bootstrap())
 
         def full(sql, params=()):
@@ -445,8 +485,16 @@ class BuildTest(unittest.TestCase):
         self.env.d1.query = full
         store = FakeStore()
         summary = self.env.build(utc("2026-11-03T12:30:00"), FakeMassive(self.days), store=store)
-        self.assertEqual((summary["status"], cm.exit_code(summary)), ("d1_write_limit", 1))
-        self.assertEqual(store.puts, [cm.R2_PREFIX + "us-2026-11-02.json"], "日檔已上傳，明天不用重抓")
+        self.assertEqual((summary["status"], cm.exit_code(summary), summary["d1_status"]), ("d1_write_limit_r2", 0, "d1_write_limit"))
+        self.assertEqual(store.puts, [cm.R2_PREFIX + "us-2026-11-02.json", cm.CURRENT_KEY], "日檔與網站那份都已上傳")
+        self.assertIn("免費寫入額度已用完，這一班只寫進 R2", cm.plain_message(summary))
+        # R2 那份也寫不進去：照舊是紅色
+        def broken(key, data):
+            if key == cm.CURRENT_KEY:
+                raise OSError("R2 PUT → HTTP 500")
+        store.put = broken
+        summary = self.env.build(utc("2026-11-03T12:30:00"), FakeMassive(self.days), store=store)
+        self.assertEqual((summary["status"], cm.exit_code(summary), summary["r2_current"]), ("d1_write_limit", 1, False))
         self.assertIn("免費寫入額度已用完", cm.plain_message(summary))
 
         def http(url, body, headers):

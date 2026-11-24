@@ -83,6 +83,40 @@ class BootstrapTest(unittest.TestCase):
             self.assertNotIn("987.6", buffer.getvalue())
             self.assertIn("2025-11", buffer.getvalue())
 
+    def test_json_output_is_the_r2_object_the_site_reads(self) -> None:
+        sample = {**PAYLOAD, "us": {"XX": {"t": [987.6, 0.2, 0.3, 0.4]}, "PSTG": {"t": [1, 2, 3, 4]}}}
+        with tempfile.TemporaryDirectory() as tmp:
+            src, out = Path(tmp) / "flows.json", Path(tmp) / "flows-r2.json"
+            src.write_text(json.dumps(sample), encoding="utf-8")
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                code = cb.main(["--flows", str(src), "--json-output", str(out), "--built-at", "2026-11-24T15:00:00Z"])
+            self.assertEqual(code, 0)
+            obj = json.loads(out.read_text(encoding="utf-8"))
+            self.assertEqual({k: obj[k] for k in ("schema", "version", "as_of", "built_at")},
+                             {"schema": "chain-map-flows-r2/v1", "version": "bootstrap-2026-02", "as_of": "2026-02",
+                              "built_at": "2026-11-24T15:00:00Z"})
+            self.assertEqual(list(obj["payload"]), ["months", "inst0", "notes", "tw", "us"], "沒有 owner")
+            self.assertEqual(obj["payload"]["us"], {"XX": {"t": [987.6, 0.2, 0.3, 0.4]}, "P": {"t": [1, 2, 3, 4]}}, "PSTG 改成 P")
+            self.assertEqual(sample["us"].keys(), {"XX", "PSTG"}, "原檔的物件不被改動")
+            self.assertNotIn("987.6", buffer.getvalue())
+            self.assertIn("chain-map/current/flows.json", buffer.getvalue())
+            # 每日建置讀得懂同一份（當成下一次的底）
+            import chain_map_flows as cm
+            store = type("S", (), {"get": lambda self, key: out.read_bytes()})()
+            payload, built_at = cm.load_current(store)
+            self.assertEqual((payload, built_at), (obj["payload"], "2026-11-24T15:00:00Z"))
+            cm.validate_bootstrap(payload)
+            # 一個輸出都沒給：停下
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                cb.main(["--flows", str(src)])
+            # 格式不對：不產生
+            bad = Path(tmp) / "bad.json"
+            bad.write_text(json.dumps({**PAYLOAD, "inst0": 9}), encoding="utf-8")
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(cb.main(["--flows", str(bad), "--json-output", str(Path(tmp) / "x.json")]), 1)
+            self.assertFalse((Path(tmp) / "x.json").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -7,8 +7,9 @@
 //   slots   每一班：days（trading＝台股交易日、weekdays＝週一到週五、daily＝每天）、at（台北時間，這一班最早可能更新的時間）、
 //           due（台北時間，過了還沒更新就算延遲）。'date' 比的是那一天（往前推 lag 個交易日）的資料日。
 //   lag     'date' 才用：資料本來就晚幾個交易日（例如基金淨值）。
-// 狀態：ok 正常；late 最近一班過了期限還沒更新；failed 連續兩班以上沒更新；degraded 有更新但內容降級（改用程式套句、記為漏記、部分抓取失敗）。
-// 讀不到資料表（遷移還沒套）或表是空的（功能沒開）：那一列不出現，不算錯。
+// 狀態：ok 正常；late 最近一班過了期限還沒更新；failed 連續兩班以上沒更新；degraded 有更新但內容降級（改用程式套句、記為漏記、部分抓取失敗）；
+// error 這一份的查詢出錯（欄位名寫錯、資料庫讀不到）：設定頁標「無法檢查」，不推播（不是資料本身的問題）。
+// 讀不到資料表（遷移還沒套）或表是空的（功能沒開）：那一列不出現，不算錯。其他錯誤（含欄位不存在）一律是 error，不會靜靜消失。
 import { HOLIDAYS, isTradingDay, isWeekday, shiftDay, tradingDaysBefore } from "./trading-calendar.js";
 
 const EVENING = { days: "trading", at: "15:30", due: "22:30" };   // 接在每日更新（15:30～20:30 四班）後面的那些
@@ -80,6 +81,10 @@ export function evaluateHealth(facts, now, { holidays = HOLIDAYS, rules = RULES 
   for (const rule of rules) {
     const fact = facts?.[rule.key];
     if (!fact) continue;
+    if (fact.error) {
+      items.push({ key: rule.key, label: rule.label, last_ok_at: null, state: "error", since: null, detail: "查詢失敗" });
+      continue;
+    }
     const item = { key: rule.key, label: rule.label, last_ok_at: fact.last_ok_at ?? fact.data_date ?? null, state: "ok", since: null, detail: "" };
     const missed = [];
     if (rule.fresh !== "none") {
@@ -104,15 +109,25 @@ export function evaluateHealth(facts, now, { holidays = HOLIDAYS, rules = RULES 
   return items;
 }
 
-// ---------- 讀資料庫（每一份一句查詢；表或欄位還不存在就當作沒有這一份） ----------
-const missingSchema = (error) => /no such (table|column)/i.test(String(error?.message));
+// ---------- 讀資料庫（每一份一句查詢；表還不存在就當作沒有這一份，其他錯誤記成 error） ----------
+const missingTable = (error) => /no such table/i.test(String(error?.message));
 const count = (value) => Number(value) || 0;
 
+// 每日行情的資料日寫在版本名裡（cloud/build_stock_pack.py version_name：liquid-YYYYMMDD-<雜湊>-v2；
+// 同一天重新發布再接 -r<時間>，daily_update.republish_version）。stock_data_versions.source_date 是上市櫃名錄的抓取日，不是資料日。
+export function versionDataDate(version) {
+  const match = /^[a-z]+-(\d{4})(\d{2})(\d{2})-/.exec(String(version || ""));
+  return match ? `${match[1]}-${match[2]}-${match[3]}` : null;
+}
+
 const READERS = {
+  // 版本名讀不出日期（不該發生）時，退回這一版名錄裡最新的 K 棒日。最後更新＝切換成這一版的時間。
   async daily(db) {
-    const row = await db.prepare("SELECT s.updated_at, v.source_date FROM stock_data_state s "
-      + "JOIN stock_data_versions v ON v.version = s.active_version WHERE s.key = 'current'").first();
-    return row ? { last_ok_at: row.updated_at, data_date: row.source_date } : null;
+    const row = await db.prepare("SELECT s.active_version, s.updated_at, "
+      + "(SELECT MAX(l.latest_bar_date) FROM listed_securities l WHERE l.version = s.active_version) AS bar_date "
+      + "FROM stock_data_state s WHERE s.key = 'current'").first();
+    if (!row) return null;
+    return { last_ok_at: row.updated_at, data_date: versionDataDate(row.active_version) ?? row.bar_date ?? null };
   },
   // 籌碼卡解讀（白話分析）：用量紀錄的最後一筆是 failed＝這一班改用程式套句（遷移 0029 之後才有 outcome）
   async plain(db) {
@@ -165,10 +180,18 @@ const READERS = {
     return { last_ok_at: row.ok_at, degraded: count(row.errors) ? `${count(row.errors)} 檔抓取失敗` : null, degraded_at: row.error_at };
   },
   // 基金淨值：目前線上那一版名錄裡最舊的那一檔淨值日（三檔都要跟得上）
+  // 再加上這一版基金分析裡的資料提醒（fund_stock.py 的 data_issues：gap＝淨值缺日、nav-conflict／dist-conflict＝兩份官方檔數字不同）
   async fund_nav(db) {
-    const row = await db.prepare("SELECT MIN(f.latest_bar_date) AS oldest FROM fund_securities f "
-      + "JOIN stock_data_state s ON s.key = 'current' AND f.version = s.active_version").first();
-    return row?.oldest ? { last_ok_at: row.oldest, data_date: row.oldest } : null;
+    const row = await db.prepare("SELECT MIN(f.latest_bar_date) AS oldest, "
+      + "(SELECT SUM(CASE WHEN json_extract(i.value, '$.kind') = 'gap' THEN 1 ELSE 0 END) || ',' || "
+      + "SUM(CASE WHEN json_extract(i.value, '$.kind') <> 'gap' THEN 1 ELSE 0 END) "
+      + "FROM stock_analysis a JOIN fund_securities g ON g.version = a.version AND g.code = a.code, json_each(a.payload, '$.data_issues') i "
+      + "WHERE a.version = s.active_version) AS issues, s.updated_at "
+      + "FROM fund_securities f JOIN stock_data_state s ON s.key = 'current' AND f.version = s.active_version").first();
+    if (!row?.oldest) return null;
+    const [gaps, conflicts] = String(row.issues || "0,0").split(",").map(count);
+    const notes = [gaps ? `${gaps} 段淨值缺日` : "", conflicts ? `${conflicts} 處數字對不上` : ""].filter(Boolean);
+    return { last_ok_at: row.oldest, data_date: row.oldest, degraded: notes.join("、") || null, degraded_at: row.updated_at };
   },
   async level(db) {
     const row = await db.prepare("SELECT MAX(data_date) AS data_date, MAX(created_at) AS created_at FROM level_daily").first();
@@ -179,14 +202,19 @@ const READERS = {
     if (!row) return null;
     return { last_ok_at: row.updated_at, data_date: row.data_date, degraded: row.status === "generated" ? null : "解讀未完成", degraded_at: row.updated_at };
   },
-  // 資金版圖（另一條分支加的表 chain_map_flows）：表或欄位還沒有就不顯示
+  // 資金版圖（遷移 0039 chain_map_flows）：每日排程寫的那幾列 version＝台北的建置日 YYYY-MM-DD；
+  // 一次性樣品（bootstrap-YYYY-MM）不算。只有樣品、排程還沒寫過（開關沒開）就不顯示。
   async chain_map(db) {
-    const row = await db.prepare("SELECT MAX(data_date) AS data_date FROM chain_map_flows").first();
-    return row?.data_date ? { last_ok_at: row.data_date, data_date: row.data_date } : null;
+    const row = await db.prepare("SELECT version, built_at FROM chain_map_flows "
+      + "WHERE version GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' ORDER BY version DESC LIMIT 1").first();
+    return row ? { last_ok_at: row.built_at, data_date: row.version } : null;
   },
 };
 
-export async function readHealthFacts(db, { rules = RULES } = {}) {
+export const READER_KEYS = Object.keys(READERS);
+
+// strict：測試用，任何錯誤（連表不存在）都丟出來，用來確認每一句查詢對得上真正的資料表
+export async function readHealthFacts(db, { rules = RULES, strict = false } = {}) {
   const facts = {};
   for (const rule of rules) {
     const reader = READERS[rule.key];
@@ -195,7 +223,8 @@ export async function readHealthFacts(db, { rules = RULES } = {}) {
       const fact = await reader(db);
       if (fact) facts[rule.key] = fact;
     } catch (error) {
-      if (!missingSchema(error)) throw error;
+      if (strict) throw new Error(`${rule.key}: ${error?.message}`);
+      if (!missingTable(error)) facts[rule.key] = { error: String(error?.message || error).slice(0, 200) };
     }
   }
   return facts;

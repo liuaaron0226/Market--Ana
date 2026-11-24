@@ -356,10 +356,15 @@ async function listHoldings(db, email, deps) {
     todayCloses(results.filter((item) => !isFund(item) && analysis.get(item.code) !== null), deps),
     officialPrices(unresolved, deps.quoteFetch, deps.now || Date.now),
   ]);
-  for (const [code, quote] of official) {
-    await db.prepare(
-      "UPDATE user_holdings SET last_price = ?, price_as_of = ?, price_source = ? WHERE email = ? AND code = ?",
-    ).bind(quote.price, quote.asOf, quote.source, email, code).run();
+  // 存下官方行情只是快取；寫不進去（2026-11-24 D1 當天寫入額度用完）時照樣回這次查到的價，讀庫存不因此失敗。
+  try {
+    for (const [code, quote] of official) {
+      await db.prepare(
+        "UPDATE user_holdings SET last_price = ?, price_as_of = ?, price_source = ? WHERE email = ? AND code = ?",
+      ).bind(quote.price, quote.asOf, quote.source, email, code).run();
+    }
+  } catch (error) {
+    console.warn("holding price cache not saved:", String(error?.message || error));
   }
   const items = results.map((item) => {
     if (isFund(item)) return fundHoldingItem(item, funds.get(item.code));
