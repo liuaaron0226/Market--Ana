@@ -37,13 +37,18 @@
 python -X utf8 -m unittest discover -p "test_*.py" -s . -t .
 ```
 
-已知基線：**10 個失敗＋1 個錯誤**，和你的改動無關，不要去追：
-- `test_listed_catalog` 8 個（個股入口回 500，`analyze_v2() missing 1 required positional argument: 'db_path'`）
-- `test_listed_institutional.RealDataTest` 1 個（讀本機 `data/` 的上櫃法人資料，日期範圍對不上）
-- `test_long_term_screen` 1 個（基準日是空的，依賴本機資料）
-- 1 個錯誤：名稱**待確認**（交接時正在重跑確認）
+已知基線（約 2,449 個測試）：**10 個失敗＋1 個錯誤**，和你的改動無關，不要去追：
+- `test_listed_catalog` 8 個失敗：本機測試伺服器的個股分析入口回 500（log 裡是 `analyze_v2() missing 2 required positional arguments: 'db_path' and 'otc_db_path'`）。
+- `test_listed_catalog.ListedSearchEndpointContractTest.test_otc_stale_unavailable_and_insufficient_follow_listed_rules` 1 個錯誤（`KeyError: 'stock_state'`，同一個原因）。
+- `test_listed_institutional.RealDataTest.test_real_db_covers_otc_trading_days_and_sums` 1 個失敗（讀本機 `data/` 的上櫃法人資料，日期範圍對不上）。
+- `test_long_term_screen.LongTermScreenTest.test_real_loader_returns_fingerprints_and_benchmark` 1 個失敗（基準日是空的，依賴本機資料）。
 
-判斷方法：你的改動前後，失敗清單逐條相同就算沒弄壞。沒有本機 `data/` 的乾淨檢出，讀真實資料的測試會多失敗，屬環境問題。
+環境造成的額外失敗（也不是程式壞了）：
+- `test_plain_daily_workflow`、`test_strategy_workflows` 會用 `bash` 實際執行 workflow 裡的 shell 片段；**Windows 上 bash 壞掉或找不到時**會全部回 127（9＋3 個失敗）。在 Linux 或 GitHub runner 上跑才準。
+- `test_listed_catalog` 偶爾有一個搜尋請求 `TimeoutError: timed out`（電腦忙時），重跑即過。
+- 沒有本機 `data/` 的乾淨檢出，讀真實資料的測試會多失敗。
+
+判斷方法：你的改動前後，失敗清單逐條相同就算沒弄壞。
 
 **JavaScript（在 `cloud/`）**
 
