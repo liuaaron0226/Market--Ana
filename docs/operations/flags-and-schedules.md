@@ -32,7 +32,7 @@
 | `MARKET_ANA_LIVE_QUOTES` | `all` ✱（新） | 富果即時行情：個股即時報價與盤中、當天逐筆、首頁大盤即時、分時、五檔、60 分 K | 所有人。富果條款限本人私用，站主已知風險仍決定開 |
 | `MARKET_ANA_CHAIN_MAP` | `all` ✱（新） | 資金版圖頁 `/chain-map` | 所有人 |
 | `MARKET_ANA_DATA_HEALTH` | `owner`（新） | 設定頁「資料更新」那一籤 | 只有站主（`all` 也只開站主）。推播在 `cron-trigger/wrangler.toml` 的同名開關（`owner`） |
-| `MARKET_ANA_BROKER_BRANCHES` | `owner` | 個股頁「主力分點」副圖 | 只有站主。程式已支援 `all`，但「哪幾檔有分點」等於站主的名單，要先決定抓取範圍（站主說「我希望我股票池的股票都有」，意思待釐清） |
+| `MARKET_ANA_BROKER_BRANCHES` | `owner` | 個股頁「主力分點」副圖 | 只有站主。程式已支援 `all`，但「哪幾檔有分點」等於站主的名單，要先決定抓取範圍。站主想要整個股票池，但免費額度要一年以上：待站主決定付費方案後才做，或縮到自選與庫存（[handover.md](handover.md) C3） |
 | `MARKET_ANA_WATCHLIST_WATCH` | `owner` | 自選股關注（判斷、到價推播） | 只有站主。朋友版沒做（要每人各自判斷、朋友自己的 Gemini 金鑰、每人推播、行情商額度）。`cron-trigger/wrangler.toml` 也有同名開關 |
 | `MARKET_ANA_FRIEND_AI` | `on` | 朋友用自己的 Gemini 金鑰產生解讀 | 核准的朋友（只認 `on`；GitHub variable 同名開關也要 `on`） |
 | `MARKET_ANA_STRATEGIES_ENABLED` | **沒設＝關** | 策略總開關：站主 AI 解讀、現金水位、個股操作策略 | 站主 2026-11-14 定案先關 |

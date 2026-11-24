@@ -3,7 +3,8 @@
 //
 // 要改門檻只改下面的 RULES（一列一份資料）：
 //   label   畫面與推播上的名稱
-//   fresh   怎麼算「這一班有更新」：'date' 比資料日（data_date）、'time' 比最後更新時間、'none' 不看時間（只看內容有沒有降級）
+//   fresh   怎麼算「這一班有更新」：'date' 比資料日（data_date）、'time' 比最後更新時間、'none' 不看時間（只看內容有沒有降級）、
+//           'age' 不分班，只看最後一次成功離現在幾天（max_days 天內正常；超過延遲；超過兩倍停止）
 //   slots   每一班：days（trading＝台股交易日、weekdays＝週一到週五、daily＝每天）、at（台北時間，這一班最早可能更新的時間）、
 //           due（台北時間，過了還沒更新就算延遲）。'date' 比的是那一天（往前推 lag 個交易日）的資料日。
 //   lag     'date' 才用：資料本來就晚幾個交易日（例如基金淨值）。
@@ -33,6 +34,8 @@ export const RULES = [
   { key: "level", label: "現金水位", fresh: "date", lag: 1, slots: [{ days: "trading", at: "07:30", due: "09:30" }] },
   { key: "ai_digest", label: "今日 AI 解讀", fresh: "date", slots: [EVENING] },
   { key: "chain_map", label: "資金版圖", fresh: "date", slots: [EVENING] },
+  // GitHub 排程保活（workflow-keepalive，2026-11-24）：平常每天跑、至少每週一次；8 天沒成功＝排程可能快被 GitHub 停用了
+  { key: "keepalive", label: "排程保活", fresh: "age", max_days: 8, slots: [] },
 ];
 
 export const PROBLEM_STATES = new Set(["late", "failed", "degraded"]);
@@ -74,6 +77,20 @@ function updatedFor(rule, facts, slot, holidays) {
   return Number.isFinite(at) && at >= slot.at;
 }
 
+// 'age'：最後一次成功超過 max_days 天＝延遲、超過兩倍＝停止，從「該成功卻沒成功」那一刻算；從沒成功過就從第一次嘗試算。
+const DAY_MS = 86_400_000;
+function ageState(rule, fact, now) {
+  const ok = Date.parse(fact.last_ok_at || "");
+  const start = Number.isFinite(ok) ? ok : Date.parse(fact.attempt_at || "");
+  if (!Number.isFinite(start)) return null;
+  const limit = rule.max_days * DAY_MS;
+  const overdue = start + (Number.isFinite(ok) ? limit : 0);
+  if (Number.isFinite(ok) && now - ok <= limit) return null;
+  const failed = !Number.isFinite(ok) || now - ok > 2 * limit;
+  return { state: failed ? "failed" : "late", since: new Date(overdue).toISOString(),
+    detail: Number.isFinite(ok) ? `已 ${Math.floor((now - ok) / DAY_MS)} 天沒成功` : "一直沒成功過" };
+}
+
 // 純函式：facts 是 { [key]: { last_ok_at, data_date?, degraded?, degraded_at? } }（讀不到的那一份不放）。
 // 回傳每一份資料一列：{ key, label, last_ok_at, state, since, detail }。since 是問題從什麼時候開始（ISO；正常是 null）。
 export function evaluateHealth(facts, now, { holidays = HOLIDAYS, rules = RULES } = {}) {
@@ -87,6 +104,12 @@ export function evaluateHealth(facts, now, { holidays = HOLIDAYS, rules = RULES 
     }
     const item = { key: rule.key, label: rule.label, last_ok_at: fact.last_ok_at ?? fact.data_date ?? null, state: "ok", since: null, detail: "" };
     const missed = [];
+    if (rule.fresh === "age") {
+      const age = ageState(rule, fact, now);
+      if (age) Object.assign(item, age);
+      items.push(item);
+      continue;
+    }
     if (rule.fresh !== "none") {
       for (const slot of dueSlots(rule.slots, now, holidays)) {
         if (updatedFor(rule, fact, slot, holidays)) break;
@@ -208,6 +231,11 @@ const READERS = {
     const row = await db.prepare("SELECT version, built_at FROM chain_map_flows "
       + "WHERE version GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' ORDER BY version DESC LIMIT 1").first();
     return row ? { last_ok_at: row.built_at, data_date: row.version } : null;
+  },
+  // 排程保活（0041 ops_runs，由 workflow-keepalive 寫）
+  async keepalive(db) {
+    const row = await db.prepare("SELECT last_ok_at, last_attempt_at FROM ops_runs WHERE job = 'workflow-keepalive'").first();
+    return row ? { last_ok_at: row.last_ok_at, attempt_at: row.last_attempt_at } : null;
   },
 };
 

@@ -6,6 +6,8 @@
 
 為什麼要 08:00 以後：網站資料庫今晚的「每天寫入額度」用完了，台北 08:00 才重置。在那之前存自選股、庫存、畫線都會失敗，這是正常的，等就好。
 
+**這一步也是打開「資料更新異常」手機通知的開關**：在 `d1-migrate` 成功之前，手機**一則提醒都不會收到**——連「資料庫寫入額度用完」那一則也不會。
+
 **第一次：乾跑（只檢查，不改任何東西）**
 - [ ] 打開 `https://github.com/liuaaron0226/Market--Ana/actions`。
 - [ ] 左邊清單點 **d1-migrate**（手機在上方「All workflows」選單裡找）。
@@ -47,7 +49,7 @@
 ## 4. 金鑰到期日（查一次，寫在這裡，並設手機提醒到期前一週換）
 
 - [ ] `GITHUB_DISPATCH_TOKEN`：GitHub → 頭像 → Settings → Developer settings → Personal access tokens → 到期日：＿＿＿＿（**最重要**：過期後所有準時排程都停）
-- [ ] `CLOUDFLARE_API_TOKEN`：Cloudflare → 頭像 → My Profile → API Tokens → 到期日：＿＿＿＿。同一頁順便看它有沒有 **Workers Scripts：Edit** 權限（`deploy-cron-trigger` 正式部署要用）：有／沒有
+- [ ] `CLOUDFLARE_API_TOKEN`：Cloudflare → 頭像 → My Profile → API Tokens → 到期日：＿＿＿＿。同一頁看它有沒有 **Workers Scripts：Edit** 權限：有／沒有＿＿＿＿（**還沒有人確認過**。沒有的話，按 `deploy-cron-trigger` 正式部署會出現驗證錯誤，原因就是這個；加上權限或換一把新的，見 [credentials.md](credentials.md)）
 - [ ] `R2_ACCESS_KEY_ID`／`R2_SECRET_ACCESS_KEY`：Cloudflare → R2 → Manage R2 API Tokens → 到期日：＿＿＿＿
 - [ ] `FUGLE_API_KEY`：富果開發者網站 → API 金鑰 → 到期日：＿＿＿＿
 - [ ] `EODHD_API_KEY`：eodhd.com 會員後台 → 狀態：＿＿＿＿
@@ -65,10 +67,16 @@
 - [ ] 首頁動效「播一陣子就停」可不可以接受。
 - [ ] 用一個朋友的帳號看：盯項、盤勢解讀、海外分時、即時報價、預測對帳、資金版圖都看得到。
 
-## 6. 等你決定的事（AI 來問時再回答）
+## 6. 以後程式有改時要記得按的
+
+- [ ] 接手的 AI 改了 `cron-trigger/` 底下的任何檔，或 `cloud/lib/data-health` 開頭的檔，推上 main 之後要按 **`deploy-cron-trigger`**：先預設（乾跑）按一次 → 綠了再取消勾選 `dry_run` 按一次。成功時摘要會顯示一個 **Version ID**。推上 main **不會**自動更新排程器。步驟見 [ops-buttons.md](ops-buttons.md)。
+- [ ] 有新的資料庫變更（AI 會說「要套遷移」）時按 `d1-migrate`，做法同第 1 項。
+
+## 7. 等你決定的事（AI 來問時再回答）
+
+- 主力分點要不要涵蓋整個股票池（約 350 檔）：免費方案要一年以上才補得完。選項是「升級付費方案後才做」或「縮到自選與庫存」。你決定前，AI 不會自己開始。
 
 - 資金版圖：首頁入口放哪、點公司要不要連到個股頁、當月未過完要不要顯示。
-- 主力分點要不要開給朋友：你說「我希望我股票池的股票都有」——是指抓「股票池全部」還是別的範圍？
 - 收到行情商來函時，照 [flags-and-schedules.md](flags-and-schedules.md)〈行情商來函或帳號被停時怎麼關〉改回只給自己。
 - [handover.md](handover.md) C 段每一項標「同意」的那一行。
 
