@@ -8,6 +8,7 @@ import { packFromWeb } from "./lib/build-pack.js";
 import { screensModuleText, validateScreensPack } from "./lib/build-screens.js";
 import { dataStatusModuleText, validateDataStatus } from "./lib/build-status.js";
 import { compareModuleText, validateComparePack } from "./lib/build-compare.js";
+import { chainMapModuleText } from "./lib/chain-map-definition.js";
 
 import { cloudPage, stampAssets, WEB_FILES, RETIRED } from "./lib/build-page.js";
 
@@ -110,6 +111,11 @@ try {
 const statusInfo = validateDataStatus(dataStatus);
 writeFileSync(new URL("functions/_data-status.js", root), dataStatusModuleText(dataStatus));
 
+// AI 產業鏈資金版圖（.scratch/ai-chain-map 票 01）：產業鏈定義的基準版入庫在 seeds/ai-chain-map.json，這裡驗證後包進 Functions。
+// D1 chain_map_definitions 有修改過的版本時資料入口用那一份，沒有才用這份。每月的資金數字不在這裡（D1 chain_map_flows，由排程寫）。
+const chainDefinition = JSON.parse(readFileSync(new URL("../seeds/ai-chain-map.json", root), "utf8"));
+writeFileSync(new URL("functions/_chain-map.js", root), chainMapModuleText(chainDefinition));
+
 // 部署前掃描：dist 只能有允許的檔，且不得含資料或本機路徑。
 const ALLOWED = new Set([...WEB_FILES, "index.html", "_headers", "_routes.json", "market-data-cloud.js",
   "apply/index.html", "apply/apply.js", "apply/account.css", "admin/index.html", "admin/admin.js", "admin/account.css",
@@ -143,4 +149,5 @@ console.log(`stock pack ${stockPack.as_of}（${Object.keys(stockPack.results).le
 console.log(`screens pack ${screensInfo.dataDate}（${screensInfo.screens} 組結果，${screensInfo.membership} 檔名單代號，${(Buffer.byteLength(JSON.stringify(screensPack)) / 1024) | 0} KB）`);
 console.log(`market pack ${pack.version}（${(JSON.stringify(pack).length / 1024) | 0} KB，明細 ${pack.overview.detailIndex.days.length} 天）`);
 console.log(`compare pack ${compareInfo.dataDate}（${compareInfo.items} 檔對照，母體外 ${compareInfo.outside} 檔，基金 ${compareInfo.funds} 檔，${(Buffer.byteLength(JSON.stringify(comparePack)) / 1024) | 0} KB）`);
+console.log(`chain map 定義 ${chainDefinition.layers.length} 層、${chainDefinition.nodes.length} 個環節（資金數字在 D1 chain_map_flows）`);
 console.log(`data status 最後成功 ${statusInfo.lastSuccessDate ?? "無"}（本次 ${statusInfo.runStatus ?? "—"}，stale=${statusInfo.stale}）`);

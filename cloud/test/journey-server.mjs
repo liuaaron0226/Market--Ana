@@ -9,6 +9,7 @@ import marketPack from "../functions/_market-pack.js";
 import stockPack from "../functions/_stock-pack.js";
 import screensPack from "../functions/_screens-pack.js";
 import comparePack from "../functions/_compare-pack.js";
+import chainMap from "../functions/_chain-map.js";
 
 const port = Number(process.argv[2] || 8899);
 const dist = new URL("../dist/", import.meta.url);
@@ -43,6 +44,9 @@ if (process.env.MARKET_ANA_STOCK_FACTS) env.MARKET_ANA_STOCK_FACTS = process.env
 // 海外大盤的分時（本人 2026-11-24，.scratch/index-intraday 票 01）的本機預覽：MARKET_ANA_INDEX_INTRADAY=owner／all 打開開關；
 // 來源的回應換成 JOURNEY_INTRADAY_FIXTURE（見下面），旅程不連真的來源。
 if (process.env.MARKET_ANA_INDEX_INTRADAY) env.MARKET_ANA_INDEX_INTRADAY = process.env.MARKET_ANA_INDEX_INTRADAY;
+// AI 產業鏈資金版圖（.scratch/ai-chain-map 票 01）的本機預覽：MARKET_ANA_CHAIN_MAP=owner 打開開關；
+// 每月資金數字那一列（chain_map_flows，0039）放在 JOURNEY_SEED_SQL（chain_map_bootstrap.py 產生的那種 SQL）。
+if (process.env.MARKET_ANA_CHAIN_MAP) env.MARKET_ANA_CHAIN_MAP = process.env.MARKET_ANA_CHAIN_MAP;
 // 自動化驗收會在一分鐘內點完全部下鑽；額度可由第三個參數放寬（正式版額度見 gate.js RATE，不受影響）。
 // 即時行情與五檔只在換成假資料（JOURNEY_LIVE_FIXTURE）時放寬：不然旅程會真的去問證交所，盤後的收盤報價一進來就把畫面拉回最新一根。
 const fakeLive = Boolean(process.env.JOURNEY_LIVE_FIXTURE);
@@ -63,7 +67,7 @@ if (process.env.JOURNEY_PUSH === "test") {
   }
 }
 const pushFetch = async (url) => { pushed.push(String(url)); console.log(`push → ${new URL(url).host}`); return new Response(null, { status: 201 }); };
-const deps = { fetchImpl: fetchJwks(issuer.jwks), now: () => Date.now(), marketPack, stockPack, screensPack, comparePack, rate,
+const deps = { fetchImpl: fetchJwks(issuer.jwks), now: () => Date.now(), marketPack, stockPack, screensPack, comparePack, chainMap, rate,
   pushFetch };
 // 分時旅程（本人 11-18）：JOURNEY_LIVE_FIXTURE 指向一個 JSON（{ stock: 個股即時回應, index: 大盤即時回應 }），每次請求重讀，
 // 旅程中途改檔就能換成盤中／盤後。沒設時照舊連真的即時服務。

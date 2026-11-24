@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-Hant" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
+  <link rel="apple-touch-icon" href="/icon-180.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="決策鏡">
+  <meta name="theme-color" content="#0b0b0e">
+  <title>AI 產業鏈資金版圖｜台股決策鏡</title>
+  <!-- 樣品用的網路字型（本站其他頁沒有載 Noto Sans TC 與 JetBrains Mono；不載的話手機上的字和樣品不一樣） -->
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;600&family=Noto+Sans+TC:wght@400;500;700&family=Noto+Serif+TC:wght@600&display=swap">
+  <link rel="stylesheet" href="minimal.css?v=20261124-chain1">
+  <link rel="stylesheet" href="bold.css?v=20261124-chain1">
+  <link rel="stylesheet" href="chain-map.css?v=20261124-chain1">
+</head>
+<body class="bd cm">
+  <div class="app">
+    <header class="top" id="top">
+      <h1>AI 產業鏈資金版圖</h1>
+      <div class="seg" id="seg" role="tablist" aria-label="指標">
+        <i class="thumb" aria-hidden="true"></i>
+        <button type="button" role="tab" data-m="tw" aria-selected="true" aria-label="台股成交金額占比">台股成交</button>
+        <button type="button" role="tab" data-m="inst" aria-selected="false" aria-label="台股法人買賣超">台股法人</button>
+        <button type="button" role="tab" data-m="us" aria-selected="false" aria-label="美股成交金額占比">美股成交</button>
+      </div>
+      <div class="search" id="search">
+        <input id="q" type="search" placeholder="公司名稱或代號" autocomplete="off" enterkeyhint="search" aria-label="搜尋公司名稱或代號">
+        <button class="key icon" id="searchKey" type="button" aria-label="搜尋公司名稱或代號"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg></button>
+        <div class="results" id="results" hidden></div>
+      </div>
+    </header>
+    <main class="stage">
+      <div class="left">
+        <section class="view" id="view" aria-label="AI 產業鏈資金版圖">
+          <canvas id="cv"></canvas>
+          <div class="tags" id="tags" aria-hidden="true"></div>
+          <div class="legend" id="legend" hidden><span>買超</span><span>賣超</span></div>
+          <button class="key pill" id="pill" type="button" hidden></button>
+        </section>
+        <section class="dock" id="dock" aria-label="月份">
+          <div class="dock-row">
+            <button class="key ink play" id="play" type="button" aria-label="播放">
+              <svg class="i-play" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.2v13.6a1 1 0 0 0 1.5.86l11-6.8a1 1 0 0 0 0-1.72l-11-6.8A1 1 0 0 0 8 5.2z"/></svg>
+              <svg class="i-pause" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4.2" height="14" rx="1.2"/><rect x="13.8" y="5" width="4.2" height="14" rx="1.2"/></svg>
+            </button>
+            <output class="month" id="month"></output>
+            <div class="steps">
+              <button class="key" id="prev" type="button" aria-label="上一月"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 6l-6 6 6 6"/></svg></button>
+              <button class="key" id="next" type="button" aria-label="下一月"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 6l6 6-6 6"/></svg></button>
+            </div>
+          </div>
+          <div class="track" id="track" role="slider" tabindex="0" aria-label="月份">
+            <div class="well"><div class="in" id="trackIn"><div class="void" id="void" hidden></div><svg id="wave" viewBox="0 0 690 34" preserveAspectRatio="none" aria-hidden="true"></svg><div class="head" id="head"></div></div></div>
+            <div class="years" id="years" aria-hidden="true"></div>
+          </div>
+        </section>
+      </div>
+      <aside class="side">
+        <div class="slot" id="slot"><div class="clip" id="slotIn"></div></div>
+        <section class="rank slab" id="rankCard" hidden>
+          <header><h2 id="rankTitle"></h2><span id="rankMonth"></span></header>
+          <ol id="rank"></ol>
+        </section>
+        <details class="notes"><summary>資料說明</summary><ul id="notes"></ul></details>
+        <p class="credit">資料：證交所、櫃買中心每日行情與三大法人；美股為 Yahoo 月線估算。名單依 AI 模型知識整理，非投資建議。</p>
+      </aside>
+    </main>
+  </div>
+  <div class="sheet" id="sheet" data-state="hidden"><div id="sheetIn"></div></div>
+  <script src="chain-map.js?v=20261124-chain1" defer></script>
+</body>
+</html>

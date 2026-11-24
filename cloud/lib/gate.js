@@ -12,7 +12,7 @@ import { defaultLiveQuoteService } from "./live-quotes.js";
 import { fetchTickPage } from "./live-ticks.js";
 import { loadHourly, withToday } from "./hourly-candles.js";
 import { defaultIndexLiveService } from "./index-live.js";
-import { analysisHidden, brokerBranchesVisible, impactWatchVisible, indexIntradayVisible, marketBriefVisible, marketNewsVisible, policyForViewer, releasePolicy, stockEtfsVisible, stockFactsVisible, stockFundsVisible, stockSignalsVisible } from "./release-policy.js";
+import { analysisHidden, brokerBranchesVisible, chainMapVisible, impactWatchVisible, indexIntradayVisible, marketBriefVisible, marketNewsVisible, policyForViewer, releasePolicy, stockEtfsVisible, stockFactsVisible, stockFundsVisible, stockSignalsVisible } from "./release-policy.js";
 import { isOwnerEmail } from "./owner.js";
 import { CODE_PATTERN, CODE_RE, isExchangeCode } from "./codes.js";
 import { FORECAST_PATH, handleForecastApi } from "./forecast.js";
@@ -27,6 +27,7 @@ import { MARKET_NEWS_PATH, handleMarketNewsApi, handleStockHeadlinesApi } from "
 import { IMPACT_WATCH_PATH, handleImpactWatchApi } from "./impact-watch.js";
 import { MARKET_BRIEF_PATH, handleMarketBriefApi } from "./market-brief.js";
 import { branchHistoryUnavailable, handleBranchHistoryApi } from "./broker-branches.js";
+import { CHAIN_MAP_PAGE, CHAIN_MAP_PATH, chainMapUnavailable, handleChainMapApi } from "./chain-map.js";
 import { pushConfigured, sendOne } from "./web-push.js";
 
 const PENDING_CAP = 30;
@@ -428,6 +429,20 @@ async function handleBranchHistoryRequest(request, env, path, email, deps, { isO
     throw new HttpError(503, "暫時無法處理，請稍後再試");
   }
   return handleBranchHistoryApi(request, env, path.match(BRANCH_HISTORY_PATH)[1], { isOwner }, { pageRows: deps.branchPageRows });
+}
+
+// AI 產業鏈資金版圖（本人 2026-11-24，.scratch/ai-chain-map 票 01）：開關 MARKET_ANA_CHAIN_MAP（off／owner／all）。
+// 開關對這個人關著：資料入口回「沒有」而且不碰任何資料表（連限流那張也不碰）；那一頁的檔案回 404（見 handle）。
+// 開著時和查行情共用同一個限流（一次進頁問一次）。
+async function handleChainMapRequest(request, env, email, deps, { isOwner }) {
+  if (!chainMapVisible(env, isOwner)) return chainMapUnavailable();
+  try {
+    await consume(env.DB, email, "market", (deps.now || Date.now)(), deps.rate);
+  } catch (e) {
+    if (e instanceof RateLimited) return json(429, { error: "rate-limited", message: "查詢太頻繁，請稍後再試" }, { "retry-after": String(e.retryAfter) });
+    throw new HttpError(503, "暫時無法處理，請稍後再試");
+  }
+  return handleChainMapApi(request, env, deps.chainMap, { isOwner });
 }
 
 async function handleAnnouncementsApi(request, env, path, email, deps, { isOwner }) {
@@ -1031,10 +1046,13 @@ export async function handle(request, env, next, deps = defaultDeps) {
       if (IMPACT_WATCH_PATH.test(path)) return await handleImpactWatchRequest(request, env, email, deps, { isOwner: true });
       if (MARKET_BRIEF_PATH.test(path)) return await handleMarketBriefRequest(request, env, email, deps, { isOwner: true });
       if (BRANCH_HISTORY_PATH.test(path)) return await handleBranchHistoryRequest(request, env, path, email, deps, { isOwner: true });
+      if (CHAIN_MAP_PATH.test(path)) return await handleChainMapRequest(request, env, email, deps, { isOwner: true });
       if (isStock) return await handleStockApi(request, env, path, email, deps, { isOwner: true });
       if (isScreens) return await handleScreensApi(request, env, path, email, deps);
       if (path === DATA_STATUS_PATH) return handleDataStatusApi(request, deps);
       if (RETIRED_DATA.has(path)) return fail(404, "找不到");
+      // 資金版圖那一頁：開關關著時和不存在一樣（比照 Gemini 設定頁）
+      if (CHAIN_MAP_PAGE.test(path) && !chainMapVisible(env, true)) return fail(404, "找不到");
       return await cacheHashedAsset(request, await next());
     }
 
@@ -1069,10 +1087,13 @@ export async function handle(request, env, next, deps = defaultDeps) {
     if (IMPACT_WATCH_PATH.test(path)) return await handleImpactWatchRequest(request, env, email, deps, { isOwner: false });
     if (MARKET_BRIEF_PATH.test(path)) return await handleMarketBriefRequest(request, env, email, deps, { isOwner: false });
     if (BRANCH_HISTORY_PATH.test(path)) return await handleBranchHistoryRequest(request, env, path, email, deps, { isOwner: false });
+    if (CHAIN_MAP_PATH.test(path)) return await handleChainMapRequest(request, env, email, deps, { isOwner: false });
     if (isStock) return await handleStockApi(request, env, path, email, deps, { isOwner: false });
     if (isScreens) return await handleScreensApi(request, env, path, email, deps);
     if (path === DATA_STATUS_PATH) return handleDataStatusApi(request, deps);
     if (RETIRED_DATA.has(path)) return fail(404, "找不到");
+    // 資金版圖那一頁：開關對這個人關著（off，或 owner 而他不是站主）時和不存在一樣
+    if (CHAIN_MAP_PAGE.test(path) && !chainMapVisible(env, false)) return fail(404, "找不到");
     return await cacheHashedAsset(request, await next());
   } catch (e) {
     if (e instanceof HttpError || e instanceof UserPortfolioError) return fail(e.status, e.message);
