@@ -152,6 +152,25 @@ class MassiveSource:
             raise NotFound()
         return bars
 
+    def grouped(self, day: date) -> tuple[list[dict], bytes]:
+        """全美股某一天的日線（grouped daily，一次呼叫一天、所有代號）：回 (results, 原始回應)。
+
+        AI 產業鏈資金版圖（chain_map_flows.py）用；不還原分割（adjusted=false，成交量×均價和還原與否無關）。
+        休市日 Massive 回 resultsCount 0、沒有 results：這裡回空清單，由呼叫的人決定怎麼記。"""
+        status, body = self.http(f"https://api.massive.com/v2/aggs/grouped/locale/us/market/stocks/{day.isoformat()}"
+                                 f"?adjusted=false&apiKey={urllib.parse.quote(self.key, safe='')}")
+        _check_status(status)
+        payload = _json(body)
+        if not isinstance(payload, dict):
+            raise FormatChanged("不是物件")
+        results = payload.get("results", [] if payload.get("resultsCount") == 0 else None)
+        if not isinstance(results, list):
+            raise FormatChanged("沒有 results")
+        for item in results:
+            if not isinstance(item, dict) or not isinstance(item.get("T"), str):
+                raise FormatChanged("grouped daily 格式不同")
+        return results, body
+
 
 class EodhdSource:
     """EODHD 免費方案：單檔日線，一次算一次額度。收盤用還原後的 adjusted_close。"""

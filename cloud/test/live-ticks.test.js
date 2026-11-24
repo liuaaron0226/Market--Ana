@@ -77,6 +77,32 @@ test("站主取得當天逐筆；核准的非站主與未登入者拿不到，�
   assert.equal(asked.length, 1);
 });
 
+// 本人 2026-11-24 晚「全部都開」：MARKET_ANA_LIVE_QUOTES 是 "all" 時獲准使用者也拿得到逐筆；
+// 逐筆每次都直接問富果，所以站主以外的人另外共用一份每分鐘的總額度（ticksShared），站主自己不算在裡面
+test("開關是 all：獲准的朋友拿得到逐筆；朋友們合計超過每分鐘總額度就 429、不再問富果，站主不受影響", async () => {
+  env.MARKET_ANA_LIVE_QUOTES = "all";
+  deps.rate = { ticksShared: 3 };
+  for (const email of ["a@x.com", "b@x.com", "p@x.com"]) {
+    await env.DB.prepare("INSERT INTO users (email, nickname, status, applied_at) VALUES (?, ?, ?, ?)")
+      .bind(email, "n", email === "p@x.com" ? "pending" : "approved", "2026-11-10T00:00:00Z").run();
+  }
+  const first = await req("/api/stocks/2330/ticks?offset=0", "a@x.com");
+  assert.equal(first.status, 200);
+  assert.doesNotMatch(await first.text(), /secret-key/);
+  assert.equal((await req("/api/stocks/2330/ticks", "a@x.com")).status, 200);
+  assert.equal((await req("/api/stocks/2330/ticks", "b@x.com")).status, 200);
+  const limited = await req("/api/stocks/2330/ticks", "b@x.com");
+  assert.equal(limited.status, 429, "朋友們合計第 4 次");
+  assert.ok(Number(limited.headers.get("retry-after")) > 0);
+  assert.equal(asked.length, 3, "超過總額度的那一次沒有問富果");
+  assert.equal((await req("/api/stocks/2330/ticks")).status, 200, "站主不算在朋友的總額度裡");
+  assert.equal((await req("/api/stocks/2330/ticks", "p@x.com")).status, 403, "還沒核准的人照樣擋");
+  for (const value of [undefined, "owner", "ALL", "on"]) {
+    env.MARKET_ANA_LIVE_QUOTES = value;
+    assert.equal((await req("/api/stocks/2330/ticks", "a@x.com")).status, 403, String(value));
+  }
+});
+
 test("位移必須是非負整數；沒有設定行情金鑰或上游失敗時明講拿不到，不回空資料假裝沒有成交", async () => {
   assert.equal((await req("/api/stocks/2330/ticks?offset=-1")).status, 400);
   assert.equal((await req("/api/stocks/2330/ticks?offset=abc")).status, 400);

@@ -136,26 +136,43 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def load_seed(code: str, *, seed_dir: Path = SEED_DIR) -> tuple[list[tuple[str, float]], list[dict[str, Any]]]:
+def load_seed_files(code: str, *, seed_dir: Path = SEED_DIR
+                    ) -> tuple[list[tuple[list[tuple[str, float]], tuple[str, str]]], list[dict[str, Any]]]:
     """瀏覽器回補的原件（資料夾用站上代碼 ``seeds/funds/<代碼>/``）：逐檔核對清單上的 SHA-256，對不上就停（不拿被改過的檔算）。
 
+    回傳 ([(這份淨值檔的列, 這份檔看過的區間), ...], 配息)，淨值檔照清單順序（第一份是最早的整段回補，後面是補缺口的檔）。
+    看過的區間：清單那一筆有 first／last 就用它（人工補缺口時寫「我看了哪幾天」，中間沒有淨值＝基金休市），沒有就用檔裡第一天到最後一天。
     還沒有回補清單的基金（剛加進 FUNDS、原件還沒讀）回兩個空的：只用每日抽取檔，load_history 另記 seed-missing。"""
     folder = seed_dir / code
     if not (folder / "backfill-manifest.json").exists():
         return [], []
     manifest = json.loads((folder / "backfill-manifest.json").read_text(encoding="utf-8"))
-    nav_files: list[list[tuple[str, float]]] = []
+    nav_files: list[tuple[list[tuple[str, float]], tuple[str, str]]] = []
     pages: list[str] = []
     for entry in manifest["files"]:
         data = (folder / entry["file"]).read_bytes()
-        if _sha256(data) != entry["sha256"]:
+        # 大小寫不分：Windows 的 Get-FileHash 印大寫，人工補缺口時直接貼上也對得起來
+        if _sha256(data) != str(entry["sha256"]).strip().lower():
             raise ValueError(f"{code} 回補原件 {entry['file']} 的 SHA-256 和清單不符，停止")
         if entry["kind"] == "nav":
-            nav_files.append(parse_nav_csv(data.decode("utf-8")))
+            rows = parse_nav_csv(data.decode("utf-8-sig"))
+            if not rows:
+                raise ValueError(f"{code} 回補原件 {entry['file']} 沒有任何淨值，停止")
+            window = (_iso(entry.get("first") or rows[0][0]), _iso(entry.get("last") or rows[-1][0]))
+            outside = [day for day, _ in rows if not window[0] <= day <= window[1]]
+            if outside:
+                raise ValueError(f"{code} 回補原件 {entry['file']} 有 {outside[0]} 在清單寫的 first～last 之外，停止")
+            nav_files.append((rows, window))
         elif entry["kind"] == "distributions":
             pages.append(data.decode("utf-8"))
-    navs, _ = merge_navs(nav_files)   # 之後補缺口的檔只會補沒有的日子；同一天不同數字由 load_history 的合併記錄
-    return navs, parse_backfill_distributions(pages)
+    return nav_files, parse_backfill_distributions(pages)
+
+
+def load_seed(code: str, *, seed_dir: Path = SEED_DIR) -> tuple[list[tuple[str, float]], list[dict[str, Any]]]:
+    """回補原件合併成一條淨值＋配息（同一天不同數字留先到的；衝突由 load_history 記成提醒）。"""
+    nav_files, dists = load_seed_files(code, seed_dir=seed_dir)
+    navs, _ = merge_navs([rows for rows, _ in nav_files])
+    return navs, dists
 
 
 # ---- 合併與缺日檢查 ----
@@ -245,6 +262,7 @@ FUNDS: dict[str, dict[str, str]] = {
                 "name": "安聯收益成長基金-AM穩定月收類股(美元)", "short_name": "安聯收益成長 AM 穩定月收"},
     # TODO 待核實 class_launch：2021-07-02 取自 Yahoo 奇摩基金 tw.stock.yahoo.com/fund/summary/F00001CI86:FO（晨星資料，非一手）；
     # 摩根投信與集保基金資訊觀測站頁面（JS 動態載入）2026-11-24 都沒讀到級別成立日，回補原件到手時請核對。
+    # 2026-11-24 再查：cbonds、easybank（都非一手）同列 2021-07-02；一手來源應是摩根資產管理該級別的 KID／公開說明書，尚未讀到。
     "GLIACU": {"code": "GLIACU", "tdcc_code": "GLIACU", "isin": "LU2347655073", "currency": "USD",
                "class_launch": "2021-07-02",
                "name": "摩根投資基金 - 多重收益基金 - JPM多重收益(美元對沖) - A股(穩定月配)",
@@ -352,7 +370,9 @@ def daily(*, store, get: Callable[[str], bytes] | None = None, now: str | None =
           raw_dir: Path = RAW_DIR, upload: bool = True) -> dict[str, Any]:
     """補齊 R2 已有的抽取檔 → 每檔基金的每個來源一天最多抓一次 → 只留那檔的列存檔 → 上傳新的。
 
-    開放資料淨值只留約 4 個交易日：每個平日都跑，漏一次下一次仍涵蓋得到；漏太久由缺日檢查報出來。
+    開放資料淨值只留最近 4 個淨值日（2026-11-24 實測 3-4 只有 11-16～11-19）：連續 4 個營業日都沒抓成功才會留下缺口，
+    漏太久由缺日檢查報出來。兩個抓取點共用 R2 上的記號：每日更新（週一到週五四個時段）與 announcements（每天 08:00、
+    含週末連假）；先成功的那個留記號，另一個當天就不再抓。抓失敗（下載、解析或這檔不在檔裡）不留記號，下一個時段再試。
     一個來源失敗不擋其他來源，也不擋每日更新（工作流程裡這一步 continue-on-error）。
     回報的 sources 以當天記號的名字為鍵（nav-<代碼>、dist-<代碼>、fx），每檔各自一筆；
     同一個網址（3-4、3-5 是整份全部基金）一次執行只下載一次，幾檔基金共用。"""
@@ -402,9 +422,11 @@ def load_history(code: str, *, raw_dir: Path = RAW_DIR, seed_dir: Path = SEED_DI
 
     檔名用站上代碼；抽取檔裡的列照集保原樣，用集保代碼（tdcc_code）篩。"""
     source = tdcc_code(code)
-    seed_navs, seed_dists = load_seed(code, seed_dir=seed_dir)
-    nav_sources, dist_sources = [seed_navs], [seed_dists]
-    windows = [(seed_navs[0][0], seed_navs[-1][0])] if seed_navs else []
+    seed_files, seed_dists = load_seed_files(code, seed_dir=seed_dir)
+    seed_navs = [row for rows, _ in seed_files for row in rows]
+    # 每份回補檔各自一段「看過的區間」：補缺口的檔只蓋住它自己那幾天，漏補的日子照樣報缺；同一天不同數字記衝突、不覆蓋。
+    nav_sources, dist_sources = [rows for rows, _ in seed_files], [seed_dists]
+    windows = [window for _, window in seed_files]
     for path in sorted(raw_dir.glob(f"{code}-nav-*.json")) if raw_dir.exists() else []:
         body = _read(path)
         nav_sources.append(parse_opendata_nav(body["rows"], source))
@@ -514,9 +536,48 @@ def precompute(loader, end: str, *, as_of: str, raw_dir: Path | None = None, see
     return funds, problems
 
 
+MANUAL_FIX = "seeds/funds/README.md"   # 缺口只能人工補時的步驟（本人照做，不需要助手）
+
+
+def describe_issue(code: str, issue: Mapping[str, Any]) -> str:
+    """一筆提醒 → 一行白話（執行摘要用）：哪一檔、哪幾天、怎麼補。"""
+    name = f"{code}（{FUNDS[code]['short_name']}）" if code in FUNDS else code
+    kind = issue.get("kind")
+    if kind == "gap":
+        return (f"{name} 缺淨值 {issue['from']}～{issue['to']}（{issue['weekdays']} 個平日沒有任何官方檔看過）。"
+                f"集保開放資料只留最近 4 個淨值日，排程補不回來；照 {MANUAL_FIX} 補。")
+    if kind == "stale":
+        return (f"{name} 最新淨值停在 {issue['latest']}，已落後 {issue['weekdays_behind']} 個平日"
+                f"（超過 {STALE_WEEKDAYS} 個就算過期）：先看上面哪個來源失敗；連續 4 個營業日沒抓到就會變成缺口。")
+    if kind == "nav-conflict":
+        return f"{name} {issue['date']} 的淨值兩份官方檔不同：留 {issue['kept']}、另一份是 {issue['other']}（沒有覆蓋，請人工核對）。"
+    if kind == "dist-conflict":
+        return f"{name} 除息日 {issue['ex_date']} 的配息兩份官方檔不同：留 {issue['kept']}、另一份是 {issue['other']}。"
+    if kind == "seed-missing":
+        return f"{name} 還沒有歷史回補原件（seeds/funds/{code}/），只有每日累積的幾天。"
+    if kind == "fx-missing":
+        return f"{name} 沒有央行匯率資料，台幣比較算不出來。"
+    return f"{name} {json.dumps(dict(issue), ensure_ascii=False)}"
+
+
+def summary_markdown(report: Mapping[str, Any]) -> str:
+    """執行摘要（GITHUB_STEP_SUMMARY）：先講有沒有問題，再逐條列抓取失敗與每檔的缺日／衝突／過期。"""
+    failed = {mark: s for mark, s in (report.get("sources") or {}).items() if s.get("status") == "failed"}
+    checks = report.get("checks") or {}
+    lines = ["### 基金淨值"]
+    if not failed and not any(checks.values()):
+        lines.append("正常：每檔都沒有缺日、衝突或過期。")
+    for mark, source in failed.items():
+        lines.append(f"- 抓取失敗 {mark}：{source.get('error')}（今天沒留記號，下一個排程時段會再試）")
+    for code, issues in checks.items():
+        lines.extend(f"- {describe_issue(code, issue)}" for issue in issues)
+    return "\n".join(lines) + "\n"
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    """python fund_compare.py daily [--r2] [--no-upload]：每日抓取（工作流程用 --r2）。
-    python fund_compare.py check [--as-of YYYY-MM-DD]：只檢查目前資料的缺日／衝突／過期，不抓。"""
+    """python fund_compare.py daily [--r2] [--no-upload] [--summary 檔案]：每日抓取（工作流程用 --r2）。
+    python fund_compare.py check [--as-of YYYY-MM-DD] [--summary 檔案]：只檢查目前資料的缺日／衝突／過期，不抓。
+    --summary：把白話的結果（哪一檔、哪幾天）附加到這個檔案（工作流程給 $GITHUB_STEP_SUMMARY）。"""
     import argparse
     import sys
 
@@ -525,8 +586,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     run = sub.add_parser("daily")
     run.add_argument("--r2", action="store_true", help="先從 R2 funds/raw/ 補齊、抓完上傳新的")
     run.add_argument("--no-upload", action="store_true", help="試跑：不寫 R2")
+    run.add_argument("--summary")
     check = sub.add_parser("check")
     check.add_argument("--as-of")
+    check.add_argument("--summary")
     args = parser.parse_args(argv)
     today = taipei_today()
     report: dict[str, Any] = {}
@@ -539,6 +602,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     as_of = getattr(args, "as_of", None) or today
     report["checks"] = {code: load_history(code, as_of=as_of)["issues"] for code in FUNDS}
     sys.stdout.write(json.dumps(report, ensure_ascii=False, indent=1) + "\n")
+    if args.summary:
+        with open(args.summary, "a", encoding="utf-8") as handle:
+            handle.write(summary_markdown(report))
     failed = any(s.get("status") == "failed" for s in report.get("sources", {}).values())
     problems = any(report["checks"].values())
     return 1 if failed or problems else 0

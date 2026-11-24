@@ -136,6 +136,21 @@
 .st-model { color: var(--faint); font-size: 12px; }
 .st-updated { margin: 0; padding-top: 10px; color: var(--faint); font-size: 12px; }
 
+/* ---------- 資料更新（2026-11-24）：一份資料一列——名稱、最後更新、狀態；狀態前面一個小圓點，有問題的那一列名稱下面寫怎麼了 ---------- */
+.st-health { list-style: none; margin: 6px 0 0; padding: 0; }
+.st-health li {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto 6.2em; gap: 12px; align-items: center;
+  min-height: 44px; padding: 4px 0; border-top: 1px solid var(--hair); font-size: 14px;
+}
+.st-health li:first-child { border-top: 0; }
+.st-hname small { display: block; color: var(--dim); font-size: 12px; line-height: 1.4; }
+.st-htime { color: var(--dim); font-size: 13px; }
+.st-hstate { justify-self: end; display: inline-flex; align-items: center; gap: 6px; color: var(--dim); font-size: 13px; white-space: nowrap; }
+.st-hstate::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--down); }
+.st-health li:not([data-state="ok"]) .st-hstate { color: var(--ink); font-weight: 600; }
+.st-health li:is([data-state="late"], [data-state="degraded"]) .st-hstate::before { background: var(--gold); }
+.st-health li[data-state="failed"] .st-hstate::before { background: var(--up); }
+
 /* ---------- AI 模型（本人 11-19 晚選樣品 C：每列寫現值、點開才選；改了才出現還原／存檔）---------- */
 /* 站主有四顆籤：手機上字不折行 */
 .st-tab { white-space: nowrap; padding: 0 6px; }

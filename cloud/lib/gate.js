@@ -12,13 +12,14 @@ import { defaultLiveQuoteService } from "./live-quotes.js";
 import { fetchTickPage } from "./live-ticks.js";
 import { loadHourly, withToday } from "./hourly-candles.js";
 import { defaultIndexLiveService } from "./index-live.js";
-import { analysisHidden, brokerBranchesVisible, impactWatchVisible, indexIntradayVisible, marketBriefVisible, marketNewsVisible, policyForViewer, releasePolicy, stockEtfsVisible, stockFactsVisible, stockFundsVisible, stockSignalsVisible } from "./release-policy.js";
+import { analysisHidden, brokerBranchesVisible, chainMapVisible, impactWatchVisible, indexIntradayVisible, liveChartsVisible, liveQuotesVisible, marketBriefVisible, marketNewsVisible, policyForViewer, releasePolicy, stockEtfsVisible, stockFactsVisible, stockFundsVisible, stockSignalsVisible } from "./release-policy.js";
 import { isOwnerEmail } from "./owner.js";
 import { CODE_PATTERN, CODE_RE, isExchangeCode } from "./codes.js";
 import { FORECAST_PATH, handleForecastApi } from "./forecast.js";
 import { WATCH_PATH, handleWatchApi } from "./watch.js";
 import { GEMINI_USAGE_PATH, handleGeminiUsageApi } from "./gemini-usage.js";
 import { AI_MODELS_PATH, handleAiModelsApi } from "./ai-models.js";
+import { DATA_HEALTH_PATH, handleDataHealthApi } from "./data-health-api.js";
 import { FRIEND_AI_PAGE, FRIEND_AI_PATH, keyStateLookup, deleteFriendKey, friendAiEnabled, handleFriendAiApi, notAvailable, ownerRefused } from "./friend-ai.js";
 import { WATCH_PEERS_PATH, handleWatchPeersApi } from "./watch-peers.js";
 import { INDEX_PATH, appendRecentDaily, indexOf, loadIndex } from "./market-indices.js";
@@ -27,13 +28,15 @@ import { MARKET_NEWS_PATH, handleMarketNewsApi, handleStockHeadlinesApi } from "
 import { IMPACT_WATCH_PATH, handleImpactWatchApi } from "./impact-watch.js";
 import { MARKET_BRIEF_PATH, handleMarketBriefApi } from "./market-brief.js";
 import { branchHistoryUnavailable, handleBranchHistoryApi } from "./broker-branches.js";
+import { CHAIN_MAP_PAGE, CHAIN_MAP_PATH, chainMapUnavailable, handleChainMapApi } from "./chain-map.js";
 import { pushConfigured, sendOne } from "./web-push.js";
 
 const PENDING_CAP = 30;
 // 票 06 限速（Astra r1 建議值）：市場 API 全部每人每分 30 次；個股明細另限每分 12 次。固定一分鐘窗，邊界最多兩倍突發。
 // ticks：行情商免費方案的日內查詢是每分鐘 60 次，報價與分 K 輪詢約用掉 10 次，逐筆留 40 次。
 // friendAi：朋友保存、同意、刪除 Gemini 金鑰（保存會替他試呼叫一次 Gemini），所以另外限得緊一點；讀狀態不扣這一份。
-const RATE = { market: 30, detail: 12, userData: 60, live: 20, history: 30, ticks: 40, timeshare: 20, hourly: 20, friendAi: 10, indices: 30, branches: 20, indexIntraday: 20 };
+const RATE = { market: 30, detail: 12, userData: 60, live: 20, history: 30, ticks: 40, ticksShared: 20, timeshare: 20, hourly: 20, friendAi: 10, indices: 30, branches: 20, indexIntraday: 20 };
+// ticksShared：站主以外所有人合計每分鐘最多問幾次逐筆（逐筆每次都直接問富果；本人 2026-11-24「全部都開」之後加的總額度）。
 // indexIntraday：海外大盤的分時，開著時每分鐘更新一次，留到 20 次給切換指數與重新整理。
 // branches：主力分點的分點歷史，每進一檔個股頁問一次（一次要讀這一檔全部的分點日資料），留到每分鐘 20 次給換股。
 // timeshare：分時（1 分K、五檔），盤中每 10 秒一次＝每分鐘 6 次，留到 20 次給重新整理與換股（和 live 同額度）。
@@ -415,8 +418,8 @@ async function handleMarketBriefRequest(request, env, email, deps, { isOwner }) 
   return handleMarketBriefApi(request, env, { isOwner });
 }
 
-// 主力分點（本人 2026-11-24，.scratch/broker-branches 票 01）：開關 MARKET_ANA_BROKER_BRANCHES（off／owner），只有站主拿得到。
-// 開關關著、不是站主：回「沒有」而且不碰任何資料表（連限流那張也不碰）。自己一份限流（branches）。
+// 主力分點（本人 2026-11-24，.scratch/broker-branches 票 01）：開關 MARKET_ANA_BROKER_BRANCHES（off／owner／all，11-24 晚起三種狀態）。
+// 開關對這個人沒開：回「沒有」而且不碰任何資料表（連限流那張也不碰）。自己一份限流（branches）。
 const BRANCH_HISTORY_PATH = new RegExp(`^/api/stocks/(${CODE_PATTERN})/branch-history$`);
 
 async function handleBranchHistoryRequest(request, env, path, email, deps, { isOwner }) {
@@ -428,6 +431,20 @@ async function handleBranchHistoryRequest(request, env, path, email, deps, { isO
     throw new HttpError(503, "暫時無法處理，請稍後再試");
   }
   return handleBranchHistoryApi(request, env, path.match(BRANCH_HISTORY_PATH)[1], { isOwner }, { pageRows: deps.branchPageRows });
+}
+
+// AI 產業鏈資金版圖（本人 2026-11-24，.scratch/ai-chain-map 票 01）：開關 MARKET_ANA_CHAIN_MAP（off／owner／all）。
+// 開關對這個人關著：資料入口回「沒有」而且不碰任何資料表（連限流那張也不碰）；那一頁的檔案回 404（見 handle）。
+// 開著時和查行情共用同一個限流（一次進頁問一次）。
+async function handleChainMapRequest(request, env, email, deps, { isOwner }) {
+  if (!chainMapVisible(env, isOwner)) return chainMapUnavailable();
+  try {
+    await consume(env.DB, email, "market", (deps.now || Date.now)(), deps.rate);
+  } catch (e) {
+    if (e instanceof RateLimited) return json(429, { error: "rate-limited", message: "查詢太頻繁，請稍後再試" }, { "retry-after": String(e.retryAfter) });
+    throw new HttpError(503, "暫時無法處理，請稍後再試");
+  }
+  return handleChainMapApi(request, env, deps.chainMap, { isOwner });
 }
 
 async function handleAnnouncementsApi(request, env, path, email, deps, { isOwner }) {
@@ -642,12 +659,15 @@ async function handleIndexIntradayApi(request, env, path, email, deps, { isOwner
   return json(200, await loadIntraday(item, intradaySourceOptions(deps)), headers);
 }
 
-async function handleStockLiveApi(request, env, path, email, deps) {
+// isOwner：站主照舊；其他獲准使用者要 MARKET_ANA_LIVE_QUOTES 是 "all" 才會走到這裡（本人 2026-11-24「全部都開」）。
+// 行情來源的用量：和分時（/timeshare，已開給所有人）共用同一個即時服務，同一檔每 15 秒最多問一次報價、每分鐘一次 K 線，
+// 看的人多不會讓來源多被問。
+async function handleStockLiveApi(request, env, path, email, deps, { isOwner = true } = {}) {
   if (request.method !== "GET") throw new HttpError(405, "方法不允許");
   const match = path.match(LIVE_STOCK_PATH);
   if (!match) throw new HttpError(400, "代號格式不正確");
-  // 即時行情只給站主
-  const market = await liveCoverage(env, deps, match[1], true);
+  // 即時行情原本只給站主（「行情商條款不得轉給第三方」）；開關見 release-policy.js 的 liveQuotesVisible
+  const market = await liveCoverage(env, deps, match[1], isOwner);
   try {
     await consume(env.DB, email, "live", (deps.now || Date.now)(), deps.rate);
   } catch (error) {
@@ -671,9 +691,13 @@ async function handleStockLiveApi(request, env, path, email, deps) {
 
 // 秒級第一步：當天逐筆成交（站主限定，與既有即時行情相同；行情商條款不得轉給第三方）。
 // 只轉送一頁逐筆，金鑰留在伺服器端；秒 K 由瀏覽器彙總。
+// 本人 2026-11-24 晚聽過條款限制與金鑰可能被停之後仍決定「全部都開」：MARKET_ANA_LIVE_QUOTES 是 "all" 時其他獲准使用者也拿得到。
+// 逐筆每次都直接問行情來源（沒有共用快取），所以站主以外的人除了各自的 ticks 限流，還共用一份每分鐘的總額度
+// （ticksShared，記在 FRIENDS_SHARED 這個不是信箱的鍵底下），朋友再多也不會把站主的富果額度用完。
 const TICKS_STOCK_PATH = new RegExp(`^/api/stocks/(${CODE_PATTERN})/ticks$`);
+const FRIENDS_SHARED = "*others-shared*";
 
-async function handleStockTicksApi(request, env, path, email, deps) {
+async function handleStockTicksApi(request, env, path, email, deps, { isOwner = true } = {}) {
   if (request.method !== "GET") throw new HttpError(405, "方法不允許");
   const code = path.match(TICKS_STOCK_PATH)[1];
   // 逐筆只有上市櫃股票有；基金這類長代碼直接查無，不扣額度、不問行情商
@@ -682,7 +706,9 @@ async function handleStockTicksApi(request, env, path, email, deps) {
   if (!/^\d{1,6}$/.test(rawOffset)) throw new HttpError(400, "位移格式不正確");
   const headers = { "cache-control": "private, no-store" };
   try {
-    await consume(env.DB, email, "ticks", (deps.now || Date.now)(), { ...RATE, ...deps.rate });
+    const nowMs = (deps.now || Date.now)();
+    await consume(env.DB, email, "ticks", nowMs, { ...RATE, ...deps.rate });
+    if (!isOwner) await consume(env.DB, FRIENDS_SHARED, "ticksShared", nowMs, { ...RATE, ...deps.rate });
   } catch (error) {
     if (error instanceof RateLimited) {
       return json(429, { error: "rate-limited", message: "逐筆查詢太頻繁，請稍後再試", retry_after_seconds: error.retryAfter },
@@ -865,10 +891,12 @@ async function handleUserDataApi(request, env, path, email, deps, access) {
   if (WATCH_PEERS_PATH.test(path)) return handleWatchPeersApi(request, env, path, email, deps, access);
   // ETF 上站：加自選／持股時，名單內 ETF 算不算在分析範圍內，看 ETF 開關對這個人開不開。
   // 基金（03 票）：最近搜尋收不收基金，看基金開關對這個人開不開。
-  // 庫存收盤後改用今天的收盤（本人 11-19）：和個股頁 /live 同一個即時服務；即時行情只給站主，所以只有站主有。
+  // 庫存收盤後改用今天的收盤（本人 11-19）：和個股頁 /live 同一個即時服務；即時行情原本只給站主，所以只有站主有。
+  // 本人 2026-11-24「全部都開」：MARKET_ANA_LIVE_QUOTES 是 "all" 時每個人自己的庫存也用今天的收盤（同一個共用快取，收盤抓到後當天不重抓）。
+  const closeQuotesOpen = liveQuotesVisible(env, access.isOwner);
   return handleUserPortfolio(request, env, path, email, { ...deps, includeEtfs: stockEtfsVisible(env, access.isOwner),
     includeFunds: stockFundsVisible(env, access.isOwner),
-    closeQuotes: access.isOwner ? { service: deps.liveQuoteService || defaultLiveQuoteService, fugleApiKey: env.FUGLE_API_KEY || null } : null });
+    closeQuotes: closeQuotesOpen ? { service: deps.liveQuoteService || defaultLiveQuoteService, fugleApiKey: env.FUGLE_API_KEY || null } : null });
 }
 
 // 讀狀態（首頁入口每一頁都會讀）走一般個人資料的額度；保存、同意、刪除才扣 friendAi。
@@ -1012,6 +1040,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
       if (path === "/api/me") return json(200, { email, status: "approved", owner: true, logout_url: logoutUrl(env) });
       if (path === GEMINI_USAGE_PATH) return await handleGeminiUsageApi(request, env, deps, { isOwner: true });
       if (path === AI_MODELS_PATH) return await handleAiModelsApi(request, env, deps, { isOwner: true });
+      if (path === DATA_HEALTH_PATH) return await handleDataHealthApi(request, env, deps, { isOwner: true });
       if (path === "/api/holdings/level" && !policy.features.level_advice) return levelDisabled();
       if (FORECAST_PATH.test(path)) return await handleForecastApi(request, env, path, { isOwner: true, policy });
       if (FRIEND_AI_PATH.test(path)) return ownerRefused();
@@ -1031,10 +1060,13 @@ export async function handle(request, env, next, deps = defaultDeps) {
       if (IMPACT_WATCH_PATH.test(path)) return await handleImpactWatchRequest(request, env, email, deps, { isOwner: true });
       if (MARKET_BRIEF_PATH.test(path)) return await handleMarketBriefRequest(request, env, email, deps, { isOwner: true });
       if (BRANCH_HISTORY_PATH.test(path)) return await handleBranchHistoryRequest(request, env, path, email, deps, { isOwner: true });
+      if (CHAIN_MAP_PATH.test(path)) return await handleChainMapRequest(request, env, email, deps, { isOwner: true });
       if (isStock) return await handleStockApi(request, env, path, email, deps, { isOwner: true });
       if (isScreens) return await handleScreensApi(request, env, path, email, deps);
       if (path === DATA_STATUS_PATH) return handleDataStatusApi(request, deps);
       if (RETIRED_DATA.has(path)) return fail(404, "找不到");
+      // 資金版圖那一頁：開關關著時和不存在一樣（比照 Gemini 設定頁）
+      if (CHAIN_MAP_PAGE.test(path) && !chainMapVisible(env, true)) return fail(404, "找不到");
       return await cacheHashedAsset(request, await next());
     }
 
@@ -1049,19 +1081,29 @@ export async function handle(request, env, next, deps = defaultDeps) {
     if (path === "/api/me") return json(200, { email, status, owner: false, logout_url: logoutUrl(env) });
     if (path === GEMINI_USAGE_PATH) return await handleGeminiUsageApi(request, env, deps, { isOwner: false });
     if (path === AI_MODELS_PATH) return await handleAiModelsApi(request, env, deps, { isOwner: false });
+    if (path === DATA_HEALTH_PATH) return await handleDataHealthApi(request, env, deps, { isOwner: false });
     if (path === "/api/features") return json(200, policyForViewer(policy, false, env));
     if (path === "/api/holdings/level" && !policy.features.level_advice) return levelDisabled();
     if (FORECAST_PATH.test(path)) return await handleForecastApi(request, env, path, { isOwner: false, policy });
     if (FRIEND_AI_PATH.test(path)) return await handleFriendAiRequest(request, env, path, email, deps);
     if (isUserData) return await handleUserDataApi(request, env, path, email, deps, { isOwner: false, policy });
+    // 富果即時行情（本人 2026-11-24「全部都開」）：MARKET_ANA_LIVE_QUOTES 是 "all" 時開給獲准使用者；其他寫法照舊只給站主
+    const liveOpen = liveQuotesVisible(env, false);
+    if (path === "/api/live" && liveOpen) return await handleIndexLiveApi(request, env, email, deps);
     if (path === "/api/live" || path === "/api/mis-probe") return fail(403, "即時行情僅限站主使用");
     if (INDEX_PATH.test(path)) return await handleIndexApi(request, env, path, email, deps, { isOwner: false });
     if (INDEX_INTRADAY_PATH.test(path)) return await handleIndexIntradayApi(request, env, path, email, deps, { isOwner: false });
     if (isMarket) return await handleMarketApi(request, env, path, email, deps, { isOwner: false });
     if (isComparePath(path)) return await handleCompareApi(request, env, path, email, deps, { isOwner: false });
     if (RETIRED_FUND_PATH.test(path)) return fail(404, "找不到");
+    // 分時與 60 分K：本人 11-18 開給所有核准的人；MARKET_ANA_LIVE_QUOTES 是一字不差的 "owner" 時一起收回只給站主
+    const chartsOpen = liveChartsVisible(env, false);
+    if (TIMESHARE_STOCK_PATH.test(path) && !chartsOpen) return fail(403, "即時行情僅限站主使用");
+    if (HOURLY_STOCK_PATH.test(path) && !chartsOpen) return fail(403, "即時行情僅限站主使用");
     if (TIMESHARE_STOCK_PATH.test(path)) return await handleStockTimeShareApi(request, env, path, email, deps, { isOwner: false });
     if (HOURLY_STOCK_PATH.test(path)) return await handleStockHourlyApi(request, env, path, email, deps, { isOwner: false });
+    if (liveOpen && LIVE_STOCK_PATH.test(path)) return await handleStockLiveApi(request, env, path, email, deps, { isOwner: false });
+    if (liveOpen && TICKS_STOCK_PATH.test(path)) return await handleStockTicksApi(request, env, path, email, deps, { isOwner: false });
     if (LIVE_STOCK_PATH.test(path) || TICKS_STOCK_PATH.test(path)) return fail(403, "即時行情僅限站主使用");
     if (HISTORY_STOCK_PATH.test(path)) return await handleStockHistoryApi(request, env, path, email, deps, { isOwner: false });
     if (ANNOUNCEMENTS_PATH.test(path)) return await handleAnnouncementsApi(request, env, path, email, deps, { isOwner: false });
@@ -1069,10 +1111,13 @@ export async function handle(request, env, next, deps = defaultDeps) {
     if (IMPACT_WATCH_PATH.test(path)) return await handleImpactWatchRequest(request, env, email, deps, { isOwner: false });
     if (MARKET_BRIEF_PATH.test(path)) return await handleMarketBriefRequest(request, env, email, deps, { isOwner: false });
     if (BRANCH_HISTORY_PATH.test(path)) return await handleBranchHistoryRequest(request, env, path, email, deps, { isOwner: false });
+    if (CHAIN_MAP_PATH.test(path)) return await handleChainMapRequest(request, env, email, deps, { isOwner: false });
     if (isStock) return await handleStockApi(request, env, path, email, deps, { isOwner: false });
     if (isScreens) return await handleScreensApi(request, env, path, email, deps);
     if (path === DATA_STATUS_PATH) return handleDataStatusApi(request, deps);
     if (RETIRED_DATA.has(path)) return fail(404, "找不到");
+    // 資金版圖那一頁：開關對這個人關著（off，或 owner 而他不是站主）時和不存在一樣
+    if (CHAIN_MAP_PAGE.test(path) && !chainMapVisible(env, false)) return fail(404, "找不到");
     return await cacheHashedAsset(request, await next());
   } catch (e) {
     if (e instanceof HttpError || e instanceof UserPortfolioError) return fail(e.status, e.message);

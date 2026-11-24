@@ -1,4 +1,4 @@
-name = "market-ana-cron-trigger"
+﻿name = "market-ana-cron-trigger"
 main = "worker.js"
 compatibility_date = "2026-11-01"
 workers_dev = false
@@ -27,6 +27,9 @@ database_id = "391bc764-2dd8-47b3-b9f9-93b9521c59e7"
 # OWNER_EMAIL（站主的信箱）也是機密設定（wrangler secret put OWNER_EMAIL）：專案公開後這個檔任何人都看得到。
 [vars]
 MARKET_ANA_WATCHLIST_WATCH = "owner"
+# 資料更新狀態的推播提醒（2026-11-24，cloud/lib/data-health-alert.js）：每分鐘盯價以外的每一個時段檢查一次，
+# 出問題、恢復各推一則給站主。"owner" 打開；其他值是關。打開前正式資料庫要先套 0040（沒套時什麼都不做）。
+MARKET_ANA_DATA_HEALTH = "owner"
 
 [observability]
 enabled = true

@@ -168,10 +168,27 @@
     .filter(({ task }) => SCORED[task.key])
     .map(({ task, next }) => `${MODEL_TASKS[task.key].name}改成 ${choiceText(next)}：${SCORED[task.key]}`);
 
-  const tabsFor = ({ usage, models, notify }) => ['usage', 'models', 'notify', 'look']
-    .filter(key => key === 'look' || ({ usage, models, notify })[key]);
+  // ---- 資料更新（2026-11-24：每一份資料最後更新的時間與狀態；/api/settings/data-health，判斷在 cloud/lib/data-health.js）----
+  const HEALTH_STATES = { ok: '正常', late: '延遲', failed: '停止更新', degraded: '部分異常' };
+  function healthTime(value, now) {
+    const text = String(value || '');
+    if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text.slice(5);   // 只有資料日（基金淨值、主力分點…）
+    const at = taipei(text);
+    if (!at) return '—';
+    return sameDay(at, taipei(new Date(now).toISOString())) ? `今天 ${at.hm}` : `${pad(at.m)}-${pad(at.day)} ${at.hm}`;
+  }
+  function healthView(data, now) {
+    const rows = (data?.items || []).filter(item => HEALTH_STATES[item.state]).map(item => ({
+      key: item.key, label: item.label, time: healthTime(item.last_ok_at, now),
+      state: item.state, stateText: HEALTH_STATES[item.state], detail: item.state === 'ok' ? '' : String(item.detail || ''),
+    }));
+    return { rows, empty: rows.length ? '' : '目前沒有可檢查的資料。' };
+  }
 
-  global.MarketSettings = { DESKS, DARK_DESKS, readPrefs, resetText, modelLabel, usageView, tabsFor, modelsView, confirmNotes, nextChoice };
+  const tabsFor = ({ usage, health, models, notify }) => ['usage', 'health', 'models', 'notify', 'look']
+    .filter(key => key === 'look' || ({ usage, health, models, notify })[key]);
+
+  global.MarketSettings = { DESKS, DARK_DESKS, readPrefs, resetText, modelLabel, usageView, tabsFor, modelsView, confirmNotes, nextChoice, healthView };
 
   // ---------- 畫面 ----------
   const doc = global.document;
@@ -208,7 +225,7 @@
     return response.json();
   };
   const ICON_CLOSE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>';
-  const TAB_NAMES = { usage: 'Gemini 用量', models: 'AI 模型', notify: '通知', look: '外觀' };
+  const TAB_NAMES = { usage: 'Gemini 用量', health: '資料更新', models: 'AI 模型', notify: '通知', look: '外觀' };
 
   const dialog = el('dialog', 'st-sheet');
   dialog.id = 'settingsDialog';
@@ -228,7 +245,7 @@
   track.setAttribute('aria-label', '設定分類');
   tabBar.append(track);
   const panes = {};
-  for (const key of ['usage', 'models', 'notify', 'look']) {
+  for (const key of ['usage', 'health', 'models', 'notify', 'look']) {
     const pane = el('section', `st-pane st-pane-${key}`);
     pane.id = `settings-${key}`;
     pane.setAttribute('role', 'tabpanel');
@@ -237,10 +254,10 @@
     panes[key] = pane;
   }
   const foot = el('div', 'st-foot');
-  dialog.append(head, tabBar, panes.usage, panes.models, panes.notify, panes.look, foot);
+  dialog.append(head, tabBar, panes.usage, panes.health, panes.models, panes.notify, panes.look, foot);
   doc.body.append(dialog);
 
-  const access = { usage: false, models: false, notify: false };
+  const access = { usage: false, health: false, models: false, notify: false };
   let current = 'look';
   let notifyMounted = false;
 
@@ -276,6 +293,7 @@
     current = key;
     renderTabs();
     if (key === 'usage') loadUsage();
+    if (key === 'health') loadHealth();
     if (key === 'models') loadModels();
     if (key === 'notify') mountNotify();
   }
@@ -395,6 +413,29 @@
       pane.append(list);
     }
     if (view.updated) pane.append(el('p', 'st-updated num', view.updated));
+  }
+
+  // ---- 資料更新 ----
+  async function loadHealth() {
+    const pane = panes.health;
+    if (!pane.childElementCount) pane.append(el('p', 'st-note', '讀取中…'));
+    let view;
+    try { view = healthView(await getJson('/api/settings/data-health'), Date.now()); }
+    catch (_) { pane.replaceChildren(el('p', 'st-note', '資料更新狀態暫時讀不到，請稍後再試。')); return; }
+    pane.replaceChildren();
+    if (view.empty) { pane.append(el('p', 'st-note', view.empty)); return; }
+    const list = el('ul', 'st-health');
+    list.setAttribute('aria-label', '資料更新狀態');
+    for (const row of view.rows) {
+      const li = el('li');
+      li.dataset.health = row.key;
+      li.dataset.state = row.state;
+      const name = el('span', 'st-hname', row.label);
+      if (row.detail) name.append(el('small', '', row.detail));
+      li.append(name, el('span', 'st-htime num', row.time), el('span', 'st-hstate', row.stateText));
+      list.append(li);
+    }
+    pane.append(list);
   }
 
   // ---- AI 模型 ----
@@ -601,6 +642,9 @@
     if (me?.owner) {
       access.usage = true;
       access.models = true;
+      // 資料更新：開關關著時入口回 available: false，就不放這一籤
+      try { access.health = Boolean((await getJson('/api/settings/data-health')).available); }
+      catch (_) { access.health = false; }
       // 到價推播跟著自選股關注的開關（和原本自選股頁的鈴鐺同一個判斷）；/api/features 對站主不扣額度
       try { access.notify = Boolean(global.WatchPush) && Boolean((await getJson('/api/features')).features?.watchlist_watch_v1); }
       catch (_) { access.notify = false; }
@@ -619,6 +663,8 @@
       try { if ((await getJson('/api/friend-ai')).available) footLink('/gemini/', 'Gemini 設定'); } catch (_) { /* 沒有就不放 */ }
     }
     renderTabs();
+    // 資料更新提醒的推播點了會帶 #data-health 打開首頁：直接打開設定的這一籤
+    if (access.health && global.location?.hash === '#data-health') { current = 'health'; open(); }
   }
 
   // ---- 打開與收回（和到價推播原本的浮層同一套：Esc、關閉鈕、按下與放開都在板外才收）----

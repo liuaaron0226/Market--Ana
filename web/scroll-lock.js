@@ -53,6 +53,8 @@
   window.addEventListener('pageshow', event => { if (event.persisted && holders.size && !saved) pin(); });
 
   window.ScrollLock = {
+    // 整頁原本捲到哪：釘住時 window.scrollY 是 0，要用鎖住當下記的位置（nav-return.js 存「離開前的樣子」用）
+    pageY() { return saved ? saved.y : window.scrollY; },
     lock(owner) {
       holders.add(owner);
       if (!saved) pin();

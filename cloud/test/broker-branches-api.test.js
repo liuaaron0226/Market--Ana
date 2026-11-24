@@ -137,11 +137,25 @@ test("朋友：拿到 available false，而且不碰任何資料表", async () =
   assert.deepEqual(JSON.parse(text), UNAVAILABLE);
 });
 
-test("開關關著（沒設、off、寫錯、all）：站主也拿到 available false，不碰分點的表也不扣限流", async () => {
+// 本人 2026-11-24「全部功能都開放」：開關改成三種狀態，all 時朋友也看得到有資料的股票的分點（正式設定先留 owner，見 wrangler.jsonc）
+test("開關是 all：朋友拿到和站主同一份；沒有資料的股票一樣是 available false", async () => {
+  env.MARKET_ANA_BROKER_BRANCHES = "all";
+  await branch(env.DB, "1040", "臺銀");
+  await stock(env.DB, "2330", "2026-11-20");
+  await day(env.DB, "2330", "1040", "2026-11-20", 10);
+  const friend = await (await req({ email: FRIEND })).text();
+  assert.equal(JSON.parse(friend).available, true);
+  assert.equal(friend, await (await req()).text());
+  assert.deepEqual(await (await req({ email: FRIEND, code: "2317" })).json(), UNAVAILABLE);
+  assert.equal((await req({ email: FRIEND, method: "POST" })).status, 405);
+  assert.equal((await req({ email: PENDING })).status, 403);
+});
+
+test("開關關著（沒設、off、寫錯）：站主也拿到 available false，不碰分點的表也不扣限流", async () => {
   await branch(env.DB, "1040", "臺銀");
   await day(env.DB, "2330", "1040", "2026-11-20", 10);
   const db = env.DB;
-  for (const value of [undefined, "off", "on", "true", "all", "Owner", "OWNER"]) {
+  for (const value of [undefined, "off", "on", "true", "ALL", "Owner", "OWNER"]) {
     env.MARKET_ANA_BROKER_BRANCHES = value;
     env.DB = { prepare: (sql) => { if (/broker_branch|api_hits/.test(sql)) throw new Error(`開關關著不能讀這張表：${sql}`); return db.prepare(sql); } };
     const r = await req();
@@ -150,13 +164,20 @@ test("開關關著（沒設、off、寫錯、all）：站主也拿到 available 
   }
 });
 
-test("功能清單：只有一字不差的 owner 對站主是開的；朋友一律是關", () => {
-  for (const [value, owner] of [[undefined, false], ["off", false], ["all", false], ["on", false], ["Owner", false], ["owner", true]]) {
+test("功能清單：站主看開關有沒有開；朋友只有 all 才是開的", () => {
+  for (const [value, owner, friend] of [[undefined, false, false], ["off", false, false], ["all", true, true], ["on", false, false], ["Owner", false, false], ["owner", true, false]]) {
     const policy = releasePolicy({ MARKET_ANA_BROKER_BRANCHES: value });
     assert.equal(policy.features.broker_branches_v1, owner, `站主 ${value}`);
     assert.equal(policyForViewer(policy, true, { MARKET_ANA_BROKER_BRANCHES: value }).features.broker_branches_v1, owner, `站主（看到的清單）${value}`);
-    assert.equal(policyForViewer(policy, false, { MARKET_ANA_BROKER_BRANCHES: value }).features.broker_branches_v1, false, `朋友 ${value}`);
+    assert.equal(policyForViewer(policy, false, { MARKET_ANA_BROKER_BRANCHES: value }).features.broker_branches_v1, friend, `朋友 ${value}`);
   }
+  assert.equal(policyForViewer(releasePolicy({ MARKET_ANA_BROKER_BRANCHES: "all" }), false).features.broker_branches_v1, false, "env 沒給時對朋友是關");
+});
+
+test("正式設定（wrangler.jsonc）先留 owner：有資料的股票＝站主的自選與庫存，開給全部之前要先決定抓取範圍", async () => {
+  const { readFileSync } = await import("node:fs");
+  const vars = JSON.parse(readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8").replace(/^\s*\/\/.*$/gm, "")).vars;
+  assert.equal(vars.MARKET_ANA_BROKER_BRANCHES, "owner");
 });
 
 test("/api/features：站主看到開著、朋友看到關著", async () => {

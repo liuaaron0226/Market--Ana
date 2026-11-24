@@ -65,12 +65,15 @@ test("申請頁底下只放行申請頁自己的檔案：其他路徑回 404，�
 // 開關全開（正式站目前開著的，再加上還沒開的），確認不是靠開關關著才擋得住。
 const ALL_ON = {
   MARKET_ANA_STRATEGIES_ENABLED: "true", MARKET_ANA_ENABLED_FEATURES: "strategy_v1,market_trend_v1,level_advice,ai_digest,ai_stock_advice",
-  MARKET_ANA_FORECAST_LEDGER: "owner", MARKET_ANA_STOCK_FACTS: "all", MARKET_ANA_WATCHLIST_WATCH: "owner", MARKET_ANA_STOCK_SIGNALS: "all",
+  MARKET_ANA_FORECAST_LEDGER: "all", MARKET_ANA_STOCK_FACTS: "all", MARKET_ANA_WATCHLIST_WATCH: "owner", MARKET_ANA_STOCK_SIGNALS: "all",
   MARKET_ANA_STOCK_ETFS: "all", MARKET_ANA_STOCK_FUNDS: "all", MARKET_ANA_MARKET_NEWS: "all", MARKET_ANA_IMPACT_WATCH: "all", MARKET_ANA_FRIEND_AI: "on",
+  // 本人 2026-11-24「全部功能都開放」之後開給全部的開關
+  MARKET_ANA_MARKET_BRIEF: "all", MARKET_ANA_INDEX_INTRADAY: "all", MARKET_ANA_LIVE_QUOTES: "all", MARKET_ANA_BROKER_BRANCHES: "all",
+  MARKET_ANA_CHAIN_MAP: "all",
   FUGLE_API_KEY: "server-only-key",
 };
 const API_PATHS = [
-  "/api/me", "/api/features", "/api/settings/gemini-usage", "/api/settings/ai-models", "/api/holdings/level",
+  "/api/me", "/api/features", "/api/settings/gemini-usage", "/api/settings/ai-models", "/api/settings/data-health", "/api/holdings/level",
   "/api/forecast/latest", "/api/forecast/summary", "/api/forecast/history", "/api/forecast/replay",
   "/api/friend-ai", "/api/friend-ai/key", "/api/friend-ai/consent", "/api/friend-ai/digest", "/api/friend-ai/stocks",
   "/api/watchlist", "/api/watchlist/2330", "/api/holdings", "/api/holdings/2330", "/api/search-history", "/api/search-history/2330",
@@ -79,12 +82,13 @@ const API_PATHS = [
   "/api/market/overview", "/api/market/detail?kind=margin&date=2026-11-09", "/api/compare-0050", "/api/stocks/2330/vs-0050", "/api/funds/x",
   "/api/stocks/2330/analysis", "/api/stocks/2330/timeshare", "/api/stocks/2330/hourly", "/api/stocks/2330/live", "/api/stocks/2330/ticks",
   "/api/stocks/2330/history", "/api/stocks/2330/announcements", "/api/stocks/2330/headlines", "/api/stocks/2330/facts", "/api/stocks/search?q=2330",
-  "/api/market-news", "/api/impact-watch", "/api/screens", "/api/screens/membership", "/api/rotation", "/api/core-holdings", "/api/data-status",
+  "/api/market-news", "/api/impact-watch", "/api/chain-map", "/api/market-brief", "/api/indices/n225/intraday", "/api/indices/usdtwd",
+  "/api/stocks/2330/branch-history", "/api/screens", "/api/screens/membership", "/api/rotation", "/api/core-holdings", "/api/data-status",
   "/api/admin/users", "/api/admin/users/p%40x.com/approve", "/api/admin/users/nobody%40x.com/approve", "/api/unknown", "/api/",
   "/analysis-data.js", "/chips-data.js", "/dashboard-data.js", "/detail-data.js", "/plain-data.js",
 ];
 const PAGE_PATHS = ["/", "/index.html", "/minimal.html", "/stock.html?code=2330", "/stock", "/portfolio.html", "/portfolio", "/admin", "/admin/",
-  "/admin/index.html", "/gemini/", "/gemini/index.html", "/no-such-page", "/deep/er/page/", "/_headers", "/_routes"];
+  "/admin/index.html", "/gemini/", "/gemini/index.html", "/chain-map", "/chain-map.html", "/no-such-page", "/deep/er/page/", "/_headers", "/_routes"];
 const STATIC_PATHS = [...WEB_FILES.filter((f) => !f.endsWith(".html")).map((f) => "/" + f), "/admin/admin.js", "/admin/account.css",
   "/gemini/gemini.js", "/gemini/account.css", "/market-data-cloud.js", "/_routes.json", "/favicon.ico"];
 
@@ -156,7 +160,8 @@ test("還沒核准的人帶著主站的登入：頁面一律轉去申請頁，�
 test("掃描清單不是空轉：同一份清單換成已核准的人拿得到東西（不是因為路徑打錯才被擋）", async () => {
   Object.assign(env, ALL_ON);
   await seed("ok@x.com", "approved");
-  for (const path of [...PAGE_PATHS, ...STATIC_PATHS].filter((p) => !p.startsWith("/admin"))) {
+  // 後台與 AI 產業鏈資金版圖只給站主：已核准的朋友拿到 403／404（各自的測試驗），不在這份清單的「拿得到」裡
+  for (const path of [...PAGE_PATHS, ...STATIC_PATHS].filter((p) => !p.startsWith("/admin") && !p.startsWith("/chain-map"))) {
     assert.equal(await (await req(path, { email: "ok@x.com" })).text(), "static-ok", path);
   }
   deps.marketPack = { version: "v", overview: { analysis: {}, dashboard: {} }, details: {} };

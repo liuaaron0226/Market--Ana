@@ -11,3 +11,4 @@ functions/_data-status.js
 .data-status.json
 functions/_compare-pack.js
 .compare-pack.json
+functions/_chain-map.js

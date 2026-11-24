@@ -1,0 +1,55 @@
+# 有排程的 workflow 保活（2026-11-24）。GitHub：公開 repo 連續 60 天沒有活動，有 schedule 的 workflow 會被自動停用，
+# 停用後連 API 觸發（workflow_dispatch）也會被拒，Cloudflare cron-trigger 就送不進 daily-update，網站停更。
+# 規則出處：https://docs.github.com/en/actions/writing-workflows/choosing-when-your-workflow-runs/events-that-trigger-workflows#schedule
+#
+# 為什麼接在 announcements／market-news 後面、不自己排時間：
+# - 這兩支沒有 schedule，由 Cloudflare 的 cron（不受 GitHub 60 天規則影響）用 API 觸發：announcements 每天台北 08:00（含週末），
+#   market-news 交易日一天好幾班（11:30、14:00、18:30、23:00、06:30），所以每天早上、每次每日更新之前都會先保活一次。
+# - 保活自己也沒有 schedule，不會被同一條規則停用；不需要部署 Cloudflare、不需要新的機密設定（用 workflow 自帶的 GITHUB_TOKEN）。
+# - 不 commit、不碰 main 的內容、不碰網站。
+# 做的事見 workflow_keepalive.py：被 60 天規則停用的重新啟用；有排程而且啟用中的照樣呼叫一次啟用；本人手動停用的不碰。
+# 手動觸發：Actions → workflow-keepalive → Run workflow；預設乾跑（只列出狀態），取消勾選才真的呼叫啟用。
+name: workflow-keepalive
+
+on:
+  workflow_run:
+    workflows: [announcements, market-news]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "乾跑：只列出每支有排程的 workflow 目前的狀態，不呼叫啟用"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  actions: write   # 啟用 workflow（PUT /actions/workflows/{id}/enable）
+  contents: read
+
+concurrency:
+  group: workflow-keepalive
+  cancel-in-progress: false
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 叫醒有排程的 workflow
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          args=(--summary "$GITHUB_STEP_SUMMARY")
+          # 接在別的 workflow 後面的一律正式做；手動的只有取消勾選乾跑（剛好是 false）才正式做
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$INPUT_DRY_RUN" != "false" ]; then args+=(--dry-run); fi
+          python workflow_keepalive.py "${args[@]}"

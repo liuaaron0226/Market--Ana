@@ -5,6 +5,8 @@
 //   /api/forecast/replay   最新一份「歷史重播（參考）」摘要（F 票，本人 11-17；另外三張表 forecast_replay_*，不計入正式結論）
 // 公開之前只回給站主，而且要功能開關打開；其他人（含開關關著時的站主）一律得到「沒有內容」而不是錯誤，
 // 首頁維持原樣。資料只讀 D1 只能新增的表（migrations/0010；重播是 0023）。
+import { forecastLedgerVisible } from "./release-policy.js";
+
 const HEADERS = {
   "content-type": "application/json; charset=utf-8",
   "cache-control": "private, no-store",
@@ -73,8 +75,10 @@ async function history(db, url) {
   return json(200, { available: true, from, to, items });
 }
 
-export async function handleForecastApi(request, env, path, { isOwner, policy }) {
-  if (!isOwner || !policy.features.forecast_ledger_v1) return json(200, { available: false });
+// 三種狀態（本人 2026-11-24「全部功能都開放」）：MARKET_ANA_FORECAST_LEDGER 是 "all" 時其他獲准使用者也讀得到同一本帳；
+// 四個入口都只讀（帳本由排程寫進只能新增的表），沒有站主個人的內容。
+export async function handleForecastApi(request, env, path, { isOwner }) {
+  if (!forecastLedgerVisible(env, isOwner)) return json(200, { available: false });
   if (request.method !== "GET") return json(405, { error: "方法不允許" });
   const [, kind] = FORECAST_PATH.exec(path);
   if (kind === "latest") return json(200, await latest(env.DB));
