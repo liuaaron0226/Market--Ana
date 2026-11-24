@@ -208,6 +208,15 @@ def main() -> None:
         expect("個股頁往右滑回日K 再點：週期選單打開", period["seen"] == ["日K"] and "periodMenu" in period["menus"], period)
         page.keyboard.press("Escape")
         page.wait_for_timeout(500)
+        # 選了一條畫好的線（draw-tools-ui.js 會把刪除與到價提醒那一組放出來）：自動換到分析工具，不然刪除鍵看不到；取消選取就回到原本那一顆
+        page.evaluate("() => { document.querySelector('.ts-bar-keys .dt-acts').hidden = false; }")
+        page.wait_for_timeout(500)
+        chosen = page.evaluate(STATE)
+        trash = page.evaluate("() => { const b = document.getElementById('drawDelete').getBoundingClientRect(); const hit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2); return Boolean(hit && hit.closest('#drawDelete')); }")
+        page.evaluate("() => { document.querySelector('.ts-bar-keys .dt-acts').hidden = true; }")
+        page.wait_for_timeout(500)
+        dropped = page.evaluate(STATE)
+        expect("選了一條線：自動換到分析工具、刪除鍵點得到；取消選取回到日K", chosen["seen"] == ["分析工具"] and trash and dropped["seen"] == ["日K"], [chosen["seen"], trash, dropped["seen"]])
         # 分析工具暫時不在（分時沒有它）：只剩一顆、不畫小點、滑不動；它回來之後，原本停在它上面的話要換回去
         page.evaluate("() => window.KeySlot.show('tools')")
         page.wait_for_timeout(300)

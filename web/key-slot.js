@@ -8,7 +8,8 @@
    - chart-menus.js 原本「按下去就先打開選單」在這一格裡改成「放開才打開」（不然手指一碰到、還沒滑選單就跳出來）。
    - 鍵盤與自動化：鍵都還在，焦點走到哪一顆就顯示哪一顆；window.KeySlot.show('tools') 也可以直接換（檢查腳本要點一顆現在沒顯示的鍵之前先呼叫它）。
    - 想看的那一顆暫時不在（分時沒有分析工具）時先顯示最後一顆，它回來了再換回去。換到別顆時，原本那顆開著的選單會一起收起來。
-   - 選了畫線工具時自動停在「分析工具」那一顆（它旁邊的離開鍵才看得到）。
+   - 「分析工具」那一顆旁邊有東西要讓人看到的時候自動換到它：正在用畫線工具（旁邊是離開鍵）、選了一條畫好的線（旁邊是刪除與到價提醒）。
+     這種自動換過去的不算使用者自己選的：事情結束（放下工具、取消選取）就回到他原本停的那一顆。
    維護說明在 DESIGN_UPGRADE.md 第 11 節。 */
 (() => {
   'use strict';
@@ -42,9 +43,12 @@
   }
   const clear = key => { key.mover.style.translate = ''; key.unit.style.opacity = ''; };
 
-  // 顯示 id 那一顆；其他的收起來
-  function show(id) {
-    want = id;
+  // 「分析工具」那一顆旁邊有東西要讓人看到：正在用畫線工具（離開鍵）、選了一條線（刪除、到價提醒；draw-tools-ui.js 的 .dt-acts）
+  const busy = () => Boolean(host.querySelector('#toolsKey.is-on, .dt-acts:not([hidden])'));
+
+  // 顯示 id 那一顆；其他的收起來。auto＝程式自己換過去的（不改「使用者想看哪一顆」）
+  function show(id, auto) {
+    if (!auto) want = id;
     const list = keys();
     if (!list.length) return;
     if (!list.some(key => key.id === id)) id = list[list.length - 1].id;
@@ -168,12 +172,13 @@
     const key = keys().find(one => one.unit.contains(event.target));
     if (key && key.id !== current) show(key.id);
   });
-  // 鍵是別的程式放進來的（預測、分析工具），放進來之後再排一次；選了畫線工具就停在分析工具。
-  // 只看三種事：那一排多了或少了東西、某一顆被隱藏或放出來、分析工具鍵的「使用中」記號。
+  // 鍵是別的程式放進來的（預測、分析工具），放進來之後再排一次；分析工具那一顆有事（busy）就換到它，沒事了回到使用者原本停的那一顆。
+  // 只看三種事：那一排多了或少了東西、某一顆（或它旁邊的小鍵）被隱藏或放出來、分析工具鍵的「使用中」記號。
   watch = new MutationObserver(list => {
     if (!live() || drag) return;
     const relevant = list.some(item => item.type === 'childList' || item.attributeName === 'hidden' || (item.attributeName === 'class' && item.target.id === 'toolsKey'));
-    if (relevant) show(host.querySelector('#toolsKey.is-on') ? 'tools' : want || FIRST);
+    if (!relevant) return;
+    if (busy()) show('tools', true); else show(want || FIRST);
   });
   watch.observe(host, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'class'] });
   narrow.addEventListener('change', apply);
