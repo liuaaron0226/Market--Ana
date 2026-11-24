@@ -195,7 +195,7 @@
         list.querySelectorAll('.iw-item').forEach((item, index) => {
           if (typeof saved.open?.[index] === 'boolean') item.open = saved.open[index];
         });
-        dialog.scrollTop = saved.top || 0;
+        if (window.NavReturn.still()) dialog.scrollTop = saved.top || 0;
       },
     });
   }

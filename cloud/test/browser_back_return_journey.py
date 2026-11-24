@@ -135,16 +135,18 @@ def note_path(j: Journey, page, label: str) -> str:
     return word
 
 
-def back_home(j: Journey, page, how: str, label: str, ready: str) -> str:
+def back_home(j: Journey, page, how: str, label: str, ready: str, during=None) -> str:
     go_back(page, how)
     page.wait_for_url("**/minimal.html", timeout=20_000)
+    if during:
+        during(page)   # 回到首頁、還原正在進行時做的事（碰一下螢幕、檢查面板已經先打開）
     page.wait_for_function(ready, timeout=20_000)
     page.wait_for_timeout(900)   # 還原完、版面穩定
     return note_path(j, page, label)
 
 
 # ---------- 籌碼與資金 → 成交金額 ----------
-def chip_volume(j: Journey, page, tag: str, how: str, card: str = "volume") -> list[str]:
+def chip_volume(j: Journey, page, tag: str, how: str, card: str = "volume", during=None, other_day: bool = False) -> list[str]:
     home(page, j.base)
     open_cat(page, "chips")
     page.locator(f'#chipGrid [data-chip="{card}"]').click()
@@ -153,6 +155,11 @@ def chip_volume(j: Journey, page, tag: str, how: str, card: str = "volume") -> l
     if card != "volume":   # 有兩組名單的（外資）：換到賣超那一組
         page.locator('#panelBody .chip-seg [data-value="1"]').click()
         page.wait_for_function("() => document.querySelector('#chipList tbody tr') && !document.querySelector('#chipList.is-loading')", timeout=20_000)
+        page.wait_for_timeout(300)
+    if other_day:   # 圖上點另一天：名單要另外向伺服器取（/api/market/detail）
+        page.evaluate("""() => { const bars = [...document.querySelectorAll('#panelBody .bar-hit')].filter(b => b.getAttribute('aria-label').includes('點看那一天的名單'));
+          bars[Math.max(0, bars.length - 3)].dispatchEvent(new MouseEvent('click', { bubbles: true })); }""")
+        page.wait_for_function("() => document.querySelector('#chipList tbody tr') && !document.querySelector('#chipList.is-loading, #chipList [data-loading]')", timeout=20_000)
         page.wait_for_timeout(300)
     # 名單比 10 檔長時有「看到前 N」：展開（資料只有 10 檔時沒有這顆鍵）
     more = page.locator("#chipList [data-more]")
@@ -163,9 +170,9 @@ def chip_volume(j: Journey, page, tag: str, how: str, card: str = "volume") -> l
     before = page.evaluate(HOME_STATE)
     codes = page.evaluate("() => [...document.querySelectorAll('#chipList a.stock-link')].map(a => new URL(a.href).searchParams.get('code'))")
     at = visible_link(page, "#panelBody", "#chipList a.stock-link")
-    j.check(f"{tag}：成交金額名單出來、板子裡捲過", before["rows"] >= 10 and before["panelTop"] > 30 and at >= 0, [before, at])
+    j.check(f"{tag}：{before['title']}名單出來、板子裡捲過", before["rows"] >= 10 and before["panelTop"] > 30 and at >= 0, [before, at])
     to_stock(page, page.locator("#chipList a.stock-link").nth(at))
-    word = back_home(j, page, how, f"{tag}／{how}／成交金額", "() => document.getElementById('detailPanel').getAttribute('aria-hidden') === 'false' && document.querySelector('#chipList tbody tr')")
+    word = back_home(j, page, how, f"{tag}／{how}／{before['title']}", "() => document.getElementById('detailPanel').getAttribute('aria-hidden') === 'false' && document.querySelector('#chipList tbody tr')", during)
     after = page.evaluate(HOME_STATE)
     j.check(f"{tag}（{how}，{word}）：回到{before['title']}的明細板，不是大盤頁首", after["panel"] == "chip" and after["title"] == before["title"] and after["cats"] == ["chips"], after)
     j.check(f"{tag}（{how}）：名單的那一組（買超／賣超）一樣", after["side"] == before["side"] and after["listTitle"] == before["listTitle"], [before, after])
@@ -180,6 +187,68 @@ def chip_volume(j: Journey, page, tag: str, how: str, card: str = "volume") -> l
     closed = page.evaluate(HOME_STATE)
     j.check(f"{tag}（{how}）：關掉明細板後頁面停在原處", abs(closed["grid"] - before["grid"]) <= NEAR and closed["y"] == after["y"], [before, closed])
     return codes
+
+
+# ---------- 還原途中碰一下螢幕；明細資料很慢；瀏覽器回報的換頁種類不是 back_forward ----------
+def touch_midway(j: Journey, page, tag: str) -> None:
+    """回到首頁、還原正在進行時手指碰一下螢幕（按下又取消，不點到東西）：不算離開，照樣還原。"""
+    cdp = page.context.new_cdp_session(page)
+
+    def touch(p) -> None:
+        p.wait_for_timeout(150)
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": 200, "y": 120}]})
+        p.wait_for_timeout(120)
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchCancel", "touchPoints": []})
+    chip_volume(j, page, f"{tag}・還原途中碰一下螢幕", "上一頁", during=touch)
+
+
+# 另一天的名單（/api/market/detail）每次都慢 2.5 秒才回來
+SLOW_DETAIL = """(() => {
+  const original = window.fetch.bind(window);
+  window.fetch = (url, options) => (String(url).includes('/api/market/detail')
+    ? new Promise(resolve => setTimeout(resolve, 2500)).then(() => original(url, options)) : original(url, options));
+})();"""
+
+
+def slow_detail(j: Journey, browser, tag: str, options: dict) -> None:
+    """另一天的名單要向伺服器取，伺服器很慢：面板先照原樣打開（名單顯示讀取中），資料到了再填、最後才捲。"""
+    context, page = j.context(browser, **options)
+    context.add_init_script(SLOW_DETAIL)
+    seen = {}
+
+    def early(p) -> None:
+        p.wait_for_function("() => document.getElementById('detailPanel').getAttribute('aria-hidden') === 'false'", timeout=2_000)
+        seen.update(p.evaluate("() => ({ loading: Boolean(document.querySelector('#chipList [data-loading], #chipList.is-loading')), rows: document.querySelectorAll('#chipList tbody tr').length })"))
+    try:
+        chip_volume(j, page, f"{tag}・明細資料很慢", "上一頁", card="foreign", during=early, other_day=True)
+        j.check(f"{tag}・明細資料很慢：資料還沒到，面板已經先打開、名單顯示讀取中", seen.get("loading") is True and seen.get("rows") == 0, seen)
+    except Exception as error:  # noqa: BLE001
+        j.check(f"{tag}・明細資料很慢：走完", False, str(error).splitlines()[0])
+        page.screenshot(path=str(OUT / f"{tag}-slow-error.png"))
+    context.close()
+
+
+# 瀏覽器回報的換頁種類一律是 navigate（舊的 performance.navigation 也是 0）：模擬 iPhone Safari 回報不可靠
+FAKE_NAVTYPE = """(() => {
+  const original = performance.getEntriesByType.bind(performance);
+  performance.getEntriesByType = type => (type === 'navigation' ? original(type).map(entry => ({ ...entry.toJSON(), type: 'navigate' })) : original(type));
+  Object.defineProperty(performance, 'navigation', { configurable: true, value: { type: 0 } });
+})();"""
+
+
+def fake_navtype(j: Journey, browser) -> None:
+    tag = "回報不是上一頁・手機"
+    context, page = j.context(browser, viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True, has_touch=True)
+    context.add_init_script(FAKE_NAVTYPE)
+    try:
+        for how in ("鍵", "上一頁"):
+            chip_volume(j, page, tag, how)
+        search(j, page, tag, "上一頁")
+        portfolio(j, page, tag, "上一頁")
+    except Exception as error:  # noqa: BLE001
+        j.check(f"{tag}：走完", False, str(error).splitlines()[0])
+        page.screenshot(path=str(OUT / f"{tag}-error.png"))
+    context.close()
 
 
 # ---------- 籌碼選股 ----------
@@ -397,7 +466,10 @@ def run(j: Journey, browser, label: str) -> None:
         for how in ("鍵", "上一頁"):
             step(f"自選股與庫存（{how}）", portfolio, how)
         step("直接打開", direct)
+        if options.get("has_touch"):
+            step("還原途中碰一下螢幕", touch_midway)
         context.close()
+        slow_detail(j, browser, tag, options)
 
 
 def bfcache(j: Journey, browser) -> None:
@@ -429,8 +501,11 @@ def seed_sql() -> str:
 
 def with_strong(route) -> None:
     """旅程用的發布結果沒有各產業強勢股（較舊的一批）：在真的回應上補幾個產業的強勢股，地形明細與下面的名單才有個股可點。"""
-    response = route.fetch()
-    data = response.json()
+    try:
+        response = route.fetch()
+        data = response.json()
+    except Exception:  # noqa: BLE001 分頁已經關掉（還在路上的請求）：不用補
+        return
     bubbles = (data.get("latest") or {}).get("bubbles") or []
     if bubbles and not data.get("strong_stocks"):
         groups = {}
@@ -438,7 +513,10 @@ def with_strong(route) -> None:
             codes = WATCH[i % len(WATCH):][:3] or WATCH[:3]
             groups[bubble["name"]] = [{"code": code, "name": NAMES[code], "today_pct": 1.5 - k, "gain_pct": 9.0 - k, "limit_up": k == 0} for k, code in enumerate(codes)]
         data["strong_stocks"] = {"window_days": 5, "limit": 3, "min_avg_turnover": 50_000_000, "groups": groups}
-    route.fulfill(response=response, json=data)
+    try:
+        route.fulfill(response=response, json=data)
+    except Exception:  # noqa: BLE001 同上
+        pass
 
 
 def fake_search(route) -> None:
@@ -478,6 +556,7 @@ def main() -> int:
             # 和正式站一樣：頁面不進整頁快取，回來時重新載入
             browser = p.chromium.launch(args=["--disable-back-forward-cache"])
             run(j, browser, "整頁快取關掉")
+            fake_navtype(j, browser)
             browser.close()
             # 瀏覽器預設（Playwright 自己若預設關掉整頁快取，把那個參數拿掉）
             browser = p.chromium.launch(ignore_default_args=["--disable-back-forward-cache"])

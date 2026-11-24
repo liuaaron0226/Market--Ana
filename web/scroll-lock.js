@@ -55,6 +55,12 @@
   window.ScrollLock = {
     // 整頁原本捲到哪：釘住時 window.scrollY 是 0，要用鎖住當下記的位置（nav-return.js 存「離開前的樣子」用）
     pageY() { return saved ? saved.y : window.scrollY; },
+    // 把整頁捲到 y：釘住時改的是釘住的位置（畫面上看到的跟著動，關掉浮層時捲回這裡），沒釘住就直接捲（nav-return.js 還原用）
+    pageTo(y) {
+      if (!saved) { window.scrollTo({ left: 0, top: y, behavior: 'instant' }); return; }
+      saved.y = y;
+      document.body.style.setProperty('top', `${-y}px`);
+    },
     lock(owner) {
       holders.add(owner);
       if (!saved) pin();

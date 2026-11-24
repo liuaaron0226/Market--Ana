@@ -1995,8 +1995,10 @@
         more: [...els.panelBody.querySelectorAll('.more-wrap')].map(wrap => wrap.classList.contains('is-all')) };
     },
     restore: async saved => {
-      const card = CHIP_LISTS[saved.key] ? $('chipGrid').querySelector(`[data-chip="${CSS.escape(String(saved.key))}"]`) : null;
-      if (!card) return;
+      if (!CHIP_LISTS[saved.key]) return;
+      const cardOf = () => $('chipGrid').querySelector(`[data-chip="${CSS.escape(String(saved.key))}"]`);
+      if (!(await window.NavReturn.until(cardOf))) return;   // 卡片在這一段登記之後才畫
+      const card = cardOf();
       const payload = { key: saved.key };
       if (saved.side) payload.side = Number(saved.side);
       if (/^\d{4}-\d{2}-\d{2}$/.test(saved.day || '')) payload.day = saved.day;
@@ -2006,7 +2008,7 @@
       els.panelBody.querySelectorAll('.more-wrap').forEach((wrap, index) => {
         if (saved.more?.[index] && !wrap.classList.contains('is-all')) wrap.querySelector('[data-more]')?.click();
       });
-      els.panelBody.scrollTop = saved.top || 0;
+      if (window.NavReturn.still()) els.panelBody.scrollTop = saved.top || 0;   // 使用者已經自己捲了就不再替他捲
     },
   });
 
@@ -2396,7 +2398,7 @@
       restore: async saved => {
         const query = String(saved.q || '').slice(0, 24);
         input.value = query;
-        toggle.click();   // 和點放大鏡同一條路（home-fold.js 鎖住底下的頁面再打開；字是空的就載入最近搜尋）
+        if (!dialog.open) toggle.click();   // 和點放大鏡同一條路（home-fold.js 鎖住底下的頁面再打開；字是空的就載入最近搜尋）
         if (!dialog.open) return;
         if (query) {
           await search(query);
@@ -2405,7 +2407,7 @@
         } else {
           await window.NavReturn.until(() => !suggestions.hidden && suggestions.querySelector('.stock-suggest-group'));
         }
-        dialog.scrollTop = saved.top || 0;
+        if (window.NavReturn.still()) dialog.scrollTop = saved.top || 0;
       },
     });
   }
