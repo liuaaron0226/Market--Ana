@@ -30,18 +30,38 @@
 | 名稱 | 做什麼用 | 放在哪 | 去哪裡看／重發 | 失效時會怎樣 |
 |---|---|---|---|---|
 | `AGY_LOGIN_BUNDLE` | Gemini（agy）登入檔，排程用它呼叫 Gemini | GitHub secret | 見下方〈重做 Gemini 登入檔〉；撤銷舊授權：`myaccount.google.com/connections` | **run 仍是綠的**，但白話分析、盤勢解讀退成「依當天數字自動整理」；盯項、消息解讀停更；預測與自選股判斷記成「漏記」 |
-| `CLOUDFLARE_API_TOKEN` | 讓 GitHub 讀寫 D1、部署網站 | GitHub secret | Cloudflare → 右上頭像 → My Profile → API Tokens（權限至少要 D1 編輯、Cloudflare Pages 編輯） | `daily-update` 在「驗證 Cloudflare token」就紅叉，整天不發布 |
+| `CLOUDFLARE_API_TOKEN` | 讓 GitHub 讀寫 D1、部署網站 | GitHub secret | Cloudflare → 右上頭像 → My Profile → API Tokens（權限至少要 D1 編輯、Cloudflare Pages 編輯；`deploy-cron-trigger` 正式部署另需 Account › Workers Scripts › Edit，**有沒有還沒驗證**） | `daily-update` 在「驗證 Cloudflare token」就紅叉，整天不發布；`d1-migrate`、`deploy-cron-trigger` 也不能用 |
 | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare 帳號編號（不是密碼，不會過期） | GitHub secret | Cloudflare 後台首頁右側 | 同上 |
 | `R2_ACCESS_KEY_ID`、`R2_SECRET_ACCESS_KEY` | 讀寫 R2 工作集與原件 | GitHub secret | Cloudflare → R2 → Manage R2 API Tokens | `daily-update` 在「檢查金鑰」或「從 R2 還原工作集」紅叉 |
 | `OWNER_EMAIL` | 站主是誰（網站認站主、排程挑站主的自選股） | GitHub secret；Pages secret（正式＋預覽）；Worker `market-ana-cron-trigger` 與 `market-ana-eval` 的 secret | 不會過期 | 網站沒有它整站回 503 |
 | `FUGLE_API_KEY` | 富果即時報價（盤中報價、五檔、分時、盯價） | Pages secret；Worker `market-ana-cron-trigger`；GitHub secret | 富果開發者網站的 API 金鑰頁（網址**待確認**） | 盤中報價、分時、到價推播停；預測少一層資料 |
 | `EODHD_API_KEY` | 國外指數與國外同類股日線（每天 20 次） | GitHub secret；Pages secret | eodhd.com 會員後台 | 國外指數、同類股標「過期」；可用 `eodhd-probe` 檢查 |
-| `MASSIVE_API_KEY` | 美股日線（國外同類股；之後資金版圖美股每日） | GitHub secret；Pages secret | massive.com 會員後台 | 同類股美股那幾檔標「沒有金鑰」或「過期」 |
+| `MASSIVE_API_KEY` | 美股日線（國外同類股；資金版圖美股每日成交金額） | GitHub secret；Pages secret | massive.com 會員後台 | 同類股美股那幾檔標「沒有金鑰」或「過期」；資金版圖美股最新月份不動 |
 | `VAPID_PUBLIC_KEY`、`VAPID_PRIVATE_KEY` | 手機推播的簽章金鑰 | GitHub secret；Pages secret；Worker `market-ana-cron-trigger` | 不會過期 | 推播送不出去。**三處必須同一組**；換新的要用電腦跑 `node cron-trigger/set-push-keys.mjs`（需要 `gh` 與 `wrangler` 登入），換完每台手機要在自選股頁重新打開推播一次。**待簡化** |
 | `FRIEND_AI_MASTER_KEY` | 把朋友存的 Gemini 金鑰加密存進資料庫的主金鑰（32 bytes、base64） | GitHub secret；Pages secret | 不會過期 | **不要換**：換了以後所有朋友存過的金鑰都解不開，要每位朋友重新輸入 |
 | `GITHUB_DISPATCH_TOKEN` | Worker 準時去「按」GitHub workflow 用的 GitHub 權杖（只需這個倉庫的 Actions 寫入權限） | Worker `market-ana-cron-trigger` secret | GitHub → 右上頭像 → Settings → Developer settings → Personal access tokens（Fine-grained）→ 看到期日、Regenerate | **所有準時觸發都停**：每日更新只剩 GitHub 自己的排程（會晚好幾小時）；晨間預測、消息、公告停；Worker 只記 log，**不會通知任何人** |
 | `GITHUB_TOKEN` | GitHub 自動給每個 run 的權杖 | 自動 | 不用管 | — |
 | `PUSH_CONTACT` | 推播簽章裡的聯絡網址（選填，沒設用網站網址） | Pages／Worker（選填） | — | — |
+
+### 換 `CLOUDFLARE_API_TOKEN`
+
+1. Cloudflare → 右上頭像 → My Profile → API Tokens → **Create Token**（自訂）。權限（Account 層級，只選這個帳號）：
+   - D1：Edit（每日更新、`d1-migrate`）
+   - Cloudflare Pages：Edit（部署網站）
+   - Workers Scripts：Edit（`deploy-cron-trigger`）
+   - 每日更新還會跑 `wrangler d1 list`、`pages project list` 做唯讀檢查，上面三項已包含讀取。
+   - 是否還需要其他權限：**待確認**（以 `daily-update` 乾跑能不能通過「驗證 Cloudflare token」為準）。
+2. 複製新值 → GitHub secret `CLOUDFLARE_API_TOKEN` → Update。
+3. 驗證：`daily-update` 以 `redeploy` 勾、`dry_run` 勾跑一次，「驗證 Cloudflare token（唯讀）」那一步綠；`d1-migrate` 乾跑綠。要驗**寫入**：等當天正式的每日更新成功（或 `redeploy` 正式跑一次）。
+4. 新的確認能用之後，回 API Tokens 把**舊的那把刪掉**（Roll／Delete）。不要先刪舊的。
+
+### 換 R2 金鑰（`R2_ACCESS_KEY_ID`＋`R2_SECRET_ACCESS_KEY`，**一定成對換**）
+
+1. Cloudflare → R2 → Manage R2 API Tokens → Create API Token：權限 **Object Read & Write**，範圍限 bucket `market-ana-state`。
+2. 建立後畫面會同時給 Access Key ID 與 Secret Access Key（**只顯示一次**）。兩個都抄下來。
+3. GitHub secret `R2_ACCESS_KEY_ID`、`R2_SECRET_ACCESS_KEY` **兩個都換**（只換一個一定失敗）。
+4. 驗證讀取：`daily-update` 乾跑，「從 R2 還原工作集」那一步綠。驗證寫入：`announcements` 手動跑一次（會把原件存回 R2），或等下一次正式每日更新成功（「同步工作集回 R2」那一步綠）。
+5. 都綠了再回 R2 API Tokens 刪掉舊的。
 
 ### 換 `GITHUB_DISPATCH_TOKEN`（手機可做）
 

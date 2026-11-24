@@ -11,7 +11,14 @@
 | 正常 | 最近一班有按時更新，內容也是完整的。 |
 | 延遲 | 最近一班過了期限還沒更新（例如每日行情過了 21:30 還停在前一天）。 |
 | 停止更新 | 連續兩班以上沒有更新。 |
-| 部分異常 | 有更新，但內容降級：改用程式套句、記為漏記、或部分項目抓取失敗。 |
+| 部分異常 | 有更新，但內容降級：改用程式套句、記為漏記、部分項目抓取失敗、基金淨值缺日或數字對不上。 |
+| 無法檢查 | 這一份的檢查本身出錯（程式查錯欄位、資料庫讀不到）。不會推播；請交給維護的 AI 看 `cloud/lib/data-health.js`。 |
+
+## 「資料庫寫入額度用完」
+
+網站用 Cloudflare D1 免費方案，每天最多寫入 10 萬列，台北早上 8 點重算。用完時看得到資料，但新增自選、畫線、排程寫入都會失敗。
+這時會收到「資料庫寫入額度用完」：同一天最多 4 則（台北 11:30、15:30、20:30、06:30 這幾個時段才送）。不用處理，早上 8 點後自動恢復；
+如果連續幾天都這樣，代表某支排程寫太多，請交給維護的 AI 查是哪一支。
 
 ## 收到通知時先看哪裡
 
@@ -33,7 +40,7 @@
 | 基金淨值 | 淨值日不晚於 4 個交易日前 | daily-update 裡「基金對照 0050」那一步；漏抓超過約 3 個營業日要到集保網頁補 | — | daily-update |
 | 現金水位 | 交易日 09:30 前（開關有開才會出現） | level-daily | — | level-daily |
 | 今日 AI 解讀 | 交易日 22:30 前（開關有開才會出現） | ai-digest | 解讀未完成（Gemini） | ai-digest |
-| 資金版圖 | 交易日 22:30 前（有這張表才會出現） | 資金版圖的排程 | — | — |
+| 資金版圖 | 交易日 22:30 前（每日排程寫過資料庫才會出現；只看資料庫，R2 那一份沒有檢查） | 資金版圖的排程 | — | — |
 | 排程保活 | 最近 8 天內至少成功一次（超過 16 天＝停止；資料庫套過 0041 才會出現） | Actions 左邊的 workflow-keepalive：紅色就點進去看摘要。寫「必要的卻被手動停用」＝到那一支按「Enable workflow」；寫「啟用失敗（HTTP 403）」或「心跳 commit 推不上 main」＝GitHub 的權限設定被改過（Settings → Actions → General → Workflow permissions 要允許寫入，main 不能擋 github-actions 推送）。整頁都沒有新的執行＝保活本身被停用，按「Enable workflow」再手動跑一次 | — | workflow-keepalive |
 
 ## 全部同時延遲
@@ -42,6 +49,7 @@
 
 1. 排程是由 Cloudflare 的排程器（market-ana-cron-trigger）去叫 GitHub 的，它用的權杖是 `GITHUB_DISPATCH_TOKEN`。權杖到期就整個停：GitHub → Settings → Developer settings → Personal access tokens 重新產生，再到 Cloudflare 的 Workers → market-ana-cron-trigger → Settings → Variables and Secrets 換掉。
 2. 公開倉庫 60 天沒有任何提交，GitHub 會把有排程的 workflow 停用：Actions 頁上方會有黃色提示，按「Enable workflow」。
+   平常不會發生：workflow-keepalive 每 25 天自動提交一次 `ops/heartbeat.txt`，並把被停用的排程重新啟用（上表「排程保活」那一列）。
 3. Cloudflare 權杖（`CLOUDFLARE_API_TOKEN`）到期：每一支排程的第一步「驗證 Cloudflare token」就會失敗。
 
 ## 誰在檢查

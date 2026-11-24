@@ -183,5 +183,22 @@
   // 個股頁每次換股票（stock.js）：換成那一檔的盯項；資料還沒讀到時先記著，讀到就畫
   window.ImpactWatch = { show(code) { stockCode = String(code || ''); renderStock(); } };
 
+  // 返回原處（nav-return.js，本人 2026-11-24）：首頁清單裡點了個股、按返回回來時，清單照原本打開、攤開的那幾項一樣、捲回原處
+  const dialog = document.getElementById('impactWatchDialog');
+  if (home && dialog) {
+    window.NavReturn?.remember('impact', {
+      layer: 'overlay',
+      save: () => (dialog.open ? { open: [...list.querySelectorAll('.iw-item')].map(item => item.open), top: Math.round(dialog.scrollTop) } : null),
+      restore: async saved => {
+        if (!(await window.NavReturn.until(() => !key.hidden && list.querySelector('.iw-item')))) return;
+        if (!dialog.open) key.click();   // 開合在 home-fold.js，照點那顆鍵的路走
+        list.querySelectorAll('.iw-item').forEach((item, index) => {
+          if (typeof saved.open?.[index] === 'boolean') item.open = saved.open[index];
+        });
+        dialog.scrollTop = saved.top || 0;
+      },
+    });
+  }
+
   init();
 })();

@@ -214,22 +214,50 @@ class RateLimited extends Error {
   }
 }
 
+// 2026-11-24 正式站事故：D1 免費方案當天的寫入額度用完，讀還可以，但每個 API 都先在這裡寫 api_hits，
+// 寫入失敗被各個入口轉成 503，整站只剩「暫時無法處理」。讀的功能必須照常：寫入失敗時改用這個執行環境自己記憶體裡的
+// 每分鐘計數（同樣的額度，只算到這一個 isolate，比 D1 寬鬆），超過一樣回 429。登入（Access）與核准檢查照舊擋在前面。
+const memoryHits = new Map();
+const MEMORY_HITS_MAX = 5000;
+
+function consumeInMemory(email, bucket, minute, limit) {
+  if (memoryHits.size >= MEMORY_HITS_MAX) memoryHits.clear();
+  for (const key of memoryHits.keys()) {
+    if (Number(key.slice(key.lastIndexOf("|") + 1)) < minute) memoryHits.delete(key);
+  }
+  const key = `${email}|${bucket}|${minute}`;
+  const count = memoryHits.get(key) || 0;
+  if (count >= limit) return false;
+  memoryHits.set(key, count + 1);
+  return true;
+}
+
 // 單一語句條件遞增：未超限才 +1 並回傳新值；超限不寫入、回空。超限紀錄每人每額度每分鐘只寫一次。
 async function consume(db, email, bucket, now, rate = RATE) {
   const minute = Math.floor(now / 60_000);
-  const row = await db
-    .prepare(
-      "INSERT INTO api_hits (email, bucket, minute, count) VALUES (?, ?, ?, 1) " +
-        "ON CONFLICT (email, bucket, minute) DO UPDATE SET count = count + 1 WHERE count < ? RETURNING count",
-    )
-    .bind(email, bucket, minute, rate[bucket])
-    .first();
+  let row;
+  try {
+    row = await db
+      .prepare(
+        "INSERT INTO api_hits (email, bucket, minute, count) VALUES (?, ?, ?, 1) " +
+          "ON CONFLICT (email, bucket, minute) DO UPDATE SET count = count + 1 WHERE count < ? RETURNING count",
+      )
+      .bind(email, bucket, minute, rate[bucket])
+      .first();
+  } catch (error) {
+    console.warn("rate limit write failed, using in-memory limit:", String(error?.message || error));
+    if (consumeInMemory(email, bucket, minute, rate[bucket])) return;
+    throw new RateLimited(60 - Math.floor((now % 60_000) / 1000));
+  }
   if (row) return;
-  const flag = await db
-    .prepare("INSERT INTO api_hits (email, bucket, minute, count) VALUES (?, ?, ?, 0) ON CONFLICT DO NOTHING RETURNING count")
-    .bind(email, `${bucket}:over`, minute)
-    .first();
-  if (flag) await audit(db, email, "rate_limited", bucket, String(minute));
+  // 超限的紀錄寫不進去（例如寫入額度用完）也照樣回 429，不變成 503。
+  try {
+    const flag = await db
+      .prepare("INSERT INTO api_hits (email, bucket, minute, count) VALUES (?, ?, ?, 0) ON CONFLICT DO NOTHING RETURNING count")
+      .bind(email, `${bucket}:over`, minute)
+      .first();
+    if (flag) await audit(db, email, "rate_limited", bucket, String(minute));
+  } catch { /* 只是少一筆超限紀錄 */ }
   throw new RateLimited(60 - Math.floor((now % 60_000) / 1000));
 }
 

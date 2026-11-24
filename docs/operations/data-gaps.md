@@ -2,73 +2,43 @@
 
 ## 1. 基金淨值缺口（三檔境外基金）
 
-### 為什麼會有缺口
+網站每天從**集保結算所開放資料**抓三檔境外基金（`BLKTENAU`、`AGIFFVM`、`GLIACU`）的淨值與配息，有兩個抓取點：`announcements` 的 `fund-nav`（每天 08:00，含週末）與 `daily-update` 的「基金對照 0050」那一步（平日四班）。開放資料**只留最近 4 個淨值日**，兩邊連續 4 個營業日以上都沒抓成功，中間那幾天就永遠抓不回來，要手動補。
 
-站上的境外基金（`BLKTENAU` 貝萊德世界科技 A10、`AGIFFVM` 安聯收益成長、`GLIACU` 摩根多重收益）每天由 `daily-update` 的「基金對照 0050…」那一步，從**集保結算所的開放資料**抓淨值與配息、從央行抓匯率。開放資料**只留最近約 4 個交易日**，所以排程連續漏抓超過約 3 個營業日，中間那幾天就再也抓不到，形成缺口。（每天抓到的抽取檔存在 R2 的 `funds/raw/`；歷史回補原件存在倉庫的 `seeds/funds/<代碼>/`。）
+- **怎麼知道**：Actions → 最新的 `announcements` 或 `daily-update` → 執行摘要的「基金淨值」。寫「正常」或「抓取失敗（下一個時段會再試）」都不用做事；寫「XXX 缺淨值 某日～某日」才要補。
+- **怎麼補**：照 [`seeds/funds/README.md`](../../seeds/funds/README.md) 的步驟（到集保網頁抄那幾天 → 新增 `nav-backfill-N.csv` → 算 SHA-256 → 登記到 `backfill-manifest.json` → 推上 main）。要用電腦瀏覽器。
+- **沒有自動補**：找不到可以合法自動抓歷史淨值的來源（站主 2026-11-17 定案：不打集保網站背後的資料介面、不破解驗證碼）。
 
-### 怎麼知道有缺口
+## 2. 法人歷史回補（資金版圖要從 2021-01 起）：`institutional-backfill`
 
-1. GitHub Actions → `daily-update` 當天那筆 run：整體綠勾，但步驟「基金對照 0050：抓集保開放資料淨值、配息與央行匯率，存回 R2」是**紅叉**。
-2. 點進那一筆 run 的 **Summary**，「基金對照資料」那一段 JSON 的 `checks` 底下，每檔基金一個清單：
-   - `{"kind": "gap", "from": "日期", "to": "日期", "weekdays": N}` → **缺口**，這段要手動補。
-   - `{"kind": "nav-conflict", ...}` → 同一天兩份數字不同（保留先到的那份），交給 AI 查。
-   - `stale` 類 → 超過 6 個平日沒有新淨值，多半是來源晚發，先等一兩天。
-   - `seed-missing` → 這檔還沒有歷史回補原件。
-   - `sources` 裡某項 `"status": "failed"` → 當天來源下載失敗，隔天通常自己好。
+站主 2026-11-24 已同意正式執行；2026-11-24 晚第一批已開始。
 
-### 手動補缺口（要用電腦瀏覽器；目前沒有自動補，見 handover.md (f)）
+1. Actions → `institutional-backfill` → Run workflow，分支 `main`。
+2. **取消勾選 `dry_run`**（勾著只會試抓 2 天、什麼都不存），`days`、`start` 用預設（600、2021-01-01）。
+3. 等它跑完（預設 600 個交易日約 2 小時；程式最多抓 4 小時就自己收工）。看 Summary：會寫「補到哪一天、還剩約幾個交易日、約再按幾次」。
+4. 還沒補完就再按一次，**每次接著上一次停下的地方**。總共大約按 2 次。
+5. Summary 寫「全部補完了，不用再按」就結束。
 
-做法和第一次回補一樣：**用瀏覽器以人的速度打開集保「基金資訊觀測站」網頁、照畫面點選**，只記錄網頁自己收到的回應；不直接呼叫它的 API、遇到驗證碼就停。
+它會：逐日向證交所與櫃買抓官方報表，原件＋SHA-256 存進 R2（只增不改），再併進法人資料庫。跑的時候不擋每日更新；合併那一步和每日更新共用一把鎖，只要幾分鐘，被取消也沒關係，下一次按會補寫。
 
-1. 用電腦的 Chrome／Edge 打開（把 `<集保代碼>` 換成那一檔：`BLKTENAU`、`AGIF-FVM`、`GLIACU`）：
-   `https://www.fundclear.com.tw/fund-basic-info?site=offshore&key=<集保代碼>&tab=fund-nav`
-2. 按 `F12` 打開開發者工具 → **Network（網路）** 分頁。
-3. 在網頁上點能涵蓋缺口的期間（例如「三個月」）。
-4. Network 清單裡找到 `query-nav-value/picture` 那一筆 → **Response（回應）** → 全部複製。回應是一個 JSON 陣列，每筆有 `navDate`、`nav`。
-5. 把**缺口那幾天**整理成 CSV，每行 `YYYY-MM-DD,淨值原字串`，由舊到新，最後一行也要換行。格式和既有的 `seeds/funds/<站上代碼>/nav-backfill.csv` 一樣，例如：
-   ```
-   2026-11-10,10.520000
-   2026-11-11,10.310000
-   ```
-   （淨值照網頁原字串抄，不要四捨五入。）
-6. 存成新檔 `seeds/funds/<站上代碼>/nav-backfill-2.csv`（已有 `-2` 就用 `-3`，依序）。**注意：資料夾用站上代碼**（`AGIFFVM`，沒有連字號）。
-7. 算這個檔的 SHA-256：
-   - Windows：`certutil -hashfile nav-backfill-2.csv SHA256`
-   - Mac／Linux：`sha256sum nav-backfill-2.csv`
-8. 打開同一個資料夾的 `backfill-manifest.json`，在 `files` 陣列最後加一筆（照既有那筆的欄位）：
-   ```json
-   {
-     "file": "nav-backfill-2.csv",
-     "kind": "nav",
-     "page_url": "https://www.fundclear.com.tw/fund-basic-info?site=offshore&key=<集保代碼>&tab=fund-nav",
-     "page_action": "淨值期間點「三個月」",
-     "response_of": "POST /api/offshore/fund-basic/query-nav-value/picture",
-     "read_at": "讀取時間（ISO 格式，例如 2026-12-01T10:00:00Z）",
-     "format": "只留 navDate（改成 YYYY-MM-DD）與 nav 原字串，依日期由舊到新、每行一筆、結尾換行。",
-     "rows": 筆數,
-     "first": "第一天",
-     "last": "最後一天",
-     "sha256": "第 7 步算出來的值（小寫）"
-   }
-   ```
-9. 兩個檔一起提交到 `main`（這兩個檔**不可以讓 Git 改換行**，`seeds/funds/.gitattributes` 已設定 `-text`；用 GitHub 網頁上傳也可以）。
-10. 確認：下一次 `daily-update`，「基金對照 0050」那一步的 `checks` 裡那個 `gap` 不見了、步驟變綠。SHA-256 對不上時，程式會停在 `回補原件 … 的 SHA-256 和清單不符`，那一檔不會被算錯，改正後再跑即可。
+已知限制：雲端只留約 1,270 個交易日的股價，所以即使法人補完，資金版圖「法人買賣超（股數×收盤價）」在 2021-01～約 2021-08 仍然是空的。
 
-程式怎麼合併（給 AI）：`fund_compare.load_seed()` 照 manifest 順序讀所有 `kind: nav` 的檔、逐檔核對 SHA-256，`merge_navs()` 依日期合併，同一天先到的為準（回補原件優先於每日抽取檔），所以補檔只會補沒有的日子。
+## 3. 資金版圖每日資料
 
-## 2. 其他回補（都是 GitHub 網頁上的手動輸入）
+`daily-update` 的「AI 產業鏈資金版圖：每月資金資料」那一步，開關是 repository variable `MARKET_ANA_CHAIN_MAP_SCHEDULE=on`。美股用 Massive 全市場單日行情，一次最多補 20 天，停擺後會從最舊的缺日往後接著補。各種狀態與重建做法寫在 `chain_map_flows.py` 檔頭（給 AI）。歷史起始資料在 R2 `market-ana-state/chain-map/bootstrap/`。
+
+## 4. 其他回補（GitHub 網頁上的手動輸入）
 
 | 回補 | 在哪 | 什麼時候用 | 怎麼做 |
 |---|---|---|---|
-| ETF 每日行情原件 | `daily-update` 的 `etf_raw_days` | ETF 的日 K 根數太少（雲端工作集只留最近幾天原件）。2026-11-16 站主同意 130 天 | `etf_raw_days` 填 1～300 的數字、**`dry_run` 取消勾選**、**`republish` 勾**（重新發布目前線上那一天）。它會向證交所／櫃買重抓原件，位元組雜湊要和行情庫當初記的相同才放回；一天都沒補回就整個 run 失敗、不發布。這一項不能乾跑 |
-| 主力分點一檔 | `broker-branches`，`mode=backfill`、`code=代號` | 某檔副圖沒有資料 | 先 `dry_run` 勾著跑一次，再取消。一檔近三年約 2 萬多列；D1 一天寫入上限 10 萬列，一天最多補 2～3 檔 |
-| 主力分點：自選與庫存中還沒補的 | `broker-branches`，`mode=backfill`、`code` 空白、`limit=2` | 新加了自選股 | 同上。每天排程（開關 `on` 時）本來就會自動補約 2 檔 |
-| 主力分點：整理超過上限的分點 | `broker-branches`，`mode=trim` | 某檔分點太多 | 不連來源，只刪資料 |
-| 事前預測歷史重播 | `forecast-replay` | 站主要看過去的重播參考成績 | 先 `plan_only` 勾著看要幾次 Gemini；真的跑要站主同意（吃 AI Pro 每週額度） |
+| ETF 每日行情原件 | `daily-update` 的 `etf_raw_days` | ETF 的日 K 根數太少 | `etf_raw_days` 填 1～300、**`dry_run` 取消**、**`republish` 勾**。向證交所／櫃買重抓原件，雜湊要和當初記的相同才放回。⚠️ 會重新發布，吃大量 D1 寫入額度，不要和其他大量寫入同一天做 |
+| 主力分點一檔 | `broker-branches`，`mode=backfill`、`code=代號` | 某檔副圖沒有資料 | 先乾跑再正式。一檔約 2 萬多列；D1 一天上限 10 萬列 |
+| 主力分點：還沒補的自選與庫存 | `broker-branches`，`mode=backfill`、`code` 空白、`limit=2` | 新加了自選股 | 每天排程本來就會自動補約 2 檔 |
+| 主力分點：整理 | `broker-branches`，`mode=trim` | 某檔分點太多 | 刪除也算寫入額度 |
 | 晚間預測漏寫 | `forecast-ledger` 手動，`dry_run` 取消 | 當天晚間版沒寫成 | `date` 必須等於已發布資料的最後一天；晨間版過了 08:45 就不能補 |
-| 公司重大訊息原件 | `announcements` 手動 | 某天早上 08:00 那班沒跑 | 直接 Run workflow；官方快照只留前一天，隔太久就補不回來 |
+| 公司重大訊息原件 | `announcements` 手動 | 某天 08:00 那班沒跑 | 直接 Run workflow；官方快照只留前一天 |
+| 事前預測歷史重播 | `forecast-replay` | 站主要看重播參考成績 | 先 `plan_only` 勾著；真的跑要站主同意（吃 AI Pro 每週額度） |
 
-## 3. 只能靠這台電腦重建的（缺口，見 handover.md）
+## 5. 還要靠這台電腦的（缺口）
 
-- 雲端工作集只有 R2 `state/` 一份，雜湊不符時還原會直接停。累積型原件（大戶持股週檔、期貨原件）壞了，目前只能用這台電腦的 `data/` 重建；這份本機資料新不新**待確認**。
-- 某個交易日四班全部失敗、隔天才恢復時，前一天的資料會不會自動補進來：**待確認**（`daily-update` 的 `date` 可以手動填過去的日子，但發布有「不能比線上舊」的檢查，能不能補過去的日子沒有實測過）。
+- 雲端工作集在 R2 `state/`，保留**目前與上一個資料日**兩份（`manifest.json`、`manifest.previous.json`）；雜湊不符時還原會直接停。目前那份壞了：先把上一份還原到**另一個空資料夾**驗證，不要直接蓋掉——在倉庫根目錄執行 `python state_sync.py restore --previous --target <空資料夾>`（需 R2 金鑰），確認成功、資料日正確，再決定怎麼處理（交給 AI）。**兩份都壞時，倉庫裡沒有任何復原辦法**，只能用這台電腦的 `data/` 重建（本機那份新不新**待確認**），所以 [owner-todo.md](owner-todo.md) 要求備份整個資料夾。
+- 某個交易日四班全部失敗、隔天才恢復時，前一天能不能補發布：**待確認**（發布有「不能比線上舊」的檢查，沒實測過）。

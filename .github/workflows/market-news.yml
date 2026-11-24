@@ -199,6 +199,8 @@ jobs:
             args+=(--dry-run)
           fi
           mkdir -p "$RUNNER_TEMP/market-news"
+          # 沒有 pipefail 時，market_news.py 失敗（例如資料庫寫不進去）會被後面的 tee 蓋成成功（2026-11-24 第二意見審查）。
+          set -o pipefail
           # 倉庫公開之後這裡的輸出與步驟摘要誰都看得到：market_news.py 印的是遮過的那一份（public_log.py：朋友的 email、
           # 站主個股的盯項、模型回的字都不印）。這支排程沒有存回 R2 的資料夾，所以完整的報告不另外保存（--private-report 沒給）。
           python market_news.py "${args[@]}" | tee "$RUNNER_TEMP/market-news/run.json"

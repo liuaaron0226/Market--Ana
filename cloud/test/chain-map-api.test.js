@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { handle } from "../lib/gate.js";
 import { releasePolicy, policyForViewer } from "../lib/release-policy.js";
 import { chainForPage, chainMapModuleText } from "../lib/chain-map-definition.js";
-import { flowsShape } from "../lib/chain-map.js";
+import { flowsShape, R2_FLOWS_KEY, R2_FLOWS_SCHEMA } from "../lib/chain-map.js";
 import { fakeD1, rosterOnly, makeIssuer, claims, fetchJwks, TEAM, MAIN_AUD, APPLY_AUD, OWNER, MIGRATION_FILES } from "./helpers.js";
 
 const ORIGIN = "https://market-ana.pages.dev";
@@ -65,7 +65,7 @@ test("站主、開關 owner：給定義（還沒改過＝入庫的基準版）�
   assert.equal(r.headers.get("cache-control"), "private, no-store");
   const body = await r.json();
   assert.deepEqual(body, { available: true, definition: { version: "file", source: "file" }, chain: BASELINE,
-    flows: { version: "2026-11-24", as_of: "2026-10", built_at: "2026-11-24T10:00:00Z", ...FLOWS } });
+    flows: { source: "d1", version: "2026-11-24", as_of: "2026-10", built_at: "2026-11-24T10:00:00Z", ...FLOWS } });
   assert.deepEqual(body.chain.primary, { "TW 2222": "n2" }, "主要環節在定義裡");
   assert.equal("owner" in body.flows, false, "資金數字裡沒有主要環節");
 });
@@ -186,6 +186,82 @@ test("還沒核准的人、沒登入的人一律拿不到：頁面轉去申請�
   assert.ok(!(await api.text()).includes("甲公司"));
   const anonymous = await req({ email: null });
   assert.ok([401, 403].includes(anonymous.status), String(anonymous.status));
+});
+
+// R2 備援（2026-11-24 晚 D1 寫入額度用完）：chain-map/current/flows.json，格式 chain-map-flows-r2/v1
+const r2Object = (payload, { builtAt = "2026-11-24T15:00:00Z", version = "bootstrap-2026-10", schema = R2_FLOWS_SCHEMA, raw, uploaded } = {}) => ({
+  text: async () => raw ?? JSON.stringify({ schema, version, as_of: "2026-10", ...(builtAt === null ? {} : { built_at: builtAt }), payload }),
+  uploaded: uploaded ?? new Date("2026-11-24T15:30:00Z"),
+});
+function fakeR2(objects = {}) {
+  const gets = [];
+  return { gets, get: async (key) => { gets.push(key); return objects[key] ?? null; } };
+}
+
+test("R2 備援：0039 還沒套、或表是空的 → 讀 R2 那一份，source r2", async () => {
+  env.STATE = fakeR2({ [R2_FLOWS_KEY]: r2Object({ ...FLOWS, owner: { "TW 1111": "n1" }, partial: { month: "2026-11" } }) });
+  let body = await (await req()).json();
+  assert.deepEqual(body.flows, { source: "r2", version: "bootstrap-2026-10", as_of: "2026-10", built_at: "2026-11-24T15:00:00Z", ...FLOWS });
+  assert.deepEqual(env.STATE.gets, [R2_FLOWS_KEY]);
+  env.DB = fakeD1(MIGRATION_FILES.filter((file) => !file.startsWith("0039")));
+  await users(env.DB);
+  body = await (await req()).json();
+  assert.equal(body.available, true);
+  assert.equal(body.flows.source, "r2");
+  assert.deepEqual(body.chain, BASELINE);
+});
+
+test("R2 備援：D1 與 R2 都有 → built_at 較晚的那一份；D1 那列格式壞了就用 R2", async () => {
+  await flowsRow(env.DB, "2026-11-24", { ...FLOWS, notes: ["D1 的"] }, "2026-11-24T10:00:00Z");
+  env.STATE = fakeR2({ [R2_FLOWS_KEY]: r2Object({ ...FLOWS, notes: ["R2 的"] }, { builtAt: "2026-11-24T12:00:00Z", version: "2026-11-24" }) });
+  let body = await (await req()).json();
+  assert.deepEqual([body.flows.source, body.flows.notes], ["r2", ["R2 的"]], "R2 較新");
+  await flowsRow(env.DB, "2026-11-25", { ...FLOWS, notes: ["D1 新的"] }, "2026-11-25T10:00:00Z");
+  body = await (await req()).json();
+  assert.deepEqual([body.flows.source, body.flows.version, body.flows.notes], ["d1", "2026-11-25", ["D1 新的"]], "D1 較新");
+  await flowsRow(env.DB, "2026-11-26", { months: ["2026-10"] }, "2026-11-26T10:00:00Z");
+  body = await (await req()).json();
+  assert.deepEqual([body.flows.source, body.flows.notes], ["r2", ["R2 的"]], "最新那列壞了 → R2");
+  // 物件沒有 built_at：用 R2 的上傳時間比
+  env.STATE = fakeR2({ [R2_FLOWS_KEY]: r2Object(FLOWS, { builtAt: null, uploaded: new Date("2026-11-27T00:00:00Z") }) });
+  body = await (await req()).json();
+  assert.deepEqual([body.flows.source, body.flows.built_at], ["r2", "2026-11-27T00:00:00.000Z"]);
+});
+
+test("R2 備援：沒綁 STATE、沒有物件、JSON 壞了、schema 不對、payload 格式不對、讀的時候出錯 → 和沒有資料一樣（不是 500）", async () => {
+  for (const state of [undefined, {}, fakeR2(), fakeR2({ [R2_FLOWS_KEY]: r2Object(FLOWS, { raw: "{" }) }),
+    fakeR2({ [R2_FLOWS_KEY]: r2Object(FLOWS, { schema: "other" }) }),
+    fakeR2({ [R2_FLOWS_KEY]: r2Object({ months: ["2026-10"], inst0: 0, tw: {}, us: {} }) }),
+    { get: async () => { throw new Error("R2 掛了"); } },
+    fakeR2({ [R2_FLOWS_KEY]: { text: async () => { throw new Error("讀到一半斷了"); } } })]) {
+    env.STATE = state;
+    const r = await req();
+    assert.equal(r.status, 200);
+    assert.deepEqual(await r.json(), UNAVAILABLE);
+  }
+  // D1 有資料時，R2 壞掉不影響
+  await flowsRow(env.DB, "2026-11-24", FLOWS, "2026-11-24T10:00:00Z");
+  env.STATE = { get: async () => { throw new Error("R2 掛了"); } };
+  assert.equal((await (await req()).json()).flows.source, "d1");
+});
+
+test("R2 備援：存取規則不變——開關 owner 的朋友、開關關著不碰 R2；還沒核准的人 403", async () => {
+  const state = fakeR2({ [R2_FLOWS_KEY]: r2Object(FLOWS) });
+  env.STATE = state;
+  assert.deepEqual(await (await req({ email: FRIEND })).json(), UNAVAILABLE);
+  env.MARKET_ANA_CHAIN_MAP = "off";
+  assert.deepEqual(await (await req()).json(), UNAVAILABLE);
+  assert.deepEqual(state.gets, [], "開關對這個人關著：不讀 R2");
+  env.MARKET_ANA_CHAIN_MAP = "all";
+  assert.equal((await (await req({ email: FRIEND })).json()).flows.source, "r2");
+  const pending = await req({ email: PENDING });
+  assert.equal(pending.status, 403);
+  assert.ok(!(await pending.text()).includes("一行說明"));
+});
+
+test("正式設定（wrangler.jsonc）把 market-ana-state 綁成 STATE", () => {
+  const config = JSON.parse(readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8").replace(/^\s*\/\/.*$/gm, ""));
+  assert.deepEqual(config.r2_buckets, [{ binding: "STATE", bucket_name: "market-ana-state" }]);
 });
 
 test("只能讀：其他方法不允許", async () => {

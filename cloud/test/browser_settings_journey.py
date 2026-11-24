@@ -271,13 +271,15 @@ def health_seed(scenario: str) -> str:
     day = "2026-11-23" if scenario == "late" else "2026-11-24"
     updated = "2026-11-23T10:12:00Z" if scenario == "late" else "2026-11-24T10:12:00Z"
     brief_source = "template" if scenario == "degraded" else "ai"
+    # 和正式資料庫同一個樣子：資料日在版本名裡，source_date 是名錄抓取日（不是資料日）
+    version = f"liquid-{day.replace('-', '')}-237d4b8dd208-v2"
     return f"""
 INSERT INTO users (email, nickname, status, applied_at) VALUES ('{FRIEND}', 'F', 'approved', '2026-11-09T00:00:00Z');
 INSERT INTO stock_data_versions (version, source_date, source_url, source_sha256, built_at, catalog_count, analysis_count)
-  VALUES ('v1', '{day}', 'x', '{SHA}', '{updated}', 1, 1);
-INSERT INTO stock_data_state (key, active_version, updated_at) VALUES ('current', 'v1', '{updated}');
+  VALUES ('{version}', '2026-11-08', 'x', '{SHA}', '{updated}', 1, 1);
+INSERT INTO stock_data_state (key, active_version, updated_at) VALUES ('current', '{version}', '{updated}');
 INSERT INTO fund_securities (version, code, name, full_name, currency, latest_bar_date, available_bars, analysis_status) VALUES
-  ('v1', 'BLKTENAU', 'n', 'n', 'USD', '2026-11-21', 10, 'available'), ('v1', 'GLIACU', 'n', 'n', 'USD', '2026-11-21', 10, 'available');
+  ('{version}', 'BLKTENAU', 'n', 'n', 'USD', '2026-11-21', 10, 'available'), ('{version}', 'GLIACU', 'n', 'n', 'USD', '2026-11-21', 10, 'available');
 INSERT INTO gemini_usage_snapshots (task, run_id, taken_at, outcome, dry_run) VALUES ('daily-update', '9', '{updated[:11]}10:05:00Z', 'ok', 0);
 INSERT INTO market_news_runs (run_id, trade_date, slot, created_at, status) VALUES ('2026-11-24-close', '2026-11-24', 'close', '2026-11-24T06:08:00Z', 'ok');
 INSERT INTO market_brief_runs (trade_date, slot, generated_at, source, payload) VALUES ('2026-11-24', 'close', '2026-11-24T06:20:00Z', 'ai', '{{}}'),

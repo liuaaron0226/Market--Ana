@@ -17,7 +17,9 @@
 |---|---|
 | 根目錄 `*.py` | Python 資料管線（抓官方資料、算分析、呼叫 Gemini、寫 D1）。進入點：`daily_update.py`（每日更新協調器，`--redeploy`、`--republish`）、`state_sync.py`（R2 工作集 `restore`／`upload`）、`fund_compare.py`（基金）、`market_news.py`、`forecast_*.py`、`watch_*.py`、`broker_branches.py`、`market_brief.py`、`gemini_models.py`（每個 AI 任務用哪個模型） |
 | 根目錄 `test_*.py` | Python 測試 |
-| `.github/workflows/*.yml` | 13 支 GitHub Actions；**每支檔頭的註解是最好的說明** |
+| `.github/workflows/*.yml` | GitHub Actions；**每支檔頭的註解是最好的說明**。維運按鈕：`d1-migrate`、`deploy-cron-trigger`、`workflow-keepalive`、`institutional-backfill` |
+| `chain_map_flows.py`、`seeds/ai-chain-map.json` | 資金版圖的每日資料建置與公司名單（狀態與重建方法在檔頭） |
+| `cloud/lib/data-health.js` | 「資料更新」檢查規則（`RULES` 表） |
 | `cron-trigger/` | Cloudflare Worker `market-ana-cron-trigger`：準時觸發 workflow、盤中每分鐘盯價（`worker.js`、`wrangler.toml`） |
 | `cloud/` | Cloudflare Pages 網站後端：`functions/`、`lib/`（`gate.js` 入口與 API、`release-policy.js` 功能開關）、`migrations/`（D1 結構，0001～0038）、`build.mjs`（建置）、`wrangler.jsonc`（Pages 設定與功能開關）、`eval-worker/`（登入名單檢查 Worker）、`test/`（JS 測試與瀏覽器旅程） |
 | `web/` | 前端（純 HTML／CSS／JS，沒有框架） |
@@ -29,15 +31,23 @@
 
 ## 跑測試
 
-需要：Python 3.11、Node 22、`pip install -r requirements.txt`（排程只用 `requirements-daily.txt`）。
+需要：Python 3.11、Node 22、`pip install -r requirements.txt`（排程只用 `requirements-daily.txt`）。另外要自己裝、不在 requirements 裡的：`pip install pyyaml playwright` 與 `python -m playwright install chromium`（workflow 測試與瀏覽器旅程用）。
 
-**Python（在倉庫根目錄）**
+### 五條指令與乾淨檢出（clean clone、沒有本機 `data/`）的預期數字
 
-```
-python -X utf8 -m unittest discover -p "test_*.py" -s . -t .
-```
+| # | 在哪 | 指令 | 乾淨檢出的結果（2026-11-24 雲端實測） |
+|---|---|---|---|
+| 1 | 根目錄 | `python -X utf8 -m unittest discover -p "test_*.py" -s . -t .` | 2,393 個；failures=1、errors=17、skipped=56（其中 14 個要本機 `data/`） |
+| 2 | `cloud/` | `npm test`（＝`node --test --no-warnings "test/**/*.test.js"`） | 1,244 個通過；`intraday-client.test.js` 載入失敗（要 `cloud/.stock-pack.json`） |
+| 3 | `cloud/` | `node --test --no-warnings "test/**/*.test.cjs"` | `kchart-gestures.test.cjs` 23 個（**不在 `npm test` 裡**，要另外跑） |
+| 4 | 根目錄 | `node --test cron-trigger/*.test.js` | 全過（約 19 個；**不在 `npm test` 裡**） |
+| 5 | 根目錄 | `cloud/test/` 的 Python 測試**不能用 discover**（和根目錄測試同名衝突），一支一支跑：`python -X utf8 cloud/test/browser_plain_journey.py` 等 | 見下方〈瀏覽器旅程〉 |
 
-已知基線（約 2,449 個測試）：**10 個失敗＋1 個錯誤**，和你的改動無關，不要去追：
+### 這台 Windows 電腦（有 `data/`）的基線
+
+下面的數字是在站主這台 Windows 電腦、**有本機 `data/`** 時量的，換到乾淨檢出或 Linux 會不同：
+
+Python 約 2,449 個：**10 個失敗＋1 個錯誤**，和你的改動無關，不要去追：
 - `test_listed_catalog` 8 個失敗：本機測試伺服器的個股分析入口回 500（log 裡是 `analyze_v2() missing 2 required positional arguments: 'db_path' and 'otc_db_path'`）。
 - `test_listed_catalog.ListedSearchEndpointContractTest.test_otc_stale_unavailable_and_insufficient_follow_listed_rules` 1 個錯誤（`KeyError: 'stock_state'`，同一個原因）。
 - `test_listed_institutional.RealDataTest.test_real_db_covers_otc_trading_days_and_sums` 1 個失敗（讀本機 `data/` 的上櫃法人資料，日期範圍對不上）。
@@ -47,20 +57,19 @@ python -X utf8 -m unittest discover -p "test_*.py" -s . -t .
 - `test_plain_daily_workflow`、`test_strategy_workflows` 會用 `bash` 實際執行 workflow 裡的 shell 片段；**Windows 上 bash 壞掉或找不到時**會全部回 127（9＋3 個失敗）。在 Linux 或 GitHub runner 上跑才準。
 - `test_listed_catalog` 偶爾有一個搜尋請求 `TimeoutError: timed out`（電腦忙時），重跑即過。
 - 沒有本機 `data/` 的乾淨檢出，讀真實資料的測試會多失敗。
+- 寫死本機路徑 `C:/Users/User/Desktop/Market--Ana` 的：`logs/fetch_analysis_data.py` 第 14 行（有 3 個測試經由它失敗）、`test_daily_update.py`、`cloud/market_pack_daily.py`、`logs/check_*.py` 多支。`test_etf_raw_restore.py` 第 72 行在非 Windows 上會失敗。
 
-判斷方法：你的改動前後，失敗清單逐條相同就算沒弄壞。
+判斷方法：你的改動前後，失敗清單逐條相同就算沒弄壞。JS（`npm test`＋`.cjs`）在這台電腦是全部通過（約 1,282 個）。
 
-**JavaScript（在 `cloud/`）**
+### 建置網站（`cloud/build.mjs`）
+
+**乾淨檢出不能直接建置**：`build.mjs` 需要 `cloud/.stock-pack.json`、`cloud/.screens-pack.json`、`cloud/.compare-pack.json`、`cloud/.data-status.json`，以及大盤資料包（環境變數 `MARKET_DATA_DIR`，每日流程指向 `data/daily-update-state/last-market-pack`；沒設時讀 `web/`）。從 R2 還原（**在倉庫根目錄**、需 R2 金鑰）：
 
 ```
-cd cloud
-node build.mjs
-node --test --no-warnings "test/**/*.test.js" "test/**/*.test.cjs"
+python state_sync.py restore --target .
 ```
 
-`build.mjs` 需要 `cloud/.stock-pack.json` 與大盤資料包；資料包位置用環境變數 `MARKET_DATA_DIR` 指定（每日流程指向 `data/daily-update-state/last-market-pack`，要先用 `python state_sync.py restore --target .` 從 R2 取回，需 R2 金鑰；沒設時讀 `web/`）。乾淨檢出能不能直接建置：**待確認**。交接時基線是全部通過（約 1,282 個）。
-
-Worker 測試：`node --test cron-trigger/*.test.js`。
+只會帶回 `.stock-pack.json` 與大盤資料包，其他三個不在工作集裡。所以完整建置只發生在 `daily-update` 裡（它先算出這些檔再建置）；要在本機看網站改動，用 `cloud/test/journey-server.mjs`（瀏覽器旅程的測試伺服器）或請站主跑 redeploy 乾跑。
 
 **瀏覽器旅程（真瀏覽器端到端）**：`cloud/test/browser_*_journey.py`，用 Playwright（Python）。每支單獨跑：`python -X utf8 cloud/test/browser_plain_journey.py`。需要本機起測試伺服器（`cloud/test/journey-server.mjs`）與 Chromium；外部字型（Google Fonts）連不到時會截圖逾時，屬環境問題。`browser_time_share_journey.py` 偶有一項不穩定（重跑即過）。
 
@@ -73,7 +82,7 @@ Worker 測試：`node --test cron-trigger/*.test.js`。
 5. **網站裡的 AI 只用 Gemini**：排程用官方 `agy -p`（站主的 Google AI Pro 額度；這是 Antigravity 官方 FAQ 允許的「direct scripting and CI workflows」用法），朋友那條線用朋友自己的 Gemini API 金鑰。**不要**把 `agy` 包進網站後端或讓網站使用者的請求觸發它（違反條款，帳號會被停權）。
 6. **不准留下「要在某台電腦上手動跑」的步驟**。所有例行工作都要在 GitHub Actions 或 Cloudflare 上自己跑；需要人的，只能是站主用網頁按按鈕。
 7. **推上 `main` 等於隔天上線**（每日發布會部署 `main`）。介面還在改就留在別的分支；推 `main`、部署、套正式資料庫遷移、改開關、開給其他人，**每一步先問站主**。
-8. **D1 免費方案一天 10 萬列寫入**（刪除也算）；大量回補要分批、可中斷續跑。
+8. **D1 免費方案一天 10 萬列寫入**（刪除也算，台北 08:00 重置）；用完時網站與所有排程的寫入都會失敗（2026-11-24 晚發生過，起因是同一天 `republish`＋主力分點整理）。大量回補要分批、可中斷續跑，避免和 `republish` 同一天。
 
 ## 站主的介面規矩（看得到的變更）
 
@@ -92,6 +101,7 @@ Worker 測試：`node --test cron-trigger/*.test.js`。
 |---|---|
 | 改網頁或 `cloud/` 程式 | 改 → 跑 JS 測試＋相關旅程 → 給站主看樣品 → 同意後推 `main` → redeploy（[rerun-and-redeploy.md](rerun-and-redeploy.md) B）→ 正式站核對 |
 | 改 Python 管線 | 改 → 跑 Python 全套（對照基線）→ 推 `main` → 該 workflow 手動乾跑一次 |
-| 新增資料表 | 新增 `cloud/migrations/00NN_*.sql`；套到正式 D1 的方法與帳本問題見 [handover.md](handover.md) (c)，**先問站主** |
+| 新增資料表 | 新增 `cloud/migrations/00NN_*.sql` → 推 main → 請站主按 `d1-migrate`（先乾跑）。**不要直接打 `wrangler d1 migrations apply`**（見 [ops-buttons.md](ops-buttons.md)） |
+| 改排程器 `cron-trigger/` | 改 → `node --test cron-trigger/*.test.js` → 推 main → 請站主按 `deploy-cron-trigger` |
 | 換模型 | 只改 `gemini_models.py`（站主也能在網站設定頁「AI 模型」自己選）；換大盤預測的模型會換預測帳本的輸入版本 |
 | 排程失敗 | 先看 run 的紅叉步驟訊息；金鑰類看 [credentials.md](credentials.md) |

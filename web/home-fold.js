@@ -50,6 +50,19 @@
       const key = event.target.closest('button[aria-controls]');
       if (key) showOnly(key.getAttribute('aria-expanded') === 'true' ? null : key);
     });
+    // 返回原處（nav-return.js，本人 2026-11-24）：從個股頁等處按返回回到這一頁時，原本開著的那一類再打開。
+    // 一般打開這一頁照舊全部收著（上面「不記住上次開哪一類」不變）。有的鍵要等資料到了才出現（消息、配息），等它出現再點
+    const openId = () => keys.find(key => key.getAttribute('aria-expanded') === 'true')?.getAttribute('aria-controls') || null;
+    window.NavReturn?.remember('cat', {
+      save: openId,
+      // 整頁捲回去時對齊開著的那一類（它上面的區塊晚一點才長出來、高度不同，看到的清單位置也一樣）
+      anchor: () => (openId() ? document.getElementById(openId()) : null),
+      restore: async id => {
+        const key = keys.find(item => item.getAttribute('aria-controls') === id);
+        if (!key || !(await window.NavReturn.until(() => !key.hidden))) return;
+        if (key.getAttribute('aria-expanded') !== 'true') key.click();
+      },
+    });
   }
 
   document.querySelectorAll('button[aria-haspopup="dialog"][aria-controls]').forEach(opener => {

@@ -37,15 +37,24 @@
 | 事前預測歷史重播 | `forecast-replay` | 平日 10:00（開關打開才寫） | 只影響重播參考成績 |
 | 盤中即時盯價、到價推播 | Worker `market-ana-cron-trigger` | 平日 09:00–13:59 每分鐘 | 手機收不到到價推播 |
 | 登入名單檢查 | Worker `market-ana-eval` | 每次登入 | 核准的人登不進去 |
+| 資金版圖（`/chain-map`）每月資金資料 | `daily-update` 裡的一步（開關 `MARKET_ANA_CHAIN_MAP_SCHEDULE`） | 每日更新發布後 | 資金版圖最新月份不動 |
+| 基金淨值第二個抓取點 | `announcements` 裡的 `fund-nav` | 每天 08:00 | 基金淨值缺口變多 |
+| 保活（防 GitHub 60 天停用排程） | `workflow-keepalive`（接在 `announcements`、`market-news` 後面） | 每天 08:00 起 | 兩個月沒提交後所有排程停 |
+| 資料更新檢查與異常推播 | Worker `market-ana-cron-trigger` | 交易日約 11 次、週末 1 次 | 出事時手機收不到「資料更新異常」 |
+| 維運按鈕（只能手動） | `d1-migrate`、`deploy-cron-trigger`、`institutional-backfill` | 只能手動 | 見 [ops-buttons.md](ops-buttons.md)、[data-gaps.md](data-gaps.md) |
 | 手動檢查用 | `agy-auth-probe`（Gemini 登入檔是否還有效）、`eodhd-probe`（EODHD 金鑰） | 只能手動 | — |
 
 全部都在雲端跑，**不需要這台電腦**。例外與缺口見 [handover.md](handover.md)。
+
+> **2026-11-24 晚的事故**：同一天做了 `republish` 又做了主力分點整理，正式資料庫（D1）撞到免費方案「每天 10 萬列寫入」上限。用完時**所有寫入都失敗**，直到台北早上 08:00 重置：使用者存不了自選股、庫存、畫線；有寫入的排程（消息、07:20 晨間預測）什麼都沒記到。教訓與處理見 [daily-check.md](daily-check.md)〈D1 寫入額度用完〉。
 
 ## 出事時開哪一份
 
 | 狀況 | 打開 |
 |---|---|
-| 想知道今天有沒有正常更新 | [daily-check.md](daily-check.md) |
+| 想知道今天有沒有正常更新 | [daily-check.md](daily-check.md)；設定（齒輪）→「資料更新」那一籤，說明在 [data-health.md](data-health.md) |
+| 手機收到「資料更新異常」 | [data-health.md](data-health.md) |
+| 要套資料庫變更、部署排程器 | [ops-buttons.md](ops-buttons.md) |
 | 某支 workflow 紅了、要重跑；改了程式要上線；同一天要重新發布 | [rerun-and-redeploy.md](rerun-and-redeploy.md) |
 | 某個金鑰過期、AI 文字變成「依當天數字自動整理」、Gemini 登入失效 | [credentials.md](credentials.md) |
 | 基金淨值有缺口、要補抓歷史 | [data-gaps.md](data-gaps.md) |

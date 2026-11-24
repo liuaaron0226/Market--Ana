@@ -10,6 +10,11 @@ GitHub Actions 排程（台股從每日更新的工作集重算、美股來源�
     python chain_map_bootstrap.py --flows <stock_flows.json> --sql-output <檔>
     npx wrangler@4 d1 execute market-ana-accounts --remote --file <檔>      ← 本人核准後由 owner 手動執行一次
 
+D1 寫不進去時（2026-11-24 晚免費方案當天寫入額度用完）改走 R2：
+
+    python chain_map_bootstrap.py --flows <stock_flows.json> --json-output <檔>
+    npx wrangler@4 r2 object put market-ana-state/chain-map/current/flows.json --file <檔> --content-type application/json --remote
+
 只寫資金數字那一張（chain_map_flows）；產業鏈定義不用寫，chain_map_definitions 是空的時候網站用入庫的 seeds/ai-chain-map.json。
 寫進的那一列：version＝bootstrap-<最後一個月>、as_of＝最後一個月、built_at＝現在（UTC）。表裡已經有排程寫的列
 （version 不是 bootstrap- 開頭）就什麼都不寫，不會蓋過每日建置。payload 的約定（chain-map-flows/v1）見 cloud/lib/chain-map.js 開頭；
@@ -26,6 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import chain_map_flows as cm
 from ledger_core import sql_literal
 
 TABLE = "chain_map_flows"
@@ -96,23 +102,46 @@ def bootstrap_sql(payload: dict[str, Any], *, built_at: str) -> str:
     return sql
 
 
+def r2_object(payload: dict[str, Any], *, built_at: str) -> dict[str, Any]:
+    """R2 chain-map/current/flows.json 的內容（2026-11-24 晚 D1 寫入額度用完時的備援，網站讀法見 cloud/lib/chain-map.js）：
+    約定的五個鍵（不留 owner）、舊代號改成新代號（PSTG → P，和每日建置一樣），外面包 schema／version／as_of／built_at。"""
+    flows = validate(payload)
+    us = dict(flows["us"])
+    for old, new, _ in cm.RENAMES:
+        if old in us and new not in us:
+            us[new] = us.pop(old)
+    flows["us"] = us
+    as_of = flows["months"][-1]
+    return cm.current_object(flows, version=f"bootstrap-{as_of}", as_of=as_of, built_at=built_at)
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="一次性：樣品 stock_flows.json → 寫進 chain_map_flows 的一列 SQL（不連遠端）")
+    parser = argparse.ArgumentParser(description="一次性：樣品 stock_flows.json → 寫進 chain_map_flows 的一列 SQL、或 R2 的那一份 JSON（不連遠端）")
     parser.add_argument("--flows", required=True, help="stock_flows.json 的路徑")
-    parser.add_argument("--sql-output", required=True, help="寫出的 SQL 檔")
+    parser.add_argument("--sql-output", help="寫出的 SQL 檔（D1）")
+    parser.add_argument("--json-output", help="寫出的 JSON 檔（上傳到 R2 market-ana-state/chain-map/current/flows.json）")
     parser.add_argument("--built-at", help="建置時間（ISO 8601，UTC）；不給就用現在")
     args = parser.parse_args(argv)
+    if not (args.sql_output or args.json_output):
+        parser.error("要給 --sql-output 或 --json-output")
     built_at = args.built_at or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
         payload = json.loads(Path(args.flows).read_text(encoding="utf-8"))
-        sql = bootstrap_sql(payload, built_at=built_at)
+        sql = bootstrap_sql(payload, built_at=built_at) if args.sql_output else None
+        obj = r2_object(payload, built_at=built_at) if args.json_output else None
     except (OSError, ValueError) as error:
         print(f"沒有產生：{error}", file=sys.stderr)
         return 1
-    Path(args.sql_output).write_text(sql, encoding="utf-8", newline="\n")
     months = payload["months"]
-    print(f"chain_map_flows 一列（bootstrap-{months[-1]}）：{months[0]}～{months[-1]}，法人自 {months[payload['inst0']] if payload['inst0'] < len(months) else '—'}，"
-          f"台股 {len(payload['tw'])} 檔、美股 {len(payload['us'])} 檔，{len(sql.encode('utf-8'))} 位元組")
+    summary = (f"{months[0]}～{months[-1]}，法人自 {months[payload['inst0']] if payload['inst0'] < len(months) else '—'}，"
+               f"台股 {len(payload['tw'])} 檔、美股 {len(payload['us'])} 檔")
+    if sql is not None:
+        Path(args.sql_output).write_text(sql, encoding="utf-8", newline="\n")
+        print(f"chain_map_flows 一列（bootstrap-{months[-1]}）：{summary}，{len(sql.encode('utf-8'))} 位元組")
+    if obj is not None:
+        text = json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+        Path(args.json_output).write_text(text, encoding="utf-8", newline="\n")
+        print(f"R2 {cm.CURRENT_KEY}（bootstrap-{months[-1]}，built_at {built_at}）：{summary}，{len(text.encode('utf-8'))} 位元組")
     return 0
 
 

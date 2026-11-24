@@ -150,6 +150,7 @@
 .st-health li:not([data-state="ok"]) .st-hstate { color: var(--ink); font-weight: 600; }
 .st-health li:is([data-state="late"], [data-state="degraded"]) .st-hstate::before { background: var(--gold); }
 .st-health li[data-state="failed"] .st-hstate::before { background: var(--up); }
+.st-health li[data-state="error"] .st-hstate::before { background: var(--faint); }
 
 /* ---------- AI 模型（本人 11-19 晚選樣品 C：每列寫現值、點開才選；改了才出現還原／存檔）---------- */
 /* 站主有四顆籤：手機上字不折行 */
