@@ -1594,7 +1594,7 @@ class Handler(SimpleHTTPRequestHandler):
             "next_cursor": next_cursor,
         }
         # 基金當成一般個股 03 票：基金是 items 裡的一般一筆（類別基金、市場境外基金），和雲端 gate 同一組比對規則；
-        # 本機沒有開關與帳號，一律看得到。基金只有一檔，只放在第一頁最後面，不佔股票的分頁。
+        # 本機沒有開關與帳號，一律看得到。基金只有幾檔（fund_compare.FUNDS），只放在第一頁最後面，不佔股票的分頁。
         if int(cursor or 0) == 0:
             import fund_compare
             import fund_stock

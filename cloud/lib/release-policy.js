@@ -73,7 +73,7 @@ export function stockEtfsVisible(env, isOwner) {
 }
 
 // 基金當成一般個股（2026-11-18 規格 .scratch/fund-as-stock/spec.md，03 票）：自己一個三種狀態的開關，比照 ETF、和其他開關都不連動。
-// 對這個人是開的時候，名錄裡的基金（目前只有貝萊德世界科技 A10）搜尋得到、有個股頁；關的時候和沒有這個功能時一樣。
+// 對這個人是開的時候，名錄裡的基金（fund_compare.FUNDS：貝萊德世界科技 A10、安聯收益成長、摩根多重收益）搜尋得到、有個股頁；關的時候和沒有這個功能時一樣。
 function stockFundsMode(env) {
   return threeStateMode(env?.MARKET_ANA_STOCK_FUNDS);
 }

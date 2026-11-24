@@ -24,7 +24,7 @@ KEYS = {"tick", "level", "low", "high", "distance_pct", "tier", "signal_count", 
 
 
 def payload_on(as_of: str, loader=REAL) -> dict:
-    _, analyses, _ = fund_stock.fund_rows(as_of, loader=loader)
+    _, analyses, _ = fund_stock.fund_rows(as_of, loader=loader, codes=["BLKTENAU"])   # 預期值取自這檔的回補原件
     return analyses[0]["payload"]
 
 

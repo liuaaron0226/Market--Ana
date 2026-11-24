@@ -31,7 +31,9 @@
     return {
       latest: latest && {
         amount: amountText(latest.amount), unit: `${currency}／單位`,
-        dates: `除息 ${latest.ex_date} · 發放 ${latest.pay_date}`, source: latestSource(latest),
+        // 集保較早的配息列有的沒有發放日（N/A → null）：只寫除息日，不寫「發放 null」
+        dates: latest.pay_date ? `除息 ${latest.ex_date} · 發放 ${latest.pay_date}` : `除息 ${latest.ex_date}`,
+        source: latestSource(latest),
       },
       years,
       note: dist?.capital_note || '',

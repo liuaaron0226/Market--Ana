@@ -1,0 +1,94 @@
+{
+  "schema": "fund-backfill/v1",
+  "fund_code": "AGIFFVM",
+  "source_code": "AGIF-FVM",
+  "isin": "LU0820561818",
+  "name": "安聯收益成長基金-AM穩定月收類股(美元)",
+  "method": "內建瀏覽器以人的速度開啟集保「基金資訊觀測站」網頁、點選畫面上的期間與分頁；只記錄頁面自己發出的請求所收到的回應，沒有另外呼叫任何 API，沒有遇到驗證碼。核對：寫檔後的 SHA-256 與頁內對同一份內容算的 SHA-256 相同。",
+  "patching": "做法同 seeds/funds/BLKTENAU/backfill-manifest.json。淨值與配息都從 2021 年 11 月起讀（五年）；配息分頁前幾筆的發放日與配息組成在原網頁就是 N/A。",
+  "owner_decision": "2026-11-17 owner session 定案的回補方法（瀏覽器以人的速度讀一次、存原件，不打內部 API、不解驗證碼）；2026-11-24 本人要求把這檔加入股票池，照同一方法回補。",
+  "files": [
+    {
+      "file": "nav-backfill.csv",
+      "kind": "nav",
+      "page_url": "https://www.fundclear.com.tw/fund-basic-info?site=offshore&key=AGIF-FVM&tab=fund-nav",
+      "page_action": "淨值期間點「五年」",
+      "response_of": "POST /api/offshore/fund-basic/query-nav-value/picture",
+      "request_body": "{\"fundCode\":\"AGIF-FVM\",\"startDate\":\"2021/11/24\",\"endDate\":\"2026/11/23\"}",
+      "read_at": "2026-11-24T09:00:24.917Z",
+      "format": "回應是逐日 {navDate, nav, navChangeRate, newestNav} 的 JSON 陣列；本檔只留 navDate（改成 YYYY-MM-DD）與 nav 原字串，依日期由舊到新、每行一筆、結尾換行。",
+      "raw_response_bytes": 102725,
+      "raw_response_sha256": "6c6f29591f37489e8e47eb03fa5c35f350f0b5a367419dc40ad9811f776875d9",
+      "rows": 1209,
+      "first": "2021-11-24",
+      "last": "2026-11-23",
+      "sha256": "ac6ba2b8e851eb137d465c8f5b8d5367bca3515aa1b74cd843fb03fdd5981432"
+    },
+    {
+      "file": "distributions-backfill-p1.json",
+      "kind": "distributions",
+      "page_url": "https://www.fundclear.com.tw/fund-basic-info?site=offshore&key=AGIF-FVM&tab=latest-distribution",
+      "page_action": "配息基準日 2021年11月～2026年11月，按「查詢」",
+      "response_of": "POST /api/offshore/fund-basic/query-latest-nav",
+      "request_body": "{\"fundCode\":\"AGIF-FVM\",\"startDate\":\"2021/11\",\"endDate\":\"2026/11\",\"_pageNum\":1,\"_pageSize\":10}",
+      "read_at": "2026-11-24T09:03:27.748Z",
+      "format": "原始回應全文（未改動）",
+      "sha256": "f769a96d293a6a6b8e3c1ea09771bd41ee37feb02d1adcde0d7c7f4e1a646c7b"
+    },
+    {
+      "file": "distributions-backfill-p2.json",
+      "kind": "distributions",
+      "page_url": "https://www.fundclear.com.tw/fund-basic-info?site=offshore&key=AGIF-FVM&tab=latest-distribution",
+      "page_action": "表格下方按「下一頁」",
+      "response_of": "POST /api/offshore/fund-basic/query-latest-nav",
+      "request_body": "{\"fundCode\":\"AGIF-FVM\",\"startDate\":\"2021/11\",\"endDate\":\"2026/11\",\"_pageNum\":2,\"_pageSize\":10}",
+      "read_at": "2026-11-24T09:03:55.340Z",
+      "format": "原始回應全文（未改動）",
+      "sha256": "58a84bb852b2f7989b3b28c8fcf9abd99a1956e3ef74e9d4e7636192f4b5a018"
+    },
+    {
+      "file": "distributions-backfill-p3.json",
+      "kind": "distributions",
+      "page_url": "https://www.fundclear.com.tw/fund-basic-info?site=offshore&key=AGIF-FVM&tab=latest-distribution",
+      "page_action": "表格下方按「下一頁」",
+      "response_of": "POST /api/offshore/fund-basic/query-latest-nav",
+      "request_body": "{\"fundCode\":\"AGIF-FVM\",\"startDate\":\"2021/11\",\"endDate\":\"2026/11\",\"_pageNum\":3,\"_pageSize\":10}",
+      "read_at": "2026-11-24T09:03:58.392Z",
+      "format": "原始回應全文（未改動）",
+      "sha256": "dff147ca8c16bfddd5a60db945e8a4967d92ad21341b2facc95319eebeadeea7"
+    },
+    {
+      "file": "distributions-backfill-p4.json",
+      "kind": "distributions",
+      "page_url": "https://www.fundclear.com.tw/fund-basic-info?site=offshore&key=AGIF-FVM&tab=latest-distribution",
+      "page_action": "表格下方按「下一頁」",
+      "response_of": "POST /api/offshore/fund-basic/query-latest-nav",
+      "request_body": "{\"fundCode\":\"AGIF-FVM\",\"startDate\":\"2021/11\",\"endDate\":\"2026/11\",\"_pageNum\":4,\"_pageSize\":10}",
+      "read_at": "2026-11-24T09:04:01.414Z",
+      "format": "原始回應全文（未改動）",
+      "sha256": "1144409d587fed6c7303e816a947c6c7a81a6d1c3b1625f2e7609c9e3f34b50e"
+    },
+    {
+      "file": "distributions-backfill-p5.json",
+      "kind": "distributions",
+      "page_url": "https://www.fundclear.com.tw/fund-basic-info?site=offshore&key=AGIF-FVM&tab=latest-distribution",
+      "page_action": "表格下方按「下一頁」",
+      "response_of": "POST /api/offshore/fund-basic/query-latest-nav",
+      "request_body": "{\"fundCode\":\"AGIF-FVM\",\"startDate\":\"2021/11\",\"endDate\":\"2026/11\",\"_pageNum\":5,\"_pageSize\":10}",
+      "read_at": "2026-11-24T09:04:04.710Z",
+      "format": "原始回應全文（未改動）",
+      "sha256": "f790be42d97d009dbf73143a117334129a46f0f0891c2ad8bb81074ea427ebb7"
+    },
+    {
+      "file": "distributions-backfill-p6.json",
+      "kind": "distributions",
+      "page_url": "https://www.fundclear.com.tw/fund-basic-info?site=offshore&key=AGIF-FVM&tab=latest-distribution",
+      "page_action": "表格下方按「下一頁」",
+      "response_of": "POST /api/offshore/fund-basic/query-latest-nav",
+      "request_body": "{\"fundCode\":\"AGIF-FVM\",\"startDate\":\"2021/11\",\"endDate\":\"2026/11\",\"_pageNum\":6,\"_pageSize\":10}",
+      "read_at": "2026-11-24T09:04:08.812Z",
+      "format": "原始回應全文（未改動）",
+      "sha256": "f765d555ce455bc472b0c1a50e277401fd62c14433dc56d8ae7d83abcacd0e68"
+    }
+  ]
+}

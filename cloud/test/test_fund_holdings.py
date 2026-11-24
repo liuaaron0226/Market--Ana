@@ -30,6 +30,7 @@ from cloud import build_stock_pack as build  # noqa: E402
 EMPTY_RAW = Path(tempfile.mkdtemp(prefix="fund-raw-empty-"))
 REAL = partial(fund_compare.load_history, raw_dir=EMPTY_RAW)
 FX = [("2026-11-14", 32.1), ("2026-11-17", 32.4), ("2026-11-19", 33.0)]
+ONE = ["BLKTENAU"]   # 預期值取自這檔的回補原件；名錄裡其他基金另有測試（test_fund_on_site_build.MoreFundsTests）
 
 
 def with_fx(fx):
@@ -40,20 +41,20 @@ def with_fx(fx):
 
 class FundAnalysisFxTests(unittest.TestCase):
     def test_analysis_carries_the_latest_fx_on_or_before_the_data_date(self) -> None:
-        _, analyses, _ = fund_stock.fund_rows("2026-11-18", loader=with_fx(FX))
+        _, analyses, _ = fund_stock.fund_rows("2026-11-18", loader=with_fx(FX), codes=ONE)
         payload = analyses[0]["payload"]
         self.assertEqual(payload["fx"], {"pair": "USD/TWD", "rate": 32.4, "date": "2026-11-17", "source": "中央銀行"})
         build._check_payload("BLKTENAU", payload)
 
     def test_broken_fx_rows_do_not_drop_the_nav_analysis(self) -> None:
-        rows, analyses, failures = fund_stock.fund_rows("2026-11-18", loader=with_fx([("2026-11-17", "壞掉")]))
+        rows, analyses, failures = fund_stock.fund_rows("2026-11-18", loader=with_fx([("2026-11-17", "壞掉")]), codes=ONE)
         self.assertEqual((rows[0]["analysis_status"], len(analyses), failures), ("available", 1, []))
         self.assertIsNone(analyses[0]["payload"]["fx"])
 
     def test_no_fx_means_no_fx_and_no_made_up_number(self) -> None:
-        _, analyses, _ = fund_stock.fund_rows("2026-11-18", loader=with_fx([]))
+        _, analyses, _ = fund_stock.fund_rows("2026-11-18", loader=with_fx([]), codes=ONE)
         self.assertIsNone(analyses[0]["payload"]["fx"])
-        _, analyses, _ = fund_stock.fund_rows("2026-11-18", loader=with_fx([("2026-11-19", 33.0)]))
+        _, analyses, _ = fund_stock.fund_rows("2026-11-18", loader=with_fx([("2026-11-19", 33.0)]), codes=ONE)
         self.assertIsNone(analyses[0]["payload"]["fx"], "資料日之後的匯率不用")
 
     def test_twd_quote_is_nav_times_fx(self) -> None:

@@ -28,7 +28,7 @@ REAL = partial(fund_compare.load_history, raw_dir=EMPTY_RAW)
 
 
 def fund_payload(as_of: str = DATA_DATE, loader=REAL) -> dict:
-    _, analyses, _ = fund_stock.fund_rows(as_of, loader=loader)
+    _, analyses, _ = fund_stock.fund_rows(as_of, loader=loader, codes=["BLKTENAU"])   # 預期值取自這檔的回補原件
     return analyses[0]["payload"]
 
 

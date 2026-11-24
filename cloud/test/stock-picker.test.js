@@ -81,3 +81,10 @@ test("打的字剛好是某一檔的代碼（例如基金 BLKTENAU，不分大�
   assert.equal(decide("blktenau", [長榮航, fund], { strict: true }).option.code, "BLKTENAU");
 });
 
+test("照集保寫法打基金代碼（AGIF-FVM，站上代碼 AGIFFVM）也算完全相同", () => {
+  const allianz = { kind: "stock", code: "AGIFFVM", name: "安聯收益成長 AM 穩定月收", title: "AGIFFVM 安聯收益成長 AM 穩定月收", meta: "基金", fund: true };
+  for (const term of ["AGIF-FVM", "agif-fvm", "AGIFFVM"]) {
+    assert.equal(decide(term, [長榮航, allianz], { strict: true }).option?.code, "AGIFFVM", term);
+  }
+});
+

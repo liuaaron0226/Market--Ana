@@ -1,0 +1,94 @@
+{
+  "schema": "fund-backfill/v1",
+  "fund_code": "GLIACU",
+  "source_code": "GLIACU",
+  "isin": "LU2347655073",
+  "name": "摩根投資基金 - 多重收益基金 - JPM多重收益(美元對沖) - A股(穩定月配)",
+  "method": "內建瀏覽器以人的速度開啟集保「基金資訊觀測站」網頁、點選畫面上的期間與分頁；只記錄頁面自己發出的請求所收到的回應，沒有另外呼叫任何 API，沒有遇到驗證碼。核對：寫檔後的 SHA-256 與頁內對同一份內容算的 SHA-256 相同。",
+  "patching": "做法同 seeds/funds/BLKTENAU/backfill-manifest.json。淨值與配息都從 2021 年 11 月起讀（五年）；配息分頁前幾筆的發放日與配息組成在原網頁就是 N/A。",
+  "owner_decision": "2026-11-17 owner session 定案的回補方法（瀏覽器以人的速度讀一次、存原件，不打內部 API、不解驗證碼）；2026-11-24 本人要求把這檔加入股票池，照同一方法回補。",
+  "files": [
+    {
+      "file": "nav-backfill.csv",
+      "kind": "nav",
+      "page_url": "https://www.fundclear.com.tw/fund-basic-info?site=offshore&key=GLIACU&tab=fund-nav",
+      "page_action": "淨值期間點「五年」",
+      "response_of": "POST /api/offshore/fund-basic/query-nav-value/picture",
+      "request_body": "{\"fundCode\":\"GLIACU\",\"startDate\":\"2021/11/24\",\"endDate\":\"2026/11/23\"}",
+      "read_at": "2026-11-24T09:09:03.773Z",
+      "format": "回應是逐日 {navDate, nav, navChangeRate, newestNav} 的 JSON 陣列；本檔只留 navDate（改成 YYYY-MM-DD）與 nav 原字串，依日期由舊到新、每行一筆、結尾換行。",
+      "raw_response_bytes": 101495,
+      "raw_response_sha256": "5ce6cce0169bcb5df4df78c67093b27d4a7ac4ebdb0fe3821ebe54ebcba8756c",
+      "rows": 1189,
+      "first": "2021-11-24",
+      "last": "2026-11-23",
+      "sha256": "77ead409c43e5dd28a1e29ad4f23a27be71df5d3b2510cbe9bee7e6a7c070183"
+    },
+    {
+      "file": "distributions-backfill-p1.json",
+      "kind": "distributions",
+      "page_url": "https://www.fundclear.com.tw/fund-basic-info?site=offshore&key=GLIACU&tab=latest-distribution",
+      "page_action": "配息基準日 2021年11月～2026年11月，按「查詢」",
+      "response_of": "POST /api/offshore/fund-basic/query-latest-nav",
+      "request_body": "{\"fundCode\":\"GLIACU\",\"startDate\":\"2021/11\",\"endDate\":\"2026/11\",\"_pageNum\":1,\"_pageSize\":10}",
+      "read_at": "2026-11-24T09:11:59.575Z",
+      "format": "原始回應全文（未改動）",
+      "sha256": "ee383b059e3e00fddb4bedf309021d6bd73c343c449629f3172fd249f791a3d2"
+    },
+    {
+      "file": "distributions-backfill-p2.json",
+      "kind": "distributions",
+      "page_url": "https://www.fundclear.com.tw/fund-basic-info?site=offshore&key=GLIACU&tab=latest-distribution",
+      "page_action": "表格下方按「下一頁」",
+      "response_of": "POST /api/offshore/fund-basic/query-latest-nav",
+      "request_body": "{\"fundCode\":\"GLIACU\",\"startDate\":\"2021/11\",\"endDate\":\"2026/11\",\"_pageNum\":2,\"_pageSize\":10}",
+      "read_at": "2026-11-24T09:12:13.745Z",
+      "format": "原始回應全文（未改動）",
+      "sha256": "9f1b9033eb2c6501e1005eb4970d0935eefcf8be6114c3bd62584b53bc3f7cde"
+    },
+    {
+      "file": "distributions-backfill-p3.json",
+      "kind": "distributions",
+      "page_url": "https://www.fundclear.com.tw/fund-basic-info?site=offshore&key=GLIACU&tab=latest-distribution",
+      "page_action": "表格下方按「下一頁」",
+      "response_of": "POST /api/offshore/fund-basic/query-latest-nav",
+      "request_body": "{\"fundCode\":\"GLIACU\",\"startDate\":\"2021/11\",\"endDate\":\"2026/11\",\"_pageNum\":3,\"_pageSize\":10}",
+      "read_at": "2026-11-24T09:12:17.174Z",
+      "format": "原始回應全文（未改動）",
+      "sha256": "db12f911e309f0416b90dfb65559102e82aeef8c86ffd8277109f7e94954ae1c"
+    },
+    {
+      "file": "distributions-backfill-p4.json",
+      "kind": "distributions",
+      "page_url": "https://www.fundclear.com.tw/fund-basic-info?site=offshore&key=GLIACU&tab=latest-distribution",
+      "page_action": "表格下方按「下一頁」",
+      "response_of": "POST /api/offshore/fund-basic/query-latest-nav",
+      "request_body": "{\"fundCode\":\"GLIACU\",\"startDate\":\"2021/11\",\"endDate\":\"2026/11\",\"_pageNum\":4,\"_pageSize\":10}",
+      "read_at": "2026-11-24T09:12:20.311Z",
+      "format": "原始回應全文（未改動）",
+      "sha256": "e35e2c6778d26c0a026fe7bb05d4af7bc2811813513772dd1cfe6c6236547e7d"
+    },
+    {
+      "file": "distributions-backfill-p5.json",
+      "kind": "distributions",
+      "page_url": "https://www.fundclear.com.tw/fund-basic-info?site=offshore&key=GLIACU&tab=latest-distribution",
+      "page_action": "表格下方按「下一頁」",
+      "response_of": "POST /api/offshore/fund-basic/query-latest-nav",
+      "request_body": "{\"fundCode\":\"GLIACU\",\"startDate\":\"2021/11\",\"endDate\":\"2026/11\",\"_pageNum\":5,\"_pageSize\":10}",
+      "read_at": "2026-11-24T09:12:23.028Z",
+      "format": "原始回應全文（未改動）",
+      "sha256": "0c4413fe76b0f5aa446a8c4ba3de4a7e3f212d4e52c2f5c2b517db41b726cd77"
+    },
+    {
+      "file": "distributions-backfill-p6.json",
+      "kind": "distributions",
+      "page_url": "https://www.fundclear.com.tw/fund-basic-info?site=offshore&key=GLIACU&tab=latest-distribution",
+      "page_action": "表格下方按「下一頁」",
+      "response_of": "POST /api/offshore/fund-basic/query-latest-nav",
+      "request_body": "{\"fundCode\":\"GLIACU\",\"startDate\":\"2021/11\",\"endDate\":\"2026/11\",\"_pageNum\":6,\"_pageSize\":10}",
+      "read_at": "2026-11-24T09:12:25.772Z",
+      "format": "原始回應全文（未改動）",
+      "sha256": "1025eda95be6286de3d3636d4ba296913f50132adce03d30d89ac2e09a4f8751"
+    }
+  ]
+}

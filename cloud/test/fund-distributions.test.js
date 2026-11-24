@@ -53,6 +53,11 @@ test("最近一次：每單位配息（美元）、除息日與發放日；來�
   assert.equal(capital.latest.source, "78.56% 來自本金");
 });
 
+test("最近一次沒有發放日（集保寫 N/A，例如安聯收益成長 2021～2022 年的幾筆）：只寫除息日，不寫「發放 null」", () => {
+  const view = read({ ...DIST, latest: { ...DIST.latest, pay_date: null } });
+  assert.equal(view.latest.dates, "除息 2026-10-30");
+});
+
 test("各年：新的在前，次數、合計（美元）與來源；有本金的年份標出來", () => {
   const view = read(DIST);
   assert.deepEqual(view.years.map((y) => [y.year, y.facts, y.source, y.capital]), [
