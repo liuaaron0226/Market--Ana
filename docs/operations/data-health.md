@@ -41,6 +41,7 @@
 | 現金水位 | 交易日 09:30 前（開關有開才會出現） | level-daily | — | level-daily |
 | 今日 AI 解讀 | 交易日 22:30 前（開關有開才會出現） | ai-digest | 解讀未完成（Gemini） | ai-digest |
 | 資金版圖 | 交易日 22:30 前（每日排程寫過資料庫才會出現；只看資料庫，R2 那一份沒有檢查） | 資金版圖的排程 | — | — |
+| 排程保活 | 最近 8 天內至少成功一次（超過 16 天＝停止；資料庫套過 0041 才會出現） | Actions 左邊的 workflow-keepalive：紅色就點進去看摘要。寫「必要的卻被手動停用」＝到那一支按「Enable workflow」；寫「啟用失敗（HTTP 403）」或「心跳 commit 推不上 main」＝GitHub 的權限設定被改過（Settings → Actions → General → Workflow permissions 要允許寫入，main 不能擋 github-actions 推送）。整頁都沒有新的執行＝保活本身被停用，按「Enable workflow」再手動跑一次 | — | workflow-keepalive |
 
 ## 全部同時延遲
 
@@ -48,6 +49,7 @@
 
 1. 排程是由 Cloudflare 的排程器（market-ana-cron-trigger）去叫 GitHub 的，它用的權杖是 `GITHUB_DISPATCH_TOKEN`。權杖到期就整個停：GitHub → Settings → Developer settings → Personal access tokens 重新產生，再到 Cloudflare 的 Workers → market-ana-cron-trigger → Settings → Variables and Secrets 換掉。
 2. 公開倉庫 60 天沒有任何提交，GitHub 會把有排程的 workflow 停用：Actions 頁上方會有黃色提示，按「Enable workflow」。
+   平常不會發生：workflow-keepalive 每 25 天自動提交一次 `ops/heartbeat.txt`，並把被停用的排程重新啟用（上表「排程保活」那一列）。
 3. Cloudflare 權杖（`CLOUDFLARE_API_TOKEN`）到期：每一支排程的第一步「驗證 Cloudflare token」就會失敗。
 
 ## 誰在檢查

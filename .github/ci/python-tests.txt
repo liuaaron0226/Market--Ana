@@ -1,0 +1,111 @@
+# tests.yml 在 GitHub 上跑的 Python 測試模組（根目錄的 test_*.py）。一行一個；# 開頭是說明。
+# 2026-11-24 在一份沒有 data/ 的乾淨工作樹上逐一跑過（Python 3.11，MARKET_ANA_SKIP_STEP_RUNS=1），下面這些全部通過。
+# 新加的測試模組不會自動加進來：確定它不需要 data/、在乾淨的 checkout 會過，再加一行。
+#
+# 沒放進來的（和原因）：
+#   需要本機 data/（官方原檔、stock-history.sqlite 等，倉庫裡沒有）：
+#     test_benchmark_compare test_candidates_api test_fundamentals_history test_listed_catalog test_live_server_funds
+#     test_market_screens_publish test_otc_catalog test_screens_api
+#   開發機缺 idna（requests 的相依）所以沒驗到；GitHub 上裝了 requests 應該會過，第一次綠了再加：
+#     test_daily_ingest test_etf_history test_etf_raw_restore test_fetch_analysis_current_month test_otc_history
+#     test_valuation_history test_workflow
+#   在乾淨的工作樹上就失敗（沒有查原因）：test_daily_update（2 項）、test_plain_daily_workflow（9 項）、
+#     test_strategy_workflows（3 項，自己實跑 bash）
+test_ai_digest
+test_ai_digest_inputs
+test_ai_digest_trigger
+test_announcements
+test_backtest
+test_bollinger
+test_broker_branches
+test_broker_branches_workflow
+test_candidate_snapshots
+test_capital_supplement
+test_chain_map_bootstrap
+test_chain_map_flows
+test_chain_map_workflow
+test_chart_projection
+test_chip_detail_pack
+test_chip_streaks
+test_corporate_actions
+test_d1_migrate
+test_eodhd_cache
+test_etf_classification
+test_etf_constituents
+test_finhunt_screens
+test_forecast_experience
+test_forecast_ledger
+test_forecast_replay
+test_forecast_replay_chips
+test_forecast_run
+test_forecast_store
+test_forecast_workflow
+test_foreign_flow
+test_foreign_futures
+test_friend_ai_digest
+test_friend_ai_pipeline
+test_friend_ai_stocks
+test_friend_ai_workflow
+test_fund_compare
+test_gemini_models
+test_gemini_settings
+test_gemini_usage
+test_impact_watch
+test_impact_watch_news
+test_impact_watch_stocks
+test_institutional_backfill
+test_ledger_long_paths
+test_level_signals
+test_level_strategy
+test_licensed_inputs
+test_liquid_universe
+test_listed_institutional
+test_local_ai_digest
+test_long_term_evaluation
+test_long_term_screen
+test_margin_history
+test_market_brief
+test_market_brief_workflow
+test_market_layers
+test_market_news
+test_market_news_night_workflow
+test_market_trend
+test_news_feeds
+test_order_flow
+test_otc_corporate_actions
+test_otc_market_data
+test_overseas_inputs
+test_overseas_peers
+test_plain_daily
+test_public_log
+test_screen_snapshots_kept
+test_sector_rotation
+test_short_term_evaluation
+test_short_term_screen
+test_state_sync
+test_stock_codes
+test_stock_history
+test_strategy_engine
+test_strategy_v02
+test_strategy_v1
+test_strong_stocks
+test_tdcc_backfill
+test_tdcc_holders
+test_text_whitelist
+test_twon_analyze
+test_twon_analyze_v2
+test_twon_data_otc
+test_twon_fixtures
+test_twon_indicators
+test_twon_price_adjustment
+test_twon_profiles
+test_virtual_ledger
+test_watch_inputs
+test_watch_ledger
+test_watch_news
+test_watch_news_gnews
+test_watch_run
+test_watch_workflow
+test_workflow_keepalive
+test_wyckoff_lpsy
+test_ci_workflow

@@ -1,17 +1,28 @@
-# 有排程的 workflow 保活（2026-11-24）。GitHub：公開 repo 連續 60 天沒有活動，有 schedule 的 workflow 會被自動停用，
-# 停用後連 API 觸發（workflow_dispatch）也會被拒，Cloudflare cron-trigger 就送不進 daily-update，網站停更。
+# 有排程的 workflow 保活（2026-11-24 起）。GitHub：公開 repo 連續 60 天沒有活動，有 schedule 的 workflow 會被自動停用，
+# 停用後連 API 觸發也會被拒，Cloudflare cron-trigger 就送不進 daily-update，網站停更。
 # 規則出處：https://docs.github.com/en/actions/writing-workflows/choosing-when-your-workflow-runs/events-that-trigger-workflows#schedule
 #
-# 為什麼接在 announcements／market-news 後面、不自己排時間：
-# - 這兩支沒有 schedule，由 Cloudflare 的 cron（不受 GitHub 60 天規則影響）用 API 觸發：announcements 每天台北 08:00（含週末），
-#   market-news 交易日一天好幾班（11:30、14:00、18:30、23:00、06:30），所以每天早上、每次每日更新之前都會先保活一次。
-# - 保活自己也沒有 schedule，不會被同一條規則停用；不需要部署 Cloudflare、不需要新的機密設定（用 workflow 自帶的 GITHUB_TOKEN）。
-# - 不 commit、不碰 main 的內容、不碰網站。
-# 做的事見 workflow_keepalive.py：被 60 天規則停用的重新啟用；有排程而且啟用中的照樣呼叫一次啟用；本人手動停用的不碰。
-# 手動觸發：Actions → workflow-keepalive → Run workflow；預設乾跑（只列出狀態），取消勾選才真的呼叫啟用。
+# 兩層（workflow_keepalive.py）：
+# 1. 心跳 commit（主要）：上一次心跳滿 25 天，就把 UTC 日期寫進 ops/heartbeat.txt、以 github-actions[bot] commit 到 main。
+#    commit 是 repository activity 最直接的形式，60 天的計時永遠走不完。只改這一個檔（commit 前檢查），
+#    網站的建置不讀 ops/（cloud/build.mjs 只複製 web/ 的允許清單、cloud/public-src、seeds），所以下一次每日部署出去的網站不變；
+#    沒有任何 workflow 接 push 或 pull_request（tests.yml 接 push，但 GITHUB_TOKEN 推的 commit 不會觸發任何 workflow），不會連帶觸發部署。
+# 2. 呼叫 enable（第二層）：被停用的重新啟用、啟用中的也呼叫一次（GitHub 沒寫明這樣會不會重算天數，只當保險）。
+#    必要的 workflow（daily-update、level-daily、forecast-replay）不是啟用中就讓這一輪變紅色。
+#
+# 什麼時候跑：
+# - 接在 announcements／market-news 後面（Cloudflare cron 用 API 觸發，每天至少一次）。
+# - 自己每週一次的 schedule：萬一 Cloudflare 那邊的 GitHub 權杖失效、上面兩支不再跑，保活照樣每週跑、而且會變紅色讓人看到。
+#   這個 schedule 本身也受同一條 60 天規則管——但心跳 commit 讓那條規則根本不會觸發；只要保活還在跑，就會繼續打心跳。
+#   （唯一的迴圈：保活要先跑才打得了心跳。所以有三個來源：每週排程、上面兩支的 workflow_run、手動。）
+# - 手動：Actions → workflow-keepalive → Run workflow；預設乾跑（只列出狀態、不 commit、不寫資料庫）。
+# 每一輪正式跑完，把成功與否記到網站資料庫 ops_runs（0041 套用之後；沒套或寫不進去只出警告），
+# 設定頁「資料更新」的「排程保活」那一列讀它：超過 8 天沒成功就算延遲、會推播提醒站主。
 name: workflow-keepalive
 
 on:
+  schedule:
+    - cron: "17 3 * * 1"   # 每週一 UTC 03:17（台北 11:17）
   workflow_run:
     workflows: [announcements, market-news]
     types: [completed]
@@ -19,14 +30,14 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "乾跑：只列出每支有排程的 workflow 目前的狀態，不呼叫啟用"
+        description: "乾跑：只列出每支有排程的 workflow 目前的狀態，不呼叫啟用、不打心跳、不寫資料庫"
         required: false
         type: boolean
         default: true
 
 permissions:
-  actions: write   # 啟用 workflow（PUT /actions/workflows/{id}/enable）
-  contents: read
+  actions: write    # 啟用 workflow（PUT /actions/workflows/{id}/enable）
+  contents: write   # 心跳 commit（只改 ops/heartbeat.txt）
 
 concurrency:
   group: workflow-keepalive
@@ -35,21 +46,84 @@ concurrency:
 jobs:
   keepalive:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
+      - name: 決定這一輪是不是正式
+        id: plan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          REF: ${{ github.ref }}
+        run: |
+          real=true
+          # 排程與接在別的 workflow 後面的一律正式做；手動的只有取消勾選乾跑（剛好是 false）才正式做
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$INPUT_DRY_RUN" != "false" ]; then real=false; fi
+          # 心跳只從 main 打
+          beat=false
+          if [ "$real" = "true" ] && [ "$REF" = "refs/heads/main" ]; then beat=true; fi
+          echo "real=$real" >> "$GITHUB_OUTPUT"
+          echo "beat=$beat" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
+      - uses: actions/setup-node@v4   # 只有最後記到網站資料庫那一步用（wrangler）
+        with:
+          node-version: "22"
+
       - name: 叫醒有排程的 workflow
+        id: keepalive
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          EVENT_NAME: ${{ github.event_name }}
-          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          REAL: ${{ steps.plan.outputs.real }}
         run: |
           args=(--summary "$GITHUB_STEP_SUMMARY")
-          # 接在別的 workflow 後面的一律正式做；手動的只有取消勾選乾跑（剛好是 false）才正式做
-          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$INPUT_DRY_RUN" != "false" ]; then args+=(--dry-run); fi
+          if [ "$REAL" != "true" ]; then args+=(--dry-run); fi
           python workflow_keepalive.py "${args[@]}"
+
+      # 上一步失敗（有必要的 workflow 被停用）也照樣打心跳：心跳是讓 60 天規則不觸發的那一層，和啟用是兩回事
+      - name: 心跳 commit（只改 ops/heartbeat.txt）
+        id: beat
+        if: always() && steps.plan.outputs.beat == 'true'
+        run: |
+          python workflow_keepalive.py heartbeat --github-output "$RUNNER_TEMP/beat.out"
+          if grep -q '^due=true$' "$RUNNER_TEMP/beat.out"; then
+            git add ops/heartbeat.txt
+            changed="$(git diff --cached --name-only)"
+            if [ "$changed" != "ops/heartbeat.txt" ]; then
+              echo "::error::心跳只能改 ops/heartbeat.txt，這一次卻有：$changed"
+              exit 1
+            fi
+            git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "Keep-alive heartbeat $(date -u +%F) (ops/heartbeat.txt only)"
+            for attempt in 1 2 3; do
+              if git push origin HEAD:main; then break; fi
+              if [ "$attempt" = "3" ]; then echo "::error::心跳 commit 推不上 main"; exit 1; fi
+              sleep $((attempt * 5))
+              git pull --rebase origin main
+            done
+            echo "- 心跳 commit：已推上 main（ops/heartbeat.txt）" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- 心跳 commit：上一次未滿 25 天，這一輪不用" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: 記到網站資料庫（資料更新狀態「排程保活」）
+        if: always() && steps.plan.outputs.real == 'true'
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          OUTCOME: ${{ steps.keepalive.outcome }}
+          BEAT: ${{ steps.beat.outcome }}
+        run: |
+          # 成功＝叫醒那一步成功，而且心跳那一步不是失敗（不用打心跳時是 skipped）
+          ok=false
+          if [ "$OUTCOME" = "success" ] && [ "$BEAT" != "failure" ]; then ok=true; fi
+          sql="$(python workflow_keepalive.py record-sql --ok "$ok" --detail "keepalive=$OUTCOME heartbeat=$BEAT")"
+          if ! (cd cloud && npx --yes wrangler@4 d1 execute market-ana-accounts --remote --command "$sql" > "$RUNNER_TEMP/record.log" 2>&1); then
+            echo "::warning::保活結果寫不進網站資料庫（0041 還沒套、額度用完或權杖問題）；保活本身不受影響"
+            tail -n 5 "$RUNNER_TEMP/record.log"
+          fi
