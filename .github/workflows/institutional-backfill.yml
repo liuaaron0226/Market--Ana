@@ -1,0 +1,139 @@
+# 一次性回補上市／上櫃三大法人買賣超（本人 2026-11-24 同意：「AI 產業鏈資金版圖」要從 2021-01 起）。
+# 站主從 GitHub 網頁 Actions → institutional-backfill → Run workflow 按；用預設值一直按就好，每次接著上一次停下的地方。
+# 步驟摘要會用白話寫「補到哪一天、還剩幾天、約再按幾次」，補完會寫「全部補完了，不用再按」。
+#
+# 兩個工作、兩把鎖（程式與理由見 institutional_backfill.py）：
+# - fetch：自己的鎖，不擋每日更新。只還原兩個法人庫與交易日曆，逐日向證交所／櫃買抓，
+#   每一天驗過就把官方原件＋SHA-256 存進 R2 的 institutional-backfill/（工作集之外、只增不改）。
+# - merge：和每日更新同一把 market-state-write 鎖（只要幾分鐘）。還原最新的工作集，把已存的日子附加進法人庫，
+#   用同一個資料日傳回 R2；每日更新在這之前發布的那一天也在還原的工作集裡，不會被蓋掉。
+#   merge 被取消（例如鎖上同時排了別的 run）也沒關係：原件都在 R2，下一次按的 merge 會補寫。
+# - dry_run（預設勾選）：只抓 2 天驗格式，不寫 R2、不跑 merge。
+name: institutional-backfill
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "試跑：只抓 2 天驗格式、什麼都不存。真的要補請取消勾選"
+        required: false
+        type: boolean
+        default: true
+      days:
+        description: "這一次最多補幾個交易日（1～1500；預設 600，約 2 小時）"
+        required: false
+        type: string
+        default: "600"
+      start:
+        description: "從哪一天補起（YYYY-MM-DD；預設 2021-01-01，不用改）"
+        required: false
+        type: string
+        default: "2021-01-01"
+
+permissions:
+  contents: read
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300   # 程式自己抓滿 240 分鐘就收工；GitHub 上限 6 小時
+    concurrency:
+      group: institutional-backfill
+      cancel-in-progress: false
+    env:
+      TZ: Asia/Taipei
+      PYTHONIOENCODING: utf-8
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: market-ana-state
+      INPUT_DAYS: ${{ inputs.days }}
+      INPUT_START: ${{ inputs.start }}
+      INPUT_DRY_RUN: ${{ inputs.dry_run }}
+    steps:
+      - name: 檢查輸入
+        run: |
+          if ! printf '%s' "$INPUT_DAYS" | grep -Eq '^[0-9]{1,4}$'; then echo "::error::days 必須是 1～1500 的整數"; exit 1; fi
+          if ! printf '%s' "$INPUT_START" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'; then echo "::error::start 必須是 YYYY-MM-DD"; exit 1; fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-daily.txt
+
+      - name: 安裝相依
+        run: python -m pip install -r requirements-daily.txt
+
+      - name: 從 R2 還原兩個法人庫與交易日曆（唯讀）
+        run: >-
+          python state_sync.py restore --target .
+          --only data/listed-institutional/listed_institutional.sqlite
+          --only data/otc-history/otc_market.sqlite
+          --only data/market-snapshots/analysis-20261106-close/index-monthly
+
+      - name: 抓官方原件存進 R2
+        run: |
+          set -o pipefail
+          dry=""
+          if [ "$INPUT_DRY_RUN" != "false" ]; then dry="--dry-run"; fi
+          echo "### 三大法人回補（抓取）" >> "$GITHUB_STEP_SUMMARY"
+          python institutional_backfill.py fetch --start "$INPUT_START" --days "$INPUT_DAYS" $dry \
+            --summary "$GITHUB_STEP_SUMMARY" | tee "$RUNNER_TEMP/backfill-fetch.json"
+
+  merge:
+    needs: fetch
+    # 抓取那一步失敗（例如格式變了）也照樣把已存的寫進資料庫；試跑不寫
+    if: ${{ !cancelled() && inputs.dry_run == false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      group: market-state-write   # 與 daily-update／level-daily／ai-digest 同一把鎖，不同時寫工作集
+      cancel-in-progress: false
+    env:
+      TZ: Asia/Taipei
+      PYTHONIOENCODING: utf-8
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: market-ana-state
+      INPUT_DAYS: ${{ inputs.days }}
+      INPUT_START: ${{ inputs.start }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-daily.txt
+
+      - name: 安裝相依
+        run: python -m pip install -r requirements-daily.txt
+
+      - name: 從 R2 還原最新的工作集
+        id: restore
+        run: |
+          set -o pipefail
+          python state_sync.py restore --target . | tee "$RUNNER_TEMP/restore.json"
+          day=$(python -c "import json,sys; print(json.load(open(sys.argv[1], encoding='utf-8'))['data_date'])" "$RUNNER_TEMP/restore.json")
+          python -c 'from state_sync import require_iso_date; import sys; require_iso_date(sys.argv[1], "manifest date")' "$day"
+          echo "date=$day" >> "$GITHUB_OUTPUT"
+
+      - name: 把已存的原件寫進法人庫
+        run: |
+          set -o pipefail
+          echo "### 三大法人回補（寫進網站資料庫）" >> "$GITHUB_STEP_SUMMARY"
+          python institutional_backfill.py merge --start "$INPUT_START" --days "$INPUT_DAYS" \
+            --summary "$GITHUB_STEP_SUMMARY" | tee "$RUNNER_TEMP/backfill-merge.json"
+
+      - name: 同步工作集回 R2（同一個資料日，只在有寫入時）
+        run: |
+          count=$(python -c "import json,sys; m=json.load(open(sys.argv[1], encoding='utf-8'))['merged']; print(m['listed']+m['otc'])" "$RUNNER_TEMP/backfill-merge.json")
+          if [ "$count" -gt 0 ]; then
+            python state_sync.py upload --data-date "${{ steps.restore.outputs.date }}" --cursor-domain market
+          else
+            echo "這一次沒有新寫進資料庫的日子，工作集維持原樣"
+          fi
