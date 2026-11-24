@@ -70,11 +70,19 @@ test("GitHub 觸發失敗（權杖過期、GitHub 停擺）時照樣檢查資料
     healthAlert: async () => { checked = true; return { problems: 1, notified: 1, recovered: 0 }; },
   }), /401/);
   assert.equal(checked, true);
-  // 提醒本身出錯不影響觸發
-  const result = await runScheduled("0 0 * * *", Date.parse("2026-11-28T00:00:00Z"), env, {
-    fetcher: async () => ({ status: 204 }), healthAlert: async () => { throw new Error("資料庫查詢失敗"); },
-  });
-  assert.deepEqual(result, { dispatched: "announcements.yml", date: "2026-11-28", health: { error: "資料庫查詢失敗" } });
+  // 提醒本身出錯（例如資料庫寫入額度用完）：觸發照樣送出，但這次排程要標成失敗，不能當成功收掉（2026-11-24 審查）
+  let dispatched = false;
+  const errors = [];
+  const original = console.error;
+  console.error = (line) => errors.push(String(line));
+  try {
+    await assert.rejects(runScheduled("0 0 * * *", Date.parse("2026-11-28T00:00:00Z"), env, {
+      fetcher: async () => { dispatched = true; return { status: 204 }; },
+      healthAlert: async () => { throw new Error("資料庫寫不進去"); },
+    }), /資料庫寫不進去/);
+  } finally { console.error = original; }
+  assert.equal(dispatched, true);
+  assert.ok(errors.some((line) => line.includes("資料庫寫不進去")), "記一行錯誤");
 });
 
 test("提醒的開關在 wrangler.toml（本人 2026-11-24 晚授權打開，只開站主）；沒有開關時提醒什麼都不做", async () => {

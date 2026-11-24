@@ -254,6 +254,13 @@ class Migration:
     def number(self) -> str:
         return self.name[:4]
 
+    def idempotent(self) -> bool:
+        """每一句都是 CREATE … IF NOT EXISTS（表、索引、觸發器、檢視）：重跑不會出錯、也不會動到已經在的東西。"""
+        return bool(self.statements) and all(
+            s.op in ("create_table", "create_index", "create_trigger", "create_view")
+            and re.match(r"CREATE (UNIQUE )?(TABLE|INDEX|TRIGGER|VIEW) IF NOT EXISTS ", s.text, re.I)
+            for s in self.statements)
+
     def problems(self) -> list[str]:
         """無法從結構核對的敘述：單獨的資料異動與看不懂的敘述。重建表搬資料（INSERT INTO 之後改名的表）不算。"""
         renamed = {s.name for s in self.statements if s.op == "rename_table"}
@@ -320,7 +327,8 @@ def expected_checks(migrations: Iterable[Migration]) -> list[Check]:
         dropped_here: set[str] = set()
         for s in mig.statements:
             if s.op == "create_table":
-                tables[s.name] = _Table(mig.name, True, {c: mig.name for c in s.columns}, set(s.literals), body=s.body)
+                tables[s.name] = _Table(mig.name, True, {c: mig.name for c in s.columns}, set(s.literals), body=s.body,
+                                        rebuilt_in=mig.name if s.name in dropped_here else "")
                 absent.pop(("table", s.name), None)
             elif s.op == "add_column":
                 t = tables.setdefault(s.table, _Table(mig.name, False))
@@ -466,6 +474,37 @@ def evaluate(check: Check, db: DbState, *, strict: bool) -> tuple[bool, str]:
 APPLIED, NOT_APPLIED, PARTIAL, UNVERIFIABLE = "已套用（沒記帳）", "還沒套用", "只套了一部分", "無法核對"
 
 
+def resumable(mig: Migration, db: DbState) -> list[str]:
+    """只建了一部分的變更能不能直接重跑：每一句都是 IF NOT EXISTS，而且已經在的東西都和檔案的定義一樣
+    （沒過的那幾項只能是「整個不存在」，不能是「在、但長得不一樣」——那樣 IF NOT EXISTS 會跳過、留下錯的定義）。
+    回傳不能重跑的原因；空的＝可以。"""
+    if not mig.idempotent():
+        return [f"{mig.name} 不是每一句都是 CREATE … IF NOT EXISTS，重跑可能出錯或改到資料"]
+    out = []
+    for c in expected_checks([mig]):
+        ok, why = evaluate(c, db, strict=True)
+        if ok:
+            continue
+        if c.kind in ("table", "index", "trigger", "view") and (c.kind, c.name) not in db.objects:
+            continue   # 還沒建，重跑會補上
+        out.append(f"{c.migration}：{c.describe()}：{why}")
+    return out
+
+
+def conflicts(mig: Migration, db: DbState) -> list[str]:
+    """還沒套的變更要建的東西，資料庫裡已經有同名的、但定義不一樣（重建表的新定義不算：那本來就要換掉）。
+    IF NOT EXISTS 會跳過它、留下錯的定義；沒有 IF NOT EXISTS 會在中途出錯。兩種都先擋下來。"""
+    out = []
+    for c in expected_checks([mig]):
+        if c.kind not in ("table", "index", "trigger", "view") or not c.evidence or c.rebuilt:
+            continue
+        if (c.kind, c.name) in db.objects:
+            ok, why = evaluate(c, db, strict=True)
+            if not ok:
+                out.append(f"{c.migration}：已經有同名的{c.describe()}，但和變更檔不一樣（{why}）")
+    return out
+
+
 def migration_status(mig: Migration, db: DbState) -> tuple[str, list[str]]:
     checks = expected_checks([mig])
     results = [(c, *evaluate(c, db, strict=True)) for c in checks]
@@ -564,7 +603,21 @@ def plan(migrations: list[Migration], db: DbState, *, real: bool, reconcile_only
     while lead < len(pending) and statuses[pending[lead].name] == APPLIED:
         lead += 1
     to_reconcile, to_apply = pending[:lead], pending[lead:]
+    # 緊接在已套用那一段後面、只建了一部分的那一支：每一句都是 IF NOT EXISTS、已經在的東西和檔案一樣，就當成還沒套、交給 wrangler 重跑
+    # （例：上次手動套用時被當天的寫入額度中斷）。其他「只套一部分」一律拒絕。
+    resumed = None
+    if to_apply and statuses[to_apply[0].name] == PARTIAL:
+        why_not = resumable(to_apply[0], db)
+        if why_not:
+            blockers.extend(why_not)
+        else:
+            resumed = to_apply[0].name
     for mig in to_apply:
+        if mig.name == resumed:
+            continue
+        if statuses[mig.name] == NOT_APPLIED:
+            blockers.extend(conflicts(mig, db))
+            continue
         if statuses[mig.name] != NOT_APPLIED:
             blockers.append(f"{mig.name} 是「{statuses[mig.name]}」" + (
                 "（排在還沒套用的後面，順序對不上）" if statuses[mig.name] == APPLIED else ""))
@@ -590,7 +643,11 @@ def plan(migrations: list[Migration], db: DbState, *, real: bool, reconcile_only
                          "它們的資料表早就在資料庫裡（逐項核對過），只在記帳表補記一筆，不會重跑。")
             step += 1
         for mig in to_apply:
-            lines.append(f"{step}. 套用 {mig.name}：建立 {_summarize(mig)}。")
+            if mig.name == resumed:
+                lines.append(f"{step}. 套用 {mig.name}：{mig.number} 只建了一部分（上次被當天寫入額度中斷）；"
+                             f"這一支可以安全重跑，會把缺的補上（{_summarize(mig)}）。")
+            else:
+                lines.append(f"{step}. 套用 {mig.name}：建立 {_summarize(mig)}。")
             step += 1
         if reconcile_only and len(pending) > len(to_reconcile):
             lines.append("（勾了「只補記帳」：之後新的變更這一輪不套用。）")

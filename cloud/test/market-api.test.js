@@ -107,13 +107,15 @@ test("超限只記一筆紀錄（同一分鐘不重複寫），站主也受限",
   assert.equal(auditRows("rate_limited").length, 1);
 });
 
-test("限速計數壞掉時回 503、不給資料（不當成超限，也不放行）", async () => {
+// 2026-11-24 起（D1 寫入額度用完、整站 503 的事故）：限速計數寫不進去時改用記憶體計數放行，讀的功能照常；
+// 核准檢查照舊在前面。記憶體計數的超限見 rate-limit-d1-write-failure.test.js。
+test("限速計數壞掉時改用記憶體計數照常回資料，錯誤細節不外洩", async () => {
   await seed("ok@x.com", "approved");
   const real = env.DB;
   env.DB = { prepare: (sql) => (/api_hits/.test(sql) ? (() => { throw new Error("d1 down"); })() : real.prepare(sql)) };
   const r = await req("/api/market/overview", "ok@x.com");
-  assert.equal(r.status, 503);
-  assert.doesNotMatch(await r.text(), /daily|d1 down/);
+  assert.equal(r.status, 200);
+  assert.doesNotMatch(await r.text(), /d1 down/);
 });
 
 test("資料包未設定時市場 API 回 503", async () => {

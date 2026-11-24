@@ -2,9 +2,9 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { RULES, evaluateHealth, readHealthFacts } from "../lib/data-health.js";
+import { READER_KEYS, RULES, evaluateHealth, readHealthFacts, versionDataDate } from "../lib/data-health.js";
 import { HOLIDAYS, tradingDaysBefore } from "../lib/trading-calendar.js";
-import { DAILY_PUSH_CAP, healthNotice, runDataHealthAlert } from "../lib/data-health-alert.js";
+import { DAILY_PUSH_CAP, WRITE_NOTICE_SLOTS, healthNotice, runDataHealthAlert } from "../lib/data-health-alert.js";
 import { handle } from "../lib/gate.js";
 import { fakeD1, makeIssuer, claims, fetchJwks, TEAM, MAIN_AUD, APPLY_AUD, OWNER, MIGRATION_FILES } from "./helpers.js";
 import { makeVapid, makeDevice, pushRecorder } from "./push-helpers.js";
@@ -78,12 +78,45 @@ test("交易日曆：2026 年和 Python 那邊的官方種子同一份（開始�
 
 // ---------- 讀資料庫 ----------
 const SHA = "a".repeat(64);
-async function publish(db, version, sourceDate, updatedAt) {
+// 和正式資料庫同一個樣子（2026-11-24 查過）：版本名帶資料日（同一天重新發布再接 -r<時間>）；
+// source_date 是上市櫃名錄的抓取日，最近每一版都是 2026-11-08，不是資料日。
+const CATALOG_DATE = "2026-11-08";
+async function publish(db, label, dataDate, updatedAt) {
+  const version = `liquid-${dataDate.replaceAll("-", "")}-237d4b8dd208-v2${label.startsWith("r") ? `-${label}` : ""}`;
   await db.prepare("INSERT INTO stock_data_versions (version, source_date, source_url, source_sha256, built_at, catalog_count, analysis_count) "
-    + "VALUES (?, ?, 'x', ?, ?, 1, 1)").bind(version, sourceDate, SHA, updatedAt).run();
+    + "VALUES (?, ?, 'x', ?, ?, 1, 1)").bind(version, CATALOG_DATE, SHA, updatedAt).run();
   await db.prepare("INSERT INTO stock_data_state (key, active_version, updated_at) VALUES ('current', ?, ?) "
     + "ON CONFLICT (key) DO UPDATE SET active_version = excluded.active_version, updated_at = excluded.updated_at").bind(version, updatedAt).run();
+  return version;
 }
+
+test("每日行情的資料日取自版本名（含同一天重新發布的 -r 尾巴），不是名錄抓取日 source_date", async () => {
+  assert.equal(versionDataDate("liquid-20261124-237d4b8dd208-v2"), "2026-11-24");
+  assert.equal(versionDataDate("liquid-20261124-237d4b8dd208-v2-r202611241833"), "2026-11-24");
+  assert.equal(versionDataDate("twomarket-20261110-0123456789ab-1a2b3c4d-v2"), "2026-11-10");
+  assert.equal(versionDataDate("v1"), null);
+  const db = fakeD1();
+  await publish(db, "v", "2026-11-24", "2026-11-24T10:36:21Z");
+  await publish(db, "r202611241833", "2026-11-24", "2026-11-24T10:40:02Z");
+  const facts = await readHealthFacts(db);
+  assert.deepEqual(facts.daily, { last_ok_at: "2026-11-24T10:40:02Z", data_date: "2026-11-24" });
+  assert.equal(only(evaluateHealth(facts, TUE_2200), "daily").state, "ok", "正式站 11-24 晚上的樣子不能誤報");
+  // 版本名讀不出日期時，退回這一版名錄裡最新的 K 棒日
+  await db.prepare("INSERT INTO stock_data_versions (version, source_date, source_url, source_sha256, built_at, catalog_count, analysis_count) "
+    + "VALUES ('odd', ?, 'x', ?, '2026-11-24T10:00:00Z', 1, 1)").bind(CATALOG_DATE, SHA).run();
+  await db.prepare("INSERT INTO listed_securities (version, code, name, market, security_type, isin, listed_date, industry, cfi_code, latest_bar_date, available_bars, analysis_status) "
+    + "VALUES ('odd', '2330', 'n', '上市', '普通股', 'TW0002330008', '1994-09-05', 'x', 'ESVUFR', '2026-11-24', 300, 'available')").run();
+  await db.prepare("UPDATE stock_data_state SET active_version = 'odd'").run();
+  assert.equal((await readHealthFacts(db)).daily.data_date, "2026-11-24");
+});
+
+test("資金版圖：只看每日排程寫的那幾列（version＝建置日），一次性樣品不算", async () => {
+  const db = fakeD1();
+  await db.prepare("INSERT INTO chain_map_flows (version, as_of, payload, built_at) VALUES ('bootstrap-2026-10', '2026-10', '{}', '2026-11-24T05:00:00Z')").run();
+  assert.equal((await readHealthFacts(db)).chain_map, undefined, "只有樣品：排程還沒寫過，不顯示");
+  await db.prepare("INSERT INTO chain_map_flows (version, as_of, payload, built_at) VALUES ('2026-11-24', '2026-10', '{}', '2026-11-24T10:50:00Z')").run();
+  assert.deepEqual((await readHealthFacts(db)).chain_map, { last_ok_at: "2026-11-24T10:50:00Z", data_date: "2026-11-24" });
+});
 
 test("讀資料庫：每日行情、盤勢解讀、白話分析的用量紀錄；空的表不出現", async () => {
   const db = fakeD1();
@@ -98,16 +131,52 @@ test("讀資料庫：每日行情、盤勢解讀、白話分析的用量紀錄�
   assert.deepEqual(facts.plain, { last_ok_at: "2026-11-23T10:05:00Z", degraded: "改用程式套句", degraded_at: "2026-11-24T10:05:00Z" }, "乾跑不算");
 });
 
-test("讀資料庫：遷移還沒套（沒有那張表、沒有那個欄位）不是錯，那一份不出現", async () => {
+test("讀資料庫：遷移還沒套（沒有那張表）不是錯，那一份不出現；其他錯誤（欄位不存在）不會消失，標成無法檢查", async () => {
   const db = fakeD1(MIGRATION_FILES.filter((f) => !["0035_market_brief.sql", "0029_gemini_usage_outcome.sql", "0036_broker_branches.sql"].includes(f)));
   await publish(db, "v1", "2026-11-24", "2026-11-24T10:12:00Z");
   const facts = await readHealthFacts(db);
-  assert.deepEqual(Object.keys(facts), ["daily"]);
+  assert.deepEqual(Object.keys(facts), ["daily", "plain"]);
+  assert.match(facts.plain.error, /no such column/);
+  const plain = only(evaluateHealth(facts, TUE_2200), "plain");
+  assert.deepEqual([plain.state, plain.detail], ["error", "查詢失敗"]);
+});
+
+// 每一份的查詢都拿真正的遷移檔建出來的資料庫跑一次（連 helpers 沒放的 0006、0007、0039 一起）：欄位或表名寫錯就在這裡失敗，
+// 不會在正式站被當成「沒有資料」藏起來（2026-11-24 審查：資金版圖原本查了不存在的 data_date）。
+test("每一條規則的查詢都對得上遷移檔裡真正的表與欄位", async () => {
+  const { readdirSync } = await import("node:fs");
+  const all = readdirSync(new URL("../migrations/", import.meta.url)).filter((f) => /^\d{4}_.*\.sql$/.test(f)).sort();
+  const extra = ["0006_cash_and_level.sql", "0007_ai_daily.sql", "0039_chain_map.sql"].filter((f) => all.includes(f));
+  const db = fakeD1([...MIGRATION_FILES, ...extra].sort());
+  for (const rule of RULES) assert.ok(READER_KEYS.includes(rule.key), `${rule.key} 有查詢`);
+  await readHealthFacts(db, { strict: true });   // 空的表：每一句都照樣跑過
+  const version = await publish(db, "v1", "2026-11-24", "2026-11-24T10:12:00Z");
+  await db.prepare("INSERT INTO fund_securities (version, code, name, full_name, currency, latest_bar_date, available_bars, analysis_status) "
+    + "VALUES (?, 'BLKTENAU', 'n', 'n', 'USD', '2026-11-21', 10, 'available')").bind(version).run();
+  const facts = await readHealthFacts(db, { strict: true });
+  assert.equal(facts.fund_nav.data_date, "2026-11-21");
+});
+
+test("基金淨值：這一版基金分析裡的缺日與數字對不上（data_issues）算部分異常", async () => {
+  const db = fakeD1();
+  const version = await publish(db, "v1", "2026-11-24", "2026-11-24T10:12:00Z");
+  const issues = [{ kind: "gap", from: "2026-11-17", to: "2026-11-18", weekdays: 2 }, { kind: "nav-conflict", date: "2026-11-13", kept: 17.73, other: 17.8 }];
+  for (const [code, list] of [["BLKTENAU", issues], ["GLIACU", []]]) {
+    await db.prepare("INSERT INTO fund_securities (version, code, name, full_name, currency, latest_bar_date, available_bars, analysis_status) "
+      + "VALUES (?, ?, 'n', 'n', 'USD', '2026-11-21', 10, 'available')").bind(version, code).run();
+    await db.prepare("INSERT INTO stock_analysis (version, code, as_of, payload) VALUES (?, ?, '2026-11-21', ?)")
+      .bind(version, code, JSON.stringify({ schema: "stock-analysis/v2", kind: "fund", data_issues: list })).run();
+  }
+  const fact = (await readHealthFacts(db)).fund_nav;
+  assert.equal(fact.degraded, "1 段淨值缺日、1 處數字對不上");
+  assert.equal(only(evaluateHealth({ fund_nav: fact }, TUE_2200), "fund_nav").state, "degraded");
+  await db.prepare("UPDATE stock_analysis SET payload = json_set(payload, '$.data_issues', json('[]')) WHERE code = 'BLKTENAU'").run();
+  assert.equal((await readHealthFacts(db)).fund_nav.degraded, null);
 });
 
 test("讀資料庫：主力分點、國外行情部分抓取失敗；預測最後一筆是漏記；基金看最舊的那一檔", async () => {
   const db = fakeD1();
-  await publish(db, "v1", "2026-11-24", "2026-11-24T10:12:00Z");
+  const version = await publish(db, "v1", "2026-11-24", "2026-11-24T10:12:00Z");
   await db.prepare("INSERT INTO broker_branch_stocks (code, updated_through, last_attempt_at, last_error) VALUES "
     + "('2330', '2026-11-24', '2026-11-24T11:00:00Z', NULL), ('1802', '2026-11-21', '2026-11-24T11:01:00Z', 'format-changed')").run();
   await db.prepare("INSERT INTO overseas_fetch_status (symbol, source, attempted_at, ok, succeeded_at, problem) VALUES "
@@ -116,7 +185,7 @@ test("讀資料庫：主力分點、國外行情部分抓取失敗；預測最�
     + "VALUES ('f1', '2026-11-24', 'morning', 'm', 'i', 'official', 'miss', '{}', ?, '2026-11-24T00:50:00Z')").bind(SHA).run();
   for (const [code, date] of [["BLKTENAU", "2026-11-21"], ["GLIACU", "2026-11-19"]]) {
     await db.prepare("INSERT INTO fund_securities (version, code, name, full_name, currency, latest_bar_date, available_bars, analysis_status) "
-      + "VALUES ('v1', ?, 'n', 'n', 'USD', ?, 10, 'available')").bind(code, date).run();
+      + "VALUES (?, ?, 'n', 'n', 'USD', ?, 10, 'available')").bind(version, code, date).run();
   }
   const facts = await readHealthFacts(db);
   assert.deepEqual(facts.broker_branches, { last_ok_at: "2026-11-24", data_date: "2026-11-24", degraded: "1 檔抓取失敗", degraded_at: "2026-11-24T11:01:00Z" });
@@ -262,6 +331,46 @@ test("提醒：休市日不提醒；開關關著、0040 還沒套都什麼都不
   env.DB = fakeD1(MIGRATION_FILES.filter((f) => f !== "0040_data_health.sql"));
   await publish(env.DB, "v0", "2026-12-23", "2026-12-23T10:12:00Z");
   assert.deepEqual(await alert(at("2026-12-28T23:00:00")), { skipped: "no_table", problems: 1 });
+});
+
+// D1 免費方案每天 10 萬列寫入用完時：讀照常、每一次寫入都失敗（2026-11-24 正式站實際發生）
+const QUOTA_ERROR = "D1_ERROR: Exceeded D1's free tier daily row write limit. Please upgrade your plan.";
+function writesFail(db, message = QUOTA_ERROR) {
+  return {
+    prepare(sql) {
+      if (!/^\s*(INSERT|UPDATE|DELETE|REPLACE)/i.test(sql)) return db.prepare(sql);
+      const fail = async () => { throw new Error(message); };
+      const statement = { bind: () => statement, run: fail, all: fail, first: fail };
+      return statement;
+    },
+  };
+}
+
+test("資料庫寫不進去：不碰認領，直接用不寫資料庫的方式通知站主一次（只在固定時段、同一天記在記憶體），然後丟出錯誤", async () => {
+  await setupPush();
+  await publish(env.DB, "v1", "2026-11-23", "2026-11-23T10:12:00Z");
+  const real = env.DB;
+  env.DB = writesFail(real);
+  const memory = { day: null };
+  const run = (iso) => runDataHealthAlert(env, { now: () => Date.parse(iso), pushFetch: pushes.fetch, memory });
+  assert.ok(WRITE_NOTICE_SLOTS.has("03:30"));
+  await assert.rejects(run("2026-11-25T02:00:00Z"), (error) => error.writeFailed && /not_slot/.test(error.message));
+  assert.equal(pushes.sent.length, 0, "不是固定時段不送");
+  await assert.rejects(run("2026-11-25T03:30:00Z"), (error) => error.writeFailed && /sent/.test(error.message));
+  assert.equal(pushes.sent.length, 1);
+  assert.deepEqual(phone.decrypt(pushes.sent[0].body), { title: "資料庫寫入額度用完",
+    body: "資料庫今天的寫入額度用完，台北早上 8 點恢復；這段時間新增自選、畫線與排程寫入都會失敗。",
+    url: "/minimal.html#data-health", tag: "data-health-write" });
+  await assert.rejects(run("2026-11-25T07:30:00Z"), /already_sent/);
+  assert.equal(pushes.sent.length, 1, "同一個 UTC 日、同一個執行環境只送一次");
+  await assert.rejects(run("2026-11-26T03:30:00Z"), /sent/);
+  assert.equal(pushes.sent.length, 2, "隔天（額度重算之後）還是寫不進去就再送");
+  env.DB = writesFail(real, "D1_ERROR: database is locked");
+  await assert.rejects(run("2026-11-27T03:30:00Z"), /sent/);
+  assert.equal(phone.decrypt(pushes.sent[2].body).title, "資料庫無法寫入");
+  // 寫得進去之後照常：先前的問題照一般規則送
+  env.DB = real;
+  assert.equal((await run("2026-11-27T03:30:00Z")).problems, 1);
 });
 
 test("推播字句：停止更新、部分抓取失敗、只有資料日的恢復", () => {
