@@ -936,6 +936,17 @@
     if (!undoLast) say('');   // 還可以還原的時候留著：刪完想換一顆鍵看看再決定要不要還原
     setFilter(chosen.dataset.filter);
   });
+  // 返回原處（nav-return.js，本人 2026-11-24）：從清單點進個股頁、按返回回來時，照原本的篩選（全部／庫存／自選，自選照群組分段）
+  // 與展開的那一檔畫出來；整頁捲回原處由 nav-return.js 在清單畫好之後做
+  window.NavReturn?.remember('list', {
+    save: () => (listModel ? { filter: listFilter, open: openCode || '' } : null),
+    anchor: () => host,
+    restore: async saved => {
+      if (!(await window.NavReturn.until(() => listReady && listModel))) return;
+      if (saved.open && listModel.rows.some(entry => entry.code === saved.open)) openCode = saved.open;
+      setFilter(['all', 'holding', 'watch'].includes(saved.filter) ? saved.filter : listFilter);
+    },
+  });
   // 新增了某一種之後，目前的篩選如果看不到它就切回全部
   const showKind = kind => { if (listFilter !== 'all' && listFilter !== kind) setFilter('all'); };
 

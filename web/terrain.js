@@ -45,6 +45,7 @@
 
   // 上一次畫在同一個容器上留下的觀察器，重畫前要收掉
   const cleanups = new WeakMap();
+  const pickers = new WeakMap();   // 每個框現在的選樓（select 用）
 
   /* 建出街區、樓與名稱牌。回傳的 corners 是每個角落在街區上的位置與高度（縮放前、還沒轉），
      frameAt 用它算整片街區轉到某個角度時，投影到畫面上佔多大；shapes 是每棟樓的中心、半邊長與樓高，
@@ -222,7 +223,8 @@
   /* 選一棟樓：凸顯它、其他變淡，明細出現。回傳 { toggle, clear }：toggle 再點同一棟就取消，clear 一律取消。 */
   function selection(host, city, detail, byName, labelOf, follow, detailExtra) {
     let selected = null;
-    const select = node => {
+    // quiet：程式代選（返回原處還原）時不捲頁面，整頁的位置由還原那一段負責
+    const select = (node, quiet) => {
       if (selected) { selected.classList.remove('is-selected'); selected.setAttribute('aria-pressed', 'false'); }
       selected = node || null;
       follow();   // 選中的樓升起、其他的變淡都有轉場：名稱牌跟著樓頂走
@@ -242,12 +244,12 @@
       detail.replaceChildren(state, el('h4', '', selected.dataset.name), list, ...(extra ? [extra] : []));
       // 手機上明細排在街區下方。點樓不捲頁面（原本每次捲到明細整個看得見，點一下畫面就跳）；
       // 只有明細整個落在畫面下緣以外、完全看不到時，才輕輕捲到剛好露出（桌機的明細浮在地形角落，不用捲）。
-      if (getComputedStyle(detail).position === 'static' && detail.getBoundingClientRect().top >= global.innerHeight) {
+      if (!quiet && getComputedStyle(detail).position === 'static' && detail.getBoundingClientRect().top >= global.innerHeight) {
         const calm = Boolean(global.matchMedia && global.matchMedia('(prefers-reduced-motion: reduce)').matches);
         detail.scrollIntoView({ block: 'nearest', behavior: calm ? 'auto' : 'smooth' });
       }
     };
-    return { toggle: node => select(node && node !== selected ? node : null), clear: () => { if (selected) select(null); } };
+    return { toggle: (node, quiet) => select(node && node !== selected ? node : null, quiet), clear: () => { if (selected) select(null); } };
   }
 
   /* 指標與鍵盤：在地形上左右拖是旋轉，位移很小才算點選；Enter／空白鍵選取，Esc 取消。回傳一個收尾函式（停掉還在滑的慣性）。
@@ -426,8 +428,18 @@
     };
     const picker = selection(host, city, detail, byName, labelOf, label.follow, payload && payload.detailExtra);
     const stopGlide = bindControls(stage, city, towers, picker, turned, rest, whereIs);
+    pickers.set(host, { picker, towers });
     cleanups.set(host, () => { observers.forEach(observer => observer.disconnect()); global.clearTimeout(settle); stopGlide(); });
   }
 
-  global.Terrain = { render, shortName };
+  /* 用產業名稱選一棟樓（和點它一樣：凸顯、出明細）；已經選著就不動。返回原處用（nav-return.js、minimal.js）。找不到回 false。 */
+  function select(host, name) {
+    const entry = pickers.get(host);
+    const node = entry && entry.towers.find(tower => tower.dataset.name === String(name));
+    if (!node) return false;
+    if (!node.classList.contains('is-selected')) entry.picker.toggle(node, true);
+    return true;
+  }
+
+  global.Terrain = { render, select, shortName };
 })(window);
