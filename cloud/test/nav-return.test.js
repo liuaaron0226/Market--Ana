@@ -22,7 +22,7 @@ function tabStorage() {
 }
 
 // 一頁：回傳 { win, fire, click, calls }。navType 是這一頁怎麼來的（navigate／back_forward／reload）
-function openPage(href, { storage, navType = "navigate", state = null, scrollLock = null } = {}) {
+function openPage(href, { storage, navType = "navigate", state = null, scrollLock = null, legacy = null } = {}) {
   const calls = [];
   const bags = { window: new Map(), document: new Map() };
   const adder = (bag) => (type, fn, options) => {
@@ -62,10 +62,11 @@ function openPage(href, { storage, navType = "navigate", state = null, scrollLoc
   };
   const win = {
     location, history, document, sessionStorage: storage,
-    performance: { getEntriesByType: () => [{ type: navType }] },
+    performance: { getEntriesByType: () => [{ type: navType }], ...(legacy === null ? {} : { navigation: { type: legacy } }) },
     scrollY: 0, innerWidth: 390, innerHeight: 844,
     scrollTo(options) { win.scrollY = options.top; calls.push(["scrollTo", options.top]); },
     addEventListener: adder(bags.window),
+    removeEventListener: (type, fn) => bags.window.set(type, (bags.window.get(type) || []).filter((item) => item.fn !== fn)),
     setTimeout, clearTimeout, console, URL, ScrollLock: scrollLock,
   };
   win.window = win;
@@ -87,6 +88,8 @@ function openPage(href, { storage, navType = "navigate", state = null, scrollLoc
   return { win, click, fire, calls, elements };
 }
 const tick = (ms = 0) => new Promise((resolve) => setTimeout(resolve, ms));
+// 之後去過別頁（個股頁離開時記的是它自己那一筆）
+const leftElsewhere = (storage) => storage.setItem("nav-return:left", JSON.stringify({ id: "stock-entry", at: Date.now() }));
 
 test("同一頁的判斷：去掉 .html、結尾的 index 與錨點；不同股票是不同頁", () => {
   const { pageKey, samePage } = openPage(HOME, { storage: tabStorage() }).win.NavReturn.model;
@@ -124,7 +127,7 @@ test("只留最近的幾筆樣子；捲動位置先對齊記下的元素，找�
   assert.equal(scrollTarget({ y: 900, anchor: null }, () => null), 900);
 });
 
-test("首頁點進個股、按返回鍵：走瀏覽器的上一頁；回到首頁（重新載入）照離開前的樣子還原，先頁面再捲動再浮層", async () => {
+test("首頁點進個股、按返回鍵：走瀏覽器的上一頁；回到首頁（重新載入）照離開前的樣子還原：面板先開，最後才捲", async () => {
   const storage = tabStorage();
   // 首頁：開著成交金額的名單、捲到 1234
   const home = openPage(HOME, { storage });
@@ -154,33 +157,102 @@ test("首頁點進個股、按返回鍵：走瀏覽器的上一頁；回到首�
   await tick(1050);
   assert.ok(!stock.calls.some(([kind]) => kind === "assign"), "有離開就不補走連結");
 
-  // 回到首頁：瀏覽器重新載入（no-store），歷史紀錄的 state 還在
-  const again = openPage(HOME, { storage, navType: "back_forward", state: homeState });
-  again.win.NavReturn.remember("cat", { save: () => null, restore: async (v) => { await tick(20); order.push(["cat", v]); } });
-  again.win.NavReturn.remember("panel", { layer: "overlay", save: () => null, restore: (v) => { order.push(["panel", v.key, v.top]); } });
-  again.win.NavReturn.remember("empty", { save: () => null, restore: () => order.push(["empty"]) });
-  again.win.scrollTo = (options) => { again.win.scrollY = options.top; order.push(["scroll", options.top]); };
-  await tick();
-  await again.win.NavReturn.done();
-  assert.deepEqual(order, [["cat", "chipsSection"], ["scroll", 1234], ["panel", "volume", 300]]);
-  assert.equal(again.win.history.scrollRestoration, "manual", "捲動由這裡負責，不和瀏覽器自己的還原搶");
+  // 回到首頁：瀏覽器重新載入（no-store），歷史紀錄的 state 還在。iPhone Safari 回報的 navigation type 不可靠：
+  // 回報成 navigate 也要還原（state 帶著編號、存過樣子就算數）
+  for (const navType of ["back_forward", "navigate"]) {
+    order.length = 0;
+    const again = openPage(HOME, { storage, navType, state: homeState });
+    again.win.NavReturn.remember("cat", { save: () => null, restore: async (v) => { await tick(20); order.push(["cat", v]); } });
+    again.win.NavReturn.remember("panel", { save: () => null, restore: (v) => { order.push(["panel", v.key, v.top]); } });
+    again.win.NavReturn.remember("empty", { save: () => null, restore: () => order.push(["empty"]) });
+    again.win.scrollTo = (options) => { again.win.scrollY = options.top; order.push(["scroll", options.top]); };
+    assert.equal(again.win.history.scrollRestoration, "manual", `${navType}：捲動由這裡負責，不和瀏覽器自己的還原搶`);
+    await tick();
+    await again.win.NavReturn.done();
+    // 面板一開始就打開（不等分類那一段的資料），整頁最後捲到原處
+    assert.deepEqual(order, [["panel", "volume", 300], ["scroll", 1234], ["cat", "chipsSection"]], navType);
+    assert.equal(again.win.scrollY, 1234);
+  }
 });
 
-test("一般打開首頁（不是按上一頁回來）：就算有存過的樣子也不還原", async () => {
+test("要不要還原：這一筆帶著編號＋存過樣子＋不是重新整理才還原，不看 navigation type 是不是 back_forward", () => {
+  const { decide } = openPage(HOME, { storage: tabStorage() }).win.NavReturn.model;
+  const yes = (o) => decide({ hadId: true, hasSnap: true, navType: "navigate", legacyType: null, ...o });
+  assert.equal(yes({}), true, "回報成 navigate 也還原");
+  assert.equal(yes({ navType: "back_forward" }), true);
+  assert.equal(yes({ navType: "prerender" }), true);
+  assert.equal(yes({ navType: "reload" }), false, "重新整理不還原");
+  assert.equal(yes({ navType: "navigate", legacyType: 1 }), false, "舊 API 說重新整理");
+  assert.equal(yes({ navType: "reload", legacyType: 2 }), true, "舊 API 說上一頁／下一頁就算");
+  assert.equal(yes({ hadId: false }), false, "新進來的一頁沒有 state");
+  assert.equal(yes({ hasSnap: false }), false, "沒存過樣子");
+  assert.equal(yes({ leftSame: true }), false, "剛剛離開的就是這一筆（重新整理、同網址再開）");
+  assert.equal(yes({ leftSame: true, navType: "back_forward" }), false);
+});
+
+test("同網址再開一次、瀏覽器沿用同一筆紀錄（state 還在、回報 navigate）：不還原；從別頁回來才還原", async () => {
+  const storage = tabStorage();
+  const home = openPage(HOME, { storage });
+  home.win.NavReturn.remember("cat", { save: () => "chipsSection", restore: () => {} });
+  await tick();
+  const state = home.win.history.state;
+  home.fire("pagehide");   // 離開的就是這一筆
+  const restored = [];
+  const same = openPage(HOME, { storage, navType: "navigate", state });
+  same.win.NavReturn.remember("cat", { save: () => null, restore: (v) => restored.push(v) });
+  await tick();
+  await same.win.NavReturn.done();
+  assert.deepEqual(restored, []);
+  // 去了個股頁（它離開時記的是它自己那一筆）再回來：還原
+  const stock = openPage(STOCK, { storage });
+  await tick();
+  stock.fire("pagehide");
+  const back = openPage(HOME, { storage, navType: "navigate", state });
+  back.win.NavReturn.remember("cat", { save: () => null, restore: (v) => restored.push(v) });
+  await tick();
+  await back.win.NavReturn.done();
+  assert.deepEqual(restored, ["chipsSection"]);
+});
+
+test("一般打開首頁（新的一筆）或重新整理：就算有存過的樣子也不還原", async () => {
   const storage = tabStorage();
   const home = openPage(HOME, { storage });
   home.win.NavReturn.remember("cat", { save: () => "chipsSection", restore: () => {} });
   await tick();
   const state = home.win.history.state;
   home.fire("pagehide");
-  for (const navType of ["navigate", "reload"]) {
+  for (const [label, options] of [["新的一筆", { navType: "navigate", state: null }], ["重新整理", { navType: "reload", state }],
+    ["舊 API 說重新整理", { navType: "navigate", state, legacy: 1 }]]) {
     const restored = [];
-    const page = openPage(HOME, { storage, navType, state });
+    const page = openPage(HOME, { storage, ...options });
     page.win.NavReturn.remember("cat", { save: () => null, restore: (v) => restored.push(v) });
     await tick();
     await page.win.NavReturn.done();
-    assert.deepEqual(restored, [], navType);
+    assert.deepEqual(restored, [], label);
   }
+});
+
+test("整頁快取回來（pageshow persisted）：和存下的樣子不一樣才補那一段；一樣就不動", async () => {
+  const storage = tabStorage();
+  const home = openPage(HOME, { storage });
+  let open = "chipsSection";
+  const restored = [];
+  home.win.NavReturn.remember("cat", { save: () => open, restore: (v) => { restored.push(v); open = v; } });
+  home.win.NavReturn.remember("panel", { save: () => ({ key: "volume", top: 300 }), restore: (v) => restored.push(v.key) });
+  await tick();
+  home.fire("pagehide");
+  home.fire("pageshow", { persisted: true });
+  await home.win.NavReturn.done();
+  assert.deepEqual(restored, [], "原樣回來：不動");
+  // 有東西把分類收掉了（或面板裡捲動差幾格）：只補分類
+  home.fire("pagehide");
+  open = null;
+  home.fire("pageshow", { persisted: true });
+  await home.win.NavReturn.done();
+  assert.deepEqual(restored, ["chipsSection"]);
+  const { same } = home.win.NavReturn.model;
+  assert.ok(same({ key: "volume", top: 300 }, { key: "volume", top: 330 }), "面板裡捲動差 40 以內算一樣");
+  assert.ok(!same({ key: "volume" }, { key: "foreign" }));
 });
 
 test("直接打開的個股頁（書籤、推播、網址列）：返回鍵照連結去大盤", async () => {
@@ -242,22 +314,49 @@ test("對齊用的元素：各段給的（例如開著的那一類）在畫面�
   assert.deepEqual({ ...snaps[home.win.history.state.navId].anchor }, { id: "chipsSection", top: -120 });
 });
 
-test("還原途中使用者自己動了（點、捲）：剩下的浮層就不打開", async () => {
+async function midway(act) {
   const storage = tabStorage();
   const home = openPage(HOME, { storage });
   home.win.NavReturn.remember("cat", { save: () => "x", restore: () => {} });
-  home.win.NavReturn.remember("panel", { layer: "overlay", save: () => ({ key: "volume" }), restore: () => {} });
+  home.win.NavReturn.remember("panel", { save: () => ({ key: "volume" }), restore: () => {} });
+  home.win.scrollY = 900;
   await tick();
   const state = home.win.history.state;
   home.fire("pagehide");
-  const opened = [];
+  leftElsewhere(storage);
+  const opened = [], scrolled = [];
   const page = openPage(HOME, { storage, navType: "back_forward", state });
-  page.win.NavReturn.remember("cat", { save: () => null, restore: () => tick(30) });
-  page.win.NavReturn.remember("panel", { layer: "overlay", save: () => null, restore: (v) => opened.push(v) });
-  await tick();
-  page.fire("touchstart");
+  // 分類那一段的資料 80 毫秒後才到；版面在那之後長高一次
+  page.win.NavReturn.remember("cat", { save: () => null, restore: () => tick(80).then(() => { page.win.document.documentElement.scrollHeight = 3400; }) });
+  page.win.NavReturn.remember("panel", { save: () => null, restore: (v) => opened.push(v.key) });
+  page.win.scrollTo = (options) => { scrolled.push(options.top); page.win.scrollY = options.top; };
+  await tick(20);
+  act(page);
   await page.win.NavReturn.done();
-  assert.deepEqual(opened, []);
+  return { opened, scrolled, still: page.win.NavReturn.still() };
+}
+
+test("還原途中手指碰一下螢幕（touchstart）不算離開：面板照開、整頁照捲", async () => {
+  const got = await midway((page) => page.fire("touchstart", { touches: [{ clientY: 300 }] }));
+  assert.deepEqual(got.opened, ["volume"]);
+  assert.ok(got.scrolled.length >= 2 && got.scrolled.at(-1) === 900, got.scrolled);
+  assert.ok(got.still);
+});
+
+test("還原途中使用者明顯去做別的事（點了按鈕、手指拖一段）：不再替他捲，已經打開的留著", async () => {
+  const button = { closest: (selector) => (selector.includes("button") ? {} : null) };
+  for (const act of [
+    (page) => page.fire("click", { isTrusted: true, target: button }),
+    (page) => { page.fire("touchstart", { touches: [{ clientY: 300 }] }); page.fire("touchmove", { touches: [{ clientY: 200 }] }); },
+  ]) {
+    const got = await midway(act);
+    assert.deepEqual(got.opened, ["volume"], "面板一開始就打開了，留著");
+    assert.equal(got.scrolled.length, 1, `版面長高之後不再捲：${got.scrolled}`);
+    assert.ok(!got.still);
+  }
+  // 還原時程式自己點的（isTrusted 是 false）不算
+  const own = await midway((page) => page.fire("click", { isTrusted: false, target: button }));
+  assert.ok(own.still && own.scrolled.length >= 2);
 });
 
 test("一段還原出錯不影響其他段", async () => {
@@ -272,6 +371,7 @@ test("一段還原出錯不影響其他段", async () => {
   console.warn = () => {};
   try {
     home.fire("pagehide");
+    leftElsewhere(storage);
     const got = [];
     const page = openPage(HOME, { storage, navType: "back_forward", state });
     page.win.NavReturn.remember("a", { save: () => null, restore: () => { throw new Error("也壞掉"); } });
