@@ -337,6 +337,31 @@ jobs:
             echo "本次沒有新發布，不抓國外同類股"
           fi
 
+      - name: AI 產業鏈資金版圖：每月資金資料（發布成功或乾跑時）
+        # 本人 2026-11-24：資金版圖每天自己更新、不靠助手。台股用剛發布的工作集；美股向 Massive 補抓缺的交易日
+        # （grouped daily 一天一次，每次最多 20 次、間隔 12.5 秒），日檔存 R2 chain-map/raw/（只增不改）。
+        # 開關是 repository variable MARKET_ANA_CHAIN_MAP_SCHEDULE（要剛好是 on 才跑；沒設、其他值都不跑）。
+        # 乾跑：照樣讀 R2、呼叫 Massive，但不上傳 R2、不寫 D1，只印一行遮過的摘要（數量與月份範圍）。
+        # 名單：D1 chain_map_definitions 最新一份，沒有就用 seeds/ai-chain-map.json。歷史：R2 chain-map/bootstrap/ 最新的樣品原檔
+        # ＋D1 chain_map_flows 上一次排程寫的那一列；寫回一列（Cloudflare API 的 D1 /query 綁定參數，不用 SQL 檔：payload 超過單句 100 KB）。
+        # 0039 還沒套用：步驟摘要寫「資料表還沒建立：到 Actions 按 d1-migrate」，不算失敗；D1 當天寫入額度用完：紅色，日檔照樣留在 R2。
+        # Massive 資料限站主私用：payload 不寫檔、不印；只印一行狀態（數量與月份）與一行白話摘要。失敗只讓這一步顯示紅色，不擋發布。
+        if: success() && vars.MARKET_ANA_CHAIN_MAP_SCHEDULE == 'on'
+        continue-on-error: true
+        env:
+          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DRY_RUN: ${{ steps.day.outputs.dry_run }}
+        run: |
+          if [ -n "$DRY_RUN" ]; then
+            python chain_map_flows.py build --d1 --r2 --dry-run
+            exit $?
+          fi
+          sync=$(python -c "import json,sys; print(json.load(open(sys.argv[1], encoding='utf-8'))['sync_state'])" "${{ runner.temp }}/daily-result.json")
+          if [ "$sync" != "True" ]; then echo "本次沒有新發布，資金版圖不重算"; exit 0; fi
+          python chain_map_flows.py build --d1 --r2
+
       - name: 個股新聞名單：股票池前一交易日成交金額前 50 與英文簡稱（只在發布成功時）
         # 本人 2026-11-19「股票池中有進入到量大前50名」：剛發布的股票池快照＋行情庫最新一天的成交金額 → stock_news_pool；
         # 證交所／櫃買公開資料的英文簡稱 → stock_news_names（Google News 用英文名搜大媒體）。0031 還沒套時寫不進去，不擋發布。
