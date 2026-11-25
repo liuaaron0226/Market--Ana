@@ -21,6 +21,8 @@ export const WEB_FILES = [
   "terrain-layout.js", "terrain.js", "desk-tilt.js",
   // 看盤桌的動態層（2026-11-24 全站動態與元件設計升級；先接首頁，見 DESIGN_UPGRADE.md）
   "desk-motion.css", "desk-motion.js",
+  // K 線板標題列的鍵收成一格、左右滑切換（站主 2026-11-24；首頁與個股頁，只在手機寬度）
+  "key-slot.css", "key-slot.js",
   // 產業資金流向下面的各產業強勢股（本人 2026-11-20）
   "rotation-strong.js",
   // 立體重設計（11-15）：短中長期走勢的算票與畫面

@@ -3,8 +3,7 @@
 # 不讀任何機密設定。跑哪些、為什麼沒跑哪些：
 # - Python：.github/ci/python-tests.txt 列的模組（裡面寫了沒放進來的模組和原因）。MARKET_ANA_SKIP_STEP_RUNS=1：
 #   「實跑 workflow 的 shell 步驟」那幾項跳過（開發機上一直跳過、沒在 Linux 驗過），和開發機的結果一致。
-# - 網站程式（cloud/test/*.test.js、kchart-gestures.test.cjs）：全部，只有 intraday-client.test.js 不跑——
-#   它讀 cloud/.stock-pack.json，那是每日更新用 data/ 建出來的資料包，倉庫裡沒有。
+# - 網站程式（cloud/test/*.test.js、kchart-gestures.test.cjs）：全部；盤中投影使用倉庫內的固定樣本，不需每日資料包。
 # - 排程程式（cron-trigger/*.test.js）：全部。
 # - cloud/test 底下的 Python 測試（test_*.py、browser_*.py）不跑：要瀏覽器或 data/，也不能用 discover。
 # 紅色＝有東西壞了，但網站照常運作；把那一頁的網址給工程師或另一個 AI 看。
@@ -54,8 +53,6 @@ jobs:
           node-version: "22"
       - name: 排程程式（cron-trigger）
         run: node --test cron-trigger/*.test.js
-      - name: 網站程式（cloud/test，intraday-client.test.js 除外）
+      - name: 網站程式（cloud/test 全部）
         working-directory: cloud
-        run: |
-          files="$(ls test/*.test.js | grep -v '^test/intraday-client\.test\.js$' | tr '\n' ' ')"
-          node --test --no-warnings $files test/kchart-gestures.test.cjs
+        run: node --test --no-warnings test/*.test.js test/kchart-gestures.test.cjs

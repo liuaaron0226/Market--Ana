@@ -144,6 +144,18 @@ def choose(page, value: str) -> None:
     page.wait_for_timeout(500)
 
 
+# 手機寬度下標題列的鍵收成一格、一次只顯示一顆（web/key-slot.js，站主 11-24 指定）：要點哪一顆，先換到那一顆。
+# 電腦寬度下鍵並排，這一行沒有作用。那一格怎麼滑另由 design-previews/site-design-upgrade/keyslot_check.py 驗。
+def slot(page, name: str) -> None:
+    page.evaluate("name => { if (window.KeySlot) window.KeySlot.show(name); }", name)
+    page.wait_for_timeout(250)
+
+
+SLOT_SEEN_JS = """() => [...document.querySelectorAll('.ts-bar-keys > .dt-ui, .ts-bar-keys > .hm-period')]
+  .filter(unit => unit.getClientRects().length && getComputedStyle(unit).opacity === '1' && getComputedStyle(unit).pointerEvents !== 'none')
+  .map(unit => unit.matches('.dt-ui') ? 'tools' : 'period')"""
+
+
 def tools_journey(j: Journey, page, prefix: str) -> None:
     # 本人 11-24 選樣品 A：沒有工具列，「分析工具」一枚小鍵，點了浮出分三組的選單（draw-tools-ui.js）
     key, menu, trend = page.locator("#toolsKey"), page.locator("#drawTools"), page.locator("#drawTools button[data-tool=trend]")
@@ -151,7 +163,12 @@ def tools_journey(j: Journey, page, prefix: str) -> None:
             and not menu.is_visible())
     keys = page.locator(".ts-bar-keys").bounding_box()
     period = page.locator(".hm-period .chart-chip").bounding_box()
-    j.check(f"{prefix}分析工具鍵在週期鍵左邊", key.bounding_box()["x"] < period["x"], [key.bounding_box(), period, keys])
+    if prefix == "mobile-":
+        j.check(f"{prefix}鍵收成一格：一進來只顯示週期鍵（日K），換過去才是分析工具", page.evaluate(SLOT_SEEN_JS) == ["period"], page.evaluate(SLOT_SEEN_JS))
+        slot(page, "tools")
+        j.check(f"{prefix}鍵收成一格：換到分析工具後只顯示它", page.evaluate(SLOT_SEEN_JS) == ["tools"], page.evaluate(SLOT_SEEN_JS))
+    else:
+        j.check(f"{prefix}分析工具鍵在週期鍵左邊", key.bounding_box()["x"] < period["x"], [key.bounding_box(), period, keys])
     page.locator(".bd-chart").screenshot(path=str(OUT / f"{prefix}tools-1-collapsed.png"))
     key.click()
     page.wait_for_timeout(450)
@@ -288,6 +305,7 @@ def main() -> int:
                 context = j.context(browser, OWNER, **options)
                 page = j.stock(context)
                 tools_journey(j, page, prefix)
+                slot(page, "period")   # 手機：換回週期鍵（分析工具開著的選單會跟著收起）
                 page.locator(".hm-period .chart-chip").click()
                 page.wait_for_timeout(200)
                 names = page.locator("#periodMenu button:not([hidden])").all_inner_texts()

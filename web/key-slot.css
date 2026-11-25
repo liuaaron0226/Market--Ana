@@ -1,0 +1,38 @@
+/* K 線板標題列的鍵收成最右邊一格，左右滑切換（站主 2026-11-24 指定的做法）。程式在 key-slot.js。
+   首頁三顆（預測／分析工具／週期），個股頁兩顆（分析工具／週期）。只在手機寬度（860px 以下）收，電腦維持並排。
+   <html> 沒有 .ks-live 時這份樣式完全不作用（程式沒跑起來、或螢幕夠寬）。
+   不往那一排裡塞元素：鍵都還在原本的位置上，只是疊在同一格、一次顯示一顆；小點是那一排自己的 ::after。
+   時間與曲線用 desk-motion.css 的那一組（--u-move、--u-fade、--ease-depth）。維護說明在 DESIGN_UPGRADE.md 第 11 節。 */
+
+/* 那一排變成一格：現在這一顆照常排版（所以格子和它一樣寬），其他兩顆疊在同一個位置、看不到也點不到 */
+html.ks-live :is(body.hm .chart-controls, body.st .ts-bar-keys) { position: relative; display: flex; justify-content: flex-end; align-items: flex-end; gap: 8px; }
+/* 只管標題列按鍵的觸控；浮出細項保留原本的滑選／捲動規則，不覆蓋它們的 touch-action。 */
+html.ks-live :is(body.hm .chart-controls, body.st .ts-bar-keys) > :is(.forecast-control, .dt-ui, .hm-period) > :is(.forecast-chip, .chart-chip) { touch-action: pan-y; }   /* 左右滑交給程式，上下滑照常捲頁面 */
+html.ks-live :is(body.hm .chart-controls, body.st .ts-bar-keys) > :is(.forecast-control, .dt-ui, .hm-period) {
+  position: absolute; right: 0; bottom: 0; opacity: 0; pointer-events: none;
+  transition: opacity var(--u-fade, 180ms) var(--ease-out, ease-out);
+}
+html.ks-live :is(body.hm .chart-controls, body.st .ts-bar-keys) > :is(.forecast-control, .dt-ui, .hm-period).ks-on { position: relative; right: auto; bottom: auto; opacity: 1; pointer-events: auto; }
+/* 會跟著手指左右移的那一層：預測只動鍵本身（它的浮窗在手機上是釘在畫面上的，外層一有位移浮窗就會跟著跑掉） */
+html.ks-live :is(body.hm .chart-controls, body.st .ts-bar-keys) :is(.forecast-chip, .dt-ui, .hm-period) { transition: translate var(--u-move, 350ms) var(--ease-depth, cubic-bezier(.16, 1, .3, 1)); }
+html.ks-live :is(body.hm .chart-controls, body.st .ts-bar-keys).ks-drag > :is(.forecast-control, .dt-ui, .hm-period),
+html.ks-live :is(body.hm .chart-controls, body.st .ts-bar-keys).ks-drag :is(.forecast-chip, .dt-ui, .hm-period) { transition: none; }
+
+/* 鍵的正下方的小點：有幾顆鍵就幾個點，現在這一顆的點是深的 */
+html.ks-live :is(body.hm .chart-controls, body.st .ts-bar-keys)::after {
+  content: ""; position: absolute; right: 3px; bottom: -8px; width: 22px; height: 4px; pointer-events: none;
+  --ks-off: color-mix(in srgb, var(--ink) 22%, transparent);
+  background:
+    radial-gradient(circle at 2px 2px, var(--ks-d0, var(--ks-off)) 1.9px, transparent 2.3px),
+    radial-gradient(circle at 11px 2px, var(--ks-d1, var(--ks-off)) 1.9px, transparent 2.3px),
+    radial-gradient(circle at 20px 2px, var(--ks-d2, var(--ks-off)) 1.9px, transparent 2.3px);
+}
+html.ks-live :is(body.hm .chart-controls, body.st .ts-bar-keys)[data-ks-count="2"]::after { width: 13px; }
+html.ks-live :is(body.hm .chart-controls, body.st .ts-bar-keys)[data-ks-count="1"]::after { content: none; }   /* 只剩一顆（個股頁切到分時，沒有分析工具）：沒得滑，不畫點 */
+html.ks-live :is(body.hm .chart-controls, body.st .ts-bar-keys)[data-ks-at="0"] { --ks-d0: var(--ink); }
+html.ks-live :is(body.hm .chart-controls, body.st .ts-bar-keys)[data-ks-at="1"] { --ks-d1: var(--ink); }
+html.ks-live :is(body.hm .chart-controls, body.st .ts-bar-keys)[data-ks-at="2"] { --ks-d2: var(--ink); }
+
+@media (prefers-reduced-motion: reduce) {
+  html.ks-live :is(body.hm .chart-controls, body.st .ts-bar-keys) :is(.forecast-control, .forecast-chip, .dt-ui, .hm-period) { transition-duration: 1ms !important; }
+}
