@@ -307,6 +307,28 @@ class BookkeepingGuardTest(unittest.TestCase):
             dm.reconcile_sql(["0033'); DROP TABLE users; --.sql"])
 
 
+class VerifyCliTest(unittest.TestCase):
+    def test_verify_command_accepts_the_same_arguments_as_the_workflow(self):
+        db = database(NAMES, NAMES)
+        self.addCleanup(db.close)
+        cursor = db.execute(dm.STATE_SQL)
+        columns = [column[0] for column in cursor.description]
+        payload = [{"results": [dict(zip(columns, row)) for row in cursor.fetchall()], "success": True}]
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "state.json"
+            state.write_text(json.dumps(payload), encoding="utf-8")
+            for expected, code in ((NAMES[-1], 0), (NEW_NAME, 1)):
+                with self.subTest(expected):
+                    result = subprocess.run(
+                        [os.sys.executable, "-X", "utf8", str(ROOT / "d1_migrate.py"),
+                         "verify", "--state", str(state), "--expect", expected],
+                        cwd=tmp, capture_output=True, text=True, encoding="utf-8")
+                    self.assertEqual(result.returncode, code, result.stdout + result.stderr)
+                    self.assertNotIn("Traceback", result.stderr)
+                    if code:
+                        self.assertIn("還沒記帳", result.stdout)
+
+
 class ExplainErrorTest(unittest.TestCase):
     def test_the_daily_write_limit_is_said_in_plain_words(self):
         log = ("✘ [ERROR] A request to the Cloudflare API failed.\n  Your account has exceeded D1's free tier daily row write limit. "
