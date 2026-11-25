@@ -14,8 +14,8 @@ function loadIntraday() {
   return window.Intraday;
 }
 
-const pack = JSON.parse(readFileSync(new URL("cloud/.stock-pack.json", ROOT), "utf8"));
-const base = typeof pack.results["2330"] === "string" ? JSON.parse(pack.results["2330"]) : pack.results["2330"];
+// 固定數值對照必須使用同一份盤後輸入，不能隨每日建置資料包改變。
+const base = JSON.parse(readFileSync(new URL("cloud/test/fixtures/intraday-analysis-20261109.json", ROOT), "utf8"));
 const live = {
   ok: true, environment: "local", market_open: true, live: true,
   quote: {
@@ -28,6 +28,12 @@ const live = {
     "5": [], "15": [],
   },
 };
+
+test("盤中投影案例的盤後資料早於即時報價，歷史 K 線日期有序且與資料日一致", () => {
+  assert.ok(base.as_of < live.quote.data_date, "不得把較新的每日資料配上舊報價");
+  assert.equal(base.bars.at(-1).date, base.as_of);
+  assert.ok(base.bars.every((bar, index, bars) => index === 0 || bars[index - 1].date < bar.date));
+});
 
 test("盤中現價以 Python 同一套規則重算指標、價位、主要訊號與操作指引輸入", () => {
   const projected = loadIntraday().projectAnalysis(base, live);
