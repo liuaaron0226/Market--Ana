@@ -101,7 +101,9 @@
   host.addEventListener('pointerdown', event => {
     if (!live() || !event.isPrimary || event.button) return;
     const list = keys();
-    if (list.length < 2 || !event.target.closest('.forecast-control, .dt-ui, .hm-period')) return;
+    // 只接標題列按鍵，不接同一外層裡的浮出選單／預測細項；它們保留自己的點選與滑選。
+    const target = event.target.closest('.forecast-chip, .chart-chip');
+    if (list.length < 2 || !target || !list.some(key => key.unit === target.parentElement)) return;
     event.stopPropagation();   // 不讓 chart-menus.js「按下去就打開選單」的那一段接到：這一格裡改成放開才打開（走原本的 click）
     swallowUntil = 0;   // 新的一下開始了：上一次滑完要擋的那一下 click 早該到了，不要連這一下的點擊也擋掉
     drag = { id: event.pointerId, x: event.clientX, y: event.clientY, lx: event.clientX, lt: event.timeStamp, v: 0, mode: null, list, at: list.findIndex(key => key.id === current),

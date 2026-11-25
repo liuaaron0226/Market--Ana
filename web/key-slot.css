@@ -6,8 +6,8 @@
 
 /* 那一排變成一格：現在這一顆照常排版（所以格子和它一樣寬），其他兩顆疊在同一個位置、看不到也點不到 */
 html.ks-live :is(body.hm .chart-controls, body.st .ts-bar-keys) { position: relative; display: flex; justify-content: flex-end; align-items: flex-end; gap: 8px; }
-html.ks-live :is(body.hm .chart-controls, body.st .ts-bar-keys),
-html.ks-live :is(body.hm .chart-controls, body.st .ts-bar-keys) :is(button, span, div, svg) { touch-action: pan-y; }   /* 左右滑交給程式，上下滑照常捲頁面 */
+/* 只管標題列按鍵的觸控；浮出細項保留原本的滑選／捲動規則，不覆蓋它們的 touch-action。 */
+html.ks-live :is(body.hm .chart-controls, body.st .ts-bar-keys) > :is(.forecast-control, .dt-ui, .hm-period) > :is(.forecast-chip, .chart-chip) { touch-action: pan-y; }   /* 左右滑交給程式，上下滑照常捲頁面 */
 html.ks-live :is(body.hm .chart-controls, body.st .ts-bar-keys) > :is(.forecast-control, .dt-ui, .hm-period) {
   position: absolute; right: 0; bottom: 0; opacity: 0; pointer-events: none;
   transition: opacity var(--u-fade, 180ms) var(--ease-out, ease-out);

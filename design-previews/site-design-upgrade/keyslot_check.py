@@ -83,6 +83,39 @@ def main() -> None:
             touch("touchEnd", 0, 0)
             page.wait_for_timeout(700)
 
+        def period_menu_swipes(prefix: str) -> None:
+            # 細項自己的橫向滑選不能被外層三鍵攔走；放開選定後仍照既有規則收合。
+            for origin, target, label, across in (("daily", "weekly", "週K", 0), ("weekly", "daily", "日K", 0),
+                                                   ("daily", "daily", "日K", 1), ("daily", "daily", "日K", -1)):
+                direction = ("向右" if across > 0 else "向左") if across else "沿選單排列"
+                page.evaluate("() => window.KeySlot.show('period')")
+                page.wait_for_timeout(450)
+                if not page.locator("#periodMenu").is_visible():
+                    tap()
+                start = page.locator(f'#periodMenu button[data-value="{origin}"]').bounding_box()
+                end = page.locator(f'#periodMenu button[data-value="{target}"]').bounding_box()
+                x, y = start["x"] + start["width"] / 2, start["y"] + start["height"] / 2
+                tx, ty = end["x"] + end["width"] / 2, end["y"] + end["height"] / 2
+                if across:
+                    # 在同一個細項內左右各滑超過三鍵門檻，仍只能選它，不能換標題列功能。
+                    half = min(start["width"] / 2 - 3, 20)
+                    tx, ty = x + across * half, y
+                    x -= across * half
+                touch("touchStart", x, y)
+                for index in range(1, 9):
+                    touch("touchMove", x + (tx - x) * index / 8, y + (ty - y) * index / 8)
+                    page.wait_for_timeout(30)
+                during = page.evaluate(STATE)
+                touch("touchEnd", 0, 0)
+                page.wait_for_timeout(700)
+                after = page.evaluate(STATE)
+                value = page.locator("#periodSelect").input_value()
+                expect(f"{prefix}細項{direction}滑向{label}途中：選單保持開啟、不切三鍵",
+                       during["current"] == "period" and "periodMenu" in during["menus"], during)
+                expect(f"{prefix}細項{direction}滑向{label}放開：只選週期、仍停週期鍵並正常收合",
+                       value == target and after["current"] == "period" and after["seen"] == [label] and not after["menus"],
+                       {"value": value, "state": after})
+
         def crop(name: str) -> None:
             box = page.locator(".chart-toolbar").bounding_box()
             page.screenshot(path=str(OUT / f"{name}.png"), clip={"x": 0, "y": max(0, box["y"] - 8), "width": 390, "height": box["height"] + 34})
@@ -144,6 +177,8 @@ def main() -> None:
         menu = page.evaluate(STATE)
         page.screenshot(path=str(OUT / "8-period-menu.png"))
         expect("點一下日K：週期選單打開", "periodMenu" in menu["menus"], menu["menus"])
+        period_menu_swipes("首頁")
+        page.evaluate("() => window.KeySlot.show('period')")
         page.keyboard.press("Escape")
         page.wait_for_timeout(500)
 
@@ -206,6 +241,8 @@ def main() -> None:
         tap()
         period = page.evaluate(STATE)
         expect("個股頁往右滑回日K 再點：週期選單打開", period["seen"] == ["日K"] and "periodMenu" in period["menus"], period)
+        period_menu_swipes("個股頁")
+        page.evaluate("() => window.KeySlot.show('period')")
         page.keyboard.press("Escape")
         page.wait_for_timeout(500)
         # 選了一條畫好的線（draw-tools-ui.js 會把刪除與到價提醒那一組放出來）：自動換到分析工具，不然刪除鍵看不到；取消選取就回到原本那一顆
