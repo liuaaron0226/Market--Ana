@@ -42,13 +42,12 @@ class CiWorkflowTest(unittest.TestCase):
         self.assertTrue({"test_benchmark_compare", "test_daily_update"} <= excluded)
         self.assertFalse(excluded & set(listed), "說明裡列為不跑的，不能又出現在清單裡")
 
-    def test_the_js_step_skips_only_the_pack_dependent_file(self):
+    def test_the_js_step_includes_all_js_and_gesture_tests(self):
         steps = yaml.safe_load(TESTS.read_text(encoding="utf-8"))["jobs"]["javascript"]["steps"]
         run = next(s for s in steps if s.get("name", "").startswith("網站程式"))["run"]
-        self.assertIn("grep -v '^test/intraday-client\\.test\\.js$'", run)
+        self.assertIn("test/*.test.js", run)
         self.assertIn("test/kchart-gestures.test.cjs", run)
-        self.assertIn('.stock-pack.json', (ROOT / "cloud/test/intraday-client.test.js").read_text(encoding="utf-8"),
-                      "那一支確實要資料包；不再需要時把排除拿掉")
+        self.assertNotIn("grep -v", run, "盤中投影已有固定樣本，不得再排除")
 
 
 if __name__ == "__main__":
