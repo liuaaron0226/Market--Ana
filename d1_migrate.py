@@ -767,7 +767,6 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print("補記帳檔只寫記帳表：" + "、".join(names))
         return 0
-    migrations = load_migrations(args.migrations)
     try:
         db = _load_state(args.state)
     except (OSError, ValueError) as err:
@@ -781,6 +780,7 @@ def main(argv: list[str] | None = None) -> int:
         print("寫入之後核對：這一輪該記帳的都記上了。")
         return 0
 
+    migrations = load_migrations(args.migrations)
     report = plan(migrations, db, real=args.real, reconcile_only=args.reconcile_only)
     text = "\n".join(report.lines) + "\n"
     print(text, end="")
