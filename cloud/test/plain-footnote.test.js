@@ -51,7 +51,7 @@ test("人寫的舊版沒有來源欄、資料同一天：不寫小字", () => {
 });
 
 test("過期的白話分析整份不用：籌碼卡詳情也不拿舊文字配新數字", () => {
-  assert.match(source, /const PL = plainStale \? null : \(OV\.plain \|\| null\);/);
+  assert.match(source, /(?:const|let) PL = plainStale \? null : \(OV\.plain \|\| null\);/);
 });
 
 test("白話詳情與籌碼卡詳情都帶這行小字", () => {

@@ -12,8 +12,8 @@
     if (note) { note.hidden = false; note.textContent = error && error.kind ? error.message : '暫時無法取得資料，請稍後再試。'; }
     return;
   }
-  const A = OV && OV.analysis;
-  const D = OV && OV.dashboard;
+  let A = OV && OV.analysis;
+  let D = OV && OV.dashboard;
   let features = OV?.features || { market_trend_v1: false };
   if (!OV?.features && location.protocol !== 'file:') {
     try {
@@ -139,42 +139,46 @@
     return;
   }
 
-  const AS_OF = A.backtest.as_of || {};
-  // 收復線、防守線：每日更新照規則從當天的 K 線算出來（回測的截止日資料），每天都有，優先讀這一份；
-  // 人寫的劇本裡也抄了一份同樣的數字，只有在資料包還沒有帶算出來的那一份時才退回去讀它（本人 2026-11-15：線與圖不等人寫劇本）。
   const isNumber = value => value !== null && value !== '' && Number.isFinite(Number(value));
   const numberOr = value => (isNumber(value) ? Number(value) : NaN);   // null、空字串不當成 0
-  const linesDaily = isNumber(AS_OF.upper) && isNumber(AS_OF.lower);
-  const scenarioThresholds = D.thresholds || {};
-  const UPPER = numberOr(linesDaily ? AS_OF.upper : scenarioThresholds.upper);
-  const LOWER = numberOr(linesDaily ? AS_OF.lower : scenarioThresholds.lower);
-  const ACTIONS = D.actions || (D.forecast && D.forecast.actions) || {};
-  const CLOSE = Number(AS_OF.close || (D.latest && D.latest.close));
-  // 預設用哪一組比較樣本：也是每天照當天的型態定的，先讀算出來的；人寫的那一份可能是好幾天前的型態
-  const DEFAULT_SAMPLE = AS_OF.default_sample || D.default_sample || (A.backtest.samples[0] && A.backtest.samples[0].key);
-  const scenarioDate = (() => {
-    const horizon = String(D.forecast && D.forecast.horizon || '');
-    const match = horizon.match(/\d{4}-\d{2}-\d{2}/);
-    return match ? match[0] : String(D.expires_at || D.forecast && D.forecast.expiry || '').slice(0, 10);
-  })();
-  const scenarioExpired = Boolean(scenarioDate && A.meta.cutoff_date && scenarioDate < A.meta.cutoff_date);
-  // 本人 2026-11-14「過期就隱藏」：劇本與直白分析是人寫的，不會跟每日資料一起更新，比行情資料日舊時不顯示，不拿舊解讀配新數字。
-  // 2026-11-15 本人同意把範圍縮小：過期只藏人寫的文字（scenarioHidden：劇本日期、怎麼應對、觸發條件、解讀）。
-  // 人寫的那幾句講的是「它那一天的兩條線」：線已經換成新一天算的（數字和劇本裡抄的不一樣）時，就算劇本的適用日還沒過也不能顯示——
-  // 劇本的適用日當天收盤後，資料更新到那一天，線就換了，劇本還要到隔天才算過期。
   const sameLine = (a, b) => isNumber(a) && Math.abs(Number(a) - b) < 0.005;
-  const scenarioHidden = scenarioExpired || (linesDaily && !(sameLine(scenarioThresholds.upper, UPPER) && sameLine(scenarioThresholds.lower, LOWER)));
-  // 兩條線與靠它們算的東西每天都有。不顯示的情況只有三種：
-  // 兩邊都沒有數字（資料包壞了，不畫出「NaN」）；線還是從過期的劇本抄來的（資料包還沒帶算出來的那一份）；
-  // 行情已經走到線適用的那一天之後（每日更新沒跑成，見 setMarketHeader 裡的 linesOutdated）。
-  const linesMissing = !(Number.isFinite(UPPER) && Number.isFinite(LOWER)) || (!linesDaily && scenarioExpired);
+  let AS_OF, linesDaily, scenarioThresholds, UPPER, LOWER, ACTIONS, CLOSE, DEFAULT_SAMPLE, scenarioDate, scenarioExpired, scenarioHidden, linesMissing, plainSource, plainStale;
+  function updateAnalysisValues() {
+    AS_OF = A.backtest.as_of || {};
+    // 收復線、防守線：每日更新照規則從當天的 K 線算出來（回測的截止日資料），每天都有，優先讀這一份；
+    // 人寫的劇本裡也抄了一份同樣的數字，只有在資料包還沒有帶算出來的那一份時才退回去讀它（本人 2026-11-15：線與圖不等人寫劇本）。
+    linesDaily = isNumber(AS_OF.upper) && isNumber(AS_OF.lower);
+    scenarioThresholds = D.thresholds || {};
+    UPPER = numberOr(linesDaily ? AS_OF.upper : scenarioThresholds.upper);
+    LOWER = numberOr(linesDaily ? AS_OF.lower : scenarioThresholds.lower);
+    ACTIONS = D.actions || (D.forecast && D.forecast.actions) || {};
+    CLOSE = Number(AS_OF.close || (D.latest && D.latest.close));
+    // 預設用哪一組比較樣本：也是每天照當天的型態定的，先讀算出來的；人寫的那一份可能是好幾天前的型態
+    DEFAULT_SAMPLE = AS_OF.default_sample || D.default_sample || (A.backtest.samples[0] && A.backtest.samples[0].key);
+    scenarioDate = (() => {
+      const horizon = String(D.forecast && D.forecast.horizon || '');
+      const match = horizon.match(/\d{4}-\d{2}-\d{2}/);
+      return match ? match[0] : String(D.expires_at || D.forecast && D.forecast.expiry || '').slice(0, 10);
+    })();
+    scenarioExpired = Boolean(scenarioDate && A.meta.cutoff_date && scenarioDate < A.meta.cutoff_date);
+    // 本人 2026-11-14「過期就隱藏」：劇本與直白分析是人寫的，不會跟每日資料一起更新，比行情資料日舊時不顯示，不拿舊解讀配新數字。
+    // 2026-11-15 本人同意把範圍縮小：過期只藏人寫的文字（scenarioHidden：劇本日期、怎麼應對、觸發條件、解讀）。
+    // 人寫的那幾句講的是「它那一天的兩條線」：線已經換成新一天算的（數字和劇本裡抄的不一樣）時，就算劇本的適用日還沒過也不能顯示——
+    // 劇本的適用日當天收盤後，資料更新到那一天，線就換了，劇本還要到隔天才算過期。
+    scenarioHidden = scenarioExpired || (linesDaily && !(sameLine(scenarioThresholds.upper, UPPER) && sameLine(scenarioThresholds.lower, LOWER)));
+    // 兩條線與靠它們算的東西每天都有。不顯示的情況只有三種：
+    // 兩邊都沒有數字（資料包壞了，不畫出「NaN」）；線還是從過期的劇本抄來的（資料包還沒帶算出來的那一份）；
+    // 行情已經走到線適用的那一天之後（每日更新沒跑成，見 setMarketHeader 裡的 linesOutdated）。
+    linesMissing = !(Number.isFinite(UPPER) && Number.isFinite(LOWER)) || (!linesDaily && scenarioExpired);
+    plainSource = OV && OV.plain || null;
+    plainStale = Boolean(plainSource && plainSource.data_dates && A.meta.cutoff_date
+      && String(plainSource.data_dates.price_and_foreign || '') < A.meta.cutoff_date);
+  }
+  updateAnalysisValues();
   let linesOutdated = false;
   const linesHidden = () => linesMissing || linesOutdated;
   // 線是哪一天畫的：那一天就是今天才寫「今天」，不然寫日期（line-zones.js 的 dayOf）
   const drawnDay = () => window.LineZones.dayOf(AS_OF.date || A.meta.cutoff_date || '', new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Taipei' }));
-  const plainSource = OV && OV.plain || null;
-  const plainStale = Boolean(plainSource && plainSource.data_dates && A.meta.cutoff_date
-    && String(plainSource.data_dates.price_and_foreign || '') < A.meta.cutoff_date);
 
   let chart = null;
 
@@ -310,7 +314,7 @@
     };
   }
 
-  const officialMarketSnapshot = buildOfficialMarketSnapshot();
+  let officialMarketSnapshot = buildOfficialMarketSnapshot();
   const fallbackMarketDate = () => officialMarketSnapshot.date || A.meta.cutoff_date || D.market_date || '—';
   const fallbackMarketData = () => officialMarketSnapshot.data;
 
@@ -869,13 +873,13 @@
 
 
   // 籌碼卡與直白分析（本人 2026-11-06：選 B、多一點數據、直白分析、要提空單與融資）
-  const CH = OV.chips || null;
+  let CH = OV.chips || null;
   // 過期（比行情資料日舊）就整份不用：籌碼卡詳情也不拿舊的解讀配新數字（本人 11-14「過期就隱藏」）。
-  const PL = plainStale ? null : (OV.plain || null);
+  let PL = plainStale ? null : (OV.plain || null);
   // 盤勢解讀改版的最新一班（market-brief.js；/api/market-brief）。有它的時候首頁那張卡與點開的面板用它，籌碼卡的說明照舊用 PL。
   let BRIEF = null;
   let BRIEF_WATCH = [];   // 站主自己的追蹤事項（/api/impact-watch）：有項目時面板最後多一顆「追蹤事項」
-  const NOW = OV.current || null;   // 最新一天各項的前 10 與連續天數（本人 11-07 定案）
+  let NOW = OV.current || null;   // 最新一天各項的前 10 與連續天數（本人 11-07 定案）
   const shortDay = date => (date ? date.slice(5).replace('-', '/') : '');
   // 外資期貨空單比前一天（本人 11-19「寫出今天加空幾口或者是回補多少口」）：net 是淨部位（負的是空單），越負就是加空
   const shortChange = (prevNet, net) => {
@@ -918,7 +922,7 @@
       { key: 'volume', name: '成交金額', value: `${fmt(amounts.at(-1), 0)} 億`, tone: 'mid', read: `平常的 ${fmt(amtRatio, 1)} 倍`, chart: spark(amounts, 'var(--accent)'), date: A.daily.at(-1).date, plain: pick('volume') },
     ];
   }
-  function renderChips() {
+  function renderChips(refresh = false) {
     const grid = $('chipGrid');
     if (!grid) return;
     const cards = chipCards();
@@ -944,16 +948,21 @@
         $('readList').innerHTML = '';
         $('readDate').textContent = '';
         $('readCard').hidden = false;   // 這一份自己帶資料日，不看原本解讀過期了沒
-        const redraw = () => { if (panelState.kind === 'plain' && panelState.layer === 1 && els.panel.getAttribute('aria-hidden') === 'false') renderLayerOne(); };
+        const redraw = () => {
+          if (panelState.kind !== 'plain' || panelState.layer !== 1 || els.panel.getAttribute('aria-hidden') !== 'false') return;
+          const saved = panelSnapshot();
+          renderLayerOne();
+          restorePanelView(saved, saved.focusIndex >= 0);
+        };
         redraw();
         // 追蹤事項那一類（票 05）不在那一份裡：站主自己的追蹤事項有項目時，面板最後多一顆鍵
         if (features.impact_watch_v1) window.MarketBrief.loadWatch().then(items => { BRIEF_WATCH = items; if (items.length) redraw(); });
       });
     } else showPlain();
-    $('readCard').addEventListener('click', () => openPanel('plain', {}, $('readCard')));
+    if (!refresh) $('readCard').addEventListener('click', () => openPanel('plain', {}, $('readCard')));
   }
-  const DT = OV.detailIndex || null;
-  const detailDays = new Set(DT ? DT.days : []);
+  let DT = OV.detailIndex || null;
+  let detailDays = new Set(DT ? DT.days : []);
   function chipSeries(key) {
     if (!CH) return [];
     if (key === 'foreign') return CH.foreign.slice(-20).map(r => ({ date: r.date, value: r.net_billion, label: `${r.net_billion < 0 ? '賣' : '買'} ${fmt(Math.abs(r.net_billion), 0)} 億` }));
@@ -1070,9 +1079,10 @@
     return `<div class="drill-table chip-table more-wrap"><table><thead><tr><th>#</th><th>股票</th>${columns.map(c => `<th class="num">${columnHead(c[0])}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table>${rows.length > LIST_ROWS ? moreButton(`看到前 ${rows.length} ›`) : ''}</div>`;
   }
   // 填名單：其他天的排行要去取，取回後只在使用者仍停在同一張卡、同一天、同一邊時才填入（舊請求不覆蓋新選擇）。
-  let drillToken = 0;
-  function showChipList(key) {
+  let drillToken = 0, detailRetry = false;
+  function showChipList(key, preserve = false) {
     const list = chipList(key), day = chipDay(key), token = ++drillToken;
+    detailRetry = false;
     const target = () => els.panelBody.querySelector('#chipList'), title = els.panelBody.querySelector('#chipListTitle');
     if (!list || !title || !target()) return;
     // 日期只在看的不是最新那一天（在圖上點了別天）時才寫（本人 2026-11-20：重複的小字不要）
@@ -1082,6 +1092,8 @@
     title.innerHTML = name(list[0]);
     const fill = html => {
       if (token !== drillToken || !target()) return;
+      const top = els.panelBody.scrollTop;
+      const expanded = preserve && Boolean(target().querySelector('.more-wrap.is-all'));
       target().classList.remove('is-loading');
       target().removeAttribute('aria-busy');
       target().innerHTML = html;
@@ -1092,6 +1104,8 @@
         if (token !== drillToken) return;   // 已經在等另一天的資料：這份名單是舊的，標題不能被寫回舊的那一天
         title.innerHTML = name(more.getAttribute('aria-expanded') === 'true' ? list[0].replace(`前 ${LIST_ROWS}`, `前 ${target().querySelectorAll('tbody tr').length}`) : list[0]);
       });
+      if (expanded) more?.click();
+      if (preserve) els.panelBody.scrollTop = top;
     };
     if (day && day === nowDay(key)) { fill(listTable(NOW[list[1]], latestColumns(key, list[2]))); return; }
     // 那一天的明細還沒抓到（不在已有的日子裡，或取回來是空的）和官方那天真的沒資料要分開寫（換皮前就是這樣分；D 包核銷補回）
@@ -1105,7 +1119,19 @@
     } else fill('<p class="chip-date" data-loading>載入明細中…</p>');
     window.MarketData.detail(key, day).then(
       detail => fill(Object.keys(detail || {}).length ? listTable(detail[list[1]], dayColumns(key)) : notFetched),
-      error => fill(`<p class="chip-date" role="alert">${esc(error && error.message ? error.message : '暫時無法取得明細。')}</p>`)
+      error => {
+        if (token !== drillToken || !target()) return;
+        detailRetry = true;
+        const message = `<p class="chip-date" role="alert">${esc(error && error.message ? error.message : '暫時無法取得明細。')}</p>`;
+        if (preserve && target().querySelector('table')) {
+          target().classList.remove('is-loading');
+          target().removeAttribute('aria-busy');
+          target().querySelector('[data-loading]')?.removeAttribute('data-loading');
+          target().querySelector('[role="alert"]')?.remove();
+          target().insertAdjacentHTML('beforeend', message);
+        } else fill(message);
+        scheduleOverview(OVERVIEW_RETRY);
+      }
     );
   }
   function segmented(name, options, current) {
@@ -1126,7 +1152,27 @@
       <div class="chip-list-head"><h4 id="chipListTitle"></h4>${sides ? segmented('side', sides.map((label, i) => [i, label]), chipSide()) : ''}</div>
       <div id="chipList"></div>`;
   }
-  function bindChipPanel(key) {
+  function refreshChipPanel() {
+    const key = panelState.payload.key, day = panelState.payload.day;
+    // 原本選的日期已不在這張圖時，沿既有預設回到該項最新一天；買／賣選擇不變。
+    if (day && !chipSeries(key).some(row => row.date === day)) delete panelState.payload.day;
+    const top = els.panelBody.scrollTop;
+    const more = [...els.panelBody.querySelectorAll('.more-wrap')].map(node => node.classList.contains('is-all'));
+    const oldList = els.panelBody.querySelector('#chipList');
+    const content = document.createElement('template');
+    content.innerHTML = renderChipPanel(key);
+    // 換版中的歷史名單保留到新請求成功，避免板子先縮短造成捲動跳動。
+    if (oldList) content.content.querySelector('#chipList').replaceWith(oldList.cloneNode(true));
+    els.panelBody.replaceChildren(content.content);
+    bindChipPanel(key, true);
+    els.panelBody.querySelectorAll('.more-wrap').forEach((wrap, index) => {
+      if (more[index] && !wrap.classList.contains('is-all')) wrap.querySelector('[data-more]')?.click();
+    });
+    els.panelBody.scrollTop = top;
+    panelAnchor = $('chipGrid').querySelector(`[data-chip="${key}"]`);
+    activeAnchor = panelAnchor;
+  }
+  function bindChipPanel(key, preserve = false) {
     bindMore(els.panelBody);
     els.panelBody.querySelectorAll('.chip-seg button').forEach(button => button.addEventListener('click', () => {
       panelState.payload.side = Number(button.dataset.value);
@@ -1145,7 +1191,7 @@
       bar.addEventListener('click', () => { if (!justDragged()) pickDay(bar); });   // 拖完放開後瀏覽器補發的那一下不算
       bar.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); pickDay(bar); } });
     });
-    showChipList(key);
+    showChipList(key, preserve);
   }
   // 柱狀圖按住左右拖：選中的那個直條框跟著手指走，放開時靠近哪一天就選哪一天、名單跟著換（本人 11-15 更正）。點一下照舊。
   // 框是圖裡的一塊（.bar-thumb），位置用圖自己的座標。拖的時候圖帶 is-sliding：原本選中那一根的底色先收掉、由框來畫，
@@ -1480,16 +1526,19 @@
     return '詳情';
   }
 
-  function rememberPanel() {
-    window.cancelAnimationFrame(panelRestoreFrame);
+  function panelSnapshot() {
     const focusable = [...els.panelBody.querySelectorAll('button, summary, a, [tabindex]')];
-    panelTrail.push({
+    return {
       state: { ...panelState, payload: { ...panelState.payload } },
       title: els.panelTitle.textContent,
       scroll: els.panelBody.scrollTop,
       details: [...els.panelBody.querySelectorAll('details')].map(element => element.open),
       focusIndex: focusable.indexOf(document.activeElement)
-    });
+    };
+  }
+  function rememberPanel() {
+    window.cancelAnimationFrame(panelRestoreFrame);
+    panelTrail.push(panelSnapshot());
   }
 
   function updatePanelBack() {
@@ -1507,14 +1556,19 @@
     panelState = previous.state;
     if (panelState.layer === 2) renderLayerTwo(panelState.subkind, false);
     else renderLayerOne();
+    restorePanelView(previous);
+  }
+
+  function restorePanelView(previous, focus = true) {
     els.panelBody.querySelectorAll('details').forEach((element, index) => {
       element.open = previous.details[index] || false;
     });
+    els.panelBody.scrollTop = previous.scroll;
     panelRestoreFrame = requestAnimationFrame(() => {
       panelRestoreFrame = 0;
       const focusable = [...els.panelBody.querySelectorAll('button, summary, a, [tabindex]')];
       const target = focusable[previous.focusIndex];
-      (target && target.getClientRects().length ? target : els.panelBack).focus({ preventScroll: true });
+      if (focus) (target && target.getClientRects().length ? target : els.panelBack).focus({ preventScroll: true });
       els.panelBody.scrollTop = previous.scroll;
     });
   }
@@ -2024,10 +2078,71 @@
     updateOverlayControls();
     if (els.panel.getAttribute('aria-hidden') === 'false' && panelAnchor) placePanel(panelAnchor);
   });
+  // 盤後資料與即時報價是兩條來源；低頻查新版，回前景／整頁快取返回也查。
+  const OVERVIEW_INTERVAL = 5 * 60_000, OVERVIEW_RETRY = 30_000;
+  let overviewTimer = 0, overviewJob = null, overviewAttempt = -Infinity;
+  function scheduleOverview(delay = OVERVIEW_INTERVAL) {
+    window.clearTimeout(overviewTimer);
+    if (document.hidden || window.MarketData?.source !== 'cloud') return;
+    overviewTimer = window.setTimeout(refreshOverview, delay);
+  }
+  async function refreshOverview() {
+    if (document.hidden || window.MarketData?.source !== 'cloud' || overviewJob) return;
+    const remaining = OVERVIEW_RETRY - (Date.now() - overviewAttempt);
+    if (remaining > 0) { scheduleOverview(remaining); return; }
+    overviewAttempt = Date.now();
+    let delay = OVERVIEW_INTERVAL;
+    overviewJob = window.MarketData.overview();
+    try {
+      const next = await overviewJob;
+      if (next.version === OV.version) {
+        if (detailRetry && panelState.kind === 'chip' && panelState.layer === 1 && els.panel.getAttribute('aria-hidden') === 'false') {
+          showChipList(panelState.payload.key, true);
+        }
+        return;
+      }
+      OV = next;
+      A = next.analysis;
+      D = next.dashboard;
+      updateAnalysisValues();
+      officialMarketSnapshot = buildOfficialMarketSnapshot();
+      CH = next.chips || null;
+      NOW = next.current || null;
+      PL = plainStale ? null : (next.plain || null);
+      DT = next.detailIndex || null;
+      detailDays = new Set(DT ? DT.days : []);
+      if (!A.backtest.results[selectedSample]) selectedSample = DEFAULT_SAMPLE;
+      els.upper.textContent = fmt(UPPER);
+      els.lower.textContent = fmt(LOWER);
+      renderDistribution();
+      for (const node of [els.scenarioDate.parentElement, els.scenarioDate.parentElement.previousElementSibling]) {
+        if (node) node.hidden = scenarioHidden;
+      }
+      $('readCard').hidden = plainStale;
+      if (latestPayload) renderPayload(latestPayload);
+      else {
+        setMarketHeader(fallbackMarketData(), { id: 'closed', label: '休市' }, fallbackMarketDate());
+        loadPeriod(currentPeriod, false);   // 既有 update 保留視窗、週期、均線與副圖，不重建圖表
+      }
+      showLineKeys();   // 換版也會改變缺線狀態，不只行情過期狀態改變時才同步控制。
+      renderChips(true);
+      if (panelState.kind === 'chip' && panelState.layer === 1 && els.panel.getAttribute('aria-hidden') === 'false') {
+        refreshChipPanel();
+      }
+    } catch (error) {
+      console.warn('[盤後資料]', error);
+      delay = OVERVIEW_RETRY;   // 保留最後成功的畫面；失敗不讓重試永久停住
+    } finally {
+      overviewJob = null;
+      scheduleOverview(delay);
+    }
+  }
   document.addEventListener('visibilitychange', () => {
     window.clearTimeout(pollTimer);
-    if (!document.hidden) pollLive();
+    window.clearTimeout(overviewTimer);
+    if (!document.hidden) { pollLive(); refreshOverview(); }
   });
+  scheduleOverview();
 
   // 主題的選擇存在瀏覽器裡，和個股頁、自選庫存頁用同一個名字：換頁之後才會是同一種背景色（本人 11-15 回報換頁會跑掉）。
   const THEME_KEY = 'market-theme';
@@ -2046,7 +2161,7 @@
     requestAnimationFrame(updateOverlayControls);
     // 清單、面板都還是原樣（返回原處，nav-return.js）；行情在離開的那段時間沒有更新，馬上再問一次
     window.clearTimeout(pollTimer);
-    if (!document.hidden) pollLive();
+    if (!document.hidden) { pollLive(); refreshOverview(); }
   });
 
   // 主題在設定浮板裡切換（settings.js，本人 11-17 選樣品 A），切換後發 market:theme：圖用新的顏色重畫

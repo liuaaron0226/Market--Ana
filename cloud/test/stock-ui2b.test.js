@@ -92,10 +92,10 @@ test("策略理由只在結論出現一次，展開後不再重複同一句（�
 test("首頁人寫的劇本與直白分析比資料日舊時不顯示，不留「已過期」字樣配新數字（本人 11-14）；兩條線每天算得出來，不跟著藏（本人 11-15）", () => {
   const source = read("web/minimal.js");
   // 線優先讀每天算的那一份；只有線還是從過期的劇本抄來的時候才跟著藏
-  assert.match(source, /const UPPER = numberOr\(linesDaily \? AS_OF\.upper : scenarioThresholds\.upper\);/);
-  assert.match(source, /const linesMissing = !\(Number\.isFinite\(UPPER\) && Number\.isFinite\(LOWER\)\) \|\| \(!linesDaily && scenarioExpired\);/);
+  assert.match(source, /\bUPPER = numberOr\(linesDaily \? AS_OF\.upper : scenarioThresholds\.upper\);/);
+  assert.match(source, /\blinesMissing = !\(Number\.isFinite\(UPPER\) && Number\.isFinite\(LOWER\)\) \|\| \(!linesDaily && scenarioExpired\);/);
   // 人寫的那幾句只在它講的就是現在這兩條線時顯示
-  assert.match(source, /const scenarioHidden = scenarioExpired \|\| \(linesDaily && !\(sameLine\(scenarioThresholds\.upper, UPPER\) && sameLine\(scenarioThresholds\.lower, LOWER\)\)\);/);
+  assert.match(source, /\bscenarioHidden = scenarioExpired \|\| \(linesDaily && !\(sameLine\(scenarioThresholds\.upper, UPPER\) && sameLine\(scenarioThresholds\.lower, LOWER\)\)\);/);
   assert.match(source, /function overlays\(\) \{\s+if \(linesHidden\(\)\) return \[\];/);
   assert.match(source, /\$\('readCard'\)\.hidden = plainStale;/);
   assert.match(source, /plainSource\.data_dates\.price_and_foreign \|\| ''\) < A\.meta\.cutoff_date/);
