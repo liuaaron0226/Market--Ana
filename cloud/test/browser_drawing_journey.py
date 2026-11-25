@@ -207,6 +207,10 @@ class Journey:
         context = browser.new_context(**options)
         # 只連本機：外部字型等請求一律擋掉，旅程不受網路快慢影響（畫面改用系統字型）。
         context.route(lambda url: not url.startswith(self.base), lambda route: route.abort())
+        # 手機寬度下 K 線板標題列的鍵收成一格、一次只顯示一顆，進頁面先顯示週期鍵（web/key-slot.js，站主 11-24 指定）。
+        # 這支旅程驗的是畫線，所以每一頁一載入就先換到「分析工具」那一顆（等同使用者先滑到那一顆）；電腦寬度下這一行沒有作用。
+        # 那一格怎麼滑、怎麼換，另由 design-previews/site-design-upgrade/keyslot_check.py 驗。
+        context.add_init_script("addEventListener('DOMContentLoaded', () => { if (window.KeySlot) window.KeySlot.show('tools'); })")
         if email:
             context.add_cookies([{"name": "test_as", "value": quote(email), "url": self.base}])
         return context
