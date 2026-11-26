@@ -29,6 +29,7 @@ import { IMPACT_WATCH_PATH, handleImpactWatchApi } from "./impact-watch.js";
 import { MARKET_BRIEF_PATH, handleMarketBriefApi } from "./market-brief.js";
 import { branchHistoryUnavailable, handleBranchHistoryApi } from "./broker-branches.js";
 import { CHAIN_MAP_PAGE, CHAIN_MAP_PATH, chainMapUnavailable, handleChainMapApi } from "./chain-map.js";
+import { handleChainRoster } from "./chain-roster.js";
 import { pushConfigured, sendOne } from "./web-push.js";
 
 const PENDING_CAP = 30;
@@ -472,7 +473,9 @@ async function handleChainMapRequest(request, env, email, deps, { isOwner }) {
     if (e instanceof RateLimited) return json(429, { error: "rate-limited", message: "查詢太頻繁，請稍後再試" }, { "retry-after": String(e.retryAfter) });
     throw new HttpError(503, "暫時無法處理，請稍後再試");
   }
-  return handleChainMapApi(request, env, deps.chainMap, { isOwner });
+  const result = await handleChainMapApi(request, env, deps.chainMap, { isOwner });
+  if (isOwner) result.headers.set("x-chain-roster-owner", "1");
+  return result;
 }
 
 async function handleAnnouncementsApi(request, env, path, email, deps, { isOwner }) {
@@ -1052,6 +1055,8 @@ export async function handle(request, env, next, deps = defaultDeps) {
     }
 
     const isAdmin = path === "/admin" || path.startsWith("/admin/") || path.startsWith("/api/admin/");
+    const rosterApi = path === "/api/chain-roster";
+    const rosterPage = /^\/chain-roster(?:\/|\.html|\.js|\.css)?$/.test(path);
     const isMarket = path.startsWith("/api/market/");
     const isStock = path.startsWith("/api/stocks/");
     const isScreens = SCREEN_PATHS.has(path);
@@ -1064,6 +1069,8 @@ export async function handle(request, env, next, deps = defaultDeps) {
       if (closed) return closed;
       if (path === "/api/features") return json(200, policy);
       if (path === "/api/live") return await handleIndexLiveApi(request, env, email, deps);
+      if ((rosterPage || rosterApi) && !chainMapVisible(env, true)) return fail(404, "找不到");
+      if (rosterApi) return await handleChainRoster(request, env, deps);
       if (path.startsWith("/api/admin/")) return await handleAdminApi(request, env, path, owner);
       if (path === "/api/me") return json(200, { email, status: "approved", owner: true, logout_url: logoutUrl(env) });
       if (path === GEMINI_USAGE_PATH) return await handleGeminiUsageApi(request, env, deps, { isOwner: true });
@@ -1105,6 +1112,7 @@ export async function handle(request, env, next, deps = defaultDeps) {
     }
     const closed = friendAiClosed();
     if (closed) return closed;
+    if (rosterPage || rosterApi) return fail(404, "找不到");
     if (isAdmin) return fail(403, "沒有管理權限");
     if (path === "/api/me") return json(200, { email, status, owner: false, logout_url: logoutUrl(env) });
     if (path === GEMINI_USAGE_PATH) return await handleGeminiUsageApi(request, env, deps, { isOwner: false });

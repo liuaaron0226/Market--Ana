@@ -82,13 +82,13 @@ const API_PATHS = [
   "/api/market/overview", "/api/market/detail?kind=margin&date=2026-11-09", "/api/compare-0050", "/api/stocks/2330/vs-0050", "/api/funds/x",
   "/api/stocks/2330/analysis", "/api/stocks/2330/timeshare", "/api/stocks/2330/hourly", "/api/stocks/2330/live", "/api/stocks/2330/ticks",
   "/api/stocks/2330/history", "/api/stocks/2330/announcements", "/api/stocks/2330/headlines", "/api/stocks/2330/facts", "/api/stocks/search?q=2330",
-  "/api/market-news", "/api/impact-watch", "/api/chain-map", "/api/market-brief", "/api/indices/n225/intraday", "/api/indices/usdtwd",
+  "/api/market-news", "/api/impact-watch", "/api/chain-map", "/api/chain-roster", "/api/market-brief", "/api/indices/n225/intraday", "/api/indices/usdtwd",
   "/api/stocks/2330/branch-history", "/api/screens", "/api/screens/membership", "/api/rotation", "/api/core-holdings", "/api/data-status",
   "/api/admin/users", "/api/admin/users/p%40x.com/approve", "/api/admin/users/nobody%40x.com/approve", "/api/unknown", "/api/",
   "/analysis-data.js", "/chips-data.js", "/dashboard-data.js", "/detail-data.js", "/plain-data.js",
 ];
 const PAGE_PATHS = ["/", "/index.html", "/minimal.html", "/stock.html?code=2330", "/stock", "/portfolio.html", "/portfolio", "/admin", "/admin/",
-  "/admin/index.html", "/gemini/", "/gemini/index.html", "/chain-map", "/chain-map.html", "/no-such-page", "/deep/er/page/", "/_headers", "/_routes"];
+  "/admin/index.html", "/gemini/", "/gemini/index.html", "/chain-map", "/chain-map.html", "/chain-roster", "/chain-roster.html", "/no-such-page", "/deep/er/page/", "/_headers", "/_routes"];
 const STATIC_PATHS = [...WEB_FILES.filter((f) => !f.endsWith(".html")).map((f) => "/" + f), "/admin/admin.js", "/admin/account.css",
   "/gemini/gemini.js", "/gemini/account.css", "/market-data-cloud.js", "/_routes.json", "/favicon.ico"];
 
@@ -161,7 +161,7 @@ test("掃描清單不是空轉：同一份清單換成已核准的人拿得到�
   Object.assign(env, ALL_ON);
   await seed("ok@x.com", "approved");
   // 後台與 AI 產業鏈資金版圖只給站主：已核准的朋友拿到 403／404（各自的測試驗），不在這份清單的「拿得到」裡
-  for (const path of [...PAGE_PATHS, ...STATIC_PATHS].filter((p) => !p.startsWith("/admin") && !p.startsWith("/chain-map"))) {
+  for (const path of [...PAGE_PATHS, ...STATIC_PATHS].filter((p) => !p.startsWith("/admin") && !p.startsWith("/chain-map") && !p.startsWith("/chain-roster"))) {
     assert.equal(await (await req(path, { email: "ok@x.com" })).text(), "static-ok", path);
   }
   deps.marketPack = { version: "v", overview: { analysis: {}, dashboard: {} }, details: {} };

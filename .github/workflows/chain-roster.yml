@@ -1,0 +1,57 @@
+name: chain-roster
+on:
+  schedule:
+    - cron: '47 2 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: chain-roster-quarter
+  cancel-in-progress: false
+jobs:
+  nominate:
+    if: vars.MARKET_ANA_CHAIN_ROSTER_SCHEDULE == 'on'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements-daily.txt
+      - name: 檢查本季是否已有結果
+        id: check
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          due=$(python chain_roster_nominate.py due)
+          echo "due=$due" >> "$GITHUB_OUTPUT"
+      - name: 準備季度提名使用的官方 Gemini 與站主模型設定
+        if: steps.check.outputs.due == 'true'
+        env:
+          AGY_LOGIN_BUNDLE: ${{ secrets.AGY_LOGIN_BUNDLE }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: market-ana-state
+        run: |
+          set -euo pipefail
+          mkdir -m 700 "$RUNNER_TEMP/agy-home"
+          printf '%s' "$AGY_LOGIN_BUNDLE" | tr -d ' \r\n' | base64 -d | tar xzf - -C "$RUNNER_TEMP/agy-home"
+          python gemini_runtime.py install --directory "$RUNNER_TEMP/agy" --snapshot "$RUNNER_TEMP/catalog.json" --github-env "$GITHUB_ENV"
+          (cd cloud && npx --yes wrangler@4 d1 execute market-ana-accounts --remote --json --command "SELECT task, model, effort FROM ai_model_settings") > "$RUNNER_TEMP/ai-models.json"
+          python gemini_runtime.py prepare --read-only --directory "$RUNNER_TEMP/agy" --snapshot "$RUNNER_TEMP/catalog.json" --home "$RUNNER_TEMP/agy-home" --input "$RUNNER_TEMP/ai-models.json" --task watch-ledger --tasks watch_nominate --run-id "$GITHUB_RUN_ID" --github-env "$GITHUB_ENV"
+      - name: 產生本季提名
+        if: steps.check.outputs.due == 'true'
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+        run: python chain_roster_nominate.py run --agy-bin "$RUNNER_TEMP/agy/antigravity" --agy-home "$RUNNER_TEMP/agy-home"
+      - if: always()
+        run: rm -rf "$RUNNER_TEMP/agy-home" "$RUNNER_TEMP/agy" "$RUNNER_TEMP/ai-models.json"

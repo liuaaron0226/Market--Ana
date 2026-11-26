@@ -123,7 +123,7 @@
 
 ### C11. 資金版圖的未定事項
 - 首頁入口、點公司連到個股頁（用返回回原清單那個模組）、當月未過完的顯示（資料裡已有 `partial` 欄位，頁面不讀）——都要問站主。
-- 名單維護「Gemini 提名、站主同意」：已定案、沒做。現況與手動改法見 [chain-map-companies.md](chain-map-companies.md)。
+- 名單維護「Gemini 提名、站主同意」已依本人確認的樣張與三日門檻在獨立分支實作，待正式遷移與發布授權。操作與啟用步驟見 [chain-map-companies.md](chain-map-companies.md)。
 - 已知名單修正：`PSTG` → `P`（Everpure，程式已處理代號）、`MOD` 改名 Modexus Solutions。
 
 ### C12. 自選股關注的朋友版

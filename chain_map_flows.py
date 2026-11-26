@@ -369,7 +369,7 @@ def make_extract(day: str, results: list[dict], body: bytes, us_codes: list[str]
     return {"schema": SCHEMA, "source": "Massive grouped daily（美股，adjusted=false）",
             "endpoint": f"/v2/aggs/grouped/locale/us/market/stocks/{day}", "date": day, "fetched_at": fetched_at,
             "response_sha256": hashlib.sha256(body).hexdigest(), "response_bytes": len(body),
-            "results_count": len(results), "holiday": not results, "tickers": tickers}
+            "results_count": len(results), "holiday": not results, "requested": sorted(wanted), "tickers": tickers}
 
 
 def load_us_days(raw_dir: Path) -> dict[str, dict[str, Any]]:
@@ -607,7 +607,13 @@ def build(*, d1=None, chain: Mapping[str, Any] | None = None, bootstrap: Mapping
     if store is not None and not dry_run:
         summary["r2_uploaded"] = sync_up(store, raw_dir)
     tw = load_tw(data_dir, tw_codes)
-    payload = compose(base, tw, load_us_days(raw_dir), tw_codes, us_codes)
+    from chain_roster_health import market_health
+    us_days = load_us_days(raw_dir)
+    payload = compose(base, tw, us_days, tw_codes, us_codes)
+    seed_us = definition(json.loads(CHAIN_PATH.read_text(encoding="utf-8")))[1]
+    payload["roster_health"] = market_health(chain, data_dir, PRICE_DBS, us_days, massive_ticker, set(seed_us))
+    if fetch["error"] or fetch["left"]:
+        payload["roster_health"]["us_incomplete"] = True
     massive_from = payload.pop("us_massive_from")
     text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     months = payload["months"]

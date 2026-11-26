@@ -487,6 +487,11 @@ function renderPanel() {
     more = chips('也出現在', s.nodes.filter(x => x !== n.id));
   }
   $('#dLayer').textContent = eyebrow; $('#dName').textContent = title; $('#dDesc').textContent = desc; $('#dDesc').hidden = !desc; $('#dMore').innerHTML = more;
+  const gap = lv === 3 && FLOWS.roster_health?.gaps?.[mk + ':' + S.stock];
+  if (Array.isArray(gap?.days) && gap.days.length >= 3) {
+    const warning = el('p', 'roster-gap', '缺資料 · ' + gap.days.length + ' 個交易日');
+    $('#dMore').prepend(warning);
+  }
   const ends = trendBox.querySelectorAll('.ends span'); ends[0].textContent = MONTHS[0]; ends[1].textContent = MONTHS[N - 1];
   $('svg', trendBox).innerHTML = sparkSVG(SER[S.metric][scopeKey()] || [], 690, 64, m.kind === 'flow');
   updatePanelNumbers(); measureTrack();
@@ -624,7 +629,11 @@ function showEmpty(kind) {
   window.ChainMap = { snapshot: () => ({ ready: false, empty: kind }) };
 }
 fetch('/api/chain-map', { credentials: 'same-origin', cache: 'no-store', headers: { accept: 'application/json' } })
-  .then(r => (r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status))))
+  .then(r => {
+    const entry = document.getElementById('rosterEntry');
+    if (entry) entry.hidden = r.headers?.get('x-chain-roster-owner') !== '1';
+    return r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status));
+  })
   .then(d => { if (d && d.available && d.chain && d.flows) boot(d.chain, d.flows); else showEmpty('none'); },
     error => { console.warn('chain-map:', error && error.message); showEmpty('error'); });
 })();

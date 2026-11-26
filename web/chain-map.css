@@ -282,3 +282,5 @@ body.cm {
 }
 /* 還沒有資料、讀不到：在畫面那一格寫一句話（樣品沒有這個狀態） */
 .cm-empty { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; text-align: center; color: var(--dim); font-size: 14px; }
+#rosterEntry:not([hidden]) { display:inline-block; margin:10px 0; color:#73572f; font-weight:600; }
+.roster-gap { color:#754d12; background:#fbedd3; border-radius:6px; padding:4px 9px; }

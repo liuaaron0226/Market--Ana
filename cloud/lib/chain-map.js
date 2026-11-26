@@ -38,6 +38,21 @@ export function chainMapUnavailable() {
   return json(200, UNAVAILABLE);
 }
 
+// 舊快照沒有缺口欄位，壞掉的單筆觀測也不能影響其餘資金數字。
+function rosterHealth(value) {
+  if (!isObject(value?.through) || !isObject(value.gaps)) return {};
+  const isDay = day => typeof day === "string" && /^\d{4}-\d{2}-\d{2}$/.test(day);
+  const through = Object.fromEntries(["listed", "otc", "us"].map(key =>
+    [key, isDay(value.through[key]) ? value.through[key] : null]));
+  const gaps = {};
+  for (const [key, row] of Object.entries(value.gaps)) {
+    if (!/^(?:tw:\d{4}|us:[A-Z][A-Z.0-9-]*)$/.test(key) || !Array.isArray(row?.days)) continue;
+    const days = [...new Set(row.days.filter(isDay))].sort();
+    if (days.length >= 3) gaps[key] = {days, lastGood: isDay(row.lastGood) ? row.lastGood : null};
+  }
+  return {roster_health: {through, gaps, ...(value.us_incomplete === true ? {us_incomplete: true} : {})}};
+}
+
 // 存的那一份不直接信：最上層不是約定的格式就當成沒有；個別一檔的數字長度不對就拿掉那一檔（網頁把它畫成沒有資料），其他照給。
 export function flowsShape(stored) {
   let payload;
@@ -49,6 +64,7 @@ export function flowsShape(stored) {
   return {
     months: payload.months,
     inst0: payload.inst0,
+    ...rosterHealth(payload.roster_health),
     notes: Array.isArray(payload.notes) ? payload.notes.filter((line) => typeof line === "string") : [],
     tw: keep(payload.tw, (row) => numbers(row.t, n) && (row.i === undefined || numbers(row.i, n - payload.inst0))),
     us: keep(payload.us, (row) => numbers(row.t, n)),
@@ -70,7 +86,8 @@ async function currentDefinition(db, baseline) {
     "SELECT version, source, payload FROM chain_map_definitions ORDER BY created_at DESC, version DESC LIMIT 1");
   if (row) {
     try {
-      return { chain: chainForPage(JSON.parse(row.payload)), definition: { version: row.version, source: row.source } };
+      const raw = JSON.parse(row.payload);
+      return { chain: chainForPage(raw), since: raw.roster_since, definition: { version: row.version, source: row.source } };
     } catch { /* 那一份壞了：退回基準版 */ }
   }
   return baseline ? { chain: baseline, definition: { version: "file", source: "file" } } : null;
@@ -123,6 +140,15 @@ export async function handleChainMapApi(request, env, baseline, { isOwner }) {
   // 定義同理：D1 讀取出錯就用入庫的基準版。
   const current = await currentDefinition(env.DB, baseline).catch(() => (baseline ? { chain: baseline, definition: { version: "file", source: "file" } } : null));
   if (!current) return chainMapUnavailable();
+  const gaps = picked.flows.roster_health?.gaps;
+  if (gaps) {
+    for (const [key, gap] of Object.entries(gaps)) {
+      const [market, code] = key.split(":");
+      const since = current.since?.[market.toUpperCase() + " " + code];
+      if (since) gap.days = gap.days.filter(day => day > since);
+      if (!Object.hasOwn(current.chain[market], code) || gap.days.length < 3) delete gaps[key];
+    }
+  }
   return json(200, { available: true, definition: current.definition, chain: current.chain,
     flows: { source: picked.source, version: picked.version, as_of: picked.as_of, built_at: picked.built_at, ...picked.flows } });
 }

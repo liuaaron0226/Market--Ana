@@ -187,7 +187,7 @@ class PrepareReadOnlyTests(unittest.TestCase):
                     if 'gemini_runtime.py prepare ' in step.get('run', ''):
                         calls[(path.stem, step.get('id', 'prepare'))] = step
         read_only = {('forecast-ledger', 'prepare'), ('forecast-morning', 'prepare'),
-                     ('watch-ledger', 'prepare'), ('daily-update', 'plain_models')}
+                     ('watch-ledger', 'prepare'), ('daily-update', 'plain_models'), ('chain-roster', 'prepare')}
         live_only = {
             ('ai-digest', 'prepare'): "steps.mode.outputs.dry_run == 'false'",
             ('forecast-replay', 'prepare'): "steps.mode.outputs.plan_only == 'false'",

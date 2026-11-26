@@ -12,7 +12,7 @@ export const MIGRATION_FILES = ["0001_init.sql", "0003_api_hits.sql", "0004_list
   "0028_user_drawings_frame.sql", "0029_gemini_usage_outcome.sql", "0030_ai_model_settings.sql",
   "0031_market_news.sql", "0032_stock_news_marks.sql", "0033_news_impact.sql", "0034_impact_watch.sql",
   "0035_market_brief.sql", "0036_broker_branches.sql", "0037_market_news_push.sql", "0038_user_drawings_tools.sql",
-  "0039_chain_map.sql", "0040_data_health.sql", "0041_ops_runs.sql"];
+  "0039_chain_map.sql", "0040_data_health.sql", "0041_ops_runs.sql", "0042_chain_roster.sql"];
 export const migrationSql = (f) => readFileSync(new URL(`../migrations/${f}`, import.meta.url), "utf8");
 const MIGRATION = MIGRATION_FILES.map(migrationSql).join("\n");
 
@@ -47,13 +47,26 @@ export function fakeD1(files = null) {
       measure(sql, args, rows);
       return { results: rows };
     },
-    run: async () => {
-      const r = db.prepare(sql).run(...args);
-      return { meta: { changes: Number(r.changes) } };
-    },
+    run: async () => execute(sql, args),
+    execute: () => execute(sql, args),
   });
+  function execute(sql, args) {
+    const r = db.prepare(sql).run(...args);
+    return { meta: { changes: Number(r.changes) } };
+  }
   const resetMetrics = () => Object.assign(metrics, { selectQueries: 0, rowsReturned: 0, logicalRowsRead: 0, fullScanQueries: 0 });
-  return { prepare: (sql) => stmt(sql), _raw: db, metrics, resetMetrics };
+  async function batch(statements) {
+    db.exec("BEGIN");
+    try {
+      const results = statements.map(statement => statement.execute());
+      db.exec("COMMIT");
+      return results;
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  return { prepare: (sql) => stmt(sql), batch, _raw: db, metrics, resetMetrics };
 }
 
 // 只准查核准名單（閘門對每個非站主請求都會查的那一句）的資料庫：其他任何查詢都丟錯。

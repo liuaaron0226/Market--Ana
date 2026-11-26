@@ -23,6 +23,7 @@ test_candidate_snapshots
 test_capital_supplement
 test_chain_map_bootstrap
 test_chain_map_flows
+test_chain_roster
 test_chain_map_workflow
 test_chart_projection
 test_chip_detail_pack

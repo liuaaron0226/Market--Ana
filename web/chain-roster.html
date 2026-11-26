@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>季度名單維護｜資金版圖</title>
+    <link rel="stylesheet" href="chain-roster.css" />
+    <script src="chain-roster.js" defer></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header>
+        <div class="brand">
+          <span class="brandmark" aria-hidden="true">▦</span> 台股決策鏡 <span class="slash">／</span> 資金版圖
+        </div>
+        <a class="light" href="chain-map.html">查看資金版圖 ↗</a>
+      </header>
+      <div class="heading">
+        <div>
+          <div id="quarter" class="quarter"></div>
+          <h1>季度名單維護</h1>
+          <p class="sub">逐項審閱 Gemini 提名，經你同意才更新公司名單。</p>
+        </div>
+      </div>
+      <nav id="tabs" aria-label="維護功能"></nav>
+      <div role="status" aria-live="polite" id="notice"></div>
+      <section id="content"></section>
+    </main>
+  </body>
+</html>

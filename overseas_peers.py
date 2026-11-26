@@ -169,6 +169,8 @@ class MassiveSource:
         for item in results:
             if not isinstance(item, dict) or not isinstance(item.get("T"), str):
                 raise FormatChanged("grouped daily 格式不同")
+        if payload.get("next_url") or payload.get("resultsCount", len(results)) != len(results):
+            raise FormatChanged("grouped daily 回傳尚未完整")
         return results, body
 
 

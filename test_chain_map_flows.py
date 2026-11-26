@@ -200,7 +200,7 @@ class MergeRuleTest(unittest.TestCase):
         self.assertEqual(p["tw"]["6488"]["t"][3], 0, "完整月份沒有成交就是 0")
         self.assertEqual(summary["status"], "ok")
         self.assertEqual((summary["as_of"], summary["tw_through"]), ("2026-11", "2026-12-01"))
-        self.assertEqual(set(p), {"months", "inst0", "notes", "tw", "us", "partial"}, "chain-map-flows/v1＋partial；沒有 owner")
+        self.assertEqual(set(p), {"months", "inst0", "notes", "tw", "us", "partial", "roster_health"}, "chain-map-flows/v1＋partial 與公司缺行情觀測")
         self.assertEqual(self.env.d1.rows()[-1], {"version": "2026-12-02", "as_of": "2026-11", "built_at": "2026-12-02T12:30:00Z"},
                          "version＝台北建置日、as_of＝最後一個完整月份")
 
