@@ -225,15 +225,16 @@ jobs:
           python gemini_settings.py --input "$RUNNER_TEMP/ai-models.json" --github-env "$GITHUB_ENV" \
             --task watch-ledger --run-id "$GITHUB_RUN_ID" --read-sql "$RUNNER_TEMP/ai-model-read.sql"
 
-      - name: 下載官方 agy 1.5.3 並核對 SHA-256
+      - name: 安裝模型目錄同一快照的官方 agy（驗 SHA-256）
         id: agy_download
         continue-on-error: true
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: market-ana-state
         run: |
-          mkdir -p "$RUNNER_TEMP/agy" && cd "$RUNNER_TEMP/agy"
-          curl -fsSL -o agy.tgz https://github.com/google-antigravity/antigravity-cli/releases/download/1.5.3/agy_cli_linux_x64.tar.gz
-          echo "1b4850599cce73a17f94ffb422df3bf9531531b77dbddc40c1a435e0c2c16807  agy.tgz" | sha256sum -c
-          tar xzf agy.tgz
-          ./antigravity --version
+          python gemini_runtime.py install --directory "$RUNNER_TEMP/agy" --snapshot "$RUNNER_TEMP/gemini-catalog.json" --github-env "$GITHUB_ENV"
 
       - name: 還原登入檔到隔離 HOME
         id: agy_auth
@@ -244,6 +245,16 @@ jobs:
         run: |
           home="$RUNNER_TEMP/agy-home"; mkdir -p "$home"; chmod 700 "$home"
           printf '%s' "$AGY_LOGIN_BUNDLE" | tr -d ' \r\n' | base64 -d | tar xzf - -C "$home"
+
+      - name: 確認模型可用性（停用才替代，保留手動設定）
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: market-ana-state
+        run: |
+          python gemini_runtime.py prepare --directory "$RUNNER_TEMP/agy" --snapshot "$RUNNER_TEMP/gemini-catalog.json" --home "$RUNNER_TEMP/agy-home" \
+            --input "$RUNNER_TEMP/ai-models.json" --task watch-ledger --run-id "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --github-env "$GITHUB_ENV" ${{ steps.mode.outputs.dry_run != 'false' && '--read-only' || '' }}
 
       - name: 寫判斷
         env:

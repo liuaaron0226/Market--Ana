@@ -1,4 +1,7 @@
-"""每個任務用哪個 Gemini 模型：只在這裡改，排程檔不另外寫模型名稱。
+"""Gemini 任務預設與朋友 API 分線；排程檔不另外寫模型名稱。
+
+2026-11-25：可選模型由官方 CLI 每日同步（gemini_catalog／gemini_runtime），以下歷史決策只保留任務預設。
+新模型不覆寫手動選擇；只有已確認停用才由 prepare_choices 選經檢查的替代，實際模型另記。
 
 本人 2026-11-17 定案（ANALYSIS_PLAN.md〈Gemini 依任務分模型〉）：AI Pro 方案只有 Flash 與 Argon，
 事前預測（晚間、晨間、歷史重播）交給 Argon；同日更正「籌碼與資金白話分析、自選股提名同類股可以用 flash，
@@ -54,5 +57,6 @@ NEWS_EFFORT = "high"
 
 # 本人 2026-11-19 晚：上面五組（預測、判斷、提名、白話、站主解讀）改成站主在設定頁「AI 模型」自己選，排程開跑時讀
 # （gemini_settings.py）；這裡的值是「還沒選過」或「讀不到設定」時用的預設。朋友解讀不在設定頁（朋友自己的金鑰）。
-MODELS = (ARGON, FLASH)
-EFFORTS = ("low", "medium", "high")
+# Catalogue validation is shared with the API, not a hand-maintained allowlist.
+from gemini_catalog import load_catalog, EFFORTS
+MODELS = tuple(model['id'] for model in load_catalog()['models'])

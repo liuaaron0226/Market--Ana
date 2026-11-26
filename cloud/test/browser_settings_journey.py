@@ -233,6 +233,51 @@ def owner_models(journey: Journey, browser, width: int, first: bool) -> None:
     context.close()
 
 
+def dynamic_models(journey: Journey, browser, width: int, state_file: Path) -> None:
+    tag = f'動態模型 {width}'
+    context, page = journey.page(browser, OWNER, width, '/minimal.html#ai-models')
+    page.wait_for_selector('#settings-models .st-mrow')
+    page.locator('[data-mrow="digest"]').click()
+    page.locator('[data-mkey="digest"][data-model="gemini-4-neon"]').click()
+    page.locator('[data-mkey="digest"][data-effort="xhigh"]').click()
+    journey.check(f'{tag}：新模型可選極高，未知用量不捏造', '未知' in page.locator('#settings-model-digest-choices').inner_text())
+    page.locator('[data-maction="save"]').click()
+    page.wait_for_selector('#settings-models .st-saved')
+    page.reload(wait_until='load')
+    page.wait_for_selector('#settings-models .st-mrow')
+    journey.check(f'{tag}：Neon極高手動選擇重新整理後保留', 'Neon・極高' in page.locator('[data-mrow="digest"]').inner_text())
+    page.locator('[data-mrow="digest"]').click()
+    page.locator('[data-mkey="digest"][data-model="gemini-pro-orchestrator-neon"]').click()
+    efforts = page.locator('[data-mkey="digest"][data-effort]').all_inner_texts()
+    journey.check(f'{tag}：Orchestrator只顯示官方自動強度', efforts == ['模型自動'], efforts)
+    page.locator('[data-maction="save"]').click()
+    page.wait_for_selector('#settings-models .st-saved')
+    at = (datetime.now(timezone.utc) + timedelta(seconds=2)).isoformat()
+    state_file.write_text(json.dumps({'ai-models/resolutions/digest.json': {
+        'requested': {'model':'gemini-pro-orchestrator-neon','effort':'default'},
+        'actual': {'model':'gemini-4-neon','effort':'medium'}, 'state':'replaced',
+        'reason':'officially_unavailable', 'checked_at':at}}), encoding='utf-8')
+    page.reload(wait_until='load')
+    page.wait_for_selector('#settings-models .st-mrow')
+    warning = page.locator('#settings-models .st-warn').all_inner_texts()
+    journey.check(f'{tag}：原選擇保留且看得到替代原因與實際模型',
+                  'Orchestrator' in page.locator('[data-mrow="digest"]').inner_text()
+                  and any('已停用' in w and 'Neon・中' in w for w in warning), warning)
+    page.locator('[data-mrow="digest"]').click()
+    page.screenshot(path=str(OUT / f'dynamic-models-{width}.png'))
+    page.wait_for_timeout(300)  # Existing pane entrance animation must finish before measuring layout.
+    size = page.evaluate('() => { const d=document.querySelector("#settings-models"); return {scroll:d.scrollWidth, client:d.clientWidth, wide:[...d.querySelectorAll("*")].filter(e=>e.getBoundingClientRect().right>d.getBoundingClientRect().right+1).map(e=>[e.className,e.tagName,e.getBoundingClientRect().width])}; }')
+    journey.check(f'{tag}：動態選項不橫向溢出', size['scroll'] <= size['client'] + 1, size)
+    page.locator('[data-mkey="digest"][data-model="gemini-4-argon"]').click()
+    page.locator('[data-maction="save"]').click()
+    page.wait_for_selector('#settings-models .st-saved')
+    journey.check(f'{tag}：替代之後仍能手動改選並清除舊告警',
+                  'Argon・中' in page.locator('[data-mrow="digest"]').inner_text()
+                  and not any('已停用' in w for w in page.locator('#settings-models .st-warn').all_inner_texts()))
+    state_file.write_text('{}', encoding='utf-8')
+    context.close()
+
+
 def friend_page(journey: Journey, browser, width: int) -> None:
     tag = f"朋友 home {width}"
     context, page = journey.page(browser, FRIEND, width, PAGES["home"])
@@ -369,7 +414,9 @@ def main() -> int:
     seed = Path(tempfile.mkdtemp()) / "seed.sql"
     seed.write_text(seed_sql(), encoding="utf-8")
     port = free_port()
-    env = {**os.environ, "JOURNEY_SEED_SQL": str(seed), "MARKET_ANA_WATCHLIST_WATCH": "owner", "JOURNEY_PUSH": "test"}
+    state_file = seed.with_name('model-state.json')
+    state_file.write_text('{}', encoding='utf-8')
+    env = {**os.environ, "JOURNEY_SEED_SQL": str(seed), "MARKET_ANA_WATCHLIST_WATCH": "owner", "JOURNEY_PUSH": "test", 'JOURNEY_MODEL_STATE': str(state_file)}
     server = subprocess.Popen(["node", str(ROOT / "cloud/test/journey-server.mjs"), str(port), "relaxed"], cwd=ROOT / "cloud", env=env)
     base = f"http://127.0.0.1:{port}"
     wait_for(base)
@@ -388,6 +435,7 @@ def main() -> int:
                 for name, path in PAGES.items():
                     owner_page(journey, browser, name, path, width)
                 owner_models(journey, browser, width, first=width == 390)
+                dynamic_models(journey, browser, width, state_file)
                 friend_page(journey, browser, width)
             browser.close()
     finally:

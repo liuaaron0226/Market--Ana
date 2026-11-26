@@ -165,15 +165,15 @@
 }
 .st-quota + .st-mrow, .st-warn + .st-mrow { margin-top: 6px; }
 .st-mname small { display: block; color: var(--faint); font-size: 12px; }
-.st-mval { display: inline-flex; align-items: center; gap: 6px; flex: none; color: var(--dim); font-size: 14px; }
+.st-mval { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 58%; overflow-wrap: anywhere; color: var(--dim); font-size: 14px; }
 .st-mval[data-changed] { color: var(--ink); font-weight: 600; }
-.st-mval .st-chev { transition: transform 200ms var(--ease-out); }
+.st-mchoice { min-width: 0; overflow-wrap: anywhere; }
+.st-mval .st-chev { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 16px; width: 16px; height: 16px; line-height: 1; transition: transform 200ms var(--ease-out); }
 .st-mrow[aria-expanded="true"] .st-chev { transform: rotate(90deg); }
-.st-mopen { display: flex; gap: 8px; padding: 0 0 12px; }
+.st-mopen { display: flex; flex-direction: column; gap: 8px; padding: 0 0 12px; }
 .st-mopen[hidden] { display: none; }
-.st-mopen .st-seg:last-child { flex: 1; }
-.st-mopen .st-seg:last-child button { flex: 1; min-width: 0; }
-.st-mopen .st-seg button { min-width: 62px; padding: 0 10px; }
+.st-mopen .st-seg { flex-wrap: wrap; }
+.st-mopen .st-seg button { min-width: 62px; min-height: 44px; padding: 4px 10px; flex: 1 1 auto; }
 .st-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 0 4px; }
 .st-btn {
   min-height: 40px; padding: 0 16px; border: 0; border-radius: var(--r-key); background: var(--key); color: var(--ink);

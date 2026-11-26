@@ -98,6 +98,27 @@ class WorkflowModelTests(unittest.TestCase):
         jobs = yaml.safe_load((ROOT / ".github/workflows" / f"{name}.yml").read_text(encoding="utf-8"))["jobs"]
         return next(job["steps"] for job in jobs.values() if any("gemini_settings.py" in s.get("run", "") for s in job["steps"]))
 
+    def test_every_consumer_installs_the_catalogue_cli_and_checks_before_analysis(self):
+        for name in SETTINGS_WORKFLOWS:
+            with self.subTest(workflow=name):
+                steps = self.jobs_steps(name)
+                installs = [i for i,s in enumerate(steps) if 'gemini_runtime.py install ' in s.get('run','')]
+                checks = [i for i,s in enumerate(steps) if 'gemini_runtime.py prepare ' in s.get('run','')]
+                self.assertTrue(installs)
+                self.assertTrue(checks)
+                self.assertLess(installs[0], checks[0])
+                if name == 'daily-update':
+                    self.assertTrue(steps[checks[0]].get('continue-on-error'), 'AI failure must not block market data publication')
+                    run = next(s for s in steps if s.get('id') == 'run')
+                    self.assertIn("steps.plain_models.outcome == 'success'", run['env']['PLAIN_AGY_BIN'])
+                else:
+                    self.assertFalse(steps[checks[0]].get('continue-on-error', False), 'failed checks must stop model analysis')
+                self.assertNotIn('releases/download/1.5.3', str(steps))
+        import yaml
+        workflow = yaml.safe_load((ROOT / '.github/workflows/gemini-catalog.yml').read_text(encoding='utf-8'))
+        self.assertIn('schedule', workflow.get('on', workflow.get(True)))
+        self.assertIn('gemini_runtime.py sync', str(workflow))
+
     def test_schedules_never_write_a_model_name_themselves(self):
         for name in (*AGY_WORKFLOWS, "daily-update.yml", "ai-digest.yml"):
             source = "\n".join(line for line in (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")

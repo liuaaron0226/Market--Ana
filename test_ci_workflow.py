@@ -42,6 +42,9 @@ class CiWorkflowTest(unittest.TestCase):
         self.assertTrue({"test_benchmark_compare", "test_daily_update"} <= excluded)
         self.assertFalse(excluded & set(listed), "說明裡列為不跑的，不能又出現在清單裡")
 
+    def test_model_catalog_and_runtime_regressions_are_in_the_ci_module_list(self):
+        self.assertTrue({"test_gemini_catalog_regressions", "test_gemini_runtime_regressions"} <= set(modules()))
+
     def test_the_js_step_includes_all_js_and_gesture_tests(self):
         steps = yaml.safe_load(TESTS.read_text(encoding="utf-8"))["jobs"]["javascript"]["steps"]
         run = next(s for s in steps if s.get("name", "").startswith("網站程式"))["run"]

@@ -125,14 +125,15 @@
     digest: { name: '今日 AI 解讀', sub: '' },
     news: { name: '首頁消息', sub: '盤前・午盤・收盤後' },
   };
-  const MODEL_CHOICES = [['gemini-4-argon', 'Argon'], ['gemini-3.8-flash', 'Flash']];
-  const EFFORT_CHOICES = [['low', '低'], ['medium', '中'], ['high', '高']];
+  const EFFORT_CHOICES = [['low', '低'], ['medium', '中'], ['high', '高'], ['xhigh', '極高'], ['max', '最高'], ['default', '模型自動']];
+  const catalogLabel = (catalog, model) => (catalog?.models?.find(m => m.id === model)?.label || modelLabel(model) || model).replace(/^Gemini [\d.]+ /, '');
   // 改了會另開一組成績的兩項（本人第 5、6 題：存檔前先問）
   const SCORED = {
     forecast: '成績另開一組從頭累積，正式起算要重數連續 5 天。從下一個晚間版開始用。',
     watch_judge: '成績另開一組從頭累積。下一時段開始用。',
   };
-  const choiceText = (c) => `${modelLabel(c.model)}・${(EFFORT_CHOICES.find(([k]) => k === c.effort) || [])[1] || ''}`;
+  const choiceText = (c, catalog) => c.effort === 'default' ? catalogLabel(catalog, c.model)
+    : `${catalogLabel(catalog, c.model)}・${(EFFORT_CHOICES.find(([k]) => k === c.effort) || [])[1] || c.effort}`;
   const shortTime = (iso) => { const t = iso ? taipei(iso) : null; return t ? `${pad(t.m)}-${pad(t.day)} ${t.hm}` : ''; };
   // 草稿裡和現值不同的才算改動
   const pending = (data, draft) => (data?.tasks || [])
@@ -143,8 +144,16 @@
     const changed = new Set(pending(data, draft).map(({ task }) => task.key));
     const rows = (data?.tasks || []).filter(task => MODEL_TASKS[task.key]).map(task => {
       const current = changed.has(task.key) ? draft[task.key] : task;
+      const record = data?.resolutions?.[task.key];
+      const applies = record?.requested?.model === task.model && record?.requested?.effort === task.effort;
+      const warning = applies && record.state === 'replaced'
+        ? `${choiceText(task, data.catalog)} 已停用；實際改用 ${choiceText(record.actual, data.catalog)}。可手動改選。`
+        : applies && record.state === 'failed' ? '上一班無法確認可用模型，未替代；請檢查登入與用量，或手動改選。' : '';
+      const supported = data?.catalog?.models?.find(m => m.id === current.model)?.efforts || [];
       return { key: task.key, ...MODEL_TASKS[task.key], model: current.model, effort: current.effort,
-        value: choiceText(current), changed: changed.has(task.key) };
+        value: choiceText(current, data?.catalog), changed: changed.has(task.key), warning,
+        effortChoices: supported.map(e => [e, EFFORT_CHOICES.find(([k]) => k === e)?.[1] || e]),
+        quotaNote: ['gemini-4-argon', 'gemini-3.8-flash'].includes(current.model) ? '' : '此模型用量資訊未知。' };
     });
     const quota = [['argon', 'Argon 本週剩'], ['flash', 'Flash 本週剩']]
       .filter(([key]) => data?.quota?.[key] != null)
@@ -152,6 +161,11 @@
     const updated = shortTime(data?.updated_at);
     return {
       rows, quota, dirty: changed.size > 0,
+      modelChoices: (data?.catalog?.models || []).map(m => [m.id, catalogLabel(data.catalog, m.id)]),
+      catalogWarning: data?.catalog?.source_state === 'unreadable' || data?.catalog?.source_state === 'seed'
+        ? '尚未取得雲端模型清單，顯示內建官方快照；既有選擇不變。'
+        : ['failed', 'stale'].includes(data?.catalog_status?.state)
+          ? '模型清單更新異常，保留最後成功清單；既有選擇不變。' : '',
       unread: (data?.unread || []).map(item => `${TASKS[item.task] || item.task}上一時段（${shortTime(item.read_at)}）沒讀到你的設定，用了預設。`),
       notReady: data?.ready === false ? '網站資料庫還沒更新，現在顯示的是預設，暫時不能存。' : '',
       foot: `存檔後下一時段排程開始用（大盤預測從下一個晚間版起）。${updated ? `上次修改 ${updated}。` : ''}`,
@@ -159,14 +173,19 @@
   }
 
   // 按了一顆鍵之後的選擇。本人 11-19 晚「Flash還是改用高好了」：從別的模型切到 Flash 時思考強度先帶「高」，之後仍可自己改
-  const nextChoice = (base, pick) => {
-    if (pick.model && pick.model !== base.model) return { model: pick.model, effort: pick.model === 'gemini-3.8-flash' ? 'high' : base.effort };
-    return { ...base, ...pick };
+  const nextChoice = (base, pick, catalog) => {
+    const next = { ...base, ...pick };
+    if (pick.model && pick.model !== base.model) {
+      next.effort = pick.model === 'gemini-3.8-flash' ? 'high' : base.effort;
+      const efforts = catalog?.models?.find(m => m.id === pick.model)?.efforts;
+      if (efforts?.length && !efforts.includes(next.effort)) next.effort = efforts.includes('medium') ? 'medium' : efforts[0];
+    }
+    return next;
   };
 
   const confirmNotes = (data, draft) => pending(data, draft)
     .filter(({ task }) => SCORED[task.key])
-    .map(({ task, next }) => `${MODEL_TASKS[task.key].name}改成 ${choiceText(next)}：${SCORED[task.key]}`);
+    .map(({ task, next }) => `${MODEL_TASKS[task.key].name}改成 ${choiceText(next, data?.catalog)}：${SCORED[task.key]}`);
 
   // ---- 資料更新（2026-11-24：每一份資料最後更新的時間與狀態；/api/settings/data-health，判斷在 cloud/lib/data-health.js）----
   const HEALTH_STATES = { ok: '正常', late: '延遲', failed: '停止更新', degraded: '部分異常', error: '無法檢查' };
@@ -492,6 +511,7 @@
     }
     for (const text of view.unread) pane.append(el('p', 'st-warn', text));
     if (view.notReady) pane.append(el('p', 'st-warn', view.notReady));
+    if (view.catalogWarning) pane.append(el('p', 'st-warn', view.catalogWarning));
     for (const row of view.rows) {
       const open = models.open === row.key;
       const head = el('button', 'st-mrow');
@@ -502,16 +522,22 @@
       head.setAttribute('aria-controls', `settings-model-${row.key}-choices`);
       const name = el('span', 'st-mname', row.name);
       if (row.sub) name.append(el('small', '', row.sub));
-      const value = el('span', 'st-mval', row.value);
+      const value = el('span', 'st-mval');
+      value.append(el('span', 'st-mchoice', row.value));
       if (row.changed) value.dataset.changed = '';
-      value.append(el('span', 'st-chev', '›'));
+      const chevron = el('span', 'st-chev');
+      chevron.innerHTML = '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="m6 3 5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>';
+      value.append(chevron);
       head.append(name, value);
       const choices = el('div', 'st-mopen');
       choices.id = `settings-model-${row.key}-choices`;
       choices.hidden = !open;
-      choices.append(segment(`${row.name}的模型`, MODEL_CHOICES, row.model, row.key, 'model'),
-        segment(`${row.name}的思考強度`, EFFORT_CHOICES, row.effort, row.key, 'effort'));
-      pane.append(head, choices);
+      choices.append(segment(`${row.name}的模型`, view.modelChoices, row.model, row.key, 'model'),
+        segment(`${row.name}的思考強度`, row.effortChoices, row.effort, row.key, 'effort'));
+      if (row.quotaNote) choices.append(el('p', 'st-note', row.quotaNote));
+      pane.append(head);
+      if (row.warning) pane.append(el('p', 'st-warn', row.warning));
+      pane.append(choices);
     }
     if (models.confirming) {
       const box = el('div', 'st-confirm');
@@ -577,7 +603,7 @@
       const key = pick.dataset.mkey;
       const task = models.data.tasks.find(t => t.key === key);
       const base = models.draft[key] || { model: task.model, effort: task.effort };
-      models.draft = { ...models.draft, [key]: nextChoice(base, pick.dataset.model ? { model: pick.dataset.model } : { effort: pick.dataset.effort }) };
+      models.draft = { ...models.draft, [key]: nextChoice(base, pick.dataset.model ? { model: pick.dataset.model } : { effort: pick.dataset.effort }, models.data.catalog) };
       models.confirming = false;
       models.note = '';
       renderModels();
@@ -665,6 +691,7 @@
     renderTabs();
     // 資料更新提醒的推播點了會帶 #data-health 打開首頁：直接打開設定的這一籤
     if (access.health && global.location?.hash === '#data-health') { current = 'health'; open(); }
+    if (access.models && global.location?.hash === '#ai-models') { current = 'models'; open(); }
   }
 
   // ---- 打開與收回（和到價推播原本的浮層同一套：Esc、關閉鈕、按下與放開都在板外才收）----

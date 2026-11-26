@@ -50,6 +50,8 @@ test_fund_compare
 test_gemini_models
 test_gemini_settings
 test_gemini_usage
+test_gemini_catalog_regressions
+test_gemini_runtime_regressions
 test_impact_watch
 test_impact_watch_news
 test_impact_watch_stocks

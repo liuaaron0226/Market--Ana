@@ -79,9 +79,18 @@ class PlainDailyWorkflowTest(unittest.TestCase):
                 s = step(step_id)
                 self.assertIn("steps.plain.outputs.mode != 'off'", s["if"])
                 self.assertIs(s["continue-on-error"], True)
-        self.assertIn("sha256sum -c", step("plain_agy")["run"])
-        forecast = (ROOT / ".github/workflows/forecast-ledger.yml").read_text(encoding="utf-8")
-        self.assertIn(step("plain_agy")["run"].split("curl -fsSL -o agy.tgz ")[1].split()[0], forecast, "和預測用同一版 agy")
+        self.assertIn('gemini_runtime.py install --directory', step('plain_agy')['run'])
+        forecast = (ROOT / '.github/workflows/forecast-ledger.yml').read_text(encoding='utf-8')
+        self.assertIn(step('plain_agy')['run'].strip(), forecast, '和預測從同一份驗證目錄安裝 CLI')
+
+    def test_failed_model_preparation_cannot_call_a_model_or_block_market_publication(self):
+        prepared = next(s for s in steps() if 'gemini_runtime.py prepare' in s.get('run',''))
+        self.assertIs(prepared.get('continue-on-error'), True)
+        self.assertEqual(prepared['id'], 'plain_models')
+        self.assertIn("steps.plain_models.outcome == 'success'", step('run')['env']['PLAIN_AGY_BIN'])
+        brief = next(s for s in steps() if 'python market_brief.py run' in s.get('run',''))
+        self.assertIn("steps.brief_models.outcome == 'success'", brief['env']['BRIEF_AGY_BIN'])
+        self.assertIn('--agy-bin "$BRIEF_AGY_BIN"', brief['run'])
 
     def test_the_login_bundle_only_reaches_the_restore_step(self):
         holders = [s.get("id") or s.get("name") for s in steps() if "AGY_LOGIN_BUNDLE" in str(s.get("env", {}))]

@@ -133,15 +133,16 @@ jobs:
           python gemini_settings.py --input "$RUNNER_TEMP/ai-models.json" --github-env "$GITHUB_ENV" \
             --task market-news --run-id "$GITHUB_RUN_ID" --read-sql "$RUNNER_TEMP/ai-model-read.sql"
 
-      - name: 下載官方 agy 1.5.3 並核對 SHA-256
+      - name: 安裝模型目錄同一快照的官方 agy（驗 SHA-256）
         id: agy_download
         continue-on-error: true
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: market-ana-state
         run: |
-          mkdir -p "$RUNNER_TEMP/agy" && cd "$RUNNER_TEMP/agy"
-          curl -fsSL -o agy.tgz https://github.com/google-antigravity/antigravity-cli/releases/download/1.5.3/agy_cli_linux_x64.tar.gz
-          echo "1b4850599cce73a17f94ffb422df3bf9531531b77dbddc40c1a435e0c2c16807  agy.tgz" | sha256sum -c
-          tar xzf agy.tgz
-          ./antigravity --version
+          python gemini_runtime.py install --directory "$RUNNER_TEMP/agy" --snapshot "$RUNNER_TEMP/gemini-catalog.json" --github-env "$GITHUB_ENV"
 
       - name: 還原登入檔到隔離 HOME
         id: agy_auth
@@ -155,6 +156,17 @@ jobs:
 
       # 「我的自選」要用最新的個股新聞：先抓一次（股票池前 50、每個人的自選與最近搜尋；Google News 大媒體＋中央社）。
       # 乾跑不寫網站資料庫，所以跳過（模型讀的是資料庫裡現有的個股新聞）。
+      - name: 確認模型可用性（停用才替代，保留手動設定）
+        if: env.DRY_RUN != 'true'
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: market-ana-state
+        run: |
+          python gemini_runtime.py prepare --directory "$RUNNER_TEMP/agy" --snapshot "$RUNNER_TEMP/gemini-catalog.json" --home "$RUNNER_TEMP/agy-home" \
+            --input "$RUNNER_TEMP/ai-models.json" --task market-news --tasks news --run-id "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --github-env "$GITHUB_ENV"
+
       - name: 個股新聞：抓 Google News 大媒體與中央社，寫進 D1
         if: env.DRY_RUN == 'false'
         continue-on-error: true
@@ -279,16 +291,31 @@ jobs:
             --command "$query" > "$RUNNER_TEMP/market-brief-inputs.json") \
             || echo "::warning::讀不到國際股市與這一班消息，盤勢解讀那兩類這一班各只有一句"
 
+      - name: 確認盤勢解讀共用白話模型（不影響已發布消息）
+        id: brief_models
+        if: success() && env.DRY_RUN == 'false' && vars.MARKET_ANA_MARKET_BRIEF_SCHEDULE == 'on' && steps.brief_pack.outputs.ready == 'true'
+        continue-on-error: true
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: market-ana-state
+        run: |
+          python gemini_runtime.py prepare --directory "$RUNNER_TEMP/agy" --snapshot "$RUNNER_TEMP/gemini-catalog.json" --home "$RUNNER_TEMP/agy-home" \
+            --input "$RUNNER_TEMP/ai-models.json" --task market-news --tasks plain --run-id "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --github-env "$GITHUB_ENV"
+
       - name: 盤勢解讀：產生這一班（接在消息成功之後）
         id: market_brief
         if: success() && env.DRY_RUN == 'false' && vars.MARKET_ANA_MARKET_BRIEF_SCHEDULE == 'on' && steps.brief_pack.outputs.ready == 'true'
         continue-on-error: true
+        env:
+          BRIEF_AGY_BIN: ${{ steps.brief_models.outcome == 'success' && format('{0}/agy/antigravity', runner.temp) || format('{0}/agy/unavailable', runner.temp) }}
         run: |
           # 模型與思考程度：market_brief.py 自己讀環境裡的 AI_PLAIN_*，這裡不另外帶
           set -o pipefail
           python market_brief.py run --slot "$SLOT" --analysis data/daily-update-state/last-market-pack/analysis-data.js \
             --inputs "$RUNNER_TEMP/market-brief-inputs.json" \
-            --agy-bin "$RUNNER_TEMP/agy/antigravity" --agy-home "$RUNNER_TEMP/agy-home" \
+            --agy-bin "$BRIEF_AGY_BIN" --agy-home "$RUNNER_TEMP/agy-home" \
             --sql-output "$RUNNER_TEMP/market-brief.sql" \
             --report "data/daily-update-log/market-brief/$(date +%F)-$SLOT.json" | tee "$RUNNER_TEMP/market-brief.json"
 

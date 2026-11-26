@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 import gemini_models as gm
+from gemini_catalog import ID, EFFORTS, load_catalog, supports, now
 
 # 設定頁的五項（key 也是 D1 的 task 欄）→ gemini_models 裡的預設
 TASKS = {
@@ -51,22 +52,68 @@ def _rows(text: str | None) -> list[dict[str, Any]] | None:
     return results if isinstance(results, list) else None
 
 
-def resolve(text: str | None) -> dict[str, Any]:
+def resolve(text: str | None, *, catalog=None) -> dict[str, Any]:
     rows = _rows(text)
     tasks = {task: {**choice, "from": "default"} for task, choice in defaults().items()}
     if rows is None:
         return {"source": "unreadable", "tasks": tasks}
     for row in rows:
         task = row.get("task") if isinstance(row, dict) else None
-        if task in tasks and row.get("model") in gm.MODELS and row.get("effort") in gm.EFFORTS:
+        # Keep a syntactically valid former selection even when it is absent from today's list.
+        # Only prepare_choices (with a successful official listing) may replace it for execution.
+        if task in tasks and isinstance(row.get('model'), str) and ID.fullmatch(row['model']) and row.get('effort') in EFFORTS:
             tasks[task] = {"model": row["model"], "effort": row["effort"], "from": "saved"}
     saved = any(choice["from"] == "saved" for choice in tasks.values())
     return {"source": "saved" if saved else "unset", "tasks": tasks}
 
 
-def env_lines(resolved: dict[str, Any]) -> list[str]:
+class ModelUnavailable(RuntimeError):
+    def __init__(self, message, resolutions):
+        super().__init__(message)
+        self.resolutions = resolutions
+
+
+def prepare_choices(resolved, catalog, tasks, *, probe, previous=None):
+    """Resolve only tasks that this run will use. Never write the requested D1 values.
+
+    An active choice is untouched. A retired choice tries only same-effort candidates
+    in official order. Only explicit unsupported errors permit trying another;
+    quota/auth/network errors stop the run, not the selection policy.
+    """
+    result = {**resolved, 'tasks': {k: dict(v) for k, v in resolved['tasks'].items()}, 'resolutions': {}}
+    for task in tasks:
+        requested = {k: resolved['tasks'][task][k] for k in ('model', 'effort')}
+        record = {'requested': requested, 'actual': requested, 'state': 'selected', 'checked_at': now()}
+        result['resolutions'][task] = record
+        if supports(catalog, **requested):
+            continue
+        record.update(state='failed', actual=None, reason='officially_unavailable')
+        candidates = [(m['id'], requested['effort']) for m in catalog['models'] if requested['effort'] in m['efforts']]
+        # Once a fallback has been selected, a newer model must not silently upgrade it either.
+        old = (previous or {}).get(task, {})
+        actual = old.get('actual') if old.get('state') == 'replaced' else old.get('last_actual')
+        if old.get('requested') == requested and actual and actual.get('effort') == requested['effort'] and supports(catalog, **actual):
+            candidates = [(actual['model'], actual['effort'])] + candidates
+        for model, effort in dict.fromkeys(candidates):
+            status = probe(model, effort)
+            if status == 'unsupported':
+                continue
+            if status != 'ok':
+                record['reason'] = 'availability_check_failed'
+                raise ModelUnavailable('替代模型檢查失敗，未變更手動設定。', result['resolutions'])
+            record.update(state='replaced', actual={'model': model, 'effort': effort})
+            result['tasks'][task].update(model=model, effort=effort)
+            break
+        else:
+            raise ModelUnavailable('沒有通過檢查的 Gemini 替代模型。', result['resolutions'])
+    return result
+
+
+def env_lines(resolved: dict[str, Any], *, tasks=None) -> list[str]:
     lines = []
     for task, choice in resolved["tasks"].items():
+        if tasks is not None and task not in tasks:
+            continue
         lines += [f"AI_{task.upper()}_MODEL={choice['model']}", f"AI_{task.upper()}_EFFORT={choice['effort']}"]
     return lines + [f"AI_SETTINGS_SOURCE={resolved['source']}"]
 

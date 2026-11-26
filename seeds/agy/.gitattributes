@@ -1,0 +1,2 @@
+# Keep official CLI output byte-identical for SHA-256 verification.
+*.txt -text

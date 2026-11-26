@@ -201,8 +201,9 @@ def _model_command(model_bin: Path | str, model: str, output_schema: Mapping[str
     """agy 的串流模式：提示從 stdin 送（Windows 單一指令列約 32K 字元的上限擋不住方法稿全文），結果讀最後的 result 事件。"""
     path = Path(model_bin)
     prefix = [sys.executable, str(path)] if path.suffix.lower() == ".py" else [str(path)]
+    from gemini_catalog import model_args
     return [*prefix, "-p=", "--input-format", "stream-json", "--output-format", "stream-json",
-            "--model", model, "--effort", effort,
+            *model_args(model, effort),
             "--json-schema", json.dumps(output_schema, ensure_ascii=False, separators=(",", ":")),
             "--print-timeout", f"{int(print_timeout)}s", "--sandbox"]
 

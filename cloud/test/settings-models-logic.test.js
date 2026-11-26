@@ -27,6 +27,23 @@ const DATA = {
   unread: [],
 };
 
+test("依目錄顯示可選強度與替代原因，手動切換仍可使用", () => {
+  const catalog = { models: [
+    { id: 'gemini-4-neon', label: 'Gemini 4 Neon', efforts: ['high', 'xhigh', 'medium', 'low'] },
+    { id: 'gemini-pro-orchestrator-neon', label: 'Orchestrator (Neon)', efforts: ['default'] },
+  ] };
+  const data = { ...DATA, catalog, resolutions: { forecast: { state: 'replaced', requested: { model: ARGON, effort: 'medium' }, actual: { model: 'gemini-4-neon', effort: 'medium' }, reason: 'officially_unavailable' } } };
+  const view = S.modelsView(data, {});
+  assert.deepEqual(view.modelChoices, [['gemini-4-neon', 'Neon'], ['gemini-pro-orchestrator-neon', 'Orchestrator (Neon)']]);
+  assert.match(view.rows[0].warning, /Argon.*停用.*Neon/);
+  assert.equal(view.rows[0].model, ARGON);
+  assert.deepEqual(S.nextChoice({ model: ARGON, effort: 'medium' }, { model: 'gemini-pro-orchestrator-neon' }, catalog), { model: 'gemini-pro-orchestrator-neon', effort: 'default' });
+  const changed = S.modelsView(data, { plain: { model: 'gemini-4-neon', effort: 'xhigh' } });
+  assert.deepEqual(changed.rows.find(r => r.key === 'plain').effortChoices, [['high','高'],['xhigh','極高'],['medium','中'],['low','低']]);
+  assert.match(changed.rows.find(r => r.key === 'plain').quotaNote, /未知/);
+  assert.match(S.modelsView({ ...data, catalog_status: { state: 'failed' } }, {}).catalogWarning, /保留/);
+});
+
 test("站主多一顆「AI 模型」籤，排在用量後面", () => {
   assert.deepEqual(S.tabsFor({ usage: true, models: true, notify: true }), ["usage", "models", "notify", "look"]);
   assert.deepEqual(S.tabsFor({ usage: true, notify: true }), ["usage", "notify", "look"]);

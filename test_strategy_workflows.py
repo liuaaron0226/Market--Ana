@@ -111,7 +111,8 @@ class StrategyWorkflowTests(unittest.TestCase):
                                      (level, 'state_sync.py upload', "steps.day.outputs.dry_run == 'false'"),
                                      (ai, '--file', "steps.mode.outputs.dry_run == 'false'"),
                                      (ai, '--agy-bin', "steps.mode.outputs.dry_run == 'false'"),
-                                     (ai, 'curl -fsSL -o agy.tgz', "steps.mode.outputs.dry_run == 'false'")]:
+                                     (ai, 'gemini_runtime.py install', "steps.mode.outputs.dry_run == 'false'"),
+                                     (ai, 'gemini_runtime.py prepare', "steps.mode.outputs.dry_run == 'false'")]:
             matches = [s for s in steps if marker in s.get('run', '')]
             self.assertTrue(matches, marker)
             for step in matches:

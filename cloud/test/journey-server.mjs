@@ -15,6 +15,11 @@ const port = Number(process.argv[2] || 8899);
 const dist = new URL("../dist/", import.meta.url);
 const issuer = await makeIssuer();
 const env = { DB: fakeD1(), TEAM_DOMAIN: TEAM, MAIN_AUD, APPLY_AUD, OWNER_EMAIL: OWNER };
+// Dynamic model catalogue journey: local fake R2 only, never remote credentials.
+if (process.env.JOURNEY_MODEL_STATE) env.STATE = { get: async key => {
+  const objects = JSON.parse(await readFile(process.env.JOURNEY_MODEL_STATE, 'utf8'));
+  return objects[key] ? { json: async () => objects[key] } : null;
+} };
 // 一個入口（本人 2026-11-20）：JOURNEY_ACCESS=single 模擬「申請頁那個 Access 應用已經移除」——整站只發主站的憑證，
 // 設定裡也沒有 APPLY_AUD。沒設時照舊是兩個應用（/apply 發申請頁的憑證，其他路徑發主站的）。
 const singleAccess = process.env.JOURNEY_ACCESS === "single";

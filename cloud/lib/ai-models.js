@@ -6,9 +6,7 @@ import { UserPortfolioError, readBody, response } from "./user-portfolio.js";
 import { geminiUsage } from "./gemini-usage.js";
 
 export const AI_MODELS_PATH = "/api/settings/ai-models";
-const ARGON = "gemini-4-argon", FLASH = "gemini-3.8-flash";
-export const MODELS = [ARGON, FLASH];
-export const EFFORTS = ["low", "medium", "high"];
+import { readCatalog, readModelStatus, readResolutions, supports, safeChoice } from './gemini-catalog.js';
 
 // 還沒選過或排程讀不到時用的預設，和 gemini_models.py 同一組（test_gemini_settings 對帳）。順序就是設定頁的順序。
 export const DEFAULTS = {
@@ -46,14 +44,27 @@ async function unread(db) {
   }
 }
 
-export async function aiModels(db, now) {
+export async function aiModels(db, now, bucket) {
+  const catalog = await readCatalog(bucket);
   const { ready, rows } = await saved(db);
-  const byTask = new Map(rows.filter((row) => row.task in DEFAULTS && MODELS.includes(row.model) && EFFORTS.includes(row.effort))
+  const byTask = new Map(rows.filter((row) => row.task in DEFAULTS && safeChoice(row.model, row.effort))
     .map((row) => [row.task, row]));
+  const records = await readResolutions(bucket);
+  const resolutions = Object.fromEntries(Object.entries(records).filter(([key, record]) => {
+    const choice = byTask.get(key) || DEFAULTS[key];
+    return choice && record?.requested?.model === choice.model && record?.requested?.effort === choice.effort
+      && (!choice.updated_at || record.checked_at >= choice.updated_at);
+  }));
+  const status = await readModelStatus(bucket);
+  const catalogStatus = status?.state === 'failed' ? status
+    : now - Date.parse(catalog.checked_at) > 48 * 3600000 ? { state: 'stale' } : status;
   const usage = await geminiUsage(db, now);
   const updated = rows.map((row) => row.updated_at).filter(Boolean).sort().at(-1) ?? null;
   return {
     available: true,
+    catalog,
+    catalog_status: catalogStatus,
+    resolutions,
     ready,
     tasks: Object.entries(DEFAULTS).map(([key, fallback]) => {
       const row = byTask.get(key);
@@ -65,20 +76,19 @@ export async function aiModels(db, now) {
   };
 }
 
-function choices(body) {
+function choices(body, catalog) {
   const tasks = body?.tasks;
   const entries = tasks && typeof tasks === "object" && !Array.isArray(tasks) ? Object.entries(tasks) : [];
   if (!entries.length) throw new UserPortfolioError(400, "沒有要存的設定");
   for (const [key, choice] of entries) {
     if (!(key in DEFAULTS)) throw new UserPortfolioError(400, "不認得的任務");
-    if (!MODELS.includes(choice?.model)) throw new UserPortfolioError(400, "模型只能選 Argon 或 Flash");
-    if (!EFFORTS.includes(choice?.effort)) throw new UserPortfolioError(400, "思考強度只能選低、中、高");
+    if (!supports(catalog, choice?.model, choice?.effort)) throw new UserPortfolioError(400, "請選可用的 Gemini 模型與支援的思考強度");
   }
   return entries;
 }
 
-async function save(request, db, now) {
-  const entries = choices(await readBody(request));
+async function save(request, db, now, bucket) {
+  const entries = choices(await readBody(request), await readCatalog(bucket));
   const at = iso(now);
   // 一條多列 INSERT：幾項一起存好，或一項都沒存
   const values = entries.map(() => "(?, ?, ?, ?)").join(", ");
@@ -92,13 +102,13 @@ async function save(request, db, now) {
     if (tableMissing(error)) throw new UserPortfolioError(503, "設定還不能存：網站資料庫還沒更新");
     throw error;
   }
-  return aiModels(db, now);
+  return aiModels(db, now, bucket);
 }
 
 export async function handleAiModelsApi(request, env, deps, { isOwner }) {
   const now = (deps.now || Date.now)();
-  if (request.method === "GET") return response(200, isOwner ? await aiModels(env.DB, now) : { available: false });
+  if (request.method === "GET") return response(200, isOwner ? await aiModels(env.DB, now, env.STATE) : { available: false });
   if (request.method !== "PUT") throw new UserPortfolioError(405, "方法不允許");
   if (!isOwner) throw new UserPortfolioError(403, "只有站主可以改");
-  return response(200, await save(request, env.DB, now));
+  return response(200, await save(request, env.DB, now, env.STATE));
 }

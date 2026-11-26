@@ -1,0 +1,118 @@
+{
+  "schema": 1,
+  "checked_at": "2026-11-25T00:00:00Z",
+  "source": "https://antigravity.google/docs/cli/headless",
+  "cli_version": "1.5.12",
+  "raw_sha256": "39310f8bf8e60f38cf8b0f19e749f02d2fa52f61a8993eef58c46bbaa9607b40",
+  "models": [
+    {
+      "id": "gemini-4-neon",
+      "label": "Gemini 4 Neon",
+      "efforts": [
+        "high",
+        "xhigh",
+        "medium",
+        "low"
+      ],
+      "slugs": {
+        "high": "gemini-4-neon-high",
+        "xhigh": "gemini-4-neon-xhigh",
+        "medium": "gemini-4-neon-medium",
+        "low": "gemini-4-neon-low"
+      }
+    },
+    {
+      "id": "gemini-4-carbon",
+      "label": "Gemini 4 Carbon",
+      "efforts": [
+        "medium",
+        "high",
+        "low"
+      ],
+      "slugs": {
+        "medium": "gemini-4-carbon-medium",
+        "high": "gemini-4-carbon-high",
+        "low": "gemini-4-carbon-low"
+      }
+    },
+    {
+      "id": "gemini-4-argon",
+      "label": "Gemini 4 Argon",
+      "efforts": [
+        "medium",
+        "high",
+        "low"
+      ],
+      "slugs": {
+        "medium": "gemini-4-argon-medium",
+        "high": "gemini-4-argon-high",
+        "low": "gemini-4-argon-low"
+      }
+    },
+    {
+      "id": "gemini-4-hydrogen",
+      "label": "Gemini 4 Hydrogen",
+      "efforts": [
+        "high",
+        "xhigh",
+        "medium",
+        "low"
+      ],
+      "slugs": {
+        "high": "gemini-4-hydrogen-high",
+        "xhigh": "gemini-4-hydrogen-xhigh",
+        "medium": "gemini-4-hydrogen-medium",
+        "low": "gemini-4-hydrogen-low"
+      }
+    },
+    {
+      "id": "gemini-pro-orchestrator-neon",
+      "label": "Orchestrator (Neon)",
+      "efforts": [
+        "default"
+      ],
+      "slugs": {
+        "default": "gemini-pro-orchestrator-neon"
+      }
+    },
+    {
+      "id": "gemini-pro-orchestrator",
+      "label": "Orchestrator (Carbon)",
+      "efforts": [
+        "default"
+      ],
+      "slugs": {
+        "default": "gemini-pro-orchestrator"
+      }
+    },
+    {
+      "id": "gemini-pro-orchestrator-argon",
+      "label": "Orchestrator (Argon)",
+      "efforts": [
+        "default"
+      ],
+      "slugs": {
+        "default": "gemini-pro-orchestrator-argon"
+      }
+    },
+    {
+      "id": "gemini-3.8-flash",
+      "label": "Gemini 3.8 Flash",
+      "efforts": [
+        "high",
+        "medium",
+        "low"
+      ],
+      "slugs": {
+        "high": "gemini-3.8-flash-high",
+        "medium": "gemini-3.8-flash-medium",
+        "low": "gemini-3.8-flash-low"
+      }
+    }
+  ],
+  "release": {
+    "version": "1.5.12",
+    "url": "https://github.com/google-antigravity/antigravity-cli/releases/download/1.5.12/agy_cli_linux_x64.tar.gz",
+    "sha256": "0f0cb851cdc9fbedd50432570aa6ae9c4c398b9ea3f1e23e7776f707643c5b3e"
+  }
+}

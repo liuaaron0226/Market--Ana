@@ -283,7 +283,7 @@ class ChosenEffortTests(unittest.TestCase):
         import ai_digest
         command = ai_digest._agy_command("agy", "p", "gemini-4-argon", "high")
         self.assertEqual(command[command.index("--effort") + 1], "high")
-        self.assertEqual(command[command.index("--model") + 1], "gemini-4-argon")
+        self.assertEqual(command[command.index("--model") + 1], "gemini-4-argon-high")
         # 不另外指定時送的是 gemini_models 的站主解讀強度（以前寫死 medium）
         import gemini_models as gm
         default = ai_digest._agy_command("agy", "p", "gemini-4-argon")

@@ -382,12 +382,30 @@ class ChosenModelTests(MorningTestCase):
                               model_bin=model_bin, session_date=SESSION, holidays=set(),
                               now=lambda: at_taipei(SESSION, "07:30:00"), **kwargs)
 
+    def test_retirement_replacement_is_recorded_as_its_own_forecast_series(self):
+        import gemini_settings as gs
+        from gemini_catalog import load_catalog
+        catalog = load_catalog()
+        catalog['models'] = [m for m in catalog['models'] if m['id'] != 'gemini-4-argon']
+        selected = gs.prepare_choices(gs.resolve('[{"results":[]}]'), catalog, ['forecast'], probe=lambda m,e:'ok')['tasks']['forecast']
+        script, seen = self.recording_model()
+        fr.run_evening(self.analysis_file(analysis()), ledger=self.ledger, method_path=self.method, model_bin=script,
+                       model=selected['model'], effort=selected['effort'],
+                       now=lambda: datetime.fromisoformat(f'{BASE}T17:40:00+08:00'))
+        record = fl.read_ledger(self.ledger)['forecasts'][0]
+        self.assertEqual(record['model'], 'gemini-4-neon')
+        self.assertEqual(record['effort'], 'medium')
+        self.assertNotEqual(record['input_version'], fl.input_version('gemini-4-argon', 'medium'))
+        self.assertEqual(json.loads(seen.read_text().splitlines()[0]), ['gemini-4-neon-medium','medium'])
+        log = self.morning(script, model='gemini-3.8-flash', effort='high')
+        self.assertEqual((log['model'], log['effort']), ('gemini-4-neon', 'medium'))
+
     def test_evening_sends_the_chosen_effort_and_records_it(self):
         script, seen = self.recording_model()
         fr.run_evening(self.analysis_file(analysis()), ledger=self.ledger, method_path=self.method, model_bin=script,
                        model="gemini-3.8-flash", effort="high",
                        now=lambda: datetime.fromisoformat(f"{BASE}T17:40:00+08:00"))
-        self.assertEqual(json.loads(seen.read_text().splitlines()[0]), ["gemini-3.8-flash", "high"])
+        self.assertEqual(json.loads(seen.read_text().splitlines()[0]), ["gemini-3.8-flash-high", "high"])
         record = fl.read_ledger(self.ledger)["forecasts"][0]
         self.assertEqual((record["model"], record["effort"]), ("gemini-3.8-flash", "high"))
 
@@ -398,7 +416,7 @@ class ChosenModelTests(MorningTestCase):
                        now=lambda: datetime.fromisoformat(f"{BASE}T17:40:00+08:00"))
         # 晚間之後站主改成 Flash 高：晨間版仍用前一晚那組，下一個晚間才換
         log = self.morning(script, model="gemini-3.8-flash", effort="high")
-        self.assertEqual(json.loads(seen.read_text().splitlines()[-1]), ["gemini-4-argon", "medium"])
+        self.assertEqual(json.loads(seen.read_text().splitlines()[-1]), ["gemini-4-argon-medium", "medium"])
         self.assertEqual((log["model"], log["effort"]), ("gemini-4-argon", "medium"))
         records = {r["edition"]: r for r in fl.read_ledger(self.ledger)["forecasts"]}
         self.assertEqual(records["morning"]["input_version"], records["evening"]["input_version"])
@@ -408,12 +426,12 @@ class ChosenModelTests(MorningTestCase):
         script, seen = self.recording_model()
         fr.run_evening(self.analysis_file(analysis()), ledger=self.ledger, method_path=self.method, model_bin=script,
                        now=lambda: datetime.fromisoformat(f"{BASE}T17:40:00+08:00"))
-        self.assertEqual(json.loads(seen.read_text().splitlines()[0]), [gm.FORECAST, gm.FORECAST_EFFORT])
+        self.assertEqual(json.loads(seen.read_text().splitlines()[0]), ["gemini-4-argon-medium", "medium"])
 
     def test_morning_without_an_evening_uses_the_setting(self):
         script, seen = self.recording_model()
         log = self.morning(script, model="gemini-3.8-flash", effort="low")
-        self.assertEqual(json.loads(seen.read_text().splitlines()[-1]), ["gemini-3.8-flash", "low"])
+        self.assertEqual(json.loads(seen.read_text().splitlines()[-1]), ["gemini-3.8-flash-low", "low"])
         self.assertEqual(log["effort"], "low")
 
     def test_an_empty_model_or_effort_from_the_schedule_means_the_default(self):

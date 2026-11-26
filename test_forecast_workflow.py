@@ -85,7 +85,7 @@ class ForecastWorkflowTests(unittest.TestCase):
         self.assertIn('--model "$AI_FORECAST_MODEL" --effort "$AI_FORECAST_EFFORT"', run)
         self.assertIn("--analysis data/daily-update-state/last-market-pack/analysis-data.js", run)
         self.assertIn("--method MARKET_METHOD.md", run)
-        self.assertIn("1b4850599cce73a17f94ffb422df3bf9531531b77dbddc40c1a435e0c2c16807", self.source)
+        self.assertIn('gemini_runtime.py install --directory', self.source)  # 共用安裝器驗官方 digest；RuntimeTests 有損毀/非官方反例
         secrets = set(re.findall(r"secrets\.([A-Z0-9_]+)", self.source))
         # FUGLE_API_KEY：J 票，本人 2026-11-19 00:1x「富果、新聞來源、國外同類股都交給 Gemini 做詳細分析」
         self.assertEqual(secrets, {"CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "R2_ACCESS_KEY_ID",
@@ -176,7 +176,7 @@ class MorningWorkflowTests(unittest.TestCase):
         self.assertIn("if: always() && steps.mode.outputs.dry_run == 'false' && steps.restore.outcome == 'success'", push)
         self.assertIn("if: success() && steps.mode.outputs.dry_run == 'false'", d1)
         self.assertLess(self.source.index("帳本原件存回 R2（只新增）"), self.source.index("發布到網站資料庫"))
-        self.assertIn("1b4850599cce73a17f94ffb422df3bf9531531b77dbddc40c1a435e0c2c16807", self.source)
+        self.assertIn('gemini_runtime.py install --directory', self.source)  # 共用安裝器驗官方 digest；RuntimeTests 有損毀/非官方反例
         secrets = set(re.findall(r"secrets\.([A-Z0-9_]+)", self.source))
         # FUGLE_API_KEY：J 票，本人 2026-11-19 00:1x「富果、新聞來源、國外同類股都交給 Gemini 做詳細分析」
         self.assertEqual(secrets, {"CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "R2_ACCESS_KEY_ID",
@@ -274,7 +274,7 @@ class ReplayWorkflowTests(unittest.TestCase):
         self.assertLess(self.source.index("重播帳本存回 R2（只新增）"), self.source.index("發布到網站資料庫（重播專用的表）"))
         fetch = step(self.source, "抓海外原件（不擋重播）")
         self.assertIn("--treasury-months", fetch)
-        self.assertIn("1b4850599cce73a17f94ffb422df3bf9531531b77dbddc40c1a435e0c2c16807", self.source)
+        self.assertIn('gemini_runtime.py install --directory', self.source)  # 共用安裝器驗官方 digest；RuntimeTests 有損毀/非官方反例
 
     def test_always_keeps_a_record_and_cleans_up_the_login(self):
         self.assertIn("if: always()", step(self.source, "保存執行紀錄"))

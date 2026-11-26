@@ -199,8 +199,9 @@ def _parse_envelope(text: str) -> dict[str, Any]:
 def _agy_command(agy_bin: Path | str, prompt: str, model: str, effort: str = EFFORT_DEFAULT) -> list[str]:
     path = Path(agy_bin)
     prefix = [sys.executable, str(path)] if path.suffix.lower() == ".py" else [str(path)]
+    from gemini_catalog import model_args
     return [
-        *prefix, "-p", prompt, "--model", model, "--effort", effort, "--output-format", "json",
+        *prefix, "-p", prompt, *model_args(model, effort), "--output-format", "json",
         "--json-schema", json.dumps(OUTPUT_SCHEMA, ensure_ascii=False, separators=(",", ":")),
         "--print-timeout", "300s", "--sandbox",
     ]

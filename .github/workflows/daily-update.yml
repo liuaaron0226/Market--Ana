@@ -186,7 +186,7 @@ jobs:
       - name: 讀設定頁的 AI 模型（本人 11-19 晚；讀不到照 gemini_models.py 的預設跑）
         # 站主在設定頁「AI 模型」選的模型與思考強度（D1 ai_model_settings）；gemini_settings.py 寫進 GITHUB_ENV，
         # 這一班有沒有讀到記在 ai-model-read.sql，記用量那一步一起寫進 D1（設定頁標「上一班沒讀到你的設定」）。
-        if: steps.plain.outputs.mode != 'off'
+        # 即使籌碼卡解讀關閉，消息盯項與盤勢解讀仍須保留站主的模型選擇。
         continue-on-error: true
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -198,16 +198,17 @@ jobs:
           python gemini_settings.py --input "$RUNNER_TEMP/ai-models.json" --github-env "$GITHUB_ENV" \
             --task daily-update --run-id "$GITHUB_RUN_ID" --read-sql "$RUNNER_TEMP/ai-model-read.sql"
 
-      - name: 白話分析：下載官方 agy 1.5.3 並核對 SHA-256
+      - name: 白話分析：安裝模型目錄同一快照的官方 agy（驗 SHA-256）
         id: plain_agy
         if: steps.plain.outputs.mode != 'off'
         continue-on-error: true
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: market-ana-state
         run: |
-          mkdir -p "$RUNNER_TEMP/agy" && cd "$RUNNER_TEMP/agy"
-          curl -fsSL -o agy.tgz https://github.com/google-antigravity/antigravity-cli/releases/download/1.5.3/agy_cli_linux_x64.tar.gz
-          echo "1b4850599cce73a17f94ffb422df3bf9531531b77dbddc40c1a435e0c2c16807  agy.tgz" | sha256sum -c
-          tar xzf agy.tgz
-          ./antigravity --version
+          python gemini_runtime.py install --directory "$RUNNER_TEMP/agy" --snapshot "$RUNNER_TEMP/gemini-catalog.json" --github-env "$GITHUB_ENV"
 
       - name: 白話分析：還原登入檔到隔離 HOME（只給 agy 子行程用）
         id: plain_auth
@@ -219,6 +220,19 @@ jobs:
           if [ -z "$AGY_LOGIN_BUNDLE" ]; then echo "::warning::缺少 secret AGY_LOGIN_BUNDLE，白話分析改用程式套句"; exit 1; fi
           home="$RUNNER_TEMP/agy-home"; mkdir -p "$home"; chmod 700 "$home"
           printf '%s' "$AGY_LOGIN_BUNDLE" | tr -d ' \r\n' | base64 -d | tar xzf - -C "$home"
+
+      - name: 確認模型可用性（停用才替代，保留手動設定）
+        id: plain_models
+        continue-on-error: true
+        if: (steps.plain.outputs.mode == 'on' || steps.plain.outputs.mode == 'dry') && steps.plain_agy.outcome == 'success' && steps.plain_auth.outcome == 'success'
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: market-ana-state
+        run: |
+          python gemini_runtime.py prepare --directory "$RUNNER_TEMP/agy" --snapshot "$RUNNER_TEMP/gemini-catalog.json" --home "$RUNNER_TEMP/agy-home" \
+            --input "$RUNNER_TEMP/ai-models.json" --task daily-update --run-id "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --github-env "$GITHUB_ENV" --tasks plain ${{ (steps.day.outputs.dry_run != '' || steps.plain.outputs.mode == 'dry') && '--read-only' || '' }}
 
       - name: 一次性補抓 ETF 要用的每日行情原件（手動填 etf_raw_days 才跑）
         # 2026-11-16 本人同意「最近 130 個交易日」：雲端工作集的原件只剩最近幾天，ETF 只回補得到幾根日線。
@@ -291,8 +305,8 @@ jobs:
           TRIGGER_SOURCE: ${{ github.event_name == 'schedule' && 'github-schedule' || inputs.trigger_source }}
           TRIGGER_SLOT: ${{ github.event_name == 'schedule' && github.event.schedule || inputs.trigger_slot }}
           PLAIN_DAILY_MODE: ${{ steps.plain.outputs.mode }}
-          PLAIN_AGY_BIN: ${{ steps.plain_auth.outcome == 'success' && format('{0}/agy/antigravity', runner.temp) || '' }}
-          PLAIN_AGY_HOME: ${{ steps.plain_auth.outcome == 'success' && format('{0}/agy-home', runner.temp) || '' }}
+          PLAIN_AGY_BIN: ${{ steps.plain_auth.outcome == 'success' && steps.plain_models.outcome == 'success' && format('{0}/agy/antigravity', runner.temp) || '' }}
+          PLAIN_AGY_HOME: ${{ steps.plain_auth.outcome == 'success' && steps.plain_models.outcome == 'success' && format('{0}/agy-home', runner.temp) || '' }}
           # 白話分析用的模型與思考程度：設定頁「AI 模型」（本人 11-19 晚）；讀不到時是空的，plain_daily 照 gemini_models.PLAIN
           PLAIN_MODEL: ${{ env.AI_PLAIN_MODEL }}
           PLAIN_EFFORT: ${{ env.AI_PLAIN_EFFORT }}
@@ -417,11 +431,7 @@ jobs:
           sync=$(python -c "import json,sys; print(json.load(open(sys.argv[1], encoding='utf-8'))['sync_state'])" "${{ runner.temp }}/daily-result.json")
           if [ "$sync" != "True" ] && [ "${{ inputs.redeploy }}" != "true" ]; then echo "本次沒有新發布，不用準備"; exit 0; fi
           if [ ! -x "$RUNNER_TEMP/agy/antigravity" ]; then
-            mkdir -p "$RUNNER_TEMP/agy" && cd "$RUNNER_TEMP/agy"
-            curl -fsSL -o agy.tgz https://github.com/google-antigravity/antigravity-cli/releases/download/1.5.3/agy_cli_linux_x64.tar.gz
-            echo "1b4850599cce73a17f94ffb422df3bf9531531b77dbddc40c1a435e0c2c16807  agy.tgz" | sha256sum -c
-            tar xzf agy.tgz
-            ./antigravity --version
+            python gemini_runtime.py install --directory "$RUNNER_TEMP/agy" --snapshot "$RUNNER_TEMP/gemini-catalog.json" --github-env "$GITHUB_ENV"
           fi
           if [ -z "$(ls -A "$RUNNER_TEMP/agy-home" 2>/dev/null)" ]; then
             if [ -z "$AGY_LOGIN_BUNDLE" ]; then echo "::warning::缺少 secret AGY_LOGIN_BUNDLE，消息型盯項今天不判"; exit 1; fi
@@ -429,8 +439,12 @@ jobs:
             printf '%s' "$AGY_LOGIN_BUNDLE" | tr -d ' \r\n' | base64 -d | tar xzf - -C "$home"
           fi
 
+          (cd cloud && npx --yes wrangler@4 d1 execute market-ana-accounts --remote --json --command "SELECT task, model, effort FROM ai_model_settings" > "$RUNNER_TEMP/ai-models.json") || true
+          python gemini_runtime.py prepare --directory "$RUNNER_TEMP/agy" --snapshot "$RUNNER_TEMP/gemini-catalog.json" --home "$RUNNER_TEMP/agy-home" \
+            --input "$RUNNER_TEMP/ai-models.json" --task daily-update --tasks news --run-id "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --github-env "$GITHUB_ENV"
+
       - name: 消息型盯項每日檢查：新抓到、對得上關鍵詞的新聞交給 Flash 判斷（只在發布成功時）
-        if: success() && steps.day.outputs.dry_run == ''
+        if: success() && steps.day.outputs.dry_run == '' && steps.impact_news_auth.outcome == 'success'
         continue-on-error: true
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -507,12 +521,26 @@ jobs:
             --command "$query" > "$RUNNER_TEMP/market-brief-inputs.json") \
             || echo "::warning::讀不到國際股市與當天消息，盤勢解讀那兩類這一班各只有一句"
 
+      - name: 盤勢解讀：確認共用白話模型（不阻擋行情發布）
+        id: brief_models
+        if: success() && steps.day.outputs.dry_run == '' && vars.MARKET_ANA_MARKET_BRIEF_SCHEDULE == 'on'
+        continue-on-error: true
+        env:
+          PLAIN_READY: ${{ steps.plain_models.outcome }}
+          PLAIN_MODE: ${{ steps.plain.outputs.mode }}
+        run: |
+          sync=$(python -c "import json,sys; print(json.load(open(sys.argv[1], encoding='utf-8'))['sync_state'])" "${{ runner.temp }}/daily-result.json")
+          if [ "$sync" != "True" ] || { [ "$PLAIN_READY" = success ] && [ "$PLAIN_MODE" = on ]; }; then exit 0; fi
+          python gemini_runtime.py prepare --directory "$RUNNER_TEMP/agy" --snapshot "$RUNNER_TEMP/gemini-catalog.json" --home "$RUNNER_TEMP/agy-home" \
+            --input "$RUNNER_TEMP/ai-models.json" --task daily-update --tasks plain --run-id "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --github-env "$GITHUB_ENV"
+
       - name: 盤勢解讀：產生晚間這一班（只在發布成功時）
         id: market_brief
         if: success() && steps.day.outputs.dry_run == '' && vars.MARKET_ANA_MARKET_BRIEF_SCHEDULE == 'on'
         continue-on-error: true
         env:
           DAY: ${{ steps.day.outputs.date }}
+          BRIEF_AGY_BIN: ${{ steps.brief_models.outcome == 'success' && format('{0}/agy/antigravity', runner.temp) || format('{0}/agy/unavailable', runner.temp) }}
         run: |
           sync=$(python -c "import json,sys; print(json.load(open(sys.argv[1], encoding='utf-8'))['sync_state'])" "${{ runner.temp }}/daily-result.json")
           if [ "$sync" != "True" ]; then echo "本次沒有新發布，盤勢解讀不重寫"; exit 0; fi
@@ -520,7 +548,7 @@ jobs:
           set -o pipefail
           python market_brief.py run --slot evening --analysis data/daily-update-state/last-market-pack/analysis-data.js \
             --inputs "$RUNNER_TEMP/market-brief-inputs.json" \
-            --agy-bin "$RUNNER_TEMP/agy/antigravity" --agy-home "$RUNNER_TEMP/agy-home" \
+            --agy-bin "$BRIEF_AGY_BIN" --agy-home "$RUNNER_TEMP/agy-home" \
             --sql-output "$RUNNER_TEMP/market-brief.sql" \
             --report "data/daily-update-log/market-brief/$DAY.json" | tee "$RUNNER_TEMP/market-brief.json"
 
@@ -615,7 +643,8 @@ jobs:
         # 設定頁對成「籌碼與資金白話」；模型、思考程度、成功或失敗、是不是乾跑都照白話分析的執行紀錄（--plain-audit）。
         # 這一班沒呼叫到 Gemini（等資料、已完成、事實表算不出來、agy 沒準備好）就不記；乾跑的每日更新不寫資料庫，整步跳過
         # （那時就算 plain_daily 選了 on 或 dry、真的呼叫了 Gemini，也不會出現在設定頁，只在執行紀錄裡）。
-        # agy -p /usage 由 CLI 自己回答、不耗額度。遷移 0029 還沒套用時新格式寫不進去，改寫舊格式（沒有思考程度、成功或失敗、乾跑）。
+        # agy 1.5.12 的 headless /usage 已觀察到生成並耗額度；既有用量收集尚未在本次模型預核修正中改寫。
+        # 遷移 0029 還沒套用時新格式寫不進去，改寫舊格式（沒有思考程度、成功或失敗、乾跑）。
         if: always() && steps.plain.outputs.mode != 'off' && steps.plain.outputs.mode != '' && steps.day.outputs.dry_run == ''
         continue-on-error: true
         env:

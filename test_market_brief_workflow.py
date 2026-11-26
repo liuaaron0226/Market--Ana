@@ -81,7 +81,9 @@ class MarketBriefWorkflowTest(unittest.TestCase):
             self.assertIn(f'"$RUNNER_TEMP/{name}"', order[-1]["run"])
         fetch = next(s for s in order if "overseas_peers.py indices" in s.get("run", ""))
         self.assertLess(order.index(fetch), order.index(read_step()), "國外指數這一班先抓過，再讀")
-        self.assertEqual(order.index(read_step()) + 1, order.index(generate))
+        model_check = next(s for s in order if s.get('id') == 'brief_models')
+        self.assertEqual(order.index(read_step()) + 1, order.index(model_check))
+        self.assertEqual(order.index(model_check) + 1, order.index(generate))
 
     def test_the_overseas_and_news_inputs_are_read_from_d1_with_the_generators_own_query(self):
         s = read_step()
@@ -97,7 +99,7 @@ class MarketBriefWorkflowTest(unittest.TestCase):
         for needed in ("python market_brief.py run --slot evening ",
                        "--analysis data/daily-update-state/last-market-pack/analysis-data.js",
                        '--inputs "$RUNNER_TEMP/market-brief-inputs.json"',
-                       '--agy-bin "$RUNNER_TEMP/agy/antigravity"', '--agy-home "$RUNNER_TEMP/agy-home"',
+                       '--agy-bin "$BRIEF_AGY_BIN"', '--agy-home "$RUNNER_TEMP/agy-home"',
                        '--sql-output "$RUNNER_TEMP/market-brief.sql"',
                        '--report "data/daily-update-log/market-brief/$DAY.json"', "['sync_state']"):
             self.assertIn(needed, s["run"])
@@ -105,7 +107,8 @@ class MarketBriefWorkflowTest(unittest.TestCase):
         self.assertNotIn("--dry-run", s["run"])
         # 模型與思考程度：讀設定頁那一步寫進 GITHUB_ENV 的 AI_PLAIN_*，market_brief.py 自己讀（test_market_brief 有測）；
         # 這一步不另外帶、也不寫死模型名稱
-        self.assertEqual(set(s["env"]), {"DAY"})
+        self.assertEqual(set(s['env']), {'DAY', 'BRIEF_AGY_BIN'})
+        self.assertIn("steps.brief_models.outcome == 'success'", s['env']['BRIEF_AGY_BIN'])
         self.assertNotIn("--model", s["run"])
 
     def test_no_secret_reaches_the_step_that_calls_the_model_through_its_own_env(self):
@@ -237,8 +240,8 @@ class DaytimeBriefWorkflowTest(unittest.TestCase):
         for forbidden in ("state_sync.py upload", "state_sync.py init", "forecast_store.py", "actions/upload-artifact", "wrangler@4 r2"):
             self.assertNotIn(forbidden, text)
         self.assertEqual(text.count("state_sync.py"), 1)
-        others = [s for s in news_steps() if s.get("id") != "brief_pack"]
-        self.assertNotIn("R2_", str([s.get("env", {}) for s in others]), "R2 的金鑰只給取資料包那一步")
+        others = [s for s in news_steps() if s.get('id') != 'brief_pack' and 'gemini_runtime.py' not in s.get('run', '')]
+        self.assertNotIn('R2_', str([s.get('env', {}) for s in others]), 'R2 金鑰只給資料包與已核准模型目錄步驟，不給分析步驟')
 
     def test_the_inputs_come_from_d1_with_the_generators_own_query(self):
         s = day_steps()[1]
@@ -251,14 +254,15 @@ class DaytimeBriefWorkflowTest(unittest.TestCase):
         s = day_steps()[2]
         for needed in ('python market_brief.py run --slot "$SLOT" ', f"--analysis {PACK}/analysis-data.js",
                        '--inputs "$RUNNER_TEMP/market-brief-inputs.json"',
-                       '--agy-bin "$RUNNER_TEMP/agy/antigravity"', '--agy-home "$RUNNER_TEMP/agy-home"',
+                       '--agy-bin "$BRIEF_AGY_BIN"', '--agy-home "$RUNNER_TEMP/agy-home"',
                        '--sql-output "$RUNNER_TEMP/market-brief.sql"',
                        '--report "data/daily-update-log/market-brief/$(date +%F)-$SLOT.json"', "set -o pipefail",
                        '| tee "$RUNNER_TEMP/market-brief.json"'):
             self.assertIn(needed, s["run"])
         self.assertNotIn("--dry-run", s["run"])
         self.assertNotIn("--model", s["run"])
-        self.assertNotIn("env", s, "叫模型的那一步自己的環境不帶任何金鑰；模型設定讀前面寫進環境的 AI_PLAIN_*")
+        self.assertEqual(set(s.get('env', {})), {'BRIEF_AGY_BIN'}, '只傳預核後的 CLI 路徑，不帶金鑰')
+        self.assertIn("steps.brief_models.outcome == 'success'", s['env']['BRIEF_AGY_BIN'])
         self.assertNotIn("AGY_LOGIN_BUNDLE", str([step.get("env", {}) for step in day_steps()]))
 
     def test_the_sql_and_usage_are_applied_like_the_evening_shift(self):

@@ -510,7 +510,7 @@ class WiringTests(unittest.TestCase):
         cleanup = text.index("- name: 清除 agy 登入檔與執行檔")
         self.assertTrue(numeric < news < usage < push < cleanup)
         step = text[news - 2500:usage + 600]
-        for needed in ("AGY_LOGIN_BUNDLE", "1b4850599cce73a17f94ffb422df3bf9531531b77dbddc40c1a435e0c2c16807", "impact-watch-usage.sql",
+        for needed in ("AGY_LOGIN_BUNDLE", "gemini_runtime.py install", "impact-watch-usage.sql",
                        "continue-on-error: true", "steps.day.outputs.dry_run == ''"):
             self.assertIn(needed, step)
 

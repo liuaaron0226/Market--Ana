@@ -1,0 +1,69 @@
+# Daily official Gemini catalogue + checksum-verified CLI snapshot. No model generation.
+# Failed release metadata/listing leaves ai-models/current.json untouched. No D1 migrations.
+name: gemini-catalog
+on:
+  schedule:
+    - cron: '17 21 * * *'
+  workflow_dispatch:
+  workflow_run:
+    workflows: [daily-update, forecast-ledger, forecast-morning, forecast-replay, watch-ledger, ai-digest, market-news]
+    types: [completed]
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: gemini-catalog
+  cancel-in-progress: false
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTHONIOENCODING: utf-8
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: market-ana-state
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: 還原登入檔到隔離 HOME
+        if: github.event_name != 'workflow_run'
+        env:
+          AGY_LOGIN_BUNDLE: ${{ secrets.AGY_LOGIN_BUNDLE }}
+        run: |
+          home="$RUNNER_TEMP/agy-home"; mkdir -p "$home"; chmod 700 "$home"
+          printf '%s' "$AGY_LOGIN_BUNDLE" | tr -d ' \r\n' | base64 -d | tar xzf - -C "$home"
+      - name: 驗證官方發佈並同步 Gemini 目錄
+        if: github.event_name != 'workflow_run'
+        run: |
+          python gemini_runtime.py sync --directory "$RUNNER_TEMP/agy" --snapshot "$RUNNER_TEMP/gemini-catalog.json" --home "$RUNNER_TEMP/agy-home"
+      - name: 沿既有站主裝置送提醒（唯讀 D1，R2 去重）
+        if: always()
+        env:
+          OWNER_EMAIL: ${{ secrets.OWNER_EMAIL }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+        run: |
+          python gemini_runtime.py notices --input "$RUNNER_TEMP/model-notices.json"
+          node cloud/model-notices.mjs "$RUNNER_TEMP/model-notices.json" "$RUNNER_TEMP/model-receipt.json"
+          python gemini_runtime.py ack-notices --input "$RUNNER_TEMP/model-notices.json" --receipt "$RUNNER_TEMP/model-receipt.json"
+      - name: 同步結果（不含帳號或原始輸出）
+        if: always() && github.event_name != 'workflow_run'
+        env:
+          RESULT: ${{ job.status }}
+        run: |
+          if [ "$RESULT" = success ]; then
+            echo 'Gemini 目錄與 CLI 驗證快照已更新；既有手動選擇不變。' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'Gemini 目錄更新失敗；保留最後成功清單與 CLI，不變更手動選擇。此摘要不代表已送出推播。' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: 清除本次隔離登入檔
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/agy-home"

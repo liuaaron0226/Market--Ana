@@ -2,6 +2,7 @@
 // 和用量端點同一個接縫：測試用資料庫＋簽章身分直接呼叫請求處理。
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from 'node:crypto';
 import { handle } from "../lib/gate.js";
 import { fakeD1, makeIssuer, claims, fetchJwks, TEAM, MAIN_AUD, APPLY_AUD, OWNER, MIGRATION_FILES } from "./helpers.js";
 
@@ -45,6 +46,18 @@ test("還沒選過：六項（含首頁消息）都是預設值（和 gemini_mod
   assert.equal(body.updated_at, null);
 });
 
+test("官方目錄的新模型與各自強度可選，既有手動選擇不因新模型改變", async () => {
+  await call("PUT", { tasks: { forecast: { model: ARGON, effort: "high" } } });
+  const body = await (await call()).json();
+  const neon = body.catalog.models.find(m => m.id === "gemini-4-neon");
+  assert.deepEqual(neon.efforts, ["high", "xhigh", "medium", "low"]);
+  assert.equal(byKey(body).forecast.model, ARGON);
+  const saved = await call("PUT", { tasks: { plain: { model: neon.id, effort: "xhigh" } } });
+  assert.equal(saved.status, 200);
+  assert.equal(byKey(await saved.json()).plain.effort, "xhigh");
+  assert.equal((await call("PUT", { tasks: { plain: { model: FLASH, effort: "xhigh" } } })).status, 400);
+});
+
 test("朋友拿不到也改不了", async () => {
   assert.deepEqual(await (await call("GET", undefined, { email: "a@example.com" })).json(), { available: false });
   const res = await call("PUT", { tasks: { plain: { model: FLASH, effort: "low" } } }, { email: "a@example.com" });
@@ -84,6 +97,87 @@ test("不認得的任務、模型或思考強度整筆拒絕，什麼都不存",
     assert.equal(res.status, 400, JSON.stringify(tasks));
   }
   assert.equal(await env.DB.prepare("SELECT count(*) AS n FROM ai_model_settings").first().then((r) => r.n), 0);
+});
+
+test("R2 目錄更新共用儲存驗證，停用選擇仍可見，只有站主可讀替代記錄", async () => {
+  const initial = await (await call()).json();
+  const future = { id: 'gemini-5-future', label: 'Gemini 5 Future', efforts: ['medium'], slugs: { medium: 'gemini-5-future-medium' } };
+  const raw = Buffer.from('gemini-5-future-medium Gemini 5 Future (Medium)\n');
+  const digest = createHash('sha256').update(raw).digest('hex');
+  const objects = {
+    'ai-models/current.json': { ...initial.catalog, raw_sha256: digest, models: [future] },
+    'ai-models/status.json': { state: 'failed', checked_at: '2026-11-19T11:00:00Z' },
+    'ai-models/resolutions/forecast.json': { state: 'replaced', requested: { model: ARGON, effort: 'high' }, actual: { model: future.id, effort: 'medium' }, checked_at: '2026-11-19T13:00:00Z' },
+  };
+  await call('PUT', { tasks: { forecast: { model: ARGON, effort: 'high' } } });
+  let reads = 0;
+  env.STATE = { get: async key => {
+    reads++;
+    if (key === `ai-models/raw/${digest}.txt`) return new Response(raw);
+    return objects[key] ? { json: async () => objects[key] } : null;
+  } };
+  const body = await (await call()).json();
+  assert.equal(byKey(body).forecast.model, ARGON, 'keep saved retired models visible');
+  assert.equal(body.resolutions.forecast.actual.model, future.id);
+  assert.equal(body.catalog_status.state, 'failed');
+  assert.equal((await call('PUT', { tasks: { forecast: { model: future.id, effort: 'medium' } } })).status, 200);
+  assert.equal((await (await call()).json()).resolutions.forecast, undefined, 'old replacement does not apply after a manual change');
+  reads = 0;
+  assert.deepEqual(await (await call('GET', undefined, {email: 'a@example.com'})).json(), {available: false});
+  assert.equal(reads, 0, 'friend requests never read private resolution objects');
+});
+
+test('來源失敗或快照與原文不同時不放進選單與儲存白名單，也不覆寫手動設定', async () => {
+  await call('PUT', { tasks: { forecast: { model: ARGON, effort: 'high' } } });
+  const initial = await (await call()).json();
+  const raw = Buffer.from('gemini-fixture-high Fixture (High)\n');
+  const digest = createHash('sha256').update(raw).digest('hex');
+  const validRow = { id: 'gemini-fixture', label: 'Fixture', efforts: ['high'], slugs: { high: 'gemini-fixture-high' } };
+  for (const mode of ['slug', 'effort', 'raw', 'missing', 'network']) {
+    const row = structuredClone(validRow);
+    if (mode === 'slug') row.slugs.high = 'gemini-unlisted-high';
+    if (mode === 'effort') { row.efforts.push('max'); row.slugs.max = 'gemini-fixture-max'; }
+    env.STATE = { get: async key => {
+      if (mode === 'network') throw new Error('fake offline');
+      if (key === 'ai-models/current.json') return Response.json({ ...initial.catalog, raw_sha256: digest, models: [row] });
+      if (key === `ai-models/raw/${digest}.txt` && mode !== 'missing') return new Response(mode === 'raw' ? Buffer.concat([raw, Buffer.from('\n')]) : raw);
+      return null;
+    } };
+    const body = await (await call()).json();
+    assert.equal(body.catalog.source_state, 'unreadable', mode);
+    assert.equal(body.catalog.models.some(m => m.id === row.id), false, mode);
+    assert.equal((await call('PUT', { tasks: { forecast: { model: row.id, effort: mode === 'effort' ? 'max' : 'high' } } })).status, 400, mode);
+    const after = byKey(await (await call()).json()).forecast;
+    assert.deepEqual([after.model, after.effort, after.saved], [ARGON, 'high', true], mode);
+  }
+});
+
+test("不完整 CLI 快照不可提供新選項，明示退回內建快照", async () => {
+  const initial = await (await call()).json();
+  env.STATE = { get: async key => key === 'ai-models/current.json' ? { json: async () => ({ ...initial.catalog, release: { ...initial.catalog.release, sha256: '' } }) } : null };
+  const body = await (await call()).json();
+  assert.equal(body.catalog.source_state, 'unreadable');
+  assert.equal(body.catalog.cli_version, '1.5.12');
+});
+
+test("模型通知沿既有站主推播裝置送出，不通知朋友、不把失敗記成已送", async () => {
+  const { sendModelNotices } = await import('../model-notices.mjs');
+  for (const [email, endpoint] of [[OWNER, 'https://fcm.googleapis.com/owner'], ['a@example.com', 'https://fcm.googleapis.com/friend']]) {
+    await env.DB.prepare('INSERT INTO push_subscriptions (endpoint,email,p256dh,auth,label,created_at) VALUES (?,?,?,?,?,?)')
+      .bind(endpoint,email,'a'.repeat(87),'b'.repeat(22),'device','2026-11-19T00:00:00Z').run();
+  }
+  const sent = [];
+  const notices = [{ id: 'a'.repeat(64), key: 'catalog', state: 'failed' }];
+  const pushEnv = { ...env, VAPID_PUBLIC_KEY: 'pub', VAPID_PRIVATE_KEY: 'priv' };
+  const result = await sendModelNotices(pushEnv, notices, { send: async (subscription, payload) => { sent.push([subscription.endpoint, payload]); return {ok: true}; } });
+  assert.deepEqual(result.delivered, ['a'.repeat(64)]);
+  assert.deepEqual(sent.map(s => s[0]), ['https://fcm.googleapis.com/owner']);
+  assert.equal(sent[0][1].url, '/minimal.html#ai-models');
+  assert.deepEqual((await sendModelNotices(pushEnv, notices, {send: async () => ({ok:false})})).delivered, []);
+  await call('PUT', {tasks:{forecast:{model:FLASH,effort:'high'}}});
+  const obsolete = await sendModelNotices(pushEnv, [{...notices[0], key:'forecast', requested:{model:ARGON,effort:'medium'}, checked_at:'2026-11-19T11:00:00Z'}], {send: async () => { throw new Error('obsolete notice must not send'); }});
+  assert.deepEqual(obsolete.delivered, []);
+  assert.deepEqual(obsolete.discarded, ['a'.repeat(64)]);
 });
 
 test("跨站送來的存檔被擋", async () => {
