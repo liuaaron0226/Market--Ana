@@ -248,7 +248,8 @@ function spark(key, x, y, w, h, color) {   // 大格子裡淡淡的 70 個月走
 function draw() {
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.clearRect(0, 0, vw, vh);
   const P = PAL, id = S.metric, m = METRICS[id], lv = level();
-  const all = [...ents.values()], by = t => all.filter(e => e.type === t);
+  // 已退出的格子仍可銜接快速反向操作，但不能再畫到新層級上。
+  const all = [...ents.values()].filter(e => e.live), by = t => all.filter(e => e.type === t);
   const sans = (w, px) => `${w} ${px}px ${FONT_SANS}`, mono = (w, px) => `${w} ${px}px ${FONT_MONO}`;
   const signCol = (v, dark) => m.kind === 'flow' && v ? (dark ? '#fff' : rgb(v > 0 ? P.up : P.down)) : null;
 
@@ -273,7 +274,7 @@ function draw() {
       }
       ctx.restore();
     }
-    if (e.open > .3) {   // 展開後的標題列：名稱、數字、收合的箭頭
+    if (e.t.open && e.open > .3) {   // 展開後的標題列：名稱、數字、收合的箭頭
       ctx.save(); ctx.globalAlpha = e.a * clamp((e.open - .3) / .5, 0, 1);
       const cy = r.y + HEAD / 2 + 1, val = fmtVal(m, e.v);
       label(L.name, r.x + 12, cy, sans(700, 14), rgb(P.ink)); chevron(r.x + r.w - 17, cy, rgb(P.dim));
@@ -303,7 +304,7 @@ function draw() {
       }
       ctx.restore(); ctx.restore();
     }
-    if (e.open > .3) {
+    if (e.t.open && e.open > .3) {
       ctx.save(); ctx.globalAlpha = e.a * clamp((e.open - .3) / .5, 0, 1);
       const cy = r.y + HEAD2 / 2 + 1, val = fmtVal(m, e.v), vf = mono(600, 12.5); ctx.font = vf; const vwid = ctx.measureText(val).width;
       label(fitText(n.name, r.w - vwid - 58, sans(700, 13)), r.x + 10, cy, sans(700, 13), rgb(P.ink)); chevron(r.x + r.w - 15, cy, rgb(P.dim));

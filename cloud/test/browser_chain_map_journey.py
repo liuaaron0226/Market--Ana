@@ -170,6 +170,36 @@ def owner_journey(j: Journey, browser, base: str, prefix: str, options: dict, sk
             and [c["id"] for c in stocks] == [row[0] for row in definition_node["tw"]], [snap["node"], [c["id"] for c in stocks]])
     page.screenshot(path=str(OUT / f"{prefix}3-segment.png"))
 
+    # 看轉場當下實際繪出的字，等動畫停了才看截圖會漏掉殘影。
+    layer_def = next(item for item in DEFINITION["layers"] if item["id"] == layer["id"])
+    title_forms = [[item.get("short") or item["name"], item["name"]] for item in (layer_def, definition_node)]
+    page.evaluate("""titleForms => {
+        const ctx = document.querySelector('#cv').getContext('2d');
+        const clear = ctx.clearRect.bind(ctx), write = ctx.fillText.bind(ctx);
+        const painted = {}, overlaps = new Set();
+        let labels, level, titleCount;
+        window.finishPaintTrace = () => {
+            delete ctx.clearRect;
+            delete ctx.fillText;
+            return {
+                labels: Object.fromEntries(Object.entries(painted).map(([level, texts]) => [level, [...texts]])),
+                overlaps: [...overlaps],
+            };
+        };
+        ctx.clearRect = (...args) => {
+            level = window.ChainMap.snapshot().level;
+            titleCount = 0;
+            labels = painted[level] ??= new Set();
+            clear(...args);
+        };
+        ctx.fillText = (text, ...args) => {
+            if (labels && ctx.globalAlpha > 0.01) {
+                labels.add(String(text));
+                if (titleForms[level]?.includes(text) && ++titleCount > 1) overlaps.add(level);
+            }
+            write(text, ...args);
+        };
+    }""", title_forms)
     stock = biggest([c for c in stocks if c["v"]], "h")
     tap_cell(page, stock, touch)
     snap = page.evaluate(SNAP)
@@ -193,6 +223,19 @@ def owner_journey(j: Journey, browser, base: str, prefix: str, options: dict, sk
     open_layer = next(c for c in cells(page, "L") if c["open"])
     tap_cell(page, open_layer, touch, head=15)
     j.check(f"{prefix}點展開那一層的標題列：回到全景", page.evaluate(SNAP)["level"] == 0)
+    trace = page.evaluate("() => window.finishPaintTrace()")
+    painted = trace["labels"]
+    stock_codes = {cell["id"] for cell in stocks}
+    layer_names = {layer.get(key) for layer in DEFINITION["layers"] for key in ("name", "short")}
+    node_names = {n.get("short") or n["name"] for n in DEFINITION["nodes"] if n["id"] in expected_nodes} - layer_names
+    for before, after, labels, title in ((2, 1, stock_codes, "公司代號"), (1, 0, node_names, "環節名稱")):
+        visible = labels.intersection(painted.get(str(before), []))
+        outgoing = labels.intersection(painted.get(str(after), []))
+        j.check(f"{prefix}收合後每一幀都只繪出現層內容（退出的{title}消失）",
+                bool(visible) and bool(painted.get(str(after))) and not outgoing,
+                {"visible_before": sorted(visible), "painted_after": sorted(outgoing)})
+        j.check(f"{prefix}退回第 {after} 層：收合中的格子每幀只畫一個標題",
+                after not in trace["overlaps"] and bool(set(title_forms[after]).intersection(painted.get(str(after), []))))
 
     # 三種指標
     for metric, label in (("inst", "台股法人"), ("us", "美股成交"), ("tw", "台股成交")):
