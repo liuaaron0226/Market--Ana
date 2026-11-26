@@ -34,7 +34,8 @@ test("依目錄顯示可選強度與替代原因，手動切換仍可使用", ()
   ] };
   const data = { ...DATA, catalog, resolutions: { forecast: { state: 'replaced', requested: { model: ARGON, effort: 'medium' }, actual: { model: 'gemini-4-neon', effort: 'medium' }, reason: 'officially_unavailable' } } };
   const view = S.modelsView(data, {});
-  assert.deepEqual(view.modelChoices, [['gemini-4-neon', 'Neon'], ['gemini-pro-orchestrator-neon', 'Orchestrator (Neon)']]);
+  assert.deepEqual(view.modelChoices, [['gemini-4-neon', 'Neon 4']]);
+  assert.deepEqual(view.advancedModelChoices, [['gemini-pro-orchestrator-neon', 'Orchestrator (Neon)']]);
   assert.match(view.rows[0].warning, /Argon.*停用.*Neon/);
   assert.equal(view.rows[0].model, ARGON);
   assert.deepEqual(S.nextChoice({ model: ARGON, effort: 'medium' }, { model: 'gemini-pro-orchestrator-neon' }, catalog), { model: 'gemini-pro-orchestrator-neon', effort: 'default' });
@@ -42,6 +43,33 @@ test("依目錄顯示可選強度與替代原因，手動切換仍可使用", ()
   assert.deepEqual(changed.rows.find(r => r.key === 'plain').effortChoices, [['high','高'],['xhigh','極高'],['medium','中'],['low','低']]);
   assert.match(changed.rows.find(r => r.key === 'plain').quotaNote, /未知/);
   assert.match(S.modelsView({ ...data, catalog_status: { state: 'failed' } }, {}).catalogWarning, /保留/);
+});
+
+test("官方目錄五款一般模型與三個進階變體各出現一次，不改已有選擇", () => {
+  const catalog = JSON.parse(readFileSync(new URL('../lib/gemini-catalog-seed.json', import.meta.url), 'utf8'));
+  const data = { ...DATA, catalog, tasks: [{ key: 'digest', model: 'gemini-pro-orchestrator', effort: 'default', saved: true }] };
+  const original = JSON.stringify(data);
+  const view = S.modelsView(data, {});
+  assert.deepEqual(view.modelChoices, [
+    ['gemini-4-neon', 'Neon 4'], ['gemini-4-carbon', 'Carbon 4'], ['gemini-4-argon', 'Argon 4'],
+    ['gemini-4-hydrogen', 'Hydrogen 4'], ['gemini-3.8-flash', 'Flash 3.8'],
+  ]);
+  assert.deepEqual(view.advancedModelChoices, [
+    ['gemini-pro-orchestrator-neon', 'Orchestrator (Neon)'], ['gemini-pro-orchestrator', 'Orchestrator (Carbon)'],
+    ['gemini-pro-orchestrator-argon', 'Orchestrator (Argon)'],
+  ]);
+  assert.equal(view.rows[0].value, 'Orchestrator (Carbon)');
+  assert.equal(view.rows[0].effort, 'default');
+  assert.equal(view.dirty, false);
+  assert.equal(JSON.stringify(data), original);
+});
+
+test("版本由官方標籤與既有模型ID取得，不寫死目前版本", () => {
+  const catalog = { models: [{ id: 'gemini-5.1-neon', label: 'Gemini 5.1 Neon', efforts: ['medium'] }] };
+  const data = { ...DATA, catalog, tasks: [{ key: 'digest', model: 'gemini-5.1-neon', effort: 'medium' }] };
+  assert.deepEqual(S.modelsView(data, {}).modelChoices, [['gemini-5.1-neon', 'Neon 5.1']]);
+  assert.equal(S.modelsView(data, {}).rows[0].value, 'Neon 5.1・中');
+  assert.equal(S.modelsView({ ...data, catalog: undefined }, {}).rows[0].value, 'Neon 5.1・中');
 });
 
 test("站主多一顆「AI 模型」籤，排在用量後面", () => {
@@ -52,12 +80,12 @@ test("站主多一顆「AI 模型」籤，排在用量後面", () => {
 test("每列寫任務名稱與現值；大盤預測註明晚間、晨間、重播一起", () => {
   const view = S.modelsView(DATA, {});
   assert.deepEqual(view.rows.map((r) => [r.key, r.name, r.value]), [
-    ["forecast", "大盤預測", "Argon・中"],
-    ["watch_judge", "自選股每日判斷", "Flash・高"],
-    ["watch_nominate", "提名國外同類股", "Flash・高"],
-    ["plain", "盤勢解讀", "Argon・中"],
-    ["digest", "今日 AI 解讀", "Argon・中"],
-    ["news", "首頁消息", "Flash・高"],
+    ["forecast", "大盤預測", "Argon 4・中"],
+    ["watch_judge", "自選股每日判斷", "Flash 3.8・高"],
+    ["watch_nominate", "提名國外同類股", "Flash 3.8・高"],
+    ["plain", "盤勢解讀", "Argon 4・中"],
+    ["digest", "今日 AI 解讀", "Argon 4・中"],
+    ["news", "首頁消息", "Flash 3.8・高"],
   ]);
   assert.equal(view.rows[0].sub, "晚間・晨間・重播一起");
   assert.equal(view.dirty, false);
@@ -73,7 +101,7 @@ test("頂端一行：Argon、Flash 本週剩多少，剩不到兩成標低", () 
 
 test("改了還沒存：那一列換成新值、標有改動", () => {
   const view = S.modelsView(DATA, { forecast: { model: FLASH, effort: "medium" } });
-  assert.equal(view.rows[0].value, "Flash・中");
+  assert.equal(view.rows[0].value, "Flash 3.8・中");
   assert.equal(view.rows[0].changed, true);
   assert.equal(view.dirty, true);
   // 改回原值就不算改動
@@ -106,10 +134,10 @@ test("切到 Flash 時思考強度自動帶「高」（本人 11-19 晚：用 Fl
 test("只有改到大盤預測或每日判斷，存檔前才先問", () => {
   assert.deepEqual(S.confirmNotes(DATA, { plain: { model: FLASH, effort: "low" } }), []);
   assert.deepEqual(S.confirmNotes(DATA, { forecast: { model: FLASH, effort: "medium" } }), [
-    "大盤預測改成 Flash・中：成績另開一組從頭累積，正式起算要重數連續 5 天。從下一個晚間版開始用。",
+    "大盤預測改成 Flash 3.8・中：成績另開一組從頭累積，正式起算要重數連續 5 天。從下一個晚間版開始用。",
   ]);
   assert.deepEqual(S.confirmNotes(DATA, { watch_judge: { model: FLASH, effort: "low" }, digest: { model: FLASH, effort: "low" } }), [
-    "自選股每日判斷改成 Flash・低：成績另開一組從頭累積。下一時段開始用。",
+    "自選股每日判斷改成 Flash 3.8・低：成績另開一組從頭累積。下一時段開始用。",
   ]);
   // 改了又改回來不算
   assert.deepEqual(S.confirmNotes(DATA, { forecast: { model: ARGON, effort: "medium" } }), []);

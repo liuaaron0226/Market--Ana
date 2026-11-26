@@ -126,7 +126,12 @@
     news: { name: '首頁消息', sub: '盤前・午盤・收盤後' },
   };
   const EFFORT_CHOICES = [['low', '低'], ['medium', '中'], ['high', '高'], ['xhigh', '極高'], ['max', '最高'], ['default', '模型自動']];
-  const catalogLabel = (catalog, model) => (catalog?.models?.find(m => m.id === model)?.label || modelLabel(model) || model).replace(/^Gemini [\d.]+ /, '');
+  const catalogLabel = (catalog, model) => {
+    const label = catalog?.models?.find(m => m.id === model)?.label;
+    if (label) return label.replace(/^Gemini ([\d.]+) (.+)$/, '$2 $1');
+    const version = /^gemini-([\d.]+)-/i.exec(String(model || ''))?.[1];
+    return version ? `${modelLabel(model)} ${version}` : model;
+  };
   // 改了會另開一組成績的兩項（本人第 5、6 題：存檔前先問）
   const SCORED = {
     forecast: '成績另開一組從頭累積，正式起算要重數連續 5 天。從下一個晚間版開始用。',
@@ -141,6 +146,11 @@
     .filter(({ task, next }) => next && (next.model !== task.model || next.effort !== task.effort));
 
   function modelsView(data, draft) {
+    const modelChoices = [], advancedModelChoices = [];
+    for (const model of data?.catalog?.models || []) {
+      const choices = /^gemini-pro-orchestrator(?:-|$)/.test(model.id) ? advancedModelChoices : modelChoices;
+      choices.push([model.id, catalogLabel(data.catalog, model.id)]);
+    }
     const changed = new Set(pending(data, draft).map(({ task }) => task.key));
     const rows = (data?.tasks || []).filter(task => MODEL_TASKS[task.key]).map(task => {
       const current = changed.has(task.key) ? draft[task.key] : task;
@@ -161,7 +171,7 @@
     const updated = shortTime(data?.updated_at);
     return {
       rows, quota, dirty: changed.size > 0,
-      modelChoices: (data?.catalog?.models || []).map(m => [m.id, catalogLabel(data.catalog, m.id)]),
+      modelChoices, advancedModelChoices,
       catalogWarning: data?.catalog?.source_state === 'unreadable' || data?.catalog?.source_state === 'seed'
         ? '尚未取得雲端模型清單，顯示內建官方快照；既有選擇不變。'
         : ['failed', 'stale'].includes(data?.catalog_status?.state)
@@ -497,6 +507,7 @@
 
   function renderModels() {
     const pane = panes.models;
+    const advancedOpen = new Set([...pane.querySelectorAll('details[open]')].map(details => details.dataset.madvanced));
     const view = modelsView(models.data, models.draft);
     pane.replaceChildren();
     if (view.quota.length) {
@@ -532,8 +543,16 @@
       const choices = el('div', 'st-mopen');
       choices.id = `settings-model-${row.key}-choices`;
       choices.hidden = !open;
-      choices.append(segment(`${row.name}的模型`, view.modelChoices, row.model, row.key, 'model'),
-        segment(`${row.name}的思考強度`, row.effortChoices, row.effort, row.key, 'effort'));
+      choices.append(segment(`${row.name}的模型`, view.modelChoices, row.model, row.key, 'model'));
+      if (view.advancedModelChoices.length) {
+        const advanced = el('details', 'st-madvanced');
+        advanced.dataset.madvanced = row.key;
+        advanced.open = advancedOpen.has(row.key) || view.advancedModelChoices.some(([id]) => id === row.model);
+        advanced.append(el('summary', '', '進階選項'),
+          segment(`${row.name}的進階模型`, view.advancedModelChoices, row.model, row.key, 'model'));
+        choices.append(advanced);
+      }
+      choices.append(segment(`${row.name}的思考強度`, row.effortChoices, row.effort, row.key, 'effort'));
       if (row.quotaNote) choices.append(el('p', 'st-note', row.quotaNote));
       pane.append(head);
       if (row.warning) pane.append(el('p', 'st-warn', row.warning));

@@ -192,13 +192,13 @@ def owner_models(journey: Journey, browser, width: int, first: bool) -> None:
     journey.check(f"{tag}：晨間預測上一時段沒讀到設定有標出來", any("晨間事前預測上一時段" in w and "沒讀到你的設定" in w for w in warn), warn)
     rows = models_rows(page)
     if not first:
-        journey.check(f"{tag}：上次存的值重新整理後還在（大盤預測 Flash・高、白話 Argon・低）",
-                      rows[0].endswith("Flash・高") and rows[3].endswith("Argon・低"), rows)
+        journey.check(f"{tag}：上次存的值重新整理後還在（大盤預測 Flash 3.8・高、白話 Argon 4・低）",
+                      rows[0].endswith("Flash 3.8・高") and rows[3].endswith("Argon 4・低"), rows)
         page.screenshot(path=str(OUT / f"owner-models-{width}.png"))
         context.close()
         return
     journey.check(f"{tag}：六列都是預設值（含首頁消息，本人 11-19）",
-                  [r.split(" ")[-1] for r in rows] == ["Argon・中", "Flash・高", "Flash・高", "Argon・中", "Argon・中", "Flash・高"]
+                  page.locator('#settings-models .st-mchoice').all_inner_texts() == ["Argon 4・中", "Flash 3.8・高", "Flash 3.8・高", "Argon 4・中", "Argon 4・中", "Flash 3.8・高"]
                   and rows[0].startswith("大盤預測 晚間・晨間・重播一起"), rows)
     journey.check(f"{tag}：還沒改不出現存檔鍵", page.locator("[data-maction]").count() == 0)
     page.screenshot(path=str(OUT / f"owner-models-{width}-start.png"))
@@ -209,11 +209,11 @@ def owner_models(journey: Journey, browser, width: int, first: bool) -> None:
                   and page.locator("[data-mrow='forecast']").get_attribute("aria-expanded") == "true")
     page.locator("[data-mkey='forecast'][data-model='gemini-3.8-flash']").click()
     journey.check(f"{tag}：選 Flash 那一列換成新值（強度自動帶高）、出現還原與存檔、焦點留在 Flash",
-                  models_rows(page)[0].endswith("Flash・高") and page.locator("[data-maction='save']").is_visible()
+                  models_rows(page)[0].endswith("Flash 3.8・高") and page.locator("[data-maction='save']").is_visible()
                   and page.evaluate("() => document.activeElement?.dataset.model") == "gemini-3.8-flash")
     page.locator("[data-maction='save']").click()
     confirm = page.locator("#settings-models .st-confirm").inner_text()
-    journey.check(f"{tag}：存檔前先問（成績另開一組、正式起算重數）", "大盤預測改成 Flash・高" in confirm and "連續 5 天" in confirm, confirm)
+    journey.check(f"{tag}：存檔前先問（成績另開一組、正式起算重數）", "大盤預測改成 Flash 3.8・高" in confirm and "連續 5 天" in confirm, confirm)
     page.screenshot(path=str(OUT / f"owner-models-{width}-confirm.png"))
     page.locator("[data-maction='cancel']").click()
     journey.check(f"{tag}：取消回到還沒存的樣子", page.locator(".st-confirm").count() == 0 and page.locator("[data-maction='save']").is_visible())
@@ -221,14 +221,14 @@ def owner_models(journey: Journey, browser, width: int, first: bool) -> None:
     page.locator("[data-maction='confirm']").click()
     page.wait_for_selector("#settings-models .st-saved")
     journey.check(f"{tag}：確認變更之後存好", "已存檔" in page.locator(".st-saved").inner_text()
-                  and page.locator("[data-maction]").count() == 0 and models_rows(page)[0].endswith("Flash・高"))
+                  and page.locator("[data-maction]").count() == 0 and models_rows(page)[0].endswith("Flash 3.8・高"))
 
     page.locator("[data-mrow='plain']").click()
     page.locator("[data-mkey='plain'][data-effort='low']").click()
     page.locator("[data-maction='save']").click()
     page.wait_for_function("() => document.querySelector('#settings-models .st-saved')?.textContent.includes('已存檔')"
                            " && !document.querySelector('[data-maction]')")
-    journey.check(f"{tag}：白話改思考低，不用確認直接存", page.locator(".st-confirm").count() == 0 and models_rows(page)[3].endswith("Argon・低"))
+    journey.check(f"{tag}：白話改思考低，不用確認直接存", page.locator(".st-confirm").count() == 0 and models_rows(page)[3].endswith("Argon 4・低"))
     page.screenshot(path=str(OUT / f"owner-models-{width}-saved.png"))
     context.close()
 
@@ -238,6 +238,26 @@ def dynamic_models(journey: Journey, browser, width: int, state_file: Path) -> N
     context, page = journey.page(browser, OWNER, width, '/minimal.html#ai-models')
     page.wait_for_selector('#settings-models .st-mrow')
     page.locator('[data-mrow="digest"]').click()
+    choices = page.locator('#settings-model-digest-choices')
+    general = choices.get_by_role('group', name='今日 AI 解讀的模型', exact=True)
+    journey.check(f'{tag}：主清單只有五款一般模型並在名稱後標版本',
+                  general.get_by_role('button').all_inner_texts() == ['Neon 4', 'Carbon 4', 'Argon 4', 'Hydrogen 4', 'Flash 3.8'])
+    advanced = choices.locator('details')
+    journey.check(f'{tag}：進階選項預設收合', advanced.count() == 1 and not advanced.evaluate('(d) => d.open'))
+    assert advanced.count() == 1, 'Orchestrator 需要獨立的進階選項'
+    before = page.locator('[data-mrow="digest"]').inner_text()
+    summary = advanced.locator('summary')
+    summary.focus()
+    page.keyboard.press('Enter')
+    journey.check(f'{tag}：鍵盤展開進階後才看得到三個Orchestrator變體',
+                  advanced.evaluate('(d) => d.open') and advanced.get_by_role('button').all_inner_texts()
+                  == ['Orchestrator (Neon)', 'Orchestrator (Carbon)', 'Orchestrator (Argon)'])
+    journey.check(f'{tag}：展開進階不改原模型或產生待存變更',
+                  page.locator('[data-mrow="digest"]').inner_text() == before and page.locator('[data-maction="save"]').count() == 0)
+    page.keyboard.press('Space')
+    journey.check(f'{tag}：鍵盤可收回進階而且三個變體不在主清單',
+                  not advanced.evaluate('(d) => d.open') and not advanced.get_by_role('button').first.is_visible())
+    page.screenshot(path=str(OUT / f'models-primary-{width}.png'))
     page.locator('[data-mkey="digest"][data-model="gemini-4-neon"]').click()
     page.locator('[data-mkey="digest"][data-effort="xhigh"]').click()
     journey.check(f'{tag}：新模型可選極高，未知用量不捏造', '未知' in page.locator('#settings-model-digest-choices').inner_text())
@@ -245,13 +265,27 @@ def dynamic_models(journey: Journey, browser, width: int, state_file: Path) -> N
     page.wait_for_selector('#settings-models .st-saved')
     page.reload(wait_until='load')
     page.wait_for_selector('#settings-models .st-mrow')
-    journey.check(f'{tag}：Neon極高手動選擇重新整理後保留', 'Neon・極高' in page.locator('[data-mrow="digest"]').inner_text())
+    journey.check(f'{tag}：Neon極高手動選擇重新整理後保留', 'Neon 4・極高' in page.locator('[data-mrow="digest"]').inner_text())
     page.locator('[data-mrow="digest"]').click()
+    advanced = page.locator('#settings-model-digest-choices details')
+    advanced.locator('summary').click()
+    page.locator('[data-mkey="digest"][data-effort="high"]').click()
+    journey.check(f'{tag}：調思考強度後進階展開狀態仍保留', advanced.evaluate('(d) => d.open'))
     page.locator('[data-mkey="digest"][data-model="gemini-pro-orchestrator-neon"]').click()
     efforts = page.locator('[data-mkey="digest"][data-effort]').all_inner_texts()
     journey.check(f'{tag}：Orchestrator只顯示官方自動強度', efforts == ['模型自動'], efforts)
     page.locator('[data-maction="save"]').click()
     page.wait_for_selector('#settings-models .st-saved')
+    page.reload(wait_until='load')
+    page.wait_for_selector('#settings-models .st-mrow')
+    journey.check(f'{tag}：已存Orchestrator重新整理後仍是原選擇',
+                  page.locator('[data-mrow="digest"]').inner_text().endswith('Orchestrator (Neon)'))
+    page.locator('[data-mrow="digest"]').click()
+    advanced = page.locator('#settings-model-digest-choices details')
+    journey.check(f'{tag}：既有進階選擇自動展開且選取鍵可見',
+                  advanced.evaluate('(d) => d.open')
+                  and advanced.locator('[data-model="gemini-pro-orchestrator-neon"][aria-pressed="true"]').is_visible()
+                  and page.locator('[data-maction="save"]').count() == 0)
     at = (datetime.now(timezone.utc) + timedelta(seconds=2)).isoformat()
     state_file.write_text(json.dumps({'ai-models/resolutions/digest.json': {
         'requested': {'model':'gemini-pro-orchestrator-neon','effort':'default'},
@@ -262,7 +296,7 @@ def dynamic_models(journey: Journey, browser, width: int, state_file: Path) -> N
     warning = page.locator('#settings-models .st-warn').all_inner_texts()
     journey.check(f'{tag}：原選擇保留且看得到替代原因與實際模型',
                   'Orchestrator' in page.locator('[data-mrow="digest"]').inner_text()
-                  and any('已停用' in w and 'Neon・中' in w for w in warning), warning)
+                  and any('已停用' in w and 'Neon 4・中' in w for w in warning), warning)
     page.locator('[data-mrow="digest"]').click()
     page.screenshot(path=str(OUT / f'dynamic-models-{width}.png'))
     page.wait_for_timeout(300)  # Existing pane entrance animation must finish before measuring layout.
@@ -272,7 +306,7 @@ def dynamic_models(journey: Journey, browser, width: int, state_file: Path) -> N
     page.locator('[data-maction="save"]').click()
     page.wait_for_selector('#settings-models .st-saved')
     journey.check(f'{tag}：替代之後仍能手動改選並清除舊告警',
-                  'Argon・中' in page.locator('[data-mrow="digest"]').inner_text()
+                  'Argon 4・中' in page.locator('[data-mrow="digest"]').inner_text()
                   and not any('已停用' in w for w in page.locator('#settings-models .st-warn').all_inner_texts()))
     state_file.write_text('{}', encoding='utf-8')
     context.close()
